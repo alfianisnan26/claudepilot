@@ -1,0 +1,57 @@
+# Builds the workspace image (images/workspace) and pushes it to GHCR, where Kubernetes
+# workspaces pull it from (PORTAL_K8S_IMAGE). amd64 for the cluster, arm64 for Apple-silicon Docker.
+# Also rebuilds weekly so the image picks up new Claude Code releases.
+name: Workspace image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - images/workspace/**
+      - .github/workflows/workspace-image.yml
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: workspace-image
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/claudepilot-workspace
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.title=claudepilot-workspace
+            org.opencontainers.image.description=Claude Code workspace for claudepilot
+      - uses: docker/build-push-action@v6
+        with:
+          context: images/workspace
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
