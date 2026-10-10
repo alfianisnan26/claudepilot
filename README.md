@@ -126,6 +126,22 @@ rename), into running and stopped workspaces alike; a hand-edited file is repair
 A workspace whose delivered files this portal can't account for (another portal's, or an older
 database's) is **Frozen** until you choose **Adopt workspace**.
 
+## Sessions
+
+The Sessions page chats with Claude Code in a workspace, from a phone or a desktop: send messages,
+steer a running turn, stop it, and answer the agent's requests (allow or deny a tool) from a card
+above the composer. Replies stream in as they're written. Sessions keep running when you close the
+tab, and a reopened tab resumes where it left off.
+
+How it works: the portal installs a small host script in the workspace
+(`/etc/claudepilot/bin/cp-session`, root-owned) and starts the unmodified `claude -p` with
+stream-json in and out, detached, so it survives dropped connections and portal restarts. Its stdin
+is a FIFO the portal writes one checked line into per message; its output is appended to a log the
+portal reads from a byte offset, stores (numbered, in the database) and pushes to open tabs over
+`/api/chat/live`. Tool requests use Claude Code's own permission prompt (`--permission-prompt-tool
+stdio`): nothing runs until you allow it. Sessions start in the default (ask) mode with a $10 budget;
+Bypass is off. Docker workspaces only for now.
+
 ## Storage
 
 The portal keeps its state in SQLite (`node:sqlite`, WAL) at `$PORTAL_DATA_DIR/portal.db`, migrated on

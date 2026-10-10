@@ -35,6 +35,8 @@ import { HTTPException } from 'hono/http-exception';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AccountHealthService } from './accounts/health.js';
+import type { ChatController } from './chat/controller.js';
+import { createChatRoutes } from './chat/routes.js';
 import type { AccountPools } from './accounts/pools.js';
 import type { AccountsService } from './accounts/service.js';
 import { runPreflight } from './delivery/preflight.js';
@@ -69,6 +71,7 @@ export function createApp(
   pools: AccountPools,
   reconciler: Reconciler,
   health: AccountHealthService,
+  chatController: ChatController,
   { serveWeb, notify = () => {} }: { serveWeb: boolean; notify?: (...topics: LiveTopic[]) => void },
 ) {
   const app = new Hono<Env>();
@@ -369,6 +372,12 @@ export function createApp(
     return c.json(success({ ok: true }));
   });
   app.route('/api/account-pools', ap);
+
+  // Chat sessions (REST); the live part rides its own socket (chat/socket.ts).
+  const chat = new Hono<Env>();
+  chat.use(requireSession);
+  chat.route('/', createChatRoutes(chatController));
+  app.route('/api/chat/sessions', chat);
 
   app.all('/api/*', () => {
     throw new AppError('NOT_FOUND');

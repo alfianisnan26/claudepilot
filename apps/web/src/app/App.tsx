@@ -4,6 +4,8 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import { AppShell } from '@/components/AppShell';
 import { AccountsPage } from '@/features/accounts/AccountsPage';
 import { AccessPage } from '@/features/admin/AccessPage';
+import { SessionPage } from '@/features/chat/SessionPage';
+import { SessionsPage } from '@/features/chat/SessionsPage';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { ShellPage } from '@/features/workspaces/ShellPage';
 import { WorkspacesPage } from '@/features/workspaces/WorkspacesPage';
@@ -53,9 +55,19 @@ function AppRoutes() {
       >
         <Route index element={<Navigate to={HOME} replace />} />
         <Route path="workspaces" element={<WorkspacesPage />} />
+        <Route path="sessions" element={<SessionsPage />} />
         <Route path="accounts" element={<AccountsPage />} />
         <Route path="access" element={<AccessPage />} />
       </Route>
+      {/* Full screen, outside the app frame: the chat view owns the viewport (composer pinned, no tab bar). */}
+      <Route
+        path="/admin/sessions/:id"
+        element={
+          <SignedInOnly>
+            <SessionPage />
+          </SignedInOnly>
+        }
+      />
       {/* Full screen, outside the app frame: the terminal wants every pixel. */}
       <Route
         path="/admin/workspaces/:target/:name/shell"

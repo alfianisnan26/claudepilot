@@ -17,6 +17,20 @@ const ignore = (...codes: number[]) => (e: unknown) => {
   if (!codes.includes(statusOf(e) ?? 0)) throw e;
 };
 
+/**
+ * An exec's exit code. The output stream can end a moment before Docker marks the exec finished, so
+ * an immediate inspect may still say Running with no code: wait for it (2 s at most).
+ */
+async function exitCodeOf(exec: Docker.Exec): Promise<number | null> {
+  for (let i = 0; i < 40; i++) {
+    const info = await exec.inspect().catch(() => null);
+    if (!info) return null;
+    if (!info.Running) return info.ExitCode ?? null;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return null;
+}
+
 const STATUS: Record<string, WorkspaceStatus> = {
   created: 'stopped',
   running: 'running',
@@ -87,8 +101,8 @@ export class DockerRuntime implements Runtime {
       });
       if (opts.stdin !== undefined) stream.end(opts.stdin);
       await done;
-      const { ExitCode } = await exec.inspect();
-      return { code: ExitCode ?? -1, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') };
+      const code = await exitCodeOf(exec);
+      return { code: code ?? -1, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') };
     },
 
     put: async (name, entries) => {
@@ -128,10 +142,7 @@ export class DockerRuntime implements Runtime {
     const finish = () => {
       if (done) return;
       done = true;
-      exec.inspect().then(
-        (i) => exitFns.forEach((fn) => fn(i.ExitCode ?? null)),
-        () => exitFns.forEach((fn) => fn(null)),
-      );
+      void exitCodeOf(exec).then((code) => exitFns.forEach((fn) => fn(code)));
     };
     stream.on('end', finish);
     stream.on('close', finish);
@@ -297,7 +308,7 @@ export class DockerRuntime implements Runtime {
     const finish = async () => {
       if (exited) return;
       exited = true;
-      const code = await exec.inspect().then((i) => i.ExitCode, () => null);
+      const code = await exitCodeOf(exec);
       exitFns.forEach((fn) => fn(code));
     };
     stream.on('end', () => void finish());

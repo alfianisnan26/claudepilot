@@ -19,6 +19,9 @@ import { sessionStore } from './store/sessions.js';
 import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
 import { attachShell, cookie } from './workspaces/shell.js';
+import { ChatController } from './chat/controller.js';
+import { hostInstaller } from './chat/install.js';
+import { attachChat } from './chat/socket.js';
 import { KubernetesRuntime } from './workspaces/kubernetes.js';
 import { Workspaces } from './workspaces/manager.js';
 import type { Runtime } from './workspaces/runtime.js';
@@ -75,6 +78,10 @@ if (ws.kubernetes.enabled) {
 const workspaces = new Workspaces(runtimes, new JsonFile(`${config.paths.data}/pending-creates.json`, []));
 void workspaces.resume().catch((e: unknown) => console.error(`[workspaces] resume failed: ${(e as Error).message}`));
 
+// Chat sessions: one controller shared by the REST routes and the chat socket.
+const chatController = new ChatController(store, workspaces);
+chatController.installHost = hostInstaller(workspaces);
+
 const accounts = new AccountsService(store);
 const pools = new AccountPools(store);
 const health = new AccountHealthService(store);
@@ -109,11 +116,12 @@ accounts.hooks.event = () => notify('accounts');
 health.onEvent = () => notify('accounts');
 pools.onChange = () => notify('accounts', 'workspaces');
 const stopWatching = runtimes.flatMap((r) => (r.watch ? [r.watch(() => notify('workspaces'))] : []));
-const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, { serveWeb: !config.dev, notify });
+const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify });
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
 attachShell(server, portal, workspaces);
 live.attach(server);
+attachChat(server, chatController, (req) => !!portal.session(cookie(req, config.session.cookie)));
 
 if (config.dev) {
   // One port for everything: the API through Hono, the rest through Vite (with HMR on this server).

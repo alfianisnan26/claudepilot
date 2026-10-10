@@ -222,6 +222,126 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 6,
+    name: 'chat sessions',
+    up(db) {
+      db.exec(`
+        -- Chat sessions PRD §9. Redacted, no secrets.
+        CREATE TABLE chat_sessions (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          cwd TEXT NOT NULL DEFAULT '',
+          title TEXT NOT NULL DEFAULT '',
+          origin TEXT NOT NULL DEFAULT 'ui',
+          state TEXT NOT NULL DEFAULT 'starting',
+          state_since TEXT NOT NULL,
+          process TEXT NOT NULL DEFAULT 'live',
+          parent_pid INTEGER,
+          process_started_at TEXT,
+          segment INTEGER NOT NULL DEFAULT 1,
+          byte_offset INTEGER NOT NULL DEFAULT 0,
+          last_seq INTEGER NOT NULL DEFAULT 0,
+          model TEXT,
+          mode TEXT NOT NULL DEFAULT 'default',
+          bypass_capable INTEGER NOT NULL DEFAULT 0,
+          cost_est_usd REAL NOT NULL DEFAULT 0,
+          budget_usd REAL,
+          turns INTEGER NOT NULL DEFAULT 0,
+          launch TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          last_activity_at TEXT NOT NULL,
+          ended_reason TEXT,
+          archived_at TEXT
+        ) STRICT;
+        CREATE INDEX chat_sessions_activity ON chat_sessions (last_activity_at);
+        CREATE INDEX chat_sessions_workspace ON chat_sessions (workspace_id);
+
+        -- One row per stored transcript event; seq is per session and gap-free.
+        CREATE TABLE chat_events (
+          session_id TEXT NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
+          seq INTEGER NOT NULL,
+          at TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          uuid TEXT,
+          parent_tool_use_id TEXT,
+          request_id TEXT,
+          payload TEXT NOT NULL DEFAULT '{}',
+          PRIMARY KEY (session_id, seq)
+        ) STRICT;
+
+        -- Every line the controller sends, and its lifecycle (integrity checks read this).
+        CREATE TABLE chat_inputs (
+          session_id TEXT NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
+          uuid TEXT NOT NULL,
+          actor TEXT,
+          kind TEXT NOT NULL,
+          priority TEXT,
+          state TEXT NOT NULL DEFAULT 'sending',
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (session_id, uuid)
+        ) STRICT;
+
+        -- Requests the agent raised (tools, questions, plans) and how they were answered.
+        CREATE TABLE chat_requests (
+          session_id TEXT NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
+          request_id TEXT NOT NULL,
+          tool_use_id TEXT,
+          kind TEXT NOT NULL,
+          tool_name TEXT,
+          agent_label TEXT,
+          title TEXT NOT NULL DEFAULT '',
+          detail TEXT,
+          created_at TEXT NOT NULL,
+          answered_at TEXT,
+          outcome TEXT,
+          actor TEXT,
+          PRIMARY KEY (session_id, request_id)
+        ) STRICT;
+
+        -- Sub-agents and background tasks within a session (multi-agent view).
+        CREATE TABLE chat_tasks (
+          session_id TEXT NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
+          task_id TEXT NOT NULL,
+          parent_task_id TEXT,
+          tool_use_id TEXT,
+          type TEXT,
+          label TEXT,
+          background INTEGER NOT NULL DEFAULT 0,
+          status TEXT,
+          tokens INTEGER,
+          tool_uses INTEGER,
+          started_at TEXT,
+          ended_at TEXT,
+          PRIMARY KEY (session_id, task_id)
+        ) STRICT;
+
+        -- Attachments, tool images and downloads (blob refs).
+        CREATE TABLE chat_files (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
+          kind TEXT NOT NULL,
+          blob_sha256 TEXT,
+          name TEXT,
+          workspace_path TEXT,
+          size INTEGER,
+          media_type TEXT,
+          at TEXT NOT NULL
+        ) STRICT;
+
+        -- Folders the agent is trusted to run in (FR43).
+        CREATE TABLE chat_folder_trust (
+          workspace_id TEXT NOT NULL,
+          folder TEXT NOT NULL,
+          scan_hash TEXT,
+          scan TEXT NOT NULL DEFAULT '{}',
+          trusted_at TEXT NOT NULL,
+          actor TEXT,
+          PRIMARY KEY (workspace_id, folder)
+        ) STRICT;
+      `);
+    },
+  },
 ];
 
 /**
