@@ -45,5 +45,24 @@ export function createChatRoutes(controller: ChatController): Hono {
   // GET /api/chat/sessions/:id/events?after=<seq> — stored transcript events (history and resume).
   chat.get('/:id/events', (c) => c.json(success(controller.history(c.req.param('id'), Number(c.req.query('after') ?? 0) || 0))));
 
+  // GET /api/chat/sessions/:id/models — what the session can switch to (asks Claude Code; resumes it if needed).
+  chat.get('/:id/models', async (c) => c.json(success(await controller.models(c.req.param('id')))));
+
+  // GET /api/chat/sessions/:id/tasks — sub-agents and background tasks.
+  chat.get('/:id/tasks', (c) => c.json(success(controller.tasks(c.req.param('id')))));
+
+  // GET /api/chat/sessions/:id/blobs/:blobId — an image's bytes, only when this session links it.
+  chat.get('/:id/blobs/:blobId', (c) => {
+    const blob = controller.blob(c.req.param('id'), c.req.param('blobId'));
+    if (!blob) throw new AppError('NOT_FOUND', 'No such image.');
+    return c.body(blob.bytes, 200, {
+      'Content-Type': blob.mediaType,
+      'Content-Disposition': 'inline',
+      'X-Content-Type-Options': 'nosniff',
+      // Content-addressed: the bytes behind an id never change.
+      'Cache-Control': 'private, max-age=31536000, immutable',
+    });
+  });
+
   return chat;
 }

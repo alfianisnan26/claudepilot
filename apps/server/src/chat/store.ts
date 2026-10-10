@@ -1,9 +1,20 @@
 // Chat sessions: the database layer (chat-sessions PRD §9). Synchronous over `node:sqlite`, redacted,
 // and never a secret — only allowlisted fields of each event are kept, and large text is truncated.
 
-import type { ChatEvent, ChatEventKind, ChatOrigin, ChatPermissionMode, ChatRequest, ChatSession, ChatSessionState } from '@portal/contracts';
+import type {
+  ChatEvent,
+  ChatEventKind,
+  ChatImage,
+  ChatInputState,
+  ChatOrigin,
+  ChatPermissionMode,
+  ChatRequest,
+  ChatSession,
+  ChatSessionState,
+  ChatTask,
+} from '@portal/contracts';
 import type { Store } from '../store/store.js';
-import type { StoredEvent } from './protocol.js';
+import type { StoredEvent, TaskPatch } from './protocol.js';
 
 /** A raw `chat_sessions` row; the controller reads `segment`/`byte_offset`/`cwd`/`process` from it. */
 export type ChatSessionRow = {
@@ -22,6 +33,9 @@ export type ChatSessionRow = {
   last_seq: number;
   model: string | null;
   mode: string;
+  effort: string | null;
+  ultracode: number;
+  ultracode_available: number;
   cost_est_usd: number;
   budget_usd: number | null;
   turns: number;
@@ -41,6 +55,20 @@ type EventRow = {
   payload: string;
 };
 
+type TaskRow = {
+  task_id: string;
+  tool_use_id: string | null;
+  label: string | null;
+  subagent_type: string | null;
+  status: string | null;
+  tokens: number | null;
+  tool_uses: number | null;
+  duration_ms: number | null;
+  summary: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+};
+
 type RequestRow = {
   request_id: string;
   tool_use_id: string | null;
@@ -56,6 +84,9 @@ type RequestRow = {
 export interface ChatSessionPatch {
   model?: string | null;
   mode?: string;
+  effort?: string | null;
+  ultracode?: boolean;
+  ultracodeAvailable?: boolean;
   state?: ChatSessionState;
   cost?: number;
   turnsDelta?: number;
@@ -67,13 +98,37 @@ export interface ChatSessionPatch {
   endedReason?: string | null;
 }
 
-/** The lifecycle states a sent line moves through (chat-sessions PRD §9). */
-export type ChatInputState = 'sending' | 'queued' | 'started' | 'completed' | 'cancelled' | 'discarded' | 'refused' | 'failed';
+/** The lifecycle states a sent line moves through (chat-sessions PRD §9): the contract's, plus `refused`. */
+export type InputState = ChatInputState | 'refused';
+
+/** How far along each state is; a line only ever moves forward (terminal states rank last). */
+const INPUT_RANK_SQL = `CASE state WHEN 'sending' THEN 0 WHEN 'queued' THEN 1 WHEN 'started' THEN 2 ELSE 3 END`;
+const inputRank = (state: InputState): number => ({ sending: 0, queued: 1, started: 2 })[state as string] ?? 3;
+
+/** States a reconnecting tab can't tell from the transcript, so the socket replays them on subscribe. */
+const REPLAYED_INPUT_STATES: ChatInputState[] = ['queued', 'cancelled', 'discarded', 'failed'];
 
 /** Whole, redacted event text over this many characters is truncated before it reaches the row. */
 const MAX_TEXT = 16_000;
 
-/** The chat tables (migration v6), wrapped around the portal {@link Store}. All methods are synchronous. */
+const TASK_STATUSES = new Set<string>(['running', 'completed', 'failed', 'killed']);
+
+/** An epoch-ms instant as ISO-8601, or null when it isn't a plausible one. */
+function isoFromMs(ms: number | undefined): string | null {
+  if (ms === undefined || !Number.isFinite(ms) || ms <= 0 || ms > 8.64e15) return null;
+  return new Date(ms).toISOString();
+}
+
+/** Only the reference fields of an image (never anything else that might ride along). */
+function imageRef(v: unknown): ChatImage | null {
+  const o = v && typeof v === 'object' ? (v as Record<string, unknown>) : null;
+  if (!o || typeof o.blobId !== 'string' || typeof o.mediaType !== 'string') return null;
+  const ref: ChatImage = { blobId: o.blobId, mediaType: o.mediaType };
+  if (typeof o.name === 'string' && o.name) ref.name = o.name;
+  return ref;
+}
+
+/** The chat tables (migrations v6–v7), wrapped around the portal {@link Store}. All methods are synchronous. */
 export class ChatStore {
   readonly #store: Store;
   readonly #now: () => Date;
@@ -137,6 +192,9 @@ export class ChatStore {
       origin: row.origin as ChatOrigin,
       model: row.model ?? null,
       mode: row.mode as ChatPermissionMode,
+      effort: row.effort ?? null,
+      ultracode: row.ultracode === 1,
+      ultracodeAvailable: row.ultracode_available === 1,
       costUsd: row.cost_est_usd,
       turns: row.turns,
       lastSeq: row.last_seq,
@@ -172,9 +230,22 @@ export class ChatStore {
     return rows.map((r) => this.#toEvent(r));
   }
 
-  /** Whether the session already has an event of this kind (e.g. the one-time `system` "Ready"). */
-  hasEventKind(sessionId: string, kind: ChatEventKind): boolean {
-    return !!this.#db().prepare('SELECT 1 FROM chat_events WHERE session_id = ? AND kind = ? LIMIT 1').get(sessionId, kind);
+  /** The tool a stored `tool_use` called, by its id; for naming a result whose call was read earlier. */
+  toolName(sessionId: string, toolUseId: string): string | null {
+    const row = this.#db()
+      .prepare(
+        `SELECT json_extract(payload, '$.toolName') AS name FROM chat_events
+         WHERE session_id = ? AND kind = 'tool_use' AND json_extract(payload, '$.toolUseId') = ? ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(sessionId, toolUseId) as { name: string | null } | undefined;
+    return typeof row?.name === 'string' ? row.name : null;
+  }
+
+  /** Whether the one-time "Ready" note (from the first `system/init`) is stored; other system notes don't count. */
+  hasReady(sessionId: string): boolean {
+    return !!this.#db()
+      .prepare(`SELECT 1 FROM chat_events WHERE session_id = ? AND kind = 'system' AND json_extract(payload, '$.text') = 'Ready' LIMIT 1`)
+      .get(sessionId);
   }
 
   patchSession(id: string, patch: ChatSessionPatch): void {
@@ -187,6 +258,9 @@ export class ChatStore {
     };
     if (patch.model !== undefined) set('model', patch.model);
     if (patch.mode !== undefined) set('mode', patch.mode);
+    if (patch.effort !== undefined) set('effort', patch.effort);
+    if (patch.ultracode !== undefined) set('ultracode', patch.ultracode ? 1 : 0);
+    if (patch.ultracodeAvailable !== undefined) set('ultracode_available', patch.ultracodeAvailable ? 1 : 0);
     if (patch.state !== undefined) {
       const now = this.#stamp();
       set('state', patch.state);
@@ -214,12 +288,130 @@ export class ChatStore {
       .run(sessionId, uuid, actor, kind, priority, this.#stamp());
   }
 
-  setInputState(sessionId: string, uuid: string, state: ChatInputState): void {
-    this.#writable().prepare('UPDATE chat_inputs SET state = ? WHERE session_id = ? AND uuid = ?').run(state, sessionId, uuid);
+  /**
+   * Moves a sent line forward (sending → queued → started → completed, or to a terminal state) and says
+   * whether it changed; a stale or repeated report never moves it back. `failed` applies only to a line
+   * Claude Code hasn't reported on yet. Unknown uuids change nothing.
+   */
+  setInputState(sessionId: string, uuid: string, state: InputState): boolean {
+    const db = this.#writable();
+    const result =
+      state === 'failed'
+        ? db.prepare(`UPDATE chat_inputs SET state = 'failed' WHERE session_id = ? AND uuid = ? AND state = 'sending'`).run(sessionId, uuid)
+        : db.prepare(`UPDATE chat_inputs SET state = ? WHERE session_id = ? AND uuid = ? AND ${INPUT_RANK_SQL} < ?`).run(state, sessionId, uuid, inputRank(state));
+    return Number(result.changes) > 0;
+  }
+
+  inputState(sessionId: string, uuid: string): InputState | null {
+    const row = this.#db().prepare('SELECT state FROM chat_inputs WHERE session_id = ? AND uuid = ?').get(sessionId, uuid) as { state: string } | undefined;
+    return row ? (row.state as InputState) : null;
+  }
+
+  /** Sent messages that are queued, withdrawn or failed — what a reconnecting tab needs beyond the transcript. */
+  inputStates(sessionId: string): { uuid: string; state: ChatInputState }[] {
+    const marks = REPLAYED_INPUT_STATES.map(() => '?').join(', ');
+    const rows = this.#db()
+      .prepare(`SELECT uuid, state FROM chat_inputs WHERE session_id = ? AND kind = 'message' AND state IN (${marks}) ORDER BY created_at`)
+      .all(sessionId, ...REPLAYED_INPUT_STATES) as { uuid: string; state: ChatInputState }[];
+    return rows.map((r) => ({ uuid: r.uuid, state: r.state }));
   }
 
   hasInput(sessionId: string, uuid: string): boolean {
     return !!this.#db().prepare('SELECT 1 FROM chat_inputs WHERE session_id = ? AND uuid = ?').get(sessionId, uuid);
+  }
+
+  /* ---------- Sub-agents and background tasks ---------- */
+
+  /**
+   * Applies one task line: inserts the task (running, started now) the first time it's seen, otherwise
+   * changes only the fields the line carries. A terminal status stamps `ended_at` once; a later
+   * running set (`background_tasks_changed`) never revives a finished task.
+   */
+  upsertTask(sessionId: string, t: TaskPatch): void {
+    const db = this.#writable();
+    const now = this.#stamp();
+    const status = t.status && TASK_STATUSES.has(t.status) ? t.status : undefined;
+    const existing = db.prepare('SELECT status, ended_at FROM chat_tasks WHERE session_id = ? AND task_id = ?').get(sessionId, t.taskId) as
+      | { status: string | null; ended_at: string | null }
+      | undefined;
+    if (!existing) {
+      db.prepare(
+        `INSERT INTO chat_tasks (session_id, task_id, tool_use_id, type, label, background, status, tokens, tool_uses, started_at, ended_at, subagent_type, summary, duration_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        sessionId,
+        t.taskId,
+        t.toolUseId ?? null,
+        t.taskType ?? null,
+        t.description ?? null,
+        t.background ? 1 : 0,
+        status ?? 'running',
+        t.tokens ?? null,
+        t.toolUses ?? null,
+        now,
+        status && status !== 'running' ? (isoFromMs(t.endedAtMs) ?? now) : null,
+        t.subagentType ?? null,
+        t.summary ?? null,
+        t.durationMs ?? null,
+      );
+      return;
+    }
+    const sets: string[] = [];
+    const vals: (string | number | null)[] = [];
+    const set = (col: string, v: string | number | null) => {
+      sets.push(`${col} = ?`);
+      vals.push(v);
+    };
+    if (t.toolUseId !== undefined) set('tool_use_id', t.toolUseId);
+    if (t.taskType !== undefined) set('type', t.taskType);
+    if (t.description !== undefined) set('label', t.description);
+    if (t.subagentType !== undefined) set('subagent_type', t.subagentType);
+    if (t.background !== undefined) set('background', t.background ? 1 : 0);
+    if (status) set('status', status);
+    if ((status ?? existing.status ?? 'running') === 'running') {
+      if (status && existing.ended_at !== null) set('ended_at', null); // started again
+    } else {
+      // An explicit end time wins; otherwise the first terminal report stamps it.
+      const explicit = isoFromMs(t.endedAtMs);
+      if (explicit) set('ended_at', explicit);
+      else if (existing.ended_at === null) set('ended_at', now);
+    }
+    if (t.summary !== undefined) set('summary', t.summary);
+    if (t.tokens !== undefined) set('tokens', t.tokens);
+    if (t.toolUses !== undefined) set('tool_uses', t.toolUses);
+    if (t.durationMs !== undefined) set('duration_ms', t.durationMs);
+    if (!sets.length) return;
+    db.prepare(`UPDATE chat_tasks SET ${sets.join(', ')} WHERE session_id = ? AND task_id = ?`).run(...vals, sessionId, t.taskId);
+  }
+
+  /** The session's sub-agents and background tasks, oldest first. */
+  tasks(sessionId: string): ChatTask[] {
+    const rows = this.#db()
+      .prepare(
+        'SELECT task_id, tool_use_id, label, subagent_type, status, tokens, tool_uses, duration_ms, summary, started_at, ended_at FROM chat_tasks WHERE session_id = ? ORDER BY started_at, task_id',
+      )
+      .all(sessionId) as TaskRow[];
+    return rows.map((r) => ({
+      taskId: r.task_id,
+      toolUseId: r.tool_use_id,
+      description: r.label ?? '',
+      subagentType: r.subagent_type,
+      status: r.status && TASK_STATUSES.has(r.status) ? (r.status as ChatTask['status']) : 'running',
+      tokens: r.tokens,
+      toolUses: r.tool_uses,
+      durationMs: r.duration_ms,
+      summary: r.summary,
+      startedAt: r.started_at ?? '',
+      endedAt: r.ended_at,
+    }));
+  }
+
+  /** The description of the task a `Task` tool_use started, to label its sub-agent's lines. */
+  taskLabel(sessionId: string, toolUseId: string): string | null {
+    const row = this.#db().prepare('SELECT label FROM chat_tasks WHERE session_id = ? AND tool_use_id = ? AND label IS NOT NULL LIMIT 1').get(sessionId, toolUseId) as
+      | { label: string }
+      | undefined;
+    return row?.label ?? null;
   }
 
   /** Records a request the agent raised and returns it with its stored timestamp. Throws on a duplicate id. */
@@ -267,6 +459,13 @@ export class ChatStore {
     if (ev.request !== undefined) p.request = ev.request;
     if (ev.outcome !== undefined) p.outcome = ev.outcome;
     if (ev.costUsd !== undefined) p.costUsd = ev.costUsd;
+    // A call's id, kept (not shown) so a result read after a restart can still be named.
+    if (ev.kind === 'tool_use' && ev.toolUseId) p.toolUseId = ev.toolUseId;
+    // The readable sub-agent label, when it isn't just the raw parent_tool_use_id kept in its column.
+    if (ev.agentLabel && ev.agentLabel !== ev.parentToolUseId) p.agentLabel = ev.agentLabel;
+    // Blob references only: base64 never reaches a row (the controller moves it to the blob store).
+    const images = (ev.images ?? []).map(imageRef).filter((i): i is ChatImage => i !== null);
+    if (images.length) p.images = images;
     return p;
   }
 
@@ -274,12 +473,18 @@ export class ChatStore {
     const payload = this.#parsePayload(row.payload);
     const ev: ChatEvent = { seq: row.seq, at: row.at, kind: row.kind as ChatEventKind };
     if (typeof payload.text === 'string') ev.text = payload.text;
-    if (row.parent_tool_use_id !== null) ev.agentLabel = row.parent_tool_use_id;
+    const agentLabel = typeof payload.agentLabel === 'string' ? payload.agentLabel : row.parent_tool_use_id;
+    if (agentLabel !== null) ev.agentLabel = agentLabel;
     if (typeof payload.toolName === 'string') ev.toolName = payload.toolName;
     if (row.request_id !== null) ev.requestId = row.request_id;
     if (payload.request && typeof payload.request === 'object') ev.request = payload.request as ChatRequest;
     if (typeof payload.outcome === 'string') ev.outcome = payload.outcome;
     if (typeof payload.costUsd === 'number') ev.costUsd = payload.costUsd;
+    if (Array.isArray(payload.images)) {
+      const images = payload.images.map(imageRef).filter((i): i is ChatImage => i !== null);
+      if (images.length) ev.images = images;
+    }
+    if (row.kind === 'user' && row.uuid !== null) ev.uuid = row.uuid;
     return ev;
   }
 

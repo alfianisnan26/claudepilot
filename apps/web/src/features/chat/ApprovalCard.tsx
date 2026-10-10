@@ -17,13 +17,17 @@ export function ApprovalCard({
   waiting,
   onRespond,
   disabled,
+  agentName,
 }: {
   request: ChatRequest;
   waiting: number;
   onRespond: (requestId: string, decision: Decision) => void;
   disabled?: boolean;
+  /** The asking sub-agent as people read it (its task's description), when known. */
+  agentName?: string | null;
 }) {
   const detail = request.detail ?? '';
+  const agent = agentName ?? request.agentLabel;
   return (
     <div role="group" aria-label="Approval needed" className="mb-2.5 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3.5">
       <div className="flex items-start gap-2.5">
@@ -31,7 +35,7 @@ export function ApprovalCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <p className="min-w-0 flex-1 truncate text-sm font-semibold">{request.title}</p>
-            {request.agentLabel && <AgentTag label={request.agentLabel} />}
+            {agent && <AgentTag label={agent} />}
             {waiting > 1 && <span className="shrink-0 text-[11.5px] font-semibold text-muted">{waiting} waiting</span>}
           </div>
           {detail && (

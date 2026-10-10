@@ -16,9 +16,14 @@ export interface ChatSession {
   title: string;
   state: ChatSessionState;
   origin: ChatOrigin;
-  /** The model in effect, or null for the workspace default. */
+  /** The model in effect (Claude Code's `applied.model`), or null before the first report. */
   model: string | null;
   mode: ChatPermissionMode;
+  /** Effort in effect (`low` … `max`), or null when the model has none. */
+  effort: string | null;
+  ultracode: boolean;
+  /** Whether this model/host offers ultracode at all. */
+  ultracodeAvailable: boolean;
   costUsd: number;
   turns: number;
   /** The last stored event's sequence number; a reconnecting tab resumes after it. */
@@ -74,6 +79,60 @@ export interface ChatEvent {
   outcome?: string;
   /** For `result`: the turn's cost and model. */
   costUsd?: number;
+  /** Images on this event (sent by you, or returned by a tool), served from `CHAT_API.blob`. */
+  images?: ChatImage[];
+  /** For `user`: the client UUID it was sent with, to match lifecycle updates (`input` messages). */
+  uuid?: string;
+}
+
+export interface ChatImage {
+  /** sha256 of the bytes; fetch from `CHAT_API.blob(sessionId, blobId)`. */
+  blobId: string;
+  mediaType: string;
+  name?: string;
+}
+
+/** An image you attach to a message. */
+export interface ChatAttachment {
+  name: string;
+  mediaType: ChatImageType;
+  /** Base64, without a `data:` prefix. */
+  dataBase64: string;
+}
+export type ChatImageType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+export const CHAT_IMAGE_TYPES: readonly ChatImageType[] = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+/** Per message: at most this many images, each at most this many bytes (before base64). */
+export const CHAT_MAX_IMAGES = 4;
+export const CHAT_MAX_IMAGE_BYTES = 3_750_000;
+
+/** Where a sent message is (Claude Code's `command_lifecycle`). */
+export type ChatInputState = 'sending' | 'queued' | 'started' | 'completed' | 'cancelled' | 'discarded' | 'failed';
+
+/** A sub-agent or background task inside a session (multi-agent view). */
+export interface ChatTask {
+  taskId: string;
+  /** The `Task` tool_use that started it; sub-agent lines carry it as their agent label. */
+  toolUseId: string | null;
+  description: string;
+  subagentType: string | null;
+  status: 'running' | 'completed' | 'failed' | 'killed';
+  tokens: number | null;
+  toolUses: number | null;
+  durationMs: number | null;
+  summary: string | null;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+/** A model the session can switch to (Claude Code's `list_models`). */
+export interface ChatModelOption {
+  /** Pass to the `model` control op, e.g. `default`, `sonnet`, a full model id. */
+  value: string;
+  displayName: string;
+  description: string | null;
+  /** The model it resolves to now. */
+  resolvedModel: string | null;
+  effortLevels: string[];
 }
 
 export interface CreateChatSessionRequest {
@@ -93,6 +152,12 @@ export const CHAT_API = {
   one: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}`,
   /** GET `?after=<seq>`: stored transcript events after a sequence number (history and resume). */
   events: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/events`,
+  /** GET: models this session can switch to. */
+  models: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/models`,
+  /** GET: sub-agents and background tasks. */
+  tasks: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/tasks`,
+  /** GET: an image's bytes (attachments and tool images). */
+  blob: (id: string, blobId: string) => `/api/chat/sessions/${encodeURIComponent(id)}/blobs/${blobId}`,
 } as const;
 
 /** The chat WebSocket, one per tab. Authorized like the shell socket (Origin + session cookie). */
@@ -118,6 +183,7 @@ export interface ChatSend {
   text: string;
   /** `next` steers the running turn; `later` queues after it. Omit for a fresh turn. */
   priority?: 'next' | 'later';
+  attachments?: ChatAttachment[];
 }
 export interface ChatRespond {
   type: 'respond';
@@ -129,7 +195,14 @@ export interface ChatRespond {
 export interface ChatControl {
   type: 'control';
   session: string;
-  op: 'stop' | 'end';
+  /**
+   * `stop` interrupts the turn; `end` closes the session; `model`, `effort`, `ultracode`, `mode`
+   * change what applies from the next request; `cancel_queued` withdraws a queued message.
+   */
+  op: 'stop' | 'end' | 'model' | 'effort' | 'ultracode' | 'mode' | 'cancel_queued';
+  /** Used to key the `ack`; any client-chosen string. */
+  uuid?: string;
+  args?: { model?: string; effort?: string; ultracode?: boolean; mode?: ChatPermissionMode; inputUuid?: string };
 }
 export type ChatClientMessage = ChatSubscribe | ChatUnsubscribe | ChatSend | ChatRespond | ChatControl;
 
@@ -144,4 +217,8 @@ export type ChatServerMessage =
   | { type: 'session'; session: ChatSession }
   /** Result of a send/respond/control the tab sent. */
   | { type: 'ack'; uuid: string; ok: boolean; error?: string }
+  /** A sent message moved through Claude Code's queue (queued → started → completed, or cancelled). */
+  | { type: 'input'; session: string; uuid: string; state: ChatInputState }
+  /** The session's sub-agents and background tasks changed (the full current list). */
+  | { type: 'tasks'; session: string; tasks: ChatTask[] }
   | { type: 'error'; session?: string; message: string };

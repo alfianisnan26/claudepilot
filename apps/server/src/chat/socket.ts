@@ -10,7 +10,11 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { ChatController } from './controller.js';
 
 const PING_MS = 25_000;
-const MAX_PAYLOAD = 1024 * 1024;
+/**
+ * 24 MB: room for a send with the most images allowed (CHAT_MAX_IMAGES × CHAT_MAX_IMAGE_BYTES, about
+ * 20 MB once base64-encoded) plus its JSON. The web app relies on it; per-message checks are the real guard.
+ */
+const MAX_PAYLOAD = 24 * 1024 * 1024;
 
 /** Browsers send cookies on cross-site WebSocket handshakes, so the origin must be this host. */
 function sameOrigin(req: IncomingMessage): boolean {
@@ -46,7 +50,7 @@ export function attachChat(server: Server, controller: ChatController, authorize
   function join(ws: WebSocket) {
     const subscribed = new Set<string>();
     const send = (msg: ChatServerMessage) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(msg));
-    // Forward the controller's live updates for sessions this tab watches.
+    // Forward the controller's live updates (events, deltas, session, input states, tasks) for watched sessions.
     const off = controller.onEvent((sessionId, msg) => {
       if (subscribed.has(sessionId)) send(msg);
     });
@@ -67,7 +71,8 @@ export function attachChat(server: Server, controller: ChatController, authorize
       } catch {
         return;
       }
-      void handle(msg);
+      if (!msg || typeof msg !== 'object') return;
+      void handle(msg).catch((e: unknown) => send({ type: 'error', session: typeof msg.session === 'string' ? msg.session : undefined, message: errMessage(e) }));
     });
     ws.on('close', () => {
       clearInterval(ping);
@@ -83,7 +88,12 @@ export function attachChat(server: Server, controller: ChatController, authorize
           const items = controller.history(msg.session, msg.afterSeq ?? 0);
           if (items.length) send({ type: 'events', session: msg.session, items });
           const session = controller.get(msg.session);
-          if (session) send({ type: 'session', session });
+          if (session) {
+            send({ type: 'session', session });
+            send({ type: 'tasks', session: msg.session, tasks: controller.tasks(msg.session) });
+            // Queued, withdrawn and failed messages: what the transcript alone can't tell a fresh tab.
+            for (const input of controller.inputStates(msg.session)) send({ type: 'input', session: msg.session, uuid: input.uuid, state: input.state });
+          }
           return;
         }
         case 'unsubscribe':
@@ -91,7 +101,7 @@ export function attachChat(server: Server, controller: ChatController, authorize
           return;
         case 'send':
           try {
-            await controller.send(msg.session, msg.uuid, msg.text, { priority: msg.priority, actor: 'ui' });
+            await controller.send(msg.session, msg.uuid, msg.text, { priority: msg.priority, attachments: msg.attachments, actor: 'ui' });
             send({ type: 'ack', uuid: msg.uuid, ok: true });
           } catch (e) {
             send({ type: 'ack', uuid: msg.uuid, ok: false, error: errMessage(e) });
@@ -105,15 +115,16 @@ export function attachChat(server: Server, controller: ChatController, authorize
             send({ type: 'ack', uuid: msg.requestId, ok: false, error: errMessage(e) });
           }
           return;
-        case 'control':
+        case 'control': {
+          const key = typeof msg.uuid === 'string' && msg.uuid ? msg.uuid : String(msg.op);
           try {
-            if (msg.op === 'stop') await controller.stop(msg.session);
-            else if (msg.op === 'end') await controller.end(msg.session);
-            send({ type: 'ack', uuid: msg.op, ok: true });
+            await controller.control(msg.session, msg.op, msg.args);
+            send({ type: 'ack', uuid: key, ok: true });
           } catch (e) {
-            send({ type: 'ack', uuid: msg.op, ok: false, error: errMessage(e) });
+            send({ type: 'ack', uuid: key, ok: false, error: errMessage(e) });
           }
           return;
+        }
       }
     }
   }

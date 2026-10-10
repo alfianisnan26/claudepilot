@@ -71,12 +71,12 @@ case "$cmd" in
     mkdir -p "$dir/in.d"
     file="$dir/in.d/$uuid.jsonl"
     head -c "$nbytes" > "$file"
-    # Exactly one newline-terminated line that is a single JSON value, or drop it (exit 4).
-    raw="$(cat "$file"; printf x)"; raw="\${raw%x}"
-    body="\${raw%"$nl"}"
+    # Exactly one newline-terminated line that is a single JSON value, or drop it (exit 4). Checked
+    # with streaming tools: a line carrying images can be ~20 MB, too big for shell variables.
     ok=1
-    [ "$body" != "$raw" ] || ok=
-    case "$body" in *"$nl"*) ok= ;; esac
+    [ "$(wc -c < "$file")" -eq "$nbytes" ] || ok=
+    [ "$(wc -l < "$file")" -eq 1 ] || ok=
+    [ "$(tail -c 1 "$file" | od -An -tx1 | tr -d ' ')" = 0a ] || ok=
     jq -e . "$file" >/dev/null 2>&1 || ok=
     if [ -z "$ok" ]; then rm -f "$file"; exit 4; fi
     # Open the FIFO read-write so the append never blocks waiting for a reader, then stage is consumed.

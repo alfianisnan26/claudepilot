@@ -342,6 +342,23 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 7,
+    name: 'chat controls and tasks',
+    up(db) {
+      db.exec(`
+        -- What applies now (Claude Code's get_settings.applied; never the rest of that response).
+        ALTER TABLE chat_sessions ADD COLUMN effort TEXT;
+        ALTER TABLE chat_sessions ADD COLUMN ultracode INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE chat_sessions ADD COLUMN ultracode_available INTEGER NOT NULL DEFAULT 0;
+        -- Sub-agents: what system/task_* events report.
+        ALTER TABLE chat_tasks ADD COLUMN subagent_type TEXT;
+        ALTER TABLE chat_tasks ADD COLUMN summary TEXT;
+        ALTER TABLE chat_tasks ADD COLUMN duration_ms INTEGER;
+        CREATE INDEX chat_files_blob ON chat_files (session_id, blob_sha256);
+      `);
+    },
+  },
 ];
 
 /**

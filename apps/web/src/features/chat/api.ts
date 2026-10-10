@@ -1,6 +1,13 @@
 import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
 import { track } from '@isnanme/ui';
-import { CHAT_API, type ChatEvent, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
+import {
+  CHAT_API,
+  type ChatEvent,
+  type ChatModelOption,
+  type ChatSession,
+  type ChatTask,
+  type CreateChatSessionRequest,
+} from '@portal/contracts';
 import { ApiError } from '@/lib/api';
 
 /**
@@ -35,4 +42,10 @@ export const chatApi = {
   end: (id: string) => request<{ ok: true }>('DELETE', CHAT_API.one(id)),
   history: (id: string, after?: number) =>
     request<ChatEvent[]>('GET', CHAT_API.events(id) + (after !== undefined ? `?after=${after}` : '')),
+  /** Models this session can switch to (Claude Code's own list). */
+  models: (id: string) => request<ChatModelOption[]>('GET', CHAT_API.models(id)),
+  /** Sub-agents and background tasks, the full current list. */
+  tasks: (id: string) => request<ChatTask[]>('GET', CHAT_API.tasks(id)),
+  /** Where an image's bytes are served (attachments and tool images); plain same-origin GET. */
+  blobUrl: (id: string, blobId: string) => CHAT_API.blob(id, blobId),
 };

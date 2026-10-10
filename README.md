@@ -142,6 +142,14 @@ portal reads from a byte offset, stores (numbered, in the database) and pushes t
 stdio`): nothing runs until you allow it. Sessions start in the default (ask) mode with a $10 budget;
 Bypass is off. Docker workspaces only for now.
 
+Above the composer, chips show what applies right now and switch it: the model (Claude Code's own
+list), effort, ultracode where the model offers it, and the mode (Ask, Auto-accept edits, Plan). While
+a turn runs, **Steer** sends your message at the next step and **Send after this turn** queues it;
+a queued message can be withdrawn. **Agents** lists the session's sub-agents with their status,
+tokens and summary, and their messages are tagged in the transcript. Images can be attached (paste,
+drop or the paperclip; up to 4, 3.75 MB each) and show in the transcript with tool images; they're
+stored on the portal by content hash and served only to their session.
+
 ## Storage
 
 The portal keeps its state in SQLite (`node:sqlite`, WAL) at `$PORTAL_DATA_DIR/portal.db`, migrated on
