@@ -1,0 +1,19 @@
+{
+  "name": "claudepilot",
+  "private": true,
+  "type": "module",
+  "description": "Portal: React + Vite frontend and Node backend served together on one port",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "npm run dev -w @portal/server",
+    "build": "npm run build -w @portal/web && npm run build -w @portal/server",
+    "start": "npm run start -w @portal/server",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}

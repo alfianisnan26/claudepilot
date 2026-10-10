@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Run Claude Code with an isolated login/config per profile.
+# Usage: claude-as <profile> [claude args...]
+set -euo pipefail
+
+profile="${1:?usage: claude-as <profile> [claude args...]}"
+shift
+
+export CLAUDE_CONFIG_DIR="$HOME/.claude-profiles/$profile"
+mkdir -p "$CLAUDE_CONFIG_DIR"
+exec claude "$@"

@@ -1,0 +1,27 @@
+{
+  "name": "@portal/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Portal backend: Hono on Node; serves the API and the web app",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false --ignore '../web/**' src/index.ts",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:hono --external:@hono/node-server --external:@isnanme/* --external:vite --outfile=dist/index.js",
+    "start": "NODE_ENV=production node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.5",
+    "@isnanme/core": "^0.1.0",
+    "@portal/contracts": "*",
+    "hono": "^4.10.1"
+  },
+  "devDependencies": {
+    "@isnanme/tsconfig": "^0.1.0",
+    "@types/node": "^22.18.0",
+    "esbuild": "^0.25.10",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9"
+  }
+}

@@ -1,0 +1,4 @@
+@import 'tailwindcss';
+@import '@isnanme/tokens/tailwind.css';
+/* Let Tailwind see @isnanme/ui's class names (workspace root node_modules). */
+@source '../../../node_modules/@isnanme/ui/dist';

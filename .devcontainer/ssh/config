@@ -1,0 +1,17 @@
+# Container-side SSH config for the isnan k3s cluster.
+# Keys and known_hosts come read-only from the Mac via ~/.ssh-host.
+
+Host ssh-node1-infra.isnan.me
+  HostName ssh-node1-infra.isnan.me
+  User root
+  ProxyCommand cloudflared access ssh --hostname %h
+
+Host ssh-k3s-master-infra.isnan.me
+  HostName 10.26.0.10
+  User root
+  ProxyJump ssh-node1-infra.isnan.me
+
+Host *
+  IdentityFile ~/.ssh-host/id_ed25519
+  IdentityFile ~/.ssh-host/id_rsa
+  UserKnownHostsFile ~/.ssh/known_hosts ~/.ssh-host/known_hosts

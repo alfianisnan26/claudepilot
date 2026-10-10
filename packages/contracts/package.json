@@ -1,0 +1,19 @@
+{
+  "name": "@portal/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Wire types and rules shared by the portal server and web app",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@isnanme/core": "^0.1.0"
+  },
+  "devDependencies": {
+    "@isnanme/tsconfig": "^0.1.0"
+  }
+}

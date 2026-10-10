@@ -1,0 +1,45 @@
+{
+  "name": "claudepilot",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "remoteUser": "node",
+
+  // Runs on the Mac before the container starts: export the gh token and the
+  // home-isnan-cluster kubeconfig outside the repo.
+  "initializeCommand": "bash .devcontainer/initialize.sh",
+  "postStartCommand": "bash .devcontainer/post-start.sh",
+
+  // Portal (apps/server), plain HTTP.
+  "forwardPorts": [3000],
+
+  // Docker both ways: `docker` talks to a daemon inside this container (DinD); the Mac's
+  // Docker Desktop is the `host` context (`docker --context host …`), via the socket mounted below.
+  // moby=false: Moby has no Debian trixie packages, so install Docker CE.
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": { "moby": false }
+  },
+
+  "containerEnv": {
+    "KUBECONFIG": "/home/node/.host-secrets/kubeconfig",
+    // Default Claude Code config (login, sessions, memory) lives on the profiles volume
+    // so it survives rebuilds. `claude-as <profile>` still overrides this.
+    "CLAUDE_CONFIG_DIR": "/home/node/.claude-profiles/default"
+  },
+  "mounts": [
+    "source=claudepilot-claude-profiles,target=/home/node/.claude-profiles,type=volume",
+    "source=claudepilot-cloudflared,target=/home/node/.cloudflared,type=volume",
+    "source=${localEnv:HOME}/.config/claudepilot-devcontainer,target=/home/node/.host-secrets,type=bind,readonly",
+    "source=${localEnv:HOME}/.ssh/id_ed25519,target=/home/node/.ssh-host/id_ed25519,type=bind,readonly",
+    "source=${localEnv:HOME}/.ssh/id_rsa,target=/home/node/.ssh-host/id_rsa,type=bind,readonly",
+    "source=${localEnv:HOME}/.ssh/known_hosts,target=/home/node/.ssh-host/known_hosts,type=bind,readonly",
+    "source=/var/run/docker.sock,target=/var/run/docker-host.sock,type=bind"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code"
+      ]
+    }
+  }
+}
