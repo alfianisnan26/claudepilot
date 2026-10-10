@@ -3,6 +3,7 @@ import { getRequestListener } from '@hono/node-server';
 import { formatCode } from '@portal/contracts';
 import { createApp } from './app.js';
 import { config } from './config.js';
+import { JsonFile } from './jsonFile.js';
 import { Portal } from './portal.js';
 import { DockerRuntime } from './workspaces/docker.js';
 import { KubernetesRuntime } from './workspaces/kubernetes.js';
@@ -20,7 +21,8 @@ if (ws.kubernetes.enabled) {
     console.error(`[workspaces] kubernetes target off: ${(e as Error).message}`);
   }
 }
-const workspaces = new Workspaces(runtimes);
+const workspaces = new Workspaces(runtimes, new JsonFile(`${config.paths.data}/pending-creates.json`, []));
+void workspaces.resume().catch((e: unknown) => console.error(`[workspaces] resume failed: ${(e as Error).message}`));
 
 const app = createApp(portal, workspaces, { serveWeb: !config.dev });
 const handleApi = getRequestListener(app.fetch);

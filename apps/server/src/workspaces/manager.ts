@@ -7,6 +7,7 @@ import {
   type WorkspaceTarget,
   type WorkspaceUsage,
 } from '@portal/contracts';
+import type { JsonFile } from '../jsonFile.js';
 import type { Runtime, ShellSession } from './runtime.js';
 
 const CHECK_TTL_MS = 10_000;
@@ -32,15 +33,54 @@ const timeout = <T>(p: Promise<T>, ms: number) =>
 
 /**
  * Every target's workspaces in one place. What exists is read from the runtimes each time; only
- * creates in flight (and creates that failed, until removed) live here.
+ * creates in flight (and creates that failed, until removed) live here. Those are also saved to
+ * disk, so a restart picks an interrupted create back up instead of dropping it.
  */
 export class Workspaces {
   readonly #runtimes = new Map<string, Runtime>();
   readonly #pending = new Map<string, Workspace>();
   #checked: { at: number; targets: Promise<WorkspaceTarget[]> } | undefined;
 
-  constructor(runtimes: Runtime[]) {
+  constructor(
+    runtimes: Runtime[],
+    private readonly saved: JsonFile<Workspace[]>,
+  ) {
     for (const r of runtimes) this.#runtimes.set(r.target.id, r);
+  }
+
+  /** Picks up the creates that were in flight (or had failed) when the portal last stopped. */
+  async resume() {
+    const saved = this.saved.read();
+    if (!saved.length) return;
+    for (const w of saved) this.#pending.set(w.id, w.status === 'creating' ? { ...w, detail: 'Resuming after restart' } : w);
+    const targets = await this.targets(true);
+    await Promise.all(
+      saved
+        .filter((w) => w.status === 'creating')
+        .map(async (w) => {
+          const workspace = this.#pending.get(w.id)!;
+          const target = targets.find((t) => t.id === w.target);
+          if (!target?.available) {
+            const why = target ? `${target.label} isn’t reachable: ${target.problem}` : `No target “${w.target}”.`;
+            return this.#setPending({ ...workspace, status: 'error', detail: `Could not resume after restart. ${why}` });
+          }
+          const runtime = this.#runtime(target.id);
+          try {
+            const found = (await runtime.list()).find((x) => x.name === w.name);
+            if (found) {
+              // The runtime got far enough to hold it; finish the job if it never started.
+              if (found.status === 'stopped') await runtime.start(w.name);
+              this.#deletePending(w.id);
+              console.log(`[workspaces] ${w.id} was created before the restart`);
+              return;
+            }
+          } catch (e) {
+            return this.#setPending({ ...workspace, status: 'error', detail: runtimeMessage(e) });
+          }
+          console.log(`[workspaces] resuming create of ${w.id}`);
+          this.#launch(runtime, workspace);
+        }),
+    );
   }
 
   targets(fresh = false): Promise<WorkspaceTarget[]> {
@@ -72,7 +112,7 @@ export class Workspaces {
     const found = lists.flat();
     const ids = new Set(found.map((w) => w.id));
     // A create in flight shows as "creating" until the runtime has it (then the runtime's view wins).
-    for (const [id, w] of this.#pending) if (w.status === 'creating' && ids.has(id)) this.#pending.delete(id);
+    for (const [id, w] of this.#pending) if (w.status === 'creating' && ids.has(id)) this.#deletePending(id);
     const pending = [...this.#pending.values()].filter((w) => !ids.has(w.id));
     return [...pending, ...found].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
@@ -112,8 +152,14 @@ export class Workspaces {
       cpus,
       memoryMb,
     };
-    this.#pending.set(id, workspace);
+    this.#setPending(workspace);
+    this.#launch(runtime, workspace);
+    return workspace;
+  }
 
+  /** Runs a create in the background; `workspace` (the pending entry) tracks its progress. */
+  #launch(runtime: Runtime, workspace: Workspace) {
+    const { id, name, cpus, memoryMb } = workspace;
     void runtime
       .create({ name, cpus, memoryMb }, (detail) => {
         workspace.detail = detail;
@@ -121,16 +167,33 @@ export class Workspaces {
       .then(
         () => {
           console.log(`[workspaces] created ${id}`);
-          this.#pending.delete(id);
+          this.#deletePending(id);
         },
         (e: unknown) => {
           const message = isAppError(e) ? e.message : runtimeMessage(e);
           console.error(`[workspaces] creating ${id} failed: ${message}`);
           // Keep a failed create visible (as an error) until someone removes it.
-          this.#pending.set(id, { ...workspace, status: 'error', detail: message });
+          this.#setPending({ ...workspace, status: 'error', detail: message });
         },
       );
-    return workspace;
+  }
+
+  // Progress text changes too often to save; status changes (added, failed, done) are saved.
+  #setPending(w: Workspace) {
+    this.#pending.set(w.id, w);
+    this.#save();
+  }
+
+  #deletePending(id: string) {
+    if (this.#pending.delete(id)) this.#save();
+  }
+
+  #save() {
+    try {
+      this.saved.write([...this.#pending.values()]);
+    } catch (e) {
+      console.error(`[workspaces] could not save pending creates: ${(e as Error).message}`);
+    }
   }
 
   start = (target: string, name: string) => this.#run(target, (r) => r.start(name));
@@ -140,7 +203,7 @@ export class Workspaces {
     const id = workspaceId(target, name);
     if (this.#pending.get(id)?.status === 'creating')
       throw new AppError('CONFLICT', 'Wait for it to finish creating, then remove it.');
-    this.#pending.delete(id);
+    this.#deletePending(id);
     await this.#run(target, (r) => r.remove(name));
     console.log(`[workspaces] removed ${id}`);
   }

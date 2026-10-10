@@ -10,11 +10,12 @@ export const config = {
   port: Number(env('PORTAL_PORT') ?? 3000),
   /** Fixed server code; when unset one is generated at startup. */
   serverCode: env('PORTAL_SERVER_CODE'),
-  /** Repo root, web app source and its build output. */
+  /** Repo root, web app source and its build output, and where the portal keeps its own files. */
   paths: {
     root,
     web: `${root}apps/web`,
     webDist: `${root}apps/web/dist`,
+    data: env('PORTAL_DATA_DIR') ?? `${root}.data`,
   },
   session: {
     cookie: 'portal_session',

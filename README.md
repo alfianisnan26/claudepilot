@@ -33,6 +33,9 @@ gh auth refresh -h github.com -s read:packages   # once
 NODE_AUTH_TOKEN=$(gh auth token) npm install
 ```
 
+In the devcontainer, every new shell sets `NODE_AUTH_TOKEN` from `gh` (see
+[.devcontainer/post-start.sh](.devcontainer/post-start.sh)), so a plain `npm install` works after a rebuild.
+
 ## Run
 
 ```sh
@@ -52,6 +55,7 @@ Environment variables (see [.env.example](.env.example)):
 | `PORTAL_SERVER_CODE` | generated | Sign-in code. Unset: an 8-character code is generated at startup and printed in the log. |
 | `PORTAL_HOST` | `0.0.0.0` | Bind address. |
 | `PORTAL_PORT` | `3000` | Port. |
+| `PORTAL_DATA_DIR` | `.data` (repo root) | Where the portal keeps its own files (today: workspace creates in progress). |
 
 Codes are exactly 8 letters and digits (one sign-in box each, shown as `XXXX-XXXX`). Case, spaces and
 dashes are ignored. A `.env` at the repo root is loaded in dev.
@@ -69,14 +73,17 @@ Targets (each shows up when reachable):
 | `docker-host` | `PORTAL_DOCKER_HOST_SOCKET` (`/var/run/docker-host.sock`; the Mac's Docker Desktop) | same |
 | `kubernetes` | current kubeconfig context, namespace `PORTAL_K8S_NAMESPACE` (`claudepilot-workspaces`) | Deployment `ws-<name>` (scaled 1/0 to start/stop) + PVC `ws-<name>-home` |
 
-- The runtimes are the record: workspaces are found by label, so a portal restart loses nothing
-  (except a create still in progress).
+- The runtimes are the record: workspaces are found by label, so a portal restart loses nothing.
+  Creates in progress (and failed ones, until removed) are saved in `PORTAL_DATA_DIR` and picked up
+  again after a restart.
 - `/home/node` persists. On Docker a fresh volume is seeded from the image; on Kubernetes an init
   container copies it in once.
 - Docker targets build `PORTAL_WORKSPACE_IMAGE` (`claudepilot-workspace:latest`) from
   `images/workspace` the first time (a few minutes). Kubernetes pulls `PORTAL_K8S_IMAGE`
-  (`ghcr.io/alfianisnan26/claudepilot-workspace:latest`), so that image has to be pushed to a registry
-  the cluster can reach; set `PORTAL_K8S_IMAGE_PULL_SECRET` for a private one. Also:
+  (`ghcr.io/alfianisnan26/claudepilot-workspace:latest`), which
+  [.github/workflows/workspace-image.yml](.github/workflows/workspace-image.yml) builds for amd64 and
+  arm64 on changes to `images/workspace` and weekly (new Claude Code releases). If the GHCR package is
+  private, set `PORTAL_K8S_IMAGE_PULL_SECRET` to a pull secret in the namespace. Also:
   `PORTAL_K8S_STORAGE` (`10Gi`), `PORTAL_K8S_STORAGE_CLASS`, `PORTAL_K8S_ENABLED=false` to turn it off.
 - The shell is a WebSocket at `/api/workspaces/<target>/<name>/shell`; it needs a session cookie and a
   same-origin `Origin`.
