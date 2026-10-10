@@ -1,10 +1,11 @@
-import { Button, cn, ConfirmDialog, Menu, useMediaQuery, useToast } from '@isnanme/ui';
+import { Button, cn, ConfirmDialog, Menu, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
 import type { ChatRequest } from '@portal/contracts';
-import { ArrowLeft, Bot, FolderOpen, Square, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, Bot, FolderOpen, MoreHorizontal, Square, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { errorText } from '@/lib/api';
 import { AgentsPanel, AgentsSheet } from './AgentsPanel';
+import { chatApi } from './api';
 import { ApprovalCard } from './ApprovalCard';
 import { Composer, type ComposerHandle } from './Composer';
 import { Controls } from './Controls';
@@ -12,7 +13,8 @@ import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './Fi
 import { StateBadge } from './shared';
 import { Transcript } from './Transcript';
 import { ResumeBanner } from './ResumeBanner';
-import { useChatSession } from './useChatSocket';
+import { TrustSheet, useFolderTrust, type TrustTarget } from './TrustSheet';
+import { useChatSession, type ChatControlArgs, type ChatControlOp, type ChatSendOptions } from './useChatSocket';
 
 /** The side panels: one at a time. */
 type Side = 'agents' | 'files';
@@ -32,7 +34,9 @@ function savedPanel(): Side | null {
  * One session, full screen (like the shell): a header with the state and controls, the transcript,
  * the approvals dock, the session's controls and the composer pinned to the bottom. From 1280 px the
  * agents or files panel sits on the right (toggleable, one at a time); below that each opens as a
- * sheet. It owns the dedicated chat socket for as long as it's mounted.
+ * sheet, and below 640 px Files and Agents move into the header's ⋯ menu. It owns the dedicated chat
+ * socket for as long as it's mounted. A send, resume or change refused because the session's folder
+ * needs trust asks first ("Trust this folder?") and runs again once trusted.
  */
 export function SessionPage() {
   const { id = '' } = useParams();
@@ -41,7 +45,26 @@ export function SessionPage() {
   const [ending, setEnding] = useState(false);
   const composer = useRef<ComposerHandle>(null);
 
+  // A refused start's ack names no folder, and the session doesn't either: its folder is where Files
+  // opens by default.
+  const sessionRef = useRef(session);
+  useLayoutEffect(() => {
+    sessionRef.current = session;
+  });
+  const locate = useCallback(async (): Promise<TrustTarget> => {
+    const [s, folder] = await Promise.all([sessionRef.current ?? chatApi.get(id), chatApi.files(id)]);
+    return { workspaceId: s.workspaceId, folder: folder.path };
+  }, [id]);
+  const trust = useFolderTrust(id, locate);
+  const { guard } = trust;
+  const trustedSend = useCallback((text: string, opts?: ChatSendOptions) => guard(() => send(text, opts)), [guard, send]);
+  const trustedControl = useCallback((op: ChatControlOp, args?: ChatControlArgs) => guard(() => control(op, args)), [guard, control]);
+  const stopTask = useCallback((taskId: string) => control('stop_task', { taskId }), [control]);
+  const interrupt = useCallback(() => control('stop'), [control]);
+
   const wide = useMediaQuery('(min-width: 1280px)');
+  // Below 640 px the title needs the room: Files and Agents live in the ⋯ menu.
+  const roomy = useMediaQuery('(min-width: 640px)');
   const [panel, setPanel] = useState(savedPanel);
   const [sheet, setSheet] = useState<Side | null>(null);
   const open = wide ? panel : sheet;
@@ -111,6 +134,23 @@ export function SessionPage() {
   const working = state === 'working';
   const ended = state === 'ended';
 
+  // What the ⋯ menu opens takes focus back to ⋯ when it closes (the menu item it came from is gone by then).
+  const menuRef = useRef<HTMLDivElement>(null);
+  const fromMenu = (fn: () => void) => () => {
+    menuRef.current?.querySelector<HTMLElement>('[aria-haspopup="menu"]')?.focus({ preventScroll: true });
+    fn();
+  };
+  const agentsLabel = running ? `Agents, ${running} running` : 'Agents';
+  const menuItems: MenuItem[] = [
+    ...(roomy
+      ? []
+      : [
+          { label: 'Files and changes', icon: <FolderOpen className="size-4" />, onSelect: fromMenu(toggleFiles) },
+          { label: running ? `Agents · ${running} running` : 'Agents', icon: <Bot className="size-4" />, onSelect: fromMenu(toggleAgents) },
+        ]),
+    { label: 'End session', icon: <Trash2 className="size-4" />, onSelect: fromMenu(() => setEnding(true)), danger: true, disabled: ended },
+  ];
+
   return (
     <div className="flex h-dvh flex-col bg-bg text-ink">
       <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-line bg-bg/90 px-2 pt-[env(safe-area-inset-top)] backdrop-blur-md sm:px-3">
@@ -130,49 +170,57 @@ export function SessionPage() {
         </div>
         {session && <StateBadge state={state} />}
         {working && (
-          <Button size="sm" variant="secondary" icon={<Square className="size-3.5" />} onClick={stop}>
+          <Button size="sm" variant="secondary" icon={<Square className="size-3.5" />} onClick={stop} aria-label="Stop">
             <span className="hidden sm:inline">Stop</span>
           </Button>
         )}
-        <button
-          type="button"
-          onClick={toggleFiles}
-          aria-label="Files"
-          aria-expanded={filesOpen}
-          aria-controls={filesOpen ? 'files-panel' : undefined}
-          title={wide ? (filesOpen ? 'Hide files' : 'Show files and changes') : 'Files and changes'}
-          className={cn(
-            'press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold text-muted hover:bg-surface-2 hover:text-ink',
-            filesOpen && 'bg-surface-2 text-ink',
-          )}
-        >
-          <FolderOpen className="size-[18px]" />
-          <span className="hidden sm:inline">Files</span>
-        </button>
-        <button
-          type="button"
-          onClick={toggleAgents}
-          aria-label={running ? `Agents, ${running} running` : 'Agents'}
-          aria-expanded={agentsOpen}
-          aria-controls={agentsOpen ? 'agents-panel' : undefined}
-          title={wide ? (agentsOpen ? 'Hide agents' : 'Show agents') : 'Agents'}
-          className={cn(
-            'press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold text-muted hover:bg-surface-2 hover:text-ink',
-            agentsOpen && 'bg-surface-2 text-ink',
-          )}
-        >
-          <Bot className="size-[18px]" />
-          <span className="hidden sm:inline">Agents</span>
-          {running > 0 && (
-            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-accent px-1.5 text-[11px] font-bold text-white tabular-nums dark:text-bg">
-              {running}
-            </span>
-          )}
-        </button>
-        <Menu
-          label="Session actions"
-          items={[{ label: 'End session', icon: <Trash2 className="size-4" />, onSelect: () => setEnding(true), danger: true, disabled: ended }]}
-        />
+        {roomy && (
+          <>
+            <button
+              type="button"
+              onClick={toggleFiles}
+              aria-label="Files"
+              aria-expanded={filesOpen}
+              aria-controls={filesOpen ? 'files-panel' : undefined}
+              title={wide ? (filesOpen ? 'Hide files' : 'Show files and changes') : 'Files and changes'}
+              className={cn(
+                'press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold text-muted hover:bg-surface-2 hover:text-ink',
+                filesOpen && 'bg-surface-2 text-ink',
+              )}
+            >
+              <FolderOpen className="size-[18px]" />
+              <span>Files</span>
+            </button>
+            <button
+              type="button"
+              onClick={toggleAgents}
+              aria-label={agentsLabel}
+              aria-expanded={agentsOpen}
+              aria-controls={agentsOpen ? 'agents-panel' : undefined}
+              title={wide ? (agentsOpen ? 'Hide agents' : 'Show agents') : 'Agents'}
+              className={cn(
+                'press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold text-muted hover:bg-surface-2 hover:text-ink',
+                agentsOpen && 'bg-surface-2 text-ink',
+              )}
+            >
+              <Bot className="size-[18px]" />
+              <span>Agents</span>
+              {running > 0 && <RunningCount count={running} />}
+            </button>
+          </>
+        )}
+        <div ref={menuRef} className="shrink-0">
+          <Menu
+            label={!roomy && running ? `Session actions, ${running} ${running === 1 ? 'agent' : 'agents'} running` : 'Session actions'}
+            trigger={
+              <span className="relative flex">
+                <MoreHorizontal className="size-[18px]" />
+                {!roomy && running > 0 && <RunningCount count={running} small />}
+              </span>
+            }
+            items={menuItems}
+          />
+        </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -203,9 +251,18 @@ export function SessionPage() {
                 <p className="py-2 text-center text-[13px] text-muted">This session has ended.</p>
               ) : (
                 <>
-                  {session && <ResumeBanner session={session} connected={connected} onResume={() => control('resume')} />}
-                  {session && <Controls sessionId={id} session={session} connected={connected} control={control} className="mb-2" />}
-                  <Composer ref={composer} onSend={send} connected={connected} working={working} />
+                  {session && <ResumeBanner session={session} connected={connected} onResume={() => trustedControl('resume')} />}
+                  {session && (
+                    <Controls
+                      sessionId={id}
+                      session={session}
+                      connected={connected}
+                      control={trustedControl}
+                      suspended={trust.prompt !== null}
+                      className="mb-2"
+                    />
+                  )}
+                  <Composer ref={composer} onSend={trustedSend} connected={connected} working={working} />
                 </>
               )}
             </div>
@@ -214,7 +271,14 @@ export function SessionPage() {
 
         {wide && panel === 'agents' && (
           <aside id="agents-panel" aria-label="Agents" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg">
-            <AgentsPanel tasks={tasks} onClose={toggleAgents} closeLabel="Hide agents" />
+            <AgentsPanel
+              tasks={tasks}
+              onStopTask={ended ? undefined : stopTask}
+              onInterrupt={interrupt}
+              connected={connected}
+              onClose={toggleAgents}
+              closeLabel="Hide agents"
+            />
           </aside>
         )}
         {wide && panel === 'files' && (
@@ -224,8 +288,19 @@ export function SessionPage() {
         )}
       </div>
 
-      {!wide && <AgentsSheet open={sheet === 'agents'} tasks={tasks} onClose={() => setSheet(null)} />}
+      {!wide && (
+        <AgentsSheet
+          open={sheet === 'agents'}
+          tasks={tasks}
+          onStopTask={ended ? undefined : stopTask}
+          onInterrupt={interrupt}
+          connected={connected}
+          onClose={() => setSheet(null)}
+        />
+      )}
       {!wide && <FilesSheet key={id} open={sheet === 'files'} sessionId={id} view={filesView} onView={setFilesView} onClose={() => setSheet(null)} />}
+
+      <TrustSheet trust={trust} />
 
       <ConfirmDialog
         open={ending}
@@ -239,5 +314,20 @@ export function SessionPage() {
         onClose={() => setEnding(false)}
       />
     </div>
+  );
+}
+
+/** How many agents are running: a green pill by Agents, or a smaller one on the ⋯ button on phones. */
+function RunningCount({ count, small }: { count: number; small?: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        'flex items-center justify-center rounded-full bg-accent font-bold text-white tabular-nums dark:text-bg',
+        small ? 'absolute -top-2 -right-2 h-4 min-w-4 px-1 text-[10px] ring-2 ring-bg' : 'h-5 min-w-5 px-1.5 text-[11px]',
+      )}
+    >
+      {count}
+    </span>
   );
 }

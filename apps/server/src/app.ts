@@ -38,6 +38,7 @@ import type { AccountHealthService } from './accounts/health.js';
 import type { ChatController } from './chat/controller.js';
 import { createChatFileRoutes } from './chat/fileRoutes.js';
 import { createChatRoutes } from './chat/routes.js';
+import { createChatTrustRoutes } from './chat/trustRoutes.js';
 import type { AccountPools } from './accounts/pools.js';
 import type { AccountsService } from './accounts/service.js';
 import { runPreflight } from './delivery/preflight.js';
@@ -380,6 +381,10 @@ export function createApp(
   chat.route('/', createChatRoutes(chatController));
   chat.route('/', createChatFileRoutes({ controller: chatController, workspaces, store }));
   app.route('/api/chat/sessions', chat);
+  const trust = new Hono<Env>();
+  trust.use(requireSession);
+  trust.route('/', createChatTrustRoutes({ controller: chatController, workspaces, store }));
+  app.route('/api/chat/trust', trust);
 
   app.all('/api/*', () => {
     throw new AppError('NOT_FOUND');

@@ -13,9 +13,10 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
+import { formatTokens } from './shared';
 import type { ChatControlArgs, ChatControlOp } from './useChatSocket';
 
 type Control = (op: ChatControlOp, args?: ChatControlArgs) => Promise<void>;
@@ -69,22 +70,26 @@ function matchModel(models: ChatModelOption[] | null, applied: string | null, pi
  * The session's controls, just above the composer: model, effort, Ultracode (when on) and permission
  * mode as chips. Each opens a small picker (a bottom sheet on phones) that sends the change and waits
  * for its ack, showing the error in place. Chips always show what the session reports as applied,
- * never what was asked for.
+ * never what was asked for. At the end of the row, how full the context window is.
  */
 export function Controls({
   sessionId,
   session,
   connected,
   control,
+  suspended,
   className,
 }: {
   sessionId: string;
   session: ChatSession;
   connected: boolean;
   control: Control;
+  /** Another prompt has the screen (the folder needs trust before a change can apply): pickers stay closed. */
+  suspended?: boolean;
   className?: string;
 }) {
   const [open, setOpen] = useState<Picker | null>(null);
+  if (suspended && open !== null) setOpen(null);
   const [models, setModels] = useState<ChatModelOption[] | null>(null);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
@@ -124,34 +129,37 @@ export function Controls({
 
   return (
     <>
-      <div role="group" aria-label="Session settings" className={cn('no-scrollbar flex items-center gap-1.5 overflow-x-auto', className)}>
-        <Chip
-          icon={Cpu}
-          label={modelName}
-          ariaLabel={`Model: ${modelName}`}
-          title={session.model ?? undefined}
-          onClick={() => setOpen('model')}
-          shrink
-        />
-        {session.effort !== null && (
-          <Chip icon={Gauge} label={effortLabel(session.effort)} ariaLabel={`Effort: ${effortLabel(session.effort)}`} onClick={() => setOpen('effort')} />
-        )}
-        {showUltracode && (
+      <div className={cn('flex items-center gap-1.5', className)}>
+        <div role="group" aria-label="Session settings" className="no-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
           <Chip
-            icon={Zap}
-            label="Ultracode"
-            ariaLabel={`Ultracode: ${session.ultracode ? 'on' : 'off'}`}
-            tone={session.ultracode ? 'gold' : undefined}
-            onClick={() => setOpen('effort')}
+            icon={Cpu}
+            label={modelName}
+            ariaLabel={`Model: ${modelName}`}
+            title={session.model ?? undefined}
+            onClick={() => setOpen('model')}
+            shrink
           />
-        )}
-        <Chip
-          icon={mode.icon}
-          label={mode.label}
-          ariaLabel={`Permission mode: ${mode.label}`}
-          tone={mode.danger ? 'danger' : undefined}
-          onClick={() => setOpen('mode')}
-        />
+          {session.effort !== null && (
+            <Chip icon={Gauge} label={effortLabel(session.effort)} ariaLabel={`Effort: ${effortLabel(session.effort)}`} onClick={() => setOpen('effort')} />
+          )}
+          {showUltracode && (
+            <Chip
+              icon={Zap}
+              label="Ultracode"
+              ariaLabel={`Ultracode: ${session.ultracode ? 'on' : 'off'}`}
+              tone={session.ultracode ? 'gold' : undefined}
+              onClick={() => setOpen('effort')}
+            />
+          )}
+          <Chip
+            icon={mode.icon}
+            label={mode.label}
+            ariaLabel={`Permission mode: ${mode.label}`}
+            tone={mode.danger ? 'danger' : undefined}
+            onClick={() => setOpen('mode')}
+          />
+        </div>
+        {session.context && <ContextMeter context={session.context} />}
       </div>
 
       <Dialog open={open === 'model'} onClose={close} size="sm" title="Model" description="Applies from Claude’s next request.">
@@ -242,6 +250,86 @@ function Chip({
       <span className="truncate">{label}</span>
       <ChevronDown className="size-3 shrink-0 opacity-60" aria-hidden="true" />
     </button>
+  );
+}
+
+/** The meter's ring: radius in a 14-unit box, and its length. */
+const RING_R = 5.25;
+const RING_LENGTH = 2 * Math.PI * RING_R;
+
+/**
+ * How full the context window was after the last turn (Claude Code's own usage report): a ring and a
+ * percentage, gold from 80 % and red from 95 %. The token counts show on hover, keyboard focus or tap.
+ */
+function ContextMeter({ context }: { context: NonNullable<ChatSession['context']> }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const tipId = useId();
+  const { usedTokens: used, windowTokens: size } = context;
+  const pct = size ? Math.min(100, Math.round((used / size) * 100)) : null;
+  const tone = pct === null ? null : pct >= 95 ? 'danger' : pct >= 80 ? 'gold' : null;
+
+  // Opened by a tap: closes on a tap elsewhere or Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        onBlur={() => setOpen(false)}
+        aria-label={pct === null ? `Context: ${formatTokens(used)} tokens` : `Context ${pct}% full`}
+        aria-describedby={tipId}
+        className={cn(
+          'peer press inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12.5px] font-semibold whitespace-nowrap tabular-nums transition-colors tap:h-10 tap:px-3',
+          tone === 'danger'
+            ? 'border-danger/30 bg-danger-soft text-danger'
+            : tone === 'gold'
+              ? 'border-gold/30 bg-gold-soft text-gold'
+              : 'border-line bg-surface text-ink-soft hover:border-line-strong hover:text-ink',
+        )}
+      >
+        {pct !== null && (
+          <svg viewBox="0 0 14 14" className="size-3.5 shrink-0 -rotate-90" aria-hidden="true">
+            <circle cx="7" cy="7" r={RING_R} fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
+            <circle
+              cx="7"
+              cy="7"
+              r={RING_R}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeDasharray={RING_LENGTH}
+              strokeDashoffset={RING_LENGTH * (1 - pct / 100)}
+            />
+          </svg>
+        )}
+        <span>
+          <span className="hidden sm:inline">Context </span>
+          {pct === null ? formatTokens(used) : `${pct}%`}
+        </span>
+      </button>
+      <span
+        id={tipId}
+        role="tooltip"
+        className={cn(
+          'pointer-events-none absolute right-0 bottom-full z-20 mb-2 rounded-xl bg-primary px-3 py-2 text-[12px] font-medium whitespace-nowrap text-primary-ink tabular-nums opacity-0 shadow-lift transition-opacity peer-hover:opacity-100 peer-focus-visible:opacity-100',
+          open && 'opacity-100',
+        )}
+      >
+        {size ? `${used.toLocaleString()} of ${size.toLocaleString()} tokens` : `${used.toLocaleString()} tokens used`}
+      </span>
+    </div>
   );
 }
 

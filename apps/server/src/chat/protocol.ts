@@ -71,6 +71,17 @@ export interface ParsedLine {
   tasks?: TaskPatch[];
   /** `Task`/`Agent` tool calls and their descriptions, to label sub-agent lines. */
   agents?: { toolUseId: string; description: string }[];
+  /**
+   * From a `result`: the tokens its `usage` counts (input, cache reads and writes, output) and each
+   * model's context window from `modelUsage`; the controller picks the window of the model in use.
+   */
+  context?: { usedTokens: number; windows: { model: string; tokens: number }[] };
+  /**
+   * One main-thread API call's usage: input and cache tokens from its `assistant` line (keyed by the
+   * message id), or its final output count from the stream's `message_delta`. The context after a
+   * turn is the last call's, not the turn's sum, which adds up every call.
+   */
+  mainUsage?: { messageId: string | null; input?: number; output?: number };
 
   /* What the integrity checks (PRD §10.4) look at. */
 
@@ -285,6 +296,11 @@ function parseStreamEvent(obj: Record<string, unknown>): ParsedLine {
     case 'content_block_stop':
     case 'message_stop':
       return { stored: [], blockEdge: { agentLabel } };
+    case 'message_delta': {
+      const output = asNum(asObj(event?.usage)?.output_tokens);
+      if (agentLabel || output === null) return { stored: [] };
+      return { stored: [], mainUsage: { messageId: asStr(obj.api_message_id), output: tokens(output) } };
+    }
     default:
       return { stored: [] };
   }
@@ -320,6 +336,11 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
   const out: ParsedLine = { stored };
   if (agents.length) out.agents = agents;
   if (enterPlan) out.enterPlan = true;
+  const usage = asObj(asObj(obj.message)?.usage);
+  if (usage && !agentLabel) {
+    const input = tokens(usage.input_tokens) + tokens(usage.cache_read_input_tokens) + tokens(usage.cache_creation_input_tokens);
+    if (input > 0) out.mainUsage = { messageId: asStr(asObj(obj.message)?.id), input, output: tokens(usage.output_tokens) };
+  }
   return out;
 }
 
@@ -404,9 +425,36 @@ function parseResult(obj: Record<string, unknown>): ParsedLine {
   const patch: NonNullable<ParsedLine['sessionPatch']> = { state: 'idle', turnsDelta: 1 };
   if (cost !== null) patch.cost = cost;
   const out: ParsedLine = { stored, sessionPatch: patch };
+  const context = resultContext(obj);
+  if (context) out.context = context;
   const sid = asStr(obj.session_id);
   if (sid) out.sessionIdSeen = sid;
   return out;
+}
+
+/** A token count from a usage report: a whole, non-negative number, else 0. */
+const tokens = (v: unknown): number => {
+  const n = asNum(v);
+  return n !== null && n > 0 ? Math.round(n) : 0;
+};
+
+/**
+ * How full the context is, from a `result`'s own usage report (no request of its own):
+ * `input_tokens + cache_read_input_tokens + cache_creation_input_tokens + output_tokens`, a missing
+ * count reading 0, and each `modelUsage` entry's `contextWindow`. A result that read nothing (no
+ * `usage`, or all zeros: a local command, a turn stopped before its first request) says nothing new.
+ */
+function resultContext(obj: Record<string, unknown>): ParsedLine['context'] | null {
+  const usage = asObj(obj.usage);
+  if (!usage) return null;
+  const usedTokens = tokens(usage.input_tokens) + tokens(usage.cache_read_input_tokens) + tokens(usage.cache_creation_input_tokens) + tokens(usage.output_tokens);
+  if (usedTokens === 0) return null;
+  const windows: { model: string; tokens: number }[] = [];
+  for (const [model, entry] of Object.entries(asObj(obj.modelUsage) ?? {})) {
+    const size = tokens(asObj(entry)?.contextWindow);
+    if (size > 0) windows.push({ model, tokens: size });
+  }
+  return { usedTokens, windows };
 }
 
 /** `can_use_tool` becomes a request the operator must answer; any other control_request gets an error. */

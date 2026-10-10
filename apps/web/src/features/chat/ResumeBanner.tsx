@@ -3,6 +3,7 @@ import type { ChatSession } from '@portal/contracts';
 import { Play } from 'lucide-react';
 import { useState } from 'react';
 import { errorText } from '@/lib/api';
+import { isTrustDeclined } from './TrustSheet';
 
 /**
  * A session whose Claude Code process is gone (Interrupted) or asleep after idling: say so, and offer
@@ -18,7 +19,8 @@ export function ResumeBanner({ session, onResume, connected }: { session: ChatSe
     try {
       await onResume();
     } catch (e) {
-      toast(errorText(e, 'Could not resume the session.'), 'error');
+      // Cancelled on "Trust this folder?": nothing to report.
+      if (!isTrustDeclined(e)) toast(errorText(e, 'Could not resume the session.'), 'error');
     } finally {
       setBusy(false);
     }

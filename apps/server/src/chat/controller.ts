@@ -8,13 +8,15 @@
 // liveness every minute. A vanished process leaves the session Interrupted; Resume or the next message
 // relaunches it with `--resume` on a fresh log segment and restores its settings. Idle sessions sleep and
 // wake the same way. Integrity (§10.4): anything in the stream this portal didn't originate ends the
-// session. Redaction (§13): stored text and live deltas pass through redact.ts.
+// session. Redaction (§13): stored text and live deltas pass through redact.ts. Folder trust (FR43): no
+// process starts in a folder whose project settings would load something the person hasn't trusted.
 
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
 import {
   CHAT_SESSION_TITLE_MAX,
   type ChatControl,
+  type ChatFolderScan,
   type ChatImage,
   type ChatInputState,
   type ChatModelOption,
@@ -27,6 +29,7 @@ import type { Store } from '../store/store.js';
 import type { Workspaces } from '../workspaces/manager.js';
 import { HOME, type ExecSession } from '../workspaces/runtime.js';
 import { decodeAttachments, decodeToolImage, readBlob, saveBlob } from './blobs.js';
+import { workspacePath } from './files.js';
 import { CP_SESSION_PATH, parseStartOutput } from './host.js';
 import {
   allowResponse,
@@ -45,7 +48,8 @@ import {
   type StoredEvent,
 } from './protocol.js';
 import { redact, StreamRedactor } from './redact.js';
-import { ChatStore, type ChatSessionRow, type InputState } from './store.js';
+import { ChatStore, sessionCwd, type ChatSessionPatch, type ChatSessionRow, type InputState } from './store.js';
+import { FOLDER_CHANGED, scanFolder, untrustedError } from './trust.js';
 
 /** The permission mode every process starts in (`--permission-mode`); others are applied after. */
 const START_MODE = 'default';
@@ -78,6 +82,8 @@ const MODEL_VALUE = /^[\x21-\x7e]{1,200}$/;
 const EFFORT_LEVEL = /^[a-z]{1,16}$/;
 /** A client-chosen message id (a UUID in practice); it's echoed into the stream and the inputs table. */
 const CLIENT_ID = /^[A-Za-z0-9._:-]{1,64}$/;
+/** A sub-agent's task id as Claude Code reports it (e.g. `aae5b105d0089cda7`). */
+const TASK_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
 /** Keys of the portal's own control lines in `chat_inputs`: a request it asks, an answer it gives. */
 const ASKED = (requestId: string) => `req/${requestId}`;
@@ -130,6 +136,13 @@ interface Restore {
   mode: string;
 }
 
+interface LaunchOptions {
+  /** Relaunch with `--resume` (Interrupted, or asleep). */
+  resume?: boolean;
+  /** The host was just brought up to date and the folder just passed its trust check (a create). */
+  checked?: boolean;
+}
+
 type Dispatch = (sessionId: string, msg: ChatServerMessage) => void;
 
 export interface ChatControllerOptions {
@@ -164,11 +177,15 @@ export class ChatController {
   readonly #chat: ChatStore;
   readonly #workspaces: Workspaces;
   readonly #readers = new Map<string, Reader>();
+  /** Per session, the latest main-thread API call's usage (for the context figure). */
+  readonly #lastCall = new Map<string, { messageId: string | null; input: number; output: number }>();
   readonly #dispatchers = new Set<Dispatch>();
   /** Control requests in flight, by request_id. */
   readonly #pending = new Map<string, PendingControl>();
-  /** Lifecycle work in flight (a launch, a sleep): sends and controls wait for it, and it's never doubled. */
+  /** Lifecycle work in flight (a launch, a sleep): sends and controls wait for it, and it's never doubled. Never rejects. */
   readonly #busy = new Map<string, Promise<void>>();
+  /** Launches in flight: whoever asks for one meanwhile shares its outcome, a trust refusal included. */
+  readonly #launching = new Map<string, Promise<void>>();
   /** Sessions whose current process has had its applied settings read (after its first `system/init`). */
   readonly #appliedRead = new Set<string>();
   /** Per session: a `Task` tool_use id → its sub-agent's description, to label that agent's lines. */
@@ -398,16 +415,29 @@ export class ChatController {
 
   /* ---------- Lifecycle ---------- */
 
-  create(req: Partial<CreateChatSessionRequest>): ChatSession {
+  /**
+   * Creates a session and starts its process in the background. The folder is checked first (FR43): when
+   * its project settings would load something the person hasn't trusted at this exact hash, this throws
+   * a 409 `FOLDER_UNTRUSTED` carrying the scan, and no session is created.
+   */
+  async create(req: Partial<CreateChatSessionRequest>): Promise<ChatSession> {
     const workspaceId = typeof req.workspaceId === 'string' ? req.workspaceId.trim() : '';
     if (!workspaceId) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
     const [target] = this.#split(workspaceId);
     if (!this.#workspaces.runtimeFor(target)) throw new AppError('VALIDATION_FAILED', `No target “${target}”.`, { details: { workspaceId: 'Unknown target.' } });
-    const id = randomUUID();
-    const cwd = typeof req.cwd === 'string' && req.cwd.trim() ? req.cwd.trim() : HOME;
+    const cwd = this.#folder(req.cwd);
     const title = (typeof req.title === 'string' && req.title.trim() ? req.title.trim() : 'New session').slice(0, CHAT_SESSION_TITLE_MAX);
+    // The scan needs the current host. If it can't be installed, the session is created anyway and its
+    // launch tries again: failing, it ends with the reason, and nothing starts unchecked either way.
+    let installed = true;
+    if (this.installHost) await this.installHost(workspaceId).catch(() => void (installed = false));
+    if (installed) {
+      const scan = await this.#scan(workspaceId, cwd);
+      if (!scan.empty && !scan.trusted) throw untrustedError(scan, this.#chat.folderTrust(workspaceId, scan.folder) !== null);
+    }
+    const id = randomUUID();
     const session = this.#chat.create({ id, workspaceId, cwd, title, origin: 'ui' });
-    void this.#startProcess(id).catch(() => undefined);
+    void this.#startProcess(id, { checked: installed }).catch(() => undefined);
     return session;
   }
 
@@ -512,7 +542,7 @@ export class ChatController {
    * One session control. `stop` interrupts the turn and `end` closes the session; `model`, `effort`,
    * `ultracode` and `mode` change what applies from Claude Code's next request (the session then shows
    * the applied values); `cancel_queued` withdraws a queued message; `resume` relaunches an Interrupted
-   * or sleeping session.
+   * or sleeping session; `stop_task` stops one sub-agent or background task.
    */
   async control(sessionId: string, op: ChatControl['op'], args?: ChatControl['args']): Promise<void> {
     const a: NonNullable<ChatControl['args']> = args && typeof args === 'object' ? args : {};
@@ -533,6 +563,8 @@ export class ChatController {
         return this.#cancelQueued(sessionId, a.inputUuid);
       case 'resume':
         return this.#resume(sessionId);
+      case 'stop_task':
+        return this.#stopTask(sessionId, a.taskId);
       default:
         throw new AppError('VALIDATION_FAILED', 'Unknown control.');
     }
@@ -636,24 +668,54 @@ export class ChatController {
     this.#setInput(sessionId, uuid, 'cancelled');
   }
 
+  /**
+   * Stops one running sub-agent or background task (`stop_task`) and waits for Claude Code's reply; a
+   * refusal comes back as its message. Claude Code reports the task stopped on the stream, which the task
+   * list follows. One that already ended, or whose process is gone, needs nothing (it's never resumed for this).
+   */
+  async #stopTask(sessionId: string, taskId: unknown): Promise<void> {
+    const id = typeof taskId === 'string' ? taskId.trim() : '';
+    if (!TASK_ID.test(id)) throw new AppError('VALIDATION_FAILED', 'Say which sub-agent to stop.');
+    this.#require(sessionId);
+    const task = this.#chat.tasks(sessionId).find((t) => t.taskId === id);
+    if (!task) throw new AppError('NOT_FOUND', 'No such sub-agent.');
+    if (task.status !== 'running') return;
+    await this.#busy.get(sessionId);
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state === 'ended' || row.process !== 'live') return;
+    await this.#request(sessionId, 'stop_task', { task_id: id });
+  }
+
   /* ---------- Host process ---------- */
 
-  /** Launches (or resumes) the session's process; lifecycle work already in flight is shared, never doubled. */
-  #startProcess(sessionId: string, opts: { resume?: boolean } = {}): Promise<void> {
+  /**
+   * Launches (or resumes) the session's process; lifecycle work already in flight is shared, never
+   * doubled. Rejects when the folder's trust check refuses the launch (409 `FOLDER_UNTRUSTED`).
+   */
+  #startProcess(sessionId: string, opts: LaunchOptions = {}): Promise<void> {
+    const launching = this.#launching.get(sessionId);
+    if (launching) return launching;
     const inFlight = this.#busy.get(sessionId);
     if (inFlight) return inFlight;
-    const launch = this.#launch(sessionId, opts).finally(() => this.#busy.delete(sessionId));
-    this.#busy.set(sessionId, launch);
+    const launch = this.#launch(sessionId, opts).finally(() => {
+      this.#busy.delete(sessionId);
+      this.#launching.delete(sessionId);
+    });
+    this.#launching.set(sessionId, launch);
+    // Whoever only waits for lifecycle work (Stop, a liveness round) needs it settled, not its refusal.
+    this.#busy.set(sessionId, launch.catch(() => undefined));
     return launch;
   }
 
-  async #launch(sessionId: string, opts: { resume?: boolean }): Promise<void> {
+  async #launch(sessionId: string, opts: LaunchOptions): Promise<void> {
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended') return;
     // A relaunch starts on defaults: these go back once it runs.
     const restore: Restore | null = opts.resume ? { model: row.model, effort: row.effort, ultracode: row.ultracode === 1, mode: row.mode } : null;
+    // The folder it's scanned in is the folder it runs in (and the one the session reports).
+    const cwd = sessionCwd(row.cwd);
 
-    if (this.installHost) {
+    if (this.installHost && !opts.checked) {
       try {
         await this.installHost(row.workspace_id);
       } catch (e) {
@@ -663,12 +725,27 @@ export class ChatController {
       }
     }
 
+    if (!opts.checked) {
+      let scan: ChatFolderScan;
+      try {
+        scan = await this.#scan(row.workspace_id, cwd);
+      } catch (e) {
+        // The folder couldn't be checked (the workspace is unreachable, the folder gone): nothing starts,
+        // and like a start that failed, the session reads Interrupted and a later send can resume it.
+        if (this.#chat.row(sessionId)?.state === 'ended') return;
+        this.#chat.patchSession(sessionId, { state: 'interrupted', process: 'gone', endedReason: this.#message(e) });
+        this.#emitSession(sessionId);
+        return;
+      }
+      if (this.#chat.row(sessionId)?.state === 'ended') return;
+      if (!scan.empty && !scan.trusted) this.#refuseLaunch(sessionId, row, scan);
+    }
+
     // One log segment per process: a relaunch never appends to (or re-reads) the previous one's log.
     const seg = opts.resume || row.process_started_at !== null ? row.segment + 1 : row.segment;
     // `--resume` needs Claude Code's transcript, which exists once a turn has started (the first
     // `system/init`, stored as "Ready"); until then the id is unused and the session starts afresh.
     const resume = opts.resume === true && this.#chat.hasReady(sessionId);
-    const cwd = row.cwd || HOME;
     const flags = [...BASE_FLAGS, resume ? '--resume' : '--session-id', sessionId, ...BUDGET_FLAGS];
     let code: number | null;
     let out: string;
@@ -712,6 +789,22 @@ export class ChatController {
     this.#emitSession(sessionId);
     this.#ensureReader(sessionId);
     if (restore && code === 0) await this.#restore(sessionId, restore);
+  }
+
+  /**
+   * A launch the folder's trust check refused (FR43): nothing starts, and the caller gets the 409 with
+   * the scan. When the files changed since the folder was trusted, the transcript says so (once). A first
+   * launch, which never ran, reads Interrupted; a resume or wake leaves the session as it was.
+   */
+  #refuseLaunch(sessionId: string, row: ChatSessionRow, scan: ChatFolderScan): never {
+    const changed = this.#chat.folderTrust(row.workspace_id, scan.folder) !== null;
+    const error = untrustedError(scan, changed);
+    if (changed) this.#appendOnce(sessionId, { kind: 'error', text: FOLDER_CHANGED });
+    if (this.#chat.row(sessionId)?.process === 'live') {
+      this.#chat.patchSession(sessionId, { state: 'interrupted', process: 'gone', endedReason: error.message });
+      this.#emitSession(sessionId);
+    }
+    throw error;
   }
 
   /**
@@ -925,8 +1018,27 @@ export class ChatController {
       this.#append(sessionId, { kind: 'request', requestId: canonical.requestId, request: canonical, agentLabel: canonical.agentLabel, parentToolUseId: parent });
     }
 
-    if (parsed.sessionPatch) {
-      this.#chat.patchSession(sessionId, parsed.sessionPatch);
+    if (parsed.mainUsage) {
+      // The latest main-thread API call: its input (with cache) and final output tokens.
+      const u = parsed.mainUsage;
+      const last = this.#lastCall.get(sessionId);
+      const same = last && last.messageId === u.messageId;
+      this.#lastCall.set(sessionId, {
+        messageId: u.messageId,
+        input: Math.max(same ? last.input : 0, u.input ?? 0),
+        output: Math.max(same ? last.output : 0, u.output ?? 0),
+      });
+    }
+    if (parsed.sessionPatch || parsed.context) {
+      const patch: ChatSessionPatch = { ...parsed.sessionPatch };
+      if (parsed.context) {
+        // How full the window is now: the last call's tokens, not the turn's sum over every call.
+        const last = this.#lastCall.get(sessionId);
+        patch.contextUsed = last && last.input > 0 ? last.input + last.output : parsed.context.usedTokens;
+        this.#lastCall.delete(sessionId); // each turn reports its own
+        patch.contextWindow = this.#contextWindow(sessionId, parsed.context.windows);
+      }
+      this.#chat.patchSession(sessionId, patch);
       this.#emitSession(sessionId);
     }
 
@@ -1164,6 +1276,19 @@ export class ChatController {
 
   /* ---------- Exec helpers ---------- */
 
+  /** What the folder's project settings would load, and whether the person trusted exactly that (FR43). */
+  #scan(workspaceId: string, folder: string): Promise<ChatFolderScan> {
+    return scanFolder(this.#workspaces, this.#store, workspaceId, folder, { timeoutMs: this.execTimeoutMs });
+  }
+
+  /** A new session's folder: an absolute path, tidied; the home folder when none is given. */
+  #folder(raw: unknown): string {
+    if (typeof raw !== 'string' || !raw.trim()) return HOME;
+    if (!raw.trim().startsWith('/'))
+      throw new AppError('VALIDATION_FAILED', 'Pick a folder by its full path, like /home/node/project.', { details: { cwd: 'Expected an absolute path.' } });
+    return workspacePath(raw.trim());
+  }
+
   /** Stages one line into the FIFO via `cp-session send` (a fresh staging uuid, exact byte count). */
   async #writeLine(sessionId: string, line: string): Promise<void> {
     const row = this.#chat.row(sessionId);
@@ -1206,6 +1331,13 @@ export class ChatController {
     this.#emit(sessionId, { type: 'events', session: sessionId, items: [full] });
   }
 
+  /** Appends an event unless the newest one already says the same (a refusal repeated on every retry). */
+  #appendOnce(sessionId: string, ev: StoredEvent): void {
+    const last = this.#chat.lastEvent(sessionId);
+    if (last?.kind === ev.kind && last.text === ev.text) return;
+    this.#append(sessionId, ev);
+  }
+
   /** A system row in the transcript (a control change). */
   #note(sessionId: string, text: string): void {
     this.#append(sessionId, { kind: 'system', text });
@@ -1231,6 +1363,14 @@ export class ChatController {
     let calls = this.#toolCalls.get(sessionId);
     if (!calls) this.#toolCalls.set(sessionId, (calls = new Map()));
     return calls;
+  }
+
+  /** The context window of the model in use, from a result's `modelUsage`; the largest when that's unclear. */
+  #contextWindow(sessionId: string, windows: { model: string; tokens: number }[]): number | null {
+    if (!windows.length) return null;
+    const model = this.#chat.row(sessionId)?.model;
+    const own = model ? windows.find((w) => w.model === model) : undefined;
+    return own ? own.tokens : Math.max(...windows.map((w) => w.tokens));
   }
 
   /** The tool a result answers: from the call still in flight (then forgotten), else from the stored call. */

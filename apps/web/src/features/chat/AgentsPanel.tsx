@@ -1,9 +1,10 @@
-import { Badge, ease, Spinner, type BadgeTone } from '@isnanme/ui';
+import { Badge, Button, ease, Spinner, useToast, type BadgeTone } from '@isnanme/ui';
 import type { ChatTask } from '@portal/contracts';
-import { Bot, X } from 'lucide-react';
+import { Bot, Square, X } from 'lucide-react';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
-import { useId, useMemo } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { errorText } from '@/lib/api';
 import { AgentTag, formatDuration, formatTokens, useModal, useNow } from './shared';
 
 const STATUS: Record<ChatTask['status'], { label: string; tone: BadgeTone }> = {
@@ -12,6 +13,9 @@ const STATUS: Record<ChatTask['status'], { label: string; tone: BadgeTone }> = {
   failed: { label: 'Failed', tone: 'danger' },
   killed: { label: 'Stopped', tone: 'danger' },
 };
+
+/** After its ack, how long a stopped task's row waits for the task to report it ended before Stop is offered again. */
+const STOP_GRACE_MS = 15_000;
 
 /** Running first, then the most recently started. */
 const byActivity = (a: ChatTask, b: ChatTask) =>
@@ -29,24 +33,119 @@ function tasksSummary(tasks: ChatTask[]): string {
   return parts.length ? parts.join(' · ') : 'Nothing running';
 }
 
+interface AgentsProps {
+  tasks: ChatTask[];
+  /** Stops one running task (`stop_task`), settling on its ack. Without it there's no Stop. */
+  onStopTask?: (taskId: string) => Promise<void>;
+  /** Interrupts the turn (`stop`): the first half of Stop all. */
+  onInterrupt?: () => Promise<void>;
+  /** While the socket is down, Stop waits. */
+  connected?: boolean;
+}
+
 /**
  * The session's sub-agents and background tasks: what each is doing, its type, status, tokens,
- * tool uses, time and summary. The same content fills the side panel on wide screens and the
- * sheet below them.
+ * tool uses, time and summary, with Stop on each running one and Stop all above them. The same
+ * content fills the side panel on wide screens and the sheet below them.
  */
 export function AgentsPanel({
   tasks,
+  onStopTask,
+  onInterrupt,
+  connected = true,
   onClose,
   closeLabel,
   titleId,
-}: {
-  tasks: ChatTask[];
+}: AgentsProps & {
   onClose: () => void;
   closeLabel: string;
   titleId?: string;
 }) {
+  const toast = useToast();
   const sorted = useMemo(() => [...tasks].sort(byActivity), [tasks]);
   const now = useNow(tasks.some((t) => t.status === 'running'));
+  const running = sorted.filter((t) => t.status === 'running');
+  // Stops in flight (or acked, until the task reports it ended), and why the last one failed, by task.
+  const [stopping, setStopping] = useState<ReadonlySet<string>>(() => new Set());
+  const [failures, setFailures] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const [stoppingAll, setStoppingAll] = useState(false);
+  const latest = useRef(tasks);
+  useLayoutEffect(() => {
+    latest.current = tasks;
+  });
+  const stillRunning = (taskId: string) => latest.current.some((t) => t.taskId === taskId && t.status === 'running');
+
+  const mark = useCallback((ids: string[], on: boolean) => {
+    setStopping((s) => {
+      const next = new Set(s);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }, []);
+  const fail = useCallback((taskId: string, message: string | null) => {
+    setFailures((m) => {
+      if (message === null && !m.has(taskId)) return m;
+      const next = new Map(m);
+      if (message === null) next.delete(taskId);
+      else next.set(taskId, message);
+      return next;
+    });
+  }, []);
+
+  // Acked stops wait for the task to report it ended; if it never does, Stop comes back.
+  const timers = useRef(new Set<number>());
+  useEffect(() => {
+    const pending = timers.current;
+    return () => pending.forEach((t) => window.clearTimeout(t));
+  }, []);
+  const settleLater = (taskId: string) => {
+    const t = window.setTimeout(() => {
+      timers.current.delete(t);
+      mark([taskId], false);
+    }, STOP_GRACE_MS);
+    timers.current.add(t);
+  };
+
+  /** Stops one task; resolves with why it failed, or null. A task that ended meanwhile isn't a failure. */
+  const stopOne = async (taskId: string): Promise<string | null> => {
+    if (!onStopTask) return null;
+    mark([taskId], true);
+    fail(taskId, null);
+    try {
+      await onStopTask(taskId);
+      settleLater(taskId);
+      return null;
+    } catch (e) {
+      mark([taskId], false);
+      if (!stillRunning(taskId)) return null;
+      const message = errorText(e, 'Couldn’t stop it.');
+      fail(taskId, message);
+      return message;
+    }
+  };
+
+  // Stop all: interrupt the turn first, then stop each task that's still running.
+  const stopAll = async () => {
+    const ids = running.map((t) => t.taskId);
+    setStoppingAll(true);
+    mark(ids, true);
+    let problem: string | null = null;
+    try {
+      await onInterrupt?.();
+    } catch (e) {
+      problem = errorText(e, 'Couldn’t stop the turn.');
+    }
+    const results = await Promise.all(ids.filter(stillRunning).map(stopOne));
+    const failed = results.filter((r): r is string => r !== null);
+    mark(ids.filter((id) => !stillRunning(id)), false);
+    setStoppingAll(false);
+    if (failed.length) toast(failed.length === 1 ? `Couldn’t stop an agent: ${failed[0]}` : `Couldn’t stop ${failed.length} agents: ${failed[0]}`, 'error');
+    else if (problem) toast(problem, 'error');
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-14 shrink-0 items-center gap-2 border-b border-line pr-2 pl-4">
@@ -56,6 +155,19 @@ export function AgentsPanel({
           </h2>
           <p className="truncate text-[11px] text-muted">{tasksSummary(tasks)}</p>
         </div>
+        {onStopTask && running.length > 0 && (
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<Square className="size-3.5" />}
+            loading={stoppingAll}
+            disabled={!connected}
+            onClick={() => void stopAll()}
+            aria-label={`Stop all: the turn and ${running.length === 1 ? 'the running agent' : `${running.length} running agents`}`}
+          >
+            Stop all
+          </Button>
+        )}
         <button
           type="button"
           onClick={onClose}
@@ -77,7 +189,15 @@ export function AgentsPanel({
         ) : (
           <ul className="divide-y divide-line">
             {sorted.map((t) => (
-              <TaskRow key={t.taskId} task={t} now={now} />
+              <TaskRow
+                key={t.taskId}
+                task={t}
+                now={now}
+                onStop={onStopTask ? () => void stopOne(t.taskId) : undefined}
+                stopping={stopping.has(t.taskId)}
+                stopDisabled={!connected}
+                failure={t.status === 'running' ? failures.get(t.taskId) : undefined}
+              />
             ))}
           </ul>
         )}
@@ -86,7 +206,21 @@ export function AgentsPanel({
   );
 }
 
-function TaskRow({ task: t, now }: { task: ChatTask; now: number }) {
+function TaskRow({
+  task: t,
+  now,
+  onStop,
+  stopping,
+  stopDisabled,
+  failure,
+}: {
+  task: ChatTask;
+  now: number;
+  onStop?: () => void;
+  stopping: boolean;
+  stopDisabled: boolean;
+  failure?: string;
+}) {
   const status = STATUS[t.status] ?? STATUS.running;
   const started = Date.parse(t.startedAt);
   // Running: live from its start. Finished: what it reported, else start to end.
@@ -99,10 +233,11 @@ function TaskRow({ task: t, now }: { task: ChatTask; now: number }) {
     t.toolUses != null && `${t.toolUses} ${t.toolUses === 1 ? 'tool use' : 'tool uses'}`,
     Number.isFinite(ms) && formatDuration(ms),
   ].filter((f): f is string => !!f);
+  const name = t.description || 'Task';
   return (
     <li className="px-4 py-3">
       <div className="flex items-start gap-2">
-        <p className="min-w-0 flex-1 text-[13.5px] leading-snug font-semibold break-words">{t.description || 'Task'}</p>
+        <p className="min-w-0 flex-1 text-[13.5px] leading-snug font-semibold break-words">{name}</p>
         <Badge tone={status.tone} className="shrink-0">
           {t.status === 'running' && <Spinner className="size-3" />}
           {status.label}
@@ -119,25 +254,45 @@ function TaskRow({ task: t, now }: { task: ChatTask; now: number }) {
           {t.summary}
         </p>
       )}
+      {onStop && t.status === 'running' && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<Square className="size-3.5" />}
+            loading={stopping}
+            disabled={stopDisabled}
+            onClick={onStop}
+            aria-label={stopping ? `Stopping ${name}` : `Stop ${name}`}
+          >
+            {stopping ? 'Stopping…' : 'Stop'}
+          </Button>
+          {failure && !stopping && (
+            <p role="alert" className="min-w-0 flex-1 text-[12.5px] font-medium break-words text-danger">
+              {failure}
+            </p>
+          )}
+        </div>
+      )}
     </li>
   );
 }
 
 /**
  * The agents panel below 1280 px: full screen on phones, a sheet from the right from 640 px.
- * A modal: focus moves in, Escape or × closes, and focus returns to the Agents button.
+ * A modal: focus moves in, Escape or × closes, and focus returns to the Agents button (⋯ on phones).
  */
-export function AgentsSheet({ open, tasks, onClose }: { open: boolean; tasks: ChatTask[]; onClose: () => void }) {
+export function AgentsSheet({ open, onClose, ...props }: AgentsProps & { open: boolean; onClose: () => void }) {
   if (typeof document === 'undefined') return null;
   return createPortal(
     <MotionConfig reducedMotion="user">
-      <AnimatePresence>{open && <Sheet key="agents" tasks={tasks} onClose={onClose} />}</AnimatePresence>
+      <AnimatePresence>{open && <Sheet key="agents" {...props} onClose={onClose} />}</AnimatePresence>
     </MotionConfig>,
     document.body,
   );
 }
 
-function Sheet({ tasks, onClose }: { tasks: ChatTask[]; onClose: () => void }) {
+function Sheet({ onClose, ...props }: AgentsProps & { onClose: () => void }) {
   const ref = useModal<HTMLDivElement>(onClose);
   const titleId = useId();
   return (
@@ -164,7 +319,7 @@ function Sheet({ tasks, onClose }: { tasks: ChatTask[]; onClose: () => void }) {
         transition={{ duration: 0.24, ease }}
         className="relative flex h-full w-full flex-col bg-bg pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-lift outline-none sm:w-[400px] sm:border-l sm:border-line"
       >
-        <AgentsPanel tasks={tasks} onClose={onClose} closeLabel="Close agents" titleId={titleId} />
+        <AgentsPanel {...props} onClose={onClose} closeLabel="Close agents" titleId={titleId} />
       </motion.div>
     </div>
   );

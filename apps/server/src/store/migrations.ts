@@ -359,6 +359,17 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 8,
+    name: 'chat context usage',
+    up(db) {
+      db.exec(`
+        -- How full the context window was after the last turn (from Claude Code's result line).
+        ALTER TABLE chat_sessions ADD COLUMN context_used INTEGER;
+        ALTER TABLE chat_sessions ADD COLUMN context_window INTEGER;
+      `);
+    },
+  },
 ];
 
 /**

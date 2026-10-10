@@ -14,9 +14,21 @@ import type {
   ChatSessionState,
   ChatTask,
 } from '@portal/contracts';
+import { posix } from 'node:path';
 import type { Store } from '../store/store.js';
+import { HOME } from '../workspaces/runtime.js';
 import type { StoredEvent, TaskPatch } from './protocol.js';
 import { redact, redactMaybe } from './redact.js';
+
+/**
+ * The folder a session runs in: its stored folder made absolute (from the home folder) and tidied, or
+ * the home folder when none is stored. The same folder Files opens (files.ts `sessionFolder`), the trust
+ * check scans and the process starts in.
+ */
+export function sessionCwd(stored: string | null | undefined): string {
+  const cwd = typeof stored === 'string' ? stored.trim() : '';
+  return cwd ? posix.resolve(HOME, cwd) : HOME;
+}
 
 /** A raw `chat_sessions` row; the controller reads `segment`/`byte_offset`/`cwd`/`process` from it. */
 export type ChatSessionRow = {
@@ -41,6 +53,8 @@ export type ChatSessionRow = {
   cost_est_usd: number;
   budget_usd: number | null;
   turns: number;
+  context_used: number | null;
+  context_window: number | null;
   created_at: string;
   last_activity_at: string;
   ended_reason: string | null;
@@ -92,6 +106,9 @@ export interface ChatSessionPatch {
   state?: ChatSessionState;
   cost?: number;
   turnsDelta?: number;
+  /** How full the context window was after the last turn (tokens), and the window's size. */
+  contextUsed?: number | null;
+  contextWindow?: number | null;
   segment?: number;
   byteOffset?: number;
   parentPid?: number | null;
@@ -138,7 +155,7 @@ function imageRef(v: unknown): ChatImage | null {
   return ref;
 }
 
-/** The chat tables (migrations v6–v7), wrapped around the portal {@link Store}. All methods are synchronous. */
+/** The chat tables (migrations v6–v8), wrapped around the portal {@link Store}. All methods are synchronous. */
 export class ChatStore {
   readonly #store: Store;
   readonly #now: () => Date;
@@ -236,6 +253,7 @@ export class ChatStore {
     return {
       id: row.id,
       workspaceId: row.workspace_id,
+      cwd: sessionCwd(row.cwd),
       title: row.title,
       state: row.state as ChatSessionState,
       origin: row.origin as ChatOrigin,
@@ -245,6 +263,7 @@ export class ChatStore {
       ultracode: row.ultracode === 1,
       ultracodeAvailable: row.ultracode_available === 1,
       process: PROCESS_STATES.has(row.process) ? (row.process as ChatSession['process']) : 'gone',
+      context: row.context_used === null || row.context_used === undefined ? null : { usedTokens: row.context_used, windowTokens: row.context_window ?? null },
       costUsd: row.cost_est_usd,
       turns: row.turns,
       lastSeq: row.last_seq,
@@ -278,6 +297,14 @@ export class ChatStore {
   history(sessionId: string, after = 0): ChatEvent[] {
     const rows = this.#db().prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq > ? ORDER BY seq').all(sessionId, after) as EventRow[];
     return rows.map((r) => this.#toEvent(r));
+  }
+
+  /** The session's newest stored event, or null before the first. */
+  lastEvent(sessionId: string): ChatEvent | null {
+    const row = this.#db().prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? ORDER BY seq DESC LIMIT 1').get(sessionId) as
+      | EventRow
+      | undefined;
+    return row ? this.#toEvent(row) : null;
   }
 
   /** The tool a stored `tool_use` called, by its id; for naming a result whose call was read earlier. */
@@ -322,6 +349,8 @@ export class ChatStore {
       sets.push('turns = turns + ?');
       vals.push(patch.turnsDelta);
     }
+    if (patch.contextUsed !== undefined) set('context_used', patch.contextUsed);
+    if (patch.contextWindow !== undefined) set('context_window', patch.contextWindow);
     if (patch.segment !== undefined) set('segment', patch.segment);
     if (patch.byteOffset !== undefined) set('byte_offset', patch.byteOffset);
     if (patch.parentPid !== undefined) set('parent_pid', patch.parentPid);
@@ -578,6 +607,26 @@ export class ChatStore {
       detail: r.detail,
       createdAt: r.created_at,
     }));
+  }
+
+  /* ---------- Folder trust (FR43) ---------- */
+
+  /** The trust a person gave a folder: the scan hash it holds for, or null when the folder was never trusted. */
+  folderTrust(workspaceId: string, folder: string): { hash: string | null; trustedAt: string } | null {
+    const row = this.#db().prepare('SELECT scan_hash, trusted_at FROM chat_folder_trust WHERE workspace_id = ? AND folder = ?').get(workspaceId, folder) as
+      | { scan_hash: string | null; trusted_at: string }
+      | undefined;
+    return row ? { hash: row.scan_hash, trustedAt: row.trusted_at } : null;
+  }
+
+  /** Trusts a folder as scanned: its hash, what the scan named (names only, never values), when and by whom. */
+  saveFolderTrust(workspaceId: string, folder: string, hash: string, scan: Record<string, unknown>, actor: string | null): void {
+    this.#writable()
+      .prepare(
+        `INSERT INTO chat_folder_trust (workspace_id, folder, scan_hash, scan, trusted_at, actor) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (workspace_id, folder) DO UPDATE SET scan_hash = excluded.scan_hash, scan = excluded.scan, trusted_at = excluded.trusted_at, actor = excluded.actor`,
+      )
+      .run(workspaceId, folder, hash, JSON.stringify(scan), this.#stamp(), actor);
   }
 
   /** Only the allowlisted display fields of an event (never a raw tool input blob), with credentials redacted. */

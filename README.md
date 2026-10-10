@@ -158,6 +158,11 @@ segment, and the chosen model, effort, ultracode and mode are restored); after 3
 sleeps and wakes on the next message. The portal ends a session whose output shows activity it didn't
 send (a message or answer it never sent, or a mode it didn't set), and redacts credential-shaped text
 (API keys, tokens, private keys) from stored events and live text, even when split across chunks.
+**Folder trust:** in print mode Claude Code loads a folder's own project settings (`.mcp.json` servers,
+hooks in `.claude/settings*.json`) without asking, so before the first session in a folder, and again
+whenever those files change, the portal lists by name what would load and asks you to trust the folder;
+nothing starts until you do. The controls also show how full the context window is, and the Agents
+panel can stop one sub-agent or all of them.
 Kubernetes workspaces get the session host from the workspace image (`images/workspace/cp-session`,
 generated with `npm run gen:workspace-host -w @portal/server`); Docker workspaces get it installed.
 

@@ -12,6 +12,7 @@ import {
   type KeyboardEvent,
   type Ref,
 } from 'react';
+import { isTrustDeclined } from './TrustSheet';
 import type { ChatSendOptions } from './useChatSocket';
 
 export interface ComposerHandle {
@@ -150,7 +151,8 @@ export function Composer({
     onSend(text.trim(), { priority, attachments: files }).catch((e: unknown) => {
       setText((t) => (t.trim() ? t : draft.text));
       setAttachments((a) => (a.length ? a : draft.attachments));
-      toast(e instanceof Error ? e.message : 'Not sent.', 'error');
+      // Cancelled on "Trust this folder?": the words coming back say enough.
+      if (!isTrustDeclined(e)) toast(e instanceof Error ? e.message : 'Not sent.', 'error');
     });
     // Keep the caret in the box so a desktop user can keep typing.
     if (!touch) requestAnimationFrame(() => box.current?.focus());

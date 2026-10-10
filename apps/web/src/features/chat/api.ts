@@ -5,9 +5,11 @@ import {
   type ChatDiff,
   type ChatEvent,
   type ChatFolder,
+  type ChatFolderScan,
   type ChatModelOption,
   type ChatSession,
   type ChatTask,
+  type ChatTrustRequest,
   type CreateChatSessionRequest,
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
@@ -57,4 +59,9 @@ export const chatApi = {
   downloadUrl: (id: string, path: string) => `${CHAT_API.download(id)}?path=${encodeURIComponent(path)}`,
   /** What changed in the session's folder (git status and the unified diff). */
   diff: (id: string) => request<ChatDiff>('GET', CHAT_API.diff(id)),
+  /** What a folder's own Claude Code settings would load when a session starts there, by name. */
+  scan: (workspaceId: string, folder: string) =>
+    request<ChatFolderScan>('GET', `${CHAT_API.scan}?workspaceId=${encodeURIComponent(workspaceId)}&folder=${encodeURIComponent(folder)}`),
+  /** Trusts a folder as scanned; `FOLDER_UNTRUSTED` (with the new scan) when its files changed since. */
+  trust: (body: ChatTrustRequest) => request<unknown>('POST', CHAT_API.trust, body).then(() => undefined),
 };

@@ -16,6 +16,13 @@ export const DIFF_MAX_PATCH_BYTES = 1_000_000;
 export const HOST_REFUSED = 2;
 export const HOST_TOO_LARGE = 6;
 
+/** The project settings `trustscan` reads (FR43), in the fixed order their digests are hashed. */
+export const TRUST_FILES = ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json'] as const;
+/** `trustscan` reads names from a settings file of at most this many bytes; a larger one is only hashed. */
+export const TRUST_MAX_FILE_BYTES = 1_000_000;
+/** `trustscan`'s hash when none of {@link TRUST_FILES} is there: the sha256 of nothing. */
+export const TRUST_EMPTY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
 /**
  * The POSIX `sh` (dash, no bashisms) session host. One process per session, guarded by a `flock`.
  *
@@ -46,6 +53,16 @@ export const HOST_TOO_LARGE = 6;
  *   commit), the patch cut at {@link DIFF_MAX_PATCH_BYTES} and followed by `#truncated` when longer.
  *   Nothing the repository configures runs: no fsmonitor, hooks, external diff, textconv, pager or
  *   filter; each git call has 30 s.
+ * - `trustscan <dir>` prints one JSON object naming what the folder's own Claude Code project settings
+ *   ({@link TRUST_FILES}) would load, never a value or a command: `mcpServers` (keys of `mcpServers`),
+ *   `hooks` (events with at least one command), `plugins` (`enabledPlugins` keys set to true),
+ *   `allowRules` (entries in `permissions.allow`) and `envNames` (keys of `env`), from every file read;
+ *   `files` (those present) and `invalid` (present but not a JSON object, or not read). `hash` is the
+ *   sha256 of `<sha256 of the file>  <name>` lines for the files present, in that order, so any change
+ *   to any of them changes it; with none it's {@link TRUST_EMPTY_HASH}. Each file is read once, through
+ *   a checked descriptor, and only when it leads to a regular file the policy allows; one over
+ *   {@link TRUST_MAX_FILE_BYTES} is hashed whole but not read for names. At the files root `.claude` is
+ *   Claude Code's own folder (the user settings), so only `.mcp.json` counts there.
  */
 export const CP_SESSION = `#!/bin/sh
 set -u
@@ -105,6 +122,18 @@ catfd() {
   size="$(stat -L -c %s "/proc/$$/fd/3")" || return 2
   [ "$size" -le ${CHAT_MAX_DOWNLOAD_BYTES} ] || return 6
   cat <&3
+}
+# Copies the settings file open on fd 3, once the opened file itself checks out as $r, into $1 when it
+# has at most ${TRUST_MAX_FILE_BYTES} bytes; of a larger one only the digest of all of it is kept, in $1.big.
+grab() {
+  l="$(readlink "/proc/$$/fd/3" && printf x)" || return 1
+  l="\${l%x}"
+  l="\${l%"$nl"}"
+  [ "$l" = "$r" ] && [ -f "/proc/$$/fd/3" ] || return 1
+  head -c ${TRUST_MAX_FILE_BYTES + 1} <&3 > "$1" || return 1
+  [ "$(wc -c < "$1")" -le ${TRUST_MAX_FILE_BYTES} ] && return 0
+  rm -f "$1"
+  sha256sum < "/proc/$$/fd/3" | cut -c1-64 > "$1.big"
 }
 
 cmd="\${1:-}"
@@ -219,6 +248,57 @@ case "$cmd" in
       head -c ${DIFF_MAX_PATCH_BYTES}
       if [ "$(head -c 1 | wc -c)" -ne 0 ]; then printf '\\n#truncated\\n'; fi
     }
+    exit 0
+    ;;
+  trustscan)
+    exec 2>/dev/null
+    enter "\${1:-}" || exit 2
+    t="$(mktemp -d)" || exit 1
+    trap 'rm -rf "$t"' EXIT
+    trap 'exit 1' HUP INT TERM
+    : > "$t/sums" || exit 1
+    files=
+    invalid=
+    n=0
+    set --
+    for name in ${TRUST_FILES.join(' ')}; do
+      n=$((n + 1))
+      # At the files root, .claude is Claude Code's own folder (the user settings), not the project's.
+      if [ "$here" = "$root" ]; then case "$name" in .claude/*) continue ;; esac; fi
+      # Not there (a dangling link included): nothing to load.
+      [ -e "$name" ] || continue
+      files="$files $name"
+      d=
+      r=
+      ok=
+      if real "$name" && inroot "$r" && [ -f "$r" ] && [ -r "$r" ] && grab "$t/$n" 3<"$r"; then
+        if [ -f "$t/$n" ]; then
+          d="$(sha256sum < "$t/$n" | cut -c1-64)"
+          jq -se 'length == 1 and (.[0] | type) == "object"' "$t/$n" >/dev/null </dev/null && ok=1
+        else
+          d="$(cat "$t/$n.big")"
+        fi
+      fi
+      # Present but not read (it leads outside the root or into the portal's own files, or isn't a
+      # regular file): it counts all the same, keyed by where it leads.
+      [ -n "$d" ] || d="x$(printf '%s' "$r" | sha256sum | cut -c1-64)"
+      if [ -n "$ok" ]; then set -- "$@" "$t/$n"; else invalid="$invalid $name"; fi
+      printf '%s  %s\\n' "$d" "$name" >> "$t/sums"
+    done
+    # Names only, from the files that parsed: never a value, a command or an argument.
+    jq -cn --arg hash "$(sha256sum < "$t/sums" | cut -c1-64)" --arg files "$files" --arg invalid "$invalid" '[inputs] as $s | {
+      hash: $hash,
+      files: ($files | split(" ") | map(select(. != ""))),
+      invalid: ($invalid | split(" ") | map(select(. != ""))),
+      mcpServers: ([$s[] | .mcpServers | objects | keys[]] | unique),
+      hooks: ([$s[] | .hooks | objects | to_entries[]
+        | select([.value | arrays | .[] | objects | .hooks | arrays | .[] | objects
+          | select((.command | if type == "string" then length > 0 else false end) or (.type | if type == "string" then . != "command" else false end))] | length > 0)
+        | .key] | unique),
+      plugins: ([$s[] | .enabledPlugins | objects | to_entries[] | select(.value == true) | .key] | unique),
+      allowRules: ([$s[] | .permissions | objects | .allow | arrays | length] | add // 0),
+      envNames: ([$s[] | .env | objects | keys[]] | unique)
+    }' "$@" </dev/null || exit 1
     exit 0
     ;;
   *)

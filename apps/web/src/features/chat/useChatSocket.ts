@@ -39,6 +39,17 @@ export interface ChatOutgoing {
 export type ChatControlOp = ChatControl['op'];
 export type ChatControlArgs = NonNullable<ChatControl['args']>;
 
+/** A send or control the portal refused: its ack's error, and its `code` when it gave one (e.g. `FOLDER_UNTRUSTED`). */
+export class ChatAckError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'ChatAckError';
+  }
+}
+
 export interface ChatSessionApi {
   connected: boolean;
   /** Stored transcript, ordered and deduped by `seq`. */
@@ -51,7 +62,10 @@ export interface ChatSessionApi {
   outbox: ChatOutgoing[];
   /** The session's sub-agents and background tasks (the full current list). */
   tasks: ChatTask[];
-  /** Sends a message. Settles on the portal's ack: rejects with its error, or when the socket is down or drops first. */
+  /**
+   * Sends a message. Settles on the portal's ack: rejects with its error (a `ChatAckError`), or when the
+   * socket is down or drops first.
+   */
   send: (text: string, opts?: ChatSendOptions) => Promise<void>;
   respond: (requestId: string, decision: 'allow' | 'allow_session' | 'deny', note?: string) => void;
   /** Sends a control op. Settles on its ack, so a picker can show "Unable to validate model" where it was used. */
@@ -150,7 +164,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
     void chatApi.get(sessionId).then((s) => !closed && setSession(s), () => undefined);
     loadTasks();
 
-    const settle = (uuid: string, w: Waiter, ok: boolean, error?: string) => {
+    const settle = (uuid: string, w: Waiter, ok: boolean, error?: string, code?: string) => {
       waiters.delete(uuid);
       window.clearTimeout(w.timer);
       if (ok) return w.resolve();
@@ -158,7 +172,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
         setInputs((m) => new Map(m).set(uuid, 'failed'));
         setOutbox((o) => o.filter((x) => x.uuid !== uuid));
       }
-      w.reject(new Error(error || 'That didn’t go through.'));
+      w.reject(new ChatAckError(error || 'That didn’t go through.', code));
     };
 
     // Sends and controls still waiting when the socket drops never get their ack: fail them now. A send
@@ -220,12 +234,12 @@ export function useChatSession(sessionId: string): ChatSessionApi {
         case 'ack': {
           const w = waiters.get(msg.uuid);
           if (w) {
-            settle(msg.uuid, w, msg.ok, msg.error);
+            settle(msg.uuid, w, msg.ok, msg.error, msg.code);
             break;
           }
           // C1 portals key a control's ack by its op name; match those to the oldest waiter for that op.
           const byOp = [...waiters].find(([, x]) => x.kind === 'control' && x.op === msg.uuid);
-          if (byOp) settle(byOp[0], byOp[1], msg.ok, msg.error);
+          if (byOp) settle(byOp[0], byOp[1], msg.ok, msg.error, msg.code);
           else if (!msg.ok) toastRef.current(msg.error ?? 'That didn’t go through.', 'error');
           break;
         }

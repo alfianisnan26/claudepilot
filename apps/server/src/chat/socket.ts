@@ -33,6 +33,13 @@ function refuse(socket: Duplex, status: number, text: string) {
 
 const errMessage = (e: unknown): string => (isAppError(e) ? e.message : e instanceof Error ? e.message : String(e));
 
+/** A refused send, respond or control: its message, and its code when it has one (`FOLDER_UNTRUSTED` asks for the trust sheet). */
+function refused(uuid: string, e: unknown): ChatServerMessage {
+  const ack: Extract<ChatServerMessage, { type: 'ack' }> = { type: 'ack', uuid, ok: false, error: errMessage(e) };
+  if (isAppError(e)) ack.code = e.code;
+  return ack;
+}
+
 /**
  * Attaches the chat socket to the HTTP server. `authorized` is checked after the same-origin check,
  * exactly like the shell socket (so pass the session-cookie check through it).
@@ -106,7 +113,7 @@ export function attachChat(server: Server, controller: ChatController, authorize
             await controller.send(msg.session, msg.uuid, msg.text, { priority: msg.priority, attachments: msg.attachments, actor: 'ui' });
             send({ type: 'ack', uuid: msg.uuid, ok: true });
           } catch (e) {
-            send({ type: 'ack', uuid: msg.uuid, ok: false, error: errMessage(e) });
+            send(refused(msg.uuid, e));
           }
           return;
         case 'respond':
@@ -114,7 +121,7 @@ export function attachChat(server: Server, controller: ChatController, authorize
             await controller.respond(msg.session, msg.requestId, msg.decision, { note: msg.note, actor: 'ui' });
             send({ type: 'ack', uuid: msg.requestId, ok: true });
           } catch (e) {
-            send({ type: 'ack', uuid: msg.requestId, ok: false, error: errMessage(e) });
+            send(refused(msg.requestId, e));
           }
           return;
         case 'control': {
@@ -123,7 +130,7 @@ export function attachChat(server: Server, controller: ChatController, authorize
             await controller.control(msg.session, msg.op, msg.args);
             send({ type: 'ack', uuid: key, ok: true });
           } catch (e) {
-            send({ type: 'ack', uuid: key, ok: false, error: errMessage(e) });
+            send(refused(key, e));
           }
           return;
         }

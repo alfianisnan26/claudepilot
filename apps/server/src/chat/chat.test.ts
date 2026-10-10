@@ -6,8 +6,8 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { isAppError } from '@isnanme/core';
-import { CHAT_MAX_IMAGE_BYTES, CHAT_SOCKET_PATH, type ChatServerMessage, type ChatTask } from '@portal/contracts';
+import { AppError, isAppError } from '@isnanme/core';
+import { CHAT_MAX_IMAGE_BYTES, CHAT_SOCKET_PATH, type ChatFolderScan, type ChatServerMessage, type ChatSession, type ChatTask } from '@portal/contracts';
 import { Hono } from 'hono';
 import { WebSocket } from 'ws';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
@@ -16,6 +16,7 @@ import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { decodeAttachments, readBlob, saveBlob } from './blobs.js';
 import { ChatController, type ChatControllerOptions } from './controller.js';
+import { TRUST_EMPTY_HASH } from './host.js';
 import {
   allowResponse,
   controlRequest,
@@ -33,7 +34,8 @@ import {
 import { MAX_HOLD, redact, StreamRedactor } from './redact.js';
 import { createChatRoutes } from './routes.js';
 import { attachChat } from './socket.js';
-import { ChatStore } from './store.js';
+import { ChatStore, sessionCwd } from './store.js';
+import { FOLDER_CHANGED, FOLDER_NOT_TRUSTED } from './trust.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(cond: () => boolean, ms = 3000) {
@@ -311,6 +313,9 @@ test('attachments: at most four PNG/JPEG/GIF/WebP images of valid base64 within 
 
 /* ========================= controller (fake workspaces) ========================= */
 
+/** `trustscan` for a folder with none of the project settings files. */
+const EMPTY_SCAN = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [] };
+
 /** A controllable stand-in for one `workspaces.exec` call. */
 class FakeExec implements ExecSession {
   readonly #data: ((b: Buffer) => void)[] = [];
@@ -365,13 +370,26 @@ class FakeWorkspaces {
   sendCode = 0;
   /** A host that takes stdin but never exits. */
   hangSends = false;
+  /** What `trustscan` prints (a folder with nothing to load unless a test says otherwise) and its exit code. */
+  scanOut = JSON.stringify(EMPTY_SCAN);
+  scanCode = 0;
+  /** The folders `trustscan` was asked about, in order. */
+  readonly scans: string[] = [];
   runtimeFor(target: string): object | undefined {
     return target === 'docker' ? {} : undefined; // only the docker target exists
   }
   async exec(_target: string, _name: string, command: string[]): Promise<ExecSession> {
     const exec = new FakeExec();
     const cmd = command[2]; // ['sh', <script>, <cmd>, ...]
-    if (cmd === 'start') {
+    if (cmd === 'trustscan') {
+      this.scans.push(command[3] ?? '');
+      this.ops.push('trustscan');
+      const [out, code] = [this.scanOut, this.scanCode];
+      setTimeout(() => {
+        exec.push(`${out}\n`);
+        exec.exit(code);
+      }, 0);
+    } else if (cmd === 'start') {
       this.starts++;
       this.startArgs.push(command.slice(2));
       this.ops.push('start');
@@ -426,7 +444,7 @@ test('controller: create launches a reader, stores the transcript, sends, resolv
   });
 
   try {
-    const session = controller.create({ workspaceId: 'docker/ws1' });
+    const session = await controller.create({ workspaceId: 'docker/ws1' });
     assert.equal(session.state, 'starting');
     const id = session.id;
 
@@ -507,7 +525,7 @@ test('controller: the host install hook runs before start and its failure ends t
     throw new Error('cannot write the host script');
   };
   try {
-    const session = controller.create({ workspaceId: 'docker/ws1' });
+    const session = await controller.create({ workspaceId: 'docker/ws1' });
     await until(() => controller.get(session.id)?.state === 'ended');
     assert.equal(controller.get(session.id)!.endedReason, 'cannot write the host script');
     assert.equal(ws.starts, 0, 'start was never reached');
@@ -521,8 +539,8 @@ test('controller: create rejects a missing workspace and an unknown target', asy
   const { store, dataDir } = await freshStore();
   const controller = new ChatController(store, new FakeWorkspaces() as unknown as Workspaces);
   try {
-    assert.throws(() => controller.create({}), /Pick a workspace/);
-    assert.throws(() => controller.create({ workspaceId: 'nope/x' }), /No target/);
+    await assert.rejects(controller.create({}), /Pick a workspace/);
+    await assert.rejects(controller.create({ workspaceId: 'nope/x' }), /No target/);
   } finally {
     store.close();
     rmSync(dataDir, { recursive: true, force: true });
@@ -556,7 +574,7 @@ async function liveSession(opts: ChatControllerOptions = {}, start = false) {
   if (start) controller.start();
   const messages: ChatServerMessage[] = [];
   controller.onEvent((_id, msg) => messages.push(msg));
-  const id = controller.create({ workspaceId: 'docker/ws1' }).id;
+  const id = (await controller.create({ workspaceId: 'docker/ws1' })).id;
   await until(() => ws.tails.length === 1);
   await until(() => controller.get(id)?.state === 'idle');
   await sleep(20); // let the tail attach its data handler
@@ -1731,7 +1749,7 @@ test('exec: a send writes the line, waits for the host to exit, and only then cl
   const ws = new SlowHost();
   const controller = new ChatController(store, ws as unknown as Workspaces);
   try {
-    const id = controller.create({ workspaceId: 'docker/ws1' }).id;
+    const id = (await controller.create({ workspaceId: 'docker/ws1' })).id;
     await until(() => controller.get(id)?.state === 'idle');
     const big = 'x'.repeat(2_000_000);
     await controller.send(id, randomUUID(), big);
@@ -1791,5 +1809,368 @@ test('reader: once stopped it takes no further line, not even the rest of the ch
     assert.equal(e.controller.get(e.id)!.endedReason, 'closed by operator');
   } finally {
     await e.done();
+  }
+});
+
+/* ========================= folder trust (FR43) ========================= */
+
+/** `trustscan` for a folder whose .mcp.json starts a server. */
+const scanOf = (hash: string) => ({ hash, files: ['.mcp.json'], invalid: [], mcpServers: ['evil'], hooks: [], plugins: [], allowRules: 0, envNames: [] });
+const H1 = '1'.repeat(64);
+const H2 = '2'.repeat(64);
+
+/** A chat socket on the session's controller: what it receives, and the ack for a uuid once it comes. */
+async function socketFor(s: Live) {
+  const server = createServer();
+  attachChat(server, s.controller, () => true);
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const port = (server.address() as AddressInfo).port;
+  const sock = new WebSocket(`ws://127.0.0.1:${port}${CHAT_SOCKET_PATH}`, { headers: { origin: `http://127.0.0.1:${port}` } });
+  const got: ChatServerMessage[] = [];
+  sock.on('message', (d) => got.push(JSON.parse(String(d)) as ChatServerMessage));
+  await new Promise((resolve, reject) => {
+    sock.once('open', resolve);
+    sock.once('error', reject);
+  });
+  type Ack = Extract<ChatServerMessage, { type: 'ack' }>;
+  const ack = async (uuid: string): Promise<Ack> => {
+    let found: Ack | undefined;
+    await until(() => !!(found = got.find((m): m is Ack => m.type === 'ack' && m.uuid === uuid)));
+    return found!;
+  };
+  const close = async () => {
+    await new Promise((r) => {
+      sock.once('close', r);
+      sock.close();
+    });
+    server.close();
+  };
+  return { send: (msg: object) => sock.send(JSON.stringify(msg)), got, ack, close };
+}
+
+test('trust: create in a folder that needs trusting creates nothing and throws FOLDER_UNTRUSTED with the scan; trusted at that hash, it starts', async () => {
+  const { store, dataDir } = await freshStore();
+  const ws = new FakeWorkspaces();
+  ws.scanOut = JSON.stringify(scanOf(H1));
+  const controller = new ChatController(store, ws as unknown as Workspaces);
+  try {
+    await assert.rejects(controller.create({ workspaceId: 'docker/ws1', cwd: '/home/node/proj/' }), (e) => {
+      assert.ok(isAppError(e));
+      assert.deepEqual([e.code, e.status, e.message], ['FOLDER_UNTRUSTED', 409, FOLDER_NOT_TRUSTED]);
+      const scan = e.details as ChatFolderScan;
+      assert.deepEqual([scan.workspaceId, scan.folder, scan.hash, scan.empty, scan.trusted, scan.mcpServers], ['docker/ws1', '/home/node/proj', H1, false, false, ['evil']]);
+      return true;
+    });
+    assert.deepEqual(ws.scans, ['/home/node/proj']);
+    assert.deepEqual(controller.list(), [], 'no session was created');
+    assert.equal(store.db!.prepare('SELECT count(*) AS n FROM chat_sessions').get()!.n, 0);
+    assert.equal(ws.starts, 0);
+
+    // Trusted at another hash: its files changed since.
+    const chat = new ChatStore(store);
+    chat.saveFolderTrust('docker/ws1', '/home/node/proj', H2, {}, 'ui');
+    await assert.rejects(controller.create({ workspaceId: 'docker/ws1', cwd: '/home/node/proj' }), (e) => isAppError(e) && e.code === 'FOLDER_UNTRUSTED' && e.message === FOLDER_CHANGED);
+    assert.deepEqual(controller.list(), []);
+
+    // Trusted at this hash: it starts there, scanned once (its first launch doesn't scan again).
+    chat.saveFolderTrust('docker/ws1', '/home/node/proj', H1, {}, 'ui');
+    const session = await controller.create({ workspaceId: 'docker/ws1', cwd: '/home/node/proj' });
+    await until(() => controller.get(session.id)?.state === 'idle');
+    assert.equal(ws.starts, 1);
+    assert.equal(ws.startArgs[0]![3], '/home/node/proj');
+    assert.equal(ws.scans.length, 3);
+
+    // A folder with nothing to load needs no trust.
+    ws.scanOut = JSON.stringify(EMPTY_SCAN);
+    await controller.create({ workspaceId: 'docker/ws1', cwd: '/home/node/fresh' });
+    await until(() => ws.starts === 2);
+  } finally {
+    controller.stop();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('store: a session reports the folder it runs in — absolute and tidied, the home folder when none is stored', async () => {
+  const { store, dataDir } = await freshStore();
+  try {
+    const chat = new ChatStore(store);
+    const cwdOf = (id: string, cwd: string) => chat.create({ id, workspaceId: 'docker/ws1', cwd, title: id, origin: 'ui' }).cwd;
+    assert.equal(cwdOf('A', '/home/node/proj'), '/home/node/proj');
+    assert.equal(cwdOf('B', ''), '/home/node', 'older sessions stored no folder');
+    assert.equal(cwdOf('C', '/home/node/proj/../api/'), '/home/node/api');
+    assert.equal(cwdOf('D', 'work/api'), '/home/node/work/api', 'relative to the home folder, like Files');
+    assert.equal(sessionCwd('  '), '/home/node');
+  } finally {
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('trust: a folder that can’t be checked creates nothing; a relative folder is refused before anything runs', async () => {
+  const { store, dataDir } = await freshStore();
+  const ws = new FakeWorkspaces();
+  const controller = new ChatController(store, ws as unknown as Workspaces);
+  try {
+    await assert.rejects(controller.create({ workspaceId: 'docker/ws1', cwd: 'proj' }), (e) => isAppError(e) && e.status === 422);
+    assert.equal(ws.scans.length, 0);
+    ws.scanCode = 2; // outside the home folder, gone, or the portal's own files
+    ws.scanOut = '';
+    await assert.rejects(controller.create({ workspaceId: 'docker/ws1', cwd: '/etc' }), (e) => isAppError(e) && e.status === 400 && /Can’t use that folder/.test(e.message));
+    ws.scanCode = 0;
+    ws.scanOut = 'garbage';
+    await assert.rejects(controller.create({ workspaceId: 'docker/ws1' }), (e) => isAppError(e) && e.status === 503);
+    assert.deepEqual(controller.list(), []);
+    assert.equal(ws.starts, 0);
+  } finally {
+    controller.stop();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('trust: a resume refused because the folder changed since it was trusted adds the error once, leaves the session as it was, and acks FOLDER_UNTRUSTED; trusted again, it resumes', async () => {
+  const s = await liveSession();
+  const socket = await socketFor(s);
+  try {
+    socket.send({ type: 'subscribe', session: s.id });
+    await until(() => socket.got.some((m) => m.type === 'session'));
+    await firstTurn(s);
+    // The person trusted the home folder at H1; since then its files changed (H2).
+    const chat = new ChatStore(s.store);
+    chat.saveFolderTrust('docker/ws1', '/home/node', H1, {}, 'ui');
+    s.ws.scanOut = JSON.stringify(scanOf(H2));
+    await vanish(s);
+    const events = s.controller.history(s.id).length;
+
+    socket.send({ type: 'control', session: s.id, op: 'resume', uuid: 'r-1' });
+    const refusedResume = await socket.ack('r-1');
+    assert.deepEqual(refusedResume, { type: 'ack', uuid: 'r-1', ok: false, error: FOLDER_CHANGED, code: 'FOLDER_UNTRUSTED' });
+    const added = s.controller.history(s.id).slice(events);
+    assert.deepEqual(added.map((e) => [e.kind, e.text]), [['error', FOLDER_CHANGED]]);
+    assert.ok(socket.got.some((m) => m.type === 'events' && m.items.some((e) => e.kind === 'error' && e.text === FOLDER_CHANGED)), 'the tab saw it');
+
+    // A message (a wake) is refused the same way: nothing of it is stored, and the error isn't repeated.
+    socket.send({ type: 'send', session: s.id, uuid: 'u-refused', text: 'hello?' });
+    const refusedSend = await socket.ack('u-refused');
+    assert.deepEqual([refusedSend.ok, refusedSend.code], [false, 'FOLDER_UNTRUSTED']);
+    assert.equal(s.controller.history(s.id).length, events + 1);
+    assert.equal(new ChatStore(s.store).inputState(s.id, 'u-refused'), null);
+    // So is any control that would start the process.
+    socket.send({ type: 'control', session: s.id, op: 'effort', uuid: 'e-1', args: { effort: 'high' } });
+    assert.deepEqual(await socket.ack('e-1'), { type: 'ack', uuid: 'e-1', ok: false, error: FOLDER_CHANGED, code: 'FOLDER_UNTRUSTED' });
+    assert.equal(s.ws.starts, 1, 'nothing started');
+    const session = s.controller.get(s.id)!;
+    assert.deepEqual([session.state, session.process], ['interrupted', 'gone']);
+
+    // Over REST (the model list resumes too): a 409 carrying the scan.
+    await assert.rejects(s.controller.models(s.id), (e) => isAppError(e) && e.status === 409 && (e.details as ChatFolderScan).hash === H2);
+
+    // Trusted at H2, it resumes.
+    chat.saveFolderTrust('docker/ws1', '/home/node', H2, {}, 'ui');
+    await s.answering(s.controller.control(s.id, 'resume'));
+    assert.equal(s.ws.starts, 2);
+    assert.ok(s.ws.startArgs[1]!.includes('--resume'));
+    assert.deepEqual([s.controller.get(s.id)!.state, s.controller.get(s.id)!.process], ['idle', 'live']);
+  } finally {
+    await socket.close();
+    await s.done();
+  }
+});
+
+test('trust: a first launch refused (the folder changed after create checked it) reads Interrupted, and nothing starts', async () => {
+  const { store, dataDir } = await freshStore();
+  const ws = new FakeWorkspaces();
+  ws.scanOut = JSON.stringify(scanOf(H1));
+  const controller = new ChatController(store, ws as unknown as Workspaces);
+  let installs = 0;
+  // The first install fails, so create can't scan; the launch installs, scans, and refuses.
+  controller.installHost = async () => {
+    if (installs++ === 0) throw new Error('flaky');
+  };
+  try {
+    const session = await controller.create({ workspaceId: 'docker/ws1', cwd: '/home/node/proj' });
+    await until(() => controller.get(session.id)?.state === 'interrupted');
+    const s = controller.get(session.id)!;
+    assert.deepEqual([s.process, s.endedReason], ['gone', FOLDER_NOT_TRUSTED]);
+    assert.equal(ws.starts, 0);
+  } finally {
+    controller.stop();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('routes: POST create answers the new session, or a 409 FOLDER_UNTRUSTED carrying the scan', async () => {
+  const { store, dataDir } = await freshStore();
+  const ws = new FakeWorkspaces();
+  const controller = new ChatController(store, ws as unknown as Workspaces);
+  const app = new Hono();
+  app.onError((e, c) => {
+    const err = isAppError(e) ? e : new AppError('INTERNAL_ERROR', undefined, { cause: e });
+    return c.json(err.toJSON(), err.status as 409);
+  });
+  app.route('/', createChatRoutes(controller));
+  const post = (body: unknown) => app.request('/', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  try {
+    ws.scanOut = JSON.stringify(scanOf(H1));
+    const refused = await post({ workspaceId: 'docker/ws1', cwd: '/home/node/proj' });
+    assert.equal(refused.status, 409);
+    const body = (await refused.json()) as { error: { code: string; message: string; details: ChatFolderScan } };
+    assert.deepEqual([body.error.code, body.error.message, body.error.details.hash, body.error.details.folder], ['FOLDER_UNTRUSTED', FOLDER_NOT_TRUSTED, H1, '/home/node/proj']);
+
+    new ChatStore(store).saveFolderTrust('docker/ws1', '/home/node/proj', H1, {}, 'ui');
+    const created = await post({ workspaceId: 'docker/ws1', cwd: '/home/node/proj', title: 'API' });
+    assert.equal(created.status, 201);
+    const { data } = (await created.json()) as { data: ChatSession };
+    assert.deepEqual([typeof data.id, data.title, data.state, data.context, data.cwd], ['string', 'API', 'starting', null, '/home/node/proj']);
+  } finally {
+    controller.stop();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+/* ========================= context usage ========================= */
+
+/** A `result` line with its usage report. */
+const resultLine = (sessionId: string, usage: unknown, modelUsage?: unknown) =>
+  line({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0.01, session_id: sessionId, usage, ...(modelUsage === undefined ? {} : { modelUsage }) });
+
+test('parseLine: a result’s usage counts input, cache reads and writes and output (missing ones as 0), with each model’s context window', () => {
+  const p = parseLine(
+    resultLine(
+      'S',
+      { input_tokens: 5, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200, output_tokens: 50, server_tool_use: { web_search_requests: 3 } },
+      { 'claude-opus-5-5': { inputTokens: 9, contextWindow: 200_000 }, 'claude-haiku-5-5': { contextWindow: 1_000_000 }, odd: { contextWindow: 'big' } },
+    ),
+  );
+  assert.deepEqual(p.context, {
+    usedTokens: 1255,
+    windows: [
+      { model: 'claude-opus-5-5', tokens: 200_000 },
+      { model: 'claude-haiku-5-5', tokens: 1_000_000 },
+    ],
+  });
+  assert.deepEqual(parseLine(resultLine('S', { input_tokens: 7, output_tokens: 'x' })).context, { usedTokens: 7, windows: [] });
+  assert.equal(parseLine(resultLine('S', { input_tokens: 0, output_tokens: 0 })).context, undefined, 'a result that read nothing says nothing');
+  assert.equal(parseLine(line({ type: 'result', subtype: 'success', session_id: 'S' })).context, undefined);
+});
+
+test('controller: each result records how full the context is, against the window of the model in use (else the largest), and emits it', async () => {
+  const s = await liveSession();
+  try {
+    assert.equal(s.controller.get(s.id)!.context, null, 'null until the first result');
+    await firstTurn(s); // the model in use: claude-opus-5-5
+    s.tail.push(
+      resultLine(s.id, { input_tokens: 5, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200, output_tokens: 50 }, {
+        'claude-haiku-5-5': { contextWindow: 1_000_000 },
+        'claude-opus-5-5': { contextWindow: 200_000 },
+      }),
+    );
+    await until(() => s.controller.get(s.id)!.context !== null);
+    assert.deepEqual(s.controller.get(s.id)!.context, { usedTokens: 1255, windowTokens: 200_000 });
+    assert.ok(s.messages.some((m) => m.type === 'session' && m.session.context?.usedTokens === 1255 && m.session.context.windowTokens === 200_000));
+    assert.deepEqual(
+      new ChatStore(s.store).row(s.id) && [new ChatStore(s.store).row(s.id)!.context_used, new ChatStore(s.store).row(s.id)!.context_window],
+      [1255, 200_000],
+    );
+
+    // Only other models reported: the largest window.
+    s.tail.push(resultLine(s.id, { input_tokens: 10, output_tokens: 10 }, { 'claude-sonnet-5-5': { contextWindow: 400_000 }, 'claude-haiku-5-5': { contextWindow: 300_000 } }));
+    await until(() => s.controller.get(s.id)!.context?.usedTokens === 20);
+    assert.equal(s.controller.get(s.id)!.context!.windowTokens, 400_000);
+    // A turn that read nothing leaves it; one without modelUsage has no window to say.
+    s.tail.push(resultLine(s.id, { input_tokens: 0, output_tokens: 0 }, { 'claude-opus-5-5': { contextWindow: 1 } }));
+    s.tail.push(resultLine(s.id, { input_tokens: 3 }));
+    await until(() => s.controller.get(s.id)!.context?.usedTokens === 3);
+    assert.deepEqual(s.controller.get(s.id)!.context, { usedTokens: 3, windowTokens: null });
+    assert.equal(s.controller.get(s.id)!.turns, 4);
+  } finally {
+    await s.done();
+  }
+});
+
+test('controller: a turn with several API calls reports the last call’s context, not the turn’s sum', async () => {
+  const s = await liveSession();
+  try {
+    await firstTurn(s);
+    const assistant = (id: string, input: number, cache: number) =>
+      line({ type: 'assistant', message: { id, role: 'assistant', content: [{ type: 'text', text: 'x' }], usage: { input_tokens: input, cache_read_input_tokens: cache, output_tokens: 1 } }, parent_tool_use_id: null, session_id: s.id, uuid: id + '-u' });
+    const delta = (id: string, output: number) =>
+      line({ type: 'stream_event', event: { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: output } }, parent_tool_use_id: null, session_id: s.id, api_message_id: id });
+    const sub = line({ type: 'assistant', message: { id: 'sub1', role: 'assistant', content: [{ type: 'text', text: 'sub' }], usage: { input_tokens: 99_999 } }, parent_tool_use_id: 'toolu_x', session_id: s.id, uuid: 'sub-u' });
+    // Call 1 (10 in), a sub-agent's call (ignored), call 2 (1200 in + 300 cached, 7 out); the result sums them all.
+    for (const l of [assistant('m1', 10, 0), delta('m1', 8), sub, assistant('m2', 1200, 300), delta('m2', 7)]) s.tail.push(l);
+    s.tail.push(resultLine(s.id, { input_tokens: 1210, cache_read_input_tokens: 300, output_tokens: 15 }, { 'claude-opus-5-5': { contextWindow: 200_000 } }));
+    await until(() => s.controller.get(s.id)!.context?.usedTokens === 1507);
+    // The next turn starts fresh: a result with no calls of its own falls back to its usage.
+    s.tail.push(resultLine(s.id, { input_tokens: 40 }, { 'claude-opus-5-5': { contextWindow: 200_000 } }));
+    await until(() => s.controller.get(s.id)!.context?.usedTokens === 40);
+  } finally {
+    await s.done();
+  }
+});
+
+/* ========================= stopping one sub-agent ========================= */
+
+const taskStarted = (taskId: string, toolUseId: string) =>
+  line({ type: 'system', subtype: 'task_started', task_id: taskId, tool_use_id: toolUseId, description: `Agent ${taskId}`, subagent_type: 'general-purpose', is_backgrounded: true, task_type: 'local_agent' });
+
+test('controller: stop_task asks Claude Code to stop that task and settles on its reply; the stream then reports it stopped', async () => {
+  const s = await liveSession();
+  try {
+    s.tail.push(taskStarted('aae5b105d0089cda7', 'toolu_a'));
+    await until(() => s.lastTasks()?.[0]?.status === 'running');
+    let settled = false;
+    const pending = s.controller.control(s.id, 'stop_task', { taskId: 'aae5b105d0089cda7' }).finally(() => (settled = true));
+    const req = await s.take('stop_task');
+    assert.deepEqual(req.request, { subtype: 'stop_task', task_id: 'aae5b105d0089cda7' });
+    const raw = JSON.parse(s.ws.sends.find((x) => x.line.includes('"stop_task"'))!.line) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(raw), ['type', 'request_id', 'request']);
+    await sleep(20);
+    assert.equal(settled, false, 'it waits for the reply');
+    // What Claude Code 2.1.296 sends: the task killed and stopped, then its success reply.
+    s.tail.push(line({ type: 'system', subtype: 'task_updated', task_id: 'aae5b105d0089cda7', patch: { status: 'killed', end_time: 1_791_658_682_529 } }));
+    s.tail.push(line({ type: 'system', subtype: 'task_notification', task_id: 'aae5b105d0089cda7', tool_use_id: 'toolu_a', status: 'stopped', output_file: '/tmp/x.output', summary: 'Agent' }));
+    s.tail.push(ok(req.id, {}));
+    await pending;
+    assert.equal(s.lastTasks()![0]!.status, 'killed');
+    assert.ok(!JSON.stringify(s.lastTasks()).includes('/tmp/x.output'), 'the output path is never kept');
+
+    // Already over: nothing to ask. Unknown or malformed ids are refused before anything is written.
+    const before = s.ws.sends.length;
+    await s.controller.control(s.id, 'stop_task', { taskId: 'aae5b105d0089cda7' });
+    await assert.rejects(s.controller.control(s.id, 'stop_task', { taskId: 'nope' }), (e) => isAppError(e) && e.status === 404);
+    await assert.rejects(s.controller.control(s.id, 'stop_task', { taskId: 'bad id; rm -rf /' }), (e) => isAppError(e) && e.status === 422);
+    await assert.rejects(s.controller.control(s.id, 'stop_task', {}), /Say which sub-agent to stop/);
+    await sleep(20);
+    assert.equal(s.ws.sends.length, before);
+  } finally {
+    await s.done();
+  }
+});
+
+test('controller: a stop_task Claude Code refuses comes back as its message in the ack; with the process gone nothing is asked or resumed', async () => {
+  const s = await liveSession();
+  const socket = await socketFor(s);
+  try {
+    s.tail.push(taskStarted('t-1', 'toolu_1'));
+    await until(() => s.lastTasks()?.length === 1);
+    socket.send({ type: 'control', session: s.id, op: 'stop_task', uuid: 'st-1', args: { taskId: 't-1' } });
+    const req = await s.take('stop_task');
+    s.tail.push(fail(req.id, 'Unsupported control request subtype: stop_task'));
+    assert.deepEqual(await socket.ack('st-1'), { type: 'ack', uuid: 'st-1', ok: false, error: 'Unsupported control request subtype: stop_task', code: 'VALIDATION_FAILED' });
+    assert.equal(s.state(), 'idle', 'a refusal ends nothing');
+
+    // The process vanishes: its tasks are over with it, and stopping one neither asks nor resumes.
+    await vanish(s);
+    assert.equal(s.controller.tasks(s.id)[0]!.status, 'killed');
+    const sends = s.ws.sends.length;
+    await s.controller.control(s.id, 'stop_task', { taskId: 't-1' });
+    assert.deepEqual([s.ws.sends.length, s.ws.starts], [sends, 1]);
+  } finally {
+    await socket.close();
+    await s.done();
   }
 });

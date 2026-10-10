@@ -13,6 +13,8 @@ export type ChatPermissionMode = 'default' | 'acceptEdits' | 'plan' | 'dontAsk' 
 export interface ChatSession {
   id: string;
   workspaceId: string;
+  /** The folder the session runs in. */
+  cwd: string;
   title: string;
   state: ChatSessionState;
   origin: ChatOrigin;
@@ -26,6 +28,8 @@ export interface ChatSession {
   ultracodeAvailable: boolean;
   /** `live` running; `asleep` stopped after idling (wakes on the next message); `gone` exited or lost (Interrupted). */
   process: 'live' | 'asleep' | 'gone';
+  /** How full the context window was after the last turn, from Claude Code's own usage report. */
+  context: { usedTokens: number; windowTokens: number | null } | null;
   costUsd: number;
   turns: number;
   /** The last stored event's sequence number; a reconnecting tab resumes after it. */
@@ -166,6 +170,10 @@ export const CHAT_API = {
   download: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/files/download`,
   /** GET: what changed in the session's folder (git), as a summary and a unified diff. */
   diff: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/diff`,
+  /** GET `?workspaceId=&folder=`: what a folder would load (FR43). */
+  scan: '/api/chat/trust/scan',
+  /** POST `ChatTrustRequest`: trust a folder as scanned. */
+  trust: '/api/chat/trust',
 } as const;
 
 export interface ChatFileEntry {
@@ -203,6 +211,41 @@ export interface ChatDiff {
 
 /** Downloads larger than this are refused. */
 export const CHAT_MAX_DOWNLOAD_BYTES = 50_000_000;
+
+/**
+ * What a folder's own Claude Code project settings would load when a session starts there (FR43),
+ * by name only. Print mode doesn't ask before loading them, so the portal asks instead.
+ */
+export interface ChatFolderScan {
+  workspaceId: string;
+  folder: string;
+  /** Hash of the scanned files; trust is tied to it, so any change asks again. */
+  hash: string;
+  /** Nothing to load: such a folder needs no confirmation. */
+  empty: boolean;
+  mcpServers: string[];
+  /** Hook events with commands configured, e.g. `SessionStart`. */
+  hooks: string[];
+  plugins: string[];
+  allowRules: number;
+  envNames: string[];
+  /** Settings files found (relative to the folder). */
+  files?: string[];
+  /** Files present but not valid JSON (they still count toward the hash). */
+  invalid?: string[];
+  /** Whether this exact scan (same hash) was already trusted. */
+  trusted: boolean;
+}
+
+/** `POST CHAT_API.trust`: trust a folder as scanned. */
+export interface ChatTrustRequest {
+  workspaceId: string;
+  folder: string;
+  hash: string;
+}
+
+/** The error code a session start returns when its folder needs confirming first; `details` is the `ChatFolderScan`. */
+export const CHAT_FOLDER_UNTRUSTED = 'FOLDER_UNTRUSTED';
 
 /** The chat WebSocket, one per tab. Authorized like the shell socket (Origin + session cookie). */
 export const CHAT_SOCKET_PATH = '/api/chat/live';
@@ -243,10 +286,10 @@ export interface ChatControl {
    * `stop` interrupts the turn; `end` closes the session; `model`, `effort`, `ultracode`, `mode`
    * change what applies from the next request; `cancel_queued` withdraws a queued message.
    */
-  op: 'stop' | 'end' | 'model' | 'effort' | 'ultracode' | 'mode' | 'cancel_queued' | 'resume';
+  op: 'stop' | 'end' | 'model' | 'effort' | 'ultracode' | 'mode' | 'cancel_queued' | 'resume' | 'stop_task';
   /** Used to key the `ack`; any client-chosen string. */
   uuid?: string;
-  args?: { model?: string; effort?: string; ultracode?: boolean; mode?: ChatPermissionMode; inputUuid?: string };
+  args?: { model?: string; effort?: string; ultracode?: boolean; mode?: ChatPermissionMode; inputUuid?: string; taskId?: string };
 }
 export type ChatClientMessage = ChatSubscribe | ChatUnsubscribe | ChatSend | ChatRespond | ChatControl;
 
@@ -260,7 +303,7 @@ export type ChatServerMessage =
   /** The session's state/counters changed. */
   | { type: 'session'; session: ChatSession }
   /** Result of a send/respond/control the tab sent. */
-  | { type: 'ack'; uuid: string; ok: boolean; error?: string }
+  | { type: 'ack'; uuid: string; ok: boolean; error?: string; code?: string }
   /** A sent message moved through Claude Code's queue (queued → started → completed, or cancelled). */
   | { type: 'input'; session: string; uuid: string; state: ChatInputState }
   /** The session's sub-agents and background tasks changed (the full current list). */

@@ -7,10 +7,7 @@ import { createPortal } from 'react-dom';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { DiffView, useReturnRefresh } from './DiffView';
-import { useModal } from './shared';
-
-/** The workspace user's home folder: shown as `~`, and the fallback when the session's folder can't be opened. */
-const HOME = '/home/node';
+import { HOME, useModal } from './shared';
 
 export type FilesTab = 'files' | 'changes';
 
@@ -349,7 +346,7 @@ function ListSkeleton() {
 
 /**
  * The Files panel below 1280 px: full screen on phones, a sheet from the right from 640 px.
- * A modal: focus moves in, Escape or × closes, and focus returns to the Files button.
+ * A modal: focus moves in, Escape or × closes, and focus returns to the Files button (⋯ on phones).
  */
 export function FilesSheet({ open, ...props }: FilesPanelProps & { open: boolean }) {
   if (typeof document === 'undefined') return null;

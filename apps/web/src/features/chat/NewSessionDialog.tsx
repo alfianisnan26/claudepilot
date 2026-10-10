@@ -1,27 +1,67 @@
 import { FormDialog, Select, TextField } from '@isnanme/ui';
-import { CHAT_SESSION_TITLE_MAX, type Workspace } from '@portal/contracts';
+import { CHAT_SESSION_TITLE_MAX, type ChatFolderScan, type CreateChatSessionRequest, type Workspace } from '@portal/contracts';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { api, errorText } from '@/lib/api';
 import { chatApi } from './api';
+import { HOME } from './shared';
+import { isFolderUntrusted, scanAfter, TrustDetails } from './TrustSheet';
+
+/** The longest folder path the portal takes. */
+const FOLDER_MAX = 4096;
+const FOLDER_PROBLEM = `Use a folder inside ${HOME}, like ${HOME}/project.`;
 
 /**
- * Start a session: pick a running workspace and, optionally, a title. The running workspaces are
- * loaded when the dialog opens; with none running there's nothing to talk to, so it points at
- * Workspaces instead of offering an empty picker.
+ * The folder as the session will run in it: `~` expanded, `.`, `..` and repeated slashes resolved, and
+ * empty meaning the home folder. Null when it isn't inside the home folder.
+ */
+function folderPath(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return HOME;
+  const path = value === '~' || value.startsWith('~/') ? HOME + value.slice(1) : value;
+  if (!path.startsWith('/')) return null;
+  const parts: string[] = [];
+  for (const part of path.split('/')) {
+    if (part === '..') parts.pop();
+    else if (part && part !== '.') parts.push(part);
+  }
+  const tidy = `/${parts.join('/')}`;
+  return tidy === HOME || tidy.startsWith(`${HOME}/`) ? tidy : null;
+}
+
+/** A start refused until the folder is trusted: what the folder would load, and the start to run again. */
+interface TrustStep {
+  scan: ChatFolderScan;
+  request: CreateChatSessionRequest;
+  /** The folder's settings changed since the last scan shown. */
+  changed: boolean;
+}
+
+/**
+ * Start a session: pick a running workspace, optionally a folder in it and a title. The running
+ * workspaces are loaded when the dialog opens; with none running there's nothing to talk to, so it
+ * points at Workspaces instead of offering an empty picker. A folder whose own Claude Code settings
+ * would load something asks first: the dialog turns into "Trust this folder?", and Trust and start
+ * starts it again (Cancel goes back to the form).
  */
 export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate();
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
   const [workspaceId, setWorkspaceId] = useState('');
   const [title, setTitle] = useState('');
+  const [folder, setFolder] = useState(HOME);
+  const [folderError, setFolderError] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [trust, setTrust] = useState<TrustStep | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setTitle('');
+    setFolder(HOME);
+    setFolderError(undefined);
     setError(null);
+    setTrust(null);
     setWorkspaces(null);
     setWorkspaceId('');
     let current = true;
@@ -42,36 +82,83 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
   const running = workspaces ?? [];
   const none = workspaces !== null && running.length === 0;
 
-  const submit = async () => {
-    if (!workspaceId) return;
+  /** The folder needs trust: show what it would load (a fresh scan when its files changed since the last). */
+  const askTrust = async (e: unknown, request: CreateChatSessionRequest, where: string) => {
+    try {
+      const scan = await scanAfter(e, request.workspaceId, where);
+      setTrust((t) => ({ scan, request, changed: !!t && t.scan.hash !== scan.hash }));
+    } catch (err) {
+      setTrust(null);
+      setError(errorText(err, 'Couldn’t check the folder.'));
+    }
+  };
+
+  const start = async (request: CreateChatSessionRequest) => {
     setSaving(true);
     setError(null);
     try {
-      const session = await chatApi.create({ workspaceId, title: title.trim() || undefined });
+      const session = await chatApi.create(request);
       onClose();
       navigate(`/admin/sessions/${session.id}`);
     } catch (e) {
-      setError(errorText(e, 'Could not start the session.'));
+      if (isFolderUntrusted(e)) {
+        await askTrust(e, request, request.cwd ?? HOME);
+      } else {
+        setTrust(null);
+        setError(errorText(e, 'Could not start the session.'));
+      }
     } finally {
       setSaving(false);
     }
   };
 
+  const submit = async () => {
+    if (!workspaceId) return;
+    const cwd = folderPath(folder);
+    if (!cwd) return setFolderError(FOLDER_PROBLEM);
+    await start({ workspaceId, title: title.trim() || undefined, cwd });
+  };
+
+  const trustAndStart = async () => {
+    if (!trust) return;
+    const { scan, request } = trust;
+    setSaving(true);
+    setError(null);
+    try {
+      await chatApi.trust({ workspaceId: scan.workspaceId, folder: scan.folder, hash: scan.hash });
+    } catch (e) {
+      if (isFolderUntrusted(e)) await askTrust(e, request, scan.folder);
+      else setError(errorText(e, 'Couldn’t trust the folder.'));
+      setSaving(false);
+      return;
+    }
+    await start(request);
+  };
+
+  // Cancel (and ×) on the trust step goes back to the form.
+  const back = () => {
+    if (saving) return;
+    setTrust(null);
+    setError(null);
+  };
+
   return (
     <FormDialog
       open={open}
-      onClose={onClose}
+      onClose={trust ? back : onClose}
       size="sm"
-      title="New session"
-      description="Chat with Claude Code in a running workspace."
-      onSubmit={submit}
-      submitLabel="Start"
+      title={trust ? 'Trust this folder?' : 'New session'}
+      description={trust ? <span className="font-mono break-all">{trust.scan.folder}</span> : 'Chat with Claude Code in a running workspace.'}
+      onSubmit={trust ? trustAndStart : submit}
+      submitLabel={trust ? 'Trust and start' : 'Start'}
       saving={saving}
-      submitDisabled={!workspaceId}
+      submitDisabled={!trust && !workspaceId}
       error={error}
-      dirty={!!title}
+      dirty={!trust && (!!title || folder.trim() !== HOME)}
     >
-      {none ? (
+      {trust ? (
+        <TrustDetails scan={trust.scan} changed={trust.changed} />
+      ) : none ? (
         <p className="text-sm text-muted">
           No workspace is running.{' '}
           <Link to="/admin/workspaces" onClick={onClose} className="font-semibold text-ink underline underline-offset-2">
@@ -87,6 +174,24 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
             onChange={setWorkspaceId}
             options={running.map((w) => ({ value: w.id, label: w.name }))}
             placeholder={workspaces === null ? 'Loading…' : 'Pick a workspace'}
+          />
+          <TextField
+            label="Folder"
+            optional
+            hint={`Where Claude Code works, inside ${HOME}.`}
+            placeholder={HOME}
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            maxLength={FOLDER_MAX}
+            className="[&_input]:font-mono"
+            value={folder}
+            onChange={(e) => {
+              setFolder(e.target.value);
+              setFolderError(undefined);
+            }}
+            error={folderError}
           />
           <TextField
             label="Title"

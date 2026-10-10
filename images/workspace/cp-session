@@ -57,6 +57,18 @@ catfd() {
   [ "$size" -le 50000000 ] || return 6
   cat <&3
 }
+# Copies the settings file open on fd 3, once the opened file itself checks out as $r, into $1 when it
+# has at most 1000000 bytes; of a larger one only the digest of all of it is kept, in $1.big.
+grab() {
+  l="$(readlink "/proc/$$/fd/3" && printf x)" || return 1
+  l="${l%x}"
+  l="${l%"$nl"}"
+  [ "$l" = "$r" ] && [ -f "/proc/$$/fd/3" ] || return 1
+  head -c 1000001 <&3 > "$1" || return 1
+  [ "$(wc -c < "$1")" -le 1000000 ] && return 0
+  rm -f "$1"
+  sha256sum < "/proc/$$/fd/3" | cut -c1-64 > "$1.big"
+}
 
 cmd="${1:-}"
 [ "$#" -ge 1 ] && shift
@@ -170,6 +182,57 @@ case "$cmd" in
       head -c 1000000
       if [ "$(head -c 1 | wc -c)" -ne 0 ]; then printf '\n#truncated\n'; fi
     }
+    exit 0
+    ;;
+  trustscan)
+    exec 2>/dev/null
+    enter "${1:-}" || exit 2
+    t="$(mktemp -d)" || exit 1
+    trap 'rm -rf "$t"' EXIT
+    trap 'exit 1' HUP INT TERM
+    : > "$t/sums" || exit 1
+    files=
+    invalid=
+    n=0
+    set --
+    for name in .mcp.json .claude/settings.json .claude/settings.local.json; do
+      n=$((n + 1))
+      # At the files root, .claude is Claude Code's own folder (the user settings), not the project's.
+      if [ "$here" = "$root" ]; then case "$name" in .claude/*) continue ;; esac; fi
+      # Not there (a dangling link included): nothing to load.
+      [ -e "$name" ] || continue
+      files="$files $name"
+      d=
+      r=
+      ok=
+      if real "$name" && inroot "$r" && [ -f "$r" ] && [ -r "$r" ] && grab "$t/$n" 3<"$r"; then
+        if [ -f "$t/$n" ]; then
+          d="$(sha256sum < "$t/$n" | cut -c1-64)"
+          jq -se 'length == 1 and (.[0] | type) == "object"' "$t/$n" >/dev/null </dev/null && ok=1
+        else
+          d="$(cat "$t/$n.big")"
+        fi
+      fi
+      # Present but not read (it leads outside the root or into the portal's own files, or isn't a
+      # regular file): it counts all the same, keyed by where it leads.
+      [ -n "$d" ] || d="x$(printf '%s' "$r" | sha256sum | cut -c1-64)"
+      if [ -n "$ok" ]; then set -- "$@" "$t/$n"; else invalid="$invalid $name"; fi
+      printf '%s  %s\n' "$d" "$name" >> "$t/sums"
+    done
+    # Names only, from the files that parsed: never a value, a command or an argument.
+    jq -cn --arg hash "$(sha256sum < "$t/sums" | cut -c1-64)" --arg files "$files" --arg invalid "$invalid" '[inputs] as $s | {
+      hash: $hash,
+      files: ($files | split(" ") | map(select(. != ""))),
+      invalid: ($invalid | split(" ") | map(select(. != ""))),
+      mcpServers: ([$s[] | .mcpServers | objects | keys[]] | unique),
+      hooks: ([$s[] | .hooks | objects | to_entries[]
+        | select([.value | arrays | .[] | objects | .hooks | arrays | .[] | objects
+          | select((.command | if type == "string" then length > 0 else false end) or (.type | if type == "string" then . != "command" else false end))] | length > 0)
+        | .key] | unique),
+      plugins: ([$s[] | .enabledPlugins | objects | to_entries[] | select(.value == true) | .key] | unique),
+      allowRules: ([$s[] | .permissions | objects | .allow | arrays | length] | add // 0),
+      envNames: ([$s[] | .env | objects | keys[]] | unique)
+    }' "$@" </dev/null || exit 1
     exit 0
     ;;
   *)

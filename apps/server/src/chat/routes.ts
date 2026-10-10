@@ -22,11 +22,11 @@ export function createChatRoutes(controller: ChatController): Hono {
   // GET /api/chat/sessions — sessions, newest activity first.
   chat.get('/', (c) => c.json(success(controller.list())));
 
-  // POST /api/chat/sessions — create one (starts the host in the background).
+  // POST /api/chat/sessions — create one (starts the host in the background); 409 FOLDER_UNTRUSTED with the scan first when the folder needs trusting.
   chat.post('/', async (c) => {
     const req = await body<CreateChatSessionRequest>(c);
     if (typeof req.workspaceId !== 'string' || !req.workspaceId.trim()) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
-    return c.json(success(controller.create(req)), 201);
+    return c.json(success(await controller.create(req)), 201);
   });
 
   // GET /api/chat/sessions/:id — one session.
