@@ -76,8 +76,8 @@ test('classification follows structured fields first', () => {
 });
 
 test('provider text never keeps the key', () => {
-  assert.equal(redact('bad sk-ant-api03-abcdefghijklmnopqrstuvwxyz key', 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz'), 'bad [redacted] key');
-  assert.equal(redact('ends with ...mnopqrstuvwxyz', 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz'), 'ends with ...mn[redacted]', 'the last 12 characters are removed');
+  assert.equal(redact('bad fake-test-value-abcdefghijklmnopqrstuvwxyz key', 'fake-test-value-abcdefghijklmnopqrstuvwxyz'), 'bad [redacted] key');
+  assert.equal(redact('ends with ...mnopqrstuvwxyz', 'fake-test-value-abcdefghijklmnopqrstuvwxyz'), 'ends with ...mn[redacted]', 'the last 12 characters are removed');
 });
 
 test('a check reports one result and sends the key in both headers', async () => {
