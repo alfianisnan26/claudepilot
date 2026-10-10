@@ -2,7 +2,9 @@ import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
 import { track } from '@isnanme/ui';
 import {
   CHAT_API,
+  type ChatDiff,
   type ChatEvent,
+  type ChatFolder,
   type ChatModelOption,
   type ChatSession,
   type ChatTask,
@@ -48,4 +50,11 @@ export const chatApi = {
   tasks: (id: string) => request<ChatTask[]>('GET', CHAT_API.tasks(id)),
   /** Where an image's bytes are served (attachments and tool images); plain same-origin GET. */
   blobUrl: (id: string, blobId: string) => CHAT_API.blob(id, blobId),
+  /** A folder in the session's workspace; without a path, the session's own folder. */
+  files: (id: string, path?: string) =>
+    request<ChatFolder>('GET', CHAT_API.files(id) + (path ? `?path=${encodeURIComponent(path)}` : '')),
+  /** Where a file downloads from (an attachment); plain same-origin GET, for `<a download>`. */
+  downloadUrl: (id: string, path: string) => `${CHAT_API.download(id)}?path=${encodeURIComponent(path)}`,
+  /** What changed in the session's folder (git status and the unified diff). */
+  diff: (id: string) => request<ChatDiff>('GET', CHAT_API.diff(id)),
 };

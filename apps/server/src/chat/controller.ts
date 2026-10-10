@@ -1,8 +1,14 @@
-// Chat sessions: the controller (chat-sessions PRD milestones C1–C3). Owns the lifecycle of each
+// Chat sessions: the controller (chat-sessions PRD milestones C1–C4). Owns the lifecycle of each
 // session — launch the host process, follow its stdout, store the transcript, send input (with images),
 // answer requests, change model/effort/ultracode/mode, track sub-agents — and dispatches live updates to
 // whatever subscribes (the socket). All host access goes through short `workspaces.exec` calls into
 // `cp-session`; the agent process itself stays detached in the workspace.
+//
+// Durability (PRD §8): `start()` reattaches to running processes after a portal restart and checks
+// liveness every minute. A vanished process leaves the session Interrupted; Resume or the next message
+// relaunches it with `--resume` on a fresh log segment and restores its settings. Idle sessions sleep and
+// wake the same way. Integrity (§10.4): anything in the stream this portal didn't originate ends the
+// session. Redaction (§13): stored text and live deltas pass through redact.ts.
 
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
@@ -34,13 +40,17 @@ import {
   userLine,
   type AppliedSettings,
   type ControlResponse,
+  type ParsedLine,
   type RawImage,
   type StoredEvent,
 } from './protocol.js';
-import { ChatStore, type InputState } from './store.js';
+import { redact, StreamRedactor } from './redact.js';
+import { ChatStore, type ChatSessionRow, type InputState } from './store.js';
 
+/** The permission mode every process starts in (`--permission-mode`); others are applied after. */
+const START_MODE = 'default';
 /** The claude flags cp-session runs after `--`; `--resume` or `--session-id` plus the id are spliced in. */
-const BASE_FLAGS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', 'default'] as const;
+const BASE_FLAGS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', START_MODE];
 const BUDGET_FLAGS = ['--max-budget-usd', '10'] as const;
 
 /** How long a dropped `tail` waits before re-following, and how many immediate failures end the reader. */
@@ -51,6 +61,12 @@ const HEALTHY_TAIL_MS = 5_000;
 
 /** How long a control request waits for Claude Code's `control_response`. */
 const CONTROL_TIMEOUT_MS = 15_000;
+/** How long one short `cp-session` command (start, send, status, stop) may take. */
+const EXEC_TIMEOUT_MS = 30_000;
+/** Idle this long, with nothing open or running, and a session's process sleeps (PRD FR38). */
+const IDLE_SLEEP_MS = 30 * 60_000;
+/** How often live sessions' processes are checked. */
+const LIVENESS_MS = 60_000;
 
 /** Modes a chat session may switch to; Bypass is never one of them. */
 const MODES = new Set<string>(['default', 'acceptEdits', 'plan', 'dontAsk']);
@@ -63,6 +79,10 @@ const EFFORT_LEVEL = /^[a-z]{1,16}$/;
 /** A client-chosen message id (a UUID in practice); it's echoed into the stream and the inputs table. */
 const CLIENT_ID = /^[A-Za-z0-9._:-]{1,64}$/;
 
+/** Keys of the portal's own control lines in `chat_inputs`: a request it asks, an answer it gives. */
+const ASKED = (requestId: string) => `req/${requestId}`;
+const ANSWERED = (requestId: string) => `ans/${requestId}`;
+
 /** One follower per session: the live `tail` exec, its byte cursor, and re-follow bookkeeping. */
 interface Reader {
   sessionId: string;
@@ -73,12 +93,14 @@ interface Reader {
   offset: number;
   /** Whether the one-time `system` "Ready" event has been stored. */
   ready: boolean;
-  /** True once the reader is deliberately stopped (end / integrity); no re-follow after that. */
+  /** True once the reader is deliberately stopped (end, integrity, sleep, a new process); never reused. */
   stopped: boolean;
   /** Consecutive immediate `tail` exits; reset when a follow makes progress or runs its full term. */
   retries: number;
   tailStart: number;
   timer?: NodeJS.Timeout;
+  /** A `tail` exec is being opened (so a second one never is). */
+  connecting?: boolean;
 }
 
 /** A control request waiting for its `control_response`. */
@@ -89,20 +111,53 @@ interface PendingControl {
   timer: NodeJS.Timeout;
 }
 
+/** The permission mode the portal set or confirmed, and the changes Claude Code may make by itself. */
+interface ModeTrack {
+  expected: string;
+  /** The mode before plan mode, which approving ExitPlanMode returns to. */
+  prePlan: string | null;
+  /** The agent called EnterPlanMode, which needs no approval: `plan` may follow. */
+  enterPlan: boolean;
+  /** The portal approved ExitPlanMode: leaving plan mode may follow. */
+  exitPlan: boolean;
+}
+
+/** Values a resumed process gets back (it starts on defaults). */
+interface Restore {
+  model: string | null;
+  effort: string | null;
+  ultracode: boolean;
+  mode: string;
+}
+
 type Dispatch = (sessionId: string, msg: ChatServerMessage) => void;
 
-/** A refusal Claude Code sent, made safe to show: one line, no control characters, bounded. */
+export interface ChatControllerOptions {
+  /** How long a live session sits idle, with nothing open or running, before its process sleeps. */
+  idleSleepMs?: number;
+  /** How often `start()`ed durability work checks live sessions' processes. */
+  livenessMs?: number;
+  /** How long one short `cp-session` command may run before it counts as failed. */
+  execTimeoutMs?: number;
+}
+
+/** A refusal Claude Code sent, made safe to show: one line, no control characters, bounded, redacted. */
 function cliMessage(error: string): string {
   // eslint-disable-next-line no-control-regex
-  const text = error.replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
+  const text = redact(error.replace(/[\x00-\x1f\x7f]+/g, ' ').trim());
   if (!text) return 'Claude Code refused the request.';
   return text.length > 300 ? `${text.slice(0, 299)}…` : text;
 }
 
+/** An id read from the stream, made safe for a reason line: printable, short, redacted. */
+function shortId(v: string): string {
+  const s = redact(v.replace(/[^\x20-\x7e]+/g, '?'));
+  return s.length > 64 ? `${s.slice(0, 63)}…` : s;
+}
+
 /**
- * The chat controller. Construct once, share it between the HTTP routes and the socket. Readers are
- * started only on create and first send or control (resume-on-restart is a later milestone), and are
- * kept alive even with no subscribers so the transcript is never missed.
+ * The chat controller. Construct once, share it between the HTTP routes and the socket, and call
+ * {@link start} once. Readers are kept alive even with no subscribers so the transcript is never missed.
  */
 export class ChatController {
   readonly #store: Store;
@@ -112,24 +167,190 @@ export class ChatController {
   readonly #dispatchers = new Set<Dispatch>();
   /** Control requests in flight, by request_id. */
   readonly #pending = new Map<string, PendingControl>();
-  /** Launches in flight, so a send and a control never start the same session twice. */
-  readonly #starting = new Map<string, Promise<void>>();
+  /** Lifecycle work in flight (a launch, a sleep): sends and controls wait for it, and it's never doubled. */
+  readonly #busy = new Map<string, Promise<void>>();
   /** Sessions whose current process has had its applied settings read (after its first `system/init`). */
   readonly #appliedRead = new Set<string>();
   /** Per session: a `Task` tool_use id → its sub-agent's description, to label that agent's lines. */
   readonly #agentNames = new Map<string, Map<string, string>>();
   /** Per session: tool calls still waiting for their result, tool_use id → tool name. */
   readonly #toolCalls = new Map<string, Map<string, string>>();
+  /** Per session, per agent (`''` for the main thread): the open text block's redactor. */
+  readonly #streams = new Map<string, Map<string, StreamRedactor>>();
+  /** Per session: the permission mode the stream must report. */
+  readonly #modes = new Map<string, ModeTrack>();
+  readonly #idleTimers = new Map<string, NodeJS.Timeout>();
+  readonly #idleMs: number;
+  readonly #livenessMs: number;
+  #liveness?: NodeJS.Timeout;
+  #started = false;
+  #closed = false;
+  #ticking = false;
 
   /** Installed by the owner: writes `cp-session` into the workspace before each `start`. */
   installHost?: (workspaceId: string) => Promise<void>;
   /** How long a control request waits for Claude Code's answer. */
   controlTimeoutMs = CONTROL_TIMEOUT_MS;
+  /** How long one short `cp-session` command may run. */
+  execTimeoutMs: number;
 
-  constructor(store: Store, workspaces: Workspaces) {
+  constructor(store: Store, workspaces: Workspaces, opts: ChatControllerOptions = {}) {
     this.#store = store;
     this.#chat = new ChatStore(store);
     this.#workspaces = workspaces;
+    this.#idleMs = opts.idleSleepMs ?? IDLE_SLEEP_MS;
+    this.#livenessMs = opts.livenessMs ?? LIVENESS_MS;
+    this.execTimeoutMs = opts.execTimeoutMs ?? EXEC_TIMEOUT_MS;
+  }
+
+  /* ---------- Durability ---------- */
+
+  /**
+   * Starts the background work; call once, after construction. Sessions whose process is still running
+   * get their reader back (resuming from the stored byte offset), vanished ones become Interrupted, and
+   * the same check repeats every minute. Idle sessions sleep from now on.
+   */
+  start(): void {
+    if (this.#started || this.#closed) return;
+    this.#started = true;
+    this.#liveness = setInterval(() => void this.#tick(), this.#livenessMs);
+    this.#liveness.unref?.();
+    void this.#tick();
+  }
+
+  /** Stops the background work and the readers. The processes keep running; the next `start` reattaches. */
+  stop(): void {
+    this.#closed = true;
+    if (this.#liveness) clearInterval(this.#liveness);
+    this.#liveness = undefined;
+    for (const timer of this.#idleTimers.values()) clearTimeout(timer);
+    this.#idleTimers.clear();
+    for (const id of [...this.#readers.keys()]) this.#stopReader(id);
+    for (const [id, pending] of this.#pending) {
+      this.#pending.delete(id);
+      clearTimeout(pending.timer);
+      pending.reject(new AppError('SERVICE_UNAVAILABLE', 'The portal is shutting down.', { expose: true }));
+    }
+  }
+
+  /** A tab opened the session: a running process gets its reader if it lost it. */
+  attach(sessionId: string): void {
+    const row = this.#chat.row(sessionId);
+    if (row && row.state !== 'ended' && row.process === 'live' && !this.#busy.has(sessionId)) this.#ensureReader(sessionId);
+  }
+
+  /** One liveness round over every session whose process should be running. */
+  async #tick(): Promise<void> {
+    if (this.#ticking || this.#closed) return;
+    this.#ticking = true;
+    try {
+      await Promise.allSettled(this.#chat.liveRows().map((row) => this.#check(row)));
+    } catch {
+      // the store is unavailable: try again next round
+    } finally {
+      this.#ticking = false;
+    }
+  }
+
+  /** A running process keeps (or gets back) its reader; a vanished one leaves the session Interrupted. */
+  async #check(row: ChatSessionRow): Promise<void> {
+    const id = row.id;
+    if (this.#busy.has(id)) return; // a launch or sleep is deciding
+    const status = await this.#status(row.workspace_id, id);
+    if (status === 'unknown') return; // unreachable right now: ask again next round
+    const now = this.#chat.row(id);
+    // Act only on the process this check was about.
+    if (!now || now.state === 'ended' || now.process !== 'live' || this.#busy.has(id) || now.segment !== row.segment || now.parent_pid !== row.parent_pid) return;
+    if (status === 'gone') return this.#markGone(id);
+    this.#ensureReader(id);
+    this.#armIdle(id);
+  }
+
+  /** `cp-session status`: `live <pid>` or `gone`; anything else (unreachable, no host) is `unknown`. */
+  async #status(workspaceId: string, sessionId: string): Promise<'live' | 'gone' | 'unknown'> {
+    try {
+      const { code, out } = await this.#runOnce(workspaceId, ['status', sessionId]);
+      const word = out.trim().split(/\s+/)[0];
+      if (word === 'live') return 'live';
+      return word === 'gone' && code === 0 ? 'gone' : 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /** The process vanished: the session is Interrupted (resumable) and what it was doing is over. */
+  #markGone(sessionId: string, why = 'Claude Code stopped before it answered.'): void {
+    this.#stopReader(sessionId);
+    this.#forget(sessionId, why);
+    this.#closeOut(sessionId);
+    this.#chat.patchSession(sessionId, { process: 'gone', state: 'interrupted' });
+    this.#emitSession(sessionId);
+  }
+
+  /** A process is over: its unfinished messages are discarded, its open requests expire, its tasks are killed. */
+  #closeOut(sessionId: string): void {
+    for (const uuid of this.#chat.discardOpenInputs(sessionId)) this.#emit(sessionId, { type: 'input', session: sessionId, uuid, state: 'discarded' });
+    for (const requestId of this.#chat.expireOpenRequests(sessionId)) this.#append(sessionId, { kind: 'resolved', requestId, outcome: 'expired' });
+    if (this.#chat.endRunningTasks(sessionId)) this.#emitTasks(sessionId);
+  }
+
+  /** (Re)schedules the idle check of a live, idle session; any other state cancels it. */
+  #armIdle(sessionId: string): void {
+    const old = this.#idleTimers.get(sessionId);
+    if (old) clearTimeout(old);
+    this.#idleTimers.delete(sessionId);
+    if (!this.#started || this.#closed) return;
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state !== 'idle' || row.process !== 'live') return;
+    const wait = Math.max(0, this.#idleSince(row) + this.#idleMs - Date.now());
+    const timer = setTimeout(() => {
+      this.#idleTimers.delete(sessionId);
+      try {
+        this.#maybeSleep(sessionId);
+      } catch {
+        // the store went away (shutdown)
+      }
+    }, wait + 5);
+    timer.unref?.();
+    this.#idleTimers.set(sessionId, timer);
+  }
+
+  #idleSince(row: ChatSessionRow): number {
+    const t = Math.max(Date.parse(row.state_since), Date.parse(row.last_activity_at));
+    return Number.isFinite(t) ? t : Date.now();
+  }
+
+  #maybeSleep(sessionId: string): void {
+    if (this.#closed || this.#busy.has(sessionId)) return;
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state !== 'idle' || row.process !== 'live') return;
+    if (Date.now() < this.#idleSince(row) + this.#idleMs) return this.#armIdle(sessionId); // active since: wait out the rest
+    if (!this.#canSleep(sessionId)) return; // still busy; the next change or liveness round re-arms
+    const op = this.#sleep(sessionId, row).finally(() => this.#busy.delete(sessionId));
+    this.#busy.set(sessionId, op);
+  }
+
+  /** Nothing sleeping would lose: no open request, running task, unfinished message or control in flight. */
+  #canSleep(sessionId: string): boolean {
+    if (this.#chat.openRequests(sessionId).length || this.#chat.hasRunningTasks(sessionId) || this.#chat.hasOpenInputs(sessionId)) return false;
+    for (const pending of this.#pending.values()) if (pending.sessionId === sessionId) return false;
+    return true;
+  }
+
+  /** Stops an idle process; the session reads Idle (asleep) and the next message or Resume wakes it. */
+  async #sleep(sessionId: string, row: ChatSessionRow): Promise<void> {
+    let code: number | null;
+    try {
+      ({ code } = await this.#runOnce(row.workspace_id, ['stop', sessionId]));
+    } catch {
+      return; // unreachable: the liveness round decides
+    }
+    const now = this.#chat.row(sessionId);
+    if (code !== 0 || !now || now.state === 'ended' || now.process !== 'live') return;
+    this.#stopReader(sessionId);
+    this.#forget(sessionId, 'The session went to sleep.');
+    this.#chat.patchSession(sessionId, { process: 'asleep' });
+    this.#emitSession(sessionId);
   }
 
   /* ---------- Reads (delegated to the store) ---------- */
@@ -193,7 +414,8 @@ export class ChatController {
   /**
    * Sends a message. While Claude works, `priority` `next` steers the running turn and `later` waits
    * for it to end; `command_lifecycle` then reports where it is (`input` messages). Attached images are
-   * checked, kept in the blob store, and sent inline; the transcript keeps only their references.
+   * checked, kept in the blob store, and sent inline; the transcript keeps only their references. An
+   * Interrupted or sleeping session is resumed first.
    */
   async send(sessionId: string, uuid: string, text: string, opts: { priority?: 'next' | 'later'; actor?: string; attachments?: unknown } = {}): Promise<void> {
     const session = this.#require(sessionId);
@@ -266,10 +488,17 @@ export class ChatController {
     this.#append(sessionId, { kind: 'resolved', requestId, outcome });
     this.#chat.patchSession(sessionId, { state: 'working' });
     this.#emitSession(sessionId);
+    // Claude Code echoes every answer it reads; the answer is on record first, so the echo matches it.
+    this.#chat.addControl(sessionId, ANSWERED(requestId));
+    // Approving ExitPlanMode lets Claude Code leave plan mode by itself.
+    const exitPlan = decision !== 'deny' && open.toolName === 'ExitPlanMode';
+    if (exitPlan) this.#mode(sessionId).exitPlan = true;
     try {
       await this.#writeLine(sessionId, line);
     } catch (e) {
       // It never arrived: Claude Code is still waiting, so the request is open again.
+      this.#chat.setControlState(sessionId, ANSWERED(requestId), 'failed');
+      if (exitPlan) this.#mode(sessionId).exitPlan = false;
       this.#chat.reopenRequest(sessionId, requestId);
       this.#append(sessionId, { kind: 'error', text: `Your answer didn't reach Claude Code: ${(e as Error).message}` });
       this.#append(sessionId, { kind: 'request', requestId, request: open });
@@ -280,15 +509,16 @@ export class ChatController {
   }
 
   /**
-   * One session control. `stop` and `end` as before; `model`, `effort`, `ultracode` and `mode` change
-   * what applies from Claude Code's next request (the session then shows the applied values);
-   * `cancel_queued` withdraws a queued message.
+   * One session control. `stop` interrupts the turn and `end` closes the session; `model`, `effort`,
+   * `ultracode` and `mode` change what applies from Claude Code's next request (the session then shows
+   * the applied values); `cancel_queued` withdraws a queued message; `resume` relaunches an Interrupted
+   * or sleeping session.
    */
   async control(sessionId: string, op: ChatControl['op'], args?: ChatControl['args']): Promise<void> {
     const a: NonNullable<ChatControl['args']> = args && typeof args === 'object' ? args : {};
     switch (op) {
       case 'stop':
-        return this.stop(sessionId);
+        return this.interrupt(sessionId);
       case 'end':
         return this.end(sessionId);
       case 'model':
@@ -301,28 +531,38 @@ export class ChatController {
         return this.#setMode(sessionId, a.mode);
       case 'cancel_queued':
         return this.#cancelQueued(sessionId, a.inputUuid);
+      case 'resume':
+        return this.#resume(sessionId);
       default:
         throw new AppError('VALIDATION_FAILED', 'Unknown control.');
     }
   }
 
   /** Interrupt the running turn: a plain `interrupt` control request (Stop never sends a signal). */
-  async stop(sessionId: string): Promise<void> {
+  async interrupt(sessionId: string): Promise<void> {
     const session = this.#require(sessionId);
     if (session.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
-    await this.#starting.get(sessionId);
-    if (this.#chat.row(sessionId)?.process === 'gone') return; // nothing is running
+    await this.#busy.get(sessionId);
+    if (this.#chat.row(sessionId)?.process !== 'live') return; // nothing is running
     await this.#request(sessionId, 'interrupt');
   }
 
-  /** End the session: SIGTERM the process group, stop the reader, mark it ended. */
+  /** End the session: SIGTERM the process group, stop the reader, mark it ended. An ended session stays as it is. */
   async end(sessionId: string): Promise<void> {
     const session = this.#require(sessionId);
+    if (session.state === 'ended') return; // already over, and its reason (an integrity end, say) stays
     this.#stopReader(sessionId);
     this.#forget(sessionId, 'The session ended.');
     await this.#runOnce(session.workspaceId, ['stop', sessionId]).catch(() => undefined);
+    this.#closeOut(sessionId);
     this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason: 'closed by operator' });
     this.#emitSession(sessionId);
+  }
+
+  /** Resume: an Interrupted or sleeping session relaunches with `--resume`; a running one is left as it is. */
+  async #resume(sessionId: string): Promise<void> {
+    this.#require(sessionId);
+    await this.#live(sessionId);
   }
 
   /* ---------- Controls ---------- */
@@ -364,6 +604,7 @@ export class ChatController {
     if (typeof mode !== 'string' || !MODES.has(mode)) throw new AppError('VALIDATION_FAILED', 'Pick a permission mode.');
     this.#require(sessionId);
     await this.#live(sessionId);
+    // The reply confirms the mode as it's read (see #acceptControlResponse), before any status line.
     const reply = await this.#request(sessionId, 'set_permission_mode', { mode });
     const applied = typeof reply.mode === 'string' && reply.mode ? reply.mode : mode;
     if (applied === 'bypassPermissions') {
@@ -384,9 +625,9 @@ export class ChatController {
     if (state === 'cancelled') return; // already withdrawn (a retry)
     if (state === 'started' || state === 'completed') throw new AppError('CONFLICT', 'Claude already read that message.');
     if (state !== 'sending' && state !== 'queued') throw new AppError('CONFLICT', 'That message isn’t queued.');
-    await this.#starting.get(sessionId);
+    await this.#busy.get(sessionId);
     const row = this.#chat.row(sessionId);
-    if (!row || row.state === 'ended' || row.process === 'gone') {
+    if (!row || row.state === 'ended' || row.process !== 'live') {
       this.#setInput(sessionId, uuid, 'cancelled'); // its process, and the queue with it, is gone: it will never run
       return;
     }
@@ -397,19 +638,20 @@ export class ChatController {
 
   /* ---------- Host process ---------- */
 
-  /** Launches (or resumes) the session's process; a launch already in flight is shared, never doubled. */
+  /** Launches (or resumes) the session's process; lifecycle work already in flight is shared, never doubled. */
   #startProcess(sessionId: string, opts: { resume?: boolean } = {}): Promise<void> {
-    const inFlight = this.#starting.get(sessionId);
+    const inFlight = this.#busy.get(sessionId);
     if (inFlight) return inFlight;
-    const launch = this.#launch(sessionId, opts).finally(() => this.#starting.delete(sessionId));
-    this.#starting.set(sessionId, launch);
+    const launch = this.#launch(sessionId, opts).finally(() => this.#busy.delete(sessionId));
+    this.#busy.set(sessionId, launch);
     return launch;
   }
 
   async #launch(sessionId: string, opts: { resume?: boolean }): Promise<void> {
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended') return;
-    const resume = opts.resume ?? false;
+    // A relaunch starts on defaults: these go back once it runs.
+    const restore: Restore | null = opts.resume ? { model: row.model, effort: row.effort, ultracode: row.ultracode === 1, mode: row.mode } : null;
 
     if (this.installHost) {
       try {
@@ -421,7 +663,11 @@ export class ChatController {
       }
     }
 
-    const seg = resume ? row.segment + 1 : row.segment;
+    // One log segment per process: a relaunch never appends to (or re-reads) the previous one's log.
+    const seg = opts.resume || row.process_started_at !== null ? row.segment + 1 : row.segment;
+    // `--resume` needs Claude Code's transcript, which exists once a turn has started (the first
+    // `system/init`, stored as "Ready"); until then the id is unused and the session starts afresh.
+    const resume = opts.resume === true && this.#chat.hasReady(sessionId);
     const cwd = row.cwd || HOME;
     const flags = [...BASE_FLAGS, resume ? '--resume' : '--session-id', sessionId, ...BUDGET_FLAGS];
     let code: number | null;
@@ -435,39 +681,88 @@ export class ChatController {
       return;
     }
 
+    if (this.#chat.row(sessionId)?.state === 'ended') {
+      // Ended while it launched: leave no process behind.
+      if (code === 0) await this.#runOnce(row.workspace_id, ['stop', sessionId]).catch(() => undefined);
+      return;
+    }
     if (code === 0) {
       const started = parseStartOutput(out);
-      this.#chat.patchSession(sessionId, { parentPid: started?.pid ?? null, processStartedAt: started?.startedAt ?? null, process: 'live', state: 'idle', segment: seg, byteOffset: 0 });
+      // A new process: nothing of the previous one carries over, and its reader must not read this log.
+      this.#stopReader(sessionId);
+      this.#forget(sessionId, 'Claude Code restarted.');
+      this.#chat.patchSession(sessionId, {
+        parentPid: started?.pid ?? null,
+        processStartedAt: started?.startedAt ?? null,
+        process: 'live',
+        state: 'idle',
+        segment: seg,
+        byteOffset: 0,
+        endedReason: null,
+      });
+      this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
     } else if (code === 3) {
       // Already running (run.lock held): attach to the existing process on its current segment.
-      this.#chat.patchSession(sessionId, { process: 'live', state: 'idle' });
+      this.#chat.patchSession(sessionId, { process: 'live', state: 'idle', endedReason: null });
     } else {
       this.#chat.patchSession(sessionId, { state: 'interrupted', process: 'gone', endedReason: `the session host could not start (exit ${code ?? 'unknown'})` });
       this.#emitSession(sessionId);
       return;
     }
-    this.#appliedRead.delete(sessionId); // a new process: read its applied settings after its first init
     this.#emitSession(sessionId);
     this.#ensureReader(sessionId);
+    if (restore && code === 0) await this.#restore(sessionId, restore);
   }
 
-  /** Makes sure there is a live process to talk to: waits out a launch in flight, resumes a gone one. */
+  /**
+   * After a resume or wake: put back the session's model, effort, ultracode and mode (never Bypass),
+   * skipping values that are unset, default, or already apply, then read what applies. A failure leaves a
+   * note and never fails the launch.
+   */
+  async #restore(sessionId: string, r: Restore): Promise<void> {
+    const mode = r.mode !== START_MODE && MODES.has(r.mode);
+    if (!r.model && !r.effort && !r.ultracode && !mode) {
+      await this.#refreshApplied(sessionId).catch(() => undefined); // nothing to put back: just show what applies
+      return;
+    }
+    const now = await this.#request(sessionId, 'get_settings').then(pickApplied, () => null);
+    const failed: string[] = [];
+    if (r.model && now?.model !== r.model) await this.#request(sessionId, 'set_model', { model: r.model }).catch(() => failed.push('model'));
+    const settings: { effort?: string; ultracode?: boolean } = {};
+    if (r.effort && now?.effort !== r.effort) settings.effort = r.effort;
+    if (r.ultracode && now?.ultracode !== true) settings.ultracode = true;
+    if (settings.effort !== undefined || settings.ultracode !== undefined)
+      await this.#request(sessionId, 'apply_flag_settings', { settings: flagSettings(settings) }).catch(() => failed.push(settings.ultracode ? 'effort and ultracode' : 'effort'));
+    if (mode) {
+      try {
+        const reply = await this.#request(sessionId, 'set_permission_mode', { mode: r.mode });
+        const applied = typeof reply.mode === 'string' && reply.mode ? reply.mode : r.mode;
+        if (applied !== 'bypassPermissions') this.#chat.patchSession(sessionId, { mode: applied });
+      } catch {
+        failed.push('mode');
+      }
+    }
+    await this.#refreshApplied(sessionId).catch(() => undefined);
+    if (failed.length) this.#note(sessionId, `Couldn’t restore the ${failed.join(', ')} after resuming.`);
+  }
+
+  /** Makes sure there is a running process to talk to: waits out work in flight, resumes or wakes one that isn't running. */
   async #live(sessionId: string): Promise<void> {
-    await this.#starting.get(sessionId);
+    await this.#busy.get(sessionId);
     let row = this.#chat.row(sessionId);
-    if (row && row.state !== 'ended' && row.process === 'gone') {
+    if (row && row.state !== 'ended' && row.process !== 'live') {
       await this.#startProcess(sessionId, { resume: true });
       row = this.#chat.row(sessionId);
     }
     if (!row || row.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
-    if (row.process === 'gone')
+    if (row.process !== 'live')
       throw new AppError('SERVICE_UNAVAILABLE', row.ended_reason ? `Couldn’t resume the session: ${row.ended_reason}` : 'Couldn’t resume the session.', { expose: true });
   }
 
   #ensureReader(sessionId: string): void {
     let reader = this.#readers.get(sessionId);
     if (reader) {
-      if (reader.exec || reader.timer || reader.stopped) return; // already following, scheduled, or stopped
+      if (reader.exec || reader.connecting || reader.timer || reader.stopped) return; // already following, opening, scheduled, or stopped
     } else {
       reader = { sessionId, partial: [], offset: 0, ready: this.#chat.hasReady(sessionId), stopped: false, retries: 0, tailStart: 0 };
       this.#readers.set(sessionId, reader);
@@ -483,13 +778,16 @@ export class ChatController {
     reader.partial = [];
     reader.tailStart = Date.now();
     let exec: ExecSession;
+    reader.connecting = true;
     try {
       const [target, name] = this.#split(row.workspace_id);
       exec = await this.#workspaces.exec(target, name, ['sh', CP_SESSION_PATH, 'tail', reader.sessionId, String(row.segment), String(reader.offset)]);
     } catch {
+      reader.connecting = false;
       this.#scheduleRetail(reader); // workspace briefly unreachable; try again shortly
       return;
     }
+    reader.connecting = false;
     if (reader.stopped) return void exec.close();
     reader.exec = exec;
     exec.onData((b) => this.#onBytes(reader, b));
@@ -497,23 +795,37 @@ export class ChatController {
   }
 
   #onBytes(reader: Reader, chunk: Buffer): void {
-    let advanced = false;
     let start = 0;
     let nl: number;
-    while ((nl = chunk.indexOf(0x0a, start)) >= 0) {
+    let unsaved = false;
+    // A stopped reader takes no further line, not even the rest of this chunk.
+    while (!reader.stopped && (nl = chunk.indexOf(0x0a, start)) >= 0) {
       const tail = chunk.subarray(start, nl + 1);
       const lineBuf = reader.partial.length ? Buffer.concat([...reader.partial, tail]) : tail;
       reader.partial = [];
       start = nl + 1;
       reader.offset += lineBuf.length;
       reader.retries = 0; // progress: the follow is healthy
-      advanced = true;
-      this.#handleLine(reader, lineBuf.toString('utf8'));
-      if (reader.stopped) return;
+      const offset = reader.offset;
+      unsaved = true;
+      try {
+        // The line's effects and its byte offset commit together, so a restart never applies it twice.
+        this.#chat.transaction(
+          () => this.#handleLine(reader, lineBuf.toString('utf8')),
+          () => {
+            this.#chat.patchSession(reader.sessionId, { byteOffset: offset });
+            unsaved = false;
+          },
+        );
+      } catch (e) {
+        // One line the store couldn't take: skip it rather than stall the session.
+        console.error(`[chat] skipped a line of session ${reader.sessionId}: ${this.#message(e)}`);
+      }
     }
+    if (reader.stopped) return;
     if (start < chunk.length) reader.partial.push(chunk.subarray(start));
-    // Persist the cursor so a re-follow (or a restart) resumes after whole lines only.
-    if (advanced) this.#chat.patchSession(reader.sessionId, { byteOffset: reader.offset });
+    // Lines that changed nothing (live deltas) move the cursor once per chunk.
+    if (unsaved) this.#chat.patchSession(reader.sessionId, { byteOffset: reader.offset });
   }
 
   #onTailExit(reader: Reader): void {
@@ -527,30 +839,15 @@ export class ChatController {
   async #checkAndRetail(reader: Reader): Promise<void> {
     const row = this.#chat.row(reader.sessionId);
     if (!row || row.state === 'ended' || reader.stopped) return;
-    let alive = false;
-    try {
-      const { out } = await this.#runOnce(row.workspace_id, ['status', reader.sessionId]);
-      alive = out.trim().startsWith('live');
-    } catch {
-      alive = false; // treat unreachable as gone; a later send resumes
-    }
-    if (!alive) {
-      this.#forget(reader.sessionId, 'Claude Code stopped before it answered.');
-      this.#chat.patchSession(reader.sessionId, { process: 'gone', state: 'interrupted' });
-      this.#emitSession(reader.sessionId);
-      return; // keep the reader registered but idle
-    }
-    this.#scheduleRetail(reader);
+    const status = await this.#status(row.workspace_id, reader.sessionId);
+    if (reader.stopped || this.#readers.get(reader.sessionId) !== reader) return; // replaced meanwhile
+    if (status === 'gone') return this.#markGone(reader.sessionId);
+    this.#scheduleRetail(reader); // live, or unreachable (which runs out of retries if it stays so)
   }
 
   #scheduleRetail(reader: Reader): void {
     if (reader.stopped || reader.timer) return;
-    if (reader.retries >= MAX_IMMEDIATE_RETRIES) {
-      this.#forget(reader.sessionId, 'Lost touch with Claude Code before it answered.');
-      this.#chat.patchSession(reader.sessionId, { process: 'gone', state: 'interrupted' });
-      this.#emitSession(reader.sessionId);
-      return;
-    }
+    if (reader.retries >= MAX_IMMEDIATE_RETRIES) return this.#markGone(reader.sessionId, 'Lost touch with Claude Code before it answered.');
     reader.retries++;
     reader.timer = setTimeout(() => {
       reader.timer = undefined;
@@ -575,12 +872,16 @@ export class ChatController {
     const sessionId = reader.sessionId;
     const parsed = parseLine(raw);
 
-    // Integrity: the agent must stay the session we launched, and never run with Bypass.
-    if (parsed.sessionIdSeen && parsed.sessionIdSeen !== sessionId) return void this.#endIntegrity(sessionId, `the agent reported a different session id (${parsed.sessionIdSeen})`);
-    if (parsed.sessionPatch?.mode === 'bypassPermissions') return void this.#endIntegrity(sessionId, 'the agent reported Bypass permissions, which chat sessions never allow');
+    // Integrity (PRD §10.4): the stream may show only what this portal started.
+    if (parsed.sessionIdSeen && parsed.sessionIdSeen !== sessionId) return void this.#endIntegrity(sessionId, `the agent reported a different session id (${shortId(parsed.sessionIdSeen)})`);
+    if (parsed.controlResponse && !this.#acceptControlResponse(sessionId, parsed.controlResponse)) return;
+    if (parsed.replay && !this.#acceptReplay(sessionId, parsed.replay)) return;
+    if (parsed.commandUuid && !this.#chat.isMessage(sessionId, parsed.commandUuid))
+      return void this.#endIntegrity(sessionId, `Claude Code queued a message this portal didn't send (${shortId(parsed.commandUuid)})`);
+    if (parsed.enterPlan) this.#mode(sessionId).enterPlan = true;
+    if (parsed.modeSeen !== undefined && !this.#acceptMode(sessionId, parsed.modeSeen)) return;
 
-    if (parsed.controlError) void this.#writeLine(sessionId, errorResponse(parsed.controlError, 'unsupported')).catch(() => undefined);
-    if (parsed.controlResponse) this.#settleControl(sessionId, parsed.controlResponse);
+    if (parsed.controlError) this.#refuseControl(sessionId, parsed.controlError);
 
     // Sub-agent names first, so this line's own events can already use them.
     for (const a of parsed.agents ?? []) this.#names(sessionId).set(a.toolUseId, a.description);
@@ -590,7 +891,11 @@ export class ChatController {
         if (t.toolUseId && t.description) this.#names(sessionId).set(t.toolUseId, t.description);
       }
       this.#emitTasks(sessionId);
+      this.#armIdle(sessionId); // a task that ended may be what kept it awake
     }
+
+    // A finished block replaces its live text: what was held back goes out (redacted) just before it.
+    this.#flushFor(sessionId, parsed);
 
     for (const ev of parsed.stored) {
       if (parsed.init && ev.kind === 'system') {
@@ -615,7 +920,7 @@ export class ChatController {
       try {
         canonical = this.#chat.addRequest(sessionId, { ...parsed.request, agentLabel: parent ? this.#label(sessionId, parent) : null });
       } catch {
-        return void this.#endIntegrity(sessionId, `a tool request id arrived twice (${parsed.request.requestId})`);
+        return void this.#endIntegrity(sessionId, `a tool request id arrived twice (${shortId(parsed.request.requestId)})`);
       }
       this.#append(sessionId, { kind: 'request', requestId: canonical.requestId, request: canonical, agentLabel: canonical.agentLabel, parentToolUseId: parent });
     }
@@ -627,10 +932,8 @@ export class ChatController {
 
     for (const { uuid, state } of parsed.inputs ?? []) this.#setInput(sessionId, uuid, state);
 
-    if (parsed.delta) {
-      const agentLabel = parsed.delta.agentLabel ? this.#label(sessionId, parsed.delta.agentLabel) : null;
-      this.#emit(sessionId, { type: 'delta', session: sessionId, agentLabel, text: parsed.delta.text });
-    }
+    if (parsed.delta) this.#pushDelta(sessionId, parsed.delta.agentLabel, parsed.delta.text);
+    if (parsed.blockEdge) this.#flushDelta(sessionId, parsed.blockEdge.agentLabel);
 
     // After a process's first `system/init`, read what actually applies (model, effort, ultracode).
     if (parsed.init && !this.#appliedRead.has(sessionId)) {
@@ -639,16 +942,161 @@ export class ChatController {
     }
   }
 
+  /**
+   * A `control_response` on stdout is either Claude Code's reply to a request this portal asked, or the
+   * echo of an answer this portal gave (it echoes every answer it reads). Anything else — a reply or echo
+   * nobody asked for, or a second one — ends the session. Returns whether the line may be processed.
+   */
+  #acceptControlResponse(sessionId: string, reply: ControlResponse): boolean {
+    const id = reply.requestId;
+    const asked = this.#chat.controlState(sessionId, ASKED(id));
+    if (asked !== null) {
+      if (asked === 'completed') {
+        this.#endIntegrity(sessionId, `a second control response for request ${shortId(id)}`);
+        return false;
+      }
+      this.#chat.setControlState(sessionId, ASKED(id), 'completed');
+      this.#settleControl(sessionId, reply);
+      // `set_permission_mode`'s reply confirms the mode, before the status line that reports it.
+      const mode = reply.ok ? reply.response.mode : undefined;
+      if (typeof mode === 'string' && mode) {
+        if (mode === 'bypassPermissions') {
+          this.#endIntegrity(sessionId, 'Claude Code switched to Bypass permissions, which chat sessions never allow');
+          return false;
+        }
+        this.#confirmMode(sessionId, mode);
+      }
+      return true;
+    }
+    const answered = this.#chat.controlState(sessionId, ANSWERED(id));
+    if (answered === 'sending' || answered === 'failed') {
+      this.#chat.setControlState(sessionId, ANSWERED(id), 'completed');
+      return true;
+    }
+    this.#endIntegrity(
+      sessionId,
+      answered === 'completed' ? `a second control response for request ${shortId(id)}` : `a control response for request ${shortId(id)} that this portal never asked for or answered`,
+    );
+    return false;
+  }
+
+  /** A replayed user line must be a message this portal sent; local command output is Claude Code's own. */
+  #acceptReplay(sessionId: string, replay: NonNullable<ParsedLine['replay']>): boolean {
+    if (replay.uuid && this.#chat.isMessage(sessionId, replay.uuid)) return true;
+    // `/compact` and other local commands echo their output as a replayed line under an id of its own.
+    if (replay.localCommand && this.#chat.slashCommandRunning(sessionId)) return true;
+    this.#endIntegrity(sessionId, `a message this portal didn't send reached Claude Code (${shortId(replay.uuid ?? 'no id')})`);
+    return false;
+  }
+
+  /**
+   * The mode a main-thread `system/init` or `system/status` reports must be the one the portal set or
+   * confirmed. Claude Code changes it by itself only into plan mode after EnterPlanMode, and out of it
+   * after the portal approved ExitPlanMode. Bypass always ends the session.
+   */
+  #acceptMode(sessionId: string, mode: string): boolean {
+    if (mode === 'bypassPermissions') {
+      this.#endIntegrity(sessionId, 'the agent reported Bypass permissions, which chat sessions never allow');
+      return false;
+    }
+    const m = this.#mode(sessionId);
+    if (mode === m.expected) return true;
+    if (mode === 'plan' && m.enterPlan) {
+      m.prePlan = m.expected;
+      m.expected = 'plan';
+      m.enterPlan = false;
+      return true;
+    }
+    if (m.exitPlan && m.expected === 'plan' && (mode === m.prePlan || mode === START_MODE)) {
+      m.expected = mode;
+      m.exitPlan = false;
+      m.prePlan = null;
+      return true;
+    }
+    this.#endIntegrity(sessionId, `the permission mode changed to ${shortId(mode)} without this portal (expected ${m.expected})`);
+    return false;
+  }
+
+  #mode(sessionId: string): ModeTrack {
+    let m = this.#modes.get(sessionId);
+    if (!m) {
+      // After a portal restart: the last mode stored is the last one set or confirmed.
+      m = { expected: this.#chat.row(sessionId)?.mode ?? START_MODE, prePlan: null, enterPlan: false, exitPlan: false };
+      this.#modes.set(sessionId, m);
+    }
+    return m;
+  }
+
+  #confirmMode(sessionId: string, mode: string): void {
+    const m = this.#mode(sessionId);
+    m.prePlan = mode === 'plan' ? (m.expected === 'plan' ? m.prePlan : m.expected) : null;
+    m.expected = mode;
+    m.enterPlan = false;
+    m.exitPlan = false;
+  }
+
+  /** A control request the portal doesn't handle gets an error response, on record first like every answer. */
+  #refuseControl(sessionId: string, requestId: string): void {
+    this.#chat.addControl(sessionId, ANSWERED(requestId));
+    void this.#writeLine(sessionId, errorResponse(requestId, 'unsupported')).catch(() => {
+      try {
+        this.#chat.setControlState(sessionId, ANSWERED(requestId), 'failed');
+      } catch {
+        // the store went away
+      }
+    });
+  }
+
   /** Integrity failure (§10.4): end the session at once and SIGTERM the process. */
   #endIntegrity(sessionId: string, why: string): void {
     this.#stopReader(sessionId);
     this.#forget(sessionId, 'The session ended for integrity.');
-    if (this.#chat.row(sessionId)?.state === 'ended') return; // already ended (by the operator, or an earlier check)
-    this.#append(sessionId, { kind: 'error', text: `Session ended for integrity: ${why}.` });
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state === 'ended') return; // already ended (by the operator, or an earlier check)
+    this.#append(sessionId, { kind: 'error', text: `Integrity check failed: ${why}` });
+    this.#closeOut(sessionId);
     this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason: `integrity: ${why}` });
     this.#emitSession(sessionId);
-    const row = this.#chat.row(sessionId);
-    if (row) void this.#runOnce(row.workspace_id, ['stop', sessionId]).catch(() => undefined);
+    void this.#runOnce(row.workspace_id, ['stop', sessionId]).catch(() => undefined);
+  }
+
+  /* ---------- Live deltas, redacted ---------- */
+
+  #stream(sessionId: string, agent: string | null): StreamRedactor {
+    let streams = this.#streams.get(sessionId);
+    if (!streams) this.#streams.set(sessionId, (streams = new Map()));
+    let redactor = streams.get(agent ?? '');
+    if (!redactor) streams.set(agent ?? '', (redactor = new StreamRedactor()));
+    return redactor;
+  }
+
+  /** A delta goes out minus a short tail that could still become a credential (held for the next one). */
+  #pushDelta(sessionId: string, agent: string | null, text: string): void {
+    this.#emitDelta(sessionId, agent, this.#stream(sessionId, agent).push(text));
+  }
+
+  /** The block ended: what it held back goes out, redacted. */
+  #flushDelta(sessionId: string, agent: string | null): void {
+    const streams = this.#streams.get(sessionId);
+    const redactor = streams?.get(agent ?? '');
+    if (!streams || !redactor) return;
+    streams.delete(agent ?? '');
+    this.#emitDelta(sessionId, agent, redactor.flush());
+  }
+
+  /** Before a finished block (`assistant`) or turn (`result`) is stored, flush the live text it replaces. */
+  #flushFor(sessionId: string, parsed: ParsedLine): void {
+    if (!parsed.stored.length || !this.#streams.has(sessionId)) return;
+    if (parsed.stored.some((e) => e.kind === 'result')) {
+      for (const agent of [...(this.#streams.get(sessionId)?.keys() ?? [])]) this.#flushDelta(sessionId, agent || null);
+      return;
+    }
+    for (const ev of parsed.stored) if (ev.kind === 'assistant') this.#flushDelta(sessionId, ev.parentToolUseId ?? null);
+  }
+
+  #emitDelta(sessionId: string, agent: string | null, text: string): void {
+    if (!text) return;
+    this.#emit(sessionId, { type: 'delta', session: sessionId, agentLabel: agent ? this.#label(sessionId, agent) : null, text });
   }
 
   /* ---------- Control requests ---------- */
@@ -656,11 +1104,17 @@ export class ChatController {
   /**
    * Sends one control request and resolves with the body of Claude Code's success reply. Rejects with
    * its error message, when the line can't be written, or after {@link controlTimeoutMs} without an
-   * answer. Replies are only ever reduced by the caller, never stored or logged whole.
+   * answer. The request is on record first (its reply is checked against it). Replies are only ever
+   * reduced by the caller, never stored or logged whole.
    */
   #request(sessionId: string, subtype: string, fields: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
+      try {
+        this.#chat.addControl(sessionId, ASKED(requestId));
+      } catch (e) {
+        return reject(e instanceof Error ? e : new Error(String(e)));
+      }
       const timer = setTimeout(() => {
         if (this.#pending.delete(requestId)) reject(new AppError('SERVICE_UNAVAILABLE', 'Claude Code didn’t answer in time. Try again.', { expose: true }));
       }, this.controlTimeoutMs);
@@ -674,10 +1128,10 @@ export class ChatController {
     });
   }
 
-  /** Routes a `control_response` to the request it answers; replies we didn't ask for are ignored. */
+  /** Hands a reply to the request waiting for it (one that already timed out has nobody waiting). */
   #settleControl(sessionId: string, reply: ControlResponse): void {
     const pending = this.#pending.get(reply.requestId);
-    if (!pending || pending.sessionId !== sessionId) return; // not ours (e.g. issued before a restart)
+    if (!pending || pending.sessionId !== sessionId) return;
     this.#pending.delete(reply.requestId);
     clearTimeout(pending.timer);
     if (reply.ok) pending.resolve(reply.response);
@@ -693,7 +1147,7 @@ export class ChatController {
     return applied;
   }
 
-  /** Fails the session's control requests in flight and drops its per-process caches. */
+  /** Fails the session's control requests in flight and drops everything kept for its current process. */
   #forget(sessionId: string, why: string): void {
     for (const [id, pending] of this.#pending) {
       if (pending.sessionId !== sessionId) continue;
@@ -704,6 +1158,8 @@ export class ChatController {
     this.#appliedRead.delete(sessionId);
     this.#agentNames.delete(sessionId);
     this.#toolCalls.delete(sessionId);
+    this.#streams.delete(sessionId);
+    this.#modes.delete(sessionId);
   }
 
   /* ---------- Exec helpers ---------- */
@@ -713,26 +1169,33 @@ export class ChatController {
     const row = this.#chat.row(sessionId);
     if (!row) throw new AppError('NOT_FOUND', 'No such session.');
     const { code } = await this.#runOnce(row.workspace_id, ['send', sessionId, randomUUID(), String(Buffer.byteLength(line))], line);
-    if (code !== 0) throw new AppError('SERVICE_UNAVAILABLE', `The session host rejected the line (exit ${code ?? 'unknown'}).`, { expose: true });
+    if (code === null) throw new AppError('SERVICE_UNAVAILABLE', 'The session host didn’t confirm the line in time.', { expose: true });
+    if (code !== 0) throw new AppError('SERVICE_UNAVAILABLE', `The session host rejected the line (exit ${code}).`, { expose: true });
   }
 
-  /** Runs one short `cp-session` command to completion; writes `stdin` (then closes it) when given. */
+  /**
+   * Runs one short `cp-session` command to completion and closes the exec only after it exits: closing
+   * earlier drops stdin bytes still in flight (the host reads exactly as many as it was told, then exits
+   * by itself) and, on Kubernetes, the exit code. A command still running after {@link execTimeoutMs} is
+   * closed and reads as failed (`code: null`).
+   */
   async #runOnce(workspaceId: string, args: string[], stdin?: string): Promise<{ code: number | null; out: string }> {
     const [target, name] = this.#split(workspaceId);
     const exec = await this.#workspaces.exec(target, name, ['sh', CP_SESSION_PATH, ...args]);
     const chunks: Buffer[] = [];
     return await new Promise((resolve) => {
       let done = false;
-      exec.onData((b) => chunks.push(b));
-      exec.onExit((code) => {
+      const finish = (code: number | null) => {
         if (done) return;
         done = true;
-        resolve({ code, out: Buffer.concat(chunks).toString('utf8') });
-      });
-      if (stdin !== undefined) {
-        exec.write(stdin);
+        clearTimeout(timer);
         exec.close();
-      }
+        resolve({ code, out: Buffer.concat(chunks).toString('utf8') });
+      };
+      const timer = setTimeout(() => finish(null), this.execTimeoutMs);
+      exec.onData((b) => chunks.push(b));
+      exec.onExit((code) => finish(code));
+      if (stdin !== undefined) exec.write(stdin);
     });
   }
 
@@ -811,9 +1274,11 @@ export class ChatController {
     for (const cb of this.#dispatchers) cb(sessionId, msg);
   }
 
+  /** Tells the tabs the session changed, and (re)schedules its idle check. */
   #emitSession(sessionId: string): void {
     const session = this.#chat.get(sessionId);
     if (session) this.#emit(sessionId, { type: 'session', session });
+    this.#armIdle(sessionId);
   }
 
   #require(sessionId: string): ChatSession {

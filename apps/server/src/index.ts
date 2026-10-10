@@ -81,6 +81,8 @@ void workspaces.resume().catch((e: unknown) => console.error(`[workspaces] resum
 // Chat sessions: one controller shared by the REST routes and the chat socket.
 const chatController = new ChatController(store, workspaces);
 chatController.installHost = hostInstaller(workspaces);
+// Reattach readers to sessions still running in workspaces, and mark the ones that died Interrupted.
+chatController.start();
 
 const accounts = new AccountsService(store);
 const pools = new AccountPools(store);
@@ -165,6 +167,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
     outbox.stop();
     health.stop();
     live.close();
+    chatController.stop();
     for (const stop of stopWatching) stop();
     store.close();
     process.exit(0); // releases the data-dir lock

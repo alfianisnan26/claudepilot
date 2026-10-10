@@ -36,6 +36,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AccountHealthService } from './accounts/health.js';
 import type { ChatController } from './chat/controller.js';
+import { createChatFileRoutes } from './chat/fileRoutes.js';
 import { createChatRoutes } from './chat/routes.js';
 import type { AccountPools } from './accounts/pools.js';
 import type { AccountsService } from './accounts/service.js';
@@ -377,6 +378,7 @@ export function createApp(
   const chat = new Hono<Env>();
   chat.use(requireSession);
   chat.route('/', createChatRoutes(chatController));
+  chat.route('/', createChatFileRoutes({ controller: chatController, workspaces, store }));
   app.route('/api/chat/sessions', chat);
 
   app.all('/api/*', () => {

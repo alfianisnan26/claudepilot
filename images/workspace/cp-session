@@ -1,0 +1,178 @@
+#!/bin/sh
+set -u
+base="${CLAUDEPILOT_SESSIONS_DIR:-$HOME/.claudepilot/sessions}"
+nl='
+'
+tab="$(printf '\t')"
+valid() {
+  case "$1" in
+    ''|.|..) return 1 ;;
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  [ "${#1}" -le 128 ]
+}
+digits() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; }
+
+# Files and Diff read only real paths under the files root, never the portal's own files.
+froot="${CLAUDEPILOT_FILES_ROOT:-/home/node}"
+# Sets r to the real path of $1, symlinks resolved (exact even when it ends in a newline).
+real() {
+  r="$(realpath -e -- "$1" 2>/dev/null && printf x)" || return 1
+  r="${r%x}"
+  r="${r%"$nl"}"
+}
+# Whether real path $1 may be shown: under the root, and not the portal's or Claude Code's own files.
+inroot() {
+  case "$1" in
+    "$root/.claudepilot"|"$root/.claudepilot/"*|"$root/.claude"|"$root/.claude/"*) return 1 ;;
+    /etc/claudepilot|/etc/claudepilot/*) return 1 ;;
+    "$root"|"$root/"*) return 0 ;;
+  esac
+  return 1
+}
+# For an absolute path $1 that may be shown, sets root and r (its real path); status 1 otherwise.
+allowed() {
+  case "$1" in /*) ;; *) return 1 ;; esac
+  real "$froot" || return 1
+  root="$r"
+  real "$1" || return 1
+  inroot "$r"
+}
+# Enters folder $1 when it may be shown, then checks the folder actually entered (sets here).
+enter() {
+  allowed "$1" && [ -d "$r" ] && cd -P -- "$r" || return 1
+  here="$(pwd -P && printf x)" || return 1
+  here="${here%x}"
+  here="${here%"$nl"}"
+  inroot "$here" && [ -r . ]
+}
+# Prints the file open on fd 3 once the opened file itself checks out, so a path swapped after the
+# check can't redirect the read; 6 when it's over the download limit.
+catfd() {
+  l="$(readlink "/proc/$$/fd/3" && printf x)" || return 2
+  l="${l%x}"
+  l="${l%"$nl"}"
+  [ "$l" = "$r" ] && [ -f "/proc/$$/fd/3" ] || return 2
+  size="$(stat -L -c %s "/proc/$$/fd/3")" || return 2
+  [ "$size" -le 50000000 ] || return 6
+  cat <&3
+}
+
+cmd="${1:-}"
+[ "$#" -ge 1 ] && shift
+
+case "$cmd" in
+  start)
+    id="${1:-}"; seg="${2:-}"; cwd="${3:-}"
+    valid "$id" || exit 2
+    valid "$seg" || exit 2
+    case "$cwd" in /*) ;; *) exit 2 ;; esac
+    [ "${4:-}" = '--' ] || exit 2
+    shift 4
+    dir="$base/$id"
+    mkdir -p "$dir" || exit 1
+    # Already running? run.lock is held for the life of claude, so a free lock means no live process.
+    if ! flock -n "$dir/run.lock" true 2>/dev/null; then exit 3; fi
+    # A fresh pipe and staging area for this run (safe now the lock is free).
+    mkdir -p "$dir/in.d"
+    rm -f "$dir/in.d"/* 2>/dev/null
+    rm -f "$dir/in"
+    mkfifo "$dir/in" || exit 1
+    # Detach: new session/process group, own fds, writes its own exit.json. -o keeps the lock out of
+    # claude's children, so a server it leaves running can't hold the session open.
+    setsid sh -c 'dir="$1"; seg="$2"; cd "$3" || exit 1; shift 3; flock -n -o "$dir/run.lock" claude "$@" <>"$dir/in" >>"$dir/out.$seg.jsonl" 2>>"$dir/err.log"; printf "{\"code\":%s,\"at\":\"%s\"}\n" "$?" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$dir/exit.json"' sh "$dir" "$seg" "$cwd" "$@" </dev/null >/dev/null 2>>"$dir/err.log" &
+    pgid="$!"
+    echo "$pgid" > "$dir/parent.pid"
+    printf '%s %s\n' "$pgid" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    ;;
+  send)
+    id="${1:-}"; uuid="${2:-}"; nbytes="${3:-}"
+    valid "$id" || exit 2
+    valid "$uuid" || exit 2
+    digits "$nbytes" || exit 2
+    dir="$base/$id"
+    [ -p "$dir/in" ] || exit 5
+    mkdir -p "$dir/in.d"
+    file="$dir/in.d/$uuid.jsonl"
+    head -c "$nbytes" > "$file"
+    # Exactly one newline-terminated line that is a single JSON value, or drop it (exit 4). Checked
+    # with streaming tools: a line carrying images can be ~20 MB, too big for shell variables.
+    ok=1
+    [ "$(wc -c < "$file")" -eq "$nbytes" ] || ok=
+    [ "$(wc -l < "$file")" -eq 1 ] || ok=
+    [ "$(tail -c 1 "$file" | od -An -tx1 | tr -d ' ')" = 0a ] || ok=
+    jq -e . "$file" >/dev/null 2>&1 || ok=
+    if [ -z "$ok" ]; then rm -f "$file"; exit 4; fi
+    # Open the FIFO read-write so the append never blocks waiting for a reader, then stage is consumed.
+    flock "$dir/send.lock" cat "$file" 1<>"$dir/in"
+    rm -f "$file"
+    ;;
+  tail)
+    id="${1:-}"; seg="${2:-}"; offset="${3:-}"
+    valid "$id" || exit 2
+    valid "$seg" || exit 2
+    digits "$offset" || exit 2
+    dir="$base/$id"
+    mkdir -p "$dir"
+    : >> "$dir/out.$seg.jsonl"
+    # Follow from a 1-based byte position; stop when our own stdin closes (portal ends the exec).
+    timeout 600 sh -c 'tail -c "+$(($3 + 1))" -f "$1/out.$2.jsonl" & tp=$!; cat >/dev/null; kill "$tp" 2>/dev/null' sh "$dir" "$seg" "$offset"
+    ;;
+  stop)
+    id="${1:-}"
+    valid "$id" || exit 2
+    dir="$base/$id"
+    pid="$(cat "$dir/parent.pid" 2>/dev/null)" || exit 0
+    digits "$pid" || exit 0
+    # Negative pid signals the whole process group.
+    if kill -0 "-$pid" 2>/dev/null; then kill -TERM "-$pid" 2>/dev/null; fi
+    exit 0
+    ;;
+  status)
+    id="${1:-}"
+    valid "$id" || exit 2
+    dir="$base/$id"
+    pid="$(cat "$dir/parent.pid" 2>/dev/null)"
+    if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then echo "live $pid"; else echo gone; fi
+    ;;
+  ls)
+    exec 2>/dev/null
+    enter "${1:-}" || exit 2
+    # The root's listing leaves out the folders it refuses anyway.
+    if [ "$here" = "$root" ]; then set -- ! -name .claudepilot ! -name .claude; else set --; fi
+    find . -mindepth 1 -maxdepth 1 ! -name "*$nl*" "$@" -printf '%y\t%s\t%T@\t%f\n' | LC_ALL=C sort -t "$tab" -k 4 | head -n 501 | sed '501s/.*/#truncated/'
+    exit 0
+    ;;
+  cat)
+    exec 2>/dev/null
+    allowed "${1:-}" && [ -f "$r" ] && [ -r "$r" ] || exit 2
+    catfd 3<"$r"
+    exit "$?"
+    ;;
+  diff)
+    exec 2>/dev/null
+    enter "${1:-}" || exit 2
+    export GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat LC_ALL=C
+    set -- -c core.fsmonitor= -c core.hooksPath=/dev/null -c diff.external= -c core.pager=cat -c core.quotePath=false -c color.ui=false
+    [ "$(git "$@" rev-parse --is-inside-work-tree)" = true ] || { echo '#norepo'; exit 0; }
+    # Every filter the configuration defines is switched off (clean, smudge and process alike).
+    for f in $(git "$@" config --name-only --get-regexp '^filter\.' | sed -n 's/^filter\.\([A-Za-z0-9_.-]*\)\.[a-z]*$/\1/p' | sort -u); do
+      set -- "$@" -c "filter.$f.clean=" -c "filter.$f.smudge=" -c "filter.$f.process=" -c "filter.$f.required=false"
+    done
+    # Staged and unstaged changes against the last commit; before the first one, against the empty tree.
+    against="$(git "$@" rev-parse --verify -q HEAD)" || against="$(git "$@" hash-object -t tree /dev/null)" || exit 1
+    echo '#status'
+    timeout 30 git "$@" status --porcelain=v1 --untracked-files=normal || exit 1
+    echo '#numstat'
+    timeout 30 git "$@" diff --numstat --no-ext-diff --no-textconv --no-color --no-relative "$against" -- || exit 1
+    echo '#patch'
+    timeout 30 git "$@" diff --no-ext-diff --no-textconv --no-color --no-relative --src-prefix=a/ --dst-prefix=b/ "$against" -- | {
+      head -c 1000000
+      if [ "$(head -c 1 | wc -c)" -ne 0 ]; then printf '\n#truncated\n'; fi
+    }
+    exit 0
+    ;;
+  *)
+    exit 2
+    ;;
+esac

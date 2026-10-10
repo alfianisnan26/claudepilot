@@ -89,6 +89,8 @@ export function attachChat(server: Server, controller: ChatController, authorize
           if (items.length) send({ type: 'events', session: msg.session, items });
           const session = controller.get(msg.session);
           if (session) {
+            // A running process gets its reader back if it lost it (after a restart, say).
+            controller.attach(msg.session);
             send({ type: 'session', session });
             send({ type: 'tasks', session: msg.session, tasks: controller.tasks(msg.session) });
             // Queued, withdrawn and failed messages: what the transcript alone can't tell a fresh tab.

@@ -1,6 +1,6 @@
 import { Button, cn, ConfirmDialog, Menu, useMediaQuery, useToast } from '@isnanme/ui';
 import type { ChatRequest } from '@portal/contracts';
-import { ArrowLeft, Bot, Square, Trash2 } from 'lucide-react';
+import { ArrowLeft, Bot, FolderOpen, Square, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { errorText } from '@/lib/api';
@@ -8,25 +8,31 @@ import { AgentsPanel, AgentsSheet } from './AgentsPanel';
 import { ApprovalCard } from './ApprovalCard';
 import { Composer, type ComposerHandle } from './Composer';
 import { Controls } from './Controls';
+import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './FilesPanel';
 import { StateBadge } from './shared';
 import { Transcript } from './Transcript';
+import { ResumeBanner } from './ResumeBanner';
 import { useChatSession } from './useChatSocket';
 
-/** Whether the agents side panel is open on wide screens, remembered on this device. */
+/** The side panels: one at a time. */
+type Side = 'agents' | 'files';
+
+/** Which side panel is open on wide screens, remembered on this device: `1` agents (the default), `files`, `0` none. */
 const PANEL_KEY = 'claudepilot.chat-agents-panel';
-function savedPanel(): boolean {
+function savedPanel(): Side | null {
   try {
-    return localStorage.getItem(PANEL_KEY) !== '0';
+    const saved = localStorage.getItem(PANEL_KEY);
+    return saved === '0' ? null : saved === 'files' ? 'files' : 'agents';
   } catch {
-    return true;
+    return 'agents';
   }
 }
 
 /**
  * One session, full screen (like the shell): a header with the state and controls, the transcript,
  * the approvals dock, the session's controls and the composer pinned to the bottom. From 1280 px the
- * agents panel sits on the right (toggleable); below that it opens as a sheet. It owns the dedicated
- * chat socket for as long as it's mounted.
+ * agents or files panel sits on the right (toggleable, one at a time); below that each opens as a
+ * sheet. It owns the dedicated chat socket for as long as it's mounted.
  */
 export function SessionPage() {
   const { id = '' } = useParams();
@@ -37,22 +43,34 @@ export function SessionPage() {
 
   const wide = useMediaQuery('(min-width: 1280px)');
   const [panel, setPanel] = useState(savedPanel);
-  const [sheet, setSheet] = useState(false);
-  const agentsOpen = wide ? panel : sheet;
+  const [sheet, setSheet] = useState<Side | null>(null);
+  const open = wide ? panel : sheet;
+  const agentsOpen = open === 'agents';
+  const filesOpen = open === 'files';
   // The sheet is for narrow screens; when the window widens, the side panel takes over.
   useEffect(() => {
-    if (wide) setSheet(false);
+    if (wide) setSheet(null);
   }, [wide]);
-  const toggleAgents = () => {
-    if (!wide) return setSheet((v) => !v);
-    const next = !panel;
+  const toggle = (side: Side) => {
+    if (!wide) return setSheet((v) => (v === side ? null : side));
+    const next = panel === side ? null : side;
     setPanel(next);
     try {
-      localStorage.setItem(PANEL_KEY, next ? '1' : '0');
+      localStorage.setItem(PANEL_KEY, next === null ? '0' : next === 'agents' ? '1' : 'files');
     } catch {
       // private window: just not remembered
     }
   };
+  const toggleAgents = () => toggle('agents');
+  const toggleFiles = () => toggle('files');
+  // Where Files is (tab, folder) survives closing the panel; another session starts fresh, before
+  // anything renders with this one's folder.
+  const [filesView, setFilesView] = useState<FilesView>(INITIAL_FILES_VIEW);
+  const [filesFor, setFilesFor] = useState(id);
+  if (filesFor !== id) {
+    setFilesFor(id);
+    setFilesView(INITIAL_FILES_VIEW);
+  }
 
   useEffect(() => {
     document.title = `${session?.title || 'Session'} · chat`;
@@ -118,11 +136,26 @@ export function SessionPage() {
         )}
         <button
           type="button"
+          onClick={toggleFiles}
+          aria-label="Files"
+          aria-expanded={filesOpen}
+          aria-controls={filesOpen ? 'files-panel' : undefined}
+          title={wide ? (filesOpen ? 'Hide files' : 'Show files and changes') : 'Files and changes'}
+          className={cn(
+            'press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold text-muted hover:bg-surface-2 hover:text-ink',
+            filesOpen && 'bg-surface-2 text-ink',
+          )}
+        >
+          <FolderOpen className="size-[18px]" />
+          <span className="hidden sm:inline">Files</span>
+        </button>
+        <button
+          type="button"
           onClick={toggleAgents}
           aria-label={running ? `Agents, ${running} running` : 'Agents'}
           aria-expanded={agentsOpen}
           aria-controls={agentsOpen ? 'agents-panel' : undefined}
-          title={wide ? (panel ? 'Hide agents' : 'Show agents') : 'Agents'}
+          title={wide ? (agentsOpen ? 'Hide agents' : 'Show agents') : 'Agents'}
           className={cn(
             'press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold text-muted hover:bg-surface-2 hover:text-ink',
             agentsOpen && 'bg-surface-2 text-ink',
@@ -170,6 +203,7 @@ export function SessionPage() {
                 <p className="py-2 text-center text-[13px] text-muted">This session has ended.</p>
               ) : (
                 <>
+                  {session && <ResumeBanner session={session} connected={connected} onResume={() => control('resume')} />}
                   {session && <Controls sessionId={id} session={session} connected={connected} control={control} className="mb-2" />}
                   <Composer ref={composer} onSend={send} connected={connected} working={working} />
                 </>
@@ -178,14 +212,20 @@ export function SessionPage() {
           </div>
         </div>
 
-        {wide && panel && (
+        {wide && panel === 'agents' && (
           <aside id="agents-panel" aria-label="Agents" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg">
             <AgentsPanel tasks={tasks} onClose={toggleAgents} closeLabel="Hide agents" />
           </aside>
         )}
+        {wide && panel === 'files' && (
+          <aside id="files-panel" aria-label="Files" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg">
+            <FilesPanel key={id} sessionId={id} view={filesView} onView={setFilesView} onClose={toggleFiles} closeLabel="Hide files" />
+          </aside>
+        )}
       </div>
 
-      {!wide && <AgentsSheet open={sheet} tasks={tasks} onClose={() => setSheet(false)} />}
+      {!wide && <AgentsSheet open={sheet === 'agents'} tasks={tasks} onClose={() => setSheet(null)} />}
+      {!wide && <FilesSheet key={id} open={sheet === 'files'} sessionId={id} view={filesView} onView={setFilesView} onClose={() => setSheet(null)} />}
 
       <ConfirmDialog
         open={ending}

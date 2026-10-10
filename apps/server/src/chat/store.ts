@@ -1,5 +1,6 @@
 // Chat sessions: the database layer (chat-sessions PRD §9). Synchronous over `node:sqlite`, redacted,
-// and never a secret — only allowlisted fields of each event are kept, and large text is truncated.
+// and never a secret — only allowlisted fields of each event are kept, every stored text passes the
+// credential redactor (redact.ts), and large text is truncated.
 
 import type {
   ChatEvent,
@@ -15,6 +16,7 @@ import type {
 } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import type { StoredEvent, TaskPatch } from './protocol.js';
+import { redact, redactMaybe } from './redact.js';
 
 /** A raw `chat_sessions` row; the controller reads `segment`/`byte_offset`/`cwd`/`process` from it. */
 export type ChatSessionRow = {
@@ -108,6 +110,14 @@ const inputRank = (state: InputState): number => ({ sending: 0, queued: 1, start
 /** States a reconnecting tab can't tell from the transcript, so the socket replays them on subscribe. */
 const REPLAYED_INPUT_STATES: ChatInputState[] = ['queued', 'cancelled', 'discarded', 'failed'];
 
+/** States of a sent message that Claude Code hasn't finished with. */
+const OPEN_INPUT_STATES = `('sending', 'queued', 'started')`;
+
+/** Where one of the portal's own control lines is: written (`sending`), echoed or answered (`completed`), or not delivered (`failed`). */
+export type ControlLineState = 'sending' | 'completed' | 'failed';
+
+const PROCESS_STATES = new Set<string>(['live', 'asleep', 'gone']);
+
 /** Whole, redacted event text over this many characters is truncated before it reaches the row. */
 const MAX_TEXT = 16_000;
 
@@ -132,10 +142,44 @@ function imageRef(v: unknown): ChatImage | null {
 export class ChatStore {
   readonly #store: Store;
   readonly #now: () => Date;
+  /** Nesting depth of {@link transaction} (SQLite has no nested BEGIN). */
+  #txDepth = 0;
 
   constructor(store: Store, now: () => Date = () => new Date()) {
     this.#store = store;
     this.#now = now;
+  }
+
+  /**
+   * Runs `fn` in one transaction. When `fn` changed any row, `ifChanged` runs inside it too — the reader
+   * moves its byte offset this way, so a line's effects and "this line was read" commit together and a
+   * restart never applies a line twice. Lines that change nothing (live deltas) write nothing.
+   */
+  transaction(fn: () => void, ifChanged?: () => void): void {
+    const db = this.#writable();
+    if (this.#txDepth > 0) {
+      fn();
+      ifChanged?.();
+      return;
+    }
+    const changes = () => (db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
+    db.exec('BEGIN');
+    this.#txDepth++;
+    try {
+      const before = changes();
+      fn();
+      if (ifChanged && changes() > before) ifChanged();
+      db.exec('COMMIT');
+    } catch (e) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // already rolled back
+      }
+      throw e;
+    } finally {
+      this.#txDepth--;
+    }
   }
 
   /** The database, for reads. Throws when the store has no usable database. */
@@ -182,6 +226,11 @@ export class ChatStore {
     return rows.map((r) => this.toSession(r));
   }
 
+  /** Sessions whose process should be running (for liveness checks and reattaching after a restart). */
+  liveRows(): ChatSessionRow[] {
+    return this.#db().prepare(`SELECT * FROM chat_sessions WHERE process = 'live' AND state != 'ended'`).all() as ChatSessionRow[];
+  }
+
   toSession(row: ChatSessionRow): ChatSession {
     const waiting = (this.#db().prepare('SELECT count(*) AS n FROM chat_requests WHERE session_id = ? AND answered_at IS NULL').get(row.id) as { n: number }).n;
     return {
@@ -195,6 +244,7 @@ export class ChatStore {
       effort: row.effort ?? null,
       ultracode: row.ultracode === 1,
       ultracodeAvailable: row.ultracode_available === 1,
+      process: PROCESS_STATES.has(row.process) ? (row.process as ChatSession['process']) : 'gone',
       costUsd: row.cost_est_usd,
       turns: row.turns,
       lastSeq: row.last_seq,
@@ -277,7 +327,7 @@ export class ChatStore {
     if (patch.parentPid !== undefined) set('parent_pid', patch.parentPid);
     if (patch.processStartedAt !== undefined) set('process_started_at', patch.processStartedAt);
     if (patch.process !== undefined) set('process', patch.process);
-    if (patch.endedReason !== undefined) set('ended_reason', patch.endedReason);
+    if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
     if (!sets.length) return;
     db.prepare(`UPDATE chat_sessions SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
   }
@@ -320,6 +370,62 @@ export class ChatStore {
     return !!this.#db().prepare('SELECT 1 FROM chat_inputs WHERE session_id = ? AND uuid = ?').get(sessionId, uuid);
   }
 
+  /** Whether the portal sent a message under this uuid in this session (whatever became of it). */
+  isMessage(sessionId: string, uuid: string): boolean {
+    return !!this.#db().prepare(`SELECT 1 FROM chat_inputs WHERE session_id = ? AND uuid = ? AND kind = 'message'`).get(sessionId, uuid);
+  }
+
+  /** Whether a sent message is still with Claude Code (sending, queued or started). */
+  hasOpenInputs(sessionId: string): boolean {
+    return !!this.#db().prepare(`SELECT 1 FROM chat_inputs WHERE session_id = ? AND kind = 'message' AND state IN ${OPEN_INPUT_STATES} LIMIT 1`).get(sessionId);
+  }
+
+  /** Its process is gone: messages it never finished become `discarded`. Returns their uuids. */
+  discardOpenInputs(sessionId: string): string[] {
+    const db = this.#writable();
+    const rows = db.prepare(`SELECT uuid FROM chat_inputs WHERE session_id = ? AND kind = 'message' AND state IN ${OPEN_INPUT_STATES} ORDER BY created_at`).all(sessionId) as { uuid: string }[];
+    if (rows.length) db.prepare(`UPDATE chat_inputs SET state = 'discarded' WHERE session_id = ? AND kind = 'message' AND state IN ${OPEN_INPUT_STATES}`).run(sessionId);
+    return rows.map((r) => r.uuid);
+  }
+
+  /**
+   * Whether one of the portal's own slash commands (`/compact`, …) is running: Claude Code echoes local
+   * command output as a replayed line under an id of its own while it does.
+   */
+  slashCommandRunning(sessionId: string): boolean {
+    return !!this.#db()
+      .prepare(
+        `SELECT 1 FROM chat_inputs i JOIN chat_events e ON e.session_id = i.session_id AND e.uuid = i.uuid AND e.kind = 'user'
+         WHERE i.session_id = ? AND i.kind = 'message' AND i.state = 'started' AND substr(ltrim(json_extract(e.payload, '$.text')), 1, 1) = '/' LIMIT 1`,
+      )
+      .get(sessionId);
+  }
+
+  /* ---------- The portal's own control lines (integrity, PRD §10.4) ---------- */
+
+  /**
+   * Records a control line before it's written: a request the portal asks (`req/<id>`) or an answer it
+   * gives (`ans/<id>`). Keys carry a `/`, which client message ids never do. Writing an answer again after
+   * a failed delivery puts it back to `sending`.
+   */
+  addControl(sessionId: string, key: string): void {
+    this.#writable()
+      .prepare(
+        `INSERT INTO chat_inputs (session_id, uuid, actor, kind, priority, state, created_at) VALUES (?, ?, NULL, 'control', NULL, 'sending', ?)
+         ON CONFLICT (session_id, uuid) DO UPDATE SET state = 'sending' WHERE state = 'failed'`,
+      )
+      .run(sessionId, key, this.#stamp());
+  }
+
+  controlState(sessionId: string, key: string): ControlLineState | null {
+    const row = this.#db().prepare(`SELECT state FROM chat_inputs WHERE session_id = ? AND uuid = ? AND kind = 'control'`).get(sessionId, key) as { state: string } | undefined;
+    return row ? (row.state as ControlLineState) : null;
+  }
+
+  setControlState(sessionId: string, key: string, state: ControlLineState): void {
+    this.#writable().prepare(`UPDATE chat_inputs SET state = ? WHERE session_id = ? AND uuid = ? AND kind = 'control'`).run(state, sessionId, key);
+  }
+
   /* ---------- Sub-agents and background tasks ---------- */
 
   /**
@@ -327,9 +433,10 @@ export class ChatStore {
    * changes only the fields the line carries. A terminal status stamps `ended_at` once; a later
    * running set (`background_tasks_changed`) never revives a finished task.
    */
-  upsertTask(sessionId: string, t: TaskPatch): void {
+  upsertTask(sessionId: string, patch: TaskPatch): void {
     const db = this.#writable();
     const now = this.#stamp();
+    const t: TaskPatch = { ...patch, description: redactMaybe(patch.description), summary: redactMaybe(patch.summary) };
     const status = t.status && TASK_STATUSES.has(t.status) ? t.status : undefined;
     const existing = db.prepare('SELECT status, ended_at FROM chat_tasks WHERE session_id = ? AND task_id = ?').get(sessionId, t.taskId) as
       | { status: string | null; ended_at: string | null }
@@ -406,6 +513,19 @@ export class ChatStore {
     }));
   }
 
+  /** Whether a sub-agent or background task is still running. */
+  hasRunningTasks(sessionId: string): boolean {
+    return !!this.#db().prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running') LIMIT 1`).get(sessionId);
+  }
+
+  /** Its process is gone, and its sub-agents and background tasks with it: they read `killed`. Says whether any did. */
+  endRunningTasks(sessionId: string): boolean {
+    const result = this.#writable()
+      .prepare(`UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE session_id = ? AND (status IS NULL OR status = 'running')`)
+      .run(this.#stamp(), sessionId);
+    return Number(result.changes) > 0;
+  }
+
   /** The description of the task a `Task` tool_use started, to label its sub-agent's lines. */
   taskLabel(sessionId: string, toolUseId: string): string | null {
     const row = this.#db().prepare('SELECT label FROM chat_tasks WHERE session_id = ? AND tool_use_id = ? AND label IS NOT NULL LIMIT 1').get(sessionId, toolUseId) as
@@ -417,10 +537,19 @@ export class ChatStore {
   /** Records a request the agent raised and returns it with its stored timestamp. Throws on a duplicate id. */
   addRequest(sessionId: string, req: ChatRequest & { toolUseId?: string }): ChatRequest {
     const createdAt = this.#stamp();
+    const detail = redactMaybe(req.detail ?? null);
     this.#writable()
       .prepare(`INSERT INTO chat_requests (session_id, request_id, tool_use_id, kind, tool_name, agent_label, title, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(sessionId, req.requestId, req.toolUseId ?? null, req.kind, req.toolName ?? null, req.agentLabel ?? null, req.title, req.detail ?? null, createdAt);
-    return { requestId: req.requestId, kind: req.kind, toolName: req.toolName ?? null, agentLabel: req.agentLabel ?? null, title: req.title, detail: req.detail ?? null, createdAt };
+      .run(sessionId, req.requestId, req.toolUseId ?? null, req.kind, req.toolName ?? null, req.agentLabel ?? null, req.title, detail, createdAt);
+    return { requestId: req.requestId, kind: req.kind, toolName: req.toolName ?? null, agentLabel: req.agentLabel ?? null, title: req.title, detail, createdAt };
+  }
+
+  /** Its process is gone: requests nobody can answer any more read `expired`. Returns their ids. */
+  expireOpenRequests(sessionId: string): string[] {
+    const db = this.#writable();
+    const rows = db.prepare('SELECT request_id FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at').all(sessionId) as { request_id: string }[];
+    if (rows.length) db.prepare(`UPDATE chat_requests SET answered_at = ?, outcome = 'expired' WHERE session_id = ? AND answered_at IS NULL`).run(this.#stamp(), sessionId);
+    return rows.map((r) => r.request_id);
   }
 
   answerRequest(sessionId: string, requestId: string, outcome: string, actor: string | null): void {
@@ -451,18 +580,21 @@ export class ChatStore {
     }));
   }
 
-  /** Only the allowlisted display fields of an event (never a raw tool input blob). */
+  /** Only the allowlisted display fields of an event (never a raw tool input blob), with credentials redacted. */
   #payload(ev: StoredEvent): Record<string, unknown> {
     const p: Record<string, unknown> = {};
-    if (ev.text !== undefined) p.text = ev.text.length > MAX_TEXT ? `${ev.text.slice(0, MAX_TEXT)}…` : ev.text;
+    if (ev.text !== undefined) {
+      const text = redact(ev.text); // whole, before truncating, so a cut never splits a credential
+      p.text = text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}…` : text;
+    }
     if (ev.toolName !== undefined) p.toolName = ev.toolName;
-    if (ev.request !== undefined) p.request = ev.request;
+    if (ev.request !== undefined) p.request = { ...ev.request, detail: redactMaybe(ev.request.detail) };
     if (ev.outcome !== undefined) p.outcome = ev.outcome;
     if (ev.costUsd !== undefined) p.costUsd = ev.costUsd;
     // A call's id, kept (not shown) so a result read after a restart can still be named.
     if (ev.kind === 'tool_use' && ev.toolUseId) p.toolUseId = ev.toolUseId;
     // The readable sub-agent label, when it isn't just the raw parent_tool_use_id kept in its column.
-    if (ev.agentLabel && ev.agentLabel !== ev.parentToolUseId) p.agentLabel = ev.agentLabel;
+    if (ev.agentLabel && ev.agentLabel !== ev.parentToolUseId) p.agentLabel = redact(ev.agentLabel);
     // Blob references only: base64 never reaches a row (the controller moves it to the blob store).
     const images = (ev.images ?? []).map(imageRef).filter((i): i is ChatImage => i !== null);
     if (images.length) p.images = images;

@@ -20,6 +20,13 @@ RUN npm install -g @anthropic-ai/claude-code
 # The workspace owner can install what they need.
 RUN echo 'node ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/node && chmod 440 /etc/sudoers.d/node
 
+# The chat session host, root-owned. Kubernetes workspaces get it only from here (on Docker the portal
+# also writes it in). Its tools (jq, flock, setsid, coreutils, findutils, git) are all in this image.
+# Generated from CP_SESSION in apps/server/src/chat/host.ts: npm run gen:workspace-host -w @portal/server
+# (no COPY --chmod: the portal builds this with Docker's classic builder).
+COPY cp-session /etc/claudepilot/bin/cp-session
+RUN chmod 0755 /etc/claudepilot /etc/claudepilot/bin /etc/claudepilot/bin/cp-session
+
 ENV LANG=en_US.UTF-8 TERM=xterm-256color
 USER node
 WORKDIR /home/node

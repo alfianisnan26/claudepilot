@@ -140,7 +140,7 @@ is a FIFO the portal writes one checked line into per message; its output is app
 portal reads from a byte offset, stores (numbered, in the database) and pushes to open tabs over
 `/api/chat/live`. Tool requests use Claude Code's own permission prompt (`--permission-prompt-tool
 stdio`): nothing runs until you allow it. Sessions start in the default (ask) mode with a $10 budget;
-Bypass is off. Docker workspaces only for now.
+Bypass is off. Docker workspaces, and Kubernetes once the workspace image includes the session host.
 
 Above the composer, chips show what applies right now and switch it: the model (Claude Code's own
 list), effort, ultracode where the model offers it, and the mode (Ask, Auto-accept edits, Plan). While
@@ -148,7 +148,18 @@ a turn runs, **Steer** sends your message at the next step and **Send after this
 a queued message can be withdrawn. **Agents** lists the session's sub-agents with their status,
 tokens and summary, and their messages are tagged in the transcript. Images can be attached (paste,
 drop or the paperclip; up to 4, 3.75 MB each) and show in the transcript with tool images; they're
-stored on the portal by content hash and served only to their session.
+stored on the portal by content hash and served only to their session. **Files** browses the session's
+folder and downloads files (the portal's own files, `~/.claude` and anything outside the home folder
+are refused); **Changes** shows the git diff against the last commit.
+
+Durability: a session keeps running while the portal restarts and its reply still arrives; a session
+whose Claude Code process died shows **Interrupted** with **Resume** (each process gets its own log
+segment, and the chosen model, effort, ultracode and mode are restored); after 30 minutes idle a session
+sleeps and wakes on the next message. The portal ends a session whose output shows activity it didn't
+send (a message or answer it never sent, or a mode it didn't set), and redacts credential-shaped text
+(API keys, tokens, private keys) from stored events and live text, even when split across chunks.
+Kubernetes workspaces get the session host from the workspace image (`images/workspace/cp-session`,
+generated with `npm run gen:workspace-host -w @portal/server`); Docker workspaces get it installed.
 
 ## Storage
 

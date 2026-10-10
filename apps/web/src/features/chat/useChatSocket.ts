@@ -201,7 +201,9 @@ export function useChatSession(sessionId: string): ChatSessionApi {
           if (msg.session === sessionId) applyEvents(msg.items);
           break;
         case 'delta':
-          if (msg.session === sessionId) setDelta({ agentLabel: msg.agentLabel, text: msg.text });
+          // Deltas are pieces of the open block: append them (a new agent starts a new bubble).
+          if (msg.session === sessionId)
+            setDelta((d) => (d && d.agentLabel === msg.agentLabel ? { ...d, text: d.text + msg.text } : { agentLabel: msg.agentLabel, text: msg.text }));
           break;
         case 'session':
           if (msg.session.id === sessionId) setSession(msg.session);

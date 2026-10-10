@@ -344,7 +344,7 @@ export class DockerRuntime implements Runtime {
     const local = !this.image.includes('/');
     progress(local ? 'Building the workspace image (first time, a few minutes)' : `Pulling ${this.image}`);
     const stream = local
-      ? await this.#docker.buildImage({ context: this.imageContext, src: ['Dockerfile'] }, { t: this.image })
+      ? await this.#docker.buildImage({ context: this.imageContext, src: ['Dockerfile', 'cp-session'] }, { t: this.image })
       : await this.#docker.pull(this.image);
 
     await new Promise<void>((resolve, reject) =>

@@ -24,6 +24,8 @@ export interface ChatSession {
   ultracode: boolean;
   /** Whether this model/host offers ultracode at all. */
   ultracodeAvailable: boolean;
+  /** `live` running; `asleep` stopped after idling (wakes on the next message); `gone` exited or lost (Interrupted). */
+  process: 'live' | 'asleep' | 'gone';
   costUsd: number;
   turns: number;
   /** The last stored event's sequence number; a reconnecting tab resumes after it. */
@@ -158,7 +160,49 @@ export const CHAT_API = {
   tasks: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/tasks`,
   /** GET: an image's bytes (attachments and tool images). */
   blob: (id: string, blobId: string) => `/api/chat/sessions/${encodeURIComponent(id)}/blobs/${blobId}`,
+  /** GET `?path=`: a folder's entries in the session's workspace (default: the session's folder). */
+  files: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/files`,
+  /** GET `?path=`: a file's bytes, as a download. */
+  download: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/files/download`,
+  /** GET: what changed in the session's folder (git), as a summary and a unified diff. */
+  diff: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/diff`,
 } as const;
+
+export interface ChatFileEntry {
+  name: string;
+  /** Absolute path in the workspace. */
+  path: string;
+  type: 'file' | 'dir' | 'symlink' | 'other';
+  size: number | null;
+  modifiedAt: string | null;
+}
+
+export interface ChatFolder {
+  path: string;
+  entries: ChatFileEntry[];
+  /** True when the listing was cut short. */
+  truncated: boolean;
+}
+
+export interface ChatDiffFile {
+  path: string;
+  /** git's short status, e.g. `M`, `A`, `D`, `R`, `??`. */
+  status: string;
+  additions: number | null;
+  deletions: number | null;
+}
+
+export interface ChatDiff {
+  /** Null when the session's folder isn't a git repository. */
+  repo: string | null;
+  files: ChatDiffFile[];
+  /** Unified diff of tracked changes (untracked files listed only). */
+  patch: string;
+  truncated: boolean;
+}
+
+/** Downloads larger than this are refused. */
+export const CHAT_MAX_DOWNLOAD_BYTES = 50_000_000;
 
 /** The chat WebSocket, one per tab. Authorized like the shell socket (Origin + session cookie). */
 export const CHAT_SOCKET_PATH = '/api/chat/live';
@@ -199,7 +243,7 @@ export interface ChatControl {
    * `stop` interrupts the turn; `end` closes the session; `model`, `effort`, `ultracode`, `mode`
    * change what applies from the next request; `cancel_queued` withdraws a queued message.
    */
-  op: 'stop' | 'end' | 'model' | 'effort' | 'ultracode' | 'mode' | 'cancel_queued';
+  op: 'stop' | 'end' | 'model' | 'effort' | 'ultracode' | 'mode' | 'cancel_queued' | 'resume';
   /** Used to key the `ack`; any client-chosen string. */
   uuid?: string;
   args?: { model?: string; effort?: string; ultracode?: boolean; mode?: ChatPermissionMode; inputUuid?: string };

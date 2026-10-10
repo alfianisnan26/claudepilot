@@ -1,9 +1,20 @@
 // Chat sessions: the session-host script that runs Claude Code in a workspace (chat-sessions PRD, C1).
 // The portal reaches it only through short `docker exec` / `kubectl exec` calls; the script keeps the
-// Claude Code process detached, with a FIFO for stdin and an appended segment file for stdout.
+// Claude Code process detached, with a FIFO for stdin and an appended segment file for stdout. It also
+// serves Files and Diff (C3): folder listings, file bytes and git changes, under a path policy.
+
+import { CHAT_MAX_DOWNLOAD_BYTES } from '@portal/contracts';
 
 /** Where the reconciler installs the script inside a workspace (foundation-owned `bin/` path). */
 export const CP_SESSION_PATH = '/etc/claudepilot/bin/cp-session';
+
+/** `ls` lists at most this many entries, then prints `#truncated`. */
+export const LS_MAX_ENTRIES = 500;
+/** `diff` prints at most this many bytes of patch, then `#truncated`. */
+export const DIFF_MAX_PATCH_BYTES = 1_000_000;
+/** Exit codes of the Files and Diff commands: a path the policy refuses, a file over the download limit. */
+export const HOST_REFUSED = 2;
+export const HOST_TOO_LARGE = 6;
 
 /**
  * The POSIX `sh` (dash, no bashisms) session host. One process per session, guarded by a `flock`.
@@ -19,12 +30,29 @@ export const CP_SESSION_PATH = '/etc/claudepilot/bin/cp-session';
  *
  * Session files live under `${CLAUDEPILOT_SESSIONS_DIR:-$HOME/.claudepilot/sessions}/<id>/` and are
  * referenced by absolute path, since `claude` runs with its own working directory.
+ *
+ * Files and Diff take an absolute path and act only on its real path (symlinks resolved), which must
+ * lie under `${CLAUDEPILOT_FILES_ROOT:-/home/node}` and outside the portal's own files (`.claudepilot`
+ * and Claude Code's `.claude` at the root, `/etc/claudepilot`). A refused path exits 2 and prints
+ * nothing; stderr is discarded, since the exec merges it into stdout.
+ *
+ * - `ls <dir>` prints `<type>\t<size>\t<mtime-epoch>\t<name>` per entry (`find -printf` `%y %s %T@ %f`),
+ *   sorted by name, at most {@link LS_MAX_ENTRIES}, then `#truncated` when there were more. The root's
+ *   own listing leaves out the folders it refuses; names with a newline are left out.
+ * - `cat <file>` prints a regular file's bytes, read through a descriptor that is checked after it is
+ *   opened; exit 6 when it's over {@link CHAT_MAX_DOWNLOAD_BYTES}.
+ * - `diff <dir>` prints `#norepo` outside a git work tree. Inside one: `#status` (`status
+ *   --porcelain=v1`), `#numstat` and `#patch` (`diff` against HEAD, or the empty tree before the first
+ *   commit), the patch cut at {@link DIFF_MAX_PATCH_BYTES} and followed by `#truncated` when longer.
+ *   Nothing the repository configures runs: no fsmonitor, hooks, external diff, textconv, pager or
+ *   filter; each git call has 30 s.
  */
 export const CP_SESSION = `#!/bin/sh
 set -u
 base="\${CLAUDEPILOT_SESSIONS_DIR:-$HOME/.claudepilot/sessions}"
 nl='
 '
+tab="$(printf '\\t')"
 valid() {
   case "$1" in
     ''|.|..) return 1 ;;
@@ -33,6 +61,51 @@ valid() {
   [ "\${#1}" -le 128 ]
 }
 digits() { case "\${1:-}" in ''|*[!0-9]*) return 1 ;; esac; }
+
+# Files and Diff read only real paths under the files root, never the portal's own files.
+froot="\${CLAUDEPILOT_FILES_ROOT:-/home/node}"
+# Sets r to the real path of $1, symlinks resolved (exact even when it ends in a newline).
+real() {
+  r="$(realpath -e -- "$1" 2>/dev/null && printf x)" || return 1
+  r="\${r%x}"
+  r="\${r%"$nl"}"
+}
+# Whether real path $1 may be shown: under the root, and not the portal's or Claude Code's own files.
+inroot() {
+  case "$1" in
+    "$root/.claudepilot"|"$root/.claudepilot/"*|"$root/.claude"|"$root/.claude/"*) return 1 ;;
+    /etc/claudepilot|/etc/claudepilot/*) return 1 ;;
+    "$root"|"$root/"*) return 0 ;;
+  esac
+  return 1
+}
+# For an absolute path $1 that may be shown, sets root and r (its real path); status 1 otherwise.
+allowed() {
+  case "$1" in /*) ;; *) return 1 ;; esac
+  real "$froot" || return 1
+  root="$r"
+  real "$1" || return 1
+  inroot "$r"
+}
+# Enters folder $1 when it may be shown, then checks the folder actually entered (sets here).
+enter() {
+  allowed "$1" && [ -d "$r" ] && cd -P -- "$r" || return 1
+  here="$(pwd -P && printf x)" || return 1
+  here="\${here%x}"
+  here="\${here%"$nl"}"
+  inroot "$here" && [ -r . ]
+}
+# Prints the file open on fd 3 once the opened file itself checks out, so a path swapped after the
+# check can't redirect the read; 6 when it's over the download limit.
+catfd() {
+  l="$(readlink "/proc/$$/fd/3" && printf x)" || return 2
+  l="\${l%x}"
+  l="\${l%"$nl"}"
+  [ "$l" = "$r" ] && [ -f "/proc/$$/fd/3" ] || return 2
+  size="$(stat -L -c %s "/proc/$$/fd/3")" || return 2
+  [ "$size" -le ${CHAT_MAX_DOWNLOAD_BYTES} ] || return 6
+  cat <&3
+}
 
 cmd="\${1:-}"
 [ "$#" -ge 1 ] && shift
@@ -110,6 +183,43 @@ case "$cmd" in
     dir="$base/$id"
     pid="$(cat "$dir/parent.pid" 2>/dev/null)"
     if [ -n "\${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then echo "live $pid"; else echo gone; fi
+    ;;
+  ls)
+    exec 2>/dev/null
+    enter "\${1:-}" || exit 2
+    # The root's listing leaves out the folders it refuses anyway.
+    if [ "$here" = "$root" ]; then set -- ! -name .claudepilot ! -name .claude; else set --; fi
+    find . -mindepth 1 -maxdepth 1 ! -name "*$nl*" "$@" -printf '%y\\t%s\\t%T@\\t%f\\n' | LC_ALL=C sort -t "$tab" -k 4 | head -n ${LS_MAX_ENTRIES + 1} | sed '${LS_MAX_ENTRIES + 1}s/.*/#truncated/'
+    exit 0
+    ;;
+  cat)
+    exec 2>/dev/null
+    allowed "\${1:-}" && [ -f "$r" ] && [ -r "$r" ] || exit 2
+    catfd 3<"$r"
+    exit "$?"
+    ;;
+  diff)
+    exec 2>/dev/null
+    enter "\${1:-}" || exit 2
+    export GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat LC_ALL=C
+    set -- -c core.fsmonitor= -c core.hooksPath=/dev/null -c diff.external= -c core.pager=cat -c core.quotePath=false -c color.ui=false
+    [ "$(git "$@" rev-parse --is-inside-work-tree)" = true ] || { echo '#norepo'; exit 0; }
+    # Every filter the configuration defines is switched off (clean, smudge and process alike).
+    for f in $(git "$@" config --name-only --get-regexp '^filter\\.' | sed -n 's/^filter\\.\\([A-Za-z0-9_.-]*\\)\\.[a-z]*$/\\1/p' | sort -u); do
+      set -- "$@" -c "filter.$f.clean=" -c "filter.$f.smudge=" -c "filter.$f.process=" -c "filter.$f.required=false"
+    done
+    # Staged and unstaged changes against the last commit; before the first one, against the empty tree.
+    against="$(git "$@" rev-parse --verify -q HEAD)" || against="$(git "$@" hash-object -t tree /dev/null)" || exit 1
+    echo '#status'
+    timeout 30 git "$@" status --porcelain=v1 --untracked-files=normal || exit 1
+    echo '#numstat'
+    timeout 30 git "$@" diff --numstat --no-ext-diff --no-textconv --no-color --no-relative "$against" -- || exit 1
+    echo '#patch'
+    timeout 30 git "$@" diff --no-ext-diff --no-textconv --no-color --no-relative --src-prefix=a/ --dst-prefix=b/ "$against" -- | {
+      head -c ${DIFF_MAX_PATCH_BYTES}
+      if [ "$(head -c 1 | wc -c)" -ne 0 ]; then printf '\\n#truncated\\n'; fi
+    }
+    exit 0
     ;;
   *)
     exit 2

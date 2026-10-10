@@ -3,6 +3,7 @@
 // do; the builders turn an action into one JSON line to write into the session's stdin FIFO.
 
 import type { ChatEvent, ChatInputState, ChatModelOption, ChatRequest, ChatSessionState, ChatTask } from '@portal/contracts';
+import { redact } from './redact.js';
 
 /** A base64 image as Claude Code carries it; the controller turns it into a blob and never stores this. */
 export interface RawImage {
@@ -70,6 +71,23 @@ export interface ParsedLine {
   tasks?: TaskPatch[];
   /** `Task`/`Agent` tool calls and their descriptions, to label sub-agent lines. */
   agents?: { toolUseId: string; description: string }[];
+
+  /* What the integrity checks (PRD §10.4) look at. */
+
+  /** The permission mode a main-thread `system/init` or `system/status` reports. */
+  modeSeen?: string;
+  /**
+   * A replayed user line (`isReplay`): the uuid Claude Code read it under, and whether it's local command
+   * output (`<local-command-stdout>`), which Claude Code echoes under an id of its own.
+   */
+  replay?: { uuid: string | null; localCommand: boolean };
+  /** A `command_lifecycle` line's command uuid, whatever its state. */
+  commandUuid?: string;
+  /** The main thread called EnterPlanMode, which needs no approval: `plan` mode may follow. */
+  enterPlan?: boolean;
+
+  /** A text block started or ended (or its message did): held-back delta text is flushed. */
+  blockEdge?: { agentLabel: string | null };
 }
 
 const asObj = (v: unknown): Record<string, unknown> | null => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
@@ -77,6 +95,8 @@ const asStr = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 const asNum = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const asStrings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 const clip = (s: string, max: number): string => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
+/** Redacted first, then clipped, so a cut never leaves part of a credential behind. */
+const clean = (s: string, max: number): string => clip(redact(s), max);
 
 /** How much of a sub-agent's description and final summary is kept. */
 const MAX_LABEL = 200;
@@ -116,23 +136,28 @@ export function parseLine(raw: string): ParsedLine {
 }
 
 /** `system/init` sets model and mode and reports the session id; `status` lines carry the working state
- *  and mode; `task_*` and `background_tasks_changed` track sub-agents. */
+ *  and mode; `task_*` and `background_tasks_changed` track sub-agents. Only main-thread lines speak for
+ *  the session's model and mode. */
 function parseSystem(obj: Record<string, unknown>): ParsedLine {
+  const main = !asStr(obj.parent_tool_use_id);
   switch (asStr(obj.subtype)) {
     case 'init': {
       const out: ParsedLine = { stored: [{ kind: 'system', text: 'Ready' }], init: true };
       const patch: NonNullable<ParsedLine['sessionPatch']> = {};
       const model = asStr(obj.model);
-      if (model) patch.model = model;
+      if (model && main) patch.model = model;
       const mode = asStr(obj.permissionMode);
-      if (mode) patch.mode = mode;
+      if (mode && main) {
+        patch.mode = mode;
+        out.modeSeen = mode;
+      }
       if (Object.keys(patch).length) out.sessionPatch = patch;
       const sid = asStr(obj.session_id);
       if (sid) out.sessionIdSeen = sid;
       return out;
     }
     case 'status':
-      return parseStatus(obj);
+      return parseStatus(obj, main);
     case 'task_started':
     case 'task_updated':
     case 'task_notification': {
@@ -156,7 +181,7 @@ function parseSystem(obj: Record<string, unknown>): ParsedLine {
 
 /** `requesting` means working, and names the sent lines that request reads; any status line may carry
  *  the permission mode now in effect (e.g. after `set_permission_mode`). */
-function parseStatus(obj: Record<string, unknown>): ParsedLine {
+function parseStatus(obj: Record<string, unknown>, main: boolean): ParsedLine {
   const out: ParsedLine = { stored: [] };
   const patch: NonNullable<ParsedLine['sessionPatch']> = {};
   if (asStr(obj.status) === 'requesting') {
@@ -165,7 +190,10 @@ function parseStatus(obj: Record<string, unknown>): ParsedLine {
     if (read.length) out.inputs = read.map((uuid) => ({ uuid, state: 'started' }));
   }
   const mode = asStr(obj.permissionMode);
-  if (mode) patch.mode = mode;
+  if (mode && main) {
+    patch.mode = mode;
+    out.modeSeen = mode;
+  }
   if (Object.keys(patch).length) out.sessionPatch = patch;
   return out;
 }
@@ -188,7 +216,7 @@ function parseTask(obj: Record<string, unknown>): TaskPatch | null {
     const end = asNum(patch.end_time);
     if (end !== null) t.endedAtMs = end;
     const description = asStr(patch.description);
-    if (description) t.description = clip(description, MAX_LABEL);
+    if (description) t.description = clean(description, MAX_LABEL);
     if (typeof patch.is_backgrounded === 'boolean') t.background = patch.is_backgrounded;
     return t;
   }
@@ -197,7 +225,7 @@ function parseTask(obj: Record<string, unknown>): TaskPatch | null {
   const status = taskStatus(obj.status);
   if (status) t.status = status;
   const summary = asStr(obj.summary);
-  if (summary) t.summary = clip(summary, MAX_SUMMARY);
+  if (summary) t.summary = clean(summary, MAX_SUMMARY);
   const usage = asObj(obj.usage);
   const tokens = asNum(usage?.total_tokens);
   if (tokens !== null) t.tokens = tokens;
@@ -214,7 +242,7 @@ function taskFields(obj: Record<string, unknown>, base: TaskPatch): TaskPatch {
   const toolUseId = asStr(obj.tool_use_id);
   if (toolUseId) t.toolUseId = toolUseId;
   const description = asStr(obj.description);
-  if (description) t.description = clip(description, MAX_LABEL);
+  if (description) t.description = clean(description, MAX_LABEL);
   const subagentType = asStr(obj.subagent_type);
   if (subagentType) t.subagentType = subagentType;
   const taskType = asStr(obj.task_type);
@@ -242,14 +270,24 @@ function taskStatus(v: unknown): ChatTask['status'] | null {
   }
 }
 
-/** Live text deltas: shown as an ephemeral delta, never stored. Other stream_event subtypes are ignored. */
+/** Live text deltas: shown as an ephemeral delta, never stored. A block's start and stop (and its
+ *  message's stop) mark where held-back text is flushed; other stream_event subtypes are ignored. */
 function parseStreamEvent(obj: Record<string, unknown>): ParsedLine {
   const event = asObj(obj.event);
-  if (event && asStr(event.type) === 'content_block_delta') {
-    const delta = asObj(event.delta);
-    if (delta && asStr(delta.type) === 'text_delta') return { stored: [], delta: { agentLabel: asStr(obj.parent_tool_use_id), text: asStr(delta.text) ?? '' } };
+  const agentLabel = asStr(obj.parent_tool_use_id);
+  switch (asStr(event?.type)) {
+    case 'content_block_delta': {
+      const delta = asObj(event?.delta);
+      if (delta && asStr(delta.type) === 'text_delta') return { stored: [], delta: { agentLabel, text: asStr(delta.text) ?? '' } };
+      return { stored: [] };
+    }
+    case 'content_block_start':
+    case 'content_block_stop':
+    case 'message_stop':
+      return { stored: [], blockEdge: { agentLabel } };
+    default:
+      return { stored: [] };
   }
-  return { stored: [] };
 }
 
 /** Tools that start a sub-agent; their `description` input names it. */
@@ -262,6 +300,7 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
   const uuid = asStr(obj.uuid) ?? undefined;
   const stored: StoredEvent[] = [];
   const agents: NonNullable<ParsedLine['agents']> = [];
+  let enterPlan = false;
   if (Array.isArray(content))
     for (const raw of content) {
       const block = asObj(raw);
@@ -274,17 +313,31 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
         if (id) ev.toolUseId = id;
         stored.push(ev);
         const description = asStr(asObj(block.input)?.description);
-        if (name && AGENT_TOOLS.has(name) && id && description) agents.push({ toolUseId: id, description: clip(description, MAX_LABEL) });
+        if (name && AGENT_TOOLS.has(name) && id && description) agents.push({ toolUseId: id, description: clean(description, MAX_LABEL) });
+        if (name === 'EnterPlanMode' && !agentLabel) enterPlan = true;
       }
     }
-  return agents.length ? { stored, agents } : { stored };
+  const out: ParsedLine = { stored };
+  if (agents.length) out.agents = agents;
+  if (enterPlan) out.enterPlan = true;
+  return out;
+}
+
+/** Local command output (`/compact`'s "Compacted", …) as Claude Code wraps it. */
+const LOCAL_OUTPUT = /^\s*<local-command-(?:stdout|stderr)>/;
+
+function isLocalOutput(content: unknown): boolean {
+  if (typeof content === 'string') return LOCAL_OUTPUT.test(content);
+  const first = Array.isArray(content) ? asObj(content[0]) : null;
+  return asStr(first?.type) === 'text' && LOCAL_OUTPUT.test(asStr(first?.text) ?? '');
 }
 
 /** Incoming `user` lines: an array holds tool results (stored, images pulled out for the blob store); a
- *  string, or anything marked `isReplay`, is a line we sent and already stored. */
+ *  string, or anything marked `isReplay`, is a line we sent and already stored. A replay reports the
+ *  uuid it carries, which the controller checks against what it sent. */
 function parseUser(obj: Record<string, unknown>): ParsedLine {
-  if (obj.isReplay === true) return { stored: [] };
   const content = asObj(obj.message)?.content;
+  if (obj.isReplay === true) return { stored: [], replay: { uuid: asStr(obj.uuid), localCommand: isLocalOutput(content) } };
   if (typeof content === 'string') return { stored: [] }; // a replay: the user event was stored when we sent it
   const agentLabel = asStr(obj.parent_tool_use_id);
   const stored: StoredEvent[] = [];
@@ -328,7 +381,7 @@ function toolResultContent(v: unknown): { text: string; images: RawImage[] } {
     else if (typeof raw === 'string') parts.push(raw);
     else parts.push(`[${type ?? 'content'}]`); // other blocks (documents, …) may carry base64 too: name them only
   }
-  return { text: clip(parts.join('\n'), 500), images };
+  return { text: clean(parts.join('\n'), 500), images };
 }
 
 /** `{type: "image", source: {type: "base64", media_type, data}}` → a raw image, else null. */
@@ -391,12 +444,14 @@ function parseControlResponse(obj: Record<string, unknown>): ParsedLine {
 /** The `command_lifecycle` states a sent line can report. */
 const LIFECYCLE = new Set<string>(['queued', 'started', 'completed', 'cancelled', 'discarded']);
 
-/** `command_lifecycle`: a line the portal sent was queued, started, completed or cancelled. */
+/** `command_lifecycle`: a line the portal sent was queued, started, completed or cancelled. Its uuid is
+ *  reported for the integrity check whatever the state. */
 function parseLifecycle(obj: Record<string, unknown>): ParsedLine {
   const uuid = asStr(obj.command_uuid);
+  if (!uuid) return { stored: [] };
   const state = asStr(obj.state);
-  if (!uuid || !state || !LIFECYCLE.has(state)) return { stored: [] };
-  return { stored: [], inputs: [{ uuid, state: state as ChatInputState }] };
+  if (!state || !LIFECYCLE.has(state)) return { stored: [], commandUuid: uuid };
+  return { stored: [], commandUuid: uuid, inputs: [{ uuid, state: state as ChatInputState }] };
 }
 
 /* ---------- Control replies, reduced to what may be kept ---------- */
@@ -529,12 +584,10 @@ export function requestDetail(toolName: string | null, input: unknown): string |
       return null; // unknown tools: don't risk echoing secrets from an unrecognised shape
   }
   if (detail === null) return null;
-  const trimmed = detail.replace(/\s+/g, ' ').trim();
-  return trimmed.length > MAX_DETAIL ? `${trimmed.slice(0, MAX_DETAIL - 1)}…` : trimmed;
+  return clean(detail.replace(/\s+/g, ' ').trim(), MAX_DETAIL);
 }
 
-/** Stringify a tool_result's content, kept short for the transcript row. */
+/** Stringify a tool_result's content, redacted and kept short for the transcript row. */
 function shortText(v: unknown): string {
-  const s = typeof v === 'string' ? v : JSON.stringify(v ?? '');
-  return s.length > 500 ? `${s.slice(0, 499)}…` : s;
+  return clean(typeof v === 'string' ? v : JSON.stringify(v ?? ''), 500);
 }

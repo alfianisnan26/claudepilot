@@ -10,7 +10,8 @@
     "start": "NODE_ENV=production node --disable-warning=ExperimentalWarning dist/index.js",
     "typecheck": "tsc --noEmit",
     "portal": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx --env-file-if-exists=../../.env src/cli.ts",
-    "test": "node --import tsx --disable-warning=ExperimentalWarning --test 'src/**/*.test.ts'"
+    "test": "node --import tsx --disable-warning=ExperimentalWarning --test 'src/**/*.test.ts'",
+    "gen:workspace-host": "tsx scripts/gen-workspace-host.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.5",
