@@ -154,8 +154,9 @@ One portal per data dir: a lock file (`portal.lock`) stops a second one, and sto
 
 ## Behaviour
 
-- State lives in memory. A restart goes back to `PORTAL_SERVER_CODE` (or a new generated code),
-  turns sign-in back on and signs everyone out.
+- The code and the sign-in switch live in memory: a restart goes back to `PORTAL_SERVER_CODE` (or a
+  new generated code) and turns sign-in back on. Sign-ins survive restarts: they're kept in the
+  database, which stores only a hash of each token.
 - Rotating or setting a custom code signs out every other session.
 - Turning sign-in off keeps existing sessions; nobody new can sign in until it's turned back on or
   the server restarts.

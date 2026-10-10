@@ -15,6 +15,7 @@ import { JsonFile } from './jsonFile.js';
 import { Portal } from './portal.js';
 import { acquireLock } from './store/lock.js';
 import { loadSecretKey, SecretKeyError } from './store/secretBox.js';
+import { sessionStore } from './store/sessions.js';
 import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
 import { attachShell, cookie } from './workspaces/shell.js';
@@ -60,6 +61,8 @@ const backupTimer = setInterval(dailyBackup, 60 * 60 * 1000);
 backupTimer.unref();
 
 const portal = new Portal(config.serverCode, config.session.ttlMs);
+// Sign-ins survive restarts (12 hours each); only token hashes are stored.
+portal.useStore(sessionStore(store));
 const { workspaces: ws } = config;
 const runtimes: Runtime[] = ws.docker.map((d) => new DockerRuntime(d, ws.dockerImage, ws.imageContext));
 if (ws.kubernetes.enabled) {

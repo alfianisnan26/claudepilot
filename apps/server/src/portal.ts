@@ -9,9 +9,17 @@ import {
 } from '@portal/contracts';
 import { AppError } from '@isnanme/core';
 
-interface Session {
+export interface Session {
   createdAt: number;
   expiresAt: number;
+}
+
+/** Keeps sessions across restarts, keyed by a hash of the token (the portal database). */
+export interface SessionStore {
+  load(now: number): Map<string, Session>;
+  save(hash: string, session: Session): void;
+  remove(hash: string): void;
+  removeAllExcept(hash: string | null): void;
 }
 
 export function generateCode(): string {
@@ -21,17 +29,23 @@ export function generateCode(): string {
 }
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
+/** Sessions are looked up by this, so neither memory nor the database holds a usable token. */
+const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
 
 /**
- * The portal's state: the server code, whether sign-in is open, and the signed-in sessions.
- * Kept in memory: a restart goes back to the env code (or a fresh one) and signs everyone out.
+ * The portal's state: the server code, whether sign-in is open, and the signed-in sessions. The code
+ * and the on/off switch live in memory (a restart goes back to the env code, or a fresh one); sessions
+ * also go to the session store when there is one, so a restart doesn't sign anyone out.
  */
 export class Portal {
   #code: string;
   #source: CodeSource;
   #codeUpdatedAt = Date.now();
   #enabled = true;
+  /** By token hash. */
   readonly #sessions = new Map<string, Session>();
+  #store: SessionStore | null = null;
+  #storeFailed = false;
 
   constructor(
     envCode: string | undefined,
@@ -45,6 +59,25 @@ export class Portal {
     } else {
       this.#code = generateCode();
       this.#source = 'generated';
+    }
+  }
+
+  /** Restores the sessions saved before a restart, and saves sign-ins and sign-outs from now on. */
+  useStore(store: SessionStore) {
+    this.#store = store;
+    this.#persist((st) => {
+      for (const [hash, s] of st.load(Date.now())) this.#sessions.set(hash, s);
+    });
+  }
+
+  /** Best effort: a database that can't be written keeps sessions in memory until the next restart. */
+  #persist(fn: (store: SessionStore) => void) {
+    if (!this.#store) return;
+    try {
+      fn(this.#store);
+    } catch (e) {
+      if (!this.#storeFailed) console.error(`[portal] sessions not saved: ${(e as Error).message}`);
+      this.#storeFailed = true;
     }
   }
 
@@ -68,22 +101,29 @@ export class Portal {
     if (!this.matches(input)) throw new AppError('UNAUTHORIZED', 'That code is not right.');
     const token = randomBytes(32).toString('base64url');
     const now = Date.now();
-    this.#sessions.set(token, { createdAt: now, expiresAt: now + this.ttlMs });
+    const hash = tokenHash(token);
+    const session = { createdAt: now, expiresAt: now + this.ttlMs };
+    this.#sessions.set(hash, session);
+    this.#persist((st) => st.save(hash, session));
     return token;
   }
 
   session(token: string | undefined): Session | undefined {
     if (!token) return undefined;
-    const s = this.#sessions.get(token);
+    const hash = tokenHash(token);
+    const s = this.#sessions.get(hash);
     if (s && s.expiresAt <= Date.now()) {
-      this.#sessions.delete(token);
+      this.#sessions.delete(hash);
+      this.#persist((st) => st.remove(hash));
       return undefined;
     }
     return s;
   }
 
   signOut(token: string) {
-    this.#sessions.delete(token);
+    const hash = tokenHash(token);
+    this.#sessions.delete(hash);
+    this.#persist((st) => st.remove(hash));
   }
 
   /** Sets a new code (given, or generated) and signs out every session but `keep`. */
@@ -95,7 +135,9 @@ export class Portal {
     this.#code = input === undefined ? generateCode() : normalizeCode(input);
     this.#source = input === undefined ? 'generated' : 'custom';
     this.#codeUpdatedAt = Date.now();
-    for (const token of this.#sessions.keys()) if (token !== keep) this.#sessions.delete(token);
+    const keepHash = tokenHash(keep);
+    for (const hash of this.#sessions.keys()) if (hash !== keepHash) this.#sessions.delete(hash);
+    this.#persist((st) => st.removeAllExcept(keepHash));
   }
 
   setEnabled(enabled: boolean) {
@@ -104,7 +146,11 @@ export class Portal {
 
   #prune() {
     const now = Date.now();
-    for (const [token, s] of this.#sessions) if (s.expiresAt <= now) this.#sessions.delete(token);
+    for (const [hash, s] of this.#sessions) {
+      if (s.expiresAt > now) continue;
+      this.#sessions.delete(hash);
+      this.#persist((st) => st.remove(hash));
+    }
   }
 
   adminState(token: string): AdminState {

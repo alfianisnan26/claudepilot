@@ -207,6 +207,21 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 5,
+    name: 'web sessions',
+    up(db) {
+      db.exec(`
+        -- Signed-in browsers, so a restart doesn't sign everyone out. Only a hash of each token is kept.
+        CREATE TABLE web_sessions (
+          token_hash TEXT PRIMARY KEY,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX web_sessions_expires ON web_sessions (expires_at);
+      `);
+    },
+  },
 ];
 
 /**
