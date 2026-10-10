@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.5.** ✅ = observed in our sandbox runs on Claude Code 2.1.296 (print mode, mock API). 📄 = documented by Anthropic or Kubernetes, not observed by us. 🔬 = needs a test before it becomes an acceptance criterion (§20). Runtime metrics exist today. OTLP export configured from managed `env` to a loopback receiver, per-record account tagging and managed hooks writing to the outbox were verified for Account Pool (sandbox E7). |
+| Status | **Draft v0.6**, a consistency pass: the Web app's navigation and workspace page (its A4), Chat A7, Browser & desktop A9, and requests from MCP set, Portal MCP and Settings & policies. ✅ = observed in our sandbox runs on Claude Code 2.1.296 (print mode, mock API). 📄 = documented by Anthropic or Kubernetes, not observed by us. 🔬 = needs a test before it becomes an acceptance criterion (§20). Runtime metrics exist today. OTLP export configured from managed `env` to a loopback receiver, per-record account tagging and managed hooks writing to the outbox were verified for Account Pool (sandbox E7). |
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-10 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, delivery engine, outbox, event log, shared UI) |
@@ -52,7 +52,8 @@ say so.
 ## 4. Non-goals
 
 - A general observability stack: custom dashboards, a query language, Grafana parity.
-- Alerts outside the open page. The portal speaks plain HTTP, which rules out Web Push.
+- Sending alerts itself. Attention items reach devices as push through the Web app (its §11); email,
+  SMS and Slack are out of scope there too.
 - Storing conversation content. Transcripts belong to [Chat sessions](chat-sessions.md).
 - Forwarding telemetry to another collector. In Full mode Monitoring owns the OTLP endpoint.
 - Billing. Billed amounts appear only where Anthropic's cost report covers an account (FR14).
@@ -92,7 +93,7 @@ the portal's ingest schema, which drops unknown fields.
 | Opt-in per workspace: the first 200 characters of a requested or denied command or path, redacted | Raw API request or response bodies |
 
 Workspace-reported data is unauthenticated: on the standard image anyone with a shell can forge or
-suppress it, or post to the receiver; the locked image (Settings & policies §14) narrows that.
+suppress it, or post to the receiver; the hardened image (Settings & policies §14) narrows that.
 Features that act on these numbers (budgets, rotation thresholds) get them only within sanity caps:
 a line's tokens at most the model's context window plus its maximum output, and a workspace's spend
 per minute at most 10× its 7-day p99 (at least $5). Lines over a cap are quarantined, kept out of
@@ -131,7 +132,9 @@ conversation. A **subagent** is an agent a session starts. A **process** is an O
 ### Runtime
 
 - **FR1** One sampler reads CPU and memory of running workspaces every 30 s, or 10 s while anyone
-  watches, through the existing `usage()`. `/api/workspaces/usage` serves its latest sample.
+  watches, through the existing `usage()`, per container, so a browser container counts apart from
+  the workspace's ([Browser & desktop](browser-desktop-pool.md) A5). `/api/workspaces/usage` serves
+  its latest sample.
 - **FR2** Restarts: Docker `RestartCount`, pod `restartCount`. OOM kills are stored as `resource`
   events with their time, from three sources. On every target, the cumulative `oom_kill` count in
   `/sys/fs/cgroup/memory.events`, read and diffed by every snapshot (FR27; a drop means a restart).
@@ -139,16 +142,19 @@ conversation. A **subagent** is an agent a session starts. A **process** is an O
   `lastState.terminated.reason: OOMKilled`, since on cgroup v2 the kubelet kills the whole container
   📄 (🔬 Q14). The count catches the kernel killing `claude` or a dev server while PID 1
   (`bash -c '… sleep infinity & wait'`) keeps the container running and its state unchanged. A rise
-  with no runtime event reads "2 kills between 14:02 and 14:10".
+  with no runtime event reads "2 kills between 14:02 and 14:10". A browser container's restarts and
+  OOM kills are counted apart and never change the workspace's status.
 - **FR3** While a Processes section is open, every 5 s, `monitor-snapshot --ps` (by `exec`, as the
   workspace user) reads `/proc`: PID, parent, user, state, RSS, start time, command line, and
   `utime` plus `stime` in clock ticks. CPU % is the tick change over the interval; `ps`'s
   `cputimes` counts whole seconds, so over 5 s it moves in steps of 20% of a core. Docker's top API
   returns host PIDs that don't match `claude agents` PIDs, so every target uses `exec`. Rows are
-  tagged: Claude Code with its session, its children, stdio MCP servers by set (launcher args),
-  claudepilot components, leftovers of ended sessions. The snapshot hides its own processes.
-  Nothing is stored.
-- **FR4** While the Agents tab or an Activity tab is visible, every second pull (20 s), the snapshot
+  tagged: Claude Code with its session, its children, stdio MCP servers by set (from the non-secret
+  `CLAUDEPILOT_MCP_SERVER` marker the launcher exports, since `exec` replaces its arguments;
+  [MCP set](mcpset-pool.md) §14), claudepilot components, leftovers of ended sessions. The snapshot
+  reads only that marker from a process's environment and hides its own processes. Nothing is
+  stored.
+- **FR4** While the Agents tab or a workspace's Sessions tab is visible, every second pull (20 s), the snapshot
   adds `claude agents --json --all` where a `claude` process runs
   ([agent view](https://code.claude.com/docs/en/agent-view)): `id`, `sessionId`, `kind`, `state`
   (background only), `status`, `waitingFor`, `pid`, `startedAt`, `name`, `cwd`. `--all` keeps parked
@@ -173,8 +179,9 @@ conversation. A **subagent** is an agent a session starts. A **process** is an O
   enforced timeout 📄), parses at most the first 64 KB of stdin with `jq --stream` and discards the
   rest, marking the line `truncated` (a `PostToolUse` input carries the whole `tool_response`),
   finishes within 100 ms, and never opens `transcript_path`. In Full mode, `SessionStart` and
-  `UserPromptSubmit` pass `--receiver`, which starts the receiver if its port is free. Tests: a
-  failing `jq` on `Stop` never continues the turn; a 10 MB `tool_response` finishes within 100 ms.
+  `UserPromptSubmit` pass `--receiver`, which starts the receiver if its port is free. It exits 0 at
+  once when `CLAUDEPILOT_VERIFY` is set ([Skillset](skillset-pool.md) A7). Tests: a failing `jq` on
+  `Stop` never continues the turn; a 10 MB `tool_response` finishes within 100 ms.
 - **FR7** `monitor-otel` accepts OTLP/HTTP JSON on `127.0.0.1:14318`; anything but `POST /v1/logs`
   gets 404. It keeps §10.1's allowlist and sums usage and tool calls per session per minute into
   `outbox/telemetry.jsonl`, writing a minute when it closes, or every 10 s while the `watching` flag
@@ -192,12 +199,13 @@ conversation. A **subagent** is an agent a session starts. A **process** is an O
 
 - **FR9** One `agent_sessions` row per session ID, shared by hooks, telemetry (`session.id`), Chat
   sessions and `claude agents`. Kind: chat (in the Chat registry; `claude agents` lists it as
-  `interactive` ✅), background, interactive, headless (`-p`, not chat) or unknown.
+  `interactive` ✅), background, interactive, headless (`-p`, not chat) or unknown. A chat wake keeps
+  the session ID and sets `CLAUDEPILOT_CHAT_WAKE=1`, so its `SessionStart` folds into the same row.
 - **FR10** State follows §12. A turn is a `UserPromptSubmit` → `Stop` / `StopFailure` pair, or a chat
   result. RED metrics (rate, errors, duration): turns per minute, failed-turn rate, p50 and p95 turn
   duration, API errors.
 - **FR11** Counts pick a source per metric. Tokens and cost: telemetry if the session sent any
-  `api_request`, else the chat result's `modelUsage`. Turns and denials: hooks if the session sent
+  `api_request`, else the per-result deltas Chat hands over (never its cumulative totals). Turns and denials: hooks if the session sent
   any, else chat results. `agent_sessions` stores both choices (`usage_source`, `activity_source`);
   rollups and views read only those, so nothing counts twice.
 - **FR12** Actions: Open chat or Open shell; Stop for background sessions (`claude stop <id>` by
@@ -224,29 +232,32 @@ conversation. A **subagent** is an agent a session starts. A **process** is an O
 - **FR17** Connection status: chat sessions' `system/init`, and an on-demand "Check MCP servers"
   that runs `claude mcp list` by `exec` in each working directory of the workspace's live sessions
   (from hook lines, at most 5), else `/home/node`. It starts every stdio server, so it never runs on
-  a timer. Telemetry's `mcp_server_connection` adds unnamed failure counts, grouped by `is_plugin`
+  a timer, and the same run does MCP set's duplicate check: it takes the sets' URLs and package
+  names on stdin, compares them inside the workspace with what `claude mcp list` prints, and returns
+  only the names and scopes of matches ([MCP set](mcpset-pool.md) §10.6). Telemetry's `mcp_server_connection` adds unnamed failure counts, grouped by `is_plugin`
   and `plugin_id_hash`.
 - **FR18** `managed_by` comes from the hook's `mcp_server.source` plus its name, never the name alone
   ([hooks](https://code.claude.com/docs/en/hooks)). Source `plugin` with a name delivered to that
   workspace (`plugin:cpm-<set>:<server>`), or source `managed` with a delivered `managedMcpServers`
-  name (`cpm-<set>-<server>`, [MCP set](mcpset-pool.md) §10), maps to that set; the server the
-  Browser & desktop pool declares maps to that pool. Anything else in use is **Unmanaged**: one
+  name (`cpm-<set>-<server>`, [MCP set](mcpset-pool.md) §10), maps to that set; `plugin:cpb-browser:*`
+  maps to `managed_by: browser`. Anything else in use is **Unmanaged**: one
   security event per workspace and server per day. Names are untrusted text, escaped on display.
 - **FR19** [Portal MCP](portal-mcp.md) clients: calls per tool per hour, errors, denials, p95
   duration and active connections, from its audit tables.
 
 ### Security
 
-- **FR20** The Security feed lists §12 events and portal actions (deliveries, drift, assignments,
-  failovers, setting changes, Monitor and Portal MCP actions) with severity, actor, workspace and
-  summary. `monitor_events` holds only workspace-reported events and Monitoring's own actions; other
+- **FR20** The Events tab lists §12 events and portal actions (deliveries, drift, assignments,
+  failovers, setting changes, Monitor and Portal MCP actions, browser take-overs) with severity,
+  actor, workspace and summary, under the saved filters All and Security. `monitor_events` holds only workspace-reported events and Monitoring's own actions; other
   owners' rows are read through one view (A7) and never copied, so each keeps its retention. Rows
   expand to redacted details, and the filtered range exports as CSV.
 - **FR21** Bypass is detected three ways: `bypassPermissions` as a hook's `permission_mode`,
   `permission_mode_changed` to bypass, and Claude Code process args (`--dangerously-skip-permissions`,
-  `--permission-mode bypassPermissions`).
+  `--permission-mode bypassPermissions`). If Settings & policies Q22 finds that `--bare` skips
+  managed settings, a nested `claude --bare` process is a High event too.
 - **FR22** Posture per control (default mode, auto mode, bypass, sandbox, managed-only rules and
-  hooks) with its enforcement state (Settings FR17), user or project hooks seen (`hook_registered`),
+  hooks) with its enforcement state and the controls not met (Settings FR17), user or project hooks seen (`hook_registered`),
   and Settings' limit signals: budgets by state, cap refusals per hour, sessions stopped by budget or
   turns.
 - **FR23** Detailed events (a Settings row, off by default, scopes Global and workspace) add the first
@@ -274,7 +285,8 @@ conversation. A **subagent** is an agent a session starts. A **process** is an O
   quality: 'measured' | 'estimated' | 'billed' | 'unknown', source, asOf, reason? }`. `null` renders
   "—" with its reason, never 0.
 - **FR27** `/api/monitor` serves `overview`, `workspaces`, `workspaces/:target/:name`,
-  `…/processes`, `agents`, `agents/:id`, `security`, `security.csv` and `accounts` behind the
+  `…/processes`, `agents`, `agents/:id`, `events` (saved filter `all` or `security`), `events.csv`
+  and `accounts` behind the
   session and CSRF guards; the browser polls every 10 s while visible. A Monitor request marks the
   portal "watching" for 30 s, which subscribes every running workspace to the foundation's 10 s
   pull. That pull is one `exec` that also runs `monitor-snapshot` (A5): it touches the `watching`
@@ -290,9 +302,11 @@ conversation. A **subagent** is an agent a session starts. A **process** is an O
   erroring; lines dropped or quarantined. Pools and Settings add theirs through one interface
   (`severity`, `summary`, `workspace_id`, `since`, `link`): failed or drifted deliveries, secrets
   expiring within 14 days, servers needing sign-in, revoked skills still present, "Budget reached",
-  "Cap refused 4×/h".
+  "Cap refused 4×/h", a waiting browser handoff, a browser error. Every item also carries a
+  notification kind ([Web app & PWA](web-app-pwa.md) §11.1) and a stable tag, and badges one
+  destination: chat requests badge Sessions, health items Monitor only (its FR6).
 - **FR29** Workspaces page rows gain an agents chip ("2 working · 1 needs input") and 24 h tokens,
-  linking to the workspace's Activity tab.
+  linking to the workspace's Sessions tab.
 
 ## 9. Data model
 
@@ -438,10 +452,11 @@ and panels read `workspace_delivery.claude_version` to show "Needs Claude Code �
 
 | From | What Monitoring reads | Through |
 | --- | --- | --- |
-| [Chat sessions](chat-sessions.md) | Per session: `session_id`, workspace, state (its FR4: Starting, Working, Needs input, Failed, Idle, Interrupted, Ended), `waiting_for`, model, mode; MCP servers and status from each `system/init`; each `result`'s `modelUsage`, `total_cost_usd`, `permission_denials` and `is_error`, as `usage_minutes` rows with source `chat`. Stop calls `interrupt` or `end_session`. | The chat controller, in process |
+| [Chat sessions](chat-sessions.md) | Per session: `session_id`, workspace, state (its FR3: Starting, Working, Needs input, Failed, Idle, Interrupted, Ended), `waiting_for`, model, mode; MCP servers and status from each `system/init`; per-result usage deltas (never cumulative totals), `permission_denials` and `is_error`, as `usage_minutes` rows with source `chat`. Stop calls `interrupt` or `end_session`. | The chat controller, in process |
 | [Account Pool](account-pool.md) | Health, headroom with "as of", error tags, failovers and switch times, workspaces waiting for quota, `usage_rollups`, daily billed cost per Anthropic workspace (§19) | Its service |
 | [Settings & policies](settings-policies.md) | Effective monitoring rows with sources; posture and enforcement (its FR17); budgets by state, cap refusals per hour, sessions stopped by budget or turns (its §17) | Its service |
-| [Skillset](skillset-pool.md), [MCP set](mcpset-pool.md), Browser & desktop | Skill-usage records; server names delivered to each workspace (FR18) | Their services, the compiler |
+| [Skillset](skillset-pool.md), [MCP set](mcpset-pool.md), [Browser & desktop](browser-desktop-pool.md) | Skill-usage records; server names delivered to each workspace (FR18); browser state, handoffs, take-overs and security events (its §16) | Their services, the compiler |
+| [Persona](persona-pool.md) | Its §17 metrics: workspaces per persona, recent sessions on an older revision (from the foundation's session reporter), synced but not loaded, delivery failures, test-run spend per day | Its service |
 | [Portal MCP](portal-mcp.md) | `mcp_audit`, `mcp_auth_events` | The event view (A7) |
 | Every pool | Attention items (FR28) | One interface |
 
@@ -452,7 +467,7 @@ they run the unmodified CLI, which loads managed settings.
 
 | Session state | Entered on |
 | --- | --- |
-| Starting; Interrupted | Chat sessions only (Chat sessions FR4) |
+| Starting; Interrupted | Chat sessions only (Chat sessions FR3) |
 | Working | `UserPromptSubmit`, `SubagentStart`; agents `status: busy` or `state: working`; chat Working |
 | Needs input | `PermissionRequest`, `Notification`; agents `status: waiting` or `state: blocked`; chat Needs input. Clears on any later line from that session (a hook, a telemetry `tool_decision` or `tool_result`) or agents `busy`. In `dontAsk` mode and in headless sessions other than chat, a `PermissionRequest` is an auto-denial 📄 and counts as a denial instead. |
 | Failed | `StopFailure`, until the next prompt; agents `state: failed`; chat Failed |
@@ -460,7 +475,9 @@ they run the unmodified CLI, which loads managed settings.
 | Ended | `SessionEnd`; agents `state: stopped` (reason `stopped`); gone from agents and processes; Remove (reason `removed`); 6 h without any signal |
 | Offline; Unknown | The workspace is stopped or unreachable; a Claude Code process with no other data |
 
-The freshest signal wins; on a tie, chat beats agents, which beat hooks.
+For kind `chat`, the chat registry's state wins whatever its age: a chat process that has gone is
+Interrupted, or Idle while asleep, never Ended. For other kinds the freshest signal wins; on a tie, agents beat
+hooks.
 
 | Security event | Signal | Severity |
 | --- | --- | --- |
@@ -473,7 +490,9 @@ The freshest signal wins; on a tie, chat beats agents, which beat hooks.
 | Sandbox violation | 🔬 Reported only inside the Bash tool result; no hook or telemetry event (Q6) | Medium |
 | Settings tampering | `ConfigChange` from `policy_settings` whose file hash matches none the portal wrote for that path in the last 24 h, or foundation drift: High. User or project settings changed: Info. One event per workspace, file and hash. | High or Info |
 | Unmanaged MCP server | FR18, once per workspace and server per day | Medium |
-| Portal MCP auth | Repeated wrong codes, refresh-token reuse, rejected origins (Portal MCP audit, through the view) | Medium |
+| Portal MCP | Repeated wrong codes, refresh-token reuse, rejected origins, refused relaxations; a lockdown (Portal MCP audit, through the view) | Medium; High for a lockdown |
+| Portal connector used in a workspace | A portal tool called through a claude.ai connector (`mcp__claude_ai_<name>__<portal tool>`) in FR16's tool names ([Portal MCP](portal-mcp.md) §10.1) | High |
+| Browser | An exposed listener; a browser without its sandbox or network isolation; Chromium over 21 days behind; a take-over; loopback requests refused for their Origin or Host ([Browser & desktop](browser-desktop-pool.md) §16) | High for an exposed listener; Info for a take-over; else Medium |
 
 ## 13. Retention and aggregation
 
@@ -497,19 +516,20 @@ caps. The tables stay under 250 MB for 20 workspaces over 13 months.
 Screens use existing components (PageHeader, PageTabs, Section, Card, StatGrid and StatTile, Badge,
 Menu, Segmented, ChipGroup, Select, Dialog, FormDialog, ConfirmDialog, EmptyState, LoadError,
 RowsSkeleton, Spinner) and the app's Meter, moved to `components/`. Four shared additions, built once
-for Chat sessions and Monitor: **StatusDot**, **Sparkline** (inline SVG, about 80×20, labels its
+in Web app W1 for Chat sessions and Monitor: **StatusDot**, **Sparkline** (inline SVG, about 80×20, labels its
 last value), **TrendChart** (pay's LineChart generalized: one or two series, a limit line,
 scrubbing, never stacked) and **FreshnessLabel**. No chart library.
 
-**Layout.** NAV is Sessions · Workspaces · **Monitor** · Pools · Settings, the five phone tabs from
-Chat sessions A2 and Skillset A8, with Access inside Settings. Monitor (`Activity` icon) lives at
-`/admin/monitor` with tabs **Overview · Workspaces · Agents · Security · Accounts** (PageTabs,
-`stack="never"`, `?tab=`). One workspace's activity is the **Activity** tab of the shared workspace
-page, `/admin/workspaces/:target/:name`, beside **Configuration** (A8). AppShell gets a `wide` route
-flag (`max-w-7xl` from `lg`). Every tab opens with a **health line** (the highest-attention
-StatusDot and one sentence: "2 sessions need input · 1 workspace error", or "All quiet") and a
-FreshnessLabel ("Updated 8 s ago"). A range Segmented (1h · 24h · 7d · 30d) appears only on Overview,
-Security and the Activity charts; Workspaces shows live values and Accounts the UTC month. The ⋯
+**Layout.** Navigation is the Web app's (its §8): the phone tab bar is Sessions · Workspaces ·
+**Monitor** · Pools · Menu, and Settings and Access are destinations of their own. Monitor
+(`Activity` icon) lives at `/admin/monitor` with tabs **Overview · Workspaces · Agents · Events ·
+Accounts** (PageTabs, `stack="never"`, `?tab=`), a `wide` route (Web app §9.2). One workspace's
+monitoring lives on the shared workspace page, `/admin/workspaces/:target/:name?tab=`, in its
+**Overview**, **Sessions** and **Activity** tabs beside **Configuration** (A8). Every tab opens with
+a **health line** (the highest-attention StatusDot and one sentence: "2 sessions need input · 1
+workspace error", or "All quiet") and a FreshnessLabel ("Updated 8 s ago"). A range Segmented (1h ·
+24h · 7d · 30d) appears only on Overview, Events and the workspace page's charts; Workspaces shows
+live values and Accounts the UTC month. The ⋯
 Menu opens **Monitoring settings**: the Settings rows with source badges, line counts (ingested,
 rejected, quarantined, dropped) and database size.
 
@@ -523,15 +543,17 @@ horizontal scroll. Nothing hides behind hover: tapping a tile opens a sheet with
 | Accent dot, soft pulse while working (static with reduced motion) | Working | Running, Synced, Connected, Healthy | |
 | Spinner | Starting | Creating, Starting, Stopping | |
 | Gold ring with "!"; `warning` Badge | Needs input | Pending, Drifted, Cooling, Needs attention, Model unavailable, near a threshold | Medium |
+| Gold pause glyph; `warning` Badge | Interrupted (resumable) | | |
+| Hand icon on the accent ring | | In control (a person holds a browser) | |
 | Danger ✕; `danger` Badge | Failed | Error, Failed, Invalid, Billing, Exhausted | High |
-| Muted hollow dot; `neutral` Badge | Idle, Interrupted, Ended | Stopped, Disconnected | Info |
+| Muted hollow dot; `neutral` Badge | Idle, Ended | Stopped, Disconnected | Info |
 | Muted dashed ring; muted "—" with the reason | Offline; Unknown | Locked, Frozen, target unavailable; Unknown | |
 
 Gold and flame appear only in icons, badges and large text (about 3:1 contrast in light mode). The
 shared **Meter** shows the share used: accent below 75%, gold from 75% to 90%, danger above 90%, with
 an optional threshold tick such as the rotation point. Headroom renders as used = 1 − headroom, so
 the Accounts page and Monitor agree; the Workspaces page meters gain the gold band. Lists sort by
-attention (Needs input, Failed, Working, Idle, Ended). Bypass shows a danger Badge "Bypass".
+attention (Needs input, Failed and Interrupted, Working, Idle, Ended). Bypass shows a danger Badge "Bypass".
 
 **Overview**, top to bottom, the same order on phones:
 1. StatGrid of four: **Running agents** (Working plus Needs input; "+5 subagents · 3 idle"),
@@ -546,42 +568,48 @@ attention (Needs input, Failed, Working, Idle, Ended). Bypass shows a danger Bad
 **Workspaces.** One row per workspace: StatusDot and name, target, CPU Meter (% of limit, or cores
 when unlimited) with a 1 h Sparkline, memory Meter, agents, tokens, MCP ("4 ok · 1 failed"), last
 activity; sorted by attention, then CPU; filter All · Running · Attention · Stopped. Phone rows:
-name, status and agents, then "CPU 34% · 1.2/4 GB · 120k tokens". Rows open the Activity tab.
+name, status and agents, then "CPU 34% · 1.2/4 GB · 120k tokens". Rows open the workspace page.
 
-**Activity tab.** The page header (name, status, target, Shell, Chat; ⋯ Menu with Check MCP servers
-and Monitoring for this workspace) is shared with Configuration. Under it, one **Data sources** line
-("Hooks ✓ · Telemetry: 2 sessions to restart") opens a sheet with hooks, receiver, last data,
-coverage, sessions to restart, snapshot, drops, quarantined lines and Claude Code version. It names
-why data is missing: "Needs Enable pools", "Delivery failed", "Delivery locked", "No exec on this
-target", "Needs Claude Code ≥ X". Telemetry without hooks, or `managed_settings_resolved` listing
-`remote` before `file`, reads "Managed hooks ignored: this login's organization delivers its own
-managed settings". A `claude` process with no hook line for 10 minutes reads "No hook signals: an
-organization's managed settings, or a `--bare` session (Q4)". Five sections:
+**Workspace page.** The header (name, status, target, Shell, Chat; ⋯ Menu with Check MCP servers
+and Monitoring for this workspace) is shared by all four tabs (Web app §8). Monitoring fills three:
 
-1. **Resources:** CPU and memory charts with the limit line, restarts, OOM kills with their times,
-   disk ("Host disk (shared)" where it applies).
-2. **Processes:** every 5 s, with Pause: a tree of PID, CPU %, memory, running for, redacted command;
-   Claude Code rows show their session, MCP servers their set; no kill. Phone rows: the command,
-   truncated in the middle, over "CPU 12% · 340 MB · 2h", indent capped at 3 levels.
-3. **Agents:** this workspace's sessions with tokens by model, est. cost and turns; supervisor state.
-4. **MCP & tools:** servers with owner, status, calls, failures and p50; tools; skills.
-5. **Events:** this workspace's feed.
+1. **Overview:** first a **Data sources** line ("Hooks ✓ · Telemetry: 2 sessions to restart") that
+   opens a sheet with hooks, receiver, last data, coverage, sessions to restart, snapshot, drops,
+   quarantined lines and Claude Code version. It names why data is missing: "Needs Enable pools",
+   "Delivery failed", "Delivery locked", "No exec on this target", "Needs Claude Code ≥ X".
+   Telemetry without hooks, or `managed_settings_resolved` listing `remote` before `file`, reads
+   "Overridden by organization policy: this login's organization delivers its own managed settings"
+   (Settings & policies FR17), worked out without reading login state. A `claude` process with no
+   hook line for 10 minutes reads "No hook signals: an organization's managed settings, or a
+   `--bare` session (Q4)". Then **Resources:** CPU and memory charts with the limit line, restarts,
+   OOM kills with their times, disk ("Host disk (shared)" where it applies), and the browser
+   container's own row.
+2. **Sessions:** this workspace's sessions, chat and terminal, with tokens by model, est. cost and
+   turns; supervisor state.
+3. **Activity:** **Processes** (every 5 s, with Pause: a tree of PID, CPU %, memory, running for,
+   redacted command; Claude Code rows show their session, MCP servers their set; no kill; phone rows
+   put the command, truncated in the middle, over "CPU 12% · 340 MB · 2h", indent capped at 3
+   levels), **MCP & tools** (servers with owner, status, calls, failures and p50; tools; skills) and
+   **Events** (this workspace's feed).
 
-Desktop uses two columns on `xl`. Phones stack the five as collapsible Sections with a one-line
-summary each ("CPU 34% · 1.2/4 GB · 0 OOM"), Resources open.
+Desktop uses two columns from 1280 px. Phones stack each tab's blocks as collapsible Sections with a
+one-line summary each ("CPU 34% · 1.2/4 GB · 0 OOM"), the first open.
 
 **Agents.** Groups in attention order, folding past 10 rows into "… N more"; filter Needs input ·
 Working · Failed · Bypass · All. Row: StatusDot, title, kind icon, workspace chip, model, mode Badge,
 time in state ("Needs input · Bash · 4m"), subagents, tokens, est. cost. Phones show a two-line Card
-whose subagents expand as indented rows. Chat sessions open in Sessions; others open a sheet with a
-recent timeline, tokens by model, MCP calls, denials, and Open shell or Stop.
+whose subagents expand as indented rows. Chat sessions open in Sessions; others open a detail (a
+pushed screen on phones, Web app §9.4) with a recent timeline, tokens by model, MCP calls, denials,
+and Open shell or Stop.
 
-**Security.** StatGrid (Bypass active, danger above 0; Denials; Mode escalations; Tamper signals); a
+**Events.** The event log (A7) with saved filters **All** and **Security** (Web app §8). Security
+puts a StatGrid (Bypass active, danger above 0; Denials; Mode escalations; Tamper signals) and a
 Policy card (one line per FR22 control with its enforcement state, a limits line such as "Budgets: 1
-reached · 2 warn · Cap refused 4×/h", "Edit in Settings"); the feed (severity icon, time, workspace,
-actor, summary; filter All · Permissions · Modes · Sandbox · Secrets · MCP · Settings · Portal; 50
-rows per page; Export CSV; phone rows put icon and summary over "workspace · actor · 14:02"); and a
-Portal MCP card (calls per hour, errors, active connections).
+reached · 2 warn · Cap refused 4×/h", "Edit in Settings") above the feed, and a Portal MCP card
+(calls per hour, errors, active connections) below it. The feed: severity icon, time, workspace,
+actor (the device name for UI actions), summary; filter chips Permissions · Modes · Sandbox ·
+Secrets · MCP · Settings · Portal · Browser; 50 rows per page; Export CSV; phone rows put icon and
+summary over "workspace · actor · 14:02".
 
 **Accounts.** The Accounts page's account row, read-only, riskiest first: headroom per model group on
 the shared Meter with the threshold tick and "as of HH:MM", month spend against budget, 24 h error
@@ -601,13 +629,14 @@ in under 150 ms at p95 for 20 workspaces. Polling stops in hidden tabs. Every ta
 - **No content** (§6), enforced by the hook script, the receiver and the ingest schema. A canary
   test runs sessions with marker strings in prompts, tool input, tool output and environment
   variables, and checks that none reach outbox files, the database, API responses or logs.
-- **Redaction at ingest**: free text (errors, detailed events, process args) is scrubbed of the
-  secret values delivered to that workspace (decrypted in memory only to match, skipping values
+- **Redaction at ingest**, with the shared value redactor (Secrets & env A9): free text (errors,
+  detailed events, process args) is scrubbed of the secret values delivered to that workspace (decrypted in memory only to match, skipping values
   under 8 characters) and of credential shapes (`sk-ant-…`, `ghp_…`, `github_pat_…`, `AKIA…`,
   `xox?-…`, `Bearer …`, `password=…`, `token=…`). While Locked, free text is dropped and only
   categories are stored.
 - **Processes**: command lines are redacted, cut to 300 characters, never stored or logged; process
-  environments are never read.
+  environments never leave the workspace: the snapshot reads only the non-secret
+  `CLAUDEPILOT_MCP_SERVER` marker from them (FR3).
 - **Receiver**: binds `127.0.0.1`, accepts bodies up to 1 MB, answers 404 to anything but
   `POST /v1/logs`, runs as the workspace user with a clean environment, writes only its outbox and
   status.
@@ -633,13 +662,13 @@ in under 150 ms at p95 for 20 workspaces. Polling stops in hidden tabs. Every ta
 
 | Milestone | Scope | Gate |
 | --- | --- | --- |
-| D1 | Monitor page and tabs, health line, shared components and Meter bands, the workspace page's Activity tab; sampler with history, restarts and Docker `oom` events; Workspaces tab and Resources | Foundation F1 |
+| D1 | Monitor page and tabs, health line, Meter bands, Monitoring's blocks in the workspace page's Overview, Sessions and Activity tabs (frames and shared components from Web app W1); sampler with history, restarts and Docker `oom` events; Workspaces tab and Resources | Foundation F1; Web app W1 |
 | D2 | Snapshots as inline `exec` commands, with no delivered script: `/proc` processes, `df`, `oom_kill`, `claude agents --json --all`; Agents tab from snapshots | Q3 |
-| D3 | Drop-in with hooks, `monitor-event`, `monitor-snapshot` (replacing D2's inline commands), ingest; sessions, turns, RED, MCP calls, Security tab, attention items, Workspaces page chips | Foundation F2 and F4; Settings S2 (monitoring rows, Policy card); Q2; Q8 for FR30 |
+| D3 | Drop-in with hooks, `monitor-event`, `monitor-snapshot` (replacing D2's inline commands), ingest; sessions, turns, RED, MCP calls, Events tab with its Security filter, attention items, Workspaces page chips | Foundation F2 and F4; Settings S2 (monitoring rows, Policy card); Q2; Q8 for FR30 |
 | D4 | Receiver and telemetry `env`: tokens and cost, tool stats, denials and mode changes, coverage, hourly `usage_rollups` | Q1; Account Pool M5, or D4 creates `usage_rollups` in the amended shape (§19) |
 | D5 | Chat-session state and usage; Accounts tab; billed spend; Portal MCP card | Chat sessions C3; Account Pool M5 with the cost-report read; Q13; Portal MCP MCP5 |
 | D6 | Kubernetes delivery of the drop-in; Kubernetes OOM signals | Foundation F3; Q14 |
-| Later | Metrics exporter (lines changed, commits, PRs, active time), latency (`ttft_ms`), alerts over HTTPS, process actions | Q10, Q11 |
+| Later | Metrics exporter (lines changed, commits, PRs, active time), latency (`ttft_ms`), process actions. Push for attention items ships in Web app W5. | Q10 |
 
 **Existing workspaces.** Monitoring turns on at upgrade in each workspace's effective mode (FR5),
 paced by the foundation's rollout control. Unlike Settings' first policy (its FR5), it changes
@@ -686,11 +715,12 @@ every stop. Monitoring still needs:
   (Account Pool, Skillset, Persona, Monitoring). The docs say so: "Hooks merge across files rather
   than replacing each other" ([settings reference](https://code.claude.com/docs/en/settings-reference)),
   and `ConfigChange` runs when any file in `managed-settings.d` changes
-  ([hooks](https://code.claude.com/docs/en/hooks)). Q2 confirms both on 2.1.296; if that fails, the
-  compiler merges every owner's entries into `00-claudepilot-base.json` (Portal MCP A1). This
-  supersedes Persona A6's one-owner premise. If the program adopts its `session-event` dispatcher
-  anyway, it runs `monitor-event` as Monitoring's handler (model, permission mode, session title,
-  receiver start).
+  ([hooks](https://code.claude.com/docs/en/hooks)). ✅ In the cross-pool lab, `SessionStart` hooks
+  from two drop-ins both ran, and a hook in a newly added drop-in fired on the next prompt. So each
+  owner adds its own matcher group in its own drop-in, and every portal hook prints nothing, because
+  `SessionStart` and `UserPromptSubmit` output becomes model context. This supersedes Persona A6's
+  one-owner premise: the foundation's session reporter in `00-claudepilot-base.json` records
+  revisions beside Monitoring's own entry. Q2 keeps the interactive check and `ConfigChange`.
 - **A4 Outbox writers and pulls (§8).** Writers open with `O_APPEND`, write each line in one
   `write()` of at most 4 KB, and close; none keeps a descriptor between lines. Otherwise a
   long-running writer such as `monitor-otel` keeps appending to the sealed file after the portal

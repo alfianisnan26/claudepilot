@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.5.** Written from research on Claude Code 2.1.296 and the MCP Registry. ✅ = observed in throwaway containers from the workspace image (Claude Code 2.1.296, `claude -p` and CLI commands), with fake secrets, local dummy MCP servers and the layout in §10.2. 📄 = documented by Anthropic or the MCP project, not observed by us. 🔬 = unverified, listed in §22. |
+| Status | **Draft v0.6** (consistency pass: version folders, one secret reference form, the browser's reserved prefix and the Web app's routes). Written from research on Claude Code 2.1.296 and the MCP Registry. ✅ = observed in throwaway containers from the workspace image (Claude Code 2.1.296, `claude -p` and CLI commands), with fake secrets, local dummy MCP servers and the layout in §10.2. 📄 = documented by Anthropic or the MCP project, not observed by us. 🔬 = unverified, listed in §22. |
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-10 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, delivery engine, plugin marketplace, outbox), [Secrets & env](secrets-env-pool.md) (the secrets that servers reference), [Settings & policies](settings-policies.md) (clean environment, MCP allowlists, allow rules), [Monitoring dashboard](monitoring-dashboard.md) (connection status and usage) |
@@ -126,7 +126,8 @@ checks, a stdio probe and Monitoring (§13, §14).
   logs.
 - **FR3** Review states: draft, approved, deprecated, revoked. Approval shows the exact command or URL
   untruncated and flags `sudo`, `rm -rf`, pipes into a shell, `curl` or `wget` in arguments, plain
-  `http://`, npm install scripts and PyPI source builds. The MCP spec requires this for one-click
+  `http://`, npm install scripts, PyPI source builds, and servers that target `127.0.0.1` ports
+  `9220`, `9222` or `8930`, the browser pool's ([Browser & desktop](browser-desktop-pool.md) §13). The MCP spec requires this for one-click
   local servers ([security best practices](https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/security_best_practices)).
   Approval records who, when and a note (Q9).
 - **FR4** Approved versions are immutable; a change makes a new draft. Sets point at an entry and a
@@ -138,7 +139,7 @@ checks, a stdio probe and Monitoring (§13, §14).
   renaming creates a new set or server, and the dialog warns that rules and usage history start fresh
   and that persona and skill tool lists naming the old tools stop matching. Claude Code's reserved
   names (`workspace`, `claude-in-chrome`, `computer-use`, `Claude Preview`, `Claude Browser`) are
-  refused.
+  refused. Plugin prefixes are reserved per owner: `cpm-` for MCP sets, `cpb-` for the browser pool.
 
 ### MCP Registry
 
@@ -164,24 +165,24 @@ checks, a stdio probe and Monitoring (§13, §14).
 - **FR9** A set lists servers, each with a key, catalog entry and version, config values, a reference
   per secret slot, tool rules and an enabled flag. Revisions and pinning follow the foundation, with
   Skillset's reviewable revisions (A7).
-- **FR10** Reference forms: `{{secret-value:NAME}}` (recommended), a Secrets & env secret file's
-  content, read by the launcher or helper at start or connect; `{{secret-file:NAME}}`, its path
-  `/etc/claudepilot/secrets/files/NAME`, for path slots (Secrets & env FR20); `{{secret-github:HOST}}`,
-  the Secrets & env GitHub entry's token, refused for stdio servers while the entry mints 1-hour
-  tokens (Secrets & env FR26), since a stdio server keeps the token it started with; and `${NAME}`, a
-  variable Claude Code expands (Secrets & env FR20). The first and third are requested in §21. The
-  editor discourages `${NAME}`: the value sits in Claude Code's environment, a credential-like one in
-  a stdio `env` arrived empty under the scrub ✅, and remote headers read credential-like names as
-  empty 📄 (Secrets & env FR22). Names resolve against the workspace's own Secrets & env sets
-  (Secrets & env FR21). An unresolved name leaves out only that server once Secrets & env accepts
-  per-server degradation (Q8): "Needs NAME: assign a Secrets & env set that provides it". Until then,
-  its FR21 holds back the whole MCP fragment, and the workspace keeps its last delivered MCP files.
+- **FR10** Secret slots reference Secrets & env entries by name, as `{{secret-file:NAME}}`
+  (Secrets & env FR21). For `env` and header slots the launcher or helper reads the file's content at
+  start or connect; a path slot gets the path, `/etc/claudepilot/secrets/files/NAME`. A tool login
+  such as GitHub is referenced by its entry name: its token-only file comes from the same value
+  version, so one rotation reaches the server too. A GitHub login that mints 1-hour tokens
+  (Secrets & env FR29) is refused for stdio servers, since a stdio server keeps the token it started
+  with. The editor discourages `${NAME}`, a variable Claude Code expands: the value sits in Claude
+  Code's environment, a credential-like one in a stdio `env` arrived empty under the scrub ✅, and
+  remote headers read credential-like names as empty 📄 (Secrets & env FR24). Names resolve against
+  the workspace's own Secrets & env sets, and an unresolved name leaves out only that server
+  (Secrets & env FR22): "Needs NAME: assign a Secrets & env set that provides it".
 - **FR11** Several sets per workspace (create dialog, Configuration panel, bulk assignment). The
   compiler refuses the same remote URL in two sets assigned to one workspace, since which plugin wins
   is undocumented, and warns when one entry is in two sets. Each session starts its own stdio
   processes, so it warns above 8 stdio servers per session (configurable) and shows "about N
   processes with M open sessions", from Monitoring's session count and each entry's measured memory
-  (§13.2). Kubernetes workspaces created before pools need "Enable pools" (foundation §6.6) first;
+  (§13.2), counting the browser pool's per-session gate and servers too
+  ([Browser & desktop](browser-desktop-pool.md) §14.1). Kubernetes workspaces created before pools need "Enable pools" (foundation §6.6) first;
   the assign dialog says so.
 - **FR12** Tool rules per server: "Ask for every tool" (`mcp__plugin_cpm-<set>_<server>__*`), "Block
   tools not marked read-only" (from the snapshot's `readOnlyHint`, a hint the server sets; a new tool
@@ -231,7 +232,9 @@ checks, a stdio probe and Monitoring (§13, §14).
   adds", comparing the configured command and arguments 📄 ([How a server is evaluated](https://code.claude.com/docs/en/managed-mcp#how-a-server-is-evaluated)).
   ✅ The exact launcher argv admitted a plugin's stdio server, an entry missing one argument blocked
   it, and blocked servers vanished from `claude mcp list`. Server names aren't a security control and
-  aren't used. A server that policy still blocks shows "Blocked by policy".
+  aren't used. The browser pool reports its matchers the same way (Browser & desktop §11.1). A server
+  that policy still blocks shows "Blocked by policy", which the portal works out from the effective
+  lists, since Claude Code drops the server silently.
 
 ## 9. Data model
 
@@ -241,7 +244,7 @@ references, never values; Secrets & env records them in its `secret_references` 
 
 ```json
 { "servers": [ { "key": "context7", "entry": "<entry id>", "version": "4.3.0", "enabled": true,
-    "config": {}, "secrets": { "CONTEXT7_API_KEY": "{{secret-value:CONTEXT7_API_KEY}}" },
+    "config": {}, "secrets": { "CONTEXT7_API_KEY": "{{secret-file:CONTEXT7_API_KEY}}" },
     "tools": { "ask_all": false, "block_not_read_only": false, "rules": { "get-library-docs": "ask" } } } ] }
 ```
 
@@ -280,9 +283,9 @@ per workspace.
 | Path in the workspace | Content |
 | --- | --- |
 | `/etc/claude-code/managed-settings.d/30-claudepilot-mcp.json` | `enabledPlugins`: `"cpm-<set>@claudepilot": true` per assigned set. `permissions.ask` and `permissions.deny`: tool rules and revocations, as `mcp__plugin_cpm-<set>_<server>__<tool>` or `…__*`. `env`: `MCP_TIMEOUT=60000` (default 30000), so a first-use install can finish. It applies to every MCP server in the workspace and is harmless there, so it isn't tombstoned when the last set goes. |
-| `/etc/claudepilot/marketplace/plugins/cpm-<set>/.claude-plugin/plugin.json` | `{"name": "cpm-<set>", "version": "<revision>.0.0", "description": "…"}`, plus the set's entry in the foundation's `marketplace.json` (A3). |
-| `…/plugins/cpm-<set>/.mcp.json` | One entry per delivered server (example below). |
-| `…/plugins/cpm-<set>/servers/<server>.json` | The server's map: its `target`, and its variables or headers as lists of parts. Never values. |
+| `/etc/claudepilot/marketplace/plugins/cpm-<set>/<hash12>/.claude-plugin/plugin.json` | `{"name": "cpm-<set>", "version": "<revision>.0.0+<hash8>", "description": "…"}` in a version folder named by the compiled tree hash, plus the set's entry in the foundation's `marketplace.json`, repointed once the folder is complete ([Skillset](skillset-pool.md) A2; A3). |
+| `…/cpm-<set>/<hash12>/.mcp.json` | One entry per delivered server (example below). |
+| `…/cpm-<set>/<hash12>/servers/<server>.json` | The server's map: its `target`, and its variables or headers as lists of parts. Never values. |
 | `/etc/claudepilot/bin/mcp-launch`, `mcp-headers` (and `uv`, `uvx` where the image lacks them) | Items of the foundation's script bundle, not baked into the image (A6). |
 | `~/.cache/claudepilot/mcp/` | The launcher's working directory: a `package.json` stub, so npm looks no further up, and the pre-installed packages (§12). Written through `exec` as the workspace user. |
 | `~/.claudepilot/outbox/mcp.jsonl` | Launcher and helper events, never values (§13.2, foundation §8). |
@@ -300,17 +303,18 @@ per workspace.
 
 ```json
 { "target": "npm:@upstash/context7-mcp@4.3.0", "env": { "CONTEXT7_API_KEY": [ { "file": "CONTEXT7_API_KEY" } ] } }
-{ "headers": { "Authorization": [ { "text": "Bearer " }, { "github": "github.com" } ] } }
+{ "headers": { "Authorization": [ { "text": "Bearer " }, { "file": "github-main" } ] } }
 ```
 
-A part is literal `text`, a secret `file` (under `/etc/claudepilot/secrets/files/`, one trailing
-newline trimmed, at most 64 KB), or a `github` host (its `oauth_token` in
-`/etc/claudepilot/secrets/gh/hosts.yml`). A missing or unreadable source makes the server exit with
+A part is literal `text` or a secret `file` (under `/etc/claudepilot/secrets/files/`, one trailing
+newline trimmed, at most 64 KB); a GitHub login is a `file` part naming its token-only file
+(`github-main` above, Secrets & env FR21). A missing or unreadable source makes the server exit with
 `secret NAME missing` on stderr, never the value.
 
 - **`mcp-launch cpm-<set>/<server> -- <target> [args]`** (target `npm:<pkg>@<version>`,
-  `pypi:<pkg>==<version>:<bin>` or `cmd:<path>`) exits with "server changed or removed; run
-  /reload-plugins" if the map is gone or its `target` differs, so a session that hasn't reloaded
+  `pypi:<pkg>==<version>:<bin>` or `cmd:<path>`) reads the server's map from the version folder the
+  current `marketplace.json` entry names, and exits with "server changed or removed; run
+  /reload-plugins" if that map is gone or its `target` differs, so a session still on an older folder
   can't restart an old or revoked version. It sets `PATH` and `HOME`, exports the variables and two
   non-secret markers (`CLAUDEPILOT_MCP_SERVER=cpm-<set>/<server>`, `CLAUDEPILOT_MCP_TARGET=<target>`),
   and changes to `~/.cache/claudepilot/mcp`; otherwise the server runs in the session's working
@@ -320,7 +324,8 @@ newline trimmed, at most 64 KB), or a `github` host (its `oauth_token` in
   or `uvx --no-config --no-build --default-index https://pypi.org/simple --from "<pkg>==<version>"
   <bin>`, with `uvx` from `/etc/claudepilot/bin` first (🔬 Q11). Each start and failure appends an
   outbox line (§13.2).
-- **`mcp-headers cpm-<set>/<server>`** prints the server's headers as one JSON object. Plugin helpers
+- **`mcp-headers cpm-<set>/<server>`** prints the server's headers, from the same current map, as one
+  JSON object. Plugin helpers
   get no credential-named variables 📄 ([MCP](https://code.claude.com/docs/en/mcp)), so it reads files.
 
 ✅ With this layout, a dummy server got exactly the file's value, the launcher's `PATH` and `HOME`,
@@ -351,15 +356,16 @@ the server, but every rotation would then change the FR19 matchers.
 
 ### 10.4 Write order and removal
 
-1. Secrets & env's files, then the plugin, then its `enabledPlugins` entry. Within a plugin, maps go
-   before `.mcp.json`, and a server's map is deleted one reconcile after `.mcp.json` stops naming it.
-   Each set keeps one stable folder of small files, each renamed into place.
+1. Secrets & env's files, then the plugin's new version folder, complete before anything names it,
+   then the repointed `marketplace.json` entry, then the `enabledPlugins` entry. Old version folders
+   follow Skillset's retention (its §10.5); revocation deletes every folder holding the revoked
+   version at once.
 2. Docker uses the archive API. On Kubernetes the plugin goes on the marketplace volume
    ([Skillset](skillset-pool.md) A6), and a stopped workspace's drop-in doesn't enable `cpm-<set>`
    until the start reconcile has written the plugin ("Applies after start"). Packages never go in
    the workspace Secret.
-3. Unassign: remove the `enabledPlugins` and marketplace entries in one write, and the folder at the
-   next reconcile. Running stdio servers keep their values until the session ends or reloads; the UI
+3. Unassign: remove the `enabledPlugins` and marketplace entries in one reconcile, and the folders at
+   the next. Running stdio servers keep their values until the session ends or reloads; the UI
    says so. Revoking a credential is a Secrets & env action, which takes effect for remote servers at
    their next connect or 401. A name that stops resolving takes its server out at the next reconcile.
 4. Revoke (FR13b): plugin and deny rule first. Then one `exec` as the workspace user finds processes
@@ -398,26 +404,26 @@ command ran alongside, duplicating tools and processes.
 ## 11. Secrets
 
 - **Names only.** A set stores Secrets & env references. Secrets & env stores the values, delivers
-  them (secret files at `/etc/claudepilot/secrets/files/NAME`, `0440 root:node`; variables in its
-  drop-in; GitHub tokens in `gh/hosts.yml`), and records which revisions use which names. The MCP
+  them (secret files at `/etc/claudepilot/secrets/files/NAME`, `0440 root:node`, tool logins' token-only
+  files among them; variables in its drop-in), and records which revisions use which names. The MCP
   fragment never sees or writes a value.
 - **Who can read them.** The launcher and helper read the files as the workspace user, so the user
   and the agent's commands can too, and a running server's values sit in its `/proc/<pid>/environ`.
   Secrets & env's deny rules (`Read(//etc/claudepilot/secrets/**)`, `Read(//proc/**/environ)`) stop
   Claude's file tools and common Bash file commands, not scripts, and don't touch the launcher.
-- **Per workspace.** Names resolve against the workspace's own Secrets & env sets (its FR21). A shared
+- **Per workspace.** Names resolve against the workspace's own Secrets & env sets (its FR22). A shared
   credential is one Secrets & env set on many workspaces; per-person tokens are one set per person
   under the same MCP set. The assign dialog shows which names each workspace has.
 - **Recommended entry:** a secret file with no path variable, marked Hidden (the "For MCP servers"
   preset, Q8), so it's in no environment. Hidden takes effect only where Settings & policies runs the
-  sandbox; elsewhere only the deny rules apply. GitHub servers use `{{secret-github:HOST}}`, so
-  rotating the GitHub entry covers them too.
+  sandbox; elsewhere only the deny rules apply. GitHub servers reference the GitHub login by
+  its entry name, whose token-only file comes from the same value version, so rotating the login
+  covers them too (Secrets & env FR21).
 - **Rotation** needs no MCP change; servers pick up the rewritten file per §10.3. Beside "Safe to
-  revoke" (Secrets & env FR16), Secrets & env shows "stdio MCP servers in running sessions may still
-  use the old value" (§21).
-- **Portal checks** (§13.1) read a value through a Secrets & env call reserved for them (§21),
-  recorded as an exposure "portal check → <host>" and paused while the portal is Locked (Secrets &
-  env FR14). The value goes only to the server's URL.
+  revoke", Secrets & env shows "stdio MCP servers in running sessions may still use the old value"
+  (its FR17).
+- **Portal checks** (§13.1) read a value through a Secrets & env call reserved for them (its FR11),
+  recorded as an exposure "portal check → <host>" and paused while the portal is Locked (its FR14). The value goes only to the server's URL.
 
 ## 12. Runtimes and installs
 
@@ -450,6 +456,8 @@ PyPI servers show "uv missing: restart to update the image".
   install scripts, so they need the same approval.
 - A version installs once per workspace, since the home volume persists; unused ones go after 14
   days. Both modes need egress to `registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org` (Q7).
+- The browser pool installs its servers from a lockfile into its own `~/.cache/claudepilot/browser/`
+  through the same step, never into this folder ([Browser & desktop](browser-desktop-pool.md) §11.1).
 
 ## 13. Health and status
 
@@ -494,7 +502,9 @@ The portal connects with the official MCP TypeScript SDK client and the referenc
   "context7: secret CONTEXT7_API_KEY missing".
 - A rejected helper-supplied credential shows as Failed to connect, not Needs authentication 📄; the
   portal labels it "Credential rejected" when its own check agrees (§13.1). `claude plugin list
-  --json` returned `[]` for these plugins before and after a session ✅, hence FR16's choice.
+  --json` returns `[]` until a session has registered the marketplace, then lists each plugin's
+  `readFromFolder`, `folderVersion` and `errors` ✅ (cross-pool lab; an earlier run here saw only
+  `[]`). It names no servers, so FR16 uses `plugin details`.
 
 ### 13.3 OAuth servers
 
@@ -529,12 +539,13 @@ RowsSkeleton) and the foundation's pool page pattern. Two shared pieces are adde
 a Disclosure row (a row that expands) and a CodeBlock (wrapping monospace, never truncated, with a
 CopyButton).
 
-- **MCP sets** (a tab under Pools, [Skillset](skillset-pool.md) A8) has PageTabs for Sets and Catalog,
-  as Skillset does. A set card shows revision, server count, health ("5 OK · 1 needs sign-in · 1
+- **MCP sets tab** (`/admin/pools?tab=mcp`, [Skillset](skillset-pool.md) A8) lists the sets; the
+  **Catalog** is its own route, `/admin/pools/mcp/catalog`, like Skillset's Library
+  ([Web app](web-app-pwa.md) §8). A set card shows revision, server count, health ("5 OK · 1 needs sign-in · 1
   failing"), "Used by N workspaces", usage and a menu. A catalog row shows kind, version, review
   badge, auth mode, last check, "In N sets" and a menu (Check now, New version, Approve, Deprecate,
   Revoke). Catalog actions: "Add from registry", "Add manually".
-- **Set editor** (FormDialog): a Disclosure row per server with its secret slots (a Select of Secrets &
+- **Set editor** (a FormDialog on desktop, a `task` route on phones, Web app §9.2): a Disclosure row per server with its secret slots (a Select of Secrets &
   env entries, file entries first, plus "Create secret"), config slots, tool rules and an enabled
   switch. Tool rules show the two bulk switches and only the tools that have a rule; "Add rule" opens
   a filterable list of the snapshot's tool names, each with a Default · Ask · Block Segmented.
@@ -637,14 +648,15 @@ milestone S3) would otherwise block every set.
 - **A3. §7, shared marketplace.** Adopt [Skillset](skillset-pool.md) A2: the foundation registers
   `extraKnownMarketplaces.claudepilot` (directory source `/etc/claudepilot/marketplace`,
   `autoUpdate: false`) in `00-claudepilot-base.json` and compiles `marketplace.json` from owners'
-  entries. MCP sets verify with `claude plugin details` because an init-based run would start every
-  stdio server; Skillset keeps its FR18.
+  entries. Plugins use version folders and the `<revision>.0.0+<hash8>` version (Skillset A2). MCP sets
+  verify with `claude plugin details` because an init-based run would start every stdio server;
+  Skillset's FR21 adds `plugin list --json`.
 - **A4. §6.2, run-in-workspace step.** A fragment may request commands run through `exec` as the
   workspace user in the workspace container (not a sync sidecar) after its files are written: at once
   if running, after the next start if stopped. Each gets a timeout, redacted output and a result in
   `delivery_events`. It serves MCP pre-installs and generalizes Skillset A7's verify step.
 - **A5. §6.1, cross-pool references.** The compiler resolves names against the workspace's Secrets &
-  env sets (Secrets & env FR21), writes the referenced files before the plugins that use them, and
+  env sets (Secrets & env FR22), writes the referenced files before the plugins that use them, and
   recompiles the MCP fragment when a referenced name starts or stops resolving.
 - **A6. §9, image and script bundle.** Add a pinned `uv` (amd64 and arm64) to the image. The bundle
   carries `mcp-launch` and `mcp-headers` and, for Docker workspaces whose image lacks `uv`, an optional
@@ -656,14 +668,14 @@ milestone S3) would otherwise block every set.
 
 **Requests to related PRDs.**
 
-- [Secrets & env](secrets-env-pool.md): (1) degrade per server, not per fragment, on an unresolved
-  name (its FR21); (2) add `{{secret-value:NAME}}` (a file's content) beside FR20's
-  `{{secret-file:NAME}}` (its path), and `{{secret-github:HOST}}`; (3) an internal call, for the MCP
-  check service only and never a compiler, returning a value by entry ID, recorded as an exposure
-  "portal check → <host>", unavailable while Locked, and listed in its FR11; (4) a "For MCP servers"
-  preset (secret file, no path variable, Hidden); (5) "stdio MCP servers in running sessions may
-  still use the old value" beside "Safe to revoke" (its FR16); (6) its request that MCP sets turn on
-  `CLAUDE_CODE_MCP_ALLOWLIST_ENV` goes to Settings & policies, which writes it. ✅ Findings for it:
+- [Secrets & env](secrets-env-pool.md), settled in its v0.6: (1) per-server degradation on an
+  unresolved name (its FR22); (2) not adopted: it keeps one form, `{{secret-file:NAME}}`, with
+  token-only files for tool logins (its FR21), and FR10 follows it; (3) an internal call for the MCP
+  check service only, never a compiler, returning a value by entry ID, recorded as an exposure
+  "portal check → <host>" and unavailable while Locked (its FR11); (4) the "For MCP servers" preset
+  (its FR2); (5) "stdio MCP servers in running sessions may still use the old value" beside "Safe to
+  revoke" (its FR17); (6) `CLAUDE_CODE_MCP_ALLOWLIST_ENV` belongs to Settings & policies, which
+  writes it. ✅ Findings for it:
   without bubblewrap the scrub stops every `claude` command, so the scrub option needs `bwrap` in the
   image; and its Q3 is answered (launcher-set values survive the scrub and the clean environment; a
   credential-like `${NAME}` in a stdio `env` arrives empty under the scrub).
@@ -671,12 +683,13 @@ milestone S3) would otherwise block every set.
   warning-level policy requirement (its FR8): where a policy turns it off, delivery continues and
   sets show "stdio servers inherit the full environment". Its §11.2 can drop the 🔬, since the clean
   environment keeps `PATH` and `HOME` ✅ (its "Q6" was an earlier question here). The FR19 matchers
-  ship in M1, before its "Pool-delivered only" (S3).
+  ship in M1, before its "Pool-delivered only" (S3). Adopted in its §11.2 and FR8; the requirement
+  shows unmet until its first Apply (FR5).
 - [Monitoring](monitoring-dashboard.md): tag stdio servers by the `CLAUDEPILOT_MCP_SERVER` marker, not
   launcher arguments (its FR3), and run the §10.6 comparison inside "Check MCP servers" (its FR17),
   so stdio servers start once. [Portal MCP](portal-mcp.md): the base drop-in is settled as
   `00-claudepilot-base.json` (its A1). [Chat sessions](chat-sessions.md): show "Start a new session
-  to apply MCP changes", and relay Ask prompts for MCP tools (FR12).
+  to apply MCP changes", and relay Ask prompts for MCP tools (FR12); adopted in its §12.3 and FR22.
 
 ## 22. Open questions
 
@@ -686,7 +699,7 @@ milestone S3) would otherwise block every set.
 | Q2 | 🔬 OAuth with a plugin-provided remote server: does `claude mcp login --no-browser plugin:<plugin>:<server>` work in the portal's web terminal, where is the token stored on Linux, and does it survive a workspace restart? | Sandbox with a test OAuth server |
 | Q3 | 🔬 Does `/mcp` Reconnect restart a connected stdio server, so a rotated secret applies without a new session? `/reload-plugins` keeps unchanged servers 📄. | Sandbox (TTY) |
 | Q7 | What egress does the k3s cluster allow: npm, PyPI, GitHub releases (for `uv` and managed Python), remote MCP hosts? Without it, offline vendoring moves into v1. | Operator |
-| Q8 | Will Secrets & env accept the §21 requests: per-server degradation, the two new reference forms, the check-service call and the "For MCP servers" preset? | Product, with [Secrets & env](secrets-env-pool.md) |
+| Q8 | Answered: Secrets & env accepts per-server degradation, the check-service call, the "For MCP servers" preset and the stdio rotation note, and keeps one reference form instead of the two new ones (§21, FR10). | Product, with [Secrets & env](secrets-env-pool.md) |
 | Q9 | With one shared admin login, approval can't require a second person. Is a self-review checklist enough for v1? | Product |
 | Q10 | Are npm `--ignore-scripts` and uv `--no-build` acceptable defaults, given that packages with native add-ons or only source distributions then need an override at review? | Engineering |
 | Q11 | 🔬 Do `npx` with `npm_config_ignore_scripts=true` and `uvx --no-build` skip install scripts and source builds, and do the fixed directory, `--userconfig /dev/null` and `--no-config` keep a repository's npm and uv configuration out (§18)? | Lab test (M1 gate) |

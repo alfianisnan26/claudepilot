@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.8.** ✅ = observed in our experiments on Claude Code 2.1.296 with fake keys and a local mock API, in print mode unless stated. 📄 = documented by Anthropic, not observed by us. 🔬 = unverified, listed in §19. |
+| Status | **Draft v0.9** (consistency pass: amendments from Chat sessions, Settings & policies, Monitoring, Persona and Web app applied). ✅ = observed in our experiments on Claude Code 2.1.296 with fake keys and a local mock API, in print mode unless stated. 📄 = documented by Anthropic, not observed by us. 🔬 = unverified, listed in §19. |
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-10 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, encryption, delivery engine, outbox) |
@@ -68,7 +68,7 @@ or a chat session and uses `claude`. Today these are often the same person.
 | US5 | As an admin, I see each account's health, headroom, reset times, recent errors and recent usage. |
 | US6 | When an account is limited or exhausted, the workspaces using it switch to another account within the bound in §12.5, and I can see each switch in the event log. |
 | US7 | As an admin, I disable or remove an account, and its workspaces move off it straight away. |
-| US8 | As a workspace user with my own Claude subscription, I keep my workspace without a pool and run `/login` in it. The portal shows "own login" and never touches it. |
+| US8 | As a workspace user with my own Claude subscription, I keep my workspace without a pool and run `/login` in it. The portal shows "own login" and never touches it. Portal chat sessions need an account pool, so there I use the terminal ([Chat sessions](chat-sessions.md) §6). |
 | US9 | As an admin, I unassign a pool. The workspace stops using pool credentials safely (§10.4) and falls back to whatever login it has. |
 | US10 | When every account in a pool is exhausted, I see "waiting for quota until T" instead of silent failures. |
 
@@ -90,8 +90,9 @@ Sources:
 
 What this means for the product:
 
-- The add-account form offers only "Anthropic API key" and "Custom host key". There is no
-  "Sign in with Claude".
+- The add-key form takes only keys, for the Anthropic API or a custom host. There is no "Sign in
+  with Claude", and subscription tokens are refused (FR2). A note in the form points Pro and Max
+  users to signing in inside their own workspace instead (§13).
 - Adding an account asks the admin to confirm that it belongs to them or their organization and
   that they're entitled to use it this way. Failover is presented as resilience, not a way around
   limits. The UI warns when a pool's accounts all belong to one organization (§11.4), because
@@ -154,9 +155,16 @@ What this means for the product:
     Code otherwise assumes 200k and 32k, and marks its cost estimate's basis unknown ✅. An optional
     price per million tokens feeds the portal's estimates.
   - "Rejects Claude Code's beta flags", which sets `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` 📄.
+  - Two results [Settings & policies](settings-policies.md) relies on: a keyless-request check
+    (Pause is offered only where the host answers 401 or 403, its §13.2), and the admin's
+    confirmation that the host serves Claude Code's auto-mode classifier (its "Auto on this custom
+    host", FR6).
 - **FR2** Accounts: name, endpoint, secret (write-only), enabled flag, notes. The portal stores a
   fingerprint (SHA-256) and the last four characters so admins can recognize a key without
-  decrypting it. Duplicate names are refused (409).
+  decrypting it. Duplicate names are refused (409). Subscription credentials are refused before
+  anything is stored: `sk-ant-oat*`, `sk-ant-ort*` and other OAuth shapes, raw or encoded, matched
+  as [Secrets & env](secrets-env-pool.md) FR5 does ("This looks like a Claude sign-in. Pools take
+  API keys only.").
 - **FR3** Check: on save and on demand, the portal validates the key (§11.2) and records the
   result. Checks send the key in both headers, as Claude Code does. A failed check still saves the
   account as "unknown", so keys can be staged before a host is reachable.
@@ -166,14 +174,16 @@ What this means for the product:
   `GET /v1/models` check doesn't carry them (🔬 Q4), the first probe does. Used to warn about pools
   that share one organization, and to share headroom probes (§11.2).
 - **FR6** Organization monitors (optional): an Admin key per organization, used for read-only Admin
-  API calls (key status and expiry, usage report per key, configured rate limits) and for one
-  write: deactivating a compromised key when an admin asks (§14).
+  API calls (key status and expiry, usage report per key, configured rate limits, and the daily
+  cost report `/v1/organizations/cost_report` grouped by `workspace_id`, for Monitoring and Settings'
+  budgets) and for one write: deactivating a compromised key when an admin asks (§14).
 
 ### Pools and assignment
 
 - **FR7** Pools: name, endpoint, ordered members (up and down controls), strategy (§12.1),
-  per-account workspace cap, proactive threshold (§12.2), probe models (§11.2), "hide `/login` in
-  assigned workspaces" (on by default).
+  per-account workspace cap, proactive threshold (§12.2; stored as Settings & policies' "Rotate
+  below headroom" override at account-pool scope, which this field renders), probe models (§11.2),
+  "hide `/login` in assigned workspaces" (on by default).
 - **FR8** An account belongs to at most one pool in v1, so that each account's health, caps and
   workspaces have one owner.
 - **FR9** Assign a pool when creating a workspace, or later from the workspace row or in bulk.
@@ -181,7 +191,7 @@ What this means for the product:
   confirmation (§13): the pool's key will outrank any sign-in the workspace has 📄, usage will be
   billed to the pool's account, and the features listed in §10.4 stop working.
 - **FR10** The workspace row shows "Pool X · account Y", "Own login", or a problem ("Delivery
-  failed", "Drifted", "Waiting for quota until T").
+  failed", "Drifted", "Waiting for quota until T", "Paused until T").
 - **FR11** Removing an account or pool that is in use asks for confirmation and moves (or
   unassigns) the affected workspaces first. Removing an account also purges its key file from every
   workspace it was ever delivered to (§14).
@@ -222,9 +232,11 @@ What this means for the product:
   retry window.
 - **FR19** Admin overrides: clear an account's cooldown, re-check now, take an account out of
   rotation, and pin a workspace to a specific account. Pause and resume follow
-  [Settings & policies](settings-policies.md) §13.2: the workspace's key file is emptied and the
-  drop-in rewritten so the next request sees it (§10.3), never removed. Resume restores the key the
-  same way.
+  [Settings & policies](settings-policies.md) §13.2: pause takes Chat sessions' credential-transition
+  lock (its §6 rule 2), empties the workspace's key file and rewrites the drop-in with
+  `CLAUDEPILOT_ACCOUNT=paused:<id>`, so the next request runs `account-key`, which exits 1 with the
+  reason on stderr (§10.3); the lock is released once that write lands. The key file is never
+  removed. Resume restores the key the same way.
 
 ### Observability
 
@@ -246,20 +258,22 @@ columns.
 
 | Table | Key fields |
 | --- | --- |
-| `endpoints` | id, kind (`anthropic` \| `custom`), name, base_url, model_names (json), context_tokens, max_output_tokens, price (json), disable_betas, created_at |
+| `endpoints` | id, kind (`anthropic` \| `custom`), name, base_url, model_names (json), context_tokens, max_output_tokens, price (json), disable_betas, models_seen (json: the latest `GET /v1/models` IDs, a [Persona](persona-pool.md) A7 compile input), keyless_check, auto_confirmed_at (FR1), created_at |
 | `accounts` | id, endpoint_id, name, secret (encrypted), fingerprint, last4, organization_id and anthropic_workspace_id (discovered), enabled, notes, created_at |
 | `org_monitors` | id, organization_id, admin_key (encrypted), last_ok_at |
-| `pools` | id, name, endpoint_id, strategy, workspace_cap, threshold_pct, probe_models (json), hide_login, created_at |
+| `pools` | id, name, endpoint_id, strategy, workspace_cap, probe_models (json), hide_login, created_at. The threshold is a Settings & policies override (FR7). |
 | `pool_members` | pool_id, account_id, position, enabled |
-| `assignments` | workspace_id (`target/name`), pool_id, active_account_id, pinned, assigned_at, state, waiting_until |
+| `account_assignments` | workspace_id (`target/name`), pool_id, active_account_id, pinned_account_id, state, waiting_until, changed_at, reason |
 | `account_health` | account_id, scope (`*` or model group), state, reason, until, backoff_level, source, observed_at |
 | `quota_snapshots` | organization_id, anthropic_workspace_id, account_id (probed), model_group, metric, limit, remaining, reset_at, source, observed_at (kept 7 days) |
 | `account_events` | id, at, type, account_id, workspace_id, details (json, redacted) (kept 90 days) |
 | `account_exposure` | account_id, workspace_id, first_delivered_at, last_delivered_at, purged_at. Extends the foundation's `exposures` and keeps its retention: the portal's lifetime |
-| `usage_rollups` | bucket_start_utc, account_id, workspace_id, model, uncached_in, cache_read, cache_write_5m, cache_write_1h, output, cost_estimate, source (kept 13 months) |
+| `usage_rollups` | bucket_start_utc, account_id, workspace_id, instance_id ([Monitoring](monitoring-dashboard.md) A9), model, requests, uncached_in, cache_read, cache_write (one total: telemetry doesn't split 5-minute and 1-hour writes), output, cost_micros (estimated), source (`admin`, `telemetry`, `chat`, `estimate`) (kept 13 months) |
 
-`pools` and `assignments` extend the foundation's tables of the same name. Delivery status and file
-hashes live in the foundation's `workspace_delivery` table and manifest. `enabled` (the admin's
+Pools are the foundation's `pools` (type `account`), with their content in `pool_revisions`;
+`account_assignments` sits beside the foundation's `assignments` and holds each workspace's active
+account. Delivery status and file hashes live in the foundation's `workspace_delivery` table and
+manifest. `enabled` (the admin's
 intent) and health (what the portal observed) are separate. A failed check never flips `enabled`.
 
 ## 10. Delivery to Claude Code
@@ -268,7 +282,7 @@ intent) and health (what the portal observed) are separate. A failed check never
 
 | Path in the workspace | Content |
 | --- | --- |
-| `/etc/claude-code/managed-settings.d/40-claudepilot-account.json` | `apiKeyHelper: "/etc/claudepilot/bin/account-key <account-id>"`. `env`: `ANTHROPIC_BASE_URL` (always; `https://api.anthropic.com` for the Anthropic endpoint), `CLAUDE_CODE_API_KEY_HELPER_TTL_MS` (default `60000`: a safety net, and the window in §11.5), model names and custom-host settings (FR1), `CLAUDEPILOT_WORKSPACE`, `CLAUDEPILOT_ACCOUNT`, `DISABLE_LOGIN_COMMAND=1` (FR7), and empty `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_USE_BEDROCK` / `_VERTEX` / `_FOUNDRY` (FR14). Every variable Account Pool may set is always present, empty when unused (🔬 Q6), because a removed value lingers until relaunch ✅. `hooks.StopFailure` matching every category (`*`) runs `/etc/claudepilot/bin/account-event`; the portal does the classifying. |
+| `/etc/claude-code/managed-settings.d/40-claudepilot-account.json` | `apiKeyHelper: "/etc/claudepilot/bin/account-key <account-id>"`. `env`: `ANTHROPIC_BASE_URL` (always; `https://api.anthropic.com` for the Anthropic endpoint), `CLAUDE_CODE_API_KEY_HELPER_TTL_MS` (default `60000`: a safety net, and the window in §11.5), the slot model names `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and `ANTHROPIC_DEFAULT_HAIKU_MODEL`, the default slot as `ANTHROPIC_MODEL` (as built in M3; Q21), custom-host settings (FR1), `CLAUDE_CODE_MAX_RETRIES` (from M6, §12.5), `CLAUDEPILOT_WORKSPACE`, `CLAUDEPILOT_ACCOUNT`, `DISABLE_LOGIN_COMMAND=1` (FR7), and empty `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_USE_BEDROCK` / `_VERTEX` / `_FOUNDRY` (FR14). These are Account Pool's names in the foundation's env registry ([Pools foundation](foundation-pools.md) §7). Every variable Account Pool may set is always present, empty when unused (🔬 Q6), because a removed value lingers until relaunch ✅. `hooks.StopFailure` matching every category (`*`) runs `/etc/claudepilot/bin/account-event`; the portal does the classifying. |
 | `/etc/claudepilot/account/<account-id>.key` | That account's key with no trailing newline, nothing else. `root:node 0440` ✅. The previous account's file is deleted at the next reconcile (§10.3). |
 | `/etc/claudepilot/bin/account-key` | The helper. Reads the key file for its argument, appends one line to the outbox (event ID, time, account ID, the calling `claude` process, whether the file was empty), and prints only the key: from 2.1.227 any other output fails the helper 📄. An outbox write error never stops it printing the key. |
 | `/etc/claudepilot/bin/account-event` | The `StopFailure` hook. Appends only an event ID, the time, error category, session ID and `CLAUDEPILOT_ACCOUNT`. Never copies `last_assistant_message`, `error_details` or the transcript path. |
@@ -283,7 +297,8 @@ Why each choice:
   reload when a file is renamed into place ✅. Each pool type owns one numbered drop-in, merged with
   the others 📄. They're not a security boundary, because workspace users have `sudo`, but they keep
   a user's own settings from overriding the pool by accident. Server-managed settings from the
-  organization of a user's own sign-in might outrank them (🔬 Q18).
+  organization of a user's own sign-in might outrank them (🔬 Q18), but a key from `apiKeyHelper`
+  doesn't trigger their fetch 📄, so pool workspaces should keep the file tier.
 - **`apiKeyHelper` is the only credential channel.** It sends the key as both `x-api-key` and
   `Authorization: Bearer` ✅. Claude Code re-runs it before every retry after a 401 ✅ (after a 403
   too 📄) and on the next request after any managed-settings write ✅. It outranks a `/login`
@@ -301,7 +316,7 @@ Why each choice:
 
 | Target | Running workspace | Stopped workspace | Survives a restart without the portal |
 | --- | --- | --- | --- |
-| Docker (DinD, host) | Archive API writes each file under a hidden temporary name with owner and mode from the tar header (the key file's `root:node 0440` was kept on both daemons ✅), then `exec` as root renames it in place (🔬 Q16: not yet run on either daemon). An in-place archive overwrite was picked up without a restart ✅, but whether it is atomic is unknown (🔬 Q16). | Archive API writes into the container's filesystem: ✅ for a created, never-started container; 🔬 for one that has run and stopped (Q16). | Yes: files live in the container's filesystem until it's removed. |
+| Docker (DinD, host) | Archive API writes each file under a hidden temporary name with owner and mode from the tar header (the key file's `root:node 0440` was kept on both daemons ✅), then `exec` as root renames it in place. ✅ On DinD the rename never showed a reader a missing or partial file, while an in-place archive overwrite did ([Pools foundation](foundation-pools.md) §6.2); Docker Desktop is 🔬 Q16. | Archive API writes into the container's filesystem: ✅ for a created, never-started container, and ✅ for one that has run and stopped (DinD). | Yes: files live in the container's filesystem until it's removed. |
 | Kubernetes | The portal updates the workspace's Secret, then `exec`s `sync.sh` with the bundle on stdin, which writes the files into regular folders with a plain rename (🔬 Q19). | The Secret alone. An init container copies it into place when the pod starts. | Yes: the Secret is the source. |
 
 Never mount the Secret at `managed-settings.d`: a kubelet-style symlink swap there was ignored, for
@@ -337,14 +352,17 @@ The cache lifetime is a safety net, not the rotation path.
 **Stopped workspaces get changes at once.** Rotations, disables, removals and revocations write
 straight through to stopped workspaces instead of waiting for the foundation's 10-minute
 stopped-workspace reconcile, because a stopped Docker container can be started outside the portal
-(`docker start`). Writes into a container that has run and stopped are 🔬 (Q16).
+(`docker start`). Writes into a container that has run and stopped persist ✅ (DinD; Docker Desktop
+🔬 Q16).
 
 ### 10.4 Unassigning safely
 
 A removed helper takes effect at once ✅, but a removed `env` value lingers until the next launch ✅.
 When a lab session's drop-in was simply deleted, its custom base URL stayed in effect and the
 session sent its fallback credential, a user-level helper's key, to that host ✅. A user's own
-sign-in would leak the same way. So unassigning takes two steps:
+sign-in would leak the same way. So unassigning takes two steps. Unassigning and moving a workspace
+to own login first take Chat sessions' credential-transition lock, which ends the workspace's portal
+chat sessions; Account Pool releases it after step 2 ([Chat sessions](chat-sessions.md) §6 rule 2).
 
 1. Overwrite the drop-in with `ANTHROPIC_BASE_URL=https://api.anthropic.com`, every other Account
    Pool variable empty, and no helper or hook. The next request goes to that URL with the
@@ -371,7 +389,9 @@ What users see:
 - They rotate through the same drop-in. Managed settings outrank `--settings` ✅, so a chat session
   can't carry its own key or switch accounts in-band.
 - Control-channel responses such as `get_settings` echo `env` values in plain text ✅ (stream-json),
-  so chat-session logs redact every `env` value ([Chat sessions](chat-sessions.md)).
+  so chat stores only `get_settings.applied` (model, effort and the like) and runs the shared
+  redactor on everything it keeps ([Chat sessions](chat-sessions.md) §13).
+- Chat hears of every move, and proactive moves wait for its turn boundaries (§12.2).
 
 ## 11. Quota monitoring and health
 
@@ -490,8 +510,14 @@ rejected key while the retries are still running. A portal probe decides.
   cooldowns are left to Claude Code's own retries.
 - Proactive threshold: headroom for the main model group below N% (default 15%), or tracked spend
   past a budget's rotate point: move at the next reconcile. The account takes no new workspaces
-  until it is 10 points above the threshold or past its reset time. Values and budgets come from
-  [Settings & policies](settings-policies.md) (FR10, FR11).
+  until a probe shows headroom at least 10 points above the threshold, also after its reset time,
+  and a workspace stays at least 10 minutes on an account between proactive moves. An
+  organization budget's rotate point moves the workspaces of every account in that organization.
+  Values and budgets come from [Settings & policies](settings-policies.md) (FR10, FR11).
+- [Chat sessions](chat-sessions.md) hears of every move. Proactive moves wait for a turn boundary in
+  the workspace's chat sessions, and until Q20 is answered, a cross-organization move of a workspace
+  with a Working chat session waits for that turn to end. Moves off an account that can't serve
+  (Invalid, Billing, Exhausted, disabled, removed) never wait.
 
 A move to another organization mid-conversation discards the prompt cache 📄; whether earlier
 thinking blocks survive it is 🔬 (Q20).
@@ -538,26 +564,29 @@ levers reduce that:
 
 1. **Proactive threshold** (§12.2): move before the limit, so no request ever sees the 429. This is
    the main tool.
-2. **Fail over faster** (optional, in [Settings & policies](settings-policies.md)): when the pool has
-   another healthy account in a different organization, set `CLAUDE_CODE_MAX_RETRIES` lower (for
-   example 4) in managed `env`. ✅ The value is honored from managed settings. The turn then fails
-   sooner, `StopFailure` fires, and the next request already uses the new account. It also shortens
-   the 401 window, which is `CLAUDE_CODE_MAX_RETRIES` + 3 attempts ✅, so the 401 target must be
-   re-checked at the chosen value (🔬 Q15).
+2. **Fail over faster** (optional, a [Settings & policies](settings-policies.md) row, M6): Account
+   Pool always writes `CLAUDE_CODE_MAX_RETRIES` in its drop-in: `4` while the row is on and the pool
+   has another healthy account in a different organization, else `10`. ✅ The value is honored from
+   managed settings. The turn then fails sooner, `StopFailure` fires, and the next request already
+   uses the new account. It also shortens the 401 window, which is `CLAUDE_CODE_MAX_RETRIES` + 3
+   attempts ✅, so the 401 target must be re-checked at 4 (🔬 Q15).
 
 ## 13. User experience
 
 All screens use the existing components (Card, Section, Badge, Menu, FormDialog, ConfirmDialog,
 Select, StatTile) and work on phones and desktops.
 
-**Accounts page** (new navigation item "Accounts"):
+**Accounts tab**, the first tab of the Pools hub (`/admin/pools?tab=accounts`; today's
+`/admin/accounts` redirects there once the hub ships, [Web app](web-app-pwa.md) §8, W1):
 
 - **Pools** section: one card per pool. Name, endpoint, health counts ("3 healthy · 1 cooling ·
   1 invalid"), member list in order, "Used by N workspaces", and actions (edit, add account, delete).
 - **Accounts** section: one row per account. Name, masked key (`sk-ant-…a1b2`), endpoint, status chip
   with a live cooldown countdown ("Cooling · 2m 30s"), an error tag (AUTH, 429, CAP, BILL, NET),
-  a headroom bar for the main model group (green above 70%, amber 30–70%, red below 30%) with
-  "headroom as of HH:MM" and the reset time, a flag for unconfirmed signals, workspaces using it,
+  a headroom bar for the main model group (the shared Meter: used = 1 − headroom, its design-token
+  bands and a tick at the rotate point; [Monitoring](monitoring-dashboard.md) A8, Settings
+  amendment 8) with "headroom as of HH:MM" and the reset time, a flag for unconfirmed signals,
+  workspaces using it,
   and a menu (Check, Edit, Disable, Clear cooldown, Deactivate at Anthropic when a monitor exists,
   Remove). Filter by pool, status or endpoint; sort by lowest headroom or soonest reset. The account
   detail lists every probed group.
@@ -568,9 +597,12 @@ Select, StatTile) and work on phones and desktops.
   report.
 - **Event log**: a filterable timeline of failovers, state changes and checks.
 
-**Add account dialog**: type (Anthropic API key or Custom host key), name, key (password field, never
-shown again), Check button, ownership confirmation. Saving runs the check and shows the result
-inline.
+**Add key dialog**: one key or several (FR4's `name|key` lines), "Used with" (the Anthropic API or a
+custom host), name, key (the shared write-only SecretInput from Web app W1, never shown again),
+notes, and the ownership confirmation. "Add and check" saves and shows the check result (FR3). A
+note under the fields reads: "Using a Claude Pro or Max plan? Sign in inside the workspace instead:
+leave it without a pool, open its terminal and run `claude` (or `/login`). Plan logins can't be
+added to pools."
 
 **Pool editor**: name, endpoint, ordered members (up and down buttons), strategy, workspace cap,
 probe models, proactive threshold, "hide /login".
@@ -601,6 +633,9 @@ sessions.
   `sudo`. The product treats every key in a pool as shared with every user of the workspaces
   assigned to it. It recommends a dedicated Anthropic workspace per pool with a spend limit, and
   records every workspace an account was delivered to in the exposure ledger (FR20).
+  `/etc/claudepilot/account/**` is in the foundation's secret-path registry, which generates Read
+  and Edit deny rules for Claude and keeps the folder out of previews and downloads; `python3`,
+  `grep -r` and command substitution still read the key ✅ (cross-pool lab).
 - **Copies outside the portal:**
   - Docker: the key file sits in the container's writable layer, on the DinD daemon's storage or
     inside the Docker Desktop VM's disk. `docker commit`, `export` and `cp` copy it, and deleting it
@@ -615,7 +650,7 @@ sessions.
     a memory-backed `emptyDir`, and the Secret is the durable copy.
 - **Purge:** after a rotation, the old account's key file goes at the next reconcile (§10.3).
   Removing an account deletes its key file from every workspace in its exposure ledger, running or
-  stopped (Docker: `exec rm`, or an empty file while stopped, 🔬 Q16; Kubernetes: the Secret entry).
+  stopped (Docker: `exec rm`, or an empty file while stopped; Kubernetes: the Secret entry).
   Workspaces that can't be reached stay "purge pending" and are retried at each reconcile.
 - **Compromised key:**
   1. Revoke it at Anthropic; removing it from the portal doesn't. Use the Console, or "Deactivate at
@@ -645,6 +680,8 @@ sessions.
 - Metrics for the [Monitoring dashboard](monitoring-dashboard.md): failovers per hour, accounts by
   state, workspaces waiting for quota, probe failures and probe tokens, unconfirmed signals,
   delivery failures.
+- Attention items and the Account push ([Web app](web-app-pwa.md) §11.1): an account Invalid, Billing
+  or Exhausted, a pool waiting for quota, a budget reached or a workspace paused.
 
 ## 16. Testing and verification
 
@@ -666,9 +703,9 @@ Every ✅ in this PRD comes from single runs on one Claude Code version. These s
 | M1 | Foundation pieces this PRD needs: F1, F2 and F4 (database, encryption, Docker delivery with drop-ins and reconcile, outbox, exposure records). Kubernetes delivery in M4 also needs F3. | Foundation PRD approved |
 | M2 | Endpoints and accounts: CRUD, checks, bulk add, organization discovery, Accounts page | |
 | M3 | Pools and assignment with consent; Docker delivery with per-account key paths; workspace create and row integration; safe unassign; exposure ledger and purge | Docker suite and write test (Q16); interactive test (Q9) |
-| M4 | Helper-run and hook signals, confirmatory probes, classification, failover, event log; Kubernetes delivery | Error-class matrix (Q14), helper-run detection (Q15), Kubernetes end to end (Q19) |
+| M4 | Helper-run and hook signals, confirmatory probes, classification, failover with chat-aware timing (§12.2), event log; Kubernetes delivery | Error-class matrix (Q14), helper-run detection (Q15), Kubernetes end to end (Q19) |
 | M5 | Headroom probes, quota UI, optional organization monitors (usage, key status, deactivation) and usage rollups | Live-key smoke test (Q3, Q4, Q5, Q10) |
-| M6 | Proactive threshold failover, herding controls, budgets (with Settings & policies) | |
+| M6 | Proactive threshold failover, herding controls, budgets, pause and Fail over faster (with Settings & policies S5) | |
 
 ## 18. Success metrics
 
@@ -700,9 +737,10 @@ Every ✅ in this PRD comes from single runs on one Claude Code version. These s
 | Q12 | Ask Anthropic in writing: is automatic failover across API keys from several organizations the operator owns acceptable under the Commercial Terms, and with what limits? Also ask what acceleration-limit 429s look like, and whether any API reads a Console organization's spend cap. Record the answers in §6. | Operator |
 | Q13 | Everyone signs in with one shared code, so the audit log can't name who added a key or moved a workspace. Accept anonymous audit, or add named admins before the portal stores third-party keys? | Product |
 | Q14 | 🔬 Error-class matrix on the pinned version: 429 with `enforced_spend_limit_reached` and no `retry-after`, 429 with `x-should-retry: false`, `retry-after` above 60, the user-set limit 400, 402, 403, model 404, an error after a 200. For each: attempts and their timing, helper re-runs, `StopFailure` category, and chat-session `api_retry` events. | Lab test |
-| Q15 | 🔬 Helper-run detection: run cadence under a persistent 401; time from the first 401 to the session continuing on a new key, with a 10 s pull; whether the 40 s target holds with a lower `CLAUDE_CODE_MAX_RETRIES`; how the helper reliably names its `claude` process (its parent is a shell). | Lab test |
-| Q16 | 🔬 Docker writes on DinD and Docker Desktop: hidden temporary name plus `exec` rename versus an in-place archive overwrite (atomic for the file watcher and a concurrent `cat`?), and writes into containers that have run and stopped. | Lab test |
+| Q15 | 🔬 Helper-run detection: run cadence under a persistent 401; time from the first 401 to the session continuing on a new key, with a 10 s pull; whether the 40 s target holds with `CLAUDE_CODE_MAX_RETRIES=4`; how the helper reliably names its `claude` process (its parent is a shell). | Lab test |
+| Q16 | ✅ Answered on DinD ([Pools foundation](foundation-pools.md) Q6): a hidden temporary name plus `exec` rename is atomic for a concurrent reader, an in-place archive overwrite isn't, and writes into containers that have run and stopped persist. 🔬 Still open on Docker Desktop. | Lab test |
 | Q17 | 🔬 Does writing `ANTHROPIC_BASE_URL=https://api.anthropic.com` behave differently from leaving it unset: the auto-mode notice, Remote Control, the server-managed settings fetch, model discovery? If so, write it only for custom hosts and when leaving one. | Live key or TLS-intercepting mock |
-| Q18 | 🔬 Can server-managed settings from the organization of a workspace's own sign-in outrank the drop-in (the first managed source wins 📄)? The portal never looks; a person can check `/status` with their own sign-in. | Manual test |
+| Q18 | 🔬 Can server-managed settings from the organization of a workspace's own sign-in outrank the drop-in (the first managed source wins 📄)? A key from `apiKeyHelper` doesn't trigger their fetch 📄, so pool workspaces should be unaffected; untested with a real Team or Enterprise login. The portal never looks; a person can check `/status` with their own sign-in. | Manual test |
 | Q19 | 🔬 Kubernetes end to end on k3s: Secret propagation, `sync.sh` through `exec` as uid 1000 into the `fsGroup` `emptyDir`s (also under `allowPrivilegeEscalation: false`), the init copy, and delivery time ([Pools foundation](foundation-pools.md)). | Implementation test (M4) |
 | Q20 | 🔬 After a move to another organization mid-conversation, does the API accept, strip or reject earlier thinking blocks? If it rejects them, cross-organization moves must wait for a new session. | Live-key test with two organizations |
+| Q21 | [Persona](persona-pool.md) A2 asks Account Pool never to write `ANTHROPIC_MODEL` and to fill empty slot variables from the default slot instead: ✅ `ANTHROPIC_MODEL` in managed `env` outranks a persona's managed `model` (cross-pool lab). M3 writes `ANTHROPIC_MODEL` from the default slot. Change that before Persona P1 ships? Until then Persona shows "Persona model ignored here". | Owner |

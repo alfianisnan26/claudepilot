@@ -125,7 +125,7 @@ What a running session picks up (✅ rows observed on 2.1.296, print mode):
 | Change | Picked up |
 | --- | --- |
 | Temp file renamed into `managed-settings.d` | ✅ At the next request: `env`, helper and key. |
-| Archive API overwrite in place (Docker) | ✅ At the next turn. 🔬 Not known to be atomic: extraction probably deletes, then recreates the file (Q6). |
+| Archive API overwrite in place (Docker) | ✅ At the next turn, but ✅ **not atomic**: a reader polling the file during 40 overwrites saw it missing or partial 6 times in 15,387 reads (DinD, F2 gate test). Never used on a running workspace. |
 | Kubelet-style `..data` symlink swap inside `managed-settings.d`, which is what a Secret or ConfigMap mounted there does | ✅ **Not picked up**, for `env` and helper changes alike (a base-URL change was still ignored after 60 s). The helper isn't re-run, so a new key goes unseen too (simulated kubelet layout). |
 | A projected volume at `/etc/claude-code` whose items have nested paths (`managed-settings.d/<file>`) | ✅ At the next request (simulated). 🔬 With a real kubelet (Q5). |
 | A `subPath` mount | 📄 Never updated. |
@@ -136,8 +136,8 @@ What a running session picks up (✅ rows observed on 2.1.296, print mode):
 
 | | |
 | --- | --- |
-| Running | The archive API writes each file under a hidden temp name in its target directory, with owner and mode from the tar header. One `exec` as root renames them into place in write order. ✅ Tar-header owner and mode on both daemons. 🔬 The temp-and-rename path (Q6). |
-| Stopped | The archive API writes the final names directly, in write order, manifest last. Nothing reads them while the container is stopped. ✅ Into a created, never-started container. 🔬 Into one stopped after running (Q6). |
+| Running | The archive API writes each file under a hidden temp name in its target directory, with owner and mode from the tar header. One `exec` as root renames them into place in write order. ✅ Tar-header owner and mode on both daemons. ✅ Temp and rename never showed a missing or partial file: 0 bad reads in 15,160 during 40 rewrites (DinD). |
+| Stopped | The archive API writes the final names directly, in write order, manifest last. Nothing reads them while the container is stopped. ✅ Into a created, never-started container, and ✅ into one stopped after running (DinD). |
 | Removing files | Running: `exec` as root (`rm`). Stopped: overwrite with empty files (an empty drop-in counts as `{}` 📄), then remove them at the next start. |
 | Latency | About 1 s 🔬 (Q6). |
 | Without the portal | Files stay in the container's writable layer, on the daemon's disk, until the container is removed. |
@@ -430,7 +430,7 @@ Account Pool can start after F2 (Docker) and F4 (signals). Kubernetes support fo
 | Q3 | Is k3s secret encryption at rest enabled in the cluster? |
 | Q4 | Production deployment target for the portal itself (decides the data dir, the key channel and TLS). |
 | Q5 | 🔬 With a real kubelet on our k3s: does a projected volume at `/etc/claude-code` with nested items hot-reload, how long does a Secret change take to reach the pod, does an annotation bump speed it up, does the read-only mount resist `sudo`, and how long does the primary path take, including `exec` as uid 1000 into the `fsGroup` `emptyDir`s under `allowPrivilegeEscalation: false`? |
-| Q6 | 🔬 Is an in-place archive overwrite atomic as Claude Code's watcher sees it? Does temp + `exec` rename behave as expected, how long does it take, and do writes into containers stopped after running behave like writes into never-started ones? |
+| Q6 | ✅ Answered on DinD (`delivery/docker.integration.test.ts`): an in-place archive overwrite is **not** atomic; temp + `exec` rename is; writes into containers stopped after running persist. 🔬 Still open: the same on Docker Desktop, and the latency. |
 | Q7 | 🔬 Can the archive API read and replace outbox files on a stopped Docker container's home volume? What load do 10 s `exec` pulls put on the daemon and the API server at 50 workspaces? |
 | Q8 | Can the minimum supported Claude Code version go below 2.1.296? The version matrix decides. |
 | Q9 | 🔬 Do server-managed settings for a user's own sign-in replace the portal's drop-ins (first-wins 📄)? Only the user can check, for example in `/status` "Setting sources". The portal never reads login state. |

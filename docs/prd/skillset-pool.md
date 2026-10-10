@@ -2,11 +2,11 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.5.** Written from research on the Claude Code 2.1.296 docs and the codebase. Facts the research summaries didn't cover were checked in the doc pages linked next to them. Plugin-loading results marked ✅ come from the [MCP set](mcpset-pool.md) sandbox run; nothing skill-specific has run in a sandbox yet. Items marked 🔬 need a check before the milestone that depends on them. |
+| Status | **Draft v0.6** (consistency pass: base drop-in, hooks, verification and prefixes aligned with the foundation's ownership registry). Written from research on the Claude Code 2.1.296 docs and the codebase. Facts the research summaries didn't cover were checked in the doc pages linked next to them. Plugin-loading results marked ✅ come from the [MCP set](mcpset-pool.md) sandbox run and the cross-pool lab (print mode); nothing skill-specific has run in a sandbox yet. Items marked 🔬 need a check before the milestone that depends on them. |
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-10 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, revisions, assignment, delivery engine, plugin marketplace, outbox) |
-| Related | [Persona pool](persona-pool.md) (subagents, output styles), [MCP set pool](mcpset-pool.md) (shared marketplace), [Settings & policies](settings-policies.md) (skill policy keys, locked image), [Monitoring dashboard](monitoring-dashboard.md), [Portal MCP server](portal-mcp.md), [Chat sessions](chat-sessions.md) (reload in chat) |
+| Related | [Persona pool](persona-pool.md) (subagents, output styles), [MCP set pool](mcpset-pool.md) (shared marketplace), [Settings & policies](settings-policies.md) (skill policy keys, hardened image), [Monitoring dashboard](monitoring-dashboard.md), [Portal MCP server](portal-mcp.md), [Chat sessions](chat-sessions.md) (reload in chat) |
 
 ## 1. Summary
 
@@ -61,7 +61,7 @@ fetch anything. The portal is the only fetcher, and it pushes pinned, reviewed f
 - **Changing a user's own skills** (`~/.claude/skills/`, including `synced/`) or a repository's
   `.claude/skills/`. The portal points out hand-copied duplicates (FR19) but never deletes them.
 - **Enforcement on the standard image,** whose users have `sudo`. Managed delivery is a default with
-  drift repair; the locked image ([Settings & policies](settings-policies.md) §14) makes it binding.
+  drift repair; the hardened image ([Settings & policies](settings-policies.md) §14) makes it binding.
 - **Public registries as trust.** Stars, installs and rankings don't replace review.
 
 ## 5. Users and stories
@@ -169,7 +169,8 @@ verification inside the workspace (FR21).
 - **FR11** Reviews belong to the tree hash, so an approved version joins any set without a new review.
 - **FR12** A skillset has a name, description, command prefix and skill versions. The prefix is the
   plugin name: kebab-case, unique across portal plugins, not starting with `claude-`, `anthropic-`,
-  `anthropics-`, `cc-plugin-` (refused by `claude plugin validate`) or `cpm-` (MCP sets). Renaming it
+  `anthropics-`, `cc-plugin-` (refused by `claude plugin validate`), `cpm-` (MCP sets) or `cpb-`
+  (Browser & desktop). Renaming it
   renames every command; the editor shows how many workspaces that affects. Skill names are unique in a
   set, and each skill is written to `skills/<name>/` with frontmatter `name` equal to the folder.
 - **FR13** Per skill: **On** (as authored), **Manual** (`disable-model-invocation: true`, and
@@ -208,14 +209,17 @@ verification inside the workspace (FR21).
 
 ### Verification and inventory
 
-- **FR21** Verify each delivery to a running workspace with `claude plugin details <prefix>@claudepilot`
-  through `exec` as the workspace user (✅ lists a portal plugin's components, [MCP set](mcpset-pool.md)
-  A3): a CLI subcommand, not a session, so no model request or session hooks (🔬 Q3). Its skills must
-  equal the compiled ones. `claude plugin list --json` adds enabled plugins from other marketplaces
-  named like a prefix (§12); it can't verify the sets themselves, since it returns `[]` for in-place
-  plugins (✅ MCP set §13.2). Results: Verified, Mismatch, Load error (with Claude Code's message), or
-  Not verified (stopped, or "not found" before any session registered the marketplace: no
-  `claudepilot` entry in `~/.claude/plugins/known_marketplaces.json`).
+- **FR21** Verify each delivery to a running workspace through `exec` as the workspace user, with two
+  CLI subcommands that start no session and make no model request (🔬 Q3 for hooks):
+  `claude plugin details <prefix>@claudepilot`, whose skills must equal the compiled ones (✅ lists a
+  portal plugin's components, [MCP set](mcpset-pool.md) FR16), and `claude plugin list --json`,
+  which reports each managed plugin's `readFromFolder`, `folderVersion` and `errors` ✅ (cross-pool
+  lab). The folder must be the current version folder; `version` isn't compared, because it keeps its
+  install-time value after a repoint ✅. The list also names enabled plugins from other marketplaces
+  that use a prefix (§12). Claude Code's own plugin records in `~/.claude/plugins/` are read only
+  through these commands, never opened or edited (foundation §2). Results: Verified, Mismatch, Load
+  error (with Claude Code's message), or Not verified: stopped, or no session yet, since both
+  commands report the marketplace as not configured until a session has registered it ✅.
 - **FR22** A deeper `system/init` check turns on only after Q3 shows that `claude -p /reload-plugins`
   makes no API request, with or without credentials. It runs with `CLAUDE_CONFIG_DIR=$(mktemp -d)`,
   an empty temporary working folder, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and
@@ -277,7 +281,7 @@ Claude Code offers two native routes for shared skills, and this PRD uses plugin
 | `/etc/claude-code/managed-settings.d/60-claudepilot-skills.json` | `enabledPlugins`: `"<prefix>@claudepilot": true` per assigned set, and `false` for a set whose files may still be present after unassignment or revocation, until a reconcile confirms they're deleted. `permissions.deny`: `Skill(<prefix>:<name>)` and `Skill(<prefix>:<name> *)` for each revoked skill, kept 14 days (§11.3). From M5, the §15 hooks. |
 
 - **Ownership.** The workspace user can't write delivered skill files: they're `root:root` on Docker
-  and on the standard Kubernetes image, and the locked image mounts them read-only (§10.3). Files are
+  and on the standard Kubernetes image, and the hardened image mounts them read-only (§10.3). Files are
   `0644`, files the review marked executable `0755`, folders `0755`; setuid, setgid and sticky bits
   are dropped. Otherwise a process running as that user could add `hooks/hooks.json` to a
   force-enabled plugin, and its hooks would run even under `allowManagedHooksOnly`
@@ -290,7 +294,7 @@ Claude Code offers two native routes for shared skills, and this PRD uses plugin
 
 | | Docker (DinD and host) | Kubernetes |
 | --- | --- | --- |
-| Running | The archive API writes the version folder under a temporary name, `root:root`, and one `exec` as root renames it (foundation §6.2). The catalog and drop-in are then swapped by temp file and rename. | A streamed `exec sudo tar --no-same-owner -x` unpacks into a temp folder on the `ws-<name>-pools` volume, then renames it. In the locked image the `claudepilot-sync` sidecar runs the same `tar` without `sudo`. Then the catalog on the volume (temp file and rename), then the drop-in through the Secret and `sync.sh`. |
+| Running | The archive API writes the version folder under a temporary name, `root:root`, and one `exec` as root renames it (foundation §6.2). The catalog and drop-in are then swapped by temp file and rename. | A streamed `exec sudo tar --no-same-owner -x` unpacks into a temp folder on the `ws-<name>-pools` volume, then renames it. In the hardened image the `claudepilot-sync` sidecar runs the same `tar` without `sudo`. Then the catalog on the volume (temp file and rename), then the drop-in through the Secret and `sync.sh`. |
 | Stopped | The archive API writes the same files into the stopped container, folder first ✅ (foundation). The start reconcile confirms them with `tree-hash`. | Only the drop-in in the Secret changes, for unassignment and revocation (§11.3). New sets and revisions arrive at the start reconcile. |
 
 Kubernetes needs the volume because a Secret holds at most 1 MiB ([Kubernetes](https://kubernetes.io/docs/concepts/configuration/secret/)),
@@ -320,7 +324,7 @@ which skills with scripts and reference files exceed. `sync.sh` never touches th
 | --- | --- |
 | Order | New version folders first, under new names so a loading session never sees a half-written tree; then the catalog; then the drop-in (temp file and rename); then verification (FR21). A drop-in adds a plugin entry only after the folder it references is complete; removing entries is always allowed. Unassigning reverses the order. |
 | Retention | Keep the previous two versions of each plugin and any version younger than 14 days, at most 10 per set, for sessions that loaded them; Claude Code keeps its own old plugin versions 14 days too ([plugin loading](https://code.claude.com/docs/en/plugins/loading#cleanup-of-previous-versions)). Revocation still deletes at once. |
-| Repointing | 🔬 A new version folder loads only if Claude Code re-reads a directory marketplace's `marketplace.json` at session start and on `/reload-plugins` (Q2). If it doesn't, each plugin keeps one stable path: write `plugins/<prefix>.<hash12>/`, then `ln -sfn` a temporary link and `mv -T` it over `plugins/<prefix>`; Q2 also confirms that loading follows the link. |
+| Repointing | ✅ The next session loads the new version folder of a repointed `marketplace.json` entry (cross-pool lab, print mode). 🔬 Whether `/reload-plugins` does too is Q2. If it doesn't, each plugin keeps one stable path: write `plugins/<prefix>.<hash12>/`, then `ln -sfn` a temporary link and `mv -T` it over `plugins/<prefix>`; Q2 also confirms that loading follows the link. |
 | Drift | The foundation's manifest check can't see changed or extra files in a tree of up to 5,000 files. The `tree-hash` helper computes each version folder's FR6 hash inside the workspace, through `exec`, every 10 minutes and at start. A mismatch or an unexpected file (such as a new `hooks/hooks.json`) is drift, and the folder is rewritten. |
 | Fallback | If the directory marketplace doesn't load without prompts in a container (Q1), the compiler writes `/etc/claude-code/.claude/skills/<prefix>-<name>/` instead, with `name` rewritten to the folder name. The choice is portal-wide, never per workspace, and the Skills row shows each command as delivered (`/<prefix>-<name>`). These skills outrank same-named personal and project skills, aren't covered by `disableSkillShellExecution`, and are verified only by `skills` in `system/init`. 🔬 If a plugin folder there loads as `<prefix>@skills-dir` (Q14), that becomes the first fallback and keeps namespacing. On Kubernetes the folder is a second mount of the pools volume (`subPath: managed-skills`), which sees later writes, unlike a Secret `subPath`. |
 
@@ -394,7 +398,8 @@ them ([skills](https://code.claude.com/docs/en/skills#skill-descriptions-are-cut
 warns at 75% of the budget for the workspace's default model. 🔬 The docs don't say whether "1%"
 counts characters or tokens (Q11); until checked, the estimate assumes 4 characters per token. The
 warning suggests Manual for rarely used skills, which takes their descriptions out of the listing.
-Repository and personal skills aren't counted.
+The browser pool's skill counts too ([Browser & desktop](browser-desktop-pool.md) §11.1); repository
+and personal skills aren't counted.
 
 ## 13. User experience
 
@@ -403,7 +408,8 @@ FormDialog, DiscardDialog, ConfirmDialog, Select, Segmented, ChipGroup, SwitchRo
 EmptyState, LoadError, RowsSkeleton) and work on phones and desktops. New: a read-only file viewer
 (monospace, line numbers, highlighted findings, 500 lines at a time), a diff view, an upload drop zone,
 and the Meter bar promoted from WorkspacesPage. Skill files show as plain text, never rendered HTML.
-Routes sit under the "Pools" hub (§18 A8); without A8 they move to a "Skills" item and `/admin/skills/…`.
+Routes sit under the Pools hub (§18 A8, adopted in [Web app](web-app-pwa.md) §8); the editor and the
+review page are `task` routes on phones (its §9.2).
 
 | Screen | What it shows |
 | --- | --- |
@@ -462,7 +468,7 @@ Routes sit under the "Pools" hub (§18 A8); without A8 they move to a "Skills" i
 | Milestone | Scope | Gate |
 | --- | --- | --- |
 | M1 | Foundation pieces: database, reviewable revisions, blob store, plugin marketplace with version folders, Docker delivery engine (foundation F2, F6) | Foundation PRD approved; Q1 and Q2 checked in a container |
-| M2 | Upload import, scanner, Library, review page, skillsets, skillset fragment on Docker (portal-side checks only until M4), revocation (recompile and delete, ignoring pins and the rollout limit), version gate, `tree-hash` drift check, verification with `claude plugin details`, rollout pause, workspace Skills row | Q3 for `claude plugin details` |
+| M2 | Upload import, scanner, Library, review page, skillsets, skillset fragment on Docker (portal-side checks only until M4), revocation (recompile and delete, ignoring pins and the rollout limit), version gate, `tree-hash` drift check, verification with `claude plugin details` and `plugin list --json`, rollout pause, workspace Skills row | Q3 for the two commands |
 | M3 | Git source with pinning, Anthropic source, updates with diffs, hand-copied skill check | |
 | M4 | Marketplace sources and licenses, Kubernetes delivery on the pools volume, validation container | Foundation F3 with A6; Kubernetes exec and tar path verified in the cluster |
 | M5 | Per-workspace overrides, conflict, budget and policy checks, revocation deny rules, usage events, the deeper check | Q4, Q11, Q13, Q15; Q3 for the deeper check |
@@ -484,19 +490,20 @@ Routes sit under the "Pools" hub (§18 A8); without A8 they move to a "Skills" i
 
 | ID | Section | Proposed change |
 | --- | --- | --- |
-| A1 | §7 ownership | Skillset row. Files: `managed-settings.d/60-claudepilot-skills.json`, `/etc/claudepilot/marketplace/plugins/<prefix>/**` (`/etc/claude-code/.claude/skills/**` only in the §10.5 fallback), outbox type `skills` (1 MB cap per [Monitoring](monitoring-dashboard.md) A5, an `id` on every line per its A4). The foundation bundle adds `/etc/claudepilot/bin/skill-event` and `tree-hash`. Keys: `enabledPlugins` entries `<prefix>@claudepilot` (`true` or `false`); `permissions.deny` entries `Skill(<prefix>:<name>)` and `Skill(<prefix>:<name> *)`; from M5, `hooks.PostToolUse` entries with matcher `Skill` and `hooks.UserPromptExpansion` entries, under Monitoring A3: hook arrays are list keys, and if its Q2 shows that drop-ins don't combine them, the compiler merges every owner's entries into one foundation drop-in. Remove `extraKnownMarketplaces` (A2). |
-| A2 | §7 shared marketplace | The foundation writes `extraKnownMarketplaces.claudepilot` (directory source `/etc/claudepilot/marketplace`, `autoUpdate: false`) in `managed-settings.d/00-claudepilot-base.json`. Every owner writes `plugins/<name>/<hash12>/` version folders; the foundation compiles `marketplace.json`, repoints an entry only after its new folder is complete, and prunes old folders per §10.5. If Q2 fails, every owner uses one stable path per plugin, swapped as in §10.5. Every portal plugin's `version` is `<revision>.0.0+<hash8>`. Plugin names are unique across portal plugins, kebab-case, without reserved prefixes. `CLAUDE_CODE_SYNC_PLUGIN_INSTALL` isn't set: `-p` loads these plugins in its first session without it (✅ MCP set A3), and only Q1 could show interactive sessions need it. |
+| A1 | §7 ownership | Skillset row. Files: `managed-settings.d/60-claudepilot-skills.json`, `/etc/claudepilot/marketplace/plugins/<prefix>/**` (`/etc/claude-code/.claude/skills/**` only in the §10.5 fallback), outbox type `skills` (1 MB cap, declared under [Monitoring](monitoring-dashboard.md) A4). The foundation bundle adds `/etc/claudepilot/bin/skill-event` and `tree-hash`. Keys: `enabledPlugins` entries `<prefix>@claudepilot` (`true` or `false`); `permissions.deny` entries `Skill(<prefix>:<name>)` and `Skill(<prefix>:<name> *)`; from M5, `hooks.PostToolUse` entries with matcher `Skill` and `hooks.UserPromptExpansion` entries in this drop-in: hook arrays are list keys (Monitoring A3), and hook arrays from two drop-ins both ran ✅ (cross-pool lab). Its hook prints nothing, as every portal hook must. Remove `extraKnownMarketplaces` (A2). |
+| A2 | §7 shared marketplace | The foundation writes `extraKnownMarketplaces.claudepilot` (directory source `/etc/claudepilot/marketplace`, `autoUpdate: false`) in `managed-settings.d/00-claudepilot-base.json`. Every owner writes `plugins/<name>/<hash12>/` version folders; the foundation compiles `marketplace.json`, repoints an entry only after its new folder is complete, and prunes old folders per §10.5. If Q2 fails, every owner uses one stable path per plugin, swapped as in §10.5. Every portal plugin's `version` is `<revision>.0.0+<hash8>`. Plugin names are unique across portal plugins, kebab-case, without Claude Code's reserved prefixes; `cpm-` belongs to MCP sets and `cpb-` to the browser pool. `CLAUDE_CODE_SYNC_PLUGIN_INSTALL` isn't set: `-p` loads these plugins in its first session without it (✅ MCP set A3, cross-pool lab), and only Q1 could show interactive sessions need it. The repointed entry is followed by the next session ✅ (cross-pool lab). |
 | A3 | §5, §6.3 revisions | `pool_revisions` gains `status` (`draft`, `waiting_review`, `deliverable`) and `rollout_paused_at` with a reason. `pools.current_revision` moves only to deliverable revisions, and a paused revision reaches no more workspaces (FR23). Revocation bypasses pins (§5) and the rollout limit (§6.3). MCP sets and personas can reuse this. |
 | A4 | §5 assignment | `assignments.options` (json) holds pool-specific settings for one workspace, such as per-skill overrides. |
 | A5 | §4 storage | Blob store: content-addressed files at `<PORTAL_DATA_DIR>/blobs/sha256/`, mode `0600`, included in `portal backup` and `portal restore`, collected 30 days after nothing references them. |
-| A6 | §6.2, F3 | Kubernetes pools volume: a per-workspace PVC `ws-<name>-pools` (1 Gi, ownerReference to the Deployment) at `/etc/claudepilot/marketplace`, added by "Enable pools" in the same restart. `sync.sh` never reads, writes or prunes that folder. `marketplace.json` lives on the volume and is written through `exec` (temp file, then rename) before the Secret's drop-in refers to it. The standard image writes as root (`sudo tar --no-same-owner`); in the locked image the `claudepilot-sync` sidecar writes and the workspace container mounts the volume read-only ([Settings & policies](settings-policies.md) amendment 6). Limits: a compiled set at most 50 MB, a workspace's plugins at most 600 MB. The writer checks free space, prunes retained versions beyond the previous one if needed, and otherwise fails with "Pools volume full (X of 1 GiB)". |
-| A7 | §6.3 verify step | Adopt [MCP set](mcpset-pool.md) A4's run-in-workspace step for FR21, FR22 and the `tree-hash` check, with results in `skill_inventory`. Such commands start no session and read no user credentials. Every hook helper in the foundation bundle (`account-event`, `monitor-event`, `persona-event`, `skill-event`, and [Persona](persona-pool.md) A6's `session-event` if adopted) exits 0 at once when `CLAUDEPILOT_VERIFY` is set. |
-| A8 | §10 navigation | "Pools" is one hub navigation item: PageTabs `stack="never"` with the tab in `?tab=`, and tabs Accounts, Skills, Personas, MCP sets, Secrets and Browser. A pool type's library or review pages are routes of their own, not nested tabs, because nested PageTabs stack inside a hub. Pool editors that hold lists are pages (Persona, Settings, Skillset). |
+| A6 | §6.2, F3 | Kubernetes pools volume: a per-workspace PVC `ws-<name>-pools` (1 Gi, ownerReference to the Deployment) at `/etc/claudepilot/marketplace`, added by "Enable pools" in the same restart. `sync.sh` never reads, writes or prunes that folder. `marketplace.json` lives on the volume and is written through `exec` (temp file, then rename) before the Secret's drop-in refers to it. The standard image writes as root (`sudo tar --no-same-owner`); in the hardened image the `claudepilot-sync` sidecar writes and the workspace container mounts the volume read-only ([Settings & policies](settings-policies.md) amendment 6). Limits: a compiled set at most 50 MB, a workspace's plugins at most 600 MB. The writer checks free space, prunes retained versions beyond the previous one if needed, and otherwise fails with "Pools volume full (X of 1 GiB)". |
+| A7 | §6.3 verify step | Adopt [MCP set](mcpset-pool.md) A4's run-in-workspace step for FR21, FR22 and the `tree-hash` check, with results in `skill_inventory`. Such commands start no session and read no user credentials. Every hook helper in the foundation bundle (`account-event`, `monitor-event`, `persona-event`, `skill-event`, and the foundation's `session-event`, [Persona](persona-pool.md) A6) exits 0 at once when `CLAUDEPILOT_VERIFY` is set. |
+| A8 | §10 navigation | "Pools" is one hub navigation item: PageTabs `stack="never"` with the tab in `?tab=`, and tabs Accounts, Skills, Personas, MCP sets, Secrets and Browser (ids `accounts`, `skills`, `personas`, `mcp`, `secrets`, `browser`; adopted in [Web app](web-app-pwa.md) §8, an index list on phones). A pool type's library or review pages are routes of their own, not nested tabs, because nested PageTabs stack inside a hub. Pool editors that hold lists are pages (Persona, Settings, Skillset). |
 
 **Requests to related PRDs.** [MCP set](mcpset-pool.md): version folders and the A2 version format
 (its §10.2 and §10.4), and its A4 in place of this PRD's earlier verify step. [Settings & policies](settings-policies.md):
-show next to "Skills may run shell commands" how many delivered skills it affects (FR18).
-[Account Pool](account-pool.md): its Accounts page becomes the first Pools tab (A8).
+show next to "Skills may run shell commands" how many delivered skills it affects (FR18); adopted in
+its §11.2. [Account Pool](account-pool.md): its Accounts page becomes the first Pools tab (A8);
+adopted in its §13.
 [Chat sessions](chat-sessions.md) A9 is applied in §10.4; the reload notice it cites as FR20 is now FR24.
 
 ## 19. Open questions
@@ -504,8 +511,8 @@ show next to "Skills may run shell commands" how many delivered skills it affect
 | ID | Question | Who decides |
 | --- | --- | --- |
 | Q1 | 🔬 In interactive sessions in a container, does the portal marketplace load with no prompt, and do its plugins appear in the first session after it's registered? `claude -p` does both ✅ (MCP set A3). Foundation Q1; decides the §10.5 fallback. | Sandbox test (TTY) |
-| Q2 | 🔬 Does Claude Code re-read a directory marketplace's `marketplace.json` at session start and on `/reload-plugins`, so a repointed entry loads its new folder? If not, does loading follow a symlinked plugin folder (§10.5)? | Sandbox test |
-| Q3 | 🔬 Do `claude plugin details` and `claude plugin list` run without credentials, network requests or hooks, and does `details` find the plugin before any session ran? Does `claude -p --no-session-persistence --output-format stream-json --verbose /reload-plugins` handle the command locally, with no model request, with and without credentials? How are marketplace plugin skills named in `skills` and `slash_commands`, and do Manual skills appear in `skills`? | Sandbox test |
+| Q2 | Partly answered: ✅ the next session loads a repointed entry's new folder (cross-pool lab, print mode). 🔬 Does `/reload-plugins` re-read `marketplace.json` too? If not, does loading follow a symlinked plugin folder (§10.5)? | Sandbox test |
+| Q3 | Partly answered ✅ (cross-pool lab): `plugin list --json` makes no API request, and before any session has registered the marketplace both commands say it isn't configured. 🔬 Do they run without credentials, network requests or hooks? Does `claude -p --no-session-persistence --output-format stream-json --verbose /reload-plugins` handle the command locally, with no model request, with and without credentials? How are marketplace plugin skills named in `skills` and `slash_commands`, and do Manual skills appear in `skills`? | Sandbox test |
 | Q4 | 🔬 Which skill does bare `/x` run when two enabled plugins both have `x`? Does a `Skill(<prefix>:<name>)` deny rule also stop a user typing the command, bare or prefixed? | Sandbox test |
 | Q5 | Should a later version import whole plugins (hooks, MCP servers, agents, `bin/`) as a pass-through, or stay with skills and commands? | Product |
 | Q6 | With one shared admin sign-in, is recording approvals without separation of duties acceptable until user accounts exist? | Operator |

@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.5.** Written from research on the Claude Code 2.1.296 and Agent SDK docs. No persona behavior is sandbox-verified yet. Items marked 🔬 need a sandbox check before anything is built on them. |
+| Status | **Draft v0.6** (consistency pass: session-start record, hooks, model variables, MCP tool names and Chat sessions references aligned). Written from research on the Claude Code 2.1.296 and Agent SDK docs. ✅ marks come from the cross-pool lab (print mode); no persona delivery is sandbox-verified yet. Items marked 🔬 need a sandbox check before anything is built on them. |
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-10 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, revisions, delivery engine, outbox); [Chat sessions](chat-sessions.md) (session runner, for the chat prompt and test prompts only) |
@@ -185,7 +185,7 @@ delivered until it unlocks (foundation §6.5). Content:
 | Table | Key fields |
 | --- | --- |
 | `persona_tests` | id, pool_id, revision, workspace_id, previous_assignment (json), started_by, started_at, ends_at (default +24 h), ended_at, end_reason (`ended`, `expired`, `assignment_changed`) |
-| `persona_test_runs` | id, test_id, prompt_id, chat_session_id, with_chat_prompt, started_at, finished_at, status, model, input_tokens, output_tokens, cost_usd (null when unknown), files_loaded (json), error (redacted). The response lives in Chat sessions (§16). Rows kept 14 days. |
+| `persona_test_runs` | id, test_id, prompt_id, chat_session_id, with_chat_prompt, started_at, finished_at, status, model, input_tokens, output_tokens, cost_usd (null when unknown), files_loaded (json), error (redacted). The response lives in Chat sessions (its §9). Rows kept 14 days. |
 | `persona_sessions` | workspace_id, session_id, pool_id, revision (from the start record only), source (`startup`, `resume`, …), started_at, last_compact_at, instruction_files (json: memory type, path, load reason). Rows kept 30 days. |
 
 `pools.default_for_new` and `pools.archived_at` come from A5. Retention is edited in
@@ -210,7 +210,9 @@ Files are mode `0644`: root-owned on Docker, group-owned through `fsGroup` on Ku
 Why each choice:
 
 - **The managed CLAUDE.md file, not the `claudeMd` key:** the file is the documented managed
-  location; `claudeMd` is documented only for `managed-settings.json`, not drop-ins. The foundation
+  location; `claudeMd` is documented only for `managed-settings.json`, though it worked from a
+  drop-in in the cross-pool lab ✅ (shown as organization-managed policy, and replaced from the next
+  turn when edited). The foundation
   delivers `/etc/claude-code` on every target (its §6.2). The file keeps 100 KB of Markdown out of
   JSON, `InstructionsLoaded` can report it by path, and "persona only" loads it.
 - **Managed folders, not a plugin:** no dependency on the portal marketplace (foundation Q1) or
@@ -256,7 +258,7 @@ project and local settings by default, so the runner adds only:
 
 - Terminal sessions never get the chat prompt. The runner never passes `--bare` or
   `--system-prompt`, which would drop or replace persona parts.
-- Sessions sleep after 30 idle minutes and resume on the next message (Chat sessions FR40), so most
+- Sessions sleep after 30 idle minutes and resume on the next message (Chat sessions FR38), so most
   chat conversations follow §11's Resumed column. A resumed conversation keeps the system prompt
   recorded on its first request until compaction
   ([CLI reference](https://code.claude.com/docs/en/cli-reference)). The runner doesn't pass
@@ -294,7 +296,8 @@ and hooks, so they get little or none of the persona and report nothing (Unknown
 
 **Session reports.** 🔬 Field names, load reasons and `source` values to confirm (Q7). Each session
 gets one start record with the manifest's persona revision, from A6's shared `session-event` or,
-until A6 lands, a persona `SessionStart` entry (hooks are list keys, Monitoring A3). Its `source`
+until A6 lands, a persona `SessionStart` entry (hook arrays merge across drop-ins ✅, cross-pool
+lab; Monitoring A3). Its `source`
 marks resumed sessions. `persona-event` also handles `InstructionsLoaded`, which no other owner
 claims, and records memory type, load reason and path, never content. A session's revision comes
 only from its start record. A `compact` record changes it only if Q2 confirms the managed CLAUDE.md
@@ -373,16 +376,18 @@ confirmation, and the workspace row shows a warning badge while it's on.
   until the test ends; running sessions may switch style at their next message." "End test", or 24
   hours, restores the previous assignment; any other assignment change ends the test without
   restoring. The workspace Select offers "Start" for stopped ones and "Enable pools" where needed.
-- **Test prompts.** Up to 10, each a one-shot `cp-session` run in the test workspace (§10.3, Chat
+- **Test prompts.** Up to 10, each a one-shot `cp-session run` in the test workspace (§10.3, Chat
   sessions A8), with or without the chat prompt:
   - `--permission-mode plan` blocks Claude's edits and non-read-only tool calls. Hooks, skills'
     injected commands and MCP servers still run.
   - The controller denies every permission request and question (`--permission-prompt-tool stdio`,
-    Chat sessions FR22), so a run never waits for an answer.
+    Chat sessions FR21), so a run never waits for an answer.
   - Limits: `--max-turns 4`; `--max-budget-usd 0.50`, shown as "est., may pass by one response", or
-    "cost unknown" on custom hosts without a price; 120 s, then the run is ended. Stdin closes after
-    the prompt, so the run drains and exits. Runs count against the chat caps (Chat sessions FR41).
-  - Results: model, tokens, cost, duration, loaded files and errors, and the response (§16). Later:
+    "cost unknown" on custom hosts without a price; 120 s, then the run is ended. `cp-session run` gives
+    the run a file as stdin, so it drains and exits (✅ for a plain pipe; the host path is a Chat
+    sessions contract test). Runs count against the chat caps (Chat sessions FR39).
+  - Results: model, tokens, cost, duration, loaded files and errors, and the response (Chat sessions
+    §9). Later:
     side by side with the published revision.
 - **Who pays.** Run is enabled only while the workspace's Account Pool assignment is active (not
   paused, not waiting for quota, delivery Synced), and otherwise says why. Chat sessions' credential
@@ -418,22 +423,27 @@ confirmation, and the workspace row shows a warning badge while it's on.
 Screens use existing components (Card, Section, PageTabs, Badge, Menu, FormDialog, DiscardDialog,
 ConfirmDialog, Dialog, Select, ChipGroup, Segmented, Switch, TextArea, EmptyState) on phones and
 desktops. New: a DiffView (side by side on desktop, unified on phones, shared with Skillset's), and
-`mono` and `autoGrow` props on `@isnanme/ui`'s TextArea.
+`mono` and `autoGrow` props on `@isnanme/ui`'s TextArea, shipped upstream ([Web app](web-app-pwa.md)
+§14).
 
-**Personas tab** (Pools hub, `/admin/pools?tab=personas`, [Skillset](skillset-pool.md) A8): a
+**Personas tab** (Pools hub, `/admin/pools?tab=personas`, [Skillset](skillset-pool.md) A8, Web app §8): a
 card per persona with name, description, revision, a "Draft r5" badge, a parts line ("48 lines ·
 style Reviewer · 3 subagents · opus, high · chat prompt"), "Used by N workspaces", a "Default"
 badge, and a menu (Edit, Duplicate, Test, History, Export, Archive). "Show archived" lists archived
 ones with Restore. The EmptyState offers "New persona" and "Import files".
 
-**Persona editor** (`/admin/pools/personas/<id>`), four groups (Sections on desktop, PageTabs on
-phones):
+**Persona editor** (`/admin/pools/personas/<id>`, a `task` route on phones, Web app §9.2), four
+groups (Sections on desktop, PageTabs on phones):
 
 - *Text:* instructions in a monospace, growing TextArea with line and token counts, the §12.1
   guidance, the §6 rule 1 note and the Instruction sources Select; then the chat prompt ("Chat
   sessions only").
-- *Styles & subagents:* rows edited in a FormDialog. Subagent tools are a ChipGroup plus free text
-  for MCP tool names; model is a Select, effort a Segmented.
+- *Styles & subagents:* rows edited in a FormDialog. Subagent tools are a ChipGroup: built-in tools,
+  then MCP tools from the delivered catalogs under their plugin names
+  (`mcp__plugin_cpm-<set>_<server>__<tool>`, `mcp__plugin_cpb-browser_<server>__<tool>`), plus free
+  text; a name that no assigned set or browser pool delivers warns at compile time. MCP set slugs
+  and server keys never change once delivered ([MCP set](mcpset-pool.md) FR5), so these names stay
+  valid. Model is a Select, effort a Segmented.
 - *Defaults:* model Select (aliases, then IDs from Account Pool endpoints), effort Segmented, and
   "Starting point. Users can change both in a session. Policy caps apply."
 - *Test & history:* test prompts, a workspace Select, Run, result cards; revisions, a diff Dialog,
@@ -494,7 +504,7 @@ how workspace users see what applies to them (US10).
 | P1 | Instructions, model and effort; drafts and publish; drop-in delivery to Docker targets; assignment at create, later and in bulk; editor preview | Foundation F2, F5 and A3. 🔬 Q5, Q6 |
 | P2 | Output styles and subagents; Kubernetes delivery; policy and endpoint checks (A7) | Foundation F3; Settings & policies S2. 🔬 Q3, Q4 |
 | P3 | History and diff, restore, stop rollout, pins, archiving; testing a draft in the terminal; Portal MCP rules (§14) | |
-| P4 | Session reports; workspace preview with user and repository files; "Loaded" status; import from workspace | Foundation F4; A6 or the persona `SessionStart` entry. 🔬 Q7, Monitoring Q2 |
+| P4 | Session reports; workspace preview with user and repository files; "Loaded" status; import from workspace | Foundation F4; A6 or the persona `SessionStart` entry. 🔬 Q7 |
 | P5 | Chat prompt; test prompts | Chat sessions C5; Settings & policies Q5. 🔬 Q14 |
 | P6 | Instruction sources; import and export; side-by-side test comparison | |
 
@@ -521,15 +531,16 @@ how workspace users see what applies to them (US10).
 
 Remove `enabledPlugins`, and drop personas from §7's marketplace paragraph and from F6: there's no
 persona plugin in v1. `claudeMd` and `agent` are reserved for Persona; no fragment writes them in
-v1.
+v1. Other pools ship always-on guidance as skills in their own plugins
+([Browser & desktop](browser-desktop-pool.md) A12).
 
 | ID | Section | Proposed change |
 | --- | --- | --- |
-| A2 | §7, a third rule | Default model and effort come only from the persona's `model` and `effortLevel`. No pool sets `ANTHROPIC_MODEL` or `CLAUDE_CODE_EFFORT_LEVEL` in `env`, not even empty: the first may override the persona's model 🔬 (Q6), the second outranks `/effort`. |
+| A2 | §7, a third rule | Default model and effort come only from the persona's `model` and `effortLevel`. No pool sets `ANTHROPIC_MODEL` or `CLAUDE_CODE_EFFORT_LEVEL` in `env`, not even empty: the first overrides the persona's model ✅ (cross-pool lab, Q6), the second outranks `/effort`. Account Pool's M3 build writes `ANTHROPIC_MODEL` from a custom host's default slot; its Q21 decides when that stops. |
 | A3 | §5, §6.3 | Adopt [Skillset](skillset-pool.md) A3 (`pool_revisions.status`, `rollout_paused_at`). Personas use `draft` and `deliverable` only, and a persona test (§13.2) may pin a `draft` without it becoming current. "Stop rollout" sets `rollout_paused_at`. A persona restore skips the rollout limit, like revocation, but not pins. |
 | A4 | §9 | Create `/etc/claude-code/.claude/agents` and `/etc/claude-code/.claude/output-styles`, empty, in the image, at the first delivery to existing Docker workspaces, and in `sync` on Kubernetes, whose `emptyDir` hides the image's folders. |
 | A5 | §5 | `pools.default_for_new` (at most one per type) and `pools.archived_at` (§14). |
-| A6 | §7, §8 | One session-start record. Monitoring registers `hooks.SessionStart` (its §10.1) and accepts one shared entry (its A8). Proposal: the foundation base drop-in `00-claudepilot-base.json` ([Portal MCP](portal-mcp.md) A1) owns `SessionStart` and runs the foundation's `session-event`. It appends `{id, at, session_id, source, revisions, model, permission_mode, session_title}` to `outbox/sessions.jsonl` in every monitoring mode, then calls `monitor-event` where monitoring is on. The outbox types `sessions` and `persona` are capped at 256 KB each. 🔬 Monitoring Q2, whether hook arrays combine across drop-ins, also decides the persona's `InstructionsLoaded` entry. |
+| A6 | §7, §8 | One session-start record for every pool. The foundation base drop-in `00-claudepilot-base.json` ([Portal MCP](portal-mcp.md) A1) carries a `hooks.SessionStart` entry running the foundation's `session-event`, which prints nothing and appends `{id, at, session_id, source, revisions, model, permission_mode, session_title}` to `outbox/sessions.jsonl` in every monitoring mode. Hook arrays from two drop-ins both ran ✅ (cross-pool lab; Monitoring A3), so each owner keeps its own entries in its own drop-in: Monitoring its `SessionStart` entry (its §10.1), Persona its `InstructionsLoaded` entry. Persona's own `SessionStart` entry goes once this lands. The outbox types `sessions` and `persona` are capped at 256 KB each. |
 | A7 | §6.1 | Cross-pool compile inputs: the persona fragment receives the workspace's effective `availableModels` and `maxEffortLevel`, its Account Pool endpoint's model slots and model list, and its Claude Code version. A change to any of them recompiles it and changes the desired hash. |
 | A8 | §10 | The persona editor is a page (Sections on desktop, PageTabs on phones), as in Settings & policies amendment 8. Pool pages may offer Archive instead of Delete. A Configuration row may add a "Loaded" status and a Preview action, with details in a Dialog (a sheet on phones). |
 
@@ -537,10 +548,10 @@ v1.
 
 | PRD | Change |
 | --- | --- |
-| [Account Pool](account-pool.md) | §10.1 names its model variables. For custom hosts it always writes `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, with empty slots taking FR1's default slot, so Claude Code's default alias resolves to a model the host serves. It never writes `ANTHROPIC_MODEL`; with no persona, nobody writes `model`. It keeps each endpoint's latest `GET /v1/models` IDs for A7. Until this lands, workspaces whose drop-in sets `ANTHROPIC_MODEL` show "Persona model ignored here: Account Pool sets ANTHROPIC_MODEL". |
+| [Account Pool](account-pool.md) | §10.1 names its model variables. For custom hosts it always writes `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, with empty slots taking FR1's default slot, so Claude Code's default alias resolves to a model the host serves. It never writes `ANTHROPIC_MODEL`; with no persona, nobody writes `model`. It keeps each endpoint's latest `GET /v1/models` IDs for A7. Until this lands, workspaces whose drop-in sets `ANTHROPIC_MODEL` show "Persona model ignored here: Account Pool sets ANTHROPIC_MODEL". Open as Account Pool Q21, since its M3 build writes it. |
 | [Portal MCP](portal-mcp.md) | On pool types with drafts, `pool_create` and `pool_update` return `{revision, status: "draft", publish_url}`. Publishing a persona joins its §13.4 list (UI-only), and `pool_delete` archives a persona (§14). |
 | [Settings & policies](settings-policies.md) | §11.4 gains persona retention: session reports 30 days, test runs 14 days. Per-subagent permission modes, if wanted later, are a Settings & policies setting, not a persona field. |
-| [Monitoring](monitoring-dashboard.md) | Shows the §17 persona metrics; its A8 follows A6. |
+| [Monitoring](monitoring-dashboard.md) | Shows the §17 persona metrics. Its A3 (hooks are list keys) is adopted: A6 no longer asks for one `SessionStart` owner. |
 | [Chat sessions](chat-sessions.md) | Its A8 is adopted in §10.3 and §13.2. Also: never pass `--bare` or `--system-prompt`; delete `persona_test` sessions when their test ends or after 24 hours, and leave them out of the Sessions list. |
 
 ## 21. Open questions
@@ -552,8 +563,8 @@ v1.
 | Q3 | 🔬 Does Claude Code watch `/etc/claude-code/.claude/agents/` live? The docs list only the user and project folders. | Sandbox test |
 | Q4 | 🔬 Does a managed `outputStyle` override a user's `/output-style` choice, in running and new sessions? | Sandbox test |
 | Q5 | 🔬 Do managed `model` and `effortLevel` act as per-session defaults that `/model` and `/effort` override, with each new session starting on them again? | Sandbox test |
-| Q6 | 🔬 Does `ANTHROPIC_MODEL` in `env` outrank the `model` setting on 2.1.296, and does an empty value count as unset? Decides A2 and the Account Pool change (§20). | Sandbox test |
-| Q7 | 🔬 What do `InstructionsLoaded` and `SessionStart` receive on 2.1.296 (fields, load reasons, `source` values), and does `InstructionsLoaded` list the managed CLAUDE.md? | Sandbox test |
+| Q6 | Partly answered ✅ (cross-pool lab): `ANTHROPIC_MODEL` in managed `env` outranks the managed `model` (`claude-haiku-4-5` won over `sonnet`), and `ANTHROPIC_DEFAULT_SONNET_MODEL` resolved the `sonnet` alias to the custom name. 🔬 Does an empty value count as unset? Decides A2 and Account Pool Q21. | Sandbox test |
+| Q7 | 🔬 What do `InstructionsLoaded` and `SessionStart` receive on 2.1.296 (fields, load reasons, `source` values), and does `InstructionsLoaded` list the managed CLAUDE.md file? In print mode it fired for `~/.claude/CLAUDE.md` and the project CLAUDE.md but never for an inline managed `claudeMd` ✅ (cross-pool lab); if it skips the file too, "Loaded" comes from A6's start record. | Sandbox test |
 | Q8 | 🔬 Do subagents receive the managed CLAUDE.md unless `omitClaudeMd: true`? | Sandbox test |
 | Q9 | 🔬 Does `/doctor prompt-audit` run non-interactively? | Sandbox test |
 | Q10 | Answered for DinD: `cp-session` over `docker exec` carries stream-json, and one-shot runs drain and exit ✅ (Chat sessions A8). The Kubernetes transport is Chat sessions Q1. | Chat sessions spike |
