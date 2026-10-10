@@ -9,4 +9,13 @@ else
   echo "post-start: no gh token from host; run 'gh auth login' inside the container" >&2
 fi
 
+# The repo's .npmrc reads @isnanme packages from GitHub Packages with NODE_AUTH_TOKEN: take it
+# from gh in every new shell, so `npm install` works right after a rebuild.
+npm_auth='export NODE_AUTH_TOKEN="$(gh auth token 2>/dev/null)"'
+for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  if [ -f "$rc" ] && ! grep -qF "$npm_auth" "$rc"; then
+    printf '\n# claudepilot: GitHub Packages auth for npm\n%s\n' "$npm_auth" >> "$rc"
+  fi
+done
+
 bash "$(dirname "$0")/docker-contexts.sh"
