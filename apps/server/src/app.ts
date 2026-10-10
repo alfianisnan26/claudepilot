@@ -5,11 +5,16 @@ import { AppError, codeForStatus, isAppError, success } from '@isnanme/core';
 import {
   API,
   type AdminState,
+  type BulkAddAccountsRequest,
+  type CreateAccountRequest,
   type CreateWorkspaceRequest,
+  type EndpointRequest,
   type LoginRequest,
   type RotateCodeRequest,
   type SessionStatus,
   type SetEnabledRequest,
+  type SystemStatus,
+  type UpdateAccountRequest,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -18,9 +23,11 @@ import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import type { AccountsService } from './accounts/service.js';
 import { config } from './config.js';
 import type { Portal } from './portal.js';
 import { RateLimiter } from './rateLimit.js';
+import type { Store } from './store/store.js';
 import type { Workspaces } from './workspaces/manager.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
@@ -36,7 +43,13 @@ async function body<T>(c: Context<Env>): Promise<Partial<T>> {
   }
 }
 
-export function createApp(portal: Portal, workspaces: Workspaces, { serveWeb }: { serveWeb: boolean }) {
+export function createApp(
+  portal: Portal,
+  workspaces: Workspaces,
+  store: Store,
+  accounts: AccountsService,
+  { serveWeb }: { serveWeb: boolean },
+) {
   const app = new Hono<Env>();
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
   const { cookie, ttlMs } = config.session;
@@ -119,6 +132,26 @@ export function createApp(portal: Portal, workspaces: Workspaces, { serveWeb }: 
     console.log(`[portal] sign-in ${enabled ? 'enabled' : 'disabled'}`);
     return state(c);
   });
+  const system = (c: Context<Env>) => {
+    const backups = store.listBackups();
+    return c.json(
+      success<SystemStatus>({
+        portalId: store.portalId,
+        schemaVersion: store.schemaVersion,
+        trust: store.trust,
+        resumable: store.resumable,
+        lastBackupAt: backups[0]?.at.toISOString() ?? null,
+        backups: backups.length,
+      }),
+    );
+  };
+  admin.get('/system', system);
+  admin.post('/system/resume', (c) => {
+    if (!store.resumable) throw new AppError('CONFLICT', 'Nothing to resume: fix the reasons shown first.');
+    store.resume();
+    console.log('[store] delivery resumed by an admin');
+    return system(c);
+  });
   app.route('/api/admin', admin);
 
   const ws = new Hono<Env>();
@@ -144,6 +177,30 @@ export function createApp(portal: Portal, workspaces: Workspaces, { serveWeb }: 
     return c.json(success({ ok: true }));
   });
   app.route('/api/workspaces', ws);
+
+  const acc = new Hono<Env>();
+  acc.use(requireSession);
+  acc.get('/', (c) => c.json(success(accounts.overview())));
+  acc.post('/', async (c) => c.json(success(await accounts.create(await body<CreateAccountRequest>(c))), 201));
+  acc.post('/bulk', async (c) => c.json(success(accounts.bulkAdd(await body<BulkAddAccountsRequest>(c)))));
+  acc.patch('/:id', async (c) => c.json(success(await accounts.update(c.req.param('id'), await body<UpdateAccountRequest>(c)))));
+  acc.post('/:id/check', async (c) => c.json(success(await accounts.check(c.req.param('id')))));
+  acc.delete('/:id', (c) => {
+    accounts.remove(c.req.param('id'));
+    return c.json(success({ ok: true }));
+  });
+  app.route('/api/accounts', acc);
+
+  const ep = new Hono<Env>();
+  ep.use(requireSession);
+  ep.post('/', async (c) => c.json(success(accounts.createEndpoint(await body<EndpointRequest>(c))), 201));
+  ep.patch('/:id', async (c) => c.json(success(accounts.updateEndpoint(c.req.param('id'), await body<EndpointRequest>(c)))));
+  ep.get('/:id/models', async (c) => c.json(success(await accounts.endpointModels(c.req.param('id')))));
+  ep.delete('/:id', (c) => {
+    accounts.removeEndpoint(c.req.param('id'));
+    return c.json(success({ ok: true }));
+  });
+  app.route('/api/endpoints', ep);
 
   app.all('/api/*', () => {
     throw new AppError('NOT_FOUND');

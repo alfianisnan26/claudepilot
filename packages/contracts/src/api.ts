@@ -23,6 +23,21 @@ export interface AdminState {
   signedInAt: string;
 }
 
+/** Whether the portal trusts its own state enough to change workspaces (foundation PRD §6.5). */
+export type TrustState = 'ok' | 'locked' | 'frozen';
+
+/** `GET /api/admin/system`: the portal's database, secret key and backups. */
+export interface SystemStatus {
+  portalId: string | null;
+  schemaVersion: number | null;
+  trust: { state: TrustState; reasons: { code: string; message: string }[] };
+  /** "Resume delivery" can clear the freeze (a restore or an admin pause). */
+  resumable: boolean;
+  /** ISO time of the newest backup, any kind. */
+  lastBackupAt: string | null;
+  backups: number;
+}
+
 export interface LoginRequest {
   code: string;
 }
@@ -43,4 +58,6 @@ export const API = {
   adminState: '/api/admin/state',
   rotateCode: '/api/admin/code',
   enabled: '/api/admin/enabled',
+  system: '/api/admin/system',
+  resumeDelivery: '/api/admin/system/resume',
 } as const;

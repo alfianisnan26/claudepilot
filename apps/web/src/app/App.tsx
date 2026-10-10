@@ -2,6 +2,7 @@ import { ActivityBar, initViewportFix, ThemeProvider, ToastProvider, UiStringsPr
 import { useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router';
 import { AppShell } from '@/components/AppShell';
+import { AccountsPage } from '@/features/accounts/AccountsPage';
 import { AccessPage } from '@/features/admin/AccessPage';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { ShellPage } from '@/features/workspaces/ShellPage';
@@ -49,6 +50,7 @@ function AppRoutes() {
       >
         <Route index element={<Navigate to={HOME} replace />} />
         <Route path="workspaces" element={<WorkspacesPage />} />
+        <Route path="accounts" element={<AccountsPage />} />
         <Route path="access" element={<AccessPage />} />
       </Route>
       {/* Full screen, outside the app frame: the terminal wants every pixel. */}

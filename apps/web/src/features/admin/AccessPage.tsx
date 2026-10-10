@@ -18,6 +18,7 @@ import { api, errorText } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { CustomCodeDialog } from './CustomCodeDialog';
+import { StorageSection } from './StorageSection';
 
 const SOURCE: Record<CodeSource, { label: string; tone: BadgeTone }> = {
   env: { label: 'From env', tone: 'neutral' },
@@ -162,6 +163,8 @@ export function AccessPage() {
               />
             </Card>
           </Section>
+
+          <StorageSection />
 
           <Section title="Session">
             <Card>

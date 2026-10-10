@@ -10,6 +10,8 @@ export const config = {
   port: Number(env('PORTAL_PORT') ?? 3000),
   /** Fixed server code; when unset one is generated at startup. */
   serverCode: env('PORTAL_SERVER_CODE'),
+  /** Encrypts stored secrets: 32 random bytes in base64url, given directly or as a file. */
+  secretKey: { value: env('PORTAL_SECRET_KEY'), file: env('PORTAL_SECRET_KEY_FILE') },
   /** Repo root, web app source and its build output, and where the portal keeps its own files. */
   paths: {
     root,

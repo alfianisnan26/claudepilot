@@ -24,7 +24,9 @@
     "KUBECONFIG": "/home/node/.host-secrets/kubeconfig",
     // Default Claude Code config (login, sessions, memory) lives on the profiles volume
     // so it survives rebuilds. `claude-as <profile>` still overrides this.
-    "CLAUDE_CONFIG_DIR": "/home/node/.claude-profiles/default"
+    "CLAUDE_CONFIG_DIR": "/home/node/.claude-profiles/default",
+    // Encrypts the portal's stored secrets; created on the Mac by initialize.sh (never in the repo).
+    "PORTAL_SECRET_KEY_FILE": "/home/node/.host-secrets/portal_secret_key"
   },
   "mounts": [
     "source=claudepilot-claude-profiles,target=/home/node/.claude-profiles,type=volume",

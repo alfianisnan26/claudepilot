@@ -8,12 +8,14 @@
     "packages/*"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
     "dev": "npm run dev -w @portal/server",
     "build": "npm run build -w @portal/web && npm run build -w @portal/server",
     "start": "npm run start -w @portal/server",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "portal": "npm run portal -w @portal/server --"
   }
 }
