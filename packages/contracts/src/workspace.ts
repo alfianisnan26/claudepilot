@@ -81,6 +81,11 @@ export const WORKSPACE_API = {
   claudeLogout: (id: string) => `/api/workspaces/${id}/claude-logout`,
 } as const;
 
+/** `POST …/claude-login` body: `sso` for organizations that sign in through their identity provider. */
+export interface ClaudeLoginRequest {
+  sso?: boolean;
+}
+
 /** `POST …/claude-login`: Claude Code's sign-in link, on claude.com. */
 export interface ClaudeLoginStart {
   url: string;

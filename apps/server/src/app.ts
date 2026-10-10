@@ -23,6 +23,7 @@ import {
   type Workspace,
   type WorkspaceDeliveryState,
   type LiveTopic,
+  type ClaudeLoginRequest,
   type ClaudeLoginStart,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
@@ -259,7 +260,11 @@ export function createApp(
       throw new AppError('CONFLICT', 'This workspace uses its account pool’s keys. Unassign the pool to sign in with your own Claude account.');
     return [target, name] as const;
   };
-  ws.post('/:target/:name/claude-login', async (c) => c.json(success<ClaudeLoginStart>(await logins.start(...ownSignIn(c)))));
+  ws.post('/:target/:name/claude-login', async (c) => {
+    const [target, name] = ownSignIn(c);
+    const req = (await c.req.json().catch(() => ({}))) as Partial<ClaudeLoginRequest> | null;
+    return c.json(success<ClaudeLoginStart>(await logins.start(target, name, { sso: req?.sso === true })));
+  });
   ws.post('/:target/:name/claude-login/code', async (c) => {
     const { code } = await body<{ code: string }>(c);
     await logins.submit(...ownSignIn(c), code);

@@ -64,10 +64,13 @@ export class ClaudeLogins {
 
   constructor(private readonly workspaces: Workspaces) {}
 
-  async start(target: string, name: string): Promise<{ url: string }> {
+  /** `sso`: Claude Code's single sign-on flow, for organizations that sign in through their identity provider. */
+  async start(target: string, name: string, opts: { sso?: boolean } = {}): Promise<{ url: string }> {
     const id = `${target}/${name}`;
     await this.cancel(target, name);
-    const exec = await this.workspaces.exec(target, name, ['sh', '-c', `echo "cp-pid:$$"; exec timeout ${LOGIN_LIMIT_S} claude auth login --claudeai`]);
+    // Options go in as arguments ("$@"), never through the shell's parsing.
+    const args = ['--claudeai', ...(opts.sso ? ['--sso'] : [])];
+    const exec = await this.workspaces.exec(target, name, ['sh', '-c', `echo "cp-pid:$$"; exec timeout ${LOGIN_LIMIT_S} claude auth login "$@"`, 'sh', ...args]);
     const login: Login = {
       exec,
       pid: null,
@@ -97,7 +100,7 @@ export class ClaudeLogins {
       await this.cancel(target, name);
       throw new AppError('SERVICE_UNAVAILABLE', `Claude Code didn’t start its sign-in: ${why}`);
     }
-    console.log(`[workspaces] Claude sign-in started in ${id}`);
+    console.log(`[workspaces] Claude sign-in started in ${id}${opts.sso ? ' (SSO)' : ''}`);
     return { url };
   }
 

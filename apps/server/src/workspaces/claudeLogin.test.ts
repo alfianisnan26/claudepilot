@@ -52,9 +52,18 @@ test('a sign-in shows Claude Code’s link, and finishes when Claude Code accept
   const fake = fakeWorkspaces((code, s) => (code === 'good-code-123' ? (s.out('Login successful.\n'), s.exit(0)) : undefined));
   const logins = new ClaudeLogins(fake.workspaces);
   assert.deepEqual(await logins.start('docker', 'api-dev'), { url: LINK });
-  assert.match(fake.commands[0]!.join(' '), /timeout 900 claude auth login --claudeai/);
+  assert.match(fake.commands[0]![2]!, /exec timeout 900 claude auth login "\$@"$/);
+  assert.deepEqual(fake.commands[0]!.slice(3), ['sh', '--claudeai']);
   await logins.submit('docker', 'api-dev', 'good-code-123');
   await assert.rejects(logins.submit('docker', 'api-dev', 'good-code-123'), /has ended/);
+});
+
+test('single sign-on passes --sso to Claude Code as an argument', async () => {
+  const fake = fakeWorkspaces(() => undefined);
+  const logins = new ClaudeLogins(fake.workspaces);
+  await logins.start('docker', 'api-dev', { sso: true });
+  assert.deepEqual(fake.commands[0]!.slice(3), ['sh', '--claudeai', '--sso']);
+  await logins.cancel('docker', 'api-dev');
 });
 
 test('a rejected code can be pasted again; the error never repeats the code', async () => {
