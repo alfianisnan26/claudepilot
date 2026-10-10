@@ -84,6 +84,15 @@ export const WORKSPACE_API = {
 /** `POST …/claude-login` body: `sso` for organizations that sign in through their identity provider. */
 export interface ClaudeLoginRequest {
   sso?: boolean;
+  /** Prefill the email on Claude's sign-in page. */
+  email?: string;
+}
+
+/** `GET …/claude-login`: Claude Code's own sign-in status for a workspace (never the credential). */
+export interface ClaudeAuthStatus {
+  loggedIn: boolean;
+  /** Claude Code's `authMethod`: `claudeai`, `console`, `none`, … */
+  method: string;
 }
 
 /** `POST …/claude-login`: Claude Code's sign-in link, on claude.com. */

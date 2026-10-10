@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ClaudeLogins, cleanCode, signInLink } from './claudeLogin.js';
+import { ClaudeLogins, cleanCode, cleanEmail, signInLink } from './claudeLogin.js';
 import type { Workspaces } from './manager.js';
 import type { ExecSession } from './runtime.js';
 
@@ -17,6 +17,12 @@ test('only https links on Anthropic hosts are shown', () => {
 test('codes are one line of the characters the callback page uses', () => {
   assert.equal(cleanCode('  abcDEF123_-.~#state99  '), 'abcDEF123_-.~#state99');
   for (const bad of ['', 'short', 'two\nlines-0000', 'has space 000', 42]) assert.throws(() => cleanCode(bad), /whole code/);
+});
+
+test('emails are prefilled only when they look like an address', () => {
+  assert.equal(cleanEmail('me@example.com'), 'me@example.com');
+  assert.equal(cleanEmail('  Dev.User@corp.example  '), 'Dev.User@corp.example');
+  for (const bad of ['', 'nope', 'a@', '@b', 'a b@c', 42, '"x"@y']) assert.equal(cleanEmail(bad), null);
 });
 
 /** A fake `claude auth login`: answers the code with `answer`, and records every command run. */
@@ -77,6 +83,40 @@ test('a rejected code can be pasted again; the error never repeats the code', as
   await logins.start('docker', 'api-dev');
   await assert.rejects(logins.submit('docker', 'api-dev', 'typo-code-999'), (e: Error) => /Invalid code \[code\]/.test(e.message) && !e.message.includes('typo-code-999'));
   await logins.submit('docker', 'api-dev', 'right-code-1');
+});
+
+test('status reads Claude Code’s auth status as status only, never the credential', async () => {
+  const outputs: Record<string, string> = {
+    'claude auth status --json': '{"loggedIn":true,"authMethod":"claudeai","apiProvider":"firstParty"}',
+  };
+  const workspaces = {
+    exec: async (_t: string, _n: string, command: string[]): Promise<ExecSession> => {
+      const data: ((b: Buffer) => void)[] = [];
+      const exits: ((c: number | null) => void)[] = [];
+      setTimeout(() => {
+        const out = outputs[command.join(' ')];
+        if (out) data.forEach((fn) => fn(Buffer.from(out)));
+        exits.forEach((fn) => fn(out ? 0 : 1));
+      }, 1);
+      return { write: () => undefined, close: () => undefined, onData: (fn) => void data.push(fn), onExit: (fn) => void exits.push(fn) };
+    },
+  } as unknown as Workspaces;
+  const logins = new ClaudeLogins(workspaces);
+  assert.deepEqual(await logins.status('docker', 'api-dev'), { loggedIn: true, method: 'claudeai' });
+});
+
+test('status is signed-out when Claude Code says so or its output is unreadable', async () => {
+  const reply = (out: string) =>
+    ({
+      exec: async (): Promise<ExecSession> => {
+        const data: ((b: Buffer) => void)[] = [];
+        const exits: ((c: number | null) => void)[] = [];
+        setTimeout(() => (data.forEach((fn) => fn(Buffer.from(out))), exits.forEach((fn) => fn(1))), 1);
+        return { write: () => undefined, close: () => undefined, onData: (fn) => void data.push(fn), onExit: (fn) => void exits.push(fn) };
+      },
+    }) as unknown as Workspaces;
+  assert.deepEqual(await new ClaudeLogins(reply('{"loggedIn":false,"authMethod":"none"}')).status('docker', 'x'), { loggedIn: false, method: 'none' });
+  assert.deepEqual(await new ClaudeLogins(reply('command not found')).status('docker', 'x'), { loggedIn: false, method: 'unknown' });
 });
 
 test('cancelling stops the waiting sign-in in the workspace', async () => {

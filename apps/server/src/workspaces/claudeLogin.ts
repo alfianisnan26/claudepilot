@@ -1,4 +1,5 @@
 import { AppError } from '@isnanme/core';
+import type { ClaudeAuthStatus } from '@portal/contracts';
 import type { Workspaces } from './manager.js';
 import type { ExecSession } from './runtime.js';
 
@@ -23,6 +24,12 @@ export function signInLink(output: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Prefills the email on Claude's sign-in page (optional). A plain address; anything odd is dropped. */
+export function cleanEmail(input: unknown): string | null {
+  const email = typeof input === 'string' ? input.trim() : '';
+  return /^[^\s@"']{1,128}@[^\s@"']{1,128}$/.test(email) ? email : null;
 }
 
 /** The code Anthropic's page shows: one line of letters, digits and a few separators. */
@@ -65,11 +72,12 @@ export class ClaudeLogins {
   constructor(private readonly workspaces: Workspaces) {}
 
   /** `sso`: Claude Code's single sign-on flow, for organizations that sign in through their identity provider. */
-  async start(target: string, name: string, opts: { sso?: boolean } = {}): Promise<{ url: string }> {
+  async start(target: string, name: string, opts: { sso?: boolean; email?: string | null } = {}): Promise<{ url: string }> {
     const id = `${target}/${name}`;
     await this.cancel(target, name);
     // Options go in as arguments ("$@"), never through the shell's parsing.
-    const args = ['--claudeai', ...(opts.sso ? ['--sso'] : [])];
+    const email = cleanEmail(opts.email);
+    const args = ['--claudeai', ...(opts.sso ? ['--sso'] : []), ...(email ? ['--email', email] : [])];
     const exec = await this.workspaces.exec(target, name, ['sh', '-c', `echo "cp-pid:$$"; exec timeout ${LOGIN_LIMIT_S} claude auth login "$@"`, 'sh', ...args]);
     const login: Login = {
       exec,
@@ -134,6 +142,19 @@ export class ClaudeLogins {
     // Closing stdin doesn't end `claude auth login`: stop it by its PID (the `timeout` wrapping it).
     if (!login.exited && login.pid) await this.#run(target, name, ['kill', String(login.pid)]).catch(() => undefined);
     login.exec.close();
+  }
+
+  /** Claude Code's own `claude auth status` (status only, never the credential). */
+  async status(target: string, name: string): Promise<ClaudeAuthStatus> {
+    const r = await this.#run(target, name, ['claude', 'auth', 'status', '--json']);
+    const brace = r.output.indexOf('{');
+    if (brace < 0) return { loggedIn: false, method: 'unknown' };
+    try {
+      const j = JSON.parse(r.output.slice(brace, r.output.lastIndexOf('}') + 1)) as { loggedIn?: unknown; authMethod?: unknown };
+      return { loggedIn: j.loggedIn === true, method: typeof j.authMethod === 'string' ? j.authMethod : 'unknown' };
+    } catch {
+      return { loggedIn: false, method: 'unknown' };
+    }
   }
 
   /** `claude auth logout` in the workspace. */
