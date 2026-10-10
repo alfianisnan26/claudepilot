@@ -11,3 +11,9 @@ export function timeAgo(iso: string, now = Date.now()): string {
   if (abs < 86400) return relative.format(Math.round(s / 3600), 'hour');
   return relative.format(Math.round(s / 86400), 'day');
 }
+
+export function formatBytes(n: number): string {
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  if (n < 1024 ** 3) return `${Math.round(n / 1024 ** 2)} MB`;
+  return `${(n / 1024 ** 3).toFixed(1)} GB`;
+}

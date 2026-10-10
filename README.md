@@ -53,7 +53,33 @@ Environment variables (see [.env.example](.env.example)):
 | `PORTAL_HOST` | `0.0.0.0` | Bind address. |
 | `PORTAL_PORT` | `3000` | Port. |
 
-Codes are letters and digits, at least 6. Case, spaces and dashes are ignored when signing in.
+Codes are exactly 8 letters and digits (one sign-in box each, shown as `XXXX-XXXX`). Case, spaces and
+dashes are ignored. A `.env` at the repo root is loaded in dev.
+
+## Workspaces
+
+Shell boxes with Claude Code, git and gh ([images/workspace](images/workspace/Dockerfile)), managed
+from the Workspaces page: create, start, stop, remove, live CPU/memory, and a browser terminal.
+
+Targets (each shows up when reachable):
+
+| Target | Where | Runs a workspace as |
+| --- | --- | --- |
+| `docker` | `PORTAL_DOCKER_SOCKET` (`/var/run/docker.sock`; in the devcontainer, its DinD daemon) | container `claudepilot-<name>` + volume `claudepilot-<name>-home` |
+| `docker-host` | `PORTAL_DOCKER_HOST_SOCKET` (`/var/run/docker-host.sock`; the Mac's Docker Desktop) | same |
+| `kubernetes` | current kubeconfig context, namespace `PORTAL_K8S_NAMESPACE` (`claudepilot-workspaces`) | Deployment `ws-<name>` (scaled 1/0 to start/stop) + PVC `ws-<name>-home` |
+
+- The runtimes are the record: workspaces are found by label, so a portal restart loses nothing
+  (except a create still in progress).
+- `/home/node` persists. On Docker a fresh volume is seeded from the image; on Kubernetes an init
+  container copies it in once.
+- Docker targets build `PORTAL_WORKSPACE_IMAGE` (`claudepilot-workspace:latest`) from
+  `images/workspace` the first time (a few minutes). Kubernetes pulls `PORTAL_K8S_IMAGE`
+  (`ghcr.io/alfianisnan26/claudepilot-workspace:latest`), so that image has to be pushed to a registry
+  the cluster can reach; set `PORTAL_K8S_IMAGE_PULL_SECRET` for a private one. Also:
+  `PORTAL_K8S_STORAGE` (`10Gi`), `PORTAL_K8S_STORAGE_CLASS`, `PORTAL_K8S_ENABLED=false` to turn it off.
+- The shell is a WebSocket at `/api/workspaces/<target>/<name>/shell`; it needs a session cookie and a
+  same-origin `Origin`.
 
 ## Behaviour
 

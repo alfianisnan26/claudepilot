@@ -5,6 +5,7 @@ import { AppError, codeForStatus, isAppError, success } from '@isnanme/core';
 import {
   API,
   type AdminState,
+  type CreateWorkspaceRequest,
   type LoginRequest,
   type RotateCodeRequest,
   type SessionStatus,
@@ -20,6 +21,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { config } from './config.js';
 import type { Portal } from './portal.js';
 import { RateLimiter } from './rateLimit.js';
+import type { Workspaces } from './workspaces/manager.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
 
@@ -34,7 +36,7 @@ async function body<T>(c: Context<Env>): Promise<Partial<T>> {
   }
 }
 
-export function createApp(portal: Portal, { serveWeb }: { serveWeb: boolean }) {
+export function createApp(portal: Portal, workspaces: Workspaces, { serveWeb }: { serveWeb: boolean }) {
   const app = new Hono<Env>();
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
   const { cookie, ttlMs } = config.session;
@@ -118,6 +120,30 @@ export function createApp(portal: Portal, { serveWeb }: { serveWeb: boolean }) {
     return state(c);
   });
   app.route('/api/admin', admin);
+
+  const ws = new Hono<Env>();
+  ws.use(requireSession);
+  ws.get('/targets', async (c) => c.json(success(await workspaces.targets(c.req.query('fresh') === '1'))));
+  ws.get('/usage', async (c) => c.json(success(await workspaces.usage())));
+  ws.get('/', async (c) => c.json(success(await workspaces.list())));
+  ws.post('/', async (c) => {
+    const created = await workspaces.create(await body<CreateWorkspaceRequest>(c));
+    console.log(`[workspaces] creating ${created.id}`);
+    return c.json(success(created), 202);
+  });
+  ws.post('/:target/:name/start', async (c) => {
+    await workspaces.start(c.req.param('target'), c.req.param('name'));
+    return c.json(success({ ok: true }));
+  });
+  ws.post('/:target/:name/stop', async (c) => {
+    await workspaces.stop(c.req.param('target'), c.req.param('name'));
+    return c.json(success({ ok: true }));
+  });
+  ws.delete('/:target/:name', async (c) => {
+    await workspaces.remove(c.req.param('target'), c.req.param('name'));
+    return c.json(success({ ok: true }));
+  });
+  app.route('/api/workspaces', ws);
 
   app.all('/api/*', () => {
     throw new AppError('NOT_FOUND');

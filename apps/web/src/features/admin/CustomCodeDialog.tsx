@@ -1,5 +1,5 @@
 import { Button, Dialog, TextField } from '@isnanme/ui';
-import { codeProblem, CODE_MIN_LENGTH } from '@portal/contracts';
+import { codeProblem, CODE_LENGTH } from '@portal/contracts';
 import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError } from '@/lib/api';
 
@@ -56,7 +56,7 @@ export function CustomCodeDialog({
       <form onSubmit={submit} noValidate>
         <TextField
           label="New code"
-          hint={`Letters and digits, at least ${CODE_MIN_LENGTH}. Case, spaces and dashes are ignored.`}
+          hint={`Exactly ${CODE_LENGTH} letters and digits. Case, spaces and dashes are ignored.`}
           autoComplete="off"
           autoCapitalize="characters"
           autoCorrect="off"

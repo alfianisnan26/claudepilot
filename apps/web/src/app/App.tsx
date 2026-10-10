@@ -4,6 +4,8 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import { AppShell } from '@/components/AppShell';
 import { AccessPage } from '@/features/admin/AccessPage';
 import { LoginPage } from '@/features/auth/LoginPage';
+import { ShellPage } from '@/features/workspaces/ShellPage';
+import { WorkspacesPage } from '@/features/workspaces/WorkspacesPage';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { HOME } from './nav';
 import { uiStrings } from './strings';
@@ -46,8 +48,18 @@ function AppRoutes() {
         }
       >
         <Route index element={<Navigate to={HOME} replace />} />
+        <Route path="workspaces" element={<WorkspacesPage />} />
         <Route path="access" element={<AccessPage />} />
       </Route>
+      {/* Full screen, outside the app frame: the terminal wants every pixel. */}
+      <Route
+        path="/admin/workspaces/:target/:name/shell"
+        element={
+          <SignedInOnly>
+            <ShellPage />
+          </SignedInOnly>
+        }
+      />
       <Route path="*" element={<Navigate to={HOME} replace />} />
     </Routes>
   );

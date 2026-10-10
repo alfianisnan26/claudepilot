@@ -5,20 +5,25 @@
   "type": "module",
   "description": "Portal backend: Hono on Node; serves the API and the web app",
   "scripts": {
-    "dev": "tsx watch --clear-screen=false --ignore '../web/**' src/index.ts",
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:hono --external:@hono/node-server --external:@isnanme/* --external:vite --outfile=dist/index.js",
+    "dev": "tsx watch --env-file-if-exists=../../.env --clear-screen=false --ignore '../web/**' --ignore '../../node_modules/**' src/index.ts",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:hono --external:@hono/node-server --external:@isnanme/* --external:vite --external:dockerode --external:@kubernetes/client-node --external:ws --outfile=dist/index.js",
     "start": "NODE_ENV=production node dist/index.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.5",
     "@isnanme/core": "^0.1.0",
+    "@kubernetes/client-node": "^2.0.0",
     "@portal/contracts": "*",
-    "hono": "^4.10.1"
+    "dockerode": "^5.0.1",
+    "hono": "^4.10.1",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@isnanme/tsconfig": "^0.1.0",
+    "@types/dockerode": "^4.0.2",
     "@types/node": "^22.18.0",
+    "@types/ws": "^8.18.2",
     "esbuild": "^0.25.10",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",

@@ -4,11 +4,28 @@ import { formatCode } from '@portal/contracts';
 import { createApp } from './app.js';
 import { config } from './config.js';
 import { Portal } from './portal.js';
+import { DockerRuntime } from './workspaces/docker.js';
+import { KubernetesRuntime } from './workspaces/kubernetes.js';
+import { Workspaces } from './workspaces/manager.js';
+import type { Runtime } from './workspaces/runtime.js';
+import { attachShell } from './workspaces/shell.js';
 
 const portal = new Portal(config.serverCode, config.session.ttlMs);
-const app = createApp(portal, { serveWeb: !config.dev });
+const { workspaces: ws } = config;
+const runtimes: Runtime[] = ws.docker.map((d) => new DockerRuntime(d, ws.dockerImage, ws.imageContext));
+if (ws.kubernetes.enabled) {
+  try {
+    runtimes.push(new KubernetesRuntime(ws.kubernetes));
+  } catch (e) {
+    console.error(`[workspaces] kubernetes target off: ${(e as Error).message}`);
+  }
+}
+const workspaces = new Workspaces(runtimes);
+
+const app = createApp(portal, workspaces, { serveWeb: !config.dev });
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
+attachShell(server, portal, workspaces);
 
 if (config.dev) {
   // One port for everything: the API through Hono, the rest through Vite (with HMR on this server).
