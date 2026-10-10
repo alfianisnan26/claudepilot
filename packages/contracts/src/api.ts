@@ -36,6 +36,34 @@ export interface SystemStatus {
   /** ISO time of the newest backup, any kind. */
   lastBackupAt: string | null;
   backups: number;
+  secretKey: {
+    /** Where the key in use came from; null while Locked. */
+    source: 'env' | 'file' | 'panel' | null;
+    /** The database never had a key: "Set up encryption" can create one. */
+    canSetUp: boolean;
+    /** The database has a key the portal doesn't have: "Unlock" with it. */
+    canUnlock: boolean;
+    /**
+     * That key was lost but nothing was ever encrypted with it, so "Start over" can replace it
+     * without losing anything. False as soon as one secret is stored.
+     */
+    canReset: boolean;
+    /** PORTAL_SECRET_KEY_FILE, when set: a key set up or unlocked in the panel is saved there if it's empty. */
+    keyFile: string | null;
+  };
+}
+
+/** `POST /api/admin/system/key/setup`: the new key, shown once. */
+export interface KeySetupResult {
+  key: string;
+  /** The key file it was saved to, or null when it's kept in memory until the portal restarts. */
+  savedTo: string | null;
+  status: SystemStatus;
+}
+
+export interface KeyUnlockResult {
+  savedTo: string | null;
+  status: SystemStatus;
 }
 
 export interface LoginRequest {
@@ -60,4 +88,7 @@ export const API = {
   enabled: '/api/admin/enabled',
   system: '/api/admin/system',
   resumeDelivery: '/api/admin/system/resume',
+  keySetup: '/api/admin/system/key/setup',
+  keyUnlock: '/api/admin/system/key/unlock',
+  keyReset: '/api/admin/system/key/reset',
 } as const;

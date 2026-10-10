@@ -29,6 +29,10 @@ export interface Workspace {
   /** Limits; undefined means none. */
   cpus?: number;
   memoryMb?: number;
+  /** The account pool it uses; null or absent means its own sign-in. */
+  account?: import('./accounts.js').WorkspaceAccountState | null;
+  /** What the portal last delivered into it; absent when nothing was ever delivered. */
+  delivery?: import('./accounts.js').WorkspaceDeliveryState | null;
 }
 
 export interface WorkspaceUsage {
@@ -43,6 +47,8 @@ export interface CreateWorkspaceRequest {
   target: string;
   cpus?: number;
   memoryMb?: number;
+  /** Account pool to assign from the start (no confirmation needed: the workspace has no sign-in yet). */
+  accountPoolId?: string | null;
 }
 
 export const WORKSPACE_NAME_MAX = 40;
@@ -68,4 +74,14 @@ export const WORKSPACE_API = {
   usage: '/api/workspaces/usage',
   /** `/api/workspaces/<target>/<name>` (+ `/start`, `/stop`, `/shell`). */
   one: (id: string) => `/api/workspaces/${id}`,
+  /** Claude Code's own sign-in in the workspace: POST starts it, DELETE cancels it. */
+  claudeLogin: (id: string) => `/api/workspaces/${id}/claude-login`,
+  /** POST `{ code }`: the code the sign-in page showed. */
+  claudeLoginCode: (id: string) => `/api/workspaces/${id}/claude-login/code`,
+  claudeLogout: (id: string) => `/api/workspaces/${id}/claude-logout`,
 } as const;
+
+/** `POST …/claude-login`: Claude Code's sign-in link, on claude.com. */
+export interface ClaudeLoginStart {
+  url: string;
+}

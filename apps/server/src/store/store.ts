@@ -66,10 +66,14 @@ function ensurePrivateDir(dir: string) {
   }
 }
 
+export type KeySource = 'env' | 'file' | 'panel';
+
 export interface StoreOptions {
   dataDir: string;
   /** The portal's secret key, or null when none is configured. */
   secretKey: Buffer | null;
+  /** Where that key came from (shown in the UI). */
+  keySource?: KeySource | null;
   /** Why the configured key couldn't be used (for example, not 32 bytes); reported instead of "not set". */
   keyError?: string;
   migrations?: Migration[];
@@ -92,10 +96,11 @@ export class Store {
   #secrets: SecretBox | null = null;
   #portalId: string | null = null;
   #schemaVersion: number | null = null;
+  #keySource: KeySource | null = null;
 
   private constructor(
     readonly dataDir: string,
-    private readonly opts: Required<Omit<StoreOptions, 'dataDir' | 'secretKey' | 'keyError'>>,
+    private readonly opts: Required<Omit<StoreOptions, 'dataDir' | 'secretKey' | 'keyError' | 'keySource'>>,
   ) {
     this.path = join(dataDir, 'portal.db');
     this.backupsDir = join(dataDir, 'backups');
@@ -108,6 +113,7 @@ export class Store {
       now: options.now ?? (() => new Date()),
     });
     await store.#open(options.secretKey, options.keyError);
+    if (store.#secrets) store.#keySource = options.keySource ?? 'env';
     return store;
   }
 
@@ -115,6 +121,77 @@ export class Store {
     const reasons = [...this.#reasons];
     const frozen = reasons.some((r) => !r.code.startsWith('key-'));
     return { state: reasons.length === 0 ? 'ok' : frozen ? 'frozen' : 'locked', reasons };
+  }
+
+  get keySource(): KeySource | null {
+    return this.#keySource;
+  }
+
+  /** The database has a key check: it was set up with a key, which is the only one that opens it. */
+  get hasKeyCheck(): boolean {
+    return !!this.#metaGet('key_check');
+  }
+
+  /**
+   * Unlocks with a key an admin pasted (kept in memory only). Only the key the database was set up
+   * with is accepted; a database without a key check needs setUpKey instead.
+   */
+  unlock(key: Buffer): void {
+    if (!this.writable) throw new Error('The database is not writable.');
+    const check = this.#metaGet('key_check');
+    if (!check) throw new Error('This database has no key yet. Set up encryption instead.');
+    const box = new SecretBox(key);
+    let ok = false;
+    try {
+      ok = box.open(check, KEY_CHECK_SLOT) === KEY_CHECK_TEXT;
+    } catch {
+      ok = false;
+    }
+    if (!ok) throw new Error(`That key doesn't open this database (it was set up with key ${SecretBox.keyIdOf(check) ?? 'unknown'}).`);
+    this.#secrets = box;
+    this.#keySource = 'panel';
+    this.#reasons = this.#reasons.filter((r) => !r.code.startsWith('key-'));
+  }
+
+  /**
+   * First-time setup from the panel: only for a database that has never had a key. Makes `key`
+   * the database's key. The portal never replaces an existing key by itself (that's forget-secrets).
+   */
+  setUpKey(key: Buffer): void {
+    if (!this.writable) throw new Error('The database is not writable.');
+    if (this.#metaGet('key_check')) throw new Error('This database already has a key. Unlock it with that key.');
+    const box = new SecretBox(key);
+    this.#metaSet('key_check', box.seal(KEY_CHECK_TEXT, KEY_CHECK_SLOT));
+    this.#secrets = box;
+    this.#keySource = 'panel';
+    this.#reasons = this.#reasons.filter((r) => !r.code.startsWith('key-'));
+  }
+
+  /** How many sealed values the database holds (encrypted columns that aren't empty). */
+  get sealedCount(): number {
+    const db = this.#db;
+    if (!db) return 0;
+    return this.opts.encryptedColumns.reduce(
+      (n, c) => n + (db.prepare(`SELECT count(*) AS n FROM ${c.table} WHERE ${c.column} IS NOT NULL`).get() as { n: number }).n,
+      0,
+    );
+  }
+
+  /**
+   * Replaces a lost key that never protected anything: allowed only while Locked and before any
+   * secret is stored, so nothing can be lost. Once a secret exists, only the right key (or
+   * `portal forget-secrets`) gets past Locked.
+   */
+  resetKey(key: Buffer): void {
+    if (!this.writable) throw new Error('The database is not writable.');
+    if (this.#secrets) throw new Error('The portal is unlocked; there is nothing to reset.');
+    if (!this.#metaGet('key_check')) throw new Error('This database has no key yet. Set up encryption instead.');
+    if (this.sealedCount > 0) throw new Error('Secrets are stored with the current key. Unlock with it, or run `portal forget-secrets`.');
+    const box = new SecretBox(key);
+    this.#metaSet('key_check', box.seal(KEY_CHECK_TEXT, KEY_CHECK_SLOT));
+    this.#secrets = box;
+    this.#keySource = 'panel';
+    this.#reasons = this.#reasons.filter((r) => !r.code.startsWith('key-'));
   }
 
   /** Whether "Resume delivery" can clear what's stopping deliveries (other reasons may remain). */
@@ -238,8 +315,8 @@ export class Store {
       this.#reasons.push({
         code: 'key-missing',
         message: check
-          ? 'PORTAL_SECRET_KEY is not set. Secrets stay sealed until the portal starts with the key this database was set up with.'
-          : 'PORTAL_SECRET_KEY is not set. Set it (or PORTAL_SECRET_KEY_FILE) to store secrets.',
+          ? 'The secret key isn’t loaded, so stored secrets stay sealed. Unlock with the key this database was set up with, or start the portal with PORTAL_SECRET_KEY or PORTAL_SECRET_KEY_FILE.'
+          : 'No secret key yet. Set up encryption on the Access page, or start the portal with PORTAL_SECRET_KEY or PORTAL_SECRET_KEY_FILE.',
       });
       return;
     }

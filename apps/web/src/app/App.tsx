@@ -8,6 +8,7 @@ import { LoginPage } from '@/features/auth/LoginPage';
 import { ShellPage } from '@/features/workspaces/ShellPage';
 import { WorkspacesPage } from '@/features/workspaces/WorkspacesPage';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { LiveProvider } from '@/lib/live';
 import { HOME } from './nav';
 import { uiStrings } from './strings';
 
@@ -19,9 +20,11 @@ export function App() {
         <ToastProvider>
           <ActivityBar />
           <AuthProvider>
-            <BrowserRouter>
-              <AppRoutes />
-            </BrowserRouter>
+            <LiveProvider>
+              <BrowserRouter>
+                <AppRoutes />
+              </BrowserRouter>
+            </LiveProvider>
           </AuthProvider>
         </ToastProvider>
       </UiStringsProvider>

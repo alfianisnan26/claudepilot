@@ -1,7 +1,14 @@
+import { existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { getRequestListener } from '@hono/node-server';
-import { formatCode } from '@portal/contracts';
+import { formatCode, type LiveTopic } from '@portal/contracts';
+import { AccountHealthService } from './accounts/health.js';
+import { AccountPools } from './accounts/pools.js';
 import { AccountsService } from './accounts/service.js';
+import { Outbox } from './delivery/outbox.js';
+import { LiveHub } from './live.js';
+import { workspaceView } from './workspaces/view.js';
+import { Reconciler } from './delivery/reconciler.js';
 import { createApp } from './app.js';
 import { config } from './config.js';
 import { JsonFile } from './jsonFile.js';
@@ -10,10 +17,10 @@ import { acquireLock } from './store/lock.js';
 import { loadSecretKey, SecretKeyError } from './store/secretBox.js';
 import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
+import { attachShell, cookie } from './workspaces/shell.js';
 import { KubernetesRuntime } from './workspaces/kubernetes.js';
 import { Workspaces } from './workspaces/manager.js';
 import type { Runtime } from './workspaces/runtime.js';
-import { attachShell } from './workspaces/shell.js';
 
 // One portal per data dir: the database has a single writer.
 await acquireLock(config.paths.data).catch((e: unknown) => {
@@ -23,13 +30,20 @@ await acquireLock(config.paths.data).catch((e: unknown) => {
 
 let secretKey: Buffer | null = null;
 let keyError: string | undefined;
+// A key file that doesn't exist yet (or is empty) just means "no key yet": the panel can set one up.
+const keyFileEmpty = !!config.secretKey.file && !config.secretKey.value && (!existsSync(config.secretKey.file) || statSync(config.secretKey.file).size === 0);
 try {
-  secretKey = loadSecretKey(config.secretKey);
+  secretKey = keyFileEmpty ? null : loadSecretKey(config.secretKey);
 } catch (e) {
   if (!(e instanceof SecretKeyError)) throw e;
   keyError = e.message;
 }
-const store = await Store.open({ dataDir: config.paths.data, secretKey, keyError });
+const store = await Store.open({
+  dataDir: config.paths.data,
+  secretKey,
+  keyError,
+  keySource: config.secretKey.value ? 'env' : config.secretKey.file ? 'file' : null,
+});
 const { trust } = store;
 console.log(
   trust.state === 'ok'
@@ -59,10 +73,44 @@ const workspaces = new Workspaces(runtimes, new JsonFile(`${config.paths.data}/p
 void workspaces.resume().catch((e: unknown) => console.error(`[workspaces] resume failed: ${(e as Error).message}`));
 
 const accounts = new AccountsService(store);
-const app = createApp(portal, workspaces, store, accounts, { serveWeb: !config.dev });
+const pools = new AccountPools(store);
+const health = new AccountHealthService(store);
+accounts.hooks = {
+  changed: (id, why) => pools.accountChanged(id, why),
+  checked: (id, result, manual) => health.fromCheck(id, result, manual),
+  poolsWith: (id) => pools.poolsWith(id),
+};
+const reconciler = new Reconciler(store, (t) => workspaces.runtimeFor(t), () => workspaces.runtimeList(), [pools]);
+pools.reconciler = reconciler;
+health.onChange = (id, why, opts) => pools.accountChanged(id, why, opts);
+health.check = async (id) => void (await accounts.check(id, { manual: false }));
+health.activeAccount = (workspaceId) => pools.activeAccount(workspaceId);
+health.onUnconfirmed = (ids) => ids.forEach((id) => void reconciler.request(id, 'unconfirmed signal'));
+// Failure signals from assigned workspaces: helper runs and StopFailure (Account Pool §11.5).
+const outbox = new Outbox(store, (t) => workspaces.runtimeFor(t));
+outbox.subscribe('account', (workspaceId, events) => health.onSignals(workspaceId, events), () => pools.assignedWorkspaces());
+workspaces.hooks.beforeStop = (id) => outbox.pull(id);
+reconciler.start();
+outbox.start();
+health.start();
+// Live pages (`/api/live`): one socket per tab, fed by every place that changes what they show.
+const view = workspaceView(pools, reconciler);
+const live = new LiveHub(
+  { workspaces: async () => (await workspaces.list()).map(view), usage: () => workspaces.usage() },
+  (req) => !!portal.session(cookie(req, config.session.cookie)),
+);
+const notify = (...topics: LiveTopic[]) => topics.forEach((t) => live.publish(t));
+workspaces.hooks.changed = () => notify('workspaces');
+reconciler.onChange(() => notify('workspaces'));
+accounts.hooks.event = () => notify('accounts');
+health.onEvent = () => notify('accounts');
+pools.onChange = () => notify('accounts', 'workspaces');
+const stopWatching = runtimes.flatMap((r) => (r.watch ? [r.watch(() => notify('workspaces'))] : []));
+const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, { serveWeb: !config.dev, notify });
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
 attachShell(server, portal, workspaces);
+live.attach(server);
 
 if (config.dev) {
   // One port for everything: the API through Hono, the rest through Vite (with HMR on this server).
@@ -102,6 +150,11 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
   process.on(signal, () => {
     server.close();
     clearInterval(backupTimer);
+    reconciler.stop();
+    outbox.stop();
+    health.stop();
+    live.close();
+    for (const stop of stopWatching) stop();
     store.close();
     process.exit(0); // releases the data-dir lock
   });

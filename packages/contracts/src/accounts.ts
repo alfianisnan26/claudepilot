@@ -42,6 +42,20 @@ export type CheckResult =
   | 'unreachable'
   | 'error';
 
+/**
+ * What failover acts on (Account Pool PRD §11.3, §12.2), from probes, checks and admin actions.
+ * `cooling` and `exhausted` end at `until`; the others last until a check or probe succeeds.
+ */
+export type AccountHealthState = 'ok' | 'cooling' | 'exhausted' | 'billing' | 'invalid' | 'attention';
+
+export interface AccountHealth {
+  state: AccountHealthState;
+  until: string | null;
+  /** The provider's message, with the key taken out. */
+  detail: string | null;
+  at: string | null;
+}
+
 export interface Account {
   id: string;
   endpointId: string;
@@ -63,6 +77,7 @@ export interface Account {
     detail: string | null;
     at: string | null;
   };
+  health: AccountHealth;
   createdAt: string;
 }
 
@@ -113,6 +128,73 @@ export interface EndpointRequest {
   allowPrivateNetwork?: boolean;
 }
 
+/** Sticky fill-first: highest-priority healthy account. Sticky spread: the one with the fewest workspaces. */
+export type PoolStrategy = 'fill-first' | 'spread';
+
+export interface AccountPool {
+  id: string;
+  name: string;
+  description: string;
+  endpointId: string;
+  /** In priority order. */
+  members: { accountId: string; enabled: boolean }[];
+  strategy: PoolStrategy;
+  /** Hide /login in assigned workspaces (DISABLE_LOGIN_COMMAND). Off by default. */
+  hideLogin: boolean;
+  revision: number;
+  /** Workspaces assigned to this pool. */
+  workspaces: number;
+  createdAt: string;
+}
+
+export interface AccountPoolRequest {
+  name: string;
+  description?: string;
+  endpointId: string;
+  /** Account IDs in priority order. */
+  members: string[];
+  strategy?: PoolStrategy;
+  hideLogin?: boolean;
+}
+
+export interface AssignAccountPoolRequest {
+  /** Null removes the pool: the workspace goes back to its own sign-in. */
+  poolId: string | null;
+  /** Required for workspaces that already exist: the pool's key overrides any sign-in there (PRD §13). */
+  confirmOverride?: boolean;
+}
+
+/** Which pool and account a workspace uses (Account Pool PRD FR10). */
+export interface WorkspaceAccountState {
+  poolId: string;
+  poolName: string;
+  accountId: string | null;
+  accountName: string | null;
+  /** `active`: has a key. `waiting`: no usable account in the pool. `removing`: unassign in progress. */
+  state: 'active' | 'waiting' | 'removing';
+  /** While waiting: the earliest time an account in the pool is expected back, when known (FR18). */
+  waitingUntil: string | null;
+  /** Why the account last changed (assigned, failover cause, …). */
+  reason: string | null;
+  changedAt: string | null;
+}
+
+export type DeliveryStatus = 'synced' | 'pending' | 'drifted' | 'failed' | 'locked' | 'frozen' | 'unsupported' | 'none';
+
+/** What the portal last delivered into a workspace (foundation PRD §5). */
+export interface WorkspaceDeliveryState {
+  status: DeliveryStatus;
+  reason: string | null;
+  appliedAt: string | null;
+  claudeVersion: string | null;
+}
+
+/** Credentials and settings the user configured themselves, by name only (foundation §6.6). */
+export interface PreflightResult {
+  /** Null when the workspace isn't running, so it couldn't be checked. */
+  findings: string[] | null;
+}
+
 export const ACCOUNT_NAME_MAX = 60;
 
 export const ACCOUNT_API = {
@@ -121,9 +203,17 @@ export const ACCOUNT_API = {
   bulk: '/api/accounts/bulk',
   one: (id: string) => `/api/accounts/${id}`,
   check: (id: string) => `/api/accounts/${id}/check`,
+  /** Admin override (FR19): clear a cooldown or problem state. */
+  clearHealth: (id: string) => `/api/accounts/${id}/clear`,
   endpoints: '/api/endpoints',
   endpoint: (id: string) => `/api/endpoints/${id}`,
   endpointModels: (id: string) => `/api/endpoints/${id}/models`,
+  pools: '/api/account-pools',
+  pool: (id: string) => `/api/account-pools/${id}`,
+  /** `/api/workspaces/<target>/<name>/account` */
+  workspaceAccount: (workspaceId: string) => `/api/workspaces/${workspaceId}/account`,
+  workspacePreflight: (workspaceId: string) => `/api/workspaces/${workspaceId}/preflight`,
+  workspaceAdopt: (workspaceId: string) => `/api/workspaces/${workspaceId}/adopt`,
 } as const;
 
 /** The built-in endpoint; always present, not editable. */

@@ -40,6 +40,11 @@ export class Workspaces {
   readonly #runtimes = new Map<string, Runtime>();
   readonly #pending = new Map<string, Workspace>();
   #checked: { at: number; targets: Promise<WorkspaceTarget[]> } | undefined;
+  /**
+   * `beforeStop`: runs (for at most 5 s) before the portal stops a workspace, such as an outbox pull.
+   * `changed`: the list changed through the portal (a create's progress, start, stop, remove).
+   */
+  hooks: { beforeStop?: (workspaceId: string) => Promise<void>; changed?: () => void } = {};
 
   constructor(
     runtimes: Runtime[],
@@ -163,6 +168,7 @@ export class Workspaces {
     void runtime
       .create({ name, cpus, memoryMb }, (detail) => {
         workspace.detail = detail;
+        this.hooks.changed?.();
       })
       .then(
         () => {
@@ -182,10 +188,12 @@ export class Workspaces {
   #setPending(w: Workspace) {
     this.#pending.set(w.id, w);
     this.#save();
+    this.hooks.changed?.();
   }
 
   #deletePending(id: string) {
     if (this.#pending.delete(id)) this.#save();
+    this.hooks.changed?.();
   }
 
   #save() {
@@ -196,16 +204,41 @@ export class Workspaces {
     }
   }
 
-  start = (target: string, name: string) => this.#run(target, (r) => r.start(name));
-  stop = (target: string, name: string) => this.#run(target, (r) => r.stop(name));
+  async start(target: string, name: string) {
+    try {
+      return await this.#run(target, (r) => r.start(name));
+    } finally {
+      this.hooks.changed?.();
+    }
+  }
+
+  async stop(target: string, name: string) {
+    // Events written just before a stop are pulled first (foundation PRD §8); never blocks a stop long.
+    const pull = this.hooks.beforeStop?.(workspaceId(target, name)).catch(() => undefined);
+    if (pull) await Promise.race([pull, new Promise((r) => setTimeout(r, 5_000).unref())]);
+    try {
+      return await this.#run(target, (r) => r.stop(name));
+    } finally {
+      this.hooks.changed?.();
+    }
+  }
 
   async remove(target: string, name: string) {
     const id = workspaceId(target, name);
     if (this.#pending.get(id)?.status === 'creating')
       throw new AppError('CONFLICT', 'Wait for it to finish creating, then remove it.');
     this.#deletePending(id);
-    await this.#run(target, (r) => r.remove(name));
+    try {
+      await this.#run(target, (r) => r.remove(name));
+    } finally {
+      this.hooks.changed?.();
+    }
     console.log(`[workspaces] removed ${id}`);
+  }
+
+  /** A command in a running workspace, as its user, with stdin open and no terminal. */
+  exec(target: string, name: string, command: string[]) {
+    return this.#run(target, (r) => r.exec(name, command));
   }
 
   async usage(): Promise<WorkspaceUsage[]> {
@@ -225,6 +258,15 @@ export class Workspaces {
 
   shell(target: string, name: string, size: { cols: number; rows: number }): Promise<ShellSession> {
     return this.#run(target, (r) => r.shell(name, size));
+  }
+
+  /** The runtime for a target, if configured (for the delivery engine). */
+  runtimeFor(target: string): Runtime | undefined {
+    return this.#runtimes.get(target);
+  }
+
+  runtimeList(): Runtime[] {
+    return [...this.#runtimes.values()];
   }
 
   #runtime(target: string): Runtime {

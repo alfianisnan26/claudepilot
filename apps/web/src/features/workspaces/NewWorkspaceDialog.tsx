@@ -1,5 +1,5 @@
 import { FormDialog, Select, TextField } from '@isnanme/ui';
-import { WORKSPACE_NAME_MAX, workspaceNameProblem, type CreateWorkspaceRequest, type WorkspaceTarget } from '@portal/contracts';
+import { WORKSPACE_NAME_MAX, workspaceNameProblem, type AccountPool, type CreateWorkspaceRequest, type WorkspaceTarget } from '@portal/contracts';
 import { useEffect, useState } from 'react';
 import { ApiError } from '@/lib/api';
 
@@ -21,11 +21,13 @@ const MEMORY_OPTIONS = [
 export function NewWorkspaceDialog({
   open,
   targets,
+  pools,
   onClose,
   onCreate,
 }: {
   open: boolean;
   targets: WorkspaceTarget[];
+  pools: AccountPool[];
   onClose: () => void;
   onCreate: (body: CreateWorkspaceRequest) => Promise<void>;
 }) {
@@ -33,6 +35,7 @@ export function NewWorkspaceDialog({
   const [target, setTarget] = useState('');
   const [cpus, setCpus] = useState('2');
   const [memory, setMemory] = useState('4096');
+  const [poolId, setPoolId] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -43,6 +46,7 @@ export function NewWorkspaceDialog({
     setTarget(targets.find((t) => t.available)?.id ?? '');
     setCpus('2');
     setMemory('4096');
+    setPoolId('');
     setErrors({});
     setFormError(null);
   }, [open, targets]);
@@ -63,6 +67,7 @@ export function NewWorkspaceDialog({
         target,
         cpus: cpus ? Number(cpus) : undefined,
         memoryMb: memory ? Number(memory) : undefined,
+        accountPoolId: poolId || null,
       });
     } catch (e) {
       if (e instanceof ApiError && e.details && typeof e.details === 'object')
@@ -115,6 +120,14 @@ export function NewWorkspaceDialog({
           }))}
           placeholder="Pick a target"
           error={errors.target}
+        />
+        <Select
+          label="Account pool"
+          value={poolId}
+          onChange={setPoolId}
+          options={[{ value: '', label: 'None (sign in inside the workspace)' }, ...pools.map((p) => ({ value: p.id, label: p.name }))]}
+          hint={poolId ? 'Claude Code starts signed in with the pool’s keys.' : undefined}
+          error={errors.accountPoolId}
         />
         <div className="grid grid-cols-2 gap-3">
           <Select label="CPU" value={cpus} onChange={setCpus} options={CPU_OPTIONS} error={errors.cpus} />

@@ -2,6 +2,7 @@ import { FormDialog, SwitchRow, TextField } from '@isnanme/ui';
 import { ACCOUNT_NAME_MAX, type Account } from '@portal/contracts';
 import { Power } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { SecretField } from '@/components/SecretField';
 import { api, ApiError } from '@/lib/api';
 
 /** Rename, notes, enable/disable, or replace the key. The current key is never shown. */
@@ -63,20 +64,21 @@ export function EditAccountDialog({
         <TextField
           label="Name"
           autoComplete="off"
+          name="key-name"
+          data-1p-ignore=""
+          data-lpignore="true"
+          data-bwignore="true"
+          data-form-type="other"
           maxLength={ACCOUNT_NAME_MAX}
           value={name}
           onChange={(e) => (setName(e.target.value), setErrors(({ name: _, ...r }) => r))}
           error={errors.name}
         />
-        <TextField
+        <SecretField
           label="Replace key"
-          type="password"
           optional
           placeholder={account?.hasSecret ? `Current: ${account.masked}` : 'Enter the key again'}
           hint={account?.hasSecret ? 'Leave empty to keep the current key.' : 'This key was cleared (portal forget-secrets). Enter it again to use the account.'}
-          autoComplete="off"
-          spellCheck={false}
-          className="[&_input]:font-mono"
           value={key}
           onChange={(e) => (setKey(e.target.value), setErrors(({ key: _, ...r }) => r))}
           error={errors.key}

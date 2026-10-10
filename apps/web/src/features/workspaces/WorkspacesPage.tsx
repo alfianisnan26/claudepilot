@@ -13,15 +13,28 @@ import {
   type BadgeTone,
   type MenuItem,
 } from '@isnanme/ui';
-import type { Workspace, WorkspaceStatus, WorkspaceTarget, WorkspaceUsage } from '@portal/contracts';
-import { Box, Boxes, Play, Plus, RefreshCw, Square, SquareTerminal, Trash2 } from 'lucide-react';
+import type { AccountPool, DeliveryStatus, Workspace, WorkspaceStatus, WorkspaceTarget, WorkspaceUsage } from '@portal/contracts';
+import { Box, Boxes, KeySquare, LogIn, LogOut, Play, Plus, RefreshCw, ShieldCheck, Square, SquareTerminal, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/Card';
 import { PageHeader } from '@/components/PageHeader';
 import { api, errorText } from '@/lib/api';
-import { formatBytes, formatDateTime, timeAgo } from '@/lib/format';
+import { useLive, useLiveConnected } from '@/lib/live';
+import { formatBytes, formatDateTime, formatUntil, timeAgo } from '@/lib/format';
+import { AssignPoolDialog } from './AssignPoolDialog';
+import { ClaudeLoginDialog } from './ClaudeLoginDialog';
 import { NewWorkspaceDialog } from './NewWorkspaceDialog';
+
+/** Delivery states worth showing on the row; synced and none stay quiet. */
+const DELIVERY: Partial<Record<DeliveryStatus, { label: string; tone: BadgeTone; busy?: boolean }>> = {
+  pending: { label: 'Delivering', tone: 'neutral', busy: true },
+  failed: { label: 'Delivery failed', tone: 'danger' },
+  frozen: { label: 'Frozen', tone: 'danger' },
+  locked: { label: 'Locked', tone: 'warning' },
+  drifted: { label: 'Drifted', tone: 'warning' },
+  unsupported: { label: 'No delivery yet', tone: 'neutral' },
+};
 
 const STATUS: Record<WorkspaceStatus, { label: string; tone: BadgeTone; busy?: boolean }> = {
   creating: { label: 'Creating', tone: 'neutral', busy: true },
@@ -32,7 +45,7 @@ const STATUS: Record<WorkspaceStatus, { label: string; tone: BadgeTone; busy?: b
   error: { label: 'Error', tone: 'danger' },
 };
 
-/** Faster while something is changing, so progress shows without a refresh. */
+/** Only while the live socket is down: faster while something is changing, so progress still shows. */
 const POLL_BUSY_MS = 2_000;
 const POLL_IDLE_MS = 10_000;
 const USAGE_MS = 5_000;
@@ -47,6 +60,39 @@ export function WorkspacesPage() {
   const [removing, setRemoving] = useState<Workspace | null>(null);
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [removeBusy, setRemoveBusy] = useState(false);
+  const [pools, setPools] = useState<AccountPool[]>([]);
+  const [assigning, setAssigning] = useState<Workspace | null>(null);
+  const [signingIn, setSigningIn] = useState<Workspace | null>(null);
+  const [signingOut, setSigningOut] = useState<Workspace | null>(null);
+  const [signOutBusy, setSignOutBusy] = useState(false);
+
+  const signOut = async () => {
+    if (!signingOut) return;
+    setSignOutBusy(true);
+    try {
+      await api.workspaces.claudeLogout(signingOut.id);
+      toast(`Signed out of Claude in ${signingOut.name}`);
+      setSigningOut(null);
+    } catch (e) {
+      toast(errorText(e, 'Could not sign out.'), 'error');
+    } finally {
+      setSignOutBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    api.accounts.pools().then(setPools, () => undefined);
+  }, []);
+
+  const adopt = async (w: Workspace) => {
+    try {
+      await api.accounts.adopt(w.id);
+      await loadList();
+      toast(`${w.name} adopted`);
+    } catch (e) {
+      toast(errorText(e, 'Could not adopt it.'), 'error');
+    }
+  };
 
   const loadList = useCallback(async () => {
     const next = await api.workspaces.list();
@@ -66,18 +112,23 @@ export function WorkspacesPage() {
 
   useEffect(() => void load(), [load]);
 
-  // Poll the list: quickly while anything is mid-change, slowly otherwise.
-  const anyBusy = !!list?.some((w) => STATUS[w.status].busy);
+  // The portal pushes the list when it changes, and usage while something runs.
+  const live = useLiveConnected();
+  const anyRunning = !!list?.some((w) => w.status === 'running');
+  useLive('workspaces', (msg) => setList(msg.data));
+  useLive('usage', (msg) => setUsage(new Map(msg.data.map((x) => [x.id, x]))), anyRunning);
+  useLive('accounts', () => void api.accounts.pools().then(setPools, () => undefined));
+
+  // Without the live socket (reconnecting), poll: quickly while anything is mid-change, slowly otherwise.
+  const anyBusy = !!list?.some((w) => STATUS[w.status].busy || w.delivery?.status === 'pending' || w.account?.state === 'removing');
   useEffect(() => {
-    if (!list) return;
+    if (live || !list) return;
     const t = setTimeout(() => void loadList().catch(() => undefined), anyBusy ? POLL_BUSY_MS : POLL_IDLE_MS);
     return () => clearTimeout(t);
-  }, [list, anyBusy, loadList]);
+  }, [live, list, anyBusy, loadList]);
 
-  // Usage for running workspaces.
-  const anyRunning = !!list?.some((w) => w.status === 'running');
   useEffect(() => {
-    if (!anyRunning) return;
+    if (live || !anyRunning) return;
     let stop = false;
     const tick = async () => {
       try {
@@ -90,7 +141,7 @@ export function WorkspacesPage() {
     void tick();
     const t = setInterval(() => void tick(), USAGE_MS);
     return () => ((stop = true), clearInterval(t));
-  }, [anyRunning]);
+  }, [live, anyRunning]);
 
   const act = async (w: Workspace, action: 'start' | 'stop') => {
     setBusy((s) => new Set(s).add(w.id));
@@ -183,6 +234,10 @@ export function WorkspacesPage() {
                     onStart={() => void act(w, 'start')}
                     onStop={() => void act(w, 'stop')}
                     onRemove={() => setRemoving(w)}
+                    onAssign={() => setAssigning(w)}
+                    onAdopt={() => void adopt(w)}
+                    onSignIn={() => setSigningIn(w)}
+                    onSignOut={() => setSigningOut(w)}
                   />
                 ))}
               </ul>
@@ -191,9 +246,20 @@ export function WorkspacesPage() {
         </div>
       )}
 
+      <AssignPoolDialog
+        workspace={assigning}
+        pools={pools}
+        onClose={() => setAssigning(null)}
+        onDone={(message) => {
+          setAssigning(null);
+          toast(message);
+          void loadList();
+        }}
+      />
       <NewWorkspaceDialog
         open={creating}
         targets={targets ?? []}
+        pools={pools}
         onClose={() => setCreating(false)}
         onCreate={async (body) => {
           const w = await api.workspaces.create(body);
@@ -201,6 +267,24 @@ export function WorkspacesPage() {
           setList((l) => (l ? [w, ...l.filter((x) => x.id !== w.id)] : [w]));
           toast(`Creating ${w.name}`);
         }}
+      />
+      <ClaudeLoginDialog
+        workspace={signingIn}
+        onClose={() => setSigningIn(null)}
+        onDone={() => {
+          toast(`Signed in to Claude in ${signingIn?.name ?? 'the workspace'}`);
+          setSigningIn(null);
+        }}
+      />
+      <ConfirmDialog
+        open={!!signingOut}
+        tone="primary"
+        title={`Sign out of Claude in ${signingOut?.name ?? ''}?`}
+        description="Claude Code there forgets your Claude sign-in and asks you to sign in again."
+        confirmLabel="Sign out"
+        loading={signOutBusy}
+        onConfirm={() => void signOut()}
+        onClose={() => !signOutBusy && setSigningOut(null)}
       />
       <ConfirmDialog
         open={!!removing}
@@ -252,6 +336,10 @@ function WorkspaceRow({
   onStart,
   onStop,
   onRemove,
+  onAssign,
+  onAdopt,
+  onSignIn,
+  onSignOut,
 }: {
   w: Workspace;
   targetLabel: string;
@@ -260,6 +348,10 @@ function WorkspaceRow({
   onStart: () => void;
   onStop: () => void;
   onRemove: () => void;
+  onAssign: () => void;
+  onAdopt: () => void;
+  onSignIn: () => void;
+  onSignOut: () => void;
 }) {
   const status = STATUS[w.status];
   const running = w.status === 'running';
@@ -268,8 +360,19 @@ function WorkspaceRow({
     running || w.status === 'starting'
       ? { label: 'Stop', icon: <Square className="size-4" />, onSelect: onStop, disabled: busy }
       : { label: 'Start', icon: <Play className="size-4" />, onSelect: onStart, disabled: busy || w.status !== 'stopped' },
+    { label: 'Account pool…', icon: <KeySquare className="size-4" />, onSelect: onAssign, disabled: w.status === 'creating' },
+    // Your own Claude account, for workspaces without a pool (a pool's keys would take precedence).
+    ...(running && !w.account
+      ? [
+          { label: 'Sign in to Claude…', icon: <LogIn className="size-4" />, onSelect: onSignIn },
+          { label: 'Sign out of Claude', icon: <LogOut className="size-4" />, onSelect: onSignOut },
+        ]
+      : []),
+    ...(w.delivery?.status === 'frozen' ? [{ label: 'Adopt workspace', icon: <ShieldCheck className="size-4" />, onSelect: onAdopt }] : []),
     { label: 'Remove', icon: <Trash2 className="size-4" />, onSelect: onRemove, danger: true, disabled: w.status === 'creating' },
   ];
+  const delivery = w.delivery ? DELIVERY[w.delivery.status] : undefined;
+  const account = w.account;
   // A shell is the point of a workspace: link straight to it once it's running.
   const showDetail = w.status !== 'running' && w.status !== 'stopped' && w.detail;
 
@@ -287,6 +390,12 @@ function WorkspaceRow({
             {status.busy || busy ? <Spinner className="size-3" /> : running && <span className="size-1.5 rounded-full bg-accent" />}
             {status.label}
           </Badge>
+          {delivery && (
+            <Badge tone={delivery.tone}>
+              {delivery.busy && <Spinner className="size-3" />}
+              {delivery.label}
+            </Badge>
+          )}
         </div>
         <p className="mt-0.5 truncate text-[13px] text-muted">
           {targetLabel}
@@ -294,6 +403,17 @@ function WorkspaceRow({
           {' · '}
           <span title={formatDateTime(w.createdAt)}>created {timeAgo(w.createdAt)}</span>
         </p>
+        <p className="mt-0.5 flex items-center gap-1.5 truncate text-[13px] text-muted">
+          <KeySquare className="size-3.5 shrink-0" />
+          {!account
+            ? 'Own sign-in'
+            : account.state === 'removing'
+              ? `Removing ${account.poolName}…`
+              : account.state === 'waiting'
+                ? `${account.poolName} · ${account.waitingUntil ? `waiting for quota until ${formatUntil(account.waitingUntil)}` : 'waiting for a usable account'}`
+                : `${account.poolName} · ${account.accountName}`}
+        </p>
+        {w.delivery?.reason && delivery && <p className="mt-1 line-clamp-2 text-[13px] text-ink-soft">{w.delivery.reason}</p>}
         {showDetail && (
           <p className={`mt-1 line-clamp-2 text-[13px] ${w.status === 'error' ? 'text-danger' : 'text-ink-soft'}`}>{w.detail}</p>
         )}

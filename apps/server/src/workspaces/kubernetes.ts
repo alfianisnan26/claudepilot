@@ -11,7 +11,7 @@ import {
   type V1Pod,
   type V1Status,
 } from '@kubernetes/client-node';
-import { HOME, LABEL, type CreateSpec, type Runtime, type ShellSession } from './runtime.js';
+import { HOME, LABEL, type CreateSpec, type ExecSession, type Runtime, type ShellSession } from './runtime.js';
 
 const LIMIT = { cpus: 'claudepilot.cpus', memoryMb: 'claudepilot.memory-mb' } as const;
 const CONTAINER = 'workspace';
@@ -254,13 +254,47 @@ export class KubernetesRuntime implements Runtime {
     return names.map((n) => byName.get(n) ?? { cpuPercent: null, memoryBytes: null });
   }
 
-  async shell(name: string, size: { cols: number; rows: number }): Promise<ShellSession> {
+  async #runningPod(name: string): Promise<string> {
     const pods = await this.#core.listNamespacedPod({
       namespace: this.#ns,
       labelSelector: `${LABEL.managed}=true,${LABEL.name}=${name}`,
     });
     const pod = pods.items.find((p) => p.status?.phase === 'Running' && !p.metadata?.deletionTimestamp);
     if (!pod) throw new AppError('CONFLICT', 'The workspace isn’t running.');
+    return pod.metadata!.name!;
+  }
+
+  async exec(name: string, command: string[]): Promise<ExecSession> {
+    const pod = await this.#runningPod(name);
+    const out = new PassThrough();
+    const stdin = new PassThrough();
+    const exitFns: ((code: number | null) => void)[] = [];
+    let exitCode: number | null = null;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      exitFns.forEach((fn) => fn(exitCode));
+    };
+    const ws = await new Exec(this.#kc).exec(this.#ns, pod, CONTAINER, command, out, out, stdin, false, (status: V1Status) => {
+      if (status.status === 'Success') exitCode = 0;
+      else {
+        const cause = status.details?.causes?.find((c) => c.reason === 'ExitCode');
+        exitCode = cause?.message ? Number(cause.message) : null;
+      }
+    });
+    ws.on('close', finish);
+    ws.on('error', finish);
+    return {
+      write: (data) => void stdin.write(data),
+      close: () => ws.close(),
+      onData: (fn) => void out.on('data', fn),
+      onExit: (fn) => void exitFns.push(fn),
+    };
+  }
+
+  async shell(name: string, size: { cols: number; rows: number }): Promise<ShellSession> {
+    const podName = await this.#runningPod(name);
 
     // Exec reads the size off stdout (rows/columns + "resize" events), like a real TTY.
     const stdout = Object.assign(new PassThrough(), { columns: size.cols, rows: size.rows });
@@ -276,7 +310,7 @@ export class KubernetesRuntime implements Runtime {
 
     const ws = await new Exec(this.#kc).exec(
       this.#ns,
-      pod.metadata!.name!,
+      podName,
       CONTAINER,
       ['bash', '-l'],
       stdout,

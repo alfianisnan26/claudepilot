@@ -69,9 +69,10 @@ function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => voi
                 <Link
                   to={to}
                   aria-current={active ? 'page' : undefined}
+                  aria-label={label}
                   title={label}
                   className={cn(
-                    'press relative isolate flex flex-col items-center gap-1 rounded-2xl px-1 py-2 text-[10.5px] font-semibold transition-colors lg:flex-row lg:gap-3 lg:px-3 lg:py-2.5 lg:text-[14.5px]',
+                    'press relative isolate flex flex-col items-center gap-1 rounded-2xl px-1 py-3 text-[10.5px] font-semibold transition-colors lg:flex-row lg:gap-3 lg:px-3 lg:py-2.5 lg:text-[14.5px]',
                     active ? 'text-ink' : 'text-muted hover:bg-surface-2/60 hover:text-ink',
                   )}
                 >
@@ -79,7 +80,7 @@ function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => voi
                     <motion.span layoutId="side-pill" transition={spring} className="absolute inset-0 -z-10 rounded-2xl bg-surface-2" />
                   )}
                   <Icon className="size-5 shrink-0" strokeWidth={active ? 2.4 : 2} />
-                  <span className="max-w-full truncate">{label}</span>
+                  <span className="hidden max-w-full truncate lg:inline">{label}</span>
                 </Link>
               </li>
             );

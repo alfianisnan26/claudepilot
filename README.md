@@ -57,7 +57,7 @@ Environment variables (see [.env.example](.env.example)):
 | `PORTAL_HOST` | `0.0.0.0` | Bind address. |
 | `PORTAL_PORT` | `3000` | Port. |
 | `PORTAL_DATA_DIR` | `.data` (repo root) | Where the portal keeps its database (`portal.db`), backups and workspace creates in progress. Mode 0700. |
-| `PORTAL_SECRET_KEY_FILE` / `PORTAL_SECRET_KEY` | none | Encrypts stored secrets: 32 random bytes, base64url (`npm run portal -- generate-key`). Keep it outside the repo and keep an offline copy; without it stored secrets can't be read. The devcontainer creates one on the Mac (`~/.config/claudepilot-devcontainer/portal_secret_key`). |
+| `PORTAL_SECRET_KEY_FILE` / `PORTAL_SECRET_KEY` | none | Encrypts stored secrets: 32 random bytes, base64url. Easiest: leave the file empty and choose **Set up encryption** on the Access page; the portal writes the key there (never overwriting one) and shows it once. Without a key file the key lives in memory and you **Unlock** after restarts. Keep an offline copy: without it stored secrets can't be read. In the devcontainer the file is on the `claudepilot-portal-secrets` volume. |
 
 Codes are exactly 8 letters and digits (one sign-in box each, shown as `XXXX-XXXX`). Case, spaces and
 dashes are ignored. A `.env` at the repo root is loaded in dev.
@@ -98,7 +98,33 @@ are encrypted (see Storage), never shown again after saving, and checked with `G
 (no inference, not billed), sending the key the way Claude Code does. Each check gives one result
 (working, rate limited, invalid key, billing, spend limit, wrong URL, unreachable). Custom hosts on
 private addresses (LAN, localhost) need "Allow private network". Adding keys to pools and workspaces
-comes next ([docs/prd/account-pool.md](docs/prd/account-pool.md)).
+works through account pools ([docs/prd/account-pool.md](docs/prd/account-pool.md)).
+
+**Pools.** Group keys into a pool (in priority order) and assign it to workspaces, when creating one
+or later from its menu. Assigning to an existing workspace asks for confirmation, because the pool's
+key overrides any sign-in there. The portal delivers the key natively: a managed-settings drop-in
+(`/etc/claude-code/managed-settings.d/40-claudepilot-account.json`) points Claude Code's
+`apiKeyHelper` at a key file only that account uses, so `claude` starts signed in. Disabling or
+re-keying an account moves its workspaces to the next usable one; the next Claude Code request uses
+the new key, with no restart. Unassigning first writes safe values, then removes the files a minute
+later.
+
+**Failover.** Workspaces report trouble through an outbox the portal pulls every 10 s: each run of the
+key helper (Claude Code runs it again before every retry after a 401) and each turn that ends on an
+API error (a `StopFailure` hook). A signal alone changes nothing: the portal probes the account with
+one 1-token request, at most once a minute, and classifies the answer: **cooling** (429, until
+`retry-after`), **exhausted** (spend cap or usage limit), **billing**, **invalid key** or **needs
+attention**. Workspaces then move to the next usable key, preferring another organization after a rate
+limit, spread over a few seconds. Cooldowns under 2 minutes are left to Claude Code's own retries. With
+no usable key left, a workspace keeps its last one and shows "waiting for quota until …"; it moves on
+once a probe finds an account back. Keys are also checked every 15 minutes, and **Check now**, **End
+cooldown** and **Mark as working** override the state by hand. In tests with the real CLI, a key
+revoked mid-request was replaced in about 10 s and the same request succeeded.
+
+**Delivery** (Docker targets today, Kubernetes next). Files are written atomically (temp file, then
+rename), into running and stopped workspaces alike; a hand-edited file is repaired within a minute.
+A workspace whose delivered files this portal can't account for (another portal's, or an older
+database's) is **Frozen** until you choose **Adopt workspace**.
 
 ## Storage
 

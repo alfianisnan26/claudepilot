@@ -1,8 +1,10 @@
 import { existsSync } from 'node:fs';
+import { PassThrough } from 'node:stream';
 import { AppError } from '@isnanme/core';
 import { workspaceId, type Workspace, type WorkspaceStatus } from '@portal/contracts';
 import Docker from 'dockerode';
-import { HOME, LABEL, type CreateSpec, type Runtime, type ShellSession } from './runtime.js';
+import { extract, pack } from 'tar-stream';
+import { HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type ShellSession, type TarEntry } from './runtime.js';
 
 const LIMIT = { cpus: 'claudepilot.cpus', memoryMb: 'claudepilot.memory-mb' } as const;
 
@@ -46,6 +48,141 @@ export class DockerRuntime implements Runtime {
   async check() {
     if (!existsSync(this.#socket)) throw new Error(`${this.#socket} not found`);
     await this.#docker.ping();
+  }
+
+  readonly delivery: DeliveryAccess = {
+    state: async (name) => {
+      try {
+        const info = await this.#container(name).inspect();
+        return { exists: true, running: !!info.State.Running };
+      } catch (e) {
+        if (statusOf(e) === 404) return { exists: false, running: false };
+        throw e;
+      }
+    },
+
+    run: async (name, script, opts = {}) => {
+      const exec = await this.#container(name).exec({
+        Cmd: ['sh', '-c', script],
+        User: opts.user === 'node' ? 'node' : '0',
+        AttachStdin: opts.stdin !== undefined,
+        AttachStdout: true,
+        AttachStderr: true,
+        Tty: false,
+      });
+      const stream = await exec.start({ hijack: true, stdin: opts.stdin !== undefined });
+      const out: Buffer[] = [];
+      const err: Buffer[] = [];
+      const stdout = new PassThrough().on('data', (c: Buffer) => out.push(c));
+      const stderr = new PassThrough().on('data', (c: Buffer) => err.push(c));
+      this.#docker.modem.demuxStream(stream, stdout, stderr);
+      const done = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          stream.destroy();
+          reject(new Error(`exec timed out after ${opts.timeoutMs ?? 30_000} ms`));
+        }, opts.timeoutMs ?? 30_000);
+        stream.on('end', () => (clearTimeout(timer), resolve()));
+        stream.on('close', () => (clearTimeout(timer), resolve()));
+        stream.on('error', (e: Error) => (clearTimeout(timer), reject(e)));
+      });
+      if (opts.stdin !== undefined) stream.end(opts.stdin);
+      await done;
+      const { ExitCode } = await exec.inspect();
+      return { code: ExitCode ?? -1, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') };
+    },
+
+    put: async (name, entries) => {
+      await this.#container(name).putArchive(await tarOf(entries), { path: '/' });
+    },
+
+    read: async (name, path) => {
+      let stream: NodeJS.ReadableStream;
+      try {
+        stream = await this.#container(name).getArchive({ path });
+      } catch (e) {
+        if (statusOf(e) === 404) return null;
+        throw e;
+      }
+      return firstFileOf(stream);
+    },
+
+    watchStarts: (onStart) => this.#watchEvents(['start'], onStart),
+  };
+
+  async exec(name: string, command: string[]): Promise<ExecSession> {
+    const exec = await this.#container(name).exec({
+      Cmd: command,
+      User: 'node',
+      WorkingDir: HOME,
+      Env: [`HOME=${HOME}`],
+      AttachStdin: true,
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: false,
+    });
+    const stream = await exec.start({ hijack: true, stdin: true });
+    const out = new PassThrough();
+    this.#docker.modem.demuxStream(stream, out, out);
+    const exitFns: ((code: number | null) => void)[] = [];
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      exec.inspect().then(
+        (i) => exitFns.forEach((fn) => fn(i.ExitCode ?? null)),
+        () => exitFns.forEach((fn) => fn(null)),
+      );
+    };
+    stream.on('end', finish);
+    stream.on('close', finish);
+    stream.on('error', finish);
+    return {
+      write: (data) => void stream.write(data),
+      close: () => stream.destroy(),
+      onData: (fn) => void out.on('data', fn),
+      onExit: (fn) => void exitFns.push(fn),
+    };
+  }
+
+  /** Container changes that show in the list (started, stopped, died, created, removed). */
+  watch(onChange: () => void): () => void {
+    return this.#watchEvents(['create', 'start', 'stop', 'die', 'destroy', 'pause', 'unpause', 'restart', 'rename'], () => onChange());
+  }
+
+  /** Follows Docker's event stream for the portal's containers, reconnecting when it drops. */
+  #watchEvents(events: string[], onEvent: (name: string) => void): () => void {
+    let stopped = false;
+    let current: NodeJS.ReadableStream | undefined;
+    const connect = () => {
+      if (stopped) return;
+      this.#docker.getEvents({ filters: { type: ['container'], event: events, label: [`${LABEL.managed}=true`] } }, (err, stream) => {
+        if (err || !stream) return void setTimeout(connect, 5000);
+        current = stream;
+        let buf = '';
+        stream.on('data', (chunk: Buffer) => {
+          buf += chunk.toString('utf8');
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl);
+            buf = buf.slice(nl + 1);
+            try {
+              const name = (JSON.parse(line) as { Actor?: { Attributes?: Record<string, string> } }).Actor?.Attributes?.[LABEL.name];
+              if (name) onEvent(name);
+            } catch {
+              // not an event line
+            }
+          }
+        });
+        const again = () => !stopped && setTimeout(connect, 5000);
+        stream.on('end', again);
+        stream.on('error', again);
+      });
+    };
+    connect();
+    return () => {
+      stopped = true;
+      (current as { destroy?: () => void } | undefined)?.destroy?.();
+    };
   }
 
   async list(): Promise<Workspace[]> {
@@ -215,4 +352,34 @@ export class DockerRuntime implements Runtime {
       ),
     );
   }
+}
+
+/** A tar archive (paths relative to `/`) with the entries' owner and mode in the headers. */
+async function tarOf(entries: TarEntry[]): Promise<Buffer> {
+  const p = pack();
+  for (const e of entries) {
+    const name = e.path.replace(/^\/+/, '');
+    const header = { name, mode: e.mode, uid: e.uid, gid: e.gid, mtime: new Date() };
+    if (e.type === 'directory') p.entry({ ...header, type: 'directory' });
+    else p.entry({ ...header, type: 'file' }, e.content ?? '');
+  }
+  p.finalize();
+  const chunks: Buffer[] = [];
+  for await (const chunk of p) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks);
+}
+
+/** The first regular file in a tar stream, as text. */
+async function firstFileOf(stream: NodeJS.ReadableStream): Promise<string | null> {
+  const ex = extract();
+  stream.pipe(ex as unknown as NodeJS.WritableStream);
+  for await (const entry of ex) {
+    if (entry.header.type === 'file') {
+      const chunks: Buffer[] = [];
+      for await (const c of entry) chunks.push(c as Buffer);
+      return Buffer.concat(chunks).toString('utf8');
+    }
+    entry.resume();
+  }
+  return null;
 }

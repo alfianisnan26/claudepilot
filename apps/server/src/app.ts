@@ -1,13 +1,18 @@
-import { relative } from 'node:path';
+import { existsSync, mkdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, relative } from 'node:path';
 import type { HttpBindings } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { AppError, codeForStatus, isAppError, success } from '@isnanme/core';
 import {
   API,
+  type AccountPoolRequest,
   type AdminState,
+  type AssignAccountPoolRequest,
   type BulkAddAccountsRequest,
   type CreateAccountRequest,
   type CreateWorkspaceRequest,
+  type KeySetupResult,
+  type KeyUnlockResult,
   type EndpointRequest,
   type LoginRequest,
   type RotateCodeRequest,
@@ -15,6 +20,10 @@ import {
   type SetEnabledRequest,
   type SystemStatus,
   type UpdateAccountRequest,
+  type Workspace,
+  type WorkspaceDeliveryState,
+  type LiveTopic,
+  type ClaudeLoginStart,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -23,10 +32,17 @@ import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import type { AccountHealthService } from './accounts/health.js';
+import type { AccountPools } from './accounts/pools.js';
 import type { AccountsService } from './accounts/service.js';
+import { runPreflight } from './delivery/preflight.js';
+import type { Reconciler } from './delivery/reconciler.js';
 import { config } from './config.js';
 import type { Portal } from './portal.js';
 import { RateLimiter } from './rateLimit.js';
+import { ClaudeLogins } from './workspaces/claudeLogin.js';
+import { deliveryState, workspaceView } from './workspaces/view.js';
+import { generateSecretKey, parseSecretKey, SecretKeyError } from './store/secretBox.js';
 import type { Store } from './store/store.js';
 import type { Workspaces } from './workspaces/manager.js';
 
@@ -48,7 +64,10 @@ export function createApp(
   workspaces: Workspaces,
   store: Store,
   accounts: AccountsService,
-  { serveWeb }: { serveWeb: boolean },
+  pools: AccountPools,
+  reconciler: Reconciler,
+  health: AccountHealthService,
+  { serveWeb, notify = () => {} }: { serveWeb: boolean; notify?: (...topics: LiveTopic[]) => void },
 ) {
   const app = new Hono<Env>();
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
@@ -132,24 +151,95 @@ export function createApp(
     console.log(`[portal] sign-in ${enabled ? 'enabled' : 'disabled'}`);
     return state(c);
   });
-  const system = (c: Context<Env>) => {
-    const backups = store.listBackups();
-    return c.json(
-      success<SystemStatus>({
-        portalId: store.portalId,
-        schemaVersion: store.schemaVersion,
-        trust: store.trust,
-        resumable: store.resumable,
-        lastBackupAt: backups[0]?.at.toISOString() ?? null,
-        backups: backups.length,
-      }),
-    );
+  const keyFileFilled = () => {
+    const file = config.secretKey.file;
+    return !!file && existsSync(file) && statSync(file).size > 0;
   };
+  const systemStatus = (): SystemStatus => {
+    const backups = store.listBackups();
+    const locked = !store.secrets;
+    return {
+      portalId: store.portalId,
+      schemaVersion: store.schemaVersion,
+      trust: store.trust,
+      resumable: store.resumable,
+      lastBackupAt: backups[0]?.at.toISOString() ?? null,
+      backups: backups.length,
+      secretKey: {
+        source: store.keySource,
+        canSetUp: locked && store.writable && !store.hasKeyCheck,
+        canUnlock: locked && store.writable && store.hasKeyCheck,
+        // A new key must also stick after a restart: not while PORTAL_SECRET_KEY or a filled key file supplies the old one.
+        canReset: locked && store.writable && store.hasKeyCheck && store.sealedCount === 0 && !config.secretKey.value && !keyFileFilled(),
+        keyFile: config.secretKey.file ?? null,
+      },
+    };
+  };
+  const system = (c: Context<Env>) => c.json(success(systemStatus()));
+
+  /** Saves a panel key to PORTAL_SECRET_KEY_FILE when that file is set and empty. Never overwrites a key file. */
+  const saveKeyFile = (key: string): string | null => {
+    const file = config.secretKey.file;
+    if (!file || keyFileFilled()) return null;
+    try {
+      mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+      const tmp = `${file}.${process.pid}.tmp`;
+      writeFileSync(tmp, key, { mode: 0o600 });
+      renameSync(tmp, file);
+      return file;
+    } catch (e) {
+      console.error(`[store] could not save the key file: ${(e as Error).message}`);
+      return null;
+    }
+  };
+  const unlockLimiter = new RateLimiter(10, 10 * 60 * 1000);
+  admin.post('/system/key/reset', (c) => {
+    if (!systemStatus().secretKey.canReset) throw new AppError('CONFLICT', 'Secrets are stored with the current key. Unlock with it instead.');
+    const key = generateSecretKey();
+    store.resetKey(parseSecretKey(key));
+    const savedTo = saveKeyFile(key);
+    console.log(`[store] lost key replaced from the panel; nothing was encrypted with it (${savedTo ? `saved to ${savedTo}` : 'kept in memory'})`);
+    reconciler.requestAll('key reset');
+    notify('system', 'accounts');
+    return c.json(success<KeySetupResult>({ key, savedTo, status: systemStatus() }));
+  });
   admin.get('/system', system);
+  admin.post('/system/key/setup', (c) => {
+    if (!systemStatus().secretKey.canSetUp) throw new AppError('CONFLICT', 'This database already has a key. Unlock it with that key.');
+    const key = generateSecretKey();
+    store.setUpKey(parseSecretKey(key));
+    const savedTo = saveKeyFile(key);
+    console.log(`[store] encryption set up from the panel (${savedTo ? `saved to ${savedTo}` : 'kept in memory'})`);
+    reconciler.requestAll('key set up');
+    notify('system', 'accounts');
+    return c.json(success<KeySetupResult>({ key, savedTo, status: systemStatus() }));
+  });
+  admin.post('/system/key/unlock', async (c) => {
+    const who = clientKey(c);
+    if (unlockLimiter.blocked(who)) throw new AppError('RATE_LIMITED', 'Too many tries. Wait a few minutes.');
+    if (!systemStatus().secretKey.canUnlock) throw new AppError('CONFLICT', 'Nothing to unlock.');
+    const { key } = await body<{ key: string }>(c);
+    let parsed: Buffer;
+    try {
+      parsed = parseSecretKey(typeof key === 'string' ? key : '', 'The key');
+      store.unlock(parsed);
+    } catch (e) {
+      unlockLimiter.fail(who);
+      const message = e instanceof SecretKeyError ? e.message : (e as Error).message;
+      throw new AppError('VALIDATION_FAILED', message, { details: { key: message } });
+    }
+    unlockLimiter.reset(who);
+    const savedTo = saveKeyFile((key as string).trim());
+    console.log(`[store] unlocked from the panel${savedTo ? `; key saved to ${savedTo}` : ''}`);
+    reconciler.requestAll('unlocked');
+    notify('system', 'accounts');
+    return c.json(success<KeyUnlockResult>({ savedTo, status: systemStatus() }));
+  });
   admin.post('/system/resume', (c) => {
     if (!store.resumable) throw new AppError('CONFLICT', 'Nothing to resume: fix the reasons shown first.');
     store.resume();
     console.log('[store] delivery resumed by an admin');
+    notify('system');
     return system(c);
   });
   app.route('/api/admin', admin);
@@ -158,11 +248,56 @@ export function createApp(
   ws.use(requireSession);
   ws.get('/targets', async (c) => c.json(success(await workspaces.targets(c.req.query('fresh') === '1'))));
   ws.get('/usage', async (c) => c.json(success(await workspaces.usage())));
-  ws.get('/', async (c) => c.json(success(await workspaces.list())));
+  const delivery = (id: string) => deliveryState(reconciler, id);
+  const decorate = workspaceView(pools, reconciler);
+
+  // Claude Code's own sign-in, driven from the portal; the credential stays in the workspace.
+  const logins = new ClaudeLogins(workspaces);
+  const ownSignIn = (c: Context<Env>) => {
+    const [target, name] = [c.req.param('target')!, c.req.param('name')!];
+    if (pools.stateFor(`${target}/${name}`))
+      throw new AppError('CONFLICT', 'This workspace uses its account pool’s keys. Unassign the pool to sign in with your own Claude account.');
+    return [target, name] as const;
+  };
+  ws.post('/:target/:name/claude-login', async (c) => c.json(success<ClaudeLoginStart>(await logins.start(...ownSignIn(c)))));
+  ws.post('/:target/:name/claude-login/code', async (c) => {
+    const { code } = await body<{ code: string }>(c);
+    await logins.submit(...ownSignIn(c), code);
+    return c.json(success({ ok: true }));
+  });
+  ws.delete('/:target/:name/claude-login', async (c) => {
+    await logins.cancel(c.req.param('target'), c.req.param('name'));
+    return c.json(success({ ok: true }));
+  });
+  ws.post('/:target/:name/claude-logout', async (c) => {
+    await logins.logout(...ownSignIn(c));
+    return c.json(success({ ok: true }));
+  });
+  ws.get('/', async (c) => c.json(success((await workspaces.list()).map(decorate))));
   ws.post('/', async (c) => {
-    const created = await workspaces.create(await body<CreateWorkspaceRequest>(c));
-    console.log(`[workspaces] creating ${created.id}`);
-    return c.json(success(created), 202);
+    const req = await body<CreateWorkspaceRequest>(c);
+    const poolId = req.accountPoolId ?? null;
+    if (poolId && !pools.list().some((p) => p.id === poolId))
+      throw new AppError('VALIDATION_FAILED', 'That account pool no longer exists.', { details: { accountPoolId: 'Pick another pool.' } });
+    const created = await workspaces.create(req);
+    // A new workspace has no sign-in of its own yet, so no override confirmation is needed.
+    if (poolId) pools.assign(created.id, { poolId }, { existing: false });
+    console.log(`[workspaces] creating ${created.id}${poolId ? ' with an account pool' : ''}`);
+    return c.json(success(decorate(created)), 202);
+  });
+  ws.put('/:target/:name/account', async (c) => {
+    const id = `${c.req.param('target')}/${c.req.param('name')}`;
+    const state = pools.assign(id, await body<AssignAccountPoolRequest>(c), { existing: true });
+    return c.json(success({ account: state }));
+  });
+  ws.get('/:target/:name/preflight', async (c) => {
+    const access = workspaces.runtimeFor(c.req.param('target'))?.delivery;
+    if (!access) return c.json(success({ findings: null }));
+    return c.json(success({ findings: await runPreflight(access, c.req.param('name')) }));
+  });
+  ws.post('/:target/:name/adopt', async (c) => {
+    await reconciler.adopt(`${c.req.param('target')}/${c.req.param('name')}`);
+    return c.json(success({ delivery: delivery(`${c.req.param('target')}/${c.req.param('name')}`) }));
   });
   ws.post('/:target/:name/start', async (c) => {
     await workspaces.start(c.req.param('target'), c.req.param('name'));
@@ -174,6 +309,7 @@ export function createApp(
   });
   ws.delete('/:target/:name', async (c) => {
     await workspaces.remove(c.req.param('target'), c.req.param('name'));
+    pools.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     return c.json(success({ ok: true }));
   });
   app.route('/api/workspaces', ws);
@@ -184,7 +320,19 @@ export function createApp(
   acc.post('/', async (c) => c.json(success(await accounts.create(await body<CreateAccountRequest>(c))), 201));
   acc.post('/bulk', async (c) => c.json(success(accounts.bulkAdd(await body<BulkAddAccountsRequest>(c)))));
   acc.patch('/:id', async (c) => c.json(success(await accounts.update(c.req.param('id'), await body<UpdateAccountRequest>(c)))));
-  acc.post('/:id/check', async (c) => c.json(success(await accounts.check(c.req.param('id')))));
+  // Check now: the key check, plus a probe when the account is cooling or has a problem (FR19).
+  acc.post('/:id/check', async (c) => {
+    const id = c.req.param('id');
+    const account = await accounts.check(id);
+    if (account.health.state !== 'ok') await health.probe(id, { reasons: ['admin re-check'], manual: true });
+    return c.json(success(accounts.get(id)));
+  });
+  acc.post('/:id/clear', (c) => {
+    const id = c.req.param('id');
+    accounts.get(id);
+    health.clear(id);
+    return c.json(success(accounts.get(id)));
+  });
   acc.delete('/:id', (c) => {
     accounts.remove(c.req.param('id'));
     return c.json(success({ ok: true }));
@@ -201,6 +349,17 @@ export function createApp(
     return c.json(success({ ok: true }));
   });
   app.route('/api/endpoints', ep);
+
+  const ap = new Hono<Env>();
+  ap.use(requireSession);
+  ap.get('/', (c) => c.json(success(pools.list())));
+  ap.post('/', async (c) => c.json(success(pools.create(await body<AccountPoolRequest>(c))), 201));
+  ap.patch('/:id', async (c) => c.json(success(pools.update(c.req.param('id'), await body<AccountPoolRequest>(c)))));
+  ap.delete('/:id', (c) => {
+    pools.remove(c.req.param('id'));
+    return c.json(success({ ok: true }));
+  });
+  app.route('/api/account-pools', ap);
 
   app.all('/api/*', () => {
     throw new AppError('NOT_FOUND');

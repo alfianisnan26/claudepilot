@@ -2,6 +2,7 @@ import { FormDialog, Segmented, Select, SwitchRow, TextArea, TextField } from '@
 import { ACCOUNT_NAME_MAX, ANTHROPIC_ENDPOINT_ID, type Endpoint } from '@portal/contracts';
 import { ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { SecretField } from '@/components/SecretField';
 import { api, ApiError } from '@/lib/api';
 
 type Mode = 'one' | 'many';
@@ -110,19 +111,20 @@ export function AddAccountDialog({
               label="Name"
               placeholder="team-main"
               autoComplete="off"
+              name="key-name"
+              data-1p-ignore=""
+              data-lpignore="true"
+              data-bwignore="true"
+              data-form-type="other"
               maxLength={ACCOUNT_NAME_MAX}
               value={name}
               onChange={(e) => (setName(e.target.value), setErrors(({ name: _, ...r }) => r))}
               error={errors.name}
               data-autofocus
             />
-            <TextField
+            <SecretField
               label="Key"
-              type="password"
               placeholder="sk-ant-…"
-              autoComplete="off"
-              spellCheck={false}
-              className="[&_input]:font-mono"
               value={key}
               onChange={(e) => (setKey(e.target.value), setErrors(({ key: _, ...r }) => r))}
               error={errors.key}
@@ -148,6 +150,10 @@ export function AddAccountDialog({
           checked={owned}
           onChange={(v) => (setOwned(v), setErrors(({ confirmOwned: _, ...r }) => r))}
         />
+        <p className="rounded-xl bg-surface-2 px-3.5 py-3 text-[13px] text-muted">
+          Using a Claude Pro or Max plan? Sign in per workspace instead: in a workspace without a pool, open its menu and
+          choose <span className="font-semibold text-ink-soft">Sign in to Claude</span>. Plan logins can’t be added to pools.
+        </p>
       </div>
     </FormDialog>
   );

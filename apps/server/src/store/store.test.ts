@@ -286,3 +286,51 @@ test('the lock creates a data dir that does not exist yet', async () => {
   release();
   assert.equal(existsSync(join(dir, 'portal.lock')), false);
 });
+
+test('the panel can set up a key once, and unlock only with that key', async () => {
+  const dir = tempDir();
+  const store = await Store.open({ dataDir: dir, secretKey: null });
+  assert.equal(store.trust.reasons[0]!.code, 'key-missing');
+  assert.equal(store.hasKeyCheck, false);
+  const key = newKey();
+  store.setUpKey(key);
+  assert.equal(store.trust.state, 'ok');
+  assert.equal(store.keySource, 'panel');
+  assert.throws(() => store.setUpKey(newKey()), /already has a key/);
+  store.close();
+
+  const restarted = await Store.open({ dataDir: dir, secretKey: null });
+  assert.equal(restarted.trust.state, 'locked', 'a panel key is not remembered by the database');
+  assert.throws(() => restarted.unlock(newKey()), /doesn't open this database/);
+  restarted.unlock(key);
+  assert.equal(restarted.trust.state, 'ok');
+  assert.ok(restarted.secrets);
+  restarted.close();
+});
+
+test('a lost key can be replaced only while nothing was ever encrypted with it', async () => {
+  const dir = tempDir();
+  const store = await Store.open({ dataDir: dir, secretKey: null });
+  store.setUpKey(newKey());
+  store.close();
+
+  // Restarted without the key, nothing stored yet: starting over loses nothing.
+  const lost = await Store.open({ dataDir: dir, secretKey: null });
+  assert.equal(lost.sealedCount, 0);
+  const replacement = newKey();
+  lost.resetKey(replacement);
+  assert.equal(lost.trust.state, 'ok');
+  assert.throws(() => lost.resetKey(newKey()), /unlocked/);
+  lost.db!.prepare("INSERT INTO accounts (id, endpoint_id, name, secret, fingerprint, masked, created_at, updated_at) VALUES ('a1', 'anthropic', 'one', ?, 'fp', 'm', 'now', 'now')").run(
+    lost.secrets!.seal('sk-test-value', { table: 'accounts', row: 'a1', column: 'secret' }),
+  );
+  lost.close();
+
+  // Once a secret is stored, only the right key gets past Locked.
+  const guarded = await Store.open({ dataDir: dir, secretKey: null });
+  assert.equal(guarded.sealedCount, 1);
+  assert.throws(() => guarded.resetKey(newKey()), /Secrets are stored/);
+  guarded.unlock(replacement);
+  assert.equal(guarded.secrets!.open(guarded.db!.prepare("SELECT secret FROM accounts WHERE id = 'a1'").get()!.secret as string, { table: 'accounts', row: 'a1', column: 'secret' }), 'sk-test-value');
+  guarded.close();
+});

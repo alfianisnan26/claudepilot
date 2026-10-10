@@ -36,5 +36,6 @@ COPY --chown=node:node ssh/config /home/node/.ssh/config
 RUN chmod 700 /home/node/.ssh && chmod 600 /home/node/.ssh/config
 
 # Pre-create mount targets so named volumes inherit node ownership
-RUN mkdir -p /home/node/.claude-profiles /home/node/.cloudflared \
-    && chown node:node /home/node/.claude-profiles /home/node/.cloudflared
+RUN mkdir -p /home/node/.claude-profiles /home/node/.cloudflared /home/node/.portal-secrets \
+    && chown node:node /home/node/.claude-profiles /home/node/.cloudflared /home/node/.portal-secrets \
+    && chmod 700 /home/node/.portal-secrets

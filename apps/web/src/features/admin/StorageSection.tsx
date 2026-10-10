@@ -1,10 +1,12 @@
 import { Badge, Button, ConfirmDialog, LoadError, Section, useToast, type BadgeTone } from '@isnanme/ui';
 import type { SystemStatus, TrustState } from '@portal/contracts';
-import { Database, Play } from 'lucide-react';
+import { Database, KeyRound, Play, ShieldPlus } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Card } from '@/components/Card';
 import { api, errorText } from '@/lib/api';
+import { useLive } from '@/lib/live';
 import { formatDateTime, timeAgo } from '@/lib/format';
+import { SetUpKeyDialog, UnlockDialog } from './KeyDialogs';
 
 const STATE: Record<TrustState, { label: string; tone: BadgeTone; summary: string }> = {
   ok: { label: 'OK', tone: 'success', summary: 'Secrets are encrypted and deliveries to workspaces can run.' },
@@ -19,6 +21,7 @@ export function StorageSection() {
   const [failed, setFailed] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [keyDialog, setKeyDialog] = useState<'setup' | 'reset' | 'unlock' | null>(null);
 
   const load = useCallback(async () => {
     setFailed(false);
@@ -29,6 +32,7 @@ export function StorageSection() {
     }
   }, []);
   useEffect(() => void load(), [load]);
+  useLive('system', () => void load());
 
   const resume = async () => {
     setBusy(true);
@@ -91,16 +95,61 @@ export function StorageSection() {
             </div>
           </dl>
 
-          {status.resumable && (
-            <div className="mt-4 border-t border-line pt-4">
-              <Button variant="secondary" icon={<Play className="size-4" />} onClick={() => setConfirm(true)}>
-                Resume delivery
-              </Button>
+          {(status.resumable || status.secretKey.canSetUp || status.secretKey.canUnlock) && (
+            <div className="mt-4 flex flex-col gap-2 border-t border-line pt-4 sm:flex-row">
+              {status.secretKey.canSetUp && (
+                <Button icon={<ShieldPlus className="size-4" />} onClick={() => setKeyDialog('setup')}>
+                  Set up encryption
+                </Button>
+              )}
+              {status.secretKey.canUnlock && (
+                <Button icon={<KeyRound className="size-4" />} onClick={() => setKeyDialog('unlock')}>
+                  Unlock
+                </Button>
+              )}
+              {status.resumable && (
+                <Button variant="secondary" icon={<Play className="size-4" />} onClick={() => setConfirm(true)}>
+                  Resume delivery
+                </Button>
+              )}
             </div>
+          )}
+          {status.secretKey.source && (
+            <p className="mt-3 text-[12px] text-muted">
+              Key from{' '}
+              {status.secretKey.source === 'panel'
+                ? 'this panel (in memory until the portal restarts)'
+                : status.secretKey.source === 'file'
+                  ? 'PORTAL_SECRET_KEY_FILE'
+                  : 'PORTAL_SECRET_KEY'}
+              .
+            </p>
           )}
         </Card>
       )}
 
+      <SetUpKeyDialog
+        open={keyDialog === 'setup' || keyDialog === 'reset'}
+        mode={keyDialog === 'reset' ? 'reset' : 'setup'}
+        keyFile={status?.secretKey.keyFile ?? null}
+        onClose={() => setKeyDialog(null)}
+        onDone={(next) => {
+          setStatus(next);
+          setKeyDialog(null);
+          toast('Encryption set up');
+        }}
+      />
+      <UnlockDialog
+        open={keyDialog === 'unlock'}
+        canReset={status?.secretKey.canReset}
+        onReset={() => setKeyDialog('reset')}
+        onClose={() => setKeyDialog(null)}
+        onDone={(next, savedTo) => {
+          setStatus(next);
+          setKeyDialog(null);
+          toast(savedTo ? 'Unlocked; key saved to the key file' : 'Unlocked');
+        }}
+      />
       <ConfirmDialog
         open={confirm}
         tone="primary"

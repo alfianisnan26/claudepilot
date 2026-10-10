@@ -3,6 +3,7 @@ import { AppError, defineErrorCodes, newId } from '@isnanme/core';
 import {
   ACCOUNT_NAME_MAX,
   type Account,
+  type AccountHealthState,
   type AccountsOverview,
   type BulkAddAccountsRequest,
   type BulkAddAccountsResult,
@@ -55,6 +56,10 @@ interface AccountRow {
   check_status: number | null;
   check_detail: string | null;
   checked_at: string | null;
+  health: AccountHealthState;
+  health_until: string | null;
+  health_detail: string | null;
+  health_at: string | null;
   created_at: string;
 }
 
@@ -108,6 +113,17 @@ function cleanModelNames(input: unknown): ModelNames {
  */
 export class AccountsService {
   #lastPrune = 0;
+  /**
+   * Wired at startup: `changed` (an account was edited, disabled or enabled), `checked` (a key check
+   * was saved; health decides what it means), `poolsWith` (pools holding an account).
+   */
+  hooks: {
+    changed?: (accountId: string, why: string) => void;
+    checked?: (accountId: string, result: CheckResult, manual: boolean) => void;
+    poolsWith?: (accountId: string) => string[];
+    /** Any account or endpoint change worth showing (every one is also an event in the log). */
+    event?: () => void;
+  } = {};
 
   constructor(private readonly store: Store) {}
 
@@ -177,13 +193,14 @@ export class AccountsService {
   #event(type: string, accountId: string | null, details: Record<string, unknown> = {}) {
     const now = Date.now();
     this.#db.prepare('INSERT INTO account_events (at, type, account_id, details) VALUES (?, ?, ?, ?)').run(new Date(now).toISOString(), type, accountId, JSON.stringify(details));
+    this.hooks.event?.();
     if (now - this.#lastPrune > 60 * 60 * 1000) {
       this.#lastPrune = now;
       this.#db.prepare('DELETE FROM account_events WHERE at < ?').run(new Date(now - EVENT_RETENTION_DAYS * 86_400_000).toISOString());
     }
   }
 
-  #saveCheck(id: string, outcome: CheckOutcome) {
+  #saveCheck(id: string, outcome: CheckOutcome, manual = true) {
     this.#db
       .prepare(
         `UPDATE accounts SET check_result = ?, check_status = ?, check_detail = ?, checked_at = ?,
@@ -191,7 +208,8 @@ export class AccountsService {
          WHERE id = ?`,
       )
       .run(outcome.result, outcome.status, outcome.detail, new Date().toISOString(), outcome.organizationId, outcome.anthropicWorkspaceId, id);
-    this.#event('account_checked', id, { result: outcome.result, status: outcome.status });
+    this.#event('account_checked', id, { result: outcome.result, status: outcome.status, manual });
+    this.hooks.checked?.(id, outcome.result, manual);
   }
 
   #insert(endpoint: Endpoint, name: string, key: string, notes: string): string {
@@ -272,27 +290,38 @@ export class AccountsService {
     if (key) {
       const box = this.#secrets();
       this.#db
-        .prepare("UPDATE accounts SET secret = ?, fingerprint = ?, masked = ?, check_result = 'unknown', check_status = NULL, check_detail = NULL WHERE id = ?")
+        .prepare(
+          `UPDATE accounts SET secret = ?, fingerprint = ?, masked = ?, check_result = 'unknown', check_status = NULL, check_detail = NULL,
+             health = 'ok', health_until = NULL, health_detail = NULL, health_at = NULL, backoff_ms = NULL WHERE id = ?`,
+        )
         .run(box.seal(key, { table: 'accounts', row: id, column: 'secret' }), fingerprintOf(key), maskKey(key), id);
       changes.push('key replaced');
     }
     if (changes.length) this.#event('account_updated', id, { changes });
     if (key) this.#saveCheck(id, await checkKey(this.#endpoint(row.endpoint_id), key));
+    else if (changes.length) this.hooks.changed?.(id, changes.join(', '));
     return toAccount(this.#account(id));
   }
 
-  async check(id: string): Promise<Account> {
+  /** `manual`: an admin asked (Check now); scheduled checks every 15 minutes pass false. */
+  async check(id: string, opts: { manual?: boolean } = {}): Promise<Account> {
     const box = this.#secrets();
     const row = this.#account(id);
     if (!row.secret) throw new AppError('CONFLICT', 'This account has no key. Enter it again first.');
     const key = box.open(row.secret, { table: 'accounts', row: id, column: 'secret' });
-    this.#saveCheck(id, await checkKey(this.#endpoint(row.endpoint_id), key));
+    this.#saveCheck(id, await checkKey(this.#endpoint(row.endpoint_id), key), opts.manual ?? true);
+    return toAccount(this.#account(id));
+  }
+
+  get(id: string): Account {
     return toAccount(this.#account(id));
   }
 
   remove(id: string) {
     this.#requireWritable();
     const row = this.#account(id);
+    const pools = this.hooks.poolsWith?.(id) ?? [];
+    if (pools.length) throw new AppError('CONFLICT', `Take it out of ${pools.map((p) => `“${p}”`).join(', ')} first.`);
     this.#db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
     this.#event('account_removed', id, { name: row.name, fingerprint: row.fingerprint });
   }
@@ -412,6 +441,7 @@ function toAccount(r: AccountRow): Account {
     organizationId: r.organization_id,
     anthropicWorkspaceId: r.anthropic_workspace_id,
     check: { result: r.check_result, status: r.check_status, detail: r.check_detail, at: r.checked_at },
+    health: { state: r.health, until: r.health_until, detail: r.health_detail, at: r.health_at },
     createdAt: r.created_at,
   };
 }

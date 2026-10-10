@@ -10,7 +10,8 @@ import { runtimeMessage, type Workspaces } from './manager.js';
 const SHELL_PATH = /^\/api\/workspaces\/([a-z0-9-]+)\/([a-z0-9-]+)\/shell$/;
 const PING_MS = 25_000;
 
-function cookie(req: IncomingMessage, name: string): string | undefined {
+/** One cookie from an upgrade request (WebSocket handshakes carry the session cookie). */
+export function cookie(req: IncomingMessage, name: string): string | undefined {
   for (const part of req.headers.cookie?.split(';') ?? []) {
     const [k, ...v] = part.trim().split('=');
     if (k === name) return decodeURIComponent(v.join('='));
