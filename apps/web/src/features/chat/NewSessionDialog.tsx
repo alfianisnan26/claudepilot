@@ -1,5 +1,5 @@
 import { FormDialog, Select, TextField } from '@isnanme/ui';
-import { CHAT_SESSION_TITLE_MAX, type ChatFolderScan, type CreateChatSessionRequest, type Workspace } from '@portal/contracts';
+import { CHAT_SESSION_TITLE_MAX, CLAUDE_NAME_MAX, type ChatFolderScan, type CreateChatSessionRequest, type Workspace, type WorkspaceClaude } from '@portal/contracts';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { api, errorText } from '@/lib/api';
@@ -68,6 +68,9 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [trust, setTrust] = useState<TrustStep | null>(null);
+  const [claudes, setClaudes] = useState<WorkspaceClaude[]>([]);
+  const [claudeId, setClaudeId] = useState('');
+  const [newClaude, setNewClaude] = useState('');
 
   useEffect(() => {
     if (!open) return;
@@ -78,6 +81,9 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
     setTrust(null);
     setWorkspaces(null);
     setWorkspaceId('');
+    setClaudes([]);
+    setClaudeId('');
+    setNewClaude('');
     let current = true;
     api.workspaces.list().then(
       (list) => {
@@ -91,6 +97,23 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
       current = false;
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    let current = true;
+    chatApi.claudes(workspaceId).then(
+      (list) => {
+        if (!current) return;
+        const open = list.filter((c) => !c.removedAt);
+        setClaudes(open);
+        setClaudeId(open[0]?.id ?? '');
+      },
+      () => current && setClaudes([]),
+    );
+    return () => {
+      current = false;
+    };
+  }, [workspaceId]);
 
   /** After a refusal for the workspace's pool: the picker catches up (the choice stays if still eligible). */
   const reload = () =>
@@ -155,7 +178,22 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
     if (!workspaceId) return;
     const cwd = folderPath(folder);
     if (!cwd) return setFolderError(FOLDER_PROBLEM);
-    await start({ workspaceId, title: title.trim() || undefined, cwd });
+    let chosen = claudeId;
+    const named = newClaude.trim();
+    if (named) {
+      setSaving(true);
+      setError(null);
+      try {
+        const created = await chatApi.createClaude({ workspaceId, name: named });
+        chosen = created.id;
+      } catch (e) {
+        setError(errorText(e, 'Could not add that Claude.'));
+        setSaving(false);
+        return;
+      }
+      setSaving(false);
+    }
+    await start({ workspaceId, title: title.trim() || undefined, cwd, claudeId: chosen || undefined });
   };
 
   const trustAndStart = async () => {
@@ -230,6 +268,22 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
               setFolderError(undefined);
             }}
             error={folderError}
+          />
+          <Select
+            label="Claude"
+            value={claudeId}
+            onChange={setClaudeId}
+            options={claudes.map((c) => ({ value: c.id, label: c.name }))}
+            placeholder={workspaceId ? 'Loading…' : 'Pick a workspace first'}
+          />
+          <TextField
+            label="New Claude"
+            optional
+            hint="Leaves an empty directory on this workspace. Sign in from the terminal there if you want SSO. Portal chat uses the workspace account pool and does not ask."
+            placeholder="Name, to add one"
+            maxLength={CLAUDE_NAME_MAX}
+            value={newClaude}
+            onChange={(e) => setNewClaude(e.target.value)}
           />
           <TextField
             label="Title"

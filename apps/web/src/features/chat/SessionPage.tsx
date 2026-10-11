@@ -1,8 +1,8 @@
-import { Badge, Button, cn, ConfirmDialog, Menu, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
-import type { ChatRequest } from '@portal/contracts';
+import { Badge, Button, cn, ConfirmDialog, FormDialog, Menu, Select, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
+import type { ChatRequest, WorkspaceClaude } from '@portal/contracts';
 import { ArrowLeft, Bot, FolderOpen, ListCollapse, ListTree, MoreHorizontal, Square, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import { BRAND_NAME } from '@/components/Logo';
 import { errorText } from '@/lib/api';
 import { AgentsPanel, AgentsSheet } from './AgentsPanel';
@@ -51,6 +51,7 @@ function savedDetails(): boolean {
  */
 export function SessionPage() {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const toast = useToast();
   const { connected, events, delta, session, inputs, outbox, tasks, send, respond, control, stop, end } = useChatSession(id);
   const [ending, setEnding] = useState(false);
@@ -122,6 +123,42 @@ export function SessionPage() {
     return () => void (document.title = BRAND_NAME);
   }, [session?.title]);
 
+  // The open thread follows a transfer onto the new session.
+  useEffect(() => {
+    if (session?.id === id && session.successorId) navigate(`/admin/sessions/${session.successorId}`, { replace: true });
+  }, [session?.id, session?.successorId, id, navigate]);
+
+  const [switching, setSwitching] = useState(false);
+  const [switchTo, setSwitchTo] = useState('');
+  const [others, setOthers] = useState<WorkspaceClaude[]>([]);
+  const [moving, setMoving] = useState(false);
+  const openSwitch = () => {
+    if (!session) return;
+    setSwitching(true);
+    setSwitchTo('');
+    chatApi.claudes(session.workspaceId).then(
+      (list) => {
+        const rest = list.filter((c) => !c.removedAt && c.id !== session.claudeId);
+        setOthers(rest);
+        setSwitchTo(rest[0]?.id ?? '');
+      },
+      () => setOthers([]),
+    );
+  };
+  const runTransfer = async () => {
+    if (!switchTo) return;
+    setMoving(true);
+    try {
+      const next = await chatApi.transfer(id, { claudeId: switchTo });
+      setSwitching(false);
+      navigate(`/admin/sessions/${next.id}`, { replace: true });
+    } catch (e) {
+      toast(errorText(e, 'Could not move this session.'), 'error');
+    } finally {
+      setMoving(false);
+    }
+  };
+
   // Open requests: a `request` with no later `resolved`, oldest first (events are seq-ordered).
   const openRequests = useMemo(() => {
     const resolved = new Set<string>();
@@ -179,6 +216,12 @@ export function SessionPage() {
     details
       ? { label: 'Show less', icon: <ListCollapse className="size-4" />, onSelect: fromMenu(toggleDetails) }
       : { label: 'Show all details', icon: <ListTree className="size-4" />, onSelect: fromMenu(toggleDetails) },
+    {
+      label: 'Switch Claude',
+      icon: <Bot className="size-4" />,
+      onSelect: fromMenu(openSwitch),
+      disabled: ended && session?.endedReason !== 'transferred',
+    },
     { label: 'End session', icon: <Trash2 className="size-4" />, onSelect: fromMenu(() => setEnding(true)), danger: true, disabled: ended },
   ];
 
@@ -196,6 +239,8 @@ export function SessionPage() {
           <p className="truncate text-sm font-semibold">{session?.title || 'Untitled'}</p>
           <p className="truncate text-[11px] text-muted">
             <span className="font-mono">{session?.workspaceId ?? '…'}</span>
+            {session?.claudeName ? ` · ${session.claudeName}` : ''}
+            {session?.endedReason === 'transferred' ? ' · left behind' : ''}
             {!connected && ' · reconnecting…'}
           </p>
         </div>
@@ -340,6 +385,26 @@ export function SessionPage() {
       {!wide && <FilesSheet key={id} open={sheet === 'files'} sessionId={id} view={filesView} onView={setFilesView} onClose={() => setSheet(null)} />}
 
       <TrustSheet trust={trust} />
+
+      <FormDialog
+        open={switching}
+        onClose={() => !moving && setSwitching(false)}
+        size="sm"
+        title="Move this chat?"
+        description="This session stops being the live thread. A new session starts on the Claude you pick, and this view follows it. Logins stay in their directories."
+        onSubmit={runTransfer}
+        submitLabel="Move"
+        saving={moving}
+        submitDisabled={!switchTo}
+      >
+        <Select
+          label="Claude"
+          value={switchTo}
+          onChange={setSwitchTo}
+          options={others.map((c) => ({ value: c.id, label: c.name }))}
+          placeholder={others.length ? 'Pick a Claude' : 'No other Claude on this workspace'}
+        />
+      </FormDialog>
 
       <ConfirmDialog
         open={ending}

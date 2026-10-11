@@ -39,6 +39,25 @@ export interface ChatSession {
   createdAt: string;
   lastActivityAt: string;
   endedReason: string | null;
+  /** The Claude directory this session runs in. Empty until a Claude is recorded. */
+  claudeId: string;
+  /** Display name of that Claude, when known. */
+  claudeName: string | null;
+  /** The session this one was transferred from, if any. */
+  predecessorId: string | null;
+  /** The session a transfer continued as, if any. */
+  successorId: string | null;
+}
+
+/** A named Claude on one workspace volume. Its directory holds chats and any terminal login. No credential is stored here. */
+export interface WorkspaceClaude {
+  id: string;
+  workspaceId: string;
+  name: string;
+  /** Relative directory on the volume, or empty for the workspace's original Claude home. */
+  directory: string;
+  removedAt: string | null;
+  createdAt: string;
 }
 
 /** A request from the agent that needs an answer: a tool to allow, a question, a plan to review. */
@@ -153,7 +172,21 @@ export interface CreateChatSessionRequest {
   title?: string;
   /** A folder in the workspace to run in; defaults to the home folder. */
   cwd?: string;
+  /** Which Claude on that workspace. Omitted uses Default. */
+  claudeId?: string;
 }
+
+export interface CreateWorkspaceClaudeRequest {
+  workspaceId: string;
+  name: string;
+}
+
+export interface TransferChatRequest {
+  /** Destination Claude on the same workspace. */
+  claudeId: string;
+}
+
+export const CLAUDE_NAME_MAX = 40;
 
 export const CHAT_SESSION_TITLE_MAX = 80;
 
@@ -181,6 +214,10 @@ export const CHAT_API = {
   scan: '/api/chat/trust/scan',
   /** POST `ChatTrustRequest`: trust a folder as scanned. */
   trust: '/api/chat/trust',
+  /** GET `?workspaceId=`: Claudes on a workspace. POST: create one (empty directory, no sign-in). */
+  claudes: '/api/chat/claudes',
+  /** POST `TransferChatRequest`: confirm a context move to another Claude on the same workspace. */
+  transfer: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/transfer`,
 } as const;
 
 export interface ChatFileEntry {

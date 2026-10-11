@@ -125,7 +125,9 @@ function SessionRow({ session: s, onEnd }: { session: ChatSession; onEnd: () => 
             {/* Waiting is the state's own badge, so it says how many when there's more than one. */}
             {(s.waiting > 0 || s.state === 'waiting') && <Badge tone="warning">{s.waiting > 1 ? `${s.waiting} waiting` : 'Needs you'}</Badge>}
           </div>
-          <p className="mt-0.5 flex min-w-0 items-baseline gap-1 text-[13px] text-muted">
+            <p className="mt-0.5 flex min-w-0 items-baseline gap-1 text-[13px] text-muted">
+            {s.claudeName ? <span className="shrink-0">{s.claudeName}</span> : null}
+            {s.claudeName ? <span aria-hidden="true">·</span> : null}
             {/* Phones show the workspace's name; wider screens its target too (docker/…). */}
             <span title={s.workspaceId} className="truncate font-mono">
               <span className="hidden sm:inline">{s.workspaceId.slice(0, s.workspaceId.indexOf('/') + 1)}</span>

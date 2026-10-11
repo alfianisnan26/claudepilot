@@ -3,6 +3,7 @@
 // credential redactor (redact.ts), and large text is truncated.
 
 import type {
+  WorkspaceClaude,
   ChatEvent,
   ChatEventKind,
   ChatImage,
@@ -14,6 +15,7 @@ import type {
   ChatSessionState,
   ChatTask,
 } from '@portal/contracts';
+import { createHash, randomBytes } from 'node:crypto';
 import { posix } from 'node:path';
 import type { Store } from '../store/store.js';
 import { HOME } from '../workspaces/runtime.js';
@@ -59,6 +61,9 @@ export type ChatSessionRow = {
   last_activity_at: string;
   ended_reason: string | null;
   archived_at: string | null;
+  claude_id?: string | null;
+  predecessor_id?: string | null;
+  successor_id?: string | null;
 };
 
 type EventRow = {
@@ -115,6 +120,8 @@ export interface ChatSessionPatch {
   processStartedAt?: string | null;
   process?: 'live' | 'asleep' | 'gone';
   endedReason?: string | null;
+  successorId?: string | null;
+  predecessorId?: string | null;
 }
 
 /** The lifecycle states a sent line moves through (chat-sessions PRD §9): the contract's, plus `refused`. */
@@ -217,14 +224,14 @@ export class ChatStore {
     return this.#now().toISOString();
   }
 
-  create(opts: { id: string; workspaceId: string; cwd: string; title: string; origin: ChatOrigin }): ChatSession {
+  create(opts: { id: string; workspaceId: string; cwd: string; title: string; origin: ChatOrigin; claudeId?: string; predecessorId?: string | null }): ChatSession {
     const now = this.#stamp();
     this.#writable()
       .prepare(
-        `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?)`,
+        `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?)`,
       )
-      .run(opts.id, opts.workspaceId, opts.cwd, opts.title, opts.origin, now, now, now);
+      .run(opts.id, opts.workspaceId, opts.cwd, opts.title, opts.origin, now, now, now, opts.claudeId ?? '', opts.predecessorId ?? null);
     return this.get(opts.id)!;
   }
 
@@ -276,6 +283,10 @@ export class ChatStore {
       createdAt: row.created_at,
       lastActivityAt: row.last_activity_at,
       endedReason: row.ended_reason ?? null,
+      claudeId: row.claude_id ?? '',
+      claudeName: this.claudeName(row.workspace_id, row.claude_id ?? ''),
+      predecessorId: row.predecessor_id ?? null,
+      successorId: row.successor_id ?? null,
     };
   }
 
@@ -362,6 +373,8 @@ export class ChatStore {
     if (patch.processStartedAt !== undefined) set('process_started_at', patch.processStartedAt);
     if (patch.process !== undefined) set('process', patch.process);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
+    if (patch.successorId !== undefined) set('successor_id', patch.successorId);
+    if (patch.predecessorId !== undefined) set('predecessor_id', patch.predecessorId);
     if (!sets.length) return;
     db.prepare(`UPDATE chat_sessions SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
   }
@@ -635,6 +648,79 @@ export class ChatStore {
   }
 
   /** Only the allowlisted display fields of an event (never a raw tool input blob), with credentials redacted. */
+  /** The workspace's Claudes, creating Default on first use. Default keeps the original home (no extra directory). */
+  listClaudes(workspaceId: string): WorkspaceClaude[] {
+    this.ensureDefault(workspaceId);
+    const rows = this.#db().prepare('SELECT * FROM workspace_claudes WHERE workspace_id = ? ORDER BY created_at, name').all(workspaceId) as ClaudeRow[];
+    return rows.map(toClaude);
+  }
+
+  ensureDefault(workspaceId: string): WorkspaceClaude {
+    const existing = this.#db().prepare(`SELECT * FROM workspace_claudes WHERE workspace_id = ? AND directory = ''`).get(workspaceId) as ClaudeRow | undefined;
+    if (existing) return toClaude(existing);
+    const now = this.#stamp();
+    const id = `d_${createHash('sha256').update(workspaceId).digest('hex').slice(0, 16)}`;
+    this.#writable().prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES (?, ?, 'Default', '', ?)`).run(id, workspaceId, now);
+    return toClaude(this.#db().prepare('SELECT * FROM workspace_claudes WHERE id = ?').get(id) as ClaudeRow);
+  }
+
+  claude(id: string): WorkspaceClaude | null {
+    const row = this.#db().prepare('SELECT * FROM workspace_claudes WHERE id = ?').get(id) as ClaudeRow | undefined;
+    return row ? toClaude(row) : null;
+  }
+
+  claudeName(workspaceId: string, claudeId: string): string | null {
+    if (!claudeId) return 'Default';
+    const row = this.#db().prepare('SELECT name FROM workspace_claudes WHERE id = ? AND workspace_id = ?').get(claudeId, workspaceId) as { name: string } | undefined;
+    return row?.name ?? null;
+  }
+
+  /** Absolute config directory for a non-default Claude, or null to leave Claude Code on the workspace home. */
+  configDir(claudeId: string): string | null {
+    if (!claudeId) return null;
+    const row = this.#db().prepare('SELECT directory FROM workspace_claudes WHERE id = ?').get(claudeId) as { directory: string } | undefined;
+    if (!row || !row.directory) return null;
+    if (!/^claudes\/[a-f0-9]{16}$/.test(row.directory)) return null;
+    return `${HOME}/.claudepilot/${row.directory}`;
+  }
+
+  addClaude(workspaceId: string, name: string): { id: string; directory: string } {
+    const id = randomBytes(8).toString('hex');
+    const directory = `claudes/${id}`;
+    const now = this.#stamp();
+    this.#writable().prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES (?, ?, ?, ?, ?)`).run(id, workspaceId, name, directory, now);
+    return { id, directory };
+  }
+
+  removeClaudeRow(id: string): void {
+    this.#writable().prepare('DELETE FROM workspace_claudes WHERE id = ?').run(id);
+  }
+
+  /** Portal events, newest last, capped, already redacted in the store. */
+  contextSummary(sessionId: string): string {
+    const rows = this.history(sessionId);
+    const lines: string[] = [];
+    for (const ev of rows) {
+      if ((ev.kind !== 'user' && ev.kind !== 'assistant') || !ev.text?.trim()) continue;
+      lines.push(`${ev.kind === 'user' ? 'User' : 'Claude'}: ${ev.text.trim()}`);
+    }
+    const text = lines.join('\n\n');
+    return text.length > 8000 ? text.slice(-8000) : text;
+  }
+
+  saveHandoff(row: { id: string; workspaceId: string; sourceSessionId: string; sourceClaudeId: string; destClaudeId: string; path: string }): void {
+    this.#writable()
+      .prepare(
+        `INSERT INTO claude_handoffs (id, workspace_id, source_session_id, successor_session_id, source_claude_id, dest_claude_id, path, created_at)
+         VALUES (?, ?, ?, NULL, ?, ?, ?, ?)`,
+      )
+      .run(row.id, row.workspaceId, row.sourceSessionId, row.sourceClaudeId, row.destClaudeId, row.path, this.#stamp());
+  }
+
+  setHandoffSuccessor(id: string, successorId: string): void {
+    this.#writable().prepare('UPDATE claude_handoffs SET successor_session_id = ? WHERE id = ?').run(successorId, id);
+  }
+
   #payload(ev: StoredEvent): Record<string, unknown> {
     const p: Record<string, unknown> = {};
     if (ev.text !== undefined) {
@@ -688,4 +774,24 @@ export class ChatStore {
       return {};
     }
   }
+}
+
+type ClaudeRow = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  directory: string;
+  removed_at: string | null;
+  created_at: string;
+};
+
+function toClaude(row: ClaudeRow): WorkspaceClaude {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    directory: row.directory,
+    removedAt: row.removed_at,
+    createdAt: row.created_at,
+  };
 }
