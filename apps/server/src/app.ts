@@ -397,6 +397,15 @@ export function createApp(
       await next();
       c.header('Cache-Control', 'public, max-age=31536000, immutable');
     });
+    // The worker and the manifest must always be re-checked, or an update can take days to reach installed copies.
+    app.use('/sw.js', async (c, next) => {
+      await next();
+      c.header('Cache-Control', 'no-cache');
+    });
+    app.use('/manifest.webmanifest', async (c, next) => {
+      await next();
+      c.header('Cache-Control', 'no-cache');
+    });
     app.use('*', serveStatic({ root }));
     // Client-side routes: every other path gets the app shell.
     app.get('*', serveStatic({ root, path: 'index.html' }));

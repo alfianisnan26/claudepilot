@@ -47,6 +47,11 @@ npm test           # server tests (node:test)
 
 The devcontainer forwards port 3000.
 
+The web app is installable (a PWA): `apps/web/public/manifest.webmanifest`, icons and `sw.js`. The
+service worker is registered in production builds only and does one thing: it shows `offline.html`
+when a page load can't reach the server. API calls, WebSockets and assets are never cached. Browsers
+only offer installing on HTTPS or `localhost`.
+
 ## Configuration
 
 Environment variables (see [.env.example](.env.example)):

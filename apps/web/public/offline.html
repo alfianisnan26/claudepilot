@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>pilot is offline</title>
+    <style>
+      :root { color-scheme: light dark; --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #0b0b0c; --fg: #f5f5f4; --muted: #a8a29e; } }
+      body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 24px; box-sizing: border-box;
+        background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; text-align: center; }
+      h1 { margin: 0 0 8px; font-size: 20px; }
+      p { margin: 0 0 20px; color: var(--muted); }
+      button { font: inherit; padding: 10px 18px; border-radius: 10px; border: 1px solid var(--muted); background: transparent; color: var(--fg); cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>pilot can’t be reached</h1>
+      <p>Check your connection or whether the server is running.</p>
+      <button onclick="location.reload()">Try again</button>
+    </main>
+  </body>
+</html>
