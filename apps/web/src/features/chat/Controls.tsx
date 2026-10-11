@@ -119,7 +119,9 @@ export function Controls({
   }, [needModels, sessionId, reload]);
 
   const current = matchModel(models, session.model, picked);
-  const modelName = current?.displayName || (session.model ? prettyModel(session.model) : 'Model');
+  // The model in effect, by name: steady whether or not the list has loaded (an alias such as
+  // "Default (recommended)" names a choice, not the model running).
+  const modelName = session.model ? prettyModel(session.model) : current?.displayName || 'Model';
   const mode = MODES[session.mode] ?? MODES.default;
   // Ultracode lives in the effort picker; with no effort chip, its own chip is the way there.
   const showUltracode = session.ultracode || (session.ultracodeAvailable && session.effort === null);
@@ -238,7 +240,7 @@ function Chip({
       title={title}
       className={cn(
         'press inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12.5px] font-semibold whitespace-nowrap transition-colors tap:h-10 tap:px-3',
-        shrink ? 'max-w-[13rem] min-w-0 shrink' : 'shrink-0',
+        shrink ? 'max-w-[13rem] min-w-[6.5rem] shrink' : 'shrink-0',
         tone === 'gold'
           ? 'border-gold/30 bg-gold-soft text-gold'
           : tone === 'danger'
@@ -248,7 +250,8 @@ function Chip({
     >
       <Icon className="size-3.5 shrink-0" aria-hidden="true" />
       <span className="truncate">{label}</span>
-      <ChevronDown className="size-3 shrink-0 opacity-60" aria-hidden="true" />
+      {/* Phones need the room for the chips' values; the chips still read as buttons. */}
+      <ChevronDown className="hidden size-3 shrink-0 opacity-60 sm:block" aria-hidden="true" />
     </button>
   );
 }

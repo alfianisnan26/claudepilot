@@ -446,7 +446,7 @@ New pieces go in `apps/web/src/components` before Chat and Monitoring ship UI.
 | Q3 | Lifetimes: 12 h, or 30 days unused and 90 days at most when kept; re-auth lasting 10 minutes. Right? | Operator |
 | Q4 | Quiet hours off by default, since phones' Focus modes cover most needs, or 22:00–07:00 on new devices? Keep the one offline summary, or nothing? | Product |
 | Q5 | 🔬 Behind Access, with the static paths bypassed, does the installed app install, update its worker and recover from an expired Access session on iOS and Android? Does Renew restart the month? | Device test |
-| Q6 | Home screens will show the app's name next to Anthropic's Claude app. Check "claude pilot" against Anthropic's trademark guidelines, then fix one display name and one short name (Chat Q13). | Operator |
+| Q6 | Home screens will show the app's name next to Anthropic's Claude app. Check "pilot" against Anthropic's trademark guidelines, then fix one display name and one short name (Chat Q13). | Operator |
 | Q7 | 🔬 Do high-urgency pushes reach an iPhone within seconds after days unopened? Does Apple's push service collapse by `Topic`? Does Safari hand `mutable` declarative pushes to the worker? | Device test |
 | Q8 | Passkeys in W6 or later? Should notifications ever show session titles (proposed: never)? | Product |
 | Q9 | 🔬 Under `focus-existing`, does Chrome on Android open the share target's POST in a new window or hand it to the open one? | Device test |

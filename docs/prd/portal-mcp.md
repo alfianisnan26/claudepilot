@@ -200,7 +200,7 @@ signed in with the account that holds the portal connector would give its agent 
 | Aspect | Requirement |
 | --- | --- |
 | File | `/etc/claude-code/managed-settings.d/00-claudepilot-base.json` (`root:root 0644`), in every workspace with or without pools, next to the marketplace registration ([Skillset](skillset-pool.md) A2). Owner: Foundation (A1, A2). |
-| Content | `{"deniedMcpServers": [{"serverUrl": "*://cp.example.com:*/*"}, {"serverName": "claude.ai claudepilot"}]}`, built from `PORTAL_PUBLIC_URL`. A hostname written out in full matches only the default port, so scheme and port are wildcards. The name entry is a backup: display names can change and gain a ` (N)` suffix, so Connect asks the admin to name the connector `claudepilot`. |
+| Content | `{"deniedMcpServers": [{"serverUrl": "*://cp.example.com:*/*"}, {"serverName": "claude.ai pilot"}]}`, built from `PORTAL_PUBLIC_URL`. A hostname written out in full matches only the default port, so scheme and port are wildcards. The name entry is a backup: display names can change and gain a ` (N)` suffix, so Connect asks the admin to name the connector `pilot`. |
 | What it blocks | The connectors Claude Code fetches itself, by URL or by name. Nothing overrides a deny match, and deny lists merge from every scope ([managed MCP](https://code.claude.com/docs/en/managed-mcp)). From Claude Code 2.1.273 the entry applies from any admin source, so it holds when the user's claude.ai organization pushes server-managed settings ([managed settings](https://code.claude.com/docs/en/managed-settings#keys-read-from-every-admin-source)). |
 | What it misses | Connectors the desktop app delivers in-process to its local and SSH sessions, and cloud sessions, whose proxy rewrites connector URLs. Workspaces run terminal and Agent SDK sessions, where it applies. Policy is checked when a server loads, reconnects or is turned back on; 🔬 whether a running session drops a loaded connector is Q8. |
 | Not a boundary | Workspace users and agents have passwordless `sudo` and can delete the file (foundation §2). Reconcile restores it within 60 s, Monitoring raises "Settings tampering" (its §12), and only the locked image makes it binding ([Settings & policies](settings-policies.md) §14). The real control is the account: Connect requires confirming that the claude.ai account adding the connector is never used inside a workspace, for `/login` or for a Claude Desktop SSH session (§15). |
@@ -219,11 +219,11 @@ run at each connection and after a 401 or 403, reading a file the UI copies
 
 ```
 # Quick: the token goes into ~/.claude.json
-claude mcp add --transport http --scope user claudepilot https://cp.example.com/mcp \
+claude mcp add --transport http --scope user pilot https://cp.example.com/mcp \
   --header "Authorization: Bearer cpat_…"
-# Or: the token stays in ~/.config/claudepilot/mcp-headers.json
-claude mcp add-json --scope user claudepilot \
-  '{"type":"http","url":"https://cp.example.com/mcp","headersHelper":"cat ~/.config/claudepilot/mcp-headers.json"}'
+# Or: the token stays in ~/.config/pilot/mcp-headers.json
+claude mcp add-json --scope user pilot \
+  '{"type":"http","url":"https://cp.example.com/mcp","headersHelper":"cat ~/.config/pilot/mcp-headers.json"}'
 ```
 
 `http://localhost:3000/mcp` works on the portal machine without a tunnel. OAuth works from Claude
@@ -342,22 +342,22 @@ the SDK only verifies tokens (`requireBearerAuth`).
 
 | Requirement (connector docs, MCP spec) | Portal |
 | --- | --- |
-| A 401 starts sign-in; `WWW-Authenticate` on a 200 is ignored | 401 with `WWW-Authenticate: Bearer resource_metadata="<public>/.well-known/oauth-protected-resource/mcp", scope="claudepilot:read claudepilot:operate"` |
+| A 401 starts sign-in; `WWW-Authenticate` on a 200 is ignored | 401 with `WWW-Authenticate: Bearer resource_metadata="<public>/.well-known/oauth-protected-resource/mcp", scope="pilot:read pilot:operate"` |
 | RFC 9728 metadata whose `resource` equals the URL the user entered; only the first `authorization_servers` entry is used | `resource: "<PORTAL_PUBLIC_URL>/mcp"`, one server. The UI shows the exact URL to paste. |
 | RFC 8414 metadata; PKCE `S256`; RFC 8707 `resource` on authorize and token requests | `code_challenge_methods_supported: ["S256"]`; a different `resource` is `invalid_target` |
 | CIMD only with `client_id_metadata_document_supported: true` and `"none"` in `token_endpoint_auth_methods_supported`, else DCR | Both advertised |
 | `/token` is form-encoded and answers within 10 s (30 s for refresh); refresh tokens rotate; a dead one returns `invalid_grant` | Under 1 s, `Cache-Control: no-store`, rotation with reuse detection |
 | `iss` in the authorization response (RFC 9207), advertised as `authorization_response_iss_parameter_supported: true`; Claude Code v2 rejects an unexpected issuer | Both |
-| Scopes from the 401, else the protected resource metadata's `scopes_supported`; `offline_access` added if the authorization server lists it | Protected resource metadata lists `claudepilot:read claudepilot:operate`; authorization server metadata lists all three, without `offline_access`. Refresh tokens are issued anyway. |
+| Scopes from the 401, else the protected resource metadata's `scopes_supported`; `offline_access` added if the authorization server lists it | Protected resource metadata lists `pilot:read pilot:operate`; authorization server metadata lists all three, without `offline_access`. Refresh tokens are issued anyway. |
 | Refresh on a 401 and up to 5 minutes before expiry; discovery cached about 5 minutes; public IPv4; no redirects | 60-minute access tokens; §11 |
 
 ### 12.4 Scopes
 
 | Scope | Allows | Granted |
 | --- | --- | --- |
-| `claudepilot:read` | Every read tool, resource and prompt | Always |
-| `claudepilot:operate` | Read, plus starting, stopping and resyncing workspaces, checking accounts, interrupting and ending chat sessions, answering an agent's question or denying its request, and `mcp_lockdown` | claude.ai's first consent; PATs by choice |
-| `claudepilot:admin` | Operate, plus creating and deleting workspaces, managing pools, account pools and accounts, changing settings, secret links, and session control (start, send, configure, allow a request) | OAuth by step-up only; PATs by choice |
+| `pilot:read` | Every read tool, resource and prompt | Always |
+| `pilot:operate` | Read, plus starting, stopping and resyncing workspaces, checking accounts, interrupting and ending chat sessions, answering an agent's question or denying its request, and `mcp_lockdown` | claude.ai's first consent; PATs by choice |
+| `pilot:admin` | Operate, plus creating and deleting workspaces, managing pools, account pools and accounts, changing settings, secret links, and session control (start, send, configure, allow a request) | OAuth by step-up only; PATs by choice |
 
 - The server applies the hierarchy itself, and no scope reaches §6's right-hand column. It never
   accepts or forwards tokens it didn't issue.
@@ -388,7 +388,7 @@ Claude Code asks on every call, even in bypassPermissions mode
 ([docs](https://code.claude.com/docs/en/mcp#require-approval-for-a-specific-tool)); every admin
 tool marked D has it. **C** is server confirmation (§14.1); **C\*** applies only when a change
 reaches more than 5 workspaces. Names are snake_case `<noun>_<verb>` without dots
-(`mcp__claudepilot__<name>` in Claude Code). Items are accepted by ID or by exact name within a
+(`mcp__pilot__<name>` in Claude Code). Items are accepted by ID or by exact name within a
 type; an ambiguous name returns `AMBIGUOUS` with the matches, and destructive tools show the resolved
 ID in the preview and confirm by it.
 
@@ -464,10 +464,10 @@ session control over MCP" is on (off by default); otherwise only `session_list`,
 | `session_send` | admin | D O U | `id`, `text`, `priority` (`next` steers this turn, `later` waits for it to end) | Accepted, message state |
 | `session_configure` | admin | D U; C when raising the mode | `id`, `model`, `effort`, `mode` | Values after policy caps. Modes rank `plan`, then `default` or `dontAsk`, then `acceptEdits` ([Monitoring](monitoring-dashboard.md) §12). |
 
-Resources (read scope, no subscriptions): `claudepilot://status`,
-`claudepilot://workspaces/{target}/{name}` and `claudepilot://pools/{id}`, attached with `@` in
+Resources (read scope, no subscriptions): `pilot://status`,
+`pilot://workspaces/{target}/{name}` and `pilot://pools/{id}`, attached with `@` in
 Claude Code. Prompts: `fleet_status`, and `workspace_triage` with a `workspace_id`, shown in Claude
-Code as `/claudepilot:fleet_status`.
+Code as `/pilot:fleet_status`.
 
 ### 13.4 Not over MCP in v1
 
@@ -579,7 +579,7 @@ Access page gets PageTabs "Sign-in" (today's sections) and "MCP".
   and "3 workspaces not protected", which opens the list with reasons.
 - **Connect, claude.ai:** (1) a SwitchRow, "The claude.ai account I'll use is never used inside a
   workspace", which must be on before the steps show; (2) Add custom connector, name it
-  `claudepilot`, paste the URL; (3) Sign in now, then "Use your own OAuth client" (or Advanced
+  `pilot`, paste the URL; (3) Sign in now, then "Use your own OAuth client" (or Advanced
   settings): Client ID `claude-ai`, secret blank; (4) Connect and enter the server code. The steps
   stay disabled while any workspace is Pending; Not protected workspaces are listed, and continuing
   needs a ConfirmDialog naming them. **Claude Code** (§10.2) and **scripts** (curl) follow.
@@ -600,7 +600,7 @@ protected with the reason and its fix), and the workspace list's delivery chip c
 **Public pages** are a small second entry of the same Vite build, under `/connect/`, with the same
 components:
 
-- **Consent:** AuthLayout; "claude.ai wants to manage claudepilot"; the redirect host; scopes as
+- **Consent:** AuthLayout; "claude.ai wants to manage pilot"; the redirect host; scopes as
   SwitchRows (Read on and disabled, Operate on, Admin shown only when requested and on only for a
   step-up); the loopback warning for Claude Code; the box-per-character ServerCodeInput; Allow and
   Deny. A wrong code shows this IP's tries left. It fits a 360 px screen (claude.ai mobile may open

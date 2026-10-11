@@ -577,7 +577,7 @@ Workspace budgets mirror nothing at Anthropic; they're a portal control.
 2. Account Pool empties the workspace's key file and rewrites its drop-in with
    `CLAUDEPILOT_ACCOUNT=paused:<id>` ([Account Pool](account-pool.md) FR19). The write clears the
    helper cache ✅, so the next API request runs `account-key`, which finds the file empty, exits 1 and
-   prints "claudepilot: paused (workspace budget) · resumes 1 Nov 00:00 UTC" on stderr. Claude Code
+   prints "pilot: paused (workspace budget) · resumes 1 Nov 00:00 UTC" on stderr. Claude Code
    shows that on each attempt and fails the turn in about 2 s ✅ (X6). The portal ignores hook and
    telemetry lines marked `paused:`, so a paused workspace never probes or flags its shared account.
 3. The base URL keeps its helper, so [Account Pool §10.4](account-pool.md) holds (🔬 Q5: no fallback

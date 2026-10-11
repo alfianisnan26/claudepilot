@@ -345,6 +345,10 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
         const id = asStr(block.id);
         const ev: StoredEvent = { kind: 'tool_use', toolName: name ?? undefined, agentLabel, uuid, parentToolUseId: agentLabel };
         if (id) ev.toolUseId = id;
+        // The transcript's one-line summary of the call (a command, a path, a sub-agent's task); the
+        // input itself is never stored.
+        const summary = requestDetail(name, block.input);
+        if (summary) ev.text = summary;
         stored.push(ev);
         const description = asStr(asObj(block.input)?.description);
         if (name && AGENT_TOOLS.has(name) && id && description) agents.push({ toolUseId: id, description: clean(description, MAX_LABEL) });
@@ -667,7 +671,10 @@ export function requestTitle(toolName: string | null): string {
 
 const MAX_DETAIL = 200;
 
-/** A short, redacted one-line summary of a tool's input (never the whole blob); null for unknown tools. */
+/**
+ * A short one-line summary of a tool's input (never the whole blob), redacted where it's stored: for
+ * approval cards and the transcript's tool rows. Null for unknown tools.
+ */
 export function requestDetail(toolName: string | null, input: unknown): string | null {
   const o = asObj(input);
   if (!o) return null;
@@ -682,6 +689,23 @@ export function requestDetail(toolName: string | null, input: unknown): string |
     case 'NotebookEdit':
     case 'Read':
       detail = asStr(o.file_path) ?? asStr(o.notebook_path);
+      break;
+    case 'Glob':
+    case 'Grep':
+      detail = asStr(o.pattern);
+      break;
+    case 'LS':
+      detail = asStr(o.path);
+      break;
+    case 'WebFetch':
+      detail = asStr(o.url);
+      break;
+    case 'WebSearch':
+      detail = asStr(o.query);
+      break;
+    case 'Task':
+    case 'Agent':
+      detail = asStr(o.description);
       break;
     default:
       return null; // unknown tools: don't risk echoing secrets from an unrecognised shape

@@ -6,6 +6,7 @@ import '@xterm/xterm/css/xterm.css';
 import { ArrowLeft, RotateCw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
+import { BRAND_NAME } from '@/components/Logo';
 
 type Phase = { kind: 'connecting' } | { kind: 'open' } | { kind: 'closed'; reason: string };
 
@@ -26,7 +27,7 @@ export function ShellPage() {
 
   useEffect(() => {
     document.title = `${name} · shell`;
-    return () => void (document.title = 'portal');
+    return () => void (document.title = BRAND_NAME);
   }, [name]);
 
   useEffect(() => {

@@ -151,7 +151,7 @@ conversation. A **subagent** is an agent a session starts. A **process** is an O
   returns host PIDs that don't match `claude agents` PIDs, so every target uses `exec`. Rows are
   tagged: Claude Code with its session, its children, stdio MCP servers by set (from the non-secret
   `CLAUDEPILOT_MCP_SERVER` marker the launcher exports, since `exec` replaces its arguments;
-  [MCP set](mcpset-pool.md) §14), claudepilot components, leftovers of ended sessions. The snapshot
+  [MCP set](mcpset-pool.md) §14), pilot components, leftovers of ended sessions. The snapshot
   reads only that marker from a process's environment and hides its own processes. Nothing is
   stored.
 - **FR4** While the Agents tab or a workspace's Sessions tab is visible, every second pull (20 s), the snapshot

@@ -81,6 +81,7 @@ test('parseLine: assistant text and tool_use blocks are stored with the agent la
   assert.equal(p.stored[0]!.text, 'Hello');
   assert.equal(p.stored[0]!.agentLabel, 'a1');
   assert.equal(p.stored[1]!.toolName, 'Bash');
+  assert.equal(p.stored[1]!.text, 'ls', 'the one-line summary, never the input itself');
 });
 
 test('parseLine: an incoming tool_result is stored; a replayed string user line is ignored', () => {
@@ -148,6 +149,9 @@ test('helpers: titles and redacted, truncated details', () => {
   assert.equal(requestTitle(null), 'Use a tool');
   assert.equal(requestDetail('Write', { file_path: '/a/b.txt' }), '/a/b.txt');
   assert.equal(requestDetail('Unknown', { foo: 'bar' }), null);
+  assert.equal(requestDetail('Grep', { pattern: 'readSid', path: '/x' }), 'readSid');
+  assert.equal(requestDetail('Task', { description: 'Survey the auth module', prompt: 'long…' }), 'Survey the auth module');
+  assert.equal(requestDetail('WebFetch', { url: 'https://example.com/a', prompt: 'p' }), 'https://example.com/a');
   assert.equal(requestDetail('Bash', {})?.length ?? null, null);
   assert.equal(requestDetail('Bash', { command: 'x'.repeat(500) })?.length, 200);
 });

@@ -1,6 +1,6 @@
 # Product requirements
 
-Planned features for claudepilot, one PRD each. Every PRD is reviewed and approved before
+Planned features for pilot, one PRD each. Every PRD is reviewed and approved before
 implementation starts.
 
 | PRD | What it covers | Status |

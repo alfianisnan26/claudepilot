@@ -1,4 +1,4 @@
-# portal
+# pilot
 
 A small admin portal served over plain HTTP on port 3000. Sign in with a **server code**; once in, the
 admin view rotates or replaces the code, turns sign-in on or off, and signs out.
@@ -66,6 +66,7 @@ dashes are ignored. A `.env` at the repo root is loaded in dev.
 
 Shell boxes with Claude Code, git and gh ([images/workspace](images/workspace/Dockerfile)), managed
 from the Workspaces page: create, start, stop, remove, live CPU/memory, and a browser terminal.
+Internal names (containers, volumes, paths inside workspaces, the workspace image) still use `claudepilot`.
 
 Targets (each shows up when reachable):
 

@@ -1,8 +1,9 @@
-import { Button, cn, ConfirmDialog, Menu, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
+import { Badge, Button, cn, ConfirmDialog, Menu, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
 import type { ChatRequest } from '@portal/contracts';
 import { ArrowLeft, Bot, FolderOpen, MoreHorizontal, Square, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
+import { BRAND_NAME } from '@/components/Logo';
 import { errorText } from '@/lib/api';
 import { AgentsPanel, AgentsSheet } from './AgentsPanel';
 import { chatApi } from './api';
@@ -97,7 +98,7 @@ export function SessionPage() {
 
   useEffect(() => {
     document.title = `${session?.title || 'Session'} · chat`;
-    return () => void (document.title = 'portal');
+    return () => void (document.title = BRAND_NAME);
   }, [session?.title]);
 
   // Open requests: a `request` with no later `resolved`, oldest first (events are seq-ordered).
@@ -168,7 +169,12 @@ export function SessionPage() {
             {!connected && ' · reconnecting…'}
           </p>
         </div>
-        {session && <StateBadge state={state} />}
+        {session &&
+          (endedForSafety(session.endedReason) && ended ? (
+            <Badge tone="danger">Ended</Badge>
+          ) : (
+            <StateBadge state={state} />
+          ))}
         {working && (
           <Button size="sm" variant="secondary" icon={<Square className="size-3.5" />} onClick={stop} aria-label="Stop">
             <span className="hidden sm:inline">Stop</span>
@@ -317,14 +323,14 @@ export function SessionPage() {
   );
 }
 
-/** An ended session: a safety or integrity stop says what tripped it. */
+/** An ended session. A safety or integrity stop says so; why is in the transcript's last error. */
 function EndedNote({ reason }: { reason: string | null | undefined }) {
   const stop = endedForSafety(reason);
   return (
-    <p role="status" className="py-2 text-center text-[13px] break-words text-muted">
+    <p role="status" className="py-2 text-center text-[13px] text-muted">
       {stop ? (
         <>
-          <span className="font-semibold text-ink">{stop.label}:</span> {stop.why}. Start a new session to carry on.
+          <span className="font-semibold text-danger">{stop.label}.</span> Start a new session to carry on.
         </>
       ) : (
         'This session has ended.'

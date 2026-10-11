@@ -4,6 +4,7 @@ import { Clock3, ImageIcon, Wrench, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { chatApi } from './api';
 import { imageAlt, imageFileName, ImageThumbs, type ViewerImage } from './ImageViewer';
+import { CopyButton, Markdown } from './Markdown';
 import { formatUsd } from './shared';
 import type { ChatDelta, ChatOutgoing } from './useChatSocket';
 
@@ -28,6 +29,8 @@ interface RowContext {
   agentName: (label: string | null | undefined) => string | null;
   /** The tool behind a tool result with images, by the result's `seq`. */
   resultTools: ReadonlyMap<number, string>;
+  /** Replies that end their turn (or the latest one): they get Copy; narration between tool calls doesn't. */
+  finals: ReadonlySet<number>;
   onCancelQueued?: (uuid: string, text: string) => Promise<void>;
 }
 
@@ -96,11 +99,29 @@ export function Transcript({
     return out;
   }, [events]);
 
+  // The main agent's last reply before each result, and its latest reply in a turn still open.
+  const finals = useMemo(() => {
+    const out = new Set<number>();
+    let pending: number | null = null;
+    for (const e of events) {
+      if (e.agentLabel) continue;
+      if (e.kind === 'assistant') pending = e.seq;
+      else if (e.kind === 'tool_use' || e.kind === 'user') pending = null;
+      else if (e.kind === 'result' && pending !== null) {
+        out.add(pending);
+        pending = null;
+      }
+    }
+    if (pending !== null) out.add(pending);
+    return out;
+  }, [events]);
+
   const ctx: RowContext = {
     sessionId,
     inputs,
     agentName: (label) => (label ? (agentNames?.get(label) ?? label) : null),
     resultTools,
+    finals,
     onCancelQueued,
   };
 
@@ -127,7 +148,7 @@ export function Transcript({
             onCancel={onCancelQueued ? () => onCancelQueued(o.uuid, o.text) : undefined}
           />
         ))}
-        {delta && <AssistantBubble text={delta.text} agentLabel={ctx.agentName(delta.agentLabel)} live />}
+        {delta && <AssistantReply text={delta.text} agentLabel={ctx.agentName(delta.agentLabel)} live />}
       </div>
     </div>
   );
@@ -157,14 +178,19 @@ function EventRow({ event: e, ctx }: { event: ChatEvent; ctx: RowContext }) {
       );
     }
     case 'assistant':
-      return <AssistantBubble text={e.text ?? ''} agentLabel={ctx.agentName(e.agentLabel)} />;
+      return <AssistantReply text={e.text ?? ''} agentLabel={ctx.agentName(e.agentLabel)} copy={ctx.finals.has(e.seq)} />;
     case 'tool_use': {
       const agent = ctx.agentName(e.agentLabel);
       return (
         <ToolRow>
           <Wrench className="size-3.5 shrink-0" />
-          <span className="truncate font-mono">{e.toolName ?? 'tool'}</span>
-          {agent && <span className="truncate text-muted/80">· {agent}</span>}
+          <span className="shrink-0 font-mono">{e.toolName ? toolLabel(e.toolName) : 'tool'}</span>
+          {e.text && (
+            <span title={e.text} className="min-w-0 truncate font-mono text-muted">
+              {e.text}
+            </span>
+          )}
+          {agent && <span className="shrink-0 truncate text-muted/80">· {agent}</span>}
         </ToolRow>
       );
     }
@@ -294,18 +320,24 @@ function Note({ children, danger }: { children: ReactNode; danger?: boolean }) {
   return <span className={cn('px-1 text-[11.5px] font-semibold', danger ? 'text-danger' : 'text-muted')}>{children}</span>;
 }
 
-function AssistantBubble({ text, agentLabel, live }: { text: string; agentLabel: string | null; live?: boolean }) {
+/**
+ * A reply: full-width markdown (chat PRD FR5), with Copy under it when it ends its turn (`copy`). A
+ * sub-agent's reply carries its name. `live` is the reply still being written.
+ */
+function AssistantReply({ text, agentLabel, live, copy }: { text: string; agentLabel: string | null; live?: boolean; copy?: boolean }) {
   return (
-    <div className="flex flex-col items-start gap-1">
+    <div className={cn('flex flex-col items-start gap-0.5', agentLabel && 'border-l-2 border-line pl-3')}>
       {agentLabel && (
-        <span title={agentLabel} className="max-w-full truncate px-1 text-[10.5px] font-semibold tracking-wide text-muted uppercase">
+        <span title={agentLabel} className="max-w-full truncate text-[10.5px] font-semibold tracking-wide text-muted uppercase">
           {agentLabel}
         </span>
       )}
-      <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-surface-2 px-3.5 py-2.5 text-[14px] whitespace-pre-wrap break-words text-ink">
-        {text}
-        {live && <span className="ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[2px] animate-pulse bg-ink/60 align-middle" aria-hidden="true" />}
-      </div>
+      <Markdown text={text} className="w-full text-[14.5px] leading-[1.65] text-ink" />
+      {live ? (
+        <span className="mt-1 inline-block h-[1.05em] w-[2px] animate-pulse bg-ink/60" aria-hidden="true" />
+      ) : (
+        copy && text && <CopyButton text={text} label="Copy reply" className="-ml-1.5" />
+      )}
     </div>
   );
 }

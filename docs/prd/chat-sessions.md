@@ -639,7 +639,7 @@ but attention.
 | Q10 | 🔬 Are detached sessions reaped with `bash -c` as PID 1? How much memory do real sessions use with MCP servers and a 200k-token context (≈223 MB RSS was one sample during a busy turn against the mock, X3), and how long does a wake take? Gate for C4. | Sandbox test |
 | Q11 | Answered by Web app & PWA: push for Needs input once HTTPS exists (its W5); until then, badges, the tab title and toasts. | — |
 | Q12 | One shared folder with warnings (v1), or a git worktree per session? | Product |
-| Q13 | Before anyone outside the operator's organization uses Sessions: written sign-off on the refused login commands and hidden `/login`, on key pooling (Account Pool Q1, Q12) and on the name "claudepilot" against Anthropic's trademark guidelines, plus the claude.ai data flow through Portal MCP (A10). | Operator |
+| Q13 | Before anyone outside the operator's organization uses Sessions: written sign-off on the refused login commands and hidden `/login`, on key pooling (Account Pool Q1, Q12) and on the name "pilot" against Anthropic's trademark guidelines, plus the claude.ai data flow through Portal MCP (A10). | Operator |
 | Q14 | Answered by Web app & PWA: approvals record the device name ("Allowed by Alfian's iPhone", its §12.4). | — |
 | Q15 | Should terminal sessions appear read-only in Sessions, with a later "Continue here" that forks them, never a second `--resume`? | Product |
 | Q16 | Are 30 minutes of idle sleep, 64 MB segments, 90 days of session data, C1's caps of 2 and 10, and the 600 MB admission estimate right? | Operator |

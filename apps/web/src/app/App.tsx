@@ -1,18 +1,21 @@
 import { ActivityBar, initViewportFix, ThemeProvider, ToastProvider, UiStringsProvider } from '@isnanme/ui';
-import { useEffect, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router';
 import { AppShell } from '@/components/AppShell';
 import { AccountsPage } from '@/features/accounts/AccountsPage';
 import { AccessPage } from '@/features/admin/AccessPage';
-import { SessionPage } from '@/features/chat/SessionPage';
 import { SessionsPage } from '@/features/chat/SessionsPage';
 import { LoginPage } from '@/features/auth/LoginPage';
-import { ShellPage } from '@/features/workspaces/ShellPage';
 import { WorkspacesPage } from '@/features/workspaces/WorkspacesPage';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { LiveProvider } from '@/lib/live';
 import { HOME } from './nav';
 import { uiStrings } from './strings';
+
+// The full-screen views load on first use, in chunks of their own: the chat (markdown and all) and
+// the terminal (xterm) stay out of the bundle every other page waits for.
+const SessionPage = lazy(() => import('@/features/chat/SessionPage').then((m) => ({ default: m.SessionPage })));
+const ShellPage = lazy(() => import('@/features/workspaces/ShellPage').then((m) => ({ default: m.ShellPage })));
 
 export function App() {
   useEffect(() => initViewportFix(), []);
@@ -64,7 +67,9 @@ function AppRoutes() {
         path="/admin/sessions/:id"
         element={
           <SignedInOnly>
-            <SessionPage />
+            <Suspense fallback={<Splash />}>
+              <SessionPage />
+            </Suspense>
           </SignedInOnly>
         }
       />
@@ -73,7 +78,9 @@ function AppRoutes() {
         path="/admin/workspaces/:target/:name/shell"
         element={
           <SignedInOnly>
-            <ShellPage />
+            <Suspense fallback={<Splash />}>
+              <ShellPage />
+            </Suspense>
           </SignedInOnly>
         }
       />

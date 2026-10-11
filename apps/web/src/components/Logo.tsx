@@ -1,22 +1,25 @@
 import { cn } from '@isnanme/ui';
 import { Link } from 'react-router';
 
-export const BRAND_NAME = 'claude pilot';
+export const BRAND_NAME = 'pilot';
 
-/** A "c" in pay's mark style: ink tile, primary-ink stroke, a green pilot light in its opening. */
+/**
+ * A heading arrow in pay's mark style (ink tile, primary-ink stroke, a green light) but a symbol, not
+ * a letter, so it never reads as pay's "p": the arrow steers toward the pilot light at its tip.
+ */
 export function LogoMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 32 32" className={cn('size-7', className)} aria-hidden="true">
       <rect width="32" height="32" rx="9" className="fill-primary" />
       <path
-        d="M21.4 11.6a6.6 6.6 0 1 0 0 8.8"
+        d="M16 7.6 22.6 23.6 16 19.9 9.4 23.6Z"
+        transform="rotate(45 16 16)"
         fill="none"
         className="stroke-primary-ink"
-        strokeWidth="2.8"
-        strokeLinecap="round"
+        strokeWidth="2.6"
         strokeLinejoin="round"
       />
-      <circle cx="23" cy="16" r="2.2" fill="#34d399" />
+      <circle cx="23.6" cy="8.4" r="2.2" fill="#34d399" />
     </svg>
   );
 }

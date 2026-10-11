@@ -117,14 +117,24 @@ function SessionRow({ session: s, onEnd }: { session: ChatSession; onEnd: () => 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <p className="truncate font-semibold">{title}</p>
-            {safety ? <Badge tone="danger">{safety.label}</Badge> : <StateBadge state={s.state} />}
-            {s.waiting > 0 && <Badge tone="warning">{s.waiting === 1 ? 'Needs you' : `${s.waiting} waiting`}</Badge>}
+            {safety ? (
+              <Badge tone="danger">{safety.label}</Badge>
+            ) : s.state !== 'waiting' ? (
+              <StateBadge state={s.state} />
+            ) : null}
+            {/* Waiting is the state's own badge, so it says how many when there's more than one. */}
+            {(s.waiting > 0 || s.state === 'waiting') && <Badge tone="warning">{s.waiting > 1 ? `${s.waiting} waiting` : 'Needs you'}</Badge>}
           </div>
-          <p className="mt-0.5 truncate text-[13px] text-muted">
-            <span className="font-mono">{s.workspaceId}</span>
-            {s.costUsd > 0 && ` · ${formatUsd(s.costUsd)}`}
-            {' · '}
-            <span title={formatDateTime(s.lastActivityAt)}>{timeAgo(s.lastActivityAt)}</span>
+          <p className="mt-0.5 flex min-w-0 items-baseline gap-1 text-[13px] text-muted">
+            {/* Phones show the workspace's name; wider screens its target too (docker/…). */}
+            <span title={s.workspaceId} className="truncate font-mono">
+              <span className="hidden sm:inline">{s.workspaceId.slice(0, s.workspaceId.indexOf('/') + 1)}</span>
+              {s.workspaceId.slice(s.workspaceId.indexOf('/') + 1)}
+            </span>
+            <span className="shrink-0">
+              {s.costUsd > 0 && `· ${formatUsd(s.costUsd)} `}·{' '}
+              <span title={formatDateTime(s.lastActivityAt)}>{timeAgo(s.lastActivityAt)}</span>
+            </span>
           </p>
         </div>
       </Link>
