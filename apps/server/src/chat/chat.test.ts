@@ -18,7 +18,7 @@ import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { decodeAttachments, readBlob, saveBlob } from './blobs.js';
 import { ChatController, type ChatControllerOptions } from './controller.js';
-import { CHAT_INELIGIBLE, NO_KEY, NO_POOL, NOT_SET_UP, NOT_SYNCED, poolEligibility, UNKNOWN, type Eligibility } from './eligibility.js';
+import { CHAT_INELIGIBLE, chatEligibility, NO_KEY, NO_POOL, NOT_SET_UP, NOT_SIGNED_IN, NOT_SYNCED, poolEligibility, UNKNOWN, type Eligibility } from './eligibility.js';
 import { TRUST_EMPTY_HASH } from './host.js';
 import {
   allowResponse,
@@ -40,6 +40,7 @@ import {
 import { MAX_HOLD, redact, StreamRedactor } from './redact.js';
 import { createChatRoutes } from './routes.js';
 import { attachChat } from './socket.js';
+import { usageReport } from './usage.js';
 import { ChatStore, sessionCwd } from './store.js';
 import { FOLDER_CHANGED, FOLDER_NOT_TRUSTED } from './trust.js';
 
@@ -2744,5 +2745,242 @@ test('subscription: no answer in time ends a running session; a process that die
     assert.equal(closed.controller.get(closed.id)!.endedReason, 'closed by operator');
   } finally {
     await closed.done();
+  }
+});
+
+test('claudes: a removed Claude frees its name; Default and a Claude with a live session can’t be removed', async () => {
+  const { store, dataDir } = await freshStore();
+  const controller = new ChatController(store, new FakeWorkspaces() as unknown as Workspaces);
+  try {
+    const chat = new ChatStore(store);
+    const ws = 'docker/ws1';
+    const def = chat.ensureDefault(ws);
+    const work = chat.addClaude(ws, 'Work');
+    assert.throws(() => chat.addClaude(ws, 'Work'), /UNIQUE/, 'two live Claudes can’t share a name');
+
+    assert.throws(() => controller.removeClaude(ws, def.id), /Default can’t be removed/);
+    chat.create({ id: 'S', workspaceId: ws, cwd: '/home/node', title: 'S', origin: 'ui', claudeId: work.id });
+    assert.throws(() => controller.removeClaude(ws, work.id), /hasn’t ended/);
+    chat.patchSession('S', { state: 'ended' });
+    controller.removeClaude(ws, work.id);
+    assert.ok(chat.claude(work.id)!.removedAt, 'the row stays, marked removed');
+
+    // The name is free again, and renaming onto a live name is still refused.
+    const again = chat.addClaude(ws, 'Work');
+    assert.notEqual(again.id, work.id);
+    assert.equal(controller.renameClaude(ws, again.id, 'Personal').name, 'Personal');
+    assert.throws(() => controller.renameClaude(ws, again.id, 'Default'), /already on this workspace/);
+    assert.throws(() => controller.renameClaude(ws, work.id, 'Old'), /isn’t on this workspace/, 'a removed Claude can’t be renamed');
+  } finally {
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+/* ========================= Own sign-in (no pool) ========================= */
+
+test('eligibility: a workspace without a pool may host sessions (on its Claudes’ own sign-in); with one, the pool rules apply', () => {
+  assert.deepEqual(chatEligibility(null, null), { ok: true });
+  assert.deepEqual(chatEligibility({ state: 'removing' }, 'synced'), { ok: false, reason: NO_POOL });
+  assert.deepEqual(chatEligibility({ state: 'waiting' }, 'synced'), { ok: false, reason: NO_KEY });
+  assert.deepEqual(chatEligibility({ state: 'active' }, 'pending'), { ok: false, reason: NOT_SYNCED });
+  assert.deepEqual(chatEligibility({ state: 'active' }, 'synced'), { ok: true });
+});
+
+test('own sign-in: without a pool a session needs its Claude signed in, skips the pool checks and the spending cap, and keeps running on plan limits', async () => {
+  const { store, dataDir } = await freshStore();
+  const ws = new FakeWorkspaces();
+  const controller = new ChatController(store, ws as unknown as Workspaces);
+  const asked: [string, string][] = [];
+  let signedIn = false;
+  controller.pooled = () => false;
+  controller.signedIn = async (workspaceId, directory) => (asked.push([workspaceId, directory]), signedIn);
+  try {
+    // Signed out: refused before the folder is scanned, and nothing is created.
+    await assert.rejects(controller.create({ workspaceId: 'docker/ws1' }), (e) => isAppError(e) && e.code === CHAT_INELIGIBLE && e.message === NOT_SIGNED_IN);
+    assert.deepEqual(asked, [['docker/ws1', '']], 'Default’s directory is the home one');
+    assert.deepEqual(ws.ops, []);
+    assert.deepEqual(controller.list(), []);
+
+    signedIn = true;
+    const id = (await controller.create({ workspaceId: 'docker/ws1' })).id;
+    await until(() => ws.tails.length === 1);
+    await until(() => controller.get(id)?.state === 'idle');
+    await sleep(20);
+    assert.deepEqual(ws.ops, ['trustscan', 'start'], 'no authcheck: there is no pool to check');
+    assert.ok(!ws.startArgs[0]!.includes('--max-budget-usd'), 'no spending cap on a plan login');
+
+    // A claude.ai login reports no helper and sees plan limits: both are its own, and the session runs on.
+    const tail = ws.tails[0]!;
+    tail.push(init(id, 'default', 'none'));
+    tail.push(line({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } }));
+    tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: 0.01, is_error: false, session_id: id }));
+    await until(() => controller.history(id).some((e) => e.kind === 'result'));
+    await sleep(50);
+    assert.equal(controller.get(id)!.state, 'idle');
+    assert.ok(!controls(ws).some((c) => c.request.subtype === 'get_usage'), 'no subscription check');
+  } finally {
+    controller.stop();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('own sign-in: a pool on the workspace brings its checks back, so a session there that reports no helper ends for safety', async () => {
+  const { store, dataDir } = await freshStore();
+  const ws = new FakeWorkspaces();
+  const controller = new ChatController(store, ws as unknown as Workspaces);
+  let pooled = false;
+  controller.pooled = () => pooled;
+  controller.signedIn = async () => true;
+  try {
+    const id = (await controller.create({ workspaceId: 'docker/ws1' })).id;
+    await until(() => ws.tails.length === 1 && controller.get(id)?.state === 'idle');
+    await sleep(20);
+    pooled = true; // (a real assignment ends the workspace's sessions first; this checks the guard holds anyway)
+    ws.tails[0]!.push(init(id, 'default', 'none'));
+    await until(() => controller.get(id)!.state === 'ended');
+    assert.equal(controller.get(id)!.endedReason, `credential: ${CREDENTIAL.keySource}`);
+  } finally {
+    controller.stop();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+/* ========================= Archive (FR4) ========================= */
+
+test('archive: a running session is ended first, then archived; an ended one keeps its reason; unarchive brings it back, ended', async () => {
+  const s = await liveSession();
+  try {
+    const stops = s.ws.stops;
+    const archived = await s.controller.archive(s.id);
+    assert.equal(archived.state, 'ended');
+    assert.equal(archived.endedReason, 'closed by operator');
+    assert.ok(archived.archivedAt, 'archivedAt set');
+    assert.ok(s.ws.stops > stops, 'its process was stopped');
+    assert.ok(s.controller.list().find((x) => x.id === s.id)?.archivedAt, 'the list carries it, for the client to fold away');
+
+    // Archiving again changes nothing; unarchiving clears it and leaves it ended.
+    const again = await s.controller.archive(s.id);
+    assert.equal(again.archivedAt, archived.archivedAt);
+    const back = s.controller.unarchive(s.id);
+    assert.equal(back.archivedAt, null);
+    assert.equal(back.state, 'ended');
+
+    // Over HTTP.
+    const app = new Hono();
+    app.onError((e, c) => {
+      const err = isAppError(e) ? e : new AppError('INTERNAL_ERROR', undefined, { cause: e });
+      return c.json(err.toJSON(), err.status as 404);
+    });
+    app.route('/', createChatRoutes(s.controller));
+    const post = await app.request(`/${s.id}/archive`, { method: 'POST' });
+    assert.equal(post.status, 200);
+    assert.ok(((await post.json()) as { data: { archivedAt: string | null } }).data.archivedAt);
+    const del = await app.request(`/${s.id}/archive`, { method: 'DELETE' });
+    assert.equal(((await del.json()) as { data: { archivedAt: string | null } }).data.archivedAt, null);
+    assert.equal((await app.request('/nope/archive', { method: 'POST' })).status, 404);
+  } finally {
+    await s.done();
+  }
+});
+
+/* ========================= Per-turn usage ========================= */
+
+test('usage: each result stores its turn’s tokens and duration, and what the turn cost out of the process’s running total', async () => {
+  const s = await liveSession();
+  try {
+    const turn = async (total: number, usage: Record<string, number>, ms: number) => {
+      s.tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: ms, usage, is_error: false, session_id: s.id }));
+      s.tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+    };
+    await turn(0.08, { input_tokens: 2, output_tokens: 21, cache_read_input_tokens: 12913, cache_creation_input_tokens: 20680 }, 1985);
+    await turn(0.17, { input_tokens: 6, output_tokens: 480, cache_read_input_tokens: 82750, cache_creation_input_tokens: 19364 }, 5223);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const [a, b] = s.controller.history(s.id).filter((e) => e.kind === 'result');
+    assert.deepEqual([a!.costUsd, a!.turnCostUsd, a!.durationMs], [0.08, 0.08, 1985]);
+    assert.deepEqual(a!.tokens, { input: 2, output: 21, cacheRead: 12913, cacheWrite: 20680 });
+    assert.equal(b!.costUsd, 0.17);
+    assert.ok(Math.abs(b!.turnCostUsd! - 0.09) < 1e-9, `the second turn alone: ${b!.turnCostUsd}`);
+    assert.deepEqual(b!.tokens, { input: 6, output: 480, cacheRead: 82750, cacheWrite: 19364 });
+  } finally {
+    await s.done();
+  }
+});
+
+/* ========================= Usage metrics ========================= */
+
+test('usage metrics: each turn is stored per model from the change in the running totals, sub-agents included, and charts add them up', async () => {
+  const s = await liveSession();
+  try {
+    const turn = async (total: number, modelUsage: Record<string, unknown>, extra: string[] = []) => {
+      for (const l of extra) s.tail.push(l);
+      s.tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: 3000, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage, is_error: false, session_id: s.id }));
+      s.tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+    };
+    const opus = (input: number, output: number, cost: number) => ({ inputTokens: input, outputTokens: output, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: cost });
+    // Turn 1: the main agent only.
+    await turn(0.1, { 'claude-opus-5-5': opus(100, 10, 0.1) });
+    // Turn 2: the main agent starts a sub-agent that runs on another model.
+    const task = line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_task', name: 'Task', input: { description: 'Look around', prompt: 'x' } }] }, parent_tool_use_id: null, uuid: randomUUID() });
+    await turn(0.25, { 'claude-opus-5-5': opus(160, 30, 0.2), 'claude-haiku-5-5': opus(500, 50, 0.05) }, [task]);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+
+    const rows = s.store.db!.prepare('SELECT model, input_tokens AS i, output_tokens AS o, cost_usd AS c, requests AS r, agents AS a FROM chat_usage ORDER BY id').all() as Record<string, number | string>[];
+    assert.equal(rows.length, 3, 'one row for turn 1, two (one per model) for turn 2');
+    assert.deepEqual([rows[0]!.model, rows[0]!.i, rows[0]!.o, rows[0]!.r, rows[0]!.a], ['claude-opus-5-5', 100, 10, 1, 0]);
+    assert.deepEqual([rows[1]!.model, rows[1]!.i, rows[1]!.o, rows[1]!.r, rows[1]!.a], ['claude-opus-5-5', 60, 20, 1, 1]);
+    assert.deepEqual([rows[2]!.model, rows[2]!.i, rows[2]!.o, rows[2]!.r], ['claude-haiku-5-5', 500, 50, 0]);
+    // The result's tokens are the whole turn's, sub-agent included.
+    const second = s.controller.history(s.id).filter((e) => e.kind === 'result')[1]!;
+    assert.deepEqual(second.tokens, { input: 560, output: 70, cacheRead: 0, cacheWrite: 0 });
+
+    const report = s.controller.usage('1h');
+    assert.equal(report.buckets.length, 30);
+    assert.equal(report.totals.requests, 2);
+    assert.equal(report.totals.agents, 1);
+    assert.equal(report.totals.input, 660);
+    assert.ok(Math.abs(report.totals.costUsd - 0.25) < 1e-9);
+    assert.deepEqual(report.byModel.map((m) => m.model), ['claude-opus-5-5', 'claude-haiku-5-5']);
+    assert.equal(report.byClaude.length, 1);
+    assert.equal(report.byClaude[0]!.name, 'Default');
+    assert.equal(report.buckets.reduce((n, b) => n + b.requests, 0), 2, 'every turn falls in a bucket');
+    assert.throws(() => s.controller.usage('2y'), (e) => isAppError(e) && e.code === 'VALIDATION_FAILED');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage report: buckets line up with the viewer’s clock and cover the whole window', () => {
+  const now = Date.parse('2026-10-11T12:34:56Z');
+  const rec = (atMs: number) => ({ atMs, workspaceId: 'docker/ws1', claudeId: null, model: 'm', input: 1, output: 1, cacheRead: 0, cacheWrite: 0, costUsd: 1, requests: 1, agents: 0, durationMs: 0 });
+  const chat = { usageSince: () => [rec(now - 40 * 86_400_000), rec(now - 2 * 86_400_000), rec(now)], claudeName: () => 'Default' };
+  const r = usageReport(chat as never, '30d', { now, tzOffsetMin: -420 }); // UTC+7
+  assert.equal(r.buckets.length, 30);
+  assert.equal(new Date(Date.parse(r.buckets.at(-1)!.at) + 7 * 3_600_000).toISOString().slice(11), '00:00:00.000Z', 'days start at local midnight');
+  assert.equal(r.totals.requests, 2, 'a turn before the window is left out');
+  assert.equal(r.buckets.at(-1)!.requests, 1);
+});
+
+test('integrity: Claude Code’s "Set model to …" echo is fine right after the portal changed the model, and ends the session otherwise', async () => {
+  const s = await liveSession();
+  try {
+    const pending = s.controller.control(s.id, 'model', { model: 'sonnet' });
+    const setModel = await s.take('set_model');
+    s.tail.push(line({ type: 'user', isReplay: true, uuid: randomUUID(), message: { role: 'user', content: '<local-command-stdout>Set model to `sonnet (claude-sonnet-5-5)`</local-command-stdout>' }, session_id: s.id }));
+    s.tail.push(ok(setModel.id));
+    s.tail.push(ok((await s.take('get_settings')).id, APPLIED));
+    await pending;
+    await sleep(50);
+    assert.notEqual(s.state(), 'ended', 'the echo of its own change is accepted');
+  } finally {
+    await s.done();
+  }
+  const t = await liveSession();
+  try {
+    await expectIntegrityEnd(t, line({ type: 'user', isReplay: true, uuid: 'x-2', message: { role: 'user', content: '<local-command-stdout>Set model to `opus (claude-opus-5-5)`</local-command-stdout>' } }), /a message this portal didn't send/);
+  } finally {
+    await t.done();
   }
 });

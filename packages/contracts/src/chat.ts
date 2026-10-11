@@ -39,6 +39,27 @@ export interface ChatSession {
   createdAt: string;
   lastActivityAt: string;
   endedReason: string | null;
+  /** The Claude directory this session runs in. Empty until a Claude is recorded. */
+  claudeId: string;
+  /** Display name of that Claude, when known. */
+  claudeName: string | null;
+  /** The session this one was transferred from, if any. */
+  predecessorId: string | null;
+  /** The session a transfer continued as, if any. */
+  successorId: string | null;
+  /** When it was archived (hidden from the list; an archived session has ended), or null. */
+  archivedAt: string | null;
+}
+
+/** A named Claude on one workspace volume. Its directory holds chats and any terminal login. No credential is stored here. */
+export interface WorkspaceClaude {
+  id: string;
+  workspaceId: string;
+  name: string;
+  /** Relative directory on the volume, or empty for the workspace's original Claude home. */
+  directory: string;
+  removedAt: string | null;
+  createdAt: string;
 }
 
 /** A request from the agent that needs an answer: a tool to allow, a question, a plan to review. */
@@ -84,18 +105,62 @@ export interface ChatEvent {
   request?: ChatRequest;
   /** For `resolved`: `allowed_once`, `allowed_session`, `denied`, `withdrawn`, `expired`. */
   outcome?: string;
-  /** For `result`: the turn's cost and model. */
+  /** For `result`: Claude Code's running cost for the process so far (it reports a total, not the turn's). */
   costUsd?: number;
+  /** For `result`: what this turn alone cost (the change in that running total). */
+  turnCostUsd?: number;
+  /** For `result`: this turn's tokens, summed over its API calls. */
+  tokens?: ChatTurnTokens;
   /** For `tool_use` and `tool_result`: the call they belong to, pairing a result with its call. */
   toolUseId?: string;
   /** For `tool_result`: the tool failed. */
   isError?: boolean;
-  /** For `thinking`: how long the block took, when the portal saw it start. */
+  /** For `thinking`: how long the block took, when the portal saw it start. For `result`: how long the turn took. */
   durationMs?: number;
   /** Images on this event (sent by you, or returned by a tool), served from `CHAT_API.blob`. */
   images?: ChatImage[];
   /** For `user`: the client UUID it was sent with, to match lifecycle updates (`input` messages). */
   uuid?: string;
+}
+
+/** The windows Usage charts over, newest last; each has its own bucket size. */
+export const CHAT_USAGE_RANGES = ['30m', '1h', '12h', '1d', '7d', '30d'] as const;
+export type ChatUsageRange = (typeof CHAT_USAGE_RANGES)[number];
+
+/** What a slice of turns used: tokens, estimated cost, requests (turns) and sub-agents started. */
+export interface ChatUsageTotals {
+  costUsd: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  requests: number;
+  agents: number;
+}
+
+/**
+ * `GET /api/chat/usage?range=&claudeId=&tz=`: usage over a window, from the turns stored as metrics
+ * (one row per model per turn, sub-agents included). Buckets cover the whole window, empty ones too.
+ */
+export interface ChatUsageReport {
+  range: ChatUsageRange;
+  from: string;
+  to: string;
+  bucketMs: number;
+  totals: ChatUsageTotals;
+  buckets: (ChatUsageTotals & { at: string })[];
+  /** Per Claude (whose sign-in, or the pool, the turns ran as), most cost first. */
+  byClaude: (ChatUsageTotals & { claudeId: string; name: string; workspaceId: string })[];
+  /** Per model, most cost first. */
+  byModel: (ChatUsageTotals & { model: string })[];
+}
+
+/** A turn's tokens: fresh input, output, and input read from or written to the prompt cache. */
+export interface ChatTurnTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
 }
 
 export interface ChatImage {
@@ -153,7 +218,21 @@ export interface CreateChatSessionRequest {
   title?: string;
   /** A folder in the workspace to run in; defaults to the home folder. */
   cwd?: string;
+  /** Which Claude on that workspace. Omitted uses Default. */
+  claudeId?: string;
 }
+
+export interface CreateWorkspaceClaudeRequest {
+  workspaceId: string;
+  name: string;
+}
+
+export interface TransferChatRequest {
+  /** Destination Claude on the same workspace. */
+  claudeId: string;
+}
+
+export const CLAUDE_NAME_MAX = 40;
 
 export const CHAT_SESSION_TITLE_MAX = 80;
 
@@ -163,6 +242,8 @@ export const CHAT_API = {
   create: '/api/chat/sessions',
   /** GET: one session. DELETE: end it. */
   one: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}`,
+  /** POST: archive it (ending it first if it hasn't ended). DELETE: unarchive it. */
+  archive: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/archive`,
   /** GET `?after=<seq>`: stored transcript events after a sequence number (history and resume). */
   events: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/events`,
   /** GET: models this session can switch to. */
@@ -177,10 +258,16 @@ export const CHAT_API = {
   download: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/files/download`,
   /** GET: what changed in the session's folder (git), as a summary and a unified diff. */
   diff: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/diff`,
+  /** GET `?range=&claudeId=&tz=`: usage over time (`ChatUsageReport`). */
+  usage: '/api/chat/usage',
   /** GET `?workspaceId=&folder=`: what a folder would load (FR43). */
   scan: '/api/chat/trust/scan',
   /** POST `ChatTrustRequest`: trust a folder as scanned. */
   trust: '/api/chat/trust',
+  /** GET `?workspaceId=`: Claudes on a workspace. POST: create one (empty directory, no sign-in). */
+  claudes: '/api/chat/claudes',
+  /** POST `TransferChatRequest`: confirm a context move to another Claude on the same workspace. */
+  transfer: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/transfer`,
 } as const;
 
 export interface ChatFileEntry {

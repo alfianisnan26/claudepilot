@@ -10,7 +10,12 @@ import {
   type ChatSession,
   type ChatTask,
   type ChatTrustRequest,
+  type ChatUsageRange,
+  type ChatUsageReport,
   type CreateChatSessionRequest,
+  type CreateWorkspaceClaudeRequest,
+  type TransferChatRequest,
+  type WorkspaceClaude,
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
 
@@ -44,6 +49,15 @@ export const chatApi = {
   create: (body: CreateChatSessionRequest) => request<ChatSession>('POST', CHAT_API.create, body),
   get: (id: string) => request<ChatSession>('GET', CHAT_API.one(id)),
   end: (id: string) => request<{ ok: true }>('DELETE', CHAT_API.one(id)),
+  /** Usage over a window, in buckets that line up with this device's clock; optionally one Claude's. */
+  usage: (range: ChatUsageRange, claudeId?: string) =>
+    request<ChatUsageReport>(
+      'GET',
+      `${CHAT_API.usage}?range=${range}&tz=${new Date().getTimezoneOffset()}${claudeId ? `&claudeId=${encodeURIComponent(claudeId)}` : ''}`,
+    ),
+  /** Archive (ending it first if it hasn't ended), or bring it back to the list. */
+  archive: (id: string) => request<ChatSession>('POST', CHAT_API.archive(id)),
+  unarchive: (id: string) => request<ChatSession>('DELETE', CHAT_API.archive(id)),
   history: (id: string, after?: number) =>
     request<ChatEvent[]>('GET', CHAT_API.events(id) + (after !== undefined ? `?after=${after}` : '')),
   /** Models this session can switch to (Claude Code's own list). */
@@ -64,4 +78,7 @@ export const chatApi = {
     request<ChatFolderScan>('GET', `${CHAT_API.scan}?workspaceId=${encodeURIComponent(workspaceId)}&folder=${encodeURIComponent(folder)}`),
   /** Trusts a folder as scanned; `FOLDER_UNTRUSTED` (with the new scan) when its files changed since. */
   trust: (body: ChatTrustRequest) => request<unknown>('POST', CHAT_API.trust, body).then(() => undefined),
+  claudes: (workspaceId: string) => request<WorkspaceClaude[]>('GET', `${CHAT_API.claudes}?workspaceId=${encodeURIComponent(workspaceId)}`),
+  createClaude: (body: CreateWorkspaceClaudeRequest) => request<WorkspaceClaude>('POST', CHAT_API.claudes, body),
+  transfer: (id: string, body: TransferChatRequest) => request<ChatSession>('POST', CHAT_API.transfer(id), body),
 };

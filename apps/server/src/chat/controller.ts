@@ -11,12 +11,14 @@
 // session. Redaction (§13): stored text and live deltas pass through redact.ts. Folder trust (FR43): no
 // process starts in a folder whose project settings would load something the person hasn't trusted.
 //
-// Credentials (§6): sessions are SDK-style use, so they run only on what an Account Pool delivered (its
-// managed `apiKeyHelper`), never on a workspace's own Claude login, which the portal never reads. Every
-// create, launch, resume and wake needs an eligible workspace (the `eligibility` hook: an active, Synced
-// assignment) and a passing `cp-session authcheck`; every turn's `system/init` must report the helper,
-// and after every `result` a `get_usage` must show no plan limits, or the session ends. A pool unassign
-// or move stops the workspace's sessions before it goes out (`endWorkspaceSessions`).
+// Credentials (§6): a session runs on one of two. On a workspace with an Account Pool, on the pool's keys
+// (its managed `apiKeyHelper`): every create, launch, resume and wake needs an active, Synced assignment
+// (the `eligibility` hook) and a passing `cp-session authcheck`; every turn's `system/init` must report
+// the helper, and after every `result` a `get_usage` must show no plan limits, or the session ends.
+// Without a pool, on its Claude's own sign-in: that Claude must be signed in (the `signedIn` hook, from
+// `claude auth status`) before each start, and the pool checks don't apply. The portal never reads the
+// login itself. Assigning, moving or unassigning a pool stops the workspace's sessions before it goes out
+// (`endWorkspaceSessions`), so a session never changes credential mid-run.
 
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
@@ -32,13 +34,15 @@ import {
   type ChatServerMessage,
   type ChatSession,
   type ChatTask,
+  type ChatUsageReport,
   type CreateChatSessionRequest,
+  type WorkspaceClaude,
 } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import type { Workspaces } from '../workspaces/manager.js';
 import { HOME, type ExecSession } from '../workspaces/runtime.js';
 import { decodeAttachments, decodeToolImage, readBlob, saveBlob } from './blobs.js';
-import { ineligibleError, NOT_SET_UP, UNKNOWN, type Eligibility } from './eligibility.js';
+import { ineligibleError, NOT_SET_UP, NOT_SIGNED_IN, UNKNOWN, type Eligibility } from './eligibility.js';
 import { workspacePath } from './files.js';
 import { CP_SESSION_PATH, parseStartOutput } from './host.js';
 import {
@@ -56,6 +60,7 @@ import {
   userLine,
   type AppliedSettings,
   type ControlResponse,
+  type ModelTotals,
   type ParsedLine,
   type RawImage,
   type StoredEvent,
@@ -63,12 +68,15 @@ import {
 import { redact, StreamRedactor } from './redact.js';
 import { ChatStore, sessionCwd, type ChatSessionPatch, type ChatSessionRow, type InputState } from './store.js';
 import { FOLDER_CHANGED, scanFolder, untrustedError } from './trust.js';
+import { usageReport } from './usage.js';
 
 /** The permission mode every process starts in (`--permission-mode`); others are applied after. */
 const START_MODE = 'default';
 /** The claude flags cp-session runs after `--`; `--resume` or `--session-id` plus the id are spliced in. */
 const BASE_FLAGS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', START_MODE];
 const BUDGET_FLAGS = ['--max-budget-usd', '10'] as const;
+/** How long after the portal asks for a model change Claude Code's "Set model to …" echo is expected. */
+const MODEL_NOTE_MS = 60_000;
 
 /** How long a dropped `tail` waits before re-following, and how many immediate failures end the reader. */
 const RETAIL_MS = 1_000;
@@ -219,6 +227,12 @@ export class ChatController {
   /** Per session: the permission mode the stream must report. */
   readonly #modes = new Map<string, ModeTrack>();
   readonly #idleTimers = new Map<string, NodeJS.Timeout>();
+  /** Per session: the running cost its process last reported, so each `result` can say what its turn cost. */
+  readonly #costBase = new Map<string, number>();
+  /** Per session: when the portal last asked Claude Code to change the model (its note may follow). */
+  readonly #modelAsked = new Map<string, number>();
+  /** Per session: each model's running totals its process last reported, for each turn's usage metrics. */
+  readonly #modelBase = new Map<string, Map<string, ModelTotals>>();
   /**
    * Per workspace: how many times its credentials began to change ({@link endWorkspaceSessions}). A
    * launch that began before the latest change gives up, and stops a process it already started.
@@ -241,6 +255,18 @@ export class ChatController {
    * eligible (tests); production always sets it.
    */
   eligibility?: (workspaceId: string) => Eligibility;
+  /**
+   * Installed by the owner: whether the workspace has an Account Pool assignment (in any state). With
+   * one, its sessions run on the pool's keys and the pool checks apply; without, each runs on its
+   * Claude's own sign-in. Unset, every workspace counts as pooled (tests).
+   */
+  pooled?: (workspaceId: string) => boolean;
+  /**
+   * Installed by the owner: whether a Claude's directory (`''` for Default) is signed in to Claude Code,
+   * from `claude auth status` (status only). Asked before every start of a session on its Claude's own
+   * sign-in. Unset, every Claude counts as signed in.
+   */
+  signedIn?: (workspaceId: string, directory: string) => Promise<boolean>;
   /** How long a control request waits for Claude Code's answer. */
   controlTimeoutMs = CONTROL_TIMEOUT_MS;
   /** How long one short `cp-session` command may run. */
@@ -452,8 +478,9 @@ export class ChatController {
 
   /**
    * Creates a session and starts its process in the background. The workspace must be eligible (§6
-   * rule 1: a 409 `CHAT_INELIGIBLE` with the reason otherwise, before anything runs there), its host must
-   * pass `authcheck` (the same 409 when the account drop-in doesn't name the pool's helper), and the
+   * rule 1: a 409 `CHAT_INELIGIBLE` with the reason otherwise, before anything runs there), its credential
+   * must check out (the same 409: on a pool, `authcheck` names its helper; without one, the Claude is
+   * signed in), and the
    * folder is checked (FR43): when its project settings would load something the person hasn't trusted
    * at this exact hash, this throws a 409 `FOLDER_UNTRUSTED` carrying the scan. Refused, nothing is created.
    */
@@ -465,21 +492,182 @@ export class ChatController {
     const cwd = this.#folder(req.cwd);
     const title = (typeof req.title === 'string' && req.title.trim() ? req.title.trim() : 'New session').slice(0, CHAT_SESSION_TITLE_MAX);
     this.#requireEligible(workspaceId);
+    const claude = typeof req.claudeId === 'string' && req.claudeId.trim() ? this.#chat.claude(req.claudeId.trim()) : this.#chat.ensureDefault(workspaceId);
+    if (!claude || claude.workspaceId !== workspaceId || claude.removedAt) {
+      throw new AppError('VALIDATION_FAILED', 'Pick a Claude on this workspace.', { details: { claudeId: 'Unknown Claude.' } });
+    }
     // The checks need the current host. If it can't be installed, the session is created anyway and its
     // launch tries again: failing, it ends with the reason, and nothing starts unchecked either way.
     let installed = true;
     if (this.installHost) await this.installHost(workspaceId).catch(() => void (installed = false));
     if (installed) {
-      if ((await this.#authcheck(workspaceId)) !== 'pass') throw ineligibleError(NOT_SET_UP);
+      const refused = await this.#credentialCheck(workspaceId, claude.id);
+      if (refused) throw ineligibleError(refused);
       const scan = await this.#scan(workspaceId, cwd);
       if (!scan.empty && !scan.trusted) throw untrustedError(scan, this.#chat.folderTrust(workspaceId, scan.folder) !== null);
     }
     // Asked again: the pool may have changed while the host was checked. The launch asks once more.
     this.#requireEligible(workspaceId);
     const id = randomUUID();
-    const session = this.#chat.create({ id, workspaceId, cwd, title, origin: 'ui' });
+    const session = this.#chat.create({ id, workspaceId, cwd, title, origin: 'ui', claudeId: claude.id });
     void this.#startProcess(id, { checked: installed }).catch(() => undefined);
     return session;
+  }
+
+  /** Claudes on a workspace. Default is created on first read and keeps the original home. */
+  listClaudes(workspaceId: string): WorkspaceClaude[] {
+    const id = workspaceId.trim();
+    if (!id) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
+    this.#split(id);
+    return this.#chat.listClaudes(id);
+  }
+
+  /**
+   * Adds an empty Claude directory on the workspace volume. Does not sign in and does not copy a login.
+   * The workspace must be running so the directory can be created.
+   */
+  async createClaude(workspaceId: string, rawName: string): Promise<WorkspaceClaude> {
+    const id = workspaceId.trim();
+    const name = rawName.trim();
+    if (!id) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
+    if (!/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(name)) {
+      throw new AppError('VALIDATION_FAILED', 'Use a short name: letters, numbers, spaces, dots, _ or -.', { details: { name: 'Invalid name.' } });
+    }
+    this.#split(id);
+    this.#chat.ensureDefault(id);
+    let created: { id: string; directory: string };
+    try {
+      created = this.#chat.addClaude(id, name);
+    } catch (e) {
+      if (String(e).includes('UNIQUE')) throw new AppError('CONFLICT', 'A Claude with that name is already on this workspace.');
+      throw e;
+    }
+    try {
+      // Under the workspace user's own $HOME: /home/node in workspace images, the portal user's home on this machine.
+      await this.#shell(id, ['sh', '-c', 'mkdir -p -- "$HOME/.claudepilot/$1"', 'sh', created.directory]);
+    } catch (e) {
+      this.#chat.removeClaudeRow(created.id);
+      throw new AppError('SERVICE_UNAVAILABLE', 'Couldn’t create the Claude directory. Is the workspace running?', { expose: true, cause: e });
+    }
+    return this.#chat.claude(created.id)!;
+  }
+
+  /** Renames a Claude (FR3): the label only. */
+  renameClaude(workspaceId: string, claudeId: string, rawName: string): WorkspaceClaude {
+    const claude = this.#ownClaude(workspaceId, claudeId);
+    const name = rawName.trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(name)) {
+      throw new AppError('VALIDATION_FAILED', 'Use a short name: letters, numbers, spaces, dots, _ or -.', { details: { name: 'Invalid name.' } });
+    }
+    try {
+      this.#chat.renameClaude(claude.id, name);
+    } catch (e) {
+      if (String(e).includes('UNIQUE')) throw new AppError('CONFLICT', 'A Claude with that name is already on this workspace.');
+      throw e;
+    }
+    return this.#chat.claude(claude.id)!;
+  }
+
+  /**
+   * Removes a Claude (FR3): refused for Default and while a session on it hasn't ended. Its rows and
+   * its directory stay: the portal doesn't delete a directory that may hold a login.
+   */
+  removeClaude(workspaceId: string, claudeId: string): void {
+    const claude = this.#ownClaude(workspaceId, claudeId);
+    if (!claude.directory) throw new AppError('CONFLICT', 'Default can’t be removed.');
+    if (this.#chat.openSessionsOnClaude(claude.workspaceId, claude.id, false) > 0)
+      throw new AppError('CONFLICT', `${claude.name} has a session that hasn’t ended. End it first.`);
+    this.#chat.markClaudeRemoved(claude.id);
+  }
+
+  /** A Claude of this workspace that isn't removed. */
+  #ownClaude(workspaceId: string, claudeId: string): WorkspaceClaude {
+    const claude = this.listClaudes(workspaceId).find((c) => c.id === claudeId && !c.removedAt);
+    if (!claude) throw new AppError('NOT_FOUND', 'That Claude isn’t on this workspace.');
+    return claude;
+  }
+
+  /**
+   * Confirmed context move (Workspace Claudes FR9–FR16). Stops the source, writes a context file from
+   * portal events, and starts a new session in the destination Claude. Does not copy a login.
+   */
+  async transfer(sessionId: string, destClaudeId: string): Promise<ChatSession> {
+    const source = this.#require(sessionId);
+    if (source.state === 'ended' && source.endedReason !== 'transferred') throw new AppError('CONFLICT', 'This session has ended.');
+    const dest = this.#chat.claude(destClaudeId.trim());
+    if (!dest || dest.workspaceId !== source.workspaceId || dest.removedAt) {
+      throw new AppError('VALIDATION_FAILED', 'Pick a Claude on this workspace.', { details: { claudeId: 'Unknown Claude.' } });
+    }
+    if (dest.id === source.claudeId) throw new AppError('VALIDATION_FAILED', 'That session is already on this Claude.');
+    const row = this.#chat.row(sessionId);
+    if (row?.process === 'live') await this.#runOnce(source.workspaceId, ['stop', sessionId]).catch(() => undefined);
+    const summary = redact(this.#chat.contextSummary(sessionId));
+    const handoffId = randomUUID();
+    const path = `${HOME}/.claudepilot/transfer/${handoffId}.md`;
+    const from = source.claudeName ?? 'Claude';
+    const body = `# Transferred from ${from}\n\n${summary || '(no messages yet)'}\n`;
+    await this.#shellWrite(source.workspaceId, `${HOME}/.claudepilot/transfer`, path, body);
+    const sourceClaudeId = source.claudeId || this.#chat.ensureDefault(source.workspaceId).id;
+    this.#chat.saveHandoff({ id: handoffId, workspaceId: source.workspaceId, sourceSessionId: source.id, sourceClaudeId, destClaudeId: dest.id, path });
+    const successorId = randomUUID();
+    const successor = this.#chat.create({
+      id: successorId,
+      workspaceId: source.workspaceId,
+      cwd: source.cwd,
+      title: source.title,
+      origin: source.origin,
+      claudeId: dest.id,
+      predecessorId: source.id,
+    });
+    this.#chat.setHandoffSuccessor(handoffId, successor.id);
+    this.#chat.patchSession(source.id, { state: 'ended', process: 'gone', endedReason: 'transferred', successorId: successor.id });
+    const when = new Date().toISOString().slice(11, 16);
+    this.#append(successor.id, { kind: 'system', text: `New session on ${dest.name} · transferred from ${from} · ${when}` });
+    this.#emitSession(source.id);
+    const opening = `Context transferred from ${from}. Continue from this summary. This is prior context, not a new request.\n\n${summary || '(no messages yet)'}`;
+    void this.#startProcess(successor.id)
+      .then(() => this.send(successor.id, randomUUID(), opening))
+      .catch(() => undefined);
+    return this.#chat.get(successor.id)!;
+  }
+
+  /** Runs a short command in the workspace. The arguments are passed as argv, never through a shell string. */
+  async #shell(workspaceId: string, command: string[]): Promise<void> {
+    const [target, name] = this.#split(workspaceId);
+    const exec = await this.#workspaces.exec(target, name, command);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        exec.close();
+        reject(new Error('The workspace took too long.'));
+      }, this.execTimeoutMs);
+      exec.onExit((code) => {
+        clearTimeout(timer);
+        exec.close();
+        if (code === 0) resolve();
+        else reject(new Error(`Command failed (${code ?? 'no exit'}).`));
+      });
+    });
+  }
+
+  /** Writes `body` to `path` under the transfer directory. `body` is stdin, not a shell argument. */
+  async #shellWrite(workspaceId: string, dir: string, path: string, body: string): Promise<void> {
+    if (!path.startsWith(`${dir}/`) || path.includes('..')) throw new AppError('VALIDATION_FAILED', 'That transfer path is not allowed.');
+    const [target, name] = this.#split(workspaceId);
+    const bytes = Buffer.byteLength(body);
+    const exec = await this.#workspaces.exec(target, name, ['sh', '-c', 'mkdir -p -- "$1" && head -c "$3" > "$2"', 'sh', dir, path, String(bytes)]);
+    if (bytes) exec.write(body);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        exec.close();
+        reject(new Error('The workspace took too long.'));
+      }, this.execTimeoutMs);
+      exec.onExit((code) => {
+        clearTimeout(timer);
+        exec.close();
+        if (code === 0) resolve();
+        else reject(new Error(`Couldn’t write the context file (${code ?? 'no exit'}).`));
+      });
+    });
   }
 
   /**
@@ -633,6 +821,26 @@ export class ChatController {
   }
 
   /**
+   * Archive (FR4): hides the session from the list. One that hasn't ended is ended first, the same as
+   * End, so nothing archived keeps running. Its transcript stays; Unarchive brings it back, ended.
+   */
+  async archive(sessionId: string): Promise<ChatSession> {
+    const session = this.#require(sessionId);
+    if (session.state !== 'ended') await this.end(sessionId);
+    if (!session.archivedAt) this.#chat.patchSession(sessionId, { archivedAt: new Date().toISOString() });
+    this.#emitSession(sessionId);
+    return this.#chat.get(sessionId)!;
+  }
+
+  /** Brings an archived session back to the list. */
+  unarchive(sessionId: string): ChatSession {
+    this.#require(sessionId);
+    this.#chat.patchSession(sessionId, { archivedAt: null });
+    this.#emitSession(sessionId);
+    return this.#chat.get(sessionId)!;
+  }
+
+  /**
    * Stops a workspace's sessions before its credentials change (§6 rule 2): Account Pool calls this at
    * the start of an unassign or a move to another pool, before the change goes out, so no session ever
    * runs on whatever would come after the pool's helper. Every running process gets `cp-session stop`
@@ -673,6 +881,7 @@ export class ChatController {
     if (!MODEL_VALUE.test(value)) throw new AppError('VALIDATION_FAILED', 'Pick a model.');
     this.#require(sessionId);
     await this.#live(sessionId);
+    this.#modelAsked.set(sessionId, Date.now());
     await this.#request(sessionId, 'set_model', { model: value }); // Claude Code validates it with a tiny API call
     const applied = await this.#refreshApplied(sessionId).catch(() => null);
     this.#note(sessionId, `Model: ${applied?.model ?? value}`);
@@ -789,7 +998,7 @@ export class ChatController {
     // The folder it's scanned in is the folder it runs in (and the one the session reports).
     const cwd = sessionCwd(row.cwd);
 
-    // §6 rule 1: only on credentials an Account Pool delivered, before anything runs in the workspace.
+    // §6 rule 1: the workspace may host sessions now, before anything runs in it.
     this.#requireEligible(workspaceId, sessionId);
 
     if (this.installHost && !opts.checked) {
@@ -805,12 +1014,12 @@ export class ChatController {
     }
 
     if (!opts.checked) {
-      let auth: 'pass' | 'fail';
+      let refused: string | null;
       let scan: ChatFolderScan | undefined;
       try {
-        // The host's own check first: a workspace not set up for the pool's keys never gets the trust sheet.
-        auth = await this.#authcheck(workspaceId);
-        if (auth === 'pass' && !cancelled()) scan = await this.#scan(workspaceId, cwd);
+        // The credential first: a workspace not set up for it never gets the trust sheet.
+        refused = await this.#credentialCheck(workspaceId, row.claude_id ?? null);
+        if (!refused && !cancelled()) scan = await this.#scan(workspaceId, cwd);
       } catch (e) {
         // The workspace couldn't be checked (unreachable, the folder gone): nothing starts, and like a
         // start that failed, the session reads Interrupted and a later send can resume it.
@@ -820,7 +1029,7 @@ export class ChatController {
         return;
       }
       if (cancelled()) return;
-      if (auth !== 'pass') this.#refuse(sessionId, ineligibleError(NOT_SET_UP));
+      if (refused) this.#refuse(sessionId, ineligibleError(refused));
       if (scan && !scan.empty && !scan.trusted) this.#refuseLaunch(sessionId, row, scan);
     }
 
@@ -832,11 +1041,12 @@ export class ChatController {
     // `--resume` needs Claude Code's transcript, which exists once a turn has started (the first
     // `system/init`, stored as "Ready"); until then the id is unused and the session starts afresh.
     const resume = opts.resume === true && this.#chat.hasReady(sessionId);
-    const flags = [...BASE_FLAGS, resume ? '--resume' : '--session-id', sessionId, ...BUDGET_FLAGS];
+    // The spending cap is for the pool's keys; a Claude's own sign-in has its plan's limits instead.
+    const flags = [...BASE_FLAGS, resume ? '--resume' : '--session-id', sessionId, ...(this.#viaPool(workspaceId) ? BUDGET_FLAGS : [])];
     let code: number | null;
     let out: string;
     try {
-      ({ code, out } = await this.#runOnce(workspaceId, ['start', sessionId, String(seg), cwd, '--', ...flags]));
+      ({ code, out } = await this.#runOnce(workspaceId, ['start', sessionId, String(seg), cwd, '--', ...flags], undefined, this.#chat.configDir(row.claude_id ?? '')));
     } catch (e) {
       if (cancelled()) return;
       // The workspace is unreachable or stopped: nothing started, but a later send can resume it.
@@ -865,6 +1075,8 @@ export class ChatController {
         endedReason: null,
       });
       this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
+      this.#costBase.set(sessionId, 0); // a new process counts its cost from zero
+      this.#modelBase.set(sessionId, new Map());
     } else if (code === 3) {
       // Already running (run.lock held): attach to the existing process on its current segment.
       this.#chat.patchSession(sessionId, { process: 'live', state: 'idle', endedReason: null });
@@ -935,7 +1147,10 @@ export class ChatController {
     }
     const now = await this.#request(sessionId, 'get_settings').then(pickApplied, () => null);
     const failed: string[] = [];
-    if (r.model && now?.model !== r.model) await this.#request(sessionId, 'set_model', { model: r.model }).catch(() => failed.push('model'));
+    if (r.model && now?.model !== r.model) {
+      this.#modelAsked.set(sessionId, Date.now());
+      await this.#request(sessionId, 'set_model', { model: r.model }).catch(() => failed.push('model'));
+    }
     const settings: { effort?: string; ultracode?: boolean } = {};
     if (r.effort && now?.effort !== r.effort) settings.effort = r.effort;
     if (r.ultracode && now?.ultracode !== true) settings.ultracode = true;
@@ -1083,10 +1298,12 @@ export class ChatController {
 
     // Integrity (PRD §10.4): the stream may show only what this portal started.
     if (parsed.sessionIdSeen && parsed.sessionIdSeen !== sessionId) return void this.#endIntegrity(sessionId, `the agent reported a different session id (${shortId(parsed.sessionIdSeen)})`);
-    // Credentials (§6 rules 1 and 3): every turn on the pool's helper, and never plan limits. The source
-    // Claude Code reported is only compared, never kept.
-    if (parsed.apiKeySource !== undefined && parsed.apiKeySource !== POOL_KEY_SOURCE) return void this.#endCredential(sessionId, CREDENTIAL.keySource);
-    if (parsed.rateLimitEvent) return void this.#endCredential(sessionId, CREDENTIAL.planLimits);
+    // Credentials (§6 rules 1 and 3), on a pool: every turn on its helper, and never plan limits. The source
+    // Claude Code reported is only compared, never kept. On a Claude's own sign-in both are its own.
+    if ((parsed.apiKeySource !== undefined || parsed.rateLimitEvent) && this.#viaPool(this.#chat.row(sessionId)?.workspace_id ?? '')) {
+      if (parsed.apiKeySource !== undefined && parsed.apiKeySource !== POOL_KEY_SOURCE) return void this.#endCredential(sessionId, CREDENTIAL.keySource);
+      if (parsed.rateLimitEvent) return void this.#endCredential(sessionId, CREDENTIAL.planLimits);
+    }
     if (parsed.controlResponse && !this.#acceptControlResponse(sessionId, parsed.controlResponse)) return;
     if (parsed.replay && !this.#acceptReplay(sessionId, parsed.replay)) return;
     if (parsed.commandUuid && !this.#chat.isMessage(sessionId, parsed.commandUuid))
@@ -1125,6 +1342,14 @@ export class ChatController {
           since!.delete(ev.parentToolUseId ?? '');
         }
       }
+      // What this turn cost: the change in the process's running total (a reattached reader, after a
+      // portal restart, takes the last stored total; a total lower than that is a new process's).
+      if (ev.kind === 'result' && ev.costUsd !== undefined) {
+        const base = this.#costBase.get(sessionId) ?? this.#chat.lastResultCost(sessionId) ?? 0;
+        ev.turnCostUsd = ev.costUsd >= base ? ev.costUsd - base : ev.costUsd;
+        this.#costBase.set(sessionId, ev.costUsd);
+      }
+      if (ev.kind === 'result') this.#recordTurn(sessionId, ev);
       // Name each result from its own call (parallel calls finish in any order).
       if (ev.kind === 'tool_use' && ev.toolUseId && ev.toolName) this.#calls(sessionId).set(ev.toolUseId, ev.toolName);
       if (ev.kind === 'tool_result' && ev.toolUseId && ev.toolName === undefined) ev.toolName = this.#toolFor(sessionId, ev.toolUseId);
@@ -1234,6 +1459,8 @@ export class ChatController {
     if (replay.uuid && this.#chat.isMessage(sessionId, replay.uuid)) return true;
     // `/compact` and other local commands echo their output as a replayed line under an id of its own.
     if (replay.localCommand && this.#chat.slashCommandRunning(sessionId)) return true;
+    // A model change the portal asked for: Claude Code echoes "Set model to …" as a replayed line.
+    if (replay.modelNote && Date.now() - (this.#modelAsked.get(sessionId) ?? 0) < MODEL_NOTE_MS) return true;
     this.#endIntegrity(sessionId, `a message this portal didn't send reached Claude Code (${shortId(replay.uuid ?? 'no id')})`);
     return false;
   }
@@ -1439,6 +1666,8 @@ export class ChatController {
    */
   async #checkUsage(sessionId: string): Promise<void> {
     if (this.#closed || !this.#isLive(sessionId)) return;
+    // Only a pool's keys are confirmed: on a Claude's own sign-in, plan limits are expected.
+    if (!this.#viaPool(this.#chat.row(sessionId)!.workspace_id)) return this.#armIdle(sessionId);
     let reply: ControlResponse;
     try {
       reply = await this.#control(sessionId, 'get_usage', { skip_behaviors: true });
@@ -1458,6 +1687,73 @@ export class ChatController {
     const why = reply.ok ? usageVerdict(reply.response) : CREDENTIAL.refused;
     if (why) return this.#endCredential(sessionId, why);
     this.#armIdle(sessionId); // a sleep this check held off may go ahead now
+  }
+
+  /**
+   * A finished turn as usage metrics (Usage charts): one row per model, from the change in each model's
+   * running totals since the last turn, so sub-agents count with the request that started them. The
+   * result's tokens become that sum too (Claude Code's own `usage` counts the main agent only). Runs
+   * before the result is stored, so "since the last result" means this turn.
+   */
+  #recordTurn(sessionId: string, ev: StoredEvent): void {
+    try {
+      const row = this.#chat.row(sessionId);
+      if (!row) return;
+      const base = this.#modelBase.get(sessionId) ?? new Map((this.#chat.lastResultModelTotals(sessionId) ?? []).map((m) => [m.model, m]));
+      const turn: ModelTotals[] = [];
+      for (const cur of ev.modelTotals ?? []) {
+        const was = base.get(cur.model);
+        // A total lower than before means a new process, counting from zero.
+        const fresh = !was || cur.input < was.input || cur.output < was.output || cur.cacheRead < was.cacheRead || cur.cacheWrite < was.cacheWrite || cur.costUsd < was.costUsd - 1e-9;
+        const d = fresh
+          ? cur
+          : { model: cur.model, input: cur.input - was.input, output: cur.output - was.output, cacheRead: cur.cacheRead - was.cacheRead, cacheWrite: cur.cacheWrite - was.cacheWrite, costUsd: cur.costUsd - was.costUsd };
+        if (d.input || d.output || d.cacheRead || d.cacheWrite || d.costUsd > 0) turn.push(d);
+      }
+      if (ev.modelTotals?.length) this.#modelBase.set(sessionId, new Map(ev.modelTotals.map((m) => [m.model, m])));
+      if (turn.length) {
+        ev.tokens = turn.reduce(
+          (t, m) => ({ input: t.input + m.input, output: t.output + m.output, cacheRead: t.cacheRead + m.cacheRead, cacheWrite: t.cacheWrite + m.cacheWrite }),
+          { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        );
+      }
+      const shares: ModelTotals[] = turn.length
+        ? turn
+        : [{ model: row.model ?? 'unknown', input: ev.tokens?.input ?? 0, output: ev.tokens?.output ?? 0, cacheRead: ev.tokens?.cacheRead ?? 0, cacheWrite: ev.tokens?.cacheWrite ?? 0, costUsd: ev.turnCostUsd ?? 0 }];
+      const agents = this.#chat.agentsSinceLastResult(sessionId);
+      this.#chat.recordUsage(
+        { atMs: Date.now(), sessionId, workspaceId: row.workspace_id, claudeId: row.claude_id ?? null },
+        shares.map((m, i) => ({ ...m, requests: i === 0 ? 1 : 0, agents: i === 0 ? agents : 0, durationMs: i === 0 ? (ev.durationMs ?? 0) : 0 })),
+      );
+    } catch {
+      // Metrics never get in the way of the transcript.
+    }
+  }
+
+  /** Usage over a window, for the Usage charts. */
+  usage(range: unknown, opts: { claudeId?: string; tzOffsetMin?: number } = {}): ChatUsageReport {
+    return usageReport(this.#chat, range, opts);
+  }
+
+  /** Whether the workspace's sessions run on its Account Pool's keys (else on their Claude's own sign-in). */
+  #viaPool(workspaceId: string): boolean {
+    try {
+      return this.pooled ? this.pooled(workspaceId) : true;
+    } catch {
+      return true; // can't tell: the pool's checks apply
+    }
+  }
+
+  /**
+   * Before each start, the credential the session will run on: on a pool, `authcheck` must pass (§6 rule
+   * 1); without one, the session's Claude must be signed in. Returns the refusal's reason, or null. Throws
+   * when the workspace can't be asked.
+   */
+  async #credentialCheck(workspaceId: string, claudeId: string | null): Promise<string | null> {
+    if (this.#viaPool(workspaceId)) return (await this.#authcheck(workspaceId)) === 'pass' ? null : NOT_SET_UP;
+    if (!this.signedIn) return null;
+    const directory = (claudeId ? this.#chat.claude(claudeId)?.directory : '') ?? '';
+    return (await this.signedIn(workspaceId, directory)) ? null : NOT_SIGNED_IN;
   }
 
   /**
@@ -1531,9 +1827,13 @@ export class ChatController {
    * by itself) and, on Kubernetes, the exit code. A command still running after {@link execTimeoutMs} is
    * closed and reads as failed (`code: null`).
    */
-  async #runOnce(workspaceId: string, args: string[], stdin?: string): Promise<{ code: number | null; out: string }> {
+  async #runOnce(workspaceId: string, args: string[], stdin?: string, configDir?: string | null): Promise<{ code: number | null; out: string }> {
     const [target, name] = this.#split(workspaceId);
-    const exec = await this.#workspaces.exec(target, name, ['sh', CP_SESSION_PATH, ...args]);
+    // Only a start needs the directory. The long-lived claude inherits it; the portal never reads that directory.
+    const command = configDir
+      ? ['sh', '-c', 'export CLAUDE_CONFIG_DIR="$1"; shift; exec sh "$@"', 'sh', configDir, CP_SESSION_PATH, ...args]
+      : ['sh', CP_SESSION_PATH, ...args];
+    const exec = await this.#workspaces.exec(target, name, command);
     const chunks: Buffer[] = [];
     return await new Promise((resolve) => {
       let done = false;

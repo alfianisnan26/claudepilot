@@ -29,7 +29,7 @@ export function ApprovalCard({
   const detail = request.detail ?? '';
   const agent = agentName ?? request.agentLabel;
   return (
-    <div role="group" aria-label="Approval needed" className="mb-2.5 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3.5">
+    <div role="group" aria-label="Approval needed" className="glass-card rounded-[24px] border-amber-500/40! p-4">
       <div className="flex items-start gap-2.5">
         <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
         <div className="min-w-0 flex-1">

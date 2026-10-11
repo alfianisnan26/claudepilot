@@ -1,7 +1,7 @@
 /** How a target runs workspaces. */
-export type RuntimeKind = 'docker' | 'kubernetes';
+export type RuntimeKind = 'docker' | 'kubernetes' | 'local';
 
-/** A place workspaces can run: a Docker daemon or a Kubernetes namespace. */
+/** A place workspaces can run: a Docker daemon, a Kubernetes namespace, or the portal's own machine. */
 export interface WorkspaceTarget {
   id: string;
   label: string;
@@ -40,6 +40,9 @@ export interface WorkspaceUsage {
   /** Percent of one core (200 = two cores busy). */
   cpuPercent: number | null;
   memoryBytes: number | null;
+  /** What the workspace can use when it has no limit of its own (the host's cores and memory), for scaling a bar. */
+  cores?: number | null;
+  memoryTotalBytes?: number | null;
 }
 
 export interface CreateWorkspaceRequest {
@@ -79,7 +82,60 @@ export const WORKSPACE_API = {
   /** POST `{ code }`: the code the sign-in page showed. */
   claudeLoginCode: (id: string) => `/api/workspaces/${id}/claude-login/code`,
   claudeLogout: (id: string) => `/api/workspaces/${id}/claude-logout`,
+  /** GET lists, POST opens one (`CreateTerminalRequest`); DELETE `…/terminals/<terminal>` closes it. */
+  terminals: (id: string) => `/api/workspaces/${id}/terminals`,
+  /**
+   * GET: the workspace's Claudes with their sign-in state (`WorkspaceClaudeState`). PATCH
+   * `…/claudes/<claude>` `{ name }` renames one, DELETE removes it. The sign-in routes above take
+   * `?claude=<id>` for a Claude other than Default.
+   */
+  claudes: (id: string) => `/api/workspaces/${id}/claudes`,
 } as const;
+
+/**
+ * One of the workspace's Claudes as its page shows it: whether Claude Code there is signed in (status
+ * and method only, from `claude auth status`; never the account, plan or credential) and how many
+ * terminals run as it. `auth` is null when it couldn't be checked (the workspace is stopped).
+ */
+export interface WorkspaceClaudeState {
+  claude: import('./chat.js').WorkspaceClaude;
+  auth: ClaudeAuthStatus | null;
+  terminals: number;
+}
+
+/** How many terminals a workspace keeps open at once (each Claude Code takes a few hundred MB). */
+export const TERMINAL_MAX = 8;
+
+/** `claude`: Claude Code, falling back to a shell when it exits; `shell`: a login shell. */
+export type TerminalKind = 'claude' | 'shell';
+
+/**
+ * A terminal that outlives the browser: a tmux session in the workspace, run as its user with its
+ * own Claude sign-in. Several can run side by side; the shell socket attaches with `?term=<id>`.
+ */
+export interface WorkspaceTerminal {
+  /** `claude-1`, `shell-2`, …: the tmux session is `cp-<id>`. */
+  id: string;
+  kind: TerminalKind;
+  /** The folder its current program runs in. */
+  cwd: string;
+  /** What runs in it now (`claude`, `bash`, `vim`, …). */
+  command: string;
+  createdAt: string;
+  /** Browser tabs (or other clients) attached right now. */
+  attached: number;
+  /** The Claude it runs as (Workspace Claudes): its directory holds that Claude's own login and chats. */
+  claudeId: string;
+  claudeName: string;
+}
+
+export interface CreateTerminalRequest {
+  kind: TerminalKind;
+  /** Which Claude on the workspace (its `CLAUDE_CONFIG_DIR`); Default when absent. */
+  claudeId?: string;
+  /** Where it starts: `~`, `~/work/api` or an absolute path. The home folder when absent. */
+  cwd?: string;
+}
 
 /** `POST …/claude-login` body: `sso` for organizations that sign in through their identity provider. */
 export interface ClaudeLoginRequest {

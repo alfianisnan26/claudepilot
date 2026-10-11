@@ -17,7 +17,7 @@ export function AuthLayout({
 }) {
   return (
     <div className="flex min-h-dvh flex-col">
-      <header className="mx-auto flex w-full max-w-5xl items-center px-5 py-5 sm:px-8">
+      <header className="sticky top-0 z-10 mx-auto flex w-full max-w-5xl bg-bg items-center px-5 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-5 sm:px-8">
         <Logo />
       </header>
       <main className="flex flex-1 items-start justify-center px-5 pt-4 pb-16 sm:items-center sm:pt-0">

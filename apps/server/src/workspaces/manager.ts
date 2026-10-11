@@ -256,8 +256,8 @@ export class Workspaces {
     return results.flat();
   }
 
-  shell(target: string, name: string, size: { cols: number; rows: number }): Promise<ShellSession> {
-    return this.#run(target, (r) => r.shell(name, size));
+  shell(target: string, name: string, size: { cols: number; rows: number }, command?: string[]): Promise<ShellSession> {
+    return this.#run(target, (r) => r.shell(name, size, command));
   }
 
   /** The runtime for a target, if configured (for the delivery engine). */

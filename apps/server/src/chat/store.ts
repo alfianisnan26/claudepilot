@@ -3,6 +3,7 @@
 // credential redactor (redact.ts), and large text is truncated.
 
 import type {
+  WorkspaceClaude,
   ChatEvent,
   ChatEventKind,
   ChatImage,
@@ -14,10 +15,11 @@ import type {
   ChatSessionState,
   ChatTask,
 } from '@portal/contracts';
+import { createHash, randomBytes } from 'node:crypto';
 import { posix } from 'node:path';
 import type { Store } from '../store/store.js';
 import { HOME } from '../workspaces/runtime.js';
-import type { StoredEvent, TaskPatch } from './protocol.js';
+import type { ModelTotals, StoredEvent, TaskPatch } from './protocol.js';
 import { redact, redactMaybe } from './redact.js';
 
 /**
@@ -59,6 +61,9 @@ export type ChatSessionRow = {
   last_activity_at: string;
   ended_reason: string | null;
   archived_at: string | null;
+  claude_id?: string | null;
+  predecessor_id?: string | null;
+  successor_id?: string | null;
 };
 
 type EventRow = {
@@ -115,6 +120,23 @@ export interface ChatSessionPatch {
   processStartedAt?: string | null;
   process?: 'live' | 'asleep' | 'gone';
   endedReason?: string | null;
+  successorId?: string | null;
+  predecessorId?: string | null;
+  archivedAt?: string | null;
+}
+
+/** One model's share of a finished turn, as recorded. */
+export interface UsageRow extends ModelTotals {
+  requests: number;
+  agents: number;
+  durationMs: number;
+}
+
+/** A stored usage row, as Usage reads it. */
+export interface UsageRecord extends UsageRow {
+  atMs: number;
+  workspaceId: string;
+  claudeId: string | null;
 }
 
 /** The lifecycle states a sent line moves through (chat-sessions PRD §9): the contract's, plus `refused`. */
@@ -217,14 +239,14 @@ export class ChatStore {
     return this.#now().toISOString();
   }
 
-  create(opts: { id: string; workspaceId: string; cwd: string; title: string; origin: ChatOrigin }): ChatSession {
+  create(opts: { id: string; workspaceId: string; cwd: string; title: string; origin: ChatOrigin; claudeId?: string; predecessorId?: string | null }): ChatSession {
     const now = this.#stamp();
     this.#writable()
       .prepare(
-        `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?)`,
+        `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?)`,
       )
-      .run(opts.id, opts.workspaceId, opts.cwd, opts.title, opts.origin, now, now, now);
+      .run(opts.id, opts.workspaceId, opts.cwd, opts.title, opts.origin, now, now, now, opts.claudeId ?? '', opts.predecessorId ?? null);
     return this.get(opts.id)!;
   }
 
@@ -276,6 +298,11 @@ export class ChatStore {
       createdAt: row.created_at,
       lastActivityAt: row.last_activity_at,
       endedReason: row.ended_reason ?? null,
+      claudeId: row.claude_id ?? '',
+      claudeName: this.claudeName(row.workspace_id, row.claude_id ?? ''),
+      predecessorId: row.predecessor_id ?? null,
+      successorId: row.successor_id ?? null,
+      archivedAt: row.archived_at ?? null,
     };
   }
 
@@ -302,6 +329,56 @@ export class ChatStore {
   history(sessionId: string, after = 0): ChatEvent[] {
     const rows = this.#db().prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq > ? ORDER BY seq').all(sessionId, after) as EventRow[];
     return rows.map((r) => this.#toEvent(r));
+  }
+
+  /** The running cost the session's newest `result` reported, or null before the first. */
+  lastResultCost(sessionId: string): number | null {
+    const row = this.#db().prepare(`SELECT payload FROM chat_events WHERE session_id = ? AND kind = 'result' ORDER BY seq DESC LIMIT 1`).get(sessionId) as { payload: string } | undefined;
+    const cost = row ? this.#parsePayload(row.payload).costUsd : undefined;
+    return typeof cost === 'number' ? cost : null;
+  }
+
+  /** Each model's running totals the session's newest `result` reported, or null. */
+  lastResultModelTotals(sessionId: string): ModelTotals[] | null {
+    const row = this.#db().prepare(`SELECT payload FROM chat_events WHERE session_id = ? AND kind = 'result' ORDER BY seq DESC LIMIT 1`).get(sessionId) as { payload: string } | undefined;
+    const totals = row ? this.#parsePayload(row.payload).modelTotals : undefined;
+    return Array.isArray(totals) ? (totals as ModelTotals[]) : null;
+  }
+
+  /** Sub-agents started (by any agent) since the session's newest stored `result`. */
+  agentsSinceLastResult(sessionId: string): number {
+    const row = this.#db()
+      .prepare(
+        `SELECT count(*) AS n FROM chat_events WHERE session_id = ? AND kind = 'tool_use'
+           AND json_extract(payload, '$.toolName') IN ('Task', 'Agent')
+           AND seq > coalesce((SELECT max(seq) FROM chat_events WHERE session_id = ? AND kind = 'result'), 0)`,
+      )
+      .get(sessionId, sessionId) as { n: number };
+    return row.n;
+  }
+
+  /** A finished turn's usage, one row per model; the first carries the request, sub-agents and time. */
+  recordUsage(turn: { atMs: number; sessionId: string; workspaceId: string; claudeId: string | null }, rows: UsageRow[]): void {
+    const db = this.#writable();
+    const insert = db.prepare(
+      `INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests, agents, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const at = new Date(turn.atMs).toISOString();
+    for (const r of rows) {
+      insert.run(at, turn.atMs, turn.sessionId, turn.workspaceId, turn.claudeId, r.model, r.input, r.output, r.cacheRead, r.cacheWrite, r.costUsd, r.requests, r.agents, r.durationMs);
+    }
+  }
+
+  /** Usage rows from `fromMs` on, oldest first, optionally for one Claude. */
+  usageSince(fromMs: number, claudeId?: string): UsageRecord[] {
+    const cols = `at_ms AS atMs, workspace_id AS workspaceId, claude_id AS claudeId, model, input_tokens AS input, output_tokens AS output,
+      cache_read_tokens AS cacheRead, cache_write_tokens AS cacheWrite, cost_usd AS costUsd, requests, agents, duration_ms AS durationMs`;
+    return (
+      claudeId
+        ? this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? AND claude_id = ? ORDER BY at_ms`).all(fromMs, claudeId)
+        : this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? ORDER BY at_ms`).all(fromMs)
+    ) as unknown as UsageRecord[];
   }
 
   /** The session's newest stored event, or null before the first. */
@@ -361,7 +438,10 @@ export class ChatStore {
     if (patch.parentPid !== undefined) set('parent_pid', patch.parentPid);
     if (patch.processStartedAt !== undefined) set('process_started_at', patch.processStartedAt);
     if (patch.process !== undefined) set('process', patch.process);
+    if (patch.archivedAt !== undefined) set('archived_at', patch.archivedAt);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
+    if (patch.successorId !== undefined) set('successor_id', patch.successorId);
+    if (patch.predecessorId !== undefined) set('predecessor_id', patch.predecessorId);
     if (!sets.length) return;
     db.prepare(`UPDATE chat_sessions SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
   }
@@ -635,6 +715,97 @@ export class ChatStore {
   }
 
   /** Only the allowlisted display fields of an event (never a raw tool input blob), with credentials redacted. */
+  /** The workspace's Claudes, creating Default on first use. Default keeps the original home (no extra directory). */
+  listClaudes(workspaceId: string): WorkspaceClaude[] {
+    this.ensureDefault(workspaceId);
+    const rows = this.#db().prepare('SELECT * FROM workspace_claudes WHERE workspace_id = ? ORDER BY created_at, name').all(workspaceId) as ClaudeRow[];
+    return rows.map(toClaude);
+  }
+
+  ensureDefault(workspaceId: string): WorkspaceClaude {
+    const existing = this.#db().prepare(`SELECT * FROM workspace_claudes WHERE workspace_id = ? AND directory = ''`).get(workspaceId) as ClaudeRow | undefined;
+    if (existing) return toClaude(existing);
+    const now = this.#stamp();
+    const id = `d_${createHash('sha256').update(workspaceId).digest('hex').slice(0, 16)}`;
+    this.#writable().prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES (?, ?, 'Default', '', ?)`).run(id, workspaceId, now);
+    return toClaude(this.#db().prepare('SELECT * FROM workspace_claudes WHERE id = ?').get(id) as ClaudeRow);
+  }
+
+  claude(id: string): WorkspaceClaude | null {
+    const row = this.#db().prepare('SELECT * FROM workspace_claudes WHERE id = ?').get(id) as ClaudeRow | undefined;
+    return row ? toClaude(row) : null;
+  }
+
+  claudeName(workspaceId: string, claudeId: string): string | null {
+    if (!claudeId) return 'Default';
+    const row = this.#db().prepare('SELECT name FROM workspace_claudes WHERE id = ? AND workspace_id = ?').get(claudeId, workspaceId) as { name: string } | undefined;
+    return row?.name ?? null;
+  }
+
+  /** Absolute config directory for a non-default Claude, or null to leave Claude Code on the workspace home. */
+  configDir(claudeId: string): string | null {
+    if (!claudeId) return null;
+    const row = this.#db().prepare('SELECT directory FROM workspace_claudes WHERE id = ?').get(claudeId) as { directory: string } | undefined;
+    if (!row || !row.directory) return null;
+    if (!/^claudes\/[a-f0-9]{16}$/.test(row.directory)) return null;
+    return `${HOME}/.claudepilot/${row.directory}`;
+  }
+
+  addClaude(workspaceId: string, name: string): { id: string; directory: string } {
+    const id = randomBytes(8).toString('hex');
+    const directory = `claudes/${id}`;
+    const now = this.#stamp();
+    this.#writable().prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES (?, ?, ?, ?, ?)`).run(id, workspaceId, name, directory, now);
+    return { id, directory };
+  }
+
+  removeClaudeRow(id: string): void {
+    this.#writable().prepare('DELETE FROM workspace_claudes WHERE id = ?').run(id);
+  }
+
+  /** A new label (Workspace Claudes FR3); the directory doesn't change. */
+  renameClaude(id: string, name: string): void {
+    this.#writable().prepare('UPDATE workspace_claudes SET name = ? WHERE id = ? AND removed_at IS NULL').run(name, id);
+  }
+
+  /** Marks a Claude removed; its row and its sessions' rows stay, and so does its directory (FR3). */
+  markClaudeRemoved(id: string): void {
+    this.#writable().prepare('UPDATE workspace_claudes SET removed_at = ? WHERE id = ? AND removed_at IS NULL').run(this.#stamp(), id);
+  }
+
+  /** Sessions on that Claude that haven't ended (Default's include rows from before Claudes, with no claude_id). */
+  openSessionsOnClaude(workspaceId: string, claudeId: string, isDefault: boolean): number {
+    const row = this.#db()
+      .prepare(`SELECT COUNT(*) AS n FROM chat_sessions WHERE workspace_id = ? AND state != 'ended' AND (claude_id = ? OR (? AND claude_id = ''))`)
+      .get(workspaceId, claudeId, isDefault ? 1 : 0) as { n: number };
+    return row.n;
+  }
+
+  /** Portal events, newest last, capped, already redacted in the store. */
+  contextSummary(sessionId: string): string {
+    const rows = this.history(sessionId);
+    const lines: string[] = [];
+    for (const ev of rows) {
+      if ((ev.kind !== 'user' && ev.kind !== 'assistant') || !ev.text?.trim()) continue;
+      lines.push(`${ev.kind === 'user' ? 'User' : 'Claude'}: ${ev.text.trim()}`);
+    }
+    const text = lines.join('\n\n');
+    return text.length > 8000 ? text.slice(-8000) : text;
+  }
+
+  saveHandoff(row: { id: string; workspaceId: string; sourceSessionId: string; sourceClaudeId: string; destClaudeId: string; path: string }): void {
+    this.#writable()
+      .prepare(
+        `INSERT INTO claude_handoffs (id, workspace_id, source_session_id, successor_session_id, source_claude_id, dest_claude_id, path, created_at)
+         VALUES (?, ?, ?, NULL, ?, ?, ?, ?)`,
+      )
+      .run(row.id, row.workspaceId, row.sourceSessionId, row.sourceClaudeId, row.destClaudeId, row.path, this.#stamp());
+  }
+
+  setHandoffSuccessor(id: string, successorId: string): void {
+    this.#writable().prepare('UPDATE claude_handoffs SET successor_session_id = ? WHERE id = ?').run(successorId, id);
+  }
+
   #payload(ev: StoredEvent): Record<string, unknown> {
     const p: Record<string, unknown> = {};
     if (ev.text !== undefined) {
@@ -649,7 +820,10 @@ export class ChatStore {
     // transcript pairs each call with its result.
     if ((ev.kind === 'tool_use' || ev.kind === 'tool_result') && ev.toolUseId) p.toolUseId = ev.toolUseId;
     if (ev.kind === 'tool_result' && ev.isError) p.isError = true;
-    if (ev.kind === 'thinking' && ev.durationMs !== undefined) p.durationMs = ev.durationMs;
+    if ((ev.kind === 'thinking' || ev.kind === 'result') && ev.durationMs !== undefined) p.durationMs = ev.durationMs;
+    if (ev.kind === 'result' && ev.turnCostUsd !== undefined) p.turnCostUsd = ev.turnCostUsd;
+    if (ev.kind === 'result' && ev.tokens) p.tokens = ev.tokens;
+    if (ev.kind === 'result' && ev.modelTotals?.length) p.modelTotals = ev.modelTotals;
     // The readable sub-agent label, when it isn't just the raw parent_tool_use_id kept in its column.
     if (ev.agentLabel && ev.agentLabel !== ev.parentToolUseId) p.agentLabel = redact(ev.agentLabel);
     // Blob references only: base64 never reaches a row (the controller moves it to the blob store).
@@ -672,6 +846,12 @@ export class ChatStore {
     if (typeof payload.toolUseId === 'string') ev.toolUseId = payload.toolUseId;
     if (payload.isError === true) ev.isError = true;
     if (typeof payload.durationMs === 'number') ev.durationMs = payload.durationMs;
+    if (typeof payload.turnCostUsd === 'number') ev.turnCostUsd = payload.turnCostUsd;
+    const t = payload.tokens as Record<string, unknown> | undefined;
+    if (t && typeof t === 'object') {
+      const n = (v: unknown) => (typeof v === 'number' && v > 0 ? v : 0);
+      ev.tokens = { input: n(t.input), output: n(t.output), cacheRead: n(t.cacheRead), cacheWrite: n(t.cacheWrite) };
+    }
     if (Array.isArray(payload.images)) {
       const images = payload.images.map(imageRef).filter((i): i is ChatImage => i !== null);
       if (images.length) ev.images = images;
@@ -688,4 +868,24 @@ export class ChatStore {
       return {};
     }
   }
+}
+
+type ClaudeRow = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  directory: string;
+  removed_at: string | null;
+  created_at: string;
+};
+
+function toClaude(row: ClaudeRow): WorkspaceClaude {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    directory: row.directory,
+    removedAt: row.removed_at,
+    createdAt: row.created_at,
+  };
 }

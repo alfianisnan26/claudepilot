@@ -26,6 +26,9 @@ import {
   type ClaudeAuthStatus,
   type ClaudeLoginRequest,
   type ClaudeLoginStart,
+  type CreateTerminalRequest,
+  type WorkspaceClaudeState,
+  type WorkspaceTerminal,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -37,7 +40,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AccountHealthService } from './accounts/health.js';
 import type { ChatController } from './chat/controller.js';
 import { createChatFileRoutes } from './chat/fileRoutes.js';
-import { createChatRoutes } from './chat/routes.js';
+import { createChatRoutes, createClaudeRoutes, createUsageRoutes } from './chat/routes.js';
 import { createChatTrustRoutes } from './chat/trustRoutes.js';
 import type { AccountPools } from './accounts/pools.js';
 import type { AccountsService } from './accounts/service.js';
@@ -47,6 +50,7 @@ import { config } from './config.js';
 import type { Portal } from './portal.js';
 import { RateLimiter } from './rateLimit.js';
 import { ClaudeLogins } from './workspaces/claudeLogin.js';
+import { Terminals } from './workspaces/terminals.js';
 import { deliveryState, workspaceView } from './workspaces/view.js';
 import { generateSecretKey, parseSecretKey, SecretKeyError } from './store/secretBox.js';
 import type { Store } from './store/store.js';
@@ -260,31 +264,85 @@ export function createApp(
 
   // Claude Code's own sign-in, driven from the portal; the credential stays in the workspace.
   const logins = new ClaudeLogins(workspaces);
+  // A session without a pool runs on its Claude's own sign-in (chat PRD §6): checked before each start.
+  chatController.signedIn = async (workspaceId, directory) => {
+    const slash = workspaceId.indexOf('/');
+    return (await logins.status(workspaceId.slice(0, slash), workspaceId.slice(slash + 1), directory)).loggedIn;
+  };
   const ownSignIn = (c: Context<Env>) => {
     const [target, name] = [c.req.param('target')!, c.req.param('name')!];
     if (pools.stateFor(`${target}/${name}`))
       throw new AppError('CONFLICT', 'This workspace uses its account pool’s keys. Unassign the pool to sign in with your own Claude account.');
     return [target, name] as const;
   };
+  /** `?claude=<id>`: which of the workspace's Claudes (its directory, each with its own login); Default when absent. */
+  const claudeDir = (c: Context<Env>) => {
+    const id = c.req.query('claude');
+    if (!id) return '';
+    const claude = chatController.listClaudes(`${c.req.param('target')}/${c.req.param('name')}`).find((x) => x.id === id && !x.removedAt);
+    if (!claude) throw new AppError('NOT_FOUND', 'That Claude isn’t on this workspace.');
+    return claude.directory;
+  };
   ws.get('/:target/:name/claude-login', async (c) =>
-    c.json(success<ClaudeAuthStatus>(await logins.status(c.req.param('target'), c.req.param('name')))),
+    c.json(success<ClaudeAuthStatus>(await logins.status(c.req.param('target'), c.req.param('name'), claudeDir(c)))),
   );
   ws.post('/:target/:name/claude-login', async (c) => {
     const [target, name] = ownSignIn(c);
     const req = (await c.req.json().catch(() => ({}))) as Partial<ClaudeLoginRequest> | null;
-    return c.json(success<ClaudeLoginStart>(await logins.start(target, name, { sso: req?.sso === true, email: req?.email })));
+    return c.json(success<ClaudeLoginStart>(await logins.start(target, name, { sso: req?.sso === true, email: req?.email, dir: claudeDir(c) })));
   });
   ws.post('/:target/:name/claude-login/code', async (c) => {
     const { code } = await body<{ code: string }>(c);
-    await logins.submit(...ownSignIn(c), code);
+    await logins.submit(...ownSignIn(c), code, claudeDir(c));
     return c.json(success({ ok: true }));
   });
   ws.delete('/:target/:name/claude-login', async (c) => {
-    await logins.cancel(c.req.param('target'), c.req.param('name'));
+    await logins.cancel(c.req.param('target'), c.req.param('name'), claudeDir(c));
     return c.json(success({ ok: true }));
   });
   ws.post('/:target/:name/claude-logout', async (c) => {
-    await logins.logout(...ownSignIn(c));
+    await logins.logout(...ownSignIn(c), claudeDir(c));
+    return c.json(success({ ok: true }));
+  });
+
+  // Terminals that outlive the browser (tmux sessions), several Claude Codes side by side.
+  const terminals = new Terminals(workspaces, logins, chatController);
+  ws.get('/:target/:name/terminals', async (c) =>
+    c.json(success<WorkspaceTerminal[]>(await terminals.list(c.req.param('target'), c.req.param('name')))),
+  );
+  ws.post('/:target/:name/terminals', async (c) => {
+    const req = (await c.req.json().catch(() => ({}))) as Partial<CreateTerminalRequest> | null;
+    return c.json(success<WorkspaceTerminal>(await terminals.create(c.req.param('target'), c.req.param('name'), req ?? {})), 201);
+  });
+  ws.delete('/:target/:name/terminals/:term', async (c) => {
+    await terminals.close(c.req.param('target'), c.req.param('name'), c.req.param('term'));
+    return c.json(success({ ok: true }));
+  });
+
+  // The workspace's Claudes (Workspace Claudes), each with its own Claude Code login: sign-in state
+  // from `claude auth status` (status and method only), and the terminals running as each.
+  ws.get('/:target/:name/claudes', async (c) => {
+    const [target, name] = [c.req.param('target'), c.req.param('name')];
+    const live = chatController.listClaudes(`${target}/${name}`).filter((x) => !x.removedAt);
+    const open = await terminals.list(target, name).catch(() => []);
+    const states = await Promise.all(
+      live.map(async (claude): Promise<WorkspaceClaudeState> => ({
+        claude,
+        auth: await logins.status(target, name, claude.directory).catch(() => null),
+        terminals: open.filter((t) => t.claudeId === claude.id).length,
+      })),
+    );
+    return c.json(success(states));
+  });
+  ws.patch('/:target/:name/claudes/:claude', async (c) => {
+    const { name: label } = await body<{ name: string }>(c);
+    return c.json(success(chatController.renameClaude(`${c.req.param('target')}/${c.req.param('name')}`, c.req.param('claude'), String(label ?? ''))));
+  });
+  ws.delete('/:target/:name/claudes/:claude', async (c) => {
+    const [target, name, claudeId] = [c.req.param('target'), c.req.param('name'), c.req.param('claude')];
+    if ((await terminals.list(target, name).catch(() => [])).some((t) => t.claudeId === claudeId))
+      throw new AppError('CONFLICT', 'Close this Claude’s terminals first.');
+    chatController.removeClaude(`${target}/${name}`, claudeId);
     return c.json(success({ ok: true }));
   });
   ws.get('/', async (c) => c.json(success((await workspaces.list()).map(decorate))));
@@ -381,6 +439,14 @@ export function createApp(
   chat.route('/', createChatRoutes(chatController));
   chat.route('/', createChatFileRoutes({ controller: chatController, workspaces, store }));
   app.route('/api/chat/sessions', chat);
+  const claudes = new Hono<Env>();
+  claudes.use(requireSession);
+  claudes.route('/', createClaudeRoutes(chatController));
+  const usage = new Hono<Env>();
+  usage.use(requireSession);
+  usage.route('/', createUsageRoutes(chatController));
+  app.route('/api/chat/usage', usage);
+  app.route('/api/chat/claudes', claudes);
   const trust = new Hono<Env>();
   trust.use(requireSession);
   trust.route('/', createChatTrustRoutes({ controller: chatController, workspaces, store }));
@@ -396,6 +462,15 @@ export function createApp(
     app.use('/assets/*', async (c, next) => {
       await next();
       c.header('Cache-Control', 'public, max-age=31536000, immutable');
+    });
+    // The worker and the manifest must always be re-checked, or an update can take days to reach installed copies.
+    app.use('/sw.js', async (c, next) => {
+      await next();
+      c.header('Cache-Control', 'no-cache');
+    });
+    app.use('/manifest.webmanifest', async (c, next) => {
+      await next();
+      c.header('Cache-Control', 'no-cache');
     });
     app.use('*', serveStatic({ root }));
     // Client-side routes: every other path gets the app shell.

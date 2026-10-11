@@ -1,6 +1,6 @@
 import { FormDialog, Select, TextField } from '@isnanme/ui';
 import { WORKSPACE_NAME_MAX, workspaceNameProblem, type AccountPool, type CreateWorkspaceRequest, type WorkspaceTarget } from '@portal/contracts';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ApiError } from '@/lib/api';
 
 const CPU_OPTIONS = [
@@ -39,17 +39,19 @@ export function NewWorkspaceDialog({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // This machine is one workspace you start and stop; there is nothing to create on it.
+  const creatable = useMemo(() => targets.filter((t) => t.kind !== 'local'), [targets]);
 
   useEffect(() => {
     if (!open) return;
     setName('');
-    setTarget(targets.find((t) => t.available)?.id ?? '');
+    setTarget(creatable.find((t) => t.available)?.id ?? '');
     setCpus('2');
     setMemory('4096');
     setPoolId('');
     setErrors({});
     setFormError(null);
-  }, [open, targets]);
+  }, [open, creatable]);
 
   const submit = async () => {
     const problem = workspaceNameProblem(name);
@@ -113,7 +115,7 @@ export function NewWorkspaceDialog({
           label="Runs on"
           value={target}
           onChange={(v) => (setTarget(v), setErrors(({ target: _, ...rest }) => rest))}
-          options={targets.map((t) => ({
+          options={creatable.map((t) => ({
             value: t.id,
             label: t.available ? `${t.label} · ${t.where}` : `${t.label} (unreachable)`,
             disabled: !t.available,

@@ -1,10 +1,11 @@
-import { Badge, Button, cn, ConfirmDialog, Menu, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
-import type { ChatRequest } from '@portal/contracts';
-import { ArrowLeft, Bot, FolderOpen, ListCollapse, ListTree, MoreHorizontal, Square, Trash2 } from 'lucide-react';
+import { Badge, Button, cn, ConfirmDialog, FormDialog, Menu, Select, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
+import type { ChatRequest, WorkspaceClaude } from '@portal/contracts';
+import { Archive, ArchiveRestore, ArrowLeft, Bot, FolderOpen, Gauge, ListCollapse, ListTree, MoreHorizontal, Square, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import { BRAND_NAME } from '@/components/Logo';
 import { errorText } from '@/lib/api';
+import { pinnedToViewport, useVisualViewport } from '@/lib/viewport';
 import { AgentsPanel, AgentsSheet } from './AgentsPanel';
 import { chatApi } from './api';
 import { ApprovalCard } from './ApprovalCard';
@@ -15,6 +16,7 @@ import { endedForSafety, StateBadge } from './shared';
 import { Transcript } from './Transcript';
 import { ResumeBanner } from './ResumeBanner';
 import { TrustSheet, useFolderTrust, type TrustTarget } from './TrustSheet';
+import { UsageDialog } from './Usage';
 import { useChatSession, type ChatControlArgs, type ChatControlOp, type ChatSendOptions } from './useChatSocket';
 
 /** The side panels: one at a time. */
@@ -51,11 +53,47 @@ function savedDetails(): boolean {
  */
 export function SessionPage() {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const toast = useToast();
   const { connected, events, delta, session, inputs, outbox, tasks, send, respond, control, stop, end } = useChatSession(id);
   const [ending, setEnding] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
+  /** Archive (FR4): ends it if it's still going, then back to the list, where it's under Archived. */
+  const archive = async () => {
+    try {
+      await chatApi.archive(id);
+      toast('Archived');
+      navigate('/admin/sessions');
+    } catch (e) {
+      toast(errorText(e, 'Could not archive it.'), 'error');
+    }
+  };
+  const unarchive = async () => {
+    try {
+      await chatApi.unarchive(id);
+      toast('Back in Sessions');
+    } catch (e) {
+      toast(errorText(e, 'Could not unarchive it.'), 'error');
+    }
+  };
   const composer = useRef<ComposerHandle>(null);
   const controls = useRef<ControlsHandle>(null);
+  // The page follows the visible area, so the header stays put when the keyboard opens (iOS scrolls the
+  // page instead of resizing it); the transcript scrolls under the glass header and dock.
+  // A focused composer on a phone means the keyboard: the dock drops its safe-area gap at once.
+  const viewport = useVisualViewport({ keyboardOnFocus: true });
+  const dock = useRef<HTMLDivElement>(null);
+  const [dockHeight, setDockHeight] = useState(0);
+  useLayoutEffect(() => {
+    const el = dock.current;
+    if (!el) return;
+    const measure = () => setDockHeight(el.offsetHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   // A refused start's ack names no folder, and the session doesn't either: its folder is where Files
   // opens by default.
@@ -122,6 +160,42 @@ export function SessionPage() {
     return () => void (document.title = BRAND_NAME);
   }, [session?.title]);
 
+  // The open thread follows a transfer onto the new session.
+  useEffect(() => {
+    if (session?.id === id && session.successorId) navigate(`/admin/sessions/${session.successorId}`, { replace: true });
+  }, [session?.id, session?.successorId, id, navigate]);
+
+  const [switching, setSwitching] = useState(false);
+  const [switchTo, setSwitchTo] = useState('');
+  const [others, setOthers] = useState<WorkspaceClaude[]>([]);
+  const [moving, setMoving] = useState(false);
+  const openSwitch = () => {
+    if (!session) return;
+    setSwitching(true);
+    setSwitchTo('');
+    chatApi.claudes(session.workspaceId).then(
+      (list) => {
+        const rest = list.filter((c) => !c.removedAt && c.id !== session.claudeId);
+        setOthers(rest);
+        setSwitchTo(rest[0]?.id ?? '');
+      },
+      () => setOthers([]),
+    );
+  };
+  const runTransfer = async () => {
+    if (!switchTo) return;
+    setMoving(true);
+    try {
+      const next = await chatApi.transfer(id, { claudeId: switchTo });
+      setSwitching(false);
+      navigate(`/admin/sessions/${next.id}`, { replace: true });
+    } catch (e) {
+      toast(errorText(e, 'Could not move this session.'), 'error');
+    } finally {
+      setMoving(false);
+    }
+  };
+
   // Open requests: a `request` with no later `resolved`, oldest first (events are seq-ordered).
   const openRequests = useMemo(() => {
     const resolved = new Set<string>();
@@ -176,15 +250,30 @@ export function SessionPage() {
             ? [{ label: `Mode: ${mode.label}`, icon: <ModeIcon className="size-4" />, onSelect: fromMenu(() => controls.current?.openMode()) }]
             : []),
         ]),
+    { label: 'Usage', icon: <Gauge className="size-4" />, onSelect: fromMenu(() => setUsageOpen(true)) },
     details
       ? { label: 'Show less', icon: <ListCollapse className="size-4" />, onSelect: fromMenu(toggleDetails) }
       : { label: 'Show all details', icon: <ListTree className="size-4" />, onSelect: fromMenu(toggleDetails) },
+    {
+      label: 'Switch Claude',
+      icon: <Bot className="size-4" />,
+      onSelect: fromMenu(openSwitch),
+      disabled: ended && session?.endedReason !== 'transferred',
+    },
+    session?.archivedAt
+      ? { label: 'Unarchive', icon: <ArchiveRestore className="size-4" />, onSelect: fromMenu(() => void unarchive()) }
+      : {
+          label: 'Archive',
+          icon: <Archive className="size-4" />,
+          onSelect: fromMenu(() => (session?.state === 'working' || session?.state === 'waiting' ? setArchiving(true) : void archive())),
+          disabled: !session,
+        },
     { label: 'End session', icon: <Trash2 className="size-4" />, onSelect: fromMenu(() => setEnding(true)), danger: true, disabled: ended },
   ];
 
   return (
-    <div className="flex h-dvh flex-col bg-bg text-ink">
-      <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-line bg-bg/90 px-2 pt-[env(safe-area-inset-top)] backdrop-blur-md sm:px-3">
+    <div className="fixed inset-x-0 top-0 h-dvh overflow-hidden bg-bg text-ink" style={pinnedToViewport(viewport)}>
+      <header className="glass absolute inset-x-0 top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center gap-2 border-b border-ink/[0.05] px-2 pt-[env(safe-area-inset-top)] sm:px-3">
         <Link
           to="/admin/sessions"
           aria-label="Back to sessions"
@@ -193,9 +282,11 @@ export function SessionPage() {
           <ArrowLeft className="size-[18px]" />
         </Link>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold">{session?.title || 'Untitled'}</p>
-          <p className="truncate text-[11px] text-muted">
+          <p className="truncate text-[15.5px] font-semibold">{session?.title || 'Untitled'}</p>
+          <p className="truncate text-[12px] text-muted">
             <span className="font-mono">{session?.workspaceId ?? '…'}</span>
+            {session?.claudeName ? ` · ${session.claudeName}` : ''}
+            {session?.endedReason === 'transferred' ? ' · left behind' : ''}
             {!connected && ' · reconnecting…'}
           </p>
         </div>
@@ -205,9 +296,9 @@ export function SessionPage() {
           ) : (
             <StateBadge state={state} />
           ))}
-        {working && (
+        {working && roomy && (
           <Button size="sm" variant="secondary" icon={<Square className="size-3.5" />} onClick={stop} aria-label="Stop">
-            <span className="hidden sm:inline">Stop</span>
+            Stop
           </Button>
         )}
         {roomy && (
@@ -259,8 +350,8 @@ export function SessionPage() {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex h-full min-h-0">
+        <div className="relative flex min-w-0 flex-1 flex-col">
           <Transcript
             sessionId={id}
             events={events}
@@ -271,11 +362,19 @@ export function SessionPage() {
             onCancelQueued={cancelQueued}
             details={details}
             working={working}
-            className="min-h-0 flex-1"
+            padTop="calc(3.5rem + env(safe-area-inset-top) + 1.25rem)"
+            padBottom={dockHeight + 12}
+            onOpenUsage={() => setUsageOpen(true)}
+            className="h-full"
           />
 
-          <div className="shrink-0 border-t border-line bg-bg">
-            <div className="mx-auto w-full max-w-[760px] px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <div ref={dock} className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
+            <div
+              className={cn(
+                'pointer-events-auto mx-auto flex w-full max-w-[760px] flex-col gap-2 px-3 pt-2 sm:px-4',
+                viewport?.keyboard ? 'pb-1.5' : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]',
+              )}
+            >
               {current && (
                 <ApprovalCard
                   request={current}
@@ -290,18 +389,26 @@ export function SessionPage() {
               ) : (
                 <>
                   {session && <ResumeBanner session={session} connected={connected} onResume={() => trustedControl('resume')} />}
-                  {session && (
-                    <Controls
-                      ref={controls}
-                      sessionId={id}
-                      session={session}
-                      connected={connected}
-                      control={trustedControl}
-                      suspended={trust.prompt !== null}
-                      className="-mx-2 mb-1"
-                    />
-                  )}
-                  <Composer ref={composer} onSend={trustedSend} connected={connected} working={working} />
+                  <Composer
+                    ref={composer}
+                    onSend={trustedSend}
+                    connected={connected}
+                    working={working}
+                    onStop={stop}
+                    accessory={
+                      session && (
+                        <Controls
+                          ref={controls}
+                          sessionId={id}
+                          session={session}
+                          connected={connected}
+                          control={trustedControl}
+                          suspended={trust.prompt !== null}
+                          className="min-w-0 flex-1"
+                        />
+                      )
+                    }
+                  />
                 </>
               )}
             </div>
@@ -309,7 +416,7 @@ export function SessionPage() {
         </div>
 
         {wide && panel === 'agents' && (
-          <aside id="agents-panel" aria-label="Agents" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg">
+          <aside id="agents-panel" aria-label="Agents" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[calc(3.5rem+env(safe-area-inset-top))]">
             <AgentsPanel
               tasks={tasks}
               onStopTask={ended ? undefined : stopTask}
@@ -321,7 +428,7 @@ export function SessionPage() {
           </aside>
         )}
         {wide && panel === 'files' && (
-          <aside id="files-panel" aria-label="Files" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg">
+          <aside id="files-panel" aria-label="Files" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[calc(3.5rem+env(safe-area-inset-top))]">
             <FilesPanel key={id} sessionId={id} view={filesView} onView={setFilesView} onClose={toggleFiles} closeLabel="Hide files" />
           </aside>
         )}
@@ -341,6 +448,26 @@ export function SessionPage() {
 
       <TrustSheet trust={trust} />
 
+      <FormDialog
+        open={switching}
+        onClose={() => !moving && setSwitching(false)}
+        size="sm"
+        title="Move this chat?"
+        description="This session stops being the live thread. A new session starts on the Claude you pick, and this view follows it. Logins stay in their directories."
+        onSubmit={runTransfer}
+        submitLabel="Move"
+        saving={moving}
+        submitDisabled={!switchTo}
+      >
+        <Select
+          label="Claude"
+          value={switchTo}
+          onChange={setSwitchTo}
+          options={others.map((c) => ({ value: c.id, label: c.name }))}
+          placeholder={others.length ? 'Pick a Claude' : 'No other Claude on this workspace'}
+        />
+      </FormDialog>
+
       <ConfirmDialog
         open={ending}
         title="End this session?"
@@ -352,6 +479,18 @@ export function SessionPage() {
         }}
         onClose={() => setEnding(false)}
       />
+      <UsageDialog open={usageOpen} onClose={() => setUsageOpen(false)} events={events} session={session} />
+      <ConfirmDialog
+        open={archiving}
+        title="Archive this session?"
+        description="Claude Code stops working on it and the chat ends. It moves to Archived, where the transcript stays."
+        confirmLabel="Archive"
+        onConfirm={() => {
+          setArchiving(false);
+          void archive();
+        }}
+        onClose={() => setArchiving(false)}
+      />
     </div>
   );
 }
@@ -360,7 +499,7 @@ export function SessionPage() {
 function EndedNote({ reason }: { reason: string | null | undefined }) {
   const stop = endedForSafety(reason);
   return (
-    <p role="status" className="py-2 text-center text-[13px] text-muted">
+    <p role="status" className="glass-card rounded-full px-4 py-3 text-center text-[13.5px] text-muted">
       {stop ? (
         <>
           <span className="font-semibold text-danger">{stop.label}.</span> Start a new session to carry on.

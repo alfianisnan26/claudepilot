@@ -14,6 +14,10 @@ import {
   type ClaudeAuthStatus,
   type ClaudeLoginRequest,
   type ClaudeLoginStart,
+  type CreateTerminalRequest,
+  type WorkspaceClaude,
+  type WorkspaceClaudeState,
+  type WorkspaceTerminal,
   type CreateAccountRequest,
   type KeySetupResult,
   type KeyUnlockResult,
@@ -74,6 +78,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   throw new ApiError('INTERNAL_ERROR', `Unexpected response (${res.status}).`, res.status);
 }
 
+/** `?claude=<id>` for a Claude other than Default. */
+const asClaude = (claudeId?: string) => (claudeId ? `?claude=${encodeURIComponent(claudeId)}` : '');
+
 export const api = {
   session: () => request<SessionStatus>('GET', API.session),
   login: (code: string) => request<AdminState>('POST', API.login, { code }),
@@ -115,11 +122,21 @@ export const api = {
     start: (id: string) => request<{ ok: true }>('POST', `${WORKSPACE_API.one(id)}/start`),
     stop: (id: string) => request<{ ok: true }>('POST', `${WORKSPACE_API.one(id)}/stop`),
     remove: (id: string) => request<{ ok: true }>('DELETE', WORKSPACE_API.one(id)),
-    claudeAuthStatus: (id: string) => request<ClaudeAuthStatus>('GET', WORKSPACE_API.claudeLogin(id)),
-    claudeLogin: (id: string, body: ClaudeLoginRequest = {}) => request<ClaudeLoginStart>('POST', WORKSPACE_API.claudeLogin(id), body),
-    claudeLoginCode: (id: string, code: string) => request<{ ok: true }>('POST', WORKSPACE_API.claudeLoginCode(id), { code }),
-    cancelClaudeLogin: (id: string) => request<{ ok: true }>('DELETE', WORKSPACE_API.claudeLogin(id)),
-    claudeLogout: (id: string) => request<{ ok: true }>('POST', WORKSPACE_API.claudeLogout(id)),
+    // `claudeId`: one of the workspace's Claudes (each has its own login); Default when absent.
+    claudeAuthStatus: (id: string, claudeId?: string) => request<ClaudeAuthStatus>('GET', WORKSPACE_API.claudeLogin(id) + asClaude(claudeId)),
+    claudeLogin: (id: string, body: ClaudeLoginRequest = {}, claudeId?: string) =>
+      request<ClaudeLoginStart>('POST', WORKSPACE_API.claudeLogin(id) + asClaude(claudeId), body),
+    claudeLoginCode: (id: string, code: string, claudeId?: string) =>
+      request<{ ok: true }>('POST', WORKSPACE_API.claudeLoginCode(id) + asClaude(claudeId), { code }),
+    cancelClaudeLogin: (id: string, claudeId?: string) => request<{ ok: true }>('DELETE', WORKSPACE_API.claudeLogin(id) + asClaude(claudeId)),
+    claudeLogout: (id: string, claudeId?: string) => request<{ ok: true }>('POST', WORKSPACE_API.claudeLogout(id) + asClaude(claudeId)),
+    claudes: (id: string) => request<WorkspaceClaudeState[]>('GET', WORKSPACE_API.claudes(id)),
+    renameClaude: (id: string, claudeId: string, name: string) =>
+      request<WorkspaceClaude>('PATCH', `${WORKSPACE_API.claudes(id)}/${encodeURIComponent(claudeId)}`, { name }),
+    removeClaude: (id: string, claudeId: string) => request<{ ok: true }>('DELETE', `${WORKSPACE_API.claudes(id)}/${encodeURIComponent(claudeId)}`),
+    terminals: (id: string) => request<WorkspaceTerminal[]>('GET', WORKSPACE_API.terminals(id)),
+    openTerminal: (id: string, body: CreateTerminalRequest) => request<WorkspaceTerminal>('POST', WORKSPACE_API.terminals(id), body),
+    closeTerminal: (id: string, terminal: string) => request<{ ok: true }>('DELETE', `${WORKSPACE_API.terminals(id)}/${terminal}`),
   },
 };
 

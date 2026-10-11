@@ -2,7 +2,7 @@
 // the owner mounts this under a guarded group (`requireSession`) at /api/chat/sessions.
 
 import { AppError, success } from '@isnanme/core';
-import type { CreateChatSessionRequest } from '@portal/contracts';
+import type { CreateChatSessionRequest, CreateWorkspaceClaudeRequest, TransferChatRequest } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import type { ChatController } from './controller.js';
 
@@ -36,11 +36,22 @@ export function createChatRoutes(controller: ChatController): Hono {
     return c.json(success(session));
   });
 
+  // POST /api/chat/sessions/:id/transfer — confirmed context move to another Claude on the same workspace.
+  chat.post('/:id/transfer', async (c) => {
+    const req = await body<TransferChatRequest>(c);
+    if (typeof req.claudeId !== 'string' || !req.claudeId.trim()) throw new AppError('VALIDATION_FAILED', 'Pick a Claude.', { details: { claudeId: 'Required.' } });
+    return c.json(success(await controller.transfer(c.req.param('id'), req.claudeId)));
+  });
+
   // DELETE /api/chat/sessions/:id — end it.
   chat.delete('/:id', async (c) => {
     await controller.end(c.req.param('id'));
     return c.json(success({ ok: true }));
   });
+
+  // POST /api/chat/sessions/:id/archive — archive it (ends it first); DELETE unarchives.
+  chat.post('/:id/archive', async (c) => c.json(success(await controller.archive(c.req.param('id')))));
+  chat.delete('/:id/archive', (c) => c.json(success(controller.unarchive(c.req.param('id')))));
 
   // GET /api/chat/sessions/:id/events?after=<seq> — stored transcript events (history and resume).
   chat.get('/:id/events', (c) => c.json(success(controller.history(c.req.param('id'), Number(c.req.query('after') ?? 0) || 0))));
@@ -65,4 +76,27 @@ export function createChatRoutes(controller: ChatController): Hono {
   });
 
   return chat;
+}
+
+/** Claudes on a workspace. Mount at `/api/chat/claudes`. */
+/** `GET /api/chat/usage?range=&claudeId=&tz=`: usage over time, for the Usage charts. */
+export function createUsageRoutes(controller: ChatController): Hono {
+  const usage = new Hono();
+  usage.get('/', (c) => {
+    const tz = Number(c.req.query('tz'));
+    return c.json(success(controller.usage(c.req.query('range'), { claudeId: c.req.query('claudeId') || undefined, tzOffsetMin: Number.isFinite(tz) ? tz : 0 })));
+  });
+  return usage;
+}
+
+export function createClaudeRoutes(controller: ChatController): Hono {
+  const claudes = new Hono();
+  claudes.get('/', (c) => c.json(success(controller.listClaudes(c.req.query('workspaceId') ?? ''))));
+  claudes.post('/', async (c) => {
+    const req = await body<CreateWorkspaceClaudeRequest>(c);
+    if (typeof req.workspaceId !== 'string' || !req.workspaceId.trim()) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
+    if (typeof req.name !== 'string') throw new AppError('VALIDATION_FAILED', 'Name the Claude.', { details: { name: 'Required.' } });
+    return c.json(success(await controller.createClaude(req.workspaceId, req.name)), 201);
+  });
+  return claudes;
 }

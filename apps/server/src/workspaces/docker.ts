@@ -277,6 +277,8 @@ export class DockerRuntime implements Runtime {
           return {
             cpuPercent: systemDelta > 0 && cpuDelta >= 0 ? (cpuDelta / systemDelta) * cpus * 100 : 0,
             memoryBytes,
+            cores: cpus,
+            memoryTotalBytes: s.memory_stats.limit || null,
           };
         } catch {
           return { cpuPercent: null, memoryBytes: null };
@@ -285,9 +287,9 @@ export class DockerRuntime implements Runtime {
     );
   }
 
-  async shell(name: string, size: { cols: number; rows: number }): Promise<ShellSession> {
+  async shell(name: string, size: { cols: number; rows: number }, command?: string[]): Promise<ShellSession> {
     const exec = await this.#container(name).exec({
-      Cmd: ['bash', '-l'],
+      Cmd: command ?? ['bash', '-l'],
       AttachStdin: true,
       AttachStdout: true,
       AttachStderr: true,

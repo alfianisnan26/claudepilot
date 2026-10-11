@@ -47,6 +47,11 @@ npm test           # server tests (node:test)
 
 The devcontainer forwards port 3000.
 
+The web app is installable (a PWA): `apps/web/public/manifest.webmanifest`, icons and `sw.js`. The
+service worker is registered in production builds only and does one thing: it shows `offline.html`
+when a page load can't reach the server. API calls, WebSockets and assets are never cached. Browsers
+only offer installing on HTTPS or `localhost`.
+
 ## Configuration
 
 Environment variables (see [.env.example](.env.example)):
@@ -75,7 +80,15 @@ Targets (each shows up when reachable):
 | `docker` | `PORTAL_DOCKER_SOCKET` (`/var/run/docker.sock`; in the devcontainer, its DinD daemon) | container `claudepilot-<name>` + volume `claudepilot-<name>-home` |
 | `docker-host` | `PORTAL_DOCKER_HOST_SOCKET` (`/var/run/docker-host.sock`; the Mac's Docker Desktop) | same |
 | `kubernetes` | current kubeconfig context, namespace `PORTAL_K8S_NAMESPACE` (`claudepilot-workspaces`) | Deployment `ws-<name>` (scaled 1/0 to start/stop) + PVC `ws-<name>-home` |
+| `local` | the machine the portal runs on (off unless `PORTAL_LOCAL_ENABLED=true`) | one workspace, `PORTAL_LOCAL_NAME` (`local`), as the portal's own user |
 
+- **This machine** (`local`) is the host itself as a single workspace. It starts switched off: Start
+  allows shells and commands, Stop refuses them again (the state is kept in
+  `PORTAL_DATA_DIR/local-workspace.json`). It can't be created or removed, and it needs
+  `@lydell/node-pty` for the terminal. It is **off by default** because anyone with the server code
+  gets a shell as the portal's user: turn it on only where the portal isn't reachable by others.
+  Account-pool delivery writes `/home/node` paths into the portal user's home, and anything under
+  `/etc` needs the portal to run as root.
 - The runtimes are the record: workspaces are found by label, so a portal restart loses nothing.
   Creates in progress (and failed ones, until removed) are saved in `PORTAL_DATA_DIR` and picked up
   again after a restart.
@@ -90,6 +103,17 @@ Targets (each shows up when reachable):
   `PORTAL_K8S_STORAGE` (`10Gi`), `PORTAL_K8S_STORAGE_CLASS`, `PORTAL_K8S_ENABLED=false` to turn it off.
 - The shell is a WebSocket at `/api/workspaces/<target>/<name>/shell`; it needs a session cookie and a
   same-origin `Origin`.
+- **Terminals** keep running without a browser: each is a tmux session (`cp-claude-1`, `cp-shell-2`, …)
+  as the workspace's user, up to 8 per workspace, and each runs as one of the workspace's Claudes
+  ([Workspace Claudes](docs/prd/workspace-claudes.md)). A Claude other than Default gets its own
+  `CLAUDE_CONFIG_DIR` (`~/.claudepilot/claudes/<id>`) in that tmux session only, so signing in there
+  (account or SSO, done by you in the terminal) keeps its login and chats apart from the others; tmux
+  itself separates nothing. A Claude terminal runs Claude Code and drops to a shell when it exits. The
+  shell page shows terminals as tabs (`…/shell?term=claude-1`); New picks the Claude (or adds one,
+  which starts signed out), the program and the folder. tmux is installed
+  through passwordless sudo when missing (workspace images ship it), and Claude Code with its own
+  installer. Terminals are terminals, not chat sessions; a chat session on the same Claude uses the same
+  sign-in when the workspace has no account pool.
 
 ## Accounts
 
@@ -164,14 +188,17 @@ hooks in `.claude/settings*.json`) without asking, so before the first session i
 whenever those files change, the portal lists by name what would load and asks you to trust the folder;
 nothing starts until you do. The controls also show how full the context window is, and the Agents
 panel can stop one sub-agent or all of them.
-**Account pools only:** sessions run only on the keys an Account Pool delivers (API keys or custom
-hosts, through the managed `apiKeyHelper`), never on a workspace's own Claude sign-in, which stays for
-the terminal. A session starts, resumes or wakes only in a workspace whose pool is active and delivered,
-after the host checks that the account drop-in names the pool's helper (`cp-session authcheck`, which
-reads that one file). Every turn must report the pool's helper as its key source, and a usage check
-after each turn must show no plan limits; otherwise the session ends for safety at once. Unassigning
-the pool, or moving the workspace to another one, stops its sessions first (they read Interrupted and
-resume once the new pool is delivered).
+**A pool or a Claude's own sign-in:** a session on a workspace without an account pool runs on the
+Claude Code sign-in of the Claude it was started on (Workspaces › the workspace › Claudes › Sign in).
+That Claude must be signed in before each start (`claude auth status`, status only); there are no pool
+checks and no spending cap, and the plan's own limits apply. On a workspace with a pool, sessions run on
+its keys (API keys or custom hosts, through the managed `apiKeyHelper`): a session starts, resumes or
+wakes only while the pool is active and delivered, after the host checks that the account drop-in names
+the pool's helper (`cp-session authcheck`, which reads that one file). Every turn must report the pool's
+helper as its key source, and a usage check after each turn must show no plan limits; otherwise the
+session ends for safety at once. Assigning, unassigning or moving a pool stops the workspace's sessions
+first (they read Interrupted and resume on the new credential). Sessions also run on This machine,
+where `/home/node` is your home folder and the session host lives in `~/.claudepilot/host`.
 Kubernetes workspaces get the session host from the workspace image (`images/workspace/cp-session`,
 generated with `npm run gen:workspace-host -w @portal/server`); Docker workspaces get it installed.
 

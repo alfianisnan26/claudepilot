@@ -1,6 +1,21 @@
 import { cn, Spinner } from '@isnanme/ui';
 import type { ChatEvent } from '@portal/contracts';
-import { ChevronRight, CircleAlert, Layers, Lightbulb, Wrench } from 'lucide-react';
+import {
+  Bot,
+  ChevronRight,
+  FilePen,
+  FileText,
+  FolderOpen,
+  Globe,
+  Layers,
+  Lightbulb,
+  ListChecks,
+  Plug,
+  Search,
+  SquareTerminal,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { ImageThumbs, type ViewerImage } from './ImageViewer';
 
@@ -26,6 +41,50 @@ const READ_ONLY = new Set(['Read', 'NotebookRead', 'Glob', 'LS', 'Grep', 'WebFet
 const LOOK_COMMAND = /^(ls|cat|head|tail|grep|rg|find|wc|pwd|tree|stat|file|du|which|git (status|log|diff|show|branch))(\s|$)/;
 const isReadOnly = (call: ChatEvent) =>
   READ_ONLY.has(call.toolName ?? '') || (call.toolName === 'Bash' && !!call.text && LOOK_COMMAND.test(call.text) && !/[;&>`]|\$\(/.test(call.text));
+
+/** A path's last part ("MEMORY.md"), or a short head of anything else: what a one-line row shows. */
+export function shortTarget(text: string | undefined): string {
+  const t = (text ?? '').trim();
+  if (!t) return '';
+  if (/^[~/]/.test(t) && !/\s/.test(t)) return t.split('/').filter(Boolean).pop() ?? t;
+  return t.length > 48 ? `${t.slice(0, 47)}…` : t;
+}
+
+/** A tool's icon: what it does, at a glance (the activity row's group and each step use it). */
+export function toolIcon(name: string | undefined): LucideIcon {
+  const tool = name ?? '';
+  if (tool.startsWith('mcp__')) return Plug;
+  switch (tool) {
+    case 'Bash':
+    case 'BashOutput':
+    case 'KillShell':
+      return SquareTerminal;
+    case 'Read':
+    case 'NotebookRead':
+      return FileText;
+    case 'Write':
+    case 'Edit':
+    case 'MultiEdit':
+    case 'NotebookEdit':
+      return FilePen;
+    case 'Grep':
+    case 'Glob':
+      return Search;
+    case 'LS':
+      return FolderOpen;
+    case 'WebFetch':
+    case 'WebSearch':
+      return Globe;
+    case 'Task':
+    case 'Agent':
+      return Bot;
+    case 'TodoWrite':
+    case 'TodoRead':
+      return ListChecks;
+    default:
+      return Wrench;
+  }
+}
 
 /** "mcp__playwright__browser_take_screenshot" reads "playwright · browser_take_screenshot". */
 export const toolLabel = (name: string) => (name.startsWith('mcp__') ? name.slice(5).split('__').filter(Boolean).join(' · ') : name);
@@ -105,7 +164,7 @@ const NOUNS: Record<string, [string, string]> = {
   TodoRead: ['to-do check', 'to-do checks'],
   Bash: ['command', 'commands'],
 };
-function groupLabel(tools: ToolPair[]): string {
+export function groupLabel(tools: ToolPair[]): string {
   const counts = new Map<string, number>();
   for (const { call } of tools) {
     const noun = NOUNS[call.toolName ?? '']?.join('|') ?? 'step|steps';
@@ -150,7 +209,7 @@ function RowButton({
   children: ReactNode;
 }) {
   const cls = cn(
-    'flex max-w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[12px]',
+    'flex max-w-full min-w-0 items-center gap-2 rounded-lg px-1 py-1 text-left text-[14px] sm:text-[13px]',
     danger ? 'text-danger' : 'text-ink-soft',
   );
   if (!expandable) return <div className={cls}>{children}</div>;
@@ -164,8 +223,9 @@ function RowButton({
 
 /**
  * One tool call: its name and one-line summary (a command, a path), then, opened, the summary in full
- * and what the tool returned (text, kept short by the portal, and images). A failure shows open and in
- * the danger tone, and so do returned images. `running` marks a call still waiting for its result.
+ * and what the tool returned (text, kept short by the portal, and images). A failure shows in the
+ * danger tone (its turn's activity row counts it); returned images show open. `running` marks a call
+ * still waiting for its result.
  */
 export function ToolCall({
   call,
@@ -176,16 +236,17 @@ export function ToolCall({
   images,
 }: ToolPair & { agent: string | null; running: boolean; details: boolean; images: ViewerImage[] }) {
   const error = !!result?.isError;
-  const [open, toggle] = useOpen(details, error || images.length > 0);
+  const Icon = toolIcon(call.toolName);
+  const [open, toggle] = useOpen(details, images.length > 0);
   const id = useId();
   const output = result?.text?.trim() ?? '';
   const expandable = !!(call.text || output || images.length);
   return (
     <div className="flex max-w-full flex-col items-start">
       <RowButton open={open} onToggle={toggle} controls={id} expandable={expandable} danger={error}>
-        {error ? <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" /> : <Wrench className="size-3.5 shrink-0" aria-hidden="true" />}
+        <Icon className="size-4 shrink-0" aria-hidden="true" />
         <span className="shrink-0 font-mono">{call.toolName ? toolLabel(call.toolName) : 'tool'}</span>
-        {call.text && <span className="min-w-0 truncate font-mono text-muted">{call.text}</span>}
+        {call.text && <span className="min-w-0 truncate font-mono text-muted">{shortTarget(call.text)}</span>}
         {agent && <span className="shrink-0 truncate text-muted/80">· {agent}</span>}
         {running && !result && <Spinner className="size-3 shrink-0" />}
         {error && <span className="sr-only">(failed)</span>}
@@ -195,7 +256,7 @@ export function ToolCall({
           {(call.text || output) && (
             <div className={cn('overflow-hidden rounded-lg border text-[12px]', error ? 'border-danger/30 bg-danger-soft' : 'border-line bg-surface-2/50')}>
               {/* The summary in full where the row can't show it all: commands, and anything long. */}
-              {call.text && (call.toolName === 'Bash' || call.text.length > 48) && (
+              {call.text && (call.toolName === 'Bash' || shortTarget(call.text) !== call.text.trim()) && (
                 <p className="border-b border-line/70 px-3 py-1.5 font-mono break-all text-ink-soft">{call.text}</p>
               )}
               {output ? (
@@ -267,9 +328,8 @@ export function LiveThinking({ since, agent }: { since: number; agent: string | 
     return () => clearInterval(t);
   }, []);
   return (
-    <div role="status" className="flex items-center gap-1.5 px-1 text-[12px] text-ink-soft">
-      <Spinner className="size-3 shrink-0" />
-      <span>Thinking… {formatSeconds(Math.max(0, now - since))}</span>
+    <div role="status" className="flex items-center gap-1.5 text-[15.5px] sm:text-[14.5px]">
+      <span className="shimmer">Thinking… {formatSeconds(Math.max(0, now - since))}</span>
       {agent && <span className="truncate text-muted/80">· {agent}</span>}
     </div>
   );

@@ -13,7 +13,19 @@ export interface RawImage {
 
 /** A transcript event ready to store: a {@link ChatEvent} without the fields the store assigns (seq,
  *  at), plus the raw identifiers the controller persists in the event's own columns. */
+/** One model's running totals for the process, from a result's `modelUsage` (sub-agents included). */
+export interface ModelTotals {
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  costUsd: number;
+}
+
 export type StoredEvent = Omit<ChatEvent, 'seq' | 'at'> & {
+  /** For `result`: each model's running totals, so the controller can tell what this turn used. */
+  modelTotals?: ModelTotals[];
   uuid?: string;
   parentToolUseId?: string | null;
   requestId?: string;
@@ -93,7 +105,7 @@ export interface ParsedLine {
    * A replayed user line (`isReplay`): the uuid Claude Code read it under, and whether it's local command
    * output (`<local-command-stdout>`), which Claude Code echoes under an id of its own.
    */
-  replay?: { uuid: string | null; localCommand: boolean };
+  replay?: { uuid: string | null; localCommand: boolean; modelNote?: boolean };
   /** A `command_lifecycle` line's command uuid, whatever its state. */
   commandUuid?: string;
   /** The main thread called EnterPlanMode, which needs no approval: `plan` mode may follow. */
@@ -375,6 +387,8 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
 
 /** Local command output (`/compact`'s "Compacted", …) as Claude Code wraps it. */
 const LOCAL_OUTPUT = /^\s*<local-command-(?:stdout|stderr)>/;
+/** What Claude Code echoes after a `set_model` control request: its note of the model now in use. */
+const MODEL_NOTE = /^\s*<local-command-stdout>Set model to [^<]*<\/local-command-stdout>\s*$/;
 
 function isLocalOutput(content: unknown): boolean {
   if (typeof content === 'string') return LOCAL_OUTPUT.test(content);
@@ -387,7 +401,10 @@ function isLocalOutput(content: unknown): boolean {
  *  uuid it carries, which the controller checks against what it sent. */
 function parseUser(obj: Record<string, unknown>): ParsedLine {
   const content = asObj(obj.message)?.content;
-  if (obj.isReplay === true) return { stored: [], replay: { uuid: asStr(obj.uuid), localCommand: isLocalOutput(content) } };
+  if (obj.isReplay === true) {
+    const text = typeof content === 'string' ? content : (asStr(asObj(Array.isArray(content) ? content[0] : null)?.text) ?? '');
+    return { stored: [], replay: { uuid: asStr(obj.uuid), localCommand: isLocalOutput(content), modelNote: MODEL_NOTE.test(text) } };
+  }
   if (typeof content === 'string') return { stored: [] }; // a replay: the user event was stored when we sent it
   const agentLabel = asStr(obj.parent_tool_use_id);
   const stored: StoredEvent[] = [];
@@ -450,7 +467,35 @@ function parseResult(obj: Record<string, unknown>): ParsedLine {
   const cost = asNum(obj.total_cost_usd);
   const text = asStr(obj.result) ?? undefined;
   const errored = obj.is_error === true || (subtype !== null && subtype !== 'success');
-  const stored: StoredEvent[] = [{ kind: 'result', text, costUsd: cost ?? undefined }];
+  const ended: StoredEvent = { kind: 'result', text, costUsd: cost ?? undefined };
+  // The turn's own numbers (`usage` is per turn; `total_cost_usd` is the process's running total).
+  const took = asNum(obj.duration_ms);
+  if (took !== null && took >= 0) ended.durationMs = Math.round(took);
+  const usage = asObj(obj.usage);
+  if (usage) {
+    ended.tokens = {
+      input: tokens(usage.input_tokens),
+      output: tokens(usage.output_tokens),
+      cacheRead: tokens(usage.cache_read_input_tokens),
+      cacheWrite: tokens(usage.cache_creation_input_tokens),
+    };
+  }
+  const models: ModelTotals[] = [];
+  for (const [model, entry] of Object.entries(asObj(obj.modelUsage) ?? {})) {
+    const e = asObj(entry);
+    if (!e) continue;
+    const cost = asNum(e.costUSD);
+    models.push({
+      model,
+      input: tokens(e.inputTokens),
+      output: tokens(e.outputTokens),
+      cacheRead: tokens(e.cacheReadInputTokens),
+      cacheWrite: tokens(e.cacheCreationInputTokens),
+      costUsd: cost !== null && cost > 0 ? cost : 0,
+    });
+  }
+  if (models.length) ended.modelTotals = models;
+  const stored: StoredEvent[] = [ended];
   if (errored) stored.push({ kind: 'error', text: text ?? `The turn ended with ${subtype ?? 'an error'}.` });
   const patch: NonNullable<ParsedLine['sessionPatch']> = { state: 'idle', turnsDelta: 1 };
   if (cost !== null) patch.cost = cost;

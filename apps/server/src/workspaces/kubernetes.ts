@@ -293,7 +293,7 @@ export class KubernetesRuntime implements Runtime {
     };
   }
 
-  async shell(name: string, size: { cols: number; rows: number }): Promise<ShellSession> {
+  async shell(name: string, size: { cols: number; rows: number }, command?: string[]): Promise<ShellSession> {
     const podName = await this.#runningPod(name);
 
     // Exec reads the size off stdout (rows/columns + "resize" events), like a real TTY.
@@ -312,7 +312,7 @@ export class KubernetesRuntime implements Runtime {
       this.#ns,
       podName,
       CONTAINER,
-      ['bash', '-l'],
+      command ?? ['bash', '-l'],
       stdout,
       null, // a TTY merges stderr into stdout
       stdin,
