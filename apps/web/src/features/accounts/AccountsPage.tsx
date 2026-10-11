@@ -1,20 +1,9 @@
-import {
-  Badge,
-  Button,
-  ConfirmDialog,
-  EmptyState,
-  LoadError,
-  Menu,
-  RowsSkeleton,
-  Section,
-  useToast,
-  type MenuItem,
-} from '@isnanme/ui';
+import { Badge, Button, ConfirmDialog, LoadError, Menu, RowsSkeleton, Section, useToast, type MenuItem } from '@isnanme/ui';
 import type { Account, AccountPool, AccountsOverview, Endpoint } from '@portal/contracts';
 import { Globe, KeySquare, Layers, Lock, Pencil, Plus, Power, RefreshCw, RotateCcw, Server, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Card } from '@/components/Card';
+import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
 import { KeyActions } from '@/features/admin/KeyDialogs';
 import { api, errorText } from '@/lib/api';
@@ -159,7 +148,6 @@ export function AccountsPage() {
     <>
       <PageHeader
         title="Accounts"
-        description="API keys for Claude Code in your workspaces: the Anthropic API or your own gateways."
         action={
           data &&
           data.accounts.length > 0 && (
@@ -175,69 +163,34 @@ export function AccountsPage() {
       {!data && !failed && <RowsSkeleton rows={3} lines={2} trailing icon="rounded-2xl" />}
 
       {data && (
-        <div className="flex flex-col gap-8">
+        <div className="flex flex-col gap-6">
           {locked && (
-            <div role="status" className="flex flex-col gap-3 rounded-2xl bg-flame-soft px-4 py-3 text-sm sm:flex-row sm:items-center">
-              <div className="flex min-w-0 flex-1 items-start gap-3">
-                <Lock className="mt-0.5 size-4 shrink-0 text-flame" />
-                <p className="text-ink-soft">
-                  <span className="font-semibold text-ink">Keys are locked.</span> {locked.reason}{' '}
-                  <Link to="/admin/access" className="font-semibold text-ink underline underline-offset-2">
-                    Storage status
-                  </Link>
-                </p>
-              </div>
-              <div className="flex shrink-0 gap-2 pl-7 sm:pl-0">
-                <KeyActions onDone={() => void load()} />
-              </div>
+            <div role="status" className="flex items-center gap-2.5 rounded-2xl bg-flame-soft py-2.5 pr-2.5 pl-4 text-sm">
+              <Lock className="size-4 shrink-0 text-flame" />
+              <p className="font-semibold">Keys locked</p>
+              <InfoTip label="Why keys are locked">{locked.reason}</InfoTip>
+              <span className="flex-1" />
+              <KeyActions onDone={() => void load()} />
             </div>
           )}
 
           <Section
-            title="Pools"
-            description="Assign a pool to workspaces; they use its first usable key and move to the next when one stops working."
-            action={
-              data.accounts.length > 0 && (
-                <Button variant="ghost" size="sm" icon={<Plus className="size-3.5" />} onClick={() => setPoolDialog({ pool: null })}>
-                  New pool
-                </Button>
-              )
+            title={
+              <span className="inline-flex items-center gap-1">
+                Keys
+                <InfoTip label="About keys">
+                  Anthropic API keys, or keys for your own gateway. Each is encrypted, checked without being billed, and
+                  handed to Claude Code only in the workspaces whose pool includes it.
+                </InfoTip>
+              </span>
             }
           >
-            {pools.length === 0 ? (
-              <p className="rounded-2xl border border-dashed border-line px-4 py-3 text-[13px] text-muted">
-                {data.accounts.length === 0 ? 'Add keys first, then group them into a pool.' : 'No pools yet. Create one to give workspaces these keys.'}
-              </p>
-            ) : (
-              <div className="grid gap-2 sm:grid-cols-2">
-                {pools.map((p) => (
-                  <PoolCard
-                    key={p.id}
-                    pool={p}
-                    endpointName={endpointName(p.endpointId)}
-                    accounts={data.accounts}
-                    onEdit={() => setPoolDialog({ pool: p })}
-                    onRemove={() => setRemovingPool(p)}
-                  />
-                ))}
-              </div>
-            )}
-          </Section>
-
-          <Section title="Keys">
             {data.accounts.length === 0 ? (
-              <EmptyState
-                icon={<KeySquare className="size-6" />}
-                title="No keys yet"
-                action={
-                  <Button icon={<Plus className="size-4" />} onClick={() => setAdding(true)} disabled={!!locked}>
-                    Add key
-                  </Button>
-                }
-              >
-                Add an Anthropic API key (or a key for your own gateway). It's encrypted, checked, and later
-                handed to Claude Code in the workspaces you choose.
-              </EmptyState>
+              <EmptyLine icon={<KeySquare className="size-4" />} text="No keys yet">
+                <Button size="sm" icon={<Plus className="size-4" />} onClick={() => setAdding(true)} disabled={!!locked}>
+                  Add key
+                </Button>
+              </EmptyLine>
             ) : (
               <Card>
                 <ul className="divide-y divide-line">
@@ -261,11 +214,60 @@ export function AccountsPage() {
           </Section>
 
           <Section
-            title="Endpoints"
-            description="Where keys are used. Claude Code talks to the endpoint directly; the portal is never in between."
+            title={
+              <span className="inline-flex items-center gap-1">
+                Pools
+                <InfoTip label="About pools">
+                  A pool groups keys in priority order. Assign it to workspaces: they use its first usable key and move
+                  to the next when one stops working.
+                </InfoTip>
+              </span>
+            }
+            action={
+              data.accounts.length > 0 && (
+                <Button variant="ghost" size="sm" icon={<Plus className="size-3.5" />} onClick={() => setPoolDialog({ pool: null })}>
+                  New
+                </Button>
+              )
+            }
+          >
+            {pools.length === 0 ? (
+              <EmptyLine icon={<Layers className="size-4" />} text={data.accounts.length === 0 ? 'No pools · add a key first' : 'No pools yet'}>
+                {data.accounts.length > 0 && (
+                  <Button size="sm" variant="secondary" icon={<Plus className="size-4" />} onClick={() => setPoolDialog({ pool: null })}>
+                    New pool
+                  </Button>
+                )}
+              </EmptyLine>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {pools.map((p) => (
+                  <PoolCard
+                    key={p.id}
+                    pool={p}
+                    endpointName={endpointName(p.endpointId)}
+                    accounts={data.accounts}
+                    onEdit={() => setPoolDialog({ pool: p })}
+                    onRemove={() => setRemovingPool(p)}
+                  />
+                ))}
+              </div>
+            )}
+          </Section>
+
+          <Section
+            title={
+              <span className="inline-flex items-center gap-1">
+                Endpoints
+                <InfoTip label="About endpoints">
+                  Where keys are used: the Anthropic API, or a custom host for your own gateway. Claude Code talks to it
+                  directly; the portal is never in between.
+                </InfoTip>
+              </span>
+            }
             action={
               <Button variant="ghost" size="sm" icon={<Plus className="size-3.5" />} onClick={() => setEndpointDialog({ endpoint: null })}>
-                Custom host
+                Custom
               </Button>
             }
           >
@@ -388,41 +390,36 @@ function AccountRow({
   ];
   const meta = [a.masked, endpointName, a.organizationId && `org ${a.organizationId.replace(/^org-?/, '').slice(0, 8)}`].filter(Boolean).join(' · ');
 
+  // What went wrong, when something did: shown in the badge's ⓘ, not as a paragraph.
+  const problem = health ? a.health.detail : !state.working ? a.check.detail : null;
+
   return (
-    <li className={`flex items-start gap-3 p-4 sm:items-center sm:px-5 ${a.enabled ? '' : 'opacity-60'}`}>
+    <li className={`flex items-center gap-3 px-4 py-3.5 sm:px-5 ${a.enabled ? '' : 'opacity-60'}`}>
       <span
         className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${working ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-ink-soft'}`}
       >
         <KeySquare className="size-5" />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <div className="flex min-w-0 items-center gap-1.5">
           <p className="truncate font-semibold">{a.name}</p>
-          {!a.enabled && <Badge tone="neutral">Disabled</Badge>}
-          {a.hasSecret && health && !checking ? (
-            <Badge tone={health.tone}>
-              {health.label}
-              {a.health.until && ` until ${formatUntil(a.health.until)}`}
-              <span className="font-mono text-[10.5px] opacity-70">{health.tag}</span>
-            </Badge>
-          ) : a.hasSecret ? (
-            <Badge tone={state.tone}>
-              {checking ? 'Checking…' : state.label}
-              {!checking && state.tag && <span className="font-mono text-[10.5px] opacity-70">{state.tag}</span>}
-            </Badge>
-          ) : (
-            <Badge tone="warning">Re-enter key</Badge>
-          )}
+          <span className="shrink-0" title={a.check.at ? `Checked ${timeAgo(a.check.at)} · ${formatDateTime(a.check.at)}` : undefined}>
+            {!a.enabled ? (
+              <Badge tone="neutral">Off</Badge>
+            ) : a.hasSecret && health && !checking ? (
+              <Badge tone={health.tone}>
+                {health.label}
+                {a.health.until && ` until ${formatUntil(a.health.until)}`}
+              </Badge>
+            ) : a.hasSecret ? (
+              <Badge tone={state.tone}>{checking ? 'Checking…' : state.label}</Badge>
+            ) : (
+              <Badge tone="warning">Re-enter key</Badge>
+            )}
+          </span>
+          {problem && <InfoTip label={`What's wrong with ${a.name}`}>{problem}</InfoTip>}
         </div>
         <p className="mt-0.5 truncate font-mono text-[12.5px] text-muted">{meta}</p>
-        {health
-          ? a.health.detail && <p className="mt-1 line-clamp-2 text-[13px] text-ink-soft">{a.health.detail}</p>
-          : a.check.detail && !state.working && <p className="mt-1 line-clamp-2 text-[13px] text-ink-soft">{a.check.detail}</p>}
-        {a.check.at && (
-          <p className="mt-0.5 text-[12px] text-muted" title={formatDateTime(a.check.at)}>
-            Checked {timeAgo(a.check.at)}
-          </p>
-        )}
       </div>
       <Menu label={`Actions for ${a.name}`} items={items} />
     </li>
@@ -433,8 +430,8 @@ function EndpointCard({ endpoint: e, onEdit, onRemove }: { endpoint: Endpoint; o
   const builtIn = e.kind === 'anthropic';
   const models = Object.entries(e.modelNames).filter(([, v]) => v);
   return (
-    <div className="flex min-w-0 items-start gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3">
-      <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-ink-soft">
+    <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-ink-soft">
         {builtIn ? <Globe className="size-4" /> : <Server className="size-4" />}
       </span>
       <div className="min-w-0 flex-1">
@@ -442,9 +439,8 @@ function EndpointCard({ endpoint: e, onEdit, onRemove }: { endpoint: Endpoint; o
           <p className="truncate text-sm font-semibold">{builtIn ? 'Anthropic API' : e.name}</p>
           {builtIn && <Badge tone="neutral">Built in</Badge>}
         </div>
-        <p className="truncate font-mono text-[12px] text-muted">{e.baseUrl}</p>
-        <p className="mt-0.5 text-[12px] text-muted">
-          {e.accounts === 1 ? '1 key' : `${e.accounts} keys`}
+        <p className="truncate text-[12px] text-muted" title={e.baseUrl}>
+          {e.baseUrl.replace(/^https?:\/\//, '')} · {e.accounts === 1 ? '1 key' : `${e.accounts} keys`}
           {models.length > 0 && ` · ${models.length} model name${models.length > 1 ? 's' : ''}`}
           {e.allowPrivateNetwork && ' · private network'}
         </p>
@@ -478,20 +474,24 @@ function PoolCard({
   const members = p.members.map((m) => accounts.find((a) => a.id === m.accountId)).filter((a): a is Account => !!a);
   const working = members.filter((a) => a.enabled && CHECK[a.check.result].working).length;
   return (
-    <div className="flex min-w-0 items-start gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3">
-      <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+    <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
         <Layers className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold">{p.name}</p>
-        <p className="truncate text-[12px] text-muted">
-          {endpointName} · {p.strategy === 'fill-first' ? 'fill first' : 'spread'} · {p.workspaces === 1 ? '1 workspace' : `${p.workspaces} workspaces`}
-        </p>
-        <p className="mt-1 truncate text-[12px] text-ink-soft">
-          {members.length === 0 ? 'No accounts' : members.map((a, i) => `${i + 1}. ${a.name}`).join('  ')}
-        </p>
-        <p className="mt-0.5 text-[12px] text-muted">
-          {working} of {members.length} working
+        <div className="flex min-w-0 items-center gap-1.5">
+          <p className="truncate text-sm font-semibold">{p.name}</p>
+          <span className="shrink-0">
+            <Badge tone={working ? 'success' : 'danger'}>
+              {working}/{members.length} working
+            </Badge>
+          </span>
+        </div>
+        <p
+          className="truncate text-[12px] text-muted"
+          title={members.length ? members.map((a, i) => `${i + 1}. ${a.name}`).join('\n') : 'No keys'}
+        >
+          {endpointName} · {p.workspaces === 1 ? '1 workspace' : `${p.workspaces} workspaces`}
         </p>
       </div>
       <Menu
@@ -501,6 +501,17 @@ function PoolCard({
           { label: 'Remove', icon: <Trash2 className="size-4" />, onSelect: onRemove, danger: true, disabled: p.workspaces > 0 },
         ]}
       />
+    </div>
+  );
+}
+
+/** An empty list in one line: what's missing, and the button that adds it. */
+function EmptyLine({ icon, text, children }: { icon: ReactNode; text: string; children?: ReactNode }) {
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-dashed border-line py-2.5 pr-2.5 pl-4 text-sm text-muted">
+      {icon}
+      <span className="min-w-0 flex-1 truncate">{text}</span>
+      {children}
     </div>
   );
 }
