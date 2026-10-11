@@ -24,6 +24,8 @@ function savedMethod(): Method {
 export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: Workspace | null; onClose: () => void; onDone: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  // Starting takes longer when Claude Code has to be installed first.
+  const [slow, setSlow] = useState(false);
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
@@ -47,12 +49,18 @@ export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: W
     setStartError(null);
     setCode('');
     setError(undefined);
-    api.workspaces.claudeLogin(id, { sso: method === 'sso' }).then(
-      (r) => current && setUrl(r.url),
-      (e: unknown) => current && setStartError(errorText(e, 'Could not start the sign-in.')),
-    );
+    setSlow(false);
+    const slowTimer = setTimeout(() => current && setSlow(true), 6_000);
+    api.workspaces
+      .claudeLogin(id, { sso: method === 'sso' })
+      .then(
+        (r) => current && setUrl(r.url),
+        (e: unknown) => current && setStartError(errorText(e, 'Could not start the sign-in.')),
+      )
+      .finally(() => clearTimeout(slowTimer));
     return () => {
       current = false;
+      clearTimeout(slowTimer);
     };
   }, [id, method]);
 
@@ -109,7 +117,8 @@ export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: W
           <p className="rounded-xl bg-danger-soft px-3.5 py-2.5 text-[13px] font-medium text-danger">{startError}</p>
         ) : !url ? (
           <p className="flex items-center gap-2 text-[13px] text-muted" aria-busy="true">
-            <Spinner className="size-4" /> Starting Claude Code’s sign-in…
+            <Spinner className="size-4" />
+            {slow ? 'Still starting. If Claude Code isn’t installed yet, it’s being installed (about half a minute)…' : 'Starting Claude Code’s sign-in…'}
           </p>
         ) : (
           <form
