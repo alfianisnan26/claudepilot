@@ -1,9 +1,10 @@
 import { FormDialog, Select, TextField } from '@isnanme/ui';
 import { CHAT_SESSION_TITLE_MAX, type ChatFolderScan, type CreateChatSessionRequest, type Workspace } from '@portal/contracts';
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { api, errorText } from '@/lib/api';
 import { chatApi } from './api';
+import { SessionSetup, useSessionSetup } from './SessionSetup';
 import { HOME, isIneligible } from './shared';
 import { isFolderUntrusted, scanAfter, TrustDetails } from './TrustSheet';
 
@@ -102,8 +103,28 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
     );
 
   const all = workspaces ?? [];
-  const none = workspaces !== null && !all.some((w) => w.status === 'running');
-  const noneEligible = workspaces !== null && !none && !all.some((w) => !ineligible(w));
+  // No workspace can host a session yet: walk through what's missing instead of a dead end.
+  const needsSetup = workspaces !== null && !all.some((w) => !ineligible(w));
+  const setup = useSessionSetup(open && needsSetup && !trust, workspaces, reload);
+  const go = setup.next?.go;
+
+  /** The main button while setting up: go where the next step is done, or do it here. */
+  const runNext = async () => {
+    if (!go) return;
+    if (go.to) {
+      onClose();
+      return void navigate(go.to);
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await go.run?.();
+    } catch (e) {
+      setError(errorText(e, 'That didn’t work.'));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   /** The folder needs trust: show what it would load (a fresh scan when its files changed since the last). */
   const askTrust = async (e: unknown, request: CreateChatSessionRequest, where: string) => {
@@ -172,32 +193,20 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
       onClose={trust ? back : onClose}
       size="sm"
       title={trust ? 'Trust this folder?' : 'New session'}
-      description={trust ? <span className="font-mono break-all">{trust.scan.folder}</span> : 'Chat with Claude Code in a workspace that has an account pool.'}
-      onSubmit={trust ? trustAndStart : submit}
-      submitLabel={trust ? 'Trust and start' : 'Start'}
+      description={
+        trust ? <span className="font-mono break-all">{trust.scan.folder}</span> : needsSetup ? 'A few things first.' : 'Chat with Claude Code in a workspace.'
+      }
+      onSubmit={trust ? trustAndStart : needsSetup ? runNext : submit}
+      submitLabel={trust ? 'Trust and start' : needsSetup ? (go?.label ?? 'Start') : 'Start'}
       saving={saving}
-      submitDisabled={!trust && !workspaceId}
+      submitDisabled={trust ? false : needsSetup ? !go : !workspaceId}
       error={error}
       dirty={!trust && (!!title || folder.trim() !== HOME)}
     >
       {trust ? (
         <TrustDetails scan={trust.scan} changed={trust.changed} />
-      ) : none ? (
-        <p className="text-sm text-muted">
-          No workspace is running.{' '}
-          <Link to="/admin/workspaces" onClick={onClose} className="font-semibold text-ink underline underline-offset-2">
-            Start one
-          </Link>{' '}
-          to chat with its agent.
-        </p>
-      ) : noneEligible ? (
-        <p className="text-sm text-muted">
-          Sessions run on an account pool’s keys, and no running workspace has one ready.{' '}
-          <Link to="/admin/workspaces" onClick={onClose} className="font-semibold text-ink underline underline-offset-2">
-            Assign a pool
-          </Link>{' '}
-          to a workspace to chat with its agent. (Your own Claude sign-in works in the workspace’s terminal.)
-        </p>
+      ) : needsSetup ? (
+        <SessionSetup steps={setup.steps} next={setup.next} loading={setup.loading} />
       ) : (
         <div className="flex flex-col gap-4">
           <Select
