@@ -40,6 +40,9 @@ export interface WorkspaceUsage {
   /** Percent of one core (200 = two cores busy). */
   cpuPercent: number | null;
   memoryBytes: number | null;
+  /** What the workspace can use when it has no limit of its own (the host's cores and memory), for scaling a bar. */
+  cores?: number | null;
+  memoryTotalBytes?: number | null;
 }
 
 export interface CreateWorkspaceRequest {

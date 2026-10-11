@@ -153,7 +153,7 @@ export class LocalRuntime implements Runtime {
     this.#cpu = now;
     const cpuPercent = total > 0 ? (1 - idle / total) * cpus().length * 100 : 0;
     const memoryBytes = totalmem() - freemem();
-    return names.map(() => ({ cpuPercent, memoryBytes }));
+    return names.map(() => ({ cpuPercent, memoryBytes, cores: cpus().length, memoryTotalBytes: totalmem() }));
   }
 
   async shell(name: string, size: { cols: number; rows: number }): Promise<ShellSession> {
@@ -211,9 +211,14 @@ export class LocalRuntime implements Runtime {
   }
 }
 
-/** The portal's environment with HOME pointing at the portal user's real home. */
+/**
+ * The portal's environment with HOME pointing at the portal user's real home, and ~/.local/bin on
+ * PATH: where Claude Code's installer (and pip, pipx) put commands for one user.
+ */
 function userEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, HOME: homedir() };
+  const local = `${homedir()}/.local/bin`;
+  const path = process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin';
+  return { ...process.env, HOME: homedir(), PATH: path.split(':').includes(local) ? path : `${local}:${path}` };
 }
 
 function sample() {

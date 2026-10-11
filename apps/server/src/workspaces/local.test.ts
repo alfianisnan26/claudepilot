@@ -71,9 +71,11 @@ describe('LocalRuntime', () => {
   });
 
   it('runs commands as the portal user, with HOME set to the real home', async () => {
-    const { text, code } = await output(await rt.exec(NAME, ['sh', '-c', 'echo "$HOME"; cat']).then(async (e) => (e.write('typed\n'), e.close(), e)));
+    const { text, code } = await output(await rt.exec(NAME, ['sh', '-c', 'echo "$HOME"; echo "$PATH"; cat']).then(async (e) => (e.write('typed\n'), e.close(), e)));
     assert.equal(code, 0);
-    assert.match(text, new RegExp(join(dir, 'home')));
+    const [home, path] = text.split('\n');
+    assert.equal(home, join(dir, 'home'));
+    assert.equal(path!.split(':')[0], join(dir, 'home', '.local', 'bin'), 'the installer’s bin folder comes first');
   });
 
   it('reports a missing program as exit 127', async () => {
@@ -123,5 +125,7 @@ describe('LocalRuntime', () => {
     const [u] = await rt.usage([NAME]);
     assert.ok(u!.memoryBytes! > 0);
     assert.ok(u!.cpuPercent! >= 0);
+    assert.ok(u!.cores! >= 1);
+    assert.ok(u!.memoryTotalBytes! >= u!.memoryBytes!);
   });
 });

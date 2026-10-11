@@ -277,6 +277,8 @@ export class DockerRuntime implements Runtime {
           return {
             cpuPercent: systemDelta > 0 && cpuDelta >= 0 ? (cpuDelta / systemDelta) * cpus * 100 : 0,
             memoryBytes,
+            cores: cpus,
+            memoryTotalBytes: s.memory_stats.limit || null,
           };
         } catch {
           return { cpuPercent: null, memoryBytes: null };

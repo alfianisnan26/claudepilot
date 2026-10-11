@@ -4,6 +4,7 @@ import { Play, Square, SquareTerminal } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { formatBytes, formatDateTime, formatUntil, timeAgo } from '@/lib/format';
+import { usageFractions } from './usage';
 
 export interface SheetBadge {
   label: string;
@@ -46,6 +47,7 @@ export function WorkspaceSheet({
   const running = w.status === 'running';
   const account = w.account;
   const limits = [w.cpus && `${w.cpus} CPU`, w.memoryMb && formatBytes(w.memoryMb * 1024 * 1024)].filter(Boolean).join(' · ');
+  const fractions = usageFractions(usage, w.cpus, w.memoryMb);
   const problem = w.status === 'error' || (w.status !== 'running' && w.status !== 'stopped' && w.detail);
 
   const claude = account
@@ -103,20 +105,26 @@ export function WorkspaceSheet({
           <div className="grid grid-cols-2 gap-4 text-[13px] text-muted">
             <Meter
               label="CPU"
-              value={usage?.cpuPercent == null ? '–' : `${usage.cpuPercent.toFixed(usage.cpuPercent < 10 ? 1 : 0)}%`}
-              // A bar needs a ceiling: without a CPU limit the figure is a share of every core on the host.
-              fraction={usage?.cpuPercent == null || !w.cpus ? undefined : usage.cpuPercent / 100 / w.cpus}
+              value={
+                fractions.cpu === undefined
+                  ? usage?.cpuPercent == null
+                    ? '–'
+                    : `${Math.round(usage.cpuPercent)}%`
+                  : `${Math.round(fractions.cpu * 100)}% of ${w.cpus ?? usage?.cores} cores`
+              }
+              // Out of the CPU limit, or else every core on the host.
+              fraction={fractions.cpu}
             />
             <Meter
               label="Memory"
               value={
                 usage?.memoryBytes == null
                   ? '–'
-                  : w.memoryMb
-                    ? `${formatBytes(usage.memoryBytes)} / ${formatBytes(w.memoryMb * 1024 * 1024)}`
+                  : w.memoryMb || usage.memoryTotalBytes
+                    ? `${formatBytes(usage.memoryBytes)} / ${formatBytes(w.memoryMb ? w.memoryMb * 1024 * 1024 : usage.memoryTotalBytes!)}`
                     : formatBytes(usage.memoryBytes)
               }
-              fraction={usage?.memoryBytes == null || !w.memoryMb ? undefined : usage.memoryBytes / (w.memoryMb * 1024 * 1024)}
+              fraction={fractions.memory}
             />
           </div>
         )}

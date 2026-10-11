@@ -24,6 +24,7 @@ import { formatBytes, formatDateTime, timeAgo } from '@/lib/format';
 import { AssignPoolDialog } from './AssignPoolDialog';
 import { ClaudeLoginDialog } from './ClaudeLoginDialog';
 import { NewWorkspaceDialog } from './NewWorkspaceDialog';
+import { usageFractions } from './usage';
 import { WorkspaceSheet } from './WorkspaceSheet';
 
 /** Delivery states worth showing on the row; synced and none stay quiet. */
@@ -445,10 +446,9 @@ function WorkspaceRow({
   const account = w.account;
   // Progress while creating or starting, and errors; a running or stopped one needs no words.
   const showDetail = w.status !== 'running' && w.status !== 'stopped' && w.detail;
-  // One short line: where, how old, and (running) how busy. The pool only when one is assigned.
+  // One short line: where and how old, the pool when one is assigned; how busy shows as bars beside it.
   const meta = [
     targetLabel,
-    running && usageText(usage),
     account && (account.state === 'waiting' ? `${account.poolName} · waiting` : account.state === 'removing' ? `removing ${account.poolName}` : account.poolName),
     limits,
     timeAgo(w.createdAt),
@@ -491,9 +491,14 @@ function WorkspaceRow({
               </span>
             )}
           </div>
-          <p className="mt-0.5 truncate text-[13px] text-muted" title={formatDateTime(w.createdAt)}>
-            {meta.join(' · ')}
-          </p>
+          {/* Running: how busy it is, as two bars. Otherwise where and how old (both are in the details too). */}
+          {running && usageFractions(usage, w.cpus, w.memoryMb).cpu !== undefined ? (
+            <UsageBars usage={usage} cpus={w.cpus} memoryMb={w.memoryMb} />
+          ) : (
+            <p className="mt-0.5 truncate text-[13px] text-muted" title={formatDateTime(w.createdAt)}>
+              {meta.join(' · ')}
+            </p>
+          )}
           {showDetail && (
             <p className={`mt-1 line-clamp-2 text-[13px] ${w.status === 'error' ? 'text-danger' : 'text-ink-soft'}`}>{w.detail}</p>
           )}
@@ -536,11 +541,28 @@ function WorkspaceRow({
   );
 }
 
-/** "CPU 56% · 2.1 GB", or nothing until the first sample arrives. */
-function usageText(usage?: WorkspaceUsage): string | false {
-  if (!usage || (usage.cpuPercent == null && usage.memoryBytes == null)) return false;
-  const parts = [];
-  if (usage.cpuPercent != null) parts.push(`CPU ${Math.round(usage.cpuPercent)}%`);
-  if (usage.memoryBytes != null) parts.push(formatBytes(usage.memoryBytes));
-  return parts.join(' · ');
+/** Two small bars, CPU and memory; the figures are in the title and in the details sheet. */
+function UsageBars({ usage, cpus, memoryMb }: { usage?: WorkspaceUsage; cpus?: number; memoryMb?: number }) {
+  const { cpu, memory } = usageFractions(usage, cpus, memoryMb);
+  if (cpu === undefined && memory === undefined) return null;
+  const pct = (f?: number) => (f === undefined ? '–' : `${Math.round(f * 100)}%`);
+  return (
+    <span className="mt-1.5 flex items-center gap-4" title={`CPU ${pct(cpu)} · Memory ${pct(memory)}`}>
+      <MiniBar label="CPU" fraction={cpu} />
+      <MiniBar label="RAM" fraction={memory} />
+    </span>
+  );
+}
+
+function MiniBar({ label, fraction }: { label: string; fraction?: number }) {
+  if (fraction === undefined) return null;
+  const width = `${Math.min(100, Math.max(4, fraction * 100))}%`;
+  return (
+    <span className="flex items-center gap-1.5 text-[10px] font-semibold tracking-wide text-muted">
+      {label}
+      <span className="h-1.5 w-12 overflow-hidden rounded-full bg-surface-2">
+        <span className={`block h-full rounded-full ${fraction > 0.9 ? 'bg-danger' : 'bg-accent'}`} style={{ width }} />
+      </span>
+    </span>
+  );
 }
