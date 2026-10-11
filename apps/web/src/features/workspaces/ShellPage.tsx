@@ -9,6 +9,7 @@ import { Link, useParams, useSearchParams } from 'react-router';
 import { KeyBar, TERMINAL_KEYS, withModifiers, type Modifier, type ModState } from '@/components/KeyBar';
 import { BRAND_NAME } from '@/components/Logo';
 import { api, errorText } from '@/lib/api';
+import { pinnedToViewport, useVisualViewport, viewportKeyboard } from '@/lib/viewport';
 import { NewTerminalDialog } from './NewTerminalDialog';
 
 type Phase = { kind: 'connecting' } | { kind: 'open' } | { kind: 'closed'; reason: string };
@@ -44,9 +45,6 @@ function writeSetting(key: string, value: string) {
 
 const NO_MODS: Record<Modifier, ModState> = { ctrl: 'off', alt: 'off' };
 const NEXT_MOD: Record<ModState, ModState> = { off: 'once', once: 'locked', locked: 'off' };
-
-/** The visual viewport, which shrinks under the on-screen keyboard while the layout viewport doesn't. */
-type Viewport = { height: number; top: number; keyboard: boolean };
 
 /**
  * A workspace's terminal, full screen, over `/api/workspaces/<target>/<name>/shell`. Tabs on top switch
@@ -250,7 +248,7 @@ export function ShellPage() {
   return (
     <div
       className="fixed inset-x-0 top-0 flex h-dvh flex-col bg-[#0b0b0c] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)] text-[#e6e6e6]"
-      style={viewport ? { height: viewport.height, transform: `translateY(${viewport.top}px)` } : undefined}
+      style={pinnedToViewport(viewport)}
     >
       <header className="sticky top-0 z-10 flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 bg-[#0b0b0c] items-center gap-3 border-b border-white/10 px-2 pt-[env(safe-area-inset-top)] sm:px-3">
         <Link
@@ -426,31 +424,3 @@ function useMedia(query: string): boolean {
   return matches;
 }
 
-/** The on-screen keyboard is up when the visual viewport is well short of the layout viewport. */
-function viewportKeyboard(): boolean {
-  const vv = window.visualViewport;
-  return !!vv && vv.height < window.innerHeight * 0.85;
-}
-
-/** The visual viewport's size and offset, at most once a frame. */
-function useVisualViewport(): Viewport | null {
-  const [viewport, setViewport] = useState<Viewport | null>(null);
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-    let frame = 0;
-    const update = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => setViewport({ height: vv.height, top: vv.offsetTop, keyboard: viewportKeyboard() }));
-    };
-    update();
-    vv.addEventListener('resize', update);
-    vv.addEventListener('scroll', update);
-    return () => {
-      cancelAnimationFrame(frame);
-      vv.removeEventListener('resize', update);
-      vv.removeEventListener('scroll', update);
-    };
-  }, []);
-  return viewport;
-}

@@ -105,18 +105,30 @@ export interface ChatEvent {
   request?: ChatRequest;
   /** For `resolved`: `allowed_once`, `allowed_session`, `denied`, `withdrawn`, `expired`. */
   outcome?: string;
-  /** For `result`: the turn's cost and model. */
+  /** For `result`: Claude Code's running cost for the process so far (it reports a total, not the turn's). */
   costUsd?: number;
+  /** For `result`: what this turn alone cost (the change in that running total). */
+  turnCostUsd?: number;
+  /** For `result`: this turn's tokens, summed over its API calls. */
+  tokens?: ChatTurnTokens;
   /** For `tool_use` and `tool_result`: the call they belong to, pairing a result with its call. */
   toolUseId?: string;
   /** For `tool_result`: the tool failed. */
   isError?: boolean;
-  /** For `thinking`: how long the block took, when the portal saw it start. */
+  /** For `thinking`: how long the block took, when the portal saw it start. For `result`: how long the turn took. */
   durationMs?: number;
   /** Images on this event (sent by you, or returned by a tool), served from `CHAT_API.blob`. */
   images?: ChatImage[];
   /** For `user`: the client UUID it was sent with, to match lifecycle updates (`input` messages). */
   uuid?: string;
+}
+
+/** A turn's tokens: fresh input, output, and input read from or written to the prompt cache. */
+export interface ChatTurnTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
 }
 
 export interface ChatImage {

@@ -317,6 +317,13 @@ export class ChatStore {
     return rows.map((r) => this.#toEvent(r));
   }
 
+  /** The running cost the session's newest `result` reported, or null before the first. */
+  lastResultCost(sessionId: string): number | null {
+    const row = this.#db().prepare(`SELECT payload FROM chat_events WHERE session_id = ? AND kind = 'result' ORDER BY seq DESC LIMIT 1`).get(sessionId) as { payload: string } | undefined;
+    const cost = row ? this.#parsePayload(row.payload).costUsd : undefined;
+    return typeof cost === 'number' ? cost : null;
+  }
+
   /** The session's newest stored event, or null before the first. */
   lastEvent(sessionId: string): ChatEvent | null {
     const row = this.#db().prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? ORDER BY seq DESC LIMIT 1').get(sessionId) as
@@ -756,7 +763,9 @@ export class ChatStore {
     // transcript pairs each call with its result.
     if ((ev.kind === 'tool_use' || ev.kind === 'tool_result') && ev.toolUseId) p.toolUseId = ev.toolUseId;
     if (ev.kind === 'tool_result' && ev.isError) p.isError = true;
-    if (ev.kind === 'thinking' && ev.durationMs !== undefined) p.durationMs = ev.durationMs;
+    if ((ev.kind === 'thinking' || ev.kind === 'result') && ev.durationMs !== undefined) p.durationMs = ev.durationMs;
+    if (ev.kind === 'result' && ev.turnCostUsd !== undefined) p.turnCostUsd = ev.turnCostUsd;
+    if (ev.kind === 'result' && ev.tokens) p.tokens = ev.tokens;
     // The readable sub-agent label, when it isn't just the raw parent_tool_use_id kept in its column.
     if (ev.agentLabel && ev.agentLabel !== ev.parentToolUseId) p.agentLabel = redact(ev.agentLabel);
     // Blob references only: base64 never reaches a row (the controller moves it to the blob store).
@@ -779,6 +788,12 @@ export class ChatStore {
     if (typeof payload.toolUseId === 'string') ev.toolUseId = payload.toolUseId;
     if (payload.isError === true) ev.isError = true;
     if (typeof payload.durationMs === 'number') ev.durationMs = payload.durationMs;
+    if (typeof payload.turnCostUsd === 'number') ev.turnCostUsd = payload.turnCostUsd;
+    const t = payload.tokens as Record<string, unknown> | undefined;
+    if (t && typeof t === 'object') {
+      const n = (v: unknown) => (typeof v === 'number' && v > 0 ? v : 0);
+      ev.tokens = { input: n(t.input), output: n(t.output), cacheRead: n(t.cacheRead), cacheWrite: n(t.cacheWrite) };
+    }
     if (Array.isArray(payload.images)) {
       const images = payload.images.map(imageRef).filter((i): i is ChatImage => i !== null);
       if (images.length) ev.images = images;

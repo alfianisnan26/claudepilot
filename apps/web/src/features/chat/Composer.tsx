@@ -259,7 +259,7 @@ export function Composer({
           onPaste={onPaste}
           aria-label="Message"
           placeholder={working ? 'Steer Claude…' : 'Message Claude…'}
-          className="block max-h-[200px] min-h-11 min-w-0 flex-1 resize-none rounded-[22px] border border-line bg-surface px-4 py-[9px] text-base leading-6 text-ink outline-none transition-[border-color,box-shadow] placeholder:text-muted/70 hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)]"
+          className="block max-h-[200px] min-h-11 min-w-0 flex-1 resize-none rounded-[22px] border border-line/70 glass-field px-4 py-[9px] text-base leading-6 text-ink outline-none transition-[border-color,box-shadow] placeholder:text-muted/70 hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)]"
         />
         {working ? (
           <SteerButton canSend={canSend} connected={connected} showKeys={!touch} onSend={submit} />

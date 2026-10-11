@@ -222,6 +222,8 @@ export class ChatController {
   /** Per session: the permission mode the stream must report. */
   readonly #modes = new Map<string, ModeTrack>();
   readonly #idleTimers = new Map<string, NodeJS.Timeout>();
+  /** Per session: the running cost its process last reported, so each `result` can say what its turn cost. */
+  readonly #costBase = new Map<string, number>();
   /**
    * Per workspace: how many times its credentials began to change ({@link endWorkspaceSessions}). A
    * launch that began before the latest change gives up, and stops a process it already started.
@@ -1063,6 +1065,7 @@ export class ChatController {
         endedReason: null,
       });
       this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
+      this.#costBase.set(sessionId, 0); // a new process counts its cost from zero
     } else if (code === 3) {
       // Already running (run.lock held): attach to the existing process on its current segment.
       this.#chat.patchSession(sessionId, { process: 'live', state: 'idle', endedReason: null });
@@ -1324,6 +1327,13 @@ export class ChatController {
           ev.durationMs = Math.max(0, Date.now() - started);
           since!.delete(ev.parentToolUseId ?? '');
         }
+      }
+      // What this turn cost: the change in the process's running total (a reattached reader, after a
+      // portal restart, takes the last stored total; a total lower than that is a new process's).
+      if (ev.kind === 'result' && ev.costUsd !== undefined) {
+        const base = this.#costBase.get(sessionId) ?? this.#chat.lastResultCost(sessionId) ?? 0;
+        ev.turnCostUsd = ev.costUsd >= base ? ev.costUsd - base : ev.costUsd;
+        this.#costBase.set(sessionId, ev.costUsd);
       }
       // Name each result from its own call (parallel calls finish in any order).
       if (ev.kind === 'tool_use' && ev.toolUseId && ev.toolName) this.#calls(sessionId).set(ev.toolUseId, ev.toolName);

@@ -27,6 +27,14 @@ const LOOK_COMMAND = /^(ls|cat|head|tail|grep|rg|find|wc|pwd|tree|stat|file|du|w
 const isReadOnly = (call: ChatEvent) =>
   READ_ONLY.has(call.toolName ?? '') || (call.toolName === 'Bash' && !!call.text && LOOK_COMMAND.test(call.text) && !/[;&>`]|\$\(/.test(call.text));
 
+/** A path's last part ("MEMORY.md"), or a short head of anything else: what a one-line row shows. */
+export function shortTarget(text: string | undefined): string {
+  const t = (text ?? '').trim();
+  if (!t) return '';
+  if (/^[~/]/.test(t) && !/\s/.test(t)) return t.split('/').filter(Boolean).pop() ?? t;
+  return t.length > 48 ? `${t.slice(0, 47)}…` : t;
+}
+
 /** "mcp__playwright__browser_take_screenshot" reads "playwright · browser_take_screenshot". */
 export const toolLabel = (name: string) => (name.startsWith('mcp__') ? name.slice(5).split('__').filter(Boolean).join(' · ') : name);
 
@@ -105,7 +113,7 @@ const NOUNS: Record<string, [string, string]> = {
   TodoRead: ['to-do check', 'to-do checks'],
   Bash: ['command', 'commands'],
 };
-function groupLabel(tools: ToolPair[]): string {
+export function groupLabel(tools: ToolPair[]): string {
   const counts = new Map<string, number>();
   for (const { call } of tools) {
     const noun = NOUNS[call.toolName ?? '']?.join('|') ?? 'step|steps';
@@ -164,8 +172,9 @@ function RowButton({
 
 /**
  * One tool call: its name and one-line summary (a command, a path), then, opened, the summary in full
- * and what the tool returned (text, kept short by the portal, and images). A failure shows open and in
- * the danger tone, and so do returned images. `running` marks a call still waiting for its result.
+ * and what the tool returned (text, kept short by the portal, and images). A failure shows in the
+ * danger tone (its turn's activity row counts it); returned images show open. `running` marks a call
+ * still waiting for its result.
  */
 export function ToolCall({
   call,
@@ -176,7 +185,7 @@ export function ToolCall({
   images,
 }: ToolPair & { agent: string | null; running: boolean; details: boolean; images: ViewerImage[] }) {
   const error = !!result?.isError;
-  const [open, toggle] = useOpen(details, error || images.length > 0);
+  const [open, toggle] = useOpen(details, images.length > 0);
   const id = useId();
   const output = result?.text?.trim() ?? '';
   const expandable = !!(call.text || output || images.length);
@@ -185,7 +194,7 @@ export function ToolCall({
       <RowButton open={open} onToggle={toggle} controls={id} expandable={expandable} danger={error}>
         {error ? <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" /> : <Wrench className="size-3.5 shrink-0" aria-hidden="true" />}
         <span className="shrink-0 font-mono">{call.toolName ? toolLabel(call.toolName) : 'tool'}</span>
-        {call.text && <span className="min-w-0 truncate font-mono text-muted">{call.text}</span>}
+        {call.text && <span className="min-w-0 truncate font-mono text-muted">{shortTarget(call.text)}</span>}
         {agent && <span className="shrink-0 truncate text-muted/80">· {agent}</span>}
         {running && !result && <Spinner className="size-3 shrink-0" />}
         {error && <span className="sr-only">(failed)</span>}
@@ -195,7 +204,7 @@ export function ToolCall({
           {(call.text || output) && (
             <div className={cn('overflow-hidden rounded-lg border text-[12px]', error ? 'border-danger/30 bg-danger-soft' : 'border-line bg-surface-2/50')}>
               {/* The summary in full where the row can't show it all: commands, and anything long. */}
-              {call.text && (call.toolName === 'Bash' || call.text.length > 48) && (
+              {call.text && (call.toolName === 'Bash' || shortTarget(call.text) !== call.text.trim()) && (
                 <p className="border-b border-line/70 px-3 py-1.5 font-mono break-all text-ink-soft">{call.text}</p>
               )}
               {output ? (

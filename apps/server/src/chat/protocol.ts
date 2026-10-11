@@ -450,7 +450,20 @@ function parseResult(obj: Record<string, unknown>): ParsedLine {
   const cost = asNum(obj.total_cost_usd);
   const text = asStr(obj.result) ?? undefined;
   const errored = obj.is_error === true || (subtype !== null && subtype !== 'success');
-  const stored: StoredEvent[] = [{ kind: 'result', text, costUsd: cost ?? undefined }];
+  const ended: StoredEvent = { kind: 'result', text, costUsd: cost ?? undefined };
+  // The turn's own numbers (`usage` is per turn; `total_cost_usd` is the process's running total).
+  const took = asNum(obj.duration_ms);
+  if (took !== null && took >= 0) ended.durationMs = Math.round(took);
+  const usage = asObj(obj.usage);
+  if (usage) {
+    ended.tokens = {
+      input: tokens(usage.input_tokens),
+      output: tokens(usage.output_tokens),
+      cacheRead: tokens(usage.cache_read_input_tokens),
+      cacheWrite: tokens(usage.cache_creation_input_tokens),
+    };
+  }
+  const stored: StoredEvent[] = [ended];
   if (errored) stored.push({ kind: 'error', text: text ?? `The turn ended with ${subtype ?? 'an error'}.` });
   const patch: NonNullable<ParsedLine['sessionPatch']> = { state: 'idle', turnsDelta: 1 };
   if (cost !== null) patch.cost = cost;

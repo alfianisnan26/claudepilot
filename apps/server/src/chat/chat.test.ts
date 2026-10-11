@@ -2884,3 +2884,26 @@ test('archive: a running session is ended first, then archived; an ended one kee
     await s.done();
   }
 });
+
+/* ========================= Per-turn usage ========================= */
+
+test('usage: each result stores its turn’s tokens and duration, and what the turn cost out of the process’s running total', async () => {
+  const s = await liveSession();
+  try {
+    const turn = async (total: number, usage: Record<string, number>, ms: number) => {
+      s.tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: ms, usage, is_error: false, session_id: s.id }));
+      s.tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+    };
+    await turn(0.08, { input_tokens: 2, output_tokens: 21, cache_read_input_tokens: 12913, cache_creation_input_tokens: 20680 }, 1985);
+    await turn(0.17, { input_tokens: 6, output_tokens: 480, cache_read_input_tokens: 82750, cache_creation_input_tokens: 19364 }, 5223);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const [a, b] = s.controller.history(s.id).filter((e) => e.kind === 'result');
+    assert.deepEqual([a!.costUsd, a!.turnCostUsd, a!.durationMs], [0.08, 0.08, 1985]);
+    assert.deepEqual(a!.tokens, { input: 2, output: 21, cacheRead: 12913, cacheWrite: 20680 });
+    assert.equal(b!.costUsd, 0.17);
+    assert.ok(Math.abs(b!.turnCostUsd! - 0.09) < 1e-9, `the second turn alone: ${b!.turnCostUsd}`);
+    assert.deepEqual(b!.tokens, { input: 6, output: 480, cacheRead: 82750, cacheWrite: 19364 });
+  } finally {
+    await s.done();
+  }
+});
