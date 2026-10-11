@@ -515,9 +515,9 @@ export class ChatController {
       if (String(e).includes('UNIQUE')) throw new AppError('CONFLICT', 'A Claude with that name is already on this workspace.');
       throw e;
     }
-    const path = `${HOME}/.claudepilot/${created.directory}`;
     try {
-      await this.#shell(id, ['mkdir', '-p', '--', path]);
+      // Under the workspace user's own $HOME: /home/node in workspace images, the portal user's home on this machine.
+      await this.#shell(id, ['sh', '-c', 'mkdir -p -- "$HOME/.claudepilot/$1"', 'sh', created.directory]);
     } catch (e) {
       this.#chat.removeClaudeRow(created.id);
       throw new AppError('SERVICE_UNAVAILABLE', 'Couldn’t create the Claude directory. Is the workspace running?', { expose: true, cause: e });

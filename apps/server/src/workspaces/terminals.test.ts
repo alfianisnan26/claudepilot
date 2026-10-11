@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { TERMINAL_MAX } from '@portal/contracts';
+import { TERMINAL_MAX, type WorkspaceClaude } from '@portal/contracts';
 import type { Workspaces } from './manager.js';
 import type { ExecSession } from './runtime.js';
 import { attachCommand, cleanFolder, Terminals } from './terminals.js';
@@ -9,18 +9,27 @@ import { attachCommand, cleanFolder, Terminals } from './terminals.js';
  * A workspace with a fake tmux: `sessions` are its tmux sessions (name → created), `installed`
  * whether tmux is there, `installWorks` whether installing it succeeds. Records every command.
  */
-function fakeWorkspace(opts: { installed?: boolean; installWorks?: boolean; sessions?: Record<string, number> } = {}) {
+const DEFAULT: WorkspaceClaude = { id: 'c-default', workspaceId: 'docker/api', name: 'Default', directory: '', removedAt: null, createdAt: '2026-10-01T00:00:00.000Z' };
+const WORK: WorkspaceClaude = { ...DEFAULT, id: 'c-work', name: 'Work', directory: 'claudes/0123456789abcdef', createdAt: '2026-10-02T00:00:00.000Z' };
+const GONE: WorkspaceClaude = { ...DEFAULT, id: 'c-gone', name: 'Gone', directory: 'claudes/fedcba9876543210', removedAt: '2026-10-03T00:00:00.000Z' };
+
+function fakeWorkspace(opts: { installed?: boolean; installWorks?: boolean; sessions?: Record<string, number>; claudeOf?: Record<string, string> } = {}) {
   const commands: string[][] = [];
   const sessions = new Map(Object.entries(opts.sessions ?? {}));
+  /** tmux's @cp_claude per session. */
+  const claudeOf = new Map(Object.entries(opts.claudeOf ?? {}));
   let installed = opts.installed ?? true;
   const reply = (command: string[]): { out: string; code: number } => {
     const script = command[0] === 'sh' ? (command[2] ?? '') : '';
     if (script.includes('tmux list-sessions')) {
       if (!installed) return { out: '', code: 0 };
       const format = command[4] ?? '';
-      assert.equal(format.split('\t').length, 6, 'six tab-separated fields');
+      assert.equal(format.split('\t').length, 7, 'seven tab-separated fields');
       // tmux names the pane's shell; the program it started is its child (see the `ps` reply).
-      return { out: [...sessions].map(([s, at], i) => `${s}\t${at}\t0\t/home/node/work\tbash\t${s.includes('claude') ? 100 : 200 + i}`).join('\n'), code: 0 };
+      return {
+        out: [...sessions].map(([s, at], i) => `${s}\t${at}\t0\t/home/node/work\tbash\t${s.includes('claude') ? 100 : 200 + i}\t${claudeOf.get(s) ?? ''}`).join('\n'),
+        code: 0,
+      };
     }
     if (script === 'command -v tmux') return { out: installed ? '/usr/bin/tmux\n' : '', code: installed ? 0 : 1 };
     if (script.includes('apt-get')) {
@@ -32,6 +41,7 @@ function fakeWorkspace(opts: { installed?: boolean; installWorks?: boolean; sess
       const [folder, session] = [command[4], command[5]!];
       if (folder === '/nope') return { out: 'No folder /nope\n', code: 3 };
       sessions.set(session, 1_760_000_000 + sessions.size);
+      claudeOf.set(session, command[9] ?? '');
       return { out: '', code: 0 };
     }
     if (command[0] === 'ps') {
@@ -57,7 +67,8 @@ function fakeWorkspace(opts: { installed?: boolean; installWorks?: boolean; sess
   } as unknown as Workspaces;
   let claudeInstalls = 0;
   const claude = { ensureInstalled: async () => void claudeInstalls++ };
-  return { terminals: new Terminals(workspaces, claude), commands, sessions, claudeInstalls: () => claudeInstalls };
+  const claudes = { listClaudes: (id: string) => (assert.match(id, /^[a-z]+\/[a-z]+$/), [DEFAULT, WORK, GONE]) };
+  return { terminals: new Terminals(workspaces, claude, claudes), commands, sessions, claudeOf, claudeInstalls: () => claudeInstalls };
 }
 
 test('folders are ~, ~/… or absolute, on one line; empty means home', () => {
@@ -96,9 +107,10 @@ test('a new Claude terminal gets the next free number, Claude Code installed fir
   assert.equal(fake.claudeInstalls(), 1);
   const made = fake.commands.find((c) => c[2]?.includes('tmux new-session'))!;
   assert.deepEqual(made.slice(3, 6), ['sh', '~/work/api', 'cp-claude-2']);
+  assert.deepEqual(made.slice(8), ['', 'c-default'], 'Default: no directory of its own, so no CLAUDE_CONFIG_DIR');
   assert.match(made[6]!, /claude; exec "\$\{SHELL:-bash\}" -l$/);
   assert.equal(made[7], 'claude', 'the window is named after its kind');
-  assert.match(made[2]!, /new-session -d -s "\$2" -n "\$4" -x 160 -y 48 -c "\$d" "\$3" \|\| exit \$\?/);
+  assert.match(made[2]!, /else tmux new-session -d -s "\$2" -n "\$4" -x 160 -y 48 -c "\$d" "\$3" \|\| exit \$\?; fi/);
   assert.match(made[2]!, /status off.*mouse on/);
 });
 
@@ -152,4 +164,36 @@ test('closing kills that tmux session; an unknown one is not found', async () =>
   assert.equal(fake.sessions.size, 0);
   await assert.rejects(fake.terminals.close('docker', 'api', 'claude-1'), { code: 'NOT_FOUND' });
   await assert.rejects(fake.terminals.close('docker', 'api', 'mine'), { code: 'NOT_FOUND' });
+});
+
+test('a terminal on another Claude runs with that Claude’s own CLAUDE_CONFIG_DIR, in that session only', async () => {
+  const fake = fakeWorkspace();
+  const t = await fake.terminals.create('docker', 'api', { kind: 'claude', claudeId: 'c-work' });
+  assert.deepEqual([t.claudeId, t.claudeName], ['c-work', 'Work']);
+  const made = fake.commands.find((c) => c[2]?.includes('tmux new-session'))!;
+  assert.deepEqual(made.slice(8), ['claudes/0123456789abcdef', 'c-work']);
+  // The directory is joined to the workspace user's $HOME by its shell, and set with tmux -e (this session's environment).
+  assert.match(made[2]!, /c="\$HOME\/\.claudepilot\/\$5"; mkdir -p -- "\$c" && tmux new-session .* -e "CLAUDE_CONFIG_DIR=\$c" "\$3"/);
+  assert.match(made[2]!, /tmux set-option -t "\$2" @cp_claude "\$6"/);
+});
+
+test('an unknown or removed Claude is refused before anything runs', async () => {
+  const fake = fakeWorkspace();
+  for (const claudeId of ['nope', 'c-gone']) await assert.rejects(fake.terminals.create('docker', 'api', { kind: 'claude', claudeId }), { code: 'NOT_FOUND' });
+  assert.ok(!fake.commands.some((c) => c[2]?.includes('tmux new-session')));
+});
+
+test('the list names each terminal’s Claude; older terminals without one are Default', async () => {
+  const fake = fakeWorkspace({
+    sessions: { 'cp-claude-1': 1_760_000_000, 'cp-claude-2': 1_760_000_100 },
+    claudeOf: { 'cp-claude-2': 'c-work' },
+  });
+  const list = await fake.terminals.list('docker', 'api');
+  assert.deepEqual(
+    list.map((t) => [t.id, t.claudeName]),
+    [
+      ['claude-1', 'Default'],
+      ['claude-2', 'Work'],
+    ],
+  );
 });

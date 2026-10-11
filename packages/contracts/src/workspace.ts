@@ -107,10 +107,15 @@ export interface WorkspaceTerminal {
   createdAt: string;
   /** Browser tabs (or other clients) attached right now. */
   attached: number;
+  /** The Claude it runs as (Workspace Claudes): its directory holds that Claude's own login and chats. */
+  claudeId: string;
+  claudeName: string;
 }
 
 export interface CreateTerminalRequest {
   kind: TerminalKind;
+  /** Which Claude on the workspace (its `CLAUDE_CONFIG_DIR`); Default when absent. */
+  claudeId?: string;
   /** Where it starts: `~`, `~/work/api` or an absolute path. The home folder when absent. */
   cwd?: string;
 }

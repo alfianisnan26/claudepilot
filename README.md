@@ -104,9 +104,13 @@ Targets (each shows up when reachable):
 - The shell is a WebSocket at `/api/workspaces/<target>/<name>/shell`; it needs a session cookie and a
   same-origin `Origin`.
 - **Terminals** keep running without a browser: each is a tmux session (`cp-claude-1`, `cp-shell-2`, …)
-  as the workspace's user, up to 8 per workspace. A Claude terminal runs Claude Code on the workspace's
-  own Claude sign-in (and drops to a shell when it exits), so several can work side by side; the shell
-  page shows them as tabs (`…/shell?term=claude-1`), and New opens one in a folder. tmux is installed
+  as the workspace's user, up to 8 per workspace, and each runs as one of the workspace's Claudes
+  ([Workspace Claudes](docs/prd/workspace-claudes.md)). A Claude other than Default gets its own
+  `CLAUDE_CONFIG_DIR` (`~/.claudepilot/claudes/<id>`) in that tmux session only, so signing in there
+  (account or SSO, done by you in the terminal) keeps its login and chats apart from the others; tmux
+  itself separates nothing. A Claude terminal runs Claude Code and drops to a shell when it exits. The
+  shell page shows terminals as tabs (`…/shell?term=claude-1`); New picks the Claude (or adds one,
+  which starts signed out), the program and the folder. tmux is installed
   through passwordless sudo when missing (workspace images ship it), and Claude Code with its own
   installer. Terminals are terminals, not chat sessions: those still need an account pool.
 

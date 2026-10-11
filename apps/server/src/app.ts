@@ -292,7 +292,7 @@ export function createApp(
   });
 
   // Terminals that outlive the browser (tmux sessions), several Claude Codes side by side.
-  const terminals = new Terminals(workspaces, logins);
+  const terminals = new Terminals(workspaces, logins, chatController);
   ws.get('/:target/:name/terminals', async (c) =>
     c.json(success<WorkspaceTerminal[]>(await terminals.list(c.req.param('target'), c.req.param('name')))),
   );

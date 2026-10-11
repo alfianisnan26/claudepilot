@@ -168,8 +168,8 @@ export function ShellPage() {
             active={term === t.id}
             onClick={() => switchTo(t.id)}
             icon={t.kind === 'claude' ? <Bot className="size-3.5" /> : <SquareTerminal className="size-3.5" />}
-            label={t.id}
-            hint={`${t.command} in ${t.cwd}`}
+            label={t.claudeId && t.claudeName !== 'Default' ? `${t.id} · ${t.claudeName}` : t.id}
+            hint={`${t.command} in ${t.cwd}, as Claude ${t.claudeName}`}
             onClose={() => setClosing(t.id)}
           />
         ))}

@@ -172,6 +172,7 @@ export function WorkspaceSheet({
                     >
                       {t.kind === 'claude' ? <Bot className="size-4 shrink-0 text-accent" /> : <SquareTerminal className="size-4 shrink-0 text-muted" />}
                       <span className="font-mono font-medium">{t.id}</span>
+                      {t.claudeName !== 'Default' && <span className="truncate text-[12.5px] font-medium">{t.claudeName}</span>}
                       <span className="min-w-0 flex-1 truncate text-right text-[12.5px] text-muted">
                         {t.command} · {t.cwd.replace(/^\/home\/[^/]+/, '~')}
                       </span>
