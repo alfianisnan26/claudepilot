@@ -39,6 +39,8 @@ export interface TarEntry {
   path: string;
   type: 'file' | 'directory';
   content?: string;
+  /** Additive: a binary file's bytes, written instead of `content`. */
+  bytes?: Buffer;
   mode: number;
   uid: number;
   gid: number;

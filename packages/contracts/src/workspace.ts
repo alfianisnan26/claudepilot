@@ -49,6 +49,8 @@ export interface CreateWorkspaceRequest {
   memoryMb?: number;
   /** Account pool to assign from the start (no confirmation needed: the workspace has no sign-in yet). */
   accountPoolId?: string | null;
+  /** The create dialog's Add-ons: pools of each multi-assignment type to assign from the start. */
+  pools?: Partial<Record<import('./pools.js').MultiPoolType, string[]>>;
 }
 
 export const WORKSPACE_NAME_MAX = 40;

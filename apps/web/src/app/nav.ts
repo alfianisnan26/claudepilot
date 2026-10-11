@@ -1,4 +1,4 @@
-import { Boxes, KeyRound, KeySquare, MessagesSquare, type LucideIcon } from 'lucide-react';
+import { Boxes, KeyRound, Layers, MessagesSquare, type LucideIcon } from 'lucide-react';
 
 export interface NavItem {
   id: string;
@@ -11,7 +11,8 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   { id: 'workspaces', to: '/admin/workspaces', label: 'Workspaces', icon: Boxes },
   { id: 'sessions', to: '/admin/sessions', label: 'Sessions', icon: MessagesSquare },
-  { id: 'accounts', to: '/admin/accounts', label: 'Accounts', icon: KeySquare },
+  // One hub for every pool type, Accounts first (Skillset PRD §18 A8).
+  { id: 'pools', to: '/admin/pools', label: 'Pools', icon: Layers },
   { id: 'access', to: '/admin/access', label: 'Access', icon: KeyRound },
 ];
 

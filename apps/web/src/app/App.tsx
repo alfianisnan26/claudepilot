@@ -2,10 +2,11 @@ import { ActivityBar, initViewportFix, ThemeProvider, ToastProvider, UiStringsPr
 import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router';
 import { AppShell } from '@/components/AppShell';
-import { AccountsPage } from '@/features/accounts/AccountsPage';
 import { AccessPage } from '@/features/admin/AccessPage';
 import { SessionsPage } from '@/features/chat/SessionsPage';
 import { LoginPage } from '@/features/auth/LoginPage';
+import { PoolsHub } from '@/features/pools/PoolsHub';
+import { POOL_TABS } from '@/features/pools/registry';
 import { WorkspacesPage } from '@/features/workspaces/WorkspacesPage';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { LiveProvider } from '@/lib/live';
@@ -59,7 +60,10 @@ function AppRoutes() {
         <Route index element={<Navigate to={HOME} replace />} />
         <Route path="workspaces" element={<WorkspacesPage />} />
         <Route path="sessions" element={<SessionsPage />} />
-        <Route path="accounts" element={<AccountsPage />} />
+        <Route path="pools" element={<PoolsHub />} />
+        {/* Each pool type's own pages (library, catalog, review, page editors) are routes, not nested tabs. */}
+        {POOL_TABS.flatMap((t) => (t.routes ?? []).map((r) => <Route key={`${t.id}/${r.path}`} path={`pools/${t.id}/${r.path}`} element={r.element} />))}
+        <Route path="accounts" element={<Navigate to="/admin/pools?tab=accounts" replace />} />
         <Route path="access" element={<AccessPage />} />
       </Route>
       {/* Full screen, outside the app frame: the chat view owns the viewport (composer pinned, no tab bar). */}

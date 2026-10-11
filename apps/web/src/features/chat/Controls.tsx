@@ -1,4 +1,4 @@
-import { Button, ChipGroup, cn, Dialog, Spinner, SwitchRow } from '@isnanme/ui';
+import { Button, cn, Dialog, Spinner, SwitchRow } from '@isnanme/ui';
 import type { ChatModelOption, ChatPermissionMode, ChatSession } from '@portal/contracts';
 import {
   Check,
@@ -369,6 +369,15 @@ function ModelEffortSheet({
   const apply = useApply();
   const ultracodeBusy = apply.pending === 'ultracode';
   const effortBusy = apply.pending?.startsWith('effort:') ?? false;
+  // Resolves true once Claude Code applied it, so the slider can let go of the level it shows.
+  const pickEffort = async (level: string) => {
+    let ok = false;
+    await apply.run(`effort:${level}`, async () => {
+      await onEffort(level);
+      ok = true;
+    });
+    return ok;
+  };
   return (
     <div className="flex flex-col gap-4">
       {!models ? (
@@ -410,22 +419,14 @@ function ModelEffortSheet({
           )}
         </div>
       )}
-      {session.effort !== null && levels.length > 0 && (
-        <div className="flex flex-col gap-1.5 border-t border-line pt-3">
-          <ChipGroup
-            label="Effort"
-            hint={
-              effortBusy ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <Spinner className="size-3" /> Applying…
-                </span>
-              ) : (
-                'How hard Claude thinks. More is slower and uses more tokens.'
-              )
-            }
+      {session.effort !== null && levels.length > 1 && (
+        <div className="border-t border-line pt-3">
+          <EffortSlider
+            levels={levels}
             value={session.effort}
-            onChange={(value) => void apply.run(`effort:${value}`, () => onEffort(value))}
-            options={levels.map((level) => ({ value: level, label: effortLabel(level), disabled: !connected || apply.pending !== null }))}
+            busy={effortBusy}
+            disabled={!connected || (apply.pending !== null && !effortBusy)}
+            onPick={pickEffort}
           />
         </div>
       )}
@@ -450,6 +451,128 @@ function ModelEffortSheet({
         </div>
       )}
       <Footnotes error={apply.error} connected={connected} />
+    </div>
+  );
+}
+
+/** The slider's thumb, in px: tick labels sit under where its center can stop. */
+const THUMB = 20;
+
+/**
+ * Effort as a slider over the model's own levels (chat PRD §12.4): one step per level, the level's name
+ * above the track and every level's name under its stop (a tap picks it). A drag applies once, on
+ * release; arrow keys apply after a short pause, so one change sends one request. The shown level stays
+ * on the pick until Claude Code reports it applied, or the change failed.
+ */
+function EffortSlider({
+  levels,
+  value,
+  busy,
+  disabled,
+  onPick,
+}: {
+  levels: string[];
+  value: string;
+  busy: boolean;
+  disabled: boolean;
+  onPick: (level: string) => Promise<boolean>;
+}) {
+  const labelId = useId();
+  const applied = Math.max(0, levels.indexOf(value));
+  const [draft, setDraft] = useState<number | null>(null);
+  const latest = useRef<number | null>(null);
+  const dragging = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  // Applied as picked: the slider follows the session again.
+  useEffect(() => {
+    if (draft !== null && applied === draft && !busy) setDraft(null);
+  }, [applied, draft, busy]);
+
+  const shown = draft ?? applied;
+  const last = levels.length - 1;
+  const pct = (shown / last) * 100;
+
+  const choose = (i: number) => {
+    latest.current = i;
+    setDraft(i);
+  };
+  const commit = (delay: number) => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      const i = latest.current;
+      if (i === null) return;
+      if (i === applied) return setDraft(null);
+      void onPick(levels[i]!).then((ok) => !ok && setDraft(null));
+    }, delay);
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <span id={labelId} className="text-[13px] font-semibold text-ink">
+          Effort
+        </span>
+        <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-ink" aria-hidden="true">
+          {busy && <Spinner className="size-3" />}
+          {effortLabel(levels[shown]!)}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={last}
+        step={1}
+        value={shown}
+        disabled={disabled}
+        aria-labelledby={labelId}
+        aria-valuetext={effortLabel(levels[shown]!)}
+        onChange={(e) => {
+          choose(Number(e.target.value));
+          if (!dragging.current) commit(400);
+        }}
+        onPointerDown={() => (dragging.current = true)}
+        onPointerUp={() => {
+          dragging.current = false;
+          commit(0);
+        }}
+        onPointerCancel={() => {
+          dragging.current = false;
+          commit(0);
+        }}
+        style={{ background: `linear-gradient(to right, var(--color-primary) ${pct}%, var(--color-line) ${pct}%)` }}
+        className={cn(
+          'h-1.5 w-full cursor-pointer appearance-none rounded-full outline-none disabled:cursor-not-allowed disabled:opacity-50',
+          'focus-visible:ring-4 focus-visible:ring-[var(--ring)]',
+          '[&::-webkit-slider-thumb]:size-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-surface [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:shadow-card',
+          '[&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-surface [&::-moz-range-thumb]:bg-primary [&::-moz-range-thumb]:shadow-card',
+        )}
+      />
+      {/* Under each stop: the thumb's center runs from half a thumb in to half a thumb short of the end.
+          The end labels line up with the thumb's outer edge there instead, so none hangs past the track. */}
+      <div className="relative h-5" aria-hidden="true">
+        {levels.map((level, i) => (
+          <button
+            key={level}
+            type="button"
+            tabIndex={-1}
+            disabled={disabled}
+            onClick={() => {
+              choose(i);
+              commit(0);
+            }}
+            style={i === 0 ? { left: 0 } : i === last ? { right: 0 } : { left: `calc(${THUMB / 2}px + (100% - ${THUMB}px) * ${i / last})` }}
+            className={cn(
+              'absolute top-0 text-[11.5px] whitespace-nowrap transition-colors disabled:cursor-not-allowed',
+              i > 0 && i < last && '-translate-x-1/2',
+              i === shown ? 'font-semibold text-ink' : 'text-muted hover:text-ink',
+            )}
+          >
+            {effortLabel(level)}
+          </button>
+        ))}
+      </div>
+      <p className="text-[12.5px] text-muted">How hard Claude thinks. More is slower and uses more tokens.</p>
     </div>
   );
 }

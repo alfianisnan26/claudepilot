@@ -8,7 +8,12 @@ import { AccountsService } from './accounts/service.js';
 import { Outbox } from './delivery/outbox.js';
 import { LiveHub } from './live.js';
 import { workspaceView } from './workspaces/view.js';
-import { Reconciler } from './delivery/reconciler.js';
+import { Reconciler, type FragmentProvider } from './delivery/reconciler.js';
+import { References } from './pools/references.js';
+import { SecretsKind } from './secrets/kind.js';
+import { registerMcpSets } from './mcp/index.js';
+import { SkillsModule } from './skills/module.js';
+import { PoolService } from './pools/service.js';
 import { createApp } from './app.js';
 import { config } from './config.js';
 import { JsonFile } from './jsonFile.js';
@@ -91,8 +96,24 @@ accounts.hooks = {
   checked: (id, result, manual) => health.fromCheck(id, result, manual),
   poolsWith: (id) => pools.poolsWith(id),
 };
-const reconciler = new Reconciler(store, (t) => workspaces.runtimeFor(t), () => workspaces.runtimeList(), [pools]);
+// Multi-assignment pools (secrets & env, skillsets, MCP sets). Each registered kind's fragment provider
+// joins `providers`; register kinds here, before the reconciler starts, or a manifest naming one of
+// their pools freezes its workspace (foundation §6.5).
+const providers: FragmentProvider[] = [pools];
+const poolService = new PoolService(store, { providers });
+// Pool kinds register here, before the reconciler starts. Kinds that use Secrets & env names (or provide
+// them) share one References.
+const references = new References();
+// Secrets & env: variables and secrets for tools in workspaces; also where other pools resolve secret names.
+poolService.register(new SecretsKind(store, poolService, references));
+// MCP sets: reviewed MCP servers grouped into sets, delivered as plugins; secrets by Secrets & env name.
+const mcpSets = registerMcpSets({ store, pools: poolService, references, access: (t) => workspaces.runtimeFor(t)?.delivery });
+// Skillsets: the reviewed skill library, delivered as one plugin per set; verified in running workspaces.
+const skills = new SkillsModule(store, poolService, { runtimes: (t) => workspaces.runtimeFor(t) });
+skills.start();
+const reconciler = new Reconciler(store, (t) => workspaces.runtimeFor(t), () => workspaces.runtimeList(), providers);
 pools.reconciler = reconciler;
+poolService.reconciler = reconciler;
 // Sessions run only on the keys an Account Pool delivers (chat PRD §6): a workspace needs an active,
 // synced pool, and a pool change ends its sessions first.
 chatController.eligibility = (id) => poolEligibility(pools.stateFor(id), reconciler.row(id)?.status);
@@ -106,6 +127,8 @@ health.onUnconfirmed = (ids) => ids.forEach((id) => void reconciler.request(id, 
 // Failure signals from assigned workspaces: helper runs and StopFailure (Account Pool §11.5).
 const outbox = new Outbox(store, (t) => workspaces.runtimeFor(t));
 outbox.subscribe('account', (workspaceId, events) => health.onSignals(workspaceId, events), () => pools.assignedWorkspaces());
+// MCP launcher and helper events: starts and failures, never values (MCP set §13.2).
+outbox.subscribe('mcp', (workspaceId, events) => mcpSets.onOutbox(workspaceId, events), () => mcpSets.assignedWorkspaces());
 workspaces.hooks.beforeStop = (id) => outbox.pull(id);
 reconciler.start();
 outbox.start();
@@ -122,8 +145,9 @@ reconciler.onChange(() => notify('workspaces'));
 accounts.hooks.event = () => notify('accounts');
 health.onEvent = () => notify('accounts');
 pools.onChange = () => notify('accounts', 'workspaces');
+poolService.onChange = () => notify('pools');
 const stopWatching = runtimes.flatMap((r) => (r.watch ? [r.watch(() => notify('workspaces'))] : []));
-const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify });
+const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills });
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
 attachShell(server, portal, workspaces);

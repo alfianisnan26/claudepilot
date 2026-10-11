@@ -370,10 +370,312 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 9,
+    name: 'pool revision status and assignment options',
+    up(db) {
+      db.exec(`
+        -- Skillset PRD §18 A3: only deliverable revisions reach workspaces, and pools.current_revision
+        -- moves only to one. Revisions so far (account pools) were all delivered, so they stay deliverable.
+        ALTER TABLE pool_revisions ADD COLUMN status TEXT NOT NULL DEFAULT 'deliverable'
+          CHECK (status IN ('draft', 'waiting_review', 'deliverable'));
+        -- A paused rollout (FR23): the revision reaches no more workspaces until resumed.
+        ALTER TABLE pool_revisions ADD COLUMN rollout_paused_at TEXT;
+        ALTER TABLE pool_revisions ADD COLUMN rollout_paused_reason TEXT;
+        -- A4: the pool type's own settings for one workspace (per-skill overrides and the like), as JSON.
+        ALTER TABLE assignments ADD COLUMN options TEXT NOT NULL DEFAULT '{}';
+        -- The revision the workspace last received, so a paused rollout holds back only the workspaces
+        -- it hasn't reached yet.
+        ALTER TABLE assignments ADD COLUMN delivered_revision INTEGER;
+      `);
+    },
+  },
+  {
+    version: 10,
+    name: 'secret values',
+    up(db) {
+      db.exec(`
+        -- Secrets & env PRD §9, A8: secret values as immutable, encrypted versions, referenced by ID from
+        -- revision content, which never holds ciphertext. A set's values go with it.
+        CREATE TABLE secret_values (
+          id TEXT PRIMARY KEY,
+          pool_id TEXT NOT NULL REFERENCES pools (id) ON DELETE CASCADE,
+          entry_id TEXT NOT NULL,
+          -- Which of the entry's secret fields: 'value' for a secret; a tool login (S2) has several.
+          field TEXT NOT NULL DEFAULT 'value',
+          version INTEGER NOT NULL,
+          -- Sealed for secret_values|<id>|ciphertext; NULL once portal forget-secrets cleared it.
+          ciphertext TEXT,
+          -- A11: 8 hex of an HMAC under a key derived from the portal's secret key, and that key's ID.
+          fingerprint TEXT NOT NULL,
+          fingerprint_key_id TEXT NOT NULL,
+          prev_fingerprint TEXT,
+          hint TEXT NOT NULL,
+          byte_length INTEGER NOT NULL,
+          detected_type TEXT,
+          expires_at TEXT,
+          check_status TEXT,
+          checked_at TEXT,
+          source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'github_app', 'k8s_token')),
+          revoked_at TEXT,
+          created_at TEXT NOT NULL,
+          purge_after TEXT
+        ) STRICT;
+        CREATE UNIQUE INDEX secret_values_version ON secret_values (pool_id, entry_id, field, version);
+      `);
+    },
+  },
+  {
+    version: 12,
+    name: 'mcp sets: catalog, delivery, installs and verify',
+    up(db) {
+      db.exec(`
+        -- MCP set PRD §9. The catalog: one entry per server, with pinned versions that are reviewed before
+        -- any set can use them (FR1–FR5).
+        CREATE TABLE mcp_catalog (
+          id TEXT PRIMARY KEY,
+          -- The server key sets suggest: [a-z0-9-], at most 16 characters (FR5).
+          key TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          kind TEXT NOT NULL CHECK (kind IN ('npm', 'pypi', 'remote', 'command')),
+          -- The npm or PyPI package, or the command's path. One entry each, so the processes a revocation
+          -- stops (found by their launcher target) are only ever that entry's.
+          package TEXT,
+          -- M3: the MCP Registry name it was imported from.
+          registry_name TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        CREATE UNIQUE INDEX mcp_catalog_key ON mcp_catalog (key);
+        CREATE UNIQUE INDEX mcp_catalog_package ON mcp_catalog (kind, package) WHERE package IS NOT NULL;
+
+        -- Approved versions never change (FR4); a change is a new draft. Spec and slots are JSON.
+        CREATE TABLE mcp_catalog_versions (
+          id TEXT PRIMARY KEY,
+          entry_id TEXT NOT NULL REFERENCES mcp_catalog (id) ON DELETE CASCADE,
+          version TEXT NOT NULL,
+          spec TEXT NOT NULL,
+          slots TEXT NOT NULL DEFAULT '[]',
+          review_state TEXT NOT NULL DEFAULT 'draft' CHECK (review_state IN ('draft', 'approved', 'deprecated', 'revoked')),
+          reviewed_at TEXT,
+          reviewed_by TEXT,
+          review_note TEXT,
+          revoked_at TEXT,
+          revoke_reason TEXT,
+          -- M2 and M3: the registry's status for it, and its tool snapshot and hash (FR18).
+          registry_status TEXT,
+          tools TEXT,
+          tools_hash TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        CREATE UNIQUE INDEX mcp_catalog_versions_entry ON mcp_catalog_versions (entry_id, version);
+
+        -- What the last compile did with each server of each set in each workspace (FR14, FR17).
+        CREATE TABLE mcp_delivery (
+          workspace_id TEXT NOT NULL,
+          pool_id TEXT NOT NULL,
+          server_key TEXT NOT NULL,
+          -- cpm-<slug>: deny rules for a revoked server outlive its set's next revision.
+          plugin TEXT NOT NULL,
+          version_id TEXT,
+          -- The launcher target, or the URL.
+          target TEXT,
+          state TEXT NOT NULL,
+          reason TEXT,
+          -- M2: why a delivered server is absent in the workspace, and the user's server hiding it (name only).
+          absent_cause TEXT,
+          matching_server TEXT,
+          observed_at TEXT,
+          -- FR13b: when a revocation took it out here (its tools stay denied 14 days), and when its
+          -- processes were stopped.
+          revoked_at TEXT,
+          killed_at TEXT,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (workspace_id, pool_id, server_key)
+        ) STRICT;
+        CREATE INDEX mcp_delivery_version ON mcp_delivery (version_id);
+
+        -- Pre-installed packages (§12): once per version per workspace, kept in the home volume.
+        CREATE TABLE mcp_installs (
+          workspace_id TEXT NOT NULL,
+          -- npm:<package>@<version>
+          package_ref TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('installing', 'installed', 'failed')),
+          installed_at TEXT,
+          last_used_at TEXT,
+          -- Redacted, capped.
+          error TEXT,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (workspace_id, package_ref)
+        ) STRICT;
+
+        -- FR16: the last \`claude plugin details\` of each set's plugin in each workspace.
+        CREATE TABLE mcp_verify (
+          workspace_id TEXT NOT NULL,
+          plugin TEXT NOT NULL,
+          -- The version folder verified.
+          hash12 TEXT NOT NULL,
+          result TEXT NOT NULL,
+          servers TEXT NOT NULL DEFAULT '[]',
+          detail TEXT,
+          at TEXT NOT NULL,
+          PRIMARY KEY (workspace_id, plugin)
+        ) STRICT;
+
+        -- Which catalog versions each plugin version folder holds (FR13b). Folder names are content
+        -- hashes, so a revoked version's folders can be named in every workspace that still has them.
+        CREATE TABLE mcp_plugin_folders (
+          plugin TEXT NOT NULL,
+          hash12 TEXT NOT NULL,
+          version_ids TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (plugin, hash12)
+        ) STRICT;
+
+        -- Catalog changes, approvals, revocations and launcher events (§17): what and when, never values.
+        -- Kept 90 days.
+        CREATE TABLE mcp_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at TEXT NOT NULL,
+          type TEXT NOT NULL,
+          entry_id TEXT,
+          version_id TEXT,
+          workspace_id TEXT,
+          details TEXT NOT NULL DEFAULT '{}'
+        ) STRICT;
+        CREATE INDEX mcp_events_at ON mcp_events (at);
+        CREATE INDEX mcp_events_workspace ON mcp_events (workspace_id, type, at);
+      `);
+    },
+  },
+  {
+    version: 11,
+    name: 'skillsets: library, reviews, inventory and blobs',
+    up(db) {
+      db.exec(`
+        -- Where skill versions come from. Upload sources hold only a label; git and marketplace sources
+        -- (M3, M4) add a URL, ref and the resolved commit. token is sealed (SecretBox) and write-only.
+        CREATE TABLE skill_sources (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('upload', 'git', 'anthropic', 'marketplace')),
+          label TEXT NOT NULL,
+          url TEXT,
+          ref TEXT,
+          subpath TEXT,
+          marketplace_name TEXT,
+          plugin_name TEXT,
+          token TEXT,
+          resolved TEXT,
+          checked_at TEXT,
+          latest_seen TEXT,
+          created_at TEXT NOT NULL,
+          removed_at TEXT
+        ) STRICT;
+
+        -- Immutable skill versions, identified by their FR6 tree hash. Identical content under the same
+        -- name is one version, so it keeps its review.
+        CREATE TABLE skill_versions (
+          id TEXT PRIMARY KEY,
+          source_id TEXT NOT NULL REFERENCES skill_sources (id) ON DELETE RESTRICT,
+          name TEXT NOT NULL,
+          path_in_source TEXT NOT NULL,
+          tree_hash TEXT NOT NULL,
+          frontmatter TEXT NOT NULL DEFAULT '{}',
+          description TEXT NOT NULL DEFAULT '',
+          license TEXT,
+          size_bytes INTEGER NOT NULL,
+          file_count INTEGER NOT NULL,
+          scripted INTEGER NOT NULL DEFAULT 0,
+          risk TEXT NOT NULL CHECK (risk IN ('low', 'medium', 'high')),
+          findings TEXT NOT NULL DEFAULT '[]',
+          listing_chars INTEGER NOT NULL DEFAULT 0,
+          -- Converted command, requirements, license files, badges: what the review page shows besides findings.
+          details TEXT NOT NULL DEFAULT '{}',
+          imported_at TEXT NOT NULL
+        ) STRICT;
+        CREATE UNIQUE INDEX skill_versions_hash_name ON skill_versions (tree_hash, name);
+        CREATE INDEX skill_versions_source ON skill_versions (source_id);
+
+        -- A version's files; their bytes live in the blob store. mode is 0644 (420) or 0755 (493).
+        CREATE TABLE skill_files (
+          version_id TEXT NOT NULL REFERENCES skill_versions (id) ON DELETE CASCADE,
+          path TEXT NOT NULL,
+          blob_sha256 TEXT NOT NULL,
+          size INTEGER NOT NULL,
+          mode INTEGER NOT NULL CHECK (mode IN (420, 493)),
+          kind TEXT NOT NULL CHECK (kind IN ('skill_md', 'markdown', 'text', 'script', 'asset')),
+          interpreter TEXT,
+          PRIMARY KEY (version_id, path)
+        ) STRICT;
+        CREATE INDEX skill_files_blob ON skill_files (blob_sha256);
+
+        -- Review decisions per tree hash. Never edited: a new decision is a new row, and the latest decides.
+        CREATE TABLE skill_reviews (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tree_hash TEXT NOT NULL,
+          decision TEXT NOT NULL CHECK (decision IN ('approved', 'rejected', 'revoked')),
+          note TEXT NOT NULL DEFAULT '',
+          -- {"findings": [ids], "license": bool}
+          acknowledged TEXT NOT NULL DEFAULT '{}',
+          -- A short hash of the signed-in session (one shared admin sign-in), never the token.
+          session TEXT,
+          at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX skill_reviews_hash ON skill_reviews (tree_hash, id);
+
+        -- FR21: per workspace, what its last delivery shipped and what verification last saw (delivered
+        -- names only, never file content).
+        CREATE TABLE skill_inventory (
+          workspace_id TEXT PRIMARY KEY,
+          observed_at TEXT,
+          method TEXT CHECK (method IN ('details', 'init')),
+          status TEXT CHECK (status IN ('verified', 'mismatch', 'error', 'not_verified')),
+          plugins TEXT NOT NULL DEFAULT '[]',
+          skills TEXT NOT NULL DEFAULT '[]',
+          hand_copied TEXT NOT NULL DEFAULT '[]',
+          detail TEXT,
+          -- Consecutive mismatches or timeouts: reported only on the second (FR23).
+          attempts INTEGER NOT NULL DEFAULT 0,
+          -- What the last delivery shipped: [{poolId, revision, prefix, folder, skills}], and its hash.
+          expected TEXT NOT NULL DEFAULT '[]',
+          expected_hash TEXT,
+          -- When the shipped skills last changed, for the reload notice (§10.4).
+          changed_at TEXT,
+          -- Skillset plugin version folders still in the workspace, as the engine reports them: plugin → [hash12].
+          folders TEXT NOT NULL DEFAULT '{}'
+        ) STRICT;
+
+        -- Which skill versions each compiled version folder holds, so revoking one finds every folder to
+        -- delete at once (§11.3), retained ones included.
+        CREATE TABLE skill_plugin_folders (
+          plugin TEXT NOT NULL,
+          hash12 TEXT NOT NULL,
+          tree_hashes TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (plugin, hash12)
+        ) STRICT;
+
+        -- A5: the blob store's files (<dataDir>/blobs/sha256/<aa>/<sha256>), for garbage collection.
+        CREATE TABLE blobs (
+          sha256 TEXT PRIMARY KEY,
+          size INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          unreferenced_since TEXT
+        ) STRICT;
+      `);
+    },
+  },
 ];
 
 /**
  * Every column that holds sealed values. `portal rotate-key` re-seals them and `portal
  * forget-secrets` clears them, so a migration that adds one must list it here.
  */
-export const ENCRYPTED_COLUMNS: EncryptedColumn[] = [{ table: 'accounts', column: 'secret', idColumn: 'id' }];
+export const ENCRYPTED_COLUMNS: EncryptedColumn[] = [
+  { table: 'accounts', column: 'secret', idColumn: 'id' },
+  { table: 'secret_values', column: 'ciphertext', idColumn: 'id' },
+  { table: 'skill_sources', column: 'token', idColumn: 'id' },
+];

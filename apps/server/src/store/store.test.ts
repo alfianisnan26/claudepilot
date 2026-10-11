@@ -116,6 +116,22 @@ test('migrating an existing database takes a backup first', async () => {
   store.close();
 });
 
+test('a migration numbered below one already applied still runs (side-by-side work)', async () => {
+  const dir = tempDir();
+  const later: Migration = { version: LATEST + 2, name: 'later', up: (db) => db.exec('CREATE TABLE later_t (id INTEGER) STRICT') };
+  const earlier: Migration = { version: LATEST + 1, name: 'earlier', up: (db) => db.exec('CREATE TABLE earlier_t (id INTEGER) STRICT') };
+  (await Store.open({ dataDir: dir, secretKey: null, migrations: [...MIGRATIONS, later] })).close();
+  const store = await Store.open({ dataDir: dir, secretKey: null, migrations: [...MIGRATIONS, earlier, later] });
+  assert.equal(store.trust.state === 'frozen' ? store.trust.reasons[0]!.code : 'ok', 'ok');
+  assert.ok(store.db!.prepare("SELECT name FROM sqlite_master WHERE name = 'earlier_t'").get(), 'the earlier-numbered migration ran');
+  assert.equal(store.schemaVersion, LATEST + 2);
+  store.close();
+  // And nothing reruns on the next open.
+  const again = await Store.open({ dataDir: dir, secretKey: null, migrations: [...MIGRATIONS, earlier, later] });
+  assert.equal(again.listBackups().filter((b) => b.kind === 'pre-migrate').length, 1, 'only the one migrating open took a backup');
+  again.close();
+});
+
 test('a failing migration rolls back and freezes the portal', async () => {
   const dir = tempDir();
   (await Store.open({ dataDir: dir, secretKey: newKey() })).close();

@@ -372,7 +372,7 @@ async function tarOf(entries: TarEntry[]): Promise<Buffer> {
     const name = e.path.replace(/^\/+/, '');
     const header = { name, mode: e.mode, uid: e.uid, gid: e.gid, mtime: new Date() };
     if (e.type === 'directory') p.entry({ ...header, type: 'directory' });
-    else p.entry({ ...header, type: 'file' }, e.content ?? '');
+    else p.entry({ ...header, type: 'file' }, e.bytes ?? e.content ?? '');
   }
   p.finalize();
   const chunks: Buffer[] = [];

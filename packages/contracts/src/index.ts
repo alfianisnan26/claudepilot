@@ -4,3 +4,7 @@ export * from './workspace.js';
 export * from './accounts.js';
 export * from './live.js';
 export * from './chat.js';
+export * from './pools.js';
+export * from './mcp.js';
+export * from './skills.js';
+export * from './secrets.js';

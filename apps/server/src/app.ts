@@ -51,6 +51,13 @@ import { deliveryState, workspaceView } from './workspaces/view.js';
 import { generateSecretKey, parseSecretKey, SecretKeyError } from './store/secretBox.js';
 import type { Store } from './store/store.js';
 import type { Workspaces } from './workspaces/manager.js';
+import { createPoolRoutes, createWorkspacePoolRoutes } from './pools/routes.js';
+import { createSecretsRoutes } from './secrets/routes.js';
+import type { PoolService } from './pools/service.js';
+import type { McpSets } from './mcp/index.js';
+import { createMcpRoutes } from './mcp/routes.js';
+import type { SkillsModule } from './skills/module.js';
+import { createSkillRoutes } from './skills/routes.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
 
@@ -74,7 +81,22 @@ export function createApp(
   reconciler: Reconciler,
   health: AccountHealthService,
   chatController: ChatController,
-  { serveWeb, notify = () => {} }: { serveWeb: boolean; notify?: (...topics: LiveTopic[]) => void },
+  {
+    serveWeb,
+    notify = () => {},
+    poolService,
+    mcp,
+    skills,
+  }: {
+    serveWeb: boolean;
+    notify?: (...topics: LiveTopic[]) => void;
+    /** Multi-assignment pools (secrets & env, skillsets, MCP sets). */
+    poolService: PoolService;
+    /** MCP sets: the catalog and each workspace's MCP status (`/api/mcp`). */
+    mcp?: McpSets;
+    /** Skillsets: the skill library, reviews and each workspace's skills (`/api/skills`). */
+    skills?: SkillsModule;
+  },
 ) {
   const app = new Hono<Env>();
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
@@ -293,9 +315,11 @@ export function createApp(
     const poolId = req.accountPoolId ?? null;
     if (poolId && !pools.list().some((p) => p.id === poolId))
       throw new AppError('VALIDATION_FAILED', 'That account pool no longer exists.', { details: { accountPoolId: 'Pick another pool.' } });
+    const addOns = poolService.checkAddOns(req.pools);
     const created = await workspaces.create(req);
     // A new workspace has no sign-in of its own yet, so no override confirmation is needed.
     if (poolId) pools.assign(created.id, { poolId }, { existing: false });
+    for (const [type, ids] of Object.entries(addOns)) poolService.setAssignments(created.id, type, ids.map((id) => ({ poolId: id })));
     console.log(`[workspaces] creating ${created.id}${poolId ? ' with an account pool' : ''}`);
     return c.json(success(decorate(created)), 202);
   });
@@ -324,8 +348,13 @@ export function createApp(
   ws.delete('/:target/:name', async (c) => {
     await workspaces.remove(c.req.param('target'), c.req.param('name'));
     pools.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
+    poolService.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     return c.json(success({ ok: true }));
   });
+  // A workspace's multi-assignment pools: GET …/pools, PUT …/pools/:type.
+  ws.route('/', createWorkspacePoolRoutes({ service: poolService, reconciler }));
+  // Secrets & env: what a workspace's sets deliver (names only) and the migration check (FR15).
+  ws.route('/', createSecretsRoutes({ pools: poolService, workspaces }));
   app.route('/api/workspaces', ws);
 
   const acc = new Hono<Env>();
@@ -374,6 +403,28 @@ export function createApp(
     return c.json(success({ ok: true }));
   });
   app.route('/api/account-pools', ap);
+
+  // Multi-assignment pools (secrets & env, skillsets, MCP sets): one set of routes for every type.
+  const pl = new Hono<Env>();
+  pl.use(requireSession);
+  pl.route('/', createPoolRoutes({ service: poolService }));
+  app.route('/api/pools', pl);
+
+  // MCP sets: the catalog, "Try in set" and each workspace's MCP status (the sets use /api/pools/mcpset).
+  if (mcp) {
+    const mc = new Hono<Env>();
+    mc.use(requireSession);
+    mc.route('/', createMcpRoutes(mcp));
+    app.route('/api/mcp', mc);
+  }
+
+  // Skillsets: the library, imports, reviews and each workspace's skills (the sets use /api/pools/skillset).
+  if (skills) {
+    const sk = new Hono<Env>();
+    sk.use(requireSession);
+    sk.route('/', createSkillRoutes(skills));
+    app.route('/api/skills', sk);
+  }
 
   // Chat sessions (REST); the live part rides its own socket (chat/socket.ts).
   const chat = new Hono<Env>();

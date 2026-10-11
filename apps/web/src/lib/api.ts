@@ -3,7 +3,18 @@ import { track } from '@isnanme/ui';
 import {
   ACCOUNT_API,
   API,
+  POOLS_API,
   WORKSPACE_API,
+  type AssignPoolResult,
+  type MultiPoolType,
+  type PoolDetail,
+  type PoolPreview,
+  type PoolPreviewRequest,
+  type PoolRequest,
+  type PoolSummary,
+  type SetWorkspacePoolsRequest,
+  type SetWorkspacePoolsResult,
+  type WorkspacePools,
   type Account,
   type AccountPool,
   type AccountPoolRequest,
@@ -120,6 +131,26 @@ export const api = {
     claudeLoginCode: (id: string, code: string) => request<{ ok: true }>('POST', WORKSPACE_API.claudeLoginCode(id), { code }),
     cancelClaudeLogin: (id: string) => request<{ ok: true }>('DELETE', WORKSPACE_API.claudeLogin(id)),
     claudeLogout: (id: string) => request<{ ok: true }>('POST', WORKSPACE_API.claudeLogout(id)),
+  },
+  /** Multi-assignment pools (secrets & env, skillsets, MCP sets): one API for every type. */
+  pools: {
+    types: () => request<{ types: MultiPoolType[] }>('GET', POOLS_API.types),
+    list: (type: MultiPoolType) => request<PoolSummary[]>('GET', POOLS_API.list(type)),
+    get: (type: MultiPoolType, id: string) => request<PoolDetail>('GET', POOLS_API.one(type, id)),
+    create: (type: MultiPoolType, body: PoolRequest) => request<PoolSummary>('POST', POOLS_API.list(type), body),
+    update: (type: MultiPoolType, id: string, body: Partial<PoolRequest>) => request<PoolSummary>('PUT', POOLS_API.one(type, id), body),
+    remove: (type: MultiPoolType, id: string) => request<{ ok: true }>('DELETE', POOLS_API.one(type, id)),
+    duplicate: (type: MultiPoolType, id: string, name: string) => request<PoolSummary>('POST', POOLS_API.duplicate(type, id), { name }),
+    approve: (type: MultiPoolType, id: string, revision: number) => request<PoolSummary>('POST', POOLS_API.approve(type, id, revision)),
+    makeCurrent: (type: MultiPoolType, id: string, revision: number) => request<PoolSummary>('POST', POOLS_API.current(type, id, revision)),
+    rollout: (type: MultiPoolType, id: string, paused: boolean, reason?: string) =>
+      request<PoolSummary>('POST', POOLS_API.rollout(type, id), { paused, reason }),
+    assign: (type: MultiPoolType, id: string, workspaceIds: string[]) => request<AssignPoolResult>('POST', POOLS_API.assign(type, id), { workspaceIds }),
+    /** `id` null: a pool not saved yet (then `content` is required). */
+    preview: (type: MultiPoolType, id: string | null, body: PoolPreviewRequest = {}) => request<PoolPreview>('POST', POOLS_API.preview(type, id), body),
+    workspace: (workspaceId: string) => request<WorkspacePools>('GET', POOLS_API.workspace(workspaceId)),
+    setWorkspace: (workspaceId: string, type: MultiPoolType, body: SetWorkspacePoolsRequest) =>
+      request<SetWorkspacePoolsResult>('PUT', POOLS_API.workspaceType(workspaceId, type), body),
   },
 };
 

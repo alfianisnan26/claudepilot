@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 const VERSION = 'v1';
@@ -57,11 +57,22 @@ const slotData = (s: SecretSlot) => Buffer.from(`${s.table}\0${s.row}\0${s.colum
 export class SecretBox {
   readonly keyId: string;
   readonly #dataKey: Buffer;
+  readonly #fingerprintKey: Buffer;
 
   constructor(masterKey: Buffer) {
     if (masterKey.length !== KEY_BYTES) throw new SecretKeyError(`Secret key must be ${KEY_BYTES} bytes.`);
     this.#dataKey = derive(masterKey, 'claudepilot/data-key/v1');
+    this.#fingerprintKey = derive(masterKey, 'claudepilot/fingerprint-key/v1');
     this.keyId = createHash('sha256').update(derive(masterKey, 'claudepilot/key-id/v1')).digest('hex').slice(0, 12);
+  }
+
+  /**
+   * A keyed fingerprint of a secret (secrets PRD A11): HMAC-SHA256 under its own key derived from the
+   * portal's secret key, so a stolen database can't test guesses against it the way it could a plain
+   * hash. Hex; callers keep as much as they show. Under another key (`keyId`) the same value differs.
+   */
+  fingerprint(value: string): string {
+    return createHmac('sha256', this.#fingerprintKey).update(value, 'utf8').digest('hex');
   }
 
   seal(plaintext: string, slot: SecretSlot): string {
