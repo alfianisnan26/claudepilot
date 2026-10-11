@@ -1,152 +1,108 @@
-import { cn, Spinner } from '@isnanme/ui';
-import type { AccountPool, AccountsOverview, Workspace } from '@portal/contracts';
-import { Check, KeyRound, Layers, Lock, Send, SquareTerminal } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
-import { api } from '@/lib/api';
+import { Button, buttonClass, cn } from '@isnanme/ui';
+import type { Workspace } from '@portal/contracts';
+import { Box, Layers, Play, SquareTerminal } from 'lucide-react';
+import { useState } from 'react';
+import { Link } from 'react-router';
 
-/** One thing a session needs; `go` is what the dialog's main button does for it. */
-export interface SetupStep {
-  id: string;
-  label: string;
-  icon: ReactNode;
-  done: boolean;
-  /** Shown under the next step only: what's in the way, briefly. */
-  hint?: string;
-  go?: { label: string; to?: string; run?: () => Promise<void> };
+/** Why a workspace can't host a session, and the way out (chat PRD FR1 and §11's state table). */
+function wayOut(w: Workspace): { reason: string; to?: { label: string; href: string }; start?: boolean; shell: boolean } {
+  const shell = w.status === 'running';
+  if (w.status === 'stopped') return { reason: 'Stopped', start: true, shell };
+  if (w.status !== 'running') return { reason: w.status === 'error' ? 'Error' : 'Not ready yet', shell };
+  if (!w.account) return { reason: 'No account pool', to: { label: 'Assign', href: '/admin/workspaces' }, shell };
+  if (w.account.state === 'removing') return { reason: 'Pool change in progress', shell };
+  if (w.account.state === 'waiting') return { reason: 'Pool has no usable key', to: { label: 'Accounts', href: '/admin/accounts' }, shell };
+  if (w.delivery?.status === 'locked') return { reason: 'Keys locked', to: { label: 'Access', href: '/admin/access' }, shell };
+  return { reason: 'Delivery not up to date', shell };
 }
+
+const shellHref = (w: Workspace) => `/admin/workspaces/${w.id}/shell`;
 
 /**
- * What stands between this portal and a first session, in order (sessions run only on an account
- * pool's keys, chat PRD §6 rule 1): encryption on, a key, a pool, a running workspace, the pool
- * assigned to it, and its delivery landed. Loaded only while the dialog needs it.
+ * No workspace can host a session (US8): each one says why, with its way out, Start, Assign or
+ * Open shell. Sessions run only on an account pool's keys (§6); a workspace signed in to Claude
+ * itself is used from its shell, which is the dialog's main button.
  */
-export function useSessionSetup(active: boolean, workspaces: Workspace[] | null, reloadWorkspaces: () => Promise<void>) {
-  const [overview, setOverview] = useState<AccountsOverview | null>(null);
-  const [pools, setPools] = useState<AccountPool[] | null>(null);
+export function NoSessionWorkspace({
+  workspaces,
+  onStart,
+  onLeave,
+}: {
+  workspaces: Workspace[];
+  onStart: (w: Workspace) => Promise<void>;
+  /** Closes the dialog before a link takes the person elsewhere. */
+  onLeave: () => void;
+}) {
+  const [starting, setStarting] = useState<string | null>(null);
+  const shown = [...workspaces].sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running'));
 
-  useEffect(() => {
-    if (!active) return;
-    let current = true;
-    Promise.all([api.accounts.overview(), api.accounts.pools()]).then(
-      ([o, p]) => current && (setOverview(o), setPools(p)),
-      () => current && (setOverview(null), setPools([])),
-    );
-    return () => {
-      current = false;
-    };
-  }, [active]);
-
-  if (!active || !workspaces || !pools) return { loading: active, steps: [] as SetupStep[], next: undefined };
-
-  const usable = (overview?.accounts ?? []).filter((a) => a.enabled && a.hasSecret);
-  const poolWithKey = pools.find((p) => p.members.some((m) => m.enabled && usable.some((a) => a.id === m.accountId)));
-  const running = workspaces.filter((w) => w.status === 'running');
-  const stopped = workspaces.find((w) => w.status === 'stopped');
-  const assigned = running.find((w) => w.account && w.account.state !== 'removing');
-
-  const steps: SetupStep[] = [
-    {
-      id: 'unlock',
-      label: 'Encryption on',
-      icon: <Lock className="size-4" />,
-      done: !!overview && !overview.locked,
-      hint: overview?.locked ? 'Keys can’t be stored until it is.' : undefined,
-      go: { label: 'Set up encryption', to: '/admin/access' },
-    },
-    {
-      id: 'key',
-      label: 'An API key',
-      icon: <KeyRound className="size-4" />,
-      done: usable.length > 0,
-      go: { label: 'Add a key', to: '/admin/accounts' },
-    },
-    {
-      id: 'pool',
-      label: 'A pool with that key',
-      icon: <Layers className="size-4" />,
-      done: !!poolWithKey,
-      go: { label: 'Make a pool', to: '/admin/accounts' },
-    },
-    {
-      id: 'running',
-      label: 'A running workspace',
-      icon: <SquareTerminal className="size-4" />,
-      done: running.length > 0,
-      go: stopped
-        ? {
-            label: `Start ${stopped.name}`,
-            run: async () => {
-              await api.workspaces.start(stopped.id);
-              await reloadWorkspaces();
-            },
-          }
-        : { label: 'Create a workspace', to: '/admin/workspaces' },
-    },
-    {
-      id: 'assign',
-      label: 'The pool on that workspace',
-      icon: <Layers className="size-4" />,
-      done: !!assigned,
-      hint: running.length ? `Workspaces → ${running[0]!.name} → Account pool.` : undefined,
-      go: { label: 'Assign the pool', to: '/admin/workspaces' },
-    },
-    {
-      id: 'delivered',
-      label: 'Keys delivered',
-      icon: <Send className="size-4" />,
-      done: false,
-      hint:
-        assigned?.account?.state === 'waiting'
-          ? 'The pool has no usable key right now.'
-          : (assigned?.delivery?.reason ?? 'Usually takes a few seconds after assigning.'),
-    },
-  ];
-  return { loading: false, steps, next: steps.find((s) => !s.done) };
-}
-
-/** The steps as a checklist: done ones ticked, the next one highlighted, the rest dimmed. */
-export function SessionSetup({ steps, next, loading }: { steps: SetupStep[]; next?: SetupStep; loading: boolean }) {
-  if (loading)
+  if (shown.length === 0)
     return (
-      <p className="flex items-center gap-2 text-sm text-muted" aria-busy="true">
-        <Spinner className="size-4" /> Checking what’s set up…
+      <p className="text-sm text-muted">
+        Start a workspace first.{' '}
+        <Link to="/admin/workspaces" onClick={onLeave} className="font-semibold text-ink underline underline-offset-2">
+          Workspaces
+        </Link>
       </p>
     );
+
   return (
     <div className="flex flex-col gap-3">
-      <ol className="flex flex-col gap-1">
-        {steps.map((s, i) => {
-          const isNext = s === next;
+      <ul className="flex flex-col divide-y divide-line rounded-2xl border border-line">
+        {shown.map((w) => {
+          const way = wayOut(w);
           return (
-            <li
-              key={s.id}
-              className={cn(
-                'flex items-center gap-3 rounded-xl px-3 py-2 text-sm',
-                isNext && 'bg-surface-2',
-                !s.done && !isNext && 'opacity-45',
-              )}
-            >
+            <li key={w.id} className="flex items-center gap-3 px-3.5 py-2.5">
               <span
                 className={cn(
-                  'flex size-7 shrink-0 items-center justify-center rounded-full',
-                  s.done ? 'bg-accent-soft text-accent' : isNext ? 'bg-ink text-bg' : 'bg-surface-2 text-muted',
+                  'flex size-8 shrink-0 items-center justify-center rounded-lg',
+                  w.status === 'running' ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-ink-soft',
                 )}
-                aria-hidden="true"
               >
-                {s.done ? <Check className="size-4" /> : s.icon}
+                <Box className="size-4" />
               </span>
-              <div className="min-w-0">
-                <p className={cn('font-medium', s.done && 'text-muted')}>
-                  <span className="sr-only">{s.done ? 'Done: ' : isNext ? 'Next: ' : `Step ${i + 1}: `}</span>
-                  {s.label}
-                </p>
-                {isNext && s.hint && <p className="text-[13px] text-muted">{s.hint}</p>}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold">{w.name}</p>
+                <p className="truncate text-[12.5px] text-muted">{way.reason}</p>
               </div>
+              {way.start && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<Play className="size-4" />}
+                  loading={starting === w.id}
+                  onClick={() => {
+                    setStarting(w.id);
+                    void onStart(w).finally(() => setStarting(null));
+                  }}
+                >
+                  Start
+                </Button>
+              )}
+              {way.to && (
+                <Link to={way.to.href} onClick={onLeave} className={buttonClass('ghost', 'sm')}>
+                  {way.to.label === 'Assign' && <Layers className="size-4" />}
+                  {way.to.label}
+                </Link>
+              )}
+              {way.shell && (
+                <Link to={shellHref(w)} onClick={onLeave} className={buttonClass('secondary', 'sm')} aria-label={`Open shell in ${w.name}`}>
+                  <SquareTerminal className="size-4" />
+                </Link>
+              )}
             </li>
           );
         })}
-      </ol>
-      <p className="text-xs text-muted">Sessions use a pool’s API keys. Your own Claude sign-in works in the workspace’s shell.</p>
+      </ul>
+      <p className="text-[13px] text-muted">
+        Sessions need an account pool in the workspace. Signed in to Claude yourself? Use it in the shell.
+      </p>
     </div>
   );
+}
+
+/** Where the main button goes when no workspace can host a session: the first running one's shell. */
+export function firstShell(workspaces: Workspace[]): string | null {
+  const running = workspaces.find((w) => w.status === 'running');
+  return running ? shellHref(running) : null;
 }

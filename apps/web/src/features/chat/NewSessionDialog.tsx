@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { api, errorText } from '@/lib/api';
 import { chatApi } from './api';
-import { SessionSetup, useSessionSetup } from './SessionSetup';
+import { firstShell, NoSessionWorkspace } from './SessionSetup';
 import { HOME, isIneligible } from './shared';
 import { isFolderUntrusted, scanAfter, TrustDetails } from './TrustSheet';
 
@@ -103,27 +103,21 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
     );
 
   const all = workspaces ?? [];
-  // No workspace can host a session yet: walk through what's missing instead of a dead end.
+  // No workspace can host a session (US8): each says why, with its way out; the main button opens a shell.
   const needsSetup = workspaces !== null && !all.some((w) => !ineligible(w));
-  const setup = useSessionSetup(open && needsSetup && !trust, workspaces, reload);
-  const go = setup.next?.go;
-
-  /** The main button while setting up: go where the next step is done, or do it here. */
-  const runNext = async () => {
-    if (!go) return;
-    if (go.to) {
-      onClose();
-      return void navigate(go.to);
-    }
-    setSaving(true);
+  const shell = needsSetup ? firstShell(all) : null;
+  const startWorkspace = async (w: Workspace) => {
     setError(null);
     try {
-      await go.run?.();
+      await api.workspaces.start(w.id);
+      await reload();
     } catch (e) {
-      setError(errorText(e, 'That didn’t work.'));
-    } finally {
-      setSaving(false);
+      setError(errorText(e, `Couldn’t start ${w.name}.`));
     }
+  };
+  const goNext = () => {
+    onClose();
+    navigate(shell ?? '/admin/workspaces');
   };
 
   /** The folder needs trust: show what it would load (a fresh scan when its files changed since the last). */
@@ -194,19 +188,19 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
       size="sm"
       title={trust ? 'Trust this folder?' : 'New session'}
       description={
-        trust ? <span className="font-mono break-all">{trust.scan.folder}</span> : needsSetup ? 'A few things first.' : 'Chat with Claude Code in a workspace.'
+        trust ? <span className="font-mono break-all">{trust.scan.folder}</span> : needsSetup ? 'No workspace is ready for sessions.' : 'Chat with Claude Code in a workspace.'
       }
-      onSubmit={trust ? trustAndStart : needsSetup ? runNext : submit}
-      submitLabel={trust ? 'Trust and start' : needsSetup ? (go?.label ?? 'Start') : 'Start'}
+      onSubmit={trust ? trustAndStart : needsSetup ? goNext : submit}
+      submitLabel={trust ? 'Trust and start' : needsSetup ? (shell ? 'Open shell' : 'Workspaces') : 'Start'}
       saving={saving}
-      submitDisabled={trust ? false : needsSetup ? !go : !workspaceId}
+      submitDisabled={trust ? false : needsSetup ? false : !workspaceId}
       error={error}
       dirty={!trust && (!!title || folder.trim() !== HOME)}
     >
       {trust ? (
         <TrustDetails scan={trust.scan} changed={trust.changed} />
       ) : needsSetup ? (
-        <SessionSetup steps={setup.steps} next={setup.next} loading={setup.loading} />
+        <NoSessionWorkspace workspaces={all} onStart={startWorkspace} onLeave={onClose} />
       ) : (
         <div className="flex flex-col gap-4">
           <Select
