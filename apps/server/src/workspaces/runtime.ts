@@ -78,7 +78,8 @@ export interface Runtime {
   /** Removes the workspace and its home volume. */
   remove(name: string): Promise<void>;
   usage(names: string[]): Promise<Omit<WorkspaceUsage, 'id'>[]>;
-  shell(name: string, size: { cols: number; rows: number }): Promise<ShellSession>;
+  /** A terminal running `command` (a login shell when absent), as the workspace user. */
+  shell(name: string, size: { cols: number; rows: number }, command?: string[]): Promise<ShellSession>;
   /** Runs `command` as the workspace user, with stdin open, no terminal. */
   exec(name: string, command: string[]): Promise<ExecSession>;
   /** Calls `onChange` when a workspace changes outside the portal's own calls, when the runtime can tell. */

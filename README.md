@@ -103,6 +103,12 @@ Targets (each shows up when reachable):
   `PORTAL_K8S_STORAGE` (`10Gi`), `PORTAL_K8S_STORAGE_CLASS`, `PORTAL_K8S_ENABLED=false` to turn it off.
 - The shell is a WebSocket at `/api/workspaces/<target>/<name>/shell`; it needs a session cookie and a
   same-origin `Origin`.
+- **Terminals** keep running without a browser: each is a tmux session (`cp-claude-1`, `cp-shell-2`, …)
+  as the workspace's user, up to 8 per workspace. A Claude terminal runs Claude Code on the workspace's
+  own Claude sign-in (and drops to a shell when it exits), so several can work side by side; the shell
+  page shows them as tabs (`…/shell?term=claude-1`), and New opens one in a folder. tmux is installed
+  through passwordless sudo when missing (workspace images ship it), and Claude Code with its own
+  installer. Terminals are terminals, not chat sessions: those still need an account pool.
 
 ## Accounts
 

@@ -26,6 +26,8 @@ import {
   type ClaudeAuthStatus,
   type ClaudeLoginRequest,
   type ClaudeLoginStart,
+  type CreateTerminalRequest,
+  type WorkspaceTerminal,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -47,6 +49,7 @@ import { config } from './config.js';
 import type { Portal } from './portal.js';
 import { RateLimiter } from './rateLimit.js';
 import { ClaudeLogins } from './workspaces/claudeLogin.js';
+import { Terminals } from './workspaces/terminals.js';
 import { deliveryState, workspaceView } from './workspaces/view.js';
 import { generateSecretKey, parseSecretKey, SecretKeyError } from './store/secretBox.js';
 import type { Store } from './store/store.js';
@@ -285,6 +288,20 @@ export function createApp(
   });
   ws.post('/:target/:name/claude-logout', async (c) => {
     await logins.logout(...ownSignIn(c));
+    return c.json(success({ ok: true }));
+  });
+
+  // Terminals that outlive the browser (tmux sessions), several Claude Codes side by side.
+  const terminals = new Terminals(workspaces, logins);
+  ws.get('/:target/:name/terminals', async (c) =>
+    c.json(success<WorkspaceTerminal[]>(await terminals.list(c.req.param('target'), c.req.param('name')))),
+  );
+  ws.post('/:target/:name/terminals', async (c) => {
+    const req = (await c.req.json().catch(() => ({}))) as Partial<CreateTerminalRequest> | null;
+    return c.json(success<WorkspaceTerminal>(await terminals.create(c.req.param('target'), c.req.param('name'), req ?? {})), 201);
+  });
+  ws.delete('/:target/:name/terminals/:term', async (c) => {
+    await terminals.close(c.req.param('target'), c.req.param('name'), c.req.param('term'));
     return c.json(success({ ok: true }));
   });
   ws.get('/', async (c) => c.json(success((await workspaces.list()).map(decorate))));

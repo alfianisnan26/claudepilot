@@ -82,7 +82,38 @@ export const WORKSPACE_API = {
   /** POST `{ code }`: the code the sign-in page showed. */
   claudeLoginCode: (id: string) => `/api/workspaces/${id}/claude-login/code`,
   claudeLogout: (id: string) => `/api/workspaces/${id}/claude-logout`,
+  /** GET lists, POST opens one (`CreateTerminalRequest`); DELETE `…/terminals/<terminal>` closes it. */
+  terminals: (id: string) => `/api/workspaces/${id}/terminals`,
 } as const;
+
+/** How many terminals a workspace keeps open at once (each Claude Code takes a few hundred MB). */
+export const TERMINAL_MAX = 8;
+
+/** `claude`: Claude Code, falling back to a shell when it exits; `shell`: a login shell. */
+export type TerminalKind = 'claude' | 'shell';
+
+/**
+ * A terminal that outlives the browser: a tmux session in the workspace, run as its user with its
+ * own Claude sign-in. Several can run side by side; the shell socket attaches with `?term=<id>`.
+ */
+export interface WorkspaceTerminal {
+  /** `claude-1`, `shell-2`, …: the tmux session is `cp-<id>`. */
+  id: string;
+  kind: TerminalKind;
+  /** The folder its current program runs in. */
+  cwd: string;
+  /** What runs in it now (`claude`, `bash`, `vim`, …). */
+  command: string;
+  createdAt: string;
+  /** Browser tabs (or other clients) attached right now. */
+  attached: number;
+}
+
+export interface CreateTerminalRequest {
+  kind: TerminalKind;
+  /** Where it starts: `~`, `~/work/api` or an absolute path. The home folder when absent. */
+  cwd?: string;
+}
 
 /** `POST …/claude-login` body: `sso` for organizations that sign in through their identity provider. */
 export interface ClaudeLoginRequest {

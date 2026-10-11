@@ -14,6 +14,8 @@ import {
   type ClaudeAuthStatus,
   type ClaudeLoginRequest,
   type ClaudeLoginStart,
+  type CreateTerminalRequest,
+  type WorkspaceTerminal,
   type CreateAccountRequest,
   type KeySetupResult,
   type KeyUnlockResult,
@@ -120,6 +122,9 @@ export const api = {
     claudeLoginCode: (id: string, code: string) => request<{ ok: true }>('POST', WORKSPACE_API.claudeLoginCode(id), { code }),
     cancelClaudeLogin: (id: string) => request<{ ok: true }>('DELETE', WORKSPACE_API.claudeLogin(id)),
     claudeLogout: (id: string) => request<{ ok: true }>('POST', WORKSPACE_API.claudeLogout(id)),
+    terminals: (id: string) => request<WorkspaceTerminal[]>('GET', WORKSPACE_API.terminals(id)),
+    openTerminal: (id: string, body: CreateTerminalRequest) => request<WorkspaceTerminal>('POST', WORKSPACE_API.terminals(id), body),
+    closeTerminal: (id: string, terminal: string) => request<{ ok: true }>('DELETE', `${WORKSPACE_API.terminals(id)}/${terminal}`),
   },
 };
 

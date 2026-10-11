@@ -2,6 +2,7 @@ import { AppError } from '@isnanme/core';
 import type { ClaudeAuthStatus } from '@portal/contracts';
 import type { Workspaces } from './manager.js';
 import type { ExecSession } from './runtime.js';
+import { runToEnd } from './runToEnd.js';
 
 /** How long a started sign-in waits for its code; `timeout` also ends it inside the workspace. */
 const LOGIN_LIMIT_S = 15 * 60;
@@ -84,7 +85,7 @@ export class ClaudeLogins {
   async start(target: string, name: string, opts: { sso?: boolean; email?: string | null } = {}): Promise<{ url: string }> {
     const id = `${target}/${name}`;
     await this.cancel(target, name);
-    await this.#ensureInstalled(target, name);
+    await this.ensureInstalled(target, name);
     // Options go in as arguments ("$@"), never through the shell's parsing.
     const email = cleanEmail(opts.email);
     const args = ['--claudeai', ...(opts.sso ? ['--sso'] : []), ...(email ? ['--email', email] : [])];
@@ -184,9 +185,9 @@ export class ClaudeLogins {
 
   /**
    * Installs Claude Code in the workspace when it's missing (workspace images ship it; this machine
-   * may not), with Claude Code's own installer, as the workspace's user.
+   * may not), with Claude Code's own installer, as the workspace's user. Terminals use it too.
    */
-  #ensureInstalled(target: string, name: string): Promise<void> {
+  ensureInstalled(target: string, name: string): Promise<void> {
     const id = `${target}/${name}`;
     const running = this.#installs.get(id);
     if (running) return running;
@@ -226,15 +227,7 @@ export class ClaudeLogins {
   }
 
   /** A command, to completion (10 s at most unless `ms` says otherwise; null code when it ran out). */
-  async #run(target: string, name: string, command: string[], ms = 10_000): Promise<{ code: number | null; output: string }> {
-    const exec = await this.workspaces.exec(target, name, command);
-    let output = '';
-    exec.onData((d) => (output = (output + d.toString('utf8')).slice(-OUTPUT_MAX)));
-    const code = await new Promise<number | null>((resolve) => {
-      const timer = setTimeout(() => resolve(null), ms);
-      exec.onExit((c) => (clearTimeout(timer), resolve(c)));
-    });
-    exec.close();
-    return { code, output };
+  #run(target: string, name: string, command: string[], ms = 10_000): Promise<{ code: number | null; output: string }> {
+    return runToEnd(this.workspaces, target, name, command, ms);
   }
 }

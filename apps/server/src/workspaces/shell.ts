@@ -6,6 +6,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { config } from '../config.js';
 import type { Portal } from '../portal.js';
 import { runtimeMessage, type Workspaces } from './manager.js';
+import { attachCommand, TERMINAL_ID } from './terminals.js';
 
 const SHELL_PATH = /^\/api\/workspaces\/([a-z0-9-]+)\/([a-z0-9-]+)\/shell$/;
 const PING_MS = 25_000;
@@ -55,19 +56,22 @@ export function attachShell(server: Server, portal: Portal, workspaces: Workspac
       cols: clamp(Number(url.searchParams.get('cols')), 20, 500),
       rows: clamp(Number(url.searchParams.get('rows')), 5, 200),
     };
-    wss.handleUpgrade(req, socket, head, (ws) => void run(ws, target, name, size));
+    // `?term=claude-1`: attach to that terminal (a tmux session that outlives this socket).
+    const term = url.searchParams.get('term');
+    if (term !== null && !TERMINAL_ID.test(term)) return refuse(socket, 400, 'Bad Request');
+    wss.handleUpgrade(req, socket, head, (ws) => void run(ws, target, name, size, term ?? undefined));
   });
 
-  async function run(ws: WebSocket, target: string, name: string, size: { cols: number; rows: number }) {
+  async function run(ws: WebSocket, target: string, name: string, size: { cols: number; rows: number }, term?: string) {
     const send = (msg: ShellServerMessage) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(msg));
     let shell;
     try {
-      shell = await workspaces.shell(target, name, size);
+      shell = await workspaces.shell(target, name, size, term ? attachCommand(term) : undefined);
     } catch (e) {
       send({ type: 'error', message: isAppError(e) ? e.message : runtimeMessage(e) });
       return ws.close(1011);
     }
-    console.log(`[workspaces] shell opened in ${target}/${name}`);
+    console.log(`[workspaces] shell opened in ${target}/${name}${term ? ` (${term})` : ''}`);
     send({ type: 'ready' });
 
     let alive = true;

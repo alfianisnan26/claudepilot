@@ -287,9 +287,9 @@ export class DockerRuntime implements Runtime {
     );
   }
 
-  async shell(name: string, size: { cols: number; rows: number }): Promise<ShellSession> {
+  async shell(name: string, size: { cols: number; rows: number }, command?: string[]): Promise<ShellSession> {
     const exec = await this.#container(name).exec({
-      Cmd: ['bash', '-l'],
+      Cmd: command ?? ['bash', '-l'],
       AttachStdin: true,
       AttachStdout: true,
       AttachStderr: true,

@@ -156,11 +156,12 @@ export class LocalRuntime implements Runtime {
     return names.map(() => ({ cpuPercent, memoryBytes, cores: cpus().length, memoryTotalBytes: totalmem() }));
   }
 
-  async shell(name: string, size: { cols: number; rows: number }): Promise<ShellSession> {
+  async shell(name: string, size: { cols: number; rows: number }, command?: string[]): Promise<ShellSession> {
     this.#same(name);
     this.#guard();
     const pty = await loadPty();
-    const term = pty.spawn(process.env.SHELL && existsSync(process.env.SHELL) ? process.env.SHELL : 'sh', ['-l'], {
+    const [file, ...args] = command ?? [process.env.SHELL && existsSync(process.env.SHELL) ? process.env.SHELL : 'sh', '-l'];
+    const term = pty.spawn(file!, args, {
       name: 'xterm-256color',
       cols: size.cols,
       rows: size.rows,

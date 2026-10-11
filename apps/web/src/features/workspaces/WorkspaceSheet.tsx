@@ -1,9 +1,11 @@
 import { Badge, Button, buttonClass, cn, Dialog, Spinner, type BadgeTone, type MenuItem } from '@isnanme/ui';
-import type { ClaudeAuthStatus, Workspace, WorkspaceUsage } from '@portal/contracts';
-import { Play, Square, SquareTerminal } from 'lucide-react';
-import type { ReactNode } from 'react';
-import { Link } from 'react-router';
+import { TERMINAL_MAX, type ClaudeAuthStatus, type Workspace, type WorkspaceTerminal, type WorkspaceUsage } from '@portal/contracts';
+import { Bot, Play, Plus, Square, SquareTerminal } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Link, useNavigate } from 'react-router';
+import { api } from '@/lib/api';
 import { formatBytes, formatDateTime, formatUntil, timeAgo } from '@/lib/format';
+import { NewTerminalDialog } from './NewTerminalDialog';
 import { usageFractions } from './usage';
 
 export interface SheetBadge {
@@ -48,6 +50,21 @@ export function WorkspaceSheet({
   const account = w.account;
   const limits = [w.cpus && `${w.cpus} CPU`, w.memoryMb && formatBytes(w.memoryMb * 1024 * 1024)].filter(Boolean).join(' · ');
   const fractions = usageFractions(usage, w.cpus, w.memoryMb);
+  const navigate = useNavigate();
+  const [terminals, setTerminals] = useState<WorkspaceTerminal[] | null>(null);
+  const [newTerminal, setNewTerminal] = useState(false);
+  useEffect(() => {
+    if (!open || !running) return setTerminals(null);
+    let current = true;
+    api.workspaces.terminals(w.id).then(
+      (list) => current && setTerminals(list),
+      () => current && setTerminals([]),
+    );
+    return () => {
+      current = false;
+    };
+  }, [open, running, w.id]);
+  const shellOf = (term?: string) => `/admin/workspaces/${w.id}/shell${term ? `?term=${term}` : ''}`;
   const problem = w.status === 'error' || (w.status !== 'running' && w.status !== 'stopped' && w.detail);
 
   const claude = account
@@ -129,6 +146,45 @@ export function WorkspaceSheet({
           </div>
         )}
 
+        {running && (
+          <section aria-label="Terminals" className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <p className="text-[13px] font-semibold text-muted">
+                Terminals{terminals ? ` · ${terminals.length}/${TERMINAL_MAX}` : ''}
+              </p>
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Plus className="size-4" />}
+                disabled={!!terminals && terminals.length >= TERMINAL_MAX}
+                onClick={() => setNewTerminal(true)}
+              >
+                New
+              </Button>
+            </div>
+            {terminals?.length ? (
+              <ul className="flex flex-col gap-1">
+                {terminals.map((t) => (
+                  <li key={t.id}>
+                    <Link
+                      to={shellOf(t.id)}
+                      className="press flex items-center gap-3 rounded-xl bg-surface-2 px-3 py-2 text-sm hover:bg-line"
+                    >
+                      {t.kind === 'claude' ? <Bot className="size-4 shrink-0 text-accent" /> : <SquareTerminal className="size-4 shrink-0 text-muted" />}
+                      <span className="font-mono font-medium">{t.id}</span>
+                      <span className="min-w-0 flex-1 truncate text-right text-[12.5px] text-muted">
+                        {t.command} · {t.cwd.replace(/^\/home\/[^/]+/, '~')}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-[13px] text-muted">{terminals ? 'None yet. Claude keeps working in them with the page closed.' : 'Loading…'}</p>
+            )}
+          </section>
+        )}
+
         <dl className="divide-y divide-line rounded-2xl border border-line text-sm">
           <Row label="Runs on">{targetLabel}</Row>
           <Row label="Created">
@@ -164,6 +220,16 @@ export function WorkspaceSheet({
           </ul>
         )}
       </div>
+      <NewTerminalDialog
+        workspaceId={w.id}
+        open={newTerminal}
+        onClose={() => setNewTerminal(false)}
+        onOpened={(t) => {
+          setNewTerminal(false);
+          onClose();
+          navigate(shellOf(t.id));
+        }}
+      />
     </Dialog>
   );
 }
