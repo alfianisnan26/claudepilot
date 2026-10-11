@@ -81,7 +81,8 @@ export function SessionPage() {
   const controls = useRef<ControlsHandle>(null);
   // The page follows the visible area, so the header stays put when the keyboard opens (iOS scrolls the
   // page instead of resizing it); the transcript scrolls under the glass header and dock.
-  const viewport = useVisualViewport();
+  // A focused composer on a phone means the keyboard: the dock drops its safe-area gap at once.
+  const viewport = useVisualViewport({ keyboardOnFocus: true });
   const dock = useRef<HTMLDivElement>(null);
   const [dockHeight, setDockHeight] = useState(0);
   useLayoutEffect(() => {
@@ -371,7 +372,7 @@ export function SessionPage() {
             <div
               className={cn(
                 'pointer-events-auto mx-auto flex w-full max-w-[760px] flex-col gap-2 px-3 pt-2 sm:px-4',
-                viewport?.keyboard ? 'pb-2' : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]',
+                viewport?.keyboard ? 'pb-1.5' : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]',
               )}
             >
               {current && (

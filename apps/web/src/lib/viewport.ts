@@ -23,13 +23,21 @@ const typing = () => {
   return !!el && (el.matches('input, textarea, select') || (el as HTMLElement).isContentEditable);
 };
 
-function keyboardUp(vv: VisualViewport): boolean {
+/** A phone or tablet without a mouse: focusing a field there brings up the on-screen keyboard. */
+const touchFirst = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+
+/**
+ * Whether the on-screen keyboard is up: a field has focus and the visible area is well short of the
+ * full screen. With `onFocus`, on a touch screen a focused field is enough, whatever the sizes say
+ * (iOS reports them differently from one version and mode to the next).
+ */
+function keyboardUp(vv: VisualViewport, onFocus = false): boolean {
   if (Math.abs(vv.width - full.width) > 1) full = { width: vv.width, height: Math.max(vv.height, window.innerHeight) };
   full.height = Math.max(full.height, vv.height);
-  return typing() && full.height - vv.height > KEYBOARD_MIN;
+  return typing() && ((onFocus && touchFirst()) || full.height - vv.height > KEYBOARD_MIN);
 }
 
-/** The on-screen keyboard is up: a field has focus and the visible area is well short of the full screen. */
+/** The on-screen keyboard is up, by the visible area shrinking (a hardware keyboard doesn't shrink it). */
 export function viewportKeyboard(): boolean {
   const vv = window.visualViewport;
   return !!vv && keyboardUp(vv);
@@ -40,7 +48,8 @@ export function viewportKeyboard(): boolean {
  * it keeps its header in view and its bottom bar above the keyboard, on iOS too, where the keyboard
  * scrolls the page instead of resizing it.
  */
-export function useVisualViewport(): VisualViewportBox | null {
+export function useVisualViewport(opts: { keyboardOnFocus?: boolean } = {}): VisualViewportBox | null {
+  const onFocus = opts.keyboardOnFocus === true;
   const [box, setBox] = useState<VisualViewportBox | null>(null);
   useEffect(() => {
     const vv = window.visualViewport;
@@ -48,7 +57,7 @@ export function useVisualViewport(): VisualViewportBox | null {
     let frame = 0;
     const update = () => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => setBox({ height: vv.height, top: vv.offsetTop, keyboard: keyboardUp(vv) }));
+      frame = requestAnimationFrame(() => setBox({ height: vv.height, top: vv.offsetTop, keyboard: keyboardUp(vv, onFocus) }));
     };
     update();
     vv.addEventListener('resize', update);
@@ -63,7 +72,7 @@ export function useVisualViewport(): VisualViewportBox | null {
       document.removeEventListener('focusin', update);
       document.removeEventListener('focusout', update);
     };
-  }, []);
+  }, [onFocus]);
   return box;
 }
 
