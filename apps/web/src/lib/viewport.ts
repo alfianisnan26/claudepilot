@@ -8,10 +8,31 @@ export interface VisualViewportBox {
   keyboard: boolean;
 }
 
-/** The on-screen keyboard is up when the visual viewport is well short of the layout viewport. */
+/** How much shorter than the full screen the visible area must be for the keyboard to count as up. */
+const KEYBOARD_MIN = 120;
+
+/**
+ * The tallest the visible area has been at this width (a turn of the phone starts over). The keyboard
+ * is measured against it rather than against the window: in an installed iOS app the window can shrink
+ * with the keyboard too, so comparing the two would never see it.
+ */
+let full = { width: 0, height: 0 };
+
+const typing = () => {
+  const el = document.activeElement;
+  return !!el && (el.matches('input, textarea, select') || (el as HTMLElement).isContentEditable);
+};
+
+function keyboardUp(vv: VisualViewport): boolean {
+  if (Math.abs(vv.width - full.width) > 1) full = { width: vv.width, height: Math.max(vv.height, window.innerHeight) };
+  full.height = Math.max(full.height, vv.height);
+  return typing() && full.height - vv.height > KEYBOARD_MIN;
+}
+
+/** The on-screen keyboard is up: a field has focus and the visible area is well short of the full screen. */
 export function viewportKeyboard(): boolean {
   const vv = window.visualViewport;
-  return !!vv && vv.height < window.innerHeight * 0.85;
+  return !!vv && keyboardUp(vv);
 }
 
 /**
@@ -27,15 +48,20 @@ export function useVisualViewport(): VisualViewportBox | null {
     let frame = 0;
     const update = () => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => setBox({ height: vv.height, top: vv.offsetTop, keyboard: viewportKeyboard() }));
+      frame = requestAnimationFrame(() => setBox({ height: vv.height, top: vv.offsetTop, keyboard: keyboardUp(vv) }));
     };
     update();
     vv.addEventListener('resize', update);
     vv.addEventListener('scroll', update);
+    // Focus moves before the keyboard animates in or out: measure again then too.
+    document.addEventListener('focusin', update);
+    document.addEventListener('focusout', update);
     return () => {
       cancelAnimationFrame(frame);
       vv.removeEventListener('resize', update);
       vv.removeEventListener('scroll', update);
+      document.removeEventListener('focusin', update);
+      document.removeEventListener('focusout', update);
     };
   }, []);
   return box;
