@@ -20,7 +20,7 @@ import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
 import { attachShell, cookie } from './workspaces/shell.js';
 import { ChatController } from './chat/controller.js';
-import { poolEligibility } from './chat/eligibility.js';
+import { chatEligibility } from './chat/eligibility.js';
 import { hostInstaller } from './chat/install.js';
 import { attachChat } from './chat/socket.js';
 import { KubernetesRuntime } from './workspaces/kubernetes.js';
@@ -95,9 +95,10 @@ accounts.hooks = {
 };
 const reconciler = new Reconciler(store, (t) => workspaces.runtimeFor(t), () => workspaces.runtimeList(), [pools]);
 pools.reconciler = reconciler;
-// Sessions run only on the keys an Account Pool delivers (chat PRD §6): a workspace needs an active,
-// synced pool, and a pool change ends its sessions first.
-chatController.eligibility = (id) => poolEligibility(pools.stateFor(id), reconciler.row(id)?.status);
+// Sessions run on the workspace's Account Pool when it has one (active and synced), else on their Claude's
+// own sign-in (chat PRD §6); a pool change ends the workspace's sessions first. `signedIn` is set in app.ts.
+chatController.pooled = (id) => !!pools.stateFor(id);
+chatController.eligibility = (id) => chatEligibility(pools.stateFor(id), reconciler.row(id)?.status);
 pools.onTransition = (id) => void chatController.endWorkspaceSessions(id, 'Pool change in progress');
 // Reattach readers to sessions still running in workspaces, and mark the ones that died Interrupted.
 chatController.start();

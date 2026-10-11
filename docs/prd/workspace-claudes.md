@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.3.** v0.3 follows what was built: the portal can start each Claude's own sign-in and shows whether it's signed in (status and method only, FR4, FR21); terminals run as a Claude (FR22); removing a Claude waits for its terminals and frees its name (FR3); the Claudes list sits on the workspace (§11). Q1 answered, Q2 half answered. v0.2 stated who writes the context file, that a new directory is unsigned-in, and that the Claude list is portal sessions only. 🔬 = unverified, listed in §16. |
+| Status | **Draft v0.4.** v0.4 (owner's decision, with [Chat sessions](chat-sessions.md) v0.7): a portal chat on a workspace without a pool runs on its Claude's own sign-in (§6, FR4, FR7). v0.3 followed what was built: the portal can start each Claude's own sign-in and shows whether it's signed in (status and method only, FR4, FR21); terminals run as a Claude (FR22); removing a Claude waits for its terminals and frees its name (FR3); the Claudes list sits on the workspace (§11). Q1 answered, Q2 half answered. v0.2 stated who writes the context file, that a new directory is unsigned-in, and that the Claude list is portal sessions only. 🔬 = unverified, listed in §16. |
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-11 |
 | Depends on | [Chat sessions](chat-sessions.md) (session controller, event store, one writer, eligibility), [Account Pool](account-pool.md) (the only credentials a portal session runs on), [Pools foundation](foundation-pools.md) (the workspace home volume) |
@@ -14,7 +14,7 @@ A workspace is one VM and one volume. On that volume a person can keep several C
 
 Moving work is a context transfer, asked for by the person. The portal writes a context file from its own event store onto that same volume, the source stops being the live thread, and a new session starts in the other Claude. The open portal thread follows the new session and marks the join. Other chats, other workspaces, and every login stay where they are. Creating a Claude does not sign it in.
 
-Each Claude also has its own Claude Code login for the terminal. The workspace lists its Claudes with whether each is signed in, and from there a person signs one in, switches its account, signs it out, or opens terminals that run as it. Claude Code does the sign-in in that Claude's directory. The portal shows the link and passes on the code, and keeps neither the code nor the login. Portal chat never runs on such a login: it stays on the account pool.
+Each Claude also has its own Claude Code login for the terminal. The workspace lists its Claudes with whether each is signed in, and from there a person signs one in, switches its account, signs it out, or opens terminals that run as it. Claude Code does the sign-in in that Claude's directory. The portal shows the link and passes on the code, and keeps neither the code nor the login. Portal chat on a workspace without a pool runs on that sign-in, so two Claudes can chat as two accounts. With a pool, chat runs on its keys.
 
 ## 2. Background and problem
 
@@ -38,7 +38,7 @@ Each Claude also has its own Claude Code login for the terminal. The workspace l
 ## 4. Non-goals
 
 - **A quota switch.** Nothing watches a plan window or an API-key headroom and moves a session. Account Pool failover stays [Account Pool](account-pool.md). This PRD does not choose another login when usage runs low.
-- **Rotating or pooling Claude plan logins.** The portal does not store, copy, inject, rotate, or select SSO or other subscription credentials, and never runs a portal chat on one. It may start Claude Code's own sign-in in a Claude's directory (FR4). Claude Code writes that login there. The portal never reads it.
+- **Rotating or pooling Claude plan logins.** The portal does not store, copy, inject, rotate, or select SSO or other subscription credentials. A session on a Claude without a pool uses the sign-in that Claude already has; the portal never picks another. It may start Claude Code's own sign-in in a Claude's directory (FR4). Claude Code writes that login there. The portal never reads it.
 - **A second workspace as the destination.** A transfer stays inside one workspace. Three workspaces are three volumes. Their disks are not mounted into each other.
 - **tmux as isolation.** tmux keeps a terminal running without a browser. It does not separate Claudes. A terminal is a Claude by the directory it was started with (FR22). Two shells with one directory are one Claude.
 - **Hot-swapping a running process.** The open process keeps the directory it started with until that session stops. The continuation is a new session id.
@@ -58,7 +58,7 @@ Each Claude also has its own Claude Code login for the terminal. The workspace l
 | US5 | I open the Claude I left. The session I moved is listed there as left behind. I can open it, or transfer it again. |
 | US6 | I open the real session the thread is tailing. It is that same session, not a second one writing beside it. |
 | US7 | I have three workspaces. A move in one of them does not appear in the other two, and their Claudes keep running. |
-| US8 | I create a Claude, including a second one on this workspace or the same account on another workspace. Its directory is empty. I sign it in from its row on the workspace, or in a terminal running as it. Opening a portal chat does not ask. |
+| US8 | I create a Claude, including a second one on this workspace or the same account on another workspace. Its directory is empty. I sign it in from its row on the workspace, or in a terminal running as it. On a workspace without a pool, a portal chat on it then runs on that sign-in. |
 | US9 | The list on a Claude shows the portal sessions that ran there, including ones left behind. A shell I started myself in the terminal is not on that list. |
 | US10 | On a workspace I see each Claude: signed in or not, and whether with a Claude account or a Console key, and how many terminals run as it. From its row I sign it in, switch its account, sign it out, rename it, or remove it. |
 | US11 | I open several terminals on one workspace, each as a Claude I pick. Claude Code in each one uses that Claude's login, and keeps running after I close the browser. |
@@ -68,14 +68,14 @@ Each Claude also has its own Claude Code login for the terminal. The workspace l
 | Allowed | Not allowed |
 | --- | --- |
 | Several named Claudes on one workspace volume, each a directory the portal created and starts processes with. | Copying a directory in order to move a login. Reading a directory to discover which account or plan is signed in. |
-| A portal session on a Claude while the workspace's Account Pool assignment is active and Synced, with the same `apiKeyHelper` checks as [Chat sessions](chat-sessions.md) §6. | A portal session whose credential is a plan login, including one stored in a Claude directory. |
+| A portal session on a Claude: on the workspace's Account Pool when it has one (active and Synced, with the `apiKeyHelper` checks of [Chat sessions](chat-sessions.md) §6), otherwise on that Claude's own sign-in. | A session on another Claude's sign-in, on a credential the portal copied or injected, or one that changes credential mid-run. |
 | A person using the workspace terminal in a Claude directory, including a sign-in Claude performed there. | Starting a terminal with a directory other than the Claude picked for it. |
-| The portal starting Claude Code's own `claude auth login` or `claude auth logout` with a Claude's directory, showing the sign-in link it prints, and writing the code the person pastes to that process. | Storing or logging that code or the login it produces, reading the directory's files, or running a portal chat session on that login. |
+| The portal starting Claude Code's own `claude auth login` or `claude auth logout` with a Claude's directory, showing the sign-in link it prints, and writing the code the person pastes to that process. | Storing or logging that code or the login it produces, or reading the directory's files. |
 | Showing whether a Claude is signed in and by which method, from `claude auth status` run with its directory. | Showing or keeping the account, email, organization, or plan behind it. |
 | A context file of redacted portal events, written on the same volume, then read as the opening context of a new portal session. | Putting a key, a token, or a credential file into the context file. |
 | Listing portal sessions by the Claude they ran in, including sessions ended by a transfer. | Treating a left-behind session as still the live writer, or resuming its process inside the destination directory. |
 
-Managed settings for the workspace stay workspace-wide (`/etc/claude-code/managed-settings.d`). Every portal session in every Claude of that workspace uses the workspace's account-pool helper. Separate directories do not create a second billed account for portal chat. They separate chats, local settings, and whatever login a person has in that directory for the terminal. While a pool is assigned its keys replace own sign-ins, so sign-in, switch, and sign-out are refused until it is unassigned.
+Managed settings for the workspace stay workspace-wide (`/etc/claude-code/managed-settings.d`). With a pool, every portal session in every Claude of that workspace uses the workspace's account-pool helper. Without one, each session runs on its own Claude's sign-in, so separate directories can be separate accounts for chat as well as for the terminal. While a pool is assigned its keys replace own sign-ins, so sign-in, switch, and sign-out are refused until it is unassigned.
 
 ## 7. Solution overview
 
@@ -108,7 +108,7 @@ Managed settings for the workspace stay workspace-wide (`/etc/claude-code/manage
 - **FR1** A workspace has one or more Claudes. Creating one asks for a name, unique among that workspace's Claudes that are not removed (409 on a duplicate). The portal creates an empty directory on the home volume and stores the name, directory id, and creation time. It does not copy another Claude's directory.
 - **FR2** The first Claude on a workspace is Default, bound to where Claude Code keeps its files with no directory set (`~/.claude` and `~/.claude.json`), so existing sessions and an existing login stay put (Q1). New Claudes get a new directory, `~/.claudepilot/claudes/<16 hex>` in the workspace home (`/home/node` in a container, the person's home on This machine).
 - **FR3** Renaming a Claude changes the label only, with the same uniqueness as FR1. Removing a Claude is refused for Default, while it has a session that is not ended, and while a terminal runs as it. Removing one with only ended sessions keeps those rows and marks the Claude removed. Its name is free again for a new Claude. The directory is left on the volume. The portal does not delete a directory that may hold a login.
-- **FR4** A Claude has no credential fields. The API never returns, accepts, or logs the contents of its directory. Creating one does not sign it in and does not copy a login from another Claude or another workspace. The directory starts empty. Each Claude signs in on its own, including when that same account is already signed in elsewhere, in one of two ways: in a terminal running as it (FR22), or from its row on the workspace. From the row, the portal runs `claude auth login` with that directory, shows the link Claude Code prints (only an https link on claude.com, claude.ai, or anthropic.com), and writes the code the person pastes to that process. The code is held only until it is written, never stored or logged. Claude Code writes the login into the directory. Switch account is the same sign-in over the existing one. Sign out runs `claude auth logout` with that directory. These three are refused while the workspace has an account pool (§6). Opening or transferring a portal chat does not ask for a sign-in: portal chat uses the workspace account pool.
+- **FR4** A Claude has no credential fields. The API never returns, accepts, or logs the contents of its directory. Creating one does not sign it in and does not copy a login from another Claude or another workspace. The directory starts empty. Each Claude signs in on its own, including when that same account is already signed in elsewhere, in one of two ways: in a terminal running as it (FR22), or from its row on the workspace. From the row, the portal runs `claude auth login` with that directory, shows the link Claude Code prints (only an https link on claude.com, claude.ai, or anthropic.com), and writes the code the person pastes to that process. The code is held only until it is written, never stored or logged. Claude Code writes the login into the directory. Switch account is the same sign-in over the existing one. Sign out runs `claude auth logout` with that directory. These three are refused while the workspace has an account pool (§6). Without a pool a portal chat runs on its Claude's sign-in, so starting or transferring one to a signed-out Claude is refused with a pointer to sign it in (FR7).
 
 ### Sign-in state and terminals
 
@@ -120,7 +120,7 @@ Managed settings for the workspace stay workspace-wide (`/etc/claude-code/manage
 
 - **FR5** Creating a portal session requires a `claude_id` on that workspace. Omitted, the workspace's Default is used. The session row stores it. The host process is started with that directory and no other Claude's directory.
 - **FR6** A session keeps its `claude_id` for its whole life. Resume, wake, and steer use the same directory. There is no control that points the running process at another directory.
-- **FR7** Eligibility is unchanged and still per workspace: an active, Synced account pool, `authcheck` pass, and `apiKeySource: "apiKeyHelper"` each turn. A failure ends or refuses the session the way [Chat sessions](chat-sessions.md) §6 already does. The portal does not inspect the Claude directory to explain the failure.
+- **FR7** Eligibility follows [Chat sessions](chat-sessions.md) §6 v0.7. With a pool: an active, Synced account pool, `authcheck` pass, and `apiKeySource: "apiKeyHelper"` each turn. Without one: the session's Claude signed in, from `claude auth status` with its directory before every start (only `loggedIn` counts), and no pool checks. A failure ends or refuses the session the way Chat sessions §6 does. The portal reads nothing else of the Claude directory to explain it.
 - **FR8** One writer per session, the existing `run.lock`. Opening the real session from the Claude list opens this session. It does not launch a second process for the same id.
 
 ### Transfer
@@ -175,10 +175,10 @@ Phone and desktop use the existing session screen.
 | Place | What it shows |
 | --- | --- |
 | Claudes (workspace sheet) | One row per Claude: name, a badge (Signed in, Signed in · key for a Console login, Signed out, or Unknown), and how many terminals run as it. A terminal button opens a new terminal as it. ⋯ has Sign in… or Switch account… (off while the state is Unknown), Sign out, Rename…, and Remove (off while terminals run, absent on Default). New adds one. With a pool assigned, a line says the pool's keys are in use and the sign-in items are off. |
-| New Claude | A name only. The directory is empty and the row shows Signed out. Sign in from the row or in its terminal, including for an account already used elsewhere. Portal chat does not ask. |
+| New Claude | A name only. The directory is empty and the row shows Signed out. Sign in from the row or in its terminal, including for an account already used elsewhere. Without a pool, chat on it waits for that sign-in. |
 | Sign in | One dialog, one way: it opens Claude's sign-in page in a new tab, where the page itself offers a Claude account or SSO. The person pastes the code the page shows. On success the row's badge changes. |
 | Terminal | New terminal asks which Claude (or + New Claude…), Claude Code or Shell, and the folder. The terminal page has a tab per terminal, showing which Claude each runs as, and a key row on phones ([Web app & PWA](web-app-pwa.md) §9.3). |
-| New chat | Workspace, then Claude. Default is the last Claude this person used in that workspace, else Default. |
+| New chat | Workspace, then Claude. Default is the last Claude this person used in that workspace, else Default. Without a pool, signed-out Claudes are listed but can't be picked; the hint says the session runs on the Claude's own sign-in, or links to sign one in when none is. With a pool, it says the session runs on the pool. |
 | Session header | Claude name. Switch opens the confirm dialog (FR10). One other Claude is a single confirm. More than one asks which, then confirm. |
 | After confirm | The thread shows "Moving to Claude B" until the successor exists, then tails. Failure stays on the source and says the move did not finish. |
 | Marker | First row of the successor: "New session on Claude B · transferred from Claude A · 14:02". |
@@ -195,7 +195,7 @@ Switch is disabled while a transfer of this session is in progress, while the wo
 - The context file is redacted with the chat redactor before it is written. A handoff row stores the path and ids, not the summary body. The summary is not written to the portal log.
 - Removing a Claude does not delete its directory (FR3), so a login on disk is not wiped by a portal action the person did not take in the terminal.
 - A transfer cannot target another workspace id. The destination `claude_id` is checked to belong to the source session's workspace.
-- The successor is a normal portal session: account-pool checks apply before it starts. A transfer into a workspace that has lost its pool fails the create, and the source remains the left-behind session with the context file in place.
+- The successor is a normal portal session: its credential checks apply before it starts (the pool's, or the destination Claude's sign-in). A transfer that fails them fails the create, and the source remains the left-behind session with the context file in place.
 
 ## 13. Testing
 
@@ -217,6 +217,8 @@ Switch is disabled while a transfer of this session is in progress, while the wo
 | Pool assigned | Sign in, switch, and sign out are refused (409). |
 | Remove | Refused for Default, with a session not ended, or with a terminal running as it. After a remove, a new Claude can take the same name. The directory is still on disk. |
 | Terminal as Claude B | `CLAUDE_CONFIG_DIR` in its process is B's directory. `claude auth status` there is B's, not Default's. |
+| Chat without a pool | A session on a signed-in Claude starts with no `authcheck`, runs without the spending cap, and isn't ended by plan limits. Its transcript is in that Claude's directory. A signed-out Claude is refused (409) before anything runs. |
+| Chat after a pool is assigned | Sessions on a sign-in end before the pool's keys take over; new ones run on the pool. |
 
 🔬 Q2 and Q3 are manual on the pinned Claude Code before the first milestone is called done.
 

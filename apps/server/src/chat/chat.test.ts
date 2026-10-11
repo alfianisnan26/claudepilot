@@ -18,7 +18,7 @@ import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { decodeAttachments, readBlob, saveBlob } from './blobs.js';
 import { ChatController, type ChatControllerOptions } from './controller.js';
-import { CHAT_INELIGIBLE, NO_KEY, NO_POOL, NOT_SET_UP, NOT_SYNCED, poolEligibility, UNKNOWN, type Eligibility } from './eligibility.js';
+import { CHAT_INELIGIBLE, chatEligibility, NO_KEY, NO_POOL, NOT_SET_UP, NOT_SIGNED_IN, NOT_SYNCED, poolEligibility, UNKNOWN, type Eligibility } from './eligibility.js';
 import { TRUST_EMPTY_HASH } from './host.js';
 import {
   allowResponse,
@@ -2771,6 +2771,77 @@ test('claudes: a removed Claude frees its name; Default and a Claude with a live
     assert.throws(() => controller.renameClaude(ws, again.id, 'Default'), /already on this workspace/);
     assert.throws(() => controller.renameClaude(ws, work.id, 'Old'), /isn’t on this workspace/, 'a removed Claude can’t be renamed');
   } finally {
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+/* ========================= Own sign-in (no pool) ========================= */
+
+test('eligibility: a workspace without a pool may host sessions (on its Claudes’ own sign-in); with one, the pool rules apply', () => {
+  assert.deepEqual(chatEligibility(null, null), { ok: true });
+  assert.deepEqual(chatEligibility({ state: 'removing' }, 'synced'), { ok: false, reason: NO_POOL });
+  assert.deepEqual(chatEligibility({ state: 'waiting' }, 'synced'), { ok: false, reason: NO_KEY });
+  assert.deepEqual(chatEligibility({ state: 'active' }, 'pending'), { ok: false, reason: NOT_SYNCED });
+  assert.deepEqual(chatEligibility({ state: 'active' }, 'synced'), { ok: true });
+});
+
+test('own sign-in: without a pool a session needs its Claude signed in, skips the pool checks and the spending cap, and keeps running on plan limits', async () => {
+  const { store, dataDir } = await freshStore();
+  const ws = new FakeWorkspaces();
+  const controller = new ChatController(store, ws as unknown as Workspaces);
+  const asked: [string, string][] = [];
+  let signedIn = false;
+  controller.pooled = () => false;
+  controller.signedIn = async (workspaceId, directory) => (asked.push([workspaceId, directory]), signedIn);
+  try {
+    // Signed out: refused before the folder is scanned, and nothing is created.
+    await assert.rejects(controller.create({ workspaceId: 'docker/ws1' }), (e) => isAppError(e) && e.code === CHAT_INELIGIBLE && e.message === NOT_SIGNED_IN);
+    assert.deepEqual(asked, [['docker/ws1', '']], 'Default’s directory is the home one');
+    assert.deepEqual(ws.ops, []);
+    assert.deepEqual(controller.list(), []);
+
+    signedIn = true;
+    const id = (await controller.create({ workspaceId: 'docker/ws1' })).id;
+    await until(() => ws.tails.length === 1);
+    await until(() => controller.get(id)?.state === 'idle');
+    await sleep(20);
+    assert.deepEqual(ws.ops, ['trustscan', 'start'], 'no authcheck: there is no pool to check');
+    assert.ok(!ws.startArgs[0]!.includes('--max-budget-usd'), 'no spending cap on a plan login');
+
+    // A claude.ai login reports no helper and sees plan limits: both are its own, and the session runs on.
+    const tail = ws.tails[0]!;
+    tail.push(init(id, 'default', 'none'));
+    tail.push(line({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } }));
+    tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: 0.01, is_error: false, session_id: id }));
+    await until(() => controller.history(id).some((e) => e.kind === 'result'));
+    await sleep(50);
+    assert.equal(controller.get(id)!.state, 'idle');
+    assert.ok(!controls(ws).some((c) => c.request.subtype === 'get_usage'), 'no subscription check');
+  } finally {
+    controller.stop();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('own sign-in: a pool on the workspace brings its checks back, so a session there that reports no helper ends for safety', async () => {
+  const { store, dataDir } = await freshStore();
+  const ws = new FakeWorkspaces();
+  const controller = new ChatController(store, ws as unknown as Workspaces);
+  let pooled = false;
+  controller.pooled = () => pooled;
+  controller.signedIn = async () => true;
+  try {
+    const id = (await controller.create({ workspaceId: 'docker/ws1' })).id;
+    await until(() => ws.tails.length === 1 && controller.get(id)?.state === 'idle');
+    await sleep(20);
+    pooled = true; // (a real assignment ends the workspace's sessions first; this checks the guard holds anyway)
+    ws.tails[0]!.push(init(id, 'default', 'none'));
+    await until(() => controller.get(id)!.state === 'ended');
+    assert.equal(controller.get(id)!.endedReason, `credential: ${CREDENTIAL.keySource}`);
+  } finally {
+    controller.stop();
     store.close();
     rmSync(dataDir, { recursive: true, force: true });
   }

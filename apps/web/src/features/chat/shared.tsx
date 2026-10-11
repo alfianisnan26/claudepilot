@@ -26,8 +26,9 @@ export function StateBadge({ state }: { state: ChatSessionState }) {
 }
 
 /**
- * Whether the portal refused because the workspace can't host sessions now (no account pool ready: none
- * assigned, no usable key, delivery not up to date, a pool change under way). The message says why.
+ * Whether the portal refused because the workspace can't host sessions now (its Claude isn't signed in
+ * and there's no pool, or the pool isn't ready: no usable key, delivery not up to date, a pool change
+ * under way). The message says why.
  */
 export const isIneligible = (e: unknown): boolean => (e instanceof ApiError || e instanceof ChatAckError) && e.code === CHAT_INELIGIBLE;
 

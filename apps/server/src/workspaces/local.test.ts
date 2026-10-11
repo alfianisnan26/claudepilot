@@ -128,4 +128,20 @@ describe('LocalRuntime', () => {
     assert.ok(u!.cores! >= 1);
     assert.ok(u!.memoryTotalBytes! >= u!.memoryBytes!);
   });
+
+  it('runs workspace paths as this machine’s: /home/node is the home folder and /etc/claudepilot is ~/.claudepilot/host', async () => {
+    await rt.start(NAME);
+    const home = process.env.HOME!;
+    const { text } = await output(await rt.exec(NAME, ['sh', '-c', 'printf "%s|%s|%s|%s" "$1" "$2" "$3" "$CLAUDEPILOT_FILES_ROOT"', 'sh', '/home/node/project', '/etc/claudepilot/bin/cp-session', '/home/nodes']));
+    assert.equal(text, `${home}/project|${home}/.claudepilot/host/bin/cp-session|/home/nodes|${home}`);
+    await rt.delivery.put(NAME, [
+      { path: '/etc/claudepilot', type: 'directory', mode: 0o755, uid: 0, gid: 0 },
+      { path: '/etc/claudepilot/bin', type: 'directory', mode: 0o755, uid: 0, gid: 0 },
+      { path: '/etc/claudepilot/bin/.tmp', type: 'file', content: 'host', mode: 0o755, uid: 0, gid: 0 },
+    ]);
+    const r = await rt.delivery.run(NAME, "mv -f '/etc/claudepilot/bin/.tmp' '/etc/claudepilot/bin/cp-session'", { user: 'root' });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(await rt.delivery.read(NAME, '/etc/claudepilot/bin/cp-session'), 'host');
+    await rt.stop(NAME);
+  });
 });

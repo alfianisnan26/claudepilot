@@ -15,8 +15,16 @@ export interface LocalState {
 
 const OFF = 'This machine is switched off. Start it first.';
 
-/** Paths the portal writes for a workspace's own user (`/home/node`) land in the portal user's home. */
-const hostPath = (path: string) => (path === HOME || path.startsWith(`${HOME}/`) ? homedir() + path.slice(HOME.length) : path);
+/** The portal's own folder in a workspace (the chat host, root-owned there). The portal user can't write /etc here. */
+const ETC = '/etc/claudepilot';
+const hostDir = () => `${homedir()}/.claudepilot/host`;
+const under = (path: string, dir: string) => path === dir || path.startsWith(`${dir}/`);
+/**
+ * A workspace path on this machine: the workspace user's home (`/home/node`) is the portal user's home,
+ * and `/etc/claudepilot` is `~/.claudepilot/host`. Anything else is the same path.
+ */
+const hostPath = (path: string) =>
+  under(path, HOME) ? homedir() + path.slice(HOME.length) : under(path, ETC) ? hostDir() + path.slice(ETC.length) : path;
 
 type Pty = {
   onData(fn: (data: string) => void): unknown;
@@ -59,7 +67,9 @@ export class LocalRuntime implements Runtime {
       this.#same(name);
       this.#guard();
       return new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
-        const child = spawn('sh', ['-c', script], { cwd: homedir(), env: userEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+        // Scripts name the portal's folder as a workspace has it (the chat host's install, say).
+        const local = script.split(`${ETC}/`).join(`${hostDir()}/`);
+        const child = spawn('sh', ['-c', local], { cwd: homedir(), env: userEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
         const out: Buffer[] = [];
         const err: Buffer[] = [];
         const timer = setTimeout(() => {
@@ -180,7 +190,8 @@ export class LocalRuntime implements Runtime {
   async exec(name: string, command: string[]): Promise<ExecSession> {
     this.#same(name);
     this.#guard();
-    const [bin, ...args] = command;
+    // Arguments that are workspace paths (the chat host, a session's folder, a Claude's directory) are this machine's.
+    const [bin, ...args] = command.map(hostPath);
     if (!bin) throw new AppError('VALIDATION_FAILED', 'No command.');
     const child = spawn(bin, args, { cwd: homedir(), env: userEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
     const dataFns: ((data: Buffer) => void)[] = [];
@@ -219,7 +230,8 @@ export class LocalRuntime implements Runtime {
 function userEnv(): NodeJS.ProcessEnv {
   const local = `${homedir()}/.local/bin`;
   const path = process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin';
-  return { ...process.env, HOME: homedir(), PATH: path.split(':').includes(local) ? path : `${local}:${path}` };
+  // The chat host's file commands work under the home folder, which here is the portal user's.
+  return { ...process.env, HOME: homedir(), CLAUDEPILOT_FILES_ROOT: homedir(), PATH: path.split(':').includes(local) ? path : `${local}:${path}` };
 }
 
 function sample() {

@@ -112,7 +112,8 @@ Targets (each shows up when reachable):
   shell page shows terminals as tabs (`…/shell?term=claude-1`); New picks the Claude (or adds one,
   which starts signed out), the program and the folder. tmux is installed
   through passwordless sudo when missing (workspace images ship it), and Claude Code with its own
-  installer. Terminals are terminals, not chat sessions: those still need an account pool.
+  installer. Terminals are terminals, not chat sessions; a chat session on the same Claude uses the same
+  sign-in when the workspace has no account pool.
 
 ## Accounts
 
@@ -187,14 +188,17 @@ hooks in `.claude/settings*.json`) without asking, so before the first session i
 whenever those files change, the portal lists by name what would load and asks you to trust the folder;
 nothing starts until you do. The controls also show how full the context window is, and the Agents
 panel can stop one sub-agent or all of them.
-**Account pools only:** sessions run only on the keys an Account Pool delivers (API keys or custom
-hosts, through the managed `apiKeyHelper`), never on a workspace's own Claude sign-in, which stays for
-the terminal. A session starts, resumes or wakes only in a workspace whose pool is active and delivered,
-after the host checks that the account drop-in names the pool's helper (`cp-session authcheck`, which
-reads that one file). Every turn must report the pool's helper as its key source, and a usage check
-after each turn must show no plan limits; otherwise the session ends for safety at once. Unassigning
-the pool, or moving the workspace to another one, stops its sessions first (they read Interrupted and
-resume once the new pool is delivered).
+**A pool or a Claude's own sign-in:** a session on a workspace without an account pool runs on the
+Claude Code sign-in of the Claude it was started on (Workspaces › the workspace › Claudes › Sign in).
+That Claude must be signed in before each start (`claude auth status`, status only); there are no pool
+checks and no spending cap, and the plan's own limits apply. On a workspace with a pool, sessions run on
+its keys (API keys or custom hosts, through the managed `apiKeyHelper`): a session starts, resumes or
+wakes only while the pool is active and delivered, after the host checks that the account drop-in names
+the pool's helper (`cp-session authcheck`, which reads that one file). Every turn must report the pool's
+helper as its key source, and a usage check after each turn must show no plan limits; otherwise the
+session ends for safety at once. Assigning, unassigning or moving a pool stops the workspace's sessions
+first (they read Interrupted and resume on the new credential). Sessions also run on This machine,
+where `/home/node` is your home folder and the session host lives in `~/.claudepilot/host`.
 Kubernetes workspaces get the session host from the workspace image (`images/workspace/cp-session`,
 generated with `npm run gen:workspace-host -w @portal/server`); Docker workspaces get it installed.
 

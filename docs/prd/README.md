@@ -13,8 +13,8 @@ implementation starts.
 | [MCP set pool](mcpset-pool.md) | Sets of MCP servers assigned to workspaces, with their secrets. | Draft v0.5 (reviewed) |
 | [Secrets & env pool](secrets-env-pool.md) | Environment variables and secret files (GitHub, registries, cloud, SSH) assigned to workspaces. | Draft v0.5 (reviewed) |
 | [Portal MCP server](portal-mcp.md) | The portal's own MCP server, so people can manage everything from claude.ai, the Claude apps or Claude Code. | Draft v0.5 (reviewed) |
-| [Chat sessions](chat-sessions.md) | Chatting with the Claude Code agents in workspaces: steering, model and effort, sub-agent monitoring, images and files; mobile and desktop. | Draft v0.6 (reviewed) · **C1–C3 and most of C4 built** (session host, controller, event store, transcript, send, Stop, approvals; model, effort, ultracode and mode; steer and queue; agents panel; images; files and diff; restart recovery, Interrupted and Resume, idle sleep, segments; integrity checks and redaction; folder trust; context usage; stop one agent; account-pool-only eligibility, host auth check, per-turn key-source and plan-limit checks, sessions stopped before a pool change; Kubernetes via the workspace image) |
-| [Workspace Claudes](workspace-claudes.md) | Several Claudes on one workspace volume, isolated by directory, each with its own Claude Code sign-in and terminals. A confirmed transfer moves context to a new portal session. | Draft v0.3 · **W1, W2 built** (registry, Default, `claude_id`, transfer) · **Claudes list built** (sign-in state, sign in, switch, sign out, rename, remove; terminals as a Claude) |
+| [Chat sessions](chat-sessions.md) | Chatting with the Claude Code agents in workspaces: steering, model and effort, sub-agent monitoring, images and files; mobile and desktop. Sessions run on the workspace's account pool, or on a Claude's own sign-in when it has none. | Draft v0.7 · **C1–C3 and most of C4 built** (session host, controller, event store, transcript, send, Stop, approvals; model, effort, ultracode and mode; steer and queue; agents panel; images; files and diff; restart recovery, Interrupted and Resume, idle sleep, segments; integrity checks and redaction; folder trust; context usage; stop one agent; eligibility on a pool or a Claude's own sign-in, host auth check, per-turn key-source and plan-limit checks on pool sessions, sessions stopped before a pool change; This machine; Kubernetes via the workspace image) |
+| [Workspace Claudes](workspace-claudes.md) | Several Claudes on one workspace volume, isolated by directory, each with its own Claude Code sign-in, chats and terminals. A confirmed transfer moves context to a new portal session. | Draft v0.4 · **W1, W2 built** (registry, Default, `claude_id`, transfer) · **Claudes list built** (sign-in state, sign in, switch, sign out, rename, remove; terminals as a Claude) |
 | [Settings & policies](settings-policies.md) | Permission controls (including bypass-permissions policy) and limits such as rotating at a quota threshold, budgets and concurrency caps. | Draft v0.5 (reviewed) |
 | [Monitoring dashboard](monitoring-dashboard.md) | Running agents and workspaces, tokens, processes, MCP use and security events, at a glance. | Draft v0.5 (reviewed) |
 | [Web app & PWA](web-app-pwa.md) | The portal as one web frontend: app shell and navigation, phone and desktop layouts, installable PWA, push notifications (for example "agent needs your approval"), HTTPS, performance and accessibility budgets. | Draft v0.5 (reviewed) |
@@ -28,10 +28,11 @@ Build order and dependencies are added once the research is in.
 - **Push, don't pull.** The portal writes into workspaces through the runtime APIs it already holds
   (Docker, Kubernetes). Workspaces never need to call back to the portal.
 - **Secrets stay secret.** They're encrypted at rest and never returned to the browser in full.
-- **No Claude.ai subscription credentials.** The portal never stores, injects or rotates them. A
-  user signs in with their own subscription inside their own workspace, and the portal leaves that
-  alone. It may start Claude Code's own sign-in there and pass on the one-time code, keeping nothing
-  ([Workspace Claudes](workspace-claudes.md) FR4).
+- **No Claude.ai subscription credentials held by the portal.** The portal never stores, injects or
+  rotates them. A user signs in with their own subscription inside their own workspace. The portal may
+  start Claude Code's own sign-in there and pass on the one-time code, keeping nothing
+  ([Workspace Claudes](workspace-claudes.md) FR4). On a workspace without an account pool, chat
+  sessions run on that sign-in, for the person who owns it ([Chat sessions](chat-sessions.md) §6).
 - **One web app, phone and desktop.** The portal is a single web frontend, installable as a PWA. Every
   screen uses the existing components and is designed for both phone and desktop widths: concise,
   consistent and fast.

@@ -1,7 +1,7 @@
 import { FormDialog, Select, TextField } from '@isnanme/ui';
-import { CHAT_SESSION_TITLE_MAX, CLAUDE_NAME_MAX, type ChatFolderScan, type CreateChatSessionRequest, type Workspace, type WorkspaceClaude } from '@portal/contracts';
+import { CHAT_SESSION_TITLE_MAX, CLAUDE_NAME_MAX, type ChatFolderScan, type CreateChatSessionRequest, type Workspace, type WorkspaceClaudeState } from '@portal/contracts';
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { api, errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { firstShell, NoSessionWorkspace } from './SessionSetup';
@@ -39,12 +39,13 @@ interface TrustStep {
 }
 
 /**
- * Why a workspace can't host a session right now, or null when it can. Sessions run only on the keys
- * an Account Pool delivers (chat PRD §6 rule 1), so the workspace needs an active, synced pool.
+ * Why a workspace can't host a session right now, or null when it can (chat PRD §6 rule 1). Without a
+ * pool a session runs on its Claude's own sign-in (checked per Claude below); with one, on the pool's
+ * keys, so the pool must be active and delivered.
  */
 function ineligible(w: Workspace): string | null {
   if (w.status !== 'running') return 'not running';
-  if (!w.account) return 'no account pool';
+  if (!w.account) return null;
   if (w.account.state === 'removing') return 'pool change in progress';
   if (w.account.state === 'waiting') return 'pool has no usable key';
   if (w.delivery?.status !== 'synced') return 'delivery not up to date';
@@ -68,7 +69,7 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [trust, setTrust] = useState<TrustStep | null>(null);
-  const [claudes, setClaudes] = useState<WorkspaceClaude[]>([]);
+  const [claudes, setClaudes] = useState<WorkspaceClaudeState[] | null>(null);
   const [claudeId, setClaudeId] = useState('');
   const [newClaude, setNewClaude] = useState('');
 
@@ -81,7 +82,7 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
     setTrust(null);
     setWorkspaces(null);
     setWorkspaceId('');
-    setClaudes([]);
+    setClaudes(null);
     setClaudeId('');
     setNewClaude('');
     let current = true;
@@ -98,15 +99,23 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
     };
   }, [open]);
 
+  const all = workspaces ?? [];
+  const chosenWorkspace = all.find((w) => w.id === workspaceId);
+  /** Without a pool, each session runs on its Claude's own sign-in. */
+  const ownSignIn = !!chosenWorkspace && !chosenWorkspace.account;
+  /** A Claude that can't start a session: signed out, on a workspace without a pool. */
+  const signedOut = (c: WorkspaceClaudeState) => ownSignIn && !!c.auth && !c.auth.loggedIn;
+
   useEffect(() => {
     if (!workspaceId) return;
     let current = true;
-    chatApi.claudes(workspaceId).then(
+    setClaudes(null);
+    api.workspaces.claudes(workspaceId).then(
       (list) => {
         if (!current) return;
-        const open = list.filter((c) => !c.removedAt);
-        setClaudes(open);
-        setClaudeId(open[0]?.id ?? '');
+        setClaudes(list);
+        const usable = list.find((c) => !(c.auth && !c.auth.loggedIn)) ?? list[0];
+        setClaudeId(usable?.claude.id ?? '');
       },
       () => current && setClaudes([]),
     );
@@ -125,7 +134,6 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
       () => undefined,
     );
 
-  const all = workspaces ?? [];
   // No workspace can host a session (US8): each says why, with its way out; the main button opens a shell.
   const needsSetup = workspaces !== null && !all.some((w) => !ineligible(w));
   const shell = needsSetup ? firstShell(all) : null;
@@ -179,7 +187,7 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
     const cwd = folderPath(folder);
     if (!cwd) return setFolderError(FOLDER_PROBLEM);
     let chosen = claudeId;
-    const named = newClaude.trim();
+    const named = ownSignIn ? '' : newClaude.trim();
     if (named) {
       setSaving(true);
       setError(null);
@@ -231,7 +239,7 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
       onSubmit={trust ? trustAndStart : needsSetup ? goNext : submit}
       submitLabel={trust ? 'Trust and start' : needsSetup ? (shell ? 'Open shell' : 'Workspaces') : 'Start'}
       saving={saving}
-      submitDisabled={trust ? false : needsSetup ? false : !workspaceId}
+      submitDisabled={trust ? false : needsSetup ? false : !workspaceId || (ownSignIn && !newClaude.trim() && !claudes?.some((c) => c.claude.id === claudeId && !signedOut(c)))}
       error={error}
       dirty={!trust && (!!title || folder.trim() !== HOME)}
     >
@@ -273,18 +281,38 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
             label="Claude"
             value={claudeId}
             onChange={setClaudeId}
-            options={claudes.map((c) => ({ value: c.id, label: c.name }))}
-            placeholder={workspaceId ? 'Loading…' : 'Pick a workspace first'}
+            options={(claudes ?? []).map((c) => ({
+              value: c.claude.id,
+              label: signedOut(c) ? `${c.claude.name} · signed out` : c.claude.name,
+              disabled: signedOut(c),
+            }))}
+            placeholder={!workspaceId ? 'Pick a workspace first' : claudes === null ? 'Loading…' : 'Pick a Claude'}
+            hint={
+              !chosenWorkspace ? undefined : !ownSignIn ? (
+                'Runs on the workspace’s account pool.'
+              ) : claudes && !claudes.some((c) => !signedOut(c)) ? (
+                <>
+                  No Claude here is signed in.{' '}
+                  <Link to="/admin/workspaces" onClick={onClose} className="font-semibold text-ink underline underline-offset-2">
+                    Sign one in
+                  </Link>
+                </>
+              ) : (
+                'Runs on this Claude’s own sign-in.'
+              )
+            }
           />
-          <TextField
-            label="New Claude"
-            optional
-            hint="Leaves an empty directory on this workspace. Sign in from the terminal there if you want SSO. Portal chat uses the workspace account pool and does not ask."
-            placeholder="Name, to add one"
-            maxLength={CLAUDE_NAME_MAX}
-            value={newClaude}
-            onChange={(e) => setNewClaude(e.target.value)}
-          />
+          {!ownSignIn && (
+            <TextField
+              label="New Claude"
+              optional
+              hint="Adds an empty directory on this workspace, with its own chats. It runs on the account pool too."
+              placeholder="Name, to add one"
+              maxLength={CLAUDE_NAME_MAX}
+              value={newClaude}
+              onChange={(e) => setNewClaude(e.target.value)}
+            />
+          )}
           <TextField
             label="Title"
             optional

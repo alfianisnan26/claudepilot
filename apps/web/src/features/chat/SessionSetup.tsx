@@ -9,7 +9,7 @@ function wayOut(w: Workspace): { reason: string; to?: { label: string; href: str
   const shell = w.status === 'running';
   if (w.status === 'stopped') return { reason: 'Stopped', start: true, shell };
   if (w.status !== 'running') return { reason: w.status === 'error' ? 'Error' : 'Not ready yet', shell };
-  if (!w.account) return { reason: 'No account pool', to: { label: 'Assign', href: '/admin/workspaces' }, shell };
+  if (!w.account) return { reason: 'Ready', shell }; // runs on its Claudes' own sign-in
   if (w.account.state === 'removing') return { reason: 'Pool change in progress', shell };
   if (w.account.state === 'waiting') return { reason: 'Pool has no usable key', to: { label: 'Accounts', href: '/admin/accounts' }, shell };
   if (w.delivery?.status === 'locked') return { reason: 'Keys locked', to: { label: 'Access', href: '/admin/access' }, shell };
@@ -19,9 +19,9 @@ function wayOut(w: Workspace): { reason: string; to?: { label: string; href: str
 const shellHref = (w: Workspace) => `/admin/workspaces/${w.id}/shell`;
 
 /**
- * No workspace can host a session (US8): each one says why, with its way out, Start, Assign or
- * Open shell. Sessions run only on an account pool's keys (§6); a workspace signed in to Claude
- * itself is used from its shell, which is the dialog's main button.
+ * No workspace can host a session (US8): each one says why, with its way out, Start, Accounts or
+ * Open shell. A running workspace without a pool can always host one, on a Claude's own sign-in (§6),
+ * so what's listed here is stopped, or waiting on its pool.
  */
 export function NoSessionWorkspace({
   workspaces,
@@ -95,7 +95,7 @@ export function NoSessionWorkspace({
         })}
       </ul>
       <p className="text-[13px] text-muted">
-        Sessions need an account pool in the workspace. Signed in to Claude yourself? Use it in the shell.
+        Sessions run on a Claude’s own sign-in, or on the workspace’s account pool.
       </p>
     </div>
   );

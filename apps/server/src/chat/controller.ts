@@ -11,12 +11,14 @@
 // session. Redaction (§13): stored text and live deltas pass through redact.ts. Folder trust (FR43): no
 // process starts in a folder whose project settings would load something the person hasn't trusted.
 //
-// Credentials (§6): sessions are SDK-style use, so they run only on what an Account Pool delivered (its
-// managed `apiKeyHelper`), never on a workspace's own Claude login, which the portal never reads. Every
-// create, launch, resume and wake needs an eligible workspace (the `eligibility` hook: an active, Synced
-// assignment) and a passing `cp-session authcheck`; every turn's `system/init` must report the helper,
-// and after every `result` a `get_usage` must show no plan limits, or the session ends. A pool unassign
-// or move stops the workspace's sessions before it goes out (`endWorkspaceSessions`).
+// Credentials (§6): a session runs on one of two. On a workspace with an Account Pool, on the pool's keys
+// (its managed `apiKeyHelper`): every create, launch, resume and wake needs an active, Synced assignment
+// (the `eligibility` hook) and a passing `cp-session authcheck`; every turn's `system/init` must report
+// the helper, and after every `result` a `get_usage` must show no plan limits, or the session ends.
+// Without a pool, on its Claude's own sign-in: that Claude must be signed in (the `signedIn` hook, from
+// `claude auth status`) before each start, and the pool checks don't apply. The portal never reads the
+// login itself. Assigning, moving or unassigning a pool stops the workspace's sessions before it goes out
+// (`endWorkspaceSessions`), so a session never changes credential mid-run.
 
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
@@ -39,7 +41,7 @@ import type { Store } from '../store/store.js';
 import type { Workspaces } from '../workspaces/manager.js';
 import { HOME, type ExecSession } from '../workspaces/runtime.js';
 import { decodeAttachments, decodeToolImage, readBlob, saveBlob } from './blobs.js';
-import { ineligibleError, NOT_SET_UP, UNKNOWN, type Eligibility } from './eligibility.js';
+import { ineligibleError, NOT_SET_UP, NOT_SIGNED_IN, UNKNOWN, type Eligibility } from './eligibility.js';
 import { workspacePath } from './files.js';
 import { CP_SESSION_PATH, parseStartOutput } from './host.js';
 import {
@@ -242,6 +244,18 @@ export class ChatController {
    * eligible (tests); production always sets it.
    */
   eligibility?: (workspaceId: string) => Eligibility;
+  /**
+   * Installed by the owner: whether the workspace has an Account Pool assignment (in any state). With
+   * one, its sessions run on the pool's keys and the pool checks apply; without, each runs on its
+   * Claude's own sign-in. Unset, every workspace counts as pooled (tests).
+   */
+  pooled?: (workspaceId: string) => boolean;
+  /**
+   * Installed by the owner: whether a Claude's directory (`''` for Default) is signed in to Claude Code,
+   * from `claude auth status` (status only). Asked before every start of a session on its Claude's own
+   * sign-in. Unset, every Claude counts as signed in.
+   */
+  signedIn?: (workspaceId: string, directory: string) => Promise<boolean>;
   /** How long a control request waits for Claude Code's answer. */
   controlTimeoutMs = CONTROL_TIMEOUT_MS;
   /** How long one short `cp-session` command may run. */
@@ -453,8 +467,9 @@ export class ChatController {
 
   /**
    * Creates a session and starts its process in the background. The workspace must be eligible (§6
-   * rule 1: a 409 `CHAT_INELIGIBLE` with the reason otherwise, before anything runs there), its host must
-   * pass `authcheck` (the same 409 when the account drop-in doesn't name the pool's helper), and the
+   * rule 1: a 409 `CHAT_INELIGIBLE` with the reason otherwise, before anything runs there), its credential
+   * must check out (the same 409: on a pool, `authcheck` names its helper; without one, the Claude is
+   * signed in), and the
    * folder is checked (FR43): when its project settings would load something the person hasn't trusted
    * at this exact hash, this throws a 409 `FOLDER_UNTRUSTED` carrying the scan. Refused, nothing is created.
    */
@@ -466,21 +481,22 @@ export class ChatController {
     const cwd = this.#folder(req.cwd);
     const title = (typeof req.title === 'string' && req.title.trim() ? req.title.trim() : 'New session').slice(0, CHAT_SESSION_TITLE_MAX);
     this.#requireEligible(workspaceId);
+    const claude = typeof req.claudeId === 'string' && req.claudeId.trim() ? this.#chat.claude(req.claudeId.trim()) : this.#chat.ensureDefault(workspaceId);
+    if (!claude || claude.workspaceId !== workspaceId || claude.removedAt) {
+      throw new AppError('VALIDATION_FAILED', 'Pick a Claude on this workspace.', { details: { claudeId: 'Unknown Claude.' } });
+    }
     // The checks need the current host. If it can't be installed, the session is created anyway and its
     // launch tries again: failing, it ends with the reason, and nothing starts unchecked either way.
     let installed = true;
     if (this.installHost) await this.installHost(workspaceId).catch(() => void (installed = false));
     if (installed) {
-      if ((await this.#authcheck(workspaceId)) !== 'pass') throw ineligibleError(NOT_SET_UP);
+      const refused = await this.#credentialCheck(workspaceId, claude.id);
+      if (refused) throw ineligibleError(refused);
       const scan = await this.#scan(workspaceId, cwd);
       if (!scan.empty && !scan.trusted) throw untrustedError(scan, this.#chat.folderTrust(workspaceId, scan.folder) !== null);
     }
     // Asked again: the pool may have changed while the host was checked. The launch asks once more.
     this.#requireEligible(workspaceId);
-    const claude = typeof req.claudeId === 'string' && req.claudeId.trim() ? this.#chat.claude(req.claudeId.trim()) : this.#chat.ensureDefault(workspaceId);
-    if (!claude || claude.workspaceId !== workspaceId || claude.removedAt) {
-      throw new AppError('VALIDATION_FAILED', 'Pick a Claude on this workspace.', { details: { claudeId: 'Unknown Claude.' } });
-    }
     const id = randomUUID();
     const session = this.#chat.create({ id, workspaceId, cwd, title, origin: 'ui', claudeId: claude.id });
     void this.#startProcess(id, { checked: installed }).catch(() => undefined);
@@ -950,7 +966,7 @@ export class ChatController {
     // The folder it's scanned in is the folder it runs in (and the one the session reports).
     const cwd = sessionCwd(row.cwd);
 
-    // §6 rule 1: only on credentials an Account Pool delivered, before anything runs in the workspace.
+    // §6 rule 1: the workspace may host sessions now, before anything runs in it.
     this.#requireEligible(workspaceId, sessionId);
 
     if (this.installHost && !opts.checked) {
@@ -966,12 +982,12 @@ export class ChatController {
     }
 
     if (!opts.checked) {
-      let auth: 'pass' | 'fail';
+      let refused: string | null;
       let scan: ChatFolderScan | undefined;
       try {
-        // The host's own check first: a workspace not set up for the pool's keys never gets the trust sheet.
-        auth = await this.#authcheck(workspaceId);
-        if (auth === 'pass' && !cancelled()) scan = await this.#scan(workspaceId, cwd);
+        // The credential first: a workspace not set up for it never gets the trust sheet.
+        refused = await this.#credentialCheck(workspaceId, row.claude_id ?? null);
+        if (!refused && !cancelled()) scan = await this.#scan(workspaceId, cwd);
       } catch (e) {
         // The workspace couldn't be checked (unreachable, the folder gone): nothing starts, and like a
         // start that failed, the session reads Interrupted and a later send can resume it.
@@ -981,7 +997,7 @@ export class ChatController {
         return;
       }
       if (cancelled()) return;
-      if (auth !== 'pass') this.#refuse(sessionId, ineligibleError(NOT_SET_UP));
+      if (refused) this.#refuse(sessionId, ineligibleError(refused));
       if (scan && !scan.empty && !scan.trusted) this.#refuseLaunch(sessionId, row, scan);
     }
 
@@ -993,7 +1009,8 @@ export class ChatController {
     // `--resume` needs Claude Code's transcript, which exists once a turn has started (the first
     // `system/init`, stored as "Ready"); until then the id is unused and the session starts afresh.
     const resume = opts.resume === true && this.#chat.hasReady(sessionId);
-    const flags = [...BASE_FLAGS, resume ? '--resume' : '--session-id', sessionId, ...BUDGET_FLAGS];
+    // The spending cap is for the pool's keys; a Claude's own sign-in has its plan's limits instead.
+    const flags = [...BASE_FLAGS, resume ? '--resume' : '--session-id', sessionId, ...(this.#viaPool(workspaceId) ? BUDGET_FLAGS : [])];
     let code: number | null;
     let out: string;
     try {
@@ -1244,10 +1261,12 @@ export class ChatController {
 
     // Integrity (PRD §10.4): the stream may show only what this portal started.
     if (parsed.sessionIdSeen && parsed.sessionIdSeen !== sessionId) return void this.#endIntegrity(sessionId, `the agent reported a different session id (${shortId(parsed.sessionIdSeen)})`);
-    // Credentials (§6 rules 1 and 3): every turn on the pool's helper, and never plan limits. The source
-    // Claude Code reported is only compared, never kept.
-    if (parsed.apiKeySource !== undefined && parsed.apiKeySource !== POOL_KEY_SOURCE) return void this.#endCredential(sessionId, CREDENTIAL.keySource);
-    if (parsed.rateLimitEvent) return void this.#endCredential(sessionId, CREDENTIAL.planLimits);
+    // Credentials (§6 rules 1 and 3), on a pool: every turn on its helper, and never plan limits. The source
+    // Claude Code reported is only compared, never kept. On a Claude's own sign-in both are its own.
+    if ((parsed.apiKeySource !== undefined || parsed.rateLimitEvent) && this.#viaPool(this.#chat.row(sessionId)?.workspace_id ?? '')) {
+      if (parsed.apiKeySource !== undefined && parsed.apiKeySource !== POOL_KEY_SOURCE) return void this.#endCredential(sessionId, CREDENTIAL.keySource);
+      if (parsed.rateLimitEvent) return void this.#endCredential(sessionId, CREDENTIAL.planLimits);
+    }
     if (parsed.controlResponse && !this.#acceptControlResponse(sessionId, parsed.controlResponse)) return;
     if (parsed.replay && !this.#acceptReplay(sessionId, parsed.replay)) return;
     if (parsed.commandUuid && !this.#chat.isMessage(sessionId, parsed.commandUuid))
@@ -1600,6 +1619,8 @@ export class ChatController {
    */
   async #checkUsage(sessionId: string): Promise<void> {
     if (this.#closed || !this.#isLive(sessionId)) return;
+    // Only a pool's keys are confirmed: on a Claude's own sign-in, plan limits are expected.
+    if (!this.#viaPool(this.#chat.row(sessionId)!.workspace_id)) return this.#armIdle(sessionId);
     let reply: ControlResponse;
     try {
       reply = await this.#control(sessionId, 'get_usage', { skip_behaviors: true });
@@ -1619,6 +1640,27 @@ export class ChatController {
     const why = reply.ok ? usageVerdict(reply.response) : CREDENTIAL.refused;
     if (why) return this.#endCredential(sessionId, why);
     this.#armIdle(sessionId); // a sleep this check held off may go ahead now
+  }
+
+  /** Whether the workspace's sessions run on its Account Pool's keys (else on their Claude's own sign-in). */
+  #viaPool(workspaceId: string): boolean {
+    try {
+      return this.pooled ? this.pooled(workspaceId) : true;
+    } catch {
+      return true; // can't tell: the pool's checks apply
+    }
+  }
+
+  /**
+   * Before each start, the credential the session will run on: on a pool, `authcheck` must pass (§6 rule
+   * 1); without one, the session's Claude must be signed in. Returns the refusal's reason, or null. Throws
+   * when the workspace can't be asked.
+   */
+  async #credentialCheck(workspaceId: string, claudeId: string | null): Promise<string | null> {
+    if (this.#viaPool(workspaceId)) return (await this.#authcheck(workspaceId)) === 'pass' ? null : NOT_SET_UP;
+    if (!this.signedIn) return null;
+    const directory = (claudeId ? this.#chat.claude(claudeId)?.directory : '') ?? '';
+    return (await this.signedIn(workspaceId, directory)) ? null : NOT_SIGNED_IN;
   }
 
   /**

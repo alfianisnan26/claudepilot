@@ -1,7 +1,8 @@
-// Chat sessions: which workspaces may host them (chat-sessions PRD §6 rule 1). Sessions are SDK-style
-// use of Claude Code, so they run only on credentials the portal delivered through an Account Pool
-// (Anthropic API keys or custom hosts, via the managed `apiKeyHelper`), never on a workspace's own
-// Claude login. Eligibility comes from portal state alone, so nothing here reads the workspace.
+// Chat sessions: which workspaces may host them (chat-sessions PRD §6 rule 1). A workspace with an
+// Account Pool runs its sessions on the pool's keys (Anthropic API keys or custom hosts, via the managed
+// `apiKeyHelper`), so the pool must be active and delivered. A workspace without one runs each session on
+// its Claude's own sign-in, which the controller checks per launch. Eligibility comes from portal state
+// alone, so nothing here reads the workspace.
 
 import { AppError, defineErrorCodes } from '@isnanme/core';
 import { CHAT_INELIGIBLE, type WorkspaceAccountState } from '@portal/contracts';
@@ -25,6 +26,8 @@ export const NO_KEY = "This workspace's pool has no usable key right now.";
 export const NOT_SYNCED = "Delivery to this workspace isn't up to date yet.";
 /** `cp-session authcheck` failed: the account drop-in doesn't name Account Pool's helper. */
 export const NOT_SET_UP = "This workspace isn't set up to use its pool's keys yet.";
+/** No pool, and the session's Claude isn't signed in to Claude Code. */
+export const NOT_SIGNED_IN = 'This Claude isn’t signed in. Sign it in on its workspace, or assign an account pool.';
 /** The eligibility check itself failed (the database is unavailable, say). */
 export const UNKNOWN = "Couldn't check this workspace's account pool. Try again.";
 
@@ -41,6 +44,15 @@ export function poolEligibility(account: Pick<WorkspaceAccountState, 'state'> | 
   if (account.state !== 'active') return { ok: false, reason: NO_KEY };
   if (delivery !== 'synced') return { ok: false, reason: NOT_SYNCED };
   return { ok: true };
+}
+
+/**
+ * Rule 1 for any workspace: with an Account Pool assignment, {@link poolEligibility}; without one, it may
+ * host sessions, each on its Claude's own sign-in (checked per launch). Wire it as the controller's
+ * `eligibility` hook.
+ */
+export function chatEligibility(account: Pick<WorkspaceAccountState, 'state'> | null, delivery: DeliveryStatus | null | undefined): Eligibility {
+  return account ? poolEligibility(account, delivery) : { ok: true };
 }
 
 /** The refusal: 409 `CHAT_INELIGIBLE`, the reason as its message. */

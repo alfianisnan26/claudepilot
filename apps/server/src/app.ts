@@ -264,6 +264,11 @@ export function createApp(
 
   // Claude Code's own sign-in, driven from the portal; the credential stays in the workspace.
   const logins = new ClaudeLogins(workspaces);
+  // A session without a pool runs on its Claude's own sign-in (chat PRD §6): checked before each start.
+  chatController.signedIn = async (workspaceId, directory) => {
+    const slash = workspaceId.indexOf('/');
+    return (await logins.status(workspaceId.slice(0, slash), workspaceId.slice(slash + 1), directory)).loggedIn;
+  };
   const ownSignIn = (c: Context<Env>) => {
     const [target, name] = [c.req.param('target')!, c.req.param('name')!];
     if (pools.stateFor(`${target}/${name}`))
