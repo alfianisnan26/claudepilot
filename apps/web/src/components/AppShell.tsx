@@ -23,7 +23,7 @@ export function AppShell() {
     <div className={cn('min-h-dvh pb-10 sm:pb-16 sm:pl-20 lg:pl-64', showTabBar && 'pb-[calc(5rem+env(safe-area-inset-bottom))]')}>
       <Sidebar pathname={pathname} onLogout={() => void logout()} />
 
-      <header className="sticky top-0 z-40 border-b border-line bg-bg/80 pt-[env(safe-area-inset-top)] backdrop-blur-md sm:hidden">
+      <header className="sticky top-0 z-40 border-b border-line bg-bg/80 pt-[var(--inset-top)] backdrop-blur-md sm:hidden">
         <div className="mx-auto flex h-16 max-w-4xl items-center gap-6 px-4">
           <Logo to={HOME} />
           <div className="ml-auto flex items-center gap-1.5">
