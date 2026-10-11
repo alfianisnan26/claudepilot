@@ -2,20 +2,3 @@
 @import '@isnanme/tokens/tailwind.css';
 /* Let Tailwind see @isnanme/ui's class names (workspace root node_modules). */
 @source '../../../node_modules/@isnanme/ui/dist';
-
-/*
- * Space to keep clear at the top. Installed on iOS 26+, the system blurs the top edge of the app,
- * and the blur fades out about 40pt below the status bar, not at it: headers add this much so their
- * text and buttons sit below it. Landscape phones hide the status bar, so they keep the plain inset.
- */
-:root {
-  --inset-top: env(safe-area-inset-top);
-}
-/* -webkit-touch-callout: only iOS Safari has it, so installed apps elsewhere get no extra space. */
-@supports (-webkit-touch-callout: none) {
-  @media (display-mode: standalone) and (orientation: portrait) {
-    :root {
-      --inset-top: calc(env(safe-area-inset-top) + 2.5rem);
-    }
-  }
-}

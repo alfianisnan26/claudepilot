@@ -184,7 +184,7 @@ export function SessionPage() {
 
   return (
     <div className="flex h-dvh flex-col bg-bg text-ink">
-      <header className="sticky top-0 z-30 flex h-[calc(3.5rem+var(--inset-top))] shrink-0 items-center gap-2 border-b border-line bg-bg/90 px-2 pt-[var(--inset-top)] backdrop-blur-md sm:px-3">
+      <header className="sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 items-center gap-2 border-b border-line bg-bg/90 px-2 pt-[env(safe-area-inset-top)] backdrop-blur-md sm:px-3">
         <Link
           to="/admin/sessions"
           aria-label="Back to sessions"

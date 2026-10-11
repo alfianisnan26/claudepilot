@@ -383,7 +383,7 @@ function Sheet(props: FilesPanelProps) {
         animate={{ x: 0 }}
         exit={{ x: '100%', transition: { duration: 0.18, ease } }}
         transition={{ duration: 0.24, ease }}
-        className="relative flex h-full w-full flex-col bg-bg pt-[var(--inset-top)] pb-[env(safe-area-inset-bottom)] shadow-lift outline-none sm:w-[400px] sm:border-l sm:border-line"
+        className="relative flex h-full w-full flex-col bg-bg pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-lift outline-none sm:w-[400px] sm:border-l sm:border-line"
       >
         <FilesPanel {...props} closeLabel="Close files" titleId={titleId} />
       </motion.div>

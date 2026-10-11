@@ -96,7 +96,7 @@ export function ShellPage() {
 
   return (
     <div className="flex h-dvh flex-col bg-[#0b0b0c] text-[#e6e6e6]">
-      <header className="flex h-[calc(3rem+var(--inset-top))] shrink-0 items-center gap-3 border-b border-white/10 px-2 pt-[var(--inset-top)] sm:px-3">
+      <header className="sticky top-0 z-10 flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 bg-[#0b0b0c] items-center gap-3 border-b border-white/10 px-2 pt-[env(safe-area-inset-top)] sm:px-3">
         <Link
           to="/admin/workspaces"
           aria-label="Back to workspaces"
