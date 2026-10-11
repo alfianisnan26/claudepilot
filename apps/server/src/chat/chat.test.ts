@@ -84,6 +84,31 @@ test('parseLine: assistant text and tool_use blocks are stored with the agent la
   assert.equal(p.stored[1]!.text, 'ls', 'the one-line summary, never the input itself');
 });
 
+test('parseLine: thinking blocks are stored (never their signature), a thinking start is flagged, and a tool error is kept', () => {
+  const a = parseLine(
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'thinking', thinking: 'Let me check the cookie.', signature: 'SIG-XYZ' }, { type: 'redacted_thinking', data: 'OPAQUE' }, { type: 'text', text: 'Done' }] },
+      parent_tool_use_id: null,
+    }),
+  );
+  assert.deepEqual(
+    a.stored.map((e) => [e.kind, e.text]),
+    [
+      ['thinking', 'Let me check the cookie.'],
+      ['thinking', ''],
+      ['assistant', 'Done'],
+    ],
+  );
+  assert.ok(!JSON.stringify(a.stored).includes('SIG-XYZ') && !JSON.stringify(a.stored).includes('OPAQUE'));
+  const start = (type: string) => parseLine(JSON.stringify({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type } }, parent_tool_use_id: 'toolu_t' }));
+  assert.deepEqual(start('thinking').thinkingStarted, { agentLabel: 'toolu_t' });
+  assert.equal(start('text').thinkingStarted, undefined);
+  const err = parseLine(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_x', content: 'File does not exist.', is_error: true }] }, parent_tool_use_id: null }));
+  assert.equal(err.stored[0]!.isError, true);
+  assert.equal(err.stored[0]!.toolUseId, 'toolu_x');
+});
+
 test('parseLine: an incoming tool_result is stored; a replayed string user line is ignored', () => {
   const tr = parseLine(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok', is_error: false }] }, parent_tool_use_id: null }));
   assert.deepEqual(tr.stored.map((e) => e.kind), ['tool_result']);
@@ -982,6 +1007,39 @@ test('controller: task events are stored without the prompt, emitted as the full
   }
 });
 
+test('controller: a thinking block is announced live and timed from its start; a failed tool keeps its error', async () => {
+  const s = await liveSession();
+  try {
+    s.tail.push(line({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, parent_tool_use_id: null }));
+    await until(() => s.messages.some((m) => m.type === 'delta' && m.thinking === true && m.text === ''));
+    await sleep(80);
+    // A tab subscribing now learns the block is open, and for how long.
+    const open = s.controller.openThinking(s.id);
+    assert.equal(open.length, 1);
+    assert.equal(open[0]!.agentLabel, null);
+    assert.ok(open[0]!.elapsedMs >= 70, `elapsedMs ${open[0]!.elapsedMs}`);
+    s.tail.push(line({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'Checking the cookie.', signature: 'SIG-XYZ' }] }, parent_tool_use_id: null, uuid: 'a-th' }));
+    await until(() => s.controller.history(s.id).some((e) => e.kind === 'thinking'));
+    assert.deepEqual(s.controller.openThinking(s.id), [], 'stored: no longer open');
+    const thought = s.controller.history(s.id).find((e) => e.kind === 'thinking')!;
+    assert.equal(thought.text, 'Checking the cookie.');
+    assert.ok(thought.durationMs !== undefined && thought.durationMs >= 70, `durationMs ${thought.durationMs}`);
+    // A block whose start the portal never saw (read after a restart, say) has no duration.
+    s.tail.push(line({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'More.' }] }, parent_tool_use_id: null, uuid: 'a-th2' }));
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'thinking').length === 2);
+    assert.equal(s.controller.history(s.id).filter((e) => e.kind === 'thinking')[1]!.durationMs, undefined);
+
+    s.tail.push(line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_r', name: 'Read', input: { file_path: '/nope' } }] }, parent_tool_use_id: null, uuid: 'a-r' }));
+    s.tail.push(line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_r', content: 'File does not exist.', is_error: true }] }, parent_tool_use_id: null }));
+    await until(() => s.controller.history(s.id).some((e) => e.kind === 'tool_result'));
+    const failed = s.controller.history(s.id).find((e) => e.kind === 'tool_result')!;
+    assert.deepEqual([failed.isError, failed.toolUseId, failed.toolName], [true, 'toolu_r', 'Read']);
+    assert.ok(!JSON.stringify(s.controller.history(s.id)).includes('SIG-XYZ'));
+  } finally {
+    await s.done();
+  }
+});
+
 test('controller: each tool_result is named from its own call, even when parallel calls finish out of order', async () => {
   const s = await liveSession();
   try {
@@ -1006,7 +1064,16 @@ test('controller: each tool_result is named from its own call, even when paralle
       ['?', undefined],
       ['again', 'Bash'],
     ]);
-    assert.ok(!JSON.stringify(s.controller.history(s.id)).includes('toolu_a'), 'the call id is kept for naming only, never shown');
+    // Each result carries its call's id, so the transcript pairs them (a result for an unknown call keeps its own).
+    const pairs = s.controller.history(s.id).flatMap((e) => (e.kind === 'tool_use' || e.kind === 'tool_result' ? [[e.kind, e.toolUseId]] : []));
+    assert.deepEqual(pairs, [
+      ['tool_use', 'toolu_a'],
+      ['tool_use', 'toolu_b'],
+      ['tool_result', 'toolu_b'],
+      ['tool_result', 'toolu_a'],
+      ['tool_result', 'toolu_zzz'],
+      ['tool_result', 'toolu_a'],
+    ]);
     assert.equal(new ChatStore(s.store).toolName(s.id, 'toolu_b'), 'Read');
   } finally {
     await s.done();

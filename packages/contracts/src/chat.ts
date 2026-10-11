@@ -66,6 +66,7 @@ export type ChatEventKind =
   | 'result' // a turn finished (with cost/usage)
   | 'tool_use' // the agent used a tool
   | 'tool_result' // a tool returned
+  | 'thinking' // a finished thinking block (`text` is the reasoning, `durationMs` how long it took)
   | 'retry' // an API retry (rate limit, overloaded)
   | 'request' // something needs an answer (carries `request`)
   | 'resolved' // a request was answered or withdrawn (carries `requestId`, `outcome`)
@@ -85,6 +86,12 @@ export interface ChatEvent {
   outcome?: string;
   /** For `result`: the turn's cost and model. */
   costUsd?: number;
+  /** For `tool_use` and `tool_result`: the call they belong to, pairing a result with its call. */
+  toolUseId?: string;
+  /** For `tool_result`: the tool failed. */
+  isError?: boolean;
+  /** For `thinking`: how long the block took, when the portal saw it start. */
+  durationMs?: number;
   /** Images on this event (sent by you, or returned by a tool), served from `CHAT_API.blob`. */
   images?: ChatImage[];
   /** For `user`: the client UUID it was sent with, to match lifecycle updates (`input` messages). */
@@ -309,7 +316,15 @@ export type ChatServerMessage =
   /** Stored events, in order, for a subscribed session (also the backlog on subscribe). */
   | { type: 'events'; session: string; items: ChatEvent[] }
   /** Live assistant tokens for the open block; never stored, not replayed on resume. */
-  | { type: 'delta'; session: string; agentLabel: string | null; text: string }
+  | {
+      type: 'delta';
+      session: string;
+      agentLabel: string | null;
+      text: string;
+      /** A thinking block opened (no text); `elapsedMs` says how long ago, for a tab that joins late. */
+      thinking?: boolean;
+      elapsedMs?: number;
+    }
   /** The session's state/counters changed. */
   | { type: 'session'; session: ChatSession }
   /** Result of a send/respond/control the tab sent. */

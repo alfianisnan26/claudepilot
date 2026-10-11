@@ -645,8 +645,11 @@ export class ChatStore {
     if (ev.request !== undefined) p.request = { ...ev.request, detail: redactMaybe(ev.request.detail) };
     if (ev.outcome !== undefined) p.outcome = ev.outcome;
     if (ev.costUsd !== undefined) p.costUsd = ev.costUsd;
-    // A call's id, kept (not shown) so a result read after a restart can still be named.
-    if (ev.kind === 'tool_use' && ev.toolUseId) p.toolUseId = ev.toolUseId;
+    // A call's id, on the call and its result: a result read after a restart can still be named, and the
+    // transcript pairs each call with its result.
+    if ((ev.kind === 'tool_use' || ev.kind === 'tool_result') && ev.toolUseId) p.toolUseId = ev.toolUseId;
+    if (ev.kind === 'tool_result' && ev.isError) p.isError = true;
+    if (ev.kind === 'thinking' && ev.durationMs !== undefined) p.durationMs = ev.durationMs;
     // The readable sub-agent label, when it isn't just the raw parent_tool_use_id kept in its column.
     if (ev.agentLabel && ev.agentLabel !== ev.parentToolUseId) p.agentLabel = redact(ev.agentLabel);
     // Blob references only: base64 never reaches a row (the controller moves it to the blob store).
@@ -666,6 +669,9 @@ export class ChatStore {
     if (payload.request && typeof payload.request === 'object') ev.request = payload.request as ChatRequest;
     if (typeof payload.outcome === 'string') ev.outcome = payload.outcome;
     if (typeof payload.costUsd === 'number') ev.costUsd = payload.costUsd;
+    if (typeof payload.toolUseId === 'string') ev.toolUseId = payload.toolUseId;
+    if (payload.isError === true) ev.isError = true;
+    if (typeof payload.durationMs === 'number') ev.durationMs = payload.durationMs;
     if (Array.isArray(payload.images)) {
       const images = payload.images.map(imageRef).filter((i): i is ChatImage => i !== null);
       if (images.length) ev.images = images;

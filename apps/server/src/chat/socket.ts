@@ -105,6 +105,9 @@ export function attachChat(server: Server, controller: ChatController, authorize
             send({ type: 'tasks', session: msg.session, tasks: controller.tasks(msg.session) });
             // Queued, withdrawn and failed messages: what the transcript alone can't tell a fresh tab.
             for (const input of controller.inputStates(msg.session)) send({ type: 'input', session: msg.session, uuid: input.uuid, state: input.state });
+            // A thinking block already under way shows as "Thinking…", timed from its real start.
+            for (const t of controller.openThinking(msg.session))
+              send({ type: 'delta', session: msg.session, agentLabel: t.agentLabel, text: '', thinking: true, elapsedMs: t.elapsedMs });
           }
           return;
         }

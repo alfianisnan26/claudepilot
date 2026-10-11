@@ -1,11 +1,12 @@
 import { cn, Spinner } from '@isnanme/ui';
 import type { ChatEvent, ChatImage, ChatInputState } from '@portal/contracts';
-import { Clock3, ImageIcon, Wrench, X } from 'lucide-react';
+import { Clock3, ImageIcon, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { chatApi } from './api';
 import { imageAlt, imageFileName, ImageThumbs, type ViewerImage } from './ImageViewer';
-import { CopyButton, Markdown } from './Markdown';
+import { Markdown, QuietCopyButton } from './Markdown';
 import { formatUsd } from './shared';
+import { buildRows, LiveThinking, ThinkingRow, ToolCall, ToolGroup, toolLabel, type ToolPair } from './ToolRows';
 import type { ChatDelta, ChatOutgoing } from './useChatSocket';
 
 /** Friendly words for a resolved request's outcome. */
@@ -18,9 +19,6 @@ const OUTCOME: Record<string, string> = {
 };
 
 const NO_INPUTS: ReadonlyMap<string, ChatInputState> = new Map();
-
-/** "mcp__playwright__browser_take_screenshot" reads "playwright · browser_take_screenshot". */
-const toolLabel = (name: string) => (name.startsWith('mcp__') ? name.slice(5).split('__').filter(Boolean).join(' · ') : name);
 
 interface RowContext {
   sessionId: string;
@@ -39,6 +37,9 @@ interface RowContext {
  * the bottom while new lines, live tokens and images arrive — but only when the reader is already
  * there, so scrolling up to re-read is never yanked back down. Messages sent from this tab that
  * aren't stored yet (`outbox`) show at the end, faded, until the stored copy replaces them.
+ *
+ * Tool calls show with their results, thinking as "Thought for 12 s", and runs of read-only calls as
+ * one row, all folded; `details` (Show all details) opens every row and ungroups the runs.
  */
 export function Transcript({
   sessionId,
@@ -48,6 +49,8 @@ export function Transcript({
   inputs = NO_INPUTS,
   agentNames,
   onCancelQueued,
+  details = false,
+  working = false,
   className,
 }: {
   sessionId: string;
@@ -58,6 +61,10 @@ export function Transcript({
   /** Sub-agent labels (`Task` tool_use ids) → their task's description. */
   agentNames?: ReadonlyMap<string, string>;
   onCancelQueued?: (uuid: string, text: string) => Promise<void>;
+  /** Show all details: every row open, read-only runs ungrouped. */
+  details?: boolean;
+  /** A turn is running: calls still waiting for their result show a spinner. */
+  working?: boolean;
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -116,6 +123,8 @@ export function Transcript({
     return out;
   }, [events]);
 
+  const rows = useMemo(() => buildRows(events, !details), [events, details]);
+
   const ctx: RowContext = {
     sessionId,
     inputs,
@@ -123,6 +132,21 @@ export function Transcript({
     resultTools,
     finals,
     onCancelQueued,
+  };
+
+  const toolCall = (t: ToolPair) => {
+    const tool = t.call.toolName ? toolLabel(t.call.toolName) : 'a tool';
+    return (
+      <ToolCall
+        key={`t${t.call.seq}`}
+        call={t.call}
+        result={t.result}
+        agent={ctx.agentName(t.call.agentLabel)}
+        running={working}
+        details={details}
+        images={storedImages(sessionId, t.result?.images, `Image from ${tool}`)}
+      />
+    );
   };
 
   return (
@@ -135,9 +159,27 @@ export function Transcript({
       className={cn('overflow-y-auto overscroll-contain px-4 py-5', className)}
     >
       <div className="mx-auto flex w-full max-w-[760px] flex-col gap-3">
-        {events.map((e) => (
-          <EventRow key={e.seq} event={e} ctx={ctx} />
-        ))}
+        {rows.map((r) => {
+          switch (r.type) {
+            case 'event':
+              return <EventRow key={`e${r.event.seq}`} event={r.event} ctx={ctx} />;
+            case 'tool':
+              return toolCall(r);
+            case 'group':
+              return (
+                <ToolGroup
+                  key={`g${r.tools[0]!.call.seq}`}
+                  tools={r.tools}
+                  agent={ctx.agentName(r.tools[0]!.call.agentLabel)}
+                  running={working}
+                  details={details}
+                  render={toolCall}
+                />
+              );
+            case 'thinking':
+              return <ThinkingRow key={`h${r.event.seq}`} event={r.event} agent={ctx.agentName(r.event.agentLabel)} details={details} />;
+          }
+        })}
         {outbox.map((o) => (
           <UserMessage
             key={o.uuid}
@@ -148,7 +190,12 @@ export function Transcript({
             onCancel={onCancelQueued ? () => onCancelQueued(o.uuid, o.text) : undefined}
           />
         ))}
-        {delta && <AssistantReply text={delta.text} agentLabel={ctx.agentName(delta.agentLabel)} live />}
+        {delta &&
+          (delta.thinking ? (
+            <LiveThinking since={delta.thinking.since} agent={ctx.agentName(delta.agentLabel)} />
+          ) : (
+            <AssistantReply text={delta.text} agentLabel={ctx.agentName(delta.agentLabel)} live />
+          ))}
       </div>
     </div>
   );
@@ -179,22 +226,7 @@ function EventRow({ event: e, ctx }: { event: ChatEvent; ctx: RowContext }) {
     }
     case 'assistant':
       return <AssistantReply text={e.text ?? ''} agentLabel={ctx.agentName(e.agentLabel)} copy={ctx.finals.has(e.seq)} />;
-    case 'tool_use': {
-      const agent = ctx.agentName(e.agentLabel);
-      return (
-        <ToolRow>
-          <Wrench className="size-3.5 shrink-0" />
-          <span className="shrink-0 font-mono">{e.toolName ? toolLabel(e.toolName) : 'tool'}</span>
-          {e.text && (
-            <span title={e.text} className="min-w-0 truncate font-mono text-muted">
-              {e.text}
-            </span>
-          )}
-          {agent && <span className="shrink-0 truncate text-muted/80">· {agent}</span>}
-        </ToolRow>
-      );
-    }
-    // Tool output stays folded to keep the log readable; images a tool returned are worth showing.
+    // A result with no call to join (calls show their own results): only shown for its images.
     case 'tool_result': {
       if (!e.images?.length) return null;
       const name = ctx.resultTools.get(e.seq);
@@ -336,7 +368,7 @@ function AssistantReply({ text, agentLabel, live, copy }: { text: string; agentL
       {live ? (
         <span className="mt-1 inline-block h-[1.05em] w-[2px] animate-pulse bg-ink/60" aria-hidden="true" />
       ) : (
-        copy && text && <CopyButton text={text} label="Copy reply" className="-ml-1.5" />
+        copy && text && <QuietCopyButton text={text} label="Copy reply" className="-ml-1.5" />
       )}
     </div>
   );

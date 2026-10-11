@@ -1,39 +1,14 @@
-import { cn } from '@isnanme/ui';
+import { cn, copyText } from '@isnanme/ui';
 import { Check, Copy, ImageIcon } from 'lucide-react';
 import { Children, isValidElement, memo, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 /**
- * Copies text: the Clipboard API where the page may use it (HTTPS or localhost), else the old
- * select-and-copy, which also works when the portal is opened over plain HTTP on a LAN.
+ * A quiet Copy for code blocks and replies (the kit's CopyButton is a bordered pill with a toast): a tick
+ * for a moment after. The kit's `copyText` falls back to select-and-copy over plain HTTP on a LAN.
  */
-export async function copyText(text: string): Promise<boolean> {
-  try {
-    if (window.isSecureContext && navigator.clipboard) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // fall through to the textarea
-  }
-  const area = document.createElement('textarea');
-  area.value = text;
-  area.setAttribute('readonly', '');
-  area.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
-  document.body.appendChild(area);
-  area.select();
-  try {
-    return document.execCommand('copy');
-  } catch {
-    return false;
-  } finally {
-    area.remove();
-  }
-}
-
-/** Copy, then a tick for a moment. `label` names what it copies for screen readers. */
-export function CopyButton({ text, label, className, children }: { text: string; label: string; className?: string; children?: ReactNode }) {
+export function QuietCopyButton({ text, label, className, children }: { text: string; label: string; className?: string; children?: ReactNode }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -78,9 +53,9 @@ function CodeBlock({ children }: { children?: ReactNode }) {
     <div className="my-3 overflow-hidden rounded-xl border border-line bg-surface-2/60">
       <div className="flex items-center justify-between border-b border-line py-0.5 pr-1 pl-3">
         <span className="font-mono text-[11px] text-muted">{lang ?? 'text'}</span>
-        <CopyButton text={source} label={lang ? `Copy ${lang} code` : 'Copy code'}>
+        <QuietCopyButton text={source} label={lang ? `Copy ${lang} code` : 'Copy code'}>
           Copy
-        </CopyButton>
+        </QuietCopyButton>
       </div>
       <pre className="overflow-x-auto px-3 py-2.5 font-mono text-[12.5px] leading-relaxed">
         <code>{source}</code>

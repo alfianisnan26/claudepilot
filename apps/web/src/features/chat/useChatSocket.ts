@@ -20,6 +20,8 @@ import { chatApi } from './api';
 export interface ChatDelta {
   agentLabel: string | null;
   text: string;
+  /** A thinking block is open (its text isn't streamed); `since` is when this tab heard it start. */
+  thinking?: { since: number };
 }
 
 export interface ChatSendOptions {
@@ -147,8 +149,10 @@ export function useChatSession(sessionId: string): ChatSessionApi {
       if (items.length === 0) return;
       for (const e of items) if (e.seq > seqRef.current) seqRef.current = e.seq;
       setEvents((prev) => mergeEvents(prev, items));
-      // A finished assistant block or a turn result supersedes whatever the live delta was showing.
+      // A finished assistant block or a turn result supersedes whatever the live delta was showing;
+      // a finished thinking block ends a "Thinking…" delta.
       if (items.some((e) => e.kind === 'assistant' || e.kind === 'result')) setDelta(null);
+      else if (items.some((e) => e.kind === 'thinking')) setDelta((d) => (d?.thinking ? null : d));
       // Stored now: the transcript shows the real event instead of the optimistic copy.
       const stored = new Set(items.flatMap((e) => (e.kind === 'user' && e.uuid ? [e.uuid] : [])));
       if (stored.size) setOutbox((o) => (o.some((x) => stored.has(x.uuid)) ? o.filter((x) => !stored.has(x.uuid)) : o));
@@ -215,9 +219,16 @@ export function useChatSession(sessionId: string): ChatSessionApi {
           if (msg.session === sessionId) applyEvents(msg.items);
           break;
         case 'delta':
-          // Deltas are pieces of the open block: append them (a new agent starts a new bubble).
+          // Deltas are pieces of the open block: append them (a new agent, or text after thinking, starts
+          // afresh). A thinking start carries no text: it shows as "Thinking…" until the block is stored.
           if (msg.session === sessionId)
-            setDelta((d) => (d && d.agentLabel === msg.agentLabel ? { ...d, text: d.text + msg.text } : { agentLabel: msg.agentLabel, text: msg.text }));
+            setDelta((d) =>
+              msg.thinking
+                ? { agentLabel: msg.agentLabel, text: '', thinking: { since: Date.now() - (msg.elapsedMs ?? 0) } }
+                : d && d.agentLabel === msg.agentLabel && !d.thinking
+                  ? { ...d, text: d.text + msg.text }
+                  : { agentLabel: msg.agentLabel, text: msg.text },
+            );
           break;
         case 'session':
           if (msg.session.id === sessionId) setSession(msg.session);

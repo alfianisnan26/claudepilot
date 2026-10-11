@@ -214,6 +214,8 @@ export class ChatController {
   readonly #toolCalls = new Map<string, Map<string, string>>();
   /** Per session, per agent (`''` for the main thread): the open text block's redactor. */
   readonly #streams = new Map<string, Map<string, StreamRedactor>>();
+  /** Per session, per agent ('' for the main one): when its open thinking block started (epoch ms). */
+  readonly #thinkingSince = new Map<string, Map<string, number>>();
   /** Per session: the permission mode the stream must report. */
   readonly #modes = new Map<string, ModeTrack>();
   readonly #idleTimers = new Map<string, NodeJS.Timeout>();
@@ -1114,6 +1116,15 @@ export class ChatController {
         reader.ready = true;
       }
       if (ev.parentToolUseId) ev.agentLabel = this.#label(sessionId, ev.parentToolUseId);
+      // "Thought for 12 s": timed from the block's start in the stream, when the portal saw it.
+      if (ev.kind === 'thinking') {
+        const since = this.#thinkingSince.get(sessionId);
+        const started = since?.get(ev.parentToolUseId ?? '');
+        if (started !== undefined) {
+          ev.durationMs = Math.max(0, Date.now() - started);
+          since!.delete(ev.parentToolUseId ?? '');
+        }
+      }
       // Name each result from its own call (parallel calls finish in any order).
       if (ev.kind === 'tool_use' && ev.toolUseId && ev.toolName) this.#calls(sessionId).set(ev.toolUseId, ev.toolName);
       if (ev.kind === 'tool_result' && ev.toolUseId && ev.toolName === undefined) ev.toolName = this.#toolFor(sessionId, ev.toolUseId);
@@ -1162,6 +1173,7 @@ export class ChatController {
 
     for (const { uuid, state } of parsed.inputs ?? []) this.#setInput(sessionId, uuid, state);
 
+    if (parsed.thinkingStarted) this.#thinkingStarted(sessionId, parsed.thinkingStarted.agentLabel);
     if (parsed.delta) this.#pushDelta(sessionId, parsed.delta.agentLabel, parsed.delta.text);
     if (parsed.blockEdge) this.#flushDelta(sessionId, parsed.blockEdge.agentLabel);
 
@@ -1173,7 +1185,10 @@ export class ChatController {
 
     // After every turn, the subscription check (§6 rule 3) — asked once this line has committed, so the
     // request it records can't be rolled back with it.
-    if (parsed.result) setImmediate(() => void this.#checkUsage(sessionId).catch(() => undefined));
+    if (parsed.result) {
+      this.#thinkingSince.delete(sessionId); // a block cut short (stopped mid-thought) is never stored
+      setImmediate(() => void this.#checkUsage(sessionId).catch(() => undefined));
+    }
   }
 
   /**
@@ -1342,6 +1357,23 @@ export class ChatController {
     for (const ev of parsed.stored) if (ev.kind === 'assistant') this.#flushDelta(sessionId, ev.parentToolUseId ?? null);
   }
 
+  /** Thinking blocks open right now, for a tab that subscribes mid-block (each with how long it has run). */
+  openThinking(sessionId: string): { agentLabel: string | null; elapsedMs: number }[] {
+    const now = Date.now();
+    return [...(this.#thinkingSince.get(sessionId) ?? [])].map(([agent, since]) => ({
+      agentLabel: agent ? this.#label(sessionId, agent) : null,
+      elapsedMs: Math.max(0, now - since),
+    }));
+  }
+
+  /** A thinking block opened: note when, and tell open tabs (its text is never streamed). */
+  #thinkingStarted(sessionId: string, agent: string | null): void {
+    let since = this.#thinkingSince.get(sessionId);
+    if (!since) this.#thinkingSince.set(sessionId, (since = new Map()));
+    since.set(agent ?? '', Date.now());
+    this.#emit(sessionId, { type: 'delta', session: sessionId, agentLabel: agent ? this.#label(sessionId, agent) : null, text: '', thinking: true });
+  }
+
   #emitDelta(sessionId: string, agent: string | null, text: string): void {
     if (!text) return;
     this.#emit(sessionId, { type: 'delta', session: sessionId, agentLabel: agent ? this.#label(sessionId, agent) : null, text });
@@ -1460,6 +1492,7 @@ export class ChatController {
     this.#agentNames.delete(sessionId);
     this.#toolCalls.delete(sessionId);
     this.#streams.delete(sessionId);
+    this.#thinkingSince.delete(sessionId);
     this.#modes.delete(sessionId);
   }
 

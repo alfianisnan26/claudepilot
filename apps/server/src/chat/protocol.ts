@@ -53,6 +53,8 @@ export interface ParsedLine {
   stored: StoredEvent[];
   /** A live token for the open block; shown but never stored (not replayed on resume). */
   delta?: { agentLabel: string | null; text: string };
+  /** A thinking block started (its text isn't streamed; the finished block is stored as `thinking`). */
+  thinkingStarted?: { agentLabel: string | null };
   /** Fields to update on the session row. `cost` is absolute; `turnsDelta` is added. */
   sessionPatch?: { model?: string; mode?: string; state?: ChatSessionState; cost?: number; turnsDelta?: number };
   /** A permission/question request the agent raised (carries the tool_use_id for the controller). */
@@ -311,6 +313,8 @@ function parseStreamEvent(obj: Record<string, unknown>): ParsedLine {
       return { stored: [] };
     }
     case 'content_block_start':
+      if (asStr(asObj(event?.content_block)?.type) === 'thinking') return { stored: [], blockEdge: { agentLabel }, thinkingStarted: { agentLabel } };
+      return { stored: [], blockEdge: { agentLabel } };
     case 'content_block_stop':
     case 'message_stop':
       return { stored: [], blockEdge: { agentLabel } };
@@ -340,6 +344,9 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
       const block = asObj(raw);
       if (!block) continue;
       if (asStr(block.type) === 'text') stored.push({ kind: 'assistant', text: asStr(block.text) ?? '', agentLabel, uuid, parentToolUseId: agentLabel });
+      // Thinking shows as a collapsed row; redacted thinking has nothing readable, only that it happened.
+      else if (asStr(block.type) === 'thinking' || asStr(block.type) === 'redacted_thinking')
+        stored.push({ kind: 'thinking', text: asStr(block.thinking) ?? '', agentLabel, uuid, parentToolUseId: agentLabel });
       else if (asStr(block.type) === 'tool_use') {
         const name = asStr(block.name);
         const id = asStr(block.id);
@@ -394,6 +401,7 @@ function parseUser(obj: Record<string, unknown>): ParsedLine {
     if (type === 'tool_result') {
       const { text, images } = toolResultContent(block.content);
       last = { kind: 'tool_result', text, agentLabel, parentToolUseId: agentLabel };
+      if (block.is_error === true) last.isError = true;
       const toolUseId = asStr(block.tool_use_id);
       if (toolUseId) last.toolUseId = toolUseId; // the controller names the result from its call
       if (images.length) last.rawImages = images;

@@ -1,11 +1,9 @@
-import { Button, cn, Dialog, Spinner, SwitchRow } from '@isnanme/ui';
+import { Button, ChipGroup, cn, Dialog, Spinner, SwitchRow } from '@isnanme/ui';
 import type { ChatModelOption, ChatPermissionMode, ChatSession } from '@portal/contracts';
 import {
   Check,
   ChevronDown,
-  Cpu,
   FilePen,
-  Gauge,
   Hand,
   ListChecks,
   ShieldAlert,
@@ -13,14 +11,19 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { formatTokens } from './shared';
 import type { ChatControlArgs, ChatControlOp } from './useChatSocket';
 
 type Control = (op: ChatControlOp, args?: ChatControlArgs) => Promise<void>;
-type Picker = 'model' | 'effort' | 'mode';
+type Picker = 'model' | 'mode';
+
+/** Opens the mode picker from elsewhere: on phones, Mode lives in the session's ⋯ menu. */
+export interface ControlsHandle {
+  openMode: () => void;
+}
 
 /** Every mode a session can report, so the chip always reads right; only `OFFERED_MODES` can be picked here. */
 const MODES: Record<ChatPermissionMode, { label: string; hint: string; icon: LucideIcon; danger?: boolean }> = {
@@ -30,6 +33,9 @@ const MODES: Record<ChatPermissionMode, { label: string; hint: string; icon: Luc
   dontAsk: { label: 'Don’t ask', hint: 'Runs only pre-approved actions and denies the rest.', icon: ShieldOff },
   bypassPermissions: { label: 'Bypass', hint: 'Runs everything without asking.', icon: ShieldAlert, danger: true },
 };
+/** A mode's name and icon, for the ⋯ menu's Mode item. */
+export const modeDetails = (mode: ChatPermissionMode) => MODES[mode] ?? MODES.default;
+
 /** Bypass needs its own opt-in and confirmation, so it's never offered here. */
 const OFFERED_MODES: ChatPermissionMode[] = ['default', 'acceptEdits', 'plan'];
 
@@ -67,10 +73,11 @@ function matchModel(models: ChatModelOption[] | null, applied: string | null, pi
 }
 
 /**
- * The session's controls, just above the composer: model, effort, Ultracode (when on) and permission
- * mode as chips. Each opens a small picker (a bottom sheet on phones) that sends the change and waits
- * for its ack, showing the error in place. Chips always show what the session reports as applied,
- * never what was asked for. At the end of the row, how full the context window is.
+ * The session's controls, one quiet line above the composer: "Opus 5.5 · Medium" (with ⚡ while
+ * Ultracode is on) opens one Model and effort sheet (chat PRD §12.4); the permission mode follows from
+ * 640 px (on phones it's in the ⋯ menu, and shows here only when it isn't Ask); how full the context
+ * window is sits at the end. Pickers send the change and wait for its ack, showing the error in place,
+ * and the line always shows what the session reports as applied, never what was asked for.
  */
 export function Controls({
   sessionId,
@@ -79,6 +86,7 @@ export function Controls({
   control,
   suspended,
   className,
+  ref,
 }: {
   sessionId: string;
   session: ChatSession;
@@ -87,9 +95,11 @@ export function Controls({
   /** Another prompt has the screen (the folder needs trust before a change can apply): pickers stay closed. */
   suspended?: boolean;
   className?: string;
+  ref?: Ref<ControlsHandle>;
 }) {
   const [open, setOpen] = useState<Picker | null>(null);
   if (suspended && open !== null) setOpen(null);
+  useImperativeHandle(ref, () => ({ openMode: () => setOpen('mode') }), []);
   const [models, setModels] = useState<ChatModelOption[] | null>(null);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
@@ -102,9 +112,9 @@ export function Controls({
     setPicked(null);
   }, [sessionId]);
 
-  // The model list is fetched each time the model picker opens (and once for the effort picker,
-  // which needs the model's levels); what was loaded stays on screen while it refreshes.
-  const needModels = open === 'model' || (open === 'effort' && models === null);
+  // The model list (with each model's effort levels) is fetched each time the sheet opens; what was
+  // loaded stays on screen while it refreshes.
+  const needModels = open === 'model';
   useEffect(() => {
     if (!needModels) return;
     let current = true;
@@ -123,78 +133,52 @@ export function Controls({
   // "Default (recommended)" names a choice, not the model running).
   const modelName = session.model ? prettyModel(session.model) : current?.displayName || 'Model';
   const mode = MODES[session.mode] ?? MODES.default;
-  // Ultracode lives in the effort picker; with no effort chip, its own chip is the way there.
-  const showUltracode = session.ultracode || (session.ultracodeAvailable && session.effort === null);
+  const ModeIcon = mode.icon;
+  const effort = session.effort !== null ? effortLabel(session.effort) : null;
   const close = () => setOpen(null);
   // A change that lands after its picker was closed (or another opened) leaves the screen alone.
   const done = (picker: Picker) => setOpen((o) => (o === picker ? null : o));
 
   return (
     <>
-      <div className={cn('flex items-center gap-1.5', className)}>
-        <div role="group" aria-label="Session settings" className="no-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
-          <Chip
-            icon={Cpu}
-            label={modelName}
-            ariaLabel={`Model: ${modelName}`}
-            title={session.model ?? undefined}
-            onClick={() => setOpen('model')}
-            shrink
-          />
-          {session.effort !== null && (
-            <Chip icon={Gauge} label={effortLabel(session.effort)} ariaLabel={`Effort: ${effortLabel(session.effort)}`} onClick={() => setOpen('effort')} />
-          )}
-          {showUltracode && (
-            <Chip
-              icon={Zap}
-              label="Ultracode"
-              ariaLabel={`Ultracode: ${session.ultracode ? 'on' : 'off'}`}
-              tone={session.ultracode ? 'gold' : undefined}
-              onClick={() => setOpen('effort')}
-            />
-          )}
-          <Chip
-            icon={mode.icon}
-            label={mode.label}
-            ariaLabel={`Permission mode: ${mode.label}`}
-            tone={mode.danger ? 'danger' : undefined}
-            onClick={() => setOpen('mode')}
-          />
-        </div>
+      <div role="group" aria-label="Session settings" className={cn('flex min-w-0 items-center gap-0.5', className)}>
+        <Quiet
+          onClick={() => setOpen('model')}
+          ariaLabel={`Model and effort: ${modelName}${effort ? `, ${effort}` : ''}${session.ultracode ? ', Ultracode on' : ''}`}
+          title={session.model ?? undefined}
+        >
+          <span className="truncate">{modelName}</span>
+          {effort && <span className="shrink-0 text-muted">· {effort}</span>}
+          {session.ultracode && <Zap className="size-3 shrink-0 text-gold" aria-hidden="true" />}
+        </Quiet>
+        <Quiet
+          onClick={() => setOpen('mode')}
+          ariaLabel={`Permission mode: ${mode.label}`}
+          tone={mode.danger ? 'danger' : session.mode !== 'default' ? 'gold' : undefined}
+          hideOnPhone={session.mode === 'default'}
+          className="shrink-0"
+        >
+          <ModeIcon className="size-3.5 shrink-0" aria-hidden="true" />
+          <span>{mode.label}</span>
+        </Quiet>
+        <span className="min-w-1 flex-1" />
         {session.context && <ContextMeter context={session.context} />}
       </div>
 
-      <Dialog open={open === 'model'} onClose={close} size="sm" title="Model" description="Applies from Claude’s next request.">
-        <ModelPicker
+      <Dialog open={open === 'model'} onClose={close} size="sm" title="Model and effort" description="Applies from Claude’s next request.">
+        <ModelEffortSheet
+          session={session}
           models={models}
           error={modelsError}
           onRetry={() => setReload((n) => n + 1)}
-          applied={session.model}
           current={current}
-          connected={connected}
-          onPick={async (value) => {
-            setPicked(value);
-            await control('model', { model: value });
-            done('model');
-          }}
-        />
-      </Dialog>
-
-      <Dialog
-        open={open === 'effort'}
-        onClose={close}
-        size="sm"
-        title="Effort"
-        description="How hard Claude thinks. More effort is slower and uses more tokens."
-      >
-        <EffortPicker
-          session={session}
           levels={current?.effortLevels.length ? current.effortLevels : EFFORT_FALLBACK}
           connected={connected}
-          onEffort={async (effort) => {
-            await control('effort', { effort });
-            done('effort');
+          onModel={async (value) => {
+            setPicked(value);
+            await control('model', { model: value });
           }}
+          onEffort={(value) => control('effort', { effort: value })}
           onUltracode={(ultracode) => control('ultracode', { ultracode })}
         />
       </Dialog>
@@ -213,23 +197,24 @@ export function Controls({
   );
 }
 
-function Chip({
-  icon: Icon,
-  label,
+/** One of the line's controls: text with a small chevron, no frame; the tone marks a mode worth noticing. */
+function Quiet({
+  onClick,
   ariaLabel,
   title,
   tone,
-  shrink,
-  onClick,
+  hideOnPhone,
+  className,
+  children,
 }: {
-  icon: LucideIcon;
-  label: string;
+  onClick: () => void;
   ariaLabel: string;
   title?: string;
   tone?: 'gold' | 'danger';
-  /** The one chip that truncates first when the row runs out of room (the model name). */
-  shrink?: boolean;
-  onClick: () => void;
+  /** Below 640 px it's in the ⋯ menu instead. (One display class: the kit's `cn` doesn't merge conflicting ones.) */
+  hideOnPhone?: boolean;
+  className?: string;
+  children: ReactNode;
 }) {
   return (
     <button
@@ -239,19 +224,18 @@ function Chip({
       aria-label={ariaLabel}
       title={title}
       className={cn(
-        'press inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12.5px] font-semibold whitespace-nowrap transition-colors tap:h-10 tap:px-3',
-        shrink ? 'max-w-[13rem] min-w-[6.5rem] shrink' : 'shrink-0',
-        tone === 'gold'
-          ? 'border-gold/30 bg-gold-soft text-gold'
-          : tone === 'danger'
-            ? 'border-danger/30 bg-danger-soft text-danger'
-            : 'border-line bg-surface text-ink-soft hover:border-line-strong hover:text-ink',
+        'press h-7 min-w-0 items-center gap-1 rounded-lg px-2 text-[12.5px] font-semibold whitespace-nowrap transition-colors tap:h-8',
+        hideOnPhone ? 'hidden sm:inline-flex' : 'inline-flex',
+        tone === 'danger'
+          ? 'text-danger hover:bg-danger-soft'
+          : tone === 'gold'
+            ? 'text-gold hover:bg-gold-soft'
+            : 'text-ink-soft hover:bg-surface-2 hover:text-ink',
+        className,
       )}
     >
-      <Icon className="size-3.5 shrink-0" aria-hidden="true" />
-      <span className="truncate">{label}</span>
-      {/* Phones need the room for the chips' values; the chips still read as buttons. */}
-      <ChevronDown className="hidden size-3 shrink-0 opacity-60 sm:block" aria-hidden="true" />
+      {children}
+      <ChevronDown className="size-3 shrink-0 opacity-50" aria-hidden="true" />
     </button>
   );
 }
@@ -294,12 +278,8 @@ function ContextMeter({ context }: { context: NonNullable<ChatSession['context']
         aria-label={pct === null ? `Context: ${formatTokens(used)} tokens` : `Context ${pct}% full`}
         aria-describedby={tipId}
         className={cn(
-          'peer press inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12.5px] font-semibold whitespace-nowrap tabular-nums transition-colors tap:h-10 tap:px-3',
-          tone === 'danger'
-            ? 'border-danger/30 bg-danger-soft text-danger'
-            : tone === 'gold'
-              ? 'border-gold/30 bg-gold-soft text-gold'
-              : 'border-line bg-surface text-ink-soft hover:border-line-strong hover:text-ink',
+          'peer press inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[12px] font-semibold whitespace-nowrap tabular-nums transition-colors tap:h-8',
+          tone === 'danger' ? 'text-danger hover:bg-danger-soft' : tone === 'gold' ? 'text-gold hover:bg-gold-soft' : 'text-muted hover:bg-surface-2 hover:text-ink',
         )}
       >
         {pct !== null && (
@@ -358,94 +338,96 @@ function useApply() {
   return { pending, error, run };
 }
 
-function ModelPicker({
+/**
+ * Model and effort in one sheet (chat PRD §12.4): the session's models, then effort as chips (the
+ * model's own levels), then Ultracode where the model has it. Each pick applies at once and the sheet
+ * stays open, so a model and its effort can be set together; one change runs at a time.
+ */
+function ModelEffortSheet({
+  session,
   models,
   error,
   onRetry,
-  applied,
   current,
-  connected,
-  onPick,
-}: {
-  models: ChatModelOption[] | null;
-  error: string | null;
-  onRetry: () => void;
-  applied: string | null;
-  current: ChatModelOption | null;
-  connected: boolean;
-  onPick: (value: string) => Promise<void>;
-}) {
-  const apply = useApply();
-  if (!models) {
-    return error ? (
-      <div className="flex flex-col items-start gap-3">
-        <ErrorNote>{error}</ErrorNote>
-        <Button size="sm" variant="secondary" onClick={onRetry}>
-          Try again
-        </Button>
-      </div>
-    ) : (
-      <p className="flex items-center gap-2 py-2 text-[13px] text-muted" aria-busy="true">
-        <Spinner className="size-4" /> Loading models…
-      </p>
-    );
-  }
-  return (
-    <div className="flex flex-col gap-3">
-      {applied && !current && (
-        <p className="text-[13px] text-muted">
-          In use: <span className="font-mono text-ink-soft">{applied}</span>
-        </p>
-      )}
-      {models.length === 0 ? (
-        <p className="text-[13px] text-muted">This session has no other models to switch to.</p>
-      ) : (
-        <OptionList
-          label="Model"
-          current={current?.value ?? null}
-          pending={apply.pending}
-          disabled={!connected}
-          onPick={(value) => void apply.run(value, () => onPick(value))}
-          options={models.map((m) => ({
-            value: m.value,
-            label: m.displayName || m.value,
-            hint: m.description || (m.resolvedModel && m.resolvedModel !== m.displayName ? m.resolvedModel : undefined),
-          }))}
-        />
-      )}
-      <Footnotes error={apply.error} connected={connected} />
-    </div>
-  );
-}
-
-function EffortPicker({
-  session,
   levels,
   connected,
+  onModel,
   onEffort,
   onUltracode,
 }: {
   session: ChatSession;
+  models: ChatModelOption[] | null;
+  error: string | null;
+  onRetry: () => void;
+  current: ChatModelOption | null;
   levels: string[];
   connected: boolean;
-  onEffort: (effort: string) => Promise<void>;
+  onModel: (value: string) => Promise<void>;
+  onEffort: (value: string) => Promise<void>;
   onUltracode: (on: boolean) => Promise<void>;
 }) {
   const apply = useApply();
   const ultracodeBusy = apply.pending === 'ultracode';
+  const effortBusy = apply.pending?.startsWith('effort:') ?? false;
   return (
-    <div className="flex flex-col gap-3">
-      {session.effort === null || levels.length === 0 ? (
-        <p className="text-[13px] text-muted">This model has no effort levels.</p>
+    <div className="flex flex-col gap-4">
+      {!models ? (
+        error ? (
+          <div className="flex flex-col items-start gap-3">
+            <ErrorNote>{error}</ErrorNote>
+            <Button size="sm" variant="secondary" onClick={onRetry}>
+              Try again
+            </Button>
+          </div>
+        ) : (
+          <p className="flex items-center gap-2 py-2 text-[13px] text-muted" aria-busy="true">
+            <Spinner className="size-4" /> Loading models…
+          </p>
+        )
       ) : (
-        <OptionList
-          label="Effort"
-          current={session.effort}
-          pending={apply.pending}
-          disabled={!connected}
-          onPick={(effort) => void apply.run(effort, () => onEffort(effort))}
-          options={levels.map((level) => ({ value: level, label: effortLabel(level) }))}
-        />
+        <div className="flex flex-col gap-2">
+          {session.model && !current && (
+            <p className="text-[13px] text-muted">
+              In use: <span className="font-mono text-ink-soft">{session.model}</span>
+            </p>
+          )}
+          {models.length === 0 ? (
+            <p className="text-[13px] text-muted">This session has no other models to switch to.</p>
+          ) : (
+            <OptionList
+              label="Model"
+              dense
+              current={current?.value ?? null}
+              pending={apply.pending}
+              disabled={!connected}
+              onPick={(value) => void apply.run(value, () => onModel(value))}
+              options={models.map((m) => ({
+                value: m.value,
+                label: m.displayName || m.value,
+                hint: m.description || (m.resolvedModel && m.resolvedModel !== m.displayName ? m.resolvedModel : undefined),
+              }))}
+            />
+          )}
+        </div>
+      )}
+      {session.effort !== null && levels.length > 0 && (
+        <div className="flex flex-col gap-1.5 border-t border-line pt-3">
+          <ChipGroup
+            label="Effort"
+            hint={
+              effortBusy ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Spinner className="size-3" /> Applying…
+                </span>
+              ) : (
+                'How hard Claude thinks. More is slower and uses more tokens.'
+              )
+            }
+            value={session.effort}
+            onChange={(value) => void apply.run(`effort:${value}`, () => onEffort(value))}
+            options={levels.map((level) => ({ value: level, label: effortLabel(level), disabled: !connected || apply.pending !== null }))}
+          />
+        </div>
       )}
       {(session.ultracodeAvailable || session.ultracode) && (
         <div className="border-t border-line pt-1">
@@ -538,6 +520,7 @@ function OptionList({
   current,
   pending,
   disabled,
+  dense,
   onPick,
 }: {
   label: string;
@@ -545,6 +528,8 @@ function OptionList({
   current: string | null;
   pending: string | null;
   disabled?: boolean;
+  /** Tighter rows, hints at most two lines (the full hint on hover): long lists like the models. */
+  dense?: boolean;
   onPick: (value: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -584,16 +569,20 @@ function OptionList({
             aria-busy={busy || undefined}
             data-autofocus={o.value === focusFirst ? '' : undefined}
             onClick={() => !on && !blocked && !busy && onPick(o.value)}
+            title={dense ? o.hint : undefined}
             className={cn(
-              'flex min-h-11 w-full items-start gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ink/40',
+              'flex min-h-11 w-full items-start gap-3 rounded-2xl px-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ink/40',
+              dense ? 'py-2' : 'py-2.5',
               on ? 'bg-surface-2' : 'hover:bg-surface-2/70',
               blocked && 'cursor-not-allowed opacity-50',
             )}
           >
             {o.icon && <span className="mt-0.5 shrink-0 text-ink-soft">{o.icon}</span>}
             <span className="min-w-0 flex-1">
-              <span className="block text-[15px] font-semibold text-ink">{o.label}</span>
-              {o.hint && <span className="mt-0.5 block text-[13px] break-words text-muted">{o.hint}</span>}
+              <span className={cn('block font-semibold text-ink', dense ? 'text-[14px]' : 'text-[15px]')}>{o.label}</span>
+              {o.hint && (
+                <span className={cn('mt-0.5 block break-words text-muted', dense ? 'line-clamp-2 text-[12px] leading-snug' : 'text-[13px]')}>{o.hint}</span>
+              )}
             </span>
             <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center">
               {busy ? <Spinner className="size-4" /> : on ? <Check className="size-[18px] text-accent" aria-hidden="true" /> : null}

@@ -1,6 +1,6 @@
 import { Badge, Button, cn, ConfirmDialog, Menu, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
 import type { ChatRequest } from '@portal/contracts';
-import { ArrowLeft, Bot, FolderOpen, MoreHorizontal, Square, Trash2 } from 'lucide-react';
+import { ArrowLeft, Bot, FolderOpen, ListCollapse, ListTree, MoreHorizontal, Square, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { BRAND_NAME } from '@/components/Logo';
@@ -9,7 +9,7 @@ import { AgentsPanel, AgentsSheet } from './AgentsPanel';
 import { chatApi } from './api';
 import { ApprovalCard } from './ApprovalCard';
 import { Composer, type ComposerHandle } from './Composer';
-import { Controls } from './Controls';
+import { Controls, modeDetails, type ControlsHandle } from './Controls';
 import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './FilesPanel';
 import { endedForSafety, StateBadge } from './shared';
 import { Transcript } from './Transcript';
@@ -31,6 +31,16 @@ function savedPanel(): Side | null {
   }
 }
 
+/** Show all details, remembered in this browser for every session. */
+const DETAILS_KEY = 'claudepilot.chat-details';
+function savedDetails(): boolean {
+  try {
+    return localStorage.getItem(DETAILS_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * One session, full screen (like the shell): a header with the state and controls, the transcript,
  * the approvals dock, the session's controls and the composer pinned to the bottom. From 1280 px the
@@ -45,6 +55,7 @@ export function SessionPage() {
   const { connected, events, delta, session, inputs, outbox, tasks, send, respond, control, stop, end } = useChatSession(id);
   const [ending, setEnding] = useState(false);
   const composer = useRef<ComposerHandle>(null);
+  const controls = useRef<ControlsHandle>(null);
 
   // A refused start's ack names no folder, and the session doesn't either: its folder is where Files
   // opens by default.
@@ -81,6 +92,16 @@ export function SessionPage() {
     setPanel(next);
     try {
       localStorage.setItem(PANEL_KEY, next === null ? '0' : next === 'agents' ? '1' : 'files');
+    } catch {
+      // private window: just not remembered
+    }
+  };
+  const [details, setDetails] = useState(savedDetails);
+  const toggleDetails = () => {
+    const next = !details;
+    setDetails(next);
+    try {
+      localStorage.setItem(DETAILS_KEY, next ? '1' : '0');
     } catch {
       // private window: just not remembered
     }
@@ -142,13 +163,22 @@ export function SessionPage() {
     fn();
   };
   const agentsLabel = running ? `Agents, ${running} running` : 'Agents';
+  const mode = modeDetails(session?.mode ?? 'default');
+  const ModeIcon = mode.icon;
   const menuItems: MenuItem[] = [
     ...(roomy
       ? []
       : [
           { label: 'Files and changes', icon: <FolderOpen className="size-4" />, onSelect: fromMenu(toggleFiles) },
           { label: running ? `Agents · ${running} running` : 'Agents', icon: <Bot className="size-4" />, onSelect: fromMenu(toggleAgents) },
+          // Phones keep the line above the composer short: the permission mode is changed from here.
+          ...(session && !ended
+            ? [{ label: `Mode: ${mode.label}`, icon: <ModeIcon className="size-4" />, onSelect: fromMenu(() => controls.current?.openMode()) }]
+            : []),
         ]),
+    details
+      ? { label: 'Show less', icon: <ListCollapse className="size-4" />, onSelect: fromMenu(toggleDetails) }
+      : { label: 'Show all details', icon: <ListTree className="size-4" />, onSelect: fromMenu(toggleDetails) },
     { label: 'End session', icon: <Trash2 className="size-4" />, onSelect: fromMenu(() => setEnding(true)), danger: true, disabled: ended },
   ];
 
@@ -239,6 +269,8 @@ export function SessionPage() {
             inputs={inputs}
             agentNames={agentNames}
             onCancelQueued={cancelQueued}
+            details={details}
+            working={working}
             className="min-h-0 flex-1"
           />
 
@@ -260,12 +292,13 @@ export function SessionPage() {
                   {session && <ResumeBanner session={session} connected={connected} onResume={() => trustedControl('resume')} />}
                   {session && (
                     <Controls
+                      ref={controls}
                       sessionId={id}
                       session={session}
                       connected={connected}
                       control={trustedControl}
                       suspended={trust.prompt !== null}
-                      className="mb-2"
+                      className="-mx-2 mb-1"
                     />
                   )}
                   <Composer ref={composer} onSend={trustedSend} connected={connected} working={working} />

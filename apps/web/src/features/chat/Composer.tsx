@@ -1,4 +1,4 @@
-import { Button, cn, Spinner, useMediaQuery, useToast } from '@isnanme/ui';
+import { cn, Spinner, useMediaQuery, useToast } from '@isnanme/ui';
 import { CHAT_IMAGE_TYPES, CHAT_MAX_IMAGE_BYTES, CHAT_MAX_IMAGES, type ChatAttachment, type ChatImageType } from '@portal/contracts';
 import { ArrowUp, ChevronUp, ImagePlus, Paperclip, X } from 'lucide-react';
 import {
@@ -80,12 +80,14 @@ export function Composer({
     count.current.attached = attachments.length;
   }, [attachments]);
 
-  // Grow to fit the text, up to a cap, then scroll inside.
+  // Grow to fit the text, up to a cap, then scroll inside. The height is border-box: scrollHeight
+  // leaves the border out, so it's added back (one line is then exactly the buttons' 44 px).
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    const border = el.offsetHeight - el.clientHeight;
+    el.style.height = `${Math.min(el.scrollHeight + border, 200)}px`;
   }, [text]);
 
   // A file dropped beside the composer would make the browser open it and leave the session.
@@ -231,10 +233,12 @@ export function Composer({
           )}
         </ul>
       )}
+      {/* One row height for the box and every button (44 px, the kit's field and tap size), bottoms aligned
+          as the box grows. */}
       <div className="flex items-end gap-2">
-        <Button variant="ghost" size="icon" aria-label="Attach images" title="Attach images" onClick={() => fileInput.current?.click()} className="mb-0.5">
+        <button type="button" aria-label="Attach images" title="Attach images" onClick={() => fileInput.current?.click()} className={cn(ROUND, GHOST)}>
           <Paperclip className="size-[18px]" />
-        </Button>
+        </button>
         <input
           ref={fileInput}
           type="file"
@@ -255,14 +259,14 @@ export function Composer({
           onPaste={onPaste}
           aria-label="Message"
           placeholder={working ? 'Steer Claude…' : 'Message Claude…'}
-          className="max-h-[200px] min-h-[2.75rem] min-w-0 flex-1 resize-none rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-base text-ink outline-none transition-[border-color,box-shadow] placeholder:text-muted/70 hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)]"
+          className="block max-h-[200px] min-h-11 min-w-0 flex-1 resize-none rounded-[22px] border border-line bg-surface px-4 py-[9px] text-base leading-6 text-ink outline-none transition-[border-color,box-shadow] placeholder:text-muted/70 hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)]"
         />
         {working ? (
           <SteerButton canSend={canSend} connected={connected} showKeys={!touch} onSend={submit} />
         ) : (
-          <Button size="icon" aria-label="Send message" disabled={!canSend} onClick={() => submit()} className="mb-0.5">
+          <button type="button" aria-label="Send message" disabled={!canSend} onClick={() => submit()} className={cn(ROUND, PRIMARY)}>
             <ArrowUp className="size-[18px]" />
-          </Button>
+          </button>
         )}
       </div>
       {dragging && (
@@ -280,8 +284,12 @@ export function Composer({
   );
 }
 
-const SPLIT =
-  'inline-flex h-9 items-center justify-center bg-primary text-[13px] font-semibold text-primary-ink transition-opacity hover:opacity-90 disabled:pointer-events-none disabled:opacity-50 tap:h-11';
+/** The composer's row height, on every screen: the kit's field height and tap size. */
+const ROUND = 'press inline-flex size-11 shrink-0 select-none items-center justify-center rounded-full disabled:pointer-events-none disabled:opacity-50';
+/** The kit's button looks (its `size` can't be overridden: its `cn` joins classes, it doesn't merge them). */
+const GHOST = 'text-ink-soft hover:bg-surface-2 hover:text-ink';
+const PRIMARY = 'bg-primary text-primary-ink hover:opacity-90';
+const SPLIT = 'inline-flex h-11 items-center justify-center bg-primary text-[13px] font-semibold text-primary-ink transition-opacity hover:opacity-90';
 
 /**
  * Send while a turn runs: "Steer" (the message reaches Claude at its next step), and a menu that also
@@ -333,8 +341,9 @@ function SteerButton({
   };
 
   return (
-    <div ref={wrap} className="relative mb-0.5 flex shrink-0">
-      <button type="button" disabled={!canSend} onClick={() => onSend('next')} className={cn(SPLIT, 'gap-1.5 rounded-l-full pr-2.5 pl-3.5')}>
+    // With nothing to send the whole pill dims as one (its menu still opens, to say what each way does).
+    <div ref={wrap} className={cn('relative flex shrink-0 transition-opacity', !canSend && 'opacity-50')}>
+      <button type="button" disabled={!canSend} onClick={() => onSend('next')} className={cn(SPLIT, 'gap-1.5 rounded-l-full pr-2.5 pl-3.5 disabled:pointer-events-none')}>
         <ArrowUp className="size-4" aria-hidden="true" />
         Steer
       </button>
@@ -346,7 +355,7 @@ function SteerButton({
         aria-label="More ways to send"
         aria-haspopup="menu"
         aria-expanded={open}
-        className={cn(SPLIT, 'w-8 rounded-r-full border-l border-primary-ink/20 tap:w-9')}
+        className={cn(SPLIT, 'w-9 rounded-r-full border-l border-primary-ink/20 disabled:pointer-events-none')}
       >
         <ChevronUp className={cn('size-4 transition-transform', open && 'rotate-180')} aria-hidden="true" />
       </button>
