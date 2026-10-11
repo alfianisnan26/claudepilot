@@ -1,24 +1,16 @@
-import {
-  Badge,
-  Button,
-  ConfirmDialog,
-  CopyButton,
-  LoadError,
-  Section,
-  SwitchRow,
-  useToast,
-  type BadgeTone,
-} from '@isnanme/ui';
+import { Badge, Button, ConfirmDialog, CopyButton, LoadError, Switch, useToast, type BadgeTone } from '@isnanme/ui';
 import { formatCode, type AdminState, type CodeSource } from '@portal/contracts';
-import { Eye, EyeOff, LogIn, LogOut, PenLine, Power, RefreshCw, Users } from 'lucide-react';
+import { Eye, EyeOff, LogOut, PenLine, Power, RefreshCw, Users } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Card } from '@/components/Card';
+import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
+import { SettingRow } from '@/components/SettingRow';
 import { api, errorText } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { CustomCodeDialog } from './CustomCodeDialog';
-import { StorageSection } from './StorageSection';
+import { StorageRow } from './StorageSection';
 
 const SOURCE: Record<CodeSource, { label: string; tone: BadgeTone }> = {
   env: { label: 'From env', tone: 'neutral' },
@@ -26,7 +18,10 @@ const SOURCE: Record<CodeSource, { label: string; tone: BadgeTone }> = {
   custom: { label: 'Custom', tone: 'warning' },
 };
 
-/** The admin's one page today: the server code, whether sign-in is open, and this session. */
+/**
+ * Who gets in: the server code in a card, then sign-in, storage and sessions as one list. The
+ * explanations sit behind ⓘ notes so the page fits one phone screen.
+ */
 export function AccessPage() {
   const toast = useToast();
   const { logout } = useAuth();
@@ -82,7 +77,6 @@ export function AccessPage() {
     <>
       <PageHeader
         title="Access"
-        description="Who can sign in to this server, and with which code."
         action={
           state && (
             <Badge tone={state.enabled ? 'success' : 'danger'} className="mb-1">
@@ -103,98 +97,81 @@ export function AccessPage() {
       )}
 
       {state && (
-        <div className="flex flex-col gap-8">
-          <Section title="Server code" description="Share it only with people who should manage this portal.">
-            <Card className="p-4 sm:p-5">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-                <p
-                  aria-label={revealed ? `Server code ${state.code}` : 'Server code hidden'}
-                  className="min-w-0 flex-1 truncate font-mono text-[22px] font-semibold tracking-[0.1em] tabular-nums sm:text-[30px] sm:tracking-[0.14em]"
-                >
-                  {revealed ? formatCode(state.code) : MASK}
-                </p>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={revealed ? 'Hide code' : 'Show code'}
-                    aria-pressed={revealed}
-                    onClick={() => setRevealed((v) => !v)}
-                  >
-                    {revealed ? <EyeOff className="size-[18px]" /> : <Eye className="size-[18px]" />}
-                  </Button>
-                  <CopyButton value={state.code} toastMessage="Server code copied" />
-                </div>
-              </div>
-              <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted">
-                <Badge tone={SOURCE[state.source].tone}>{SOURCE[state.source].label}</Badge>
-                <span title={formatDateTime(state.codeUpdatedAt)}>Set {timeAgo(state.codeUpdatedAt)}</span>
+        <div className="flex flex-col gap-4">
+          <Card className="p-4 sm:p-5">
+            <div className="flex items-center gap-1 text-[13px] font-semibold text-muted">
+              Server code
+              <InfoTip label="About the server code">
+                Share it only with people who manage this portal. Rotating signs out every other session.
+                {state.source === 'env' && ' A new code replaces PORTAL_SERVER_CODE until the server restarts.'}
+                <span className="mt-1.5 block text-muted" title={formatDateTime(state.codeUpdatedAt)}>
+                  Set {timeAgo(state.codeUpdatedAt)}.
+                </span>
+              </InfoTip>
+            </div>
+            <div className="mt-1 flex items-center gap-2">
+              <p
+                aria-label={revealed ? `Server code ${state.code}` : 'Server code hidden'}
+                className="min-w-0 flex-1 truncate font-mono text-[24px] font-semibold tracking-[0.1em] tabular-nums sm:text-[30px] sm:tracking-[0.14em]"
+              >
+                {revealed ? formatCode(state.code) : MASK}
               </p>
-              {state.source === 'env' && (
-                <p className="mt-3 text-[13px] text-muted">
-                  Rotating replaces <code className="font-mono text-ink-soft">PORTAL_SERVER_CODE</code> until the server
-                  restarts.
-                </p>
-              )}
-              <div className="mt-4 flex flex-col gap-2 border-t border-line pt-4 sm:flex-row">
-                <Button variant="secondary" icon={<RefreshCw className="size-4" />} onClick={() => setConfirm('rotate')}>
-                  Rotate code
-                </Button>
-                <Button variant="ghost" icon={<PenLine className="size-4" />} onClick={() => setCustomOpen(true)}>
-                  Set custom code
-                </Button>
-              </div>
-            </Card>
-          </Section>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={revealed ? 'Hide code' : 'Show code'}
+                aria-pressed={revealed}
+                onClick={() => setRevealed((v) => !v)}
+              >
+                {revealed ? <EyeOff className="size-[18px]" /> : <Eye className="size-[18px]" />}
+              </Button>
+              <CopyButton value={state.code} toastMessage="Server code copied" />
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <Badge tone={SOURCE[state.source].tone}>{SOURCE[state.source].label}</Badge>
+              <span className="flex-1" />
+              <Button variant="secondary" size="sm" icon={<RefreshCw className="size-4" />} onClick={() => setConfirm('rotate')}>
+                Rotate
+              </Button>
+              <Button variant="ghost" size="sm" icon={<PenLine className="size-4" />} aria-label="Set a custom code" onClick={() => setCustomOpen(true)}>
+                Custom
+              </Button>
+            </div>
+          </Card>
 
-          <Section title="Sign-in">
-            <Card className="px-4 sm:px-5">
-              <SwitchRow
-                icon={<Power className="size-[18px]" />}
-                label="Allow sign-in"
-                description={
-                  state.enabled
-                    ? 'Anyone with the code can sign in.'
-                    : 'Nobody can sign in. Signed-in sessions keep working.'
+          <Card>
+            <ul className="divide-y divide-line">
+              <SettingRow
+                icon={<Power className="size-5" />}
+                tone={state.enabled ? 'accent' : 'neutral'}
+                label="Sign-in"
+                sub={state.enabled ? 'Anyone with the code' : 'Off · signed-in sessions keep working'}
+                trailing={
+                  <Switch
+                    label="Allow sign-in"
+                    checked={state.enabled}
+                    disabled={busy}
+                    onChange={(on) => (on ? void setEnabled(true) : setConfirm('disable'))}
+                  />
                 }
-                checked={state.enabled}
-                disabled={busy}
-                onChange={(on) => (on ? void setEnabled(true) : setConfirm('disable'))}
               />
-            </Card>
-          </Section>
-
-          <StorageSection />
-
-          <Section title="Session">
-            <Card>
-              <ul className="divide-y divide-line">
-                <li className="flex items-center gap-3 p-4 sm:px-5">
-                  <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
-                    <LogIn className="size-5" />
+              <StorageRow />
+              <SettingRow
+                icon={<Users className="size-5" />}
+                label="Sessions"
+                sub={
+                  <span title={`This device signed in ${formatDateTime(state.signedInAt)}`}>
+                    {others ? `You + ${others} other${others === 1 ? '' : 's'}` : 'Only you'}
                   </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-semibold">This device</p>
-                    <p className="text-[13px] text-muted" title={formatDateTime(state.signedInAt)}>
-                      Signed in {timeAgo(state.signedInAt)}
-                    </p>
-                  </div>
-                </li>
-                <li className="flex items-center gap-3 p-4 sm:px-5">
-                  <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface-2 text-ink-soft">
-                    <Users className="size-5" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-semibold">{others ? othersText : 'No other sessions'}</p>
-                    <p className="text-[13px] text-muted">Rotating the code signs them out.</p>
-                  </div>
-                </li>
-              </ul>
-            </Card>
-            <Button variant="secondary" className="mt-3 w-full sm:w-auto" icon={<LogOut className="size-4" />} onClick={logout}>
-              Sign out
-            </Button>
-          </Section>
+                }
+                trailing={
+                  <Button variant="secondary" size="sm" icon={<LogOut className="size-4" />} onClick={logout}>
+                    Sign out
+                  </Button>
+                }
+              />
+            </ul>
+          </Card>
         </div>
       )}
 

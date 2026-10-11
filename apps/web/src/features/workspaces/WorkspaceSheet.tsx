@@ -170,7 +170,7 @@ export function WorkspaceSheet({
 
 function Notice({ badge, tone, children }: { badge: SheetBadge; tone?: BadgeTone; children?: ReactNode }) {
   return (
-    <div className={cn('rounded-2xl p-3.5 text-sm', (tone ?? badge.tone) === 'danger' ? 'bg-danger/10' : 'bg-surface-2')}>
+    <div className={cn('rounded-2xl p-3.5 text-sm', (tone ?? badge.tone) === 'danger' ? 'bg-danger-soft' : 'bg-surface-2')}>
       <Badge tone={badge.tone}>
         {badge.busy && <Spinner className="size-3" />}
         {badge.label}
