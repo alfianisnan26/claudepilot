@@ -227,7 +227,7 @@ Switch is disabled while a transfer of this session is in progress, while the wo
 | Milestone | Scope |
 | --- | --- |
 | W1 | Claude registry, Default adoption, directory create, session `claude_id` on create and launch. No switch yet. **Built.** |
-| W2 | Confirm, context file, successor, tail, marker, left-behind list, transfer again. **Built**, not yet run end to end on a workspace. |
+| W2 | Confirm, context file, successor, tail, marker, left-behind list, transfer again. **Built** and run end to end on This machine (Satria → Default: source ended `transferred`, successor with the marker, context file written, the successor recalled a word only the source had). Not built yet: the session list grouped by Claude with left-behind rows (FR17); transfer again is from the left-behind session's own ⋯ → Switch Claude. |
 | W1b | Claudes list with sign-in state, sign in, switch, sign out, rename, remove; terminals as a Claude. **Built**, tried on This machine. A second real account and tmux on Docker and Kubernetes not yet tried. |
 | W3 | Kubernetes, the same paths on the home volume. |
 
