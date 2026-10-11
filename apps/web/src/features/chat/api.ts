@@ -47,6 +47,9 @@ export const chatApi = {
   create: (body: CreateChatSessionRequest) => request<ChatSession>('POST', CHAT_API.create, body),
   get: (id: string) => request<ChatSession>('GET', CHAT_API.one(id)),
   end: (id: string) => request<{ ok: true }>('DELETE', CHAT_API.one(id)),
+  /** Archive (ending it first if it hasn't ended), or bring it back to the list. */
+  archive: (id: string) => request<ChatSession>('POST', CHAT_API.archive(id)),
+  unarchive: (id: string) => request<ChatSession>('DELETE', CHAT_API.archive(id)),
   history: (id: string, after?: number) =>
     request<ChatEvent[]>('GET', CHAT_API.events(id) + (after !== undefined ? `?after=${after}` : '')),
   /** Models this session can switch to (Claude Code's own list). */

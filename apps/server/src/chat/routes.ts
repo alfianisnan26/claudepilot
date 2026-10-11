@@ -49,6 +49,10 @@ export function createChatRoutes(controller: ChatController): Hono {
     return c.json(success({ ok: true }));
   });
 
+  // POST /api/chat/sessions/:id/archive — archive it (ends it first); DELETE unarchives.
+  chat.post('/:id/archive', async (c) => c.json(success(await controller.archive(c.req.param('id')))));
+  chat.delete('/:id/archive', (c) => c.json(success(controller.unarchive(c.req.param('id')))));
+
   // GET /api/chat/sessions/:id/events?after=<seq> — stored transcript events (history and resume).
   chat.get('/:id/events', (c) => c.json(success(controller.history(c.req.param('id'), Number(c.req.query('after') ?? 0) || 0))));
 

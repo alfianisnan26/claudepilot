@@ -1,6 +1,6 @@
 import { Badge, Button, cn, ConfirmDialog, FormDialog, Menu, Select, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
 import type { ChatRequest, WorkspaceClaude } from '@portal/contracts';
-import { ArrowLeft, Bot, FolderOpen, ListCollapse, ListTree, MoreHorizontal, Square, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Bot, FolderOpen, ListCollapse, ListTree, MoreHorizontal, Square, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { BRAND_NAME } from '@/components/Logo';
@@ -55,6 +55,25 @@ export function SessionPage() {
   const toast = useToast();
   const { connected, events, delta, session, inputs, outbox, tasks, send, respond, control, stop, end } = useChatSession(id);
   const [ending, setEnding] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  /** Archive (FR4): ends it if it's still going, then back to the list, where it's under Archived. */
+  const archive = async () => {
+    try {
+      await chatApi.archive(id);
+      toast('Archived');
+      navigate('/admin/sessions');
+    } catch (e) {
+      toast(errorText(e, 'Could not archive it.'), 'error');
+    }
+  };
+  const unarchive = async () => {
+    try {
+      await chatApi.unarchive(id);
+      toast('Back in Sessions');
+    } catch (e) {
+      toast(errorText(e, 'Could not unarchive it.'), 'error');
+    }
+  };
   const composer = useRef<ComposerHandle>(null);
   const controls = useRef<ControlsHandle>(null);
 
@@ -222,6 +241,14 @@ export function SessionPage() {
       onSelect: fromMenu(openSwitch),
       disabled: ended && session?.endedReason !== 'transferred',
     },
+    session?.archivedAt
+      ? { label: 'Unarchive', icon: <ArchiveRestore className="size-4" />, onSelect: fromMenu(() => void unarchive()) }
+      : {
+          label: 'Archive',
+          icon: <Archive className="size-4" />,
+          onSelect: fromMenu(() => (session?.state === 'working' || session?.state === 'waiting' ? setArchiving(true) : void archive())),
+          disabled: !session,
+        },
     { label: 'End session', icon: <Trash2 className="size-4" />, onSelect: fromMenu(() => setEnding(true)), danger: true, disabled: ended },
   ];
 
@@ -416,6 +443,17 @@ export function SessionPage() {
           setEnding(false);
         }}
         onClose={() => setEnding(false)}
+      />
+      <ConfirmDialog
+        open={archiving}
+        title="Archive this session?"
+        description="Claude Code stops working on it and the chat ends. It moves to Archived, where the transcript stays."
+        confirmLabel="Archive"
+        onConfirm={() => {
+          setArchiving(false);
+          void archive();
+        }}
+        onClose={() => setArchiving(false)}
       />
     </div>
   );

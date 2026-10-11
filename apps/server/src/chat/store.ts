@@ -122,6 +122,7 @@ export interface ChatSessionPatch {
   endedReason?: string | null;
   successorId?: string | null;
   predecessorId?: string | null;
+  archivedAt?: string | null;
 }
 
 /** The lifecycle states a sent line moves through (chat-sessions PRD §9): the contract's, plus `refused`. */
@@ -287,6 +288,7 @@ export class ChatStore {
       claudeName: this.claudeName(row.workspace_id, row.claude_id ?? ''),
       predecessorId: row.predecessor_id ?? null,
       successorId: row.successor_id ?? null,
+      archivedAt: row.archived_at ?? null,
     };
   }
 
@@ -372,6 +374,7 @@ export class ChatStore {
     if (patch.parentPid !== undefined) set('parent_pid', patch.parentPid);
     if (patch.processStartedAt !== undefined) set('process_started_at', patch.processStartedAt);
     if (patch.process !== undefined) set('process', patch.process);
+    if (patch.archivedAt !== undefined) set('archived_at', patch.archivedAt);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
     if (patch.successorId !== undefined) set('successor_id', patch.successorId);
     if (patch.predecessorId !== undefined) set('predecessor_id', patch.predecessorId);

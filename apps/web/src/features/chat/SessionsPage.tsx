@@ -1,6 +1,6 @@
-import { Badge, Button, ConfirmDialog, EmptyState, LoadError, Menu, RowsSkeleton, useToast } from '@isnanme/ui';
+import { Badge, Button, ConfirmDialog, EmptyState, LoadError, Menu, RowsSkeleton, Segmented, useToast, type MenuItem } from '@isnanme/ui';
 import type { ChatSession } from '@portal/contracts';
-import { MessageSquare, MessagesSquare, Plus, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, MessageSquare, MessagesSquare, Plus, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/Card';
@@ -12,12 +12,19 @@ import { NewSessionDialog } from './NewSessionDialog';
 import { endedForSafety, formatUsd, StateBadge } from './shared';
 import { useChatList } from './useChatSocket';
 
+/** Archiving a session that's working or waiting on you stops it, so that asks first (like End, FR4). */
+const isBusy = (s: ChatSession) => s.state === 'working' || s.state === 'waiting';
+
+/** The sessions, or the archived ones (FR4: archived sessions have ended and leave the list). */
 export function SessionsPage() {
   const toast = useToast();
   const { sessions, failed, reload } = useChatList();
   const [creating, setCreating] = useState(false);
   const [ending, setEnding] = useState<ChatSession | null>(null);
   const [endBusy, setEndBusy] = useState(false);
+  const [archiving, setArchiving] = useState<ChatSession | null>(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [view, setView] = useState<'open' | 'archived'>('open');
 
   // Attention first (anything waiting on you), then by most recent activity.
   const sorted = useMemo(
@@ -30,6 +37,34 @@ export function SessionsPage() {
         : null,
     [sessions],
   );
+
+  const archivedCount = sessions?.filter((s) => s.archivedAt).length ?? 0;
+  const showing = view === 'archived' && archivedCount > 0 ? 'archived' : 'open';
+  const shown = sorted?.filter((s) => (showing === 'archived' ? !!s.archivedAt : !s.archivedAt)) ?? null;
+
+  const archive = async (s: ChatSession) => {
+    setArchiveBusy(true);
+    try {
+      await chatApi.archive(s.id);
+      toast('Archived');
+      setArchiving(null);
+      await reload();
+    } catch (e) {
+      toast(errorText(e, 'Could not archive it.'), 'error');
+    } finally {
+      setArchiveBusy(false);
+    }
+  };
+
+  const unarchive = async (s: ChatSession) => {
+    try {
+      await chatApi.unarchive(s.id);
+      toast('Back in Sessions');
+      await reload();
+    } catch (e) {
+      toast(errorText(e, 'Could not unarchive it.'), 'error');
+    }
+  };
 
   const endSession = async () => {
     if (!ending) return;
@@ -65,11 +100,25 @@ export function SessionsPage() {
       {failed && !sorted && <LoadError onRetry={reload} />}
       {!sorted && !failed && <RowsSkeleton rows={3} lines={1} trailing icon="rounded-2xl" />}
 
-      {sorted &&
-        (sorted.length === 0 ? (
+      {archivedCount > 0 && (
+        <div className="mb-4">
+          <Segmented
+            label="Show"
+            value={showing}
+            options={[
+              { value: 'open', label: 'Sessions' },
+              { value: 'archived', label: `Archived · ${archivedCount}` },
+            ]}
+            onChange={setView}
+          />
+        </div>
+      )}
+
+      {shown &&
+        (shown.length === 0 ? (
           <EmptyState
             icon={<MessagesSquare className="size-6" />}
-            title="No sessions yet"
+            title={archivedCount > 0 ? 'No open sessions' : 'No sessions yet'}
             action={
               <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>
                 New session
@@ -81,8 +130,14 @@ export function SessionsPage() {
         ) : (
           <Card>
             <ul className="divide-y divide-line">
-              {sorted.map((s) => (
-                <SessionRow key={s.id} session={s} onEnd={() => setEnding(s)} />
+              {shown.map((s) => (
+                <SessionRow
+                  key={s.id}
+                  session={s}
+                  onEnd={() => setEnding(s)}
+                  onArchive={() => (isBusy(s) ? setArchiving(s) : void archive(s))}
+                  onUnarchive={() => void unarchive(s)}
+                />
               ))}
             </ul>
           </Card>
@@ -98,11 +153,30 @@ export function SessionsPage() {
         onConfirm={() => void endSession()}
         onClose={() => !endBusy && setEnding(null)}
       />
+      <ConfirmDialog
+        open={!!archiving}
+        title={`Archive ${archiving?.title || 'this session'}?`}
+        description="Claude Code stops working on it and the chat ends. It moves to Archived, where the transcript stays."
+        confirmLabel="Archive"
+        loading={archiveBusy}
+        onConfirm={() => archiving && void archive(archiving)}
+        onClose={() => !archiveBusy && setArchiving(null)}
+      />
     </>
   );
 }
 
-function SessionRow({ session: s, onEnd }: { session: ChatSession; onEnd: () => void }) {
+function SessionRow({
+  session: s,
+  onEnd,
+  onArchive,
+  onUnarchive,
+}: {
+  session: ChatSession;
+  onEnd: () => void;
+  onArchive: () => void;
+  onUnarchive: () => void;
+}) {
   const title = s.title || 'Untitled';
   const active = s.state === 'working' || s.state === 'waiting';
   const safety = s.state === 'ended' ? endedForSafety(s.endedReason) : null;
@@ -140,7 +214,16 @@ function SessionRow({ session: s, onEnd }: { session: ChatSession; onEnd: () => 
           </p>
         </div>
       </Link>
-      <Menu label={`Actions for ${title}`} items={[{ label: 'End session', icon: <Trash2 className="size-4" />, onSelect: onEnd, danger: true }]} />
+      <Menu label={`Actions for ${title}`} items={rowActions(s, { onEnd, onArchive, onUnarchive })} />
     </li>
   );
+}
+
+/** A row's ⋯: Archive and End (End only while it hasn't ended); Unarchive once archived. */
+function rowActions(s: ChatSession, on: { onEnd: () => void; onArchive: () => void; onUnarchive: () => void }): MenuItem[] {
+  if (s.archivedAt) return [{ label: 'Unarchive', icon: <ArchiveRestore className="size-4" />, onSelect: on.onUnarchive }];
+  return [
+    { label: 'Archive', icon: <Archive className="size-4" />, onSelect: on.onArchive },
+    ...(s.state === 'ended' ? [] : [{ label: 'End session', icon: <Trash2 className="size-4" />, onSelect: on.onEnd, danger: true }]),
+  ];
 }

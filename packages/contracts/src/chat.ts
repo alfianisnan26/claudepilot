@@ -47,6 +47,8 @@ export interface ChatSession {
   predecessorId: string | null;
   /** The session a transfer continued as, if any. */
   successorId: string | null;
+  /** When it was archived (hidden from the list; an archived session has ended), or null. */
+  archivedAt: string | null;
 }
 
 /** A named Claude on one workspace volume. Its directory holds chats and any terminal login. No credential is stored here. */
@@ -196,6 +198,8 @@ export const CHAT_API = {
   create: '/api/chat/sessions',
   /** GET: one session. DELETE: end it. */
   one: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}`,
+  /** POST: archive it (ending it first if it hasn't ended). DELETE: unarchive it. */
+  archive: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/archive`,
   /** GET `?after=<seq>`: stored transcript events after a sequence number (history and resume). */
   events: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/events`,
   /** GET: models this session can switch to. */

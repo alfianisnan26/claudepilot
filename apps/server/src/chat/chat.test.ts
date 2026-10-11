@@ -2846,3 +2846,41 @@ test('own sign-in: a pool on the workspace brings its checks back, so a session 
     rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+/* ========================= Archive (FR4) ========================= */
+
+test('archive: a running session is ended first, then archived; an ended one keeps its reason; unarchive brings it back, ended', async () => {
+  const s = await liveSession();
+  try {
+    const stops = s.ws.stops;
+    const archived = await s.controller.archive(s.id);
+    assert.equal(archived.state, 'ended');
+    assert.equal(archived.endedReason, 'closed by operator');
+    assert.ok(archived.archivedAt, 'archivedAt set');
+    assert.ok(s.ws.stops > stops, 'its process was stopped');
+    assert.ok(s.controller.list().find((x) => x.id === s.id)?.archivedAt, 'the list carries it, for the client to fold away');
+
+    // Archiving again changes nothing; unarchiving clears it and leaves it ended.
+    const again = await s.controller.archive(s.id);
+    assert.equal(again.archivedAt, archived.archivedAt);
+    const back = s.controller.unarchive(s.id);
+    assert.equal(back.archivedAt, null);
+    assert.equal(back.state, 'ended');
+
+    // Over HTTP.
+    const app = new Hono();
+    app.onError((e, c) => {
+      const err = isAppError(e) ? e : new AppError('INTERNAL_ERROR', undefined, { cause: e });
+      return c.json(err.toJSON(), err.status as 404);
+    });
+    app.route('/', createChatRoutes(s.controller));
+    const post = await app.request(`/${s.id}/archive`, { method: 'POST' });
+    assert.equal(post.status, 200);
+    assert.ok(((await post.json()) as { data: { archivedAt: string | null } }).data.archivedAt);
+    const del = await app.request(`/${s.id}/archive`, { method: 'DELETE' });
+    assert.equal(((await del.json()) as { data: { archivedAt: string | null } }).data.archivedAt, null);
+    assert.equal((await app.request('/nope/archive', { method: 'POST' })).status, 404);
+  } finally {
+    await s.done();
+  }
+});

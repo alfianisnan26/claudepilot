@@ -810,6 +810,26 @@ export class ChatController {
   }
 
   /**
+   * Archive (FR4): hides the session from the list. One that hasn't ended is ended first, the same as
+   * End, so nothing archived keeps running. Its transcript stays; Unarchive brings it back, ended.
+   */
+  async archive(sessionId: string): Promise<ChatSession> {
+    const session = this.#require(sessionId);
+    if (session.state !== 'ended') await this.end(sessionId);
+    if (!session.archivedAt) this.#chat.patchSession(sessionId, { archivedAt: new Date().toISOString() });
+    this.#emitSession(sessionId);
+    return this.#chat.get(sessionId)!;
+  }
+
+  /** Brings an archived session back to the list. */
+  unarchive(sessionId: string): ChatSession {
+    this.#require(sessionId);
+    this.#chat.patchSession(sessionId, { archivedAt: null });
+    this.#emitSession(sessionId);
+    return this.#chat.get(sessionId)!;
+  }
+
+  /**
    * Stops a workspace's sessions before its credentials change (§6 rule 2): Account Pool calls this at
    * the start of an unassign or a move to another pool, before the change goes out, so no session ever
    * runs on whatever would come after the pool's helper. Every running process gets `cp-session stop`
