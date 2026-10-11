@@ -7,14 +7,13 @@ import {
   LoadError,
   Menu,
   RowsSkeleton,
-  Section,
   Spinner,
   useToast,
   type BadgeTone,
   type MenuItem,
 } from '@isnanme/ui';
 import type { AccountPool, ClaudeAuthStatus, DeliveryStatus, Workspace, WorkspaceStatus, WorkspaceTarget, WorkspaceUsage } from '@portal/contracts';
-import { Box, Boxes, KeySquare, LogIn, LogOut, Play, Plus, RefreshCw, ShieldCheck, Square, SquareTerminal, Trash2 } from 'lucide-react';
+import { Box, Boxes, ChevronDown, KeySquare, LogIn, LogOut, Play, Plus, RefreshCw, ShieldCheck, Square, SquareTerminal, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/Card';
@@ -216,16 +215,21 @@ export function WorkspacesPage() {
 
   const targetLabel = (id: string) => targets?.find((t) => t.id === id)?.label ?? id;
   const anyAvailable = !!targets?.some((t) => t.available);
+  // This machine can't be created, so New only makes sense with another target to create on.
+  const canCreate = !!targets?.some((t) => t.available && t.kind !== 'local');
+  // Running ones first; otherwise the order the server gives (newest first).
+  const ordered = list ? [...list].sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running')) : null;
 
   return (
     <>
       <PageHeader
         title="Workspaces"
-        description="Shell boxes with Claude Code, on Docker or Kubernetes."
+        description="Shell boxes with Claude Code."
         action={
           list &&
-          list.length > 0 && (
-            <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)} disabled={!anyAvailable}>
+          list.length > 0 &&
+          canCreate && (
+            <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>
               <span className="hidden sm:inline">New workspace</span>
               <span className="sm:hidden">New</span>
             </Button>
@@ -236,22 +240,14 @@ export function WorkspacesPage() {
       {loadFailed && <LoadError onRetry={load} />}
       {!list && !loadFailed && <RowsSkeleton rows={3} lines={2} trailing icon="rounded-2xl" />}
 
-      {list && targets && (
-        <div className="flex flex-col gap-8">
-          <TargetStrip
-            targets={targets}
-            onRefresh={async () => {
-              setTargets(await api.workspaces.targets(true));
-              await loadList();
-            }}
-          />
-
-          {list.length === 0 ? (
+      {ordered && targets && (
+        <div className="flex flex-col gap-6">
+          {ordered.length === 0 ? (
             <EmptyState
               icon={<Boxes className="size-6" />}
               title="No workspaces yet"
               action={
-                <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)} disabled={!anyAvailable}>
+                <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)} disabled={!canCreate}>
                   New workspace
                 </Button>
               }
@@ -263,7 +259,7 @@ export function WorkspacesPage() {
           ) : (
             <Card>
               <ul className="divide-y divide-line">
-                {list.map((w) => (
+                {ordered.map((w) => (
                   <WorkspaceRow
                     key={w.id}
                     w={w}
@@ -284,6 +280,14 @@ export function WorkspacesPage() {
               </ul>
             </Card>
           )}
+
+          <TargetStrip
+            targets={targets}
+            onRefresh={async () => {
+              setTargets(await api.workspaces.targets(true));
+              await loadList();
+            }}
+          />
         </div>
       )}
 
@@ -341,32 +345,48 @@ export function WorkspacesPage() {
   );
 }
 
+/** Where workspaces can run: one line, opened on demand (open from the start when none is reachable). */
 function TargetStrip({ targets, onRefresh }: { targets: WorkspaceTarget[]; onRefresh: () => Promise<void> }) {
+  const reachable = targets.filter((t) => t.available).length;
+  const [open, setOpen] = useState(reachable === 0);
   return (
-    <Section
-      title="Targets"
-      action={
-        <Button variant="ghost" size="sm" icon={<RefreshCw className="size-3.5" />} onClick={onRefresh}>
-          Check
-        </Button>
-      }
-    >
-      <div className="grid gap-2 sm:grid-cols-3">
-        {targets.map((t) => (
-          <div
-            key={t.id}
-            title={t.problem}
-            className="flex min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface px-3.5 py-2.5"
-          >
-            <span className={`size-2 shrink-0 rounded-full ${t.available ? 'bg-accent' : 'bg-danger'}`} />
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold">{t.label}</p>
-              <p className="truncate text-xs text-muted">{t.available ? t.where : (t.problem ?? 'Unreachable')}</p>
-            </div>
+    <div className="rounded-2xl border border-line">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-3 rounded-2xl px-3.5 py-2.5 text-left text-sm"
+      >
+        <span className={`size-2 shrink-0 rounded-full ${reachable ? 'bg-accent' : 'bg-danger'}`} />
+        <span className="font-semibold">Targets</span>
+        <span className="min-w-0 flex-1 truncate text-muted">
+          {reachable} of {targets.length} reachable
+        </span>
+        <ChevronDown className={`size-4 shrink-0 text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="flex flex-col gap-2 border-t border-line p-2">
+          <div className="grid gap-2 sm:grid-cols-3">
+            {targets.map((t) => (
+              <div
+                key={t.id}
+                title={t.problem}
+                className="flex min-w-0 items-center gap-3 rounded-xl bg-surface px-3.5 py-2.5"
+              >
+                <span className={`size-2 shrink-0 rounded-full ${t.available ? 'bg-accent' : 'bg-danger'}`} />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">{t.label}</p>
+                  <p className="truncate text-xs text-muted">{t.available ? t.where : (t.problem ?? 'Unreachable')}</p>
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-    </Section>
+          <Button variant="ghost" size="sm" className="self-end" icon={<RefreshCw className="size-3.5" />} onClick={onRefresh}>
+            Check again
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
