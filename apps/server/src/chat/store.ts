@@ -696,6 +696,24 @@ export class ChatStore {
     this.#writable().prepare('DELETE FROM workspace_claudes WHERE id = ?').run(id);
   }
 
+  /** A new label (Workspace Claudes FR3); the directory doesn't change. */
+  renameClaude(id: string, name: string): void {
+    this.#writable().prepare('UPDATE workspace_claudes SET name = ? WHERE id = ? AND removed_at IS NULL').run(name, id);
+  }
+
+  /** Marks a Claude removed; its row and its sessions' rows stay, and so does its directory (FR3). */
+  markClaudeRemoved(id: string): void {
+    this.#writable().prepare('UPDATE workspace_claudes SET removed_at = ? WHERE id = ? AND removed_at IS NULL').run(this.#stamp(), id);
+  }
+
+  /** Sessions on that Claude that haven't ended (Default's include rows from before Claudes, with no claude_id). */
+  openSessionsOnClaude(workspaceId: string, claudeId: string, isDefault: boolean): number {
+    const row = this.#db()
+      .prepare(`SELECT COUNT(*) AS n FROM chat_sessions WHERE workspace_id = ? AND state != 'ended' AND (claude_id = ? OR (? AND claude_id = ''))`)
+      .get(workspaceId, claudeId, isDefault ? 1 : 0) as { n: number };
+    return row.n;
+  }
+
   /** Portal events, newest last, capped, already redacted in the store. */
   contextSummary(sessionId: string): string {
     const rows = this.history(sessionId);

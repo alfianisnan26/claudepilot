@@ -27,6 +27,7 @@ import {
   type ClaudeLoginRequest,
   type ClaudeLoginStart,
   type CreateTerminalRequest,
+  type WorkspaceClaudeState,
   type WorkspaceTerminal,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
@@ -269,25 +270,33 @@ export function createApp(
       throw new AppError('CONFLICT', 'This workspace uses its account pool’s keys. Unassign the pool to sign in with your own Claude account.');
     return [target, name] as const;
   };
+  /** `?claude=<id>`: which of the workspace's Claudes (its directory, each with its own login); Default when absent. */
+  const claudeDir = (c: Context<Env>) => {
+    const id = c.req.query('claude');
+    if (!id) return '';
+    const claude = chatController.listClaudes(`${c.req.param('target')}/${c.req.param('name')}`).find((x) => x.id === id && !x.removedAt);
+    if (!claude) throw new AppError('NOT_FOUND', 'That Claude isn’t on this workspace.');
+    return claude.directory;
+  };
   ws.get('/:target/:name/claude-login', async (c) =>
-    c.json(success<ClaudeAuthStatus>(await logins.status(c.req.param('target'), c.req.param('name')))),
+    c.json(success<ClaudeAuthStatus>(await logins.status(c.req.param('target'), c.req.param('name'), claudeDir(c)))),
   );
   ws.post('/:target/:name/claude-login', async (c) => {
     const [target, name] = ownSignIn(c);
     const req = (await c.req.json().catch(() => ({}))) as Partial<ClaudeLoginRequest> | null;
-    return c.json(success<ClaudeLoginStart>(await logins.start(target, name, { sso: req?.sso === true, email: req?.email })));
+    return c.json(success<ClaudeLoginStart>(await logins.start(target, name, { sso: req?.sso === true, email: req?.email, dir: claudeDir(c) })));
   });
   ws.post('/:target/:name/claude-login/code', async (c) => {
     const { code } = await body<{ code: string }>(c);
-    await logins.submit(...ownSignIn(c), code);
+    await logins.submit(...ownSignIn(c), code, claudeDir(c));
     return c.json(success({ ok: true }));
   });
   ws.delete('/:target/:name/claude-login', async (c) => {
-    await logins.cancel(c.req.param('target'), c.req.param('name'));
+    await logins.cancel(c.req.param('target'), c.req.param('name'), claudeDir(c));
     return c.json(success({ ok: true }));
   });
   ws.post('/:target/:name/claude-logout', async (c) => {
-    await logins.logout(...ownSignIn(c));
+    await logins.logout(...ownSignIn(c), claudeDir(c));
     return c.json(success({ ok: true }));
   });
 
@@ -302,6 +311,33 @@ export function createApp(
   });
   ws.delete('/:target/:name/terminals/:term', async (c) => {
     await terminals.close(c.req.param('target'), c.req.param('name'), c.req.param('term'));
+    return c.json(success({ ok: true }));
+  });
+
+  // The workspace's Claudes (Workspace Claudes), each with its own Claude Code login: sign-in state
+  // from `claude auth status` (status and method only), and the terminals running as each.
+  ws.get('/:target/:name/claudes', async (c) => {
+    const [target, name] = [c.req.param('target'), c.req.param('name')];
+    const live = chatController.listClaudes(`${target}/${name}`).filter((x) => !x.removedAt);
+    const open = await terminals.list(target, name).catch(() => []);
+    const states = await Promise.all(
+      live.map(async (claude): Promise<WorkspaceClaudeState> => ({
+        claude,
+        auth: await logins.status(target, name, claude.directory).catch(() => null),
+        terminals: open.filter((t) => t.claudeId === claude.id).length,
+      })),
+    );
+    return c.json(success(states));
+  });
+  ws.patch('/:target/:name/claudes/:claude', async (c) => {
+    const { name: label } = await body<{ name: string }>(c);
+    return c.json(success(chatController.renameClaude(`${c.req.param('target')}/${c.req.param('name')}`, c.req.param('claude'), String(label ?? ''))));
+  });
+  ws.delete('/:target/:name/claudes/:claude', async (c) => {
+    const [target, name, claudeId] = [c.req.param('target'), c.req.param('name'), c.req.param('claude')];
+    if ((await terminals.list(target, name).catch(() => [])).some((t) => t.claudeId === claudeId))
+      throw new AppError('CONFLICT', 'Close this Claude’s terminals first.');
+    chatController.removeClaude(`${target}/${name}`, claudeId);
     return c.json(success({ ok: true }));
   });
   ws.get('/', async (c) => c.json(success((await workspaces.list()).map(decorate))));

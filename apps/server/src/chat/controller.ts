@@ -525,6 +525,41 @@ export class ChatController {
     return this.#chat.claude(created.id)!;
   }
 
+  /** Renames a Claude (FR3): the label only. */
+  renameClaude(workspaceId: string, claudeId: string, rawName: string): WorkspaceClaude {
+    const claude = this.#ownClaude(workspaceId, claudeId);
+    const name = rawName.trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(name)) {
+      throw new AppError('VALIDATION_FAILED', 'Use a short name: letters, numbers, spaces, dots, _ or -.', { details: { name: 'Invalid name.' } });
+    }
+    try {
+      this.#chat.renameClaude(claude.id, name);
+    } catch (e) {
+      if (String(e).includes('UNIQUE')) throw new AppError('CONFLICT', 'A Claude with that name is already on this workspace.');
+      throw e;
+    }
+    return this.#chat.claude(claude.id)!;
+  }
+
+  /**
+   * Removes a Claude (FR3): refused for Default and while a session on it hasn't ended. Its rows and
+   * its directory stay: the portal doesn't delete a directory that may hold a login.
+   */
+  removeClaude(workspaceId: string, claudeId: string): void {
+    const claude = this.#ownClaude(workspaceId, claudeId);
+    if (!claude.directory) throw new AppError('CONFLICT', 'Default can’t be removed.');
+    if (this.#chat.openSessionsOnClaude(claude.workspaceId, claude.id, false) > 0)
+      throw new AppError('CONFLICT', `${claude.name} has a session that hasn’t ended. End it first.`);
+    this.#chat.markClaudeRemoved(claude.id);
+  }
+
+  /** A Claude of this workspace that isn't removed. */
+  #ownClaude(workspaceId: string, claudeId: string): WorkspaceClaude {
+    const claude = this.listClaudes(workspaceId).find((c) => c.id === claudeId && !c.removedAt);
+    if (!claude) throw new AppError('NOT_FOUND', 'That Claude isn’t on this workspace.');
+    return claude;
+  }
+
   /**
    * Confirmed context move (Workspace Claudes FR9–FR16). Stops the source, writes a context file from
    * portal events, and starts a new session in the destination Claude. Does not copy a login.

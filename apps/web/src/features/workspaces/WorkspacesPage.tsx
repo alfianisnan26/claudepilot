@@ -12,9 +12,9 @@ import {
   type BadgeTone,
   type MenuItem,
 } from '@isnanme/ui';
-import type { AccountPool, ClaudeAuthStatus, DeliveryStatus, Workspace, WorkspaceStatus, WorkspaceTarget, WorkspaceUsage } from '@portal/contracts';
-import { Box, Boxes, ChevronDown, KeySquare, LogIn, LogOut, Play, Plus, RefreshCw, ShieldCheck, Square, SquareTerminal, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AccountPool, DeliveryStatus, Workspace, WorkspaceStatus, WorkspaceTarget, WorkspaceUsage } from '@portal/contracts';
+import { Box, Boxes, ChevronDown, KeySquare, Play, Plus, RefreshCw, ShieldCheck, Square, SquareTerminal, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/Card';
 import { PageHeader } from '@/components/PageHeader';
@@ -22,7 +22,6 @@ import { api, errorText } from '@/lib/api';
 import { useLive, useLiveConnected } from '@/lib/live';
 import { formatBytes, formatDateTime, timeAgo } from '@/lib/format';
 import { AssignPoolDialog } from './AssignPoolDialog';
-import { ClaudeLoginDialog } from './ClaudeLoginDialog';
 import { NewWorkspaceDialog } from './NewWorkspaceDialog';
 import { usageFractions } from './usage';
 import { WorkspaceSheet } from './WorkspaceSheet';
@@ -63,63 +62,6 @@ export function WorkspacesPage() {
   const [removeBusy, setRemoveBusy] = useState(false);
   const [pools, setPools] = useState<AccountPool[]>([]);
   const [assigning, setAssigning] = useState<Workspace | null>(null);
-  const [signingIn, setSigningIn] = useState<Workspace | null>(null);
-  const [signingOut, setSigningOut] = useState<Workspace | null>(null);
-  const [signOutBusy, setSignOutBusy] = useState(false);
-  // Claude sign-in state per workspace (running, pool-less ones), read through `claude auth status`.
-  const [claudeAuth, setClaudeAuth] = useState<Map<string, ClaudeAuthStatus | 'loading'>>(new Map());
-  const authWatched = useRef<Set<string>>(new Set());
-
-  const refreshAuth = useCallback(async (id: string) => {
-    setClaudeAuth((m) => new Map(m).set(id, 'loading'));
-    try {
-      const status = await api.workspaces.claudeAuthStatus(id);
-      setClaudeAuth((m) => new Map(m).set(id, status));
-    } catch {
-      setClaudeAuth((m) => {
-        const next = new Map(m);
-        next.delete(id);
-        return next;
-      });
-    }
-  }, []);
-
-  const signOut = async () => {
-    if (!signingOut) return;
-    setSignOutBusy(true);
-    try {
-      await api.workspaces.claudeLogout(signingOut.id);
-      toast(`Signed out of Claude in ${signingOut.name}`);
-      const id = signingOut.id;
-      setSigningOut(null);
-      void refreshAuth(id);
-    } catch (e) {
-      toast(errorText(e, 'Could not sign out.'), 'error');
-    } finally {
-      setSignOutBusy(false);
-    }
-  };
-
-  // Check sign-in state once per eligible workspace; forget it when it stops or gets a pool.
-  useEffect(() => {
-    if (!list) return;
-    const eligible = new Set(list.filter((w) => w.status === 'running' && !w.account).map((w) => w.id));
-    for (const id of eligible)
-      if (!authWatched.current.has(id)) {
-        authWatched.current.add(id);
-        void refreshAuth(id);
-      }
-    for (const id of [...authWatched.current])
-      if (!eligible.has(id)) {
-        authWatched.current.delete(id);
-        setClaudeAuth((m) => {
-          const next = new Map(m);
-          next.delete(id);
-          return next;
-        });
-      }
-  }, [list, refreshAuth]);
-
   useEffect(() => {
     api.accounts.pools().then(setPools, () => undefined);
   }, []);
@@ -274,9 +216,6 @@ export function WorkspacesPage() {
                     onRemove={() => setRemoving(w)}
                     onAssign={() => setAssigning(w)}
                     onAdopt={() => void adopt(w)}
-                    onSignIn={() => setSigningIn(w)}
-                    onSignOut={() => setSigningOut(w)}
-                    claudeAuth={claudeAuth.get(w.id)}
                   />
                 ))}
               </ul>
@@ -314,25 +253,6 @@ export function WorkspacesPage() {
           setList((l) => (l ? [w, ...l.filter((x) => x.id !== w.id)] : [w]));
           toast(`Creating ${w.name}`);
         }}
-      />
-      <ClaudeLoginDialog
-        workspace={signingIn}
-        onClose={() => setSigningIn(null)}
-        onDone={() => {
-          toast(`Signed in to Claude in ${signingIn?.name ?? 'the workspace'}`);
-          if (signingIn) void refreshAuth(signingIn.id);
-          setSigningIn(null);
-        }}
-      />
-      <ConfirmDialog
-        open={!!signingOut}
-        tone="primary"
-        title={`Sign out of Claude in ${signingOut?.name ?? ''}?`}
-        description="Claude Code there forgets your Claude sign-in and asks you to sign in again."
-        confirmLabel="Sign out"
-        loading={signOutBusy}
-        onConfirm={() => void signOut()}
-        onClose={() => !signOutBusy && setSigningOut(null)}
       />
       <ConfirmDialog
         open={!!removing}
@@ -403,9 +323,6 @@ function WorkspaceRow({
   onRemove,
   onAssign,
   onAdopt,
-  onSignIn,
-  onSignOut,
-  claudeAuth,
 }: {
   w: Workspace;
   targetLabel: string;
@@ -418,27 +335,15 @@ function WorkspaceRow({
   onRemove: () => void;
   onAssign: () => void;
   onAdopt: () => void;
-  onSignIn: () => void;
-  onSignOut: () => void;
-  claudeAuth?: ClaudeAuthStatus | 'loading';
 }) {
   const status = STATUS[w.status];
   const running = w.status === 'running';
-  const authKnown = claudeAuth && claudeAuth !== 'loading' ? claudeAuth : null;
-  const signedInToClaude = !!authKnown?.loggedIn;
   const limits = [w.cpus && `${w.cpus} CPU`, w.memoryMb && formatBytes(w.memoryMb * 1024 * 1024)].filter(Boolean).join(' · ');
   const items: MenuItem[] = [
     running || w.status === 'starting'
       ? { label: 'Stop', icon: <Square className="size-4" />, onSelect: onStop, disabled: busy }
       : { label: 'Start', icon: <Play className="size-4" />, onSelect: onStart, disabled: busy || w.status !== 'stopped' },
     { label: 'Account pool…', icon: <KeySquare className="size-4" />, onSelect: onAssign, disabled: w.status === 'creating' },
-    // Your own Claude account, for workspaces without a pool (a pool's keys would take precedence).
-    ...(running && !w.account
-      ? [
-          { label: signedInToClaude ? 'Switch Claude account…' : 'Sign in to Claude…', icon: <LogIn className="size-4" />, onSelect: onSignIn },
-          ...(signedInToClaude ? [{ label: 'Sign out of Claude', icon: <LogOut className="size-4" />, onSelect: onSignOut }] : []),
-        ]
-      : []),
     ...(w.delivery?.status === 'frozen' ? [{ label: 'Adopt workspace', icon: <ShieldCheck className="size-4" />, onSelect: onAdopt }] : []),
     { label: 'Remove', icon: <Trash2 className="size-4" />, onSelect: onRemove, danger: true, disabled: w.status === 'creating' || !removable },
   ];
@@ -531,7 +436,6 @@ function WorkspaceRow({
         delivery={delivery}
         targetLabel={targetLabel}
         usage={usage}
-        claudeAuth={claudeAuth}
         busy={busy}
         items={items.slice(1)}
         onStart={onStart}

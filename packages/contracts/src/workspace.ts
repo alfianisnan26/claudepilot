@@ -84,7 +84,24 @@ export const WORKSPACE_API = {
   claudeLogout: (id: string) => `/api/workspaces/${id}/claude-logout`,
   /** GET lists, POST opens one (`CreateTerminalRequest`); DELETE `…/terminals/<terminal>` closes it. */
   terminals: (id: string) => `/api/workspaces/${id}/terminals`,
+  /**
+   * GET: the workspace's Claudes with their sign-in state (`WorkspaceClaudeState`). PATCH
+   * `…/claudes/<claude>` `{ name }` renames one, DELETE removes it. The sign-in routes above take
+   * `?claude=<id>` for a Claude other than Default.
+   */
+  claudes: (id: string) => `/api/workspaces/${id}/claudes`,
 } as const;
+
+/**
+ * One of the workspace's Claudes as its page shows it: whether Claude Code there is signed in (status
+ * and method only, from `claude auth status`; never the account, plan or credential) and how many
+ * terminals run as it. `auth` is null when it couldn't be checked (the workspace is stopped).
+ */
+export interface WorkspaceClaudeState {
+  claude: import('./chat.js').WorkspaceClaude;
+  auth: ClaudeAuthStatus | null;
+  terminals: number;
+}
 
 /** How many terminals a workspace keeps open at once (each Claude Code takes a few hundred MB). */
 export const TERMINAL_MAX = 8;

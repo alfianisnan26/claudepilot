@@ -1,5 +1,5 @@
 import { Button, buttonClass, CopyButton, Dialog, Spinner, TextField } from '@isnanme/ui';
-import type { Workspace } from '@portal/contracts';
+import type { Workspace, WorkspaceClaude } from '@portal/contracts';
 import { ExternalLink, LogIn } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, errorText } from '@/lib/api';
@@ -10,7 +10,19 @@ import { api, errorText } from '@/lib/api';
  * CLI's --sso only adds login_method=sso to the same link), so there's no method to pick here. The
  * sign-in is saved in the workspace, not the portal.
  */
-export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: Workspace | null; onClose: () => void; onDone: () => void }) {
+export function ClaudeLoginDialog({
+  workspace,
+  claude,
+  onClose,
+  onDone,
+}: {
+  workspace: Workspace | null;
+  /** Which of the workspace's Claudes signs in (its own directory and login); Default when absent. */
+  claude?: WorkspaceClaude | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const claudeId = claude?.directory ? claude.id : undefined;
   const [url, setUrl] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   // Starting takes longer when Claude Code has to be installed first.
@@ -31,7 +43,7 @@ export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: W
     setSlow(false);
     const slowTimer = setTimeout(() => current && setSlow(true), 6_000);
     api.workspaces
-      .claudeLogin(id)
+      .claudeLogin(id, {}, claudeId)
       .then(
         (r) => current && setUrl(r.url),
         (e: unknown) => current && setStartError(errorText(e, 'Could not start the sign-in.')),
@@ -41,12 +53,12 @@ export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: W
       current = false;
       clearTimeout(slowTimer);
     };
-  }, [id]);
+  }, [id, claudeId]);
 
   // Closing ends the sign-in waiting in the workspace.
   const close = () => {
     if (busy) return;
-    if (id && !startError) void api.workspaces.cancelClaudeLogin(id).catch(() => undefined);
+    if (id && !startError) void api.workspaces.cancelClaudeLogin(id, claudeId).catch(() => undefined);
     onClose();
   };
 
@@ -55,7 +67,7 @@ export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: W
     if (!code.trim()) return setError('Paste the code the sign-in page shows.');
     setBusy(true);
     try {
-      await api.workspaces.claudeLoginCode(id, code.trim());
+      await api.workspaces.claudeLoginCode(id, code.trim(), claudeId);
       onDone();
     } catch (e) {
       setError(errorText(e, 'Signing in failed.'));
@@ -69,8 +81,8 @@ export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: W
       open={!!workspace}
       onClose={close}
       size="sm"
-      title="Sign in to Claude"
-      description={`For Claude Code in ${workspace?.name ?? 'this workspace'}. Saved there, not in the portal.`}
+      title={`Sign in · ${claude?.name ?? 'Default'}`}
+      description={`Claude ${claude?.name ?? 'Default'} in ${workspace?.name ?? 'this workspace'}. Saved in its own directory there, not in the portal.`}
       footer={
         <>
           <Button variant="secondary" onClick={close} disabled={busy}>

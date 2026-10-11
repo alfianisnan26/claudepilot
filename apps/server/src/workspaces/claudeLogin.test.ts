@@ -78,7 +78,7 @@ test('a sign-in shows Claude Code’s link, and finishes when Claude Code accept
   const logins = new ClaudeLogins(fake.workspaces);
   assert.deepEqual(await logins.start('docker', 'api-dev'), { url: LINK });
   assert.match(fake.login()[2]!, /^PATH="\$HOME\/\.local\/bin:\$PATH"; export PATH; .*exec timeout 900 claude auth login "\$@"$/);
-  assert.deepEqual(fake.login().slice(3), ['sh', '--claudeai']);
+  assert.deepEqual(fake.login().slice(3), ['sh', '', '--claudeai'], 'Default: no Claude directory');
   assert.ok(!fake.commands.some((c) => c[2]?.includes('install.sh')), 'nothing installed when Claude Code is there');
   await logins.submit('docker', 'api-dev', 'good-code-123');
   await assert.rejects(logins.submit('docker', 'api-dev', 'good-code-123'), /has ended/);
@@ -88,7 +88,7 @@ test('single sign-on passes --sso to Claude Code as an argument', async () => {
   const fake = fakeWorkspaces(() => undefined);
   const logins = new ClaudeLogins(fake.workspaces);
   await logins.start('docker', 'api-dev', { sso: true });
-  assert.deepEqual(fake.login().slice(3), ['sh', '--claudeai', '--sso']);
+  assert.deepEqual(fake.login().slice(3), ['sh', '', '--claudeai', '--sso']);
   await logins.cancel('docker', 'api-dev');
 });
 
@@ -115,7 +115,8 @@ test('status reads Claude Code’s auth status as status only, never the credent
       const data: ((b: Buffer) => void)[] = [];
       const exits: ((c: number | null) => void)[] = [];
       setTimeout(() => {
-        const out = command[2]?.endsWith('exec claude "$@"') ? outputs[command.slice(4).join(' ')] : undefined;
+        // `sh -c '<PATH> <as Claude> exec claude "$@"' sh <claude dir> auth status --json`
+        const out = command[2]?.endsWith('exec claude "$@"') ? outputs[command.slice(5).join(' ')] : undefined;
         if (out) data.forEach((fn) => fn(Buffer.from(out)));
         exits.forEach((fn) => fn(out ? 0 : 1));
       }, 1);
@@ -179,4 +180,28 @@ test('two sign-ins at once share one install', async () => {
   await Promise.allSettled([logins.start('local', 'local'), logins.start('local', 'local')]);
   assert.equal(fake.commands.filter((c) => c[2]?.includes('install.sh')).length, 1);
   await logins.cancel('local', 'local');
+});
+
+test('each Claude signs in, reports and signs out with its own CLAUDE_CONFIG_DIR', async () => {
+  const fake = fakeWorkspaces(() => undefined);
+  const logins = new ClaudeLogins(fake.workspaces);
+  const dir = 'claudes/0123456789abcdef';
+  await logins.start('local', 'local', { dir });
+  assert.equal(fake.login()[4], dir);
+  assert.match(fake.login()[2]!, /if \[ -n "\$1" \]; then CLAUDE_CONFIG_DIR="\$HOME\/\.claudepilot\/\$1"; export CLAUDE_CONFIG_DIR; fi; shift; echo "cp-pid:\$\$"/);
+  // A sign-in on Default meanwhile is a separate one: it doesn't cancel this Claude's.
+  await logins.start('local', 'local');
+  assert.ok(!fake.killed(), 'Default’s sign-in left the other Claude’s running');
+  await logins.cancel('local', 'local', dir);
+  assert.ok(fake.killed());
+  await logins.cancel('local', 'local');
+});
+
+test('a Claude directory that isn’t one of ours is refused before anything runs', async () => {
+  const fake = fakeWorkspaces(() => undefined);
+  const logins = new ClaudeLogins(fake.workspaces);
+  for (const dir of ['../etc', 'claudes/x', '/root', 'claudes/0123456789abcdef/..'])
+    await assert.rejects(logins.start('local', 'local', { dir }), { code: 'VALIDATION_FAILED' });
+  await assert.rejects(logins.status('local', 'local', '$(id)'), { code: 'VALIDATION_FAILED' });
+  assert.equal(fake.commands.length, 0);
 });
