@@ -163,6 +163,14 @@ hooks in `.claude/settings*.json`) without asking, so before the first session i
 whenever those files change, the portal lists by name what would load and asks you to trust the folder;
 nothing starts until you do. The controls also show how full the context window is, and the Agents
 panel can stop one sub-agent or all of them.
+**Account pools only:** sessions run only on the keys an Account Pool delivers (API keys or custom
+hosts, through the managed `apiKeyHelper`), never on a workspace's own Claude sign-in, which stays for
+the terminal. A session starts, resumes or wakes only in a workspace whose pool is active and delivered,
+after the host checks that the account drop-in names the pool's helper (`cp-session authcheck`, which
+reads that one file). Every turn must report the pool's helper as its key source, and a usage check
+after each turn must show no plan limits; otherwise the session ends for safety at once. Unassigning
+the pool, or moving the workspace to another one, stops its sessions first (they read Interrupted and
+resume once the new pool is delivered).
 Kubernetes workspaces get the session host from the workspace image (`images/workspace/cp-session`,
 generated with `npm run gen:workspace-host -w @portal/server`); Docker workspaces get it installed.
 

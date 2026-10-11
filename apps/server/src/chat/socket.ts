@@ -33,7 +33,10 @@ function refuse(socket: Duplex, status: number, text: string) {
 
 const errMessage = (e: unknown): string => (isAppError(e) ? e.message : e instanceof Error ? e.message : String(e));
 
-/** A refused send, respond or control: its message, and its code when it has one (`FOLDER_UNTRUSTED` asks for the trust sheet). */
+/**
+ * A refused send, respond or control: its message, and its code when it has one (`FOLDER_UNTRUSTED` asks
+ * for the trust sheet; `CHAT_INELIGIBLE` means the workspace can't host sessions now, the message says why).
+ */
 function refused(uuid: string, e: unknown): ChatServerMessage {
   const ack: Extract<ChatServerMessage, { type: 'ack' }> = { type: 'ack', uuid, ok: false, error: errMessage(e) };
   if (isAppError(e)) ack.code = e.code;

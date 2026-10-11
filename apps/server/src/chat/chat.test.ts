@@ -10,16 +10,20 @@ import { AppError, isAppError } from '@isnanme/core';
 import { CHAT_MAX_IMAGE_BYTES, CHAT_SOCKET_PATH, type ChatFolderScan, type ChatServerMessage, type ChatSession, type ChatTask } from '@portal/contracts';
 import { Hono } from 'hono';
 import { WebSocket } from 'ws';
+import { AccountPools } from '../accounts/pools.js';
+import type { Reconciler } from '../delivery/reconciler.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { decodeAttachments, readBlob, saveBlob } from './blobs.js';
 import { ChatController, type ChatControllerOptions } from './controller.js';
+import { CHAT_INELIGIBLE, NO_KEY, NO_POOL, NOT_SET_UP, NOT_SYNCED, poolEligibility, UNKNOWN, type Eligibility } from './eligibility.js';
 import { TRUST_EMPTY_HASH } from './host.js';
 import {
   allowResponse,
   controlRequest,
+  CREDENTIAL,
   denyResponse,
   errorResponse,
   flagSettings,
@@ -27,8 +31,10 @@ import {
   parseLine,
   pickApplied,
   pickModels,
+  POOL_KEY_SOURCE,
   requestDetail,
   requestTitle,
+  usageVerdict,
   userLine,
 } from './protocol.js';
 import { MAX_HOLD, redact, StreamRedactor } from './redact.js';
@@ -375,13 +381,27 @@ class FakeWorkspaces {
   scanCode = 0;
   /** The folders `trustscan` was asked about, in order. */
   readonly scans: string[] = [];
+  /** What `authcheck` prints (the account drop-in names the pool's helper unless a test says otherwise), and its exit code (null: never exits). */
+  authOut = 'pass';
+  authCode: number | null = 0;
+  auths = 0;
+  /** While set, `start` waits for it before answering (a launch caught mid-way). */
+  startGate: Promise<void> | null = null;
   runtimeFor(target: string): object | undefined {
     return target === 'docker' ? {} : undefined; // only the docker target exists
   }
   async exec(_target: string, _name: string, command: string[]): Promise<ExecSession> {
     const exec = new FakeExec();
     const cmd = command[2]; // ['sh', <script>, <cmd>, ...]
-    if (cmd === 'trustscan') {
+    if (cmd === 'authcheck') {
+      this.auths++;
+      this.ops.push('authcheck');
+      const [out, code] = [this.authOut, this.authCode];
+      setTimeout(() => {
+        exec.push(`${out}\n`);
+        if (code !== null) exec.exit(code);
+      }, 0);
+    } else if (cmd === 'trustscan') {
       this.scans.push(command[3] ?? '');
       this.ops.push('trustscan');
       const [out, code] = [this.scanOut, this.scanCode];
@@ -393,10 +413,13 @@ class FakeWorkspaces {
       this.starts++;
       this.startArgs.push(command.slice(2));
       this.ops.push('start');
-      setTimeout(() => {
-        exec.push('4242 2026-10-10T12:00:00Z\n');
-        exec.exit(0);
-      }, 0);
+      const gate = this.startGate ?? Promise.resolve();
+      void gate.then(() =>
+        setTimeout(() => {
+          exec.push('4242 2026-10-10T12:00:00Z\n');
+          exec.exit(0);
+        }, 0),
+      );
     } else if (cmd === 'tail') {
       this.tails.push(exec); // kept open; the test pushes lines
       this.tailArgs.push(command.slice(2));
@@ -419,7 +442,7 @@ class FakeWorkspaces {
       }, 0);
     } else if (cmd === 'stop') {
       this.stops++;
-      this.ops.push('stop');
+      this.ops.push(`stop ${command[3] ?? ''}`.trim());
       setTimeout(() => exec.exit(0), 0);
     } else {
       setTimeout(() => exec.exit(0), 0);
@@ -455,7 +478,7 @@ test('controller: create launches a reader, stores the transcript, sends, resolv
     const tail = ws.tails[0]!;
 
     // A turn: init, a live delta, a finished block, and a result.
-    tail.push(`${JSON.stringify({ type: 'system', subtype: 'init', session_id: id, model: 'claude-opus-5-5', permissionMode: 'default' })}\n`);
+    tail.push(`${JSON.stringify({ type: 'system', subtype: 'init', session_id: id, model: 'claude-opus-5-5', permissionMode: 'default', apiKeySource: 'apiKeyHelper' })}\n`);
     tail.push(`${JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hel' } }, parent_tool_use_id: null })}\n`);
     tail.push(`${JSON.stringify({ type: 'assistant', message: { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'Hello' }] }, parent_tool_use_id: null, uuid: 'u1' })}\n`);
     tail.push(`${JSON.stringify({ type: 'result', subtype: 'success', total_cost_usd: 0.0004, num_turns: 1, result: 'done', is_error: false, session_id: id })}\n`);
@@ -618,8 +641,24 @@ type Live = Awaited<ReturnType<typeof liveSession>>;
 
 /** What Claude Code reports as applied on a fresh process (get_settings.applied). */
 const APPLIED = { applied: { model: 'claude-opus-5-5', effort: 'medium', ultracode: false, ultracodeAvailable: true } };
-/** A main-thread `system/init`: a turn starts. */
-const init = (sessionId: string, mode = 'default') => line({ type: 'system', subtype: 'init', session_id: sessionId, model: 'claude-opus-5-5', permissionMode: mode });
+/** Claude Code 2.1.296's `get_usage {skip_behaviors: true}` reply for an API-key session (the pool's helper), as observed. */
+const USAGE_API_KEY = {
+  session: {
+    total_cost_usd: 0.00014,
+    total_api_duration_ms: 21,
+    total_duration_ms: 6987,
+    total_lines_added: 0,
+    total_lines_removed: 0,
+    model_usage: { 'claude-opus-5-5': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.00014, contextWindow: 1_000_000, maxOutputTokens: 128_000, thinkingTokens: 0, canonicalModel: 'claude-opus-5-5', provider: 'firstParty', costBasis: 'list' } },
+  },
+  subscription_type: null,
+  rate_limits_available: false,
+  rate_limits: null,
+  behaviors: null,
+};
+/** A main-thread `system/init`: a turn starts, on the pool's helper (what Claude Code 2.1.296 reports for it). */
+const init = (sessionId: string, mode = 'default', apiKeySource: string | null = 'apiKeyHelper') =>
+  line({ type: 'system', subtype: 'init', session_id: sessionId, model: 'claude-opus-5-5', permissionMode: mode, ...(apiKeySource === null ? {} : { apiKeySource }) });
 
 /** A first turn starts (so Claude Code has a transcript to resume) and its applied settings are read. */
 async function firstTurn(s: Live) {
@@ -973,7 +1012,7 @@ test('controller: each tool_result is named from its own call, even when paralle
 test('controller: the first system/init of a process reads the applied settings, once', async () => {
   const s = await liveSession();
   try {
-    const init = line({ type: 'system', subtype: 'init', session_id: s.id, model: 'claude-opus-5-5', permissionMode: 'default' });
+    const init = line({ type: 'system', subtype: 'init', session_id: s.id, model: 'claude-opus-5-5', permissionMode: 'default', apiKeySource: 'apiKeyHelper' });
     s.tail.push(init);
     const get = await s.take('get_settings');
     s.tail.push(ok(get.id, { applied: { model: 'claude-opus-5-5', effort: 'max', ultracode: false, ultracodeAvailable: false } }));
@@ -1510,6 +1549,8 @@ test('durability: a waiting request keeps a session awake; Resume wakes a sleepi
     await s.controller.respond(s.id, 'R-wait', 'deny');
     s.tail.push(line({ type: 'control_response', response: { subtype: 'success', request_id: 'R-wait', response: { behavior: 'deny', message: 'Denied by the operator.' } } }));
     s.tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: 0, is_error: false, session_id: s.id }));
+    // The turn's subscription check is a control in flight, which keeps it awake until answered.
+    s.tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
     await until(() => s.controller.get(s.id)!.process === 'asleep');
     await s.answering(s.controller.control(s.id, 'resume'));
     assert.equal(s.controller.get(s.id)!.process, 'live');
@@ -2172,5 +2213,465 @@ test('controller: a stop_task Claude Code refuses comes back as its message in t
   } finally {
     await socket.close();
     await s.done();
+  }
+});
+
+/* ========================= credentials (PRD §6) ========================= */
+
+test('parseLine: a main-thread system/init carries its credential source (null without one), a sub-agent’s isn’t read; rate_limit_event and result are flagged', () => {
+  assert.equal(POOL_KEY_SOURCE, 'apiKeyHelper');
+  assert.equal(parseLine(init('S')).apiKeySource, 'apiKeyHelper');
+  assert.equal(parseLine(init('S', 'default', 'ANTHROPIC_API_KEY')).apiKeySource, 'ANTHROPIC_API_KEY');
+  assert.equal(parseLine(init('S', 'default', 'none')).apiKeySource, 'none');
+  assert.equal(parseLine(init('S', 'default', null)).apiKeySource, null, 'missing reads null, which fails the check');
+  assert.equal(parseLine(line({ type: 'system', subtype: 'init', session_id: 'S', parent_tool_use_id: 'toolu_1', apiKeySource: 'none' })).apiKeySource, undefined);
+  assert.equal(parseLine(line({ type: 'system', subtype: 'status', status: null })).apiKeySource, undefined);
+  // What Claude Code emits "when rate limit info changes": flagged, nothing of it kept.
+  const event = parseLine(line({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning', resetsAt: 1_791_700_000, rateLimitType: 'five_hour', isUsingOverage: false }, uuid: 'u', session_id: 'S' }));
+  assert.deepEqual(event, { stored: [], rateLimitEvent: true });
+  assert.equal(parseLine(line({ type: 'result', subtype: 'success', session_id: 'S' })).result, true);
+  assert.equal(parseLine(init('S')).result, undefined);
+});
+
+test('usageVerdict: Claude Code’s reply for an API-key session passes; plan limits, a subscription type, or no rate_limits_available: false fail', () => {
+  assert.equal(usageVerdict(USAGE_API_KEY), null);
+  assert.equal(usageVerdict({ ...USAGE_API_KEY, behaviors: { anything: true } }), null, 'other fields don’t matter');
+  assert.equal(usageVerdict({ ...USAGE_API_KEY, rate_limits: { five_hour: { utilization: 41, resets_at: '2026-10-11T03:00:00Z' } } }), CREDENTIAL.planLimits);
+  assert.equal(usageVerdict({ ...USAGE_API_KEY, rate_limits: {} }), CREDENTIAL.planLimits);
+  assert.equal(usageVerdict({ ...USAGE_API_KEY, subscription_type: 'max' }), CREDENTIAL.planLimits);
+  assert.equal(usageVerdict({ ...USAGE_API_KEY, rate_limits_available: true }), CREDENTIAL.planLimits);
+  const { rate_limits_available: _available, ...without } = USAGE_API_KEY;
+  assert.equal(usageVerdict(without), CREDENTIAL.unconfirmed);
+  assert.equal(usageVerdict({ ...USAGE_API_KEY, rate_limits_available: 'false' }), CREDENTIAL.unconfirmed);
+  assert.equal(usageVerdict({}), CREDENTIAL.unconfirmed);
+});
+
+test('poolEligibility: an active assignment whose delivery is Synced; otherwise the reason', () => {
+  assert.deepEqual(poolEligibility({ state: 'active' }, 'synced'), { ok: true });
+  assert.deepEqual(poolEligibility(null, 'synced'), { ok: false, reason: NO_POOL });
+  assert.deepEqual(poolEligibility({ state: 'removing' }, 'synced'), { ok: false, reason: NO_POOL }, 'an unassign in progress');
+  assert.deepEqual(poolEligibility({ state: 'waiting' }, 'synced'), { ok: false, reason: NO_KEY });
+  assert.deepEqual(poolEligibility({ state: 'waiting' }, 'pending'), { ok: false, reason: NO_KEY }, 'the pool first');
+  for (const status of ['pending', 'drifted', 'failed', 'locked', 'frozen', 'unsupported', 'none', null, undefined] as const)
+    assert.deepEqual(poolEligibility({ state: 'active' }, status), { ok: false, reason: NOT_SYNCED }, String(status));
+  assert.deepEqual(
+    [NO_POOL, NO_KEY, NOT_SYNCED, NOT_SET_UP],
+    ['Sessions need an account pool on this workspace.', "This workspace's pool has no usable key right now.", "Delivery to this workspace isn't up to date yet.", "This workspace isn't set up to use its pool's keys yet."],
+  );
+});
+
+test('eligibility: create is refused with 409 CHAT_INELIGIBLE and the reason before anything runs in the workspace, over REST too; eligible, every create and launch asks', async () => {
+  const { store, dataDir } = await freshStore();
+  const ws = new FakeWorkspaces();
+  const controller = new ChatController(store, ws as unknown as Workspaces);
+  let installs = 0;
+  controller.installHost = async () => void installs++;
+  const app = new Hono();
+  app.onError((e, c) => {
+    const err = isAppError(e) ? e : new AppError('INTERNAL_ERROR', undefined, { cause: e });
+    return c.json(err.toJSON(), err.status as 409);
+  });
+  app.route('/', createChatRoutes(controller));
+  try {
+    for (const reason of [NO_POOL, NO_KEY, NOT_SYNCED]) {
+      controller.eligibility = () => ({ ok: false, reason });
+      await assert.rejects(controller.create({ workspaceId: 'docker/ws1' }), (e) => {
+        assert.ok(isAppError(e));
+        assert.deepEqual([e.code, e.status, e.message], [CHAT_INELIGIBLE, 409, reason]);
+        return true;
+      });
+    }
+    controller.eligibility = () => {
+      throw new Error('the database went away');
+    };
+    await assert.rejects(controller.create({ workspaceId: 'docker/ws1' }), (e) => isAppError(e) && e.code === CHAT_INELIGIBLE && e.message === UNKNOWN);
+    controller.eligibility = () => ({ ok: false, reason: NO_POOL });
+    const res = await app.request('/', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspaceId: 'docker/ws1' }) });
+    assert.equal(res.status, 409);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    assert.deepEqual([body.error.code, body.error.message], [CHAT_INELIGIBLE, NO_POOL]);
+    assert.deepEqual(ws.ops, [], 'nothing ran in the workspace');
+    assert.equal(installs, 0, 'not even the host install');
+    assert.deepEqual(controller.list(), []);
+
+    const asked: string[] = [];
+    controller.eligibility = (id) => (asked.push(id), { ok: true });
+    const session = await controller.create({ workspaceId: 'docker/ws1' });
+    await until(() => controller.get(session.id)?.state === 'idle');
+    assert.deepEqual(asked, ['docker/ws1', 'docker/ws1', 'docker/ws1', 'docker/ws1'], 'create asks before and after its checks, the launch before and after its own');
+    assert.deepEqual(ws.ops, ['authcheck', 'trustscan', 'start'], 'the host check, the folder, then the start');
+    assert.equal(installs, 1);
+  } finally {
+    controller.stop();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('eligibility: while ineligible, resume, a message (a wake) and any control that would start the process are refused — acked with the code — and nothing starts; eligible again, it resumes', async () => {
+  const s = await liveSession();
+  const socket = await socketFor(s);
+  let verdict: Eligibility = { ok: true };
+  s.controller.eligibility = () => verdict;
+  try {
+    await firstTurn(s);
+    await vanish(s);
+    const auths = s.ws.auths;
+    verdict = { ok: false, reason: NO_KEY };
+    await assert.rejects(s.controller.control(s.id, 'resume'), (e) => isAppError(e) && e.code === CHAT_INELIGIBLE && e.status === 409 && e.message === NO_KEY);
+    socket.send({ type: 'send', session: s.id, uuid: 'u-1', text: 'hello?' });
+    assert.deepEqual(await socket.ack('u-1'), { type: 'ack', uuid: 'u-1', ok: false, error: NO_KEY, code: CHAT_INELIGIBLE });
+    assert.equal(new ChatStore(s.store).inputState(s.id, 'u-1'), null, 'nothing of the message is stored');
+    socket.send({ type: 'control', session: s.id, op: 'model', uuid: 'm-1', args: { model: 'sonnet' } });
+    assert.deepEqual(await socket.ack('m-1'), { type: 'ack', uuid: 'm-1', ok: false, error: NO_KEY, code: CHAT_INELIGIBLE });
+    await assert.rejects(s.controller.models(s.id), (e) => isAppError(e) && e.code === CHAT_INELIGIBLE);
+    assert.equal(s.ws.starts, 1, 'nothing started');
+    assert.equal(s.ws.auths, auths, 'nothing ran in the workspace');
+    assert.deepEqual([s.state(), s.controller.get(s.id)!.process], ['interrupted', 'gone'], 'the session is as it was');
+
+    verdict = { ok: true };
+    await s.answering(s.controller.control(s.id, 'resume'));
+    assert.equal(s.ws.starts, 2);
+    assert.deepEqual([s.state(), s.controller.get(s.id)!.process], ['idle', 'live']);
+  } finally {
+    await socket.close();
+    await s.done();
+  }
+});
+
+test('eligibility: a sleeping session isn’t woken while ineligible; it stays asleep', async () => {
+  const s = await liveSession({ idleSleepMs: 60 }, true);
+  try {
+    await firstTurn(s);
+    await until(() => s.controller.get(s.id)!.process === 'asleep');
+    s.controller.eligibility = () => ({ ok: false, reason: NOT_SYNCED });
+    await assert.rejects(s.controller.send(s.id, randomUUID(), 'wake up'), (e) => isAppError(e) && e.code === CHAT_INELIGIBLE && e.message === NOT_SYNCED);
+    assert.deepEqual([s.controller.get(s.id)!.process, s.state(), s.ws.starts], ['asleep', 'idle', 1]);
+  } finally {
+    await s.done();
+  }
+});
+
+test('eligibility: a first launch refused (the pool changed after create checked) reads Interrupted with the reason, and nothing starts', async () => {
+  const { store, dataDir } = await freshStore();
+  const ws = new FakeWorkspaces();
+  const controller = new ChatController(store, ws as unknown as Workspaces);
+  let calls = 0;
+  controller.eligibility = () => (++calls <= 2 ? { ok: true } : { ok: false, reason: NO_KEY }); // create asks twice, then its launch
+  try {
+    const session = await controller.create({ workspaceId: 'docker/ws1' });
+    await until(() => controller.get(session.id)?.state === 'interrupted');
+    assert.deepEqual([controller.get(session.id)!.process, controller.get(session.id)!.endedReason], ['gone', NO_KEY]);
+    assert.equal(ws.starts, 0);
+  } finally {
+    controller.stop();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('authcheck: a create whose host check fails is refused (409 CHAT_INELIGIBLE) before the folder is scanned, and nothing is created; one that can’t answer in time is a 503', async () => {
+  const { store, dataDir } = await freshStore();
+  const ws = new FakeWorkspaces();
+  const controller = new ChatController(store, ws as unknown as Workspaces, { execTimeoutMs: 60 });
+  try {
+    const refusedFor = async (label: string) =>
+      assert.rejects(controller.create({ workspaceId: 'docker/ws1' }), (e) => isAppError(e) && e.code === CHAT_INELIGIBLE && e.status === 409 && e.message === NOT_SET_UP, label);
+    ws.authOut = 'fail';
+    await refusedFor('fail');
+    ws.authOut = '';
+    ws.authCode = 2; // a host older than the command
+    await refusedFor('an older host');
+    ws.authOut = 'pass\nmore';
+    ws.authCode = 0;
+    await refusedFor('anything but exactly pass');
+    ws.authOut = 'pass';
+    ws.authCode = null; // never exits
+    await assert.rejects(controller.create({ workspaceId: 'docker/ws1' }), (e) => isAppError(e) && e.status === 503 && /too long/.test(e.message));
+    assert.deepEqual(ws.scans, [], 'the folder was never scanned');
+    assert.equal(ws.starts, 0);
+    assert.deepEqual(controller.list(), []);
+  } finally {
+    controller.stop();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('authcheck: every resume runs it right before the start; failing, the resume is refused and nothing starts', async () => {
+  const s = await liveSession();
+  try {
+    await firstTurn(s);
+    await vanish(s);
+    s.ws.authOut = 'fail';
+    await assert.rejects(s.controller.control(s.id, 'resume'), (e) => isAppError(e) && e.code === CHAT_INELIGIBLE && e.message === NOT_SET_UP);
+    assert.equal(s.ws.starts, 1);
+    assert.equal(s.ws.scans.length, 1, 'no trust scan for a workspace that isn’t set up');
+    assert.deepEqual([s.state(), s.controller.get(s.id)!.process], ['interrupted', 'gone']);
+    s.ws.authOut = 'pass';
+    await s.answering(s.controller.control(s.id, 'resume'));
+    assert.equal(s.ws.starts, 2);
+    const at = s.ws.ops.lastIndexOf('start');
+    assert.deepEqual(s.ws.ops.slice(at - 2, at + 1), ['authcheck', 'trustscan', 'start']);
+  } finally {
+    await s.done();
+  }
+});
+
+test('credentials: a turn whose system/init reports another source than the pool’s helper, or none, ends the session; the source is never kept', async () => {
+  // Claude Code's sources: ANTHROPIC_API_KEY (environment), /login managed key (Console login), none
+  // (a claude.ai login, a bearer token, a cloud provider); and an init without the field.
+  for (const source of ['ANTHROPIC_API_KEY', '/login managed key', 'none', null] as const) {
+    const s = await liveSession();
+    try {
+      await firstTurn(s); // the first turn ran on the pool's helper
+      const stops = s.ws.stops;
+      s.tail.push(init(s.id, 'default', source));
+      await until(() => s.state() === 'ended');
+      const session = s.controller.get(s.id)!;
+      assert.deepEqual([session.endedReason, session.process], [`credential: ${CREDENTIAL.keySource}`, 'gone'], String(source));
+      const last = s.controller.history(s.id).at(-1)!;
+      assert.deepEqual([last.kind, last.text], ['error', `Ended for safety: ${CREDENTIAL.keySource}.`]);
+      await until(() => s.ws.stops > stops);
+      assert.ok(s.tail.closed, 'its reader stopped');
+      s.tail.push(assistantText('after the end'));
+      await sleep(20);
+      assert.ok(!s.controller.history(s.id).some((e) => e.text === 'after the end'));
+      if (source === 'ANTHROPIC_API_KEY' || source === '/login managed key') {
+        const rows = JSON.stringify(['chat_sessions', 'chat_events', 'chat_inputs'].map((t) => s.store.db!.prepare(`SELECT * FROM ${t}`).all()));
+        assert.ok(!rows.includes(source), `${source} is never stored`);
+        assert.ok(!JSON.stringify(s.messages).includes(source), `${source} never reaches a tab`);
+      }
+    } finally {
+      await s.done();
+    }
+  }
+});
+
+test('credentials: a pool change stops the workspace’s running sessions at once (Interrupted, with the reason), leaves other workspaces and sleeping sessions alone, and they resume once eligible', async () => {
+  const s = await liveSession();
+  let verdict: Eligibility = { ok: true };
+  s.controller.eligibility = () => verdict;
+  try {
+    const a = s.id;
+    const b = (await s.controller.create({ workspaceId: 'docker/ws1' })).id;
+    const c = (await s.controller.create({ workspaceId: 'docker/ws2' })).id;
+    await until(() => s.ws.tails.length === 3 && [b, c].every((id) => s.controller.get(id)?.state === 'idle'));
+    await sleep(20);
+    const tailOf = (id: string) => s.ws.tails[s.ws.tailArgs.findIndex((t) => t[1] === id)]!;
+    // b is mid-turn: a message sent, and a request waiting.
+    await s.controller.send(b, 'u-b', 'do it');
+    tailOf(b).push(line({ type: 'control_request', request_id: 'R-b', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_b' } }));
+    await until(() => s.controller.get(b)!.state === 'waiting');
+    // d sleeps in the same workspace.
+    const chat = new ChatStore(s.store);
+    chat.create({ id: 'D', workspaceId: 'docker/ws1', cwd: '/home/node', title: 'D', origin: 'ui' });
+    chat.patchSession('D', { process: 'asleep', state: 'idle' });
+
+    const stops = s.ws.ops.length;
+    const ended = s.controller.endWorkspaceSessions('docker/ws1', 'Pool change in progress');
+    // Before it returns: both stopped on the portal's side, their stops already on the way to the workspace.
+    for (const id of [a, b]) {
+      const session = s.controller.get(id)!;
+      assert.deepEqual([session.state, session.process, session.endedReason], ['interrupted', 'gone', 'Pool change in progress']);
+      assert.ok(tailOf(id).closed, 'its reader stopped');
+    }
+    assert.deepEqual(s.ws.ops.slice(stops).sort(), [`stop ${a}`, `stop ${b}`].sort());
+    await ended;
+    // b's unfinished work is closed out, and its answer can no longer reach a process.
+    assert.equal(chat.inputState(b, 'u-b'), 'discarded');
+    assert.equal(s.controller.get(b)!.waiting, 0);
+    assert.ok(s.controller.history(b).some((e) => e.kind === 'resolved' && e.requestId === 'R-b' && e.outcome === 'expired'));
+    await assert.rejects(s.controller.respond(b, 'R-b', 'allow'), /no longer open/);
+    assert.ok(s.controller.history(a).some((e) => e.kind === 'system' && e.text === 'Session stopped: Pool change in progress'));
+    assert.ok(s.messages.some((m) => m.type === 'session' && m.session.id === a && m.session.state === 'interrupted'), 'the tabs were told');
+    // Another workspace's session, and a sleeping one here, are left alone.
+    assert.deepEqual([s.controller.get(c)!.state, s.controller.get(c)!.process], ['idle', 'live']);
+    assert.ok(!tailOf(c).closed);
+    assert.deepEqual([s.controller.get('D')!.state, s.controller.get('D')!.process], ['idle', 'asleep']);
+
+    // Until the new assignment is active and Synced nothing resumes, a sleeping one included; then it does.
+    verdict = { ok: false, reason: NOT_SYNCED };
+    await assert.rejects(s.controller.send(a, 'u-a', 'still there?'), (e) => isAppError(e) && e.code === CHAT_INELIGIBLE && e.message === NOT_SYNCED);
+    await assert.rejects(s.controller.control('D', 'resume'), (e) => isAppError(e) && e.code === CHAT_INELIGIBLE);
+    verdict = { ok: true };
+    const starts = s.ws.starts;
+    await s.answering(s.controller.control(a, 'resume'));
+    assert.equal(s.ws.starts, starts + 1);
+    assert.deepEqual([s.controller.get(a)!.state, s.controller.get(a)!.process], ['idle', 'live']);
+  } finally {
+    await s.done();
+  }
+});
+
+test('credentials: a launch in flight when a pool change begins gives up, and stops the process it had started', async () => {
+  const { store, dataDir } = await freshStore();
+  const ws = new FakeWorkspaces();
+  const controller = new ChatController(store, ws as unknown as Workspaces);
+  let open!: () => void;
+  ws.startGate = new Promise<void>((r) => (open = r));
+  try {
+    const id = (await controller.create({ workspaceId: 'docker/ws1' })).id;
+    await until(() => ws.starts === 1); // its start is out, not yet answered
+    await controller.endWorkspaceSessions('docker/ws1', 'Pool change in progress');
+    assert.deepEqual([controller.get(id)!.state, controller.get(id)!.process, controller.get(id)!.endedReason], ['interrupted', 'gone', 'Pool change in progress']);
+    const stops = ws.stops;
+    open(); // the start succeeds now: the launch must not adopt it
+    await until(() => ws.stops > stops);
+    await sleep(20);
+    assert.deepEqual([controller.get(id)!.state, controller.get(id)!.process], ['interrupted', 'gone']);
+    assert.equal(ws.tails.length, 0, 'never followed');
+  } finally {
+    controller.stop();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('pools: assign tells chat before an assignment is set, moved or removed — ahead of anything written or delivered — and not for a no-op or a refused request', async () => {
+  const { store, dataDir } = await freshStore();
+  const db = store.db!;
+  const now = new Date().toISOString();
+  db.prepare("INSERT INTO endpoints (id, kind, name, base_url, created_at, updated_at) VALUES ('e1', 'anthropic', 'Anthropic', 'https://api.anthropic.com', ?, ?)").run(now, now);
+  for (const id of ['a1', 'a2'])
+    db.prepare("INSERT INTO accounts (id, endpoint_id, name, secret, fingerprint, masked, created_at, updated_at) VALUES (?, 'e1', ?, 'sealed', ?, 'sk-…', ?, ?)").run(id, id, `fp-${id}`, now, now);
+  const pools = new AccountPools(store);
+  const order: string[] = [];
+  const state = (id: string) => {
+    const s = pools.stateFor(id);
+    return s ? `${s.poolName} ${s.state}` : 'no pool';
+  };
+  pools.reconciler = {
+    request: (id: string, why: string) => {
+      order.push(`deliver ${why} (${state(id)})`);
+      return Promise.resolve();
+    },
+  } as unknown as Reconciler;
+  pools.onTransition = (id) => order.push(`chat ${id} (${state(id)})`);
+  try {
+    const one = pools.create({ name: 'One', endpointId: 'e1', members: ['a1'] });
+    const two = pools.create({ name: 'Two', endpointId: 'e1', members: ['a2'] });
+    pools.assign('docker/ws1', { poolId: one.id }, { existing: false });
+    pools.assign('docker/ws1', { poolId: one.id }, { existing: true }); // no change
+    pools.assign('docker/ws1', { poolId: two.id }, { existing: true }); // a move
+    pools.assign('docker/ws1', { poolId: null }, { existing: true }); // an unassign
+    pools.assign('docker/ws1', { poolId: null }, { existing: true }); // nothing left to remove
+    assert.deepEqual(order, [
+      'chat docker/ws1 (no pool)',
+      'deliver assigned (One active)',
+      'chat docker/ws1 (One active)',
+      'deliver assigned (Two active)',
+      'chat docker/ws1 (Two active)',
+      'deliver unassigned (Two removing)',
+    ]);
+    // Refused requests change nothing, so chat hears nothing.
+    order.length = 0;
+    assert.throws(() => pools.assign('docker/ws1', { poolId: 'nope' }, { existing: false }), /no longer exists/);
+    assert.throws(() => pools.assign('docker/ws2', { poolId: one.id }, { existing: true }), (e) => isAppError(e) && e.code === 'CONFIRM_REQUIRED');
+    assert.deepEqual(order, []);
+  } finally {
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+/** A turn ends; the controller then asks `get_usage`, which this returns. */
+async function turnEnds(s: Live): Promise<Control> {
+  s.tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: 0.01, is_error: false, session_id: s.id }));
+  return s.take('get_usage');
+}
+
+test('subscription: after each result the controller asks get_usage {skip_behaviors: true}; an API-key reply keeps the session, and nothing of it is kept', async () => {
+  const s = await liveSession();
+  try {
+    await firstTurn(s);
+    for (let turn = 0; turn < 2; turn++) {
+      const ask = await turnEnds(s);
+      assert.deepEqual(ask.request, { subtype: 'get_usage', skip_behaviors: true });
+      s.tail.push(ok(ask.id, USAGE_API_KEY));
+    }
+    await sleep(30);
+    assert.equal(s.state(), 'idle');
+    assert.equal(controls(s.ws).filter((c) => c.request.subtype === 'get_usage').length, 2, 'one per result');
+    const rows = JSON.stringify(['chat_sessions', 'chat_events', 'chat_inputs'].map((t) => s.store.db!.prepare(`SELECT * FROM ${t}`).all()));
+    for (const needle of ['subscription_type', 'rate_limits', 'model_usage', 'firstParty']) assert.ok(!rows.includes(needle), `no ${needle} stored`);
+    assert.ok(!JSON.stringify(s.messages).includes('rate_limits'), 'nor sent to tabs');
+  } finally {
+    await s.done();
+  }
+});
+
+test('subscription: plan limits, a subscription type, a reply without rate_limits_available: false, or Claude Code refusing the check ends the session', async () => {
+  const cases: [string, string, (requestId: string) => string][] = [
+    ['plan limits', CREDENTIAL.planLimits, (id) => ok(id, { ...USAGE_API_KEY, rate_limits_available: true, rate_limits: { five_hour: { utilization: 41, resets_at: '2026-10-11T03:00:00Z' } } })],
+    ['a subscription type', CREDENTIAL.planLimits, (id) => ok(id, { ...USAGE_API_KEY, subscription_type: 'max' })],
+    ['no rate_limits_available', CREDENTIAL.unconfirmed, (id) => ok(id, { session: USAGE_API_KEY.session, rate_limits: null })],
+    ['a refusal', CREDENTIAL.refused, (id) => fail(id, 'Unsupported control request subtype: get_usage')],
+  ];
+  for (const [label, why, reply] of cases) {
+    const s = await liveSession();
+    try {
+      const stops = s.ws.stops;
+      s.tail.push(reply((await turnEnds(s)).id));
+      await until(() => s.state() === 'ended');
+      assert.equal(s.controller.get(s.id)!.endedReason, `credential: ${why}`, label);
+      const last = s.controller.history(s.id).at(-1)!;
+      assert.deepEqual([last.kind, last.text], ['error', `Ended for safety: ${why}.`], label);
+      await until(() => s.ws.stops > stops);
+      const kept = JSON.stringify(s.store.db!.prepare('SELECT * FROM chat_sessions').all()) + JSON.stringify(s.controller.history(s.id));
+      for (const needle of ['five_hour', 'resets_at', 'Unsupported']) assert.ok(!kept.includes(needle), `${label}: no ${needle} kept`);
+    } finally {
+      await s.done();
+    }
+  }
+});
+
+test('subscription: a rate_limit_event line ends the session at once', async () => {
+  const s = await liveSession();
+  try {
+    s.tail.push(line({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', resetsAt: 1_791_700_000, rateLimitType: 'five_hour', isUsingOverage: false }, uuid: randomUUID(), session_id: s.id }));
+    s.tail.push(assistantText('after the event'));
+    await until(() => s.state() === 'ended');
+    assert.equal(s.controller.get(s.id)!.endedReason, `credential: ${CREDENTIAL.planLimits}`);
+    await sleep(20);
+    assert.ok(!s.controller.history(s.id).some((e) => e.text === 'after the event'));
+    assert.ok(!JSON.stringify(s.store.db!.prepare('SELECT * FROM chat_events').all()).includes('five_hour'));
+  } finally {
+    await s.done();
+  }
+});
+
+test('subscription: no answer in time ends a running session; a process that died after its turn reads Interrupted instead; a session ended meanwhile is left as it was', async () => {
+  const live = await liveSession();
+  try {
+    live.controller.controlTimeoutMs = 40;
+    await turnEnds(live);
+    await until(() => live.state() === 'ended');
+    assert.equal(live.controller.get(live.id)!.endedReason, `credential: ${CREDENTIAL.unanswered}`);
+  } finally {
+    await live.done();
+  }
+
+  const died = await liveSession();
+  try {
+    died.controller.controlTimeoutMs = 40;
+    await turnEnds(died);
+    died.ws.alive = false; // the process exited right after its turn
+    await until(() => died.state() === 'interrupted');
+    assert.deepEqual([died.controller.get(died.id)!.process, died.controller.get(died.id)!.endedReason], ['gone', null]);
+    assert.ok(!died.controller.history(died.id).some((e) => e.kind === 'error'), 'not a credential end');
+  } finally {
+    await died.done();
+  }
+
+  const closed = await liveSession();
+  try {
+    closed.controller.controlTimeoutMs = 60;
+    await turnEnds(closed);
+    await closed.controller.end(closed.id);
+    await sleep(120);
+    assert.equal(closed.controller.get(closed.id)!.endedReason, 'closed by operator');
+  } finally {
+    await closed.done();
   }
 });

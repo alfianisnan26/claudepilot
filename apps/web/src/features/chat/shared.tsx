@@ -1,6 +1,8 @@
 import { Badge, Spinner, type BadgeTone } from '@isnanme/ui';
-import type { ChatSessionState } from '@portal/contracts';
+import { CHAT_ENDED_CREDENTIAL, CHAT_ENDED_INTEGRITY, CHAT_INELIGIBLE, type ChatSessionState } from '@portal/contracts';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ApiError } from '@/lib/api';
+import { ChatAckError } from './useChatSocket';
 
 /** State → label and badge tone. `starting`/`working` spin; `waiting`/`interrupted` ask for you. */
 export const SESSION_STATE: Record<ChatSessionState, { label: string; tone: BadgeTone; busy?: boolean }> = {
@@ -21,6 +23,19 @@ export function StateBadge({ state }: { state: ChatSessionState }) {
       {s.label}
     </Badge>
   );
+}
+
+/**
+ * Whether the portal refused because the workspace can't host sessions now (no account pool ready: none
+ * assigned, no usable key, delivery not up to date, a pool change under way). The message says why.
+ */
+export const isIneligible = (e: unknown): boolean => (e instanceof ApiError || e instanceof ChatAckError) && e.code === CHAT_INELIGIBLE;
+
+/** A session the portal ended at once for safety (credential check) or integrity, and why; null otherwise. */
+export function endedForSafety(reason: string | null | undefined): { label: string; why: string } | null {
+  if (reason?.startsWith(CHAT_ENDED_CREDENTIAL)) return { label: 'Ended for safety', why: reason.slice(CHAT_ENDED_CREDENTIAL.length) };
+  if (reason?.startsWith(CHAT_ENDED_INTEGRITY)) return { label: 'Ended for integrity', why: reason.slice(CHAT_ENDED_INTEGRITY.length) };
+  return null;
 }
 
 /** Which sub-agent a line came from, when it's not the main one. */

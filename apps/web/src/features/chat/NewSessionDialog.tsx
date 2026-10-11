@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { api, errorText } from '@/lib/api';
 import { chatApi } from './api';
-import { HOME } from './shared';
+import { HOME, isIneligible } from './shared';
 import { isFolderUntrusted, scanAfter, TrustDetails } from './TrustSheet';
 
 /** The longest folder path the portal takes. */
@@ -38,6 +38,19 @@ interface TrustStep {
 }
 
 /**
+ * Why a workspace can't host a session right now, or null when it can. Sessions run only on the keys
+ * an Account Pool delivers (chat PRD §6 rule 1), so the workspace needs an active, synced pool.
+ */
+function ineligible(w: Workspace): string | null {
+  if (w.status !== 'running') return 'not running';
+  if (!w.account) return 'no account pool';
+  if (w.account.state === 'removing') return 'pool change in progress';
+  if (w.account.state === 'waiting') return 'pool has no usable key';
+  if (w.delivery?.status !== 'synced') return 'delivery not up to date';
+  return null;
+}
+
+/**
  * Start a session: pick a running workspace, optionally a folder in it and a title. The running
  * workspaces are loaded when the dialog opens; with none running there's nothing to talk to, so it
  * points at Workspaces instead of offering an empty picker. A folder whose own Claude Code settings
@@ -68,9 +81,8 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
     api.workspaces.list().then(
       (list) => {
         if (!current) return;
-        const running = list.filter((w) => w.status === 'running');
-        setWorkspaces(running);
-        setWorkspaceId(running[0]?.id ?? '');
+        setWorkspaces(list);
+        setWorkspaceId(list.find((w) => !ineligible(w))?.id ?? '');
       },
       () => current && setWorkspaces([]),
     );
@@ -79,8 +91,19 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
     };
   }, [open]);
 
-  const running = workspaces ?? [];
-  const none = workspaces !== null && running.length === 0;
+  /** After a refusal for the workspace's pool: the picker catches up (the choice stays if still eligible). */
+  const reload = () =>
+    api.workspaces.list().then(
+      (list) => {
+        setWorkspaces(list);
+        setWorkspaceId((id) => (list.some((w) => w.id === id && !ineligible(w)) ? id : (list.find((w) => !ineligible(w))?.id ?? '')));
+      },
+      () => undefined,
+    );
+
+  const all = workspaces ?? [];
+  const none = workspaces !== null && !all.some((w) => w.status === 'running');
+  const noneEligible = workspaces !== null && !none && !all.some((w) => !ineligible(w));
 
   /** The folder needs trust: show what it would load (a fresh scan when its files changed since the last). */
   const askTrust = async (e: unknown, request: CreateChatSessionRequest, where: string) => {
@@ -106,6 +129,7 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
       } else {
         setTrust(null);
         setError(errorText(e, 'Could not start the session.'));
+        if (isIneligible(e)) void reload();
       }
     } finally {
       setSaving(false);
@@ -148,7 +172,7 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
       onClose={trust ? back : onClose}
       size="sm"
       title={trust ? 'Trust this folder?' : 'New session'}
-      description={trust ? <span className="font-mono break-all">{trust.scan.folder}</span> : 'Chat with Claude Code in a running workspace.'}
+      description={trust ? <span className="font-mono break-all">{trust.scan.folder}</span> : 'Chat with Claude Code in a workspace that has an account pool.'}
       onSubmit={trust ? trustAndStart : submit}
       submitLabel={trust ? 'Trust and start' : 'Start'}
       saving={saving}
@@ -166,13 +190,24 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
           </Link>{' '}
           to chat with its agent.
         </p>
+      ) : noneEligible ? (
+        <p className="text-sm text-muted">
+          Sessions run on an account pool’s keys, and no running workspace has one ready.{' '}
+          <Link to="/admin/workspaces" onClick={onClose} className="font-semibold text-ink underline underline-offset-2">
+            Assign a pool
+          </Link>{' '}
+          to a workspace to chat with its agent. (Your own Claude sign-in works in the workspace’s terminal.)
+        </p>
       ) : (
         <div className="flex flex-col gap-4">
           <Select
             label="Workspace"
             value={workspaceId}
             onChange={setWorkspaceId}
-            options={running.map((w) => ({ value: w.id, label: w.name }))}
+            options={all.map((w) => {
+              const why = ineligible(w);
+              return { value: w.id, label: why ? `${w.name} · ${why}` : w.name, disabled: !!why };
+            })}
             placeholder={workspaces === null ? 'Loading…' : 'Pick a workspace'}
           />
           <TextField

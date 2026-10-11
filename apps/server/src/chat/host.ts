@@ -23,6 +23,11 @@ export const TRUST_MAX_FILE_BYTES = 1_000_000;
 /** `trustscan`'s hash when none of {@link TRUST_FILES} is there: the sha256 of nothing. */
 export const TRUST_EMPTY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
+/** Account Pool's managed-settings drop-in, the one file `authcheck` reads (delivery `ownership.ts`). */
+export const ACCOUNT_DROPIN = '/etc/claude-code/managed-settings.d/40-claudepilot-account.json';
+/** The `apiKeyHelper` that drop-in names: Account Pool's helper and an account id (accounts/pools.ts). */
+export const ACCOUNT_HELPER = '/etc/claudepilot/bin/account-key';
+
 /**
  * The POSIX `sh` (dash, no bashisms) session host. One process per session, guarded by a `flock`.
  *
@@ -63,6 +68,11 @@ export const TRUST_EMPTY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934
  *   a checked descriptor, and only when it leads to a regular file the policy allows; one over
  *   {@link TRUST_MAX_FILE_BYTES} is hashed whole but not read for names. At the files root `.claude` is
  *   Claude Code's own folder (the user settings), so only `.mcp.json` counts there.
+ * - `authcheck` prints `pass` when the account drop-in ({@link ACCOUNT_DROPIN}) is a regular file (not a
+ *   link) holding one JSON object whose `apiKeyHelper` is exactly `{@link ACCOUNT_HELPER} <account id>`,
+ *   and `fail` otherwise; it always exits 0 (chat-sessions PRD §6 rule 1). It reads that one root-owned
+ *   file and nothing else: never the home folder, a login, a credential or a transcript, and it never
+ *   reports what else is configured.
  */
 export const CP_SESSION = `#!/bin/sh
 set -u
@@ -299,6 +309,20 @@ case "$cmd" in
       allowRules: ([$s[] | .permissions | objects | .allow | arrays | length] | add // 0),
       envNames: ([$s[] | .env | objects | keys[]] | unique)
     }' "$@" </dev/null || exit 1
+    exit 0
+    ;;
+  authcheck)
+    # Only whether Account Pool's helper is what Claude Code is configured to use: the drop-in, a regular
+    # file and not a link (which could lead anywhere, the home folder included), holding one JSON object
+    # that names the helper. Nothing else is read, and only pass or fail is printed. \\A and \\z anchor
+    # the whole value (^ and $ would match at a newline inside it).
+    exec 2>/dev/null </dev/null
+    f="\${CLAUDEPILOT_ACCOUNT_DROPIN:-${ACCOUNT_DROPIN}}"
+    if [ -f "$f" ] && [ ! -L "$f" ] && jq -se 'length == 1 and (.[0] | type) == "object" and (.[0].apiKeyHelper | type) == "string" and (.[0].apiKeyHelper | test("\\\\A${ACCOUNT_HELPER} [A-Za-z0-9-]{1,64}\\\\z"))' "$f" >/dev/null; then
+      echo pass
+    else
+      echo fail
+    fi
     exit 0
     ;;
   *)

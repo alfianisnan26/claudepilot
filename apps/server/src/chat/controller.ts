@@ -10,10 +10,19 @@
 // wake the same way. Integrity (§10.4): anything in the stream this portal didn't originate ends the
 // session. Redaction (§13): stored text and live deltas pass through redact.ts. Folder trust (FR43): no
 // process starts in a folder whose project settings would load something the person hasn't trusted.
+//
+// Credentials (§6): sessions are SDK-style use, so they run only on what an Account Pool delivered (its
+// managed `apiKeyHelper`), never on a workspace's own Claude login, which the portal never reads. Every
+// create, launch, resume and wake needs an eligible workspace (the `eligibility` hook: an active, Synced
+// assignment) and a passing `cp-session authcheck`; every turn's `system/init` must report the helper,
+// and after every `result` a `get_usage` must show no plan limits, or the session ends. A pool unassign
+// or move stops the workspace's sessions before it goes out (`endWorkspaceSessions`).
 
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
 import {
+  CHAT_ENDED_CREDENTIAL,
+  CHAT_ENDED_INTEGRITY,
   CHAT_SESSION_TITLE_MAX,
   type ChatControl,
   type ChatFolderScan,
@@ -29,17 +38,21 @@ import type { Store } from '../store/store.js';
 import type { Workspaces } from '../workspaces/manager.js';
 import { HOME, type ExecSession } from '../workspaces/runtime.js';
 import { decodeAttachments, decodeToolImage, readBlob, saveBlob } from './blobs.js';
+import { ineligibleError, NOT_SET_UP, UNKNOWN, type Eligibility } from './eligibility.js';
 import { workspacePath } from './files.js';
 import { CP_SESSION_PATH, parseStartOutput } from './host.js';
 import {
   allowResponse,
   controlRequest,
+  CREDENTIAL,
   denyResponse,
   errorResponse,
   flagSettings,
   parseLine,
   pickApplied,
   pickModels,
+  POOL_KEY_SOURCE,
+  usageVerdict,
   userLine,
   type AppliedSettings,
   type ControlResponse,
@@ -109,12 +122,19 @@ interface Reader {
   connecting?: boolean;
 }
 
-/** A control request waiting for its `control_response`. */
+/** A control request waiting for its `control_response` (Claude Code's success or error reply). */
 interface PendingControl {
   sessionId: string;
-  resolve: (response: Record<string, unknown>) => void;
+  resolve: (reply: ControlResponse) => void;
   reject: (e: Error) => void;
   timer: NodeJS.Timeout;
+}
+
+/** A control request Claude Code didn't answer in time (as opposed to one it refused, or one never sent). */
+class ControlTimeout extends AppError {
+  constructor() {
+    super('SERVICE_UNAVAILABLE', 'Claude Code didn’t answer in time. Try again.', { expose: true });
+  }
 }
 
 /** The permission mode the portal set or confirmed, and the changes Claude Code may make by itself. */
@@ -139,7 +159,7 @@ interface Restore {
 interface LaunchOptions {
   /** Relaunch with `--resume` (Interrupted, or asleep). */
   resume?: boolean;
-  /** The host was just brought up to date and the folder just passed its trust check (a create). */
+  /** The host was just brought up to date and passed its auth check, and the folder its trust check (a create). */
   checked?: boolean;
 }
 
@@ -197,6 +217,11 @@ export class ChatController {
   /** Per session: the permission mode the stream must report. */
   readonly #modes = new Map<string, ModeTrack>();
   readonly #idleTimers = new Map<string, NodeJS.Timeout>();
+  /**
+   * Per workspace: how many times its credentials began to change ({@link endWorkspaceSessions}). A
+   * launch that began before the latest change gives up, and stops a process it already started.
+   */
+  readonly #epochs = new Map<string, number>();
   readonly #idleMs: number;
   readonly #livenessMs: number;
   #liveness?: NodeJS.Timeout;
@@ -206,6 +231,14 @@ export class ChatController {
 
   /** Installed by the owner: writes `cp-session` into the workspace before each `start`. */
   installHost?: (workspaceId: string) => Promise<void>;
+  /**
+   * Installed by the owner: whether a workspace may host sessions now (chat-sessions PRD §6 rule 1), from
+   * portal state alone — an `active` Account Pool assignment whose delivery is `synced`
+   * (`poolEligibility` in eligibility.ts). Asked before every create, launch, resume and wake; a refusal
+   * is a 409 `CHAT_INELIGIBLE` carrying the reason, and nothing starts. Unset, every workspace is
+   * eligible (tests); production always sets it.
+   */
+  eligibility?: (workspaceId: string) => Eligibility;
   /** How long a control request waits for Claude Code's answer. */
   controlTimeoutMs = CONTROL_TIMEOUT_MS;
   /** How long one short `cp-session` command may run. */
@@ -416,9 +449,11 @@ export class ChatController {
   /* ---------- Lifecycle ---------- */
 
   /**
-   * Creates a session and starts its process in the background. The folder is checked first (FR43): when
-   * its project settings would load something the person hasn't trusted at this exact hash, this throws
-   * a 409 `FOLDER_UNTRUSTED` carrying the scan, and no session is created.
+   * Creates a session and starts its process in the background. The workspace must be eligible (§6
+   * rule 1: a 409 `CHAT_INELIGIBLE` with the reason otherwise, before anything runs there), its host must
+   * pass `authcheck` (the same 409 when the account drop-in doesn't name the pool's helper), and the
+   * folder is checked (FR43): when its project settings would load something the person hasn't trusted
+   * at this exact hash, this throws a 409 `FOLDER_UNTRUSTED` carrying the scan. Refused, nothing is created.
    */
   async create(req: Partial<CreateChatSessionRequest>): Promise<ChatSession> {
     const workspaceId = typeof req.workspaceId === 'string' ? req.workspaceId.trim() : '';
@@ -427,14 +462,18 @@ export class ChatController {
     if (!this.#workspaces.runtimeFor(target)) throw new AppError('VALIDATION_FAILED', `No target “${target}”.`, { details: { workspaceId: 'Unknown target.' } });
     const cwd = this.#folder(req.cwd);
     const title = (typeof req.title === 'string' && req.title.trim() ? req.title.trim() : 'New session').slice(0, CHAT_SESSION_TITLE_MAX);
-    // The scan needs the current host. If it can't be installed, the session is created anyway and its
+    this.#requireEligible(workspaceId);
+    // The checks need the current host. If it can't be installed, the session is created anyway and its
     // launch tries again: failing, it ends with the reason, and nothing starts unchecked either way.
     let installed = true;
     if (this.installHost) await this.installHost(workspaceId).catch(() => void (installed = false));
     if (installed) {
+      if ((await this.#authcheck(workspaceId)) !== 'pass') throw ineligibleError(NOT_SET_UP);
       const scan = await this.#scan(workspaceId, cwd);
       if (!scan.empty && !scan.trusted) throw untrustedError(scan, this.#chat.folderTrust(workspaceId, scan.folder) !== null);
     }
+    // Asked again: the pool may have changed while the host was checked. The launch asks once more.
+    this.#requireEligible(workspaceId);
     const id = randomUUID();
     const session = this.#chat.create({ id, workspaceId, cwd, title, origin: 'ui' });
     void this.#startProcess(id, { checked: installed }).catch(() => undefined);
@@ -591,6 +630,34 @@ export class ChatController {
     this.#emitSession(sessionId);
   }
 
+  /**
+   * Stops a workspace's sessions before its credentials change (§6 rule 2): Account Pool calls this at
+   * the start of an unassign or a move to another pool, before the change goes out, so no session ever
+   * runs on whatever would come after the pool's helper. Every running process gets `cp-session stop`
+   * and its session reads Interrupted with `reason` (its unfinished messages discarded, open requests
+   * expired, sub-agents killed); a launch in flight gives up, stopping its process if it got that far.
+   * Sleeping and interrupted sessions have nothing running. The sessions resume like any Interrupted
+   * one, once the eligibility check passes again (the new assignment active and Synced).
+   *
+   * Everything on the portal's side happens before this returns, the stop commands included (they're on
+   * their way to the workspace); the promise settles once each has finished or failed.
+   */
+  endWorkspaceSessions(workspaceId: string, reason: string): Promise<void> {
+    this.#epochs.set(workspaceId, this.#epoch(workspaceId) + 1);
+    const stops: Promise<unknown>[] = [];
+    for (const row of this.#chat.workspaceRows(workspaceId)) {
+      if (row.process !== 'live' && !this.#launching.has(row.id)) continue;
+      this.#stopReader(row.id);
+      this.#forget(row.id, reason);
+      this.#closeOut(row.id);
+      this.#chat.patchSession(row.id, { state: 'interrupted', process: 'gone', endedReason: reason });
+      this.#note(row.id, `Session stopped: ${reason}`);
+      this.#emitSession(row.id);
+      stops.push(this.#runOnce(workspaceId, ['stop', row.id]).catch(() => undefined));
+    }
+    return Promise.all(stops).then(() => undefined);
+  }
+
   /** Resume: an Interrupted or sleeping session relaunches with `--resume`; a running one is left as it is. */
   async #resume(sessionId: string): Promise<void> {
     this.#require(sessionId);
@@ -690,7 +757,8 @@ export class ChatController {
 
   /**
    * Launches (or resumes) the session's process; lifecycle work already in flight is shared, never
-   * doubled. Rejects when the folder's trust check refuses the launch (409 `FOLDER_UNTRUSTED`).
+   * doubled. Rejects when a check refuses the launch: the folder's trust (409 `FOLDER_UNTRUSTED`), or the
+   * workspace's eligibility or host auth check (409 `CHAT_INELIGIBLE`).
    */
   #startProcess(sessionId: string, opts: LaunchOptions = {}): Promise<void> {
     const launching = this.#launching.get(sessionId);
@@ -710,36 +778,52 @@ export class ChatController {
   async #launch(sessionId: string, opts: LaunchOptions): Promise<void> {
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended') return;
+    const workspaceId = row.workspace_id;
+    // Ended meanwhile, or the workspace's credentials began to change (which settled the session): stop here.
+    const epoch = this.#epoch(workspaceId);
+    const cancelled = () => this.#epoch(workspaceId) !== epoch || this.#chat.row(sessionId)?.state === 'ended';
     // A relaunch starts on defaults: these go back once it runs.
     const restore: Restore | null = opts.resume ? { model: row.model, effort: row.effort, ultracode: row.ultracode === 1, mode: row.mode } : null;
     // The folder it's scanned in is the folder it runs in (and the one the session reports).
     const cwd = sessionCwd(row.cwd);
 
+    // §6 rule 1: only on credentials an Account Pool delivered, before anything runs in the workspace.
+    this.#requireEligible(workspaceId, sessionId);
+
     if (this.installHost && !opts.checked) {
       try {
-        await this.installHost(row.workspace_id);
+        await this.installHost(workspaceId);
       } catch (e) {
+        if (cancelled()) return;
         this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason: this.#message(e) });
         this.#emitSession(sessionId);
         return;
       }
+      if (cancelled()) return;
     }
 
     if (!opts.checked) {
-      let scan: ChatFolderScan;
+      let auth: 'pass' | 'fail';
+      let scan: ChatFolderScan | undefined;
       try {
-        scan = await this.#scan(row.workspace_id, cwd);
+        // The host's own check first: a workspace not set up for the pool's keys never gets the trust sheet.
+        auth = await this.#authcheck(workspaceId);
+        if (auth === 'pass' && !cancelled()) scan = await this.#scan(workspaceId, cwd);
       } catch (e) {
-        // The folder couldn't be checked (the workspace is unreachable, the folder gone): nothing starts,
-        // and like a start that failed, the session reads Interrupted and a later send can resume it.
-        if (this.#chat.row(sessionId)?.state === 'ended') return;
+        // The workspace couldn't be checked (unreachable, the folder gone): nothing starts, and like a
+        // start that failed, the session reads Interrupted and a later send can resume it.
+        if (cancelled()) return;
         this.#chat.patchSession(sessionId, { state: 'interrupted', process: 'gone', endedReason: this.#message(e) });
         this.#emitSession(sessionId);
         return;
       }
-      if (this.#chat.row(sessionId)?.state === 'ended') return;
-      if (!scan.empty && !scan.trusted) this.#refuseLaunch(sessionId, row, scan);
+      if (cancelled()) return;
+      if (auth !== 'pass') this.#refuse(sessionId, ineligibleError(NOT_SET_UP));
+      if (scan && !scan.empty && !scan.trusted) this.#refuseLaunch(sessionId, row, scan);
     }
+
+    // Asked again at the last moment: the assignment or its delivery may have changed meanwhile.
+    this.#requireEligible(workspaceId, sessionId);
 
     // One log segment per process: a relaunch never appends to (or re-reads) the previous one's log.
     const seg = opts.resume || row.process_started_at !== null ? row.segment + 1 : row.segment;
@@ -750,17 +834,18 @@ export class ChatController {
     let code: number | null;
     let out: string;
     try {
-      ({ code, out } = await this.#runOnce(row.workspace_id, ['start', sessionId, String(seg), cwd, '--', ...flags]));
+      ({ code, out } = await this.#runOnce(workspaceId, ['start', sessionId, String(seg), cwd, '--', ...flags]));
     } catch (e) {
+      if (cancelled()) return;
       // The workspace is unreachable or stopped: nothing started, but a later send can resume it.
       this.#chat.patchSession(sessionId, { state: 'interrupted', process: 'gone', endedReason: this.#message(e) });
       this.#emitSession(sessionId);
       return;
     }
 
-    if (this.#chat.row(sessionId)?.state === 'ended') {
-      // Ended while it launched: leave no process behind.
-      if (code === 0) await this.#runOnce(row.workspace_id, ['stop', sessionId]).catch(() => undefined);
+    if (cancelled()) {
+      // Ended, or the credentials began to change, while it launched: leave no process behind.
+      if (code === 0) await this.#runOnce(workspaceId, ['stop', sessionId]).catch(() => undefined);
       return;
     }
     if (code === 0) {
@@ -793,18 +878,46 @@ export class ChatController {
 
   /**
    * A launch the folder's trust check refused (FR43): nothing starts, and the caller gets the 409 with
-   * the scan. When the files changed since the folder was trusted, the transcript says so (once). A first
-   * launch, which never ran, reads Interrupted; a resume or wake leaves the session as it was.
+   * the scan. When the files changed since the folder was trusted, the transcript says so (once).
    */
   #refuseLaunch(sessionId: string, row: ChatSessionRow, scan: ChatFolderScan): never {
     const changed = this.#chat.folderTrust(row.workspace_id, scan.folder) !== null;
-    const error = untrustedError(scan, changed);
     if (changed) this.#appendOnce(sessionId, { kind: 'error', text: FOLDER_CHANGED });
+    this.#refuse(sessionId, untrustedError(scan, changed));
+  }
+
+  /**
+   * A launch refused before anything started (trust, eligibility, the host's auth check): the caller gets
+   * `error`. A first launch, which never ran, reads Interrupted with its reason; a resume or wake leaves
+   * the session as it was.
+   */
+  #refuse(sessionId: string, error: AppError): never {
     if (this.#chat.row(sessionId)?.process === 'live') {
       this.#chat.patchSession(sessionId, { state: 'interrupted', process: 'gone', endedReason: error.message });
       this.#emitSession(sessionId);
     }
     throw error;
+  }
+
+  /**
+   * §6 rule 1, from portal state: throws the 409 `CHAT_INELIGIBLE` with the hook's reason unless the
+   * workspace may host sessions now. With a session (a launch), that launch is refused like any other.
+   */
+  #requireEligible(workspaceId: string, sessionId?: string): void {
+    let verdict: Eligibility = { ok: true };
+    try {
+      if (this.eligibility) verdict = this.eligibility(workspaceId);
+    } catch {
+      verdict = { ok: false, reason: UNKNOWN }; // can't tell: nothing starts
+    }
+    if (verdict.ok) return;
+    const error = ineligibleError(verdict.reason);
+    if (sessionId) this.#refuse(sessionId, error);
+    throw error;
+  }
+
+  #epoch(workspaceId: string): number {
+    return this.#epochs.get(workspaceId) ?? 0;
   }
 
   /**
@@ -836,7 +949,8 @@ export class ChatController {
       }
     }
     await this.#refreshApplied(sessionId).catch(() => undefined);
-    if (failed.length) this.#note(sessionId, `Couldn’t restore the ${failed.join(', ')} after resuming.`);
+    // A process stopped meanwhile (ended, a pool change) failed them all: nothing worth a note.
+    if (failed.length && this.#isLive(sessionId)) this.#note(sessionId, `Couldn’t restore the ${failed.join(', ')} after resuming.`);
   }
 
   /** Makes sure there is a running process to talk to: waits out work in flight, resumes or wakes one that isn't running. */
@@ -967,6 +1081,10 @@ export class ChatController {
 
     // Integrity (PRD §10.4): the stream may show only what this portal started.
     if (parsed.sessionIdSeen && parsed.sessionIdSeen !== sessionId) return void this.#endIntegrity(sessionId, `the agent reported a different session id (${shortId(parsed.sessionIdSeen)})`);
+    // Credentials (§6 rules 1 and 3): every turn on the pool's helper, and never plan limits. The source
+    // Claude Code reported is only compared, never kept.
+    if (parsed.apiKeySource !== undefined && parsed.apiKeySource !== POOL_KEY_SOURCE) return void this.#endCredential(sessionId, CREDENTIAL.keySource);
+    if (parsed.rateLimitEvent) return void this.#endCredential(sessionId, CREDENTIAL.planLimits);
     if (parsed.controlResponse && !this.#acceptControlResponse(sessionId, parsed.controlResponse)) return;
     if (parsed.replay && !this.#acceptReplay(sessionId, parsed.replay)) return;
     if (parsed.commandUuid && !this.#chat.isMessage(sessionId, parsed.commandUuid))
@@ -1052,6 +1170,10 @@ export class ChatController {
       this.#appliedRead.add(sessionId);
       void this.#refreshApplied(sessionId).catch(() => undefined);
     }
+
+    // After every turn, the subscription check (§6 rule 3) — asked once this line has committed, so the
+    // request it records can't be rolled back with it.
+    if (parsed.result) setImmediate(() => void this.#checkUsage(sessionId).catch(() => undefined));
   }
 
   /**
@@ -1161,13 +1283,27 @@ export class ChatController {
 
   /** Integrity failure (§10.4): end the session at once and SIGTERM the process. */
   #endIntegrity(sessionId: string, why: string): void {
+    this.#endForSafety(sessionId, 'The session ended for integrity.', `Integrity check failed: ${why}`, `${CHAT_ENDED_INTEGRITY}${why}`);
+  }
+
+  /**
+   * Credential failure (§6 rules 1 and 3): Claude Code stopped using the pool's helper, or plan limits
+   * showed. The session ends at once like an integrity failure; `why` is fixed text that never names the
+   * credential, account or plan.
+   */
+  #endCredential(sessionId: string, why: string): void {
+    this.#endForSafety(sessionId, 'The session ended for safety.', `Ended for safety: ${why}.`, `${CHAT_ENDED_CREDENTIAL}${why}`);
+  }
+
+  /** Ends the session at once, with an error event and its reason, and SIGTERMs the process. */
+  #endForSafety(sessionId: string, forget: string, text: string, endedReason: string): void {
     this.#stopReader(sessionId);
-    this.#forget(sessionId, 'The session ended for integrity.');
+    this.#forget(sessionId, forget);
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended') return; // already ended (by the operator, or an earlier check)
-    this.#append(sessionId, { kind: 'error', text: `Integrity check failed: ${why}` });
+    this.#append(sessionId, { kind: 'error', text });
     this.#closeOut(sessionId);
-    this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason: `integrity: ${why}` });
+    this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason });
     this.#emitSession(sessionId);
     void this.#runOnce(row.workspace_id, ['stop', sessionId]).catch(() => undefined);
   }
@@ -1219,7 +1355,18 @@ export class ChatController {
    * answer. The request is on record first (its reply is checked against it). Replies are only ever
    * reduced by the caller, never stored or logged whole.
    */
-  #request(sessionId: string, subtype: string, fields: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  async #request(sessionId: string, subtype: string, fields: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    const reply = await this.#control(sessionId, subtype, fields);
+    if (!reply.ok) throw new AppError('VALIDATION_FAILED', cliMessage(reply.error));
+    return reply.response;
+  }
+
+  /**
+   * Sends one control request and resolves with Claude Code's reply, success or error. Rejects only when
+   * no reply came: the line couldn't be written, the process's requests were dropped (it ended, slept or
+   * restarted), or a {@link ControlTimeout} after {@link controlTimeoutMs}.
+   */
+  #control(sessionId: string, subtype: string, fields: Record<string, unknown> = {}): Promise<ControlResponse> {
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
       try {
@@ -1228,7 +1375,7 @@ export class ChatController {
         return reject(e instanceof Error ? e : new Error(String(e)));
       }
       const timer = setTimeout(() => {
-        if (this.#pending.delete(requestId)) reject(new AppError('SERVICE_UNAVAILABLE', 'Claude Code didn’t answer in time. Try again.', { expose: true }));
+        if (this.#pending.delete(requestId)) reject(new ControlTimeout());
       }, this.controlTimeoutMs);
       this.#pending.set(requestId, { sessionId, resolve, reject, timer });
       this.#ensureReader(sessionId); // the reply arrives on stdout
@@ -1246,8 +1393,50 @@ export class ChatController {
     if (!pending || pending.sessionId !== sessionId) return;
     this.#pending.delete(reply.requestId);
     clearTimeout(pending.timer);
-    if (reply.ok) pending.resolve(reply.response);
-    else pending.reject(new AppError('VALIDATION_FAILED', cliMessage(reply.error)));
+    pending.resolve(reply);
+  }
+
+  /**
+   * §6 rule 3, after each `result`: `get_usage {skip_behaviors: true}` (without the flag Claude Code reads
+   * every transcript of the last seven days). Plan limits or a subscription type in the reply, a reply
+   * without `rate_limits_available: false`, or Claude Code refusing the request ends the session; so does
+   * no reply in time from a process that's still running. No gate on this CLI version: 2.1.296 answered
+   * every API-key session (helper, environment key, none) with success and `rate_limits_available: false`,
+   * so an error is never expected and fails closed. Only the verdict is used: the reply is never stored,
+   * logged or shown.
+   */
+  async #checkUsage(sessionId: string): Promise<void> {
+    if (this.#closed || !this.#isLive(sessionId)) return;
+    let reply: ControlResponse;
+    try {
+      reply = await this.#control(sessionId, 'get_usage', { skip_behaviors: true });
+    } catch (e) {
+      // Never asked (the line didn't go) or dropped (the session ended, slept or restarted): no verdict.
+      if (!(e instanceof ControlTimeout) || !this.#isLive(sessionId)) return;
+      // No answer: a process that died after its turn says nothing about credentials; a running one that
+      // won't answer fails closed. Unreachable, the liveness check and the next turn's check decide.
+      const workspaceId = this.#chat.row(sessionId)!.workspace_id;
+      const status = await this.#status(workspaceId, sessionId);
+      if (!this.#isLive(sessionId)) return;
+      if (status === 'gone') this.#markGone(sessionId);
+      else if (status === 'live') this.#endCredential(sessionId, CREDENTIAL.unanswered);
+      return;
+    }
+    if (!this.#isLive(sessionId)) return;
+    const why = reply.ok ? usageVerdict(reply.response) : CREDENTIAL.refused;
+    if (why) return this.#endCredential(sessionId, why);
+    this.#armIdle(sessionId); // a sleep this check held off may go ahead now
+  }
+
+  /**
+   * §6 rule 1's host check, before each start: `cp-session authcheck` answers `pass` only when the
+   * account drop-in names Account Pool's helper; anything else is `fail`. It reads nothing of the
+   * workspace's own login. Throws when the workspace can't be asked (unreachable, or no answer in time).
+   */
+  async #authcheck(workspaceId: string): Promise<'pass' | 'fail'> {
+    const { code, out } = await this.#runOnce(workspaceId, ['authcheck']);
+    if (code === null) throw new AppError('SERVICE_UNAVAILABLE', 'The workspace took too long to check its account setup. Try again.', { expose: true });
+    return code === 0 && out.trim() === 'pass' ? 'pass' : 'fail';
   }
 
   /** Reads what applies now — `get_settings.applied` only, never `effective` or `sources` — onto the session. */
@@ -1289,10 +1478,15 @@ export class ChatController {
     return workspacePath(raw.trim());
   }
 
-  /** Stages one line into the FIFO via `cp-session send` (a fresh staging uuid, exact byte count). */
+  /**
+   * Stages one line into the FIFO via `cp-session send` (a fresh staging uuid, exact byte count). Never
+   * to a process the portal stopped or lost: a pool change may have stopped it since the caller looked.
+   */
   async #writeLine(sessionId: string, line: string): Promise<void> {
     const row = this.#chat.row(sessionId);
     if (!row) throw new AppError('NOT_FOUND', 'No such session.');
+    if (row.state === 'ended' || row.process !== 'live')
+      throw new AppError('CONFLICT', row.state === 'ended' ? 'This session has ended.' : row.ended_reason ? `Claude Code isn’t running: ${row.ended_reason}` : 'Claude Code isn’t running.');
     const { code } = await this.#runOnce(row.workspace_id, ['send', sessionId, randomUUID(), String(Buffer.byteLength(line))], line);
     if (code === null) throw new AppError('SERVICE_UNAVAILABLE', 'The session host didn’t confirm the line in time.', { expose: true });
     if (code !== 0) throw new AppError('SERVICE_UNAVAILABLE', `The session host rejected the line (exit ${code}).`, { expose: true });
@@ -1425,6 +1619,12 @@ export class ChatController {
     const session = this.#chat.get(sessionId);
     if (!session) throw new AppError('NOT_FOUND', 'No such session.');
     return session;
+  }
+
+  /** The session hasn't ended and its process should be running. */
+  #isLive(sessionId: string): boolean {
+    const row = this.#chat.row(sessionId);
+    return !!row && row.state !== 'ended' && row.process === 'live';
   }
 
   #split(workspaceId: string): [string, string] {

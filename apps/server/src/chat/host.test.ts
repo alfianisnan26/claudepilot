@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { CHAT_MAX_DOWNLOAD_BYTES } from '@portal/contracts';
-import { CP_SESSION, DIFF_MAX_PATCH_BYTES, LS_MAX_ENTRIES, parseStartOutput, TRUST_EMPTY_HASH, TRUST_FILES, TRUST_MAX_FILE_BYTES } from './host.js';
+import { ACCOUNT_DROPIN, ACCOUNT_HELPER, CP_SESSION, DIFF_MAX_PATCH_BYTES, LS_MAX_ENTRIES, parseStartOutput, TRUST_EMPTY_HASH, TRUST_FILES, TRUST_MAX_FILE_BYTES } from './host.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(cond: () => boolean, ms = 3000) {
@@ -670,4 +670,128 @@ test('trustscan never reads stdin, which an exec leaves open', async () => {
   child.stdin.destroy();
   assert.equal(code, 0);
   assert.equal((JSON.parse(out) as TrustScanOut).hash, TRUST_EMPTY_HASH);
+});
+
+/* ---------- The pool key check (authcheck, chat-sessions PRD §6 rule 1) ---------- */
+
+/** What Account Pool delivers as its drop-in: pretty-printed, a UUIDv7 account id, env and hooks beside the helper. */
+const DELIVERED = `${JSON.stringify(
+  {
+    apiKeyHelper: `${ACCOUNT_HELPER} 0199c1d2-aaaa-7bbb-8ccc-0123456789ab`,
+    env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com', ANTHROPIC_API_KEY: '', CLAUDEPILOT_ACCOUNT: '0199c1d2-aaaa-7bbb-8ccc-0123456789ab' },
+    hooks: { StopFailure: [{ matcher: '*', hooks: [{ type: 'command', command: '/etc/claudepilot/bin/account-event' }] }] },
+  },
+  null,
+  2,
+)}\n`;
+
+/** A folder for a drop-in, and a fake home holding a login and user settings that must never count. */
+function mkAuth() {
+  const etc = mkdtempSync(join(tmpdir(), 'cp-auth-etc-'));
+  const home = mkdtempSync(join(tmpdir(), 'cp-auth-home-'));
+  dirs.push(etc, home);
+  mkdirSync(join(home, '.claude'));
+  writeFileSync(join(home, '.claude', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'sk-ant-oat01-NEVER-READ' } }));
+  writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ apiKeyHelper: `${ACCOUNT_HELPER} from-home` }));
+  writeFileSync(join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'someone@example.com' } }));
+  const dropIn = join(etc, '40-claudepilot-account.json');
+  const env = { ...process.env, HOME: home, CLAUDEPILOT_ACCOUNT_DROPIN: dropIn };
+  return { etc, home, dropIn, env };
+}
+
+/** Runs `authcheck`: it always exits 0 and prints exactly one word. */
+async function authcheck(env: NodeJS.ProcessEnv): Promise<string> {
+  const r = await run(['authcheck'], { env });
+  assert.equal(r.code, 0, r.stdout);
+  assert.match(r.stdout, /^(pass|fail)\n$/, 'one word, nothing else');
+  return r.stdout.trim();
+}
+
+test('authcheck: the account drop-in is Account Pool’s, at the path the delivery writes it', () => {
+  assert.equal(ACCOUNT_DROPIN, '/etc/claude-code/managed-settings.d/40-claudepilot-account.json');
+  assert.equal(ACCOUNT_HELPER, '/etc/claudepilot/bin/account-key');
+  assert.ok(CP_SESSION.includes(`f="\${CLAUDEPILOT_ACCOUNT_DROPIN:-${ACCOUNT_DROPIN}}"`), 'the default path is the drop-in');
+});
+
+test('authcheck: pass when the drop-in names the pool’s helper, as delivered', async () => {
+  const { dropIn, env } = mkAuth();
+  writeFileSync(dropIn, DELIVERED);
+  assert.equal(await authcheck(env), 'pass');
+  writeFileSync(dropIn, JSON.stringify({ apiKeyHelper: `${ACCOUNT_HELPER} acct-1` }));
+  assert.equal(await authcheck(env), 'pass', 'compact JSON, other id shapes');
+});
+
+test('authcheck: fail for a missing drop-in, one without the helper, another helper, or anything that isn’t one JSON object naming it exactly', async () => {
+  const { dropIn, env } = mkAuth();
+  assert.equal(await authcheck(env), 'fail', 'no drop-in (a workspace without a pool, or after an unassign)');
+  const helper = (id: string) => `${ACCOUNT_HELPER} ${id}`;
+  const cases: [string, string][] = [
+    ['safe values only (unassign, step 1)', JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com', DISABLE_LOGIN_COMMAND: '', CLAUDEPILOT_ACCOUNT: '' } })],
+    ['another helper', JSON.stringify({ apiKeyHelper: '/home/node/bin/my-key' })],
+    ['the helper under another folder', JSON.stringify({ apiKeyHelper: '/tmp/etc/claudepilot/bin/account-key x' })],
+    ['words after the id', JSON.stringify({ apiKeyHelper: helper('x; cat ~/.claude/.credentials.json') })],
+    ['a newline after the id', JSON.stringify({ apiKeyHelper: `${helper('x')}\n` })],
+    ['a line before the helper', JSON.stringify({ apiKeyHelper: `echo hi\n${helper('x')}` })],
+    ['no account id', JSON.stringify({ apiKeyHelper: `${ACCOUNT_HELPER} ` })],
+    ['an id too long to be one', JSON.stringify({ apiKeyHelper: helper('a'.repeat(65)) })],
+    ['not a string', JSON.stringify({ apiKeyHelper: [helper('x')] })],
+    ['an array around it', JSON.stringify([{ apiKeyHelper: helper('x') }])],
+    ['two objects', `${JSON.stringify({ apiKeyHelper: '/bin/false' })}\n${JSON.stringify({ apiKeyHelper: helper('x') })}`],
+    ['not JSON', 'apiKeyHelper = /etc/claudepilot/bin/account-key x'],
+    ['empty', ''],
+  ];
+  for (const [label, content] of cases) {
+    writeFileSync(dropIn, content);
+    assert.equal(await authcheck(env), 'fail', label);
+  }
+});
+
+test('authcheck: a link, a folder or a FIFO in the drop-in’s place fails without being followed or opened', async () => {
+  const { etc, home, dropIn, env } = mkAuth();
+  // A link to a drop-in that would pass, inside the home folder: never followed.
+  writeFileSync(join(home, 'fake-dropin.json'), DELIVERED);
+  symlinkSync(join(home, 'fake-dropin.json'), dropIn);
+  assert.equal(await authcheck(env), 'fail', 'a link');
+  rmSync(dropIn);
+  // Even one pointing at a real drop-in elsewhere in /etc: the delivery writes a regular file.
+  writeFileSync(join(etc, 'real.json'), DELIVERED);
+  symlinkSync(join(etc, 'real.json'), dropIn);
+  assert.equal(await authcheck(env), 'fail', 'a link within the folder');
+  rmSync(dropIn);
+  mkdirSync(dropIn);
+  assert.equal(await authcheck(env), 'fail', 'a folder');
+  rmSync(dropIn, { recursive: true });
+  execFileSync('mkfifo', [dropIn]); // opening it would block
+  assert.equal(await authcheck(env), 'fail', 'a FIFO');
+});
+
+test('authcheck reads nothing of the home folder: its login and settings never count, and an unreadable home changes nothing', async () => {
+  const { home, dropIn, env } = mkAuth();
+  // The user's own settings name the helper too, and a login is there: without the drop-in it's still fail.
+  assert.equal(await authcheck(env), 'fail');
+  writeFileSync(dropIn, DELIVERED);
+  chmodSync(home, 0o000); // anything that read the home folder would now fail or differ
+  try {
+    assert.equal(await authcheck(env), 'pass');
+  } finally {
+    chmodSync(home, 0o700);
+  }
+  // Nothing of the home folder's files ever reaches the output.
+  const r = await run(['authcheck'], { env });
+  for (const s of ['sk-ant-oat', 'someone@', 'from-home', 'claudeAiOauth']) assert.ok(!r.stdout.includes(s), s);
+});
+
+test('authcheck never reads stdin, which an exec leaves open, and takes no arguments to point it elsewhere', async () => {
+  const { dropIn, env } = mkAuth();
+  writeFileSync(dropIn, DELIVERED);
+  const child = spawn('sh', [scriptPath, 'authcheck'], { env }); // stdin stays open
+  let out = '';
+  child.stdout.on('data', (d: Buffer) => (out += d.toString()));
+  const code = await new Promise<number | null>((resolve) => child.on('close', resolve));
+  child.stdin.destroy();
+  assert.deepEqual([code, out], [0, 'pass\n']);
+  // An argument is ignored: the drop-in path comes only from the portal-set environment (or the default).
+  const elsewhere = join(dirs.at(-1)!, 'nope.json');
+  const r = await run(['authcheck', elsewhere], { env });
+  assert.deepEqual([r.code, r.stdout], [0, 'pass\n']);
 });

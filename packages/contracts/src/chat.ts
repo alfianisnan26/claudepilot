@@ -247,6 +247,16 @@ export interface ChatTrustRequest {
 /** The error code a session start returns when its folder needs confirming first; `details` is the `ChatFolderScan`. */
 export const CHAT_FOLDER_UNTRUSTED = 'FOLDER_UNTRUSTED';
 
+/**
+ * The error code (409) of a create, resume, wake or send refused because the workspace can't host
+ * sessions now: sessions run only on the keys an active, synced Account Pool delivers. The message says why.
+ */
+export const CHAT_INELIGIBLE = 'CHAT_INELIGIBLE';
+
+/** `endedReason` prefixes of sessions the portal ended at once (credential or integrity check); the rest is why. */
+export const CHAT_ENDED_CREDENTIAL = 'credential: ';
+export const CHAT_ENDED_INTEGRITY = 'integrity: ';
+
 /** The chat WebSocket, one per tab. Authorized like the shell socket (Origin + session cookie). */
 export const CHAT_SOCKET_PATH = '/api/chat/live';
 

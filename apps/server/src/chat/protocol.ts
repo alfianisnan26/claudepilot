@@ -97,6 +97,18 @@ export interface ParsedLine {
   /** The main thread called EnterPlanMode, which needs no approval: `plan` mode may follow. */
   enterPlan?: boolean;
 
+  /* What the credential checks (PRD §6 rules 1 and 3) look at. Never stored or shown. */
+
+  /**
+   * From a main-thread `system/init` (one per turn): the credential source Claude Code reports, or null
+   * when the line carries none. The controller only compares it with {@link POOL_KEY_SOURCE}.
+   */
+  apiKeySource?: string | null;
+  /** A `rate_limit_event` line: Claude Code saw plan rate limits on this credential. */
+  rateLimitEvent?: boolean;
+  /** A `result` line: the turn ended (the controller then runs the subscription check). */
+  result?: boolean;
+
   /** A text block started or ended (or its message did): held-back delta text is flushed. */
   blockEdge?: { agentLabel: string | null };
 }
@@ -141,6 +153,10 @@ export function parseLine(raw: string): ParsedLine {
       return parseLifecycle(obj);
     case 'api_retry':
       return { stored: [{ kind: 'retry', text: 'The API is retrying (rate limit or overload).' }] };
+    case 'rate_limit_event':
+      // `{type, rate_limit_info, uuid, session_id}`, "emitted when rate limit info changes" (the 2.1.296
+      // schema): plan limits, which an API key never has. Nothing of it is kept.
+      return { stored: [], rateLimitEvent: true };
     default:
       return { stored: [] };
   }
@@ -165,6 +181,8 @@ function parseSystem(obj: Record<string, unknown>): ParsedLine {
       if (Object.keys(patch).length) out.sessionPatch = patch;
       const sid = asStr(obj.session_id);
       if (sid) out.sessionIdSeen = sid;
+      // Every turn's credential source; a main-thread init without one reads null (and fails the check).
+      if (main) out.apiKeySource = asStr(obj.apiKeySource);
       return out;
     }
     case 'status':
@@ -424,7 +442,7 @@ function parseResult(obj: Record<string, unknown>): ParsedLine {
   if (errored) stored.push({ kind: 'error', text: text ?? `The turn ended with ${subtype ?? 'an error'}.` });
   const patch: NonNullable<ParsedLine['sessionPatch']> = { state: 'idle', turnsDelta: 1 };
   if (cost !== null) patch.cost = cost;
-  const out: ParsedLine = { stored, sessionPatch: patch };
+  const out: ParsedLine = { stored, sessionPatch: patch, result: true };
   const context = resultContext(obj);
   if (context) out.context = context;
   const sid = asStr(obj.session_id);
@@ -528,6 +546,43 @@ export function pickApplied(response: Record<string, unknown>): AppliedSettings 
   if (typeof applied.ultracode === 'boolean') out.ultracode = applied.ultracode;
   if (typeof applied.ultracodeAvailable === 'boolean') out.ultracodeAvailable = applied.ultracodeAvailable;
   return out;
+}
+
+/* ---------- Credential checks (PRD §6 rules 1 and 3): verdicts only, nothing kept ---------- */
+
+/**
+ * The only credential source a session may report in `system/init`: Account Pool's managed
+ * `apiKeyHelper`. Observed with Claude Code 2.1.296 in the workspace image (managed drop-in naming
+ * `/etc/claudepilot/bin/account-key <id>`, custom host): `apiKeyHelper` on every turn. For contrast, an
+ * `ANTHROPIC_API_KEY` in the environment reports `ANTHROPIC_API_KEY` and no credential reports `none`.
+ * The CLI's schema lists the rest: `/login managed key` (a Console key stored by /login), and `none` also
+ * for a claude.ai login, a bearer token or a cloud provider. Anything but the helper ends the session.
+ */
+export const POOL_KEY_SOURCE = 'apiKeyHelper';
+
+/** Why a credential check ends a session; fixed text that never names the credential, account or plan. */
+export const CREDENTIAL = {
+  keySource: "Claude Code stopped using the pool's key",
+  planLimits: 'plan limits appeared on this credential',
+  unconfirmed: "Claude Code's usage report didn't confirm an API key",
+  refused: 'Claude Code refused the subscription check',
+  unanswered: "Claude Code didn't answer the subscription check",
+} as const;
+
+/**
+ * Rule 3's subscription check on a `get_usage {skip_behaviors: true}` reply: null when it shows an
+ * API-key session, else why it doesn't. Observed with 2.1.296 for helper, environment-key and no-key
+ * sessions alike: `{session: {…totals}, subscription_type: null, rate_limits_available: false,
+ * rate_limits: null, behaviors: null}`; the CLI's schema documents `subscription_type` as null "for API
+ * key / 3P provider sessions" and `rate_limits_available` as false "when plan rate limits do not apply".
+ * So plan limits, a subscription type, or a reply without `rate_limits_available: false` fail (closed).
+ */
+export function usageVerdict(response: Record<string, unknown>): string | null {
+  if (response.rate_limits !== null && response.rate_limits !== undefined) return CREDENTIAL.planLimits;
+  if (response.subscription_type !== null && response.subscription_type !== undefined) return CREDENTIAL.planLimits;
+  if (response.rate_limits_available === true) return CREDENTIAL.planLimits;
+  if (response.rate_limits_available !== false) return CREDENTIAL.unconfirmed;
+  return null;
 }
 
 /** The models a `list_models` reply offers, as picker rows. */

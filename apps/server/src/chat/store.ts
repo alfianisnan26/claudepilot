@@ -248,6 +248,11 @@ export class ChatStore {
     return this.#db().prepare(`SELECT * FROM chat_sessions WHERE process = 'live' AND state != 'ended'`).all() as ChatSessionRow[];
   }
 
+  /** One workspace's sessions that haven't ended (whatever their process), oldest first. */
+  workspaceRows(workspaceId: string): ChatSessionRow[] {
+    return this.#db().prepare(`SELECT * FROM chat_sessions WHERE workspace_id = ? AND state != 'ended' ORDER BY created_at, id`).all(workspaceId) as ChatSessionRow[];
+  }
+
   toSession(row: ChatSessionRow): ChatSession {
     const waiting = (this.#db().prepare('SELECT count(*) AS n FROM chat_requests WHERE session_id = ? AND answered_at IS NULL').get(row.id) as { n: number }).n;
     return {

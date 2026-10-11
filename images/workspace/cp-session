@@ -235,6 +235,20 @@ case "$cmd" in
     }' "$@" </dev/null || exit 1
     exit 0
     ;;
+  authcheck)
+    # Only whether Account Pool's helper is what Claude Code is configured to use: the drop-in, a regular
+    # file and not a link (which could lead anywhere, the home folder included), holding one JSON object
+    # that names the helper. Nothing else is read, and only pass or fail is printed. \A and \z anchor
+    # the whole value (^ and $ would match at a newline inside it).
+    exec 2>/dev/null </dev/null
+    f="${CLAUDEPILOT_ACCOUNT_DROPIN:-/etc/claude-code/managed-settings.d/40-claudepilot-account.json}"
+    if [ -f "$f" ] && [ ! -L "$f" ] && jq -se 'length == 1 and (.[0] | type) == "object" and (.[0].apiKeyHelper | type) == "string" and (.[0].apiKeyHelper | test("\\A/etc/claudepilot/bin/account-key [A-Za-z0-9-]{1,64}\\z"))' "$f" >/dev/null; then
+      echo pass
+    else
+      echo fail
+    fi
+    exit 0
+    ;;
   *)
     exit 2
     ;;

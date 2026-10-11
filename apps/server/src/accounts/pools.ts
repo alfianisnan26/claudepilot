@@ -113,6 +113,12 @@ export class AccountPools implements FragmentProvider {
   reconciler: Reconciler | null = null;
   /** Pools or assignments changed (edits, assignments, failovers), for live pages. */
   onChange: () => void = () => {};
+  /**
+   * Chat sessions (chat-sessions PRD §6 rule 2): called with the workspace when its assignment is about
+   * to change (removed, or set to another pool), after the request checked out and before anything is
+   * written or delivered, so its live chat sessions end before the change goes out.
+   */
+  onTransition?: (workspaceId: string) => void;
   /** Recent moves onto each account, for the per-minute cap (a soft limit: memory is enough). */
   readonly #movesOnto = new Map<string, number[]>();
 
@@ -410,6 +416,7 @@ export class AccountPools implements FragmentProvider {
     const now = new Date().toISOString();
     if (poolId === null) {
       if (!current) return null;
+      this.onTransition?.(workspaceId); // chat: end the workspace's sessions first (§6 rule 2)
       this.#db.exec('BEGIN IMMEDIATE');
       try {
         this.#db.prepare('DELETE FROM account_assignments WHERE workspace_id = ?').run(workspaceId);
@@ -428,6 +435,7 @@ export class AccountPools implements FragmentProvider {
     if (!pool) throw invalid('poolId', 'That pool no longer exists.');
     if (opts.existing && !current && req.confirmOverride !== true)
       throw new AppError('CONFIRM_REQUIRED', 'This workspace may have its own sign-in. Confirm that the pool’s key should override it.');
+    this.onTransition?.(workspaceId); // chat: end the workspace's sessions first (§6 rule 2)
     const picked = this.#pick(pool);
     const account = picked === 'capped' ? null : picked;
     this.#db.exec('BEGIN IMMEDIATE');

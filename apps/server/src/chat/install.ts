@@ -3,16 +3,15 @@ import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { CP_SESSION, CP_SESSION_PATH } from './host.js';
 
-
 /** Why a Kubernetes workspace can't run chat yet: its image predates the current session host. */
 export const IMAGE_HOST_OUTDATED =
   "This workspace's image doesn't have the current chat host yet. It ships with the next workspace image (images/workspace): once that's published, stop and start the workspace to pull it (your home folder stays).";
 
 /**
  * Makes sure a workspace has the current session host (`/etc/claudepilot/bin/cp-session`, root-owned
- * so the agent can't change it) before a chat session starts. Pool delivery only reaches workspaces
- * with a pool, and chat also runs in workspaces signed in with a person's own Claude account, so the
- * chat controller does this itself.
+ * so the agent can't change it) before a chat session starts. The chat controller does this itself,
+ * right before each start, rather than leaving it to pool delivery: a start needs the current host
+ * then, not whenever the next delivery runs.
  *
  * Docker (runtimes with delivery): installs it when missing or out of date. The file is staged under a
  * temp name and renamed as root, so a concurrent call never runs half a script.

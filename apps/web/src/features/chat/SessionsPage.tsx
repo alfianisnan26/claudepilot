@@ -9,7 +9,7 @@ import { errorText } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { chatApi } from './api';
 import { NewSessionDialog } from './NewSessionDialog';
-import { formatUsd, StateBadge } from './shared';
+import { endedForSafety, formatUsd, StateBadge } from './shared';
 import { useChatList } from './useChatSocket';
 
 export function SessionsPage() {
@@ -105,6 +105,7 @@ export function SessionsPage() {
 function SessionRow({ session: s, onEnd }: { session: ChatSession; onEnd: () => void }) {
   const title = s.title || 'Untitled';
   const active = s.state === 'working' || s.state === 'waiting';
+  const safety = s.state === 'ended' ? endedForSafety(s.endedReason) : null;
   return (
     <li className="flex items-center gap-3 p-4 sm:px-5">
       <Link to={`/admin/sessions/${s.id}`} className="flex min-w-0 flex-1 items-start gap-3">
@@ -116,7 +117,7 @@ function SessionRow({ session: s, onEnd }: { session: ChatSession; onEnd: () => 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <p className="truncate font-semibold">{title}</p>
-            <StateBadge state={s.state} />
+            {safety ? <Badge tone="danger">{safety.label}</Badge> : <StateBadge state={s.state} />}
             {s.waiting > 0 && <Badge tone="warning">{s.waiting === 1 ? 'Needs you' : `${s.waiting} waiting`}</Badge>}
           </div>
           <p className="mt-0.5 truncate text-[13px] text-muted">

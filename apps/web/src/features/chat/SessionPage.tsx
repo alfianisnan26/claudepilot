@@ -10,7 +10,7 @@ import { ApprovalCard } from './ApprovalCard';
 import { Composer, type ComposerHandle } from './Composer';
 import { Controls } from './Controls';
 import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './FilesPanel';
-import { StateBadge } from './shared';
+import { endedForSafety, StateBadge } from './shared';
 import { Transcript } from './Transcript';
 import { ResumeBanner } from './ResumeBanner';
 import { TrustSheet, useFolderTrust, type TrustTarget } from './TrustSheet';
@@ -248,7 +248,7 @@ export function SessionPage() {
                 />
               )}
               {ended ? (
-                <p className="py-2 text-center text-[13px] text-muted">This session has ended.</p>
+                <EndedNote reason={session?.endedReason} />
               ) : (
                 <>
                   {session && <ResumeBanner session={session} connected={connected} onResume={() => trustedControl('resume')} />}
@@ -314,6 +314,22 @@ export function SessionPage() {
         onClose={() => setEnding(false)}
       />
     </div>
+  );
+}
+
+/** An ended session: a safety or integrity stop says what tripped it. */
+function EndedNote({ reason }: { reason: string | null | undefined }) {
+  const stop = endedForSafety(reason);
+  return (
+    <p role="status" className="py-2 text-center text-[13px] break-words text-muted">
+      {stop ? (
+        <>
+          <span className="font-semibold text-ink">{stop.label}:</span> {stop.why}. Start a new session to carry on.
+        </>
+      ) : (
+        'This session has ended.'
+      )}
+    </p>
   );
 }
 

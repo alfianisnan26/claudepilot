@@ -20,6 +20,7 @@ import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
 import { attachShell, cookie } from './workspaces/shell.js';
 import { ChatController } from './chat/controller.js';
+import { poolEligibility } from './chat/eligibility.js';
 import { hostInstaller } from './chat/install.js';
 import { attachChat } from './chat/socket.js';
 import { KubernetesRuntime } from './workspaces/kubernetes.js';
@@ -81,8 +82,6 @@ void workspaces.resume().catch((e: unknown) => console.error(`[workspaces] resum
 // Chat sessions: one controller shared by the REST routes and the chat socket.
 const chatController = new ChatController(store, workspaces);
 chatController.installHost = hostInstaller(workspaces);
-// Reattach readers to sessions still running in workspaces, and mark the ones that died Interrupted.
-chatController.start();
 
 const accounts = new AccountsService(store);
 const pools = new AccountPools(store);
@@ -94,6 +93,12 @@ accounts.hooks = {
 };
 const reconciler = new Reconciler(store, (t) => workspaces.runtimeFor(t), () => workspaces.runtimeList(), [pools]);
 pools.reconciler = reconciler;
+// Sessions run only on the keys an Account Pool delivers (chat PRD §6): a workspace needs an active,
+// synced pool, and a pool change ends its sessions first.
+chatController.eligibility = (id) => poolEligibility(pools.stateFor(id), reconciler.row(id)?.status);
+pools.onTransition = (id) => void chatController.endWorkspaceSessions(id, 'Pool change in progress');
+// Reattach readers to sessions still running in workspaces, and mark the ones that died Interrupted.
+chatController.start();
 health.onChange = (id, why, opts) => pools.accountChanged(id, why, opts);
 health.check = async (id) => void (await accounts.check(id, { manual: false }));
 health.activeAccount = (workspaceId) => pools.activeAccount(workspaceId);
