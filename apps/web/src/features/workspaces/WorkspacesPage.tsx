@@ -20,7 +20,7 @@ import { Card } from '@/components/Card';
 import { PageHeader } from '@/components/PageHeader';
 import { api, errorText } from '@/lib/api';
 import { useLive, useLiveConnected } from '@/lib/live';
-import { formatBytes, formatDateTime, formatUntil, timeAgo } from '@/lib/format';
+import { formatBytes, formatDateTime, timeAgo } from '@/lib/format';
 import { AssignPoolDialog } from './AssignPoolDialog';
 import { ClaudeLoginDialog } from './ClaudeLoginDialog';
 import { NewWorkspaceDialog } from './NewWorkspaceDialog';
@@ -442,66 +442,54 @@ function WorkspaceRow({
   ];
   const delivery = w.delivery ? DELIVERY[w.delivery.status] : undefined;
   const account = w.account;
-  // A shell is the point of a workspace: link straight to it once it's running.
+  // Progress while creating or starting, and errors; a running or stopped one needs no words.
   const showDetail = w.status !== 'running' && w.status !== 'stopped' && w.detail;
+  // One short line: where, how old, and (running) how busy. The pool only when one is assigned.
+  const meta = [
+    targetLabel,
+    running && usageText(usage),
+    account && (account.state === 'waiting' ? `${account.poolName} · waiting` : account.state === 'removing' ? `removing ${account.poolName}` : account.poolName),
+    limits,
+    timeAgo(w.createdAt),
+  ].filter(Boolean);
+  // Running and stopped show in the icon and the action (Shell or Start); other states get a badge.
+  const settled = (w.status === 'running' || w.status === 'stopped') && !busy;
 
   return (
-    <li className="flex items-start gap-3 p-4 sm:items-center sm:px-5">
+    <li className="flex items-center gap-3 p-4 sm:px-5">
       <span
         className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${running ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-ink-soft'}`}
       >
         <Box className="size-5" />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <div className="flex min-w-0 items-center gap-2">
           <p className="truncate font-semibold">{w.name}</p>
-          <Badge tone={status.tone}>
-            {status.busy || busy ? <Spinner className="size-3" /> : running && <span className="size-1.5 rounded-full bg-accent" />}
-            {status.label}
-          </Badge>
+          {!settled && (
+            <span className="shrink-0">
+              <Badge tone={status.tone}>
+                {(status.busy || busy) && <Spinner className="size-3" />}
+                {status.label}
+              </Badge>
+            </span>
+          )}
           {delivery && (
-            <Badge tone={delivery.tone}>
-              {delivery.busy && <Spinner className="size-3" />}
-              {delivery.label}
-            </Badge>
+            <span title={w.delivery?.reason ?? undefined} className="shrink-0">
+              <Badge tone={delivery.tone}>
+                {delivery.busy && <Spinner className="size-3" />}
+                {delivery.label}
+              </Badge>
+            </span>
           )}
         </div>
-        <p className="mt-0.5 truncate text-[13px] text-muted">
-          {targetLabel}
-          {limits && ` · ${limits}`}
-          {' · '}
-          <span title={formatDateTime(w.createdAt)}>created {timeAgo(w.createdAt)}</span>
+        <p className="mt-0.5 truncate text-[13px] text-muted" title={formatDateTime(w.createdAt)}>
+          {meta.join(' · ')}
         </p>
-        <p className="mt-0.5 flex items-center gap-1.5 truncate text-[13px] text-muted">
-          <KeySquare className="size-3.5 shrink-0" />
-          {!account
-            ? !running
-              ? 'Own sign-in'
-              : claudeAuth === undefined || claudeAuth === 'loading'
-                ? 'Claude sign-in: checking…'
-                : claudeAuth.loggedIn
-                  ? claudeAuth.method === 'console'
-                    ? 'Signed in to Claude · Console key'
-                    : 'Signed in to Claude'
-                  : 'Not signed in to Claude'
-            : account.state === 'removing'
-              ? `Removing ${account.poolName}…`
-              : account.state === 'waiting'
-                ? `${account.poolName} · ${account.waitingUntil ? `waiting for quota until ${formatUntil(account.waitingUntil)}` : 'waiting for a usable account'}`
-                : `${account.poolName} · ${account.accountName}`}
-        </p>
-        {w.delivery?.reason && delivery && <p className="mt-1 line-clamp-2 text-[13px] text-ink-soft">{w.delivery.reason}</p>}
         {showDetail && (
           <p className={`mt-1 line-clamp-2 text-[13px] ${w.status === 'error' ? 'text-danger' : 'text-ink-soft'}`}>{w.detail}</p>
         )}
-        {running && <UsageLine usage={usage} memoryMb={w.memoryMb} cpus={w.cpus} />}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        {running && !account && authKnown && !signedInToClaude && (
-          <Button variant="secondary" size="sm" icon={<LogIn className="size-4" />} onClick={onSignIn}>
-            <span className="hidden sm:inline">Sign in</span>
-          </Button>
-        )}
         {running ? (
           <Link
             to={`/admin/workspaces/${w.id}/shell`}
@@ -524,42 +512,11 @@ function WorkspaceRow({
   );
 }
 
-function UsageLine({ usage, memoryMb, cpus }: { usage?: WorkspaceUsage; memoryMb?: number; cpus?: number }) {
-  const cpu = usage?.cpuPercent;
-  const mem = usage?.memoryBytes;
-  const memLimit = memoryMb ? memoryMb * 1024 * 1024 : undefined;
-  return (
-    <div className="mt-2 grid max-w-md grid-cols-2 gap-3 text-[12px] text-muted">
-      <Meter
-        label="CPU"
-        value={cpu == null ? '–' : `${cpu.toFixed(cpu < 10 ? 1 : 0)}%`}
-        fraction={cpu == null ? undefined : cpu / 100 / (cpus ?? 1)}
-      />
-      <Meter
-        label="Memory"
-        value={mem == null ? '–' : memLimit ? `${formatBytes(mem)} / ${formatBytes(memLimit)}` : formatBytes(mem)}
-        fraction={mem == null || !memLimit ? undefined : mem / memLimit}
-      />
-    </div>
-  );
-}
-
-function Meter({ label, value, fraction }: { label: string; value: string; fraction?: number }) {
-  const pct = fraction === undefined ? 0 : Math.min(100, Math.max(2, fraction * 100));
-  return (
-    <div className="min-w-0">
-      <div className="flex items-baseline justify-between gap-2">
-        <span>{label}</span>
-        <span className="truncate font-medium tabular-nums text-ink-soft">{value}</span>
-      </div>
-      <div className="mt-1 h-1 overflow-hidden rounded-full bg-surface-2">
-        {fraction !== undefined && (
-          <div
-            className={`h-full rounded-full transition-[width] duration-500 ${fraction > 0.9 ? 'bg-danger' : 'bg-accent'}`}
-            style={{ width: `${pct}%` }}
-          />
-        )}
-      </div>
-    </div>
-  );
+/** "CPU 56% · 2.1 GB", or nothing until the first sample arrives. */
+function usageText(usage?: WorkspaceUsage): string | false {
+  if (!usage || (usage.cpuPercent == null && usage.memoryBytes == null)) return false;
+  const parts = [];
+  if (usage.cpuPercent != null) parts.push(`CPU ${Math.round(usage.cpuPercent)}%`);
+  if (usage.memoryBytes != null) parts.push(formatBytes(usage.memoryBytes));
+  return parts.join(' · ');
 }
