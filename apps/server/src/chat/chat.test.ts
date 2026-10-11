@@ -2746,3 +2746,32 @@ test('subscription: no answer in time ends a running session; a process that die
     await closed.done();
   }
 });
+
+test('claudes: a removed Claude frees its name; Default and a Claude with a live session can’t be removed', async () => {
+  const { store, dataDir } = await freshStore();
+  const controller = new ChatController(store, new FakeWorkspaces() as unknown as Workspaces);
+  try {
+    const chat = new ChatStore(store);
+    const ws = 'docker/ws1';
+    const def = chat.ensureDefault(ws);
+    const work = chat.addClaude(ws, 'Work');
+    assert.throws(() => chat.addClaude(ws, 'Work'), /UNIQUE/, 'two live Claudes can’t share a name');
+
+    assert.throws(() => controller.removeClaude(ws, def.id), /Default can’t be removed/);
+    chat.create({ id: 'S', workspaceId: ws, cwd: '/home/node', title: 'S', origin: 'ui', claudeId: work.id });
+    assert.throws(() => controller.removeClaude(ws, work.id), /hasn’t ended/);
+    chat.patchSession('S', { state: 'ended' });
+    controller.removeClaude(ws, work.id);
+    assert.ok(chat.claude(work.id)!.removedAt, 'the row stays, marked removed');
+
+    // The name is free again, and renaming onto a live name is still refused.
+    const again = chat.addClaude(ws, 'Work');
+    assert.notEqual(again.id, work.id);
+    assert.equal(controller.renameClaude(ws, again.id, 'Personal').name, 'Personal');
+    assert.throws(() => controller.renameClaude(ws, again.id, 'Default'), /already on this workspace/);
+    assert.throws(() => controller.renameClaude(ws, work.id, 'Old'), /isn’t on this workspace/, 'a removed Claude can’t be renamed');
+  } finally {
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});

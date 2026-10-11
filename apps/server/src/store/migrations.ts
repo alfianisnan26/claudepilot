@@ -405,6 +405,17 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 10,
+    name: 'claude names unique among live claudes',
+    up(db) {
+      db.exec(`
+        -- A removed Claude keeps its row (Workspace Claudes FR3), so its name is free again.
+        DROP INDEX workspace_claudes_name;
+        CREATE UNIQUE INDEX workspace_claudes_name ON workspace_claudes (workspace_id, name) WHERE removed_at IS NULL;
+      `);
+    },
+  },
 ];
 
 /**
