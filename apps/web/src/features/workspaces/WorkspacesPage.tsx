@@ -24,6 +24,7 @@ import { formatBytes, formatDateTime, timeAgo } from '@/lib/format';
 import { AssignPoolDialog } from './AssignPoolDialog';
 import { ClaudeLoginDialog } from './ClaudeLoginDialog';
 import { NewWorkspaceDialog } from './NewWorkspaceDialog';
+import { WorkspaceSheet } from './WorkspaceSheet';
 
 /** Delivery states worth showing on the row; synced and none stay quiet. */
 const DELIVERY: Partial<Record<DeliveryStatus, { label: string; tone: BadgeTone; busy?: boolean }>> = {
@@ -454,41 +455,50 @@ function WorkspaceRow({
   ].filter(Boolean);
   // Running and stopped show in the icon and the action (Shell or Start); other states get a badge.
   const settled = (w.status === 'running' || w.status === 'stopped') && !busy;
+  const [open, setOpen] = useState(false);
 
   return (
     <li className="flex items-center gap-3 p-4 sm:px-5">
-      <span
-        className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${running ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-ink-soft'}`}
+      {/* The icon and text open the details; the buttons beside them keep their own jobs. */}
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label={`Details for ${w.name}`}
+        className="press flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left"
       >
-        <Box className="size-5" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <p className="truncate font-semibold">{w.name}</p>
-          {!settled && (
-            <span className="shrink-0">
-              <Badge tone={status.tone}>
-                {(status.busy || busy) && <Spinner className="size-3" />}
-                {status.label}
-              </Badge>
-            </span>
-          )}
-          {delivery && (
-            <span title={w.delivery?.reason ?? undefined} className="shrink-0">
-              <Badge tone={delivery.tone}>
-                {delivery.busy && <Spinner className="size-3" />}
-                {delivery.label}
-              </Badge>
-            </span>
+        <span
+          className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${running ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-ink-soft'}`}
+        >
+          <Box className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate font-semibold">{w.name}</p>
+            {!settled && (
+              <span className="shrink-0">
+                <Badge tone={status.tone}>
+                  {(status.busy || busy) && <Spinner className="size-3" />}
+                  {status.label}
+                </Badge>
+              </span>
+            )}
+            {delivery && (
+              <span title={w.delivery?.reason ?? undefined} className="shrink-0">
+                <Badge tone={delivery.tone}>
+                  {delivery.busy && <Spinner className="size-3" />}
+                  {delivery.label}
+                </Badge>
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 truncate text-[13px] text-muted" title={formatDateTime(w.createdAt)}>
+            {meta.join(' · ')}
+          </p>
+          {showDetail && (
+            <p className={`mt-1 line-clamp-2 text-[13px] ${w.status === 'error' ? 'text-danger' : 'text-ink-soft'}`}>{w.detail}</p>
           )}
         </div>
-        <p className="mt-0.5 truncate text-[13px] text-muted" title={formatDateTime(w.createdAt)}>
-          {meta.join(' · ')}
-        </p>
-        {showDetail && (
-          <p className={`mt-1 line-clamp-2 text-[13px] ${w.status === 'error' ? 'text-danger' : 'text-ink-soft'}`}>{w.detail}</p>
-        )}
-      </div>
+      </button>
       <div className="flex shrink-0 items-center gap-1">
         {running ? (
           <Link
@@ -508,6 +518,20 @@ function WorkspaceRow({
         )}
         <Menu label={`Actions for ${w.name}`} items={items} />
       </div>
+      <WorkspaceSheet
+        open={open}
+        onClose={() => setOpen(false)}
+        w={w}
+        status={status}
+        delivery={delivery}
+        targetLabel={targetLabel}
+        usage={usage}
+        claudeAuth={claudeAuth}
+        busy={busy}
+        items={items.slice(1)}
+        onStart={onStart}
+        onStop={onStop}
+      />
     </li>
   );
 }
