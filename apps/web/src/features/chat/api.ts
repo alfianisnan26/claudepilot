@@ -11,6 +11,9 @@ import {
   type ChatTask,
   type ChatTrustRequest,
   type CreateChatSessionRequest,
+  type CreateWorkspaceClaudeRequest,
+  type TransferChatRequest,
+  type WorkspaceClaude,
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
 
@@ -64,4 +67,7 @@ export const chatApi = {
     request<ChatFolderScan>('GET', `${CHAT_API.scan}?workspaceId=${encodeURIComponent(workspaceId)}&folder=${encodeURIComponent(folder)}`),
   /** Trusts a folder as scanned; `FOLDER_UNTRUSTED` (with the new scan) when its files changed since. */
   trust: (body: ChatTrustRequest) => request<unknown>('POST', CHAT_API.trust, body).then(() => undefined),
+  claudes: (workspaceId: string) => request<WorkspaceClaude[]>('GET', `${CHAT_API.claudes}?workspaceId=${encodeURIComponent(workspaceId)}`),
+  createClaude: (body: CreateWorkspaceClaudeRequest) => request<WorkspaceClaude>('POST', CHAT_API.claudes, body),
+  transfer: (id: string, body: TransferChatRequest) => request<ChatSession>('POST', CHAT_API.transfer(id), body),
 };

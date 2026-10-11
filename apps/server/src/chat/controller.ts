@@ -33,6 +33,7 @@ import {
   type ChatSession,
   type ChatTask,
   type CreateChatSessionRequest,
+  type WorkspaceClaude,
 } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import type { Workspaces } from '../workspaces/manager.js';
@@ -476,10 +477,135 @@ export class ChatController {
     }
     // Asked again: the pool may have changed while the host was checked. The launch asks once more.
     this.#requireEligible(workspaceId);
+    const claude = typeof req.claudeId === 'string' && req.claudeId.trim() ? this.#chat.claude(req.claudeId.trim()) : this.#chat.ensureDefault(workspaceId);
+    if (!claude || claude.workspaceId !== workspaceId || claude.removedAt) {
+      throw new AppError('VALIDATION_FAILED', 'Pick a Claude on this workspace.', { details: { claudeId: 'Unknown Claude.' } });
+    }
     const id = randomUUID();
-    const session = this.#chat.create({ id, workspaceId, cwd, title, origin: 'ui' });
+    const session = this.#chat.create({ id, workspaceId, cwd, title, origin: 'ui', claudeId: claude.id });
     void this.#startProcess(id, { checked: installed }).catch(() => undefined);
     return session;
+  }
+
+  /** Claudes on a workspace. Default is created on first read and keeps the original home. */
+  listClaudes(workspaceId: string): WorkspaceClaude[] {
+    const id = workspaceId.trim();
+    if (!id) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
+    this.#split(id);
+    return this.#chat.listClaudes(id);
+  }
+
+  /**
+   * Adds an empty Claude directory on the workspace volume. Does not sign in and does not copy a login.
+   * The workspace must be running so the directory can be created.
+   */
+  async createClaude(workspaceId: string, rawName: string): Promise<WorkspaceClaude> {
+    const id = workspaceId.trim();
+    const name = rawName.trim();
+    if (!id) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
+    if (!/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(name)) {
+      throw new AppError('VALIDATION_FAILED', 'Use a short name: letters, numbers, spaces, dots, _ or -.', { details: { name: 'Invalid name.' } });
+    }
+    this.#split(id);
+    this.#chat.ensureDefault(id);
+    let created: { id: string; directory: string };
+    try {
+      created = this.#chat.addClaude(id, name);
+    } catch (e) {
+      if (String(e).includes('UNIQUE')) throw new AppError('CONFLICT', 'A Claude with that name is already on this workspace.');
+      throw e;
+    }
+    const path = `${HOME}/.claudepilot/${created.directory}`;
+    try {
+      await this.#shell(id, ['mkdir', '-p', '--', path]);
+    } catch (e) {
+      this.#chat.removeClaudeRow(created.id);
+      throw new AppError('SERVICE_UNAVAILABLE', 'Couldn’t create the Claude directory. Is the workspace running?', { expose: true, cause: e });
+    }
+    return this.#chat.claude(created.id)!;
+  }
+
+  /**
+   * Confirmed context move (Workspace Claudes FR9–FR16). Stops the source, writes a context file from
+   * portal events, and starts a new session in the destination Claude. Does not copy a login.
+   */
+  async transfer(sessionId: string, destClaudeId: string): Promise<ChatSession> {
+    const source = this.#require(sessionId);
+    if (source.state === 'ended' && source.endedReason !== 'transferred') throw new AppError('CONFLICT', 'This session has ended.');
+    const dest = this.#chat.claude(destClaudeId.trim());
+    if (!dest || dest.workspaceId !== source.workspaceId || dest.removedAt) {
+      throw new AppError('VALIDATION_FAILED', 'Pick a Claude on this workspace.', { details: { claudeId: 'Unknown Claude.' } });
+    }
+    if (dest.id === source.claudeId) throw new AppError('VALIDATION_FAILED', 'That session is already on this Claude.');
+    const row = this.#chat.row(sessionId);
+    if (row?.process === 'live') await this.#runOnce(source.workspaceId, ['stop', sessionId]).catch(() => undefined);
+    const summary = redact(this.#chat.contextSummary(sessionId));
+    const handoffId = randomUUID();
+    const path = `${HOME}/.claudepilot/transfer/${handoffId}.md`;
+    const from = source.claudeName ?? 'Claude';
+    const body = `# Transferred from ${from}\n\n${summary || '(no messages yet)'}\n`;
+    await this.#shellWrite(source.workspaceId, `${HOME}/.claudepilot/transfer`, path, body);
+    const sourceClaudeId = source.claudeId || this.#chat.ensureDefault(source.workspaceId).id;
+    this.#chat.saveHandoff({ id: handoffId, workspaceId: source.workspaceId, sourceSessionId: source.id, sourceClaudeId, destClaudeId: dest.id, path });
+    const successorId = randomUUID();
+    const successor = this.#chat.create({
+      id: successorId,
+      workspaceId: source.workspaceId,
+      cwd: source.cwd,
+      title: source.title,
+      origin: source.origin,
+      claudeId: dest.id,
+      predecessorId: source.id,
+    });
+    this.#chat.setHandoffSuccessor(handoffId, successor.id);
+    this.#chat.patchSession(source.id, { state: 'ended', process: 'gone', endedReason: 'transferred', successorId: successor.id });
+    const when = new Date().toISOString().slice(11, 16);
+    this.#append(successor.id, { kind: 'system', text: `New session on ${dest.name} · transferred from ${from} · ${when}` });
+    this.#emitSession(source.id);
+    const opening = `Context transferred from ${from}. Continue from this summary. This is prior context, not a new request.\n\n${summary || '(no messages yet)'}`;
+    void this.#startProcess(successor.id)
+      .then(() => this.send(successor.id, randomUUID(), opening))
+      .catch(() => undefined);
+    return this.#chat.get(successor.id)!;
+  }
+
+  /** Runs a short command in the workspace. The arguments are passed as argv, never through a shell string. */
+  async #shell(workspaceId: string, command: string[]): Promise<void> {
+    const [target, name] = this.#split(workspaceId);
+    const exec = await this.#workspaces.exec(target, name, command);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        exec.close();
+        reject(new Error('The workspace took too long.'));
+      }, this.execTimeoutMs);
+      exec.onExit((code) => {
+        clearTimeout(timer);
+        exec.close();
+        if (code === 0) resolve();
+        else reject(new Error(`Command failed (${code ?? 'no exit'}).`));
+      });
+    });
+  }
+
+  /** Writes `body` to `path` under the transfer directory. `body` is stdin, not a shell argument. */
+  async #shellWrite(workspaceId: string, dir: string, path: string, body: string): Promise<void> {
+    if (!path.startsWith(`${dir}/`) || path.includes('..')) throw new AppError('VALIDATION_FAILED', 'That transfer path is not allowed.');
+    const [target, name] = this.#split(workspaceId);
+    const bytes = Buffer.byteLength(body);
+    const exec = await this.#workspaces.exec(target, name, ['sh', '-c', 'mkdir -p -- "$1" && head -c "$3" > "$2"', 'sh', dir, path, String(bytes)]);
+    if (bytes) exec.write(body);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        exec.close();
+        reject(new Error('The workspace took too long.'));
+      }, this.execTimeoutMs);
+      exec.onExit((code) => {
+        clearTimeout(timer);
+        exec.close();
+        if (code === 0) resolve();
+        else reject(new Error(`Couldn’t write the context file (${code ?? 'no exit'}).`));
+      });
+    });
   }
 
   /**
@@ -836,7 +962,7 @@ export class ChatController {
     let code: number | null;
     let out: string;
     try {
-      ({ code, out } = await this.#runOnce(workspaceId, ['start', sessionId, String(seg), cwd, '--', ...flags]));
+      ({ code, out } = await this.#runOnce(workspaceId, ['start', sessionId, String(seg), cwd, '--', ...flags], undefined, this.#chat.configDir(row.claude_id ?? '')));
     } catch (e) {
       if (cancelled()) return;
       // The workspace is unreachable or stopped: nothing started, but a later send can resume it.
@@ -1531,9 +1657,13 @@ export class ChatController {
    * by itself) and, on Kubernetes, the exit code. A command still running after {@link execTimeoutMs} is
    * closed and reads as failed (`code: null`).
    */
-  async #runOnce(workspaceId: string, args: string[], stdin?: string): Promise<{ code: number | null; out: string }> {
+  async #runOnce(workspaceId: string, args: string[], stdin?: string, configDir?: string | null): Promise<{ code: number | null; out: string }> {
     const [target, name] = this.#split(workspaceId);
-    const exec = await this.#workspaces.exec(target, name, ['sh', CP_SESSION_PATH, ...args]);
+    // Only a start needs the directory. The long-lived claude inherits it; the portal never reads that directory.
+    const command = configDir
+      ? ['sh', '-c', 'export CLAUDE_CONFIG_DIR="$1"; shift; exec sh "$@"', 'sh', configDir, CP_SESSION_PATH, ...args]
+      : ['sh', CP_SESSION_PATH, ...args];
+    const exec = await this.#workspaces.exec(target, name, command);
     const chunks: Buffer[] = [];
     return await new Promise((resolve) => {
       let done = false;

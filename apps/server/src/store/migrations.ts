@@ -370,6 +370,41 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 9,
+    name: 'workspace claudes',
+    up(db) {
+      db.exec(`
+        -- One directory per Claude on a workspace volume (Workspace Claudes PRD). No credentials.
+        CREATE TABLE workspace_claudes (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          directory TEXT NOT NULL DEFAULT '',
+          removed_at TEXT,
+          created_at TEXT NOT NULL
+        ) STRICT;
+        CREATE UNIQUE INDEX workspace_claudes_name ON workspace_claudes (workspace_id, name);
+        CREATE INDEX workspace_claudes_workspace ON workspace_claudes (workspace_id);
+
+        ALTER TABLE chat_sessions ADD COLUMN claude_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE chat_sessions ADD COLUMN predecessor_id TEXT;
+        ALTER TABLE chat_sessions ADD COLUMN successor_id TEXT;
+
+        CREATE TABLE claude_handoffs (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          source_session_id TEXT NOT NULL,
+          successor_session_id TEXT,
+          source_claude_id TEXT NOT NULL,
+          dest_claude_id TEXT NOT NULL,
+          path TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          actor TEXT
+        ) STRICT;
+      `);
+    },
+  },
 ];
 
 /**

@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.1.** No lab marks yet. 🔬 = unverified, listed in §16. |
+| Status | **Draft v0.2.** v0.2 states who writes the context file, that a new directory is unsigned-in, and that the Claude list is portal sessions only. No lab marks yet. 🔬 = unverified, listed in §16. |
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-11 |
 | Depends on | [Chat sessions](chat-sessions.md) (session controller, event store, one writer, eligibility), [Account Pool](account-pool.md) (the only credentials a portal session runs on), [Pools foundation](foundation-pools.md) (the workspace home volume) |
@@ -12,7 +12,7 @@
 
 A workspace is one VM and one volume. On that volume a person can keep several Claudes. Each Claude has its own directory, so its chats and its local login stay apart from the others. Portal chat sessions still belong to the workspace. Opening one includes choosing which Claude it runs in.
 
-Moving work is a context transfer, asked for by the person. The source session writes a context file on that same volume, stops being the live thread, and a new session starts in the other Claude. The open portal thread follows the new session and marks the join. Other chats, other workspaces, and every login stay where they are.
+Moving work is a context transfer, asked for by the person. The portal writes a context file from its own event store onto that same volume, the source stops being the live thread, and a new session starts in the other Claude. The open portal thread follows the new session and marks the join. Other chats, other workspaces, and every login stay where they are. Creating a Claude does not sign it in.
 
 ## 2. Background and problem
 
@@ -56,6 +56,8 @@ Moving work is a context transfer, asked for by the person. The source session w
 | US5 | I open the Claude I left. The session I moved is listed there as left behind. I can open it, or transfer it again. |
 | US6 | I open the real session the thread is tailing. It is that same session, not a second one writing beside it. |
 | US7 | I have three workspaces. A move in one of them does not appear in the other two, and their Claudes keep running. |
+| US8 | I create a Claude, including a second one on this workspace or the same account on another workspace. Its directory is empty. The terminal there asks me to sign in if I want SSO. Opening a portal chat does not. |
+| US9 | The list on a Claude shows the portal sessions that ran there, including ones left behind. A shell I started myself in the terminal is not on that list. |
 
 ## 6. Scope boundary
 
@@ -99,7 +101,7 @@ Managed settings for the workspace stay workspace-wide (`/etc/claude-code/manage
 - **FR1** A workspace has one or more Claudes. Creating one asks for a name, unique among that workspace's Claudes (409 on a duplicate). The portal creates an empty directory on the home volume and stores the name, directory id, and creation time. It does not copy another Claude's directory.
 - **FR2** The first Claude on a workspace that already has sessions is Default, bound to the directory those sessions already use (🔬 Q1). New Claudes get a new directory under `/home/node/.claudepilot/claudes/<id>`.
 - **FR3** Renaming a Claude changes the label only. Removing a Claude is refused while it has a session that is not ended. Removing one with only ended sessions keeps those rows and marks the Claude removed. The directory is left on the volume. The portal does not delete a directory that may hold a login.
-- **FR4** A Claude has no credential fields. The API never returns, accepts, or logs the contents of its directory.
+- **FR4** A Claude has no credential fields. The API never returns, accepts, or logs the contents of its directory. Creating one does not sign it in and does not copy a login from another Claude or another workspace. The directory starts empty. A person who wants SSO there signs in from the terminal, including when that same account is already signed in elsewhere. The portal does not start that sign-in. Opening or transferring a portal chat does not ask for it: portal chat uses the workspace account pool.
 
 ### Portal sessions
 
@@ -121,7 +123,8 @@ Managed settings for the workspace stay workspace-wide (`/etc/claude-code/manage
 
 ### Audit
 
-- **FR17** The workspace's session list can group by Claude. Each Claude shows running sessions and left-behind ones (ended by transfer). Left-behind rows show the time and the successor, and offer Open and Transfer.
+- **FR17** The workspace's session list can group by Claude. Each Claude shows portal sessions: running ones, and left-behind ones (ended by transfer). Left-behind rows show the time and the successor, and offer Open and Transfer.
+- **FR20** That list is portal sessions only. A process the person started in the terminal is not a row. It stays in the Claude directory, and the portal does not read Claude's own session index to find it.
 - **FR18** Open on a live session is FR8. Open on a left-behind session shows its transcript and the marker of where it was transferred, and does not resume the process unless the person explicitly resumes that same session in the same Claude. Resume stays in the source directory.
 
 ## 9. Data model
@@ -156,6 +159,7 @@ Phone and desktop use the existing session screen.
 
 | Place | What it shows |
 | --- | --- |
+| New Claude | A name only. The directory is empty. SSO, if wanted, is a sign-in in the terminal of that directory, including for an account already used elsewhere. Portal chat does not ask. |
 | New chat | Workspace, then Claude. Default is the last Claude this person used in that workspace, else Default. |
 | Session header | Claude name. Switch opens the confirm dialog (FR10). One other Claude is a single confirm. More than one asks which, then confirm. |
 | After confirm | The thread shows "Moving to Claude B" until the successor exists, then tails. Failure stays on the source and says the move did not finish. |
@@ -186,6 +190,8 @@ Switch is disabled while a transfer of this session is in progress, while the wo
 | Destination workspace id | Rejected. |
 | Context file and logs | A canary string that must be redacted is absent from the file, the API, and logs. A canary login file in the directory is never read. |
 | Three workspaces | A transfer in one leaves the other two's session rows and processes alone. |
+| New Claude | The directory is empty. No credential file is copied from another Claude or workspace. Create-session does not start a sign-in. |
+| Claude list | Rows are portal sessions for that Claude. A process started only in the terminal is absent. |
 
 🔬 Q2 and Q3 are manual on the pinned Claude Code before the first milestone is called done.
 
@@ -204,7 +210,7 @@ Switch is disabled while a transfer of this session is in progress, while the wo
 | A new Claude is usable for a portal session | Without a new workspace or a new volume |
 | A's chats visible in B | Never, except the context the person confirmed |
 | A running process changes directory | Never |
-| A login file read by the portal | Never, covered by the canary |
+| A login file read or copied by the portal | Never, covered by the canary. A new directory starts empty, including for an account already signed in elsewhere. |
 | A transfer that crosses workspaces | Never, rejected before a file is written |
 | The open thread after a successful confirm | On the successor, with the marker |
 
