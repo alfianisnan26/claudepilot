@@ -1,25 +1,14 @@
-import { Button, buttonClass, CopyButton, Dialog, Segmented, Spinner, TextField } from '@isnanme/ui';
+import { Button, buttonClass, CopyButton, Dialog, Spinner, TextField } from '@isnanme/ui';
 import type { Workspace } from '@portal/contracts';
 import { ExternalLink, LogIn } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, errorText } from '@/lib/api';
 
-type Method = 'claude' | 'sso';
-const METHOD_KEY = 'claudepilot.claude-login-method';
-
-/** The sign-in method used last time on this device, so SSO users don't pick it every time. */
-function savedMethod(): Method {
-  try {
-    return localStorage.getItem(METHOD_KEY) === 'sso' ? 'sso' : 'claude';
-  } catch {
-    return 'claude';
-  }
-}
-
 /**
  * Sign in to Claude from the portal: Claude Code in the workspace prints a claude.com link, the person
- * signs in there (with their Claude account, or their organization's single sign-on) and pastes the
- * code it shows. The sign-in is saved in the workspace, not the portal.
+ * signs in there and pastes the code it shows. One way in: the page itself offers single sign-on (the
+ * CLI's --sso only adds login_method=sso to the same link), so there's no method to pick here. The
+ * sign-in is saved in the workspace, not the portal.
  */
 export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: Workspace | null; onClose: () => void; onDone: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
@@ -29,19 +18,9 @@ export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: W
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
-  const [method, setMethod] = useState<Method>(savedMethod);
   const id = workspace?.id;
 
-  const choose = (next: Method) => {
-    setMethod(next);
-    try {
-      localStorage.setItem(METHOD_KEY, next);
-    } catch {
-      // private window: just not remembered
-    }
-  };
-
-  // Starts Claude Code's sign-in in the workspace, and restarts it when the method changes.
+  // Starts Claude Code's sign-in in the workspace when the dialog opens.
   useEffect(() => {
     if (!id) return;
     let current = true;
@@ -52,7 +31,7 @@ export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: W
     setSlow(false);
     const slowTimer = setTimeout(() => current && setSlow(true), 6_000);
     api.workspaces
-      .claudeLogin(id, { sso: method === 'sso' })
+      .claudeLogin(id)
       .then(
         (r) => current && setUrl(r.url),
         (e: unknown) => current && setStartError(errorText(e, 'Could not start the sign-in.')),
@@ -62,7 +41,7 @@ export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: W
       current = false;
       clearTimeout(slowTimer);
     };
-  }, [id, method]);
+  }, [id]);
 
   // Closing ends the sign-in waiting in the workspace.
   const close = () => {
@@ -91,7 +70,7 @@ export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: W
       onClose={close}
       size="sm"
       title="Sign in to Claude"
-      description={`Claude Code in ${workspace?.name ?? 'this workspace'} signs in with your own Claude account (Pro, Max, Team or Enterprise). The sign-in is saved in the workspace, not in the portal.`}
+      description={`For Claude Code in ${workspace?.name ?? 'this workspace'}. Saved there, not in the portal.`}
       footer={
         <>
           <Button variant="secondary" onClick={close} disabled={busy}>
@@ -103,16 +82,7 @@ export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: W
         </>
       }
     >
-      <Segmented<Method>
-        label="Sign in with"
-        value={method}
-        onChange={choose}
-        options={[
-          { value: 'claude', label: 'Claude account' },
-          { value: 'sso', label: 'Single sign-on (SSO)' },
-        ]}
-      />
-      <div className="mt-4">
+      <div>
         {startError ? (
           <p className="rounded-xl bg-danger-soft px-3.5 py-2.5 text-[13px] font-medium text-danger">{startError}</p>
         ) : !url ? (
@@ -131,7 +101,7 @@ export function ClaudeLoginDialog({ workspace, onClose, onDone }: { workspace: W
           >
             <div>
               <p className="mb-2 text-sm font-semibold text-ink-soft">
-                {method === 'sso' ? '1. Sign in through your organization on claude.com' : '1. Sign in on claude.com'}
+                1. Sign in on claude.com (account or SSO)
               </p>
               <div className="flex items-center gap-2">
                 <a href={url} target="_blank" rel="noopener noreferrer" className={buttonClass('secondary', 'md', 'min-w-0 flex-1 gap-2')}>
