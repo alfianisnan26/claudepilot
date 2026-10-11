@@ -2962,3 +2962,25 @@ test('usage report: buckets line up with the viewer’s clock and cover the whol
   assert.equal(r.totals.requests, 2, 'a turn before the window is left out');
   assert.equal(r.buckets.at(-1)!.requests, 1);
 });
+
+test('integrity: Claude Code’s "Set model to …" echo is fine right after the portal changed the model, and ends the session otherwise', async () => {
+  const s = await liveSession();
+  try {
+    const pending = s.controller.control(s.id, 'model', { model: 'sonnet' });
+    const setModel = await s.take('set_model');
+    s.tail.push(line({ type: 'user', isReplay: true, uuid: randomUUID(), message: { role: 'user', content: '<local-command-stdout>Set model to `sonnet (claude-sonnet-5-5)`</local-command-stdout>' }, session_id: s.id }));
+    s.tail.push(ok(setModel.id));
+    s.tail.push(ok((await s.take('get_settings')).id, APPLIED));
+    await pending;
+    await sleep(50);
+    assert.notEqual(s.state(), 'ended', 'the echo of its own change is accepted');
+  } finally {
+    await s.done();
+  }
+  const t = await liveSession();
+  try {
+    await expectIntegrityEnd(t, line({ type: 'user', isReplay: true, uuid: 'x-2', message: { role: 'user', content: '<local-command-stdout>Set model to `opus (claude-opus-5-5)`</local-command-stdout>' } }), /a message this portal didn't send/);
+  } finally {
+    await t.done();
+  }
+});

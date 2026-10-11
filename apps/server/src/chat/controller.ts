@@ -75,6 +75,8 @@ const START_MODE = 'default';
 /** The claude flags cp-session runs after `--`; `--resume` or `--session-id` plus the id are spliced in. */
 const BASE_FLAGS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', START_MODE];
 const BUDGET_FLAGS = ['--max-budget-usd', '10'] as const;
+/** How long after the portal asks for a model change Claude Code's "Set model to …" echo is expected. */
+const MODEL_NOTE_MS = 60_000;
 
 /** How long a dropped `tail` waits before re-following, and how many immediate failures end the reader. */
 const RETAIL_MS = 1_000;
@@ -227,6 +229,8 @@ export class ChatController {
   readonly #idleTimers = new Map<string, NodeJS.Timeout>();
   /** Per session: the running cost its process last reported, so each `result` can say what its turn cost. */
   readonly #costBase = new Map<string, number>();
+  /** Per session: when the portal last asked Claude Code to change the model (its note may follow). */
+  readonly #modelAsked = new Map<string, number>();
   /** Per session: each model's running totals its process last reported, for each turn's usage metrics. */
   readonly #modelBase = new Map<string, Map<string, ModelTotals>>();
   /**
@@ -877,6 +881,7 @@ export class ChatController {
     if (!MODEL_VALUE.test(value)) throw new AppError('VALIDATION_FAILED', 'Pick a model.');
     this.#require(sessionId);
     await this.#live(sessionId);
+    this.#modelAsked.set(sessionId, Date.now());
     await this.#request(sessionId, 'set_model', { model: value }); // Claude Code validates it with a tiny API call
     const applied = await this.#refreshApplied(sessionId).catch(() => null);
     this.#note(sessionId, `Model: ${applied?.model ?? value}`);
@@ -1142,7 +1147,10 @@ export class ChatController {
     }
     const now = await this.#request(sessionId, 'get_settings').then(pickApplied, () => null);
     const failed: string[] = [];
-    if (r.model && now?.model !== r.model) await this.#request(sessionId, 'set_model', { model: r.model }).catch(() => failed.push('model'));
+    if (r.model && now?.model !== r.model) {
+      this.#modelAsked.set(sessionId, Date.now());
+      await this.#request(sessionId, 'set_model', { model: r.model }).catch(() => failed.push('model'));
+    }
     const settings: { effort?: string; ultracode?: boolean } = {};
     if (r.effort && now?.effort !== r.effort) settings.effort = r.effort;
     if (r.ultracode && now?.ultracode !== true) settings.ultracode = true;
@@ -1451,6 +1459,8 @@ export class ChatController {
     if (replay.uuid && this.#chat.isMessage(sessionId, replay.uuid)) return true;
     // `/compact` and other local commands echo their output as a replayed line under an id of its own.
     if (replay.localCommand && this.#chat.slashCommandRunning(sessionId)) return true;
+    // A model change the portal asked for: Claude Code echoes "Set model to …" as a replayed line.
+    if (replay.modelNote && Date.now() - (this.#modelAsked.get(sessionId) ?? 0) < MODEL_NOTE_MS) return true;
     this.#endIntegrity(sessionId, `a message this portal didn't send reached Claude Code (${shortId(replay.uuid ?? 'no id')})`);
     return false;
   }

@@ -1,4 +1,4 @@
-import { Button, ChipGroup, cn, Dialog, Spinner, SwitchRow } from '@isnanme/ui';
+import { Button, cn, Dialog, Spinner, SwitchRow } from '@isnanme/ui';
 import type { ChatModelOption, ChatPermissionMode, ChatSession } from '@portal/contracts';
 import {
   Check,
@@ -13,6 +13,7 @@ import {
 import { useEffect, useId, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
+import { EffortSlider, ModelFamilies } from './ModelPicker';
 import { formatTokens } from './shared';
 import type { ChatControlArgs, ChatControlOp } from './useChatSocket';
 
@@ -327,8 +328,9 @@ function useApply() {
 }
 
 /**
- * Model and effort in one sheet (chat PRD §12.4): the session's models, then effort as chips (the
- * model's own levels), then Ultracode where the model has it. Each pick applies at once and the sheet
+ * Model and effort in one sheet (chat PRD §12.4): the session's models as families (versions as
+ * buttons under the picked one), then effort as a slider over the model's own levels, then Ultracode
+ * where the model has it. Each pick applies at once and the sheet
  * stays open, so a model and its effort can be set together; one change runs at a time.
  */
 function ModelEffortSheet({
@@ -382,38 +384,25 @@ function ModelEffortSheet({
           {models.length === 0 ? (
             <p className="text-[13px] text-muted">This session has no other models to switch to.</p>
           ) : (
-            <OptionList
-              label="Model"
-              dense
-              current={current?.value ?? null}
+            <ModelFamilies
+              models={models}
+              current={current}
               pending={apply.pending}
               disabled={!connected}
               onPick={(value) => void apply.run(value, () => onModel(value))}
-              options={models.map((m) => ({
-                value: m.value,
-                label: m.displayName || m.value,
-                hint: m.description || (m.resolvedModel && m.resolvedModel !== m.displayName ? m.resolvedModel : undefined),
-              }))}
             />
           )}
         </div>
       )}
       {session.effort !== null && levels.length > 0 && (
-        <div className="flex flex-col gap-1.5 border-t border-line pt-3">
-          <ChipGroup
-            label="Effort"
-            hint={
-              effortBusy ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <Spinner className="size-3" /> Applying…
-                </span>
-              ) : (
-                'How hard Claude thinks. More is slower and uses more tokens.'
-              )
-            }
+        <div className="border-t border-line pt-4">
+          <EffortSlider
+            levels={levels}
             value={session.effort}
+            label={effortLabel}
+            busy={effortBusy}
+            disabled={!connected || (apply.pending !== null && !effortBusy)}
             onChange={(value) => void apply.run(`effort:${value}`, () => onEffort(value))}
-            options={levels.map((level) => ({ value: level, label: effortLabel(level), disabled: !connected || apply.pending !== null }))}
           />
         </div>
       )}
