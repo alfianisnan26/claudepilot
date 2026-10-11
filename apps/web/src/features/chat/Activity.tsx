@@ -1,51 +1,51 @@
 import { cn, ease } from '@isnanme/ui';
-import { ChevronRight } from 'lucide-react';
+import type { ChatEvent } from '@portal/contracts';
+import { ChevronRight, Lightbulb, type LucideIcon } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useState, type ReactNode } from 'react';
-import { formatSeconds, groupLabel, shortTarget, toolLabel, type TranscriptRow } from './ToolRows';
+import { formatSeconds, shortTarget, toolIcon, toolLabel, type TranscriptRow } from './ToolRows';
 import { usageLine, type TurnUsage } from './Usage';
 
-/** What one step did, in a few words: the live line while Claude works ("Read MEMORY.md"). */
-function stepLabel(r: TranscriptRow): string {
-  switch (r.type) {
-    case 'thinking':
-      return 'Thinking';
-    case 'group':
-      return groupLabel(r.tools);
-    case 'tool': {
-      const name = r.call.toolName ? toolLabel(r.call.toolName) : 'Tool';
-      const target = shortTarget(r.call.text);
-      return target ? `${name} ${target}` : name;
-    }
-    case 'event':
-      return r.event.kind === 'assistant' ? 'Writing' : (r.event.text ?? 'Working');
+/** One step of a turn's work, as the collapsed row shows it: a tool call or a thinking block. */
+type Step = { kind: 'tool'; call: ChatEvent; result: ChatEvent | null } | { kind: 'thinking'; event: ChatEvent };
+
+/** The steps in order: runs of read-only calls open up into their calls; notes between steps are left out. */
+function stepsOf(rows: TranscriptRow[]): Step[] {
+  return rows.flatMap((r): Step[] =>
+    r.type === 'tool'
+      ? [{ kind: 'tool', call: r.call, result: r.result }]
+      : r.type === 'group'
+        ? r.tools.map((t) => ({ kind: 'tool' as const, call: t.call, result: t.result }))
+        : r.type === 'thinking'
+          ? [{ kind: 'thinking', event: r.event }]
+          : [],
+  );
+}
+
+/** Each step's icon: a thinking block's, or its tool's. */
+const iconFor = (step: Step): LucideIcon => (step.kind === 'thinking' ? Lightbulb : toolIcon(step.call.toolName));
+
+/** The step's words, next to its icon when it's the latest: "Read MEMORY.md", "Thought for 4 s". */
+function stepText(step: Step, live: boolean): string {
+  if (step.kind === 'thinking') {
+    if (live) return 'Thinking';
+    const ms = step.event.durationMs ?? 0;
+    return ms >= 1000 ? `Thought for ${formatSeconds(ms)}` : 'Thought';
   }
+  const name = step.call.toolName ? toolLabel(step.call.toolName) : 'Tool';
+  const target = shortTarget(step.call.text);
+  return target ? `${name} ${target}` : name;
 }
 
-const toolCount = (rows: TranscriptRow[]) => rows.reduce((n, r) => n + (r.type === 'tool' ? 1 : r.type === 'group' ? r.tools.length : 0), 0);
-const failedCount = (rows: TranscriptRow[]) => rows.reduce((n, r) => n + (r.type === 'tool' && r.result?.isError ? 1 : 0), 0);
-const thoughtMs = (rows: TranscriptRow[]) => rows.reduce((n, r) => n + (r.type === 'thinking' ? (r.event.durationMs ?? 0) : 0), 0);
-
-/** The one tool a row used, by name ("File Write"), when it used just one. */
-function onlyTool(rows: TranscriptRow[]): string | null {
-  const calls = rows.flatMap((r) => (r.type === 'tool' ? [r.call] : r.type === 'group' ? r.tools.map((t) => t.call) : []));
-  return calls.length === 1 && calls[0]!.toolName ? toolLabel(calls[0]!.toolName) : null;
-}
-
-/** "Used File Write", "Used 4 tools", "Thought for 4 s": what the turn did, once it's done. */
-function summary(rows: TranscriptRow[]): string {
-  const tools = toolCount(rows);
-  if (tools) return onlyTool(rows) ? `Used ${onlyTool(rows)}` : `Used ${tools} tools`;
-  const ms = thoughtMs(rows);
-  if (rows.some((r) => r.type === 'thinking')) return ms >= 1000 ? `Thought for ${formatSeconds(ms)}` : 'Thought';
-  return 'Notes';
-}
+const failed = (s: Step) => s.kind === 'tool' && !!s.result?.isError;
+/** Icons shown before the latest one; older steps fold into "+N". */
+const SHOWN = 5;
 
 /**
- * A turn's work in one quiet line (chat PRD FR5): thinking, tool calls and the notes between them fold
- * into "Used 4 tools ›" above the reply. While the turn runs it names the step under way, shimmering;
- * done, it says what was used, with failed steps counted. Tapping opens the steps (each opens to its
- * details) and the turn's usage; Show all details opens every one.
+ * A turn's work in one line (chat PRD FR5): every step as a small icon in an overlapping group, and
+ * only the latest one (the one running, while the turn runs) named beside it, shimmering while it
+ * runs. Done, the group is its tool calls and the last one is named. A failed step's icon is red. Tapping opens the steps (each opens to its details) and the
+ * turn's usage; Show all details opens every one.
  */
 export function ActivityBlock({
   rows,
@@ -65,38 +65,78 @@ export function ActivityBlock({
   useEffect(() => setTapped(null), [details]);
   const open = tapped ?? details;
   const id = useId();
-  const failed = failedCount(rows);
-  const label = live ? stepLabel(rows[rows.length - 1]!) : summary(rows);
+  // While it runs every step shows, thinking included; once done, the tools tell the story (thinking only
+  // when there was nothing else).
+  const all = stepsOf(rows);
+  const tools = all.filter((x) => x.kind === 'tool');
+  const steps = !live && tools.length ? tools : all;
+  const latest = steps[steps.length - 1] ?? null;
+  const earlier = steps.slice(0, -1);
+  const hidden = Math.max(0, earlier.length - SHOWN);
+  const shown = earlier.slice(hidden);
+  const text = latest ? stepText(latest, live) : live ? 'Writing' : 'Notes';
+  const failures = steps.filter(failed).length;
+  const LatestIcon = latest ? iconFor(latest) : Lightbulb;
+
   return (
     <div className="flex max-w-full flex-col items-start">
       <button
         type="button"
         aria-expanded={open}
         aria-controls={open ? id : undefined}
+        aria-label={`${steps.length} ${steps.length === 1 ? 'step' : 'steps'}${failures ? `, ${failures} failed` : ''}. Latest: ${text}`}
         onClick={() => setTapped(!open)}
-        className="press -mx-1 inline-flex max-w-full items-center gap-1.5 rounded-lg px-1 py-1 text-[15.5px] text-muted transition-colors hover:text-ink-soft sm:text-[14.5px]"
+        className="press -mx-1 inline-flex max-w-full items-center gap-2 rounded-xl px-1 py-1 text-[15.5px] text-muted transition-colors hover:text-ink-soft sm:text-[14.5px]"
       >
-        {/* The live line crossfades from step to step. */}
+        <span className="flex shrink-0 items-center" aria-hidden="true">
+          {hidden > 0 && <Chip className="text-[10.5px] font-semibold tabular-nums">+{hidden}</Chip>}
+          <AnimatePresence initial={false}>
+            {shown.map((s, i) => {
+              const Icon = iconFor(s);
+              return (
+                <motion.span
+                  key={s.kind === 'tool' ? s.call.seq : s.event.seq}
+                  layout
+                  initial={{ scale: 0.4, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ type: 'spring', stiffness: 520, damping: 30 }}
+                  className={cn(hidden > 0 || i > 0 ? '-ml-1.5' : '')}
+                >
+                  <Chip danger={failed(s)}>
+                    <Icon className="size-3.5" />
+                  </Chip>
+                </motion.span>
+              );
+            })}
+            <motion.span
+              key={latest ? (latest.kind === 'tool' ? latest.call.seq : latest.event.seq) : 'none'}
+              layout
+              initial={{ scale: 0.4, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: 'spring', stiffness: 520, damping: 30 }}
+              className={cn(shown.length > 0 || hidden > 0 ? '-ml-1.5' : '')}
+            >
+              <Chip latest danger={latest ? failed(latest) : false}>
+                <LatestIcon className="size-3.5" />
+              </Chip>
+            </motion.span>
+          </AnimatePresence>
+        </span>
+        {/* The latest step's words crossfade as the next one starts. */}
         <span className="relative min-w-0 overflow-hidden">
           <AnimatePresence mode="popLayout" initial={false}>
             <motion.span
-              key={label}
+              key={text}
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.18, ease }}
-              className={cn('block truncate', live && 'shimmer')}
+              className={cn('block truncate', live ? 'shimmer' : latest && failed(latest) ? 'text-danger' : 'text-ink-soft')}
             >
-              {label}
+              {text}
             </motion.span>
           </AnimatePresence>
         </span>
-        {failed > 0 && (
-          <span className="inline-flex shrink-0 items-center gap-1 text-muted">
-            <span className="size-1.5 rounded-full bg-danger" aria-hidden="true" />
-            {failed} failed
-          </span>
-        )}
         <ChevronRight className={cn('size-4 shrink-0 opacity-70 transition-transform duration-200', open && 'rotate-90')} aria-hidden="true" />
       </button>
       <AnimatePresence initial={false}>
@@ -110,7 +150,7 @@ export function ActivityBlock({
             transition={{ duration: 0.24, ease }}
             className="w-full overflow-hidden"
           >
-            <div className="mt-1.5 ml-1 flex flex-col gap-2 border-l border-line/80 pl-3.5">
+            <div className="mt-1.5 ml-3 flex flex-col gap-2 border-l border-line/80 pl-3.5">
               {rows.map(render)}
               {usage && <p className="pt-0.5 pl-1 text-[12.5px] text-muted tabular-nums">{usageLine(usage)}</p>}
             </div>
@@ -118,5 +158,20 @@ export function ActivityBlock({
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+/** One step's round icon in the group; a ring in the page colour keeps overlapping ones apart. */
+function Chip({ children, latest, danger, className }: { children: ReactNode; latest?: boolean; danger?: boolean; className?: string }) {
+  return (
+    <span
+      className={cn(
+        'flex size-7 items-center justify-center rounded-full ring-2 ring-bg',
+        danger ? 'bg-danger-soft text-danger' : latest ? 'bg-surface-2 text-ink' : 'bg-surface-2 text-muted',
+        className,
+      )}
+    >
+      {children}
+    </span>
   );
 }

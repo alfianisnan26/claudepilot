@@ -1,6 +1,21 @@
 import { cn, Spinner } from '@isnanme/ui';
 import type { ChatEvent } from '@portal/contracts';
-import { ChevronRight, CircleAlert, Layers, Lightbulb, Wrench } from 'lucide-react';
+import {
+  Bot,
+  ChevronRight,
+  FilePen,
+  FileText,
+  FolderOpen,
+  Globe,
+  Layers,
+  Lightbulb,
+  ListChecks,
+  Plug,
+  Search,
+  SquareTerminal,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { ImageThumbs, type ViewerImage } from './ImageViewer';
 
@@ -33,6 +48,42 @@ export function shortTarget(text: string | undefined): string {
   if (!t) return '';
   if (/^[~/]/.test(t) && !/\s/.test(t)) return t.split('/').filter(Boolean).pop() ?? t;
   return t.length > 48 ? `${t.slice(0, 47)}…` : t;
+}
+
+/** A tool's icon: what it does, at a glance (the activity row's group and each step use it). */
+export function toolIcon(name: string | undefined): LucideIcon {
+  const tool = name ?? '';
+  if (tool.startsWith('mcp__')) return Plug;
+  switch (tool) {
+    case 'Bash':
+    case 'BashOutput':
+    case 'KillShell':
+      return SquareTerminal;
+    case 'Read':
+    case 'NotebookRead':
+      return FileText;
+    case 'Write':
+    case 'Edit':
+    case 'MultiEdit':
+    case 'NotebookEdit':
+      return FilePen;
+    case 'Grep':
+    case 'Glob':
+      return Search;
+    case 'LS':
+      return FolderOpen;
+    case 'WebFetch':
+    case 'WebSearch':
+      return Globe;
+    case 'Task':
+    case 'Agent':
+      return Bot;
+    case 'TodoWrite':
+    case 'TodoRead':
+      return ListChecks;
+    default:
+      return Wrench;
+  }
 }
 
 /** "mcp__playwright__browser_take_screenshot" reads "playwright · browser_take_screenshot". */
@@ -185,6 +236,7 @@ export function ToolCall({
   images,
 }: ToolPair & { agent: string | null; running: boolean; details: boolean; images: ViewerImage[] }) {
   const error = !!result?.isError;
+  const Icon = toolIcon(call.toolName);
   const [open, toggle] = useOpen(details, images.length > 0);
   const id = useId();
   const output = result?.text?.trim() ?? '';
@@ -192,7 +244,7 @@ export function ToolCall({
   return (
     <div className="flex max-w-full flex-col items-start">
       <RowButton open={open} onToggle={toggle} controls={id} expandable={expandable} danger={error}>
-        {error ? <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" /> : <Wrench className="size-3.5 shrink-0" aria-hidden="true" />}
+        <Icon className="size-4 shrink-0" aria-hidden="true" />
         <span className="shrink-0 font-mono">{call.toolName ? toolLabel(call.toolName) : 'tool'}</span>
         {call.text && <span className="min-w-0 truncate font-mono text-muted">{shortTarget(call.text)}</span>}
         {agent && <span className="shrink-0 truncate text-muted/80">· {agent}</span>}

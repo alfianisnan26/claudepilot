@@ -224,7 +224,7 @@ function Quiet({
       aria-label={ariaLabel}
       title={title}
       className={cn(
-        'press h-10 min-w-0 items-center gap-1.5 rounded-full px-3.5 text-[14.5px] font-semibold whitespace-nowrap transition-colors tap:h-11 sm:text-[13.5px]',
+        'press h-10 min-w-0 items-center gap-1 rounded-full px-3 text-[14px] font-semibold whitespace-nowrap transition-colors tap:h-11 sm:text-[13.5px]',
         hideOnPhone ? 'hidden sm:inline-flex' : 'inline-flex',
         tone === 'danger'
           ? 'bg-danger-soft text-danger'
@@ -273,14 +273,14 @@ function ContextMeter({ context }: { context: NonNullable<ChatSession['context']
         aria-label={pct === null ? `Context: ${formatTokens(used)} tokens` : `Context ${pct}% full`}
         aria-describedby={tipId}
         className={cn(
-          'peer press inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[12px] font-semibold whitespace-nowrap tabular-nums transition-colors tap:h-8',
+          'peer press inline-flex h-7 items-center gap-1 rounded-lg px-1 text-[12px] font-semibold whitespace-nowrap tabular-nums transition-colors tap:h-8',
           tone === 'danger' ? 'text-danger hover:bg-danger-soft' : tone === 'gold' ? 'text-gold hover:bg-gold-soft' : 'text-muted hover:bg-surface-2 hover:text-ink',
         )}
       >
         {pct !== null && (
           // The fill carries how full it is: accent, then gold from 80 %, red from 95 %.
           <span
-            className={cn('relative block h-1.5 w-9 overflow-hidden rounded-full bg-current/20', tone === 'danger' ? 'text-danger' : tone === 'gold' ? 'text-gold' : 'text-accent')}
+            className={cn('relative block h-1.5 w-7 overflow-hidden rounded-full bg-current/20', tone === 'danger' ? 'text-danger' : tone === 'gold' ? 'text-gold' : 'text-accent')}
             aria-hidden="true"
           >
             <span className="absolute inset-y-0 left-0 rounded-full bg-current" style={{ width: `${Math.max(pct, 4)}%` }} />
