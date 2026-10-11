@@ -10,6 +10,8 @@ import {
   type ChatSession,
   type ChatTask,
   type ChatTrustRequest,
+  type ChatUsageRange,
+  type ChatUsageReport,
   type CreateChatSessionRequest,
   type CreateWorkspaceClaudeRequest,
   type TransferChatRequest,
@@ -47,6 +49,12 @@ export const chatApi = {
   create: (body: CreateChatSessionRequest) => request<ChatSession>('POST', CHAT_API.create, body),
   get: (id: string) => request<ChatSession>('GET', CHAT_API.one(id)),
   end: (id: string) => request<{ ok: true }>('DELETE', CHAT_API.one(id)),
+  /** Usage over a window, in buckets that line up with this device's clock; optionally one Claude's. */
+  usage: (range: ChatUsageRange, claudeId?: string) =>
+    request<ChatUsageReport>(
+      'GET',
+      `${CHAT_API.usage}?range=${range}&tz=${new Date().getTimezoneOffset()}${claudeId ? `&claudeId=${encodeURIComponent(claudeId)}` : ''}`,
+    ),
   /** Archive (ending it first if it hasn't ended), or bring it back to the list. */
   archive: (id: string) => request<ChatSession>('POST', CHAT_API.archive(id)),
   unarchive: (id: string) => request<ChatSession>('DELETE', CHAT_API.archive(id)),

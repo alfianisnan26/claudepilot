@@ -19,7 +19,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { posix } from 'node:path';
 import type { Store } from '../store/store.js';
 import { HOME } from '../workspaces/runtime.js';
-import type { StoredEvent, TaskPatch } from './protocol.js';
+import type { ModelTotals, StoredEvent, TaskPatch } from './protocol.js';
 import { redact, redactMaybe } from './redact.js';
 
 /**
@@ -123,6 +123,20 @@ export interface ChatSessionPatch {
   successorId?: string | null;
   predecessorId?: string | null;
   archivedAt?: string | null;
+}
+
+/** One model's share of a finished turn, as recorded. */
+export interface UsageRow extends ModelTotals {
+  requests: number;
+  agents: number;
+  durationMs: number;
+}
+
+/** A stored usage row, as Usage reads it. */
+export interface UsageRecord extends UsageRow {
+  atMs: number;
+  workspaceId: string;
+  claudeId: string | null;
 }
 
 /** The lifecycle states a sent line moves through (chat-sessions PRD §9): the contract's, plus `refused`. */
@@ -322,6 +336,49 @@ export class ChatStore {
     const row = this.#db().prepare(`SELECT payload FROM chat_events WHERE session_id = ? AND kind = 'result' ORDER BY seq DESC LIMIT 1`).get(sessionId) as { payload: string } | undefined;
     const cost = row ? this.#parsePayload(row.payload).costUsd : undefined;
     return typeof cost === 'number' ? cost : null;
+  }
+
+  /** Each model's running totals the session's newest `result` reported, or null. */
+  lastResultModelTotals(sessionId: string): ModelTotals[] | null {
+    const row = this.#db().prepare(`SELECT payload FROM chat_events WHERE session_id = ? AND kind = 'result' ORDER BY seq DESC LIMIT 1`).get(sessionId) as { payload: string } | undefined;
+    const totals = row ? this.#parsePayload(row.payload).modelTotals : undefined;
+    return Array.isArray(totals) ? (totals as ModelTotals[]) : null;
+  }
+
+  /** Sub-agents started (by any agent) since the session's newest stored `result`. */
+  agentsSinceLastResult(sessionId: string): number {
+    const row = this.#db()
+      .prepare(
+        `SELECT count(*) AS n FROM chat_events WHERE session_id = ? AND kind = 'tool_use'
+           AND json_extract(payload, '$.toolName') IN ('Task', 'Agent')
+           AND seq > coalesce((SELECT max(seq) FROM chat_events WHERE session_id = ? AND kind = 'result'), 0)`,
+      )
+      .get(sessionId, sessionId) as { n: number };
+    return row.n;
+  }
+
+  /** A finished turn's usage, one row per model; the first carries the request, sub-agents and time. */
+  recordUsage(turn: { atMs: number; sessionId: string; workspaceId: string; claudeId: string | null }, rows: UsageRow[]): void {
+    const db = this.#writable();
+    const insert = db.prepare(
+      `INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests, agents, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const at = new Date(turn.atMs).toISOString();
+    for (const r of rows) {
+      insert.run(at, turn.atMs, turn.sessionId, turn.workspaceId, turn.claudeId, r.model, r.input, r.output, r.cacheRead, r.cacheWrite, r.costUsd, r.requests, r.agents, r.durationMs);
+    }
+  }
+
+  /** Usage rows from `fromMs` on, oldest first, optionally for one Claude. */
+  usageSince(fromMs: number, claudeId?: string): UsageRecord[] {
+    const cols = `at_ms AS atMs, workspace_id AS workspaceId, claude_id AS claudeId, model, input_tokens AS input, output_tokens AS output,
+      cache_read_tokens AS cacheRead, cache_write_tokens AS cacheWrite, cost_usd AS costUsd, requests, agents, duration_ms AS durationMs`;
+    return (
+      claudeId
+        ? this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? AND claude_id = ? ORDER BY at_ms`).all(fromMs, claudeId)
+        : this.#db().prepare(`SELECT ${cols} FROM chat_usage WHERE at_ms >= ? ORDER BY at_ms`).all(fromMs)
+    ) as unknown as UsageRecord[];
   }
 
   /** The session's newest stored event, or null before the first. */
@@ -766,6 +823,7 @@ export class ChatStore {
     if ((ev.kind === 'thinking' || ev.kind === 'result') && ev.durationMs !== undefined) p.durationMs = ev.durationMs;
     if (ev.kind === 'result' && ev.turnCostUsd !== undefined) p.turnCostUsd = ev.turnCostUsd;
     if (ev.kind === 'result' && ev.tokens) p.tokens = ev.tokens;
+    if (ev.kind === 'result' && ev.modelTotals?.length) p.modelTotals = ev.modelTotals;
     // The readable sub-agent label, when it isn't just the raw parent_tool_use_id kept in its column.
     if (ev.agentLabel && ev.agentLabel !== ev.parentToolUseId) p.agentLabel = redact(ev.agentLabel);
     // Blob references only: base64 never reaches a row (the controller moves it to the blob store).

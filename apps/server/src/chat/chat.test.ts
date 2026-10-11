@@ -40,6 +40,7 @@ import {
 import { MAX_HOLD, redact, StreamRedactor } from './redact.js';
 import { createChatRoutes } from './routes.js';
 import { attachChat } from './socket.js';
+import { usageReport } from './usage.js';
 import { ChatStore, sessionCwd } from './store.js';
 import { FOLDER_CHANGED, FOLDER_NOT_TRUSTED } from './trust.js';
 
@@ -2906,4 +2907,58 @@ test('usage: each result stores its turn’s tokens and duration, and what the t
   } finally {
     await s.done();
   }
+});
+
+/* ========================= Usage metrics ========================= */
+
+test('usage metrics: each turn is stored per model from the change in the running totals, sub-agents included, and charts add them up', async () => {
+  const s = await liveSession();
+  try {
+    const turn = async (total: number, modelUsage: Record<string, unknown>, extra: string[] = []) => {
+      for (const l of extra) s.tail.push(l);
+      s.tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: 3000, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage, is_error: false, session_id: s.id }));
+      s.tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+    };
+    const opus = (input: number, output: number, cost: number) => ({ inputTokens: input, outputTokens: output, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: cost });
+    // Turn 1: the main agent only.
+    await turn(0.1, { 'claude-opus-5-5': opus(100, 10, 0.1) });
+    // Turn 2: the main agent starts a sub-agent that runs on another model.
+    const task = line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_task', name: 'Task', input: { description: 'Look around', prompt: 'x' } }] }, parent_tool_use_id: null, uuid: randomUUID() });
+    await turn(0.25, { 'claude-opus-5-5': opus(160, 30, 0.2), 'claude-haiku-5-5': opus(500, 50, 0.05) }, [task]);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+
+    const rows = s.store.db!.prepare('SELECT model, input_tokens AS i, output_tokens AS o, cost_usd AS c, requests AS r, agents AS a FROM chat_usage ORDER BY id').all() as Record<string, number | string>[];
+    assert.equal(rows.length, 3, 'one row for turn 1, two (one per model) for turn 2');
+    assert.deepEqual([rows[0]!.model, rows[0]!.i, rows[0]!.o, rows[0]!.r, rows[0]!.a], ['claude-opus-5-5', 100, 10, 1, 0]);
+    assert.deepEqual([rows[1]!.model, rows[1]!.i, rows[1]!.o, rows[1]!.r, rows[1]!.a], ['claude-opus-5-5', 60, 20, 1, 1]);
+    assert.deepEqual([rows[2]!.model, rows[2]!.i, rows[2]!.o, rows[2]!.r], ['claude-haiku-5-5', 500, 50, 0]);
+    // The result's tokens are the whole turn's, sub-agent included.
+    const second = s.controller.history(s.id).filter((e) => e.kind === 'result')[1]!;
+    assert.deepEqual(second.tokens, { input: 560, output: 70, cacheRead: 0, cacheWrite: 0 });
+
+    const report = s.controller.usage('1h');
+    assert.equal(report.buckets.length, 30);
+    assert.equal(report.totals.requests, 2);
+    assert.equal(report.totals.agents, 1);
+    assert.equal(report.totals.input, 660);
+    assert.ok(Math.abs(report.totals.costUsd - 0.25) < 1e-9);
+    assert.deepEqual(report.byModel.map((m) => m.model), ['claude-opus-5-5', 'claude-haiku-5-5']);
+    assert.equal(report.byClaude.length, 1);
+    assert.equal(report.byClaude[0]!.name, 'Default');
+    assert.equal(report.buckets.reduce((n, b) => n + b.requests, 0), 2, 'every turn falls in a bucket');
+    assert.throws(() => s.controller.usage('2y'), (e) => isAppError(e) && e.code === 'VALIDATION_FAILED');
+  } finally {
+    await s.done();
+  }
+});
+
+test('usage report: buckets line up with the viewer’s clock and cover the whole window', () => {
+  const now = Date.parse('2026-10-11T12:34:56Z');
+  const rec = (atMs: number) => ({ atMs, workspaceId: 'docker/ws1', claudeId: null, model: 'm', input: 1, output: 1, cacheRead: 0, cacheWrite: 0, costUsd: 1, requests: 1, agents: 0, durationMs: 0 });
+  const chat = { usageSince: () => [rec(now - 40 * 86_400_000), rec(now - 2 * 86_400_000), rec(now)], claudeName: () => 'Default' };
+  const r = usageReport(chat as never, '30d', { now, tzOffsetMin: -420 }); // UTC+7
+  assert.equal(r.buckets.length, 30);
+  assert.equal(new Date(Date.parse(r.buckets.at(-1)!.at) + 7 * 3_600_000).toISOString().slice(11), '00:00:00.000Z', 'days start at local midnight');
+  assert.equal(r.totals.requests, 2, 'a turn before the window is left out');
+  assert.equal(r.buckets.at(-1)!.requests, 1);
 });

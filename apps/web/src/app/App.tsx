@@ -5,8 +5,10 @@ import { AppShell } from '@/components/AppShell';
 import { AccountsPage } from '@/features/accounts/AccountsPage';
 import { AccessPage } from '@/features/admin/AccessPage';
 import { SessionsPage } from '@/features/chat/SessionsPage';
+import { UsagePage } from '@/features/usage/UsagePage';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { WorkspacesPage } from '@/features/workspaces/WorkspacesPage';
+import { useAppUpdate } from '@/lib/appUpdate';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { LiveProvider } from '@/lib/live';
 import { HOME } from './nav';
@@ -38,6 +40,7 @@ export function App() {
 }
 
 function AppRoutes() {
+  useAppUpdate();
   return (
     <Routes>
       <Route
@@ -59,6 +62,7 @@ function AppRoutes() {
         <Route index element={<Navigate to={HOME} replace />} />
         <Route path="workspaces" element={<WorkspacesPage />} />
         <Route path="sessions" element={<SessionsPage />} />
+        <Route path="usage" element={<UsagePage />} />
         <Route path="accounts" element={<AccountsPage />} />
         <Route path="access" element={<AccessPage />} />
       </Route>

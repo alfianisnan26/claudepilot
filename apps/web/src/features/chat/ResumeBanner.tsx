@@ -33,7 +33,7 @@ export function ResumeBanner({ session, onResume, connected }: { session: ChatSe
     }
   };
   return (
-    <div role="status" className="mb-2 flex items-center gap-3 rounded-2xl bg-surface-2 px-3.5 py-2.5 text-[13px]">
+    <div role="status" className="glass-card flex items-center gap-3 rounded-[24px] px-4 py-3 text-[13.5px]">
       <div className="min-w-0 flex-1">
         <p className="text-ink-soft">
           {asleep

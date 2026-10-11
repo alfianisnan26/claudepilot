@@ -416,6 +416,66 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 11,
+    name: 'chat usage metrics',
+    up(db) {
+      db.exec(`
+        -- What each finished turn used, as metrics (Usage charts): one row per model the turn used, the
+        -- main agent and its sub-agents together. The turn's request, sub-agents and time count on its
+        -- first row. Rows stay when their session is deleted, so the history does too.
+        CREATE TABLE chat_usage (
+          id INTEGER PRIMARY KEY,
+          at TEXT NOT NULL,
+          at_ms INTEGER NOT NULL,
+          session_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          claude_id TEXT,
+          model TEXT NOT NULL,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+          cost_usd REAL NOT NULL DEFAULT 0,
+          requests INTEGER NOT NULL DEFAULT 0,
+          agents INTEGER NOT NULL DEFAULT 0,
+          duration_ms INTEGER NOT NULL DEFAULT 0
+        ) STRICT;
+        CREATE INDEX chat_usage_at ON chat_usage (at_ms);
+      `);
+      // Turns finished before this: one row each, from what their result kept. A result's cost is the
+      // process's running total, so a turn's is the change from the one before (lower: a new process).
+      const insert = db.prepare(
+        `INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests, duration_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      );
+      const results = db.prepare(`SELECT at, payload FROM chat_events WHERE session_id = ? AND kind = 'result' ORDER BY seq`);
+      const sessions = db.prepare('SELECT id, workspace_id, claude_id, model FROM chat_sessions').all() as {
+        id: string;
+        workspace_id: string;
+        claude_id: string | null;
+        model: string | null;
+      }[];
+      const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+      for (const s of sessions) {
+        let last = 0;
+        for (const r of results.all(s.id) as { at: string; payload: string }[]) {
+          let p: Record<string, unknown> = {};
+          try {
+            p = JSON.parse(r.payload) as Record<string, unknown>;
+          } catch {
+            // a row that can't be read counts as a request with nothing known
+          }
+          const total = typeof p.costUsd === 'number' ? p.costUsd : null;
+          const cost = typeof p.turnCostUsd === 'number' ? p.turnCostUsd : total === null ? 0 : total >= last ? total - last : total;
+          if (total !== null) last = total;
+          const t = (p.tokens && typeof p.tokens === 'object' ? p.tokens : {}) as Record<string, unknown>;
+          const at = Date.parse(r.at);
+          insert.run(r.at, Number.isFinite(at) ? at : 0, s.id, s.workspace_id, s.claude_id, s.model ?? 'unknown', num(t.input), num(t.output), num(t.cacheRead), num(t.cacheWrite), num(cost), num(p.durationMs));
+        }
+      }
+    },
+  },
 ];
 
 /**

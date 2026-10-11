@@ -123,6 +123,38 @@ export interface ChatEvent {
   uuid?: string;
 }
 
+/** The windows Usage charts over, newest last; each has its own bucket size. */
+export const CHAT_USAGE_RANGES = ['30m', '1h', '12h', '1d', '7d', '30d'] as const;
+export type ChatUsageRange = (typeof CHAT_USAGE_RANGES)[number];
+
+/** What a slice of turns used: tokens, estimated cost, requests (turns) and sub-agents started. */
+export interface ChatUsageTotals {
+  costUsd: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  requests: number;
+  agents: number;
+}
+
+/**
+ * `GET /api/chat/usage?range=&claudeId=&tz=`: usage over a window, from the turns stored as metrics
+ * (one row per model per turn, sub-agents included). Buckets cover the whole window, empty ones too.
+ */
+export interface ChatUsageReport {
+  range: ChatUsageRange;
+  from: string;
+  to: string;
+  bucketMs: number;
+  totals: ChatUsageTotals;
+  buckets: (ChatUsageTotals & { at: string })[];
+  /** Per Claude (whose sign-in, or the pool, the turns ran as), most cost first. */
+  byClaude: (ChatUsageTotals & { claudeId: string; name: string; workspaceId: string })[];
+  /** Per model, most cost first. */
+  byModel: (ChatUsageTotals & { model: string })[];
+}
+
 /** A turn's tokens: fresh input, output, and input read from or written to the prompt cache. */
 export interface ChatTurnTokens {
   input: number;
@@ -226,6 +258,8 @@ export const CHAT_API = {
   download: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/files/download`,
   /** GET: what changed in the session's folder (git), as a summary and a unified diff. */
   diff: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/diff`,
+  /** GET `?range=&claudeId=&tz=`: usage over time (`ChatUsageReport`). */
+  usage: '/api/chat/usage',
   /** GET `?workspaceId=&folder=`: what a folder would load (FR43). */
   scan: '/api/chat/trust/scan',
   /** POST `ChatTrustRequest`: trust a folder as scanned. */

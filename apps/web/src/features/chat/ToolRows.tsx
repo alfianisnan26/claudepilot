@@ -158,7 +158,7 @@ function RowButton({
   children: ReactNode;
 }) {
   const cls = cn(
-    'flex max-w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[12px]',
+    'flex max-w-full min-w-0 items-center gap-2 rounded-lg px-1 py-1 text-left text-[14px] sm:text-[13px]',
     danger ? 'text-danger' : 'text-ink-soft',
   );
   if (!expandable) return <div className={cls}>{children}</div>;
@@ -276,9 +276,8 @@ export function LiveThinking({ since, agent }: { since: number; agent: string | 
     return () => clearInterval(t);
   }, []);
   return (
-    <div role="status" className="flex items-center gap-1.5 px-1 text-[12px] text-ink-soft">
-      <Spinner className="size-3 shrink-0" />
-      <span>Thinking… {formatSeconds(Math.max(0, now - since))}</span>
+    <div role="status" className="flex items-center gap-1.5 text-[15.5px] sm:text-[14.5px]">
+      <span className="shimmer">Thinking… {formatSeconds(Math.max(0, now - since))}</span>
       {agent && <span className="truncate text-muted/80">· {agent}</span>}
     </div>
   );

@@ -272,7 +272,7 @@ export function SessionPage() {
 
   return (
     <div className="fixed inset-x-0 top-0 h-dvh overflow-hidden bg-bg text-ink" style={pinnedToViewport(viewport)}>
-      <header className="glass absolute inset-x-0 top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center gap-2 border-b border-line/60 px-2 pt-[env(safe-area-inset-top)] sm:px-3">
+      <header className="glass absolute inset-x-0 top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center gap-2 border-b border-ink/[0.05] px-2 pt-[env(safe-area-inset-top)] sm:px-3">
         <Link
           to="/admin/sessions"
           aria-label="Back to sessions"
@@ -281,8 +281,8 @@ export function SessionPage() {
           <ArrowLeft className="size-[18px]" />
         </Link>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold">{session?.title || 'Untitled'}</p>
-          <p className="truncate text-[11px] text-muted">
+          <p className="truncate text-[15.5px] font-semibold">{session?.title || 'Untitled'}</p>
+          <p className="truncate text-[12px] text-muted">
             <span className="font-mono">{session?.workspaceId ?? '…'}</span>
             {session?.claudeName ? ` · ${session.claudeName}` : ''}
             {session?.endedReason === 'transferred' ? ' · left behind' : ''}
@@ -295,9 +295,9 @@ export function SessionPage() {
           ) : (
             <StateBadge state={state} />
           ))}
-        {working && (
+        {working && roomy && (
           <Button size="sm" variant="secondary" icon={<Square className="size-3.5" />} onClick={stop} aria-label="Stop">
-            <span className="hidden sm:inline">Stop</span>
+            Stop
           </Button>
         )}
         {roomy && (
@@ -362,16 +362,16 @@ export function SessionPage() {
             details={details}
             working={working}
             padTop="calc(3.5rem + env(safe-area-inset-top) + 1.25rem)"
-            padBottom={dockHeight + 20}
+            padBottom={dockHeight + 12}
             onOpenUsage={() => setUsageOpen(true)}
             className="h-full"
           />
 
-          <div ref={dock} className="glass absolute inset-x-0 bottom-0 z-20 border-t border-line/60">
+          <div ref={dock} className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
             <div
               className={cn(
-                'mx-auto w-full max-w-[760px] px-4 pt-3',
-                viewport?.keyboard ? 'pb-3' : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]',
+                'pointer-events-auto mx-auto flex w-full max-w-[760px] flex-col gap-2 px-3 pt-2 sm:px-4',
+                viewport?.keyboard ? 'pb-2' : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]',
               )}
             >
               {current && (
@@ -388,18 +388,26 @@ export function SessionPage() {
               ) : (
                 <>
                   {session && <ResumeBanner session={session} connected={connected} onResume={() => trustedControl('resume')} />}
-                  {session && (
-                    <Controls
-                      ref={controls}
-                      sessionId={id}
-                      session={session}
-                      connected={connected}
-                      control={trustedControl}
-                      suspended={trust.prompt !== null}
-                      className="-mx-2 mb-1"
-                    />
-                  )}
-                  <Composer ref={composer} onSend={trustedSend} connected={connected} working={working} />
+                  <Composer
+                    ref={composer}
+                    onSend={trustedSend}
+                    connected={connected}
+                    working={working}
+                    onStop={stop}
+                    accessory={
+                      session && (
+                        <Controls
+                          ref={controls}
+                          sessionId={id}
+                          session={session}
+                          connected={connected}
+                          control={trustedControl}
+                          suspended={trust.prompt !== null}
+                          className="min-w-0 flex-1"
+                        />
+                      )
+                    }
+                  />
                 </>
               )}
             </div>
@@ -490,7 +498,7 @@ export function SessionPage() {
 function EndedNote({ reason }: { reason: string | null | undefined }) {
   const stop = endedForSafety(reason);
   return (
-    <p role="status" className="py-2 text-center text-[13px] text-muted">
+    <p role="status" className="glass-card rounded-full px-4 py-3 text-center text-[13.5px] text-muted">
       {stop ? (
         <>
           <span className="font-semibold text-danger">{stop.label}.</span> Start a new session to carry on.

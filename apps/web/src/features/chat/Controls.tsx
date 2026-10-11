@@ -2,7 +2,6 @@ import { Button, ChipGroup, cn, Dialog, Spinner, SwitchRow } from '@isnanme/ui';
 import type { ChatModelOption, ChatPermissionMode, ChatSession } from '@portal/contracts';
 import {
   Check,
-  ChevronDown,
   FilePen,
   Hand,
   ListChecks,
@@ -73,10 +72,10 @@ function matchModel(models: ChatModelOption[] | null, applied: string | null, pi
 }
 
 /**
- * The session's controls, one quiet line above the composer: "Opus 5.5 · Medium" (with ⚡ while
+ * The session's controls, as pills in the composer card's bottom row: "Opus 5.5 Medium" (with ⚡ while
  * Ultracode is on) opens one Model and effort sheet (chat PRD §12.4); the permission mode follows from
  * 640 px (on phones it's in the ⋯ menu, and shows here only when it isn't Ask); how full the context
- * window is sits at the end. Pickers send the change and wait for its ack, showing the error in place,
+ * window is sits at the end, by Send. Pickers send the change and wait for its ack, showing the error in place,
  * and the line always shows what the session reports as applied, never what was asked for.
  */
 export function Controls({
@@ -141,14 +140,14 @@ export function Controls({
 
   return (
     <>
-      <div role="group" aria-label="Session settings" className={cn('flex min-w-0 items-center gap-0.5', className)}>
+      <div role="group" aria-label="Session settings" className={cn('flex min-w-0 items-center gap-1.5', className)}>
         <Quiet
           onClick={() => setOpen('model')}
           ariaLabel={`Model and effort: ${modelName}${effort ? `, ${effort}` : ''}${session.ultracode ? ', Ultracode on' : ''}`}
           title={session.model ?? undefined}
         >
           <span className="truncate">{modelName}</span>
-          {effort && <span className="shrink-0 text-muted">· {effort}</span>}
+          {effort && <span className="shrink-0 font-medium text-muted">{effort}</span>}
           {session.ultracode && <Zap className="size-3 shrink-0 text-gold" aria-hidden="true" />}
         </Quiet>
         <Quiet
@@ -224,29 +223,24 @@ function Quiet({
       aria-label={ariaLabel}
       title={title}
       className={cn(
-        'press h-7 min-w-0 items-center gap-1 rounded-lg px-2 text-[12.5px] font-semibold whitespace-nowrap transition-colors tap:h-8',
+        'press h-10 min-w-0 items-center gap-1.5 rounded-full px-3.5 text-[14.5px] font-semibold whitespace-nowrap transition-colors tap:h-11 sm:text-[13.5px]',
         hideOnPhone ? 'hidden sm:inline-flex' : 'inline-flex',
         tone === 'danger'
-          ? 'text-danger hover:bg-danger-soft'
+          ? 'bg-danger-soft text-danger'
           : tone === 'gold'
-            ? 'text-gold hover:bg-gold-soft'
-            : 'text-ink-soft hover:bg-surface-2 hover:text-ink',
+            ? 'bg-gold-soft text-gold'
+            : 'bg-ink/[0.07] text-ink hover:bg-ink/[0.12]',
         className,
       )}
     >
       {children}
-      <ChevronDown className="size-3 shrink-0 opacity-50" aria-hidden="true" />
     </button>
   );
 }
 
-/** The meter's ring: radius in a 14-unit box, and its length. */
-const RING_R = 5.25;
-const RING_LENGTH = 2 * Math.PI * RING_R;
-
 /**
- * How full the context window was after the last turn (Claude Code's own usage report): a ring and a
- * percentage, gold from 80 % and red from 95 %. The token counts show on hover, keyboard focus or tap.
+ * How full the context window was after the last turn (Claude Code's own usage report): a small bar
+ * (its track a lighter step of the same colour) and a percentage, gold from 80 % and red from 95 %. The token counts show on hover, keyboard focus or tap.
  */
 function ContextMeter({ context }: { context: NonNullable<ChatSession['context']> }) {
   const [open, setOpen] = useState(false);
@@ -283,19 +277,13 @@ function ContextMeter({ context }: { context: NonNullable<ChatSession['context']
         )}
       >
         {pct !== null && (
-          <svg viewBox="0 0 14 14" className="size-3.5 shrink-0 -rotate-90" aria-hidden="true">
-            <circle cx="7" cy="7" r={RING_R} fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
-            <circle
-              cx="7"
-              cy="7"
-              r={RING_R}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeDasharray={RING_LENGTH}
-              strokeDashoffset={RING_LENGTH * (1 - pct / 100)}
-            />
-          </svg>
+          // The fill carries how full it is: accent, then gold from 80 %, red from 95 %.
+          <span
+            className={cn('relative block h-1.5 w-9 overflow-hidden rounded-full bg-current/20', tone === 'danger' ? 'text-danger' : tone === 'gold' ? 'text-gold' : 'text-accent')}
+            aria-hidden="true"
+          >
+            <span className="absolute inset-y-0 left-0 rounded-full bg-current" style={{ width: `${Math.max(pct, 4)}%` }} />
+          </span>
         )}
         <span>
           <span className="hidden sm:inline">Context </span>

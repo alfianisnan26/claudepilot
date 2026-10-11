@@ -3,6 +3,7 @@ import type { ChatEvent, ChatSession } from '@portal/contracts';
 import { CircleCheck } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
+import { Link } from 'react-router';
 import { formatTokens, formatUsd } from './shared';
 import { formatSeconds } from './ToolRows';
 
@@ -117,6 +118,9 @@ export function UsageDialog({ open, onClose, events, session }: { open: boolean;
           {context.windowTokens ? ` of ${formatTokens(context.windowTokens)} (${Math.round((context.usedTokens / context.windowTokens) * 100)}%)` : ''} after the last turn.
         </p>
       )}
+      <Link to="/admin/usage" onClick={onClose} className="mt-3 inline-block text-[13px] font-semibold text-ink underline underline-offset-2">
+        All usage over time
+      </Link>
       {turns.length > 0 && (
         <ol className="mt-4 flex flex-col divide-y divide-line rounded-2xl border border-line">
           {[...turns].reverse().map((u, i) => (

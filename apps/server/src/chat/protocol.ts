@@ -13,7 +13,19 @@ export interface RawImage {
 
 /** A transcript event ready to store: a {@link ChatEvent} without the fields the store assigns (seq,
  *  at), plus the raw identifiers the controller persists in the event's own columns. */
+/** One model's running totals for the process, from a result's `modelUsage` (sub-agents included). */
+export interface ModelTotals {
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  costUsd: number;
+}
+
 export type StoredEvent = Omit<ChatEvent, 'seq' | 'at'> & {
+  /** For `result`: each model's running totals, so the controller can tell what this turn used. */
+  modelTotals?: ModelTotals[];
   uuid?: string;
   parentToolUseId?: string | null;
   requestId?: string;
@@ -463,6 +475,21 @@ function parseResult(obj: Record<string, unknown>): ParsedLine {
       cacheWrite: tokens(usage.cache_creation_input_tokens),
     };
   }
+  const models: ModelTotals[] = [];
+  for (const [model, entry] of Object.entries(asObj(obj.modelUsage) ?? {})) {
+    const e = asObj(entry);
+    if (!e) continue;
+    const cost = asNum(e.costUSD);
+    models.push({
+      model,
+      input: tokens(e.inputTokens),
+      output: tokens(e.outputTokens),
+      cacheRead: tokens(e.cacheReadInputTokens),
+      cacheWrite: tokens(e.cacheCreationInputTokens),
+      costUsd: cost !== null && cost > 0 ? cost : 0,
+    });
+  }
+  if (models.length) ended.modelTotals = models;
   const stored: StoredEvent[] = [ended];
   if (errored) stored.push({ kind: 'error', text: text ?? `The turn ended with ${subtype ?? 'an error'}.` });
   const patch: NonNullable<ParsedLine['sessionPatch']> = { state: 'idle', turnsDelta: 1 };

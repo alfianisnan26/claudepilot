@@ -79,6 +79,16 @@ export function createChatRoutes(controller: ChatController): Hono {
 }
 
 /** Claudes on a workspace. Mount at `/api/chat/claudes`. */
+/** `GET /api/chat/usage?range=&claudeId=&tz=`: usage over time, for the Usage charts. */
+export function createUsageRoutes(controller: ChatController): Hono {
+  const usage = new Hono();
+  usage.get('/', (c) => {
+    const tz = Number(c.req.query('tz'));
+    return c.json(success(controller.usage(c.req.query('range'), { claudeId: c.req.query('claudeId') || undefined, tzOffsetMin: Number.isFinite(tz) ? tz : 0 })));
+  });
+  return usage;
+}
+
 export function createClaudeRoutes(controller: ChatController): Hono {
   const claudes = new Hono();
   claudes.get('/', (c) => c.json(success(controller.listClaudes(c.req.query('workspaceId') ?? ''))));

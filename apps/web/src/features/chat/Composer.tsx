@@ -1,6 +1,6 @@
 import { cn, Spinner, useMediaQuery, useToast } from '@isnanme/ui';
 import { CHAT_IMAGE_TYPES, CHAT_MAX_IMAGE_BYTES, CHAT_MAX_IMAGES, type ChatAttachment, type ChatImageType } from '@portal/contracts';
-import { ArrowUp, ChevronUp, ImagePlus, Paperclip, X } from 'lucide-react';
+import { ArrowUp, ChevronUp, ImagePlus, Plus, Square, X } from 'lucide-react';
 import {
   useEffect,
   useImperativeHandle,
@@ -10,6 +10,7 @@ import {
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
+  type ReactNode,
   type Ref,
 } from 'react';
 import { isTrustDeclined } from './TrustSheet';
@@ -42,8 +43,8 @@ function readDataUrl(file: File): Promise<string> {
 }
 
 /**
- * The message box. A textarea that grows with its content, a paperclip for images (paste and drop
- * work too) and Send. On a mouse-and-keyboard screen Enter sends and Shift+Enter makes a newline; on
+ * The message box, one floating frosted card: the text on top, growing with what's written, and a row
+ * under it with + for images (paste and drop work too), the session's controls (`accessory`) and Send. On a mouse-and-keyboard screen Enter sends and Shift+Enter makes a newline; on
  * a touch screen Enter makes a newline (so the on-screen keyboard's return key doesn't fire off
  * half-written messages) and Send is the way to send. Cmd/Ctrl+Enter always sends.
  *
@@ -56,11 +57,17 @@ export function Composer({
   onSend,
   connected,
   working,
+  onStop,
+  accessory,
 }: {
   ref?: Ref<ComposerHandle>;
   onSend: (text: string, opts: ChatSendOptions) => Promise<void>;
   connected: boolean;
   working: boolean;
+  /** While a turn runs and nothing is written, Send becomes Stop. */
+  onStop?: () => void;
+  /** The session's controls (model and effort, mode, context), in the row under the text. */
+  accessory?: ReactNode;
 }) {
   const toast = useToast();
   const [text, setText] = useState('');
@@ -80,14 +87,12 @@ export function Composer({
     count.current.attached = attachments.length;
   }, [attachments]);
 
-  // Grow to fit the text, up to a cap, then scroll inside. The height is border-box: scrollHeight
-  // leaves the border out, so it's added back (one line is then exactly the buttons' 44 px).
+  // Grow to fit the text, up to about a third of the screen, then scroll inside.
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
     el.style.height = 'auto';
-    const border = el.offsetHeight - el.clientHeight;
-    el.style.height = `${Math.min(el.scrollHeight + border, 200)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, Math.max(120, Math.round(window.innerHeight * 0.32)))}px`;
   }, [text]);
 
   // A file dropped beside the composer would make the browser open it and leave the session.
@@ -209,47 +214,31 @@ export function Composer({
   };
 
   return (
-    <div className="relative flex flex-col gap-2" {...drag}>
-      {(attachments.length > 0 || reading > 0) && (
-        <ul aria-label="Images to send" className="flex flex-wrap gap-2 pt-1.5">
-          {attachments.map((a) => (
-            <li key={a.id} className="relative">
-              <img src={a.preview} alt={a.name} className="size-16 rounded-xl border border-line bg-surface-2 object-cover" />
-              <button
-                type="button"
-                onClick={() => setAttachments((list) => list.filter((x) => x.id !== a.id))}
-                aria-label={`Remove ${a.name}`}
-                className="press absolute -top-1.5 -right-1.5 flex size-6 items-center justify-center rounded-full bg-primary text-primary-ink shadow-card tap:size-7"
-              >
-                <X className="size-3.5" />
-              </button>
-            </li>
-          ))}
-          {reading > 0 && (
-            <li className="flex size-16 items-center justify-center rounded-xl border border-line bg-surface-2 text-muted">
-              <Spinner className="size-4" />
-              <span className="sr-only">Reading the image…</span>
-            </li>
-          )}
-        </ul>
-      )}
-      {/* One row height for the box and every button (44 px, the kit's field and tap size), bottoms aligned
-          as the box grows. */}
-      <div className="flex items-end gap-2">
-        <button type="button" aria-label="Attach images" title="Attach images" onClick={() => fileInput.current?.click()} className={cn(ROUND, GHOST)}>
-          <Paperclip className="size-[18px]" />
-        </button>
-        <input
-          ref={fileInput}
-          type="file"
-          accept={ACCEPT}
-          multiple
-          hidden
-          onChange={(e) => {
-            addFiles(Array.from(e.target.files ?? []));
-            e.target.value = '';
-          }}
-        />
+    <div className="relative" {...drag}>
+      <div className="glass-card rounded-[28px]">
+        {(attachments.length > 0 || reading > 0) && (
+          <ul aria-label="Images to send" className="flex flex-wrap gap-2 px-3.5 pt-3.5">
+            {attachments.map((a) => (
+              <li key={a.id} className="relative">
+                <img src={a.preview} alt={a.name} className="size-16 rounded-2xl bg-surface-2 object-cover" />
+                <button
+                  type="button"
+                  onClick={() => setAttachments((list) => list.filter((x) => x.id !== a.id))}
+                  aria-label={`Remove ${a.name}`}
+                  className="press absolute -top-1.5 -right-1.5 flex size-6 items-center justify-center rounded-full bg-ink text-bg shadow-card tap:size-7"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </li>
+            ))}
+            {reading > 0 && (
+              <li className="flex size-16 items-center justify-center rounded-2xl bg-surface-2 text-muted">
+                <Spinner className="size-4" />
+                <span className="sr-only">Reading the image…</span>
+              </li>
+            )}
+          </ul>
+        )}
         <textarea
           ref={box}
           rows={1}
@@ -259,24 +248,45 @@ export function Composer({
           onPaste={onPaste}
           aria-label="Message"
           placeholder={working ? 'Steer Claude…' : 'Message Claude…'}
-          className="block max-h-[200px] min-h-11 min-w-0 flex-1 resize-none rounded-[22px] border border-line/70 glass-field px-4 py-[9px] text-base leading-6 text-ink outline-none transition-[border-color,box-shadow] placeholder:text-muted/70 hover:border-line-strong focus:border-ink/40 focus:ring-4 focus:ring-[var(--ring)]"
+          className="block min-h-[52px] w-full resize-none bg-transparent px-[18px] pt-[15px] pb-1 text-[16.5px] leading-[1.45] text-ink outline-none placeholder:text-muted sm:text-[15.5px]"
         />
-        {working ? (
-          <SteerButton canSend={canSend} connected={connected} showKeys={!touch} onSend={submit} />
-        ) : (
-          <button type="button" aria-label="Send message" disabled={!canSend} onClick={() => submit()} className={cn(ROUND, PRIMARY)}>
-            <ArrowUp className="size-[18px]" />
+        <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-2.5">
+          <button type="button" aria-label="Attach images" title="Attach images" onClick={() => fileInput.current?.click()} className={cn(ROUND, GHOST)}>
+            <Plus className="size-5" />
           </button>
-        )}
+          <input
+            ref={fileInput}
+            type="file"
+            accept={ACCEPT}
+            multiple
+            hidden
+            onChange={(e) => {
+              addFiles(Array.from(e.target.files ?? []));
+              e.target.value = '';
+            }}
+          />
+          <div className="flex min-w-0 flex-1 items-center">{accessory}</div>
+          {working && canSend ? (
+            <SteerButton canSend={canSend} connected={connected} showKeys={!touch} onSend={submit} />
+          ) : working && onStop ? (
+            <button type="button" aria-label="Stop" title="Stop" onClick={onStop} className={cn(ROUND, PRIMARY)}>
+              <Square className="size-3.5 fill-current" />
+            </button>
+          ) : (
+            <button type="button" aria-label="Send message" disabled={!canSend} onClick={() => submit()} className={cn(ROUND, canSend ? PRIMARY : IDLE)}>
+              <ArrowUp className="size-5" strokeWidth={2.25} />
+            </button>
+          )}
+        </div>
       </div>
       {dragging && (
-        <div className="pointer-events-none absolute -inset-1.5 z-10 flex items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-ink/30 bg-surface/90 text-sm font-semibold text-ink-soft">
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-[28px] border-2 border-dashed border-ink/30 bg-surface/90 text-sm font-semibold text-ink-soft">
           <ImagePlus className="size-4" aria-hidden="true" />
           Drop images to attach
         </div>
       )}
       {!connected && (
-        <p className="px-1 text-[12px] text-muted" aria-live="polite">
+        <p className="px-3 pt-1.5 text-[12px] text-muted" aria-live="polite">
           Reconnecting…
         </p>
       )}
@@ -284,12 +294,14 @@ export function Composer({
   );
 }
 
-/** The composer's row height, on every screen: the kit's field height and tap size. */
-const ROUND = 'press inline-flex size-11 shrink-0 select-none items-center justify-center rounded-full disabled:pointer-events-none disabled:opacity-50';
+/** The card's round buttons: 40 px (44 px taps on touch screens). */
+const ROUND = 'press inline-flex size-10 shrink-0 select-none items-center justify-center rounded-full transition-colors tap:size-11 disabled:pointer-events-none';
 /** The kit's button looks (its `size` can't be overridden: its `cn` joins classes, it doesn't merge them). */
-const GHOST = 'text-ink-soft hover:bg-surface-2 hover:text-ink';
-const PRIMARY = 'bg-primary text-primary-ink hover:opacity-90';
-const SPLIT = 'inline-flex h-11 items-center justify-center bg-primary text-[13px] font-semibold text-primary-ink transition-opacity hover:opacity-90';
+const GHOST = 'bg-ink/[0.07] text-ink-soft hover:bg-ink/[0.12] hover:text-ink';
+const PRIMARY = 'bg-ink text-bg hover:opacity-90';
+/** Send with nothing to send yet. */
+const IDLE = 'bg-ink/[0.07] text-muted';
+const SPLIT = 'inline-flex h-10 items-center justify-center bg-ink text-[13.5px] font-semibold text-bg transition-opacity hover:opacity-90 tap:h-11';
 
 /**
  * Send while a turn runs: "Steer" (the message reaches Claude at its next step), and a menu that also
@@ -355,7 +367,7 @@ function SteerButton({
         aria-label="More ways to send"
         aria-haspopup="menu"
         aria-expanded={open}
-        className={cn(SPLIT, 'w-9 rounded-r-full border-l border-primary-ink/20 disabled:pointer-events-none')}
+        className={cn(SPLIT, 'w-9 rounded-r-full border-l border-bg/20 disabled:pointer-events-none')}
       >
         <ChevronUp className={cn('size-4 transition-transform', open && 'rotate-180')} aria-hidden="true" />
       </button>

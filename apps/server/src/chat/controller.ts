@@ -34,6 +34,7 @@ import {
   type ChatServerMessage,
   type ChatSession,
   type ChatTask,
+  type ChatUsageReport,
   type CreateChatSessionRequest,
   type WorkspaceClaude,
 } from '@portal/contracts';
@@ -59,6 +60,7 @@ import {
   userLine,
   type AppliedSettings,
   type ControlResponse,
+  type ModelTotals,
   type ParsedLine,
   type RawImage,
   type StoredEvent,
@@ -66,6 +68,7 @@ import {
 import { redact, StreamRedactor } from './redact.js';
 import { ChatStore, sessionCwd, type ChatSessionPatch, type ChatSessionRow, type InputState } from './store.js';
 import { FOLDER_CHANGED, scanFolder, untrustedError } from './trust.js';
+import { usageReport } from './usage.js';
 
 /** The permission mode every process starts in (`--permission-mode`); others are applied after. */
 const START_MODE = 'default';
@@ -224,6 +227,8 @@ export class ChatController {
   readonly #idleTimers = new Map<string, NodeJS.Timeout>();
   /** Per session: the running cost its process last reported, so each `result` can say what its turn cost. */
   readonly #costBase = new Map<string, number>();
+  /** Per session: each model's running totals its process last reported, for each turn's usage metrics. */
+  readonly #modelBase = new Map<string, Map<string, ModelTotals>>();
   /**
    * Per workspace: how many times its credentials began to change ({@link endWorkspaceSessions}). A
    * launch that began before the latest change gives up, and stops a process it already started.
@@ -1066,6 +1071,7 @@ export class ChatController {
       });
       this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
       this.#costBase.set(sessionId, 0); // a new process counts its cost from zero
+      this.#modelBase.set(sessionId, new Map());
     } else if (code === 3) {
       // Already running (run.lock held): attach to the existing process on its current segment.
       this.#chat.patchSession(sessionId, { process: 'live', state: 'idle', endedReason: null });
@@ -1335,6 +1341,7 @@ export class ChatController {
         ev.turnCostUsd = ev.costUsd >= base ? ev.costUsd - base : ev.costUsd;
         this.#costBase.set(sessionId, ev.costUsd);
       }
+      if (ev.kind === 'result') this.#recordTurn(sessionId, ev);
       // Name each result from its own call (parallel calls finish in any order).
       if (ev.kind === 'tool_use' && ev.toolUseId && ev.toolName) this.#calls(sessionId).set(ev.toolUseId, ev.toolName);
       if (ev.kind === 'tool_result' && ev.toolUseId && ev.toolName === undefined) ev.toolName = this.#toolFor(sessionId, ev.toolUseId);
@@ -1670,6 +1677,52 @@ export class ChatController {
     const why = reply.ok ? usageVerdict(reply.response) : CREDENTIAL.refused;
     if (why) return this.#endCredential(sessionId, why);
     this.#armIdle(sessionId); // a sleep this check held off may go ahead now
+  }
+
+  /**
+   * A finished turn as usage metrics (Usage charts): one row per model, from the change in each model's
+   * running totals since the last turn, so sub-agents count with the request that started them. The
+   * result's tokens become that sum too (Claude Code's own `usage` counts the main agent only). Runs
+   * before the result is stored, so "since the last result" means this turn.
+   */
+  #recordTurn(sessionId: string, ev: StoredEvent): void {
+    try {
+      const row = this.#chat.row(sessionId);
+      if (!row) return;
+      const base = this.#modelBase.get(sessionId) ?? new Map((this.#chat.lastResultModelTotals(sessionId) ?? []).map((m) => [m.model, m]));
+      const turn: ModelTotals[] = [];
+      for (const cur of ev.modelTotals ?? []) {
+        const was = base.get(cur.model);
+        // A total lower than before means a new process, counting from zero.
+        const fresh = !was || cur.input < was.input || cur.output < was.output || cur.cacheRead < was.cacheRead || cur.cacheWrite < was.cacheWrite || cur.costUsd < was.costUsd - 1e-9;
+        const d = fresh
+          ? cur
+          : { model: cur.model, input: cur.input - was.input, output: cur.output - was.output, cacheRead: cur.cacheRead - was.cacheRead, cacheWrite: cur.cacheWrite - was.cacheWrite, costUsd: cur.costUsd - was.costUsd };
+        if (d.input || d.output || d.cacheRead || d.cacheWrite || d.costUsd > 0) turn.push(d);
+      }
+      if (ev.modelTotals?.length) this.#modelBase.set(sessionId, new Map(ev.modelTotals.map((m) => [m.model, m])));
+      if (turn.length) {
+        ev.tokens = turn.reduce(
+          (t, m) => ({ input: t.input + m.input, output: t.output + m.output, cacheRead: t.cacheRead + m.cacheRead, cacheWrite: t.cacheWrite + m.cacheWrite }),
+          { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        );
+      }
+      const shares: ModelTotals[] = turn.length
+        ? turn
+        : [{ model: row.model ?? 'unknown', input: ev.tokens?.input ?? 0, output: ev.tokens?.output ?? 0, cacheRead: ev.tokens?.cacheRead ?? 0, cacheWrite: ev.tokens?.cacheWrite ?? 0, costUsd: ev.turnCostUsd ?? 0 }];
+      const agents = this.#chat.agentsSinceLastResult(sessionId);
+      this.#chat.recordUsage(
+        { atMs: Date.now(), sessionId, workspaceId: row.workspace_id, claudeId: row.claude_id ?? null },
+        shares.map((m, i) => ({ ...m, requests: i === 0 ? 1 : 0, agents: i === 0 ? agents : 0, durationMs: i === 0 ? (ev.durationMs ?? 0) : 0 })),
+      );
+    } catch {
+      // Metrics never get in the way of the transcript.
+    }
+  }
+
+  /** Usage over a window, for the Usage charts. */
+  usage(range: unknown, opts: { claudeId?: string; tzOffsetMin?: number } = {}): ChatUsageReport {
+    return usageReport(this.#chat, range, opts);
   }
 
   /** Whether the workspace's sessions run on its Account Pool's keys (else on their Claude's own sign-in). */

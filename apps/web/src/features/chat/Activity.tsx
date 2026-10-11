@@ -1,5 +1,5 @@
-import { cn, ease, Spinner } from '@isnanme/ui';
-import { ChevronRight, Sparkles } from 'lucide-react';
+import { cn, ease } from '@isnanme/ui';
+import { ChevronRight } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { formatSeconds, groupLabel, shortTarget, toolLabel, type TranscriptRow } from './ToolRows';
@@ -26,22 +26,25 @@ const toolCount = (rows: TranscriptRow[]) => rows.reduce((n, r) => n + (r.type =
 const failedCount = (rows: TranscriptRow[]) => rows.reduce((n, r) => n + (r.type === 'tool' && r.result?.isError ? 1 : 0), 0);
 const thoughtMs = (rows: TranscriptRow[]) => rows.reduce((n, r) => n + (r.type === 'thinking' ? (r.event.durationMs ?? 0) : 0), 0);
 
-/** "Worked for 5 s · 3 steps", "Thought for 4 s", or while it runs, the step under way. */
-function summary(rows: TranscriptRow[], usage: TurnUsage | null): string {
+/** The one tool a row used, by name ("File Write"), when it used just one. */
+function onlyTool(rows: TranscriptRow[]): string | null {
+  const calls = rows.flatMap((r) => (r.type === 'tool' ? [r.call] : r.type === 'group' ? r.tools.map((t) => t.call) : []));
+  return calls.length === 1 && calls[0]!.toolName ? toolLabel(calls[0]!.toolName) : null;
+}
+
+/** "Used File Write", "Used 4 tools", "Thought for 4 s": what the turn did, once it's done. */
+function summary(rows: TranscriptRow[]): string {
   const tools = toolCount(rows);
-  if (!tools) {
-    const ms = thoughtMs(rows);
-    if (rows.every((r) => r.type === 'thinking')) return ms >= 1000 ? `Thought for ${formatSeconds(ms)}` : 'Thought';
-  }
-  const took = usage?.durationMs ?? null;
-  const worked = took !== null && took >= 1000 ? `Worked for ${formatSeconds(took)}` : 'Worked';
-  return tools ? `${worked} · ${tools} ${tools === 1 ? 'step' : 'steps'}` : worked;
+  if (tools) return onlyTool(rows) ? `Used ${onlyTool(rows)}` : `Used ${tools} tools`;
+  const ms = thoughtMs(rows);
+  if (rows.some((r) => r.type === 'thinking')) return ms >= 1000 ? `Thought for ${formatSeconds(ms)}` : 'Thought';
+  return 'Notes';
 }
 
 /**
- * A turn's work in one row (chat PRD FR5): thinking, tool calls and the notes between them fold into a
- * pill above the reply. While the turn runs it names the step under way; done, it says how long it
- * worked and how many steps, with failed ones counted. Tapping opens the steps (each opens to its
+ * A turn's work in one quiet line (chat PRD FR5): thinking, tool calls and the notes between them fold
+ * into "Used 4 tools ›" above the reply. While the turn runs it names the step under way, shimmering;
+ * done, it says what was used, with failed steps counted. Tapping opens the steps (each opens to its
  * details) and the turn's usage; Show all details opens every one.
  */
 export function ActivityBlock({
@@ -63,7 +66,7 @@ export function ActivityBlock({
   const open = tapped ?? details;
   const id = useId();
   const failed = failedCount(rows);
-  const label = live ? stepLabel(rows[rows.length - 1]!) : summary(rows, usage);
+  const label = live ? stepLabel(rows[rows.length - 1]!) : summary(rows);
   return (
     <div className="flex max-w-full flex-col items-start">
       <button
@@ -71,9 +74,8 @@ export function ActivityBlock({
         aria-expanded={open}
         aria-controls={open ? id : undefined}
         onClick={() => setTapped(!open)}
-        className="press inline-flex max-w-full items-center gap-2 rounded-full border border-line/60 bg-surface-2/50 py-1 pr-2.5 pl-2 text-[12.5px] text-ink-soft transition-colors hover:bg-surface-2"
+        className="press -mx-1 inline-flex max-w-full items-center gap-1.5 rounded-lg px-1 py-1 text-[15.5px] text-muted transition-colors hover:text-ink-soft sm:text-[14.5px]"
       >
-        {live ? <Spinner className="size-3.5 shrink-0" /> : <Sparkles className="size-3.5 shrink-0 text-muted" aria-hidden="true" />}
         {/* The live line crossfades from step to step. */}
         <span className="relative min-w-0 overflow-hidden">
           <AnimatePresence mode="popLayout" initial={false}>
@@ -83,9 +85,8 @@ export function ActivityBlock({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.18, ease }}
-              className="block truncate"
+              className={cn('block truncate', live && 'shimmer')}
             >
-              {live && <span className="text-muted">Working · </span>}
               {label}
             </motion.span>
           </AnimatePresence>
@@ -96,7 +97,7 @@ export function ActivityBlock({
             {failed} failed
           </span>
         )}
-        <ChevronRight className={cn('size-3.5 shrink-0 opacity-60 transition-transform duration-200', open && 'rotate-90')} aria-hidden="true" />
+        <ChevronRight className={cn('size-4 shrink-0 opacity-70 transition-transform duration-200', open && 'rotate-90')} aria-hidden="true" />
       </button>
       <AnimatePresence initial={false}>
         {open && (
@@ -109,9 +110,9 @@ export function ActivityBlock({
             transition={{ duration: 0.24, ease }}
             className="w-full overflow-hidden"
           >
-            <div className="mt-2 ml-3 flex flex-col gap-1.5 border-l border-line pl-3">
+            <div className="mt-1.5 ml-1 flex flex-col gap-2 border-l border-line/80 pl-3.5">
               {rows.map(render)}
-              {usage && <p className="pt-0.5 pl-1 text-[11.5px] text-muted tabular-nums">{usageLine(usage)}</p>}
+              {usage && <p className="pt-0.5 pl-1 text-[12.5px] text-muted tabular-nums">{usageLine(usage)}</p>}
             </div>
           </motion.div>
         )}
