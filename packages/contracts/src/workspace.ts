@@ -1,7 +1,7 @@
 /** How a target runs workspaces. */
-export type RuntimeKind = 'docker' | 'kubernetes';
+export type RuntimeKind = 'docker' | 'kubernetes' | 'local';
 
-/** A place workspaces can run: a Docker daemon or a Kubernetes namespace. */
+/** A place workspaces can run: a Docker daemon, a Kubernetes namespace, or the portal's own machine. */
 export interface WorkspaceTarget {
   id: string;
   label: string;

@@ -75,7 +75,15 @@ Targets (each shows up when reachable):
 | `docker` | `PORTAL_DOCKER_SOCKET` (`/var/run/docker.sock`; in the devcontainer, its DinD daemon) | container `claudepilot-<name>` + volume `claudepilot-<name>-home` |
 | `docker-host` | `PORTAL_DOCKER_HOST_SOCKET` (`/var/run/docker-host.sock`; the Mac's Docker Desktop) | same |
 | `kubernetes` | current kubeconfig context, namespace `PORTAL_K8S_NAMESPACE` (`claudepilot-workspaces`) | Deployment `ws-<name>` (scaled 1/0 to start/stop) + PVC `ws-<name>-home` |
+| `local` | the machine the portal runs on (off unless `PORTAL_LOCAL_ENABLED=true`) | one workspace, `PORTAL_LOCAL_NAME` (`local`), as the portal's own user |
 
+- **This machine** (`local`) is the host itself as a single workspace. It starts switched off: Start
+  allows shells and commands, Stop refuses them again (the state is kept in
+  `PORTAL_DATA_DIR/local-workspace.json`). It can't be created or removed, and it needs
+  `@lydell/node-pty` for the terminal. It is **off by default** because anyone with the server code
+  gets a shell as the portal's user: turn it on only where the portal isn't reachable by others.
+  Account-pool delivery writes `/home/node` paths into the portal user's home, and anything under
+  `/etc` needs the portal to run as root.
 - The runtimes are the record: workspaces are found by label, so a portal restart loses nothing.
   Creates in progress (and failed ones, until removed) are saved in `PORTAL_DATA_DIR` and picked up
   again after a restart.

@@ -24,6 +24,7 @@ import { poolEligibility } from './chat/eligibility.js';
 import { hostInstaller } from './chat/install.js';
 import { attachChat } from './chat/socket.js';
 import { KubernetesRuntime } from './workspaces/kubernetes.js';
+import { LocalRuntime } from './workspaces/local.js';
 import { Workspaces } from './workspaces/manager.js';
 import type { Runtime } from './workspaces/runtime.js';
 
@@ -76,6 +77,7 @@ if (ws.kubernetes.enabled) {
     console.error(`[workspaces] kubernetes target off: ${(e as Error).message}`);
   }
 }
+if (ws.local.enabled) runtimes.push(new LocalRuntime({ name: ws.local.name, state: new JsonFile(`${config.paths.data}/local-workspace.json`, {}) }));
 const workspaces = new Workspaces(runtimes, new JsonFile(`${config.paths.data}/pending-creates.json`, []));
 void workspaces.resume().catch((e: unknown) => console.error(`[workspaces] resume failed: ${(e as Error).message}`));
 

@@ -34,6 +34,14 @@ export const config = {
     /** Image for Docker targets; built from images/workspace when it's this tag and missing. */
     dockerImage: env('PORTAL_WORKSPACE_IMAGE') ?? 'claudepilot-workspace:latest',
     imageContext: `${root}images/workspace`,
+    /**
+     * The machine the portal runs on, as one workspace. Off unless asked for: anyone with the
+     * server code gets a shell as the portal's user.
+     */
+    local: {
+      enabled: env('PORTAL_LOCAL_ENABLED') === 'true',
+      name: env('PORTAL_LOCAL_NAME') ?? 'local',
+    },
     kubernetes: {
       /** Off when there's no kubeconfig and we're not in a cluster. */
       enabled:

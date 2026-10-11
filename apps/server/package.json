@@ -6,7 +6,7 @@
   "description": "Portal backend: Hono on Node; serves the API and the web app",
   "scripts": {
     "dev": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx watch --env-file-if-exists=../../.env --clear-screen=false --ignore '../web/**' --ignore '../../node_modules/**' src/index.ts",
-    "build": "esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --target=node22 --external:hono --external:@hono/node-server --external:@isnanme/* --external:vite --external:dockerode --external:@kubernetes/client-node --external:ws --external:tar-stream --outdir=dist",
+    "build": "esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --target=node22 --external:hono --external:@hono/node-server --external:@isnanme/* --external:vite --external:dockerode --external:@kubernetes/client-node --external:@lydell/node-pty --external:ws --external:tar-stream --outdir=dist",
     "start": "NODE_ENV=production node --disable-warning=ExperimentalWarning dist/index.js",
     "typecheck": "tsc --noEmit",
     "portal": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx --env-file-if-exists=../../.env src/cli.ts",
@@ -17,6 +17,7 @@
     "@hono/node-server": "^1.19.5",
     "@isnanme/core": "^0.1.0",
     "@kubernetes/client-node": "^2.0.0",
+    "@lydell/node-pty": "^1.2.0-beta.15",
     "@portal/contracts": "*",
     "dockerode": "^5.0.1",
     "hono": "^4.10.1",

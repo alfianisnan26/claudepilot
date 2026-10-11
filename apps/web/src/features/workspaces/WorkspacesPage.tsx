@@ -268,6 +268,7 @@ export function WorkspacesPage() {
                     key={w.id}
                     w={w}
                     targetLabel={targetLabel(w.target)}
+                    removable={targets.find((t) => t.id === w.target)?.kind !== 'local'}
                     usage={usage.get(w.id)}
                     busy={busy.has(w.id)}
                     onStart={() => void act(w, 'start')}
@@ -372,6 +373,7 @@ function TargetStrip({ targets, onRefresh }: { targets: WorkspaceTarget[]; onRef
 function WorkspaceRow({
   w,
   targetLabel,
+  removable,
   usage,
   busy,
   onStart,
@@ -385,6 +387,8 @@ function WorkspaceRow({
 }: {
   w: Workspace;
   targetLabel: string;
+  /** False for this machine: it is switched off, not removed. */
+  removable: boolean;
   usage?: WorkspaceUsage;
   busy: boolean;
   onStart: () => void;
@@ -414,7 +418,7 @@ function WorkspaceRow({
         ]
       : []),
     ...(w.delivery?.status === 'frozen' ? [{ label: 'Adopt workspace', icon: <ShieldCheck className="size-4" />, onSelect: onAdopt }] : []),
-    { label: 'Remove', icon: <Trash2 className="size-4" />, onSelect: onRemove, danger: true, disabled: w.status === 'creating' },
+    { label: 'Remove', icon: <Trash2 className="size-4" />, onSelect: onRemove, danger: true, disabled: w.status === 'creating' || !removable },
   ];
   const delivery = w.delivery ? DELIVERY[w.delivery.status] : undefined;
   const account = w.account;
