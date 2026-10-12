@@ -14,6 +14,7 @@ import { personasApi } from '@/features/personas/api';
 import { PoolChoice } from '@/features/pools/PoolPicker';
 import { multiPoolTabs, type MultiPoolTab } from '@/features/pools/registry';
 import { api, ApiError } from '@/lib/api';
+import { connectApi } from '@/features/targets/api';
 
 type AddOns = Partial<Record<MultiPoolType, string[]>>;
 
@@ -55,19 +56,36 @@ export function NewWorkspaceDialog({
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // This machine is one workspace you start and stop; there is nothing to create on it.
-  const creatable = useMemo(() => targets.filter((t) => t.kind !== 'local'), [targets]);
+  // A single (an enrolled host or container) is one workspace that already exists: nothing to create on it either.
+  const creatable = useMemo(() => targets.filter((t) => t.kind !== 'local' && t.role !== 'single'), [targets]);
+  const [node, setNode] = useState('');
+  // Where new workspaces go when none is picked (Targets settings); read when the dialog opens.
+  const [defaultTarget, setDefaultTarget] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let current = true;
+    connectApi.settings().then(
+      (s) => current && setDefaultTarget(s.defaultTarget),
+      () => undefined,
+    );
+    return () => void (current = false);
+  }, [open]);
+  const picked = creatable.find((t) => t.id === target);
+  // The Node select exists for a cluster with more than one node; "Auto" lets the portal place it.
+  const pickable = (picked?.nodes ?? []).length > 1 ? picked!.nodes! : [];
 
   useEffect(() => {
     if (!open) return;
     setName('');
-    setTarget(creatable.find((t) => t.available)?.id ?? '');
+    setTarget((creatable.find((t) => t.id === defaultTarget && t.available) ?? creatable.find((t) => t.available))?.id ?? '');
+    setNode('');
     setCpus('2');
     setMemory('4096');
     setPoolId('');
     setAddOns({});
     setErrors({});
     setFormError(null);
-  }, [open, creatable]);
+  }, [open, creatable, defaultTarget]);
 
   // Persona PRD FR10: the default persona starts selected; picking "None" sends nothing.
   useEffect(() => {
@@ -94,6 +112,7 @@ export function NewWorkspaceDialog({
       await onCreate({
         name,
         target,
+        node: pickable.length && node ? node : undefined,
         cpus: cpus ? Number(cpus) : undefined,
         memoryMb: memory ? Number(memory) : undefined,
         accountPoolId: poolId || null,
@@ -143,15 +162,34 @@ export function NewWorkspaceDialog({
         <Select
           label="Runs on"
           value={target}
-          onChange={(v) => (setTarget(v), setErrors(({ target: _, ...rest }) => rest))}
-          options={creatable.map((t) => ({
-            value: t.id,
-            label: t.available ? `${t.label} · ${t.where}` : `${t.label} (unreachable)`,
-            disabled: !t.available,
-          }))}
+          onChange={(v) => (setTarget(v), setNode(''), setErrors(({ target: _, ...rest }) => rest))}
           placeholder="Pick a target"
           error={errors.target}
-        />
+        >
+          {(['scanned', 'enrolled'] as const).map((group) => {
+            const list = creatable.filter((t) => (t.source ?? 'scanned') === group);
+            if (list.length === 0) return null;
+            const option = (t: WorkspaceTarget) => (
+              <option key={t.id} value={t.id} disabled={!t.available}>
+                {t.available ? `${t.label} · ${t.where}` : `${t.label} (unreachable)`}
+              </option>
+            );
+            // One kind of target: no group label needed.
+            return creatable.every((t) => (t.source ?? 'scanned') === group) ? list.map(option) : (
+              <optgroup key={group} label={group === 'scanned' ? 'This portal' : 'Connected'}>
+                {list.map(option)}
+              </optgroup>
+            );
+          })}
+        </Select>
+        {pickable.length > 0 && (
+          <Select
+            label="Node"
+            value={node}
+            onChange={setNode}
+            options={[{ value: '', label: 'Auto' }, ...pickable.map((n) => ({ value: n.id, label: n.name, disabled: !n.connected || n.drained }))]}
+          />
+        )}
         <Select
           label="Account pool"
           value={poolId}

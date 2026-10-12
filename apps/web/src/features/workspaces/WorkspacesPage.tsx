@@ -12,12 +12,13 @@ import {
   type BadgeTone,
   type MenuItem,
 } from '@isnanme/ui';
-import type { AccountPool, DeliveryStatus, Workspace, WorkspaceStatus, WorkspaceTarget, WorkspaceUsage } from '@portal/contracts';
-import { Box, Boxes, Check, ChevronDown, ListChecks, Play, Plus, RefreshCw, ShieldCheck, SlidersHorizontal, Square, SquareTerminal, Trash2 } from 'lucide-react';
+import type { AccountPool, DeliveryStatus, RepoWorkspaceSummary, Workspace, WorkspaceStatus, WorkspaceTarget, WorkspaceUsage } from '@portal/contracts';
+import { Box, Boxes, Check, ChevronRight, ListChecks, Play, Plus, ShieldCheck, SlidersHorizontal, Square, SquareTerminal, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/Card';
 import { PageHeader } from '@/components/PageHeader';
+import { ReposChip, REPOS_CHIP_ATTR, reposLabel, useReposOverview } from '@/features/repos';
 import { api, errorText } from '@/lib/api';
 import { useLive, useLiveConnected } from '@/lib/live';
 import { formatBytes, formatDateTime, timeAgo } from '@/lib/format';
@@ -25,7 +26,8 @@ import { BulkAssignDialog } from './BulkAssignDialog';
 import { ConfigurationSheet } from './ConfigurationSheet';
 import { NewWorkspaceDialog } from './NewWorkspaceDialog';
 import { usageFractions } from './usage';
-import { WorkspaceSheet } from './WorkspaceSheet';
+import { WorkspaceSheet, type SheetTab } from './WorkspaceSheet';
+import { VersionChip } from '@/features/claudeversion/VersionChip';
 
 /** Delivery states worth showing on the row; synced and none stay quiet. */
 const DELIVERY: Partial<Record<DeliveryStatus, { label: string; tone: BadgeTone; busy?: boolean }>> = {
@@ -44,6 +46,7 @@ const STATUS: Record<WorkspaceStatus, { label: string; tone: BadgeTone; busy?: b
   stopping: { label: 'Stopping', tone: 'neutral', busy: true },
   stopped: { label: 'Stopped', tone: 'neutral' },
   error: { label: 'Error', tone: 'danger' },
+  unreachable: { label: 'Unreachable', tone: 'warning' },
 };
 
 /** Only while the live socket is down: faster while something is changing, so progress still shows. */
@@ -105,6 +108,8 @@ export function WorkspacesPage() {
   useLive('workspaces', (msg) => setList(msg.data));
   useLive('usage', (msg) => setUsage(new Map(msg.data.map((x) => [x.id, x]))), anyRunning);
   useLive('accounts', () => void api.accounts.pools().then(setPools, () => undefined));
+  // How many repositories of each workspace need a look: the chip on its row.
+  const repos = useReposOverview();
 
   // Without the live socket (reconnecting), poll: quickly while anything is mid-change, slowly otherwise.
   const anyBusy = !!list?.some((w) => STATUS[w.status].busy || w.delivery?.status === 'pending' || w.account?.state === 'removing');
@@ -213,7 +218,7 @@ export function WorkspacesPage() {
             >
               {anyAvailable
                 ? 'Each one is a container with Claude Code, git and gh, and a home folder that persists.'
-                : 'No target is reachable. Check the Docker sockets or the kubeconfig.'}
+                : 'No target is reachable. Check them on the Targets page.'}
             </EmptyState>
           ) : (
             <Card>
@@ -223,8 +228,10 @@ export function WorkspacesPage() {
                     key={w.id}
                     w={w}
                     targetLabel={targetLabel(w.target)}
-                    removable={targets.find((t) => t.id === w.target)?.kind !== 'local'}
+                    removable={!['local'].includes(targets.find((t) => t.id === w.target)?.kind ?? '') && targets.find((t) => t.id === w.target)?.role !== 'single'}
                     usage={usage.get(w.id)}
+                    repos={repos.byWorkspace.get(w.id)}
+                    reposTab={targets.find((t) => t.id === w.target)?.kind !== 'kubernetes'}
                     busy={busy.has(w.id)}
                     onStart={() => void act(w, 'start')}
                     onStop={() => void act(w, 'stop')}
@@ -245,13 +252,7 @@ export function WorkspacesPage() {
             </Card>
           )}
 
-          <TargetStrip
-            targets={targets}
-            onRefresh={async () => {
-              setTargets(await api.workspaces.targets(true));
-              await loadList();
-            }}
-          />
+          <TargetStrip targets={targets} />
         </div>
       )}
 
@@ -297,48 +298,18 @@ export function WorkspacesPage() {
   );
 }
 
-/** Where workspaces can run: one line, opened on demand (open from the start when none is reachable). */
-function TargetStrip({ targets, onRefresh }: { targets: WorkspaceTarget[]; onRefresh: () => Promise<void> }) {
+/** Where workspaces can run: one line to the Targets page, which has the list, the checks and Add. */
+function TargetStrip({ targets }: { targets: WorkspaceTarget[] }) {
   const reachable = targets.filter((t) => t.available).length;
-  const [open, setOpen] = useState(reachable === 0);
   return (
-    <div className="rounded-2xl border border-line">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-3 rounded-2xl px-3.5 py-2.5 text-left text-sm"
-      >
-        <span className={`size-2 shrink-0 rounded-full ${reachable ? 'bg-accent' : 'bg-danger'}`} />
+    <Link to="/admin/targets" className="press flex min-h-11 items-center gap-3 rounded-2xl border border-line px-3.5 py-2.5 text-sm">
+      <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${reachable ? 'bg-accent' : 'bg-danger'}`} />
+      <span className="min-w-0 flex-1 truncate">
         <span className="font-semibold">Targets</span>
-        <span className="min-w-0 flex-1 truncate text-muted">
-          {reachable} of {targets.length} reachable
-        </span>
-        <ChevronDown className={`size-4 shrink-0 text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && (
-        <div className="flex flex-col gap-2 border-t border-line p-2">
-          <div className="grid gap-2 sm:grid-cols-3">
-            {targets.map((t) => (
-              <div
-                key={t.id}
-                title={t.problem}
-                className="flex min-w-0 items-center gap-3 rounded-xl bg-surface px-3.5 py-2.5"
-              >
-                <span className={`size-2 shrink-0 rounded-full ${t.available ? 'bg-accent' : 'bg-danger'}`} />
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">{t.label}</p>
-                  <p className="truncate text-xs text-muted">{t.available ? t.where : (t.problem ?? 'Unreachable')}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <Button variant="ghost" size="sm" className="self-end" icon={<RefreshCw className="size-3.5" />} onClick={onRefresh}>
-            Check again
-          </Button>
-        </div>
-      )}
-    </div>
+        <span className="text-muted"> · {reachable} of {targets.length} reachable</span>
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-muted" aria-hidden="true" />
+    </Link>
   );
 }
 
@@ -347,6 +318,8 @@ function WorkspaceRow({
   targetLabel,
   removable,
   usage,
+  repos,
+  reposTab,
   busy,
   onStart,
   onStop,
@@ -361,6 +334,10 @@ function WorkspaceRow({
   /** False for this machine: it is switched off, not removed. */
   removable: boolean;
   usage?: WorkspaceUsage;
+  /** What the last scan found in its repositories (none: never scanned). */
+  repos?: RepoWorkspaceSummary;
+  /** Its sheet has a Repos tab (not for Kubernetes). */
+  reposTab: boolean;
   busy: boolean;
   onStart: () => void;
   onStop: () => void;
@@ -374,15 +351,17 @@ function WorkspaceRow({
   const status = STATUS[w.status];
   const running = w.status === 'running';
   const picking = selected !== null;
+  // Its target's tunnel is down: what needs the target waits (the row and its sheet say since when).
+  const unreachable = w.status === 'unreachable';
   const limits = [w.cpus && `${w.cpus} CPU`, w.memoryMb && formatBytes(w.memoryMb * 1024 * 1024)].filter(Boolean).join(' · ');
   const items: MenuItem[] = [
     running || w.status === 'starting'
       ? { label: 'Stop', icon: <Square className="size-4" />, onSelect: onStop, disabled: busy }
       : { label: 'Start', icon: <Play className="size-4" />, onSelect: onStart, disabled: busy || w.status !== 'stopped' },
     // Every pool type in one place, the account pool included (foundation PRD §10).
-    { label: 'Configuration…', icon: <SlidersHorizontal className="size-4" />, onSelect: onConfigure, disabled: w.status === 'creating' },
+    { label: 'Configuration…', icon: <SlidersHorizontal className="size-4" />, onSelect: onConfigure, disabled: w.status === 'creating' || unreachable },
     ...(w.delivery?.status === 'frozen' ? [{ label: 'Adopt workspace', icon: <ShieldCheck className="size-4" />, onSelect: onAdopt }] : []),
-    { label: 'Remove', icon: <Trash2 className="size-4" />, onSelect: onRemove, danger: true, disabled: w.status === 'creating' || !removable },
+    { label: 'Remove', icon: <Trash2 className="size-4" />, onSelect: onRemove, danger: true, disabled: w.status === 'creating' || unreachable || !removable },
   ];
   const delivery = w.delivery ? DELIVERY[w.delivery.status] : undefined;
   const account = w.account;
@@ -393,11 +372,13 @@ function WorkspaceRow({
     targetLabel,
     account && (account.state === 'waiting' ? `${account.poolName} · waiting` : account.state === 'removing' ? `removing ${account.poolName}` : account.poolName),
     limits,
-    timeAgo(w.createdAt),
+    unreachable && w.lastSeenAt ? `Last seen ${timeAgo(w.lastSeenAt)}` : timeAgo(w.createdAt),
   ].filter(Boolean);
   // Running and stopped show in the icon and the action (Shell or Start); other states get a badge.
   const settled = (w.status === 'running' || w.status === 'stopped') && !busy;
   const [open, setOpen] = useState(false);
+  // The tab the sheet opens on: Details from the row, Repos from the repositories chip.
+  const [tab, setTab] = useState<SheetTab>('details');
 
   return (
     <li className="flex items-center gap-3 p-4 sm:px-5">
@@ -405,10 +386,10 @@ function WorkspaceRow({
       {/* While picking for bulk assignment the whole row toggles the selection instead. */}
       <button
         type="button"
-        onClick={picking ? onToggle : () => setOpen(true)}
+        onClick={picking ? onToggle : (e) => (setTab((e.target as HTMLElement).closest(`[${REPOS_CHIP_ATTR}]`) ? 'repos' : 'details'), setOpen(true))}
         role={picking ? 'checkbox' : undefined}
         aria-checked={picking ? !!selected : undefined}
-        aria-label={picking ? `Select ${w.name}` : `Details for ${w.name}`}
+        aria-label={picking ? `Select ${w.name}` : `Details for ${w.name}${reposTab && reposLabel(repos) ? `, ${reposLabel(repos)}` : ''}`}
         className={`press flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left ${picking ? 'select-none' : ''}`}
       >
         {picking ? (
@@ -443,6 +424,8 @@ function WorkspaceRow({
                 </Badge>
               </span>
             )}
+            {reposTab && <ReposChip summary={repos} />}
+            <VersionChip claude={w.claude} />
           </div>
           {/* Running: how busy it is, as two bars. Otherwise where and how old (both are in the details too). */}
           {running && usageFractions(usage, w.cpus, w.memoryMb).cpu !== undefined ? (
@@ -488,6 +471,8 @@ function WorkspaceRow({
         items={items.slice(1)}
         onStart={onStart}
         onStop={onStop}
+        reposTab={reposTab}
+        initialTab={tab}
       />
     </li>
   );

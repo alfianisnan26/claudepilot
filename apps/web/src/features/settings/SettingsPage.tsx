@@ -4,6 +4,8 @@ import { History } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
+import { CanaryPanel } from '@/features/claudeversion/CanaryPanel';
+import { GlanceSettingsSection } from '@/features/glance/SettingsSection';
 import { PageHeader } from '@/components/PageHeader';
 import { ApiError, errorText } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/format';
@@ -101,6 +103,13 @@ export function SettingsPage() {
           ))}
         </div>
       )}
+      <div className="mt-6">
+        <CanaryPanel />
+      </div>
+      {/* Glance widgets: a person's preferences kept on this device, so they show even when the portal's settings could not load. */}
+      <div className="mt-6">
+        <GlanceSettingsSection />
+      </div>
       <ConfirmDialog
         open={!!confirm}
         title={confirm ? `${verb(confirm.value)} “${confirm.setting.label}”?` : ''}

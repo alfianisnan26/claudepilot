@@ -1,17 +1,24 @@
-import { Badge, Button, buttonClass, cn, Dialog, Spinner, type BadgeTone, type MenuItem } from '@isnanme/ui';
+import { Badge, Button, buttonClass, cn, Dialog, Segmented, Spinner, type BadgeTone, type MenuItem } from '@isnanme/ui';
 import type { Workspace, WorkspaceUsage } from '@portal/contracts';
 import { Play, Square, SquareTerminal } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
+import { TreeSkeleton } from '@/features/repos';
 import { formatBytes, formatDateTime, formatUntil, timeAgo } from '@/lib/format';
 import { ClaudesSection } from './ClaudesSection';
+import { VersionChip } from '@/features/claudeversion/VersionChip';
 import { usageFractions } from './usage';
+
+// The Repos tab (and the repo sheet, the timeline, the dialogs) load when the tab is first opened, not with the page.
+const ReposTab = lazy(() => import('@/features/repos/ReposTab').then((m) => ({ default: m.ReposTab })));
 
 export interface SheetBadge {
   label: string;
   tone: BadgeTone;
   busy?: boolean;
 }
+
+export type SheetTab = 'details' | 'repos';
 
 /**
  * Everything about one workspace that the row leaves out: a bottom sheet on phones, a dialog on
@@ -29,6 +36,8 @@ export function WorkspaceSheet({
   items,
   onStart,
   onStop,
+  reposTab,
+  initialTab,
 }: {
   open: boolean;
   onClose: () => void;
@@ -42,7 +51,17 @@ export function WorkspaceSheet({
   items: MenuItem[];
   onStart: () => void;
   onStop: () => void;
+  /** Show the Repos tab (not for a Kubernetes workspace: its repositories are not scanned). */
+  reposTab?: boolean;
+  /** The tab it opens on (the row's repositories chip opens Repos). */
+  initialTab?: SheetTab;
 }) {
+  // Details, or the workspace's repositories (workspace-git PRD §16).
+  const [tab, setTab] = useState<SheetTab>(initialTab ?? 'details');
+  useEffect(() => {
+    if (open) setTab(initialTab ?? 'details');
+  }, [open, initialTab]);
+  const onRepos = !!reposTab && tab === 'repos';
   const running = w.status === 'running';
   const account = w.account;
   const limits = [w.cpus && `${w.cpus} CPU`, w.memoryMb && formatBytes(w.memoryMb * 1024 * 1024)].filter(Boolean).join(' · ');
@@ -77,6 +96,23 @@ export function WorkspaceSheet({
   return (
     <Dialog open={open} onClose={onClose} title={w.name} description={`${targetLabel} · ${status.label}`} footer={footer}>
       <div className="flex flex-col gap-5">
+        {reposTab && (
+          <Segmented<SheetTab>
+            label="Show"
+            value={tab}
+            options={[
+              { value: 'details', label: 'Details' },
+              { value: 'repos', label: 'Repos' },
+            ]}
+            onChange={setTab}
+          />
+        )}
+        {onRepos ? (
+          <Suspense fallback={<TreeSkeleton />}>
+            <ReposTab workspace={w} />
+          </Suspense>
+        ) : (
+          <>
         {problem && (
           <Notice badge={status} tone={w.status === 'error' ? 'danger' : 'neutral'}>
             {w.detail}
@@ -125,6 +161,17 @@ export function WorkspaceSheet({
 
         <dl className="divide-y divide-line rounded-2xl border border-line text-sm">
           <Row label="Runs on">{targetLabel}</Row>
+          {w.node && <Row label="Node">{w.node}</Row>}
+          {w.status === 'unreachable' && w.lastSeenAt && (
+            <Row label="Last seen">
+              <span title={formatDateTime(w.lastSeenAt)}>{timeAgo(w.lastSeenAt)}</span>
+            </Row>
+          )}
+          {w.claude && (
+            <Row label="Claude Code">
+              <VersionChip claude={w.claude} />
+            </Row>
+          )}
           <Row label="Created">
             <span title={formatDateTime(w.createdAt)}>{timeAgo(w.createdAt)}</span>
           </Row>
@@ -156,6 +203,8 @@ export function WorkspaceSheet({
               </li>
             ))}
           </ul>
+        )}
+          </>
         )}
       </div>
     </Dialog>

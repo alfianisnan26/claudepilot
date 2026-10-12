@@ -4,6 +4,7 @@ import { KeySquare, type LucideIcon } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { DELIVERY_LABEL } from '@/features/pools/labels';
 import { PoolPickerDialog } from '@/features/pools/PoolPicker';
+import { ClaudeCodeSection } from '@/features/claudeversion/ClaudeCodeSection';
 import { multiPoolTabs, type MultiPoolTab } from '@/features/pools/registry';
 import { LockdownLine } from '@/features/settings/LockdownLine';
 import { api } from '@/lib/api';
@@ -72,6 +73,7 @@ export function ConfigurationSheet({
           <div className="flex flex-col gap-4">
             <DeliveryLine delivery={delivery} checkedAt={data?.delivery?.checkedAt ?? null} />
             <LockdownLine workspaceId={workspace.id} />
+            <ClaudeCodeSection workspace={workspace} />
             <ul className="divide-y divide-line rounded-2xl border border-line">
               <Row
                 icon={KeySquare}

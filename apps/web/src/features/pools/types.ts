@@ -38,8 +38,14 @@ export interface MultiPoolUi<C = unknown> {
   Editor: ComponentType<PoolContentEditorProps<C>>;
   /** 'dialog' (the default), or 'page' for editors that hold lists (Web app PRD §9.2 `task` routes). */
   editor?: 'dialog' | 'page';
-  /** Beside "New …" in the tab's header: links to the type's own pages, such as MCP's Catalog. */
-  headerAction?: ReactNode;
+  /**
+   * Beside "New …" in the tab's header: links to the type's own pages, such as MCP's Catalog. A function is told whether
+   * the tab has pools yet: the header's "New" shows only then, and an action that the empty state shows instead (`emptyAction`)
+   * can stay out of the header until there are some.
+   */
+  headerAction?: ReactNode | ((state: { hasPools: boolean }) => ReactNode);
+  /** Beside "New …" in the empty state, such as MCP's Built-in. */
+  emptyAction?: ReactNode;
   /** Extra line on a pool card, such as "4 variables · 2 secrets". */
   summary?: (pool: PoolSummary) => ReactNode;
   /** Replaces the card's icon: a persona's avatar. */

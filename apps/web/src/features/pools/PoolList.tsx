@@ -67,6 +67,7 @@ export function PoolList<C>({ tabId, label, ui }: { tabId: string; label: string
     </Button>
   );
   const Icon = ui.icon;
+  const headerAction = typeof ui.headerAction === 'function' ? ui.headerAction({ hasPools: !!pools && pools.length > 0 }) : ui.headerAction;
 
   return (
     <>
@@ -74,9 +75,9 @@ export function PoolList<C>({ tabId, label, ui }: { tabId: string; label: string
         title={label}
         description={ui.description}
         action={
-          ui.headerAction ? (
+          headerAction ? (
             <div className="flex items-center gap-2">
-              {ui.headerAction}
+              {headerAction}
               {pools && pools.length > 0 && newButton}
             </div>
           ) : (
@@ -88,7 +89,20 @@ export function PoolList<C>({ tabId, label, ui }: { tabId: string; label: string
       {!pools && !failed && <RowsSkeleton rows={3} lines={2} trailing icon="rounded-2xl" />}
       {pools &&
         (pools.length === 0 ? (
-          <EmptyState icon={<Icon className="size-6" />} title={`No ${ui.noun.other} yet`} action={newButton} />
+          <EmptyState
+            icon={<Icon className="size-6" />}
+            title={`No ${ui.noun.other} yet`}
+            action={
+              ui.emptyAction ? (
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  {ui.emptyAction}
+                  {newButton}
+                </div>
+              ) : (
+                newButton
+              )
+            }
+          />
         ) : (
           <div className="grid gap-2 sm:grid-cols-2">
             {pools.map((p) => (
