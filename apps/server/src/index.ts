@@ -252,7 +252,7 @@ const connect = createConnect({
   scannedIds: () => scannedTargetIds,
   workspacesOn: async (target) => (await workspaces.list()).filter((w) => w.target === target),
   removeWorkspace: (id) => workspaces.remove(id.slice(0, id.indexOf('/')), id.slice(id.indexOf('/') + 1)),
-  recheck: async () => void (await workspaces.targets(true)),
+  recheck: (id) => workspaces.recheck(id),
   bundle: agentBundle,
   trustProxy: config.trustProxy,
   notify: () => connectChanged(),
