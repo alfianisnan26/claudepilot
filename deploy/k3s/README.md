@@ -14,6 +14,9 @@ The portal runs in the cluster as one pod and its workspaces run as pods too, at
 ```sh
 kubectl create namespace isnan-claudepilot
 kubectl -n isnan-claudepilot create secret generic claudepilot-server --from-literal=code=<8 letters or digits>
+# the key that seals secrets stored in the portal: 32 random bytes, base64url. Keep a copy: without it stored secrets are lost.
+kubectl -n isnan-claudepilot create secret generic claudepilot-secret-key \
+  --from-literal=portal_secret_key="$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("="))')"
 kubectl apply -f deploy/argocd/claudepilot.yaml
 ```
 
@@ -42,7 +45,7 @@ The commit must be on `main` of the repository. To update: build, change the two
 
 ## What is configured
 
-- State is one 10 Gi `local-path` volume (database, backups, knowledge, the key that seals stored secrets) on `k3s-node2`; it is never pruned or deleted by Argo CD.
+- State is one 10 Gi `local-path` volume (database, backups, knowledge) on `k3s-node2`; the key that seals stored secrets is the Secret `claudepilot-secret-key`; it is never pruned or deleted by Argo CD.
 - Workspaces are Deployments in `isnan-claudepilot-workspaces` made with the portal's service account (`PORTAL_K8S_*`); `PORTAL_K8S_NODE_SELECTOR` keeps them on `k3s-node2`.
 - `PORTAL_INTERNAL_URL` is the in-cluster address workspaces use for the Portal MCP tools; Connect is on (`PORTAL_CONNECT_URL`).
 - Not enabled: the "This machine" target (`PORTAL_LOCAL_ENABLED`): it would give a shell inside the portal pod, which holds the cluster credentials; and Docker targets (there is no Docker socket in k3s).
