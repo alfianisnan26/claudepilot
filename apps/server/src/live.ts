@@ -36,8 +36,8 @@ function refuse(socket: Duplex, status: number, text: string) {
 
 /**
  * The live socket (`/api/live`, one per tab): pushes the workspace list and usage while a page shows
- * them, and tells pages when accounts or the portal's storage state change, so nothing polls. Listing
- * runs once for all tabs, only while someone watches, and a list goes out only when it changed.
+ * them, and tells pages when accounts, pools or the portal's storage state change, so nothing polls.
+ * Listing runs once for all tabs, only while someone watches, and a list goes out only when it changed.
  */
 export class LiveHub {
   readonly #clients = new Map<WebSocket, Client>();
@@ -75,7 +75,7 @@ export class LiveHub {
       setTimeout(() => {
         this.#coalesce.delete(topic);
         if (topic === 'workspaces') void this.#refreshWorkspaces();
-        else if (topic === 'accounts' || topic === 'system') this.#send(topic, JSON.stringify({ type: topic } satisfies LiveMessage));
+        else if (topic === 'accounts' || topic === 'system' || topic === 'pools' || topic === 'tickets' || topic === 'ci' || topic === 'claudeusage') this.#send(topic, JSON.stringify({ type: topic } satisfies LiveMessage));
       }, COALESCE_MS).unref(),
     );
   }

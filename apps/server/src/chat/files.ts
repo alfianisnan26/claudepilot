@@ -428,3 +428,6 @@ export async function readDiff(workspaces: Workspaces, workspaceId: string, path
   if (!cut) check(code, 'diff', installError);
   return parseDiff(folder, out.toString('utf8'), cut);
 }
+
+/** The same plumbing for the other host commands of chat content (staging, copy-out): started like these, with the host brought up to date first. */
+export { collect as collectHostOutput, start as startHostCommand, tooSlow, within as withinTime, type Started as StartedHostCommand };

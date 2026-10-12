@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.5.** ✅ = observed in our labs on Claude Code 2.1.296 (the foundation's, Account Pool's sandbox runs E1–X8, the cross-pool lab, and the Secrets & env and Chat sessions runs), in print mode unless stated. Documented facts link to Anthropic's docs. 🔬 = unverified, listed in §21. |
+| Status | **Draft v0.6.** v0.6 records what was built: the shared settings store and the owner's two MCP switches, "Account MCP off" and "Pool MCP only" (§22). The rest of this PRD (policies, budgets, limits, the sandbox) is **not built**. ✅ = observed in our labs on Claude Code 2.1.296 (the foundation's, Account Pool's sandbox runs E1–X8, the cross-pool lab, and the Secrets & env and Chat sessions runs), in print mode unless stated. Documented facts link to Anthropic's docs. 🔬 = unverified, listed in §21. |
 | Owner | Alfian Isnan |
-| Last updated | 2026-10-10 |
+| Last updated | 2026-10-12 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, assignment, delivery engine, outbox), [Account Pool](account-pool.md) (rotation, pausing and per-key spend act through it), [Monitoring dashboard](monitoring-dashboard.md) (telemetry spend, policy signals) |
 | Related | [Chat sessions](chat-sessions.md) (session limits), [MCP set](mcpset-pool.md), [Skillset](skillset-pool.md), [Secrets & env](secrets-env-pool.md) and [Browser & desktop](browser-desktop-pool.md) (planned) pools (policy requirements), [Persona pool](persona-pool.md) (model defaults), [Portal MCP server](portal-mcp.md) (relaxing changes stay UI-only), [Web app & PWA](web-app-pwa.md) (navigation, re-auth) |
 
@@ -440,7 +440,7 @@ account, **W** workspace, **S** chat session (within caps).
 | TLS inspection (Advanced) | Off | G P W | `sandbox.network.tlsTerminate` (experimental). Needed for Secrets & env's Masked entries; tools must trust its CA (Secrets & env Q1). |
 | Weaker nested sandbox (Advanced) | Off | G | `sandbox.enableWeakerNestedSandbox`. The probe suggests it where only weaker mode works; the docs say it considerably weakens security. |
 | Require the env scrub | Off | G P W | `env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, only where the probe passed in full mode: without bubblewrap every `claude` exited, and under default seccomp every Bash command failed ✅. It may strip Secrets & env's pointer variables (its Q2). |
-| MCP servers | Any | G P W | Pool-delivered only: `allowedMcpServers` with the matchers pools report (FR8; ✅ for a stdio plugin server, 🔬 Q21 for remote ones). Denied servers: `deniedMcpServers`, beside the foundation's portal entry. |
+| MCP servers | Any | G P W | Pool-delivered only: `allowedMcpServers` with the matchers pools report (FR8; ✅ for a stdio and for a remote plugin server). **Built as the global switch "Pool MCP only", with "Account MCP off" beside it (§22); per-workspace and per-policy scopes are not built.** Denied servers: `deniedMcpServers`, beside the foundation's portal entry. |
 | Clean environment for stdio MCP servers | On | G P W | `env.CLAUDE_CODE_MCP_ALLOWLIST_ENV`: stdio servers get only `PATH`, `HOME`, `TERM`, a few Claude Code variables and their own `env` ✅ ([MCP set](mcpset-pool.md) §10). Off: MCP sets show "stdio servers inherit the full environment". |
 | Plugin marketplaces | Any | G P W | Portal only: `strictKnownMarketplaces` with the portal marketplace (FR8) |
 | Skills may run shell commands | Yes | G P W | No: `disableSkillShellExecution`, which covers plugin skills. The row shows how many delivered skills it affects ([Skillset](skillset-pool.md) FR18). Block one skill with a `Skill(...)` deny rule. |
@@ -735,7 +735,7 @@ navigation, targets are at least 44 px, and Defaults loads in one request (regis
 | # | Section | Proposed change |
 | --- | --- | --- |
 | 1 | §3, §5, §6.1, §6.5 | Add the pool type `policy`: one per workspace, none meaning Global. Global is a built-in `policy` row, never assigned or deleted. After the first Apply (FR5) the compiler builds it into every workspace's policy fragment as a system fragment (as [Monitoring](monitoring-dashboard.md) A2 proposes) and records it in the manifest as `global@<revision>`; the "Assignments missing" check treats it as assigned. An assigned policy and workspace overrides layer on top in the same fragment. Unassigning a policy writes a removal record and falls back to Global. |
-| 2 | §7 ownership row | Settings & policies: files `managed-settings.d/10-claudepilot-policy.json` and `/etc/claudepilot/bin/policy-*`. Keys `permissions.defaultMode`, `disableBypassPermissionsMode`, `disableAutoMode` and `allow`; `deny` and `ask` entries; `allowManagedPermissionRulesOnly`, `allowManagedHooksOnly`, `allowManagedMcpServersOnly`; `sandbox.*` except `sandbox.credentials`; `allowedMcpServers` and `deniedMcpServers` entries; `strictKnownMarketplaces`, `disableSkillShellExecution`, `availableModels`, `maxEffortLevel`, `disableWorkflows`, `modelPricing`, `cleanupPeriodDays`; four `env` names (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, `CLAUDE_CODE_MCP_ALLOWLIST_ENV`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`), plus the TLS variables in Secrets & env FR4, reserved for TLS inspection. `allowedMcpServers` and `allowManagedMcpServersOnly` leave the MCP set row ([MCP set](mcpset-pool.md) A2). No hooks; budgets, caps and thresholds are portal-side. `CLAUDE_CODE_MAX_RETRIES` joins the Account Pool row. |
+| 2 | §7 ownership row | Settings & policies: files `managed-settings.d/10-claudepilot-policy.json` and `/etc/claudepilot/bin/policy-*`. Keys `permissions.defaultMode`, `disableBypassPermissionsMode`, `disableAutoMode` and `allow`; `deny` and `ask` entries; `allowManagedPermissionRulesOnly`, `allowManagedHooksOnly`, `allowManagedMcpServersOnly`; `sandbox.*` except `sandbox.credentials`; `allowedMcpServers` and `deniedMcpServers` entries; `strictKnownMarketplaces`, `disableSkillShellExecution`, `availableModels`, `maxEffortLevel`, `disableWorkflows`, `modelPricing`, `cleanupPeriodDays`; four `env` names (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, `CLAUDE_CODE_MCP_ALLOWLIST_ENV`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`), plus the TLS variables in Secrets & env FR4, reserved for TLS inspection. `allowedMcpServers` and `allowManagedMcpServersOnly` leave the MCP set row ([MCP set](mcpset-pool.md) A2). **Built differently (§22): they are written by a separate delivery owner, `settings` (drop-in `05-claudepilot-settings.json`), together with `disableClaudeAiConnectors`, so the global MCP switches work before the policy pool type exists; the `policy` owner keeps `deniedMcpServers`.** No hooks; budgets, caps and thresholds are portal-side. `CLAUDE_CODE_MAX_RETRIES` joins the Account Pool row. |
 | 3 | §7 merge rules | `permissions.deny` and `ask` are list keys: other owners add entries for their own tools or delivered paths (Skillset revocations, MCP set tool rules, Secrets & env path rules). `deniedMcpServers` is a list key (Settings, and the foundation per [Portal MCP](portal-mcp.md) A1). Settings alone owns `permissions.allow` and `permissions.defaultMode`, which Claude Code reads from the highest-ranked managed source only. Hook arrays from two drop-ins both ran in the cross-pool lab ✅, which supports Monitoring A3. |
 | 4 | §6.1 compile | The policy fragment reads the workspace's account pool (price multiplier, endpoint price, the custom-host Auto confirmation) and what other fragments report (MCP matchers, pool requirements), and recompiles when they change (compile inputs, as Secrets & env A10 proposes). A pool requirement never turns a control on or fails a delivery; an unmet one is reported on both pools (FR8). No fragment may write `forceLoginMethod`, `forceLoginOrgUUID` or `/etc/claude-code/managed-mcp.json`. |
 | 5 | §9 image and capabilities | Install `bubblewrap` and `socat`; publish `:hardened` without the `sudoers` entry; label each workspace's variant (`claudepilot.io/image-variant`). `policy-probe` runs at each start and when a policy needs the sandbox (FR21); its result is a workspace capability that Secrets & env reads for masking. Each policy key declares the Claude Code version that added it, for per-feature gating. |
@@ -785,7 +785,84 @@ navigation, targets are at least 44 px, and Defaults loads in one request (regis
 | Q18 | Terminal-session spend is counted only in Monitoring's Full mode. Should setting a workspace budget require Full mode? | Product |
 | Q19 | Do the defaults ($10 sessions, highest $50; 4 sessions per workspace, 20 in total) fit your accounts' rate limits? | Operator |
 | Q20 | 🔬 `disableWorkflows` is documented to make ultracode unavailable. Does the managed key turn ultracode off on 2.1.296 in terminals, chat and running sessions? | Sandbox test |
-| Q21 | Narrowed: the docs say the allowlist checks every server a plugin adds, and an exact `serverCommand` admitted a plugin's stdio server while a near miss blocked it ✅ ([MCP set](mcpset-pool.md) FR19). 🔬 Left: `serverUrl` for a plugin's remote server, and interactive sessions. Where matchers don't apply, "Pool-delivered only" isn't offered. | Sandbox test |
+| Q21 | Answered ✅ (2.1.296, a throwaway Docker workspace, `settings/claude.integration.test.ts`): the allowlist checks every server a plugin adds. An exact `serverCommand` admitted a plugin's stdio server and a near miss blocked it ([MCP set](mcpset-pool.md) FR19), and `serverUrl` admitted a plugin's remote (HTTP) server while another URL passed with `--mcp-config` was blocked ("MCP server blocked by enterprise policy"). 🔬 Left: a remote server with OAuth or a `headersHelper` under the allowlist (the first needs a test OAuth server, MCP set Q2). | Sandbox test |
 | Q22 | 🔬 Do `claude --bare` and `CLAUDE_CODE_SIMPLE` still apply `/etc/claude-code` managed settings on the pinned version (Monitoring Q4 asks the same for hooks)? Until confirmed, no workspace shows Enforced. If they don't, Monitoring flags nested `--bare` runs as High. | Sandbox test |
 | Q23 | 🔬 Does `claude doctor` run through `exec` without a TTY and list dropped managed entries? If not, FR22 relies on `managed_settings_resolved` alone. | Sandbox test |
 | Q24 | 🔬 Does `modelPricing` accept per-model rates for model names Claude Code doesn't know? If so, a custom endpoint's price goes there, and Claude Code's estimates and `--max-budget-usd` work on custom hosts. | Sandbox test |
+
+## 22. Built: the shared settings store and the MCP lockdown
+
+The owner asked for two switches: cut off every account (SSO) MCP connector so only the pool's servers can
+connect, and an enforce switch so Claude cannot add a connection itself and must go through the pool. They
+are built, together with the small store every global setting lives in. Everything else in this PRD is not.
+
+**Status: Built** (server, delivery, page, workspace status line; verified on Claude Code 2.1.296 in Docker,
+`apps/server/src/settings/`). Not built: per-workspace overrides, scopes G/P/W beyond Global (§12), the
+relaxing flag and re-authentication (FR19), the settings registry's versions and directions, policies as a
+pool type, everything in §11.1 and §11.3–11.5.
+
+### 22.1 The store
+
+| | |
+| --- | --- |
+| Registry | `defineSetting({ key, type, default, scope: 'global', group, label, help, confirmText, protective, order, min, max })` at import time. Areas define their own (A2's Bypass setting appeared in the list the day the store did). Keys look like `mcp.poolOnly`; a type is `boolean`, `number` or `string`. |
+| Values | `portal_meta` under `setting:<key>` (JSON with who and when); a setting never set reads as its default, and reads never fail (a Frozen portal answers with defaults). |
+| API | `GET /api/settings` (groups and settings), `PUT /api/settings/:key` (`{ value, confirm? }`), `GET /api/settings/audit`, `GET /api/settings/lockdown/:target/:name`. Behind the session guard and the Origin check. |
+| Audit | Every change: key, old and new value, actor, time (`setting_changes`). The page's History button lists them. A repeat of the current value is not a change. |
+| Confirmation | A setting with `protective: <value>` is a security switch. Moving away from that value (switching a protection off, or an agent permission on) is refused with `409 CONFIRMATION_REQUIRED` unless the request says `confirm: true`; the page asks first, in one line (`confirmText`). Turning a protection on never asks. |
+| Page | Settings, in the admin group of the navigation (phones: the More sheet). Sections by group (MCP, Agents, Sessions); a row is a label, an ⓘ with what it does, and a switch. Nothing else is on the page. |
+
+### 22.2 The two MCP switches
+
+| Switch | Delivered as | Observed on 2.1.296 ✅ |
+| --- | --- | --- |
+| Account MCP off (`mcp.accountOff`) | `disableClaudeAiConnectors: true` | Signed in as a claude.ai subscription account (fake credentials, a TLS stand-in for `api.anthropic.com` that lists one connector and serves it over the claude.ai proxy), a session asks `/v1/mcp_servers`, connects the connector and offers its tool. With the key on, the log says "Disabled via disableClaudeAiConnectors setting", the list is never asked for, and only the pool's tool remains. `ENABLE_CLAUDEAI_MCP_SERVERS=false` in a process's environment does the same ("Disabled via env var"). |
+| Pool MCP only (`mcp.poolOnly`) | `allowManagedMcpServersOnly: true` and `allowedMcpServers`: exactly the matchers the pools report for that workspace (MCP set FR19: MCP sets register theirs; the portal MCP endpoint and the browser pool are asked to, with `McpLockdown.addMatcherSource`) | `claude mcp list` shows the pool's servers only; a server in `~/.claude.json`, in a repository's `.mcp.json` (even pre-approved), in `--mcp-config` (the portal's own chat endpoint included, unless a source admits it) or from a claude.ai connector is blocked ("MCP server blocked by enterprise policy"); `claude mcp add` is refused for stdio and HTTP ("not allowed by enterprise policy"); a user-level `allowedMcpServers` does not widen it; an empty allowlist blocks every server; a plugin's remote server is admitted by its `serverUrl`. |
+
+Pool MCP only alone already shuts the claude.ai connectors out (they are blocked after being listed); Account
+MCP off additionally stops them being fetched at all, and works without the allowlist. Both are written for
+every workspace: own-login Claudes and pool workspaces, running ones too.
+
+- **FR-L1** The fragment is owned by `settings` (`delivery/ownership.ts`): `disableClaudeAiConnectors`,
+  `allowManagedMcpServersOnly` and `allowedMcpServers` only, `true` only, and an allowlist entry is only
+  `{ serverUrl }` or `{ serverCommand }` (never a server name: names are not a control). The compiler's
+  guard still rejects `cpat_`, `cpoa_`, `cpor_` anywhere and `cpst_` in files. Claude Code older than 2.1.273
+  does not get it, and the workspace's status says so.
+- **FR-L2** A change is delivered at once to every known workspace (no rollout pacing: a protection never
+  waits, foundation §6.3). Switching a switch off removes the drop-in after the delivery engine's 30 s grace,
+  or at the next session start, never before.
+- **FR-L3** A source that fails to report its matchers is skipped and logged: its servers are not admitted
+  and delivery goes on. An allowlist is never widened by a failure.
+- **FR-L4 Status per workspace** (the Configuration sheet, one line, only while a switch is on):
+  **Locked** (delivered and no running session predates it), **Pending** ("Not delivered yet", "A change is on its way", or "N running
+  sessions started before the change: restart them"), **Not protected** with the reason (delivery failed,
+  frozen, Locked portal, Claude Code too old, unsupported target). ✅ A running session keeps the MCP
+  servers it connected when it started, even when the managed folder already existed: held open across the
+  change, one session's next request still offered the repository's server (Pool MCP only) and another's the
+  claude.ai connector (Account MCP off). (Before the folder exists a session never sees later managed
+  settings at all: A3c's finding.) So the portal reads each running `claude` process's age and counts the
+  sessions older than the change. Locked is a security claim, so the count is conservative: the change counts
+  from when its write finished; the pass that wrote it read the ages before writing and says "Checking the
+  running sessions" until a second pass, a few seconds later, reads them again; and a process counts as older
+  when it could be (ages are whole seconds). The ages are read before a workspace's first manifest too.
+- **FR-L5** Not a boundary against someone with `sudo` in a standard workspace (foundation §2): managed
+  settings are precedence there, and the reconciler puts the file back. It does stop Claude's own routes to a
+  new connection. On the hardened image it binds (§14).
+- **FR-L6** When Pool MCP only is on, the sanctioned way for an agent to get a new MCP is the portal MCP's
+  proposal tool through its agent token ([Portal MCP](portal-mcp.md) I3, I8), which lands as a draft for a
+  person to approve; with agent access off the admin adds the entry in the UI. The switch's ⓘ says so.
+
+### 22.3 Verification
+
+`settings/settings.test.ts` (store, confirmation, audit, ownership, matchers, status, routes, removal) and
+`settings/claude.integration.test.ts` (Docker, `CLAUDEPILOT_DOCKER_TESTS=1`): a real Claude Code against a
+throwaway workspace: pool-only (list, add, `--mcp-config`, the repository's server, an older running session
+Pending then Locked, an empty pool, switching off), the same for a remote pool server by URL (Q21), and the
+subscription-account run for Account MCP off with the connector appearing and disappearing.
+
+### 22.4 Open
+
+- 🔬 A claude.ai connector from a **real** account (the stand-in lists one fake connector).
+- Answered ✅: a running session does not apply the lockdown (above), so Pending until restarted is right.
+  🔬 Left: whether an interactive session re-reads it on `/reload-plugins`.
+- The single "pool MCP" gateway reading is designed, not built: [MCP set](mcpset-pool.md) §23.

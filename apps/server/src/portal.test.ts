@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { test } from 'node:test';
 import { Portal } from './portal.js';
 import { sessionStore } from './store/sessions.js';
 import { Store } from './store/store.js';
+import { tempDirectory } from './store/testTmp.js';
 
 const CODE = '00000000';
 const open = (dir: string) => Store.open({ dataDir: dir, secretKey: null });
@@ -19,7 +17,7 @@ async function start(dir: string, ttlMs = 60_000) {
 }
 
 test('sign-ins survive a restart, and sign-outs and code changes do too', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cp-sessions-'));
+  const dir = tempDirectory('cp-sessions-');
   const first = await start(dir);
   const mine = first.portal.signIn(CODE);
   const other = first.portal.signIn(CODE);
@@ -41,7 +39,7 @@ test('sign-ins survive a restart, and sign-outs and code changes do too', async 
 });
 
 test('the database keeps only token hashes, and expired sign-ins are not restored', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cp-sessions-'));
+  const dir = tempDirectory('cp-sessions-');
   const first = await start(dir, 50);
   const token = first.portal.signIn(CODE);
   const rows = first.store.db!.prepare('SELECT * FROM web_sessions').all() as Record<string, string>[];

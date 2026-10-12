@@ -1,0 +1,190 @@
+import { createHash, randomBytes } from 'node:crypto';
+import { AppError } from '@isnanme/core';
+import {
+  PORTAL_SCOPES,
+  PORTAL_TOKEN_DAYS,
+  PORTAL_TOKEN_LABEL_MAX,
+  PORTAL_TOKEN_PREFIX,
+  type CreatePortalTokenRequest,
+  type PortalScope,
+  type PortalToken,
+} from '@portal/contracts';
+import type { Store } from '../store/store.js';
+import type { PortalPrincipal } from './registry.js';
+import { cleanText, looksLikeSecret } from './sanitize.js';
+
+interface Row {
+  id: string;
+  label: string;
+  token_hash: string;
+  last4: string;
+  scope: PortalScope;
+  vaults: string | null;
+  created_at: string;
+  expires_at: string;
+  last_used_at: string | null;
+  last_used_ip: string | null;
+  revoked_at: string | null;
+  revoked_reason: string | null;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** `last_used_at` is written at most this often per token: a busy script must not turn every call into a write. */
+const TOUCH_EVERY_MS = 60_000;
+
+export const hashToken = (secret: string): string => createHash('sha256').update(secret).digest('hex');
+
+/** `cpat_` plus 43 base64url characters: 256 random bits. */
+export const newTokenSecret = (): string => `${PORTAL_TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
+
+const preview = (last4: string) => `${PORTAL_TOKEN_PREFIX}…${last4}`;
+
+function view(r: Row): PortalToken {
+  return {
+    id: r.id,
+    label: r.label,
+    preview: preview(r.last4),
+    scope: r.scope,
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+    lastUsedAt: r.last_used_at,
+    lastUsedIp: r.last_used_ip,
+    revokedAt: r.revoked_at,
+    revokedReason: r.revoked_reason,
+  };
+}
+
+function vaultsOf(raw: string | null): string[] | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export type VerifyResult =
+  | { ok: true; principal: PortalPrincipal; token: PortalToken }
+  | { ok: false; reason: 'unknown' | 'revoked' | 'expired'; tokenId?: string };
+
+/**
+ * An admin's personal access tokens (portal-mcp PRD §12.1). Only the SHA-256 of a token is stored, so a token is
+ * shown once, at creation, and can't be recovered. Reads work while the portal is Locked (the hash needs no
+ * key); the bookkeeping writes (last used) are skipped while the database is read-only. Agents' per-session
+ * tokens are a separate class (agents.ts).
+ */
+export class PortalTokens {
+  readonly #touched = new Map<string, number>();
+  /** Called after any change, for pages that list tokens. */
+  onChange?: () => void;
+
+  constructor(
+    private readonly store: Store,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  get #db() {
+    return this.store.db;
+  }
+
+  get #writable() {
+    return this.store.writable ? this.store.db : null;
+  }
+
+  list(): PortalToken[] {
+    const rows = this.#db?.prepare('SELECT * FROM pmcp_tokens ORDER BY created_at DESC, id DESC LIMIT 200').all() as unknown as Row[] | undefined;
+    return (rows ?? []).map(view);
+  }
+
+  get(id: string): PortalToken | null {
+    const row = this.#db?.prepare('SELECT * FROM pmcp_tokens WHERE id = ?').get(id) as Row | undefined;
+    return row ? view(row) : null;
+  }
+
+  /** Tokens that can still be used right now. */
+  activeCount(): number {
+    const row = this.#db?.prepare('SELECT count(*) AS n FROM pmcp_tokens WHERE revoked_at IS NULL AND expires_at > ?').get(this.now().toISOString()) as { n: number } | undefined;
+    return row?.n ?? 0;
+  }
+
+  /** Makes a token. Returns the view and the secret, which exists nowhere else. */
+  create(req: Partial<CreatePortalTokenRequest>): { token: PortalToken; secret: string } {
+    const db = this.#writable;
+    if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
+    const label = typeof req.label === 'string' ? req.label.trim() : '';
+    if (!label) throw new AppError('VALIDATION_FAILED', 'Give the token a label.', { details: { label: 'Required.' } });
+    if (label.length > PORTAL_TOKEN_LABEL_MAX)
+      throw new AppError('VALIDATION_FAILED', `Use at most ${PORTAL_TOKEN_LABEL_MAX} characters.`, { details: { label: `At most ${PORTAL_TOKEN_LABEL_MAX} characters.` } });
+    if (looksLikeSecret(label)) throw new AppError('VALIDATION_FAILED', 'That label looks like a secret. Name the token after what uses it.', { details: { label: 'Not a secret.' } });
+    if (!req.scope || !PORTAL_SCOPES.includes(req.scope)) throw new AppError('VALIDATION_FAILED', 'Pick read, operate or admin.', { details: { scope: 'Pick a scope.' } });
+    const days = req.expiresInDays ?? 90;
+    if (!(PORTAL_TOKEN_DAYS as readonly number[]).includes(days))
+      throw new AppError('VALIDATION_FAILED', `Pick ${PORTAL_TOKEN_DAYS.join(', ')} days.`, { details: { expiresInDays: `One of ${PORTAL_TOKEN_DAYS.join(', ')}.` } });
+
+    const now = this.now();
+    const secret = newTokenSecret();
+    const id = `ptk_${randomBytes(6).toString('hex')}`;
+    db.prepare(
+      `INSERT INTO pmcp_tokens (id, label, token_hash, last4, scope, purpose, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, 'user', ?, ?)`,
+    ).run(id, cleanText(label, PORTAL_TOKEN_LABEL_MAX), hashToken(secret), secret.slice(-4), req.scope, now.toISOString(), new Date(now.getTime() + days * DAY_MS).toISOString());
+    this.onChange?.();
+    return { token: this.get(id)!, secret };
+  }
+
+  /** Checks a bearer token: whether it exists, wasn't revoked and hasn't expired, and who it is. */
+  verify(secret: string, ip?: string): VerifyResult {
+    if (!secret.startsWith(PORTAL_TOKEN_PREFIX) || secret.length < 20 || secret.length > 128) return { ok: false, reason: 'unknown' };
+    const row = this.#db?.prepare('SELECT * FROM pmcp_tokens WHERE token_hash = ?').get(hashToken(secret)) as Row | undefined;
+    if (!row) return { ok: false, reason: 'unknown' };
+    if (row.revoked_at) return { ok: false, reason: 'revoked', tokenId: row.id };
+    const now = this.now();
+    if (Date.parse(row.expires_at) <= now.getTime()) return { ok: false, reason: 'expired', tokenId: row.id };
+    this.#touch(row.id, ip, now);
+    return {
+      ok: true,
+      token: view(row),
+      principal: {
+        kind: 'user',
+        tokenId: row.id,
+        label: row.label,
+        scope: row.scope,
+        workspaceId: null,
+        sessionId: null,
+        expiresAt: row.expires_at,
+        client: null,
+        vaults: vaultsOf(row.vaults),
+      },
+    };
+  }
+
+  #touch(id: string, ip: string | undefined, now: Date) {
+    const last = this.#touched.get(id) ?? 0;
+    if (now.getTime() - last < TOUCH_EVERY_MS) return;
+    this.#touched.set(id, now.getTime());
+    try {
+      this.#writable?.prepare('UPDATE pmcp_tokens SET last_used_at = ?, last_used_ip = ? WHERE id = ?').run(now.toISOString(), ip ?? null, id);
+    } catch {
+      // bookkeeping only: a database that can't be written must not fail the call
+    }
+  }
+
+  /** Revokes one token: it fails on its next request. False when it was already revoked or doesn't exist. */
+  revoke(id: string, reason = 'revoked in the portal'): boolean {
+    const db = this.#writable;
+    if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
+    const r = db.prepare('UPDATE pmcp_tokens SET revoked_at = ?, revoked_reason = ? WHERE id = ? AND revoked_at IS NULL').run(this.now().toISOString(), reason, id);
+    if (r.changes > 0) this.onChange?.();
+    return r.changes > 0;
+  }
+
+  /** Revokes every token that is still live; returns how many. */
+  revokeAll(reason: string): number {
+    const db = this.#writable;
+    if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
+    const r = db.prepare('UPDATE pmcp_tokens SET revoked_at = ?, revoked_reason = ? WHERE revoked_at IS NULL').run(this.now().toISOString(), reason);
+    if (r.changes > 0) this.onChange?.();
+    return Number(r.changes);
+  }
+}

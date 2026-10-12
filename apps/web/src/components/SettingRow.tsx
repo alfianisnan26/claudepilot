@@ -6,6 +6,7 @@ export function SettingRow({
   icon,
   label,
   sub,
+  wrapSub = false,
   trailing,
   tone = 'neutral',
 }: {
@@ -13,6 +14,8 @@ export function SettingRow({
   /** The name, and anything that sits beside it (a badge, an ⓘ). */
   label: ReactNode;
   sub?: ReactNode;
+  /** Let the status wrap (up to three lines) instead of cutting it to one: for a message that has to be read. */
+  wrapSub?: boolean;
   trailing?: ReactNode;
   tone?: 'neutral' | 'accent' | 'warning' | 'danger';
 }) {
@@ -31,7 +34,7 @@ export function SettingRow({
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5 font-semibold">{label}</div>
-        {sub && <p className="truncate text-[13px] text-muted">{sub}</p>}
+        {sub && <p className={cn('text-[13px] text-muted', wrapSub ? 'line-clamp-3' : 'truncate')}>{sub}</p>}
       </div>
       {trailing && <div className="flex shrink-0 items-center gap-2">{trailing}</div>}
     </li>

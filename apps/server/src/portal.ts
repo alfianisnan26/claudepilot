@@ -46,6 +46,8 @@ export class Portal {
   readonly #sessions = new Map<string, Session>();
   #store: SessionStore | null = null;
   #storeFailed = false;
+  /** Called after sessions end by sign-out or a new code, so what is tied to them (open sockets) can be cut. */
+  onRevoked: () => void = () => {};
 
   constructor(
     envCode: string | undefined,
@@ -124,6 +126,7 @@ export class Portal {
     const hash = tokenHash(token);
     this.#sessions.delete(hash);
     this.#persist((st) => st.remove(hash));
+    this.onRevoked();
   }
 
   /** Sets a new code (given, or generated) and signs out every session but `keep`. */
@@ -138,6 +141,7 @@ export class Portal {
     const keepHash = tokenHash(keep);
     for (const hash of this.#sessions.keys()) if (hash !== keepHash) this.#sessions.delete(hash);
     this.#persist((st) => st.removeAllExcept(keepHash));
+    this.onRevoked();
   }
 
   setEnabled(enabled: boolean) {

@@ -1,0 +1,37 @@
+#!/usr/bin/env node
+// cpb-ctl <command> [--key value ...]: one command to the supervisor over its control socket (uid 1001 only,
+// so the portal runs it through `exec` and nothing in the workspace can). Prints one JSON line.
+//   cpb-ctl status [--tabs]            cpb-ctl wake            cpb-ctl tabs
+//   cpb-ctl control --on --holder <device> --label <text> --ttl 90 [--private]     cpb-ctl control --off
+//   cpb-ctl viewers --n 2              cpb-ctl chrome --action stop|restart
+//   cpb-ctl activate-tab --id <id>     cpb-ctl handoff-answer --id <id> --state handed_back --note <text>
+import net from 'node:net';
+
+const [cmd, ...rest] = process.argv.slice(2);
+const args = {};
+for (let i = 0; i < rest.length; i++) {
+  const m = /^--([a-z-]+)(?:=(.*))?$/.exec(rest[i] ?? '');
+  if (!m) continue;
+  const name = m[1];
+  const next = rest[i + 1];
+  if (m[2] !== undefined) args[name] = m[2];
+  else if (next !== undefined && !next.startsWith('--')) (args[name] = next), i++;
+  else args[name] = true;
+}
+if (args.off === true) (args.on = false), delete args.off;
+for (const k of ['n', 'ttl']) if (typeof args[k] === 'string') args[k] = Number(args[k]);
+
+const sock = process.env.CPB_CTL_SOCK || '/run/cpb/ctl.sock';
+const conn = net.connect(sock);
+let out = '';
+conn.on('connect', () => conn.write(`${JSON.stringify({ cmd, args })}\n`));
+conn.on('data', (d) => (out += d));
+conn.on('error', (e) => {
+  console.log(JSON.stringify({ ok: false, error: `cannot reach the supervisor: ${e.message}` }));
+  process.exit(1);
+});
+conn.on('close', () => {
+  const line = out.trim();
+  console.log(line || JSON.stringify({ ok: false, error: 'no answer' }));
+  process.exit(line && JSON.parse(line).ok ? 0 : 1);
+});

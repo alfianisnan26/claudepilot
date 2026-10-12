@@ -1,7 +1,21 @@
-import { FormDialog, Select, TextField } from '@isnanme/ui';
-import { WORKSPACE_NAME_MAX, workspaceNameProblem, type AccountPool, type CreateWorkspaceRequest, type WorkspaceTarget } from '@portal/contracts';
+import { cn, FormDialog, Select, TextField } from '@isnanme/ui';
+import {
+  WORKSPACE_NAME_MAX,
+  workspaceNameProblem,
+  type AccountPool,
+  type CreateWorkspaceRequest,
+  type MultiPoolType,
+  type PoolSummary,
+  type WorkspaceTarget,
+} from '@portal/contracts';
+import { ChevronDown } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { ApiError } from '@/lib/api';
+import { personasApi } from '@/features/personas/api';
+import { PoolChoice } from '@/features/pools/PoolPicker';
+import { multiPoolTabs, type MultiPoolTab } from '@/features/pools/registry';
+import { api, ApiError } from '@/lib/api';
+
+type AddOns = Partial<Record<MultiPoolType, string[]>>;
 
 const CPU_OPTIONS = [
   { value: '', label: 'No limit' },
@@ -36,6 +50,7 @@ export function NewWorkspaceDialog({
   const [cpus, setCpus] = useState('2');
   const [memory, setMemory] = useState('4096');
   const [poolId, setPoolId] = useState('');
+  const [addOns, setAddOns] = useState<AddOns>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -49,9 +64,21 @@ export function NewWorkspaceDialog({
     setCpus('2');
     setMemory('4096');
     setPoolId('');
+    setAddOns({});
     setErrors({});
     setFormError(null);
   }, [open, creatable]);
+
+  // Persona PRD FR10: the default persona starts selected; picking "None" sends nothing.
+  useEffect(() => {
+    if (!open || !multiPoolTabs().some((t) => t.pool.type === 'persona')) return;
+    let current = true;
+    personasApi.default().then(
+      ({ poolId: id }) => current && id && setAddOns((a) => (a.persona ? a : { ...a, persona: [id] })),
+      () => undefined,
+    );
+    return () => void (current = false);
+  }, [open]);
 
   const submit = async () => {
     const problem = workspaceNameProblem(name);
@@ -70,6 +97,8 @@ export function NewWorkspaceDialog({
         cpus: cpus ? Number(cpus) : undefined,
         memoryMb: memory ? Number(memory) : undefined,
         accountPoolId: poolId || null,
+        // Assigned right after the create, the way the account pool is.
+        pools: Object.fromEntries(Object.entries(addOns).filter(([, ids]) => ids.length > 0)),
       });
     } catch (e) {
       if (e instanceof ApiError && e.details && typeof e.details === 'object')
@@ -131,11 +160,96 @@ export function NewWorkspaceDialog({
           hint={poolId ? 'Claude Code starts signed in with the pool’s keys.' : undefined}
           error={errors.accountPoolId}
         />
+        {multiPoolTabs()
+          .filter((t) => t.pool.single)
+          .map((t) => (
+            <SinglePick key={t.id} open={open} tab={t} value={addOns[t.pool.type] ?? []} onChange={(ids) => setAddOns((a) => ({ ...a, [t.pool.type]: ids }))} />
+          ))}
         <div className="grid grid-cols-2 gap-3">
           <Select label="CPU" value={cpus} onChange={setCpus} options={CPU_OPTIONS} error={errors.cpus} />
           <Select label="Memory" value={memory} onChange={setMemory} options={MEMORY_OPTIONS} error={errors.memoryMb} />
         </div>
+        <AddOnsSection open={open} value={addOns} onChange={setAddOns} error={errors.pools} />
       </div>
     </FormDialog>
+  );
+}
+
+/** A one-per-workspace type (a persona) as one compact select in the main form; nothing shows while there is nothing to pick. */
+function SinglePick({ open, tab, value, onChange }: { open: boolean; tab: MultiPoolTab; value: string[]; onChange: (poolIds: string[]) => void }) {
+  const [list, setList] = useState<PoolSummary[] | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    setList(null);
+    let current = true;
+    api.pools.list(tab.pool.type).then(
+      (l) => current && setList(l),
+      () => current && setList([]),
+    );
+    return () => void (current = false);
+  }, [open, tab.pool.type]);
+  if (!list || list.length === 0) return null;
+  return <PoolChoice ui={tab.pool} label={tab.label} pools={list} value={value} onChange={onChange} />;
+}
+
+/**
+ * Add-ons (foundation PRD §10): pools of each registered multi-assignment type, collapsed by default.
+ * Hidden while no such type is registered. One-per-workspace types (personas) have their own select above.
+ */
+function AddOnsSection({ open, value, onChange, error }: { open: boolean; value: AddOns; onChange: (next: AddOns) => void; error?: string }) {
+  const tabs = multiPoolTabs().filter((t) => !t.pool.single);
+  const [expanded, setExpanded] = useState(false);
+  const [pools, setPools] = useState<Partial<Record<MultiPoolType, PoolSummary[]>>>({});
+
+  useEffect(() => {
+    if (!open) return;
+    setExpanded(false);
+    setPools({});
+    let current = true;
+    for (const t of multiPoolTabs().filter((x) => !x.pool.single))
+      api.pools.list(t.pool.type).then(
+        (list) => current && setPools((p) => ({ ...p, [t.pool.type]: list })),
+        () => current && setPools((p) => ({ ...p, [t.pool.type]: [] })),
+      );
+    return () => void (current = false);
+  }, [open]);
+
+  if (tabs.length === 0) return null;
+  const count = tabs.reduce((n, t) => n + (value[t.pool.type]?.length ?? 0), 0);
+  return (
+    <div className="rounded-2xl border border-line">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((x) => !x)}
+        className="press flex w-full items-center gap-2 px-4 py-3 text-left"
+      >
+        <span className="flex-1 text-sm font-semibold text-ink-soft">Add-ons</span>
+        <span className="text-[13px] text-muted">{count ? `${count} selected` : 'Optional'}</span>
+        <ChevronDown className={cn('size-4 text-muted transition-transform', expanded && 'rotate-180')} />
+      </button>
+      {expanded && (
+        <div className="flex flex-col gap-4 border-t border-line px-4 py-3">
+          {tabs.map((t) => {
+            const list = pools[t.pool.type];
+            return list ? (
+              <PoolChoice
+                key={t.id}
+                ui={t.pool}
+                label={t.label}
+                pools={list}
+                value={value[t.pool.type] ?? []}
+                onChange={(ids) => onChange({ ...value, [t.pool.type]: ids })}
+              />
+            ) : (
+              <p key={t.id} className="text-[13px] text-muted">
+                Loading {t.label.toLowerCase()}…
+              </p>
+            );
+          })}
+          {error && <p className="text-[13px] font-medium text-danger">{error}</p>}
+        </div>
+      )}
+    </div>
   );
 }

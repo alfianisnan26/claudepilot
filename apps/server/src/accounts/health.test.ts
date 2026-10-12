@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { after, before, test } from 'node:test';
@@ -14,6 +13,7 @@ import type { Runtime } from '../workspaces/runtime.js';
 import { AccountHealthService, classifyResponse, verdictOfCheck } from './health.js';
 import { AccountPools } from './pools.js';
 import { AccountsService } from './service.js';
+import { tempDirectory } from '../store/testTmp.js';
 
 const run = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -91,7 +91,7 @@ test('outbox output parses into sealed files and events, skipping torn or foreig
 });
 
 test('pulls seal the outbox, deliver each event once (also after a restart), and delete what was stored', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'cp-outbox-'));
+  const root = tempDirectory('cp-outbox-');
   const box = join(root, 'outbox');
   mkdirSync(box);
   const script = join(root, 'outbox-pull');
@@ -106,7 +106,7 @@ test('pulls seal the outbox, deliver each event once (also after a restart), and
       },
     },
   } as unknown as Runtime;
-  const store = await Store.open({ dataDir: mkdtempSync(join(tmpdir(), 'cp-outbox-db-')), secretKey: parseSecretKey(generateSecretKey()) });
+  const store = await Store.open({ dataDir: tempDirectory('cp-outbox-db-'), secretKey: parseSecretKey(generateSecretKey()) });
   const got: OutboxEvent[] = [];
   const subscribe = (o: Outbox) => o.subscribe('account', (_ws, events) => got.push(...events), () => ['docker/ws1']);
 
@@ -165,7 +165,7 @@ const revoked = { status: 401, error: { type: 'authentication_error', message: '
 /** Three accounts in one pool, in this priority order (`a` and `c` share an organization), and one workspace on `a`. */
 async function setup(opts: { spacingMs?: number } = {}) {
   answer.clear();
-  const store = await Store.open({ dataDir: mkdtempSync(join(tmpdir(), 'cp-health-')), secretKey: parseSecretKey(generateSecretKey()) });
+  const store = await Store.open({ dataDir: tempDirectory('cp-health-'), secretKey: parseSecretKey(generateSecretKey()) });
   const accounts = new AccountsService(store);
   const pools = new AccountPools(store, { jitterMs: () => 0 });
   const health = new AccountHealthService(store, { spacingMs: opts.spacingMs ?? 0 });

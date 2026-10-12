@@ -1,9 +1,13 @@
-import { Badge, Button, cn, ConfirmDialog, FormDialog, Menu, Select, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
-import type { ChatRequest, WorkspaceClaude } from '@portal/contracts';
-import { Archive, ArchiveRestore, ArrowLeft, Bot, FolderOpen, Gauge, ListCollapse, ListTree, MoreHorizontal, Square, Trash2 } from 'lucide-react';
+import { Badge, cn, ConfirmDialog, Menu, Spinner, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
+import type { ChatRequest, ChatSession } from '@portal/contracts';
+import { Archive, ArchiveRestore, ArrowLeft, Bot, CircleStop, FolderOpen, Gauge, GitBranch, ListCollapse, ListTree, MoreHorizontal, Pencil, ShieldAlert, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { BRAND_NAME } from '@/components/Logo';
+import { usePersonaOf } from '@/features/personas/identities';
+import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
+import { TicketChip } from '@/features/tickets/TicketChip';
+import { RunChip } from '@/features/ci/RunChip';
 import { errorText } from '@/lib/api';
 import { pinnedToViewport, useVisualViewport } from '@/lib/viewport';
 import { AgentsPanel, AgentsSheet } from './AgentsPanel';
@@ -15,9 +19,12 @@ import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './Fi
 import { endedForSafety, StateBadge } from './shared';
 import { Transcript } from './Transcript';
 import { ResumeBanner } from './ResumeBanner';
+import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
+import { useMoveChat } from './SwitchDialog';
 import { TrustSheet, useFolderTrust, type TrustTarget } from './TrustSheet';
 import { UsageDialog } from './Usage';
 import { useChatSession, type ChatControlArgs, type ChatControlOp, type ChatSendOptions } from './useChatSocket';
+import { useWorkspaceFacts } from './useWorkspaceFacts';
 
 /** The side panels: one at a time. */
 type Side = 'agents' | 'files';
@@ -55,9 +62,19 @@ export function SessionPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
-  const { connected, events, delta, session, inputs, outbox, tasks, send, respond, control, stop, end } = useChatSession(id);
+  const { connected, events, delta, session, removed, inputs, outbox, tasks, send, respond, control, stop, end } = useChatSession(id);
   const [ending, setEnding] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  // Deleted here (the dialog leaves on its own) or in another tab: back to the list.
+  const leaving = useRef(false);
+  useEffect(() => {
+    if (!removed || leaving.current) return;
+    leaving.current = true;
+    toast('That session was deleted');
+    navigate('/admin/sessions', { replace: true });
+  }, [removed, navigate, toast]);
   const [usageOpen, setUsageOpen] = useState(false);
   /** Archive (FR4): ends it if it's still going, then back to the list, where it's under Archived. */
   const archive = async () => {
@@ -111,6 +128,15 @@ export function SessionPage() {
   const trustedControl = useCallback((op: ChatControlOp, args?: ChatControlArgs) => guard(() => control(op, args)), [guard, control]);
   const stopTask = useCallback((taskId: string) => control('stop_task', { taskId }), [control]);
   const interrupt = useCallback(() => control('stop'), [control]);
+  // Leaving Bypass is one tap (FR20): back to the start mode, no confirmation.
+  const leaveBypass = useCallback(async () => {
+    try {
+      await trustedControl('mode', { mode: 'default' });
+      toast('Bypass off');
+    } catch (e) {
+      toast(errorText(e, 'Could not turn Bypass off.'), 'error');
+    }
+  }, [trustedControl, toast]);
 
   const wide = useMediaQuery('(min-width: 1280px)');
   // Below 640 px the title needs the room: Files and Agents live in the ⋯ menu.
@@ -160,41 +186,14 @@ export function SessionPage() {
     return () => void (document.title = BRAND_NAME);
   }, [session?.title]);
 
-  // The open thread follows a transfer onto the new session.
+  // A moved chat is still this session. An old link to a session an earlier move had made (its id is an alias
+  // now) opens the chat under its own id.
   useEffect(() => {
-    if (session?.id === id && session.successorId) navigate(`/admin/sessions/${session.successorId}`, { replace: true });
-  }, [session?.id, session?.successorId, id, navigate]);
+    if (session && session.id !== id) navigate(`/admin/sessions/${session.id}`, { replace: true });
+  }, [session, id, navigate]);
 
-  const [switching, setSwitching] = useState(false);
-  const [switchTo, setSwitchTo] = useState('');
-  const [others, setOthers] = useState<WorkspaceClaude[]>([]);
-  const [moving, setMoving] = useState(false);
-  const openSwitch = () => {
-    if (!session) return;
-    setSwitching(true);
-    setSwitchTo('');
-    chatApi.claudes(session.workspaceId).then(
-      (list) => {
-        const rest = list.filter((c) => !c.removedAt && c.id !== session.claudeId);
-        setOthers(rest);
-        setSwitchTo(rest[0]?.id ?? '');
-      },
-      () => setOthers([]),
-    );
-  };
-  const runTransfer = async () => {
-    if (!switchTo) return;
-    setMoving(true);
-    try {
-      const next = await chatApi.transfer(id, { claudeId: switchTo });
-      setSwitching(false);
-      navigate(`/admin/sessions/${next.id}`, { replace: true });
-    } catch (e) {
-      toast(errorText(e, 'Could not move this session.'), 'error');
-    } finally {
-      setMoving(false);
-    }
-  };
+  const move = useMoveChat();
+  const openSwitch = () => session && move.start(session);
 
   // Open requests: a `request` with no later `resolved`, oldest first (events are seq-ordered).
   const openRequests = useMemo(() => {
@@ -226,9 +225,15 @@ export function SessionPage() {
     [control, toast],
   );
 
+  // The workspace's persona (I11): its name and avatar, where the session says who it is.
+  const persona = usePersonaOf(session?.workspaceId);
   const state = session?.state ?? 'starting';
   const working = state === 'working';
   const ended = state === 'ended';
+  const bypass = session?.mode === 'bypassPermissions' && !ended;
+  // Its workspace was removed: the transcript is all that's left, so nothing that needs the workspace is offered.
+  const { factOf } = useWorkspaceFacts();
+  const gone = !!session && !!factOf(session.workspaceId)?.gone;
 
   // What the ⋯ menu opens takes focus back to ⋯ when it closes (the menu item it came from is gone by then).
   const menuRef = useRef<HTMLDivElement>(null);
@@ -243,37 +248,46 @@ export function SessionPage() {
     ...(roomy
       ? []
       : [
-          { label: 'Files and changes', icon: <FolderOpen className="size-4" />, onSelect: fromMenu(toggleFiles) },
+          ...(gone ? [] : [{ label: 'Files and changes', icon: <FolderOpen className="size-4" />, onSelect: fromMenu(toggleFiles) }]),
           { label: running ? `Agents · ${running} running` : 'Agents', icon: <Bot className="size-4" />, onSelect: fromMenu(toggleAgents) },
           // Phones keep the line above the composer short: the permission mode is changed from here.
-          ...(session && !ended
+          ...(session && !ended && !gone
             ? [{ label: `Mode: ${mode.label}`, icon: <ModeIcon className="size-4" />, onSelect: fromMenu(() => controls.current?.openMode()) }]
             : []),
         ]),
+    { label: 'Rename…', icon: <Pencil className="size-4" />, onSelect: fromMenu(() => setRenaming(true)), disabled: !session },
     { label: 'Usage', icon: <Gauge className="size-4" />, onSelect: fromMenu(() => setUsageOpen(true)) },
     details
       ? { label: 'Show less', icon: <ListCollapse className="size-4" />, onSelect: fromMenu(toggleDetails) }
       : { label: 'Show all details', icon: <ListTree className="size-4" />, onSelect: fromMenu(toggleDetails) },
     {
-      label: 'Switch Claude',
+      label: 'Move to another Claude…',
       icon: <Bot className="size-4" />,
       onSelect: fromMenu(openSwitch),
-      disabled: ended && session?.endedReason !== 'transferred',
+      disabled: gone || ended || !!session?.switching,
     },
     session?.archivedAt
       ? { label: 'Unarchive', icon: <ArchiveRestore className="size-4" />, onSelect: fromMenu(() => void unarchive()) }
       : {
           label: 'Archive',
           icon: <Archive className="size-4" />,
-          onSelect: fromMenu(() => (session?.state === 'working' || session?.state === 'waiting' ? setArchiving(true) : void archive())),
+          onSelect: fromMenu(() => (session?.state === 'working' || session?.state === 'waiting' || session?.worktree ? setArchiving(true) : void archive())),
           disabled: !session,
         },
-    { label: 'End session', icon: <Trash2 className="size-4" />, onSelect: fromMenu(() => setEnding(true)), danger: true, disabled: ended },
+    { label: 'End session', icon: <CircleStop className="size-4" />, onSelect: fromMenu(() => setEnding(true)), danger: true, disabled: ended },
+    { label: 'Delete…', icon: <Trash2 className="size-4" />, onSelect: fromMenu(() => setDeleting(true)), danger: true, disabled: !session },
   ];
 
   return (
     <div className="fixed inset-x-0 top-0 h-dvh overflow-hidden bg-bg text-ink" style={pinnedToViewport(viewport)}>
-      <header className="glass absolute inset-x-0 top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center gap-2 border-b border-ink/[0.05] px-2 pt-[env(safe-area-inset-top)] sm:px-3">
+      <header
+        className={cn(
+          'glass absolute inset-x-0 top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center gap-2 border-b px-2 pt-[env(safe-area-inset-top)] sm:px-3',
+          bypass ? 'border-danger/40' : 'border-ink/[0.05]',
+        )}
+      >
+        {/* Bypass is on: the whole header is tinted until it's off. */}
+        {bypass && <span aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 bg-danger/10" />}
         <Link
           to="/admin/sessions"
           aria-label="Back to sessions"
@@ -282,42 +296,82 @@ export function SessionPage() {
           <ArrowLeft className="size-[18px]" />
         </Link>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[15.5px] font-semibold">{session?.title || 'Untitled'}</p>
+          {/* Tap the title to rename (FR4). */}
+          <button
+            type="button"
+            onClick={() => setRenaming(true)}
+            disabled={!session}
+            title="Rename"
+            className="block max-w-full truncate rounded-md text-left text-[15.5px] font-semibold hover:text-ink-soft"
+          >
+            {session?.title || 'Untitled'}
+          </button>
           <p className="truncate text-[12px] text-muted">
+            {persona && (
+              <>
+                <PersonaAvatar name={persona.name} avatar={persona.avatar} size="xs" showName className="inline-flex max-w-[40%] align-middle font-semibold text-ink-soft" />
+                {' · '}
+              </>
+            )}
             <span className="font-mono">{session?.workspaceId ?? '…'}</span>
             {session?.claudeName ? ` · ${session.claudeName}` : ''}
+            {session?.ticketId && (
+              <>
+                {' · '}
+                <TicketChip ticketId={session.ticketId} compact />
+              </>
+            )}
+            {session?.worktree && <RunChip sessionId={session.id} compact lead=" · " />}
+            {session?.worktree && (
+              <>
+                {' · '}
+                <span className="inline-flex max-w-[45%] items-center gap-1 align-bottom font-mono" title={session.worktree.path}>
+                  <GitBranch className="size-3 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{session.worktree.branch}</span>
+                </span>
+              </>
+            )}
             {session?.endedReason === 'transferred' ? ' · left behind' : ''}
+            {gone ? ' · workspace removed' : ''}
             {!connected && ' · reconnecting…'}
           </p>
         </div>
+        {/* No Working badge and no Stop here: the composer's button shows a ring while Claude works and is the Stop. */}
         {session &&
-          (endedForSafety(session.endedReason) && ended ? (
-            <Badge tone="danger">Ended</Badge>
-          ) : (
-            <StateBadge state={state} />
-          ))}
-        {working && roomy && (
-          <Button size="sm" variant="secondary" icon={<Square className="size-3.5" />} onClick={stop} aria-label="Stop">
-            Stop
-          </Button>
+          !working &&
+          (endedForSafety(session.endedReason) && ended ? <Badge tone="danger">Ended</Badge> : <StateBadge state={state} />)}
+        {bypass && (
+          <button
+            type="button"
+            onClick={() => void leaveBypass()}
+            aria-label="Turn off Bypass"
+            title="Bypass is on: Claude runs every tool without asking. Deny rules still apply. Tap to turn it off."
+            className="press inline-flex h-8 shrink-0 items-center gap-1 rounded-full bg-danger px-2.5 text-[12.5px] font-semibold text-white dark:text-bg"
+          >
+            <ShieldAlert className="size-3.5" aria-hidden="true" />
+            Bypass
+            <X className="size-3.5" aria-hidden="true" />
+          </button>
         )}
         {roomy && (
           <>
-            <button
-              type="button"
-              onClick={toggleFiles}
-              aria-label="Files"
-              aria-expanded={filesOpen}
-              aria-controls={filesOpen ? 'files-panel' : undefined}
-              title={wide ? (filesOpen ? 'Hide files' : 'Show files and changes') : 'Files and changes'}
-              className={cn(
-                'press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold text-muted hover:bg-surface-2 hover:text-ink',
-                filesOpen && 'bg-surface-2 text-ink',
-              )}
-            >
-              <FolderOpen className="size-[18px]" />
-              <span>Files</span>
-            </button>
+            {!gone && (
+              <button
+                type="button"
+                onClick={toggleFiles}
+                aria-label="Files"
+                aria-expanded={filesOpen}
+                aria-controls={filesOpen ? 'files-panel' : undefined}
+                title={wide ? (filesOpen ? 'Hide files' : 'Show files and changes') : 'Files and changes'}
+                className={cn(
+                  'press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold text-muted hover:bg-surface-2 hover:text-ink',
+                  filesOpen && 'bg-surface-2 text-ink',
+                )}
+              >
+                <FolderOpen className="size-[18px]" />
+                <span>Files</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={toggleAgents}
@@ -365,6 +419,7 @@ export function SessionPage() {
             padTop="calc(3.5rem + env(safe-area-inset-top) + 1.25rem)"
             padBottom={dockHeight + 12}
             onOpenUsage={() => setUsageOpen(true)}
+            persona={persona}
             className="h-full"
           />
 
@@ -384,13 +439,18 @@ export function SessionPage() {
                   agentName={current.agentLabel ? agentNames.get(current.agentLabel) : null}
                 />
               )}
-              {ended ? (
+              {gone ? (
+                <GoneNote />
+              ) : ended ? (
                 <EndedNote reason={session?.endedReason} />
+              ) : session?.switching ? (
+                <MovingNote to={session.switching.toClaude} step={session.switching.step} from={session.claudeName} />
               ) : (
                 <>
                   {session && <ResumeBanner session={session} connected={connected} onResume={() => trustedControl('resume')} />}
                   <Composer
                     ref={composer}
+                    sessionId={id}
                     onSend={trustedSend}
                     connected={connected}
                     working={working}
@@ -427,7 +487,7 @@ export function SessionPage() {
             />
           </aside>
         )}
-        {wide && panel === 'files' && (
+        {wide && !gone && panel === 'files' && (
           <aside id="files-panel" aria-label="Files" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[calc(3.5rem+env(safe-area-inset-top))]">
             <FilesPanel key={id} sessionId={id} view={filesView} onView={setFilesView} onClose={toggleFiles} closeLabel="Hide files" />
           </aside>
@@ -444,54 +504,53 @@ export function SessionPage() {
           onClose={() => setSheet(null)}
         />
       )}
-      {!wide && <FilesSheet key={id} open={sheet === 'files'} sessionId={id} view={filesView} onView={setFilesView} onClose={() => setSheet(null)} />}
+      {!wide && !gone && <FilesSheet key={id} open={sheet === 'files'} sessionId={id} view={filesView} onView={setFilesView} onClose={() => setSheet(null)} />}
 
       <TrustSheet trust={trust} />
 
-      <FormDialog
-        open={switching}
-        onClose={() => !moving && setSwitching(false)}
-        size="sm"
-        title="Move this chat?"
-        description="This session stops being the live thread. A new session starts on the Claude you pick, and this view follows it. Logins stay in their directories."
-        onSubmit={runTransfer}
-        submitLabel="Move"
-        saving={moving}
-        submitDisabled={!switchTo}
-      >
-        <Select
-          label="Claude"
-          value={switchTo}
-          onChange={setSwitchTo}
-          options={others.map((c) => ({ value: c.id, label: c.name }))}
-          placeholder={others.length ? 'Pick a Claude' : 'No other Claude on this workspace'}
-        />
-      </FormDialog>
+      {move.element}
 
-      <ConfirmDialog
-        open={ending}
-        title="End this session?"
-        description="The chat is closed and Claude Code stops working on it. The transcript stays for your records."
-        confirmLabel="End session"
-        onConfirm={() => {
-          end();
-          setEnding(false);
+      <EndSessionDialog session={ending ? session : null} onClose={() => setEnding(false)} />
+      <RenameSessionDialog session={renaming ? session : null} onClose={() => setRenaming(false)} />
+      <DeleteSessionDialog
+        session={deleting ? session : null}
+        onClose={() => setDeleting(false)}
+        onDeleted={() => {
+          leaving.current = true;
+          navigate('/admin/sessions', { replace: true });
         }}
-        onClose={() => setEnding(false)}
       />
       <UsageDialog open={usageOpen} onClose={() => setUsageOpen(false)} events={events} session={session} />
-      <ConfirmDialog
-        open={archiving}
-        title="Archive this session?"
-        description="Claude Code stops working on it and the chat ends. It moves to Archived, where the transcript stays."
-        confirmLabel="Archive"
-        onConfirm={() => {
-          setArchiving(false);
-          void archive();
-        }}
+      <ArchiveSessionDialog
+        session={archiving ? session : null}
         onClose={() => setArchiving(false)}
+        onArchived={() => {
+          leaving.current = true;
+          navigate('/admin/sessions');
+        }}
       />
     </div>
+  );
+}
+
+/** The session's workspace was removed: the transcript stays, and that's all. */
+function GoneNote() {
+  return (
+    <p role="status" className="glass-card rounded-[24px] px-4 py-3 text-center text-[13.5px] text-muted">
+      <span className="font-semibold text-ink">Workspace removed.</span> Read-only.
+    </p>
+  );
+}
+
+/** The chat is moving to another Claude: nothing is sent or queued meanwhile; the transcript shows the steps. */
+function MovingNote({ to, step, from }: { to: string; step: 'handoff' | 'starting' | 'finishing'; from: string | null }) {
+  return (
+    <p role="status" aria-live="polite" className="glass-card flex items-center justify-center gap-2.5 rounded-full px-4 py-3 text-center text-[13.5px] text-muted">
+      <Spinner className="size-4" />
+      <span>
+        {step === 'handoff' ? `${from ?? 'Claude'} is writing the handoff…` : step === 'starting' ? `Starting ${to}…` : `Moving to ${to}…`}
+      </span>
+    </p>
   );
 }
 
@@ -500,13 +559,7 @@ function EndedNote({ reason }: { reason: string | null | undefined }) {
   const stop = endedForSafety(reason);
   return (
     <p role="status" className="glass-card rounded-full px-4 py-3 text-center text-[13.5px] text-muted">
-      {stop ? (
-        <>
-          <span className="font-semibold text-danger">{stop.label}.</span> Start a new session to carry on.
-        </>
-      ) : (
-        'This session has ended.'
-      )}
+      {stop ? <span className="font-semibold text-danger">{stop.label}</span> : 'Ended'}
     </p>
   );
 }

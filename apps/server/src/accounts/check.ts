@@ -29,10 +29,52 @@ export function normalizeBaseUrl(input: string): string {
   return `${url.protocol}//${url.host}${path}`;
 }
 
-/** Private, loopback, link-local and other non-public addresses (IPv4 and IPv6). */
+/** The eight 16-bit groups of an IPv6 address (`::` expanded, an embedded dotted quad read), or null when `ip` isn't one. */
+function ipv6Groups(ip: string): number[] | null {
+  const addr = ip.split('%')[0]!.toLowerCase();
+  if (isIP(addr) !== 6) return null;
+  const gap = addr.indexOf('::');
+  const groups = (text: string) =>
+    (text ? text.split(':') : []).flatMap((part) => {
+      if (!part.includes('.')) return [parseInt(part, 16)];
+      const [a, b, c, d] = part.split('.').map(Number) as [number, number, number, number];
+      return [a * 256 + b, c * 256 + d];
+    });
+  if (gap < 0) {
+    const all = groups(addr);
+    return all.length === 8 ? all : null;
+  }
+  const head = groups(addr.slice(0, gap));
+  const tail = groups(addr.slice(gap + 2));
+  const fill = 8 - head.length - tail.length;
+  return fill < 0 ? null : [...head, ...new Array<number>(fill).fill(0), ...tail];
+}
+
+const dotted = (hi: number, lo: number) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+
+/**
+ * The IPv4 address an IPv6 one stands for, when it does: mapped (`::ffff:a.b.c.d`, which `new URL` spells
+ * `::ffff:7f00:1`), compatible (`::a.b.c.d`), translated (`::ffff:0:a.b.c.d`), NAT64 (`64:ff9b::/96`) and
+ * 6to4 (`2002:aabb:ccdd::/48`). Null for any other address.
+ */
+export function embeddedIPv4(ip: string): string | null {
+  const g = ipv6Groups(ip);
+  if (!g) return null;
+  if (g.slice(0, 5).every((x) => x === 0) && (g[5] === 0xffff || g[5] === 0)) return dotted(g[6]!, g[7]!);
+  if (g.slice(0, 4).every((x) => x === 0) && g[4] === 0xffff && g[5] === 0) return dotted(g[6]!, g[7]!);
+  if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return dotted(g[6]!, g[7]!);
+  if (g[0] === 0x2002) return dotted(g[1]!, g[2]!);
+  return null;
+}
+
+/**
+ * Private, loopback, link-local and other non-public addresses (IPv4 and IPv6). An IPv6 address that
+ * carries an IPv4 one is judged by that one, in whatever spelling (`::ffff:127.0.0.1` is `::ffff:7f00:1`
+ * once a URL parser has seen it). Anything that is not an IP address is refused.
+ */
 export function isPrivateAddress(ip: string): boolean {
   if (isIP(ip) === 4) {
-    const [a, b] = ip.split('.').map(Number) as [number, number];
+    const [a, b, c] = ip.split('.').map(Number) as [number, number, number];
     return (
       a === 0 ||
       a === 10 ||
@@ -41,13 +83,30 @@ export function isPrivateAddress(ip: string): boolean {
       (a === 169 && b === 254) ||
       (a === 172 && b >= 16 && b <= 31) ||
       (a === 192 && b === 168) ||
+      (a === 192 && b === 0 && (c === 0 || c === 2)) || // IETF protocol assignments, TEST-NET-1
+      (a === 192 && b === 88 && c === 99) || // 6to4 relay anycast
       (a === 198 && (b === 18 || b === 19)) ||
+      (a === 198 && b === 51 && c === 100) || // TEST-NET-2
+      (a === 203 && b === 0 && c === 113) || // TEST-NET-3
       a >= 224
     );
   }
-  const v6 = ip.toLowerCase();
-  if (v6.startsWith('::ffff:')) return isPrivateAddress(v6.slice(7));
-  return v6 === '::' || v6 === '::1' || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6) || v6.startsWith('ff');
+  const g = ipv6Groups(ip);
+  if (!g) return true;
+  const inner = embeddedIPv4(ip);
+  if (inner) return isPrivateAddress(inner);
+  const first = g[0]!;
+  return (
+    g.every((x) => x === 0) || // ::
+    (g.slice(0, 7).every((x) => x === 0) && g[7] === 1) || // ::1
+    (first & 0xfe00) === 0xfc00 || // fc00::/7 unique local
+    (first & 0xffc0) === 0xfe80 || // fe80::/10 link-local
+    (first & 0xffc0) === 0xfec0 || // fec0::/10 site-local (deprecated)
+    (first & 0xff00) === 0xff00 || // ff00::/8 multicast
+    (first === 0x2001 && (g[1] === 0 || g[1] === 0x0db8)) || // Teredo, documentation
+    (first === 0x0100 && g.slice(1, 4).every((x) => x === 0)) || // 100::/64 discard-only
+    (first === 0x64 && g[1] === 0xff9b && g[2] === 1) // 64:ff9b:1::/48 local-use NAT64
+  );
 }
 
 /**

@@ -1,0 +1,68 @@
+#!/usr/bin/env node
+// cpb-vnc <view|full>: the container's end of the portal's live-view bridge (browser & desktop PRD §12.1), run by
+// `exec` as uid 1001, the only user who can open the VNC socket and read the role passwords. It logs in to the
+// display's VNC server with the role's password (so the server itself enforces view-only for `view`), sends
+// ClientInit "shared", then prints `CPB-VNC-OK` and relays raw RFB bytes from ServerInit on, both ways. The portal
+// does the browser-facing handshake and filters what the viewer may send.
+import fs from 'node:fs';
+import net from 'node:net';
+import { vncResponse } from './des.mjs';
+
+const role = process.argv[2] === 'full' ? 'full' : 'view';
+const RUN = process.env.CPB_RUN || '/run/cpb';
+const fail = (why) => {
+  process.stdout.write(`CPB-VNC-ERR ${why}\n`, () => process.exit(1));
+};
+
+let password;
+try {
+  password = fs.readFileSync(`${RUN}/vnc-${role}.pw`, 'utf8');
+} catch {
+  fail('the display is not running');
+}
+
+const sock = net.connect(`${RUN}/vnc.sock`);
+let buf = Buffer.alloc(0);
+let step = 'version';
+const timer = setTimeout(() => fail('the display did not answer'), 10_000);
+const take = (n) => {
+  const b = buf.subarray(0, n);
+  buf = buf.subarray(n);
+  return b;
+};
+
+sock.on('error', (e) => fail(`cannot reach the display: ${e.message}`));
+sock.on('close', () => process.exit(0));
+sock.on('data', (d) => {
+  if (step === 'relay') return void process.stdout.write(d);
+  buf = Buffer.concat([buf, d]);
+  for (;;) {
+    if (step === 'version' && buf.length >= 12) {
+      take(12);
+      sock.write('RFB 003.008\n');
+      step = 'types';
+    } else if (step === 'types' && buf.length >= 1) {
+      const n = buf[0];
+      if (n === 0) return fail('the display refused the connection');
+      if (buf.length < 1 + n) return;
+      const types = [...take(1 + n)].slice(1);
+      if (!types.includes(2)) return fail('the display offers no password login');
+      sock.write(Buffer.from([2]));
+      step = 'challenge';
+    } else if (step === 'challenge' && buf.length >= 16) {
+      sock.write(vncResponse(take(16), password));
+      step = 'result';
+    } else if (step === 'result' && buf.length >= 4) {
+      if (take(4).readUInt32BE(0) !== 0) return fail('the display refused the password');
+      clearTimeout(timer);
+      process.stdout.write('CPB-VNC-OK\n');
+      sock.write(Buffer.from([1])); // ClientInit: shared, so no viewer can disconnect another
+      step = 'relay';
+      if (buf.length) process.stdout.write(take(buf.length));
+      process.stdin.on('data', (c) => sock.write(c));
+      process.stdin.on('end', () => sock.end());
+      process.stdin.resume();
+      return;
+    } else return;
+  }
+});

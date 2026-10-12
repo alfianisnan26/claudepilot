@@ -1,9 +1,11 @@
 import { cn, Dialog, StatGrid, StatTile } from '@isnanme/ui';
-import type { ChatEvent, ChatSession } from '@portal/contracts';
+import type { ChatEvent, ChatSegment, ChatSession } from '@portal/contracts';
 import { CircleCheck } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Link } from 'react-router';
+import { InfoTip } from '@/components/InfoTip';
+import { chatApi } from './api';
 import { formatTokens, formatUsd } from './shared';
 import { formatSeconds } from './ToolRows';
 
@@ -104,8 +106,32 @@ export function UsageDialog({ open, onClose, events, session }: { open: boolean;
   const context = session?.context;
   // Turns stored before tokens were kept have none: say so rather than 0.
   const counted = turns.some((u) => u.input !== null);
+  // A chat that moved between Claudes: what each run cost.
+  const [segments, setSegments] = useState<ChatSegment[]>([]);
+  const id = session?.id;
+  const moved = (session?.previousClaudes.length ?? 0) > 0;
+  useEffect(() => {
+    if (!open || !id || !moved) return setSegments([]);
+    let current = true;
+    chatApi.segments(id).then(
+      (list) => current && setSegments(list),
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [open, id, moved, session?.claudeSessionId]);
   return (
-    <Dialog open={open} onClose={onClose} title="Usage" description="Estimated at list prices, for this session's stored turns." size="sm">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={
+        <span className="inline-flex items-center gap-1.5">
+          Usage <InfoTip label="About usage">Estimated at list prices from this session’s stored turns.</InfoTip>
+        </span>
+      }
+      size="sm"
+    >
       <StatGrid cols={2}>
         <StatTile label="Cost" value={formatUsd(cost)} size="sm" />
         <StatTile label="Turns" value={String(turns.length)} size="sm" />
@@ -118,8 +144,19 @@ export function UsageDialog({ open, onClose, events, session }: { open: boolean;
           {context.windowTokens ? ` of ${formatTokens(context.windowTokens)} (${Math.round((context.usedTokens / context.windowTokens) * 100)}%)` : ''} after the last turn.
         </p>
       )}
+      {segments.length > 1 && (
+        <ul aria-label="By Claude" className="mt-4 flex flex-col divide-y divide-line rounded-2xl border border-line">
+          {segments.map((g) => (
+            <li key={g.n} className="flex items-baseline gap-3 px-3.5 py-2.5 text-[13px]">
+              <span className="min-w-0 flex-1 truncate font-semibold">{g.claudeName}</span>
+              <span className="shrink-0 text-muted tabular-nums">{g.turns} {g.turns === 1 ? 'turn' : 'turns'}</span>
+              <span className="w-16 shrink-0 text-right font-semibold tabular-nums">{formatUsd(g.costUsd)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <Link to="/admin/usage" onClick={onClose} className="mt-3 inline-block text-[13px] font-semibold text-ink underline underline-offset-2">
-        All usage over time
+        Usage over time
       </Link>
       {turns.length > 0 && (
         <ol className="mt-4 flex flex-col divide-y divide-line rounded-2xl border border-line">

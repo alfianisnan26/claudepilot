@@ -4,7 +4,22 @@ import type { Workspace, WorkspaceTarget, WorkspaceUsage } from '@portal/contrac
 export const LABEL = {
   managed: 'claudepilot.managed',
   name: 'claudepilot.workspace',
+  /** The id of the portal that created the workspace: portals sharing one daemon never touch each other's workspaces. */
+  portal: 'claudepilot.portal',
 } as const;
+
+/**
+ * Whether a workspace's labels say another portal created it. Workspaces from before the label existed carry
+ * none and stay adoptable; a portal that doesn't know its own id (a frozen store) can't tell, so it says no.
+ */
+export function createdByAnotherPortal(labels: Record<string, string> | null | undefined, mine: string | null): boolean {
+  return foreignPortal(labels?.[LABEL.portal], mine);
+}
+
+/** The same, for a portal id already read from the label. */
+export function foreignPortal(theirs: string | null | undefined, mine: string | null): boolean {
+  return !!theirs && !!mine && theirs !== mine;
+}
 
 export const HOME = '/home/node';
 
@@ -39,6 +54,8 @@ export interface TarEntry {
   path: string;
   type: 'file' | 'directory';
   content?: string;
+  /** Additive: a binary file's bytes, written instead of `content`. */
+  bytes?: Buffer;
   mode: number;
   uid: number;
   gid: number;
@@ -49,7 +66,8 @@ export interface TarEntry {
  * `put` archives and `run` stdin, never in a command line.
  */
 export interface DeliveryAccess {
-  state(name: string): Promise<{ exists: boolean; running: boolean }>;
+  /** `portal`: the id of the portal that created it, null when it carries none (made before the label existed). */
+  state(name: string): Promise<{ exists: boolean; running: boolean; portal?: string | null }>;
   /** Runs `sh -c script` in a running workspace. */
   run(name: string, script: string, opts?: { user?: 'root' | 'node'; stdin?: string; timeoutMs?: number }): Promise<{ code: number; stdout: string; stderr: string }>;
   /** Writes files and folders (with owner and mode) into a running or stopped workspace. */

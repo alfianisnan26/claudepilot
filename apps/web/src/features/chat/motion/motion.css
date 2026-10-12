@@ -1,0 +1,46 @@
+/*
+ * A word arriving in the live reply: it pulls into focus from a soft blur, fading in with a small rise. The
+ * numbers are the motion tokens (motion/tokens.ts), set as variables on the reply's element. An element that has
+ * finished playing loses `mo-w` and becomes `mo-s` (plain), so only the last few words are ever positioned or
+ * filtered. Nothing animates with reduced motion: the words are simply there.
+ */
+.mo-w {
+  position: relative;
+  animation: mo-word var(--mo-ms) var(--mo-ease) backwards;
+}
+
+@keyframes mo-word {
+  from {
+    opacity: 0;
+    filter: blur(var(--mo-blur));
+    top: var(--mo-rise);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    top: 0;
+  }
+}
+
+/* A slow device (frames taking too long while words play) drops the blur and keeps the fade and rise. */
+[data-mo-lite] .mo-w {
+  animation-name: mo-word-lite;
+}
+
+@keyframes mo-word-lite {
+  from {
+    opacity: 0;
+    top: var(--mo-rise);
+  }
+  to {
+    opacity: 1;
+    top: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mo-w {
+    position: static;
+    animation: none;
+  }
+}

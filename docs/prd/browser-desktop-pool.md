@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.2**, revised after the security and UX reviews. ✅ = observed in our experiments: Docker 29.9 DinD on arm64; Chromium 154 headful under Xvfb at 1280×800 and chrome-headless-shell 156 at 800×600; Playwright MCP 0.0.83 and chrome-devtools-mcp 1.10.1 driven by an MCP probe client; Claude Code 2.1.296 (`claude mcp list`); read-only checks and one server-side dry run on the k3s cluster. 🗂 = seen in the operator's isnan setup (its live configuration, read-only, or its own notes), not tested by us. 📄 = vendor documentation. 🔬 = unverified, listed in §21. |
+| Status | **Draft v0.3.** Built on Docker and verified (2026-10-12): the pool type and editor, the browser container, the gate with Playwright MCP, the VNC live view with control, Private and handoff, and the proxy view (§22); see §18 for each milestone's state and §23 for what the build changed. Not built: Kubernetes, the desktop tier and its MCP server, Monitoring and chat panels, Downloads and Send a file. Revised after the security and UX reviews (v0.2). ✅ = observed in our experiments: Docker 29.9 DinD on arm64; Chromium 154 headful under Xvfb at 1280×800 and chrome-headless-shell 156 at 800×600; Playwright MCP 0.0.83 and chrome-devtools-mcp 1.10.1 driven by an MCP probe client; Claude Code 2.1.296 (`claude mcp list`); read-only checks and one server-side dry run on the k3s cluster. 🗂 = seen in the operator's isnan setup (its live configuration, read-only, or its own notes), not tested by us. 📄 = vendor documentation. 🔬 = unverified, listed in §21. |
 | Owner | Alfian Isnan |
-| Last updated | 2026-10-10 |
+| Last updated | 2026-10-12 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, delivery, structure manager, plugin marketplace), [MCP set](mcpset-pool.md) (plugin and install conventions), [Web app & PWA](web-app-pwa.md) (immersive routes, devices, HTTPS, push) |
 | Related | [Settings & policies](settings-policies.md) (tool rules, allow group, network isolation values), [Chat sessions](chat-sessions.md) (handoff card, Browser panel), [Monitoring dashboard](monitoring-dashboard.md), [Portal MCP server](portal-mcp.md) |
 
@@ -36,17 +36,18 @@ agent's browser tools wait, and during a sign-in other viewers see nothing.
 | ID | Goal |
 | --- | --- |
 | G1 | **Tools for the agent.** A browser per workspace, and a desktop where needed, driven over MCP with no setup, on DinD, host Docker and Kubernetes. |
-| G2 | **Isolated by construction.** CDP, VNC and every helper stay on loopback or a unix socket in the workspace's namespace, hardened against web pages. No Service, published port or proxy. |
+| G2 | **Isolated by construction.** CDP, VNC and every helper stay on loopback or a unix socket in the workspace's namespace, hardened against web pages. No Service, published port or CDP proxy: the portal reaches the browser only through the bridge (§12) and the proxy view's helper (§22), which speaks a small fixed message set. |
 | G3 | **Watch and help.** A live view on phone and desktop, view-only by default; control leased to one device; a sign-in handoff that pauses the agent's browser tools, hides the screen from other viewers and takes no screenshots. |
 | G4 | **Cheap when idle, never in the way.** Explicit requests and limits; Chrome starts on first use and stops when idle; a browser fault never stops Claude Code or marks the workspace Error. |
 | G5 | **Native and push-only.** Claude Code's own MCP support through files; portal-initiated runtime calls only. |
 | G6 | **Honest.** Every screen says what is enforced and what isn't: the agent and workspace users can read the browser's cookies and send anything they can read to any site it reaches. |
+| G7 | **A browser preview that is a web page.** The owner's request: besides the VNC screen, a proxy view the portal draws itself (frames, an address bar, tabs), usable on a phone, with the agent and the person driving the same Chromium (§22). |
 
 ## 4. Non-goals
 
 - **Anti-bot evasion, CAPTCHA solving, fingerprint or user-agent spoofing, stealth plugins, rotating
   proxies, mass account automation.** People handle logins, 2FA, QR codes and CAPTCHAs in the live view.
-- **Claude in Chrome, computer use,** a CDP or MCP proxy in the portal, and any browser or desktop shared
+- **Claude in Chrome, computer use,** an MCP proxy in the portal, a raw CDP proxy (the proxy view of §22 forwards a fixed, validated message set, never CDP), and any browser or desktop shared
   between workspaces, external agent desktops such as isnan's Coder computer included (Q18).
 - **Website credentials** in the portal, or typed for the agent (Q19). **Protecting the browser from its
   own workspace,** which can reach CDP ✅ and read the profile, as it reads delivered secrets (foundation
@@ -281,7 +282,8 @@ noVNC's `viewOnly` only stops a cooperative client 📄, so the bridge filters b
 | Not enforced | Workspace users and the agent can drive the browser and read its cookies, through CDP ✅ or the profile. The agent can send anything it can read (files, delivered secrets, cookies) to any site the browser reaches, and act as anyone signed in there. Policies and Playwright's origin flags are guardrails; Playwright MCP says it isn't a security boundary 📄. Every assign dialog says so. |
 | Loopback services | Every listener the pool adds (supervisor `9220`, desktop `8930`) binds `127.0.0.1` explicitly (Node's default is `::`), refuses any request with an `Origin` header, accepts only `Host: 127.0.0.1:<port>`, and needs `X-CPB: 1` on every request and `Content-Type: application/json` on every POST; `8930` also needs `Mcp-Session-Id` after `initialize`. A page can't add that header without a preflight, so cross-origin `no-cors` requests and DNS rebinding fail, as isnan's `X-Kb` header does 🗂. Chrome's Local Network Access policies keep public sites off loopback as a second layer (🔬 Q21). Pages the agent opens still reach the workspace's own dev servers (US2). |
 | CDP | Bound to `127.0.0.1`; full Chromium ignored `--remote-debugging-address=0.0.0.0` ✅. Never headless-shell's stock entrypoint (socat on `0.0.0.0` ✅), `--remote-allow-origins=*`, a Service or a published port. Chrome's checks stay on: on headless-shell, a name in `Host` got 500 and a foreign `Origin` 403 ✅. |
-| Display and VNC | Xvfb with `-nolisten tcp -nolisten local` and an auth cookie, because a second container in the namespace drove the display through its abstract socket ✅ (🔬 Q9). VNC only on the `0600` socket (§12.1). |
+| Display and VNC | (Built with TigerVNC's `Xvnc` instead of Xvfb plus x11vnc, §23 F1.) Xvfb with `-nolisten tcp -nolisten local` and an auth cookie, because a second container in the namespace drove the display through its abstract socket ✅ (🔬 Q9). VNC only on the `0600` socket (§12.1). |
+| Proxy view | Never raw CDP: a viewer's page sends the fixed messages of §22 over a socket checked like the shell's (session, Origin, device id), the portal validates each one and a helper in the container validates it again and is the only CDP client. Only the holder of control, over HTTPS or localhost, gets past `ping` and `quality`; others watch, and see nothing while Private. Input is rate-limited, frames are never stored or logged, and the portal fetches no page itself, so it is not an open proxy. |
 | Users | Chrome runs as uid 1000. Xvfb, x11vnc, the supervisor, `cpb-ctl` and the desktop server run as uid 1001, whose control socket, VNC socket and passwords Chrome can't open. Config is root-owned. |
 | Chrome sandbox | Non-root Chromium under Docker's default seccomp failed with "No usable sandbox" ✅ and worked with seccomp unconfined or `SYS_ADMIN` ✅; neither is used. Docker gets a profile built from moby's default for that daemon's version plus user-namespace creation; Kubernetes a `Localhost` profile installed on the nodes, else `RuntimeDefault` set explicitly (🔬 Q2). Where the probe fails (A4), Chrome starts only if the admin allowed "Chrome without its sandbox" for that target (relaxing, A8). **Sandbox off means:** a page that exploits the renderer runs as Chrome's user. It drives every tab, reads every cookie (effectively plain text under `--password-store=basic`), and can log keys through X, so it sees passwords typed in a take-over for any site. It can't reach the VNC socket, change control or rewrite policy. The "Sandbox off" chip and the handoff card say so. |
 | Updates | Images rebuild weekly in the GHCR workflow and on each Chrome security release, on `node:22-trixie-slim`: bookworm is oldstable, and Debian LTS hasn't promised Chromium (🔬 Q10). Security-only revisions skip rollout pacing like revocations (foundation §6.3) and apply at the next idle stop (§10.3). The pool row shows "Chromium N days behind stable" (Google's version feed, read daily); past 21 days Chrome won't start with its sandbox off. CI fails a build whose Chromium trails the stable major. Built for amd64 and arm64, pinned by digest. |
@@ -433,14 +435,15 @@ noVNC's `viewOnly` only stops a cooperative client 📄, so the bridge filters b
 
 ## 18. Rollout and milestones
 
-| Milestone | Scope | Gate |
-| --- | --- | --- |
-| B0 | Spikes for Q1–Q7, Q9, Q20, Q21; the trixie image for amd64 and arm64 with its update pipeline; target probes (A4) | Foundation F2 |
-| B1 | Docker, Browser tier: pool type and editor page, companion with rule-based convergence, network isolation (A2), users and seccomp profile, loopback hardening, plugin and gate, Playwright MCP, live view and bridge, control lease, Private, handoff, the secure-context rule, row chip, chat card and Browser panel | Foundation F2, F5, F6; MCP set A4; Web app W1 (W3 for take-over away from localhost); Chat C1; exposure, loopback and bridge suites pass |
-| B2 | Idle stop and wake, memory guard, Restart and Reset, Downloads and Send a file, Monitoring, caps, handoff push | Monitoring D3; Settings S2; Web app W5 |
-| B3 | Kubernetes: browser container, ConfigMap, bridge, status and usage split, explicit requests and fit check, egress policy | Foundation F3; A2's requests; Q1, Q4; Q12 decided |
-| B4 | Desktop tier and desktop server | Q9, Q14 |
-| B5 | Headless tier with screencast, chrome-devtools-mcp, extensions, Google Chrome on amd64 | Q10 |
+| Milestone | Scope | Gate | State (2026-10-12) |
+| --- | --- | --- | --- |
+| B0 | Spikes for Q1–Q7, Q9, Q20, Q21; the trixie image for amd64 and arm64 with its update pipeline; target probes (A4) | Foundation F2 | **Partly built.** Q2, Q3, Q5, Q6, Q7, Q9 answered on Docker (§21); the image is built for arm64 only; no update pipeline, no probes beyond the sandbox check; Q1, Q4 (throughput), Q10, Q11, Q20, Q21 open. |
+| B1 | Docker, Browser tier: pool type and editor page, companion with rule-based convergence, network isolation (A2), users and seccomp profile, loopback hardening, plugin and gate, Playwright MCP, live view and bridge, control lease, Private, handoff, the secure-context rule, row chip, chat card and Browser panel | Foundation F2, F5, F6; MCP set A4; Web app W1 (W3 for take-over away from localhost); Chat C1; exposure, loopback and bridge suites pass | **Built** except the chat card and Browser panel (chat PRD, not built) and network isolation between workspaces (A2, not part of this build). 21 real-Docker tests pass, and real Claude Code 2.1.296 lists and calls the browser. |
+| B2 | Idle stop and wake, memory guard, Restart and Reset, Downloads and Send a file, Monitoring, caps, handoff push | Monitoring D3; Settings S2; Web app W5 | **Partly built:** idle stop and wake, memory guard, Restart and sleep, viewer caps, crash accounting. Not built: Reset as its own action, Downloads and Send a file, Monitoring, handoff push. |
+| B3 | Kubernetes: browser container, ConfigMap, bridge, status and usage split, explicit requests and fit check, egress policy | Foundation F3; A2's requests; Q1, Q4; Q12 decided | **Not built.** |
+| B4 | Desktop tier and desktop server | Q9, Q14 | **Not built** (the pool refuses the Desktop tier). |
+| B5 | Headless tier with screencast, chrome-devtools-mcp, extensions, Google Chrome on amd64 | Q10 | **Partly built:** the headless tier (code and unit tests only, not yet run in a container; watched through the proxy view, §22) and chrome-devtools-mcp (verified through the gate). Not built: extensions, Google Chrome. |
+| B6 | The proxy view (§22): helper, preview socket, preview page, phone input | Owner's request; B1 | **Built and verified** in a real browser against a real browser container (1280 and 390 px): frames arrive, a person's clicks and typing change the remote page, the agent and the person share one Chromium, the lease pauses the agent's tools, a second viewer only watches. Not built: the upstream proxy setting. |
 
 ## 19. Success metrics
 
@@ -498,3 +501,66 @@ noVNC's `viewOnly` only stops a cooperative client 📄, so the bridge filters b
 | Q22 | 🔬 Memory per Claude session of the gate, Playwright MCP and chrome-devtools-mcp, for §14.1 and MCP set FR11. | Lab test |
 
 Closed since v0.1: Q8 (companions converge by rule, §10.1), Q15 (device names), Q17 (yes, in B2).
+
+## 22. Proxy view
+
+**Why.** The owner asked for a browser preview that is not VNC: a page the portal draws itself, so it works like any
+web page on a phone (no RFB client, no display, so also the headless tier), with an address bar and tabs, and the
+agent and the person driving the same Chromium. It overturns the old non-goal "a CDP proxy in the portal" in one
+narrow way: the portal never forwards CDP. A helper inside the browser container is the only CDP client, and the
+portal passes it a fixed set of validated messages.
+
+**Parts.** `cpb-view` (images/browser/cpb) runs in the browser container as uid 1001, one process per viewer, started by
+the portal's runtime `exec`; it talks to Chrome on loopback and to the portal on stdio. `PreviewSession`
+(apps/server/src/browser/preview.ts) bridges the socket `GET /api/workspaces/:target/:name/browser/preview?device=<id>`
+to it. `PreviewView` (apps/web/src/features/browser) draws the frames on a canvas and sends the person's input.
+
+**Messages** (`PreviewClientMessage` and `PreviewServerEvent`, packages/contracts/src/browser.ts). Page to portal, JSON
+text frames of at most 16 KB: `mouse` (move, down, up, wheel; positions as fractions of the frame), `key`, `text`,
+`go`, `back`, `forward`, `reload`, `stop`, `tab`, `newTab`, `closeTab`, `viewport` (size, pixel ratio, mobile, or
+reset), `quality` (JPEG quality, width, frames per second), `dialog` (answer an alert, confirm or prompt), `ping`.
+Portal to page: JSON events (`ready` with the socket's role, `tabs`, `url`, `loading`, `dialog`, `dialog-closed`,
+`error`, `pong`) and binary frames `[u16 header length][header JSON {dw, dh, tab, emu}][JPEG]`. Nothing else is
+accepted in either direction.
+
+**Rules.**
+
+| Area | Rule |
+| --- | --- |
+| Socket | Same checks as the shell and live-view sockets: the session cookie, an `Origin` equal to the host, and a device id; the central socket guard closes it when the session ends. No separate per-view token: it would add nothing against the cross-site attacks `Origin` already stops (decision, §23 D3). |
+| Vocabulary | The portal validates every message (types, ranges, lengths, control characters) and drops the rest; the helper validates again, because it is not the only writer of its pipe. `go` accepts `http:`, `https:` and `about:blank` (a bare host gets `http` for loopback, IPs and `.local`, else `https`); `javascript:`, `file:`, `chrome:` and `data:` are refused. Events and frames from the helper are shaped the same way: known events with bounded text, ids checked, a frame must be a JPEG. |
+| Roles | The holder of control, over HTTPS or localhost, is the controller; every other socket is a viewer and can send only `ping` and `quality`. A viewer follows the browser's front tab. When who holds control changes, the socket closes with 4001 and the page reconnects with its new role, which also ends the holder's viewport emulation. |
+| Private | While control is Private a viewer's socket is closed with 4002 and the helper is never started for it: no frames, no events. |
+| Shared browser | The agent and the person use one Chromium. The lease pauses the agent's browser tools (the gate's refusal, §11.3) while a person holds control; a tab the agent opens or brings forward becomes the viewers' tab, and a tab the controller picks is brought forward for the agent too. |
+| Limits | Per socket per second: 400 input messages, 8 navigation, 6 viewport, 3 quality, 6 dialog. A frame is at most 8 MB. A viewer too slow for the stream gets the newest frame, never a backlog. Viewer caps are shared with the VNC view (§14.1). |
+| Not an open proxy | The portal fetches nothing for the person: a navigation is the browser's own, under the pool's blocked sites and allowlist mode like the agent's. |
+| Nothing kept | Frames, keys, typed text and addresses are neither stored nor logged; the helper writes no file (tested); audit rows are those of the live view. |
+| Not built | An upstream proxy setting for the browser; recording; the person's clipboard out of the page (paste in works). |
+
+**Page.** Canvas, address bar, back, forward, reload or stop, a tab menu, and "Fit to screen" (the page is laid out at
+the person's screen size and pixel ratio, as a mobile page on a phone). Touch: a tap is a click, a second tap a double
+click, a long press a right click, a drag scrolls. A keyboard types into the page and a paste is sent as text; on a
+phone the text bar and key row of the live view do the same. The Screen and Preview views switch in the header, the
+preview first on a touch screen.
+
+**Verified** (2026-10-12; Docker 29.9 DinD arm64, Chromium 154): `preview.test.ts` (13 tests: validation, framing,
+roles, Private, caps, rate limit, newest-frame-wins, cleanup) and `cpbview.test.ts` (12 tests against a real
+Chromium); then in a real browser at 1280 and 390 px against a real browser container: frames arrive; a viewer's
+clicks and typing do nothing; taking control; the address bar navigates; a click and typing change the remote page;
+the wheel and a finger drag scroll it; back, forward, tabs, a JavaScript dialog; hand back; the agent's navigation and
+new tab show in the preview; while the person holds control the agent's call is refused, and after hand-back the agent
+reads the title the person's click set; a second device is a viewer and its input changes nothing.
+
+## 23. What the build changed
+
+| | Finding or decision |
+| --- | --- |
+| F1 | `x11vnc -unixsock` still listened on TCP 5900 ✅, so the display is TigerVNC's `Xvnc` on a `0600` unix socket only (`-rfbport -1`), with a full and a view-only password and server-enforced view-only. Xvfb, x11vnc and socat are not in the image. |
+| F2 | Q2: Chromium's sandbox starts under moby's default seccomp profile plus `unshare`, `setns`, `clone` and `chroot` with every capability dropped but `SETUID`/`SETGID` ✅ (`chroot` is needed because dropping all capabilities removes `SYS_CHROOT`). |
+| F3 | Q3: downloads land in `~/Downloads` with the policy `DownloadDirectory` ✅. Q5, Q6: the stdio gate starts from a plugin `.mcp.json`, answers `initialize` and `tools/list` from pinned lists without waking Chrome, and Claude Code 2.1.296 lists it connected and calls its tools ✅. |
+| F4 | Q7: restored tabs made Playwright drive a hidden tab ✅, so there is no `RestoreOnStartup`; the gate opens its own tab (or brings it forward) and the supervisor reports the tab count. Q9: `-nolisten local` removes the abstract socket ✅. Q4: the bridge works over `exec` with a helper (`cpb-vnc`) in place of socat ✅; throughput and latency are not measured. |
+| F5 | Other portals on the same Docker daemon reaped this portal's browser containers, so every container carries the creating portal's id and a portal only touches its own, and none when it does not trust its database. |
+| F6 | The MCP lockdown matches a plugin server by its command line with `${CLAUDE_PLUGIN_ROOT}` already replaced by the plugin's version folder ✅ (the unexpanded text is blocked). The browser reports that exact line (`BrowserService.matchers`), so "Pool MCP only" keeps the browser's tools. |
+| D1 | noVNC 1.4.0, pinned exactly: later releases ship CommonJS with top-level await, which the web build can't bundle. It loads only when the Screen view is shown. |
+| D2 | The Desktop tier is not built (no panel, terminal or desktop MCP server): the editor doesn't offer it and the pool refuses it until B4. |
+| D3 | Decision for the owner: no per-view token on the preview socket. It uses the shell socket's checks (§22). Say if a one-time token is wanted anyway. |

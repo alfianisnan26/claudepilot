@@ -1,15 +1,23 @@
+import { isWorkspaceId } from '../names.js';
 import type { Store } from '../store/store.js';
-import type { Runtime } from '../workspaces/runtime.js';
+import { foreignPortal, type Runtime } from '../workspaces/runtime.js';
 import { compile, CompileError } from './compile.js';
+import { dueFolders, folderPlugin, manifestPlugins, pluginDir } from './marketplace.js';
 import { OUTBOX_PULL } from './outbox.js';
+import { deliverable } from './ownership.js';
+import { parsePending, serializePending } from './pending.js';
+import { settleTombstones, tombstoneKey } from './tombstones.js';
 import { NODE, ROOT, MANIFEST_PATH, type Fragment, type PoolType } from './types.js';
-import { deleteFiles, readApplied, writeBundle } from './writer.js';
+import { checkReadable, deleteFiles, readApplied, writeBundle } from './writer.js';
+import { appendedLines, sameLine } from './hooks.js';
 
 /** How long a file stays after nothing references it, so a session mid-retry never loses it (§6.4). */
 const DELETE_GRACE_MS = 30_000;
 const RUNNING_EVERY_MS = 60_000;
 const STOPPED_EVERY_MS = 10 * 60_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
+/** Version folders are checked by tree hash at each start and this often (skillset §10.5). */
+const TREES_EVERY_MS = 10 * 60_000;
 
 export type DeliveryStatus = 'synced' | 'pending' | 'drifted' | 'failed' | 'locked' | 'frozen' | 'unsupported' | 'none';
 
@@ -33,18 +41,41 @@ export interface FragmentProvider {
   /** Pools of this type the database says this workspace has (assigned, or being removed). */
   knownPools(workspaceId: string): string[];
   fragments(workspaceId: string, ctx: { running: boolean; now: Date }): Fragment[];
-  /** After a successful write: advance removals and the like. */
-  delivered?(workspaceId: string, ctx: { running: boolean; now: Date; delivered: Set<string> }): void;
+  /**
+   * After a successful write: advance removals and the like. `delivered` holds the files now wanted;
+   * `pluginFolders` maps each portal plugin with a version folder still in the workspace (current or
+   * kept for older sessions) to those folders' `<hash12>` names, so an owner can tell when a revoked or
+   * unassigned plugin is really gone.
+   */
+  delivered?(
+    workspaceId: string,
+    ctx: {
+      running: boolean;
+      now: Date;
+      delivered: Set<string>;
+      pluginFolders: Map<string, string[]>;
+      /** Seconds each running `claude` process had been up when this pass began, before anything was written (null: couldn't be read). */
+      claudeAges?: number[] | null;
+      /** When this pass's write finished (ms), or when it began if nothing was written. A session that started before it can lack what was written. */
+      landedAt?: number;
+    },
+  ): void;
 }
 
 /** Shared folders every delivery needs; created by the engine because old images lack them (§9). */
-const FOUNDATION: Fragment = {
+export const FOUNDATION: Fragment = {
   owner: 'foundation',
   dirs: [
     { path: '/etc/claudepilot', mode: 0o755, uid: ROOT, gid: ROOT },
     { path: '/etc/claudepilot/bin', mode: 0o755, uid: ROOT, gid: ROOT },
     { path: '/etc/claude-code', mode: 0o755, uid: ROOT, gid: ROOT },
     { path: '/etc/claude-code/managed-settings.d', mode: 0o755, uid: ROOT, gid: ROOT },
+    // Claude Code watches a managed folder only if it existed when a session started (✅ 2.1.296), so the
+    // instruction, subagent and output-style folders are always there, even empty (persona PRD A4).
+    { path: '/etc/claude-code/.claude', mode: 0o755, uid: ROOT, gid: ROOT },
+    { path: '/etc/claude-code/.claude/agents', mode: 0o755, uid: ROOT, gid: ROOT },
+    { path: '/etc/claude-code/.claude/output-styles', mode: 0o755, uid: ROOT, gid: ROOT },
+    { path: '/etc/claude-code/.claude/rules', mode: 0o755, uid: ROOT, gid: ROOT },
     { path: '/home/node/.claudepilot', mode: 0o755, uid: NODE, gid: NODE },
     { path: '/home/node/.claudepilot/outbox', mode: 0o700, uid: NODE, gid: NODE },
   ],
@@ -66,6 +97,7 @@ export class Reconciler {
   readonly #again = new Set<string>();
   readonly #failures = new Map<string, number>();
   readonly #lastCheck = new Map<string, number>();
+  readonly #lastTrees = new Map<string, number>();
   readonly #listeners = new Set<(workspaceId: string) => void>();
   #stopWatchers: (() => void)[] = [];
   #timer: NodeJS.Timeout | undefined;
@@ -122,6 +154,9 @@ export class Reconciler {
    * workspace pending at once, so the UI never shows "synced" for a change that hasn't landed.
    */
   request(workspaceId: string, why = 'requested', opts: { changed?: boolean } = {}): Promise<void> {
+    // Not a workspace id (QA-032: a hostile one was kept as a "known workspace" and asked of Docker every 15 s): nothing to reconcile,
+    // no row to make.
+    if (!isWorkspaceId(workspaceId)) return Promise.resolve();
     if (opts.changed) this.#save(workspaceId, { status: 'pending', reason: null });
     const running = this.#inFlight.get(workspaceId);
     if (running) {
@@ -193,9 +228,18 @@ export class Reconciler {
         this.#save(workspaceId, { status: 'pending', reason: 'Waiting for the workspace to exist.', checked_at: now.toISOString() });
         return;
       }
+      // Created by another portal (it carries that portal's id): never read and never written, the first manifest
+      // included, whatever global fragments this portal has (a lockdown for one). Without the label (made before
+      // it existed) a workspace stays adoptable.
+      if (foreignPortal(state.portal, this.store.portalId)) {
+        if (this.row(workspaceId)) this.#save(workspaceId, { status: 'frozen', reason: 'Created by another portal.', checked_at: now.toISOString() });
+        return;
+      }
       const row = this.row(workspaceId) ?? ({ generation: 0, applied_hash: null, pending_deletes: '[]', secret_paths: '{}' } as DeliveryRow);
       const secretPaths = JSON.parse(row.secret_paths || '{}') as Record<string, string>;
-      const applied = await readApplied(access, name, state.running);
+      const treesDue = state.running && (why === 'started' || now.getTime() - (this.#lastTrees.get(workspaceId) ?? 0) >= TREES_EVERY_MS);
+      const applied = await readApplied(access, name, state.running, { trees: treesDue });
+      if (applied.trees) this.#lastTrees.set(workspaceId, now.getTime());
 
       // Can we account for what's in the workspace? (Skipped once when an admin adopts it.)
       const adopting = this.#adopting.has(workspaceId);
@@ -222,16 +266,52 @@ export class Reconciler {
         return;
       }
 
-      const bundle = compile({ portalId: this.store.portalId!, generation: row.generation + 1, fragments: [FOUNDATION, ...fragments], claudeVersion: version, now });
+      // What's on its way out: files, version folders no longer current, and tombstones. A tombstone
+      // goes once no `claude` process older than it still runs, and at once in a stopped workspace (A6).
+      const pending = parsePending(row.pending_deletes);
+      const carried = settleTombstones(pending.tombstones, { running: state.running, claudeAges: applied.claudeAges, now: now.getTime() });
+
+      const bundle = compile({
+        portalId: this.store.portalId!,
+        generation: row.generation + 1,
+        fragments: [FOUNDATION, ...fragments],
+        claudeVersion: version,
+        now,
+        previous: { env: applied.manifest?.env },
+        tombstones: carried,
+        running: state.running,
+      });
+      // Hook lines (secrets A3) are appended once, on a running workspace, and the manifest remembers which;
+      // a stopped workspace gets them at its next start.
+      const appended = appendedLines(applied.manifest);
+      const newLines = state.running ? (bundle.lines ?? []).filter((l) => !appended.some((a) => sameLine(a, l))) : [];
+      const keptLines = (bundle.lines ?? []).filter((l) => state.running || appended.some((a) => sameLine(a, l)));
+      if (keptLines.length) bundle.manifest.lines = keptLines;
       const wanted = new Set([...bundle.files.map((f) => f.path), MANIFEST_PATH]);
+      const current = new Set(bundle.plugins.map((p) => `${p.dir}/`));
+      const delivering = new Set(bundle.plugins.map((p) => p.name));
+      const appliedPlugins = manifestPlugins(applied.manifest);
 
       // Files delivered before and no longer wanted: delete after a grace period (or at the next start).
-      const pending = new Map<string, number>((JSON.parse(row.pending_deletes) as { path: string; since: number }[]).map((p) => [p.path, p.since]));
-      for (const path of Object.keys(applied.manifest?.files ?? {})) if (!wanted.has(path) && !pending.has(path)) pending.set(path, now.getTime());
-      for (const path of [...pending.keys()]) if (wanted.has(path)) pending.delete(path);
-      const due = state.running
-        ? [...pending].filter(([, since]) => now.getTime() - since >= DELETE_GRACE_MS || why === 'started').map(([p]) => p)
-        : [];
+      for (const path of Object.keys(applied.manifest?.files ?? {})) if (!wanted.has(path) && !pending.paths.has(path) && deliverable(path)) pending.paths.set(path, now.getTime());
+      // Version folders the catalog no longer points at: kept for sessions that loaded them (retention).
+      for (const p of appliedPlugins) {
+        const dir = `${pluginDir(p.name, p.treeHash)}/`;
+        if (!current.has(dir) && !pending.paths.has(dir)) pending.paths.set(dir, now.getTime());
+      }
+      for (const path of [...pending.paths.keys()]) if (wanted.has(path) || current.has(path)) pending.paths.delete(path);
+      const retired = [...pending.paths].filter(([p]) => p.endsWith('/')).map(([path, since]) => ({ path, since }));
+      const due = [
+        ...(state.running ? [...pending.paths].filter(([p, since]) => !p.endsWith('/') && (now.getTime() - since >= DELETE_GRACE_MS || why === 'started')).map(([p]) => p) : []),
+        ...dueFolders(retired, {
+          running: state.running,
+          started: why === 'started',
+          now: now.getTime(),
+          current: delivering,
+          revoked: new Set(bundle.revoked),
+          graceMs: DELETE_GRACE_MS,
+        }),
+      ];
 
       // On a running workspace, anything on disk that isn't what we want gets rewritten; files that
       // differ from what the manifest says we wrote were changed by hand (drift).
@@ -239,40 +319,88 @@ export class Reconciler {
       const handEdited = applied.hashes
         ? Object.keys(applied.manifest?.files ?? {}).filter((p) => p !== MANIFEST_PATH && wanted.has(p) && applied.hashes![p] !== applied.manifest!.files[p])
         : [];
-      const needWrite = adopting || bundle.hash !== row.applied_hash || !applied.manifest || mismatched.length > 0;
+      // Version folders to write: new ones, and delivered ones whose tree hash no longer matches (drift).
+      const inPlace = new Map(appliedPlugins.map((p) => [pluginDir(p.name, p.treeHash), p.treeHash]));
+      const changed = bundle.plugins.filter((p) => inPlace.get(p.dir) === p.treeHash && applied.trees && p.dir in applied.trees && applied.trees[p.dir] !== p.treeHash);
+      const fresh = bundle.plugins.filter((p) => inPlace.get(p.dir) !== p.treeHash || changed.includes(p));
+      const needWrite = adopting || bundle.hash !== row.applied_hash || !applied.manifest || mismatched.length > 0 || fresh.length > 0 || newLines.length > 0;
 
+      let landed = now.getTime();
       if (needWrite) {
         this.#save(workspaceId, { generation: row.generation + 1, desired_hash: bundle.hash, status: 'pending', reason: null }); // recorded before writing (§6.5)
-        const stoppedDeletes = state.running ? [] : [...pending.keys()];
-        await writeBundle(access, name, bundle, { running: state.running, deletes: state.running ? due : stoppedDeletes });
-        for (const p of state.running ? due : []) pending.delete(p);
+        const stoppedDeletes = state.running ? [] : [...pending.paths.keys()].filter((p) => !p.endsWith('/'));
+        await writeBundle(access, name, bundle, { running: state.running, deletes: state.running ? due : stoppedDeletes, plugins: fresh, lines: newLines });
+        landed = Date.now();
+        for (const p of state.running ? due : []) pending.paths.delete(p);
         this.#exposuresRemoved(workspaceId, state.running ? due : stoppedDeletes, secretPaths, now);
-        if (handEdited.length) this.#event(workspaceId, 'drift_repaired', { files: handEdited });
-        this.#event(workspaceId, 'delivered', { why, generation: row.generation + 1, running: state.running, files: bundle.files.length, deleted: due, skipped: bundle.skipped });
+        if (handEdited.length || changed.length) this.#event(workspaceId, 'drift_repaired', { files: handEdited, ...(changed.length ? { plugins: changed.map((p) => p.dir) } : {}) });
+        this.#event(workspaceId, 'delivered', {
+          why,
+          generation: row.generation + 1,
+          running: state.running,
+          files: bundle.files.length,
+          deleted: due,
+          skipped: bundle.skipped,
+          ...(fresh.length ? { plugins: fresh.map((p) => p.dir) } : {}),
+          ...(bundle.tombstones.length ? { tombstones: bundle.tombstones.map((t) => t.name) } : {}),
+        });
         this.#recordExposures(workspaceId, bundle.files, now);
       } else if (due.length) {
         await deleteFiles(access, name, due);
-        for (const p of due) pending.delete(p);
+        for (const p of due) pending.paths.delete(p);
         this.#exposuresRemoved(workspaceId, due, secretPaths, now);
         this.#event(workspaceId, 'deleted', { files: due });
       }
+      // A secret file whose content became another value (a rotation, an urgent one for pinned workspaces, a
+      // revoked value replaced) no longer exposes the old one here: close its record, so "safe to revoke" and
+      // the purge of a revoked value can tell (Secrets & env FR17, FR18). Other copies are not this file's concern.
+      const overwritten = bundle.files.flatMap((f) => (f.secretRef && secretPaths[f.path] && secretPaths[f.path] !== f.secretRef ? [secretPaths[f.path]!] : []));
+      if (overwritten.length && this.store.writable) {
+        const close = this.store.db!.prepare('UPDATE exposures SET removed_at = ? WHERE secret_ref = ? AND workspace_id = ? AND removed_at IS NULL');
+        for (const ref of new Set(overwritten)) close.run(now.toISOString(), ref, workspaceId);
+      }
       for (const f of bundle.files) if (f.secretRef) secretPaths[f.path] = f.secretRef;
+      // Tombstones this compile added reached the workspace just now: processes started before may hold the old value.
+      const kept = new Set(carried.map(tombstoneKey));
+      pending.tombstones = bundle.tombstones.map((t) => (kept.has(tombstoneKey(t)) ? t : { ...t, since: landed }));
+
+      // Secrets FR12: after a write to a running workspace, the workspace user must be able to read what the
+      // fragments that ask for it got. A failure is saved with the rest, but without the applied hash, so the
+      // next attempt writes and checks again.
+      let unreadable: string | null = null;
+      if (needWrite && state.running && bundle.readable?.length) {
+        try {
+          await checkReadable(access, name, bundle.readable);
+        } catch (e) {
+          unreadable = (e as Error).message;
+        }
+      }
 
       this.#save(workspaceId, {
-        applied_hash: needWrite ? bundle.hash : row.applied_hash,
+        applied_hash: unreadable !== null ? null : needWrite ? bundle.hash : row.applied_hash,
         applied_at: needWrite ? now.toISOString() : row.applied_at,
-        status: 'synced',
-        reason: bundle.skipped.length ? bundle.skipped.map((s) => s.reason).join(' ') : null,
+        status: unreadable !== null ? 'failed' : 'synced',
+        reason: unreadable ?? (bundle.skipped.length ? bundle.skipped.map((s) => s.reason).join(' ') : null),
         claude_version: version,
         checked_at: now.toISOString(),
-        pending_deletes: JSON.stringify([...pending].map(([path, since]) => ({ path, since }))),
-        secret_paths: JSON.stringify(Object.fromEntries(Object.entries(secretPaths).filter(([p]) => wanted.has(p) || pending.has(p)))),
+        pending_deletes: serializePending(pending),
+        secret_paths: JSON.stringify(Object.fromEntries(Object.entries(secretPaths).filter(([p]) => wanted.has(p) || pending.paths.has(p)))),
       });
-      for (const p of this.providers) p.delivered?.(workspaceId, { ...ctx, delivered: wanted });
+      if (unreadable !== null) throw new Error(unreadable);
+      const pluginFolders = new Map<string, string[]>();
+      for (const dir of [...current, ...pending.paths.keys()]) {
+        const plugin = folderPlugin(dir);
+        if (plugin) pluginFolders.set(plugin, [...(pluginFolders.get(plugin) ?? []), dir.slice(-13, -1)]);
+      }
+      // `claudeAges`: seconds each running `claude` process has been up (null when it couldn't be read), so an owner can
+      // tell which sessions started before a change (the MCP lockdown's "restart these sessions").
+      for (const p of this.providers) p.delivered?.(workspaceId, { ...ctx, delivered: wanted, pluginFolders, claudeAges: applied.claudeAges, landedAt: landed });
       this.#adopting.delete(workspaceId);
       this.#failures.delete(workspaceId);
-      // Deletions still waiting for their grace period: come back for them.
-      if (state.running && pending.size) setTimeout(() => void this.request(workspaceId, 'grace'), DELETE_GRACE_MS + 1000).unref();
+      // Deletions still waiting for their grace period: come back for them. Folders kept for retention
+      // wait for the regular timer instead.
+      const graceWaiting = [...pending.paths.keys()].some((p) => !p.endsWith('/') || !delivering.has(folderPlugin(p) ?? ''));
+      if (state.running && graceWaiting) setTimeout(() => void this.request(workspaceId, 'grace'), DELETE_GRACE_MS + 1000).unref();
     } catch (e) {
       const failures = (this.#failures.get(workspaceId) ?? 0) + 1;
       this.#failures.set(workspaceId, failures);

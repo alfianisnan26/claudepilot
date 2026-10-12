@@ -6,26 +6,32 @@
   "description": "Portal backend: Hono on Node; serves the API and the web app",
   "scripts": {
     "dev": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx watch --env-file-if-exists=../../.env --clear-screen=false --ignore '../web/**' --ignore '../../node_modules/**' src/index.ts",
-    "build": "esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --target=node22 --external:hono --external:@hono/node-server --external:@isnanme/* --external:vite --external:dockerode --external:@kubernetes/client-node --external:@lydell/node-pty --external:ws --external:tar-stream --outdir=dist",
+    "build": "esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --target=node22 --external:hono --external:@hono/node-server --external:@isnanme/* --external:vite --external:dockerode --external:@kubernetes/client-node --external:@lydell/node-pty --external:ws --external:tar-stream --external:sharp --outdir=dist",
     "start": "NODE_ENV=production node --disable-warning=ExperimentalWarning dist/index.js",
     "typecheck": "tsc --noEmit",
     "portal": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx --env-file-if-exists=../../.env src/cli.ts",
     "test": "node --import tsx --disable-warning=ExperimentalWarning --test 'src/**/*.test.ts'",
-    "gen:workspace-host": "tsx scripts/gen-workspace-host.ts"
+    "gen:workspace-host": "tsx scripts/gen-workspace-host.ts",
+    "gen:ci-runner": "tsx scripts/gen-ci-runner.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.5",
     "@isnanme/core": "^0.1.0",
     "@kubernetes/client-node": "^2.0.0",
     "@lydell/node-pty": "^1.2.0-beta.15",
+    "@modelcontextprotocol/server": "^2.3.1",
     "@portal/contracts": "*",
     "dockerode": "^5.0.1",
     "hono": "^4.10.1",
+    "js-yaml": "^5.4.3",
+    "sharp": "^0.35.5",
     "tar-stream": "^3.2.2",
-    "ws": "^8.22.0"
+    "ws": "^8.22.0",
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@isnanme/tsconfig": "^0.1.0",
+    "@modelcontextprotocol/client": "^2.3.1",
     "@types/dockerode": "^4.0.2",
     "@types/node": "^22.18.0",
     "@types/tar-stream": "^3.1.5",

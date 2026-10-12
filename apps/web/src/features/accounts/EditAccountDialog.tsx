@@ -1,6 +1,5 @@
 import { FormDialog, SwitchRow, TextField } from '@isnanme/ui';
 import { ACCOUNT_NAME_MAX, type Account } from '@portal/contracts';
-import { Power } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { SecretField } from '@/components/SecretField';
 import { api, ApiError } from '@/lib/api';
@@ -78,19 +77,13 @@ export function EditAccountDialog({
           label="Replace key"
           optional
           placeholder={account?.hasSecret ? `Current: ${account.masked}` : 'Enter the key again'}
-          hint={account?.hasSecret ? 'Leave empty to keep the current key.' : 'This key was cleared (portal forget-secrets). Enter it again to use the account.'}
+          hint={account?.hasSecret ? undefined : 'Cleared (portal forget-secrets): enter it again.'}
           value={key}
           onChange={(e) => (setKey(e.target.value), setErrors(({ key: _, ...r }) => r))}
           error={errors.key}
         />
         <TextField label="Notes" optional autoComplete="off" value={notes} onChange={(e) => setNotes(e.target.value)} />
-        <SwitchRow
-          icon={<Power className="size-[18px]" />}
-          label="Enabled"
-          description={enabled ? 'Can be used by pools.' : 'Kept, but not used by any pool.'}
-          checked={enabled}
-          onChange={setEnabled}
-        />
+        <SwitchRow label="Enabled" checked={enabled} onChange={setEnabled} />
       </div>
     </FormDialog>
   );

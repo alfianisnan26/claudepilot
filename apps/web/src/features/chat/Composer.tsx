@@ -1,6 +1,6 @@
-import { cn, Spinner, useMediaQuery, useToast } from '@isnanme/ui';
-import { CHAT_IMAGE_TYPES, CHAT_MAX_IMAGE_BYTES, CHAT_MAX_IMAGES, type ChatAttachment, type ChatImageType } from '@portal/contracts';
-import { ArrowUp, ChevronUp, ImagePlus, Plus, Square, X } from 'lucide-react';
+import { cn, useMediaQuery, useToast } from '@isnanme/ui';
+import type { ChatFile, ChatUpload } from '@portal/contracts';
+import { ArrowUp, ChevronUp, Plus, Square, Upload } from 'lucide-react';
 import {
   useEffect,
   useImperativeHandle,
@@ -8,11 +8,13 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
-  type DragEvent,
   type KeyboardEvent,
   type ReactNode,
   type Ref,
 } from 'react';
+import { AttachmentTile } from './artifacts/AttachmentTile';
+import { fileUrl } from './artifacts/contentApi';
+import { useAttachments } from './artifacts/useAttachments';
 import { isTrustDeclined } from './TrustSheet';
 import type { ChatSendOptions } from './useChatSocket';
 
@@ -21,32 +23,27 @@ export interface ComposerHandle {
   restore: (text: string) => void;
 }
 
-/** An attached image, read and ready to send; `preview` is its `data:` URL. */
-interface Picked extends ChatAttachment {
-  id: string;
-  preview: string;
-}
-
-let nextPickedId = 0;
-const ACCEPT = CHAT_IMAGE_TYPES.join(',');
-const MAX_SIZE = `${+(CHAT_MAX_IMAGE_BYTES / 1_000_000).toFixed(2)} MB`;
-const isImageType = (type: string): type is ChatImageType => (CHAT_IMAGE_TYPES as readonly string[]).includes(type);
 const hasFiles = (e: { dataTransfer: DataTransfer | null }) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
 
-function readDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error('Could not read the file.'));
-    reader.readAsDataURL(file);
-  });
+/** What the transcript shows for attachments just sent, until the stored message replaces it (the files are already in the portal). */
+function shownFor(sessionId: string, uploads: ChatUpload[]): NonNullable<ChatSendOptions['shown']> {
+  const images: { src: string; name: string; width?: number; height?: number }[] = [];
+  const files: ChatFile[] = [];
+  for (const { id: _id, ...file } of uploads) {
+    if (file.preview === 'image' && file.mediaType !== 'image/svg+xml') images.push({ src: fileUrl(sessionId, file.blobId), name: file.name, width: file.width, height: file.height });
+    else files.push(file);
+  }
+  return { images, files };
 }
 
 /**
  * The message box, one floating frosted card: the text on top, growing with what's written, and a row
- * under it with + for images (paste and drop work too), the session's controls (`accessory`) and Send. On a mouse-and-keyboard screen Enter sends and Shift+Enter makes a newline; on
- * a touch screen Enter makes a newline (so the on-screen keyboard's return key doesn't fire off
- * half-written messages) and Send is the way to send. Cmd/Ctrl+Enter always sends.
+ * under it with + for files (paste works, and so does dropping them anywhere on the page), the session's
+ * controls (`accessory`) and Send. Anything can be attached: photos, screenshots, documents, audio, video.
+ * Each file gets a tile that shows its upload; Send waits for them. On a mouse-and-keyboard screen Enter
+ * sends and Shift+Enter makes a newline; on a touch screen Enter makes a newline (so the on-screen
+ * keyboard's return key doesn't fire off half-written messages) and Send is the way to send. Cmd/Ctrl+Enter
+ * always sends.
  *
  * While a turn is running, Send becomes Steer (Claude reads it at its next step) and its menu offers
  * "Send after this turn" (also Alt+Enter), which queues the message as its own turn. A message that
@@ -54,6 +51,7 @@ function readDataUrl(file: File): Promise<string> {
  */
 export function Composer({
   ref,
+  sessionId,
   onSend,
   connected,
   working,
@@ -61,6 +59,8 @@ export function Composer({
   accessory,
 }: {
   ref?: Ref<ComposerHandle>;
+  /** The chat the files are uploaded to. */
+  sessionId: string;
   onSend: (text: string, opts: ChatSendOptions) => Promise<void>;
   connected: boolean;
   working: boolean;
@@ -71,21 +71,16 @@ export function Composer({
 }) {
   const toast = useToast();
   const [text, setText] = useState('');
-  const [attachments, setAttachments] = useState<Picked[]>([]);
-  const [reading, setReading] = useState(0);
   const [dragging, setDragging] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  // Counts kept outside render so quick successive adds see each other.
-  const count = useRef({ attached: 0, reading: 0 });
   const dragDepth = useRef(0);
   const touch = useMediaQuery('(hover: none) and (pointer: coarse)');
+  const att = useAttachments(sessionId, (message) => toast(message, 'error'));
+  const add = useRef(att.add);
+  add.current = att.add;
 
   useImperativeHandle(ref, () => ({ restore: (value: string) => setText((t) => (t.trim() ? t : value)) }), []);
-
-  useLayoutEffect(() => {
-    count.current.attached = attachments.length;
-  }, [attachments]);
 
   // Grow to fit the text, up to about a third of the screen, then scroll inside.
   useLayoutEffect(() => {
@@ -95,69 +90,54 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, Math.max(120, Math.round(window.innerHeight * 0.32)))}px`;
   }, [text]);
 
-  // A file dropped beside the composer would make the browser open it and leave the session.
+  // Files dropped anywhere on the page are attached (and a file dropped beside the composer must not make the browser open it and leave the chat).
   useEffect(() => {
-    const guard = (e: globalThis.DragEvent) => hasFiles(e) && e.preventDefault();
-    window.addEventListener('dragover', guard);
-    window.addEventListener('drop', guard);
+    const enter = (e: globalThis.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current++;
+      setDragging(true);
+    };
+    const over = (e: globalThis.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    };
+    const leave = (e: globalThis.DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragging(false);
+    };
+    const drop = (e: globalThis.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDragging(false);
+      add.current(Array.from(e.dataTransfer?.files ?? []));
+    };
+    window.addEventListener('dragenter', enter);
+    window.addEventListener('dragover', over);
+    window.addEventListener('dragleave', leave);
+    window.addEventListener('drop', drop);
     return () => {
-      window.removeEventListener('dragover', guard);
-      window.removeEventListener('drop', guard);
+      window.removeEventListener('dragenter', enter);
+      window.removeEventListener('dragover', over);
+      window.removeEventListener('dragleave', leave);
+      window.removeEventListener('drop', drop);
     };
   }, []);
 
-  const addFiles = (files: File[]) => {
-    if (files.length === 0) return;
-    const ok = files.filter((f) => isImageType(f.type) && f.size <= CHAT_MAX_IMAGE_BYTES);
-    const room = Math.max(0, CHAT_MAX_IMAGES - count.current.attached - count.current.reading);
-    const take = ok.slice(0, room);
-    const problem = files.some((f) => !isImageType(f.type))
-      ? 'Only PNG, JPEG, GIF and WebP images can be attached.'
-      : ok.length < files.length
-        ? `Each image can be up to ${MAX_SIZE}.`
-        : take.length < ok.length
-          ? `Up to ${CHAT_MAX_IMAGES} images per message.`
-          : null;
-    if (problem) toast(problem, 'error');
-    if (take.length === 0) return;
-
-    count.current.reading += take.length;
-    setReading(count.current.reading);
-    void Promise.all(
-      take.map(async (file): Promise<Picked | null> => {
-        try {
-          const url = await readDataUrl(file);
-          return {
-            id: String(++nextPickedId),
-            name: file.name || `image.${file.type.split('/')[1] ?? 'png'}`,
-            mediaType: file.type as ChatImageType,
-            dataBase64: url.slice(url.indexOf(',') + 1),
-            preview: url,
-          };
-        } catch {
-          return null;
-        }
-      }),
-    ).then((read) => {
-      count.current.reading -= take.length;
-      setReading(count.current.reading);
-      const good = read.filter((p): p is Picked => p !== null);
-      if (good.length < read.length) toast('Could not read that image.', 'error');
-      setAttachments((a) => [...a, ...good].slice(0, CHAT_MAX_IMAGES));
-    });
-  };
-
-  const canSend = connected && reading === 0 && (text.trim().length > 0 || attachments.length > 0);
+  const ready = att.items.filter((a) => a.state === 'ready').length;
+  const failed = att.items.some((a) => a.state === 'error');
+  const canSend = connected && !att.busy && !failed && (text.trim().length > 0 || ready > 0);
 
   const submit = (priority?: 'next' | 'later') => {
     if (!canSend) return;
-    const draft = { text, attachments };
+    const draft = { text, uploads: att.take() };
     setText('');
-    setAttachments([]);
-    const files = attachments.map(({ name, mediaType, dataBase64 }) => ({ name, mediaType, dataBase64 }));
-    onSend(text.trim(), { priority, attachments: files }).catch((e: unknown) => {
+    onSend(text.trim(), { priority, attachments: draft.uploads.map((u) => ({ uploadId: u.id })), shown: shownFor(sessionId, draft.uploads) }).catch((e: unknown) => {
       setText((t) => (t.trim() ? t : draft.text));
-      setAttachments((a) => (a.length ? a : draft.attachments));
+      att.restore(draft.uploads);
       // Cancelled on "Trust this folder?": the words coming back say enough.
       if (!isTrustDeclined(e)) toast(e instanceof Error ? e.message : 'Not sent.', 'error');
     });
@@ -176,7 +156,7 @@ export function Composer({
     }
   };
 
-  // A pasted screenshot or copied image is attached rather than pasted as text.
+  // A pasted screenshot or copied file is attached rather than pasted as text.
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(e.clipboardData.items).flatMap((item) => {
       const file = item.kind === 'file' ? item.getAsFile() : null;
@@ -184,59 +164,17 @@ export function Composer({
     });
     if (files.length === 0) return;
     e.preventDefault();
-    addFiles(files);
-  };
-
-  const drag = {
-    onDragEnter: (e: DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      dragDepth.current++;
-      setDragging(true);
-    },
-    onDragOver: (e: DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
-    },
-    onDragLeave: (e: DragEvent) => {
-      if (!hasFiles(e)) return;
-      dragDepth.current = Math.max(0, dragDepth.current - 1);
-      if (dragDepth.current === 0) setDragging(false);
-    },
-    onDrop: (e: DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      dragDepth.current = 0;
-      setDragging(false);
-      addFiles(Array.from(e.dataTransfer.files));
-    },
+    att.add(files);
   };
 
   return (
-    <div className="relative" {...drag}>
+    <div className="relative">
       <div className="glass-card rounded-[28px]">
-        {(attachments.length > 0 || reading > 0) && (
-          <ul aria-label="Images to send" className="flex flex-wrap gap-2 px-3.5 pt-3.5">
-            {attachments.map((a) => (
-              <li key={a.id} className="relative">
-                <img src={a.preview} alt={a.name} className="size-16 rounded-2xl bg-surface-2 object-cover" />
-                <button
-                  type="button"
-                  onClick={() => setAttachments((list) => list.filter((x) => x.id !== a.id))}
-                  aria-label={`Remove ${a.name}`}
-                  className="press absolute -top-1.5 -right-1.5 flex size-6 items-center justify-center rounded-full bg-ink text-bg shadow-card tap:size-7"
-                >
-                  <X className="size-3.5" />
-                </button>
-              </li>
+        {att.items.length > 0 && (
+          <ul aria-label="Attachments" className="no-scrollbar flex gap-2 overflow-x-auto px-3.5 pt-3.5 pb-0.5">
+            {att.items.map((item) => (
+              <AttachmentTile key={item.key} item={item} sessionId={sessionId} onRemove={() => att.remove(item.key)} onRetry={() => att.retry(item.key)} />
             ))}
-            {reading > 0 && (
-              <li className="flex size-16 items-center justify-center rounded-2xl bg-surface-2 text-muted">
-                <Spinner className="size-4" />
-                <span className="sr-only">Reading the image…</span>
-              </li>
-            )}
           </ul>
         )}
         <textarea
@@ -251,25 +189,25 @@ export function Composer({
           className="block min-h-[52px] w-full resize-none bg-transparent px-[18px] pt-[15px] pb-1 text-[16.5px] leading-[1.45] text-ink outline-none placeholder:text-muted sm:text-[15.5px]"
         />
         <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-2.5">
-          <button type="button" aria-label="Attach images" title="Attach images" onClick={() => fileInput.current?.click()} className={cn(ROUND, GHOST)}>
+          <button type="button" aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()} className={cn(ROUND, GHOST)}>
             <Plus className="size-5" />
           </button>
           <input
             ref={fileInput}
             type="file"
-            accept={ACCEPT}
             multiple
             hidden
             onChange={(e) => {
-              addFiles(Array.from(e.target.files ?? []));
+              att.add(Array.from(e.target.files ?? []));
               e.target.value = '';
             }}
           />
           <div className="flex min-w-0 flex-1 items-center">{accessory}</div>
           {working && canSend ? (
-            <SteerButton canSend={canSend} connected={connected} showKeys={!touch} onSend={submit} />
+            <SteerButton canSend={canSend} connected={connected} showKeys={!touch} onSend={submit} onStop={onStop} />
           ) : working && onStop ? (
-            <button type="button" aria-label="Stop" title="Stop" onClick={onStop} className={cn(ROUND, PRIMARY)}>
+            <button type="button" aria-label="Stop" title="Stop" onClick={onStop} className={cn(ROUND, PRIMARY, 'relative')}>
+              <WorkingRing className="inset-[3px]" />
               <Square className="size-3.5 fill-current" />
             </button>
           ) : (
@@ -280,11 +218,16 @@ export function Composer({
         </div>
       </div>
       {dragging && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-[28px] border-2 border-dashed border-ink/30 bg-surface/90 text-sm font-semibold text-ink-soft">
-          <ImagePlus className="size-4" aria-hidden="true" />
-          Drop images to attach
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-bg/70 backdrop-blur-sm" aria-hidden="true">
+          <div className="flex items-center gap-2 rounded-full border-2 border-dashed border-ink/30 bg-surface px-5 py-3 text-sm font-semibold text-ink-soft shadow-lift">
+            <Upload className="size-4" />
+            Drop to attach
+          </div>
         </div>
       )}
+      <span role="status" className="sr-only">
+        {working ? 'Claude is working' : att.busy ? 'Uploading files' : ''}
+      </span>
       {!connected && (
         <p className="px-3 pt-1.5 text-[12px] text-muted" aria-live="polite">
           Reconnecting…
@@ -312,11 +255,14 @@ function SteerButton({
   connected,
   showKeys,
   onSend,
+  onStop,
 }: {
   canSend: boolean;
   connected: boolean;
   showKeys: boolean;
   onSend: (priority: 'next' | 'later') => void;
+  /** Stop the turn without sending: what is written stays in the box. */
+  onStop?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -356,7 +302,10 @@ function SteerButton({
     // With nothing to send the whole pill dims as one (its menu still opens, to say what each way does).
     <div ref={wrap} className={cn('relative flex shrink-0 transition-opacity', !canSend && 'opacity-50')}>
       <button type="button" disabled={!canSend} onClick={() => onSend('next')} className={cn(SPLIT, 'gap-1.5 rounded-l-full pr-2.5 pl-3.5 disabled:pointer-events-none')}>
-        <ArrowUp className="size-4" aria-hidden="true" />
+        <span className="relative inline-flex size-4 items-center justify-center">
+          <WorkingRing className="-inset-1" />
+          <ArrowUp className="size-4" aria-hidden="true" />
+        </span>
         Steer
       </button>
       <button
@@ -386,11 +335,30 @@ function SteerButton({
             disabled={!canSend}
             onClick={() => pick('later')}
           />
+          {onStop && (
+            <>
+              <div role="separator" className="mx-2 my-1 h-px bg-line" />
+              <SendItem
+                label="Stop turn"
+                hint="Ends this turn. What you wrote stays in the box."
+                disabled={false}
+                onClick={() => {
+                  setOpen(false);
+                  onStop();
+                }}
+              />
+            </>
+          )}
           {!canSend && <p className="px-3 pt-1 pb-1.5 text-[12px] text-muted">Write a message first.</p>}
         </div>
       )}
     </div>
   );
+}
+
+/** A ring that turns while Claude works: the only working indicator (the session header has none). Still, with reduced motion. */
+function WorkingRing({ className }: { className?: string }) {
+  return <span aria-hidden="true" className={cn('pointer-events-none absolute rounded-full border-2 border-bg/25 border-t-bg motion-safe:animate-spin', className)} />;
 }
 
 function SendItem({ label, hint, keys, disabled, onClick }: { label: string; hint: string; keys?: string; disabled: boolean; onClick: () => void }) {

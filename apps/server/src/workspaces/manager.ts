@@ -8,10 +8,17 @@ import {
   type WorkspaceUsage,
 } from '@portal/contracts';
 import type { JsonFile } from '../jsonFile.js';
+import { PLAIN_NAME } from '../names.js';
 import type { Runtime, ShellSession } from './runtime.js';
 
 const CHECK_TTL_MS = 10_000;
 const CHECK_TIMEOUT_MS = 4_000;
+
+/** How long a target's check counts, and how long one may take (tests shorten both). */
+export interface CheckTiming {
+  ttlMs?: number;
+  timeoutMs?: number;
+}
 
 /** The readable part of a Docker (`json.message`) or Kubernetes (`body.message`) error. */
 export function runtimeMessage(e: unknown): string {
@@ -39,7 +46,11 @@ const timeout = <T>(p: Promise<T>, ms: number) =>
 export class Workspaces {
   readonly #runtimes = new Map<string, Runtime>();
   readonly #pending = new Map<string, Workspace>();
-  #checked: { at: number; targets: Promise<WorkspaceTarget[]> } | undefined;
+  /** Per target: the last check's result and when it finished, and the check in flight (one at a time). */
+  readonly #known = new Map<string, { at: number; target: WorkspaceTarget }>();
+  readonly #checking = new Map<string, Promise<WorkspaceTarget>>();
+  readonly #ttlMs: number;
+  readonly #timeoutMs: number;
   /**
    * `beforeStop`: runs (for at most 5 s) before the portal stops a workspace, such as an outbox pull.
    * `changed`: the list changed through the portal (a create's progress, start, stop, remove).
@@ -49,8 +60,11 @@ export class Workspaces {
   constructor(
     runtimes: Runtime[],
     private readonly saved: JsonFile<Workspace[]>,
+    timing: CheckTiming = {},
   ) {
     for (const r of runtimes) this.#runtimes.set(r.target.id, r);
+    this.#ttlMs = timing.ttlMs ?? CHECK_TTL_MS;
+    this.#timeoutMs = timing.timeoutMs ?? CHECK_TIMEOUT_MS;
   }
 
   /** Picks up the creates that were in flight (or had failed) when the portal last stopped. */
@@ -88,18 +102,41 @@ export class Workspaces {
     );
   }
 
+  /**
+   * Every target and whether it can be reached. A target's check is kept for a few seconds; after that it answers from what was
+   * last known while it is checked again in the background (stale-while-revalidate), so one that is down, whose check only ends
+   * by timing out, never holds up the list of the others. Only a target never checked yet, or a `fresh` ask, waits for the check.
+   */
   targets(fresh = false): Promise<WorkspaceTarget[]> {
-    if (!fresh && this.#checked && Date.now() - this.#checked.at < CHECK_TTL_MS) return this.#checked.targets;
-    const targets = Promise.all(
-      [...this.#runtimes.values()].map((r) =>
-        timeout(r.check(), CHECK_TIMEOUT_MS).then(
-          () => ({ ...r.target, available: true }),
-          (e: unknown) => ({ ...r.target, available: false, problem: runtimeMessage(e) }),
-        ),
-      ),
-    );
-    this.#checked = { at: Date.now(), targets };
-    return targets;
+    return Promise.all([...this.#runtimes.values()].map((r) => this.#target(r, fresh)));
+  }
+
+  #target(runtime: Runtime, fresh: boolean): Promise<WorkspaceTarget> {
+    const id = runtime.target.id;
+    const known = this.#known.get(id);
+    if (!fresh && known && Date.now() - known.at < this.#ttlMs) return Promise.resolve(known.target);
+    const check = this.#check(runtime);
+    return !fresh && known ? Promise.resolve(known.target) : check;
+  }
+
+  /** One check of a target at a time; its result is what the next asks see. */
+  #check(runtime: Runtime): Promise<WorkspaceTarget> {
+    const id = runtime.target.id;
+    let running = this.#checking.get(id);
+    if (!running) {
+      running = timeout(runtime.check(), this.#timeoutMs)
+        .then(
+          (): WorkspaceTarget => ({ ...runtime.target, available: true }),
+          (e: unknown): WorkspaceTarget => ({ ...runtime.target, available: false, problem: runtimeMessage(e) }),
+        )
+        .then((target) => {
+          this.#known.set(id, { at: Date.now(), target });
+          return target;
+        })
+        .finally(() => this.#checking.delete(id));
+      this.#checking.set(id, running);
+    }
+    return running;
   }
 
   async list(): Promise<Workspace[]> {
@@ -133,7 +170,9 @@ export class Workspaces {
     if (memoryMb !== undefined && !(Number.isInteger(memoryMb) && memoryMb >= 256))
       throw new AppError('VALIDATION_FAILED', 'Memory must be at least 256 MB.', { details: { memoryMb: 'At least 256 MB.' } });
 
-    const target = (await this.targets()).find((t) => t.id === req.target);
+    let target = (await this.targets()).find((t) => t.id === req.target);
+    // A target last seen down may be back: someone creating on it checks again rather than trusting a stale "no".
+    if (target && !target.available) target = (await this.targets(true)).find((t) => t.id === req.target);
     if (!target) throw new AppError('VALIDATION_FAILED', 'Pick where it runs.', { details: { target: 'Pick a target.' } });
     if (!target.available) throw new AppError('SERVICE_UNAVAILABLE', `${target.label} isn’t reachable: ${target.problem}`);
 
@@ -234,6 +273,22 @@ export class Workspaces {
       this.hooks.changed?.();
     }
     console.log(`[workspaces] removed ${id}`);
+  }
+
+  /**
+   * Whether a workspace of that name is on that target now: only that target's runtime is asked, not all of them. A target that cannot
+   * answer says yes, so the call that follows fails with its own reason (a stopped Docker daemon) instead of "no such workspace".
+   */
+  async exists(target: string, name: string): Promise<boolean> {
+    const runtime = this.#runtimes.get(target);
+    if (!runtime || !PLAIN_NAME.test(name)) return false;
+    const id = workspaceId(target, name);
+    if (this.#pending.has(id)) return true;
+    try {
+      return (await runtime.list()).some((w) => w.id === id);
+    } catch {
+      return true;
+    }
   }
 
   /** A command in a running workspace, as its user, with stdin open and no terminal. */

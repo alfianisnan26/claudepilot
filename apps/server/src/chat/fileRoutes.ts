@@ -2,14 +2,21 @@
 // the owner mounts this under the guarded chat group at /api/chat/sessions, next to createChatRoutes.
 
 import { AppError, success } from '@isnanme/core';
+import { CHAT_MAX_UPLOAD_BYTES, CHAT_MAX_ZIP_ENTRIES } from '@portal/contracts';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import type { Store } from '../store/store.js';
 import type { Workspaces } from '../workspaces/manager.js';
+import { blobFileFor, textPreview } from './artifacts/serve.js';
+import { dispositionHeader } from './artifacts/names.js';
+import { eventFiles } from './artifacts/records.js';
+import { discardUpload, receiveUpload } from './artifacts/uploads.js';
+import { zipStream, type ZipItem } from './artifacts/zip.js';
 import type { ChatController } from './controller.js';
 import { listFolder, openDownload, readDiff, sessionFolder, type FilesOptions } from './files.js';
 
 export interface ChatFileRoutesDeps {
-  controller: Pick<ChatController, 'get' | 'installHost'>;
+  controller: Pick<ChatController, 'get' | 'installHost' | 'blobFile' | 'scrub'>;
   workspaces: Workspaces;
   store: Store;
 }
@@ -20,6 +27,8 @@ const encode5987 = (s: string) => encodeURIComponent(s).replace(/['()*]/g, (c) =
 /**
  * `attachment; filename="<name>"` with the name made safe for a quoted header value (printable ASCII,
  * no quote, backslash or percent). When that changed it, `filename*` carries the real name in UTF-8.
+ * For a file in the workspace, whose name is whatever the file system holds (a backslash included); the
+ * names of chat content come through `dispositionHeader`, which also drops anything path-like.
  */
 export function attachmentHeader(name: string): string {
   const real = [...name].slice(0, 200).join('');
@@ -51,7 +60,7 @@ export function createChatFileRoutes(deps: ChatFileRoutesDeps): Hono {
   /** The session's workspace and folder; 404 when there's no such session. */
   const session = (id: string) => {
     const s = deps.controller.get(id);
-    const folder = s ? sessionFolder(deps.store, id) : null;
+    const folder = s ? sessionFolder(deps.store, s.id) : null; // s.id: a folded session’s old id resolves to the chat that took it in
     if (!s || !folder) throw new AppError('NOT_FOUND', 'No such session.');
     return { workspaceId: s.workspaceId, folder };
   };
@@ -83,6 +92,82 @@ export function createChatFileRoutes(deps: ChatFileRoutesDeps): Hono {
   files.get('/:id/diff', async (c) => {
     const s = session(c.req.param('id'));
     return c.json(success(await readDiff(deps.workspaces, s.workspaceId, s.folder, opts)));
+  });
+
+  /** The session by id (or an alias of it); 404 when there's no such session. */
+  const chat = (id: string) => {
+    const s = deps.controller.get(id);
+    if (!s) throw new AppError('NOT_FOUND', 'No such session.');
+    return s;
+  };
+
+  // POST /api/chat/sessions/:id/uploads — one file to attach, as the raw request body (chat content, FR30).
+  // Its own limit (QA-028): a file up to the cap, refused by its announced size before a byte is read; opaque bytes, never JSON.
+  const uploadLimit = bodyLimit({
+    maxSize: CHAT_MAX_UPLOAD_BYTES + 64 * 1024,
+    onError: (c) => {
+      const e = new AppError('PAYLOAD_TOO_LARGE', `That file is over ${CHAT_MAX_UPLOAD_BYTES / 1_000_000} MB.`);
+      return c.json(e.toJSON(), e.status as 413);
+    },
+  });
+  files.post('/:id/uploads', uploadLimit, async (c) => {
+    const s = chat(c.req.param('id'));
+    if (s.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
+    let name: string | null = null;
+    try {
+      name = decodeURIComponent(c.req.header('x-file-name') ?? '') || null;
+    } catch {
+      name = null; // not valid percent-encoding: the file is still welcome, under a name of the portal's making
+    }
+    const declared = Number(c.req.header('content-length'));
+    const upload = await receiveUpload(deps.store, s.id, { body: c.req.raw.body, name, declaredSize: Number.isFinite(declared) && c.req.header('content-length') ? declared : null });
+    return c.json(success(upload), 201);
+  });
+
+  // DELETE /api/chat/sessions/:id/uploads/:uploadId — an attachment that was removed before it was sent.
+  files.delete('/:id/uploads/:uploadId', (c) => {
+    const s = chat(c.req.param('id'));
+    discardUpload(deps.store, s.id, c.req.param('uploadId'));
+    return c.json(success({ ok: true }));
+  });
+
+  // GET /api/chat/sessions/:id/blobs/:blobId/preview — a text file's start, secrets hidden (FR32).
+  files.get('/:id/blobs/:blobId/preview', (c) => {
+    const s = chat(c.req.param('id'));
+    const file = deps.controller.blobFile(s.id, c.req.param('blobId'));
+    if (!file) throw new AppError('NOT_FOUND', 'No such file.');
+    // The workspace's secret values go first, then credential shapes (the same hiding as the transcript's).
+    return c.json(success(textPreview(file, (text) => deps.controller.scrub(s.workspaceId, text))));
+  });
+
+  // GET /api/chat/sessions/:id/artifacts.zip?events=12,15 — the files of those transcript events as one zip ("Download all", FR32).
+  files.get('/:id/artifacts.zip', (c) => {
+    const s = chat(c.req.param('id'));
+    const seqs = (c.req.query('events') ?? '')
+      .split(',')
+      .map((v) => Number(v))
+      .filter((n) => Number.isSafeInteger(n) && n > 0)
+      .slice(0, CHAT_MAX_ZIP_ENTRIES);
+    const items: ZipItem[] = [];
+    const seen = new Set<string>();
+    for (const f of eventFiles(deps.store, s.id, seqs)) {
+      const blob = blobFileFor(deps.store, s.id, f.blobId);
+      const key = `${f.blobId}/${f.name}`;
+      if (blob && !seen.has(key)) {
+        seen.add(key);
+        items.push({ name: f.name, file: blob });
+      }
+    }
+    const body = zipStream(items);
+    return new Response(body, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': attachmentHeader(`${(s.title || 'chat').slice(0, 60)}-files.zip`),
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'private, no-store',
+      },
+    });
   });
 
   return files;

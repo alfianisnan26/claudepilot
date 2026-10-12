@@ -1,15 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { ANTHROPIC_ENDPOINT_ID } from '@portal/contracts';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { forgetSecrets, Store } from '../store/store.js';
 import { checkKey, classify, isPrivateAddress, normalizeBaseUrl, redact } from './check.js';
 import { AccountsService, fingerprintOf, maskKey } from './service.js';
+import { tempDirectory } from '../store/testTmp.js';
 
 /** A fake Anthropic-compatible host: the key decides the answer. */
 let server: Server;
@@ -41,7 +39,7 @@ after(() => {
 });
 
 const newKey = () => parseSecretKey(generateSecretKey());
-async function service(secretKey: Buffer | null = newKey(), dataDir = mkdtempSync(join(tmpdir(), 'cp-acc-'))) {
+async function service(secretKey: Buffer | null = newKey(), dataDir = tempDirectory('cp-acc-')) {
   const store = await Store.open({ dataDir, secretKey });
   return { store, accounts: new AccountsService(store), dataDir };
 }

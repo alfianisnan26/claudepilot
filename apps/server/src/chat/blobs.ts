@@ -2,6 +2,8 @@
 // images are checked here, then kept content-addressed under `<dataDir>/chat-blobs/<sha256>` (0700
 // directory, 0600 files) and linked to a session by a `chat_files` row. A blob is only ever served to
 // a session that links it. Event payloads carry the reference ({@link ChatImage}), never the base64.
+// Files of any other kind (uploads, artifacts) use the same store through `putBlob` and `adoptBlob`;
+// what they are and how they are served is in artifacts/.
 
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -10,22 +12,16 @@ import { AppError } from '@isnanme/core';
 import { CHAT_IMAGE_TYPES, CHAT_MAX_IMAGE_BYTES, CHAT_MAX_IMAGES, type ChatImage, type ChatImageType } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 
-/** Where a `chat_files` blob came from: you attached it, or a tool returned it. */
-export type ChatFileKind = 'upload' | 'tool_image';
+/** Where a `chat_files` blob came from: you attached it, a tool returned it, or the agent produced it (an artifact). */
+export type ChatFileKind = 'upload' | 'tool_image' | 'download';
 
-const BLOB_ID = /^[a-f0-9]{64}$/;
+export const BLOB_ID = /^[a-f0-9]{64}$/;
 
 /** The blob directory under the portal's data directory. */
-const blobDir = (store: Store): string => join(store.dataDir, 'chat-blobs');
+export const blobDir = (store: Store): string => join(store.dataDir, 'chat-blobs');
 
-/**
- * Stores `bytes` (once per content, whatever the session) and links them to the session. The file is
- * written whole under a temporary name and renamed, so a crash never leaves half a blob behind.
- */
-export function saveBlob(store: Store, sessionId: string, kind: ChatFileKind, name: string | null, mediaType: string, bytes: Buffer): ChatImage {
-  const db = store.db;
-  if (!db || !store.writable) throw new Error('The chat store is read-only.');
-  const blobId = createHash('sha256').update(bytes).digest('hex');
+/** Creates the blob directory (0700) when it isn't there yet. */
+export function ensureBlobDir(store: Store): string {
   const dir = blobDir(store);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {
@@ -33,7 +29,17 @@ export function saveBlob(store: Store, sessionId: string, kind: ChatFileKind, na
   } catch {
     // not ours to change (e.g. a mount); the files inside are still 0600
   }
-  const file = join(dir, blobId);
+  return dir;
+}
+
+/**
+ * Stores `bytes` in the blob store (once per content) without linking them to anything; returns their
+ * sha256. The file is written whole under a temporary name and renamed, so a crash never leaves half a
+ * blob behind.
+ */
+export function putBlob(store: Store, bytes: Buffer): string {
+  const blobId = createHash('sha256').update(bytes).digest('hex');
+  const file = join(ensureBlobDir(store), blobId);
   if (!existsSync(file)) {
     const tmp = `${file}.${randomUUID()}.tmp`;
     try {
@@ -44,6 +50,30 @@ export function saveBlob(store: Store, sessionId: string, kind: ChatFileKind, na
       throw e;
     }
   }
+  return blobId;
+}
+
+/** Moves a finished temporary file (already hashed) into the blob store as `<sha256>`; the temporary file is gone either way. */
+export function adoptBlob(store: Store, tmpFile: string, sha256: string): void {
+  const file = join(ensureBlobDir(store), sha256);
+  if (existsSync(file)) return void rmSync(tmpFile, { force: true });
+  try {
+    chmodSync(tmpFile, 0o600);
+    renameSync(tmpFile, file);
+  } catch (e) {
+    rmSync(tmpFile, { force: true });
+    throw e;
+  }
+}
+
+/**
+ * Stores `bytes` (once per content, whatever the session) and links them to the session. The file is
+ * written whole under a temporary name and renamed, so a crash never leaves half a blob behind.
+ */
+export function saveBlob(store: Store, sessionId: string, kind: ChatFileKind, name: string | null, mediaType: string, bytes: Buffer): ChatImage {
+  const db = store.db;
+  if (!db || !store.writable) throw new Error('The chat store is read-only.');
+  const blobId = putBlob(store, bytes);
   db.prepare('INSERT INTO chat_files (session_id, kind, blob_sha256, name, size, media_type, at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
     sessionId,
     kind,
@@ -75,6 +105,24 @@ export function readBlob(store: Store, sessionId: string, blobId: string): { byt
   }
   // Only the image types we accept are served as such; anything else is plain bytes.
   return { bytes, mediaType: isChatImageType(row.media_type) ? row.media_type : 'application/octet-stream' };
+}
+
+/** Deletes the files of these blobs that nothing links any more (a `chat_files` row or a waiting upload), after a session's delete. */
+export function pruneBlobs(store: Store, blobIds: string[]): void {
+  const db = store.db;
+  if (!db) return;
+  const linked = db.prepare('SELECT 1 FROM chat_files WHERE blob_sha256 = ? LIMIT 1');
+  // The table is there from schema 60; on an older (frozen) database nothing is waiting.
+  let waiting: ReturnType<typeof db.prepare> | null = null;
+  try {
+    waiting = db.prepare('SELECT 1 FROM chat_uploads WHERE blob_sha256 = ? LIMIT 1');
+  } catch {
+    waiting = null;
+  }
+  for (const blobId of blobIds) {
+    if (!BLOB_ID.test(blobId) || linked.get(blobId) || waiting?.get(blobId)) continue;
+    rmSync(join(blobDir(store), blobId), { force: true });
+  }
 }
 
 /* ---------- Checking images ---------- */

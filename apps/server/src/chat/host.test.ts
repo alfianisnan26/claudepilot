@@ -20,6 +20,7 @@ async function until(cond: () => boolean, ms = 3000) {
 /** A stand-in for `claude -p`: on start it drops a marker in its cwd, then echoes a line per input line. */
 const FAKE_CLAUDE = [
   `require('fs').writeFileSync('started', '');`,
+  `require('fs').writeFileSync('seen.json', JSON.stringify({ argv: process.argv.slice(2), env: Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(PILOT_|ENABLE_|LD_PRELOAD)/.test(k))) }));`,
   `process.stdin.setEncoding('utf8');`,
   `let buf = '';`,
   `process.stdin.on('data', (d) => {`,
@@ -165,6 +166,58 @@ test('a session starts detached in its cwd, takes a send, is tailable by offset,
   // stop ends the process group; status then reports gone.
   assert.equal((await run(['stop', 's1'], { env })).code, 0);
   await runUntil(['status', 's1'], env, (s) => s === 'gone');
+});
+
+test('start --env puts NAME=value lines from stdin into the process environment, never on a command line or in a file; other names are refused', async () => {
+  const { sessions, work, env } = mkEnv();
+  const token = 'cpst_Zk3pQ7vR1mT8xN4bC6yL0wH2dF5gJ9aS';
+  const input = `PILOT_MCP_TOKEN=${token}\nPILOT_SESSION_ID=s-1\nPILOT_MCP_URL=http://172.18.0.1:3105/mcp?a=b=c\nENABLE_CLAUDEAI_MCP_SERVERS=false\n`;
+  const started = await run(['start', 'e1', '1', work, '--env', '4', '--', '-p', '--mcp-config', '{"mcpServers":{}}'], { input, env });
+  assert.equal(started.code, 0, started.stderr);
+  await until(() => existsSync(join(work, 'seen.json')));
+  const seen = JSON.parse(readFileSync(join(work, 'seen.json'), 'utf8')) as { argv: string[]; env: Record<string, string> };
+  assert.deepEqual(seen.env, { PILOT_MCP_TOKEN: token, PILOT_SESSION_ID: 's-1', PILOT_MCP_URL: 'http://172.18.0.1:3105/mcp?a=b=c', ENABLE_CLAUDEAI_MCP_SERVERS: 'false' });
+  assert.deepEqual(seen.argv, ['-p', '--mcp-config', '{"mcpServers":{}}'], 'the arguments are exactly what was passed: the token is not one of them');
+  // Nothing of it was written anywhere in the session's folder.
+  for (const name of ['err.log', 'exit.json', 'parent.pid', 'out.1.jsonl']) {
+    if (existsSync(join(sessions, 'e1', name))) assert.ok(!readFileSync(join(sessions, 'e1', name), 'utf8').includes(token), name);
+  }
+  assert.equal((await run(['stop', 'e1'], { env })).code, 0);
+
+  // A name that isn't on the list (LD_PRELOAD, PATH, anything) is refused, and nothing starts.
+  const bad = mkEnv();
+  const refused = await run(['start', 'e2', '1', bad.work, '--env', '1', '--', '-p'], { input: 'LD_PRELOAD=/tmp/evil.so\n', env: bad.env });
+  assert.equal(refused.code, 2);
+  assert.ok(!existsSync(join(bad.work, 'started')), 'nothing started');
+  // A count that doesn't match the lines on stdin refuses too (here: more lines promised than sent).
+  const short = mkEnv();
+  const missing = await run(['start', 'e3', '1', short.work, '--env', '2', '--', '-p'], { input: 'PILOT_SESSION_ID=s-1\n', env: short.env });
+  assert.equal(missing.code, 2);
+  assert.ok(!existsSync(join(short.work, 'started')));
+  // Without --env nothing is read and nothing is added.
+  const plain = mkEnv();
+  assert.equal((await run(['start', 'e4', '1', plain.work, '--', '-p'], { env: { ...plain.env, PILOT_MCP_TOKEN: 'from-the-callers-env' } })).code, 0);
+  await until(() => existsSync(join(plain.work, 'seen.json')));
+  assert.deepEqual((JSON.parse(readFileSync(join(plain.work, 'seen.json'), 'utf8')) as { argv: string[] }).argv, ['-p']);
+  assert.equal((await run(['stop', 'e4'], { env: plain.env })).code, 0);
+});
+
+test('start appends a delivered persona prompt to the arguments, at every start, and only when the file is there', async () => {
+  const withPrompt = mkEnv();
+  const prompt = join(withPrompt.work, 'chat-prompt.md');
+  writeFileSync(prompt, 'You are Ada.');
+  const env = { ...withPrompt.env, CLAUDEPILOT_PERSONA_PROMPT: prompt };
+  assert.equal((await run(['start', 'p1', '1', withPrompt.work, '--', '-p', '--resume', 'p1'], { env })).code, 0);
+  await until(() => existsSync(join(withPrompt.work, 'seen.json')));
+  assert.deepEqual((JSON.parse(readFileSync(join(withPrompt.work, 'seen.json'), 'utf8')) as { argv: string[] }).argv, ['-p', '--resume', 'p1', '--append-system-prompt-file', prompt]);
+  assert.equal((await run(['stop', 'p1'], { env })).code, 0);
+
+  const without = mkEnv();
+  const env2 = { ...without.env, CLAUDEPILOT_PERSONA_PROMPT: join(without.work, 'missing.md') };
+  assert.equal((await run(['start', 'p2', '1', without.work, '--', '-p'], { env: env2 })).code, 0);
+  await until(() => existsSync(join(without.work, 'seen.json')));
+  assert.deepEqual((JSON.parse(readFileSync(join(without.work, 'seen.json'), 'utf8')) as { argv: string[] }).argv, ['-p']);
+  assert.equal((await run(['stop', 'p2'], { env: env2 })).code, 0);
 });
 
 test('send rejects malformed input and a wrong byte count without appending to the pipe', async () => {

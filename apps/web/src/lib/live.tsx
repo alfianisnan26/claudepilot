@@ -7,7 +7,7 @@ type Handler = (msg: LiveMessage) => void;
 /**
  * One WebSocket per tab to `/api/live`. Pages subscribe to topics and the portal pushes changes, so
  * nothing polls. Reconnects with backoff (1 s doubling to 30 s); after a reconnect, pages showing
- * accounts or storage reload, since changes made meanwhile weren't seen.
+ * accounts, pools or storage reload, since changes made meanwhile weren't seen.
  */
 class LiveClient {
   readonly #handlers = new Map<LiveTopic, Set<Handler>>();
@@ -66,7 +66,7 @@ class LiveClient {
       this.#retry = 0;
       this.#setConnected(true);
       this.#sendTopics();
-      if (this.#everConnected) for (const type of ['accounts', 'system'] as const) this.#dispatch({ type });
+      if (this.#everConnected) for (const type of ['accounts', 'system', 'pools', 'tickets', 'ci'] as const) this.#dispatch({ type });
       this.#everConnected = true;
     };
     ws.onmessage = (e) => {

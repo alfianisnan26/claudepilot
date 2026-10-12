@@ -3,6 +3,7 @@ import { CODE_LENGTH } from '@portal/contracts';
 import { CircleOff } from 'lucide-react';
 import { useRef, useState, type FormEvent } from 'react';
 import { AuthLayout } from '@/components/AuthLayout';
+import { InfoTip } from '@/components/InfoTip';
 import { ApiError, errorText } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { ServerCodeInput } from './ServerCodeInput';
@@ -45,19 +46,13 @@ export function LoginPage() {
   };
 
   return (
-    <AuthLayout
-      title="Sign in"
-      subtitle="Enter the server code to manage this portal."
-      footer="The code is printed in the server log at startup, or set with PORTAL_SERVER_CODE."
-    >
+    <AuthLayout title="Sign in">
       <form onSubmit={submit} noValidate className="flex flex-col gap-4">
         {!enabled && (
-          <div role="status" className="flex items-start gap-3 rounded-2xl bg-flame-soft px-4 py-3 text-sm">
-            <CircleOff className="mt-0.5 size-4 shrink-0 text-flame" />
-            <p className="text-ink-soft">
-              <span className="font-semibold text-ink">Sign-in is turned off.</span> An admin who is still signed in
-              can turn it back on, or restart the server.
-            </p>
+          <div role="status" className="flex items-center gap-2.5 rounded-2xl bg-flame-soft px-4 py-3 text-sm">
+            <CircleOff className="size-4 shrink-0 text-flame" />
+            <p className="font-semibold">Sign-in is turned off.</p>
+            <InfoTip label="How to turn it back on">An admin who is still signed in can turn it back on, or restart the server.</InfoTip>
           </div>
         )}
         {formError && (
@@ -66,7 +61,10 @@ export function LoginPage() {
           </p>
         )}
         <div className="flex flex-col gap-2">
-          <span className="text-sm font-semibold text-ink-soft">Server code</span>
+          <span className="flex items-center gap-1 text-sm font-semibold text-ink-soft">
+            Server code
+            <InfoTip label="Where is the code?">The code is printed in the server log at startup, or set with PORTAL_SERVER_CODE.</InfoTip>
+          </span>
           <ServerCodeInput
             ref={input}
             value={code}

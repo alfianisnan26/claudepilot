@@ -11,14 +11,16 @@ import {
   type V1Pod,
   type V1Status,
 } from '@kubernetes/client-node';
+import { plainName } from '../names.js';
 import { HOME, LABEL, type CreateSpec, type ExecSession, type Runtime, type ShellSession } from './runtime.js';
 
 const LIMIT = { cpus: 'claudepilot.cpus', memoryMb: 'claudepilot.memory-mb' } as const;
 const CONTAINER = 'workspace';
 const SEEDED = '.claudepilot-seeded';
 
-const objectName = (name: string) => `ws-${name}`;
-const claimName = (name: string) => `ws-${name}-home`;
+// A name that is not plain is refused here and in `#runningPod` (it goes into a label selector there): QA-029, QA-032.
+const objectName = (name: string) => `ws-${plainName(name)}`;
+const claimName = (name: string) => `ws-${plainName(name)}-home`;
 const selector = `${LABEL.managed}=true`;
 
 const codeOf = (e: unknown) => (e as { code?: number }).code;
@@ -221,8 +223,8 @@ export class KubernetesRuntime implements Runtime {
       .then(() => undefined);
   }
 
-  start = (name: string) => this.#scale(name, 1);
-  stop = (name: string) => this.#scale(name, 0);
+  start = async (name: string) => this.#scale(name, 1);
+  stop = async (name: string) => this.#scale(name, 0);
 
   async remove(name: string) {
     await this.#apps
@@ -257,7 +259,7 @@ export class KubernetesRuntime implements Runtime {
   async #runningPod(name: string): Promise<string> {
     const pods = await this.#core.listNamespacedPod({
       namespace: this.#ns,
-      labelSelector: `${LABEL.managed}=true,${LABEL.name}=${name}`,
+      labelSelector: `${LABEL.managed}=true,${LABEL.name}=${plainName(name)}`,
     });
     const pod = pods.items.find((p) => p.status?.phase === 'Running' && !p.metadata?.deletionTimestamp);
     if (!pod) throw new AppError('CONFLICT', 'The workspace isn’t running.');
@@ -268,6 +270,7 @@ export class KubernetesRuntime implements Runtime {
     const pod = await this.#runningPod(name);
     const out = new PassThrough();
     const stdin = new PassThrough();
+    stdin.on('error', () => undefined); // a write after the command exited is the caller's lost race, not a crash
     const exitFns: ((code: number | null) => void)[] = [];
     let exitCode: number | null = null;
     let done = false;
@@ -299,6 +302,7 @@ export class KubernetesRuntime implements Runtime {
     // Exec reads the size off stdout (rows/columns + "resize" events), like a real TTY.
     const stdout = Object.assign(new PassThrough(), { columns: size.cols, rows: size.rows });
     const stdin = new PassThrough();
+    stdin.on('error', () => undefined);
     const exitFns: ((code: number | null) => void)[] = [];
     let exitCode: number | null = null;
     let exited = false;

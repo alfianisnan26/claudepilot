@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, onUnauthorized } from './api';
 
-type AuthState = { status: 'loading' } | { status: 'out'; enabled: boolean } | { status: 'in' };
+/** `unreachable`: the server didn't answer, which says nothing about whether you are signed in. */
+type AuthState = { status: 'loading' } | { status: 'out'; enabled: boolean } | { status: 'in' } | { status: 'unreachable' };
 
 interface AuthContextValue {
   state: AuthState;
@@ -20,7 +21,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const s = await api.session();
       setState(s.authenticated ? { status: 'in' } : { status: 'out', enabled: s.enabled });
     } catch {
-      setState({ status: 'out', enabled: true });
+      // Not "signed out": the server may be restarting or the network gone. Keep what we knew, or wait and retry.
+      setState((prev) => (prev.status === 'in' ? prev : { status: 'unreachable' }));
     }
   }, []);
 

@@ -5,6 +5,7 @@ import {
   type ChatClientMessage,
   type ChatControl,
   type ChatEvent,
+  type ChatFile,
   type ChatInputState,
   type ChatRespond,
   type ChatSend,
@@ -15,6 +16,7 @@ import {
 } from '@portal/contracts';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { chatApi } from './api';
+import { createDeltaBatcher, foldDelta } from './motion/deltas';
 
 /** The live partial assistant text for the open block, before it's stored as an event. */
 export interface ChatDelta {
@@ -28,14 +30,18 @@ export interface ChatSendOptions {
   /** `next` steers the running turn; `later` runs it as its own turn after this one. */
   priority?: 'next' | 'later';
   attachments?: ChatAttachment[];
+  /** What the transcript shows for the attachments until the stored message replaces it (files already uploaded, so nothing is read from `attachments`). */
+  shown?: { images: { src: string; name: string; width?: number; height?: number }[]; files: ChatFile[] };
 }
 
 /** A message this tab sent that isn't in the stored transcript yet; shown at once so a send never looks lost. */
 export interface ChatOutgoing {
   uuid: string;
   text: string;
-  /** The attached images as `data:` URLs, for the thumbnails. */
-  images: { src: string; name: string }[];
+  /** The attached images, for the thumbnails (a `data:` URL for one sent inline, else where the portal serves it). */
+  images: { src: string; name: string; width?: number; height?: number }[];
+  /** The other files attached. */
+  files: ChatFile[];
 }
 
 export type ChatControlOp = ChatControl['op'];
@@ -58,6 +64,8 @@ export interface ChatSessionApi {
   events: ChatEvent[];
   delta: ChatDelta | null;
   session: ChatSession | null;
+  /** The session was deleted (here or in another tab), or never existed. */
+  removed: boolean;
   /** Where each message is in Claude Code's queue, by its uuid: this tab's sends plus every `input` update seen. */
   inputs: Map<string, ChatInputState>;
   /** Sent from this tab but not stored yet; the stored `user` event with the same uuid replaces it. */
@@ -113,6 +121,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
   const [events, setEvents] = useState<ChatEvent[]>([]);
   const [delta, setDelta] = useState<ChatDelta | null>(null);
   const [session, setSession] = useState<ChatSession | null>(null);
+  const [removed, setRemoved] = useState(false);
   const [inputs, setInputs] = useState<Map<string, ChatInputState>>(() => new Map());
   const [outbox, setOutbox] = useState<ChatOutgoing[]>([]);
   const [tasks, setTasks] = useState<ChatTask[]>([]);
@@ -131,11 +140,14 @@ export function useChatSession(sessionId: string): ChatSessionApi {
     setEvents([]);
     setDelta(null);
     setSession(null);
+    setRemoved(false);
     setInputs(new Map());
     setOutbox([]);
     setTasks([]);
     const waiters = new Map<string, Waiter>();
     waitersRef.current = waiters;
+    // Deltas are applied once per frame, not once per message (each one re-renders the whole page).
+    const deltas = createDeltaBatcher((messages) => setDelta((d) => messages.reduce<ChatDelta | null>(foldDelta, d)));
 
     let closed = false;
     let retry = 0;
@@ -147,6 +159,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
 
     const applyEvents = (items: ChatEvent[]) => {
       if (items.length === 0) return;
+      deltas.flush(); // the deltas first, then whatever supersedes them
       for (const e of items) if (e.seq > seqRef.current) seqRef.current = e.seq;
       setEvents((prev) => mergeEvents(prev, items));
       // A finished assistant block or a turn result supersedes whatever the live delta was showing;
@@ -219,19 +232,14 @@ export function useChatSession(sessionId: string): ChatSessionApi {
           if (msg.session === sessionId) applyEvents(msg.items);
           break;
         case 'delta':
-          // Deltas are pieces of the open block: append them (a new agent, or text after thinking, starts
-          // afresh). A thinking start carries no text: it shows as "Thinking…" until the block is stored.
-          if (msg.session === sessionId)
-            setDelta((d) =>
-              msg.thinking
-                ? { agentLabel: msg.agentLabel, text: '', thinking: { since: Date.now() - (msg.elapsedMs ?? 0) } }
-                : d && d.agentLabel === msg.agentLabel && !d.thinking
-                  ? { ...d, text: d.text + msg.text }
-                  : { agentLabel: msg.agentLabel, text: msg.text },
-            );
+          // Pieces of the open block, appended (see foldDelta); a thinking start shows as "Thinking…" until the block is stored.
+          if (msg.session === sessionId) deltas.push(msg);
           break;
         case 'session':
           if (msg.session.id === sessionId) setSession(msg.session);
+          break;
+        case 'removed':
+          if (msg.session === sessionId) setRemoved(true);
           break;
         case 'input':
           if (msg.session === sessionId) setInputs((m) => (m.get(msg.uuid) === msg.state ? m : new Map(m).set(msg.uuid, msg.state)));
@@ -297,6 +305,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
 
     return () => {
       closed = true;
+      deltas.cancel();
       window.clearTimeout(timer);
       // Leaving: nobody is left to tell, so waiters are just forgotten.
       for (const w of waiters.values()) window.clearTimeout(w.timer);
@@ -327,8 +336,8 @@ export function useChatSession(sessionId: string): ChatSessionApi {
         if (attachments.length) msg.attachments = attachments;
         waitersRef.current.set(uuid, { kind: 'send', resolve, reject });
         setInputs((m) => new Map(m).set(uuid, 'sending'));
-        const images = attachments.map((a) => ({ src: `data:${a.mediaType};base64,${a.dataBase64}`, name: a.name }));
-        setOutbox((o) => [...o, { uuid, text, images }]);
+        const images = opts.shown?.images ?? attachments.flatMap((a) => ('dataBase64' in a ? [{ src: `data:${a.mediaType};base64,${a.dataBase64}`, name: a.name }] : []));
+        setOutbox((o) => [...o, { uuid, text, images, files: opts.shown?.files ?? [] }]);
         ws.send(JSON.stringify(msg));
       }),
     [sessionId],
@@ -364,7 +373,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
   const stop = useCallback(() => void control('stop').catch(fail), [control, fail]);
   const end = useCallback(() => void control('end').catch(fail), [control, fail]);
 
-  return { connected, events, delta, session, inputs, outbox, tasks, send, respond, control, stop, end };
+  return { connected, events, delta, session, removed, inputs, outbox, tasks, send, respond, control, stop, end };
 }
 
 export interface ChatListApi {

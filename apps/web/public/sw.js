@@ -21,8 +21,16 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Nothing answered, or only a proxy did to say the portal is down (502, 503, 504): the offline page. Any other answer is the portal's.
+const PROXY_DOWN = new Set([502, 503, 504]);
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET' || request.mode !== 'navigate') return;
-  event.respondWith(fetch(request).catch(() => caches.match(OFFLINE)));
+  event.respondWith(
+    fetch(request).then(
+      (response) => (PROXY_DOWN.has(response.status) ? caches.match(OFFLINE).then((page) => page || response) : response),
+      () => caches.match(OFFLINE),
+    ),
+  );
 });

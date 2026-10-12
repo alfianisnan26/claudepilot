@@ -4,6 +4,7 @@ import { Bot, LogIn, LogOut, Pencil, Plus, SquareTerminal, Trash2 } from 'lucide
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { chatApi } from '@/features/chat/api';
+import { ClaudeMeter } from '@/features/usage/claude';
 import { api, errorText } from '@/lib/api';
 import { ClaudeLoginDialog } from './ClaudeLoginDialog';
 
@@ -152,6 +153,7 @@ export function ClaudesSection({ workspace: w, onLeave }: { workspace: Workspace
                     {c.directory ? '' : ' · original home'}
                   </p>
                 </div>
+                <ClaudeMeter claudeId={c.id} />
                 <Button
                   size="sm"
                   variant="secondary"

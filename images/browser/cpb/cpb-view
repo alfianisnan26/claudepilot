@@ -1,0 +1,449 @@
+#!/usr/bin/env node
+// cpb-view: the container's end of the portal's proxy browser (browser & desktop PRD §22). Run by `exec` as uid 1001
+// (the portal does it, once per viewer). It is a CDP client of the browser on 127.0.0.1 and speaks a NARROW protocol
+// with the portal over stdio, so raw CDP never leaves the container, and the page the human sees is rendered by the
+// portal itself, not by a VNC server:
+//
+//   stdin  (portal -> here)  one JSON message per line, at most 16 KB:
+//     {t:'mouse', a:'move'|'down'|'up'|'wheel', x, y, b?:0|1|2, cc?, dx?, dy?, m?}   x and y are fractions (0..1) of the frame
+//     {t:'key', a:'down'|'up', key, code, vk?, text?, m?}      {t:'text', text}
+//     {t:'go', url} {t:'back'} {t:'forward'} {t:'reload'} {t:'stop'}
+//     {t:'tab', id, activate?} {t:'follow', on} {t:'newTab', url?} {t:'closeTab', id}
+//     {t:'viewport', w, h, dpr?, mobile?} {t:'viewport', reset:true}
+//     {t:'quality', q, maxW?, fps?}   {t:'dialog', accept, text?}   {t:'ping'}
+//   stdout (here -> portal)  frames: [u8 kind][u32 length][payload]
+//     kind 1: a JSON event  {e:'ready'|'tabs'|'url'|'loading'|'dialog'|'dialog-closed'|'error'|'pong', ...}
+//     kind 2: a screencast frame: [u32 header length][header JSON {w,h,dw,dh,tab}][JPEG bytes]
+//
+// Nothing here fetches a page: navigation is a CDP `Page.navigate` the BROWSER performs. Frames are never written to disk.
+import { CDP_PORT } from './lib.mjs';
+
+const PORT = Number(process.env.CPB_CDP_PORT || CDP_PORT);
+const out = process.stdout;
+const elog = (...a) => process.stderr.write(`cpb-view: ${a.join(' ')}\n`);
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+
+/* ---------- Output framing ---------- */
+
+function frame(kind, payload) {
+  const head = Buffer.alloc(5);
+  head[0] = kind;
+  head.writeUInt32BE(payload.length, 1);
+  out.write(Buffer.concat([head, payload]));
+}
+const event = (e) => frame(1, Buffer.from(JSON.stringify(e)));
+
+/* ---------- CDP over the browser's own WebSocket ---------- */
+
+class Cdp {
+  #ws;
+  #id = 0;
+  #pending = new Map();
+  #handlers = new Map();
+  onclose = () => undefined;
+
+  static async connect(port) {
+    const version = await (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(4000) })).json();
+    const cdp = new Cdp();
+    cdp.#ws = new WebSocket(version.webSocketDebuggerUrl);
+    await new Promise((resolve, reject) => {
+      cdp.#ws.addEventListener('open', resolve, { once: true });
+      cdp.#ws.addEventListener('error', () => reject(new Error('Chrome did not accept the connection')), { once: true });
+    });
+    cdp.#ws.addEventListener('message', (e) => cdp.#message(JSON.parse(String(e.data))));
+    cdp.#ws.addEventListener('close', () => cdp.onclose());
+    return cdp;
+  }
+
+  #message(m) {
+    if (m.id !== undefined) {
+      const p = this.#pending.get(m.id);
+      if (!p) return;
+      this.#pending.delete(m.id);
+      if (m.error) p.reject(new Error(m.error.message));
+      else p.resolve(m.result ?? {});
+    } else if (m.method) for (const fn of this.#handlers.get(m.method) ?? []) fn(m.params ?? {}, m.sessionId);
+  }
+
+  send(method, params = {}, sessionId) {
+    const id = ++this.#id;
+    if (process.env.CPB_VIEW_DEBUG && method.startsWith('Input.')) elog('cdp>', method, JSON.stringify(params).slice(0, 160), 'session', String(sessionId).slice(0, 6));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => (this.#pending.delete(id), reject(new Error(`${method} timed out`))), 10_000);
+      this.#pending.set(id, { resolve: (v) => (clearTimeout(timer), resolve(v)), reject: (e) => (clearTimeout(timer), reject(e)) });
+      this.#ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    });
+  }
+
+  on(method, fn) {
+    this.#handlers.set(method, [...(this.#handlers.get(method) ?? []), fn]);
+  }
+
+  close() {
+    try {
+      this.#ws.close();
+    } catch {
+      // already closed
+    }
+  }
+}
+
+/* ---------- State ---------- */
+
+let cdp;
+/** The tab being watched: { targetId, sessionId }. */
+let cur = null;
+const tabs = new Map(); // targetId -> { id, title, url }
+let last = { dw: 1280, dh: 800 };
+let settings = { quality: 60, maxW: 1280, fps: 15 };
+/** Follow the browser's front tab: what a viewer who can't choose a tab watches (the controller's choice is activated instead). */
+let follow = true;
+/** A JavaScript dialog is open on the watched tab: its page can't run script, so nothing may move the view away from it. */
+let dialogOpen = false;
+let buttons = 0;
+let tabsTimer = null;
+let emulating = false;
+
+const isPage = (t) => t.type === 'page' && /^(https?:|about:|file:|chrome:)/.test(t.url || '');
+
+function pushTabs() {
+  clearTimeout(tabsTimer);
+  tabsTimer = setTimeout(() => {
+    event({ e: 'tabs', tabs: [...tabs.values()].map((t) => ({ id: t.id, title: String(t.title || '').slice(0, 200), url: String(t.url || '').slice(0, 2000) })), current: cur?.targetId ?? null });
+  }, 80);
+}
+
+/* ---------- Screencast ---------- */
+
+let pendingFrame = null;
+let lastSent = 0;
+let flushTimer = null;
+
+function sendFrame(f) {
+  lastSent = Date.now();
+  const header = Buffer.from(JSON.stringify(f.header));
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(header.length);
+  frame(2, Buffer.concat([len, header, f.jpeg]));
+}
+
+/** At most `fps` frames a second; the newest one always arrives, even if it has to wait its turn. */
+function offer(f) {
+  const gap = 1000 / settings.fps;
+  const wait = lastSent + gap - Date.now();
+  if (wait <= 0 && !flushTimer) return sendFrame(f);
+  pendingFrame = f;
+  if (!flushTimer)
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      if (pendingFrame) sendFrame(pendingFrame);
+      pendingFrame = null;
+    }, Math.max(0, wait));
+}
+
+async function startScreencast() {
+  if (!cur) return;
+  const maxW = clamp(Math.round(settings.maxW), 200, 3840);
+  await cdp.send('Page.startScreencast', { format: 'jpeg', quality: clamp(Math.round(settings.quality), 10, 95), maxWidth: maxW, maxHeight: Math.round(maxW * 1.8), everyNthFrame: 1 }, cur.sessionId);
+}
+
+async function attach(targetId) {
+  if (cur) {
+    const old = cur;
+    cur = null;
+    await cdp.send('Page.stopScreencast', {}, old.sessionId).catch(() => undefined);
+    await cdp.send('Target.detachFromTarget', { sessionId: old.sessionId }).catch(() => undefined);
+  }
+  const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
+  cur = { targetId, sessionId };
+  buttons = 0;
+  emulating = false;
+  dialogOpen = false;
+  await cdp.send('Page.enable', {}, sessionId);
+  // Playwright does the same for every page it drives: input reaches a page that isn't the focused window's.
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true }, sessionId).catch(() => undefined);
+  await startScreencast();
+  const t = tabs.get(targetId);
+  if (t) event({ e: 'url', id: t.id, url: t.url, title: t.title });
+  pushTabs();
+}
+
+/**
+ * The tab a person would be looking at: Chrome lists its pages most recently active first, and the one at the top is
+ * the one on screen (only the front tab of a window is rendered). Read from the listing, so no page is attached to
+ * and a page stuck in a dialog still answers.
+ */
+async function frontTab() {
+  try {
+    const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`, { signal: AbortSignal.timeout(1500) })).json();
+    return list.find((t) => isPage(t))?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/* ---------- Input (validated again here: the portal is not the only thing that can write to this pipe) ---------- */
+
+const BUTTONS = ['left', 'middle', 'right'];
+const MASK = { left: 1, right: 2, middle: 4 };
+
+function url(raw) {
+  const s = String(raw ?? '').trim().slice(0, 2048);
+  if (!s || /[\u0000-\u001f\u007f\s]/.test(s)) return null;
+  if (s === 'about:blank') return s;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(s);
+  if (scheme && !/^[0-9]+$/.test(s.slice(scheme[0].length).split('/')[0] ?? '')) {
+    // A scheme: only the web (a `host:8080` is a host and a port, not a scheme).
+    return /^https?$/i.test(scheme[1]) && /^https?:\/\/[^/]+/i.test(s) ? s : null;
+  }
+  if (!/^[A-Za-z0-9.-]+(:\d{1,5})?(\/\S*)?$/.test(s) || !/[.:]|^localhost/.test(s.split('/')[0] ?? '')) return null;
+  const hostPart = (s.split('/')[0] ?? '').split(':')[0] ?? '';
+  const local = hostPart === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(hostPart) || hostPart.endsWith('.local');
+  return `${local ? 'http' : 'https'}://${s}`;
+}
+
+async function mouse(m) {
+  if (!cur) return;
+  const x = Math.round(clamp(num(m.x), 0, 1) * last.dw);
+  const y = Math.round(clamp(num(m.y), 0, 1) * last.dh);
+  const button = BUTTONS[clamp(Math.round(num(m.b)), 0, 2)];
+  const mods = clamp(Math.round(num(m.m)), 0, 15);
+  const base = { x, y, modifiers: mods };
+  if (m.a === 'move') return void (await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...base, button: buttons ? 'left' : 'none', buttons }, cur.sessionId));
+  if (m.a === 'down') {
+    buttons |= MASK[button];
+    return void (await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base, button, buttons, clickCount: clamp(Math.round(num(m.cc, 1)), 1, 3) }, cur.sessionId));
+  }
+  if (m.a === 'up') {
+    buttons &= ~MASK[button];
+    return void (await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base, button, buttons, clickCount: clamp(Math.round(num(m.cc, 1)), 1, 3) }, cur.sessionId));
+  }
+  if (m.a === 'wheel') return void (await cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', ...base, deltaX: clamp(num(m.dx), -4000, 4000), deltaY: clamp(num(m.dy), -4000, 4000) }, cur.sessionId));
+}
+
+async function key(m) {
+  if (!cur || typeof m.key !== 'string' || m.key.length > 32) return;
+  const printable = m.a === 'down' && typeof m.text === 'string' && m.text.length > 0 && m.text.length <= 8 && !(num(m.m) & 6);
+  await cdp.send(
+    'Input.dispatchKeyEvent',
+    {
+      type: m.a === 'up' ? 'keyUp' : printable ? 'keyDown' : 'rawKeyDown',
+      key: m.key,
+      code: typeof m.code === 'string' ? m.code.slice(0, 32) : '',
+      windowsVirtualKeyCode: clamp(Math.round(num(m.vk)), 0, 255),
+      nativeVirtualKeyCode: clamp(Math.round(num(m.vk)), 0, 255),
+      modifiers: clamp(Math.round(num(m.m)), 0, 15),
+      ...(printable ? { text: m.text, unmodifiedText: m.text } : {}),
+    },
+    cur.sessionId,
+  );
+}
+
+async function navigate(m) {
+  if (!cur) return;
+  if (m.t === 'go') {
+    const u = url(m.url);
+    if (!u) return event({ e: 'error', message: 'That is not a web address.' });
+    return void (await cdp.send('Page.navigate', { url: u }, cur.sessionId));
+  }
+  if (m.t === 'reload') return void (await cdp.send('Page.reload', {}, cur.sessionId));
+  if (m.t === 'stop') return void (await cdp.send('Page.stopLoading', {}, cur.sessionId));
+  const history = await cdp.send('Page.getNavigationHistory', {}, cur.sessionId);
+  const entry = history.entries[history.currentIndex + (m.t === 'back' ? -1 : 1)];
+  if (entry) await cdp.send('Page.navigateToHistoryEntry', { entryId: entry.id }, cur.sessionId);
+}
+
+async function handle(m) {
+  if (process.env.CPB_VIEW_DEBUG) elog('msg', JSON.stringify(m).slice(0, 120), 'cur', cur ? cur.sessionId.slice(0, 6) : null, 'last', JSON.stringify(last));
+  switch (m.t) {
+    case 'ping':
+      return event({ e: 'pong' });
+    case 'mouse':
+      return mouse(m);
+    case 'key':
+      return key(m);
+    case 'text':
+      if (cur && typeof m.text === 'string' && m.text.length <= 2000) await cdp.send('Input.insertText', { text: m.text }, cur.sessionId);
+      return;
+    case 'go':
+    case 'back':
+    case 'forward':
+    case 'reload':
+    case 'stop':
+      return navigate(m);
+    case 'tab':
+      if (!tabs.has(m.id)) return;
+      // A person in control brings the tab forward, and then it is the front tab for everyone (the agent included):
+      // the view keeps following the front tab, which is the one just chosen. Without `activate` the view stays on its choice.
+      if (m.activate === true) await cdp.send('Target.activateTarget', { targetId: m.id }).catch(() => undefined);
+      else follow = false;
+      return void (await attach(m.id));
+    case 'follow':
+      follow = m.on !== false;
+      return;
+    case 'newTab': {
+      const u = m.url ? url(m.url) : 'about:blank';
+      if (!u) return event({ e: 'error', message: 'That is not a web address.' });
+      const { targetId } = await cdp.send('Target.createTarget', { url: u });
+      follow = false;
+      return void (await attach(targetId));
+    }
+    case 'closeTab':
+      if (tabs.has(m.id)) await cdp.send('Target.closeTarget', { targetId: m.id });
+      return;
+    case 'viewport':
+      if (!cur) return;
+      if (m.reset) {
+        emulating = false;
+        return void (await cdp.send('Emulation.clearDeviceMetricsOverride', {}, cur.sessionId));
+      }
+      emulating = true;
+      return void (await cdp.send(
+        'Emulation.setDeviceMetricsOverride',
+        { width: clamp(Math.round(num(m.w, 1280)), 100, 4096), height: clamp(Math.round(num(m.h, 800)), 100, 4096), deviceScaleFactor: clamp(num(m.dpr, 1), 1, 4), mobile: m.mobile === true },
+        cur.sessionId,
+      ));
+    case 'quality': {
+      const next = { quality: clamp(num(m.q, 60), 10, 95), maxW: clamp(num(m.maxW, settings.maxW), 200, 3840), fps: clamp(num(m.fps, settings.fps), 1, 30) };
+      if (next.quality === settings.quality && next.maxW === settings.maxW && next.fps === settings.fps) return;
+      settings = next;
+      if (!cur) return;
+      // A running screencast is restarted with the new numbers.
+      await cdp.send('Page.stopScreencast', {}, cur.sessionId).catch(() => undefined);
+      return startScreencast();
+    }
+    case 'dialog': {
+      if (!cur) return;
+      const answer = () => cdp.send('Page.handleJavaScriptDialog', { accept: m.accept === true, ...(typeof m.text === 'string' ? { promptText: m.text.slice(0, 2000) } : {}) }, cur.sessionId);
+      // The opening event can come a moment before the dialog can be answered.
+      await answer().catch(async () => {
+        await new Promise((r) => setTimeout(r, 200));
+        await answer();
+      });
+      return;
+    }
+    default:
+      return; // anything else is ignored
+  }
+}
+
+/* ---------- Boot ---------- */
+
+async function main() {
+  cdp = await Cdp.connect(PORT);
+  cdp.onclose = () => {
+    event({ e: 'error', message: 'The browser closed.', fatal: true });
+    out.write('', () => process.exit(0));
+  };
+  cdp.on('Target.targetCreated', ({ targetInfo: t }) => {
+    if (isPage(t)) {
+      tabs.set(t.targetId, { id: t.targetId, title: t.title, url: t.url });
+      pushTabs();
+    }
+  });
+  cdp.on('Target.targetInfoChanged', ({ targetInfo: t }) => {
+    if (!isPage(t)) return;
+    tabs.set(t.targetId, { id: t.targetId, title: t.title, url: t.url });
+    if (cur?.targetId === t.targetId) event({ e: 'url', id: t.targetId, url: t.url, title: t.title });
+    pushTabs();
+  });
+  cdp.on('Target.targetDestroyed', async ({ targetId }) => {
+    tabs.delete(targetId);
+    pushTabs();
+    if (cur?.targetId === targetId) {
+      cur = null;
+      follow = true;
+      const next = (await frontTab().catch(() => null)) ?? [...tabs.keys()][0];
+      if (next) await attach(next).catch((e) => elog('re-attach', e.message));
+    }
+  });
+  cdp.on('Page.screencastFrame', (p, sessionId) => {
+    if (!cur || sessionId !== cur.sessionId) return;
+    const md = p.metadata ?? {};
+    last = { dw: Math.max(1, Math.round(num(md.deviceWidth, last.dw))), dh: Math.max(1, Math.round(num(md.deviceHeight, last.dh))) };
+    // Acknowledge at once: the portal drops frames a slow viewer can't take, so Chrome never has to wait for it.
+    cdp.send('Page.screencastFrameAck', { sessionId: p.sessionId }, sessionId).catch(() => undefined);
+    offer({ header: { dw: last.dw, dh: last.dh, tab: cur.targetId, emu: emulating }, jpeg: Buffer.from(p.data, 'base64') });
+  });
+  cdp.on('Page.javascriptDialogOpening', (p, sessionId) => {
+    if (cur && sessionId === cur.sessionId) dialogOpen = true;
+    if (cur && sessionId === cur.sessionId) event({ e: 'dialog', kind: String(p.type || 'alert'), message: String(p.message || '').slice(0, 500), prompt: String(p.defaultPrompt || '').slice(0, 500) });
+  });
+  cdp.on('Page.javascriptDialogClosed', (_p, sessionId) => {
+    if (cur && sessionId === cur.sessionId) {
+      dialogOpen = false;
+      event({ e: 'dialog-closed' });
+    }
+  });
+  cdp.on('Page.frameStartedLoading', (_p, sessionId) => cur && sessionId === cur.sessionId && event({ e: 'loading', on: true }));
+  cdp.on('Page.frameStoppedLoading', (_p, sessionId) => cur && sessionId === cur.sessionId && event({ e: 'loading', on: false }));
+
+  // Chrome doesn't announce every title change as a target change, so the list is also read once a second (cheap, and
+  // it is what the supervisor does too).
+  const poll = setInterval(async () => {
+    try {
+      const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`, { signal: AbortSignal.timeout(1500) })).json();
+      let changed = false;
+      for (const t of list) {
+        if (t.type !== 'page' || !isPage(t)) continue;
+        const have = tabs.get(t.id);
+        if (!have || have.title !== t.title || have.url !== t.url) {
+          tabs.set(t.id, { id: t.id, title: t.title, url: t.url });
+          changed = true;
+          if (cur?.targetId === t.id) event({ e: 'url', id: t.id, url: t.url, title: t.title });
+        }
+      }
+      if (changed) pushTabs();
+    } catch {
+      // the browser is going away: the socket's close says so
+    }
+  }, 1000);
+  poll.unref();
+  // Following the front tab: a tab the agent opens or brings forward becomes the one this view shows.
+  const front = setInterval(async () => {
+    if (!follow || dialogOpen || tabs.size < 2 || !cur) return;
+    const id = await frontTab().catch(() => null);
+    if (id && id !== cur.targetId && tabs.has(id)) await attach(id).catch((e) => elog('follow', e.message));
+  }, 1500);
+  front.unref();
+
+  await cdp.send('Target.setDiscoverTargets', { discover: true });
+  // setDiscoverTargets reports the existing targets as events; give them a moment to arrive.
+  await new Promise((r) => setTimeout(r, 150));
+  let first = await frontTab();
+  if (!first) {
+    const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
+    first = targetId;
+  }
+  await attach(first);
+  event({ e: 'ready' });
+
+  let buf = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    buf += chunk;
+    for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      if (line.length > 16 * 1024) continue;
+      let m;
+      try {
+        m = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (m && typeof m === 'object') handle(m).catch((e) => event({ e: 'error', message: String(e.message).slice(0, 200) }));
+    }
+    if (buf.length > 64 * 1024) buf = '';
+  });
+  process.stdin.on('end', () => {
+    cdp.close();
+    process.exit(0);
+  });
+}
+
+main().catch((e) => {
+  event({ e: 'error', message: `The browser is not available: ${String(e.message).slice(0, 200)}`, fatal: true });
+  out.write('', () => process.exit(1));
+});

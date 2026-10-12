@@ -64,7 +64,8 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
-const COMPONENTS: Components = {
+/** Also what the live reply renders with (motion/StreamingMarkdown), so a reply looks the same while it streams and after. */
+export const COMPONENTS: Components = {
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
   code: ({ children, className }) => (
     <code className={cn('rounded-md bg-surface-2 px-1 py-0.5 font-mono text-[0.88em] break-words', className)}>{children}</code>
@@ -103,7 +104,7 @@ const COMPONENTS: Components = {
   td: ({ children }) => <td className="border-b border-line px-3 py-1.5 align-top">{children}</td>,
 };
 
-const PLUGINS = [remarkGfm];
+export const PLUGINS = [remarkGfm];
 
 /**
  * A reply as markdown (GitHub flavored). Raw HTML is never rendered (it shows as text), links open in

@@ -3,6 +3,9 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, st
 import { basename, join } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
 import { ENCRYPTED_COLUMNS, MIGRATIONS, type EncryptedColumn, type Migration } from './migrations.js';
+
+/** portal_meta key holding the versions of every migration applied, as a JSON array. */
+const APPLIED_KEY = 'migrations_applied';
 import { isPortalRunning } from './lock.js';
 import { SecretBox, type SecretSlot } from './secretBox.js';
 
@@ -268,24 +271,38 @@ export class Store {
     }
 
     this.#db = db;
-    if (version < latest) {
+    // Migrations run by set, not only by number: one numbered below a migration already applied (work
+    // on two features side by side, with a hot-reloading dev server applying whichever landed first)
+    // still runs. `user_version` stays the highest applied, for the newer-portal check above.
+    const applied = this.#appliedMigrations(db, version);
+    const pending = [...this.opts.migrations].sort((a, b) => a.version - b.version).filter((m) => !applied.has(m.version));
+    if (pending.length) {
       try {
         if (existed && version > 0) await this.backup('pre-migrate');
-        for (const m of [...this.opts.migrations].sort((a, b) => a.version - b.version)) {
-          if (m.version <= version) continue;
+        let high = version;
+        for (const m of pending) {
           db.exec('BEGIN IMMEDIATE');
           try {
             m.up(db);
-            db.exec(`PRAGMA user_version = ${m.version}`);
+            applied.add(m.version);
+            high = Math.max(high, m.version);
+            db.exec(`PRAGMA user_version = ${high}`);
+            // portal_meta exists from migration 1 on; the set commits with the migration it records.
+            db.prepare('INSERT INTO portal_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(
+              APPLIED_KEY,
+              JSON.stringify([...applied].sort((a, b) => a - b)),
+            );
             db.exec('COMMIT');
           } catch (e) {
             db.exec('ROLLBACK');
+            applied.delete(m.version);
             throw new Error(`migration ${m.version} (${m.name}): ${(e as Error).message}`);
           }
         }
       } catch (e) {
         this.#schemaVersion = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version);
-        return this.#freeze('migration-failed', `A schema migration failed: ${(e as Error).message}`);
+        this.#portalId = this.#metaGet('portal_id');
+        return this.#freeze('migration-failed', `A schema migration failed: ${(e as Error).message}${this.#oldNumberingRepair(db, applied)}`);
       }
     }
     this.#schemaVersion = latest;
@@ -340,6 +357,35 @@ export class Store {
 
   #freeze(code: TrustCode, message: string) {
     this.#reasons.push({ code, message });
+  }
+
+  /**
+   * Which migrations this database has: the recorded set, or, for a database migrated before the set
+   * was kept, every known migration up to its `user_version` (those ran strictly in order).
+   */
+  /**
+   * The database of an older build, whose pool migrations were numbered 9-12 (QA-013): the applied set looks complete up to 12, yet this
+   * build's migration 9 (workspace claudes) never ran, so a later one fails on a table that is already there. One statement, on a copy
+   * with the portal stopped, renumbers it; the next start applies what is missing. Returns the sentence to add to the reason, or ''.
+   */
+  #oldNumberingRepair(db: DatabaseSync, applied: Set<number>): string {
+    const claudes = this.opts.migrations.find((m) => m.name === 'workspace claudes');
+    if (!claudes || !applied.has(claudes.version)) return '';
+    if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_claudes'").get()) return '';
+    return ` This database was written by an older build that numbered its pool migrations 9-12. On a copy, with the portal stopped, run: UPDATE portal_meta SET value='[1,2,3,4,5,6,7,8,12,13,14,15]' WHERE key='migrations_applied'; PRAGMA user_version=15; then start again.`;
+  }
+
+  #appliedMigrations(db: DatabaseSync, version: number): Set<number> {
+    if (version > 0) {
+      try {
+        const row = db.prepare('SELECT value FROM portal_meta WHERE key = ?').get(APPLIED_KEY) as { value: string } | undefined;
+        const list: unknown = row ? JSON.parse(row.value) : null;
+        if (Array.isArray(list) && list.every((v) => Number.isInteger(v))) return new Set(list as number[]);
+      } catch {
+        // no portal_meta or an unreadable value: fall back to the number
+      }
+    }
+    return new Set(this.opts.migrations.filter((m) => m.version <= version).map((m) => m.version));
   }
 
   #metaGet(key: string): string | null {

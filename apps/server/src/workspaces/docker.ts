@@ -4,12 +4,15 @@ import { AppError } from '@isnanme/core';
 import { workspaceId, type Workspace, type WorkspaceStatus } from '@portal/contracts';
 import Docker from 'dockerode';
 import { extract, pack } from 'tar-stream';
-import { HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type ShellSession, type TarEntry } from './runtime.js';
+import { plainName } from '../names.js';
+import { createdByAnotherPortal, HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type ShellSession, type TarEntry } from './runtime.js';
 
 const LIMIT = { cpus: 'claudepilot.cpus', memoryMb: 'claudepilot.memory-mb' } as const;
 
-const containerName = (name: string) => `claudepilot-${name}`;
-const volumeName = (name: string) => `claudepilot-${name}-home`;
+// Every Docker call builds its container and volume id here, so a name that is not plain (`x/../../containers`, `x?force=true`) is refused
+// before it can become part of a Docker Engine URL (QA-029, QA-032).
+const containerName = (name: string) => `claudepilot-${plainName(name)}`;
+const volumeName = (name: string) => `claudepilot-${plainName(name)}-home`;
 
 /** Docker answers "already started/stopped" with 304 and "no such thing" with 404. */
 const statusOf = (e: unknown) => (e as { statusCode?: number }).statusCode;
@@ -53,10 +56,14 @@ export class DockerRuntime implements Runtime {
     opts: { id: string; label: string; socket: string },
     private readonly image: string,
     private readonly imageContext: string,
+    /** This portal's id (the store's), labelled onto every container it creates. Null while unknown: nothing is labelled or skipped. */
+    private readonly portal: () => string | null = () => null,
+    /** A Docker client, for tests. */
+    client?: Docker,
   ) {
     this.target = { id: opts.id, label: opts.label, kind: 'docker' as const, where: opts.socket };
     this.#socket = opts.socket;
-    this.#docker = new Docker({ socketPath: opts.socket });
+    this.#docker = client ?? new Docker({ socketPath: opts.socket });
   }
 
   async check() {
@@ -68,7 +75,7 @@ export class DockerRuntime implements Runtime {
     state: async (name) => {
       try {
         const info = await this.#container(name).inspect();
-        return { exists: true, running: !!info.State.Running };
+        return { exists: true, running: !!info.State.Running, portal: info.Config?.Labels?.[LABEL.portal] ?? null };
       } catch (e) {
         if (statusOf(e) === 404) return { exists: false, running: false };
         throw e;
@@ -177,8 +184,10 @@ export class DockerRuntime implements Runtime {
             const line = buf.slice(0, nl);
             buf = buf.slice(nl + 1);
             try {
-              const name = (JSON.parse(line) as { Actor?: { Attributes?: Record<string, string> } }).Actor?.Attributes?.[LABEL.name];
-              if (name) onEvent(name);
+              const attributes = (JSON.parse(line) as { Actor?: { Attributes?: Record<string, string> } }).Actor?.Attributes;
+              const name = attributes?.[LABEL.name];
+              // Another portal's workspace (it carries that portal's id) is none of this portal's business.
+              if (name && !createdByAnotherPortal(attributes, this.portal())) onEvent(name);
             } catch {
               // not an event line
             }
@@ -201,7 +210,8 @@ export class DockerRuntime implements Runtime {
       all: true,
       filters: { label: [`${LABEL.managed}=true`] },
     });
-    return containers.map((c) => {
+    const mine = this.portal();
+    return containers.filter((c) => !createdByAnotherPortal(c.Labels, mine)).map((c) => {
       const name = c.Labels[LABEL.name] ?? c.Names[0]?.replace(/^\/claudepilot-/, '') ?? c.Id;
       const cpus = Number(c.Labels[LIMIT.cpus]) || undefined;
       const memoryMb = Number(c.Labels[LIMIT.memoryMb]) || undefined;
@@ -228,9 +238,11 @@ export class DockerRuntime implements Runtime {
 
     await this.#ensureImage(progress);
     progress('Creating container');
+    const portal = this.portal();
     const labels = {
       [LABEL.managed]: 'true',
       [LABEL.name]: spec.name,
+      ...(portal ? { [LABEL.portal]: portal } : {}),
       ...(spec.cpus ? { [LIMIT.cpus]: String(spec.cpus) } : {}),
       ...(spec.memoryMb ? { [LIMIT.memoryMb]: String(spec.memoryMb) } : {}),
     };
@@ -254,8 +266,9 @@ export class DockerRuntime implements Runtime {
     await container.start();
   }
 
-  start = (name: string) => this.#container(name).start().catch(ignore(304));
-  stop = (name: string) => this.#container(name).stop({ t: 5 }).catch(ignore(304));
+  // async: a refused name rejects like any other failure instead of throwing before there is a promise.
+  start = async (name: string) => this.#container(name).start().catch(ignore(304));
+  stop = async (name: string) => this.#container(name).stop({ t: 5 }).catch(ignore(304));
 
   async remove(name: string) {
     await this.#container(name).remove({ force: true }).catch(ignore(404));
@@ -374,7 +387,7 @@ async function tarOf(entries: TarEntry[]): Promise<Buffer> {
     const name = e.path.replace(/^\/+/, '');
     const header = { name, mode: e.mode, uid: e.uid, gid: e.gid, mtime: new Date() };
     if (e.type === 'directory') p.entry({ ...header, type: 'directory' });
-    else p.entry({ ...header, type: 'file' }, e.content ?? '');
+    else p.entry({ ...header, type: 'file' }, e.bytes ?? e.content ?? '');
   }
   p.finalize();
   const chunks: Buffer[] = [];

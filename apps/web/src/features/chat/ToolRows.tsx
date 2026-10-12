@@ -1,4 +1,4 @@
-import { cn, Spinner } from '@isnanme/ui';
+import { cn } from '@isnanme/ui';
 import type { ChatEvent } from '@portal/contracts';
 import {
   Bot,
@@ -245,10 +245,11 @@ export function ToolCall({
     <div className="flex max-w-full flex-col items-start">
       <RowButton open={open} onToggle={toggle} controls={id} expandable={expandable} danger={error}>
         <Icon className="size-4 shrink-0" aria-hidden="true" />
-        <span className="shrink-0 font-mono">{call.toolName ? toolLabel(call.toolName) : 'tool'}</span>
+        {/* A call still waiting for its result is a quiet shimmer on its name, not a spinner. */}
+        <span className={cn('shrink-0 font-mono', running && !result && 'shimmer')}>{call.toolName ? toolLabel(call.toolName) : 'tool'}</span>
         {call.text && <span className="min-w-0 truncate font-mono text-muted">{shortTarget(call.text)}</span>}
         {agent && <span className="shrink-0 truncate text-muted/80">· {agent}</span>}
-        {running && !result && <Spinner className="size-3 shrink-0" />}
+        {running && !result && <span className="sr-only">(running)</span>}
         {error && <span className="sr-only">(failed)</span>}
       </RowButton>
       {open && expandable && (
@@ -268,7 +269,7 @@ export function ToolCall({
               )}
             </div>
           )}
-          {images.length > 0 && <ImageThumbs images={images} />}
+          {images.length > 0 && <ImageThumbs images={images} actions />}
         </div>
       )}
     </div>
@@ -284,9 +285,9 @@ export function ToolGroup({ tools, agent, running, details, render }: { tools: T
     <div className="flex max-w-full flex-col items-start">
       <RowButton open={open} onToggle={toggle} controls={id} expandable>
         <Layers className="size-3.5 shrink-0" aria-hidden="true" />
-        <span className="truncate">{groupLabel(tools)}</span>
+        <span className={cn('truncate', pending && 'shimmer')}>{groupLabel(tools)}</span>
         {agent && <span className="shrink-0 truncate text-muted/80">· {agent}</span>}
-        {pending && <Spinner className="size-3 shrink-0" />}
+        {pending && <span className="sr-only">(running)</span>}
       </RowButton>
       {open && (
         <div id={id} className="mt-0.5 ml-2 flex w-[calc(100%-0.5rem)] flex-col gap-0.5 border-l border-line pl-2">
@@ -329,7 +330,11 @@ export function LiveThinking({ since, agent }: { since: number; agent: string | 
   }, []);
   return (
     <div role="status" className="flex items-center gap-1.5 text-[15.5px] sm:text-[14.5px]">
-      <span className="shimmer">Thinking… {formatSeconds(Math.max(0, now - since))}</span>
+      {/* Read once ("Thinking"), not every second as the count changes. */}
+      <span className="sr-only">Thinking</span>
+      <span aria-hidden="true" className="shimmer">
+        Thinking… {formatSeconds(Math.max(0, now - since))}
+      </span>
       {agent && <span className="truncate text-muted/80">· {agent}</span>}
     </div>
   );

@@ -13,7 +13,7 @@ import {
   type MenuItem,
 } from '@isnanme/ui';
 import type { AccountPool, DeliveryStatus, Workspace, WorkspaceStatus, WorkspaceTarget, WorkspaceUsage } from '@portal/contracts';
-import { Box, Boxes, ChevronDown, KeySquare, Play, Plus, RefreshCw, ShieldCheck, Square, SquareTerminal, Trash2 } from 'lucide-react';
+import { Box, Boxes, Check, ChevronDown, ListChecks, Play, Plus, RefreshCw, ShieldCheck, SlidersHorizontal, Square, SquareTerminal, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/Card';
@@ -21,7 +21,8 @@ import { PageHeader } from '@/components/PageHeader';
 import { api, errorText } from '@/lib/api';
 import { useLive, useLiveConnected } from '@/lib/live';
 import { formatBytes, formatDateTime, timeAgo } from '@/lib/format';
-import { AssignPoolDialog } from './AssignPoolDialog';
+import { BulkAssignDialog } from './BulkAssignDialog';
+import { ConfigurationSheet } from './ConfigurationSheet';
 import { NewWorkspaceDialog } from './NewWorkspaceDialog';
 import { usageFractions } from './usage';
 import { WorkspaceSheet } from './WorkspaceSheet';
@@ -61,7 +62,11 @@ export function WorkspacesPage() {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [removeBusy, setRemoveBusy] = useState(false);
   const [pools, setPools] = useState<AccountPool[]>([]);
-  const [assigning, setAssigning] = useState<Workspace | null>(null);
+  // By ID: the sheet shows the workspace as the live list has it now.
+  const [configuringId, setConfiguringId] = useState<string | null>(null);
+  // Bulk assignment: pick workspaces, then "Assign pool…".
+  const [selected, setSelected] = useState<Set<string> | null>(null);
+  const [bulk, setBulk] = useState(false);
   useEffect(() => {
     api.accounts.pools().then(setPools, () => undefined);
   }, []);
@@ -186,6 +191,16 @@ export function WorkspacesPage() {
 
       {ordered && targets && (
         <div className="flex flex-col gap-6">
+          {ordered.length > 0 && (
+            <SelectionBar
+              total={ordered.length}
+              selected={selected}
+              onStart={() => setSelected(new Set())}
+              onAll={() => setSelected(new Set(ordered.map((w) => w.id)))}
+              onAssign={() => setBulk(true)}
+              onCancel={() => setSelected(null)}
+            />
+          )}
           {ordered.length === 0 ? (
             <EmptyState
               icon={<Boxes className="size-6" />}
@@ -214,7 +229,15 @@ export function WorkspacesPage() {
                     onStart={() => void act(w, 'start')}
                     onStop={() => void act(w, 'stop')}
                     onRemove={() => setRemoving(w)}
-                    onAssign={() => setAssigning(w)}
+                    onConfigure={() => setConfiguringId(w.id)}
+                    selected={selected ? selected.has(w.id) : null}
+                    onToggle={() =>
+                      setSelected((s) => {
+                        const next = new Set(s);
+                        if (!next.delete(w.id)) next.add(w.id);
+                        return next;
+                      })
+                    }
                     onAdopt={() => void adopt(w)}
                   />
                 ))}
@@ -232,14 +255,21 @@ export function WorkspacesPage() {
         </div>
       )}
 
-      <AssignPoolDialog
-        workspace={assigning}
-        pools={pools}
-        onClose={() => setAssigning(null)}
+      <ConfigurationSheet
+        workspace={list?.find((w) => w.id === configuringId) ?? null}
+        accountPools={pools}
+        onClose={() => setConfiguringId(null)}
+        onChanged={() => void loadList().catch(() => undefined)}
+      />
+      <BulkAssignDialog
+        workspaces={bulk ? (list ?? []).filter((w) => selected?.has(w.id)) : null}
+        accountPools={pools}
+        onClose={() => setBulk(false)}
         onDone={(message) => {
-          setAssigning(null);
+          setBulk(false);
+          setSelected(null);
           toast(message);
-          void loadList();
+          void loadList().catch(() => undefined);
         }}
       />
       <NewWorkspaceDialog
@@ -321,7 +351,9 @@ function WorkspaceRow({
   onStart,
   onStop,
   onRemove,
-  onAssign,
+  onConfigure,
+  selected,
+  onToggle,
   onAdopt,
 }: {
   w: Workspace;
@@ -333,17 +365,22 @@ function WorkspaceRow({
   onStart: () => void;
   onStop: () => void;
   onRemove: () => void;
-  onAssign: () => void;
+  onConfigure: () => void;
+  /** Null outside selection mode; then whether this row is picked. */
+  selected: boolean | null;
+  onToggle: () => void;
   onAdopt: () => void;
 }) {
   const status = STATUS[w.status];
   const running = w.status === 'running';
+  const picking = selected !== null;
   const limits = [w.cpus && `${w.cpus} CPU`, w.memoryMb && formatBytes(w.memoryMb * 1024 * 1024)].filter(Boolean).join(' · ');
   const items: MenuItem[] = [
     running || w.status === 'starting'
       ? { label: 'Stop', icon: <Square className="size-4" />, onSelect: onStop, disabled: busy }
       : { label: 'Start', icon: <Play className="size-4" />, onSelect: onStart, disabled: busy || w.status !== 'stopped' },
-    { label: 'Account pool…', icon: <KeySquare className="size-4" />, onSelect: onAssign, disabled: w.status === 'creating' },
+    // Every pool type in one place, the account pool included (foundation PRD §10).
+    { label: 'Configuration…', icon: <SlidersHorizontal className="size-4" />, onSelect: onConfigure, disabled: w.status === 'creating' },
     ...(w.delivery?.status === 'frozen' ? [{ label: 'Adopt workspace', icon: <ShieldCheck className="size-4" />, onSelect: onAdopt }] : []),
     { label: 'Remove', icon: <Trash2 className="size-4" />, onSelect: onRemove, danger: true, disabled: w.status === 'creating' || !removable },
   ];
@@ -365,17 +402,28 @@ function WorkspaceRow({
   return (
     <li className="flex items-center gap-3 p-4 sm:px-5">
       {/* The icon and text open the details; the buttons beside them keep their own jobs. */}
+      {/* While picking for bulk assignment the whole row toggles the selection instead. */}
       <button
         type="button"
-        onClick={() => setOpen(true)}
-        aria-label={`Details for ${w.name}`}
-        className="press flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left"
+        onClick={picking ? onToggle : () => setOpen(true)}
+        role={picking ? 'checkbox' : undefined}
+        aria-checked={picking ? !!selected : undefined}
+        aria-label={picking ? `Select ${w.name}` : `Details for ${w.name}`}
+        className={`press flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left ${picking ? 'select-none' : ''}`}
       >
-        <span
-          className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${running ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-ink-soft'}`}
-        >
-          <Box className="size-5" />
-        </span>
+        {picking ? (
+          <span
+            className={`flex size-10 shrink-0 items-center justify-center rounded-xl border-2 ${selected ? 'border-primary bg-primary text-primary-ink' : 'border-line-strong text-transparent'}`}
+          >
+            <Check className="size-5" strokeWidth={3} />
+          </span>
+        ) : (
+          <span
+            className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${running ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-ink-soft'}`}
+          >
+            <Box className="size-5" />
+          </span>
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <p className="truncate font-semibold">{w.name}</p>
@@ -409,7 +457,7 @@ function WorkspaceRow({
           )}
         </div>
       </button>
-      <div className="flex shrink-0 items-center gap-1">
+      <div className={`flex shrink-0 items-center gap-1 ${picking ? 'hidden' : ''}`}>
         {running ? (
           <Link
             to={`/admin/workspaces/${w.id}/shell`}
@@ -468,5 +516,51 @@ function MiniBar({ label, fraction }: { label: string; fraction?: number }) {
         <span className={`block h-full rounded-full ${fraction > 0.9 ? 'bg-danger' : 'bg-accent'}`} style={{ width }} />
       </span>
     </span>
+  );
+}
+
+/**
+ * Above the list: "Select" starts picking workspaces for bulk assignment (foundation PRD §10); while
+ * picking it counts them and offers "Assign pool…".
+ */
+function SelectionBar({
+  total,
+  selected,
+  onStart,
+  onAll,
+  onAssign,
+  onCancel,
+}: {
+  total: number;
+  selected: Set<string> | null;
+  onStart: () => void;
+  onAll: () => void;
+  onAssign: () => void;
+  onCancel: () => void;
+}) {
+  if (!selected)
+    return (
+      <div className="-mb-6 flex items-center justify-between gap-2">
+        <h2 className="text-[15px] font-semibold">{total === 1 ? '1 workspace' : `${total} workspaces`}</h2>
+        <Button variant="ghost" size="sm" icon={<ListChecks className="size-3.5" />} onClick={onStart}>
+          Select
+        </Button>
+      </div>
+    );
+  return (
+    <div className="sticky top-16 z-20 -mx-4 -mb-6 flex items-center gap-2 border-b border-line bg-bg/90 px-4 py-2 backdrop-blur-md sm:top-0 sm:mx-0 sm:rounded-2xl sm:border sm:px-3">
+      <p className="min-w-0 flex-1 truncate text-sm font-semibold">{selected.size === 0 ? 'Pick workspaces' : `${selected.size} selected`}</p>
+      {selected.size < total && (
+        <Button variant="ghost" size="sm" onClick={onAll}>
+          All
+        </Button>
+      )}
+      <Button variant="ghost" size="sm" onClick={onCancel}>
+        Cancel
+      </Button>
+      <Button size="sm" onClick={onAssign} disabled={selected.size === 0}>
+        Assign pool…
+      </Button>
+    </div>
   );
 }

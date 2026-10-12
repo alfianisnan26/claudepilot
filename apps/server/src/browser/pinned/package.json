@@ -1,0 +1,10 @@
+{
+  "name": "claudepilot-browser-servers",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The MCP servers the browser pool delivers, pinned exactly (browser & desktop PRD §11.1). Installed with `npm ci` in the workspace; never npx at runtime.",
+  "dependencies": {
+    "@playwright/mcp": "0.0.83",
+    "chrome-devtools-mcp": "1.10.1"
+  }
+}

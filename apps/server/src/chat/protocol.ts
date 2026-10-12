@@ -71,10 +71,14 @@ export interface ParsedLine {
   sessionPatch?: { model?: string; mode?: string; state?: ChatSessionState; cost?: number; turnsDelta?: number };
   /** A permission/question request the agent raised (carries the tool_use_id for the controller). */
   request?: ChatRequest & { toolUseId?: string };
+  /** The raw input of that request's tool, for the controller to decide on at once. Never stored, shown or logged. */
+  toolInput?: unknown;
   /** The `session_id` the agent reported; the controller ends the session if it isn't the expected one. */
   sessionIdSeen?: string;
   /** A control_request the controller doesn't handle: its request_id, to answer with an error response. */
   controlError?: string;
+  /** Claude Code withdrew a request it had asked (an interrupt, a rule or another client answered it): its id. */
+  cancelRequest?: string;
   /** Set for `system/init`: after a process's first one the controller reads the applied settings. */
   init?: boolean;
   /** A reply to one of the portal's own control requests. */
@@ -120,6 +124,11 @@ export interface ParsedLine {
   apiKeySource?: string | null;
   /** A `rate_limit_event` line: Claude Code saw plan rate limits on this credential. */
   rateLimitEvent?: boolean;
+  /**
+   * The `rate_limit_info` object of that line (or of an assistant line that failed with `usage_limit_reached`), exactly as
+   * Claude Code emitted it, for Claude usage's hook. Never stored, redacted, logged or sent to a tab.
+   */
+  rateLimitInfo?: unknown;
   /** A `result` line: the turn ended (the controller then runs the subscription check). */
   result?: boolean;
 
@@ -138,6 +147,12 @@ const clean = (s: string, max: number): string => clip(redact(s), max);
 /** How much of a sub-agent's description and final summary is kept. */
 const MAX_LABEL = 200;
 const MAX_SUMMARY = 4_000;
+
+/** What a turn that Claude Code stopped itself because of a limit says, instead of its raw reason. */
+const STOPPED_BY: Record<string, string> = {
+  error_max_budget_usd: 'Budget reached: this session hit its spending limit, so Claude stopped. Raise the limit in Settings to go on.',
+  error_max_turns: 'Stopped at the turn limit. Send a message to go on.',
+};
 
 /** Parses one stdout line. Lines to ignore (and anything malformed) come back as `{ stored: [] }`. */
 export function parseLine(raw: string): ParsedLine {
@@ -165,12 +180,16 @@ export function parseLine(raw: string): ParsedLine {
       return parseControlResponse(obj);
     case 'command_lifecycle':
       return parseLifecycle(obj);
+    case 'control_cancel_request': {
+      const requestId = asStr(obj.request_id);
+      return requestId ? { stored: [], cancelRequest: requestId } : { stored: [] };
+    }
     case 'api_retry':
       return { stored: [{ kind: 'retry', text: 'The API is retrying (rate limit or overload).' }] };
     case 'rate_limit_event':
       // `{type, rate_limit_info, uuid, session_id}`, "emitted when rate limit info changes" (the 2.1.296
       // schema): plan limits, which an API key never has. Nothing of it is kept.
-      return { stored: [], rateLimitEvent: true };
+      return { stored: [], rateLimitEvent: true, rateLimitInfo: obj.rate_limit_info };
     default:
       return { stored: [] };
   }
@@ -377,6 +396,11 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
   const out: ParsedLine = { stored };
   if (agents.length) out.agents = agents;
   if (enterPlan) out.enterPlan = true;
+  // A turn that failed on the plan's usage limit carries its limit info on the assistant line itself.
+  if (asStr(obj.api_error) === 'usage_limit_reached') {
+    const info = asObj(obj.api_error_params)?.rate_limit_info;
+    if (info !== undefined) out.rateLimitInfo = info;
+  }
   const usage = asObj(asObj(obj.message)?.usage);
   if (usage && !agentLabel) {
     const input = tokens(usage.input_tokens) + tokens(usage.cache_read_input_tokens) + tokens(usage.cache_creation_input_tokens);
@@ -496,7 +520,7 @@ function parseResult(obj: Record<string, unknown>): ParsedLine {
   }
   if (models.length) ended.modelTotals = models;
   const stored: StoredEvent[] = [ended];
-  if (errored) stored.push({ kind: 'error', text: text ?? `The turn ended with ${subtype ?? 'an error'}.` });
+  if (errored) stored.push({ kind: 'error', text: text ?? STOPPED_BY[subtype ?? ''] ?? `The turn ended with ${subtype ?? 'an error'}.` });
   const patch: NonNullable<ParsedLine['sessionPatch']> = { state: 'idle', turnsDelta: 1 };
   if (cost !== null) patch.cost = cost;
   const out: ParsedLine = { stored, sessionPatch: patch, result: true };
@@ -549,7 +573,7 @@ function parseControlRequest(obj: Record<string, unknown>): ParsedLine {
     };
     const toolUseId = asStr(request.tool_use_id);
     if (toolUseId) req.toolUseId = toolUseId;
-    return { stored: [], request: req, sessionPatch: { state: 'waiting' } };
+    return { stored: [], request: req, toolInput: request.input, sessionPatch: { state: 'waiting' } };
   }
   if (requestId) return { stored: [], controlError: requestId };
   return { stored: [] };
@@ -661,16 +685,15 @@ const line = (value: unknown): string => `${JSON.stringify(value)}\n`;
 /**
  * A user message. `uuid` (the client's) lets `command_lifecycle` report on it; `priority` `next` steers
  * the running turn and `later` waits for it to end. With images the content is an array: the text (when
- * there is any) and then one base64 image block each.
+ * there is any) and then one base64 image block each; with `imagesFirst` the images come first and the text
+ * last. Claude Code (2.1.296) reads `@path` mentions only from the LAST block of an array, so a message
+ * that carries files for it to open puts its words last.
  */
-export function userLine(text: string, opts: { uuid?: string; priority?: 'next' | 'later'; images?: RawImage[] } = {}): string {
+export function userLine(text: string, opts: { uuid?: string; priority?: 'next' | 'later'; images?: RawImage[]; imagesFirst?: boolean } = {}): string {
   const images = opts.images ?? [];
-  const content = images.length
-    ? [
-        ...(text.trim() ? [{ type: 'text', text }] : []),
-        ...images.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.mediaType, data: i.dataBase64 } })),
-      ]
-    : text;
+  const pictures = images.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.mediaType, data: i.dataBase64 } }));
+  const words = text.trim() ? [{ type: 'text', text }] : [];
+  const content = images.length ? (opts.imagesFirst ? [...pictures, ...words] : [...words, ...pictures]) : text;
   const msg: Record<string, unknown> = { type: 'user' };
   if (opts.uuid) msg.uuid = opts.uuid;
   if (opts.priority) msg.priority = opts.priority;

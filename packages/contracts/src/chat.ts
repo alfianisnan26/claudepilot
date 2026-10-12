@@ -1,6 +1,8 @@
 // Chat sessions: talking to Claude Code agents in workspaces (chat-sessions PRD, milestone C1).
 // Transcript, send, steer, Stop, approvals and questions. One dedicated WebSocket per tab.
 
+import type { ChatFile, ChatUploadRef } from './artifacts.js';
+
 /** `starting` launching; `idle` waiting for you; `working` a turn is running; `waiting` needs an answer; `interrupted` the process is gone but resumable; `ended` closed. */
 export type ChatSessionState = 'starting' | 'idle' | 'working' | 'waiting' | 'interrupted' | 'ended';
 
@@ -36,6 +38,8 @@ export interface ChatSession {
   lastSeq: number;
   /** Open requests waiting for an answer. */
   waiting: number;
+  /** What the oldest open request asks, in a few words ("Run a command: npm test"), or null when none is open. */
+  waitingFor: string | null;
   createdAt: string;
   lastActivityAt: string;
   endedReason: string | null;
@@ -43,13 +47,101 @@ export interface ChatSession {
   claudeId: string;
   /** Display name of that Claude, when known. */
   claudeName: string | null;
-  /** The session this one was transferred from, if any. */
+  /** Legacy: a chat moved to another Claude used to become a second session. Never set now; the two were folded into one. */
   predecessorId: string | null;
-  /** The session a transfer continued as, if any. */
+  /** Legacy, as above. */
   successorId: string | null;
   /** When it was archived (hidden from the list; an archived session has ended), or null. */
   archivedAt: string | null;
+  /** The ticket this session works on (Tickets), or null. Set when it's created, or with `setTicket`. */
+  ticketId: string | null;
+  /** The session that started this one (multi-agent), or null for one a person or a ticket started. */
+  parentId: string | null;
+  /** The git worktree it runs in, which is also its `cwd`, or null when it runs in a plain folder. */
+  worktree: ChatWorktree | null;
+  /** Who started it: `ui` (a person), `ticket:<id>`, `session:<id>` or `portal-mcp:<token id>`; null for sessions from before this field. */
+  startedBy: string | null;
+  /** The session was started with, or restarted for, Bypass permissions: only then can the person turn it on (FR20). */
+  bypassCapable: boolean;
+  /** The Claude Code session of the run going now. A chat that moved to another Claude has had several; this id is the portal's own, for every one of them. */
+  claudeSessionId: string;
+  /** The other Claudes this chat ran on before its current one, oldest first. */
+  previousClaudes: { claudeId: string; name: string }[];
+  /** While the chat moves to another Claude: where to and how far along. The composer waits; nothing is queued. */
+  switching: { toClaude: string; step: 'handoff' | 'starting' | 'finishing' } | null;
 }
+
+/** One run of a chat on a Claude: its Claude Code session, when, why it ended, and what it cost. */
+export interface ChatSegment {
+  n: number;
+  claudeId: string;
+  claudeName: string;
+  claudeSessionId: string;
+  cwd: string;
+  startedAt: string;
+  endedAt: string | null;
+  /** `switched` when the chat moved to another Claude; `closed` and other reasons otherwise; null while it runs. */
+  endedReason: string | null;
+  costUsd: number;
+  turns: number;
+}
+
+/**
+ * A git worktree a session runs in (chat-sessions PRD, "Git worktrees per session"). The portal adds
+ * it from `repo` on a branch of its own, and the session's folder is `path`.
+ */
+export interface ChatWorktree {
+  /** The worktree's folder in the workspace. */
+  path: string;
+  /** The branch checked out in it. */
+  branch: string;
+  /** The repository (its main working folder) it belongs to. */
+  repo: string;
+}
+
+/** What removing a session's worktree would lose (`GET CHAT_API.worktree(id)`). */
+export interface ChatWorktreeStatus {
+  /** Its folder is still there (it may be gone: removed by hand, or the workspace was rebuilt). */
+  exists: boolean;
+  branch: string | null;
+  /** Files with changes, untracked files, and commits only this branch has (reachable from no other branch and no remote). */
+  dirty: number;
+  untracked: number;
+  unique: number;
+  /** Removing the folder now takes the person's word that the changes and untracked files may go. */
+  needsForce: boolean;
+}
+
+/** What a delete or an archive does with a session's worktree: nothing (the default), remove it if nothing is lost, or remove it and discard its changes. */
+export type ChatWorktreeRemoval = 'keep' | 'remove' | 'force';
+
+/** One of a workspace's worktrees (`GET CHAT_API.worktrees`): the ones the portal made and the ones git lists beside them. */
+export interface ChatWorktreeEntry {
+  path: string;
+  branch: string | null;
+  repo: string | null;
+  /** `active`: a chat runs in it. `kept`: its chat is over or gone and the folder stays. `reserved`: made for a start still waiting on folder trust. `other`: made outside the portal. */
+  state: 'active' | 'kept' | 'reserved' | 'other';
+  sessionId: string | null;
+  sessionTitle: string | null;
+  locked: boolean;
+}
+
+/** The error code (409) of a removal that would lose changes unless forced; its details are a `ChatWorktreeStatus`. */
+export const WORKTREE_DIRTY = 'WORKTREE_DIRTY';
+
+/**
+ * What a portal-originated message says about who sent it (chat-sessions PRD FR14). Portal actors are
+ * `ticket:<id>`, `session:<id>` and `portal-mcp:<token id>`, and `portal:<what>` for the portal acting on
+ * its own after a person's click (`portal:handoff`: the request for a handoff when a chat moves to another Claude); a person
+ * typing in the app is `ui`. Anything else is refused, so an actor can't be made up with characters that
+ * would read as something else.
+ */
+export const CHAT_ACTOR_UI = 'ui';
+export const CHAT_ACTOR_PATTERN = /^(?:ticket|session|portal-mcp|portal|ci):[A-Za-z0-9._:-]{1,64}$/;
+export const isChatActor = (v: unknown): v is string => typeof v === 'string' && (v === CHAT_ACTOR_UI || CHAT_ACTOR_PATTERN.test(v));
+/** A portal actor: anything an actor string can be except the person at the keyboard. */
+export const isPortalActor = (v: unknown): v is string => typeof v === 'string' && CHAT_ACTOR_PATTERN.test(v);
 
 /** A named Claude on one workspace volume. Its directory holds chats and any terminal login. No credential is stored here. */
 export interface WorkspaceClaude {
@@ -91,6 +183,7 @@ export type ChatEventKind =
   | 'retry' // an API retry (rate limit, overloaded)
   | 'request' // something needs an answer (carries `request`)
   | 'resolved' // a request was answered or withdrawn (carries `requestId`, `outcome`)
+  | 'artifact' // the agent produced files (carries `files`; chat content, artifacts.ts)
   | 'error'; // a turn or the session failed
 
 export interface ChatEvent {
@@ -119,8 +212,48 @@ export interface ChatEvent {
   durationMs?: number;
   /** Images on this event (sent by you, or returned by a tool), served from `CHAT_API.blob`. */
   images?: ChatImage[];
+  /** For `user`: the other files you attached. For `artifact`: what the agent produced. Served from `CHAT_API.blob`. */
+  files?: ChatFile[];
   /** For `user`: the client UUID it was sent with, to match lifecycle updates (`input` messages). */
   uuid?: string;
+  /**
+   * For `user`: the opening of a chat that moved to another Claude (Workspace Claudes FR13). The text is the context
+   * the portal sent, shown as prior context from the named Claude, not as a message you typed. For
+   * `system`: the marker row of a move (FR14), on the new session and on the one left behind, which the
+   * transcript shows as a marker rather than folding it into a turn's activity.
+   */
+  transfer?: ChatTransferContext;
+  /**
+   * For `user`: who sent it, when it didn't come from the person at the keyboard (`ticket:<id>`,
+   * `session:<id>`, `portal-mcp:<token id>`). Such a message shows as coming from that actor, never as
+   * something you typed. Absent for your own messages.
+   */
+  actor?: string;
+  /** For `user` with an `actor`: how to name it (a session's title, a ticket's number), as the portal knew it then. */
+  actorLabel?: string;
+  /**
+   * Set on everything a move to another Claude wrote while it ran: progress rows, the handoff request and the
+   * document, the opening, the acknowledgement. The transcript folds them into one card at the move's marker.
+   */
+  handoffId?: string;
+}
+
+/** Where the context of a chat that moved to another Claude came from. */
+export interface ChatTransferContext {
+  /** The Claude the chat was moved from, and the one it runs on now. */
+  fromClaude: string;
+  toClaude: string;
+  /** The chat itself (the same session before and after the move). */
+  sourceSessionId: string;
+  /** The context file on the workspace volume. */
+  path: string;
+  /** How many messages of the source the context carries, and whether older ones were left out. */
+  messages: number;
+  truncated: boolean;
+  /** The Claude the chat ran on wrote a handoff document first (Workspace Claudes Q3), and it's in the context. */
+  handoff?: boolean;
+  /** The move this belongs to: the events it wrote (progress rows, the handoff exchange, the opening and its acknowledgement) carry it. */
+  handoffId?: string;
 }
 
 /** The windows Usage charts over, newest last; each has its own bucket size. */
@@ -168,15 +301,20 @@ export interface ChatImage {
   blobId: string;
   mediaType: string;
   name?: string;
+  /** Pixels, when known (uploads): the image's box is sized before it loads. */
+  width?: number;
+  height?: number;
 }
 
-/** An image you attach to a message. */
-export interface ChatAttachment {
+/** An image attached inline as base64 (the portal's API, tests). The app uploads first and sends a `ChatUploadRef`. */
+export interface ChatInlineImage {
   name: string;
   mediaType: ChatImageType;
   /** Base64, without a `data:` prefix. */
   dataBase64: string;
 }
+/** What a message's `attachments` hold: inline images, or files uploaded first (chat content, `artifacts.ts`). */
+export type ChatAttachment = ChatInlineImage | ChatUploadRef;
 export type ChatImageType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
 export const CHAT_IMAGE_TYPES: readonly ChatImageType[] = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 /** Per message: at most this many images, each at most this many bytes (before base64). */
@@ -220,6 +358,84 @@ export interface CreateChatSessionRequest {
   cwd?: string;
   /** Which Claude on that workspace. Omitted uses Default. */
   claudeId?: string;
+  /**
+   * The person ticked "Allow Bypass later in this session" (FR20). Read only from a person's own request through the
+   * app's route, and only when the policy allows it; every other caller (Portal MCP, tickets, personas, a session
+   * starting another) can't set it.
+   */
+  allowBypass?: boolean;
+  /** The ticket it works on (Tickets). An opaque id: the portal only records it. */
+  ticketId?: string;
+  /**
+   * Run it in a git worktree of its own: the portal adds one from `repo` (default: the repository
+   * containing `cwd`) on `branch` (default: a new branch named after the session), starting from `base`
+   * (default: the repository's current branch), and the session's folder is that worktree. Nothing is
+   * created when the folder is untrusted or the start is refused.
+   */
+  worktree?: ChatWorktreeRequest;
+}
+
+/** The parts of a worktree a caller may choose; the portal picks the folder. */
+export interface ChatWorktreeRequest {
+  /** The repository's folder in the workspace. Defaults to the session's `cwd`. */
+  repo?: string;
+  /** The branch to check out in the worktree: a new one, or an existing one no other worktree has. */
+  branch?: string;
+  /** Where a new branch starts: a branch, tag or commit of the repository. Not with an existing branch. */
+  base?: string;
+}
+
+/** What the Bypass confirmation and the mode picker need to know of a session (FR20). */
+export interface ChatBypassFacts {
+  workspaceId: string;
+  /** The workspace can reach the internet (false only where the portal knows it can't). */
+  internet: boolean;
+  /** Credentials the portal delivered into it, by kind ("account pool key", "Secrets & env values"). */
+  credentials: string[];
+}
+
+/** `GET CHAT_API.bypass(id)`. */
+export interface ChatBypassState {
+  /** The policy allows Bypass in chat (the interim switch `sessions.allowBypass`). */
+  allowed: boolean;
+  /** The session was started with, or restarted for, Bypass. */
+  capable: boolean;
+  /** It is on now. */
+  active: boolean;
+  /** Working or waiting: restarting it for Bypass has to wait for the turn to end. */
+  busy: boolean;
+  facts: ChatBypassFacts;
+  /** The sign-in passed the re-check of the server code in the last 10 minutes. */
+  reauthed: boolean;
+}
+
+/** `POST CHAT_API.bypass(id)`: the person's confirmation. The server code check comes first (`REAUTH_REQUIRED`). */
+export interface EnterBypassRequest {
+  /** The tick on "Claude will run every tool without asking in <workspace>…". */
+  acknowledged: boolean;
+}
+
+/** `POST CHAT_API.reauth`: the server code again, for actions that guard it. */
+export interface ReauthRequest {
+  code: string;
+}
+
+/** The error code (403) of an action that needs the server code checked again, then the same request again. */
+export const REAUTH_REQUIRED = 'REAUTH_REQUIRED';
+/** Error codes of a Bypass request the portal refused: the policy blocks it (403), or the session wasn't started for it (409). */
+export const BYPASS_BLOCKED = 'BYPASS_BLOCKED';
+export const BYPASS_NOT_CAPABLE = 'BYPASS_NOT_CAPABLE';
+
+/** One entry of the chat audit trail (`GET CHAT_API.audit`). */
+export interface ChatAuditEntry {
+  id: number;
+  at: string;
+  severity: 'info' | 'medium' | 'high';
+  kind: string;
+  sessionId: string | null;
+  workspaceId: string | null;
+  actor: string | null;
+  detail: Record<string, unknown>;
 }
 
 export interface CreateWorkspaceClaudeRequest {
@@ -227,9 +443,54 @@ export interface CreateWorkspaceClaudeRequest {
   name: string;
 }
 
-export interface TransferChatRequest {
-  /** Destination Claude on the same workspace. */
+export interface SwitchChatRequest {
+  /** The Claude to move the chat to, on the same workspace. */
   claudeId: string;
+  /**
+   * `ask` (the default) first asks the Claude the chat runs on, with a message the portal sends, to compact what it
+   * knows into a handoff document. `skip` moves with the conversation as the portal stored it. When the Claude
+   * can't answer in time, the move goes ahead as if skipped and says why.
+   */
+  handoff?: 'ask' | 'skip';
+}
+
+/** One Claude a chat could move to, and whether a session could start there right now (asked before the person confirms). */
+export interface ChatSwitchOption {
+  claude: WorkspaceClaude;
+  ok: boolean;
+  /** Why not, in the portal's words, when it isn't. */
+  reason: string | null;
+  /** What would fix it: sign that Claude in, deal with the workspace's account pool, or start the workspace. */
+  fix: 'sign_in' | 'pool' | 'start_workspace' | null;
+}
+
+/** `GET CHAT_API.switchOptions(id)`: where a chat can move, before the person confirms (Workspace Claudes FR9, §11). */
+export interface ChatSwitchOptions {
+  sessionId: string;
+  /** Sessions on this workspace run on its account pool's keys, or on each Claude's own sign-in. */
+  via: 'pool' | 'own';
+  options: ChatSwitchOption[];
+  /** The folder the chat continues in (the worktree, when it has one). */
+  folder: string;
+  worktree: ChatWorktree | null;
+  /** Whether the Claude the chat runs on can be asked for a handoff now. */
+  handoff: { ok: boolean; reason: string | null };
+  /** A turn is running: the move waits for it, then stops it. */
+  working: boolean;
+  /** What the move drops, because it ends with the process the chat leaves. */
+  dropped: { approvals: number; queued: number; agents: number };
+}
+
+/** PATCH body for a session: rename it (FR4). */
+export interface UpdateChatSessionRequest {
+  title: string;
+}
+
+/** What a delete did: the portal's rows are gone; `purged` says whether its files in the workspace went too. */
+export interface DeleteChatSessionResult {
+  purged: boolean;
+  /** What happened to its worktree: none, or `kept` (the folder stays) or `removed` (the branch goes only when merged). */
+  worktree?: 'none' | 'kept' | 'removed';
 }
 
 export const CLAUDE_NAME_MAX = 40;
@@ -240,9 +501,11 @@ export const CHAT_API = {
   /** GET: sessions, newest activity first. POST: create one. */
   list: '/api/chat/sessions',
   create: '/api/chat/sessions',
-  /** GET: one session. DELETE: end it. */
+  /** GET: one session. PATCH `UpdateChatSessionRequest`: rename it. DELETE `?worktree=keep|remove|force`: delete it (ending it first), `DeleteChatSessionResult`. */
   one: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}`,
-  /** POST: archive it (ending it first if it hasn't ended). DELETE: unarchive it. */
+  /** POST: end it. */
+  end: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/end`,
+  /** POST `?worktree=keep|remove|force`: archive it (ending it first if it hasn't ended). DELETE: unarchive it. */
   archive: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/archive`,
   /** GET `?after=<seq>`: stored transcript events after a sequence number (history and resume). */
   events: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/events`,
@@ -254,6 +517,20 @@ export const CHAT_API = {
   blob: (id: string, blobId: string) => `/api/chat/sessions/${encodeURIComponent(id)}/blobs/${blobId}`,
   /** GET `?path=`: a folder's entries in the session's workspace (default: the session's folder). */
   files: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/files`,
+  /** GET: what removing the session's worktree would lose (`ChatWorktreeStatus`), or null when it has none. */
+  worktree: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/worktree`,
+  /** GET `?workspaceId=&folder=`: a workspace's worktrees (`ChatWorktreeEntry[]`); `folder` also asks git about that repository's. */
+  worktrees: '/api/chat/worktrees',
+  /** GET: where Bypass stands for the session (`ChatBypassState`). POST `EnterBypassRequest`: turn it on, after the server code was checked again. */
+  bypass: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/bypass`,
+  /** POST: restart the session so it can enter Bypass (at its next turn boundary); the policy must allow it. */
+  bypassAllow: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/bypass/allow`,
+  /** POST `ReauthRequest`: check the server code again. */
+  reauth: '/api/chat/reauth',
+  /** GET: the chat policy (`{ bypass: { allowed } }`). */
+  policy: '/api/chat/policy',
+  /** GET `?kind=&sessionId=&limit=`: the audit trail (`ChatAuditEntry[]`). */
+  audit: '/api/chat/audit',
   /** GET `?path=`: a file's bytes, as a download. */
   download: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/files/download`,
   /** GET: what changed in the session's folder (git), as a summary and a unified diff. */
@@ -266,8 +543,12 @@ export const CHAT_API = {
   trust: '/api/chat/trust',
   /** GET `?workspaceId=`: Claudes on a workspace. POST: create one (empty directory, no sign-in). */
   claudes: '/api/chat/claudes',
-  /** POST `TransferChatRequest`: confirm a context move to another Claude on the same workspace. */
-  transfer: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/transfer`,
+  /** POST `SwitchChatRequest`: confirm the move of a chat to another Claude on the same workspace; the chat stays the same session. */
+  switch: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/switch`,
+  /** GET: where the chat can move, and whether each Claude can take it now (`ChatSwitchOptions`). */
+  switchOptions: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/switch-options`,
+  /** GET: the runs of the chat on Claudes, oldest first (`ChatSegment[]`). */
+  segments: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/segments`,
 } as const;
 
 export interface ChatFileEntry {
@@ -329,6 +610,11 @@ export interface ChatFolderScan {
   invalid?: string[];
   /** Whether this exact scan (same hash) was already trusted. */
   trusted: boolean;
+  /**
+   * Set when the folder is a worktree the portal just made for a start that is waiting on this trust: the request to send again
+   * (repository, the branch it chose, the base), so the retry reuses that worktree instead of making another.
+   */
+  worktree?: ChatWorktreeRequest;
 }
 
 /** `POST CHAT_API.trust`: trust a folder as scanned. */
@@ -388,12 +674,13 @@ export interface ChatControl {
   session: string;
   /**
    * `stop` interrupts the turn; `end` closes the session; `model`, `effort`, `ultracode`, `mode`
-   * change what applies from the next request; `cancel_queued` withdraws a queued message.
+   * change what applies from the next request; `cancel_queued` withdraws a queued message; `rename`
+   * sets the title.
    */
-  op: 'stop' | 'end' | 'model' | 'effort' | 'ultracode' | 'mode' | 'cancel_queued' | 'resume' | 'stop_task';
+  op: 'stop' | 'end' | 'model' | 'effort' | 'ultracode' | 'mode' | 'cancel_queued' | 'resume' | 'stop_task' | 'rename';
   /** Used to key the `ack`; any client-chosen string. */
   uuid?: string;
-  args?: { model?: string; effort?: string; ultracode?: boolean; mode?: ChatPermissionMode; inputUuid?: string; taskId?: string };
+  args?: { model?: string; effort?: string; ultracode?: boolean; mode?: ChatPermissionMode; inputUuid?: string; taskId?: string; title?: string };
 }
 export type ChatClientMessage = ChatSubscribe | ChatUnsubscribe | ChatSend | ChatRespond | ChatControl;
 
@@ -414,6 +701,8 @@ export type ChatServerMessage =
     }
   /** The session's state/counters changed. */
   | { type: 'session'; session: ChatSession }
+  /** The session was deleted; its transcript is gone. */
+  | { type: 'removed'; session: string }
   /** Result of a send/respond/control the tab sent. */
   | { type: 'ack'; uuid: string; ok: boolean; error?: string; code?: string }
   /** A sent message moved through Claude Code's queue (queued → started → completed, or cancelled). */

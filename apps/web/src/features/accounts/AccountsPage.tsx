@@ -316,7 +316,7 @@ export function AccountsPage() {
       <ConfirmDialog
         open={!!removing}
         title={`Remove ${removing?.name ?? ''}?`}
-        description="The encrypted key is deleted from the portal. This doesn't revoke it at Anthropic or your gateway; do that there if the key is compromised."
+        description="Deletes the key here. It isn't revoked at the provider."
         confirmLabel="Remove"
         loading={busy}
         onConfirm={() => void remove()}
@@ -338,7 +338,7 @@ export function AccountsPage() {
       <ConfirmDialog
         open={!!removingPool}
         title={`Remove ${removingPool?.name ?? ''}?`}
-        description="The pool is removed. Pools still assigned to workspaces can't be removed; unassign them first."
+        description="Pools assigned to workspaces can't be removed."
         confirmLabel="Remove"
         loading={busy}
         onConfirm={() => void removePool()}
@@ -347,7 +347,7 @@ export function AccountsPage() {
       <ConfirmDialog
         open={!!removingEndpoint}
         title={`Remove ${removingEndpoint?.name ?? ''}?`}
-        description="The host is removed from the portal. Hosts with keys can't be removed; remove their keys first."
+        description="Hosts with keys can't be removed."
         confirmLabel="Remove"
         loading={busy}
         onConfirm={() => void removeEndpoint()}

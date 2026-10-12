@@ -1,7 +1,7 @@
 import { FormDialog, Segmented, Select, SwitchRow, TextArea, TextField } from '@isnanme/ui';
 import { ACCOUNT_NAME_MAX, ANTHROPIC_ENDPOINT_ID, type Endpoint } from '@portal/contracts';
-import { ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { InfoTip } from '@/components/InfoTip';
 import { SecretField } from '@/components/SecretField';
 import { api, ApiError } from '@/lib/api';
 
@@ -23,7 +23,6 @@ export function AddAccountDialog({
   const [endpointId, setEndpointId] = useState(ANTHROPIC_ENDPOINT_ID);
   const [name, setName] = useState('');
   const [key, setKey] = useState('');
-  const [notes, setNotes] = useState('');
   const [lines, setLines] = useState('');
   const [owned, setOwned] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -36,7 +35,6 @@ export function AddAccountDialog({
     setEndpointId(ANTHROPIC_ENDPOINT_ID);
     setName('');
     setKey('');
-    setNotes('');
     setLines('');
     setOwned(false);
     setErrors({});
@@ -55,7 +53,7 @@ export function AddAccountDialog({
     setFormError(null);
     try {
       if (mode === 'one') {
-        const account = await api.accounts.create({ name, endpointId, key, notes, confirmOwned: true });
+        const account = await api.accounts.create({ name, endpointId, key, confirmOwned: true });
         onAdded(account.check.result === 'ok' ? `${account.name} added and working` : `${account.name} added; check: ${account.check.result.replace('_', ' ')}`);
       } else {
         const result = await api.accounts.bulk({ endpointId, lines, confirmOwned: true });
@@ -80,8 +78,15 @@ export function AddAccountDialog({
     <FormDialog
       open={open}
       onClose={onClose}
-      title="Add key"
-      description="An Anthropic API key, or a key for one of your custom hosts. Keys are encrypted and can't be shown again."
+      title={
+        <span className="inline-flex items-center gap-1.5">
+          Add key
+          <InfoTip label="About keys">
+            An Anthropic API key, or a key for one of your custom hosts. Keys are encrypted and can’t be shown again. Using a
+            Claude Pro or Max plan? Sign in per workspace instead (its menu, Sign in to Claude): plan logins can’t be added to pools.
+          </InfoTip>
+        </span>
+      }
       onSubmit={submit}
       submitLabel={mode === 'one' ? 'Add and check' : 'Add keys'}
       saving={saving}
@@ -129,7 +134,6 @@ export function AddAccountDialog({
               onChange={(e) => (setKey(e.target.value), setErrors(({ key: _, ...r }) => r))}
               error={errors.key}
             />
-            <TextField label="Notes" optional autoComplete="off" value={notes} onChange={(e) => setNotes(e.target.value)} />
           </>
         ) : (
           <TextArea
@@ -144,16 +148,11 @@ export function AddAccountDialog({
           />
         )}
         <SwitchRow
-          icon={<ShieldCheck className="size-[18px]" />}
           label="These keys belong to me or my organization"
-          description={errors.confirmOwned ?? 'And we may use them here, for our own people, billed to the key owner.'}
+          description={errors.confirmOwned}
           checked={owned}
           onChange={(v) => (setOwned(v), setErrors(({ confirmOwned: _, ...r }) => r))}
         />
-        <p className="rounded-xl bg-surface-2 px-3.5 py-3 text-[13px] text-muted">
-          Using a Claude Pro or Max plan? Sign in per workspace instead: in a workspace without a pool, open its menu and
-          choose <span className="font-semibold text-ink-soft">Sign in to Claude</span>. Plan logins can’t be added to pools.
-        </p>
       </div>
     </FormDialog>
   );

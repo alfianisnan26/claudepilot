@@ -6,6 +6,7 @@ import { BarList, ColumnChart, type ChartColumn } from '@/components/charts';
 import { PageHeader } from '@/components/PageHeader';
 import { chatApi } from '@/features/chat/api';
 import { formatTokens } from '@/features/chat/shared';
+import { UsageTabs } from './claude/UsageTabs';
 
 type Metric = 'cost' | 'tokens' | 'requests';
 
@@ -66,7 +67,7 @@ function savedRange(): ChatUsageRange {
  * and the Claude, whose sign-in or pool the requests ran as. Then the totals, one chart over time
  * (cost, tokens or requests), and the split by Claude and by model.
  */
-export function UsagePage() {
+function RequestsTab() {
   const [range, setRange] = useState<ChatUsageRange>(savedRange);
   const [metric, setMetric] = useState<Metric>('cost');
   const [claude, setClaude] = useState('');
@@ -251,6 +252,11 @@ export function UsagePage() {
       </div>
     </>
   );
+}
+
+/** Usage: what requests cost, and (Claude usage PRD) what each Claude's plan has left. */
+export function UsagePage() {
+  return <UsageTabs requests={<RequestsTab />} />;
 }
 
 /** "claude-opus-5-5" reads "Opus 5.5". */

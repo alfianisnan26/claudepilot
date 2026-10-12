@@ -2,19 +2,28 @@ import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
 import { track } from '@isnanme/ui';
 import {
   CHAT_API,
+  type ChatBypassState,
   type ChatDiff,
   type ChatEvent,
   type ChatFolder,
   type ChatFolderScan,
   type ChatModelOption,
   type ChatSession,
+  type ChatSegment,
+  type ChatSwitchOptions,
   type ChatTask,
   type ChatTrustRequest,
+  type ChatWorktreeRemoval,
+  type ChatWorktreeStatus,
   type ChatUsageRange,
   type ChatUsageReport,
   type CreateChatSessionRequest,
   type CreateWorkspaceClaudeRequest,
-  type TransferChatRequest,
+  type DeleteChatSessionResult,
+  type EnterBypassRequest,
+  type ReauthRequest,
+  type SwitchChatRequest,
+  type UpdateChatSessionRequest,
   type WorkspaceClaude,
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
@@ -44,11 +53,25 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   throw new ApiError('INTERNAL_ERROR', `Unexpected response (${res.status}).`, res.status);
 }
 
+/** A query string from the options that are set. */
+const query = (o: Record<string, string | undefined>) => {
+  const set = Object.entries(o).filter((e): e is [string, string] => !!e[1]);
+  return set.length ? `?${set.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')}` : '';
+};
+/** `?children=end` on an end: also end the sessions this one started (absent, they keep running). */
+const childrenQuery = (children?: 'end') => query({ children });
+
 export const chatApi = {
   list: () => request<ChatSession[]>('GET', CHAT_API.list),
   create: (body: CreateChatSessionRequest) => request<ChatSession>('POST', CHAT_API.create, body),
   get: (id: string) => request<ChatSession>('GET', CHAT_API.one(id)),
-  end: (id: string) => request<{ ok: true }>('DELETE', CHAT_API.one(id)),
+  end: (id: string, children?: 'end') => request<{ ok: true }>('POST', CHAT_API.end(id) + childrenQuery(children)),
+  /** The sessions a session started. */
+  children: (id: string) => request<ChatSession[]>('GET', `${CHAT_API.list}?parentId=${encodeURIComponent(id)}`),
+  rename: (id: string, title: string) => request<ChatSession>('PATCH', CHAT_API.one(id), { title } satisfies UpdateChatSessionRequest),
+  /** Deletes it, ending it first: the transcript and its files in the workspace go (FR4). */
+  remove: (id: string, worktree?: ChatWorktreeRemoval, children?: 'end') =>
+    request<DeleteChatSessionResult>('DELETE', CHAT_API.one(id) + query({ worktree: worktree && worktree !== 'keep' ? worktree : undefined, children })),
   /** Usage over a window, in buckets that line up with this device's clock; optionally one Claude's. */
   usage: (range: ChatUsageRange, claudeId?: string) =>
     request<ChatUsageReport>(
@@ -56,7 +79,10 @@ export const chatApi = {
       `${CHAT_API.usage}?range=${range}&tz=${new Date().getTimezoneOffset()}${claudeId ? `&claudeId=${encodeURIComponent(claudeId)}` : ''}`,
     ),
   /** Archive (ending it first if it hasn't ended), or bring it back to the list. */
-  archive: (id: string) => request<ChatSession>('POST', CHAT_API.archive(id)),
+  archive: (id: string, worktree?: ChatWorktreeRemoval, children?: 'end') =>
+    request<ChatSession>('POST', CHAT_API.archive(id) + query({ worktree: worktree && worktree !== 'keep' ? worktree : undefined, children })),
+  /** What removing the session's worktree would lose; null for a session in a plain folder. */
+  worktreeStatus: (id: string) => request<ChatWorktreeStatus | null>('GET', CHAT_API.worktree(id)),
   unarchive: (id: string) => request<ChatSession>('DELETE', CHAT_API.archive(id)),
   history: (id: string, after?: number) =>
     request<ChatEvent[]>('GET', CHAT_API.events(id) + (after !== undefined ? `?after=${after}` : '')),
@@ -80,5 +106,20 @@ export const chatApi = {
   trust: (body: ChatTrustRequest) => request<unknown>('POST', CHAT_API.trust, body).then(() => undefined),
   claudes: (workspaceId: string) => request<WorkspaceClaude[]>('GET', `${CHAT_API.claudes}?workspaceId=${encodeURIComponent(workspaceId)}`),
   createClaude: (body: CreateWorkspaceClaudeRequest) => request<WorkspaceClaude>('POST', CHAT_API.claudes, body),
-  transfer: (id: string, body: TransferChatRequest) => request<ChatSession>('POST', CHAT_API.transfer(id), body),
+  /** Moves the chat to another Claude; it stays the same session. Resolves when the new Claude has taken the context. */
+  switch: (id: string, body: SwitchChatRequest) => request<ChatSession>('POST', CHAT_API.switch(id), body),
+  /** Where the chat can move, and whether each Claude can take it now: asked before the person confirms. */
+  switchOptions: (id: string) => request<ChatSwitchOptions>('GET', CHAT_API.switchOptions(id)),
+  /** The runs of the chat on Claudes, oldest first. */
+  segments: (id: string) => request<ChatSegment[]>('GET', CHAT_API.segments(id)),
+  /** Where Bypass stands for the session: the mode picker and the confirmation read it. */
+  bypass: (id: string) => request<ChatBypassState>('GET', CHAT_API.bypass(id)),
+  /** Turns Bypass on, after the person's confirmation; `REAUTH_REQUIRED` until the server code was checked again. */
+  enterBypass: (id: string, body: EnterBypassRequest) => request<ChatSession>('POST', CHAT_API.bypass(id), body),
+  /** Restarts the session so it can enter Bypass, at its next turn boundary. */
+  allowBypass: (id: string) => request<ChatSession>('POST', CHAT_API.bypassAllow(id)),
+  /** Checks the server code again (what Bypass guards). */
+  reauth: (code: string) => request<{ ok: true }>('POST', CHAT_API.reauth, { code } satisfies ReauthRequest),
+  /** What the chat policy allows: whether a session can be started to allow Bypass. */
+  policy: () => request<{ bypass: { allowed: boolean } }>('GET', CHAT_API.policy),
 };

@@ -1,0 +1,1574 @@
+#!/usr/bin/env node
+"use strict";
+
+// src/ci/runner/main.ts
+var import_node_crypto3 = require("node:crypto");
+var import_node_fs6 = require("node:fs");
+
+// src/ci/limits.ts
+var KiB = 1024;
+var MiB = 1024 * KiB;
+var MINUTE = 6e4;
+var CI_LIMITS = {
+  /** Remotes one workspace may host. */
+  reposPerWorkspace: 20,
+  /** `.pilot/*.yml` files read per commit, and the size of each. */
+  pipelineFiles: 20,
+  pipelineFileBytes: 128 * KiB,
+  /** How deep a YAML file may nest, and how many aliases (`*name`) it may use. */
+  yamlDepth: 40,
+  yamlAliases: 20,
+  jobs: 50,
+  stepsPerJob: 100,
+  matrixCombinations: 25,
+  /** Ref updates one push may turn into events, and events one poll returns. */
+  eventsPerPush: 50,
+  eventsPerPoll: 100,
+  /** Runs waiting for a slot in one workspace; a newer event is dropped beyond this. */
+  queuedPerWorkspace: 20,
+  /** Timeouts: what a job and a run get when the file says nothing, and the most any may be. */
+  jobTimeoutMs: 30 * MINUTE,
+  runTimeoutMs: 60 * MINUTE,
+  maxTimeoutMs: 6 * 60 * MINUTE,
+  /** A run needs this much free space on the workspace's volume to start. */
+  freeDiskBytes: 512 * MiB,
+  /** A step's log, and a whole run's, in the workspace; past it output is dropped. */
+  stepLogBytes: 16 * MiB,
+  runLogBytes: 64 * MiB,
+  /** What the portal keeps of a finished run's logs: per step the head and the tail, and in all. */
+  archiveHeadBytes: 64 * KiB,
+  archiveTailBytes: 192 * KiB,
+  archiveRunBytes: 2 * MiB,
+  /** One live read of a log. */
+  logChunkBytes: 64 * KiB,
+  /** Artifacts: files per job, bytes per file, bytes per run, and how long they are kept. */
+  artifactFiles: 100,
+  artifactFileBytes: 32 * MiB,
+  artifactRunBytes: 128 * MiB,
+  artifactExpireDays: 14,
+  /** How long finished runs' folders and acknowledged events stay in the workspace. */
+  runDirDays: 14,
+  eventDays: 7,
+  /** What the portal keeps: run records, event records, and runs per workspace. */
+  runRecordDays: 30,
+  eventRecordDays: 14,
+  runRecordsPerWorkspace: 300,
+  /** Seconds between polls of a workspace that has work pending, and of one that is idle. */
+  pollActiveMs: 5e3,
+  pollIdleMs: 15e3,
+  /** A failed run is told to its session at most this often (per ticket, or per session without one). */
+  messagesPerHour: 3,
+  messagesPerDay: 10,
+  /** After this many failed runs of one branch within the window, no more messages until one passes. */
+  failuresToPause: 3,
+  pauseWindowMs: 30 * MINUTE,
+  /** A step is killed this long after the polite signal. */
+  killGraceMs: 5e3
+};
+
+// src/ci/runner/common.ts
+var import_node_child_process = require("node:child_process");
+var import_node_crypto = require("node:crypto");
+var import_node_fs = require("node:fs");
+var import_node_os = require("node:os");
+var import_node_path = require("node:path");
+
+// src/ci/plan.ts
+var EVENT_ID = /^\d{10,16}-[0-9a-f]{8}$/;
+var RUN_ID = /^r[a-z0-9]{6,24}$/;
+var SHA = /^[0-9a-f]{40}$/;
+var NULL_SHA = "0".repeat(40);
+
+// src/ci/runner/common.ts
+var Fail = class extends Error {
+  constructor(code, message, extra = {}) {
+    super(message);
+    this.code = code;
+    this.extra = extra;
+  }
+};
+var rootDir = () => (0, import_node_path.join)((0, import_node_os.homedir)(), ".claudepilot");
+var gitRoot = () => (0, import_node_path.join)(rootDir(), "git");
+var ciRoot = () => (0, import_node_path.join)(rootDir(), "ci");
+var eventsDir = () => (0, import_node_path.join)(ciRoot(), "events");
+var runsDir = () => (0, import_node_path.join)(ciRoot(), "runs");
+var runDir = (runId) => (0, import_node_path.join)(runsDir(), runId);
+var REPO_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+var validRepoName = (n) => typeof n === "string" && REPO_NAME.test(n) && !n.endsWith(".git") && !n.includes("..");
+var validRunId = (n) => typeof n === "string" && RUN_ID.test(n);
+var validSha = (n) => typeof n === "string" && SHA.test(n);
+var validEventId = (n) => typeof n === "string" && EVENT_ID.test(n);
+var JOB_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+function validRefName(name) {
+  return typeof name === "string" && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(name) && !name.includes("..") && !name.includes("//") && !name.endsWith("/") && !name.endsWith(".lock") && !name.includes("/.") && !name.endsWith(".");
+}
+function validRef(ref) {
+  return typeof ref === "string" && (ref.startsWith("refs/heads/") ? validRefName(ref.slice(11)) : ref.startsWith("refs/tags/") ? validRefName(ref.slice(10)) : false);
+}
+var bareDir = (repo) => (0, import_node_path.join)(gitRoot(), `${repo}.git`);
+function writeAtomic(path, data, mode = 384) {
+  const tmp = `${path}.${process.pid}.${(0, import_node_crypto.randomBytes)(3).toString("hex")}.tmp`;
+  (0, import_node_fs.writeFileSync)(tmp, data, { mode });
+  (0, import_node_fs.renameSync)(tmp, path);
+}
+var ensureDir = (path, mode = 448) => (0, import_node_fs.mkdirSync)(path, { recursive: true, mode });
+var inside = (parent, child) => child === parent || child.startsWith(parent.endsWith("/") ? parent : `${parent}/`);
+var HARDEN = ["-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat", "-c", "diff.external=", "-c", "core.quotePath=false", "-c", "protocol.ext.allow=never"];
+function gitEnv(extra = {}) {
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_") && v !== void 0) env[k] = v;
+  return { ...env, HOME: (0, import_node_os.homedir)(), LC_ALL: "C", GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", ...extra };
+}
+function git(args, opts = {}) {
+  return new Promise((resolve2, reject) => {
+    const full = [...opts.raw ? [] : HARDEN, ...opts.gitDir ? [`--git-dir=${opts.gitDir}`] : [], ...args];
+    const child = (0, import_node_child_process.spawn)("git", full, { cwd: opts.cwd ?? (0, import_node_os.homedir)(), env: gitEnv(opts.env), stdio: ["pipe", "pipe", "pipe"] });
+    const out = [];
+    const err = [];
+    let size = 0;
+    const max = opts.maxBytes ?? 32 * 1024 * 1024;
+    const timer = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs ?? 6e4);
+    child.stdout.on("data", (c) => {
+      size += c.length;
+      if (size <= max) out.push(c);
+    });
+    child.stderr.on("data", (c) => {
+      if (err.reduce((n, b) => n + b.length, 0) < 16384) err.push(c);
+    });
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      reject(new Fail("git_missing", `git could not run: ${e.message}`));
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve2({ code: code ?? -1, stdout: Buffer.concat(out), stderr: Buffer.concat(err).toString("utf8") });
+    });
+    child.stdin.on("error", () => void 0);
+    child.stdin.end(opts.input);
+  });
+}
+async function gitText(args, opts = {}, code = "git_failed") {
+  const r = await git(args, opts);
+  if (r.code !== 0) throw new Fail(code, r.stderr.trim().split("\n")[0]?.slice(0, 300) || `git ${args[0]} failed`);
+  return r.stdout.toString("utf8").trim();
+}
+var PREFIX = "@cpci ";
+function reply(obj) {
+  return `${PREFIX}${JSON.stringify(obj)}
+`;
+}
+var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+var nowIso = () => (/* @__PURE__ */ new Date()).toISOString();
+
+// src/ci/runner/events.ts
+var import_node_crypto2 = require("node:crypto");
+var import_node_fs2 = require("node:fs");
+var import_node_os2 = require("node:os");
+var import_node_path2 = require("node:path");
+var username = () => {
+  try {
+    return (0, import_node_os2.userInfo)().username;
+  } catch {
+    return "unknown";
+  }
+};
+function emitEvents(repo, updates, via) {
+  ensureDir(eventsDir());
+  const written = [];
+  let dropped = 0;
+  for (const u of updates) {
+    if (written.length >= CI_LIMITS.eventsPerPush) {
+      dropped++;
+      continue;
+    }
+    if (!validRef(u.ref) || !validSha(u.old) || !validSha(u.new)) {
+      dropped++;
+      continue;
+    }
+    const id = `${Date.now()}-${(0, import_node_crypto2.randomBytes)(4).toString("hex")}`;
+    const ev = { v: 1, id, at: nowIso(), repo, kind: u.new === NULL_SHA ? "delete" : "push", ref: u.ref, old: u.old, new: u.new, by: username(), via };
+    writeAtomic((0, import_node_path2.join)(eventsDir(), `${id}.json`), JSON.stringify(ev));
+    written.push(id);
+  }
+  return { written, dropped };
+}
+async function hookPostReceive(readStdin) {
+  const text = await readStdin();
+  const cwd = (0, import_node_fs2.realpathSync)(process.cwd());
+  const repo = (0, import_node_path2.basename)(cwd).replace(/\.git$/, "");
+  if (!validRepoName(repo) || !(0, import_node_fs2.existsSync)(gitRoot()) || (0, import_node_path2.dirname)(cwd) !== (0, import_node_fs2.realpathSync)(gitRoot())) return { ok: false, error: "not_a_remote", message: "This is not one of the portal's remotes." };
+  const updates = [];
+  for (const line of text.split("\n").slice(0, 5e3)) {
+    const m = /^([0-9a-f]{40}) ([0-9a-f]{40}) (\S.*)$/.exec(line);
+    if (m) updates.push({ old: m[1], new: m[2], ref: m[3] });
+  }
+  const r = emitEvents(repo, updates, "push");
+  return { ok: true, events: r.written.length, dropped: r.dropped };
+}
+function pendingEvents(max) {
+  const dir = eventsDir();
+  if (!(0, import_node_fs2.existsSync)(dir)) return [];
+  const names = (0, import_node_fs2.readdirSync)(dir).filter((n) => n.endsWith(".json") && validEventId(n.slice(0, -5))).sort().slice(0, max);
+  const out = [];
+  for (const n of names) {
+    const path = (0, import_node_path2.join)(dir, n);
+    try {
+      const st = (0, import_node_fs2.statSync)(path);
+      if (!st.isFile() || st.size > 16384) throw new Error("size");
+      const ev = JSON.parse((0, import_node_fs2.readFileSync)(path, "utf8"));
+      if (ev.v !== 1 || ev.id !== n.slice(0, -5) || !validRepoName(ev.repo) || !validRef(ev.ref) || !validSha(ev.old) || !validSha(ev.new) || ev.kind !== "push" && ev.kind !== "delete" || typeof ev.at !== "string" || typeof ev.by !== "string" || ev.via !== "push" && ev.via !== "portal") throw new Error("shape");
+      out.push({ v: 1, id: ev.id, at: ev.at.slice(0, 40), repo: ev.repo, kind: ev.kind, ref: ev.ref, old: ev.old, new: ev.new, by: ev.by.slice(0, 64), via: ev.via });
+    } catch {
+      ensureDir((0, import_node_path2.join)(dir, "bad"));
+      try {
+        (0, import_node_fs2.renameSync)(path, (0, import_node_path2.join)(dir, "bad", n));
+      } catch {
+      }
+    }
+  }
+  return out;
+}
+function ackEvents(ids) {
+  const dir = eventsDir();
+  let n = 0;
+  for (const id of ids) {
+    if (!validEventId(id)) continue;
+    const from = (0, import_node_path2.join)(dir, `${id}.json`);
+    if (!(0, import_node_fs2.existsSync)(from)) continue;
+    ensureDir((0, import_node_path2.join)(dir, "done"));
+    try {
+      (0, import_node_fs2.renameSync)(from, (0, import_node_path2.join)(dir, "done", `${id}.json`));
+      n++;
+    } catch {
+    }
+  }
+  return n;
+}
+function pruneEvents(days) {
+  let n = 0;
+  const cutoff = Date.now() - days * 864e5;
+  for (const sub of ["done", "bad"]) {
+    const dir = (0, import_node_path2.join)(eventsDir(), sub);
+    if (!(0, import_node_fs2.existsSync)(dir)) continue;
+    for (const name of (0, import_node_fs2.readdirSync)(dir)) {
+      try {
+        const p = (0, import_node_path2.join)(dir, name);
+        if ((0, import_node_fs2.statSync)(p).mtimeMs < cutoff) {
+          (0, import_node_fs2.rmSync)(p, { force: true });
+          n++;
+        }
+      } catch {
+      }
+    }
+  }
+  return n;
+}
+
+// src/ci/runner/repo.ts
+var import_node_fs3 = require("node:fs");
+var import_node_os3 = require("node:os");
+var import_node_path3 = require("node:path");
+function hookText(self) {
+  if (!/^[A-Za-z0-9._/-]+$/.test(self)) throw new Fail("bad_runner_path", "The runner is at a path that can not go in a hook.");
+  return `#!/bin/sh
+# claudepilot: written by the portal and rewritten when a workspace starts. Records the push; never blocks it.
+'${self}' hook post-receive >/dev/null 2>&1 || true
+`;
+}
+function hookState(repo, self) {
+  const path = (0, import_node_path3.join)(bareDir(repo), "hooks", "post-receive");
+  if (!(0, import_node_fs3.existsSync)(path)) return "missing";
+  try {
+    if ((0, import_node_fs3.readFileSync)(path, "utf8") !== hookText(self)) return "outdated";
+    return ((0, import_node_fs3.statSync)(path).mode & 73) !== 0 ? "ok" : "outdated";
+  } catch {
+    return "missing";
+  }
+}
+async function ensureHooks(repo, self) {
+  const dir = (0, import_node_path3.join)(bareDir(repo), "hooks");
+  ensureDir(dir, 493);
+  const path = (0, import_node_path3.join)(dir, "post-receive");
+  (0, import_node_fs3.writeFileSync)(path, hookText(self), { mode: 493 });
+  (0, import_node_fs3.chmodSync)(path, 493);
+  const hooksPath = await git(["config", "--get", "core.hooksPath"], { gitDir: bareDir(repo), raw: true });
+  return hooksPath.code === 0 && hooksPath.stdout.toString("utf8").trim() ? "outdated" : "ok";
+}
+function needRepo(repo) {
+  if (!validRepoName(repo)) throw new Fail("bad_name", "A remote's name is lowercase letters, digits, . _ and -, up to 64.");
+  const dir = bareDir(repo);
+  if (!(0, import_node_fs3.existsSync)((0, import_node_path3.join)(dir, "HEAD"))) throw new Fail("no_repo", `There is no remote named ${repo}.`);
+  return dir;
+}
+async function workingRepo(path) {
+  if (typeof path !== "string" || !path.startsWith("/") || path.includes("\0")) throw new Fail("bad_path", "Give an absolute path.");
+  let real;
+  try {
+    real = (0, import_node_fs3.realpathSync)(path);
+  } catch {
+    throw new Fail("no_path", "That folder does not exist.");
+  }
+  const home = (0, import_node_fs3.realpathSync)((0, import_node_os3.homedir)());
+  if (!inside(home, real) || real === home || inside((0, import_node_path3.join)(home, ".claudepilot"), real) || inside("/etc/claudepilot", real)) throw new Fail("bad_path", "That folder is not one a remote can be made from.");
+  if (!(0, import_node_fs3.statSync)(real).isDirectory()) throw new Fail("bad_path", "That is not a folder.");
+  const top = await gitText(["rev-parse", "--show-toplevel"], { cwd: real }, "not_a_repo");
+  const topReal = (0, import_node_fs3.realpathSync)(top);
+  if (!inside(home, topReal) || inside((0, import_node_path3.join)(home, ".claudepilot"), topReal)) throw new Fail("bad_path", "That repository is not one a remote can be made from.");
+  return topReal;
+}
+async function info(repo, self) {
+  const dir = needRepo(repo);
+  const head = await git(["symbolic-ref", "--short", "HEAD"], { gitDir: dir });
+  const refs = await git(["for-each-ref", "--format=%(refname)", "refs/heads"], { gitDir: dir });
+  return { name: repo, path: dir, defaultBranch: head.code === 0 ? head.stdout.toString("utf8").trim() : "main", branches: refs.stdout.toString("utf8").split("\n").filter(Boolean).length, hook: hookState(repo, self) };
+}
+var repoInfo = info;
+async function repoList(self) {
+  if (!(0, import_node_fs3.existsSync)(gitRoot())) return [];
+  const out = [];
+  for (const entry of (0, import_node_fs3.readdirSync)(gitRoot())) {
+    if (!entry.endsWith(".git")) continue;
+    const name = entry.slice(0, -4);
+    if (!validRepoName(name) || !(0, import_node_fs3.existsSync)((0, import_node_path3.join)(gitRoot(), entry, "HEAD"))) continue;
+    out.push(await info(name, self));
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+async function repoCreate(name, opts, self) {
+  if (!validRepoName(name)) throw new Fail("bad_name", "A remote's name is lowercase letters, digits, . _ and -, up to 64.");
+  const branch = opts.branch ?? "main";
+  if (!validRefName(branch)) throw new Fail("bad_branch", "That is not a branch name.");
+  const dir = bareDir(name);
+  if ((0, import_node_fs3.existsSync)(dir)) throw new Fail("exists", `There is already a remote named ${name}.`);
+  if ((0, import_node_fs3.existsSync)(gitRoot()) && (0, import_node_fs3.readdirSync)(gitRoot()).filter((e) => e.endsWith(".git")).length >= 20) throw new Fail("too_many", "A workspace has at most 20 remotes.");
+  ensureDir(rootDir(), 493);
+  ensureDir(gitRoot(), 493);
+  const source = opts.from === void 0 ? null : await workingRepo(opts.from);
+  try {
+    if (source) {
+      const r = await git(["clone", "--bare", "--no-hardlinks", "--quiet", source, dir], { timeoutMs: 6e5 });
+      if (r.code !== 0) throw new Fail("clone_failed", r.stderr.trim().split("\n")[0] ?? "The clone failed.");
+      const heads = (await gitText(["for-each-ref", "--format=%(refname:short)", "refs/heads"], { gitDir: dir })).split("\n").filter(Boolean);
+      const head = await git(["symbolic-ref", "--short", "HEAD"], { gitDir: dir });
+      const current = head.code === 0 ? head.stdout.toString("utf8").trim() : "";
+      if (!heads.includes(current)) {
+        const pick = heads.includes(branch) ? branch : heads.includes("main") ? "main" : heads.includes("master") ? "master" : heads[0];
+        if (pick) await gitText(["symbolic-ref", "HEAD", `refs/heads/${pick}`], { gitDir: dir });
+      }
+    } else {
+      await gitText(["init", "--bare", "--quiet", `--initial-branch=${branch}`, dir], {}, "init_failed");
+    }
+    await git(["remote", "remove", "origin"], { gitDir: dir });
+    await gitText(["config", "receive.denyDeleteCurrent", "true"], { gitDir: dir });
+    const hook = await ensureHooks(name, self);
+    let connected = null;
+    if (source && opts.connect) connected = (await connect(name, source, self)).path;
+    return { ok: true, ...await info(name, self), hook, connected };
+  } catch (e) {
+    (0, import_node_fs3.rmSync)(dir, { recursive: true, force: true });
+    throw e;
+  }
+}
+async function connect(repo, path, self) {
+  const dir = needRepo(repo);
+  const top = await workingRepo(path);
+  const current = await git(["remote", "get-url", "pilot"], { cwd: top });
+  let action;
+  if (current.code !== 0) {
+    await gitText(["remote", "add", "pilot", dir], { cwd: top });
+    action = "added";
+  } else if ((0, import_node_path3.resolve)(current.stdout.toString("utf8").trim()) === dir) action = "unchanged";
+  else {
+    await gitText(["remote", "set-url", "pilot", dir], { cwd: top });
+    action = "updated";
+  }
+  await ensureHooks(repo, self);
+  return { ok: true, path: top, action };
+}
+var repoConnect = connect;
+function repoDelete(repo) {
+  const dir = needRepo(repo);
+  if ((0, import_node_fs3.realpathSync)(dir) !== (0, import_node_path3.join)((0, import_node_fs3.realpathSync)(gitRoot()), `${repo}.git`)) throw new Fail("bad_path", "That folder is not where remotes live.");
+  (0, import_node_fs3.rmSync)(dir, { recursive: true, force: true });
+  return { ok: true };
+}
+async function repoBranches(repo, limit) {
+  const dir = needRepo(repo);
+  const r = await git(["for-each-ref", "--sort=-committerdate", `--count=${Math.max(1, Math.min(limit, 500))}`, "--format=%(refname:short)%00%(objectname)%00%(committerdate:iso-strict)%00%(subject)", "refs/heads"], { gitDir: dir });
+  const branches = r.stdout.toString("utf8").split("\n").filter(Boolean).map((line) => {
+    const [name, sha, at, subject] = line.split("\0");
+    return { name: name ?? "", sha: sha ?? "", at: at ?? "", subject: (subject ?? "").slice(0, 200) };
+  }).filter((b) => validRefName(b.name) && validSha(b.sha));
+  return { ok: true, branches };
+}
+async function repoRev(repo, ref) {
+  const dir = needRepo(repo);
+  if (!validRef(ref)) throw new Fail("bad_ref", "That is not a branch or tag.");
+  const r = await git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { gitDir: dir });
+  if (r.code !== 0) throw new Fail("no_ref", `There is no ${ref.replace(/^refs\/(heads|tags)\//, "")} in ${repo}.`);
+  return { ok: true, sha: r.stdout.toString("utf8").trim() };
+}
+async function repoMerge(repo, opts) {
+  const dir = needRepo(repo);
+  if (!validRefName(opts.source) || !validRefName(opts.target)) throw new Fail("bad_branch", "That is not a branch name.");
+  const strategy = opts.strategy ?? "merge";
+  if (strategy !== "ff" && strategy !== "merge") throw new Fail("bad_strategy", "The strategy is ff or merge.");
+  if (opts.source === opts.target) throw new Fail("same_branch", "A branch can not be merged into itself.");
+  const srcRef = `refs/heads/${opts.source}`;
+  const dstRef = `refs/heads/${opts.target}`;
+  const rev = async (ref, what) => {
+    const r = await git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { gitDir: dir });
+    if (r.code !== 0) throw new Fail("no_branch", `There is no branch ${what}.`);
+    return r.stdout.toString("utf8").trim();
+  };
+  const src = await rev(srcRef, opts.source);
+  const dst = await rev(dstRef, opts.target);
+  if (opts.expect !== void 0 && opts.expect !== dst) throw new Fail("moved", `${opts.target} has moved since it was read.`, { current: dst });
+  const ancestor = async (a, b) => (await git(["merge-base", "--is-ancestor", a, b], { gitDir: dir })).code === 0;
+  if (await ancestor(src, dst)) return { ok: true, sha: dst, strategy: "ff", alreadyMerged: true, old: dst };
+  let sha;
+  let used;
+  if (await ancestor(dst, src)) {
+    sha = src;
+    used = "ff";
+  } else {
+    if (strategy === "ff") throw new Fail("not_ff", `${opts.target} has commits that ${opts.source} lacks, so it can not be fast-forwarded.`);
+    const tree = await git(["merge-tree", "--write-tree", "--name-only", dst, src], { gitDir: dir });
+    const lines = tree.stdout.toString("utf8").split("\n");
+    if (tree.code === 1) {
+      const files = [];
+      for (const l of lines.slice(1)) {
+        if (!l) break;
+        files.push(l);
+      }
+      throw new Fail("conflict", `${opts.source} conflicts with ${opts.target} in ${files.length} file${files.length === 1 ? "" : "s"}.`, { files: files.slice(0, 50) });
+    }
+    if (tree.code !== 0 || !validSha(lines[0]?.trim())) throw new Fail("merge_failed", tree.stderr.trim().split("\n")[0] || "git could not merge these.");
+    const message = (opts.message ?? `Merge branch '${opts.source}' into ${opts.target}`).slice(0, 4e3);
+    const who = (opts.author ?? "Claudepilot").replace(/[<>\n\0]/g, "").slice(0, 60) || "Claudepilot";
+    const commit = await gitText(["commit-tree", lines[0].trim(), "-p", dst, "-p", src, "-m", message], { gitDir: dir, env: { GIT_AUTHOR_NAME: who, GIT_AUTHOR_EMAIL: "claudepilot@localhost", GIT_COMMITTER_NAME: who, GIT_COMMITTER_EMAIL: "claudepilot@localhost" } }, "merge_failed");
+    if (!validSha(commit)) throw new Fail("merge_failed", "git did not make a commit.");
+    sha = commit;
+    used = "merge";
+  }
+  const move = await git(["update-ref", "-m", `merge ${opts.source}`, dstRef, sha, dst], { gitDir: dir });
+  if (move.code !== 0) throw new Fail("moved", `${opts.target} moved while it was being merged. Try again.`);
+  emitEvents(repo, [{ ref: dstRef, old: dst, new: sha }], "portal");
+  return { ok: true, sha, strategy: used, alreadyMerged: false, old: dst };
+}
+
+// src/ci/runner/runs.ts
+var import_node_child_process2 = require("node:child_process");
+var import_node_fs4 = require("node:fs");
+var import_node_os4 = require("node:os");
+var import_node_path4 = require("node:path");
+var NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+var WHENS = ["success", "failure", "always"];
+var relative = (s) => typeof s === "string" && s.length > 0 && s.length <= 200 && !s.startsWith("/") && !s.includes("\\") && !s.includes("\0") && !s.split("/").includes("..");
+function envOf(x, what) {
+  if (x === null || typeof x !== "object" || Array.isArray(x)) throw new Fail("bad_plan", `${what} is not a map.`);
+  const entries = Object.entries(x);
+  if (entries.length > 200) throw new Fail("bad_plan", `${what} has too many variables.`);
+  const out = {};
+  for (const [k, v] of entries) {
+    if (!NAME.test(k) || typeof v !== "string" || v.length > 8192) throw new Fail("bad_plan", `${what} has a bad variable.`);
+    out[k] = v;
+  }
+  return out;
+}
+function parsePlan(raw) {
+  let x;
+  try {
+    x = JSON.parse(raw.toString("utf8"));
+  } catch {
+    throw new Fail("bad_plan", "The plan is not JSON.");
+  }
+  const bad = (m) => new Fail("bad_plan", m);
+  const int = (v, lo, hi) => typeof v === "number" && Number.isInteger(v) && v >= lo && v <= hi;
+  if (!x || x.v !== 1) throw bad("Unknown plan version.");
+  if (!validRunId(x.runId) || !validRepoName(x.repo) || !validSha(x.sha) || !validRef(x.ref)) throw bad("The plan names a run, remote, commit or ref that is not valid.");
+  if (typeof x.pipeline !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(x.pipeline) || typeof x.workspace !== "string" || x.workspace.length > 200 || !int(x.runNumber, 0, 1e9)) throw bad("The plan has a bad name.");
+  if (!int(x.timeoutMs, 1e3, CI_LIMITS.maxTimeoutMs) || !int(x.maxParallel, 1, 8)) throw bad("The plan has a bad limit.");
+  const env = envOf(x.env, "The plan");
+  if (!Array.isArray(x.jobs) || x.jobs.length < 1 || x.jobs.length > CI_LIMITS.jobs) throw bad("The plan has no jobs, or too many.");
+  const ids = /* @__PURE__ */ new Set();
+  const jobs = x.jobs;
+  for (const j of jobs) {
+    if (!j || typeof j.id !== "string" || !JOB_ID.test(j.id) || ids.has(j.id)) throw bad("A job id is not valid or is used twice.");
+    ids.add(j.id);
+  }
+  for (const j of jobs) {
+    const id = j.id;
+    if (typeof j.name !== "string" || j.name.length > 200) throw bad(`Job ${id} has a bad name.`);
+    if (!Array.isArray(j.needs) || j.needs.some((n) => typeof n !== "string" || !ids.has(n) || n === id)) throw bad(`Job ${id} needs a job that does not exist.`);
+    if (!WHENS.includes(j.when) || j.skip !== null && j.skip !== "condition" || !int(j.timeoutMs, 1e3, CI_LIMITS.maxTimeoutMs) || typeof j.continueOnError !== "boolean") throw bad(`Job ${id} has a bad setting.`);
+    envOf(j.env, `Job ${id}`);
+    const g = j.group;
+    if (g !== null && (typeof g !== "object" || typeof g.id !== "string" || !JOB_ID.test(g.id) || typeof g.failFast !== "boolean" || g.maxParallel !== null && !int(g.maxParallel, 1, 8))) throw bad(`Job ${id} has a bad matrix group.`);
+    if (!Array.isArray(j.secrets) || j.secrets.length > 20 || j.secrets.some((n) => typeof n !== "string" || !NAME.test(n) || n.startsWith("PILOT_"))) throw bad(`Job ${id} lists a secret that is not a name.`);
+    if (!Array.isArray(j.steps) || j.steps.length > CI_LIMITS.stepsPerJob) throw bad(`Job ${id} has too many steps.`);
+    for (const s of j.steps) {
+      if (!s || typeof s.name !== "string" || s.name.length > 200 || typeof s.run !== "string" || s.run.length > 1e5 || !relative(s.workingDirectory === "." ? "x" : s.workingDirectory)) throw bad(`A step of ${id} is not valid.`);
+      if (!WHENS.includes(s.when) || s.skip !== null && s.skip !== "condition" || typeof s.continueOnError !== "boolean" || s.timeoutMs !== null && !int(s.timeoutMs, 1e3, CI_LIMITS.maxTimeoutMs)) throw bad(`A step of ${id} has a bad setting.`);
+      envOf(s.env, `A step of ${id}`);
+    }
+    const a = j.artifacts;
+    if (a !== null && (typeof a !== "object" || !Array.isArray(a.paths) || a.paths.length < 1 || a.paths.length > 50 || !a.paths.every(relative) || !int(a.expireDays, 1, 365) || a.when !== "success" && a.when !== "always")) throw bad(`Job ${id} has bad artifacts.`);
+  }
+  const by = new Map(jobs.map((j) => [j.id, j.needs]));
+  const seen = /* @__PURE__ */ new Set();
+  const done = /* @__PURE__ */ new Set();
+  const visit = (id) => {
+    if (done.has(id)) return;
+    if (seen.has(id)) throw bad("The jobs wait for each other.");
+    seen.add(id);
+    for (const n of by.get(id) ?? []) visit(n);
+    done.add(id);
+  };
+  for (const id of by.keys()) visit(id);
+  return { ...x, env };
+}
+function readJson(path) {
+  try {
+    return JSON.parse((0, import_node_fs4.readFileSync)(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function startTicks(pid) {
+  try {
+    const stat = (0, import_node_fs4.readFileSync)(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+function supervisorAlive(runId) {
+  let raw;
+  try {
+    raw = (0, import_node_fs4.readFileSync)((0, import_node_path4.join)(runDir(runId), "supervisor.pid"), "utf8");
+  } catch {
+    return false;
+  }
+  const [pidText, ticks] = raw.trim().split(" ");
+  const pid = Number(pidText);
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+  if (ticks) {
+    const now = startTicks(pid);
+    if (now !== null && now !== ticks) return false;
+  }
+  return true;
+}
+var isTerminal = (s) => s === "passed" || s === "failed" || s === "cancelled";
+function readExactly(n, timeoutMs = 15e3) {
+  return new Promise((resolve2, reject) => {
+    const chunks = [];
+    let got = 0;
+    const timer = setTimeout(() => reject(new Fail("stdin_timeout", "The plan did not arrive.")), timeoutMs);
+    process.stdin.on("data", (c) => {
+      chunks.push(c);
+      got += c.length;
+      if (got >= n) {
+        clearTimeout(timer);
+        process.stdin.pause();
+        resolve2(Buffer.concat(chunks).subarray(0, n));
+      }
+    });
+    process.stdin.on("end", () => {
+      if (got < n) {
+        clearTimeout(timer);
+        reject(new Fail("stdin_short", "The plan was cut short."));
+      }
+    });
+    process.stdin.on("error", (e) => reject(e));
+  });
+}
+function initialState(plan) {
+  return {
+    v: 1,
+    runId: plan.runId,
+    status: "queued",
+    reason: null,
+    startedAt: null,
+    finishedAt: null,
+    durationMs: null,
+    jobs: plan.jobs.map((j) => ({
+      id: j.id,
+      name: j.name,
+      status: j.skip ? "skipped" : "pending",
+      needs: j.needs,
+      startedAt: null,
+      durationMs: null,
+      ignored: false,
+      reason: j.skip ? "condition" : null,
+      steps: j.steps.map((s, idx) => ({ idx, name: s.name, status: s.skip || j.skip ? "skipped" : "pending", startedAt: null, durationMs: null, exitCode: null, logBytes: 0, logTruncated: false, ignored: false, reason: s.skip || j.skip ? "condition" : null })),
+      artifacts: [],
+      artifactsSkipped: 0
+    }))
+  };
+}
+async function startRun(runId, bytes) {
+  if (!validRunId(runId)) throw new Fail("bad_run", "That is not a run id.");
+  if (!Number.isInteger(bytes) || bytes < 2 || bytes > 1048576) throw new Fail("bad_plan", "The plan is empty or too large.");
+  const plan = parsePlan(await readExactly(bytes));
+  if (plan.runId !== runId) throw new Fail("bad_plan", "The plan is for another run.");
+  needRepo(plan.repo);
+  ensureDir(runsDir(), 448);
+  const dir = runDir(runId);
+  try {
+    (0, import_node_fs4.mkdirSync)(dir, { mode: 448 });
+  } catch (e) {
+    if (e.code === "EEXIST") return { ok: true, already: true, status: readJson((0, import_node_path4.join)(dir, "state.json"))?.status ?? "queued" };
+    throw e;
+  }
+  try {
+    const fs = (0, import_node_fs4.statfsSync)((0, import_node_os4.homedir)());
+    if (fs.bavail * fs.bsize < CI_LIMITS.freeDiskBytes) throw new Fail("no_space", "The workspace is almost out of disk space.");
+    writeAtomic((0, import_node_path4.join)(dir, "plan.json"), JSON.stringify(plan));
+    writeAtomic((0, import_node_path4.join)(dir, "state.json"), JSON.stringify(initialState(plan)));
+    const log = (0, import_node_fs4.openSync)((0, import_node_path4.join)(dir, "supervisor.log"), "a", 384);
+    const child = (0, import_node_child_process2.spawn)(process.execPath, [(0, import_node_fs4.realpathSync)(process.argv[1]), "exec", runId], { detached: true, stdio: ["ignore", log, log], cwd: (0, import_node_os4.homedir)(), env: process.env });
+    child.unref();
+    (0, import_node_fs4.closeSync)(log);
+    if (child.pid) (0, import_node_fs4.writeFileSync)((0, import_node_path4.join)(dir, "supervisor.pid"), `${child.pid}
+`, { mode: 384 });
+    return { ok: true, pid: child.pid ?? null };
+  } catch (e) {
+    (0, import_node_fs4.rmSync)(dir, { recursive: true, force: true });
+    throw e;
+  }
+}
+function poll(opts, self) {
+  const acked = ackEvents(opts.ack);
+  const events = pendingEvents(Math.min(opts.max, CI_LIMITS.eventsPerPoll));
+  const runs = {};
+  for (const id of opts.runs.slice(0, 200)) {
+    if (!validRunId(id)) continue;
+    runs[id] = { state: readJson((0, import_node_path4.join)(runDir(id), "state.json")), alive: supervisorAlive(id) };
+  }
+  const repos = [];
+  if ((0, import_node_fs4.existsSync)(gitRoot())) {
+    for (const entry of (0, import_node_fs4.readdirSync)(gitRoot())) {
+      const name = entry.slice(0, -4);
+      if (entry.endsWith(".git") && validRepoName(name) && (0, import_node_fs4.existsSync)((0, import_node_path4.join)(gitRoot(), entry, "HEAD"))) repos.push({ name, hook: hookState(name, self) });
+    }
+  }
+  let freeBytes = null;
+  try {
+    const fs = (0, import_node_fs4.statfsSync)((0, import_node_os4.homedir)());
+    freeBytes = fs.bavail * fs.bsize;
+  } catch {
+  }
+  return { ok: true, now: nowIso(), acked, events, runs, repos, freeBytes };
+}
+function cancelRun(runId) {
+  if (!validRunId(runId)) throw new Fail("bad_run", "That is not a run id.");
+  const dir = runDir(runId);
+  const path = (0, import_node_path4.join)(dir, "state.json");
+  const state = readJson(path);
+  if (!state) throw new Fail("no_run", "There is no such run here.");
+  if (isTerminal(state.status)) return { ok: true, status: state.status, alreadyOver: true };
+  writeAtomic((0, import_node_path4.join)(dir, "cancel"), nowIso());
+  if (supervisorAlive(runId)) {
+    try {
+      const pid = Number((0, import_node_fs4.readFileSync)((0, import_node_path4.join)(dir, "supervisor.pid"), "utf8").trim().split(" ")[0]);
+      process.kill(pid, "SIGTERM");
+    } catch {
+    }
+    return { ok: true, status: state.status, signalled: true };
+  }
+  const now = nowIso();
+  for (const j of state.jobs) {
+    if (j.status === "pending" || j.status === "running") {
+      j.status = "cancelled";
+      j.reason = "cancelled";
+    }
+    for (const s of j.steps) if (s.status === "pending" || s.status === "running") s.status = "cancelled", s.reason = "cancelled";
+  }
+  state.status = "cancelled";
+  state.reason = "cancelled";
+  state.finishedAt = now;
+  writeAtomic(path, JSON.stringify(state));
+  return { ok: true, status: "cancelled", signalled: false };
+}
+function wholeChars(buf) {
+  let i = buf.length - 1;
+  let back = 0;
+  while (i >= 0 && back < 3 && (buf[i] & 192) === 128) {
+    i--;
+    back++;
+  }
+  if (i < 0) return buf;
+  const lead = buf[i];
+  const need = lead >= 240 ? 4 : lead >= 224 ? 3 : lead >= 192 ? 2 : 1;
+  return need > back + 1 ? buf.subarray(0, i) : buf;
+}
+function fromBoundary(buf) {
+  let i = 0;
+  while (i < buf.length && i < 4 && (buf[i] & 192) === 128) i++;
+  return buf.subarray(i);
+}
+function readRange(path, from, length) {
+  const fd = (0, import_node_fs4.openSync)(path, "r");
+  try {
+    const size = (0, import_node_fs4.statSync)(path).size;
+    const len = Math.max(0, Math.min(length, size - from));
+    const buf = Buffer.alloc(len);
+    let got = 0;
+    while (got < len) {
+      const n = (0, import_node_fs4.readSync)(fd, buf, got, len - got, from + got);
+      if (n <= 0) break;
+      got += n;
+    }
+    return { bytes: buf.subarray(0, got), size };
+  } finally {
+    (0, import_node_fs4.closeSync)(fd);
+  }
+}
+var logPath = (runId, job, n) => (0, import_node_path4.join)(runDir(runId), "logs", job, `${n}.log`);
+function readLog(runId, job, step, offset, max) {
+  if (!validRunId(runId) || typeof job !== "string" || !JOB_ID.test(job) || !Number.isInteger(step) || step < 0 || step > CI_LIMITS.stepsPerJob) throw new Fail("bad_log", "That is not a log.");
+  const path = logPath(runId, job, step);
+  const state = readJson((0, import_node_path4.join)(runDir(runId), "state.json"));
+  const unit = state?.jobs.find((j) => j.id === job)?.steps[step];
+  const over = !unit || unit.status !== "running" && unit.status !== "pending";
+  if (!(0, import_node_fs4.existsSync)(path)) return { ok: true, text: "", next: offset, size: 0, done: over };
+  const want = Math.max(1024, Math.min(max, CI_LIMITS.logChunkBytes));
+  const { bytes, size } = readRange(path, Math.max(0, offset), want);
+  let chunk = wholeChars(bytes);
+  const reachedEnd = offset + bytes.length >= size;
+  if (!reachedEnd || !over) {
+    const nl = chunk.lastIndexOf(10);
+    if (nl >= 0 && (!reachedEnd || nl + 1 < chunk.length)) chunk = chunk.subarray(0, nl + 1);
+  }
+  const next = offset + chunk.length;
+  return { ok: true, text: chunk.toString("utf8"), next, size, done: over && next >= size, truncated: !!unit?.logTruncated };
+}
+function archiveLogs(runId, head, tail, total) {
+  if (!validRunId(runId)) throw new Fail("bad_run", "That is not a run id.");
+  const state = readJson((0, import_node_path4.join)(runDir(runId), "state.json"));
+  if (!state) throw new Fail("no_run", "There is no such run here.");
+  let budget = total;
+  const steps = [];
+  for (const j of state.jobs) {
+    for (const s of j.steps) {
+      const path = logPath(runId, j.id, s.idx);
+      if (!(0, import_node_fs4.existsSync)(path)) continue;
+      const size = (0, import_node_fs4.statSync)(path).size;
+      if (size === 0) continue;
+      if (budget <= 0) {
+        steps.push({ job: j.id, step: s.idx, size, head: "", tail: null, omitted: size });
+        continue;
+      }
+      if (size <= head + tail) {
+        const whole = readRange(path, 0, Math.min(size, budget)).bytes;
+        steps.push({ job: j.id, step: s.idx, size, head: wholeChars(whole).toString("utf8"), tail: null, omitted: size - whole.length > 0 ? size - whole.length : 0 });
+        budget -= whole.length;
+      } else {
+        const h = wholeChars(readRange(path, 0, Math.min(head, budget)).bytes);
+        const t = fromBoundary(readRange(path, size - tail, tail).bytes);
+        steps.push({ job: j.id, step: s.idx, size, head: h.toString("utf8"), tail: t.toString("utf8"), omitted: size - h.length - t.length });
+        budget -= h.length + t.length;
+      }
+    }
+  }
+  return { ok: true, steps };
+}
+function gc(days) {
+  let runs = 0;
+  let work = 0;
+  const cutoff = Date.now() - days * 864e5;
+  if ((0, import_node_fs4.existsSync)(runsDir())) {
+    for (const id of (0, import_node_fs4.readdirSync)(runsDir())) {
+      if (!validRunId(id)) continue;
+      const dir2 = runDir(id);
+      const state = readJson((0, import_node_path4.join)(dir2, "state.json"));
+      const alive = supervisorAlive(id);
+      if (!alive && (0, import_node_fs4.existsSync)((0, import_node_path4.join)(dir2, "work"))) {
+        (0, import_node_fs4.rmSync)((0, import_node_path4.join)(dir2, "work"), { recursive: true, force: true });
+        work++;
+      }
+      try {
+        const old = (0, import_node_fs4.statSync)((0, import_node_path4.join)(dir2, "state.json")).mtimeMs < cutoff;
+        if (!alive && (old || !state)) {
+          if (!state || isTerminal(state.status)) {
+            (0, import_node_fs4.rmSync)(dir2, { recursive: true, force: true });
+            runs++;
+          }
+        }
+      } catch {
+        if (!alive && !state) {
+          (0, import_node_fs4.rmSync)(dir2, { recursive: true, force: true });
+          runs++;
+        }
+      }
+    }
+  }
+  let events = pruneEvents(CI_LIMITS.eventDays);
+  const dir = eventsDir();
+  if ((0, import_node_fs4.existsSync)(dir)) {
+    for (const name of (0, import_node_fs4.readdirSync)(dir)) {
+      if (!name.endsWith(".json")) continue;
+      try {
+        if ((0, import_node_fs4.statSync)((0, import_node_path4.join)(dir, name)).mtimeMs < Date.now() - CI_LIMITS.eventDays * 864e5) {
+          (0, import_node_fs4.rmSync)((0, import_node_path4.join)(dir, name), { force: true });
+          events++;
+        }
+      } catch {
+      }
+    }
+  }
+  return { ok: true, runs, work, events };
+}
+
+// src/ci/runner/snapshot.ts
+var WANTED = /^\.pilot\/(?:[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.ya?ml|(?:steps|templates)\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.ya?ml)$/;
+async function snapshot(repo, sha) {
+  const dir = needRepo(repo);
+  if (!validSha(sha)) throw new Fail("bad_sha", "That is not a commit id.");
+  const meta = await git(["log", "-1", "--format=%H%x00%P%x00%an%x00%ae%x00%aI%x00%B", sha], { gitDir: dir });
+  if (meta.code !== 0) throw new Fail("no_commit", `There is no commit ${sha.slice(0, 7)} in ${repo}.`);
+  const [full, parents, an, ae, at, ...body] = meta.stdout.toString("utf8").split("\0");
+  const message = body.join("\0").trim();
+  const tree = await git(["ls-tree", "-r", "-l", "-z", sha, "--", ".pilot"], { gitDir: dir });
+  const entries = tree.stdout.toString("utf8").split("\0").filter(Boolean).map((e) => {
+    const m = /^(\d{6}) (\w+) ([0-9a-f]{40}) +(\d+|-)\t(.*)$/s.exec(e);
+    return m ? { mode: m[1], type: m[2], oid: m[3], size: m[4] === "-" ? 0 : Number(m[4]), path: m[5] } : null;
+  }).filter((e) => e !== null && e.type === "blob" && WANTED.test(e.path));
+  const files = [];
+  const toRead = [];
+  let dropped = 0;
+  for (const e of entries) {
+    if (files.length + toRead.length >= CI_LIMITS.pipelineFiles * 3) {
+      dropped++;
+      continue;
+    }
+    if (e.mode === "120000") files.push({ path: e.path, text: null, skipped: "symlink" });
+    else if (e.size > CI_LIMITS.pipelineFileBytes) files.push({ path: e.path, text: null, skipped: "too_large" });
+    else toRead.push({ path: e.path, oid: e.oid });
+  }
+  if (toRead.length) {
+    const batch = await git(["cat-file", "--batch"], { gitDir: dir, input: `${toRead.map((f) => f.oid).join("\n")}
+` });
+    const out = batch.stdout;
+    let at2 = 0;
+    for (const f of toRead) {
+      const nl = out.indexOf(10, at2);
+      if (nl < 0) break;
+      const header = out.subarray(at2, nl).toString("utf8").split(" ");
+      const size = Number(header[2]);
+      if (header[1] !== "blob" || !Number.isFinite(size)) {
+        files.push({ path: f.path, text: null, skipped: "binary" });
+        at2 = nl + 1;
+        continue;
+      }
+      const bytes = out.subarray(nl + 1, nl + 1 + size);
+      at2 = nl + 1 + size + 1;
+      files.push(bytes.includes(0) ? { path: f.path, text: null, skipped: "binary" } : { path: f.path, text: bytes.toString("utf8") });
+    }
+  }
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return {
+    ok: true,
+    sha: full,
+    parents: (parents ?? "").split(" ").filter(Boolean),
+    author: { name: (an ?? "").slice(0, 100), email: (ae ?? "").slice(0, 100) },
+    at: at ?? "",
+    subject: message.split("\n")[0]?.slice(0, 200) ?? "",
+    message: message.slice(0, 8192),
+    hasPilot: entries.length > 0,
+    files,
+    dropped
+  };
+}
+
+// src/ci/runner/supervise.ts
+var import_node_child_process3 = require("node:child_process");
+var import_node_fs5 = require("node:fs");
+var import_node_os5 = require("node:os");
+var import_node_path5 = require("node:path");
+var import_node_perf_hooks = require("node:perf_hooks");
+
+// src/ci/glob.ts
+var escapeRe = (s) => s.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+function globToRegExp(glob) {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        i++;
+        if (glob[i + 1] === "/") {
+          i++;
+          re += "(?:.*/)?";
+        } else re += ".*";
+      } else re += "[^/]*";
+    } else if (c === "?") re += "[^/]";
+    else re += escapeRe(c);
+  }
+  return new RegExp(`^${re}$`);
+}
+function artifactMatches(patterns, rel) {
+  return patterns.some((p) => {
+    const bare = p.replace(/\/+$/, "");
+    if (!/[*?]/.test(bare)) return rel === bare || rel.startsWith(`${bare}/`);
+    return globToRegExp(bare).test(rel) || globToRegExp(`${bare}/**`).test(rel);
+  });
+}
+
+// src/ci/runner/supervise.ts
+var MASK = Buffer.from("[redacted]");
+var Masker = class {
+  #needles;
+  #held = Buffer.alloc(0);
+  constructor(values) {
+    this.#needles = values.filter((v) => v.length >= 6).map((v) => Buffer.from(v, "utf8"));
+  }
+  get active() {
+    return this.#needles.length > 0;
+  }
+  push(chunk) {
+    if (!this.#needles.length) return chunk;
+    let buf = this.#held.length ? Buffer.concat([this.#held, chunk]) : chunk;
+    this.#held = Buffer.alloc(0);
+    const out = [];
+    let from = 0;
+    for (; ; ) {
+      let at = -1;
+      let len = 0;
+      for (const n of this.#needles) {
+        const i = buf.indexOf(n, from);
+        if (i >= 0 && (at < 0 || i < at || i === at && n.length > len)) at = i, len = n.length;
+      }
+      if (at < 0) break;
+      out.push(buf.subarray(from, at), MASK);
+      from = at + len;
+    }
+    buf = buf.subarray(from);
+    let hold = 0;
+    for (const n of this.#needles) {
+      for (let k = Math.min(n.length - 1, buf.length); k > hold; k--) {
+        if (buf.subarray(buf.length - k).equals(n.subarray(0, k))) {
+          hold = k;
+          break;
+        }
+      }
+    }
+    out.push(buf.subarray(0, buf.length - hold));
+    this.#held = Buffer.from(buf.subarray(buf.length - hold));
+    return Buffer.concat(out);
+  }
+  /** The step is over: whatever was held was not a value. */
+  flush() {
+    const rest = this.#held;
+    this.#held = Buffer.alloc(0);
+    return rest;
+  }
+};
+var LogSink = class {
+  constructor(path, cap, budget, secretValues = []) {
+    this.cap = cap;
+    this.budget = budget;
+    this.#ws = (0, import_node_fs5.createWriteStream)(path, { flags: "a", mode: 384 });
+    this.#ws.on("error", () => void 0);
+    this.#mask = new Masker(secretValues);
+  }
+  bytes = 0;
+  truncated = false;
+  #ws;
+  #mask;
+  write(raw) {
+    if (this.truncated) return;
+    this.#put(this.#mask.push(raw));
+  }
+  #put(chunk) {
+    if (!chunk.length) return;
+    const room = Math.min(this.cap - this.bytes, this.budget.left);
+    if (room <= 0) return this.#cut();
+    const part = chunk.length > room ? chunk.subarray(0, room) : chunk;
+    this.#ws.write(part);
+    this.bytes += part.length;
+    this.budget.left -= part.length;
+    if (part.length < chunk.length) this.#cut();
+  }
+  /** A line from the runner itself, outside the cap. */
+  note(text) {
+    this.#ws.write(`${text}
+`);
+  }
+  #cut() {
+    this.truncated = true;
+    this.#ws.write("\n[pilot] output cap reached; the rest of this step's output was dropped\n");
+  }
+  end() {
+    if (!this.truncated) this.#put(this.#mask.flush());
+    return new Promise((resolve2) => this.#ws.end(resolve2));
+  }
+};
+var BASH = ["/bin/bash", "/usr/bin/bash"].find((p) => (0, import_node_fs5.existsSync)(p)) ?? null;
+var signalGroup = (child, signal) => {
+  if (!child.pid) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+  }
+};
+var Supervisor = class {
+  constructor(plan, state) {
+    this.plan = plan;
+    this.state = state;
+    this.dir = runDir(plan.runId);
+  }
+  dir;
+  cancelled = false;
+  timedOut = false;
+  #children = /* @__PURE__ */ new Map();
+  #jobTimedOut = /* @__PURE__ */ new Set();
+  #logBudget = { left: CI_LIMITS.runLogBytes };
+  #artifactBudget = { left: CI_LIMITS.artifactRunBytes };
+  #timer = null;
+  /* ---------- State ---------- */
+  touch() {
+    if (this.#timer) return;
+    this.#timer = setTimeout(() => this.flush(), 250);
+  }
+  flush() {
+    if (this.#timer) clearTimeout(this.#timer);
+    this.#timer = null;
+    try {
+      writeAtomic((0, import_node_path5.join)(this.dir, "state.json"), JSON.stringify(this.state));
+    } catch {
+    }
+  }
+  /* ---------- Killing ---------- */
+  #group(jobId) {
+    let set = this.#children.get(jobId);
+    if (!set) this.#children.set(jobId, set = /* @__PURE__ */ new Set());
+    return set;
+  }
+  /** SIGTERM now, SIGKILL after the grace period, to every step of a job (or of the run). */
+  #terminate(children) {
+    const list2 = [...children];
+    for (const c of list2) signalGroup(c, "SIGTERM");
+    setTimeout(() => {
+      for (const c of list2) signalGroup(c, "SIGKILL");
+    }, CI_LIMITS.killGraceMs).unref();
+  }
+  killAll() {
+    for (const set of this.#children.values()) this.#terminate(set);
+  }
+  cancel() {
+    if (this.cancelled) return;
+    this.cancelled = true;
+    this.killAll();
+  }
+  /* ---------- The run ---------- */
+  async run() {
+    const t0 = import_node_perf_hooks.performance.now();
+    const { plan, state } = this;
+    state.status = "running";
+    state.startedAt = nowIso();
+    const ticks = startTicks(process.pid);
+    (0, import_node_fs5.writeFileSync)((0, import_node_path5.join)(this.dir, "supervisor.pid"), `${process.pid}${ticks ? ` ${ticks}` : ""}
+`, { mode: 384 });
+    this.flush();
+    const watch = setInterval(() => {
+      if ((0, import_node_fs5.existsSync)((0, import_node_path5.join)(this.dir, "cancel"))) this.cancel();
+    }, 500);
+    const runTimer = setTimeout(() => {
+      this.timedOut = true;
+      this.killAll();
+    }, plan.timeoutMs);
+    process.on("SIGTERM", () => this.cancel());
+    process.on("SIGINT", () => this.cancel());
+    const byId = new Map(state.jobs.map((j) => [j.id, j]));
+    const running = /* @__PURE__ */ new Map();
+    for (; ; ) {
+      if (this.cancelled || this.timedOut) {
+        for (const js of state.jobs) if (js.status === "pending") this.#close(js, "cancelled", this.cancelled ? "cancelled" : "timeout");
+      } else {
+        let started = false;
+        for (const job of plan.jobs) {
+          const js = byId.get(job.id);
+          if (js.status !== "pending" || running.size >= plan.maxParallel) continue;
+          if (job.group?.maxParallel && plan.jobs.filter((o) => o.group?.id === job.group.id && byId.get(o.id).status === "running").length >= job.group.maxParallel) continue;
+          const deps = job.needs.map((n) => byId.get(n));
+          if (deps.some((d) => d.status === "pending" || d.status === "running")) continue;
+          const ok = deps.every((d) => d.status === "passed" || d.status === "failed" && d.ignored);
+          const brokenDep = deps.some((d) => d.status === "failed" && !d.ignored || d.status === "cancelled");
+          if (!(job.when === "always" || (job.when === "failure" ? brokenDep : ok))) {
+            this.#close(js, "skipped", "needs");
+            this.touch();
+            continue;
+          }
+          started = true;
+          running.set(
+            job.id,
+            this.#job(job, js).catch((e) => {
+              js.status = "failed";
+              js.reason = "runner_error";
+              this.#failFirst(job, js, `[pilot] ${e.message}`);
+            }).finally(() => {
+              running.delete(job.id);
+              if (job.group?.failFast && js.status === "failed" && !js.ignored) {
+                for (const o of plan.jobs) {
+                  const os = byId.get(o.id);
+                  if (o.group?.id === job.group.id && os.status === "pending") this.#close(os, "skipped", "fail_fast");
+                }
+              }
+              this.flush();
+            })
+          );
+        }
+        if (!started && !running.size && state.jobs.some((j) => j.status === "pending")) {
+          for (const js of state.jobs) if (js.status === "pending") this.#close(js, "skipped", "needs");
+        }
+      }
+      if (!running.size && !state.jobs.some((j) => j.status === "pending")) break;
+      await Promise.race([...running.values(), sleep(250)]);
+    }
+    clearInterval(watch);
+    clearTimeout(runTimer);
+    const failed = state.jobs.filter((j) => j.status === "failed" && !j.ignored);
+    state.status = this.cancelled ? "cancelled" : this.timedOut || failed.length ? "failed" : "passed";
+    state.reason = this.cancelled ? "cancelled" : this.timedOut ? "timeout" : failed.length ? failed.find((j) => j.reason === "timeout" || j.reason === "runner_error")?.reason ?? "step_failed" : null;
+    state.finishedAt = nowIso();
+    state.durationMs = Math.round(import_node_perf_hooks.performance.now() - t0);
+    (0, import_node_fs5.rmSync)((0, import_node_path5.join)(this.dir, "work"), { recursive: true, force: true });
+    this.flush();
+  }
+  /** Settles a job that will not run (or is cut off): every unfinished step gets the same status. */
+  #close(js, status, reason) {
+    js.status = status;
+    js.reason = reason;
+    for (const s of js.steps) if (s.status === "pending") s.status = status, s.reason = reason;
+    this.touch();
+  }
+  /** Puts a message where the person will look: the first step that has not run, as its log. */
+  #failFirst(job, js, message) {
+    const s = js.steps.find((x) => x.status === "pending" || x.status === "running");
+    if (!s) return;
+    try {
+      ensureDir((0, import_node_path5.join)(this.dir, "logs", job.id));
+      (0, import_node_fs5.writeFileSync)((0, import_node_path5.join)(this.dir, "logs", job.id, `${s.idx}.log`), `${message}
+`, { flag: "a", mode: 384 });
+    } catch {
+    }
+    s.status = "failed";
+    s.reason = "runner_error";
+    s.logBytes += message.length + 1;
+    for (const rest of js.steps) if (rest.status === "pending") rest.status = "skipped", rest.reason = null;
+  }
+  /* ---------- A job ---------- */
+  async #job(job, js) {
+    const t0 = import_node_perf_hooks.performance.now();
+    js.status = "running";
+    js.startedAt = nowIso();
+    this.flush();
+    const work = (0, import_node_path5.join)(this.dir, "work", job.id);
+    let failed = false;
+    let secrets = {};
+    const timer = setTimeout(() => {
+      this.#jobTimedOut.add(job.id);
+      this.#terminate(this.#group(job.id));
+    }, job.timeoutMs);
+    try {
+      secrets = this.#secrets(job);
+      await this.#checkout(work);
+      this.#restore(job, work);
+      for (let i = 0; i < job.steps.length; i++) {
+        const step = job.steps[i];
+        const st = js.steps[i];
+        if (st.status === "skipped") continue;
+        if (this.cancelled || this.timedOut || this.#jobTimedOut.has(job.id)) {
+          st.status = "cancelled";
+          st.reason = this.cancelled ? "cancelled" : "timeout";
+          continue;
+        }
+        const runs = step.when === "always" || (step.when === "failure" ? failed : !failed);
+        if (!runs) {
+          st.status = "skipped";
+          continue;
+        }
+        await this.#step(job, step, st, work, secrets);
+        if (st.status === "failed") {
+          if (step.continueOnError) st.ignored = true;
+          else failed = true;
+        }
+      }
+    } catch (e) {
+      failed = true;
+      js.reason = "runner_error";
+      this.#failFirst(job, js, `[pilot] ${e.message}`);
+    } finally {
+      clearTimeout(timer);
+    }
+    const timedOut = this.#jobTimedOut.has(job.id) || this.timedOut;
+    js.status = this.cancelled ? "cancelled" : timedOut || failed ? "failed" : "passed";
+    const stepTimedOut = js.steps.some((s) => s.status === "failed" && !s.ignored && s.reason === "timeout");
+    js.reason = this.cancelled ? "cancelled" : timedOut || failed && stepTimedOut ? "timeout" : failed ? js.reason ?? "step_failed" : null;
+    js.ignored = js.status === "failed" && job.continueOnError;
+    if (job.artifacts && (js.status === "passed" || job.artifacts.when === "always" && js.status !== "cancelled")) {
+      try {
+        const r = this.#collect(job, work);
+        js.artifacts = r.artifacts;
+        js.artifactsSkipped = r.skipped;
+      } catch {
+        js.artifactsSkipped += 1;
+      }
+    }
+    (0, import_node_fs5.rmSync)(work, { recursive: true, force: true });
+    js.durationMs = Math.round(import_node_perf_hooks.performance.now() - t0);
+    this.flush();
+  }
+  /** A clean checkout of the commit from the bare repository, with hooks off. */
+  async #checkout(work) {
+    ensureDir((0, import_node_path5.dirname)(work));
+    const clone = await git(["clone", "--local", "--no-checkout", "--quiet", bareDir(this.plan.repo), work], { timeoutMs: 6e5 });
+    if (clone.code !== 0) throw new Error(`Checkout failed: ${clone.stderr.trim().split("\n")[0] ?? "git clone failed"}`);
+    const out = await git(["checkout", "--quiet", "--detach", this.plan.sha], { cwd: work, timeoutMs: 6e5 });
+    if (out.code !== 0) throw new Error(`Checkout failed: ${out.stderr.trim().split("\n")[0] ?? "git checkout failed"}`);
+  }
+  /**
+   * The values of the secrets a job names, read from the files Secrets & env delivered (`<etc>/secrets/files/<NAME>`, readable
+   * by the workspace user), where `<etc>` is the folder this script is installed in. Nothing is written anywhere: the values live in
+   * this process and the steps' environments, and are masked in their logs.
+   */
+  #secrets(job) {
+    const out = {};
+    const etc = (0, import_node_path5.dirname)((0, import_node_path5.dirname)((0, import_node_fs5.realpathSync)(process.argv[1])));
+    for (const name of job.secrets) {
+      const path = (0, import_node_path5.join)(etc, "secrets", "files", name);
+      let text;
+      try {
+        const st = (0, import_node_fs5.lstatSync)(path);
+        if (!st.isFile() || st.size > 65536) throw new Error("not a file the size of a secret");
+        text = (0, import_node_fs5.readFileSync)(path, "utf8");
+      } catch {
+        throw new Error(`The secret ${name} is not available in this workspace. Assign it in Secrets & env as a secret or a tool login.`);
+      }
+      out[name] = text.endsWith("\n") ? text.slice(0, -1) : text;
+    }
+    return out;
+  }
+  /** What the jobs this one needs kept is copied in before its steps. */
+  #restore(job, work) {
+    for (const need of job.needs) {
+      const src = (0, import_node_path5.join)(this.dir, "artifacts", need);
+      if ((0, import_node_fs5.existsSync)(src)) (0, import_node_fs5.cpSync)(src, work, { recursive: true, force: true });
+    }
+  }
+  /* ---------- A step ---------- */
+  async #step(job, step, st, work, secrets) {
+    const t0 = import_node_perf_hooks.performance.now();
+    st.status = "running";
+    st.startedAt = nowIso();
+    this.flush();
+    ensureDir((0, import_node_path5.join)(this.dir, "logs", job.id));
+    const sink = new LogSink((0, import_node_path5.join)(this.dir, "logs", job.id, `${st.idx}.log`), CI_LIMITS.stepLogBytes, this.#logBudget, Object.values(secrets));
+    const finish = async (status, reason, exitCode) => {
+      await sink.end();
+      st.status = status;
+      st.reason = reason;
+      st.exitCode = exitCode;
+      st.logBytes = sink.bytes;
+      st.logTruncated = sink.truncated;
+      st.durationMs = Math.round(import_node_perf_hooks.performance.now() - t0);
+      this.flush();
+    };
+    const cwd = (0, import_node_path5.join)(work, step.workingDirectory === "." ? "" : step.workingDirectory);
+    let real;
+    try {
+      real = (0, import_node_fs5.realpathSync)(cwd);
+    } catch {
+      sink.note(`[pilot] working-directory ${step.workingDirectory} does not exist in this commit`);
+      return finish("failed", "step_failed", null);
+    }
+    if (!inside((0, import_node_fs5.realpathSync)(work), real)) {
+      sink.note("[pilot] working-directory leaves the checkout");
+      return finish("failed", "step_failed", null);
+    }
+    const env = {
+      PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+      HOME: (0, import_node_os5.homedir)(),
+      USER: (0, import_node_os5.userInfo)().username,
+      LOGNAME: (0, import_node_os5.userInfo)().username,
+      LANG: process.env.LANG ?? "C.UTF-8",
+      TERM: "dumb",
+      ...this.plan.env,
+      ...job.env,
+      ...step.env,
+      ...secrets,
+      PILOT_JOB: job.id,
+      PILOT_WORKDIR: work
+    };
+    const [file, args] = BASH ? [BASH, ["-l", "-c", `set -eo pipefail; ${step.run}`]] : ["/bin/sh", ["-c", `set -e; ${step.run}`]];
+    const child = (0, import_node_child_process3.spawn)(file, args, { cwd: real, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    this.#group(job.id).add(child);
+    if (child.pid) {
+      try {
+        (0, import_node_os5.setPriority)(child.pid, 10);
+      } catch {
+      }
+    }
+    const onData = (c) => {
+      sink.write(c);
+      st.logBytes = sink.bytes;
+      this.touch();
+    };
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    const closed = new Promise((resolve2) => child.on("close", () => resolve2()));
+    let stepTimedOut = false;
+    const timer = step.timeoutMs === null ? null : setTimeout(() => {
+      stepTimedOut = true;
+      sink.note(`[pilot] step timed out after ${Math.round(step.timeoutMs / 1e3)} s; stopping it`);
+      this.#terminate([child]);
+    }, step.timeoutMs);
+    const exit = await new Promise((resolve2) => {
+      child.on("error", (e) => {
+        sink.note(`[pilot] could not start the shell: ${e.message}`);
+        resolve2({ code: 127, signal: null });
+      });
+      child.on("exit", (code, signal) => resolve2({ code, signal }));
+    });
+    if (timer) clearTimeout(timer);
+    await Promise.race([closed, sleep(2e3)]);
+    child.stdout.destroy();
+    child.stderr.destroy();
+    signalGroup(child, "SIGKILL");
+    this.#group(job.id).delete(child);
+    const jobTimedOut = this.#jobTimedOut.has(job.id) || this.timedOut;
+    if (this.cancelled) return finish("cancelled", "cancelled", exit.code);
+    if (stepTimedOut || jobTimedOut) {
+      if (jobTimedOut && !stepTimedOut) sink.note("[pilot] the job ran out of time; stopped");
+      return finish("failed", "timeout", exit.code);
+    }
+    if (exit.code === 0) return finish("passed", null, 0);
+    return finish("failed", exit.signal ? "signal" : "step_failed", exit.code);
+  }
+  /* ---------- Artifacts ---------- */
+  #collect(job, work) {
+    const spec = job.artifacts;
+    const out = (0, import_node_path5.join)(this.dir, "artifacts", job.id);
+    const artifacts = [];
+    let skipped = 0;
+    const root = (0, import_node_fs5.realpathSync)(work);
+    const startOf = (p) => {
+      const out2 = [];
+      for (const seg of p.replace(/\/+$/, "").split("/")) {
+        if (/[*?]/.test(seg)) break;
+        out2.push(seg);
+      }
+      return out2.join("/");
+    };
+    const starts = new Set(spec.paths.map(startOf));
+    let visited = 0;
+    const walk = (rel) => {
+      if (visited > 2e5) return;
+      const abs = (0, import_node_path5.join)(root, rel);
+      let st;
+      try {
+        st = (0, import_node_fs5.lstatSync)(abs);
+      } catch {
+        return;
+      }
+      visited++;
+      if (st.isSymbolicLink()) {
+        if (artifactMatches(spec.paths, rel)) skipped++;
+        return;
+      }
+      if (st.isDirectory()) {
+        if (rel === ".git") return;
+        for (const name of (0, import_node_fs5.readdirSync)(abs)) walk(rel ? `${rel}/${name}` : name);
+        return;
+      }
+      if (!st.isFile() || !artifactMatches(spec.paths, rel)) return;
+      if (artifacts.length >= CI_LIMITS.artifactFiles || st.size > CI_LIMITS.artifactFileBytes || st.size > this.#artifactBudget.left) {
+        skipped++;
+        return;
+      }
+      const dest = (0, import_node_path5.join)(out, rel);
+      if (!inside(out, dest)) return;
+      (0, import_node_fs5.mkdirSync)((0, import_node_path5.dirname)(dest), { recursive: true });
+      (0, import_node_fs5.copyFileSync)(abs, dest);
+      this.#artifactBudget.left -= st.size;
+      artifacts.push({ path: rel, bytes: st.size });
+    };
+    for (const start of starts) {
+      const abs = (0, import_node_path5.join)(root, start);
+      if (!(0, import_node_fs5.existsSync)(abs) || !inside(root, (0, import_node_fs5.realpathSync)(abs))) continue;
+      walk(start);
+    }
+    return { artifacts: artifacts.sort((a, b) => a.path.localeCompare(b.path)), skipped };
+  }
+};
+async function supervise(runId) {
+  const dir = runDir(runId);
+  const plan = readJson((0, import_node_path5.join)(dir, "plan.json"));
+  const state = readJson((0, import_node_path5.join)(dir, "state.json"));
+  if (!plan || !state) return;
+  const sv = new Supervisor(plan, state);
+  try {
+    await sv.run();
+  } catch (e) {
+    state.status = "failed";
+    state.reason = "runner_error";
+    state.finishedAt = nowIso();
+    for (const j of state.jobs) {
+      if (j.status === "running" || j.status === "pending") j.status = "failed", j.reason = "runner_error";
+      for (const s of j.steps) if (s.status === "running" || s.status === "pending") s.status = "failed", s.reason = "runner_error";
+    }
+    sv.flush();
+    (0, import_node_fs5.writeFileSync)((0, import_node_path5.join)(dir, "supervisor.error"), `${e.stack ?? String(e)}
+`, { mode: 384 });
+  }
+}
+
+// src/ci/runner/main.ts
+function parse(args, known) {
+  const pos = [];
+  const flags = {};
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a.startsWith("--")) {
+      pos.push(a);
+      continue;
+    }
+    const kind = known[a.slice(2)];
+    if (!kind) throw new Fail("bad_flag", `Unknown option ${a}.`);
+    if (kind === "bool") flags[a.slice(2)] = true;
+    else {
+      const v = args[++i];
+      if (v === void 0) throw new Fail("bad_flag", `${a} needs a value.`);
+      flags[a.slice(2)] = v;
+    }
+  }
+  return { pos, flags };
+}
+var num = (v, fallback, lo, hi) => {
+  if (v === void 0 || v === true) return fallback;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < lo || n > hi) throw new Fail("bad_flag", `A number from ${lo} to ${hi} is needed.`);
+  return n;
+};
+var list = (v) => typeof v === "string" && v ? v.split(",").filter(Boolean) : [];
+var str = (v) => typeof v === "string" ? v : void 0;
+async function readAll(limit) {
+  const chunks = [];
+  let size = 0;
+  for await (const c of process.stdin) {
+    size += c.length;
+    if (size > limit) break;
+    chunks.push(c);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+async function dispatch(cmd, args, self) {
+  switch (cmd) {
+    case "version": {
+      const v = await git(["--version"]);
+      return { ok: true, version: (0, import_node_crypto3.createHash)("sha256").update((0, import_node_fs6.readFileSync)(self)).digest("hex").slice(0, 16), node: process.version, git: v.stdout.toString("utf8").trim().replace(/^git version /, "") };
+    }
+    case "repo": {
+      const [sub, ...rest] = args;
+      switch (sub) {
+        case "create": {
+          const { pos, flags } = parse(rest, { from: "value", branch: "value", connect: "bool" });
+          return repoCreate(pos[0], { from: str(flags.from), branch: str(flags.branch), connect: flags.connect === true }, self);
+        }
+        case "list":
+          return { ok: true, repos: await repoList(self) };
+        case "info":
+          return { ok: true, ...await repoInfo(parse(rest, {}).pos[0], self) };
+        case "ensure": {
+          const name = parse(rest, {}).pos[0];
+          needRepo(name);
+          return { ok: true, hook: await ensureHooks(name, self) };
+        }
+        case "connect": {
+          const { pos } = parse(rest, {});
+          return repoConnect(pos[0], pos[1], self);
+        }
+        case "delete":
+          return repoDelete(parse(rest, {}).pos[0]);
+        case "branches": {
+          const { pos, flags } = parse(rest, { limit: "value" });
+          return repoBranches(pos[0], num(flags.limit, 200, 1, 500));
+        }
+        case "rev": {
+          const { pos } = parse(rest, {});
+          return repoRev(pos[0], pos[1]);
+        }
+        default:
+          throw new Fail("bad_command", "Unknown repo command.");
+      }
+    }
+    case "merge": {
+      const { pos, flags } = parse(args, { strategy: "value", expect: "value", message: "value", author: "value" });
+      return repoMerge(pos[0], { source: pos[1], target: pos[2], strategy: str(flags.strategy), expect: str(flags.expect), message: str(flags.message), author: str(flags.author) });
+    }
+    case "hook": {
+      if (args[0] !== "post-receive") throw new Fail("bad_command", "Unknown hook.");
+      return hookPostReceive(() => readAll(1048576));
+    }
+    case "poll": {
+      const { flags } = parse(args, { ack: "value", runs: "value", max: "value" });
+      return poll({ ack: list(flags.ack), runs: list(flags.runs), max: num(flags.max, CI_LIMITS.eventsPerPoll, 1, CI_LIMITS.eventsPerPoll) }, self);
+    }
+    case "snapshot": {
+      const { pos } = parse(args, {});
+      return snapshot(pos[0], pos[1]);
+    }
+    case "start": {
+      const { pos, flags } = parse(args, { bytes: "value" });
+      return startRun(pos[0], num(flags.bytes, 0, 0, 1048576));
+    }
+    case "exec": {
+      const id = args[0];
+      if (!id) throw new Fail("bad_run", "No run.");
+      await supervise(id);
+      return null;
+    }
+    case "log": {
+      const { pos, flags } = parse(args, { max: "value" });
+      return readLog(pos[0], pos[1], Number(pos[2]), Number(pos[3] ?? 0), num(flags.max, CI_LIMITS.logChunkBytes, 1024, CI_LIMITS.logChunkBytes));
+    }
+    case "archive": {
+      const { pos, flags } = parse(args, { head: "value", tail: "value", total: "value" });
+      return archiveLogs(pos[0], num(flags.head, CI_LIMITS.archiveHeadBytes, 0, 1048576), num(flags.tail, CI_LIMITS.archiveTailBytes, 0, 1048576), num(flags.total, CI_LIMITS.archiveRunBytes, 0, 8388608));
+    }
+    case "cancel":
+      return cancelRun(parse(args, {}).pos[0]);
+    case "gc": {
+      const { flags } = parse(args, { days: "value" });
+      return gc(num(flags.days, CI_LIMITS.runDirDays, 0, 3650));
+    }
+    default:
+      throw new Fail("bad_command", `Unknown command${cmd ? ` ${cmd}` : ""}. See docs/prd/local-git-ci.md.`);
+  }
+}
+async function main(argv) {
+  const [cmd, ...rest] = argv;
+  const self = (0, import_node_fs6.realpathSync)(process.argv[1]);
+  try {
+    const out = await dispatch(cmd, rest, self);
+    if (out === null || cmd === "hook") return 0;
+    process.stdout.write(reply(out));
+    return 0;
+  } catch (e) {
+    const f = e instanceof Fail ? e : new Fail("internal", e instanceof Error ? e.message : String(e));
+    if (cmd === "hook") return 0;
+    process.stdout.write(reply({ ok: false, error: f.code, message: f.message, ...f.extra }));
+    return 1;
+  }
+}
+main(process.argv.slice(2)).then(
+  (code) => process.stdout.write("", () => process.exit(code)),
+  () => process.exit(1)
+);

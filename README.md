@@ -52,6 +52,27 @@ service worker is registered in production builds only and does one thing: it sh
 when a page load can't reach the server. API calls, WebSockets and assets are never cached. Browsers
 only offer installing on HTTPS or `localhost`.
 
+## Deploy (pilot.dev.isnan.me)
+
+A built copy (no watcher, no HMR) behind Caddy on HTTPS: [deploy/compose.yaml](deploy/compose.yaml).
+The name only resolves on the local network. By default (`PORTAL_TLS=internal`) Caddy signs the
+certificate with its own local CA: trust its root once per device (`docker cp
+claudepilot-caddy-1:/data/caddy/pki/authorities/local/root.crt .`). `PORTAL_TLS=cloudflare` gets a
+Let's Encrypt certificate through a DNS-01 challenge instead (a token with Zone › DNS › Edit on
+`isnan.me`); nothing has to be public either way.
+
+```sh
+cp deploy/.env.example deploy/.env      # optional: PORTAL_SERVER_CODE, PORTAL_TLS
+NODE_AUTH_TOKEN=$(gh auth token) docker compose -f deploy/compose.yaml up -d --build
+docker compose -f deploy/compose.yaml logs portal   # server code, if generated
+```
+
+From the devcontainer, add `--context host` after `docker` to run it on the Mac's Docker Desktop.
+Deploy a change by running the same `up -d --build` again. Data and the secret-key file are on the
+`portal-data` and `portal-secrets` volumes (a fresh database, separate from `.data`). Workspaces run
+on that host's Docker; don't run the dev portal against the same daemon at the same time, or the two
+will each try to deliver into the same workspaces.
+
 ## Configuration
 
 Environment variables (see [.env.example](.env.example)):
@@ -61,6 +82,7 @@ Environment variables (see [.env.example](.env.example)):
 | `PORTAL_SERVER_CODE` | generated | Sign-in code. Unset: an 8-character code is generated at startup and printed in the log. |
 | `PORTAL_HOST` | `0.0.0.0` | Bind address. |
 | `PORTAL_PORT` | `3000` | Port. |
+| `PORTAL_TRUST_PROXY` | `false` | `true` behind a reverse proxy: the sign-in rate limit uses the last `X-Forwarded-For` address. Only when the portal is reachable through the proxy alone. |
 | `PORTAL_DATA_DIR` | `.data` (repo root) | Where the portal keeps its database (`portal.db`), backups and workspace creates in progress. Mode 0700. |
 | `PORTAL_SECRET_KEY_FILE` / `PORTAL_SECRET_KEY` | none | Encrypts stored secrets: 32 random bytes, base64url. Easiest: leave the file empty and choose **Set up encryption** on the Access page; the portal writes the key there (never overwriting one) and shows it once. Without a key file the key lives in memory and you **Unlock** after restarts. Keep an offline copy: without it stored secrets can't be read. In the devcontainer the file is on the `claudepilot-portal-secrets` volume. |
 
@@ -213,6 +235,11 @@ column. On start the portal checks its own state and reports it on the Access pa
   is delivered. The portal never makes up a new key.
 - **Frozen**: the database is damaged, from a newer portal, or was just restored. Nothing is delivered
   until the cause is fixed or, after a restore, an admin chooses **Resume delivery**.
+
+**Upgrading from an older build.** A database written by the older build, whose pool migrations were numbered 9-12, starts Frozen with
+`migration 13 (secret values): table secret_values already exists`, and the reason names the repair: on a copy, with the portal stopped,
+run `UPDATE portal_meta SET value='[1,2,3,4,5,6,7,8,12,13,14,15]' WHERE key='migrations_applied'; PRAGMA user_version=15;` and start again;
+the next start applies the migrations it was missing. The portal never repairs it by itself: it does not guess about data it cannot account for.
 
 Backups go to `$PORTAL_DATA_DIR/backups`: before each migration (last 3 kept) and daily (last 7 kept),
 each a single file with secrets still encrypted. The `portal` CLI handles the rest:

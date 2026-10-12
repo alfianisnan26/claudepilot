@@ -1,7 +1,7 @@
 import { cn, Segmented, useTheme, type ThemeChoice } from '@isnanme/ui';
 import { LogOut, ShieldCheck } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 const THEMES: { value: ThemeChoice; label: string }[] = [
   { value: 'system', label: 'Auto' },
@@ -16,18 +16,31 @@ const THEMES: { value: ThemeChoice; label: string }[] = [
 export function AccountMenu({ variant = 'avatar', onLogout }: { variant?: 'avatar' | 'row'; onLogout: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const panelId = useId();
   const { theme, setTheme } = useTheme();
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    // Escape closes and hands focus back to the button that opened it.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      trigger.current?.focus();
+    };
     document.addEventListener('pointerdown', onDown);
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('pointerdown', onDown);
       document.removeEventListener('keydown', onKey);
     };
+  }, [open]);
+
+  // Opening by keyboard moves focus into the panel, so Tab continues through its controls.
+  useEffect(() => {
+    if (open) panel.current?.focus({ preventScroll: true });
   }, [open]);
 
   const avatar = (
@@ -42,16 +55,19 @@ export function AccountMenu({ variant = 'avatar', onLogout }: { variant?: 'avata
   return (
     <div ref={ref} className="relative">
       <button
+        ref={trigger}
         type="button"
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
         aria-label="Account menu"
         onClick={() => setOpen((v) => !v)}
         className={cn(
           'press',
           variant === 'row'
             ? 'flex w-full items-center justify-center gap-3 rounded-2xl p-1 text-left hover:bg-surface-2 lg:justify-start lg:p-2'
-            : 'rounded-full hover:opacity-80',
+            : // 36 px to look at, 44 px to tap (the padding is taken back with the margin, so nothing moves).
+              '-m-1 rounded-full p-1 hover:opacity-80',
         )}
       >
         {avatar}
@@ -65,13 +81,18 @@ export function AccountMenu({ variant = 'avatar', onLogout }: { variant?: 'avata
       <AnimatePresence>
         {open && (
           <motion.div
-            role="menu"
+            ref={panel}
+            id={panelId}
+            // Not a menu: it holds text and a theme choice as well as the sign-out button.
+            role="dialog"
+            aria-label="Account"
+            tabIndex={-1}
             initial={{ opacity: 0, scale: 0.95, y: -4 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.1 } }}
             transition={{ duration: 0.14 }}
             className={cn(
-              'absolute z-40 w-64 rounded-2xl border border-line bg-surface p-1.5 shadow-lift',
+              'absolute z-40 w-64 rounded-2xl border border-line bg-surface p-1.5 shadow-lift outline-none',
               variant === 'row' ? 'bottom-full left-0 mb-2 origin-bottom-left' : 'right-0 mt-2 origin-top-right',
             )}
           >
@@ -89,7 +110,6 @@ export function AccountMenu({ variant = 'avatar', onLogout }: { variant?: 'avata
             <div className="my-1 h-px bg-line" />
             <button
               type="button"
-              role="menuitem"
               onClick={() => (setOpen(false), onLogout())}
               className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm font-medium text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink"
             >

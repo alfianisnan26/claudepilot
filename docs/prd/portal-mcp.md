@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.5.** Written from research on the MCP 2026-07-28 spec, the TypeScript SDK v2, Anthropic's connector and Claude Code docs, and this codebase, then revised after review. Items marked 🔬 need a live check against claude.ai, Claude Code or Cloudflare before they become acceptance criteria. |
+| Status | **v0.6, partly built** (2026-10-12). Built and checked with Claude Code 2.1.296: the `/mcp` endpoint on SDK v2, admin tokens and per-session agent tokens (§12.6), audit, rate limits, the sanitizer, the tool registry, 35 tools, resources and prompts, and Access → MCP (§13.5, §15). **Not built:** OAuth and the claude.ai connector (MCP4), the public listener, secret links, settings and event tools, the relaxation guard, elicitation (§18). Written from research on the MCP 2026-07-28 spec, the TypeScript SDK v2, Anthropic's connector and Claude Code docs, and this codebase, then revised after review. Items marked 🔬 need a live check against claude.ai, Claude Code or Cloudflare before they become acceptance criteria. |
 | Owner | Alfian Isnan |
-| Last updated | 2026-10-10 |
+| Last updated | 2026-10-12 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, encryption, event log, delivery). Each tool group also needs its feature's service: [Account Pool](account-pool.md), [Settings & policies](settings-policies.md), [Monitoring dashboard](monitoring-dashboard.md), [Chat sessions](chat-sessions.md). |
 | Related | [Skillset pool](skillset-pool.md), [MCP set pool](mcpset-pool.md), [Persona pool](persona-pool.md), [Secrets & env pool](secrets-env-pool.md), [Browser & desktop pool](browser-desktop-pool.md) (planned) |
 
@@ -21,6 +21,10 @@ the portal. Tokens carry one of three scopes (read, operate, admin), and every a
 audited. Secrets never pass through chat, destructive actions are confirmed, changes that relax
 security are refused, workspace text is treated as untrusted, and steering agents stays off until an
 admin turns it on. Reachability: §11.3.
+
+Agents inside a workspace use a narrow part of the same endpoint (tickets, proposals for review, who-am-I)
+with a token minted for one chat session (§12.6): the owner asked for "internal mcp access", and this is
+the one place a portal token enters a workspace.
 
 ## 2. Background and problem
 
@@ -188,6 +192,13 @@ Pending authorization requests (10 minutes) and codes (60 seconds) live in memor
 mid-sign-in means signing in again. Grants, refresh tokens, PATs and the sign-in switch survive
 restarts. A daily job deletes expired rows and audit past retention; size caps prune oldest first.
 
+**As built (v0.6).** The tables are `pmcp_settings` (enabled, session control, confirm-above, retention),
+`pmcp_tokens` (admin tokens `cpat_`: SHA-256, scope, expiry, last used), `pmcp_agent_tokens` (per-session
+tokens `cpst_`, §12.6: hash, workspace, session, expiry, revoke reason), `pmcp_agent_access` (the
+per-workspace opt-in), `pmcp_audit` (the row above plus `actor`: `session:<id>` or `portal-mcp:<token id>`)
+and `pmcp_auth_events`. Confirmations (`cfm_`, single use, 5 minutes) are in memory, hashed: a restart just
+asks again. `oauth_*`, `secret_links` and `mcp_confirmations` do not exist. Migrations 40 to 45.
+
 ## 10. Delivery into Claude Code
 
 ### 10.1 Into workspaces: keep the admin tools out
@@ -208,7 +219,7 @@ signed in with the account that holds the portal connector would give its agent 
 | Status | Blocked, Pending, or Not protected with the reason: a Kubernetes workspace awaiting "Enable pools", a recorded `claude_version` (foundation §9) below 2.1.273, or a failed, Locked or Frozen delivery. Workspaces with a delivered account pool never show Not protected. Connect → claude.ai stays disabled while any workspace is Pending. An own-login workspace that gets the entry after the connector exists (a repaired delivery, a new URL) lists its earlier sessions under "Restart these sessions". |
 | Detection | [Monitoring](monitoring-dashboard.md)'s MCP hooks (its FR16) see every tool name. A portal tool called through a claude.ai connector (`mcp__claude_ai_<name>__<portal tool>`, 🔬 Q15) raises a High security event, "Portal connector used in a workspace". |
 | Plan B | If Q8 shows the entry doesn't hold, own-login workspaces get `disableClaudeAiConnectors: true`, which also applies from any admin source, with a per-workspace opt-out, since it drops the user's own connectors too. |
-| Never delivered | A portal token: the compiler rejects any fragment containing `cpat_`, `cpoa_` or `cpor_`. The MCP set catalog refuses URLs under `PORTAL_PUBLIC_URL` ([MCP set pool](mcpset-pool.md)). |
+| Never delivered | An admin's or OAuth token: the compiler rejects any fragment containing `cpat_`, `cpoa_`, `cpor_` or `cpst_`. The MCP set catalog refuses URLs under `PORTAL_PUBLIC_URL` ([MCP set pool](mcpset-pool.md)). The one token that does enter a workspace is the per-session agent token `cpst_`, only in the environment of that session's Claude Code process, never in a file, a fragment or a pool (§12.6). |
 
 ### 10.2 Into the admin's own Claude Code
 
@@ -379,6 +390,26 @@ the SDK only verifies tokens (`requireBearerAuth`).
 - The consent page puts the 8-character code (about 40 bits) on a public page. Rate limits make
   guessing impractical (§14.5), and Cloudflare Access is the recommended second factor (Q3).
 
+### 12.6 Agent tokens (`cpst_`): the portal's tools for agents inside a workspace
+
+The owner asked for "internal mcp access". §10.1's rule that no portal token enters a workspace stays true
+for every admin class; this is a new class with its own limits (decision 2026-10-12, interface I8). It is
+also the one exception to the ground rule "workspaces never call back to the portal": the delivery engine
+still only pushes, and the agent pulls tickets and posts proposals.
+
+| Aspect | Requirement |
+| --- | --- |
+| Token | `cpst_` plus 43 base64url characters, SHA-256 at rest in `pmcp_agent_tokens`, minted when a chat session starts (`AgentAccess.mint({workspaceId, sessionId})`), bound to that workspace and session. One live token per session: a new mint (a Claude switch) revokes the old one. It expires after 7 days, a ceiling for a session that outlives it. |
+| Delivery | Only in the environment of that session's Claude Code process: `PILOT_MCP_TOKEN`, `PILOT_SESSION_ID`, `PILOT_WORKSPACE_ID`, `PILOT_MCP_URL`; and `--mcp-config` with a JSON that names `${PILOT_MCP_URL}` and `${PILOT_MCP_TOKEN}` and holds no secret. Never a file. Checked with Claude Code 2.1.296 inside a Docker workspace: the expansion works in the url and the Authorization header, and the token is not blanked. |
+| Opt-in | Per workspace, off by default (Access → MCP → Agents). Off: `mint` returns null and the session starts without portal tools. Turning it off revokes the workspace's live tokens. |
+| Identity | The workspace and session of every call come from the token, never from arguments or headers: a tool sees `ctx.workspaceId`, `ctx.sessionId` and `ctx.actor` (`session:<id>`). Liveness is checked on every call: a session that ended, was archived or deleted, or moved to another Claude has no valid token (the portal revokes on those events and the check catches the rest). The client sees 401. |
+| Scope `agent` | A tool opts in with `scope: 'agent'` (older code: `audience: 'both'`). An agent sees and can call only those; they can never be destructive (refused when registered), never approve, publish or deliver anything (they propose), and act only in their own workspace and session. An admin's token reaches them too, at `read` for a read-only tool and `operate` otherwise. |
+| Limits | Per token: 60 reads and 20 writes a minute; proposal tools add `rate: { perHour }` and a size cap (`mcp_propose_entry`: 10 an hour, 16 KB); arguments over 32 KB are refused; a secret-shaped value in an argument is refused; every call is audited with its actor. |
+| URL | The address of the portal as the workspace reaches it: `PORTAL_INTERNAL_URL` when set (always for Kubernetes); otherwise from the workspace's default gateway (Docker) or 127.0.0.1 (the portal's own machine). The portal listens beyond loopback for this (`PORTAL_HOST`). |
+| Tests | The authorization matrix: a token after its session ended, of another workspace or session, on an operate or admin tool, on the admin endpoint, and arguments that claim another identity; and the agent surface of the real tool set (`portalmcp.test.ts`, `agentScope.test.ts`, `tools.test.ts`). |
+
+Checked end to end with the chat launch (mint at every launch, resume, wake and move; the environment on the process's stdin; `--mcp-config` from the grant): a session started from a ticket reached the ticket tools with its own token (Tickets §14, T2). Two results. In Manual mode the first call of each portal tool asks for an approval; the tools are scoped, rate limited and never destructive, so allowing `mcp__pilot__*` for a session that has a grant is an option for the chat launch (open). And with `mcp.poolOnly` on, the allowlist delivered into the workspace names exactly the URL the session uses (`agentMatchers`), and a new session still connected.
+
 ## 13. Tool catalog
 
 Hints: **R** readOnly, **D** destructive, **I** idempotent, **O** openWorld. A missing letter means
@@ -485,6 +516,36 @@ Code as `/pilot:fleet_status`.
 | Images and files, ultracode, and resuming, renaming, archiving or deleting chat sessions ([Chat sessions](chat-sessions.md) FR4) | Later |
 | Opening a terminal | No shell over MCP; results link to the terminal |
 
+### 13.5 As built (v0.6)
+
+**35 tools**, 4 resources and 2 prompts (tickets add 8 tools: [Tickets](tickets.md) §12): portal 3 (`portal_status`, `audit_search`,
+`mcp_lockdown`), workspaces 7 (`workspace_list`, `_get`, `_create`, `_start`, `_stop`, `_sync`, `_delete`),
+sessions 8 (`session_list`, `_get`, `_interrupt`, `_end`, and behind the switch `_start`, `_send`, `_respond`,
+`_configure`), pools 8 (`pool_types`, `_list`, `_get`, `_create`, `_update`, `_delete`, `_assign`,
+`_unassign`), accounts 4 (`account_pool_list`, `account_list`, `account_check`, `account_pool_assign`),
+monitoring 2 (`monitor_overview`, `usage_report`) and the catalog 3 (`mcp_propose_entry`,
+`mcp_proposal_withdraw`, `mcp_catalog_list`: interface I3, scope `agent`, §12.6). Where the tables above
+and the code differ, the code is what ships:
+
+- `pool_*` cover the types that exist (skillset, MCP set). **Secrets pools are read-only over MCP**: a write
+  answers `UI_ONLY` (Q13 decided). Persona and browser pools are not listed until their services are in.
+- Not built: `settings_get`, `settings_update`, `event_search`, `account_pool_update`, `account_update`,
+  `account_delete`, `secret_link_create` and the relaxation guard (FR13): their services, or the Settings
+  PRD, are not in yet. `workspace_get` takes `include` of `usage`, `sessions`, `claudes` and `pools`
+  (not `configuration` or `files`) and has no `wait_seconds`; `session_get` has it.
+- `workspace_create` takes `account_pool` and `pools` by id or exact name and resolves them before it
+  creates anything; there is no 10-minute repeat rule, a name that exists is refused by the workspace service.
+- `session_respond` takes `decision` only (`allow` needs admin and a confirmation); `answer` and `mode` are not built.
+- **Resources and prompts are built** for an admin's token (an agent's gets tools only): `pilot://status`,
+  `pilot://workspaces/{target}/{name}`, `pilot://pools/{id}` and `pilot://tickets/{id}` (JSON, read scope), and
+  the prompts `fleet_status` and `workspace_triage` (its `workspace_id` is checked against an id pattern, so an
+  argument can't write the prompt). A resource is a view over a read tool, run as the caller, so it has the same
+  scope check, limits, redaction, untrusted-text labels and audit row (the row names the tool behind it); the
+  lists name ids and fixed words only, never a ticket's own words. Checked with Claude Code 2.1.296: it lists
+  both and runs `/mcp__pilot__workspace_triage docker/api`; resources are tested with the official client in
+  both protocol eras (the `@` mention itself is interactive and not exercised). No subscriptions.
+- Not built: elicitation. Confirmation is the server's `confirm_token`.
+
 ## 14. Safety mechanics
 
 ### 14.1 Confirming destructive actions
@@ -565,6 +626,28 @@ The global limit lets anyone keep new consents and secret entry closed; Cloudfla
 the way out of a sustained lockout. After sign-in, limits are tool errors rather than HTTP 429,
 because Anthropic lists 403 and 429 responses at the edge as a cause of failed connections.
 
+### 14.6 A token inside a workspace
+
+Assume the `cpst_` token of a session is known to whatever that session reads or runs: agents have
+passwordless `sudo`, and text from a web page, a repository or a ticket can steer them. What limits the damage:
+
+- **Narrow reach.** Only `agent` tools: tickets in its own workspace and the shared queue, catalog proposals,
+  who-am-I. No workspace, pool, account, setting or session tool, and nothing destructive.
+- **Short life.** It dies with its session and with the workspace's opt-in, and lasts 7 days at most.
+- **Rate and size.** §12.6's limits stop a looping or injected agent filling queues: 50 tickets an hour per
+  session, 200 open agent tickets per workspace, 10 proposals an hour, 16 KB a proposal.
+- **A person decides.** A proposal is a draft that waits for review; nothing an agent can call approves,
+  publishes or delivers (a test lists every agent tool). Text an agent wrote is labelled untrusted wherever it is
+  shown, and starting a session from its ticket shows the opening message first.
+- **No cross-talk.** A token never works for another session or workspace; an agent changes only tickets
+  assigned to its own session, or ones it made and nobody holds.
+- **Audit and redaction.** Every call is audited with `session:<id>`; the portal's own results and logs mask
+  `cpst_` shapes, and the chat redactor is to as well (asked of Chat sessions, not in yet); the token is in
+  the process environment, not its arguments.
+
+Accepted: the token is readable by its own session's process and what it spawns (it is that session's own
+credential), and an injected agent can still make noise inside the limits above and comment on its own tickets.
+
 ## 15. User experience
 
 Existing components only (PageHeader, PageTabs, Section, Card, Badge, Menu, FormDialog,
@@ -613,6 +696,15 @@ components:
 machine" (FR11). The shared **event log** shows MCP changes as "via MCP · claude.ai connection" and
 filters by actor.
 
+**As built (v0.6), text diet.** Rule 12 (the owner: less text, fewer components, long text into ⓘ notes)
+supersedes this section's copy. Access → MCP is one tab: the **MCP** row with its switch and one ⓘ, and the
+URL (copy) while it is on; **Tokens** (New; each row: label, scope, expiry, last used, Revoke; Revoke all);
+**Agents** (a switch per workspace, "Agent access to portal tools", off by default; turning one off asks);
+**Activity** (the last 10 calls); and **More** with the session-control switch (turning it on asks) and the
+tool counts. New token: label, scope with one line under it, expiry; then the token once, with the Claude
+Code command (Other ways: the helper variant, curl). The claude.ai steps, Connections, the public pages and
+the advanced settings belong to MCP4 and are not built.
+
 ## 16. Security requirements
 
 - Tokens, codes and confirm tokens are compared in constant time. Every OAuth and `/connect/*`
@@ -657,6 +749,25 @@ filters by actor.
 | MCP4 | OAuth server, consent page, connections, tunnel guide, deny entry and its status in every workspace | 🔬 claude.ai connects end to end through a Cloudflare Tunnel with the `claude-ai` client; deny entry verified in an own-login workspace (Q8); foundation F2 and F3 |
 | MCP5 | Pool, account pool, account, secret-link, settings, event and monitoring tools; relaxation guard; review gate; persona draft rules | Each feature's service; foundation F4 (event log); guard and review-gate tests pass |
 | MCP6 | Session tools behind the session-control switch, resources, prompts, elicitation confirmation | Chat sessions C1 and C2; injection tests on session text |
+
+**Status (2026-10-12).**
+
+- **MCP1** partly: the audit tables and persisted settings are built. `PORTAL_PUBLIC_URL`, the public
+  listener, the Host gate and the persisted server code are not; `/mcp` is on the portal's own origin, with
+  an Origin check (`PORTAL_MCP_ORIGINS` adds origins).
+- **MCP2** built. Checked with the official TypeScript client in both protocol eras and Claude Code 2.1.296
+  (host and inside a Docker workspace); MCP Inspector not run. Injection tests on runtime text pass.
+- **MCP3** built: workspace write tools, `mcp_lockdown`, confirmation, rate limits, `session_get` long-poll;
+  progress is best effort. The destructive-action matrix and canary-key tests are in `portalmcp.test.ts` and
+  `tools.test.ts`; canaries per pool type are not (a secrets pool's values are never returned).
+- **MCP4** not built (OAuth, consent, connections, tunnel guide, the deny entry's status).
+- **MCP5** partly: pool, account-pool and account tools as in §13.5; the review gate is the pool service's
+  (`waiting_review`). Not built: secret links, settings and event tools, the relaxation guard, persona drafts.
+- **MCP6** built except elicitation: session tools behind the switch, resources and prompts (§13.5).
+- **MCP7** (added): agent tokens and the `agent` scope (§12.6), the tool registry other areas register
+  through (interface I2), `mcp_propose_entry` (I3), and [Tickets](tickets.md).
+- The SDK is pinned by the lockfile (`@modelcontextprotocol/server` and `/client` 2.3.1, zod 4); `package.json`
+  keeps the caret, so a deliberate upgrade needs the conformance tests (§16).
 
 ## 19. Success metrics
 
@@ -703,8 +814,8 @@ refused relaxations to the Security feed. [Chat sessions](chat-sessions.md) A10 
 | Q8 | 🔬 On the pinned Claude Code version, does the deny entry block the synced connector in an own-login workspace (the docs say it does), and does a running session drop it when the entry arrives, or keep it until reconnect or restart? If it doesn't hold, Plan B (§10.1). | Sandbox test |
 | Q9 | ✅ Resolved: session tools ship behind "Allow session control over MCP", off by default, with steering in admin scope (§13.3). | |
 | Q10 | Are 90 days of call audit and 365 days of auth events, capped at 512 MB and 64 MB in SQLite, enough? | Operator |
-| Q11 | 🔬 Do the SDK v2 types build with the repo's TypeScript 5.9, or does the server move to TypeScript 6? | Engineering |
+| Q11 | ✅ Resolved: SDK v2 (2.3.1) with zod 4 builds with the repo's TypeScript 5.9.3; the typecheck is clean. | |
 | Q12 | 🔬 Which Bot Fight Mode option does the zone use (§11.3), and do a cloudflared ingress with path rules, the catch-all 404 and SSE keep-alives work end to end with claude.ai? | Live test, Operator |
-| Q13 | Should pools with secrets be creatable over MCP at all (through secret links), or stay UI-only? | Product |
+| Q13 | ✅ Decided for now: secrets pools stay UI-only; over MCP they are read-only (`UI_ONLY` on writes). Secret links are not built. | |
 | Q14 | Is an inline MCP App status card (Claude web and Desktop) wanted later? | Product |
 | Q15 | 🔬 Which tool names does Claude Code give a claude.ai connector? This session shows `mcp__claude_ai_<name>__<tool>`; Monitoring's detection (§10.1) matches on it. | Sandbox test |

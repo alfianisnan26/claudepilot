@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.6** (consistency pass: session-start record, hooks, model variables, MCP tool names and Chat sessions references aligned). Written from research on the Claude Code 2.1.296 and Agent SDK docs. ✅ marks come from the cross-pool lab (print mode); no persona delivery is sandbox-verified yet. Items marked 🔬 need a sandbox check before anything is built on them. |
+| Status | **Draft v0.8.** v0.8 records what was built and run. **P1 and P2 are built on Docker**, with **instruction contexts** (A9), the history and diff part of **P3**, and **persona identity and agent self-edit** (A10, interface I11: a name, an avatar, and proposals from the agent that a person reviews). ✅ = observed on Claude Code 2.1.296 in a workspace container against a scripted stand-in for the Anthropic API, through the delivery engine and, for A10, the portal's own MCP endpoint (`apps/server/src/personas/*.integration.test.ts`, `CLAUDEPILOT_DOCKER_TESTS=1`): print mode, a long-lived stream-json session (what a chat session is), `--resume` and a terminal (§11). Not built: P4, most of P5, P6, Kubernetes delivery, the policy and endpoint checks (A7), archiving, session reports. Items marked 🔬 still need a sandbox check. |
 | Owner | Alfian Isnan |
-| Last updated | 2026-10-10 |
+| Last updated | 2026-10-12 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, revisions, delivery engine, outbox); [Chat sessions](chat-sessions.md) (session runner, for the chat prompt and test prompts only) |
 | Related | [Settings & policies](settings-policies.md) (permissions, allowed models, effort cap), [Account Pool](account-pool.md) (model names per endpoint), [Monitoring dashboard](monitoring-dashboard.md) (session-start hook), [Portal MCP server](portal-mcp.md), [Skillset pool](skillset-pool.md), [MCP set pool](mcpset-pool.md), [Secrets & env](secrets-env-pool.md) |
 
@@ -12,7 +12,10 @@
 
 A persona is a reusable bundle of what Claude is told and how a session starts: instructions,
 output styles, subagents, a default model and effort, and a prompt for portal-run chat sessions.
-Admins write and version personas in the portal and assign one to each workspace.
+Admins write and version personas in the portal and assign one to each workspace. A persona also has a
+name and an avatar, and the Claude in a workspace may propose changes to its own persona, which a person
+approves (§22). Reusable pieces of instructions, **contexts**, can be assigned on their own or held by
+personas (§12.4).
 
 Every part reaches Claude Code through files it reads itself: the managed CLAUDE.md, managed style
 and subagent files, managed settings keys and, for portal chat sessions, a prompt file the runner
@@ -73,6 +76,9 @@ session starts, so the portal shows when each applies and which sessions run an 
 | US8 | As a chat user, new conversations get the persona's chat prompt. A conversation I resume keeps the prompt it started with until it's compacted. |
 | US9 | As an admin, after publishing I see which sessions started on an older revision, and know they pick up the change when restarted. |
 | US10 | As a workspace user, I can see which persona and revision my workspace runs, read-only. |
+| US11 | As an admin, I keep our coding standard in one context and put it in every workspace and in several personas, and an edit reaches them all, running sessions included. |
+| US12 | As an admin, I give a persona a name and an avatar, and see them wherever a session of that persona shows. |
+| US13 | As an admin, I let the Claude in a workspace propose a new name, an avatar or a change to its instructions, and approve or reject each with one tap; instructions never apply by themselves. |
 
 ## 6. Scope boundary: persona vs Settings & policies
 
@@ -87,8 +93,8 @@ session starts, so the portal shows when each applies and which sessions run an 
    system prompt ([memory](https://code.claude.com/docs/en/memory)). Whatever must not happen is a
    Settings & policies rule, and the editor says so next to the instructions field. Managed files
    aren't a lock either: users have `sudo`, and the reconciler repairs what they change.
-2. **A persona can't widen access.** It writes no `permissions.*`, `sandbox.*`, MCP, skill, `env` or
-   `agent` keys, and its subagents never carry `permissionMode`, `hooks`, `mcpServers` or `skills`.
+2. **A persona can't widen access.** It writes no `permissions.*`, `sandbox.*`, MCP, skill or `agent` keys and
+   no `env` but its own change stamp, `CLAUDEPILOT_PERSONA` (§10.1), and its subagents never carry `permissionMode`, `hooks`, `mcpServers` or `skills`.
    The foundation's ownership check ([§7](foundation-pools.md)) rejects anything else.
 3. **Policy wins conflicts, visibly.** Outside the workspace's `availableModels`, the persona model
    is left out and a subagent `model` becomes `inherit`, each with a warning. Effort above
@@ -165,6 +171,18 @@ foundation delivers them (§10), and hooks report each session's revision (§11)
 - **FR15** Session reports: the revision each session started on and the instruction files it
   loaded (§11), shown per workspace as "Sessions (24 h): 3 on r4, 1 on r3 · 1 resumed on r3".
 
+### Contexts and identity
+
+- **FR16** Instruction contexts (§12.4): a named, versioned Markdown piece (up to 20 KB), delivered as a managed
+  rule file; several per workspace, held by personas (up to 10), saved as drafts, published like a persona.
+- **FR17** A persona has an avatar (a PNG, JPEG or WebP, re-encoded; none is valid) and a name (the pool's),
+  shown by one component wherever a session, a list or a ticket shows its persona (§22). One persona can be the
+  default for new workspaces.
+- **FR18** Agents' proposals (§22): the Claude in a workspace may propose a name, an avatar and edits to the
+  instructions of its own persona, only while the portal's `agents.selfEdit` setting and the persona's own switch
+  are on. A person approves or rejects each. A name or an avatar may auto-approve on the persona's switch;
+  instructions never do.
+
 ## 9. Data model
 
 Stored with the foundation's `pools` (type `persona`), `pool_revisions` and `assignments`. Personas
@@ -188,7 +206,15 @@ delivered until it unlocks (foundation §6.5). Content:
 | `persona_test_runs` | id, test_id, prompt_id, chat_session_id, with_chat_prompt, started_at, finished_at, status, model, input_tokens, output_tokens, cost_usd (null when unknown), files_loaded (json), error (redacted). The response lives in Chat sessions (its §9). Rows kept 14 days. |
 | `persona_sessions` | workspace_id, session_id, pool_id, revision (from the start record only), source (`startup`, `resume`, …), started_at, last_compact_at, instruction_files (json: memory type, path, load reason). Rows kept 30 days. |
 
-`pools.default_for_new` and `pools.archived_at` come from A5. Retention is edited in
+What belongs to a persona as a whole and not to one revision (A10, migration 70; none of it is delivered):
+
+| Table | Key fields |
+| --- | --- |
+| `persona_meta` | pool_id, avatar (sha256), agents_may_propose, auto_approve_cosmetic, is_default (at most one), updated_at. Gone with the pool. |
+| `persona_avatars` | sha256, png, size, created_at. The PNG the portal re-encoded, at most 256 KB; collected once no persona and no recent proposal refers to it. |
+| `persona_proposals` | id, pool_id, kind (`name`, `avatar`, `instructions`), status (`pending`, `approved`, `rejected`, `stale`), actor (`session:<id>`), workspace_id, session_id, reason, payload (json), fingerprint, base_revision, created_at, decided_at, decided_by (`Admin` or `auto`). |
+
+`is_default` is A5's `default_for_new`, kept here; `pools.archived_at` is not built. Retention is edited in
 [Settings & policies](settings-policies.md) §11.4 (§20).
 
 ## 10. Delivery into Claude Code
@@ -198,7 +224,8 @@ delivered until it unlocks (foundation §6.5). Content:
 | Path in the workspace | Content |
 | --- | --- |
 | `/etc/claude-code/CLAUDE.md` | The instructions. The documented managed CLAUDE.md: it loads first, and `claudeMdExcludes` can't exclude it ([memory](https://code.claude.com/docs/en/memory)). Absent when empty. |
-| `/etc/claude-code/managed-settings.d/50-claudepilot-persona.json` | Only the keys the persona sets: `outputStyle` (default style), `model`, `effortLevel`, `pluginConfigs` for instruction sources (§12.2), and a `hooks.InstructionsLoaded` entry (plus a `hooks.SessionStart` entry until A6 lands, §11) running `/etc/claudepilot/bin/persona-event` with `async: true`, as Monitoring does for its hooks (its §10.1). |
+| `/etc/claude-code/managed-settings.d/50-claudepilot-persona.json` | Only the keys the persona sets: `outputStyle` (default style), `model`, `effortLevel`, `pluginConfigs` for instruction sources (§12.2), and a `hooks.InstructionsLoaded` entry (plus a `hooks.SessionStart` entry until A6 lands, §11) running `/etc/claudepilot/bin/persona-event` with `async: true`, as Monitoring does for its hooks (its §10.1). Whenever the persona delivers anything it also carries `env.CLAUDEPILOT_PERSONA`, a hash of everything it writes (the stamp, below). An empty persona writes no drop-in. |
+| `/etc/claude-code/.claude/rules/cpx-<name>.md` and `managed-settings.d/55-claudepilot-context.json` | The instruction contexts a workspace gets (§12.4), written by the `context` owner: one rule file each, and a drop-in that holds only `env.CLAUDEPILOT_CONTEXT`, the same kind of stamp. Absent without contexts. |
 | `/etc/claude-code/.claude/output-styles/<name>.md` | One per style. Frontmatter `name` (equal to the file name, so selection matches either way), `description`, `keep-coding-instructions`; then the body. |
 | `/etc/claude-code/.claude/agents/<name>.md` | One per subagent. Frontmatter `name`, `description`, `model`, `effort`, `maxTurns`, and `tools` and `disallowedTools` only when non-empty (left out, a subagent inherits every tool); the prompt is the body. |
 | `/etc/claudepilot/persona/chat-prompt.md` | The chat prompt, read by the session runner (§10.3). Absent when empty. |
@@ -206,6 +233,12 @@ delivered until it unlocks (foundation §6.5). Content:
 
 Files are mode `0644`: root-owned on Docker, group-owned through `fsGroup` on Kubernetes
 (foundation §6.2).
+
+**The stamp.** ✅ A running Claude Code session re-reads the managed instruction files (the managed
+CLAUDE.md and the managed rules) when a drop-in in `managed-settings.d` changes, and only then: a file
+edited on its own is never seen until the next session. A drop-in that delivers instructions therefore
+also carries a stamp, so it changes whenever the text does (§11). The stamp hashes the delivered paths and
+contents, never the time, so equal content gives an equal desired hash and nothing is written twice.
 
 Why each choice:
 
@@ -230,11 +263,16 @@ Why each choice:
 
 1. Instructions, style and subagent files go before the drop-in that names the default style; when
    removing, the drop-in goes first (foundation §6.4).
-2. The managed `agents` and `output-styles` folders always exist, even empty (A4): Claude Code
-   watches an agents folder only if it existed at session start. `output-styles` is created for
-   consistency; terminals read styles only at startup.
-3. A compiled persona is capped at 256 KB, well under the 1 MiB Secret all pools share.
-4. Every part is documented for 2.1.296, the foundation's minimum (its §9), so supported workspaces
+2. The managed folders exist before any session starts (A4): `managed-settings.d`, `agents`,
+   `output-styles` and `rules`, even empty. ✅ A session that started when `/etc/claude-code` didn't
+   exist never saw the persona delivered afterwards (two messages checked), while one that started with
+   an empty `managed-settings.d` picked it up 2 to 4 s after delivery (§11). The image creates the
+   folders, and the foundation creates them with the first delivery to an older workspace.
+3. A stopped workspace is left with empty files in place of removed ones until its next start
+   (foundation §6.2). ✅ Claude Code 2.1.296 starts normally, and tells nothing, with empty drop-ins, an
+   empty managed CLAUDE.md and empty rule, subagent and output-style files.
+4. A compiled persona is capped at 256 KB, well under the 1 MiB Secret all pools share.
+5. Every part is documented for 2.1.296, the foundation's minimum (its §9), so supported workspaces
    get all of it. The version stays a compile input: an update recompiles at the next reconcile.
 
 | Part | First version | Below it |
@@ -256,6 +294,10 @@ project and local settings by default, so the runner adds only:
 | Model and effort | `--model` and `--effort` only when the user picked them. The picker starts at the persona default and shows any policy clamp. |
 | Revision | Recorded in the session's `meta.json` and `chat_sessions.launch` (Chat sessions §9) |
 
+- ✅ `--append-system-prompt-file <file>` appends the file's text at the end of the system prompt in a `-p` run
+  (2.1.296), next to a persona's managed files. Chat sessions' host (`cp-session`) adds the flag at every start,
+  resume, wake and move when the file exists (✅ checked by that area with a real Claude Code: the text was in the
+  system prompt). The editor has a "Chat prompt" field.
 - Terminal sessions never get the chat prompt. The runner never passes `--bare` or
   `--system-prompt`, which would drop or replace persona parts.
 - Sessions sleep after 30 idle minutes and resume on the next message (Chat sessions FR38), so most
@@ -270,9 +312,11 @@ project and local settings by default, so the runner adds only:
 
 1. **Delivery** follows foundation §6.6 ("Enable pools" once on Kubernetes). The first delivery
    creates the managed folders (A4).
-2. **Running sessions** never see a new assignment. The Persona row lists sessions that started
-   before it, from session reports and [Monitoring](monitoring-dashboard.md) ("2 sessions started
-   before this persona; restart them to apply it").
+2. **Running sessions** that started with the managed folders in place get the persona's instructions
+   at their next message (§11); the style, subagents, model and effort wait for a new session. The
+   Persona row lists sessions that started before it, from session reports and
+   [Monitoring](monitoring-dashboard.md) ("2 sessions started before this persona; restart them to
+   apply it"; not built).
 3. **Duplicate text.** Role text users pasted into `~/.claude/CLAUDE.md` (§2) loads twice once a
    persona carries it. The workspace preview flags paragraphs that appear in both.
 4. **Import from workspace** seeds a draft from `~/.claude/CLAUDE.md`, `~/.claude/agents/*.md` and
@@ -280,19 +324,29 @@ project and local settings by default, so the runner adds only:
 
 ## 11. When changes take effect
 
+✅ Observed on Claude Code 2.1.296 in a workspace container, with the delivery engine writing the files and
+a scripted stand-in for the Anthropic API recording each request (`personas/claude.integration.test.ts`).
+"Running session" is a long-lived `claude -p --input-format stream-json` process, which is what a portal
+chat session is. A terminal (`claude` in tmux) was run for the instruction rows: it re-reads managed instruction
+files in the same way, and also notes "/etc/claude-code/CLAUDE.md changed on disk since you last read it".
+
 | Part | Running session | New session or conversation | Resumed conversation |
 | --- | --- | --- | --- |
-| Instructions (managed CLAUDE.md) | Not applied: CLAUDE.md loads at launch ([memory](https://code.claude.com/docs/en/memory)). 🔬 Q2 | Applied | 🔬 Q15 |
-| Instruction sources | Not applied: read at launch | Applied | 🔬 Q15 |
-| Default style (`outputStyle`) | From the next message, if that style's file was loaded when the session started ([output styles](https://code.claude.com/docs/en/output-styles)). That request is uncached. | Applied | 🔬 Q15 |
-| Style file content | Not applied: terminals read style files at startup | Applied | 🔬 Q15 |
-| Subagents | 🔬 Within seconds if Claude Code watches the managed agents folder (Q3); otherwise not applied ([subagents](https://code.claude.com/docs/en/sub-agents)) | Applied | 🔬 Q15 |
-| Default model and effort | Not applied: read once per session ([settings](https://code.claude.com/docs/en/settings)). Users switch with `/model` and `/effort`. | Applied | 🔬 Q15 |
-| Chat prompt | Not applied: recorded per conversation | Applied | Kept until compaction ([CLI reference](https://code.claude.com/docs/en/cli-reference)) |
+| Instructions (managed CLAUDE.md) and contexts (managed rules) | ✅ From the session's next message, 2 to 4 s after delivery: a changed drop-in makes Claude Code re-read them, and the message carries them as "Instruction files were re-read after the organization's managed settings changed; … each replaces its earlier copy". The stamp (§10.1) is what changes the drop-in. A file edited alone is never seen. | ✅ Applied | ✅ Applied: the resumed message carries the current files |
+| Removing them (unassign) | ✅ From the next message: "Instructions no longer present: /etc/claude-code/CLAUDE.md" and "The output style was reset to the default" | ✅ Gone | ✅ Gone |
+| Instruction sources | Not applied: read at launch (not built) | Applied | 🔬 |
+| Default style (`outputStyle`) | ✅ From the next message, if that style's file was there when the session started ("# Output Style: <name>" reminder). A style delivered later isn't. | ✅ Applied | ✅ Applied |
+| Style file content | ✅ Not applied | ✅ Applied | ✅ The resumed message carries the current style's text (checked with a changed default style) |
+| Subagents | ✅ Not applied: a new or an edited subagent file wasn't seen in the 6 to 8 s checked, in a folder that existed at start (answers Q3) | ✅ Applied | ✅ Applied |
+| Default model and effort | ✅ Not applied: read once per session. Users switch with `/model` and `/effort`. | ✅ Applied | ✅ A resumed process starts on the persona's current default, unless flags say otherwise |
+| Chat prompt (`--append-system-prompt-file`) | Not applied | ✅ Applied: the file's text ends the system prompt | 🔬 Q11: kept until compaction, per the docs |
 
 A resumed conversation is `claude --resume` in a terminal, or a chat session waking from its idle
-sleep (§10.3). Sessions started with `--bare` or `CLAUDE_CODE_SIMPLE` skip CLAUDE.md discovery
-and hooks, so they get little or none of the persona and report nothing (Unknown; 🔬 Monitoring Q4).
+sleep (§10.3). ✅ A session that started when `/etc/claude-code/managed-settings.d` did not exist never
+sees later deliveries (§10.2). Sessions started with `--bare` or `CLAUDE_CODE_SIMPLE` skip CLAUDE.md
+discovery and hooks, so they get little or none of the persona and report nothing (Unknown; 🔬 Monitoring Q4).
+The style body arrives as a system reminder at the start of the first message, and the system prompt's
+opening line then names the Output Style.
 
 **Session reports.** 🔬 Field names, load reasons and `source` values to confirm (Q7). Each session
 gets one start record with the manifest's persona revision, from A6's shared `session-event` or,
@@ -346,6 +400,31 @@ confirmation, and the workspace row shows a warning badge while it's on.
   receives the persona's instructions unless `omitClaudeMd` is set (Q8), which v1 doesn't expose.
 - A managed `outputStyle` outranks the `/output-style` choice kept in `.claude/settings.local.json`
   🔬 (Q4). Where users should choose, leave the default style empty.
+
+### 12.4 Instruction contexts (A9)
+
+A workspace has one persona, so a team that wants "our coding standard" in every workspace, and a persona on
+top of it, would paste the standard into every persona. A **context** is the missing piece: a named, versioned
+piece of Markdown instructions, up to 20 KB, in its own pool type (`context`, the Contexts tab). A workspace can
+have several, assigned on their own (create dialog Add-ons, the Configuration row, bulk assignment), and a
+persona can **hold** some (up to 10), which are delivered wherever it is.
+
+- **Delivery.** Each context is one managed rule file, `/etc/claude-code/.claude/rules/cpx-<name>.md`, written
+  by its own `context` owner, plus a drop-in `55-claudepilot-context.json` that holds only a stamp (§10.1).
+  ✅ Claude Code 2.1.296 loads it as "organization-managed policy instructions", right after the managed
+  CLAUDE.md and before the user's and the repository's own, so a context adds to them and never replaces them.
+  ✅ A leading HTML comment names the context and revision, and is stripped before Claude reads the file.
+  ✅ A running session re-reads a changed context at its next message, like the persona's own text (§11).
+- **Composition.** A workspace gets the contexts assigned to it plus those its persona holds, each once. Names
+  that make the same file name get a number. A context only the persona holds belongs to the persona's
+  lifecycle: it isn't named in the manifest as a pool of its own, and leaves with the persona. A change to
+  such a context is delivered at once to the workspaces whose persona holds it, though nothing is assigned to
+  them. Together the files stay under the 256 KB a compiled persona may write.
+- **Rules.** Same as a persona's (FR8): nothing credential-shaped, no control or invisible characters. Deleting
+  a context is refused while a persona's current or newest revision holds it; older revisions that name a
+  deleted context are skipped at delivery. Like a persona it saves as a draft and publishes.
+- **Editor and preview.** The persona editor lists the contexts it can hold; "What Claude is told" shows each
+  held context as its own managed layer, after the persona's text.
 
 ## 13. Preview and testing
 
@@ -416,7 +495,7 @@ confirmation, and the workspace row shows a warning badge while it's on.
   (`UI_ONLY`). `restore_revision` accepts only revisions published before and always needs server
   confirmation (C), with the §11 timing summary. `pool_delete` archives (with `unassign`, after
   moving workspaces to None). Test prompts aren't exposed in v1. Changes carry the MCP actor (Portal
-  MCP A3). Until these rules ship, Portal MCP doesn't list the persona type.
+  MCP A3). Until these rules ship, Portal MCP doesn't list the persona type. What an agent itself may do is §22: three tools, for its own persona only, none of which approves anything.
 
 ## 15. User experience
 
@@ -426,39 +505,45 @@ desktops. New: a DiffView (side by side on desktop, unified on phones, shared wi
 `mono` and `autoGrow` props on `@isnanme/ui`'s TextArea, shipped upstream ([Web app](web-app-pwa.md)
 §14).
 
-**Personas tab** (Pools hub, `/admin/pools?tab=personas`, [Skillset](skillset-pool.md) A8, Web app §8): a
-card per persona with name, description, revision, a "Draft r5" badge, a parts line ("48 lines ·
-style Reviewer · 3 subagents · opus, high · chat prompt"), "Used by N workspaces", a "Default"
-badge, and a menu (Edit, Duplicate, Test, History, Export, Archive). "Show archived" lists archived
-ones with Restore. The EmptyState offers "New persona" and "Import files".
+**Personas tab** (Pools hub, `/admin/pools?tab=personas`, [Skillset](skillset-pool.md) A8, Web app §8): a card per
+persona with its avatar (or initials), name, description, revision, a "r5 draft" badge, a parts line ("48 lines ·
+Terse · 3 subagents · opus, high · 2 contexts"), a star when it is the default for new workspaces, "N proposals"
+when agents asked for changes, "Used by N workspaces", and the shared menu (Edit, Duplicate, Assign, Revisions,
+Delete). A "Proposals" button with a count sits beside "New persona" only while something waits. Not built:
+Test, Export, Archive and "Show archived", "Import files".
 
-**Persona editor** (`/admin/pools/personas/<id>`, a `task` route on phones, Web app §9.2), four
-groups (Sections on desktop, PageTabs on phones):
+**Contexts tab** (`/admin/pools?tab=contexts`, A9, next to Personas): a card per context with its line count and
+"Used by N workspaces", and the same menu. Its editor is a page with the Markdown and its history.
 
-- *Text:* instructions in a monospace, growing TextArea with line and token counts, the §12.1
-  guidance, the §6 rule 1 note and the Instruction sources Select; then the chat prompt ("Chat
-  sessions only").
-- *Styles & subagents:* rows edited in a FormDialog. Subagent tools are a ChipGroup: built-in tools,
-  then MCP tools from the delivered catalogs under their plugin names
-  (`mcp__plugin_cpm-<set>_<server>__<tool>`, `mcp__plugin_cpb-browser_<server>__<tool>`), plus free
-  text; a name that no assigned set or browser pool delivers warns at compile time. MCP set slugs
-  and server keys never change once delivered ([MCP set](mcpset-pool.md) FR5), so these names stay
-  valid. Model is a Select, effort a Segmented.
-- *Defaults:* model Select (aliases, then IDs from Account Pool endpoints), effort Segmented, and
-  "Starting point. Users can change both in a session. Policy caps apply."
-- *Test & history:* test prompts, a workspace Select, Run, result cards; revisions, a diff Dialog,
-  Restore, Pin.
-- Sticky footer: Preview, Save draft (asks for a note), and Publish, which confirms with the §11
-  timing summary and rollout ("7 workspaces, about 1 minute"). A DiscardDialog guards edits.
+**Persona editor** (`/admin/pools/personas/<id>/edit`, a page, full screen on phones). Text diet: labels of one or
+two words, the long notes behind an ⓘ. Top to bottom: name and description (shared); the avatar with an
+"Avatar" button and the three switches ("Default for new workspaces", "Agents may propose changes",
+"Auto-approve name and avatar"), which act at once; *Instructions* in a monospace, growing text area with line and
+token counts (amber past 200 lines); *Chat prompt*; *Contexts* as chips; *Starts on* (model Select: Claude Code default, Opus,
+Sonnet, Haiku or a model ID; effort Segmented: Default, Low, Medium, High, XHigh); *Styles* and *Subagents* as
+rows that open (a star marks the default style); **What Claude is told** (the layers in load order: the persona,
+its contexts, then `~/.claude/CLAUDE.md`, the repository's and `CLAUDE.local.md` marked as the workspace's;
+style, subagents and the starting model); **History** (revisions, a line diff and the other changes against the
+editor, and a restore into the editor). The sticky footer has Preview files, Cancel, Save draft and Publish,
+which confirms with the §11 timing when workspaces follow it. Not built: instruction sources, test prompts,
+per-workspace Preview with the user's and repository's real files.
 
-**Workspaces:** the create dialog gets a Persona select (default preselected, "None" first). Rows
-show a persona chip, with a warning Badge while "persona only" is on. The Configuration panel's
-Persona row shows persona · rN · delivery status · "Loaded", a change control and Preview; policy
-adjustments and sessions by revision open in a Dialog (a sheet on phones).
+**Review queue** (A10): a dialog from "Proposals" (all personas) or from a card (one persona). Each proposal is a
+row with its kind, the proposed name, the avatar or a line diff of the instructions against what is current, the
+agent's reason as plain text, who and when, and two icon buttons: reject and approve. A proposal that can't be
+applied any more says why and can only be rejected.
 
-**Chat** ([Chat sessions](chat-sessions.md) §12.3): the persona part of the session line ("Persona
-Reviewer r4 · applies to new conversations") opens a read-only sheet with the persona's parts. It's
-how workspace users see what applies to them (US10).
+**Workspaces:** the create dialog has one compact Persona select in its main form, after the account pool, with
+the default persona selected ("None" first); contexts and the other pools stay under Add-ons. The Configuration
+panel's Persona row shows persona · rN · delivery status, what it sets and the contexts it brings, with a change
+control (a Select). Not built: the persona chip in rows, the "Loaded" status and Preview.
+
+**Chat** ([Chat sessions](chat-sessions.md) §12.3): the persona's name and avatar show in the session header, the
+Sessions rows and the transcript attribution, through the shared `PersonaAvatar` (§22); the persona part of the
+session line ("Persona Reviewer r4 · applies to new conversations") opens a read-only sheet with the persona's
+parts. It's how workspace users see what applies to them (US10). The name and avatar are built by Chat sessions
+(session header, Sessions rows, the reply in the transcript) through `usePersonaIdentities` and `PersonaAvatar`; the
+read-only parts sheet is not.
 
 ## 16. Security requirements
 
@@ -487,6 +572,13 @@ how workspace users see what applies to them (US10).
   persona keeps metadata only, and Monitoring's no-content rule (its §6) holds.
 - **Imports** are text only, shown in full, never fetched by URL; unsupported fields are dropped.
   **Publishing** is UI-only (§14).
+- **Avatars and agent proposals** (A10, §22). An image is hostile input from a person, a workspace file or an
+  agent: it is identified by its bytes (PNG, JPEG, WebP; SVG, GIF, HEIC and the rest are refused whatever they
+  are called), decoded by libvips with a pixel limit and re-encoded as a plain square PNG, so the stored file
+  carries no metadata, no animation, and nothing but pixels. An agent can only propose for the persona of its
+  own workspace, named by its token, never by an argument; a proposal is a record that nothing reads until a
+  person approves it, and instructions never auto-approve. What an agent writes is shown as plain text and
+  labelled as untrusted wherever a model reads it back.
 
 ## 17. Observability and audit
 
@@ -494,6 +586,9 @@ how workspace users see what applies to them (US10).
   created, revision saved (who, note), published, rollout stopped, restored, archived; assignments
   and pins; tests and test runs (workspace, prompt, cost); "persona only" switched; policy
   adjustments; delivery results and drift.
+- Proposals (A10) are their own audit trail: who asked (`session:<id>`, workspace), what, why, who decided
+  (`Admin` or `auto`) and when, kept with the persona. A revision an approval publishes names the proposer in its
+  note; every tool call is also audited by Portal MCP with its actor.
 - [Monitoring](monitoring-dashboard.md) metrics: workspaces per persona, recent sessions on an older
   revision, synced but not loaded, delivery failures, test-run spend per day.
 
@@ -501,12 +596,13 @@ how workspace users see what applies to them (US10).
 
 | Milestone | Scope | Gate |
 | --- | --- | --- |
-| P1 | Instructions, model and effort; drafts and publish; drop-in delivery to Docker targets; assignment at create, later and in bulk; editor preview | Foundation F2, F5 and A3. 🔬 Q5, Q6 |
-| P2 | Output styles and subagents; Kubernetes delivery; policy and endpoint checks (A7) | Foundation F3; Settings & policies S2. 🔬 Q3, Q4 |
-| P3 | History and diff, restore, stop rollout, pins, archiving; testing a draft in the terminal; Portal MCP rules (§14) | |
-| P4 | Session reports; workspace preview with user and repository files; "Loaded" status; import from workspace | Foundation F4; A6 or the persona `SessionStart` entry. 🔬 Q7 |
-| P5 | Chat prompt; test prompts | Chat sessions C5; Settings & policies Q5. 🔬 Q14 |
-| P6 | Instruction sources; import and export; side-by-side test comparison | |
+| P1 | Instructions, model and effort; drafts and publish; drop-in delivery to Docker targets; assignment at create, later and in bulk; editor preview. **Built.** Server (`apps/server/src/personas`): the `persona` pool kind (one per workspace: the shared pool service's `single` flag swaps it with a removal record), validation that names the field to fix (FR1 to FR5; FR8: credential-shaped text, control and invisible characters are refused in every field), drafts and publishing (only a published persona can be assigned, FR10), root-owned `0644` files Claude Code reads itself: `/etc/claude-code/CLAUDE.md` and `50-claudepilot-persona.json` (`outputStyle`, `model`, `effortLevel` and the stamp, §10.1), written only for what the persona sets; the read API (I5: `Personas#personaFor`, `#chatPrompt`, `GET /api/personas/workspaces/<target>/<name>`). Web (`apps/web/src/features/personas`): the Personas tab, the editor page, "What Claude is told", Preview files, the Persona select in the create dialog (default preselected), the Configuration picker and row, bulk assignment. ✅ **Run on a real Claude Code 2.1.296:** the managed CLAUDE.md, the user's and the repository's own each reach the request once, in that order; a flag overrides the default model and effort; unassigning removes every file (§11, §12.1). Checked in a browser at 390 and 1280 px. | Foundation F2, F5 and A3. Q5, Q6 |
+| P2 | Output styles and subagents; Kubernetes delivery; policy and endpoint checks (A7). **Built for Docker.** Styles (up to 5, a default, "keep coding instructions") and subagents (up to 20: description, prompt, tools, disallowed tools, model, effort, max turns, nothing else, §6 rule 2) are generated from validated fields by a serializer; the managed folders exist before any session (§10.2). ✅ In a real session the default style arrives as a "# Output Style: <name>" reminder at the start of the first message, the subagent in the agent list with its tools, the model in the request, and the effort as `output_config.effort` on effort-capable models. Editor rows for both, with the default style starred. Not built: Kubernetes delivery, and the policy and endpoint checks (A7: models outside `availableModels`, effort above `maxEffortLevel`, endpoint model lists). | Foundation F3; Settings & policies S2. Q3 answered, Q4 open |
+| P3 | History and diff, restore, stop rollout, pins, archiving; testing a draft in the terminal; Portal MCP rules (§14). **Partly built.** In the editor: the history of revisions, a line diff of the instructions and a list of the other changes against what the editor holds, and a restore that puts a revision in the editor to be saved or published (so history is never rewritten). Through the shared pool pages: Publish, make current and roll back, pause and resume a rollout, pinning a workspace to a revision (the API), a refused delete while assigned. Not built: archiving, a 409 with the diff when a save is based on an outdated revision (two people editing, or an approved proposal under an open editor, can overwrite each other), pins in the UI, testing a draft on a workspace (§13.2), Portal MCP's persona rules. | |
+| P4 | Session reports; workspace preview with user and repository files; "Loaded" status; import from workspace. **Not built.** | Foundation F4; A6 or the persona `SessionStart` entry. Q7 |
+| P5 | Chat prompt; test prompts. **Partly built.** The chat prompt is a persona field (an editor field, FR6's limits) delivered to `/etc/claudepilot/persona/chat-prompt.md`; the host passes `--append-system-prompt-file` for it at every start, resume, wake and move (§10.3, ✅ checked). Test prompts are not built. | Chat sessions C5; Settings & policies Q5 |
+| P6 | Instruction sources; import and export; side-by-side test comparison. **Not built.** | |
+| P7 | Identity and agent self-edit (A10, §22). **Built.** Name (the pool's), avatar and the per-persona switches; the avatar pipeline; proposals with a review queue; the three agent tools; `PersonaAvatar` and the read API; the default persona for new workspaces. ✅ **Run on a real Claude Code 2.1.296 through the portal's MCP endpoint:** a session read its persona, proposed a new name, an edit to its instructions and an avatar; an SVG named `.png`, a truncated PNG, a 4 MB file and `/etc/passwd` were refused; naming another persona or workspace in the arguments changed nothing; nothing was live until a person approved; the approved text reached the workspace and the next real session. | Portal MCP registry (I2), agent tokens (I8); the `agents.selfEdit` setting |
 
 ## 19. Success metrics
 
@@ -543,6 +639,9 @@ v1. Other pools ship always-on guidance as skills in their own plugins
 | A6 | §7, §8 | One session-start record for every pool. The foundation base drop-in `00-claudepilot-base.json` ([Portal MCP](portal-mcp.md) A1) carries a `hooks.SessionStart` entry running the foundation's `session-event`, which prints nothing and appends `{id, at, session_id, source, revisions, model, permission_mode, session_title}` to `outbox/sessions.jsonl` in every monitoring mode. Hook arrays from two drop-ins both ran ✅ (cross-pool lab; Monitoring A3), so each owner keeps its own entries in its own drop-in: Monitoring its `SessionStart` entry (its §10.1), Persona its `InstructionsLoaded` entry. Persona's own `SessionStart` entry goes once this lands. The outbox types `sessions` and `persona` are capped at 256 KB each. |
 | A7 | §6.1 | Cross-pool compile inputs: the persona fragment receives the workspace's effective `availableModels` and `maxEffortLevel`, its Account Pool endpoint's model slots and model list, and its Claude Code version. A change to any of them recompiles it and changes the desired hash. |
 | A8 | §10 | The persona editor is a page (Sections on desktop, PageTabs on phones), as in Settings & policies amendment 8. Pool pages may offer Archive instead of Delete. A Configuration row may add a "Loaded" status and a Preview action, with details in a Dialog (a sheet on phones). |
+| A9 | §3, §7 | **Instruction contexts** (§12.4): a pool type `context` (several per workspace) whose files are `/etc/claude-code/.claude/rules/cpx-*.md`, a new owner `context` in the ownership registry (the rules folder, and a drop-in `55-claudepilot-context.json` that holds only an `env` stamp), and `contexts` in a persona's content (up to 10 pool IDs). The persona owner gains `env.CLAUDEPILOT_PERSONA`, the same kind of stamp (§10.1). The persona owner's declaration also names `/etc/claude-code/CLAUDE.md`, `/etc/claudepilot/persona/` and `/etc/claudepilot/bin/persona-`, and its keys become `outputStyle`, `model`, `effortLevel`, `pluginConfigs` and `hooks` (A1; `claudeMd` and `agent` stay reserved). The shared pool service gains a `single` flag for one-per-workspace types (this one, and Browser & desktop): the picker and bulk assignment swap the pool, with a removal record for the old one. |
+
+| A10 | §3, §9, §22 | **Identity and agent self-edit** (interface I11): tables `persona_meta`, `persona_avatars`, `persona_proposals` (migration 70); the avatar pipeline (§16); the portal-wide setting `agents.selfEdit` (Settings & policies, default off, turning it on asks for confirmation) and the persona's own two switches; three agent-scope tools in Portal MCP; one shared display component and a read API. |
 
 **Related changes in other PRDs:**
 
@@ -550,6 +649,7 @@ v1. Other pools ship always-on guidance as skills in their own plugins
 | --- | --- |
 | [Account Pool](account-pool.md) | §10.1 names its model variables. For custom hosts it always writes `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, with empty slots taking FR1's default slot, so Claude Code's default alias resolves to a model the host serves. It never writes `ANTHROPIC_MODEL`; with no persona, nobody writes `model`. It keeps each endpoint's latest `GET /v1/models` IDs for A7. Until this lands, workspaces whose drop-in sets `ANTHROPIC_MODEL` show "Persona model ignored here: Account Pool sets ANTHROPIC_MODEL". Open as Account Pool Q21, since its M3 build writes it. |
 | [Portal MCP](portal-mcp.md) | On pool types with drafts, `pool_create` and `pool_update` return `{revision, status: "draft", publish_url}`. Publishing a persona joins its §13.4 list (UI-only), and `pool_delete` archives a persona (§14). |
+| [Portal MCP](portal-mcp.md) (A10) | Gains `persona_get_self`, `persona_propose_update` and `persona_set_avatar_proposal`, each with `scope: 'agent'` (never destructive, a rate and a size limit; they approve nothing). |
 | [Settings & policies](settings-policies.md) | §11.4 gains persona retention: session reports 30 days, test runs 14 days. Per-subagent permission modes, if wanted later, are a Settings & policies setting, not a persona field. |
 | [Monitoring](monitoring-dashboard.md) | Shows the §17 persona metrics. Its A3 (hooks are list keys) is adopted: A6 no longer asks for one `SessionStart` owner. |
 | [Chat sessions](chat-sessions.md) | Its A8 is adopted in §10.3 and §13.2. Also: never pass `--bare` or `--system-prompt`; delete `persona_test` sessions when their test ends or after 24 hours, and leave them out of the Sessions list. |
@@ -559,10 +659,10 @@ v1. Other pools ship always-on guidance as skills in their own plugins
 | ID | Question | Who decides |
 | --- | --- | --- |
 | Q1 | Closed: instructions go to the documented `/etc/claude-code/CLAUDE.md`, which the foundation delivers on every target, so `claudeMd` in a drop-in isn't needed. | — |
-| Q2 | 🔬 Does a changed managed CLAUDE.md reach a running session before `/compact`, at `/compact`, or only at the next launch? | Sandbox test |
-| Q3 | 🔬 Does Claude Code watch `/etc/claude-code/.claude/agents/` live? The docs list only the user and project folders. | Sandbox test |
+| Q2 | Answered ✅ (2.1.296, stream-json and a terminal): a changed managed CLAUDE.md or rule file reaches a running session only when a drop-in in `managed-settings.d` changes too (even an `env`-only change, written by rename); the session then re-reads them and the next message, 2 to 4 s later, carries the changed files (and "Instructions no longer present" for removed ones). Hence the stamp (§10.1). `/compact` was not tried. | — |
+| Q3 | Answered ✅: a new or an edited subagent file in a managed `agents` folder that existed when the session started was not seen by the running session (6 to 8 s checked); a new session, and a resumed one, see it. | — |
 | Q4 | 🔬 Does a managed `outputStyle` override a user's `/output-style` choice, in running and new sessions? | Sandbox test |
-| Q5 | 🔬 Do managed `model` and `effortLevel` act as per-session defaults that `/model` and `/effort` override, with each new session starting on them again? | Sandbox test |
+| Q5 | Answered ✅ except the interactive switch (2.1.296): a managed `model` and `effortLevel` set where a session starts (the request carried `model: claude-sonnet-4-6` and `output_config.effort: low` with no flags), `--model` and `--effort` override them (`claude-opus-4-6`, `high`), a running session keeps the model it started with, and a new or resumed one starts on the current default. The effort reaches the request only for effort-capable models. 🔬 `/model` and `/effort` in an interactive session. | Sandbox test |
 | Q6 | Partly answered ✅ (cross-pool lab): `ANTHROPIC_MODEL` in managed `env` outranks the managed `model` (`claude-haiku-4-5` won over `sonnet`), and `ANTHROPIC_DEFAULT_SONNET_MODEL` resolved the `sonnet` alias to the custom name. 🔬 Does an empty value count as unset? Decides A2 and Account Pool Q21. | Sandbox test |
 | Q7 | 🔬 What do `InstructionsLoaded` and `SessionStart` receive on 2.1.296 (fields, load reasons, `source` values), and does `InstructionsLoaded` list the managed CLAUDE.md file? In print mode it fired for `~/.claude/CLAUDE.md` and the project CLAUDE.md but never for an inline managed `claudeMd` ✅ (cross-pool lab); if it skips the file too, "Loaded" comes from A6's start record. | Sandbox test |
 | Q8 | 🔬 Do subagents receive the managed CLAUDE.md unless `omitClaudeMd: true`? | Sandbox test |
@@ -571,6 +671,46 @@ v1. Other pools ship always-on guidance as skills in their own plugins
 | Q11 | Should resumed chat conversations pick up a new chat prompt (`--system-prompt-snapshot off`), at the cost of one uncached request and a mid-conversation change? | Product |
 | Q12 | Should a later version allow full system-prompt replacement (the `agent` setting) for non-coding personas? | Product |
 | Q13 | Closed: ultracode is a Settings & policies switch (its §11.2 and Q20), not a persona default. | — |
-| Q14 | 🔬 Does a `claude -p` stream-json session load the managed CLAUDE.md, managed styles and agents, user and project CLAUDE.md and the user's style choice exactly as a terminal does, also in a folder whose trust dialog was never accepted? | Sandbox test |
-| Q15 | 🔬 In a resumed conversation (`--resume`, or a chat session's wake), which parts reload: instructions, instruction sources, default style and style body, subagents, model and effort? Overlaps Chat sessions Q8. | Sandbox test |
+| Q14 | Answered ✅ (2.1.296): `claude -p` and a stream-json session, in a repository folder never visited and without a trust prompt, load the managed CLAUDE.md, the managed rules, the managed output style and the managed subagents, then the user's and the project's CLAUDE.md, each once and in that order; a terminal in a folder whose trust was accepted does the same. 🔬 A terminal in a folder whose trust dialog was never accepted, and the user's own style choice. | Sandbox test |
+| Q15 | Answered ✅ for `claude -p --resume` (2.1.296), which is what a chat session's wake does: the resumed process starts on the persona's current model and effort; the resume message carries the current managed instructions, the current default style and the current subagents; the old messages keep what they said. 🔬 `claude --resume` in a terminal, and compaction (Chat sessions Q8). | Sandbox test |
 | Q16 | Which version first supports each part in §10.2's second row? It matters only if foundation Q8 lowers the minimum below 2.1.296. | Engineering (changelog) |
+
+## 22. Identity and agent self-edit (A10, interface I11)
+
+The owner's words: the Claude inside a session "can also adjust itself, including names, and if the model supports
+image generation, put its avatar there". A persona has a **name** (the pool's, shown everywhere), an **avatar**
+(none is valid: initials on a colour made from the name) and **two switches**; the agent in a workspace can
+**propose** changes to its own persona; a person decides.
+
+- **Who and what.** An agent's per-session token (Portal MCP I8) is bound to one workspace and one session. "Its
+  own persona" is the one that workspace has. There is no argument to name another persona, workspace or session:
+  the tools read all three from the token, and unknown arguments are dropped (✅ checked on a real session).
+- **Switches.** The portal-wide setting `agents.selfEdit` ("Agents may propose changes", default off, turning it
+  on asks for confirmation) decides whether any proposal is accepted. Per persona: "Agents may propose changes"
+  (default off, only offered while the portal switch is on) and "Auto-approve name and avatar" (default off): a
+  name or an avatar then applies at once and is recorded as decided by `auto`. Instructions never auto-approve,
+  whatever the switches say. Turning proposals off turns auto-approval off.
+- **Tools** (Portal MCP, scope `agent`, never destructive, a rate limit and a size cap each):
+  `persona_get_self` (the persona's name, instructions, styles, subagents, defaults, whether proposals are
+  allowed, and the session's own waiting proposals; its text is labelled untrusted),
+  `persona_propose_update` (`name`, `instructions_patch` with `append` and `replace` pieces that each name text
+  occurring once, and a `reason`; everything is checked before anything is recorded, and each part is its own
+  proposal) and `persona_set_avatar_proposal` (an image as `workspace_path` in the home folder, `blob_id` of a
+  file the session has, or `image_base64` up to 192 KB). Ten proposals an hour per session, ten waiting per
+  persona, 8 KB of edits, FR8's checks on every text.
+- **Proposals are records, not revisions.** A proposal is stored with its reason, actor and what it would do. It
+  is never live. Approving one applies it: a name renames the pool, an avatar is set, instructions publish a new
+  revision built from the text that is **current then**, with the proposer and the reason in its note. So a
+  rejected or stale proposal never reaches the history, and an edit is always checked against what it changes:
+  if the text it names is gone, or the name is taken, the proposal is **stale** and can only be rejected.
+- **Avatar pipeline.** §16. A person uploads in the editor (the file's bytes go to `POST /api/personas/pools/<id>/avatar`);
+  an agent offers a file. Either way the stored image is the portal's own PNG: square, at most 512 px, at most
+  256 KB, no metadata, content-addressed by its own hash, served as an immutable image with `nosniff` and a
+  policy that allows nothing else.
+- **Display.** One component, `PersonaAvatar` (`apps/web/src/features/personas/PersonaAvatar.tsx`): the image, or
+  initials, and the name when asked; with `usePersonaOf(workspaceId)` and `GET /api/personas/identities` so lists
+  show it without a request per row. Chat shows it in the session header, the Sessions rows and the transcript's
+  attribution; tickets on assignee chips (their owners' work).
+- **Review.** §15. One tap approves or rejects; the diff is against the current text.
+- **Not built:** proposals for skills (Skillset's), image generation (the portal generates nothing: it only takes
+  an image the session already has), a persona-wide notification when a proposal arrives.

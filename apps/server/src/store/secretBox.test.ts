@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { generateSecretKey, loadSecretKey, parseSecretKey, SecretBox, SecretKeyError, SecretOpenError } from './secretBox.js';
+import { tempDirectory } from './testTmp.js';
 
 const slot = { table: 'accounts', row: 'a1', column: 'secret' };
 const box = () => new SecretBox(parseSecretKey(generateSecretKey()));
@@ -59,7 +59,7 @@ test('keys must be 32 bytes', () => {
 });
 
 test('loadSecretKey reads the variable or the file, and is null when neither is set', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cp-key-'));
+  const dir = tempDirectory('cp-key-');
   const key = generateSecretKey();
   writeFileSync(join(dir, 'k'), `${key}\n`);
   assert.equal(loadSecretKey({ file: join(dir, 'k') })!.toString('base64url'), key);

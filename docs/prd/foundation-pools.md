@@ -4,7 +4,7 @@
 | --- | --- |
 | Status | **Draft v0.6.** ✅ = observed in our experiments (Claude Code 2.1.296, mock API, print mode). 📄 = documented by Anthropic or Kubernetes, not observed by us. 🔬 = needs a test (§14). New in v0.6: Kubernetes delivery decided, atomic Docker writes, outbox on the home volume, failing safe, version gating, existing workspaces, testing. Composition rules (§7) still wait for the cross-pool critique. |
 | Owner | Alfian Isnan |
-| Last updated | 2026-10-10 |
+| Last updated | 2026-10-12 |
 | Used by | [Account Pool](account-pool.md), [Skillset](skillset-pool.md), [Persona](persona-pool.md), [Browser & desktop](browser-desktop-pool.md), [MCP set](mcpset-pool.md), [Secrets & env](secrets-env-pool.md), [Settings & policies](settings-policies.md) |
 
 ## 1. Summary
@@ -228,6 +228,13 @@ to remove something.
   back from workspaces, so they can't be recovered from there.
 - No database and no backup: the new database gets a new portal ID. Every existing workspace shows
   "Set up by another portal", and nothing in it changes until an admin adopts it.
+- **Two portals on one Docker daemon** (a scratch or dev portal beside the deployed one) never touch each
+  other's workspaces (built). Every container a portal creates carries `claudepilot.portal=<its portal ID>`; a
+  portal skips containers that carry another's when it lists workspaces and when it watches starts, and the
+  reconciler reads and writes nothing in one, the first manifest included, whatever global fragments it has (a
+  lockdown, say). Before this, a portal with "Pool MCP only" on delivered its lockdown into another portal's
+  brand-new container, before the owner's first manifest existed. A container without the label (made before it
+  existed) stays adoptable. Kubernetes resources are not labelled yet: delivery there comes with F3.
 
 **If the portal is gone for good**
 
@@ -271,11 +278,21 @@ Each pool type declares what it may write. The compiler rejects fragments outsid
 | Persona | `managed-settings.d/50-claudepilot-persona.json`, `/etc/claude-code/.claude/agents/**`, output styles | `claudeMd`, `outputStyle`, `model` defaults, `enabledPlugins` for its plugin |
 | Skillset | `managed-settings.d/60-claudepilot-skills.json`, `/etc/claude-code/.claude/skills/**` or plugins in the portal marketplace | `enabledPlugins` entries for its plugins, `extraKnownMarketplaces` (the portal marketplace) |
 | Browser & desktop | `managed-settings.d/70-claudepilot-browser.json` | its MCP server entry, `env` (`CLAUDEPILOT_BROWSER_*`) |
+| Settings (global switches, built) | `managed-settings.d/05-claudepilot-settings.json` | `disableClaudeAiConnectors`, `allowManagedMcpServersOnly`, `allowedMcpServers` ([Settings & policies](settings-policies.md) §22) |
 | Foundation | `/etc/claudepilot/state.json`, `/etc/claudepilot/bin/**` except pool scripts, `~/.claudepilot/outbox/` | none |
 
 Pool scripts live in `/etc/claudepilot/bin/` under their type's prefix (Account Pool's `account-*`,
 for example), and each type owns its prefix. On the Kubernetes fallback, the `/etc/claudepilot/**`
 paths in this table live under `/etc/claude-code/claudepilot/` (§6.2).
+
+**Managed folders and running sessions (built).** ✅ Claude Code 2.1.296 only watches
+`/etc/claude-code/managed-settings.d` if the folder exists when a session starts, and applies a managed
+setting only to sessions that started after it was in place (found by the persona work; re-checked for the
+MCP lockdown keys). The workspace image creates `/etc/claude-code/managed-settings.d` and
+`/etc/claude-code/.claude/{agents,output-styles,rules}` (root, 0755), and every delivery creates them in
+workspaces that predate the image (`FOUNDATION.dirs`). A security change therefore reads **Pending** with the
+number of running sessions to restart, never Locked, until no older session runs; the engine reads each
+running `claude` process's age for that, also before a workspace's first manifest.
 
 How Claude Code merges drop-ins: files merge alphabetically, scalars from later files win, lists are
 combined, and `env` and other nested blocks merge key by key. Two rules keep this safe:

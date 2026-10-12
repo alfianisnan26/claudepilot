@@ -1,7 +1,9 @@
-import { FormDialog, Select, TextField } from '@isnanme/ui';
+import { FormDialog, Select, SwitchRow, TextField } from '@isnanme/ui';
 import { CHAT_SESSION_TITLE_MAX, CLAUDE_NAME_MAX, type ChatFolderScan, type CreateChatSessionRequest, type Workspace, type WorkspaceClaudeState } from '@portal/contracts';
+import { GitBranch, ShieldAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
+import { InfoTip } from '@/components/InfoTip';
 import { api, errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { firstShell, NoSessionWorkspace } from './SessionSetup';
@@ -72,9 +74,25 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
   const [claudes, setClaudes] = useState<WorkspaceClaudeState[] | null>(null);
   const [claudeId, setClaudeId] = useState('');
   const [newClaude, setNewClaude] = useState('');
+  // Where policy allows Bypass, the person can opt this session in at its start (FR20); off by default, every time.
+  const [bypassAllowed, setBypassAllowed] = useState(false);
+  const [allowBypass, setAllowBypass] = useState(false);
+  // A git worktree of its own: the chat's folder is a new branch of the repository (all optional: the portal names them).
+  const [useWorktree, setUseWorktree] = useState(false);
+  const [branch, setBranch] = useState('');
+  const [base, setBase] = useState('');
 
   useEffect(() => {
     if (!open) return;
+    setAllowBypass(false);
+    setBypassAllowed(false);
+    setUseWorktree(false);
+    setBranch('');
+    setBase('');
+    chatApi.policy().then(
+      (p) => setBypassAllowed(p.bypass.allowed),
+      () => undefined,
+    );
     setTitle('');
     setFolder(HOME);
     setFolderError(undefined);
@@ -155,7 +173,8 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
   const askTrust = async (e: unknown, request: CreateChatSessionRequest, where: string) => {
     try {
       const scan = await scanAfter(e, request.workspaceId, where);
-      setTrust((t) => ({ scan, request, changed: !!t && t.scan.hash !== scan.hash }));
+      // A worktree the portal made and is holding for this start: the retry names it, so it is used and none is made twice.
+      setTrust((t) => ({ scan, request: scan.worktree ? { ...request, worktree: scan.worktree } : request, changed: !!t && t.scan.hash !== scan.hash }));
     } catch (err) {
       setTrust(null);
       setError(errorText(err, 'Couldn’t check the folder.'));
@@ -201,7 +220,7 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
       }
       setSaving(false);
     }
-    await start({ workspaceId, title: title.trim() || undefined, cwd, claudeId: chosen || undefined });
+    await start({ workspaceId, title: title.trim() || undefined, cwd, claudeId: chosen || undefined, allowBypass: bypassAllowed && allowBypass ? true : undefined, worktree: useWorktree ? { branch: branch.trim() || undefined, base: base.trim() || undefined } : undefined });
   };
 
   const trustAndStart = async () => {
@@ -234,7 +253,7 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
       size="sm"
       title={trust ? 'Trust this folder?' : 'New session'}
       description={
-        trust ? <span className="font-mono break-all">{trust.scan.folder}</span> : needsSetup ? 'No workspace is ready for sessions.' : 'Chat with Claude Code in a workspace.'
+        trust ? <span className="font-mono break-all">{trust.scan.folder}</span> : needsSetup ? 'No workspace is ready for sessions.' : undefined
       }
       onSubmit={trust ? trustAndStart : needsSetup ? goNext : submit}
       submitLabel={trust ? 'Trust and start' : needsSetup ? (shell ? 'Open shell' : 'Workspaces') : 'Start'}
@@ -262,7 +281,6 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
           <TextField
             label="Folder"
             optional
-            hint={`Where Claude Code works, inside ${HOME}.`}
             placeholder={HOME}
             autoComplete="off"
             autoCapitalize="none"
@@ -288,25 +306,21 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
             }))}
             placeholder={!workspaceId ? 'Pick a workspace first' : claudes === null ? 'Loading…' : 'Pick a Claude'}
             hint={
-              !chosenWorkspace ? undefined : !ownSignIn ? (
-                'Runs on the workspace’s account pool.'
-              ) : claudes && !claudes.some((c) => !signedOut(c)) ? (
+              chosenWorkspace && ownSignIn && claudes && !claudes.some((c) => !signedOut(c)) ? (
                 <>
                   No Claude here is signed in.{' '}
                   <Link to="/admin/workspaces" onClick={onClose} className="font-semibold text-ink underline underline-offset-2">
                     Sign one in
                   </Link>
                 </>
-              ) : (
-                'Runs on this Claude’s own sign-in.'
-              )
+              ) : undefined
             }
           />
           {!ownSignIn && (
             <TextField
               label="New Claude"
               optional
-              hint="Adds an empty directory on this workspace, with its own chats. It runs on the account pool too."
+              hint="Adds another Claude on this workspace."
               placeholder="Name, to add one"
               maxLength={CLAUDE_NAME_MAX}
               value={newClaude}
@@ -321,6 +335,35 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
+          <SwitchRow
+            label={
+              <span className="inline-flex items-center gap-1">
+                Work in a git worktree
+                <InfoTip label="About worktrees">
+                  Adds a branch of the folder’s repository in a folder of its own, so this chat’s changes stay apart from your working folder and from other chats. Leave the branch empty and the portal names one. Its folder stays when the chat is deleted, unless you remove it.
+                </InfoTip>
+              </span>
+            }
+            icon={<GitBranch className="size-4" />}
+            checked={useWorktree}
+            onChange={setUseWorktree}
+            className="-my-1"
+          />
+          {useWorktree && (
+            <div className="grid grid-cols-2 gap-3">
+              <TextField label="Branch" optional placeholder="session/…" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} maxLength={100} className="[&_input]:font-mono" value={branch} onChange={(e) => setBranch(e.target.value)} />
+              <TextField label="From" optional placeholder="current branch" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} maxLength={100} className="[&_input]:font-mono" value={base} onChange={(e) => setBase(e.target.value)} />
+            </div>
+          )}
+          {bypassAllowed && (
+            <SwitchRow
+              label="Allow Bypass later in this session"
+              icon={<ShieldAlert className="size-4" />}
+              checked={allowBypass}
+              onChange={setAllowBypass}
+              className="-my-1"
+            />
+          )}
         </div>
       )}
     </FormDialog>

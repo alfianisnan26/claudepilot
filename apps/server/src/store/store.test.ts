@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
@@ -8,9 +7,10 @@ import { acquireLock } from './lock.js';
 import { MIGRATIONS, type EncryptedColumn, type Migration } from './migrations.js';
 import { generateSecretKey, parseSecretKey } from './secretBox.js';
 import { backupDatabase, forgetSecrets, inspectStore, restoreBackup, rotateKey, Store } from './store.js';
+import { tempDirectory } from './testTmp.js';
 
 const newKey = () => parseSecretKey(generateSecretKey());
-const tempDir = () => mkdtempSync(join(tmpdir(), 'cp-store-'));
+const tempDir = () => tempDirectory('cp-store-');
 
 /** A test-only schema with one sealed column, on top of the real migrations. */
 const LATEST = Math.max(...MIGRATIONS.map((m) => m.version));
@@ -114,6 +114,22 @@ test('migrating an existing database takes a backup first', async () => {
   assert.equal(backups.length, 1);
   assert.equal(backups[0]!.kind, 'pre-migrate');
   store.close();
+});
+
+test('a migration numbered below one already applied still runs (side-by-side work)', async () => {
+  const dir = tempDir();
+  const later: Migration = { version: LATEST + 2, name: 'later', up: (db) => db.exec('CREATE TABLE later_t (id INTEGER) STRICT') };
+  const earlier: Migration = { version: LATEST + 1, name: 'earlier', up: (db) => db.exec('CREATE TABLE earlier_t (id INTEGER) STRICT') };
+  (await Store.open({ dataDir: dir, secretKey: null, migrations: [...MIGRATIONS, later] })).close();
+  const store = await Store.open({ dataDir: dir, secretKey: null, migrations: [...MIGRATIONS, earlier, later] });
+  assert.equal(store.trust.state === 'frozen' ? store.trust.reasons[0]!.code : 'ok', 'ok');
+  assert.ok(store.db!.prepare("SELECT name FROM sqlite_master WHERE name = 'earlier_t'").get(), 'the earlier-numbered migration ran');
+  assert.equal(store.schemaVersion, LATEST + 2);
+  store.close();
+  // And nothing reruns on the next open.
+  const again = await Store.open({ dataDir: dir, secretKey: null, migrations: [...MIGRATIONS, earlier, later] });
+  assert.equal(again.listBackups().filter((b) => b.kind === 'pre-migrate').length, 1, 'only the one migrating open took a backup');
+  again.close();
 });
 
 test('a failing migration rolls back and freezes the portal', async () => {

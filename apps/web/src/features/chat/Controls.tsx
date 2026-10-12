@@ -1,5 +1,5 @@
 import { Button, cn, Dialog, Spinner, SwitchRow } from '@isnanme/ui';
-import type { ChatModelOption, ChatPermissionMode, ChatSession } from '@portal/contracts';
+import type { ChatBypassState, ChatModelOption, ChatPermissionMode, ChatSession } from '@portal/contracts';
 import {
   Check,
   FilePen,
@@ -11,14 +11,16 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useEffect, useId, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react';
+import { InfoTip } from '@/components/InfoTip';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
+import { BypassDialog } from './BypassDialog';
 import { EffortSlider, ModelFamilies } from './ModelPicker';
 import { formatTokens } from './shared';
 import type { ChatControlArgs, ChatControlOp } from './useChatSocket';
 
 type Control = (op: ChatControlOp, args?: ChatControlArgs) => Promise<void>;
-type Picker = 'model' | 'mode';
+type Picker = 'model' | 'mode' | 'bypass';
 
 /** Opens the mode picker from elsewhere: on phones, Mode lives in the session's ⋯ menu. */
 export interface ControlsHandle {
@@ -36,8 +38,10 @@ const MODES: Record<ChatPermissionMode, { label: string; hint: string; icon: Luc
 /** A mode's name and icon, for the ⋯ menu's Mode item. */
 export const modeDetails = (mode: ChatPermissionMode) => MODES[mode] ?? MODES.default;
 
-/** Bypass needs its own opt-in and confirmation, so it's never offered here. */
+/** The modes one tap changes to. Bypass has its own row below them, only where the policy allows it, and its own confirmation. */
 const OFFERED_MODES: ChatPermissionMode[] = ['default', 'acceptEdits', 'plan'];
+/** The row that makes a session bypass-capable: it restarts it with the flag. */
+const RESTART_FOR_BYPASS = 'restart-for-bypass';
 
 /** Effort levels when the model's own list isn't known (yet). */
 const EFFORT_FALLBACK = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -104,13 +108,29 @@ export function Controls({
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [bypass, setBypass] = useState<ChatBypassState | null>(null);
 
   useEffect(() => {
     setOpen(null);
     setModels(null);
     setModelsError(null);
     setPicked(null);
+    setBypass(null);
   }, [sessionId]);
+
+  // Where Bypass stands (policy, the session's opt-in) is read each time the mode picker opens.
+  const needBypass = open === 'mode';
+  useEffect(() => {
+    if (!needBypass) return;
+    let current = true;
+    chatApi.bypass(sessionId).then(
+      (state) => current && setBypass(state),
+      () => current && setBypass(null),
+    );
+    return () => {
+      current = false;
+    };
+  }, [needBypass, sessionId, session.bypassCapable, session.mode]);
 
   // The model list (with each model's effort levels) is fetched each time the sheet opens; what was
   // loaded stays on screen while it refreshes.
@@ -165,7 +185,7 @@ export function Controls({
         {session.context && <ContextMeter context={session.context} />}
       </div>
 
-      <Dialog open={open === 'model'} onClose={close} size="sm" title="Model and effort" description="Applies from Claude’s next request.">
+      <Dialog open={open === 'model'} onClose={close} size="sm" title="Model and effort">
         <ModelEffortSheet
           session={session}
           models={models}
@@ -187,12 +207,29 @@ export function Controls({
         <ModePicker
           mode={session.mode}
           connected={connected}
+          bypass={bypass}
+          onBypass={() => setOpen('bypass')}
+          onAllow={async () => {
+            await chatApi.allowBypass(sessionId);
+            setBypass(await chatApi.bypass(sessionId));
+          }}
           onPick={async (next) => {
             await control('mode', { mode: next });
             done('mode');
           }}
         />
       </Dialog>
+
+      {bypass && (
+        <BypassDialog
+          open={open === 'bypass'}
+          onClose={close}
+          sessionId={sessionId}
+          workspace={session.workspaceId}
+          facts={bypass.facts}
+          onEntered={() => done('bypass')}
+        />
+      )}
     </>
   );
 }
@@ -376,17 +413,13 @@ function ModelEffortSheet({
         )
       ) : (
         <div className="flex flex-col gap-2">
-          {session.model && !current && (
-            <p className="text-[13px] text-muted">
-              In use: <span className="font-mono text-ink-soft">{session.model}</span>
-            </p>
-          )}
           {models.length === 0 ? (
             <p className="text-[13px] text-muted">This session has no other models to switch to.</p>
           ) : (
             <ModelFamilies
               models={models}
               current={current}
+              applied={session.model}
               pending={apply.pending}
               disabled={!connected}
               onPick={(value) => void apply.run(value, () => onModel(value))}
@@ -409,15 +442,18 @@ function ModelEffortSheet({
       {(session.ultracodeAvailable || session.ultracode) && (
         <div className="border-t border-line pt-1">
           <SwitchRow
-            label="Ultracode"
+            label={
+              <span className="inline-flex items-center gap-1">
+                Ultracode
+                <InfoTip label="About Ultracode">Plans multi-agent workflows for big tasks. Uses many more tokens.</InfoTip>
+              </span>
+            }
             description={
               ultracodeBusy ? (
                 <span className="inline-flex items-center gap-1.5">
                   <Spinner className="size-3" /> Applying…
                 </span>
-              ) : (
-                'Plans multi-agent workflows for big tasks. Uses many more tokens.'
-              )
+              ) : undefined
             }
             icon={<Zap className="size-4" />}
             checked={session.ultracode}
@@ -431,9 +467,44 @@ function ModelEffortSheet({
   );
 }
 
-function ModePicker({ mode, connected, onPick }: { mode: ChatPermissionMode; connected: boolean; onPick: (mode: ChatPermissionMode) => Promise<void> }) {
+function ModePicker({
+  mode,
+  connected,
+  bypass,
+  onBypass,
+  onAllow,
+  onPick,
+}: {
+  mode: ChatPermissionMode;
+  connected: boolean;
+  /** Where Bypass stands; null until read (or when it can't be). */
+  bypass: ChatBypassState | null;
+  /** Opens the confirmation. */
+  onBypass: () => void;
+  /** "Restart to allow Bypass". */
+  onAllow: () => Promise<void>;
+  onPick: (mode: ChatPermissionMode) => Promise<void>;
+}) {
   const apply = useApply();
   const offered = OFFERED_MODES.includes(mode);
+  const options: Option[] = OFFERED_MODES.map((m) => {
+    const { label, hint, icon: Icon } = MODES[m];
+    return { value: m, label, hint, icon: <Icon className="size-4" /> };
+  });
+  // Bypass, in the danger colour, only where the policy allows it: its own row once the session can enter it, else the restart that makes it so.
+  if (bypass?.allowed && !bypass.active)
+    options.push(
+      bypass.capable
+        ? { value: 'bypassPermissions', label: MODES.bypassPermissions.label, hint: MODES.bypassPermissions.hint, icon: <ShieldAlert className="size-4" />, danger: true }
+        : {
+            value: RESTART_FOR_BYPASS,
+            label: 'Restart to allow Bypass',
+            hint: bypass.busy ? 'After this turn ends.' : undefined,
+            icon: <ShieldAlert className="size-4" />,
+            danger: true,
+            disabled: bypass.busy,
+          },
+    );
   return (
     <div className="flex flex-col gap-3">
       {!offered && (
@@ -447,11 +518,12 @@ function ModePicker({ mode, connected, onPick }: { mode: ChatPermissionMode; con
         current={offered ? mode : null}
         pending={apply.pending}
         disabled={!connected}
-        onPick={(next) => void apply.run(next, () => onPick(next as ChatPermissionMode))}
-        options={OFFERED_MODES.map((m) => {
-          const { label, hint, icon: Icon } = MODES[m];
-          return { value: m, label, hint, icon: <Icon className="size-4" /> };
-        })}
+        onPick={(next) => {
+          if (next === 'bypassPermissions') return onBypass();
+          if (next === RESTART_FOR_BYPASS) return void apply.run(next, onAllow);
+          void apply.run(next, () => onPick(next as ChatPermissionMode));
+        }}
+        options={options}
       />
       <Footnotes error={apply.error} connected={connected} />
     </div>
@@ -484,6 +556,9 @@ interface Option {
   label: string;
   hint?: string;
   icon?: ReactNode;
+  /** In the danger colour: what it does can't be undone by a tap. */
+  danger?: boolean;
+  disabled?: boolean;
 }
 
 /**
@@ -535,7 +610,7 @@ function OptionList({
       {options.map((o) => {
         const on = o.value === current;
         const busy = o.value === pending;
-        const blocked = disabled || (pending !== null && !busy);
+        const blocked = disabled || o.disabled || (pending !== null && !busy);
         return (
           <button
             key={o.value}
@@ -554,9 +629,9 @@ function OptionList({
               blocked && 'cursor-not-allowed opacity-50',
             )}
           >
-            {o.icon && <span className="mt-0.5 shrink-0 text-ink-soft">{o.icon}</span>}
+            {o.icon && <span className={cn('mt-0.5 shrink-0', o.danger ? 'text-danger' : 'text-ink-soft')}>{o.icon}</span>}
             <span className="min-w-0 flex-1">
-              <span className={cn('block font-semibold text-ink', dense ? 'text-[14px]' : 'text-[15px]')}>{o.label}</span>
+              <span className={cn('block font-semibold', o.danger ? 'text-danger' : 'text-ink', dense ? 'text-[14px]' : 'text-[15px]')}>{o.label}</span>
               {o.hint && (
                 <span className={cn('mt-0.5 block break-words text-muted', dense ? 'line-clamp-2 text-[12px] leading-snug' : 'text-[13px]')}>{o.hint}</span>
               )}

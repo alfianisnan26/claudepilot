@@ -76,7 +76,7 @@ export function StorageRow() {
         label={
           <>
             Storage
-            {state && <Badge tone={state.tone}>{state.label}</Badge>}
+            {state && status?.trust.state !== 'ok' && <Badge tone={state.tone}>{state.label}</Badge>}
             {status && (
               <InfoTip label="About storage">
                 <span className="block">{state!.summary}</span>
@@ -100,12 +100,15 @@ export function StorageRow() {
             </button>
           ) : !status ? (
             'Checking…'
+          ) : status.trust.state === 'frozen' && status.trust.reasons[0] ? (
+            <span className="text-danger">{status.trust.reasons[0].message}</span>
           ) : status.lastBackupAt ? (
             `Backup ${timeAgo(status.lastBackupAt)} · ${status.backups} kept`
           ) : (
             'No backup yet'
           )
         }
+        wrapSub={status?.trust.state === 'frozen'}
         trailing={action}
       />
 

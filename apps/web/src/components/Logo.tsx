@@ -29,7 +29,8 @@ export function Logo({ to = '/', className, label = true }: { to?: string; class
     <Link
       to={to}
       aria-label={BRAND_NAME}
-      className={cn('inline-flex items-center gap-2 rounded-lg font-extrabold tracking-tight', className)}
+      // The padding makes a 44 px tap target; the negative margin keeps the layout as it was.
+      className={cn('-my-2 inline-flex items-center gap-2 rounded-lg py-2 font-extrabold tracking-tight', className)}
     >
       <LogoMark />
       {label && <span className="text-[17px]">{BRAND_NAME}</span>}

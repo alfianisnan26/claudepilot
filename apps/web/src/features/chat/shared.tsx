@@ -54,6 +54,16 @@ export function AgentTag({ label }: { label: string }) {
 /** The workspace user's home folder: where sessions start by default, and shown as `~`. */
 export const HOME = '/home/node';
 
+/** How long ago, in the fewest characters: "now", "7m", "3h", "2d". The full date is the tooltip. */
+export function timeShort(iso: string, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (s < 45) return 'now';
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m`;
+  if (s < 86400) return `${Math.round(s / 3600)}h`;
+  if (s < 86400 * 60) return `${Math.round(s / 86400)}d`;
+  return `${Math.round(s / (86400 * 30))}mo`;
+}
+
 /** A small dollar amount: more decimals the smaller it is, so cents still read. */
 export const formatUsd = (n: number) => `$${n.toFixed(n < 1 ? 3 : 2)}`;
 

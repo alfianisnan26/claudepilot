@@ -93,26 +93,28 @@ export function attachChat(server: Server, controller: ChatController, authorize
     async function handle(msg: ChatClientMessage) {
       switch (msg.type) {
         case 'subscribe': {
-          subscribed.add(msg.session);
+          // A folded session's old id means the chat that took it in.
+          const id = controller.resolve(msg.session);
+          subscribed.add(id);
           // Backlog first (stored events after the tab's last seq), then live updates flow via `off`.
-          const items = controller.history(msg.session, msg.afterSeq ?? 0);
-          if (items.length) send({ type: 'events', session: msg.session, items });
-          const session = controller.get(msg.session);
+          const items = controller.history(id, msg.afterSeq ?? 0);
+          if (items.length) send({ type: 'events', session: id, items });
+          const session = controller.get(id);
           if (session) {
             // A running process gets its reader back if it lost it (after a restart, say).
-            controller.attach(msg.session);
+            controller.attach(id);
             send({ type: 'session', session });
-            send({ type: 'tasks', session: msg.session, tasks: controller.tasks(msg.session) });
+            send({ type: 'tasks', session: id, tasks: controller.tasks(id) });
             // Queued, withdrawn and failed messages: what the transcript alone can't tell a fresh tab.
-            for (const input of controller.inputStates(msg.session)) send({ type: 'input', session: msg.session, uuid: input.uuid, state: input.state });
+            for (const input of controller.inputStates(id)) send({ type: 'input', session: id, uuid: input.uuid, state: input.state });
             // A thinking block already under way shows as "Thinking…", timed from its real start.
-            for (const t of controller.openThinking(msg.session))
-              send({ type: 'delta', session: msg.session, agentLabel: t.agentLabel, text: '', thinking: true, elapsedMs: t.elapsedMs });
-          }
+            for (const t of controller.openThinking(id))
+              send({ type: 'delta', session: id, agentLabel: t.agentLabel, text: '', thinking: true, elapsedMs: t.elapsedMs });
+          } else send({ type: 'removed', session: msg.session }); // deleted (or never was)
           return;
         }
         case 'unsubscribe':
-          subscribed.delete(msg.session);
+          subscribed.delete(controller.resolve(msg.session));
           return;
         case 'send':
           try {

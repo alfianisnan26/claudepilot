@@ -4,6 +4,7 @@
 
 import type {
   WorkspaceClaude,
+  ChatAuditEntry,
   ChatEvent,
   ChatEventKind,
   ChatImage,
@@ -12,14 +13,17 @@ import type {
   ChatPermissionMode,
   ChatRequest,
   ChatSession,
+  ChatSegment,
   ChatSessionState,
   ChatTask,
+  ChatWorktree,
 } from '@portal/contracts';
 import { createHash, randomBytes } from 'node:crypto';
 import { posix } from 'node:path';
 import type { Store } from '../store/store.js';
 import { HOME } from '../workspaces/runtime.js';
 import type { ModelTotals, StoredEvent, TaskPatch } from './protocol.js';
+import { fileRefs } from './artifacts/records.js';
 import { redact, redactMaybe } from './redact.js';
 
 /**
@@ -64,7 +68,20 @@ export type ChatSessionRow = {
   claude_id?: string | null;
   predecessor_id?: string | null;
   successor_id?: string | null;
+  ticket_id?: string | null;
+  parent_id?: string | null;
+  started_by?: string | null;
+  worktree_path?: string | null;
+  worktree_branch?: string | null;
+  worktree_repo?: string | null;
+  bypass_capable?: number | null;
+  claude_session_id?: string | null;
+  cost_base_usd?: number | null;
+  segment_seq?: number | null;
 };
+
+/** The Claude Code session id of the run that is going now: the session's own id for every session before Claudes could be switched. */
+export const claudeSessionOf = (row: Pick<ChatSessionRow, 'id' | 'claude_session_id'>): string => row.claude_session_id || row.id;
 
 type EventRow = {
   seq: number;
@@ -123,6 +140,16 @@ export interface ChatSessionPatch {
   successorId?: string | null;
   predecessorId?: string | null;
   archivedAt?: string | null;
+  title?: string;
+  ticketId?: string | null;
+  /** Sets or clears the session's worktree (its three columns together). */
+  worktree?: ChatWorktree | null;
+  claudeId?: string;
+  bypassCapable?: boolean;
+  claudeSessionId?: string;
+  /** What the closed runs cost; `cost` (a process's running total) is added to it. */
+  costBase?: number;
+  segmentSeq?: number;
 }
 
 /** One model's share of a finished turn, as recorded. */
@@ -158,7 +185,7 @@ export type ControlLineState = 'sending' | 'completed' | 'failed';
 const PROCESS_STATES = new Set<string>(['live', 'asleep', 'gone']);
 
 /** Whole, redacted event text over this many characters is truncated before it reaches the row. */
-const MAX_TEXT = 16_000;
+export const EVENT_TEXT_MAX = 16_000;
 
 const TASK_STATUSES = new Set<string>(['running', 'completed', 'failed', 'killed']);
 
@@ -174,6 +201,11 @@ function imageRef(v: unknown): ChatImage | null {
   if (!o || typeof o.blobId !== 'string' || typeof o.mediaType !== 'string') return null;
   const ref: ChatImage = { blobId: o.blobId, mediaType: o.mediaType };
   if (typeof o.name === 'string' && o.name) ref.name = o.name;
+  // The picture's size (uploads), so its box is laid out before it loads.
+  if (typeof o.width === 'number' && typeof o.height === 'number' && Number.isInteger(o.width) && Number.isInteger(o.height) && o.width > 0 && o.height > 0 && o.width <= 100_000 && o.height <= 100_000) {
+    ref.width = o.width;
+    ref.height = o.height;
+  }
   return ref;
 }
 
@@ -239,30 +271,88 @@ export class ChatStore {
     return this.#now().toISOString();
   }
 
-  create(opts: { id: string; workspaceId: string; cwd: string; title: string; origin: ChatOrigin; claudeId?: string; predecessorId?: string | null }): ChatSession {
+  create(opts: {
+    id: string;
+    workspaceId: string;
+    cwd: string;
+    title: string;
+    origin: ChatOrigin;
+    claudeId?: string;
+    predecessorId?: string | null;
+    ticketId?: string | null;
+    parentId?: string | null;
+    startedBy?: string | null;
+    worktree?: ChatWorktree | null;
+    bypassCapable?: boolean;
+  }): ChatSession {
     const now = this.#stamp();
-    this.#writable()
+    const db = this.#writable();
+    db
       .prepare(
-        `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?)`,
+        `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
+           ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(opts.id, opts.workspaceId, opts.cwd, opts.title, opts.origin, now, now, now, opts.claudeId ?? '', opts.predecessorId ?? null);
+      .run(
+        opts.id,
+        opts.workspaceId,
+        opts.cwd,
+        opts.title,
+        opts.origin,
+        now,
+        now,
+        now,
+        opts.claudeId ?? '',
+        opts.predecessorId ?? null,
+        opts.ticketId ?? null,
+        opts.parentId ?? null,
+        opts.startedBy ?? null,
+        opts.worktree?.path ?? null,
+        opts.worktree?.branch ?? null,
+        opts.worktree?.repo ?? null,
+        opts.id,
+        opts.bypassCapable ? 1 : 0,
+      );
+    // Its first run: on its Claude, under its own id.
+    db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(opts.id, opts.claudeId ?? '', opts.id, opts.cwd, now);
     return this.get(opts.id)!;
   }
 
+  /** The id a chat goes by now: a folded session's old id (an alias) resolves to the chat that took it in. */
+  resolveId(id: string): string {
+    if (typeof id !== 'string' || !id) return id;
+    const own = this.#db().prepare('SELECT 1 FROM chat_sessions WHERE id = ?').get(id);
+    if (own) return id;
+    const alias = this.#db().prepare('SELECT session_id FROM chat_session_aliases WHERE alias_id = ?').get(id) as { session_id: string } | undefined;
+    return alias?.session_id ?? id;
+  }
+
   get(id: string): ChatSession | null {
-    const row = this.#db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id) as ChatSessionRow | undefined;
+    const row = this.#db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(this.resolveId(id)) as ChatSessionRow | undefined;
     return row ? this.toSession(row) : null;
   }
 
   /** The raw session row (for the controller's segment/offset/cwd/process bookkeeping). */
   row(id: string): ChatSessionRow | null {
-    return (this.#db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(id) as ChatSessionRow | undefined) ?? null;
+    return (this.#db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(this.resolveId(id)) as ChatSessionRow | undefined) ?? null;
   }
 
-  list(): ChatSession[] {
-    const rows = this.#db().prepare('SELECT * FROM chat_sessions ORDER BY last_activity_at DESC, created_at DESC').all() as ChatSessionRow[];
+  /** Sessions, newest activity first; optionally one workspace's, one ticket's, or one parent's children. */
+  list(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}): ChatSession[] {
+    const where: string[] = [];
+    const vals: string[] = [];
+    if (filter.workspaceId) (where.push('workspace_id = ?'), vals.push(filter.workspaceId));
+    if (filter.ticketId) (where.push('ticket_id = ?'), vals.push(filter.ticketId));
+    if (filter.parentId) (where.push('parent_id = ?'), vals.push(filter.parentId));
+    const rows = this.#db()
+      .prepare(`SELECT * FROM chat_sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY last_activity_at DESC, created_at DESC`)
+      .all(...vals) as ChatSessionRow[];
     return rows.map((r) => this.toSession(r));
+  }
+
+  /** Sessions that report to `from` report to `to` instead (a transfer: the successor carries on as the parent). */
+  reparentChildren(from: string, to: string): void {
+    this.#writable().prepare('UPDATE chat_sessions SET parent_id = ? WHERE parent_id = ?').run(to, from);
   }
 
   /** Sessions whose process should be running (for liveness checks and reattaching after a restart). */
@@ -277,6 +367,14 @@ export class ChatStore {
 
   toSession(row: ChatSessionRow): ChatSession {
     const waiting = (this.#db().prepare('SELECT count(*) AS n FROM chat_requests WHERE session_id = ? AND answered_at IS NULL').get(row.id) as { n: number }).n;
+    let waitingFor: string | null = null;
+    if (waiting > 0) {
+      const ask = this.#db().prepare('SELECT title, detail FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid LIMIT 1').get(row.id) as { title: string; detail: string | null } | undefined;
+      if (ask) {
+        const detail = ask.detail?.replace(/\s+/g, ' ').trim();
+        waitingFor = detail ? `${ask.title}: ${detail.length > 80 ? `${detail.slice(0, 79)}…` : detail}` : ask.title;
+      }
+    }
     return {
       id: row.id,
       workspaceId: row.workspace_id,
@@ -295,6 +393,7 @@ export class ChatStore {
       turns: row.turns,
       lastSeq: row.last_seq,
       waiting,
+      waitingFor,
       createdAt: row.created_at,
       lastActivityAt: row.last_activity_at,
       endedReason: row.ended_reason ?? null,
@@ -303,7 +402,128 @@ export class ChatStore {
       predecessorId: row.predecessor_id ?? null,
       successorId: row.successor_id ?? null,
       archivedAt: row.archived_at ?? null,
+      bypassCapable: row.bypass_capable === 1,
+      claudeSessionId: claudeSessionOf(row),
+      previousClaudes: this.#previousClaudes(row),
+      switching: null,
+      ticketId: row.ticket_id ?? null,
+      parentId: row.parent_id ?? null,
+      worktree: row.worktree_path ? { path: row.worktree_path, branch: row.worktree_branch ?? '', repo: row.worktree_repo ?? '' } : null,
+      startedBy: row.started_by ?? null,
     };
+  }
+
+  /** The other Claudes this chat ran on before its current one, oldest first, each once. */
+  #previousClaudes(row: ChatSessionRow): { claudeId: string; name: string }[] {
+    const rows = this.#db().prepare('SELECT DISTINCT claude_id FROM chat_segments WHERE session_id = ? AND claude_id != ? ORDER BY n').all(row.id, row.claude_id ?? '') as { claude_id: string }[];
+    const out: { claudeId: string; name: string }[] = [];
+    for (const r of rows) {
+      const name = this.claudeName(row.workspace_id, r.claude_id);
+      if (name) out.push({ claudeId: r.claude_id, name });
+    }
+    return out;
+  }
+
+  /** The runs of a chat on Claudes, oldest first. The one going now shows what it has cost and how many turns so far. */
+  segments(sessionId: string): ChatSegment[] {
+    const id = this.resolveId(sessionId);
+    const session = this.row(id);
+    if (!session) return [];
+    const rows = this.#db().prepare('SELECT * FROM chat_segments WHERE session_id = ? ORDER BY n').all(id) as SegmentRow[];
+    const closedTurns = rows.filter((r) => r.ended_at !== null).reduce((n, r) => n + r.turns, 0);
+    return rows.map((r) => {
+      const open = r.ended_at === null;
+      return {
+        n: r.n,
+        claudeId: r.claude_id,
+        claudeName: this.claudeName(session.workspace_id, r.claude_id) ?? 'Claude',
+        claudeSessionId: r.claude_session_id,
+        cwd: r.cwd,
+        startedAt: r.started_at,
+        endedAt: r.ended_at,
+        endedReason: r.ended_reason,
+        costUsd: open ? Math.max(0, session.cost_est_usd - (session.cost_base_usd ?? 0)) : r.cost_usd,
+        turns: open ? Math.max(0, session.turns - closedTurns) : r.turns,
+      };
+    });
+  }
+
+  /** Every Claude Code session id this chat has used: each has its own host folder to clean up on delete. */
+  claudeSessionIds(sessionId: string): string[] {
+    const id = this.resolveId(sessionId);
+    const rows = this.#db().prepare('SELECT DISTINCT claude_session_id AS c FROM chat_segments WHERE session_id = ?').all(id) as { c: string }[];
+    return [...new Set([id, ...rows.map((r) => r.c)])];
+  }
+
+  /**
+   * The chat moves to another Claude: its running segment closes (`switched`, with what it cost and how many
+   * turns) and a new one opens on `claudeId` under `claudeSessionId`. The row follows the new run: its Claude,
+   * Claude Code session, log segment and offset restart, the closed runs' cost becomes the base the new
+   * process's running total is added to, and the events so far belong to the earlier runs. Returns what
+   * {@link restoreSegment} needs to undo it.
+   */
+  switchSegment(
+    sessionId: string,
+    next: { claudeId: string; claudeSessionId: string; pid: number | null; startedAt: string | null },
+  ): { row: ChatSessionRow; segment: number } {
+    const db = this.#writable();
+    const before = this.row(sessionId)!;
+    let n = 0;
+    this.transaction(() => {
+      const now = this.#stamp();
+      const open = db.prepare('SELECT n FROM chat_segments WHERE session_id = ? AND ended_at IS NULL ORDER BY n DESC LIMIT 1').get(before.id) as { n: number } | undefined;
+      const closedTurns = (db.prepare('SELECT coalesce(sum(turns), 0) AS t FROM chat_segments WHERE session_id = ? AND ended_at IS NOT NULL').get(before.id) as { t: number }).t;
+      if (open)
+        db.prepare(`UPDATE chat_segments SET ended_at = ?, ended_reason = 'switched', cost_usd = ?, turns = ? WHERE session_id = ? AND n = ?`).run(
+          now,
+          Math.max(0, before.cost_est_usd - (before.cost_base_usd ?? 0)),
+          Math.max(0, before.turns - closedTurns),
+          before.id,
+          open.n,
+        );
+      n = ((db.prepare('SELECT coalesce(max(n), 0) AS n FROM chat_segments WHERE session_id = ?').get(before.id) as { n: number }).n ?? 0) + 1;
+      db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, ?, ?, ?, ?, ?)`).run(before.id, n, next.claudeId, next.claudeSessionId, before.cwd, now);
+      db.prepare(
+        `UPDATE chat_sessions SET claude_id = ?, claude_session_id = ?, segment = 0, byte_offset = 0, parent_pid = ?, process_started_at = ?, process = 'live',
+           cost_base_usd = cost_est_usd, segment_seq = last_seq, ended_reason = NULL WHERE id = ?`,
+      ).run(next.claudeId, next.claudeSessionId, next.pid, next.startedAt, before.id);
+    });
+    return { row: before, segment: n };
+  }
+
+  /** The switch didn't finish: the chat is back on the run it had (its row as it was, the new segment gone, the old one open again). */
+  restoreSegment(undo: { row: ChatSessionRow; segment: number }): void {
+    const db = this.#writable();
+    const b = undo.row;
+    this.transaction(() => {
+      db.prepare('DELETE FROM chat_segments WHERE session_id = ? AND n = ?').run(b.id, undo.segment);
+      db.prepare(`UPDATE chat_segments SET ended_at = NULL, ended_reason = NULL WHERE session_id = ? AND n = ?`).run(b.id, undo.segment - 1);
+      db.prepare(
+        `UPDATE chat_sessions SET claude_id = ?, claude_session_id = ?, segment = ?, byte_offset = ?, parent_pid = ?, process_started_at = ?, process = ?, state = ?, state_since = ?,
+           model = ?, mode = ?, effort = ?, ultracode = ?, ultracode_available = ?, context_used = ?, context_window = ?, cost_base_usd = ?, segment_seq = ?, ended_reason = ? WHERE id = ?`,
+      ).run(
+        b.claude_id ?? '',
+        claudeSessionOf(b),
+        b.segment,
+        b.byte_offset,
+        b.parent_pid,
+        b.process_started_at,
+        b.process,
+        b.state,
+        b.state_since,
+        b.model,
+        b.mode,
+        b.effort,
+        b.ultracode,
+        b.ultracode_available,
+        b.context_used,
+        b.context_window,
+        b.cost_base_usd ?? 0,
+        b.segment_seq ?? 0,
+        b.ended_reason,
+        b.id,
+      );
+    });
   }
 
   /** Appends an event with the next gap-free seq, bumps the session's last_seq and activity time. */
@@ -333,14 +553,18 @@ export class ChatStore {
 
   /** The running cost the session's newest `result` reported, or null before the first. */
   lastResultCost(sessionId: string): number | null {
-    const row = this.#db().prepare(`SELECT payload FROM chat_events WHERE session_id = ? AND kind = 'result' ORDER BY seq DESC LIMIT 1`).get(sessionId) as { payload: string } | undefined;
+    const row = this.#db()
+      .prepare(`SELECT payload FROM chat_events WHERE session_id = ? AND kind = 'result' AND seq > ? ORDER BY seq DESC LIMIT 1`)
+      .get(sessionId, this.#segmentSeq(sessionId)) as { payload: string } | undefined;
     const cost = row ? this.#parsePayload(row.payload).costUsd : undefined;
     return typeof cost === 'number' ? cost : null;
   }
 
   /** Each model's running totals the session's newest `result` reported, or null. */
   lastResultModelTotals(sessionId: string): ModelTotals[] | null {
-    const row = this.#db().prepare(`SELECT payload FROM chat_events WHERE session_id = ? AND kind = 'result' ORDER BY seq DESC LIMIT 1`).get(sessionId) as { payload: string } | undefined;
+    const row = this.#db()
+      .prepare(`SELECT payload FROM chat_events WHERE session_id = ? AND kind = 'result' AND seq > ? ORDER BY seq DESC LIMIT 1`)
+      .get(sessionId, this.#segmentSeq(sessionId)) as { payload: string } | undefined;
     const totals = row ? this.#parsePayload(row.payload).modelTotals : undefined;
     return Array.isArray(totals) ? (totals as ModelTotals[]) : null;
   }
@@ -403,8 +627,13 @@ export class ChatStore {
   /** Whether the one-time "Ready" note (from the first `system/init`) is stored; other system notes don't count. */
   hasReady(sessionId: string): boolean {
     return !!this.#db()
-      .prepare(`SELECT 1 FROM chat_events WHERE session_id = ? AND kind = 'system' AND json_extract(payload, '$.text') = 'Ready' LIMIT 1`)
-      .get(sessionId);
+      .prepare(`SELECT 1 FROM chat_events WHERE session_id = ? AND seq > ? AND kind = 'system' AND json_extract(payload, '$.text') = 'Ready' LIMIT 1`)
+      .get(sessionId, this.#segmentSeq(sessionId));
+  }
+
+  /** The seq the current run of Claude Code started after: what came before belongs to its earlier runs. */
+  #segmentSeq(sessionId: string): number {
+    return (this.#db().prepare('SELECT segment_seq AS s FROM chat_sessions WHERE id = ?').get(sessionId) as { s: number } | undefined)?.s ?? 0;
   }
 
   patchSession(id: string, patch: ChatSessionPatch): void {
@@ -426,7 +655,15 @@ export class ChatStore {
       set('state_since', now);
       set('last_activity_at', now);
     }
-    if (patch.cost !== undefined) set('cost_est_usd', patch.cost);
+    if (patch.cost !== undefined) {
+      sets.push('cost_est_usd = cost_base_usd + ?'); // a process's running total on top of what the closed runs cost
+      vals.push(patch.cost);
+    }
+    if (patch.costBase !== undefined) set('cost_base_usd', patch.costBase);
+    if (patch.segmentSeq !== undefined) set('segment_seq', patch.segmentSeq);
+    if (patch.claudeId !== undefined) set('claude_id', patch.claudeId);
+    if (patch.bypassCapable !== undefined) set('bypass_capable', patch.bypassCapable ? 1 : 0);
+    if (patch.claudeSessionId !== undefined) set('claude_session_id', patch.claudeSessionId);
     if (patch.turnsDelta !== undefined) {
       sets.push('turns = turns + ?');
       vals.push(patch.turnsDelta);
@@ -439,9 +676,16 @@ export class ChatStore {
     if (patch.processStartedAt !== undefined) set('process_started_at', patch.processStartedAt);
     if (patch.process !== undefined) set('process', patch.process);
     if (patch.archivedAt !== undefined) set('archived_at', patch.archivedAt);
+    if (patch.title !== undefined) set('title', patch.title);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
     if (patch.successorId !== undefined) set('successor_id', patch.successorId);
     if (patch.predecessorId !== undefined) set('predecessor_id', patch.predecessorId);
+    if (patch.ticketId !== undefined) set('ticket_id', patch.ticketId);
+    if (patch.worktree !== undefined) {
+      set('worktree_path', patch.worktree?.path ?? null);
+      set('worktree_branch', patch.worktree?.branch ?? null);
+      set('worktree_repo', patch.worktree?.repo ?? null);
+    }
     if (!sets.length) return;
     db.prepare(`UPDATE chat_sessions SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
   }
@@ -487,6 +731,11 @@ export class ChatStore {
   /** Whether the portal sent a message under this uuid in this session (whatever became of it). */
   isMessage(sessionId: string, uuid: string): boolean {
     return !!this.#db().prepare(`SELECT 1 FROM chat_inputs WHERE session_id = ? AND uuid = ? AND kind = 'message'`).get(sessionId, uuid);
+  }
+
+  /** How many sent messages Claude Code hasn't read yet (sending or queued). */
+  queuedMessages(sessionId: string): number {
+    return (this.#db().prepare(`SELECT count(*) AS n FROM chat_inputs WHERE session_id = ? AND kind = 'message' AND state IN ('sending', 'queued')`).get(sessionId) as { n: number }).n;
   }
 
   /** Whether a sent message is still with Claude Code (sending, queued or started). */
@@ -661,7 +910,7 @@ export class ChatStore {
   /** Its process is gone: requests nobody can answer any more read `expired`. Returns their ids. */
   expireOpenRequests(sessionId: string): string[] {
     const db = this.#writable();
-    const rows = db.prepare('SELECT request_id FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at').all(sessionId) as { request_id: string }[];
+    const rows = db.prepare('SELECT request_id FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid').all(sessionId) as { request_id: string }[];
     if (rows.length) db.prepare(`UPDATE chat_requests SET answered_at = ?, outcome = 'expired' WHERE session_id = ? AND answered_at IS NULL`).run(this.#stamp(), sessionId);
     return rows.map((r) => r.request_id);
   }
@@ -681,7 +930,7 @@ export class ChatStore {
 
   openRequests(sessionId: string): ChatRequest[] {
     const rows = this.#db()
-      .prepare('SELECT request_id, tool_use_id, kind, tool_name, agent_label, title, detail, created_at FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at')
+      .prepare('SELECT request_id, tool_use_id, kind, tool_name, agent_label, title, detail, created_at FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid')
       .all(sessionId) as RequestRow[];
     return rows.map((r) => ({
       requestId: r.request_id,
@@ -714,8 +963,62 @@ export class ChatStore {
       .run(workspaceId, folder, hash, JSON.stringify(scan), this.#stamp(), actor);
   }
 
+  /* ---------- Worktrees (chat-sessions PRD, Git worktrees per session) ---------- */
+
+  /** A worktree made for a chat that hasn't started yet (waiting on folder trust): the retry reuses it, a sweep removes it if nobody did. */
+  reserveWorktree(w: { workspaceId: string; path: string; repo: string; branch: string; base: string | null }): void {
+    this.#writable()
+      .prepare(
+        `INSERT INTO chat_worktrees (workspace_id, path, repo, branch, base, session_id, state, created_at) VALUES (?, ?, ?, ?, ?, NULL, 'reserved', ?)
+         ON CONFLICT (workspace_id, path) DO UPDATE SET repo = excluded.repo, branch = excluded.branch, base = excluded.base, session_id = NULL, state = 'reserved', created_at = excluded.created_at, removed_at = NULL`,
+      )
+      .run(w.workspaceId, w.path, w.repo, w.branch, w.base, this.#stamp());
+  }
+
+  worktreeAt(workspaceId: string, path: string): WorktreeRow | null {
+    const row = this.#db().prepare(`SELECT * FROM chat_worktrees WHERE workspace_id = ? AND path = ? AND state != 'removed'`).get(workspaceId, path) as WorktreeRecord | undefined;
+    return row ? toWorktree(row) : null;
+  }
+
+  /** A reserved worktree a retry found (by the branch it names): its repository and path, so the same request makes no second one. */
+  reservedWorktree(workspaceId: string, branch: string): WorktreeRow | null {
+    const row = this.#db()
+      .prepare(`SELECT * FROM chat_worktrees WHERE workspace_id = ? AND branch = ? AND state = 'reserved' ORDER BY created_at DESC LIMIT 1`)
+      .get(workspaceId, branch) as WorktreeRecord | undefined;
+    return row ? toWorktree(row) : null;
+  }
+
+  /** The chat now runs in it. */
+  activateWorktree(workspaceId: string, path: string, sessionId: string): void {
+    this.#writable().prepare(`UPDATE chat_worktrees SET session_id = ?, state = 'active' WHERE workspace_id = ? AND path = ?`).run(sessionId, workspaceId, path);
+  }
+
+  /** Its chat is gone and the folder stays (`kept`), or the folder is gone (`removed`). */
+  releaseWorktree(workspaceId: string, path: string, state: 'kept' | 'removed'): void {
+    this.#writable()
+      .prepare(`UPDATE chat_worktrees SET state = ?, session_id = NULL, removed_at = ? WHERE workspace_id = ? AND path = ?`)
+      .run(state, state === 'removed' ? this.#stamp() : null, workspaceId, path);
+  }
+
+  /** The worktrees the portal made in a workspace, none of them removed, newest first. */
+  worktrees(workspaceId: string): WorktreeRow[] {
+    const rows = this.#db().prepare(`SELECT * FROM chat_worktrees WHERE workspace_id = ? AND state != 'removed' ORDER BY created_at DESC`).all(workspaceId) as unknown as WorktreeRecord[];
+    return rows.map(toWorktree);
+  }
+
+  /** Worktrees reserved for a start that never came through, made before `before`. */
+  staleReservations(before: string): WorktreeRow[] {
+    const rows = this.#db().prepare(`SELECT * FROM chat_worktrees WHERE state = 'reserved' AND created_at < ?`).all(before) as unknown as WorktreeRecord[];
+    return rows.map(toWorktree);
+  }
+
   /** Only the allowlisted display fields of an event (never a raw tool input blob), with credentials redacted. */
   /** The workspace's Claudes, creating Default on first use. Default keeps the original home (no extra directory). */
+  /** Whether a Claude row exists for the workspace (a read never makes one). */
+  hasClaudes(workspaceId: string): boolean {
+    return !!this.#db().prepare('SELECT 1 FROM workspace_claudes WHERE workspace_id = ? LIMIT 1').get(workspaceId);
+  }
+
   listClaudes(workspaceId: string): WorkspaceClaude[] {
     this.ensureDefault(workspaceId);
     const rows = this.#db().prepare('SELECT * FROM workspace_claudes WHERE workspace_id = ? ORDER BY created_at, name').all(workspaceId) as ClaudeRow[];
@@ -781,16 +1084,53 @@ export class ChatStore {
     return row.n;
   }
 
-  /** Portal events, newest last, capped, already redacted in the store. */
-  contextSummary(sessionId: string): string {
-    const rows = this.history(sessionId);
-    const lines: string[] = [];
-    for (const ev of rows) {
-      if ((ev.kind !== 'user' && ev.kind !== 'assistant') || !ev.text?.trim()) continue;
-      lines.push(`${ev.kind === 'user' ? 'User' : 'Claude'}: ${ev.text.trim()}`);
-    }
-    const text = lines.join('\n\n');
-    return text.length > 8000 ? text.slice(-8000) : text;
+
+  /**
+   * Deletes a session (FR4): its row, and with it (cascade) its events, inputs, requests, tasks and file
+   * links. Usage rows stay (FR49) and so do handoff rows; a predecessor or successor no longer points
+   * at it. Returns the blobs it linked, for the caller to prune once nothing else links them.
+   */
+  deleteSession(id: string): string[] {
+    const db = this.#writable();
+    let blobs: string[] = [];
+    this.transaction(() => {
+      blobs = (db.prepare('SELECT DISTINCT blob_sha256 AS b FROM chat_files WHERE session_id = ? AND blob_sha256 IS NOT NULL').all(id) as { b: string }[]).map((r) => r.b);
+      db.prepare('UPDATE chat_sessions SET successor_id = NULL WHERE successor_id = ?').run(id);
+      db.prepare('UPDATE chat_sessions SET predecessor_id = NULL WHERE predecessor_id = ?').run(id);
+      db.prepare('UPDATE chat_sessions SET parent_id = NULL WHERE parent_id = ?').run(id);
+      db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id);
+    });
+    return blobs;
+  }
+
+  /* ---------- Audit ---------- */
+
+  /** One entry of the audit trail. `detail` holds names and ids only, redacted: never a secret or a message. */
+  addAudit(entry: { severity: ChatAuditEntry['severity']; kind: string; sessionId?: string | null; workspaceId?: string | null; actor?: string | null; detail?: Record<string, unknown> }): void {
+    this.#writable()
+      .prepare('INSERT INTO chat_audit (at, severity, kind, session_id, workspace_id, actor, detail) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(this.#stamp(), entry.severity, entry.kind, entry.sessionId ?? null, entry.workspaceId ?? null, entry.actor ?? null, redact(JSON.stringify(entry.detail ?? {})));
+  }
+
+  /** The audit trail, newest first; optionally one kind (a prefix such as `bypass`) or one session's. */
+  audit(filter: { kind?: string; sessionId?: string; limit?: number } = {}): ChatAuditEntry[] {
+    const where: string[] = [];
+    const vals: (string | number)[] = [];
+    if (filter.kind) (where.push('(kind = ? OR kind LIKE ?)'), vals.push(filter.kind, `${filter.kind}.%`));
+    if (filter.sessionId) (where.push('session_id = ?'), vals.push(this.resolveId(filter.sessionId)));
+    const rows = this.#db()
+      .prepare(`SELECT * FROM chat_audit ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`)
+      .all(...vals, Math.min(Math.max(filter.limit ?? 100, 1), 500)) as { id: number; at: string; severity: string; kind: string; session_id: string | null; workspace_id: string | null; actor: string | null; detail: string }[];
+    return rows.map((r) => {
+      let detail: Record<string, unknown> = {};
+      try {
+        const v: unknown = JSON.parse(r.detail);
+        if (v && typeof v === 'object') detail = v as Record<string, unknown>;
+      } catch {
+        // a row that can't be read shows without detail
+      }
+      return { id: r.id, at: r.at, severity: r.severity as ChatAuditEntry['severity'], kind: r.kind, sessionId: r.session_id, workspaceId: r.workspace_id, actor: r.actor, detail };
+    });
   }
 
   saveHandoff(row: { id: string; workspaceId: string; sourceSessionId: string; sourceClaudeId: string; destClaudeId: string; path: string }): void {
@@ -802,6 +1142,11 @@ export class ChatStore {
       .run(row.id, row.workspaceId, row.sourceSessionId, row.sourceClaudeId, row.destClaudeId, row.path, this.#stamp());
   }
 
+  /** The move didn't finish: the handoff has no successor after all. */
+  clearHandoffSuccessor(id: string): void {
+    this.#writable().prepare('UPDATE claude_handoffs SET successor_session_id = NULL WHERE id = ?').run(id);
+  }
+
   setHandoffSuccessor(id: string, successorId: string): void {
     this.#writable().prepare('UPDATE claude_handoffs SET successor_session_id = ? WHERE id = ?').run(successorId, id);
   }
@@ -810,7 +1155,7 @@ export class ChatStore {
     const p: Record<string, unknown> = {};
     if (ev.text !== undefined) {
       const text = redact(ev.text); // whole, before truncating, so a cut never splits a credential
-      p.text = text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}…` : text;
+      p.text = text.length > EVENT_TEXT_MAX ? `${text.slice(0, EVENT_TEXT_MAX)}…` : text;
     }
     if (ev.toolName !== undefined) p.toolName = ev.toolName;
     if (ev.request !== undefined) p.request = { ...ev.request, detail: redactMaybe(ev.request.detail) };
@@ -824,11 +1169,20 @@ export class ChatStore {
     if (ev.kind === 'result' && ev.turnCostUsd !== undefined) p.turnCostUsd = ev.turnCostUsd;
     if (ev.kind === 'result' && ev.tokens) p.tokens = ev.tokens;
     if (ev.kind === 'result' && ev.modelTotals?.length) p.modelTotals = ev.modelTotals;
+    if (ev.handoffId) p.handoffId = ev.handoffId;
+    if ((ev.kind === 'user' || ev.kind === 'system') && ev.transfer) p.transfer = { ...ev.transfer, fromClaude: redact(ev.transfer.fromClaude), toClaude: redact(ev.transfer.toClaude) };
+    if (ev.kind === 'user' && ev.actor) {
+      p.actor = redact(ev.actor);
+      if (ev.actorLabel) p.actorLabel = redact(ev.actorLabel);
+    }
     // The readable sub-agent label, when it isn't just the raw parent_tool_use_id kept in its column.
     if (ev.agentLabel && ev.agentLabel !== ev.parentToolUseId) p.agentLabel = redact(ev.agentLabel);
     // Blob references only: base64 never reaches a row (the controller moves it to the blob store).
     const images = (ev.images ?? []).map(imageRef).filter((i): i is ChatImage => i !== null);
     if (images.length) p.images = images;
+    // Files you attached, or the agent produced (chat content): the allow-listed reference fields only.
+    const files = fileRefs(ev.files);
+    if (files.length) p.files = files;
     return p;
   }
 
@@ -856,7 +1210,30 @@ export class ChatStore {
       const images = payload.images.map(imageRef).filter((i): i is ChatImage => i !== null);
       if (images.length) ev.images = images;
     }
+    if (Array.isArray(payload.files)) {
+      const files = fileRefs(payload.files);
+      if (files.length) ev.files = files;
+    }
     if (row.kind === 'user' && row.uuid !== null) ev.uuid = row.uuid;
+    if (typeof payload.handoffId === 'string') ev.handoffId = payload.handoffId;
+    if (row.kind === 'user' && typeof payload.actor === 'string') {
+      ev.actor = payload.actor;
+      if (typeof payload.actorLabel === 'string') ev.actorLabel = payload.actorLabel;
+    }
+    const tr = payload.transfer as Record<string, unknown> | undefined;
+    if ((row.kind === 'user' || row.kind === 'system') && tr && typeof tr === 'object') {
+      const str = (v: unknown) => (typeof v === 'string' ? v : '');
+      ev.transfer = {
+        fromClaude: str(tr.fromClaude),
+        toClaude: str(tr.toClaude),
+        sourceSessionId: str(tr.sourceSessionId),
+        path: str(tr.path),
+        messages: typeof tr.messages === 'number' ? tr.messages : 0,
+        truncated: tr.truncated === true,
+        ...(tr.handoff === true ? { handoff: true } : {}),
+        ...(typeof tr.handoffId === 'string' ? { handoffId: tr.handoffId } : {}),
+      };
+    }
     return ev;
   }
 
@@ -869,6 +1246,55 @@ export class ChatStore {
     }
   }
 }
+
+type SegmentRow = {
+  session_id: string;
+  n: number;
+  claude_id: string;
+  claude_session_id: string;
+  cwd: string;
+  started_at: string;
+  ended_at: string | null;
+  ended_reason: string | null;
+  cost_usd: number;
+  turns: number;
+};
+
+/** One row of `chat_worktrees`. */
+type WorktreeRecord = {
+  workspace_id: string;
+  path: string;
+  repo: string;
+  branch: string;
+  base: string | null;
+  session_id: string | null;
+  state: string;
+  created_at: string;
+  removed_at: string | null;
+};
+
+/** A worktree the portal made, as the controller reads it. */
+export interface WorktreeRow {
+  workspaceId: string;
+  path: string;
+  repo: string;
+  branch: string;
+  base: string | null;
+  sessionId: string | null;
+  state: 'reserved' | 'active' | 'kept' | 'removed';
+  createdAt: string;
+}
+
+const toWorktree = (r: WorktreeRecord): WorktreeRow => ({
+  workspaceId: r.workspace_id,
+  path: r.path,
+  repo: r.repo,
+  branch: r.branch,
+  base: r.base,
+  sessionId: r.session_id,
+  state: r.state === 'active' || r.state === 'kept' || r.state === 'removed' ? r.state : 'reserved',
+  createdAt: r.created_at,
+});
 
 type ClaudeRow = {
   id: string;

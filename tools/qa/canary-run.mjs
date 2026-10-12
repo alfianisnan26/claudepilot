@@ -1,0 +1,26 @@
+// Runs a Bash command that prints the exposed canary secret, approves it, and prints what the transcript stored.
+import { readFileSync } from 'node:fs';
+import { api, login, openChat, sleep } from './lib.mjs';
+const canary = readFileSync('/tmp/qa-canary.txt', 'utf8').trim();
+const cookie = await login();
+const call = api(cookie);
+const created = await call('POST', '/api/chat/sessions', { workspaceId: 'docker/qa-ws1', title: 'QA canary' });
+if (created.status !== 201) throw new Error(JSON.stringify(created.body));
+const id = created.data.id;
+console.log('session', id);
+const chat = await openChat(cookie, id);
+await chat.until((c) => c.session && c.session.state === 'idle', 30000, 'idle');
+const printed = 'echo "CANARY=$QA_CANARY FILE=$(cat $QA_CANARY_FILE)"';
+await chat.send(`[[bash ${printed}]]`);
+await chat.until((c) => c.requests.length > 0, 30000, 'approval request');
+console.log('request detail:', JSON.stringify(chat.requests[0]).slice(0, 300));
+await chat.respond(chat.requests[0].requestId, 'allow');
+await chat.idle(60000);
+for (const e of chat.events) console.log(e.seq, e.kind, e.toolName ?? '', JSON.stringify(e.text ?? e.request?.detail ?? '').slice(0, 200));
+const raw = JSON.stringify(chat.messages);
+console.log('canary in socket frames:', raw.includes(canary));
+const events = await call('GET', `/api/chat/sessions/${id}/events?after=0`);
+console.log('canary in events API:', events.text.includes(canary), 'status', events.status);
+chat.close();
+console.log('SESSION_ID', id);
+process.exit(0);

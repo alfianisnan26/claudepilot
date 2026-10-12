@@ -1,7 +1,9 @@
-import { Badge, Button, ConfirmDialog, CopyButton, LoadError, Switch, useToast, type BadgeTone } from '@isnanme/ui';
+import { Button, ConfirmDialog, CopyButton, LoadError, PageTabs, Switch, useToast } from '@isnanme/ui';
 import { formatCode, type AdminState, type CodeSource } from '@portal/contracts';
 import { Eye, EyeOff, LogOut, PenLine, Power, RefreshCw, Users } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router';
+import { McpAccess } from '@/features/portalmcp/McpAccess';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
@@ -12,10 +14,10 @@ import { formatDateTime, timeAgo } from '@/lib/format';
 import { CustomCodeDialog } from './CustomCodeDialog';
 import { StorageRow } from './StorageSection';
 
-const SOURCE: Record<CodeSource, { label: string; tone: BadgeTone }> = {
-  env: { label: 'From env', tone: 'neutral' },
-  generated: { label: 'Generated', tone: 'success' },
-  custom: { label: 'Custom', tone: 'warning' },
+const SOURCE: Record<CodeSource, string> = {
+  env: 'From the environment',
+  generated: 'Generated',
+  custom: 'Custom',
 };
 
 /**
@@ -23,6 +25,7 @@ const SOURCE: Record<CodeSource, { label: string; tone: BadgeTone }> = {
  * explanations sit behind ⓘ notes so the page fits one phone screen.
  */
 export function AccessPage() {
+  const [tabs, setTabs] = useSearchParams();
   const toast = useToast();
   const { logout } = useAuth();
   const [state, setState] = useState<AdminState | null>(null);
@@ -75,18 +78,16 @@ export function AccessPage() {
 
   return (
     <>
-      <PageHeader
-        title="Access"
-        action={
-          state && (
-            <Badge tone={state.enabled ? 'success' : 'danger'} className="mb-1">
-              <span className={`size-1.5 rounded-full ${state.enabled ? 'bg-accent' : 'bg-danger'}`} />
-              {state.enabled ? 'Open' : 'Closed'}
-            </Badge>
-          )
-        }
-      />
+      <PageHeader title="Access" />
 
+      {/* Two tabs (Portal MCP PRD §15): today's sign-in sections, and the MCP endpoint's tokens and activity. */}
+      <PageTabs
+        label="Access"
+        stack="never"
+        value={tabs.get('tab')}
+        onChange={(id) => setTabs(id ? { tab: id } : {}, { replace: true })}
+        tabs={[
+          { id: 'signin', label: 'Sign-in', content: (<>
       {loadFailed && <LoadError onRetry={load} />}
       {!state && !loadFailed && (
         <div className="flex flex-col gap-8" aria-busy="true">
@@ -105,7 +106,7 @@ export function AccessPage() {
                 Share it only with people who manage this portal. Rotating signs out every other session.
                 {state.source === 'env' && ' A new code replaces PORTAL_SERVER_CODE until the server restarts.'}
                 <span className="mt-1.5 block text-muted" title={formatDateTime(state.codeUpdatedAt)}>
-                  Set {timeAgo(state.codeUpdatedAt)}.
+                  {SOURCE[state.source]} · set {timeAgo(state.codeUpdatedAt)}.
                 </span>
               </InfoTip>
             </div>
@@ -127,14 +128,12 @@ export function AccessPage() {
               </Button>
               <CopyButton value={state.code} toastMessage="Server code copied" />
             </div>
-            <div className="mt-3 flex items-center gap-2">
-              <Badge tone={SOURCE[state.source].tone}>{SOURCE[state.source].label}</Badge>
-              <span className="flex-1" />
+            <div className="mt-3 flex items-center justify-end gap-2">
               <Button variant="secondary" size="sm" icon={<RefreshCw className="size-4" />} onClick={() => setConfirm('rotate')}>
                 Rotate
               </Button>
-              <Button variant="ghost" size="sm" icon={<PenLine className="size-4" />} aria-label="Set a custom code" onClick={() => setCustomOpen(true)}>
-                Custom
+              <Button variant="ghost" size="icon" aria-label="Set a custom code" title="Set a custom code" onClick={() => setCustomOpen(true)}>
+                <PenLine className="size-[18px]" />
               </Button>
             </div>
           </Card>
@@ -145,7 +144,7 @@ export function AccessPage() {
                 icon={<Power className="size-5" />}
                 tone={state.enabled ? 'accent' : 'neutral'}
                 label="Sign-in"
-                sub={state.enabled ? 'Anyone with the code' : 'Off · signed-in sessions keep working'}
+                sub={state.enabled ? undefined : 'Off'}
                 trailing={
                   <Switch
                     label="Allow sign-in"
@@ -174,16 +173,16 @@ export function AccessPage() {
           </Card>
         </div>
       )}
+          </>) },
+          { id: 'mcp', label: 'MCP', content: <McpAccess /> },
+        ]}
+      />
 
       <ConfirmDialog
         open={confirm === 'rotate'}
         tone="primary"
         title="Rotate the server code?"
-        description={
-          others
-            ? `A new code is generated and ${othersText} ${others === 1 ? 'is' : 'are'} signed out. You stay signed in.`
-            : 'A new code is generated. The current one stops working. You stay signed in.'
-        }
+        description={others ? `Signs out ${othersText}.` : 'The current code stops working.'}
         confirmLabel="Rotate"
         loading={busy}
         onConfirm={() => void rotate()}
@@ -192,7 +191,7 @@ export function AccessPage() {
       <ConfirmDialog
         open={confirm === 'disable'}
         title="Turn off sign-in?"
-        description="Nobody can sign in with the code until it's turned back on or the server restarts. You stay signed in."
+        description="No one can sign in until it's turned back on."
         confirmLabel="Turn off"
         loading={busy}
         onConfirm={() => void setEnabled(false)}

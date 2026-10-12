@@ -32,6 +32,7 @@ import {
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
+import { bodyLimit } from 'hono/body-limit';
 import { csrf } from 'hono/csrf';
 import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
@@ -40,13 +41,15 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AccountHealthService } from './accounts/health.js';
 import type { ChatController } from './chat/controller.js';
 import { createChatFileRoutes } from './chat/fileRoutes.js';
-import { createChatRoutes, createClaudeRoutes, createUsageRoutes } from './chat/routes.js';
+import { Reauth } from './chat/reauth.js';
+import { createChatMetaRoutes, createChatRoutes, createClaudeRoutes, createUsageRoutes } from './chat/routes.js';
 import { createChatTrustRoutes } from './chat/trustRoutes.js';
 import type { AccountPools } from './accounts/pools.js';
 import type { AccountsService } from './accounts/service.js';
 import { runPreflight } from './delivery/preflight.js';
 import type { Reconciler } from './delivery/reconciler.js';
 import { config } from './config.js';
+import { contentSecurityPolicy } from './csp.js';
 import type { Portal } from './portal.js';
 import { RateLimiter } from './rateLimit.js';
 import { ClaudeLogins } from './workspaces/claudeLogin.js';
@@ -55,10 +58,38 @@ import { deliveryState, workspaceView } from './workspaces/view.js';
 import { generateSecretKey, parseSecretKey, SecretKeyError } from './store/secretBox.js';
 import type { Store } from './store/store.js';
 import type { Workspaces } from './workspaces/manager.js';
+import { createPoolRoutes, createWorkspacePoolRoutes } from './pools/routes.js';
+import { createSecretsRoutes } from './secrets/routes.js';
+import type { PoolService } from './pools/service.js';
+import type { McpSets } from './mcp/index.js';
+import { createMcpRoutes } from './mcp/routes.js';
+import type { SkillsModule } from './skills/module.js';
+import { createSkillRoutes } from './skills/routes.js';
+import { createKnowledgeRoutes } from './knowledge/routes.js';
+import type { KnowledgeService } from './knowledge/service.js';
+import { createPersonaRoutes, type Personas } from './personas/index.js';
+import { createSettingsRoutes, type SettingsModule } from './settings/index.js';
+import { createSecretsAdminRoutes } from './secrets/adminRoutes.js';
+import type { SecretRotations } from './secrets/rotation.js';
+import type { PortalMcpModule } from './portalmcp/module.js';
+import { createPortalMcpEndpoint, createPortalMcpRoutes } from './portalmcp/routes.js';
+import type { Tickets } from './tickets/service.js';
+import { createTicketRoutes } from './tickets/routes.js';
+import type { CiService } from './ci/service.js';
+import { createCiRoutes } from './ci/routes.js';
+import type { BrowserModule } from './browser/index.js';
+import { isWorkspaceId, PLAIN_NAME } from './names.js';
+import { createClaudeUsageRoutes, type ClaudeUsageMonitor } from './claudeusage/index.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
 
-const clientKey = (c: Context<Env>) => c.env.incoming?.socket.remoteAddress ?? 'unknown';
+/** Letters, digits, dot, underscore and dash, starting with a letter or digit: what a target or a workspace is ever called. */
+export { PLAIN_NAME };
+
+const clientKey = (c: Context<Env>) => {
+  const forwarded = config.trustProxy ? c.req.header('x-forwarded-for')?.split(',').at(-1)?.trim() : undefined;
+  return forwarded || (c.env.incoming?.socket.remoteAddress ?? 'unknown');
+};
 
 async function body<T>(c: Context<Env>): Promise<Partial<T>> {
   try {
@@ -78,15 +109,96 @@ export function createApp(
   reconciler: Reconciler,
   health: AccountHealthService,
   chatController: ChatController,
-  { serveWeb, notify = () => {} }: { serveWeb: boolean; notify?: (...topics: LiveTopic[]) => void },
+  {
+    serveWeb,
+    notify = () => {},
+    poolService,
+    mcp,
+    skills,
+    personas,
+    settings,
+    secrets,
+    portalMcp,
+    tickets,
+    ci,
+    knowledge,
+    browser,
+    claudeUsage,
+  }: {
+    serveWeb: boolean;
+    notify?: (...topics: LiveTopic[]) => void;
+    /** Multi-assignment pools (secrets & env, skillsets, MCP sets). */
+    poolService: PoolService;
+    /** MCP sets: the catalog and each workspace's MCP status (`/api/mcp`). */
+    mcp?: McpSets;
+    /** Skillsets: the skill library, reviews and each workspace's skills (`/api/skills`). */
+    skills?: SkillsModule;
+    /** Personas and instruction contexts: what a workspace's persona is (`/api/personas`). */
+    personas?: Personas;
+    /** The settings store and the MCP lockdown (`/api/settings`). */
+    settings?: SettingsModule;
+    /** Secrets & env: rotation, versions and revocation (`/api/secrets`). */
+    secrets?: SecretRotations;
+    /** Portal MCP: the `/mcp` endpoint (bearer tokens) and its admin routes (`/api/portal-mcp`). */
+    portalMcp?: PortalMcpModule;
+    /** Tickets: the queue of work for people and agents (`/api/tickets`). */
+    tickets?: Tickets;
+    /** CI: remotes, runs and their logs (`/api/ci`). */
+    ci?: CiService;
+    /** Knowledge: vaults of notes, search and graphs (`/api/knowledge`). */
+    knowledge?: KnowledgeService;
+    /** Browser & desktop: each workspace's browser container (`/api/workspaces/:target/:name/browser`). */
+    browser?: BrowserModule;
+    /** Claude usage: the plan limits of each Claude (`/api/claude-usage`). */
+    claudeUsage?: ClaudeUsageMonitor;
+  },
 ) {
   const app = new Hono<Env>();
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
   const { cookie, ttlMs } = config.session;
 
   // Served over plain HTTP: no HSTS.
-  app.use(secureHeaders({ strictTransportSecurity: false }));
+  // The built app also gets a CSP (csp.ts); the dev server's pages come from Vite, not from here.
+  app.use(secureHeaders({ strictTransportSecurity: false, ...(serveWeb ? { contentSecurityPolicy: contentSecurityPolicy(`${config.paths.webDist}/index.html`) } : {}) }));
+  // What the API says is for this session only: never kept by a shared cache or replayed from the back/forward cache.
+  // (Blobs and downloads set their own Cache-Control.)
+  app.use('/api/*', async (c, next) => {
+    await next();
+    if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
+  });
   app.use('/api/*', csrf());
+  // csrf() only looks at form-like content types. Browsers name the origin on every request that is not a plain
+  // GET, so a JSON request from another origin (or marked cross-site) is refused here too (same host rule as the sockets).
+  app.use('/api/*', async (c, next) => {
+    if (!/^(GET|HEAD|OPTIONS)$/.test(c.req.method)) {
+      const origin = c.req.header('origin');
+      let foreign = c.req.header('sec-fetch-site') === 'cross-site';
+      if (origin !== undefined) {
+        try {
+          foreign = new URL(origin).host !== c.req.header('host');
+        } catch {
+          foreign = true;
+        }
+      }
+      if (foreign) throw new AppError('FORBIDDEN', 'Forbidden');
+    }
+    await next();
+  });
+  // Bodies are refused by their size before anything reads them into memory: sign-in takes a few bytes (and needs no session, so
+  // it must not buffer megabytes for a stranger), a JSON call a few MB; uploads have their own, lower limits (QA-028).
+  const limit = (maxSize: number) =>
+    bodyLimit({
+      maxSize,
+      onError: (c) => {
+        const e = new AppError('PAYLOAD_TOO_LARGE', 'That request is too large.');
+        return c.json(e.toJSON(), e.status as ContentfulStatusCode);
+      },
+    });
+  const loginLimit = limit(4 * 1024);
+  const jsonLimit = limit(4 * 1024 * 1024);
+  const anyLimit = limit(256 * 1024 * 1024);
+  app.use(API.login, loginLimit);
+  app.use('/api/*', (c, next) => (/^application\/json/i.test(c.req.header('content-type') ?? '') ? jsonLimit(c, next) : anyLimit(c, next)));
 
   app.onError((e, c) => {
     const error = isAppError(e)
@@ -136,9 +248,30 @@ export function createApp(
     return c.json(success({ ok: true }));
   });
 
+  // A workspace id in a body or a query string ends up in Docker API URLs, tmux names, shell words and the database just like one in a path
+  // (QA-029, QA-032): a call that names one that is not `<target>/<name>` of plain names is refused here, signed in, before a handler
+  // sees it. Empty means "none" and is the handler's to judge.
+  const WORKSPACE_FIELDS = ['workspaceId', 'workspaceIds', 'workspace', 'workspaces'];
+  const notAnId = (v: unknown) => typeof v === 'string' && v !== '' && !isWorkspaceId(v);
+  const hostileWorkspaceField = async (c: Context<Env>): Promise<string | null> => {
+    for (const f of WORKSPACE_FIELDS) if (c.req.queries(f)?.some(notAnId)) return f;
+    if (/^(POST|PUT|PATCH|DELETE)$/.test(c.req.method) && /^application\/json/i.test(c.req.header('content-type') ?? '')) {
+      // A clone, so the handler still gets the stream untouched (the avatar and file routes read it themselves).
+      const json: unknown = await c.req.raw.clone().json().catch(() => undefined);
+      if (json && typeof json === 'object' && !Array.isArray(json)) {
+        for (const f of WORKSPACE_FIELDS) {
+          const v = (json as Record<string, unknown>)[f];
+          if (Array.isArray(v) ? v.some(notAnId) : notAnId(v)) return f;
+        }
+      }
+    }
+    return null;
+  };
   const requireSession = createMiddleware<Env>(async (c, next) => {
     const token = getCookie(c, cookie);
     if (!token || !portal.session(token)) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    const field = await hostileWorkspaceField(c);
+    if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });
     c.set('token', token);
     await next();
   });
@@ -168,7 +301,9 @@ export function createApp(
   };
   const systemStatus = (): SystemStatus => {
     const backups = store.listBackups();
-    const locked = !store.secrets;
+    // Locked means a key problem. A database that froze before its key was looked at (a failed migration, a newer
+    // schema) has no secrets either, but entering a key can't fix that, so no key action is offered for it.
+    const locked = !store.secrets && store.trust.reasons.some((r) => r.code.startsWith('key-'));
     return {
       portalId: store.portalId,
       schemaVersion: store.schemaVersion,
@@ -257,6 +392,23 @@ export function createApp(
 
   const ws = new Hono<Env>();
   ws.use(requireSession);
+  // The target and name in these paths end up in Docker API URLs, tmux session names and shell commands. A name with a slash, `..`
+  // or a control character (`..%2f..%2fcontainers`) used to reach the Docker daemon as a path, and its redirect crashed the portal
+  // (QA-029). Only plain names get past here; anything else is a workspace that doesn't exist.
+  const plainName = createMiddleware<Env>(async (c, next) => {
+    const [target, name] = [c.req.param('target') ?? '', c.req.param('name') ?? ''];
+    if (!PLAIN_NAME.test(target) || !PLAIN_NAME.test(name)) throw new AppError('NOT_FOUND', 'That workspace doesn’t exist.');
+    await next();
+  });
+  ws.use('/:target/:name', plainName);
+  ws.use('/:target/:name/*', plainName);
+  // The same check for the `…/:target/:name…` paths of the other modules (MCP sets, skills, personas, lockdown, the portal MCP's agent
+  // switches). They hand the name on to the reconciler and the runtimes, which kept a hostile one as a "known workspace" and asked
+  // Docker for it again every 15 seconds. Mounted right after each module's session guard.
+  const plainNamesOn = (group: Hono<Env>, base: string) => {
+    group.use(base, plainName);
+    group.use(`${base}/*`, plainName);
+  };
   ws.get('/targets', async (c) => c.json(success(await workspaces.targets(c.req.query('fresh') === '1'))));
   ws.get('/usage', async (c) => c.json(success(await workspaces.usage())));
   const delivery = (id: string) => deliveryState(reconciler, id);
@@ -279,7 +431,7 @@ export function createApp(
   const claudeDir = (c: Context<Env>) => {
     const id = c.req.query('claude');
     if (!id) return '';
-    const claude = chatController.listClaudes(`${c.req.param('target')}/${c.req.param('name')}`).find((x) => x.id === id && !x.removedAt);
+    const claude = chatController.claudeOf(`${c.req.param('target')}/${c.req.param('name')}`, id);
     if (!claude) throw new AppError('NOT_FOUND', 'That Claude isn’t on this workspace.');
     return claude.directory;
   };
@@ -323,7 +475,7 @@ export function createApp(
   // from `claude auth status` (status and method only), and the terminals running as each.
   ws.get('/:target/:name/claudes', async (c) => {
     const [target, name] = [c.req.param('target'), c.req.param('name')];
-    const live = chatController.listClaudes(`${target}/${name}`).filter((x) => !x.removedAt);
+    const live = (await chatController.claudesOf(`${target}/${name}`)).filter((x) => !x.removedAt);
     const open = await terminals.list(target, name).catch(() => []);
     const states = await Promise.all(
       live.map(async (claude): Promise<WorkspaceClaudeState> => ({
@@ -351,9 +503,11 @@ export function createApp(
     const poolId = req.accountPoolId ?? null;
     if (poolId && !pools.list().some((p) => p.id === poolId))
       throw new AppError('VALIDATION_FAILED', 'That account pool no longer exists.', { details: { accountPoolId: 'Pick another pool.' } });
+    const addOns = poolService.checkAddOns(req.pools);
     const created = await workspaces.create(req);
     // A new workspace has no sign-in of its own yet, so no override confirmation is needed.
     if (poolId) pools.assign(created.id, { poolId }, { existing: false });
+    for (const [type, ids] of Object.entries(addOns)) poolService.setAssignments(created.id, type, ids.map((id) => ({ poolId: id })));
     console.log(`[workspaces] creating ${created.id}${poolId ? ' with an account pool' : ''}`);
     return c.json(success(decorate(created)), 202);
   });
@@ -382,8 +536,16 @@ export function createApp(
   ws.delete('/:target/:name', async (c) => {
     await workspaces.remove(c.req.param('target'), c.req.param('name'));
     pools.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
+    poolService.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
+    settings?.lockdown.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     return c.json(success({ ok: true }));
   });
+  // A workspace's multi-assignment pools: GET …/pools, PUT …/pools/:type.
+  ws.route('/', createWorkspacePoolRoutes({ service: poolService, reconciler }));
+  // Secrets & env: what a workspace's sets deliver (names only) and the migration check (FR15).
+  ws.route('/', createSecretsRoutes({ pools: poolService, workspaces }));
+  // Browser & desktop: a workspace's browser status, wake, stop and restart.
+  if (browser) ws.route('/', browser.routes());
   app.route('/api/workspaces', ws);
 
   const acc = new Hono<Env>();
@@ -433,6 +595,99 @@ export function createApp(
   });
   app.route('/api/account-pools', ap);
 
+  // Multi-assignment pools (secrets & env, skillsets, MCP sets): one set of routes for every type.
+  const pl = new Hono<Env>();
+  pl.use(requireSession);
+  pl.route('/', createPoolRoutes({ service: poolService }));
+  app.route('/api/pools', pl);
+
+  // MCP sets: the catalog, "Try in set" and each workspace's MCP status (the sets use /api/pools/mcpset).
+  if (mcp) {
+    const mc = new Hono<Env>();
+    mc.use(requireSession);
+    plainNamesOn(mc, '/workspaces/:target/:name');
+    mc.route('/', createMcpRoutes(mcp));
+    app.route('/api/mcp', mc);
+  }
+
+  // Skillsets: the library, imports, reviews and each workspace's skills (the sets use /api/pools/skillset).
+  if (skills) {
+    const sk = new Hono<Env>();
+    sk.use(requireSession);
+    plainNamesOn(sk, '/workspaces/:target/:name');
+    sk.route('/', createSkillRoutes(skills));
+    app.route('/api/skills', sk);
+  }
+
+  // Secrets & env: rotate a secret, the tracker, versions, revoke (values are write-only; none is ever returned).
+  if (secrets) {
+    const sr = new Hono<Env>();
+    sr.use(requireSession);
+    sr.route('/', createSecretsAdminRoutes(() => secrets));
+    app.route('/api/secrets', sr);
+  }
+
+  // The settings store: every setting, one change (audited), the audit trail and a workspace's MCP lockdown status.
+  if (settings) {
+    const st = new Hono<Env>();
+    st.use(requireSession);
+    plainNamesOn(st, '/lockdown/:target/:name');
+    st.route('/', createSettingsRoutes(settings));
+    app.route('/api/settings', st);
+  }
+
+  // Personas and instruction contexts: a workspace's persona and contexts (the pools use /api/pools/persona and …/context).
+  if (personas) {
+    const pr = new Hono<Env>();
+    pr.use(requireSession);
+    plainNamesOn(pr, '/workspaces/:target/:name');
+    pr.route('/', createPersonaRoutes(personas));
+    app.route('/api/personas', pr);
+  }
+
+  // Knowledge: vaults of Markdown notes, search, history and the graphs (docs/prd/knowledge-graph.md).
+  if (knowledge) {
+    const kg = new Hono<Env>();
+    kg.use(requireSession);
+    kg.route('/', createKnowledgeRoutes(knowledge));
+    app.route('/api/knowledge', kg);
+  }
+
+  // Portal MCP: `/mcp` takes bearer tokens, not the session cookie, and sits outside /api (whose CSRF check rejects
+  // form posts); the admin's routes for its tokens, switches and audit are guarded like every other /api route.
+  if (portalMcp) {
+    app.route('/', createPortalMcpEndpoint(portalMcp));
+    const pm = new Hono<Env>();
+    pm.use(requireSession);
+    plainNamesOn(pm, '/agents/:target/:name');
+    pm.route('/', createPortalMcpRoutes(portalMcp, { workspaces: async () => (await workspaces.list()).map((w) => ({ id: w.id, name: w.name })) }));
+    app.route('/api/portal-mcp', pm);
+  }
+
+  // Tickets: the queue of work for people and agents; agents reach it through Portal MCP tools instead.
+  if (tickets) {
+    const tk = new Hono<Env>();
+    tk.use(requireSession);
+    tk.route('/', createTicketRoutes(tickets));
+    app.route('/api/tickets', tk);
+  }
+
+  // CI: a git remote on each workspace and the runs of its pipelines (docs/prd/local-git-ci.md).
+  if (ci) {
+    const cr = new Hono<Env>();
+    cr.use(requireSession);
+    cr.route('/', createCiRoutes(ci));
+    app.route('/api/ci', cr);
+  }
+
+  // Claude usage: the plan limits of each Claude, read from Claude Code itself (docs/prd/claude-usage.md).
+  if (claudeUsage) {
+    const cu = new Hono<Env>();
+    cu.use(requireSession);
+    cu.route('/', createClaudeUsageRoutes(claudeUsage));
+    app.route('/api/claude-usage', cu);
+  }
+
   // Chat sessions (REST); the live part rides its own socket (chat/socket.ts).
   const chat = new Hono<Env>();
   chat.use(requireSession);
@@ -451,6 +706,13 @@ export function createApp(
   trust.use(requireSession);
   trust.route('/', createChatTrustRoutes({ controller: chatController, workspaces, store }));
   app.route('/api/chat/trust', trust);
+  // The server code checked again (guards Bypass in chat), the chat policy and its audit trail.
+  const chatReauth = new Reauth(portal);
+  chatController.reauth = chatReauth;
+  const chatMeta = new Hono<Env>();
+  chatMeta.use(requireSession);
+  chatMeta.route('/', createChatMetaRoutes(chatController, chatReauth));
+  app.route('/api/chat', chatMeta);
 
   app.all('/api/*', () => {
     throw new AppError('NOT_FOUND');
@@ -461,7 +723,8 @@ export function createApp(
     const root = relative(process.cwd(), config.paths.webDist) || '.';
     app.use('/assets/*', async (c, next) => {
       await next();
-      c.header('Cache-Control', 'public, max-age=31536000, immutable');
+      // Only a file that exists is immutable: a miss must never be kept for a year as if it were that file.
+      if (c.res.status === 200) c.header('Cache-Control', 'public, max-age=31536000, immutable');
     });
     // The worker and the manifest must always be re-checked, or an update can take days to reach installed copies.
     app.use('/sw.js', async (c, next) => {
@@ -473,6 +736,14 @@ export function createApp(
       c.header('Cache-Control', 'no-cache');
     });
     app.use('*', serveStatic({ root }));
+    // A missing file is a 404, not the app shell: the shell served for a missing script fails with a MIME error and blanks the
+    // page of a tab that stayed open across a deploy (the hashed chunks it still asks for are gone). Client-side routes
+    // never carry a file extension.
+    app.get('*', async (c, next) => {
+      if (!/^\/assets\/|\.(?:m?js|css|map|json|png|jpe?g|gif|svg|ico|webp|avif|woff2?|ttf|txt|xml|webmanifest|wasm)$/i.test(c.req.path)) return next();
+      c.header('Cache-Control', 'no-store');
+      return c.text('Not found', 404);
+    });
     // Client-side routes: every other path gets the app shell.
     app.get('*', serveStatic({ root, path: 'index.html' }));
   }

@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.6** (consistency pass: version folders, one secret reference form, the browser's reserved prefix and the Web app's routes). Written from research on Claude Code 2.1.296 and the MCP Registry. ✅ = observed in throwaway containers from the workspace image (Claude Code 2.1.296, `claude -p` and CLI commands), with fake secrets, local dummy MCP servers and the layout in §10.2. 📄 = documented by Anthropic or the MCP project, not observed by us. 🔬 = unverified, listed in §22. |
+| Status | **Draft v0.8.** v0.8 adds the owner's "pool MCP only" request: reading (a), the pool as the only MCP source, is **built** in [Settings & policies](settings-policies.md) §22 and verified here (FR19a); reading (b), one pool MCP gateway, is **designed, not built** (§23). v0.7 records what was built: M1 is **built** and was run end to end in a Docker workspace through the portal's own delivery (§19); M2 to M5 are not built yet. v0.6 (consistency pass: version folders, one secret reference form, the browser's reserved prefix and the Web app's routes). Written from research on Claude Code 2.1.296 and the MCP Registry. ✅ = observed in throwaway containers from the workspace image (Claude Code 2.1.296, `claude -p` and CLI commands), with fake secrets, local dummy MCP servers and the layout in §10.2. 📄 = documented by Anthropic or the MCP project, not observed by us. 🔬 = unverified, listed in §22. |
 | Owner | Alfian Isnan |
-| Last updated | 2026-10-10 |
+| Last updated | 2026-10-12 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, delivery engine, plugin marketplace, outbox), [Secrets & env](secrets-env-pool.md) (the secrets that servers reference), [Settings & policies](settings-policies.md) (clean environment, MCP allowlists, allow rules), [Monitoring dashboard](monitoring-dashboard.md) (connection status and usage) |
 | Related | [Skillset pool](skillset-pool.md) (shared marketplace, reviewable revisions), [Chat sessions](chat-sessions.md), [Portal MCP server](portal-mcp.md), [Persona pool](persona-pool.md) (tool lists that name MCP tools) |
 
@@ -141,6 +141,8 @@ checks, a stdio probe and Monitoring (§13, §14).
   names (`workspace`, `claude-in-chrome`, `computer-use`, `Claude Preview`, `Claude Browser`) are
   refused. Plugin prefixes are reserved per owner: `cpm-` for MCP sets, `cpb-` for the browser pool.
 
+- **FR5a** Proposals (the global "add MCP" flow, [Portal MCP](portal-mcp.md) I3): an agent or a token proposes an entry, or a new version of one, through `proposeEntry` (`apps/server/src/mcp`). The result is always a draft, with the proposer (`portal-mcp:<token id>`, `session:<id>` or `ticket:<id>`) and a reason recorded and shown to the reviewer as plain text. Secrets appear as slot names only: anything credential-shaped, or invisible and direction-changing characters, in any text is refused. A proposal is never edited once made, since a person may be reading it: the proposer withdraws it or proposes another version. At most 10 wait per proposer and 40 in all. It goes through the same catalog, validation and SSRF guard as "Add manually", and only a person approving it in the portal (FR3) makes it deliverable: no set accepts a draft, and approval is a route behind the portal's sign-in that a proposal never reaches. **Built** (server and tests; the catalog's "Proposed by" badge is in the web milestone).
+
 ### MCP Registry
 
 - **FR6** Hourly incremental mirror of `https://registry.modelcontextprotocol.io/v0.1/servers`
@@ -235,6 +237,13 @@ checks, a stdio probe and Monitoring (§13, §14).
   aren't used. The browser pool reports its matchers the same way (Browser & desktop §11.1). A server
   that policy still blocks shows "Blocked by policy", which the portal works out from the effective
   lists, since Claude Code drops the server silently.
+- **FR19a** The allowlist is built (the owner's "Pool MCP only" switch, Settings & policies §22): the
+  settings module asks `McpSets.matchers(workspace)` for every workspace it delivers to. ✅ 2.1.296:
+  with it on, `claude mcp list` shows these servers and nothing else (a repository's `.mcp.json`, the user's
+  `~/.claude.json`, `--mcp-config` and claude.ai connectors are blocked), `claude mcp add` is refused, an
+  empty pool blocks every server, and a remote server is admitted by its `serverUrl`. Adding or removing
+  a server changes the allowlist, so each such change delivers the settings drop-in too: both are
+  computed in the same delivery pass, the drop-in by calling the MCP fragment's own compile, never from a second list.
 
 ## 9. Data model
 
@@ -287,7 +296,7 @@ per workspace.
 | `…/cpm-<set>/<hash12>/.mcp.json` | One entry per delivered server (example below). |
 | `…/cpm-<set>/<hash12>/servers/<server>.json` | The server's map: its `target`, and its variables or headers as lists of parts. Never values. |
 | `/etc/claudepilot/bin/mcp-launch`, `mcp-headers` (and `uv`, `uvx` where the image lacks them) | Items of the foundation's script bundle, not baked into the image (A6). |
-| `~/.cache/claudepilot/mcp/` | The launcher's working directory: a `package.json` stub, so npm looks no further up, and the pre-installed packages (§12). Written through `exec` as the workspace user. |
+| `~/.cache/claudepilot/mcp/` | The launcher's working directory: a `package.json` stub, so npm looks no further up, and the pre-installed packages (§12). Written through `exec` as the workspace user, owner-only (`0700`, files `0600`), since `docker exec` runs with umask `0000` ✅. |
 | `~/.claudepilot/outbox/mcp.jsonl` | Launcher and helper events, never values (§13.2, foundation §8). |
 
 ```json
@@ -315,7 +324,8 @@ newline trimmed, at most 64 KB); a GitHub login is a `file` part naming its toke
   `pypi:<pkg>==<version>:<bin>` or `cmd:<path>`) reads the server's map from the version folder the
   current `marketplace.json` entry names, and exits with "server changed or removed; run
   /reload-plugins" if that map is gone or its `target` differs, so a session still on an older folder
-  can't restart an old or revoked version. It sets `PATH` and `HOME`, exports the variables and two
+  can't restart an old or revoked version. It sets `PATH` and `HOME`, masks group and world write in
+  its umask (`docker exec` gives `0000` ✅, which left npx's cache world-writable), exports the variables and two
   non-secret markers (`CLAUDEPILOT_MCP_SERVER=cpm-<set>/<server>`, `CLAUDEPILOT_MCP_TARGET=<target>`),
   and changes to `~/.cache/claudepilot/mcp`; otherwise the server runs in the session's working
   directory, the user's repository ✅. Then it runs the pre-installed package by absolute path, or
@@ -504,7 +514,11 @@ The portal connects with the official MCP TypeScript SDK client and the referenc
   portal labels it "Credential rejected" when its own check agrees (§13.1). `claude plugin list
   --json` returns `[]` until a session has registered the marketplace, then lists each plugin's
   `readFromFolder`, `folderVersion` and `errors` ✅ (cross-pool lab; an earlier run here saw only
-  `[]`). It names no servers, so FR16 uses `plugin details`.
+  `[]`). It names no servers, so FR16 uses `plugin details`. ✅ `claude mcp list` connects the set's
+  servers without registering the marketplace, and `plugin details` says "Marketplace 'claudepilot'
+  not found" until a session has started, even a `claude -p` that stops at "Not logged in". The
+  verify shows that as "Not verified yet" and runs again as soon as the outbox reports one of the
+  set's servers starting there.
 
 ### 13.3 OAuth servers
 
@@ -598,7 +612,7 @@ CopyButton).
 | Suite | What it covers | When |
 | --- | --- | --- |
 | Lab regression | The ✅ claims: plugin load, launcher and helper with maps, clean environment, scrub with bubblewrap, `MCP_TIMEOUT`, matchers, duplicates, tool-name length, `plugin details` parsing. Fake secrets, local dummy servers, no network. | CI, on each Claude Code version before the pinned version moves |
-| Hostile repository | The session's directory holds an `.npmrc` pointing at another registry, a `uv.toml`, a `pyproject.toml` with `[tool.uv]`, and `node_modules/<pkg>` at the pinned version with an install script. Pass: the reviewed package starts, from the public registry, and no install script runs (Q11). | CI; M1 gate |
+| Hostile repository | The session's directory holds an `.npmrc` pointing at another registry, a `uv.toml`, a `pyproject.toml` with `[tool.uv]`, and `node_modules/<pkg>` at the pinned version with an install script. Pass: the reviewed package starts, from the public registry, and no install script runs (Q11). Passed by hand for npm (Q11); not in CI yet. | CI; M1 gate |
 | Interactive | Q1 with its fallbacks (§10.5), and Q3, in a `claude` session driven through tmux. | By hand; M1 gate |
 | OAuth | Q2 with a test OAuth server: sign-in through the web terminal, token storage, restart survival. | By hand; M2 gate |
 | Secret leaks | Canary secrets never appear in revisions, settings, `.mcp.json`, maps, arguments, URLs, logs, the outbox, API responses or probe output. | CI |
@@ -608,11 +622,11 @@ CopyButton).
 
 | Milestone | Scope | Gate |
 | --- | --- | --- |
-| M1 | Catalog (manual npm and remote entries, review), sets, secret references, MCP fragment, Docker delivery, launcher with npm pre-install and hardened first use, helper, verify step, Preview files, FR19 matchers, Revoke | Foundation F2 and F6, A4; Secrets & env files and FR21; Q1, Q11 |
-| M2 | Portal checks, stdio probe, tool snapshots, duplicate check, OAuth status and sign-in help | Q2 |
-| M3 | MCP Registry mirror, search, import, status alerts | |
-| M4 | `uv` in the image and the bundle, PyPI servers, Kubernetes delivery | Foundation F3; Skillset A6; Q7 |
-| M5 | Tool rules with bulk rules, per-set usage from Monitoring | Monitoring FR16–FR18 |
+| M1 | Catalog (manual npm and remote entries, review), sets, secret references, MCP fragment, Docker delivery, launcher with npm pre-install and hardened first use, helper, verify step, Preview files, FR19 matchers, Revoke. **Built.** Server: the catalog with its review (FR1–FR5; `command` entries too), sets with "Try in set" (FR4, FR9–FR11, FR13), the fragment (FR14, §10.2), the launcher and helper, the npm pre-install through the run-in-workspace step with removal after 14 days unused (§12), the verify (FR16), launcher events (§13.2), the FR19 matchers (`GET /api/mcp/workspaces/<target>/<name>/matchers`), Revoke (FR13b); migration 15. Web: the MCP sets tab, the Catalog and entry pages with the review, the set editor page with a picker of Secrets names and Preview files, the workspace Configuration row (each server's delivery state, install with Retry, the verify with "Verify again", missing names, FR11's warnings, "as of"), and Add-ons listing the names the picked sets need. ✅ Run end to end in a Docker workspace through the portal's own delivery (Claude Code 2.1.296, no login): `claude mcp list` showed `plugin:cpm-lab-tools:memory: /etc/claudepilot/bin/mcp-launch cpm-lab-tools/memory -- npm:@modelcontextprotocol/server-memory@1.0.0 - ✔ Connected` with no prompt; the pre-install took 28 s, so a `claude mcp list` started before it ended ran the server by first use and the next one from the pre-installed package (outbox `source`); `plugin details` found no marketplace until a session had started (§13.2), then listed `memory`, and the portal's verify recorded it as loaded; Revoke stopped the running server, took the plugin out of `enabledPlugins`, added the deny rule, and `claude mcp list` then listed nothing. ✅ In a throwaway container from the workspace image with the compiled files: an npm, a `command` and a remote server with a headers helper all connected; the stdio server got the secret file's value (trailing newline trimmed), both markers and the cache folder as its working directory; the remote server got `Bearer <value>`; canary values were in no delivered file, outbox line or Claude Code file. Not done: Q1 in an interactive session (it needs a signed-in TTY), and the lab and hostile-repository suites (§18), run by hand (Q11) but not in CI yet. | Foundation F2 and F6, A4; Secrets & env files and FR21; Q1, Q11 |
+| M2 | Portal checks, stdio probe, tool snapshots, duplicate check, OAuth status and sign-in help. Not built: an `oauth` entry's FR1 fields already reach `.mcp.json`, but nothing shows "Needs sign-in" yet. | Q2 |
+| M3 | MCP Registry mirror, search, import, status alerts. Not built. | |
+| M4 | `uv` in the image and the bundle, PyPI servers, Kubernetes delivery. Not built: the catalog refuses PyPI entries, and Kubernetes workspaces wait for foundation F3. | Foundation F3; Skillset A6; Q7 |
+| M5 | Tool rules with bulk rules, per-set usage from Monitoring. Not built. | Monitoring FR16–FR18 |
 
 The FR19 matchers ship in M1 because Settings & policies' "Pool-delivered only" allowlist (its
 milestone S3) would otherwise block every set.
@@ -695,15 +709,48 @@ milestone S3) would otherwise block every set.
 
 | ID | Question | Who decides |
 | --- | --- | --- |
-| Q1 | 🔬 Do interactive sessions load the managed directory marketplace's plugin servers without a prompt? `claude -p` and `claude mcp list` do ✅. If not, which §10.5 fallback does? Same as foundation Q1. | Sandbox (TTY) |
+| Q1 | 🔬 Do interactive sessions load the managed directory marketplace's plugin servers without a prompt? `claude -p` and `claude mcp list` do ✅. If not, which §10.5 fallback does? Same as foundation Q1. Not checked for M1: an interactive `claude` without a login stops at its onboarding before loading plugins, so this needs a signed-in test account. | Sandbox (TTY) |
 | Q2 | 🔬 OAuth with a plugin-provided remote server: does `claude mcp login --no-browser plugin:<plugin>:<server>` work in the portal's web terminal, where is the token stored on Linux, and does it survive a workspace restart? | Sandbox with a test OAuth server |
 | Q3 | 🔬 Does `/mcp` Reconnect restart a connected stdio server, so a rotated secret applies without a new session? `/reload-plugins` keeps unchanged servers 📄. | Sandbox (TTY) |
 | Q7 | What egress does the k3s cluster allow: npm, PyPI, GitHub releases (for `uv` and managed Python), remote MCP hosts? Without it, offline vendoring moves into v1. | Operator |
 | Q8 | Answered: Secrets & env accepts per-server degradation, the check-service call, the "For MCP servers" preset and the stdio rotation note, and keeps one reference form instead of the two new ones (§21, FR10). | Product, with [Secrets & env](secrets-env-pool.md) |
 | Q9 | With one shared admin login, approval can't require a second person. Is a self-review checklist enough for v1? | Product |
 | Q10 | Are npm `--ignore-scripts` and uv `--no-build` acceptable defaults, given that packages with native add-ons or only source distributions then need an override at review? | Engineering |
-| Q11 | 🔬 Do `npx` with `npm_config_ignore_scripts=true` and `uvx --no-build` skip install scripts and source builds, and do the fixed directory, `--userconfig /dev/null` and `--no-config` keep a repository's npm and uv configuration out (§18)? | Lab test (M1 gate) |
+| Q11 | Answered for npm ✅ (by hand, M1): from a hostile repository (an `.npmrc` naming another registry, `ignore-scripts=false`, a `script-shell` and `node-options`; a user `~/.npmrc` likewise; `node_modules` holding the pinned version with install scripts and a fake bin; `uv.toml` and `[tool.uv]`), `claude mcp list` started the reviewed package through the launcher's first use from `registry.npmjs.org`, in the fixed directory, and the pre-install did the same; nothing planted ran. Controls: plain `npx` from that repository ran the fake bin and the `.npmrc` hooks, and an install with scripts allowed ran esbuild's postinstall, which the default skipped. 🔬 Still open for `uvx --no-build` and `--no-config` (M4). | Lab test (M1 gate) |
 
 Closed since the previous draft, IDs kept: Q4 (allowlists apply to plugin servers: documented, and
 ✅, FR19), Q5 (`MCP_TIMEOUT`, `PATH` and `HOME`, `${NAME}` expansion: ✅, §10.2) and Q6 (tool names
 over 64 characters: ✅, FR18).
+
+## 23. Pool MCP only: the policy (built) and the single gateway (design)
+
+The owner asked that "single MCP only" mean connections to the pool's MCP and nothing else, and that Claude
+manage MCP only through the pool, never by creating a connection inside a session. Two readings.
+
+**(a) The pool is the only MCP source: a policy. Built.** Two global switches in Settings
+(Account MCP off, Pool MCP only) delivered to every workspace as managed settings (Settings & policies §22).
+Claude can still propose a server (Portal MCP I3), which waits for a person's review in the catalog. What a
+workspace loads is whatever the sets deliver, each server as its own connection.
+
+**(b) One "pool MCP" gateway. Designed, not built.** A single stdio MCP server, `plugin:cpm-gateway:pool`,
+delivered into every workspace that has a set, which fronts all assigned servers behind one connection.
+
+| Aspect | Design |
+| --- | --- |
+| How it runs | `/etc/claudepilot/bin/pool-mcp`, started by Claude Code as the portal's own plugin server. It reads `/etc/claudepilot/mcp/gateway.json` (today's per-server parts: target, args, env and header slot references) and spawns children through `mcp-launch`; remote servers over HTTP. |
+| Tool names | `mcp__plugin_cpm-gateway_pool__<server>__<tool>`: 31 characters of fixed prefix, so a long set slug no longer eats the 64-character budget (FR18), but rules written against `mcp__plugin_cpm-<set>_<server>__*` change shape (prefix rules still work). |
+| Allowlist | One matcher, the gateway's launcher argv. It no longer changes when a set changes, which removes the allowlist churn (FR19a) and is the literal "single MCP". |
+| Token cost | Tool descriptions cost the same per tool; one server's instructions instead of one per server. No saving worth the work on its own. |
+| Applying changes | The gateway watches its manifest and sends `notifications/tools/list_changed`: a set change reaches **running** sessions without `/reload-plugins` or a new session (§10.3 today). The one clear gain. |
+| Startup | It answers `initialize` and `tools/list` from the last tool snapshot (M2) and starts children on first use: faster session start (every stdio server starts at session start now) at the cost of a slower first call. |
+| Failure isolation | Worse by construction: the gateway is one process in front of all of them. It must time out and restart each child on its own, return a per-tool error for a dead child, and keep `tools/list` stable. A crash drops every pool server at once, not one. |
+| Secrets | One parent process would hold every server's secrets. It reads a secret file only when it spawns that child, passes it only to that child, keeps none, and its own environment holds none. A user with `sudo` can read process memory either way (foundation §2). |
+| What it cannot front | Servers needing OAuth: the client flow (`claude mcp login`, token storage, refresh) is per server in Claude Code, and the gateway would have to implement an OAuth client. Sampling, elicitation, resources and prompts need forwarding per child. Per-server enable and disable in `/mcp` disappears (one entry). |
+| Management tools | Read-only `pool_status` (what is delivered, state, last error, no values). Proposals stay in the Portal MCP, which holds the agent token (I8): the gateway holds no portal credential. |
+
+**Recommendation.** Do not build (b) now. (a) already makes the pool the only source and is verified; (b)
+mostly moves the same servers behind one process, and costs an MCP proxy (protocol surface, OAuth, failure
+isolation) to gain live `list_changed` and a one-line allowlist. Revisit when sessions with many pool servers
+start slowly, when allowlist churn causes delivery trouble, or when "applies without a restart" becomes a
+requirement. If built: M2's tool snapshots first (the gateway needs them), remote servers without OAuth
+first, OAuth servers stay separate connections.

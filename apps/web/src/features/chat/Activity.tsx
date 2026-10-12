@@ -1,8 +1,9 @@
-import { cn, ease } from '@isnanme/ui';
+import { cn } from '@isnanme/ui';
 import type { ChatEvent } from '@portal/contracts';
 import { ChevronRight, Lightbulb, type LucideIcon } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useState, type ReactNode } from 'react';
+import { MOTION } from './motion';
 import { formatSeconds, shortTarget, toolIcon, toolLabel, type TranscriptRow } from './ToolRows';
 import { usageLine, type TurnUsage } from './Usage';
 
@@ -99,7 +100,7 @@ export function ActivityBlock({
                   layout
                   initial={{ scale: 0.4, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
-                  transition={{ type: 'spring', stiffness: 520, damping: 30 }}
+                  transition={MOTION.pop}
                   className={cn(hidden > 0 || i > 0 ? '-ml-1.5' : '')}
                 >
                   <Chip danger={failed(s)}>
@@ -113,7 +114,7 @@ export function ActivityBlock({
               layout
               initial={{ scale: 0.4, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: 'spring', stiffness: 520, damping: 30 }}
+              transition={MOTION.pop}
               className={cn(shown.length > 0 || hidden > 0 ? '-ml-1.5' : '')}
             >
               <Chip latest danger={latest ? failed(latest) : false}>
@@ -130,7 +131,7 @@ export function ActivityBlock({
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.18, ease }}
+              transition={MOTION.swap}
               className={cn('block truncate', live ? 'shimmer' : latest && failed(latest) ? 'text-danger' : 'text-ink-soft')}
             >
               {text}
@@ -147,7 +148,7 @@ export function ActivityBlock({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.24, ease }}
+            transition={MOTION.expand}
             className="w-full overflow-hidden"
           >
             <div className="mt-1.5 ml-3 flex flex-col gap-2 border-l border-line/80 pl-3.5">

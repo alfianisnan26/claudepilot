@@ -3,7 +3,7 @@
 // Claude Code process detached, with a FIFO for stdin and an appended segment file for stdout. It also
 // serves Files and Diff (C3): folder listings, file bytes and git changes, under a path policy.
 
-import { CHAT_MAX_DOWNLOAD_BYTES } from '@portal/contracts';
+import { CHAT_MAX_DOWNLOAD_BYTES, CHAT_MAX_UPLOAD_BYTES } from '@portal/contracts';
 
 /** Where the reconciler installs the script inside a workspace (foundation-owned `bin/` path). */
 export const CP_SESSION_PATH = '/etc/claudepilot/bin/cp-session';
@@ -15,6 +15,8 @@ export const DIFF_MAX_PATCH_BYTES = 1_000_000;
 /** Exit codes of the Files and Diff commands: a path the policy refuses, a file over the download limit. */
 export const HOST_REFUSED = 2;
 export const HOST_TOO_LARGE = 6;
+/** `put` reads the file as base64 on stdin; it takes at most this many characters (a file of {@link CHAT_MAX_UPLOAD_BYTES}). */
+export const PUT_MAX_BASE64 = 4 * Math.ceil(CHAT_MAX_UPLOAD_BYTES / 3);
 
 /** The project settings `trustscan` reads (FR43), in the fixed order their digests are hashed. */
 export const TRUST_FILES = ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json'] as const;
@@ -22,6 +24,9 @@ export const TRUST_FILES = ['.mcp.json', '.claude/settings.json', '.claude/setti
 export const TRUST_MAX_FILE_BYTES = 1_000_000;
 /** `trustscan`'s hash when none of {@link TRUST_FILES} is there: the sha256 of nothing. */
 export const TRUST_EMPTY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
+/** The environment names `start --env` accepts (anything else exits 2): a session's portal-tool token and where to reach them, and the switch that keeps claude.ai's connectors out. */
+export const HOST_ENV_NAMES = ['PILOT_MCP_TOKEN', 'PILOT_SESSION_ID', 'PILOT_WORKSPACE_ID', 'PILOT_MCP_URL', 'ENABLE_CLAUDEAI_MCP_SERVERS'] as const;
 
 /** Account Pool's managed-settings drop-in, the one file `authcheck` reads (delivery `ownership.ts`). */
 export const ACCOUNT_DROPIN = '/etc/claude-code/managed-settings.d/40-claudepilot-account.json';
@@ -31,14 +36,32 @@ export const ACCOUNT_HELPER = '/etc/claudepilot/bin/account-key';
 /**
  * The POSIX `sh` (dash, no bashisms) session host. One process per session, guarded by a `flock`.
  *
- * - `start <id> <seg> <cwd> -- <claude-args...>` detaches `claude` (new session via `setsid`) running
+ * - `start <id> <seg> <cwd> [--env <n>] -- <claude-args...>` detaches `claude` (new session via `setsid`) running
  *   in `<cwd>`, its stdin a FIFO opened read-write so sends never close it, its stdout appended to
- *   `out.<seg>.jsonl`. Prints `<pid> <iso8601-utc>`; exit 3 if a session is already running.
+ *   `out.<seg>.jsonl`. Prints `<pid> <iso8601-utc>`; exit 3 if a session is already running. `--env <n>` reads
+ *   `<n>` lines `NAME=value` from stdin into that process's environment (a short fixed list of names; anything
+ *   else exits 2): a per-session token must never be on a command line, where any process in the workspace
+ *   could read it, or in a file. When `/etc/claudepilot/persona/chat-prompt.md` exists (a persona is delivered;
+ *   `CLAUDEPILOT_PERSONA_PROMPT` moves it, for tests), it is appended to the system prompt with
+ *   `--append-system-prompt-file`, at every start, resume and wake.
  * - `send <id> <uuid> <nbytes>` stages exactly `<nbytes>` from stdin, checks it is one JSON line, and
  *   appends it to the FIFO under a lock.
  * - `tail <id> <seg> <offset>` streams the segment from a byte offset and follows it, ending when the
  *   exec stdin closes or after 600 s.
  * - `stop <id>` SIGTERMs the whole process group; `status <id>` prints `live <pid>` or `gone`.
+ * - `purge <id>` deletes the session's directory (segments, uploads, staged inputs) for a deleted
+ *   session; exit 3, nothing deleted, while its process is still alive.
+ * - `put <id> <name> <nchars> <nbytes>` stages an attachment (chat content, FR31): `<nchars>` characters of
+ *   base64 on stdin become `${CLAUDEPILOT_UPLOADS_DIR:-$HOME/.claudepilot/uploads}/<id>/<name>` (mode 0600,
+ *   written under a temporary name and renamed, never through a link), which must come to exactly `<nbytes>`
+ *   (exit 4 when it doesn't, so a cut-short upload leaves nothing), and its path is printed. `<name>` is plain
+ *   ASCII (letters, digits, dot, dash, underscore; no leading dot); exit 2 for anything else, 6 for more
+ *   than {@link PUT_MAX_BASE64} characters. `unstage <id>` deletes the session's staged files.
+ * - `produced <dir> <since> <max>` lists the files written in a folder since an instant (artifacts a command
+ *   made, chat content): a first line `#dir<TAB><the folder's real path>`, then `<size><TAB><mtime-epoch><TAB>
+ *   <path relative to it>` for at most `<max>` regular files newer than `<since>` (epoch seconds), skipping
+ *   `.git`, `node_modules`, caches and virtual environments, and never leaving the folder's file system. The
+ *   same path policy as `ls`; names with a newline are left out.
  *
  * Session files live under `${CLAUDEPILOT_SESSIONS_DIR:-$HOME/.claudepilot/sessions}/<id>/` and are
  * referenced by absolute path, since `claude` runs with its own working directory.
@@ -122,6 +145,20 @@ enter() {
   here="\${here%"$nl"}"
   inroot "$here" && [ -r . ]
 }
+# git, hardened as Diff's is: no hook, fsmonitor, pager, external diff or filter (clean, smudge, process) the configuration defines
+# ever runs, and nothing asks a question. Call it inside the repository: the filters it names come from that repository's
+# configuration and the user's. Then \`hg\` is git with those switches.
+hardened() {
+  export GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat LC_ALL=C
+  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE GIT_CEILING_DIRECTORIES
+  gf='-c core.fsmonitor= -c core.hooksPath=/dev/null -c diff.external= -c core.pager=cat -c core.quotePath=false -c color.ui=false'
+  for f in $(git $gf config --name-only --get-regexp '^filter\\.' | sed -n 's/^filter\\.\\([A-Za-z0-9_.-]*\\)\\.[a-z]*$/\\1/p' | sort -u); do
+    gf="$gf -c filter.$f.clean= -c filter.$f.smudge= -c filter.$f.process= -c filter.$f.required=false"
+  done
+}
+hg() { git $gf "$@"; }
+# The first line of git's complaint, printable ASCII only, for the portal to show.
+oneline() { printf '%s' "$1" | head -n 1 | tr -cd '\\11\\40-\\176' | cut -c1-200; }
 # Prints the file open on fd 3 once the opened file itself checks out, so a path swapped after the
 # check can't redirect the read; 6 when it's over the download limit.
 catfd() {
@@ -155,8 +192,25 @@ case "$cmd" in
     valid "$id" || exit 2
     valid "$seg" || exit 2
     case "$cwd" in /*) ;; *) exit 2 ;; esac
-    [ "\${4:-}" = '--' ] || exit 2
-    shift 4
+    shift 3
+    # Optional environment for the process, one NAME=value per line on stdin (never argv, never a file).
+    envn=0
+    if [ "\${1:-}" = '--env' ]; then envn="\${2:-}"; digits "$envn" || exit 2; shift 2; fi
+    [ "\${1:-}" = '--' ] || exit 2
+    shift
+    i=0
+    while [ "$i" -lt "$envn" ]; do
+      IFS= read -r line || [ -n "$line" ] || exit 2
+      name="\${line%%=*}"
+      case "$name" in
+        ${HOST_ENV_NAMES.join('|')}) export "$name=\${line#*=}" ;;
+        *) exit 2 ;;
+      esac
+      i=$((i + 1))
+    done
+    # A delivered persona goes at the end of the system prompt (never replacing it).
+    persona="\${CLAUDEPILOT_PERSONA_PROMPT:-/etc/claudepilot/persona/chat-prompt.md}"
+    if [ -f "$persona" ]; then set -- "$@" --append-system-prompt-file "$persona"; fi
     dir="$base/$id"
     mkdir -p "$dir" || exit 1
     # Already running? run.lock is held for the life of claude, so a free lock means no live process.
@@ -216,6 +270,59 @@ case "$cmd" in
     if kill -0 "-$pid" 2>/dev/null; then kill -TERM "-$pid" 2>/dev/null; fi
     exit 0
     ;;
+  purge)
+    # A deleted session's files: segments, uploads and staged inputs. Refused (3) while its process lives.
+    id="\${1:-}"
+    valid "$id" || exit 2
+    dir="$base/$id"
+    pid="$(cat "$dir/parent.pid" 2>/dev/null)"
+    if [ -n "\${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then exit 3; fi
+    rm -rf -- "$dir"
+    exit 0
+    ;;
+  put)
+    # An attachment, staged for Claude to read: ~/.claudepilot/uploads/<id>/<name>. The bytes arrive as base64 on
+    # stdin (exactly <nchars> characters), so the same exec works on every target. Never written through a link.
+    exec 2>/dev/null
+    id="\${1:-}"; name="\${2:-}"; nchars="\${3:-}"; nbytes="\${4:-}"
+    valid "$id" || exit 2
+    case "$name" in ''|.*|*[!A-Za-z0-9._-]*) exit 2 ;; esac
+    [ "\${#name}" -le 96 ] || exit 2
+    digits "$nchars" || exit 2
+    digits "$nbytes" || exit 2
+    [ "$nchars" -le ${PUT_MAX_BASE64} ] || exit 6
+    ubase="\${CLAUDEPILOT_UPLOADS_DIR:-$HOME/.claudepilot/uploads}"
+    dir="$ubase/$id"
+    mkdir -p "$ubase" || exit 1
+    [ ! -L "$ubase" ] && [ ! -L "$dir" ] || exit 2
+    mkdir -p "$dir" || exit 1
+    umask 077
+    tmp="$dir/.$name.$$.part"
+    head -c "$nchars" | base64 -d > "$tmp" || { rm -f "$tmp"; exit 1; }
+    [ "$(wc -c < "$tmp")" -eq "$nbytes" ] || { rm -f "$tmp"; exit 4; }
+    [ ! -L "$dir/$name" ] || { rm -f "$tmp"; exit 2; }
+    mv -f "$tmp" "$dir/$name" || { rm -f "$tmp"; exit 1; }
+    printf '%s\\n' "$dir/$name"
+    ;;
+  unstage)
+    # A deleted chat's staged attachments (a link in the way is removed, never followed).
+    id="\${1:-}"
+    valid "$id" || exit 2
+    ubase="\${CLAUDEPILOT_UPLOADS_DIR:-$HOME/.claudepilot/uploads}"
+    dir="$ubase/$id"
+    if [ -L "$dir" ]; then rm -f "$dir"; else rm -rf -- "$dir"; fi
+    exit 0
+    ;;
+  produced)
+    exec 2>/dev/null
+    enter "\${1:-}" || exit 2
+    since="\${2:-}"; max="\${3:-}"
+    digits "$since" || exit 2
+    digits "$max" || exit 2
+    printf '#dir\\t%s\\n' "$here"
+    find . -xdev \\( -name .git -o -name node_modules -o -name .cache -o -name __pycache__ -o -name .venv -o -name venv -o -name .next -o -name .npm -o -name .gradle -o -name .m2 -o -name .local -o -name .claude -o -name .claudepilot \\) -prune -o -type f -newermt "@$since" ! -name "*$nl*" -printf '%s\\t%T@\\t%p\\n' | head -n "$max"
+    exit 0
+    ;;
   status)
     id="\${1:-}"
     valid "$id" || exit 2
@@ -258,6 +365,110 @@ case "$cmd" in
       head -c ${DIFF_MAX_PATCH_BYTES}
       if [ "$(head -c 1 | wc -c)" -ne 0 ]; then printf '\\n#truncated\\n'; fi
     }
+    exit 0
+    ;;
+  wt-add)
+    # A git worktree of the repository containing <folder>, in <repo top>.worktrees/<leaf> (the host decides where; <leaf> is a plain
+    # name and must not exist yet), on <branch>: a new one started from <base> ('-' is the repository's HEAD), or an existing one no
+    # other worktree has. The repository may not be the files root itself. Git runs hardened: no hook, filter or fsmonitor of the
+    # repository runs while it checks out. Prints "ok", the worktree's real path, branch, commit, the repository's top folder and
+    # <folder> relative to it, tab separated. Exit 2 refused (names, places), 3 not a repository, 4 the branch is in use, 5 the base
+    # is unknown, 6 the folder exists.
+    exec 2>/dev/null </dev/null
+    enter "\${1:-}" || exit 2
+    leaf="\${2:-}"; branch="\${3:-}"; base="\${4:-}"
+    case "$leaf" in ''|.*|*[!A-Za-z0-9._-]*) exit 2 ;; esac
+    [ "\${#leaf}" -le 64 ] || exit 2
+    case "$branch" in ''|-*|*..*|*//*|*/|*.lock|*[!A-Za-z0-9._/-]*) exit 2 ;; esac
+    [ "\${#branch}" -le 100 ] || exit 2
+    case "$base" in -) base=HEAD ;; ''|-*|*[!A-Za-z0-9._/@^~-]*) exit 2 ;; esac
+    [ "\${#base}" -le 100 ] || exit 2
+    hardened
+    hg check-ref-format --branch "$branch" >/dev/null || exit 2
+    top="$(hg rev-parse --show-toplevel 2>/dev/null && printf x)" || exit 3
+    top="\${top%x}"; top="\${top%"$nl"}"
+    real "$top" || exit 3
+    repo="$r"
+    inroot "$repo" && [ "$repo" != "$root" ] || exit 2
+    case "$here" in "$repo"|"$repo"/*) ;; *) exit 3 ;; esac
+    rel="\${here#"$repo"}"
+    parent="$repo.worktrees"
+    [ ! -L "$parent" ] || exit 2
+    allowed "$parent" 2>/dev/null || { mkdir -p -- "$parent" && allowed "$parent"; } || exit 2
+    wpath="$r/$leaf"
+    [ ! -e "$wpath" ] && [ ! -L "$wpath" ] || exit 6
+    if hg show-ref --verify --quiet "refs/heads/$branch"; then
+      commit="$(hg rev-parse --verify -q "refs/heads/$branch")" || exit 1
+      err="$(timeout 120 git $gf worktree add --quiet -- "$wpath" "$branch" 2>&1 >/dev/null)" || { printf '#error %s\\n' "$(oneline "$err")"; exit 4; }
+    else
+      commit="$(hg rev-parse --verify -q --end-of-options "$base^{commit}")" || exit 5
+      err="$(timeout 120 git $gf worktree add --quiet -b "$branch" -- "$wpath" "$commit" 2>&1 >/dev/null)" || { printf '#error %s\\n' "$(oneline "$err")"; exit 1; }
+    fi
+    real "$wpath" && inroot "$r" || exit 1
+    printf 'ok\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$r" "$branch" "$commit" "$repo" "$rel"
+    exit 0
+    ;;
+  wt-status)
+    # What would be lost by removing the linked worktree at <path>: files with changes (dirty), untracked files, and commits that only
+    # this branch has (reachable from no other branch and no remote). One key=value per line. Exit 2 when it isn't a linked worktree.
+    exec 2>/dev/null </dev/null
+    enter "\${1:-}" || exit 2
+    [ -f .git ] && [ ! -L .git ] || exit 2
+    hardened
+    top="$(hg rev-parse --show-toplevel 2>/dev/null && printf x)" || exit 3
+    top="\${top%x}"; top="\${top%"$nl"}"
+    real "$top" && [ "$r" = "$here" ] || exit 2
+    branch="$(hg symbolic-ref --short -q HEAD)" || branch=
+    head="$(hg rev-parse --verify -q HEAD)" || head=
+    st="$(timeout 30 git $gf status --porcelain=v1 --untracked-files=normal)" || exit 1
+    untracked="$(printf '%s\\n' "$st" | grep -c '^??')"
+    dirty="$(printf '%s\\n' "$st" | grep -v '^??' | grep -c .)"
+    if [ -n "$branch" ]; then
+      unique="$(timeout 30 git $gf rev-list --count HEAD --not --exclude="$branch" --branches --remotes)" || exit 1
+    else
+      unique="$(timeout 30 git $gf rev-list --count HEAD --not --branches --remotes)" || exit 1
+    fi
+    printf 'dirty=%s\\nuntracked=%s\\nunique=%s\\nbranch=%s\\nhead=%s\\n' "$dirty" "$untracked" "$unique" "$branch" "$head"
+    exit 0
+    ;;
+  wt-list)
+    # The worktrees of the repository containing <folder>, as one JSON array: path, head, branch, detached, locked, prunable.
+    exec 2>/dev/null </dev/null
+    enter "\${1:-}" || exit 2
+    hardened
+    timeout 30 git $gf worktree list --porcelain -z | jq -Rsc 'split("\\u0000\\u0000") | map(select(length > 0) | split("\\u0000") | map(select(length > 0))
+      | { path: (map(select(startswith("worktree "))[9:]) | first // null), head: (map(select(startswith("HEAD "))[5:]) | first // null),
+          branch: (map(select(startswith("branch refs/heads/"))[18:]) | first // null), detached: any(. == "detached"),
+          locked: any(. == "locked" or startswith("locked ")), prunable: any(. == "prunable" or startswith("prunable ")) })' || exit 1
+    exit 0
+    ;;
+  wt-remove)
+    # Removes the linked worktree at <path>. Mode 'safe' refuses (7) when it has changes or untracked files; 'force' discards them: the
+    # caller has asked the person. Its branch is deleted only when fully merged (git branch -d), so commits are never lost with it.
+    # Prints branch=deleted|kept and ok.
+    exec 2>/dev/null </dev/null
+    mode="\${2:-}"
+    case "$mode" in safe|force) ;; *) exit 2 ;; esac
+    enter "\${1:-}" || exit 2
+    [ -f .git ] && [ ! -L .git ] || exit 2
+    wt="$here"
+    hardened
+    branch="$(hg symbolic-ref --short -q HEAD)" || branch=
+    common="$(hg rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || exit 3
+    main="\${common%/.git}"
+    [ "$main" != "$common" ] || exit 3
+    real "$main" && inroot "$r" || exit 3
+    cd -P -- "$r" || exit 3
+    hardened
+    if [ "$mode" = force ]; then flag=--force; else flag=; fi
+    err="$(timeout 120 git $gf worktree remove $flag -- "$wt" 2>&1 >/dev/null)" || {
+      case "$err" in *modified*|*untracked*|*"use --force"*) exit 7 ;; esac
+      printf '#error %s\\n' "$(oneline "$err")"; exit 1
+    }
+    if [ -n "$branch" ]; then
+      if timeout 30 git $gf branch -d -- "$branch" >/dev/null 2>&1; then echo branch=deleted; else echo branch=kept; fi
+    fi
+    echo ok
     exit 0
     ;;
   trustscan)

@@ -41,7 +41,7 @@ export function CustomCodeDialog({
       onClose={() => !saving && onClose()}
       size="sm"
       title="Set a custom code"
-      description="Everyone else signed in is signed out and needs the new code."
+      description="Signs out everyone else."
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>
@@ -56,7 +56,7 @@ export function CustomCodeDialog({
       <form onSubmit={submit} noValidate>
         <TextField
           label="New code"
-          hint={`Exactly ${CODE_LENGTH} letters and digits. Case, spaces and dashes are ignored.`}
+          placeholder={`${CODE_LENGTH} letters or digits`}
           autoComplete="off"
           autoCapitalize="characters"
           autoCorrect="off"

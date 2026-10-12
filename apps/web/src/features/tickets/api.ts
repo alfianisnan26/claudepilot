@@ -1,0 +1,71 @@
+import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
+import { track } from '@isnanme/ui';
+import {
+  TICKET_API,
+  type CloseTicketRequest,
+  type CommentTicketRequest,
+  type CreateTicketRequest,
+  type StartTicketSessionRequest,
+  type StartTicketSessionResult,
+  type TicketDetail,
+  type TicketEvent,
+  type TicketFilter,
+  type TicketItem,
+  type TicketList,
+  type TicketTag,
+  type UpdateTicketRequest,
+} from '@portal/contracts';
+import { api, ApiError } from '@/lib/api';
+
+/** Same contract as lib/api's client: `{ data }` on success, an ApiError otherwise; a 401 tells the app the session ended. */
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  let res: Response;
+  try {
+    res = await track(
+      fetch(path, {
+        method,
+        credentials: 'same-origin',
+        headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+    );
+  } catch {
+    throw new ApiError('NETWORK_ERROR', 'Could not reach the server.', 0);
+  }
+  const json: unknown = await res.json().catch(() => null);
+  if (res.ok && isApiSuccess<T>(json)) return json.data;
+  if (res.status === 401) void api.adminState().catch(() => undefined);
+  if (isApiErrorBody(json)) throw new ApiError(json.error.code, json.error.message, res.status, json.error.details);
+  throw new ApiError('INTERNAL_ERROR', `Unexpected response (${res.status}).`, res.status);
+}
+
+/** `TicketFilter` as a query string. */
+function query(f: TicketFilter): string {
+  const q = new URLSearchParams();
+  if (f.status?.length) q.set('status', f.status.join(','));
+  if (f.priority?.length) q.set('priority', f.priority.join(','));
+  if (f.type?.length) q.set('type', f.type.join(','));
+  if (f.tag) q.set('tag', f.tag);
+  if (f.assignee && f.assignee !== 'any') q.set('assignee', f.assignee);
+  if (f.workspaceId) q.set('workspace', f.workspaceId);
+  if (f.query) q.set('q', f.query);
+  if (f.includeClosed) q.set('includeClosed', '1');
+  if (f.limit) q.set('limit', String(f.limit));
+  if (f.offset) q.set('offset', String(f.offset));
+  return q.size ? `?${q}` : '';
+}
+
+export const ticketsApi = {
+  list: (filter: TicketFilter = {}) => request<TicketList>('GET', `${TICKET_API.list}${query(filter)}`),
+  get: (id: string) => request<TicketDetail>('GET', TICKET_API.one(id)),
+  create: (body: CreateTicketRequest) => request<TicketItem>('POST', TICKET_API.list, body),
+  update: (id: string, body: UpdateTicketRequest) => request<TicketItem>('PATCH', TICKET_API.one(id), body),
+  remove: (id: string) => request<{ ok: true }>('DELETE', TICKET_API.one(id)),
+  comment: (id: string, body: CommentTicketRequest) => request<TicketEvent>('POST', TICKET_API.comments(id), body),
+  close: (id: string, body: CloseTicketRequest) => request<TicketItem>('POST', TICKET_API.close(id), body),
+  reopen: (id: string) => request<TicketItem>('DELETE', TICKET_API.close(id)),
+  startSession: (id: string, body: StartTicketSessionRequest) => request<StartTicketSessionResult>('POST', TICKET_API.session(id), body),
+  opening: (id: string) => request<{ text: string }>('GET', TICKET_API.opening(id)),
+  tags: () => request<TicketTag[]>('GET', TICKET_API.tags),
+  brief: (id: string) => request<{ id: string; summary: string; status: string }>('GET', TICKET_API.brief(id)),
+};

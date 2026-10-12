@@ -83,6 +83,7 @@ export class LocalRuntime implements Runtime {
           clearTimeout(timer);
           resolve({ code: code ?? -1, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') });
         });
+        child.stdin.on('error', () => undefined); // the script may exit without reading its input (EPIPE)
         child.stdin.end(opts.stdin);
       });
     },
@@ -194,6 +195,7 @@ export class LocalRuntime implements Runtime {
     const [bin, ...args] = command.map(hostPath);
     if (!bin) throw new AppError('VALIDATION_FAILED', 'No command.');
     const child = spawn(bin, args, { cwd: homedir(), env: userEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+    child.stdin.on('error', () => undefined); // a write after the command exited (EPIPE) is the caller's lost race, not a crash
     const dataFns: ((data: Buffer) => void)[] = [];
     const exitFns: ((code: number | null) => void)[] = [];
     const emit = (c: Buffer) => dataFns.forEach((fn) => fn(c));

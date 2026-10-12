@@ -1,0 +1,21 @@
+# PORTAL_TLS picks how the certificate is made:
+#   internal   - Caddy's own local CA (default). Browsers warn until they trust Caddy's root certificate.
+#   cloudflare - Let's Encrypt through a DNS-01 challenge; needs CLOUDFLARE_API_TOKEN (DNS edit on the zone).
+(tls_internal) {
+	tls internal
+}
+
+(tls_cloudflare) {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+		# Ask public resolvers: the local DNS points the name here and may not serve the TXT record.
+		resolvers 1.1.1.1 1.0.0.1
+	}
+}
+
+{$PORTAL_DOMAIN} {
+	import tls_{$PORTAL_TLS:internal}
+	encode zstd gzip
+	# WebSockets (shell, chat, live) pass through as-is; Host is kept, so the same-origin checks hold.
+	reverse_proxy portal:3000
+}

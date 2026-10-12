@@ -44,7 +44,7 @@ const TICK_LABELS = 4;
  * Columns over time, one series: the card's title names it, so there's no legend. Columns are at most
  * 24 px wide with a 4 px rounded top and a square foot on the baseline, 2 px apart at the least, over
  * hairline gridlines at clean values. Each column is a button: hover, focus or a tap shows its value
- * and time; the others dim while one is picked.
+ * and time; the others dim while one is picked. The chart is one tab stop; arrow keys, Home and End move between columns.
  */
 export function ColumnChart({
   columns,
@@ -65,6 +65,9 @@ export function ColumnChart({
 }) {
   const [ref, width] = useWidth();
   const [active, setActive] = useState<number | null>(null);
+  // One tab stop for the whole chart, not one per column (a day is 24, a month 30 or more): arrow keys move between columns.
+  const [roving, setRoving] = useState(0);
+  const cells = useRef<(SVGRectElement | null)[]>([]);
   const n = columns.length;
   const max = niceMax(Math.max(0, ...columns.map((c) => c.value)));
   const plotW = Math.max(0, width - PAD.left - PAD.right);
@@ -117,14 +120,23 @@ export function ColumnChart({
                   width={slot}
                   height={plotH}
                   fill="transparent"
+                  ref={(el) => {
+                    cells.current[i] = el;
+                  }}
                   role="button"
-                  tabIndex={0}
+                  tabIndex={i === Math.min(roving, n - 1) ? 0 : -1}
                   aria-label={`${c.span}: ${format(c.value)}`}
                   onPointerEnter={() => setActive(i)}
                   onPointerLeave={() => setActive((a) => (a === i ? null : a))}
-                  onFocus={() => setActive(i)}
+                  onFocus={() => (setRoving(i), setActive(i))}
                   onBlur={() => setActive((a) => (a === i ? null : a))}
                   onClick={() => setActive(i)}
+                  onKeyDown={(e) => {
+                    const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: n - 1 }[e.key];
+                    if (next === undefined || next < 0 || next >= n) return;
+                    e.preventDefault();
+                    cells.current[next]?.focus();
+                  }}
                   className="cursor-pointer outline-none"
                 />
               </g>

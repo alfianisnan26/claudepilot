@@ -1,7 +1,8 @@
 import { Button, CopyButton, Dialog, SwitchRow, useToast } from '@isnanme/ui';
 import type { KeySetupResult, SystemStatus } from '@portal/contracts';
-import { KeyRound, ShieldCheck, ShieldPlus } from 'lucide-react';
+import { KeyRound, ShieldPlus } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { InfoTip } from '@/components/InfoTip';
 import { SecretField } from '@/components/SecretField';
 import { api, ApiError, errorText } from '@/lib/api';
 import { useLive } from '@/lib/live';
@@ -62,14 +63,31 @@ export function SetUpKeyDialog({
       open={open}
       onClose={close}
       size="sm"
-      title={result ? 'Save your key' : mode === 'reset' ? 'Start over with a new key' : 'Set up encryption'}
-      description={
-        result
-          ? 'This is the only time it is shown. Without it, stored keys and secrets can’t be read again.'
-          : mode === 'reset'
-            ? 'Nothing was ever encrypted with the lost key, so nothing is lost. The portal creates a new random 256-bit key.'
-            : 'The portal creates a random 256-bit key and encrypts stored secrets with it.'
+      title={
+        result ? (
+          'Save your key'
+        ) : (
+          <span className="inline-flex items-center gap-1.5">
+            {mode === 'reset' ? 'Start over' : 'Set up encryption'}
+            <InfoTip label="About the key">
+              {mode === 'reset' ? 'Nothing was ever encrypted with the lost key, so nothing is lost. ' : ''}
+              The portal creates a random 256-bit key and encrypts stored secrets with it.{' '}
+              {keyFile ? (
+                <>
+                  It’s saved to <code className="font-mono text-ink">{keyFile}</code>, so the portal unlocks itself after restarts.
+                </>
+              ) : (
+                <>
+                  No key file is set (<code className="font-mono text-ink">PORTAL_SECRET_KEY_FILE</code>), so the key stays in
+                  memory: after each restart you unlock here by pasting it.
+                </>
+              )}{' '}
+              Keep a copy somewhere safe too, such as a password manager.
+            </InfoTip>
+          </span>
+        )
       }
+      description={result ? 'Shown once. Without it, stored keys and secrets can’t be read again.' : undefined}
       footer={
         result ? (
           <Button onClick={close} disabled={!saved}>
@@ -88,23 +106,7 @@ export function SetUpKeyDialog({
       }
     >
       {!result ? (
-        <div className="flex flex-col gap-3 text-[13px] text-ink-soft">
-          <p>
-            {keyFile ? (
-              <>
-                It’s saved to <code className="font-mono text-ink">{keyFile}</code>, so the portal unlocks itself after
-                restarts.
-              </>
-            ) : (
-              <>
-                No key file is set (<code className="font-mono text-ink">PORTAL_SECRET_KEY_FILE</code>), so the key stays in
-                memory: after each restart you unlock here by pasting it.
-              </>
-            )}
-          </p>
-          <p>Keep a copy somewhere safe too, such as a password manager.</p>
-          {error && <p className="rounded-xl bg-danger-soft px-3.5 py-2.5 font-medium text-danger">{error}</p>}
-        </div>
+        error ? <p className="rounded-xl bg-danger-soft px-3.5 py-2.5 text-[13px] font-medium text-danger">{error}</p> : null
       ) : (
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-2 rounded-2xl border border-line bg-surface-2 px-3.5 py-3">
@@ -120,13 +122,7 @@ export function SetUpKeyDialog({
               'Kept in memory only: paste it under Storage → Unlock after the portal restarts.'
             )}
           </p>
-          <SwitchRow
-            icon={<ShieldCheck className="size-[18px]" />}
-            label="I’ve saved the key"
-            description="Somewhere other than this server."
-            checked={saved}
-            onChange={setSaved}
-          />
+          <SwitchRow label="I’ve saved the key" checked={saved} onChange={setSaved} />
         </div>
       )}
     </Dialog>
@@ -175,7 +171,6 @@ export function UnlockDialog({
       onClose={() => !busy && onClose()}
       size="sm"
       title="Unlock"
-      description="Paste the key this portal was set up with."
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>
@@ -203,11 +198,10 @@ export function UnlockDialog({
         />
         {canReset && onReset && (
           <p className="mt-3 text-[13px] text-muted">
-            Lost it? Nothing has been encrypted with it yet, so you can{' '}
+            Lost it?{' '}
             <button type="button" className="font-semibold text-ink underline underline-offset-2" onClick={onReset}>
-              start over with a new key
+              Start over with a new key
             </button>
-            .
           </p>
         )}
       </form>

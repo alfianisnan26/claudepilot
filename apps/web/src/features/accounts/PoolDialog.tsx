@@ -1,7 +1,8 @@
 import { Button, FormDialog, Select, SwitchRow, TextField } from '@isnanme/ui';
 import { ANTHROPIC_ENDPOINT_ID, type Account, type AccountPool, type Endpoint, type PoolStrategy } from '@portal/contracts';
-import { ArrowDown, ArrowUp, LogIn, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { InfoTip } from '@/components/InfoTip';
 import { api, ApiError } from '@/lib/api';
 
 /** Create or edit an account pool: endpoint, members in priority order, strategy (PRD FR7). */
@@ -75,8 +76,15 @@ export function PoolDialog({
     <FormDialog
       open={open}
       onClose={onClose}
-      title={pool ? 'Edit pool' : 'New pool'}
-      description="Workspaces assigned to a pool use its first usable account, and move to the next one when that account stops working."
+      title={
+        <span className="inline-flex items-center gap-1.5">
+          {pool ? 'Edit pool' : 'New pool'}
+          <InfoTip label="About pools">
+            Workspaces assigned to a pool use its first usable account, and move to the next one when that account stops working.
+            Every account in a pool uses the same endpoint.
+          </InfoTip>
+        </span>
+      }
       onSubmit={submit}
       submitLabel="Save"
       saving={saving}
@@ -89,7 +97,7 @@ export function PoolDialog({
           label="Endpoint"
           value={endpointId}
           disabled={!!pool && pool.workspaces > 0}
-          hint={pool && pool.workspaces > 0 ? 'Unassign its workspaces to change the endpoint.' : 'Every account in a pool uses the same endpoint.'}
+          hint={pool && pool.workspaces > 0 ? 'Unassign its workspaces to change the endpoint.' : undefined}
           onChange={(v) => (setEndpointId(v), setMembers([]))}
           options={endpoints.map((e) => ({ value: e.id, label: e.kind === 'anthropic' ? 'Anthropic API' : e.name }))}
           error={errors.endpointId}
@@ -98,7 +106,7 @@ export function PoolDialog({
         <div>
           <p className="mb-2 text-sm font-semibold text-ink-soft">Accounts, in order</p>
           {members.length === 0 ? (
-            <p className="rounded-xl bg-surface-2 px-3.5 py-3 text-[13px] text-muted">Add the accounts this pool can use.</p>
+            <p className="rounded-xl bg-surface-2 px-3.5 py-3 text-[13px] text-muted">No accounts yet</p>
           ) : (
             <ol className="flex flex-col divide-y divide-line rounded-xl border border-line">
               {members.map((id, i) => {
@@ -141,17 +149,23 @@ export function PoolDialog({
 
         <Select
           label="Strategy"
+          title="Fill first: everyone on the first usable account. Spread: the account with the fewest workspaces."
           value={strategy}
           onChange={(v) => setStrategy(v as PoolStrategy)}
           options={[
-            { value: 'fill-first', label: 'Fill first: everyone on the first usable account' },
-            { value: 'spread', label: 'Spread: the account with the fewest workspaces' },
+            { value: 'fill-first', label: 'Fill first' },
+            { value: 'spread', label: 'Spread' },
           ]}
         />
         <SwitchRow
-          icon={<LogIn className="size-[18px]" />}
-          label="Hide /login in assigned workspaces"
-          description="Off by default. Users can still sign in with their own account, but the pool's key takes precedence while assigned."
+          label={
+            <span className="inline-flex items-center gap-1.5">
+              Hide /login in assigned workspaces
+              <InfoTip label="About hiding /login">
+                Off by default. Users can still sign in with their own account, but the pool's key takes precedence while assigned.
+              </InfoTip>
+            </span>
+          }
           checked={hideLogin}
           onChange={setHideLogin}
         />

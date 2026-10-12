@@ -11,7 +11,7 @@ export function AuthLayout({
   footer,
 }: {
   title: string;
-  subtitle: ReactNode;
+  subtitle?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
 }) {
@@ -28,7 +28,7 @@ export function AuthLayout({
           transition={{ duration: 0.3, ease }}
         >
           <h1 className="text-[28px] leading-tight font-bold tracking-tight">{title}</h1>
-          <p className="mt-1.5 text-[15px] text-muted">{subtitle}</p>
+          {subtitle && <p className="mt-1.5 text-[15px] text-muted">{subtitle}</p>}
           <div className="mt-7">{children}</div>
           {footer && <p className="mt-6 text-center text-sm text-muted">{footer}</p>}
         </motion.div>
