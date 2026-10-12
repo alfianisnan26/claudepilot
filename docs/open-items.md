@@ -10,7 +10,7 @@ The multi-agent round was stopped on purpose: the account quota ran out (the age
 | Last release before this round | `main` at `872a429` |
 | Unfinished multi-user identity core (MU1), authorization evaluator (MU2), auto transfer web half (N4) | branch `wip/stopped-by-quota-20261012-0712` (pushed; migrations 400-401 are NOT released) |
 | Coordination state (plans, prompts, status, ledgers) | `docs/coord/` (restore with `bash docs/coord/RESTORE.sh <dir>`; every agent's RESUME block is in `docs/coord/RESUME-BLOCKS.md`) |
-| Deploy record | `docs/coord/deploy-ledger.md` and section 7 below |
+| Deployed | release `cc02126` (tag `release-20261012-cc02126`, `main` fast-forwarded) runs on the owner's Docker (context `host`) behind Caddy at https://pilot.dev.isnan.me; live schema 380; Connect off. Record, rollback and backups: `docs/coord/deploy-ledger.md` |
 | Old branches `backup/pre-rewrite-*` | local only; they contain a flagged token: never push, deleting them is the owner's call |
 
 ## 2. How to resume (after the quota resets)
@@ -64,6 +64,9 @@ Each has a recommended default in its PRD; agents used the default and said so.
 - The release gate on a clean copy caught a real defect before deploy: platform audit code expected columns from the unreleased identity migration (two tests failed with "no such column: outcome"). The audit files were restored to their pre-identity version; both tests pass.
 - Connect (agents that dial out) is switched OFF in the production compose file (`PORTAL_CONNECT_ENABLED: "false"`): its acceptance and abuse suite (T6) has not run. Remove the line after T6 passes.
 - Not part of this deploy: the workspace image (`images/workspace`, Claude Code pin and `cp-session`): rebuild it from the portal when convenient; the running `test` workspace has Claude Code 2.1.296, which the new usage probe (`--safe-mode`, needs 2.1.169 or newer) accepts.
+
+- After the deploy: the pre-deploy backup of the portal data and secrets is in the sandbox (`/tmp/pre-deploy-backup-20261012-0728`, mode 0600) and in the host volume `claudepilot-backup-20261012-0728`; it holds the production database and key, so delete both once the release is accepted. Previous images stay as `claudepilot-portal:previous` and `:prev2`.
+- Not restarted: the owner's dev portal (tmux `portal`): `tmux new-session -d -s portal -c /workspaces/claudepilot 'npm run dev'` starts it and migrates `.data` forward (automatic pre-migrate backup).
 
 ## 8. Housekeeping
 
