@@ -68,7 +68,15 @@ Each has a recommended default in its PRD; agents used the default and said so.
 - After the deploy: the pre-deploy backup of the portal data and secrets is in the sandbox (`/tmp/pre-deploy-backup-20261012-0728`, mode 0600) and in the host volume `claudepilot-backup-20261012-0728`; it holds the production database and key, so delete both once the release is accepted. Previous images stay as `claudepilot-portal:previous` and `:prev2`.
 - Not restarted: the owner's dev portal (tmux `portal`): `tmux new-session -d -s portal -c /workspaces/claudepilot 'npm run dev'` starts it and migrates `.data` forward (automatic pre-migrate backup).
 
-## 8. Housekeeping
+## 8. The isnan k3s cluster (second deployment, 2026-10-12)
+
+- Runs at https://pilot.ai.isnan.me (internal DNS only), namespace `isnan-claudepilot`, Argo CD Application `isnan-claudepilot` (project `isnan`, source: this repository, `deploy/k3s`), workspaces as pods in `isnan-claudepilot-workspaces`. Files and the by-hand steps (Secrets `claudepilot-server` and `claudepilot-secret-key`, the in-cluster kaniko builds, why pushing images from outside fails): `deploy/k3s/README.md`, `deploy/k3s-build/`.
+- Sign-in code: `00000000` (the owner asked for 0000000; the portal needs exactly 8 characters). Weak on purpose for a lab: change the Secret `claudepilot-server` and restart the portal.
+- Optional features turned on with `deploy/k3s/seed-features.sh` (triggers, auto move including automatic, agents self-edit). Left off: bypass sessions, auto move to an API key, MCP lockdown switches, the "This machine" target.
+- The Argo Application was applied by hand; to put it under the fleet, copy `deploy/argocd/claudepilot.yaml` to `apps/isnan/isnan-claudepilot.yaml` in the isnan-infra repository.
+- Found on the cluster: the Kubernetes runtime's `seed-home` init container failed on k3s local-path volumes; fixed (`cp -a --no-preserve=all`) in commit 7835b9c, image `2026.10.12-3`. The API refused `DELETE /api/workspaces/<id>` with 403 for a plain signed-in session: check what confirmation the web sends.
+
+## 9. Housekeeping
 
 - Scratch dirs and prefixes in `/tmp` from the round (`cx*`, `n1-n4`, `bt*`, `vc*`, `ua*`, `ub*`, `gt*`, `gu*`, `pc*`, `mu*`, `cp-qa-boot-*`, `cp-fake-claude-*`) can be deleted; containers from agents live only in the sandbox's own Docker.
 - The owner's dev portal (tmux `portal`, `npm run dev`) was paused during the round so no half-finished migration touched `.data`. When it is started again it migrates `.data` forward with an automatic pre-migrate backup.
