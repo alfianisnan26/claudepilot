@@ -370,6 +370,7 @@ describe('failed CI and the loop guard (FR10, R21, E7)', () => {
     // Another branch, twice within the cooldown: the second is a cooldown skip.
     await fail(ciRun({ id: 'cir_3', number: 16, branch: 'feature/a', ref: 'refs/heads/feature/a' }));
     h.chat.result(h.store.runs({ ownerId: 'u_a', triggerId: trigger.id }).rows[0]!.session_id!, 0);
+    h.clock.advance(1000); // runs are listed newest first by time then random id: a tie in the fake clock made this assertion flaky
     await fail(ciRun({ id: 'cir_4', number: 17, branch: 'feature/a', ref: 'refs/heads/feature/a' }));
     assert.deepEqual(all()[0], ['skipped', 'cooldown']);
     // The owner hears of the loop once, not per skip.
