@@ -164,6 +164,7 @@ function text(e: NotifyEvent, tz: string): { title: string; body: string } {
       return { title: 'Trigger problem', body: join(name(f.trigger, 'trigger'), reason(f.reason)) };
     case 'auto_move': {
       const left = pct(f.leftPct);
+      if (f.warned === true) return { title: 'No Claude to move to', body: join(ws, left && `${left} left${est(e, 'leftPct')}`) };
       return {
         title: f.suggested === true ? 'Move suggested' : `Moved to ${name(f.to, 'another Claude')}`,
         body: join(ws, f.suggested === true && `to ${name(f.to, 'another Claude')}`, left && `${left} left${est(e, 'leftPct')}`),

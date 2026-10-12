@@ -88,8 +88,8 @@ test('platform: modules register once, routes mount behind the session guard, /h
   });
   const extra = new Hono();
   extra.get('/', (c) => c.json({ ok: true, data: 'mine' }));
-  platform.register({ name: 'triggers', routes: [{ path: '/api/triggers', app: extra }] });
-  assert.throws(() => platform.register({ name: 'triggers' }));
+  platform.register({ name: 'standin', routes: [{ path: '/api/standin', app: extra }] });
+  assert.throws(() => platform.register({ name: 'standin' }));
   platform.hooks.post('/t/:token', (c) => c.json({ received: c.req.param('token') }));
   platform.start();
 
@@ -101,14 +101,14 @@ test('platform: modules register once, routes mount behind the session guard, /h
   const host = { Host: 'localhost:3232' };
   // no session: 401 on every module route
   assert.equal((await app.request('/api/notify', { headers: host })).status, 401);
-  assert.equal((await app.request('/api/triggers', { headers: host })).status, 401);
+  assert.equal((await app.request('/api/standin', { headers: host })).status, 401);
   assert.equal((await app.request('/api/platform/audit', { headers: host })).status, 401);
   const token = portal.signIn(CODE);
   const cookie = { ...host, Cookie: `portal_session=${token}` };
   const overview = (await (await app.request('/api/notify', { headers: cookie })).json()) as { data: { state: string; destinations: unknown[]; actionsCeiling: boolean } };
   assert.equal(overview.data.state, 'ready');
   assert.deepEqual(overview.data.destinations, []);
-  assert.equal(((await (await app.request('/api/triggers', { headers: cookie })).json()) as { data: string }).data, 'mine');
+  assert.equal(((await (await app.request('/api/standin', { headers: cookie })).json()) as { data: string }).data, 'mine');
   // a mutating request from another origin is refused before the module sees it
   const foreign = await app.request('/api/notify/prefs', { method: 'PUT', headers: { ...cookie, Origin: 'https://evil.example', 'Content-Type': 'application/json' }, body: '{"deny":false}' });
   assert.equal(foreign.status, 403);
