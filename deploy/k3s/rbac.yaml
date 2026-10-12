@@ -1,0 +1,71 @@
+# What the portal's Kubernetes target does (apps/server/src/workspaces/kubernetes.ts): one Deployment and one volume claim per
+# workspace, a pod list to see them, exec into the pod (shell, files, Claude), the namespace create call it makes before each
+# workspace (it is skipped by the API server when the namespace exists, and the call is only allowed to create), and
+# the metrics API for CPU and memory figures.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: claudepilot-portal
+  namespace: isnan-claudepilot
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: claudepilot-workspaces
+  namespace: isnan-claudepilot-workspaces
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: claudepilot-workspaces
+  namespace: isnan-claudepilot-workspaces
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: claudepilot-workspaces
+subjects:
+  - kind: ServiceAccount
+    name: claudepilot-portal
+    namespace: isnan-claudepilot
+---
+# The one cluster-wide right: create a namespace (the portal asks before every workspace; "already exists" is expected and fine).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: claudepilot-portal-namespace-create
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: claudepilot-portal-namespace-create
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: claudepilot-portal-namespace-create
+subjects:
+  - kind: ServiceAccount
+    name: claudepilot-portal
+    namespace: isnan-claudepilot

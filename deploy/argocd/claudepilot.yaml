@@ -1,0 +1,24 @@
+# The Argo CD Application for the portal. In the isnan fleet it lives next to the other apps as apps/isnan/isnan-claudepilot.yaml
+# (project isnan, namespace per app); it follows this repository, directory deploy/k3s.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: isnan-claudepilot
+  namespace: isnan-argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: isnan
+  source:
+    repoURL: 'https://github.com/alfianisnan26/claudepilot.git'
+    path: deploy/k3s
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: isnan-claudepilot
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,41 @@
+# Builds the portal image IN the cluster (kaniko, linux/amd64 natively) and pushes it to the internal registry. Pushing from outside is
+# not possible: the uplink is slow and the registry's ingress cuts a request at 60 s (Cloudflare's 100 MB request cap on the public path).
+# The source is this repository (public) at the commit named in --context; the GitHub Packages token for the private @isnanme/ui package
+# is a temporary Secret, made by hand and deleted after the build:
+#   kubectl -n isnan-claudepilot create secret generic claudepilot-build --from-literal=node-auth-token="$(gh auth token)"
+#   kubectl apply -f deploy/k3s-build/portal-job.yaml        # edit the commit and the tag first
+#   kubectl -n isnan-claudepilot delete secret claudepilot-build
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: claudepilot-build-portal
+  namespace: isnan-claudepilot
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: k3s-node2
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:v1.23.2
+          env:
+            - name: NODE_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: claudepilot-build
+                  key: node-auth-token
+          args:
+            - --context=git://github.com/alfianisnan26/claudepilot.git#refs/heads/main#COMMIT
+            - --dockerfile=deploy/k3s-build/portal.Dockerfile
+            - --build-arg=NODE_AUTH_TOKEN=$(NODE_AUTH_TOKEN)
+            - --destination=registry.isnan-registry.svc.cluster.local:5000/claudepilot/portal:TAG
+            - --insecure
+            - --cache=false
+            - --snapshot-mode=redo
+            - --push-retry=3
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "4", memory: 6Gi}

@@ -1,0 +1,152 @@
+# ClaudePilot portal on the isnan k3s cluster, at https://pilot.ai.isnan.me (internal only: *.ai.isnan.me resolves privately,
+# there is no public DNS or tunnel route). State (the portal database, backups, knowledge, and the key that seals stored
+# secrets) lives on one volume. Images are built for linux/amd64 and pushed to registry.int.isnan.me.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: claudepilot-data
+  namespace: isnan-claudepilot
+  annotations:
+    # The portal's whole state: never pruned or deleted by a sync or by removing the app.
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claudepilot-portal
+  namespace: isnan-claudepilot
+  labels:
+    app: claudepilot-portal
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # one SQLite database on one ReadWriteOnce volume
+  selector:
+    matchLabels:
+      app: claudepilot-portal
+  template:
+    metadata:
+      labels:
+        app: claudepilot-portal
+    spec:
+      serviceAccountName: claudepilot-portal
+      nodeSelector:
+        kubernetes.io/hostname: k3s-node2
+      containers:
+        - name: portal
+          image: registry.int.isnan.me/claudepilot/portal:2026.10.12-1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # Sign-in code: the Secret claudepilot-server (key "code"), made by hand, never in git (README.md).
+            - name: PORTAL_SERVER_CODE
+              valueFrom:
+                secretKeyRef:
+                  name: claudepilot-server
+                  key: code
+            # Traefik is the only way in: its X-Forwarded-For is the client address (sign-in rate limit).
+            - name: PORTAL_TRUST_PROXY
+              value: "true"
+            # Workspaces are pods of this cluster (the portal's service account, in-cluster).
+            - name: PORTAL_K8S_ENABLED
+              value: "true"
+            - name: PORTAL_K8S_NAMESPACE
+              value: isnan-claudepilot-workspaces
+            - name: PORTAL_K8S_IMAGE
+              value: registry.int.isnan.me/claudepilot/workspace:2.1.296-2026.10.12-1
+            - name: PORTAL_K8S_STORAGE_CLASS
+              value: local-path
+            - name: PORTAL_K8S_STORAGE
+              value: 10Gi
+            # Keep workspace pods off the control-plane node (it is short of memory).
+            - name: PORTAL_K8S_NODE_SELECTOR
+              value: kubernetes.io/hostname=k3s-node2
+            # How workspaces (other namespace) reach the portal: its Portal MCP tools, session events.
+            - name: PORTAL_INTERNAL_URL
+              value: http://claudepilot-portal.isnan-claudepilot.svc.cluster.local:3000
+            # Addresses shown to people and used in links, notifications and the Connect wizard.
+            - name: PORTAL_UI_URL
+              value: https://pilot.ai.isnan.me
+            - name: PORTAL_MCP_URL
+              value: https://pilot.ai.isnan.me/mcp
+            - name: PORTAL_PUSH_CONTACT
+              value: https://pilot.ai.isnan.me
+            # Connect (agents that dial out): on; the certificate is the public wildcard one, no private CA needed.
+            - name: PORTAL_CONNECT_ENABLED
+              value: "true"
+            - name: PORTAL_CONNECT_URL
+              value: https://pilot.ai.isnan.me
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: state
+              mountPath: /data
+              subPath: data
+            - name: state
+              mountPath: /secrets
+              subPath: secrets
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: claudepilot-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: claudepilot-portal
+  namespace: isnan-claudepilot
+spec:
+  selector:
+    app: claudepilot-portal
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: claudepilot-portal
+  namespace: isnan-claudepilot
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`pilot.ai.isnan.me`)
+      kind: Rule
+      services:
+        - name: claudepilot-portal
+          port: 3000
+  tls:
+    certResolver: cloudflare
+    domains:
+      - main: "*.ai.isnan.me"

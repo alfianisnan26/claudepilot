@@ -1,0 +1,36 @@
+# Where the portal puts the workspaces it creates (one Deployment and one volume each). The portal's own namespace
+# (isnan-claudepilot) is made by hand before the first sync, together with the server-code Secret (see README.md).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: isnan-claudepilot-workspaces
+  annotations:
+    # Workspaces and their volumes live in here and are not in git: this namespace must never be pruned or deleted with the app.
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+---
+# A guard rail for the shared cluster: a workspace without its own limits still gets a memory ceiling, and the namespace as a whole is capped.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: workspace-defaults
+  namespace: isnan-claudepilot-workspaces
+spec:
+  limits:
+    - type: Container
+      default:
+        memory: 4Gi
+      defaultRequest:
+        cpu: 100m
+        memory: 256Mi
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: workspaces
+  namespace: isnan-claudepilot-workspaces
+spec:
+  hard:
+    pods: "12"
+    persistentvolumeclaims: "12"
+    requests.storage: 120Gi
+    limits.memory: 24Gi

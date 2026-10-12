@@ -1,0 +1,30 @@
+# Builds the workspace image IN the cluster (kaniko) and pushes it to the internal registry; no secret needed.
+#   kubectl apply -f deploy/k3s-build/workspace-job.yaml        # edit the commit and the tag first
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: claudepilot-build-workspace
+  namespace: isnan-claudepilot
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: k3s-node2
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:v1.23.2
+          args:
+            - --context=git://github.com/alfianisnan26/claudepilot.git#refs/heads/main#COMMIT
+            - --context-sub-path=images/workspace
+            - --dockerfile=Dockerfile
+            - --destination=registry.isnan-registry.svc.cluster.local:5000/claudepilot/workspace:TAG
+            - --insecure
+            - --cache=false
+            - --snapshot-mode=redo
+            - --push-retry=3
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "4", memory: 6Gi}
