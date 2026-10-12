@@ -20,7 +20,7 @@ export const TITLE_MAX = 300;
 export const TEXT_MAX = 4000;
 
 // eslint-disable-next-line no-control-regex
-const INVISIBLE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f­؜᠎​-‏‪-‮⁠-⁯﻿￹-￻]/g;
+const INVISIBLE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb]/g;
 
 /** Free text made safe to quote: invisible and direction characters out, CR folded, clipped, redacted. Null for nothing. */
 export function untrustedText(v: unknown, max = TEXT_MAX): string | undefined {

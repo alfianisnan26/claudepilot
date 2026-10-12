@@ -159,6 +159,6 @@ export function mountReceiver(hooks: Hono, d: ReceiverDeps): void {
     return json(c, 200, { ok: true });
   });
 
-  // Every other method and path under /hooks: the same 404 as an unknown token (R1, R7).
-  hooks.all('*', (c) => notFound(c));
+  // Every other method on a receiver path: the same 404 as an unknown token (R1, R7). Other paths under /hooks are left to their owners.
+  hooks.on(['GET', 'HEAD', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], '/:token', (c) => notFound(c));
 }
