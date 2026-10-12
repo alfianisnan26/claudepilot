@@ -11,6 +11,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { AppError } from '@isnanme/core';
 import {
   BTW_QUESTION_MAX,
+  BTW_REQUIRED_LEVEL,
   sessionRef,
   type Actor,
   type BtwReason,
@@ -306,7 +307,7 @@ export class BtwEngine {
     if (!userId || actor.kind === 'system') throw new AppError('UNAUTHORIZED', 'Sign in again.');
     const session = typeof rawSession === 'string' ? this.#host.session(rawSession) : null;
     if (!session) throw new AppError('NOT_FOUND', 'No such session.');
-    requireCan(actor, 'operate', sessionRef(session.id));
+    requireCan(actor, BTW_REQUIRED_LEVEL, sessionRef(session.id));
     return { userId, session };
   }
 
@@ -324,6 +325,9 @@ export class BtwEngine {
 
     const same = this.#recordOf(userId, session.id, id);
     if (same) return this.#emit(userId, session.id, { type: 'btw', session: session.id, item: snapshot(same) });
+    // The same ask twice at once (a double tap): the first is still passing the gates and will answer; the second adds nothing, and is not "busy".
+    const passing = this.#reserved.get(session.id);
+    if (passing && passing.userId === userId && passing.id === id) return;
 
     const now = this.#now();
     const question = this.#host.scrub(session.workspaceId, asked);
@@ -335,7 +339,7 @@ export class BtwEngine {
     if (!cfg.enabled) return refuse('disabled');
     if (this.#active.has(session.id) || this.#reserved.has(session.id)) return refuse('busy');
     // The slot is taken here, before anything is awaited, so two asks at once can't both pass.
-    const slot = Symbol('slot');
+    const slot = { userId, id };
     this.#reserved.set(session.id, slot);
     let released = false;
     const release = () => {
@@ -385,8 +389,8 @@ export class BtwEngine {
     }
   }
 
-  /** Slots taken by asks that are still passing the gates. */
-  readonly #reserved = new Map<string, symbol>();
+  /** Slots taken by asks that are still passing the gates, and whose ask each is. */
+  readonly #reserved = new Map<string, { userId: string; id: string }>();
 
   #recordOf(userId: string, sessionId: string, id: string): BtwRecord | null {
     const live = this.#active.get(sessionId);
