@@ -1,5 +1,5 @@
 import type { Store } from '../store/store.js';
-import type { Runtime } from '../workspaces/runtime.js';
+import { isTargetUnreachable, type Runtime } from '../workspaces/runtime.js';
 
 /** Foundation PRD §8: one JSON object per line, at most this long. */
 const LINE_MAX = 4096;
@@ -85,6 +85,8 @@ export class Outbox {
   readonly #inFlight = new Map<string, Promise<void>>();
   #timer: NodeJS.Timeout | undefined;
   #lastPrune = 0;
+  /** Workspaces whose last pull met an unreachable target (logged once until a pull succeeds). */
+  readonly #unreachable = new Set<string>();
 
   constructor(
     private readonly store: Store,
@@ -107,7 +109,19 @@ export class Outbox {
 
   #tick() {
     const ids = new Set([...this.#subs.values()].flatMap((s) => s.workspaces()));
-    for (const id of ids) void this.pull(id).catch((e: unknown) => console.error(`[outbox] ${id}: ${(e as Error).message}`));
+    for (const id of ids)
+      void this.pull(id).then(
+        () => void this.#unreachable.delete(id),
+        (e: unknown) => {
+          // A target whose tunnel is down: one line per outage, not one per pull (targets-connect PRD §12.5).
+          if (isTargetUnreachable(e)) {
+            if (!this.#unreachable.has(id)) console.error(`[outbox] ${id}: ${(e as Error).message}`);
+            this.#unreachable.add(id);
+            return;
+          }
+          console.error(`[outbox] ${id}: ${(e as Error).message}`);
+        },
+      );
   }
 
   /** One pull of a running workspace; a call during one shares it. */

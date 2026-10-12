@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { SETTING_KEYS, type LockdownStatus, type McpMatcher } from '@portal/contracts';
+import { claudeMinimum, SETTING_KEYS, type LockdownStatus, type McpMatcher } from '@portal/contracts';
 import { versionAtLeast } from '../delivery/compile.js';
 import { dropInPath } from '../delivery/ownership.js';
 import type { FragmentProvider } from '../delivery/reconciler.js';
@@ -26,7 +26,7 @@ import type { Settings } from './store.js';
  * Not a boundary against someone with `sudo` (foundation §2): managed settings are precedence, and the
  * reconciler puts the file back. It does stop Claude's own routes to a new connection.
  */
-export const MIN_CLAUDE_VERSION = '2.1.273';
+export const MIN_CLAUDE_VERSION = claudeMinimum('mcp-lockdown'); // the feature-minimum registry (claude-version-pinning PRD §5)
 
 defineSetting({
   key: SETTING_KEYS.mcpAccountOff,

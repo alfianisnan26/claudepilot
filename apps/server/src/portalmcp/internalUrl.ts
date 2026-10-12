@@ -30,6 +30,10 @@ export function internalUrlResolver(o: InternalUrlOptions): InternalUrlResolver 
   const cache = new Map<string, { at: number; url: string | null }>();
   const configured = o.configured ? `${o.configured.replace(/\/+$/, '')}/mcp` : null;
   const resolve = async (workspaceId: string) => {
+    // An enrolled target's workspaces reach the portal at that target's own portal address (targets-connect PRD §12.9), before
+    // PORTAL_INTERNAL_URL: that one is an address on the portal's own network, which a remote host can't use.
+    const remote = remoteUrl(o, workspaceId);
+    if (remote) return remote;
     if (configured) return configured;
     const hit = cache.get(workspaceId);
     if (hit && Date.now() - hit.at < CACHE_MS) return hit.url;
@@ -38,7 +42,12 @@ export function internalUrlResolver(o: InternalUrlOptions): InternalUrlResolver 
     cache.set(workspaceId, { at: url ? Date.now() : Date.now() - CACHE_MS + 30_000, url });
     return url;
   };
-  return Object.assign(resolve, { known: (workspaceId: string) => configured ?? cache.get(workspaceId)?.url ?? null });
+  return Object.assign(resolve, { known: (workspaceId: string) => remoteUrl(o, workspaceId) ?? configured ?? cache.get(workspaceId)?.url ?? null });
+}
+
+function remoteUrl(o: InternalUrlOptions, workspaceId: string): string | null {
+  const portalUrl = o.workspaces.runtimeFor(workspaceId.slice(0, workspaceId.indexOf('/')))?.portalUrl;
+  return portalUrl ? `${portalUrl.replace(/\/+$/, '')}/mcp` : null;
 }
 
 async function derive(o: InternalUrlOptions, workspaceId: string): Promise<string | null> {

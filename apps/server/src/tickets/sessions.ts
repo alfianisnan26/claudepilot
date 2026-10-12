@@ -19,6 +19,8 @@ export interface CreateSession {
   cwd?: string;
   title: string;
   worktree?: { repo?: string; branch?: string; base?: string };
+  /** Who starts it, when not the ticket itself: a trigger's `portal:trigger-<id>` (its session then counts as started from outside). */
+  actor?: string;
 }
 
 export interface TicketSessions {
@@ -61,7 +63,7 @@ export class ChatTicketSessions implements TicketSessions {
   async create(req: CreateSession): Promise<TicketSessionInfo> {
     const session = await this.chat.create(
       { workspaceId: req.workspaceId, title: req.title, cwd: req.cwd, claudeId: req.claudeId, ticketId: req.ticketId, ...(req.worktree ? { worktree: req.worktree } : {}) },
-      { actor: `ticket:${req.ticketId}` },
+      { actor: req.actor ?? `ticket:${req.ticketId}` },
     );
     return info(session);
   }

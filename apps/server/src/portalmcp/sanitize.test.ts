@@ -30,6 +30,7 @@ test('redactSecrets covers the shapes in portal-mcp §14.3', () => {
     'cpat_' + 'A'.repeat(43),
     'cpoa_' + 'B'.repeat(30),
     'cpor_' + 'C'.repeat(30),
+    'cpen_' + 'D'.repeat(43),
     'xoxb-1234567890-abcdefghij',
     'sk-' + 'x'.repeat(30),
   ];

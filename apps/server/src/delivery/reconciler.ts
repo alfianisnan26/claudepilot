@@ -1,6 +1,6 @@
 import { isWorkspaceId } from '../names.js';
 import type { Store } from '../store/store.js';
-import { foreignPortal, type Runtime } from '../workspaces/runtime.js';
+import { foreignPortal, isTargetUnreachable, type Runtime } from '../workspaces/runtime.js';
 import { compile, CompileError } from './compile.js';
 import { dueFolders, folderPlugin, manifestPlugins, pluginDir } from './marketplace.js';
 import { OUTBOX_PULL } from './outbox.js';
@@ -100,6 +100,8 @@ export class Reconciler {
   readonly #lastTrees = new Map<string, number>();
   readonly #listeners = new Set<(workspaceId: string) => void>();
   #stopWatchers: (() => void)[] = [];
+  /** Start watchers of runtimes added while running (an enrolled target connecting), by target id. */
+  readonly #dynamic = new Map<string, () => void>();
   #timer: NodeJS.Timeout | undefined;
 
   constructor(
@@ -128,6 +130,25 @@ export class Reconciler {
     clearInterval(this.#timer);
     for (const s of this.#stopWatchers) s();
     this.#stopWatchers = [];
+    for (const s of this.#dynamic.values()) s();
+    this.#dynamic.clear();
+  }
+
+  /**
+   * A runtime added, replaced or removed while the portal runs (targets-connect PRD §12.5): its start events are followed (null: it went),
+   * and its workspaces are checked again: a target that came back gets what waited for it while it was unreachable.
+   */
+  runtimeChanged(targetId: string, runtime: Runtime | null) {
+    this.#dynamic.get(targetId)?.();
+    this.#dynamic.delete(targetId);
+    if (!runtime) return;
+    if (runtime.delivery) this.#dynamic.set(targetId, runtime.delivery.watchStarts((name) => this.request(`${targetId}/${name}`, 'started')));
+    this.requestTarget(targetId, 'target returned');
+  }
+
+  /** Checks every known workspace of one target now (its tunnel came back). */
+  requestTarget(targetId: string, why: string) {
+    for (const id of this.knownWorkspaces()) if (id.startsWith(`${targetId}/`)) void this.request(id, why);
   }
 
   /** Called with a workspace ID whenever its delivery row changes. */
@@ -372,6 +393,7 @@ export class Reconciler {
         try {
           await checkReadable(access, name, bundle.readable);
         } catch (e) {
+          if (isTargetUnreachable(e)) throw e; // the tunnel dropped mid-check: pending, not failed
           unreadable = (e as Error).message;
         }
       }
@@ -402,6 +424,12 @@ export class Reconciler {
       const graceWaiting = [...pending.paths.keys()].some((p) => !p.endsWith('/') || !delivering.has(folderPlugin(p) ?? ''));
       if (state.running && graceWaiting) setTimeout(() => void this.request(workspaceId, 'grace'), DELETE_GRACE_MS + 1000).unref();
     } catch (e) {
+      // An outage is not a failure (targets-connect PRD §12.5): nothing counts towards a backoff, nothing turns failed or frozen, and the
+      // target's return asks again.
+      if (isTargetUnreachable(e)) {
+        this.#save(workspaceId, { status: 'pending', reason: 'Target unreachable', checked_at: now.toISOString() });
+        return;
+      }
       const failures = (this.#failures.get(workspaceId) ?? 0) + 1;
       this.#failures.set(workspaceId, failures);
       const message = e instanceof CompileError ? `Configuration error: ${e.message}` : (e as Error).message;

@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
-import type { DeliveryAccess, Runtime } from '../workspaces/runtime.js';
+import { TargetUnreachableError, type DeliveryAccess, type Runtime } from '../workspaces/runtime.js';
 import { pluginDir, treeHash } from './marketplace.js';
 import { parsePending } from './pending.js';
 import { Reconciler, type FragmentProvider } from './reconciler.js';
@@ -308,6 +308,34 @@ test('a stopped workspace drops its tombstones at once and keeps retired folders
     h.ws.state.running = true;
     await h.run('started');
     assert.ok(!h.ws.dirs.has(dir1));
+  } finally {
+    h.done();
+  }
+});
+
+test('outage (targets-connect PRD §12.5): an unreachable target leaves the workspace pending, never failed, and its return delivers', async () => {
+  const h = await harness();
+  try {
+    h.provider.list = [skillset('v1')];
+    const state = h.ws.runtime.delivery!.state;
+    let down = true;
+    h.ws.runtime.delivery!.state = async (name) => {
+      if (down) throw new TargetUnreachableError('docker', '2026-10-12T14:02:00.000Z');
+      return state(name);
+    };
+    await h.reconciler.request(WS, 'test');
+    assert.deepEqual([h.row().status, h.row().reason], ['pending', 'Target unreachable']);
+    await h.reconciler.request(WS, 'retry');
+    assert.equal(h.row().status, 'pending');
+    const failed = h.store.db!.prepare("SELECT COUNT(*) AS n FROM delivery_events WHERE workspace_id = ? AND kind = 'failed'").get(WS) as { n: number };
+    assert.equal(failed.n, 0);
+    down = false;
+    h.reconciler.runtimeChanged('docker', h.ws.runtime);
+    await new Promise((r) => setTimeout(r, 50));
+    await h.reconciler.request(WS, 'settle');
+    assert.equal(h.row().status, 'synced', h.row().reason ?? '');
+    assert.ok(h.ws.manifest(), 'delivered on return');
+    h.reconciler.stop();
   } finally {
     h.done();
   }

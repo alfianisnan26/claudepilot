@@ -56,7 +56,12 @@ export type Caller =
   | { kind: 'ui' }
   | { kind: 'system' }
   | { kind: 'token'; tokenId: string; label: string; scope: PortalScope }
-  | { kind: 'agent'; tokenId: string; label: string; workspaceId: string; sessionId: string };
+  | { kind: 'agent'; tokenId: string; label: string; workspaceId: string; sessionId: string }
+  /**
+   * A trigger a person made (triggers PRD FR17, owner decision O8): no more rights than `system` plus starting a session; recorded as
+   * actor `trigger:<id>`, and its text (an event's words) is untrusted. The session it starts carries `portal:trigger-<id>`.
+   */
+  | { kind: 'trigger'; triggerId: string; ownerId: string; label: string };
 
 /** The identity a change is recorded under. */
 interface Writer {
@@ -138,6 +143,13 @@ export interface TicketsOptions {
 export class Tickets {
   /** Called after any change, for the live page. */
   onChange?: () => void;
+  /**
+   * Each timeline entry, after its transaction committed (a microtask later): the notifications' bus reads `assigned` here (platform
+   * work breakdown H4). `actor` is the stored actor string; `data` is the entry's own (no description, no body).
+   */
+  onEvent?: (e: { ticketId: string; kind: TicketEventKind; actor: string; fromAgent: boolean; data: Record<string, unknown> | null }) => void;
+  #told: { ticketId: string; kind: TicketEventKind; actor: string; fromAgent: boolean; data: Record<string, unknown> | null }[] = [];
+  #inTx = false;
   readonly #now: () => Date;
   #off: (() => void) | undefined;
 
@@ -178,12 +190,17 @@ export class Tickets {
   #tx<T>(fn: () => T): T {
     const db = this.#writableDb;
     db.exec('BEGIN IMMEDIATE');
+    this.#inTx = true;
     try {
       const out = fn();
       db.exec('COMMIT');
+      this.#inTx = false;
+      this.#tell();
       return out;
     } catch (e) {
       db.exec('ROLLBACK');
+      this.#inTx = false;
+      this.#told = [];
       throw e;
     }
   }
@@ -197,6 +214,7 @@ export class Tickets {
   #writer(caller: Caller, sessionId?: string | null): Writer {
     if (caller.kind === 'ui') return { actor: 'ui', label: 'Admin', fromAgent: false, session: null };
     if (caller.kind === 'system') return { actor: 'system', label: 'Portal', fromAgent: false, session: null };
+    if (caller.kind === 'trigger') return { actor: `trigger:${caller.triggerId}`, label: cleanText(caller.label, 60) || 'Trigger', fromAgent: true, session: null };
     if (caller.kind === 'agent') {
       if (sessionId && sessionId !== caller.sessionId) throw new AppError('FORBIDDEN', 'Agents can act only as their own session.');
       const s = this.sessions.get(caller.sessionId);
@@ -371,7 +389,7 @@ export class Tickets {
       } catch {
         // an unreadable entry still shows
       }
-      return { id: e.id, ticketId: ticketIdOf(e.ticket_number), at: e.at, kind: e.kind, actor: e.actor, actorLabel: e.actor_label, body: e.body, data, fromAgent: /^(portal-mcp|session|ci):/.test(e.actor) };
+      return { id: e.id, ticketId: ticketIdOf(e.ticket_number), at: e.at, kind: e.kind, actor: e.actor, actorLabel: e.actor_label, body: e.body, data, fromAgent: /^(portal-mcp|session|ci|trigger):/.test(e.actor) };
     });
   }
 
@@ -421,7 +439,25 @@ export class Tickets {
 
   /* ---------- Writing ---------- */
 
+  /** Hands what was written to `onEvent` once it is committed. */
+  #tell() {
+    const told = this.#told;
+    this.#told = [];
+    if (!told.length || !this.onEvent) return;
+    queueMicrotask(() => {
+      for (const e of told) {
+        try {
+          this.onEvent?.(e);
+        } catch (err) {
+          console.error(`[tickets] an event listener failed: ${(err as Error).message}`);
+        }
+      }
+    });
+  }
+
   #addEvent(number: number, kind: TicketEventKind, w: Pick<Writer, 'actor' | 'label'>, body: string | null, data: Record<string, unknown> | null) {
+    this.#told.push({ ticketId: ticketIdOf(number), kind, actor: w.actor, fromAgent: /^(?:session|portal-mcp):/.test(w.actor), data });
+    if (!this.#inTx) queueMicrotask(() => this.#tell());
     this.#db
       .prepare('INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, body, data) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(number, this.#now().toISOString(), kind, w.actor, w.label, body, data ? JSON.stringify(data) : null);
@@ -447,7 +483,7 @@ export class Tickets {
 
   /** FR20: the queue is protected from a looping agent. */
   #createLimit(caller: Caller) {
-    if (caller.kind === 'ui' || caller.kind === 'system') return;
+    if (caller.kind === 'ui' || caller.kind === 'system' || caller.kind === 'trigger') return; // a trigger has its own limits
     const ref = caller.kind === 'agent' ? reporterRef(caller) : caller.tokenId;
     const since = new Date(this.#now().getTime() - HOUR_MS).toISOString();
     const recent = (this.#db.prepare("SELECT count(*) AS n FROM tickets WHERE reporter_kind = 'token' AND reporter_ref = ? AND created_at > ?").get(ref, since) as { n: number }).n;
@@ -470,13 +506,15 @@ export class Tickets {
     // An agent's ticket concerns its own workspace; a session assignee's workspace is where the work is.
     let workspaceId = caller.kind === 'agent' ? caller.workspaceId : workspaceIdOf(req.workspaceId);
     if (assignee?.kind === 'session') workspaceId = assignee.session.workspaceId;
-    const source = caller.kind === 'ui' ? 'human' : caller.kind === 'system' ? 'system' : 'agent';
+    const source = caller.kind === 'ui' ? 'human' : caller.kind === 'system' || caller.kind === 'trigger' ? 'system' : 'agent';
     const reporter =
       caller.kind === 'ui'
         ? { kind: 'ui' as const, ref: null, label: 'Admin', workspace: null }
         : caller.kind === 'system'
           ? { kind: 'system' as const, ref: null, label: 'Portal', workspace: null }
-          : caller.kind === 'agent'
+          : caller.kind === 'trigger'
+            ? { kind: 'system' as const, ref: null, label: cleanText(w.label, 60), workspace: null }
+            : caller.kind === 'agent'
             ? { kind: 'token' as const, ref: reporterRef(caller), label: cleanText(w.label, 60), workspace: caller.workspaceId }
             : { kind: 'token' as const, ref: caller.tokenId, label: cleanText(caller.label, 60), workspace: null };
     const at = this.#now().toISOString();
@@ -743,7 +781,7 @@ export class Tickets {
    */
   async startSession(caller: Caller, id: string, req: Partial<StartTicketSessionRequest>): Promise<StartTicketSessionResult> {
     // A person, or an admin's token (not an agent's: an agent can't start sessions) when session control is on.
-    if (!(caller.kind === 'ui' || (caller.kind === 'token' && caller.scope === 'admin'))) throw new AppError('FORBIDDEN', 'Only a person starts a session for a ticket.');
+    if (!(caller.kind === 'ui' || caller.kind === 'trigger' || (caller.kind === 'token' && caller.scope === 'admin'))) throw new AppError('FORBIDDEN', 'Only a person starts a session for a ticket.');
     const row = this.#need(caller, id);
     if (isTicketClosed(row.status)) throw new AppError('CONFLICT', `${ticketIdOf(row.number)} is closed. Reopen it first.`);
     const workspaceId = typeof req.workspaceId === 'string' ? req.workspaceId.trim() : '';
@@ -751,7 +789,7 @@ export class Tickets {
     const ticketId = ticketIdOf(row.number);
     const worktree = req.worktree === true ? {} : req.worktree && typeof req.worktree === 'object' ? req.worktree : undefined;
     const title = `${ticketId}: ${row.summary}`.slice(0, 80);
-    const session = await this.sessions.create({ ticketId, workspaceId, claudeId: req.claudeId, cwd: req.cwd, title, worktree });
+    const session = await this.sessions.create({ ticketId, workspaceId, claudeId: req.claudeId, cwd: req.cwd, title, worktree, ...(caller.kind === 'trigger' ? { actor: `portal:trigger-${caller.triggerId}` } : {}) });
 
     const w: Writer = { ...this.#writer(caller), session: null };
     this.#tx(() => {

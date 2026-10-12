@@ -1,4 +1,5 @@
 import { AppError, newId } from '@isnanme/core';
+import { claudeMinimum } from '@portal/contracts';
 import type {
   AccountPool,
   AccountPoolRequest,
@@ -11,7 +12,7 @@ import { NODE, ROOT, type Fragment } from '../delivery/types.js';
 import type { Store } from '../store/store.js';
 
 /** Minimum Claude Code version for pool delivery (foundation PRD §9). */
-const MIN_CLAUDE = '2.1.296';
+const MIN_CLAUDE = claudeMinimum('pool-delivery');
 /** After writing safe values on unassign, wait this long before removing files (Account Pool PRD §10.4). */
 const UNASSIGN_GRACE_MS = 60_000;
 /** Check results that leave an account usable for new assignments. */

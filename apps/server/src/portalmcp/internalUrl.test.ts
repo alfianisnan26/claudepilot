@@ -35,6 +35,14 @@ test('the address: configured, or worked out per target, remembered, and never g
   assert.equal(fixed.known('anything/at-all'), 'https://portal.internal:8443/mcp');
 });
 
+test('an enrolled target: its workspaces reach the portal at the target\'s portal address, even over PORTAL_INTERNAL_URL', async () => {
+  const runtimes: Record<string, unknown> = { 'cx3-dock': { target: { kind: 'docker' }, portalUrl: 'https://pilot.example.com/' }, 'cx3-box': { target: { kind: 'local' }, portalUrl: 'http://172.18.0.1:3213' } };
+  const resolve = internalUrlResolver({ workspaces: { runtimeFor: (t: string) => runtimes[t] } as never, port: 3105, configured: 'https://portal.internal:8443' });
+  assert.equal(await resolve('cx3-dock/w1'), 'https://pilot.example.com/mcp');
+  assert.equal(resolve.known('cx3-box/cx3-box'), 'http://172.18.0.1:3213/mcp');
+  assert.equal(await resolve('docker/x'), 'https://portal.internal:8443/mcp');
+});
+
 test('lockdown allowlist: the portal endpoint is admitted by its exact address, for workspaces that opted in, once the address is known', async () => {
   const h = await portalMcpHarness();
   try {

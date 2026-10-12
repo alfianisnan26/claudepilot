@@ -1,5 +1,5 @@
 import type { BrowserPoolContent, McpMatcher } from '@portal/contracts';
-import { BROWSER_RULE_TOOLS } from '@portal/contracts';
+import { BROWSER_RULE_TOOLS, claudeMinimum } from '@portal/contracts';
 import { compilePlugin } from '../delivery/marketplace.js';
 import { ROOT, type Fragment, type PluginBundle } from '../delivery/types.js';
 import type { PoolRef } from '../pools/kinds.js';
@@ -20,7 +20,7 @@ import { CDP_ENDPOINT, DOWNLOADS_DIR, PLAYWRIGHT_OUT, PLUGIN_ID, PLUGIN_NAME, PR
  */
 
 /** Claude Code that has everything the MCP and plugin work was observed on (MCP set FR14). */
-export const BROWSER_MIN_CLAUDE = '2.1.296';
+export const BROWSER_MIN_CLAUDE = claudeMinimum('browser-pool');
 
 export interface BrowserCompileInput {
   pool: PoolRef;

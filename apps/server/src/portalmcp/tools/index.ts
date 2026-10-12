@@ -1,4 +1,5 @@
 import { registerAccountTools } from './accounts.js';
+import { registerBuiltinTools } from './builtin.js';
 import { registerCatalogTools } from './catalog.js';
 import type { PortalToolDeps } from './deps.js';
 import { registerMonitorTools } from './monitor.js';
@@ -22,4 +23,5 @@ export function registerBuiltInPortalTools(deps: PortalToolDeps): void {
   registerAccountTools(deps);
   registerMonitorTools(deps);
   registerCatalogTools(deps);
+  registerBuiltinTools(deps);
 }

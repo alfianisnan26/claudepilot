@@ -48,7 +48,7 @@ export function stripUnsafe(text: string): string {
 // Shapes the chat redactor doesn't know (it covers Anthropic, GitHub, AWS, Slack, PEM, `Bearer …`, and
 // `name: value` assignments). The portal's own tokens come first: they must never be echoed.
 const EXTRA_SHAPES: RegExp[] = [
-  /(?<![A-Za-z0-9])cp(?:at|oa|or|st)_[A-Za-z0-9_-]{8,}/g,
+  /(?<![A-Za-z0-9])cp(?:at|oa|or|st|en)_[A-Za-z0-9_-]{8,}/g,
   /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
   /(?<![A-Za-z0-9])sk-(?:proj-|live-|svcacct-)?[A-Za-z0-9_-]{24,}/g,
   /(?<![A-Za-z0-9])(?:sk|rk|pk)_live_[A-Za-z0-9]{16,}/g,
