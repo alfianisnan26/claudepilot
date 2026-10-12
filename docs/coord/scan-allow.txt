@@ -1,0 +1,2 @@
+bc2ad3ecb46eb1a246bf1e2faebf4dd2aa2d19980aaae7eb9de8b9c620f97ede public Connect protocol constant / Ed25519 test vector (public key, not a secret), connect.ts:629
+b43cdfe1bf180ef4e22bb93ea9cc8f0ef23b762de714053b3bf0acdda2d7470d public Connect protocol constant / Ed25519 test vector (public key, not a secret), connect.ts:637

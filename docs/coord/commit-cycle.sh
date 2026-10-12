@@ -11,7 +11,7 @@ cd "$R" || exit 1
 git status --porcelain -uall | sed -E 's/^.. //' | grep -v ' -> ' > "$C/.cc-all.txt"
 # files touched in the last 3 minutes (owner probably mid-edit) stay out of this checkpoint
 : > "$C/.cc-recent.txt"
-while read -r f; do [ -f "$f" ] && [ -n "$(find "$f" -mmin -3 -print 2>/dev/null)" ] && echo "$f" >> "$C/.cc-recent.txt"; done < "$C/.cc-all.txt"
+while read -r f; do [ -f "$f" ] && [ -n "$(find "$f" -mmin -${RECENT_MIN:-3} -print 2>/dev/null)" ] && echo "$f" >> "$C/.cc-recent.txt"; done < "$C/.cc-all.txt"
 grep -vxFf "$C/.cc-recent.txt" "$C/.cc-all.txt" > "$C/.cc-todo.txt"
 cp "$C/.cc-todo.txt" "$C/.cc-left.txt"
 echo "changed: $(wc -l < "$C/.cc-all.txt"), skipped as recent: $(wc -l < "$C/.cc-recent.txt")"
@@ -41,7 +41,7 @@ GROUPS_DEF=(
 "web-claudeversion|apps/web/src/features/claudeversion/|web/claudeversion: version chip, pin and upgrade UI|Version shown per workspace, warnings below the minimum, explicit upgrade with canary result."
 "web-shared-features|apps/web/src/features/workspaces/ apps/web/src/features/pools/ apps/web/src/features/settings/|web: workspace sheet, pools and settings touches|Details and Repos switch and the attention chip on the workspace list, version chip placement, pool and settings touches."
 "web-shell|apps/web/src/app/ apps/web/src/components/ apps/web/src/lib/auth.tsx apps/web/src/lib/live.tsx apps/web/public/|web shell: navigation, shared components, PWA worker and manifest|InfoTip text prop with a 44 px tap area, chart components, app shell, live topics, service worker and manifest shortcuts."
-"qa-tools|tools/qa/|tools/qa: layout and behaviour harnesses|Headless Chromium harnesses for the btw layout and other checks."
+"qa-tools|tools/|tools: QA harnesses and measuring scripts|Headless Chromium harnesses for the btw layout and other checks."
 "wiring|apps/server/src/app.ts apps/server/src/index.ts apps/server/src/config.ts apps/server/src/live.ts apps/server/src/live.test.ts apps/server/src/store/ apps/server/package.json packages/contracts/src/index.ts|wiring: app, index, config, live, migrations, package|Shared files that mount the new modules, new config keys, live topics, migrations appended by set, the package script changes."
 )
 for g in "${GROUPS_DEF[@]}"; do
