@@ -83,7 +83,7 @@ export interface BtwContext {
   truncated: boolean;
   /** The session's newest stored event when it was cut: nothing after it was seen. */
   lastSeq: number;
-  /** Characters sent after redaction (the transcript, the question and the instructions). */
+  /** Characters sent after redaction: the transcript and the question, with their tags (the fixed instructions are not counted). */
   chars: number;
 }
 

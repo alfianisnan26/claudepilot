@@ -238,10 +238,10 @@ export const CLAUDE_FEATURES: readonly ClaudeFeature[] = [
   {
     id: 'safe-mode',
     label: 'Safe mode',
-    needs: '2.1.287',
-    basis: 'observed',
+    needs: '2.1.169',
+    basis: 'documented',
     observedOn: ['2.1.287', '2.1.296'],
-    why: 'The usage probe and side questions start Claude Code with `--safe-mode` so a person’s own hooks, skills and plugins never run in a poll or a one-shot; the flag is in the help of these two versions, and no older one was tried (the changelog’s newest 100 000 characters do not name it).',
+    why: 'The usage probe and side questions start Claude Code with `--safe-mode` so a person’s own hooks, skills and plugins never run in a poll or a one-shot. The flag came in 2.1.169; 2.1.168 answers “unknown option” (observed), and it is in the help of 2.1.287 and 2.1.296 (observed).',
     enforced: false,
     degrades: null,
     source: 'docs/prd/chat-sessions.md §20, docs/prd/claude-usage.md §11',
@@ -434,7 +434,7 @@ export const CLAUDE_CANARY_CHECKS: readonly ClaudeCanaryCheckDef[] = [
     label: 'Probe safety',
     area: 'usage',
     features: ['usage-probe', 'safe-mode'],
-    what: 'The usage probe’s own command passes `--safe-mode`; `get_usage` still answers under it (read by the usage parser); and a user hook (SessionStart, UserPromptSubmit, Stop) leaves no marker: a poll must never run a person’s own hooks. As a control, the same probe without the flag is shown to run them (reported, not required).',
+    what: 'The usage probe’s own command passes `--safe-mode`; `claude --help` lists the flag; `get_usage` answers under it with the same plan and windows as without it; a SessionStart or SessionEnd hook in the Claude’s settings and in the project’s leaves no marker during a probe. As controls, the probe without the flag is shown to run them, and `CLAUDE_CODE_SAFE_MODE=1` alone is shown not to be a substitute (reported, not required).',
   },
   {
     id: 'mcp-plugin-format',
