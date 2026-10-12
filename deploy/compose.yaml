@@ -16,9 +16,14 @@ services:
       PORTAL_TRUST_PROXY: "true"
       PORTAL_DOCKER_SOCKET: /var/run/docker.sock
       PORTAL_K8S_ENABLED: "false"
-      # Connect (agents that dial out to this portal) stays OFF in production until its acceptance and abuse suite has run
-      # (docs/open-items.md). Remove this line to turn it on.
-      PORTAL_CONNECT_ENABLED: "false"
+      # Connect (docs/prd/targets-connect.md): targets enrolled from the web, agents that dial out to this portal. ON (set
+      # PORTAL_CONNECT_ENABLED to "false" to switch it off). Its full acceptance and abuse suite (docs/open-items.md, T6) has not run yet.
+      # Targets reach the portal at this address (through Caddy).
+      PORTAL_CONNECT_URL: https://${PORTAL_DOMAIN:-pilot.dev.isnan.me}
+      # With PORTAL_TLS=internal Caddy's own CA signs the certificate, so agents need its root certificate: the wizard's "Private CA"
+      # option embeds this file. Copy it once (a public certificate, not a secret) into the data volume:
+      #   docker cp claudepilot-caddy-1:/data/caddy/pki/authorities/local/root.crt ./root.crt  (then into the portal's /data/connect-ca.pem)
+      PORTAL_CONNECT_CA_FILE: /data/connect-ca.pem
     volumes:
       - portal-data:/data
       - portal-secrets:/secrets
