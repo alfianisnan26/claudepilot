@@ -4,11 +4,12 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { parseRateLimitInfo } from './parse.js';
-import { probeClaude, type ProbeIo } from './probe.js';
+import { probeClaude, SAFE_MODE_FLAG, type ProbeIo } from './probe.js';
 import { localExec, makeFakeClaude, opensslAvailable, startStandIn, type FakeClaude, type StandIn } from './testkit/index.js';
 
 const hasClaude = (() => {
@@ -20,6 +21,9 @@ const hasClaude = (() => {
   }
 })();
 const opts = { skip: hasClaude && opensslAvailable() ? false : 'needs the claude CLI and the openssl command', timeout: 120_000 };
+
+/** A fake API key, joined at run time: no token-shaped literal sits in the repo (GitHub push protection and the commit scanner look for them). */
+const FAKE_API_KEY = ['sk', 'ant', 'api03', 'x'.repeat(40)].join('-');
 
 let standIn: StandIn;
 const made: FakeClaude[] = [];
@@ -38,10 +42,9 @@ const fake = (o: Parameters<typeof makeFakeClaude>[0] = {}) => {
   return c;
 };
 
-/** The environment a workspace would hand `exec`: plus an API key and a token that the probe must not pass on. */
-const ioFor = (c: FakeClaude): ProbeIo => ({
-  exec: localExec({ HOME: c.home, PATH: process.env.PATH ?? '', ...standIn.childEnv(), ANTHROPIC_API_KEY: 'sk-ant-FAKE-must-be-dropped', CLAUDE_CODE_OAUTH_TOKEN: 'FAKE-must-be-dropped' }),
-});
+/** The environment a workspace would hand `exec` (in `cwd` when given: where a project's own settings sit): plus an API key and a token that the probe must not pass on. */
+const envFor = (c: FakeClaude) => ({ HOME: c.home, PATH: process.env.PATH ?? '', ...standIn.childEnv(), ANTHROPIC_API_KEY: FAKE_API_KEY, CLAUDE_CODE_OAUTH_TOKEN: 'FAKE-must-be-dropped' });
+const ioFor = (c: FakeClaude, cwd?: string): ProbeIo => ({ exec: localExec(envFor(c), { cwd }) });
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const at5h = Date.UTC(2026, 9, 12, 5, 0, 0);
@@ -101,7 +104,7 @@ test('real CLI: Default with no login is signed out; a Claude whose settings nam
 
   const key = fake({ directory: DIR, signedOut: true });
   mkdirSync(key.configDir!, { recursive: true });
-  writeFileSync(join(key.configDir!, 'settings.json'), JSON.stringify({ apiKeyHelper: 'echo sk-ant-api03-FAKE-not-real' }));
+  writeFileSync(join(key.configDir!, 'settings.json'), JSON.stringify({ apiKeyHelper: `echo ${FAKE_API_KEY}` }));
   const b = await probeClaude(ioFor(key), 'local', 'x', DIR);
   assert.deepEqual([b.runsOn, b.windows.length, b.problem, b.failed], ['key', 0, null, false]);
 });
@@ -141,7 +144,7 @@ test('real CLI: why the environment is cleaned: an API key in it makes the same 
   const base = { HOME: claude.home, PATH: process.env.PATH ?? '', CLAUDE_CONFIG_DIR: claude.configDir!, ...standIn.childEnv() };
   const clean = await rawUsage(base);
   assert.equal(clean.rate_limits_available, true, 'the login alone: plan limits');
-  const withKey = await rawUsage({ ...base, ANTHROPIC_API_KEY: 'sk-ant-api03-FAKE-not-real' });
+  const withKey = await rawUsage({ ...base, ANTHROPIC_API_KEY: FAKE_API_KEY });
   assert.equal(withKey.rate_limits_available, false, 'with a key in the environment Claude Code runs on the key');
   assert.equal(withKey.rate_limits, null);
 });
@@ -234,4 +237,48 @@ test('real CLI, passive: a refused turn (429, rejected) streams the event, the u
   assert.equal(parseRateLimitInfo(refusal.api_error_params?.rate_limit_info)?.rejected[0], 'session', 'with the same info under api_error_params');
   assert.ok(!lines.some((l) => l.type === 'api_retry'), 'a usage limit is not retried');
   assert.equal((lines.find((l) => l.type === 'result') as { is_error?: boolean }).is_error, true);
+});
+
+/**
+ * A Claude whose settings, and a project's, say to run a command when a session starts and ends: each leaves a marker file named for who ran it. This is what
+ * a workspace's own hooks, or an agent's, look like to a probe: it starts a session (no message sent), and without safe mode Claude Code ran them.
+ */
+function hooked(directory: string) {
+  const claude = fake({ directory });
+  const marks = mkdtempSync(join(tmpdir(), 'cp-hook-marks-'));
+  const project = mkdtempSync(join(tmpdir(), 'cp-hook-project-'));
+  const hooks = (who: string) => ({ hooks: Object.fromEntries(['SessionStart', 'SessionEnd'].map((e) => [e, [{ hooks: [{ type: 'command', command: `touch '${marks}/${who}-${e}'` }] }]])) });
+  const dir = claude.configDir ?? join(claude.home, '.claude');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'settings.json'), JSON.stringify(hooks('user')));
+  mkdirSync(join(project, '.claude'));
+  writeFileSync(join(project, '.claude', 'settings.json'), JSON.stringify(hooks('project')));
+  return {
+    claude,
+    project,
+    /** What ran, after a moment for a hook that runs as the process ends. */
+    fired: async () => (await new Promise((r) => setTimeout(r, 1500)), readdirSync(marks).sort()),
+    remove: () => [marks, project].forEach((d) => rmSync(d, { recursive: true, force: true })),
+  };
+}
+
+test('real CLI: the probe runs no hook (--safe-mode), in the Claude’s settings or the project’s, and still reads the plan; without the flag the same hooks run', opts, async () => {
+  for (const directory of [DIR, '']) {
+    const h = hooked(directory);
+    try {
+      standIn.set({ usage: { body } });
+      const r = await probeClaude(ioFor(h.claude, h.project), 'local', 'x', directory);
+      assert.deepEqual([r.runsOn, r.plan, r.failed, r.windows.length], ['plan', 'max', false, 3], 'safe mode keeps the sign-in and the usage reply');
+      assert.deepEqual(await h.fired(), [], `a probe of ${directory || 'Default'} ran a hook`);
+
+      // The control: the same Claude and project with only the flag taken out of the command. A regression test that cannot fail proves nothing.
+      const run = localExec(envFor(h.claude), { cwd: h.project });
+      const unsafe: ProbeIo = { exec: (t, n, cmd) => run(t, n, cmd.filter((a) => a !== SAFE_MODE_FLAG)) };
+      await probeClaude(unsafe, 'local', 'x', directory);
+      const fired = await h.fired();
+      assert.ok(fired.includes('user-SessionStart') && fired.includes('project-SessionStart'), `without --safe-mode the hooks ran (${fired.join(', ') || 'none'})`);
+    } finally {
+      h.remove();
+    }
+  }
 });

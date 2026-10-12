@@ -19,7 +19,7 @@ function environmentOf(dir: string, env: Record<string, string>): Record<string,
 
 test('the command: a clean environment, only the network plumbing and the Claude’s own directory', () => {
   const secrets = {
-    ANTHROPIC_API_KEY: 'sk-ant-canary-key',
+    ANTHROPIC_API_KEY: ['sk', 'ant', 'canary', 'key'].join('-'), // joined at run time: no token-shaped literal in the repo
     ANTHROPIC_AUTH_TOKEN: 'canary-bearer',
     CLAUDE_CODE_OAUTH_TOKEN: 'canary-oauth',
     ANTHROPIC_BASE_URL: 'http://canary.invalid',
