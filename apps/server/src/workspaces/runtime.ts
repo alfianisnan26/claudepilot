@@ -27,7 +27,31 @@ export interface CreateSpec {
   name: string;
   cpus?: number;
   memoryMb?: number;
+  /** The exact Claude Code version to pin the workspace to (x.y.z); the target's default image when absent (claude-version-pinning PRD). */
+  claudeVersion?: string;
+  /** An enrolled cluster's node to place it on (targets-connect PRD §12.4); the runtime picks when absent. */
+  node?: string;
 }
+
+/**
+ * What a call to an enrolled target fails with while its tunnel is down (targets-connect PRD §12.5): an outage, not a state change.
+ * The manager answers it with 503 "Target unreachable (since 14:02)"; delivery keeps the workspace `pending`; chat readers wait.
+ */
+export class TargetUnreachableError extends Error {
+  readonly code = 'TARGET_UNREACHABLE';
+  constructor(
+    readonly target: string,
+    /** ISO time the target was last reachable; null when it never was since the portal started. */
+    readonly since: string | null,
+  ) {
+    super(`Target unreachable${since ? ` (since ${new Date(since).toISOString().slice(11, 16)})` : ''}`);
+    this.name = 'TargetUnreachableError';
+  }
+}
+
+/** Whether an error says the target's tunnel is down (also across module copies: checked by name and code). */
+export const isTargetUnreachable = (e: unknown): e is TargetUnreachableError =>
+  e instanceof TargetUnreachableError || (!!e && typeof e === 'object' && (e as { code?: unknown }).code === 'TARGET_UNREACHABLE');
 
 /** A terminal running inside a workspace. */
 export interface ShellSession {
@@ -78,6 +102,57 @@ export interface DeliveryAccess {
   watchStarts(onStart: (name: string) => void): () => void;
 }
 
+/** An image of the workspace as a target holds it (claude-version-pinning PRD). */
+export interface ImageInfo {
+  /** `claudepilot-workspace:cc-2.1.296`. */
+  ref: string;
+  /** The image's id on its daemon. */
+  id: string;
+  /** The exact Claude Code version its `claudepilot.claude-version` label says; null when it carries none. */
+  version: string | null;
+  builtAt: string | null;
+  sizeBytes: number | null;
+}
+
+/** What a runtime offers for the workspace image, one tag per exact Claude Code version. Optional: This machine has none. */
+export interface ImageAccess {
+  /** The reference a workspace pinned to `version` is made from on this target. */
+  refFor(version: string): string;
+  /** The reference new workspaces get when no version is asked for. */
+  readonly defaultRef: string;
+  inspect(ref: string): Promise<ImageInfo | null>;
+  /** Builds (Docker) or pulls the image of an exact version when it is missing; resolves with its reference. Long. */
+  ensure(version: string, progress: (detail: string) => void): Promise<string>;
+  /** The images of this portal's repository, one per tag. */
+  list(): Promise<ImageInfo[]>;
+  /** Removes a tag; refused by the daemon while a container uses it. */
+  remove(ref: string): Promise<void>;
+}
+
+/** A container of the portal's own that is not a workspace: no managed label, no home volume, removed by whoever asked for it. */
+export interface Throwaway {
+  /** What `run`, `put`, `read` and `remove` take. */
+  name: string;
+}
+
+/** Throwaway containers for the compatibility canary (claude-version-pinning PRD §11): never listed as workspaces. */
+export interface ThrowawayAccess {
+  /** `network: 'none'` for a canary of an image; `bridge` only while a candidate Claude Code is installed beside the image's. */
+  start(spec: { image: string; network: 'none' | 'bridge'; cpus?: number; memoryMb?: number }): Promise<Throwaway>;
+  run: DeliveryAccess['run'];
+  put: DeliveryAccess['put'];
+  read: DeliveryAccess['read'];
+  /** A command with stdin open and no terminal, as the workspace user, in `cwd` (the home folder when absent), with exactly these extra variables. */
+  exec(name: string, command: string[], opts?: { env?: Record<string, string>; cwd?: string }): Promise<ExecSession>;
+  /** A terminal in the container as the workspace user: `claude mcp login` reads the pasted address from a terminal, not from a pipe. */
+  shell(name: string, size: { cols: number; rows: number }, command: string[], opts?: { env?: Record<string, string> }): Promise<ShellSession>;
+  /** Cuts the container off from every network (after a candidate Claude Code was installed): the checks run with none. */
+  isolate(name: string): Promise<void>;
+  remove(name: string): Promise<void>;
+  /** The throwaway containers this portal started and never removed (a restart in the middle of a canary). */
+  leftovers(): Promise<Throwaway[]>;
+}
+
 /**
  * One place workspaces run. The runtime is the record: list() reads what exists from it, so the
  * portal keeps no state of its own and survives restarts.
@@ -102,4 +177,25 @@ export interface Runtime {
   exec(name: string, command: string[]): Promise<ExecSession>;
   /** Calls `onChange` when a workspace changes outside the portal's own calls, when the runtime can tell. */
   watch?(onChange: () => void): () => void;
+  /** Image per exact Claude Code version (claude-version-pinning PRD). */
+  readonly images?: ImageAccess;
+  /** Throwaway containers for the compatibility canary. */
+  readonly throwaway?: ThrowawayAccess;
+  /**
+   * Replaces the workspace's container with one made from `image`, KEEPING its home volume (everything outside the home folder, and every
+   * running process, is not kept). A container that cannot be made or started is put back from the old image and the call fails.
+   * `progress` says the step. Resolves with the image it was on and the one it is on.
+   */
+  recreate?(name: string, image: string, progress: (detail: string) => void): Promise<{ from: string | null; to: string }>;
+  /** The image a workspace's container was made from and the Claude Code version that image says; null when the workspace is not there. */
+  imageOf?(name: string): Promise<{ ref: string | null; version: string | null; id: string | null } | null>;
+  /** Where a workspace on this target reaches the portal (an enrolled target's portal address); internalUrl derives it when absent. */
+  readonly portalUrl?: string;
+  /**
+   * An enrolled target's last good list (targets-connect PRD §12.5), served by the manager while `check()` fails: each workspace
+   * `unreachable` with `lastSeenAt`. Absent on scanned targets (they are skipped while down, as before).
+   */
+  listLastKnown?(): Workspace[];
+  /** An enrolled target: whether the workspace's node is connected right now (sync, no call). Absent: always reachable. */
+  reachable?(name: string): boolean;
 }

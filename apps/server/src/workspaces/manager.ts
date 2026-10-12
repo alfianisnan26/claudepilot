@@ -1,5 +1,6 @@
 import { AppError, isAppError } from '@isnanme/core';
 import {
+  isExactClaudeVersion,
   workspaceId,
   workspaceNameProblem,
   type CreateWorkspaceRequest,
@@ -7,9 +8,17 @@ import {
   type WorkspaceTarget,
   type WorkspaceUsage,
 } from '@portal/contracts';
+import type { Actor } from '@portal/contracts';
+import { ownerActor, requireCan } from '../authz/seam.js';
 import type { JsonFile } from '../jsonFile.js';
 import { PLAIN_NAME } from '../names.js';
-import type { Runtime, ShellSession } from './runtime.js';
+import { isTargetUnreachable, type Runtime, type ShellSession } from './runtime.js';
+
+/** A tunnelled runtime follows its links (and may hold a loopback listener): it lets go when it is replaced or removed. */
+const dispose = (r: Runtime) => (r as { dispose?: () => void }).dispose?.();
+
+/** How long a portal that just started waits for its enrolled targets' first connection before judging a pending create (FR38). */
+const SETTLE_MS = 20_000;
 
 const CHECK_TTL_MS = 10_000;
 const CHECK_TIMEOUT_MS = 4_000;
@@ -55,7 +64,19 @@ export class Workspaces {
    * `beforeStop`: runs (for at most 5 s) before the portal stops a workspace, such as an outbox pull.
    * `changed`: the list changed through the portal (a create's progress, start, stop, remove).
    */
-  hooks: { beforeStop?: (workspaceId: string) => Promise<void>; changed?: () => void } = {};
+  hooks: {
+    beforeStop?: (workspaceId: string) => Promise<void>;
+    changed?: () => void;
+    /** The Claude Code version a new workspace on `target` is pinned to when the request names none (the portal's default pin); undefined: the target's own image. */
+    defaultClaudeVersion?: (target: string) => string | undefined;
+    /** Connect's quota and drain check for an enrolled target (targets-connect PRD §12.8): throws LIMIT_REACHED / CONFLICT. */
+    beforeCreate?: (target: string, node?: string) => void;
+    /** Resolves once the enrolled targets have had their first connection, or after `ms` (`connect.settled`); read by `resume()`. */
+    settled?: (ms: number) => Promise<void>;
+  } = {};
+  /** Watchers of the runtimes added while running (static ones are wired by index.ts), by target id. */
+  readonly #watching = new Map<string, () => void>();
+  readonly #runtimeListeners = new Set<(targetId: string, runtime: Runtime | null) => void>();
 
   constructor(
     runtimes: Runtime[],
@@ -67,11 +88,62 @@ export class Workspaces {
     this.#timeoutMs = timing.timeoutMs ?? CHECK_TIMEOUT_MS;
   }
 
+  /* ---------- Runtimes that come and go (enrolled targets, targets-connect PRD §12.5, FR36) ---------- */
+
+  /** Adds a runtime while running (an enrolled target became usable); one already there under the same id is replaced. */
+  addRuntime(runtime: Runtime) {
+    this.#install(runtime);
+  }
+
+  /** Replaces a target's runtime (its nodes or settings changed); every cache of the old one is dropped. */
+  replaceRuntime(runtime: Runtime) {
+    this.#install(runtime);
+  }
+
+  /** Removes a target's runtime (the target was removed). Its pending creates stay until removed, as on any target. */
+  removeRuntime(targetId: string) {
+    const old = this.#runtimes.get(targetId);
+    if (!old || !this.#runtimes.delete(targetId)) return;
+    dispose(old);
+    this.#unwatch(targetId);
+    this.#known.delete(targetId);
+    this.#checking.delete(targetId);
+    this.#runtimeListeners.forEach((fn) => fn(targetId, null));
+    this.hooks.changed?.();
+  }
+
+  /** Called when a runtime is added or replaced (with it) or removed (null): delivery follows its start events. */
+  onRuntimeChange(fn: (targetId: string, runtime: Runtime | null) => void): () => void {
+    this.#runtimeListeners.add(fn);
+    return () => void this.#runtimeListeners.delete(fn);
+  }
+
+  #install(runtime: Runtime) {
+    const id = runtime.target.id;
+    this.#unwatch(id);
+    const old = this.#runtimes.get(id);
+    if (old && old !== runtime) dispose(old);
+    this.#runtimes.set(id, runtime);
+    // A check of the old runtime may still be running: its answer is dropped when it lands (#check compares the runtime).
+    this.#known.delete(id);
+    this.#checking.delete(id);
+    if (runtime.watch) this.#watching.set(id, runtime.watch(() => this.hooks.changed?.()));
+    this.#runtimeListeners.forEach((fn) => fn(id, runtime));
+    this.hooks.changed?.();
+  }
+
+  #unwatch(id: string) {
+    this.#watching.get(id)?.();
+    this.#watching.delete(id);
+  }
+
   /** Picks up the creates that were in flight (or had failed) when the portal last stopped. */
   async resume() {
     const saved = this.saved.read();
     if (!saved.length) return;
     for (const w of saved) this.#pending.set(w.id, w.status === 'creating' ? { ...w, detail: 'Resuming after restart' } : w);
+    // Enrolled targets come back over their tunnels a few seconds after a restart: judge a pending create on one only after that (FR38).
+    if (saved.some((w) => w.status === 'creating')) await this.hooks.settled?.(SETTLE_MS).catch(() => undefined);
     const targets = await this.targets(true);
     await Promise.all(
       saved
@@ -130,25 +202,33 @@ export class Workspaces {
           (e: unknown): WorkspaceTarget => ({ ...runtime.target, available: false, problem: runtimeMessage(e) }),
         )
         .then((target) => {
-          this.#known.set(id, { at: Date.now(), target });
+          // A runtime replaced or removed while it was checked: its answer is not the target's any more.
+          if (this.#runtimes.get(id) === runtime) this.#known.set(id, { at: Date.now(), target });
           return target;
         })
-        .finally(() => this.#checking.delete(id));
+        .finally(() => {
+          if (this.#checking.get(id) === running) this.#checking.delete(id);
+        });
       this.#checking.set(id, running);
     }
     return running;
   }
 
   async list(): Promise<Workspace[]> {
-    const available = (await this.targets()).filter((t) => t.available);
+    const targets = (await this.targets()).filter((t) => this.#runtimes.has(t.id));
+    // An enrolled target that can't be reached shows its last known list, each workspace `unreachable` (FR37); a scanned one is skipped.
+    const lastKnown = (t: WorkspaceTarget) => this.#runtimes.get(t.id)?.listLastKnown?.() ?? [];
     const lists = await Promise.all(
-      available.map((t) =>
-        this.#runtime(t.id)
-          .list()
-          .catch((e: unknown) => {
-            console.error(`[workspaces] listing ${t.id} failed: ${runtimeMessage(e)}`);
-            return [];
-          }),
+      targets.map((t) =>
+        !t.available
+          ? lastKnown(t)
+          : this.#runtime(t.id)
+              .list()
+              .catch((e: unknown) => {
+                if (isTargetUnreachable(e)) return lastKnown(t);
+                console.error(`[workspaces] listing ${t.id} failed: ${runtimeMessage(e)}`);
+                return [];
+              }),
       ),
     );
     const found = lists.flat();
@@ -159,7 +239,8 @@ export class Workspaces {
     return [...pending, ...found].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
-  async create(req: Partial<CreateWorkspaceRequest>): Promise<Workspace> {
+  /** `actor`: who asks (the route's `actorOf(c)`); creating on a target needs `operate` on it (multi-user PRD; the single-owner seam allows the owner). */
+  async create(req: Partial<CreateWorkspaceRequest>, actor: Actor = ownerActor()): Promise<Workspace> {
     const name = typeof req.name === 'string' ? req.name.trim() : '';
     const problem = workspaceNameProblem(name);
     if (problem) throw new AppError('VALIDATION_FAILED', problem, { details: { name: problem } });
@@ -175,12 +256,23 @@ export class Workspaces {
     if (target && !target.available) target = (await this.targets(true)).find((t) => t.id === req.target);
     if (!target) throw new AppError('VALIDATION_FAILED', 'Pick where it runs.', { details: { target: 'Pick a target.' } });
     if (!target.available) throw new AppError('SERVICE_UNAVAILABLE', `${target.label} isn’t reachable: ${target.problem}`);
+    requireCan(actor, 'operate', { type: 'target', id: target.id });
+    const node = req.node === undefined || req.node === null || req.node === '' ? undefined : req.node;
+    if (node !== undefined && (typeof node !== 'string' || !PLAIN_NAME.test(node)))
+      throw new AppError('VALIDATION_FAILED', 'Pick a node of this target.', { details: { node: 'Not a node of this target.' } });
+    // An enrolled target's quota and drained nodes (Connect); a node on a target without nodes is refused by its runtime.
+    this.hooks.beforeCreate?.(target.id, node);
 
     const id = workspaceId(target.id, name);
     if (this.#pending.get(id)?.status === 'creating')
       throw new AppError('CONFLICT', `“${name}” is already being created.`);
 
     const runtime = this.#runtime(target.id);
+    // The Claude Code version to pin (claude-version-pinning PRD): an exact x.y.z, only where the target holds an image per version.
+    if (req.claudeVersion !== undefined && req.claudeVersion !== null && !isExactClaudeVersion(req.claudeVersion))
+      throw new AppError('VALIDATION_FAILED', 'Use an exact version such as 2.1.296.', { details: { claudeVersion: 'An exact x.y.z.' } });
+    if (req.claudeVersion && !runtime.images) throw new AppError('VALIDATION_FAILED', `${target.label} can’t pin a Claude Code version.`, { details: { claudeVersion: 'Not on this target.' } });
+    const claudeVersion = req.claudeVersion || (runtime.images ? this.hooks.defaultClaudeVersion?.(target.id) : undefined);
     // Refuse a taken name now, not in the background: a failed create kept under the same id
     // would stand in for the real workspace (and "remove" on it would delete the real one).
     if ((await runtime.list()).some((w) => w.name === name))
@@ -195,6 +287,10 @@ export class Workspaces {
       createdAt: new Date().toISOString(),
       cpus,
       memoryMb,
+      // Saved with the pending create, so a create resumed after a restart goes to the same node.
+      ...(node ? { node } : {}),
+      // Saved with the pending create, so one that resumes after a restart is pinned to the same version.
+      ...(claudeVersion ? { claude: { pinned: claudeVersion, running: null, flags: [] } } : {}),
     };
     this.#setPending(workspace);
     this.#launch(runtime, workspace);
@@ -203,9 +299,9 @@ export class Workspaces {
 
   /** Runs a create in the background; `workspace` (the pending entry) tracks its progress. */
   #launch(runtime: Runtime, workspace: Workspace) {
-    const { id, name, cpus, memoryMb } = workspace;
+    const { id, name, cpus, memoryMb, node } = workspace;
     void runtime
-      .create({ name, cpus, memoryMb }, (detail) => {
+      .create({ name, cpus, memoryMb, claudeVersion: workspace.claude?.pinned ?? undefined, ...(node ? { node } : {}) }, (detail) => {
         workspace.detail = detail;
         this.hooks.changed?.();
       })
@@ -257,6 +353,22 @@ export class Workspaces {
     if (pull) await Promise.race([pull, new Promise((r) => setTimeout(r, 5_000).unref())]);
     try {
       return await this.#run(target, (r) => r.stop(name));
+    } finally {
+      this.hooks.changed?.();
+    }
+  }
+
+  /**
+   * Replaces a workspace's container with one made from `image`, keeping its home volume (claude-version-pinning PRD §7). The events
+   * written just before are pulled first, like a stop. Only the Runtime knows how; a target without it says so.
+   */
+  async recreate(target: string, name: string, image: string, progress: (detail: string) => void) {
+    const runtime = this.#runtime(target);
+    if (!runtime.recreate) throw new AppError('CONFLICT', 'This target can’t recreate a workspace from another image.');
+    const pull = this.hooks.beforeStop?.(workspaceId(target, name)).catch(() => undefined);
+    if (pull) await Promise.race([pull, new Promise((r) => setTimeout(r, 5_000).unref())]);
+    try {
+      return await this.#run(target, (r) => r.recreate!(name, image, progress));
     } finally {
       this.hooks.changed?.();
     }
@@ -315,6 +427,13 @@ export class Workspaces {
     return this.#run(target, (r) => r.shell(name, size, command));
   }
 
+  /** Whether a workspace's target can be reached now (an enrolled target's tunnel); for the chat readers' outage rule (§12.5). */
+  targetState(workspaceId: string): 'up' | 'down' {
+    const i = workspaceId.indexOf('/');
+    const runtime = this.#runtimes.get(workspaceId.slice(0, i));
+    return runtime?.reachable && !runtime.reachable(workspaceId.slice(i + 1)) ? 'down' : 'up';
+  }
+
   /** The runtime for a target, if configured (for the delivery engine). */
   runtimeFor(target: string): Runtime | undefined {
     return this.#runtimes.get(target);
@@ -337,6 +456,8 @@ export class Workspaces {
       return await fn(runtime);
     } catch (e) {
       if (isAppError(e)) throw e;
+      // An enrolled target's tunnel is down: "Target unreachable (since 14:02)" (targets-connect PRD §12.5).
+      if (isTargetUnreachable(e)) throw new AppError('SERVICE_UNAVAILABLE', e.message, { cause: e });
       const status = (e as { statusCode?: number; code?: number }).statusCode ?? (e as { code?: unknown }).code;
       if (status === 404) throw new AppError('NOT_FOUND', 'That workspace doesn’t exist.');
       throw new AppError('SERVICE_UNAVAILABLE', runtimeMessage(e), { cause: e });

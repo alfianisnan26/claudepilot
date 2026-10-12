@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
-import { chmodSync, chownSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { hostname, homedir, cpus, totalmem, freemem } from 'node:os';
-import { dirname } from 'node:path';
 import { AppError } from '@isnanme/core';
 import { workspaceId, type Workspace } from '@portal/contracts';
 import type { JsonFile } from '../jsonFile.js';
-import { HOME, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type ShellSession, type TarEntry } from './runtime.js';
+import { ETC, hostDir, hostPath, loadPty, sample, userEnv, writeEntry, type Pty } from './hostexec.js';
+import type { CreateSpec, DeliveryAccess, ExecSession, Runtime, ShellSession } from './runtime.js';
 
 /** What survives a restart: whether the machine is switched on, and since when it has been a workspace. */
 export interface LocalState {
@@ -14,25 +14,6 @@ export interface LocalState {
 }
 
 const OFF = 'This machine is switched off. Start it first.';
-
-/** The portal's own folder in a workspace (the chat host, root-owned there). The portal user can't write /etc here. */
-const ETC = '/etc/claudepilot';
-const hostDir = () => `${homedir()}/.claudepilot/host`;
-const under = (path: string, dir: string) => path === dir || path.startsWith(`${dir}/`);
-/**
- * A workspace path on this machine: the workspace user's home (`/home/node`) is the portal user's home,
- * and `/etc/claudepilot` is `~/.claudepilot/host`. Anything else is the same path.
- */
-const hostPath = (path: string) =>
-  under(path, HOME) ? homedir() + path.slice(HOME.length) : under(path, ETC) ? hostDir() + path.slice(ETC.length) : path;
-
-type Pty = {
-  onData(fn: (data: string) => void): unknown;
-  onExit(fn: (e: { exitCode: number }) => void): unknown;
-  write(data: string | Buffer): void;
-  resize(cols: number, rows: number): void;
-  kill(): void;
-};
 
 /**
  * The machine the portal runs on, as one workspace. Starting it switches access on and stopping it
@@ -192,7 +173,7 @@ export class LocalRuntime implements Runtime {
     this.#same(name);
     this.#guard();
     // Arguments that are workspace paths (the chat host, a session's folder, a Claude's directory) are this machine's.
-    const [bin, ...args] = command.map(hostPath);
+    const [bin, ...args] = command.map((c) => hostPath(c));
     if (!bin) throw new AppError('VALIDATION_FAILED', 'No command.');
     const child = spawn(bin, args, { cwd: homedir(), env: userEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
     child.stdin.on('error', () => undefined); // a write after the command exited (EPIPE) is the caller's lost race, not a crash
@@ -222,49 +203,5 @@ export class LocalRuntime implements Runtime {
 
   #same(name: string) {
     if (name !== this.opts.name) throw new AppError('NOT_FOUND', 'That workspace doesn’t exist.');
-  }
-}
-
-/**
- * The portal's environment with HOME pointing at the portal user's real home, and ~/.local/bin on
- * PATH: where Claude Code's installer (and pip, pipx) put commands for one user.
- */
-function userEnv(): NodeJS.ProcessEnv {
-  const local = `${homedir()}/.local/bin`;
-  const path = process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin';
-  // The chat host's file commands work under the home folder, which here is the portal user's.
-  return { ...process.env, HOME: homedir(), CLAUDEPILOT_FILES_ROOT: homedir(), PATH: path.split(':').includes(local) ? path : `${local}:${path}` };
-}
-
-function sample() {
-  let idle = 0;
-  let total = 0;
-  for (const c of cpus()) {
-    idle += c.times.idle;
-    total += c.times.user + c.times.nice + c.times.sys + c.times.idle + c.times.irq;
-  }
-  return { idle, total };
-}
-
-/** Writes one delivered file or folder; the owner is only set when the portal runs as root. */
-function writeEntry(e: TarEntry) {
-  const path = hostPath(e.path);
-  if (e.type === 'directory') mkdirSync(path, { recursive: true });
-  else {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, e.content ?? '');
-  }
-  chmodSync(path, e.mode);
-  if (process.getuid?.() === 0) chownSync(path, e.uid, e.gid);
-}
-
-type PtyModule = { spawn(file: string, args: string[], opts: object): unknown };
-
-/** The terminal library is optional; without it this target reports why it can't be used. */
-async function loadPty(): Promise<PtyModule> {
-  try {
-    return (await import('@lydell/node-pty')) as unknown as PtyModule;
-  } catch {
-    throw new Error('Terminal support (@lydell/node-pty) isn’t installed');
   }
 }

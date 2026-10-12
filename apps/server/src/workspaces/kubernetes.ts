@@ -56,22 +56,33 @@ export interface KubernetesOptions {
 /** One namespace in a cluster: a Deployment (scaled 1/0 to start/stop) and a PVC per workspace. */
 export class KubernetesRuntime implements Runtime {
   readonly target;
-  readonly #kc = new KubeConfig();
+  readonly #kc: KubeConfig = new KubeConfig();
   readonly #core: CoreV1Api;
   readonly #apps: AppsV1Api;
   readonly #metrics: CustomObjectsApi;
 
-  constructor(private readonly opts: KubernetesOptions) {
-    this.#kc.loadFromDefault();
+  readonly #manageNamespace: boolean;
+
+  constructor(
+    private readonly opts: KubernetesOptions,
+    /**
+     * An enrolled cluster (targets-connect PRD §12.6): a ready KubeConfig (the tunnel's loopback endpoint; `loadFromDefault()` is then
+     * never called), `manageNamespace: false` (the manifest made the namespace and a namespaced Role can't create one), and its target.
+     */
+    connect?: { kubeConfig: KubeConfig; manageNamespace?: boolean; target: { id: string; label: string; where: string } },
+  ) {
+    if (connect) this.#kc = connect.kubeConfig;
+    else this.#kc.loadFromDefault();
+    this.#manageNamespace = connect?.manageNamespace ?? true;
     this.#core = this.#kc.makeApiClient(CoreV1Api);
     this.#apps = this.#kc.makeApiClient(AppsV1Api);
     this.#metrics = this.#kc.makeApiClient(CustomObjectsApi);
-    const context = this.#kc.getCurrentContext();
+    const context = connect ? null : this.#kc.getCurrentContext();
     this.target = {
-      id: 'kubernetes',
-      label: 'Kubernetes',
+      id: connect?.target.id ?? 'kubernetes',
+      label: connect?.target.label ?? 'Kubernetes',
       kind: 'kubernetes' as const,
-      where: context ? `${context} / ${opts.namespace}` : opts.namespace,
+      where: connect?.target.where ?? (context ? `${context} / ${opts.namespace}` : opts.namespace),
     };
   }
 
@@ -137,10 +148,12 @@ export class KubernetesRuntime implements Runtime {
       .then(() => true, (e) => (codeOf(e) === 404 ? false : Promise.reject(e)));
     if (exists) throw new AppError('CONFLICT', `A workspace named “${spec.name}” already exists here.`);
 
-    progress(`Preparing namespace ${ns}`);
-    await this.#core
-      .createNamespace({ body: { metadata: { name: ns, labels: { [LABEL.managed]: 'true' } } } })
-      .catch(ignore(409));
+    if (this.#manageNamespace) {
+      progress(`Preparing namespace ${ns}`);
+      await this.#core
+        .createNamespace({ body: { metadata: { name: ns, labels: { [LABEL.managed]: 'true' } } } })
+        .catch(ignore(409));
+    }
 
     const labels = {
       [LABEL.managed]: 'true',
