@@ -1,0 +1,11 @@
+# V1 surgical edits in files other agents own (for the final report)
+- images/workspace/Dockerfile: ARG CLAUDE_CODE_VERSION + pinned install + guard + LABEL + ENV DISABLE_* + baked managed drop-in 01-claudepilot-pin.json (A3a's file; PLAN-7 says V1 edits it)
+- apps/server/src/workspaces/runtime.ts: CreateSpec.claudeVersion; ImageInfo/ImageAccess/Throwaway/ThrowawayAccess; optional Runtime.images/throwaway/recreate/imageOf (additive)
+- apps/server/src/workspaces/docker.ts: shared #spec for create+recreate; #runIn/#readFrom extracted from delivery.run/read (same behaviour); version-aware keyed image build with build args; images, recreate, imageOf, throwaway; list() fills Workspace.claude.pinned
+- apps/server/src/workspaces/manager.ts: hooks.defaultClaudeVersion; create() validates/carries claudeVersion; recreate()
+- apps/server/src/config.ts: dockerImage derived from the pin (PORTAL_WORKSPACE_IMAGE still wins), dockerImageFixed, claude.{canaryPrefix,imageAlias}
+- apps/server/src/index.ts: DockerRuntime extras (canaryPrefix, alias)  [+ module wiring below once built]
+- apps/server/src/live.ts: 'claudeversion' topic in the push list
+- packages/contracts/src/{index,live,workspace}.ts: export line, topic+message, Workspace.claude, CreateWorkspaceRequest.claudeVersion
+- constants derived from the registry (one line each): settings/lockdown.ts MIN_CLAUDE_VERSION, mcp/spec.ts MCP_MIN_CLAUDE + VERIFY_TESTED_CLAUDE, browser/compile.ts BROWSER_MIN_CLAUDE, accounts/pools.ts MIN_CLAUDE, contracts/skills.ts SKILLSET_MIN_CLAUDE_VERSION
+- docs/prd/README.md index row; docs/prd/foundation-pools.md §9 pointer (planned)

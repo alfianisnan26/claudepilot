@@ -1,0 +1,1 @@
+Spawn: model=opus effort=high - Tier A/S: the choice among five remote-workspace designs and the extension's auth/token/CSP/approval security model decide a long-lived platform surface; real-test PoCs with licence analysis; escalate to fable/high if the security design proves ambiguous

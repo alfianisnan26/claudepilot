@@ -358,7 +358,12 @@ directory marketplace loads without prompts in interactive and `-p` sessions in 
   that daemon. Kubernetes pods get the Deployment's image at every start.
 - **Updating:** on Docker, "Update Claude Code" installs the pinned version through `exec` as root. On
   Kubernetes it changes the Deployment's image tag, which restarts the pod, with the same
-  confirmation as "Enable pools" (§6.6).
+  confirmation as "Enable pools" (§6.6). **Superseded (2026-10-12) by [Claude Code version
+  pinning](claude-version-pinning.md):** the version is an exact build argument, the image is tagged
+  `cc-<x.y.z>` and labelled, auto-update is off, an upgrade is an explicit action behind a canary that
+  recreates the container from the new tag keeping its home volume, and Rollback goes back to the previous
+  tag. The minimums of every feature are one registry (`CLAUDE_FEATURES`); "tested" below means a version
+  the lab ran on or a canary passed on.
 
 Delivery gates on the detected version:
 

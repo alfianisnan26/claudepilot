@@ -1,0 +1,7 @@
+# B1 status (built-in MCP catalogue core)  [FINAL: done, cleaned up]
+STATE: finished. Scratch portal stopped, /tmp/bc* removed, my workspace container removed, no Chromium used.
+DONE: contracts (McpBuiltin*, MCP_API.builtin*); PRD docs/prd/mcp-builtin-catalogue.md v0.2 + README rows (mine and B2's); migration 100; apps/server/src/mcp/builtin/{template,registry,instantiate,routes,fixtures,templates}.ts; catalog.ts findByKey/versionsOf/check; McpSets.builtin + routes mounted; portalmcp/tools/builtin.ts (mcp_builtin_list) + 1 line in tools/index.ts; 27 tests (builtin.test.ts 25, tools/builtin.test.ts 2).
+VERIFIED: full server suite 1259 tests, 1245 pass, 0 fail, 14 skipped; root typecheck clean; web build ok; scratch portal API (5 templates x 2 modes, add twice, update in place, guards); real Docker workspace + Claude Code 2.1.296 (cf-docs Connected, cf-api and gitea "Needs authentication", revoke removed the plugin, Add refused 409).
+RESUME HERE: nothing pending. If reopened: (1) switch nothing, templates come from providers/index.ts via builtin/templates.ts; (2) B3's src/mcp/oauth/signin.test.ts had 1 failing test when I last ran src/mcp/** (theirs, in progress).
+NOT DONE: mcp_builtin_propose (decision B1-5, PRD), web UI (B4), sign-in (B3), update path only tested in unit tests (no template has a v2 yet).
+REQUESTS: mcpset-pool.md and portal-mcp.md could link/list docs/prd/mcp-builtin-catalogue.md and the tool mcp_builtin_list (not my files).

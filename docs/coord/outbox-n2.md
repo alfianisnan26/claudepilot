@@ -1,0 +1,3 @@
+N2 REQUEST (to N1 via coordinator): `GET /api/notify/sessions/:id` -> `{ done: boolean }` so the session menu can show "Notify when done" state; until then the web keeps a local per-browser mark. Also H3 'notify' live topic: the web casts 'notify' as LiveTopic until it lands.
+N2 NOTE: web build was broken for a few minutes by another agent's apps/web/src/features/usage/claude/MoveAdvice.ts vs moveAdvice.ts casing clash (case-insensitive FS); not mine.
+N2 LANDED: web notify (sw.js push worker, Notifications page at /admin/notifications, presence, toasts, session-menu item); exports notifyApi, useNotifyOverview in apps/web/src/features/notify.

@@ -1,0 +1,35 @@
+# QA STANDARDS (the owner's addition to the QA prompt, 2026-10-12, translated; binding for every UI agent and for the QA agents Q2a, Q2b, Q2c)
+
+Extend what exists (tools/qa/*, docs/qa/qa-report.md with QA-001..036, apps/server/src/qa/*.test.ts, COORD/drive.mjs); do not rebuild; do not collide with work in flight (QA runs in a QUIET window: no other agent building or measuring at the same time; the machine is shared and a busy machine ruins performance numbers).
+
+## A. UI/UX design strictness
+Principles: clean, friendly, simple, polished, not "AI slop"; smooth animation; end-to-end flows tested. Rate EVERY screen pass/fail WITH screenshot evidence.
+A1 CONSISTENCY: only the design system's colour, spacing, typography and radius tokens; no ad hoc values; no gradients, glow, glass effects, emoji, or decorative icons that do no work.
+A2 CLEANLINESS: titles of 1-2 words, explanations in InfoTip, no card inside a card, no badge repeating what the row says, ONE primary action per screen, a clear hierarchy.
+A3 TEXT: no placeholder or lorem; no generic AI phrases ("Seamless", "Powerful", "Let's get started!"); consistent terms across the app.
+A4 COMPLETE STATES: empty, loading (skeleton, not a long spinner), error (a clear message + an action), offline, very long text, lots of data, permission denied.
+A5 INTERACTION: touch targets >= 44 px; visible keyboard focus with a correct tab order; WCAG AA contrast; every function usable without a mouse; icons have accessible names; polite aria-live.
+A6 RESPONSIVE: 390, phone landscape, 768, 1024, 1280, 1920; light and dark; no horizontal scroll, cut-off text or overlapping elements; the phone keyboard never covers the input.
+A7 MOTION: short (about 120-250 ms), natural easing, transform and opacity only, no layout shift, respects reduced motion, never disturbs the transcript's scroll-follow.
+A8 E2E in a REAL browser, deterministic with a fake API: sign in, create a workspace, start a session, send / steer / stop, approvals, Move chat, btw, add an MCP set + sign-in, Usage + widgets, tickets, Repos, the Connect wizard, annotations / viewer, settings. For each flow: the success path, the error path and the cancel path; screenshot and trace on failure; visual regression with a baseline and a tolerance; a FLAKY TEST IS NOT ACCEPTED (three repeats must agree).
+
+A9 SPACING AND DYNAMIC DATA (the owner's addition, 2026-10-12, translated; binding for every UI agent; QA tests it with EXTREME DATA). The problem: dynamic data (legends, tags, chips, user-written text) grows or shrinks in narrow areas, so rows wrap, long text disturbs other layout, and the layout shifts when data changes.
+- ONE shared dynamic-list component (legend / tags / chips): a maximum count with a "+N" chip that opens a popover (keyboard accessible), OR a single row with fade/scroll; the row height is STABLE; deterministic order; add/remove animation transform and opacity only.
+- ONE shared dynamic-text component: ellipsis or line clamp with the FULL text in a keyboard-accessible tooltip/InfoTip (only when truncated); `overflow-wrap: anywhere` for unbroken values; length limits at input; user text never decides a container's width.
+- Flex/grid rules: `min-width: 0` on every text-bearing child, explicit min/max widths, `tabular-nums` for numbers (compact formatting for huge values). Reserve space for dynamic content: a minimum height, skeletons the SAME size as the content, `aspect-ratio` for media. A LIVE LIST never shifts what is already visible (insert at the edge or anchor the scroll; the item under the pointer does not jump).
+- Spacing ONLY from the token scale; no ad hoc px; add/remove animation only transform and opacity (no height animation).
+- TESTS (QA): extreme data modes: 0, 1, many, hundreds of items; text of 1 and 200 characters, with no spaces, emoji, RTL, huge numbers. Automatic checks in a REAL browser: no horizontal scroll; no truncated text without a tooltip; no overlap; a NEIGHBOUR-SHIFT test (bounding boxes of the unchanged neighbours before and after adding or removing data); CLS when data changes; at 390, phone landscape, 768, 1024, 1280 and 1920, light and dark; visual regression WITH extreme data; three-run flake gate.
+- AUDIT every screen, replace ad hoc patterns with the shared components, record findings in docs/qa/qa-report.md with severity, owner and screenshot.
+
+## B. Performance and efficiency
+B1 WEB (Lighthouse CI and bundle size) on the key pages: sign-in, session list, a session with a long transcript, Usage, Workspaces; phone mode (throttled) and desktop. Initial gates: LCP <= 2.5 s, INP <= 200 ms, CLS <= 0.1, low TBT. The Performance / Accessibility / Best-practices scores are SET FROM A MEASURED BASELINE and then become a "must not drop" gate. Pages behind sign-in need an injected session cookie. SIZE BUDGETS: initial JS per route and the lazy chunks (editor, charts) from the baseline; no rise above 5% without a reason. Check code splitting, fonts, images, compression and cache headers. RUNTIME: transcripts of 1k / 10k / 25k events (memory, frame time, scroll FPS, streaming render), a big session list (paging / virtualisation), many tabs, and memory leaks when a page is opened and closed repeatedly.
+B2 BACKEND: load and bursts: many sessions running at once, a socket reconnect storm, many tabs, large import/export. Measure p50 / p95 of key endpoints, event-loop lag, process CPU / memory, start time, DB size and growth (WAL), query plans (EXPLAIN) and indexes, N+1, DB locks; verify rate limits and backpressure work.
+B3 API AND COST SAVINGS: requests per page load (an aggregator vs fan-out, live push vs polling), ETag / 304, debounce / dedupe, payload size and compression. Claude side: the prompt-cache hit rate (cache read vs write), the size of handoff / btw context, the quota probe frequency, tokens per task, wasted turns. Every number labelled measured or estimate.
+B4 EFFECTIVENESS: time to first token, main-flow success without intervention, the number of steps for common tasks.
+
+## C. Rules for evidence
+- NUMBERS COME ONLY FROM REAL MEASUREMENT: record the tool, its version and the environment (machine, CPU count, memory, load at the time, throttling profile). Targets above the baseline are targets, not facts.
+- WHAT CANNOT BE MEASURED (real devices, real networks, iOS Safari) is marked NOT MEASURED and goes into the manual checklist (docs/prd/platform-roadmap.md checklist).
+- FINDINGS go to docs/qa/qa-report.md with severity (P0-P3), owner, reproduction steps and a screenshot; every fix is RE-VERIFIED.
+- Produce a BEFORE / AFTER report and RE-RUNNABLE GATE SCRIPTS (Lighthouse CI, bundle budget, load) under tools/qa/ (QA tooling lives in its own tools/qa package with its own package.json, NOT in the root dependency tree or the workspaces: the root Dockerfile copies package.json files by hand). "Before" = the committed tree (commit 872a429) built in a clean scratch copy; "after" = the working tree, both measured back to back on a quiet machine.
+- Add tests, update the PRDs, verify in the browser.

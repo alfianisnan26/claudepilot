@@ -1,0 +1,6 @@
+Spawn: P3 evidence/annotations/code viewer architect | opus | high | Tier A: design with security (untrusted quotes, storage decision) but no runtime code | 2026-10-12T06:56Z
+# P3 status (evidence, annotations, code viewer architect) - 2026-10-12 07:10Z
+FOCUS NOW: audit done in my head (browser, chat files/diff/artifacts, tickets, knowledge, portal MCP, csp); next: research (Monaco/Shiki CSP+size spike), then contracts annotations.ts/evidence.ts.
+DONE: read PLAN-6/10/14/15, ROSTER, PLAN sections 4-7, PLAN-2 A; audited code (see findings below).
+FINDINGS SO FAR: no capture/annotate anywhere; proxy helper uses Page.* screencast only (no Runtime/Network/DOM); noVNC 1.4.0 RFB has toBlob; Files = list+download only (no text viewer); DiffView = unified, no colour, no split; session Diff patch is NOT redacted (fileRoutes /diff, files.ts readDiff); repos have no content/diff routes; tickets have no attachments; knowledge has [[ticket:T-n]] mentions one way only; CSP script-src 'self' (no wasm-unsafe-eval), worker-src 'self'; sharp available server side (personas/avatar.ts).
+RESUME HERE: research + spike in /tmp/pe-spike (Monaco vs Shiki sizes, strict CSP in Chromium), then contracts, then PRDs, then work breakdown.

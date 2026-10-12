@@ -1,0 +1,10 @@
+# B3 status (OAuth status + guided sign-in) - FINISHED 2026-10-12 ~05:50
+DONE (server): contracts (McpAuthState/McpServerAuth/McpAuthEntry/McpSignIn*, MCP_API auth/signIn/signInOne/signInComplete/signOut, McpServerStatus.auth); compile.ts mcpJsonOauth (oauth.scopes list -> ONE string; a list made Claude Code silently drop the server); apps/server/src/mcp/oauth/{parse,status,signin,service,routes,testkit}.ts; wiring: mcp/index.ts (oauth, oauthServers, status.auth, audit), kind.ts onForget, jobs.ts authSteps, mcp/routes.ts mount, server index.ts 3 lines; chat seam: chat/protocol.ts (mcp_servers) + chat/controller.ts (hook + one note per process).
+TESTS: apps/server/src/mcp/oauth/*.test.ts = 43 + oauth.integration.test.ts (CLAUDEPILOT_DOCKER_TESTS=1, real Claude Code 2.1.296 + B2's gitea preset: PASSES, 9 s). Full server suite (concurrency 3): 1581 tests, 1540 pass, 15 skipped (docker-gated), 17 fail + 9 cancelled ALL in src/connect/** (another track, mid-edit; also its typecheck errors). First default-concurrency run had 15 load failures in unrelated files; every one passes rerun alone.
+TYPECHECK: root: only errors in apps/server/src/connect/** (not mine). Server bundle (esbuild to /tmp) OK. Web: B4's; typecheck clean.
+VERIFIED BY HAND (scratch portal :3203 + real Claude Code): status after delivery, paste and listener sign-in, wrong pastes, sign-out, 2nd Claude folder, no-DCR failure text, cancel leaves no process, no code in logs, audit events (actor u_owner), guards (401/403/404).
+PRD: docs/prd/mcpset-pool.md header v0.9, US6, FR1, FR17, 13.3 (rewritten), M2 row, Q2 answered, test plan, 17; web side marked built (B4).
+MULTI-USER (PLAN-10 light touch): actor param + audit in mcp_events + one helper each for workspace/server + PRD line.
+KUBERNETES SAFETY: scratch portal ran with unset KUBECONFIG KUBERNETES_SERVICE_HOST + PORTAL_K8S_ENABLED=false after the coordinator's stop; no kubectl/helm.
+CLEANUP: tmux boportal, container+volume claudepilot-bo-ws, /tmp/bo*, scratchpad bo/ removed (see final report).
+RESUME HERE: nothing pending; only the final report.

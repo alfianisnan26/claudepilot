@@ -1,0 +1,26 @@
+# Round 12 plan: usage per user for team and shared workspaces (follow-on of PLAN-4 and PLAN-10) (coordinator: the main session)
+
+COORD = /tmp/claude-1000/-workspaces-claudepilot/cad07383-74ea-4f0a-88e5-fc51c5b7a125/scratchpad/coord
+Rules: PLAN.md sections 4-7, PLAN-2.md section A, DELEGATION.md for model/effort choice. UI TEXT DIET. Reserved: migrations 480-499, scratch ports 3301-3302, CDP 9431-9432, prefixes uk- (U5 server) and ul- (U6 UI).
+PRECONDITIONS (do not start before): multi-user phase 1 has landed (users, session ownership `created_by`, the authorization seam `can`, per-actor audit of approvals and Bypass use) and the Usage track (U1a, U1b, U2) is done. Team rollups need multi-user phase 3 (teams); until then the views handle "no teams" gracefully.
+
+## 0. The owner's ask (2026-10-12, translated)
+"Add per-user metrics in Usage for team or shared workspaces. Check the usage attribution (session, workspace, ticket, persona) and the session-ownership model from the multi-user feature first; EXTEND, do not rebuild."
+- Per user and per workspace/team, per period: sessions and turns, tokens, cost (labelled estimate), cache hit rate, approvals, Bypass use, active time.
+- Attribute to the session's CREATOR; child agents and sessions made by Move stay with the ORIGINAL owner. The Claude account's QUOTA is shown separately from a user's cost.
+- A switch per Claude / per model / per user with the SAME chart frame (a fixed colour per user, legend, top-N plus "Others", previous-period comparison).
+- A rollup per team with the per-member breakdown; a shared workspace is split per user.
+- Privacy: no session content. A workspace manager or a team owner sees all members; an ordinary member sees only their own. Cross-user access is tested.
+- Sessions from BEFORE multi-user are marked "not available" per user, not invented. CSV/JSON export and a Portal MCP tool.
+Rules: multi-agent, no invented numbers (mark estimates and unavailable data), short UI (titles of 1-2 words, InfoTip), 390 and 1280 px, tests, PRD update (claude-usage.md and the multi-user PRDs), browser verification.
+
+## 1. Design notes the coordinator already fixed (the agents refine them)
+- DATA: usage rows (chat_usage) belong to a session; the session has a creator (multi-user). A user's usage = rows of sessions they created, children rolled up to the root session's creator (the chat_sessions.parent_id chain; chat_usage.agents already counts sub-agents inside a request: do not double count); a session produced by Move keeps its original owner (one portal session id per chat already, so the owner does not change). Approvals and Bypass use come from the per-actor audit of the multi-user track (approvals decided, Bypass sessions started/used) and are COUNTS with their basis; active time is defined explicitly (for example the sum of finished-turn durations from chat_usage.duration_ms, labelled an estimate) and never from presence guesses.
+- CUTOVER: the multi-user migration records a cutover time (`multi_user_since`). Usage rows before it have no known user (the migration assigns ownership of objects to the first user for access, which says nothing about who ran a turn): they appear as "Before users" with reason `pre_multiuser`, are counted in workspace and platform totals, and are NEVER attributed to a person. Rows after the cutover carry the actor.
+- QUOTA IS NOT A USER'S COST: the plan windows (session, week) belong to the Claude account and are shown in their own view; a user's figures are tokens, requests and estimated cost, never "their share of the quota" unless it can be measured (it cannot: say so).
+- PRIVACY MATRIX (the authorization layer decides, usage code calls `can`): own usage: always; another member's usage: workspace managers (manage right on the workspace) and team owners; platform admins see all; nobody sees session content through usage. Views list only what the actor may see and never reveal that hidden members or workspaces exist (counts exclude them or show them as "others" only to those allowed).
+- UI: the existing Usage page gets a third grouping (Claude | Model | User) on the same stacked chart with the shared palette (a fixed colour per user, from the same server slot mechanism extended to users, colour-blind safe, a non-colour cue), the same legend and top-N + Others and comparison; a team rollup view with member rows; a "Before users" row; estimates labelled.
+
+## 2. Assignments (not spawned yet; the coordinator spawns them when the preconditions hold)
+- U5, usage per user, server (Tier S/A: authorization-sensitive visibility and attribution correctness: fable or opus, high): contracts, attribution by user with the roll-up rules, the metrics (sessions, turns, tokens, cost estimate, cache hit, approvals, Bypass, active time), team rollup, the privacy filter through `can`, the palette slots for users, comparison, export, Portal MCP tool (admin or the actor's own), tests including cross-user access on every route and tool, hand-computed fixtures, PRD.
+- U6, usage per user, UI (Tier B: sonnet, medium): the third grouping, the team rollup and member rows, the "Before users" row, estimate and unavailable states, export buttons, 390 and 1280 px, screenshots.

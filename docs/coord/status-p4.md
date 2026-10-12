@@ -1,0 +1,7 @@
+Spawn: P4 ops plan architect (secret scanner, auto-approval rules, maintenance, templates) | fable | high | Tier S: auto-approval matching + evasion = security-critical design | 2026-10-12T06:56Z
+# P4 status (prefix po-, port 3261, CDP 9391, no migrations; docs + contracts only)
+FOCUS NOW: research (gitleaks/trufflehog, pre-push hooks, shell parsing, docker df/prune, volume snapshots), then writing.
+DONE: read PLAN-8, PLAN-19, ROSTER, PLAN.md 4-7, PLAN-2 A, PLAN-5/7, p2/p5 workbreakdown formats, status of V1/N1/N3/N4/S1/U4; code audit of secrets/detect, chat/redact+valueRedact, protocol (can_use_tool, requestFull cap 8000), controller (#respond, isStagedUpload auto-allow seam = the rule hook), bypass, worktrees, host.ts (diff cmd, hooksPath=/dev/null), ci (post-receive only), runtime.ts (Runtime/DeliveryAccess/ImageAccess/Throwaway), docker.ts (labels, volume naming, usage, images.list/remove), manager.create, blobs/retention, settings registry, authz seam, platform module pattern, notify kinds, migrations in use, contracts conventions, connect docker rules (no volume/image LIST, no df/prune through the tunnel), browser companion names.
+NEXT: p4-audit.md, contracts {scanner,approvalrules,maintenance,templates}.ts, PRDs secret-scanner/approval-rules/maintenance/workspace-templates, README rows, p4-workbreakdown.md, final report.
+DECISIONS: onboarding = PLAN-19 (referenced only, no onboarding.ts contract, no onboarding PRD); backups live in maintenance (roadmap O12).
+RESUME HERE: nothing written yet beyond this file.

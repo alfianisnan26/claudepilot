@@ -1,0 +1,12 @@
+# P1 status (architect: Connect) - 2026-10-12
+
+FOCUS NOW: review pass over the written deliverables, then the final report.
+DONE (all written): packages/contracts/src/connect.ts (+ index export, typecheck clean, vectors verified with Node crypto; announced in outbox-p1.md); docs/prd/targets-connect.md (23 sections + appendices A to E, ~1280 lines; table columns checked); COORD/p1-workbreakdown.md (T1 to T6, T2b split option, waves, A1 to A14); docs/prd/README.md row + ground-rule note.
+Spikes (scripts kept in COORD/p1-spikes, not repo code): dockerode 5.0.1 over a custom http.Agent + Duplex works (needs net.Socket stubs: setKeepAlive, setNoDelay, setTimeout, ref, unref); @kubernetes/client-node 2.0 works against plain-HTTP loopback incl. Exec over ws:// (sends its own Bearer, so the agent must replace it). appendix E seams typecheck against the real Runtime and contracts.
+Coordinator correction applied: K8S SAFETY RULE (unset KUBECONFIG KUBERNETES_SERVICE_HOST, PORTAL_K8S_ENABLED=false, --kubeconfig on every kubectl, never create/remove a K8s workspace from a scratch portal) is in PRD §19.2 and in WORK BREAKDOWN rule 2 + T2, T3, T4, T5, T6 safety lines.
+Found by reading code (in PRD gap analysis): bridge gateway here is 172.18.0.1 (not .17); internalUrl derives a gateway address that is wrong for remote targets; chat readers mark sessions gone after a few failed retries; reconciler turns an outage into failed; Workspaces.resume() judges pending creates before agents reconnect; KubernetesRuntime.create makes the namespace (403 under a namespaced Role); the agent container must not carry claudepilot.managed.
+Owner decisions: PRD §23.1 (O1 to O9). Open questions: §23.2 (Q4 and Q5 ANSWERED by my spikes: http.Server over a duplex works; ws ignores NODE_USE_ENV_PROXY so the agent has its own CONNECT agent). Also observed: kubectl apply --dry-run=client needs an API server (so manifest checks = structure test + kubeconform + stub kubectl).
+Coordinator decision applied (PRD §19.2 and T6): no agent runs the throwaway k3s or the nested swarm test; fake kube API, kubectl stub, kubeconform and the owner's checklist are the proof; the two may be written as skipped-by-default opt-in tests.
+FINAL REPORT SENT. Nothing left running (no containers, no tmux sessions).
+BLOCKERS: none.
+RESUME HERE: if the final report is not yet sent: re-read docs/prd/targets-connect.md once for contradictions with the contract, fix, then send the report (files, key decisions, owner decisions, work packages and waves). Do not start implementing.

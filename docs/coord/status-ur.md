@@ -1,0 +1,1 @@
+Spawn: model=sonnet effort=medium - Tier B: small accessible UI components, a dev-only lab and browser measurement harness against a precise spec; escalate to opus if the neighbour-shift/CLS measurements prove unreliable or the popover/keyboard behaviour keeps failing

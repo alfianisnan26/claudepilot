@@ -1,0 +1,87 @@
+tickets/portalTools.ts	ticket_list	agent	R	
+tickets/portalTools.ts	ticket_get	agent	R	
+tickets/portalTools.ts	ticket_create	agent		
+tickets/portalTools.ts	ticket_update	agent		
+tickets/portalTools.ts	ticket_comment	agent		
+tickets/portalTools.ts	ticket_claim_next	agent		
+tickets/portalTools.ts	ticket_close	agent		
+tickets/portalTools.ts	ticket_start_session	admin		D
+repos/portalTools.ts	repos_list	agent	R	
+repos/portalTools.ts	repo_get	agent	R	
+repos/portalTools.ts	repo_events	agent	R	
+repos/portalTools.ts	repos_attention	agent	R	
+repos/portalTools.ts	worktree_create	agent		
+portalmcp/tools/workspaces.ts	workspace_list	read		
+portalmcp/tools/workspaces.ts	workspace_get	read		
+portalmcp/tools/workspaces.ts	workspace_create	admin		
+portalmcp/tools/workspaces.ts	workspace_start	operate		
+portalmcp/tools/workspaces.ts	workspace_stop	operate		D
+portalmcp/tools/workspaces.ts	workspace_sync	operate		
+portalmcp/tools/workspaces.ts	workspace_delete	admin		D
+portalmcp/tools/builtin.ts	mcp_builtin_list	agent	R	
+portalmcp/tools/pools.ts	pool_types	read		
+portalmcp/tools/pools.ts	pool_list	read		
+portalmcp/tools/pools.ts	pool_get	read		
+portalmcp/tools/pools.ts	pool_create	admin		
+portalmcp/tools/pools.ts	pool_update	admin		D
+portalmcp/tools/pools.ts	pool_delete	admin		D
+portalmcp/tools/pools.ts	pool_assign	admin		D
+portalmcp/tools/pools.ts	pool_unassign	admin		D
+portalmcp/tools/accounts.ts	account_pool_list	read		
+portalmcp/tools/accounts.ts	account_list	read		
+portalmcp/tools/accounts.ts	account_check	operate		
+portalmcp/tools/accounts.ts	account_pool_assign	admin		D
+portalmcp/tools/portal.ts	portal_status	agent	R	
+portalmcp/tools/portal.ts	audit_search	read		
+portalmcp/tools/portal.ts	mcp_lockdown	operate		D
+portalmcp/tools/monitor.ts	monitor_overview	read		
+portalmcp/tools/monitor.ts	usage_report	read		
+portalmcp/tools/sessions.ts	session_list	read		
+portalmcp/tools/sessions.ts	session_get	read		
+portalmcp/tools/sessions.ts	session_interrupt	operate		D
+portalmcp/tools/sessions.ts	session_end	operate		D
+portalmcp/tools/sessions.ts	session_start	admin		D
+portalmcp/tools/sessions.ts	session_send	admin		D
+portalmcp/tools/sessions.ts	session_respond	operate		D
+portalmcp/tools/sessions.ts	session_configure	admin		D
+portalmcp/tools/catalog.ts	mcp_propose_entry	agent		
+portalmcp/tools/catalog.ts	mcp_proposal_withdraw	agent	R	
+portalmcp/tools/catalog.ts	mcp_catalog_list	agent	R	
+chat/artifacts/portalTools.ts	artifact_publish	agent		
+chat/portalTools.ts	session_rename_self	agent		
+chat/portalTools.ts	session_spawn	agent		
+chat/portalTools.ts	session_message	agent		
+chat/portalTools.ts	session_family	agent	R	
+chat/portalTools.ts	session_stop_worker	agent		
+ci/portalTools.ts	ci_runs_list	agent	R	
+ci/portalTools.ts	ci_run_get	agent	R	
+ci/portalTools.ts	ci_run_logs	agent	R	
+ci/portalTools.ts	ci_validate	agent	R	
+ci/portalTools.ts	ci_run_trigger	agent		
+ci/portalTools.ts	ci_run_cancel	agent		
+usagespend/portalTools.ts	usage_summary	agent	R	
+usagespend/portalTools.ts	usage_attribution	agent	R	
+usagespend/portalTools.ts	usage_budgets	agent	R	
+usagespend/portalTools.ts	usage_spikes	agent	R	
+usagespend/portalTools.ts	usage_budget_set	admin		
+usagespend/portalTools.ts	usage_budget_delete	admin		D
+claudeusage/portalTools.ts	claude_usage	agent	R	
+claudeusage/portalTools.ts	claude_usage_summary	read	R	
+claudeusage/portalTools.ts	claude_usage_report	read	R	
+claudeusage/portalTools.ts	claude_move_advice	read	R	
+personas/portalTools.ts	persona_get_self	agent	R	
+personas/portalTools.ts	persona_propose_update	agent		
+personas/portalTools.ts	persona_set_avatar_proposal	agent		
+knowledge/portalTools.ts	vault_list	agent	R	
+knowledge/portalTools.ts	note_search	agent	R	
+knowledge/portalTools.ts	note_read	agent	R	
+knowledge/portalTools.ts	note_backlinks	agent	R	
+knowledge/portalTools.ts	tag_list	agent	R	
+knowledge/portalTools.ts	graph_neighbours	agent	R	
+knowledge/portalTools.ts	graph_query	agent	R	
+knowledge/portalTools.ts	note_write	agent		
+knowledge/portalTools.ts	note_edit	agent		
+knowledge/portalTools.ts	note_append	agent		
+knowledge/portalTools.ts	daily_append	agent		
+skills/portalTools.ts	skill_propose	agent		
+skills/portalTools.ts	skill_proposals_list	agent	R	
