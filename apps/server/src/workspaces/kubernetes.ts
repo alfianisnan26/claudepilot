@@ -51,6 +51,8 @@ export interface KubernetesOptions {
   imagePullSecret?: string;
   storageClass?: string;
   storage: string;
+  /** Nodes workspace pods may run on (`PORTAL_K8S_NODE_SELECTOR`); unset: the scheduler decides. */
+  nodeSelector?: Record<string, string>;
 }
 
 /** One namespace in a cluster: a Deployment (scaled 1/0 to start/stop) and a PVC per workspace. */
@@ -196,6 +198,7 @@ export class KubernetesRuntime implements Runtime {
             metadata: { labels },
             spec: {
               hostname: spec.name,
+              nodeSelector: this.opts.nodeSelector,
               terminationGracePeriodSeconds: 5,
               securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 },
               imagePullSecrets: this.opts.imagePullSecret ? [{ name: this.opts.imagePullSecret }] : undefined,

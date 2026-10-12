@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { CLAUDE_IMAGE_REPO, claudeImageRef, DEFAULT_CLAUDE_CODE_VERSION } from '@portal/contracts';
+import { parseNodeSelector } from './workspaces/nodeSelector.js';
 
 const env = (name: string) => process.env[name]?.trim() || undefined;
 
@@ -105,6 +106,8 @@ export const config = {
       imagePullSecret: env('PORTAL_K8S_IMAGE_PULL_SECRET'),
       storageClass: env('PORTAL_K8S_STORAGE_CLASS'),
       storage: env('PORTAL_K8S_STORAGE') ?? '10Gi',
+      /** `key=value[,key=value]`: which nodes workspace pods may run on (for example `kubernetes.io/hostname=k3s-node2`). */
+      nodeSelector: parseNodeSelector(env('PORTAL_K8S_NODE_SELECTOR')),
     },
   },
   /** Local git and CI/CD (docs/prd/local-git-ci.md §11.5): how many runs a workspace carries at once. */
