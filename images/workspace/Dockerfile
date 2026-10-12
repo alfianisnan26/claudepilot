@@ -1,6 +1,6 @@
 # The image every workspace runs: a shell box with Claude Code, git and gh, as user `node`.
-# Docker targets build it on first use (tag claudepilot-workspace:latest); Kubernetes pulls it
-# from a registry (PORTAL_K8S_IMAGE).
+# Docker targets build it on first use, once per Claude Code version (tag claudepilot-workspace:cc-<x.y.z>,
+# docs/prd/claude-version-pinning.md); Kubernetes pulls it from a registry (PORTAL_K8S_IMAGE).
 FROM node:22-bookworm
 
 # GitHub CLI apt repo
@@ -15,7 +15,19 @@ RUN apt-get update \
     && sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code
+# Claude Code, PINNED: an exact x.y.z from the build argument, never a range or "latest". The portal builds with
+# --build-arg CLAUDE_CODE_VERSION=<x.y.z>, tags the image claudepilot-workspace:cc-<x.y.z> and labels it with the version.
+# The default below is the portal's default pin (DEFAULT_CLAUDE_CODE_VERSION in packages/contracts/src/claudeversion.ts;
+# apps/server/src/claudeversion/image.test.ts keeps the two equal). The build fails unless the CLI reports that version.
+ARG CLAUDE_CODE_VERSION=2.1.296
+RUN echo "${CLAUDE_CODE_VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    && test "$(claude --version | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+')" = "${CLAUDE_CODE_VERSION}"
+LABEL claudepilot.claude-version="${CLAUDE_CODE_VERSION}"
+# Claude Code's own updaters are off (✅ 2.1.296: `claude doctor` says "Auto-updates: disabled (set by env: ...)", and under
+# DISABLE_UPDATES `claude update` refuses): the version changes only when the portal recreates the workspace from another tag.
+# The same two switches are also a managed-settings entry below, for a process that was started without this environment.
+ENV DISABLE_AUTOUPDATER=1 DISABLE_UPDATES=1
 
 # The workspace owner can install what they need.
 RUN echo 'node ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/node && chmod 440 /etc/sudoers.d/node
@@ -32,6 +44,12 @@ RUN printf '%s\n' '# claudepilot: Secrets & env variables for login shells.' 'if
 # managed folders are here from the start, empty and root-owned: settings drop-ins, and the instruction,
 # subagent and output-style folders (the delivery engine creates the same four in older workspaces).
 RUN mkdir -p -m 755 /etc/claude-code/managed-settings.d /etc/claude-code/.claude/agents /etc/claude-code/.claude/output-styles /etc/claude-code/.claude/rules
+
+# The pin as a managed setting too (✅ 2.1.296: `claude doctor` reads it from a drop-in's `env`, two drop-ins' `env` blocks merge,
+# and a user's own settings cannot switch it back on). Not a file the delivery engine writes: it is part of the image, so a
+# workspace carries it from its first start, and Secrets & env cannot set a DISABLE_* name (secretVariableReserved).
+RUN printf '%s\n' '{"env":{"DISABLE_AUTOUPDATER":"1","DISABLE_UPDATES":"1"}}' > /etc/claude-code/managed-settings.d/01-claudepilot-pin.json \
+    && chmod 0644 /etc/claude-code/managed-settings.d/01-claudepilot-pin.json
 
 # The chat session host, root-owned. Kubernetes workspaces get it only from here (on Docker the portal
 # also writes it in). Its tools (jq, flock, setsid, coreutils, findutils, git) are all in this image.
