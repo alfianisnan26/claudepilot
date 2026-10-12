@@ -66,7 +66,16 @@ export function readAgentFile(dir: string): Record<string, unknown> {
   }
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env, file?: (dir: string) => Record<string, unknown>): AgentConfig {
+/** The text of a file, or null when it isn't there (the installer's `headers` file, which keeps an Access service token out of `docker inspect`). */
+function readTextOrNull(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env, file?: (dir: string) => Record<string, unknown>, readText: (path: string) => string | null = readTextOrNull): AgentConfig {
   const E = CONNECT_AGENT_ENV;
   const modeFromEnv = env[E.mode];
   // The mode picks the default data folder, so look at the environment first, then at agent.json in the folder the environment names.
@@ -88,7 +97,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, file?: (dir: st
 
   const dockerFile = (f.docker && typeof f.docker === 'object' ? f.docker : {}) as Record<string, unknown>;
   const logLevel = env[E.logLevel];
-  const headersText = env[E.headers];
+  // PILOT_HEADERS, or the installer's `<dataDir>/headers` (mode 0600, `Name: value` lines) when the variable is not set.
+  const headersText = env[E.headers] ?? readText(join(dataDir, 'headers')) ?? undefined;
   const services = strings(f.services).filter((s): s is ServiceName => s === 'docker' || s === 'kube' || s === 'host');
   const offered = MODE_SERVICES[kind];
 

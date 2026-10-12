@@ -16,7 +16,9 @@ import { CONNECT_LIMITS } from '@portal/contracts';
 import type { TunnelStream } from '../../../seams.js';
 import type { Logger } from '../../log.js';
 import { framingProblem, relayHeaders } from '../httpcommon.js';
+import type { ImageAllow } from '../docker/rules.js';
 import { NAMES, classifyKube, mayUpgrade, rebuildQuery, type KubeRoute } from './rules.js';
+import { checkKubeBody } from './schema.js';
 import { deniedStatus, isKubeRefusal, refuseKube, statusBody, type KubeRefusal } from './status.js';
 
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -39,6 +41,8 @@ export interface KubeProxyOptions {
   now?: () => number;
   readFile?: (path: string) => string;
   onChange?: (why: 'denied' | 'upstream') => void;
+  /** The images workspace containers may use (PILOT_IMAGES); null or empty: not enforced. */
+  images?: ImageAllow | null;
 }
 
 interface Conn {
@@ -286,14 +290,22 @@ export class KubeProxy {
     const type = req.headers['content-type'];
     if (typeof type !== 'string' || !JSON_TYPES.test(type)) return refuseKube('body', 'Only JSON bodies are allowed.');
     const data = Buffer.concat(parts);
+    // A write's body is JSON; a patch too (merge, strategic merge or JSON patch: the same scan applies to what it adds).
+    let doc: { metadata?: { name?: unknown; namespace?: unknown } };
+    try {
+      doc = JSON.parse(data.toString('utf8')) as typeof doc;
+    } catch {
+      return refuseKube('body', 'The body is not JSON.');
+    }
+    // A JSON patch names its targets in path strings (`/spec/template/spec/hostNetwork`), which a scan of the body's keys can't see: not for a pod template.
+    if (/json-patch\+json/i.test(type) && (pre.route.kind === 'deployment' || pre.route.kind === 'pvc')) return refuseKube('spec', 'A JSON patch cannot be checked: use a merge patch.');
+    if (pre.method !== 'DELETE') {
+      const images = this.opts.images && this.opts.images.list().length ? this.opts.images : null;
+      const unsafe = checkKubeBody(pre.route, pre.method, doc, images);
+      if (unsafe) return unsafe;
+    }
     // A new object, or a replaced one, must be one of the portal's (its name) and in the connector's namespace.
     if (pre.method === 'POST' || pre.method === 'PUT') {
-      let doc: { metadata?: { name?: unknown; namespace?: unknown } };
-      try {
-        doc = JSON.parse(data.toString('utf8')) as typeof doc;
-      } catch {
-        return refuseKube('body', 'The body is not JSON.');
-      }
       const meta = doc?.metadata;
       if (pre.method === 'POST' && pre.route.kind !== 'secretCreate' && pre.route.kind !== 'pvcList' && pre.route.kind !== 'deploymentList') return { data };
       const pattern = pre.route.kind === 'secretCreate' || pre.route.kind === 'secret' ? NAMES.secret : pre.route.kind === 'pvcList' || pre.route.kind === 'pvc' ? NAMES.pvc : NAMES.deployment;

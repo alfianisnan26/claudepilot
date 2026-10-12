@@ -84,7 +84,11 @@ export class Runtimes {
     if (!t) {
       if (had) {
         this.#built.delete(targetId);
-        ws.removeRuntime(targetId);
+        try {
+          ws.removeRuntime(targetId);
+        } catch (e) {
+          this.d.log(`[connect] the workspace manager could not remove the runtime of ${targetId}: ${(e as Error).message}`);
+        }
       }
       return;
     }
@@ -100,8 +104,14 @@ export class Runtimes {
       return;
     }
     this.#built.set(targetId, { runtime, signature });
-    if (had) ws.replaceRuntime(runtime);
-    else ws.addRuntime(runtime);
+    try {
+      if (had) ws.replaceRuntime(runtime);
+      else ws.addRuntime(runtime);
+    } catch (e) {
+      // the manager refused it: the registry is right and the portal must keep running; the next change tries again
+      this.#built.delete(targetId);
+      this.d.log(`[connect] the workspace manager refused the runtime of ${targetId}: ${(e as Error).message}`);
+    }
   }
 
   syncAll(): void {
@@ -152,5 +162,10 @@ export class Runtimes {
 
   onReturned(fn: (targetId: string) => void): () => void {
     return this.d.hub.onConnected((targetId) => fn(targetId));
+  }
+
+  /** Called with a target id when one of its nodes' tunnels ends (the manager's cached answer for the target is then out of date). */
+  onLost(fn: (targetId: string) => void): () => void {
+    return this.d.hub.onDisconnected((targetId) => fn(targetId));
   }
 }

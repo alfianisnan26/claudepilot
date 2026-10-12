@@ -205,7 +205,7 @@ function checkHostConfig(raw: unknown, ctx: CreateContext): { ok: true; body: Ob
       }
       case 'Mounts': {
         if (emptyish(v)) break;
-        const mounts = checkMounts(v);
+        const mounts = checkMounts(v, `${ctx.name}-home`);
         if (!mounts.ok) return mounts;
         out.Mounts = mounts.mounts;
         break;
@@ -253,7 +253,7 @@ function checkHostConfig(raw: unknown, ctx: CreateContext): { ok: true; body: Ob
   return { ok: true, body: out };
 }
 
-function checkMounts(raw: unknown): { ok: true; mounts: Obj[] } | ({ ok: false } & Refusal) {
+function checkMounts(raw: unknown, ownVolume: string): { ok: true; mounts: Obj[] } | ({ ok: false } & Refusal) {
   const bad = (rule: ConnectDockerRule, message: string) => ({ ok: false as const, ...refuse(rule, message) });
   if (!Array.isArray(raw) || raw.length > 16) return bad('create.volume', 'Mounts must be a short list.');
   const mounts: Obj[] = [];
@@ -262,7 +262,8 @@ function checkMounts(raw: unknown): { ok: true; mounts: Obj[] } | ({ ok: false }
     if (m.Type !== 'volume') return bad('create.bind', 'Only volume mounts are allowed.');
     if ('VolumeOptions' in m || 'BindOptions' in m || 'TmpfsOptions' in m) return bad('create.volume', 'Mount options are not allowed.');
     for (const key of Object.keys(m)) if (!['Type', 'Source', 'Target', 'ReadOnly'].includes(key)) return bad('create.volume', 'A mount has a field that is not allowed.');
-    if (!isStr(m.Source) || !VOLUME_NAME.test(m.Source)) return bad('create.volume', 'Only a workspace’s own home volume may be mounted.');
+    // The pattern is the PRD's; on top of it a workspace may mount its OWN home volume only (`claudepilot-<its name>-home`), never another workspace's.
+    if (!isStr(m.Source) || !VOLUME_NAME.test(m.Source) || m.Source !== ownVolume) return bad('create.volume', 'Only a workspace’s own home volume may be mounted.');
     if (!isStr(m.Target) || !ABS_PATH.test(m.Target) || m.Target === '/' || /(^|\/)\.\.?(\/|$)/.test(m.Target) || MOUNT_FORBIDDEN.some((d) => underPath(m.Target as string, d))) {
       return bad('create.volume', 'The mount target is not allowed.');
     }

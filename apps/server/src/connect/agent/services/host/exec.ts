@@ -5,6 +5,7 @@
 // backpressure. Exactly one RESULT ends it. A stream that is reset before the process is done kills it: SIGHUP to a terminal's process
 // group, SIGTERM and after a grace SIGKILL otherwise. What a command was (argv, env, cwd) is never logged.
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
 import type { ConnectHostOpen, ConnectHostResult } from '@portal/contracts';
 import { userEnv, type Pty, type PtyModule } from '../../../../workspaces/hostexec.js';
@@ -100,6 +101,8 @@ export async function runExec(op: ExecOp, ch: HostChannel, ctx: HostContext): Pr
   const argv = ctx.paths.mapArgv(op.argv);
   const cwd = op.cwd ? ctx.paths.map(op.cwd) : who.home;
   const env: NodeJS.ProcessEnv = { ...userEnv(who.home, ctx.baseEnv), USER: who.name, LOGNAME: who.name, ...(op.env ?? {}) };
+  // A folder that isn't there makes spawn say "ENOENT" about the program: say it about the folder.
+  if (!existsSync(cwd)) return ch.finish(errorResult('ENOENT', 'The working directory does not exist.'));
   const [file, ...args] = argv as [string, ...string[]];
   const ids = { ...(who.uid !== undefined ? { uid: who.uid } : {}), ...(who.gid !== undefined ? { gid: who.gid } : {}) };
 

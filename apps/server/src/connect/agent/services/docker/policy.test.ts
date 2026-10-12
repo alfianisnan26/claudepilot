@@ -11,14 +11,14 @@ import { classify, normalizeTarget, normalizeImageRef, ImageAllow, pullRef } fro
 let rig: DockerRig;
 const NAME = 'claudepilot-w1';
 const labels = (name = 'w1') => ({ 'claudepilot.managed': 'true', 'claudepilot.workspace': name, 'claudepilot.portal': PORTAL_ID });
-const goodCreate = (over: Record<string, unknown> = {}) => ({
+const goodCreate = (over: Record<string, unknown> = {}, ws = 'w1') => ({
   Image: IMAGE,
-  Hostname: 'w1',
+  Hostname: ws,
   User: 'node',
   WorkingDir: '/home/node',
-  Labels: labels(),
+  Labels: labels(ws),
   Env: ['TERM=xterm-256color'],
-  HostConfig: { RestartPolicy: { Name: 'unless-stopped' }, Mounts: [{ Type: 'volume', Source: 'claudepilot-w1-home', Target: '/home/node' }], NanoCpus: 1e9, Memory: 536_870_912 },
+  HostConfig: { RestartPolicy: { Name: 'unless-stopped' }, Mounts: [{ Type: 'volume', Source: `claudepilot-${ws}-home`, Target: '/home/node' }], NanoCpus: 1e9, Memory: 536_870_912 },
   ...over,
 });
 const withHost = (host: Record<string, unknown>) => goodCreate({ HostConfig: { ...goodCreate().HostConfig, ...host } });
@@ -58,7 +58,7 @@ describe('what a managed workspace needs is allowed', () => {
   it('rebuilds the create query: only name (and platform) go on, whatever else a client repeats there', async () => {
     rig.fake.requests.length = 0;
     const extra = new URLSearchParams({ name: 'claudepilot-w2', Image: IMAGE, Hostname: 'w2', Labels: '{"a":"b"}', HostConfig: '{}', foo: 'bar' }).toString();
-    const created = await rig.request('POST', `/containers/create?${extra}`, { body: goodCreate({ Hostname: 'w2', Labels: labels('w2'), name: 'claudepilot-w2' }) });
+    const created = await rig.request('POST', `/containers/create?${extra}`, { body: goodCreate({ name: 'claudepilot-w2' }, 'w2') });
     assert.equal(created.status, 201, created.text);
     const seen = daemonSaw('POST', /^\/containers\/create/);
     assert.equal(seen.length, 1);
@@ -128,6 +128,7 @@ describe('what it must refuse, with the rule id, and the daemon never sees it', 
       ['a tmpfs mount', withHost({ Mounts: [{ Type: 'tmpfs', Target: '/t' }] }), 'create.bind'],
       ['volumes-from', withHost({ VolumesFrom: ['other'] }), 'create.bind'],
       ['another container’s volume', withHost({ Mounts: [{ Type: 'volume', Source: 'claudepilot-other-data', Target: '/x' }] }), 'create.volume'],
+      ['another workspace’s home volume', withHost({ Mounts: [{ Type: 'volume', Source: 'claudepilot-w2-home', Target: '/home/node' }] }), 'create.volume'],
       ['a volume with options', withHost({ Mounts: [{ Type: 'volume', Source: 'claudepilot-w1-home', Target: '/home/node', VolumeOptions: { DriverConfig: {} } }] }), 'create.volume'],
       ['a mount under /var/run', withHost({ Mounts: [{ Type: 'volume', Source: 'claudepilot-w1-home', Target: '/var/run/docker.sock' }] }), 'create.volume'],
       ['a device', withHost({ Devices: [{ PathOnHost: '/dev/sda', PathInContainer: '/dev/sda' }] }), 'create.device'],
@@ -414,7 +415,7 @@ describe('fuzzed create bodies never reach the daemon unless they are valid', ()
     const before = rig.fake.requests.length;
     let allowed = 0;
     for (let i = 0; i < 400; i++) {
-      const body = goodCreate();
+      const body = goodCreate({}, `fz${i}`);
       const host = body.HostConfig as Record<string, unknown>;
       for (let k = 0; k < 1 + rnd(3); k++) host[fields[rnd(fields.length)]!] = junk[rnd(junk.length)];
       if (rnd(4) === 0) (body as Record<string, unknown>)[['Image', 'Labels', 'User', 'Env', 'Cmd', 'Tty', 'Hostname'][rnd(7)]!] = junk[rnd(junk.length)];

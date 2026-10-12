@@ -18,6 +18,8 @@ export interface Logger {
   error(event: string, fields?: LogFields): void;
   /** Registers a value that must never appear in any line (too short ones are ignored: they would mangle ordinary text). */
   addSecret(value: string | null | undefined): void;
+  /** Where warnings and errors also go (the portal's `log` message while connected); null stops it. The caller rate-limits. */
+  setRemote?(fn: ((level: 'warn' | 'error', message: string) => void) | null): void;
 }
 
 const ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -44,6 +46,7 @@ export interface LoggerOptions {
 }
 
 export function createLogger(opts: LoggerOptions = {}): Logger {
+  let remote = opts.remote ?? null;
   const min = ORDER[opts.level ?? 'info'];
   const secrets = new Set<string>();
   const now = opts.now ?? (() => new Date());
@@ -107,7 +110,7 @@ export function createLogger(opts: LoggerOptions = {}): Logger {
     const line = `${parts[0]} ${parts[1]} ${body}\n`;
     (opts.sink ?? ((l) => process.stdout.write(l)))(line);
     toFile(line);
-    if (level === 'warn' || level === 'error') opts.remote?.(level, body);
+    if (level === 'warn' || level === 'error') remote?.(level, body);
   };
 
   return {
@@ -118,6 +121,7 @@ export function createLogger(opts: LoggerOptions = {}): Logger {
     addSecret: (v) => {
       if (v && v.length >= 6) secrets.add(v);
     },
+    setRemote: (fn) => void (remote = fn),
   };
 }
 

@@ -4,6 +4,7 @@
 
 import { AppError } from '@isnanme/core';
 import {
+  CONNECT_REMOVE_QUERY,
   CONNECT_ROLE,
   type ConnectEnrollment,
   type ConnectEnrollmentCreated,
@@ -120,7 +121,7 @@ export class ConnectAdmin {
   async remove(actor: Actor, id: string, workspaces: string | undefined, meta: RequestMeta): Promise<void> {
     requireCan(actor, 'manage', targetRef(id));
     const t = this.d.registry.requireTarget(id);
-    if (workspaces !== undefined && workspaces !== 'keep' && workspaces !== 'remove') throw invalid({ workspaces: 'keep or remove.' });
+    if (workspaces !== undefined && workspaces !== 'keep' && workspaces !== 'remove') throw invalid({ [CONNECT_REMOVE_QUERY]: 'keep or remove.' });
     const list = CONNECT_ROLE[t.kind] === 'single' ? [] : await this.d.workspacesOn(id);
     const connected = this.d.registry.liveNodes(id).some((n) => this.d.hub.isConnected(n.id));
     if (list.length && !workspaces) {

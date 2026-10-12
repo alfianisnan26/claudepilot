@@ -84,5 +84,7 @@ export interface ConnectModuleApi {
   canCreate(targetId: string, node?: string): void;
   /** Called with a target id when any of its nodes connects. */
   onReturned(fn: (targetId: string) => void): () => void;
+  /** Called with a target id when one of its nodes' tunnels ends (not when a newer connection of the same node replaces it, nor when the portal shuts down). Added after PRD appendix E: the manager re-checks the target at once. */
+  onLost(fn: (targetId: string) => void): () => void;
   nodeViews(targetId: string): ConnectNodeView[];
 }

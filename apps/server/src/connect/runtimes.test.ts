@@ -109,6 +109,27 @@ describe('the runtime follows the registry', () => {
     await bad.close();
   });
 
+  test('a manager that refuses a runtime does not break the registry operation or the start-up', async () => {
+    const m = await openModule();
+    const f = fakes();
+    m.connect.useRuntimeFactory(f.factory);
+    m.connect.bind({
+      addRuntime: () => {
+        throw new Error('duplicate runtime');
+      },
+      replaceRuntime: () => undefined,
+      removeRuntime: () => {
+        throw new Error('no such runtime');
+      },
+      hooks: {},
+    });
+    const made = (await create(m)).json.data;
+    assert.equal((await enroll(m, made.token)).status, 200, 'enrolling still works');
+    assert.equal(m.connect.runtimes.has('lab'), false, 'and the next change tries again');
+    assert.equal((await m.admin('DELETE', '/targets/lab')).status, 200, 'removing still works');
+    await m.close();
+  });
+
   test('when every node was revoked the runtime still exists, with the revoked nodes as drained, so the workspaces stay listed as unreachable', async () => {
     const m = await openModule();
     const f = fakes();

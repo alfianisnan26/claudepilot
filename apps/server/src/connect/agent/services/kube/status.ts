@@ -1,5 +1,5 @@
 // What the Kubernetes proxy says when it refuses: a `Status` object like the API server's own, so client libraries show a normal error.
-export type KubeRule = 'auth' | 'path' | 'method' | 'namespace' | 'name' | 'resource' | 'selector' | 'body' | 'upgrade' | 'header';
+export type KubeRule = 'auth' | 'path' | 'method' | 'namespace' | 'name' | 'resource' | 'selector' | 'body' | 'spec' | 'upgrade' | 'header';
 
 export interface KubeRefusal {
   rule: KubeRule;

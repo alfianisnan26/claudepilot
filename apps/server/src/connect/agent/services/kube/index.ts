@@ -5,6 +5,7 @@ import type { ConnectServiceStatus, ConnectStatusMessage } from '@portal/contrac
 import type { TunnelStream } from '../../../seams.js';
 import type { Logger } from '../../log.js';
 import type { AgentService, StreamRefusal } from '../types.js';
+import { ImageAllow } from '../docker/rules.js';
 import { KubeProxy } from './proxy.js';
 import { validNamespace } from './rules.js';
 
@@ -22,6 +23,8 @@ export interface KubeServiceOptions {
   localToken(): string | null;
   log: Logger;
   env?: NodeJS.ProcessEnv;
+  /** The images workspace containers may use (PILOT_IMAGES); empty: not enforced on this cluster. */
+  images?: string[];
   now?: () => number;
   readFile?: (path: string) => string;
   idleMs?: number;
@@ -59,6 +62,7 @@ export function createService(opts: KubeServiceOptions): KubeService {
       ...(opts.readFile ? { readFile: opts.readFile } : {}),
       ...(opts.idleMs !== undefined ? { idleMs: opts.idleMs } : {}),
       onChange: () => changed?.(),
+      images: opts.images?.length ? new ImageAllow(opts.images) : null,
     });
     return proxy;
   };

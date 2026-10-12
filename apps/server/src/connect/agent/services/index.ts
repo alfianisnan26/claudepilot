@@ -49,6 +49,7 @@ export function createServices(deps: ServiceDeps): Map<ServiceName, AgentService
         createKube({
           namespace: config.kubeNamespace,
           localToken: deps.kubeLocalToken,
+          images: config.images,
           log,
           tokenFile: `${SA_DIR}/token`,
           ...deps.kube,

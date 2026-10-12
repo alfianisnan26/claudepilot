@@ -4,6 +4,7 @@
 
 import type { IncomingMessage } from 'node:http';
 import { AppError, success } from '@isnanme/core';
+import { CONNECT_REMOVE_QUERY } from '@portal/contracts';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { actorOf } from '../authz/seam.js';
@@ -63,7 +64,7 @@ export function createConnectRoutes(admin: ConnectAdmin, opts: { clientIp(req: I
   r.get('/targets/:id', (c) => c.json(success(admin.view(actorOf(c), idOf(c, 'id')))));
   r.patch('/targets/:id', async (c) => c.json(success(admin.update(actorOf(c), idOf(c, 'id'), await body(c), meta(c)))));
   r.delete('/targets/:id', async (c) => {
-    await admin.remove(actorOf(c), idOf(c, 'id'), c.req.query('workspaces'), meta(c));
+    await admin.remove(actorOf(c), idOf(c, 'id'), c.req.query(CONNECT_REMOVE_QUERY), meta(c));
     return c.json(success({ ok: true }));
   });
   r.post('/targets/:id/check', async (c) => c.json(success(await admin.check(actorOf(c), idOf(c, 'id')))));

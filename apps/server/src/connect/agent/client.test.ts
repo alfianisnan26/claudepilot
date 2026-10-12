@@ -180,6 +180,22 @@ describe('bye', () => {
   });
 });
 
+describe('log messages to the portal', () => {
+  it('sends warnings and errors to the target’s audit, at most 20 a minute, without the details of what it refused', async () => {
+    const t = portal.target({ id: 'logs1' });
+    const { handle, log } = start({ enrollToken: t.token });
+    await handle.whenConnected();
+    for (let i = 0; i < 30; i++) log.logger.warn('connect.test_warning', { n: i });
+    log.logger.info('not sent');
+    await until(() => portal.events('logs1').filter((e) => e.type === 'agent.log').length >= 20);
+    await new Promise((r) => setTimeout(r, 400));
+    const received = portal.events('logs1').filter((e) => e.type === 'agent.log');
+    assert.equal(received.length, 20, 'the first twenty of thirty; the rest stay in the local log');
+    assert.ok(received.every((e) => String(e.detail.message).startsWith('connect.test_warning')));
+    assert.ok(!received.some((e) => String(e.detail.message).includes('not sent')));
+  });
+});
+
 describe('what the agent does when the portal says no', () => {
   const fakeClock = () => {
     const sleeps: number[] = [];

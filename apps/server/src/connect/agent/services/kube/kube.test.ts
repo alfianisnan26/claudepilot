@@ -188,6 +188,96 @@ describe('confinement', () => {
   });
 });
 
+describe('what an object may contain: nothing that leaves the workspace’s sandbox', () => {
+  const dep = (podSpec: Record<string, unknown>, name = 'ws-body') => ({
+    metadata: { name, labels: { 'claudepilot.managed': 'true' } },
+    spec: { replicas: 1, template: { metadata: { labels: { 'claudepilot.managed': 'true' } }, spec: { containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest' }], ...podSpec } } },
+  });
+  const container = (extra: Record<string, unknown>) => dep({ containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest', ...extra }] });
+
+  it('refuses a pod that asks for the host, privileges, another identity or a volume it must not have, on create, replace and patch, and the API server never sees it', async () => {
+    const n = rig.fake.requests.length;
+    const bad: [string, unknown][] = [
+      ['a privileged container', container({ securityContext: { privileged: true } })],
+      ['an init container that is privileged', dep({ initContainers: [{ name: 'i', image: 'x', securityContext: { privileged: true } }] })],
+      ['privilege escalation', container({ securityContext: { allowPrivilegeEscalation: true } })],
+      ['added capabilities', container({ securityContext: { capabilities: { add: ['SYS_ADMIN'] } } })],
+      ['running as root', dep({ securityContext: { runAsUser: 0 } })],
+      ['the host network', dep({ hostNetwork: true })],
+      ['the host pid namespace', dep({ hostPID: true })],
+      ['a shared process namespace', dep({ shareProcessNamespace: true })],
+      ['a host path volume', dep({ volumes: [{ name: 'h', hostPath: { path: '/' } }] })],
+      ['an nfs volume', dep({ volumes: [{ name: 'n', nfs: { server: 'x', path: '/' } }] })],
+      ['a host port', container({ ports: [{ containerPort: 80, hostPort: 80 }] })],
+      ['the agent’s service account', dep({ serviceAccountName: 'claudepilot-agent' })],
+      ['sysctls', dep({ securityContext: { sysctls: [{ name: 'net.ipv4.ip_forward', value: '1' }] } })],
+      ['an unconfined seccomp profile', dep({ securityContext: { seccompProfile: { type: 'Unconfined' } } })],
+      ['bidirectional mount propagation', container({ volumeMounts: [{ name: 'home', mountPath: '/h', mountPropagation: 'Bidirectional' }] })],
+      ['an unmasked /proc', container({ securityContext: { procMount: 'Unmasked' } })],
+      ['a raw block device', container({ volumeDevices: [{ name: 'd', devicePath: '/dev/x' }] })],
+    ];
+    for (const [what, body] of bad) {
+      refused(await rig.request('POST', `${apps}/deployments`, { body }), 'spec');
+      refused(await rig.request('PUT', `${apps}/deployments/ws-w1`, { body: { ...(body as object), metadata: { name: 'ws-w1' } } }), 'spec');
+      void what;
+    }
+    // A patch is scanned too: a merge patch that adds a host path, and a JSON patch (which names its target in a path string) altogether.
+    refused(await rig.request('PATCH', `${apps}/deployments/ws-w1`, { body: { spec: { template: { spec: { volumes: [{ name: 'h', hostPath: { path: '/etc' } }] } } } }, headers: { 'Content-Type': 'application/strategic-merge-patch+json' } }), 'spec');
+    refused(await rig.request('PATCH', `${apps}/deployments/ws-w1`, { body: [{ op: 'add', path: '/spec/template/spec/hostNetwork', value: true }], headers: { 'Content-Type': 'application/json-patch+json' } }), 'spec');
+    assert.equal(fakeSaw(n).length, 0, fakeSaw(n).map((r) => `${r.method} ${r.url}`).join(', '));
+    assert.ok((rig.service.report!().denied ?? []).some((d) => d.rule === 'spec' && d.count >= bad.length * 2));
+  });
+
+  it('refuses a claim bound to somebody’s volume or filled from another, and a secret that mints a credential', async () => {
+    const n = rig.fake.requests.length;
+    const claim = (spec: object) => ({ metadata: { name: 'ws-c-home' }, spec: { accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '1Gi' } }, ...spec } });
+    refused(await rig.request('POST', `${base}/persistentvolumeclaims`, { body: claim({ volumeName: 'pvc-12345' }) }), 'spec');
+    refused(await rig.request('POST', `${base}/persistentvolumeclaims`, { body: claim({ dataSource: { kind: 'PersistentVolumeClaim', name: 'ws-other-home' } }) }), 'spec');
+    refused(await rig.request('POST', `${base}/persistentvolumeclaims`, { body: claim({ dataSourceRef: { kind: 'VolumeSnapshot', name: 's' } }) }), 'spec');
+    refused(await rig.request('POST', `${base}/persistentvolumeclaims`, { body: claim({ volumeMode: 'Block' }) }), 'spec');
+    refused(await rig.request('POST', `${base}/secrets`, { body: { metadata: { name: 'ws-s-claudepilot', annotations: { 'kubernetes.io/service-account.name': 'claudepilot-agent' } }, type: 'kubernetes.io/service-account-token' } }), 'spec');
+    assert.equal(fakeSaw(n).length, 0);
+    assert.equal((await rig.request('POST', `${base}/persistentvolumeclaims`, { body: claim({ storageClassName: 'fast' }) })).status, 201, 'an ordinary claim is fine');
+    assert.equal((await rig.request('POST', `${base}/secrets`, { body: { metadata: { name: 'ws-s-claudepilot' }, type: 'Opaque', data: { a: 'Yg==' } } })).status, 201);
+    await rig.request('DELETE', `${base}/persistentvolumeclaims/ws-c-home`);
+    await rig.request('DELETE', `${base}/secrets/ws-s-claudepilot`);
+  });
+
+  it('what KubernetesRuntime really creates passes: a pod security context with uid 1000, a claim volume, an init container, limits, an image pull secret, a merge patch', async () => {
+    const ok = dep({
+      hostname: 'w',
+      terminationGracePeriodSeconds: 5,
+      securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 },
+      imagePullSecrets: [{ name: 'pull' }],
+      volumes: [{ name: 'home', persistentVolumeClaim: { claimName: 'ws-ok-home' } }, { name: 'scratch', emptyDir: {} }],
+      initContainers: [{ name: 'seed-home', image: 'ghcr.io/example/claudepilot-workspace:latest', command: ['sh', '-c', 'true'], volumeMounts: [{ name: 'home', mountPath: '/seed' }] }],
+      containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest', env: [{ name: 'TERM', value: 'xterm' }], resources: { limits: { cpu: '1', memory: '512Mi' } }, volumeMounts: [{ name: 'home', mountPath: '/home/node' }], securityContext: { allowPrivilegeEscalation: false, privileged: false, capabilities: { drop: ['ALL'] } } }],
+      nodeSelector: { disk: 'ssd' },
+    }, 'ws-ok');
+    assert.equal((await rig.request('POST', `${apps}/deployments`, { body: ok })).status, 201);
+    assert.equal((await rig.request('PATCH', `${apps}/deployments/ws-ok`, { body: { spec: { replicas: 0 } }, headers: { 'Content-Type': 'application/merge-patch+json' } })).status, 200);
+    assert.equal((await rig.request('DELETE', `${apps}/deployments/ws-ok`)).status, 200);
+  });
+
+  it('with an image allowlist (PILOT_IMAGES on the cluster) only those images run; without one nothing is enforced', async () => {
+    const strict = await startKubeRig({ service: { images: ['ghcr.io/example/claudepilot-workspace:latest'] } });
+    try {
+      const withImage = (image: string, name: string) => ({ metadata: { name, labels: { 'claudepilot.managed': 'true' } }, spec: { replicas: 1, template: { metadata: { labels: { 'claudepilot.managed': 'true' } }, spec: { containers: [{ name: 'workspace', image }] } } } });
+      assert.equal((await strict.request('POST', `${apps}/deployments`, { body: withImage('ghcr.io/example/claudepilot-workspace:latest', 'ws-img1') })).status, 201);
+      assert.equal((await strict.request('POST', `${apps}/deployments`, { body: withImage('attacker.example/miner:latest', 'ws-img2') })).status, 403);
+      assert.equal((await strict.request('POST', `${apps}/deployments`, { body: { ...withImage('x', 'ws-img3'), spec: { template: { spec: { initContainers: [{ name: 'i', image: 'attacker.example/x' }], containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest' }] } } } } })).status, 403);
+    } finally {
+      await strict.stop();
+    }
+    const open = withNoImages();
+    function withNoImages() {
+      return rig;
+    }
+    assert.equal((await open.request('POST', `${apps}/deployments`, { body: dep({}, 'ws-img4') })).status, 201);
+    await open.request('DELETE', `${apps}/deployments/ws-img4`);
+  });
+});
+
 describe('selectors are injected, lists are only the portal’s', () => {
   it('adds the managed label selector to lists of pods, deployments and claims, and to a watch', async () => {
     for (const path of [`${base}/pods`, `${apps}/deployments`, `${base}/persistentvolumeclaims`]) {

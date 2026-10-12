@@ -1,4 +1,4 @@
-// Builds `pilot-agent` (docs/prd/targets-connect.md §11.1) from `agent/main.ts` into ONE ES module: `agent.mjs`, run by Node 22.13 or newer.
+// Builds `pilot-agent` (docs/prd/targets-connect.md §11.1) from `agent/bin.ts` (which runs `main.ts`) into ONE ES module: `agent.mjs`, run by Node 22.13 or newer.
 // Used by `npm run gen:connect-agent` and by tests; the portal itself never imports this (it carries the generated text, `agent.generated.ts`).
 //
 // Bundled: the agent's own code, the tunnel library it shares with the portal, `workspaces/hostexec.ts`, the contract's constants (`connect.ts`
@@ -24,7 +24,7 @@ export interface AgentBundle {
 
 export function buildAgent(): AgentBundle {
   const result = buildSync({
-    entryPoints: [fileURLToPath(new URL('./main.ts', import.meta.url))],
+    entryPoints: [fileURLToPath(new URL('./bin.ts', import.meta.url))],
     absWorkingDir: SERVER,
     bundle: true,
     platform: 'node',

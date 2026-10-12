@@ -154,9 +154,8 @@ class AgentRuntime {
       createLogger({
         level: this.#config.logLevel,
         ...(this.#config.mode === 'host' ? { file: { path: join(this.#config.dataDir, 'logs', 'agent.log') } } : {}),
-        remote: (level, message) => this.#remote?.(level, message),
       });
-    // Warnings and errors also go to the portal, whatever logger the caller gave (a test's logger has no remote sink of its own).
+    // Warnings and errors also go to the portal while connected, whatever logger the caller gave: `setRemote` is on every logger `createLogger` makes.
     this.#net = { headers: this.#config.headers, ...(opts.net ?? {}) };
     for (const v of Object.values(this.#config.headers)) this.#log.addSecret(v);
     if (this.#config.enrollToken) this.#log.addSecret(this.#config.enrollToken);
@@ -501,6 +500,7 @@ class AgentRuntime {
     });
     this.#control = control;
     this.#remote = (level, message) => control.logLine(level, message);
+    log.setRemote?.(this.#remote);
     heldFrom = this.#clock.now();
     this.#setState('connected');
     log.info('connected', { node: identity.node, target: identity.target, build: this.#build });
@@ -509,6 +509,7 @@ class AgentRuntime {
 
     const info = await closed;
     this.#stopTimers();
+    log.setRemote?.(null);
     this.#remote = null;
     this.#control = null;
     this.#session = null;

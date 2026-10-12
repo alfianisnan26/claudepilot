@@ -1,12 +1,12 @@
 // `pilot-agent` (docs/prd/targets-connect.md §11.3): `run` (the default) · `enroll [--token-stdin]` · `doctor [--json]` · `identity` · `version`.
-// This file is the entry of the generated bundle (`agent.mjs`). Configuration is `agent.json` plus the environment (`config.ts`). The token is
+// `bin.ts` is the entry of the generated bundle (`agent.mjs`) and calls `main` below. Configuration is `agent.json` plus the environment (`config.ts`). The token is
 // read from stdin (`enroll --token-stdin`, how the installer hands it over) or from PILOT_ENROLL_TOKEN, never from an argument: an argument
 // shows in the process list. Exit codes follow the installer's (`CONNECT_INSTALL_EXIT`): 11 the portal can't be reached, 12 the token was
 // refused, 14 anything else that went wrong.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { CONNECT_AGENT_VERSION, CONNECT_INSTALL_EXIT, CONNECT_PROTOCOL } from '@portal/contracts';
 import { runAgent, type AgentHandle } from './client.js';
 import { ConfigError, loadConfig, type AgentConfig } from './config.js';
@@ -141,7 +141,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, build: string
       } catch (e) {
         if (e instanceof EnrollError) {
           io.stderr(`${e.message}${e.hint ? ` ${e.hint}` : ''}\n`);
-          return e.reason === 'unreachable' ? CONNECT_INSTALL_EXIT.unreachable : e.reason.startsWith('token_') || e.reason === 'target_enrolled' || e.reason === 'name_taken' || e.reason === 'rate_limited' ? CONNECT_INSTALL_EXIT.tokenRejected : CONNECT_INSTALL_EXIT.install;
+          return enrollExitCode(e);
         }
         io.stderr('Enrollment failed.\n');
         return CONNECT_INSTALL_EXIT.install;
@@ -154,6 +154,16 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, build: string
     default:
       return 2;
   }
+}
+
+/**
+ * The installer's exit codes for a failed enrollment: 11 the portal could not be reached, 12 the portal said no (the token, the target, the key or
+ * the address: 401, 409, 422 and the rate limit), 14 anything else (a locked store, an answer that is not a portal's, an identity that could not be saved).
+ */
+export function enrollExitCode(e: EnrollError): number {
+  if (e.reason === 'unreachable') return CONNECT_INSTALL_EXIT.unreachable;
+  const refused = ['token_invalid', 'token_expired', 'token_used', 'token_revoked', 'target_enrolled', 'name_taken', 'bad_key', 'insecure_url', 'rate_limited'];
+  return refused.includes(e.reason) ? CONNECT_INSTALL_EXIT.tokenRejected : CONNECT_INSTALL_EXIT.install;
 }
 
 /** A logger for one-shot commands: warnings and errors to stderr only. */
@@ -183,13 +193,4 @@ async function runForever(config: AgentConfig, build: string): Promise<number> {
   process.on('unhandledRejection', crash);
   await handle.done;
   return 0;
-}
-
-// `node agent.mjs <command>`: run when this file is the program, not when a test imports it.
-const entry = process.argv[1] ? pathToFileURL(process.argv[1]).href : '';
-if (entry === import.meta.url) {
-  main(process.argv.slice(2), process.env, selfBuild(import.meta.url)).then(
-    (code) => process.exit(code),
-    () => process.exit(1),
-  );
 }
