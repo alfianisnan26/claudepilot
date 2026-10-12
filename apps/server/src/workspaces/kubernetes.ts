@@ -208,11 +208,11 @@ export class KubernetesRuntime implements Runtime {
                 {
                   name: 'seed-home',
                   image: this.opts.image,
-                  command: ['sh', '-c', `[ -e /seed/${SEEDED} ] || { cp -a ${HOME}/. /seed/ && touch /seed/${SEEDED}; }`],
-                  // As root: the new volume's top folder belongs to root on many storage classes (k3s local-path), and `cp -a`
-                  // as another user fails to set the times of that folder ("Operation not permitted"). Copying as root keeps
-                  // the image's owners (node, 1000), which is what the workspace container runs as.
-                  securityContext: { runAsUser: 0, runAsGroup: 0 },
+                  // --no-preserve=all: the new volume's top folder belongs to root on many storage classes (k3s local-path), and
+                  // `cp -a` as uid 1000 fails to set that folder's times and mode ("Operation not permitted"); `tar` fails the
+                  // same way. The files are created by uid 1000, the user the workspace runs as, so owners need no preserving.
+                  // (Not root: the Connect agent's policy refuses a Deployment that runs anything as root.)
+                  command: ['sh', '-c', `[ -e /seed/${SEEDED} ] || { cp -a --no-preserve=all ${HOME}/. /seed/ && touch /seed/${SEEDED}; }`],
                   volumeMounts: [{ name: 'home', mountPath: '/seed' }],
                 },
               ],
