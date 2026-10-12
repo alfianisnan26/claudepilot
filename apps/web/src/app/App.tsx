@@ -11,12 +11,15 @@ import { TicketsPage } from '@/features/tickets/TicketsPage';
 import { CiPage } from '@/features/ci/CiPage';
 import { RunPage } from '@/features/ci/RunPage';
 import { KnowledgePage } from '@/features/knowledge/KnowledgePage';
-import { UsagePage } from '@/features/usage/UsagePage';
 import { ClaudeUsageWatcher } from '@/features/usage/claude/AlertWatcher';
+import { GlanceRoot } from '@/features/glance/Root';
+import { NotificationsPage } from '@/features/notify/NotificationsPage';
+import { NotifyRoot } from '@/features/notify/Root';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { PoolsHub } from '@/features/pools/PoolsHub';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { POOL_TABS } from '@/features/pools/registry';
+import { TargetsPage } from '@/features/targets';
 import { WorkspacesPage } from '@/features/workspaces/WorkspacesPage';
 import { useAppUpdate } from '@/lib/appUpdate';
 import { AuthProvider, useAuth } from '@/lib/auth';
@@ -36,6 +39,8 @@ const BrowserPage = lazy(() => import('@/features/browser/BrowserPage').then((m)
 const VaultPage = lazy(() => import('@/features/knowledge/VaultPage').then((m) => ({ default: m.VaultPage })));
 // The portal-wide graphs (which sessions used which notes; the agents) draw on a canvas, so they load on first use too.
 const KnowledgeGraphPage = lazy(() => import('@/features/knowledge/GraphPage').then((m) => ({ default: m.GraphPage })));
+// The Usage page (stacked charts, budgets, attribution, spikes) is large and not every visit needs it: it loads on first use, behind a skeleton.
+const UsagePage = lazy(() => import('@/features/usage/UsagePage').then((m) => ({ default: m.UsagePage })));
 
 export function App() {
   useEffect(() => initViewportFix(), []);
@@ -67,6 +72,10 @@ function AppRoutes() {
   return (
     <ErrorBoundary resetKey={pathname}>
       <Pages />
+      {/* The glance widgets' global parts, the ?glance= deep link and the app badge: once, over every page. */}
+      <GlanceRoot />
+      {/* Presence, toasts for what arrives while the tab is in use, and closing notifications that are dealt with. */}
+      <NotifyRoot />
     </ErrorBoundary>
   );
 }
@@ -99,12 +108,21 @@ function Pages() {
         <Route path="ci" element={<CiPage />} />
         <Route path="ci/runs/:id" element={<RunPage />} />
         <Route path="knowledge" element={<KnowledgePage />} />
-        <Route path="usage" element={<UsagePage />} />
+        <Route
+          path="usage"
+          element={
+            <Suspense fallback={<div className="skeleton h-28 rounded-[24px]" />}>
+              <UsagePage />
+            </Suspense>
+          }
+        />
         <Route path="pools" element={<PoolsHub />} />
         {/* Each pool type's own pages (library, catalog, review, page editors) are routes, not nested tabs. */}
         {POOL_TABS.flatMap((t) => (t.routes ?? []).map((r) => <Route key={`${t.id}/${r.path}`} path={`pools/${t.id}/${r.path}`} element={r.element} />))}
         <Route path="accounts" element={<Navigate to="/admin/pools?tab=accounts" replace />} />
+        <Route path="targets" element={<TargetsPage />} />
         <Route path="access" element={<AccessPage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
       {/* Full screen, outside the app frame: the chat view owns the viewport (composer pinned, no tab bar). */}

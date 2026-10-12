@@ -1,4 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { removeThisBrowserRegistration } from '@/features/notify/deviceId';
+import { resetNotifyStore } from '@/features/notify/store';
 import { api, onUnauthorized } from './api';
 
 /** `unreachable`: the server didn't answer, which says nothing about whether you are signed in. */
@@ -38,6 +40,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    // This browser's push registration goes first, while the session can still remove it (PWA PRD 11.4).
+    await removeThisBrowserRegistration();
+    resetNotifyStore();
     await api.logout().catch(() => undefined);
     await refresh();
   }, [refresh]);

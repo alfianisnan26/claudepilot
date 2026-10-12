@@ -8,9 +8,10 @@ const MARGIN = 16;
 /**
  * A small ⓘ that opens a note on tap (title tooltips never show on touch screens). The note is placed
  * under the ⓘ and kept inside the screen; it closes on a tap elsewhere, Escape, or scrolling. For the
- * explanations a page shouldn't spell out in full.
+ * explanations a page shouldn't spell out in full. `text` shows a word instead of the ⓘ ("est." beside an estimated number). On a phone the
+ * button is 44 px (the tap target) with negative margins, so it takes the room it took before.
  */
-export function InfoTip({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+export function InfoTip({ label, children, className, text }: { label: string; children: ReactNode; className?: string; text?: string }) {
   const [open, setOpen] = useState(false);
   const [style, setStyle] = useState<CSSProperties>({});
   const button = useRef<HTMLButtonElement>(null);
@@ -58,9 +59,9 @@ export function InfoTip({ label, children, className }: { label: string; childre
           e.stopPropagation();
           setOpen((o) => !o);
         }}
-        className={`press inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink ${className ?? ''}`}
+        className={`press inline-flex shrink-0 items-center justify-center text-muted hover:bg-surface-2 hover:text-ink ${text ? 'h-6 min-w-6 rounded-md px-1 text-[11px] font-semibold underline decoration-dotted underline-offset-2 tap:h-11 tap:min-w-11 tap:-mx-2 tap:-my-2.5' : 'size-6 rounded-full tap:size-11 tap:-m-2.5'} ${className ?? ''}`}
       >
-        <Info className="size-4" />
+        {text ?? <Info className="size-4" />}
       </button>
       {open &&
         createPortal(

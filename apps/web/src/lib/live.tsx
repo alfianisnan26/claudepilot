@@ -1,5 +1,5 @@
-import { LIVE_PATH, type LiveMessage, type LiveTopic } from '@portal/contracts';
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { LIVE_PATH, type LiveMessage, type LivePresence, type LiveTopic } from '@portal/contracts';
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useAuth } from './auth';
 
 type Handler = (msg: LiveMessage) => void;
@@ -18,6 +18,7 @@ class LiveClient {
   #retry = 0;
   #timer: number | undefined;
   #running = false;
+  #presence: LivePresence | null = null;
 
   start() {
     this.#running = true;
@@ -66,7 +67,8 @@ class LiveClient {
       this.#retry = 0;
       this.#setConnected(true);
       this.#sendTopics();
-      if (this.#everConnected) for (const type of ['accounts', 'system', 'pools', 'tickets', 'ci'] as const) this.#dispatch({ type });
+      this.#sendPresence();
+      if (this.#everConnected) for (const type of ['accounts', 'system', 'pools', 'tickets', 'ci', 'connect'] as const) this.#dispatch({ type });
       this.#everConnected = true;
     };
     ws.onmessage = (e) => {
@@ -82,6 +84,16 @@ class LiveClient {
       this.#setConnected(false);
       if (this.#running) this.#timer = window.setTimeout(() => this.#connect(), Math.min(30_000, 1000 * 2 ** this.#retry++));
     };
+  }
+
+  /** Tells the portal whether this tab is visible and in use (notifications go to a device that is not). Sent again on every reconnect. */
+  setPresence(p: Omit<LivePresence, 'type'>) {
+    this.#presence = { type: 'presence', ...p };
+    this.#sendPresence();
+  }
+
+  #sendPresence() {
+    if (this.#presence && this.#ws?.readyState === WebSocket.OPEN) this.#ws.send(JSON.stringify(this.#presence));
   }
 
   #dispatch(msg: LiveMessage) {
@@ -134,4 +146,10 @@ export function useLiveConnected(): boolean {
     (fn) => client?.onConnectedChange(fn) ?? (() => undefined),
     () => client?.connected ?? false,
   );
+}
+
+/** Reports this tab's presence on the one socket (visible, used in the last two minutes, which session it shows). Null outside the provider. */
+export function usePresenceSender(): ((p: Omit<LivePresence, 'type'>) => void) | null {
+  const client = useContext(LiveContext);
+  return useMemo(() => (client ? (p: Omit<LivePresence, 'type'>) => client.setPresence(p) : null), [client]);
 }

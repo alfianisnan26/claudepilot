@@ -1,4 +1,4 @@
-import { Boxes, ChartColumn, KeyRound, Layers, Library, MessagesSquare, Settings, Ticket, Workflow, type LucideIcon } from 'lucide-react';
+import { Bell, Boxes, ChartColumn, KeyRound, Layers, Library, MessagesSquare, Server, Settings, Ticket, Workflow, type LucideIcon } from 'lucide-react';
 
 export interface NavItem {
   id: string;
@@ -27,7 +27,11 @@ export const NAV: NavItem[] = [
   { id: 'usage', to: '/admin/usage', label: 'Usage', icon: ChartColumn, group: 'admin' },
   // One hub for every pool type, Accounts first (Skillset PRD §18 A8).
   { id: 'pools', to: '/admin/pools', label: 'Pools', icon: Layers, group: 'admin' },
+  // Where workspaces run, and machines that connect to the portal (Targets and Connect PRD §16).
+  { id: 'targets', to: '/admin/targets', label: 'Targets', icon: Server, group: 'admin' },
   { id: 'access', to: '/admin/access', label: 'Access', icon: KeyRound, group: 'admin' },
+  // What arrived and where it goes: devices, channels, quiet hours (PWA PRD §11).
+  { id: 'notifications', to: '/admin/notifications', label: 'Notifications', icon: Bell, group: 'admin' },
   // Portal-wide switches areas define: MCP lockdown, agents, sessions (Settings PRD).
   { id: 'settings', to: '/admin/settings', label: 'Settings', icon: Settings, group: 'admin' },
 ];

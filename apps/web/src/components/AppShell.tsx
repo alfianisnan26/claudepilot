@@ -4,6 +4,9 @@ import { Ellipsis } from 'lucide-react';
 import { Fragment, Suspense, useEffect, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router';
 import { BAR_ITEMS, HOME, MORE_ITEMS, NAV, NAV_GROUPS, type NavItem } from '@/app/nav';
+import { GlanceDock } from '@/features/glance/Dock';
+import { NavBadge } from '@/features/notify/NavBadge';
+import { GlanceStrip, useHasStrip } from '@/features/glance/Strip';
 import { useAuth } from '@/lib/auth';
 import { AccountMenu } from './AccountMenu';
 import { BRAND_NAME, Logo, LogoMark } from './Logo';
@@ -19,9 +22,11 @@ const showTabBar = NAV.length > 1;
 export function AppShell() {
   const { logout } = useAuth();
   const { pathname } = useLocation();
+  // The glance strip takes the phone bar's room, so the logo keeps to its mark while it shows.
+  const glance = useHasStrip('header');
 
   return (
-    <div className={cn('min-h-dvh pb-10 sm:pb-16 sm:pl-20 lg:pl-64', showTabBar && 'pb-[calc(5rem+env(safe-area-inset-bottom))]')}>
+    <div className={cn('min-h-dvh pb-10 sm:pb-16 sm:pl-20 lg:pl-64 xl:pr-[var(--glance-dock-w,0px)]', showTabBar && 'pb-[calc(5rem+env(safe-area-inset-bottom))]')}>
       {/* The first Tab stop: past the sidebar and the account menu, to the page. */}
       <a
         href="#main"
@@ -33,8 +38,9 @@ export function AppShell() {
 
       <header className="sticky top-0 z-40 border-b border-line bg-bg/80 pt-[env(safe-area-inset-top)] backdrop-blur-md sm:hidden">
         <div className="mx-auto flex h-16 max-w-4xl items-center gap-6 px-4">
-          <Logo to={HOME} />
+          <Logo to={HOME} label={!glance} />
           <div className="ml-auto flex items-center gap-1.5">
+            <GlanceStrip placement="header" />
             <AccountMenu onLogout={() => void logout()} />
           </div>
         </div>
@@ -55,6 +61,7 @@ export function AppShell() {
       </main>
 
       {showTabBar && <TabBar pathname={pathname} />}
+      <GlanceDock />
     </div>
   );
 }
@@ -93,6 +100,7 @@ function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => voi
                       )}
                       <Icon className="size-5 shrink-0" strokeWidth={active ? 2.4 : 2} />
                       <span className="hidden max-w-full truncate lg:inline">{label}</span>
+                      {id === 'notifications' && <NavBadge />}
                     </Link>
                   </li>
                 );
@@ -101,6 +109,7 @@ function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => voi
           ))}
         </ul>
       </nav>
+      <GlanceStrip placement="header" layout="rail" side="right" className="shrink-0 flex-col justify-center px-3 pb-1 lg:flex-row lg:px-4" />
       <div className="border-t border-line p-3 lg:p-4">
         <AccountMenu variant="row" onLogout={onLogout} />
       </div>
@@ -209,6 +218,7 @@ function MoreList({ pathname, onPick }: { pathname: string; onPick: () => void }
                 >
                   <Icon className="size-5 shrink-0" strokeWidth={active ? 2.4 : 2} />
                   {label}
+                  {id === 'notifications' && <NavBadge inline />}
                 </Link>
               </li>
             );
