@@ -1,0 +1,185 @@
+# ClaudePilot agent for target cx4-lab (protocol 1, build 3f9a1c07be52). Namespaced objects only.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: "cx4-ns"
+  labels:
+    claudepilot.managed: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: claudepilot-agent
+  namespace: "cx4-ns"
+  labels:
+    app.kubernetes.io/name: "claudepilot-agent"
+    app.kubernetes.io/part-of: "claudepilot-connect"
+    claudepilot.connect/target: "cx4-lab"
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: claudepilot-agent
+  namespace: "cx4-ns"
+  labels:
+    app.kubernetes.io/name: "claudepilot-agent"
+    app.kubernetes.io/part-of: "claudepilot-connect"
+    claudepilot.connect/target: "cx4-lab"
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: claudepilot-agent
+  namespace: "cx4-ns"
+  labels:
+    app.kubernetes.io/name: "claudepilot-agent"
+    app.kubernetes.io/part-of: "claudepilot-connect"
+    claudepilot.connect/target: "cx4-lab"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: claudepilot-agent
+subjects:
+  - kind: ServiceAccount
+    name: claudepilot-agent
+    namespace: "cx4-ns"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: claudepilot-agent-enroll
+  namespace: "cx4-ns"
+  labels:
+    app.kubernetes.io/name: "claudepilot-agent"
+    app.kubernetes.io/part-of: "claudepilot-connect"
+    claudepilot.connect/target: "cx4-lab"
+type: Opaque
+stringData:
+  token: "<token>"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claudepilot-agent
+  namespace: "cx4-ns"
+  labels:
+    app.kubernetes.io/name: "claudepilot-agent"
+    app.kubernetes.io/part-of: "claudepilot-connect"
+    claudepilot.connect/target: "cx4-lab"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: claudepilot-agent
+      claudepilot.connect/target: "cx4-lab"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "claudepilot-agent"
+        app.kubernetes.io/part-of: "claudepilot-connect"
+        claudepilot.connect/target: "cx4-lab"
+    spec:
+      serviceAccountName: claudepilot-agent
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: fetch
+          image: "node:22-bookworm-slim"
+          command: ["node", "-e", "const [u,h,o]=process.argv.slice(1),fs=require(\"fs\"),p=require(\"path\"),c=require(\"crypto\");const die=(m)=>{console.error(\"fetch: \"+m);process.exit(13)};if(!/^[0-9a-f]{64}$|^sha512-[A-Za-z0-9+\\/]{86}==$/.test(h||\"\")||!u||!o)die(\"usage: <url> <sha256|sha512-integrity> <out>\");const sum=(b)=>h.startsWith(\"sha512-\")?\"sha512-\"+c.createHash(\"sha512\").update(b).digest(\"base64\"):c.createHash(\"sha256\").update(b).digest(\"hex\");try{if(sum(fs.readFileSync(o))===h)process.exit(0)}catch{}const hd={},hf=process.env.PILOT_HEADERS_FILE;if(hf)for(const l of fs.readFileSync(hf,\"utf8\").split(/\\r?\\n/)){const i=l.indexOf(\":\");if(i>0)hd[l.slice(0,i).trim()]=l.slice(i+1).trim()}let n=\"\";try{n=new URL(u).pathname}catch{die(\"not an address\")}fetch(u,{headers:hd,redirect:\"follow\"}).then(async(r)=>{if(!r.ok)die(\"HTTP \"+r.status+\" for \"+n);const b=Buffer.from(await r.arrayBuffer());if(sum(b)!==h)die(\"checksum mismatch for \"+n);fs.mkdirSync(p.dirname(o),{recursive:true});fs.writeFileSync(o+\".tmp\",b,{mode:0o644});fs.renameSync(o+\".tmp\",o)},(e)=>die(\"download failed for \"+n+\" (\"+String((e&&e.cause&&e.cause.code)||(e&&e.message)||e)+\")\"));", "$(PILOT_BUNDLE_URL)", "$(PILOT_BUNDLE_SHA256)", "/agent/agent.mjs"]
+          env:
+            - name: PILOT_BUNDLE_URL
+              value: "https://pilot.example.com/connect/v1/agent/3f9a1c07be52/agent.mjs"
+            - name: PILOT_BUNDLE_SHA256
+              value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            - name: NODE_USE_ENV_PROXY
+              value: "1"
+            - name: PILOT_HEADERS_FILE
+              value: "/etc/claudepilot-headers/headers"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          volumeMounts:
+            - { name: agent, mountPath: /agent }
+            - { name: headers, mountPath: /etc/claudepilot-headers, readOnly: true }
+      containers:
+        - name: agent
+          image: "node:22-bookworm-slim"
+          command: ["node", "/agent/agent.mjs", "run"]
+          env:
+            - name: PILOT_URL
+              value: "https://pilot.example.com"
+            - name: PILOT_MODE
+              value: "kubernetes"
+            - name: PILOT_DATA_DIR
+              value: "/var/lib/claudepilot-agent"
+            - name: PILOT_KUBE_NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+            - name: PILOT_IDENTITY_SECRET
+              value: "claudepilot-agent-identity"
+            - name: PILOT_NODE_NAME
+              value: "cx4-lab"
+            - name: PILOT_BUNDLE_URL
+              value: "https://pilot.example.com/connect/v1/agent/3f9a1c07be52/agent.mjs"
+            - name: PILOT_BUNDLE_SHA256
+              value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            - name: PILOT_ENROLL_TOKEN
+              valueFrom:
+                secretKeyRef: { name: claudepilot-agent-enroll, key: token, optional: true }
+            - name: PILOT_HEADERS
+              valueFrom:
+                secretKeyRef: { name: claudepilot-agent-headers, key: headers, optional: true }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          volumeMounts:
+            - { name: agent, mountPath: /agent, readOnly: true }
+            - { name: state, mountPath: /var/lib/claudepilot-agent }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: agent, emptyDir: {} }
+        - { name: state, emptyDir: {} }
+        - { name: tmp, emptyDir: {} }
+        - name: headers
+          secret: { secretName: claudepilot-agent-headers, optional: true }

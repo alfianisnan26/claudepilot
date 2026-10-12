@@ -1,0 +1,16 @@
+PILOT_PLAN=1
+PILOT_KIND=swarm
+PILOT_ROLE=cluster
+PILOT_TARGET=cx4-lab
+PILOT_PLATFORM=linux
+PILOT_PORTAL=https://pilot.example.com
+PILOT_TUNNEL=wss://pilot.example.com/connect/v1/tunnel
+PILOT_PROTOCOL=1
+PILOT_AGENT_BUILD=3f9a1c07be52
+PILOT_AGENT_URL=https://pilot.example.com/connect/v1/agent/3f9a1c07be52/agent.mjs
+PILOT_AGENT_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+PILOT_NODE_IMAGE=node:22-bookworm-slim
+PILOT_WORKSPACE_IMAGE=ghcr.io/alfianisnan26/claudepilot-workspace:latest
+PILOT_IMAGES=ghcr.io/alfianisnan26/claudepilot-workspace:latest
+PILOT_MAX_USES=20
+PILOT_EXPIRES=2026-10-12T09:15:00.000Z
