@@ -1,11 +1,13 @@
 import { cn, Menu, Segmented, Spinner, useToast } from '@isnanme/ui';
-import { USAGE_RANGES, type ClaudeUsage, type ClaudeUsageHistory, type SnoozeUntil, type UsageRange } from '@portal/contracts';
+import { USAGE_RANGES, type ClaudeUsage, type ClaudeUsageHistory, type SnoozeKind, type SnoozeUntil, type UsageRange } from '@portal/contracts';
 import { BellOff, ChevronDown, CircleCheck, CircleQuestionMark, CircleX, Infinity as NoLimit, RefreshCw, TriangleAlert, UserX, type LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { errorText } from '@/lib/api';
+import { FigureValue } from '../figure';
 import { claudeUsageApi } from './api';
 import { agoText, localTime, pctText, planText, PROBLEM_WORDS, STATE_WORDS, stateTone, TONE_TEXT, toneOf } from './format';
+import { aheadText, paceRows, projectionRisk, riskWords } from './pace';
 import { WindowLine } from './Meter';
 import { Spark } from './Spark';
 import { headroomOfClaude, replaceClaude, windowAt } from './useClaudeUsage';
@@ -53,7 +55,7 @@ function CheckButton({ c }: { c: ClaudeUsage }) {
           setBusy(false);
         }
       }}
-      className="press tap:size-10 inline-flex size-8 shrink-0 items-center justify-center rounded-xl text-muted hover:bg-surface-2 hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent"
+      className="press tap:size-11 inline-flex size-8 shrink-0 items-center justify-center rounded-xl text-muted hover:bg-surface-2 hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent"
     >
       {busy ? <Spinner className="size-4" /> : <RefreshCw className="size-4" aria-hidden="true" />}
     </button>
@@ -95,6 +97,64 @@ function Extra({ c }: { c: ClaudeUsage }) {
       Extra usage {pctText(e.usedPct)}
       {of && ` · ${of}`}
     </p>
+  );
+}
+
+/** When a Claude is estimated to run out before its window resets: one line (gold; muted while the estimate is low confidence), the numbers behind it in the ⓘ. */
+function RiskLine({ c }: { c: ClaudeUsage }) {
+  const risk = projectionRisk(c);
+  if (!risk) return null;
+  const { line, tip } = riskWords(risk);
+  return (
+    <p className={cn('mt-1.5 flex items-center gap-1.5 text-[13px]', risk.low ? 'text-muted' : 'text-gold')}>
+      <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 truncate">{line}</span>
+      <InfoTip text="est." label="How this is estimated" className="-my-1">
+        {tip}
+      </InfoTip>
+    </p>
+  );
+}
+
+const PACE_FORMULA = 'Speed: points an hour from this period’s readings (least squares over three or more, else first to last), never from tokens. At reset = used + speed × time left. Out at = when it would reach 100 %. Even = where an even spend over the whole window would stand.';
+
+/** The numbers behind a window's bar: its speed, where it ends up at the reset, when it would run out, and how far ahead of an even spend it is. */
+function PaceDetails({ c }: { c: ClaudeUsage }) {
+  const rows = paceRows(c);
+  if (!rows.length) return null;
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <h3 className="mb-2 flex items-center gap-1 text-[13px] font-semibold">
+        Pace
+        <InfoTip text="est." label="How pace is estimated">
+          {PACE_FORMULA}
+        </InfoTip>
+      </h3>
+      <ul className="flex flex-col gap-2">
+        {rows.map((r) => (
+          <li key={r.key} className="grid grid-cols-[3.75rem_minmax(0,1fr)] items-baseline gap-2 text-[13px]">
+            <span className="truncate text-ink-soft">{r.label}</span>
+            {r.speed.basis === 'unavailable' ? (
+              <span className="text-muted">
+                <FigureValue figure={r.speed} format={String} />
+              </span>
+            ) : (
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-muted tabular-nums">
+                <span>{`${r.speed.value > 0 ? '+' : ''}${r.speed.value} pts/h`}</span>
+                <span>{r.projectedPct.basis === 'unavailable' ? '-' : `${Math.round(r.projectedPct.value)} % at reset`}</span>
+                <span>{r.outAt.text === '-' ? '-' : r.outAt.text === 'after reset' ? 'out after reset' : r.outAt.text === 'now' ? 'out now' : `out ~${r.outAt.text}`}</span>
+                {r.aheadPts.basis !== 'unavailable' && <span>{`${aheadText(r.aheadPts.value)} vs even`}</span>}
+                {r.low && (
+                  <InfoTip text="low" label="Low confidence" className="-my-1">
+                    Fewer than three readings, or a short span: shown, never alerted on.
+                  </InfoTip>
+                )}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -151,6 +211,7 @@ function History({ c }: { c: ClaudeUsage }) {
           })}
         </ul>
       )}
+      <PaceDetails c={c} />
     </div>
   );
 }
@@ -158,25 +219,27 @@ function History({ c }: { c: ClaudeUsage }) {
 /** Silences this Claude's alerts for a while; the readings go on. */
 function Snooze({ c }: { c: ClaudeUsage }) {
   const toast = useToast();
-  const set = async (until: SnoozeUntil | null) => {
+  const set = async (until: SnoozeUntil | null, kind?: SnoozeKind) => {
     try {
-      replaceClaude(until ? await claudeUsageApi.snooze(c.claudeId, until) : await claudeUsageApi.unsnooze(c.claudeId));
+      replaceClaude(until ? await claudeUsageApi.snooze(c.claudeId, until, kind) : await claudeUsageApi.unsnooze(c.claudeId, kind));
     } catch (e) {
       toast(errorText(e, 'Couldn’t change the snooze.'), 'error');
     }
   };
+  const quiet = !!c.snoozedUntil || !!c.projectionSnoozedUntil;
   return (
     <div className="flex items-center gap-1.5 text-[12.5px] text-muted">
-      {c.snoozedUntil && <span>until {localTime(c.snoozedUntil)}</span>}
+      {c.snoozedUntil ? <span>until {localTime(c.snoozedUntil)}</span> : c.projectionSnoozedUntil && <span>projections until {localTime(c.projectionSnoozedUntil)}</span>}
       <Menu
         label={`Snooze ${c.claudeName}’s alerts`}
         align="right"
-        trigger={<BellOff className={cn('size-4', c.snoozedUntil && 'text-gold')} aria-hidden="true" />}
+        trigger={<BellOff className={cn('size-4', quiet && 'text-gold')} aria-hidden="true" />}
         items={[
           { label: 'Snooze 1 hour', onSelect: () => void set('1h') },
           { label: 'Snooze 4 hours', onSelect: () => void set('4h') },
           { label: 'Until it resets', onSelect: () => void set('reset') },
           ...(c.snoozedUntil ? [{ label: 'Alert me again', onSelect: () => void set(null) }] : []),
+          ...(c.runsOn === 'plan' ? [c.projectionSnoozedUntil ? { label: 'Warn about pace again', onSelect: () => void set(null, 'projection') } : { label: 'Mute pace warnings', onSelect: () => void set('reset', 'projection') }] : []),
         ]}
       />
     </div>
@@ -196,7 +259,9 @@ export function ClaudeRow({ c, peers, nowMs, open, onToggle }: { c: ClaudeUsage;
           <StateIcon c={c} />
           <span className="min-w-0 flex-1">
             <span className="flex items-baseline gap-1.5">
-              <span className="truncate text-[15px] font-semibold">{c.claudeName}</span>
+              <span dir="auto" className="truncate text-[15px] font-semibold">
+                {c.claudeName}
+              </span>
               {plan && <span className="shrink-0 rounded-md bg-surface-2 px-1.5 text-[11px] font-semibold text-ink-soft">{plan}</span>}
               {c.snoozedUntil && <BellOff className="size-3 shrink-0 self-center text-gold" aria-label={`Alerts snoozed until ${localTime(c.snoozedUntil)}`} />}
             </span>
@@ -230,8 +295,9 @@ export function ClaudeRow({ c, peers, nowMs, open, onToggle }: { c: ClaudeUsage;
         ) : (
           <Plain c={c} />
         )}
+        <RiskLine c={c} />
         <Extra c={c} />
-        {room && <p className="mt-1.5 text-[13px] text-ink-soft">{room}</p>}
+        {room && <p className="mt-1.5 text-[13px] text-ink-soft [overflow-wrap:anywhere]">{room}</p>}
       </div>
       {open && <History c={c} />}
     </li>

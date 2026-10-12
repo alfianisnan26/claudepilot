@@ -1,78 +1,39 @@
 import { LoadError, Segmented, Select, StatGrid, StatTile } from '@isnanme/ui';
-import { CHAT_USAGE_RANGES, type ChatUsageRange, type ChatUsageReport, type ChatUsageTotals } from '@portal/contracts';
+import type { ChatUsageRange, RequestsReport } from '@portal/contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router';
+import { BarList } from '@/components/charts';
 import { Card } from '@/components/Card';
-import { BarList, ColumnChart, type ChartColumn } from '@/components/charts';
+import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
-import { chatApi } from '@/features/chat/api';
-import { formatTokens } from '@/features/chat/shared';
+import { useLive } from '@/lib/live';
+import { formatCost, formatShare, formatTokens, prettyModel, slotColor, usageApi } from '@/lib/usage';
 import { UsageTabs } from './claude/UsageTabs';
+import { RANGE_OPTIONS, RANGE_WORDS, saveRange, savedRange } from './range';
+import { DOLLARS_FORMULA, figureTip } from './figure';
+import { ExportMenu } from './ExportMenu';
+import { FORMAT, spentTokens, tileChange, type Metric, type StackBy } from './requests';
+import { SpendChart } from './SpendChart';
+import { SummaryStrip } from './SummaryStrip';
+import { HIT_RATE_FORMULA, TokensCard } from './TokensCard';
 
-type Metric = 'cost' | 'tokens' | 'requests';
-
-const RANGE_LABEL: Record<ChatUsageRange, string> = { '30m': '30m', '1h': '1h', '12h': '12h', '1d': '1d', '7d': '7d', '30d': '1M' };
-const RANGE_WORDS: Record<ChatUsageRange, string> = {
-  '30m': 'last 30 minutes',
-  '1h': 'last hour',
-  '12h': 'last 12 hours',
-  '1d': 'last day',
-  '7d': 'last 7 days',
-  '30d': 'last 30 days',
-};
-const RANGE_KEY = 'pilot.usage.range';
+/** What the previous period is called in a tile's note: the stretch of the same length before the window. */
+const PERIOD_WORDS: Record<ChatUsageRange, string> = { '30m': '30 minutes', '1h': 'hour', '12h': '12 hours', '1d': '24 hours', '7d': '7 days', '30d': '30 days' };
 /** Short windows change by the minute: refresh them while the page is open. */
 const LIVE: ReadonlySet<ChatUsageRange> = new Set(['30m', '1h', '12h']);
 
-const tokensOf = (t: ChatUsageTotals) => t.input + t.cacheRead + t.cacheWrite + t.output;
-const VALUE: Record<Metric, (t: ChatUsageTotals) => number> = { cost: (t) => t.costUsd, tokens: tokensOf, requests: (t) => t.requests };
-
-/** "$0.084", "$1.23", "$12.3", "$1.2k": short enough for an axis. */
-function formatCost(v: number): string {
-  if (v === 0) return '$0';
-  if (v < 1) return `$${v.toFixed(v < 0.1 ? 3 : 2)}`;
-  if (v < 100) return `$${v.toFixed(2).replace(/\.?0+$/, '')}`;
-  if (v < 1000) return `$${Math.round(v)}`;
-  return `$${(v / 1000).toFixed(1)}k`;
-}
-const FORMAT: Record<Metric, (v: number) => string> = {
-  cost: formatCost,
-  tokens: (v) => formatTokens(Math.round(v)),
-  requests: (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1)),
-};
-
-/** A bucket's place on the axis, and what it covers, in this device's time. */
-function bucketWords(at: string, bucketMs: number, range: ChatUsageRange): { tick: string; span: string } {
-  const start = new Date(at);
-  const end = new Date(start.getTime() + bucketMs);
-  const time = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-  const day = (d: Date) => d.toLocaleDateString([], { day: 'numeric', month: 'short' });
-  const weekday = (d: Date) => d.toLocaleDateString([], { weekday: 'short' });
-  if (range === '30d') return { tick: day(start), span: day(start) };
-  if (range === '7d') return { tick: `${weekday(start)} ${time(start).slice(0, 2)}h`, span: `${weekday(start)} ${day(start)}, ${time(start)}–${time(end)}` };
-  return { tick: time(start), span: `${time(start)}–${time(end)}` };
-}
-
-function savedRange(): ChatUsageRange {
-  try {
-    const v = localStorage.getItem(RANGE_KEY);
-    return (CHAT_USAGE_RANGES as readonly string[]).includes(v ?? '') ? (v as ChatUsageRange) : '1d';
-  } catch {
-    return '1d';
-  }
-}
-
 /**
- * Usage over time, from every finished request (turn) stored as metrics: sub-agents count with the
- * request that started them. One row of filters scopes everything: the window (30 minutes to a month)
- * and the Claude, whose sign-in or pool the requests ran as. Then the totals, one chart over time
- * (cost, tokens or requests), and the split by Claude and by model.
+ * Usage over time, from every finished request (turn) stored as metrics: sub-agents count with the request that started them. One row of
+ * filters scopes everything: the window (30 minutes to a month), the Claude whose sign-in or pool the requests ran as, and what the stack is
+ * cut by. Then the totals against the previous period, one stacked chart over time (cost, tokens or requests), and the split by Claude, by
+ * model and by token kind with the cache apart.
  */
-function RequestsTab() {
+function RequestsTab({ claude, onClaude }: { claude: string; onClaude: (id: string) => void }) {
   const [range, setRange] = useState<ChatUsageRange>(savedRange);
   const [metric, setMetric] = useState<Metric>('cost');
-  const [claude, setClaude] = useState('');
-  const [report, setReport] = useState<ChatUsageReport | null>(null);
-  const [claudes, setClaudes] = useState<ChatUsageReport['byClaude']>([]);
+  const [stack, setStack] = useState<StackBy>('claude');
+  const [report, setReport] = useState<RequestsReport | null>(null);
+  const [claudes, setClaudes] = useState<RequestsReport['byClaude']>([]);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const asked = useRef(0);
@@ -81,7 +42,7 @@ function RequestsTab() {
     const ask = ++asked.current;
     setLoading(true);
     try {
-      const next = await chatApi.usage(range, claude || undefined);
+      const next = await usageApi.requests(range, claude || undefined);
       if (ask !== asked.current) return;
       setReport(next);
       setFailed(false);
@@ -100,59 +61,69 @@ function RequestsTab() {
     const t = setInterval(() => void load(), 30_000);
     return () => clearInterval(t);
   }, [load, range]);
+  // A reading or an alert landed: the plan windows moved, and the requests may have too.
+  useLive('claudeusage', () => void load());
 
   const pickRange = (r: ChatUsageRange) => {
     setRange(r);
-    try {
-      localStorage.setItem(RANGE_KEY, r);
-    } catch {
-      // not remembered on this device
-    }
+    saveRange(r);
   };
 
   const claudeKey = (c: { workspaceId: string; claudeId: string }) => c.claudeId || `default:${c.workspaceId}`;
-  const value = VALUE[metric];
-  const format = FORMAT[metric];
-
-  const columns: ChartColumn[] = useMemo(
-    () =>
-      (report?.buckets ?? []).map((b) => ({
-        key: b.at,
-        value: value(b),
-        ...bucketWords(b.at, report!.bucketMs, report!.range),
-        detail:
-          metric === 'tokens'
-            ? `${formatTokens(b.input + b.cacheRead + b.cacheWrite)} in · ${formatTokens(b.output)} out`
-            : b.requests
-              ? `${b.requests} ${b.requests === 1 ? 'request' : 'requests'}${b.agents ? ` · ${b.agents} sub-agents` : ''}`
-              : undefined,
-      })),
-    [report, metric, value],
-  );
-
   const t = report?.totals;
-  const inTokens = t ? t.input + t.cacheRead + t.cacheWrite : 0;
+  const prev = report?.previous;
+  const words = PERIOD_WORDS[range];
+  const cost = report && prev ? tileChange(prev.change.costUsd, prev.totals.costUsd, formatCost, words) : null;
+  const requests = report && prev ? tileChange(prev.change.requests, prev.totals.requests, String, words) : null;
+  const tokens = report && prev ? tileChange(prev.change.tokens, spentTokens(prev.totals), FORMAT.tokens, words) : null;
+  const hit = report?.cache.hitRate;
+  const fmt = FORMAT[metric];
+  const value = (x: { costUsd: number; input: number; output: number; cacheWrite: number; requests: number }) => (metric === 'cost' ? x.costUsd : metric === 'tokens' ? spentTokens(x) : x.requests);
 
   return (
     <>
-      <PageHeader title="Usage" description={`Every request, ${RANGE_WORDS[range]}.`} />
+      <PageHeader
+        title="Usage"
+        description={`Every finished request, ${RANGE_WORDS[range]}. Sub-agents count with the request that started them. Tokens are input + output + cache writes; cache reads are counted apart. Dollars are Claude Code’s estimate at API list prices, not a bill.`}
+        action={
+          <ExportMenu
+            items={[
+              { label: 'Requests · CSV', url: usageApi.exportUrl({ what: 'requests', format: 'csv', range, claudeId: claude || undefined }) },
+              { label: 'Requests · JSON', url: usageApi.exportUrl({ what: 'requests', format: 'json', range, claudeId: claude || undefined }) },
+            ]}
+          />
+        }
+      />
 
       {/* One row of filters, above everything they scope. */}
       <div className="mb-4 flex flex-col gap-2.5 sm:flex-row sm:items-center">
         <div className="sm:w-[360px]">
-          <Segmented label="Window" value={range} options={CHAT_USAGE_RANGES.map((r) => ({ value: r, label: RANGE_LABEL[r] }))} onChange={pickRange} />
+          <Segmented label="Window" value={range} options={RANGE_OPTIONS} onChange={pickRange} />
         </div>
-        <div className="sm:w-56">
-          <Select
-            label="Claude"
-            hideLabel
-            value={claude}
-            onChange={setClaude}
-            options={[
-              { value: '', label: 'All Claudes' },
-              ...claudes.filter((c) => c.claudeId).map((c) => ({ value: c.claudeId, label: `${c.name} · ${c.workspaceId.split('/').pop()}` })),
-            ]}
-          />
+        <div className="grid grid-cols-2 gap-2.5 sm:flex sm:gap-2.5">
+          <div className="sm:w-52">
+            <Select
+              label="Claude"
+              hideLabel
+              value={claude}
+              onChange={onClaude}
+              options={[
+                { value: '', label: 'All Claudes' },
+                ...claudes.filter((c) => c.claudeId).map((c) => ({ value: c.claudeId, label: `${c.name} · ${c.workspaceId.split('/').pop()}` })),
+              ]}
+            />
+          </div>
+          <div className="sm:w-48">
+            <Segmented
+              label="Stack by"
+              value={stack}
+              options={[
+                { value: 'claude', label: 'Claude' },
+                { value: 'model', label: 'Model' },
+              ]}
+              onChange={setStack}
+            />
+          </div>
         </div>
       </div>
 
@@ -160,109 +131,95 @@ function RequestsTab() {
 
       <div className={loading && report ? 'opacity-70 transition-opacity' : 'transition-opacity'}>
         <StatGrid cols={4}>
-          <StatTile label="Cost" value={t ? formatCost(t.costUsd) : undefined} hint="estimated" size="sm" />
-          <StatTile label="Requests" value={t ? String(t.requests) : undefined} hint={t ? `${t.agents} sub-agents` : undefined} size="sm" />
           <StatTile
-            label="Tokens in"
-            value={t ? formatTokens(inTokens) : undefined}
-            hint={t && inTokens ? `${Math.round((t.cacheRead / inTokens) * 100)}% from cache` : undefined}
+            label="Cost"
             size="sm"
+            value={t ? formatCost(t.costUsd) : undefined}
+            extra={t ? figureTip({ value: t.costUsd, basis: 'estimate' }, `${DOLLARS_FORMULA} ${cost?.note ?? ''}`) : undefined}
+            hint={cost ? <span title={cost.note}>{cost.hint}</span> : undefined}
           />
-          <StatTile label="Tokens out" value={t ? formatTokens(t.output) : undefined} size="sm" />
+          <StatTile label="Requests" size="sm" value={t ? String(t.requests) : undefined} hint={requests ? <span title={requests.note}>{requests.hint}</span> : undefined} />
+          <StatTile
+            label="Tokens"
+            size="sm"
+            value={t ? formatTokens(spentTokens(t)) : undefined}
+            extra={
+              t ? (
+                <InfoTip label="About tokens">
+                  Input + output + cache writes. Cache reads are read, not spent, and are counted apart. {tokens?.note}
+                </InfoTip>
+              ) : undefined
+            }
+            hint={tokens ? <span title={tokens.note}>{tokens.hint}</span> : undefined}
+          />
+          <StatTile
+            label="Cache"
+            size="sm"
+            value={hit ? (hit.basis === 'unavailable' ? '-' : formatShare(hit.value)) : undefined}
+            extra={hit ? hit.basis === 'unavailable' ? figureTip(hit) : <InfoTip label="About the cache">{HIT_RATE_FORMULA}</InfoTip> : undefined}
+            hint={report ? `${formatTokens(report.cache.read)} read` : undefined}
+          />
         </StatGrid>
 
-        <Card className="mt-4 p-4 sm:p-5">
-          <div className="mb-3 flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-[15px] font-semibold">
-              {metric === 'cost' ? 'Cost' : metric === 'tokens' ? 'Tokens' : 'Requests'}
-              <span className="ml-1.5 font-normal text-muted">over time</span>
-            </h2>
-            <div className="w-full shrink-0 sm:w-[240px]">
-              <Segmented
-                label="Measure"
-                value={metric}
-                options={[
-                  { value: 'cost', label: 'Cost' },
-                  { value: 'tokens', label: 'Tokens' },
-                  { value: 'requests', label: 'Requests' },
-                ]}
-                onChange={setMetric}
-              />
-            </div>
-          </div>
-          {report ? (
-            <ColumnChart columns={columns} format={format} ariaLabel={`${metric} over the ${RANGE_WORDS[range]}`} empty="No requests in this window" dim={loading} />
-          ) : (
-            <div className="skeleton h-[188px] rounded-2xl" />
-          )}
-          {report && (
-            <details className="mt-3 text-[13px]">
-              <summary className="cursor-pointer text-muted">Show as a table</summary>
-              <div className="mt-2 max-h-72 overflow-auto rounded-xl border border-line">
-                <table className="w-full text-left tabular-nums">
-                  <thead className="sticky top-0 bg-surface text-muted">
-                    <tr>
-                      <th className="px-3 py-1.5 font-medium">Time</th>
-                      <th className="px-3 py-1.5 text-right font-medium">Requests</th>
-                      <th className="px-3 py-1.5 text-right font-medium">Tokens in</th>
-                      <th className="px-3 py-1.5 text-right font-medium">Out</th>
-                      <th className="px-3 py-1.5 text-right font-medium">Cost</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.buckets
-                      .filter((b) => b.requests || b.costUsd)
-                      .reverse()
-                      .map((b) => (
-                        <tr key={b.at} className="border-t border-line">
-                          <td className="px-3 py-1.5">{bucketWords(b.at, report.bucketMs, report.range).span}</td>
-                          <td className="px-3 py-1.5 text-right">{b.requests}</td>
-                          <td className="px-3 py-1.5 text-right">{formatTokens(b.input + b.cacheRead + b.cacheWrite)}</td>
-                          <td className="px-3 py-1.5 text-right">{formatTokens(b.output)}</td>
-                          <td className="px-3 py-1.5 text-right">{formatCost(b.costUsd)}</td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </div>
-            </details>
-          )}
-        </Card>
+        <SpendChart report={report} range={range} metric={metric} onMetric={setMetric} stack={stack} loading={loading} />
 
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
-          <Card className="p-4 sm:p-5">
+          <Card className="min-w-0 p-4 sm:p-5">
             <h2 className="mb-2 text-[15px] font-semibold">
               By Claude <span className="font-normal text-muted">· {metric}</span>
             </h2>
-            <BarList
-              rows={(report?.byClaude ?? []).map((c) => ({ key: claudeKey(c), label: c.name, sub: c.workspaceId.split('/').pop(), value: value(c) }))}
-              format={format}
-              picked={claude ? claudeKey({ workspaceId: '', claudeId: claude }) : null}
-              onPick={(key) => setClaude((cur) => (key.startsWith('default:') ? '' : cur === key ? '' : key))}
-              empty="Nothing yet in this window."
-            />
+            {!report ? (
+              <div className="skeleton h-40 rounded-2xl" aria-hidden="true" />
+            ) : (
+              <BarList
+                rows={report.byClaude.map((c) => ({
+                  key: claudeKey(c),
+                  label: c.name,
+                  sub: c.workspaceId.split('/').pop(),
+                  value: value(c),
+                  color: slotColor(c.slot),
+                  title: c.cache.hitRate.basis === 'unavailable' ? undefined : `${formatShare(c.cache.hitRate.value)} of its input from cache`,
+                }))}
+                format={fmt}
+                picked={claude ? claudeKey({ workspaceId: '', claudeId: claude }) : null}
+                onPick={(key) => onClaude(key.startsWith('default:') ? '' : claude === key ? '' : key)}
+                empty="Nothing yet in this window."
+              />
+            )}
           </Card>
-          <Card className="p-4 sm:p-5">
+          <Card className="min-w-0 p-4 sm:p-5">
             <h2 className="mb-2 text-[15px] font-semibold">
               By model <span className="font-normal text-muted">· {metric}</span>
             </h2>
-            <BarList rows={(report?.byModel ?? []).map((m) => ({ key: m.model, label: prettyModel(m.model), value: value(m) }))} format={format} empty="Nothing yet in this window." />
+            {!report ? (
+              <div className="skeleton h-40 rounded-2xl" aria-hidden="true" />
+            ) : (
+              <BarList
+                rows={report.byModel.map((m) => ({
+                  key: m.model,
+                  label: prettyModel(m.model),
+                  value: value(m),
+                  color: slotColor(m.slot),
+                  title: m.cache.hitRate.basis === 'unavailable' ? undefined : `${formatShare(m.cache.hitRate.value)} of its input from cache`,
+                }))}
+                format={fmt}
+                empty="Nothing yet in this window."
+              />
+            )}
           </Card>
+          <TokensCard totals={t} cache={report?.cache} />
         </div>
       </div>
     </>
   );
 }
 
-/** Usage: what requests cost, and (Claude usage PRD) what each Claude's plan has left. */
+/** Usage: what requests cost, and (Claude usage PRD) what each Claude's plan has left. The summary strip sits above the tabs. */
 export function UsagePage() {
-  return <UsageTabs requests={<RequestsTab />} />;
-}
-
-/** "claude-opus-5-5" reads "Opus 5.5". */
-function prettyModel(id: string): string {
-  const m = /^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(id);
-  if (!m) return id;
-  const name = m[1]!.charAt(0).toUpperCase() + m[1]!.slice(1);
-  return m[3] ? `${name} ${m[2]}.${m[3]}` : `${name} ${m[2]}`;
+  const [params] = useSearchParams();
+  const [claude, setClaude] = useState('');
+  const tab = params.get('tab');
+  // The Claude picked in the Requests filter scopes the strip while that tab shows; elsewhere the strip is every Claude.
+  const scoped = useMemo(() => (!tab || tab === 'requests' ? claude : ''), [tab, claude]);
+  return <UsageTabs top={<SummaryStrip claudeId={scoped} />} requests={<RequestsTab claude={claude} onClaude={setClaude} />} />;
 }

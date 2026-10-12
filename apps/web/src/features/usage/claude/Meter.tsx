@@ -3,14 +3,25 @@ import type { ClaudeUsage, ClaudeUsageWindow } from '@portal/contracts';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { fullest, leftText, localTime, pctText, STATE_WORDS, stateTone, TONE_TEXT, toneOf, type Tone } from './format';
+import { projectionSpan } from './pace';
 import { useClaudeRow, useNow, windowAt } from './useClaudeUsage';
 
-/** A bar whose track is a lighter step of the fill's colour, like the context meter in a chat: the colour carries how full it is. */
-export function Bar({ pct, tone, className }: { pct: number | null; tone: Tone; className?: string }) {
+/** What the bar adds when a window has a pace (docs/prd/claude-usage.md §20.2): where it is estimated to reach by the reset, and where an even spend would be. */
+export type BarMark = NonNullable<ReturnType<typeof projectionSpan>>;
+
+/**
+ * A bar whose track is a lighter step of the fill's colour, like the context meter in a chat: the colour carries how full it is. With a
+ * `mark` the estimated rest up to the reset is a paler stretch after the fill (a wall at the end when it is estimated to run out first, dimmer
+ * while the estimate is low confidence) and a thin tick shows where an even spend would stand.
+ */
+export function Bar({ pct, tone, className, mark }: { pct: number | null; tone: Tone; className?: string; mark?: BarMark | null }) {
   const width = pct === null ? 0 : Math.min(100, Math.max(pct > 0 ? 3 : 0, pct));
   return (
     <span className={cn('relative block h-1.5 overflow-hidden rounded-full bg-current/20', TONE_TEXT[tone], className)} aria-hidden="true">
+      {mark && mark.to > mark.from && <span className="absolute inset-y-0 bg-current" style={{ left: `${mark.from}%`, width: `${mark.to - mark.from}%`, opacity: mark.low ? 0.28 : 0.5 }} />}
       <span className="absolute inset-y-0 left-0 rounded-full bg-current transition-[width] duration-300" style={{ width: `${width}%` }} />
+      {mark?.over && <span className="absolute inset-y-0 right-0 w-[3px] bg-danger" style={{ opacity: mark.low ? 0.5 : 1 }} />}
+      {mark && mark.even !== null && <span className="absolute inset-y-0 w-[2px] -translate-x-1/2 bg-ink/70" style={{ left: `${mark.even}%` }} />}
     </span>
   );
 }
@@ -30,7 +41,7 @@ function Reset({ w, nowMs }: { w: ClaudeUsageWindow; nowMs: number }) {
       onClick={() => setClock((c) => !c)}
       title={gone ? `Reset at ${at}` : `Resets at ${at}`}
       aria-label={gone ? `Reset at ${at}` : `Resets at ${at}, in ${leftText(w.resetsAt, nowMs)}`}
-      className="press -my-1 rounded-md py-1 text-right whitespace-nowrap text-muted tabular-nums hover:text-ink"
+      className="press -my-1 rounded-md py-1 text-right whitespace-nowrap text-muted tabular-nums hover:text-ink tap:-my-3.5 tap:py-3.5"
     >
       {gone ? 'reset' : clock ? at : leftText(w.resetsAt, nowMs)}
     </button>
@@ -46,7 +57,7 @@ export function WindowLine({ w, nowMs }: { w: ClaudeUsageWindow; nowMs: number }
       <span className="truncate text-ink-soft" title={v.label}>
         {v.label}
       </span>
-      <Bar pct={v.level === 'reset' ? 0 : v.usedPct} tone={tone} />
+      <Bar pct={v.level === 'reset' ? 0 : v.usedPct} tone={tone} mark={projectionSpan(v)} />
       <span className={cn('text-right font-semibold tabular-nums', v.level === 'reset' || v.level === 'unknown' ? 'text-muted' : TONE_TEXT[tone])}>{v.level === 'reset' ? '—' : pctText(v.usedPct)}</span>
       <Reset w={v} nowMs={nowMs} />
     </li>

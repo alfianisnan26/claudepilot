@@ -3,3 +3,5 @@
 export { ClaudeMeter } from './Meter';
 export { ClaudeHeadroom, useHeadroom } from './Headroom';
 export { headroomLine } from './format';
+// The recommended destination for the Move dialog: `useMoveAdvice(workspaceId, fromClaudeId, open)`, `RecommendedMark` beside the best option, `recommendedId` for the default.
+export { NoRecommendation, RecommendedMark, recommendedId, useMoveAdvice } from './MoveRecommendation';

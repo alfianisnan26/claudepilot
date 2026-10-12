@@ -1,6 +1,6 @@
 import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
 import { track } from '@isnanme/ui';
-import { CLAUDE_USAGE_API, type ClaudeUsage, type ClaudeUsageHistory, type ClaudeUsageReport, type SnoozeUntil, type UsageRange } from '@portal/contracts';
+import { CLAUDE_USAGE_API, type ClaudeUsage, type ClaudeUsageHistory, type ClaudeUsageReport, type SnoozeKind, type SnoozeUntil, type UsageRange } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
 
 /** Same shape as the other features' `request`: same-origin credentials, the `{ data }` / `{ error }` envelope unwrapped. */
@@ -30,6 +30,7 @@ export const claudeUsageApi = {
   history: (claudeId: string, range: UsageRange) => request<ClaudeUsageHistory>('GET', `${CLAUDE_USAGE_API.one(claudeId)}/history?range=${range}`),
   /** Reads one Claude now (a cooldown applies). */
   check: (claudeId: string) => request<ClaudeUsage>('POST', `${CLAUDE_USAGE_API.one(claudeId)}/check`),
-  snooze: (claudeId: string, until: SnoozeUntil) => request<ClaudeUsage>('PUT', `${CLAUDE_USAGE_API.one(claudeId)}/snooze`, { until }),
-  unsnooze: (claudeId: string) => request<ClaudeUsage>('DELETE', `${CLAUDE_USAGE_API.one(claudeId)}/snooze`),
+  /** Silences this Claude's alerts, or with `kind: 'projection'` only its "will run out before reset" ones. */
+  snooze: (claudeId: string, until: SnoozeUntil, kind?: SnoozeKind) => request<ClaudeUsage>('PUT', `${CLAUDE_USAGE_API.one(claudeId)}/snooze`, kind ? { until, kind } : { until }),
+  unsnooze: (claudeId: string, kind?: SnoozeKind) => request<ClaudeUsage>('DELETE', `${CLAUDE_USAGE_API.one(claudeId)}/snooze${kind ? `?kind=${kind}` : ''}`),
 };

@@ -1,0 +1,40 @@
+/*
+ * The usage palette (apps/web/src/lib/usage/palette.ts): one colour per Claude and per model, everywhere. Light values on the first
+ * line of each block, dark ones stepped for the dark card surface. Same switching as the chart colour in index.css: the OS setting, and
+ * the viewer's theme toggle which must win both ways.
+ */
+:root {
+  --usage-slot-0: #a0429f;
+  --usage-slot-1: #009e73;
+  --usage-slot-2: #9d78ed;
+  --usage-slot-3: #b14d00;
+  --usage-slot-4: #4e62d0;
+  --usage-slot-5: #e8605b;
+  --usage-slot-6: #0096c3;
+  --usage-slot-7: #928e00;
+  --usage-others: #8a8a86;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --usage-slot-0: #a73f95;
+    --usage-slot-1: #00a97b;
+    --usage-slot-2: #a07bf0;
+    --usage-slot-3: #b95100;
+    --usage-slot-4: #5468d6;
+    --usage-slot-5: #eb635e;
+    --usage-slot-6: #0093bf;
+    --usage-slot-7: #8f8b00;
+    --usage-others: #8b8b92;
+  }
+}
+:root[data-theme='dark'] {
+  --usage-slot-0: #a73f95;
+  --usage-slot-1: #00a97b;
+  --usage-slot-2: #a07bf0;
+  --usage-slot-3: #b95100;
+  --usage-slot-4: #5468d6;
+  --usage-slot-5: #eb635e;
+  --usage-slot-6: #0093bf;
+  --usage-slot-7: #8f8b00;
+  --usage-others: #8b8b92;
+}

@@ -2,15 +2,21 @@ import { LoadError } from '@isnanme/ui';
 import type { ClaudeUsage, ClaudeUsageState } from '@portal/contracts';
 import { useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '@/components/PageHeader';
+import { usageApi } from '@/lib/usage';
+import { ExportMenu } from '../ExportMenu';
 import { ClaudeRow } from './ClaudeRow';
+import { needsPaceLook } from './pace';
 import { useClaudeUsage, useNow } from './useClaudeUsage';
 
 /** Who needs a look first: out of usage, near it, within limits, then the ones with nothing to run out of. */
 const RANK: Record<ClaudeUsageState, number> = { exhausted: 0, near: 1, ok: 2, unknown: 3, signed_out: 4, no_limits: 5 };
 
-/** Claudes that need a look (near their limit or out), not counting the ones whose alerts are snoozed: the tab's badge. */
+/**
+ * Claudes that need a look: near their limit, out, or estimated to run out before they reset (a confident estimate only), not counting the
+ * ones whose alerts are snoozed: the tab's badge.
+ */
 export function attentionCount(claudes: ClaudeUsage[]): number {
-  return claudes.filter((c) => (c.state === 'near' || c.state === 'exhausted') && !c.snoozedUntil).length;
+  return claudes.filter((c) => ((c.state === 'near' || c.state === 'exhausted') && !c.snoozedUntil) || needsPaceLook(c)).length;
 }
 
 const hashId = () => {
@@ -42,7 +48,15 @@ export function ClaudesTab() {
     <>
       <PageHeader
         title="Claudes"
-        description="The plan limits Claude Code reports for each Claude: the 5-hour session, the week and the weeks of single models, and when each resets. Read while the workspace runs, every few minutes (more often with this tab open), and from live chats. A dash means not read yet, not zero. A pool or an API key has no plan limits."
+        description="The plan limits Claude Code reports for each Claude: the 5-hour session, the week and the weeks of single models, and when each resets. Read while the workspace runs, every few minutes (more often with this tab open), and from live chats. A dash means not read yet, not zero. A pool or an API key has no plan limits. The pale stretch after a bar is where the window is estimated to stand at its reset, from how fast it filled; the thin tick is where an even spend would be."
+        action={
+          <ExportMenu
+            items={[
+              { label: 'Readings · CSV', url: usageApi.exportUrl({ what: 'quota', format: 'csv', range: '7d' }) },
+              { label: 'Readings · JSON', url: usageApi.exportUrl({ what: 'quota', format: 'json', range: '7d' }) },
+            ]}
+          />
+        }
       />
       {failed ? (
         <LoadError onRetry={reload} />
