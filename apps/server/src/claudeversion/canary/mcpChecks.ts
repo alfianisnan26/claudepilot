@@ -43,7 +43,7 @@ const version = (id: string, spec: McpVersionSpec, slots: unknown[] = []): Catal
 
 /** Starts one provider instance (preset gitea: a public client, no dynamic registration) and resolves with what it printed when ready. */
 async function startKit(box: CanaryBox, name: string, port: number, authPort: number): Promise<Record<string, unknown>> {
-  await box.sh(`cd ${BOX_DIR} && (nohup node mcp-standin.cjs --preset gitea --port ${port} --auth-port ${authPort} --public-host localhost --static-token ${STATIC_TOKEN}=canary --control >${name}.out 2>&1 &)\nfor i in $(seq 1 100); do [ -s ${BOX_DIR}/${name}.out ] && break; sleep 0.2; done`, { timeoutMs: 40_000 });
+  await box.sh(`cd ${BOX_DIR} && (nohup node mcp-standin.cjs --preset gitea --port ${port} --auth-port ${authPort} --public-host localhost --static-token ${STATIC_TOKEN}=canary --control >${name}.out 2>&1 &)\nfor i in $(seq 1 300); do [ -s ${BOX_DIR}/${name}.out ] && break; sleep 0.2; done`, { timeoutMs: 80_000 });
   const first = ((await box.read(`${BOX_DIR}/${name}.out`)) ?? '').split('\n')[0] ?? '';
   let ready: Record<string, unknown> = {};
   try {

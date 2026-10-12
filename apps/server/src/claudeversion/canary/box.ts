@@ -133,7 +133,7 @@ export class CanaryBox {
   /** Writes the stand-in script into the container and starts it (as the workspace user); resolves once it is listening. */
   async startStandIn(): Promise<void> {
     await this.put([this.dir(BOX_DIR), this.dir(STATE), this.file(`${BOX_DIR}/standin.cjs`, CANARY_STANDIN), this.file(`${STATE}/script.json`, '{}')]);
-    const r = await this.sh(`cd ${BOX_DIR} && (nohup node standin.cjs ${STATE} >standin.out 2>&1 &)\nfor i in $(seq 1 100); do [ -s ${STATE}/ready.json ] && break; sleep 0.2; done\ncat ${STATE}/ready.json`, { timeoutMs: 40_000 });
+    const r = await this.sh(`cd ${BOX_DIR} && (nohup node standin.cjs ${STATE} >standin.out 2>&1 &)\nfor i in $(seq 1 300); do [ -s ${STATE}/ready.json ] && break; sleep 0.2; done\ncat ${STATE}/ready.json`, { timeoutMs: 80_000 });
     let ready: { proxy?: string; http?: string; ca?: string };
     try {
       ready = JSON.parse(r.stdout.trim().split('\n').pop() ?? '') as typeof ready;

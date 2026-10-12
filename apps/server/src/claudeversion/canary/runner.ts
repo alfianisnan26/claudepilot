@@ -58,8 +58,8 @@ export async function runOne(check: CanaryCheck, ctx: CheckContext, limitMs = CH
     const outcome = await Promise.race([
       check.run(ctx),
       new Promise<never>((_, reject) => {
+        // Not unref'd: a check that hangs must still be ended by this timer even when nothing else keeps the process alive.
         timer = setTimeout(() => reject(new CheckFailed(`The check took longer than ${Math.round(limitMs / 1000)} s.`)), limitMs);
-        timer.unref();
       }),
     ]);
     return { id: check.def.id, status: outcome.status, durationMs: Date.now() - t0, summary: clipDetail(outcome.summary).slice(0, 300), detail: clipDetail(outcome.detail ?? '') };

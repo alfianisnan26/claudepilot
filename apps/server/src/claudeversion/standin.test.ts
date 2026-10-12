@@ -35,7 +35,8 @@ before(async () => {
   execFileSync('mkdir', ['-p', join(dir, 'state')]);
   writeFileSync(join(dir, 'state', 'script.json'), '{}');
   child = spawn(process.execPath, [join(dir, 'standin.cjs'), join(dir, 'state')], { stdio: 'ignore' });
-  for (let i = 0; i < 100 && !existsSync(join(dir, 'state', 'ready.json')); i++) await new Promise((r) => setTimeout(r, 100));
+  // Generating two RSA keys is slow on a loaded machine: wait up to a minute.
+  for (let i = 0; i < 600 && !existsSync(join(dir, 'state', 'ready.json')); i++) await new Promise((r) => setTimeout(r, 100));
   const ready = JSON.parse(readFileSync(join(dir, 'state', 'ready.json'), 'utf8')) as { proxy: string; http: string; ca: string };
   http = ready.http;
   ca = ready.ca;

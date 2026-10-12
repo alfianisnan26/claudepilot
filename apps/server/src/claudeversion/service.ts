@@ -72,7 +72,7 @@ export interface WorkspaceAccess {
   list(): Promise<Workspace[]>;
   runtimeFor(target: string): Runtime | undefined;
   runtimeList(): Runtime[];
-  recreate(target: string, name: string, image: string, progress: (detail: string) => void): Promise<{ from: string | null; to: string }>;
+  recreate(target: string, name: string, image: string, progress: (detail: string) => void, opts?: { label?: string }): Promise<{ from: string | null; to: string }>;
 }
 
 export interface ClaudeVersionsDeps {
@@ -96,6 +96,8 @@ export interface ClaudeVersionsDeps {
   runner?: (t: NonNullable<Runtime['throwaway']>, target: CanaryTarget, hooks: CanaryHooks) => Promise<CanaryOutcome>;
   /** How long after start the first scheduled canary waits. */
   scheduleDelayMs?: number;
+  /** How long to wait before reading the version after a recreate (tests shorten it). */
+  settleMs?: number;
 }
 
 const wsLabel = (w: { target: string; name: string }) => `${w.target}/${w.name}`;
@@ -112,6 +114,7 @@ export class ClaudeVersions {
   #canary: { id: number; cancel: boolean } | null = null;
   #timer: NodeJS.Timeout | undefined;
   #stopSettings: (() => void) | undefined;
+  #raising: Promise<void> = Promise.resolve();
   #building = new Set<string>();
 
   constructor(private readonly deps: ClaudeVersionsDeps) {
@@ -410,13 +413,16 @@ export class ClaudeVersions {
     }
   }
 
-  /** The newest finished canary on a version (any trigger), as an Apply reads it. */
+  /**
+   * The newest finished canary on a version's own IMAGE (any trigger), as an Apply reads it. A scratch run of the scheduled candidate check tests the
+   * same Claude Code but not the image an upgrade would put in a workspace, so it informs (the plan says what it found) and never clears an Apply.
+   */
   #canaryFor(version: string, runId?: number | null): ClaudeCanaryRun | null {
     if (runId) {
       const run = this.store.run(runId);
-      return run && run.version === version ? run : null;
+      return run && run.version === version && run.mode === 'image' ? run : null;
     }
-    return this.store.runs({ version, status: 'done', limit: 1 })[0] ?? null;
+    return this.store.runs({ version, status: 'done', limit: 20 }).find((r) => r.mode === 'image') ?? null;
   }
 
   async plan(workspaceId: string, version: string, actor: Actor): Promise<ClaudeUpgradePlan> {
@@ -434,8 +440,11 @@ export class ClaudeVersions {
     const run = this.#canaryFor(version);
     const failed = run ? run.results.filter((r) => r.status === 'fail').map((r) => r.id) : [];
     const stale = !!run && (run.suite !== CLAUDE_CANARY_SUITE || this.#now().getTime() - Date.parse(run.finishedAt ?? run.startedAt) > CANARY_FRESH_MS);
-    if (!run) blockers.push('Run the canary first.');
-    else if (run.status !== 'done') blockers.push('The canary has not finished.');
+    if (!run) {
+      blockers.push('Run the canary first.');
+      const scratch = this.store.runs({ version, status: 'done', limit: 20 }).find((r) => r.mode === 'scratch' && r.fail > 0);
+      if (scratch) blockers.push(`The scheduled canary found ${version} fails ${scratch.results.filter((r) => r.status === 'fail').map((r) => r.id).join(', ')}.`);
+    } else if (run.status !== 'done') blockers.push('The canary has not finished.');
     else if (stale) blockers.push('The canary result is old: run it again.');
     else if (failed.length) blockers.push(`The canary failed: ${failed.join(', ')}. Accept the failed items to go on.`);
     if (this.#ops.get(w.id)?.status === 'running') blockers.push('An upgrade is already running here.');
@@ -472,7 +481,7 @@ export class ClaudeVersions {
   }
 
   /** Recreates a workspace on `ref` and records it, in the background; `op` is what the page watches. */
-  #recreate(w: Workspace, op: ClaudeOperation, ref: string, wantVersion: string | null, extra: { kind: ClaudeVersionHistoryEntry['kind']; canaryRunId: number | null; canary: ClaudeVersionHistoryEntry['canary']; accepted: string[]; from: { ref: string; id: string | null; version: string | null }; actor: Actor }) {
+  #recreate(w: Workspace, op: ClaudeOperation, ref: string, wantVersion: string | null, extra: { label?: string; kind: ClaudeVersionHistoryEntry['kind']; canaryRunId: number | null; canary: ClaudeVersionHistoryEntry['canary']; accepted: string[]; from: { ref: string; id: string | null; version: string | null }; actor: Actor }) {
     const set = (detail: string) => {
       op.detail = detail;
       this.#notify();
@@ -493,24 +502,24 @@ export class ClaudeVersions {
           const version = claudeVersionOfImageRef(ref);
           if (version) await runtime.images.ensure(version, set);
         }
-        await this.deps.workspaces.recreate(w.target, w.name, ref, set);
+        await this.deps.workspaces.recreate(w.target, w.name, ref, set, extra.label ? { label: extra.label } : undefined);
         this.#direct.delete(w.id);
         this.#doctor.delete(w.id);
         set('Reading the version');
         void this.deps.reconciler.request(w.id, 'claude code changed').catch(() => undefined);
         let seen: string | null = null;
         for (let i = 0; i < 12 && !seen; i++) {
-          await new Promise((r) => setTimeout(r, i === 0 ? 800 : 1500).unref());
+          await new Promise((r) => setTimeout(r, this.deps.settleMs ?? (i === 0 ? 800 : 1500)).unref());
           seen = (await this.#readVersion((await this.#workspace(w.id).catch(() => w)) as Workspace, true)).version;
         }
         const note = wantVersion && seen && seen !== wantVersion ? `Recreated, but it reports ${seen}, not ${wantVersion}.` : null;
-        this.store.addHistory({ workspaceId: w.id, kind: extra.kind, fromVersion: extra.from.version, toVersion: wantVersion ?? seen, fromImage: extra.from.ref, fromImageId: extra.from.id, toImage: ref, canaryRunId: extra.canaryRunId, canary: extra.canary, accepted: extra.accepted, outcome: 'applied', detail: note, actor: who, createdBy: owner }, this.#now());
+        this.store.addHistory({ workspaceId: w.id, kind: extra.kind, fromVersion: extra.from.version, toVersion: wantVersion ?? seen, fromImage: extra.from.ref, fromImageId: extra.from.id, toImage: extra.label ?? ref, canaryRunId: extra.canaryRunId, canary: extra.canary, accepted: extra.accepted, outcome: 'applied', detail: note, actor: who, createdBy: owner }, this.#now());
         this.#audit(extra.kind, extra.actor, { workspaceId: w.id, version: wantVersion, detail: `${extra.from.ref} -> ${ref}`.slice(0, 300) }, 'medium');
         finish('done', note ?? `Now on ${seen ?? wantVersion ?? 'the new image'}`);
       } catch (e) {
         const message = e instanceof AppError ? e.message : clip(e);
         const restored = /back on|put back/.test(message);
-        this.store.addHistory({ workspaceId: w.id, kind: extra.kind, fromVersion: extra.from.version, toVersion: wantVersion, fromImage: extra.from.ref, fromImageId: extra.from.id, toImage: ref, canaryRunId: extra.canaryRunId, canary: extra.canary, accepted: extra.accepted, outcome: restored ? 'restored' : 'failed', detail: message.slice(0, 500), actor: who, createdBy: owner }, this.#now());
+        this.store.addHistory({ workspaceId: w.id, kind: extra.kind, fromVersion: extra.from.version, toVersion: wantVersion, fromImage: extra.from.ref, fromImageId: extra.from.id, toImage: extra.label ?? ref, canaryRunId: extra.canaryRunId, canary: extra.canary, accepted: extra.accepted, outcome: restored ? 'restored' : 'failed', detail: message.slice(0, 500), actor: who, createdBy: owner }, this.#now());
         this.#audit(`${extra.kind}_failed`, extra.actor, { workspaceId: w.id, version: wantVersion, detail: message.slice(0, 300) }, 'high');
         finish('failed', message);
       }
@@ -525,6 +534,8 @@ export class ClaudeVersions {
     if (this.#ops.get(w.id)?.status === 'running') throw new AppError('CONFLICT', 'An upgrade is already running here.');
     const ref = runtime.images.refFor(req.version);
     if (!(await runtime.images.inspect(ref))) throw new AppError('CONFLICT', `Build the image for ${req.version} first.`);
+    const from = await this.#current(w);
+    if (from.ref === ref) throw new AppError('CONFLICT', `It is already on ${req.version}.`);
     // Only a canary that passed (or whose failures were accepted by name) clears an Apply.
     const run = this.#canaryFor(req.version, req.canaryRunId);
     if (!run || run.status !== 'done') throw new AppError('CONFLICT', 'Run the canary on that version first.', { details: { canaryRunId: 'No finished canary for this version.' } });
@@ -535,8 +546,6 @@ export class ClaudeVersions {
       const s = this.#runningSessions(w.id, actor);
       throw new AppError('CONFIRMATION_REQUIRED', `Upgrading recreates ${wsLabel(w)}: ${s.shown.length + s.hidden} session(s) and ${await this.#terminalCount(w)} terminal(s) stop. Confirm to go on.`, { details: { confirm: 'Confirm first.' } });
     }
-    const from = await this.#current(w);
-    if (from.ref === ref) throw new AppError('CONFLICT', `It is already on ${req.version}.`);
     const op = this.#op(w, 'upgrade', from.version, req.version);
     this.#audit('upgrade_start', actor, { workspaceId: w.id, version: req.version, detail: `canary run ${run.id}` }, 'medium');
     const kind = from.version && from.version === req.version ? 'repin' : 'upgrade';
@@ -561,7 +570,7 @@ export class ClaudeVersions {
     if (runtime.images && !(await runtime.images.inspect(target)) && last.fromImageId && (await runtime.images.inspect(last.fromImageId))) target = last.fromImageId;
     const op = this.#op(w, 'rollback', from.version, last.fromVersion);
     this.#audit('rollback_start', actor, { workspaceId: w.id, version: last.fromVersion }, 'medium');
-    this.#recreate(w, op, target, last.fromVersion, { kind: 'rollback', canaryRunId: null, canary: 'none', accepted: [], from, actor });
+    this.#recreate(w, op, target, last.fromVersion, { label: last.fromImage, kind: 'rollback', canaryRunId: null, canary: 'none', accepted: [], from, actor });
     return { ...op };
   }
 
@@ -631,7 +640,7 @@ export class ClaudeVersions {
     const installed = this.defaultVersion();
     const installedRef = runtime.images!.refFor(installed);
     const unavailable = (version: string | null, image: string | null, mode: 'image' | 'scratch', note: string) => {
-      const id = this.store.startRun({ ...base, version, image, mode, status: 'unavailable', note });
+      const id = this.store.startRun({ ...base, version, image, mode, status: 'unavailable', note }, this.#now());
       this.store.saveRun(id, { finished: true }, this.#now());
       this.#notify();
       return this.store.run(id)!;
@@ -668,7 +677,7 @@ export class ClaudeVersions {
     if (mode === 'scratch' && !(await runtime.images!.inspect(image).catch(() => null)) && !build) return unavailable(version, image, mode, `Not run: the installed image ${image} is not built yet.`);
     if (!runtime.throwaway) return unavailable(version, image, mode, 'Not run: this target cannot start a throwaway container.');
 
-    const id = this.store.startRun({ ...base, version, image, mode, status: 'running', note: 'Queued' });
+    const id = this.store.startRun({ ...base, version, image, mode, status: 'running', note: 'Queued' }, this.#now());
     this.#canary = { id, cancel: false };
     this.#audit(opts.trigger === 'scheduled' ? 'canary_scheduled' : 'canary_start', opts.actor, { version, detail: `${req.subject} ${mode} run ${id}` });
     this.#notify();
@@ -707,8 +716,13 @@ export class ClaudeVersions {
     }
     this.#refreshTested();
     this.#audit('canary_finish', systemActor('claude-canary'), { detail: `run ${id}` });
-    void this.#raiseWarnings(subject).catch(() => undefined);
+    this.#raising = this.#raising.then(() => this.#raiseWarnings(subject)).catch(() => undefined);
     this.#notify();
+  }
+
+  /** Resolves once the warning pass of the last canary has run (tests wait on this instead of the clock). */
+  idle(): Promise<void> {
+    return this.#raising;
   }
 
   /** Warnings the runs call for: each told once (a sink is where a notification plugs in). */
@@ -849,7 +863,34 @@ export class ClaudeVersions {
     return out;
   }
 
+  /**
+   * Reads `claude --version` and `claude doctor` in running workspaces whose reading is old, a few per pass, so the list's flags (a different version,
+   * the updater on) fill in without anyone opening a page. One exec each, never a model call.
+   */
+  async refreshReadings(max = 5): Promise<number> {
+    let read = 0;
+    let changed = false;
+    for (const w of await this.deps.workspaces.list()) {
+      if (w.status !== 'running') continue;
+      const cached = this.#doctor.get(w.id);
+      if (cached && this.#now().getTime() - cached.at < DOCTOR_TTL_MS) continue;
+      if (read >= max) break;
+      read++;
+      const was = [this.#knownVersion(w.id).version, cached?.auto];
+      const version = (await this.#readVersion(w, false)).version;
+      const auto = await this.#readAutoUpdate(w, true);
+      if (version !== was[0] || auto !== was[1]) changed = true;
+    }
+    if (changed) this.#notify();
+    return read;
+  }
+
   async #tick(): Promise<void> {
+    try {
+      await this.refreshReadings();
+    } catch (e) {
+      console.error(`[claude-version] refreshing versions failed: ${(e as Error).message}`);
+    }
     try {
       if (this.due()) await this.runScheduled();
     } catch (e) {

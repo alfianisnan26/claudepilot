@@ -14,6 +14,8 @@ export const CANARY_ENV_ALLOWED = [
   'HTTPS_PROXY',
   /** Local MCP servers of a check are reached directly, never through the stand-in's proxy. */
   'NO_PROXY',
+  /** Only to show that the variable alone is not a substitute for the `--safe-mode` flag. */
+  'CLAUDE_CODE_SAFE_MODE',
   'NODE_EXTRA_CA_CERTS',
   /** Keep the CLI quiet: no telemetry, no error reports. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is never set: it stops the usage fetch. */
   'DISABLE_TELEMETRY',
