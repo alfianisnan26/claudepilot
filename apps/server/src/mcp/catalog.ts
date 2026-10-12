@@ -10,6 +10,7 @@ import type {
   McpProposalRequest,
   McpProposalResult,
   McpReviewState,
+  McpRiskFlag,
   McpSlot,
   McpVersionRequest,
   McpVersionSpec,
@@ -194,6 +195,29 @@ export class McpCatalog {
     const row = db?.prepare('SELECT * FROM mcp_catalog_versions WHERE id = ?').get(versionId) as VersionRow | undefined;
     const entry = row && (db!.prepare('SELECT * FROM mcp_catalog WHERE id = ?').get(row.entry_id) as EntryRow | undefined);
     return entry && row ? McpCatalog.parsed(entry, row) : null;
+  }
+
+  /** An entry by its key (keys are unique), or null: the built-in catalogue looks for what an earlier Add made. */
+  findByKey(key: string): EntryRow | null {
+    return (this.store.db?.prepare('SELECT * FROM mcp_catalog WHERE key = ?').get(key) as EntryRow | undefined) ?? null;
+  }
+
+  /** An entry's versions parsed, newest first, without the usage numbers `get` adds: for callers that compare definitions. */
+  versionsOf(entryId: string): CatalogVersion[] {
+    const db = this.store.db;
+    const entry = db?.prepare('SELECT * FROM mcp_catalog WHERE id = ?').get(entryId) as EntryRow | undefined;
+    if (!db || !entry) return [];
+    const rows = db.prepare('SELECT * FROM mcp_catalog_versions WHERE entry_id = ? ORDER BY created_at DESC, rowid DESC').all(entryId) as unknown as VersionRow[];
+    return rows.map((row) => McpCatalog.parsed(entry, row));
+  }
+
+  /**
+   * What a version of this kind would be, checked exactly as `create` and `addVersion` check it (parse, the URL rules, the
+   * SSRF guard) but stored nowhere: the built-in catalogue's preview, and the definitions it compares before adding a version.
+   */
+  async check(kind: McpEntryKind, spec: unknown, slots?: unknown): Promise<{ spec: McpVersionSpec; slots: McpSlot[]; flags: McpRiskFlag[] }> {
+    const parsed = await this.#spec(kind, spec);
+    return { spec: parsed, slots: parseSlots(kind, slots, parsed), flags: riskFlags(kind, parsed) };
   }
 
   /** The newest approved version of an entry, for "Upgrade available" (FR4). */

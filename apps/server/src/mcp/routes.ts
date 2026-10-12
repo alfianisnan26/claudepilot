@@ -5,7 +5,9 @@
 import { AppError, success } from '@isnanme/core';
 import type { McpApproveRequest, McpEntryRequest, McpEntryUpdate, McpRevokeRequest, McpTryRequest, McpVersionRequest } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
+import { createBuiltinRoutes } from './builtin/routes.js';
 import type { McpSets } from './index.js';
+import { createOAuthRoutes } from './oauth/routes.js';
 
 async function body<T>(c: Context): Promise<Partial<T>> {
   try {
@@ -49,10 +51,16 @@ export function createMcpRoutes(mcp: McpSets): Hono {
     return c.json(success(mcp.revoke(id(c), vid(c), reason)));
   });
 
+  // The built-in catalogue: templates, preview and Add (docs/prd/mcp-builtin-catalogue.md).
+  app.route('/builtin', createBuiltinRoutes(mcp.builtin));
+
   app.post('/sets/:poolId/try', async (c) => {
     const req = await body<McpTryRequest>(c);
     return c.json(success(mcp.tryInSet(c.req.param('poolId') ?? '', req.entry, req.version)));
   });
+
+  // OAuth servers: sign-in state and the guided sign-in (§13.3).
+  app.route('/', createOAuthRoutes(mcp.oauth));
 
   app.get('/workspaces/:target/:name', (c) => c.json(success(mcp.status(workspaceId(c)))));
   app.get('/workspaces/:target/:name/matchers', (c) => c.json(success(mcp.matchers(workspaceId(c)))));

@@ -169,6 +169,8 @@ interface InstallRow {
 export class McpJobs {
   /** Something a status page shows changed. */
   onChange: () => void = () => {};
+  /** The OAuth status check (§13.3), queued with the verify; set by McpSets. */
+  authSteps: (compiled: Compiled, now: Date) => WorkspaceStep[] = () => [];
 
   constructor(
     private readonly store: Store,
@@ -179,7 +181,7 @@ export class McpJobs {
   afterDelivery(compiled: Compiled, ctx: { now: Date; running: boolean }) {
     if (!ctx.running || !this.store.writable) return;
     const ws = compiled.workspaceId;
-    const steps: WorkspaceStep[] = [...this.#kills(compiled), ...this.#verify(compiled, ctx.now), ...this.#installs(compiled, ctx.now)];
+    const steps: WorkspaceStep[] = [...this.#kills(compiled), ...this.#verify(compiled, ctx.now), ...this.authSteps(compiled, ctx.now), ...this.#installs(compiled, ctx.now)];
     if (steps.length) this.steps.enqueue(ws, steps);
   }
 

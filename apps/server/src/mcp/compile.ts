@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { McpDeliveryState, McpMatcher, McpSetContent, McpSlot } from '@portal/contracts';
+import type { McpDeliveryState, McpMatcher, McpOAuthFields, McpSetContent, McpSlot } from '@portal/contracts';
 import { SECRET_FILE_REF } from '@portal/contracts';
 import { versionAtLeast } from '../delivery/compile.js';
 import { compilePlugin } from '../delivery/marketplace.js';
@@ -94,6 +94,21 @@ const json = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
 export const pluginName = (slug: string) => `cpm-${slug}`;
 export const denyRule = (plugin: string, key: string) => `mcp__plugin_${plugin}_${key}__*`;
 const and = (names: string[]) => (names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`);
+
+/**
+ * A version's OAuth fields as `.mcp.json` takes them (§13.3). `scopes` is ONE space-separated string there: given the
+ * catalog's list, Claude Code drops the whole server from the plugin without an error ✅ (2.1.296, B3 experiment).
+ * The other fields are written as they are, in the same order.
+ */
+export function mcpJsonOauth(oauth: McpOAuthFields): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(oauth)) {
+    if (k === 'scopes') {
+      if (Array.isArray(v) && v.length) out.scopes = v.join(' ');
+    } else if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
 
 /** A slot's value as parts: secrets by file name (or path), the rest as literal text. */
 function slotParts(slot: McpSlot, value: Part): Part[] {
@@ -196,7 +211,7 @@ export function compileMcp(input: CompileInput): CompileOutput {
         const headers = Object.fromEntries([...values].filter(([slot]) => slot.target === 'header').map(([slot, parts]) => [slot.name, parts]));
         const entry: Record<string, unknown> = { type: cv.spec.transport === 'sse' ? 'sse' : 'http', url };
         if (Object.keys(headers).length) entry.headersHelper = `${HEADERS_HELPER} ${id}`;
-        if (cv.spec.auth === 'oauth' && cv.spec.oauth) entry.oauth = cv.spec.oauth;
+        if (cv.spec.auth === 'oauth' && cv.spec.oauth) entry.oauth = mcpJsonOauth(cv.spec.oauth);
         mcpServers[s.key] = entry;
         maps.push([s.key, { url, headers }]);
         out(input.running ? 'delivered' : 'pending_start', null, { matcher: { serverUrl: url } });

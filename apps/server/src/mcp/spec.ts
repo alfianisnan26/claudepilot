@@ -2,7 +2,7 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { AppError } from '@isnanme/core';
 import type { McpAuthMode, McpEntryKind, McpOAuthFields, McpRiskFlag, McpSlot, McpTransport, McpVersionSpec } from '@portal/contracts';
-import { MCP_SERVER_KEY_MAX, MCP_SLUG_MAX } from '@portal/contracts';
+import { claudeFeature, claudeMinimum, MCP_SERVER_KEY_MAX, MCP_SLUG_MAX } from '@portal/contracts';
 import { embeddedIPv4, isPrivateAddress } from '../accounts/check.js';
 import { redact } from '../chat/redact.js';
 
@@ -12,9 +12,9 @@ import { redact } from '../chat/redact.js';
  */
 
 /** MCP sets need the foundation's minimum, where every ✅ claim was observed (FR14). */
-export const MCP_MIN_CLAUDE = '2.1.296';
+export const MCP_MIN_CLAUDE = claudeMinimum('mcp-sets');
 /** `claude plugin details` prints text only; its layout is known for the pinned version (FR16). */
-export const VERIFY_TESTED_CLAUDE = ['2.1.296'];
+export const VERIFY_TESTED_CLAUDE = claudeFeature('mcp-sets').observedOn;
 
 export const BIN_DIR = '/etc/claudepilot/bin';
 export const LAUNCHER = `${BIN_DIR}/mcp-launch`;

@@ -56,6 +56,8 @@ export class McpSetKind implements PoolKind<McpSetContent>, ReferenceSource {
   afterDelivery: (compiled: Compiled, ctx: { now: Date; running: boolean }) => void = () => {};
   /** A workspace still holds a revoked version folder the last compile didn't name: deliver again now. */
   redeliver: (workspaceId: string, why: string) => void = () => {};
+  /** The workspace is gone: what else keeps something for it lets go (the OAuth sign-in state, §13.3). */
+  onForget: (workspaceId: string) => void = () => {};
   readonly #compiled = new Map<string, Compiled>();
   /** Each workspace's portal plugin version folders, as the engine last reported them. */
   readonly #folders = new Map<string, Map<string, string[]>>();
@@ -309,6 +311,7 @@ export class McpSetKind implements PoolKind<McpSetContent>, ReferenceSource {
   }
 
   forgetWorkspace(workspaceId: string) {
+    this.onForget(workspaceId);
     this.#compiled.delete(workspaceId);
     this.#folders.delete(workspaceId);
     const db = this.store.db;

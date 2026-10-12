@@ -1,5 +1,6 @@
 import { AppError } from '@isnanme/core';
 import type {
+  McpBuiltinTemplate,
   McpCatalogVersion,
   McpDeliveryState,
   McpMatcher,
@@ -19,9 +20,14 @@ import type { References } from '../pools/references.js';
 import type { PoolService } from '../pools/service.js';
 import type { Store } from '../store/store.js';
 import type { DeliveryAccess } from '../workspaces/runtime.js';
+import { McpBuiltin } from './builtin/instantiate.js';
+import { BuiltinRegistry } from './builtin/registry.js';
+import { BUILTIN_TEMPLATES } from './builtin/templates.js';
 import { McpCatalog } from './catalog.js';
 import { McpJobs } from './jobs.js';
 import { McpSetKind, namesIn } from './kind.js';
+import { McpOAuth } from './oauth/service.js';
+import type { OAuthServer } from './oauth/status.js';
 
 /** FR11: more stdio servers than this start in every session, so the status warns. */
 const STDIO_WARN = 8;
@@ -46,21 +52,34 @@ interface DeliveryRow {
  */
 export class McpSets {
   readonly catalog: McpCatalog;
+  /** The built-in catalogue (mcp-builtin-catalogue PRD): code-defined templates that Add turns into entries and a set. */
+  readonly builtin: McpBuiltin;
   readonly kind: McpSetKind;
   readonly jobs: McpJobs;
   readonly steps: WorkspaceSteps;
+  /** Each OAuth server's sign-in state and the guided sign-in (§13.3, M2): Claude Code in the workspace holds the tokens. */
+  readonly oauth: McpOAuth;
 
   constructor(
     private readonly store: Store,
     private readonly pools: PoolService,
     private readonly references: References,
     access: (target: string) => DeliveryAccess | undefined,
-    opts: { resolveDns?: boolean; steps?: WorkspaceSteps } = {},
+    opts: { resolveDns?: boolean; steps?: WorkspaceSteps; templates?: readonly McpBuiltinTemplate[] } = {},
   ) {
     this.catalog = new McpCatalog(store, { urlCheck: () => ({ portalUrl: process.env.PORTAL_PUBLIC_URL?.trim() || null }), resolveDns: opts.resolveDns });
     this.kind = new McpSetKind(store, this.catalog, pools, references);
+    this.builtin = new McpBuiltin({ store, catalog: this.catalog, pools, registry: new BuiltinRegistry(opts.templates ?? BUILTIN_TEMPLATES) });
     this.steps = opts.steps ?? new WorkspaceSteps(store, access);
     this.jobs = new McpJobs(store, this.steps);
+    this.oauth = new McpOAuth({
+      servers: (ws) => this.oauthServers(ws),
+      access,
+      audit: (type, workspaceId, details) => this.catalog.event(type, { workspaceId }, details),
+      onChange: () => pools.onChange(),
+    });
+    this.jobs.authSteps = (compiled, now) => this.oauth.steps(compiled, now);
+    this.kind.onForget = (ws) => this.oauth.forget(ws);
     this.catalog.usage = () => this.kind.usage();
     this.catalog.versionUse = (id) => this.kind.workspacesWith(id).length;
     this.catalog.onChange = () => pools.onChange();
@@ -176,6 +195,21 @@ export class McpSets {
     void this.pools.reconciler?.request(workspaceId, what === 'installs' ? 'retry mcp installs' : 'verify mcp sets');
   }
 
+  /** The OAuth servers delivered to a workspace (§13.3): the ones whose sign-in state is tracked. */
+  oauthServers(workspaceId: string): OAuthServer[] {
+    const db = this.store.db;
+    if (!db) return [];
+    const rows = db
+      .prepare("SELECT plugin, server_key, version_id FROM mcp_delivery WHERE workspace_id = ? AND state IN ('delivered', 'pending_start') ORDER BY plugin, server_key")
+      .all(workspaceId) as { plugin: string; server_key: string; version_id: string | null }[];
+    const out: OAuthServer[] = [];
+    for (const r of rows) {
+      const cv = r.version_id ? this.catalog.findById(r.version_id) : null;
+      if (cv?.spec.auth === 'oauth') out.push({ plugin: r.plugin, key: r.server_key, name: cv.entry.display_name });
+    }
+    return out;
+  }
+
   /** The MCP part of the workspace's Configuration row (FR17): each server's state, installs, the verify, missing names. */
   status(workspaceId: string): McpWorkspaceStatus {
     const db = this.store.db;
@@ -219,6 +253,7 @@ export class McpSets {
         reason: r.reason ?? (delivered && failure ? `Last start failed: ${failure.replace(/_/g, ' ')}.` : null),
         install: install ? { state: install.state, error: install.error, at: install.updated_at } : null,
         listed: delivered ? listed : null,
+        auth: delivered && cv?.spec.auth === 'oauth' ? this.oauth.status.get(workspaceId, '', { plugin: r.plugin, key: r.server_key }) : null,
         updatedAt: r.updated_at,
       };
     });
