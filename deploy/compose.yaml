@@ -16,6 +16,9 @@ services:
       PORTAL_TRUST_PROXY: "true"
       PORTAL_DOCKER_SOCKET: /var/run/docker.sock
       PORTAL_K8S_ENABLED: "false"
+      # Connect (agents that dial out to this portal) stays OFF in production until its acceptance and abuse suite has run
+      # (docs/open-items.md). Remove this line to turn it on.
+      PORTAL_CONNECT_ENABLED: "false"
     volumes:
       - portal-data:/data
       - portal-secrets:/secrets

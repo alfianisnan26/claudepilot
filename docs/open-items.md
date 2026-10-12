@@ -32,7 +32,7 @@ The multi-agent round was stopped on purpose: the account quota ran out (the age
 | Notifications web (N2) | service worker push, subscriptions, preferences in progress | finish against the real routes, Bell unread count, action authentication check, real-device checklist |
 | Triggers (N3) | cron, webhook receiver (`/hooks/:token`), providers, limits, run history; module registered in `platform/index.ts` | scratch-portal verification, UI, abuse tests, unwired parts (see its status block) |
 | Auto transfer (N4) | server landed (routes, migration 220, settings `automove.*`, tool; off by default) | web half is on the WIP branch (suggestion card, divider mark, undo, settings; one test type error in `pure.test.ts` line 15) |
-| Multi-user W1 (MU1, MU2) | on the WIP branch: identity pieces (passwords, throttle, sessions, devices, users) and the evaluator/policy files | restore from the branch, finish per `docs/coord/p5-workbreakdown.md` (MU1, MU2). The first multi-user release changes sign-in: the owner must hold the setup token and approve it |
+| Multi-user W1 (MU1, MU2) | on the WIP branch: identity pieces (passwords, throttle, sessions, devices, users) and the evaluator/policy files. MU1's edits to `platform/audit.ts` and `platform/routes.ts` (the audit columns `outcome`, `ip`, `protected` of migration 401, and the `actor`/`outcome` filters) were reverted on `integration` because migration 401 is not released: re-apply with `git diff c887bef 7f4efdd -- apps/server/src/platform/audit.ts apps/server/src/platform/routes.ts \| git apply` together with the migration | restore from the branch, finish per `docs/coord/p5-workbreakdown.md` (MU1, MU2). The first multi-user release changes sign-in: the owner must hold the setup token and approve it |
 | Planners P3 (evidence/annotations/code viewer), P4 (ops), P7 (data placement audit), P9 (MCP both ways and gateway) | partial or no output: P4 and P9 died on the limit almost at once, P3 and P7 were stopped | start again from their prompts; check `docs/prd/` for what landed |
 
 ## 4. Not started (queue, in the order intended)
@@ -59,7 +59,13 @@ Each has a recommended default in its PRD; agents used the default and said so.
 - Incidents disclosed during the round: two scratch portals saw the real kubeconfig for a short time (read-only listing, nothing created); one scratch portal inherited the owner's Claude profile (profile file rewritten by Claude Code, backup kept); a Docker pull briefly started on the Mac host Docker (killed); one early test run may have sent test data to a public address (no credentials).
 - Commits are unsigned (no GPG key in the sandbox).
 
-## 7. Housekeeping
+## 7. Release notes of this stop (2026-10-12)
+
+- The release gate on a clean copy caught a real defect before deploy: platform audit code expected columns from the unreleased identity migration (two tests failed with "no such column: outcome"). The audit files were restored to their pre-identity version; both tests pass.
+- Connect (agents that dial out) is switched OFF in the production compose file (`PORTAL_CONNECT_ENABLED: "false"`): its acceptance and abuse suite (T6) has not run. Remove the line after T6 passes.
+- Not part of this deploy: the workspace image (`images/workspace`, Claude Code pin and `cp-session`): rebuild it from the portal when convenient; the running `test` workspace has Claude Code 2.1.296, which the new usage probe (`--safe-mode`, needs 2.1.169 or newer) accepts.
+
+## 8. Housekeeping
 
 - Scratch dirs and prefixes in `/tmp` from the round (`cx*`, `n1-n4`, `bt*`, `vc*`, `ua*`, `ub*`, `gt*`, `gu*`, `pc*`, `mu*`, `cp-qa-boot-*`, `cp-fake-claude-*`) can be deleted; containers from agents live only in the sandbox's own Docker.
 - The owner's dev portal (tmux `portal`, `npm run dev`) was paused during the round so no half-finished migration touched `.data`. When it is started again it migrates `.data` forward with an automatic pre-migrate backup.
