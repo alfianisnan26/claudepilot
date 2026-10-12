@@ -43,7 +43,7 @@ export function ThisDevice({ overview }: { overview: NotifyOverview }) {
           <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface-2 text-ink-soft">
             <Smartphone className="size-5" aria-hidden="true" />
           </span>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 basis-48">
             <div className="flex items-center gap-2 font-semibold">
               <span className="min-w-0"><ClampedText>{push.device?.name ?? 'This browser'}</ClampedText></span>
               <Badge tone={TONE[push.support]} className="shrink-0">{text.label}</Badge>

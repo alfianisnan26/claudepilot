@@ -55,7 +55,7 @@ export function ClampedText({ children, lines = 1, className }: { children: stri
         onBlur={() => setOpen(false)}
         onMouseEnter={() => cut && setOpen(true)}
         onMouseLeave={() => setOpen(false)}
-        className={cn('block min-w-0 [overflow-wrap:anywhere]', clamp, cut && 'rounded focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none', className)}
+        className={cn('block min-w-0 [overflow-wrap:break-word]', clamp, cut && 'rounded focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none', className)}
       >
         {children}
       </span>
