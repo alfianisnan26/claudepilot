@@ -1,7 +1,9 @@
 import { useToast } from '@isnanme/ui';
 import {
   CHAT_SOCKET_PATH,
+  type BtwClientMessage,
   type ChatAttachment,
+  type ChatBtw,
   type ChatClientMessage,
   type ChatControl,
   type ChatEvent,
@@ -9,6 +11,7 @@ import {
   type ChatInputState,
   type ChatRespond,
   type ChatSend,
+  type BtwServerMessage,
   type ChatServerMessage,
   type ChatSession,
   type ChatSubscribe,
@@ -16,6 +19,7 @@ import {
 } from '@portal/contracts';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { chatApi } from './api';
+import { foldBtw, refusedBtw, type BtwState } from './btw/state';
 import { createDeltaBatcher, foldDelta } from './motion/deltas';
 
 /** The live partial assistant text for the open block, before it's stored as an event. */
@@ -77,6 +81,15 @@ export interface ChatSessionApi {
    * socket is down or drops first.
    */
   send: (text: string, opts?: ChatSendOptions) => Promise<void>;
+  /** The side question card (btw): the newest one, null when none is open. */
+  btw: ChatBtw | null;
+  /** Asks one; the card shows at once and fills as the portal streams. */
+  btwAsk: (question: string) => void;
+  btwCancel: () => void;
+  /** Closes the card (stops it when still running). */
+  btwClose: () => void;
+  /** Pins the answered card to the transcript; rejects with the portal's reason. */
+  btwPin: () => Promise<void>;
   respond: (requestId: string, decision: 'allow' | 'allow_session' | 'deny', note?: string) => void;
   /** Sends a control op. Settles on its ack, so a picker can show "Unable to validate model" where it was used. */
   control: (op: ChatControlOp, args?: ChatControlArgs) => Promise<void>;
@@ -125,6 +138,13 @@ export function useChatSession(sessionId: string): ChatSessionApi {
   const [inputs, setInputs] = useState<Map<string, ChatInputState>>(() => new Map());
   const [outbox, setOutbox] = useState<ChatOutgoing[]>([]);
   const [tasks, setTasks] = useState<ChatTask[]>([]);
+  const [btwState, setBtwState] = useState<BtwState>(null);
+  /** Ids of the btw asks this tab made: a refusing `ack` is keyed by one of them. */
+  const btwAsked = useRef(new Map<string, { id: string; session: string; question: string; askedAt: string }>());
+  const btwRef = useRef<ChatBtw | null>(null);
+  btwRef.current = btwState?.item ?? null;
+  /** A btw_delta applied once per frame (the same reason as the main deltas). */
+  const btwPending = useRef<{ msgs: BtwServerMessage[]; frame: number }>({ msgs: [], frame: 0 });
 
   const wsRef = useRef<WebSocket | null>(null);
   const seqRef = useRef(0);
@@ -144,6 +164,8 @@ export function useChatSession(sessionId: string): ChatSessionApi {
     setInputs(new Map());
     setOutbox([]);
     setTasks([]);
+    setBtwState(null);
+    btwAsked.current.clear();
     const waiters = new Map<string, Waiter>();
     waitersRef.current = waiters;
     // Deltas are applied once per frame, not once per message (each one re-renders the whole page).
@@ -226,6 +248,14 @@ export function useChatSession(sessionId: string): ChatSessionApi {
       ws.send(JSON.stringify(msg));
     };
 
+    const flushBtw = () => {
+      const q = btwPending.current;
+      cancelAnimationFrame(q.frame);
+      q.frame = 0;
+      const msgs = q.msgs.splice(0);
+      if (msgs.length) setBtwState((s) => msgs.reduce<BtwState>((acc, m) => foldBtw(acc, m), s));
+    };
+
     const handle = (msg: ChatServerMessage) => {
       switch (msg.type) {
         case 'events':
@@ -250,7 +280,27 @@ export function useChatSession(sessionId: string): ChatSessionApi {
             setTasks(msg.tasks);
           }
           break;
+        case 'btw':
+          if (msg.session === sessionId) {
+            flushBtw();
+            setBtwState((s) => foldBtw(s, msg));
+          }
+          break;
+        case 'btw_delta':
+          if (msg.session === sessionId) {
+            const q = btwPending.current;
+            q.msgs.push(msg);
+            if (!q.frame) q.frame = requestAnimationFrame(flushBtw);
+          }
+          break;
         case 'ack': {
+          const asked = btwAsked.current.get(msg.uuid);
+          if (asked && !msg.ok) {
+            flushBtw();
+            setBtwState((s) => (s && s.item.id !== asked.id ? s : { item: refusedBtw(asked, msg.code, msg.error), seq: 0 }));
+            break;
+          }
+          if (asked) break;
           const w = waiters.get(msg.uuid);
           if (w) {
             settle(msg.uuid, w, msg.ok, msg.error, msg.code);
@@ -306,6 +356,8 @@ export function useChatSession(sessionId: string): ChatSessionApi {
     return () => {
       closed = true;
       deltas.cancel();
+      cancelAnimationFrame(btwPending.current.frame);
+      btwPending.current = { msgs: [], frame: 0 };
       window.clearTimeout(timer);
       // Leaving: nobody is left to tell, so waiters are just forgotten.
       for (const w of waiters.values()) window.clearTimeout(w.timer);
@@ -369,11 +421,51 @@ export function useChatSession(sessionId: string): ChatSessionApi {
     },
     [sessionId, sendMessage],
   );
+  const sendBtw = useCallback((msg: BtwClientMessage) => sendMessage(msg), [sendMessage]);
+  const btwAsk = useCallback(
+    (question: string) => {
+      const q = question.trim();
+      if (!q) return;
+      const prev = btwRef.current;
+      if (prev) sendBtw({ type: 'btw_close', session: sessionId, btw: prev.id });
+      const base = { id: crypto.randomUUID(), session: sessionId, question: q, askedAt: new Date().toISOString() };
+      btwAsked.current.set(base.id, base);
+      if (wsRef.current?.readyState !== WebSocket.OPEN) {
+        setBtwState({ item: { ...base, status: 'failed', answer: '', reason: 'workspace', note: NOT_CONNECTED }, seq: 0 });
+        return;
+      }
+      setBtwState({ item: { ...base, status: 'running', answer: '' }, seq: 0 });
+      sendBtw({ type: 'btw_ask', session: sessionId, btw: base.id, question: q });
+    },
+    [sessionId, sendBtw],
+  );
+  const btwCancel = useCallback(() => {
+    const b = btwRef.current;
+    if (b) sendBtw({ type: 'btw_cancel', session: sessionId, btw: b.id });
+  }, [sessionId, sendBtw]);
+  const btwClose = useCallback(() => {
+    const b = btwRef.current;
+    if (b) sendBtw({ type: 'btw_close', session: sessionId, btw: b.id });
+    setBtwState(null);
+  }, [sessionId, sendBtw]);
+  const btwPin = useCallback(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const b = btwRef.current;
+        const ws = wsRef.current;
+        if (!b) return resolve();
+        if (ws?.readyState !== WebSocket.OPEN) return reject(new Error(NOT_CONNECTED));
+        const uuid = crypto.randomUUID();
+        waitersRef.current.set(uuid, { kind: 'control', resolve, reject });
+        ws.send(JSON.stringify({ type: 'btw_pin', session: sessionId, btw: b.id, uuid } satisfies BtwClientMessage));
+      }),
+    [sessionId],
+  );
   const fail = useCallback((e: unknown) => toastRef.current(e instanceof Error ? e.message : 'That didn’t go through.', 'error'), []);
   const stop = useCallback(() => void control('stop').catch(fail), [control, fail]);
   const end = useCallback(() => void control('end').catch(fail), [control, fail]);
 
-  return { connected, events, delta, session, removed, inputs, outbox, tasks, send, respond, control, stop, end };
+  return { connected, events, delta, session, removed, inputs, outbox, tasks, btw: btwState?.item ?? null, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end };
 }
 
 export interface ChatListApi {

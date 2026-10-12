@@ -5,6 +5,7 @@ import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
+import { PinnedBtw } from './btw/PinnedBtw';
 import { ActivityBlock } from './Activity';
 import { chatApi } from './api';
 import { ArtifactBlock, FileChips } from './artifacts/ArtifactCards';
@@ -223,7 +224,7 @@ export function Transcript({
       const e = r.event;
       if (e.kind === 'assistant') return !!e.agentLabel || !finals.has(e.seq);
       // What stands for a move stays where it is, in the open.
-      if (e.kind === 'system' && (e.transfer || moves.has(e.seq))) return false;
+      if (e.kind === 'system' && (e.transfer || e.btw || moves.has(e.seq))) return false;
       return e.kind === 'system' || e.kind === 'retry' || e.kind === 'resolved';
     };
     // "Ready" (the process started) says nothing a reader needs, except in Show all details.
@@ -505,6 +506,7 @@ function EventRow({ event: e, ctx }: { event: ChatEvent; ctx: RowContext }) {
     case 'system': {
       const move = ctx.moves.get(e.seq);
       if (move) return <MoveRow move={move} />;
+      if (e.btw) return <PinnedBtw btw={e.btw} />;
       return e.transfer ? <TransferMarker event={e} /> : <CenterLine>{e.text}</CenterLine>;
     }
     case 'retry':

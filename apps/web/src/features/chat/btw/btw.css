@@ -1,0 +1,21 @@
+/* The btw card's entrances: opacity and transform only, about 180 ms, and none at all with reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes btw-rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+  }
+  @keyframes btw-sheet {
+    from {
+      opacity: 0.4;
+      transform: translateY(100%);
+    }
+  }
+  .btw-rise {
+    animation: btw-rise 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .btw-sheet {
+    animation: btw-sheet 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+}

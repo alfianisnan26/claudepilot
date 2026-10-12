@@ -1,8 +1,9 @@
 import { cn, useMediaQuery, useToast } from '@isnanme/ui';
 import type { ChatFile, ChatUpload } from '@portal/contracts';
-import { ArrowUp, ChevronUp, Plus, Square, Upload } from 'lucide-react';
+import { ArrowUp, ChevronUp, MessageCircleQuestionMark, Plus, Square, Upload } from 'lucide-react';
 import {
   useEffect,
+  useId,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
@@ -15,12 +16,15 @@ import {
 import { AttachmentTile } from './artifacts/AttachmentTile';
 import { fileUrl } from './artifacts/contentApi';
 import { useAttachments } from './artifacts/useAttachments';
+import { parseSlash, slashMatches } from './btw/slash';
 import { isTrustDeclined } from './TrustSheet';
 import type { ChatSendOptions } from './useChatSocket';
 
 export interface ComposerHandle {
   /** Puts text back in the box (a withdrawn message), unless something is already being written there. */
   restore: (text: string) => void;
+  /** Puts the caret back in the box (the btw card closed). */
+  focus: () => void;
 }
 
 const hasFiles = (e: { dataTransfer: DataTransfer | null }) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
@@ -57,6 +61,8 @@ export function Composer({
   working,
   onStop,
   accessory,
+  onBtw,
+  btwBusy,
 }: {
   ref?: Ref<ComposerHandle>;
   /** The chat the files are uploaded to. */
@@ -68,6 +74,10 @@ export function Composer({
   onStop?: () => void;
   /** The session's controls (model and effort, mode, context), in the row under the text. */
   accessory?: ReactNode;
+  /** Asks a side question (btw): `/btw <question>` or the button. Absent: no btw here. */
+  onBtw?: (question: string) => void;
+  /** One is still running: another can't start. */
+  btwBusy?: boolean;
 }) {
   const toast = useToast();
   const [text, setText] = useState('');
@@ -80,7 +90,40 @@ export function Composer({
   const add = useRef(att.add);
   add.current = att.add;
 
-  useImperativeHandle(ref, () => ({ restore: (value: string) => setText((t) => (t.trim() ? t : value)) }), []);
+  useImperativeHandle(ref, () => ({ restore: (value: string) => setText((t) => (t.trim() ? t : value)), focus: () => box.current?.focus() }), []);
+
+  // Slash commands: typing "/" suggests them; Enter or Tab completes the highlighted one. Escape hides the list until the text changes.
+  const matches = onBtw ? slashMatches(text) : [];
+  const [pick, setPick] = useState(0);
+  const [hidden, setHidden] = useState(false);
+  const listOpen = matches.length > 0 && !hidden;
+  const listId = useId();
+  useEffect(() => {
+    setHidden(false);
+    setPick(0);
+  }, [text]);
+  const complete = (name: string) => {
+    setText(`/${name} `);
+    requestAnimationFrame(() => box.current?.focus());
+  };
+  /** The button: asks what is written, or starts the command when the box is empty. */
+  const askBtw = () => {
+    if (!onBtw) return;
+    const t = text.trim();
+    const q = parseSlash(t)?.name === 'btw' ? parseSlash(t)!.rest : t;
+    if (!q) {
+      setText('/btw ');
+      box.current?.focus();
+      return;
+    }
+    runBtw(q);
+  };
+  const runBtw = (q: string) => {
+    if (btwBusy) return toast('One side question at a time.', 'error');
+    if (!connected) return;
+    onBtw?.(q);
+    setText('');
+  };
 
   // Grow to fit the text, up to about a third of the screen, then scroll inside.
   useLayoutEffect(() => {
@@ -132,6 +175,11 @@ export function Composer({
   const canSend = connected && !att.busy && !failed && (text.trim().length > 0 || ready > 0);
 
   const submit = (priority?: 'next' | 'later') => {
+    const cmd = onBtw ? parseSlash(text) : null;
+    if (cmd?.name === 'btw') {
+      if (cmd.rest) runBtw(cmd.rest);
+      return;
+    }
     if (!canSend) return;
     const draft = { text, uploads: att.take() };
     setText('');
@@ -146,6 +194,23 @@ export function Composer({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (listOpen && !e.nativeEvent.isComposing) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setPick((i) => (i + (e.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        complete(matches[pick]!.name);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setHidden(true);
+        return;
+      }
+    }
     if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
     if (e.altKey) {
       e.preventDefault();
@@ -169,6 +234,26 @@ export function Composer({
 
   return (
     <div className="relative">
+      {listOpen && (
+        <ul id={listId} role="listbox" aria-label="Commands" className="absolute right-0 bottom-full left-0 z-40 mb-2 max-w-xs rounded-2xl border border-line bg-surface p-1.5 shadow-lift">
+          {matches.map((c, i) => (
+            <li
+              key={c.name}
+              id={`${listId}-${i}`}
+              role="option"
+              aria-selected={i === pick}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                complete(c.name);
+              }}
+              className={cn('flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm', i === pick && 'bg-surface-2')}
+            >
+              <span className="font-semibold text-ink">/{c.name}</span>
+              <span className="min-w-0 truncate text-[12px] text-muted">{c.hint}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="glass-card rounded-[28px]">
         {att.items.length > 0 && (
           <ul aria-label="Attachments" className="no-scrollbar flex gap-2 overflow-x-auto px-3.5 pt-3.5 pb-0.5">
@@ -185,6 +270,7 @@ export function Composer({
           onKeyDown={onKeyDown}
           onPaste={onPaste}
           aria-label="Message"
+          {...(listOpen ? { role: 'combobox', 'aria-expanded': true, 'aria-controls': listId, 'aria-activedescendant': `${listId}-${pick}`, 'aria-autocomplete': 'list' as const } : {})}
           placeholder={working ? 'Steer Claude…' : 'Message Claude…'}
           className="block min-h-[52px] w-full resize-none bg-transparent px-[18px] pt-[15px] pb-1 text-[16.5px] leading-[1.45] text-ink outline-none placeholder:text-muted sm:text-[15.5px]"
         />
@@ -203,6 +289,20 @@ export function Composer({
             }}
           />
           <div className="flex min-w-0 flex-1 items-center">{accessory}</div>
+          {onBtw && (
+            <button
+              type="button"
+              data-guide="btw"
+              aria-label="Ask btw"
+              title={btwBusy ? 'One side question at a time' : 'btw'}
+              disabled={!connected || btwBusy}
+              onClick={askBtw}
+              className={cn(ROUND, GHOST, 'lg:w-auto lg:gap-1.5 lg:px-3.5')}
+            >
+              <MessageCircleQuestionMark className="size-5" aria-hidden="true" />
+              <span className="hidden text-[13.5px] font-semibold lg:inline">btw</span>
+            </button>
+          )}
           {working && canSend ? (
             <SteerButton canSend={canSend} connected={connected} showKeys={!touch} onSend={submit} onStop={onStop} />
           ) : working && onStop ? (

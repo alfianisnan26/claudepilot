@@ -4,7 +4,7 @@ import { CircleAlert } from 'lucide-react';
 import { useCallback, useEffect, useId, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
-import { ClaudeHeadroom } from '@/features/usage/claude';
+import { ClaudeHeadroom, NoRecommendation, RecommendedMark, recommendedId, useMoveAdvice } from '@/features/usage/claude';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { HOME } from './shared';
@@ -47,8 +47,11 @@ export function SwitchDialog({
   const [info, setInfo] = useState<ChatSwitchOptions | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [pick, setPick] = useState('');
+  const [touched, setTouched] = useState(false);
   const [ask, setAsk] = useState(true);
   const id = session?.id ?? null;
+  // The Claude the portal recommends (what each has left, when it resets): the default choice until the person picks, marked in the list.
+  const advice = useMoveAdvice(session?.workspaceId ?? null, session?.claudeId || null, open);
 
   useEffect(() => {
     if (!open || !id) return;
@@ -56,6 +59,7 @@ export function SwitchDialog({
     setInfo(null);
     setFailed(null);
     setPick('');
+    setTouched(false);
     setAsk(true);
     chatApi.switchOptions(id).then(
       (r) => {
@@ -69,6 +73,11 @@ export function SwitchDialog({
       current = false;
     };
   }, [open, id]);
+
+  useEffect(() => {
+    const rec = recommendedId(advice);
+    if (!touched && rec && info?.options.some((o) => o.ok && o.claude.id === rec)) setPick(rec);
+  }, [advice, info, touched]);
 
   const from = session?.claudeName ?? 'this Claude';
   const warning = info && droppedLine(info);
@@ -112,9 +121,16 @@ export function SwitchDialog({
           <fieldset className="flex flex-col gap-2">
             <legend className="sr-only">Move to</legend>
             {info.options.map((o) => (
-              <OptionRow key={o.claude.id} option={o} selected={pick === o.claude.id} onPick={() => setPick(o.claude.id)} />
+              <OptionRow
+                key={o.claude.id}
+                option={o}
+                selected={pick === o.claude.id}
+                onPick={() => (setTouched(true), setPick(o.claude.id))}
+                mark={<RecommendedMark advice={advice} claudeId={o.claude.id} />}
+              />
             ))}
           </fieldset>
+          <NoRecommendation advice={advice} />
           <SwitchRow
             className="rounded-none py-0"
             label={
@@ -144,7 +160,7 @@ export function SwitchDialog({
 }
 
 /** One Claude as a radio row: ready, or why it can't take the chat now, with the way out in a note. */
-function OptionRow({ option: o, selected, onPick }: { option: ChatSwitchOption; selected: boolean; onPick: () => void }) {
+function OptionRow({ option: o, selected, onPick, mark }: { option: ChatSwitchOption; selected: boolean; onPick: () => void; mark?: ReactNode }) {
   const id = useId();
   const fix: ReactNode =
     o.fix === 'sign_in' ? (
@@ -169,6 +185,7 @@ function OptionRow({ option: o, selected, onPick }: { option: ChatSwitchOption; 
           {/* What the destination has left, so a chat isn't moved onto a Claude that is nearly out. */}
           {o.ok && <ClaudeHeadroom claudeId={o.claude.id} className="mt-0.5" />}
         </span>
+        {o.ok && mark}
       </label>
       {!o.ok && (
         <>

@@ -10,10 +10,11 @@ import {
   type ListRow,
 } from '@portal/contracts';
 import { CircleAlert, Plus, MessagesSquare } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Card } from '@/components/Card';
 import { PageHeader } from '@/components/PageHeader';
+import { GlanceStrip } from '@/features/glance/Strip';
 import { usePersonaIdentities } from '@/features/personas/identities';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
@@ -53,6 +54,15 @@ export function SessionsPage() {
   const { factOf, loaded: workspacesLoaded } = useWorkspaceFacts();
   const personas = usePersonaIdentities();
   const [creating, setCreating] = useState(false);
+  // `?new=1` opens the New session dialog (the app's "New session" shortcut and the glance Shortcuts widget link to it).
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    if (params.get('new') !== '1') return;
+    setCreating(true);
+    const next = new URLSearchParams(params);
+    next.delete('new');
+    setParams(next, { replace: true });
+  }, [params, setParams]);
   const [view, setView] = useState<ViewState>(() => ({ ...savedView(), filter: 'all', query: '', archived: false }));
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
@@ -173,6 +183,8 @@ export function SessionsPage() {
           )
         }
       />
+
+      <GlanceStrip placement="list" labelled className="-mt-3 mb-4 flex-wrap" />
 
       {failed && !sessions && <LoadError onRetry={reload} />}
       {!sessions && !failed && <RowsSkeleton rows={3} lines={1} trailing icon="rounded-2xl" />}

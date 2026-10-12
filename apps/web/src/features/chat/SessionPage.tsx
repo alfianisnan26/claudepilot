@@ -1,9 +1,10 @@
 import { Badge, cn, ConfirmDialog, Menu, Spinner, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
 import type { ChatRequest, ChatSession } from '@portal/contracts';
-import { Archive, ArchiveRestore, ArrowLeft, Bot, CircleStop, FolderOpen, Gauge, GitBranch, ListCollapse, ListTree, MoreHorizontal, Pencil, ShieldAlert, Trash2, X } from 'lucide-react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Archive, ArchiveRestore, ArrowLeft, Bell, BellOff, Bot, CircleStop, FolderOpen, Gauge, GitBranch, ListCollapse, ListTree, MoreHorizontal, Pencil, PanelRight, PanelRightClose, ShieldAlert, Trash2, X } from 'lucide-react';
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { BRAND_NAME } from '@/components/Logo';
+import { useNotifyWhenDone } from '@/features/notify/sessionFlag';
 import { usePersonaOf } from '@/features/personas/identities';
 import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
 import { TicketChip } from '@/features/tickets/TicketChip';
@@ -12,7 +13,13 @@ import { errorText } from '@/lib/api';
 import { pinnedToViewport, useVisualViewport } from '@/lib/viewport';
 import { AgentsPanel, AgentsSheet } from './AgentsPanel';
 import { chatApi } from './api';
+import { useGlanceFocus } from '@/features/glance/focus';
+import { GlanceStrip } from '@/features/glance/Strip';
 import { ApprovalCard } from './ApprovalCard';
+import { BtwCard } from './btw/BtwCard';
+import { BtwSheet } from './btw/BtwSheet';
+import { BtwSidePanel } from './btw/BtwSidePanel';
+import { useBtwLayout } from './btw/layout';
 import { Composer, type ComposerHandle } from './Composer';
 import { Controls, modeDetails, type ControlsHandle } from './Controls';
 import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './FilesPanel';
@@ -62,7 +69,9 @@ export function SessionPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
-  const { connected, events, delta, session, removed, inputs, outbox, tasks, send, respond, control, stop, end } = useChatSession(id);
+  const { connected, events, delta, session, removed, inputs, outbox, tasks, btw, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end } = useChatSession(id);
+  // The glance widgets follow this session: Quota shows its Claude.
+  useGlanceFocus({ sessionId: id, claudeId: session?.claudeId, workspaceId: session?.workspaceId });
   const [ending, setEnding] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -95,6 +104,50 @@ export function SessionPage() {
     }
   };
   const composer = useRef<ComposerHandle>(null);
+  // btw: the card above the composer (or the side panel on a wide desktop, or the phone's sheet). Focus goes to it when this tab asks, and back to the composer when it closes.
+  const row = useRef<HTMLDivElement>(null);
+  const btwLayout = useBtwLayout(row);
+  const btwEl = useRef<HTMLElement>(null);
+  const [pinned, setPinned] = useState<string | null>(null);
+  const focusBtw = useRef(false);
+  const askBtw = useCallback(
+    (q: string) => {
+      focusBtw.current = true;
+      btwAsk(q);
+    },
+    [btwAsk],
+  );
+  useEffect(() => {
+    if (!btw || !focusBtw.current) return;
+    focusBtw.current = false;
+    requestAnimationFrame(() => btwEl.current?.focus({ preventScroll: true }));
+  }, [btw?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const closeBtw = useCallback(() => {
+    btwClose();
+    composer.current?.focus();
+  }, [btwClose]);
+  const pinBtw = () => {
+    if (!btw) return;
+    setPinned(btw.id);
+    btwPin().catch((e: unknown) => {
+      setPinned(null);
+      toast(errorText(e, 'Could not pin it.'), 'error');
+    });
+  };
+  const btwCard = (variant: 'card' | 'panel' | 'sheet', extra?: ReactNode) =>
+    btw && (
+      <BtwCard
+        ref={btwEl}
+        btw={btw}
+        variant={variant}
+        pinned={btw.pinnedSeq !== undefined || pinned === btw.id}
+        onClose={closeBtw}
+        onAskAgain={() => askBtw(btw.question)}
+        onCancel={btwCancel}
+        onPin={pinBtw}
+        extra={extra}
+      />
+    );
   const controls = useRef<ControlsHandle>(null);
   // The page follows the visible area, so the header stays put when the keyboard opens (iOS scrolls the
   // page instead of resizing it); the transcript scrolls under the glass header and dock.
@@ -244,6 +297,7 @@ export function SessionPage() {
   const agentsLabel = running ? `Agents, ${running} running` : 'Agents';
   const mode = modeDetails(session?.mode ?? 'default');
   const ModeIcon = mode.icon;
+  const notifyDone = useNotifyWhenDone(id);
   const menuItems: MenuItem[] = [
     ...(roomy
       ? []
@@ -257,6 +311,7 @@ export function SessionPage() {
         ]),
     { label: 'Rename…', icon: <Pencil className="size-4" />, onSelect: fromMenu(() => setRenaming(true)), disabled: !session },
     { label: 'Usage', icon: <Gauge className="size-4" />, onSelect: fromMenu(() => setUsageOpen(true)) },
+    { label: notifyDone.done ? 'Don\u2019t notify when done' : 'Notify when done', icon: notifyDone.done ? <BellOff className="size-4" /> : <Bell className="size-4" />, onSelect: fromMenu(notifyDone.toggle), disabled: !session || ended },
     details
       ? { label: 'Show less', icon: <ListCollapse className="size-4" />, onSelect: fromMenu(toggleDetails) }
       : { label: 'Show all details', icon: <ListTree className="size-4" />, onSelect: fromMenu(toggleDetails) },
@@ -404,7 +459,7 @@ export function SessionPage() {
         </div>
       </header>
 
-      <div className="flex h-full min-h-0">
+      <div ref={row} className="flex h-full min-h-0">
         <div className="relative flex min-w-0 flex-1 flex-col">
           <Transcript
             sessionId={id}
@@ -439,6 +494,22 @@ export function SessionPage() {
                   agentName={current.agentLabel ? agentNames.get(current.agentLabel) : null}
                 />
               )}
+              {btw && btwLayout.mode === 'card' &&
+                btwCard(
+                  'card',
+                  btwLayout.canSide && (
+                    <button
+                      type="button"
+                      aria-label="Open in side panel"
+                      title="Open in side panel"
+                      onClick={() => btwLayout.setSide(true)}
+                      className="press inline-flex size-9 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-surface-2 hover:text-ink tap:size-11"
+                    >
+                      <PanelRight className="size-[18px]" aria-hidden="true" />
+                    </button>
+                  ),
+                )}
+              {!viewport?.keyboard && <GlanceStrip placement="composer" side="above" dense className="justify-end" />}
               {gone ? (
                 <GoneNote />
               ) : ended ? (
@@ -455,6 +526,8 @@ export function SessionPage() {
                     connected={connected}
                     working={working}
                     onStop={stop}
+                    onBtw={askBtw}
+                    btwBusy={btw?.status === 'running'}
                     accessory={
                       session && (
                         <Controls
@@ -473,9 +546,30 @@ export function SessionPage() {
               )}
             </div>
           </div>
+          {btw && btwLayout.mode === 'sheet' && (
+            <BtwSheet bottom={dockHeight} keyboard={!!viewport?.keyboard} onClose={closeBtw}>
+              {btwCard('sheet')}
+            </BtwSheet>
+          )}
         </div>
 
-        {wide && panel === 'agents' && (
+        {btw && btwLayout.mode === 'panel' && (
+          <BtwSidePanel width={btwLayout.width} maxWidth={btwLayout.maxWidth} onResize={btwLayout.setWidth}>
+            {btwCard(
+              'panel',
+              <button
+                type="button"
+                aria-label="Back to card"
+                title="Back to card"
+                onClick={() => btwLayout.setSide(false)}
+                className="press inline-flex size-9 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-surface-2 hover:text-ink tap:size-11"
+              >
+                <PanelRightClose className="size-[18px]" aria-hidden="true" />
+              </button>,
+            )}
+          </BtwSidePanel>
+        )}
+        {wide && panel === 'agents' && btwLayout.mode !== 'panel' && (
           <aside id="agents-panel" aria-label="Agents" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[calc(3.5rem+env(safe-area-inset-top))]">
             <AgentsPanel
               tasks={tasks}
@@ -487,7 +581,7 @@ export function SessionPage() {
             />
           </aside>
         )}
-        {wide && !gone && panel === 'files' && (
+        {wide && !gone && panel === 'files' && btwLayout.mode !== 'panel' && (
           <aside id="files-panel" aria-label="Files" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[calc(3.5rem+env(safe-area-inset-top))]">
             <FilesPanel key={id} sessionId={id} view={filesView} onView={setFilesView} onClose={toggleFiles} closeLabel="Hide files" />
           </aside>
