@@ -114,7 +114,7 @@ export function TargetSheet({
             <Events targetId={t.id} />
 
             <div className="border-t border-line pt-3">
-              <Button variant="ghost" className="text-danger" icon={<Trash2 className="size-4" />} onClick={() => setRemoving(true)} disabled={!!denied}>
+              <Button variant="ghost" className="!text-danger" icon={<Trash2 className="size-4" />} onClick={() => setRemoving(true)} disabled={!!denied}>
                 Remove
               </Button>
             </div>
@@ -178,7 +178,7 @@ function RemoveDialog({ open, target, onClose, onRemoved }: { open: boolean; tar
   const go = async () => {
     setBusy(true);
     try {
-      await connectApi.remove(target.id, choice);
+      await connectApi.remove(target.id, has ? choice : undefined);
       toast(`${target.label} removed`);
       onRemoved();
     } catch (e) {

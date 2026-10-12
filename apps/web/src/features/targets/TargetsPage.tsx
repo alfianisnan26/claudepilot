@@ -167,7 +167,7 @@ function Row({ r, onOpen, onHide }: { r: ConnectTargetRow; onOpen: () => void; o
       <li className="flex min-h-[72px] min-w-0 items-center gap-3 px-4 py-3 sm:px-5">
         {body}
         {!r.available && (
-          <Button variant="ghost" size="sm" aria-label={`Hide ${r.label}`} onClick={() => onHide(r)}>
+          <Button variant="ghost" size="sm" className="min-h-11" aria-label={`Hide ${r.label}`} onClick={() => onHide(r)}>
             Hide
           </Button>
         )}

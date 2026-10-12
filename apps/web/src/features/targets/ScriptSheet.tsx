@@ -25,7 +25,7 @@ export function ScriptSheet({ open, onClose, commands }: { open: boolean; onClos
         <div className="flex min-w-0 items-center gap-2 rounded-xl bg-surface-2 py-1 pl-3">
           <span className="shrink-0 text-[13px] font-semibold text-ink-soft">sha256</span>
           <code className="min-w-0 flex-1 font-mono text-[12px] tabular-nums [overflow-wrap:anywhere]">{commands.scriptSha256}</code>
-          <CopyButton value={commands.scriptSha256} label="Copy sha256" toastMessage="Checksum copied" />
+          <CopyButton value={commands.scriptSha256} label="Copy sha256" showLabel={false} toastMessage="Checksum copied" />
         </div>
         {failed && <LoadError onRetry={load} message="Could not load the script." />}
         {!text && !failed && (

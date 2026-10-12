@@ -119,7 +119,7 @@ export function AddTargetDialog({
   const cancel = async () => {
     if (!created) return onClose();
     try {
-      if (mode.type === 'new') await connectApi.remove(created.target.id, 'keep');
+      if (mode.type === 'new') await connectApi.remove(created.target.id);
       else await connectApi.revokeEnrollment(created.target.id, created.enrollment.id);
     } catch {
       // gone already, or not allowed: the row says what is true

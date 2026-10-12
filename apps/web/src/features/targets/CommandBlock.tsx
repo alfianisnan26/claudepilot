@@ -45,7 +45,7 @@ export function CommandBlock({
           {text}
         </pre>
         <div className="absolute right-1 top-1">
-          <CopyButton value={text} label="Copy command" toastMessage="Command copied" />
+          <CopyButton value={text} label="Copy command" showLabel={false} toastMessage="Command copied" />
         </div>
       </div>
       <div className="flex flex-wrap gap-x-4 text-[13px]">

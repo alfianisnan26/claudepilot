@@ -42,12 +42,19 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   throw new ApiError('INTERNAL_ERROR', `Unexpected response (${res.status}).`, res.status);
 }
 
+/**
+ * The query that says what happens to a target's workspaces. The contract names it only in CONNECT_API.target's comment today (`workspaces`,
+ * which app.ts's guard refuses); T1 renames it (planned `onWorkspaces`): this is the one place to follow it, never a literal elsewhere.
+ */
+const REMOVE_QUERY = 'workspaces';
+
 export const connectApi = {
   list: () => request<ConnectTargetRow[]>('GET', CONNECT_API.targets),
   create: (body: CreateConnectTargetRequest) => request<ConnectEnrollmentCreated>('POST', CONNECT_API.targets, body),
   get: (id: string) => request<ConnectTargetView>('GET', CONNECT_API.target(id)),
   update: (id: string, body: UpdateConnectTargetRequest) => request<ConnectTargetView>('PATCH', CONNECT_API.target(id), body),
-  remove: (id: string, workspaces: 'keep' | 'remove') => request<{ ok: true }>('DELETE', `${CONNECT_API.target(id)}?workspaces=${workspaces}`),
+  /** `workspaces` only when the target has some: the query is what the 428 asks for (and, with none, is left out). */
+  remove: (id: string, workspaces?: 'keep' | 'remove') => request<{ ok: true }>('DELETE', workspaces ? `${CONNECT_API.target(id)}?${REMOVE_QUERY}=${workspaces}` : CONNECT_API.target(id)),
   check: (id: string) => request<ConnectTargetView>('POST', CONNECT_API.check(id)),
   enrollments: (id: string) => request<ConnectEnrollment[]>('GET', CONNECT_API.enrollments(id)),
   enroll: (id: string, body: CreateConnectEnrollmentRequest) => request<ConnectEnrollmentCreated>('POST', CONNECT_API.enrollments(id), body),
