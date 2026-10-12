@@ -1,0 +1,280 @@
+// Auto transfer: THE decision (docs/prd/auto-transfer.md §9), a pure function. Given a chat at its turn boundary, the usage snapshot
+// (`ClaudeUsageMonitor.report().claudes`), the Move flow's own verdict (`switchOptions`), the safeguards' counters and the effective settings,
+// it says what to do: nothing (with the code), warn, suggest (a card), wait (busy) or move (with the handoff). It never reads a clock, a
+// database or a workspace: the engine gathers the inputs and acts on the answer, so every case of §14 is a test over fixtures.
+//
+// Numbers keep their basis: a percent left is measured (Claude Code reported it); a projection is an estimate (`Figure`).
+
+import {
+  ALL_MODEL_WINDOWS,
+  AUTO_CONSTANTS,
+  estimatedFigure,
+  measuredFigure,
+  unavailableFigure,
+  type AutoClaudeRef,
+  type AutoFacts,
+  type AutoMode,
+  type AutoReason,
+  type AutoRefusal,
+  type AutoTransferSettings,
+  type ChatSession,
+  type ChatSwitchOptions,
+  type ClaudeUsage,
+  type ClaudeUsageWindow,
+  type MoveCandidate,
+  type MoveRecommendation,
+} from '@portal/contracts';
+
+const MIN = 60_000;
+
+/** U1a's ranking, injected (the engine passes `recommendMove` from claudeusage/recommend.ts; its signature is kept as is). */
+export type RecommendFn = (claudes: ClaudeUsage[], opts: { workspaceId: string; from?: string | null; nowMs: number; allow?: (claudeId: string) => boolean }) => MoveRecommendation;
+
+/** The effective mode (FR1): the chat's override, else the user's choice, else the platform's, never above the platform's ceiling. */
+export function effectiveMode(platform: AutoMode, user: AutoMode | null, session: AutoMode | null): AutoMode {
+  if (platform === 'off') return 'off';
+  const wanted = session ?? user ?? platform;
+  if (wanted === 'auto' && platform !== 'auto') return 'ask';
+  return wanted;
+}
+
+/** `opus`, `sonnet` or `haiku` from a model id (`claude-opus-4-1`, `sonnet[1m]`), or null. */
+export function modelFamily(model: string | null | undefined): string | null {
+  const m = /(opus|sonnet|haiku)/i.exec(model ?? '');
+  return m ? m[1]!.toLowerCase() : null;
+}
+
+/** Whether a usage window is the per-model window of a model family (`week_opus`, `model:claude-opus-4`). */
+export function windowOfFamily(key: string, family: string | null): boolean {
+  if (!family) return false;
+  if (key === `week_${family}`) return true;
+  return key.startsWith('model:') && key.slice(6).toLowerCase().includes(family);
+}
+
+/** Where the source Claude stands for THIS chat (FR5, FR6): the windows that stop it, the fullest of them, and why a move is wanted. */
+export interface SourceReading {
+  /** The window with the least left among those that stop this chat. */
+  window: ClaudeUsageWindow;
+  leftPct: number;
+  reason: AutoReason | null;
+  facts: AutoFacts;
+}
+
+/** A window that has a number and has not reset (a reset, an unknown level or a reset time in the past leaves it out). */
+const live = (w: ClaudeUsageWindow, nowMs: number) =>
+  w.usedPct !== null && w.level !== 'reset' && w.level !== 'unknown' && !(w.resetsAt && Date.parse(w.resetsAt) <= nowMs);
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/** Whether a reading is fresh enough to act on: read at most 15 minutes ago and not stale. */
+export function freshReading(c: Pick<ClaudeUsage, 'checkedAt' | 'stale'>, nowMs: number): boolean {
+  if (!c.checkedAt || c.stale) return false;
+  const at = Date.parse(c.checkedAt);
+  return Number.isFinite(at) && nowMs - at <= AUTO_CONSTANTS.maxReadingAgeMin * MIN && at <= nowMs + MIN;
+}
+
+/**
+ * The source's limit for a chat on `model`: `session` and `week`, and the chat's own model window. `leftPct` is the smallest `100 − used`.
+ * `exhausted` when one of them is at 100 %; `low` at or under the threshold; `projection` when on, confident, within 2 hours and at most 30 % left.
+ * Null when no window applies (no number yet).
+ */
+export function sourceReading(c: ClaudeUsage, model: string | null, thresholdPct: number, useProjection: boolean, nowMs: number): SourceReading | null {
+  const family = modelFamily(model);
+  const windows = c.windows.filter((w) => live(w, nowMs) && (ALL_MODEL_WINDOWS.includes(w.key) || windowOfFamily(w.key, family)));
+  if (!windows.length) return null;
+  const window = windows.reduce((a, b) => (b.usedPct! > a.usedPct! ? b : a));
+  const leftPct = Math.max(0, round1(100 - window.usedPct!));
+  const exhausted = windows.some((w) => w.usedPct! >= 100 || w.level === 'exhausted');
+  const facts: AutoFacts = {
+    leftPct: measuredFigure(leftPct),
+    thresholdPct,
+    resetsAt: window.resetsAt ? measuredFigure(window.resetsAt) : unavailableFigure('no_reset_time'),
+  };
+  let reason: AutoReason | null = null;
+  if (exhausted) reason = 'exhausted';
+  else if (leftPct <= thresholdPct) reason = 'low';
+  else if (useProjection && leftPct <= AUTO_CONSTANTS.projectionMaxLeftPct) {
+    // The window that runs out first at its pace, among those that stop the chat, counts only with confidence and within the horizon.
+    let best: { eta: number; w: ClaudeUsageWindow } | null = null;
+    for (const w of windows) {
+      const p = w.pace;
+      if (!p || p.lowConfidence || p.status.value !== 'over' || p.etaAt.value === null) continue;
+      const eta = Date.parse(p.etaAt.value);
+      if (!Number.isFinite(eta) || eta - nowMs > AUTO_CONSTANTS.projectionHorizonMin * MIN) continue;
+      if (!best || eta < best.eta) best = { eta, w };
+    }
+    if (best) {
+      reason = 'projection';
+      facts.etaAt = estimatedFigure(best.w.pace!.etaAt.value!);
+      if (best.w.pace!.projectedPct.value !== null) facts.projectedPct = estimatedFigure(best.w.pace!.projectedPct.value);
+    }
+  }
+  return { window, leftPct, reason, facts };
+}
+
+/** What the engine knows about a chat's history of moves (from its own rows), for the safeguards and the guards on the choice. */
+export interface DecideCounters {
+  /** "Later", an Undo, a failure or a move set it. */
+  pausedUntilMs: number | null;
+  /** The chat's last move (by this feature or by a person), for the minimum pause. */
+  lastMoveMs: number | null;
+  /** Moves this feature made for the chat in the last 24 hours. */
+  movesSession24h: number;
+  /** Moves this feature made for the chat's owner, all chats, in the last 24 hours. */
+  movesOwner24h: number;
+  /** Failed automatic moves of the chat in the last 24 hours (two end automatic moves for it that day). */
+  failures24h: number;
+  /** When an automatic move started waiting for a quiet boundary. */
+  deferSinceMs: number | null;
+  /** Claudes this chat left by a move, with when, and when the window that pushed it out resets (the ping-pong guard). */
+  left: { claudeId: string; atMs: number; resetsAtMs: number | null }[];
+}
+
+export interface DecideInput {
+  nowMs: number;
+  mode: AutoMode;
+  /** The effective values for the chat's owner (the platform's caps, the user's choices). */
+  settings: AutoTransferSettings;
+  /** The source Claude's own threshold (`AutoClaudeConfig`), null for the effective one. */
+  claudeThresholdPct: number | null;
+  /** The source Claude's ordered destinations: an allowlist when not empty. */
+  destinations: string[];
+  session: Pick<ChatSession, 'id' | 'workspaceId' | 'claudeId' | 'model' | 'state' | 'mode' | 'switching'>;
+  /** The workspace runs on an account pool. */
+  pooled: boolean;
+  /** The usage snapshot's Claudes (any workspace: the function keeps the chat's). */
+  claudes: ClaudeUsage[];
+  /** The chat's owner is an enabled user who may operate the chat. */
+  ownerOk: boolean;
+  /** Whether the owner may use a Claude (`can(owner, 'operate', claude)`), passed to `recommendMove` as `allow`. */
+  allow: (claudeId: string) => boolean;
+  /** The Move flow's verdict for this chat; null when it could not be asked (then no Claude qualifies). */
+  options: ChatSwitchOptions | null;
+  /** Live sessions per Claude, counting a move on its way. */
+  load: (claudeId: string) => number;
+  counters: DecideCounters;
+  recommend: RecommendFn;
+}
+
+export interface DecideChoice {
+  reason: AutoReason;
+  to: AutoClaudeRef;
+  alternatives: AutoClaudeRef[];
+  facts: AutoFacts;
+  handoff: 'ask' | 'skip';
+  dropped: { approvals: number; queued: number; agents: number };
+  /** The source's window and its period, for "warn once". */
+  period: string;
+}
+
+export type Decision =
+  | { act: 'none'; code: AutoRefusal; reading: SourceReading | null }
+  | { act: 'warn'; code: 'no_destination' | 'destination_busy'; reading: SourceReading; period: string }
+  /** `why`: an `auto` chat that only gets a card (Bypass, the deferral ran out, two failures today), else null for `ask`. */
+  | ({ act: 'suggest'; why: 'bypass' | 'deferred' | 'failed_today' | null; reading: SourceReading } & DecideChoice)
+  | ({ act: 'wait'; code: 'busy'; reading: SourceReading } & DecideChoice)
+  | ({ act: 'move'; reading: SourceReading } & DecideChoice);
+
+const ref = (c: MoveCandidate): AutoClaudeRef => ({ id: c.claudeId, name: c.name });
+const ZERO = { approvals: 0, queued: 0, agents: 0 };
+
+/** The candidates that qualify (FR7 to FR9), best first, and those only `ask` may list; and whether any was skipped only for being full. */
+export function candidates(input: DecideInput, mode: 'ask' | 'auto'): { eligible: MoveCandidate[]; alternatives: MoveCandidate[]; full: boolean } {
+  const { session, settings, nowMs } = input;
+  const rec = input.recommend(input.claudes, { workspaceId: session.workspaceId, from: session.claudeId, nowMs, allow: input.allow });
+  const ok = new Set((input.options?.options ?? []).filter((o) => o.ok).map((o) => o.claude.id));
+  const family = modelFamily(session.model);
+  const usage = new Map(input.claudes.map((c) => [c.claudeId, c]));
+  const allow = new Set(input.destinations);
+  let full = false;
+  const pass = (c: MoveCandidate): boolean => {
+    if (!ok.has(c.claudeId) || !input.allow(c.claudeId)) return false;
+    if (allow.size && !allow.has(c.claudeId)) return false;
+    const u = usage.get(c.claudeId);
+    if (c.reason === 'no_limits') {
+      if (!settings.allowApiKey || settings.sameModelOnly) return false; // what a key's model availability is, the portal can't see
+    } else if (!u || !freshReading(u, nowMs)) return false;
+    if (settings.sameModelOnly && c.reason !== 'no_limits') {
+      // The family must be known, and its own window on the destination not used up.
+      if (!family || !u) return false;
+      if (u.windows.some((w) => windowOfFamily(w.key, family) && live(w, nowMs) && (w.level === 'exhausted' || w.usedPct! >= 100))) return false;
+    }
+    // Ping-pong: a Claude the chat left in the last 4 hours, unless the window that pushed it out has reset since.
+    const left = input.counters.left.find((l) => l.claudeId === c.claudeId && nowMs - l.atMs < AUTO_CONSTANTS.pingPongMin * MIN);
+    if (left && !(left.resetsAtMs !== null && left.resetsAtMs <= nowMs)) return false;
+    if (input.load(c.claudeId) >= settings.maxPerDestination) {
+      full = true;
+      return false;
+    }
+    return true;
+  };
+  const best = (mode === 'auto' ? ['room', 'no_limits'] : ['room', 'over_pace', 'no_limits']) as MoveCandidate['reason'][];
+  const ranked = rec.candidates.filter((c) => c.rank !== null);
+  let eligible = ranked.filter((c) => best.includes(c.reason) && pass(c));
+  const alternatives = mode === 'ask' ? ranked.filter((c) => c.reason === 'tight' && pass(c)) : [];
+  if (allow.size) {
+    // The allowlist's order among the eligible; the ranking breaks ties (it cannot: ids are unique, but the sort is stable).
+    const pos = (id: string) => input.destinations.indexOf(id);
+    eligible = [...eligible].sort((a, b) => pos(a.claudeId) - pos(b.claudeId));
+  }
+  return { eligible, alternatives, full: full && !eligible.length };
+}
+
+/** The decision, in the order of §9: each step stops the evaluation with its code. */
+export function decide(input: DecideInput): Decision {
+  const { session, settings, nowMs, counters } = input;
+  // 1. The mode.
+  if (input.mode === 'off') return { act: 'none', code: 'mode_off', reading: null };
+  // 2. A pool, or a Claude with no plan reading.
+  if (input.pooled) return { act: 'none', code: 'pooled', reading: null };
+  const source = input.claudes.find((c) => c.claudeId === session.claudeId);
+  if (!source || source.runsOn !== 'plan' || !source.checkedAt) return { act: 'none', code: 'no_plan_reading', reading: null };
+  const threshold = input.claudeThresholdPct ?? settings.thresholdPct;
+  const reading = sourceReading(source, session.model, threshold, settings.useProjection, nowMs);
+  if (!reading) return { act: 'none', code: 'no_plan_reading', reading: null };
+  // 3. A fresh reading.
+  if (!freshReading(source, nowMs)) return { act: 'none', code: 'stale_reading', reading };
+  // 4. A reason.
+  if (!reading.reason) return { act: 'none', code: 'above_threshold', reading };
+  // 5. The owner.
+  if (!input.ownerOk) return { act: 'none', code: 'owner_denied', reading };
+  // 6. The safeguards.
+  if (counters.pausedUntilMs !== null && counters.pausedUntilMs > nowMs) return { act: 'none', code: 'paused', reading };
+  if (counters.lastMoveMs !== null && nowMs - counters.lastMoveMs < settings.minPauseMin * MIN) return { act: 'none', code: 'paused', reading };
+  if (counters.movesSession24h >= settings.maxPerSessionPerDay) return { act: 'none', code: 'session_cap', reading };
+  if (counters.movesOwner24h >= settings.maxPerDay) return { act: 'none', code: 'day_cap', reading };
+  // 7. A destination.
+  const period = `${session.claudeId}|${reading.window.key}|${reading.window.resetsAt ?? ''}`;
+  // A chat in Bypass, or one whose automatic moves failed twice today, only ever gets a card: rank it as `ask` would.
+  const bypass = session.mode === 'bypassPermissions';
+  const failedToday = counters.failures24h >= 2;
+  const autoish = input.mode === 'auto' && !bypass && !failedToday;
+  const { eligible, alternatives, full } = candidates(input, autoish ? 'auto' : 'ask');
+  const pick = eligible[0];
+  if (!pick) return { act: 'warn', code: full ? 'destination_busy' : 'no_destination', reading, period };
+  const facts: AutoFacts = { ...reading.facts };
+  if (pick.reason !== 'no_limits' && pick.leftPct.value !== null) facts.destLeftPct = measuredFigure(pick.leftPct.value);
+  const handoff: 'ask' | 'skip' = reading.reason === 'exhausted' || input.options?.handoff.ok === false ? 'skip' : 'ask';
+  const choice: DecideChoice = {
+    reason: reading.reason,
+    to: ref(pick),
+    alternatives: [...eligible.slice(1), ...alternatives].map(ref),
+    facts,
+    handoff,
+    dropped: input.options?.dropped ?? ZERO,
+    period,
+  };
+  // 8. `ask`: the card.
+  if (input.mode === 'ask') return { act: 'suggest', why: null, reading, ...choice };
+  // 9. `auto`: never Bypass; not after two failures today; only at a quiet boundary, else wait (up to 30 minutes), then a card.
+  if (bypass) return { act: 'suggest', why: 'bypass', reading, ...choice };
+  if (failedToday) return { act: 'suggest', why: 'failed_today', reading, ...choice };
+  const d = choice.dropped;
+  const quiet = session.state === 'idle' && !session.switching && d.approvals === 0 && d.queued === 0 && d.agents === 0;
+  if (!quiet) {
+    if (counters.deferSinceMs !== null && nowMs - counters.deferSinceMs >= AUTO_CONSTANTS.deferMaxMin * MIN) return { act: 'suggest', why: 'deferred', reading, ...choice };
+    return { act: 'wait', code: 'busy', reading, ...choice };
+  }
+  // 10. The move.
+  return { act: 'move', reading, ...choice };
+}
