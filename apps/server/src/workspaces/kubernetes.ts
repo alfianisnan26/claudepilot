@@ -209,6 +209,10 @@ export class KubernetesRuntime implements Runtime {
                   name: 'seed-home',
                   image: this.opts.image,
                   command: ['sh', '-c', `[ -e /seed/${SEEDED} ] || { cp -a ${HOME}/. /seed/ && touch /seed/${SEEDED}; }`],
+                  // As root: the new volume's top folder belongs to root on many storage classes (k3s local-path), and `cp -a`
+                  // as another user fails to set the times of that folder ("Operation not permitted"). Copying as root keeps
+                  // the image's owners (node, 1000), which is what the workspace container runs as.
+                  securityContext: { runAsUser: 0, runAsGroup: 0 },
                   volumeMounts: [{ name: 'home', mountPath: '/seed' }],
                 },
               ],
