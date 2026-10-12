@@ -58,6 +58,7 @@ interface RowContext {
   /** The workspace's persona (I11): named above each turn's closing reply. */
   persona?: { name: string; avatar?: string | null } | null;
   onCancelQueued?: (uuid: string, text: string) => Promise<void>;
+  moveMark?: (handoffId: string) => ReactNode;
 }
 
 /**
@@ -83,6 +84,7 @@ export function Transcript({
   padBottom,
   onOpenUsage,
   persona,
+  moveMark,
   className,
 }: {
   sessionId: string;
@@ -104,6 +106,8 @@ export function Transcript({
   onOpenUsage?: () => void;
   /** The workspace's persona, when it has one: its name and avatar over each turn's closing reply. */
   persona?: { name: string; avatar?: string | null } | null;
+  /** Auto move (FR18): what a "Moved to" divider carries beside it (the auto mark and Undo), by the move's id. */
+  moveMark?: (handoffId: string) => ReactNode;
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -275,6 +279,7 @@ export function Transcript({
     turns,
     persona,
     onCancelQueued,
+    moveMark,
   };
 
   const toolCall = (t: ToolPair) => {
@@ -505,9 +510,9 @@ function EventRow({ event: e, ctx }: { event: ChatEvent; ctx: RowContext }) {
     }
     case 'system': {
       const move = ctx.moves.get(e.seq);
-      if (move) return <MoveRow move={move} />;
+      if (move) return <MoveRow move={move} moveMark={ctx.moveMark} />;
       if (e.btw) return <PinnedBtw btw={e.btw} />;
-      return e.transfer ? <TransferMarker event={e} /> : <CenterLine>{e.text}</CenterLine>;
+      return e.transfer ? <TransferMarker event={e} mark={e.transfer.handoffId ? ctx.moveMark?.(e.transfer.handoffId) : null} /> : <CenterLine>{e.text}</CenterLine>;
     }
     case 'retry':
       return <CenterLine>{e.text ?? 'Retrying… (rate limit)'}</CenterLine>;
@@ -718,7 +723,7 @@ function ContextCard({ event: e, acknowledgement }: { event: ChatEvent; acknowle
  * What stands for a move to another Claude (FR14, FR18): once it finished, the divider where the Claude changed and
  * the card with the context; while it runs, or when it didn't finish, the last thing it said.
  */
-function MoveRow({ move }: { move: ChatMove }) {
+function MoveRow({ move, moveMark }: { move: ChatMove; moveMark?: (handoffId: string) => ReactNode }) {
   if (!move.marker) {
     // Under way, the composer says where it is; a move that didn't finish says why.
     if (move.status !== 'failed') return null;
@@ -727,7 +732,7 @@ function MoveRow({ move }: { move: ChatMove }) {
   }
   return (
     <div className="flex flex-col gap-3">
-      <TransferMarker event={move.marker} />
+      <TransferMarker event={move.marker} mark={move.marker.transfer?.handoffId ? moveMark?.(move.marker.transfer.handoffId) : null} />
       {move.opening && <ContextCard event={move.opening} acknowledgement={move.acknowledgement} />}
     </div>
   );
@@ -780,7 +785,7 @@ function PortalMessage({ event: e }: { event: ChatEvent }) {
 }
 
 /** The divider where a chat changed Claude (Workspace Claudes FR14, FR18): a rule with what happened and when. */
-function TransferMarker({ event: e }: { event: ChatEvent }) {
+function TransferMarker({ event: e, mark }: { event: ChatEvent; mark?: ReactNode }) {
   const at = new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return (
     <div role="separator" className="flex items-center gap-3 px-1 text-[12px] text-muted">
@@ -789,6 +794,7 @@ function TransferMarker({ event: e }: { event: ChatEvent }) {
         <ArrowRightLeft className="size-3 shrink-0" aria-hidden="true" />
         {e.text} · {at}
       </span>
+      {mark}
       <span className="h-px flex-1 bg-line" aria-hidden="true" />
     </div>
   );

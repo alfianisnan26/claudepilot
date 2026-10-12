@@ -38,11 +38,14 @@ export function SwitchDialog({
   open,
   onClose,
   onConfirm,
+  preselect = null,
 }: {
   session: ChatSession | null;
   open: boolean;
   onClose: () => void;
   onConfirm: (claudeId: string, handoff: 'ask' | 'skip') => void;
+  /** A Claude chosen up front (auto move's Undo: the Claude the chat left), when it can take the chat. */
+  preselect?: string | null;
 }) {
   const [info, setInfo] = useState<ChatSwitchOptions | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -59,20 +62,20 @@ export function SwitchDialog({
     setInfo(null);
     setFailed(null);
     setPick('');
-    setTouched(false);
+    setTouched(!!preselect);
     setAsk(true);
     chatApi.switchOptions(id).then(
       (r) => {
         if (!current) return;
         setInfo(r);
-        setPick(r.options.find((o) => o.ok)?.claude.id ?? '');
+        setPick((preselect && r.options.find((o) => o.ok && o.claude.id === preselect)?.claude.id) || (r.options.find((o) => o.ok)?.claude.id ?? ''));
       },
       (e: unknown) => current && setFailed(errorText(e, 'Couldn’t check where this chat can move.')),
     );
     return () => {
       current = false;
     };
-  }, [open, id]);
+  }, [open, id, preselect]);
 
   useEffect(() => {
     const rec = recommendedId(advice);
@@ -203,10 +206,11 @@ function OptionRow({ option: o, selected, onPick, mark }: { option: ChatSwitchOp
  * Moving a chat from anywhere (its page, a row in the list): the dialog, and what happens after the confirm. The
  * move runs on the portal and shows in the chat; a refusal says why, and asks to trust the folder first when it must.
  */
-export function useMoveChat(): { start: (session: ChatSession) => void; element: ReactNode } {
+export function useMoveChat(): { start: (session: ChatSession, preselect?: string) => void; element: ReactNode } {
   const toast = useToast();
   const [session, setSession] = useState<ChatSession | null>(null);
   const [open, setOpen] = useState(false);
+  const [preselect, setPreselect] = useState<string | null>(null);
   const locate = useCallback(async () => ({ workspaceId: session!.workspaceId, folder: session!.cwd }), [session]);
   const trust = useFolderTrust(session?.id ?? '', locate);
   const confirm = (claudeId: string, handoff: 'ask' | 'skip') => {
@@ -220,13 +224,14 @@ export function useMoveChat(): { start: (session: ChatSession) => void; element:
       });
   };
   return {
-    start: (s) => {
+    start: (s, pre) => {
       setSession(s);
+      setPreselect(pre ?? null);
       setOpen(true);
     },
     element: (
       <>
-        <SwitchDialog session={session} open={open} onClose={() => setOpen(false)} onConfirm={confirm} />
+        <SwitchDialog session={session} open={open} onClose={() => setOpen(false)} onConfirm={confirm} preselect={preselect} />
         <TrustSheet trust={trust} />
       </>
     ),
