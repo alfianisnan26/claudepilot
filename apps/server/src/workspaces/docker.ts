@@ -462,7 +462,7 @@ export class DockerRuntime implements Runtime {
     }
   }
 
-  async recreate(name: string, image: string, progress: (detail: string) => void) {
+  async recreate(name: string, image: string, progress: (detail: string) => void, opts: { label?: string } = {}) {
     const container = this.#container(name);
     const info = await container.inspect();
     const labels = info.Config?.Labels ?? {};
@@ -488,7 +488,7 @@ export class DockerRuntime implements Runtime {
     progress('Replacing the container');
     await container.remove({ v: false }).catch(ignore(404));
     try {
-      await make(image, image);
+      await make(image, opts.label ?? image);
     } catch (e) {
       const why = runtimeText(e);
       progress('Putting the previous container back');
@@ -539,13 +539,13 @@ export class DockerRuntime implements Runtime {
       }
       return { name };
     },
-    run: (name, script, opts = {}) => this.#runIn(this.#canary(name), script, opts),
+    run: async (name, script, opts = {}) => this.#runIn(this.#canary(name), script, opts),
     put: async (name, entries) => {
       await this.#canary(name).putArchive(await tarOf(entries), { path: '/' });
     },
-    read: (name, path) => this.#readFrom(this.#canary(name), path),
-    exec: (name, command, opts) => this.#execIn(this.#canary(name), command, opts),
-    shell: (name, size, command, opts) => this.#shellIn(this.#canary(name), size, command, opts?.env),
+    read: async (name, path) => this.#readFrom(this.#canary(name), path),
+    exec: async (name, command, opts) => this.#execIn(this.#canary(name), command, opts),
+    shell: async (name, size, command, opts) => this.#shellIn(this.#canary(name), size, command, opts?.env),
     isolate: async (name) => {
       const info = await this.#canary(name).inspect();
       for (const net of Object.keys(info.NetworkSettings?.Networks ?? {})) await this.#docker.getNetwork(net).disconnect({ Container: info.Id, Force: true }).catch(() => undefined);

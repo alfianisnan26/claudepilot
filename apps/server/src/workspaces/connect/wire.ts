@@ -7,7 +7,7 @@ import type { Workspaces } from '../manager.js';
 import { createTunnelRuntime } from './factory.js';
 
 export interface ConnectWiring {
-  connect: Pick<ConnectModuleApi, 'useRuntimeFactory' | 'bind' | 'settled' | 'canCreate' | 'onReturned'>;
+  connect: Pick<ConnectModuleApi, 'useRuntimeFactory' | 'bind' | 'settled' | 'canCreate' | 'onReturned'> & Partial<Pick<ConnectModuleApi, 'onLost'>>;
   workspaces: Workspaces;
   chat?: { targetState?: (workspaceId: string) => 'up' | 'down'; targetReturned(targetId: string): void };
   reconciler?: { runtimeChanged(targetId: string, runtime: Parameters<Parameters<Workspaces['onRuntimeChange']>[0]>[1]): void; requestTarget(targetId: string, why: string): void };
@@ -21,13 +21,18 @@ export function wireConnect(w: ConnectWiring): () => void {
   workspaces.hooks.settled = (ms) => connect.settled(ms);
   if (w.chat) w.chat.targetState = (id) => workspaces.targetState(id);
   const offRuntime = workspaces.onRuntimeChange((target, runtime) => w.reconciler?.runtimeChanged(target, runtime));
+  // The manager keeps each target's check for a few seconds; a tunnel that dropped or came back is checked at once, so the list does not
+  // keep saying Running for a node that left, or Unreachable for one that is back.
   const offReturned = connect.onReturned((target) => {
+    void workspaces.recheck(target);
     w.chat?.targetReturned(target);
     w.reconciler?.requestTarget(target, 'target returned');
   });
+  const offLost = connect.onLost?.((target) => void workspaces.recheck(target));
   connect.bind(workspaces);
   return () => {
     offRuntime();
     offReturned();
+    offLost?.();
   };
 }

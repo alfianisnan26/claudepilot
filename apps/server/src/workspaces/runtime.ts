@@ -184,9 +184,10 @@ export interface Runtime {
   /**
    * Replaces the workspace's container with one made from `image`, KEEPING its home volume (everything outside the home folder, and every
    * running process, is not kept). A container that cannot be made or started is put back from the old image and the call fails.
-   * `progress` says the step. Resolves with the image it was on and the one it is on.
+   * `progress` says the step. `opts.label` is the reference the container's `claudepilot.image` label records when `image` is an id (a rollback to an
+   * image whose tag moved). Resolves with the image it was on and the one it is on.
    */
-  recreate?(name: string, image: string, progress: (detail: string) => void): Promise<{ from: string | null; to: string }>;
+  recreate?(name: string, image: string, progress: (detail: string) => void, opts?: { label?: string }): Promise<{ from: string | null; to: string }>;
   /** The image a workspace's container was made from and the Claude Code version that image says; null when the workspace is not there. */
   imageOf?(name: string): Promise<{ ref: string | null; version: string | null; id: string | null } | null>;
   /** Where a workspace on this target reaches the portal (an enrolled target's portal address); internalUrl derives it when absent. */

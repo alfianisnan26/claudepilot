@@ -202,8 +202,8 @@ export class Workspaces {
           (e: unknown): WorkspaceTarget => ({ ...runtime.target, available: false, problem: runtimeMessage(e) }),
         )
         .then((target) => {
-          // A runtime replaced or removed while it was checked: its answer is not the target's any more.
-          if (this.#runtimes.get(id) === runtime) this.#known.set(id, { at: Date.now(), target });
+          // A runtime replaced or removed while it was checked, or a check that `recheck` began after this one: its answer is not the target's any more.
+          if (this.#runtimes.get(id) === runtime && this.#checking.get(id) === running) this.#known.set(id, { at: Date.now(), target });
           return target;
         })
         .finally(() => {
@@ -212,6 +212,20 @@ export class Workspaces {
       this.#checking.set(id, running);
     }
     return running;
+  }
+
+  /**
+   * One target's reachability just changed (an enrolled target's tunnel dropped or came back; `wireConnect` calls this): checks it again now
+   * instead of at the end of the cache's lifetime, and tells the pages when the answer differs. A check that was already running began before
+   * the change, so its answer is dropped. The other targets' caches stay. Never rejects.
+   */
+  async recheck(targetId: string): Promise<void> {
+    const runtime = this.#runtimes.get(targetId);
+    if (!runtime) return;
+    const was = this.#known.get(targetId)?.target.available;
+    this.#checking.delete(targetId);
+    const now = await this.#check(runtime);
+    if (this.#runtimes.get(targetId) === runtime && now.available !== was) this.hooks.changed?.();
   }
 
   async list(): Promise<Workspace[]> {
@@ -362,13 +376,13 @@ export class Workspaces {
    * Replaces a workspace's container with one made from `image`, keeping its home volume (claude-version-pinning PRD §7). The events
    * written just before are pulled first, like a stop. Only the Runtime knows how; a target without it says so.
    */
-  async recreate(target: string, name: string, image: string, progress: (detail: string) => void) {
+  async recreate(target: string, name: string, image: string, progress: (detail: string) => void, opts?: { label?: string }) {
     const runtime = this.#runtime(target);
     if (!runtime.recreate) throw new AppError('CONFLICT', 'This target can’t recreate a workspace from another image.');
     const pull = this.hooks.beforeStop?.(workspaceId(target, name)).catch(() => undefined);
     if (pull) await Promise.race([pull, new Promise((r) => setTimeout(r, 5_000).unref())]);
     try {
-      return await this.#run(target, (r) => r.recreate!(name, image, progress));
+      return await this.#run(target, (r) => r.recreate!(name, image, progress, opts));
     } finally {
       this.hooks.changed?.();
     }
