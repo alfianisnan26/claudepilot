@@ -6,7 +6,7 @@
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-12 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, encryption, event log, delivery). Each tool group also needs its feature's service: [Account Pool](account-pool.md), [Settings & policies](settings-policies.md), [Monitoring dashboard](monitoring-dashboard.md), [Chat sessions](chat-sessions.md). |
-| Related | [Skillset pool](skillset-pool.md), [MCP set pool](mcpset-pool.md), [Persona pool](persona-pool.md), [Secrets & env pool](secrets-env-pool.md), [Browser & desktop pool](browser-desktop-pool.md) (planned) |
+| Related | [Multi-user](multi-user.md) and [Authorization](authorization.md) (token binding, tool declarations), [Skillset pool](skillset-pool.md), [MCP set pool](mcpset-pool.md), [Persona pool](persona-pool.md), [Secrets & env pool](secrets-env-pool.md), [Browser & desktop pool](browser-desktop-pool.md) (planned) |
 
 ## 1. Summary
 
@@ -173,7 +173,7 @@ limits and audit.
 
 Stored in the portal database ([Pools foundation](foundation-pools.md) §4). Tokens are stored as
 SHA-256 hashes; a generated server code and a refresh retry pair use the foundation's encryption.
-`owner` stays null until per-user identity.
+`owner` stays null until per-user identity. **Multi-user (PLAN-10):** `pmcp_tokens` gain `owner_id` (the creator, `u_owner` for existing tokens) and `token_epoch`, `pmcp_agent_tokens` gain `token_epoch`, and `pmcp_audit` gains `actor_user`; migration block 400-459, see [Authorization](authorization.md) §11.
 
 | Table | Key fields |
 | --- | --- |
@@ -380,6 +380,8 @@ the SDK only verifies tokens (`requireBearerAuth`).
 
 ### 12.5 One shared server code: what it means
 
+> **Superseded by multi-user (PLAN-10, 2026-10-12).** There is no shared server code once accounts land ([Identity and onboarding](identity-onboarding.md)): a token is bound to the person who made it (`owner_id`), carries no more than that person holds **when it is used** (its scope is a cap on the owner's rights, [Authorization](authorization.md) FR12), and dies with the owner (a `token_epoch` bumped by a disable, a reset or a password change that asks for it). Audit names the person (`actor_user`) as well as the token; the token list, `audit_search` and `GET /api/portal-mcp/audit` show a person their own tokens and rows, admins revoke others' tokens through the emergency route. The consent page of the OAuth flow (§12.2) is an ordinary signed-in page of the approving person, not a code on a public page. The bullets below describe the single-owner portal that exists until the multi-user retrofit lands.
+
 - Enabling MCP needs a stable server code: `PORTAL_SERVER_CODE`, or the generated code stored
   encrypted in `portal_state` instead of regenerated at each start. The sign-in switch is persisted
   too, so a restart never reopens a consent page an admin closed, and never revokes tokens.
@@ -391,6 +393,8 @@ the SDK only verifies tokens (`requireBearerAuth`).
   guessing impractical (§14.5), and Cloudflare Access is the recommended second factor (Q3).
 
 ### 12.6 Agent tokens (`cpst_`): the portal's tools for agents inside a workspace
+
+> **Multi-user (PLAN-10).** An agent token's user is its session's OWNER, read at each call (`chat_sessions.owner_id`), so it holds at most `operate`, only on its own session tree and workspace, never on platform, user, team, target or personal objects, and stops with the session, the owner's right to operate the workspace, or the owner ([Authorization](authorization.md) FR13). Every tool declares the objects it touches (`declareToolPolicies`; Appendix B of that PRD lists the 87 tools) and the registry refuses to start with one that does not. The per-workspace opt-in ("Agent access to portal tools") is a `manage` right on the workspace.
 
 The owner asked for "internal mcp access". §10.1's rule that no portal token enters a workspace stays true
 for every admin class; this is a new class with its own limits (decision 2026-10-12, interface I8). It is

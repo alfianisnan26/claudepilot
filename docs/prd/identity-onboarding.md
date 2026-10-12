@@ -1,0 +1,363 @@
+# PRD: Identity and onboarding
+
+| | |
+| --- | --- |
+| Status | **Draft v0.1** (2026-10-12). Design only: `packages/contracts/src/identity.ts` has landed and nothing else is built (**Not built**). Written from the code (audit in `COORD/p5-audit.md`, summarised in §2), OWASP's Password Storage, Session Management and Authentication cheat sheets read on 2026-10-12, NIST SP 800-63B-4 as quoted by OWASP, and scripts run here (scrypt benchmark, the DDL in `node:sqlite`). ✅ = checked here, 📄 = documented (source linked), 🔬 = unverified: needs a running multi-user portal or a real device. |
+| Owner | Alfian Isnan |
+| Last updated | 2026-10-12 |
+| Depends on | [Pools foundation](foundation-pools.md) F1 (the store, backups, Locked/Frozen), [Web app & PWA](web-app-pwa.md) §12 (HTTPS and sign-in: this PRD replaces its server-code design) |
+| Related | [Multi-user overview](multi-user.md), [Authorization](authorization.md), [Sharing](sharing.md), [Teams](teams.md), [Portal MCP](portal-mcp.md) §12 (tokens), [Chat sessions](chat-sessions.md) (re-auth for Bypass) |
+
+## 1. Summary
+
+The portal stops being a one-code door. A person has an **account** (a username and a password); the first account is created in a **setup** screen with a one-time token and becomes the platform admin; everyone else joins by **invitation** (the default), by an admin creating the account, or, if the admin opens it, by **registering and waiting for approval**. Passwords are stored as scrypt hashes with their parameters, compared in constant time, limited per account and per address, and a change signs out every other device. A person can see and end their own sign-ins ("devices"). There is no email: an admin or the CLI on the host resets a password. A dev/test **seed** keeps the scratch-portal recipe and the QA scripts working and cannot be switched on in production.
+
+The one-person portal that exists today becomes this one without losing anything: its data belongs to the first account, which takes the id `u_owner` that the data and the plans in flight already use.
+
+## 2. Background and what exists
+
+Checked on 2026-10-12 (✅). Evidence is symbols; the full table of findings is `COORD/p5-audit.md` §1 and §4.
+
+| Fact | Evidence | Consequence |
+| --- | --- | --- |
+| One shared 8-character server code is the only credential (about 40 bits); compared by SHA-256 + `timingSafeEqual`; env or generated at start and printed in the log | `portal.ts` `Portal.matches`, `generateCode`; `index.ts` start banner | removed; the setup token is masked in the log |
+| `GET /api/admin/state` returns the code in clear to every signed-in session | `app.ts` `admin.get('/state')`, `AdminState.code` | the Access page's code card goes; nothing returns a credential |
+| Sessions: a `Map` mirrored into `web_sessions` (hash, created, expires); 12 h; cookie `portal_session` `HttpOnly; SameSite=Strict; Path=/` | `portal.ts`, `store/sessions.ts`, `app.ts` | `login_sessions` with a user, a device and an idle timeout; DB-authoritative so a CLI reset takes effect |
+| Login limiter: 10 failures per client address per 10 minutes, in memory | `rateLimit.ts`, `config.loginLimit`, `clientKey` | persistent per-username and per-address counters |
+| Re-auth is a fresh code check within 10 minutes, marked on the in-memory `Session` | `chat/reauth.ts`, `POST /api/chat/reauth` | re-auth is the person's password; the mark moves to the login session row |
+| `SocketGuard` destroys sockets when their session ends (sign-out, rotation, expiry) | `sockets.ts` | extended to a user's sessions; the same sweep |
+| Origin and CSRF checks on every non-GET `/api/*` and on each socket | `app.ts`, four `sameOrigin()` copies | unchanged; they cover the new public routes (login, setup, register) |
+| `cli.ts` has `status backup restore rotate-key forget-secrets generate-key`; write commands need the portal stopped | `cli.ts`, `store/lock.ts` | user commands write to the database directly, safe with the portal running because sessions are DB-authoritative |
+| The avatar pipeline (validate, re-encode PNG at most 512 px, content-addressed) exists for personas | persona-pool §16, `persona_avatars` | reused for profile avatars; no second pipeline |
+| `u_owner` is already the id in 38 files, migrations 181-183 and the contracts of notifications, triggers, auto transfer, version pin, budgets | `grep` | the first account takes that id (D1): nothing is rewritten |
+| 12 test files and 5 scripts sign in with the code and the cookie `portal_session` | `COORD/p5-audit.md` §8 | the dev seed keeps `POST /api/login {"code"}` working (§11) |
+| Node here is 22.23.3: no `crypto.argon2` (added in 24.7); `scrypt` at N=2^17 takes about 250 ms and needs `maxmem` raised | script `pu/scrypt-bench.mjs`; `ERR_CRYPTO_INVALID_SCRYPT_PARAMS` observed | scrypt, no dependency (D2) |
+
+## 3. Goals
+
+| ID | Goal |
+| --- | --- |
+| G1 | **Onboarding always starts at setup.** A new install and an upgrade both end at the same screen: create the admin with a one-time token. |
+| G2 | **Accounts with real credentials.** Username and password, hashed with parameters stored, limited per account and per address. |
+| G3 | **Joining under the admin's control.** Closed, by invitation (default), or open with approval. |
+| G4 | **A person owns their sign-ins.** A profile, a device list, sign out one or all, password change that ends the others. |
+| G5 | **No email, no lost doors.** An admin or the host CLI resets a password; the last admin cannot be lost. |
+| G6 | **Uniform and quiet.** Same answer for a wrong username and a wrong password, a disabled account and a pending one; no secret in a log, a response or an audit row. |
+| G7 | **The recipe survives.** Scratch portals and QA scripts keep working from a clean environment through an explicit seed that cannot exist in production. |
+| G8 | **A one-person install keeps its data.** The first account is `u_owner`. |
+
+## 4. Non-goals
+
+- **Email, SMS, magic links, "forgot password".** No email exists; the admin or the host resets. Rejected: an email dependency and a new takeover channel.
+- **SSO, OAuth login, passkeys, TOTP.** Later (the contract leaves `via` on the actor). Passkeys are web-app-pwa W6.
+- **CAPTCHA.** Throttling and lockout come first; a CAPTCHA is a dependency and an accessibility cost.
+- **Pwned-password API calls.** An outbound call per registration is a new egress and a privacy leak; a short embedded block list is used instead.
+- **Cloudflare Access as the identity.** Access stays an outer gate (web-app-pwa §12.2/§12.3, not built); its email is not an account (Q3 of that PRD stays open as an option for later).
+- **Per-device naming and push devices** (web-app-pwa §12.4's device names): the device list here shows the browser and OS parsed from the User-Agent; push devices arrive with notifications and sit under the user.
+
+## 5. Users and stories
+
+| ID | Story |
+| --- | --- |
+| US1 | As the owner of a new install, I open the portal, paste the setup token from the log or the CLI, choose a username and a long password, and I am the admin. |
+| US2 | As the owner of an existing install, I open the portal after the upgrade, enter my old server code once, create my account, and find every workspace, session and set exactly where I left it. |
+| US3 | As an admin, I invite a colleague with a link that works once, for seven days. |
+| US4 | As an admin of a small public portal, I open registration and approve each person who asks. |
+| US5 | As a person, I change my password and every other device is signed out. |
+| US6 | As a person who lost a phone, I open Devices and end its sign-in. |
+| US7 | As an admin whose colleague forgot a password, I reset it: their old password stops working, I get a one-time link, and they open it and choose their own password. I never see or choose a password for them. |
+| US8 | As the host operator who locked everyone out, I run `portal user reset-password <name>` on the server and open the link it prints. |
+| US9 | As a developer or QA, I start a scratch portal from a clean environment with the seed and sign in with `POST /api/login {"code"}` as before, and as `alice` and `bob` for cross-user tests. |
+
+## 6. First run and setup (FR1 to FR8)
+
+The portal is in one of two states, decided at start from the database: **setup** (no account exists) and **ready**.
+
+- **FR1 (setup mode)** With no account, `GET /api/session` answers `setup: { required: true, methods, tokenExpiresAt }`, `GET`/`POST /api/setup` work, and every other `/api/*` route except `/healthz` answers `409 SETUP_REQUIRED`. The web app shows the Setup screen at every path. Jobs, readers and the reconciler keep running (running sessions are not interrupted).
+- **FR2 (the setup token)** At each start in setup mode the portal makes a token: 100 random bits as five groups of four characters from the code alphabet with no look-alikes (`ABCD-EFGH-JKMN-PQRS-TUVW`). Only its SHA-256 is stored (`portal_meta` keys `setup.token_hash`, `setup.token_expires_at`); it is valid 60 minutes, single use, and a restart or `portal setup-token` replaces it (the old one stops working). A wrong token counts toward the per-address limit (§8).
+- **FR3 (where it is shown)** The start-up log says `[setup] No account exists. Create the first admin at <url>. Setup token: ABCD-••••-••••-••••-TUVW (60 minutes). Full token: run "portal setup-token" on this host.` The **full token is printed only by the CLI** (`portal setup-token`: it issues a fresh one and prints it once). `PORTAL_SETUP_TOKEN_LOG=full` prints it in the log for operators who accept that logs then hold a one-hour, single-use credential (this is the one place the owner's "from the log" is met in full; the default keeps the principle that a token is never logged in full: M4, decision D6). The token never appears in an audit row, an error or a response body.
+- **FR4 (an install that had a server code)** If `PORTAL_SERVER_CODE` is set, `methods` also lists `server-code` and the old code is accepted ONCE as the credential, compared in constant time and counted like a token. After setup the code is never accepted again by any route (only the dev seed reads it, §11); in production the portal logs, once per start, `PORTAL_SERVER_CODE is set but no longer used; remove it` and, with `PORTAL_ENV_STRICT=1`, refuses to start (§10). A code that was only generated and printed in an old log is gone with that process: those installs use the token.
+- **FR5 (creating the first account)** `POST /api/setup { credential, username, displayName, password }` runs in ONE transaction: verify the credential, validate the username and the password policy (§8), insert the user with **id `u_owner`, role `admin`, state `active`, created_by `setup`**, delete the token, write `setup.done_at`, and audit `setup.completed`. Then the portal creates a login session, sets the cookie and answers `Me`. A second request finds no token and answers `404 SETUP_DONE` (the same as an unknown route). Two simultaneous requests: one wins.
+- **FR6 (claiming what exists)** After the commit the portal lists the runtimes' workspaces (10 s budget, other portals' workspaces excluded: `createdByAnotherPortal`) and inserts `workspace_owners (origin 'migrated')` for each. Anything it could not list (a target that is down) is claimed later from **Unclaimed** (admins only). Everything else that exists already says `u_owner`.
+- **FR7 (no way back)** `/api/setup` is 404 for ever after the first account exists. A portal whose admins are all lost is recovered with the CLI (§10), not with setup.
+- **FR8 (Locked and Frozen)** Setup, sign-in and every read of identity work while the store is Locked (a missing secret key): nothing here is sealed. While it is Frozen (read-only) sign-in succeeds with an in-memory session, as today's fallback, and every identity write answers `503` with the store's reason.
+
+## 7. Registration and invitations (FR9 to FR15)
+
+- **FR9 (modes)** The admin sets `registration` to `closed` (only an admin creates accounts), `invitation` (default: an admin, and members if `membersMayInvite`, make invitations) or `open` (anyone may ask; an admin approves). Changing it needs a password check and is audited (`registration.mode_changed`). The mode is public: the login screen shows "Register" only in `open` and "I have an invitation" in `invitation` and `open`.
+- **FR10 (an invitation)** `POST /api/invitations` makes `{ role?, username?, note?, ttlDays? }` and returns the code once: `cpinv_` plus 43 base64url characters (256 bits). Only its SHA-256 is stored. It expires in 7 days by default (1 to 30), is single use, and can be bound to a username and a role. An admin invitation (`role: admin`) needs an admin and a password check. A creator may have at most 20 invitations a day and the portal at most 100 pending.
+- **FR11 (the link)** `<origin>/invite#<code>`. The code stays in the URL fragment, so no server, proxy log or `Referer` carries it; the page reads it from `location.hash`, removes it from the address bar, and posts it in a JSON body.
+- **FR12 (redeeming)** `POST /api/auth/invitation { code, username, displayName, password }`: in one transaction mark the invitation used (`UPDATE ... SET used_at = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?` and require one changed row), insert an ACTIVE user with the invited role, create a session. An unknown, used, expired or revoked code gets one answer: `400 INVITE_INVALID`. Failures count per address (10 per 10 minutes).
+- **FR13 (open registration)** `POST /api/auth/register` is allowed only in `open`. It always answers `202 { status: 'pending' }` once the input is valid, **whether or not the username was free** (no enumeration), and creates a `pending` user only when it was. At most 5 requests per address per hour and 50 pending in all; a pending entry older than 14 days is deleted. A pending user cannot sign in and cannot be told apart from a wrong password at the login screen.
+- **FR14 (approval)** `GET /api/registrations`, `POST .../approve` (state `active`, role `member`) and `.../reject` (deleted) are platform admin acts and audited. Approval does not need a password check; creating an admin does.
+- **FR15 (usernames)** 3 to 32 characters, ASCII, starting with a letter, `a-z 0-9 . _ -`, compared lowercase after NFKC (one account per `username_key`), never starting `u_`, and not in `RESERVED_USERNAMES` (`admin`, `root`, `system`, `portal`, `pilot`, `claude`, ...). Taken and reserved names get one answer, `409 USERNAME_UNAVAILABLE`, where an answer is possible at all (invitation, admin create); the display name is 1 to 60 characters, plain text, NFC, no control characters.
+
+## 8. Passwords, sign-in and limits (FR16 to FR27)
+
+- **FR16 (hashing)** `scrypt` from `node:crypto`: N=2^17, r=8, p=1, a 16-byte random salt, a 32-byte key, `maxmem` 256 MiB (the default 32 MiB refuses N=2^17: ✅ `ERR_CRYPTO_INVALID_SCRYPT_PARAMS`), stored as `scrypt$ln=17,r=8,p=1$<salt>$<hash>` in base64url. These are OWASP's minimum scrypt settings 📄 (N=2^17, r=8, p=1) and cost about 250 ms and 128 MiB here ✅. The parameters travel with the hash: a successful sign-in with weaker ones rehashes. The password is NFKC-normalised, must not contain NUL, and is rejected above 128 characters BEFORE any hashing. Comparison is `timingSafeEqual` on equal-length buffers.
+- **FR17 (cost control)** At most 2 hashes run at once (256 MiB at most); further requests wait in a queue of at most 20 and then answer `503` at once. Limits and lockouts are checked BEFORE hashing, so a locked account costs nothing. A test profile (`PORTAL_PASSWORD_COST=test`, N=2^10) exists only with the dev seed or `NODE_ENV=test` and the process refuses it otherwise.
+- **FR18 (policy)** At least 15 characters (NIST SP 800-63B-4 for a password used alone, as cited by OWASP 📄), at most 128, any characters including spaces and Unicode, no composition rules, no expiry, no silent truncation, and `passwordProblems()` from the contract (not the username or the display name, not three or fewer distinct characters, not a plain sequence) plus a block list of the 1,000 most common passwords shipped in the server (`common`). Forms run the same function. The block list is local: no outbound call.
+- **FR19 (sign-in)** `POST /api/auth/login { username, password, keepSignedIn? }`. Order: size limit (4 KB), Origin check, normalise the name, check the limits for the name and the address (a locked one answers `429 LOCKED_OUT` with `Retry-After`, the same body whether or not the account exists), look the user up, **always hash** (a fixed dummy hash for an unknown, pending or disabled user: the same cost on every path ✅ 250 ms), compare. Any failure answers `401 UNAUTHORIZED` "That username or password isn't right." with the same body and status. Success resets the name's counter, rehashes if needed, creates the session (the old cookie's session, if any, is destroyed: no fixation) and answers `Me`.
+- **FR20 (limits)** Per username (existing or not): 5 failures in 15 minutes lock it for 30 s, doubling up to 15 minutes while failures continue; per address: 20 failures in 10 minutes block it for 10 minutes. Counters are rows (`auth_throttle`), so a restart does not reset them; a blocked key is also held in memory until it expires, so a flood from a blocked address costs no database write. OWASP asks for a per-account counter, not per address only, because attackers rotate addresses 📄; the lockout can be used to annoy a person, so a person who is already signed in is not affected and an admin or the CLI can reset the password and clear the lock.
+- **FR21 (re-auth)** `POST /api/auth/reauth { password }` marks the login session (`reauth_at`) for 10 minutes. Failures count toward the user's own limit as well as a per-session one, so a stolen cookie cannot guess the password faster than the sign-in screen allows. Routes marked `reauth` answer `403 REAUTH_REQUIRED` until then.
+- **FR22 (change)** `POST /api/auth/password { current, next, revokeTokens? }`: verify `current` (counted like re-auth), apply the policy to `next`, store the new hash, **delete every other login session**, replace the current one (new id and cookie: OWASP asks for renewal after a privilege change 📄), `emitAccessChange` (their sockets close and reconnect with the new cookie), and with `revokeTokens` bump `token_epoch`. An admin or CLI reset always bumps it (FR23).
+- **FR23 (reset by an admin or the CLI)** There is no email, so a reset is a one-time CODE, never a temporary password: `POST /api/users/:id/reset-password` (a password check by the admin) makes a reset code (`cprst_` plus 256 bits, SHA-256 at rest, one hour, single use; the same table, door and limits as an invitation), sets the account's password hash to a value nothing can match, bumps `token_epoch` and deletes every sign-in of the person, so **the old password stops working at once**, and shows the code once as the link `<origin>/reset#<code>`. The person (or the admin hands them the link) opens it, chooses their own password under the same policy, and is signed in (`POST /api/auth/reset`). Until then the account answers the uniform sign-in failure; `User.resetPending` tells admins. A reset is **loud, not impossible**: the person's next sign-in shows "An admin reset your password on <date>", the audit has `user.password_reset` and `user.reset_redeemed`, and (once the bus exists) a notification goes to the person's devices. See the honest limit in §12 (I20).
+- **FR24 (cookie)** `portal_session` on plain HTTP; `__Host-portal_session` with `Secure` when the request is HTTPS (`X-Forwarded-Proto` only when `PORTAL_TRUST_PROXY=true`, or `PORTAL_COOKIE_SECURE=true`), always `HttpOnly; SameSite=Strict; Path=/`, no `Domain`. The value is 256 random bits; the database keeps its SHA-256 only. Sockets accept either name.
+- **FR25 (audit of sign-in)** `auth.login`, `auth.login_failed` (the user id when the name exists, else `unknown:` plus the first 8 hex of the SHA-256 of the normalised name: a password pasted into the username field is never stored; at most one row per name and minute), `auth.lockout` (when a lock starts), `auth.logout`, `auth.password_changed`, `auth.password_check_failed`, `auth.session_revoked`.
+- **FR26 (headers)** Responses from these routes carry `Cache-Control: no-store` (already true for `/api/*`); no response ever contains a hash, a token or a code after the one that shows it once.
+- **FR27 (timing)** Every path of sign-in, registration and invitation redemption does the same work for found and not-found, so response time does not tell them apart beyond noise (🔬 measured in the suite).
+
+## 9. Sessions, devices and what ends them (FR28 to FR34, FR51 to FR55)
+
+- **FR28 (lifetimes)** A browser session ends 12 hours after sign-in. "Keep me signed in" (a toggle on the login form, off by default in a tab) ends after 30 days unused or 90 days at most (`SESSION_LIFETIME`; the cookie `Max-Age` follows; Chrome caps cookies at 400 days 📄). There is no idle timeout on a short session beyond its 12 hours.
+- **FR29 (database-authoritative)** A session is looked up in `login_sessions` on every request and every socket handshake (one indexed read); nothing is cached beyond the request, so a revocation by an admin or the CLI is effective at once and `SocketGuard`'s sweep (every 15 s and on `emitAccessChange`) cuts the sockets.
+- **FR30 (devices)** `GET /api/auth/sessions` lists the person's sign-ins: device (`Chrome on Linux`, parsed from the User-Agent by a small table, no library), address, created, last seen, expiry, kept, and which is current. `DELETE /api/auth/sessions/:id` ends one (the current one is ended by sign-out), `POST /api/auth/sessions/revoke-others` ends the rest. OWASP lists these as what a person should see 📄. `last_seen_at` is written at most once a minute.
+- **FR31 (what ends a session)** Sign-out, expiry, a device revoke, a password change (all others), a disable, an admin or CLI reset, and deleting the user. Each ends the user's matching sockets (live, chat, shell, browser) within one sweep.
+- **FR32 (disabling a user)** Disabling deletes the user's sessions, bumps `token_epoch` (their Portal MCP tokens and agent tokens die at the next call), ends their running chat sessions (`endUserSessions`), pauses their jobs (`owner_disabled`), and cancels their pending invitations. Their objects stay, owned by them, until an admin reassigns them ([Authorization](authorization.md) FR6). Enabling restores sign-in only: old tokens stay dead.
+- **FR33 (the last admin)** The last active admin can be neither demoted, disabled nor deleted: refused in the service (`409 LAST_ADMIN`) and by two triggers on `users` ✅ (checked in `node:sqlite`; the CLI goes through the same triggers).
+- **FR34 (identity on a socket)** A socket's actor is fixed at the handshake from its login session; `SocketGuard` tracks it by session id. A user's change of right is delivered by `emitAccessChange` ([Authorization](authorization.md) FR23).
+- **FR54 (nothing of the last person stays in the browser)** Signing out, and any change of the signed-in person, does a full page navigation (not a client-side route change), so no in-memory data of the previous person survives; local storage keys carry the user id (`claudepilot.glance.<userId>`); the service worker's offline summary (web-app-pwa §10.3) is cleared at sign-out and never shown to another person. A shared browser therefore shows a second person nothing of the first.
+- **FR55 (a restore ends every sign-in)** `portal restore` (and a restore from the panel) deletes every `login_sessions` row and bumps every user's `token_epoch` after the database is replaced: a backup holds the passwords and sessions of its day, and restoring it must not bring back a sign-in or a password that was revoked since. The admins are told that a restore also restores the passwords of that day.
+- **FR51 (client sign-ins: the extension point)** An editor extension or a command-line client has no cookie. The model leaves room for it and does not build the flow here (the VS Code plan designs it): a `login_sessions` row with `client` set (`vscode`, `cli`) and a token of its own (`cppt_` plus 256 bits, SHA-256 at rest), issued by a device flow (RFC 8628 📄: the client shows a code, the person approves it in the portal while signed in, the client polls) and bound to that person, listed under their Devices with the client's name, revocable, with a 30-day sliding lifetime. Its actor is `{ kind: 'user', via: 'client' }`: the person's rights, capped at `operate`, and only on routes declared `bearer: true` (never `reauth`, `platform` or sharing routes). Bearer requests carry no cookie, so the CSRF and Origin rule does not apply to them; they are refused if a cookie is also present.
+- **FR52 (what the table gives it)** `login_sessions.client` (NULL for browsers), the same revocation paths as a browser sign-in (device revoke, password change, disable, the epoch), and `LoginSession.client` on the wire. A password change ends client sign-ins too.
+- **FR53 (what MU1 builds)** Only the column, the `authenticate` hook that reads `Authorization: Bearer` for `bearer: true` routes, and the tests that a client token cannot reach anything else. The device-flow endpoints belong to the VS Code package.
+
+## 10. Administration, the CLI and environment hygiene (FR35 to FR42)
+
+- **FR35 (people)** Platform admins list users, add one (an invitation bound to the username and role: the person redeems it and chooses their own password; there is no "create a user with a password"), change a role, disable or enable (with a reason, kept), reset a password (FR23), reassign a disabled user's objects (and the teams they alone own) to another user, and delete a disabled user who owns nothing. Disabling, role changes, resets and deletes need a password check. Every one is audited with the actor.
+- **FR36 (what an admin cannot do in the product)** Read a person's password or hash, read their sessions, secrets or tickets through any screen, or see anyone's devices' tokens. (Resetting a password lets an admin choose a new one: FR23 and I20 say why that is the honest limit.) An admin sees each account's name, role, state, created, last sign-in and counts of devices and objects.
+- **FR37 (profile)** A person changes their display name and avatar (the persona pipeline: PNG, JPEG or WebP, re-encoded square at most 512 px, metadata stripped, content-addressed), and password; they never change their username (it appears in shares and audit).
+- **FR38 (the CLI)** Run on the host (`npm run portal -- <command>`, or `node dist/cli.js` in the image), with the data directory readable. Writes go to the database directly with a 5 s busy timeout, so the portal may be running; they pass through the same triggers and invariants and write audit rows with actor `cli:<os user>`.
+
+  | Command | What |
+  | --- | --- |
+  | `setup-token` | in setup mode: issue a fresh token and print it once; otherwise an error pointing at `user create` |
+  | `user list` | usernames, roles, states, last sign-in |
+  | `user create <username> [--admin] [--name "..."]` | makes an invitation bound to the username (and the admin role with `--admin`); prints its link once |
+  | `user reset-password <username>` | FR23: the old password dies, sessions and tokens end; prints the reset link once |
+  | `user disable <username> [--reason "..."]` / `enable` | state (the last-admin trigger applies) |
+  | `user role <username> admin\|member` | role (last-admin trigger) |
+  | `user sessions <username>` / `user revoke-sessions <username>` | list and end sign-ins |
+
+  The printed link goes to the terminal only, never to a log or an audit row. The CLI is the root of trust: whoever can run it can already read the data directory.
+- **FR39 (environment hygiene: what the portal reads)** The server reads only documented variables (`PORTAL_*`, `NODE_ENV`, `PATH`, `HOME`, `LANG`, `TZ`, `NODE_OPTIONS`, and `KUBECONFIG` or the in-cluster variables only when the Kubernetes target is enabled on purpose). Added after the 2026-10-12 incident (PLAN-2 A.11): an agent's shell inherits the owner's Claude profile and sockets, so a portal started from it must not pick them up.
+- **FR40 (environment hygiene: what children get)** Any process the portal starts on its own host (the `This machine` target's shells and `claude`, probes, `git`, `tmux`) gets an explicit environment: `PATH`, `HOME`, `LANG`, `TERM`, `TZ`, `USER`, `SHELL` plus what its feature sets itself; never `process.env` as a whole.
+- **FR41 (environment hygiene: refusing credentials it does not need)** At start the server looks at the NAMES of its environment (never values). Names that look like credentials or sockets (`*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_API_KEY`, `SSH_AUTH_SOCK`, `GIT_ASKPASS`, `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_*`, `CLAUDECODE`, `ANTHROPIC_*`, and `PORTAL_SERVER_CODE` in production), other than ones the portal documents, are IGNORED (not read, not passed on) and logged once as `[env] ignoring N inherited credential variables: A, B, C`. With `PORTAL_ENV_STRICT=1` (recommended for production; the shipped compose files are not ours to change, so it is documented in the README Deploy notes by the coordinator) the portal refuses to start instead. In `NODE_ENV=production` a stray `PORTAL_DEV_SEED` always refuses (§11).
+- **FR42 (platform audit)** Identity, sharing, teams and denied decisions write to the platform's one audit, `platform_audit` (made by the platform track, migration 200; written by `PlatformAudit.record`; read at `GET /api/platform/audit`: a person reads the rows about themselves, an admin all). This work adds `outcome`, `ip` and `protected` to it and two triggers ✅: **no row is ever rewritten**, and a `protected` (security) row younger than a year is **never deleted** (a delete skips it, so the platform track's own 90-day prune of its rows is unaffected and security rows are pruned only after a year). `kind` is the `AuditAction` (`auth.login`, `user.disabled`, `share.created`, ...), `actor` is `actorString`, `userId` the person it concerns, `subject` is `<type>:<id>`; `detail` holds names, ids and numbers only.
+
+## 11. The dev and test seed (FR43 to FR50)
+
+The scratch-portal recipe (PLAN.md §5) and the QA scripts sign in with `POST /api/login {"code"}` and the cookie `portal_session`. They keep working, through an explicit seed that is off unless asked and refused in production.
+
+- **FR43 (switch)** `PORTAL_DEV_SEED=1`, read once in `config.ts`, together with `PORTAL_SERVER_CODE=<8 characters>` (as today). Without a code the seed refuses to start.
+- **FR44 (refusals, checked at start)** The process EXITS with a clear message (it never "ignores" the flag) when `NODE_ENV=production`, when `PORTAL_TRUST_PROXY=true`, when the database holds an account that was not created by the seed, or when `PORTAL_PASSWORD_COST` is set without the seed.
+- **FR45 (what it does)** At start it ensures the account `dev` (id `u_owner`, role admin, name "Dev admin", a random password that nobody knows; created_by `dev-seed`) so a fresh scratch data directory skips setup. `POST /api/login { code, as?, role? }` compares the code in constant time, then signs in as `dev`, or as `as` (a valid username, created on the fly as a member, or with `role: 'admin'`), and sets `portal_session` exactly as today. The session is a real login session: every authorization rule applies to it.
+- **FR46 (noisy)** A red banner in the log at start and every 10 minutes (`[dev-seed] ACTIVE: anyone with the code can sign in as any account`), the response header `X-Pilot-Dev-Seed: on` on every response, `AuthStatus.devSeed: true` (the web shows a red bar), `dev_seed.login` rows in the audit, and a "dev" chip on seeded accounts in People.
+- **FR47 (clean environment)** It works from `env -i PATH=$PATH HOME=/tmp/<prefix>home LANG=C.UTF-8 PORTAL_DEV_SEED=1 PORTAL_SERVER_CODE=<8 digits> PORTAL_K8S_ENABLED=false PORTAL_PORT=<port> PORTAL_DATA_DIR=/tmp/<prefix>data PORTAL_SECRET_KEY=<key> NODE_OPTIONS=--disable-warning=ExperimentalWarning npx tsx ... src/index.ts` (PLAN-2 A.11): no variable it needs is inherited, `NODE_ENV` stays unset (development).
+- **FR48 (cross-user tests)** `tools/qa/lib.mjs` gains `login(code, as)`; the cross-user suite makes `alice`, `bob`, `carol`, `dave`, `root` this way. Tests that spawned a production-mode portal with the code (`qa/boot.test.ts` and its neighbours) run development mode with the seed, or call the identity module's `createUser` through the test kit.
+- **FR49 (tested)** Spawned-process tests: production + seed exits non-zero with the message; seed + proxy exits; seed + a real account in the database exits; seed off: `POST /api/login` is 404 and no `dev` user exists; the header is present; a wrong code is `401` and counted; `as` rejects names that break the pattern.
+- **FR50 (docs)** PLAN.md §5's recipe gains `PORTAL_DEV_SEED=1`; the sign-in line is otherwise unchanged. README and `.env.example` describe `PORTAL_SERVER_CODE` as dev-seed only.
+
+## 12. Security and threat model
+
+| ID | Abuse | Control | Test |
+| --- | --- | --- | --- |
+| I1 | Brute force one account | per-name counter and lockout (FR20), password length 15+, constant-time compare | 6 wrong passwords: the 6th is `429` and a correct one is refused during the lock |
+| I2 | Password spraying (one password, many names) | per-address limit 20/10 min; unknown names count too | 25 names from one address: blocked at 20 |
+| I3 | Credential stuffing from many addresses | per-name counters hold across addresses; block list of common passwords at set time | one name, 30 addresses: locked at 5 |
+| I4 | Username enumeration by login, registration, invitation, password change | identical status, body and cost (FR19, FR13, FR12, FR27); dummy hash for unknown | response bodies equal; timing within noise 🔬 |
+| I5 | Enumeration by the lookup used for sharing and teams | exact username only, signed in, 30 an hour per person (counted double for a miss) | the 31st lookup is `429` |
+| I6 | Lockout used to annoy someone | lock per name with a ceiling of 15 min; a signed-in person is unaffected; an admin or CLI reset clears it | a signed-in session keeps working while its name is locked |
+| I7 | Registration flood | open mode only; 5 per address per hour; 50 pending; 14-day expiry; uniform `202` | the 6th request is `429`; the 51st pending is refused |
+| I8 | Invitation guessing | 256-bit code; per-address failure limit; one answer for all invalid states | 11 wrong codes from one address: `429` |
+| I9 | Invitation replay or leak | single use by an atomic update; expiry; fragment link (no `Referer`, no server log) | two parallel redemptions: one wins |
+| I10 | Invitation abuse by a member | `membersMayInvite` off by default; per-creator 20/day, 100 pending | the 21st is refused |
+| I11 | Setup token theft or race | 100 bits, 60 minutes, single use, hashed, masked in the log; first request wins; `404` after | two parallel setups: one wins; the token is not in the log (grep) |
+| I12 | The old server code reused after setup | no route accepts it; only the dev seed reads it | `POST /api/login` is 404 without the seed |
+| I13 | Session fixation | a new session id on every sign-in, password change and reset; the presented cookie is destroyed | the cookie before and after differ |
+| I14 | Session theft from a kept device | device list with revoke; password change ends all others; 30 days idle, 90 absolute | revoked device: next request `401` |
+| I15 | Login CSRF and CSRF on public routes | Origin and `Sec-Fetch-Site` check on every non-GET `/api/*`; `SameSite=Strict` | a cross-origin login is `403` |
+| I16 | Cookie exposure | `HttpOnly`, `SameSite=Strict`, `Secure` + `__Host-` over HTTPS, no `Domain` | headers asserted |
+| I17 | Hash DoS (CPU or memory) | limits first, 2 concurrent hashes, queue 20, 128-character cap before hashing | 50 parallel logins: bounded memory, fast `503`s |
+| I18 | Unicode collisions (two names that look alike) | ASCII usernames; NFKC on passwords | a lookalike name is `format` |
+| I19 | Password in a log or audit | the failed-login audit stores a fingerprint, never the name typed when it does not exist; bodies are never logged | grep the log and the audit after a run |
+| I20 | An admin takes over an account by resetting its password and redeeming the code themselves | **Cannot be prevented without email or a second factor, so it is made loud**: the old password dies and every sign-in and token ends at once, the audit has both `user.password_reset` and `user.reset_redeemed` with their actors, the person sees "An admin reset your password" at their next sign-in, a password check guards the reset, and the last-admin triggers stand. The privacy claims of [Authorization](authorization.md) FR6 are about the product's own screens, not about a malicious admin with reset power (nor about the host operator: R4). Open: a second admin's approval for resets (Q7) | |
+| I21 | The CLI as a backdoor | host access is the trust root; actor `cli:<os user>`; same triggers; output to the terminal only | |
+| I22 | Dev seed in production | refused at start (FR44), header and banner, tested by spawning | exits non-zero |
+| I23 | Inherited credentials (the 2026-10-12 incident) | FR39 to FR41 | start with `SSH_AUTH_SOCK` and `CLAUDE_CONFIG_DIR` set: ignored and listed by name; strict mode refuses |
+| I24 | A reset link intercepted or reused | 256 bits, one hour, single use, hashed, fragment link (no `Referer`), the same per-address limit as invitations; a used or expired code is the uniform `INVITE_INVALID` | two redemptions in parallel: one wins |
+
+## 13. Data model
+
+Checked in `node:sqlite` on top of the real migrations (including migration 200's `platform_audit`), with the invariants asserted (last admin, append-only audit, the retention guard, the platform track's prune unaffected) in `COORD/p5-schema-check.mts`. Block 400-409.
+
+```sql
+CREATE TABLE users (
+  id TEXT PRIMARY KEY CHECK (id GLOB 'u_*'),
+  username TEXT NOT NULL CHECK (length(username) BETWEEN 3 AND 32),
+  username_key TEXT NOT NULL,                      -- NFKC + lower: one account per key
+  display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 60),
+  role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
+  state TEXT NOT NULL CHECK (state IN ('active', 'pending', 'disabled')),
+  password_hash TEXT NOT NULL,
+  password_changed_at TEXT NOT NULL,
+  avatar_sha256 TEXT,
+  token_epoch INTEGER NOT NULL DEFAULT 0,          -- bumped to kill tokens and agent tokens
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  last_login_at TEXT,
+  disabled_at TEXT, disabled_by TEXT, disabled_reason TEXT
+) STRICT;
+CREATE UNIQUE INDEX users_username_key ON users (username_key);
+CREATE INDEX users_state ON users (state, role);
+-- the last active admin can be neither demoted, disabled nor deleted
+CREATE TRIGGER users_keep_admin_update BEFORE UPDATE OF role, state ON users
+WHEN OLD.role = 'admin' AND OLD.state = 'active' AND (NEW.role <> 'admin' OR NEW.state <> 'active')
+  AND (SELECT count(*) FROM users WHERE role = 'admin' AND state = 'active' AND id <> OLD.id) = 0
+BEGIN SELECT RAISE(ABORT, 'LAST_ADMIN'); END;
+CREATE TRIGGER users_keep_admin_delete BEFORE DELETE ON users
+WHEN OLD.role = 'admin' AND OLD.state = 'active'
+  AND (SELECT count(*) FROM users WHERE role = 'admin' AND state = 'active' AND id <> OLD.id) = 0
+BEGIN SELECT RAISE(ABORT, 'LAST_ADMIN'); END;
+
+CREATE TABLE login_sessions (                      -- replaces web_sessions
+  id TEXT PRIMARY KEY,                             -- shown in the device list; NOT the cookie value
+  token_hash TEXT NOT NULL UNIQUE,                 -- sha256 of the 256-bit cookie token
+  user_id TEXT NOT NULL,
+  created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL, absolute_expires_at TEXT NOT NULL,
+  kept INTEGER NOT NULL DEFAULT 0 CHECK (kept IN (0, 1)),
+  reauth_at TEXT, ip TEXT, user_agent TEXT, device TEXT,
+  client TEXT,                                     -- NULL: a browser; 'vscode', 'cli': a first-party client (FR51)
+  token_epoch INTEGER NOT NULL
+) STRICT;
+CREATE INDEX login_sessions_user ON login_sessions (user_id);
+CREATE INDEX login_sessions_expiry ON login_sessions (expires_at);
+
+CREATE TABLE auth_throttle (                       -- survives a restart
+  scope TEXT NOT NULL CHECK (scope IN ('user', 'ip', 'register', 'invitation', 'reauth', 'lookup', 'share', 'team_invite')),
+  key TEXT NOT NULL,
+  failures INTEGER NOT NULL DEFAULT 0,
+  window_start_ms INTEGER NOT NULL,
+  locked_until_ms INTEGER NOT NULL DEFAULT 0,
+  updated_ms INTEGER NOT NULL,
+  PRIMARY KEY (scope, key)
+) STRICT;
+
+CREATE TABLE invitations (                         -- invitations and password resets share one door
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL DEFAULT 'invite' CHECK (kind IN ('invite', 'reset')),
+  user_id TEXT,                                    -- a reset: the account it is for
+  code_hash TEXT NOT NULL UNIQUE,
+  created_by TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
+  username_key TEXT, note TEXT,
+  used_at TEXT, used_by TEXT, revoked_at TEXT
+) STRICT;
+
+CREATE TABLE identity_settings (                   -- one row, readable before anyone signs in
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  registration TEXT NOT NULL DEFAULT 'invitation' CHECK (registration IN ('closed', 'invitation', 'open')),
+  members_may_invite INTEGER NOT NULL DEFAULT 0 CHECK (members_may_invite IN (0, 1)),
+  invitation_ttl_days INTEGER NOT NULL DEFAULT 7 CHECK (invitation_ttl_days BETWEEN 1 AND 30),
+  sign_in_enabled INTEGER NOT NULL DEFAULT 1 CHECK (sign_in_enabled IN (0, 1)),
+  sharing_acceptance TEXT NOT NULL DEFAULT 'operate' CHECK (sharing_acceptance IN ('always', 'operate', 'never')),
+  updated_at TEXT NOT NULL
+) STRICT;
+
+-- The platform audit is migration 200's table; identity adds what a security row needs (✅ run on the real schema):
+ALTER TABLE platform_audit ADD COLUMN outcome TEXT NOT NULL DEFAULT 'ok' CHECK (outcome IN ('ok', 'denied', 'failed'));
+ALTER TABLE platform_audit ADD COLUMN ip TEXT;
+ALTER TABLE platform_audit ADD COLUMN protected INTEGER NOT NULL DEFAULT 0 CHECK (protected IN (0, 1));
+CREATE INDEX platform_audit_object ON platform_audit (subject, id);
+CREATE TRIGGER platform_audit_no_update BEFORE UPDATE ON platform_audit BEGIN SELECT RAISE(ABORT, 'audit rows are append-only'); END;
+CREATE TRIGGER platform_audit_keep BEFORE DELETE ON platform_audit   -- skips (never errors) so the platform track's 90-day prune still works
+WHEN OLD.protected = 1 AND OLD.at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-365 days')
+BEGIN SELECT RAISE(IGNORE); END;
+```
+
+`portal_meta` keys: `setup.token_hash`, `setup.token_expires_at`, `setup.done_at`, `multi_user_since`. Nothing here is a sealed column: a Locked portal still signs people in. A later migration drops `web_sessions` once the first account exists (its rows have no user and are useless).
+
+## 14. API
+
+Routes are `IDENTITY_API` in [`identity.ts`](../../packages/contracts/src/identity.ts). Access is the declaration in [Authorization](authorization.md) Appendix A.
+
+| Route | Access | What |
+| --- | --- | --- |
+| `GET /api/session` | public | `AuthStatus` (who is signed in, `setup`, `registration`, `devSeed`) |
+| `GET /api/setup` / `POST /api/setup` | public until the first account | status / `SetupRequest` -> signs in |
+| `POST /api/auth/login` | public, throttled | `PasswordLoginRequest` -> `Me` |
+| `POST /api/login` | dev seed only | `{ code, as?, role? }`; 404 otherwise |
+| `POST /api/auth/logout` (`/api/logout`) | public | clears the cookie, ends the session |
+| `POST /api/auth/register` | public, `open` mode | `RegisterRequest` -> `202 { status: 'pending' }` |
+| `POST /api/auth/invitation` | public, throttled | `RedeemInvitationRequest` -> `Me` |
+| `GET /api/auth/me`, `PATCH /api/auth/me`, `POST/DELETE /api/auth/me/avatar` | self | profile |
+| `POST /api/auth/password`, `POST /api/auth/reauth` | self | change; password check |
+| `GET /api/auth/sessions`, `DELETE /api/auth/sessions/:id`, `POST /api/auth/sessions/revoke-others` | self | devices |
+| `GET /api/users/by-username/:username` | signed in, 30/h | `UserSummary` or 404 |
+| `GET /api/users`, `PATCH /api/users/:id`, `POST /api/users/:id/reset-password`, `POST /api/users/:id/reassign`, `DELETE /api/users/:id` | platform(users) (+ reauth) | administration; a reset returns `ResetPasswordResult` |
+| `POST /api/auth/reset` | public, throttled | `RedeemResetRequest` -> `Me` |
+| `GET /api/registrations`, `POST .../approve`, `.../reject` | platform(registration) | pending sign-ups |
+| `GET/POST /api/invitations`, `DELETE /api/invitations/:id` | admin; members if allowed | invitations |
+| `GET/PUT /api/identity/settings` | platform(registration) (+ reauth) | `IdentitySettings` |
+| `GET /api/platform/audit` (exists, `NOTIFY_API.audit`) | self rows; admin all | `AuditRow[]`; filters `kind` prefix, `actor`, `outcome` added |
+
+Errors: `SETUP_REQUIRED` 409, `SETUP_DONE` 404, `INVITE_INVALID` 400, `REGISTRATION_CLOSED` 403, `USERNAME_UNAVAILABLE` 409, `LAST_ADMIN` 409, `PASSWORD_REJECTED` 422 (`details.problems`), `LOCKED_OUT` 429 (`Retry-After`), `REAUTH_REQUIRED` 403, `UNAUTHORIZED` 401.
+
+## 15. What the person sees
+
+Within the text diet: titles of one or two words, explanations in an ⓘ (`InfoTip`), a warning that guards something irreversible as ONE terse line. 390 px and 1280 px.
+
+| Screen | Content |
+| --- | --- |
+| **Set up** (`/setup`, shown at any path in setup mode) | Fields: Setup token, Username, Name, Password (with a strength-free rule line: "15 or more characters"). Button: Create admin. ⓘ on the token: "From the server log, or run `portal setup-token` on the host." An install with a server code: the same field accepts "your old server code" (ⓘ). |
+| **Sign in** (`/login`) | Username, Password, "Keep me signed in" (a switch), Sign in. Under it: "Register" (open mode), "I have an invitation" (invitation and open). Locked: "Try again in 12 minutes." Disabled sign-in: one line. The page never says which field was wrong. |
+| **Join** (`/invite`) | the code is read from the address fragment; Username (locked when the invitation names it), Name, Password, Join. An invalid code: "This invitation isn't valid." |
+| **Register** (open mode) | Username, Name, Password; then "An admin has to approve you." |
+| **Profile** (account menu → Profile) | avatar and Name; **Password** (current, new; a switch "Also revoke my tokens"); **Devices**: a list (device, last seen, "This device"), End on each, "End all others". |
+| **People** (Access → People, admins) | a list: name, username, role, state, last sign-in; a row menu: Role, Disable, Reset password (shows the one-time link once, with Copy), Reassign, Delete. **Invite** (this is also how an account is added): a dialog (role, optional username, note, expiry) that shows the link once with Copy. **Registration**: a segmented control: Closed, Invitation, Open. **Pending** and **Unclaimed** sections appear only when they have rows. Dev-seed accounts carry a "dev" chip. |
+| Account menu | the person's avatar and name instead of the shield; Profile, Theme, Sign out. A badge shows waiting invitations (team invites, shares) once those exist. |
+| Banners | dev seed: a red bar "Dev seed: sign-in with a code" (never in production); setup mode needs none; after a reset is redeemed, one line at the next sign-in: "An admin reset your password on <date>." |
+
+The server-code card, "Rotate", "Custom code" and the sign-in switch row of today's Access page are removed; the sign-in switch becomes `signInEnabled` in the Registration control.
+
+## 16. Testing and verification
+
+Done here (✅): the schema script (users, the last-admin triggers, the platform audit's append-only and retention triggers, invitations, throttle table) on the real migrations; the scrypt benchmark and the `maxmem` failure; Node's missing `argon2`; the route enumeration (the public set is 4 routes today: `/healthz`, `/api/session`, `/api/login`, `/api/logout`; this PRD adds `/api/setup`, `/api/auth/login`, `/api/auth/register`, `/api/auth/invitation`).
+
+To build (packages A1, A9): unit tests for the hash format and rehash, the policy, the throttle arithmetic (the lock durations by hand: failures 5 → 30 s, 6 → 60 s, 7 → 120 s ... 15 min cap), the setup state machine including the race, invitation single use under parallel requests, cookie flags for http and https, device parsing; integration tests for every row of §12; spawned-process tests for the seed refusals; the cross-user suite's sign-in part; a log grep that no password, token or code appears. Browser verification at 390 and 1280 px, light and dark, of Set up, Sign in, Join, Profile, People.
+
+## 17. Milestones
+
+| Milestone | Scope | Gate | Status |
+| --- | --- | --- | --- |
+| I0 | contracts (`identity.ts`) | none | **Built** |
+| I1 | users, sessions, setup, sign-in, throttling, hashing, the security rows of the platform audit, `authenticate`, the CLI, the seed | A0 | **Not built** |
+| I2 | registration, invitations, profile, devices, People | I1 | **Not built** |
+| I3 | environment hygiene, `Secure`/`__Host-` cookies, the removal of the code login and its tests and scripts | I1; the quiescent window | **Not built** |
+
+## 18. Decisions
+
+| ID | Decision | Rejected, and why |
+| --- | --- | --- |
+| D1 | The first account takes the id `u_owner` | rewriting `u_owner` to a random id in 38 files and every row: a partial rewrite is a silent ownership loss (M5) |
+| D2 | scrypt from `node:crypto`, N=2^17 r=8 p=1, parameters in the hash, rehash on sign-in | argon2id: not in Node 22 (`crypto.argon2` arrived in 24.7), a native or WASM dependency; bcrypt: 72-byte limit and weaker against GPUs; PBKDF2: weaker memory hardness (OWASP prefers scrypt to it unless FIPS is required 📄) |
+| D3 | 15-character minimum, no composition rules, a local block list, no outbound check | 8 characters with symbols (weaker and worse UX); a Pwned Passwords call (egress and privacy) |
+| D4 | Sessions are rows, looked up on every request; 12 h or 30/90 days kept; rotate on sign-in and password change | an in-memory cache (a CLI or admin reset would not be seen); JWTs (cannot be revoked) |
+| D5 | Persistent per-name and per-address throttling, uniform answers, a dummy hash | address-only limits (rotating addresses defeat them); revealing "account locked" (an oracle) |
+| D6 | The setup token is masked in the log and printed in full by the CLI; `PORTAL_SETUP_TOKEN_LOG=full` opts in | printing it in full by default (logs ship elsewhere; M4 says never in full); only a file (the log is where an operator looks first) |
+| D7 | Invitations are single-use links with the code in the fragment; open registration always answers `202` | a code in the path or query (it reaches logs and `Referer`); answering "taken" (an oracle) |
+| D8 | A dev seed that is explicit, noisy and refused in production, creating real sessions | keeping the code login in all modes (the thing being removed); a hidden header or a test-only route (invisible, easy to leave on) |
+| D17 | Environment hygiene: read only documented variables, pass children an allow-list, ignore and name inherited credentials, refuse in strict mode | trusting the operator's shell (the 2026-10-12 incident) |
+
+## 19. Open questions
+
+| ID | Question | Who decides |
+| --- | --- | --- |
+| Q1 | The password minimum is 15 (NIST for a password used alone). Accept, or 12 until a second factor exists? | Owner |
+| Q2 | Print the setup token in the log in full by default (the owner's "from the log"), or keep it masked with the CLI as the source (this PRD)? | Owner |
+| Q3 | May members invite (`membersMayInvite`)? Default off | Owner |
+| Q4 | Should an admin be able to see (not use) each account's device count and last sign-in? v1: yes, counts only | Owner |
+| Q5 | Idle timeout on short sessions (the PRD of the PWA wanted 12 h absolute only): add 2 h idle? | Product |
+| Q6 | Passkeys and TOTP: the first second factor, and does it lower the password minimum to 8 (NIST allows it with MFA)? | Product |
+| Q7 | A second admin's approval before a reset takes effect (installs with two or more admins), to make I20 harder? v1: no | Owner |
+

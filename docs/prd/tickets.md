@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **v0.2, built** (2026-10-12). One queue of work that people and agents share, with agent sessions, priorities, summaries, tags and types, where anything a person asks for, and anything an agent needs from a person, is an open ticket. Tables, rules, REST, the tools, the Tickets page (list, board, detail, dialogs), starting a session for a ticket and the CI checks are built; the agent path was checked with Claude Code 2.1.296 inside a Docker workspace. Agents authenticate with the per-session token of [Portal MCP](portal-mcp.md) §12.6. A session started from a ticket in the UI was checked end to end with a real Claude Code in a Docker workspace. Not yet: worktrees, the nav count, push. Status per milestone: §14. 🔬 = unverified, listed in §17. |
+| Status | **v0.2, built** (2026-10-12). One queue of work that people and agents share, with agent sessions, priorities, summaries, tags and types, where anything a person asks for, and anything an agent needs from a person, is an open ticket. Tables, rules, REST, the tools, the Tickets page (list, board, detail, dialogs), starting a session for a ticket and the CI checks are built; the agent path was checked with Claude Code 2.1.296 inside a Docker workspace. Agents authenticate with the per-session token of [Portal MCP](portal-mcp.md) §12.6. A session started from a ticket in the UI was checked end to end with a real Claude Code in a Docker workspace. Not yet: the nav count, push (worktrees are there: `startSession` passes them and the Start dialog has "Own git worktree", checked 2026-10-12). Status per milestone: §14. 🔬 = unverified, listed in §17. |
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-12 |
 | Depends on | [Chat sessions](chat-sessions.md) (starting a session for a ticket, the actor on a portal message, session state), [Portal MCP](portal-mcp.md) (the tools agents and scripts use, tokens, audit, the sanitizer) |
@@ -39,9 +39,9 @@ Ticket text is untrusted input. It is stored with secrets removed and invisible 
 
 - **A project-management suite.** No sprints, estimates, boards per project, SLAs, custom fields or workflows. Status, priority, type and tags are the model.
 - **Per-user identity and permissions.** The portal has one shared sign-in. A person assignee is a label until per-user identity exists ([Portal MCP](portal-mcp.md) §12.5).
-- **Automation that acts on a ticket by itself.** Nothing starts a session, assigns, or closes a ticket without a person's click or an agent's own tool call. A ticket in the agents' queue waits until an agent claims it.
+- **Automation that acts on a ticket by itself.** Nothing starts a session, assigns, or closes a ticket without a person's click or an agent's own tool call. A ticket in the agents' queue waits until an agent claims it. **Amended 2026-10-12** ([Triggers](triggers.md), owner decision O3): a trigger that a person created is the one exception. Its owner, limits and approval rules stand in for the click: it creates tickets (in the queue, or assigned to its owner) and may start a session on one, and does nothing else (it never reassigns, edits or closes).
 - **An external tracker.** No sync with GitHub Issues, Linear or Jira. Links to them are text in a description.
-- **Notifications outside the portal.** Push and email for "needs you" follow the Web app PRD's notification work (Q3).
+- **Notifications outside the portal.** Push and email for "needs you" follow the Web app PRD's notification work (Q3). Answered 2026-10-12: [Web app & PWA](web-app-pwa.md) §11 sends the kind `human_request` (a ticket assigned to a person by an agent, a trigger or the portal) over Web Push, a signed webhook, Discord and Slack; email is not planned.
 - **Files and images on tickets.** Text only in v1.
 
 ## 5. Users and stories
@@ -251,7 +251,7 @@ Existing components only, on phones and desktops. A new navigation item, **Ticke
 | --- | --- | --- |
 | Q1 | Should an agent be able to reopen a ticket it closed, or only a person? (v0.1: only a person.) | Product |
 | Q2 | A person assignee is a label. When per-user identity exists, do tickets assigned to "admin" move to a real user, and who sees "Needs you"? | Product |
-| Q3 | Push for "needs you" (an approval waiting): the Web app PRD's notification service, or a separate switch? | Product |
+| Q3 | Push for "needs you" (an approval waiting): the Web app PRD's notification service, or a separate switch? Answered 2026-10-12: the notification service, kind `human_request`, per destination ([Web app & PWA](web-app-pwa.md) §11.1). | Product |
 | Q4 | Relations between tickets (blocked by, parent): wanted, or is a tag enough? | Product |
 | Q5 | Retention: do closed tickets age out, or stay as the project's memory? | Operator |
 | Q6 | Links between tickets and the knowledge graph (notes, decisions) once that exists. | Engineering |

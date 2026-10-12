@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.8.** v0.8 adds the owner's "pool MCP only" request: reading (a), the pool as the only MCP source, is **built** in [Settings & policies](settings-policies.md) §22 and verified here (FR19a); reading (b), one pool MCP gateway, is **designed, not built** (§23). v0.7 records what was built: M1 is **built** and was run end to end in a Docker workspace through the portal's own delivery (§19); M2 to M5 are not built yet. v0.6 (consistency pass: version folders, one secret reference form, the browser's reserved prefix and the Web app's routes). Written from research on Claude Code 2.1.296 and the MCP Registry. ✅ = observed in throwaway containers from the workspace image (Claude Code 2.1.296, `claude -p` and CLI commands), with fake secrets, local dummy MCP servers and the layout in §10.2. 📄 = documented by Anthropic or the MCP project, not observed by us. 🔬 = unverified, listed in §22. |
+| Status | **Draft v0.9.** v0.9 records the OAuth work (M2, OAuth part): each OAuth server's sign-in state and a guided sign-in through Claude Code's own `claude mcp login`, **built**, server and web (§13.3), with Q2 answered ✅ on Claude Code 2.1.296 and a bug found and fixed in how `oauth.scopes` is written. v0.8 adds the owner's "pool MCP only" request: reading (a), the pool as the only MCP source, is **built** in [Settings & policies](settings-policies.md) §22 and verified here (FR19a); reading (b), one pool MCP gateway, is **designed, not built** (§23). v0.7 records what was built: M1 is **built** and was run end to end in a Docker workspace through the portal's own delivery (§19); M2 to M5 are not built yet. v0.6 (consistency pass: version folders, one secret reference form, the browser's reserved prefix and the Web app's routes). Written from research on Claude Code 2.1.296 and the MCP Registry. ✅ = observed in throwaway containers from the workspace image (Claude Code 2.1.296, `claude -p` and CLI commands), with fake secrets, local dummy MCP servers and the layout in §10.2. 📄 = documented by Anthropic or the MCP project, not observed by us. 🔬 = unverified, listed in §22. |
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-12 |
 | Depends on | [Pools foundation](foundation-pools.md) (storage, delivery engine, plugin marketplace, outbox), [Secrets & env](secrets-env-pool.md) (the secrets that servers reference), [Settings & policies](settings-policies.md) (clean environment, MCP allowlists, allow rules), [Monitoring dashboard](monitoring-dashboard.md) (connection status and usage) |
@@ -72,7 +72,7 @@ in a workspace, from a terminal or a chat session.
 | US3 | As an admin, I build a set from approved servers, pick a Secrets & env entry for each secret slot, and assign the set. The portal shows which names each workspace still lacks. |
 | US4 | As a workspace user, I run `claude` and the set's tools are there. I never paste a token. |
 | US5 | As an admin, I rotate a secret in Secrets & env without editing any set. Remote servers use the new value at their next connect or 401; stdio servers when their session restarts or reconnects them. |
-| US6 | As a workspace user, when a server needs OAuth, the portal shows "Needs sign-in" and the exact command. I sign in from my workspace terminal, and the portal never sees the token. |
+| US6 | As a workspace user, when a server needs OAuth, the portal shows "Needs sign-in" and a Sign in action: I open the provider's page, paste back the address my browser ends on, and Claude Code in the workspace finishes it. The portal never sees the token. |
 | US7 | As an admin, I see which servers are down or rejecting their credential, and which workspaces have a failing or hidden server, before users report it. |
 | US8 | As an admin, I see per set which servers and tools agents use, how often calls fail and how slow they are. |
 | US9 | As an admin, I make a server's tools ask before each call, or block some (for example, GitHub's write tools), even when it has dozens of tools. |
@@ -117,7 +117,9 @@ checks, a stdio probe and Monitoring (§13, §14).
   `remote` (HTTPS URL, streamable HTTP or deprecated SSE, auth `none`, `headers` or `oauth`);
   `command` (a path already in the image, flagged "not version-pinned"). Ranges, tags and `latest`
   are refused. `oauth` may carry `clientId`, `callbackPort`, `scopes` and `authServerMetadataUrl`,
-  non-secret fields written to `.mcp.json` 📄. Servers that need an OAuth client secret, and
+  non-secret fields written to `.mcp.json` ✅ (`authServerMetadataUrl` must be https, `scopes` is a list in
+  the catalog and ONE space-separated string in `.mcp.json`: the compiler joins it, since Claude Code drops
+  a server whose `scopes` is a list, without an error, §13.3). Servers that need an OAuth client secret, and
   Anthropic-hosted connector hosts, which "don't support local OAuth" 📄
   ([MCP](https://code.claude.com/docs/en/mcp)), are refused with the reason.
 - **FR2** Slots: name, target (`env` for stdio, `header` for remote, or a credential file path),
@@ -217,8 +219,8 @@ checks, a stdio probe and Monitoring (§13, §14).
   is gated on the pinned Claude Code version and falls back to "Not verified". It says nothing about
   policy blocks, duplicates or connections (§13.2).
 - **FR17** Status per server combines the delivery state, portal checks (§13.1), the stdio probe and
-  Monitoring's connection status (§13.2). OAuth servers show "Needs sign-in" with the command to run
-  (§13.3). Every in-workspace status shows "as of HH:MM".
+  Monitoring's connection status (§13.2). OAuth servers show their sign-in state, as Claude Code reports
+  it, and a Sign in action (§13.3). Every in-workspace status shows "as of HH:MM".
 - **FR18** Tool snapshots: tool names per check, plus a hash of each tool's name, description and
   schema, from remote checks and the stdio probe (OAuth servers give names only). A change after
   approval raises "Tools changed" and can hold delivery until reviewed. A tool whose full name passes
@@ -522,15 +524,83 @@ The portal connects with the official MCP TypeScript SDK client and the referenc
 
 ### 13.3 OAuth servers
 
-- Delivered with the URL and FR1's OAuth fields, showing "Needs sign-in" until a workspace check
-  reports Connected. The UI shows `claude mcp login --no-browser plugin:cpm-<set>:<server>` with a
-  copy button, or `/mcp` in a session. `--no-browser` (✅ present on 2.1.296) prints the URL and takes
-  the redirect URL back 📄; whether that works for plugin servers in the web terminal is 🔬 (Q2). On a
-  phone: open the printed URL, sign in, copy the address of the page that then fails to load
-  (`http://localhost/…`), and paste it into the terminal.
-- Each workspace signs in separately (Q2). `-p` sessions can't complete OAuth 📄
-  ([MCP](https://code.claude.com/docs/en/mcp)), so portal-run chat sessions point to the terminal.
-  OAuth servers' tool names come from chat sessions' `system/init`.
+**Status: built, server (B3) and web (B4), 2026-10-12.** Claude Code does the
+OAuth, in the workspace (the native flow, D1): it registers a client or uses the entry's `clientId`, runs PKCE,
+stores the token and refreshes it. The portal reads what Claude Code says about each server, starts and stops
+its login, and relays the one address a person pastes. It never stores, refreshes or relays a token, a client
+secret or an authorization code (§6).
+
+**What was observed** (✅ Claude Code 2.1.296, a throwaway Docker workspace from the workspace image, a stand-in
+OAuth and MCP provider, servers delivered by the portal's own pipeline; the fixtures in
+`apps/server/src/mcp/oauth/parse.test.ts` are modelled on that output, escapes included):
+
+| Question | Observed |
+| --- | --- |
+| State of a server | `claude mcp get plugin:cpm-<set>:<key>` prints `Status: ! Needs authentication`, `✔ Connected` or `✘ Failed to connect` (then an `Issue:` line with the reason, such as `Incompatible auth server: does not support dynamic client registration`), plus `OAuth: client_id configured, callback_port N` when set. A server it doesn't list answers `No MCP server named "…"` (exit 1): not loaded yet, or hidden by a user's server at the same URL (§10.6). A plugin server's name works everywhere: `plugin:cpm-<set>:<key>`. |
+| Sign-in command | `claude mcp login --no-browser <name>` **needs a terminal on stdin**: on a plain pipe it prints the URL and gives up ("stdin isn't a terminal"). Under a pty it prints `Visit this URL to authorize:` and the URL (wrapped in a hyperlink escape), `Waiting for authorization…`, then `Or paste the redirect URL here:`. A pasted address finishes it: `Authenticated with "<name>". Its tools are now available in Claude Code.`, exit 0. An address it can't use (not its state, not an address) prints "That doesn't look like a redirect URL for this sign-in" and asks again; the provider's refusal ends it (`Couldn't complete authentication for "<name>": OAuth error: access_denied - …`, exit 1); nobody answering ends it after 5 minutes (`Authentication timeout`, exit 1). Ctrl-C exits 130. If the browser can reach its listener (the same machine), the login finishes with no paste. |
+| Redirect | `http://localhost:<port>/callback` (host `localhost`, not 127.0.0.1; path `/callback`). The port is random per registered client, or exactly `oauth.callbackPort` (the entry's field, or `claude mcp add --callback-port`) ✅. With `oauth.clientId` set there is no registration; without it Claude Code registers a client (RFC 7591: name `Claude Code (<server name>)`, `authorization_code` and `refresh_token`, no client secret) and keeps the registration, and its port, until `claude mcp logout`. A provider that forgot the client refuses the authorize page until a logout re-registers it. |
+| Request | `response_type=code`, PKCE `S256`, `scope`, `resource=<the MCP URL>`; the token call repeats the redirect URI with the verifier and `resource`, no client secret. |
+| Metadata | The protected-resource document of the MCP URL names the authorization server; Claude Code tries `/.well-known/oauth-authorization-server`, then `/.well-known/openid-configuration` (the document **must carry `jwks_uri`**, or it fails with "SDK auth failed … jwks_uri"). `authServerMetadataUrl` (must be https) replaces that discovery. Scope: the entry's `scopes` win; else `authServerMetadataUrl`'s `scopes_supported`; else the protected-resource document's; else the server's. |
+| `scopes` in `.mcp.json` | One space-separated string. **A list drops the whole server from the plugin, silently** (not in `claude plugin list --json`, not in `claude mcp list`, no error). Found here; the compiler now joins the catalog's list (`mcpJsonOauth`). |
+| Where the token lives | `<Claude's folder>/.credentials.json`, key `mcpOAuth`, one entry per server (`<name>\|<hash>`), mode 0600, in the home volume: `~/.claude` for Default, `~/.claudepilot/claudes/<id>` for another Claude (Workspace Claudes). **Each Claude signs in on its own** ✅. It survived a workspace stop and start. The portal never opens it. |
+| Sessions | `claude -p` with the stored token connects (`system/init` lists `{"name":"plugin:cpm-…","status":"connected"}` and the tools), and **refreshes an expired access token itself** (a `refresh_token` grant, then connected). With no usable token it lists `needs-auth`, offers no tools, and runs on (✅ `connected`, `needs-auth`, `failed`). |
+| Sign-out | `claude mcp logout <name>` prints `Signed out of "<name>".` and clears the token and the registered client. |
+
+**What the person sees** (B4, `apps/web/src/features/mcp/{AuthChip,SignInDialog,signIn}.tsx`, in the workspace's
+Configuration under MCP sets; [MCP built-in catalogue](mcp-builtin-catalogue.md) FR16c): in place of "Delivered", each
+delivered OAuth server shows **Connected**, **Needs sign-in**, **Failed** (with Claude Code's reason) or **Not
+checked**, and one action: Sign in, a check icon, or Sign out (confirmed); all wait for the workspace to run. Sign in
+is a dialog: 1. open the sign-in page (a link and a copy button), 2. paste the address it ends on, Done. ✅ B4 ran it
+end to end against these routes with a real Claude Code 2.1.296 in a Docker workspace: Add → Assign → Needs sign-in
+→ Sign in → the real redirect address pasted → Connected → Sign out → Needs sign-in. The UI uses the Default Claude
+only (no picker for another one, though the routes take `?claude=`), and the transcript's "Sign in to …" row (below)
+is plain text with no button: the chat is the chat owner's, and `SignInDialog` is reusable for it.
+
+**What the portal does** (`apps/server/src/mcp/oauth/`):
+
+- **State.** `McpServerStatus.auth` is `connected`, `needs_sign_in`, `failed` (with Claude Code's reason) or
+  `unknown` (not asked yet, not listed, no answer). After each delivery the portal runs `claude mcp get`
+  for each delivered OAuth server, as a step queued with the verify (never inside a reconcile): when none
+  was seen, when the plugin folder changed, after 15 minutes, after 2 when it couldn't tell. `POST
+  …/auth` asks now. A chat session's `system/init` updates the state for that session's Claude and adds one
+  transcript row per process, "Sign in to <server>", for each OAuth server it lists as `needs-auth`. The state is
+  kept in memory (a restart means `unknown` until the next check); the credential file is never read.
+- **Sign-in** (`POST …/signin`, then `…/signin/:id/complete`, `DELETE` cancels). Start runs
+  `claude mcp login --no-browser <name>` in a terminal in the workspace (as the Claude's folder, 330 s limit),
+  waits for the URL, checks it (https, or loopback http for a test provider; no credentials; printable;
+  a loopback `redirect_uri`) and returns `{signInId, url, callback, expiresAt}`. The person opens the URL, signs in,
+  and copies the address of the page that then fails to load (`http://localhost:<port>/callback?code=…&state=…`;
+  on a phone often only its query can be copied, which is accepted). Complete checks it (loopback host, the
+  port and path Claude Code listens on, a `state` and a `code` or `error`), writes it as one line to the
+  terminal, waits for Claude Code's answer and then asks it where the server stands. A refused address can be
+  tried again while the sign-in is open; a provider's refusal, a timeout or Claude Code leaving ends it
+  ("Sign-in ended: …. Start again."). One open sign-in per server and Claude (a new start replaces it), 4 per
+  workspace, 12 in all; cancelled or expired logins get Ctrl-C, then `kill <pid>`.
+- **Sign-out** (`POST …/signout`) runs `claude mcp logout <name>` and asks again.
+- **A Claude other than Default:** `?claude=<id>` on all of these, as for the Claude sign-in routes.
+- **Audit.** Each start, finish, end and sign-out is an event in the MCP event log (§17): `oauth_signin_started`,
+  `oauth_signed_in` (`via` `paste` or `listener`, and the state Claude Code then reported), `oauth_signin_ended`
+  (a reason word: cancelled, replaced, expired, failed, refused, ended, workspace_removed) and `oauth_signed_out`,
+  each with the actor, the server (`cpm-<set>/<key>`) and the Claude (`default` or its folder). Never an
+  address, a code or a URL.
+- **Never stored or logged:** the pasted address is read from the JSON body only, validated, written once,
+  echoed in no error, no log line, no step event and no transcript; what Claude Code prints back is scrubbed of
+  codes, states and tokens (`scrubOAuth`) before a person sees it. The routes are behind the session guard and the
+  origin check; no agent token reaches them.
+
+**Multi-user** (PLAN-10, not built). A sign-in is one person's act on one Claude in one workspace. The
+routes read the caller's actor in one place (today the one owner, `u_owner`), every act above is audited with it,
+and the workspace and the server are resolved in one helper each, which is where the operate right on the
+workspace will be checked. Open sign-ins remember who started them. Today's single-owner behaviour is unchanged.
+
+**Limits and notes.** A sign-in is for one Claude in one workspace: a chat on another Claude says "Sign in" again.
+Rotating refresh tokens and two Claude Code processes refreshing at once (a session and a check) is the
+provider's race, not the portal's; checks only ask Claude Code, which refreshes when it must. The URL comes from
+the workspace and the portal only offers an https link (or loopback http), but it can't tell a lookalike
+authorization server from the real one: that is the catalog review's to catch (FR3), and the dialog doesn't show
+the host apart from the link yet. The portal can't sign in a server that needs a client secret (refused at the catalog,
+FR1), or a Kubernetes or "This machine" workspace (no delivery). The terminal alternative stays:
+`claude mcp login --no-browser plugin:cpm-<set>:<server>`, or `/mcp`, in the workspace's own terminal.
 
 ## 14. Usage visibility
 
@@ -602,7 +672,8 @@ CopyButton).
 
 - The shared event log records catalog changes, approvals and revocations, set revisions,
   assignments, deliveries, installs, probes, check state changes, hidden servers and tool changes,
-  with who (session), what and when. Never secret values, arguments or results.
+  OAuth sign-ins and sign-outs (§13.3), with who (session or actor), what and when. Never secret values,
+  arguments or results.
 - Metrics for the Monitoring dashboard: servers by delivery state; check, probe, install and launcher
   failures by class; workspaces with servers needing sign-in, missing a secret name or hidden by a
   user's server; revoked versions still running.
@@ -614,7 +685,7 @@ CopyButton).
 | Lab regression | The ✅ claims: plugin load, launcher and helper with maps, clean environment, scrub with bubblewrap, `MCP_TIMEOUT`, matchers, duplicates, tool-name length, `plugin details` parsing. Fake secrets, local dummy servers, no network. | CI, on each Claude Code version before the pinned version moves |
 | Hostile repository | The session's directory holds an `.npmrc` pointing at another registry, a `uv.toml`, a `pyproject.toml` with `[tool.uv]`, and `node_modules/<pkg>` at the pinned version with an install script. Pass: the reviewed package starts, from the public registry, and no install script runs (Q11). Passed by hand for npm (Q11); not in CI yet. | CI; M1 gate |
 | Interactive | Q1 with its fallbacks (§10.5), and Q3, in a `claude` session driven through tmux. | By hand; M1 gate |
-| OAuth | Q2 with a test OAuth server: sign-in through the web terminal, token storage, restart survival. | By hand; M2 gate |
+| OAuth | Q2 with a test OAuth server (done by hand ✅, §13.3): sign-in in a terminal, token storage, restart survival, refresh. In CI: the parsers on real output, the sign-in against a fake `claude mcp login` with the same grammar, the checks, the chat seam and the `scopes` compile (`apps/server/src/mcp/oauth/*.test.ts`). | By hand for a real provider; M2 gate |
 | Secret leaks | Canary secrets never appear in revisions, settings, `.mcp.json`, maps, arguments, URLs, logs, the outbox, API responses or probe output. | CI |
 | Revoke | A revoked version's processes stop, its tools leave running sessions, a stale session can't restart it, and pinned and stopped workspaces lose it. | CI |
 
@@ -623,7 +694,7 @@ CopyButton).
 | Milestone | Scope | Gate |
 | --- | --- | --- |
 | M1 | Catalog (manual npm and remote entries, review), sets, secret references, MCP fragment, Docker delivery, launcher with npm pre-install and hardened first use, helper, verify step, Preview files, FR19 matchers, Revoke. **Built.** Server: the catalog with its review (FR1–FR5; `command` entries too), sets with "Try in set" (FR4, FR9–FR11, FR13), the fragment (FR14, §10.2), the launcher and helper, the npm pre-install through the run-in-workspace step with removal after 14 days unused (§12), the verify (FR16), launcher events (§13.2), the FR19 matchers (`GET /api/mcp/workspaces/<target>/<name>/matchers`), Revoke (FR13b); migration 15. Web: the MCP sets tab, the Catalog and entry pages with the review, the set editor page with a picker of Secrets names and Preview files, the workspace Configuration row (each server's delivery state, install with Retry, the verify with "Verify again", missing names, FR11's warnings, "as of"), and Add-ons listing the names the picked sets need. ✅ Run end to end in a Docker workspace through the portal's own delivery (Claude Code 2.1.296, no login): `claude mcp list` showed `plugin:cpm-lab-tools:memory: /etc/claudepilot/bin/mcp-launch cpm-lab-tools/memory -- npm:@modelcontextprotocol/server-memory@1.0.0 - ✔ Connected` with no prompt; the pre-install took 28 s, so a `claude mcp list` started before it ended ran the server by first use and the next one from the pre-installed package (outbox `source`); `plugin details` found no marketplace until a session had started (§13.2), then listed `memory`, and the portal's verify recorded it as loaded; Revoke stopped the running server, took the plugin out of `enabledPlugins`, added the deny rule, and `claude mcp list` then listed nothing. ✅ In a throwaway container from the workspace image with the compiled files: an npm, a `command` and a remote server with a headers helper all connected; the stdio server got the secret file's value (trailing newline trimmed), both markers and the cache folder as its working directory; the remote server got `Bearer <value>`; canary values were in no delivered file, outbox line or Claude Code file. Not done: Q1 in an interactive session (it needs a signed-in TTY), and the lab and hostile-repository suites (§18), run by hand (Q11) but not in CI yet. | Foundation F2 and F6, A4; Secrets & env files and FR21; Q1, Q11 |
-| M2 | Portal checks, stdio probe, tool snapshots, duplicate check, OAuth status and sign-in help. Not built: an `oauth` entry's FR1 fields already reach `.mcp.json`, but nothing shows "Needs sign-in" yet. | Q2 |
+| M2 | Portal checks, stdio probe, tool snapshots, duplicate check, OAuth status and sign-in help. **Partly built.** Built (server, 2026-10-12): the OAuth part, §13.3: `McpServerStatus.auth` from Claude Code's own `claude mcp get` after each delivery and on demand, a chat session's `system/init` as another source with a transcript row, the guided sign-in and sign-out through `claude mcp login` and `logout` run in a workspace terminal (`apps/server/src/mcp/oauth/`, routes under `/api/mcp/workspaces/:target/:name/{auth,signin,signout}`), per Claude with `?claude=`; and the fix for `oauth.scopes` in `.mcp.json`. ✅ Run end to end on Claude Code 2.1.296 in a Docker workspace through the portal's own delivery with a stand-in provider: status after delivery, sign-in by paste and by the listener, wrong pastes refused and retried, sign-out, a second Claude with its own state and folder, the no-DCR failure text, cancel with no process left, no code in any log. The web side is built too (B4, §13.3: the status chips in the workspace's Configuration, the Sign in dialog, Sign out), ✅ run end to end against these routes on a real Claude Code. Not built: the portal checks of remote servers (§13.1), the stdio probe, tool snapshots, the duplicate check; a Sign in button in the chat transcript's note; a picker for a Claude other than Default; a check against a real provider account (🔬, Q2). | Q2 ✅ |
 | M3 | MCP Registry mirror, search, import, status alerts. Not built. | |
 | M4 | `uv` in the image and the bundle, PyPI servers, Kubernetes delivery. Not built: the catalog refuses PyPI entries, and Kubernetes workspaces wait for foundation F3. | Foundation F3; Skillset A6; Q7 |
 | M5 | Tool rules with bulk rules, per-set usage from Monitoring. Not built. | Monitoring FR16–FR18 |
@@ -710,7 +781,7 @@ milestone S3) would otherwise block every set.
 | ID | Question | Who decides |
 | --- | --- | --- |
 | Q1 | 🔬 Do interactive sessions load the managed directory marketplace's plugin servers without a prompt? `claude -p` and `claude mcp list` do ✅. If not, which §10.5 fallback does? Same as foundation Q1. Not checked for M1: an interactive `claude` without a login stops at its onboarding before loading plugins, so this needs a signed-in test account. | Sandbox (TTY) |
-| Q2 | 🔬 OAuth with a plugin-provided remote server: does `claude mcp login --no-browser plugin:<plugin>:<server>` work in the portal's web terminal, where is the token stored on Linux, and does it survive a workspace restart? | Sandbox with a test OAuth server |
+| Q2 | **Answered ✅** (B3, Claude Code 2.1.296, stand-in provider; §13.3): `claude mcp login --no-browser plugin:<plugin>:<server>` works, in a terminal only (a pipe makes it print the URL and give up); the token is in `<Claude's folder>/.credentials.json` (`mcpOAuth`, mode 0600) and survives a workspace stop and start; `claude -p` uses it and refreshes it. 🔬 Still open, with a real account only: a real provider's behaviour (Gitea's public client and its sidecar, GitLab, Cloudflare, Outline), rotating refresh tokens under concurrent refreshes, and whether a person's phone can copy the failed callback address (§13.3 accepts the whole address or its query). | Sandbox with a test OAuth server; owner with real accounts |
 | Q3 | 🔬 Does `/mcp` Reconnect restart a connected stdio server, so a rotated secret applies without a new session? `/reload-plugins` keeps unchanged servers 📄. | Sandbox (TTY) |
 | Q7 | What egress does the k3s cluster allow: npm, PyPI, GitHub releases (for `uv` and managed Python), remote MCP hosts? Without it, offline vendoring moves into v1. | Operator |
 | Q8 | Answered: Secrets & env accepts per-server degradation, the check-service call, the "For MCP servers" preset and the stdio rotation note, and keeps one reference form instead of the two new ones (§21, FR10). | Product, with [Secrets & env](secrets-env-pool.md) |

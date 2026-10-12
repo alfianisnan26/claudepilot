@@ -1,0 +1,247 @@
+# PRD: Auto transfer
+
+| | |
+| --- | --- |
+| Status | **Draft v0.1** (2026-10-12). Design only: `packages/contracts/src/autotransfer.ts` has landed and nothing else is built (**Not built**). It extends the Move flow of [Workspace Claudes](workspace-claudes.md) and the recommendation of [Claude usage](claude-usage.md) §20, and it reverses two of Workspace Claudes' decisions (owner decision O2, §4). ✅ = checked here, 📄 = documented, 🔬 = unverified. |
+| Owner | Alfian Isnan |
+| Last updated | 2026-10-12 |
+| Depends on | [Workspace Claudes](workspace-claudes.md) (`switchOptions`, `switchClaude`, handoff and skip), [Claude usage](claude-usage.md) (headroom, pace, `recommendMove`; U1a), [Web app & PWA](web-app-pwa.md) §11 (the bus, notifications), [Settings & policies](settings-policies.md) |
+| Related | [Platform roadmap](platform-roadmap.md), [Triggers](triggers.md), [Chat sessions](chat-sessions.md) |
+
+## 1. Summary
+
+When the Claude a chat runs on is nearly out of plan quota, the chat can move to another Claude on the same workspace, by the same Move flow a person uses, so the work goes on without anyone watching a meter. It is **off by default** and has three modes: `off`; `ask` (a card above the composer says what is low and where it could go, with Move, Later and Always automatic); and `auto` (it moves by itself). It acts only at a turn boundary, only when a set of safeguards all hold (every one is checked before it acts), and every automatic move leaves an audit row, a card in the chat with an Undo, and a notification. When no Claude can take the chat it only warns.
+
+## 2. Background and what exists
+
+Checked in the code on 2026-10-12 (✅; symbols, not line numbers).
+
+| Fact | Evidence | Consequence |
+| --- | --- | --- |
+| A move stays inside one workspace: `switchClaude` refuses a destination whose `workspaceId` differs ("Pick a Claude on this workspace") | `chat/controller.ts` `switchClaude`; workspace-claudes FR9 | The destinations are the other Claudes of the chat's workspace; "another workspace" is out of scope |
+| `switchOptions(id)` tells for each other Claude whether a session could start there now (`ok`, a reason and the fix), whether the handoff can be asked, and what a move drops (`approvals`, `queued`, `agents`) | `chat/controller.ts`, contracts `ChatSwitchOptions` | The engine asks it before acting, and waits for `dropped` to be all zero |
+| `switchClaude(id, claudeId, {handoff})` (`handoff` is `ask` or `skip`) writes the handoff, starts the new run, repoints the chat, and undoes itself on failure; an unanswered handoff falls back to the stored conversation | workspace-claudes FR11, FR12 | The automatic move is this call; the "source exhausted" case is `handoff: 'skip'` |
+| Bypass never carries over: a move ends it | workspace-claudes FR16 | A session in Bypass is never moved by itself (§8 FR9) |
+| With an account pool all Claudes of a workspace share the pool's keys (`Headroom.kind: 'no_limits'`) | `claudeusage/derive.ts`, `chat/controller.ts` `pooled` | On a pooled workspace the feature is inert: there is no per-Claude quota to run out |
+| `ClaudeUsageMonitor.headroom(claudeId)` never throws and never probes; `report()` returns every Claude's windows (`usedPct`, `resetsAt`, `level`, and, with U1a, `pace` and `outlook`) | `claudeusage/service.ts` | The engine reads the snapshot; it never starts a probe |
+| U1a's contract has `MoveRecommendation` (candidates with `reason` `room`, `over_pace`, `tight`, `no_limits`, `exhausted`, `signed_out`, `unknown`; "room" is at least 20 % left) and `recommendMove(claudes, {workspaceId, from, nowMs, allow})` is a pure function with an `allow` hook for "Claudes the asking user may use" | `packages/contracts/src/usage.ts`, `claudeusage/recommend.ts` (untracked, in progress) | The engine composes `recommendMove` with the Move flow's own check |
+| The chat controller emits every stored event and every session change to `onEvent` dispatchers; a turn's end is a stored `result` event and the session's `state` goes back to `idle` | `chat/controller.ts` | The turn boundary needs no new seam; the engine needs no edit in the controller |
+| The Settings page lists `defineSetting` entries and takes custom sections (`GlanceSettingsSection` is one) | `settings/registry.ts`, `SettingsPage.tsx` | The `automove.*` settings appear there; the per-Claude and per-chat parts have their own small UI |
+
+## 3. Goals
+
+| ID | Goal |
+| --- | --- |
+| G1 | **No stalled chat.** When a Claude is nearly out, the chat can carry on elsewhere, with no one watching a meter. |
+| G2 | **Opt-in and visible.** Off by default; `ask` shows what and why; `auto` is an explicit choice (global, or per chat from the card). |
+| G3 | **Only at a boundary, only when safe.** After a turn ends, with nothing waiting that the move would drop, and every safeguard checked before acting. |
+| G4 | **Honest numbers.** A percent left is measured; a projection is an estimate and says so; a reading that is old is not used to move a chat by itself. |
+| G5 | **A trail and an undo.** An audit row, a card with an Undo, a notification, an event history. |
+| G6 | **Extend, do not rebuild.** The Move flow, the usage snapshot and the recommendation, the bus and the settings store are reused; the controller is not edited. |
+
+## 4. Non-goals
+
+- **Moving to another workspace.** A move stays in one workspace (workspace-claudes §4).
+- **Choosing credentials.** The engine never copies, injects or signs in a login; it picks among Claudes that are already signed in on the workspace.
+- **A paid API-key pool as a destination by default.** A Claude on a Console key bills per use; it is a destination only after a person turns that on (`automove.allowApiKey`, off). On a pooled workspace nothing moves (§2).
+- **Predicting from tokens.** Quota speed comes only from the percentages Claude Code reported ([claude-usage](claude-usage.md) §20.2), never from token counts.
+- **Moving an idle or a working chat for no reason, or a chat that is not on a plan Claude.**
+- **Learning from past moves.**
+
+**Amendments this PRD makes to Workspace Claudes (owner decision O2).** Its non-goal "**A quota switch.** Nothing watches a plan window or an API-key headroom and moves a session" and FR10 "Confirm is required every time. There is no 'always switch' setting" are the opposite of this feature. Both stay true **by default**: with `automove.enabled` off nothing watches and nothing moves. When a person turns it on, in `ask` mode the card is the confirmation of each move (FR10 holds), and in `auto` mode the person's setting is the standing confirmation, bounded by §8's safeguards. "The portal never picks another [credential]" (workspace-claudes §4) now reads "never copies or injects a credential; with the person's opt-in it may choose which already signed-in Claude of the same workspace takes the chat".
+
+## 5. Users and stories
+
+| ID | Story |
+| --- | --- |
+| US1 | My chat is on "Work". Its session window is at 92 %: 8 % left, under my 10 %. A card says "Work is at 8 % · move to Home (40 % left)?". I tap **Move**; the chat goes on there. |
+| US2 | I tap **Always automatic** on that card: this chat moves by itself from now on. Later it does, and I get "Moved to Home · api-dev · 8 % left" and a card in the chat with **Undo**. |
+| US3 | Work is already at 100 %: the move carries the stored conversation instead of asking Work for a handoff, and the card says so. |
+| US4 | Every Claude I could move to is also nearly out: nothing moves, and I get one warning, not a retry storm. |
+| US5 | I undo an automatic move: the chat goes back (through the normal Move dialog), and it does not move by itself again for two hours. |
+| US6 | I set Work's threshold to 15 % and its destinations to Home, then Spare, in that order. Nothing else is ever chosen for Work's chats. |
+
+## 6. Scope boundary
+
+| Allowed | Not allowed |
+| --- | --- |
+| Moving a chat to another Claude of the same workspace, signed in, that the Move flow says can take it, and that the chat's owner may use | A move to another workspace; a move to a signed-out Claude; a move to a Claude the owner may not use |
+| `auto` only for a chat on a plan Claude whose reading is fresh and measured | `auto` on a pooled workspace, on an API-key Claude, on an old reading, or on a chat in Bypass |
+| Using `headroom` and the `recommendMove` ranking | Starting a probe, reading a Claude's directory, or showing an account, an organisation or an email |
+| One move attempt per pause window, and a cap per chat and per day | Retrying in a loop, or piling many chats on one destination |
+
+## 7. Solution overview
+
+```
+ chat event "result" (a turn ended) ─▸ mode? ─▸ applicable? ─▸ reading fresh? ─▸ low / exhausted / projection?
+        (onEvent, no controller edit)    off: stop  pooled, key,    ≤ 15 min,       ≤ threshold, used up, or
+                                                    signed out: stop measured       runs out within 2 h (est.)
+        ─▸ safeguards (pause, per-chat cap, day cap) ─▸ destination (Move flow ok ∩ owner may use ∩ ranking ∩ allowlist
+           ∩ same model ∩ not piled ∩ not just left) ─▸ none: WARN once ─▸ quiet boundary? (nothing dropped) ─▸
+        ask:  banner above the composer: Move · Later · Always automatic        auto: switchClaude(handoff ask|skip)
+        ─▸ audit row ─▸ notification ─▸ "Moved" divider marked auto, with Undo
+```
+
+## 8. Functional requirements
+
+### Modes
+
+- **FR1** Three modes: `off`, `ask`, `auto`. The platform's two settings decide the default: `automove.enabled` (off) and `automove.automatic` (off): `off`, then `ask`, then `auto` (`autoModeOf`). A user's own choice (`AutoUserPrefs.mode`, null follows the platform) and a chat's own override (`AutoSessionState.mode`, set in the session's ⋯ menu or by "Always automatic") come on top; the effective mode of a chat is its override, else the user's choice, else the platform's, **never above the platform ceiling** (`enabled` off means `off` for everyone; `automatic` off means `auto` is treated as `ask`).
+- **FR2** Turning `automove.enabled` or `automove.automatic` on asks for a confirmation (the settings store's `CONFIRMATION_REQUIRED`), with one line: "Chats can move to another Claude when a quota is low" and "Chats move to another Claude by themselves when a quota is low".
+- **FR3** The feature acts only on a chat whose workspace has no account pool and whose Claude is on a plan with a measured reading. Otherwise the chat's state says why (`pooled`, `no_plan_reading`) and nothing happens.
+
+### When
+
+- **FR4** The engine evaluates a chat at its **turn boundary**: when its `result` event is stored and its state returns to `idle` (through `ChatController.onEvent`), and again after a pause ends or a deferral (FR12) expires. It never interrupts a turn. The dispatcher only queues the chat; the evaluation runs off the event path, one at a time per chat (a burst of boundaries is one evaluation), because `switchOptions` runs checks in the workspace.
+- **FR5 (the source's limit)** The windows that stop the chat are `session` and `week` (the all-model windows) and the window of the chat's model when it has one (`week_opus`, `week_sonnet`, `model:<name>`, matched to `ChatSession.model` by family). `leftPct` is the smallest `100 − usedPct` over the live ones (a window that has reset or has no number is left out), a measured figure. A per-model window of another model does not count: a chat on Sonnet is not moved because Opus is nearly used.
+- **FR6 (the reasons)** `exhausted`: an all-model window is at 100 % or the chat's model window is. `low`: `leftPct` is at most the threshold (the Claude's own, else the user's, else the platform's; default 10). `projection`: `automove.useProjection` is on, U1a's `LimitOutlook.status` is `over`, the deciding window's `WindowPace.lowConfidence` is false, the estimated run-out (`etaAt`) is within 120 minutes, and `leftPct` is at most 30 (a blip on a nearly full window never moves a chat). The reading must be `checkedAt` within 15 minutes and not `stale`; otherwise the chat's state says `stale_reading` and nothing moves (`auto` never moves on an old number; `ask` shows no card on one either).
+
+### Where to
+
+- **FR7 (candidates)** The candidates are the other Claudes of the chat's workspace that: the Move flow says can take the chat (`switchOptions(id).options[].ok`, so signed in and eligible); the chat's owner may use (`can(owner, 'operate', claude)`, passed to `recommendMove` as `allow`); have a fresh reading; and are not excluded by FR8 to FR10.
+- **FR8 (ranking and policy)** Ranked with U1a's `recommendMove` (percent left, minus 20 points when its pace is `over_pace`, the sooner reset first, then `no_limits`, then `tight`). `auto` takes only `room` (at least 20 % left) and, only with `allowApiKey`, `no_limits`; `ask` offers `room`, `over_pace` and `no_limits`, with `tight` ones listed as alternatives and never recommended. If the source Claude has a destination list it is an **allowlist**: only those Claudes are eligible, in that order among the eligible, ties broken by the ranking; an empty list means any eligible Claude. With `sameModelOnly` a destination whose per-model window for the chat's model family is exhausted (`Headroom.blockedModels`) or whose model availability is unknown is excluded; what a plan includes is not visible to the portal beyond that (🔬).
+- **FR9 (guards on the choice)** A destination already carrying `maxPerDestination` live sessions (counting a move on its way) is skipped; a Claude the chat left within the last 240 minutes is skipped unless it has recovered (its reading is now `room`); a chat in Bypass is **never** moved by itself (a move ends Bypass, and an unattended session would stall): at most an `ask` card.
+- **FR10 (nothing viable)** When the candidates are empty the engine **warns only**: one `warned` event and one `auto_move` notification ("No Claude to move to") per chat and source window period, a line on the card state (`no_destination`, or `destination_busy` when every candidate is full), and nothing else. It does not retry.
+
+### Safeguards (all checked before acting)
+
+- **FR11** `minPauseMin` (default 30) since the chat's last move or answered suggestion; `maxPerSessionPerDay` (2) and `maxPerDay` (6, across all chats) moves in the last 24 hours (rolling); each is a refusal with its code (`min_pause`, `session_cap`, `day_cap`) recorded once per pause window.
+- **FR12 (the quiet boundary)** An automatic move starts only when the chat is `idle`, not already moving, and `dropped` (approvals open, messages queued, agents running) is all zero. Otherwise it waits (`busy`), re-evaluating at the next boundary and every 60 seconds, up to 30 minutes, then becomes an `ask` card that says what a move would drop. An approval is never answered or denied by the engine.
+- **FR13 (handoff)** `ask` (the chat's Claude writes a handoff first) unless the reason is `exhausted` or `switchOptions(id).handoff.ok` is false, then `skip` (the stored conversation carries). The handoff is a turn on the Claude that is nearly out: the default threshold leaves room for it, and the Move flow itself falls back to `skip` when that Claude cannot answer.
+- **FR14 (failure)** If `switchClaude` refuses or fails, the chat stays where it was (the Move flow undoes itself), a `failed` event records the code, and the chat is paused for `minPauseMin`; a second failure for the chat in a day ends automatic moves for it that day (an `ask` card remains possible).
+
+### The card (ask mode)
+
+- **FR15** One open suggestion per chat, shown as a card above the composer (the place of the approval card): "Work is at 8 % · Home has 40 % left", **Move**, **Later**, **Always automatic**, an "Other…" choice among the alternatives, and one line when a move would drop something ("Drops 1 agent"). Numbers carry their basis (measured, or "est." with the formula in an InfoTip). **Move** is the confirmation and calls the Move flow now (safeguards other than the pause apply; the flow itself waits for a running turn and says so); **Later** holds the suggestion back 20 minutes; **Always automatic** sets this chat's override to `auto` (shown only when the platform allows `auto`), records a `mode_set` event, and moves now. A suggestion closes when the chat ends or moves, when the source recovers above the threshold, or after 24 hours.
+- **FR16** In `ask` mode a notification (`auto_move`, "Move suggested") goes to the chat's owner; its action is a link to the chat, never a button.
+
+### The move and its trail
+
+- **FR17** An automatic move calls `ChatController.switchClaude(id, dest, {handoff})` for the chat's owner. The call has no actor parameter (✅ read in the code: `switchClaude(rawId, destClaudeId, opts: {handoff})`), so the Move flow records the move as it records any move; the actor `portal:autotransfer`, the owner and the reason live in the engine's own rows and the platform audit. On success: an `autotransfer_events` row (`moved`, with the move's `handoffId` read from the new "Moved to" row), a platform audit row, an `auto_move` notification ("Moved to Home · api-dev · 8 % left"), and the chat is paused for `minPauseMin`.
+- **FR18** The Move flow's divider ("Moved to Home") carries an **auto** mark and **Undo** when the move was automatic and is less than a day old: the page finds it by `handoffId` from `GET /api/autotransfer/events`. No change to the controller or to the stored events.
+- **FR19 (Undo)** Undo opens the normal Move dialog with the Claude the chat left already chosen, so the confirmation, the handoff choice and the dropped line are the ones every move has. It is disabled, with the reason, when that Claude cannot take the chat now (still out until a time, signed out). When the engine sees the chat go back to the Claude it left within a day (a `session` change), it records `undone` and pauses automatic moves for that chat for 120 minutes. Undo is never silent and never automatic.
+
+### Settings, audit, tools
+
+- **FR20 (settings)** Platform (an admin's; group "Auto move"): `automove.enabled`, `automove.automatic`, `automove.thresholdPct` (10), `automove.useProjection` (on), `automove.minPauseMin` (30), `automove.maxPerSessionPerDay` (2), `automove.maxPerDay` (6), `automove.maxPerDestination` (2), `automove.sameModelOnly` (off), `automove.allowApiKey` (off; turning it on asks for a confirmation). Per user (`AutoUserPrefs`): mode, threshold, projection, same-model, API keys (each null follows the platform; the caps cannot be raised). Per Claude and user (`AutoClaudeConfig`): its threshold and its ordered destinations. Per chat: the override in the session menu. Constants, not settings: 20 minutes for Later, 120 for the pause after Undo, 15 for a fresh reading, 120 for the projection horizon, 30 for the projection's left-percent bound, 30 for the deferral, 240 for ping-pong.
+- **FR21 (audit)** Every suggestion, move, refusal that matters (a cap, a failure), warning, mode change and undo is a platform audit row and an `autotransfer_events` row (names, ids, the facts with their basis; never message text); kept 90 days.
+- **FR22 (Portal MCP)** A read tool `autotransfer_status` (the chat's state and recent events). Nothing changes a mode or moves a chat over MCP.
+
+## 9. The decision, in order
+
+For a chat S at its turn boundary (each line stops the evaluation with its code):
+
+| # | Check | Code |
+| --- | --- | --- |
+| 1 | Effective mode (FR1) is not `off` | `mode_off` |
+| 2 | The workspace has no pool; the chat's Claude is on a plan with a measured reading (FR3) | `pooled`, `no_plan_reading` |
+| 3 | The reading is at most 15 minutes old and not stale (FR6) | `stale_reading` |
+| 4 | A reason holds: `exhausted`, `low` or `projection` (FR5, FR6) | `above_threshold` |
+| 5 | The chat's owner is an enabled user who may operate the chat (§17) | `owner_denied` |
+| 6 | Not paused, minimum pause over, chat and day caps not reached (FR11) | `paused`, `min_pause`, `session_cap`, `day_cap` |
+| 7 | A candidate exists after FR7 to FR9 | `no_destination`, `destination_busy` (warn once) |
+| 8 | `ask`: make or keep the suggestion, notify | |
+| 9 | `auto`: not in Bypass; the quiet boundary holds (FR12), else wait or become a card | `busy` |
+| 10 | `switchClaude` with the handoff of FR13; record, notify, pause | `move_failed` |
+
+## 10. Data model
+
+Migrations 220 to 229 are N4's (shapes, not SQL). Every per-person table carries `user_id TEXT NOT NULL DEFAULT 'u_owner'`. No secret is stored.
+
+| Table | Columns |
+| --- | --- |
+| `autotransfer_user` | **user_id** (primary key), mode (null follows the platform), threshold_pct, use_projection, same_model_only, allow_api_key (each nullable) |
+| `autotransfer_claudes` | **user_id**, claude_id, threshold_pct (nullable), destinations (JSON list of Claude ids, in order); primary key (user_id, claude_id) |
+| `autotransfer_sessions` | session_id (primary key), **user_id** (the chat's owner), mode (an override, nullable), last_claude_id (to notice a move made by a person), paused_until, defer_since, last_eval_at, warned_period |
+| `autotransfer_suggestions` | id, **user_id**, session_id, at, reason, from_claude, to_claude, alternatives (JSON), facts (JSON), handoff, dropped (JSON), state, resolved_at |
+| `autotransfer_events` | id, at, **user_id**, session_id, workspace_id, kind, mode, reason, from_claude, to_claude, facts (JSON), handoff, handoff_id, code, actor; indexes (session_id, at), (user_id, at) |
+
+Hooks into other areas (the whole list): **none in the server's chat code** (the engine uses `onEvent`, `switchOptions`, `switchClaude`, `headroom`, `report` and the settings store); the web gets one-line mounts: the card in `SessionPage`/`Composer` area, the divider mark in `Transcript`, an "Auto move" item in the session ⋯ menu, a section in `SettingsPage`, and the per-Claude choice on the Claudes list. Those files are shared with U3 and the btw work: mount after they report done.
+
+## 11. API
+
+The table is `AUTOTRANSFER_API` (behind the session guard and the Origin check; a user sees and changes only their own):
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/autotransfer` | The platform values, the caller's choices, the effective values, and the caller's per-Claude settings |
+| `PUT /api/autotransfer/prefs`, `PUT /api/autotransfer/claudes/:claudeId` | The caller's own choices; a Claude's threshold and destination list |
+| `GET`, `PUT /api/autotransfer/sessions/:id` | A chat's state (mode, applicability, the open suggestion, pause, moves today, the last move and whether it can be undone); its override |
+| `POST /api/autotransfer/suggestions/:id/move`, `/later`, `/always` | The card's three buttons |
+| `GET /api/autotransfer/events` | The trail (`?session=&limit=&before=`) |
+
+## 12. Security and threat model
+
+| Threat | Control | Test |
+| --- | --- | --- |
+| A move storm, or ping-pong between two nearly empty Claudes | Minimum pause, caps per chat and per day, per-destination cap, 240 minute ping-pong guard, one failure retry rule, "no destination" warns once | S10 to S12, S17 |
+| A looping agent burns one Claude and then the next | The same caps bound the moves; the usage track's spike and budget alerts tell the owner; the cost is each Claude's own | S12 |
+| Moving on a wrong or old number | Fresh readings only (15 minutes), measured percent for `low`, a projection needs confidence and a 2 hour horizon, both ends of the move must be fresh | S5 to S7, S9 |
+| Dropping work | Automatic only at a quiet boundary; otherwise a card that says what it drops; an approval is never answered | S14 |
+| Silent change of who pays | API-key destinations off by default and behind a confirmation; pooled workspaces inert; the card names the Claude and its kind | S8, S18 |
+| A move into a Claude the owner may not use | `allow` in `recommendMove` and the owner's `can` before the call; a refusal is `owner_denied` | S19 |
+| Bypass ended unseen | A chat in Bypass is never moved by itself | S13 |
+| A handoff leaking a secret | The Move flow's own redaction of the context file; nothing here adds text | (workspace-claudes §13) |
+| Notification text carrying session titles or message text | Fixed templates over names and numbers ([web-app-pwa](web-app-pwa.md) §11.1) | canary |
+| Another user acting on a chat | Every route filters by the owner and `can`; a suggestion id of another user answers like an unknown id | S20 |
+
+## 13. What the person sees
+
+| Place | Content |
+| --- | --- |
+| The card (above the composer) | "Work is at 8 %" · "Move to Home (40 % left)", **Move**, **Later**, **Always automatic**, ⓘ (the reason, the basis of each number, the formula of a projection, what is dropped), and a small "Other…" |
+| The divider | "Moved to Home · 14:02" with an **auto** chip and **Undo** (a day); the existing "Context from Work" card below it |
+| Session ⋯ | "Auto move": Off, Ask, Automatic, Default |
+| Settings, section "Auto move" | The platform rows (labels of a word or two: Auto move, Without asking, Threshold, Projection, Pause, Per chat, Per day, Per Claude, Same model, API keys), each with ⓘ |
+| Claudes list, a Claude's ⋯ | "Auto move…": its threshold and its destinations, ordered |
+| Notification | "Moved to Home · api-dev · 8 % left"; "Move suggested · api-dev"; "No Claude to move to · api-dev" |
+
+## 14. Testing and verification
+
+Scenario tests with expected results worked out by hand and written in the test (a number is never asserted only because the code produced it). Each uses the usage fixtures with fixed clocks; the controller is the real one with the scripted stand-in Anthropic API where a move runs, and a fake where it only decides.
+
+| # | Scenario | Expected |
+| --- | --- | --- |
+| S1 | `auto`, Work `session` at 92 % used (8 % left), threshold 10, Home at 60 % used (40 % left, `room`), no destination list, chat idle, nothing waiting | Moves to Home with `handoff: ask`; one `moved` row; one notification; paused 30 minutes |
+| S2 | The same in `ask` | One suggestion; no move; one notification |
+| S3 | Work at 85 % used (15 % left) | Nothing (`above_threshold`) |
+| S4 | Work at 100 % | `exhausted`; `handoff: skip` |
+| S5 | Work 85 % used, pace `over` (projected 130 % at reset), not low confidence, run-out in 90 minutes | `projection`: moves (15 left is at most 30; 90 is at most 120) |
+| S6 | The same with the run-out in 4 hours | Nothing |
+| S7 | The same with `lowConfidence` true | Nothing |
+| S8 | A pooled workspace | Inert (`pooled`) |
+| S9 | Home's reading is 20 minutes old | Excluded; with no other candidate: `no_destination` warning |
+| S10 | Two candidates, `maxPerDestination` 2, Home already carries 2 sessions | The other is chosen; with both full: `destination_busy` warning, once |
+| S11 | A move 10 minutes ago | `min_pause`, nothing moves |
+| S12 | Two moves for the chat in the last 24 hours | `session_cap` |
+| S13 | A chat in Bypass, mode `auto` | Only an `ask` card; no move |
+| S14 | An approval is open | `busy`; re-evaluated; after 30 minutes a card that says "drops 1 approval" |
+| S15 | A chat on Opus; `session` 40 % used, `week` 40 %, `week_opus` 95 % used | `low` (5 % left on its model's window); the same state for a chat on Sonnet: nothing |
+| S16 | `sameModelOnly`; Home's `blockedModels` includes "Opus"; the chat is on Opus | Home excluded |
+| S17 | The owner moves the chat back to Work 10 minutes after an auto move | `undone` recorded; no automatic move for 120 minutes |
+| S18 | The only candidate is on a Console key | Excluded unless `allowApiKey`; with it, chosen last |
+| S19 | The owner may not use Home (two fake users) | Home excluded; with no other: `owner_denied` or `no_destination` |
+| S20 | A second user posts to the first user's suggestion id | 404, nothing changes |
+
+| Area | What | Status |
+| --- | --- | --- |
+| Decision function | S1 to S20 as pure tests over fixtures | Not built |
+| The move | A real `switchClaude` against the stand-in API in a scratch Docker workspace (Kubernetes off, `KUBECONFIG` unset): one chat id across the move, the divider mark, the audit row, the undo | Not built |
+| Web | The card, the divider mark and the Undo at 390 and 1280 px, light and dark, keyboard and touch | Not built |
+| Real accounts | A real plan reading and a real move on the owner's Claudes | 🔬 manual, owner |
+
+## 15. Milestones
+
+| Milestone | Scope | Status |
+| --- | --- | --- |
+| Contracts | `packages/contracts/src/autotransfer.ts` | **Built** 2026-10-12 |
+| N4a | Server: the decision function, safeguards, the engine on `onEvent`, tables, routes, settings, audit, notification, tests; migrations 220 to 229 | **Not built** |
+| N4b | Web: the card, the divider mark and Undo, the session menu item, the settings section, the per-Claude choice | **Not built** |
+
+## 16. Decisions and open questions
+
+Decided here (owner decisions in the [roadmap](platform-roadmap.md) §11): opt-in, off, `ask` and `auto` (O2); the destination stays in the same workspace and a paid API-key Claude is off by default (O9); "same model" means the family is not blocked, not a promise about plans (O9); "Always automatic" is per chat, never global. Open: 🔬 does a plan that lacks a model show it in any reading the portal gets; should a long idle chat on a low Claude be moved at its next message instead of at a turn's end (the PRD says no: a turn boundary is the only moment); whether the handoff turn of a Claude at 8 % is acceptable (it costs a turn of that Claude's last quota).
+
+## 17. Multi-user (PLAN-10)
+
+The engine acts for the chat's **owner**, and only among Claudes that owner may use: `recommendMove`'s `allow` and the owner's `can(owner, 'operate', claude)` both apply, and the owner must still be an enabled user who may operate the chat (`owner_denied` otherwise). The platform values (`automove.*`) are the defaults and the caps (an admin's); a user's own choices override the defaults and are never looser than a cap. The card, the notification, the audit row and the events belong to the owner. `autotransfer_user`, `autotransfer_claudes`, `autotransfer_sessions`, `autotransfer_suggestions` and `autotransfer_events` carry `user_id TEXT NOT NULL DEFAULT 'u_owner'`. A Claude's sign-in belongs to its workspace: whether a user other than the one who signed it in may use it is the authorization layer's decision, which this feature only asks (`allow`). The cross-user cases (S19, S20) are written now with two fake users. Today there is one user and none of this shows.

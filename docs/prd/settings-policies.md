@@ -522,9 +522,11 @@ pools and accounts.
 3. **Named groups** (Protect portal files, Ask before sudo, …) are on/off scalars.
 4. **Session choices are clamped** to the allowed modes and models, the highest effort, budget and
    turns. A session may add allow rules for itself, except with the rules lock on.
-5. **Scalars may loosen or tighten; inherited rules can't be removed** (one admin role in v1). Looser
+5. **Scalars may loosen or tighten; inherited rules can't be removed** (one admin role in v1; with several users the roles are `admin` and `member`, see the note below). Looser
    values say "Looser than Global" and are UI-only (FR19).
 6. **Pinned workspaces** take, per key, the stricter of their pinned and current revision (FR20).
+
+> **Multi-user (PLAN-10, 2026-10-12).** With accounts ([Multi-user](multi-user.md)), a **Global** setting is a platform setting: every signed-in person reads the effective values (a person should see why something is refused), only a platform admin changes one (`platform(settings)`, [Authorization](authorization.md)), the setting audit's actor is the person (`user:<id>`, not the literal `Admin`), and relaxing a protective setting still needs the confirmation and, now, a recent password check. A **Policy**, **Workspace** or **Session** value is set by someone who holds `manage` on that workspace (a session's own choices by its owner) and may only tighten what the platform set: an admin's Global value is a floor for `member`s ("Looser than Global" is refused for them, not only flagged). The default persona and the delegation policy are platform choices. Per-person settings (notification preferences, glance layout) are the person's own and are not in this store.
 
 Each row carries a source Badge: `Default`, `Global`, `Policy · Autonomous r4`, `Account pool ·
 team-a`, `Organization · acme`, `Account · key-3`, `Target · Kubernetes`, `Workspace` or `Session`,

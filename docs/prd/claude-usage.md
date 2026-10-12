@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.2.** K0, M1, M2 and M3 are built and were tried (§17). ✅ = observed on Claude Code 2.1.296, on this machine, against a local stand-in for `api.anthropic.com` and a scratch directory holding a clearly fake credentials file (no sign-in, no real token, nothing leaves the machine). 📄 = read from the CLI's own schema and strings, not observed. 🔬 = unverified, listed in §19. **A real claude.ai subscription could not be signed in here, so no real plan reply has been seen**: the parser is built against the observed shapes and the CLI's schema, and §19 says exactly what that leaves open. |
+| Status | **Draft v0.2.** K0, M1, M2 and M3 are built and were tried (§17). ✅ = observed on Claude Code 2.1.296, on this machine, against a local stand-in for `api.anthropic.com` and a scratch directory holding a clearly fake credentials file (no sign-in, no real token, nothing leaves the machine). 📄 = read from the CLI's own schema and strings, not observed. 🔬 = unverified, listed in §19. **A real claude.ai subscription could not be signed in here, so no real plan reply has been seen**: the parser is built against the observed shapes and the CLI's schema, and §19 says exactly what that leaves open. **Round 4 (2026-10-12):** §20 adds speed, pace and projection, the comparison with the previous period, the cache split, palette slots, a summary strip, a Move recommendation and export: **built on the server** and checked on hand-computed fixtures and a seeded scratch portal, never against a real plan; the pages that show it are not part of it. |
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-12 |
 | Depends on | [Workspace Claudes](workspace-claudes.md) (the Claudes, their directories and sign-ins), [Chat sessions](chat-sessions.md) (the reader of live sessions, `get_usage` already used there), [Account Pool](account-pool.md) (a pool means API keys, so no plan limits) |
@@ -41,7 +41,7 @@ The portal reads them only from Claude Code itself, never from a login. Two sour
 - **Plan limits of a pool or an API key.** They have none ([Chat sessions](chat-sessions.md) §6 rule 3). Account Pool shows their quota.
 - **What a request cost.** [Chat sessions](chat-sessions.md) FR49 and the Usage page keep that.
 - **Reading transcripts.** `get_usage` is always asked with `skip_behaviors: true`: without it Claude Code scans every transcript touched in the last seven days.
-- **Forecasting.** No "you will run out at 16:40". The history is shown; the guess is not made.
+- **Forecasting by guess.** Superseded in part by [§20](#20-usage-insight-round-4-engine-a) at the owner's request (2026-10-12): the portal now estimates when a window will run out, from the percentages Claude Code reported and never from tokens, labels every such figure an estimate with its formula, says why when it cannot, and alerts only on a confident basis. It still makes no forecast from the clock alone.
 - **Web Push.** It does not exist in the code yet. §12 writes down where it plugs in.
 
 ## 5. Users and stories
@@ -64,11 +64,11 @@ The portal reads them only from Claude Code itself, never from a login. Two sour
 
 | Allowed | Not allowed |
 | --- | --- |
-| Running Claude Code's own `claude -p` in the workspace, as that Claude (its directory), to ask `get_usage {skip_behaviors: true}` and read the numbers, timestamps and plan type of the reply. | Reading, copying, storing, logging or returning a login, a token, `.credentials.json` or `.claude.json`. Calling Anthropic with one. |
+| Running Claude Code's own `claude -p --safe-mode` in the workspace, as that Claude (its directory), to ask `get_usage {skip_behaviors: true}` and read the numbers, timestamps and plan type of the reply. | Reading, copying, storing, logging or returning a login, a token, `.credentials.json` or `.claude.json`. Calling Anthropic with one. |
 | Running `claude auth status --json` as that Claude to tell "signed out" from "no plan limits", keeping `loggedIn` and `authMethod` only. | Keeping its email, organization name or id, or showing them anywhere. |
 | Keeping a coarse plan label (`pro`, `max`, `team`, `enterprise`) from the reply's `subscription_type`, the word Claude Code's own `/usage` shows. | Keeping the account or the organization behind it. |
 | Using the `rate_limit_info` of a live session's `rate_limit_event`, handed over by the chat reader. | Storing the event line, the session's text or anything else from the stream. |
-| Probing only Claudes whose workspace is running. | Waking, starting or installing into a stopped workspace. Installing Claude Code (the sign-in flow does that). |
+| Probing only Claudes whose workspace is running. | Waking, starting or installing into a stopped workspace. Installing Claude Code (the sign-in flow does that). Running the workspace's hooks, plugins or skills: a probe is in safe mode (§11). |
 
 **Amendment to two PRDs (Q1).** [Chat sessions](chat-sessions.md) §6 and [Workspace Claudes](workspace-claudes.md) §6 said the portal never records "account, organization, plan". The point of those lines is that the portal does not learn who someone is. A plan limit cannot be shown without saying which plan, so this PRD keeps the plan's tier name only. The coordinator approved the change on the owner's behalf (provisional, for the owner to confirm) and both lines now read "account, organization or email" with a pointer here.
 
@@ -88,7 +88,7 @@ The portal reads them only from Claude Code itself, never from a login. Two sour
 ```
 
 1. **Scheduler.** Every few seconds it picks the Claudes that are due: workspace running, not on a pool, last probe older than the interval, not backing off.
-2. **Probe.** One short `claude -p` process per Claude, in a clean environment, one control request, read the reply, end (§11).
+2. **Probe.** One short `claude -p --safe-mode` process per Claude, in a clean environment (so no hook, plugin or skill runs), one control request, read the reply, end (§11).
 3. **Parser.** The reply becomes windows (key, label, percent, reset time), an optional extra-usage record and a plan label. Anything else is dropped.
 4. **Store.** A reading is a few rows in `claude_usage_samples` and an update of `claude_usage_latest`. The live socket tells open pages to reload.
 5. **Passive.** The chat reader hands each rate-limit event to `onRateLimit`; the same store takes it, as source `live`.
@@ -173,7 +173,7 @@ The reply (✅ observed with a fake claude.ai login and a stand-in endpoint; fie
 | Its own copy | Claude Code keeps the last usage body in the Claude's `.claude.json` (`cachedUsageUtilization`). Younger than 60 s: answered without asking the endpoint ✅. After a failed fetch it answers from that copy when it is under an hour old, and does not say so 📄. So a reading can be up to an hour old without a flag (§11, Q3). |
 | What stops it | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` stops the fetch and yields `rate_limits: null` ✅. The probe never sets it, and a workspace that sets it reads as unknown. `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING` and `DISABLE_AUTOUPDATER` do not stop it, and with them the process sends no telemetry ✅. |
 | `claude auth status --json` | `loggedIn`, `authMethod` (`claude.ai`, `none`; other values for keys and providers 🔬), `subscriptionType`, and also the email, organization name and id ✅. The portal parses the first two and drops the output. |
-| Not usable | `--bare` skips OAuth, so a subscription would read as signed out. `skip_behaviors: false` scans transcripts. |
+| Not usable | `--bare` skips OAuth, so a subscription would read as signed out. `skip_behaviors: false` scans transcripts. `CLAUDE_CODE_SAFE_MODE=1` alone does not stop hooks: the flag `--safe-mode` is what the probe uses (§11). |
 
 ### 10.2 Passive: `rate_limit_event`
 
@@ -200,7 +200,7 @@ env -i HOME PATH LANG=C.UTF-8 [CLAUDE_CONFIG_DIR=$HOME/.claudepilot/claudes/<16 
        DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 DISABLE_AUTOUPDATER=1
        [HTTPS_PROXY HTTP_PROXY NO_PROXY NODE_EXTRA_CA_CERTS SSL_CERT_FILE SSL_CERT_DIR, only when set]
   timeout 25 claude -p --input-format stream-json --output-format stream-json --verbose
-       --strict-mcp-config --no-session-persistence --disable-slash-commands
+       --strict-mcp-config --no-session-persistence --disable-slash-commands --safe-mode
 ```
 
 - **Directory.** The Claude's directory is checked against `claudes/<16 hex>` and passed as an argument, never through shell parsing (the pattern of [Workspace Claudes](workspace-claudes.md) §12). Default has no `CLAUDE_CONFIG_DIR`, as everywhere else.
@@ -209,7 +209,29 @@ env -i HOME PATH LANG=C.UTF-8 [CLAUDE_CONFIG_DIR=$HOME/.claudepilot/claudes/<16 
 - **Limits.** One probe at a time per workspace, two in the portal, 30 seconds hard stop, one check-now per Claude per 30 seconds, an interval of 10 minutes (2 while watched), backoff on trouble up to one hour. A Claude's cadence is a fraction of what the CLI itself does (it fetches usage on every `/usage` and status refresh), and the CLI's own 60-second copy absorbs bursts.
 - **Where it runs.** Docker and the local machine through the runtime's `exec`. Kubernetes uses the same exec ([Workspace Claudes](workspace-claudes.md) W3) 🔬.
 - **Failure map.** Claude Code missing (exit 127): `unknown`, problem `not_installed`; no reply in time: `unknown`, `timeout`; a refusal or an unreadable reply: `unknown`, `unreadable`; workspace stopped: nothing is run. The text shown for a problem is fixed; Claude Code's output is never shown or logged.
-- **Hooks and servers.** The probe starts no MCP server and writes no session. It sends no user message, so no turn hook (`StopFailure`) can fire. ✅ In a Docker workspace the stand-in saw only the profile, bootstrap, feature-flag and usage calls: no telemetry, no model request. A pool workspace is not probed (U8).
+- **Servers and the session.** The probe starts no MCP server and writes no session, and it sends no user message, so no model request is made. ✅ In a Docker workspace the stand-in saw only the profile, bootstrap, feature-flag and usage calls: no telemetry, no model request. A pool workspace is not probed (U8). This bullet used to say that no hook can fire; that was wrong, see the next subsection.
+
+### Hooks never run (safe mode)
+
+**Finding (2026-10-12, S1, on the real CLI).** The first version of the probe ran Claude Code without safe mode. A probe starts a session (no message is sent), and Claude Code runs the `SessionStart` and `SessionEnd` hooks of that session: those of the Claude's own `settings.json` (`$CLAUDE_CONFIG_DIR`, or `~/.claude` for Default) **and those of the project's `.claude/settings.json` in the exec's working directory**, on every poll (every 10 minutes per Claude, every 2 while the page is open, and on each check now). Those files are the workspace user's and the agent's to write. A hook is automation written for a person's interactive session (a notification, a git command, a log line): run by a poll it fires unseen and repeatedly, and it can push the probe past its limit. An agent in a workspace can already run commands there, so this is not an escalation of what it can do; it is the portal running them, on a timer, for a session nobody started.
+
+**Fix.** `--safe-mode` (`SAFE_MODE_FLAG` in `probe.ts`) is part of the probe's command. Claude Code's safe mode starts with every customization off (hooks, CLAUDE.md, skills, plugins, MCP servers, commands, agents, output styles); auth, model selection, built-ins and permissions work normally and admin-managed (policy) settings still apply. Observed on Claude Code 2.1.296: the real CLI, a private HOME with a clearly fake login, the scripted stand-in, and, for policy settings, a private mount namespace in which `/etc/claude-code/managed-settings.json` was a real root-owned policy file that only that process tree could see.
+
+| Observed | Result |
+| --- | --- |
+| The probe command without the flag, hooks in the Claude's settings and in the project's | `SessionStart` and `SessionEnd` ran, user and project hooks alike; the reply was still the plan ✅ |
+| The same with `--safe-mode`, a named Claude and Default | no hook ran, in either place; the same reply (plan `max`, its windows) ✅ |
+| The same in a throwaway container of the workspace image (dash, user `node`, its own `claude` 2.1.296) | with the flag: no hook and a reply; without it: the hook ran ✅ |
+| A managed (policy) `SessionStart` hook beside a user hook, with `--safe-mode` | the managed hook ran and the user hook did not: policy applies, the workspace's own hooks do not ✅ |
+| A managed `apiKeyHelper` | `rate_limits_available: false` with and without the flag: managed auth applies ✅ |
+| A user-level `apiKeyHelper` in the Claude's settings | still read as an API key (`auth status` says `api_key_helper`; the integration test passes with the flag) ✅ |
+| `CLAUDE_CODE_SAFE_MODE=1` in the environment instead of the flag | **no hook was stopped.** The variable is only what the flag sets; it is not a substitute, and an older Claude Code would ignore it and run the hooks ✅ |
+| `--settings '{"disableAllHooks":true}'` instead of the flag | stopped the hooks on 2.1.296 and on 2.1.168; not used, see below ✅ |
+| `claude auth status --json` (the probe's second call) | ran no hook and did not run the `apiKeyHelper`; `auth status --safe-mode` is an unknown option (the flag goes before the subcommand), so that call is left as it was ✅ |
+
+**Older Claude Code.** `--safe-mode` came in 2.1.169. An older one answers `error: unknown option '--safe-mode'` and exits before it starts anything (observed on 2.1.168), so the probe **fails closed**: it reads nothing, runs nothing and does not retry without the flag. That costs nothing: 2.1.168 does not answer `get_usage` either (it replies with an error), so no version that can answer it lacks the flag. There is therefore no fallback: `--settings '{"disableAllHooks":true}'` would have worked on 2.1.168, but only where usage could not be read anyway, and it could not be verified on any older version that could. The portal recognises the refusal (it looks for the parser's `unknown option … --safe-mode` and keeps nothing else of the output) and says once per workspace in its log: "Claude Code there has no --safe-mode … Update Claude Code in that workspace". To the page it is the contract's `unreadable` problem, with the usual back-off up to an hour. A problem code and a line of its own ("Claude Code is too old to read usage safely") need a contract and a web change: asked for in the outbox, not made here.
+
+**Policy hooks.** Under safe mode an administrator's managed hooks still run: they are root-owned and meant to. A workspace that has managed hooks runs them on each poll.
 
 ## 12. Alerts
 
@@ -223,6 +245,7 @@ env -i HOME PATH LANG=C.UTF-8 [CLAUDE_CONFIG_DIR=$HOME/.claudepilot/claudes/<16 
 - A snoozed Claude shows no toast and no attention colour until the snooze ends or its window resets.
 - **Seam for push.** Alerts are plain objects (`claudeId`, `claudeName`, `window`, `level`, `usedPct`, `resetsAt`, `at`) handed to a list of sinks in `claudeusage/alerts.ts`. The only sink today feeds the live topic. When [Web app & PWA](web-app-pwa.md) FR13 push lands, it adds a sink that sends the same object under the notification kind `limit`, with the throttle that PRD gives.
 - Optional: when a Claude is exhausted and another Claude on the same workspace has room, the row offers "Switch" and opens the switch dialog. Never automatic.
+- **Projection (§20.4).** A fourth kind of alert, "will run out before reset", from the window's pace: once per window and period, only on a confident estimate, with its own snooze, through the same sink (`kind: 'projection'`, `etaAt`, `projectedPct`).
 
 ## 13. What the person sees
 
@@ -230,7 +253,7 @@ Under the text diet: words of one or two, numbers and bars, explanations in Info
 
 | Place | What it shows |
 | --- | --- |
-| Usage → Claudes | The Usage page has two tabs, Requests and Claudes (`?tab=claudes`); the tab carries a count of Claudes that are near a limit or out and not snoozed. One row per Claude, the neediest first: a status icon (within limits, near, out, not known, not signed in, no plan limits), the name, the plan as a small chip, the workspace, a sparkline of the week on wider screens, a chevron and a check icon button. Under it a bar per window: label, bar (accent, gold from 80 %, red from 95 %), percent, and the reset as a countdown ("2 h 10 m"; tap it for the time on this device's clock). Per-model weeks sit under the week; extra usage is one short line. |
+| Usage → Claudes | The Usage page has five tabs (§27): Requests, Claudes (`?tab=claudes`), Attribution, Budgets and Spikes, under a strip of four figures. The Claudes tab carries a count of Claudes that are near a limit, out, or estimated to run out before they reset (a confident estimate only), not snoozed. One row per Claude, the neediest first: a status icon (within limits, near, out, not known, not signed in, no plan limits), the name, the plan as a small chip, the workspace, a sparkline of the week on wider screens, a chevron and a check icon button. Under it a bar per window: label, bar (accent, gold from 80 %, red from 95 %), percent, and the reset as a countdown ("2 h 10 m"; tap it for the time on this device's clock). Per-model weeks sit under the week; extra usage is one short line. |
 | A Claude with no plan limits | One short line: "No plan limits". Signed out: "Not signed in". Not read: "Not read yet", or "Couldn't read usage" with an ⓘ that says why. |
 | A stale row | Dimmed meters and the age ("3 h ago") beside the workspace; a stopped workspace says "stopped" and its check button is off. Unknown shows "—", never 0. |
 | A Claude that is out | A line under its windows: "Room on Kresna · 65 % left" when another Claude on the same workspace has room. It says; it never switches. |
@@ -239,20 +262,22 @@ Under the text diet: words of one or two, numbers and bars, explanations in Info
 | Switch dialog | One line under the destination: "Session 41 % · resets 14:20", "Out until 14:20", "No plan limits", "Not signed in". `ClaudeHeadroom` and `useHeadroom`, exported from `features/usage/claude` for A2's dialog. |
 | Toasts | Anywhere in the app, once per alert on this device: "Satria: week 95 %", "Default: out until 14:20", with a way to the tab. |
 | Info | An ⓘ on the tab says what the numbers are, where they come from, and that a dash is not zero. |
+| Round 4 | The strip, the stacked charts, pace marks on the bars, the run-out line, attribution, budgets, spikes, export and the Move recommendation are §27, with their copy. **Multi-user:** a browser preference is keyed with the user's id (`u_owner` today), and a view the portal refuses to show reads "Not available to you." rather than empty. |
 
 ## 14. Security
 
 - **No credentials.** The probe never opens a credentials file, never sets a token, and its environment is cleaned (§11). The only things read from the workspace are Claude Code's reply to one control request and `loggedIn` and `authMethod` from `auth status`; the rest of that output is dropped in memory.
+- **No hooks.** A probe never runs the workspace's hooks, CLAUDE.md, skills or plugins: its command carries `--safe-mode` (§11, "Hooks never run"). Admin-managed (policy) settings still apply. The flag is guarded by the unit test of the command line and by a real-CLI test in which a `SessionStart` hook writes a marker file (§16).
 - **No identity.** Neither table, the API, the logs nor the live socket carries an email, an organization name or an id of an account. The Claude's own label (its name) is enough. A canary test (§16) checks it.
 - **Untrusted input.** Everything in a reply is untrusted: numbers are clamped (0 to 1000), times must parse, labels are cut to 40 characters, stripped of control characters and escaped by the page, the number of windows is capped. A reply that does not match drops the reading, not the portal.
 - **Rate limits.** The limits of §11 hold for every caller: the scheduler, check-now, and the MCP tool (which never probes).
 - **Guard.** Every route sits behind the session guard; mutating requests need the origin check. The MCP tool follows the registry's scopes.
-- **Failing closed.** If the portal's store is locked or frozen, nothing probes.
+- **Failing closed.** If the portal's store is locked or frozen, nothing probes. A Claude Code that does not know `--safe-mode` is not probed either (§11).
 - The workspace is not trusted either: a workspace can lie about its own usage. The numbers inform a person; no decision of the portal's depends on them.
 
 ## 15. Observability
 
-One line per probe outcome in the portal log (`[claude-usage] <claude id> <what it runs on, or failed (problem)> in 515 ms`): never a number from the reading and never Claude Code's output. A background failure (a listing, a pass, a sink) is logged once per kind. The snapshot says when each Claude was last read and from which source. Alerts go to the live feed and to the sinks of §12; they are not written to the audit trail. Counters for the Monitoring dashboard are not built.
+One line per probe outcome in the portal log (`[claude-usage] <claude id> <what it runs on, or failed (problem)> in 515 ms`; a Claude Code without `--safe-mode` reads `failed (unreadable, no --safe-mode)` and its workspace is told once, in words): never a number from the reading and never Claude Code's output. A background failure (a listing, a pass, a sink) is logged once per kind. The snapshot says when each Claude was last read and from which source. Alerts go to the live feed and to the sinks of §12; they are not written to the audit trail. Counters for the Monitoring dashboard are not built.
 
 ## 16. Testing
 
@@ -262,6 +287,8 @@ One line per probe outcome in the portal log (`[claude-usage] <claude id> <what 
 | Passive parser: the observed events | `parse.test.ts` | Fractions become percents, Unix seconds become times; `rejected` makes the window exhausted; extra usage refused; nothing worth keeping gives null. |
 | Probe: the shell wrapper on a real `sh` | `probe.test.ts` (8) | Only HOME, PATH, LANG, the three quiet switches, the pass-through names when set, and the Claude's own directory; a key, a token, a base URL and a stray `CLAUDE_CONFIG_DIR` are dropped; a value with a space stays whole; an invalid directory throws. |
 | Probe: the protocol, with a scripted exec | `probe.test.ts` | One control line and no user message; a reply to another id is ignored; hang, 124, 127, a refusal and a failing exec each read as their problem; sign-in state tells signed out, key and a login without the profile scope apart; the canary never comes back. |
+| Probe: safe mode (§11) | `probe.test.ts` (3 added) | The command carries `--safe-mode` once and never `--bare`; `auth status` does not; a process that rejects the flag (even across chunks) is `unsupported`, fails closed with no second question, and another failure is not mistaken for it; through the real shell wrapper a stand-in `claude` is given the flag, and one that rejects it is told apart. |
+| Hooks never run (§11) | `claude.integration.test.ts` (1 added), `service.safemode.test.ts` | With the real CLI: `SessionStart` and `SessionEnd` hooks in the Claude's settings and in the project's leave no marker file for a named Claude and for Default, and the plan is still read; the control (the same command with only the flag taken out) leaves the markers, so the test can fail. A workspace whose Claude Code lacks the flag is told once and reads as `unreadable`. |
 | Store | `store.test.ts` (5) | Rows only on change or after 30 minutes; history; retention (two days, hourly to thirty, nothing after, Claudes that are gone, never on an empty list); an unusable store reads as nothing. |
 | Scheduler, check now, backoff, watch, the off switch, a store the portal does not trust | `service.test.ts` (17) | Only due Claudes of running, non-pool workspaces; one probe per workspace, two in all; backoff to an hour and back; settled states hourly; faster while watched; cooldown; nothing at all on a frozen store. |
 | Passive hook | `service.test.ts` | Updates the windows it carries and leaves the probe's others; a Claude with no reading gets one; a refusal is exhausted at once; a pool, a stranger and rubbish do nothing. |
@@ -270,9 +297,10 @@ One line per probe outcome in the portal log (`[claude-usage] <claude id> <what 
 | API | `routes.test.ts` (4) | Shapes, thresholds, alerts; no field names an account or a login; 422, 404, 409, 429 as FR18. |
 | Portal MCP tool | `portalTools.test.ts` (2) | Through the real MCP endpoint: an admin token reads all or one, an agent only its own Claude. |
 | Boot | `qa/boot.test.ts` (4) | Green with the module in. |
-| Real Claude Code against the stand-in | `claude.integration.test.ts` (8) | A fake Max login reads as a plan with its windows and nothing is asked but the usage endpoint; `limits[]` rows, a model and extra usage; a 429 reads unknown; signed out and an `apiKeyHelper` read `none` and `key`; an API key in the environment makes the same login read "no plan limits" (why the environment is cleaned); the passive events of a real stream, including a refused turn. Skipped without `claude` and `openssl`. |
+| Real Claude Code against the stand-in | `claude.integration.test.ts` (9) | A fake Max login reads as a plan with its windows and nothing is asked but the usage endpoint; `limits[]` rows, a model and extra usage; a 429 reads unknown; signed out and an `apiKeyHelper` read `none` and `key`; an API key in the environment makes the same login read "no plan limits" (why the environment is cleaned); the passive events of a real stream, including a refused turn. Skipped without `claude` and `openssl`. |
 | Real Docker workspace | by hand, 2026-10-12 | A portal on a scratch database, one workspace `cu-a`: the scheduler's own probe found Default signed out in 515 ms; with a fake `apiKeyHelper`, `POST …/check` answered `key`, "No plan limits"; the probe command run by `docker exec` in the container (dash, user `node`, its own `claude`) against the stand-in with a fake Max login read the windows in 316 ms, an `ANTHROPIC_API_KEY` given to the exec was dropped, and the stand-in saw no telemetry and no model request. Other agents' running workspaces were left alone (`PORTAL_CLAUDE_USAGE_ONLY`). |
 | UI | by hand, 2026-10-12 | Looked at in a real browser at 390 and 1280 px, light and dark, seeded for within limits, near, high, out, not known, stale, no limits and signed out: rows, sorting, the tab count, countdowns, history, the workspace sheet's tiny meter, the toast, check now (a real probe changed a row and the count), snooze (the row, the bell, the count). |
+| Usage insight (§20) | `pace`, `spend`, `palette`, `requests`, `recommend`, `exporter`, `service.insight`, `service.summary`, `service.actor`, `routes.insight`, `portalTools.insight` tests (77), and a real portal with a seeded database (38 checks) | Pace, rates, comparison, cache, palette, strip, recommendation, export and tools against numbers computed by hand: the table in §20.12. |
 
 ## 17. Milestones
 
@@ -282,6 +310,7 @@ One line per probe outcome in the portal log (`[claude-usage] <claude id> <what 
 | M1 | Server: probe runner, parser, store, scheduler, passive hook, `headroom`, routes, live topic, tests. **Built** and tried against the real CLI and a real Docker workspace (§16). Not yet called by the chat reader: the hook `onRateLimit` is assigned on the controller (`index.ts`) and waits for A2 to call it. |
 | M2 | The Claudes tab, history, check now, the workspace sheet's meter, `ClaudeHeadroom` for the switch dialog. **Built** and looked at. `ClaudeHeadroom` waits for A2's switch dialog to show it. |
 | M3 | Alerts (80 %, 95 %, out), toasts, snooze, the push seam (`onAlert`), the `claude_usage` Portal MCP tool, the "room elsewhere" hint. **Built.** Web Push **not built**: it does not exist in the code yet (§12). |
+| M4 to M8 | Usage insight, round 4 (§20.13): contracts, quota speed and pace and the projection alert, spend speed, palette, the Requests report with comparison and cache split, the summary strip, the Move recommendation, export and tools: **Built** on the server. The pages and widgets that show it: **not built here**. |
 
 ## 18. Success
 
@@ -309,6 +338,7 @@ One line per probe outcome in the portal log (`[claude-usage] <claude id> <what 
 | U7 | The chat reader calling `onRateLimit`: the hook is assigned in `index.ts` and the parser is tested on real lines, but A2's reader does not call it yet, so no live chat has fed it. |
 | U8 | That the probe causes no outbox or hook event on a workspace with an account pool: a pool workspace is not probed at all (its state is `pool`), so this was not exercised; on a workspace without one, the probe wrote no session and sent no telemetry (✅, Docker). |
 | U9 | `ClaudeHeadroom` inside A2's switch dialog: the component works on the snapshot (looked at in each row once), the dialog is A2's. |
+| U10 | Claude Code newer than 2.1.296 keeping `--safe-mode` and its meaning: the real-CLI marker test fails the day it does not (a probe then reads nothing rather than run a hook). Managed (policy) hooks run on every poll by design (§11). |
 
 | ID | Question |
 | --- | --- |
@@ -317,3 +347,429 @@ One line per probe outcome in the portal log (`[claude-usage] <claude id> <what 
 | Q3 | Should thresholds (80 and 95) be a setting in [Settings & policies](settings-policies.md)? Draft: constants, `USAGE_THRESHOLDS` in the contracts. |
 | Q4 | Should a probe run for a Claude whose only chat is asleep (no process)? Built: yes, the probe is independent of sessions. |
 | Q5 | Should the Usage nav item show a dot while a Claude is near a limit? Built: only the tab's count and the toasts. |
+| Q6 | Round 4 (§20.14): the unverified items of the pace (UI1 to UI6), above all that it has never met a real plan. |
+
+## 20. Usage insight (round 4, engine A)
+
+Added 2026-10-12 at the owner's request (speed, pace, comparison, cache, colours, a summary strip, a Move recommendation, export). This section is the server half; the Usage page, the glance widgets and the Quota widget read it. Attribution, budgets and spikes are §21 to §26. It **supersedes the non-goal "Forecasting" of §4**: the portal now estimates, labels every estimate, and gates alerts on confidence. **Multi-user** (PLAN-10, not built): see §20.14.
+
+| Part | Status |
+| --- | --- |
+| Contracts (`packages/contracts/src/usage.ts`, additions in `claudeusage.ts`) | **Built** |
+| Quota speed, pace, outlook, next reset (§20.2) | **Built.** Checked against hand-computed fixtures and against a real portal with seeded readings (§20.12); never against a real plan (§20.14). |
+| Projection alert and its own snooze (§20.4) | **Built**, through the existing sink and snapshot; tested with a clock. Not yet seen as a toast: the page is not part of this section. |
+| Spend speed and spend today (§20.1) | **Built** (every rate is an estimate). |
+| Cache split, previous period, stacked series, the Requests report (§20.3, §20.8) | **Built** as `GET /api/claude-usage/requests`; `GET /api/chat/usage` is unchanged. |
+| Palette slots (§20.6) | **Built.** The colours and the cue that is not colour are the web's: not built here. |
+| Summary strip data (§20.7) | **Built** (server). The strip is the page's. |
+| Move recommendation (§20.5) | **Built**, over HTTP, as a Portal MCP tool and in-process. The switch dialog and the auto-transfer do not call it yet. |
+| Export (§20.9), Portal MCP tools (§20.10) | **Built** |
+| The strip live on every finished request | **Not built**: it needs a hook in the chat controller (§20.14). |
+| Multi-user filter | **Seam built** (default allow); nothing filters yet. |
+
+### 20.0 Numbers are never invented
+
+Every derived figure is a `Figure`: `{ value, basis, reason? }`. `measured`: a stored value, or exact arithmetic on stored values (a sum, a ratio, a difference): tokens, requests, a percent a probe read, a reset time, the cache hit rate, the change in tokens between two periods. `estimate`: rests on an assumption: any rate (a request counts when it finishes), any projection, and dollars (Claude Code prices tokens at API list prices: for a plan that is what the use would cost, not a bill). `unavailable`: no number, with a fixed reason code (`no_samples`, `single_sample`, `short_span`, `period_reset`, `decreasing`, `no_growth`, `clock_skew`, `stale`, `signed_out`, `no_limits`, `no_reading`, `no_window`, `no_number`, `no_reset_time`, `window_length_unknown`, `no_requests`, `no_baseline`, `no_history`, `not_recorded`, `session_deleted`) and one short line for each (`UNAVAILABLE_TEXT`, `reasonText`). The page labels an estimate "est." with the formula in an InfoTip and shows "-" with the reason in an InfoTip. A zero is never shown for "not known": an idle quarter hour is a real zero, "no request today" is unavailable.
+
+### 20.1 Spend speed (from the requests the portal recorded)
+
+Source: `chat_usage`, one row per model per finished request. Tokens are input + output + cache writes; cache reads are given apart. A request is booked when it **finishes**, so a long one reads as a burst: every rate is an estimate. Terminal use of Claude Code inside a workspace is not recorded and is not counted. Dollars are Claude Code's cost figure (an estimate, §20.0).
+
+| Figure | Formula |
+| --- | --- |
+| Trailing rate (`15m`) | the sum over requests that finished in (now - 15 min, now], divided by 15 minutes. Zero requests is a real zero (idle). |
+| Today (`today`) | the sum since this device's midnight, divided by the minutes from the first request's start to now. A request's start is its finish minus its own recorded duration, never before midnight; the first to start decides. Unavailable: `no_requests` (none today), `short_span` (under 5 minutes). |
+| Spend today | tokens, cache reads and requests measured; dollars an estimate. |
+
+Rates are rounded to a tenth of a token and to $0.0001 a minute; sums of dollars to a hundred-millionth (no floating-point dust).
+
+### 20.2 Quota speed, pace and projection (from the percentages Claude Code reported, never from tokens)
+
+Per Claude and window, from `claude_usage_samples` of the **current period only** (samples whose reset time is within a minute of the latest reading's) plus the latest reading itself (an unchanged reading is not stored again for 30 minutes, so the latest reading is added at its own time). `U` = percent used at the latest reading, `t` = its time, `R` = the reset time, `L` = the window length (`session` 5 h; `week`, `week_opus`, `week_sonnet`, `week_apps`, `week_models` and `model:<name>` 7 days, by the names Claude Code gives them; `other:*` unknown). The projection stands on the reading's time, not on the clock, so it does not drift between probes. Times of an estimate are rounded to the second, percentages to a tenth.
+
+| Figure | Formula | Unavailable when |
+| --- | --- | --- |
+| `speed` (points per hour) | slope of the least-squares line through the period's readings (3 or more), first to last (2) | one reading (`single_sample`), under 10 minutes between first and last (`short_span`), the percent fell (`decreasing`), reading times in the future (`clock_skew`), the reading is old (`stale`), the window reset and no reading of the new period yet (`period_reset`), no percent (`no_number`), never read (`no_reading`), no reset time (`no_reset_time`) |
+| `projectedPct` | `U + speed x (R - t)`; can pass 100 | as `speed` |
+| `etaAt` | `t + (100 - U) / speed` | as `speed`; `no_growth` at speed 0 |
+| `status` | `exhausted` if `U >= 100` (measured); `over` if `projectedPct > 100`; else `under` (estimates) | as `speed` |
+| `evenPct` | `100 x (t - (R - L)) / L`, clamped 0 to 100 | `window_length_unknown`; the same guards as `speed` except the rate ones |
+| `aheadPts` | `U - evenPct` | as `evenPct` |
+| `lowConfidence` | fewer than 3 readings, or a span under `max(10 min, L / 10)` | a flag, never unavailable |
+
+Hand-checked example (a test): 10 % at 00:00 and 20 % at 01:00, now 01:00, the session resets at 04:00 (so it began at 23:00): speed 10 points/h; projected 20 + 10 x 3 = 50 %; ETA 01:00 + 8 h = 09:00, after the reset: `under`; even pace 100 x 2 h / 5 h = 40 %, so 20 points behind an even spend. Another: readings of 10, 25 and 40 % at 0 h, 1 h and 3 h: least squares gives 135/14 = 9.6 points/h where first to last would give 10.
+
+`outlook` of a Claude looks only at the windows that stop it altogether (`session`, `week`; a model's own week stops only that model): `exhausted` if one is used up; else `over` with the one that runs out first (the earliest ETA); else `under` (the fullest); unavailable, with the reason, for a pool or key (`no_limits`), signed out, not read (`no_reading`), no such window (`no_window`) or no usable pace. `nextReset` is the soonest future reset of any window (measured).
+
+### 20.3 Cache split
+
+`hitRate = cache reads / (cache reads + uncached input + cache writes)`: the share of input tokens the prompt cache served (what the Requests tab already calls "from cache"). Exact arithmetic on stored counts: measured; unavailable (`no_requests`) with no input. The report gives uncached, written, read and the rate for the totals and for every Claude and model row; `cacheSplit` in the contracts is the one rule for the server and the page.
+
+### 20.4 Projection alert ("will run out before reset")
+
+A new alert kind beside the threshold alerts, through the same machinery (the `onAlert` sink, the `claudeusage` live topic, the snapshot's `alerts`). It fires **once per Claude, window and period** (the period ends at the window's reset), only for `session` and `week`, only when `status` is `over`, `lowConfidence` is false (three readings over at least a tenth of the window) and the window is not exhausted yet; a projection that falls back and rises again in the same period does not repeat, and one that crosses while the Claude is snoozed stays quiet for the period. Its id is `<claudeId>|<window>|projection|<reset ms>`; it carries `kind: 'projection'`, `etaAt` and `projectedPct`. The snapshot lists it only while it still holds, with the estimate as it stands now. Its **own snooze** (`PUT .../snooze {until, kind: 'projection'}`, `DELETE ...?kind=projection`) silences only projections; the Claude's ordinary snooze silences both. The notification package subscribes to the sink for "quota about to run out".
+
+### 20.5 Move recommendation
+
+`GET /api/claude-usage/recommend?workspaceId=&from=`: the other Claudes of the workspace (a chat stays in its workspace), ranked, each with a reason code and its basis. Order: Claudes with at least 20 % of their fullest window left (`room`, or `over_pace` when their outlook says they run out before they reset, which subtracts 20 points) by percent left, the sooner reset on a tie; then Claudes with no plan limits (a pool or key: nothing to run out of, billed per use); then `tight` ones (under 20 % left). Exhausted (by when they return), unknown and signed-out Claudes follow with `rank: null`. Only the best of `room`, `over_pace` or `no_limits` is `recommended`; a signed-out, exhausted, unknown or `tight` Claude never is, and `none` says why nothing is (`no_other_claude`, `none_ready`, `all_tight`). The percent left is measured; `over_pace` is an estimate and says so in `basis`. The two constants (20 %, 20 points) are this section's choices. A recommendation is advice: the portal never moves a chat by itself. Only Claudes the asking user may use are listed (§20.14).
+
+### 20.6 Palette (one colour per Claude and per model, everywhere)
+
+The server gives each Claude and each model a stable slot, 0 to 7, on first sight, and keeps it (table `usage_palette`, migration 170). A Claude is keyed by its id, a model by its id; slots are per kind. The lowest free slot, in order of first request. When all eight of a kind are taken, the slot of the key not seen for 45 days is reused (older than any report window, so no page can show both); with none that old the newcomer gets `null` (not kept): the neutral grey, "Others". The values (an Okabe-Ito based set checked against deuteranopia, protanopia and tritanopia) and the cue that is not colour (legend order, direct labels, a pattern) belong to the web (`apps/web/src/lib/usage`). On a store that cannot be written the slots are worked out and not kept. Slot 0 to 7 is also on every Claude of the snapshot, every row of the Requests report and every Move candidate; `GET /api/claude-usage/palette` lists them all.
+
+### 20.7 Summary strip
+
+`GET /api/claude-usage/summary?claudeId=&tz=`: spend today (est.), speed (trailing and today), time until the limit (`limit.etaAt`, the page counts it down; the soonest `over` among the Claudes in scope, else the fullest), next reset (the soonest of any window), and the same per Claude, the most spent first. `tz` is the viewer's `getTimezoneOffset()`. The overall spend counts every request, even of a Claude that is gone; with a Claude picked, its requests only.
+
+### 20.8 Comparison with the previous period
+
+`GET /api/claude-usage/requests?range=&claudeId=&tz=` is `GET /api/chat/usage` and more: the same bucket rule (`usageWindow` in `chat/usage.ts`) and a `previous` period of the same length, bucket for bucket, with the percent change of cost (est.), tokens (input + output + cache writes) and requests. `coverage` says whether the portal's recorded history reaches back to the period's start (`full`), began inside it (`partial`) or after it (`none`); the change is unavailable (`not_recorded`) unless `full`, and a zero base is `no_baseline`. The report also carries, per Claude and per model, the totals, the cache split, the palette slot and the per-bucket series (for stacked charts; `null` where nothing ran). A request recorded without a Claude (before Claudes existed) is counted under its workspace's Default Claude here, so Default's earlier and later requests are one row; `GET /api/chat/usage` still lists them apart.
+
+### 20.9 Export
+
+`GET /api/claude-usage/export?what=requests|quota&format=csv|json&range=&claudeId=&tz=`, a download (`Content-Disposition: attachment`, `nosniff`, no cache). Requests: JSON is the whole report; CSV is one row per bucket, Claude and model with tokens measured and the column `cost_usd_estimate`. Quota: the plan readings of 1d, 7d or 30d, every stored reading (not thinned): CSV `at, claude, workspace, window, used_pct`. A cell starting with `=`, `+`, `-`, `@`, a tab or a carriage return is made plain text with a leading `'` (spreadsheet formula injection); a number is never defused.
+
+### 20.10 API and Portal MCP
+
+Routes under `/api/claude-usage` (behind the session guard): `summary`, `requests`, `recommend`, `palette`, `export` (GET) and the existing ones; `PUT`/`DELETE` `/:claudeId/snooze` take `kind: 'projection'`. Portal MCP, all read-only: `claude_usage` (now with each window's pace and the Claude's outlook; an agent still reads only its own Claude), and for admin tokens only `claude_usage_summary`, `claude_usage_report` (with the previous period and the cache split; a model's name is labelled untrusted) and `claude_move_advice` (it names other Claudes). Every figure in a tool answer is `{ value, basis, reason?, why? }`. In-process, on the object `createClaudeUsage` returns: `recommend(workspaceId, fromClaudeId?, actorId?)`, `recommendFrom(fromClaudeId, actorId?)`, `outlook(claudeId): { headroom, limit }` (never throws, never probes), `headroom(claudeId)` and `onAlert(fn)`.
+
+### 20.11 Data model
+
+Migration 170: `usage_palette (kind, key, slot, first_seen_ms, last_seen_ms)`, primary key (kind, key), one key per slot and kind. Migration 171: `claude_usage_latest` gains `proj_alerted` (JSON: per window, the period a projection was told for, when, the estimate, whether quiet) and `proj_snoozed_until_ms`. No other new store: the rates read `chat_usage`, the pace reads `claude_usage_samples`. No new dependency.
+
+### 20.12 Testing
+
+Every expected value is computed by hand and written in the test next to its fixture; no test asserts a number only because the code produced it.
+
+| Case | Covered by | Expected (by hand) |
+| --- | --- | --- |
+| Pace: the owner's example; three linear readings (30 points/h, 130 %, out at 03:00, over); exactly 100 % at the reset is under; least squares 9.6 against first to last 10; the period that ended is left out; a reset time a few seconds off is one period; the latest unstored reading counts; one reading, under ten minutes, zero speed, a falling percent, each missing piece (no number, reading, reset time, reset passed, old, clock in the future); a flat fractional percent is zero speed; a used-up window (measured); a week (even pace 28.6, 1.4 ahead); confidence by window length; a window of unknown length | `pace.test.ts` (24) | The values in §20.2 and in the test comments. |
+| Outlook and next reset: over with the earliest ETA, under with the fullest, exhausted, every reason, several Claudes as one | `pace.test.ts` | as above |
+| The service over scripted probes: pace and outlook in the snapshot; pool, signed out and unread each say why; the projection alert once on three readings (not on two) with its estimate (130 %, ETA 04:00), again in a new period (150 %, ETA 08:20), its own snooze and the Claude's, a weekly burst of an hour never alerts; `noteSpend` | `service.insight.test.ts` (8) | |
+| Spend speed: trailing 113.3 tokens/min, $0.02/min; today 49.7 over 155 min; idle zero; none today; under five minutes; a request that began before midnight; the viewer's midnight; Default's requests; the reader | `spend.test.ts` (10) | |
+| Palette: first sight, stable, nine keys, recycling after 45 days, a store that cannot be written | `palette.test.ts` (3) | |
+| The Requests report: totals, hit rate 8/15, by Claude and model, series, previous period (+275.0 % est., +133.3 %, +100.0 %), partial, none and full coverage, a zero base, one Claude, the viewer's clock | `requests.test.ts` (6) | |
+| The strip, the recommendation and the palette through the service | `service.summary.test.ts` (4) | |
+| Move ranking: scores, the over-pace penalty, ties, no limits, tight, exhausted, unknown, signed out, none, the old reading | `recommend.test.ts` (9) | |
+| Export: escaping, formula injection, both files | `exporter.test.ts` (4) | |
+| Routes: shapes, refusals, download headers, the snooze kind | `routes.insight.test.ts` (3) | |
+| Portal MCP: pace in `claude_usage`, the three admin tools, an agent cannot call them | `portalTools.insight.test.ts` (3) | |
+| Multi-user seam: a user sees only the Claudes they may use, a throwing seam hides | `service.actor.test.ts` (3) | |
+| A real portal on a scratch data directory, probes off, K8s off, a real Docker workspace, a seeded database (2026-10-12) | by hand, 38 checks of the real HTTP answers against numbers worked out from the seed | Default's session read 10, 25, 40 % over an hour: speed 30/h, projected 130 %, out two hours after the last reading, outlook over; Satria 70 % once: no speed (`single_sample`), 50 points ahead of an even pace, 30 % left; today $2.62 (est.), 7000 tokens, 22000 read, 5 requests; trailing 180 tokens/min and $0.0667/min; the Requests report for a day: 6 requests, $3.22, hit rate 22000/27700, +222.0 % cost, +190.7 % tokens, +200.0 % requests against the day before; slots kept; both recommendations; both exports; the snooze kind; 422, 404 and 401. All passed. The portal's own `GET /api/chat/usage` gave the same totals. |
+
+### 20.13 Milestones
+
+| Milestone | Scope | Status |
+| --- | --- | --- |
+| M4 | Contracts (`usage.ts`, additions in `claudeusage.ts`) | **Built** |
+| M5 | Quota speed, pace, outlook, projection alert and its snooze | **Built** (§20.2, §20.4) |
+| M6 | Spend speed, palette, the Requests report with comparison, cache split and series, the summary strip | **Built** (§20.1, §20.3, §20.6 to §20.8) |
+| M7 | Move recommendation, export, Portal MCP tools, the in-process API | **Built** (§20.5, §20.9, §20.10) |
+| M8 | The pages and widgets that show all of this | **Built** for the Usage page and the Move dialog (§27); the glance widgets are their own PRD |
+
+### 20.14 Multi-user, unverified, and open
+
+**Multi-user** (PLAN-10; not built, one seam in place). A Claude is a shared platform resource: its usage is visible to the users who may use it; per-session and per-request usage to the session's owner and to admins. The snapshot, the Requests report, the summary, the export and the Move recommendation take an `actorId` (today `u_owner`, `OWNER_ACTOR`) and filter through the optional `canUseClaude(actorId, claudeId)` of the monitor's options (absent: everyone may; a seam that throws hides). The Move recommendation therefore lists only the Claudes the asking user may use. Today's single-owner behaviour is unchanged.
+
+| ID | Unverified or open |
+| --- | --- |
+| UI1 | **Never run against a real plan.** The pace stands on fixtures, scripted probes and a seeded database. Not known: the resolution of the percentages a real plan reports (assumed one point or finer), how a probe's reading and a live event's round against each other, and whether a weekly window's period really begins at its reset time minus seven days (the even pace and the status inherit that). |
+| UI2 | The confidence rule (three readings, ten minutes, a tenth of the window) and the 45-day palette rule, 20 % and 20 points of the recommendation are this section's choices, not measured ones. They want a week of real use. |
+| UI3 | A request counts when it finishes, so a long request is a burst; rates leave out terminal use and anything the portal did not record. |
+| UI4 | The strip is not pushed when a request finishes: the chat controller would call a hook after it records a turn (`onUsageRecorded`), and the portal would notify `claudeusage`. Until then the page refreshes on the existing pushes and on its own timer. |
+| UI5 | The projection alert has not been seen as a toast, and nothing calls the recommendation yet (the switch dialog, the auto-transfer). |
+| UI6 | ~~The colours are not defined yet.~~ Defined and validated in §27.1 (`apps/web/src/lib/usage`). |
+
+## 21. Usage spend (round 4, engine B)
+
+Added 2026-10-12 at the owner's request: usage attributed per session, workspace, ticket and persona with child sessions rolled up into their parent, a daily or monthly budget per Claude or workspace with alerts, and spike detection (an agent that is looping). This is the server half (module `apps/server/src/usagespend/`, contracts `packages/contracts/src/usagebudget.ts`); the Usage page reads it. The speed, pace, comparison and palette are §20. **Multi-user** (PLAN-10, not built): §26.4.
+
+| Part | Status |
+| --- | --- |
+| Contracts, routes' paths (§26.1) | **Built** |
+| Attribution by session (a tree), workspace, ticket, persona, Claude; CSV (§22) | **Built** (server). Checked against hand-computed fixtures and a real portal with a seeded database (§25). |
+| Persona per session (§22.3) | **Partly built.** It is not recorded anywhere today (a persona is a pool assigned to the workspace). It is recorded from now on, at each process start; requests before that are `unknown` with `not_recorded`, never guessed. |
+| Budgets: alerts at 80, 95 and 100 %, snooze, owner, audit (§23) | **Built** |
+| Budgets that pause new messages (§23.5) | **Built**, opt-in, through one seam in the chat controller (`sendGate`). |
+| Spike detection: rate, loop, single request (§24) | **Built** as heuristics with their evidence. A runaway inside one turn is seen only when the turn ends. |
+| Portal MCP: four read tools, two admin tools (§26.2) | **Built**, checked over the real endpoint. |
+| The pages: attribution tables, budgets, spikes, toasts, export buttons | **Not built here** (the Usage page, round 4 wave 2). |
+| A ticket claimed by a session that was not started for it (`tickets.assignee`) as an attribution link | **Not built** (§22.2). |
+| Multi-user: the owner, the audit, the visibility filter | **Seam built** (default allow); nothing filters yet (§26.4). `by=user` is **not built** and has one place to plug in (§22.1). |
+
+### 21.1 What the numbers rest on
+
+The source is `chat_usage`: one row per model per finished turn, the turn's sub-agents included; the first row of a turn carries its request, its sub-agent count and its time. A **request** is a finished turn, so the sum of `requests` is the number of turns, and a request's sub-agents run inside it and are counted once, in it. A **child session** is another session (`chat_sessions.parent_id`), with rows of its own: that is what rolls up. Everything here follows §20.0: tokens and counts are `measured`, **every dollar figure is an `estimate`** (Claude Code prices tokens at API list prices; for a plan it is what the same use would cost, not a bill), and a figure that cannot be given is `unavailable` with a reason (`no_samples`, `no_cost` for requests that reported no dollars, `no_history`, `not_recorded`, `session_deleted`). **Tokens** for a budget are input + output + cache writes; cache reads are shown beside them, not added.
+
+A request recorded without a Claude (before Claudes existed) counts under its workspace's Default Claude (the `workspace_claudes` row with an empty directory), else under `default:<workspace id>`, the same key the palette uses.
+
+### 21.2 Data model
+
+| Table (migration) | Holds |
+| --- | --- |
+| `usage_sessions` (180) | One row per session that has requests: workspace, Claude, parent, ticket, title and first and last request time, refreshed at each recorded turn and filled for the sessions that exist when the migration runs. It exists because `chat_usage` outlives its session: after a delete the title and the parent link are still here, so a child's cost still rolls up. |
+| `usage_persona` (180) | `(session, time, persona pool id or NULL, name, revision)`: the persona a session's workspace had assigned when its process started, **one row per change** (a launch with the same persona adds nothing). NULL means none was assigned. |
+| `usage_budgets` (181, 183) | `id, name, scope_kind (all, claude, workspace), scope_id, period (day, month), limit_usd, limit_tokens, mode (alert, pause), enabled, snoozed_until_ms, alerted (JSON: the highest level told in a period), created_by, created_at, updated_at`. At least one limit; `scope_id` is NULL exactly for `all`. |
+| `usage_spikes` (182, 183) and `usage_spike_snoozes` (182) | An event: time, kind, subject (what a snooze and the cool-down key on), session, workspace, Claude, the evidence (JSON), whether it alerted, owner. Kept 90 days. A snooze is a subject and a time. |
+| `usage_audit` (183) | Who (`actor`), how (`via`: `ui` or `portal-mcp:<token id>`), what (`budget.create`, `.update`, `.delete`, `.snooze`, `.unsnooze`, `spike.snooze`, `.unsnooze`) and one terse line. Ids and what was set, never usage amounts or workspace text. Kept 90 days. |
+
+## 22. Attribution
+
+`GET /api/usage-spend/attribution?by=session|workspace|ticket|persona|claude&range=30m|1h|12h|1d|7d|30d&claudeId=&workspaceId=&limit=&format=json|csv`: the requests of a rolling window ending now, grouped by one dimension. Every request is in exactly one row, so the rows add up to the window's total (by session, the roots do).
+
+### 22.1 The dimensions
+
+| By | A row is | Notes |
+| --- | --- | --- |
+| `session` | a session, in a tree: the session, then the sessions it started | `own` is the session's own requests; `total` adds every session below it. Rows come in tree order with `session.depth`; siblings by dollars. A parent with no request of its own is a row so its children hang from it. `limit` caps the **root** rows (default 25, at most 200); the roots past it sum into `others`, with their children. |
+| `workspace` | where the request ran | |
+| `claude` | the Claude the request ran on | A chat that moved to another Claude counts each turn where it ran. |
+| `ticket` | the session's ticket (`chat_sessions.ticket_id`) | A child with no ticket of its own counts under its parent's, all the way up (a helper's cost belongs to the work that started it). No ticket anywhere is `none` ("No ticket"); a session whose links were never kept is `unknown` (`session_deleted`). |
+| `persona` | the persona recorded at or before the request (§22.3) | `none` is recorded as having no persona; before a session's first record the request is `unknown` (`not_recorded`). A persona never passes down to children (a child may run in another workspace). |
+| `user` | **Not built** (PLAN-12, after multi-user) | It plugs in here, and only here: one entry in `GROUPERS` (`attribution.ts`), a function of the request and its session, whose key is `creatorOf(root session)` (`actor.ts`: `u_owner` today), so a child rolls up to the creator of the root through the one `lineage` / `rootOf` helper that the ticket and the tree already use. Requests from before users existed would be an unattributed group with a later reason (`pre_multiuser`), never a 0. The figure is an **estimate** of API-equivalent dollars and tokens per user; a plan's quota (§20.2) belongs to the **Claude account** and is shared by whoever uses it, so no per-user share of the quota can be measured or claimed. A test plugs a `user` grouper in without touching the module (§25). |
+
+### 22.2 What is and is not a link
+
+`ticket_id` and `parent_id` are columns of `chat_sessions`, set when a session is made (a ticket starting one, an agent starting a helper). The `tickets.assignee` link (an agent that **claims** a ticket for a session started for something else) is not used: it would need the ticket's assignment timeline to attribute only the requests made while it was assigned, and two claims at once are ambiguous, so it is **not built** and a claim-driven session shows as "No ticket". A session deleted before this module kept its links (a request whose session is gone and was not in `usage_sessions`) is still a row, named by its id and marked `exists: false`, a root, with `session_deleted` for its ticket.
+
+### 22.3 Persona: not recorded per session
+
+A persona is a pool assigned to a workspace and delivered as a file Claude Code reads when a process starts; nothing stored which persona a session ran with. So the chat controller calls `onLaunch` whenever a process starts (a new session, a wake, a resume, a move) and the module records `personaFor(workspace)` when it differs from the last record of that session. A request is attributed to the newest record at or before its time. This is the persona the portal had assigned at the start, which is what the process was told unless the delivery lagged; a persona assigned later is seen at the next start. Sessions that were already running when this was added have no record until their next start: their earlier requests are `not_recorded`, and the report's `coverage` says how much of the window's dollars that leaves. A persona lookup that fails records nothing (never "none"). The persona's name shown is its name now, else the one recorded.
+
+### 22.4 The figures
+
+`share` = a row's `total` dollars / the window's dollars x 100, to two decimals, an estimate; unavailable with `no_samples` when the window has no request and `no_cost` when its requests reported no dollars (never 0 % or NaN). `coverage` = the dollars of rows that are `known` or `none` / the window's dollars x 100 (100 for every dimension but `persona` and `ticket`). The `none` and `unknown` rows are never folded into `others`, so the reason stays visible. An **unattributed** group (`state: unknown`) is a concept of its own (`unattributed(reason)` in `attribution.ts`): its totals are the real sums of the requests whose attribution is not known, and the row carries the reason (`not_recorded` for a persona, `session_deleted` for a ticket; `pre_multiuser` will be one more line), so the page shows the reason and the numbers and never a 0 for an unknown person, ticket or persona.
+
+### 22.5 CSV
+
+`format=csv` answers the rows as a file (`Content-Disposition: attachment; filename="usage-by-<by>-<range>.csv"`), one line per row: `by, key, label, state, reason, cost_usd_estimate, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, requests, agents, own_cost_usd_estimate, own_requests, share_pct_estimate, sessions, first_at, last_at`, then for sessions `depth, parent_id, workspace, claude, ticket, session_exists`. A session title comes from people and agents, so a cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return is prefixed with `'` (the rule of §20.9); cells with a comma, a quote or a line break are quoted.
+
+## 23. Budgets
+
+### 23.1 What a budget is
+
+A **daily or monthly** limit for **everything**, **one Claude** or **one workspace**, in **estimated dollars**, in **tokens**, or both (at least one; each above 0; at most 50 budgets). It **alerts and does nothing else** unless a person sets its mode to `pause` (§23.5). It can be switched off without losing it. A budget on a Claude counts the requests recorded without one when that Claude is the workspace's Default (§21.1). A budget is made with `POST /api/usage-spend/budgets` (the scope is checked: a workspace that does not exist, or a Claude the portal has no record of, is refused with the field) and changed with `PUT` (only what is sent; `null` clears a limit so long as the other stays).
+
+### 23.2 The clock
+
+Days and months need one clock for the whole portal, whoever has a page open: the Settings key `usage.timezone` (an IANA name; **UTC** when empty or not a name the runtime knows). A day runs from the zone's midnight to the next; a month from the 1st. The boundaries are found on the wall clock and converted back to an instant, so a day with a clock change is 23 or 25 hours long. Hand-checked: Jakarta (UTC+7) at 20:00 UTC on the 12th is 03:00 on the 13th, so its day is 17:00 UTC to 17:00 UTC; New York on 8 March 2026 has a day of 23 hours (05:00 UTC to 04:00 UTC the next day) and on 1 November 2026 one of 25 (04:00 to 05:00 UTC); a request at the first instant of a period belongs to it. Changing the setting moves every budget's boundaries.
+
+### 23.3 What it measures
+
+`used` = the sum of the requests of the scope from the period's start to now: dollars (`estimate`) and tokens (input + output + cache writes, `measured`). `usedPct` = the larger of `used dollars x 100 / limit dollars` and `used tokens x 100 / limit tokens` (dollars when they tie; the `limiting` field says which), so it can pass 100. **Levels** reuse the plan windows' thresholds: `near` from 80 %, `high` from 95 %, `exhausted` at 100 %; exactly on the line counts. The state is read from the requests each time, never from a counter that could drift.
+
+### 23.4 Alerts
+
+After every recorded request, each enabled budget that counts it is looked at. Per budget and period the **highest level told** is kept (`alerted`: level, period start, time, the percent then): a level is told once, a higher one when it is crossed, and a new period starts over. While the budget is snoozed a crossing is kept **quiet**: never shown, and not told late when the snooze ends (a higher level still is). Changing a budget's scope, period or limits starts its alerts over so they follow the new numbers; changing its name, mode or switch does not. A budget made when its period is already past a threshold says so at once. The alert (`SpendAlert`, kind `budget`) has a stable id `budget|<budget id>|<level>|<period start ms>`, the level, the scope, the owner and the workspace it concerns, and one terse line ("api daily: 95 %", "Everything monthly: used up", "Satria guard: used up · paused"). The list of alerts holds those of the last day for budgets that are not snoozed whose period is not over.
+
+### 23.5 Pausing (opt-in)
+
+A budget in mode `pause` refuses **new messages** once it is used up. The chat controller asks `sendGate` at the top of `send`, before anything is stored or sent, and throws `409 USAGE_BUDGET` naming the budget, what it used ("$5.00 of $5.00, estimated"), when it resets (on the portal's clock) and what to do ("raise it or set it to alerts only in Usage › Budgets"). Everything that sends goes through it (a person, a ticket, CI, an agent messaging its parent, the Portal MCP). It does **not** stop a running turn, does not touch approvals, Stop or a move's own messages (the handoff request, the opening), and does not remove what was already queued. Raising the limit, setting the budget to alerts only, switching it off, deleting it or the period ending lets messages through at once. A budget that pauses **cannot be snoozed** (409; its alerts are the warning), and setting a budget to pause clears a snooze it had. A budget that cannot be read, or a gate that throws, never blocks a message. Never a surprise: the mode is a person's choice, shown on the budget, and the alert says "paused" when it happens.
+
+## 24. Spike detection
+
+Three rules of thumb, each a comparison of one number with a baseline the portal can show. They are **heuristics**: an event says "this looks unusual, here is the evidence", never "this is wrong", and the only thing one does is raise an alert (an in-app one; nothing is stopped). Each runs after a recorded request, can be switched off as a whole and has its sensitivity in Settings (§24.3).
+
+### 24.1 The rules
+
+| Rule | Fires when | Needs | Subject, cool-down |
+| --- | --- | --- | --- |
+| **rate** | a Claude's spend in the trailing 15 minutes is at least `rateFactor` (default 3) x P90, the 90th percentile (nearest rank: the value at rank ceil(0.9 x n)) of that Claude's **active** 15-minute periods (spend above 0) over the 7 days before, and at least `minUsd` | 8 active periods (else no baseline: `no_history`, and nothing is said) | the Claude, 30 min. The session is named when one spent at least half of the window. Looked at most once a minute per Claude. |
+| **burst** (loop) | one session finished at least `burstRequests` (default 20) requests inside 10 minutes, whatever they cost: a loop **between** turns (a ticket, CI or another session answering each other) | nothing | the session, 60 min |
+| **outlier** | one request cost at least `outlierFactor` (default 10) x the median request of its Claude over the 7 days before (the mean of the two middle values when even), and at least `minUsd` | 20 earlier requests that cost something (else `no_history`) | the session, 5 min |
+
+Why P90 and not the mean or the median for `rate`: the spend of an active period is right-skewed, so "5 x the median" is exceeded by roughly one active period in twenty on an ordinary day; "3 x the 90th percentile" by roughly one in a hundred. By hand (the test): periods of $1 to $10 have P90 = $9, so the line is $27: $26.50 is quiet, $30 is a spike at 3.33 x; eight periods of $1 put the line at $3.
+
+### 24.2 Events and alerts
+
+An event keeps its evidence, every number with its basis (dollars and ratios `estimate`, counts `measured`): `rate` has the spend, the P90 baseline, the factor, the number of periods and the top session; `burst` the requests, the window, the threshold and the spend; `outlier` the cost, the median, the factor and the number of requests it is the median of. `summary` is one terse line ("20 requests in 10 min (limit 20)", "$30 in 15 min, 3.3x the usual", "A $11 request, 10x the median"), and every event says `heuristic: true`. An alert carries a stable id `spike|<event id>`, level `near` (a heads-up, not a quota level), its scope (a Claude for `rate`, a session for the other two) and no session text. A **snooze** (`PUT /spikes/snooze`, subject = the session or the Claude, 1 h, 4 h or a day) records further events without alerting and hides the earlier alerts of that subject while it lasts. Events are kept 90 days.
+
+### 24.3 Settings
+
+Under Settings › Usage: `usage.spikes.enabled` (on), `usage.spikes.rateFactor` (3, from 1.5 to 100), `usage.spikes.burstRequests` (20, from 3 to 1000), `usage.spikes.outlierFactor` (10, from 2 to 1000), `usage.spikes.minUsd` (0.5, in estimated dollars: rate and single-request spikes below it are ignored) and `usage.timezone` (§23.2). A value out of range falls back to its default rather than disabling a rule; a change applies from the next request.
+
+### 24.4 What it cannot see
+
+A request is recorded when it **ends**, so a runaway **inside one turn** (a tool call repeating for an hour) is seen only when that turn finishes, as an outlier; the per-session spend cap (`--max-budget-usd`, pool keys only) is what bounds it in flight. Use of Claude Code in a terminal is not recorded. A thin history says nothing rather than guessing (`no_history`). The thresholds are this section's choices, not measured ones (§26.6).
+
+## 25. Testing and verification
+
+Every expected value is computed by hand and written in the test next to its fixture; no test asserts a number only because the code produced it. 63 tests in `apps/server/src/usagespend/`.
+
+| Case | Covered by | Expected (by hand) |
+| --- | --- | --- |
+| Time zones: UTC; Jakarta (UTC+7); New York's 23-hour and 25-hour days (8 March and 1 November 2026); the first instant of a period belongs to it; December into January; the offset | `periods.test.ts` (5) | 20:00 UTC on the 12th is the 13th in Jakarta, day 17:00 to 17:00 UTC, month 17:00 UTC on the 31st to 17:00 UTC on 30 November; 05:00 to 04:00 UTC is 23 hours, 04:00 to 05:00 UTC is 25. |
+| Attribution, pure: six sessions, $11.50 and 7 requests. The tree (roots add up: 6.75 + 4.00 + 0.75), own against total, shares 58.70 / 26.09 / 19.57 / 2.17 / 34.78 / 6.52 %; the limit and Others; ticket (T-1 3.75 with its helpers, T-2 3.00, none 4.00, unknown 0.75, coverage 93.48 %); persona (Dev 5.00, Ops 0.50 under its current name, none 2.00, not recorded 4.00, coverage 65.22 %); workspace and Claude; nothing recorded; requests that cost nothing (`no_cost`); a parent that is gone, a cycle of parent links, a parent with no requests; the lineage and root helper; an unattributed group; **a `user` grouper plugged in** (alice 3.50 with her helpers, bob 4.00, not known 1.00 of 8.50) | `attribution.test.ts` (15) | as written in the test |
+| Spike rules, pure: P90 of ten values is the 9th (line $27: $26.99 quiet, $27 a spike at exactly 3 x; seven periods say `no_history`, eight are enough), the median of an even count, the 19th request of a loop is quiet and the 20th is not, a median of $1.05 (line $10.50: $11 is a spike at 10.48 x, $10.40 is not, 19 requests say `no_history`), the evidence and its one-line summaries | `spikes.test.ts` (5) | |
+| Budgets, pure: the levels at 79.99, 80, 94.99, 95, 99.99 and 100 %; the fuller of dollars and tokens (80 %, 90 % tokens, a tie to dollars, 150 %); validation with the field named; an update names only what changes; what restarts a budget's alerts | `budgets.test.ts` (5) | |
+| The service on a real store and the real migrations: a daily budget of $10 on one workspace from $7.50 (75 %) to $8.10 (near), $9.50 (high), $10.00 (used up), $11.00 with nothing told twice and yesterday's and another workspace's requests left out, then the next day from 20 %; tokens (600 of 1,000, cache reads not counted, 90 % near); a snooze keeps a crossing quiet and a higher level is told after it; the pause gate (the message, the 409, another Claude, raising, alerts only, off, the next day, no snooze for a pausing budget); Jakarta's clock and an unknown zone; made, changed, removed, 50 at most; a loop of 20 in 10 minutes (one event, the hour's cool-down, a snooze records without alerting); a $11 request against a $1.05 median and a quarter hour against a $1.80 P90 (10.48 x and 6.11 x, both found); just under the lines, too little history, switched off; the report's ranges and out-of-range settings; persona recorded once per change; attribution from the database with a deleted child still rolled up, a request without a Claude under the Default one, one session's tree, a window of an hour; a session kept at its latest request; a failure logged once; the Default Claude's budget; migration 180 on existing data; the alert sinks; owners, the audit trail (who, how, what) and the visibility seam | `service.test.ts` (20) | as written in the test |
+| HTTP: the contract's paths answer; the JSON; the CSV byte for byte (a title `=1+1, "quoted"` becomes `"'=1+1, ""quoted"""`); the budgets' lifecycle with 201, 400, 404, 409, 422; spikes and their snooze; the audit trail | `routes.test.ts` (5) | |
+| Portal MCP through the real endpoint: an admin's token reads the portal (today $7.00, three requests, shares 57.14 / 42.86 / 28.57 %), an agent only its own tree and the budgets that count it, only an admin's token changes a budget and says what it did, pausing and removing ask first, spikes with their evidence | `portalTools.test.ts` (5) | |
+| The three seams with a real controller on a fake host: a launch records the persona, a finished turn is told with the very time it was stored under, a pausing budget refuses a message before anything is stored or sent, alerts only or a failing gate let it through | `controllerHooks.test.ts` (3) | |
+| Regression | chat, qa, settings, store and portalmcp suites (416); the whole server suite after the last change but the Connect track's unfinished tests (1521 tests: 1505 pass, 15 skipped, one timing flake in `browser/gate.test.ts` that passes alone, 16 of 16) | Connect's tunnel and host-service tests (`src/connect/**`, another area, in progress) fail; none of my areas does. The full suite before those files existed: 1512 tests, 1497 pass, 15 skipped, 0 fail. |
+| A real portal on a scratch data directory (2026-10-12; Kubernetes off, a seeded database, schema 183 migrated from nothing) | by hand, the real HTTP and MCP answers against numbers worked out from the seed | Three sessions (P with its child K, and W), $1.00, $2.00 and $4.00: today $7.00, 700 input tokens, 3 requests. By session W $4.00 (57.14 %), P $3.00 with $1.00 of its own (42.86 %), K $2.00 (28.57 %). By ticket T-1 $3.00 (the helper counts under it) and none $4.00. By persona Reviewer $1.00 and not recorded $6.00 (`not_recorded`), coverage 14.29 %. A budget of $2.50 on one Claude read 120 % and used up; raised to $10 it read 30 %; a pausing budget of $4 read 100 % and paused, and its snooze answered 409; delete 200, again 404; the audit trail listed all seven changes with who and how; a foreign Origin 403, no sign-in 401; the Settings page listed the Usage group; `tools/list` over `/mcp` listed the six tools, a pause asked for confirmation first, an alert-only budget was made at once and audited as `portal-mcp:<token>`. All passed. |
+
+## 26. Interfaces, multi-user, milestones, and open
+
+### 26.1 HTTP API
+
+`USAGE_SPEND_API` in `packages/contracts/src/usagebudget.ts`; every route behind the session guard; a foreign Origin is refused like everywhere else. The live topic is the existing `claudeusage` (no new socket type): its push also means "a budget or spike alert fired, or a budget changed: load these again".
+
+| Route | Does |
+| --- | --- |
+| `GET /api/usage-spend` | today and this month, the budgets' levels, spikes of the last day, the alerts |
+| `GET /api/usage-spend/alerts` | the last day's alerts that are not snoozed |
+| `GET /api/usage-spend/attribution` | §22; `by`, `range`, `claudeId`, `workspaceId`, `limit`, `format=json\|csv` |
+| `GET`, `POST /api/usage-spend/budgets`; `PUT`, `DELETE /budgets/:id`; `PUT`, `DELETE /budgets/:id/snooze` | §23 |
+| `GET /api/usage-spend/spikes?range=1d\|7d\|30d`; `PUT`, `DELETE /spikes/snooze` | §24 |
+| `GET /api/usage-spend/audit?limit=` | what people changed here, and who, newest first |
+
+Refusals: 400 for a body that is not JSON, 422 with the field, 404, 409 (a pausing budget's snooze, more than 50 budgets), 503 when the portal cannot save. A message refused by a pausing budget answers the tab's send over the chat socket as `{ type: 'ack', ok: false, code: 'USAGE_BUDGET', error: <the sentence> }`, and a REST or MCP caller gets a 409 with the same message.
+
+### 26.2 Portal MCP
+
+Registered from `usagespend/portalTools.ts`. Dollars say they are estimates once under `basis` and in each figure; a session's title and a persona's name are labelled untrusted; nothing returns a login, an email or an account id.
+
+| Tool | Scope | Does |
+| --- | --- | --- |
+| `usage_summary` | agent | An admin's token: today and this month for the portal, the budgets, spikes and alerts. An agent's token: the last day for its own session and the sessions it started, with the budgets that count it. |
+| `usage_attribution` | agent | §22. An agent's token is kept to its own tree (a session id outside it, another workspace or another Claude is refused). |
+| `usage_budgets`, `usage_spikes` | agent | The budgets and spike events; an agent sees the budgets that count it and the events of its own tree. |
+| `usage_budget_set` | admin | Makes a budget, or changes one by id, and says what it did. A budget that pauses needs the confirmation round trip. Audited with the token as `via`. |
+| `usage_budget_delete` | admin | Removes one, after the confirmation round trip. |
+
+An agent can never change a budget or a limit, and never sees the two tools that do.
+
+### 26.3 In the process
+
+- Hooks on the chat controller, installed in `index.ts` like `liveCaps` and `sessionBudgetUsd`: `onUsage(turn, rows)` (called right after `recordUsage`, with the same turn), `onLaunch({ sessionId, workspaceId })` (a process started: a new session, a wake, a resume, a move) and `sendGate(...)` (the refusal or null). Each is wrapped so a throw never reaches the chat; a failing gate lets the message through. `sendGate` is a new seam beside the caps rather than a use of `chat/caps.ts`: that spend limit is Claude Code's own `--max-budget-usd` at launch (pool keys only) and cannot refuse a message.
+- `UsageSpend.onAlert(fn)` (returns the unsubscribe): called once per alert at the moment it is raised, which is where notifications plug in. An alert has a stable id (`budget|<id>|<level>|<period start ms>`, `spike|<event id>`), a level, a scope (`all`, `workspace`, `claude`, `session` with its id), its owner, the workspace and, for a spike, the Claude and the session; no secret and no session text. A throwing listener is logged once.
+- The module reads the portal's own tables (`chat_usage`, `chat_sessions`, `workspace_claudes`) and runs nothing in a workspace. Every background step is wrapped: a failure is logged once and never touches the transcript.
+
+### 26.4 Multi-user (PLAN-10 and PLAN-12; not built, the seams are)
+
+Today the portal has one owner, `u_owner`, who sees and changes everything. For several users: every read takes the `actorId` it is for, and the optional `visible(actorId, { kind, id })` option of the module filters the requests an attribution, the summary, a spike or an alert is built from (by workspace, then by session), and the budgets listed or changed; a rule that throws hides. Default: allow all. A budget and a spike have an owner (`usage_budgets.created_by`, `usage_spikes.owner`, default `u_owner`), carried on every alert so notifications reach the right person, and what a person changes is audited with who and how (`usage_audit`). **Budgets per Claude are admin-managed; budgets per workspace belong to the workspace's managers**: a rule for the authz module's `can`, not enforced here. A spike alert goes to the manager of what it is about once there are several users; today that is the owner. Who may change a budget is not checked beyond seeing it (an actor who cannot see a budget gets "no such budget").
+
+**Usage per user** (PLAN-12, `by=user`) plugs into attribution as one grouper (§22.1): the key is `creatorOf` the root session, so children roll up to the creator of the root by the same `lineage` helper the tree and the ticket use; requests from before users existed would be an unattributed group (`pre_multiuser`), never a 0. The figure is an **estimate** of API-equivalent dollars and tokens: a plan's quota is the Claude account's and is shared by its users, so a user's use of it cannot be measured, and nothing here claims it.
+
+### 26.5 Milestones
+
+| Milestone | Scope | Status |
+| --- | --- | --- |
+| M9 | Contracts, migrations 180 to 183, the module, routes | **Built** |
+| M10 | Attribution by session, workspace, ticket, persona and Claude; CSV | **Built** (§22); persona from now on |
+| M11 | Budgets with alerts, snooze, owner and audit; the opt-in pause | **Built** (§23) |
+| M12 | Spike detection and its settings | **Built** (§24) |
+| M13 | Portal MCP tools | **Built** (§26.2) |
+| M14 | The pages: attribution tables, budgets, spikes, toasts, export buttons | **Built** (§27) |
+
+### 26.6 Unverified, and open
+
+| ID | Unverified or open |
+| --- | --- |
+| SB1 | The spike thresholds (3 x P90, 20 requests in 10 minutes, 10 x the median, a $0.50 floor), the cool-downs (30, 60 and 5 minutes), the minimums (8 periods, 20 requests) and the 7-day baseline are this section's choices, never measured on real traffic. They want a week of real use; the sensitivity settings are there for that. |
+| SB2 | Persona attribution starts when this ships: coverage is partial until sessions restart, and what is recorded is the persona the portal had assigned at the start, not proof of what the process read (a delivery that lagged shows at the next start). |
+| SB3 | A runaway inside one turn is seen only when the turn ends (§24.4). |
+| SB4 | A ticket claimed by a session started for something else is not a link (§22.2): that session shows no ticket. |
+| SB5 | Budgets count what the portal recorded: use of Claude Code in a terminal is not recorded, so a budget can read lower than a plan's real use, and dollars are API-equivalent estimates (§21.1). A request stamped after the portal's clock (a clock that moved back) is not counted until the clock passes it. |
+| SB6 | The pause is checked when a message is sent. A message already queued and a running turn finish, so a budget can overshoot by one turn. |
+| SB7 | ~~No page shows any of this yet~~ The pages and the toast for budget and spike alerts are built (§27). `onUsage` is also the hook §20.14 UI4 wants for pushing the strip on every finished request. |
+| SB8 | Never run against a real Claude Code session that spends: the hooks are checked with a real controller on a fake workspace host, the rest with seeded rows. A real workspace chat was not started for this section. |
+
+## 27. The Usage page (round 4, the UI)
+
+Added 2026-10-12. Web only: this is what the Usage page, the Move dialog and the shared colours do with the numbers of §20 to §26. No figure here is computed by the web: each one keeps the basis the portal gave it (`measured`; `estimate`, labelled "est." with its formula behind a tap; `unavailable`, shown as "-" with the reason behind a tap, §20.0). Under the text diet: titles of one or two words, long text in an ⓘ.
+
+| Part | Status |
+| --- | --- |
+| Shared helper `apps/web/src/lib/usage`: the palette as CSS variables (light and dark), hatch patterns, the swatch, slot hooks, top N plus Others, amount formats, the usage API client | **Built** |
+| The summary strip above the tabs: Today, Speed, Limit, Reset | **Built** |
+| Requests: stacked chart by Claude or model, legend, Others, previous period, tiles with the change, tokens by kind with the cache apart, export | **Built** |
+| Claudes: pace marks on the bars, the run-out line, pace details, pace snooze, tab badge, projection toast wording | **Built** |
+| Attribution: session tree, workspace, ticket, persona; CSV | **Built** |
+| Budgets: list, create, edit, snooze, turn off, delete, the pause sentence | **Built** |
+| Spikes: list, evidence, snooze | **Built** |
+| Toasts for budget and spike alerts, with the plan alerts, once per device | **Built** (the existing watcher) |
+| The recommended Claude in the Move dialog | **Built** (a surgical edit of `SwitchDialog.tsx`, which is the chat feature's file) |
+| The strip refreshing on every finished request | **Not built** (§20.14 UI4: the portal's hook, then one line) |
+| Web push, a real phone, iOS Safari | **Not built, not measured** |
+
+### 27.1 The colours (round 4 P3)
+
+One colour per Claude and per model, everywhere: the portal gives each a slot (0 to 7, or none: the neutral grey, §20.6) and `slotColor(slot)` draws it (`var(--usage-slot-N)`; the values sit in `palette.css`, with the theme switching of the chart colour in `index.css`). Eight hue families after the Okabe-Ito set (reddish purple, bluish green, vermillion, blue, sky blue, the yellow stepped down to olive, plus violet and red), ordered by a search that maximised the colour-blind separation of neighbouring slots, then checked with the data-viz validator (colour vision simulated with the Machado-Oliveira-Fernandes 2009 matrices at severity 1; Delta E is OKLab x 100), against the card surface (#ffffff, #141415).
+
+| Slot | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | Others |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Hue | magenta | bluish green | violet | vermillion | indigo | red | sky blue | olive | grey |
+| Light | #a0429f | #009e73 | #9d78ed | #b14d00 | #4e62d0 | #e8605b | #0096c3 | #928e00 | #8a8a86 |
+| Dark | #a73f95 | #00a97b | #a07bf0 | #b95100 | #5468d6 | #eb635e | #0093bf | #8f8b00 | #8b8b92 |
+
+| Check (validator) | Light | Dark |
+| --- | --- | --- |
+| Neighbouring slots, worst colour-blind separation, protan and deutan (target 8) | 13.2 | 13.9 |
+| Neighbouring slots, worst tritan separation | 12.1 | 12.4 |
+| Neighbouring slots, worst normal-vision separation (floor 15) | 22.5 | 22.1 |
+| The first four slots, every pair: worst colour-blind, worst normal | 11.2, 15.3 | 12.2, 17.2 |
+| Every colour: lightness band (L 0.43 to 0.77 light, 0.48 to 0.67 dark), chroma at least 0.10, 3:1 on its surface | pass | pass |
+
+All eight in every pair cannot pass at these floors (no order of eight can), so the other cues carry the rest and colour is never the only signal: a stack runs in slot order with "Others" on top and the legend lists the same order; a tooltip names every band; each slot has a hatch pattern (the Patterns switch beside the legend; on by default under `forced-colors` and `prefers-contrast: more`); bands are 2 px apart. `palette.test.ts` recomputes the numbers above from the hex values. Looked at in a browser under simulated deuteranopia, protanopia, tritanopia and achromatopsia: neighbouring bands stay apart; the weak pairs are the two the validator names (olive and red, slots 7 and 5), which the legend, the tooltip and the patterns separate.
+
+### 27.2 What each part shows
+
+**The strip** (all Claudes; the Claude picked in the Requests filter scopes it while that tab shows):
+
+| Tile | Shows | Basis |
+| --- | --- | --- |
+| Today | dollars since this device's midnight, the request count beneath; tokens in the tip | dollars estimate, counts measured |
+| Speed | dollars per minute over the last 15 minutes, tokens per minute beneath, today's average in the tip; idle is a real zero | estimate (a request counts when it finishes) |
+| Limit | the time until the window that runs out first is estimated to reach 100 %; "OK" with the estimated percent at the reset when none will; "Out" until the reset; "-" with the reason for a pool, a key, a signed-out or an unread Claude | estimate; "Out" measured |
+| Reset | the soonest reset of any window, with the Claude and window | measured |
+
+**Requests.** Tokens are input + output + cache writes everywhere (§20.1); cache reads are counted apart. The chart stacks one band per Claude or per model: the top 6 by the measure keep their colour, the rest (and any series the portal could give no slot) fold into "Others", and one series is never folded alone; the tooltip of a column lists every band, top first, and names what is inside "Others" in that bucket. A legend entry switches its band off (an outline and muted words) and back; folding is decided before, so no band changes colour. "Previous" is the previous period as a dashed line, off while a band is hidden (it covers everyone) and unavailable with the reason when nothing was recorded then. The tiles show the change against the previous period as the portal computed it ("+321 % vs $1"), "no earlier data" or "none before" when it could not; Cache is the hit rate with its formula; Tokens lists uncached input, cache writes, cache reads and output. Export is CSV or JSON of the window and the Claude (§20.9).
+
+**Claudes.** Under a window's bar: the paler stretch is where the window is estimated to stand at its reset, a thin wall at the end of the bar means it is estimated to run out first (dimmer while the estimate is low confidence), and the tick is where an even spend would be. A Claude estimated to run out before it resets gets one line ("Session runs out ~06:56 · resets 07:26", "may run out" while low confidence) with the numbers behind it. The open row lists each window's speed in points an hour, the percent at the reset, when it runs out ("after reset" when it will not), and how far ahead of an even spend it is, all estimates behind one "est."; the snooze menu mutes only the pace warnings. The tab's count includes a confident run-out that is not snoozed. Export: the plan readings of the last 7 days.
+
+**Attribution** (§22): by session as a tree (a child is indented, the total includes it and the row says `own` beside it), workspace, ticket or persona; each row has its dollars (est.) and its share of the window's dollars. What was never recorded is "Not recorded" with its reason, never 0, and "n % recorded" shows beside the list when the coverage is under 100 %. A deleted session is marked; its requests stay.
+
+**Budgets** (§23): one card per budget, the neediest first: name (or scope and period), percent, a bar in the level's colour, "$1 of $1.04 · resets in 18 h". A budget that pauses says "New messages are paused." with the portal's own sentence behind the ⓘ, the one a refused message carries. New and Edit are one dialog (scope, period, dollars, tokens, pause, name) with the portal's field errors; the row menu edits, snoozes (not for a budget that pauses), turns off and deletes after a confirm.
+
+**Spikes** (§24): newest first, one line each as the portal words it, the kind, the session it names (a link), the Claude and when; the evidence is behind the ⓘ and the list is labelled "heuristic" with the sensitivity in force behind its ⓘ; the bell snoozes the session or the Claude.
+
+**Toasts.** The watcher adds the budget and spike alerts to the plan alerts: one toast for what this device has not shown, in the portal's own words, with a way to the right tab; a projection alert is worded from its estimate ("Satria: session out ~06:56 · resets 07:26"), never as a threshold. **Move dialog.** "Recommended" beside the Claude the portal ranks best (§20.5), chosen by default until the person picks, with why behind its ⓘ; one line when every option is under 20 % left.
+
+### 27.3 Copy
+
+| Place | Words |
+| --- | --- |
+| Tabs | Requests, Claudes, Attribution, Budgets, Spikes |
+| Strip | Today, Speed, Limit, Reset; "est." on an estimate; "-" |
+| Run-out | "Session runs out ~06:56 · resets 07:26" |
+| Empty | "No budgets yet.", "No spikes in this window.", "No requests in this window." |
+| Refused | "Not available to you." |
+| Failed | "Could not load. Check your connection and try again." and "Try again" |
+
+### 27.4 Multi-user (PLAN-10)
+
+Today's single-owner behaviour is unchanged. For several users: a browser preference is keyed with the user's id (`u_owner` now: `userKey` in `lib/usage`): the window, the Patterns switch, which alerts were shown; the views never assume they show everyone's data, and a read the portal refuses (403) shows "Not available to you." in the attribution, budgets and spikes views (the portal's seam filters the rows themselves, §20.14, §26.4, so a row a user may not see is simply absent).
+
+### 27.5 Testing and verification
+
+78 web tests in 12 files (the palette recomputed from its hex values, folding, formats, the strip tiles, the chart columns and tooltip rows, pace and the run-out words, alert wording, the Move words, attribution rows, budget words and the form, spike evidence, a stable list order); the web suite is 315 passing and the web build passes. Expected values are worked out by hand in the test next to their fixture.
+
+A real portal on a scratch data directory (clean environment, probes off, Kubernetes off, one real Docker workspace container, a seeded database; 2026-10-12): the fixture is 16 request rows over three days, three plan Claudes with readings, nine sessions with a parent, tickets and a persona, four budgets and three spike events. Checked by a script against numbers worked out from the fixture on paper: 30 of 30 matched (the day: $4.21, 12 requests, 46000 in, 15700 out, 463000 read, 19000 written, hit rate 463/528; by Claude and by model; the day before: $1.00, 3 requests, so +321.0 %, +434.4 % in spent tokens, +300.0 %; today $2.77, 52700 tokens, 8 requests; the last 15 minutes 360 tokens a minute, $0.0333 a minute; Satria's session read 30, 50, 70 % an hour apart: 20 points an hour, 110 % at the reset, out in 90 minutes, 60 % at even pace, 10 ahead; Kresna's week 85 % at 3 points a day: 91 % at the reset; the outlook of an exhausted, a keyed, a signed-out and an unread Claude). Attribution matched by hand too (by session $1.00 for the parent: its own $0.50 and the child's $0.50; ticket T-12 $1.00, T-7 $0.30, none $2.91; persona Reviewer $0.50, none $0.90, not recorded $2.81, coverage 33.25 %), and so did the budgets (55.4 %, 96.2 %, 3.5 %, 117.5 %) and the spike lines.
+
+In a real browser at 390, 844 x 390, 768, 1024, 1280 and 1920 px, light and dark: no horizontal scroll on any tab. With stress data (QA standard A9: 20 more Claudes, a 200-character name with no spaces, emoji, Arabic, a session tree nine deep, a hundred small sessions, a $1,234,567.89 request and 9.9 trillion tokens) nothing overflowed at 390 or 1280 px after two fixes (a grid card needed `min-w-0`, a sentence naming a Claude needed `overflow-wrap`): long names end in an ellipsis with the full text in a `title` and the accessible name, text reads in its own direction (`dir=auto`), amounts stay short (`$1.2M`, `10T`, `+123M %`, `62M %`), the legend is bounded (top 6, then Others with its members in a popover a keyboard reaches), and a list that refreshes while open keeps its order (budgets) or does not refresh by itself (attribution). Flows done by hand in the browser: a column's tooltip (Others named), a legend switch, the Patterns switch, the Claude and Model stack, a new budget (an empty save shows the field error, a valid one lists at $0.050 of $0.20 = 25 %), snooze and "Alert me again", delete after a confirm, the Move dialog with a recommendation, the refused (403) and failed states, the combined toast.
+
+### 27.6 Unverified, and open
+
+| ID | Unverified or open |
+| --- | --- |
+| UU1 | Never seen with a real plan's data (§20.14 UI1): every figure above rests on fixtures and a seeded database. |
+| UU2 | Top 6 of 8 slots, the paler stretch and the wall on a bar, and a phone's five tabs scrolling sideways are this section's design choices, not measured ones. |
+| UU3 | Controls of the UI kit are below 44 px on a phone (the segmented control is 40 px, the ⋯ menu button 36 px): not changed here, the kit is read-only. The ⓘ is 44 px on a phone through negative margins. |
+| UU4 | Hatch patterns are hard to see on a phone's thin columns; the legend, the tooltip and the order carry identity there. |
+| UU5 | The strip does not move when a request finishes, only on a reading, a push or its minute timer (§20.14 UI4). |
+| UU6 | The Move recommendation and its default could not be exercised with a signed-in Claude here (no sign-in is allowed): the dialog was checked with the portal's real recommendation and a stand-in for the switch options. |
+| UU7 | Keyboard focus inside the chart is the column's tooltip and the dimming of the others, not a ring. |
+| UU8 | A name cut to an ellipsis shows its full text in a native `title` (not on touch or for a keyboard) and in the accessible name; the shared clamp-with-popover component of QA standard A9 is not used yet (it was not there to use). |
+| UU9 | The Usage page is its own chunk, loaded on first use (App.tsx: `lazy` and a skeleton). |

@@ -63,6 +63,8 @@ the parts they share, so each pool PRD only describes its own content:
 - **The existing JSON file** for pending workspace creates stays as it is. Secrets and assignments
   never go into it.
 
+- **Ownership (multi-user, PLAN-10).** Every pool (including account pools), account and endpoint has an owner: a user, a team or, for the reviewed library, the platform (`owner_kind`, `owner_id`; existing rows belong to `u_owner`). Using a pool, assigning it to a workspace, editing it and sharing it are the levels `operate`, `operate` (plus `manage` on the workspace) and `manage` ([Authorization](authorization.md) §9); an assignment stays valid only while some manager of the workspace holds `operate` on the set ([Sharing](sharing.md) FR13). The tables `pools`, `accounts` and `endpoints` gain the owner columns in migration block 400-459.
+
 ### 4.1 Encryption
 
 - **Key:** `PORTAL_SECRET_KEY` (32 random bytes, base64url) or `PORTAL_SECRET_KEY_FILE`. In the devcontainer,
@@ -402,7 +404,7 @@ workspace's version lacks and says so (§6.1).
 - **Inside a workspace, every delivered secret is readable** by its users (they have `sudo`). Each pool
   PRD treats assignment as sharing with every user of that workspace. `exposures` (§5) records every
   workspace a secret ever reached.
-- **Audit:** everyone signs in with one shared code as "Admin", so events can't name a person (Q10).
+- **Audit:** everyone signs in with one shared code as "Admin", so events can't name a person (Q10). **Multi-user (PLAN-10):** with accounts an event names the person (`user:<id>`), and what a share carries into a workspace is a consented act ([Sharing](sharing.md)): the paragraph above stays true, and the sharing screen says it before anyone can operate a workspace that holds secrets.
 - **Transport:** the portal speaks plain HTTP. Secret entry forms warn when the page isn't served
   from localhost or over HTTPS.
 - **Portal host:** the portal holds a cluster-admin kubeconfig today and can decrypt every secret.
@@ -451,5 +453,5 @@ Account Pool can start after F2 (Docker) and F4 (signals). Kubernetes support fo
 | Q7 | 🔬 Can the archive API read and replace outbox files on a stopped Docker container's home volume? What load do 10 s `exec` pulls put on the daemon and the API server at 50 workspaces? |
 | Q8 | Can the minimum supported Claude Code version go below 2.1.296? The version matrix decides. |
 | Q9 | 🔬 Do server-managed settings for a user's own sign-in replace the portal's drop-ins (first-wins 📄)? Only the user can check, for example in `/status` "Setting sources". The portal never reads login state. |
-| Q10 | Before the portal stores third-party keys: add named admin identities, or accept an audit log where every actor is "Admin"? |
+| Q10 | Before the portal stores third-party keys: add named admin identities, or accept an audit log where every actor is "Admin"? **Answered by [Multi-user](multi-user.md) (PLAN-10):** accounts, and every event names its actor. |
 | Q11 | 🔬 Do drop-in pickup and reload behave in interactive sessions as they do in print mode? |
