@@ -294,7 +294,8 @@ test('alerts: once per window, level and period; rising levels alert again; a re
   const s = scripted(() => planResult([win('session', pct, resetAt, 'Session'), win('week', 10, resetWeek, 'Week')]));
   const h = await usageHarness({ probe: s.probe });
   const log: ClaudeUsageAlert[] = [];
-  h.usage.onAlert((a) => log.push(a));
+  // The threshold alerts only: the script jumps (50 to 79 % in ten minutes), which the projection alert (§20.4, service.insight.test.ts) also notices.
+  h.usage.onAlert((a) => a.kind !== 'projection' && log.push(a));
   const probe = async (v: number, dt = INTERVAL) => {
     pct = v;
     h.clock.t += dt;

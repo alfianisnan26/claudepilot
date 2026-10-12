@@ -184,17 +184,49 @@ export const planResult = (windows: ProbeResult['windows'], over: Partial<ProbeR
 
 export const win = (key: string, usedPct: number | null, resetsAtMs: number | null, label = key): ProbeResult['windows'][number] => ({ key, label, usedPct, resetsAtMs });
 
-export async function usageHarness(opts: { now?: { t: number }; probe?: UsageOptions['probe']; settings?: UsageOptions['settings'] } = {}) {
+export async function usageHarness(opts: { now?: { t: number }; probe?: UsageOptions['probe']; settings?: UsageOptions['settings']; canUseClaude?: UsageOptions['canUseClaude']; log?: (line: string) => void } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'cp-usage-'));
   const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
   const source = new FakeSource();
   const clock = opts.now ?? { t: NOW };
   let changes = 0;
-  const usage = new ClaudeUsageMonitor({ store, source, now: () => clock.t, notify: () => void changes++, log: () => {}, probe: opts.probe, settings: opts.settings });
+  const usage = new ClaudeUsageMonitor({ store, source, now: () => clock.t, notify: () => void changes++, log: opts.log ?? (() => {}), probe: opts.probe, settings: opts.settings, canUseClaude: opts.canUseClaude });
   const done = () => {
     usage.stop();
     store.close();
     rmSync(dataDir, { recursive: true, force: true });
   };
   return { store, source, usage, clock, done, changes: () => changes };
+}
+
+/** One row of `chat_usage` (one model's share of a finished request), for a test: times in ms, unnamed numbers zero, one request. */
+export interface UsageSeed {
+  at: number;
+  ws?: string;
+  /** null or '' is a request recorded without a Claude (Default, or before Claudes). */
+  claude?: string | null;
+  model?: string;
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  cost?: number;
+  requests?: number;
+  agents?: number;
+  duration?: number;
+}
+
+export function seedUsage(store: Store, rows: UsageSeed[]): void {
+  const insert = store.db!.prepare(
+    `INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests, agents, duration_ms)
+     VALUES (?, ?, 's', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const r of rows) {
+    insert.run(new Date(r.at).toISOString(), r.at, r.ws ?? 'docker/ws1', r.claude ?? null, r.model ?? 'claude-opus-4-5', r.input ?? 0, r.output ?? 0, r.cacheRead ?? 0, r.cacheWrite ?? 0, r.cost ?? 0, r.requests ?? 1, r.agents ?? 0, r.duration ?? 0);
+  }
+}
+
+/** A Claude of a workspace as the chat module keeps it (`workspace_claudes`): '' is Default. */
+export function seedClaude(store: Store, id: string, ws: string, name: string, directory = '', removed = false): void {
+  store.db!.prepare('INSERT INTO workspace_claudes (id, workspace_id, name, directory, removed_at, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, ws, name, directory, removed ? '2026-01-01T00:00:00.000Z' : null, '2026-01-01T00:00:00.000Z');
 }

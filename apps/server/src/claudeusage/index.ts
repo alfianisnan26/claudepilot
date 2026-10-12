@@ -9,6 +9,7 @@ import { usageSource, type ClaudeDirectory } from './source.js';
 
 export { ClaudeUsageMonitor } from './service.js';
 export { createClaudeUsageRoutes } from './routes.js';
+export { OWNER_ACTOR } from './actor.js';
 
 export interface ClaudeUsageDeps {
   store: Store;

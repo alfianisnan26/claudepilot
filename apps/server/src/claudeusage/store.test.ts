@@ -22,6 +22,8 @@ const row = (over: Partial<LatestRow> = {}): LatestRow => ({
   problem: null,
   fails: 0,
   snoozedUntilMs: null,
+  projAlerted: {},
+  projSnoozedUntilMs: null,
   alerted: { session: { level: 'near', resetsAtMs: reset, atMs: NOW } },
   ...over,
 });

@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { askUsage, authCommand, inClaude, probeClaude, probeCommand, PROBE_LIMIT_S, type ProbeIo } from './probe.js';
+import { askUsage, authCommand, inClaude, probeClaude, probeCommand, PROBE_LIMIT_S, SAFE_MODE_FLAG, type ProbeIo } from './probe.js';
+import { localExec } from './testkit/localExec.js';
 import { AUTH_KEY, AUTH_OUT, AUTH_PLAN, controlReply, REPLY_NO_LIMITS, REPLY_PLAN, REPLY_UNAVAILABLE, requestId, ScriptedExec } from './fixtures.js';
 
 const DIR = 'claudes/0123456789abcdef';
@@ -165,4 +169,78 @@ test('nothing from the account reaches a result: the canary in auth status and i
   assert.ok(!JSON.stringify(r).toLowerCase().includes('canary'));
   const k = await probeClaude(io(both(REPLY_NO_LIMITS, AUTH_PLAN.replace('"claude.ai"', '"api_key"'))), 'docker', 'ws1', '');
   assert.ok(!JSON.stringify(k).toLowerCase().includes('canary'));
+});
+
+/* ---------- Safe mode: a probe never runs the Claude's hooks (docs §11) ---------- */
+
+test('the command line carries --safe-mode, once, and auth status does not (it runs no hook and takes the flag only before the subcommand)', () => {
+  assert.equal(SAFE_MODE_FLAG, '--safe-mode', 'the exact flag the canary looks for');
+  for (const dir of ['', DIR]) {
+    const tail = probeCommand(dir).slice(5);
+    assert.equal(tail.filter((a) => a === SAFE_MODE_FLAG).length, 1);
+    assert.ok(!tail.includes('--bare'), 'safe mode keeps the sign-in; --bare would not');
+  }
+  // Observed on 2.1.296: `auth status` ran no hook and no apiKeyHelper, and `auth status --safe-mode` is an unknown option.
+  assert.ok(!authCommand('').includes(SAFE_MODE_FLAG));
+});
+
+test('a Claude Code without --safe-mode starts nothing and says so: the probe is unsupported, fails closed, and asks no second question', async () => {
+  const old = () =>
+    new ScriptedExec((self) => {
+      self.emit("error: unknown option '--safe-mode'\n");
+      self.end(1);
+    });
+  assert.deepEqual(await askUsage(io(old), 'docker', 'ws1', DIR), { ok: false, problem: 'unreadable', unsupported: true });
+  // Said in two chunks, the last without its line break, as a stream can deliver it.
+  const split = () =>
+    new ScriptedExec((self) => {
+      self.emit("error: unknown opt");
+      self.emit("ion '--safe-mode'");
+      self.end(1);
+    });
+  assert.equal((await askUsage(io(split), 'docker', 'ws1', DIR) as { unsupported?: boolean }).unsupported, true);
+  const i = io(old);
+  const r = await probeClaude(i, 'docker', 'ws1', DIR);
+  assert.deepEqual([r.failed, r.problem, r.unsupported, r.runsOn, r.windows.length], [true, 'unreadable', true, 'unknown', 0]);
+  assert.equal(i.commands.length, 1, 'no auth status, no retry without the flag');
+  // Another way to fail is not that: a crash, a missing CLI, a hang, another unknown option.
+  for (const [text, code] of [['', 1], ["error: unknown option '--verbose'\n", 1], ['segfault\n', 139]] as const) {
+    const other = io(() => new ScriptedExec((self) => (self.emit(text), self.end(code))));
+    assert.equal((await askUsage(other, 'docker', 'ws1', DIR) as { unsupported?: boolean }).unsupported, undefined, JSON.stringify([text, code]));
+  }
+});
+
+const hasTimeout = (() => {
+  try {
+    execFileSync('timeout', ['1', 'true'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+test('through the real shell wrapper, the process gets --safe-mode among its arguments; an old one that rejects it is told apart', { skip: hasTimeout ? false : 'needs GNU timeout' }, async () => {
+  const bin = mkdtempSync(join(tmpdir(), 'cp-probe-shim-'));
+  try {
+    const args = join(bin, 'args.txt');
+    // A stand-in `claude` that records its arguments and answers get_usage like a Claude Code with safe mode.
+    writeFileSync(
+      join(bin, 'claude'),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > '${args}'\nread line\nid=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\\([^"]*\\)".*/\\1/p')\nprintf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"subscription_type":"max","rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":10,"resets_at":"2026-10-12T05:00:00.000Z"}}}}}\\n' "$id"\n`,
+    );
+    chmodSync(join(bin, 'claude'), 0o755);
+    const env = { HOME: bin, PATH: `${bin}:${process.env.PATH ?? ''}` };
+    const ok = await probeClaude({ exec: localExec(env) }, 'local', 'x', '');
+    assert.deepEqual([ok.runsOn, ok.failed, ok.windows.map((w) => w.key)], ['plan', false, ['session']]);
+    const given = readFileSync(args, 'utf8').split('\n').filter(Boolean);
+    assert.ok(given.includes(SAFE_MODE_FLAG), `the process was given: ${given.join(' ')}`);
+    assert.deepEqual(given.slice(0, 1), ['-p']);
+
+    // The same wrapper with a Claude Code from before 2.1.169: its parser rejects the flag and exits.
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nfor a in "$@"; do if [ "$a" = "--safe-mode" ]; then echo "error: unknown option '--safe-mode'" >&2; exit 1; fi; done\necho started-without-safe-mode >&2\n`);
+    const old = await probeClaude({ exec: localExec(env) }, 'local', 'x', '');
+    assert.deepEqual([old.failed, old.problem, old.unsupported], [true, 'unreadable', true]);
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
 });

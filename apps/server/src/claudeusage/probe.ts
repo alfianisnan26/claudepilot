@@ -51,11 +51,21 @@ export function inClaude(dir: string, ...command: string[]): string[] {
 }
 
 /**
- * The usage probe. `--strict-mcp-config` and `--disable-slash-commands` keep it from starting MCP servers or loading
- * skills; `--no-session-persistence` writes no session. Never `--bare`: it skips the sign-in, so a plan reads signed out.
+ * What keeps a probe from running anything the workspace, the Claude's settings or the project say to run (docs §11, "Hooks never run"): Claude Code's safe
+ * mode starts with every customization off, hooks above all. Without it a probe fired the SessionStart and SessionEnd hooks of the Claude's `settings.json` and
+ * of the project's `.claude/settings.json` on every poll, with no message sent (observed on 2.1.296). The sign-in, admin-managed (policy) settings and the
+ * usage reply are unaffected (observed). Claude Code 2.1.169 added the flag; an older one answers `error: unknown option '--safe-mode'` and exits before it
+ * starts anything, so a probe fails closed (and none of those versions answers `get_usage` anyway: 2.1.168 replies with an error). The environment variable
+ * `CLAUDE_CODE_SAFE_MODE` is NOT a substitute: set alone it stopped no hook (observed), and an older Claude Code would ignore it and run them.
+ */
+export const SAFE_MODE_FLAG = '--safe-mode';
+
+/**
+ * The usage probe. `--safe-mode` keeps it from running hooks, loading CLAUDE.md, skills or plugins, or starting MCP servers; `--strict-mcp-config` and
+ * `--disable-slash-commands` stay as a second line; `--no-session-persistence` writes no session. Never `--bare`: it skips the sign-in, so a plan reads signed out.
  */
 export const probeCommand = (dir: string): string[] =>
-  inClaude(dir, 'timeout', String(PROBE_LIMIT_S), 'claude', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--no-session-persistence', '--disable-slash-commands');
+  inClaude(dir, 'timeout', String(PROBE_LIMIT_S), 'claude', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--no-session-persistence', '--disable-slash-commands', SAFE_MODE_FLAG);
 
 /** Claude Code's own sign-in state. Its output names the account; `parseAuthStatus` keeps two fields and the rest is dropped. */
 export const authCommand = (dir: string): string[] => inClaude(dir, 'timeout', String(AUTH_LIMIT_S), 'claude', 'auth', 'status', '--json');
@@ -67,7 +77,11 @@ export interface ProbeIo {
   hardMs?: number;
 }
 
-export type UsageReply = { ok: true; response: unknown } | { ok: false; problem: UsageProblem };
+/** `unsupported`: this Claude Code does not know `--safe-mode` (before 2.1.169), so it started nothing and no usage is read there. */
+export type UsageReply = { ok: true; response: unknown } | { ok: false; problem: UsageProblem; unsupported?: boolean };
+
+/** What Claude Code's argument parser says to a flag it does not have. Only this is looked for in what the process prints, and nothing of it is kept. */
+const NO_SAFE_MODE = /unknown option\b.*--safe-mode/i;
 
 /** The `control_response` for `id` in one stdout line, or null. Other lines (and merged stderr) are not ours. */
 function replyIn(line: string, id: string): UsageReply | null {
@@ -92,6 +106,7 @@ export async function askUsage(io: ProbeIo, target: string, name: string, dir: s
   }
   return new Promise<UsageReply>((resolve) => {
     let tail = '';
+    let unsupported = false;
     let settled = false;
     const finish = (r: UsageReply) => {
       if (settled) return;
@@ -109,13 +124,21 @@ export async function askUsage(io: ProbeIo, target: string, name: string, dir: s
       tail += d.toString('utf8');
       let nl: number;
       while ((nl = tail.indexOf('\n')) >= 0) {
-        const reply = replyIn(tail.slice(0, nl).trim(), id);
+        const line = tail.slice(0, nl).trim();
+        const reply = replyIn(line, id);
         tail = tail.slice(nl + 1);
         if (reply) return finish(reply);
+        if (NO_SAFE_MODE.test(line)) unsupported = true;
       }
       if (tail.length > MAX_TAIL) tail = '';
     });
-    session.onExit((code) => finish({ ok: false, problem: code === 127 ? 'not_installed' : code === 124 ? 'timeout' : 'unreadable' }));
+    session.onExit((code) =>
+      finish({
+        ok: false,
+        problem: code === 127 ? 'not_installed' : code === 124 ? 'timeout' : 'unreadable',
+        ...(unsupported || NO_SAFE_MODE.test(tail) ? { unsupported: true } : {}),
+      }),
+    );
     try {
       session.write(`${JSON.stringify({ type: 'control_request', request_id: id, request: { subtype: 'get_usage', skip_behaviors: true } })}\n`);
     } catch {
@@ -161,6 +184,8 @@ export interface ProbeResult {
   problem: UsageProblem | null;
   /** No settled answer: retry with backoff, and keep the last numbers. */
   failed: boolean;
+  /** This Claude Code has no `--safe-mode` (before 2.1.169): nothing was started, and nothing will be read there until it is updated. */
+  unsupported?: boolean;
 }
 
 const none = (over: Partial<ProbeResult>): ProbeResult => ({ runsOn: 'unknown', plan: null, windows: [], extra: null, problem: null, failed: false, ...over });
@@ -171,7 +196,7 @@ const none = (over: Partial<ProbeResult>): ProbeResult => ({ runsOn: 'unknown', 
  */
 export async function probeClaude(io: ProbeIo, target: string, name: string, dir: string): Promise<ProbeResult> {
   const reply = await askUsage(io, target, name, dir);
-  if (!reply.ok) return none({ problem: reply.problem, failed: true });
+  if (!reply.ok) return none({ problem: reply.problem, failed: true, ...(reply.unsupported ? { unsupported: true } : {}) });
   const parsed = parseUsageReply(reply.response);
   switch (parsed.kind) {
     case 'plan':

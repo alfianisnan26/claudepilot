@@ -15,6 +15,17 @@ export interface AlertMark {
   quiet?: boolean;
 }
 
+/** A "will run out before reset" alert already told: the period it was for (the window's reset time), when, and the estimate it carried (§20.4). */
+export interface ProjectionMark {
+  resetsAtMs: number;
+  atMs: number;
+  usedPct: number;
+  etaMs: number;
+  projectedPct: number;
+  /** It was told while the Claude was snoozed: kept so it isn't told later, never shown. */
+  quiet?: boolean;
+}
+
 export interface LatestRow {
   claudeId: string;
   workspaceId: string;
@@ -30,6 +41,9 @@ export interface LatestRow {
   fails: number;
   snoozedUntilMs: number | null;
   alerted: Record<string, AlertMark>;
+  /** Projection alerts told, per window (§20.4), and the snooze that silences only those. */
+  projAlerted: Record<string, ProjectionMark>;
+  projSnoozedUntilMs: number | null;
 }
 
 export interface SampleRow {
@@ -59,6 +73,8 @@ interface LatestSql {
   fails: number;
   snoozed_until_ms: number | null;
   alerted: string;
+  proj_alerted: string;
+  proj_snoozed_until_ms: number | null;
 }
 
 const RUNS_ON: readonly string[] = ['plan', 'key', 'pool', 'none', 'unknown'];
@@ -76,6 +92,7 @@ function json<T>(text: string | null, fallback: T): T {
 function toRow(r: LatestSql): LatestRow {
   const windows = json<unknown>(r.windows, []);
   const alerted = json<unknown>(r.alerted, {});
+  const proj = json<unknown>(r.proj_alerted, {});
   return {
     claudeId: r.claude_id,
     workspaceId: r.workspace_id,
@@ -90,6 +107,8 @@ function toRow(r: LatestSql): LatestRow {
     fails: r.fails,
     snoozedUntilMs: r.snoozed_until_ms,
     alerted: alerted && typeof alerted === 'object' && !Array.isArray(alerted) ? (alerted as Record<string, AlertMark>) : {},
+    projAlerted: proj && typeof proj === 'object' && !Array.isArray(proj) ? (proj as Record<string, ProjectionMark>) : {},
+    projSnoozedUntilMs: r.proj_snoozed_until_ms ?? null,
   };
 }
 
@@ -126,11 +145,12 @@ export class UsageStore {
     const db = this.store.db;
     if (!db || !this.store.writable) return;
     db.prepare(
-      `INSERT INTO claude_usage_latest (claude_id, workspace_id, checked_at_ms, last_probe_at_ms, runs_on, plan, windows, extra, source, problem, fails, snoozed_until_ms, alerted)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO claude_usage_latest (claude_id, workspace_id, checked_at_ms, last_probe_at_ms, runs_on, plan, windows, extra, source, problem, fails, snoozed_until_ms, alerted, proj_alerted, proj_snoozed_until_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (claude_id) DO UPDATE SET workspace_id = excluded.workspace_id, checked_at_ms = excluded.checked_at_ms, last_probe_at_ms = excluded.last_probe_at_ms,
          runs_on = excluded.runs_on, plan = excluded.plan, windows = excluded.windows, extra = excluded.extra, source = excluded.source, problem = excluded.problem,
-         fails = excluded.fails, snoozed_until_ms = excluded.snoozed_until_ms, alerted = excluded.alerted`,
+         fails = excluded.fails, snoozed_until_ms = excluded.snoozed_until_ms, alerted = excluded.alerted, proj_alerted = excluded.proj_alerted,
+         proj_snoozed_until_ms = excluded.proj_snoozed_until_ms`,
     ).run(
       row.claudeId,
       row.workspaceId,
@@ -145,6 +165,8 @@ export class UsageStore {
       row.fails,
       row.snoozedUntilMs,
       JSON.stringify(row.alerted),
+      JSON.stringify(row.projAlerted),
+      row.projSnoozedUntilMs,
     );
   }
 
@@ -176,6 +198,23 @@ export class UsageStore {
         .prepare(`SELECT win, at_ms, used_pct FROM claude_usage_samples WHERE claude_id = ? AND at_ms >= ? AND used_pct IS NOT NULL ${win ? 'AND win = ?' : ''} ORDER BY at_ms, id`)
         .all(...(win ? [claudeId, sinceMs, win] : [claudeId, sinceMs])) as { win: string; at_ms: number; used_pct: number }[];
       return rows.map((r) => ({ win: r.win, atMs: r.at_ms, usedPct: r.used_pct }));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * One window's samples since `sinceMs` with the reset time each carried (its period), oldest first: what the pace stands on (§20.2).
+   * Samples with no percent are left out.
+   */
+  windowSamples(claudeId: string, win: string, sinceMs: number): { atMs: number; usedPct: number; resetsAtMs: number | null }[] {
+    const db = this.store.db;
+    if (!db) return [];
+    try {
+      const rows = db
+        .prepare('SELECT at_ms, used_pct, resets_at_ms FROM claude_usage_samples WHERE claude_id = ? AND win = ? AND at_ms >= ? AND used_pct IS NOT NULL ORDER BY at_ms, id')
+        .all(claudeId, win, sinceMs) as { at_ms: number; used_pct: number; resets_at_ms: number | null }[];
+      return rows.map((r) => ({ atMs: r.at_ms, usedPct: r.used_pct, resetsAtMs: r.resets_at_ms }));
     } catch {
       return [];
     }
