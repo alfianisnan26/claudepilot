@@ -7,6 +7,7 @@ import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
 import { useLive } from '@/lib/live';
 import { mcpApi } from './api';
+import { BuiltinShelf } from './BuiltinShelf';
 import { EntryDialog, type EntryDialogMode } from './EntryDialog';
 import { authLabel, KIND_LABEL, newestApproved, REVIEW } from './labels';
 import { MONO } from './parts';
@@ -38,8 +39,7 @@ export function CatalogPage() {
   const proposed = (entries ?? []).reduce((n, e) => n + e.versions.filter((v) => v.proposal && v.reviewState === 'draft').length, 0);
   const add = (
     <Button icon={<Plus className="size-4" />} onClick={() => setDialog({ kind: 'create' })}>
-      <span className="hidden sm:inline">Add manually</span>
-      <span className="sm:hidden">Add</span>
+      Add manually
     </Button>
   );
   return (
@@ -57,6 +57,7 @@ export function CatalogPage() {
           </span>
         </p>
       )}
+      <BuiltinShelf onChanged={() => void load()} />
       {failed && <LoadError onRetry={load} />}
       {!entries && !failed && <RowsSkeleton rows={3} lines={2} trailing icon="rounded-2xl" />}
       {entries &&
@@ -65,11 +66,16 @@ export function CatalogPage() {
             <InfoTip label="About adding servers">Add an npm package at an exact version, a remote URL, or a command in the image.</InfoTip>
           </EmptyState>
         ) : (
-          <ul className="flex flex-col gap-2">
-            {entries.map((e) => (
-              <EntryRow key={e.id} entry={e} onOpen={() => navigate(`/admin/pools/mcp/catalog/${e.id}`)} />
-            ))}
-          </ul>
+          <section aria-labelledby="catalog-servers">
+            <h2 id="catalog-servers" className="mb-2 px-1 text-[13px] font-semibold text-muted">
+              Servers
+            </h2>
+            <ul className="flex flex-col gap-2">
+              {entries.map((e) => (
+                <EntryRow key={e.id} entry={e} onOpen={() => navigate(`/admin/pools/mcp/catalog/${e.id}`)} />
+              ))}
+            </ul>
+          </section>
         ))}
       <EntryDialog
         mode={dialog}

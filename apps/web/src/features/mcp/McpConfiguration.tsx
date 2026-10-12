@@ -1,13 +1,19 @@
-import { Badge, Button, Spinner, useToast } from '@isnanme/ui';
-import type { McpServerStatus, McpWorkspaceStatus, Workspace, WorkspacePoolAssignment } from '@portal/contracts';
+import { Badge, Button, ConfirmDialog, Spinner, useToast } from '@isnanme/ui';
+import { claudeFeature, claudeMinimum, type McpServerAuth, type McpServerStatus, type McpWorkspaceStatus, type Workspace, type WorkspacePoolAssignment } from '@portal/contracts';
 import { KeyRound, RefreshCw, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { errorText } from '@/lib/api';
 import { useLive } from '@/lib/live';
+import { forbiddenReason } from './access';
 import { mcpApi } from './api';
+import { AuthChip, authDetail } from './AuthChip';
 import { clock, DELIVERY, VERIFY } from './labels';
 import { MONO } from './parts';
+import { SignInDialog, type SignInTarget } from './SignInDialog';
+import { useEscapeFirst } from './useEscapeFirst';
+
+const serverId = (s: { plugin: string; key: string }) => `${s.plugin}/${s.key}`;
 
 /**
  * The MCP sets row's detail in a workspace's Configuration (PRD §15, FR17): each server's delivery state
@@ -20,12 +26,21 @@ export function McpConfiguration({ workspace, assignments }: { workspace: Worksp
   const [data, setData] = useState<McpWorkspaceStatus | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState<'installs' | 'verify' | null>(null);
+  // OAuth (§13.3): the server being signed in to or out of, a check under way, and results newer than the last load.
+  const [signingIn, setSigningIn] = useState<SignInTarget | null>(null);
+  const [signingOut, setSigningOut] = useState<SignInTarget | null>(null);
+  const [signOutBusy, setSignOutBusy] = useState(false);
+  const [checking, setChecking] = useState<string | null>(null);
+  const [authNow, setAuthNow] = useState<Record<string, McpServerAuth>>({});
+  // The portal's reason when it refused this person's sign-in, check or sign-out (403): those actions then show off, with it.
+  const [authBlocked, setAuthBlocked] = useState<string | null>(null);
   const running = workspace.status === 'running';
   const id = workspace.id;
 
   const load = useCallback(async () => {
     try {
       setData(await mcpApi.workspace(id));
+      setAuthNow({});
       setFailed(false);
     } catch {
       setFailed(true);
@@ -46,6 +61,51 @@ export function McpConfiguration({ workspace, assignments }: { workspace: Worksp
     }
   };
 
+  const target = (s: McpServerStatus): SignInTarget => ({ plugin: s.plugin, key: s.key, name: s.entryName });
+  const check = async (s: McpServerStatus) => {
+    setChecking(serverId(s));
+    try {
+      const entries = await mcpApi.checkAuth(id, { plugin: s.plugin, key: s.key });
+      const found = entries.find((e) => e.plugin === s.plugin && e.key === s.key);
+      if (found) setAuthNow((m) => ({ ...m, [serverId(s)]: found.auth }));
+    } catch (e) {
+      const refused = forbiddenReason(e);
+      if (refused) setAuthBlocked(refused);
+      toast(refused ?? errorText(e, 'Could not check the sign-in.'), 'error');
+    } finally {
+      setChecking(null);
+    }
+  };
+  const signedIn = (auth: McpServerAuth, t: SignInTarget) => {
+    setSigningIn(null);
+    setAuthNow((m) => ({ ...m, [serverId(t)]: auth }));
+    if (auth.state === 'connected') toast(`Signed in to ${t.name}`);
+    else toast(auth.detail ?? 'Signed in, but the server is not connected yet.', 'error');
+    void load();
+  };
+  const signOut = async () => {
+    if (!signingOut) return;
+    setSignOutBusy(true);
+    try {
+      const auth = await mcpApi.signOut(id, { plugin: signingOut.plugin, key: signingOut.key });
+      setAuthNow((m) => ({ ...m, [serverId(signingOut)]: auth }));
+      toast(`Signed out of ${signingOut.name}`);
+      setSigningOut(null);
+      void load();
+    } catch (e) {
+      const refused = forbiddenReason(e);
+      if (refused) {
+        setAuthBlocked(refused);
+        setSigningOut(null);
+      }
+      toast(refused ?? errorText(e, 'Could not sign out.'), 'error');
+    } finally {
+      setSignOutBusy(false);
+    }
+  };
+  // The confirmation opens over the Configuration sheet: Escape closes it alone.
+  useEscapeFirst(!!signingOut, () => !signOutBusy && setSigningOut(null));
+
   if (failed && !data) return <p className="text-[13px] text-muted">Could not load the servers’ status.</p>;
   if (!data) return null;
   const { servers, verify, missingNames, warnings } = data;
@@ -62,7 +122,18 @@ export function McpConfiguration({ workspace, assignments }: { workspace: Worksp
       ) : (
         <ul className="flex flex-col gap-2">
           {servers.map((s) => (
-            <ServerLine key={`${s.plugin}/${s.key}`} server={s} showSet={sets > 1} />
+            <ServerLine
+              key={serverId(s)}
+              server={s}
+              showSet={sets > 1}
+              auth={authNow[serverId(s)] ?? s.auth ?? null}
+              running={running}
+              checking={checking === serverId(s)}
+              blocked={authBlocked}
+              onSignIn={() => setSigningIn(target(s))}
+              onCheck={() => void check(s)}
+              onSignOut={() => setSigningOut(target(s))}
+            />
           ))}
         </ul>
       )}
@@ -110,11 +181,41 @@ export function McpConfiguration({ workspace, assignments }: { workspace: Worksp
           )}
         </div>
       )}
+      <SignInDialog workspaceId={id} target={signingIn} onClose={() => setSigningIn(null)} onDone={signedIn} onForbidden={setAuthBlocked} />
+      <ConfirmDialog
+        open={!!signingOut}
+        title={`Sign out of ${signingOut?.name ?? ''}?`}
+        description="Sessions in this workspace lose access to it until you sign in again."
+        confirmLabel="Sign out"
+        loading={signOutBusy}
+        onConfirm={() => void signOut()}
+        onClose={() => !signOutBusy && setSigningOut(null)}
+      />
     </div>
   );
 }
 
-function ServerLine({ server: s, showSet }: { server: McpServerStatus; showSet: boolean }) {
+function ServerLine({
+  server: s,
+  showSet,
+  auth,
+  running,
+  checking,
+  blocked,
+  onSignIn,
+  onCheck,
+  onSignOut,
+}: {
+  server: McpServerStatus;
+  showSet: boolean;
+  auth: McpServerAuth | null;
+  running: boolean;
+  checking: boolean;
+  blocked: string | null;
+  onSignIn: () => void;
+  onCheck: () => void;
+  onSignOut: () => void;
+}) {
   const state = DELIVERY[s.state];
   const notListed = s.listed === false;
   return (
@@ -127,13 +228,19 @@ function ServerLine({ server: s, showSet }: { server: McpServerStatus; showSet: 
           {s.entryName} {s.version}
         </span>
         {showSet && <span className="text-muted">in {s.poolName}</span>}
-        <Badge tone={state.tone}>{state.label}</Badge>
+        {auth && s.state === 'delivered' ? (
+          <AuthChip auth={auth} running={running} checking={checking} blocked={blocked} onSignIn={onSignIn} onCheck={onCheck} onSignOut={onSignOut} />
+        ) : (
+          <Badge tone={state.tone}>{state.label}</Badge>
+        )}
+        {s.state === 'claude_too_old' && <InfoTip label="About the Claude Code version">MCP sets need Claude Code {claudeMinimum('mcp-sets')} or newer. {claudeFeature('mcp-sets').why} Upgrade it in the workspace’s Configuration.</InfoTip>}
         {s.install?.state === 'installing' && <Badge tone="neutral">Installing</Badge>}
         {s.install?.state === 'failed' && <Badge tone="danger">Install failed</Badge>}
         {notListed && <Badge tone="danger">Not loaded</Badge>}
       </span>
       {s.reason && <span className="text-muted">{s.reason}</span>}
       {s.install?.state === 'failed' && s.install.error && <span className="text-muted">{s.install.error}</span>}
+      {auth && s.state === 'delivered' && authDetail(auth) && <span className="text-muted">{authDetail(auth)}</span>}
     </li>
   );
 }

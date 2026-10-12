@@ -1,6 +1,6 @@
 import type { McpSetContent } from '@portal/contracts';
 import { buttonClass } from '@isnanme/ui';
-import { BookOpen, Blocks } from 'lucide-react';
+import { BookOpen, Blocks, PackagePlus } from 'lucide-react';
 import { Link } from 'react-router';
 import { definePoolType } from '@/features/pools/definePoolType';
 import { CatalogPage } from './CatalogPage';
@@ -9,6 +9,14 @@ import { McpAddOn } from './McpAddOn';
 import { McpConfiguration } from './McpConfiguration';
 import { SetEditor } from './SetEditor';
 import { setSummary } from './summary';
+
+/** The built-in shelf is at the top of the catalog page: a shortcut there, in the header and in the empty state (built-in catalogue PRD FR16). */
+const builtinLink = (
+  <Link to="/admin/pools/mcp/catalog" className={buttonClass('secondary')}>
+    <PackagePlus className="size-4" />
+    Built-in
+  </Link>
+);
 
 /**
  * MCP sets' tab in the Pools hub (MCP set PRD §15, `/admin/pools?tab=mcp`): the sets, with the Catalog
@@ -26,12 +34,17 @@ export const mcpTab = definePoolType<McpSetContent>({
   Editor: SetEditor,
   // A row per server with its slots: a page of its own, full screen on phones (Web app §9.2).
   editor: 'page',
-  headerAction: (
-    <Link to="/admin/pools/mcp/catalog" className={buttonClass('secondary')} aria-label="Catalog">
-      <BookOpen className="size-4" />
-      <span className="hidden sm:inline">Catalog</span>
-    </Link>
+  // Built-in sits beside Catalog once there are sets, and in the empty state's own row before that (one of them, never both).
+  headerAction: ({ hasPools }) => (
+    <>
+      <Link to="/admin/pools/mcp/catalog" className={buttonClass('secondary')} aria-label="Catalog">
+        <BookOpen className="size-4" />
+        <span className="hidden sm:inline">Catalog</span>
+      </Link>
+      {hasPools && builtinLink}
+    </>
   ),
+  emptyAction: builtinLink,
   summary: setSummary,
   ConfigurationDetail: McpConfiguration,
   AddOn: McpAddOn,

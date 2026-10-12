@@ -1,5 +1,5 @@
 import type { BadgeTone } from '@isnanme/ui';
-import type { McpCatalogEntry, McpCatalogVersion, McpDeliveryState, McpEntryKind, McpReviewState, McpVerifyResult } from '@portal/contracts';
+import type { McpAuthState, McpBuiltinAuth, McpCatalogEntry, McpCatalogVersion, McpDeliveryState, McpEntryKind, McpReviewState, McpVerifyResult } from '@portal/contracts';
 
 export const KIND_LABEL: Record<McpEntryKind, string> = { npm: 'npm', pypi: 'PyPI', remote: 'Remote', command: 'Command' };
 
@@ -32,6 +32,17 @@ export const VERIFY: Record<McpVerifyResult, { label: string; tone: BadgeTone }>
   not_verified: { label: 'Not verified', tone: 'neutral' },
   failed: { label: 'Verify failed', tone: 'warning' },
 };
+
+/** Where an OAuth server's sign-in stands in a workspace (MCP set PRD §13.3): Claude Code holds the token and says so. */
+export const AUTH_STATE: Record<McpAuthState, { label: string; tone: BadgeTone }> = {
+  connected: { label: 'Connected', tone: 'success' },
+  needs_sign_in: { label: 'Needs sign-in', tone: 'warning' },
+  failed: { label: 'Failed', tone: 'danger' },
+  unknown: { label: 'Not checked', tone: 'neutral' },
+};
+
+/** How a built-in server is signed in to (built-in catalogue D1). */
+export const AUTH_MODE: Record<McpBuiltinAuth, string> = { oauth: 'OAuth', token: 'Token' };
 
 /** The version sets should use: the newest approved one. */
 export const newestApproved = (e: McpCatalogEntry): McpCatalogVersion | undefined => e.versions.find((v) => v.reviewState === 'approved');
