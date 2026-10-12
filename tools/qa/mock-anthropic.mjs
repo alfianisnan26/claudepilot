@@ -17,7 +17,9 @@
 //   [[err <status>]]           that HTTP error (429, 500, 529 …) with Anthropic's error body
 //   [[usage <in> <out> <cacheRead> <cacheWrite>]]   a reply reporting exactly these token counts
 //
-// A request that only carries tool results gets "Tool finished: …". Requests without tools (titles) get "ok".
+// A request that only carries tool results gets "Tool finished: …". Requests without tools (titles) get "ok", except a side question (btw: its
+// instructions say "answer one side question about a coding session"): the directive is read from its <side_question> text, so [[slow 5]], [[long 8]],
+// [[err 429]], [[usage …]] and [[md]] work there too, and a tool directive ([[bash …]]) answers a tool call the tool-free run must refuse.
 // Every request is appended to <logFile> as one JSON line (path, model, directive), never a key.
 import { appendFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -130,11 +132,25 @@ const XSS = [
 ].join('\n');
 
 /** What to say for the newest user message: { text } or { tool, input } or { thinking, text } or { error }. */
+/** The system prompt as text (a string, or blocks). */
+const systemText = (body) => (typeof body.system === 'string' ? body.system : (body.system ?? []).map((b) => b?.text ?? '').join('\n'));
+/** A side question (btw): a request with no tools whose instructions say so. Its directive is in <side_question>, not in the newest message. */
+const isBtw = (body) => /answer one side question about a coding session/.test(systemText(body));
+const btwQuestion = (messages) => {
+  // Claude Code adds its own reminder messages around ours: the newest message that carries the question block is the one.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = /<side_question>\n([\s\S]*?)\n<\/side_question>/.exec(textOf(messages[i]?.content ?? ''));
+    if (m) return m[1].trim();
+  }
+  return '';
+};
+
 function plan(body) {
   const messages = body.messages ?? [];
-  if (!(body.tools ?? []).length) return { text: 'ok' };
-  if (onlyToolResults(messages)) return { text: `Tool finished: ${resultText(messages)}` };
-  const user = lastUserText(messages);
+  const btw = isBtw(body);
+  if (!(body.tools ?? []).length && !btw) return { text: 'ok' };
+  if (!btw && onlyToolResults(messages)) return { text: `Tool finished: ${resultText(messages)}` };
+  const user = btw ? btwQuestion(messages) : lastUserText(messages);
   const m = /\[\[(\w+)(?: ([^\]]*))?\]\]/.exec(user);
   const [kind, arg = ''] = m ? [m[1], m[2]] : ['echo', ''];
   switch (kind) {
