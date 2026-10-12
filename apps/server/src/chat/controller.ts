@@ -32,6 +32,7 @@ import {
   isChatActor,
   isPortalActor,
   REAUTH_REQUIRED,
+  requestReview,
   WORKTREE_DIRTY,
   type ChatControl,
   type ChatFile,
@@ -93,6 +94,8 @@ import { MessageRate, spawnProblem, type AgentCaps } from './agents.js';
 import { capError, makeRoom, SESSION_CAP, weightOf, type LiveCaps } from './caps.js';
 import { defaultBranch, Worktrees, type MadeWorktree } from './worktrees.js';
 import { ChatStore, claudeSessionOf, EVENT_TEXT_MAX, sessionCwd, type ChatSessionPatch, type ChatSessionRow, type InputState } from './store.js';
+import { BtwEngine, readBtwConfig, type BtwHost } from './btw.js';
+import { BtwStore } from './btwStore.js';
 import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
 import { FOLDER_CHANGED, scanFolder, untrustedError } from './trust.js';
 import { usageReport } from './usage.js';
@@ -178,6 +181,8 @@ interface Reader {
   retries: number;
   tailStart: number;
   timer?: NodeJS.Timeout;
+  /** Waiting for its target's tunnel to come back (targets-connect PRD §12.5): no retries counted, nothing marked gone. */
+  parked?: boolean;
   /** A `tail` exec is being opened (so a second one never is). */
   connecting?: boolean;
 }
@@ -324,6 +329,8 @@ export class ChatController {
   readonly #workspaces: Workspaces;
   /** Attachments in and artifacts out (chat content, I9): see artifacts/index.ts. */
   readonly #content: ChatContent;
+  /** Side questions (btw, chat PRD §20): a separate tool-free run per question. It never writes to a session's process, queue, counters or turns; its messages go to the asking person only. */
+  readonly btw: BtwEngine;
   readonly #readers = new Map<string, Reader>();
   /** Per session, the latest main-thread API call's usage (for the context figure). */
   readonly #lastCall = new Map<string, { messageId: string | null; input: number; output: number }>();
@@ -336,6 +343,8 @@ export class ChatController {
   readonly #launching = new Map<string, Promise<void>>();
   /** Sessions whose current process has had its applied settings read (after its first `system/init`). */
   readonly #appliedRead = new Set<string>();
+  /** OAuth servers a session's current process has already said need a sign-in (§13.3). */
+  readonly #signInNoted = new Map<string, Set<string>>();
   /** Per session: a `Task` tool_use id → its sub-agent's description, to label that agent's lines. */
   readonly #agentNames = new Map<string, Map<string, string>>();
   /** Per session: tool calls still waiting for their result, tool_use id → tool name. */
@@ -413,6 +422,34 @@ export class ChatController {
    * Claude Code emitted it. Never stored, redacted or sent to tabs by the chat; a throw never affects the session.
    */
   onRateLimit?: (sessionId: string, claudeId: string, info: unknown) => void;
+  /**
+   * Installed by usage spend (claude-usage PRD §21): a finished turn's usage rows were recorded (the same turn object `recordUsage` got).
+   * It keeps the session's title and links, checks the budgets that count the turn and runs the spike rules. A throw never affects the chat.
+   */
+  onUsage?: (turn: { sessionId: string; workspaceId: string; claudeId: string | null; atMs: number }, rows: readonly { costUsd: number }[]) => void;
+  /**
+   * Installed by usage spend: a session's process started (a new session, a wake, a resume, a move to another Claude), so the persona its
+   * workspace has assigned is recorded then (a persona is not kept per session). A throw never affects the session.
+   */
+  onLaunch?: (info: { sessionId: string; workspaceId: string }) => void;
+  /**
+   * Installed by usage spend (PRD §23.4): the refusal when a budget a person set to pause is used up for this session, else null. Asked in
+   * `send` before anything is stored or sent; a running turn is never stopped and a move's own messages are not asked. A throw lets the message through.
+   */
+  sendGate?: (info: { sessionId: string; workspaceId: string; claudeId: string | null }) => AppError | null;
+  /** Installed by the settings module: a shared setting by key (side questions read theirs through it). Unset, every one has its default. */
+  btwSettings?: (key: string) => unknown;
+  /**
+   * Installed by usage spend, like {@link onUsage} but for side questions (chat PRD §20): a btw's usage row (`kind = 'side'`) was recorded. NOT a turn:
+   * nothing keyed to a turn's end (`onUsage`, `result` events, `session_done`) ever hears it. A throw never affects the chat.
+   */
+  onSideUsage?: (turn: { sessionId: string; workspaceId: string; claudeId: string | null; atMs: number }, rows: readonly { costUsd: number }[]) => void;
+  /**
+   * Installed by the MCP module (MCP set PRD §13.3): a main-thread `system/init`'s portal MCP servers with the status
+   * Claude Code gave each, for the session's Claude (`directory`, '' for Default). Answers with the names of the OAuth
+   * servers that need a sign-in, each of which gets one row in the transcript per process. A throw never affects the session.
+   */
+  mcpServersSeen?: (workspaceId: string, directory: string, servers: { name: string; status: string }[]) => string[];
   /** Installed by the owner: whether the policy allows Bypass in chat (the interim switch `sessions.allowBypass`). Unset: no. */
   bypassAllowed?: () => boolean;
   /**
@@ -479,6 +516,7 @@ export class ChatController {
       redact: (workspaceId, text) => this.scrub(workspaceId, text),
     });
     this.#worktrees = new Worktrees((workspaceId, args) => this.#runOnce(workspaceId, args));
+    this.btw = new BtwEngine({ store: new BtwStore(store), host: this.#btwHost(), config: () => readBtwConfig((key) => this.btwSettings?.(key)) });
     this.#idleMs = opts.idleSleepMs ?? IDLE_SLEEP_MS;
     this.#livenessMs = opts.livenessMs ?? LIVENESS_MS;
     this.execTimeoutMs = opts.execTimeoutMs ?? EXEC_TIMEOUT_MS;
@@ -496,6 +534,7 @@ export class ChatController {
     if (this.#started || this.#closed) return;
     this.#started = true;
     this.#content.start();
+    this.btw.start();
     this.#liveness = setInterval(() => void this.#tick(), this.#livenessMs);
     this.#liveness.unref?.();
     void this.#tick();
@@ -505,6 +544,7 @@ export class ChatController {
   stop(): void {
     this.#closed = true;
     this.#content.stop();
+    void this.btw.shutdown();
     if (this.#liveness) clearInterval(this.#liveness);
     this.#liveness = undefined;
     for (const timer of this.#idleTimers.values()) clearTimeout(timer);
@@ -1107,6 +1147,7 @@ export class ChatController {
       this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
       this.#costBase.set(sessionId, 0); // a new process counts its cost from zero
       this.#modelBase.set(sessionId, new Map());
+      this.#launched(sessionId, workspaceId);
       this.#emitSession(sessionId);
       this.#ensureReader(sessionId);
       await this.#restore(sessionId, restore).catch(() => undefined);
@@ -1285,7 +1326,31 @@ export class ChatController {
   async send(rawId: string, uuid: string, text: string, opts: ChatSendOptions = {}): Promise<void> {
     const sessionId = this.#chat.resolveId(rawId);
     this.#notMoving(sessionId);
+    this.#gate(sessionId);
     return this.#send(sessionId, uuid, text, opts);
+  }
+
+  /** A used-up budget that pauses messages (usage spend) refuses the message here, before anything is stored or sent. */
+  #gate(sessionId: string): void {
+    if (!this.sendGate) return;
+    const row = this.#chat.row(sessionId);
+    if (!row) return;
+    let refusal: AppError | null;
+    try {
+      refusal = this.sendGate({ sessionId, workspaceId: row.workspace_id, claudeId: row.claude_id || null });
+    } catch {
+      return; // a gate that fails never blocks a message
+    }
+    if (refusal) throw refusal;
+  }
+
+  /** A session's process started: usage spend records the persona the workspace has then. Never affects the session. */
+  #launched(sessionId: string, workspaceId: string): void {
+    try {
+      this.onLaunch?.({ sessionId, workspaceId });
+    } catch {
+      // metrics never get in the way of a session
+    }
   }
 
   /** {@link send} without the moving check: the move's own messages (the handoff request, the opening) go through here. */
@@ -1385,6 +1450,12 @@ export class ChatController {
     this.#require(sessionId);
     const open = this.#chat.openRequests(sessionId).find((r) => r.requestId === requestId);
     if (!open) throw new AppError('CONFLICT', 'That request is no longer open.');
+    // Nothing is allowed that was not shown whole: a request cut at the cap, or with nothing to show, can only be denied. The approval card
+    // and the glance widget keep this in their buttons; here it holds for every other way of answering (Portal MCP, a tab that is out of date).
+    if (decision !== 'deny') {
+      const review = requestReview(open);
+      if (!review.allow) throw new AppError('CONFLICT', `${review.note} It can be denied, not allowed: deny it, or ask Claude for something shorter.`);
+    }
     let line: string;
     let outcome: string;
     switch (decision) {
@@ -2193,6 +2264,7 @@ export class ChatController {
       this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
       this.#costBase.set(sessionId, 0); // a new process counts its cost from zero
       this.#modelBase.set(sessionId, new Map());
+      this.#launched(sessionId, workspaceId);
       if (wasBypass) {
         this.#chat.patchSession(sessionId, { mode: START_MODE });
         this.#note(sessionId, 'Bypass turned off after the restart.');
@@ -2458,8 +2530,32 @@ export class ChatController {
     this.#scheduleRetail(reader); // live, or unreachable (which runs out of retries if it stays so)
   }
 
+  /**
+   * Whether a workspace's target can be reached now (an enrolled target's tunnel; targets-connect PRD §12.5). Wired from Connect; absent,
+   * every target counts as up (the old behaviour).
+   */
+  targetState?: (workspaceId: string) => 'up' | 'down';
+
+  /** An enrolled target's node came back: the readers that waited for it follow again from their stored byte offsets. */
+  targetReturned(targetId: string): void {
+    for (const reader of this.#readers.values()) {
+      if (!reader.parked || reader.stopped) continue;
+      const row = this.#chat.row(reader.sessionId);
+      if (!row || this.#split(row.workspace_id)[0] !== targetId) continue;
+      reader.parked = false;
+      reader.retries = 0;
+      void this.#tail(reader);
+    }
+  }
+
   #scheduleRetail(reader: Reader): void {
-    if (reader.stopped || reader.timer) return;
+    if (reader.stopped || reader.timer || reader.parked) return;
+    // An outage is not a vanished process: wait for the target instead of spending retries (FR39).
+    const workspaceId = this.#chat.row(reader.sessionId)?.workspace_id;
+    if (workspaceId && this.targetState?.(workspaceId) === 'down') {
+      reader.parked = true;
+      return;
+    }
     if (reader.retries >= MAX_IMMEDIATE_RETRIES) return this.#markGone(reader.sessionId, 'Lost touch with Claude Code before it answered.');
     reader.retries++;
     reader.timer = setTimeout(() => {
@@ -2579,6 +2675,7 @@ export class ChatController {
       if (values.active) {
         parsed.request.title = values.redact(parsed.request.title);
         if (parsed.request.detail) parsed.request.detail = values.redact(parsed.request.detail);
+        if (parsed.request.full) parsed.request.full = values.redact(parsed.request.full);
       }
       let canonical;
       try {
@@ -2634,12 +2731,35 @@ export class ChatController {
       void this.#refreshApplied(sessionId).catch(() => undefined);
     }
 
+    // OAuth MCP servers that need a sign-in (§13.3): the module learns each one's state, and the transcript says so once per process.
+    if (parsed.mcpServers) this.#mcpSignIn(sessionId, parsed.mcpServers);
+
     // After every turn, the subscription check (§6 rule 3) — asked once this line has committed, so the
     // request it records can't be rolled back with it.
     if (parsed.result) {
       this.#thinkingSince.delete(sessionId); // a block cut short (stopped mid-thought) is never stored
       setImmediate(() => void this.#checkUsage(sessionId).catch(() => undefined));
     }
+  }
+
+  /** One "Sign in to <server>" row per OAuth server a process's `system/init` reports as needing it (§13.3). */
+  #mcpSignIn(sessionId: string, servers: { name: string; status: string }[]): void {
+    const row = this.#chat.row(sessionId);
+    if (!row || !this.mcpServersSeen) return;
+    const directory = (row.claude_id ? this.#chat.claude(row.claude_id)?.directory : '') ?? '';
+    let names: string[];
+    try {
+      names = this.mcpServersSeen(row.workspace_id, directory, servers);
+    } catch {
+      return;
+    }
+    const noted = this.#signInNoted.get(sessionId) ?? new Set<string>();
+    for (const name of names) {
+      if (noted.has(name)) continue;
+      noted.add(name);
+      this.#note(sessionId, `Sign in to ${name}: its tools wait for it. Open this workspace’s MCP servers.`);
+    }
+    if (noted.size) this.#signInNoted.set(sessionId, noted);
   }
 
   /**
@@ -2818,6 +2938,67 @@ export class ChatController {
     return redact(this.#valuesFor(workspaceId).redact(text));
   }
 
+  /**
+   * What the authorization layer needs of a session (chat/authz.ts): its current id (a folded session's old id followed), its workspace, and who
+   * created it (null until sessions record an owner: the founding user). null when there is no such session.
+   */
+  sessionFacts(id: string): { id: string; workspaceId: string; ownerId: string | null } | null {
+    const row = this.#chat.row(id);
+    return row ? { id: row.id, workspaceId: row.workspace_id, ownerId: null } : null;
+  }
+
+  /**
+   * What side questions (btw) take from this controller, and nothing more: the session's facts and stored events, an exec into its workspace,
+   * both redactors, the sign-in check a start makes, the spending gate, and the one place a card is appended to a transcript.
+   */
+  #btwHost(): BtwHost {
+    return {
+      session: (id) => {
+        const row = this.#chat.row(id);
+        if (!row) return null;
+        const claude = row.claude_id ? this.#chat.claude(row.claude_id) : null;
+        return {
+          id: row.id,
+          workspaceId: row.workspace_id,
+          claudeId: row.claude_id ?? '',
+          claudeDir: row.claude_id ? (claude && !claude.removedAt ? claude.directory : null) : '',
+          cwd: row.cwd,
+          model: row.model,
+        };
+      },
+      events: (id, limit) => this.#chat.history(id, Math.max(0, (this.#chat.row(id)?.last_seq ?? 0) - limit)),
+      exec: (workspaceId, command) => {
+        const [target, name] = this.#split(workspaceId);
+        return this.#workspaces.exec(target, name, command);
+      },
+      scrub: (workspaceId, text) => this.scrub(workspaceId, text),
+      scrubStream: (workspaceId) => new SessionStream(this.#valuesFor(workspaceId)),
+      credential: async (workspaceId, claudeId) => {
+        const why = await this.#credentialCheck(workspaceId, claudeId);
+        return why ? { reason: 'signed_out', note: why } : null;
+      },
+      gate: (info) => {
+        try {
+          return this.sendGate?.(info)?.message ?? null;
+        } catch {
+          return null; // a gate that fails never blocks
+        }
+      },
+      append: (id, ev) => {
+        this.#append(id, ev);
+        return this.#chat.lastEvent(id);
+      },
+      audit: (entry) => this.#chat.addAudit(entry),
+      sideUsage: (turn, rows) => {
+        try {
+          this.onSideUsage?.(turn, rows);
+        } catch {
+          // metrics never get in the way of an answer
+        }
+      },
+    };
+  }
+
   /** A delta goes out minus a short tail that could still become a credential (held for the next one). */
   #pushDelta(sessionId: string, agent: string | null, text: string): void {
     this.#emitDelta(sessionId, agent, this.#stream(sessionId, agent).push(text));
@@ -2979,10 +3160,10 @@ export class ChatController {
         ? turn
         : [{ model: row.model ?? 'unknown', input: ev.tokens?.input ?? 0, output: ev.tokens?.output ?? 0, cacheRead: ev.tokens?.cacheRead ?? 0, cacheWrite: ev.tokens?.cacheWrite ?? 0, costUsd: ev.turnCostUsd ?? 0 }];
       const agents = this.#chat.agentsSinceLastResult(sessionId);
-      this.#chat.recordUsage(
-        { atMs: Date.now(), sessionId, workspaceId: row.workspace_id, claudeId: row.claude_id ?? null },
-        shares.map((m, i) => ({ ...m, requests: i === 0 ? 1 : 0, agents: i === 0 ? agents : 0, durationMs: i === 0 ? (ev.durationMs ?? 0) : 0 })),
-      );
+      const turnRef = { atMs: Date.now(), sessionId, workspaceId: row.workspace_id, claudeId: row.claude_id ?? null };
+      const usageRows = shares.map((m, i) => ({ ...m, requests: i === 0 ? 1 : 0, agents: i === 0 ? agents : 0, durationMs: i === 0 ? (ev.durationMs ?? 0) : 0 }));
+      this.#chat.recordUsage(turnRef, usageRows);
+      this.onUsage?.(turnRef, usageRows);
     } catch {
       // Metrics never get in the way of the transcript.
     }
@@ -3043,6 +3224,7 @@ export class ChatController {
       pending.reject(new AppError('CONFLICT', why));
     }
     this.#appliedRead.delete(sessionId);
+    this.#signInNoted.delete(sessionId);
     this.#agentNames.delete(sessionId);
     this.#toolCalls.delete(sessionId);
     this.#streams.delete(sessionId);

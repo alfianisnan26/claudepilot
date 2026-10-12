@@ -96,6 +96,13 @@ export const ACCOUNT_HELPER = '/etc/claudepilot/bin/account-key';
  *   and `fail` otherwise; it always exits 0 (chat-sessions PRD §6 rule 1). It reads that one root-owned
  *   file and nothing else: never the home folder, a login, a credential or a transcript, and it never
  *   reports what else is configured.
+ * - `repo-find <root> <depth> <max>`, `repo-state <path> <prev>...`, `repo-track <folder> <base>` and `repo-sync <folder>`
+ *   are Workspace git (workspace-git PRD, `repos/`): which git repositories are under a folder (a bounded walk that
+ *   skips hidden, dependency and cache folders and follows no link), what each one looks like (branch, HEAD,
+ *   upstream, change counts, stash, remotes without credentials, worktrees, submodule records, the commits since the
+ *   last look), a new worktree's branch made to follow a remote branch, and a fast-forward-only sync of one
+ *   checked-out branch. All run git hardened like Diff's; only `repo-sync`'s fetch reaches a network, and it refuses
+ *   a repository whose own settings run a program. Their formats are documented where each is implemented.
  */
 export const CP_SESSION = `#!/bin/sh
 set -u
@@ -183,6 +190,116 @@ grab() {
   sha256sum < "/proc/$$/fd/3" | cut -c1-64 > "$1.big"
 }
 
+# >>> repo helpers
+# Prints each line of stdin after the tag $1 and a tab.
+tagged() { while IFS= read -r l; do printf '%s\\t%s\\n' "$1" "$l"; done; }
+# The record repo-state prints for folder $1 (the commit its HEAD was at last time is $2, '-' for none). Run it in a subshell: it
+# enters the folder and hardens git for that repository. R and Z are the caller's.
+repostate() {
+  enter "$1" || { printf 'E\\trefused\\n'; return 0; }
+  hardened
+  err="$t/err"
+  top="$(git $gf rev-parse --show-toplevel 2>"$err" && printf x)" || {
+    if grep -q 'dubious ownership' "$err"; then printf 'E\\townership\\n'; else printf 'E\\tnotrepo\\n'; fi
+    return 0
+  }
+  top="\${top%x}"; top="\${top%"$nl"}"
+  real "$top" && [ "$r" = "$here" ] || { printf 'E\\tnotrepo\\n'; return 0; }
+  gd="$(hg rev-parse --absolute-git-dir)" || gd=
+  gc="$(hg rev-parse --path-format=absolute --git-common-dir)" || gc=
+  su="$(hg rev-parse --show-superproject-working-tree)" || su=
+  case "$gd$gc$su" in *"$nl"*|*"$tab"*) printf 'E\\tunreadable\\n'; return 0 ;; esac
+  [ -n "$gd" ] && [ -n "$gc" ] || { printf 'E\\tunreadable\\n'; return 0; }
+  printf 'T\\t%s\\t%s\\t%s\\n' "$gd" "$gc" "$su"
+  st="$t/st"
+  timeout 20 git $gf status --porcelain=v2 --branch --untracked-files=normal --ignore-submodules=all >"$st" 2>"$err"
+  rc=$?
+  if [ "$rc" -eq 124 ]; then printf 'E\\ttimeout\\n'; return 0; fi
+  if [ "$rc" -ne 0 ]; then printf 'E\\tunreadable\\n'; return 0; fi
+  oid=; bh=; up=; ab=
+  while IFS= read -r l; do
+    case "$l" in
+      '# branch.oid '*) oid="\${l#'# branch.oid '}" ;;
+      '# branch.head '*) bh="\${l#'# branch.head '}" ;;
+      '# branch.upstream '*) up="\${l#'# branch.upstream '}" ;;
+      '# branch.ab '*) ab="\${l#'# branch.ab '}" ;;
+      '# '*) ;;
+      *) break ;;
+    esac
+  done < "$st"
+  printf 'B\\t%s\\t%s\\n' "$bh" "$oid"
+  printf 'D\\t%s\\t%s\\t%s\\t%s\\n' "$(grep -c '^[12] [^.]' "$st")" "$(grep -c '^[12] .[^.]' "$st")" "$(grep -c '^? ' "$st")" "$(grep -c '^u ' "$st")"
+  # Untracked folders (a folder of other repositories is one): the portal leaves out those that hold repositories it tracks itself.
+  sed -n 's/^? \\(.*\\/\\)$/\\1/p' "$st" | head -n 100 | tagged Q
+  if [ -n "$up" ]; then
+    case "$ab" in
+      '+'*' -'*) a="\${ab#+}"; a="\${a%% *}"; b="\${ab##* -}"; printf 'U\\t%s\\t%s\\t%s\\n' "$up" "$a" "$b" ;;
+      *) printf 'U\\t%s\\tgone\\n' "$up" ;;
+    esac
+  fi
+  if [ "$oid" != '(initial)' ] && [ -n "$oid" ]; then
+    timeout 20 git $gf log -1 --no-show-signature --no-notes --format='%H%x09%cI%x09%an%x09%s' HEAD 2>/dev/null | head -n 1 | tr -d '\\000-\\010\\013-\\037\\177' | tagged H
+  fi
+  n="$(timeout 20 git $gf rev-list --walk-reflogs --count refs/stash 2>/dev/null)" || n=
+  digits "$n" || n=0
+  printf 'S\\t%s\\n' "$n"
+  if [ -n "$(timeout 10 git $gf remote 2>/dev/null)" ]; then
+    if [ "$oid" != '(initial)' ] && [ -n "$oid" ]; then
+      n="$(timeout 20 git $gf rev-list --count --max-count=1001 HEAD --not --remotes -- 2>/dev/null)" || n=
+      if digits "$n"; then printf 'P\\t%s\\n' "$n"; fi
+    fi
+  fi
+  timeout 10 git $gf config --get-regexp '^remote\\..*\\.(url|pushurl)$' 2>/dev/null | sed -e 's|\\(://\\)[^/]*@|\\1|' -e 's|[?#].*$||' | head -n 40 | tagged X
+  op=
+  [ ! -f "$gd/MERGE_HEAD" ] || op=merge
+  [ ! -d "$gd/rebase-merge" ] && [ ! -d "$gd/rebase-apply" ] || op=rebase
+  [ ! -f "$gd/CHERRY_PICK_HEAD" ] || op=cherry-pick
+  [ ! -f "$gd/REVERT_HEAD" ] || op=revert
+  [ ! -f "$gd/BISECT_LOG" ] || op=bisect
+  if [ -n "$op" ]; then printf 'M\\t%s\\n' "$op"; fi
+  n="$(timeout 10 git $gf config --name-only --get-regexp '^filter\\.' 2>/dev/null | sed -n 's/^filter\\.\\([A-Za-z0-9_.-]*\\)\\.[a-z]*$/\\1/p' | sort -u | wc -l)"
+  digits "$n" || n=0
+  printf 'L\\t%s\\n' "$n"
+  if [ -f "$gc/FETCH_HEAD" ]; then
+    n="$(stat -c %Y "$gc/FETCH_HEAD" 2>/dev/null)"
+    if digits "$n"; then printf 'F\\t%s\\n' "$n"; fi
+  fi
+  if [ "$gd" = "$gc" ]; then
+    timeout 20 git $gf worktree list --porcelain -z 2>/dev/null | jq -Rsr 'split("\\u0000\\u0000") | .[] | select(length > 0) | split("\\u0000") | map(select(length > 0))
+      | ["W", (map(select(startswith("worktree "))[9:]) | first // ""), (map(select(startswith("HEAD "))[5:]) | first // ""), (map(select(startswith("branch refs/heads/"))[18:]) | first // ""),
+          ((if any(. == "detached") then "d" else "" end) + (if any(. == "locked" or startswith("locked ")) then "l" else "" end) + (if any(. == "prunable" or startswith("prunable ")) then "p" else "" end))] | @tsv' 2>/dev/null | head -n 200
+  fi
+  if [ -f .gitmodules ] && [ ! -L .gitmodules ]; then
+    timeout 10 git $gf config -f .gitmodules --get-regexp '^submodule\\..*\\.(path|url)$' 2>/dev/null | sed -e 's|\\(://\\)[^/]*@|\\1|' -e 's|[?#].*$||' | head -n 2000 | tagged Y
+    timeout 20 git $gf ls-files -s 2>/dev/null | grep '^160000 ' | head -n 1000 | tagged N
+  fi
+  prev="$2"
+  if [ "$oid" != '(initial)' ] && [ -n "$oid" ] && [ "$oid" != "$prev" ]; then
+    case "$prev" in
+      *[!0-9a-f]*|'') ;;
+      *)
+        if [ "\${#prev}" -eq 40 ] || [ "\${#prev}" -eq 64 ]; then
+          if timeout 20 git $gf cat-file -e "$prev^{commit}" 2>/dev/null; then
+            if timeout 20 git $gf merge-base --is-ancestor "$prev" HEAD 2>/dev/null; then
+              n="$(timeout 20 git $gf rev-list --count "$prev..HEAD" -- 2>/dev/null)" || n=
+              digits "$n" || n=0
+              printf 'K\\tff\\t%s\\n' "$n"
+              timeout 20 git $gf log --no-show-signature --max-count=30 --format='%H%x09%an%x09%s' "$prev..HEAD" -- 2>/dev/null | tr -d '\\000-\\010\\013-\\037\\177' | tagged C
+            else
+              printf 'K\\trewritten\\n'
+              timeout 20 git $gf log --no-show-signature --max-count=5 --format='%H%x09%an%x09%s' HEAD -- 2>/dev/null | tr -d '\\000-\\010\\013-\\037\\177' | tagged C
+            fi
+          else
+            printf 'K\\tunknown\\n'
+            timeout 20 git $gf log --no-show-signature --max-count=5 --format='%H%x09%an%x09%s' HEAD -- 2>/dev/null | tr -d '\\000-\\010\\013-\\037\\177' | tagged C
+          fi
+        fi
+        ;;
+    esac
+  fi
+  return 0
+}
+# <<< repo helpers
 cmd="\${1:-}"
 [ "$#" -ge 1 ] && shift
 
@@ -471,6 +588,124 @@ case "$cmd" in
     echo ok
     exit 0
     ;;
+# >>> repo commands
+  repo-find)
+    # Where the git repositories are under <root> (a folder the path policy allows; "~" is the files root, "~/work" a folder in it), at
+    # most <depth> folders down, at most <max> of them: "#root" and the root's real path, then "<type><TAB><path of the .git entry relative
+    # to the root>" per repository (type d: a .git folder; f: a .git file, a submodule or a linked worktree; l: a link, which is no repository),
+    # then "#truncated" when there were more than <max> and "#timeout" when the walk ran out of time. Hidden folders, dependency and
+    # cache folders are not walked into; nothing is followed through a link. Exit 2 refused (the folder, the numbers).
+    exec 2>/dev/null </dev/null
+    case "\${1:-}" in '~') p="$froot" ;; '~/'*) p="$froot/\${1#'~/'}" ;; *) p="\${1:-}" ;; esac
+    enter "$p" || exit 2
+    depth="\${2:-}"; max="\${3:-}"
+    digits "$depth" && digits "$max" || exit 2
+    [ "$depth" -ge 1 ] && [ "$depth" -le 12 ] && [ "$max" -ge 1 ] && [ "$max" -le 5000 ] || exit 2
+    t="$(mktemp)" || exit 1
+    trap 'rm -f "$t"' EXIT
+    trap 'exit 1' HUP INT TERM
+    timeout "\${CLAUDEPILOT_FIND_SECONDS:-25}" find . -mindepth 1 -maxdepth "$depth" \\( -name node_modules -o -name vendor -o -name __pycache__ -o -name venv -o -name site-packages -o -name bower_components -o \\( -name '.*' ! -name .git \\) -o -path "*$nl*" \\) -prune -o -name .git -prune -printf '%y\\t%P\\n' > "$t"
+    rc=$?
+    printf '#root\\t%s\\n' "$here"
+    head -n "$max" "$t"
+    if [ "$(wc -l < "$t")" -gt "$max" ]; then echo '#truncated'; fi
+    if [ "$rc" -eq 124 ]; then echo '#timeout'; fi
+    exit 0
+    ;;
+  repo-state)
+    # Read-only look at repositories, as records for the portal: <path> <prev> pairs (at most 20), <prev> being the commit HEAD was at last
+    # time or '-'. Each record: "R<TAB><path>", then tagged lines (T gitdir, common dir, superproject; B branch and commit; D staged,
+    # unstaged, untracked, conflicted counts; Q the untracked folders; U upstream, ahead, behind or gone; H HEAD commit, date, author, subject; S stashes; P commits
+    # on no remote; X remote settings with credentials removed; M operation in progress; L filters configured; F FETCH_HEAD time; W worktrees
+    # as path, commit, branch, flags; Y and N what .gitmodules declares and the commits the index records for submodules; K and C the commits
+    # since <prev>) or "E<TAB><why>" (refused, notrepo, ownership, timeout, unreadable), then "Z". Git runs hardened (no hook, filter or
+    # fsmonitor of a repository runs) and never reaches a network; each call has 20 s. Exit 2 for arguments that make no pairs.
+    exec 2>/dev/null </dev/null
+    [ "$#" -ge 2 ] && [ $(($# % 2)) -eq 0 ] && [ "$#" -le 40 ] || exit 2
+    t="$(mktemp -d)" || exit 1
+    trap 'rm -rf "$t"' EXIT
+    trap 'exit 1' HUP INT TERM
+    while [ "$#" -ge 2 ]; do
+      case "$1" in
+        *"$nl"*|*"$tab"*|'') ;;
+        *)
+          printf 'R\\t%s\\n' "$1"
+          ( repostate "$1" "$2" ) || printf 'E\\tunreadable\\n'
+          printf 'Z\\n'
+          ;;
+      esac
+      shift 2
+    done
+    exit 0
+    ;;
+  repo-track)
+    # Makes the branch checked out in the linked worktree at <folder> follow <base> when <base> is a remote-tracking branch (origin/main): what
+    # "git worktree add -b <branch> <path> origin/main" does and the commit id wt-add is given doesn't. Prints "tracking" when it did. Only
+    # the branch's own two settings (remote and merge) are written. Exit 2 refused (the folder, a value, not a linked worktree).
+    exec 2>/dev/null </dev/null
+    enter "\${1:-}" || exit 2
+    base="\${2:-}"
+    case "$base" in ''|-*|*[!A-Za-z0-9._/@^~-]*) exit 2 ;; esac
+    [ "\${#base}" -le 100 ] || exit 2
+    [ -f .git ] && [ ! -L .git ] || exit 2
+    hardened
+    br="$(hg symbolic-ref --short -q HEAD)" || exit 0
+    full="$(hg rev-parse --symbolic-full-name "$base" 2>/dev/null)" || exit 0
+    case "$full" in refs/remotes/*) ;; *) exit 0 ;; esac
+    if hg branch --set-upstream-to="$base" "$br" >/dev/null 2>&1; then echo tracking; fi
+    exit 0
+    ;;
+  repo-sync)
+    # Brings the checked-out branch of the repository at <folder> up to its upstream when that takes nothing but a fast-forward: fetches the
+    # upstream branch (the only thing here that reaches a network), then "merge --ff-only". Nothing else, ever: no merge commit, rebase,
+    # stash, reset or clean; a repository with changes to tracked files, an operation in progress, a detached HEAD, no upstream or a branch
+    # that has diverged is left alone and says why. Refused too when the repository's own settings run a program or change where a fetch
+    # goes (includes, credential helpers, ssh and proxy commands, upload-pack, URL rewrites, protocol and http settings): those aren't
+    # overridden, so nothing of the repository's runs. The URL fetched from must be https, http, ssh, git, file or a path. Prints one line:
+    # "sync<TAB>updated|current|refused|failed<TAB>from<TAB>to<TAB>ahead<TAB>behind<TAB>note". Exit 2 refused folder, 3 not a repository.
+    exec 2>/dev/null </dev/null
+    enter "\${1:-}" || exit 2
+    hardened
+    top="$(hg rev-parse --show-toplevel 2>/dev/null && printf x)" || exit 3
+    top="\${top%x}"; top="\${top%"$nl"}"
+    real "$top" && [ "$r" = "$here" ] || exit 3
+    syncout() { printf 'sync\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$1" "$2" "$3" "$4" "$5" "$6"; exit 0; }
+    bad="$(timeout 20 git $gf config --show-scope --list 2>/dev/null | while IFS="$tab" read -r sc kv; do case "$sc" in local|worktree) printf '%s\\n' "$kv" ;; esac; done | grep -i -E '^(include\\.|includeif\\.|credential\\.|core\\.(sshcommand|gitproxy|askpass)|remote\\.[^=]*\\.(uploadpack|receivepack|proxy|vcs)|url\\.|protocol\\.|http\\.)' | cut -d= -f1 | head -n 3 | tr -cd 'A-Za-z0-9._/@:,\\n-' | tr '\\n' ' ')"
+    [ -z "$bad" ] || syncout refused '' '' '' '' "its own settings run programs or change the fetch: \${bad% }"
+    from="$(hg rev-parse -q --verify HEAD)" || syncout refused '' '' '' '' 'no commit yet'
+    br="$(hg symbolic-ref --short -q HEAD)" || syncout refused "$from" '' '' '' 'detached HEAD'
+    gd="$(hg rev-parse --absolute-git-dir)" || syncout failed "$from" '' '' '' 'unreadable'
+    for op in MERGE_HEAD rebase-merge rebase-apply CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
+      [ ! -e "$gd/$op" ] || syncout refused "$from" '' '' '' 'an operation is in progress'
+    done
+    upref="$(hg rev-parse --symbolic-full-name '@{u}' 2>/dev/null)" || syncout refused "$from" '' '' '' 'no upstream'
+    remote="$(hg config "branch.$br.remote")" || remote=
+    merge="$(hg config "branch.$br.merge")" || merge=
+    st="$(timeout 30 git $gf status --porcelain=v1 --untracked-files=no --ignore-submodules=all 2>/dev/null)" || syncout failed "$from" '' '' '' 'unreadable'
+    [ -z "$st" ] || syncout refused "$from" '' '' '' 'it has changes'
+    if [ -n "$remote" ] && [ "$remote" != . ]; then
+      case "$merge" in refs/heads/*) ;; *) syncout refused "$from" '' '' '' 'the upstream is not a branch' ;; esac
+      case "$merge$upref" in *[!A-Za-z0-9._/-]*) syncout refused "$from" '' '' '' 'unusual branch name' ;; esac
+      url="$(hg ls-remote --get-url "$remote" 2>/dev/null)"
+      case "$url" in
+        -*|*::*|'') syncout refused "$from" '' '' '' 'not a URL sync fetches from' ;;
+        https://*|http://*|ssh://*|git://*|file:///*|/*) ;;
+        *@*:*) ;;
+        *) syncout refused "$from" '' '' '' 'not a URL sync fetches from' ;;
+      esac
+      export GIT_SSH_COMMAND="\${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes"
+      err="$(timeout 120 git $gf -c protocol.ext.allow=never -c submodule.recurse=false -c gc.auto=0 -c maintenance.auto=false fetch --no-tags --no-recurse-submodules --quiet -- "$remote" "+$merge:$upref" 2>&1 >/dev/null)" || syncout failed "$from" '' '' '' "$(oneline "$err")"
+    fi
+    ab="$(hg rev-list --left-right --count "HEAD...$upref" -- 2>/dev/null)" || syncout failed "$from" '' '' '' 'the upstream is not known here'
+    a="\${ab%%"$tab"*}"; b="\${ab##*"$tab"}"
+    digits "$a" && digits "$b" || syncout failed "$from" '' '' '' 'unreadable'
+    [ "$b" -gt 0 ] || syncout current "$from" "$from" "$a" "$b" ''
+    [ "$a" -eq 0 ] || syncout refused "$from" '' "$a" "$b" 'it has diverged'
+    err="$(timeout 120 git $gf -c submodule.recurse=false merge --ff-only --no-verify-signatures --no-edit --quiet -- "$upref" 2>&1 >/dev/null)" || syncout failed "$from" '' "$a" "$b" "$(oneline "$err")"
+    to="$(hg rev-parse -q --verify HEAD)" || to=
+    syncout updated "$from" "$to" 0 0 ''
+    ;;
+# <<< repo commands
   trustscan)
     exec 2>/dev/null
     enter "\${1:-}" || exit 2

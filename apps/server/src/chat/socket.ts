@@ -5,8 +5,9 @@
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { isAppError } from '@isnanme/core';
-import { CHAT_SOCKET_PATH, type ChatClientMessage, type ChatServerMessage } from '@portal/contracts';
+import { CHAT_SOCKET_PATH, type Actor, type ChatClientMessage, type ChatServerMessage } from '@portal/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
+import { actorOfSocket, actorUserId } from '../authz/seam.js';
 import type { ChatController } from './controller.js';
 
 const PING_MS = 25_000;
@@ -54,15 +55,22 @@ export function attachChat(server: Server, controller: ChatController, authorize
     if (new URL(req.url ?? '/', 'http://localhost').pathname !== CHAT_SOCKET_PATH) return; // not ours (shell, live, or Vite HMR)
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
     if (!authorized(req)) return refuse(socket, 401, 'Unauthorized');
-    wss.handleUpgrade(req, socket, head, (ws) => join(ws));
+    // Who is on this connection is fixed here, at the handshake; a message that names a session checks that person's right to it.
+    const actor = actorOfSocket(req, authorized);
+    wss.handleUpgrade(req, socket, head, (ws) => join(ws, actor));
   });
 
-  function join(ws: WebSocket) {
+  function join(ws: WebSocket, actor: Actor) {
     const subscribed = new Set<string>();
     const send = (msg: ChatServerMessage) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(msg));
     // Forward the controller's live updates (events, deltas, session, input states, tasks) for watched sessions.
     const off = controller.onEvent((sessionId, msg) => {
       if (subscribed.has(sessionId)) send(msg);
+    });
+
+    // A side question's messages (chat PRD §20) go to the person who asked, on the tabs watching its session, and to no one else subscribed to it.
+    const offBtw = controller.btw.onMessage((userId, sessionId, msg) => {
+      if (userId === actorUserId(actor) && subscribed.has(sessionId)) send(msg);
     });
 
     let alive = true;
@@ -87,6 +95,7 @@ export function attachChat(server: Server, controller: ChatController, authorize
     ws.on('close', () => {
       clearInterval(ping);
       off();
+      offBtw();
     });
     ws.on('error', () => ws.terminate());
 
@@ -110,6 +119,8 @@ export function attachChat(server: Server, controller: ChatController, authorize
             // A thinking block already under way shows as "Thinking…", timed from its real start.
             for (const t of controller.openThinking(id))
               send({ type: 'delta', session: id, agentLabel: t.agentLabel, text: '', thinking: true, elapsedMs: t.elapsedMs });
+            // The person's open side questions on it (their cards survive a reload or a dropped connection).
+            for (const item of controller.btw.open(actor, id)) send({ type: 'btw', session: id, item });
           } else send({ type: 'removed', session: msg.session }); // deleted (or never was)
           return;
         }
@@ -130,6 +141,30 @@ export function attachChat(server: Server, controller: ChatController, authorize
             send({ type: 'ack', uuid: msg.requestId, ok: true });
           } catch (e) {
             send(refused(msg.requestId, e));
+          }
+          return;
+        case 'btw_ask':
+          try {
+            await controller.btw.ask(actor, msg.session, msg.btw, msg.question);
+          } catch (e) {
+            send(refused(String(msg.btw ?? ''), e));
+          }
+          return;
+        case 'btw_cancel':
+        case 'btw_close':
+          try {
+            if (msg.type === 'btw_cancel') controller.btw.cancel(actor, msg.session, msg.btw);
+            else controller.btw.close(actor, msg.session, msg.btw);
+          } catch (e) {
+            send(refused(String(msg.btw ?? ''), e));
+          }
+          return;
+        case 'btw_pin':
+          try {
+            controller.btw.pin(actor, msg.session, msg.btw);
+            send({ type: 'ack', uuid: msg.uuid, ok: true });
+          } catch (e) {
+            send(refused(String(msg.uuid ?? msg.btw ?? ''), e));
           }
           return;
         case 'control': {

@@ -11,6 +11,7 @@ import type {
   ChatInputState,
   ChatOrigin,
   ChatPermissionMode,
+  ChatPinnedBtw,
   ChatRequest,
   ChatSession,
   ChatSegment,
@@ -115,6 +116,8 @@ type RequestRow = {
   agent_label: string | null;
   title: string;
   detail: string | null;
+  full: string | null;
+  full_cut: number;
   created_at: string;
 };
 
@@ -207,6 +210,26 @@ function imageRef(v: unknown): ChatImage | null {
     ref.height = o.height;
   }
   return ref;
+}
+
+/** A pinned side question as it is stored (chat PRD §20): its allow-listed fields, text redacted. */
+function pinnedBtwOut(b: ChatPinnedBtw): ChatPinnedBtw {
+  const out: ChatPinnedBtw = { id: b.id, question: redact(b.question), answer: redact(b.answer), askedAt: b.askedAt, askedBy: redact(b.askedBy) };
+  if (b.model) out.model = b.model;
+  if (b.usage) out.usage = b.usage;
+  return out;
+}
+
+/** The same read back, from JSON that may be anything: nothing but well-formed fields comes out. */
+function pinnedBtwIn(v: unknown): ChatPinnedBtw | null {
+  const o = v && typeof v === 'object' ? (v as Record<string, unknown>) : null;
+  if (!o || typeof o.id !== 'string' || typeof o.question !== 'string' || typeof o.answer !== 'string' || typeof o.askedAt !== 'string') return null;
+  const out: ChatPinnedBtw = { id: o.id, question: o.question, answer: o.answer, askedAt: o.askedAt, askedBy: typeof o.askedBy === 'string' ? o.askedBy : '' };
+  if (typeof o.model === 'string' && o.model) out.model = o.model;
+  const u = o.usage && typeof o.usage === 'object' ? (o.usage as Record<string, unknown>) : null;
+  const n = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x > 0 ? x : 0);
+  if (u && (u.basis === 'reported' || u.basis === 'estimated')) out.usage = { input: n(u.input), output: n(u.output), cacheRead: n(u.cacheRead), cacheWrite: n(u.cacheWrite), costUsd: typeof u.costUsd === 'number' ? u.costUsd : null, estimate: true, basis: u.basis };
+  return out;
 }
 
 /** The chat tables (migrations v6–v8), wrapped around the portal {@link Store}. All methods are synchronous. */
@@ -901,10 +924,13 @@ export class ChatStore {
   addRequest(sessionId: string, req: ChatRequest & { toolUseId?: string }): ChatRequest {
     const createdAt = this.#stamp();
     const detail = redactMaybe(req.detail ?? null);
+    // What is being allowed, whole (the card and the widget show it): redacted here too, whoever built the request.
+    const full = redactMaybe(req.full ?? null);
+    const fullCut = req.fullCut === true;
     this.#writable()
-      .prepare(`INSERT INTO chat_requests (session_id, request_id, tool_use_id, kind, tool_name, agent_label, title, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(sessionId, req.requestId, req.toolUseId ?? null, req.kind, req.toolName ?? null, req.agentLabel ?? null, req.title, detail, createdAt);
-    return { requestId: req.requestId, kind: req.kind, toolName: req.toolName ?? null, agentLabel: req.agentLabel ?? null, title: req.title, detail, createdAt };
+      .prepare(`INSERT INTO chat_requests (session_id, request_id, tool_use_id, kind, tool_name, agent_label, title, detail, full, full_cut, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(sessionId, req.requestId, req.toolUseId ?? null, req.kind, req.toolName ?? null, req.agentLabel ?? null, req.title, detail, full, fullCut ? 1 : 0, createdAt);
+    return { requestId: req.requestId, kind: req.kind, toolName: req.toolName ?? null, agentLabel: req.agentLabel ?? null, title: req.title, detail, full, fullCut, createdAt };
   }
 
   /** Its process is gone: requests nobody can answer any more read `expired`. Returns their ids. */
@@ -930,7 +956,7 @@ export class ChatStore {
 
   openRequests(sessionId: string): ChatRequest[] {
     const rows = this.#db()
-      .prepare('SELECT request_id, tool_use_id, kind, tool_name, agent_label, title, detail, created_at FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid')
+      .prepare('SELECT request_id, tool_use_id, kind, tool_name, agent_label, title, detail, full, full_cut, created_at FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid')
       .all(sessionId) as RequestRow[];
     return rows.map((r) => ({
       requestId: r.request_id,
@@ -939,6 +965,8 @@ export class ChatStore {
       agentLabel: r.agent_label,
       title: r.title,
       detail: r.detail,
+      full: r.full,
+      fullCut: r.full_cut === 1,
       createdAt: r.created_at,
     }));
   }
@@ -1158,7 +1186,7 @@ export class ChatStore {
       p.text = text.length > EVENT_TEXT_MAX ? `${text.slice(0, EVENT_TEXT_MAX)}…` : text;
     }
     if (ev.toolName !== undefined) p.toolName = ev.toolName;
-    if (ev.request !== undefined) p.request = { ...ev.request, detail: redactMaybe(ev.request.detail) };
+    if (ev.request !== undefined) p.request = { ...ev.request, detail: redactMaybe(ev.request.detail), ...(ev.request.full ? { full: redactMaybe(ev.request.full) } : {}) };
     if (ev.outcome !== undefined) p.outcome = ev.outcome;
     if (ev.costUsd !== undefined) p.costUsd = ev.costUsd;
     // A call's id, on the call and its result: a result read after a restart can still be named, and the
@@ -1171,6 +1199,8 @@ export class ChatStore {
     if (ev.kind === 'result' && ev.modelTotals?.length) p.modelTotals = ev.modelTotals;
     if (ev.handoffId) p.handoffId = ev.handoffId;
     if ((ev.kind === 'user' || ev.kind === 'system') && ev.transfer) p.transfer = { ...ev.transfer, fromClaude: redact(ev.transfer.fromClaude), toClaude: redact(ev.transfer.toClaude) };
+    // A pinned side question (chat PRD §20): a `system` event with its card.
+    if (ev.kind === 'system' && ev.btw) p.btw = pinnedBtwOut(ev.btw);
     if (ev.kind === 'user' && ev.actor) {
       p.actor = redact(ev.actor);
       if (ev.actorLabel) p.actorLabel = redact(ev.actorLabel);
@@ -1233,6 +1263,10 @@ export class ChatStore {
         ...(tr.handoff === true ? { handoff: true } : {}),
         ...(typeof tr.handoffId === 'string' ? { handoffId: tr.handoffId } : {}),
       };
+    }
+    if (row.kind === 'system' && payload.btw) {
+      const btw = pinnedBtwIn(payload.btw);
+      if (btw) ev.btw = btw;
     }
     return ev;
   }

@@ -91,7 +91,7 @@ test('many values and a big text stay fast', () => {
 });
 
 test('the portal’s own tokens are credentials by shape: an agent token printed by a tool never lands in a transcript', () => {
-  for (const token of [TOKEN, 'cpat_' + 'a1B2'.repeat(11), 'cpoa_' + 'x9Y8'.repeat(8), 'cpor_' + 'k3L4'.repeat(8)]) {
+  for (const token of [TOKEN, 'cpat_' + 'a1B2'.repeat(11), 'cpoa_' + 'x9Y8'.repeat(8), 'cpor_' + 'k3L4'.repeat(8), 'cpen_' + 'm5N6'.repeat(11)]) {
     assert.equal(redact(`PILOT_MCP_TOKEN=${token}`), `PILOT_MCP_TOKEN=${REDACTED}`);
     assert.equal(redact(`curl -H "Authorization: Bearer ${token}" http://x`), `curl -H "Authorization: Bearer ${REDACTED}" http://x`);
     assert.equal(redact(`token is ${token}.`), `token is ${REDACTED}.`);

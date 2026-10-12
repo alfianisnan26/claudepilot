@@ -15,7 +15,7 @@ const TAIL_WINDOW = 256;
 
 /* ---------- Shapes ---------- */
 
-type Kind = 'anthropic' | 'github' | 'aws' | 'slack' | 'portal' | 'pem' | 'bearer' | 'assign';
+type Kind = 'anthropic' | 'github' | 'aws' | 'slack' | 'portal' | 'webhook' | 'pem' | 'bearer' | 'assign';
 
 interface Shape {
   kind: Kind;
@@ -40,9 +40,14 @@ const SHAPES: Shape[] = [
   // AWS access key ids: exactly 20 characters, so they're never "open" in a stream.
   { kind: 'aws', re: /(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])/dg },
   { kind: 'slack', re: /(?<![A-Za-z0-9])xox[abprs]-[A-Za-z0-9-]{10,}/dg, swallow: '[A-Za-z0-9-]' },
-  // The portal's own tokens: admin access (cpat_), OAuth access and refresh (cpoa_, cpor_) and a session's agent token
+  // The portal's own tokens: admin access (cpat_), OAuth access and refresh (cpoa_, cpor_), an enrollment token (cpen_, Connect) and a session's agent token
   // (cpst_), which sits in the environment of that session's Claude Code process and so can be printed by a tool.
-  { kind: 'portal', re: /(?<![A-Za-z0-9])cp(?:at|oa|or|st)_[A-Za-z0-9_-]{20,}/dg, swallow: '[A-Za-z0-9_-]' },
+  // Notifications and triggers (platform track): an answer token (cpna_), a trigger's webhook secret (cpwh_), a channel's signing secret
+  // (cpws_) and a notification secret (cpns_).
+  { kind: 'portal', re: /(?<![A-Za-z0-9])cp(?:at|oa|or|st|en|na|wh|ws|ns)_[A-Za-z0-9_-]{20,}/dg, swallow: '[A-Za-z0-9_-]' },
+  // Discord and Slack incoming-webhook URLs carry their secret in the path: the secret part goes.
+  { kind: 'webhook', re: /(https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/(?:v\d{1,2}\/)?webhooks\/)(\d{5,30}\/[A-Za-z0-9_-]{20,})/dgi, group: 2, swallow: '[A-Za-z0-9_-]' },
+  { kind: 'webhook', re: /(https?:\/\/hooks\.slack\.com\/(?:services|workflows|triggers)\/)([A-Za-z0-9_\/-]{20,})/dgi, group: 2, swallow: '[A-Za-z0-9_/-]' },
   // A private key block; one without its END line runs to the end of the text.
   { kind: 'pem', re: new RegExp(`${PEM_HEADER}[\\s\\S]*?(?:${PEM_FOOTER}|$)`, 'dg'), swallow: 'pem' },
   // `Bearer <token>` with a long token: only the token goes.
@@ -58,7 +63,7 @@ const SHAPES: Shape[] = [
 ];
 
 /** Cheap pre-check: text with none of these can't hold a complete match. */
-const TRIGGER = /sk-ant-|gh[pousr]_|github_pat_|AKIA|ASIA|xox[abprs]-|cp(?:at|oa|or|st)_|PRIVATE KEY|bearer|key|token|secret|passw/i;
+const TRIGGER = /sk-ant-|gh[pousr]_|github_pat_|AKIA|ASIA|xox[abprs]-|cp(?:at|oa|or|st|en|na|wh|ws|ns)_|webhooks\/|hooks\.slack|PRIVATE KEY|bearer|key|token|secret|passw/i;
 
 interface RawSpan {
   start: number;
@@ -142,7 +147,7 @@ const LITERAL_TAILS: LiteralTail[] = [
   literalTail(['ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_'], '[A-Za-z0-9]', 20, true),
   literalTail(['github_pat_'], '[A-Za-z0-9_]', 20, true),
   literalTail(['xoxa-', 'xoxb-', 'xoxp-', 'xoxr-', 'xoxs-'], '[A-Za-z0-9-]', 10, true),
-  literalTail(['cpat_', 'cpoa_', 'cpor_', 'cpst_'], '[A-Za-z0-9_-]', 20, true),
+  literalTail(['cpat_', 'cpoa_', 'cpor_', 'cpst_', 'cpen_', 'cpna_', 'cpwh_', 'cpws_', 'cpns_'], '[A-Za-z0-9_-]', 20, true),
   literalTail(['AKIA', 'ASIA'], '[A-Z0-9]', 16, true),
 ];
 

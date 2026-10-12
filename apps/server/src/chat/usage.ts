@@ -21,6 +21,18 @@ const WINDOWS: Record<ChatUsageRange, { span: number; bucket: number }> = {
 
 export const isUsageRange = (v: unknown): v is ChatUsageRange => (CHAT_USAGE_RANGES as readonly unknown[]).includes(v);
 
+/**
+ * The buckets a range covers, ending with the one that holds `now`: whole buckets back from its end, lined up with the viewer's clock
+ * (`tzOffsetMin` is `Date.getTimezoneOffset()`). One rule for this report and the extended one (claudeusage/requests.ts, docs §20.8).
+ */
+export function usageWindow(range: ChatUsageRange, now: number, tzOffsetMin?: number): { span: number; bucket: number; count: number; start: number; end: number } {
+  const { span, bucket } = WINDOWS[range];
+  const shift = -(Number.isFinite(tzOffsetMin) ? (tzOffsetMin as number) : 0) * MIN; // local = UTC + shift
+  const end = Math.floor((now + shift) / bucket) * bucket + bucket - shift;
+  const count = Math.round(span / bucket);
+  return { span, bucket, count, start: end - count * bucket, end };
+}
+
 const zero = (): ChatUsageTotals => ({ costUsd: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: 0, agents: 0 });
 
 function add(into: ChatUsageTotals, r: UsageRecord): void {
@@ -47,13 +59,8 @@ export function usageReport(
   opts: { claudeId?: string; tzOffsetMin?: number; now?: number } = {},
 ): ChatUsageReport {
   if (!isUsageRange(range)) throw new AppError('VALIDATION_FAILED', `Pick a range: ${CHAT_USAGE_RANGES.join(', ')}.`);
-  const { span, bucket } = WINDOWS[range];
-  const now = opts.now ?? Date.now();
-  const shift = -(Number.isFinite(opts.tzOffsetMin) ? (opts.tzOffsetMin as number) : 0) * MIN; // local = UTC + shift
   // The newest bucket holds now; the window is whole buckets back from its end.
-  const end = Math.floor((now + shift) / bucket) * bucket + bucket - shift;
-  const count = Math.round(span / bucket);
-  const start = end - count * bucket;
+  const { bucket, count, start, end } = usageWindow(range, opts.now ?? Date.now(), opts.tzOffsetMin);
 
   const buckets = Array.from({ length: count }, (_, i) => ({ at: new Date(start + i * bucket).toISOString(), ...zero() }));
   const totals = zero();
