@@ -2450,6 +2450,136 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 400,
+    name: 'identity: users, login sessions, throttle, invitations, settings',
+    up(db) {
+      db.exec(`
+        -- Identity and onboarding (docs/prd/identity-onboarding.md §13; MU1, block 400-409). The SQL is the PRD's, checked in
+        -- COORD/p5-schema-check.mts. Nothing here is sealed: a Locked portal still signs people in.
+        CREATE TABLE users (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'u_*'),
+          username TEXT NOT NULL CHECK (length(username) BETWEEN 3 AND 32),
+          username_key TEXT NOT NULL,                      -- NFKC + lower: one account per key
+          display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 60),
+          role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
+          state TEXT NOT NULL CHECK (state IN ('active', 'pending', 'disabled')),
+          password_hash TEXT NOT NULL,
+          password_changed_at TEXT NOT NULL,
+          avatar_sha256 TEXT,
+          token_epoch INTEGER NOT NULL DEFAULT 0,          -- bumped to kill tokens and agent tokens
+          created_at TEXT NOT NULL,
+          created_by TEXT NOT NULL,
+          last_login_at TEXT,
+          disabled_at TEXT,
+          disabled_by TEXT,
+          disabled_reason TEXT
+        ) STRICT;
+        CREATE UNIQUE INDEX users_username_key ON users (username_key);
+        CREATE INDEX users_state ON users (state, role);
+        -- The last active admin can be neither demoted, disabled nor deleted (FR33, M5). The CLI goes through the same triggers.
+        CREATE TRIGGER users_keep_admin_update BEFORE UPDATE OF role, state ON users
+        WHEN OLD.role = 'admin' AND OLD.state = 'active' AND (NEW.role <> 'admin' OR NEW.state <> 'active')
+          AND (SELECT count(*) FROM users WHERE role = 'admin' AND state = 'active' AND id <> OLD.id) = 0
+        BEGIN SELECT RAISE(ABORT, 'LAST_ADMIN'); END;
+        CREATE TRIGGER users_keep_admin_delete BEFORE DELETE ON users
+        WHEN OLD.role = 'admin' AND OLD.state = 'active'
+          AND (SELECT count(*) FROM users WHERE role = 'admin' AND state = 'active' AND id <> OLD.id) = 0
+        BEGIN SELECT RAISE(ABORT, 'LAST_ADMIN'); END;
+
+        -- A sign-in on a device (replaces web_sessions once the first account exists). id is shown in the device list; the cookie
+        -- carries a 256-bit token of which only the SHA-256 is kept.
+        CREATE TABLE login_sessions (
+          id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL UNIQUE,
+          user_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          absolute_expires_at TEXT NOT NULL,
+          kept INTEGER NOT NULL DEFAULT 0 CHECK (kept IN (0, 1)),
+          reauth_at TEXT,
+          ip TEXT,
+          user_agent TEXT,
+          device TEXT,
+          client TEXT,                                     -- NULL: a browser; 'vscode', 'cli': a first-party client (FR51)
+          token_epoch INTEGER NOT NULL
+        ) STRICT;
+        CREATE INDEX login_sessions_user ON login_sessions (user_id);
+        CREATE INDEX login_sessions_expiry ON login_sessions (expires_at);
+
+        -- Attempt counters that survive a restart: per username, per address, and the other throttled doors.
+        CREATE TABLE auth_throttle (
+          scope TEXT NOT NULL CHECK (scope IN ('user', 'ip', 'register', 'invitation', 'reauth', 'lookup', 'share', 'team_invite')),
+          key TEXT NOT NULL,
+          failures INTEGER NOT NULL DEFAULT 0,
+          window_start_ms INTEGER NOT NULL,
+          locked_until_ms INTEGER NOT NULL DEFAULT 0,
+          updated_ms INTEGER NOT NULL,
+          PRIMARY KEY (scope, key)
+        ) STRICT;
+
+        -- Invitations and password resets share one door (FR10, FR23): only the SHA-256 of a code is kept.
+        CREATE TABLE invitations (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL DEFAULT 'invite' CHECK (kind IN ('invite', 'reset')),
+          user_id TEXT,                                    -- a reset: the account it is for
+          code_hash TEXT NOT NULL UNIQUE,
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
+          username_key TEXT,
+          note TEXT,
+          used_at TEXT,
+          used_by TEXT,
+          revoked_at TEXT
+        ) STRICT;
+        CREATE INDEX invitations_state ON invitations (used_at, revoked_at, expires_at);
+
+        -- One row: the admin's choices, readable before anyone signs in.
+        CREATE TABLE identity_settings (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          registration TEXT NOT NULL DEFAULT 'invitation' CHECK (registration IN ('closed', 'invitation', 'open')),
+          members_may_invite INTEGER NOT NULL DEFAULT 0 CHECK (members_may_invite IN (0, 1)),
+          invitation_ttl_days INTEGER NOT NULL DEFAULT 7 CHECK (invitation_ttl_days BETWEEN 1 AND 30),
+          sign_in_enabled INTEGER NOT NULL DEFAULT 1 CHECK (sign_in_enabled IN (0, 1)),
+          sharing_acceptance TEXT NOT NULL DEFAULT 'operate' CHECK (sharing_acceptance IN ('always', 'operate', 'never')),
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO identity_settings (id, updated_at) VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+        -- A person's avatar (FR37): the persona pipeline's output, content-addressed. Its own table because persona_avatars is pruned
+        -- by the personas module for rows no persona references.
+        CREATE TABLE user_avatars (
+          sha256 TEXT PRIMARY KEY,
+          png BLOB NOT NULL,
+          size INTEGER NOT NULL,
+          created_at TEXT NOT NULL
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 401,
+    name: 'identity: the security rows of the platform audit',
+    up(db) {
+      db.exec(`
+        -- The platform audit is migration 200's table (the platform track's); identity adds what a security row needs (FR42).
+        ALTER TABLE platform_audit ADD COLUMN outcome TEXT NOT NULL DEFAULT 'ok' CHECK (outcome IN ('ok', 'denied', 'failed'));
+        ALTER TABLE platform_audit ADD COLUMN ip TEXT;
+        ALTER TABLE platform_audit ADD COLUMN protected INTEGER NOT NULL DEFAULT 0 CHECK (protected IN (0, 1));
+        CREATE INDEX platform_audit_object ON platform_audit (subject, id);
+        -- No row is ever rewritten.
+        CREATE TRIGGER platform_audit_no_update BEFORE UPDATE ON platform_audit BEGIN SELECT RAISE(ABORT, 'audit rows are append-only'); END;
+        -- A protected (security) row younger than a year is never deleted: the statement skips it (no error), so the platform track's
+        -- own 90-day prune of its rows is unaffected and security rows go only after a year.
+        CREATE TRIGGER platform_audit_keep BEFORE DELETE ON platform_audit
+        WHEN OLD.protected = 1 AND OLD.at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-365 days')
+        BEGIN SELECT RAISE(IGNORE); END;
+      `);
+    },
+  },
 ];
 
 /**
