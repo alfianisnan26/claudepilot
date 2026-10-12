@@ -1,6 +1,8 @@
 // Claude usage (docs/prd/claude-usage.md): the plan limits of each Claude, read from Claude Code itself.
 // Nothing here names an account: no email, organization or id. A Claude is the portal's own record of one.
 
+import type { LimitOutlook, PaletteSlot, WindowPace } from './usage.js';
+
 /** Where a window stands. `reset`: its reset time has passed, so the number is old. */
 export type UsageLevel = 'ok' | 'near' | 'high' | 'exhausted' | 'reset' | 'unknown';
 
@@ -29,6 +31,8 @@ export interface ClaudeUsageWindow {
   /** ISO time the window resets; null when unknown. */
   resetsAt: string | null;
   level: UsageLevel;
+  /** How fast this window fills and where it is heading (docs/prd/claude-usage.md §20.2). Set by the portal's snapshot; absent where only the window's reading is given (`headroomFrom`'s input). */
+  pace?: WindowPace;
 }
 
 /** Extra usage (billed beyond the plan). Amounts are in minor units of `currency` (cents for USD). */
@@ -61,11 +65,20 @@ export interface ClaudeUsage {
   problem: UsageProblem | null;
   /** Alerts are silenced until this ISO time. */
   snoozedUntil: string | null;
+  /** Only the "will run out before reset" alerts are silenced until this ISO time (§20.4); the threshold alerts are not. */
+  projectionSnoozedUntil: string | null;
+  /** The colour this Claude keeps everywhere (a palette slot, or null: the neutral grey). */
+  slot: PaletteSlot;
+  /** Where the limits that stop this Claude are heading: will one run out before it resets (§20.2). */
+  outlook: LimitOutlook;
   /** The last 7 days of the week window (else the session's), a few dozen points: the row's sparkline. */
   trend: { key: string; label: string; points: { at: string; usedPct: number }[] } | null;
 }
 
 export type UsageAlertLevel = 'near' | 'high' | 'exhausted';
+
+/** `level`: a window crossed a threshold. `projection`: at its current speed a window will run out before it resets (§20.4). */
+export type UsageAlertKind = 'level' | 'projection';
 
 /** One crossing of a threshold by one window in one period (a period ends when the window resets). */
 export interface ClaudeUsageAlert {
@@ -80,6 +93,11 @@ export interface ClaudeUsageAlert {
   usedPct: number | null;
   resetsAt: string | null;
   at: string;
+  /** Absent means `level`. For `projection`, `level` is `near` and carries no meaning, `id` reads `<claudeId>|<window>|projection|<reset ms>`, and the estimate follows. */
+  kind?: UsageAlertKind;
+  /** `projection`: when it is estimated to reach 100 %, and where it is estimated to stand at the reset. */
+  etaAt?: string | null;
+  projectedPct?: number | null;
 }
 
 export interface ClaudeUsageReport {
@@ -128,10 +146,23 @@ export interface Headroom {
 
 export type SnoozeUntil = '1h' | '4h' | 'reset';
 
+/** What a snooze silences: absent, every alert of the Claude; `projection`, only its "will run out before reset" alerts (PUT `/snooze` `{ until, kind }`, DELETE `/snooze?kind=projection`). */
+export type SnoozeKind = 'projection';
+
 export const CLAUDE_USAGE_API = {
   list: '/api/claude-usage',
   /** `/api/claude-usage/<claudeId>/history?range=1d|7d|30d`, `/check` (POST), `/snooze` (PUT, DELETE). */
   one: (claudeId: string) => `/api/claude-usage/${encodeURIComponent(claudeId)}`,
+  /** GET `?claudeId=&tz=`: the summary strip (`UsageSummary`). */
+  summary: '/api/claude-usage/summary',
+  /** GET `?range=30m|1h|12h|1d|7d|30d&claudeId=&tz=`: the Requests report with the previous period, the cache split and palette slots (`RequestsReport`). */
+  requests: '/api/claude-usage/requests',
+  /** GET `?workspaceId=&from=`: the Claudes a chat can move to, ranked (`MoveRecommendation`). */
+  recommend: '/api/claude-usage/recommend',
+  /** GET: every palette assignment (`UsagePalette`). */
+  palette: '/api/claude-usage/palette',
+  /** GET `?what=requests|quota&format=csv|json&range=&claudeId=&tz=`: a file download (`UsageExportQuery`; build the URL with `usageExportUrl`). */
+  export: '/api/claude-usage/export',
 } as const;
 
 /** The windows whose exhaustion stops a Claude altogether; a model's weekly window stops only that model. */

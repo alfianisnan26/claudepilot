@@ -2,6 +2,7 @@
 // Transcript, send, steer, Stop, approvals and questions. One dedicated WebSocket per tab.
 
 import type { ChatFile, ChatUploadRef } from './artifacts.js';
+import type { BtwClientMessage, BtwServerMessage, ChatPinnedBtw } from './chatBtw.js';
 
 /** `starting` launching; `idle` waiting for you; `working` a turn is running; `waiting` needs an answer; `interrupted` the process is gone but resumable; `ended` closed. */
 export type ChatSessionState = 'starting' | 'idle' | 'working' | 'waiting' | 'interrupted' | 'ended';
@@ -166,9 +167,32 @@ export interface ChatRequest {
   agentLabel: string | null;
   /** A short human summary the controller builds, e.g. "Run a command". */
   title: string;
-  /** More detail, redacted: the command, the file, the question text. */
+  /** One line of detail, redacted and cut at 200 characters: the command, the file, the question text. The card's and the transcript's summary, never what is approved on. */
   detail: string | null;
+  /**
+   * What the person is asked to allow, whole (chat-sessions PRD, approvals): the command, the path, the URL, the plan, or for a tool the
+   * portal has no summary of, its whole input as JSON. Plain text exactly as the tool will receive it (nothing folded, so a run of spaces
+   * that hides a tail stays in view), characters that can disguise text shown as escapes, redacted, and at most `REQUEST_FULL_MAX`
+   * characters. Absent or empty: the portal has nothing to show for this request (one older than this field, or a call without input).
+   */
+  full?: string | null;
+  /** `full` was cut at `REQUEST_FULL_MAX`: more is asked than can be shown. */
+  fullCut?: boolean;
   createdAt: string;
+}
+
+/** The most of an approval's text kept and shown (`ChatRequest.full`). */
+export const REQUEST_FULL_MAX = 8000;
+
+/**
+ * Whether a request may be allowed: only when the text asked about is there and shown whole. A request that is cut at the cap or has
+ * nothing to show can be denied and nothing else, on every surface that answers it (the session's card, the glance widget) and at
+ * the server (`controller.respond`). `note` is the one terse line that says why.
+ */
+export function requestReview(r: Pick<ChatRequest, 'full' | 'fullCut'>): { allow: boolean; note: string | null } {
+  if (r.fullCut) return { allow: false, note: 'Too long to show in full.' };
+  if (!r.full || !r.full.trim()) return { allow: false, note: 'Nothing to show for this request.' };
+  return { allow: true, note: null };
 }
 
 /** A stored transcript event, normalized by the controller so the UI can switch on `kind`. */
@@ -236,6 +260,11 @@ export interface ChatEvent {
    * document, the opening, the acknowledgement. The transcript folds them into one card at the move's marker.
    */
   handoffId?: string;
+  /**
+   * For `system`: a side question pinned to the transcript (chat PRD §20, `chatBtw.ts`): one card with the question and the answer. `text` is its
+   * plain fallback. Claude never saw it and a later btw doesn't read it: it is the person's record, not part of the session's context.
+   */
+  btw?: ChatPinnedBtw;
 }
 
 /** Where the context of a chat that moved to another Claude came from. */
@@ -682,7 +711,7 @@ export interface ChatControl {
   uuid?: string;
   args?: { model?: string; effort?: string; ultracode?: boolean; mode?: ChatPermissionMode; inputUuid?: string; taskId?: string; title?: string };
 }
-export type ChatClientMessage = ChatSubscribe | ChatUnsubscribe | ChatSend | ChatRespond | ChatControl;
+export type ChatClientMessage = ChatSubscribe | ChatUnsubscribe | ChatSend | ChatRespond | ChatControl | BtwClientMessage;
 
 /* ---------- Socket: portal → browser ---------- */
 
@@ -709,4 +738,6 @@ export type ChatServerMessage =
   | { type: 'input'; session: string; uuid: string; state: ChatInputState }
   /** The session's sub-agents and background tasks changed (the full current list). */
   | { type: 'tasks'; session: string; tasks: ChatTask[] }
-  | { type: 'error'; session?: string; message: string };
+  | { type: 'error'; session?: string; message: string }
+  /** A side question's state and streamed text: only to the tabs of the person who asked (chatBtw.ts). */
+  | BtwServerMessage;

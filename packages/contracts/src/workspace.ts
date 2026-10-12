@@ -11,9 +11,16 @@ export interface WorkspaceTarget {
   available: boolean;
   /** Why it isn't available. */
   problem?: string;
+  /** `enrolled`: added through Connect (docs/prd/targets-connect.md §12.2); absent or `scanned`: found in the portal's environment. */
+  source?: 'scanned' | 'enrolled';
+  /** An enrolled target: `cluster` places new workspaces, `single` is one workspace. */
+  role?: 'cluster' | 'single';
+  /** An enrolled cluster's nodes (the New workspace dialog offers a Node select when there is more than one). */
+  nodes?: { id: string; name: string; connected: boolean; drained: boolean }[];
 }
 
-export type WorkspaceStatus = 'creating' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error';
+/** `unreachable`: on an enrolled target whose tunnel is down; the rest of the entry is the last known state (targets-connect PRD §12.5). */
+export type WorkspaceStatus = 'creating' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error' | 'unreachable';
 
 export interface Workspace {
   /** `<target>/<name>`: names are unique within a target. */
@@ -33,6 +40,12 @@ export interface Workspace {
   account?: import('./accounts.js').WorkspaceAccountState | null;
   /** What the portal last delivered into it; absent when nothing was ever delivered. */
   delivery?: import('./accounts.js').WorkspaceDeliveryState | null;
+  /** Its Claude Code version: pinned (the image's) and running, with what looks wrong (docs/prd/claude-version-pinning.md). */
+  claude?: import('./claudeversion.js').WorkspaceClaudeBrief | null;
+  /** The node of an enrolled cluster it runs on (targets-connect PRD §12.4). */
+  node?: string;
+  /** ISO time the portal last reached it; set while it is `unreachable`. */
+  lastSeenAt?: string;
 }
 
 export interface WorkspaceUsage {
@@ -54,6 +67,10 @@ export interface CreateWorkspaceRequest {
   accountPoolId?: string | null;
   /** The create dialog's Add-ons: pools of each multi-assignment type to assign from the start. */
   pools?: Partial<Record<import('./pools.js').MultiPoolType, string[]>>;
+  /** The exact Claude Code version to pin it to (x.y.z); the portal's default pin when absent. Docker targets only. */
+  claudeVersion?: string;
+  /** An enrolled cluster's node to place it on; the least loaded eligible node when absent (targets-connect PRD §12.8). */
+  node?: string;
 }
 
 export const WORKSPACE_NAME_MAX = 40;

@@ -263,6 +263,8 @@ export interface McpServerStatus {
   install: { state: McpInstallState; error: string | null; at: string | null } | null;
   /** Whether Claude Code listed it at the last verify; null before one ran. */
   listed: boolean | null;
+  /** OAuth servers only (§13.3): where the sign-in stands in this workspace's Default Claude; null for the rest. */
+  auth?: McpServerAuth | null;
   updatedAt: string;
 }
 
@@ -289,6 +291,226 @@ export interface McpWorkspaceStatus {
 /** FR19: what an MCP allowlist must admit for the servers a workspace gets (Settings & policies includes them). */
 export type McpMatcher = { serverUrl: string } | { serverCommand: string[] };
 
+/* ---------- OAuth status and guided sign-in (§13.3) ---------- */
+
+/**
+ * Where an OAuth server stands in a workspace, as Claude Code itself reports it (`claude mcp get`, or a chat session's
+ * `system/init`): it holds the token, the portal never does. `unknown` is "not checked yet" or "can't tell".
+ */
+export type McpAuthState = 'connected' | 'needs_sign_in' | 'failed' | 'unknown';
+
+export interface McpServerAuth {
+  mode: McpAuthMode;
+  state: McpAuthState;
+  /** One short line: why it failed, or why the state is unknown. Never a URL that carries a code. */
+  detail: string | null;
+  checkedAt: string | null;
+}
+
+/** `GET …/workspaces/:target/:name/auth` (`?claude=<id>`: which of the workspace's Claudes; Default when absent): one row per OAuth server. */
+export interface McpAuthEntry {
+  plugin: string;
+  key: string;
+  auth: McpServerAuth;
+}
+
+/** Which server a sign-in or sign-out is for: its plugin (`cpm-<set>`) and key, as in `McpServerStatus`. */
+export interface McpSignInRequest {
+  plugin: string;
+  key: string;
+}
+
+/** The answer to a sign-in start: open `url`, sign in, then send the address the browser ends on (`complete`). */
+export interface McpSignInStart {
+  signInId: string;
+  /** The provider's authorization page, https (or loopback http for a test provider). */
+  url: string;
+  /** The address Claude Code listens on, `http://localhost:<port>/callback`: the page that follows sign-in fails to load there, and its address is what `complete` takes. */
+  callback: string | null;
+  /** Claude Code gives up after 5 minutes; so does the portal. */
+  expiresAt: string;
+}
+
+/** `POST …/signin/:signInId/complete`: the whole address the browser ended on. It carries the authorization code: used once, never stored, never logged. */
+export interface McpSignInComplete {
+  redirectUrl: string;
+}
+
+/* ---------- Built-in catalogue (mcp-builtin-catalogue PRD) ---------- */
+
+/**
+ * How a person signs in to a built-in server (PRD D1). `oauth` is Claude Code's own flow in each workspace: the portal never
+ * stores, refreshes or relays a token. A template offers it first where the provider supports it WITHOUT a client secret (dynamic
+ * client registration, or a public PKCE client whose ID is not secret). `token` is the fallback: a header filled from a Secrets & env
+ * entry, named here, never typed here.
+ */
+export type McpBuiltinAuth = 'oauth' | 'token';
+
+export type McpBuiltinId = 'github' | 'gitlab' | 'gitea' | 'outline' | 'cloudflare';
+export const MCP_BUILTIN_IDS: readonly McpBuiltinId[] = ['github', 'gitlab', 'gitea', 'outline', 'cloudflare'];
+
+/** A non-secret value asked once per instance (a host, an OAuth client ID). Never a token. */
+export interface McpBuiltinParam {
+  /** `[A-Za-z][A-Za-z0-9]*`; used as `{key}` in a server's `url` and `oauth.authServerMetadataUrl`. */
+  key: string;
+  /** One or two words. */
+  label: string;
+  /** InfoTip text, never shown inline. */
+  hint?: string;
+  /** `url`: an http(s) address without credentials, query or fragment. `text`: letters, digits and `._~@:+=-` (a client ID). */
+  kind: 'url' | 'text';
+  required: boolean;
+  placeholder?: string;
+  default?: string;
+  /** Asked, stored and used only in this mode (a client ID only for OAuth). Absent: both. */
+  auth?: McpBuiltinAuth;
+}
+
+/** The OAuth fields of one server (PRD D1): they become the entry's `oauth` block in `.mcp.json` (FR1). */
+export interface McpBuiltinOAuth {
+  /** The provider registers clients dynamically (RFC 7591): no client ID is needed. False needs `clientIdParam`. */
+  dcr: boolean;
+  /** The param holding a pre-registered public client's ID. Required when `dcr` is false; optional otherwise. */
+  clientIdParam?: string;
+  scopes?: string[];
+  /** A pre-registered redirect URI needs a fixed loopback port. */
+  callbackPort?: number;
+  /** https; may use `{param}`. For providers whose metadata is not at the usual place. */
+  authServerMetadataUrl?: string;
+}
+
+/** The header a token goes in (PRD D4). The portal names a Secrets & env entry for it; it never takes the value. */
+export interface McpBuiltinToken {
+  header: string;
+  /** Around `{value}`, which appears exactly once. Default `Bearer {value}`. */
+  template?: string;
+  /** The suggested Secrets & env entry name (`GITHUB_TOKEN`): `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Servers with the same slot share one entry. */
+  slot: string;
+  description?: string;
+  docUrl?: string;
+}
+
+/**
+ * One server of a template: it becomes one catalog entry and one server in the new set.
+ * `oauth` and `token` say which modes the server offers; with neither, it needs no sign-in and is offered in both modes.
+ */
+export interface McpBuiltinServer {
+  /** The suggested server key (FR5): `[a-z0-9-]`, at most 16 characters. The instance name is added to the entry's key, not to this. */
+  key: string;
+  name: string;
+  description: string;
+  /** `{param}` placeholders; the result passes the catalog's URL checks and the SSRF guard. */
+  url: string;
+  transport: McpTransport;
+  oauth?: McpBuiltinOAuth;
+  token?: McpBuiltinToken;
+  /** Included unless the person unticks it. */
+  default: boolean;
+}
+
+export interface McpBuiltinTemplate {
+  id: McpBuiltinId;
+  name: string;
+  /** The web draws an inline SVG per id: no external images. */
+  icon: McpBuiltinId;
+  /** One short line. */
+  summary: string;
+  docUrl: string;
+  /** In preference order: OAuth first where it works without a client secret. */
+  auth: McpBuiltinAuth[];
+  params: McpBuiltinParam[];
+  servers: McpBuiltinServer[];
+  /** Short lines for an InfoTip: prerequisites, how to register the OAuth app. */
+  notes: string[];
+  /** Bumps when the definition changes: instances then show "Update". */
+  version: number;
+  /** YYYY-MM-DD the facts were checked against the provider's docs. */
+  checkedAt: string;
+}
+
+/** One instance made from a template: a set of this name and its catalog entries. Nothing in it is secret. */
+export interface McpBuiltinAdded {
+  id: string;
+  /** The instance's label, part of its entry keys and set name. Empty for the first instance of a template. */
+  name: string;
+  poolId: string;
+  poolName: string;
+  /** Catalog entry IDs, one per server. */
+  entries: string[];
+  auth: McpBuiltinAuth;
+  /** Non-secret values only. */
+  params: Record<string, string>;
+  /** The template's server keys in it. */
+  servers: string[];
+  /** Token mode: slot → the Secrets & env entry NAME it references. Names, never values. */
+  secretNames: Record<string, string>;
+  allowPrivateNetwork: boolean;
+  templateVersion: number;
+  /** The template is newer than this instance. */
+  updateAvailable: boolean;
+  addedAt: string;
+}
+
+export interface McpBuiltinItem {
+  template: McpBuiltinTemplate;
+  added: McpBuiltinAdded[];
+}
+
+/**
+ * `POST /api/mcp/builtin/:id/preview` and `/add`. Add is idempotent: the same inputs find the instance they made and change nothing;
+ * a newer template, an `instance`, or the name of an existing instance changes it in place (new approved versions, a new set revision).
+ */
+export interface McpBuiltinAddRequest {
+  auth: McpBuiltinAuth;
+  /** Values for the template's params; the ones the mode doesn't use are ignored. Defaults fill the gaps. */
+  params: Record<string, string>;
+  /** Template server keys. Default: the servers marked `default` that the mode supports. */
+  servers?: string[];
+  /** Label for a further instance: `[a-z0-9-]`, at most 12 characters. Default: none for the first, then 2, 3, … */
+  name?: string;
+  /** Token mode: slot → Secrets & env entry name, to use another name than the suggested one. */
+  secretNames?: Record<string, string>;
+  /** Change this instance instead of looking for one with the same inputs. */
+  instance?: string;
+  /** An explicit tick: the catalog's SSRF guard refuses private, loopback and link-local hosts otherwise. */
+  allowPrivateNetwork?: boolean;
+}
+
+export interface McpBuiltinPreviewServer {
+  /** The template server's key. */
+  key: string;
+  name: string;
+  /** The exact URL a workspace will connect to (PRD FR3: this is what the person consents to). */
+  url: string;
+  transport: McpTransport;
+  /** How a person signs in to it: `oauth` (Claude Code's own flow), `headers` (a token from Secrets & env), or `none`. */
+  auth: McpAuthMode;
+  /** Header names only, never values. */
+  headers: string[];
+  /** The OAuth fields that will be pinned in `.mcp.json`; null when none are (dynamic registration needs none, and `auth` still says `oauth`). */
+  oauth: McpOAuthFields | null;
+  flags: McpRiskFlag[];
+}
+
+export interface McpBuiltinPreview {
+  servers: McpBuiltinPreviewServer[];
+  /** Token mode: the Secrets & env entry each token slot references, and whether such a secret (with a value) exists yet. */
+  secretNames: { slot: string; name: string; exists: boolean }[];
+  /** The set Add makes (or changes). */
+  setName: string;
+  /** What Add would do now: make an instance, change one, or nothing. */
+  action: 'create' | 'update' | 'unchanged';
+  /** The instance it would change; null for `create`. */
+  instance: string | null;
+}
+
+/** What `add` answers: the instance, and what the call did. */
+export interface McpBuiltinAddResult extends McpBuiltinAdded {
+  result: 'created' | 'updated' | 'unchanged';
+}
+
+export const MCP_BUILTIN_NAME_MAX = 12;
+
 export const MCP_SLUG_MAX = 12;
 export const MCP_SERVER_KEY_MAX = 16;
 /** `{{secret-file:NAME}}`, the one reference form for secrets (Secrets & env FR21). */
@@ -309,4 +531,20 @@ export const MCP_API = {
   retryInstalls: (workspaceId: string) => `/api/mcp/workspaces/${workspaceId}/installs/retry`,
   verify: (workspaceId: string) => `/api/mcp/workspaces/${workspaceId}/verify`,
   matchers: (workspaceId: string) => `/api/mcp/workspaces/${workspaceId}/matchers`,
+  /** GET: every template with its instances (`McpBuiltinItem[]`). */
+  builtin: '/api/mcp/builtin',
+  /** POST `McpBuiltinAddRequest` → `McpBuiltinPreview` (changes nothing). */
+  builtinPreview: (templateId: string) => `/api/mcp/builtin/${templateId}/preview`,
+  /** POST `McpBuiltinAddRequest` → `McpBuiltinAddResult`. */
+  builtinAdd: (templateId: string) => `/api/mcp/builtin/${templateId}/add`,
+  /** GET → `McpAuthEntry[]` as last seen; POST `{plugin?, key?}` asks Claude Code now and answers with the same list (a few seconds). `?claude=<id>` on both. */
+  auth: (workspaceId: string) => `/api/mcp/workspaces/${workspaceId}/auth`,
+  /** POST `McpSignInRequest` → `McpSignInStart` (`?claude=<id>`). */
+  signIn: (workspaceId: string) => `/api/mcp/workspaces/${workspaceId}/signin`,
+  /** DELETE cancels a sign-in that is still waiting. */
+  signInOne: (workspaceId: string, signInId: string) => `/api/mcp/workspaces/${workspaceId}/signin/${signInId}`,
+  /** POST `McpSignInComplete` → `McpServerAuth`. */
+  signInComplete: (workspaceId: string, signInId: string) => `/api/mcp/workspaces/${workspaceId}/signin/${signInId}/complete`,
+  /** POST `McpSignInRequest` → `McpServerAuth`: Claude Code's own `claude mcp logout` (`?claude=<id>`). */
+  signOut: (workspaceId: string) => `/api/mcp/workspaces/${workspaceId}/signout`,
 } as const;

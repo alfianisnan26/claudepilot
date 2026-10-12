@@ -4,8 +4,10 @@
  * `skillset` (`POOLS_API`); everything else lives under `/api/skills`.
  */
 
-/** Claude Code version skillsets need (Skillset FR20): the one the M1 sandbox verified. Below it nothing is delivered. */
-export const SKILLSET_MIN_CLAUDE_VERSION = '2.1.296';
+import { claudeMinimum } from './claudeversion.js';
+
+/** Claude Code version skillsets need (Skillset FR20): the one the M1 sandbox verified. Below it nothing is delivered. From the feature-minimum registry. */
+export const SKILLSET_MIN_CLAUDE_VERSION = claudeMinimum('skillsets');
 
 /** Upload limits (Skillset FR1). */
 export const SKILL_UPLOAD_LIMITS = {
