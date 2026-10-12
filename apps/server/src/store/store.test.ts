@@ -85,7 +85,7 @@ test('a database from a newer portal is opened read-only and frozen', async () =
   const dir = tempDir();
   (await Store.open({ dataDir: dir, secretKey: newKey() })).close();
   const raw = new DatabaseSync(join(dir, 'portal.db'));
-  raw.exec('PRAGMA user_version = 99');
+  raw.exec('PRAGMA user_version = 9999');
   raw.close();
   const store = await Store.open({ dataDir: dir, secretKey: newKey() });
   assert.equal(store.trust.state, 'frozen');

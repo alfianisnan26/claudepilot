@@ -103,3 +103,22 @@ test('invalidations reach only tabs that subscribed to them', async () => {
   b.socket.close();
   await until(() => hub.clients === 0);
 });
+
+test('glance: a tab that subscribed is told to load the snapshot again, once for a burst, and `watching` says whether anybody listens', async () => {
+  assert.equal(hub.watching('glance'), false);
+  const a = await tab();
+  const b = await tab();
+  a.subscribe('glance');
+  b.subscribe('tickets');
+  await until(() => hub.watching('glance'));
+  assert.equal(hub.watching('ci'), false, 'only the topics that were asked for');
+  for (let i = 0; i < 5; i++) hub.publish('glance');
+  await until(() => a.got.length === 1);
+  await sleep(350);
+  assert.deepEqual(a.got, [{ type: 'glance' }]);
+  assert.deepEqual(b.got, []);
+  a.socket.close();
+  b.socket.close();
+  await until(() => hub.clients === 0);
+  assert.equal(hub.watching('glance'), false, 'and nobody once the tab is gone');
+});

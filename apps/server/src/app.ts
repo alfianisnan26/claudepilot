@@ -78,8 +78,16 @@ import { createTicketRoutes } from './tickets/routes.js';
 import type { CiService } from './ci/service.js';
 import { createCiRoutes } from './ci/routes.js';
 import type { BrowserModule } from './browser/index.js';
+import { createReposRoutes, createWorkspaceReposRoutes, type ReposService } from './repos/index.js';
 import { isWorkspaceId, PLAIN_NAME } from './names.js';
 import { createClaudeUsageRoutes, type ClaudeUsageMonitor } from './claudeusage/index.js';
+import { createUsageSpendRoutes, type UsageSpend } from './usagespend/index.js';
+import { createGlanceRoutes, type Glance } from './glance/index.js';
+import type { ConnectModule } from './connect/index.js';
+import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
+import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
+import type { Platform } from './platform/index.js';
+import { actorOf } from './authz/seam.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
 
@@ -124,6 +132,13 @@ export function createApp(
     knowledge,
     browser,
     claudeUsage,
+    usageSpend,
+    repos,
+    glance,
+    codespaces,
+    platform,
+    claudeVersions,
+    connect,
   }: {
     serveWeb: boolean;
     notify?: (...topics: LiveTopic[]) => void;
@@ -151,6 +166,20 @@ export function createApp(
     browser?: BrowserModule;
     /** Claude usage: the plan limits of each Claude (`/api/claude-usage`). */
     claudeUsage?: ClaudeUsageMonitor;
+    /** Usage spend: who spent what, budgets and spikes (`/api/usage-spend`). */
+    usageSpend?: UsageSpend;
+    /** Workspace git: the repositories inside each workspace (`/api/repos`, `/api/workspaces/:target/:name/repos`). */
+    repos?: ReposService;
+    /** Glance widgets: sessions, agents and what needs attention in one snapshot (`/api/glance`). */
+    glance?: Glance;
+    /** GitHub Codespaces POC: GitHub connections and the codespace lifecycle (`/api/codespaces`, docs/prd/codespaces-poc.md). */
+    codespaces?: Codespaces;
+    /** The platform track: notifications, the platform audit, and the modules that register with it (`/api/notify`, `/api/platform`, `/hooks`). */
+    platform?: Platform;
+    /** Claude Code version pinning: each workspace's version, the compatibility canary, images, Apply and Rollback (`/api/claude-version`, `/api/workspaces/:target/:name/claude-version`). */
+    claudeVersions?: ClaudeVersions;
+    /** Connect: targets and agents enrolled from the web (`/api/connect` behind the session; `/connect/` for agents, no cookie). */
+    connect?: ConnectModule;
   },
 ) {
   const app = new Hono<Env>();
@@ -412,7 +441,7 @@ export function createApp(
   ws.get('/targets', async (c) => c.json(success(await workspaces.targets(c.req.query('fresh') === '1'))));
   ws.get('/usage', async (c) => c.json(success(await workspaces.usage())));
   const delivery = (id: string) => deliveryState(reconciler, id);
-  const decorate = workspaceView(pools, reconciler);
+  const decorate = workspaceView(pools, reconciler, claudeVersions?.brief);
 
   // Claude Code's own sign-in, driven from the portal; the credential stays in the workspace.
   const logins = new ClaudeLogins(workspaces);
@@ -504,7 +533,7 @@ export function createApp(
     if (poolId && !pools.list().some((p) => p.id === poolId))
       throw new AppError('VALIDATION_FAILED', 'That account pool no longer exists.', { details: { accountPoolId: 'Pick another pool.' } });
     const addOns = poolService.checkAddOns(req.pools);
-    const created = await workspaces.create(req);
+    const created = await workspaces.create(req, actorOf(c));
     // A new workspace has no sign-in of its own yet, so no override confirmation is needed.
     if (poolId) pools.assign(created.id, { poolId }, { existing: false });
     for (const [type, ids] of Object.entries(addOns)) poolService.setAssignments(created.id, type, ids.map((id) => ({ poolId: id })));
@@ -538,6 +567,7 @@ export function createApp(
     pools.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     poolService.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     settings?.lockdown.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
+    repos?.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     return c.json(success({ ok: true }));
   });
   // A workspace's multi-assignment pools: GET …/pools, PUT …/pools/:type.
@@ -546,6 +576,10 @@ export function createApp(
   ws.route('/', createSecretsRoutes({ pools: poolService, workspaces }));
   // Browser & desktop: a workspace's browser status, wake, stop and restart.
   if (browser) ws.route('/', browser.routes());
+  // Workspace git: a workspace's repositories as a tree, a scan, and its scan settings.
+  if (repos) ws.route('/', createWorkspaceReposRoutes(repos));
+  // Claude Code version pinning: a workspace's version, the upgrade plan, Apply, Rollback and history.
+  if (claudeVersions) ws.route('/', createWorkspaceClaudeVersionRoutes(claudeVersions));
   app.route('/api/workspaces', ws);
 
   const acc = new Hono<Env>();
@@ -680,12 +714,52 @@ export function createApp(
     app.route('/api/ci', cr);
   }
 
+  // Workspace git: every workspace's repositories at a glance, the audit, and one repository (docs/prd/workspace-git.md).
+  if (repos) {
+    const rp = new Hono<Env>();
+    rp.use(requireSession);
+    rp.route('/', createReposRoutes(repos));
+    app.route('/api/repos', rp);
+  }
+
+  // Glance widgets: one snapshot of what waits on a person and who is working (docs/prd/glance-widgets.md); read-only.
+  if (glance) {
+    const gl = new Hono<Env>();
+    gl.use(requireSession);
+    gl.route('/', createGlanceRoutes(glance));
+    app.route('/api/glance', gl);
+  }
+
+  // Claude Code version pinning: the registry, the compatibility canary and its schedule, images and the default pin (docs/prd/claude-version-pinning.md).
+  if (claudeVersions) {
+    const cv = new Hono<Env>();
+    cv.use(requireSession);
+    cv.route('/', createClaudeVersionRoutes(claudeVersions));
+    app.route('/api/claude-version', cv);
+  }
+
+  // GitHub Codespaces POC: connections (token or device flow) and the codespace lifecycle (docs/prd/codespaces-poc.md).
+  if (codespaces) {
+    const cs = new Hono<Env>();
+    cs.use(requireSession);
+    cs.route('/', createCodespacesRoutes(codespaces));
+    app.route('/api/codespaces', cs);
+  }
+
   // Claude usage: the plan limits of each Claude, read from Claude Code itself (docs/prd/claude-usage.md).
   if (claudeUsage) {
     const cu = new Hono<Env>();
     cu.use(requireSession);
     cu.route('/', createClaudeUsageRoutes(claudeUsage));
     app.route('/api/claude-usage', cu);
+  }
+
+  // Usage spend: who spent what (per session, workspace, ticket, persona), budgets and spike alerts (docs/prd/claude-usage.md §21 to §26).
+  if (usageSpend) {
+    const us = new Hono<Env>();
+    us.use(requireSession);
+    us.route('/', createUsageSpendRoutes(usageSpend));
+    app.route('/api/usage-spend', us);
   }
 
   // Chat sessions (REST); the live part rides its own socket (chat/socket.ts).
@@ -713,6 +787,28 @@ export function createApp(
   chatMeta.use(requireSession);
   chatMeta.route('/', createChatMetaRoutes(chatController, chatReauth));
   app.route('/api/chat', chatMeta);
+  // The platform track (docs/prd/platform-roadmap.md): each module's routes behind the session guard; `/hooks` outside `/api` and the
+  // guard (a receiver is its own door: a signed secret), before the web app's catch-all.
+  if (platform) {
+    platform.useReauth((token) => chatReauth.fresh(token));
+    for (const r of platform.routes()) {
+      const pr = new Hono<Env>();
+      pr.use(requireSession);
+      pr.route('/', r.app);
+      app.route(r.path, pr);
+    }
+    app.route('/hooks', platform.hooks);
+  }
+
+  // Connect (docs/prd/targets-connect.md): the admin REST is guarded like every /api route; the agent-facing routes live under /connect/ with
+  // no cookie and none of /api's Origin machinery (an enrollment token or a signed challenge is their door), full paths, so mounted at the root.
+  if (connect) {
+    const cn = new Hono<Env>();
+    cn.use(requireSession);
+    cn.route('/', connect.routes() as never);
+    app.route('/api/connect', cn);
+    app.route('/', connect.publicRoutes() as never);
+  }
 
   app.all('/api/*', () => {
     throw new AppError('NOT_FOUND');

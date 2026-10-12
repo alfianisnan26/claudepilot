@@ -21,6 +21,12 @@ import { createKnowledge } from './knowledge/module.js';
 import { registerKnowledgeTools } from './knowledge/portalTools.js';
 import { createClaudeUsage } from './claudeusage/index.js';
 import { registerClaudeUsageTools } from './claudeusage/portalTools.js';
+import { ClaudeVersions, registerClaudeVersionTools } from './claudeversion/index.js';
+import { createUsageSpend, registerUsageSpendTools } from './usagespend/index.js';
+import { createRepos, registerRepoTools } from './repos/index.js';
+import { createGlance } from './glance/index.js';
+import { createPlatform } from './platform/index.js';
+import { createCodespaces } from './codespaces/index.js';
 import { registerPersonas } from './personas/index.js';
 import { registerPersonaTools } from './personas/portalTools.js';
 import { readSessionBlob } from './personas/sessionBlobs.js';
@@ -60,9 +66,13 @@ import { BUDGET_SETTING, CAP_TOTAL_SETTING, CAP_WORKSPACE_SETTING } from './chat
 import { chatEligibility } from './chat/eligibility.js';
 import { hostInstaller } from './chat/install.js';
 import { attachChat } from './chat/socket.js';
+import { registerChatAuthz } from './chat/authz.js';
 import { KubernetesRuntime } from './workspaces/kubernetes.js';
 import { LocalRuntime } from './workspaces/local.js';
 import { Workspaces } from './workspaces/manager.js';
+import { createConnect } from './connect/index.js';
+import { agentBundle } from './connect/bundle.js';
+import { wireConnect } from './workspaces/connect/wire.js';
 import type { Runtime } from './workspaces/runtime.js';
 
 // A background task that rejects (a module reading a table a frozen database doesn't have, a probe, a scan) must not
@@ -117,7 +127,7 @@ const portal = new Portal(config.serverCode, config.session.ttlMs);
 // Sign-ins survive restarts (12 hours each); only token hashes are stored.
 portal.useStore(sessionStore(store));
 const { workspaces: ws } = config;
-const runtimes: Runtime[] = ws.docker.map((d) => new DockerRuntime(d, ws.dockerImage, ws.imageContext, () => store.portalId));
+const runtimes: Runtime[] = ws.docker.map((d) => new DockerRuntime(d, ws.dockerImage, ws.imageContext, () => store.portalId, undefined, { canaryPrefix: ws.claude.canaryPrefix, alias: ws.claude.imageAlias }));
 if (ws.kubernetes.enabled) {
   try {
     runtimes.push(new KubernetesRuntime(ws.kubernetes));
@@ -131,7 +141,6 @@ if (ws.local.enabled && !PLAIN_NAME.test(ws.local.name)) {
 }
 if (ws.local.enabled) runtimes.push(new LocalRuntime({ name: ws.local.name, state: new JsonFile(`${config.paths.data}/local-workspace.json`, {}) }));
 const workspaces = new Workspaces(runtimes, new JsonFile(`${config.paths.data}/pending-creates.json`, []));
-void workspaces.resume().catch((e: unknown) => console.error(`[workspaces] resume failed: ${(e as Error).message}`));
 
 // Chat sessions: one controller shared by the REST routes and the chat socket.
 const chatController = new ChatController(store, workspaces);
@@ -200,6 +209,9 @@ chatController.bypassAllowed = () => settingsModule.settings.get<boolean>(BYPASS
 chatController.liveCaps = () => ({ perWorkspace: settingsModule.settings.get<number>(CAP_WORKSPACE_SETTING), total: settingsModule.settings.get<number>(CAP_TOTAL_SETTING) });
 // How deep, how wide and how often sessions may start sessions and message each other (multi-agent), from the shared settings.
 chatController.sessionBudgetUsd = () => settingsModule.settings.get<number>(BUDGET_SETTING);
+// Side questions (chat PRD §20): their limits and switches come from the shared settings, and a session is read through the one authorization resolver.
+chatController.btwSettings = (key) => settingsModule.settings.get(key);
+registerChatAuthz((id) => chatController.sessionFacts(id));
 chatController.agentCaps = () => ({
   maxDepth: settingsModule.settings.get<number>(AGENT_DEPTH_SETTING),
   maxChildren: settingsModule.settings.get<number>(AGENT_CHILDREN_SETTING),
@@ -228,17 +240,53 @@ workspaces.hooks.beforeStop = async (id) => {
   await chatController.endWorkspaceSessions(id, 'The workspace was stopped').catch(() => undefined);
   await outbox.pull(id);
 };
+// Connect (docs/prd/targets-connect.md): targets enrolled from the web, agents that dial out, runtimes over their tunnels. Built here, before the
+// reconciler starts and the manager resumes, so enrolled runtimes are on the manager by then (FR38); `wireConnect` (workspaces/connect/wire.ts)
+// plugs in the runtime factory and the manager's hooks. Its live topic is bound below, once the live hub exists.
+let connectChanged: () => void = () => undefined;
+const scannedTargetIds = runtimes.map((r) => r.target.id);
+const connect = createConnect({
+  store,
+  config: config.connect,
+  scanned: () => workspaces.targets(),
+  scannedIds: () => scannedTargetIds,
+  workspacesOn: async (target) => (await workspaces.list()).filter((w) => w.target === target),
+  removeWorkspace: (id) => workspaces.remove(id.slice(0, id.indexOf('/')), id.slice(id.indexOf('/') + 1)),
+  recheck: async () => void (await workspaces.targets(true)),
+  bundle: agentBundle,
+  trustProxy: config.trustProxy,
+  notify: () => connectChanged(),
+});
+wireConnect({ connect, workspaces, chat: chatController, reconciler });
+connect.start();
 reconciler.start();
+// After the manager's hooks are set (Connect's `wireConnect` sets `settled`, which resume waits on for enrolled targets: FR38).
+void workspaces.resume().catch((e: unknown) => console.error(`[workspaces] resume failed: ${(e as Error).message}`));
 browser.start();
 outbox.start();
 health.start();
+// Claude Code version pinning (claude-version-pinning PRD): each workspace's version next to its pin, the compatibility canary (a throwaway container, a stand-in
+// API and the real CLI), Apply and Rollback. New workspaces get the default pin; the workspace list carries each one's version brief.
+const claudeVersions = new ClaudeVersions({
+  store,
+  workspaces,
+  reconciler,
+  chat: chatController,
+  settings: settingsModule.settings,
+  notify: () => notify('claudeversion'),
+  audit: (e) => platform.audit.record(e),
+  canaryTarget: config.workspaces.claude.canaryTarget,
+  imageFixed: config.workspaces.dockerImageFixed,
+});
+workspaces.hooks.defaultClaudeVersion = claudeVersions.defaultForNew;
 // Live pages (`/api/live`): one socket per tab, fed by every place that changes what they show.
-const view = workspaceView(pools, reconciler);
+const view = workspaceView(pools, reconciler, claudeVersions.brief);
 const live = new LiveHub(
   { workspaces: async () => (await workspaces.list()).map(view), usage: () => workspaces.usage() },
   (req) => !!portal.session(cookie(req, config.session.cookie)),
 );
 const notify = (...topics: LiveTopic[]) => topics.forEach((t) => live.publish(t));
+connectChanged = () => notify('connect');
 workspaces.hooks.changed = () => notify('workspaces');
 reconciler.onChange(() => notify('workspaces'));
 accounts.hooks.event = () => notify('accounts');
@@ -247,6 +295,8 @@ pools.onChange = () => notify('accounts', 'workspaces');
 poolService.onChange = () => notify('pools');
 settingsModule.onChange = () => notify('workspaces');
 const stopWatching = runtimes.flatMap((r) => (r.watch ? [r.watch(() => notify('workspaces'))] : []));
+registerClaudeVersionTools(claudeVersions);
+claudeVersions.start();
 // Portal MCP (portal-mcp PRD): the /mcp endpoint, its access tokens and audit, and the tool registry every area adds to
 // (portalmcp/registry.ts). The built-in tools are adapters over the services above; other areas register theirs here too.
 const agentUrls = internalUrlResolver({ workspaces, port: config.port, configured: config.portalMcp.internalUrl ?? null });
@@ -279,6 +329,11 @@ portalMcp.start();
 chatController.agentAccess = portalMcp.agents;
 chatController.launchEnv = () => (settingsModule.settings.get<boolean>(SETTING_KEYS.mcpAccountOff) ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {});
 chatController.secretValues = (id) => exposedSecretValues(poolService, id);
+// MCP OAuth (MCP set PRD §13.3): the guided sign-in runs Claude Code's login in a workspace terminal, for one of its Claudes, and a chat
+// session's `system/init` tells the MCP module which OAuth servers still need it.
+mcpSets.oauth.host = workspaces;
+mcpSets.oauth.claudeDirectory = (id, claudeId) => chatController.claudeOf(id, claudeId)?.directory ?? null;
+chatController.mcpServersSeen = (id, directory, servers) => mcpSets.oauth.seen(id, directory, servers).map((s) => s.name);
 // Tickets: one queue of work for people and agents; reaches chat sessions only through its adapter (tickets PRD).
 const tickets = new Tickets(store, new ChatTicketSessions(chatController));
 tickets.onChange = () => notify('tickets');
@@ -322,13 +377,77 @@ claudeUsage.start();
 registerClaudeUsageTools(claudeUsage);
 // The chat reader's hook: each rate_limit_info of a session on its Claude's own sign-in (the raw object, never stored as it came).
 chatController.onRateLimit = (sessionId, claudeId, info) => claudeUsage.onRateLimit(sessionId, claudeId, info);
-const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage });
+// Usage spend: who spent what (per session, workspace, ticket, persona), budgets with alerts and spike detection, over the recorded requests
+// (claude-usage PRD §21 to §26). The chat controller tells it of each recorded turn and each process start, and asks it before a message
+// whether a budget a person set to pause is used up. Its pages hear of changes on the `claudeusage` topic; `usageSpend.onAlert` is where
+// notifications plug in.
+const usageSpend = createUsageSpend({
+  store,
+  settings: settingsModule.settings,
+  personaOf: (id) => {
+    const p = personas.personaFor(id).persona;
+    return p ? { id: p.poolId, name: p.name, revision: p.revision } : null;
+  },
+  personaName: (poolId) => {
+    try {
+      return poolService.get(poolId).name;
+    } catch {
+      return null; // the persona was deleted: the name recorded then is shown
+    }
+  },
+  workspaceExists: (id) => chatController.workspaceExists?.(id) ?? true,
+  notify: () => notify('claudeusage'),
+});
+chatController.onUsage = (turn, rows) => usageSpend.onTurn(turn, rows);
+chatController.onLaunch = (info) => usageSpend.onLaunch(info);
+chatController.sendGate = (info) => usageSpend.gate(info);
+registerUsageSpendTools(usageSpend);
+// Workspace git: the repositories inside each running workspace, found by scanning and tracked each on its own, with worktrees, an audit
+// and a summary (workspace-git PRD). It reads through the chat's hardened session host; a scan never fetches.
+const repos = createRepos({ store, workspaces, installHost: (id) => chatController.installHost?.(id) ?? Promise.resolve(), sessions: chatController, scrub: (id, text) => chatController.scrub(id, text), notify: () => notify('repos') });
+repos.start();
+registerRepoTools(repos);
+// Glance widgets: what waits on a person (approvals, tickets, failed CI) and who is working, counted once for every open page; the chat
+// controller's events feed it directly, tickets and CI changes are chained onto the hooks that already tell their own pages (docs/prd/glance-widgets.md).
+const glance = createGlance({ chat: chatController, tickets, ci, notify: () => notify('glance'), watching: () => live.watching('glance') });
+for (const source of [tickets, ci]) {
+  const was = source.onChange;
+  source.onChange = () => (was?.(), glance.changed());
+}
+// GitHub Codespaces POC: GitHub connections (token or device flow with a client ID only; the token is a sealed secret) and the codespace
+// lifecycle through GitHub's REST API (docs/prd/codespaces-poc.md).
+const codespaces = createCodespaces({ store, pools: poolService, values: secretsKind.values, dataDir: config.paths.data });
+// The platform track (docs/prd/platform-roadmap.md phase 1): one event bus over the seams above (chat, CI, usage alerts, spend alerts,
+// tickets), the platform audit, and notifications (Web Push, webhook, Discord, Slack); triggers and auto transfer register inside platform/.
+const platform = createPlatform({
+  store,
+  settings: settingsModule.settings,
+  chat: chatController,
+  ci,
+  claudeUsage,
+  usageSpend,
+  tickets,
+  ticketInfo: (id) => {
+    const t = tickets.brief(id) ? tickets.get({ kind: 'system' }, id, { eventsLimit: 1 }).ticket : null;
+    return t ? { type: t.type, workspaceId: t.workspaceId, open: t.closedAt === null } : null;
+  },
+  uiUrl: config.portalMcp.uiUrl ?? null,
+  pushContact: config.notify.pushContact ?? null,
+  selfOrigin: `http://localhost:${config.port}`,
+  publish: (topic) => notify(topic),
+  socketAuthorized: (req) => !!portal.session(cookie(req, config.session.cookie)),
+});
+live.onPresence = (connection, presence, req) => platform.presence(connection, presence, req);
+platform.start();
+const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage, usageSpend, repos, glance, codespaces, platform, claudeVersions, connect });
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
 // Before the socket modules: ties their connections to the sign-in that opened them (QA-001) and drops unanswered upgrades.
 const sockets = new SocketGuard(portal, config.session.cookie);
 sockets.attach(server);
 portal.onRevoked = () => sockets.sweep();
+// The agents' tunnel (`/connect/v1/tunnel`): no cookie, its own handshake; answers only its own path.
+connect.attach(server, portal);
 attachShell(server, portal, workspaces);
 browser.attach(server, portal);
 live.attach(server);
@@ -345,7 +464,7 @@ if (config.dev) {
   });
   server.on('request', (req, res) => {
     const url = req.url ?? '/';
-    if (url.startsWith('/api/') || url === '/healthz' || url === '/mcp' || url.startsWith('/mcp?')) void handleApi(req, res);
+    if (url.startsWith('/api/') || url === '/healthz' || url === '/mcp' || url.startsWith('/mcp?') || url.startsWith('/hooks/') || url.startsWith('/connect/')) void handleApi(req, res);
     else vite.middlewares(req, res);
   });
 } else {
@@ -372,6 +491,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
   process.on(signal, () => {
     server.close();
     clearInterval(backupTimer);
+    claudeVersions.stop();
     reconciler.stop();
     browser.stop();
     outbox.stop();
@@ -383,6 +503,11 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
     tickets.stop();
     ci.stop();
     claudeUsage.stop();
+    repos.stop();
+    glance.stop();
+    platform.stop();
+    codespaces.stop();
+    connect.stop();
     knowledge.stop();
     for (const stop of stopWatching) stop();
     store.close();

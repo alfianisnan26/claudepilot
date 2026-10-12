@@ -1,6 +1,6 @@
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { LIVE_PATH, LIVE_TOPICS, type LiveMessage, type LiveTopic, type Workspace, type WorkspaceUsage } from '@portal/contracts';
+import { LIVE_PATH, LIVE_TOPICS, type LiveMessage, type LivePresence, type LiveTopic, type Workspace, type WorkspaceUsage } from '@portal/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
 
 const PING_MS = 25_000;
@@ -49,6 +49,8 @@ export class LiveHub {
   #workspacesTimer: NodeJS.Timeout | undefined;
   #usageTimer: NodeJS.Timeout | undefined;
   #lastError = 0;
+  /** A tab said it is visible and in use, or not (PWA PRD §11.2); `null` when its socket closed. `connection` is the socket, a key. */
+  onPresence?: (connection: object, presence: LivePresence | null, req: IncomingMessage) => void;
 
   constructor(
     private readonly sources: LiveSources,
@@ -61,7 +63,7 @@ export class LiveHub {
       if (new URL(req.url ?? '/', 'http://localhost').pathname !== LIVE_PATH) return; // the terminal's, or Vite's
       if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
       if (!this.authorized(req)) return refuse(socket, 401, 'Unauthorized');
-      wss.handleUpgrade(req, socket, head, (ws) => this.#join(ws));
+      wss.handleUpgrade(req, socket, head, (ws) => this.#join(ws, req));
     });
   }
 
@@ -75,7 +77,7 @@ export class LiveHub {
       setTimeout(() => {
         this.#coalesce.delete(topic);
         if (topic === 'workspaces') void this.#refreshWorkspaces();
-        else if (topic === 'accounts' || topic === 'system' || topic === 'pools' || topic === 'tickets' || topic === 'ci' || topic === 'claudeusage') this.#send(topic, JSON.stringify({ type: topic } satisfies LiveMessage));
+        else if (topic === 'accounts' || topic === 'system' || topic === 'pools' || topic === 'tickets' || topic === 'ci' || topic === 'claudeusage' || topic === 'repos' || topic === 'glance' || topic === 'claudeversion' || topic === 'notify' || topic === 'triggers' || topic === 'autotransfer' || topic === 'connect') this.#send(topic, JSON.stringify({ type: topic } satisfies LiveMessage));
       }, COALESCE_MS).unref(),
     );
   }
@@ -85,6 +87,11 @@ export class LiveHub {
     return this.#clients.size;
   }
 
+  /** Whether some open page watches `topic`: a module that only pushes to pages can skip work while none does. */
+  watching(topic: LiveTopic): boolean {
+    return this.#watched(topic);
+  }
+
   close() {
     for (const ws of this.#clients.keys()) ws.terminate();
     this.#clients.clear();
@@ -92,7 +99,7 @@ export class LiveHub {
     for (const t of this.#coalesce.values()) clearTimeout(t);
   }
 
-  #join(ws: WebSocket) {
+  #join(ws: WebSocket, req: IncomingMessage) {
     const client: Client = { topics: new Set(), seen: 0 };
     this.#clients.set(ws, client);
     let alive = true;
@@ -110,6 +117,7 @@ export class LiveHub {
       } catch {
         return;
       }
+      if (msg.type === 'presence') return this.#presence(ws, msg as Record<string, unknown>, req);
       if (msg.type !== 'subscribe' || !Array.isArray(msg.topics)) return;
       const before = client.topics;
       client.topics = new Set(LIVE_TOPICS.filter((t) => (msg.topics as unknown[]).includes(t)));
@@ -128,8 +136,24 @@ export class LiveHub {
       clearInterval(ping);
       this.#clients.delete(ws);
       this.#schedule();
+      this.#callPresence(ws, null, req);
     });
     ws.on('error', () => ws.terminate());
+  }
+
+  /** Only the four fields, each checked: nothing here is trusted for more than "this tab is in use". */
+  #presence(ws: WebSocket, m: Record<string, unknown>, req: IncomingMessage) {
+    const id = (v: unknown, re: RegExp) => (typeof v === 'string' && re.test(v) ? v : null);
+    if (typeof m.visible !== 'boolean' || typeof m.active !== 'boolean') return;
+    this.#callPresence(ws, { type: 'presence', device: id(m.device, /^dst_[0-9a-f]{12}$/), visible: m.visible, active: m.active, session: id(m.session, /^[A-Za-z0-9_-]{1,100}$/) }, req);
+  }
+
+  #callPresence(ws: WebSocket, p: LivePresence | null, req: IncomingMessage) {
+    try {
+      this.onPresence?.(ws, p, req);
+    } catch (e) {
+      this.#logError('presence', e);
+    }
   }
 
   #watched(topic: LiveTopic) {

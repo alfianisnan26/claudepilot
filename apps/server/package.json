@@ -12,7 +12,11 @@
     "portal": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx --env-file-if-exists=../../.env src/cli.ts",
     "test": "node --import tsx --disable-warning=ExperimentalWarning --test 'src/**/*.test.ts'",
     "gen:workspace-host": "tsx scripts/gen-workspace-host.ts",
-    "gen:ci-runner": "tsx scripts/gen-ci-runner.ts"
+    "gen:ci-runner": "tsx scripts/gen-ci-runner.ts",
+    "gen:canary-kit": "tsx scripts/gen-canary-kit.ts",
+    "gen:connect-agent": "tsx scripts/gen-connect-agent.ts",
+    "gen:connect-installers": "tsx scripts/gen-connect-installers.ts",
+    "gen:connect-node": "tsx scripts/gen-connect-node.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.5",

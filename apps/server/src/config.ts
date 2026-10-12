@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { CLAUDE_IMAGE_REPO, claudeImageRef, DEFAULT_CLAUDE_CODE_VERSION } from '@portal/contracts';
 
 const env = (name: string) => process.env[name]?.trim() || undefined;
 
@@ -41,6 +42,10 @@ export const config = {
     /** `Origin` values `/mcp` accepts besides its own and https://claude.ai (comma-separated). */
     origins: (env('PORTAL_MCP_ORIGINS') ?? '').split(',').map((s) => s.trim()).filter(Boolean),
   },
+  /** Notifications (PWA PRD §11.4): the VAPID `sub` contact push services see (mailto: or https:); the setting `notify.contact` wins. */
+  notify: {
+    pushContact: env('PORTAL_PUSH_CONTACT'),
+  },
   /** Claude usage (claude-usage PRD FR10): how often a Claude's plan limits are read; `PORTAL_CLAUDE_USAGE_PROBES=off` stops the probes. */
   claudeUsage: {
     probes: env('PORTAL_CLAUDE_USAGE_PROBES') !== 'off',
@@ -49,6 +54,16 @@ export const config = {
     fastS: Number(env('PORTAL_CLAUDE_USAGE_FAST_S') ?? 120),
     /** Probe only workspaces whose name starts with one of these (comma-separated); unset means all. */
     only: (env('PORTAL_CLAUDE_USAGE_ONLY') ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+  },
+  /** Workspace git (workspace-git PRD §8): scans of each running workspace's repositories. `PORTAL_REPOS_AUTO=off` stops the timer (scans on request still work). */
+  repos: {
+    auto: env('PORTAL_REPOS_AUTO') !== 'off',
+    /** Seconds between automatic scans of one workspace, as given (repos/service.ts keeps it sane). */
+    intervalS: Number(env('PORTAL_REPOS_INTERVAL_S') ?? 300),
+    /** Folders scanned unless a workspace names its own (comma-separated, `~` is the home folder). */
+    roots: (env('PORTAL_REPOS_ROOTS') ?? '~').split(',').map((s) => s.trim()).filter(Boolean),
+    depth: Number(env('PORTAL_REPOS_DEPTH') ?? 6),
+    maxRepos: Number(env('PORTAL_REPOS_MAX') ?? 300),
   },
   /** The browser & desktop pool's container (browser PRD §14.1): a bare tag is built from images/browser on first use. */
   browser: {
@@ -61,9 +76,17 @@ export const config = {
       { id: 'docker', label: 'Docker', socket: env('PORTAL_DOCKER_SOCKET') ?? '/var/run/docker.sock' },
       { id: 'docker-host', label: 'Docker (host)', socket: env('PORTAL_DOCKER_HOST_SOCKET') ?? '/var/run/docker-host.sock' },
     ],
-    /** Image for Docker targets; built from images/workspace when it's this tag and missing. */
-    dockerImage: env('PORTAL_WORKSPACE_IMAGE') ?? 'claudepilot-workspace:latest',
+    /**
+     * Image for Docker targets, built from images/workspace when it is missing. `PORTAL_WORKSPACE_IMAGE` names it whole; otherwise it is the
+     * repository (`PORTAL_WORKSPACE_IMAGE_REPO`, default claudepilot-workspace) at the tag of the default Claude Code pin, `cc-<x.y.z>`
+     * (docs/prd/claude-version-pinning.md). Kubernetes keeps PORTAL_K8S_IMAGE as it was.
+     */
+    dockerImage: env('PORTAL_WORKSPACE_IMAGE') ?? claudeImageRef(DEFAULT_CLAUDE_CODE_VERSION, env('PORTAL_WORKSPACE_IMAGE_REPO') ?? CLAUDE_IMAGE_REPO),
+    /** Whether `PORTAL_WORKSPACE_IMAGE` fixed the image whole: then the default pin and "upgrade" pick tags in its repository only when asked. */
+    dockerImageFixed: !!env('PORTAL_WORKSPACE_IMAGE'),
     imageContext: `${root}images/workspace`,
+    /** Claude Code version pinning: the canary's container names start with this, and an optional moving tag follows the default pin's image. */
+    claude: { canaryPrefix: env('PORTAL_CANARY_PREFIX'), imageAlias: env('PORTAL_WORKSPACE_IMAGE_ALIAS'), canaryTarget: env('PORTAL_CANARY_TARGET') },
     /**
      * The machine the portal runs on, as one workspace. Off unless asked for: anyone with the
      * server code gets a shell as the portal's user.
@@ -90,5 +113,18 @@ export const config = {
     enabled: env('PORTAL_CI_ENABLED') !== 'false',
     maxRunsPerWorkspace: Math.max(1, Number(env('PORTAL_CI_MAX_RUNS') ?? 2) || 2),
     maxJobsParallel: Math.max(1, Math.min(8, Number(env('PORTAL_CI_MAX_JOBS') ?? 2) || 2)),
+  },
+  /** Connect (docs/prd/targets-connect.md §15): targets enrolled from the web, agents that dial out. `PORTAL_CONNECT_ENABLED=false` is the kill switch. */
+  connect: {
+    enabled: env('PORTAL_CONNECT_ENABLED') !== 'false',
+    /** The address targets use to reach the portal; wins over the setting and the browser's address. */
+    url: env('PORTAL_CONNECT_URL'),
+    /** Plain http to a non-loopback address (lab use). */
+    allowHttp: env('PORTAL_CONNECT_ALLOW_HTTP') === 'true',
+    /** The portal's root certificate (PEM) for the wizard's "Private CA" option. */
+    caFile: env('PORTAL_CONNECT_CA_FILE'),
+    baseImage: env('PORTAL_CONNECT_BASE_IMAGE') ?? 'node:22-bookworm-slim',
+    workspaceImage: env('PORTAL_CONNECT_WORKSPACE_IMAGE') ?? 'ghcr.io/alfianisnan26/claudepilot-workspace:latest',
+    tokenTtlMin: Math.min(1440, Math.max(1, Number(env('PORTAL_CONNECT_TOKEN_TTL_MIN') ?? 15) || 15)),
   },
 };
