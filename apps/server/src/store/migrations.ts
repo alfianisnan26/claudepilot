@@ -1629,6 +1629,827 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 100,
+    name: 'built-in MCP catalogue: instances',
+    up(db) {
+      db.exec(`
+        -- Built-in MCP catalogue (docs/prd/mcp-builtin-catalogue.md §9). One row per instance made from a code-defined template:
+        -- the non-secret params it was made with, the catalog entry behind each of its servers, the Secrets & env NAMES its token
+        -- slots reference (names only, never a value) and the set (pool) it made. A set deleted in the Pools hub takes its row.
+        CREATE TABLE mcp_builtin_instances (
+          id TEXT PRIMARY KEY,
+          template_id TEXT NOT NULL,
+          template_version INTEGER NOT NULL,
+          name TEXT NOT NULL DEFAULT '',
+          auth TEXT NOT NULL CHECK (auth IN ('oauth', 'token')),
+          params TEXT NOT NULL DEFAULT '{}',
+          servers TEXT NOT NULL DEFAULT '{}',
+          secret_names TEXT NOT NULL DEFAULT '{}',
+          allow_private_network INTEGER NOT NULL DEFAULT 0,
+          fingerprint TEXT NOT NULL,
+          pool_id TEXT NOT NULL REFERENCES pools (id) ON DELETE CASCADE,
+          added_at TEXT NOT NULL,
+          added_by TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        CREATE UNIQUE INDEX mcp_builtin_instances_name ON mcp_builtin_instances (template_id, name);
+        CREATE UNIQUE INDEX mcp_builtin_instances_pool ON mcp_builtin_instances (pool_id);
+      `);
+    },
+  },
+  {
+    version: 120,
+    name: 'workspace git: tracked repositories, events, per-workspace settings',
+    up(db) {
+      db.exec(`
+        -- Workspace git (docs/prd/workspace-git.md §13). Nothing here is a secret. Text that came from a workspace (branch names,
+        -- commit subjects, authors, remote URLs, paths) is cleaned, clipped and redacted before it is stored; remote URLs carry no
+        -- credentials.
+        CREATE TABLE repo_workspaces (
+          workspace_id TEXT PRIMARY KEY,
+          -- JSON array of folders to scan; NULL: the default ones.
+          roots TEXT,
+          auto INTEGER NOT NULL DEFAULT 1,
+          scan_at TEXT,
+          scan_ms INTEGER,
+          scan_error TEXT,
+          scan_truncated INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+
+        -- The current state of each repository, submodule, worktree, nested repository and not-cloned submodule. A repository that is no
+        -- longer there keeps its row (removed_at) for the retention period, so it can come back under the same id.
+        CREATE TABLE repos (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          path TEXT NOT NULL,
+          name TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('repo', 'submodule', 'worktree', 'nested', 'missing')),
+          parent_id TEXT,
+          main_id TEXT,
+          -- JSON RepoState; NULL for a not-cloned submodule and for one that could not be read.
+          state TEXT,
+          error TEXT,
+          -- JSON: worktree flags, what a superproject records for a submodule, drifted count.
+          extra TEXT NOT NULL DEFAULT '{}',
+          -- "Keep synced" (opt in, worktrees only) and what the last sync did.
+          sync_enabled INTEGER NOT NULL DEFAULT 0,
+          sync_at TEXT,
+          sync_outcome TEXT,
+          sync_note TEXT,
+          first_seen_at TEXT NOT NULL,
+          scanned_at TEXT NOT NULL,
+          removed_at TEXT
+        ) STRICT;
+        CREATE UNIQUE INDEX repos_path ON repos (workspace_id, path);
+        CREATE INDEX repos_workspace ON repos (workspace_id, removed_at);
+
+        -- The audit: what scans noticed and what the portal did when asked. Kept 90 days.
+        CREATE TABLE repo_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          repo_id TEXT,
+          repo TEXT,
+          kind TEXT NOT NULL,
+          -- ui, session:<id>, ticket:<id>, portal-mcp:<token id>, portal:<what>, workspace
+          actor TEXT NOT NULL,
+          session_id TEXT,
+          summary TEXT NOT NULL,
+          data TEXT NOT NULL DEFAULT '{}'
+        ) STRICT;
+        CREATE INDEX repo_events_workspace ON repo_events (workspace_id, id);
+        CREATE INDEX repo_events_repo ON repo_events (repo_id, id);
+        CREATE INDEX repo_events_at ON repo_events (at);
+      `);
+    },
+  },
+  {
+    version: 180,
+    name: 'usage spend: session facts and the persona at launch',
+    up(db) {
+      db.exec(`
+        -- Claude usage PRD §21: what attribution needs that chat_sessions and chat_usage can't keep. The usage rows
+        -- stay when a session is deleted (the history does too), so the session's title and its links are kept
+        -- here, from its last request, and a child's cost still rolls up into its parent after either is gone.
+        CREATE TABLE usage_sessions (
+          session_id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          claude_id TEXT NOT NULL DEFAULT '',
+          parent_id TEXT,
+          ticket_id TEXT,
+          title TEXT NOT NULL DEFAULT '',
+          first_at_ms INTEGER NOT NULL,
+          last_at_ms INTEGER NOT NULL
+        ) STRICT;
+        CREATE INDEX usage_sessions_parent ON usage_sessions (parent_id) WHERE parent_id IS NOT NULL;
+
+        -- The persona a workspace had assigned when a session's process started (a persona is a pool assigned to the
+        -- workspace, not recorded per session). One row per change, never per launch: a request is attributed to the newest
+        -- row at or before it. persona_id NULL: none was assigned. Requests before a session's first row are "not recorded".
+        CREATE TABLE usage_persona (
+          session_id TEXT NOT NULL,
+          at_ms INTEGER NOT NULL,
+          persona_id TEXT,
+          persona_name TEXT,
+          revision INTEGER,
+          PRIMARY KEY (session_id, at_ms)
+        ) STRICT;
+      `);
+      // The sessions that exist now and have requests: their links are kept from here on.
+      db.exec(`
+        INSERT OR IGNORE INTO usage_sessions (session_id, workspace_id, claude_id, parent_id, ticket_id, title, first_at_ms, last_at_ms)
+        SELECT s.id, s.workspace_id, s.claude_id, s.parent_id, s.ticket_id, s.title, u.first_ms, u.last_ms
+        FROM chat_sessions s
+        JOIN (SELECT session_id, MIN(at_ms) AS first_ms, MAX(at_ms) AS last_ms FROM chat_usage GROUP BY session_id) u ON u.session_id = s.id
+      `);
+    },
+  },
+  {
+    version: 181,
+    name: 'usage spend: budgets',
+    up(db) {
+      db.exec(`
+        -- Claude usage PRD §23: a daily or monthly budget for everything, one Claude or one workspace, in estimated
+        -- dollars and/or tokens. Alert-only unless mode is 'pause' (opt-in). alerted: the highest level told in the
+        -- period it was told for ({level, periodStartMs, atMs, quiet?}); snoozed_until_ms mutes alerts, never a pause.
+        CREATE TABLE usage_budgets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL DEFAULT '',
+          scope_kind TEXT NOT NULL CHECK (scope_kind IN ('all', 'claude', 'workspace')),
+          scope_id TEXT,
+          period TEXT NOT NULL CHECK (period IN ('day', 'month')),
+          limit_usd REAL,
+          limit_tokens INTEGER,
+          mode TEXT NOT NULL DEFAULT 'alert' CHECK (mode IN ('alert', 'pause')),
+          enabled INTEGER NOT NULL DEFAULT 1,
+          snoozed_until_ms INTEGER,
+          alerted TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK (limit_usd IS NOT NULL OR limit_tokens IS NOT NULL),
+          CHECK ((scope_kind = 'all') = (scope_id IS NULL))
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 182,
+    name: 'usage spend: spike events and snoozes',
+    up(db) {
+      db.exec(`
+        -- Claude usage PRD §24: what the spike heuristics noticed, each with its evidence (JSON) and the subject a snooze
+        -- and the de-duplication key on (a session id for burst and outlier, a Claude id for rate). Kept 90 days.
+        CREATE TABLE usage_spikes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at_ms INTEGER NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('rate', 'burst', 'outlier')),
+          subject TEXT NOT NULL,
+          session_id TEXT,
+          workspace_id TEXT NOT NULL,
+          claude_id TEXT NOT NULL DEFAULT '',
+          evidence TEXT NOT NULL,
+          alerted INTEGER NOT NULL DEFAULT 1
+        ) STRICT;
+        CREATE INDEX usage_spikes_at ON usage_spikes (at_ms);
+        CREATE INDEX usage_spikes_subject ON usage_spikes (kind, subject, at_ms);
+
+        CREATE TABLE usage_spike_snoozes (
+          subject TEXT PRIMARY KEY,
+          until_ms INTEGER NOT NULL
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 183,
+    name: 'usage spend: owners and the audit trail',
+    up(db) {
+      db.exec(`
+        -- Claude usage PRD §26.4 (several users are coming): a budget and a spike have an owner, and what a person changed is audited with who.
+        -- 'u_owner' is the one owner of today's portal. A budget per Claude is managed by admins, a budget per workspace by that workspace's
+        -- managers; a spike alert goes to the manager of what it is about.
+        ALTER TABLE usage_budgets ADD COLUMN created_by TEXT NOT NULL DEFAULT 'u_owner';
+        ALTER TABLE usage_spikes ADD COLUMN owner TEXT NOT NULL DEFAULT 'u_owner';
+
+        -- Budgets made, changed, snoozed and removed, and spike snoozes. actor: who (a user id); via: how ('ui', or 'portal-mcp:<token id>').
+        -- Kept 90 days. No amounts or texts from workspaces: ids and what was done.
+        CREATE TABLE usage_audit (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at TEXT NOT NULL,
+          actor TEXT NOT NULL DEFAULT 'u_owner',
+          via TEXT NOT NULL DEFAULT 'ui',
+          action TEXT NOT NULL,
+          object_kind TEXT NOT NULL,
+          object_id TEXT NOT NULL,
+          summary TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX usage_audit_at ON usage_audit (at);
+      `);
+    },
+  },
+  {
+    version: 170,
+    name: 'usage insight: palette slots',
+    up(db) {
+      db.exec(`
+        -- Claude usage PRD §20.6: the colour each Claude and each model keeps, everywhere. A slot (0 to 7) is given on first sight and
+        -- kept; one slot per kind is held by one key at a time. Keys are the portal's own ids (a Claude's id, 'default:<workspace>' for
+        -- requests recorded without a Claude, a model's id): nothing names an account.
+        CREATE TABLE usage_palette (
+          kind TEXT NOT NULL CHECK (kind IN ('claude', 'model')),
+          key TEXT NOT NULL,
+          slot INTEGER NOT NULL CHECK (slot BETWEEN 0 AND 7),
+          first_seen_ms INTEGER NOT NULL,
+          last_seen_ms INTEGER NOT NULL,
+          PRIMARY KEY (kind, key)
+        ) STRICT;
+        CREATE UNIQUE INDEX usage_palette_slot ON usage_palette (kind, slot);
+      `);
+    },
+  },
+  {
+    version: 171,
+    name: 'claude usage: projection alert marks and snooze',
+    up(db) {
+      db.exec(`
+        -- Claude usage PRD §20.4: the "will run out before reset" alert is told once per window and period, like the threshold alerts, and
+        -- has its own snooze. proj_alerted is JSON: per window, the period (its reset time) it was told for, when, the estimate, and whether it was quiet.
+        ALTER TABLE claude_usage_latest ADD COLUMN proj_alerted TEXT NOT NULL DEFAULT '{}';
+        ALTER TABLE claude_usage_latest ADD COLUMN proj_snoozed_until_ms INTEGER;
+      `);
+    },
+  },
+  {
+    version: 190,
+    name: 'chat requests: the whole text being allowed',
+    up(db) {
+      db.exec(`
+        -- Chat sessions PRD (approvals): the command, path or input a person is asked to allow, whole (up to 8,000 characters, redacted),
+        -- beside the 200-character summary in \`detail\`; full_cut says it was cut at the cap, and a cut request can only be denied.
+        -- Requests asked before this column have no text (full is NULL): they can be denied, not allowed.
+        ALTER TABLE chat_requests ADD COLUMN full TEXT;
+        ALTER TABLE chat_requests ADD COLUMN full_cut INTEGER NOT NULL DEFAULT 0;
+      `);
+    },
+  },
+  {
+    version: 300,
+    name: 'claude code versions: history, canary runs and audit',
+    up(db) {
+      db.exec(`
+        -- Claude Code version pinning PRD §9. One row per applied (or failed) change of a workspace's image: what Rollback reads. The runtime
+        -- is the record of what a workspace runs; this keeps only the small history that cannot be read from it. actor is the portal user
+        -- who acted ('u_owner' while there is one user). from_image_id lets Rollback find the old image even when its tag has moved.
+        CREATE TABLE claude_version_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('upgrade', 'rollback', 'repin')),
+          from_version TEXT,
+          to_version TEXT,
+          from_image TEXT NOT NULL,
+          from_image_id TEXT,
+          to_image TEXT NOT NULL,
+          canary_run_id INTEGER,
+          canary TEXT NOT NULL DEFAULT 'none' CHECK (canary IN ('pass', 'partial', 'fail', 'none')),
+          accepted TEXT NOT NULL DEFAULT '[]',
+          outcome TEXT NOT NULL CHECK (outcome IN ('applied', 'failed', 'restored')),
+          detail TEXT,
+          actor TEXT NOT NULL DEFAULT 'u_owner'
+        ) STRICT;
+        CREATE INDEX claude_version_history_workspace ON claude_version_history (workspace_id, id);
+
+        -- One row per canary run (manual, scheduled or before an upgrade). results is JSON: one entry per check with the real output,
+        -- redacted and clipped. suite is the check suite's revision when it ran (CLAUDE_CANARY_SUITE), so two runs can be compared or not.
+        CREATE TABLE claude_canary_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          trigger TEXT NOT NULL CHECK (trigger IN ('manual', 'scheduled', 'upgrade')),
+          subject TEXT NOT NULL CHECK (subject IN ('installed', 'candidate', 'target')),
+          version TEXT,
+          reported TEXT,
+          image TEXT,
+          mode TEXT NOT NULL CHECK (mode IN ('image', 'scratch')),
+          status TEXT NOT NULL CHECK (status IN ('running', 'done', 'error', 'unavailable')),
+          note TEXT,
+          started_at TEXT NOT NULL,
+          finished_at TEXT,
+          suite INTEGER NOT NULL,
+          results TEXT NOT NULL DEFAULT '[]',
+          pass INTEGER NOT NULL DEFAULT 0,
+          fail INTEGER NOT NULL DEFAULT 0,
+          skipped INTEGER NOT NULL DEFAULT 0,
+          actor TEXT NOT NULL DEFAULT 'u_owner'
+        ) STRICT;
+        CREATE INDEX claude_canary_runs_subject ON claude_canary_runs (subject, id);
+
+        -- The audit trail of this area: builds, prunes, canary starts, applies, rollbacks, the default pin. detail never holds a secret.
+        CREATE TABLE claude_version_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at TEXT NOT NULL,
+          actor TEXT NOT NULL DEFAULT 'u_owner',
+          action TEXT NOT NULL,
+          workspace_id TEXT,
+          version TEXT,
+          detail TEXT
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 301,
+    name: 'claude code versions: owner and creator columns',
+    up(db) {
+      db.exec(`
+        -- Multi-user, light touch (authorization PRD, adoption rule 4): every new table says whose the row is (owner_id: a user id, u_owner while
+        -- there is one user) and who made it (created_by: a user id). The existing actor columns stay what they were: the audit string of whoever acted
+        -- (user:u_owner, portal-mcp:<token>, system:claude-canary). Migration 300 had already run on a scratch database, so this is a second migration.
+        ALTER TABLE claude_version_history ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'u_owner';
+        ALTER TABLE claude_version_history ADD COLUMN created_by TEXT NOT NULL DEFAULT 'u_owner';
+        ALTER TABLE claude_canary_runs ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'u_owner';
+        ALTER TABLE claude_canary_runs ADD COLUMN created_by TEXT NOT NULL DEFAULT 'u_owner';
+        ALTER TABLE claude_version_events ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'u_owner';
+      `);
+    },
+  },
+  {
+    version: 130,
+    name: 'connect: targets, nodes, enrollments',
+    up(db) {
+      db.exec(`
+        -- Connect (docs/prd/targets-connect.md §14). The registry holds hashes and public keys only: nothing here is a secret, so nothing is
+        -- added to ENCRYPTED_COLUMNS. Targets are platform-owned (admins manage them; who may place a workspace on one is a right granted later):
+        -- owner_id and created_by name a user id (u_owner while there is one user).
+        CREATE TABLE connect_targets (
+          id TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('docker', 'swarm', 'kubernetes', 'container', 'host')),
+          state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'active')),
+          portal_url TEXT NOT NULL,
+          settings TEXT NOT NULL DEFAULT '{}',
+          -- The last list() of its workspaces, for the unreachable view (JSON Workspace[]).
+          snapshot TEXT,
+          snapshot_at TEXT,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_at TEXT NOT NULL,
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        CREATE UNIQUE INDEX connect_targets_label ON connect_targets (label COLLATE NOCASE);
+
+        CREATE TABLE connect_nodes (
+          id TEXT PRIMARY KEY,
+          target_id TEXT NOT NULL REFERENCES connect_targets (id) ON DELETE CASCADE,
+          -- The enrollment (token) it came from, so enroll/status can follow it; the row may go before the node does.
+          enrollment_id TEXT,
+          name TEXT NOT NULL,
+          -- Ed25519, the raw 32 bytes, base64url; the private half never leaves the agent.
+          public_key TEXT NOT NULL,
+          key_fingerprint TEXT NOT NULL,
+          prev_public_key TEXT,
+          rotated_at TEXT,
+          drained INTEGER NOT NULL DEFAULT 0,
+          -- The last hello and status summary. Agent text: cleaned, clipped and redacted before it is stored.
+          info TEXT NOT NULL DEFAULT '{}',
+          agent_version TEXT,
+          agent_build TEXT,
+          protocol INTEGER,
+          os TEXT,
+          arch TEXT,
+          first_seen_at TEXT NOT NULL,
+          last_seen_at TEXT,
+          last_ip TEXT,
+          revoked_at TEXT,
+          revoked_reason TEXT,
+          created_at TEXT NOT NULL,
+          created_by TEXT NOT NULL DEFAULT 'u_owner'
+        ) STRICT;
+        CREATE UNIQUE INDEX connect_nodes_name ON connect_nodes (target_id, name COLLATE NOCASE) WHERE revoked_at IS NULL;
+        CREATE INDEX connect_nodes_target ON connect_nodes (target_id);
+        CREATE INDEX connect_nodes_enrollment ON connect_nodes (enrollment_id);
+
+        CREATE TABLE connect_enrollments (
+          id TEXT PRIMARY KEY,
+          target_id TEXT NOT NULL REFERENCES connect_targets (id) ON DELETE CASCADE,
+          -- SHA-256 of the token, hex. The token itself is shown once and never stored.
+          token_hash TEXT NOT NULL UNIQUE,
+          last4 TEXT NOT NULL,
+          platform TEXT NOT NULL CHECK (platform IN ('linux', 'macos', 'windows')),
+          -- ConnectInstallOptions (JSON).
+          params TEXT NOT NULL DEFAULT '{}',
+          max_uses INTEGER NOT NULL DEFAULT 1,
+          uses INTEGER NOT NULL DEFAULT 0,
+          expires_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          first_used_at TEXT,
+          last_used_at TEXT,
+          revoked_at TEXT
+        ) STRICT;
+        CREATE INDEX connect_enrollments_target ON connect_enrollments (target_id);
+      `);
+    },
+  },
+  {
+    version: 131,
+    name: 'connect: audit events and settings',
+    up(db) {
+      db.exec(`
+        -- The audit trail (PRD FR60): lifecycle and admin actions, with the client address and never a secret. The actor is the audit string of
+        -- whoever acted (user:<id>, agent:<node id>, system); detail is flat and small by construction (connect/events.ts).
+        CREATE TABLE connect_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at TEXT NOT NULL,
+          type TEXT NOT NULL,
+          target_id TEXT,
+          node_id TEXT,
+          enrollment_id TEXT,
+          actor TEXT NOT NULL,
+          ip TEXT,
+          detail TEXT NOT NULL DEFAULT '{}'
+        ) STRICT;
+        CREATE INDEX connect_events_target ON connect_events (target_id, id);
+
+        -- Keys: public_url, token_ttl_minutes, default_target, hidden_scanned (JSON array of ids), removed_nodes (JSON: nodes of removed targets,
+        -- so an agent that comes back is told "target removed" and not "unknown node").
+        CREATE TABLE connect_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+      `);
+    },
+  },
+  {
+    version: 200,
+    name: 'notifications and the platform audit',
+    up(db) {
+      db.exec(`
+        -- Notifications (docs/prd/web-app-pwa.md §11.8). Per-person tables carry owner_id and created_by (a user id; u_owner while there is one
+        -- user: the authorization seam's adoption rule 4). notify_keys and platform_audit are platform-wide.
+        -- A destination: a Web Push device, a webhook, a Discord or a Slack channel. config is SEALED (a push endpoint and its two keys, or a
+        -- channel URL and signing secret): ENCRYPTED_COLUMNS lists it. hint is a host, safe to show. endpoint_hash (SHA-256 of a push endpoint)
+        -- finds the same browser registering again: a push endpoint belongs to one user at a time.
+        CREATE TABLE notify_destinations (
+          id TEXT PRIMARY KEY,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          type TEXT NOT NULL CHECK (type IN ('push', 'webhook', 'discord', 'slack')),
+          name TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          kinds TEXT NOT NULL DEFAULT '[]',
+          quiet TEXT NOT NULL,
+          include_shared INTEGER NOT NULL DEFAULT 0,
+          include_detail INTEGER NOT NULL DEFAULT 0,
+          allow_private INTEGER NOT NULL DEFAULT 0,
+          signed INTEGER NOT NULL DEFAULT 0,
+          tz TEXT NOT NULL DEFAULT 'UTC',
+          hint TEXT,
+          unrecognised INTEGER NOT NULL DEFAULT 0,
+          endpoint_hash TEXT,
+          state TEXT NOT NULL DEFAULT 'ok' CHECK (state IN ('ok', 'failing', 'disabled')),
+          failures INTEGER NOT NULL DEFAULT 0,
+          last_ok_at TEXT,
+          last_error_at TEXT,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          config TEXT
+        ) STRICT;
+        CREATE INDEX notify_destinations_owner ON notify_destinations (owner_id);
+        CREATE UNIQUE INDEX notify_destinations_endpoint ON notify_destinations (endpoint_hash) WHERE endpoint_hash IS NOT NULL;
+
+        -- Platform-wide: id 'vapid' (the P-256 private key, PKCS#8, sealed; public_key in clear) and 'topic' (32 random bytes, sealed).
+        -- value is NULL after \`portal forget-secrets\`: new keys are made on next use (every browser subscribes again).
+        CREATE TABLE notify_keys (
+          id TEXT PRIMARY KEY,
+          value TEXT,
+          public_key TEXT,
+          created_at TEXT NOT NULL
+        ) STRICT;
+
+        -- Each person's answer switches (§11.7): Deny on, the three Allow classes off until they turn them on.
+        CREATE TABLE notify_user_prefs (
+          owner_id TEXT PRIMARY KEY,
+          deny INTEGER NOT NULL DEFAULT 1,
+          allow_read INTEGER NOT NULL DEFAULT 0,
+          allow_edit INTEGER NOT NULL DEFAULT 0,
+          allow_command INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+
+        -- The Inbox, 30 days: what a destination without detail would have got (fixed templates over names and numbers).
+        CREATE TABLE notify_history (
+          id TEXT PRIMARY KEY,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          event_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          at TEXT NOT NULL,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          path TEXT,
+          subject_type TEXT NOT NULL,
+          subject_id TEXT NOT NULL,
+          workspace_id TEXT,
+          tag TEXT NOT NULL,
+          read_at TEXT,
+          resolved_at TEXT,
+          resolution TEXT
+        ) STRICT;
+        CREATE INDEX notify_history_owner ON notify_history (owner_id, at);
+        CREATE INDEX notify_history_tag ON notify_history (tag);
+
+        -- The delivery log, 30 days: a status and a fixed code (NotifyError or NotifySuppression), never a URL, a path or a provider's reply.
+        -- owner_id is copied from the destination, so a user reads only their own.
+        CREATE TABLE notify_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          at TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          destination_id TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('sent', 'failed', 'suppressed', 'held')),
+          code TEXT,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          http_status INTEGER
+        ) STRICT;
+        CREATE INDEX notify_log_owner ON notify_log (owner_id, id);
+
+        -- What quiet hours kept back, per destination, until the one summary at the end of the window.
+        CREATE TABLE notify_held (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          destination_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          tag TEXT NOT NULL,
+          at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX notify_held_destination ON notify_held (destination_id);
+
+        -- Single-use answer tokens (§11.7): only the SHA-256 of the token is kept, bound to its user, destination, event, session, request,
+        -- the decisions offered, the tool class and what the request showed (detail_hash). 10 minutes; at most 200 pending.
+        CREATE TABLE notify_action_tokens (
+          hash TEXT PRIMARY KEY,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          destination_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          request_id TEXT NOT NULL,
+          decisions TEXT NOT NULL,
+          tool_class TEXT NOT NULL,
+          tool_name TEXT,
+          detail_hash TEXT,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          used_at TEXT
+        ) STRICT;
+        CREATE INDEX notify_action_tokens_destination ON notify_action_tokens (destination_id);
+
+        -- "Notify when done", each user's own, per session.
+        CREATE TABLE notify_session_flags (
+          session_id TEXT NOT NULL,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          done INTEGER NOT NULL DEFAULT 1,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (session_id, owner_id)
+        ) STRICT;
+
+        -- The platform audit (platform-wide): every automatic act of the platform track. user_id: the person a row concerns (null: the
+        -- system). detail holds names, ids, numbers and fixed codes, never a secret, a URL or message text. 90 days.
+        CREATE TABLE platform_audit (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at TEXT NOT NULL,
+          severity TEXT NOT NULL DEFAULT 'info' CHECK (severity IN ('info', 'medium', 'high')),
+          kind TEXT NOT NULL,
+          actor TEXT NOT NULL,
+          user_id TEXT,
+          subject TEXT,
+          detail TEXT NOT NULL DEFAULT '{}'
+        ) STRICT;
+        CREATE INDEX platform_audit_user ON platform_audit (user_id, id);
+        CREATE INDEX platform_audit_kind ON platform_audit (kind, id);
+      `);
+    },
+  },
+  {
+    version: 380,
+    name: 'chat side questions (btw)',
+    up(db) {
+      db.exec(`
+        -- Chat sessions PRD §20: one row per side question that started a run. Private to the person who asked (user_id; created_by is the
+        -- same until a question can be asked on someone's behalf); the answer stays so Pin can use the portal's copy and a reload can show the
+        -- open card. Goes with its session. No sealed values; question and answer are redacted before they are stored.
+        CREATE TABLE chat_btw (
+          id TEXT NOT NULL,
+          session_id TEXT NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          actor TEXT NOT NULL DEFAULT 'user:u_owner',
+          workspace_id TEXT NOT NULL,
+          claude_id TEXT NOT NULL DEFAULT '',
+          question TEXT NOT NULL,
+          answer TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL CHECK (status IN ('running', 'answered', 'failed', 'cancelled')),
+          reason TEXT,
+          note TEXT,
+          retry_after_ms INTEGER,
+          model TEXT,
+          ctx_messages INTEGER,
+          ctx_truncated INTEGER,
+          ctx_last_seq INTEGER,
+          ctx_chars INTEGER,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+          cost_usd REAL,
+          basis TEXT,
+          pinned_seq INTEGER,
+          closed INTEGER NOT NULL DEFAULT 0,
+          asked_at TEXT NOT NULL,
+          asked_ms INTEGER NOT NULL,
+          settled_at TEXT,
+          PRIMARY KEY (user_id, session_id, id)
+        ) STRICT;
+        CREATE INDEX chat_btw_session ON chat_btw (session_id, asked_ms);
+
+        -- A side question's usage is a row of its own among the turns' (same columns, so every total counts it): kind says which, ref is
+        -- the btw's id. Additive: existing rows and queries are 'turn' and unchanged.
+        ALTER TABLE chat_usage ADD COLUMN kind TEXT NOT NULL DEFAULT 'turn';
+        ALTER TABLE chat_usage ADD COLUMN ref TEXT;
+      `);
+    },
+  },
+  {
+    version: 210,
+    name: 'triggers and their runs',
+    up(db) {
+      db.exec(`
+        -- Triggers (docs/prd/triggers.md §13). Per-person: owner_id and created_by (a user id; u_owner while there is one user). secret
+        -- (the signing secret) and path_token (the receiver path's token) are SEALED: ENCRYPTED_COLUMNS lists both. token_hash, the
+        -- SHA-256 of the path token, is how the public receiver finds a trigger, so the lookup's timing says nothing about the token.
+        -- spec is the source's own part (cron, webhook filters or CI filters); action, limits and approval are JSON. paused is a code
+        -- ('owner_denied', 'owner_disabled') when the portal paused it, else NULL. runs counts runs so a session is "#<n>".
+        CREATE TABLE triggers (
+          id TEXT PRIMARY KEY,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          name TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          source TEXT NOT NULL CHECK (source IN ('cron', 'webhook', 'ci_failed')),
+          spec TEXT NOT NULL,
+          action TEXT NOT NULL,
+          limits TEXT NOT NULL,
+          approval TEXT NOT NULL,
+          secret TEXT,
+          secret_mode TEXT NOT NULL DEFAULT 'generated' CHECK (secret_mode IN ('generated', 'provided')),
+          path_token TEXT,
+          token_hash TEXT,
+          paused TEXT,
+          runs INTEGER NOT NULL DEFAULT 0,
+          next_run_at TEXT,
+          last_run_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          deleted_at TEXT
+        ) STRICT;
+        CREATE INDEX triggers_owner ON triggers (owner_id);
+        CREATE UNIQUE INDEX triggers_token ON triggers (token_hash) WHERE token_hash IS NOT NULL;
+        CREATE INDEX triggers_next ON triggers (next_run_at) WHERE next_run_at IS NOT NULL;
+
+        -- One row per run: what the event's validated facts were (never the payload; event is at most 4 KB), how it ended and why.
+        -- Kept 90 days, also after its trigger is deleted.
+        CREATE TABLE trigger_runs (
+          id TEXT PRIMARY KEY,
+          trigger_id TEXT NOT NULL,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          number INTEGER NOT NULL DEFAULT 0,
+          at TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('pending_approval', 'starting', 'running', 'succeeded', 'failed', 'skipped', 'denied', 'expired', 'stopped')),
+          reason TEXT,
+          event TEXT NOT NULL,
+          delivery_id TEXT,
+          session_id TEXT,
+          ticket_id TEXT,
+          cost_usd REAL NOT NULL DEFAULT 0,
+          started_at TEXT,
+          ended_at TEXT,
+          expires_at TEXT,
+          approved_by TEXT,
+          approved_at TEXT
+        ) STRICT;
+        CREATE INDEX trigger_runs_trigger ON trigger_runs (trigger_id, at);
+        CREATE INDEX trigger_runs_owner ON trigger_runs (owner_id, at);
+        CREATE INDEX trigger_runs_state ON trigger_runs (state);
+        CREATE INDEX trigger_runs_session ON trigger_runs (session_id) WHERE session_id IS NOT NULL;
+
+        -- Platform-wide (no personal data): a delivery id seen in the last 7 days is a duplicate.
+        CREATE TABLE trigger_deliveries (
+          trigger_id TEXT NOT NULL,
+          delivery_id TEXT NOT NULL,
+          at TEXT NOT NULL,
+          PRIMARY KEY (trigger_id, delivery_id)
+        ) STRICT;
+
+        -- What is counted, not stored (FR7): deliveries that did not pass the filters, duplicates, and skips beyond 120 an hour.
+        CREATE TABLE trigger_counts (
+          trigger_id TEXT NOT NULL,
+          day TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          n INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (trigger_id, day, kind)
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 220,
+    name: 'auto transfer',
+    up(db) {
+      db.exec(`
+        -- Auto transfer (docs/prd/auto-transfer.md §10). Per-person: owner_id and created_by (a user id; u_owner while there is one user).
+        -- No secret and no message text is stored: names, ids, numbers, fixed codes. A user's own choices: each NULL follows the platform.
+        CREATE TABLE autotransfer_user (
+          owner_id TEXT PRIMARY KEY DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          mode TEXT CHECK (mode IN ('off', 'ask', 'auto')),
+          threshold_pct INTEGER,
+          use_projection INTEGER,
+          same_model_only INTEGER,
+          allow_api_key INTEGER,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+
+        -- A Claude's own threshold and its ordered destinations (a JSON list of Claude ids: an allowlist when not empty), per person.
+        CREATE TABLE autotransfer_claudes (
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          claude_id TEXT NOT NULL,
+          threshold_pct INTEGER,
+          destinations TEXT NOT NULL DEFAULT '[]',
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (owner_id, claude_id)
+        ) STRICT;
+
+        -- A chat's state: its own mode (NULL follows its owner), the pause, the deferral, the last warning's period and the last refusal
+        -- recorded (each is recorded once per period). owner_id is the chat's owner when the row was made.
+        CREATE TABLE autotransfer_sessions (
+          session_id TEXT PRIMARY KEY,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          mode TEXT CHECK (mode IN ('off', 'ask', 'auto')),
+          last_claude_id TEXT,
+          paused_until TEXT,
+          defer_since TEXT,
+          last_eval_at TEXT,
+          warned_period TEXT,
+          refused_key TEXT
+        ) STRICT;
+
+        -- The card of ask mode: one open per chat.
+        CREATE TABLE autotransfer_suggestions (
+          id TEXT PRIMARY KEY,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          session_id TEXT NOT NULL,
+          at TEXT NOT NULL,
+          reason TEXT NOT NULL CHECK (reason IN ('low', 'exhausted', 'projection')),
+          from_claude TEXT NOT NULL,
+          to_claude TEXT NOT NULL,
+          alternatives TEXT NOT NULL DEFAULT '[]',
+          facts TEXT NOT NULL,
+          handoff TEXT NOT NULL CHECK (handoff IN ('ask', 'skip')),
+          dropped TEXT NOT NULL,
+          why TEXT,
+          state TEXT NOT NULL CHECK (state IN ('open', 'moved', 'later', 'always', 'expired', 'superseded')),
+          resolved_at TEXT
+        ) STRICT;
+        CREATE INDEX autotransfer_suggestions_session ON autotransfer_suggestions (session_id, state);
+        CREATE INDEX autotransfer_suggestions_owner ON autotransfer_suggestions (owner_id, at);
+
+        -- The trail. Kept 90 days. from_claude / to_claude are JSON {id, name} (a Claude's name as it was then).
+        CREATE TABLE autotransfer_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at TEXT NOT NULL,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          session_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('suggested', 'moved', 'declined', 'deferred', 'warned', 'refused', 'failed', 'undone', 'mode_set')),
+          mode TEXT NOT NULL,
+          reason TEXT,
+          from_claude TEXT,
+          to_claude TEXT,
+          facts TEXT,
+          handoff TEXT,
+          handoff_id TEXT,
+          code TEXT,
+          actor TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX autotransfer_events_session ON autotransfer_events (session_id, at);
+        CREATE INDEX autotransfer_events_owner ON autotransfer_events (owner_id, at);
+      `);
+    },
+  },
 ];
 
 /**
@@ -1639,4 +2460,8 @@ export const ENCRYPTED_COLUMNS: EncryptedColumn[] = [
   { table: 'accounts', column: 'secret', idColumn: 'id' },
   { table: 'secret_values', column: 'ciphertext', idColumn: 'id' },
   { table: 'skill_sources', column: 'token', idColumn: 'id' },
+  { table: 'notify_destinations', column: 'config', idColumn: 'id' },
+  { table: 'notify_keys', column: 'value', idColumn: 'id' },
+  { table: 'triggers', column: 'secret', idColumn: 'id' },
+  { table: 'triggers', column: 'path_token', idColumn: 'id' },
 ];
