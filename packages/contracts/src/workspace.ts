@@ -33,7 +33,16 @@ export interface Workspace {
    * reused and never derived from the name. Absent only from a runtime's own list before the manager adds it.
    */
   stableId?: string;
+  /**
+   * The name it was made with: the key in `id` and in the runtime's labels, which never changes (T-42). What people see is `label`; show it
+   * with `workspaceDisplayName`.
+   */
   name: string;
+  /**
+   * The name shown (T-42 slice 2): a display label people can change (1 to 40 characters, one line, plain text, unique per target). A rename
+   * changes this only: never `stableId`, `id`, `name` or `runtimeName`. The manager sets it on every workspace it lists (`name` until renamed).
+   */
+  label?: string;
   /**
    * What the runtime calls it (T-42): the Docker container, the Kubernetes Deployment (its home volume is `<runtimeName>-home`), the single's
    * workspace on a Connect or This machine target. STORED on the record, never recomputed from the name; `ws-<12 hex>` for a new workspace.
@@ -99,6 +108,45 @@ export function workspaceNameProblem(name: string): string | null {
 
 export const workspaceId = (target: string, name: string) => `${target}/${name}`;
 
+/** What a workspace is called where people see it: its label, else the name it was made with (T-42). */
+export const workspaceDisplayName = (w: Pick<Workspace, 'name' | 'label'>): string => w.label || w.name;
+
+export const WORKSPACE_LABEL_MAX = 40;
+
+/** Characters a label never holds: control characters, line and paragraph separators, and bidirectional overrides that make text read backwards. */
+const LABEL_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/;
+
+/** A label as it is kept: Unicode-normalized (NFC), spaces at either end trimmed. */
+export const normalizeWorkspaceLabel = (label: string): string => label.normalize('NFC').trim();
+
+/**
+ * Why a workspace label can't be used, or null when it can (T-42 slice 2). A label is plain text shown as text: 1 to 40 characters, one line,
+ * no control or direction-override characters, and no `/` (it separates a target from a name in `<target>/<label>`, which resolves too).
+ * Uniqueness on the target is the server's check.
+ */
+export function workspaceLabelProblem(label: string): string | null {
+  const clean = normalizeWorkspaceLabel(label);
+  if (!clean) return 'Give it a name.';
+  if ([...clean].length > WORKSPACE_LABEL_MAX) return `Use at most ${WORKSPACE_LABEL_MAX} characters.`;
+  if (LABEL_FORBIDDEN.test(clean)) return 'One line of plain text: no line breaks or control characters.';
+  if (clean.includes('/')) return 'No slashes: a slash separates the target from the name.';
+  return null;
+}
+
+/** `PATCH WORKSPACE_API.one(id)`: rename a workspace (T-42 slice 2). Only the label changes. */
+export interface RenameWorkspaceRequest {
+  label: string;
+}
+
+/** What a rename answers: both forms of the id, the name it was made with, the label before and now. */
+export interface RenameWorkspaceResult {
+  id: string;
+  stableId: string;
+  name: string;
+  label: string;
+  previous: string;
+}
+
 /** A workspace's stable id (T-42): `ws_` and 12 lowercase hex digits. */
 export const STABLE_WORKSPACE_ID = /^ws_[0-9a-f]{12}$/;
 export const isStableWorkspaceId = (value: unknown): value is string => typeof value === 'string' && STABLE_WORKSPACE_ID.test(value);
@@ -111,9 +159,11 @@ export const WORKSPACE_API = {
   targets: '/api/workspaces/targets',
   list: '/api/workspaces',
   usage: '/api/workspaces/usage',
+  /** GET: `{ [<target>/<name>]: label }` for every workspace that was renamed (T-42), from the portal's records only: no runtime is asked. */
+  labels: '/api/workspaces/labels',
   /**
    * `/api/workspaces/<target>/<name>` (+ `/start`, `/stop`, `/shell`). GET on it, or on `/api/workspaces/<stableId>`, answers the one
-   * workspace (T-42): both forms resolve through the manager to the same workspace.
+   * workspace (T-42): both forms resolve through the manager to the same workspace. PATCH `RenameWorkspaceRequest` renames it (its label only).
    */
   one: (id: string) => `/api/workspaces/${id}`,
   /** Claude Code's own sign-in in the workspace: POST starts it, DELETE cancels it. */

@@ -1,4 +1,4 @@
-import { LIVE_PATH, type LiveMessage, type LivePresence, type LiveTopic } from '@portal/contracts';
+import { LIVE_PATH, rememberWorkspaceLabels, type LiveMessage, type LivePresence, type LiveTopic } from '@portal/contracts';
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useAuth } from './auth';
 
@@ -97,6 +97,8 @@ class LiveClient {
   }
 
   #dispatch(msg: LiveMessage) {
+    // A pushed workspace list teaches the labels too (T-42): a rename shows wherever the workspace is named.
+    if (msg.type === 'workspaces') rememberWorkspaceLabels(msg.data);
     for (const h of this.#handlers.get(msg.type) ?? []) h(msg);
   }
 

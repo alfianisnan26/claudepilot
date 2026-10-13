@@ -1,5 +1,5 @@
 import { Badge, Button, Dialog, Spinner, useToast } from '@isnanme/ui';
-import type { AccountPool, Workspace, WorkspaceDeliveryState, WorkspacePoolAssignment, WorkspacePools } from '@portal/contracts';
+import { workspaceDisplayName, type AccountPool, type Workspace, type WorkspaceDeliveryState, type WorkspacePoolAssignment, type WorkspacePools } from '@portal/contracts';
 import { KeySquare, type LucideIcon } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { DELIVERY_LABEL } from '@/features/pools/labels';
@@ -67,7 +67,7 @@ export function ConfigurationSheet({
         // A dialog opened from here closes on its own first.
         onClose={() => !changingAccount && !picking && onClose()}
         title="Configuration"
-        description={workspace ? `What the portal delivers into ${workspace.name}.` : undefined}
+        description={workspace ? `What the portal delivers into ${workspaceDisplayName(workspace)}.` : undefined}
       >
         {workspace && (
           <div className="flex flex-col gap-4">

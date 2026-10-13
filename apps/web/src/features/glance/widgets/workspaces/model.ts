@@ -1,4 +1,4 @@
-import type { Workspace, WorkspaceStatus, WorkspaceUsage } from '@portal/contracts';
+import { workspaceDisplayName, type Workspace, type WorkspaceStatus, type WorkspaceUsage } from '@portal/contracts';
 import { usageFractions } from '../../../workspaces/usage';
 import type { GlanceCompact, GlanceLevel } from '../../types';
 import { chipCount, listWords } from '../shared/format';
@@ -54,7 +54,7 @@ export function workspacesView(list: readonly Workspace[], usage: readonly Works
     const pinned = w.claude?.pinned ?? null;
     return {
       id: w.id,
-      name: w.name,
+      name: workspaceDisplayName(w),
       target: w.target,
       status: w.status,
       bucket,

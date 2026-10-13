@@ -37,15 +37,16 @@ export function labelProse<T>(value: T, source: string, depth = 0): unknown {
 }
 
 /**
- * A workspace by its stable id (`ws_…`) or its `<target>/<name>` alias, both through the workspaces' one resolver (T-42), or by its exact
- * name when only one target has it.
+ * A workspace by its stable id (`ws_…`), its `<target>/<name>` alias or `<target>/<label>`, through the workspaces' one resolver (T-42;
+ * `resolve` is the manager's, which also knows the labels a workspace had before a rename), or by its exact name or label when only one
+ * workspace has it.
  */
-export function resolveWorkspace(all: Workspace[], idOrName: string): Workspace {
+export function resolveWorkspace(all: Workspace[], idOrName: string, resolve?: (ref: string) => { legacyId: string } | null): Workspace {
   const wanted = idOrName.trim();
-  const byId = findWorkspace(all, wanted);
+  const byId = findWorkspace(all, wanted, resolve);
   if (byId) return byId;
   if (!wanted.includes('/')) {
-    const named = all.filter((w) => w.name === wanted);
+    const named = all.filter((w) => w.name === wanted || w.label === wanted);
     if (named.length === 1) return named[0]!;
     if (named.length > 1)
       throw new PortalToolError('AMBIGUOUS', `${named.length} workspaces are named “${wanted}”. Use the full id.`, { matches: named.map((w) => w.id) });
@@ -71,6 +72,8 @@ export function workspaceBrief(w: Workspace, ctx: PortalToolContext) {
     // The workspace's identity (T-42): `id` above is its `<target>/<name>` alias, which keeps working; both resolve.
     stable_id: w.stableId ?? null,
     name: w.name,
+    // What people call it (T-42 slice 2): its label, which a rename changes; `name` is the one it was made with and stays.
+    label: labelProse(w.label ?? w.name, 'workspace_label'),
     target: w.target,
     runtime_name: w.runtimeName ?? null,
     status: w.status,

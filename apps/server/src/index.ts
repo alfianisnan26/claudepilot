@@ -286,6 +286,8 @@ const claudeVersions = new ClaudeVersions({
   imageFixed: config.workspaces.dockerImageFixed,
 });
 workspaces.hooks.defaultClaudeVersion = claudeVersions.defaultForNew;
+// A workspace rename (T-42 slice 2) leaves a row in the platform audit (made further down; only called later).
+workspaces.hooks.audit = (e) => platform.audit.record(e);
 // Live pages (`/api/live`): one socket per tab, fed by every place that changes what they show.
 const view = workspaceView(pools, reconciler, claudeVersions.brief);
 const live = new LiveHub(

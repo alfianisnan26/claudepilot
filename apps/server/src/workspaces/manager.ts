@@ -1,19 +1,25 @@
 import { AppError, isAppError } from '@isnanme/core';
 import {
   isExactClaudeVersion,
+  normalizeWorkspaceLabel,
+  workspaceDisplayName,
   workspaceId,
+  workspaceLabelProblem,
   workspaceNameProblem,
+  type RenameWorkspaceResult,
   type CreateWorkspaceRequest,
   type Workspace,
   type WorkspaceTarget,
   type WorkspaceUsage,
 } from '@portal/contracts';
 import { workspaceRef, type Actor } from '@portal/contracts';
-import { ownerActor, requireCan } from '../authz/seam.js';
+import { actorString, actorUserId, ownerActor, requireCan } from '../authz/seam.js';
 import type { JsonFile } from '../jsonFile.js';
 import { PLAIN_NAME } from '../names.js';
 import { findWorkspace, WorkspaceIdentities, type WorkspaceIdentity } from './identity.js';
 import { isTargetUnreachable, type Runtime, type ShellSession } from './runtime.js';
+
+const notFound = () => new AppError('NOT_FOUND', 'Not found.');
 
 /** A tunnelled runtime follows its links (and may hold a loopback listener): it lets go when it is replaced or removed. */
 const dispose = (r: Runtime) => (r as { dispose?: () => void }).dispose?.();
@@ -76,6 +82,8 @@ export class Workspaces {
     beforeCreate?: (target: string, node?: string) => void;
     /** Resolves once the enrolled targets have had their first connection, or after `ms` (`connect.settled`); read by `resume()`. */
     settled?: (ms: number) => Promise<void>;
+    /** Writes an audit row (the platform audit): a rename (T-42 slice 2). Never throws. */
+    audit?: (e: { kind: string; actor: string; userId: string | null; actorLabel?: string | null; subject?: string | null; detail?: Record<string, unknown> }) => void;
   } = {};
   /** Watchers of the runtimes added while running (static ones are wired by index.ts), by target id. */
   readonly #watching = new Map<string, () => void>();
@@ -283,7 +291,7 @@ export class Workspaces {
   /** A listed workspace with its identity: adopted when the portal has no record of it, the stored runtime name over the reported one. */
   #identified(w: Workspace): Workspace {
     const known = this.identities.adopt(w.target, w.name, w.runtimeName);
-    return { ...w, stableId: known.id, ...(known.runtimeName ? { runtimeName: known.runtimeName } : {}) };
+    return { ...w, stableId: known.id, label: known.label ?? w.name, ...(known.runtimeName ? { runtimeName: known.runtimeName } : {}) };
   }
 
   /**
@@ -301,8 +309,15 @@ export class Workspaces {
    * may not view are the same 404.
    */
   async get(ref: string, actor: Actor = ownerActor()): Promise<Workspace> {
-    const missing = () => new AppError('NOT_FOUND', 'Not found.');
-    if (typeof ref !== 'string') throw missing();
+    const { known, all } = await this.#authorized(ref, actor, 'view');
+    const found = findWorkspace(all ?? (await this.list()), known.legacyId);
+    if (!found) throw notFound();
+    return found;
+  }
+
+  /** The identity behind `ref` (any form), after the seam allowed `verb` on the workspace; unknown and not allowed-to-see are the same 404. */
+  async #authorized(ref: string, actor: Actor, verb: 'view' | 'operate'): Promise<{ known: WorkspaceIdentity; all: Workspace[] | null }> {
+    if (typeof ref !== 'string') throw notFound();
     let known = this.resolve(ref);
     let all: Workspace[] | null = null;
     if (!known) {
@@ -310,16 +325,56 @@ export class Workspaces {
       all = await this.list();
       known = this.resolve(ref);
     }
-    if (!known) throw missing();
+    if (!known) throw notFound();
     try {
-      requireCan(actor, 'view', workspaceRef(known.legacyId));
+      requireCan(actor, verb, workspaceRef(known.legacyId));
     } catch (e) {
-      if (isAppError(e) && e.code === 'NOT_FOUND') throw missing();
+      if (isAppError(e) && e.code === 'NOT_FOUND') throw notFound();
       throw e;
     }
-    const found = findWorkspace(all ?? (await this.list()), known.legacyId);
-    if (!found) throw missing();
-    return found;
+    return { known, all };
+  }
+
+  /**
+   * Checks a rename without making it (T-42 slice 2): who may (`operate` on the workspace, through the seam), the label's rules, and that no
+   * other workspace on the target answers to it (its name, label, or a label it had). Throws the refusal; answers the label before and after.
+   */
+  async planRename(ref: string, label: unknown, actor: Actor = ownerActor()): Promise<{ known: WorkspaceIdentity; from: string; to: string; unchanged: boolean }> {
+    const { known } = await this.#authorized(ref, actor, 'operate');
+    const to = typeof label === 'string' ? normalizeWorkspaceLabel(label) : '';
+    const problem = workspaceLabelProblem(to);
+    if (problem) throw new AppError('VALIDATION_FAILED', problem, { details: { label: problem } });
+    const from = known.label ?? known.name;
+    const other = this.identities.holder(known.target, to);
+    if (other && other.id !== known.id) {
+      const where = this.#runtimes.get(known.target)?.target.label ?? known.target;
+      const msg = `“${to}” is already a workspace on ${where}. Pick another name.`;
+      throw new AppError('CONFLICT', msg, { details: { label: msg } });
+    }
+    return { known, from, to, unchanged: to === from };
+  }
+
+  /**
+   * Renames a workspace (T-42 slice 2): its LABEL only. Never its stable id, its `<target>/<name>` key, its runtime name or any stored
+   * reference: nothing running is touched. Every form it was called by keeps resolving, and the new label too. Audited. `via`: how a Portal
+   * MCP token is named in the audit row (its actor string and label).
+   */
+  async rename(ref: string, label: unknown, actor: Actor = ownerActor(), via: { actor?: string; actorLabel?: string } = {}): Promise<RenameWorkspaceResult> {
+    const { known, from, to, unchanged } = await this.planRename(ref, label, actor);
+    if (!unchanged) {
+      this.identities.relabel(known.id, to);
+      this.hooks.audit?.({
+        kind: 'workspace.rename',
+        actor: via.actor ?? actorString(actor),
+        userId: actorUserId(actor),
+        actorLabel: via.actorLabel ?? null,
+        subject: known.id,
+        detail: { workspace: known.legacyId, from, to },
+      });
+      console.log(`[workspaces] ${known.legacyId} (${known.id}) renamed`);
+      this.hooks.changed?.();
+    }
+    return { id: known.legacyId, stableId: known.id, name: known.name, label: workspaceDisplayName({ name: known.name, label: known.label ?? undefined }), previous: from };
   }
 
   /** `actor`: who asks (the route's `actorOf(c)`); creating on a target needs `operate` on it (multi-user PRD; the single-owner seam allows the owner). */
@@ -360,6 +415,9 @@ export class Workspaces {
     // would stand in for the real workspace (and "remove" on it would delete the real one).
     if ((await runtime.list()).some((w) => w.name === name))
       throw new AppError('CONFLICT', `A workspace named “${name}” already exists on ${target.label}.`);
+    // Nor may it take a name another workspace there answers to: its label, or a label it had (T-42 slice 2).
+    const holder = this.identities.holder(target.id, name);
+    if (holder && holder.legacyId !== id) throw new AppError('CONFLICT', `A workspace named “${name}” already exists on ${target.label}.`);
     // Its identity (T-42): a new stable id, and the runtime name its container or Deployment and volume get (`ws-<12 hex>`, or the form
     // the target's runtime must use), stored and never derived from the name again. A record still holding the name is of a workspace that
     // is gone (the list above has none): it is retired.
@@ -368,6 +426,7 @@ export class Workspaces {
       id,
       stableId: identity.id,
       name,
+      label: name,
       ...(identity.runtimeName ? { runtimeName: identity.runtimeName } : {}),
       target: target.id,
       image: '',

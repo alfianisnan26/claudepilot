@@ -2500,6 +2500,27 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 713,
+    name: 'workspace labels and the aliases a rename leaves',
+    up(db) {
+      // T-42 slice 2 (docs/prd/targets-connect.md §24.3): the name becomes a label people can change. `label` is the name shown, null until a
+      // first rename (the name it was made with). A rename also leaves an alias `<target>/<label>` that resolves to the workspace for as long
+      // as it lives, so every form it was ever called by keeps working; the alias is released (released_at) when the workspace is removed,
+      // never reused while it lives. The key name in `legacy_id` and the runtime name never change.
+      db.exec(`
+        ALTER TABLE workspace_identities ADD COLUMN label TEXT;
+        CREATE TABLE workspace_aliases (
+          alias TEXT NOT NULL,
+          workspace_id TEXT NOT NULL REFERENCES workspace_identities (id),
+          created_at TEXT NOT NULL,
+          released_at TEXT
+        ) STRICT;
+        CREATE UNIQUE INDEX workspace_aliases_live ON workspace_aliases (lower(alias)) WHERE released_at IS NULL;
+        CREATE INDEX workspace_aliases_workspace ON workspace_aliases (workspace_id);
+      `);
+    },
+  },
+  {
     version: 720,
     name: 'notify: ci_waiting (Deploy waits) for every destination that already hears CI failures',
     up(db) {

@@ -1,5 +1,5 @@
 import { FormDialog, Select, SwitchRow, TextField } from '@isnanme/ui';
-import { CHAT_SESSION_TITLE_MAX, CLAUDE_NAME_MAX, type ChatFolderScan, type CreateChatSessionRequest, type Workspace, type WorkspaceClaudeState } from '@portal/contracts';
+import { CHAT_SESSION_TITLE_MAX, CLAUDE_NAME_MAX, workspaceDisplayName, type ChatFolderScan, type CreateChatSessionRequest, type Workspace, type WorkspaceClaudeState } from '@portal/contracts';
 import { GitBranch, ShieldAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -161,7 +161,7 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
       await api.workspaces.start(w.id);
       await reload();
     } catch (e) {
-      setError(errorText(e, `Couldn’t start ${w.name}.`));
+      setError(errorText(e, `Couldn’t start ${workspaceDisplayName(w)}.`));
     }
   };
   const goNext = () => {
@@ -274,7 +274,7 @@ export function NewSessionDialog({ open, onClose }: { open: boolean; onClose: ()
             onChange={setWorkspaceId}
             options={all.map((w) => {
               const why = ineligible(w);
-              return { value: w.id, label: why ? `${w.name} · ${why}` : w.name, disabled: !!why };
+              return { value: w.id, label: why ? `${workspaceDisplayName(w)} · ${why}` : workspaceDisplayName(w), disabled: !!why };
             })}
             placeholder={workspaces === null ? 'Loading…' : 'Pick a workspace'}
           />

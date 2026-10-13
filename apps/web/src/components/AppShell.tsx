@@ -7,6 +7,7 @@ import { BAR_ITEMS, HOME, MORE_ITEMS, NAV, NAV_GROUPS, type NavItem } from '@/ap
 import { GlanceDock } from '@/features/glance/Dock';
 import { NavBadge } from '@/features/notify/NavBadge';
 import { GlanceStrip, useHasStrip } from '@/features/glance/Strip';
+import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { AccountMenu } from './AccountMenu';
 import { BRAND_NAME, Logo, LogoMark } from './Logo';
@@ -24,6 +25,8 @@ export function AppShell() {
   const { pathname } = useLocation();
   // The glance strip takes the phone bar's room, so the logo keeps to its mark while it shows.
   const glance = useHasStrip('header');
+  // The labels of renamed workspaces (T-42), once: every place that only holds a workspace id names it by its label.
+  useEffect(() => void api.workspaces.labels().catch(() => undefined), []);
 
   return (
     <div className={cn('min-h-dvh pb-10 sm:pb-16 sm:pl-20 lg:pl-64 xl:pr-[var(--glance-dock-w,0px)]', showTabBar && 'pb-[calc(var(--tabbar-h)+1.5rem)]')}>
