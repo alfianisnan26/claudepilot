@@ -19,6 +19,7 @@
 //   [[agent <models> <directive> <arg>]]   sub-agents: one Task (Agent) call per comma-separated model (sonnet, opus, haiku, or - for none:
 //                              the call carries no model argument), all in one message so they run side by side; each sub-agent's prompt is
 //                              [[<directive> <arg>]], so `[[agent opus,- slow 8]]` starts two that stream for 8 s, `[[agent sonnet bash ls]]` one that runs ls
+//   [[mcp <tool> <json>]]      a call of the MCP tool whose name ends with `__<tool>` (the browser's `browser_navigate`, say) with that JSON as input
 //   [[steps <n> <seconds> <path>]]   n turns of "Step k." and a Read of <path>, each after a pause: an agent (or a session) that works for a while,
 //                              one stored line at a time (Claude Code doesn't stream a sub-agent's text; its finished blocks arrive one by one)
 //
@@ -208,6 +209,18 @@ function plan(body) {
         },
       }));
       return { text: 'Starting agents.', tools };
+    }
+    case 'mcp': {
+      const [name = '', ...rest] = arg.split(' ');
+      const tool = (body.tools ?? []).map((t) => t?.name).find((n) => n === name || n?.endsWith(`__${name}`));
+      if (!tool) return { text: `No tool named ${name} here.` };
+      let input = {};
+      try {
+        input = JSON.parse(rest.join(' ') || '{}');
+      } catch {
+        return { text: 'That input is not JSON.' };
+      }
+      return { text: `Calling ${tool}.`, tool, input };
     }
     case 'steps': {
       const [, seconds = '2', path = '/etc/hostname'] = arg.split(' ');

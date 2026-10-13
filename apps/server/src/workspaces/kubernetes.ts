@@ -13,15 +13,37 @@ import {
 } from '@kubernetes/client-node';
 import { plainName } from '../names.js';
 import { requestsFor, type RequestOptions } from './requests.js';
+import { bytes, checkFit, cores, needOf, unchecked, type FitPod } from './fit.js';
+import { cpuQuantity, fitView, memoryQuantity, needOfValues, valuesOf } from './resources.js';
 import { kubernetesDelivery } from './kubernetesDelivery.js';
 import { homeVolumeOf, legacyRuntimeName } from './identity.js';
-import { HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type RuntimeNames, type ShellSession } from './runtime.js';
+import { HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type ResourceAccess, type Runtime, type RuntimeNames, type ShellSession } from './runtime.js';
 
 const LIMIT = { cpus: 'claudepilot.cpus', memoryMb: 'claudepilot.memory-mb' } as const;
 const CONTAINER = 'workspace';
 const SEEDED = '.claudepilot-seeded';
 
 const selector = `${LABEL.managed}=true`;
+
+/**
+ * The `seed-home` init container's script: a new PVC is empty, so the image's home is copied in once, like Docker does for a fresh volume.
+ * `dirs` (relative to home) are created with mode 0700 at every start, outside the seeded check: the browser's profile and `~/Downloads`,
+ * which the browser container mounts by `subPath` (the kubelet would make a missing one root-owned), browser PRD §20 A2.
+ */
+export function seedHomeScript(dirs: readonly string[] = []): string {
+  const seed = `[ -e /seed/${SEEDED} ] || { cp -a --no-preserve=all ${HOME}/. /seed/ && touch /seed/${SEEDED}; }`;
+  if (!dirs.length) return seed;
+  const paths = dirs.map((d) => `"/seed/${d}"`).join(' ');
+  return `${seed} && mkdir -p ${paths} && chmod 0700 ${paths}`;
+}
+
+/** What the browser pool needs to put its container in a workspace's pod (browser PRD §10.2). */
+export interface KubeBrowserAccess {
+  kubeConfig: KubeConfig;
+  namespace: string;
+  /** The Deployment of a workspace, from its stored runtime name (T-42). */
+  objectName(name: string): string;
+}
 
 const codeOf = (e: unknown) => (e as { code?: number }).code;
 const ignore = (...codes: number[]) => (e: unknown) => {
@@ -30,20 +52,6 @@ const ignore = (...codes: number[]) => (e: unknown) => {
 
 /** Waiting reasons that won't fix themselves. */
 const STUCK = new Set(['ErrImagePull', 'ImagePullBackOff', 'InvalidImageName', 'CrashLoopBackOff', 'CreateContainerConfigError']);
-
-/** Kubernetes quantities: CPU in cores ("250m", "1", "123456n"), memory in bytes ("512Mi"). */
-function cores(q: string): number {
-  const units: Record<string, number> = { n: 1e-9, u: 1e-6, m: 1e-3 };
-  const unit = units[q.slice(-1)];
-  return unit ? Number(q.slice(0, -1)) * unit : Number(q);
-}
-function bytes(q: string): number {
-  const m = q.match(/^(\d+(?:\.\d+)?)([KMGTE]i?|k)?$/);
-  if (!m) return Number(q) || 0;
-  const pow: Record<string, number> = { K: 1, k: 1, M: 2, G: 3, T: 4, E: 6 };
-  const base = m[2]?.endsWith('i') ? 1024 : 1000;
-  return Number(m[1]) * base ** (m[2] ? pow[m[2][0]!]! : 0);
-}
 
 export interface KubernetesOptions {
   namespace: string;
@@ -55,6 +63,12 @@ export interface KubernetesOptions {
   nodeSelector?: Record<string, string>;
   /** What a pod asks the scheduler to reserve, at most its limits (`PORTAL_K8S_CPU_REQUEST`, `PORTAL_K8S_MEMORY_REQUEST`); unset: the limits. */
   requests?: RequestOptions;
+  /**
+   * Whether the fit check (fit.ts) may read the cluster's nodes and pods. Default: yes for the portal's own cluster, no for an enrolled one
+   * (its agent's Role is namespaced and its policy refuses cluster-wide reads): there a create is not checked and a resources change is
+   * refused as unchecked.
+   */
+  fitCheck?: boolean;
   /** Tests only: the folders delivery may write and read (default: the engine's, `DELIVERY_ROOTS`), and how often starts are polled. */
   delivery?: { roots?: readonly string[]; pollMs?: number };
 }
@@ -68,6 +82,7 @@ export class KubernetesRuntime implements Runtime {
   readonly #metrics: CustomObjectsApi;
 
   readonly #manageNamespace: boolean;
+  readonly #fitCheck: boolean;
 
   constructor(
     private readonly opts: KubernetesOptions,
@@ -80,6 +95,8 @@ export class KubernetesRuntime implements Runtime {
     if (connect) this.#kc = connect.kubeConfig;
     else this.#kc.loadFromDefault();
     this.#manageNamespace = connect?.manageNamespace ?? true;
+    this.#enrolled = !!connect;
+    this.#fitCheck = opts.fitCheck ?? !connect;
     this.#core = this.#kc.makeApiClient(CoreV1Api);
     this.#apps = this.#kc.makeApiClient(AppsV1Api);
     this.#metrics = this.#kc.makeApiClient(CustomObjectsApi);
@@ -106,6 +123,16 @@ export class KubernetesRuntime implements Runtime {
   }
 
   #names: RuntimeNames | undefined;
+  readonly #enrolled: boolean;
+
+  /**
+   * The browser pool's way into this namespace: none for an enrolled cluster (Connect), whose agent refuses a Deployment that runs anything
+   * as root, which the browser container's init is (with every capability but SETUID and SETGID dropped).
+   */
+  browserAccess(): KubeBrowserAccess | null {
+    if (this.#enrolled) return null;
+    return { kubeConfig: this.#kc, namespace: this.#ns, objectName: (name) => this.#objectName(name) };
+  }
 
   useNames(names: RuntimeNames) {
     this.#names = names;
@@ -139,9 +166,12 @@ export class KubernetesRuntime implements Runtime {
     return { exists: true, running: (await this.#readyPod(name)) !== null, portal: d.metadata?.labels?.[LABEL.portal] ?? null };
   }
 
-  /** A pod that is up and whose workspace container is Ready (delivery's "running"), not one on its way out. */
+  /**
+   * A pod whose workspace container is Ready (delivery's "running"), not one on its way out. Not pod phase: it stays Pending while any
+   * container's image pulls, a browser's included (browser PRD §20 A5).
+   */
   #ready(p: V1Pod): boolean {
-    return p.status?.phase === 'Running' && !p.metadata?.deletionTimestamp && !!p.status.containerStatuses?.find((s) => s.name === CONTAINER)?.ready;
+    return !p.metadata?.deletionTimestamp && !!p.status?.containerStatuses?.find((s) => s.name === CONTAINER)?.ready;
   }
 
   async #readyPod(name: string): Promise<string | null> {
@@ -265,12 +295,15 @@ export class KubernetesRuntime implements Runtime {
 
     const pod = live[0];
     if (!pod) return { status: 'starting', detail: 'Scheduling' };
-    const statuses = [...(pod.status?.initContainerStatuses ?? []), ...(pod.status?.containerStatuses ?? [])];
+    // The workspace's own containers only (browser PRD §20 A5): a browser container whose image can't be pulled, or that crash-loops,
+    // is the browser's state, never the workspace's.
+    const statuses = [...(pod.status?.initContainerStatuses ?? []), ...(pod.status?.containerStatuses ?? []).filter((s) => s.name === CONTAINER)];
     const waiting = statuses.map((s) => s.state?.waiting).find(Boolean);
     if (waiting?.reason && STUCK.has(waiting.reason))
       return { status: 'error', detail: `${waiting.reason}: ${waiting.message ?? ''}`.trim() };
     const ready = pod.status?.containerStatuses?.find((s) => s.name === CONTAINER)?.ready;
-    if (pod.status?.phase === 'Running' && ready) return { status: 'running' };
+    // The workspace container's own readiness, not pod phase (Pending while another container's image pulls).
+    if (ready && pod.status?.phase !== 'Failed') return { status: 'running' };
     if (pod.status?.phase === 'Failed') return { status: 'error', detail: pod.status.message ?? pod.status.reason };
     const unschedulable = pod.status?.conditions?.find((c) => c.type === 'PodScheduled' && c.status === 'False');
     return { status: 'starting', detail: unschedulable?.message ?? waiting?.reason ?? pod.status?.phase };
@@ -290,7 +323,8 @@ export class KubernetesRuntime implements Runtime {
       progress(`Preparing namespace ${ns}`);
       await this.#core
         .createNamespace({ body: { metadata: { name: ns, labels: { [LABEL.managed]: 'true' } } } })
-        .catch(ignore(409));
+        // 403: a portal with a namespaced Role only (a rig, a locked-down cluster) uses the namespace someone made for it.
+        .catch(ignore(409, 403));
     }
 
     const labels = {
@@ -300,6 +334,22 @@ export class KubernetesRuntime implements Runtime {
       ...(spec.memoryMb ? { [LIMIT.memoryMb]: String(spec.memoryMb) } : {}),
     };
     const match = { [LABEL.managed]: 'true', [LABEL.name]: spec.name };
+
+    const limits: Record<string, string> = {};
+    if (spec.cpus) limits.cpu = String(spec.cpus);
+    if (spec.memoryMb) limits.memory = `${spec.memoryMb}Mi`;
+    const home = { name: 'home', persistentVolumeClaim: { claimName: claim } };
+    const requests = Object.keys(limits).length ? requestsFor(limits, this.opts.requests) : undefined;
+
+    // The fit check (fit.ts, T-98): a pod that fits on no node it may go to would stay Pending, so the create is refused with the numbers.
+    // A cluster the portal may not read (no ClusterRole claudepilot-portal-fit-check, an enrolled cluster's namespaced Role) is not
+    // checked: the create goes on as before.
+    const need = needOf([{ resources: { limits, requests } }]);
+    if (this.#fitCheck && (need.cpuMilli > 0 || need.memoryBytes > 0)) {
+      const fit = await checkFit(this.#core, { need, nodeSelector: this.opts.nodeSelector });
+      if (fit.checked && !fit.fits) throw new AppError('CONFLICT', fit.reason);
+      if (!fit.checked) console.log(`[kubernetes] ${spec.name}: ${fit.reason}`);
+    }
 
     progress('Creating home volume');
     await this.#core
@@ -316,10 +366,6 @@ export class KubernetesRuntime implements Runtime {
       })
       .catch(ignore(409));
 
-    const limits: Record<string, string> = {};
-    if (spec.cpus) limits.cpu = String(spec.cpus);
-    if (spec.memoryMb) limits.memory = `${spec.memoryMb}Mi`;
-    const home = { name: 'home', persistentVolumeClaim: { claimName: claim } };
 
     progress('Creating deployment');
     await this.#apps.createNamespacedDeployment({
@@ -348,7 +394,7 @@ export class KubernetesRuntime implements Runtime {
                   // `cp -a` as uid 1000 fails to set that folder's times and mode ("Operation not permitted"); `tar` fails the
                   // same way. The files are created by uid 1000, the user the workspace runs as, so owners need no preserving.
                   // (Not root: the Connect agent's policy refuses a Deployment that runs anything as root.)
-                  command: ['sh', '-c', `[ -e /seed/${SEEDED} ] || { cp -a --no-preserve=all ${HOME}/. /seed/ && touch /seed/${SEEDED}; }`],
+                  command: ['sh', '-c', seedHomeScript()],
                   volumeMounts: [{ name: 'home', mountPath: '/seed' }],
                 },
               ],
@@ -358,7 +404,7 @@ export class KubernetesRuntime implements Runtime {
                   image: this.opts.image,
                   workingDir: HOME,
                   env: [{ name: 'TERM', value: 'xterm-256color' }],
-                  resources: Object.keys(limits).length ? { limits, requests: requestsFor(limits, this.opts.requests) } : undefined,
+                  resources: Object.keys(limits).length ? { limits, requests } : undefined,
                   volumeMounts: [{ name: 'home', mountPath: HOME }],
                 },
               ],
@@ -380,6 +426,51 @@ export class KubernetesRuntime implements Runtime {
       .then(() => undefined);
   }
 
+  /**
+   * CPU and memory after a create (T-98). The values live in the `workspace` container of the Deployment's pod template; writing them is a
+   * read, change and replace (the read's resourceVersion guards against a change in between), which restarts the pod when it runs (Recreate).
+   * The limit labels the list reads are kept in step. The fit check reads the nodes and every pod on them: the portal's ClusterRole
+   * `claudepilot-portal-fit-check` (deploy/k3s/rbac.yaml); without it the check is `unavailable`, never a guess.
+   */
+  readonly resources: ResourceAccess = {
+    read: async (name) => {
+      const d = await this.#apps.readNamespacedDeployment({ name: this.#objectName(name), namespace: this.#ns });
+      const c = d.spec?.template.spec?.containers.find((x) => x.name === CONTAINER);
+      return { live: valuesOf(c?.resources as { limits?: Record<string, string>; requests?: Record<string, string> } | undefined), replicas: d.spec?.replicas ?? 1 };
+    },
+    fit: async (name, want) => {
+      if (!this.#fitCheck) return fitView(unchecked(needOfValues(want), 'this cluster is enrolled through Connect; its agent may not read the cluster’s nodes and pods.'));
+      let node: string | null = null;
+      try {
+        const own = await this.#core.listNamespacedPod({ namespace: this.#ns, labelSelector: `${LABEL.managed}=true,${LABEL.name}=${plainName(name)}` });
+        node = own.items.find((p) => !p.metadata?.deletionTimestamp && p.spec?.nodeName)?.spec?.nodeName ?? null;
+      } catch {
+        // No pod list: decided on the nodes it may go to, as for a stopped workspace.
+      }
+      const isSelf = (p: FitPod) => p.namespace === this.#ns && p.labels?.[LABEL.managed] === 'true' && p.labels?.[LABEL.name] === name;
+      return fitView(await checkFit(this.#core, { need: needOfValues(want), node, nodeSelector: this.opts.nodeSelector, isSelf }));
+    },
+    apply: async (name, values, opts = {}) => {
+      const object = this.#objectName(name);
+      const d = await this.#apps.readNamespacedDeployment({ name: object, namespace: this.#ns });
+      if (opts.onlyWhenStopped && (d.spec?.replicas ?? 1) !== 0) return false;
+      const c = d.spec?.template.spec?.containers.find((x) => x.name === CONTAINER);
+      if (!c || d.metadata?.labels?.[LABEL.managed] !== 'true') throw new AppError('CONFLICT', 'That Deployment is not a workspace the portal manages.');
+      c.resources = {
+        ...c.resources,
+        limits: { ...c.resources?.limits, cpu: cpuQuantity(values.cpus), memory: memoryQuantity(values.memoryMb) },
+        requests: { ...c.resources?.requests, cpu: cpuQuantity(values.cpuRequest), memory: memoryQuantity(values.memoryRequestMb) },
+      };
+      d.metadata = {
+        ...d.metadata,
+        labels: { ...d.metadata?.labels, [LIMIT.cpus]: String(values.cpus), [LIMIT.memoryMb]: String(values.memoryMb) },
+        annotations: { ...d.metadata?.annotations, 'claudepilot.resources-changed': new Date().toISOString() },
+      };
+      await this.#apps.replaceNamespacedDeployment({ name: object, namespace: this.#ns, body: d });
+      return true;
+    },
+  };
+
   start = async (name: string) => this.#scale(name, 1);
   stop = async (name: string) => this.#scale(name, 0);
 
@@ -400,12 +491,14 @@ export class KubernetesRuntime implements Runtime {
         namespace: this.#ns,
         plural: 'pods',
         labelSelector: selector,
-      })) as { items: { metadata: { labels?: Record<string, string> }; containers: { usage: { cpu: string; memory: string } }[] }[] };
+      })) as { items: { metadata: { labels?: Record<string, string> }; containers: { name?: string; usage: { cpu: string; memory: string } }[] }[] };
       for (const item of res.items) {
         const name = item.metadata.labels?.[LABEL.name];
         if (!name) continue;
-        const cpu = item.containers.reduce((sum, c) => sum + cores(c.usage.cpu), 0);
-        const mem = item.containers.reduce((sum, c) => sum + bytes(c.usage.memory), 0);
+        // The workspace container's own use (browser PRD §20 A5): the browser container reports its own (its supervisor reads its cgroup).
+        const own = item.containers.filter((c) => c.name === undefined || c.name === CONTAINER);
+        const cpu = own.reduce((sum, c) => sum + cores(c.usage.cpu), 0);
+        const mem = own.reduce((sum, c) => sum + bytes(c.usage.memory), 0);
         byName.set(name, { cpuPercent: cpu * 100, memoryBytes: mem });
       }
     } catch {
@@ -419,7 +512,8 @@ export class KubernetesRuntime implements Runtime {
       namespace: this.#ns,
       labelSelector: `${LABEL.managed}=true,${LABEL.name}=${plainName(name)}`,
     });
-    const pod = pods.items.find((p) => p.status?.phase === 'Running' && !p.metadata?.deletionTimestamp);
+    // The workspace container running is what counts (browser PRD §20 A5): the pod stays Pending while a browser image pulls.
+    const pod = pods.items.find((p) => !p.metadata?.deletionTimestamp && !!p.status?.containerStatuses?.find((s) => s.name === CONTAINER)?.state?.running);
     if (!pod) throw new AppError('CONFLICT', 'The workspace isn’t running.');
     return pod.metadata!.name!;
   }

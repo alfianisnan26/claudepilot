@@ -81,6 +81,19 @@ const fakes = {
       const from = w.label ?? w.name;
       return { known: { id: w.stableId ?? 'none' }, from, to: label.trim(), unchanged: label.trim() === from };
     },
+    // Resources (T-98): the manager's checks are workspaces/resources.test.ts; here, what the tool does with them.
+    planResources: async (ref: string, req: Row) => {
+      const live = { cpus: 4, memoryMb: 8192, cpuRequest: 4, memoryRequestMb: 8192 };
+      const values = { cpus: req.cpus ?? 4, memoryMb: req.memoryMb ?? 8192, cpuRequest: req.cpuRequest ?? 4, memoryRequestMb: req.memoryRequestMb ?? 8192 };
+      if (values.cpuRequest > values.cpus) throw Object.assign(new Error('Not above the CPU limit.'), { code: 'VALIDATION_FAILED' });
+      const w = world.workspaces.find((x) => x.id === ref)!;
+      return { known: { id: w.stableId ?? 'none' }, live, values, replicas: 1, apply: req.apply, unchanged: JSON.stringify(live) === JSON.stringify(values), fit: { state: 'fits', message: 'It fits on n1: the other pods request 3000m and 4096Mi, this one would ask 1000m and 2048Mi, the node can allocate 8000m and 16384Mi.' } };
+    },
+    setResources: async (ref: string, req: Row, _actor: unknown, via: Row) => {
+      calls.push(`ws.resources:${ref}:${req.apply}:${req.cpuRequest}:${via.actor}`);
+      const wanted = { cpus: 4, memoryMb: 8192, cpuRequest: req.cpuRequest, memoryRequestMb: 8192 };
+      return { id: ref, stableId: 'x', wanted, live: req.apply === 'now' ? wanted : { cpus: 4, memoryMb: 8192, cpuRequest: 4, memoryRequestMb: 8192 }, pending: req.apply !== 'now', outcome: req.apply === 'now' ? 'applied' : 'pending', fit: { state: 'fits', message: 'It fits.' } };
+    },
     rename: async (ref: string, label: string, _actor: unknown, via: Row) => {
       calls.push(`ws.rename:${ref}:${label}:${via.actor}`);
       const w = world.workspaces.find((x) => x.id === ref)!;
@@ -239,6 +252,30 @@ test('T-42: workspace_rename is admin only, previews the change, renames once af
     delete web.stableId;
     delete web.label;
   }
+});
+
+test('T-98: workspace_resources is admin only, previews the change with the warning and the fit, applies once after the confirmation', async () => {
+  reset();
+  const op = h.token('operate');
+  const admin = h.token('admin');
+  assert.equal(err(await h.call(op.secret, 'workspace_resources', { id: 'docker/api', apply: 'now', cpu_request: 1 })), 'SCOPE_REQUIRED');
+  const ask = where(await h.call(admin.secret, 'workspace_resources', { id: 'docker/api', apply: 'now', cpu_request: 1 }));
+  assert.equal(ask.status, 'confirmation_required');
+  assert.deepEqual([ask.preview.resources, ask.preview.from.cpu_request, ask.preview.to.cpu_request, ask.preview.apply], ['docker/api', 4, 1, 'now']);
+  assert.match(ask.preview.warning, /every session in this workspace ends \(2 live\)/);
+  assert.match(ask.preview.fit.message, /the node can allocate 8000m/);
+  assert.deepEqual(calls, [], 'asking changes nothing');
+  assert.equal(where(await h.call(admin.secret, 'workspace_resources', { id: 'docker/api', apply: 'now', cpu_request: 2, confirm_token: ask.confirm_token })).status, 'confirmation_required', 'the token is for those values');
+  assert.equal(where(await h.call(admin.secret, 'workspace_resources', { id: 'docker/api', apply: 'next_restart', cpu_request: 1, confirm_token: ask.confirm_token })).status, 'confirmation_required', 'and for that moment');
+  const done = where(await h.call(admin.secret, 'workspace_resources', { id: 'docker/api', apply: 'now', cpu_request: 1, confirm_token: ask.confirm_token }));
+  assert.deepEqual([done.outcome, done.live.cpu_request, done.pending], ['applied', 1, false]);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0]!, /^ws\.resources:docker\/api:now:1:portal-mcp:/, 'audited as the token');
+  assert.match(text(await h.call(admin.secret, 'workspace_resources', { id: 'docker/api', apply: 'now', cpu_request: 4 })), /already has these values/);
+  assert.equal(calls.length, 1, 'no change, no call');
+  const later = await h.call(admin.secret, 'workspace_resources', { id: 'docker/api', apply: 'later' });
+  assert.ok(later.error || later.result?.isError, `a moment that is not now or next_restart is refused: ${JSON.stringify(later).slice(0, 200)}`);
+  assert.equal(calls.length, 1);
 });
 
 test('workspace_start, _stop and _sync work at operate scope; read can’t; a read-only database changes nothing', async () => {

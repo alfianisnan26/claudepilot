@@ -316,6 +316,8 @@ if (!DIRECT) {
       const w = waiting.get(m.id);
       if (!w) return;
       waiting.delete(m.id);
+      // The init settles `sandbox: auto` at the first start (Kubernetes): what it found is what the status reports.
+      if (m.event === 'chrome-started' && typeof m.sandbox === 'boolean') cfg.sandbox = m.sandbox;
       if (m.event === 'chrome-started') w.resolve({ pid: m.pid });
       else w.reject(new Error(m.error || 'Chrome did not start'));
     } else if (m.event === 'chrome-exit') onChromeExit(m);

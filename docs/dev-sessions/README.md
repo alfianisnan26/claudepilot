@@ -2,7 +2,7 @@
 
 ClaudePilot is developed by **one orchestrator session** in the cluster's dev workspace (`kubernetes/kohi-event`, folder `~/work/claudepilot`), in Bypass
 mode, with **sub-agents** (Claude Code's own Agent tool) doing the work in git worktrees, without a person in the loop. The owner approves deploys only.
-Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first. `orchestrator.md` is the brief of the orchestrator; `track-a-connect.md`,
+Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISIONS.md` (the owner's standing decisions: never act against a row), and `CHARTER.md` (the owner's autonomy charter: zero tolerance, duties, scoring; it binds every agent, here and in the Konfersi program). `orchestrator.md` is the brief of the orchestrator; `track-a-connect.md`,
 `track-b-notify-triggers.md` and `track-c-ui.md` are the work packages it hands out. Everything below binds the orchestrator AND every sub-agent.
 
 ## Ground rules
@@ -19,16 +19,19 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first. `orches
    - `kubectl`: read freely. Change things only in a namespace you create for a rig, with `scripts/dev-rig.sh create dev-rig-<name>` and `scripts/dev-rig.sh delete dev-rig-<name>`
      (the only door: `kubectl delete namespace` is denied, the script refuses any other name); delete it when you are done.
      Never touch `isnan-claudepilot`, `isnan-claudepilot-workspaces` (this workspace hosts the session: stopping, deleting or restarting it, or
-     restarting the portal, kills it), Argo CD, the nodes or any other namespace. One narrow door exists for the owner's request only: `scripts/ws-resources.sh <name> --cpu-request ...` changes a
-     workspace's CPU and memory (a dry run is safe; `--apply` restarts the pod and ends every session in it, so never on your own initiative; T-98 replaces it with a portal feature).
+     restarting the portal, kills it), Argo CD, the nodes or any other namespace. A workspace's CPU and memory are changed in the portal (T-98 replaced
+     `scripts/ws-resources.sh`: the workspace sheet's Resources row, or the admin MCP tool `workspace_resources`), by a person: Apply now restarts the pod and ends every session in it.
    - Never push `main`. Never approve a deploy or work around its approval. For anything that needs a portal, run a scratch one:
      `scripts/scratch-portal.sh` (clean environment). Never change the real portal's settings, tokens or Secrets.
    - Never force-push, rewrite pushed history, use `--no-verify` or amend a pushed commit.
    - `.claude/settings.json` denies pushing `main` and changing the portal, workspace and Argo CD namespaces with `kubectl`, even in Bypass. That is
      deliberate: do not look for another way to do those things (a script, `sh -c`, another tool); write it under NEEDS A HUMAN instead.
-4. **Heavy jobs one at a time** (the pod has 4 CPUs and 8 GiB): typecheck, the server suite, a production build, `scripts/gate.sh` and Chromium runs go
-   through `flock /tmp/heavy.lock nice -n 10 <command>`. Targeted tests (one file) run directly. At most one scratch portal and one Chromium per
-   sub-agent; stop them when done. Keep `/tmp` clean (`/tmp/gate-*`, `/tmp/cp-*`): a full `/tmp` makes CI tests fail. **At most three sub-agents run at once.**
+4. **Heavy jobs leave the pod** (T-107; the pod has 4 CPUs and 8 GiB): typecheck, the server suite, vitest, playwright, lighthouse, production
+   builds and wrangler dry runs go through `scripts/job-run.sh [--repo claudepilot|konfersi[:<org>/<repo>]] [--ref <pushed branch or commit>] -- <command>`,
+   a Job on another node (push the WIP branch first: `git push origin HEAD:wip/<name>`; at most 3 Jobs at once and 2 per chat, the rest wait
+   "queued behind K"; `--list`, `--stop --chat <id>`). Lighthouse and timing measurements run there too (a quiet node). **flock only for what must
+   run in the pod** (a scratch portal, a browser check against it, `npm ci` of a worktree): `flock /tmp/heavy.lock nice -n 10 <command>`. A
+   targeted test (one file) may run directly. At most one scratch portal and one Chromium per sub-agent; stop them when done. Keep `/tmp` clean (`/tmp/gate-*`, `/tmp/cp-*`): a full `/tmp` makes CI tests fail. **At most three sub-agents run at once.**
 5. **Do not loop.** The same command failing three times means change the approach or move to the next item and write down why.
 6. **Quota.** The portal moves the chat to another Claude by itself when one runs out. If a turn fails with a limit error, wait a few minutes and go on.
 7. **Do not start other Bypass sessions** (`session_spawn` workers are never Bypass anyway): sub-agents of the Agent tool are the way.
@@ -72,8 +75,7 @@ backlog is done: make `TRACK COMPLETE` the first line of that file, commit and p
 
 ## The supervisor
 
-A small process, `docs/dev-sessions/supervisor.mjs`, runs inside the dev workspace (started by the coordinator with the owner's sign-in code in its
-environment; the code is never in a file) and keeps the orchestrator going when nobody else is there: a session idle for a few minutes is told to
+A small process, `docs/dev-sessions/supervisor.mjs`, runs OUTSIDE the dev pod, on the coordinator's machine, with the owner's sign-in code in its environment (inside the pod every agent runs as the same user and could read that environment, so the code must never live there; T-104's lease replaces the code), and keeps the orchestrator going when nobody else is there: a session idle for a few minutes is told to
 continue, an interrupted one is woken, one that ended is started again in the main folder and told to continue from its status file (at most 6
 starts per day, 3 after integrity endings). It leaves the work alone when the status file starts with `TRACK COMPLETE` or when a person closed the
 session. It restarts only the orchestrator: any other chat that ends (an integrity ending, say) is started again by a person; the harness-turn

@@ -13,6 +13,7 @@ import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import type { Companions, CompanionInfo, CompanionPlan, ExecStream } from './companion.js';
 import { BrowserKind } from './kind.js';
+import { kubeCapRefusal, type KubeBrowsers } from './kube.js';
 import { BrowserService, type SupervisorStatus } from './service.js';
 import { splitWorkspaceId } from './spec.js';
 
@@ -177,7 +178,8 @@ export function fakeSteps() {
   return { steps, queued };
 }
 
-export async function browserHarness(opts: { targets?: string[] } = {}) {
+/** `kube`: Kubernetes targets (KubeBrowsers on a fake API server), beside the fake Docker ones. */
+export async function browserHarness(opts: { targets?: string[]; kube?: Map<string, KubeBrowsers> } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'cp-browser-'));
   const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
   const providers: FragmentProvider[] = [];
@@ -186,7 +188,11 @@ export async function browserHarness(opts: { targets?: string[] } = {}) {
   pools.reconciler = { request: (id: string) => (requests.push(id), Promise.resolve()) };
   const targets = new Map<string, FakeTarget>();
   for (const id of opts.targets ?? ['docker']) targets.set(id, fakeTarget(id, store.portalId!));
-  const kind = new BrowserKind({ supports: (t) => targets.has(t) });
+  const kube = opts.kube ?? new Map<string, KubeBrowsers>();
+  const kind = new BrowserKind({
+    supports: (t) => targets.has(t) || kube.has(t),
+    refuseAssign: (workspaceId) => (kube.has(splitWorkspaceId(workspaceId).target) ? kubeCapRefusal(store, workspaceId) : null),
+  });
   pools.register(kind);
   const { steps, queued } = fakeSteps();
   const notified: number[] = [];
@@ -196,6 +202,8 @@ export async function browserHarness(opts: { targets?: string[] } = {}) {
     kind,
     steps,
     companions: new Map([...targets].map(([id, t]) => [id, t.comps])),
+    kube,
+    internalUrl: 'http://claudepilot-portal.portal-ns.svc.cluster.local:3000',
     portalPort: 3104,
     notify: () => notified.push(Date.now()),
   });
