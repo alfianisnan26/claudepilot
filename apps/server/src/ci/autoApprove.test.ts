@@ -68,7 +68,7 @@ function runRow(id: string, jobs: CiJob[], o: Partial<RunRow> = {}): RunRow {
   const state: CiRunStateFile = { v: 1, runId: id, status: 'running', reason: null, startedAt: null, finishedAt: null, durationMs: null, jobs };
   return { id, number: 9, workspace_id: 'docker/test', repo_id: 'p1', repo: 'app', pipeline: 'deploy', trigger: 'manual', event_id: null, ref: 'refs/heads/main', branch: 'main', tag: null, sha: SHA, base_sha: null, subject: null, status: 'running', reason: null, actor: 'ui', actor_label: null, inputs: '{}', ticket_id: null, ticket_source: null, session_id: null, rerun_of: null, concurrency_group: null, cancel_in_progress: 0, plan: JSON.stringify(planOf(jobs)), state: JSON.stringify(state), diagnostics: null, attempts: 0, created_at: at(2).toISOString(), started_at: null, finished_at: null, duration_ms: null, archived: 0, ...o };
 }
-const depRow = (o: Partial<DeploymentRow> = {}): DeploymentRow & { run_status: string | null } => ({ id: 'd1', run_id: 'r1', run_number: 9, job: 'release', repo_id: 'p1', environment: 'production', pipeline: 'deploy', sha: SHA, ref: 'refs/heads/main', actor: 'ui', approval: 'waiting', gate_key: null, decided_by: null, decided_at: null, outcome: null, owner_id: 'u_owner', created_by: 'u_owner', created_at: at(2).toISOString(), run_status: 'running', ...o });
+const depRow = (o: Partial<DeploymentRow & { run_status: string | null }> = {}): DeploymentRow & { run_status: string | null } => ({ id: 'd1', run_id: 'r1', run_number: 9, job: 'release', repo_id: 'p1', environment: 'production', pipeline: 'deploy', sha: SHA, ref: 'refs/heads/main', actor: 'ui', approval: 'waiting', gate_key: null, decided_by: null, decided_at: null, outcome: null, owner_id: 'u_owner', created_by: 'u_owner', created_at: at(2).toISOString(), run_status: 'running', ...o });
 const ENV: EnvironmentRow = { id: 'e1', repo_id: 'p1', name: 'production', protected: 1, owner_id: 'u_owner', created_by: 'system', created_at: '', updated_at: '', updated_by: 'u_owner', auto_approve: 'dry', auto_window: null, auto_paths: null };
 
 interface World {
@@ -191,7 +191,7 @@ test('6. inside the allowed window', async () => {
 });
 
 test('7. the previous auto-approved deploy is not failing or rolled back; a fact that can not be read is a WOULD NOT', async () => {
-  const prev = (o: Partial<DeploymentRow> & { run_status?: string | null }, jobs = JOBS()) => (w: World) => {
+  const prev = (o: Partial<DeploymentRow & { run_status: string | null }>, jobs = JOBS()) => (w: World) => {
     w.others = [depRow({ id: 'p', run_id: 'rp', run_number: 7, approval: 'approved', auto_verdict: 'would', auto_at: at(1).toISOString(), outcome: 'passed', run_status: 'passed', ...o })];
     w.runs.set('rp', runRow('rp', jobs));
   };
@@ -257,7 +257,7 @@ test('service: off writes nothing; dry writes one line and one audit row, approv
     await h.svc.settled();
     assert.equal(h.svc.environments(repo.id)[0]!.autoApprove, 'off');
     assert.equal(h.svc.get(first.id).deployments[0]!.autoApprove, null, 'off writes nothing');
-    assert.deepEqual(audit, []);
+    assert.equal(audit.length, 0, 'no audit row');
     await h.svc.decide(first.id, 'release', 'approve', OWNER);
     await h.until('the first release to pass', () => h.svc.get(first.id).status === 'passed');
 
@@ -322,6 +322,21 @@ test('service: WOULD NOT for a gate skipped by its input, a diff into authz and 
     assert.match(await lineOf(), /WOULD NOT: the diff changes released migration 610$/);
     assert.ok(!h.host.calls.some((c) => c[0] === 'approve'));
     assert.deepEqual(audit.filter((a) => a.kind === 'ci.deploy_auto_approve').map((a) => a.detail?.verdict), ['would_not', 'would_not', 'would_not']);
+  } finally {
+    h.done();
+  }
+});
+
+test('migration 780: every environment starts off, the mode and the verdict take only their values', async () => {
+  const h = await harness();
+  try {
+    const db = h.store.db!;
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO ci_environments (id, repo_id, name, created_at, updated_at, updated_by) VALUES ('e1', 'p1', 'production', ?, ?, 'system')").run(now, now);
+    assert.deepEqual({ ...(db.prepare('SELECT auto_approve, auto_window, auto_paths FROM ci_environments').get() as object) }, { auto_approve: 'off', auto_window: null, auto_paths: null });
+    assert.throws(() => db.prepare("UPDATE ci_environments SET auto_approve = 'always'").run(), /CHECK/);
+    db.prepare("INSERT INTO ci_deployments (id, run_id, run_number, job, repo_id, environment, pipeline, sha, ref, actor, approval, created_at) VALUES ('d1', 'r1', 1, 'release', 'p1', 'production', 'deploy', ?, 'refs/heads/main', 'ui', 'waiting', ?)").run(SHA, now);
+    assert.throws(() => db.prepare("UPDATE ci_deployments SET auto_verdict = 'approved'").run(), /CHECK/);
   } finally {
     h.done();
   }
