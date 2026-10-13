@@ -327,7 +327,8 @@ export function SessionPage() {
   // The workspace's persona (I11): its name and avatar, where the session says who it is.
   const persona = usePersonaOf(session?.workspaceId);
   const state = session?.state ?? 'starting';
-  const working = state === 'working';
+  // The main turn runs (Stop, the live line); a session working only through its tasks takes a message as an idle one does (T-41).
+  const working = state === 'working' && !session?.tasksOnly;
   const ended = state === 'ended';
   const bypass = session?.mode === 'bypassPermissions' && !ended;
   // Its workspace was removed: the transcript is all that's left, so nothing that needs the workspace is offered.
@@ -440,7 +441,7 @@ export function SessionPage() {
                       <Spinner className="size-4" />
                     </span>
                     <span className="hidden sm:flex">
-                      <StateBadge state={state} />
+                      <StateBadge state={state} agents={running} />
                     </span>
                   </>
                 ) : session ? (

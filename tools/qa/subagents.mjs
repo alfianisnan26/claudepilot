@@ -3,7 +3,7 @@
 // it. The stand-in's [[agent <models> <directive>]] starts one sub-agent per model in one message (background agents, as Claude Code runs them), each
 // prompted with [[<directive>]]: `[[agent sonnet,fable,- steps 6 2 <file>]]` gives three agents that each work for about 12 s ("Step k." and a Read,
 // one stored line at a time; Claude Code doesn't stream a sub-agent's text) while the main agent is already idle. Asserts: the main reply slot never shows an agent's text (it folds into the activity row of the turn that started it, shimmering); the header
-// says "Idle · 3 agents" ("Agents" on a phone) while they run, and the Sessions row too; the Agents panel's rows carry the model as reported
+// says "Working · 3 agents" ("Working" on a phone) while they run (the main turn is over: T-41), and the Sessions row too; the Agents panel's rows carry the model as reported
 // (sonnet, fable, and the inherited one), open on a tap; the detail view shows type, model, status, tokens, tool uses, time, its own transcript
 // (live while it runs, newest at the bottom), Stop, and back returns to the list; an agent row in the transcript opens the same view; Stop stops one;
 // 44 px targets on touch, no horizontal scroll, no page errors; at 390 px (touch, the iPhone's safe areas) and 1280 px, light and dark.
@@ -64,7 +64,7 @@ const openChat = async () => {
   const chat = { ws, state: null, tasks: [], acks: new Map() };
   ws.on('message', (raw) => {
     const m = JSON.parse(String(raw));
-    if (m.type === 'session') chat.state = m.session.state;
+    if (m.type === 'session') (chat.state = m.session.state), (chat.tasksOnly = !!m.session.tasksOnly);
     if (m.type === 'tasks') chat.tasks = m.tasks;
     if (m.type === 'ack') chat.acks.set(m.uuid, m);
   });
@@ -136,6 +136,7 @@ async function open(cfg, path = `/admin/sessions/${SID}`) {
 
 /** Opens the Agents panel (an icon on 1280, ⋯ → Agents on a phone). */
 async function openAgents(cfg) {
+  if (await ev(`!!${Q.panel}`)) return true; // restored open from the last look: a click would close it
   if (cfg.wide || cfg.w >= 640) await click(`document.querySelector('header button[aria-label^="Agents"]')`);
   else {
     await click(`document.querySelector('header [aria-haspopup="menu"]')`);
@@ -154,8 +155,8 @@ async function scenario(cfg, chat) {
   // 1. Three background agents (sonnet, fable, and one without a model argument: it inherits), working after the main turn ends.
   const ack = await chat.send(`[[agent sonnet,fable,- steps 6 2 ${NOTES}]]`);
   check('turn accepted', ack?.ok === true, JSON.stringify(ack));
-  const idleWhileRunning = async () => { const t = Date.now(); while (Date.now() - t < 30000) { if (chat.state === 'idle' && chat.running() >= 3) return true; await sleep(150); } return false; };
-  check('the main agent is idle while its three agents run', await idleWhileRunning(), `${chat.state} ${chat.running()}`);
+  const idleWhileRunning = async () => { const t = Date.now(); while (Date.now() - t < 30000) { if (chat.state === 'working' && chat.tasksOnly && chat.running() >= 3) return true; await sleep(150); } return false; };
+  check('the main turn is over, and the session works on while its three agents run (tasksOnly)', await idleWhileRunning(), `${chat.state} ${chat.tasksOnly} ${chat.running()}`);
   check('the agents’ lines show on the page', await waitFor(`/Step \\d/.test(${Q.log}.innerText)`, 15000));
   await ev(`${Q.log}.scrollTop = ${Q.log}.scrollHeight`);
   await sleep(1200);
@@ -164,7 +165,7 @@ async function scenario(cfg, chat) {
   check('an agent’s text never stands as a reply: only in the activity line or an agent row', placed.every(Boolean), JSON.stringify(placed));
   check('the activity line names a running agent and shimmers', await ev(`!!document.querySelector('[role=log] button[aria-label*="Latest: QA agent"] .shimmer')`));
   const badge = await ev(`${Q.header}.innerText`);
-  check('header: idle with agents', cfg.w < 640 ? /Agents/.test(badge) : /Idle · 3 agents/.test(badge), badge.replace(/\s+/g, ' ').slice(0, 120));
+  check('header: working with agents', cfg.w < 640 ? /Working/.test(badge) : /Working · 3 agents/.test(badge), badge.replace(/\s+/g, ' ').slice(0, 120));
   check('header: a spinner says agents still work', await ev(`!!${Q.header}.querySelector('.animate-spin, [class*=spin]')`));
   await noOverflow('agents running');
   await shot(`${cfg.name}-1-idle-agents-running`);
@@ -247,10 +248,12 @@ async function sessionsRow(cfg, chat) {
   await chat.settled(60000);
   await chat.send(`[[agent sonnet,- steps 6 2 ${NOTES}]]`);
   const t = Date.now();
-  while (Date.now() - t < 30000 && !(chat.state === 'idle' && chat.running() >= 2)) await sleep(150);
+  while (Date.now() - t < 30000 && !(chat.tasksOnly && chat.running() >= 2)) await sleep(150);
   if (!(await open(cfg, '/admin/sessions'))) return check('sessions page loads', false);
-  const want = cfg.w < 640 ? /Agents/ : /Idle · 2 agents/;
-  check('the Sessions row says agents still run', await waitFor(`${want}.test(document.querySelector('main').innerText)`, 8000), (await ev(`document.querySelector('main').innerText`)).replace(/\s+/g, ' ').slice(0, 200));
+  const want = cfg.w < 640 ? /Working/ : /Working · 2 agents/;
+  // The row's own line (its title and state), not the filter chips (one of them says Working too).
+  const rowText = `([...document.querySelectorAll('main p')].find((p) => p.innerText.trim() === 'Sub-agents QA')?.parentElement?.innerText ?? '')`;
+  check('the Sessions row says agents still run', await waitFor(`${want}.test(${rowText})`, 8000), (await ev(rowText)).replace(/\s+/g, ' ').slice(0, 200));
   await noOverflow('sessions');
   await shot(`${cfg.name}-8-sessions-row`);
   await chat.settled(40000);

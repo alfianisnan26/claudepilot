@@ -15,23 +15,25 @@ export const SESSION_STATE: Record<ChatSessionState, { label: string; tone: Badg
 };
 
 /**
- * The session's state as a pill, matching the workspace/account rows. Idle while sub-agents still run says so ("Idle · 2 agents", one word
- * on a phone), with a spinner: the main agent is done, its agents are not.
+ * The session's state as a pill, matching the workspace/account rows. Working with sub-agents or background commands running says how
+ * many ("Working · 2 agents"; one word on a phone): a session whose main turn is over still works while its tasks run (T-41).
  */
 export function StateBadge({ state, agents = 0 }: { state: ChatSessionState; agents?: number }) {
   const s = SESSION_STATE[state];
-  if (state === 'idle' && agents > 0) {
+  if (state === 'working' && agents > 0) {
     const n = `${agents} ${agents === 1 ? 'agent' : 'agents'}`;
     return (
-      <Badge tone="success">
+      <Badge tone={s.tone}>
         <Spinner className="size-3" />
         <span aria-hidden="true" className="sm:hidden">
-          Agents
+          {s.label}
         </span>
         <span aria-hidden="true" className="hidden sm:inline">
-          Idle · {n}
+          {s.label} · {n}
         </span>
-        <span className="sr-only">Idle, {n} running</span>
+        <span className="sr-only">
+          {s.label}, {n} running
+        </span>
       </Badge>
     );
   }

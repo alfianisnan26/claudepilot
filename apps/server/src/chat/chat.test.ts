@@ -2042,7 +2042,8 @@ test('controller: a stop_task Claude Code refuses comes back as its message in t
     const req = await s.take('stop_task');
     s.tail.push(fail(req.id, 'Unsupported control request subtype: stop_task'));
     assert.deepEqual(await socket.ack('st-1'), { type: 'ack', uuid: 'st-1', ok: false, error: 'Unsupported control request subtype: stop_task', code: 'VALIDATION_FAILED' });
-    assert.equal(s.state(), 'idle', 'a refusal ends nothing');
+    // A refusal ends nothing: its task still runs, so the session reads working through it (T-41), its turn over.
+    assert.deepEqual([s.state(), s.controller.get(s.id)!.tasksOnly, s.controller.tasks(s.id)[0]!.status], ['working', true, 'running']);
 
     // The process vanishes: its tasks are over with it, and stopping one neither asks nor resumes.
     await vanish(s);

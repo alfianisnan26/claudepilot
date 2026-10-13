@@ -379,6 +379,8 @@ export class ChatController {
   readonly #bypassGrant = new Set<string>();
   /** Chats moving to another Claude right now (a second move, a message, a control or an end is refused meanwhile), and how far along. */
   readonly #moving = new Map<string, { toClaude: string; step: 'handoff' | 'starting' | 'finishing' }>();
+  /** How many tasks each session had running when tabs last heard of it: a change is news (its count, and whether it reads working). */
+  readonly #tasksRunning = new Map<string, number>();
   /** Chats whose process a Restart is replacing (`restart`): a move or a second restart is refused meanwhile; messages wait for the new process. */
   readonly #restarting = new Map<string, Promise<void>>();
   /** Per session: messages a caller handed to `send` that haven't been written yet (a Restart waits for none to be on its way). */
@@ -814,6 +816,9 @@ export class ChatController {
     if (this.#restarting.has(session.id)) out = { ...out, restarting: true };
     const changed = this.#configChangedAt(session);
     if (changed) out = { ...out, configChangedAt: changed };
+    // One definition of working (T-41): the main turn runs, or a task of its live process does. The stored state stays the turn's (what
+    // a send, a restart or a move go by); what is shown, listed and notified on is this one.
+    if (out.state === 'idle' && out.process === 'live' && (out.agentsRunning ?? 0) > 0) out = { ...out, state: 'working', tasksOnly: true };
     return out;
   }
 
@@ -1762,6 +1767,7 @@ export class ChatController {
     pruneBlobs(this.#store, blobs);
     this.#forget(sessionId, 'The session was deleted.');
     this.#pilotTools.delete(sessionId);
+    this.#tasksRunning.delete(sessionId);
     this.#emit(sessionId, { type: 'removed', session: sessionId });
     return { purged: code === 0, worktree };
   }
@@ -3671,7 +3677,11 @@ export class ChatController {
   }
 
   #emitTasks(sessionId: string): void {
-    this.#emit(sessionId, { type: 'tasks', session: sessionId, tasks: this.#chat.tasks(sessionId) });
+    const tasks = this.#chat.tasks(sessionId);
+    this.#emit(sessionId, { type: 'tasks', session: sessionId, tasks });
+    // How many run is part of the session (its count, and whether it reads working): tabs and the notifier hear when that changes.
+    const running = tasks.filter((t) => t.status === 'running').length;
+    if (this.#tasksRunning.get(sessionId) !== running) this.#emitSession(sessionId);
   }
 
   #names(sessionId: string): Map<string, string> {
@@ -3738,6 +3748,7 @@ export class ChatController {
   /** Tells the tabs the session changed, and (re)schedules its idle check. */
   #emitSession(sessionId: string): void {
     const session = this.#chat.get(sessionId);
+    if (session) this.#tasksRunning.set(sessionId, session.agentsRunning ?? 0);
     if (session) this.#emit(sessionId, { type: 'session', session: this.#decorate(session) });
     this.#armIdle(sessionId);
   }

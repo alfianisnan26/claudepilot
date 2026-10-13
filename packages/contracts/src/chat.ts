@@ -58,6 +58,12 @@ export interface ChatSession {
   waitingFor: string | null;
   /** Sub-agents and background tasks still running (the Agents panel's running ones): the main agent may be idle while they work. */
   agentsRunning?: number;
+  /**
+   * The session reads `working` only because tasks of its process still run: its main turn is over (T-41). A session is working while its
+   * main turn runs OR any task of its current process runs, and idle only when neither does; this says which, so a client offers Send
+   * (not Stop) and shows no live turn.
+   */
+  tasksOnly?: boolean;
   createdAt: string;
   lastActivityAt: string;
   endedReason: string | null;

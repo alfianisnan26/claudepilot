@@ -367,21 +367,32 @@ test('routing: an event about A reaches only A; B hears of it only when shared A
   h2.notify.stop();
 });
 
-test('session_done: "Notify when done" sends every main-thread turn end; otherwise only a 5-minute turn where the kind is on', async () => {
+test('session_done: "Notify when done" sends when the session goes idle and stays so; otherwise only a 5-minute stretch where the kind is on', async () => {
   const svc = await standIn();
-  const h = await harness({ owners: { 'session:s1': 'u_a', 'session:s2': 'u_a' } });
+  let clock = Date.parse('2026-10-13T08:00:00.000Z');
+  const h = await harness({ owners: { 'session:s1': 'u_a', 'session:s2': 'u_a' }, doneDebounceMs: 20, now: () => new Date(clock) });
   try {
     h.notify.start();
     h.notify.destinations.createChannel('u_a', { type: 'webhook', name: 'A', url: `http://hooks.example.test:${svc.port}/in` });
-    h.chat.sessions.set('s1', session('s1', { state: 'idle' }));
-    h.chat.sessions.set('s2', session('s2', { state: 'idle' }));
     h.notify.destinations.setSessionDone('s1', 'u_a', true);
-    const result = (id: string, durationMs: number, agentLabel: string | null = null) => h.chat.dispatch(id, { type: 'events', session: id, items: [{ seq: 1, at: '', kind: 'result', durationMs, agentLabel }] });
-    result('s1', 60_000); // flagged: sent
-    result('s1', 60_000, 'worker'); // a sub-agent's: not a turn
-    result('s2', 10 * 60_000); // long, but session_done is off by default: Inbox only... and not sent
+    const state = (id: string, s: 'working' | 'idle', over: Record<string, unknown> = {}) => {
+      const it = session(id, { state: s, ...over });
+      h.chat.sessions.set(id, it);
+      h.chat.dispatch(id, { type: 'session', session: it });
+    };
+    const result = (id: string, durationMs: number) => h.chat.dispatch(id, { type: 'events', session: id, items: [{ seq: 1, at: '', kind: 'result', durationMs }] });
+    for (const id of ['s1', 's2']) state(id, 'idle');
+    for (const id of ['s1', 's2']) state(id, 'working');
+    result('s1', 60_000); // a result alone is not done: s1 still works through its sub-agents
+    state('s1', 'working', { tasksOnly: true, agentsRunning: 1 });
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(svc.got.length, 0, 'nothing while its tasks run');
+    clock += 60_000;
+    state('s1', 'idle');
     await until(() => svc.got.length === 1);
-    await new Promise((r) => setTimeout(r, 30));
+    clock += 9 * 60_000;
+    state('s2', 'idle'); // a 10-minute stretch, but session_done is off by default: Inbox only... and not sent
+    await new Promise((r) => setTimeout(r, 60));
     assert.equal(svc.got.length, 1);
     assert.equal(JSON.parse(svc.got[0]!.body.toString()).body, 'api-dev · 1 min');
   } finally {
