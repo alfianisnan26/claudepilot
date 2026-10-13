@@ -5,6 +5,7 @@ Tickets mirror this file (owner, 07:2x): T-1 Pinned, T-2 sideways scroll, T-3 up
 Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 after a session limit), main folder ~/work/claudepilot, branch integration. Three packages, one sub-agent each.
 
 ## DONE (pushed to integration and the pilot remote as 5bf433c at 08:17; gate green on 47dee48: 2451 tests, one load-flaky test passed alone and was made order-based)
+- T-7 auto-move web half (B item 5): merged as 191edf7 (card, divider mark, Undo, session menu item, a Claude's dialog, tools/qa/automove.mjs 520/520 at 390 and 1280 px; PRD §14.1); gate queued.
 - B item 1, deploy waits -> "Deploy waits" notification (ci_waiting): 9dd73e8; migration 720 (existing devices that hear CI failures get it): ad0b7e6 via cc838d9.
 - B item 6, tests that leak or flake, side-usage split: 41d4dc0 via cc838d9. B item 2, V1 canary guards + report: e818540, af7bf08.
 - A items 1 and 2: the gate hang's cause (a stop landing while the agent dials; 7d41bc7), scratch-portal observations (f31f6ca) via e653847.
@@ -14,7 +15,8 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 ## IN FLIGHT
 - Owner requests (07:00-07:50), committed on integration as d716245, bd91572 and 7c3d6d5, gate queued on 7c3d6d5 (T-1, T-2, T-3, T-4): (1) sideways scroll on the phone: not reproduced in Chromium (11 pages, 360/390/430/landscape, safe-area insets); the app root now clips horizontal overflow, mobile-drag.mjs checks it; (2) Pinned sessions: migration 381, POST/DELETE …/pin, chips Pinned · Idle · Needs you · Working · Ended · Archived · All, Pinned shown once anything is pinned and the default chip, else Idle; pinned leads its group; ⋯ Pin/Unpin on rows and the session page; a pin marker on the row; (3) swipe right = Pin, left = Archive (unarchive in Archived) on touch (swipe.ts, tested; tools/qa/session-swipe.mjs ran green on a scratch portal); (4) image upload "exit 4" (T-3): CAUSE FOUND: cp-session `put` began with `exec 2>/dev/null`; a Kubernetes exec (containerd) closes stdin once the last holder of an output pipe is gone, so head saw EOF at once; `put` keeps stderr's pipe open on fd 3 now (7c3d6d5), verified through the portal's own path (KubernetesRuntime + hostInstaller + stageFile) into the kohi-event pod with 6 MB; a test holds the pipe rule; a short arrival says "X of Y bytes arrived" and is tried once more. (5) automove.allowBypass (T-4, owner 07:2x): setting, decide rule, decide/engine tests, a controller test that a move keeps Bypass, PRD §16 decision, seeded on (7c3d6d5).
 - Deploy (T-18): run #4 on 5bf433c, build passed at 08:21; the release → production WAITS for the owner's approval (/admin/ci/runs/rmv6ercnjd431f8); verify follows; then seed-features.sh (allowBypass).
-- B item 5, auto-move web half (opus, worktree dev-automove-web, branch dev/automove-web, scratch port 3411): continues the uncommitted wiring the first sub-agent left (card, divider, Undo, menu item, settings rows).
+- T-5 sub-agent visibility (opus, worktree dev-automove-web now on branch dev/subagent-visibility, scratch port 3421): model label per row, clickable detail view with the task's transcript and Stop, server task-transcript route and ChatTask.model.
+- Gate on 191edf7 (the auto-move web merge) queued on the lock; green -> push.
 - A item 3, T6 acceptance and abuse (opus, dev-track-a-connect, port 3413, rig namespace dev-rig-connect).
 - C item 2, phone chrome all states (opus, dev-track-c-ui, port 3415).
 
