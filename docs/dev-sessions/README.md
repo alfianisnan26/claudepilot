@@ -34,7 +34,9 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
    targeted test (one file) may run directly. At most one scratch portal and one Chromium per sub-agent; stop them when done. Keep `/tmp` clean (`/tmp/gate-*`, `/tmp/cp-*`): a full `/tmp` makes CI tests fail. **At most three sub-agents run at once.**
 5. **Do not loop.** The same command failing three times means change the approach or move to the next item and write down why.
 6. **Quota.** The portal moves the chat to another Claude by itself when one runs out. If a turn fails with a limit error, wait a few minutes and go on.
-7. **Do not start other Bypass sessions** (`session_spawn` workers are never Bypass anyway): sub-agents of the Agent tool are the way.
+7. **Chat to chat only through the portal** (T-130): never Claude Code's SendMessage to another session (a peer line ends the receiver for
+   integrity); use the Portal MCP `session_message`. SendMessage to your own in-process sub-agents only when needed.
+8. **Do not start other Bypass sessions** (`session_spawn` workers are never Bypass anyway): sub-agents of the Agent tool are the way.
 
 ## Who integrates
 
