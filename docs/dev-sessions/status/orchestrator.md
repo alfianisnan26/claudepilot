@@ -31,7 +31,10 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
 - T-105 (label t105): worktree dev-automove-model, branch dev/t105-automove-proven (WIP pushed; 69/69 autotransfer tests, tsc clean). Left: the
   usage-refresh trigger, the web waiting line, PRD FR4a/FR10a, tools/qa/automove.mjs, merge of integration and the area tests. The live dry run
   is the orchestrator's after the deploy.
-- T-107 (label t107): worktree dev-t107-job-run, branch dev/t107-job-run from 4b4a55a: scripts/job-run.sh, fake-kubectl tests, a timed real run.
+- T-107 DONE by t107 (bfe2a1f), reviewed and merged as 5b3cdda; gate Job running, then push. Delivery VOID until incident T-124
+  (t107 printed PILOT_MCP_TOKEN into its transcript via an env dump) is closed; ticket stays open. Leftovers: Konfersi heavy.sh, Playwright
+  in the dev image, the perf.test throughput failure under load, 1 Konfersi vitest file.
+- T-100 (label t100): RESUMED 15:3x in dev-automove-web from a5def9a (WIP); heavy work through job-run.sh.
 - T-102 (label t102): RESUMED 15:11 from 4868c46 (chip and popover verified 940/940); left: headerBand, the other qa states, scroll-lock,
   mobile-drag, merge of integration, area tests.
 - T-118 STOPPED 15:1x after the owner's re-rank to rank-06b (accepted risk, T-117 closed, D-14/D-21/D-23): WIP 7b02a4e on dev/t118-login
@@ -106,3 +109,6 @@ T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, 
 
 - 15:0x Coordinator gap review adopted: WIP limit 3, the order and cut line above, DECISIONS.md is the registry until T-115. Checked the three
   running slices against D-1..D-22: no conflict (T-105 builds D-12's values; T-107 is D-5/D-11).
+- 15:3x INCIDENT T-124 (urgent): sub-agent t107 printed this chat's PILOT_MCP_TOKEN while searching the env with a name filter. Needs the
+  coordinator or owner to revoke/rotate the token. New binding brief line for every sub-agent: never print the environment in any form;
+  sent to t105 and t102, in t100's brief. Deny rules for env/printenv/set proposed (a person's call).
