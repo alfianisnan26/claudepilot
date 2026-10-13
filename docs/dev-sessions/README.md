@@ -34,7 +34,11 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first. `orches
 ## Who integrates
 
 Sub-agents commit on their own branch (unsigned: `git -c commit.gpgsign=false`; the message says what and why and ends with
-`Co-Authored-By: Claude <noreply@anthropic.com>`) and push that branch (`git push -u origin <branch>`). **Only the orchestrator pushes `integration`**:
+`Co-Authored-By: Claude <noreply@anthropic.com>`) and push that branch (`git push -u origin <branch>`). **Trailers (owner, 2026-10-13, T-27):**
+until the prepare-commit-msg hook of T-27 writes them, every commit by the orchestrator or a sub-agent also ends with two hand-typed
+trailer lines, `Pilot-Session: <the orchestrator's chat session id>` and `Pilot-Agent: main` (the orchestrator) or `Pilot-Agent: <the slice's
+label, e.g. track-a-t6>` (a sub-agent); with `git commit -m "<subject and body>" -m "Co-Authored-By: … \nPilot-Session: …\nPilot-Agent: …"`
+the trailers are their own paragraph at the end. Once the hook exists, a sub-agent exports `PILOT_AGENT="<label>"` instead. **Only the orchestrator pushes `integration`**:
 
 ```sh
 cd ~/work/claudepilot && git fetch origin && git merge --no-ff origin/<branch>     # or rebase the branch first; never discard somebody's lines
