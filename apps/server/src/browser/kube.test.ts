@@ -5,7 +5,7 @@ import { KubeConfig, type V1Deployment, type V1NetworkPolicy, type V1Node, type 
 import { BROWSER_POOL_DEFAULTS } from '@portal/contracts';
 import { FakeKube } from '../connect/agent/testkit/fakeKube.js';
 import { kubeRuntimeOn } from '../workspaces/kubeTestkit.js';
-import type { KubernetesRuntime } from '../workspaces/kubernetes.js';
+import { KubernetesRuntime } from '../workspaces/kubernetes.js';
 import {
   BROWSER_CONTAINER,
   browserContainer,
@@ -174,6 +174,14 @@ describe('the pod template', () => {
   });
 });
 
+test('a portal with a namespaced Role only creates workspaces in the namespace made for it (namespace create is 403)', async () => {
+  fake.clusterReads = false;
+  const own = new KubernetesRuntime({ namespace: fake.namespace, image: 'w', storage: '1Gi' }, { kubeConfig: kubeConfigOn(fake), manageNamespace: true, target: { id: 'k', label: 'K', where: 'fake' } });
+  await own.create({ name: 'solo', runtimeName: 'ws-solo' }, () => undefined);
+  assert.ok(fake.deployments.has('ws-solo'));
+  assert.equal(fake.seen('POST', '/api/v1/namespaces').length, 1, 'it tried');
+});
+
 describe('caps and fit', () => {
   test('at most 2 assigned browsers per Kubernetes target: the third is refused with the reason', async () => {
     for (const n of ['a', 'b', 'c']) await workspace(n, { running: false });
@@ -188,7 +196,7 @@ describe('caps and fit', () => {
 
   test('no node with room: refused with the numbers, the workspace starts without its browser, and the next start tries again', async () => {
     fake.nodes.set('n1', node('n1', '2', '4Gi') as never);
-    fake.otherPods.push(otherPod('n1', '1500m', '1Gi'), otherPod('n1', '4', '8Gi', 'Succeeded'));
+    fake.otherPods.push(otherPod('n1', '1500m', '1Gi') as never, otherPod('n1', '4', '8Gi', 'Succeeded') as never);
     await workspace('dev', { running: false, cpus: 1, memoryMb: 2048 });
     assign();
     await h.service.converge(id(), 'test');
@@ -352,7 +360,7 @@ describe('network', () => {
     const p = egressPolicy('ws-dev', { a: 'b' }, { portal: { namespace: 'portal-ns', port: 3000 }, allow: parseEgressAllow('10.43.0.1/32:443, 192.168.1.10').allow });
     const spec = (p as V1NetworkPolicy).spec!;
     assert.deepEqual(spec.policyTypes, ['Egress']);
-    assert.deepEqual(spec.podSelector.matchLabels, { a: 'b' });
+    assert.deepEqual(spec.podSelector!.matchLabels, { a: 'b' });
     const [internet, dns, portal, api, lan] = spec.egress!;
     assert.deepEqual(internet!.to![0]!.ipBlock, { cidr: '0.0.0.0/0', except: PRIVATE_V4 });
     for (const r of ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '127.0.0.0/8']) assert.ok(PRIVATE_V4.includes(r), r);
@@ -374,7 +382,7 @@ describe('network', () => {
     assign();
     await h.service.converge(id(), 'test');
     const live = fake.networkPolicies.get(egressPolicyName('ws-dev')) as unknown as V1NetworkPolicy;
-    assert.deepEqual(live.spec!.podSelector.matchLabels, { 'claudepilot.managed': 'true', 'claudepilot.workspace': 'dev' });
+    assert.deepEqual(live.spec!.podSelector!.matchLabels, { 'claudepilot.managed': 'true', 'claudepilot.workspace': 'dev' });
     assert.equal(live.metadata!.ownerReferences?.[0]?.name, 'ws-dev', 'it goes with the Deployment');
     (kb as unknown as { egress: { mode: string } }).egress.mode = 'off';
     await h.service.converge(id(), 'test');

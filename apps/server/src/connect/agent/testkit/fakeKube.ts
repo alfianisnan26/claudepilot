@@ -169,6 +169,11 @@ export class FakeKube {
       return send(200, { kind: path === '/api/v1/nodes' ? 'NodeList' : 'PodList', apiVersion: 'v1', metadata: { resourceVersion: String(this.#rv) }, items });
     }
 
+    if (path === '/api/v1/namespaces' && method === 'POST') {
+      if (!this.clusterReads) return status(403, 'Forbidden', 'namespaces is forbidden: cannot create resource "namespaces" at the cluster scope');
+      return status(409, 'AlreadyExists', `namespaces "${ns}" already exists`);
+    }
+
     const collections: [RegExp, Map<string, Obj>, string, string, string][] = [
       [new RegExp(`^/api/v1/namespaces/${ns}/pods$`), this.pods, 'pod', 'PodList', 'v1'],
       [new RegExp(`^/apis/apps/v1/namespaces/${ns}/deployments$`), this.deployments, 'deployment', 'DeploymentList', 'apps/v1'],

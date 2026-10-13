@@ -325,7 +325,8 @@ export class KubernetesRuntime implements Runtime {
       progress(`Preparing namespace ${ns}`);
       await this.#core
         .createNamespace({ body: { metadata: { name: ns, labels: { [LABEL.managed]: 'true' } } } })
-        .catch(ignore(409));
+        // 403: a portal with a namespaced Role only (a rig, a locked-down cluster) uses the namespace someone made for it.
+        .catch(ignore(409, 403));
     }
 
     const labels = {
