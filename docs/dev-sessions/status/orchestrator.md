@@ -27,8 +27,11 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
 - T-102 session screen (dispatched 13:54): worktree dev-track-a-connect, branch dev/t102-session-screen from 2466ff1, label t102-session-screen,
   scratch port > 3450. Item 1 (Tools changed chip: Restart after this turn, auto-apply for autonomous sessions, Bypass kept or no auto-restart),
   then the popover placement, then the header blur and badge with a session-states.mjs check. Migrations 755-756 if any.
-- T-97 browser pool on Kubernetes (B3, since 12:50): worktree dev-automove-web, branch dev/browser-k8s, rig dev-rig-browser; told to use T-98's
-  workspaces/fit.ts and small browser requests (100m / 512Mi to try; node2 has about 0.6 CPU of requests free). Migrations 735-736.
+- T-100 Sessions list (dispatched 13:56): worktree dev-automove-web, branch dev/t100-sessions-list from 2466ff1, label t100-sessions-list, scratch
+  port > 3460; the clipped rows first (reproduced, fixed at the cause, a harness check), then the attention order and grouping on the existing chips.
+- T-97 DONE on branch dev/browser-k8s (6ec29bc, 7 commits, opus): proved on the rig (Playwright call, live view, handoff, CDP local only); browser
+  requests 100m / 512Mi; kube.test 17/17, areas 291/292 (1 skipped); rig deleted. Merge after the running gate; unify its fitOf with T-98's fit.ts
+  at that merge. NEEDS A HUMAN on the ticket: NetworkPolicy is not enforced on the cluster; PORTAL_K8S_BROWSER_IMAGE tag; the pool assignment restart.
 - T-98 workspace Resources (since 12:50): worktree dev-gate-job, branch dev/workspace-resources; told to build workspaces/fit.ts first (one fit
   check for apply, create and T-97), push it early, and remove scripts/ws-resources.sh with its allow rule when the feature lands. Migrations 716-717.
 - T-42 slice 3 DONE: merged as 2466ff1 (tickets, chat sessions, agent access; migration 714; 1005 area tests, 0 fail); fast gate running (whole
