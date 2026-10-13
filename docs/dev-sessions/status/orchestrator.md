@@ -18,10 +18,9 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - DEPLOY #6 right after #5 is released and verified (coordinator 10:2x): from the integration head, which includes 005fab0 (Kubernetes delivery: env and secret-path variables failed on pods; blocks the Konfersi migration), plus whatever is merged and fast-laned by then. Same rules (gate on the exact commit).
 - Do not touch workspace kubernetes/konfersi-dev or its pool konfersi-gitea (the Konfersi migration; it shares k3s-node2): keep CPU use polite.
 - Deploy #5 (rmv6i7h1p2ac08f, 4995f82, gate=true): in its gate (the pipeline's local suite, started 09:54). Then build, then it WAITS FOR THE OWNER'S APPROVE. integration is not pushed until its release ran.
-- Merged locally, not pushed (the deploy): bc8d222 T-6 MCP labels (231 server + 20 web tests on the touched files; the fast lane on merge runs after the deploy, in the cluster). T-6 closed.
-- T-38 folder trust: c5c8f4a on dev/folder-trust (pushed); its local fast lane was stopped at 36 % (it ran the full suite next to deploy #5's); now gated as the FIRST in-cluster Job (scripts/gate-job.sh c5c8f4a), merge after the deploy.
-- T-37 gate as a Job: 1a00a2a on dev/gate-job (pushed), 14/14 tests; first real run is T-38's gate. Merge after the deploy.
-- Running sub-agents: T-5 + T-31 + T-39 (dev/subagent-visibility: web half 9140fc3 committed; T-39 added), T-34 (dev/home-dashboard: cad50e0 Home page committed), T-25 mute rules (dev/notify-mute, dispatched 10:14). T-24 claimed, held until T-5 merges (both change Transcript.tsx).
+- Merged locally, not pushed (the deploy), head 65e4980 (backed up to origin wip/orchestrator-local-backup): T-6 MCP labels (bc8d222), 005fab0 the coordinator's delivery fix, T-34 Home page (c76cf67), T-37 gate Job (8a6089c), T-38 folder trust (65e4980). Full gate of 65e4980 running as a cluster Job (scripts/gate-job.sh); T-38 alone too. Green -> push integration once #5 released -> deploy #6.
+- T-6, T-16, T-34, T-36 closed. T-37's first real run found the token newline (fixed 00251cc).
+- Running sub-agents (3): T-5 + T-31 + T-39 (dev/subagent-visibility), T-25 mute rules (dev/notify-mute, 10:14), T-32 part 1 CI auto-report + moves followed (dev/ci-report, 10:25). T-24 held until T-5 merges (Transcript.tsx). Next free slot: T-28 ticket Bump (builds the picker), then T-32 part 2 Bump, T-26 (three slices), T-27, T-30.
 - The move (09:42, alfian.isnan -> fadlilah): slices resumed from their files at 09:45.
 
 ## WAVES (owner, 09:4x; work in this order)
