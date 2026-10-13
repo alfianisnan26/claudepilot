@@ -75,6 +75,8 @@ import {
   denyResponse,
   errorResponse,
   flagSettings,
+  keptResult,
+  mapInputStrings,
   parseLine,
   pickApplied,
   pickModels,
@@ -3015,6 +3017,8 @@ export class ChatController {
         this.#note(sessionId, 'This workspace lets its sessions use the portal’s tools without asking.');
       }
       if (ev.kind === 'tool_result' && ev.toolUseId && ev.toolName === undefined) ev.toolName = this.#toolFor(sessionId, ev.toolUseId);
+      // A command's output is kept to the cap; what the other tools return (a file read, a search) is a shorter piece.
+      if (ev.kind === 'tool_result' && ev.text) ev.text = keptResult(ev.toolName, ev.isError, ev.text);
       if (ev.rawImages) {
         const images = this.#saveToolImages(sessionId, ev.rawImages);
         delete ev.rawImages; // the base64 never reaches the store
@@ -3685,6 +3689,7 @@ export class ChatController {
     const values = this.#valuesOf(sessionId);
     if (values.active) {
       if (typeof ev.text === 'string') ev.text = values.redact(ev.text);
+      if (ev.toolInput) ev.toolInput = mapInputStrings(ev.toolInput, (t) => values.redact(t));
       if (ev.request) ev.request = { ...ev.request, title: values.redact(ev.request.title), detail: ev.request.detail ? values.redact(ev.request.detail) : ev.request.detail };
     }
     const full = this.#chat.appendEvent(sessionId, ev);

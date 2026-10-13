@@ -217,6 +217,9 @@ export interface ChatRequest {
 /** The most of an approval's text kept and shown (`ChatRequest.full`). */
 export const REQUEST_FULL_MAX = 8000;
 
+/** One value of a tool's stored input (`ChatEvent.toolInput`): JSON. */
+export type ChatToolInputValue = string | number | boolean | null | ChatToolInputValue[] | { [key: string]: ChatToolInputValue };
+
 /**
  * Whether a request may be allowed: only when the text asked about is there and shown whole. A request that is cut at the cap or has
  * nothing to show can be denied and nothing else, on every surface that answers it (the session's card, the glance widget) and at
@@ -265,6 +268,14 @@ export interface ChatEvent {
   tokens?: ChatTurnTokens;
   /** For `tool_use` and `tool_result`: the call they belong to, pairing a result with its call. */
   toolUseId?: string;
+  /**
+   * For `tool_use`: what the tool was given, for the row's Input block (chat PRD FR7): the fields the row shows of a built-in tool (Bash's
+   * command, an edit's path and strings, a read's path and range), an MCP tool's whole input; absent for the rest (a sub-agent's prompt
+   * is never stored). Strings as written (line breaks kept), disguising characters as `⟦U+XXXX⟧`, redacted, bounded (`toolInputCut`).
+   */
+  toolInput?: { [key: string]: ChatToolInputValue };
+  /** For `tool_use`: `toolInput` was cut to its bound. */
+  toolInputCut?: boolean;
   /** For `tool_result`: the tool failed. */
   isError?: boolean;
   /** For `thinking`: how long the block took, when the portal saw it start. For `result`: how long the turn took. */
