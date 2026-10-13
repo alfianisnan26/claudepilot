@@ -1,6 +1,6 @@
 # Orchestrator status (2026-10-13)
 
-Tickets mirror this file (owner, 07:2x): T-1 Pinned, T-2 sideways scroll, T-3 upload exit 4, T-4 automove.allowBypass, T-5 sub-agent visibility, T-6 MCP client label, T-7 auto-move web, T-8 Connect T6, T-9 phone chrome, T-10 N2, T-11 N3, T-12 CI screens, T-13 T5 second pass, T-14 UR, T-15 GA/GB, T-16 mirror chore, T-17 vault (a person), T-18 first deploy, T-19 deploy-waits (done), T-20 flaky tests (done), T-21 V1 (done), T-22 Connect hang (done), T-23 btw real (done), T-24 tool rows and approvals formatting, T-25 notification mute rules, T-26 git monitoring inside workspaces + session Git view (owner, 07:5x), T-27 agentic commit trailers, verification and the author trace (lands with T-26; from now on every commit carries Pilot-Session and Pilot-Agent trailers by hand), T-28 ticket Bump button (owner, 07:58: push a ticket into a running session as a priority or a question).
+Tickets mirror this file (owner, 07:2x): T-1 Pinned, T-2 sideways scroll, T-3 upload exit 4, T-4 automove.allowBypass, T-5 sub-agent visibility, T-6 MCP client label, T-7 auto-move web, T-8 Connect T6, T-9 phone chrome, T-10 N2, T-11 N3, T-12 CI screens, T-13 T5 second pass, T-14 UR, T-15 GA/GB, T-16 mirror chore, T-17 vault (a person), T-18 first deploy, T-19 deploy-waits (done), T-20 flaky tests (done), T-21 V1 (done), T-22 Connect hang (done), T-23 btw real (done), T-24 tool rows and approvals formatting, T-25 notification mute rules, T-26 git monitoring inside workspaces + session Git view (owner, 07:5x), T-27 agentic commit trailers, verification and the author trace (lands with T-26; from now on every commit carries Pilot-Session and Pilot-Agent trailers by hand), T-28 ticket Bump button (owner, 07:58: push a ticket into a running session as a priority or a question), T-29 auto move per quota window and per model, with a model switch on the same Claude as an option (owner, 08:31).
 
 Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 after a session limit), main folder ~/work/claudepilot, branch integration. Three packages, one sub-agent each.
 
@@ -21,6 +21,8 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - C item 2, phone chrome all states (opus, dev-track-c-ui, port 3415).
 
 ## DECISIONS
+- 08:31 the owner switched this session to Opus 5.5: commits now end with `Co-Authored-By: Claude Opus 5.5` plus the Pilot trailers.
+- T-29 defaults (PRD style, until the owner says otherwise): `automove.prefer = model` (keep the model, move Claude first), `automove.modelFallback` empty (never change model by itself until set).
 - Owner (06:05): the auto-move web half runs ahead of N2 and N3.
 - Model per slice (owner): sonnet for narrow checks, opus for implementation, fable only for hard diagnosis or after two failures.
 - The gate fails a hung test after GATE_TEST_TIMEOUT_MS and reruns failing files alone; the cause is fixed in the package, not the gate.
@@ -37,7 +39,7 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - T6: whatever still needs Docker, macOS, Windows or a second cluster (A's report will list it).
 
 ## NEXT
-- Next slices when a slot frees, in this order: T-5 sub-agent visibility (opus), T-6 MCP client label (sonnet), T-24 tool rows (opus), T-26 + T-27 git monitoring with the commit trace (three opus slices: server scan + parsers + the commit hook and trailer parser; repos UI + overview + MCP tools + author sheet; session Git view), T-25 mute rules (opus), T-28 ticket Bump (opus); then B3 N2, B4 N3, C3, A4, C4, C5.
+- Next slices when a slot frees, in this order: T-29 auto move per window and per model (opus; owner concern, first), T-6 MCP client label (sonnet), T-24 tool rows (opus), T-26 + T-27 git monitoring with the commit trace (three opus slices: server scan + parsers + the commit hook and trailer parser; repos UI + overview + MCP tools + author sheet; session Git view), T-25 mute rules (opus), T-28 ticket Bump (opus); then B3 N2, B4 N3, C3, A4, C4, C5.
 - Merge each sub-agent branch as it reports, targeted tests, gate, push; after the deploy's verify: seed-features.sh (allowBypass), the iPhone checks (T-18, T-3).
 - After the three slices: B item 3 (N2 web, opus), B item 4 (N3 triggers, sonnet/opus), C item 3 (CI screens, opus), A item 4 (T5 second pass, opus), then C items 4 and 5.
 - First deploy of the day once integration is pushed with a green gate (ci_run_trigger, gate=false): the deploy-waits notification and migration 720 are user-visible.
