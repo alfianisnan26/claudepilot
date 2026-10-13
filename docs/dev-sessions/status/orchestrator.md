@@ -13,6 +13,7 @@ Session fe3df8bc in kubernetes/kohi-event, main folder ~/work/claudepilot, branc
 - Gate on 9dd73e8 running (npm-ci, typecheck, web-build green; suite first pass: cpb-view and the deploy-pipeline e2e failed under load, shellcheck real and fixed; rerun-alone pass pending).
 
 ## DECISIONS
+- Owner (2026-10-13 06:05): prioritise the auto-move web half (B item 5: suggestion card, divider mark, Undo, settings rows for threshold and destinations). It runs as its own slice in a new worktree dev-automove-web (branch dev/automove-web, opus) as soon as a sub-agent slot frees, ahead of N2 and N3.
 - Model per slice (owner, 2026-10-13): sonnet for narrow checks, opus for implementation, fable only for hard diagnosis or after two failures. The first three slices ran on fable (dispatched before the rule); from slice 2 on the model is named next to each slice.
 - Package B does item 6 (test leaks and flakes) right after item 1, before V1: the gate's reliability gates everything else. (Done.)
 - The gate (b6f141f on integration) fails a hung test after GATE_TEST_TIMEOUT_MS and reruns failing files alone; package A fixes the cause, not the gate.
