@@ -54,6 +54,10 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
   request already completed): not in T-99; the raw lines are in ~/.claudepilot/sessions/fe3df8bc-…/out.*.jsonl if it happens again.
 
 ## DECISIONS
+- 13:25 (coordinator) Deploy run 16 went red in the gate on qa/runtimes.test.ts (the empty-name bug of T-42 slice 1); fixed upstream as dca2a99
+  (merged here as a64886b, taking the upstream lines over 0520dd2); run 17 deploys dca2a99. LESSON, binding for every slice brief and merge: run the
+  touched AREAS' tests (src/qa, src/workspaces, the module's neighbours) before a merge, not only the slice's own files. The gate Job with /tmp in
+  memory takes about 6 minutes (was 31+): T-95 item 3 numbers go on the ticket when run 17's gate reports.
 - 12:45 Deploy #14 was invisible to this session's token (ci_runs_list empty); the coordinator later cancelled it. Integration is pushed after a
   green fast gate; the release merges into a moved tip (ffde31e).
 - 12:48 The earlier session's uncommitted work (T-42 slice 3, T-97) is finished by new sub-agents in the same worktrees; T-97 committed as WIP first.
