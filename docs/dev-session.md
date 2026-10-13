@@ -108,6 +108,30 @@ twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a
 - **The commit must be on GitHub** (any branch: a sub-agent's pushed branch, `integration`, or `wip/orchestrator-local-backup` for an
   unpushed merge). The deploy pipeline's gate job uses it by default.
 
+## Heavy agent work in the cluster
+
+`scripts/job-run.sh` (T-107) runs any heavy command of an agent as a Job like the gate's (`deploy/k3s-build/job-run.yaml`: the development
+image, a node without a workspace pod preferred, 1 CPU requested and 4 the limit, `/tmp` and `/dev/shm` in memory, a deadline, gone 30 minutes
+after it ends), so the pod's flock queue is only for what must run in the pod:
+
+```sh
+git push origin HEAD:wip/<name>                                              # the Job clones what is on the remote, nothing local
+scripts/job-run.sh -- 'cd apps/server && node --import tsx --test src/ci/jobRun.test.ts'
+scripts/job-run.sh --repo konfersi:platform/konfersi-backend --ref <branch> --also shared/konfersi-shared -- 'npx vitest run'
+scripts/job-run.sh --artifacts test-results --out /tmp/cp-shots -- 'npx playwright test'   # files back, at most 4 MiB compressed
+scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
+```
+
+- **The code:** `--repo` and `--ref` default to the current folder's origin and HEAD (it must be on the remote). ClaudePilot comes from GitHub
+  (the npm token for `@isnanme` in the Job's Secret), Konfersi from Gitea (git's credential helper gives the token; in the Job a credential helper
+  reads it from the environment, never a URL). The Secret belongs to the Job and is deleted on exit; the streamed log is masked for the token.
+- **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide and `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`). A Job over a cap is created
+  suspended and waits in creation order ("queued behind K"). Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`.
+- **Cleanup:** Ctrl-C or a kill deletes the Job; so does the end of the chat (the Claude process, `CLAUDE_PID`, exits); a Job whose script was
+  killed outright is removed by the next run on this host.
+- **npm cache:** none shared. A cold `npm ci` in a Job is 15 to 20 s (job-run and gate logs); a shared cache would be a node-bound `local-path`
+  PVC (the only storage class) for a few seconds.
+
 ## Rules that hold
 
 - Never print, log or commit a token. No token-shaped literal anywhere in the repository (GitHub push protection): build fixtures at runtime.
