@@ -7,7 +7,7 @@ import { describe, test } from 'node:test';
 import { CONNECT_LIMITS, CONNECT_REJECT_FATAL } from '@portal/contracts';
 import { WebSocket } from 'ws';
 import { ConnectError } from './seams.js';
-import { helloFor, openCore, openHub, withTimeout, type Core, type TestHub } from './testkit.js';
+import { helloFor, openCore, openHub, TIME_SCALE, withTimeout, type Core, type TestHub } from './testkit.js';
 import { TunnelConnectError, TunnelRejected, acceptService, generateNodeKeyPair, readLine, signRekey, writeLine, type MuxStream } from './tunnel/index.js';
 
 /** Provider-shaped text for the redaction checks, built at runtime so no token-shaped literal sits in the source. */
@@ -207,7 +207,7 @@ describe('one live connection per node (FR15)', () => {
       });
       const old = await quiet;
       assert.equal(await rejected(h.dial(n.nodeId, n.keys)), 'already_connected', 'not silent long enough yet');
-      await new Promise((r) => setTimeout(r, 300));
+      await new Promise((r) => setTimeout(r, 300 * TIME_SCALE));
       const taken = await h.dial(n.nodeId, n.keys);
       assert.equal(taken.welcome.node, n.nodeId);
       await withTimeout(once(old, 'close'), 'the old socket to close');
@@ -292,7 +292,7 @@ describe('the control stream', () => {
       assert.equal(view.nodes[0]!.docker!.running, 2);
       assert.equal(view.problem, 'docker: denied: [redacted] and red');
       await c.send({ t: 'status', at: '2026-10-12T09:00:03.000Z', services: [{ name: 'docker', ok: true }], denied: [{ rule: 'path', count: 4 }] });
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50 * TIME_SCALE));
       const denied = core.events.list('lab', { limit: 50 }).filter((e) => e.type === 'policy.denied');
       assert.deepEqual(denied.map((e) => e.detail.rule).sort(), ['create.privileged', 'path'], 'one audit row per rule, not per status');
     } finally {
@@ -307,8 +307,12 @@ describe('the control stream', () => {
       const d = await h.dial(n.nodeId, n.keys);
       const c = await h.control(d);
       for (let i = 0; i < 30; i++) await c.send({ t: 'log', level: 'warn', message: `line ${i} cpen_${'Z'.repeat(43)}`, at: '2026-10-12T09:00:00.000Z' });
-      await new Promise((r) => setTimeout(r, 100));
-      const logs = core.events.list('lab', { limit: 100 }).filter((e) => e.type === 'agent.log');
+      // The hub reads the thirty lines at its own pace (a loaded machine needs more than a fixed 100 ms: that failed the deploy gate with 10 instead of 20): wait for
+      // the twenty, then give any twenty-first a moment to show up, which the limit must have refused.
+      const agentLogs = () => core.events.list('lab', { limit: 100 }).filter((e) => e.type === 'agent.log');
+      assert.ok(await h.waitFor(() => agentLogs().length >= 20, 10_000), 'twenty rows within the wait');
+      await new Promise((r) => setTimeout(r, 150 * TIME_SCALE));
+      const logs = agentLogs();
       assert.equal(logs.length, 20);
       assert.ok(logs.every((e) => !JSON.stringify(e).includes('ZZZZZ')));
       assert.ok(logs.every((e) => e.detail.level === 'warn'));
@@ -324,9 +328,8 @@ describe('the control stream', () => {
       const d = await h.dial(n.nodeId, n.keys);
       const c = await h.control(d);
       await c.send({ t: 'from-the-future', x: 1 });
-      await new Promise((r) => setTimeout(r, 30));
+      assert.ok(await h.waitFor(() => h.logs.some((l) => /does not know \(from-the-future\)/.test(l)), 6_000), 'the unknown message is logged');
       assert.equal(d.session.closed, false);
-      assert.ok(h.logs.some((l) => /does not know \(from-the-future\)/.test(l)));
       c.stream.write('{not json\n');
       await withTimeout(once(d.ws, 'close'), 'the agent socket to close');
       assert.equal(h.hub.isConnected(n.nodeId), false);
@@ -356,7 +359,7 @@ describe('the control stream', () => {
       const d = await h.dial(n.nodeId, n.keys);
       const c = await h.control(d);
       await c.send({ t: 'bye', reason: 'uninstall' });
-      await new Promise((r) => setTimeout(r, 30));
+      await new Promise((r) => setTimeout(r, 250 * TIME_SCALE));
       d.session.close(1000, 'bye');
       assert.ok(await h.waitFor(() => !h.hub.isConnected(n.nodeId)));
       const left = core.events.list('lab', { limit: 50 }).find((e) => e.type === 'node.disconnected')!;
