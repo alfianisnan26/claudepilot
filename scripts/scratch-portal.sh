@@ -8,6 +8,9 @@
 #       PORTAL_HOST=127.0.0.1 keeps it off the network (do that before enrolling a Host agent: it gives the portal a shell)
 #   PORTAL_LOCAL_ENABLED=true scripts/scratch-portal.sh start 3405   also offers "This machine" as a workspace (its home is the private one under /tmp;
 #       a tools/qa/mock-anthropic.mjs stand-in reached through $dir/home/.claude/settings.json lets the real Claude Code answer without a credential)
+#   SCRATCH_K8S_RIG=dev-rig-<name> scripts/scratch-portal.sh restart <port>   a Kubernetes target on a RIG namespace only (scripts/dev-rig.sh), through
+#       the kubeconfig at /tmp/scratch-portal-<port>/kubeconfig (a rig service account's, made by the caller; never ~/.kube/config); PORTAL_K8S_IMAGE,
+#       _BROWSER_IMAGE, _CPU_REQUEST, _MEMORY_REQUEST, _NODE_SELECTOR, _STORAGE, _STORAGE_CLASS and _BROWSER_EGRESS(_ALLOW) are passed through then
 # `env -i` matters in a workspace like this one: without it the portal would inherit ~/.kube/config (cluster-admin) and could create or
 # delete real workspaces, and the GitHub and Claude credentials in the home folder. It starts with none of them and with Kubernetes off.
 set -eu
@@ -18,10 +21,19 @@ launch() {
   key=$(cat "$dir/key")
   # Connect's variables, when the caller set them (a lab portal for a rig agent); nothing else of the caller's environment.
   passthru=$(env | grep -E '^(PORTAL_CONNECT_[A-Z_]+|PORTAL_TRUST_PROXY|PORTAL_HOST)=' || :)
+  k8s=PORTAL_K8S_ENABLED=false
+  if [ -n "${SCRATCH_K8S_RIG:-}" ]; then
+    # Only a namespace scripts/dev-rig.sh made, and only through the scratch portal's own kubeconfig.
+    [[ $SCRATCH_K8S_RIG =~ ^dev-rig-[a-z0-9-]+$ ]] || { echo "refused: SCRATCH_K8S_RIG is a rig namespace (dev-rig-<name>)" >&2; exit 2; }
+    [ -f "$dir/kubeconfig" ] || { echo "refused: no $dir/kubeconfig (a rig service account's)" >&2; exit 2; }
+    k8s="PORTAL_K8S_ENABLED=true KUBECONFIG=$dir/kubeconfig PORTAL_K8S_NAMESPACE=$SCRATCH_K8S_RIG"
+    passthru="$passthru $(env | grep -E '^PORTAL_K8S_(IMAGE|BROWSER_IMAGE|CPU_REQUEST|MEMORY_REQUEST|NODE_SELECTOR|STORAGE|STORAGE_CLASS|BROWSER_EGRESS|BROWSER_EGRESS_ALLOW)=' || :)"
+  fi
   cd "$(dirname "$0")/../apps/server"
   # Its own session and no stdin or stdout of ours: the script (and a tool that waits for its output) must be able to end while it runs on.
   # shellcheck disable=SC2086 # one VAR=value word per line of $passthru
-  env -i "PATH=$PATH" "HOME=$dir/home" LANG=C.UTF-8 PORTAL_K8S_ENABLED=false PORTAL_PORT="$port" \
+  # shellcheck disable=SC2086 # $k8s: one VAR=value word each
+  env -i "PATH=$PATH" "HOME=$dir/home" LANG=C.UTF-8 $k8s PORTAL_PORT="$port" \
     PORTAL_DATA_DIR="$dir/data" PORTAL_SERVER_CODE="$code" PORTAL_SECRET_KEY="$key" NODE_OPTIONS=--disable-warning=ExperimentalWarning \
     ${PORTAL_LOCAL_ENABLED:+"PORTAL_LOCAL_ENABLED=$PORTAL_LOCAL_ENABLED"} $passthru \
     setsid nohup npx tsx src/index.ts >> "$dir/log" 2>&1 < /dev/null &

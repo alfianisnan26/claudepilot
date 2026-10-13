@@ -6,6 +6,8 @@ import type { Server } from 'node:http';
 import type { Store } from '../store/store.js';
 import type { Runtime, RuntimeNames } from '../workspaces/runtime.js';
 import { Companions } from './companion.js';
+import { KubernetesRuntime } from '../workspaces/kubernetes.js';
+import { kubeCapRefusal, KubeBrowsers, parseEgressAllow } from './kube.js';
 import { BrowserKind } from './kind.js';
 import { createBrowserRoutes } from './routes.js';
 import { attachBrowserSockets } from './socket.js';
@@ -20,13 +22,22 @@ export class BrowserModule {
   readonly kind: BrowserKind;
   readonly service: BrowserService;
   readonly companions = new Map<string, Companions>();
+  /** Kubernetes targets: the browser is a second container in the workspace's pod (PRD §10.2); only with `PORTAL_K8S_BROWSER_IMAGE`. */
+  readonly kube = new Map<string, KubeBrowsers>();
 
   /** `names`: the workspaces' stored runtime names (T-42), which the browser containers follow. */
   constructor(deps: { store: Store; pools: PoolService; steps: WorkspaceSteps; runtimes: Runtime[]; notify: () => void; names?: RuntimeNames }) {
+    const egressAllow = parseEgressAllow(config.browser.kubeEgressAllow);
+    if (egressAllow.bad.length) console.error(`[browser] PORTAL_K8S_BROWSER_EGRESS_ALLOW: not a CIDR or an address, left out: ${egressAllow.bad.join(', ').slice(0, 300)}`);
     for (const r of deps.runtimes) {
       if (r.target.kind === 'docker') this.companions.set(r.target.id, new Companions(r.target.id, r.target.where, config.browser.image, config.browser.imageContext, () => deps.store.portalId, deps.names));
+      const access = r instanceof KubernetesRuntime && config.browser.kubeImage ? r.browserAccess() : null;
+      if (access && config.browser.kubeImage) this.kube.set(r.target.id, new KubeBrowsers(r.target.id, access, config.browser.kubeImage, config.portalMcp.internalUrl, { mode: config.browser.kubeEgress, allow: egressAllow.allow }));
     }
-    this.kind = new BrowserKind({ supports: (target) => this.companions.has(target) });
+    this.kind = new BrowserKind({
+      supports: (target) => this.companions.has(target) || this.kube.has(target),
+      refuseAssign: (workspaceId) => (this.kube.has(workspaceId.split('/')[0]!) ? kubeCapRefusal(deps.store, workspaceId) : null),
+    });
     deps.pools.register(this.kind);
     this.service = new BrowserService({
       store: deps.store,
@@ -34,6 +45,8 @@ export class BrowserModule {
       kind: this.kind,
       steps: deps.steps,
       companions: this.companions,
+      kube: this.kube,
+      internalUrl: config.portalMcp.internalUrl,
       portalPort: config.port,
       notify: deps.notify,
     });
@@ -49,6 +62,16 @@ export class BrowserModule {
    * take the browser away first. Wraps the instance, so no workspace code changes.
    */
   guard(runtime: Runtime) {
+    if (this.kube.has(runtime.target.id)) {
+      // Kubernetes: the pod template takes the browser (or loses it) while no pod runs, just before the start. A failure here is the
+      // browser's, never the workspace's (FR13): it starts anyway.
+      const start = runtime.start.bind(runtime);
+      runtime.start = async (name) => {
+        await this.service.beforeStart(`${runtime.target.id}/${name}`).catch((e: unknown) => console.error(`[browser] before starting ${name}: ${(e as Error).message}`));
+        return start(name);
+      };
+      return;
+    }
     if (!this.companions.has(runtime.target.id)) return;
     const stop = runtime.stop.bind(runtime);
     const remove = runtime.remove.bind(runtime);
@@ -76,3 +99,4 @@ export class BrowserModule {
     this.service.stop();
   }
 }
+

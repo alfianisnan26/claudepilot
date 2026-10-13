@@ -5,6 +5,7 @@ import type { BrowserState } from '@portal/contracts';
 export const STATE: Record<BrowserState, { label: string; tone: BadgeTone }> = {
   none: { label: 'None', tone: 'neutral' },
   workspace_stopped: { label: 'Stopped', tone: 'neutral' },
+  restart_needed: { label: 'Restart needed', tone: 'warning' },
   starting: { label: 'Starting', tone: 'neutral' },
   asleep: { label: 'Asleep', tone: 'neutral' },
   ready: { label: 'Ready', tone: 'success' },

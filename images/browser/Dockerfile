@@ -10,7 +10,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        chromium tigervnc-standalone-server openbox xdotool scrot xclip xauth socat x11-utils x11-xserver-utils \
        fonts-liberation fonts-noto-color-emoji fonts-noto-core fonts-dejavu-core \
-       ca-certificates procps \
+       ca-certificates procps tini \
     && rm -rf /var/lib/apt/lists/*
 
 # uid 1000 (node, from the base image) runs Chromium; uid 1001 runs the display, the VNC servers and the
@@ -27,5 +27,6 @@ RUN chmod 0755 /opt/cpb /opt/cpb/*.mjs /opt/cpb/cpb-ctl /opt/cpb/cpb-vnc /opt/cp
     && chown 1000:1000 /data/profile /home/node/Downloads && chmod 0700 /data/profile
 
 ENV LANG=C.UTF-8 NODE_OPTIONS=--disable-warning=ExperimentalWarning
-# The root init (holding only SETUID and SETGID, PRD §10.1) starts everything else; Docker's `Init: true` is PID 1.
+# The root init (holding only SETUID and SETGID, PRD §10.1) starts everything else; Docker's `Init: true` is PID 1. On Kubernetes
+# (no such option) the pod runs it under `tini`, so the processes Chrome leaves behind are reaped.
 ENTRYPOINT ["node", "/opt/cpb/init.mjs"]

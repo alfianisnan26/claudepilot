@@ -50,6 +50,8 @@ import {
   type Workspace,
   type WorkspaceTarget,
   type WorkspaceUsage,
+  type WorkspaceResources,
+  type UpdateWorkspaceResourcesRequest,
 } from '@portal/contracts';
 
 export class ApiError extends Error {
@@ -137,6 +139,10 @@ export const api = {
     labels: () => request<Record<string, string>>('GET', WORKSPACE_API.labels).then((map) => (rememberWorkspaceLabelMap(map), map)),
     /** Renames a workspace: its label only (T-42); nothing running is touched. */
     rename: (id: string, label: string) => request<RenameWorkspaceResult>('PATCH', WORKSPACE_API.one(id), { label }),
+    /** CPU and memory of a Kubernetes workspace (T-98): stored, live, and whether a change waits for its next start. */
+    resources: (id: string) => request<WorkspaceResources>('GET', WORKSPACE_API.resources(id)),
+    /** `apply: 'now'` restarts its pod (every session in it ends); `next_restart` keeps them for its next start. */
+    setResources: (id: string, body: UpdateWorkspaceResourcesRequest) => request<WorkspaceResources>('PATCH', WORKSPACE_API.resources(id), body),
     usage: () => request<WorkspaceUsage[]>('GET', WORKSPACE_API.usage),
     create: (body: CreateWorkspaceRequest) => request<Workspace>('POST', WORKSPACE_API.list, body),
     start: (id: string) => request<{ ok: true }>('POST', `${WORKSPACE_API.one(id)}/start`),
