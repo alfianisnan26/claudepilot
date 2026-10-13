@@ -2,8 +2,9 @@
 # scripts/gate-job.sh, which fills in NAME, COMMIT, STEPS, IMAGE and VERDICT (its own scripts/gate-verdict.sh, base64, so an older commit is
 # read the same way), makes the Secret NAME (the GitHub Packages token for npm ci,
 # the private @isnanme packages) for the Job's life, and reads the verdict from the log. Several can run at once, one per name.
-# No node selector: the scheduler may put it on the master when it has CPU (k3s-node2's requests are nearly all allocated), so the
-# requests are small like the image builds', and the limits let it use up to 4 CPUs where it lands.
+# It prefers a node WITHOUT a development workspace pod (anti-affinity below): on the same node as the pod its 100m request lost every
+# fight for CPU against the agents (deploy 10: 0.4 CPU used on k3s-node2 at 95% while k3s-master was at 27%, the suite ran twice as long and
+# timing tests failed). The request is 1 CPU so the node's share is real; the limit lets it use up to 4 where it lands.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -20,6 +21,14 @@ spec:
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                namespaces: [isnan-claudepilot-workspaces]
+                labelSelector: {matchLabels: {claudepilot.managed: "true"}}
       containers:
         - name: gate
           image: IMAGE
@@ -44,5 +53,5 @@ spec:
               for s in npm-ci typecheck web-build; do grep -q "^$s rc=0 " /tmp/gate.logs/SUMMARY.txt 2>/dev/null || { [ -f "/tmp/gate.logs/$s.log" ] && { echo "=== the end of $s's log"; tail -n 40 "/tmp/gate.logs/$s.log"; }; }; done
               printf '%s' "$GATE_VERDICT_SH" | base64 -d > /tmp/gate-verdict.sh && bash /tmp/gate-verdict.sh logs /tmp/gate.logs "$GATE_STEPS"
           resources:
-            requests: {cpu: 100m, memory: 512Mi}
+            requests: {cpu: 1000m, memory: 1Gi}
             limits: {cpu: "4", memory: 6Gi}
