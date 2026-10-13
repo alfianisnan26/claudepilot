@@ -185,7 +185,8 @@ export function BtwCard({
         <span className="flex min-w-0 flex-1 items-center gap-1 text-[12px] text-muted">
           <span className="min-w-0 truncate">{estimate ?? (running ? 'Answering…' : '')}</span>
           <InfoTip label="About this answer">
-            Estimates, not the bill. Answered from this chat up to now{btw.context?.truncated ? ' (older messages left out)' : ''}, with no tools. Nothing is added to the chat unless you pin it.
+            Estimates, not the bill. Answered from {btw.context ? `the last ${btw.context.messages} messages of this chat` : 'this chat up to now'}
+            {btw.context?.truncated ? ' (older ones left out)' : ''}, with no tools. Nothing is added to the chat unless you pin it.
           </InfoTip>
         </span>
         {running ? (
