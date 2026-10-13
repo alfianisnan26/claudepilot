@@ -40,7 +40,13 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
 - T-104 Keep going as a portal feature (rank-05b), now with T-108's three additions: a deterministic WATCHDOG sweep in the portal with a Home
   'Autonomy' widget, an allow-list of protected-path approvals Keep going grants itself, the Bypass lease. Read T-108 (umbrella, rank-04b) and
   T-104's newest comment before the brief. Migration block 757-759.
-- Then T-101 (750-754), T-106 (rank-08b, after T-101; PRD knowledge-graph K4 FR36-FR39), T-28, T-32, T-24, T-26 (740-744), T-27, T-30 (745-749),
+- T-109 (rank-02b3, model fallback after a move): given to the T-105 slice, same branch, after T-105's commits.
+- T-110 (rank-04c): the portal approves ClaudePilot deploys by RULE (never an agent). PRD local-git-ci FR41 amendment first; off by default,
+  dry mode, pause switch, auto pause after a rollback; trial of 5 hand approvals by the coordinator meanwhile. (The coordinator's message
+  named it T-111; the ticket ids are T-110 = auto-approve, T-111 = self-learning.)
+- T-108 owner decisions: item 3 yes (T-110), item 6 yes (API-key last destination; keys and cap come from the owner later).
+- Then T-101 (750-754), T-106 (rank-08b, after T-101; PRD knowledge-graph K4 FR36-FR39), T-111 (rank-09b, self-learning loop: slices 1 and 2,
+  the measuring, first; the wall: never safety, deny rules, authz, Bypass gates, the gates or its own scoring), T-28, T-32, T-24, T-26 (740-744), T-27, T-30 (745-749),
   T-33 rename LAST alone, wave 4 (T-10..T-15).
 - After each merge: area tests or the gate Job, push origin and pilot. The next deploy carries T-42 slice 3, T-97, T-98, T-99, T-105, T-102, T-100.
 
