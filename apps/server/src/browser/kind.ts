@@ -65,8 +65,10 @@ function toolRules(v: unknown, fallback: Record<string, BrowserToolRule>): Recor
 
 /** The workspace targets the browser can run on, and what the kind needs from the module around it. */
 export interface BrowserKindDeps {
-  /** Whether a target can host a browser container: Docker for now. */
+  /** Whether a target can host a browser container: Docker, and Kubernetes with a browser image set. */
   supports: (targetId: string) => boolean;
+  /** Why this workspace can't have a browser assigned now (a cap, PRD §14.1), or null. */
+  refuseAssign?: (workspaceId: string) => string | null;
 }
 
 /**
@@ -144,7 +146,9 @@ export class BrowserKind implements PoolKind<BrowserPoolContent> {
 
   beforeAssign(workspaceId: string): void {
     const { target } = splitWorkspaceId(workspaceId);
-    if (!this.deps.supports(target)) throw new AppError('CONFLICT', 'A browser runs on Docker targets for now.');
+    if (!this.deps.supports(target)) throw new AppError('CONFLICT', 'A browser runs on Docker targets, and on Kubernetes targets with a browser image set.');
+    const refused = this.deps.refuseAssign?.(workspaceId);
+    if (refused) throw new AppError('CONFLICT', refused);
   }
 
   /** The container goes once the engine has taken the files away (`delivered` then sees no pool). */

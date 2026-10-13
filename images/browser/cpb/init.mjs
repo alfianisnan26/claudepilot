@@ -5,6 +5,7 @@
 // config. The supervisor can say "start" and "stop", nothing else, so a compromised supervisor can't run an
 // arbitrary program as uid 1000, and a compromised renderer (uid 1000) can't touch the supervisor's files.
 import { fork, spawn, spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync } from 'node:fs';
 import { chromeArgs, limitedRelay, loadConfig, log, UID_CHROME, UID_CPB } from './lib.mjs';
 
 const cfg = loadConfig();
@@ -20,6 +21,54 @@ let shuttingDown = false;
 let supervisorFailures = 0;
 
 const as = (uid) => ({ uid, gid: uid });
+
+/**
+ * Kubernetes (PRD §10.2): no tmpfs with an owner, only `emptyDir`s, which the kubelet makes root-owned and writable by everyone. This
+ * root init owns them, so it can set their modes without CAP_FOWNER: `/tmp` gets the sticky bit and the X socket folder, and the
+ * supervisor's folder `/run/cpb` is made by uid 1001 itself (no CAP_CHOWN here) inside a `/run` nobody else can write to, so Chrome
+ * (uid 1000) can't put a socket of its own where the supervisor's control and VNC sockets live.
+ */
+function prepareKubernetesFolders() {
+  chmodSync('/tmp', 0o1777);
+  mkdirSync('/tmp/.X11-unix', { recursive: true, mode: 0o1777 });
+  chmodSync('/tmp/.X11-unix', 0o1777);
+  chmodSync('/run', 0o1777);
+  const r = spawnSync('/bin/mkdir', ['-p', '-m', '0711', RUN], { ...as(UID_CPB), encoding: 'utf8' });
+  chmodSync('/run', 0o755);
+  if (r.status !== 0) throw new Error(`${RUN}: ${(r.stderr || r.error?.message || 'mkdir failed').trim()}`);
+}
+if (process.env.CPB_K8S === '1') {
+  try {
+    prepareKubernetesFolders();
+  } catch (e) {
+    log('kubernetes folders:', e.message);
+  }
+}
+
+/**
+ * `sandbox: auto`: one headless page with Chromium's sandbox, as Chrome's user, before the first start. A node whose seccomp profile or
+ * kernel refuses user namespaces answers "No usable sandbox"; then Chrome runs without it, unless the pool requires it (PRD §13).
+ */
+let sandboxProbed = false;
+function settleSandbox() {
+  if (!cfg.sandboxAuto) return;
+  if (sandboxProbed) {
+    if (!cfg.sandbox && cfg.requireSandbox) throw new Error('Chromium’s sandbox can’t start on this node, and the pool requires it.');
+    return;
+  }
+  const r = spawnSync(CHROME_BIN, ['--headless=new', '--disable-gpu', '--user-data-dir=/tmp/cpb-probe', '--dump-dom', 'about:blank'], {
+    ...as(UID_CHROME),
+    env: { PATH: '/usr/bin:/bin', HOME: '/tmp' },
+    encoding: 'utf8',
+    timeout: 45_000,
+  });
+  spawnSync('/bin/rm', ['-rf', '/tmp/cpb-probe'], as(UID_CHROME));
+  const works = r.status === 0 && /<html/i.test(r.stdout ?? '') && !/No usable sandbox/i.test(`${r.stdout}${r.stderr}`);
+  sandboxProbed = true;
+  cfg.sandbox = works;
+  log(`sandbox probe: ${works ? 'on' : 'unavailable, running without it'}`);
+  if (!works && cfg.requireSandbox) throw new Error('Chromium’s sandbox can’t start on this node, and the pool requires it.');
+}
 
 function tellSupervisor(msg) {
   try {
@@ -42,6 +91,7 @@ function prepareProfile() {
 function startChrome(id) {
   if (chrome) return tellSupervisor({ event: 'chrome-started', id, pid: chrome.pid, already: true });
   try {
+    settleSandbox();
     prepareProfile();
     const env = {
       PATH: '/usr/local/bin:/usr/bin:/bin',
@@ -65,7 +115,7 @@ function startChrome(id) {
       log(`chrome exited (${signal ?? code})`);
       tellSupervisor({ event: 'chrome-exit', code, signal, expected: me.stopping });
     });
-    child.once('spawn', () => tellSupervisor({ event: 'chrome-started', id, pid: child.pid }));
+    child.once('spawn', () => tellSupervisor({ event: 'chrome-started', id, pid: child.pid, sandbox: cfg.sandbox }));
   } catch (e) {
     chrome = null;
     log('chrome start failed:', e.message);

@@ -18,7 +18,8 @@ import type { WorkspaceSteps } from '../delivery/steps.js';
 import type { AssignedPool } from '../pools/kinds.js';
 import type { PoolService } from '../pools/service.js';
 import type { Store } from '../store/store.js';
-import { type Companions, type CompanionPlan } from './companion.js';
+import { type Companions, type CompanionPlan, type ExecResult, type ExecStream } from './companion.js';
+import { browserContainerState, hasBrowser, PENDING_ROLLBACK_MS, specIn, specOf, type KubeBrowsers, type KubePlan } from './kube.js';
 import { browserMatchers, compileBrowser, LOCK_HASH } from './compile.js';
 import { DEVICE_ID, deviceLabel, LEASE_TTL_S, Leases, refuse, type Lease } from './control.js';
 import type { BrowserKind } from './kind.js';
@@ -49,6 +50,10 @@ export interface BrowserServiceDeps {
   steps: WorkspaceSteps;
   /** Docker targets that can host a browser, by target id. */
   companions: Map<string, Companions>;
+  /** Kubernetes targets that can host a browser (a second container in the workspace's pod, PRD §10.2), by target id. */
+  kube?: Map<string, KubeBrowsers>;
+  /** How workspaces reach the portal (`PORTAL_INTERNAL_URL`): the browser's policy refuses it on Kubernetes. */
+  internalUrl?: string;
   /** The portal's listening port, so the browser's policy can refuse reaching it from a workspace's network. */
   portalPort: number;
   /** Something about a browser changed: pages that show it load it again. */
@@ -81,7 +86,8 @@ interface InstanceRow {
   workspace_id: string;
   pool_id: string | null;
   revision: number | null;
-  container: BrowserContainerState | 'workspace_stopped';
+  /** `restart_needed` (Kubernetes): the pod's template doesn't match the pool yet, and changing it restarts a running workspace. */
+  container: BrowserContainerState | 'workspace_stopped' | 'restart_needed';
   sandbox: string | null;
   spec: string | null;
   image_id: string | null;
@@ -156,6 +162,9 @@ export class BrowserService {
         if (!comps.available) continue;
         for (const name of await comps.list().catch(() => [])) ids.add(`${target}/${name}`);
       }
+      for (const [target, kb] of this.deps.kube ?? []) {
+        for (const name of await kb.list().catch(() => [])) ids.add(`${target}/${name}`);
+      }
       for (const id of ids) void this.converge(id, 'timer');
       this.#prune();
     } catch (e) {
@@ -181,6 +190,11 @@ export class BrowserService {
   matchers(workspaceId: string): McpMatcher[] {
     const a = this.deps.pools.assignedPools<BrowserPoolContent>(workspaceId, 'browser')[0];
     return a ? browserMatchers(a.content, compileBrowser({ pool: a.pool, content: a.content }).plugin.dir) : [];
+  }
+
+  /** Where a workspace's browser runs commands: its Docker companion or its pod's `browser` container. */
+  #host(target: string): { exec(workspace: string, cmd: string[], opts?: { user?: string; stdin?: string; timeoutMs?: number }): Promise<ExecResult>; stream(workspace: string, cmd: string[]): Promise<ExecStream> } | undefined {
+    return this.deps.companions.get(target) ?? this.deps.kube?.get(target);
   }
 
   /* ---------- Rows and events ---------- */
@@ -263,6 +277,8 @@ export class BrowserService {
 
   async #converge(workspaceId: string, why: string) {
     const { target, name } = splitWorkspaceId(workspaceId);
+    const kb = this.deps.kube?.get(target);
+    if (kb) return this.#convergeKube(workspaceId, name, why, kb);
     const comps = this.deps.companions.get(target);
     if (!comps || !comps.available) return;
     // A portal that doesn't trust its own state manages nothing (foundation §6.5), and none manages another portal's containers.
@@ -353,6 +369,103 @@ export class BrowserService {
     this.#save(workspaceId, { container: 'running', last_error: null, pool_id: base.pool_id, revision: base.revision, sandbox: base.sandbox, spec });
   }
 
+  /**
+   * Kubernetes (PRD §10.2, §10.3, §14.1): the browser is a container in the workspace's pod template, so adding, changing or removing it
+   * restarts the pod. The portal changes the template only while the workspace is stopped, which includes the moment before it starts
+   * (`beforeStart`); a running workspace shows "Restart needed". Before adding it the pod must fit a node by requests; a pod that stays
+   * unschedulable 5 minutes anyway gets its browser taken away again. A browser fault never reaches the workspace (FR13).
+   */
+  async #convergeKube(workspaceId: string, name: string, why: string, kb: KubeBrowsers) {
+    if (this.deps.store.trust.state !== 'ok' || !this.deps.store.writable || !this.deps.store.portalId) return;
+    const assigned = this.deps.pools.assignedPools<BrowserPoolContent>(workspaceId, 'browser')[0];
+    const ws = await kb.workspace(name);
+    const row = this.#row(workspaceId);
+    if (!ws) {
+      if (assigned) this.#save(workspaceId, { container: 'workspace_stopped', pool_id: assigned.pool.id, revision: assigned.pool.revision });
+      return;
+    }
+    const template = ws.deployment.spec?.template;
+    const has = hasBrowser(template);
+    const stopped = ws.replicas === 0;
+
+    if (!assigned) {
+      if (has && stopped) {
+        await kb.setTemplate(ws, null);
+        await kb.removeExtras(ws);
+        this.event(workspaceId, 'removed', { why });
+        this.#save(workspaceId, { wipe_profile: 1 });
+      }
+      // The sign-ins go once the browser is out of the pod and the workspace runs (its home volume is mounted there).
+      if (!has && this.#row(workspaceId)?.wipe_profile && ws.pod?.status?.phase === 'Running' && (await kb.wipeProfile(name))) {
+        this.#save(workspaceId, { wipe_profile: 0 });
+        this.event(workspaceId, 'profile_wiped', {});
+      }
+      if (row) this.#save(workspaceId, has && !stopped ? { container: 'restart_needed', pool_id: null, revision: null, last_error: 'Restart the workspace to remove its browser.' } : { container: 'none', pool_id: null, revision: null, last_error: null });
+      return;
+    }
+
+    const plan: KubePlan = { workspace: name, poolId: assigned.pool.id, content: assigned.content, portalHosts: this.#kubePortalHosts(), image: kb.image };
+    const spec = specOf(plan, ws.deployment.metadata!.name!);
+    const base = { pool_id: assigned.pool.id, revision: assigned.pool.revision };
+    await kb.ensureConfigMap(ws, plan);
+    await kb.ensureEgress(ws, name);
+    // Refused for room at the last start: tried again at the next one (or when the pool changes, which is a new spec).
+    if (row?.spec === `unfit:${spec}` && why !== 'workspace starting') return;
+
+    if (specIn(template) !== spec) {
+      if (!stopped) {
+        this.#save(workspaceId, {
+          ...base,
+          container: 'restart_needed',
+          last_error: has ? 'The browser changed: restart the workspace to apply it (its pod restarts).' : 'Restart the workspace to add its browser (its pod restarts).',
+        });
+        return;
+      }
+      const fit = await kb.fit(ws, plan, name);
+      if (fit && !fit.fits) {
+        if (has) await kb.setTemplate(ws, null);
+        this.#save(workspaceId, { ...base, container: 'error', spec: `unfit:${spec}`, last_error: fit.reason });
+        this.event(workspaceId, 'unfit', { reason: fit.reason, need: fit.need, nodes: fit.nodes.map((n) => ({ node: n.node, free: n.free })) });
+        return;
+      }
+      await kb.setTemplate(ws, plan);
+      this.event(workspaceId, has ? 'changed' : 'added', { why, fit: fit?.reason ?? 'not checked: the portal may not read the nodes' });
+      this.#save(workspaceId, { ...base, container: 'workspace_stopped', spec, last_error: null });
+      return;
+    }
+    if (stopped) {
+      this.#save(workspaceId, { ...base, container: 'workspace_stopped', spec, last_error: null });
+      return;
+    }
+    const st = browserContainerState(ws.pod);
+    if (st.pendingSince !== null && Date.now() - st.pendingSince > PENDING_ROLLBACK_MS) {
+      await kb.setTemplate(ws, null);
+      const message = `The pod stayed Pending 5 minutes with its browser${st.detail ? ` (${st.detail})` : ''}: it runs without it now.`;
+      this.#save(workspaceId, { ...base, container: 'error', spec: `unfit:${spec}`, last_error: message.slice(0, 500) });
+      this.event(workspaceId, 'rolled_back', { why: 'pending' });
+      return;
+    }
+    if (st.restarts > (row?.restarts ?? 0) && row?.container === 'running') this.event(workspaceId, 'restarted', { why: 'container restarted', restarts: st.restarts });
+    this.#save(workspaceId, { ...base, container: st.state, spec, restarts: st.restarts, last_error: st.state === 'error' ? st.detail : null });
+  }
+
+  /** What the browser refuses on Kubernetes: the portal as workspaces reach it (`cluster.local` is refused anyway). */
+  #kubePortalHosts(): string[] {
+    try {
+      const u = this.deps.internalUrl ? new URL(this.deps.internalUrl) : null;
+      return u ? [u.port ? `${u.hostname}:${u.port}` : u.hostname] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** A Kubernetes workspace is about to start: its pod template takes the browser (or loses it) now, while no pod runs. */
+  async beforeStart(workspaceId: string): Promise<void> {
+    const { target } = splitWorkspaceId(workspaceId);
+    if (!this.deps.kube?.has(target)) return;
+    await this.converge(workspaceId, 'workspace starting');
+  }
+
   /** Nothing is using the browser: no one in control, no handoff waiting, no viewer, and no tool call for a minute. */
   async #idle(workspaceId: string): Promise<boolean> {
     const s = await this.supervisor(workspaceId, { fresh: true });
@@ -364,11 +477,12 @@ export class BrowserService {
   async removeFor(workspaceId: string, why: string) {
     const { target, name } = splitWorkspaceId(workspaceId);
     const comps = this.deps.companions.get(target);
-    if (!comps?.available) return;
+    if (!comps?.available && !this.deps.kube?.has(target)) return;
     await this.#running.get(workspaceId)?.catch(() => undefined);
     try {
-      const found = await comps.inspect(name);
-      if (found && found.portal === this.deps.store.portalId) {
+      // On Kubernetes the browser is in the pod, and its ConfigMap and egress policy are the Deployment's: they go with it.
+      const found = comps ? await comps.inspect(name) : null;
+      if (comps && found && found.portal === this.deps.store.portalId) {
         await comps.remove(name);
         this.event(workspaceId, 'removed', { why });
       }
@@ -456,7 +570,7 @@ export class BrowserService {
   /** One `cpb-ctl` command in the workspace's browser container (uid 1001: the only user who can reach the control socket). */
   async ctl<T = unknown>(workspaceId: string, cmd: string, args: Record<string, string | number | boolean> = {}): Promise<T> {
     const { target, name } = splitWorkspaceId(workspaceId);
-    const comps = this.deps.companions.get(target);
+    const comps = this.#host(target);
     if (!comps) throw new AppError('NOT_FOUND', 'No browser on this target.');
     const flags = Object.entries(args).flatMap(([k, v]) => (v === false ? [] : v === true ? [`--${k}`] : [`--${k}`, String(v).slice(0, 400)]));
     const r = await comps.exec(name, ['cpb-ctl', cmd, ...flags], { timeoutMs: 40_000 });
@@ -493,8 +607,8 @@ export class BrowserService {
   /* ---------- Status and actions ---------- */
 
   async status(workspaceId: string, view: { deviceId?: string; secure?: boolean } = {}): Promise<BrowserStatus> {
-    const { target, name } = splitWorkspaceId(workspaceId);
-    const comps = this.deps.companions.get(target);
+    const { target } = splitWorkspaceId(workspaceId);
+    const comps = this.#host(target);
     const assigned = this.deps.pools.assignedPools<BrowserPoolContent>(workspaceId, 'browser')[0];
     const at = new Date().toISOString();
     const empty = (state: BrowserState, detail: string | null = null): BrowserStatus => ({
@@ -520,9 +634,10 @@ export class BrowserService {
     });
     if (!assigned || !comps) return empty('none');
     const row = this.#row(workspaceId);
-    const container: BrowserContainerState = row?.container === 'workspace_stopped' ? 'stopped' : (row?.container ?? 'none');
+    const container = containerOf(row);
     const base = { ...empty('starting'), container, sandbox: (row?.sandbox as 'on' | 'off' | null) ?? null };
     if (row?.container === 'workspace_stopped') return { ...base, state: 'workspace_stopped' };
+    if (row?.container === 'restart_needed') return { ...base, state: 'restart_needed', detail: row.last_error };
     if (row?.container === 'error') return { ...base, state: 'error', detail: row.last_error };
     const sup = row?.container === 'running' ? await this.supervisor(workspaceId) : null;
     if (!sup) return { ...base, state: row?.container === 'running' ? 'error' : 'starting', detail: row?.container === 'running' ? 'The browser container isn’t answering yet.' : null };
@@ -713,7 +828,7 @@ export class BrowserService {
   /** The VNC bridge's end in the container, as a process with stdin and stdout (PRD §12.1). */
   async openVnc(workspaceId: string, role: 'viewer' | 'controller') {
     const { target, name } = splitWorkspaceId(workspaceId);
-    const comps = this.deps.companions.get(target);
+    const comps = this.#host(target);
     if (!comps) throw new AppError('NOT_FOUND', 'No browser on this target.');
     return comps.stream(name, ['cpb-vnc', role === 'controller' ? 'full' : 'view']);
   }
@@ -724,7 +839,7 @@ export class BrowserService {
    */
   async openView(workspaceId: string) {
     const { target, name } = splitWorkspaceId(workspaceId);
-    const comps = this.deps.companions.get(target);
+    const comps = this.#host(target);
     if (!comps) throw new AppError('NOT_FOUND', 'No browser on this target.');
     const a = this.deps.pools.assignedPools<BrowserPoolContent>(workspaceId, 'browser')[0];
     if (!a) throw new AppError('CONFLICT', 'This workspace has no browser.');
@@ -740,7 +855,7 @@ export class BrowserService {
     const row = this.#row(workspaceId);
     const install = this.deps.store.db?.prepare('SELECT state, error FROM browser_installs WHERE workspace_id = ?').get(workspaceId) as { state: string; error: string | null } | undefined;
     return {
-      container: row?.container === 'workspace_stopped' ? 'stopped' : ((row?.container as BrowserContainerState | undefined) ?? 'none'),
+      container: containerOf(row),
       error: row?.last_error ?? null,
       sandbox: row?.sandbox ?? null,
       install: install ? { state: install.state, error: install.error } : null,
@@ -748,4 +863,10 @@ export class BrowserService {
   }
 
   companionName = companionName;
+}
+
+/** The container as the wire says it: a stopped workspace's, or one waiting for a restart (Kubernetes), is stopped. */
+function containerOf(row: InstanceRow | undefined): BrowserContainerState {
+  if (!row) return 'none';
+  return row.container === 'workspace_stopped' || row.container === 'restart_needed' ? 'stopped' : row.container;
 }

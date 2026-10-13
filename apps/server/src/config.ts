@@ -71,6 +71,11 @@ export const config = {
   browser: {
     image: env('PORTAL_BROWSER_IMAGE') ?? 'claudepilot-browser:latest',
     imageContext: `${root}images/browser`,
+    /**
+     * The browser image on Kubernetes targets (browser PRD §10.2), pulled by the nodes, so a registry reference: unset, Kubernetes
+     * workspaces get no browser.
+     */
+    kubeImage: env('PORTAL_K8S_BROWSER_IMAGE'),
   },
   workspaces: {
     /** Docker daemons; a target shows up when its socket exists. */

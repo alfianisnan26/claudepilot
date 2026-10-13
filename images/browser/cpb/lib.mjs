@@ -37,6 +37,10 @@ export function loadConfig(path = process.env.CPB_CONFIG || '/etc/cpb/config.jso
     idleMinutes: clamp(raw.idleMinutes, 0, 24 * 60, 30),
     startWithWorkspace: raw.startWithWorkspace === true,
     sandbox: raw.sandbox !== false,
+    // `auto` (Kubernetes, PRD §13 Chrome sandbox): the init tries Chromium's sandbox once before the first start and falls back to
+    // running without it, unless the pool requires it.
+    sandboxAuto: raw.sandbox === 'auto',
+    requireSandbox: raw.requireSandbox === true,
     liveView: raw.liveView !== false,
     takeOver: raw.takeOver !== false,
     private: raw.private === true,

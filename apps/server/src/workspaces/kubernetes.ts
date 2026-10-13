@@ -23,6 +23,26 @@ const SEEDED = '.claudepilot-seeded';
 
 const selector = `${LABEL.managed}=true`;
 
+/**
+ * The `seed-home` init container's script: a new PVC is empty, so the image's home is copied in once, like Docker does for a fresh volume.
+ * `dirs` (relative to home) are created with mode 0700 at every start, outside the seeded check: the browser's profile and `~/Downloads`,
+ * which the browser container mounts by `subPath` (the kubelet would make a missing one root-owned), browser PRD §20 A2.
+ */
+export function seedHomeScript(dirs: readonly string[] = []): string {
+  const seed = `[ -e /seed/${SEEDED} ] || { cp -a --no-preserve=all ${HOME}/. /seed/ && touch /seed/${SEEDED}; }`;
+  if (!dirs.length) return seed;
+  const paths = dirs.map((d) => `"/seed/${d}"`).join(' ');
+  return `${seed} && mkdir -p ${paths} && chmod 0700 ${paths}`;
+}
+
+/** What the browser pool needs to put its container in a workspace's pod (browser PRD §10.2). */
+export interface KubeBrowserAccess {
+  kubeConfig: KubeConfig;
+  namespace: string;
+  /** The Deployment of a workspace, from its stored runtime name (T-42). */
+  objectName(name: string): string;
+}
+
 const codeOf = (e: unknown) => (e as { code?: number }).code;
 const ignore = (...codes: number[]) => (e: unknown) => {
   if (!codes.includes(codeOf(e) ?? 0)) throw e;
@@ -80,6 +100,7 @@ export class KubernetesRuntime implements Runtime {
     if (connect) this.#kc = connect.kubeConfig;
     else this.#kc.loadFromDefault();
     this.#manageNamespace = connect?.manageNamespace ?? true;
+    this.#enrolled = !!connect;
     this.#core = this.#kc.makeApiClient(CoreV1Api);
     this.#apps = this.#kc.makeApiClient(AppsV1Api);
     this.#metrics = this.#kc.makeApiClient(CustomObjectsApi);
@@ -106,6 +127,16 @@ export class KubernetesRuntime implements Runtime {
   }
 
   #names: RuntimeNames | undefined;
+  readonly #enrolled: boolean;
+
+  /**
+   * The browser pool's way into this namespace: none for an enrolled cluster (Connect), whose agent refuses a Deployment that runs anything
+   * as root, which the browser container's init is (with every capability but SETUID and SETGID dropped).
+   */
+  browserAccess(): KubeBrowserAccess | null {
+    if (this.#enrolled) return null;
+    return { kubeConfig: this.#kc, namespace: this.#ns, objectName: (name) => this.#objectName(name) };
+  }
 
   useNames(names: RuntimeNames) {
     this.#names = names;
@@ -263,7 +294,9 @@ export class KubernetesRuntime implements Runtime {
 
     const pod = live[0];
     if (!pod) return { status: 'starting', detail: 'Scheduling' };
-    const statuses = [...(pod.status?.initContainerStatuses ?? []), ...(pod.status?.containerStatuses ?? [])];
+    // The workspace's own containers only (browser PRD §20 A5): a browser container whose image can't be pulled, or that crash-loops,
+    // is the browser's state, never the workspace's.
+    const statuses = [...(pod.status?.initContainerStatuses ?? []), ...(pod.status?.containerStatuses ?? []).filter((s) => s.name === CONTAINER)];
     const waiting = statuses.map((s) => s.state?.waiting).find(Boolean);
     if (waiting?.reason && STUCK.has(waiting.reason))
       return { status: 'error', detail: `${waiting.reason}: ${waiting.message ?? ''}`.trim() };
@@ -346,7 +379,7 @@ export class KubernetesRuntime implements Runtime {
                   // `cp -a` as uid 1000 fails to set that folder's times and mode ("Operation not permitted"); `tar` fails the
                   // same way. The files are created by uid 1000, the user the workspace runs as, so owners need no preserving.
                   // (Not root: the Connect agent's policy refuses a Deployment that runs anything as root.)
-                  command: ['sh', '-c', `[ -e /seed/${SEEDED} ] || { cp -a --no-preserve=all ${HOME}/. /seed/ && touch /seed/${SEEDED}; }`],
+                  command: ['sh', '-c', seedHomeScript()],
                   volumeMounts: [{ name: 'home', mountPath: '/seed' }],
                 },
               ],
@@ -398,12 +431,14 @@ export class KubernetesRuntime implements Runtime {
         namespace: this.#ns,
         plural: 'pods',
         labelSelector: selector,
-      })) as { items: { metadata: { labels?: Record<string, string> }; containers: { usage: { cpu: string; memory: string } }[] }[] };
+      })) as { items: { metadata: { labels?: Record<string, string> }; containers: { name?: string; usage: { cpu: string; memory: string } }[] }[] };
       for (const item of res.items) {
         const name = item.metadata.labels?.[LABEL.name];
         if (!name) continue;
-        const cpu = item.containers.reduce((sum, c) => sum + cores(c.usage.cpu), 0);
-        const mem = item.containers.reduce((sum, c) => sum + bytes(c.usage.memory), 0);
+        // The workspace container's own use (browser PRD §20 A5): the browser container reports its own (its supervisor reads its cgroup).
+        const own = item.containers.filter((c) => c.name === undefined || c.name === CONTAINER);
+        const cpu = own.reduce((sum, c) => sum + cores(c.usage.cpu), 0);
+        const mem = own.reduce((sum, c) => sum + bytes(c.usage.memory), 0);
         byName.set(name, { cpuPercent: cpu * 100, memoryBytes: mem });
       }
     } catch {

@@ -97,6 +97,8 @@ export type BrowserContainerState = 'none' | 'stopped' | 'starting' | 'running' 
 export type BrowserState =
   | 'none'
   | 'workspace_stopped'
+  /** Kubernetes: the browser is added, changed or removed when the workspace's pod restarts (PRD §10.3); `detail` says so. */
+  | 'restart_needed'
   | 'starting'
   | 'asleep'
   | 'ready'
