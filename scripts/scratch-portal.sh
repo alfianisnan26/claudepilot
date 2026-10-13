@@ -55,6 +55,34 @@ for p in filter(str.isdigit, os.listdir('/proc')):
         pass
 PY2
 }
+# Ends every process (but this script and its parents) whose HOME is $dir/home or whose working folder is under $dir; prints how many.
+strays_of() {
+  python3 - "$dir" "$$" <<'PY3'
+import os, signal, sys, time
+d, me = sys.argv[1], int(sys.argv[2])
+keep, p = set(), me
+while p > 1:  # this script and the shells above it are never touched
+    keep.add(p)
+    try: p = int(open(f'/proc/{p}/stat').read().rsplit(')', 1)[1].split()[1])
+    except OSError: break
+def ours(pid):
+    try:
+        cwd = os.readlink(f'/proc/{pid}/cwd')
+        if cwd == d or cwd.startswith(d + '/') or cwd.startswith(d + ' ('): return True  # " (deleted)" once the folder is gone
+    except OSError: pass
+    try: return f'HOME={d}/home'.encode() in open(f'/proc/{pid}/environ', 'rb').read().split(b'\0')
+    except OSError: return False
+found = [int(p) for p in os.listdir('/proc') if p.isdigit() and int(p) not in keep and ours(int(p))]
+for p in found:
+    try: os.kill(p, signal.SIGTERM)
+    except OSError: pass
+time.sleep(1)
+for p in found:
+    try: os.kill(p, signal.SIGKILL)
+    except OSError: pass
+print(len(found))
+PY3
+}
 case "$cmd" in
   start)
     # Another portal on the port would answer /healthz for us (and `rm -rf` below would wipe ITS data dir): refuse, say whose it is.
@@ -65,6 +93,11 @@ case "$cmd" in
   stop)
     pid=$(pid_of)
     [ -n "${pid:-}" ] && kill "$pid" && echo "stopped $port" || echo "nothing on $port"
+    # What the portal started lives on after it (chat hosts and their `claude -p` run in sessions of their own, so a process group kill
+    # misses them): every process whose home or working folder is this scratch portal's goes too (2026-10-13: six orphans whose home dirs
+    # had been deleted were found running).
+    n=$(strays_of)
+    [ "$n" -gt 0 ] && echo "stopped $n process(es) the portal had started"
     rm -rf "$dir" ;;
   restart)
     [ -f "$dir/key" ] || { echo "no scratch portal data in $dir: start one first" >&2; exit 2; }
