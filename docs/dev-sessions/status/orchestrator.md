@@ -60,7 +60,9 @@ Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIO
    risk flags, expected blockers) required to claim a ticket; 'predictability' is a scored term (charter now has eight terms, D-24).
 ---- CUT LINE: nothing below starts before 7 is merged and deployed ----
 T-121 (rank-09a2, after T-119 slice 1: ticket and CI/CD charts and Home widgets; one chart kit extending charts.tsx, no library; one
-stats API that T-119's strip uses; the timeline's state palette; hard performance budgets and a harness like T-119), T-113 (integrity guard), T-114 (scoreboard, playbooks, peer assessment), T-101, T-106, T-120 (rank-08c, after T-106: ClaudePilot
+stats API that T-119's strip uses; the timeline's state palette; hard performance budgets and a harness like T-119), T-122 (rank-09a3, after T-121, before T-111: the Usage dashboard; first the AUDIT with screenshots of the running app on the ticket, then
+data and the series API with downsampling, then components on T-121's chart kit, then the navigation of at most four items with ?tab=
+redirects; same performance budgets as T-119/T-121), T-113 (integrity guard), T-114 (scoreboard, playbooks, peer assessment), T-101, T-106, T-120 (rank-08c, after T-106: ClaudePilot
 DESIGN STANDARD in docs/design/, ClaudePilot only, never Konfersi; small doc slices between the larger tickets; every rule cites its file or
 PRD and says observed or decided; D-25), T-28, T-32, T-24, T-26, T-27, T-30, T-33, wave 4,
 the fitOf/fit.ts unification (small; may ride with T-98 follow-ups if a slot is idle).
