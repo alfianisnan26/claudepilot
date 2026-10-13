@@ -54,7 +54,8 @@
       "Bash(kubectl label:*)",
       "Bash(kubectl rollout restart:*)",
       "Bash(kubectl rollout undo:*)",
-      "Bash(scripts/k3s-build.sh:*)"
+      "Bash(scripts/k3s-build.sh:*)",
+      "Bash(scripts/dev-rig.sh:*)"
     ],
     "ask": [],
     "deny": [

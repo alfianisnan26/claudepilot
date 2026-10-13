@@ -16,7 +16,8 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first. `orches
 3. **Safety, whatever Bypass lets you do.**
    - Never print, log, commit or paste a credential. No token-shaped literal anywhere in the repo (build fixtures at runtime). Do not read
      `~/.config/gh`, `~/.git-credentials` or `~/.kube/config`, and do not dump Secrets.
-   - `kubectl`: read freely. Change things only in a namespace you create for a rig (name starts with `dev-rig-`) and delete it when you are done.
+   - `kubectl`: read freely. Change things only in a namespace you create for a rig, with `scripts/dev-rig.sh create dev-rig-<name>` and `scripts/dev-rig.sh delete dev-rig-<name>`
+     (the only door: `kubectl delete namespace` is denied, the script refuses any other name); delete it when you are done.
      Never touch `isnan-claudepilot`, `isnan-claudepilot-workspaces` (this workspace hosts the session: stopping, deleting or restarting it, or
      restarting the portal, kills it), Argo CD, the nodes or any other namespace.
    - Never push `main`. Never approve a deploy or work around its approval. For anything that needs a portal, run a scratch one:
