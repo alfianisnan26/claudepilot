@@ -299,6 +299,7 @@ const statusSaysDone = (tstate) => {
 
 const NUDGE = 'Nobody is here to answer. Continue now: integrate what finished sub-agents brought, dispatch the next slices to up to three sub-agents in parallel, keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
 const WAKE = (why) => `This session was interrupted (${why}). Continue where you left off: read your status file docs/dev-sessions/status/orchestrator.md, look at git worktree list and git status in each worktree, and carry on. Nobody is here to answer questions.`;
+const MOVED = (to) => `This chat was moved to another Claude (${to}) and its process restarted: the sub-agents of the old process stopped. Continue now where you stopped: look at your tickets or status file, git worktree list and git status, restart the work that was in flight, commit and push WIP early. Nobody is here to answer questions.`;
 const NUDGE_AFTER_MIN = Number(process.env.NUDGE_AFTER_MIN ?? 3);
 const NUDGE_GAP_MIN = Number(process.env.NUDGE_GAP_MIN ?? 10);
 const MAX_NUDGES = Number(process.env.MAX_NUDGES ?? 40);
@@ -385,6 +386,25 @@ async function watch() {
 
       if (cur && cur.state !== 'ended' && !cur.archivedAt) {
         ts.sessionId = cur.id;
+        // A move to another Claude restarts the process and starts no turn: the chat sits idle until somebody speaks. Speak at once (not after the
+        // idle wait), when it is idle, or as soon as it is.
+        if (ts.claudeId && ts.claudeId !== cur.claudeId) {
+          log(`${t.key}: moved to another Claude (${cur.claudeName ?? cur.claudeId}): will continue it at once`);
+          ts.pendingContinue = true;
+        }
+        ts.claudeId = cur.claudeId;
+        if (ts.pendingContinue && cur.state === 'idle') {
+          try {
+            await sessionSend(cur.id, (t.moved ?? MOVED)(cur.claudeName ?? 'another Claude'));
+            ts.pendingContinue = false;
+            ts.nudges.push(Date.now());
+            log(`${t.key}: continued after the move`);
+          } catch (e) {
+            log(`${t.key}: could not continue it after the move: ${e.message}`);
+          }
+          idleSince.delete(t.key);
+          continue;
+        }
         if (cur.state === 'idle') {
           if (await moveIfLow(t, ts, cur).catch((e) => (log(`${t.key}: low-quota check failed: ${e.message}`), false))) {
             idleSince.delete(t.key);
