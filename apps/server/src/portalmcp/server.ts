@@ -423,6 +423,7 @@ export class PortalMcp {
     return {
       principal,
       actor: actorOf(principal),
+      actorLabel: actorLabelOf(principal),
       scope: principal.scope,
       isAgent: principal.kind === 'agent',
       requestId: record.requestId,
@@ -465,6 +466,9 @@ export class PortalMcp {
 
 /** What events a call records as their actor: `session:<id>` for an agent, `portal-mcp:<token id>` for an admin's token. */
 const actorOf = (p: PortalPrincipal): string => (p.kind === 'agent' ? `session:${p.sessionId}` : `portal-mcp:${p.tokenId}`);
+
+/** The name an admin's token is shown under (its label, one line); an agent's per-session token is shown as its session, so none. */
+const actorLabelOf = (p: PortalPrincipal): string | undefined => (p.kind === 'agent' ? undefined : cleanText(p.label, 60) || undefined);
 
 /** The parts of the SDK's per-call context this file uses. */
 interface SdkCtx {

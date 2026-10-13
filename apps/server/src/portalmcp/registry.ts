@@ -82,6 +82,12 @@ export interface PortalToolContext {
   readonly principal: PortalPrincipal;
   /** What events this call causes record as their actor: `session:<id>` for an agent, `portal-mcp:<token id>` otherwise. */
   readonly actor: string;
+  /**
+   * How the actor is named wherever it is shown (transcript, ticket timeline, CI run, repository events, audit): the label the owner gave
+   * the token, as it is now (a later rename never changes what was stored). Undefined for an agent's per-session token, which is shown as
+   * its session. Pass it as `actorLabel` with `actor` to anything that sends or starts something.
+   */
+  readonly actorLabel: string | undefined;
   /** The caller's scope: `read`, `operate`, `admin`, or `agent`. */
   readonly scope: PortalCallerScope;
   /** The caller is an agent's per-session token. */

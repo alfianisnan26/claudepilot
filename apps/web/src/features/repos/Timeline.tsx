@@ -115,7 +115,7 @@ function EventRow({ e }: { e: RepoEvent }) {
       {actorLabel(e.actor)}
     </Link>
   ) : (
-    <span title={e.actor}>{actorLabel(e.actor)}</span>
+    <span title={e.actor}>{actorLabel(e.actor, e.actorLabel)}</span>
   );
   return (
     <li className="border-b border-line last:border-b-0">

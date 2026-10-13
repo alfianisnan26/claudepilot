@@ -395,6 +395,11 @@ test('starting a session: created for the ticket, assigned before the message, o
     const viaToken = await h.tickets.startSession(token('ptk_admin', 'admin'), t2.id, { workspaceId: 'docker/api' });
     assert.equal(h.tickets.get(UI, t2.id).events.find((e) => e.kind === 'session_started')!.actor, 'portal-mcp:ptk_admin', 'an admin’s token can, and is named');
     assert.ok(viaToken.session.id);
+    // T-6: the timeline names the token by its label, also when it acts for a session.
+    assert.equal(h.tickets.get(UI, t2.id).events.find((e) => e.kind === 'session_started')!.actorLabel, 'ptk_admin-label');
+    h.sessions.add({ workspaceId: 'docker/api', id: 'sfor', title: 'Worker' });
+    const viaTokenForSession = h.tickets.comment(token('ptk_admin', 'admin'), t2.id, 'seen', { sessionId: 'sfor' });
+    assert.deepEqual([viaTokenForSession.actor, viaTokenForSession.actorLabel], ['portal-mcp:ptk_admin', 'ptk_admin-label']);
     assert.equal(await codeAsync(() => h.tickets.startSession(UI, 'T-9', { workspaceId: 'docker/api' })), 'NOT_FOUND');
   } finally {
     h.done();

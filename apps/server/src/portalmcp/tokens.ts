@@ -113,7 +113,12 @@ export class PortalTokens {
     const db = this.#writable;
     if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
     const label = typeof req.label === 'string' ? req.label.trim() : '';
-    if (!label) throw new AppError('VALIDATION_FAILED', 'Give the token a label.', { details: { label: 'Required.' } });
+    if (!label)
+      throw new AppError('VALIDATION_FAILED', 'Give the token a label: it is the name shown wherever this client acts (chats, tickets, CI, audit).', { details: { label: 'Required.' } });
+    // One line of plain text: it is shown as the sender of messages, so no line breaks, control characters or markup brackets.
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029"<>]/.test(label))
+      throw new AppError('VALIDATION_FAILED', 'Use one line of plain text: no line breaks, quotes or angle brackets.', { details: { label: 'One line, plain text.' } });
     if (label.length > PORTAL_TOKEN_LABEL_MAX)
       throw new AppError('VALIDATION_FAILED', `Use at most ${PORTAL_TOKEN_LABEL_MAX} characters.`, { details: { label: `At most ${PORTAL_TOKEN_LABEL_MAX} characters.` } });
     if (looksLikeSecret(label)) throw new AppError('VALIDATION_FAILED', 'That label looks like a secret. Name the token after what uses it.', { details: { label: 'Not a secret.' } });

@@ -71,6 +71,20 @@ test('audit: a user reads their own rows, an admin all; detail keeps plain value
   store.close();
 });
 
+test('audit: a Portal MCP token’s label is kept in the row as it was, one line and bounded', async () => {
+  const { store } = await freshStore();
+  const audit = new PlatformAudit(store, () => new Date('2026-10-12T10:00:00Z'));
+  audit.record({ kind: 'trigger.fired', actor: 'portal-mcp:ptk_1', actorLabel: 'relay', userId: null, detail: { n: 1 } });
+  audit.record({ kind: 'trigger.fired', actor: 'portal-mcp:ptk_2', actorLabel: `a\nb${'x'.repeat(200)}`, userId: null });
+  audit.record({ kind: 'trigger.fired', actor: 'ui', userId: null });
+  const rows = audit.list({}, null);
+  const by = (a: string) => rows.find((r) => r.actor === a)!;
+  assert.deepEqual([by('portal-mcp:ptk_1').detail.actorLabel, by('portal-mcp:ptk_1').detail.n], ['relay', 1]);
+  assert.ok(!/\n/.test(by('portal-mcp:ptk_2').detail.actorLabel as string) && (by('portal-mcp:ptk_2').detail.actorLabel as string).length <= 120);
+  assert.equal(by('ui').detail.actorLabel, undefined);
+  store.close();
+});
+
 test('platform: modules register once, routes mount behind the session guard, /hooks outside /api, presence from a signed-in socket', async () => {
   const { store } = await freshStore();
   const chat = new FakeChat();

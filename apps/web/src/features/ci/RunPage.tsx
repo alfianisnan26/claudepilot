@@ -10,6 +10,7 @@ import { useLive } from '@/lib/live';
 import { ciApi } from './api';
 import { LogView } from './LogView';
 import { elapsed, formatDuration, MONO, reasonLabel, refLabel, shortSha, StatusIcon } from './parts';
+import { startedBy } from './startedBy';
 
 /** Jobs in the order they run: by how deep their `needs` go, then as written. */
 function byDepth(jobs: CiJob[]): CiJob[] {
@@ -263,7 +264,7 @@ function Approval({ run, deployment, onDecided }: { run: CiRun; deployment: CiDe
       setBusy(null);
     }
   };
-  const by = run.actor.startsWith('session:') ? 'an agent' : run.actor.startsWith('portal-mcp:') ? 'a Portal MCP token' : 'a person';
+  const by = startedBy(run);
   return (
     <section aria-label={`Approve deploy to ${deployment.environment}`} className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-gold/50 bg-gold-soft px-3.5 py-3">
       <Hand className="size-5 shrink-0 text-gold" aria-hidden="true" />

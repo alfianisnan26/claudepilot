@@ -227,7 +227,8 @@ export class Tickets {
       const s = this.sessions.get(sessionId);
       if (!s) throw invalid('session_id', 'No such session.');
       if (s.state === 'ended') throw invalid('session_id', 'That session has ended.');
-      return { ...base, label: cleanText(s.title, 60) || caller.label, session: s };
+      // The actor is the token, so it is named by the token's label (not the session it acts for): "MCP client “relay”" on the timeline.
+      return { ...base, label: caller.label, session: s };
     }
     return { ...base, label: caller.label, session: null };
   }

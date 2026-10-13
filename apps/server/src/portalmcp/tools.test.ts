@@ -84,7 +84,7 @@ const fakes = {
     interrupt: async (id: string) => void calls.push(`chat.interrupt:${id}`),
     end: async (id: string) => void calls.push(`chat.end:${id}`),
     create: async (req: Row, o: Row) => (calls.push(`chat.create:${req.workspaceId}:${o.actor}`), session('s-new', { workspaceId: req.workspaceId, startedBy: o.actor })),
-    send: async (id: string, _uuid: string, text: string, o: Row) => void calls.push(`chat.send:${id}:${o.actor}:${text}`),
+    send: async (id: string, _uuid: string, text: string, o: Row) => void (calls.push(`chat.send:${id}:${o.actor}:${text}`), sentLabels.push(o.actorLabel)),
     respond: async (id: string, req: string, decision: string, o: Row) => void calls.push(`chat.respond:${id}:${req}:${decision}:${o.actor}`),
     control: async (id: string, kind: string, v: Row) => void calls.push(`chat.control:${id}:${kind}:${JSON.stringify(v)}`),
   },
@@ -131,8 +131,11 @@ process.once('beforeExit', () => h.done());
 const where = (m: Row) => m.result?.structuredContent as Row;
 const err = (r: { result?: { structuredContent?: any } }) => r.result?.structuredContent?.error?.code as string | undefined;
 const text = (r: { result?: { content?: { text: string }[] } }) => r.result?.content?.map((c) => c.text).join('\n') ?? '';
+/** The `actorLabel` each chat.send was given, in order (undefined when none). */
+const sentLabels: unknown[] = [];
 const reset = () => {
   calls.length = 0;
+  sentLabels.length = 0;
   world.store.writable = true;
   world.store.trust.state = 'ok';
 };
@@ -356,6 +359,22 @@ test('session_send: sent as the portal, never as a person; terminal slash comman
     assert.equal(err(await h.call(admin.secret, 'session_send', { id: 'nope', text: 'x' })), 'NOT_FOUND');
     world.store.writable = false;
     assert.equal(err(await h.call(admin.secret, 'session_send', { id: 's1', text: 'x' })), 'SERVICE_UNAVAILABLE');
+  } finally {
+    h.module.settings.update({ sessionControl: false });
+  }
+});
+
+test('session_send and session_start: the token’s label travels as actorLabel, so no message is from an anonymous MCP client', async () => {
+  reset();
+  h.module.settings.update({ sessionControl: true });
+  try {
+    const relay = h.token('admin', 'relay');
+    await h.call(relay.secret, 'session_send', { id: 's1', text: 'Please run the tests.' });
+    await h.call(relay.secret, 'session_start', { workspace_id: 'docker/api', prompt: 'Look at the failing test.' });
+    assert.deepEqual(sentLabels, ['relay', 'relay']);
+    // the audit row of the call carries the label as it was
+    const rows = h.module.audit.list({ tokenId: relay.id });
+    assert.ok(rows.length > 0 && rows.every((r) => r.tokenLabel === 'relay'));
   } finally {
     h.module.settings.update({ sessionControl: false });
   }

@@ -2520,6 +2520,16 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 711,
+    name: 'actor label on CI runs and repository events',
+    up(db) {
+      // T-6: a Portal MCP token's label as it was when the token acted ("MCP client “relay”"), kept next to the actor string so a later
+      // rename or revoke of the token changes nothing already stored. Null for everything so far and for every actor that is not a token.
+      db.exec('ALTER TABLE ci_runs ADD COLUMN actor_label TEXT');
+      db.exec('ALTER TABLE repo_events ADD COLUMN actor_label TEXT');
+    },
+  },
+  {
     version: 381,
     name: 'chat sessions pinned',
     up(db) {

@@ -36,6 +36,8 @@ export interface NewEvent {
   repo: string | null;
   kind: RepoEventKind;
   actor: string;
+  /** A Portal MCP token's label as it was when it acted; null for any other actor. */
+  actorLabel?: string | null;
   sessionId: string | null;
   summary: string;
   data: RepoEventData;
@@ -69,6 +71,7 @@ interface EventSql {
   repo: string | null;
   kind: string;
   actor: string;
+  actor_label: string | null;
   session_id: string | null;
   summary: string;
   data: string;
@@ -124,6 +127,7 @@ function toEvent(r: EventSql): RepoEvent {
     repo: r.repo,
     kind: ((REPO_EVENT_KINDS as readonly string[]).includes(r.kind) ? r.kind : 'scan_failed') as RepoEventKind,
     actor: r.actor,
+    actorLabel: r.actor_label ?? null,
     sessionId: r.session_id,
     summary: r.summary,
     data: isObject(data) ? (data as RepoEventData) : {},
@@ -269,11 +273,11 @@ export class RepoStore {
   addEvents(events: NewEvent[]): number[] {
     const db = this.store.db;
     if (!db || !this.store.writable || !events.length) return [];
-    const stmt = db.prepare('INSERT INTO repo_events (at, workspace_id, repo_id, repo, kind, actor, session_id, summary, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const stmt = db.prepare('INSERT INTO repo_events (at, workspace_id, repo_id, repo, kind, actor, actor_label, session_id, summary, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     const ids: number[] = [];
     db.exec('BEGIN IMMEDIATE');
     try {
-      for (const e of events) ids.push(Number(stmt.run(e.at, e.workspaceId, e.repoId, e.repo, e.kind, e.actor, e.sessionId, e.summary, JSON.stringify(e.data)).lastInsertRowid));
+      for (const e of events) ids.push(Number(stmt.run(e.at, e.workspaceId, e.repoId, e.repo, e.kind, e.actor, e.actorLabel ?? null, e.sessionId, e.summary, JSON.stringify(e.data)).lastInsertRowid));
       db.exec('COMMIT');
     } catch (err) {
       db.exec('ROLLBACK');

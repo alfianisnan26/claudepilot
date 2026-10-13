@@ -65,6 +65,7 @@ function eventView(ctx: PortalToolContext, e: RepoEvent) {
     repo_id: e.repoId,
     repo: ctx.untrusted(e.repo, SOURCE, 200),
     actor: e.actor,
+    actor_label: e.actorLabel ?? null,
     session_id: e.sessionId,
     summary: ctx.untrusted(e.summary, SOURCE, 400),
     data: {
@@ -238,7 +239,7 @@ export function registerRepoTools(repos: ReposService, registry: ToolRegistry = 
     async handler(ctx, args) {
       const ws = repoArg(ctx, repos, args.repo_id);
       ctx.affected(`workspace:${ws}`, `repo:${args.repo_id}`);
-      const made = await repos.createWorktree(args.repo_id, { branch: args.branch, base: args.base, sync: args.sync }, ctx.actor);
+      const made = await repos.createWorktree(args.repo_id, { branch: args.branch, base: args.base, sync: args.sync }, ctx.actor, ctx.actorLabel);
       return {
         summary: `Made worktree ${made.branch}.`,
         worktree: { id: made.worktree.id, path: ctx.untrusted(made.worktree.path, SOURCE, 400), branch: ctx.untrusted(made.branch, SOURCE, 200), commit: made.commit, keep_synced: made.worktree.sync?.enabled ?? false },

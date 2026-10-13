@@ -42,6 +42,11 @@ test('a worktree is made through the host, shows in the tree under its repositor
     assert.equal(dflt.worktree.sync!.enabled, true);
     const created = audit(h).find((e) => e.kind === 'worktree_created' && e.data.branch === dflt.branch)!;
     assert.deepEqual([created.actor, created.sessionId], ['session:abc', 'abc']);
+    // T-6: a Portal MCP token's label is kept on the event, as it was then
+    const viaMcp = await h.repos.createWorktree(proj, { branch: 'feat/by-mcp' }, 'portal-mcp:ptk_1', 'relay');
+    const byMcp = audit(h).find((e) => e.kind === 'worktree_created' && e.data.branch === viaMcp.branch)!;
+    assert.deepEqual([byMcp.actor, byMcp.actorLabel], ['portal-mcp:ptk_1', 'relay']);
+    assert.equal(created.actorLabel, null, 'a session’s event has no token label');
     // a worktree of a worktree is a worktree of the same repository
     const again = await h.repos.createWorktree(wt.id, { branch: 'feat/from-wt', base: 'feat/made' }, 'ui');
     assert.equal(again.worktree.mainId, proj);

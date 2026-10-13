@@ -322,6 +322,24 @@ listener and on the main listener's loopback `/mcp`. It expires after 7, 30, 90 
 days and is shown once. PATs serve Claude Code, scripts and MCP Inspector. Claude Desktop can send a
 static token only through the unsupported community `mcp-remote` bridge, so it uses OAuth.
 
+### 12.1a The client's name: every token has a label (T-6, built)
+
+A token's **label** is typed by the owner when the token is made (Access → MCP): required, trimmed, 1 to 60 characters, one line of plain
+text (no line breaks, control characters, quotes or angle brackets). The API refuses a token without one with a message that says what the
+label is for. The label is **the name of that client wherever it acts**, so nothing is "an anonymous MCP client":
+
+- Tools get it as `ctx.actorLabel` next to `ctx.actor` (`portal-mcp:<token id>`); every tool that sends or starts something passes it on:
+  a chat message and the first message of a started session (the transcript reads "From MCP client “relay”", and so does the frame Claude
+  reads), a CI run (run page: "started by MCP client “relay”"), a repository worktree (repository timeline), a ticket (timeline names the token, also when
+  it acts for a session).
+- The label is stored **with** what it did, as it was then: the chat event (`actorLabel`), the ticket event and reporter, `ci_runs.actor_label`,
+  `repo_events.actor_label` (migration 711), the Portal MCP audit row (`token_label`), the chat audit and the platform audit (`actorLabel` in
+  the row's detail). A later change or revoke of the token changes none of them. Labels are redacted like any actor label.
+- A per-session agent token (`cpst_`) has no label: it is shown as its session, as before.
+- **When MCP clients register through OAuth (§12.2: client registration or a dynamic client name) or an API-key integration, the client name
+  or the key's label must fill this same label field** (same limits, same cleaning; a name that does not fit is shortened, never blank).
+  **Not built now:** OAuth and keys are MCP4 and later; the field is the seam.
+
 ### 12.2 OAuth for the Claude apps
 
 claude.ai, Desktop, mobile and Cowork share one connector system

@@ -243,12 +243,12 @@ export function eventTone(e: Pick<RepoEvent, 'kind' | 'data'>): Tone {
 }
 
 /** Who did it, in a word: `ui` is a person at the portal; the rest name where the request came from. */
-export function actorLabel(actor: string): string {
+export function actorLabel(actor: string, label?: string | null): string {
   if (actor === 'ui') return 'Person';
   if (actor === 'workspace') return 'Workspace';
   if (actor.startsWith('session:')) return 'Session';
   if (actor.startsWith('ticket:')) return `Ticket ${actor.slice('ticket:'.length)}`;
-  if (actor.startsWith('portal-mcp:')) return 'Agent token';
+  if (actor.startsWith('portal-mcp:')) return label?.trim() ? `MCP client “${label.trim()}”` : 'Agent token';
   if (actor === 'portal:sync') return 'Keep synced';
   if (actor === 'portal:timer') return 'Timer';
   if (actor === 'portal:session') return 'Session turn';
