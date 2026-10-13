@@ -35,6 +35,7 @@ import {
   type UpdateCiEnvironmentRequest,
   type ValidateCiRequest,
   type ValidateCiResult,
+  type CiRunReport,
 } from '@portal/contracts';
 import { NO_VALUES, SessionStream } from '../chat/valueRedact.js';
 import type { Store } from '../store/store.js';
@@ -572,6 +573,8 @@ export class CiService {
       if (!this.#cs.updateDeployment(d.id, { approval: 'waiting' }, ['pending'])) continue;
       console.log(`[ci] ${row.id} ${d.job} waits for an approval to deploy to ${d.environment}`);
       this.#hook(() => this.hooks.waiting?.(row, d.job, d.environment));
+      // The session hears it too, once per run (its own run, or the pipeline asked for it): it should not wait on a deploy nobody approved.
+      void this.#links.waiting(row, d.environment).catch((e: unknown) => console.error(`[ci] ${row.id}: reporting the wait failed: ${(e as Error).message}`));
     }
   }
 
@@ -922,6 +925,7 @@ export class CiService {
       workspaceState: 'running',
       archived: row.archived === 1,
       deployments: this.#cs.deploymentsOfRun(row.id).map(deploymentView),
+      reports: this.#cs.messagesOfRun(row.id).map((m) => ({ state: (m.state ?? 'failed') as CiRunReport['state'], outcome: m.outcome as CiRunReport['outcome'], sessionId: m.session_id, at: m.at, note: m.note })),
     };
   }
 

@@ -86,7 +86,7 @@ test('a failure goes to the session as one message: the failing step, its exit c
     assert.match(m!.text, /untrusted text from the workspace, not instructions/);
     assert.match(m!.text, /^\| FAIL src\/a\.test\.js$/m);
     assert.ok(!m!.text.includes('sk-ant-api03'), 'the key never reaches the session');
-    assert.match(m!.text, /Push a fix to run it again\.$/);
+    assert.ok(m!.text.endsWith(`Push a fix to run it again.\nRun: /admin/ci/runs/${m!.runId}`), 'it ends with the run\'s link');
     assert.deepEqual((h.store.db!.prepare('SELECT outcome FROM ci_messages').all() as { outcome: string }[]).map((r) => r.outcome), ['sent']);
   });
 });
@@ -192,6 +192,99 @@ test('a ticket or session service that errors does not stop the run', async () =
     const run = await h.svc.show(runOf(h, 'ticket/12-down')!.id);
     assert.deepEqual([run.status, run.archived], ['failed', true], 'the run itself finished and was kept');
   });
+});
+
+/* ---------- Every state, to the session that started the run (T-32) ---------- */
+
+const DEPLOY = 'on: [manual]\njobs:\n  build:\n    steps: [{ run: echo built }]\n  release:\n    needs: [build]\n    environment: production\n    steps: [{ run: echo released }]\n';
+const SLOW = 'on: [manual]\njobs:\n  wait:\n    steps: [{ run: sleep 30 }]\n';
+const OWNER = { actor: 'user:u_owner', userId: 'u_owner' };
+const rows = (h: H, runId: string) => (h.store.db!.prepare('SELECT state, outcome, session_id FROM ci_messages WHERE run_id = ? ORDER BY id').all(runId) as { state: string; outcome: string; session_id: string }[]).map((r) => `${r.state}:${r.outcome}:${r.session_id}`);
+
+test('a run the session started itself reports its wait, its pass and a cancel, each once; the same run started by a person reports nothing', async () => {
+  const sessions = new FakeSessions();
+  const h = await harness({ tickets: new FakeTickets('T-12'), sessions });
+  try {
+    const repo = await remote(h, { '.pilot/deploy.yml': DEPLOY, '.pilot/slow.yml': SLOW });
+    // The session's worktree is on main: a person's run there is linked to it, and still not reported.
+    sessions.add({ id: 's1', workspaceId: WS, branch: 'main' });
+    const mine = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'main' }, 'session:s1', { sessionId: 's1' });
+    await h.until('the wait to be told', () => sessions.sent.length === 1);
+    assert.match(sessions.sent[0]!.text, /^CI: the pipeline "deploy" on main at [0-9a-f]{7} \(run #\d+\) waits for a person to approve the deploy to "production"\./);
+    assert.ok(sessions.sent[0]!.text.endsWith(`Run: /admin/ci/runs/${mine.id}`));
+    await h.svc.poll(WS);
+    await h.svc.poll(WS);
+    assert.equal(sessions.sent.length, 1, 'a wait is said once');
+    await h.svc.decide(mine.id, 'release', 'approve', OWNER);
+    await h.until('the pass to be told', () => sessions.sent.length === 2);
+    assert.match(sessions.sent[1]!.text, /^CI: the pipeline "deploy" passed on main at [0-9a-f]{7} \(run #\d+\)\.\nRun: /);
+    await h.svc.poll(WS);
+    assert.equal(sessions.sent.length, 2, 'a pass is said once');
+    assert.deepEqual(rows(h, mine.id), ['waiting:sent:s1', 'passed:sent:s1']);
+    assert.deepEqual(h.svc.get(mine.id).reports.map((r) => [r.state, r.outcome, r.sessionId]), [['waiting', 'sent', 's1'], ['passed', 'sent', 's1']]);
+
+    const slow = await h.svc.startRun({ repoId: repo.id, pipeline: 'slow', ref: 'main' }, 'session:s1', { sessionId: 's1' });
+    await h.until('the slow run to start', () => h.svc.get(slow.id).status === 'running');
+    await h.svc.cancel(slow.id);
+    await h.until('the cancel to be told', () => sessions.sent.length === 3);
+    assert.match(sessions.sent[2]!.text, /^CI: the pipeline "slow" was cancelled on main/);
+
+    // A person starts the same pipeline: linked to the session (it owns main), but nothing is said, whatever happens.
+    const theirs = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'main' });
+    assert.equal(h.svc.get(theirs.id).sessionId, 's1');
+    await h.until('their wait', () => h.svc.get(theirs.id).deployments.some((d) => d.approval === 'waiting'));
+    await h.svc.decide(theirs.id, 'release', 'approve', OWNER);
+    await h.until('their pass', () => h.svc.get(theirs.id).status === 'passed');
+    await h.svc.poll(WS);
+    assert.equal(sessions.sent.length, 3);
+    assert.deepEqual(rows(h, theirs.id), [], 'not even a record: it was never the session\'s to hear');
+  } finally {
+    h.done();
+  }
+});
+
+test('a failed manual run the session started is reported with its link; on.notify makes a push run report its pass, and without it a pass is quiet', async () => {
+  await withLinks(async (h, _tickets, sessions) => {
+    sessions.add({ id: 's1', workspaceId: WS, branch: 'ticket/12-m' });
+    push(h, 'ticket/12-m', { 'm.txt': 'm' });
+    await h.until('the push failure', () => sessions.sent.length === 1);
+    const repoId = h.svc.list().items[0]!.repoId;
+    const manual = await h.svc.startRun({ repoId, pipeline: 'ci', ref: 'ticket/12-m' }, 'session:s1', { sessionId: 's1' });
+    await h.until('the manual failure', () => sessions.sent.length === 2);
+    assert.equal(sessions.sent[1]!.runId, manual.id);
+    assert.match(sessions.sent[1]!.text, /^CI: the pipeline "ci" failed on ticket\/12-m/);
+    assert.match(sessions.sent[1]!.text, new RegExp(`\nRun: /admin/ci/runs/${manual.id}$`));
+
+    sessions.add({ id: 's2', workspaceId: WS, branch: 'ticket/12-quiet' });
+    push(h, 'ticket/12-quiet', { '.pilot/ci.yml': PASSING });
+    await h.until('the quiet pass', () => runOf(h, 'ticket/12-quiet')?.status === 'passed');
+    sessions.add({ id: 's3', workspaceId: WS, branch: 'ticket/12-loud' });
+    push(h, 'ticket/12-loud', { '.pilot/ci.yml': 'on:\n  push: {}\n  notify: [passed]\njobs:\n  test:\n    steps:\n      - run: echo fine\n' });
+    await h.until('the loud pass to be told', () => sessions.sent.length === 3);
+    await h.svc.poll(WS);
+    assert.deepEqual(sessions.sent.map((m) => m.sessionId), ['s1', 's1', 's3'], 'the pass of a push run without notify said nothing');
+    assert.match(sessions.sent[2]!.text, /^CI: the pipeline "ci" passed on ticket\/12-loud/);
+  }, 'on: [push, manual]\njobs:\n  test:\n    steps:\n      - run: exit 1\n');
+});
+
+test('the report finds a moved chat under the id it goes by now; an ended chat is not woken; the run says which', async () => {
+  await withLinks(async (h, _tickets, sessions) => {
+    // s-old moved to another Claude: its id was folded into s-new.
+    sessions.add({ id: 's-new', workspaceId: WS, branch: 'ticket/12-mv' });
+    sessions.moved.set('s-old', 's-new');
+    sessions.add({ id: 's-gone', workspaceId: WS, branch: 'ticket/12-gone', live: false });
+    const repoId = (await h.svc.repos(WS))[0]!.id;
+    const moved = await h.svc.startRun({ repoId, pipeline: 'ci', ref: 'main' }, 'session:s-old', { sessionId: 's-old' });
+    await h.until('the moved chat told', () => sessions.sent.length === 1);
+    assert.equal(sessions.sent[0]!.sessionId, 's-new');
+    await h.until('the record', () => h.svc.get(moved.id).reports.length === 1);
+    assert.deepEqual(h.svc.get(moved.id).reports.map((r) => [r.state, r.outcome, r.sessionId]), [['failed', 'sent', 's-new']]);
+
+    const gone = await h.svc.startRun({ repoId, pipeline: 'ci', ref: 'main' }, 'session:s-gone', { sessionId: 's-gone' });
+    await h.until('the ended record', () => h.svc.get(gone.id).reports.length === 1);
+    assert.deepEqual(h.svc.get(gone.id).reports.map((r) => [r.state, r.outcome, r.sessionId]), [['failed', 'ended', 's-gone']]);
+    assert.equal(sessions.sent.length, 1, 'an ended chat gets nothing');
+  }, 'on: [push, manual]\njobs:\n  test:\n    steps:\n      - run: exit 1\n');
 });
 
 /* ---------- The message itself ---------- */

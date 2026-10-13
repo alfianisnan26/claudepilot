@@ -2530,6 +2530,17 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 730,
+    name: 'CI: the state each message to a session reports',
+    up(db) {
+      // T-32: CI now reports passed, cancelled and waiting runs too, each once per run and state, so a message row says which state it
+      // was about. Rows written before it were all failures.
+      db.exec('ALTER TABLE ci_messages ADD COLUMN state TEXT');
+      db.exec("UPDATE ci_messages SET state = 'failed' WHERE state IS NULL");
+      db.exec('CREATE INDEX ci_messages_run ON ci_messages (run_id, state)');
+    },
+  },
+  {
     version: 381,
     name: 'chat sessions pinned',
     up(db) {

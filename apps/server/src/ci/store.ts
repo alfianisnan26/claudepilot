@@ -116,6 +116,19 @@ export interface DeploymentRow {
   created_at: string;
 }
 
+/** A message CI sent to a session about a run, or decided not to (migrations 81 and 730). */
+export interface MessageRow {
+  run_id: string;
+  session_id: string;
+  ticket_id: string | null;
+  at: string;
+  /** sent, refused, capped, paused, ended */
+  outcome: string;
+  note: string | null;
+  /** The run's state it was about: failed, passed, cancelled, waiting. */
+  state: string;
+}
+
 export interface RunFilter {
   workspace?: string;
   repoId?: string;
@@ -326,8 +339,18 @@ export class CiStore {
 
   /* ---------- Messages to sessions (PRD FR37) ---------- */
 
-  insertMessage(m: { run_id: string; session_id: string; ticket_id: string | null; at: string; outcome: string; note: string | null }): void {
-    this.#writableDb.prepare('INSERT INTO ci_messages (run_id, session_id, ticket_id, at, outcome, note) VALUES (?, ?, ?, ?, ?, ?)').run(m.run_id, m.session_id, m.ticket_id, m.at, m.outcome, m.note);
+  insertMessage(m: MessageRow): void {
+    this.#writableDb.prepare('INSERT INTO ci_messages (run_id, session_id, ticket_id, at, outcome, note, state) VALUES (?, ?, ?, ?, ?, ?, ?)').run(m.run_id, m.session_id, m.ticket_id, m.at, m.outcome, m.note, m.state);
+  }
+
+  /** Whether this run's state was already reported (or decided not to be): each is said once. */
+  reported(runId: string, state: string): boolean {
+    return !!this.#db.prepare('SELECT 1 FROM ci_messages WHERE run_id = ? AND state = ?').get(runId, state);
+  }
+
+  /** What CI told a run's session, or why not, oldest first. */
+  messagesOfRun(runId: string): MessageRow[] {
+    return this.#db.prepare('SELECT run_id, session_id, ticket_id, at, outcome, note, state FROM ci_messages WHERE run_id = ? ORDER BY id').all(runId) as unknown as MessageRow[];
   }
 
   /** Messages actually sent for a ticket (or, without one, a session) since a time. */

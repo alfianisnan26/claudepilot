@@ -171,6 +171,27 @@ export interface CiRun extends CiRunSummary {
   archived: boolean;
   /** Its jobs that deploy to an environment (FR41), with where each approval stands. */
   deployments: CiDeployment[];
+  /** What CI told the run's session, or why it did not (FR36, FR37), oldest first: at most one per state. */
+  reports: CiRunReport[];
+}
+
+/**
+ * The states a run reports to its session (FR36). `failed` always does (but never for a run a person started by hand); the others do for
+ * a run the session started itself, and for any run when the pipeline lists them in `on.notify`. `waiting`: a deployment is held for a person.
+ */
+export const CI_NOTIFY_STATES = ['failed', 'passed', 'cancelled', 'waiting'] as const;
+export type CiNotifyState = (typeof CI_NOTIFY_STATES)[number];
+
+/** Where a report went: `sent`; or why not: the session `ended`, it `refused`, a cap was reached (`capped`), repeated failures (`paused`). */
+export type CiReportOutcome = 'sent' | 'refused' | 'capped' | 'paused' | 'ended';
+
+export interface CiRunReport {
+  state: CiNotifyState;
+  outcome: CiReportOutcome;
+  /** The chat it went to, as it is now (a moved chat's current id). */
+  sessionId: string;
+  at: string;
+  note: string | null;
 }
 
 /**

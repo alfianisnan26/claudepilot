@@ -10,6 +10,7 @@ import { useLive } from '@/lib/live';
 import { ciApi } from './api';
 import { LogView } from './LogView';
 import { elapsed, formatDuration, MONO, reasonLabel, refLabel, shortSha, StatusIcon } from './parts';
+import { reportLine } from './report';
 import { startedBy } from './startedBy';
 
 /** Jobs in the order they run: by how deep their `needs` go, then as written. */
@@ -114,6 +115,7 @@ export function RunPage() {
   const reason = reasonLabel(run.reason);
   const duration = run.durationMs ?? elapsed(run.startedAt ?? run.createdAt, now);
   const stopped = run.workspaceState !== 'running' && active;
+  const report = reportLine(run.reports);
 
   return (
     <>
@@ -157,6 +159,14 @@ export function RunPage() {
         {(reason || stopped) && (
           <p className={cn('text-[13px] font-medium', stopped ? 'text-gold' : run.reason === 'rejected' ? 'text-muted' : 'text-danger')}>{stopped ? 'Workspace stopped' : reason}</p>
         )}
+        {report &&
+          (report.sessionId ? (
+            <Link to={`/admin/sessions/${report.sessionId}`} className="-my-2.5 inline-flex min-h-11 items-center self-start text-[13px] text-accent hover:underline">
+              {report.text}
+            </Link>
+          ) : (
+            <p className="text-[13px]">{report.text}</p>
+          ))}
       </div>
 
       {run.deployments
