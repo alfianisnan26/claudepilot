@@ -81,6 +81,8 @@ export interface SpendOptions {
   visible?: Visibility;
   /** Tells open pages something changed (the `claudeusage` live topic). */
   notify?: () => void;
+  /** A session's stored workspace (T-42 slice 3: a stable id or a key) as the key usage speaks. Unset: as stored. */
+  workspaceKeyOf?: (stored: string) => string;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -126,6 +128,7 @@ export class UsageSpend {
 
   constructor(private readonly o: SpendOptions) {
     this.#store = new SpendStore(o.store);
+    if (o.workspaceKeyOf) this.#store.workspaceKeyOf = o.workspaceKeyOf;
   }
 
   #now(): number {

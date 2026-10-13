@@ -63,6 +63,13 @@ export const GRAPH_POOL_TYPES = ['persona', 'skillset', 'mcpset', 'context'] as 
 export class Directory {
   constructor(private readonly dbOf: () => DatabaseSync | null) {}
 
+  /**
+   * A ticket's or a session's stored workspace as the `<target>/<name>` key the graphs link by (T-42 slice 3: tickets and chat sessions store
+   * the stable id). index.ts sets it
+   * to the workspaces' registry; as it is, a stored value is taken as it is.
+   */
+  workspaceKeyOf: (stored: string | null) => string | null = (stored) => stored;
+
   /** Runs the first query that the database can answer (later ones are for databases with fewer columns). */
   #all(variants: string[], params: SQLInputValue[] = []): Row[] {
     const db = this.dbOf();
@@ -77,10 +84,10 @@ export class Directory {
     return [];
   }
 
-  static #session(r: Row): SessionInfo {
+  #session(r: Row): SessionInfo {
     return {
       id: str(r.id),
-      workspaceId: str(r.workspace_id),
+      workspaceId: str(this.workspaceKeyOf(str(r.workspace_id))),
       title: str(r.title),
       state: str(r.state),
       claudeId: str(r.claude_id),
@@ -103,7 +110,7 @@ export class Directory {
     return this.#all(
       [`SELECT ${Directory.#FULL} FROM chat_sessions WHERE ${where} ORDER BY last_activity_at DESC LIMIT ?`, `SELECT ${Directory.#BASIC} FROM chat_sessions WHERE ${where} ORDER BY last_activity_at DESC LIMIT ?`],
       params,
-    ).map(Directory.#session);
+    ).map((r) => this.#session(r));
   }
 
   /**
@@ -114,7 +121,7 @@ export class Directory {
     const out = new Map<string, SessionInfo>();
     for (const chunk of chunked([...new Set(ids)])) {
       const marks = chunk.map(() => '?').join(', ');
-      for (const r of this.#all([`SELECT ${Directory.#FULL} FROM chat_sessions WHERE id IN (${marks})`, `SELECT ${Directory.#BASIC} FROM chat_sessions WHERE id IN (${marks})`], chunk)) out.set(str(r.id), Directory.#session(r));
+      for (const r of this.#all([`SELECT ${Directory.#FULL} FROM chat_sessions WHERE id IN (${marks})`, `SELECT ${Directory.#BASIC} FROM chat_sessions WHERE id IN (${marks})`], chunk)) out.set(str(r.id), this.#session(r));
       const missing = chunk.filter((id) => !out.has(id));
       if (!missing.length) continue;
       const m2 = missing.map(() => '?').join(', ');
@@ -122,7 +129,7 @@ export class Directory {
       const targets = [...new Set(aliases.map((a) => str(a.session_id)))];
       if (!targets.length) continue;
       const m3 = targets.map(() => '?').join(', ');
-      const found = new Map(this.#all([`SELECT ${Directory.#FULL} FROM chat_sessions WHERE id IN (${m3})`, `SELECT ${Directory.#BASIC} FROM chat_sessions WHERE id IN (${m3})`], targets).map((r) => [str(r.id), Directory.#session(r)]));
+      const found = new Map(this.#all([`SELECT ${Directory.#FULL} FROM chat_sessions WHERE id IN (${m3})`, `SELECT ${Directory.#BASIC} FROM chat_sessions WHERE id IN (${m3})`], targets).map((r) => [str(r.id), this.#session(r)]));
       for (const a of aliases) {
         const s = found.get(str(a.session_id));
         if (s) out.set(str(a.alias_id), s);
@@ -151,7 +158,12 @@ export class Directory {
     return this.#all(
       [`SELECT ${Directory.#TICKET} FROM tickets WHERE status NOT IN ('done', 'wont_do') OR updated_at >= ? ORDER BY updated_at DESC LIMIT ?`],
       [since, limit],
-    ).map(Directory.#ticket);
+    ).map((r) => this.#ticketKeyed(r));
+  }
+
+  #ticketKeyed(r: Row): TicketInfo {
+    const t = Directory.#ticket(r);
+    return { ...t, workspaceId: this.workspaceKeyOf(t.workspaceId) };
   }
 
   /** Tickets by id (`T-12`; anything else is ignored). */
@@ -161,7 +173,7 @@ export class Directory {
     for (const chunk of chunked(numbers)) {
       const marks = chunk.map(() => '?').join(', ');
       for (const r of this.#all([`SELECT ${Directory.#TICKET} FROM tickets WHERE number IN (${marks})`], chunk.map(Number))) {
-        const t = Directory.#ticket(r);
+        const t = this.#ticketKeyed(r);
         out.set(t.id, t);
       }
     }
