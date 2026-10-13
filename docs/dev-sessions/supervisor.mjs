@@ -469,6 +469,21 @@ async function watch() {
         log(`${t.key}: closed by a person: not started again`);
         continue;
       }
+      // An integrity ending is recovered IN PLACE when the portal can (T-136: same session, tags, pins and numbers, no new row); a new session is the
+      // fallback when the endpoint is absent or refuses (a cap, a person's close).
+      if (cur && /^integrity/i.test(cur.endedReason ?? '')) {
+        ts.recovered ??= {};
+        if (!ts.recovered[cur.id]) {
+          ts.recovered[cur.id] = Date.now();
+          const rec = await api('POST', `/api/chat/sessions/${cur.id}/recover`, {});
+          if (!rec.error && rec.status < 300) {
+            log(`${t.key}: recovered ${cur.id.slice(0, 8)} in place after: ${String(cur.endedReason).slice(0, 80)}`);
+            saveState(state);
+            continue;
+          }
+          log(`${t.key}: recover in place refused (${rec.error?.code ?? rec.status}): ${rec.error?.code === 'NOT_FOUND' ? 'not available yet' : String(rec.error?.message ?? '').slice(0, 80)}; a new session instead`);
+        }
+      }
       const recent = within24h(ts.starts);
       const integrityEnds = recent.length && /^integrity/.test(cur?.endedReason ?? '');
       if (recent.length >= MAX_STARTS || (integrityEnds && recent.length >= 3)) {
