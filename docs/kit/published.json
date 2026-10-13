@@ -1,6 +1,6 @@
 {
   "kit": "1.0.0",
-  "at": "2026-10-13T16:42:45.178Z",
+  "at": "2026-10-13T16:57:40.457Z",
   "portal": "https://pilot.ai.isnan.me",
   "contexts": {
     "charter-essentials": "01a13624-3b6c-7087-a61d-26730374d3a6",
@@ -29,5 +29,18 @@
     "qa-verification": "01a13625-271b-74fb-bdea-ead060e10b81",
     "safety": "01a13625-271b-7b4c-a2eb-9fff58ddc2d7",
     "ticket-flow": "01a13625-271b-7719-916b-02bf40f29101"
+  },
+  "mcp": {
+    "entries": {
+      "git-host-gitea": "01a1362f-7425-72c8-8c07-e5e673f33142",
+      "outline-isnan": "01a1362f-7505-7a73-858e-d272ab72d884",
+      "outline-konfersi": "01a1362f-759b-75fb-9896-7c12a09896ac",
+      "outline-kohilabs": "01a1362f-7609-75e6-8426-a87c988d8000"
+    },
+    "sets": {
+      "isnan": "01a13632-cbed-716f-b6de-6f956771fb40",
+      "konfersi": "01a13632-cc24-7334-9f47-5dd1c0c5f048",
+      "kohi-labs": "01a13632-cc64-7c16-933c-a3650fa2f71c"
+    }
   }
 }

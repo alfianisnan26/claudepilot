@@ -1,5 +1,5 @@
 {
-  "description": "Recommended tool rules for the kit sets (`tools`: per server kind; `servers`: which kind each set and server key is; `permissions`: the full names per set): read tools need no rule (Claude Code default), write tools ask, destructive or out-of-flow tools are denied. MCP set tool rules (PRD FR12, milestone M5) are not built, so until then these go into Settings & policies as custom ask and deny rules (managed settings), for the workspaces that get the set. Deny holds in Bypass; under D-3 autonomous chats have their ask rules removed, so in those workspaces only the deny list applies. Tool names change between server versions: re-check after each approved version.",
+  "description": "Recommended tool rules for the kit sets (`tools`: per server kind; `servers`: which kind each set and server key is, the program sets `isnan`, `konfersi` and `kohi-labs` each with a `gitea` and a `docs` server, and the optional `github` set; `permissions`: the full names per set, `mcp__plugin_cpm-<set>_<key>__<tool>`): read tools need no rule (Claude Code default), write tools ask, destructive or out-of-flow tools are denied. MCP set tool rules (PRD FR12, milestone M5) are not built, so until then these go into Settings & policies as custom ask and deny rules (managed settings), for the workspaces that get the set. Deny holds in Bypass; under D-3 autonomous chats have their ask rules removed, so in those workspaces only the deny list applies. Tool names change between server versions: re-check after each approved version.",
   "checkedAt": "2026-10-13",
   "tools": {
     "gitea": {
@@ -152,211 +152,150 @@
     }
   },
   "servers": {
-    "gitea": {
-      "isnan": "gitea",
-      "konfersi": "gitea",
-      "kohilabs": "gitea"
+    "isnan": {
+      "gitea": "gitea",
+      "docs": "outline"
     },
-    "gitea-isnan": {
-      "isnan": "gitea"
+    "konfersi": {
+      "gitea": "gitea",
+      "docs": "outline"
     },
-    "gitea-konf": {
-      "konfersi": "gitea"
-    },
-    "gitea-kohi": {
-      "kohilabs": "gitea"
+    "kohi-labs": {
+      "gitea": "gitea",
+      "docs": "outline"
     },
     "github": {
       "github": "github"
-    },
-    "outline": {
-      "isnan": "outline",
-      "konfersi": "outline",
-      "kohilabs": "outline"
-    },
-    "docs-isnan": {
-      "isnan": "outline"
-    },
-    "docs-konf": {
-      "konfersi": "outline"
-    },
-    "docs-kohi": {
-      "kohilabs": "outline"
     }
   },
   "permissions": {
-    "gitea": {
+    "isnan": {
       "ask": [
-        "mcp__plugin_cpm-gitea_isnan__actions_config_read",
-        "mcp__plugin_cpm-gitea_isnan__notification_write",
-        "mcp__plugin_cpm-gitea_isnan__label_write",
-        "mcp__plugin_cpm-gitea_isnan__milestone_write",
-        "mcp__plugin_cpm-gitea_isnan__wiki_write",
-        "mcp__plugin_cpm-gitea_isnan__timetracking_write",
-        "mcp__plugin_cpm-gitea_isnan__project_write",
-        "mcp__plugin_cpm-gitea_isnan__issue_write",
-        "mcp__plugin_cpm-gitea_isnan__pull_request_write",
-        "mcp__plugin_cpm-gitea_isnan__pull_request_review_write",
-        "mcp__plugin_cpm-gitea_isnan__create_branch",
-        "mcp__plugin_cpm-gitea_isnan__rename_branch",
-        "mcp__plugin_cpm-gitea_konfersi__actions_config_read",
-        "mcp__plugin_cpm-gitea_konfersi__notification_write",
-        "mcp__plugin_cpm-gitea_konfersi__label_write",
-        "mcp__plugin_cpm-gitea_konfersi__milestone_write",
-        "mcp__plugin_cpm-gitea_konfersi__wiki_write",
-        "mcp__plugin_cpm-gitea_konfersi__timetracking_write",
-        "mcp__plugin_cpm-gitea_konfersi__project_write",
-        "mcp__plugin_cpm-gitea_konfersi__issue_write",
-        "mcp__plugin_cpm-gitea_konfersi__pull_request_write",
-        "mcp__plugin_cpm-gitea_konfersi__pull_request_review_write",
-        "mcp__plugin_cpm-gitea_konfersi__create_branch",
-        "mcp__plugin_cpm-gitea_konfersi__rename_branch",
-        "mcp__plugin_cpm-gitea_kohilabs__actions_config_read",
-        "mcp__plugin_cpm-gitea_kohilabs__notification_write",
-        "mcp__plugin_cpm-gitea_kohilabs__label_write",
-        "mcp__plugin_cpm-gitea_kohilabs__milestone_write",
-        "mcp__plugin_cpm-gitea_kohilabs__wiki_write",
-        "mcp__plugin_cpm-gitea_kohilabs__timetracking_write",
-        "mcp__plugin_cpm-gitea_kohilabs__project_write",
-        "mcp__plugin_cpm-gitea_kohilabs__issue_write",
-        "mcp__plugin_cpm-gitea_kohilabs__pull_request_write",
-        "mcp__plugin_cpm-gitea_kohilabs__pull_request_review_write",
-        "mcp__plugin_cpm-gitea_kohilabs__create_branch",
-        "mcp__plugin_cpm-gitea_kohilabs__rename_branch"
+        "mcp__plugin_cpm-isnan_gitea__actions_config_read",
+        "mcp__plugin_cpm-isnan_gitea__notification_write",
+        "mcp__plugin_cpm-isnan_gitea__label_write",
+        "mcp__plugin_cpm-isnan_gitea__milestone_write",
+        "mcp__plugin_cpm-isnan_gitea__wiki_write",
+        "mcp__plugin_cpm-isnan_gitea__timetracking_write",
+        "mcp__plugin_cpm-isnan_gitea__project_write",
+        "mcp__plugin_cpm-isnan_gitea__issue_write",
+        "mcp__plugin_cpm-isnan_gitea__pull_request_write",
+        "mcp__plugin_cpm-isnan_gitea__pull_request_review_write",
+        "mcp__plugin_cpm-isnan_gitea__create_branch",
+        "mcp__plugin_cpm-isnan_gitea__rename_branch",
+        "mcp__plugin_cpm-isnan_docs__create_document",
+        "mcp__plugin_cpm-isnan_docs__update_document",
+        "mcp__plugin_cpm-isnan_docs__move_document",
+        "mcp__plugin_cpm-isnan_docs__restore_document",
+        "mcp__plugin_cpm-isnan_docs__create_comment",
+        "mcp__plugin_cpm-isnan_docs__update_comment",
+        "mcp__plugin_cpm-isnan_docs__create_attachment",
+        "mcp__plugin_cpm-isnan_docs__create_collection",
+        "mcp__plugin_cpm-isnan_docs__update_collection"
       ],
       "deny": [
-        "mcp__plugin_cpm-gitea_isnan__create_organization",
-        "mcp__plugin_cpm-gitea_isnan__create_repo",
-        "mcp__plugin_cpm-gitea_isnan__fork_repo",
-        "mcp__plugin_cpm-gitea_isnan__create_or_update_file",
-        "mcp__plugin_cpm-gitea_isnan__delete_file",
-        "mcp__plugin_cpm-gitea_isnan__delete_branch",
-        "mcp__plugin_cpm-gitea_isnan__create_tag",
-        "mcp__plugin_cpm-gitea_isnan__delete_tag",
-        "mcp__plugin_cpm-gitea_isnan__create_release",
-        "mcp__plugin_cpm-gitea_isnan__delete_release",
-        "mcp__plugin_cpm-gitea_isnan__package_write",
-        "mcp__plugin_cpm-gitea_isnan__actions_config_write",
-        "mcp__plugin_cpm-gitea_isnan__actions_run_write",
-        "mcp__plugin_cpm-gitea_konfersi__create_organization",
-        "mcp__plugin_cpm-gitea_konfersi__create_repo",
-        "mcp__plugin_cpm-gitea_konfersi__fork_repo",
-        "mcp__plugin_cpm-gitea_konfersi__create_or_update_file",
-        "mcp__plugin_cpm-gitea_konfersi__delete_file",
-        "mcp__plugin_cpm-gitea_konfersi__delete_branch",
-        "mcp__plugin_cpm-gitea_konfersi__create_tag",
-        "mcp__plugin_cpm-gitea_konfersi__delete_tag",
-        "mcp__plugin_cpm-gitea_konfersi__create_release",
-        "mcp__plugin_cpm-gitea_konfersi__delete_release",
-        "mcp__plugin_cpm-gitea_konfersi__package_write",
-        "mcp__plugin_cpm-gitea_konfersi__actions_config_write",
-        "mcp__plugin_cpm-gitea_konfersi__actions_run_write",
-        "mcp__plugin_cpm-gitea_kohilabs__create_organization",
-        "mcp__plugin_cpm-gitea_kohilabs__create_repo",
-        "mcp__plugin_cpm-gitea_kohilabs__fork_repo",
-        "mcp__plugin_cpm-gitea_kohilabs__create_or_update_file",
-        "mcp__plugin_cpm-gitea_kohilabs__delete_file",
-        "mcp__plugin_cpm-gitea_kohilabs__delete_branch",
-        "mcp__plugin_cpm-gitea_kohilabs__create_tag",
-        "mcp__plugin_cpm-gitea_kohilabs__delete_tag",
-        "mcp__plugin_cpm-gitea_kohilabs__create_release",
-        "mcp__plugin_cpm-gitea_kohilabs__delete_release",
-        "mcp__plugin_cpm-gitea_kohilabs__package_write",
-        "mcp__plugin_cpm-gitea_kohilabs__actions_config_write",
-        "mcp__plugin_cpm-gitea_kohilabs__actions_run_write"
+        "mcp__plugin_cpm-isnan_gitea__create_organization",
+        "mcp__plugin_cpm-isnan_gitea__create_repo",
+        "mcp__plugin_cpm-isnan_gitea__fork_repo",
+        "mcp__plugin_cpm-isnan_gitea__create_or_update_file",
+        "mcp__plugin_cpm-isnan_gitea__delete_file",
+        "mcp__plugin_cpm-isnan_gitea__delete_branch",
+        "mcp__plugin_cpm-isnan_gitea__create_tag",
+        "mcp__plugin_cpm-isnan_gitea__delete_tag",
+        "mcp__plugin_cpm-isnan_gitea__create_release",
+        "mcp__plugin_cpm-isnan_gitea__delete_release",
+        "mcp__plugin_cpm-isnan_gitea__package_write",
+        "mcp__plugin_cpm-isnan_gitea__actions_config_write",
+        "mcp__plugin_cpm-isnan_gitea__actions_run_write",
+        "mcp__plugin_cpm-isnan_docs__delete_document",
+        "mcp__plugin_cpm-isnan_docs__delete_collection",
+        "mcp__plugin_cpm-isnan_docs__delete_comment"
       ]
     },
-    "gitea-isnan": {
+    "konfersi": {
       "ask": [
-        "mcp__plugin_cpm-gitea-isnan_isnan__actions_config_read",
-        "mcp__plugin_cpm-gitea-isnan_isnan__notification_write",
-        "mcp__plugin_cpm-gitea-isnan_isnan__label_write",
-        "mcp__plugin_cpm-gitea-isnan_isnan__milestone_write",
-        "mcp__plugin_cpm-gitea-isnan_isnan__wiki_write",
-        "mcp__plugin_cpm-gitea-isnan_isnan__timetracking_write",
-        "mcp__plugin_cpm-gitea-isnan_isnan__project_write",
-        "mcp__plugin_cpm-gitea-isnan_isnan__issue_write",
-        "mcp__plugin_cpm-gitea-isnan_isnan__pull_request_write",
-        "mcp__plugin_cpm-gitea-isnan_isnan__pull_request_review_write",
-        "mcp__plugin_cpm-gitea-isnan_isnan__create_branch",
-        "mcp__plugin_cpm-gitea-isnan_isnan__rename_branch"
+        "mcp__plugin_cpm-konfersi_gitea__actions_config_read",
+        "mcp__plugin_cpm-konfersi_gitea__notification_write",
+        "mcp__plugin_cpm-konfersi_gitea__label_write",
+        "mcp__plugin_cpm-konfersi_gitea__milestone_write",
+        "mcp__plugin_cpm-konfersi_gitea__wiki_write",
+        "mcp__plugin_cpm-konfersi_gitea__timetracking_write",
+        "mcp__plugin_cpm-konfersi_gitea__project_write",
+        "mcp__plugin_cpm-konfersi_gitea__issue_write",
+        "mcp__plugin_cpm-konfersi_gitea__pull_request_write",
+        "mcp__plugin_cpm-konfersi_gitea__pull_request_review_write",
+        "mcp__plugin_cpm-konfersi_gitea__create_branch",
+        "mcp__plugin_cpm-konfersi_gitea__rename_branch",
+        "mcp__plugin_cpm-konfersi_docs__create_document",
+        "mcp__plugin_cpm-konfersi_docs__update_document",
+        "mcp__plugin_cpm-konfersi_docs__move_document",
+        "mcp__plugin_cpm-konfersi_docs__restore_document",
+        "mcp__plugin_cpm-konfersi_docs__create_comment",
+        "mcp__plugin_cpm-konfersi_docs__update_comment",
+        "mcp__plugin_cpm-konfersi_docs__create_attachment",
+        "mcp__plugin_cpm-konfersi_docs__create_collection",
+        "mcp__plugin_cpm-konfersi_docs__update_collection"
       ],
       "deny": [
-        "mcp__plugin_cpm-gitea-isnan_isnan__create_organization",
-        "mcp__plugin_cpm-gitea-isnan_isnan__create_repo",
-        "mcp__plugin_cpm-gitea-isnan_isnan__fork_repo",
-        "mcp__plugin_cpm-gitea-isnan_isnan__create_or_update_file",
-        "mcp__plugin_cpm-gitea-isnan_isnan__delete_file",
-        "mcp__plugin_cpm-gitea-isnan_isnan__delete_branch",
-        "mcp__plugin_cpm-gitea-isnan_isnan__create_tag",
-        "mcp__plugin_cpm-gitea-isnan_isnan__delete_tag",
-        "mcp__plugin_cpm-gitea-isnan_isnan__create_release",
-        "mcp__plugin_cpm-gitea-isnan_isnan__delete_release",
-        "mcp__plugin_cpm-gitea-isnan_isnan__package_write",
-        "mcp__plugin_cpm-gitea-isnan_isnan__actions_config_write",
-        "mcp__plugin_cpm-gitea-isnan_isnan__actions_run_write"
+        "mcp__plugin_cpm-konfersi_gitea__create_organization",
+        "mcp__plugin_cpm-konfersi_gitea__create_repo",
+        "mcp__plugin_cpm-konfersi_gitea__fork_repo",
+        "mcp__plugin_cpm-konfersi_gitea__create_or_update_file",
+        "mcp__plugin_cpm-konfersi_gitea__delete_file",
+        "mcp__plugin_cpm-konfersi_gitea__delete_branch",
+        "mcp__plugin_cpm-konfersi_gitea__create_tag",
+        "mcp__plugin_cpm-konfersi_gitea__delete_tag",
+        "mcp__plugin_cpm-konfersi_gitea__create_release",
+        "mcp__plugin_cpm-konfersi_gitea__delete_release",
+        "mcp__plugin_cpm-konfersi_gitea__package_write",
+        "mcp__plugin_cpm-konfersi_gitea__actions_config_write",
+        "mcp__plugin_cpm-konfersi_gitea__actions_run_write",
+        "mcp__plugin_cpm-konfersi_docs__delete_document",
+        "mcp__plugin_cpm-konfersi_docs__delete_collection",
+        "mcp__plugin_cpm-konfersi_docs__delete_comment"
       ]
     },
-    "gitea-konf": {
+    "kohi-labs": {
       "ask": [
-        "mcp__plugin_cpm-gitea-konf_konfersi__actions_config_read",
-        "mcp__plugin_cpm-gitea-konf_konfersi__notification_write",
-        "mcp__plugin_cpm-gitea-konf_konfersi__label_write",
-        "mcp__plugin_cpm-gitea-konf_konfersi__milestone_write",
-        "mcp__plugin_cpm-gitea-konf_konfersi__wiki_write",
-        "mcp__plugin_cpm-gitea-konf_konfersi__timetracking_write",
-        "mcp__plugin_cpm-gitea-konf_konfersi__project_write",
-        "mcp__plugin_cpm-gitea-konf_konfersi__issue_write",
-        "mcp__plugin_cpm-gitea-konf_konfersi__pull_request_write",
-        "mcp__plugin_cpm-gitea-konf_konfersi__pull_request_review_write",
-        "mcp__plugin_cpm-gitea-konf_konfersi__create_branch",
-        "mcp__plugin_cpm-gitea-konf_konfersi__rename_branch"
+        "mcp__plugin_cpm-kohi-labs_gitea__actions_config_read",
+        "mcp__plugin_cpm-kohi-labs_gitea__notification_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__label_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__milestone_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__wiki_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__timetracking_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__project_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__issue_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__pull_request_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__pull_request_review_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__create_branch",
+        "mcp__plugin_cpm-kohi-labs_gitea__rename_branch",
+        "mcp__plugin_cpm-kohi-labs_docs__create_document",
+        "mcp__plugin_cpm-kohi-labs_docs__update_document",
+        "mcp__plugin_cpm-kohi-labs_docs__move_document",
+        "mcp__plugin_cpm-kohi-labs_docs__restore_document",
+        "mcp__plugin_cpm-kohi-labs_docs__create_comment",
+        "mcp__plugin_cpm-kohi-labs_docs__update_comment",
+        "mcp__plugin_cpm-kohi-labs_docs__create_attachment",
+        "mcp__plugin_cpm-kohi-labs_docs__create_collection",
+        "mcp__plugin_cpm-kohi-labs_docs__update_collection"
       ],
       "deny": [
-        "mcp__plugin_cpm-gitea-konf_konfersi__create_organization",
-        "mcp__plugin_cpm-gitea-konf_konfersi__create_repo",
-        "mcp__plugin_cpm-gitea-konf_konfersi__fork_repo",
-        "mcp__plugin_cpm-gitea-konf_konfersi__create_or_update_file",
-        "mcp__plugin_cpm-gitea-konf_konfersi__delete_file",
-        "mcp__plugin_cpm-gitea-konf_konfersi__delete_branch",
-        "mcp__plugin_cpm-gitea-konf_konfersi__create_tag",
-        "mcp__plugin_cpm-gitea-konf_konfersi__delete_tag",
-        "mcp__plugin_cpm-gitea-konf_konfersi__create_release",
-        "mcp__plugin_cpm-gitea-konf_konfersi__delete_release",
-        "mcp__plugin_cpm-gitea-konf_konfersi__package_write",
-        "mcp__plugin_cpm-gitea-konf_konfersi__actions_config_write",
-        "mcp__plugin_cpm-gitea-konf_konfersi__actions_run_write"
-      ]
-    },
-    "gitea-kohi": {
-      "ask": [
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__actions_config_read",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__notification_write",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__label_write",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__milestone_write",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__wiki_write",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__timetracking_write",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__project_write",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__issue_write",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__pull_request_write",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__pull_request_review_write",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__create_branch",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__rename_branch"
-      ],
-      "deny": [
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__create_organization",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__create_repo",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__fork_repo",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__create_or_update_file",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__delete_file",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__delete_branch",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__create_tag",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__delete_tag",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__create_release",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__delete_release",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__package_write",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__actions_config_write",
-        "mcp__plugin_cpm-gitea-kohi_kohilabs__actions_run_write"
+        "mcp__plugin_cpm-kohi-labs_gitea__create_organization",
+        "mcp__plugin_cpm-kohi-labs_gitea__create_repo",
+        "mcp__plugin_cpm-kohi-labs_gitea__fork_repo",
+        "mcp__plugin_cpm-kohi-labs_gitea__create_or_update_file",
+        "mcp__plugin_cpm-kohi-labs_gitea__delete_file",
+        "mcp__plugin_cpm-kohi-labs_gitea__delete_branch",
+        "mcp__plugin_cpm-kohi-labs_gitea__create_tag",
+        "mcp__plugin_cpm-kohi-labs_gitea__delete_tag",
+        "mcp__plugin_cpm-kohi-labs_gitea__create_release",
+        "mcp__plugin_cpm-kohi-labs_gitea__delete_release",
+        "mcp__plugin_cpm-kohi-labs_gitea__package_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__actions_config_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__actions_run_write",
+        "mcp__plugin_cpm-kohi-labs_docs__delete_document",
+        "mcp__plugin_cpm-kohi-labs_docs__delete_collection",
+        "mcp__plugin_cpm-kohi-labs_docs__delete_comment"
       ]
     },
     "github": {
@@ -381,102 +320,6 @@
         "mcp__plugin_cpm-github_github__fork_repository",
         "mcp__plugin_cpm-github_github__push_files",
         "mcp__plugin_cpm-github_github__merge_pull_request"
-      ]
-    },
-    "outline": {
-      "ask": [
-        "mcp__plugin_cpm-outline_isnan__create_document",
-        "mcp__plugin_cpm-outline_isnan__update_document",
-        "mcp__plugin_cpm-outline_isnan__move_document",
-        "mcp__plugin_cpm-outline_isnan__restore_document",
-        "mcp__plugin_cpm-outline_isnan__create_comment",
-        "mcp__plugin_cpm-outline_isnan__update_comment",
-        "mcp__plugin_cpm-outline_isnan__create_attachment",
-        "mcp__plugin_cpm-outline_isnan__create_collection",
-        "mcp__plugin_cpm-outline_isnan__update_collection",
-        "mcp__plugin_cpm-outline_konfersi__create_document",
-        "mcp__plugin_cpm-outline_konfersi__update_document",
-        "mcp__plugin_cpm-outline_konfersi__move_document",
-        "mcp__plugin_cpm-outline_konfersi__restore_document",
-        "mcp__plugin_cpm-outline_konfersi__create_comment",
-        "mcp__plugin_cpm-outline_konfersi__update_comment",
-        "mcp__plugin_cpm-outline_konfersi__create_attachment",
-        "mcp__plugin_cpm-outline_konfersi__create_collection",
-        "mcp__plugin_cpm-outline_konfersi__update_collection",
-        "mcp__plugin_cpm-outline_kohilabs__create_document",
-        "mcp__plugin_cpm-outline_kohilabs__update_document",
-        "mcp__plugin_cpm-outline_kohilabs__move_document",
-        "mcp__plugin_cpm-outline_kohilabs__restore_document",
-        "mcp__plugin_cpm-outline_kohilabs__create_comment",
-        "mcp__plugin_cpm-outline_kohilabs__update_comment",
-        "mcp__plugin_cpm-outline_kohilabs__create_attachment",
-        "mcp__plugin_cpm-outline_kohilabs__create_collection",
-        "mcp__plugin_cpm-outline_kohilabs__update_collection"
-      ],
-      "deny": [
-        "mcp__plugin_cpm-outline_isnan__delete_document",
-        "mcp__plugin_cpm-outline_isnan__delete_collection",
-        "mcp__plugin_cpm-outline_isnan__delete_comment",
-        "mcp__plugin_cpm-outline_konfersi__delete_document",
-        "mcp__plugin_cpm-outline_konfersi__delete_collection",
-        "mcp__plugin_cpm-outline_konfersi__delete_comment",
-        "mcp__plugin_cpm-outline_kohilabs__delete_document",
-        "mcp__plugin_cpm-outline_kohilabs__delete_collection",
-        "mcp__plugin_cpm-outline_kohilabs__delete_comment"
-      ]
-    },
-    "docs-isnan": {
-      "ask": [
-        "mcp__plugin_cpm-docs-isnan_isnan__create_document",
-        "mcp__plugin_cpm-docs-isnan_isnan__update_document",
-        "mcp__plugin_cpm-docs-isnan_isnan__move_document",
-        "mcp__plugin_cpm-docs-isnan_isnan__restore_document",
-        "mcp__plugin_cpm-docs-isnan_isnan__create_comment",
-        "mcp__plugin_cpm-docs-isnan_isnan__update_comment",
-        "mcp__plugin_cpm-docs-isnan_isnan__create_attachment",
-        "mcp__plugin_cpm-docs-isnan_isnan__create_collection",
-        "mcp__plugin_cpm-docs-isnan_isnan__update_collection"
-      ],
-      "deny": [
-        "mcp__plugin_cpm-docs-isnan_isnan__delete_document",
-        "mcp__plugin_cpm-docs-isnan_isnan__delete_collection",
-        "mcp__plugin_cpm-docs-isnan_isnan__delete_comment"
-      ]
-    },
-    "docs-konf": {
-      "ask": [
-        "mcp__plugin_cpm-docs-konf_konfersi__create_document",
-        "mcp__plugin_cpm-docs-konf_konfersi__update_document",
-        "mcp__plugin_cpm-docs-konf_konfersi__move_document",
-        "mcp__plugin_cpm-docs-konf_konfersi__restore_document",
-        "mcp__plugin_cpm-docs-konf_konfersi__create_comment",
-        "mcp__plugin_cpm-docs-konf_konfersi__update_comment",
-        "mcp__plugin_cpm-docs-konf_konfersi__create_attachment",
-        "mcp__plugin_cpm-docs-konf_konfersi__create_collection",
-        "mcp__plugin_cpm-docs-konf_konfersi__update_collection"
-      ],
-      "deny": [
-        "mcp__plugin_cpm-docs-konf_konfersi__delete_document",
-        "mcp__plugin_cpm-docs-konf_konfersi__delete_collection",
-        "mcp__plugin_cpm-docs-konf_konfersi__delete_comment"
-      ]
-    },
-    "docs-kohi": {
-      "ask": [
-        "mcp__plugin_cpm-docs-kohi_kohilabs__create_document",
-        "mcp__plugin_cpm-docs-kohi_kohilabs__update_document",
-        "mcp__plugin_cpm-docs-kohi_kohilabs__move_document",
-        "mcp__plugin_cpm-docs-kohi_kohilabs__restore_document",
-        "mcp__plugin_cpm-docs-kohi_kohilabs__create_comment",
-        "mcp__plugin_cpm-docs-kohi_kohilabs__update_comment",
-        "mcp__plugin_cpm-docs-kohi_kohilabs__create_attachment",
-        "mcp__plugin_cpm-docs-kohi_kohilabs__create_collection",
-        "mcp__plugin_cpm-docs-kohi_kohilabs__update_collection"
-      ],
-      "deny": [
-        "mcp__plugin_cpm-docs-kohi_kohilabs__delete_document",
-        "mcp__plugin_cpm-docs-kohi_kohilabs__delete_collection",
-        "mcp__plugin_cpm-docs-kohi_kohilabs__delete_comment"
       ]
     }
   }

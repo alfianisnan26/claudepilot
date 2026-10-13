@@ -71,8 +71,9 @@ Create (or pick) the workspace that holds `{{PROJECT_DIR}}`, then assign:
 - **Skillset** `pilot-way`.
 - **The Portal MCP**: not a set. Switch agent access on for this workspace (Access > MCP > Agents); every session
   then gets its own token and the portal's tools (tickets, CI, knowledge, sessions).
-- **MCP sets**, only after the owner reviewed their entries (`docs/kit/mcp/REVIEW.md`): the git host (`github`
-  or `gitea`) and `docs`, each with its token by Secrets pool name.
+- **MCP set**, only after the owner reviewed its entries (`docs/kit/mcp/REVIEW.md`): the set of the project's own program
+  (`isnan`, `konfersi` or `kohi-labs`: that program's Gitea and Outline, never another program's), with its two tokens by
+  Secrets pool name. The GitHub set is an optional draft, only for a project that lives on GitHub.
 - **Settings**: Bypass allowed for the orchestrator chat by policy; session caps; auto-approve OFF; budgets and
   spike alerts; the watchdog and the scoring enrolment where the portal offers them.
 - A Claude sign-in for the workspace (a login is per workspace).

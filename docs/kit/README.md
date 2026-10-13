@@ -15,7 +15,7 @@ Decided in D-26 (`docs/dev-sessions/DECISIONS.md`); specified in `_specs/T-132.m
 | `persona/` | `pilot-way.json`: the managed instructions for the orchestrator chat and the role sub-agents (implementer, qa-verifier, reviewer, scribe, release-coordinator, incident-analyst, explorer, ux-checker, perf-tester). | One **Persona** pool entry, `pilot-way` | `persona/README.md` |
 | `skills/` | One folder per skill (`SKILL.md`, optional `references/`): charter, decisions, ticket-flow, escalation, incident, orchestration, qa-verification, peer-review, efficiency, portal-mcp, git-flow, ci-cd, safety, knowledge, browser-testing, and the `design-standard` slot. Text only. | One **Skillset** pool entry, `pilot-way` (prefix `pilot`) | `skills/INDEX.md` |
 | `contexts/` | One Markdown file per context: charter-essentials, safety-rules, work-rhythm, project-standards (a template), program-overlay (empty by default), new-project-bootstrap. | One **Context** pool entry each | `contexts/INDEX.md` |
-| `mcp/` | Draft MCP catalog entries and set definitions (git host, docs, browser), the review dossier, the recommended tool rules. | **MCP set** pool entries, only after a person reviewed each entry | `mcp/README.md`, `mcp/REVIEW.md` |
+| `mcp/` | Draft MCP catalog entries (Gitea, three Outline hosts, an optional GitHub, browser references), **three program sets** (`isnan`, `konfersi`, `kohi-labs`: that program's Gitea and Outline each), the review dossier, the recommended tool rules. | Catalog **drafts**, then one **MCP set** pool per program, only after a person approved its entries | `mcp/README.md`, `mcp/REVIEW.md` |
 | `scaffold/` | The files a new repository starts with, the placeholder list, the first tickets and the bootstrap procedure. | Not a pool: copied into the repository (by hand, or by the portal's template when available) | `scaffold/bootstrap.md` |
 | `_specs/` | The ticket texts the kit was built from (read only). | Nothing | |
 | `publish.mjs` | The publisher (next section). | | |
@@ -26,15 +26,18 @@ Decided in D-26 (`docs/dev-sessions/DECISIONS.md`); specified in `_specs/T-132.m
 (it needs `PORTAL` and the portal's server code in the environment; an agent never holds that code).
 
 - **Dry by default.** Without `--apply` it reads the portal and prints what it would create or revise.
-  `--only=contexts,persona,skills` limits the run.
+  `--only=contexts,persona,skills,mcp` limits the run (the default is all four; `--only=mcp` runs the MCP part alone).
 - **Idempotent.** A pool that exists by name gets a new revision, never a second pool.
 - **Contexts** first: one Context pool per file (at most 20 KB each). The **persona** is created next and linked to
   the always-delivered contexts (charter-essentials, work-rhythm, safety-rules).
 - **Skills**: the folder is imported; a version is approved only when the scan finds no script, hook or network use
   and no finding that needs a person's acknowledgement; then the skillset `pilot-way` is created or revised.
+- **MCP** (`mcp/README.md`): the entries marked `publish` in `mcp/manifest.json` go into the catalog as **drafts**; a program
+  set is created only when every entry of it has an approved version, otherwise the run prints
+  `set <slug>: waiting for the owner's approval of <entries>`. The optional GitHub draft is not touched.
 - **What it never does**: approve an MCP entry (a person reviews third-party servers), create a Secrets pool,
   assign anything to a workspace (a separate step the owner confirms), or print a credential.
-- It writes `published.json` (pool ids only, no secrets) for the next run.
+- It writes `published.json` (pool and catalog ids only, no secrets) for the next run; a run that skips a part keeps that part's ids.
 
 ## Applying the kit to a new project
 
