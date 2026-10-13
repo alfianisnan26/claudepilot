@@ -3033,3 +3033,42 @@ test('a Read of a file the portal staged for this chat’s attachment is answere
     await s.done();
   }
 });
+
+/* ---------- T-99: a turn Claude Code starts by itself for a finished sub-agent ---------- */
+
+/** The raw lines of the Konfersi session at 12:50 on 2026-10-13 (its ids replaced): `command_lifecycle` started for a command nobody queued, then `system/init` and a new turn. */
+const harnessTurn = (sessionId: string, commandUuid: string) => [line({ type: 'command_lifecycle', command_uuid: commandUuid, state: 'started', uuid: randomUUID(), session_id: sessionId }), init(sessionId)];
+
+test('integrity (T-99): a turn Claude Code starts by itself after a sub-agent finished (command started, never queued, no replayed line) is accepted and logged, and so is the rest of that command', async () => {
+  const s = await liveSession();
+  try {
+    await firstTurn(s);
+    s.tail.push(line({ type: 'system', subtype: 'task_started', task_id: 'w39', tool_use_id: 'toolu_w39', description: 'role w39', task_type: 'local_agent', session_id: s.id }));
+    s.tail.push(line({ type: 'system', subtype: 'task_notification', task_id: 'w39', status: 'completed', summary: 'w39 done', session_id: s.id }));
+    await until(() => s.controller.tasks(s.id).some((t) => t.taskId === 'w39' && t.status === 'completed'));
+    const command = randomUUID();
+    for (const l of harnessTurn(s.id, command)) s.tail.push(l);
+    s.tail.push(assistantText('the role finished, carrying on'));
+    await until(() => s.controller.history(s.id).some((e) => e.text === 'the role finished, carrying on'));
+    assert.notEqual(s.state(), 'ended', 'a turn the harness started for a finished task is not an intrusion');
+    s.tail.push(line({ type: 'command_lifecycle', command_uuid: command, state: 'completed', uuid: randomUUID(), session_id: s.id }));
+    s.tail.push(assistantText('still here'));
+    await until(() => s.controller.history(s.id).some((e) => e.text === 'still here'));
+    assert.notEqual(s.state(), 'ended', 'the end of that command is its own too');
+    // A `queued` line for a command nobody sent is still an intrusion, tasks or not.
+    await expectIntegrityEnd(s, line({ type: 'command_lifecycle', command_uuid: 'peer-2', state: 'queued', uuid: randomUUID(), session_id: s.id }), /Claude Code queued a message this portal didn't send \(peer-2\)/);
+  } finally {
+    await s.done();
+  }
+});
+
+test('integrity (T-99): the same lines in a process that never ran a sub-agent or background task still end the session', async () => {
+  const s = await liveSession();
+  try {
+    await firstTurn(s);
+    const [started] = harnessTurn(s.id, 'peer-3');
+    await expectIntegrityEnd(s, started!, /Claude Code queued a message this portal didn't send \(peer-3\)/);
+  } finally {
+    await s.done();
+  }
+});

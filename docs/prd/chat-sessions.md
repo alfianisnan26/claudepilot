@@ -383,6 +383,13 @@ The controller records every UUID and `request_id` it sends and ends the session
 Contract tests inject each kind of line through the FIFO and from a stdio MCP server and expect the
 session to end.
 
+One exception, precise (T-99, 2026-10-13): Claude Code starts a **turn of its own** when a sub-agent or a background task finishes, and
+that turn's command appears as a `command_lifecycle` `started` for a UUID the portal never sent, with no `queued` before it and no
+replayed user line (then `system/init` and the turn). The controller accepts it, and the rest of that command's lifecycle, only when a
+task ran in the session's current process (`chat_tasks` since the process start), and logs it as a harness turn; the same line in a
+process without any task, or a `queued` state for an unknown UUID, still ends the session. Observed on the Konfersi session at 12:50
+(a role sub-agent finished; the session ended "queued a message this portal didn't send"); the raw lines are a test fixture.
+
 ### 10.5 Browser protocol
 
 | Direction | Messages |

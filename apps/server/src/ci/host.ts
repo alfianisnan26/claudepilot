@@ -18,7 +18,15 @@ export interface CiReply {
 }
 
 /** The runner could not be reached or answered nothing usable; the workspace is the likely cause. */
-export class CiUnreachable extends Error {}
+export class CiUnreachable extends Error {
+  /** True when the runner may simply be missing or not runnable (no reply at all, exit 126 or 127): `cp` then installs it again once (T-99). */
+  constructor(
+    message: string,
+    readonly runnerMissing = false,
+  ) {
+    super(message);
+  }
+}
 
 export interface CiHost {
   state(workspaceId: string): Promise<'running' | 'stopped' | 'gone' | 'unsupported'>;
@@ -51,7 +59,10 @@ export class WorkspacesCiHost implements CiHost {
     const access = this.workspaces.runtimeFor(target)?.delivery;
     if (!access) return this.workspaces.runtimeFor(target) ? ('unsupported' as const) : ('gone' as const);
     const s = await access.state(name);
-    return !s.exists ? ('gone' as const) : s.running ? ('running' as const) : ('stopped' as const);
+    const state = !s.exists ? ('gone' as const) : s.running ? ('running' as const) : ('stopped' as const);
+    // A workspace seen stopped or gone comes back from its image: the runner lives in the container, not on the volume (T-99).
+    if (state !== 'running') this.#checked.delete(workspaceId);
+    return state;
   }
 
   #listed: { at: number; map: Promise<Map<string, 'running' | 'stopped'>> } | null = null;
@@ -61,13 +72,36 @@ export class WorkspacesCiHost implements CiHost {
     if (this.#listed && Date.now() - this.#listed.at < 4000) return this.#listed.map;
     const map = this.workspaces
       .list()
-      .then((all) => new Map(all.map((w) => [w.id, w.status === 'running' ? ('running' as const) : ('stopped' as const)])))
+      .then((all) => {
+        for (const w of all) if (w.status !== 'running') this.#checked.delete(w.id);
+        return new Map(all.map((w) => [w.id, w.status === 'running' ? ('running' as const) : ('stopped' as const)]));
+      })
       .catch(() => new Map<string, 'running' | 'stopped'>());
     this.#listed = { at: Date.now(), map };
     return map;
   }
 
+  /**
+   * `cp-ci <args>`; when the runner gives no reply at all, or the shell can't find or run it (126, 127), and the file in the workspace
+   * is not the current runner (a pod restart keeps the home volume, not /etc/claudepilot/bin, while `install` remembered it for up to
+   * `recheckMs`: T-99), the mark is forgotten, the runner installed again and the command tried once more. A current runner that only
+   * took too long is NOT retried: the command may have run (a `start`, say).
+   */
   async cp(workspaceId: string, args: string[], opts: { stdin?: string; timeoutMs?: number } = {}): Promise<CiReply> {
+    try {
+      return await this.#cp(workspaceId, args, opts);
+    } catch (e) {
+      if (!(e instanceof CiUnreachable) || !e.runnerMissing) throw e;
+      const [target, name] = split(workspaceId);
+      const current = await this.workspaces.runtimeFor(target)?.delivery?.read(name, CP_CI_PATH).catch(() => null);
+      if (current === CP_CI) throw e;
+      this.#checked.delete(workspaceId);
+      await this.install(workspaceId);
+      return this.#cp(workspaceId, args, opts);
+    }
+  }
+
+  async #cp(workspaceId: string, args: string[], opts: { stdin?: string; timeoutMs?: number }): Promise<CiReply> {
     const [target, name] = split(workspaceId);
     const exec = await this.workspaces.exec(target, name, [CP_CI_PATH, ...args]);
     const chunks: Buffer[] = [];
@@ -94,9 +128,9 @@ export class WorkspacesCiHost implements CiHost {
         // falls through to the unreachable error
       }
     }
-    if (done.code === null) throw new CiUnreachable('The workspace did not answer in time.');
+    if (done.code === null) throw new CiUnreachable('The workspace did not answer in time.', true);
     // 126 and 127: the shell could not find or run the file.
-    if (done.code === 126 || done.code === 127) throw new CiUnreachable('The CI runner is not installed in this workspace.');
+    if (done.code === 126 || done.code === 127) throw new CiUnreachable('The CI runner is not installed in this workspace.', true);
     throw new CiUnreachable(`The CI runner gave no answer (exit ${done.code}): ${out.trim().slice(-200)}`);
   }
 
