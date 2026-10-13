@@ -6,8 +6,13 @@ import {
   workspaceId,
   workspaceLabelProblem,
   workspaceNameProblem,
+  workspaceResourcesProblem,
   type RenameWorkspaceResult,
   type CreateWorkspaceRequest,
+  type UpdateWorkspaceResourcesRequest,
+  type WorkspaceResources,
+  type WorkspaceResourcesFit,
+  type WorkspaceResourceValues,
   type Workspace,
   type WorkspaceTarget,
   type WorkspaceUsage,
@@ -17,7 +22,8 @@ import { actorString, actorUserId, ownerActor, requireCan } from '../authz/seam.
 import type { JsonFile } from '../jsonFile.js';
 import { PLAIN_NAME } from '../names.js';
 import { findWorkspace, WorkspaceIdentities, type WorkspaceIdentity } from './identity.js';
-import { isTargetUnreachable, type Runtime, type ShellSession } from './runtime.js';
+import { describeValues } from './resources.js';
+import { isTargetUnreachable, type ResourceAccess, type Runtime, type ShellSession } from './runtime.js';
 
 const notFound = () => new AppError('NOT_FOUND', 'Not found.');
 
@@ -84,7 +90,11 @@ export class Workspaces {
     settled?: (ms: number) => Promise<void>;
     /** Writes an audit row (the platform audit): a rename (T-42 slice 2). Never throws. */
     audit?: (e: { kind: string; actor: string; userId: string | null; actorLabel?: string | null; subject?: string | null; detail?: Record<string, unknown> }) => void;
+    /** How many CI runs are running in a workspace (`<target>/<name>`): a resources change that restarts its pod waits for them (T-98). */
+    runningCi?: (workspaceId: string) => number;
   } = {};
+  /** Why pending resources were not applied at a workspace's last start (T-98), by stable id; in memory only. */
+  readonly #resourceProblems = new Map<string, string>();
   /** Watchers of the runtimes added while running (static ones are wired by index.ts), by target id. */
   readonly #watching = new Map<string, () => void>();
   readonly #runtimeListeners = new Set<(targetId: string, runtime: Runtime | null) => void>();
@@ -377,6 +387,148 @@ export class Workspaces {
     return { id: known.legacyId, stableId: known.id, name: known.name, label: workspaceDisplayName({ name: known.name, label: known.label ?? undefined }), previous: from };
   }
 
+  /* ---------- Resources: CPU and memory after a create (T-98, docs/prd/targets-connect.md §25) ---------- */
+
+  /** The runtime's resource access for a workspace's target; a target without one (Docker, This machine, a single) says so. */
+  #resourceAccess(known: WorkspaceIdentity): ResourceAccess {
+    const access = this.#runtimes.get(known.target)?.resources;
+    if (!access) throw new AppError('CONFLICT', 'Only a Kubernetes workspace’s CPU and memory can be changed here.');
+    return access;
+  }
+
+  #resourcesView(known: WorkspaceIdentity, live: Partial<WorkspaceResourceValues>, replicas: number, extra: Partial<WorkspaceResources> = {}): WorkspaceResources {
+    return {
+      id: known.legacyId,
+      stableId: known.id,
+      wanted: known.resources ?? null,
+      live,
+      pending: !!known.resourcesPendingAt,
+      pendingSince: known.resourcesPendingAt ?? null,
+      appliedAt: known.resourcesAppliedAt ?? null,
+      running: replicas > 0,
+      problem: known.resourcesPendingAt ? (this.#resourceProblems.get(known.id) ?? null) : null,
+      ...extra,
+    };
+  }
+
+  /** The wanted values on the record, what the Deployment has, and whether a change waits for the next start. `view` on the workspace. */
+  async resourcesOf(ref: string, actor: Actor = ownerActor()): Promise<WorkspaceResources> {
+    const { known } = await this.#authorized(ref, actor, 'view');
+    const access = this.#resourceAccess(known);
+    const { live, replicas } = await this.#run(known.target, () => access.read(known.name));
+    return this.#resourcesView(known, live, replicas);
+  }
+
+  /**
+   * Checks a resources change without making it: who may (`operate` on the workspace through the seam, and never an agent: a change that
+   * restarts the pod ends its own session), the values (left-out ones keep what is stored, else what the Deployment has; then the bounds and
+   * no request above its limit), and the fit check with its numbers. Throws the refusal.
+   */
+  async planResources(
+    ref: string,
+    req: Partial<UpdateWorkspaceResourcesRequest>,
+    actor: Actor = ownerActor(),
+  ): Promise<{ known: WorkspaceIdentity; access: ResourceAccess; values: WorkspaceResourceValues; live: Partial<WorkspaceResourceValues>; replicas: number; apply: 'now' | 'next_restart'; unchanged: boolean; fit: WorkspaceResourcesFit }> {
+    const { known } = await this.#authorized(ref, actor, 'operate');
+    if (actor.kind === 'agent') throw new AppError('FORBIDDEN', 'An agent can’t change a workspace’s CPU and memory: the restart would end every session in it. Ask a person.');
+    const access = this.#resourceAccess(known);
+    const body = (req ?? {}) as Partial<UpdateWorkspaceResourcesRequest>;
+    if (body.apply !== 'now' && body.apply !== 'next_restart')
+      throw new AppError('VALIDATION_FAILED', 'Say when: now, or at the next restart.', { details: { apply: 'now or next_restart.' } });
+    const { live, replicas } = await this.#run(known.target, () => access.read(known.name));
+    const base: Partial<WorkspaceResourceValues> = { ...live, ...(known.resources ?? {}) };
+    const pick = (k: keyof WorkspaceResourceValues) => (body[k] === undefined || body[k] === null ? base[k] : body[k]);
+    const merged = { cpus: pick('cpus'), memoryMb: pick('memoryMb'), cpuRequest: pick('cpuRequest'), memoryRequestMb: pick('memoryRequestMb') };
+    const problems = workspaceResourcesProblem(merged);
+    if (problems) throw new AppError('VALIDATION_FAILED', Object.values(problems)[0]!, { details: problems });
+    const values = merged as WorkspaceResourceValues;
+    const unchanged = (Object.keys(values) as (keyof WorkspaceResourceValues)[]).every((k) => live[k] === values[k]);
+    const fit = await this.#run(known.target, () => access.fit(known.name, values));
+    return { known, access, values, live, replicas, apply: body.apply, unchanged, fit };
+  }
+
+  /**
+   * Stores a workspace's CPU and memory on its record and applies them when the person picked (T-98). `now`: refused while a CI run is
+   * running in it, or when the fit check does not say it fits (the numbers in the refusal); then the Deployment is patched and its pod
+   * restarts, every session in it ending (events written just before are pulled first, like a stop). `next_restart`: kept until its next
+   * start, which applies them before it scales up. Values equal to what the Deployment has change nothing. Audited.
+   */
+  async setResources(
+    ref: string,
+    req: Partial<UpdateWorkspaceResourcesRequest>,
+    actor: Actor = ownerActor(),
+    via: { actor?: string; actorLabel?: string } = {},
+  ): Promise<WorkspaceResources> {
+    const plan = await this.planResources(ref, req, actor);
+    const { known, access, values, live, replicas, apply, unchanged, fit } = plan;
+    const now = new Date().toISOString();
+    if (unchanged) {
+      this.identities.setResources(known.id, values, { pendingAt: null, appliedAt: known.resourcesAppliedAt ?? null });
+      this.#resourceProblems.delete(known.id);
+      return this.#resourcesView(known, live, replicas, { fit, outcome: 'unchanged' });
+    }
+    let outcome: 'applied' | 'pending' = 'pending';
+    if (apply === 'now') {
+      const ci = replicas > 0 ? (this.hooks.runningCi?.(known.legacyId) ?? 0) : 0;
+      if (ci > 0) throw new AppError('CONFLICT', `${ci === 1 ? 'A CI run is' : `${ci} CI runs are`} running in this workspace. Let ${ci === 1 ? 'it' : 'them'} finish (or cancel ${ci === 1 ? 'it' : 'them'}), then apply.`, { details: { ci: String(ci) } });
+      if (fit.state !== 'fits') throw new AppError('CONFLICT', fit.message, { details: { fit: fit.message } });
+      if (replicas > 0) {
+        const pull = this.hooks.beforeStop?.(known.legacyId).catch(() => undefined);
+        if (pull) await Promise.race([pull, new Promise((r) => setTimeout(r, 5_000).unref())]);
+      }
+      await this.#run(known.target, () => access.apply(known.name, values));
+      outcome = 'applied';
+    }
+    this.identities.setResources(known.id, values, outcome === 'applied' ? { pendingAt: null, appliedAt: now } : { pendingAt: now, appliedAt: known.resourcesAppliedAt ?? null });
+    this.#resourceProblems.delete(known.id);
+    this.hooks.audit?.({
+      kind: 'workspace.resources',
+      actor: via.actor ?? actorString(actor),
+      userId: actorUserId(actor),
+      actorLabel: via.actorLabel ?? null,
+      subject: known.id,
+      detail: { workspace: known.legacyId, apply, outcome, restarted: outcome === 'applied' && replicas > 0, from: describeValues(live), to: describeValues(values) },
+    });
+    console.log(`[workspaces] ${known.legacyId} resources ${outcome === 'applied' ? (replicas > 0 ? 'applied, the pod restarts' : 'applied') : 'kept for the next start'}`);
+    this.hooks.changed?.();
+    return this.#resourcesView(known, outcome === 'applied' ? values : live, replicas, { fit, outcome });
+  }
+
+  /**
+   * At a start: resources waiting for it are written into the stopped Deployment before it scales up, when the fit check says they fit.
+   * When they do not (or anything fails), the workspace starts as it was and they stay pending, the reason shown. Never blocks a start.
+   */
+  async #applyPendingResources(target: string, name: string): Promise<void> {
+    const known = this.identities.of(target, name);
+    const access = this.#runtimes.get(target)?.resources;
+    if (!known?.resourcesPendingAt || !known.resources || !access) return;
+    const values = known.resources;
+    try {
+      const { live, replicas } = await access.read(name);
+      if (replicas !== 0) return;
+      const fit = await access.fit(name, values);
+      if (fit.state !== 'fits') {
+        this.#resourceProblems.set(known.id, fit.message);
+        console.log(`[workspaces] ${known.legacyId} started without its pending resources: ${fit.message}`);
+        return;
+      }
+      if (!(await access.apply(name, values, { onlyWhenStopped: true }))) return;
+      this.identities.setResources(known.id, values, { pendingAt: null, appliedAt: new Date().toISOString() });
+      this.#resourceProblems.delete(known.id);
+      this.hooks.audit?.({
+        kind: 'workspace.resources',
+        actor: 'system:workspaces',
+        userId: null,
+        subject: known.id,
+        detail: { workspace: known.legacyId, apply: 'next_restart', outcome: 'applied', restarted: false, from: describeValues(live), to: describeValues(values) },
+      });
+      console.log(`[workspaces] ${known.legacyId} starts with its pending resources`);
+    } catch (e) {
+      this.#resourceProblems.set(known.id, runtimeMessage(e));
+      console.error(`[workspaces] ${known.legacyId}: pending resources not applied: ${runtimeMessage(e)}`);
+    }
+  }
+
   /** `actor`: who asks (the route's `actorOf(c)`); creating on a target needs `operate` on it (multi-user PRD; the single-owner seam allows the owner). */
   async create(req: Partial<CreateWorkspaceRequest>, actor: Actor = ownerActor()): Promise<Workspace> {
     const name = typeof req.name === 'string' ? req.name.trim() : '';
@@ -492,6 +644,7 @@ export class Workspaces {
 
   async start(target: string, name: string) {
     try {
+      await this.#applyPendingResources(target, name);
       return await this.#run(target, (r) => r.start(name));
     } finally {
       this.hooks.changed?.();

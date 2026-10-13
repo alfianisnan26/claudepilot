@@ -232,6 +232,7 @@ export function WorkspacesPage() {
                     usage={usage.get(w.id)}
                     repos={repos.byWorkspace.get(w.id)}
                     reposTab={targets.find((t) => t.id === w.target)?.kind !== 'kubernetes'}
+                    resources={targets.find((t) => t.id === w.target)?.kind === 'kubernetes'}
                     busy={busy.has(w.id)}
                     onStart={() => void act(w, 'start')}
                     onStop={() => void act(w, 'stop')}
@@ -320,6 +321,7 @@ function WorkspaceRow({
   usage,
   repos,
   reposTab,
+  resources,
   busy,
   onStart,
   onStop,
@@ -338,6 +340,8 @@ function WorkspaceRow({
   repos?: RepoWorkspaceSummary;
   /** Its sheet has a Repos tab (not for Kubernetes). */
   reposTab: boolean;
+  /** Its sheet has the Resources row (Kubernetes, T-98). */
+  resources: boolean;
   busy: boolean;
   onStart: () => void;
   onStop: () => void;
@@ -472,6 +476,7 @@ function WorkspaceRow({
         onStart={onStart}
         onStop={onStop}
         reposTab={reposTab}
+        resources={resources}
         initialTab={tab}
       />
     </li>

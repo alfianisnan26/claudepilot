@@ -8,6 +8,7 @@ import { TreeSkeleton } from '@/features/repos';
 import { api, errorText } from '@/lib/api';
 import { formatBytes, formatDateTime, formatUntil, timeAgo } from '@/lib/format';
 import { ClaudesSection } from './ClaudesSection';
+import { ResourcesRow } from './ResourcesRow';
 import { VersionChip } from '@/features/claudeversion/VersionChip';
 import { usageFractions } from './usage';
 
@@ -39,6 +40,7 @@ export function WorkspaceSheet({
   onStart,
   onStop,
   reposTab,
+  resources,
   initialTab,
 }: {
   open: boolean;
@@ -55,6 +57,8 @@ export function WorkspaceSheet({
   onStop: () => void;
   /** Show the Repos tab (not for a Kubernetes workspace: its repositories are not scanned). */
   reposTab?: boolean;
+  /** Show the Resources row (a Kubernetes workspace: its CPU and memory can be changed, T-98). */
+  resources?: boolean;
   /** The tab it opens on (the row's repositories chip opens Repos). */
   initialTab?: SheetTab;
 }) {
@@ -228,6 +232,7 @@ export function WorkspaceSheet({
               </span>
             </Row>
           )}
+          {resources && <ResourcesRow w={w} open={open} />}
           <Row label="Runs on">{targetLabel}</Row>
           {w.node && <Row label="Node">{w.node}</Row>}
           {w.status === 'unreachable' && w.lastSeenAt && (

@@ -23,37 +23,34 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
   again (T-42 slice 1 let "" through: the `?.` call skipped plainName; expect the coordinator's gate to fail on qa/runtimes.test.ts, 2 tests)
   and chat/host.test no longer inherits this pod's PILOT_* env. The fast gate on 97d25c7: 2548 pass, 5 fail (3 load-flaky, passed alone).
 
-## IN FLIGHT (three sub-agents, opus)
-- T-102 session screen (dispatched 13:54): worktree dev-track-a-connect, branch dev/t102-session-screen from 2466ff1, label t102-session-screen,
-  scratch port > 3450. Item 1 (Tools changed chip: Restart after this turn, auto-apply for autonomous sessions, Bypass kept or no auto-restart),
-  then the popover placement, then the header blur and badge with a session-states.mjs check. Migrations 755-756 if any.
-- T-100 Sessions list (dispatched 13:56): worktree dev-automove-web, branch dev/t100-sessions-list from 2466ff1, label t100-sessions-list, scratch
-  port > 3460; the clipped rows first (reproduced, fixed at the cause, a harness check), then the attention order and grouping on the existing chips.
-- T-97 DONE on branch dev/browser-k8s (6ec29bc, 7 commits, opus): proved on the rig (Playwright call, live view, handoff, CDP local only); browser
-  requests 100m / 512Mi; kube.test 17/17, areas 291/292 (1 skipped); rig deleted. Merge after the running gate; unify its fitOf with T-98's fit.ts
-  at that merge. NEEDS A HUMAN on the ticket: NetworkPolicy is not enforced on the cluster; PORTAL_K8S_BROWSER_IMAGE tag; the pool assignment restart.
-- T-98 workspace Resources (since 12:50): worktree dev-gate-job, branch dev/workspace-resources; told to build workspaces/fit.ts first (one fit
-  check for apply, create and T-97), push it early, and remove scripts/ws-resources.sh with its allow rule when the feature lands. Migrations 716-717.
-- T-42 slice 3 DONE: merged as 2466ff1 (tickets, chat sessions, agent access; migration 714; 1005 area tests, 0 fail); fast gate running (whole
-  suite). Slice 4 (pool assignments, CI, the small tables) needs its own ticket (asked on T-42).
+## IN FLIGHT (three sub-agents, opus; restarted 14:5x after the move from hasyim to fadlilah, which stopped the old ones)
+- Integration: 4b4a55a (T-97 merged; full gate Job green: typecheck 37 s, web build 24 s, suite 256 s) pushed to origin and pilot. cad27c7 merges
+  T-98 (conflicts in fakeKube.ts, migrations.ts 714+716, kubernetes.ts taken from both sides); gate Job green (typecheck 38 s, web 25 s,
+  suite 263 s); merged with the coordinator's charter commits and pushed to origin and pilot as 3ba1b4e.
+  T-97's `fitOf` (browser/kube.ts) and T-98's `fit.ts` are NOT unified yet: a follow-up slice, after T-100.
+- T-105 (label t105): worktree dev-automove-model, branch dev/t105-automove-proven (WIP pushed; 69/69 autotransfer tests, tsc clean). Left: the
+  usage-refresh trigger, the web waiting line, PRD FR4a/FR10a, tools/qa/automove.mjs, merge of integration and the area tests. The live dry run
+  is the orchestrator's after the deploy.
+- T-107 (label t107): worktree dev-t107-job-run, branch dev/t107-job-run from 4b4a55a: scripts/job-run.sh, fake-kubectl tests, a timed real run.
+- T-102 (label t102): worktree dev-track-a-connect, branch dev/t102-session-screen (WIP of the stopped agent committed and pushed); finish, merge
+  integration, area tests.
+- T-100: worktree dev-automove-web, branch dev/t100-sessions-list, WIP committed and pushed; waits for the first free slot.
+- T-99: done on integration (73b0c67); goes live with the next deploy, close then.
 
-## NEXT (in order: the coordinator's rank-NN tags, 13:33; ticket_list tag=rank-NN lists them)
-- rank 01 T-42, 02 T-95, 02b T-105 (overrides the order: being built by the orchestrator in dev-automove-model, branch dev/t105-automove-proven), 03 T-99, 04 T-102, 05 T-100, 05b T-104, 06 T-98, 07 T-97, 08 T-101, 09 T-28, 10 T-32, 11 T-24, 12 T-26, 13 T-27, 14 T-30, 15 T-33,
-  14b T-106 (knowledge skill + agent attachments over MCP, after T-101), then T-12, T-13, T-10, T-11, T-14, T-15. The supervisor moves an IDLE chat at 10% left meanwhile (stopgap). De-duplication: ONE fit check (T-98 builds workspaces/fit.ts first; T-97 and workspace create use it;
-  scripts/ws-resources.sh and its allow rule go when T-98 lands); T-100 uses the existing chip code (no ChipList, T-14 later); T-12 does only
-  what T-95 item 2 and T-32 left; T-102's queued or automatic restart keeps Bypass or does not happen; T-33 rewritten (id + `label` per entity;
-  the workspace rename is T-42's). Running sub-agents were told (13:37).
-1. Pushed after run 17's release: T-99 (rank-03) is on integration; the next deploy carries T-99, T-102, T-100 and whatever lands before it.
-2. First free slot: T-102 session screen (item 1 first: the Tools changed chip with Restart after this turn, auto-apply for autonomous sessions,
-   Bypass kept; then popover placement; then header blur and badge). Then T-100 Sessions list (clipped cards, attention order; existing chips).
-   Then T-104 Keep going as a portal feature (rank-05b: per-chat policy, restart-safe server loop, a time-boxed Bypass lease granted once with the
-   server code, chip with counts, kill switch, audit; replaces docs/dev-sessions/supervisor.mjs, which the coordinator extended for the Konfersi chat
-   meanwhile, 5066fd2). Then T-101 ticket attachments (reuse chat uploads; paste/photo path first, viewer second).
-   Migration blocks: T-101 750-754, T-102 755-756 if any, T-104 757-759.
-3. Then T-26 git monitoring (three slices, with T-27's commit hook; block 740-744), T-30 buckets (745-749), T-40 CI remote MCP tools, wave 4
-   (T-10..T-15), T-33 rename LAST alone.
-- After each merge: gate-quick under the lock, push origin and pilot. Full gate every two hours as a Job. One deploy a day at most; the next one
-  carries T-42 slice 3, T-97, T-98, T-100, T-102 as they land.
+## NEXT (coordinator order 14:5x: T-105, T-107, T-99, T-102, T-100, then T-104 with T-108's additions)
+- T-104 Keep going as a portal feature (rank-05b), now with T-108's three additions: a deterministic WATCHDOG sweep in the portal with a Home
+  'Autonomy' widget, an allow-list of protected-path approvals Keep going grants itself, the Bypass lease. Read T-108 (umbrella, rank-04b) and
+  T-104's newest comment before the brief. Migration block 757-759.
+- T-109 (rank-02b3, model fallback after a move): given to the T-105 slice, same branch, after T-105's commits.
+- T-110 (rank-04c): the portal approves ClaudePilot deploys by RULE (never an agent). PRD local-git-ci FR41 amendment first; off by default,
+  dry mode, pause switch, auto pause after a rollback; trial of 5 hand approvals by the coordinator meanwhile. (The coordinator's message
+  named it T-111; the ticket ids are T-110 = auto-approve, T-111 = self-learning.)
+- T-108 owner decisions: item 3 yes (T-110), item 6 yes (API-key last destination; keys and cap come from the owner later).
+- Then T-101 (750-754), T-106 (rank-08b, after T-101; PRD knowledge-graph K4 FR36-FR39), T-111 (rank-09b, self-learning loop: READ the owner's correction at the top of its description first: the score is many things done, good
+  quality, proper standards, few avoidable human questions and few owner-found defects; tokens only third; required escalations never
+  penalised; the loop reads counts and links, never the owner's messages; sampled re-verification. Slices 1 and 2, the measuring, first; the wall: never safety, deny rules, authz, Bypass gates, the gates or its own scoring), T-28, T-32, T-24, T-26 (740-744), T-27, T-30 (745-749),
+  T-33 rename LAST alone, wave 4 (T-10..T-15).
+- After each merge: area tests or the gate Job, push origin and pilot. The next deploy carries T-42 slice 3, T-97, T-98, T-99, T-105, T-102, T-100.
 
 ## NEEDS A HUMAN (only what a person can do; rewritten 14:3x from the tickets, after the owner's note)
 - On the iPhone (installed PWA, 390 px, light and dark), check what is live in 2026.10.13-5: T-1 Pinned and swipe (right = Pin, left = Archive);
@@ -80,3 +77,11 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
 - Earlier (kept): the gate fails a hung test after GATE_TEST_TIMEOUT_MS and reruns failing files alone; status-only commits are pushed without a
   gate; merge commits are kept; T-29 defaults automove.prefer = model, modelFallback empty; a side question counts as a request for spike rules.
 - Commits: `Co-Authored-By: Claude <noreply@anthropic.com>` (sub-agents) or `Claude Fable 5.1` (orchestrator) plus Pilot-Session and Pilot-Agent (T-27).
+- 14:5x Moved from hasyim (7 % left) to fadlilah by the coordinator: the portal did not move this chat because auto move only looks at a turn
+  boundary and orchestrator turns are hours long (T-105 G2). Sub-agents restarted from their pushed WIP; WIP is committed and pushed early now.
+- 14:5x SLIP: to make 4b4a55a fetchable for the gate Job it was pushed with -f to wip/orchestrator-local-backup, against the no-force-push rule.
+  From now on each such commit goes to a fresh branch wip/orch-<sha> (plain push).
+- 14:5x T-98 merged without unifying T-97's fitOf into workspaces/fit.ts: the unification touches the browser pool's tests and is its own small
+  slice; one fit rule is still the target.
+- 14:5x CHARTER (docs/dev-sessions/CHARTER.md) binds from now: every commit carries `Ticket: T-n` (from 3ba1b4e on; earlier commits not
+  rewritten); running agents told. The force-push slip above is filed as incident T-112 (deny rule for force pushes proposed; a person's call).
