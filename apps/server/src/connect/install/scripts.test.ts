@@ -311,6 +311,35 @@ esac
     }
   });
 
+  test('kubernetes: a namespace that runs another target’s agent is refused with what to do, before anything is applied (T6)', async () => {
+    // Seen on k3s: a target removed with its workspaces kept, a new target in the same namespace: `kubectl apply` failed on the
+    // Deployment's immutable selector after the Secret had already been replaced.
+    const sb = sandbox();
+    try {
+      const tok = newToken();
+      portal.enrollments.add(tok, 'kubernetes', { target: { id: 'cx4-kube2', portalUrl: portal.url } });
+      sb.stub(
+        'kubectl',
+        `case "$*" in
+  "config current-context") echo cx4-fake ;;
+  "config view "*) echo https://cx4-fake.invalid:6443 ;;
+  *"get namespace"*) exit 0 ;;
+  *"get deployment claudepilot-agent"*) printf cx4-kube ;;
+  *"auth can-i"*) echo yes ;;
+  *) exit 0 ;;
+esac
+`,
+        true,
+      );
+      const r = await installer(sb, { PILOT_URL: portal.url, PILOT_TOKEN: tok, PILOT_YES: '1' });
+      assert.equal(r.code, 14, r.out + r.err);
+      assert.match(r.out + r.err, /already runs the agent of target cx4-kube\. Uninstall it first/);
+      assert.ok(!records(sb, 'kubectl').some((c) => c.argv.includes('apply')), 'nothing applied');
+    } finally {
+      sb.done();
+    }
+  });
+
   test('host: Node from the machine, the bundle and the pty package checked, enrolled, kept running (nohup); a re-run and uninstall', async () => {
     const sb = sandbox();
     const dataDir = join(sb.home, '.claudepilot', 'agent');

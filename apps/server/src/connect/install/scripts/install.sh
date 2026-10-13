@@ -707,6 +707,13 @@ install_kubernetes() {
     [ "$_a" = yes ] || _miss="$_miss, create namespaces"
   fi
   [ -z "$_miss" ] || die 10 "Your kubectl user can't${_miss#,} in $_ns."
+  if [ "$_nsx" = 1 ]; then
+    # One agent per namespace: another target's agent there would be replaced (its Deployment's selector names its target and can't change).
+    _other=$(kc -n "$_ns" get deployment claudepilot-agent -o 'jsonpath={.metadata.labels.claudepilot\.connect/target}' 2>/dev/null || :)
+    if [ -n "$_other" ] && [ "$_other" != "$P_TARGET" ]; then
+      die 14 "$_ns already runs the agent of target $_other. Uninstall it first (PILOT_TARGET=$_other PILOT_KIND=kubernetes ... sh -s -- uninstall) or choose another namespace."
+    fi
+  fi
   step "Manifest"
   _code=$(http_get "$URL/connect/v1/manifest" "$_tmp/manifest.yaml" auth) || unreachable $?
   [ "$_code" = 200 ] || die 11 "The portal answered HTTP $_code for the manifest."
