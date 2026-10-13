@@ -56,7 +56,8 @@
       "Bash(kubectl rollout undo:*)",
       "Bash(scripts/k3s-build.sh:*)",
       "Bash(scripts/dev-rig.sh:*)",
-      "Bash(scripts/gate-job-stop.sh:*)"
+      "Bash(scripts/gate-job-stop.sh:*)",
+      "Bash(scripts/ws-resources.sh:*)"
     ],
     "ask": [],
     "deny": [
