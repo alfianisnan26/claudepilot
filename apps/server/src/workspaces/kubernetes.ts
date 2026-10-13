@@ -117,7 +117,9 @@ export class KubernetesRuntime implements Runtime {
    * A name that is not plain is refused here and in `#runningPod` (it goes into a label selector there): QA-029, QA-032.
    */
   #objectName(name: string): string {
-    return plainName(this.#names?.runtimeNameOf(this.target.id, plainName(name)) ?? legacyRuntimeName('kubernetes', name));
+    // The name itself first: with no registry the `?.` call would not evaluate its arguments, and the legacy name of "" is plain (QA-029).
+    plainName(name);
+    return plainName(this.#names?.runtimeNameOf(this.target.id, name) ?? legacyRuntimeName('kubernetes', name));
   }
 
   /**
