@@ -245,6 +245,6 @@ export const AUTOTRANSFER_API = {
   later: (suggestionId: string) => `/api/autotransfer/suggestions/${encodeURIComponent(suggestionId)}/later`,
   /** POST: set THIS chat's mode to `auto` (not the global one), and move now. */
   always: (suggestionId: string) => `/api/autotransfer/suggestions/${encodeURIComponent(suggestionId)}/always`,
-  /** GET `?session=&limit=&before=`: `AutoTransferEvent[]`, newest first. */
+  /** GET `?session=&kind=moved,undone&limit=&before=`: `AutoTransferEvent[]` (the caller's), newest first; `kind` keeps only those kinds. */
   events: '/api/autotransfer/events',
 } as const;
