@@ -31,7 +31,14 @@ export const OWNER: ActorCtx = { actor: 'user:u_owner', userId: 'u_owner', ip: '
  * `p`, or a failure after `ms` that names what did not happen. A Connect test never waits for ever for an event: one that does not come under load
  * hung the release gate for 26 minutes at 0% CPU (rekey.test.ts), and a hang says nothing, while a timeout says what was waited for.
  */
-export function withTimeout<T>(p: Promise<T>, what: string, ms = 10_000): Promise<T> {
+/**
+ * How much longer than usual the tests wait: CP_TEST_TIME_SCALE (a number of at least 1; scripts/gate.sh sets it when the machine is busier than it has CPUs).
+ * A timing test that passes alone in two seconds failed in the deploy gate when the pod's load average was 26 on 8 cores (hub.test.ts, "the control stream").
+ */
+export const TIME_SCALE = Math.min(10, Math.max(1, Number(process.env.CP_TEST_TIME_SCALE ?? 1) || 1));
+
+export function withTimeout<T>(p: Promise<T>, what: string, baseMs = 10_000): Promise<T> {
+  const ms = baseMs * TIME_SCALE;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(`Timed out after ${ms} ms waiting for ${what}.`)), ms);
@@ -40,7 +47,8 @@ export function withTimeout<T>(p: Promise<T>, what: string, ms = 10_000): Promis
 }
 
 /** Polls `fn` every 20 ms until it is true; fails after `ms` naming `what`. */
-export async function until(fn: () => boolean, what: string, ms = 8_000): Promise<void> {
+export async function until(fn: () => boolean, what: string, baseMs = 8_000): Promise<void> {
+  const ms = baseMs * TIME_SCALE;
   const t0 = Date.now();
   while (!fn()) {
     if (Date.now() - t0 > ms) throw new Error(`Timed out after ${ms} ms waiting for ${what}.`);
@@ -159,8 +167,8 @@ export async function openHub(core: Core, opts: { timing?: HubDeps['timing']; bu
     const next = async (): Promise<Record<string, unknown>> => (await lines.next()).value as Record<string, unknown>;
     return { stream, next, send: (msg: unknown) => writeLine(stream, msg), config: await next() };
   };
-  const waitFor = async (cond: () => boolean, ms = 2_000): Promise<boolean> => {
-    const end = Date.now() + ms;
+  const waitFor = async (cond: () => boolean, baseMs = 2_000): Promise<boolean> => {
+    const end = Date.now() + baseMs * TIME_SCALE;
     while (!cond()) {
       if (Date.now() > end) return false;
       await new Promise((r) => setTimeout(r, 5));

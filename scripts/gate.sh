@@ -15,7 +15,9 @@ cd "$dir" || exit 1
 step() { local name=$1; shift; local t0; t0=$(date +%s); "$@" > "$logs/$name.log" 2>&1; local rc=$?; echo "$name rc=$rc $(( $(date +%s) - t0 ))s" | tee -a "$logs/SUMMARY.txt"; return $rc; }
 export NODE_AUTH_TOKEN=${NODE_AUTH_TOKEN:-$(gh auth token 2>/dev/null || true)}
 step npm-ci npm ci --no-audit --no-fund || { echo "npm ci failed: see $logs/npm-ci.log"; exit 1; }
-clean=(env -i "PATH=$PATH" "HOME=$dir/.home" LANG=C.UTF-8 PORTAL_K8S_ENABLED=false NODE_OPTIONS=--disable-warning=ExperimentalWarning)
+# Timing tests wait CP_TEST_TIME_SCALE times longer when the machine is busier than it has CPUs (load average above the CPU count): 1 to 6, rounded up.
+scale=$(awk -v l="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)" -v c="$(nproc 2>/dev/null || echo 1)" 'BEGIN { s = (l > c) ? int(l / c) + 1 : 1; if (s > 6) s = 6; print s }')
+clean=(env -i "PATH=$PATH" "HOME=$dir/.home" LANG=C.UTF-8 PORTAL_K8S_ENABLED=false "CP_TEST_TIME_SCALE=$scale" NODE_OPTIONS=--disable-warning=ExperimentalWarning)
 steps=",${GATE_STEPS:-typecheck,web-build,server-suite},"
 wants() { [[ $steps == *",$1,"* ]]; }
 if wants typecheck; then step typecheck "${clean[@]}" nice -n 10 npm run typecheck; fi
