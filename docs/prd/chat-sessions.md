@@ -917,3 +917,9 @@ never stream in the main reply's place, nor the session read plain Idle while it
 
 `tools/qa/subagents.mjs` against a scratch portal whose local workspace runs the real Claude Code with the stand-in: `[[agent sonnet,fable,- steps 6 2 <file>]]`
 starts three background agents that work about 12 s after the main turn is done, at 390 px (touch, safe areas) and 1280 px, light and dark.
+Observed (2026-10-13): 390 px light and dark 72/72 checks except the Sessions row, which then looked for the agents on the Idle chip
+(the session counts as Working since T-41; the harness now picks the Working chip); 1280 px light and dark passed 116/116 before T-41's
+wording, and light again after it through the detail view (opened from the panel and from the transcript's agent row). The page showed:
+no agent text in the reply slot; the activity line naming the running agent ("QA agent 2 (fable) · Read qa-notes.txt"); "Working · 3
+agents" (phone: "Working") with Send, not Stop; models sonnet, fable, and opus for the agent with no model argument (it inherited the
+session's); Stop ending one agent ("Stopped"). Not re-run after T-41: the 1280 px Sessions row and 1280 px dark (paused for a deploy gate).
