@@ -63,6 +63,8 @@ test('two users: B can not see or touch A’s runs, remotes or environments; ids
       ['GET', `/api/ci/runs/${runId}/log?job=build&step=0`],
       ['POST', `/api/ci/runs/${runId}/cancel`],
       ['POST', `/api/ci/runs/${runId}/rerun`],
+      ['GET', `/api/ci/runs/${runId}/bump`],
+      ['POST', `/api/ci/runs/${runId}/bump`, { sessionId: 's1', mode: 'ask' }],
       ['POST', `/api/ci/runs/${runId}/approve`, { job: 'release' }],
       ['POST', `/api/ci/runs/${runId}/reject`, { job: 'release' }],
       ['POST', '/api/ci/runs', { repoId: repo.id, pipeline: 'deploy', ref: 'main' }],

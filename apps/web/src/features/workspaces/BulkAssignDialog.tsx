@@ -1,5 +1,5 @@
 import { Button, Dialog, Select } from '@isnanme/ui';
-import type { AccountPool, MultiPoolType, Workspace } from '@portal/contracts';
+import { workspaceDisplayName, type AccountPool, type MultiPoolType, type Workspace } from '@portal/contracts';
 import { ShieldAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { multiPoolTabs } from '@/features/pools/registry';
@@ -61,7 +61,7 @@ export function BulkAssignDialog({
       if (type === ACCOUNT) {
         // One at a time: each change ends that workspace's chat sessions first and re-picks an account.
         const failed: string[] = [];
-        for (const w of workspaces) await api.accounts.assign(w.id, { poolId, confirmOverride: true }).catch(() => failed.push(w.name));
+        for (const w of workspaces) await api.accounts.assign(w.id, { poolId, confirmOverride: true }).catch(() => failed.push(workspaceDisplayName(w)));
         if (failed.length) setError(`Could not assign it to ${failed.join(', ')}.`);
         else onDone(`${name} assigned to ${count} workspace${count === 1 ? '' : 's'}`);
       } else {

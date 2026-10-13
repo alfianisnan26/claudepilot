@@ -12,7 +12,7 @@ import {
   type BadgeTone,
   type MenuItem,
 } from '@isnanme/ui';
-import type { AccountPool, DeliveryStatus, RepoWorkspaceSummary, Workspace, WorkspaceStatus, WorkspaceTarget, WorkspaceUsage } from '@portal/contracts';
+import { workspaceDisplayName, type AccountPool, type DeliveryStatus, type RepoWorkspaceSummary, type Workspace, type WorkspaceStatus, type WorkspaceTarget, type WorkspaceUsage } from '@portal/contracts';
 import { Box, Boxes, Check, ChevronRight, ListChecks, Play, Plus, ShieldCheck, SlidersHorizontal, Square, SquareTerminal, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
@@ -78,7 +78,7 @@ export function WorkspacesPage() {
     try {
       await api.accounts.adopt(w.id);
       await loadList();
-      toast(`${w.name} adopted`);
+      toast(`${workspaceDisplayName(w)} adopted`);
     } catch (e) {
       toast(errorText(e, 'Could not adopt it.'), 'error');
     }
@@ -140,9 +140,9 @@ export function WorkspacesPage() {
     try {
       await api.workspaces[action](w.id);
       await loadList();
-      toast(action === 'start' ? `Starting ${w.name}` : `Stopping ${w.name}`);
+      toast(action === 'start' ? `Starting ${workspaceDisplayName(w)}` : `Stopping ${workspaceDisplayName(w)}`);
     } catch (e) {
-      toast(errorText(e, `Could not ${action} ${w.name}.`), 'error');
+      toast(errorText(e, `Could not ${action} ${workspaceDisplayName(w)}.`), 'error');
     } finally {
       setBusy((s) => {
         const next = new Set(s);
@@ -158,7 +158,7 @@ export function WorkspacesPage() {
     try {
       await api.workspaces.remove(removing.id);
       await loadList();
-      toast(`${removing.name} removed`);
+      toast(`${workspaceDisplayName(removing)} removed`);
       setRemoving(null);
     } catch (e) {
       toast(errorText(e, 'Could not remove it.'), 'error');
@@ -282,12 +282,12 @@ export function WorkspacesPage() {
           const w = await api.workspaces.create(body);
           setCreating(false);
           setList((l) => (l ? [w, ...l.filter((x) => x.id !== w.id)] : [w]));
-          toast(`Creating ${w.name}`);
+          toast(`Creating ${workspaceDisplayName(w)}`);
         }}
       />
       <ConfirmDialog
         open={!!removing}
-        title={`Remove ${removing?.name ?? ''}?`}
+        title={`Remove ${removing ? workspaceDisplayName(removing) : ''}?`}
         description="The container and its home folder are deleted, with everything in them. This can’t be undone."
         confirmLabel="Remove"
         loading={removeBusy}
@@ -389,7 +389,7 @@ function WorkspaceRow({
         onClick={picking ? onToggle : (e) => (setTab((e.target as HTMLElement).closest(`[${REPOS_CHIP_ATTR}]`) ? 'repos' : 'details'), setOpen(true))}
         role={picking ? 'checkbox' : undefined}
         aria-checked={picking ? !!selected : undefined}
-        aria-label={picking ? `Select ${w.name}` : `Details for ${w.name}${reposTab && reposLabel(repos) ? `, ${reposLabel(repos)}` : ''}`}
+        aria-label={picking ? `Select ${workspaceDisplayName(w)}` : `Details for ${workspaceDisplayName(w)}${reposTab && reposLabel(repos) ? `, ${reposLabel(repos)}` : ''}`}
         className={`press flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left ${picking ? 'select-none' : ''}`}
       >
         {picking ? (
@@ -407,7 +407,7 @@ function WorkspaceRow({
         )}
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <p className="truncate font-semibold">{w.name}</p>
+            <p className="truncate font-semibold">{workspaceDisplayName(w)}</p>
             {!settled && (
               <span className="shrink-0">
                 <Badge tone={status.tone}>
@@ -445,7 +445,7 @@ function WorkspaceRow({
           <Link
             to={`/admin/workspaces/${w.id}/shell`}
             className={buttonClass('secondary', 'sm')}
-            aria-label={`Open shell in ${w.name}`}
+            aria-label={`Open shell in ${workspaceDisplayName(w)}`}
           >
             <SquareTerminal className="size-4" />
             <span className="hidden sm:inline">Shell</span>
@@ -457,7 +457,7 @@ function WorkspaceRow({
             </Button>
           )
         )}
-        <Menu label={`Actions for ${w.name}`} items={items} />
+        <Menu label={`Actions for ${workspaceDisplayName(w)}`} items={items} />
       </div>
       <WorkspaceSheet
         open={open}

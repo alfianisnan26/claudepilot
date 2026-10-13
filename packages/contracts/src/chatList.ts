@@ -96,8 +96,26 @@ export function attentionTier(s: ChatSession): number {
 const byUrgency = (a: ChatSession, b: ChatSession) =>
   Number(!!b.pinnedAt) - Number(!!a.pinnedAt) || attentionTier(a) - attentionTier(b) || Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt);
 
-/** A workspace's name without its target (`docker/api-dev` → `api-dev`). */
-export const workspaceLabel = (id: string): string => id.slice(id.indexOf('/') + 1);
+const knownLabels = new Map<string, string>();
+
+/**
+ * Remembers the labels of the workspaces a page has listed (T-42 slice 2: a rename changes the label shown, never the id), so every place that
+ * only holds a workspace id names it by its label. The web calls it with each workspace list it receives; nothing else needs to.
+ */
+export function rememberWorkspaceLabels(list: readonly { id: string; name: string; label?: string }[]): void {
+  for (const w of list) {
+    if (w.label && w.label !== w.name) knownLabels.set(w.id, w.label);
+    else knownLabels.delete(w.id);
+  }
+}
+
+/** The same from `WORKSPACE_API.labels` (`{ [id]: label }`): what the app learns once at its start. */
+export function rememberWorkspaceLabelMap(map: Readonly<Record<string, string>>): void {
+  for (const [id, label] of Object.entries(map)) if (label) knownLabels.set(id, label);
+}
+
+/** What a workspace is called, from its id: its label when a list has said it has one, else its name without its target (`docker/api-dev` → `api-dev`). */
+export const workspaceLabel = (id: string): string => knownLabels.get(id) ?? id.slice(id.indexOf('/') + 1);
 const targetOf = (id: string): string => (id.includes('/') ? id.slice(0, id.indexOf('/')) : '');
 const baseName = (path: string): string => path.replace(/\/+$/, '').slice(path.replace(/\/+$/, '').lastIndexOf('/') + 1);
 

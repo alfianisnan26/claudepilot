@@ -8,8 +8,10 @@ import {
   actorUserId,
   CI_STATUSES,
   objectRef,
+  sessionRef,
   workspaceRef,
   type Actor,
+  type BumpRequest,
   type CiApprovalRequest,
   type UpdateCiEnvironmentRequest,
   type ConnectCiRepoRequest,
@@ -21,7 +23,7 @@ import {
   type CiStatus,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { actorOf, requireCan, visible } from '../authz/seam.js';
+import { actorOf, can, requireCan, visible } from '../authz/seam.js';
 import { declareCiPolicies, registerCiAuthz } from './authz.js';
 import type { CiDecider, CiService } from './service.js';
 
@@ -82,6 +84,17 @@ export function createCiRoutes(ci: CiService): Hono {
   // The UI is a person (runs they start say `ui`; a cancel says the same, T-95).
   app.post('/runs/:id/cancel', async (c) => (may(c, 'operate', runRef), c.json(success(await ci.cancel(id(c), { actor: 'ui' })))));
   app.post('/runs/:id/rerun', async (c) => (may(c, 'operate', runRef), c.json(success(await ci.rerun(id(c))), 201)));
+  // Bump (FR37a): operate on the run, and on the session it goes into; the picker lists only sessions the person may operate.
+  app.get('/runs/:id/bump', (c) => {
+    const actor = may(c, 'operate', runRef);
+    return c.json(success(ci.bumpTargets(id(c)).filter((t) => can(actor, 'operate', sessionRef(t.id)).allow)));
+  });
+  app.post('/runs/:id/bump', async (c) => {
+    const actor = may(c, 'operate', runRef);
+    const req = await body<BumpRequest>(c);
+    if (typeof req.sessionId === 'string' && req.sessionId.trim()) requireCan(actor, 'operate', sessionRef(req.sessionId.trim()));
+    return c.json(success(await ci.bump(id(c), req, { actor: 'ui', label: null, userId: actorUserId(actor) })));
+  });
   // A deployment's approval (PRD FR41): a person with manage on the run, never a token or an agent. There is no tool for it.
   for (const decision of ['approve', 'reject'] as const) {
     app.post(`/runs/:id/${decision}`, async (c) => {

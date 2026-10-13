@@ -1,5 +1,5 @@
 import { Button, ChipGroup, Dialog, RowsSkeleton } from '@isnanme/ui';
-import type { MultiPoolType, PoolSummary, Workspace } from '@portal/contracts';
+import { workspaceDisplayName, type MultiPoolType, type PoolSummary, type Workspace } from '@portal/contracts';
 import { TriangleAlert } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, errorText } from '@/lib/api';
@@ -90,7 +90,7 @@ export function AssignWorkspacesDialog({
               label="Workspaces"
               value={picked}
               onChange={setPicked}
-              options={workspaces.map((w) => ({ value: w.id, label: w.name, detail: has.has(w.id) ? 'has it' : undefined, disabled: has.has(w.id) }))}
+              options={workspaces.map((w) => ({ value: w.id, label: workspaceDisplayName(w), detail: has.has(w.id) ? 'has it' : undefined, disabled: has.has(w.id) }))}
             />
           ))}
         {error && (

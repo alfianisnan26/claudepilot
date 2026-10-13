@@ -3,7 +3,8 @@ import type { MultiPoolType, Workspace } from '@portal/contracts';
 import { z } from 'zod';
 import { paginate, pageInput } from '../paging.js';
 import { registerPortalTool, PortalToolError } from '../registry.js';
-import { assertCanChange, resolveWorkspace, uiLink, workspaceBrief } from './common.js';
+import { actorOfPrincipal } from '../../authz/seam.js';
+import { assertCanChange, labelProse, resolveWorkspace, uiLink, workspaceBrief } from './common.js';
 import type { PortalToolDeps } from './deps.js';
 
 const WORKSPACE_STATUSES = ['creating', 'starting', 'running', 'stopping', 'stopped', 'error'] as const;
@@ -17,7 +18,8 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
     const row = reconciler.row(w.id);
     return { ...w, account: accountPools.stateFor(w.id), delivery: row ? { status: row.status, reason: row.reason, appliedAt: row.applied_at, claudeVersion: row.claude_version } : null };
   };
-  const find = async (idOrName: string) => decorate(resolveWorkspace(await workspaces.list(), idOrName));
+  // Any form of the id, through the manager's one resolver (T-42): it also knows the labels a workspace had before a rename.
+  const find = async (idOrName: string) => decorate(resolveWorkspace(await workspaces.list(), idOrName, (ref) => workspaces.resolve?.(ref) ?? null));
   const liveSessions = (id: string) => chat.list().filter((s) => s.workspaceId === id && s.state !== 'ended' && !s.archivedAt);
 
   registerPortalTool({
@@ -111,6 +113,45 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
       ctx.affected(`workspace:${created.id}`);
       console.log(`[portal-mcp] ${ctx.actor} creating workspace ${created.id}`);
       return { summary: `Creating ${created.id}.`, id: created.id, status: created.status, ui: uiLink('/admin/workspaces') };
+    },
+  });
+
+  registerPortalTool({
+    name: 'workspace_rename',
+    title: 'Rename a workspace',
+    description:
+      'Changes the name a workspace is shown by (its label: 1 to 40 characters, one line, unique on its target). Nothing running is touched: its id, its runtime name, its volume and every reference stay, and every name it had keeps resolving. Asks for confirmation first, showing the change.',
+    scope: 'admin',
+    hints: { idempotent: true },
+    input: z.object({
+      id: z.string().max(100).describe('The stable id (`ws_` and 12 hex), `<target>/<name>`, or the name when it is unique.'),
+      label: z.string().max(200).describe('The new name: plain text, one line, at most 40 characters, no slash.'),
+      confirm_token: z.string().optional().describe('From the confirmation_required answer.'),
+    }),
+    async handler(ctx, args) {
+      const w = await find(args.id);
+      assertCanChange(store, 'workspace');
+      const actor = actorOfPrincipal(ctx.principal);
+      // Checked before the confirmation: a label that is not allowed, or taken on the target, is refused at once.
+      const plan = await workspaces.planRename(w.id, args.label, actor);
+      const ids = { id: w.id, stable_id: w.stableId ?? plan.known.id, name: w.name };
+      if (plan.unchanged) return { summary: `${w.id} is already called that.`, ...ids, label: labelProse(plan.to, 'workspace_label') };
+      const gate = ctx.confirm(
+        args,
+        {
+          rename: w.id,
+          stable_id: ids.stable_id,
+          from: labelProse(plan.from, 'workspace_label'),
+          to: labelProse(plan.to, 'workspace_label'),
+          changes: 'the name it is shown by, only',
+          keeps: ['its id and every reference to it', 'its runtime name, container or pod, and its home volume', 'every name it had, which keeps resolving'],
+        },
+        `${ids.stable_id}@${plan.from}`,
+      );
+      if (gate) return gate;
+      const done = await workspaces.rename(w.id, args.label, actor, { actor: ctx.actor, actorLabel: ctx.actorLabel });
+      ctx.affected(`workspace:${w.id}`);
+      return { summary: `Renamed ${w.id}.`, ...ids, label: labelProse(done.label, 'workspace_label'), previous: labelProse(done.previous, 'workspace_label') };
     },
   });
 

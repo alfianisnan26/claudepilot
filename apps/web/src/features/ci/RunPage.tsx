@@ -1,6 +1,6 @@
 import { Button, cn, LoadError, useToast } from '@isnanme/ui';
 import { isCiActive, type CiDeployment, type CiDiagnostic, type CiJob, type CiRun } from '@portal/contracts';
-import { ChevronDown, ChevronLeft, ChevronRight, Hand, RotateCw, Square } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Hand, RotateCw, Square } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
@@ -10,7 +10,8 @@ import { useLive } from '@/lib/live';
 import { ciApi } from './api';
 import { LogView } from './LogView';
 import { elapsed, formatDuration, MONO, reasonLabel, refLabel, shortSha, StatusIcon } from './parts';
-import { reportLine } from './report';
+import { bumpLine, reportLine } from './report';
+import { RunBumpDialog } from './RunBump';
 import { cancelledLine, startedBy } from './startedBy';
 
 /** Jobs in the order they run: by how deep their `needs` go, then as written. */
@@ -45,6 +46,7 @@ export function RunPage() {
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [now, setNow] = useState(Date.now());
+  const [bumping, setBumping] = useState(false);
   const opened = useRef(false);
   const seq = useRef(0);
 
@@ -116,6 +118,7 @@ export function RunPage() {
   const duration = run.durationMs ?? elapsed(run.startedAt ?? run.createdAt, now);
   const stopped = run.workspaceState !== 'running' && active;
   const report = reportLine(run.reports);
+  const bumped = bumpLine(run.bumps);
   const cancelled = cancelledLine(run);
 
   return (
@@ -128,6 +131,7 @@ export function RunPage() {
         <h1 className="min-w-0 flex-1 truncate text-xl font-bold tracking-tight sm:text-2xl">
           {run.pipeline} <span className="font-semibold text-muted">#{run.number}</span>
         </h1>
+        <Button variant="secondary" size="icon" aria-label="Bump" title="Bump" icon={<ChevronsUp className="size-4" />} onClick={() => setBumping(true)} />
         {active && (
           <Button variant="secondary" size="icon" aria-label="Cancel" title="Cancel" icon={<Square className="size-4" />} onClick={() => act(() => ciApi.cancel(run.id))} />
         )}
@@ -169,7 +173,25 @@ export function RunPage() {
           ) : (
             <p className="text-[13px]">{report.text}</p>
           ))}
+        {bumped &&
+          (bumped.sessionId ? (
+            <Link to={`/admin/sessions/${bumped.sessionId}`} className="-my-2.5 inline-flex min-h-11 items-center self-start text-[13px] text-accent hover:underline">
+              {bumped.text}
+            </Link>
+          ) : (
+            <p className="text-[13px] [overflow-wrap:anywhere]">{bumped.text}</p>
+          ))}
       </div>
+
+      <RunBumpDialog
+        run={bumping ? run : null}
+        onClose={() => setBumping(false)}
+        onBumped={() => {
+          setBumping(false);
+          toast(`Bumped #${run.number}`);
+          void load();
+        }}
+      />
 
       {run.deployments
         .filter((d) => d.approval === 'waiting')

@@ -74,6 +74,20 @@ const fakes = {
     stop: async (t: string, n: string) => void calls.push(`ws.stop:${t}/${n}`),
     remove: async (t: string, n: string) => void calls.push(`ws.remove:${t}/${n}`),
     create: async (req: Row) => (calls.push(`ws.create:${req.target}/${req.name}`), { id: `${req.target}/${req.name}`, status: 'creating', createdAt: NOW }),
+    // A rename (T-42 slice 2): the manager's checks are its own tests (workspaces/rename.test.ts); here, what the tool does with them.
+    resolve: () => null,
+    planRename: async (ref: string, label: string) => {
+      const w = world.workspaces.find((x) => x.id === ref)!;
+      const from = w.label ?? w.name;
+      return { known: { id: w.stableId ?? 'none' }, from, to: label.trim(), unchanged: label.trim() === from };
+    },
+    rename: async (ref: string, label: string, _actor: unknown, via: Row) => {
+      calls.push(`ws.rename:${ref}:${label}:${via.actor}`);
+      const w = world.workspaces.find((x) => x.id === ref)!;
+      const previous = w.label ?? w.name;
+      w.label = label.trim();
+      return { id: w.id, stableId: w.stableId, name: w.name, label: w.label, previous };
+    },
   },
   chat: {
     list: (f: Row = {}) => world.sessions.filter((s) => (!f.workspaceId || s.workspaceId === f.workspaceId) && (!f.ticketId || s.ticketId === f.ticketId)),
@@ -193,6 +207,37 @@ test('T-42: the workspace tools take the stable id as well as the alias, and eve
       delete w.stableId;
       delete w.runtimeName;
     }
+  }
+});
+
+test('T-42: workspace_rename is admin only, previews the change, renames once after the confirmation, and answers with the id, the name and the label', async () => {
+  reset();
+  const op = h.token('operate');
+  const admin = h.token('admin');
+  const web = world.workspaces.find((w) => w.id === 'docker/web')!;
+  const stable = `ws_${'9a8b'.repeat(3)}`;
+  web.stableId = stable;
+  try {
+    assert.equal(err(await h.call(op.secret, 'workspace_rename', { id: 'docker/web', label: 'Front' })), 'SCOPE_REQUIRED');
+    const ask = where(await h.call(admin.secret, 'workspace_rename', { id: stable, label: 'Front' }));
+    assert.equal(ask.status, 'confirmation_required');
+    assert.deepEqual([ask.preview.rename, ask.preview.stable_id, ask.preview.from, ask.preview.to], ['docker/web', stable, 'web', 'Front']);
+    assert.ok(ask.preview.keeps.some((x: string) => /runtime name/.test(x)), 'the preview says what stays');
+    assert.deepEqual(calls, [], 'asking renames nothing');
+    assert.equal(where(await h.call(admin.secret, 'workspace_rename', { id: stable, label: 'Other', confirm_token: ask.confirm_token })).status, 'confirmation_required', 'the token is for that label');
+    const done = where(await h.call(admin.secret, 'workspace_rename', { id: stable, label: 'Front', confirm_token: ask.confirm_token }));
+    assert.deepEqual([done.id, done.stable_id, done.name, done.label, done.previous], ['docker/web', stable, 'web', 'Front', 'web']);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0]!, /^ws\.rename:docker\/web:Front:portal-mcp:/, 'audited as the token');
+    const brief = where(await h.call(admin.secret, 'workspace_get', { id: 'Front', include: [] })).workspace;
+    assert.deepEqual([brief.id, brief.stable_id, brief.name, brief.label], ['docker/web', stable, 'web', 'Front'], 'found by its label; shows both');
+    const same = await h.call(admin.secret, 'workspace_rename', { id: 'docker/web', label: 'Front' });
+    assert.match(text(same), /already called that/);
+    assert.equal(where(same).label, 'Front');
+    assert.equal(calls.length, 1, 'no change, no rename');
+  } finally {
+    delete web.stableId;
+    delete web.label;
   }
 });
 

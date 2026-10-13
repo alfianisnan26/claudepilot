@@ -943,6 +943,17 @@ export class ChatStore {
   }
 
   /** Whether a sub-agent or background task is still running. */
+  /**
+   * Whether a sub-agent or background task ran in the session's current process: one still running, or one started or ended since
+   * `since` (the process start; null when the portal attached to a process it didn't start: then any task of the session counts). T-99.
+   */
+  hasTaskActivitySince(sessionId: string, since: string | null): boolean {
+    if (since === null) return !!this.#db().prepare('SELECT 1 FROM chat_tasks WHERE session_id = ? LIMIT 1').get(sessionId);
+    return !!this.#db()
+      .prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running' OR started_at >= ? OR ended_at >= ?) LIMIT 1`)
+      .get(sessionId, since, since);
+  }
+
   hasRunningTasks(sessionId: string): boolean {
     return !!this.#db().prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running') LIMIT 1`).get(sessionId);
   }

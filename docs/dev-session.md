@@ -96,7 +96,7 @@ The workspace pod has 4 CPUs shared with the agents, their scratch portals and C
 twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a Job in `isnan-claudepilot` instead, on whichever node has CPU:
 
 - **The Job** (`deploy/k3s-build/gate-job.yaml`): the newest development workspace image (or `GATE_IMAGE`), a shallow clone of the commit from
-  GitHub, `GATE_CONCURRENCY=3`; requests 100m CPU and 512 MiB, limits 4 CPUs and 6 GiB, no node selector (k3s-node2's requests are nearly all
+  GitHub, `GATE_CONCURRENCY=3`; requests 1 CPU and 2 GiB, limits 4 CPUs and 8 GiB, `/tmp` an emptyDir in memory (3 GiB: the clean copy, `node_modules` and the tests' databases; on the overlay the suite was IO-bound, 31+ min), no node selector (k3s-node2's requests are nearly all
   allocated: the master may take it), no service account token, gone an hour after it ends. A name per call
   (`claudepilot-gate-<sha>-<4 hex>`), so gates for different commits run side by side.
 - **The token** for `npm ci` (the private `@isnanme` packages) is a Secret named like the Job, made from `gh auth token` on stdin, deleted on

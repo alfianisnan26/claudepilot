@@ -16,6 +16,7 @@ export function BumpDialog({
   onClose,
   subject,
   preferredLabel = 'Assigned',
+  modeLabels = BUMP_MODE_LABEL,
   modeHelp,
   load,
   onBump,
@@ -26,6 +27,8 @@ export function BumpDialog({
   subject: ReactNode;
   /** The mark on the preferred session. */
   preferredLabel?: string;
+  /** What the two modes are called here (a run's first one is "Fix"). */
+  modeLabels?: Record<BumpMode, string>;
   /** What each mode does here, for the one ⓘ. */
   modeHelp: Record<BumpMode, string>;
   load: () => Promise<BumpTarget[]>;
@@ -85,14 +88,14 @@ export function BumpDialog({
             How
             <InfoTip label="About the two ways">
               <span className="block">
-                <b>{BUMP_MODE_LABEL.prioritise}:</b> {modeHelp.prioritise}
+                <b>{modeLabels.prioritise}:</b> {modeHelp.prioritise}
               </span>
               <span className="mt-1 block">
-                <b>{BUMP_MODE_LABEL.ask}:</b> {modeHelp.ask}
+                <b>{modeLabels.ask}:</b> {modeHelp.ask}
               </span>
             </InfoTip>
           </p>
-          <Segmented<BumpMode> label="How" labelledBy={howId} value={mode} onChange={setMode} options={BUMP_MODES.map((m) => ({ value: m, label: BUMP_MODE_LABEL[m] }))} />
+          <Segmented<BumpMode> label="How" labelledBy={howId} value={mode} onChange={setMode} options={BUMP_MODES.map((m) => ({ value: m, label: modeLabels[m] }))} />
         </div>
         <TextField label="Note" optional autoComplete="off" maxLength={BUMP_NOTE_MAX} placeholder={mode === 'ask' ? 'Your question' : 'Anything it should know'} value={note} onChange={(e) => setNote(e.target.value)} />
       </div>
