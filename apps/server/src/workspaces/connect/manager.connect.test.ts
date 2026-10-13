@@ -130,3 +130,48 @@ test('without settled (no Connect) resume judges at once, as before', async () =
   await m.resume();
   assert.match((await m.list())[0]!.detail!, /Could not resume after restart/);
 });
+
+test('an enrolled target that is not back when the grace ends: the create waits and resumes when it returns (T6: a crash, an agent in its backoff)', async () => {
+  const pending: Workspace = { id: 'cx3-s/w8', name: 'w8', target: 'cx3-s', image: '', status: 'creating', createdAt: '2026-10-12T00:00:00.000Z', node: 'n1' };
+  const store = memory([pending]);
+  const m = new Workspaces([], store, { ttlMs: 0 });
+  const e = enrolled('cx3-s', { up: false });
+  m.addRuntime(e.runtime);
+  m.hooks.settled = async () => undefined; // the grace ran out with the agent still away
+  await m.resume();
+  const waiting = (await m.list()).find((w) => w.id === 'cx3-s/w8')!;
+  assert.equal(waiting.status, 'creating');
+  assert.match(waiting.detail!, /Waiting for cx3-s to reconnect/);
+  assert.equal(store.read()[0]!.status, 'creating', 'still pending on disk: a second restart keeps waiting');
+  assert.equal(e.state.creates.length, 0);
+  // The agent comes back: wireConnect calls recheck; two nodes returning at once launch it once.
+  e.state.up = true;
+  await Promise.all([m.recheck('cx3-s'), m.recheck('cx3-s')]);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(e.state.creates.length, 1);
+  assert.equal(e.state.creates[0]!.node, 'n1');
+  assert.equal((await m.list()).find((w) => w.id === 'cx3-s/w8')!.status, 'running');
+});
+
+test('a create waiting for its target can be removed (nothing runs it here), and a scanned target that is down still fails it', async () => {
+  const pending: Workspace = { id: 'cx3-t/w7', name: 'w7', target: 'cx3-t', image: '', status: 'creating', createdAt: '2026-10-12T00:00:00.000Z' };
+  const m = new Workspaces([], memory([pending]), { ttlMs: 0 });
+  const e = enrolled('cx3-t', { up: false });
+  m.addRuntime(e.runtime);
+  m.hooks.settled = async () => undefined;
+  await m.resume();
+  await m.remove('cx3-t', 'w7');
+  assert.equal((await m.list()).length, 0);
+  e.state.up = true;
+  await m.recheck('cx3-t');
+  assert.equal(e.state.creates.length, 0, 'a removed waiting create is not launched when the target returns');
+
+  const scannedPending: Workspace = { ...pending, id: 'cx3-u/w6', name: 'w6', target: 'cx3-u' };
+  const m2 = new Workspaces([], memory([scannedPending]), { ttlMs: 0 });
+  const s = enrolled('cx3-u', { up: false });
+  (s.runtime.target as { source: string }).source = 'scanned';
+  m2.addRuntime(s.runtime);
+  m2.hooks.settled = async () => undefined;
+  await m2.resume();
+  assert.match((await m2.list()).find((w) => w.id === 'cx3-u/w6')?.detail ?? '', /Could not resume after restart/);
+});
