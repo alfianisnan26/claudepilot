@@ -50,18 +50,17 @@ test('host put keeps the stderr pipe open until it ends (a Kubernetes exec close
   child.stderr.on('end', () => (stderrEndedAt = Date.now()));
   child.stderr.resume(); // 'end' only comes to a flowing stream
   const exited = new Promise<number | null>((resolve) => child.on('close', resolve));
-  // The bytes come slowly, as over a tunnel: if the script had dropped its stderr, the pipe's end would fire long before the exit.
+  // The bytes come slowly, as over a tunnel: if the script had dropped its stderr, the pipe's end would fire while it still waits for input.
   await new Promise((r) => setTimeout(r, 150));
-  const beforeWrite = stderrEndedAt;
+  assert.equal(stderrEndedAt, null, 'stderr was still open while the script waited for its input');
   for (let at = 0; at < text.length; at += 65_536) {
+    if (at + 65_536 < text.length) await new Promise((r) => setTimeout(r, 10));
     child.stdin.write(text.slice(at, at + 65_536));
-    await new Promise((r) => setTimeout(r, 10));
   }
-  const exitedAt = Date.now();
+  assert.equal(stderrEndedAt, null, 'still open as the last piece goes in (nothing has run since the write)');
   const code = await exited;
   assert.equal(code, 0);
-  assert.equal(beforeWrite, null, 'stderr was still open while the script waited for its input');
-  assert.ok(stderrEndedAt !== null && stderrEndedAt >= exitedAt - 5, 'stderr closed with the exit, not before');
+  assert.ok(stderrEndedAt !== null, 'stderr closed with the exit');
   assert.ok(readFileSync(join(host.uploads, 'S1', 'keep.bin')).equals(bytes));
 });
 
