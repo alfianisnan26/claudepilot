@@ -45,8 +45,9 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
   dry mode, pause switch, auto pause after a rollback; trial of 5 hand approvals by the coordinator meanwhile. (The coordinator's message
   named it T-111; the ticket ids are T-110 = auto-approve, T-111 = self-learning.)
 - T-108 owner decisions: item 3 yes (T-110), item 6 yes (API-key last destination; keys and cap come from the owner later).
-- Then T-101 (750-754), T-106 (rank-08b, after T-101; PRD knowledge-graph K4 FR36-FR39), T-111 (rank-09b, self-learning loop: slices 1 and 2,
-  the measuring, first; the wall: never safety, deny rules, authz, Bypass gates, the gates or its own scoring), T-28, T-32, T-24, T-26 (740-744), T-27, T-30 (745-749),
+- Then T-101 (750-754), T-106 (rank-08b, after T-101; PRD knowledge-graph K4 FR36-FR39), T-111 (rank-09b, self-learning loop: READ the owner's correction at the top of its description first: the score is many things done, good
+  quality, proper standards, few avoidable human questions and few owner-found defects; tokens only third; required escalations never
+  penalised; the loop reads counts and links, never the owner's messages; sampled re-verification. Slices 1 and 2, the measuring, first; the wall: never safety, deny rules, authz, Bypass gates, the gates or its own scoring), T-28, T-32, T-24, T-26 (740-744), T-27, T-30 (745-749),
   T-33 rename LAST alone, wave 4 (T-10..T-15).
 - After each merge: area tests or the gate Job, push origin and pilot. The next deploy carries T-42 slice 3, T-97, T-98, T-99, T-105, T-102, T-100.
 
