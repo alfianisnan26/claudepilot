@@ -6,7 +6,8 @@
 // - A file already at <out> with the right checksum is kept (a restart needs no network).
 // - Written to <out>.tmp and renamed, so a half download never sits at <out>.
 // - Proxies: the caller sets NODE_USE_ENV_PROXY=1 (global fetch then honours HTTPS_PROXY/NO_PROXY); a private CA: NODE_EXTRA_CA_CERTS.
-// - Extra headers (a Cloudflare Access service token): `Name: value` lines in the file named by PILOT_HEADERS_FILE. Never printed.
+// - Extra headers (a Cloudflare Access service token): `Name: value` lines in the file named by PILOT_HEADERS_FILE. Never printed. A file
+//   that is not there means no headers: the Kubernetes manifest always names one, from a Secret that exists only when headers were given.
 // - Exit 13 (CONNECT_INSTALL_EXIT.download) on any failure, with one line on stderr that names the file, never a header or a query.
 // The text has no single quote, no backtick and no `$(` (Kubernetes would expand it in a container's command), so it sits unchanged in a
 // single-quoted sh string, a PowerShell single-quoted here-string, a JSON/YAML string and an environment variable.
@@ -18,7 +19,7 @@ const LINES = [
   'const sum=(b)=>h.startsWith("sha512-")?"sha512-"+c.createHash("sha512").update(b).digest("base64"):c.createHash("sha256").update(b).digest("hex");',
   'try{if(sum(fs.readFileSync(o))===h)process.exit(0)}catch{}',
   'const hd={},hf=process.env.PILOT_HEADERS_FILE;',
-  'if(hf)for(const l of fs.readFileSync(hf,"utf8").split(/\\r?\\n/)){const i=l.indexOf(":");if(i>0)hd[l.slice(0,i).trim()]=l.slice(i+1).trim()}',
+  'if(hf&&fs.existsSync(hf))for(const l of fs.readFileSync(hf,"utf8").split(/\\r?\\n/)){const i=l.indexOf(":");if(i>0)hd[l.slice(0,i).trim()]=l.slice(i+1).trim()}',
   'let n="";try{n=new URL(u).pathname}catch{die("not an address")}',
   'fetch(u,{headers:hd,redirect:"follow"}).then(async(r)=>{if(!r.ok)die("HTTP "+r.status+" for "+n);',
   'const b=Buffer.from(await r.arrayBuffer());if(sum(b)!==h)die("checksum mismatch for "+n);',
