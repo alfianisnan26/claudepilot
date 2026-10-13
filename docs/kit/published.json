@@ -1,0 +1,33 @@
+{
+  "kit": "1.0.0",
+  "at": "2026-10-13T16:42:45.178Z",
+  "portal": "https://pilot.ai.isnan.me",
+  "contexts": {
+    "charter-essentials": "01a13624-3b6c-7087-a61d-26730374d3a6",
+    "new-project-bootstrap": "01a13624-3beb-7b5d-ba16-dd3ad3c352fc",
+    "program-overlay": "01a13624-3c6d-7085-bf00-81e994db0988",
+    "project-standards": "01a13624-3cf4-7079-9dbe-34c6bb05891a",
+    "safety-rules": "01a13624-3d7a-71bc-9bd8-9fd8b7a33219",
+    "work-rhythm": "01a13624-3e03-7257-a5e8-782176330b6f"
+  },
+  "persona": "01a13624-3e9f-751c-8d65-46174b446e71",
+  "skillset": "01a13625-3046-7434-8ec6-16e178eb9062",
+  "skills": {
+    "browser-testing": "01a13625-2718-7946-bf02-c5658d779b54",
+    "charter": "01a13625-2719-70bd-9ace-5f7762491de3",
+    "ci-cd": "01a13625-2719-7b27-b005-58d8dd356321",
+    "decisions": "01a13625-2719-720d-8181-973400ac4431",
+    "design-standard": "01a13625-2719-7347-ad33-6c232ed0e691",
+    "efficiency": "01a13625-2719-714e-8368-069d125746c4",
+    "escalation": "01a13625-271a-7898-9daa-d7095c35fdc4",
+    "git-flow": "01a13625-271a-7548-a864-ccd6f6effc68",
+    "incident": "01a13625-271a-7d55-9f57-8c9a3312f67b",
+    "knowledge": "01a13625-271a-7f0e-a0cb-e5d4d9e51a6d",
+    "orchestration": "01a13625-271a-7d68-a95f-c68384b744bf",
+    "peer-review": "01a13625-271a-7e0a-bde9-4c377256c122",
+    "portal-mcp": "01a13625-271b-7b22-af36-a85164c37cc2",
+    "qa-verification": "01a13625-271b-74fb-bdea-ead060e10b81",
+    "safety": "01a13625-271b-7b4c-a2eb-9fff58ddc2d7",
+    "ticket-flow": "01a13625-271b-7719-916b-02bf40f29101"
+  }
+}

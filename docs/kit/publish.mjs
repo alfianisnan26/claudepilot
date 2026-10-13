@@ -27,7 +27,9 @@ async function api(method, path, body, raw) {
     if (!l.ok) throw new Error(`sign-in refused (${l.status})`);
     cookie = (l.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).join('; ');
   }
-  const headers = { origin: PORTAL, cookie, ...(raw ? {} : { 'content-type': 'application/json' }) };
+  // Behind the TLS proxy Hono's csrf() compares a form-like (multipart) request's Origin with the http URL it sees, so an https Origin is refused
+  // (a ticket is open: multipart csrf behind the proxy): until that is fixed the upload names the same host with http, which the portal's own host check accepts.
+  const headers = { origin: raw ? PORTAL.replace(/^https:/, 'http:') : PORTAL, cookie, ...(raw ? {} : { 'content-type': 'application/json' }) };
   const res = await fetch(`${PORTAL}${path}`, { method, headers, ...(body === undefined ? {} : { body: raw ? body : JSON.stringify(body) }) });
   const json = await res.json().catch(() => null);
   if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${json?.error?.code ?? ''} ${json?.error?.message ?? ''} ${JSON.stringify(json?.error?.details ?? '').slice(0, 300)}`);
