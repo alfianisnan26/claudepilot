@@ -53,3 +53,15 @@ test('New York: the day the clocks go forward has 23 hours, the day they go back
   // Just before the spring change, still on the 7th's evening (EST): the day is the 7th.
   assert.deepEqual(periodBounds('day', 'America/New_York', at(2026, 3, 8, 4, 59)), { start: at(2026, 3, 7, 5), end: at(2026, 3, 8, 5) });
 });
+
+test('the week starts on Monday at midnight in the zone (2026-10-12 is a Monday, hand-checked)', () => {
+  // Wednesday the 14th at 05:30 UTC: Monday the 12th to Monday the 19th.
+  assert.deepEqual(periodBounds('week', 'UTC', at(2026, 10, 14, 5, 30)), { start: at(2026, 10, 12), end: at(2026, 10, 19) });
+  // Monday's first instant is in its own week; Sunday's last millisecond is in the week before.
+  assert.deepEqual(periodBounds('week', 'UTC', at(2026, 10, 12)), { start: at(2026, 10, 12), end: at(2026, 10, 19) });
+  assert.deepEqual(periodBounds('week', 'UTC', at(2026, 10, 12) - 1), { start: at(2026, 10, 5), end: at(2026, 10, 12) });
+  // Jakarta: 18:00 UTC on Sunday the 11th is 01:00 on Monday the 12th there, so the week began at 17:00 UTC on the 11th.
+  assert.deepEqual(periodBounds('week', 'Asia/Jakarta', at(2026, 10, 11, 18)), { start: at(2026, 10, 11, 17), end: at(2026, 10, 18, 17) });
+  // A week across the year's end.
+  assert.deepEqual(periodBounds('week', 'UTC', at(2027, 1, 1, 12)), { start: at(2026, 12, 28), end: at(2027, 1, 4) });
+});

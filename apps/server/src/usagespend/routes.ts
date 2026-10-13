@@ -25,7 +25,7 @@ async function body(c: Context): Promise<Record<string, unknown>> {
 export function createUsageSpendRoutes(spend: UsageSpend): Hono {
   const r = new Hono();
 
-  // GET /api/usage-spend: today and this month, the budgets' levels, spikes of the last day, and the alerts.
+  // GET /api/usage-spend: today, this week and this month, the budgets' levels, spikes of the last day, and the alerts.
   r.get('/', (c) => c.json(success(spend.summary(actorOf(c)))));
 
   // GET /api/usage-spend/alerts: the last day's alerts that are not snoozed.

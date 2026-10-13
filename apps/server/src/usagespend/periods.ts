@@ -47,12 +47,21 @@ function instantOfWall(tz: string, wall: number): number {
 
 export type BudgetPeriodName = 'day' | 'month';
 
-/** The period holding `atMs`: from its first instant (inclusive) to the next period's (exclusive), in the zone. */
-export function periodBounds(period: BudgetPeriodName, tz: string, atMs: number): { start: number; end: number } {
+/**
+ * The period holding `atMs`: from its first instant (inclusive) to the next period's (exclusive), in the zone. `week` (the summary's
+ * "this week", not a budget period) starts on Monday at midnight, as ISO 8601 weeks do.
+ */
+export function periodBounds(period: BudgetPeriodName | 'week', tz: string, atMs: number): { start: number; end: number } {
   const local = atMs + offsetMs(tz, atMs);
   if (period === 'day') {
     const startWall = Math.floor(local / DAY) * DAY;
     return { start: instantOfWall(tz, startWall), end: instantOfWall(tz, startWall + DAY) };
+  }
+  if (period === 'week') {
+    const dayWall = Math.floor(local / DAY) * DAY;
+    // getUTCDay: Sunday 0 … Saturday 6; days since Monday: Monday 0 … Sunday 6.
+    const startWall = dayWall - ((new Date(dayWall).getUTCDay() + 6) % 7) * DAY;
+    return { start: instantOfWall(tz, startWall), end: instantOfWall(tz, startWall + 7 * DAY) };
   }
   const d = new Date(local);
   return {

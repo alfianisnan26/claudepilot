@@ -659,6 +659,7 @@ export class UsageSpend {
     const live = states.filter((s) => s.budget.enabled);
     return {
       today: this.#totals(actorId, periodBounds('day', tz, now).start, now + 1),
+      week: this.#totals(actorId, periodBounds('week', tz, now).start, now + 1),
       month: this.#totals(actorId, periodBounds('month', tz, now).start, now + 1),
       timezone: tz,
       budgets: {
