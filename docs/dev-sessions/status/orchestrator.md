@@ -64,7 +64,8 @@ stats API that T-119's strip uses; the timeline's state palette; hard performanc
 data and the series API with downsampling, then components on T-121's chart kit, then the navigation of at most four items with ?tab=
 redirects; same performance budgets as T-119/T-121), T-113 (integrity guard), T-114 (scoreboard, playbooks, peer assessment), T-101, T-106, T-120 (rank-08c, after T-106: ClaudePilot
 DESIGN STANDARD in docs/design/, ClaudePilot only, never Konfersi; small doc slices between the larger tickets; every rule cites its file or
-PRD and says observed or decided; D-25), T-28, T-32, T-24, T-26, T-27, T-30, T-33, wave 4,
+PRD and says observed or decided; D-25), T-28, T-32, T-24, T-26, T-27, T-30, T-33, T-123 (rank-14c, wave 3: motion, transitions, heroes, mission control; ClaudePilot only; audit of today's motion first;
+compositor-only, Motion setting Full/Reduced/Off, no-drag harnesses green, frame budgets on the 4x phone profile), wave 4,
 the fitOf/fit.ts unification (small; may ride with T-98 follow-ups if a slot is idle).
 T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, never use that code, and tell the coordinator if they see it.
 
