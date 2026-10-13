@@ -378,6 +378,11 @@ export class AutoTransferEngine {
       load: this.#load(s.workspaceId, s.id),
       counters: this.#counters(s, ownerId, row),
       recommend: this.#d.usage.recommend,
+      // What each Claude's list_models said (T-109), when the chat controller knows it: it overrides the catalogue's guess from the windows.
+      listed: (claudeId: string, family: string) => {
+        const fams = this.#d.chat.modelFamilies?.(claudeId) ?? null;
+        return fams ? fams.includes(family) : null;
+      },
     };
     let d = decide(base);
     // The Move flow's check runs commands in the workspace: asked only once the cheap steps (1 to 6) have passed.
@@ -594,8 +599,17 @@ export class AutoTransferEngine {
     // After an automatic move the chat goes on by itself (T-105 item 3) when its last turn ended on the limit or it was told to stop for the move.
     const why: 'exhausted' | 'steered' | null = m.auto ? (m.reason === 'exhausted' ? 'exhausted' : m.steered ? 'steered' : null) : null;
     try {
-      if (!inPlace) await this.#d.chat.switchClaude(s.id, m.to.id, { handoff: m.handoff });
-      if (m.to.model) await this.#d.chat.setModel(s.id, m.to.model);
+      // A move to another Claude takes the model with it (T-109): the Move flow applies it, verifies it and falls down the chain; in place,
+      // the model control as before (T-29).
+      let moved: ChatSession | null = null;
+      if (!inPlace) moved = await this.#d.chat.switchClaude(s.id, m.to.id, { handoff: m.handoff, ...(m.to.model ? { model: m.to.model } : {}) });
+      else if (m.to.model) await this.#d.chat.setModel(s.id, m.to.model);
+      // The trail says the model that APPLIES there, never only what was asked: the Move flow may have gone further down the chain.
+      const applied = moved ? modelFamily(moved.model) : null;
+      if (moved && applied && applied !== modelFamily(s.model)) {
+        base.from = { ...this.#from(s), model: modelFamily(s.model) };
+        base.to = { ...m.to, model: applied };
+      } else if (moved && m.to.model && applied === modelFamily(s.model)) base.to = { id: m.to.id, name: m.to.name };
       const now = this.#d.clock.now();
       // The move's id, from the "Moved to" row the Move flow wrote: the page finds the divider by it.
       const after = Math.max(0, (s.lastSeq ?? 0) - 1);
@@ -750,7 +764,7 @@ export class AutoTransferEngine {
     let lastMove: AutoSessionState['lastMove'] = null;
     const latest = events[0];
     if (latest?.kind === 'moved' && latest.actor === ENGINE_ACTOR && latest.from && ownerId === userId) {
-      lastMove = { event: latest, undo: latest.from.model && latest.to?.model ? this.#undoableModel(s, latest.from.model) : this.#undoable(s, latest.from.id, claudes, now) };
+      lastMove = { event: latest, undo: latest.from.model && latest.to?.model && latest.to.id === latest.from.id ? this.#undoableModel(s, latest.from.model) : this.#undoable(s, latest.from.id, claudes, now) };
     }
     const pausedUntil = row?.pausedUntil && ms(row.pausedUntil) > now ? row.pausedUntil : null;
     const pending = open && open.ownerId === userId ? (({ ownerId: _o, why: _w, ...rest }) => rest)(open) : null;

@@ -10,7 +10,10 @@ export interface ChatPort {
   get(id: string): ChatSession | null;
   list(filter?: { workspaceId?: string }): ChatSession[];
   switchOptions(id: string): Promise<ChatSwitchOptions>;
-  switchClaude(id: string, destClaudeId: string, opts: { handoff?: 'ask' | 'skip' }): Promise<ChatSession>;
+  /** The Move flow; `model` (T-109) is the model to run there, applied and verified, down the catalogue's chain when refused. */
+  switchClaude(id: string, destClaudeId: string, opts: { handoff?: 'ask' | 'skip'; model?: string }): Promise<ChatSession>;
+  /** The model families a Claude's `list_models` offered, while fresh (T-109); null when not known. Absent in some tests. */
+  modelFamilies?(claudeId: string): string[] | null;
   /** Changes the chat's model on the Claude it runs on (`sonnet`): the chat control `model`, as a person's model picker does. */
   setModel(id: string, model: string): Promise<void>;
   onEvent(cb: (sessionId: string, msg: ChatServerMessage) => void): () => void;

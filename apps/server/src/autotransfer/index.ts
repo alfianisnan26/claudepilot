@@ -31,6 +31,7 @@ function ports(deps: Platform['deps']): { chat: ChatPort; usage: UsagePort } | n
       list: (f) => c.list(f) as ChatSession[],
       switchOptions: (id) => c.switchOptions(id),
       switchClaude: (id, to, o) => c.switchClaude(id, to, o),
+      ...(typeof (chat as { modelFamilies?: unknown }).modelFamilies === 'function' ? { modelFamilies: (claudeId: string) => (chat as unknown as { modelFamilies(id: string): string[] | null }).modelFamilies(claudeId) } : {}),
       setModel: (id, model) => (chat as unknown as { control(id: string, op: 'model', args: { model: string }): Promise<void> }).control(id, 'model', { model }),
       onEvent: (cb) => c.onEvent(cb),
       history: (id, after) => c.history(id, after),

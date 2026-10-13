@@ -865,6 +865,12 @@ export class ChatController {
     this.#claudeModels.delete(claudeId);
   }
 
+  /** The same, by where the Claude signs in (a workspace and its Claude's directory, '' for Default): what the sign-in routes know. */
+  forgetClaudeModelsAt(workspaceId: string, directory: string): void {
+    if (!this.#chat.hasClaudes(workspaceId)) return;
+    for (const c of this.#chat.listClaudes(workspaceId)) if (c.directory === directory) this.#claudeModels.delete(c.id);
+  }
+
   /**
    * Whether a Claude can run a model family (T-109): its `list_models` when known, else the catalogue (a family every plan has: yes; one
    * only some plans have, like Fable: only with its usage window). Unknown families: yes.
