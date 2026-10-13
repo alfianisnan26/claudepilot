@@ -1,0 +1,90 @@
+# An image built IN the cluster from any repository's Dockerfile and pushed (T-141): daemonless (kaniko, linux/amd64, not privileged:
+# D-5 holds), so an agent in the workspace pod can build what wrangler or a deploy needs without Docker. Started only by
+# scripts/image-build.sh, which fills in the __PLACEHOLDERS__ (every value validated there), makes the Secret of the same name (the
+# destination's docker config.json and Gitea's token, from stdin) for the Job's life, and lets the Job out of suspend when no other build runs
+# (one at a time cluster-wide; the queue is the creation order of the suspended Jobs).
+# The init container clones the ref into an emptyDir (the token through a credential helper that reads the environment, never a URL); kaniko
+# builds the context from there and writes the pushed digest to its termination message. Like gate-job.yaml it prefers a node WITHOUT a
+# development workspace pod, requests 1 CPU and 2 GiB (limit 4 and 8 GiB), and has a deadline (at most 60 minutes).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __NAME__
+  namespace: isnan-claudepilot
+  labels: {app: claudepilot-image-build, image-build/chat: __CHAT__, image-build/role: __ROLE__, image-build/repo: __REPO__}
+  annotations: {image-build/owner: "__OWNER__", image-build/destination: "__DEST__"}
+spec:
+  suspend: true
+  backoffLimit: 0
+  activeDeadlineSeconds: __DEADLINE__
+  ttlSecondsAfterFinished: 1800
+  template:
+    metadata:
+      labels: {app: claudepilot-image-build, image-build/chat: __CHAT__}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                namespaces: [isnan-claudepilot-workspaces]
+                labelSelector: {matchLabels: {claudepilot.managed: "true"}}
+      initContainers:
+        - name: clone
+          image: __IMAGE__
+          env:
+            - {name: IB_REPO_URL, value: "__REPO_URL__"}
+            - {name: IB_REF, value: "__REF__"}
+            - {name: IB_DOCKERFILE, value: "__DOCKERFILE__"}
+            - {name: IB_CONTEXT, value: "__CONTEXT__"}
+            - {name: GIT_USER, valueFrom: {secretKeyRef: {name: __NAME__, key: git-user, optional: true}}}
+            - {name: GIT_TOKEN, valueFrom: {secretKeyRef: {name: __NAME__, key: git-token, optional: true}}}
+          command: [bash, -c]
+          args:
+            - |
+              # IMAGE-BUILD-CLONE BEGIN (the test runs this part on its own, with IB_ROOT pointing elsewhere)
+              set -u
+              root=${IB_ROOT:-/workspace}; say() { echo "=== IMAGE-BUILD $*"; }
+              export HOME=$root/.home; mkdir -p "$HOME"
+              git config --global credential.helper '!f() { [ -n "${GIT_TOKEN:-}" ] || exit 0; echo "username=${GIT_USER:-git}"; echo "password=$GIT_TOKEN"; }; f'
+              t0=$(date +%s)
+              if ! { git init -q "$root/src" && git -C "$root/src" fetch -q --depth 1 "$IB_REPO_URL" "$IB_REF" && git -C "$root/src" checkout -q FETCH_HEAD; }; then
+                say "CLONE FAILED"; echo "image-build: $IB_REF of $IB_REPO_URL is not on the remote (push it first)"; exit 2
+              fi
+              rm -rf "$HOME"
+              [ -d "$root/src/$IB_CONTEXT" ] || { say "CLONE FAILED"; echo "image-build: no folder $IB_CONTEXT in the repository"; exit 2; }
+              [ -f "$root/src/$IB_DOCKERFILE" ] || { say "CLONE FAILED"; echo "image-build: no file $IB_DOCKERFILE in the repository"; exit 2; }
+              say "checked out $(git -C "$root/src" rev-parse --short HEAD) in $(( $(date +%s) - t0 ))s; building $IB_DOCKERFILE in $IB_CONTEXT"
+              # IMAGE-BUILD-CLONE END
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:v1.23.2
+          args:
+            - "--context=dir:///workspace/src/__CONTEXT__"
+            - "--dockerfile=/workspace/src/__DOCKERFILE__"
+            - "--destination=__PUSH__"
+            - "--custom-platform=linux/amd64"
+            - "--digest-file=/dev/termination-log"
+            - "--cache=false"
+            - "--snapshot-mode=redo"
+            - "--push-retry=3"
+            - __KANIKO_EXTRA__
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace}
+            - {name: docker-config, mountPath: /kaniko/.docker, readOnly: true}
+          resources:
+            requests: {cpu: 1000m, memory: 2Gi}
+            limits: {cpu: "4", memory: 8Gi}
+      volumes:
+        - name: workspace
+          emptyDir: {sizeLimit: 6Gi}
+        - name: docker-config
+          secret: {secretName: __NAME__, optional: true, items: [{key: config.json, path: config.json}]}
