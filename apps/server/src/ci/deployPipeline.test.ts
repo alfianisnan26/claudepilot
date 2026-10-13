@@ -17,6 +17,9 @@ import { harness, WS } from './testkit.js';
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url));
 const today = () => new Date().toISOString().slice(0, 10).replace(/-/g, '.');
+/** The tag the repository's own manifest has for an image now: the pipeline's "before" (the manifest changes with every release, so the test reads it). */
+const manifestTag = (what: 'portal' | 'workspace') => new RegExp(`claudepilot/${what}:(\\S+)`).exec(readFileSync(join(REPO, 'deploy/k3s/portal.yaml'), 'utf8'))![1]!;
+const esc = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** What the fake world needs from this repository: the pipeline, its scripts, the manifests, the build script and the workspace Dockerfile. */
 function templateFiles(): Record<string, string> {
@@ -270,11 +273,11 @@ test('a release: gate verdict, the real k3s-build.sh on a fake cluster, the bump
   assert.equal(w.branch('integration'), bump, 'main and integration move together');
   assert.equal(w.git(['--git-dir', w.github, 'rev-parse', `${bump}^`]), w.sha, 'the bump sits on the run\'s commit');
   assert.match(w.manifestAt('main'), new RegExp(`image: registry\\.int\\.isnan\\.me/claudepilot/portal:${today().replace(/\./g, '\\.')}-2\\n`));
-  assert.match(w.manifestAt('main'), /value: registry\.int\.isnan\.me\/claudepilot\/workspace:2\.1\.296-2026\.10\.12-1\n/, 'an image not built keeps its tag');
+  assert.match(w.manifestAt('main'), new RegExp(`value: registry\\.int\\.isnan\\.me/claudepilot/workspace:${esc(manifestTag('workspace'))}\\n`), 'an image not built keeps its tag');
   const diff = w.git(['--git-dir', w.github, 'diff', '--stat', `${bump}^`, bump]);
   assert.match(diff, /1 file changed, 1 insertion\(\+\), 1 deletion\(-\)/, 'exactly one line changed');
   assert.match(w.git(['--git-dir', w.github, 'log', '-1', '--format=%B', bump]), /^deploy: portal \S+\n\nReleased by the deploy pipeline: pilot CI run #7 .*\n\nPilot-Run: rtestdeploy01/);
-  assert.match(outFile(w, 'release.env'), new RegExp(`PREV_PORTAL=2026\\.10\\.12-3\\nPREV_WORKSPACE=2\\.1\\.296-2026\\.10\\.12-1\\nNEW_PORTAL=${today().replace(/\./g, '\\.')}-2\\nNEW_WORKSPACE=\\nBUMP_SHA=${bump}\\nBASE_SHA=${w.sha}\\nPUSHED=1\\n`));
+  assert.match(outFile(w, 'release.env'), new RegExp(`PREV_PORTAL=${esc(manifestTag('portal'))}\\nPREV_WORKSPACE=${esc(manifestTag('workspace'))}\\nNEW_PORTAL=${today().replace(/\./g, '\\.')}-2\\nNEW_WORKSPACE=\\nBUMP_SHA=${bump}\\nBASE_SHA=${w.sha}\\nPUSHED=1\\n`));
 
   const verify = w.run('verify');
   assert.equal(verify.code, 0, verify.out);
@@ -301,8 +304,8 @@ test('a verify that fails rolls back: the previous tags on main (and integration
   const back = w.main();
   assert.equal(w.git(['--git-dir', w.github, 'rev-parse', `${back}^`]), bump, 'a new commit on top: nothing forced');
   assert.equal(w.branch('integration'), back);
-  assert.match(w.manifestAt('main'), /claudepilot\/portal:2026\.10\.12-3\n/, 'the tag from before');
-  assert.match(rollback.out, /rollback: back at portal 2026\.10\.12-3/);
+  assert.match(w.manifestAt('main'), new RegExp(`claudepilot/portal:${esc(manifestTag('portal'))}\\n`), 'the tag from before');
+  assert.match(rollback.out, new RegExp(`rollback: back at portal ${esc(manifestTag('portal'))}`));
 
   // A portal whose log has a fatal line fails verify too (here on the cluster as it is: nothing released in this pretend run).
   writeFileSync(join(w.work, '.pilot/out/release.env'), 'PUSHED=0\n');

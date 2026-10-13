@@ -103,6 +103,8 @@ import { usageReport } from './usage.js';
 
 /** The permission mode every process starts in (`--permission-mode`); others are applied after. */
 const START_MODE = 'default';
+/** Origins (`kind/producer`) Claude Code puts on user lines it makes itself: seen from the real CLI (2.1.296) for a finished background command. */
+const HARNESS_ORIGINS: ReadonlySet<string> = new Set(['task-notification/session-task']);
 /** The claude flags cp-session runs after `--`; `--resume` or `--session-id` plus the id are spliced in. */
 const BASE_FLAGS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', START_MODE];
 /** The tools of the portal's own MCP connector (named `pilot`), pre-allowed for a session that holds an agent token. */
@@ -3078,14 +3080,19 @@ export class ChatController {
     return false;
   }
 
-  /** A replayed user line must be a message this portal sent; local command output is Claude Code's own. */
+  /**
+   * A replayed user line must be a message this portal sent; local command output is Claude Code's own, and so is the report of a background
+   * command it started finishing (a user line it marks `origin: task-notification` from `session-task`): without that, any session that
+   * ran a command in the background ended for integrity when the command did. Any other origin, or none, is still refused.
+   */
   #acceptReplay(sessionId: string, replay: NonNullable<ParsedLine['replay']>): boolean {
     if (replay.uuid && this.#chat.isMessage(sessionId, replay.uuid)) return true;
+    if (replay.origin && HARNESS_ORIGINS.has(`${replay.origin.kind}/${replay.origin.producer ?? ''}`)) return true;
     // `/compact` and other local commands echo their output as a replayed line under an id of its own.
     if (replay.localCommand && this.#chat.slashCommandRunning(sessionId)) return true;
     // A model change the portal asked for: Claude Code echoes "Set model to …" as a replayed line.
     if (replay.modelNote && Date.now() - (this.#modelAsked.get(sessionId) ?? 0) < MODEL_NOTE_MS) return true;
-    this.#endIntegrity(sessionId, `a message this portal didn't send reached Claude Code (${shortId(replay.uuid ?? 'no id')})`);
+    this.#endIntegrity(sessionId, `a message this portal didn't send reached Claude Code (${shortId(replay.uuid ?? 'no id')}${replay.origin ? `, origin ${replay.origin.kind}` : ''})`);
     return false;
   }
 

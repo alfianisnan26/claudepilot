@@ -19,7 +19,8 @@ fi
 export GATE_DIR="${TMPDIR:-/tmp}/pilot-gate-${PILOT_RUN_ID:-local}"
 logs="$GATE_DIR.logs"
 trap 'rm -rf "$GATE_DIR" "$logs"' EXIT
-bash scripts/gate.sh "$sha" 2>&1 | mask
+# Heavy jobs one at a time in this workspace: the development sessions take the same lock (docs/dev-sessions/README.md).
+flock /tmp/heavy.lock bash scripts/gate.sh "$sha" 2>&1 | mask
 [ -f "$logs/SUMMARY.txt" ] || die "the gate left no summary"
 for step in npm-ci typecheck web-build server-suite; do
   if ! grep -q "^$step rc=0 " "$logs/SUMMARY.txt"; then

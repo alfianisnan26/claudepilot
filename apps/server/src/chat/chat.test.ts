@@ -2900,6 +2900,57 @@ test('integrity: Claude Code’s "Set model to …" echo is fine right after the
   }
 });
 
+const taskNotification = (origin: unknown, session: string) =>
+  line({
+    type: 'user',
+    isReplay: true,
+    uuid: randomUUID(),
+    session_id: session,
+    message: { role: 'user', content: '<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background command "npm ci" completed (exit code 0)</summary>\n</task-notification>' },
+    ...(origin === undefined ? {} : { origin }),
+  });
+
+test('integrity: the report of a background command Claude Code ran (origin task-notification from session-task) is its own and does not end the session', async () => {
+  const s = await liveSession();
+  try {
+    await firstTurn(s);
+    s.tail.push(taskNotification({ kind: 'task-notification', producer: 'session-task', runId: 'r1' }, s.id));
+    // A second one, and the turn Claude Code starts for it: still the same live session.
+    s.tail.push(taskNotification({ kind: 'task-notification', producer: 'session-task', runId: 'r2' }, s.id));
+    s.tail.push(assistantText('the install finished'));
+    await until(() => s.controller.history(s.id).some((e) => e.text === 'the install finished'));
+    assert.notEqual(s.state(), 'ended', 'a finished background command is not an intrusion');
+  } finally {
+    await s.done();
+  }
+});
+
+test('integrity: a replayed line with any other origin, another producer or none still ends the session, and the failure names the origin', async () => {
+  for (const [origin, why] of [
+    [{ kind: 'channel', producer: 'some-server' }, /a message this portal didn't send reached Claude Code \([^)]*, origin channel\)/],
+    [{ kind: 'task-notification', producer: 'mcp' }, /a message this portal didn't send reached Claude Code \([^)]*, origin task-notification\)/],
+    [{ kind: 'task-notification' }, /a message this portal didn't send reached Claude Code \([^)]*, origin task-notification\)/],
+    [undefined, /a message this portal didn't send reached Claude Code \([^,)]*\)/],
+    [{ kind: 'Not A Token!', producer: 'session-task' }, /a message this portal didn't send reached Claude Code \([^,)]*\)/],
+  ] as const) {
+    const s = await liveSession();
+    try {
+      await expectIntegrityEnd(s, taskNotification(origin, s.id), why);
+    } finally {
+      await s.done();
+    }
+  }
+});
+
+test('a replayed line carries the origin Claude Code gave it, only as short plain tokens', () => {
+  const parse = (origin: unknown) => parseLine(line({ type: 'user', isReplay: true, uuid: 'u1', message: { role: 'user', content: 'x' }, origin })).replay;
+  assert.deepEqual(parse({ kind: 'task-notification', producer: 'session-task', runId: 'r' })?.origin, { kind: 'task-notification', producer: 'session-task' });
+  assert.deepEqual(parse({ kind: 'channel' })?.origin, { kind: 'channel', producer: null });
+  assert.equal(parse({ kind: '<script>' })?.origin, undefined);
+  assert.equal(parse('task-notification')?.origin, undefined);
+  assert.equal(parse(undefined)?.origin, undefined);
+});
+
 test('a Read of a file the portal staged for this chat’s attachment is answered by the portal, on the record; nothing else is', async () => {
   const s = await liveSession();
   try {

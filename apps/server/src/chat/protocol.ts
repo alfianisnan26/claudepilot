@@ -111,7 +111,7 @@ export interface ParsedLine {
    * A replayed user line (`isReplay`): the uuid Claude Code read it under, and whether it's local command
    * output (`<local-command-stdout>`), which Claude Code echoes under an id of its own.
    */
-  replay?: { uuid: string | null; localCommand: boolean; modelNote?: boolean };
+  replay?: { uuid: string | null; localCommand: boolean; modelNote?: boolean; origin?: { kind: string; producer: string | null } };
   /** A `command_lifecycle` line's command uuid, whatever its state. */
   commandUuid?: string;
   /** The main thread called EnterPlanMode, which needs no approval: `plan` mode may follow. */
@@ -445,6 +445,19 @@ function isLocalOutput(content: unknown): boolean {
   return asStr(first?.type) === 'text' && LOCAL_OUTPUT.test(asStr(first?.text) ?? '');
 }
 
+/**
+ * Where Claude Code says a replayed user line came from (`origin`, set by Claude Code itself and not by anything in the message): for example
+ * `{ kind: 'task-notification', producer: 'session-task' }` when a background command it started has finished. Short plain tokens only,
+ * since the kind is shown in an integrity failure's text.
+ */
+function replayOrigin(raw: unknown): { kind: string; producer: string | null } | undefined {
+  const o = asObj(raw);
+  const kind = asStr(o?.kind);
+  if (!kind || !/^[a-z][a-z0-9_-]{0,39}$/.test(kind)) return undefined;
+  const producer = asStr(o?.producer);
+  return { kind, producer: producer && /^[a-z][a-z0-9_-]{0,39}$/.test(producer) ? producer : null };
+}
+
 /** Incoming `user` lines: an array holds tool results (stored, images pulled out for the blob store); a
  *  string, or anything marked `isReplay`, is a line we sent and already stored. A replay reports the
  *  uuid it carries, which the controller checks against what it sent. */
@@ -452,7 +465,8 @@ function parseUser(obj: Record<string, unknown>): ParsedLine {
   const content = asObj(obj.message)?.content;
   if (obj.isReplay === true) {
     const text = typeof content === 'string' ? content : (asStr(asObj(Array.isArray(content) ? content[0] : null)?.text) ?? '');
-    return { stored: [], replay: { uuid: asStr(obj.uuid), localCommand: isLocalOutput(content), modelNote: MODEL_NOTE.test(text) } };
+    const origin = replayOrigin(obj.origin);
+    return { stored: [], replay: { uuid: asStr(obj.uuid), localCommand: isLocalOutput(content), modelNote: MODEL_NOTE.test(text), ...(origin ? { origin } : {}) } };
   }
   if (typeof content === 'string') return { stored: [] }; // a replay: the user event was stored when we sent it
   const agentLabel = asStr(obj.parent_tool_use_id);
