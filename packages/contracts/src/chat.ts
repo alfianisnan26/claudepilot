@@ -510,8 +510,13 @@ export interface EnterBypassRequest {
 }
 
 /** `POST CHAT_API.reauth`: the server code again, for actions that guard it. */
+/**
+ * The re-check before Bypass: the person's PASSWORD when they signed in with one (T-118), the server code only on a portal that has no
+ * account yet. `code` is the older field name and is read the same way (it is checked against the password for a password sign-in).
+ */
 export interface ReauthRequest {
-  code: string;
+  password?: string;
+  code?: string;
 }
 
 /** The error code (403) of an action that needs the server code checked again, then the same request again. */
@@ -634,7 +639,7 @@ export const CHAT_API = {
    * when the policy still allows it. Refused while a turn runs or an approval waits.
    */
   restart: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/restart`,
-  /** POST `ReauthRequest`: check the server code again. */
+  /** POST `ReauthRequest`: check the password again (the server code on a portal with no account). */
   reauth: '/api/chat/reauth',
   /** GET: the chat policy (`{ bypass: { allowed } }`). */
   policy: '/api/chat/policy',

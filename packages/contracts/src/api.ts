@@ -8,11 +8,29 @@ export interface SessionStatus {
   authenticated: boolean;
   /** Whether new sign-ins are accepted. */
   enabled: boolean;
+  /**
+   * How this portal signs people in (T-118): `password` once an account exists (username and password; the server code is no longer a
+   * credential), `code` only on a portal with no account yet (a fresh or scratch install). Absent from an older server: read it as `code`.
+   */
+  signIn?: 'password' | 'code';
+  /** Who is signed in, when `authenticated` and signed in with a password; null for a code sign-in or nobody. */
+  user?: SignedInUser | null;
+}
+
+/** The signed-in person as the app shell shows them. */
+export interface SignedInUser {
+  id: string;
+  username: string;
+  displayName: string;
+  role: 'admin' | 'member';
 }
 
 /** Everything the admin view shows. */
 export interface AdminState {
+  /** The server code; empty once accounts exist (T-118): it is no longer a credential and is not shown. */
   code: string;
+  /** Whether the server code still signs in (only on a portal with no account yet, or `auth.codeLogin` on). */
+  codeLogin?: boolean;
   source: CodeSource;
   enabled: boolean;
   /** ISO time the code was last set (startup or rotation). */
@@ -66,9 +84,11 @@ export interface KeyUnlockResult {
   status: SystemStatus;
 }
 
-export interface LoginRequest {
-  code: string;
-}
+/**
+ * `POST /api/login`: a username and password (T-118), or the server code on a portal that has no account yet. Once an account exists a
+ * code is refused with one clear message.
+ */
+export type LoginRequest = { username: string; password: string; keepSignedIn?: boolean } | { code: string };
 
 /** Omit `code` to generate a new one. */
 export interface RotateCodeRequest {

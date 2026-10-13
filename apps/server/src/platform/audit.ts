@@ -3,7 +3,7 @@
 // Platform-wide table (`platform_audit`); each row names the person it concerns (`user_id`, nullable for the system): a user reads their
 // own rows, an admin reads all. `detail` holds names, ids, numbers and fixed codes only: never a secret, a URL or message text.
 
-import type { PlatformAuditEntry } from '@portal/contracts';
+import type { AuditRow, PlatformAuditEntry } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 
 export interface AuditInput {
@@ -15,6 +15,10 @@ export interface AuditInput {
   actorLabel?: string | null;
   subject?: string | null;
   detail?: Record<string, unknown>;
+  /** Identity, sharing, teams and denied decisions (identity PRD FR42; migration 401): how it went, from where, and whether the row is a security row kept a year. */
+  outcome?: 'ok' | 'denied' | 'failed';
+  ip?: string | null;
+  protected?: boolean;
 }
 
 export interface AuditFilter {
@@ -22,6 +26,9 @@ export interface AuditFilter {
   limit?: number;
   /** Rows with an id below this one (the next page). */
   before?: number;
+  /** Identity's filters (identity PRD §14): the exact actor string, and the outcome. */
+  actor?: string;
+  outcome?: 'ok' | 'denied' | 'failed';
 }
 
 const KIND = /^[a-z][a-z0-9_]{0,30}(?:\.[a-z][a-z0-9_]{0,30}){0,3}$/;
@@ -54,7 +61,7 @@ export class PlatformAudit {
     try {
       let detail = JSON.stringify(cleanDetail(e.actorLabel ? { ...e.detail, actorLabel: e.actorLabel } : e.detail));
       if (detail.length > DETAIL_MAX) detail = '{}';
-      db.prepare('INSERT INTO platform_audit (at, severity, kind, actor, user_id, subject, detail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      db.prepare('INSERT INTO platform_audit (at, severity, kind, actor, user_id, subject, detail, outcome, ip, protected) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
         this.now().toISOString(),
         e.severity ?? 'info',
         e.kind,
@@ -62,6 +69,9 @@ export class PlatformAudit {
         e.userId,
         e.subject?.slice(0, 200) ?? null,
         detail,
+        e.outcome ?? 'ok',
+        e.ip?.slice(0, 64) ?? null,
+        e.protected ? 1 : 0,
       );
     } catch (err) {
       console.error(`[platform] an audit row could not be written: ${(err as Error).message}`);
@@ -69,7 +79,7 @@ export class PlatformAudit {
   }
 
   /** The rows a caller may read: their own (`userId`), or every row for an admin (`userId` null). Newest first. */
-  list(filter: AuditFilter, userId: string | null): PlatformAuditEntry[] {
+  list(filter: AuditFilter, userId: string | null): AuditRow[] {
     const db = this.store.db;
     if (!db) return [];
     const where: string[] = [];
@@ -86,11 +96,19 @@ export class PlatformAudit {
       where.push('id < ?');
       args.push(filter.before);
     }
+    if (filter.actor) {
+      where.push('actor = ?');
+      args.push(filter.actor);
+    }
+    if (filter.outcome) {
+      where.push('outcome = ?');
+      args.push(filter.outcome);
+    }
     const limit = Math.max(1, Math.min(500, Math.floor(filter.limit ?? 100)));
     const rows = db
-      .prepare(`SELECT id, at, severity, kind, actor, user_id, subject, detail FROM platform_audit ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ${limit}`)
-      .all(...args) as { id: number; at: string; severity: PlatformAuditEntry['severity']; kind: string; actor: string; user_id: string | null; subject: string | null; detail: string }[];
-    return rows.map((r) => ({ id: r.id, at: r.at, severity: r.severity, kind: r.kind, actor: r.actor, userId: r.user_id, subject: r.subject, detail: JSON.parse(r.detail) as Record<string, unknown> }));
+      .prepare(`SELECT id, at, severity, kind, actor, user_id, subject, detail, outcome, ip FROM platform_audit ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ${limit}`)
+      .all(...args) as { id: number; at: string; severity: PlatformAuditEntry['severity']; kind: string; actor: string; user_id: string | null; subject: string | null; detail: string; outcome: AuditRow['outcome']; ip: string | null }[];
+    return rows.map((r) => ({ id: r.id, at: r.at, severity: r.severity, kind: r.kind, actor: r.actor, userId: r.user_id, subject: r.subject, detail: JSON.parse(r.detail) as Record<string, unknown>, outcome: r.outcome, ip: r.ip }));
   }
 
   /** Rows older than 90 days go. */
