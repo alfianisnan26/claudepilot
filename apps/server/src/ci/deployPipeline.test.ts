@@ -416,7 +416,8 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
   const job = readFileSync(join(w.root, 'applied.yaml'), 'utf8');
   assert.match(job, new RegExp(`value: "${w.sha}"`));
   assert.match(job, /image: registry\.test\/claudepilot\/workspace:dev-1/);
-  assert.match(job, /requests: \{cpu: 1000m/);
+  assert.match(job, /requests: \{cpu: 1000m, memory: 2Gi\}/);
+  assert.match(job, /- \{name: tmp, mountPath: \/tmp\}[\s\S]*emptyDir: \{medium: Memory, sizeLimit: 3Gi\}/, '/tmp is in memory (T-95 item 3): the suite was IO-bound on the overlay');
   assert.match(job, /podAntiAffinity[\s\S]*claudepilot\.managed: "true"/, 'it prefers a node without a development workspace pod');
   assert.match(job, /GATE_VERDICT_SH, value: "[A-Za-z0-9+/=]{100,}"/, 'the caller’s verdict script travels with the Job');
   assert.doesNotMatch(job, /nodeSelector/);
