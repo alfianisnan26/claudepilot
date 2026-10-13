@@ -44,7 +44,7 @@ Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIO
 ---- CUT LINE: nothing below starts before 7 is merged and deployed ----
 In rank order (details on each ticket): T-126 (item 5 local time first), T-129 (with T-122, before T-111), T-121 (after T-119 slice 1),
 T-122 (after T-121: audit with screenshots first), T-113, T-114, T-101, T-106, T-120 (after T-106; ClaudePilot only, D-25), T-28, T-32, T-24,
-T-26/T-27 (folded into T-134), T-30, T-33, T-123, T-132..T-135, T-137 by their rank tags (wave 3, motion), wave 4, T-130, T-131, and the fitOf/fit.ts unification (small; fills an idle slot).
+T-26/T-27 (folded into T-134), T-30, T-33, T-123, T-132..T-135, T-137 by their rank tags, then T-138 (rank-10a, Settings v2, D-32: audit first, agents read and propose only) (wave 3, motion), wave 4, T-130, T-131, and the fitOf/fit.ts unification (small; fills an idle slot).
 T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, never use that code, and tell the coordinator if they see it.
 
 ## NEEDS A HUMAN (only what a person can do; rewritten 14:3x from the tickets, after the owner's note)
