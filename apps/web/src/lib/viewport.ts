@@ -76,6 +76,10 @@ export function useVisualViewport(opts: { keyboardOnFocus?: boolean } = {}): Vis
   return box;
 }
 
-/** Inline style that pins a `fixed inset-x-0 top-0` page to the visual viewport (none until it's known). */
+/**
+ * Inline style that pins a `fixed inset-x-0 top-0` page to the visual viewport (none until it's known). It follows the viewport's
+ * offset only while the keyboard is up (iOS scrolls the page to keep the field in view). Otherwise the offset is just the page
+ * rubber-banding under a finger, and following it dragged the whole session screen up and down with every swipe on its header.
+ */
 export const pinnedToViewport = (box: VisualViewportBox | null) =>
-  box ? { height: box.height, transform: `translateY(${box.top}px)` } : undefined;
+  box ? { height: box.height, ...(box.keyboard ? { transform: `translateY(${box.top}px)` } : null) } : undefined;

@@ -81,6 +81,15 @@
   --chart-1: #26a876;
 }
 
+/*
+ * The page never rubber-bands or pulls to refresh at its ends: on a phone the header, the tab bar and the session screen stay
+ * where they are and only the content inside scrolls (a drag on the header used to move the whole page).
+ */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+
 /* A slider (effort): a thin track filled up to the thumb (`--fill`), and a round thumb that lifts off it. */
 @utility range {
   -webkit-appearance: none;

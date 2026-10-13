@@ -334,7 +334,9 @@ export function SessionPage() {
   ];
 
   return (
-    <div className="fixed inset-x-0 top-0 h-dvh overflow-hidden bg-bg text-ink" style={pinnedToViewport(viewport)}>
+    // touch-action: pinch-zoom: a drag that starts on the header, the card or the composer pans nothing (it used to scroll the page behind and drag this
+    // whole screen with it); the transcript and the panels are their own scrollers and keep scrolling.
+    <div className="fixed inset-x-0 top-0 h-dvh overflow-hidden bg-bg text-ink [touch-action:pinch-zoom]" style={pinnedToViewport(viewport)}>
       <header
         className={cn(
           'glass absolute inset-x-0 top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center gap-2 border-b px-2 pt-[env(safe-area-inset-top)] sm:px-3',

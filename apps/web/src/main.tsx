@@ -2,10 +2,13 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './app/App';
 import { installScrollGuard } from './lib/scrollGuard';
+import { installNoSheetDrag } from './lib/sheetDrag';
 import './index.css';
 
 // A dialog and the palette that overlap can leave the page locked ("Settings cannot be scrolled"): this clears a lock nobody holds.
 installScrollGuard();
+// The header and grab bar of a phone sheet (the More menu, every dialog) are not drag handles: only the content inside scrolls.
+installNoSheetDrag();
 
 // A deploy replaces the hashed script files under a tab that stayed open, so its next lazy page cannot load. Reload once
 // to pick up the new build (not in a loop: a second failure inside 15 s falls through to the error page).
