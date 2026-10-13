@@ -250,6 +250,9 @@ async function sessionsRow(cfg, chat) {
   const t = Date.now();
   while (Date.now() - t < 30000 && !(chat.tasksOnly && chat.running() >= 2)) await sleep(150);
   if (!(await open(cfg, '/admin/sessions'))) return check('sessions page loads', false);
+  // It counts as working (T-41): the list opens on Idle, so pick the Working chip.
+  await waitFor(`!!${byText('main button', /^Working/)}`, 5000);
+  await click(byText('main button', /^Working/));
   const want = cfg.w < 640 ? /Working/ : /Working · 2 agents/;
   // The row's own line (its title and state), not the filter chips (one of them says Working too).
   const rowText = `([...document.querySelectorAll('main p')].find((p) => p.innerText.trim() === 'Sub-agents QA')?.parentElement?.innerText ?? '')`;
