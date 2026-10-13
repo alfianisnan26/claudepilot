@@ -18,6 +18,7 @@ export interface RefColumn {
 /** The converted columns, in the order they are rewritten. A module joins this list when it reads and writes through the registry. */
 export const REF_COLUMNS: readonly RefColumn[] = [
   { table: 'tickets', column: 'workspace_id' },
+  { table: 'chat_sessions', column: 'workspace_id' },
 ];
 
 const IDENT = /^[a-z_][a-z0-9_]{0,62}$/;

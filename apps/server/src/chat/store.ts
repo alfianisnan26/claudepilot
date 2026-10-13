@@ -2,6 +2,7 @@
 // and never a secret — only allowlisted fields of each event are kept, every stored text passes the
 // credential redactor (redact.ts), and large text is truncated.
 
+import type { WorkspaceRefs } from '../workspaces/identity.js';
 import type {
   WorkspaceClaude,
   ChatAuditEntry,
@@ -262,9 +263,31 @@ export class ChatStore {
   /** Nesting depth of {@link transaction} (SQLite has no nested BEGIN). */
   #txDepth = 0;
 
-  constructor(store: Store, now: () => Date = () => new Date()) {
+  /** The workspaces' registry (T-42 slice 3): a session's workspace is stored as the stable id and read back as the key. Absent: as given. */
+  readonly #refs: WorkspaceRefs | undefined;
+
+  constructor(store: Store, now: () => Date = () => new Date(), workspaceRefs?: WorkspaceRefs) {
     this.#store = store;
     this.#now = now;
+    this.#refs = workspaceRefs;
+  }
+
+  /* ---------- chat_sessions.workspace_id (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
+
+  /**
+   * A session row with its workspace as the key, whichever form it is stored in. Everything past these queries (the controller, which keys
+   * live processes and runtime calls by the key) sees what it saw before.
+   */
+  #keyed<R extends ChatSessionRow | undefined>(row: R): R {
+    if (!row || !this.#refs) return row;
+    const key = this.#refs.keyOf(row.workspace_id);
+    return key === row.workspace_id ? row : ({ ...row, workspace_id: key } as R);
+  }
+
+  /** `workspace_id IN (…)`: every form one workspace's rows may hold while the move runs. */
+  #inWorkspace(key: string): { sql: string; args: string[] } {
+    const forms = this.#refs ? this.#refs.storedForms(key) : [key];
+    return { sql: `workspace_id IN (${forms.map(() => '?').join(', ')})`, args: forms };
   }
 
   /**
@@ -341,7 +364,7 @@ export class ChatStore {
       )
       .run(
         opts.id,
-        opts.workspaceId,
+        this.#refs ? this.#refs.storedRef(opts.workspaceId) : opts.workspaceId,
         opts.cwd,
         opts.title,
         opts.origin,
@@ -374,26 +397,30 @@ export class ChatStore {
   }
 
   get(id: string): ChatSession | null {
-    const row = this.#db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(this.resolveId(id)) as ChatSessionRow | undefined;
+    const row = this.#keyed(this.#db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(this.resolveId(id)) as ChatSessionRow | undefined);
     return row ? this.toSession(row) : null;
   }
 
   /** The raw session row (for the controller's segment/offset/cwd/process bookkeeping). */
   row(id: string): ChatSessionRow | null {
-    return (this.#db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(this.resolveId(id)) as ChatSessionRow | undefined) ?? null;
+    return this.#keyed(this.#db().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(this.resolveId(id)) as ChatSessionRow | undefined) ?? null;
   }
 
   /** Sessions, newest activity first; optionally one workspace's, one ticket's, or one parent's children. */
   list(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}): ChatSession[] {
     const where: string[] = [];
     const vals: string[] = [];
-    if (filter.workspaceId) (where.push('workspace_id = ?'), vals.push(filter.workspaceId));
+    if (filter.workspaceId) {
+      const one = this.#inWorkspace(filter.workspaceId);
+      where.push(one.sql);
+      vals.push(...one.args);
+    }
     if (filter.ticketId) (where.push('ticket_id = ?'), vals.push(filter.ticketId));
     if (filter.parentId) (where.push('parent_id = ?'), vals.push(filter.parentId));
     const rows = this.#db()
       .prepare(`SELECT * FROM chat_sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY last_activity_at DESC, created_at DESC`)
       .all(...vals) as ChatSessionRow[];
-    return rows.map((r) => this.toSession(r));
+    return rows.map((r) => this.toSession(this.#keyed(r)));
   }
 
   /** Sessions that report to `from` report to `to` instead (a transfer: the successor carries on as the parent). */
@@ -403,12 +430,13 @@ export class ChatStore {
 
   /** Sessions whose process should be running (for liveness checks and reattaching after a restart). */
   liveRows(): ChatSessionRow[] {
-    return this.#db().prepare(`SELECT * FROM chat_sessions WHERE process = 'live' AND state != 'ended'`).all() as ChatSessionRow[];
+    return (this.#db().prepare(`SELECT * FROM chat_sessions WHERE process = 'live' AND state != 'ended'`).all() as ChatSessionRow[]).map((r) => this.#keyed(r));
   }
 
   /** One workspace's sessions that haven't ended (whatever their process), oldest first. */
   workspaceRows(workspaceId: string): ChatSessionRow[] {
-    return this.#db().prepare(`SELECT * FROM chat_sessions WHERE workspace_id = ? AND state != 'ended' ORDER BY created_at, id`).all(workspaceId) as ChatSessionRow[];
+    const one = this.#inWorkspace(workspaceId);
+    return (this.#db().prepare(`SELECT * FROM chat_sessions WHERE ${one.sql} AND state != 'ended' ORDER BY created_at, id`).all(...one.args) as ChatSessionRow[]).map((r) => this.#keyed(r));
   }
 
   toSession(row: ChatSessionRow): ChatSession {
@@ -1186,9 +1214,10 @@ export class ChatStore {
 
   /** Sessions on that Claude that haven't ended (Default's include rows from before Claudes, with no claude_id). */
   openSessionsOnClaude(workspaceId: string, claudeId: string, isDefault: boolean): number {
+    const one = this.#inWorkspace(workspaceId);
     const row = this.#db()
-      .prepare(`SELECT COUNT(*) AS n FROM chat_sessions WHERE workspace_id = ? AND state != 'ended' AND (claude_id = ? OR (? AND claude_id = ''))`)
-      .get(workspaceId, claudeId, isDefault ? 1 : 0) as { n: number };
+      .prepare(`SELECT COUNT(*) AS n FROM chat_sessions WHERE ${one.sql} AND state != 'ended' AND (claude_id = ? OR (? AND claude_id = ''))`)
+      .get(...one.args, claudeId, isDefault ? 1 : 0) as { n: number };
     return row.n;
   }
 

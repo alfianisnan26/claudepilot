@@ -427,6 +427,8 @@ const usageSpend = createUsageSpend({
   },
   workspaceExists: (id) => chatController.workspaceExists?.(id) ?? true,
   notify: () => notify('claudeusage'),
+  // Chat sessions store their workspace as the stable id (T-42 slice 3); usage groups by the key.
+  workspaceKeyOf: (stored) => workspaces.identities.keyOf(stored) ?? stored,
 });
 chatController.onUsage = (turn, rows) => usageSpend.onTurn(turn, rows);
 // A side question's row (`kind = 'side'`, chat PRD §20) is a request like a turn's: budgets are evaluated and spikes looked for right then, not at the next turn.
