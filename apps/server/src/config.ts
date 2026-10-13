@@ -71,6 +71,18 @@ export const config = {
   browser: {
     image: env('PORTAL_BROWSER_IMAGE') ?? 'claudepilot-browser:latest',
     imageContext: `${root}images/browser`,
+    /**
+     * The browser image on Kubernetes targets (browser PRD §10.2), pulled by the nodes, so a registry reference: unset, Kubernetes
+     * workspaces get no browser.
+     */
+    kubeImage: env('PORTAL_K8S_BROWSER_IMAGE'),
+    /**
+     * The per-pod egress policy of a Kubernetes workspace with a browser (PRD §13 Network, Q12): `isolate` (the default) denies private,
+     * link-local and cluster ranges but DNS, the portal and `PORTAL_K8S_BROWSER_EGRESS_ALLOW` (CIDRs or addresses, `:port` optional,
+     * comma-separated); `off` is the admin's opt-out, audited per workspace. It covers the whole pod, Claude Code included.
+     */
+    kubeEgress: env('PORTAL_K8S_BROWSER_EGRESS') === 'off' ? ('off' as const) : ('isolate' as const),
+    kubeEgressAllow: env('PORTAL_K8S_BROWSER_EGRESS_ALLOW'),
   },
   workspaces: {
     /** Docker daemons; a target shows up when its socket exists. */

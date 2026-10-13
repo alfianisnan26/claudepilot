@@ -23,15 +23,23 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
   again (T-42 slice 1 let "" through: the `?.` call skipped plainName; expect the coordinator's gate to fail on qa/runtimes.test.ts, 2 tests)
   and chat/host.test no longer inherits this pod's PILOT_* env. The fast gate on 97d25c7: 2548 pass, 5 fail (3 load-flaky, passed alone).
 
-## IN FLIGHT (three sub-agents, opus, dispatched 12:50)
-- T-42 slice 3 (stored refs move to the stable id: tickets + the background rewrite, migration 714; then sessions, pool assignments, agent access,
-  CI remotes as far as an hour allows): worktree dev-track-a-connect, branch dev/workspace-id, label workspace-id. Migrations 714-715.
-- T-97 browser pool on Kubernetes (B3): worktree dev-automove-web, branch dev/browser-k8s (WIP committed as 9fca355), rig dev-rig-browser. Migrations 735-736.
-- T-98 workspace Resources: worktree dev-gate-job, branch dev/workspace-resources from 97d25c7, label workspace-resources. Migrations 716-717.
+## IN FLIGHT (three sub-agents, opus)
+- T-102 session screen (dispatched 13:54): worktree dev-track-a-connect, branch dev/t102-session-screen from 2466ff1, label t102-session-screen,
+  scratch port > 3450. Item 1 (Tools changed chip: Restart after this turn, auto-apply for autonomous sessions, Bypass kept or no auto-restart),
+  then the popover placement, then the header blur and badge with a session-states.mjs check. Migrations 755-756 if any.
+- T-100 Sessions list (dispatched 13:56): worktree dev-automove-web, branch dev/t100-sessions-list from 2466ff1, label t100-sessions-list, scratch
+  port > 3460; the clipped rows first (reproduced, fixed at the cause, a harness check), then the attention order and grouping on the existing chips.
+- T-97 DONE on branch dev/browser-k8s (6ec29bc, 7 commits, opus): proved on the rig (Playwright call, live view, handoff, CDP local only); browser
+  requests 100m / 512Mi; kube.test 17/17, areas 291/292 (1 skipped); rig deleted. Merge after the running gate; unify its fitOf with T-98's fit.ts
+  at that merge. NEEDS A HUMAN on the ticket: NetworkPolicy is not enforced on the cluster; PORTAL_K8S_BROWSER_IMAGE tag; the pool assignment restart.
+- T-98 workspace Resources (since 12:50): worktree dev-gate-job, branch dev/workspace-resources; told to build workspaces/fit.ts first (one fit
+  check for apply, create and T-97), push it early, and remove scripts/ws-resources.sh with its allow rule when the feature lands. Migrations 716-717.
+- T-42 slice 3 DONE: merged as 2466ff1 (tickets, chat sessions, agent access; migration 714; 1005 area tests, 0 fail); fast gate running (whole
+  suite). Slice 4 (pool assignments, CI, the small tables) needs its own ticket (asked on T-42).
 
 ## NEXT (in order: the coordinator's rank-NN tags, 13:33; ticket_list tag=rank-NN lists them)
-- rank 01 T-42, 02 T-95, 03 T-99, 04 T-102, 05 T-100, 05b T-104, 06 T-98, 07 T-97, 08 T-101, 09 T-28, 10 T-32, 11 T-24, 12 T-26, 13 T-27, 14 T-30, 15 T-33,
-  then T-12, T-13, T-10, T-11, T-14, T-15. De-duplication: ONE fit check (T-98 builds workspaces/fit.ts first; T-97 and workspace create use it;
+- rank 01 T-42, 02 T-95, 02b T-105 (overrides the order: being built by the orchestrator in dev-automove-model, branch dev/t105-automove-proven), 03 T-99, 04 T-102, 05 T-100, 05b T-104, 06 T-98, 07 T-97, 08 T-101, 09 T-28, 10 T-32, 11 T-24, 12 T-26, 13 T-27, 14 T-30, 15 T-33,
+  14b T-106 (knowledge skill + agent attachments over MCP, after T-101), then T-12, T-13, T-10, T-11, T-14, T-15. The supervisor moves an IDLE chat at 10% left meanwhile (stopgap). De-duplication: ONE fit check (T-98 builds workspaces/fit.ts first; T-97 and workspace create use it;
   scripts/ws-resources.sh and its allow rule go when T-98 lands); T-100 uses the existing chip code (no ChipList, T-14 later); T-12 does only
   what T-95 item 2 and T-32 left; T-102's queued or automatic restart keeps Bypass or does not happen; T-33 rewritten (id + `label` per entity;
   the workspace rename is T-42's). Running sub-agents were told (13:37).
@@ -47,18 +55,16 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
 - After each merge: gate-quick under the lock, push origin and pilot. Full gate every two hours as a Job. One deploy a day at most; the next one
   carries T-42 slice 3, T-97, T-98, T-100, T-102 as they land.
 
-## NEEDS A HUMAN
-- APPROVE the deploy started by this session (the run number is on T-42 and below once started). Then check on the phone: tool rows (T-24),
-  ticket Bump (T-28), CI Bump (T-32), the workspace sheet's Name and ID rows and a rename (T-42), that this chat survives a finished sub-agent (T-99).
-- The coordinator relabels kubernetes/kohi-event to isnan-pod after the release (workspace_rename or the sheet).
-- Live tickets to check on the phone (deploy #13): T-1 Pinned and swipe, T-2 no sideways scroll, T-3 image upload, T-5/T-31/T-41 sub-agent rows,
-  T-25 Mute similar, T-34 Home page, T-6 MCP client labels, T-29 auto move card.
-- Run deploy/k3s/seed-features.sh: chat.trust.autoPermissionOnly (T-38) on (automove.allowBypass is on already).
-- "Deploy waits" on the iPhone when a deploy holds for approval. Multi-user (parked): the `admin` password lives nowhere. Usage page "side
-  questions": decide. T6 (Connect): whatever needs Docker, macOS, Windows or a second cluster.
-- After T-97 is deployed: set PORTAL_K8S_BROWSER_IMAGE in deploy/k3s/portal.yaml and assign a Browser pool to kohi-event (the report says the tag).
-- The previous orchestrator session ended on "a second control response for request 2e919c3c" (controller #acceptControlResponse: a reply to a
-  request already completed): not in T-99; the raw lines are in ~/.claudepilot/sessions/fe3df8bc-…/out.*.jsonl if it happens again.
+## NEEDS A HUMAN (only what a person can do; rewritten 14:3x from the tickets, after the owner's note)
+- On the iPhone (installed PWA, 390 px, light and dark), check what is live in 2026.10.13-5: T-1 Pinned and swipe (right = Pin, left = Archive);
+  T-2 no sideways scroll on any page; T-3 an image attaches and uploads in this Kubernetes workspace; T-5 sub-agents in their own rows, "Working ·
+  N agents", "Session finished" only at real idle; T-24 tool rows open to Input and Output blocks with real line breaks and shell colouring, the
+  approval card the same; T-25 Mute similar on a notification; T-28 Bump on a ticket pushes it into a running session (priority or question);
+  T-32 Bump on a CI run (Fix or Ask) and the auto-report of a finished run to the session that started it; T-34 the Home page as the first page;
+  T-42 the workspace sheet shows the label isnan-pod with the id next to it, every old link and MCP call by kubernetes/kohi-event still works;
+  T-99 this chat survives a finished sub-agent (no "Ended for integrity"), and CI works within a minute of a pod restart.
+- Open questions parked on tickets: T-97 (NetworkPolicy not enforced on the cluster; the browser image tag and the pool assignment after the
+  next deploy), T-95 item 4 (close if the run summary already reports flaky-passed-alone), T-42 slice 4 (needs its own ticket number).
 
 ## DECISIONS
 - 13:25 (coordinator) Deploy run 16 went red in the gate on qa/runtimes.test.ts (the empty-name bug of T-42 slice 1); fixed upstream as dca2a99

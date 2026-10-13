@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { AppError } from '@isnanme/core';
 import { PORTAL_AGENT_TOKEN_PREFIX } from '@portal/contracts';
 import type { Store } from '../store/store.js';
+import type { WorkspaceRefs } from '../workspaces/identity.js';
 import type { PortalPrincipal } from './registry.js';
 
 // Per-session agent tokens (interface I8; portal-mcp PRD §10.1 as amended). The portal mints a `cpst_` token for ONE
@@ -78,11 +79,31 @@ export class AgentAccess implements AgentTokenMinter {
   onChange?: () => void;
   /** Called when a workspace's opt-in is turned on or off (what a lockdown allowlist must admit changes with it). */
   onAccessChange?: (workspaceId: string) => void;
+  /**
+   * The workspaces' registry (T-42 slice 3): the opt-in and the tokens store the workspace's stable id and read it back as the key the rest of
+   * the portal speaks (a token's principal carries the key). Rows written before (a key) read and match as they are. index.ts sets it; unset,
+   * stored as given.
+   */
+  workspaceRefs?: WorkspaceRefs;
 
   constructor(
     private readonly store: Store,
     private readonly o: AgentAccessOptions,
   ) {}
+
+  /** Every form one workspace's rows may hold while the move to the stable id runs. */
+  #forms(workspaceId: string): { sql: string; args: string[] } {
+    const forms = this.workspaceRefs ? this.workspaceRefs.storedForms(workspaceId) : [workspaceId];
+    return { sql: `workspace_id IN (${forms.map(() => '?').join(', ')})`, args: forms };
+  }
+
+  #stored(workspaceId: string): string {
+    return this.workspaceRefs?.storedRef(workspaceId) ?? workspaceId;
+  }
+
+  #key(stored: string): string {
+    return this.workspaceRefs?.keyOf(stored) ?? stored;
+  }
 
   get #now(): Date {
     return (this.o.now ?? (() => new Date()))();
@@ -100,16 +121,31 @@ export class AgentAccess implements AgentTokenMinter {
 
   enabled(workspaceId: string): boolean {
     try {
-      return !!this.#db?.prepare('SELECT 1 AS x FROM pmcp_agent_access WHERE workspace_id = ?').get(workspaceId);
+      // On what is stored: the opt-in of a REMOVED workspace (its id) is not the opt-in of a new workspace that took the name.
+      const mine = this.#forms(workspaceId);
+      return !!this.#db?.prepare(`SELECT 1 AS x FROM pmcp_agent_access WHERE ${mine.sql}`).get(...mine.args);
     } catch {
       return false; // no such table (a failed migration): nobody has opted in
     }
   }
 
+  /** A stored reference that stands for a live workspace: a key (as before slice 3), or the id of one not removed. */
+  #isLive(stored: string): boolean {
+    if (!this.workspaceRefs) return true;
+    const key = this.#key(stored);
+    return this.workspaceRefs.storedForms(key).includes(stored);
+  }
+
+  /** The opt-in of the workspace a token was minted for, by what the token stored: its own workspace's, never a successor's of that name. */
+  #enabledAsStored(stored: string): boolean {
+    return this.#isLive(stored) && this.enabled(this.#key(stored));
+  }
+
   /** Workspaces that opted in. */
   enabledWorkspaces(): string[] {
     const rows = this.#db?.prepare('SELECT workspace_id FROM pmcp_agent_access ORDER BY workspace_id').all() as { workspace_id: string }[] | undefined;
-    return (rows ?? []).map((r) => r.workspace_id);
+    // Only live workspaces' opt-ins count (a removed one's stays on record as its id, which reads as no live workspace's key).
+    return [...new Set((rows ?? []).filter((r) => this.#isLive(r.workspace_id)).map((r) => this.#key(r.workspace_id)))].sort();
   }
 
   /** Turns agent access on or off for a workspace. Turning it off revokes every token its sessions hold. */
@@ -120,9 +156,11 @@ export class AgentAccess implements AgentTokenMinter {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}\/[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(workspaceId)) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.');
     let revoked = 0;
     const was = this.enabled(workspaceId);
-    if (enabled) db.prepare('INSERT INTO pmcp_agent_access (workspace_id, enabled_at) VALUES (?, ?) ON CONFLICT (workspace_id) DO NOTHING').run(workspaceId, this.#now.toISOString());
-    else {
-      db.prepare('DELETE FROM pmcp_agent_access WHERE workspace_id = ?').run(workspaceId);
+    if (enabled) {
+      if (!was) db.prepare('INSERT INTO pmcp_agent_access (workspace_id, enabled_at) VALUES (?, ?) ON CONFLICT (workspace_id) DO NOTHING').run(this.#stored(workspaceId), this.#now.toISOString());
+    } else {
+      const mine = this.#forms(workspaceId);
+      db.prepare(`DELETE FROM pmcp_agent_access WHERE ${mine.sql}`).run(...mine.args);
       revoked = this.revokeWorkspace(workspaceId, 'agent access turned off');
     }
     this.onChange?.();
@@ -135,7 +173,12 @@ export class AgentAccess implements AgentTokenMinter {
     const rows = this.#db
       ?.prepare('SELECT workspace_id, count(*) AS n FROM pmcp_agent_tokens WHERE revoked_at IS NULL AND expires_at > ? GROUP BY workspace_id')
       .all(this.#now.toISOString()) as { workspace_id: string; n: number }[] | undefined;
-    return new Map((rows ?? []).map((r) => [r.workspace_id, r.n]));
+    const out = new Map<string, number>();
+    for (const r of rows ?? []) {
+      const key = this.#key(r.workspace_id);
+      out.set(key, (out.get(key) ?? 0) + r.n);
+    }
+    return out;
   }
 
   liveTotal(): number {
@@ -171,7 +214,7 @@ export class AgentAccess implements AgentTokenMinter {
     db.prepare('INSERT INTO pmcp_agent_tokens (id, token_hash, workspace_id, session_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)').run(
       id,
       hashOf(secret),
-      workspaceId,
+      this.#stored(workspaceId),
       sessionId,
       now.toISOString(),
       new Date(now.getTime() + AGENT_TOKEN_TTL_MS).toISOString(),
@@ -194,7 +237,8 @@ export class AgentAccess implements AgentTokenMinter {
   }
 
   revokeWorkspace(workspaceId: string, reason: string): number {
-    return this.#revoke('workspace_id = ?', [workspaceId], reason);
+    const mine = this.#forms(workspaceId);
+    return this.#revoke(mine.sql, mine.args, reason);
   }
 
   /** Every live agent token (a lockdown, or "revoke all"). */
@@ -213,10 +257,13 @@ export class AgentAccess implements AgentTokenMinter {
     if (!secret.startsWith(PORTAL_AGENT_TOKEN_PREFIX) || secret.length < 20 || secret.length > 128) return { ok: false, reason: 'unknown' };
     const row = this.#db?.prepare('SELECT id, workspace_id, session_id, vaults, expires_at, revoked_at FROM pmcp_agent_tokens WHERE token_hash = ?').get(hashOf(secret)) as TokenRow | undefined;
     if (!row) return { ok: false, reason: 'unknown' };
+    // The token's workspace as stored decides (a removed workspace's token never passes as a new one's); the principal carries the key.
+    const stored = row.workspace_id;
+    row.workspace_id = this.#key(stored);
     if (row.revoked_at) return { ok: false, reason: 'revoked', tokenId: row.id };
     const now = this.#now;
     if (Date.parse(row.expires_at) <= now.getTime()) return { ok: false, reason: 'expired', tokenId: row.id };
-    if (!this.enabled(row.workspace_id)) {
+    if (!this.#enabledAsStored(stored)) {
       this.#revoke('id = ?', [row.id], 'agent access turned off');
       return { ok: false, reason: 'disabled', tokenId: row.id };
     }

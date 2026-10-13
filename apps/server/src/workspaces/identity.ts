@@ -13,6 +13,17 @@ import type { DatabaseSync } from 'node:sqlite';
 import { normalizeWorkspaceLabel, STABLE_WORKSPACE_ID, workspaceId, type Workspace } from '@portal/contracts';
 import { PLAIN_NAME, WORKSPACE_ID } from '../names.js';
 import type { RuntimeNames } from './runtime.js';
+import { pinRefsOfRemoved } from './refRewrite.js';
+
+/**
+ * What a module that stores workspace references needs from the registry (T-42 slice 3): `storedRef` on save (the stable id), `keyOf` on
+ * read (the `<target>/<name>` key the rest of the portal speaks), `storedForms` in a filter (every form a row may hold while the move runs).
+ */
+export interface WorkspaceRefs {
+  storedRef(ref: string | null): string | null;
+  keyOf(stored: string | null): string | null;
+  storedForms(ref: string): string[];
+}
 
 export interface WorkspaceIdentity {
   /** `ws_` and 12 hex digits. */
@@ -63,7 +74,7 @@ export function legacyRuntimeName(kind: 'docker' | 'kubernetes', name: string): 
  * The registry. Reads are from memory (loaded once), so a runtime can ask on every call; writes go through to the database when it is
  * writable. A portal whose database cannot be written (read-only, or no database at all) keeps what it learns in memory only.
  */
-export class WorkspaceIdentities implements RuntimeNames {
+export class WorkspaceIdentities implements RuntimeNames, WorkspaceRefs {
   readonly #byId = new Map<string, WorkspaceIdentity>();
   /** The key alias (`<target>/<name it was made with>`) -> the live workspace that holds it: what runtimes and stored references use. */
   readonly #live = new Map<string, WorkspaceIdentity>();
@@ -159,6 +170,37 @@ export class WorkspaceIdentities implements RuntimeNames {
     return this.#forms.get(formKey(ref.slice(0, slash), normalizeWorkspaceLabel(ref.slice(slash + 1)))) ?? null;
   }
 
+  /* ---------- Stored references (slice 3): written as the id, read as the key ---------- */
+
+  /**
+   * What a row should store for a workspace reference: the stable id when the reference resolves to a live workspace, else the reference as it
+   * is (a workspace the portal has no record of, or none: null). Every converted module writes through this on save.
+   */
+  storedRef(ref: string | null): string | null {
+    if (ref === null) return null;
+    return this.resolve(ref)?.id ?? ref;
+  }
+
+  /**
+   * The key (`<target>/<name>`) a stored reference stands for, which every runtime call and every unconverted module still speaks: a stable id
+   * gives its workspace's key (a removed one's too, so history still reads); anything else is returned as it is (an old row: the alias).
+   */
+  keyOf(stored: string | null): string | null {
+    if (stored === null || !STABLE_WORKSPACE_ID.test(stored)) return stored;
+    this.#load();
+    return this.#byId.get(stored)?.legacyId ?? stored;
+  }
+
+  /**
+   * Every form a reference to this workspace may be stored under while the move runs: its key and its stable id. A filter matches either
+   * (`IN (…)`). A key with no live workspace gives the key alone, so rows of a REMOVED workspace (stored with its id) never match a new
+   * workspace that took its name.
+   */
+  storedForms(ref: string): string[] {
+    const w = this.resolve(ref);
+    return w ? [w.legacyId, w.id] : [ref];
+  }
+
   /** `{ [<target>/<name>]: label }` for every live workspace that has a label of its own (was renamed). */
   labels(): Record<string, string> {
     this.#load();
@@ -237,6 +279,9 @@ export class WorkspaceIdentities implements RuntimeNames {
   retire(target: string, name: string): void {
     const w = this.of(target, name);
     if (!w) return;
+    // Rows still holding its key (not yet rewritten) keep this workspace's id, not the name a later workspace may take (slice 3).
+    const db = this.store?.db;
+    if (db && this.store?.writable) pinRefsOfRemoved(db, w.legacyId, w.id);
     w.removedAt = this.now().toISOString();
     this.#remember(w);
     this.#write('UPDATE workspace_identities SET removed_at = ? WHERE id = ?', w.removedAt, w.id);

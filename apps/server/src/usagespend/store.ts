@@ -113,6 +113,12 @@ const inList = (n: number): string => `(${Array.from({ length: n }, () => '?').j
 export class SpendStore {
   constructor(private readonly store: Store) {}
 
+  /**
+   * A session's stored workspace as the `<target>/<name>` key usage is grouped and filtered by (T-42 slice 3: `chat_sessions` stores the
+   * stable id). index.ts sets it to the workspaces' registry; as it is, a stored value is taken as it is.
+   */
+  workspaceKeyOf: (stored: string) => string = (stored) => stored;
+
   get writable(): boolean {
     return this.store.writable;
   }
@@ -297,6 +303,7 @@ export class SpendStore {
             .prepare(`SELECT id, workspace_id, claude_id, parent_id, ticket_id, title, state FROM chat_sessions WHERE id IN ${inList(part.length)}`)
             .all(...part) as unknown as { id: string; workspace_id: string; claude_id: string; parent_id: string | null; ticket_id: string | null; title: string; state: string }[];
           for (const r of live) {
+            r.workspace_id = this.workspaceKeyOf(r.workspace_id);
             out.set(r.id, {
               sessionId: r.id,
               workspaceId: r.workspace_id,
@@ -363,6 +370,7 @@ export class SpendStore {
       const r = db.prepare('SELECT workspace_id, claude_id, parent_id, ticket_id, title FROM chat_sessions WHERE id = ?').get(sessionId) as unknown as
         | { workspace_id: string; claude_id: string; parent_id: string | null; ticket_id: string | null; title: string }
         | undefined;
+      if (r) r.workspace_id = this.workspaceKeyOf(r.workspace_id);
       return r ? { workspaceId: r.workspace_id, claudeId: this.claudeKey(r.claude_id, r.workspace_id), parentId: r.parent_id, ticketId: r.ticket_id, title: r.title } : null;
     });
   }

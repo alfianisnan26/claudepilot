@@ -57,13 +57,14 @@ export function BrowserConfiguration({ workspace, assignments }: { workspace: Wo
           </span>
         )}
         {status?.sandbox === 'off' && <Badge tone="warning">Sandbox off</Badge>}
-        {running && status && status.state !== 'none' && status.state !== 'workspace_stopped' && (
+        {running && status && status.state !== 'none' && status.state !== 'workspace_stopped' && status.state !== 'restart_needed' && (
           <Link to={`/admin/workspaces/${id}/browser`} className="ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-semibold text-accent hover:bg-accent-soft">
             <MonitorPlay className="size-4" /> Open
           </Link>
         )}
       </div>
       {status?.state === 'error' && status.detail && <p className="text-danger">{status.detail}</p>}
+      {status && status.state !== 'error' && status.detail && <p className="text-muted">{status.detail}</p>}
       {failed && (
         <div className="flex items-start gap-2">
           <p className="min-w-0 flex-1 text-danger">Tools install failed{config?.install?.error ? `: ${config.install.error}` : ''}</p>

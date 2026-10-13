@@ -529,7 +529,8 @@ export class ChatController {
 
   constructor(store: Store, workspaces: Workspaces, opts: ChatControllerOptions = {}) {
     this.#store = store;
-    this.#chat = new ChatStore(store);
+    // Sessions store their workspace as the stable id and read it as the key (T-42 slice 3); everything here keeps the key.
+    this.#chat = new ChatStore(store, undefined, workspaces.identities);
     this.#workspaces = workspaces;
     // Chat content (I9): attachments in, artifacts out. `installHost` is set after construction, so it is read when used.
     this.#content = new ChatContent({
