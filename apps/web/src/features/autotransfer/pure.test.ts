@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AutoTransferEvent } from '@portal/contracts';
-import { autoMarks, droppedText, headline, modeChoices, moveItem, offer, parseThreshold, pctText, reasonText, toggleItem, undoFor, whyText } from './pure';
+import { autoMarks, droppedText, headline, inPlace, modeChoices, moveItem, offer, parseThreshold, pctText, reasonText, toggleItem, undoFor, whyText } from './pure';
 
 const m = (value: number) => ({ value, basis: 'measured' as const });
 
@@ -86,4 +86,20 @@ test('why nothing happens, in a few words; nothing to say for the ordinary codes
 test('a chat may choose Automatic only when the platform allows it', () => {
   assert.deepEqual(modeChoices('auto'), ['default', 'off', 'ask', 'auto']);
   assert.deepEqual(modeChoices('ask'), ['default', 'off', 'ask']);
+});
+
+test('T-29: the card names the limit that is low and offers a model change in words', () => {
+  const facts = { leftPct: m(5), thresholdPct: 10, resetsAt: { value: '2026-10-12T15:00:00Z', basis: 'measured' as const }, destLeftPct: m(50), limit: { key: 'week_opus', label: 'Opus', kind: 'model' as const } };
+  const here = { from: { id: 'w', name: 'Work' }, to: { id: 'w', name: 'Work', model: 'sonnet' }, reason: 'low' as const, facts, handoff: 'skip' as const };
+  assert.equal(headline(here), 'Work: Opus limit has 5 % left');
+  assert.equal(offer(here), 'Use Sonnet here (50 % left)');
+  assert.ok(inPlace(here));
+  assert.equal(
+    reasonText(here, true),
+    'Its Opus limit, which stops only this model, has 5 % left (measured), at or under the threshold of 10 %. Sonnet here has 50 % left (measured). The chat stays on this Claude and changes to Sonnet: the conversation stays as it is, nothing is handed off.',
+  );
+  const away = { ...here, to: { id: 'h', name: 'Home', model: 'sonnet' }, handoff: 'ask' as const };
+  assert.equal(offer(away), 'Move to Home on Sonnet (50 % left)');
+  assert.ok(!inPlace(away));
+  assert.equal(headline({ ...here, reason: 'exhausted' }), 'Work: Opus limit is used up');
 });

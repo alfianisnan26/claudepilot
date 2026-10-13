@@ -10,15 +10,26 @@ export function pctText(f: Figure | undefined | null): string {
   return `${v} %${f.basis === 'estimate' ? ' est.' : ''}`;
 }
 
-/** The card's first line: "Work is at 8 % left" (or "is used up"). */
+/** A model family as people say it: "Sonnet". */
+export const modelName = (family: string): string => family.charAt(0).toUpperCase() + family.slice(1);
+
+/** Whether the suggestion changes the model on the Claude the chat is on (no move). */
+export const inPlace = (s: Pick<AutoSuggestion, 'from' | 'to'>): boolean => s.from.id === s.to.id && !!s.to.model;
+
+/** The card's first line: "Work has 8 % left", "Work: Opus week has 8 % left" when only the model's own limit is low, or "… is used up". */
 export function headline(s: Pick<AutoSuggestion, 'from' | 'reason' | 'facts'>): string {
-  if (s.reason === 'exhausted') return `${s.from.name} is used up`;
-  return `${s.from.name} has ${pctText(s.facts.leftPct)} left`;
+  const limit = s.facts.limit;
+  const who = limit?.kind === 'model' ? `${s.from.name}: ${limit.label} limit` : s.from.name;
+  if (s.reason === 'exhausted') return `${who} is used up`;
+  return `${who} has ${pctText(s.facts.leftPct)} left`;
 }
 
-/** The card's second line: "Move to Home (40 % left)" or, for a Claude without plan limits, "Move to Console". */
-export function offer(s: Pick<AutoSuggestion, 'to' | 'facts'>): string {
+/** The card's second line: "Move to Home (40 % left)", "Use Sonnet here (55 % left)", "Move to Home on Sonnet (40 % left)", or for a
+ * Claude without plan limits "Move to Console". */
+export function offer(s: Pick<AutoSuggestion, 'from' | 'to' | 'facts'>): string {
   const left = s.facts.destLeftPct && s.facts.destLeftPct.value !== null ? ` (${pctText(s.facts.destLeftPct)} left)` : '';
+  if (inPlace(s)) return `Use ${modelName(s.to.model!)} here${left}`;
+  if (s.to.model) return `Move to ${s.to.name} on ${modelName(s.to.model)}${left}`;
   return `Move to ${s.to.name}${left}`;
 }
 
@@ -33,19 +44,29 @@ export function droppedText(d: AutoSuggestion['dropped']): string | null {
 }
 
 /** Why the card shows, in the ⓘ; `bypass` when the chat is in Bypass now. */
-export function reasonText(s: Pick<AutoSuggestion, 'reason' | 'facts' | 'handoff'> & { to?: AutoSuggestion['to'] }, bypass = false): string {
+export function reasonText(s: Pick<AutoSuggestion, 'reason' | 'facts' | 'handoff'> & { to?: AutoSuggestion['to']; from?: AutoSuggestion['from'] }, bypass = false): string {
   const f = s.facts;
   const base =
     s.reason === 'exhausted'
-      ? 'Its session or week limit is used up (measured).'
+      ? f.limit?.kind === 'model'
+        ? `Its ${f.limit.label} limit, which stops only this model, is used up (measured).`
+        : 'Its session or week limit is used up (measured).'
       : s.reason === 'low'
-        ? `Its fullest limit has ${pctText(f.leftPct)} left (measured), at or under the threshold of ${f.thresholdPct} %.`
+        ? f.limit?.kind === 'model'
+          ? `Its ${f.limit.label} limit, which stops only this model, has ${pctText(f.leftPct)} left (measured), at or under the threshold of ${f.thresholdPct} %.`
+          : `Its fullest limit has ${pctText(f.leftPct)} left (measured), at or under the threshold of ${f.thresholdPct} %.`
         : `At its current pace it runs out before it resets: ${pctText(f.projectedPct)} by the reset, out around ${f.etaAt?.value ? new Date(f.etaAt.value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'soon'} (an estimate from recent readings: used percent plus speed × time left).`;
-  const handoff = s.handoff === 'skip' ? ' The stored conversation carries over; it can’t write a handoff now.' : ' It writes a handoff first.';
+  const here = !!s.to?.model && (s as { from?: { id: string } }).from?.id === s.to.id;
+  const handoff = here
+    ? ` The chat stays on this Claude and changes to ${modelName(s.to!.model!)}: the conversation stays as it is, nothing is handed off.`
+    : s.handoff === 'skip'
+      ? ' The stored conversation carries over; it can’t write a handoff now.'
+      : ' It writes a handoff first.';
   const d = f.destLeftPct;
-  const dest = s.to && d && d.value !== null ? ` ${s.to.name} has ${pctText(d)} left (${d.basis === 'estimate' ? 'an estimate' : 'measured'}).` : '';
+  const where = here ? `${modelName(s.to!.model!)} here` : s.to?.model ? `${s.to.name} on ${modelName(s.to.model)}` : s.to?.name;
+  const dest = s.to && d && d.value !== null ? ` ${where} has ${pctText(d)} left (${d.basis === 'estimate' ? 'an estimate' : 'measured'}).` : '';
   // A move keeps Bypass while the policy allows it (chat-sessions §21, FR20a).
-  return base + dest + handoff + (bypass ? ' Bypass stays on after the move while the policy allows it.' : '');
+  return base + dest + handoff + (bypass && !here ? ' Bypass stays on after the move while the policy allows it.' : '');
 }
 
 /** The automatic moves of a chat in the last day, by the move's id (the "Moved to" divider's `handoffId`). */
