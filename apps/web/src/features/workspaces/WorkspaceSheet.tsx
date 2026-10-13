@@ -1,9 +1,11 @@
-import { Badge, Button, buttonClass, cn, Dialog, Segmented, Spinner, type BadgeTone, type MenuItem } from '@isnanme/ui';
-import type { Workspace, WorkspaceUsage } from '@portal/contracts';
-import { Play, Square, SquareTerminal } from 'lucide-react';
+import { Badge, Button, buttonClass, cn, Dialog, FormDialog, Segmented, Spinner, TextField, useToast, type BadgeTone, type MenuItem } from '@isnanme/ui';
+import { WORKSPACE_LABEL_MAX, workspaceDisplayName, workspaceLabelProblem, type Workspace, type WorkspaceUsage } from '@portal/contracts';
+import { Copy, Pencil, Play, Square, SquareTerminal } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
+import { InfoTip } from '@/components/InfoTip';
 import { TreeSkeleton } from '@/features/repos';
+import { api, errorText } from '@/lib/api';
 import { formatBytes, formatDateTime, formatUntil, timeAgo } from '@/lib/format';
 import { ClaudesSection } from './ClaudesSection';
 import { VersionChip } from '@/features/claudeversion/VersionChip';
@@ -62,6 +64,32 @@ export function WorkspaceSheet({
     if (open) setTab(initialTab ?? 'details');
   }, [open, initialTab]);
   const onRepos = !!reposTab && tab === 'repos';
+  const toast = useToast();
+  const name = workspaceDisplayName(w);
+  // Rename (T-42): the label only. The field holds the draft; null while the dialog is closed.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [draftError, setDraftError] = useState<string>();
+  const rename = async () => {
+    if (draft === null) return;
+    const problem = workspaceLabelProblem(draft);
+    if (problem) return setDraftError(problem);
+    try {
+      const done = await api.workspaces.rename(w.id, draft);
+      setDraft(null);
+      toast(done.label === done.previous ? 'No change' : 'Renamed');
+    } catch (e) {
+      const details = (e as { details?: { label?: string } }).details;
+      setDraftError(details?.label ?? errorText(e, 'Couldn’t rename it.'));
+    }
+  };
+  const copyId = async () => {
+    try {
+      await navigator.clipboard.writeText(w.stableId ?? w.id);
+      toast('Copied');
+    } catch {
+      toast('Couldn’t copy. The browser blocked the clipboard.', 'error');
+    }
+  };
   const running = w.status === 'running';
   const account = w.account;
   const limits = [w.cpus && `${w.cpus} CPU`, w.memoryMb && formatBytes(w.memoryMb * 1024 * 1024)].filter(Boolean).join(' · ');
@@ -94,7 +122,8 @@ export function WorkspaceSheet({
   ) : undefined;
 
   return (
-    <Dialog open={open} onClose={onClose} title={w.name} description={`${targetLabel} · ${status.label}`} footer={footer}>
+    <>
+    <Dialog open={open} onClose={onClose} title={name} description={`${targetLabel} · ${status.label}`} footer={footer}>
       <div className="flex flex-col gap-5">
         {reposTab && (
           <Segmented<SheetTab>
@@ -160,6 +189,45 @@ export function WorkspaceSheet({
         {running && <ClaudesSection workspace={w} onLeave={onClose} />}
 
         <dl className="divide-y divide-line rounded-2xl border border-line text-sm">
+          <Row
+            label={
+              <span className="inline-flex items-center gap-1">
+                Name
+                <InfoTip label="About renaming">Renaming changes only the name shown. Nothing running is touched: its container or pod, its files and its sessions stay as they are, and the old name keeps working.</InfoTip>
+              </span>
+            }
+          >
+            <span className="inline-flex min-w-0 items-center justify-end gap-1">
+              <span className="min-w-0 truncate">{name}</span>
+              <button
+                type="button"
+                aria-label={`Rename ${name}`}
+                title="Rename"
+                onClick={() => (setDraft(name), setDraftError(undefined))}
+                className="press -my-2 -mr-2 inline-flex size-11 shrink-0 items-center justify-center rounded-xl text-muted hover:bg-surface-2 hover:text-ink"
+              >
+                <Pencil className="size-4" />
+              </button>
+            </span>
+          </Row>
+          {w.stableId && (
+            <Row label="ID">
+              <span className="inline-flex min-w-0 items-center justify-end gap-1">
+                <span className="min-w-0 truncate font-mono text-[12.5px]" title={`${w.stableId} · ${w.id}`}>
+                  {w.stableId}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Copy the ID"
+                  title="Copy"
+                  onClick={() => void copyId()}
+                  className="press -my-2 -mr-2 inline-flex size-11 shrink-0 items-center justify-center rounded-xl text-muted hover:bg-surface-2 hover:text-ink"
+                >
+                  <Copy className="size-4" />
+                </button>
+              </span>
+            </Row>
+          )}
           <Row label="Runs on">{targetLabel}</Row>
           {w.node && <Row label="Node">{w.node}</Row>}
           {w.status === 'unreachable' && w.lastSeenAt && (
@@ -208,6 +276,17 @@ export function WorkspaceSheet({
         )}
       </div>
     </Dialog>
+    <FormDialog open={draft !== null} onClose={() => setDraft(null)} size="sm" title="Rename" onSubmit={rename} submitLabel="Save">
+      <TextField
+        label="Name"
+        maxLength={WORKSPACE_LABEL_MAX}
+        autoComplete="off"
+        value={draft ?? ''}
+        onChange={(e) => (setDraft(e.target.value), setDraftError(undefined))}
+        error={draftError}
+      />
+    </FormDialog>
+    </>
   );
 }
 
@@ -223,7 +302,7 @@ function Notice({ badge, tone, children }: { badge: SheetBadge; tone?: BadgeTone
   );
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+function Row({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-4 px-3.5 py-2.5">
       <dt className="shrink-0 text-muted">{label}</dt>

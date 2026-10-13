@@ -10,8 +10,8 @@
 
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { isStableWorkspaceId, workspaceId, type Workspace } from '@portal/contracts';
-import { isWorkspaceId, PLAIN_NAME } from '../names.js';
+import { normalizeWorkspaceLabel, STABLE_WORKSPACE_ID, workspaceId, type Workspace } from '@portal/contracts';
+import { PLAIN_NAME, WORKSPACE_ID } from '../names.js';
 import type { RuntimeNames } from './runtime.js';
 
 export interface WorkspaceIdentity {
@@ -24,6 +24,8 @@ export interface WorkspaceIdentity {
   legacyId: string;
   /** What the runtime calls it; null until the runtime first lists it (a row the migration made). */
   runtimeName: string | null;
+  /** The name shown (slice 2): null until a first rename, which is the name it was made with. Changing it changes nothing else. */
+  label: string | null;
   createdAt: string;
   /** Set when the workspace was removed: its id is never given again, and its alias goes to whichever workspace holds the name now. */
   removedAt: string | null;
@@ -35,9 +37,13 @@ interface Row {
   name: string;
   legacy_id: string;
   runtime_name: string | null;
+  label: string | null;
   created_at: string;
   removed_at: string | null;
 }
+
+/** How a form is looked up: `<target>/<name or label>`, case-insensitive (a label differing only in case is the same label). */
+const formKey = (target: string, name: string) => workspaceId(target, name).normalize('NFC').toLowerCase();
 
 /** The runtime name a new workspace gets: `ws-` and the 12 hex digits of its stable id (a DNS label: no underscore). */
 export const newRuntimeName = (stableId: string) => `ws-${stableId.slice(3)}`;
@@ -59,8 +65,13 @@ export function legacyRuntimeName(kind: 'docker' | 'kubernetes', name: string): 
  */
 export class WorkspaceIdentities implements RuntimeNames {
   readonly #byId = new Map<string, WorkspaceIdentity>();
-  /** Alias -> the identity of the workspace that holds that name now. */
+  /** The key alias (`<target>/<name it was made with>`) -> the live workspace that holds it: what runtimes and stored references use. */
   readonly #live = new Map<string, WorkspaceIdentity>();
+  /**
+   * Every form a live workspace answers to (`formKey`): its key alias, its label and every label it had (the aliases a rename leaves).
+   * One workspace per form: what makes a label unique on its target.
+   */
+  readonly #forms = new Map<string, WorkspaceIdentity>();
   #loaded = false;
 
   constructor(
@@ -79,18 +90,30 @@ export class WorkspaceIdentities implements RuntimeNames {
     const db = this.store?.db;
     if (!db) return;
     let rows: Row[] = [];
+    let aliases: { alias: string; workspace_id: string }[] = [];
     try {
-      rows = db.prepare('SELECT id, target, name, legacy_id, runtime_name, created_at, removed_at FROM workspace_identities ORDER BY created_at').all() as unknown as Row[];
+      rows = db.prepare('SELECT id, target, name, legacy_id, runtime_name, label, created_at, removed_at FROM workspace_identities ORDER BY created_at').all() as unknown as Row[];
+      aliases = db.prepare('SELECT alias, workspace_id FROM workspace_aliases WHERE released_at IS NULL ORDER BY created_at').all() as unknown as typeof aliases;
     } catch (e) {
       console.error(`[workspaces] could not read workspace identities: ${(e as Error).message}`);
     }
-    for (const r of rows) this.#remember({ id: r.id, target: r.target, name: r.name, legacyId: r.legacy_id, runtimeName: r.runtime_name, createdAt: r.created_at, removedAt: r.removed_at });
+    for (const r of rows) this.#remember({ id: r.id, target: r.target, name: r.name, legacyId: r.legacy_id, runtimeName: r.runtime_name, label: r.label ?? null, createdAt: r.created_at, removedAt: r.removed_at });
+    for (const a of aliases) {
+      const w = this.#byId.get(a.workspace_id);
+      if (w && !w.removedAt && !this.#forms.has(a.alias.normalize('NFC').toLowerCase())) this.#forms.set(a.alias.normalize('NFC').toLowerCase(), w);
+    }
   }
 
   #remember(w: WorkspaceIdentity) {
     this.#byId.set(w.id, w);
-    if (!w.removedAt) this.#live.set(w.legacyId, w);
-    else if (this.#live.get(w.legacyId)?.id === w.id) this.#live.delete(w.legacyId);
+    if (!w.removedAt) {
+      this.#live.set(w.legacyId, w);
+      this.#forms.set(formKey(w.target, w.name), w);
+      if (w.label) this.#forms.set(formKey(w.target, w.label), w);
+      return;
+    }
+    if (this.#live.get(w.legacyId)?.id === w.id) this.#live.delete(w.legacyId);
+    for (const [form, holder] of this.#forms) if (holder.id === w.id) this.#forms.delete(form);
   }
 
   #write(sql: string, ...args: (string | null)[]) {
@@ -111,24 +134,65 @@ export class WorkspaceIdentities implements RuntimeNames {
   }
 
   #insert(target: string, name: string, runtimeName: string | null, id = this.#newId()): WorkspaceIdentity {
-    const w: WorkspaceIdentity = { id, target, name, legacyId: workspaceId(target, name), runtimeName, createdAt: this.now().toISOString(), removedAt: null };
+    const w: WorkspaceIdentity = { id, target, name, legacyId: workspaceId(target, name), runtimeName, label: null, createdAt: this.now().toISOString(), removedAt: null };
     this.#remember(w);
     this.#write('INSERT INTO workspace_identities (id, target, name, legacy_id, runtime_name, created_at) VALUES (?, ?, ?, ?, ?, ?)', w.id, w.target, w.name, w.legacyId, w.runtimeName, w.createdAt);
     return w;
   }
 
   /**
-   * THE resolver: a stable id (`ws_…`) or the alias (`<target>/<name>`) to the workspace's identity; null when it is neither, unknown, or
-   * removed. Callers decide authorization on what this returns (its `legacyId`, which the seam knows), never on the string they were given.
+   * THE resolver: a stable id (`ws_…`) or an alias to the workspace's identity: `<target>/<name it was made with>`, `<target>/<label>`, or
+   * `<target>/<any label it had>` (slice 2: every form it was ever called by keeps working while it lives). Null when it is none of these,
+   * unknown, or removed. Callers decide authorization on what this returns (its `legacyId`, which the seam knows), never on the string given.
    */
   resolve(ref: string): WorkspaceIdentity | null {
     this.#load();
-    if (isStableWorkspaceId(ref)) {
+    if (typeof ref !== 'string' || ref.length > 200) return null;
+    // Plain tests, not the type guards: a guard's false branch would leave `ref` typed as nothing.
+    if (STABLE_WORKSPACE_ID.test(ref)) {
       const w = this.#byId.get(ref);
       return w && !w.removedAt ? w : null;
     }
-    if (isWorkspaceId(ref)) return this.#live.get(ref) ?? null;
-    return null;
+    if (WORKSPACE_ID.test(ref) && this.#live.has(ref)) return this.#live.get(ref)!;
+    const slash = ref.indexOf('/');
+    if (slash <= 0) return null;
+    return this.#forms.get(formKey(ref.slice(0, slash), normalizeWorkspaceLabel(ref.slice(slash + 1)))) ?? null;
+  }
+
+  /** `{ [<target>/<name>]: label }` for every live workspace that has a label of its own (was renamed). */
+  labels(): Record<string, string> {
+    this.#load();
+    const out: Record<string, string> = {};
+    for (const w of this.#live.values()) if (w.label) out[w.legacyId] = w.label;
+    return out;
+  }
+
+  /** The live workspace on `target` that answers to `nameOrLabel` (its name, its label or a label it had), if any: who holds that name there. */
+  holder(target: string, nameOrLabel: string): WorkspaceIdentity | null {
+    this.#load();
+    return this.#forms.get(formKey(target, normalizeWorkspaceLabel(nameOrLabel))) ?? null;
+  }
+
+  /**
+   * Renames a workspace: its label only (slice 2). The id, the key alias, the runtime name and every stored reference stay. The new label also
+   * becomes an alias (`<target>/<label>`), and the labels it had stay aliases, for as long as the workspace lives. The caller has checked the
+   * label (`workspaceLabelProblem`) and that no other workspace on the target holds it (`holder`); one that does is refused here too.
+   */
+  relabel(id: string, label: string): WorkspaceIdentity {
+    this.#load();
+    const w = this.#byId.get(id);
+    if (!w || w.removedAt) throw new Error('no such workspace');
+    const clean = normalizeWorkspaceLabel(label);
+    const form = formKey(w.target, clean);
+    const other = this.#forms.get(form);
+    if (other && other.id !== w.id) throw new Error('that name is taken on this target');
+    w.label = clean === w.name ? null : clean;
+    this.#write('UPDATE workspace_identities SET label = ? WHERE id = ?', w.label, w.id);
+    if (!other) {
+      this.#forms.set(form, w);
+      this.#write('INSERT INTO workspace_aliases (alias, workspace_id, created_at) VALUES (?, ?, ?)', workspaceId(w.target, clean), w.id, this.now().toISOString());
+    }
+    return w;
   }
 
   /** The identity of the workspace that holds this name on this target now, if the portal has one. */
@@ -176,12 +240,25 @@ export class WorkspaceIdentities implements RuntimeNames {
     w.removedAt = this.now().toISOString();
     this.#remember(w);
     this.#write('UPDATE workspace_identities SET removed_at = ? WHERE id = ?', w.removedAt, w.id);
+    // The labels it had are free for another workspace now; the rows stay, as history.
+    this.#write('UPDATE workspace_aliases SET released_at = ? WHERE workspace_id = ? AND released_at IS NULL', w.removedAt, w.id);
   }
 }
 
-/** One workspace out of a list by either form of its id: the stable id or the alias. Null when none matches. */
-export function findWorkspace(all: Workspace[], ref: string): Workspace | null {
+/**
+ * One workspace out of a list by any form of its id: the stable id, the key alias `<target>/<name>`, or `<target>/<label>`; with `resolve`
+ * (the manager's resolver) also a label it had before a rename. Null when none matches.
+ */
+export function findWorkspace(all: Workspace[], ref: string, resolve?: (ref: string) => { legacyId: string } | null): Workspace | null {
   const wanted = ref.trim();
-  if (isStableWorkspaceId(wanted)) return all.find((w) => w.stableId === wanted) ?? null;
-  return all.find((w) => w.id === wanted) ?? null;
+  if (STABLE_WORKSPACE_ID.test(wanted)) return all.find((w) => w.stableId === wanted) ?? null;
+  const direct = all.find((w) => w.id === wanted);
+  if (direct) return direct;
+  const slash = wanted.indexOf('/');
+  if (slash <= 0) return null;
+  const form = formKey(wanted.slice(0, slash), normalizeWorkspaceLabel(wanted.slice(slash + 1)));
+  const labelled = all.find((w) => !!w.label && formKey(w.target, w.label) === form);
+  if (labelled) return labelled;
+  const known = resolve?.(wanted);
+  return known ? (all.find((w) => w.id === known.legacyId) ?? null) : null;
 }

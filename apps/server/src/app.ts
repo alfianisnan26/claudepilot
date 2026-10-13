@@ -6,6 +6,8 @@ import { AppError, codeForStatus, isAppError, success } from '@isnanme/core';
 import {
   API,
   isStableWorkspaceId,
+  type RenameWorkspaceRequest,
+  type RenameWorkspaceResult,
   type AccountPoolRequest,
   type AdminState,
   type AssignAccountPoolRequest,
@@ -89,7 +91,7 @@ import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
-import { actorOf } from './authz/seam.js';
+import { actorOf, visible } from './authz/seam.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
 
@@ -443,6 +445,12 @@ export function createApp(
   };
   ws.get('/targets', async (c) => c.json(success(await workspaces.targets(c.req.query('fresh') === '1'))));
   ws.get('/usage', async (c) => c.json(success(await workspaces.usage())));
+  // The labels of renamed workspaces (T-42), from the records only: the app learns them once, so every place that holds an id shows the label.
+  ws.get('/labels', (c) => {
+    const labels = workspaces.identities.labels();
+    const mine = visible(actorOf(c), 'workspace', Object.keys(labels), (id) => id);
+    return c.json(success(Object.fromEntries(mine.map((id) => [id, labels[id]!]))));
+  });
   const delivery = (id: string) => deliveryState(reconciler, id);
   const decorate = workspaceView(pools, reconciler, claudeVersions?.brief);
 
@@ -538,6 +546,17 @@ export function createApp(
     return c.json(success(decorate(await workspaces.get(ref, actorOf(c)))));
   });
   ws.get('/:target/:name', async (c) => c.json(success(decorate(await workspaces.get(`${c.req.param('target')}/${c.req.param('name')}`, actorOf(c))))));
+  // Rename (T-42 slice 2): the label only, by either form of the id. Nothing running is touched; the old forms keep resolving.
+  const rename = async (c: Context<Env>, ref: string) => {
+    const { label } = await body<RenameWorkspaceRequest>(c);
+    return c.json(success<RenameWorkspaceResult>(await workspaces.rename(ref, label, actorOf(c))));
+  };
+  ws.patch('/:ref', async (c) => {
+    const ref = c.req.param('ref');
+    if (!isStableWorkspaceId(ref)) throw new AppError('NOT_FOUND', 'Not found.');
+    return rename(c, ref);
+  });
+  ws.patch('/:target/:name', async (c) => rename(c, `${c.req.param('target')}/${c.req.param('name')}`));
   ws.post('/', async (c) => {
     const req = await body<CreateWorkspaceRequest>(c);
     const poolId = req.accountPoolId ?? null;

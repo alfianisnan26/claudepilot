@@ -1,4 +1,4 @@
-import { TICKET_STATUS_LABEL, workspaceLabel, type ChatSession, type TicketItem, type Workspace } from '@portal/contracts';
+import { TICKET_STATUS_LABEL, workspaceDisplayName, workspaceLabel, type ChatSession, type TicketItem, type Workspace } from '@portal/contracts';
 import { SESSION_WORD } from '../sessions/model';
 import type { PaletteItem } from './search';
 
@@ -52,7 +52,7 @@ export function workspaceItems(workspaces: readonly Workspace[]): PaletteItem[] 
   return workspaces.map((w) => ({
     id: `workspace:${w.id}`,
     kind: 'workspace' as const,
-    title: w.name,
+    title: workspaceDisplayName(w),
     hint: w.status === 'running' ? 'Shell' : w.status,
     to: w.status === 'running' ? `/admin/workspaces/${encodeURIComponent(w.target)}/${encodeURIComponent(w.name)}/shell` : '/admin/workspaces',
     keywords: w.target,

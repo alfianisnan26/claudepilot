@@ -1,6 +1,9 @@
 import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
 import { track } from '@isnanme/ui';
 import {
+  rememberWorkspaceLabelMap,
+  rememberWorkspaceLabels,
+  type RenameWorkspaceResult,
   ACCOUNT_API,
   API,
   POOLS_API,
@@ -128,7 +131,12 @@ export const api = {
   },
   workspaces: {
     targets: (fresh = false) => request<WorkspaceTarget[]>('GET', WORKSPACE_API.targets + (fresh ? '?fresh=1' : '')),
-    list: () => request<Workspace[]>('GET', WORKSPACE_API.list),
+    // Every list teaches the labels (T-42), so places that only hold a workspace id name it by its label.
+    list: () => request<Workspace[]>('GET', WORKSPACE_API.list).then((list) => (rememberWorkspaceLabels(list), list)),
+    /** The labels of renamed workspaces (T-42), learned once at the app's start. */
+    labels: () => request<Record<string, string>>('GET', WORKSPACE_API.labels).then((map) => (rememberWorkspaceLabelMap(map), map)),
+    /** Renames a workspace: its label only (T-42); nothing running is touched. */
+    rename: (id: string, label: string) => request<RenameWorkspaceResult>('PATCH', WORKSPACE_API.one(id), { label }),
     usage: () => request<WorkspaceUsage[]>('GET', WORKSPACE_API.usage),
     create: (body: CreateWorkspaceRequest) => request<Workspace>('POST', WORKSPACE_API.list, body),
     start: (id: string) => request<{ ok: true }>('POST', `${WORKSPACE_API.one(id)}/start`),

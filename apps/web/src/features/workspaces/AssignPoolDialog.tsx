@@ -1,5 +1,5 @@
 import { Dialog, Button, Select, Spinner } from '@isnanme/ui';
-import type { AccountPool, Workspace } from '@portal/contracts';
+import { workspaceDisplayName, type AccountPool, type Workspace } from '@portal/contracts';
 import { ShieldAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, errorText } from '@/lib/api';
@@ -49,7 +49,7 @@ export function AssignPoolDialog({
     setError(null);
     try {
       await api.accounts.assign(workspace.id, { poolId: poolId || null, confirmOverride: overriding });
-      onDone(poolId ? `${workspace.name} now uses ${pools.find((p) => p.id === poolId)?.name ?? 'the pool'}` : `${workspace.name} goes back to its own sign-in`);
+      onDone(poolId ? `${workspaceDisplayName(workspace)} now uses ${pools.find((p) => p.id === poolId)?.name ?? 'the pool'}` : `${workspaceDisplayName(workspace)} goes back to its own sign-in`);
     } catch (e) {
       setError(errorText(e, 'Could not change the pool.'));
     } finally {
@@ -63,7 +63,7 @@ export function AssignPoolDialog({
       onClose={() => !saving && onClose()}
       size="sm"
       title="Account pool"
-      description={workspace ? `Which keys Claude Code in ${workspace.name} uses.` : undefined}
+      description={workspace ? `Which keys Claude Code in ${workspaceDisplayName(workspace)} uses.` : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>
