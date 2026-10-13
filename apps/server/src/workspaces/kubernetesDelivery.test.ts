@@ -249,6 +249,9 @@ describe('put and read', () => {
     ]);
     assert.deepEqual(checkEntries([file('/etc/profile.d/claudepilot.sh', '')], DELIVERY_ROOTS), ['/etc/profile.d/claudepilot.sh']);
     assert.throws(() => checkEntries([file('/etc/profile.d/other.sh', '')], DELIVERY_ROOTS), /outside the folders/);
+    // The profile script is written to a hidden temporary name and renamed (delivery/writer.ts): that name passes, no other hidden name in /etc/profile.d does.
+    assert.deepEqual(checkEntries([file('/etc/profile.d/.claudepilot.sh.cp-tmp', '')], DELIVERY_ROOTS), ['/etc/profile.d/.claudepilot.sh.cp-tmp']);
+    assert.throws(() => checkEntries([file('/etc/profile.d/.other.sh.cp-tmp', '')], DELIVERY_ROOTS), /outside the folders/);
     assert.throws(() => checkEntries([file('/etc/claudepilot-ca/ca.pem', '')], DELIVERY_ROOTS), /outside the folders/);
   });
 

@@ -15,7 +15,11 @@ import { tarOf } from './tar.js';
 import { HOME, type DeliveryAccess, type TarEntry } from './runtime.js';
 
 /** The only places delivery writes and reads (what the engine uses: the portal's folder, Claude Code's managed folder, the home, the shell hook). */
-export const DELIVERY_ROOTS = ['/etc/claudepilot', '/etc/claude-code', HOME, '/etc/profile.d/claudepilot.sh'] as const;
+/**
+ * Where delivery may write. /etc/profile.d/claudepilot.sh is ONE file, written like every file: to a hidden temporary name beside it, then renamed over it
+ * (delivery/writer.ts: tmpName), so that temporary name is allowed too; nothing else in /etc/profile.d is.
+ */
+export const DELIVERY_ROOTS = ['/etc/claudepilot', '/etc/claude-code', HOME, '/etc/profile.d/claudepilot.sh', '/etc/profile.d/.claudepilot.sh.cp-tmp'] as const;
 
 const KiB = 1024;
 const MiB = 1024 * KiB;
