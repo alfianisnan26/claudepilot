@@ -21,7 +21,7 @@ defineSetting({
   protective: false,
   confirmText: 'Chats can move to another Claude when a quota is low.',
   label: 'Auto move',
-  help: 'Off: nothing watches a quota and nothing moves. On: when the Claude a chat runs on is nearly out, a card offers to move the chat to another Claude of the same workspace.',
+  help: 'Off: nothing watches a quota and nothing moves. On: when the Claude a chat runs on is nearly out, a card offers to move the chat to another Claude of the same workspace. With "Without asking" on: at the threshold the chat moves by itself to a Claude with more left (a working chat is told to finish its step first and moves when the turn ends); a Claude already out of quota moves at once, pause and caps or not; with no Claude to move to the chat waits and is looked at again every 2 minutes until one frees up or its own limit resets, then it goes on by itself.',
 });
 defineSetting({
   key: K.automatic,
@@ -163,6 +163,17 @@ defineSetting({
   help: 'When a chat can either move to another Claude with room on its model or change model here: on, it moves and keeps its model; off, it stays here and changes model. When no Claude has room on its model, it moves with one of the other models.',
 });
 
+defineSetting({
+  key: K.dryRun,
+  type: 'boolean',
+  default: false,
+  scope: 'global',
+  group: 'automove',
+  order: 140,
+  label: 'Dry run',
+  help: 'On: the engine records in the trail what it would do (move, tell a chat to stop, continue it) and does none of it. For checking a portal before trusting it to move chats by itself (T-105).',
+});
+
 const clamp = (n: unknown, b: { min: number; max: number; default: number }) => {
   const v = typeof n === 'number' && Number.isFinite(n) ? Math.round(n) : b.default;
   return Math.min(b.max, Math.max(b.min, v));
@@ -191,6 +202,7 @@ export function platformSettings(r: AutoSettingsReader | null): AutoTransferSett
     allowBypass: b(K.allowBypass, false),
     modelFallback: parseModelFallback(get(K.modelFallback)),
     keepModelFirst: b(K.keepModelFirst, true),
+    dryRun: b(K.dryRun, false),
   };
 }
 

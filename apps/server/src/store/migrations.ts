@@ -2688,6 +2688,47 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 760,
+    name: 'auto move: the wait for quota and the steer, per chat (T-105)',
+    up(db) {
+      // T-105 (docs/prd/auto-transfer.md FR10a, FR4a): a chat at or under the threshold with nowhere to go keeps a waiting state the engine
+      // re-evaluates by itself (restart-safe: `pending()` wakes it); a chat told mid-turn to finish and stop remembers the period, so it is told once.
+      db.exec(`
+        ALTER TABLE autotransfer_sessions ADD COLUMN waiting_since TEXT;
+        ALTER TABLE autotransfer_sessions ADD COLUMN waiting_code TEXT;
+        ALTER TABLE autotransfer_sessions ADD COLUMN steered_period TEXT;
+      `);
+      // The trail takes the new kinds (waiting, resumed, steered, continued, dry_run): SQLite can't change a CHECK, so the table is rebuilt
+      // with every row and id kept (the migration runs in the store's transaction).
+      db.exec(`
+        CREATE TABLE autotransfer_events_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at TEXT NOT NULL,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          session_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('suggested', 'moved', 'declined', 'deferred', 'warned', 'refused', 'failed', 'undone', 'mode_set', 'waiting', 'resumed', 'steered', 'continued', 'dry_run')),
+          mode TEXT NOT NULL,
+          reason TEXT,
+          from_claude TEXT,
+          to_claude TEXT,
+          facts TEXT,
+          handoff TEXT,
+          handoff_id TEXT,
+          code TEXT,
+          actor TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO autotransfer_events_new (id, at, owner_id, created_by, session_id, workspace_id, kind, mode, reason, from_claude, to_claude, facts, handoff, handoff_id, code, actor)
+          SELECT id, at, owner_id, created_by, session_id, workspace_id, kind, mode, reason, from_claude, to_claude, facts, handoff, handoff_id, code, actor FROM autotransfer_events;
+        DROP TABLE autotransfer_events;
+        ALTER TABLE autotransfer_events_new RENAME TO autotransfer_events;
+        CREATE INDEX autotransfer_events_session ON autotransfer_events (session_id, at);
+        CREATE INDEX autotransfer_events_owner ON autotransfer_events (owner_id, at);
+      `);
+    },
+  },
 ];
 
 /**

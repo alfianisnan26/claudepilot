@@ -41,6 +41,8 @@ export const AUTO_SETTING_KEYS = {
   /** A Claude on a Console API key (billed per use) may be a destination. Off until a person turns it on. */
   allowApiKey: 'automove.allowApiKey',
   allowBypass: 'automove.allowBypass',
+  /** The engine records what it WOULD do (moves, steers, continuations) and does none of it (T-105's live check). */
+  dryRun: 'automove.dryRun',
   /** Models a chat may change to when only its own model's limit is low, best first (`sonnet`, `opus, sonnet, haiku`). Empty: never. */
   modelFallback: 'automove.modelFallback',
   /** When both are possible: keep the model and move to another Claude first (on), or stay on this Claude and change model first (off). */
@@ -50,10 +52,10 @@ export const AUTO_SETTING_KEYS = {
 /** Defaults and bounds of the numeric settings. The defaults are design choices, not measurements. */
 export const AUTO_BOUNDS = {
   thresholdPct: { min: 1, max: 50, default: 10 },
-  minPauseMin: { min: 5, max: 720, default: 30 },
-  maxPerSessionPerDay: { min: 1, max: 10, default: 2 },
-  maxPerDay: { min: 1, max: 50, default: 6 },
-  maxPerDestination: { min: 1, max: 10, default: 2 },
+  minPauseMin: { min: 5, max: 720, default: 5 },
+  maxPerSessionPerDay: { min: 1, max: 10, default: 8 },
+  maxPerDay: { min: 1, max: 50, default: 30 },
+  maxPerDestination: { min: 1, max: 10, default: 3 },
 } as const;
 
 /** Constants, not settings (the PRD gives each one's reason). */
@@ -72,6 +74,8 @@ export const AUTO_CONSTANTS = {
   deferMaxMin: 30,
   /** A destination the chat left is not chosen again for this long unless the one it left has reset. */
   pingPongMin: 240,
+  /** A chat waiting for quota (no destination, a cap, a pause) and every chat at or under the threshold is looked at again this often (T-105). */
+  waitRecheckMin: 2,
 } as const;
 
 export interface AutoTransferSettings {
@@ -90,6 +94,8 @@ export interface AutoTransferSettings {
   modelFallback: string[];
   /** Keep the model and move first (true), or change model on the same Claude first (false). */
   keepModelFirst: boolean;
+  /** Record what would happen, do nothing (T-105). */
+  dryRun: boolean;
 }
 
 /** Reads `automove.modelFallback`: a comma or space list of model families, lower case, known ones only, no repeats. */
@@ -208,7 +214,13 @@ export interface AutoSuggestion {
   state: AutoSuggestionState;
 }
 
-export const AUTO_EVENT_KINDS = ['suggested', 'moved', 'declined', 'deferred', 'warned', 'refused', 'failed', 'undone', 'mode_set'] as const;
+/**
+ * `waiting`: no Claude to move to (or a cap or pause holds the chat) while the source is at or under the threshold: the engine looks again
+ * every `AUTO_CONSTANTS.waitRecheckMin` minutes by itself (T-105). `resumed`: that wait ended (a move, or the source recovered). `steered`:
+ * the chat was told, mid-turn, to finish its step and stop so it can be moved. `continued`: after an automatic move the chat was told to
+ * go on. `dry_run`: what the engine would have done with `automove.dryRun` on.
+ */
+export const AUTO_EVENT_KINDS = ['suggested', 'moved', 'declined', 'deferred', 'warned', 'refused', 'failed', 'undone', 'mode_set', 'waiting', 'resumed', 'steered', 'continued', 'dry_run'] as const;
 export type AutoEventKind = (typeof AUTO_EVENT_KINDS)[number];
 
 /** One row of the trail (`GET AUTOTRANSFER_API.events`); the same facts go to the platform audit. Kept 90 days. */
@@ -251,6 +263,19 @@ export interface AutoSessionState {
   movesToday: number;
   /** The last automatic move of this chat within a day, with whether it can be undone now. */
   lastMove: { event: AutoTransferEvent; undo: { ok: boolean; reason: string | null } } | null;
+  /**
+   * The chat is at or under the threshold and nothing can take it yet (T-105 R3): why, since when, and the soonest moment a delegated
+   * Claude or the source frees up (the earliest reset among their binding windows; null when none is known). The engine looks again by itself.
+   */
+  waiting: { since: string; code: AutoRefusal; nextFreeAt: string | null } | null;
+  /** A move decided while the chat works: it happens when this turn ends (the chat was told to finish its step and stop). */
+  pendingMove: { to: AutoClaudeRef; reason: AutoReason; steeredAt: string | null } | null;
+}
+
+/** `GET AUTOTRANSFER_API.state`: what the engine waits for, per live chat of the caller (T-105 item 5). */
+export interface AutoEngineState {
+  dryRun: boolean;
+  sessions: { sessionId: string; workspaceId: string; claudeId: string; state: string; leftPct: number | null; last: { act: string; code: string | null } | null; waiting: AutoSessionState['waiting']; pendingMove: AutoSessionState['pendingMove'] }[];
 }
 
 export interface SetAutoSessionRequest {
@@ -265,6 +290,8 @@ export const AUTOTRANSFER_API = {
   prefs: '/api/autotransfer/prefs',
   /** PUT `UpdateAutoClaudeRequest`: `AutoClaudeConfig`. */
   claude: (claudeId: string) => `/api/autotransfer/claudes/${encodeURIComponent(claudeId)}`,
+  /** GET: `AutoEngineState`, what the engine waits for per live chat of the caller. */
+  state: '/api/autotransfer/state',
   /** GET: `AutoSessionState`. PUT `SetAutoSessionRequest`: `AutoSessionState`. */
   session: (sessionId: string) => `/api/autotransfer/sessions/${encodeURIComponent(sessionId)}`,
   /** POST `{ to?: string }`: Move now (the suggestion's Claude, or another of its alternatives); `AutoSessionState`. The card is the confirmation. */

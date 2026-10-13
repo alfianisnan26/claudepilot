@@ -80,6 +80,7 @@ const SETTINGS: AutoTransferSettings = {
   allowBypass: false,
   modelFallback: [],
   keepModelFirst: true,
+  dryRun: false,
 };
 
 function options(claudes: ClaudeUsage[], over: Partial<ChatSwitchOptions> = {}): ChatSwitchOptions {

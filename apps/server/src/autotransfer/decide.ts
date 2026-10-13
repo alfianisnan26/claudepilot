@@ -291,11 +291,15 @@ export function decide(input: DecideInput): Decision {
   if (!reading.reason) return { act: 'none', code: 'above_threshold', reading };
   // 5. The owner.
   if (!input.ownerOk) return { act: 'none', code: 'owner_denied', reading };
-  // 6. The safeguards.
-  if (counters.pausedUntilMs !== null && counters.pausedUntilMs > nowMs) return { act: 'none', code: 'paused', reading };
-  if (counters.lastMoveMs !== null && nowMs - counters.lastMoveMs < settings.minPauseMin * MIN) return { act: 'none', code: 'paused', reading };
-  if (counters.movesSession24h >= settings.maxPerSessionPerDay) return { act: 'none', code: 'session_cap', reading };
-  if (counters.movesOwner24h >= settings.maxPerDay) return { act: 'none', code: 'day_cap', reading };
+  // 6. The safeguards. Not for a source already out of quota (R2, T-105): the chat can do nothing there, so it moves at once, pause and
+  // caps or not; the ping-pong guard (step 7) still keeps it off the Claude it just left. The caps count only moves that were not forced.
+  const forced = reading.reason === 'exhausted';
+  if (!forced) {
+    if (counters.pausedUntilMs !== null && counters.pausedUntilMs > nowMs) return { act: 'none', code: 'paused', reading };
+    if (counters.lastMoveMs !== null && nowMs - counters.lastMoveMs < settings.minPauseMin * MIN) return { act: 'none', code: 'paused', reading };
+    if (counters.movesSession24h >= settings.maxPerSessionPerDay) return { act: 'none', code: 'session_cap', reading };
+    if (counters.movesOwner24h >= settings.maxPerDay) return { act: 'none', code: 'day_cap', reading };
+  }
   // 7. A destination.
   const period = `${session.claudeId}|${reading.window.key}|${reading.window.resetsAt ?? ''}`;
   // A chat in Bypass (unless the platform allows moving those: `allowBypass`, the owner's ask of 2026-10-13; the move keeps Bypass),
@@ -377,7 +381,10 @@ export function decide(input: DecideInput): Decision {
   const d = choice.dropped;
   const quiet = session.state === 'idle' && !session.switching && d.approvals === 0 && d.queued === 0 && d.agents === 0;
   if (!quiet) {
-    if (counters.deferSinceMs !== null && nowMs - counters.deferSinceMs >= AUTO_CONSTANTS.deferMaxMin * MIN) return { act: 'suggest', why: 'deferred', reading, ...choice };
+    // A turn that runs (or sub-agents that do) is waited for however long it takes: the chat is told to finish its step and stop (T-105
+    // item 2, the engine's steer) and moves at the boundary. Only an idle chat held by an open approval or a queue becomes a card after 30 minutes.
+    const turnRuns = session.state === 'working';
+    if (!turnRuns && counters.deferSinceMs !== null && nowMs - counters.deferSinceMs >= AUTO_CONSTANTS.deferMaxMin * MIN) return { act: 'suggest', why: 'deferred', reading, ...choice };
     return { act: 'wait', code: 'busy', reading, ...choice };
   }
   // 10. The move.

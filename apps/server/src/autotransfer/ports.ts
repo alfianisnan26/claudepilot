@@ -15,6 +15,11 @@ export interface ChatPort {
   setModel(id: string, model: string): Promise<void>;
   onEvent(cb: (sessionId: string, msg: ChatServerMessage) => void): () => void;
   history(id: string, after?: number): ChatEvent[];
+  /**
+   * A message from the engine to the chat (T-105): the steer ("finish your step and stop") while a turn runs, the continuation after a
+   * move. Sent as the portal actor `portal:autotransfer`, framed for Claude, `priority` `next`. Never message text from anyone else.
+   */
+  send(id: string, text: string, opts: { priority: 'next' | 'later'; actor: string; actorLabel?: string }): Promise<void>;
 }
 
 export interface UsagePort {

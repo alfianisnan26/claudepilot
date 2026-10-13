@@ -72,6 +72,13 @@ export class MoveChat extends FakeChat {
   readonly moves: { id: string; to: string; handoff: string | undefined }[] = [];
   /** Model changes in place, in order. */
   readonly models: { id: string; model: string }[] = [];
+  /** What the engine said to a chat (the steer, the continuation), in order. */
+  readonly sent: { id: string; text: string; priority: string; actor: string }[] = [];
+  async send(id: string, text: string, opts: { priority: 'next' | 'later'; actor: string; actorLabel?: string }): Promise<void> {
+    const s = this.get(id);
+    if (!s || s.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
+    this.sent.push({ id, text, priority: opts.priority, actor: opts.actor });
+  }
   readonly names = new Map<string, string>([
     ['work', 'Work'],
     ['home', 'Home'],
