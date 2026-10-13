@@ -60,6 +60,8 @@ export interface Plan {
   /** Jobs that may run at once. */
   maxParallel: number;
   jobs: PlanJob[];
+  /** The pipeline's `on.notify` (FR36): states a run reports to its session besides what it always does. The portal reads it; the runner does not. */
+  notify?: string[];
 }
 
 /** One ref update a hook saw, as an event file (PRD FR5). */

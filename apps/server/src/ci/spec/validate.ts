@@ -2,7 +2,7 @@
 // a suggestion; the formats this one is shaped after (GitHub Actions, GitLab CI) each get specific hints for the keys an
 // agent is likely to carry over. Nothing here runs anything: expressions are parsed and their names checked, not evaluated.
 
-import type { CiDiagnostic, CiInput, CiPipelineInfo } from '@portal/contracts';
+import { CI_NOTIFY_STATES, type CiDiagnostic, type CiInput, type CiNotifyState, type CiPipelineInfo } from '@portal/contracts';
 import { CI_LIMITS } from '../limits.js';
 import type { PlanWhen } from '../plan.js';
 import { checkExpr, checkInterp, closest, parseExpr, parseInterp, splitCondition, unwrapIf, ExprError, type Expr, type Interp, type Scope } from './expr.js';
@@ -56,6 +56,8 @@ export interface Pipeline {
     push: { branches: string[]; tags: string[] } | null;
     merge: { branches: string[] } | null;
     manual: { inputs: CiInput[] } | null;
+    /** `notify: [passed, cancelled, waiting]`: states a push or merge run reports to its session too (FR36); null when the file says nothing. */
+    notify: CiNotifyState[] | null;
   };
   env: Record<string, Interp>;
   timeoutMs: number | null;
@@ -301,7 +303,7 @@ const ON_KEYS = ['push', 'merge', 'manual', 'schedule'] as const;
 const INPUT_TYPES = ['string', 'boolean', 'choice'] as const;
 
 function readOn(d: Diags, v: unknown): { on: Pipeline['on']; inputs: CiInput[] } {
-  const on: Pipeline['on'] = { push: null, merge: null, manual: null };
+  const on: Pipeline['on'] = { push: null, merge: null, manual: null, notify: null };
   const inputs: CiInput[] = [];
   const path = ['on'];
   let map: Obj;
@@ -316,6 +318,10 @@ function readOn(d: Diags, v: unknown): { on: Pipeline['on']; inputs: CiInput[] }
   for (const key of Object.keys(map)) {
     const p = [...path, key];
     const body = map[key];
+    if (key === 'notify') {
+      on.notify = notifyOf(d, body, p);
+      continue;
+    }
     if (!(ON_KEYS as readonly string[]).includes(key)) {
       const near = closest(key, ON_KEYS);
       d.error(p, FOREIGN_ON[key] ? 'unsupported-trigger' : 'unknown-key', `Unknown trigger "${key}".`, FOREIGN_ON[key] ?? (near ? `Did you mean "${near}"?` : `Choose from ${ON_KEYS.join(', ')}.`), 'key');
@@ -379,6 +385,25 @@ function readOn(d: Diags, v: unknown): { on: Pipeline['on']; inputs: CiInput[] }
   }
   if (own(map, 'schedule')) d.error([...path, 'schedule'], 'not-yet', 'Schedules are not available yet.', 'Start the pipeline by hand with manual, or from a script.', 'key');
   return { on, inputs };
+}
+
+/** `notify`: a list of the states a run reports to its session besides a failure (`failed` may be listed; it always reports). */
+function notifyOf(d: Diags, v: unknown, path: PathSeg[]): CiNotifyState[] {
+  const list = typeof v === 'string' ? [v] : v;
+  if (!Array.isArray(list)) {
+    d.error(path, 'bad-type', 'notify is a list of states.', `For example: notify: [passed, cancelled, waiting]. Choose from ${CI_NOTIFY_STATES.join(', ')}.`);
+    return [];
+  }
+  const out: CiNotifyState[] = [];
+  list.forEach((x, i) => {
+    if (typeof x === 'string' && (CI_NOTIFY_STATES as readonly string[]).includes(x)) {
+      if (!out.includes(x as CiNotifyState)) out.push(x as CiNotifyState);
+      return;
+    }
+    const near = typeof x === 'string' ? closest(x, CI_NOTIFY_STATES) : null;
+    d.error([...path, i], 'bad-value', `"${String(x)}" is not a state a run reports.`, near ? `Did you mean "${near}"?` : `Choose from ${CI_NOTIFY_STATES.join(', ')}.`);
+  });
+  return out;
 }
 
 /* ---------- Jobs and steps ---------- */
@@ -700,7 +725,7 @@ export function validatePipeline(file: string, text: string): Validated {
   }
   checkKeys(d, root, [], TOP_KEYS, FOREIGN_TOP);
 
-  const { on, inputs } = own(root, 'on') ? readOn(d, root.on) : (d.error([], 'missing-key', 'A pipeline needs `on`.', 'For example: on: { push: {} }'), { on: { push: null, merge: null, manual: null }, inputs: [] as CiInput[] });
+  const { on, inputs } = own(root, 'on') ? readOn(d, root.on) : (d.error([], 'missing-key', 'A pipeline needs `on`.', 'For example: on: { push: {} }'), { on: { push: null, merge: null, manual: null, notify: null }, inputs: [] as CiInput[] });
   const inputNames = new Set(inputs.map((i) => i.name));
   const env = envOf(d, root.env, ['env'], { inputs: inputNames, env: new Set(), matrix: new Set() });
   const envNames = new Set(Object.keys(env));

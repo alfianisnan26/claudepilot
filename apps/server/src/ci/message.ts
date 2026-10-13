@@ -21,6 +21,8 @@ export interface FailureInput {
   log: string | null;
   /** This is the last failure CI will report until the branch passes. */
   lastWarning: boolean;
+  /** The run's page in the portal. */
+  link?: string;
 }
 
 /** The first job and step that failed and was not allowed to. */
@@ -63,6 +65,30 @@ export function failureMessage(f: FailureInput): string {
     }
   }
   lines.push('', 'Push a fix to run it again.');
+  if (f.link) lines.push(`Run: ${f.link}`);
   if (f.lastWarning) lines.push('This is the third failure in a row on this branch: CI will not message you about this branch again until a run passes.');
   return lines.join('\n');
+}
+
+export interface ReportInput {
+  state: 'passed' | 'cancelled' | 'waiting';
+  number: number;
+  pipeline: string;
+  branch: string | null;
+  sha: string;
+  /** For `waiting`: the environment a job waits to deploy to. */
+  environment?: string | null;
+  link: string;
+}
+
+/** A run that did not fail, in one or two lines (PRD FR36): what, where and the link. The pipeline's name is the file's, not free text. */
+export function reportMessage(r: ReportInput): string {
+  const where = `${r.branch ?? 'a tag'} at ${shortSha(r.sha)} (run #${r.number})`;
+  const what =
+    r.state === 'passed'
+      ? `CI: the pipeline "${r.pipeline}" passed on ${where}.`
+      : r.state === 'cancelled'
+        ? `CI: the pipeline "${r.pipeline}" was cancelled on ${where}.`
+        : `CI: the pipeline "${r.pipeline}" on ${where} waits for a person to approve the deploy${r.environment ? ` to "${cleanText(r.environment, 80)}"` : ''}. Nothing to do until then.`;
+  return `${what}\nRun: ${r.link}`;
 }

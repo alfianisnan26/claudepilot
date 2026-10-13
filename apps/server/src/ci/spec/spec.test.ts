@@ -483,3 +483,21 @@ test('replan gives a rerun its own id and number', () => {
   assert.equal(again.env.PILOT_RUN_NUMBER, '8');
   assert.equal(c.plan.runId, 'r1abc234', 'the first plan is unchanged');
 });
+
+test('on.notify lists the states a run reports to its session; it is no trigger, a wrong state is named, and the plan carries the list', () => {
+  const ok = validatePipeline('.pilot/x.yml', 'on:\n  push: {}\n  notify: [passed, waiting, passed]\njobs:\n  a:\n    steps: [{run: x}]\n');
+  assert.deepEqual(ok.info.diagnostics, []);
+  assert.deepEqual(ok.pipeline!.on.notify, ['passed', 'waiting']);
+  assert.deepEqual(ok.info.triggers, ['push'], 'notify is not a trigger');
+  const c = compile(ok.pipeline!, ctx(), { maxParallel: 1 });
+  assert.ok(c.ok && c.plan.notify && c.plan.notify.join() === 'passed,waiting');
+
+  const none = validatePipeline('.pilot/x.yml', 'on: push\njobs:\n  a:\n    steps: [{run: x}]\n');
+  const plain = compile(none.pipeline!, ctx(), { maxParallel: 1 });
+  assert.ok(plain.ok && !('notify' in plain.plan), 'a file that says nothing adds nothing to the plan');
+
+  const bad = validatePipeline('.pilot/x.yml', 'on:\n  push: {}\n  notify: [pased]\njobs:\n  a:\n    steps: [{run: x}]\n').info.diagnostics;
+  assert.deepEqual(bad.map((d) => [d.code, d.path, d.hint]), [['bad-value', 'on.notify[0]', 'Did you mean "passed"?']]);
+  const alone = validatePipeline('.pilot/x.yml', 'on:\n  notify: [passed]\njobs:\n  a:\n    steps: [{run: x}]\n').info.diagnostics;
+  assert.ok(alone.some((d) => d.code === 'empty'), 'notify alone starts nothing: a trigger is still needed');
+});

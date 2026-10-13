@@ -233,6 +233,7 @@ export function compile(p: Pipeline, e: EventContext, opts: { maxParallel: numbe
       timeoutMs: p.timeoutMs ?? CI_LIMITS.runTimeoutMs,
       maxParallel: opts.maxParallel,
       jobs,
+      ...(p.on.notify?.length ? { notify: p.on.notify } : {}),
     },
   };
 }
