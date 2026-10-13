@@ -571,7 +571,6 @@ const STATES = {
         check(`${label}: the Bypass shield at 3:1 over the tinted header`, contrast(parseRgb(s.color), bgPx) >= 3, J({ contrast: contrast(parseRgb(s.color), bgPx) }));
       }
       await shot(`${cfg.name}-header-${label.toLowerCase()}`);
-      if (process.env.SS_DEBUG) { await ev(`document.querySelector("[data-header-fade]").style.display = "none"`); await sleep(200); await shot(`${cfg.name}-header-${label.toLowerCase()}-nofade`); await ev(`document.querySelector("[data-header-fade]").style.display = ""`); }
     }
   },
 
