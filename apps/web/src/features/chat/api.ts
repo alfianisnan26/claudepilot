@@ -118,6 +118,8 @@ export const chatApi = {
   enterBypass: (id: string, body: EnterBypassRequest) => request<ChatSession>('POST', CHAT_API.bypass(id), body),
   /** Restarts the session so it can enter Bypass, at its next turn boundary. */
   allowBypass: (id: string) => request<ChatSession>('POST', CHAT_API.bypassAllow(id)),
+  /** Restarts the session's Claude Code on the same conversation, at a turn boundary, so its MCP servers reconnect. */
+  restart: (id: string, why: 'mcp' | 'manual') => request<ChatSession>('POST', CHAT_API.restart(id), { why }),
   /** Checks the server code again (what Bypass guards). */
   reauth: (code: string) => request<{ ok: true }>('POST', CHAT_API.reauth, { code } satisfies ReauthRequest),
   /** What the chat policy allows: whether a session can be started to allow Bypass. */

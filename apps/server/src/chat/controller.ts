@@ -23,6 +23,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { AppError, isAppError } from '@isnanme/core';
 import {
+  autoModeAllowed,
   BYPASS_BLOCKED,
   BYPASS_NOT_CAPABLE,
   CHAT_ACTOR_UI,
@@ -146,10 +147,10 @@ export const HANDOFF_REQUEST = [
   'No secrets or credentials. At most 900 words.',
 ].join('\n\n');
 
-/** Modes a chat session may switch to; Bypass is never one of them. */
-const MODES = new Set<string>(['default', 'acceptEdits', 'plan', 'dontAsk']);
+/** Modes a chat session may switch to; Bypass is never one of them, and Auto only for a person's own session ({@link autoModeAllowed}). */
+const MODES = new Set<string>(['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']);
 /** The UI's names for the modes, used in the transcript's system rows. */
-const MODE_LABELS: Record<string, string> = { default: 'Ask', acceptEdits: 'Auto-accept edits', plan: 'Plan', dontAsk: "Don't ask", bypassPermissions: 'Bypass' };
+const MODE_LABELS: Record<string, string> = { default: 'Manual', acceptEdits: 'Edit', plan: 'Plan', auto: 'Auto', dontAsk: "Don't ask", bypassPermissions: 'Bypass' };
 /** Characters that hide or reorder text (controls, zero-width, bidi marks and overrides, tag characters): never in a title a workspace chose. */
 const HIDDEN_CHARS = /[\p{Cc}\u200B\u200E\u200F\u202A-\u202E\u2066-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
 /** A model value (`default`, `sonnet`, a full id): printable ASCII, no spaces. */
@@ -373,6 +374,14 @@ export class ChatController {
   readonly #bypassGrant = new Set<string>();
   /** Chats moving to another Claude right now (a second move, a message, a control or an end is refused meanwhile), and how far along. */
   readonly #moving = new Map<string, { toClaude: string; step: 'handoff' | 'starting' | 'finishing' }>();
+  /** Chats whose process a Restart is replacing (`restart`): a move or a second restart is refused meanwhile; messages wait for the new process. */
+  readonly #restarting = new Map<string, Promise<void>>();
+  /** Per session: messages a caller handed to `send` that haven't been written yet (a Restart waits for none to be on its way). */
+  readonly #sending = new Map<string, number>();
+  /** When the portal saw each session's current process start (its own clock), for the "delivered since" hint; the stored start time after a portal restart. */
+  readonly #launchedAt = new Map<string, number>();
+  /** Per workspace: the last delivery time the sessions' tabs were told about (`deliveryChanged`). */
+  readonly #deliveredSeen = new Map<string, string | null>();
   /** The move whose events are being written: they carry its id, so the transcript folds them into one card. */
   readonly #tags = new Map<string, string>();
   /** Git worktrees: made and removed through the session host's hardened git. */
@@ -452,6 +461,12 @@ export class ChatController {
   mcpServersSeen?: (workspaceId: string, directory: string, servers: { name: string; status: string }[]) => string[];
   /** Installed by the owner: whether the policy allows Bypass in chat (the interim switch `sessions.allowBypass`). Unset: no. */
   bypassAllowed?: () => boolean;
+  /**
+   * Installed by the owner (delivery, `workspace_delivery.applied_at`): when the latest delivery that wrote into a workspace landed (MCP
+   * servers, settings, secrets), or null. A live session whose process started before it shows a Restart hint (`configChangedAt`).
+   * Unset, no hint.
+   */
+  deliveredAt?: (workspaceId: string) => string | null;
   /**
    * Installed by Portal MCP (I8): a per-session token for the process, minted at every launch (a new session, a resume,
    * a wake, a move to another Claude), which replaces the one before. Unset, or null for a workspace that hasn't opted
@@ -771,7 +786,46 @@ export class ChatController {
   /** A session as tabs see it: while its chat moves to another Claude, where to and how far along. */
   #decorate(session: ChatSession): ChatSession {
     const moving = this.#moving.get(session.id);
-    return moving ? { ...session, switching: { ...moving } } : session;
+    let out = moving ? { ...session, switching: { ...moving } } : session;
+    if (this.#restarting.has(session.id)) out = { ...out, restarting: true };
+    const changed = this.#configChangedAt(session);
+    if (changed) out = { ...out, configChangedAt: changed };
+    return out;
+  }
+
+  /**
+   * When the workspace's latest delivery landed, if that was after this session's process started (Claude Code reads its MCP servers and
+   * settings once, at start): the Restart hint. Null for a process that isn't running, or when nothing newer landed.
+   */
+  #configChangedAt(session: ChatSession): string | null {
+    if (!this.deliveredAt || session.process !== 'live' || session.state === 'ended') return null;
+    let at: string | null;
+    try {
+      at = this.deliveredAt(session.workspaceId);
+    } catch {
+      return null;
+    }
+    const landed = at ? Date.parse(at) : NaN;
+    if (!Number.isFinite(landed)) return null;
+    const started = this.#launchedAt.get(session.id) ?? Date.parse(this.#chat.row(session.id)?.process_started_at ?? '');
+    return Number.isFinite(started) && landed > started ? at : null;
+  }
+
+  /**
+   * Installed as the delivery's change listener (index.ts): when a workspace's latest delivery time moves, its live sessions' tabs hear it
+   * (the Restart hint). Any other change of the delivery row (a status, a check) tells nobody.
+   */
+  deliveryChanged(workspaceId: string): void {
+    if (!this.deliveredAt) return;
+    let at: string | null;
+    try {
+      at = this.deliveredAt(workspaceId);
+    } catch {
+      return;
+    }
+    if (this.#deliveredSeen.get(workspaceId) === at) return;
+    this.#deliveredSeen.set(workspaceId, at);
+    for (const row of this.#chat.liveRows()) if (row.workspace_id === workspaceId) this.#emitSession(row.id);
   }
 
   /** The chat takes no message, control or end while it moves to another Claude: nothing is queued. */
@@ -1074,6 +1128,7 @@ export class ChatController {
     if (dest.id === source.claudeId) throw new AppError('VALIDATION_FAILED', 'That session is already on this Claude.');
     if (opts.handoff !== undefined && opts.handoff !== 'ask' && opts.handoff !== 'skip') throw new AppError('VALIDATION_FAILED', 'Unknown handoff choice.', { details: { handoff: 'Expected ask or skip.' } });
     if (this.#moving.has(sessionId)) throw new AppError('CONFLICT', 'This chat is already moving.');
+    if (this.#restarting.has(sessionId)) throw new AppError('CONFLICT', 'This chat is restarting. Try again in a moment.');
     this.#moving.set(sessionId, { toClaude: dest.name, step: 'handoff' });
     this.#emitSession(sessionId);
     try {
@@ -1131,10 +1186,12 @@ export class ChatController {
       const sourceClaudeId = source.claudeId || this.#chat.ensureDefault(workspaceId).id;
       this.#chat.saveHandoff({ id: handoffId, workspaceId, sourceSessionId: sessionId, sourceClaudeId, destClaudeId: dest.id, path });
 
-      // 3. The new run: a Claude Code process in the destination Claude's directory, in the same folder or worktree.
+      // 3. The new run: a Claude Code process in the destination Claude's directory, in the same folder or worktree. A bypass-capable chat
+      // keeps the flag while the policy allows it (a move is a deliberate restart: Bypass is kept, step 5), on whichever Claude it lands.
       this.#step(sessionId, 'starting', `Starting ${dest.name}…`);
       const cwd = sessionCwd(row.cwd);
-      const r = await this.#hostStart(workspaceId, { sessionId, csid: newCsid, seg: 0, cwd, claudeId: dest.id, resume: false });
+      const wasBypass = row.mode === 'bypassPermissions';
+      const r = await this.#hostStart(workspaceId, { sessionId, csid: newCsid, seg: 0, cwd, claudeId: dest.id, resume: false, bypass: row.bypass_capable === 1 && this.#bypassAllowed() });
       started = r.code === 0 ? parseStartOutput(r.out) : null;
       if (r.code !== 0) throw new AppError('SERVICE_UNAVAILABLE', `The session host couldn’t start ${dest.name} (exit ${r.code ?? 'unknown'}).`, { expose: true });
 
@@ -1144,6 +1201,7 @@ export class ChatController {
       this.#forget(sessionId, 'The chat moved to another Claude.');
       kept = { costBase: this.#costBase.get(sessionId), modelBase: this.#modelBase.get(sessionId), mode: this.#modes.get(sessionId) };
       undo = this.#chat.switchSegment(sessionId, { claudeId: dest.id, claudeSessionId: newCsid, pid: started?.pid ?? null, startedAt: started?.startedAt ?? null });
+      this.#launchedAt.set(sessionId, Date.now());
       this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
       this.#costBase.set(sessionId, 0); // a new process counts its cost from zero
       this.#modelBase.set(sessionId, new Map());
@@ -1167,6 +1225,8 @@ export class ChatController {
       this.#append(sessionId, { kind: 'system', text: `Moved to ${dest.name}`, transfer });
       const old = undo.row;
       await this.#runOnce(workspaceId, ['stop', claudeSessionOf(old)]).catch(() => undefined);
+      // The new run started on the start mode and took the context in it (its tool requests denied): Bypass comes back only now, the move done.
+      if (wasBypass) await this.#keepBypass(sessionId, 'move');
       return this.#chat.get(sessionId)!;
     } catch (e) {
       const why = isAppError(e) ? e.message : this.#message(e);
@@ -1175,7 +1235,8 @@ export class ChatController {
         this.#stopReader(sessionId);
         this.#forget(sessionId, 'The move did not finish.');
         await this.#runOnce(workspaceId, ['stop', newCsid]).catch(() => undefined);
-        this.#chat.restoreSegment(undo);
+        this.#chat.restoreSegment(undo); // its mode as it was, Bypass included: the old run kept running in it
+        this.#launchedAt.delete(sessionId);
         if (kept?.costBase !== undefined) this.#costBase.set(sessionId, kept.costBase);
         else this.#costBase.delete(sessionId);
         if (kept?.modelBase) this.#modelBase.set(sessionId, kept.modelBase);
@@ -1327,7 +1388,16 @@ export class ChatController {
     const sessionId = this.#chat.resolveId(rawId);
     this.#notMoving(sessionId);
     this.#gate(sessionId);
-    return this.#send(sessionId, uuid, text, opts);
+    // A Restart under way: the message goes to the new process, after the ones sent before it.
+    await this.#restarting.get(sessionId);
+    this.#sending.set(sessionId, (this.#sending.get(sessionId) ?? 0) + 1);
+    try {
+      return await this.#send(sessionId, uuid, text, opts);
+    } finally {
+      const n = (this.#sending.get(sessionId) ?? 1) - 1;
+      if (n > 0) this.#sending.set(sessionId, n);
+      else this.#sending.delete(sessionId);
+    }
   }
 
   /** A used-up budget that pauses messages (usage spend) refuses the message here, before anything is stored or sent. */
@@ -1508,9 +1578,11 @@ export class ChatController {
    * the applied values); `cancel_queued` withdraws a queued message; `resume` relaunches an Interrupted
    * or sleeping session; `stop_task` stops one sub-agent or background task.
    */
-  async control(rawId: string, op: ChatControl['op'], args?: ChatControl['args']): Promise<void> {
+  async control(rawId: string, op: ChatControl['op'], args?: ChatControl['args'], opts: { actor?: string } = {}): Promise<void> {
     const sessionId = this.#chat.resolveId(rawId);
     if (op !== 'rename') this.#notMoving(sessionId);
+    // A Restart under way: a change waits for the new process (Stop and End don't wait).
+    if (op !== 'rename' && op !== 'stop' && op !== 'end') await this.#restarting.get(sessionId);
     const a: NonNullable<ChatControl['args']> = args && typeof args === 'object' ? args : {};
     switch (op) {
       case 'stop':
@@ -1524,7 +1596,7 @@ export class ChatController {
       case 'ultracode':
         return this.#setUltracode(sessionId, a.ultracode);
       case 'mode':
-        return this.#setMode(sessionId, a.mode);
+        return this.#setMode(sessionId, a.mode, opts.actor);
       case 'cancel_queued':
         return this.#cancelQueued(sessionId, a.inputUuid);
       case 'resume':
@@ -1785,6 +1857,7 @@ export class ChatController {
     const sessionId = this.#chat.resolveId(rawId);
     const session = this.#require(sessionId);
     this.#notMoving(sessionId);
+    if (this.#restarting.has(sessionId)) throw new AppError('CONFLICT', 'This chat is restarting. Try again in a moment.');
     if (!this.#bypassAllowed()) {
       this.#refuseBypass(sessionId, 'policy', 'restart');
       throw new AppError(BYPASS_BLOCKED, 'Bypass is blocked by policy.', { status: 403 });
@@ -1810,6 +1883,187 @@ export class ChatController {
     }
     await this.#live(sessionId);
     return this.#chat.get(sessionId)!;
+  }
+
+  /* ---------- Restart (reconnect) ---------- */
+
+  /**
+   * Restart (chat-sessions PRD, Restart): stops the session's Claude Code process at a turn boundary and starts it again on the same
+   * conversation (`--resume` with the same Claude Code session id, on a fresh log segment in the same folder), so it connects the MCP
+   * servers and reads the settings delivered since it started (Claude Code reads them once, at start). Model, effort and mode come back as
+   * after any resume; Bypass comes back too, without asking again, when the session was in it and the policy still allows it (a deliberate
+   * restart, unlike a wake or a crash). Refused while a turn runs, an approval waits or a message is still on its way, and while the chat
+   * moves; a move is refused while it runs. Messages sent meanwhile wait for the new process, in order. Running background tasks stop with
+   * the old process (the app lists them before asking). Audited (`session.restart`), and the transcript marks it.
+   */
+  async restart(rawId: string, opts: { why?: unknown } = {}): Promise<ChatSession> {
+    const sessionId = this.#chat.resolveId(rawId);
+    const session = this.#require(sessionId);
+    this.#notMoving(sessionId);
+    const why = opts.why === undefined || opts.why === 'manual' ? 'manual' : opts.why === 'mcp' ? 'mcp' : null;
+    if (!why) throw new AppError('VALIDATION_FAILED', 'Unknown reason.', { details: { why: 'Expected mcp or manual.' } });
+    if (this.#restarting.has(sessionId)) throw new AppError('CONFLICT', 'This chat is already restarting.');
+    this.#restartable(session);
+    const op = this.#restart(sessionId, why);
+    const settled = op.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#restarting.set(sessionId, settled);
+    this.#emitSession(sessionId);
+    try {
+      return await op;
+    } finally {
+      if (this.#restarting.get(sessionId) === settled) this.#restarting.delete(sessionId);
+      this.#emitSession(sessionId);
+    }
+  }
+
+  /** A restart happens only at a turn boundary, with nothing waiting for an answer and nothing on its way: else it throws why not. */
+  #restartable(session: ChatSession): void {
+    if (session.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
+    if (session.state === 'waiting' || this.#chat.openRequests(session.id).length) throw new AppError('CONFLICT', 'An approval is waiting. Answer it first, then restart.');
+    if (session.state === 'working') throw new AppError('CONFLICT', 'Wait for the turn to end, then restart.');
+    if (this.#chat.hasOpenInputs(session.id) || this.#sending.has(session.id)) throw new AppError('CONFLICT', 'A message is still on its way. Try again in a moment.');
+  }
+
+  async #restart(sessionId: string, why: 'mcp' | 'manual'): Promise<ChatSession> {
+    await this.#busy.get(sessionId); // a launch or a sleep in flight settles first
+    this.#restartable(this.#require(sessionId)); // and things may have moved on while it did
+    const row = this.#chat.row(sessionId)!;
+    const agents = this.#chat.tasks(sessionId).filter((t) => t.status === 'running').length;
+    // A deliberate restart keeps Bypass (the person confirmed it for this chat), while the policy allows it and the session can.
+    const keep = row.mode === 'bypassPermissions' && row.bypass_capable === 1 && this.#bypassAllowed();
+    await this.#stopForRestart(sessionId, 'The session restarted.', keep);
+    await this.#live(sessionId); // `--resume` on a new segment; its settings are put back
+    this.#append(sessionId, { kind: 'system', text: 'Restarted: MCP reconnected', restart: true });
+    if (keep) await this.#keepBypass(sessionId, 'restart');
+    const now = this.#chat.row(sessionId);
+    this.#chat.addAudit({
+      severity: 'info',
+      kind: 'session.restart',
+      sessionId,
+      workspaceId: row.workspace_id,
+      actor: 'ui',
+      detail: { why, agents, bypass: keep ? (now?.mode === 'bypassPermissions' ? 'kept' : 'dropped') : 'none' },
+    });
+    return this.#chat.get(sessionId)!;
+  }
+
+  /**
+   * Stops a running process for a deliberate restart (the session is left asleep; the next `#live` resumes it). The reader goes first, so the
+   * process's end isn't read as a crash. `quiet`: the session was in Bypass and keeps it, so it reads the start mode now (what the new process
+   * starts in) without the "turned off" note. A stop the workspace refused leaves everything as it was, and says so.
+   */
+  async #stopForRestart(sessionId: string, why: string, quiet = false): Promise<void> {
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state === 'ended' || row.process !== 'live') {
+      if (quiet && row?.mode === 'bypassPermissions') this.#chat.patchSession(sessionId, { mode: START_MODE }); // it slept: off already in fact
+      return;
+    }
+    const op = (async () => {
+      this.#stopReader(sessionId);
+      let code: number | null = null;
+      try {
+        ({ code } = await this.#runOnce(row.workspace_id, ['stop', claudeSessionOf(row)]));
+      } catch {
+        code = null;
+      }
+      if (code !== 0) {
+        this.#ensureReader(sessionId);
+        throw new AppError('SERVICE_UNAVAILABLE', 'Couldn’t stop Claude Code to restart it. Try again.', { expose: true });
+      }
+      this.#forget(sessionId, why);
+      if (quiet) this.#chat.patchSession(sessionId, { mode: START_MODE });
+      this.#closeOut(sessionId);
+      this.#chat.patchSession(sessionId, { process: 'asleep' });
+      this.#launchedAt.delete(sessionId);
+      this.#emitSession(sessionId);
+    })();
+    // Lifecycle work: sends and controls wait for it, and the liveness round leaves the session alone meanwhile.
+    const held = op.catch(() => undefined);
+    this.#busy.set(sessionId, held);
+    try {
+      await op;
+    } finally {
+      if (this.#busy.get(sessionId) === held) this.#busy.delete(sessionId);
+    }
+  }
+
+  /**
+   * After a deliberate restart (a move to another Claude, a Restart) of a session that was in Bypass: puts it back through the same grant
+   * `enterBypass` uses, without the acknowledgement or the server code again (the person gave both for this chat), on the record as a High
+   * `bypass.entered` (`how`). The new process was launched with the flag when the policy allowed it; if the switch still fails, the process
+   * is restarted once more (with the flag) and asked again; if that fails too, the session stays on the start mode, says so and the audit
+   * trail records `bypass.left` (`<how>_failed`). The policy turning Bypass off wins at any point. Never throws.
+   */
+  async #keepBypass(sessionId: string, how: 'move' | 'restart'): Promise<void> {
+    const after = how === 'move' ? 'after the move' : 'after the restart';
+    const drop = (why: string, text: string) => {
+      const row = this.#chat.row(sessionId);
+      if (!row || row.state === 'ended') return;
+      if (row.mode === 'bypassPermissions') this.#chat.patchSession(sessionId, { mode: START_MODE });
+      this.#note(sessionId, text);
+      this.#chat.addAudit({ severity: 'medium', kind: 'bypass.left', sessionId, workspaceId: row.workspace_id, actor: 'portal', detail: { why, how } });
+      this.#emitSession(sessionId);
+    };
+    try {
+      const row = this.#chat.row(sessionId);
+      if (!row || row.state === 'ended') return;
+      // The new process runs on the start mode until the switch: the session says so meanwhile.
+      if (row.mode === 'bypassPermissions') this.#chat.patchSession(sessionId, { mode: START_MODE });
+      if (!this.#bypassAllowed()) return drop('policy', `Bypass turned off ${after}: the policy no longer allows it.`);
+      if (row.bypass_capable !== 1) return drop('not_capable', `Bypass turned off ${after}.`);
+      try {
+        await this.#setBypass(sessionId);
+      } catch {
+        // Not launched with the flag, or the switch failed: the restart approach, once.
+        if (!this.#bypassAllowed()) return drop('policy', `Bypass turned off ${after}: the policy no longer allows it.`);
+        try {
+          await this.#stopForRestart(sessionId, 'Restarting to keep Bypass.');
+          await this.#setBypass(sessionId);
+        } catch (e) {
+          return drop(`${how}_failed`, `Bypass is off: it couldn’t be kept ${after} (${cliMessage(this.#message(e))}).`);
+        }
+      }
+      const now = this.#chat.row(sessionId);
+      if (!now || now.state === 'ended') return;
+      // The policy turned it off while the switch was in flight (its handler saw the start mode and passed this session by): back out.
+      if (!this.#bypassAllowed()) {
+        this.#chat.patchSession(sessionId, { mode: 'bypassPermissions' });
+        // Out of it, or no process left running in it.
+        await this.#setMode(sessionId, START_MODE).catch(() => this.#stopForRestart(sessionId, 'Bypass is no longer allowed.').catch(() => undefined));
+        return drop('policy', `Bypass turned off ${after}: the policy no longer allows it.`);
+      }
+      this.#chat.patchSession(sessionId, { mode: 'bypassPermissions' });
+      this.#note(sessionId, `Bypass kept ${after}.`);
+      this.#chat.addAudit({
+        severity: 'high',
+        kind: 'bypass.entered',
+        sessionId,
+        workspaceId: now.workspace_id,
+        actor: 'portal',
+        detail: { how, claude: this.#chat.get(sessionId)?.claudeName ?? null, policy: 'allowed', capable: true },
+      });
+      this.#emitSession(sessionId);
+    } catch (e) {
+      drop(`${how}_failed`, `Bypass is off: it couldn’t be kept ${after} (${cliMessage(this.#message(e))}).`);
+    }
+  }
+
+  /** The one request that enters Bypass, under the grant (the policy and the capability checked by the caller, and again here). */
+  async #setBypass(sessionId: string): Promise<void> {
+    if (!this.#bypassAllowed()) throw new AppError(BYPASS_BLOCKED, 'Bypass is blocked by policy.', { status: 403 });
+    await this.#live(sessionId); // a process stopped for the retry comes back with the flag (capable, and the policy allows it)
+    if (this.#chat.row(sessionId)?.bypass_capable !== 1) throw new AppError(BYPASS_NOT_CAPABLE, 'This session wasn’t started to allow Bypass.', { status: 409 });
+    this.#bypassGrant.add(sessionId);
+    try {
+      const reply = await this.#request(sessionId, 'set_permission_mode', { mode: 'bypassPermissions' });
+      const applied = typeof reply.mode === 'string' && reply.mode ? reply.mode : 'bypassPermissions';
+      if (applied !== 'bypassPermissions') throw new AppError('CONFLICT', 'Claude Code didn’t switch to Bypass.');
+    } finally {
+      this.#bypassGrant.delete(sessionId);
+    }
   }
 
   /**
@@ -2086,14 +2340,30 @@ export class ChatController {
     this.#note(sessionId, on ? 'Ultracode on' : 'Ultracode off');
   }
 
-  async #setMode(sessionId: string, mode: unknown): Promise<void> {
+  /**
+   * `actor` is who asks: `ui` (a person in the app, the socket) or nothing (the portal's own modules: triggers, Portal MCP, the policy).
+   * Auto lets Claude Code's classifier approve actions nobody sees, so only a person may turn it on, and only in a session a person
+   * started (`autoModeAllowed`): a session started from a webhook, a ticket, MCP or another session keeps the ceiling it had (Edit).
+   * Claude Code refusing Auto (`auto_mode_model`, `auto_mode_settings`) leaves the mode as it was and says why.
+   */
+  async #setMode(sessionId: string, mode: unknown, actor?: string): Promise<void> {
     if (mode === 'bypassPermissions') {
       // Never a plain control: it takes the confirmation and the server code check (enterBypass).
       this.#refuseBypass(sessionId, 'control', 'socket');
       throw new AppError('FORBIDDEN', 'Bypass is off for chat sessions. Turn it on with its own confirmation.');
     }
     if (typeof mode !== 'string' || !MODES.has(mode)) throw new AppError('VALIDATION_FAILED', 'Pick a permission mode.');
-    this.#require(sessionId);
+    const session = this.#require(sessionId);
+    if (mode === 'auto' && session.mode !== 'auto') {
+      const why = actor !== CHAT_ACTOR_UI ? 'actor' : !autoModeAllowed(session) ? 'origin' : null;
+      if (why) {
+        this.#chat.addAudit({ severity: 'medium', kind: 'mode.refused', sessionId, workspaceId: session.workspaceId, actor: actor ?? 'portal', detail: { mode: 'auto', why } });
+        throw new AppError(
+          'FORBIDDEN',
+          why === 'actor' ? 'Only a person in the app can turn on Auto.' : 'Auto is only for sessions a person started here. This one was started by a trigger, a ticket, MCP or another session.',
+        );
+      }
+    }
     await this.#live(sessionId);
     const was = this.#chat.row(sessionId)?.mode;
     // The reply confirms the mode as it's read (see #acceptControlResponse), before any status line.
@@ -2110,6 +2380,7 @@ export class ChatController {
     this.#chat.patchSession(sessionId, { mode: applied });
     this.#emitSession(sessionId);
     this.#note(sessionId, `Mode: ${MODE_LABELS[applied] ?? applied}`);
+    if (applied === 'auto' && was !== 'auto') this.#chat.addAudit({ severity: 'medium', kind: 'mode.auto', sessionId, workspaceId: session.workspaceId, actor: actor ?? 'portal', detail: { from: was ?? null } });
   }
 
   /** Withdraws a queued message (`cancel_async_message`); it then reads `cancelled`. */
@@ -2262,6 +2533,7 @@ export class ChatController {
         endedReason: null,
       });
       this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
+      this.#launchedAt.set(sessionId, Date.now());
       this.#costBase.set(sessionId, 0); // a new process counts its cost from zero
       this.#modelBase.set(sessionId, new Map());
       this.#launched(sessionId, workspaceId);
@@ -2400,7 +2672,10 @@ export class ChatController {
    * note and never fails the launch.
    */
   async #restore(sessionId: string, r: Restore): Promise<void> {
-    const mode = r.mode !== START_MODE && MODES.has(r.mode);
+    const session = this.#chat.get(sessionId);
+    const mode = r.mode !== START_MODE && MODES.has(r.mode) && (r.mode !== 'auto' || (!!session && autoModeAllowed(session)));
+    // A mode that isn't put back (Auto where it isn't allowed): the process runs on the start mode, and the session says so.
+    if (!mode && r.mode !== START_MODE && this.#isLive(sessionId)) this.#chat.patchSession(sessionId, { mode: START_MODE });
     if (!r.model && !r.effort && !r.ultracode && !mode) {
       await this.#refreshApplied(sessionId).catch(() => undefined); // nothing to put back: just show what applies
       return;
@@ -2423,6 +2698,8 @@ export class ChatController {
         if (applied !== 'bypassPermissions') this.#chat.patchSession(sessionId, { mode: applied });
       } catch {
         failed.push('mode');
+        // Claude Code refused it (Auto on a model without it, say): the process runs on the start mode, and the session says so.
+        if (this.#isLive(sessionId)) this.#chat.patchSession(sessionId, { mode: START_MODE });
       }
     }
     await this.#refreshApplied(sessionId).catch(() => undefined);

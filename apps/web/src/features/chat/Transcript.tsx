@@ -1,6 +1,6 @@
 import { cn, Spinner } from '@isnanme/ui';
 import { foldMoves, type ChatEvent, type ChatFile, type ChatImage, type ChatInputState, type ChatMove } from '@portal/contracts';
-import { ArrowDown, ArrowRightLeft, Bot, ChevronDown, Clock3, ImageIcon, Plug, Ticket, Workflow, X } from 'lucide-react';
+import { ArrowDown, ArrowRightLeft, Bot, ChevronDown, Clock3, ImageIcon, Plug, RotateCw, Ticket, Workflow, X, type LucideIcon } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -228,7 +228,7 @@ export function Transcript({
       const e = r.event;
       if (e.kind === 'assistant') return !!e.agentLabel || !finals.has(e.seq);
       // What stands for a move stays where it is, in the open.
-      if (e.kind === 'system' && (e.transfer || e.btw || moves.has(e.seq))) return false;
+      if (e.kind === 'system' && (e.transfer || e.btw || e.restart || moves.has(e.seq))) return false;
       return e.kind === 'system' || e.kind === 'retry' || e.kind === 'resolved';
     };
     // "Ready" (the process started) says nothing a reader needs, except in Show all details.
@@ -512,6 +512,7 @@ function EventRow({ event: e, ctx }: { event: ChatEvent; ctx: RowContext }) {
       const move = ctx.moves.get(e.seq);
       if (move) return <MoveRow move={move} moveMark={ctx.moveMark} />;
       if (e.btw) return <PinnedBtw btw={e.btw} />;
+      if (e.restart) return <TransferMarker event={e} icon={RotateCw} />;
       return e.transfer ? <TransferMarker event={e} mark={e.transfer.handoffId ? ctx.moveMark?.(e.transfer.handoffId) : null} /> : <CenterLine>{e.text}</CenterLine>;
     }
     case 'retry':
@@ -785,13 +786,14 @@ function PortalMessage({ event: e }: { event: ChatEvent }) {
 }
 
 /** The divider where a chat changed Claude (Workspace Claudes FR14, FR18): a rule with what happened and when. */
-function TransferMarker({ event: e, mark }: { event: ChatEvent; mark?: ReactNode }) {
+/** A move's marker, or a Restart's divider (`icon`): a line across the transcript with what happened and when. */
+function TransferMarker({ event: e, mark, icon: Icon = ArrowRightLeft }: { event: ChatEvent; mark?: ReactNode; icon?: LucideIcon }) {
   const at = new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return (
     <div role="separator" className="flex items-center gap-3 px-1 text-[12px] text-muted">
       <span className="h-px flex-1 bg-line" aria-hidden="true" />
       <span className="inline-flex items-center gap-1.5">
-        <ArrowRightLeft className="size-3 shrink-0" aria-hidden="true" />
+        <Icon className="size-3 shrink-0" aria-hidden="true" />
         {e.text} · {at}
       </span>
       {mark}

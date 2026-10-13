@@ -10,8 +10,23 @@ export type ChatSessionState = 'starting' | 'idle' | 'working' | 'waiting' | 'in
 /** Who started it. `ui` a person in the portal; `mcp` a Portal MCP client; `persona_test` a one-shot test. */
 export type ChatOrigin = 'ui' | 'mcp' | 'persona_test';
 
-/** Claude Code permission modes. `default` asks for everything (Manual). Bypass is blocked in C1. */
-export type ChatPermissionMode = 'default' | 'acceptEdits' | 'plan' | 'dontAsk' | 'bypassPermissions';
+/**
+ * Claude Code permission modes. `default` asks for everything (Manual); `acceptEdits` edits without asking (Edit); `auto` lets Claude
+ * Code's classifier approve routine actions and block risky ones (Auto: only sessions a person started in the app, see
+ * {@link autoModeAllowed}); `plan` changes nothing until approved; `dontAsk` (not offered, kept for stored rows) denies what isn't
+ * pre-approved; Bypass only through its own confirmation (FR20).
+ */
+export type ChatPermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions';
+
+/**
+ * Whether a session may use Auto (chat-sessions PRD, Auto mode): only one a person started in the app. A session a trigger, a ticket,
+ * Portal MCP or another session started read text nobody vetted (a webhook body, a ticket, an agent's words), so its ceiling stays
+ * where it was (Edit). The server checks this on every change to Auto; the app uses it to show Auto as unavailable.
+ */
+export function autoModeAllowed(s: { startedBy: string | null; origin: ChatOrigin; parentId: string | null }): boolean {
+  if (s.parentId) return false;
+  return s.startedBy === CHAT_ACTOR_UI || (s.startedBy === null && s.origin === 'ui');
+}
 
 export interface ChatSession {
   id: string;
@@ -70,6 +85,14 @@ export interface ChatSession {
   previousClaudes: { claudeId: string; name: string }[];
   /** While the chat moves to another Claude: where to and how far along. The composer waits; nothing is queued. */
   switching: { toClaude: string; step: 'handoff' | 'starting' | 'finishing' } | null;
+  /**
+   * When something was delivered into the workspace (MCP servers, settings, secrets) after this session's Claude Code process started,
+   * the time it landed: the process read its configuration at start, so a Restart (`CHAT_API.restart`) is what loads it. Absent or null
+   * when nothing newer landed, or the process isn't running.
+   */
+  configChangedAt?: string | null;
+  /** A Restart is under way (`CHAT_API.restart`): the composer waits; messages sent meanwhile go to the new process, in order. */
+  restarting?: boolean;
 }
 
 /** One run of a chat on a Claude: its Claude Code session, when, why it ended, and what it cost. */
@@ -247,6 +270,8 @@ export interface ChatEvent {
    * transcript shows as a marker rather than folding it into a turn's activity.
    */
   transfer?: ChatTransferContext;
+  /** `system`: the divider a Restart leaves ("Restarted: MCP reconnected"), shown as a marker like a move's. */
+  restart?: boolean;
   /**
    * For `user`: who sent it, when it didn't come from the person at the keyboard (`ticket:<id>`,
    * `session:<id>`, `portal-mcp:<token id>`). Such a message shows as coming from that actor, never as
@@ -472,6 +497,11 @@ export interface CreateWorkspaceClaudeRequest {
   name: string;
 }
 
+/** `POST CHAT_API.restart(id)`: why the person restarts it (`mcp`: the hint that something was delivered; `manual`: the menu). */
+export interface RestartChatRequest {
+  why?: 'mcp' | 'manual';
+}
+
 export interface SwitchChatRequest {
   /** The Claude to move the chat to, on the same workspace. */
   claudeId: string;
@@ -554,6 +584,12 @@ export const CHAT_API = {
   bypass: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/bypass`,
   /** POST: restart the session so it can enter Bypass (at its next turn boundary); the policy must allow it. */
   bypassAllow: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/bypass/allow`,
+  /**
+   * POST `RestartChatRequest`: stop the session's Claude Code process at a turn boundary and start it again on the same conversation
+   * (`--resume`), so it reconnects its MCP servers and reads what was delivered since. Model, effort and mode come back; Bypass too
+   * when the policy still allows it. Refused while a turn runs or an approval waits.
+   */
+  restart: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/restart`,
   /** POST `ReauthRequest`: check the server code again. */
   reauth: '/api/chat/reauth',
   /** GET: the chat policy (`{ bypass: { allowed } }`). */

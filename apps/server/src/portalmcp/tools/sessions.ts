@@ -9,7 +9,7 @@ import { assertCanChange, uiLink } from './common.js';
 import type { PortalToolDeps } from './deps.js';
 
 const STATES = ['starting', 'idle', 'working', 'waiting', 'interrupted', 'ended'] as const;
-/** Over MCP a session's mode is limited to the ones that can't run commands unasked (PRD §13.3). */
+/** Over MCP a session's mode is limited to the ones that can't run commands unasked (PRD §13.3): never Auto (the controller refuses it too) or Bypass. */
 const MCP_MODES = ['plan', 'default', 'acceptEdits', 'dontAsk'] as const satisfies readonly ChatPermissionMode[];
 /** Slash commands MCP text may use (chat-sessions FR13): anything else is for the terminal. */
 const SLASH_ALLOWED = new Set(['/compact', '/context', '/reload-plugins']);
@@ -252,7 +252,7 @@ export function registerSessionTools(deps: PortalToolDeps): void {
   registerPortalTool({
     name: 'session_configure',
     title: 'Change a session’s model, effort or mode',
-    description: 'Changes what applies from the session’s next request. Over MCP the mode is limited to plan, default, acceptEdits and dontAsk; bypass is never available here.',
+    description: 'Changes what applies from the session’s next request. Over MCP the mode is limited to plan, default, acceptEdits and dontAsk; auto and bypass are never available here (a person turns them on in the app).',
     scope: 'admin',
     requires: 'session_control',
     hints: { destructive: true, idempotent: true },

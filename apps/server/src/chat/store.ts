@@ -1201,6 +1201,8 @@ export class ChatStore {
     if ((ev.kind === 'user' || ev.kind === 'system') && ev.transfer) p.transfer = { ...ev.transfer, fromClaude: redact(ev.transfer.fromClaude), toClaude: redact(ev.transfer.toClaude) };
     // A pinned side question (chat PRD §20): a `system` event with its card.
     if (ev.kind === 'system' && ev.btw) p.btw = pinnedBtwOut(ev.btw);
+    // A Restart's divider (chat PRD, Restart).
+    if (ev.kind === 'system' && ev.restart === true) p.restart = true;
     if (ev.kind === 'user' && ev.actor) {
       p.actor = redact(ev.actor);
       if (ev.actorLabel) p.actorLabel = redact(ev.actorLabel);
@@ -1264,6 +1266,7 @@ export class ChatStore {
         ...(typeof tr.handoffId === 'string' ? { handoffId: tr.handoffId } : {}),
       };
     }
+    if (row.kind === 'system' && payload.restart === true) ev.restart = true;
     if (row.kind === 'system' && payload.btw) {
       const btw = pinnedBtwIn(payload.btw);
       if (btw) ev.btw = btw;

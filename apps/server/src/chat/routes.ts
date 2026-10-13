@@ -3,7 +3,7 @@
 
 import { AppError, success } from '@isnanme/core';
 import { createHash } from 'node:crypto';
-import type { ChatWorktreeRemoval, CreateChatSessionRequest, CreateWorkspaceClaudeRequest, EnterBypassRequest, ReauthRequest, SwitchChatRequest, UpdateChatSessionRequest } from '@portal/contracts';
+import type { ChatWorktreeRemoval, CreateChatSessionRequest, CreateWorkspaceClaudeRequest, EnterBypassRequest, ReauthRequest, RestartChatRequest, SwitchChatRequest, UpdateChatSessionRequest } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { RateLimiter } from '../rateLimit.js';
 import { serveBlob } from './artifacts/index.js';
@@ -77,6 +77,11 @@ export function createChatRoutes(controller: ChatController): Hono {
   });
   // POST /api/chat/sessions/:id/bypass/allow — restart it so it can enter Bypass (at a turn boundary); the policy must allow it.
   chat.post('/:id/bypass/allow', async (c) => c.json(success(await controller.allowBypass(c.req.param('id')))));
+  // POST /api/chat/sessions/:id/restart — stop its process at a turn boundary and resume the same conversation (MCP servers reconnect).
+  chat.post('/:id/restart', async (c) => {
+    const req = await body<RestartChatRequest>(c);
+    return c.json(success(await controller.restart(c.req.param('id'), { why: req.why })));
+  });
 
   // GET /api/chat/sessions/:id/segments — the runs of the chat on Claudes.
   chat.get('/:id/segments', (c) => c.json(success(controller.segments(c.req.param('id')))));

@@ -170,7 +170,8 @@ export function attachChat(server: Server, controller: ChatController, authorize
         case 'control': {
           const key = typeof msg.uuid === 'string' && msg.uuid ? msg.uuid : String(msg.op);
           try {
-            await controller.control(msg.session, msg.op, msg.args);
+            // A person in the app: the one caller that may turn on Auto (for a session a person started).
+            await controller.control(msg.session, msg.op, msg.args, { actor: 'ui' });
             send({ type: 'ack', uuid: key, ok: true });
           } catch (e) {
             send(refused(key, e));

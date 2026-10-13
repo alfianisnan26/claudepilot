@@ -233,6 +233,18 @@ function parseSystem(obj: Record<string, unknown>): ParsedLine {
     }
     case 'status':
       return parseStatus(obj, main);
+    case 'permission_denied': {
+      // Auto mode's classifier blocked a tool call (chat PRD, Auto): nobody was asked, so the transcript says which tool and why, in one line.
+      // The reason is the classifier's rule name; the tool's input is never repeated here.
+      const tool = asStr(obj.tool_name);
+      const reason = asStr(obj.decision_reason);
+      const how = asStr(obj.decision_reason_type);
+      // eslint-disable-next-line no-control-regex
+      const one = (v: string, max: number) => clean(v.replace(/[\x00-\x1f\x7f]+/g, ' ').trim(), max);
+      const text = `${how === 'classifier' ? 'Auto blocked' : 'Blocked'} ${tool ? one(tool, 80) : 'a tool'}${reason ? `: ${one(reason, 160)}` : ''}`;
+      const parent = asStr(obj.parent_tool_use_id);
+      return { stored: [{ kind: 'system', text, ...(parent ? { parentToolUseId: parent } : {}) }] };
+    }
     case 'task_started':
     case 'task_updated':
     case 'task_notification': {

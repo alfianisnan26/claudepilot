@@ -219,6 +219,9 @@ chatController.agentCaps = () => ({
   messagesPerHour: settingsModule.settings.get<number>(AGENT_MESSAGES_SETTING),
 });
 settingsModule.settings.onChange((key) => key === BYPASS_SETTING && void chatController.bypassPolicyChanged());
+// The Restart hint (chat PRD, Restart): when the latest delivery into a workspace landed; a session whose process is older offers a Restart.
+chatController.deliveredAt = (id) => reconciler.row(id)?.applied_at ?? null;
+reconciler.onChange((id) => chatController.deliveryChanged(id));
 chatController.bypassFacts = (id) => ({
   internet: true,
   credentials: [...(pools.stateFor(id) ? ['an account pool’s key'] : []), ...(poolService.assignmentsFor(id).some((a) => a.type === 'secrets' && a.state === 'assigned') ? ['Secrets & env values'] : [])],

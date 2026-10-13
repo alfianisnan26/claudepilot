@@ -1,22 +1,23 @@
 import { Button, cn, Dialog, Spinner, SwitchRow } from '@isnanme/ui';
-import type { ChatBypassState, ChatModelOption, ChatPermissionMode, ChatSession } from '@portal/contracts';
+import { autoModeAllowed, type ChatBypassState, type ChatModelOption, type ChatPermissionMode, type ChatSession } from '@portal/contracts';
 import {
   Check,
   FilePen,
   Hand,
   ListChecks,
   ShieldAlert,
+  ShieldCheck,
   ShieldOff,
   Zap,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useId, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react';
+import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { BypassDialog } from './BypassDialog';
+import { ContextRing } from './ContextRing';
 import { EffortSlider, ModelFamilies } from './ModelPicker';
-import { formatTokens } from './shared';
 import type { ChatControlArgs, ChatControlOp } from './useChatSocket';
 
 type Control = (op: ChatControlOp, args?: ChatControlArgs) => Promise<void>;
@@ -29,9 +30,10 @@ export interface ControlsHandle {
 
 /** Every mode a session can report, so the chip always reads right; only `OFFERED_MODES` can be picked here. */
 const MODES: Record<ChatPermissionMode, { label: string; hint: string; icon: LucideIcon; danger?: boolean }> = {
-  default: { label: 'Ask', hint: 'Asks before edits and commands.', icon: Hand },
-  acceptEdits: { label: 'Auto-accept edits', hint: 'Edits files without asking; asks before commands.', icon: FilePen },
   plan: { label: 'Plan', hint: 'Reads and plans; changes nothing until you approve.', icon: ListChecks },
+  default: { label: 'Manual', hint: 'Asks before edits and commands.', icon: Hand },
+  acceptEdits: { label: 'Edit', hint: 'Edits files without asking; asks before commands.', icon: FilePen },
+  auto: { label: 'Auto', hint: 'A classifier approves routine actions and blocks risky ones.', icon: ShieldCheck },
   dontAsk: { label: 'Don’t ask', hint: 'Runs only pre-approved actions and denies the rest.', icon: ShieldOff },
   bypassPermissions: { label: 'Bypass', hint: 'Runs everything without asking.', icon: ShieldAlert, danger: true },
 };
@@ -39,7 +41,7 @@ const MODES: Record<ChatPermissionMode, { label: string; hint: string; icon: Luc
 export const modeDetails = (mode: ChatPermissionMode) => MODES[mode] ?? MODES.default;
 
 /** The modes one tap changes to. Bypass has its own row below them, only where the policy allows it, and its own confirmation. */
-const OFFERED_MODES: ChatPermissionMode[] = ['default', 'acceptEdits', 'plan'];
+const OFFERED_MODES: ChatPermissionMode[] = ['plan', 'default', 'acceptEdits', 'auto'];
 /** The row that makes a session bypass-capable: it restarts it with the flag. */
 const RESTART_FOR_BYPASS = 'restart-for-bypass';
 
@@ -78,9 +80,9 @@ function matchModel(models: ChatModelOption[] | null, applied: string | null, pi
 
 /**
  * The session's controls, as pills in the composer card's bottom row: "Opus 5.5 Medium" (with ⚡ while
- * Ultracode is on) opens one Model and effort sheet (chat PRD §12.4); the permission mode follows from
- * 640 px (on phones it's in the ⋯ menu, and shows here only when it isn't Ask); how full the context
- * window is sits at the end, by Send. Pickers send the change and wait for its ack, showing the error in place,
+ * Ultracode is on; the effort from 640 px) opens one Model and effort sheet (chat PRD §12.4); the permission
+ * mode follows, always there (on phones as its icon alone, a fixed size, so Bypass or any other mode never
+ * squeezes the model's name); the context ring sits at the end, by Send. Pickers send the change and wait for its ack, showing the error in place,
  * and the line always shows what the session reports as applied, never what was asked for.
  */
 export function Controls({
@@ -161,28 +163,29 @@ export function Controls({
 
   return (
     <>
-      <div role="group" aria-label="Session settings" className={cn('flex min-w-0 items-center gap-1.5', className)}>
+      <div role="group" aria-label="Session settings" className={cn('flex min-w-0 items-center gap-1 sm:gap-1.5', className)}>
         <Quiet
           onClick={() => setOpen('model')}
           ariaLabel={`Model and effort: ${modelName}${effort ? `, ${effort}` : ''}${session.ultracode ? ', Ultracode on' : ''}`}
           title={session.model ?? undefined}
         >
           <span className="truncate">{modelName}</span>
-          {effort && <span className="shrink-0 font-medium text-muted">{effort}</span>}
+          {/* Phones keep the model's name whole: the effort is in the label and the sheet. */}
+          {effort && <span className="hidden shrink-0 font-medium text-muted sm:inline">{effort}</span>}
           {session.ultracode && <Zap className="size-3 shrink-0 text-gold" aria-hidden="true" />}
         </Quiet>
         <Quiet
           onClick={() => setOpen('mode')}
           ariaLabel={`Permission mode: ${mode.label}`}
           tone={mode.danger ? 'danger' : session.mode !== 'default' ? 'gold' : undefined}
-          hideOnPhone={session.mode === 'default'}
+          iconOnPhone
           className="shrink-0"
         >
-          <ModeIcon className="size-3.5 shrink-0" aria-hidden="true" />
-          <span>{mode.label}</span>
+          <ModeIcon className="size-4 shrink-0 sm:size-3.5" aria-hidden="true" />
+          <span className="hidden sm:inline">{mode.label}</span>
         </Quiet>
         <span className="min-w-1 flex-1" />
-        {session.context && <ContextMeter context={session.context} />}
+        <ContextRing context={session.context} />
       </div>
 
       <Dialog open={open === 'model'} onClose={close} size="sm" title="Model and effort">
@@ -206,6 +209,7 @@ export function Controls({
       <Dialog open={open === 'mode'} onClose={close} size="sm" title="Permission mode" description="What Claude may do without asking you.">
         <ModePicker
           mode={session.mode}
+          autoAllowed={autoModeAllowed(session)}
           connected={connected}
           bypass={bypass}
           onBypass={() => setOpen('bypass')}
@@ -240,7 +244,7 @@ function Quiet({
   ariaLabel,
   title,
   tone,
-  hideOnPhone,
+  iconOnPhone,
   className,
   children,
 }: {
@@ -248,8 +252,8 @@ function Quiet({
   ariaLabel: string;
   title?: string;
   tone?: 'gold' | 'danger';
-  /** Below 640 px it's in the ⋯ menu instead. (One display class: the kit's `cn` doesn't merge conflicting ones.) */
-  hideOnPhone?: boolean;
+  /** Below 640 px a round icon button of a fixed size, so the row keeps its shape whatever it says. (One width and padding class each: the kit's `cn` doesn't merge conflicting ones.) */
+  iconOnPhone?: boolean;
   className?: string;
   children: ReactNode;
 }) {
@@ -261,8 +265,8 @@ function Quiet({
       aria-label={ariaLabel}
       title={title}
       className={cn(
-        'press h-10 min-w-0 items-center gap-1 rounded-full px-3 text-[14px] font-semibold whitespace-nowrap transition-colors tap:h-11 sm:text-[13.5px]',
-        hideOnPhone ? 'hidden sm:inline-flex' : 'inline-flex',
+        'press inline-flex h-10 min-w-0 items-center gap-1 rounded-full text-[14px] font-semibold whitespace-nowrap transition-colors tap:h-11 sm:text-[13.5px]',
+        iconOnPhone ? 'w-10 justify-center tap:w-11 sm:w-auto sm:px-3' : 'px-3',
         tone === 'danger'
           ? 'bg-danger-soft text-danger'
           : tone === 'gold'
@@ -273,72 +277,6 @@ function Quiet({
     >
       {children}
     </button>
-  );
-}
-
-/**
- * How full the context window was after the last turn (Claude Code's own usage report): a small bar
- * (its track a lighter step of the same colour) and a percentage, gold from 80 % and red from 95 %. The token counts show on hover, keyboard focus or tap.
- */
-function ContextMeter({ context }: { context: NonNullable<ChatSession['context']> }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const tipId = useId();
-  const { usedTokens: used, windowTokens: size } = context;
-  const pct = size ? Math.min(100, Math.round((used / size) * 100)) : null;
-  const tone = pct === null ? null : pct >= 95 ? 'danger' : pct >= 80 ? 'gold' : null;
-
-  // Opened by a tap: closes on a tap elsewhere or Escape.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const onKey = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    document.addEventListener('pointerdown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  return (
-    <div ref={ref} className="relative shrink-0">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        onBlur={() => setOpen(false)}
-        aria-label={pct === null ? `Context: ${formatTokens(used)} tokens` : `Context ${pct}% full`}
-        aria-describedby={tipId}
-        className={cn(
-          'peer press inline-flex h-7 items-center gap-1 rounded-lg px-1 text-[12px] font-semibold whitespace-nowrap tabular-nums transition-colors tap:h-8',
-          tone === 'danger' ? 'text-danger hover:bg-danger-soft' : tone === 'gold' ? 'text-gold hover:bg-gold-soft' : 'text-muted hover:bg-surface-2 hover:text-ink',
-        )}
-      >
-        {pct !== null && (
-          // The fill carries how full it is: accent, then gold from 80 %, red from 95 %.
-          <span
-            className={cn('relative block h-1.5 w-7 overflow-hidden rounded-full bg-current/20', tone === 'danger' ? 'text-danger' : tone === 'gold' ? 'text-gold' : 'text-accent')}
-            aria-hidden="true"
-          >
-            <span className="absolute inset-y-0 left-0 rounded-full bg-current" style={{ width: `${Math.max(pct, 4)}%` }} />
-          </span>
-        )}
-        <span>
-          <span className="hidden sm:inline">Context </span>
-          {pct === null ? formatTokens(used) : `${pct}%`}
-        </span>
-      </button>
-      <span
-        id={tipId}
-        role="tooltip"
-        className={cn(
-          'pointer-events-none absolute right-0 bottom-full z-20 mb-2 rounded-xl bg-primary px-3 py-2 text-[12px] font-medium whitespace-nowrap text-primary-ink tabular-nums opacity-0 shadow-lift transition-opacity peer-hover:opacity-100 peer-focus-visible:opacity-100',
-          open && 'opacity-100',
-        )}
-      >
-        {size ? `${used.toLocaleString()} of ${size.toLocaleString()} tokens` : `${used.toLocaleString()} tokens used`}
-      </span>
-    </div>
   );
 }
 
@@ -469,6 +407,7 @@ function ModelEffortSheet({
 
 function ModePicker({
   mode,
+  autoAllowed,
   connected,
   bypass,
   onBypass,
@@ -476,6 +415,8 @@ function ModePicker({
   onPick,
 }: {
   mode: ChatPermissionMode;
+  /** Auto is only for a session a person started here (not a trigger's, a ticket's, MCP's or another session's). */
+  autoAllowed: boolean;
   connected: boolean;
   /** Where Bypass stands; null until read (or when it can't be). */
   bypass: ChatBypassState | null;
@@ -489,7 +430,8 @@ function ModePicker({
   const offered = OFFERED_MODES.includes(mode);
   const options: Option[] = OFFERED_MODES.map((m) => {
     const { label, hint, icon: Icon } = MODES[m];
-    return { value: m, label, hint, icon: <Icon className="size-4" /> };
+    const blocked = m === 'auto' && !autoAllowed && mode !== 'auto';
+    return { value: m, label, hint: blocked ? 'Only for sessions you start here.' : hint, icon: <Icon className="size-4" />, disabled: blocked };
   });
   // Bypass, in the danger colour, only where the policy allows it: its own row once the session can enter it, else the restart that makes it so.
   if (bypass?.allowed && !bypass.active)

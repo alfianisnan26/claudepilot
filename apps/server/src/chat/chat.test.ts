@@ -518,7 +518,7 @@ test('controller: mode refuses Bypass without writing anything; other modes appl
     s.tail.push(ok(req.id, { mode: 'acceptEdits' }));
     await pending;
     assert.equal(s.controller.get(s.id)!.mode, 'acceptEdits');
-    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'system' && e.text === 'Mode: Auto-accept edits'), 'the UI’s name for the mode');
+    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'system' && e.text === 'Mode: Edit'), 'the UI’s name for the mode');
 
     // A status line also carries a mode Claude Code entered by itself: plan mode after the agent calls
     // EnterPlanMode, which needs no approval. Any other change ends the session (integrity tests below).
