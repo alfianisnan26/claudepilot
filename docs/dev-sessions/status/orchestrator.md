@@ -21,6 +21,7 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - Running sub-agents (dispatched 10:54, on hold for tests until "resume"): T-42 slice 1 workspace stable id + runtime names (dev/workspace-id, migration 712), T-24 tool rows (dev/tool-rows), T-28 ticket Bump with the shared session picker (dev/ticket-bump).
 - Next: T-32 part 2 (CI Bump, reuses T-28's picker), T-42 slices 2 and 3, T-26 (three slices), T-27, T-30; wave 4; T-33 last (after T-42).
 - PACE (honest): 07:00-10:55 merged about 16 tickets' work (T-1..T-9, T-29, T-36, T-6, T-34, T-37, T-38, T-5/31/39/41, T-32a, T-25) = about 4 per hour; live: still nothing new of today until #8 releases.
+- T-37 follow-up: cancelling a pipeline run does not delete its gate Job (the runner's cancel never reaches gate-job.sh's trap): #7's Job claudepilot-gate-3b2917c-4272 ran on next to #8's. Fix: the Job carries the run id and the next gate-job.sh (or the pipeline's cancel hook) removes Jobs whose run ended; meanwhile activeDeadlineSeconds 5400 ends it. The coordinator may delete it by hand (my settings deny deletes in isnan-claudepilot).
 - Ticket queue: ticket_claim_next hands out the Konfersi tickets (T-51, workspace kubernetes/kohi-event, urgent) even with a tag filter; I returned T-51 twice. Claim our tickets by id through their owner, or retag the Konfersi ones (NEEDS A HUMAN / coordinator).
 
 ## WAVES (owner, 09:4x; work in this order)
