@@ -184,6 +184,9 @@ export class KubeProxy {
   }
 
   #onClientError(err: NodeJS.ErrnoException, socket: Duplex) {
+    // A reset stream (the portal's HTTP agent ends idle kube streams that way) is a socket error, not a request the policy refused: only
+    // the HTTP parser's own errors (HPE_*: smuggling, bad framing, oversize headers) are denials. T6 saw two false ones a minute on k3s.
+    if (!String(err.code ?? '').startsWith('HPE_')) return void socket.destroy();
     this.#count('body', this.#conns.get(socket)?.trace ?? '--------');
     const body = deniedStatus('body');
     if (socket.writable) {

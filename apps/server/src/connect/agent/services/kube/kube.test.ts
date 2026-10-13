@@ -462,3 +462,34 @@ describe('the agent’s own identity Secret (outside the portal-facing allowlist
     refused(await rig.request('GET', `${base}/secrets/claudepilot-agent-identity`), 'name');
   });
 });
+
+describe('a stream the portal resets is not a policy denial (T6)', () => {
+  it('a kept-alive stream reset by the portal, or one reset mid-request, counts nothing and logs no policy.denied', async () => {
+    // Seen on a real cluster: about two `policy.denied rule=body` a minute while nothing was refused, each one an agent.log row and a
+    // policy.denied audit row: the portal's HTTP agent ends idle kube streams with a reset, which the proxy's server reports as a client error.
+    const { streamPair } = await import('../../testkit/streams.js');
+    const reset = (s: import('node:stream').Duplex) => s.destroy(Object.assign(new Error('The stream was reset.'), { code: 'ECONNRESET' }));
+    // 1. a request served, then the idle stream reset
+    const [portal, agent] = streamPair();
+    rig.service.handle(agent, 'feed0001');
+    const got = new Promise<string>((resolve) => {
+      let text = '';
+      portal.on('data', (c: Buffer) => {
+        text += c.toString('latin1');
+        if (/\r\n\r\n[\s\S]*\}/.test(text)) resolve(text);
+      });
+    });
+    portal.write(`GET /version HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${LOCAL_TOKEN}\r\n\r\n`);
+    assert.match(await got, /HTTP\/1\.1 200/);
+    reset(agent);
+    // 2. half a request, then a reset
+    const [p2, a2] = streamPair();
+    rig.service.handle(a2, 'feed0002');
+    p2.write(`GET /version HTTP/1.1\r\nHost: x\r\n`);
+    await new Promise((r) => setTimeout(r, 50));
+    reset(a2);
+    await new Promise((r) => setTimeout(r, 100));
+    // (other tests' raw sockets may still be closing with real framing errors: look at these two streams' traces only)
+    assert.doesNotMatch(rig.log.text(), /policy\.denied service=kube rule=body trace=feed000[12]/, 'neither reset was counted as a denial');
+  });
+});

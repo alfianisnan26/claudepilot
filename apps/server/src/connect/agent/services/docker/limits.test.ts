@@ -96,3 +96,28 @@ describe('idle streams', () => {
     req.destroy();
   });
 });
+
+describe('a stream the portal resets is not a policy denial (T6)', () => {
+  it('a kept-alive stream reset after its answer, and one reset mid-request, count nothing', async () => {
+    const reset = (s: import('node:stream').Duplex) => s.destroy(Object.assign(new Error('The stream was reset.'), { code: 'ECONNRESET' }));
+    const [portal, agent] = streamPair();
+    rig.service.handle(agent as never, 'feed0001');
+    const got = new Promise<string>((resolve) => {
+      let text = '';
+      portal.on('data', (c: Buffer) => {
+        text += c.toString('latin1');
+        if (/\r\n\r\n/.test(text)) resolve(text);
+      });
+    });
+    portal.write('GET /_ping HTTP/1.1\r\nHost: docker\r\n\r\n');
+    assert.match(await withTimeout(got, 'the ping answer', 5000), /HTTP\/1\.1 200/);
+    reset(agent);
+    const [p2, a2] = streamPair();
+    rig.service.handle(a2 as never, 'feed0002');
+    p2.write('GET /_ping HTTP/1.1\r\nHost: docker\r\n');
+    await new Promise((r) => setTimeout(r, 50));
+    reset(a2);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.doesNotMatch(rig.log.text(), /policy\.denied rule=body trace=feed000[12]/, 'neither reset was counted as a denial');
+  });
+});

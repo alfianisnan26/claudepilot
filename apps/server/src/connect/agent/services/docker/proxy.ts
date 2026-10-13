@@ -148,6 +148,9 @@ export class DockerProxy {
   }
 
   #onClientError(err: NodeJS.ErrnoException, socket: Duplex) {
+    // A reset stream (the portal's HTTP agent ends idle streams that way) is a socket error, not a refused request: only the HTTP parser's
+    // own errors (HPE_*) are denials, or status.denied counts what nobody sent (T6, the same hole as the Kubernetes proxy's on k3s).
+    if (!String(err.code ?? '').startsWith('HPE_')) return void socket.destroy();
     const trace = this.#conns.get(socket)?.trace ?? '--------';
     this.#count('body', trace);
     const status = err.code === 'HPE_HEADER_OVERFLOW' ? '431 Request Header Fields Too Large' : '400 Bad Request';
