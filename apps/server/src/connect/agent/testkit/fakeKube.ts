@@ -3,7 +3,7 @@
 // real cluster. It keeps pods, deployments, claims and secrets in memory and records every request with its headers, so a test can assert
 // what the "API server" saw: the service account's token and never the client's, no impersonation, only labelled lists.
 //
-// It speaks the part of the API `KubernetesRuntime` and the agent use: `/version`, pod and deployment and claim lists (selectors, watch),
+// It speaks the part of the API `KubernetesRuntime` and the agent use: `/version`, nodes and every namespace's pods (T-98's fit check), pod and deployment and claim lists (selectors, watch),
 // create, replace, scale and delete (a deployment brings a pod up and down), secrets by name, pod metrics, SelfSubjectAccessReview, and
 // `pods/exec` over a WebSocket with the channel subprotocol (stdin 0, stdout 1, stderr 2, status 3, resize 4).
 import { randomBytes } from 'node:crypto';
@@ -48,6 +48,16 @@ export class FakeKube {
   readonly claims = new Map<string, Obj>();
   readonly secrets = new Map<string, Obj>();
   readonly pods = new Map<string, Obj>();
+  /**
+   * Nodes (T-98's fit check): `GET /api/v1/nodes` and `/api/v1/nodes/<name>`. While there is one, a deployment's new pod is scheduled on
+   * `scheduleOn` (default: the first node) and carries the template's containers, so its requests count.
+   */
+  readonly nodes = new Map<string, Obj>();
+  scheduleOn: string | undefined;
+  /** Pods of other namespaces, for `GET /api/v1/pods` (every namespace) with this namespace's pods. */
+  readonly otherPods: Obj[] = [];
+  /** false: the cluster-wide reads (nodes, every namespace's pods) answer 403, as for a namespaced Role. */
+  clusterReads = true;
   /** Scripts an exec: default echoes stdin to stdout and ends on `exit`. */
   onExec: (io: ExecIo) => void = (io) => io.onStdin((d) => (io.stdout(d), d.toString().includes('exit') && io.exit(0)));
   /** Answers SelfSubjectAccessReview. */
@@ -94,10 +104,12 @@ export class FakeKube {
   podFor(d: Obj): Obj {
     const labels = ((d.spec as { template?: { metadata?: { labels?: Record<string, string> } } })?.template?.metadata?.labels ?? {}) as Record<string, string>;
     const name = `${d.metadata.name}-7d9f6c-${randomBytes(2).toString('hex')}`;
+    const node = this.nodes.size ? (this.scheduleOn ?? [...this.nodes.keys()][0]!) : undefined;
+    const containers = (d.spec as { template?: { spec?: { containers?: unknown[] } } })?.template?.spec?.containers;
     return {
       apiVersion: 'v1', kind: 'Pod',
       metadata: { name, namespace: this.namespace, labels, uid: randomBytes(8).toString('hex'), creationTimestamp: new Date().toISOString(), resourceVersion: String(++this.#rv) },
-      spec: {}, status: { phase: 'Running', containerStatuses: [{ name: 'workspace', ready: true, state: { running: {} } }] },
+      spec: node ? { nodeName: node, containers: JSON.parse(JSON.stringify(containers ?? [])) } : {}, status: { phase: 'Running', containerStatuses: [{ name: 'workspace', ready: true, state: { running: {} } }] },
     };
   }
 
@@ -151,6 +163,20 @@ export class FakeKube {
     if (path === `/apis/metrics.k8s.io/v1beta1/namespaces/${ns}/pods` && method === 'GET') {
       const items = [...this.pods.values()].filter((p) => matchesSelector(p.metadata.labels ?? {}, url.searchParams.get('labelSelector') ?? '')).map((p) => ({ metadata: p.metadata, containers: [{ name: 'workspace', usage: { cpu: '250m', memory: '512Mi' } }] }));
       return send(200, { kind: 'PodMetricsList', apiVersion: 'metrics.k8s.io/v1beta1', items });
+    }
+
+    if (path === '/api/v1/nodes' || path.startsWith('/api/v1/nodes/') || path === '/api/v1/pods') {
+      if (method !== 'GET') return status(405, 'MethodNotAllowed', 'only reads here');
+      if (!this.clusterReads) return status(403, 'Forbidden', `${path} is forbidden: User "system:serviceaccount:portal" cannot list resource at the cluster scope`);
+      if (path === '/api/v1/pods') {
+        const field = url.searchParams.get('fieldSelector') ?? '';
+        const onNode = field.startsWith('spec.nodeName=') ? field.slice('spec.nodeName='.length) : null;
+        const items = [...this.pods.values(), ...this.otherPods].filter((p) => !onNode || (p.spec as { nodeName?: string } | undefined)?.nodeName === onNode);
+        return send(200, { kind: 'PodList', apiVersion: 'v1', metadata: {}, items });
+      }
+      if (path === '/api/v1/nodes') return send(200, { kind: 'NodeList', apiVersion: 'v1', metadata: {}, items: [...this.nodes.values()] });
+      const node = this.nodes.get(decodeURIComponent(path.slice('/api/v1/nodes/'.length)));
+      return node ? send(200, node) : status(404, 'NotFound', 'node not found');
     }
 
     const collections: [RegExp, Map<string, Obj>, string, string, string][] = [
@@ -216,6 +242,11 @@ export class FakeKube {
         merged.metadata.uid = obj.metadata.uid;
         merged.metadata.resourceVersion = String(++this.#rv);
         store.set(name, merged);
+        // A deployment's pod template changed: its pods are replaced (every workspace Deployment is Recreate: the old pod goes first).
+        if (kind === 'deployment' && JSON.stringify((obj.spec as { template?: unknown })?.template) !== JSON.stringify((merged.spec as { template?: unknown })?.template)) {
+          for (const p of [...this.pods.values()].filter((p) => p.metadata.name.startsWith(`${name}-`))) (this.pods.delete(p.metadata.name), this.#notify('pod', 'DELETED', p));
+          this.#reconcile(merged);
+        }
         return send(200, merged);
       }
     }

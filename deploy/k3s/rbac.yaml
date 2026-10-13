@@ -69,3 +69,32 @@ subjects:
   - kind: ServiceAccount
     name: claudepilot-portal
     namespace: isnan-claudepilot
+---
+# The fit check before a workspace's CPU and memory change (T-98, apps/server/src/workspaces/resources.ts): what a node can allocate, and the
+# requests of every pod on it. Reads only. Note what it widens: `pods` list across namespaces shows other pods' specs to the portal; the portal
+# reads only `spec.nodeName`, the phase and the containers' resource requests, and keeps nothing. Without this role the check is
+# "unavailable" and a change is refused (it never guesses).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: claudepilot-portal-fit-check
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: claudepilot-portal-fit-check
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: claudepilot-portal-fit-check
+subjects:
+  - kind: ServiceAccount
+    name: claudepilot-portal
+    namespace: isnan-claudepilot
