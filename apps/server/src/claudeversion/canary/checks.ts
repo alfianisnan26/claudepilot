@@ -14,7 +14,7 @@ import { btwCommand } from '../../chat/btwRun.js';
 import { allowResponse, controlRequest, denyResponse, interruptRequest, parseLine, userLine } from '../../chat/protocol.js';
 import { BOX_DIR, BOX_HOME, CheckFailed, expect, type StreamSession } from './box.js';
 import { MCP_CHECKS } from './mcpChecks.js';
-import { CHAT_FLAGS, isObj, nextRequest, obj, pass, shq, tailOf, toolResults, turn, TURN_MS, type CanaryCheck, type CheckContext } from './support.js';
+import { CHAT_FLAGS, isObj, nextRequest, obj, pass, shq, tailOf, toolResults, turn, TURN_MS, type CanaryCheck, type CheckContext, type CheckOutcome } from './support.js';
 
 /* ---------- version ---------- */
 
@@ -235,6 +235,68 @@ const rateLimitEvent: CanaryCheck = {
 
 /* ---------- probe-safe-mode ---------- */
 
+/** One probe run in a project with hooks: the get_usage reply (null when none came), the last output, and the hook markers left (space separated). */
+export interface SafeModeRun {
+  reply: Record<string, unknown> | null;
+  out: string;
+  ran: string;
+}
+
+/** What the probe-safe-mode check observed; `judgeSafeMode` applies the four guards to it (pure, so each guard is tested passing and failing). */
+export interface SafeModeObservation {
+  /** `claude --help` lists `--safe-mode`. */
+  helpListsFlag: boolean;
+  helpOut: string;
+  /** The portal's own probe command, as `probeCommand` builds it. */
+  own: string[];
+  /** The probe with the flag, without it (the control), and with `CLAUDE_CODE_SAFE_MODE=1` in the environment alone. */
+  safe: SafeModeRun;
+  bare: SafeModeRun;
+  envOnly: SafeModeRun;
+}
+
+const windowsOf = (p: ReturnType<typeof parseUsageReply> | null) => (p && p.kind === 'plan' ? JSON.stringify(p.windows.map((w) => [w.key, w.usedPct, w.resetsAtMs])) : null);
+
+/**
+ * The four safe-mode guards (docs/prd/claude-version-pinning.md §16.1), in order; the first that fails fails the check with its own words.
+ * (a) flag: the CLI's help lists `--safe-mode` (2.1.168 and older answer "unknown option" and start nothing).
+ * (b) hook marker: under the flag no SessionStart or SessionEnd hook of the Claude's or the project's settings leaves a marker, AND without it they do
+ *     (else the marker test proves nothing: the hooks did not run at all).
+ * (c) get_usage: under the flag it still answers, as a plan with windows, the same windows as without the flag.
+ * (d) the variable is not a substitute: the portal's command must pass the flag itself. `CLAUDE_CODE_SAFE_MODE=1` in the environment alone was
+ *     observed to stop no hook (2.1.296), so a command that carries only the variable counts as unsafe; what the variable alone does is reported.
+ */
+export function judgeSafeMode(o: SafeModeObservation): CheckOutcome {
+  const notes: string[] = [];
+  // (a)
+  expect(o.helpListsFlag, '`claude --help` does not list --safe-mode.', o.helpOut);
+  notes.push('flag: --safe-mode is listed in the help');
+  // (b)
+  expect(o.safe.ran === '', `With --safe-mode these hooks still ran during a probe: ${o.safe.ran}.`, o.safe.out);
+  expect(o.bare.ran !== '', 'Without --safe-mode no hook left its marker either: the hook marker test proves nothing on this version.', o.bare.out);
+  notes.push(`hooks: none ran under the flag; without it ${o.bare.ran} ran`);
+  // (c)
+  expect(o.safe.reply, 'get_usage did not answer under --safe-mode.', o.safe.out);
+  const parsed = parseUsageReply(o.safe.reply);
+  expect(parsed.kind === 'plan' && parsed.windows.length >= 2, `get_usage under --safe-mode did not read as a plan with windows (${parsed.kind}).`, JSON.stringify(o.safe.reply).slice(0, 700));
+  const bare = o.bare.reply ? parseUsageReply(o.bare.reply) : null;
+  expect(windowsOf(bare) === windowsOf(parsed), 'get_usage answers differently under --safe-mode than without it (plan or windows changed).', `${windowsOf(parsed)} against ${windowsOf(bare) ?? JSON.stringify(bare)}`);
+  notes.push(`get_usage: a plan with ${parsed.windows.length} windows under the flag, the same as without it`);
+  // (d)
+  const claudeAt = o.own.indexOf('claude');
+  const flagged = claudeAt >= 0 && o.own.slice(claudeAt + 1).includes('--safe-mode');
+  const envOnly = o.own.some((a) => /^CLAUDE_CODE_SAFE_MODE=/.test(a));
+  expect(
+    flagged,
+    envOnly
+      ? 'The usage probe’s command sets CLAUDE_CODE_SAFE_MODE but does not pass --safe-mode: the variable alone is not a substitute, every poll runs the user’s own hooks.'
+      : `The usage probe’s own command does not pass --safe-mode: every poll of a workspace runs the user’s own hooks (observed: ${o.bare.ran}).`,
+    `${notes.join('\n')}\n${o.own.slice(Math.max(0, claudeAt)).join(' ')}`,
+  );
+  notes.push(o.envOnly.ran ? `variable: CLAUDE_CODE_SAFE_MODE=1 alone is not a substitute (hooks ran: ${o.envOnly.ran}); the probe passes the flag` : 'variable: CLAUDE_CODE_SAFE_MODE=1 alone now stops the hooks too; the probe still passes the flag');
+  return pass('the probe passes --safe-mode: it is in the help, no hook runs under it (and they do without it), get_usage reads the same plan and windows', notes.join('\n'));
+}
+
 const probeSafeMode: CanaryCheck = {
   def: CLAUDE_CANARY_CHECKS.find((d) => d.id === 'probe-safe-mode')!,
   async run({ box }) {
@@ -252,7 +314,7 @@ const probeSafeMode: CanaryCheck = {
     // The variable alone, in the one place the probe's `env -i` wrapper takes assignments: before `timeout`.
     const at = withoutFlag.indexOf('timeout');
     const envOnly = [...withoutFlag.slice(0, at), 'CLAUDE_CODE_SAFE_MODE=1', ...withoutFlag.slice(at)];
-    const ask = async (command: string[]) => {
+    const ask = async (command: string[]): Promise<SafeModeRun> => {
       await box.sh(`rm -f ${BOX_DIR}/hook-*`);
       // In a project that has its own hooks, as a probe in an agent's working folder would.
       const session = await box.exec(command, { cwd: PROJECT });
@@ -284,31 +346,11 @@ const probeSafeMode: CanaryCheck = {
     try {
       await box.setScript({ usage: { body } });
       await box.resetSeen();
-      const notes: string[] = [];
-      // 1. The flag is in the CLI's help.
       const help = await box.sh(`${shq(box.claude)} --help 2>&1 | grep -c -- '--safe-mode' || true`, { timeoutMs: 60_000 });
-      expect(Number(help.stdout.trim()) > 0, '`claude --help` does not list --safe-mode.', help.stdout);
-      notes.push('help: --safe-mode is listed');
-      // 2 and 3. Under the flag: the plan and windows are read, and no hook of the Claude's settings or of the project's ran.
-      const safe = await ask(withFlag);
-      expect(safe.reply, 'get_usage did not answer under --safe-mode.', safe.out);
-      const parsed = parseUsageReply(safe.reply);
-      expect(parsed.kind === 'plan' && parsed.windows.length >= 2, `get_usage under --safe-mode did not read as a plan with windows (${parsed.kind}).`, JSON.stringify(safe.reply).slice(0, 700));
-      expect(safe.ran === '', `With --safe-mode these hooks still ran during a probe: ${safe.ran}.`, safe.out);
-      notes.push(`flag: get_usage read as a plan with ${parsed.windows.length} windows; no SessionStart or SessionEnd hook ran (Claude’s settings, project’s settings)`);
-      // Controls: without the flag the same probe runs them and reads the same windows; the variable alone does not stop them.
-      const bare = await ask(withoutFlag);
-      const bareParsed = bare.reply ? parseUsageReply(bare.reply) : null;
-      const sameWindows = !!bareParsed && bareParsed.kind === 'plan' && JSON.stringify(bareParsed.windows.map((w) => [w.key, w.usedPct, w.resetsAtMs])) === JSON.stringify(parsed.windows.map((w) => [w.key, w.usedPct, w.resetsAtMs]));
-      expect(sameWindows, 'get_usage answers differently under --safe-mode than without it (plan or windows changed).', `${JSON.stringify(parsed.windows.map((w) => [w.key, w.usedPct]))} against ${JSON.stringify(bareParsed && bareParsed.kind === 'plan' ? bareParsed.windows.map((w) => [w.key, w.usedPct]) : bareParsed)}`);
-      notes.push(`control: without the flag the probe ran ${bare.ran || 'no hook'}, and read the same plan and windows`);
-      const onlyEnv = await ask(envOnly);
-      notes.push(onlyEnv.ran ? `info: CLAUDE_CODE_SAFE_MODE=1 alone is not a substitute (hooks ran: ${onlyEnv.ran})` : 'info: CLAUDE_CODE_SAFE_MODE=1 alone now stops the hooks too (the portal still passes the flag)');
-
-      // The portal's own command must carry the flag, or every poll runs a person’s hooks.
-      expect(own.includes('--safe-mode'), `The usage probe’s own command does not pass --safe-mode: every poll of a workspace runs the user’s own hooks${bare.ran ? ` (observed: ${bare.ran})` : ''}.`, `${notes.join('\n')}\n${own.slice(own.indexOf('claude')).join(' ')}`);
-      notes.push('portal: the probe’s command passes --safe-mode');
-      return pass('the probe passes --safe-mode: it is in the help, get_usage reads the same plan and windows under it, and no hook of the Claude’s or the project’s settings runs', notes.join('\n'));
+      const helpListsFlag = Number(help.stdout.trim()) > 0;
+      // Without the flag in the help, the runs below would only show "unknown option": fail on the help alone.
+      if (!helpListsFlag) return judgeSafeMode({ helpListsFlag, helpOut: help.stdout, own, safe: { reply: null, out: '', ran: '' }, bare: { reply: null, out: '', ran: '' }, envOnly: { reply: null, out: '', ran: '' } });
+      return judgeSafeMode({ helpListsFlag, helpOut: help.stdout, own, safe: await ask(withFlag), bare: await ask(withoutFlag), envOnly: await ask(envOnly) });
     } finally {
       await box.sh(`rm -f ${shq(`${BOX_HOME}/.claude/settings.json`)} ${shq(`${PROJECT}/.claude/settings.json`)} ${BOX_DIR}/hook-*`).catch(() => undefined);
     }

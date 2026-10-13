@@ -66,7 +66,7 @@ export const outcome = (version: string, failing: string[] = [], skipped: string
   results: CLAUDE_CANARY_CHECKS.map((d) => result(d.id, failing.includes(d.id) ? 'fail' : skipped.includes(d.id) ? 'skipped' : 'pass')),
 });
 
-export async function harness(o: { installed?: string[]; workspaces?: Partial<FakeWorkspace>[]; imageFixed?: boolean; settleMs?: number } = {}): Promise<Harness> {
+export async function harness(o: { installed?: string[]; workspaces?: Partial<FakeWorkspace>[]; imageFixed?: boolean; settleMs?: number; scheduleDelayMs?: number } = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), 'cp-cv-svc-'));
   const store = await Store.open({ dataDir: dir, secretKey: parseSecretKey(generateSecretKey()) });
   const images = new Map<string, ImageInfo>();
@@ -192,7 +192,7 @@ export async function harness(o: { installed?: string[]; workspaces?: Partial<Fa
     now: () => new Date(clock.t),
     imageFixed: o.imageFixed,
     settleMs: o.settleMs ?? 1,
-    scheduleDelayMs: 60_000,
+    scheduleDelayMs: o.scheduleDelayMs ?? 60_000,
   };
   const svc = new ClaudeVersions(deps);
   void claudeVersionOfImageRef;

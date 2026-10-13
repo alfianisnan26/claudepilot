@@ -113,6 +113,9 @@ export class ClaudeVersions {
   #candidate: ClaudeCandidate | null = null;
   #canary: { id: number; cancel: boolean } | null = null;
   #timer: NodeJS.Timeout | undefined;
+  #first: NodeJS.Timeout | undefined;
+  /** The reading pass in flight: passes run one after another, never side by side (each would read the same workspaces). */
+  #reading: Promise<unknown> = Promise.resolve();
   #stopSettings: (() => void) | undefined;
   #raising: Promise<void> = Promise.resolve();
   #building = new Set<string>();
@@ -812,15 +815,17 @@ export class ClaudeVersions {
     const interrupted = this.store.interruptRunning('The portal stopped while it ran.', this.#now());
     if (interrupted) console.log(`[claude-version] ${interrupted} canary run(s) were cut short by a restart`);
     void this.#removeLeftovers();
-    const first = setTimeout(() => void this.#tick(), this.deps.scheduleDelayMs ?? SCHEDULE_FIRST_DELAY_MS);
-    first.unref();
+    this.#first = setTimeout(() => void this.#tick(), this.deps.scheduleDelayMs ?? SCHEDULE_FIRST_DELAY_MS);
+    this.#first.unref();
     this.#timer = setInterval(() => void this.#tick(), SCHEDULE_TICK_MS);
     this.#timer.unref();
   }
 
   stop(): void {
     if (this.#timer) clearInterval(this.#timer);
+    if (this.#first) clearTimeout(this.#first);
     this.#timer = undefined;
+    this.#first = undefined;
     this.#stopSettings?.();
     this.#stopSettings = undefined;
   }
@@ -867,7 +872,14 @@ export class ClaudeVersions {
    * Reads `claude --version` and `claude doctor` in running workspaces whose reading is old, a few per pass, so the list's flags (a different version,
    * the updater on) fill in without anyone opening a page. One exec each, never a model call.
    */
-  async refreshReadings(max = 5): Promise<number> {
+  refreshReadings(max = 5): Promise<number> {
+    // Serialised: a pass that starts while another runs waits for it, so it sees what that one read (the cache is written only after each await).
+    const pass = this.#reading.then(() => this.#readingPass(max));
+    this.#reading = pass.catch(() => undefined);
+    return pass;
+  }
+
+  async #readingPass(max: number): Promise<number> {
     let read = 0;
     let changed = false;
     for (const w of await this.deps.workspaces.list()) {
