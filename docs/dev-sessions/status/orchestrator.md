@@ -22,6 +22,7 @@ Session fe3df8bc in kubernetes/kohi-event, main folder ~/work/claudepilot, branc
 - A side question counts as a request for spike rules; "side" is a server-side split only, the Usage page does not show it yet (B's call, PRD claude-usage §22).
 
 ## NEEDS A HUMAN
+- Multi-user (parked, not in this backlog): the owner wants the current single-owner access (workspace kohi-event, this session) reserved for a user `admin`; the password was given in chat on 2026-10-13 and must not be written anywhere: when that work starts, the owner sets it through the setup token or a Secret.
 - After the next deploy: on the iPhone (Home Screen PWA, quiet hours off) confirm "Deploy waits" arrives when a deploy run holds for approval; migration 720 must have run on the real portal.
 - Decide whether the Usage page should show "of which side questions".
 
