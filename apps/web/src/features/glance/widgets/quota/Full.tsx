@@ -75,7 +75,7 @@ export function QuotaFull({ ctx }: GlanceFullProps) {
 }
 
 /** One Claude: its name and, for a plan, a meter per window; a pool, a key, a signed-out or unread Claude says that in one line. */
-function ClaudeBlock({ claude, nowMs, thresholds, startOpen = false }: { claude: ClaudeUsage; nowMs: number; thresholds: Thresholds; startOpen?: boolean }) {
+export function ClaudeBlock({ claude, nowMs, thresholds, startOpen = false }: { claude: ClaudeUsage; nowMs: number; thresholds: Thresholds; startOpen?: boolean }) {
   const [open, setOpen] = useState(startOpen);
   const reading = readClaude(claude, nowMs, thresholds);
   const views = windowViews(claude, nowMs, thresholds);

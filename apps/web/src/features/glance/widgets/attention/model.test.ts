@@ -2,15 +2,15 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { GlanceApproval, GlanceAttention, GlanceCiRun, GlanceSnapshot, GlanceTicket } from '@portal/contracts';
 import { approvalControls } from '../../../chat/approvalReview.js';
-import { approvalMode, approvalNote, approvalTitle, attentionCompact, ciMeta, ciRunHref, ciTitle, sessionHref, ticketHref, ticketMeta } from './model.js';
+import { approvalMode, approvalNote, approvalTitle, attentionCompact, ciMeta, ciRunHref, ciTitle, deployMeta, deployTitle, sessionHref, ticketHref, ticketMeta } from './model.js';
 
 const block = <T>(count: number, items: T[] = [], ok = true) => ({ ok, count, items });
 const snapshot = (a: Partial<GlanceAttention> & { count?: number }): GlanceSnapshot => {
-  const attention = { approvals: block(0), tickets: block(0), ci: block(0), ...a } as GlanceAttention;
-  attention.count = a.count ?? attention.approvals.count + attention.tickets.count + attention.ci.count;
+  const attention = { approvals: block(0), tickets: block(0), ci: block(0), deploys: block(0), ...a } as GlanceAttention;
+  attention.count = a.count ?? attention.approvals.count + attention.tickets.count + attention.ci.count + attention.deploys.count;
   return {
     at: '2026-10-12T12:00:00.000Z',
-    sessions: { ok: true, running: 0, waiting: 0, open: 0, items: [] },
+    sessions: { ok: true, running: 0, waiting: 0, open: 0, interrupted: 0, items: [], recent: [] },
     agents: { ok: true, running: 0, waiting: 0, rows: [], more: 0 },
     attention,
   };
@@ -27,6 +27,17 @@ test('the chip adds up requests, tickets and failed runs; its number is also wha
   assert.equal(attentionCompact({ data: snapshot({ approvals: block(150) }), ...ok }).count, 150, 'the badge is not capped by the chip');
 });
 
+test('a deploy held for approval is counted and red like a request (a pipeline is stopped on it), and says which job waits', () => {
+  const d = { id: 'run9', number: 9, repo: 'claudepilot', pipeline: 'deploy', job: 'release', branch: 'main', workspaceId: 'docker/dev', startedAt: '2026-10-12T11:40:00.000Z' };
+  const c = attentionCompact({ data: snapshot({ deploys: block(1, [d]), tickets: block(2) }), ...ok });
+  assert.deepEqual(c, { value: '3', level: 'critical', title: 'Needs attention: 1 deploy to approve and 2 tickets', count: 3, stale: false });
+  assert.equal(deployTitle(d), 'claudepilot · deploy #9');
+  assert.equal(deployMeta(d), 'release waits · main');
+  assert.equal(deployMeta({ ...d, branch: null }), 'release waits · tag');
+  // only the deploys unreadable: the rest still counts, and the title says what is missing
+  assert.equal(attentionCompact({ data: snapshot({ ci: block(1), deploys: { ok: false, count: 0, items: [] } }), ...ok }).title, 'Needs attention: 1 failed CI run (deploys could not be read)');
+});
+
 test('a source that could not be read is said so, and nothing is shown as zero when none could', () => {
   const some = attentionCompact({ data: snapshot({ approvals: block(1), ci: { ok: false, count: 0, items: [] } }), ...ok });
   assert.equal(some.title, 'Needs attention: 1 approval (CI could not be read)');
@@ -34,7 +45,7 @@ test('a source that could not be read is said so, and nothing is shown as zero w
   const none = attentionCompact({ data: snapshot({ tickets: { ok: false, count: 0, items: [] } }), ...ok });
   assert.deepEqual([none.value, none.level, none.title], ['0', 'unknown', 'Nothing needs attention (tickets could not be read)']);
   const all = attentionCompact({
-    data: snapshot({ approvals: { ok: false, count: 0, items: [] }, tickets: { ok: false, count: 0, items: [] }, ci: { ok: false, count: 0, items: [] } }),
+    data: snapshot({ approvals: { ok: false, count: 0, items: [] }, deploys: { ok: false, count: 0, items: [] }, tickets: { ok: false, count: 0, items: [] }, ci: { ok: false, count: 0, items: [] } }),
     ...ok,
   });
   assert.deepEqual([all.value, all.level, all.title, all.count], ['-', 'unknown', 'Needs attention: could not be read', undefined]);

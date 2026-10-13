@@ -187,6 +187,8 @@ export interface TicketFilter {
   query?: string;
   /** Closed tickets are left out unless asked for (or `status` names one). */
   includeClosed?: boolean;
+  /** `priority` (the default): the most urgent first, then the latest update. `newest`: the latest made first (the Home page). */
+  sort?: 'priority' | 'newest';
   limit?: number;
   offset?: number;
 }

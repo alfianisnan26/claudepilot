@@ -15,6 +15,7 @@ import {
   type GlanceApproval,
   type GlanceAttention,
   type GlanceCiRun,
+  type GlanceDeploy,
   type GlanceSession,
   type GlanceSessions,
   type GlanceSnapshot,
@@ -37,6 +38,8 @@ export interface GlanceSources {
   tickets(actor: Actor): { count: number; items: TicketItem[] };
   /** Failed CI runs `actor` may see that still stand (see `failedRuns`): all of them counted, the top few listed. */
   failedRuns(actor: Actor, now: number): { count: number; items: CiRunSummary[] };
+  /** Runs `actor` may see that hold a deploy job for a person's approval (see `waitingDeploys`): all counted, the newest few listed. */
+  deploys(actor: Actor): { count: number; items: CiRunSummary[] };
 }
 
 /** A line of untrusted or long text, whitespace folded and cut with an ellipsis. */
@@ -61,9 +64,20 @@ const asks = (s: ChatSession) => s.waiting > 0 || s.state === 'waiting';
 
 /* ---------- Sessions ---------- */
 
-function sessionsBlock(sessions: ChatSession[]): GlanceSessions {
+/** Its running sub-agent tasks (only a live process has any) and the workers it started that are working, starting or waiting. */
+function agentsUnder(s: ChatSession, open: ChatSession[], tasksOf: (id: string) => ChatTask[]): number {
+  const tasks = s.process === 'live' ? tasksOf(s.id).filter((t) => t.status === 'running').length : 0;
+  return tasks + open.filter((w) => w.parentId === s.id && w.id !== s.id && isActive(w)).length;
+}
+
+/** The Home page's order: pinned first (the latest pinned first), then the latest activity. */
+const byPinThenRecent = (a: ChatSession, b: ChatSession) =>
+  Number(!!b.pinnedAt) - Number(!!a.pinnedAt) || time(b.pinnedAt ?? '') - time(a.pinnedAt ?? '') || time(b.lastActivityAt) - time(a.lastActivityAt);
+
+function sessionsBlock(sessions: ChatSession[], tasksOf: (id: string) => ChatTask[]): GlanceSessions {
   const shown = sessions.filter((s) => !s.archivedAt);
   const open = shown.filter((s) => s.state !== 'ended');
+  const openIds = new Set(open.map((s) => s.id));
   const item = (s: ChatSession): GlanceSession => ({
     id: s.id,
     title: clip(s.title, 80) || 'Untitled',
@@ -74,13 +88,20 @@ function sessionsBlock(sessions: ChatSession[]): GlanceSessions {
     lastActivityAt: s.lastActivityAt,
     waiting: s.waiting,
     waitingFor: clipOrNull(s.waitingFor, 120),
+    pinned: !!s.pinnedAt,
+    branch: clipOrNull(s.worktree?.branch, 80),
+    agents: s.state === 'ended' ? 0 : agentsUnder(s, open, tasksOf),
   });
+  // A worker shows under the session that started it ("2 agents"), not as a session of its own, unless the person pinned it.
+  const started = open.filter((s) => s.pinnedAt || !s.parentId || s.parentId === s.id || !openIds.has(s.parentId));
   return {
     ok: true,
     running: open.filter((s) => s.state === 'working' || s.state === 'starting').length,
     waiting: open.filter(asks).length,
     open: open.length,
+    interrupted: open.filter((s) => s.state === 'interrupted').length,
     items: [...shown].sort(byUrgency).slice(0, GLANCE_LIMITS.sessions).map(item),
+    recent: [...started].sort(byPinThenRecent).slice(0, GLANCE_LIMITS.recent).map(item),
   };
 }
 
@@ -204,6 +225,17 @@ const ciOf = (r: CiRunSummary): GlanceCiRun => ({
   workspaceId: r.workspaceId,
 });
 
+const deployOf = (r: CiRunSummary): GlanceDeploy => ({
+  id: r.id,
+  number: r.number,
+  repo: clip(r.repo, 64),
+  pipeline: clip(r.pipeline, 64),
+  job: clip(r.jobs.find((j) => j.status === 'waiting')?.id ?? '', 64) || 'deploy',
+  branch: clipOrNull(r.branch, 80),
+  workspaceId: r.workspaceId,
+  startedAt: r.startedAt,
+});
+
 /** Reads one block; a source that throws leaves its block unreadable and everything else as it was. */
 function read<T>(fn: () => T, unreadable: T, log?: (what: string, e: unknown) => void, what = ''): T {
   try {
@@ -222,7 +254,14 @@ export function buildSnapshot(src: GlanceSources, actor: Actor, now: number, log
   } catch (e) {
     log?.('sessions', e);
   }
-  const noSessions: GlanceSessions = { ok: false, running: 0, waiting: 0, open: 0, items: [] };
+  const noSessions: GlanceSessions = { ok: false, running: 0, waiting: 0, open: 0, interrupted: 0, items: [], recent: [] };
+  // Tasks are read once per session however many blocks ask (the Sessions block counts them, the Agents block lists them).
+  const taskCache = new Map<string, ChatTask[]>();
+  const tasksOf = (id: string): ChatTask[] => {
+    let t = taskCache.get(id);
+    if (!t) taskCache.set(id, (t = src.tasks(actor, id)));
+    return t;
+  };
   const noAgents: GlanceAgents = { ok: false, running: 0, waiting: 0, rows: [], more: 0 };
   const noApprovals: GlanceAttention['approvals'] = { ok: false, count: 0, items: [] };
 
@@ -246,11 +285,20 @@ export function buildSnapshot(src: GlanceSources, actor: Actor, now: number, log
     log,
     'ci',
   );
+  const deploys = read(
+    () => {
+      const d = src.deploys(actor);
+      return { ok: true, count: d.count, items: d.items.slice(0, GLANCE_LIMITS.deploys).map(deployOf) };
+    },
+    { ok: false, count: 0, items: [] as GlanceDeploy[] },
+    log,
+    'deploys',
+  );
   return {
     at: new Date(now).toISOString(),
-    sessions: list ? read(() => sessionsBlock(list), noSessions, log, 'sessions') : noSessions,
-    agents: list ? read(() => agentsBlock(list, (id) => src.tasks(actor, id)), noAgents, log, 'agents') : noAgents,
-    attention: { count: approvals.count + tickets.count + ci.count, approvals, tickets, ci },
+    sessions: list ? read(() => sessionsBlock(list, tasksOf), noSessions, log, 'sessions') : noSessions,
+    agents: list ? read(() => agentsBlock(list, tasksOf), noAgents, log, 'agents') : noAgents,
+    attention: { count: approvals.count + tickets.count + ci.count + deploys.count, approvals, tickets, ci, deploys },
   };
 }
 
@@ -287,4 +335,10 @@ export function failedRuns(
   }
   standing.sort((a, b) => time(b.finishedAt ?? '') - time(a.finishedAt ?? ''));
   return { count: standing.length, items: standing.slice(0, top) };
+}
+
+/** Runs holding a deploy job for a person's approval: running, with a job `waiting` (local-git-ci FR41). Newest first, all counted. */
+export function waitingDeploys(ci: { list(f: { status?: CiRunSummary['status'][]; limit?: number }): { items: CiRunSummary[] } }, top: number): { count: number; items: CiRunSummary[] } {
+  const held = ci.list({ status: ['running'], limit: 200 }).items.filter((r) => r.jobs.some((j) => j.status === 'waiting'));
+  return { count: held.length, items: held.slice(0, top) };
 }

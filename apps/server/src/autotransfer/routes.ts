@@ -6,7 +6,9 @@
 import { AppError, success } from '@isnanme/core';
 import {
   AUTO_BOUNDS,
+  AUTO_EVENT_KINDS,
   AUTO_MODES,
+  type AutoEventKind,
   type AutoClaudeConfig,
   type AutoMode,
   type AutoUserPrefs,
@@ -174,9 +176,22 @@ export function createAutoTransferRoutes(d: AutoRouteDeps): Hono {
     const a = who(c);
     const session = c.req.query('session');
     if (session !== undefined && !/^[A-Za-z0-9_-]{1,100}$/.test(session)) throw bad('session', 'Unknown session.');
+    // `?kind=moved,undone`: only those kinds (the Home page asks for the last move without reading the whole trail).
+    const kindParam = c.req.query('kind');
+    const kinds = kindParam ? kindParam.split(',') : undefined;
+    if (kinds && (kinds.length > AUTO_EVENT_KINDS.length || kinds.some((k) => !(AUTO_EVENT_KINDS as readonly string[]).includes(k)))) throw bad('kind', 'Unknown kind.');
     const limit = Number(c.req.query('limit'));
     const before = Number(c.req.query('before'));
-    return c.json(success(d.store.events(a.userId, { session, limit: Number.isFinite(limit) && limit > 0 ? limit : undefined, before: Number.isFinite(before) && before > 0 ? before : undefined })));
+    return c.json(
+      success(
+        d.store.events(a.userId, {
+          session,
+          kinds: kinds as AutoEventKind[] | undefined,
+          limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
+          before: Number.isFinite(before) && before > 0 ? before : undefined,
+        }),
+      ),
+    );
   });
 
   return r;

@@ -4,7 +4,7 @@
 | --- | --- |
 | Status | **Draft v0.1.** The frame, its settings, the Quota widget, the app shortcuts and the app badge are built and were looked at in Chromium on 2026-10-12 (§14). The Sessions, Active agents, Needs attention and Shortcuts widgets and the server snapshot behind them (§10) are built and were looked at against a real Claude Code (§14). ✅ = observed, 📄 = read from documentation, 🔬 = unverified: needs a real device or a real account. |
 | Owner | Alfian Isnan |
-| Last updated | 2026-10-12 |
+| Last updated | 2026-10-13 |
 | Depends on | [Claude usage](claude-usage.md) §20 (the snapshot's `pace`, `outlook` and `slot`, and the live topic `claudeusage`), [Web app & PWA](web-app-pwa.md) (shell, manifest, service worker), the shared colour helper `apps/web/src/lib/usage` |
 | Related | [Chat sessions](chat-sessions.md), [Tickets](tickets.md), [Local git and CI/CD](local-git-ci.md), [Settings & policies](settings-policies.md) (these settings are per device and live outside that store: §7) |
 
@@ -12,7 +12,7 @@
 
 A glance widget is a small readout of something the person keeps asking the portal: how much of the active Claude's plan is left, what is running, what is waiting for them. One frame draws every widget in every place. A widget has a **compact form** (its icon, a number and a status dot: on a phone only the icon and the number show) and a **full form** (a popover on a larger screen, a bottom sheet on a phone, a panel in the side dock). The places are the header, a side dock on wide screens, the top of the Sessions list and the line above the composer. Which widgets show, in what order and where is the person's choice, kept on the device. The installed app gets shortcuts on its icon and a badge with the needs-attention count where the platform has them.
 
-Five widgets ship: **Quota** (§9), **Sessions**, **Active agents**, **Needs attention** and **Shortcuts** (§10).
+Five widgets ship: **Quota** (§9), **Sessions**, **Active agents**, **Needs attention** and **Shortcuts** (§10); four more, **Workspaces**, **Tickets**, **CI** and **Usage**, came with the **Home page** (§18), the page the app opens on, where every widget with a card shows as one.
 
 ## 2. Background and problem
 
@@ -330,3 +330,28 @@ Not looked at: a real device, a real Claude account's numbers (🔬), the badge 
 | A2 | README | One index line. |
 | A3 | [Chat sessions](chat-sessions.md) FR22 and FR25a, the data model | What is approved is shown whole (up to 8,000 characters), Allow only for text that is there and whole and has been read, the portal refuses Allow otherwise; `chat_requests.full` and `full_cut` (migration 190). |
 | A4 | Contracts | `glance.ts` (the snapshot and its limits) and the live topic `glance`; `ChatRequest.full`, `fullCut`, `REQUEST_FULL_MAX` and `requestReview` in `chat.ts`. |
+| A5 | [Web app & PWA](web-app-pwa.md) §8, A9 and the new A12 | The app opens on Home (§18); Home is first in the navigation and in the phone bar, Knowledge moves to More. |
+
+## 18. The Home page
+
+Owner (2026-10-13, ticket T-34): a front page that shows, at a glance, the sessions that run, the quota, the workspaces, the tickets and the rest. Built on the widgets: every card of the page is the `Card` of a glance widget, so a card can also sit in the strips as a chip and the frame knows no card by name (G1).
+
+- **Where.** `/admin/home`, first in `NAV` (a house), so the app opens on it (`HOME` is the first item: the index route, an unknown route and the sign-in's return all land there). In the phone bar it takes the first place; Knowledge moves to More so the bar stays at five ([Web app & PWA](web-app-pwa.md) G2). Workspaces, the old first page, stays in the bar.
+- **Layout.** One column on a phone, two from 1024 px, three from 1700 px; cards start at the top of their row (a long card does not stretch its neighbour). A card: its icon, a title of one or two words, an ⓘ with what it shows and where it comes from, the body, and a foot link to the page behind it. Every row is a link of at least 44 px whose text truncates with the whole of it in its name and title (QA A5, A9).
+- **Arrange.** One button (an icon on a phone) opens a dialog: per card a switch and a move up and a move down (44 px, no dragging), and Reset. Kept per person on the device (`localStorage` `claudepilot.home.<user>`), like the glance settings (§7), apart from them: a card hidden on Home is not hidden in the strips. Order: the person's, then the default (Needs you, Sessions, Quota, Workspaces, Tickets, CI, Usage), so a card added later shows up without a reset. All hidden: one line and Arrange.
+- **No new polling (G3).** A card reads a shared store (`widgets/shared/liveStore.ts`, the pattern of `useGlance`): loaded on first use (not again within 15 s by a card that only mounted), again on its live topic and when the socket comes back. The glance snapshot (§10.5) carries Needs you and Sessions; `useClaudeUsage` Quota; the others read their page's list route once and on its topic (`workspaces` and `usage` push the data itself, `tickets`, `ci`, `autotransfer` and `usage` say "load again").
+- **Honest numbers (G4).** A figure that could not be read is "-" or says "could not be read", never 0; an estimate says "est."; a card whose source failed says so with Try again, a refusal says "Not allowed.".
+
+| Card | What it shows | Source |
+| --- | --- | --- |
+| Needs you (`attention`) | One list, most blocking first: approvals (a session is stopped on each; the longest waiting first), deploys held for approval (the oldest run first), interrupted sessions (the latest first), failed CI runs that still stand, tickets assigned to a person. Six rows, then "+N more" (the Attention full form). Answering happens where the whole text is shown (§10.6): the session or the full form. | Snapshot `attention` (new: `deploys`, runs whose job waits for approval, local-git-ci FR41) and `sessions.interrupted`; the total counts the sources that were read, the others are named. |
+| Sessions | Running, Waiting, Open as figures; then the latest open sessions a person started, pinned first (T-1), each with its state ("Idle · 2 agents" while sub-agents or workers run, T-31), its Claude's colour and name, workspace, branch, last activity. All sessions. | Snapshot `sessions` (new: `recent`, `pinned`, `branch`, `agents`, `interrupted`). |
+| Quota | Every Claude, the one closest to running out first and open: each window (session, week, per model) with its meter, pace and reset (the full form's block, §9.3). Order: the least left of its fullest window (measured), a tie by the sooner projected run-out, then name; Claudes without a reading follow, pools and keys last. Under them auto move: Off, Ask or Automatic, its threshold, and the last move the portal made by itself. | `GET /api/claude-usage` (claude-usage §20) and topic `claudeusage`; auto move's overview and its trail (new filter `kind=moved`), topic `autotransfer`. |
+| Workspaces | Running, Stopped, Failing as figures; rows failing first (error, unreachable), then on the way up or down, running, stopped; CPU and memory for a running one where the portal measured it ("-" otherwise); a mark when its Claude Code differs from the image's pin (claude-version-pinning). | `GET /api/workspaces`, topics `workspaces` and `usage`. |
+| Tickets | Open by status (open, in progress, blocked, in review), waiting for a person, unassigned (the agents' queue); the three newest open tickets. | `GET /api/tickets?sort=newest&limit=3` (new: `sort=newest`), topic `tickets`. |
+| CI | Running, failing (still standing, §10.3), to approve; the five newest runs with their state. | `GET /api/ci/runs?limit=5`, topic `ci`; failing and to approve from the snapshot. |
+| Usage | Today and this week (since Monday's midnight, in the portal's zone): estimated dollars ("est.", Claude Code's own price estimate), tokens and requests (counted). Terminal use of Claude Code is not recorded and not in it. | `GET /api/usage-spend` (new: `week`), topic `usage`. |
+
+The four new widgets (Workspaces, Tickets, CI, Usage) start off in the strips (`defaultHidden`) and are switched on in Settings > Glance; the switch is then an explicit choice either way (`shown`), so a default can change later without overriding it.
+
+Tests: the pure models (`attention/needs.test.ts`, `quota/board.test.ts`, `workspaces/model.test.ts`, `tickets/model.test.ts`, `ci/model.test.ts`, `spend/model.test.ts`, `home/settings.test.ts`, `glance/settings.test.ts`) and the snapshot's new parts on the server (`glance/build.test.ts`, `glance/authz.test.ts`). Looked at in Chromium at 390 and 1280 px, light and dark, against a scratch portal (2026-10-13).

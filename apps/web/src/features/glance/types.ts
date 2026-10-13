@@ -105,4 +105,15 @@ export interface GlanceWidget {
   Settings?: ComponentType;
   /** A tap on the chip does this instead of opening the full form (the quick-search chip opens its palette). */
   activate?: (api: GlanceActivateApi) => void;
+  /**
+   * Off in the strips until the person switches it on in Settings > Glance (the widgets made for the Home page, so a phone's header
+   * does not fill up with chips nobody asked for). It still shows on the Home page.
+   */
+  defaultHidden?: boolean;
+  /** The widget's card on the Home page (docs/prd/glance-widgets.md §18). Widgets without one are not on Home. May be lazy. */
+  Card?: ComponentType;
+  /** The card's title when it differs from `label` ("Needs you" for Attention); one or two words. */
+  cardLabel?: string;
+  /** The card's ⓘ when it says more than `about`. */
+  cardAbout?: string;
 }

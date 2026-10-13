@@ -13,5 +13,6 @@ export const sessionsWidget: GlanceWidget = {
   // On the Sessions page and beside a composer it would only repeat what is already on screen.
   placements: ['header', 'dock'],
   useCompact: useSessionsCompact,
+  Card: lazy(() => import('./Card').then((m) => ({ default: m.SessionsCard }))),
   Full: lazy(() => import('./Full').then((m) => ({ default: m.SessionsFull }))),
 };

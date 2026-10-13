@@ -339,8 +339,9 @@ export type SpendAlert =
 
 /** `GET USAGE_SPEND_API.summary`: what a header strip, the Needs-attention widget and the MCP summary read. */
 export interface SpendSummary {
-  /** Since midnight and since the 1st, in `timezone`. */
+  /** Since midnight, since Monday's midnight and since the 1st, in `timezone`. */
   today: SpendTotals;
+  week: SpendTotals;
   month: SpendTotals;
   timezone: string;
   budgets: { total: number; near: number; high: number; exhausted: number; paused: number };

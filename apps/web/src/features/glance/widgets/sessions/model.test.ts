@@ -5,9 +5,9 @@ import { sessionLevel, sessionSubline, sessionsCompact, sessionTitle } from './m
 
 const snapshot = (sessions: Partial<GlanceSnapshot['sessions']>): GlanceSnapshot => ({
   at: '2026-10-12T12:00:00.000Z',
-  sessions: { ok: true, running: 0, waiting: 0, open: 0, items: [], ...sessions },
+  sessions: { ok: true, running: 0, waiting: 0, open: 0, interrupted: 0, items: [], recent: [], ...sessions },
   agents: { ok: true, running: 0, waiting: 0, rows: [], more: 0 },
-  attention: { count: 0, approvals: { ok: true, count: 0, items: [] }, tickets: { ok: true, count: 0, items: [] }, ci: { ok: true, count: 0, items: [] } },
+  attention: { count: 0, approvals: { ok: true, count: 0, items: [] }, tickets: { ok: true, count: 0, items: [] }, ci: { ok: true, count: 0, items: [] }, deploys: { ok: true, count: 0, items: [] } },
 });
 const ok = { failed: false, stale: false };
 
@@ -42,6 +42,9 @@ const row = (over: Partial<GlanceSession>): GlanceSession => ({
   lastActivityAt: '2026-10-12T11:59:00.000Z',
   waiting: 0,
   waitingFor: null,
+  pinned: false,
+  branch: null,
+  agents: 0,
   ...over,
 });
 

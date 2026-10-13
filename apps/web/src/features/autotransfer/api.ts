@@ -50,5 +50,7 @@ export const autoApi = {
   move: (suggestionId: string, to?: string) => request<AutoSessionState>('POST', AUTOTRANSFER_API.move(suggestionId), to ? { to } : {}),
   later: (suggestionId: string) => request<AutoSessionState>('POST', AUTOTRANSFER_API.later(suggestionId)),
   always: (suggestionId: string) => request<AutoSessionState>('POST', AUTOTRANSFER_API.always(suggestionId)),
+  /** The caller's latest moves (any chat), newest first: the Home page's "last automatic move". */
+  moves: (limit = 20) => request<AutoTransferEvent[]>('GET', `${AUTOTRANSFER_API.events}?kind=moved&limit=${limit}`),
   events: (session: string, limit = 20) => request<AutoTransferEvent[]>('GET', `${AUTOTRANSFER_API.events}?session=${encodeURIComponent(session)}&limit=${limit}`),
 };

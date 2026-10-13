@@ -13,7 +13,7 @@ import { can, declarePolicies, visible } from '../authz/seam.js';
 import type { CiService } from '../ci/service.js';
 import type { ChatController } from '../chat/controller.js';
 import type { Tickets } from '../tickets/service.js';
-import { failedRuns, type GlanceSources } from './build.js';
+import { failedRuns, waitingDeploys, type GlanceSources } from './build.js';
 
 export interface GlanceReads {
   chat: Pick<ChatController, 'list' | 'openRequests' | 'tasks'>;
@@ -36,7 +36,8 @@ export function declareGlancePolicies(): void {
  *   the actor cannot answer is not an item waiting on them);
  * - tasks: those of a session the actor may view;
  * - tickets: the tickets waiting on a person, the ones the actor may view;
- * - failed runs: from the CI runs the actor may view, so what supersedes a failure is also only what they can see.
+ * - failed runs: from the CI runs the actor may view, so what supersedes a failure is also only what they can see;
+ * - deploys: the running CI runs the actor may view that hold a job for a person's approval.
  */
 export function glanceSources(reads: GlanceReads): GlanceSources {
   return {
@@ -68,6 +69,16 @@ export function glanceSources(reads: GlanceReads): GlanceSources {
         now,
         GLANCE_CI_WINDOW_MS,
         GLANCE_LIMITS.ci,
+      ),
+    deploys: (actor) =>
+      waitingDeploys(
+        {
+          list: (f) => {
+            const found = reads.ci.list(f);
+            return { items: visible(actor, 'ci_run', found.items as CiRunSummary[], (r) => r.id) };
+          },
+        },
+        GLANCE_LIMITS.deploys,
       ),
   };
 }

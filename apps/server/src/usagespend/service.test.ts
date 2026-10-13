@@ -66,6 +66,8 @@ test('a daily budget on a workspace counts its own day and workspace, alerts at 
     // Everything today: this workspace $11.00 + the other $20; everything this month adds yesterday's $5. Counts are requests (rows).
     const sum = h.spend.summary();
     assert.deepEqual([sum.today.costUsd, sum.today.requests, sum.month.costUsd, sum.month.requests], [31, 8, 36, 9]);
+    // 2026-10-12 is a Monday: yesterday's $5 belongs to last week, so this week is today.
+    assert.deepEqual([sum.week.costUsd, sum.week.requests], [31, 8]);
     assert.deepEqual(sum.budgets, { total: 1, near: 0, high: 0, exhausted: 1, paused: 0 });
 
     // The next day it starts over: $2.00 is 20 %, nothing is told, and yesterday's alert is not listed any more.

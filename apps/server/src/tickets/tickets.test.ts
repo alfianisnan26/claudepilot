@@ -135,6 +135,7 @@ test('list and filters: status, priority, type, tag, assignee, workspace, text (
     const ids = (f: Parameters<typeof h.tickets.list>[1]) => h.tickets.list(UI, f).items.map((t) => t.id);
     assert.deepEqual(ids({}), ['T-2', 'T-3', 'T-4', 'T-1'], 'most urgent first; closed left out');
     assert.deepEqual(ids({ includeClosed: true }).length, 5);
+    assert.deepEqual(ids({ sort: 'newest' }), ['T-4', 'T-3', 'T-2', 'T-1'], 'the latest made first (the Home page); closed left out');
     assert.deepEqual(ids({ status: ['done'] }), ['T-5']);
     assert.deepEqual(ids({ priority: ['low', 'urgent'] }), ['T-2', 'T-1']);
     assert.deepEqual(ids({ type: ['bug'] }), ['T-2']);

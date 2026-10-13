@@ -102,6 +102,11 @@ test('S20: the card, the chat state and the trail are the owner’s; another use
   const trail = await b.call('u_a', 'GET', '/api/autotransfer/events?session=s_a');
   assert.deepEqual(trail.data.map((e: { kind: string }) => e.kind), ['moved', 'suggested']);
   assert.equal(trail.data[0].actor, 'user:u_a');
+  // Only the moves (the Home page's "last move"), still only the caller's; an unknown kind is refused.
+  assert.deepEqual((await b.call('u_a', 'GET', '/api/autotransfer/events?kind=moved&limit=1')).data.map((e: { kind: string }) => e.kind), ['moved']);
+  assert.deepEqual((await b.call('u_a', 'GET', '/api/autotransfer/events?kind=undone,failed')).data, []);
+  assert.deepEqual((await b.call('u_b', 'GET', '/api/autotransfer/events?kind=moved')).data, []);
+  assert.equal((await b.call('u_a', 'GET', '/api/autotransfer/events?kind=moved,nope')).status, 422);
   b.platform.stop();
 });
 

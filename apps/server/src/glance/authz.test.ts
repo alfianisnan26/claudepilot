@@ -12,7 +12,7 @@ import { ago, fakeCi, HOUR, MIN, NOW, request, run, session, task, ticket, userA
 const user = (id: string): Owner => ({ kind: 'user', id });
 const sessionOwner: Record<string, { owner: string; publicView?: boolean }> = { a1: { owner: 'u_a' }, b1: { owner: 'u_b' }, shared: { owner: 'u_a', publicView: true } };
 const ticketOwner: Record<string, string> = { 'T-1': 'u_a', 'T-2': 'u_b' };
-const runOwner: Record<string, string> = { RA: 'u_a', RB: 'u_b' };
+const runOwner: Record<string, string> = { RA: 'u_a', RB: 'u_b', DA: 'u_a', DB: 'u_b' };
 
 before(() => {
   registerResolver({
@@ -45,6 +45,8 @@ function reads() {
     ci: fakeCi([
       run({ id: 'RA', repoId: 'r1', pipeline: 'ci', branch: 'main', status: 'failed', created: 3 * HOUR, finished: 2 * HOUR }),
       run({ id: 'RB', repoId: 'r2', pipeline: 'ci', branch: 'main', status: 'failed', created: 3 * HOUR, finished: HOUR }),
+      run({ id: 'DA', repoId: 'r1', pipeline: 'deploy', branch: 'main', status: 'running', created: 30 * MIN, jobs: [{ id: 'release', status: 'waiting' }] }),
+      run({ id: 'DB', repoId: 'r2', pipeline: 'deploy', branch: 'main', status: 'running', created: 20 * MIN, jobs: [{ id: 'release', status: 'waiting' }] }),
     ]),
   });
 }
@@ -63,7 +65,10 @@ test('user A sees A\'s sessions, requests, tickets and failed runs, and nothing 
   assert.equal(snap.attention.tickets.count, 1);
   assert.deepEqual(snap.attention.ci.items.map((r) => r.id), ['RA']);
   assert.equal(snap.attention.ci.count, 1);
-  assert.equal(snap.attention.count, 2 + 1 + 1);
+  // DB holds B's deploy: A neither sees nor counts it
+  assert.deepEqual(snap.attention.deploys.items.map((r) => r.id), ['DA']);
+  assert.equal(snap.attention.deploys.count, 1);
+  assert.equal(snap.attention.count, 2 + 1 + 1 + 1);
   assert.deepEqual(snap.agents.rows.map((r) => r.key).sort(), ['a1', 'a1/t-a1', 'shared', 'shared/t-shared']);
 });
 
@@ -76,6 +81,7 @@ test('user B sees B\'s own and what is shared with them at view, but cannot answ
   assert.ok(snap.agents.rows.some((r) => r.key === 'shared/t-shared'), 'the shared session\'s agents are visible at view');
   assert.deepEqual(snap.attention.tickets.items.map((t) => t.id), ['T-2']);
   assert.deepEqual(snap.attention.ci.items.map((r) => r.id), ['RB']);
+  assert.deepEqual(snap.attention.deploys.items.map((r) => r.id), ['DB']);
   assert.ok(!JSON.stringify(snap).includes('a1'), 'nothing of A\'s session ids anywhere in B\'s snapshot');
   assert.ok(!JSON.stringify(snap).includes('Run a command for a1'));
 });

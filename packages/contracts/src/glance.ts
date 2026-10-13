@@ -13,7 +13,7 @@ export const GLANCE_API = {
 } as const;
 
 /** How many items each list carries. The counts beside them are whole. */
-export const GLANCE_LIMITS = { sessions: 8, agents: 16, approvals: 6, tickets: 5, ci: 5 } as const;
+export const GLANCE_LIMITS = { sessions: 8, recent: 8, agents: 16, approvals: 6, tickets: 5, ci: 5, deploys: 5 } as const;
 
 /**
  * A failed CI run needs attention for this long after it finished, and only while no later run of its pipeline on its branch
@@ -34,6 +34,12 @@ export interface GlanceSession {
   /** Requests waiting for an answer, and what the oldest asks in a few words ("Run a command: npm test"). */
   waiting: number;
   waitingFor: string | null;
+  /** The person pinned it (the Sessions list's Pinned chip): the Home page lists it first. */
+  pinned: boolean;
+  /** The branch of the git worktree it runs in, or null for a plain folder. */
+  branch: string | null;
+  /** Agents running under it now: its running sub-agent tasks and the workers it started that are working, starting or waiting. */
+  agents: number;
 }
 
 export interface GlanceSessions {
@@ -45,8 +51,15 @@ export interface GlanceSessions {
   waiting: number;
   /** Not ended and not archived. */
   open: number;
+  /** Open sessions whose process was lost (interrupted): each needs a person to resume or end it. */
+  interrupted: number;
   /** By need (waiting, interrupted, working, idle, ended), the latest activity first within each; archived ones are left out. */
   items: GlanceSession[];
+  /**
+   * The Home page's list: open sessions a person started (not a worker of another open session, unless pinned), pinned first (the
+   * latest pinned first), then the latest activity first. Capped at `GLANCE_LIMITS.recent`; `open` is the whole count.
+   */
+  recent: GlanceSession[];
 }
 
 /**
@@ -134,12 +147,30 @@ export interface GlanceCiRun {
   workspaceId: string;
 }
 
+/** A CI run holding a deploy job for a person's approval (local-git-ci FR41): the job is `waiting`, the run `running`. */
+export interface GlanceDeploy {
+  /** The run's id (approve or reject it on the run's page). */
+  id: string;
+  number: number;
+  repo: string;
+  pipeline: string;
+  /** The job that waits (its id in the pipeline). */
+  job: string;
+  /** Null for a tag. */
+  branch: string | null;
+  workspaceId: string;
+  /** When the run started (the job's own wait start is not in a run's summary). */
+  startedAt: string | null;
+}
+
 export interface GlanceAttention {
-  /** What waits on a person: the sum of the three counts below, over the sources that could be read. The installed app's badge shows it. */
+  /** What waits on a person: the sum of the four counts below, over the sources that could be read. The installed app's badge shows it. */
   count: number;
   approvals: { ok: boolean; count: number; items: GlanceApproval[] };
   tickets: { ok: boolean; count: number; items: GlanceTicket[] };
   ci: { ok: boolean; count: number; items: GlanceCiRun[] };
+  /** Runs holding a deploy for a person's approval. */
+  deploys: { ok: boolean; count: number; items: GlanceDeploy[] };
 }
 
 export interface GlanceSnapshot {
