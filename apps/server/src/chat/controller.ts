@@ -236,7 +236,7 @@ interface Restore {
    * A move (T-109): the model is applied and VERIFIED, falling down the catalogue's chain when the destination refuses it or runs another
    * one; `from` is the model the chat had before the move.
    */
-  move?: { claudeId: string; name: string; from: string | null };
+  move?: { claudeId: string; name: string; from: string | null; prev: string | null; back?: string };
 }
 
 /** How long what a Claude's `list_models` said is trusted (T-109); older, it is read again at the next start on that Claude. */
@@ -1323,14 +1323,13 @@ export class ChatController {
       // The model (T-109): the one asked for, else the chat's own, else (with `automove.returnToOriginalModel`) the one it had before an
       // earlier move changed it, when this Claude has it. Applied and verified after the start, down the chain when refused.
       const original = row.original_model ?? null;
-      let wanted = model ?? row.model;
-      if (!model && original && this.returnToOriginalModel?.() && modelFamilyOf(original) && this.#claudeHas(dest.id, modelFamilyOf(original)!).has) wanted = original;
+      const back = !model && original && this.returnToOriginalModel?.() ? original : null;
       const restore: Restore = {
-        model: wanted,
+        model: model ?? row.model ?? back,
         effort: row.effort,
         ultracode: row.ultracode === 1,
         mode: row.mode === 'bypassPermissions' ? START_MODE : row.mode,
-        move: { claudeId: dest.id, name: dest.name, from: original ?? row.model },
+        move: { claudeId: dest.id, name: dest.name, from: original ?? row.model, prev: row.model, ...(back ? { back } : {}) },
       };
       // What the old run still has running ends with it in step 5 (the new run may start its own meanwhile).
       const oldTasks = this.#chat.runningTaskIds(sessionId);
@@ -2876,8 +2875,7 @@ export class ChatController {
    * and the chat's model before the move as `originalModel` when they differ; a note says the change ("Model: Fable to Opus (Sekar has no
    * Fable).") or that none could be set. Returns the model that applies, or null.
    */
-  async #applyModel(sessionId: string, wanted: string, move: NonNullable<Restore['move']>, current: string | null): Promise<string | null> {
-    const fam = modelFamilyOf(wanted);
+  async #applyModel(sessionId: string, asked: string, move: NonNullable<Restore['move']>, current: string | null): Promise<string | null> {
     // What the destination offers, read once per hour per Claude: it lets the chain skip what it lacks.
     if (!this.#listedOptions(move.claudeId)) {
       const options = await this.#request(sessionId, 'list_models').then(pickModels, () => [] as ChatModelOption[]);
@@ -2885,6 +2883,10 @@ export class ChatController {
       this.#learnModels(move.claudeId, options);
     }
     const listed = this.modelFamilies(move.claudeId);
+    // `automove.returnToOriginalModel`: the chat's original model when this Claude has it (known only now, from its list).
+    const backFam = modelFamilyOf(move.back);
+    const wanted = move.back && backFam && (listed ? listed.includes(backFam) : this.#claudeHas(move.claudeId, backFam).has) ? move.back : asked;
+    const fam = modelFamilyOf(wanted);
     const tries = fam ? [wanted, ...downgradeChain(fam).slice(1)].filter((m, i) => !listed || listed.includes(i === 0 ? fam : m)) : [wanted];
     const same = (a: string | null, b: string) => !!a && (modelFamilyOf(a) && modelFamilyOf(b) ? modelFamilyOf(a) === modelFamilyOf(b) : a === b);
     let got: string | null = null;
@@ -2912,14 +2914,25 @@ export class ChatController {
     const origFam = modelFamilyOf(original);
     if (got) {
       const back = origFam ? modelFamilyOf(got) === origFam : got === original;
+      const wasChanged = !!this.#chat.row(sessionId)?.original_model;
       this.#chat.patchSession(sessionId, { model: got, originalModel: back ? null : original });
-      if (!same(got, wanted) || (original && !back)) {
-        // Why: the destination refused what was asked, or (a move asked for a lower model) it lacks the chat's own.
-        const why = !same(got, wanted) ? wanted : origFam && !this.#claudeHas(move.claudeId, origFam).has ? original : null;
-        const lacks = why ? ` (${move.name} has no ${modelDisplayName(why)})` : '';
-        this.#note(sessionId, `Model: ${modelDisplayName(original ?? wanted)} to ${modelDisplayName(got)}${lacks}.`);
-      } else if (original && back && original !== got && this.#chat.row(sessionId)?.original_model) {
-        this.#note(sessionId, `Model: back to ${modelDisplayName(got)}.`);
+      // A note and one audit row only when the model that runs changed with this move (what ran before it, `prev`).
+      if (!same(move.prev, got)) {
+        this.#chat.addAudit({
+          severity: 'info',
+          kind: 'model.changed',
+          sessionId,
+          workspaceId: this.#chat.row(sessionId)?.workspace_id ?? null,
+          actor: 'portal',
+          detail: { at: 'move', claude: move.claudeId, from: modelFamilyOf(move.prev) ?? move.prev, to: modelFamilyOf(got) ?? got, asked: modelFamilyOf(wanted) ?? wanted, original: back ? null : (origFam ?? original) },
+        });
+        if (back && wasChanged) this.#note(sessionId, `Model: back to ${modelDisplayName(got)}.`);
+        else {
+          // Why: the destination refused or lacks what was asked, or (a person asked for a lower model) it lacks the chat's own.
+          const why = !same(got, wanted) ? wanted : origFam && !back && !this.#claudeHas(move.claudeId, origFam).has ? original : null;
+          const lacks = why ? ` (${move.name} has no ${modelDisplayName(why)})` : '';
+          this.#note(sessionId, `Model: ${modelDisplayName(move.prev ?? original ?? wanted)} to ${modelDisplayName(got)}${lacks}.`);
+        }
       }
     } else {
       // Nothing could be set: say what runs, and remember what the chat had.
