@@ -259,7 +259,8 @@ test('a dry run says what each job would do and changes nothing: no push, no clu
   assert.equal(outFile(w, 'build.env'), `PORTAL_TAG=${today()}-2\nWORKSPACE_TAG=2.1.296-${today()}-5\n`);
   const release = w.run('release', dry);
   assert.equal(release.code, 0, release.out);
-  assert.match(release.out, /\[dry-run\] would run: git push -q --atomic origin [0-9a-f]{40}:refs\/heads\/main [0-9a-f]{40}:refs\/heads\/integration/);
+  assert.match(release.out, /\[dry-run\] would run: git push -q origin [0-9a-f]{40}:refs\/heads\/main\n/);
+  assert.match(release.out, /\[dry-run\] would run: git push -q origin [0-9a-f]{40}:refs\/heads\/integration\n/, 'the branch follows as its own step');
   assert.match(outFile(w, 'release.env'), /PUSHED=0/);
   const verify = w.run('verify', dry);
   assert.equal(verify.code, 0, verify.out);
@@ -358,6 +359,43 @@ test('a branch that moved on during the approval: main gets exactly the approved
   assert.match(w.manifestAt('integration'), new RegExp(`claudepilot/portal:${today().replace(/\./g, '\\.')}-2\n`), 'integration has the new tags too');
   assert.match(outFile(w, 'release.env'), /PUSHED=1/);
   assert.match(outFile(w, 'release.env'), new RegExp(`BRANCH_SHA=${merged}`));
+});
+
+test('T-95: the deploy is the push to main alone; integration catches up as its own step, retried when it moves during the push, and a branch that will not take it only warns', () => {
+  const w = world();
+  assert.equal(w.run('build', { images: 'portal' }).code, 0);
+  // GitHub refuses pushes to integration while refuse-integration holds a count above 0 ("always": every one), as if it moved each time.
+  const hook = join(w.github, 'hooks', 'pre-receive');
+  shell(hook, `#!/bin/sh
+while read old new ref; do
+  [ "$ref" = refs/heads/integration ] || continue
+  f="$FAKE/refuse-integration"; [ -f "$f" ] || continue
+  n=$(cat "$f"); [ "$n" = always ] && { echo "integration moved" >&2; exit 1; }
+  [ "$n" -gt 0 ] 2>/dev/null && { echo $((n - 1)) > "$f"; echo "integration moved" >&2; exit 1; }
+done
+exit 0
+`);
+  writeFileSync(join(w.root, 'refuse-integration'), '1');
+  const once = w.run('release');
+  assert.equal(once.code, 0, once.out);
+  assert.match(once.out, /integration moved during the push \(try 1 of 3\)/);
+  const bump = w.main();
+  assert.equal(w.git(['--git-dir', w.github, 'rev-parse', `${bump}^`]), w.sha, 'main: the approved commit plus the tags');
+  assert.equal(w.branch('integration'), bump, 'the second try brought integration up');
+  assert.match(outFile(w, 'release.env'), /PUSHED=1/);
+
+  // A branch that never takes it: the deploy stands (no failure, so no rollback), and the run says to merge by hand.
+  const w2 = world();
+  assert.equal(w2.run('build', { images: 'portal' }).code, 0);
+  shell(join(w2.github, 'hooks', 'pre-receive'), readFileSync(hook, 'utf8'));
+  writeFileSync(join(w2.root, 'refuse-integration'), 'always');
+  const never = w2.run('release');
+  assert.equal(never.code, 0, never.out);
+  assert.match(never.out, /WARNING: integration was not brought up to date: merge main into it by hand \(the deploy is done\)/);
+  assert.notEqual(w2.main(), w2.base, 'main was released');
+  assert.equal(w2.branch('integration'), w2.sha, 'integration as it was');
+  assert.match(outFile(w2, 'release.env'), /PUSHED=1/);
+  assert.match(outFile(w2, 'release.env'), /BRANCH_SYNC=failed/);
 });
 
 test('the gate as a Job in the cluster (T-37, the default): a Secret for its life, a Job with small requests and no node selector, the verdict from its log', () => {

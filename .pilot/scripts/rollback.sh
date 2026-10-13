@@ -26,15 +26,15 @@ else
 Pilot-Run: ${PILOT_RUN_ID:-local}"
 fi
 back=$(git rev-parse HEAD)
-refs=("$back:refs/heads/$DEPLOY_MAIN")
-if [ -n "${PILOT_BRANCH:-}" ] && [ "$PILOT_BRANCH" != "$DEPLOY_MAIN" ]; then
+# main first and alone (T-95); the run's branch follows only when it is still exactly the release, else it is told to merge main.
+[ "$back" = "$(git rev-parse "origin/$DEPLOY_MAIN")" ] || act git push -q origin "$back:refs/heads/$DEPLOY_MAIN" || die "the rollback push was refused"
+if [ -n "${PILOT_BRANCH:-}" ] && [ "$PILOT_BRANCH" != "$DEPLOY_MAIN" ] && [ "$back" != "$BUMP_SHA" ]; then
   if [ "$(git rev-parse -q --verify "origin/$PILOT_BRANCH" || true)" = "$BUMP_SHA" ]; then
-    refs+=("$back:refs/heads/$PILOT_BRANCH")
+    act git push -q origin "$back:refs/heads/$PILOT_BRANCH" || log "WARNING: $PILOT_BRANCH moved during the rollback: merge $DEPLOY_MAIN into it by hand"
   else
     log "rollback: $PILOT_BRANCH moved since the release; only $DEPLOY_MAIN is rolled back (merge $DEPLOY_MAIN into $PILOT_BRANCH)"
   fi
 fi
-[ "$back" = "$(git rev-parse "origin/$DEPLOY_MAIN")" ] || act git push -q --atomic origin "${refs[@]}" || die "the rollback push was refused"
 dry && exit 0
 wait_synced "$back"
 rollout

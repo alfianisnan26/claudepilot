@@ -4,6 +4,8 @@
 #                                                     (the rerun of the failing files alone, when there was one) has 0 failing and 0 timed-out
 #                                                     tests (node counts a timed-out file as "cancelled", not "fail"). steps: as GATE_STEPS.
 #   scripts/gate-verdict.sh joblog <file>             the log of a gate Job: its last `GATE-VERDICT:` line.
+#   scripts/gate-verdict.sh failures <suite log>      every failing test with its own report (TAP's YAML block: error, expected, actual,
+#                                                     location, stack), at most 80 lines each and 600 in all; prints, no verdict.
 # Prints one line, `GATE-VERDICT: green` or `GATE-VERDICT: red: <why>` (plus a note when a file passed only alone), and exits 0 or 1.
 set -u
 green() { echo "GATE-VERDICT: green"; exit 0; }
@@ -21,6 +23,7 @@ case ${1:-} in
         cancelled=$(grep -E '^# cancelled [0-9]+' "$logs/server-suite.log" 2>/dev/null | tail -n 1 | awk '{print $3}')
         if [ "${fails:-x}" != 0 ] || [ "${cancelled:-0}" != 0 ]; then red "the server suite has ${fails:-an unknown number of} failing and ${cancelled:-0} timed-out tests"; fi
         grep '^server-suite-rerun:' "$logs/SUMMARY.txt" | sed 's/^/note: /'
+        grep '^server-suite-flaky: .' "$logs/SUMMARY.txt" | sed 's/^server-suite-flaky: /note: flaky, passed on rerun: /'
         ;;
     esac
     green
@@ -33,5 +36,12 @@ case ${1:-} in
       *) red "the job gave no verdict" ;;
     esac
     ;;
-  *) echo "usage: scripts/gate-verdict.sh logs <dir> [steps] | joblog <file>" >&2; exit 2 ;;
+  failures)
+    awk '
+      match($0, /^ *not ok /) { ind = RLENGTH - 7; on = 1; n = 0; print ""; print; next }
+      on { n++; if (n <= 80) print; if ($0 ~ /^ *\.\.\.$/ && match($0, /^ */) && RLENGTH == ind + 2) on = 0 }
+    ' "${2:?suite log}" 2>/dev/null | head -n 600
+    exit 0
+    ;;
+  *) echo "usage: scripts/gate-verdict.sh logs <dir> [steps] | joblog <file> | failures <suite log>" >&2; exit 2 ;;
 esac

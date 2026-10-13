@@ -4,6 +4,9 @@
 # GATE_CONCURRENCY (default 2): test files run at once; this workspace has 4 CPUs and 8 GiB, so keep it low. The tests that need a
 # Docker daemon are skipped here (CLAUDEPILOT_DOCKER_TESTS unset): they run on a machine with Docker. The suite runs from `env -i`:
 # no credentials, no kubeconfig, no Claude profile reach a test. GATE_TEST_TIMEOUT_MS (default 600000): a test or file that takes longer fails.
+# GATE_FILES (default every src/**/*.test.ts): the server test files to run, space separated, relative to apps/server (one file in a Job, say).
+# Every failing test's own report (its error, expected and actual, the stack) goes to <logs>/failures.txt; a file that passes when rerun
+# alone is written to the summary as flaky, with the names of the tests that failed in the full run.
 # GATE_STEPS (default typecheck,web-build,server-suite): which steps run after npm ci (scripts/gate-job.sh runs only typecheck,web-build, say).
 # The verdict: scripts/gate-verdict.sh logs <logs dir>.
 set -u
@@ -27,8 +30,10 @@ if wants web-build; then step web-build "${clean[@]}" nice -n 10 npm run build -
 # or timed-out test run once more, alone: a test that hangs or races under load passes alone (the known ones are in docs/open-items.md). The verdict
 # is the LAST summary in the log, the rerun's when there was one; node counts a timed-out file as "cancelled", not "fail", so read both.
 run_suite() {
-  local timeout=${GATE_TEST_TIMEOUT_MS:-600000} first="$logs/server-suite.first" files rc
-  ( cd apps/server && "${clean[@]}" nice -n 10 node --import tsx --test --test-force-exit --test-timeout="$timeout" --test-concurrency="${GATE_CONCURRENCY:-2}" 'src/**/*.test.ts' ) > "$first" 2>&1
+  local timeout=${GATE_TEST_TIMEOUT_MS:-600000} first="$logs/server-suite.first" files rc tests=('src/**/*.test.ts')
+  # node expands the glob itself (bash would not descend with **); GATE_FILES are plain paths.
+  [ -z "${GATE_FILES:-}" ] || read -ra tests <<< "$GATE_FILES"
+  ( cd apps/server && "${clean[@]}" nice -n 10 node --import tsx --test --test-force-exit --test-timeout="$timeout" --test-concurrency="${GATE_CONCURRENCY:-2}" "${tests[@]}" ) > "$first" 2>&1
   rc=$?
   cat "$first"
   [ "$rc" = 0 ] && return 0
@@ -37,10 +42,15 @@ run_suite() {
   printf '\n=== the files with a failing or timed-out test, once more and alone:\n%s\n' "$files"
   ( cd apps/server && "${clean[@]}" nice -n 10 node --import tsx --test --test-force-exit --test-timeout="$timeout" --test-concurrency=1 $files )
   rc=$?
-  [ "$rc" = 0 ] && echo "server-suite-rerun: passed alone: $(echo $files)" >> "$logs/SUMMARY.txt"
+  if [ "$rc" = 0 ]; then
+    echo "server-suite-rerun: passed alone: $(echo $files)" >> "$logs/SUMMARY.txt"
+    echo "server-suite-flaky: $(sed -nE 's/^ *not ok [0-9]+ - //p' "$first" | grep -v '\.test\.ts$' | sort -u | head -n 10 | paste -sd ';' -)" >> "$logs/SUMMARY.txt"
+  fi
   return "$rc"
 }
+
 wants server-suite || exit 0
 step server-suite run_suite
 grep -E '^# (tests|pass|fail|cancelled|skipped)' "$logs/server-suite.log" | tr '\n' ' '; echo
+bash "$(dirname "$0")/gate-verdict.sh" failures "$logs/server-suite.log" > "$logs/failures.txt"
 grep '^not ok' "$logs/server-suite.log" | head -5 || true

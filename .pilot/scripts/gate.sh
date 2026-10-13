@@ -46,6 +46,7 @@ for step in npm-ci typecheck web-build server-suite; do
     break
   fi
 done
+if [ -s "$logs/failures.txt" ]; then log "--- every failing test's own report:"; mask < "$logs/failures.txt"; fi
 verdict=$(bash scripts/gate-verdict.sh logs "$logs") || die "gate: ${verdict#GATE-VERDICT: red: }"
-printf '%s\n' "$verdict" | grep '^note: ' | sed 's/^/gate: /' || true
+printf '%s\n' "$verdict" | grep '^note: ' | sed 's/^note: /gate: /' || true
 log "gate: green at $(short "$sha")"
