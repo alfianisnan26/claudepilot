@@ -17,8 +17,12 @@ import { harness, WS } from './testkit.js';
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url));
 const today = () => new Date().toISOString().slice(0, 10).replace(/-/g, '.');
-/** The tag the repository's own manifest has for an image now: the pipeline's "before" (the manifest changes with every release, so the test reads it). */
-const manifestTag = (what: 'portal' | 'workspace') => new RegExp(`claudepilot/${what}:(\\S+)`).exec(readFileSync(join(REPO, 'deploy/k3s/portal.yaml'), 'utf8'))![1]!;
+/**
+ * The tags the fake world's manifest starts from. The repository's real manifest changes with every release (and a real release on the day the tests
+ * run makes its tag equal to the "next free tag" the fake registry gives), so the fake world gets a copy with these fixed tags instead.
+ */
+const FAKE_TAGS = { portal: '2026.01.01-1', workspace: '2.1.296-2026.01.01-1' } as const;
+const manifestTag = (what: 'portal' | 'workspace') => FAKE_TAGS[what];
 const esc = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** What the fake world needs from this repository: the pipeline, its scripts, the manifests, the build script and the workspace Dockerfile. */
@@ -35,6 +39,9 @@ function templateFiles(): Record<string, string> {
   walk('.pilot');
   walk('deploy/k3s-build');
   add('deploy/k3s/portal.yaml');
+  out['deploy/k3s/portal.yaml'] = out['deploy/k3s/portal.yaml']!
+    .replace(/(claudepilot\/portal:)\S+/, (_m, head: string) => `${head}${FAKE_TAGS.portal}`)
+    .replace(/(claudepilot\/workspace:)\S+/, (_m, head: string) => `${head}${FAKE_TAGS.workspace}`);
   add('scripts/k3s-build.sh');
   add('images/workspace/Dockerfile');
   // The release gate itself (npm ci, the suite) is far too heavy here: a stand-in leaves the summary it would, green or red.

@@ -29,8 +29,8 @@ for step in npm-ci typecheck web-build server-suite; do
   fi
 done
 # The last summary in the log is the verdict (a rerun of the failing files alone comes last); a timed-out file counts as "cancelled", not "fail".
-fails=$(grep -E '^# fail [0-9]+' "$logs/server-suite.log" | tail -n 1 | awk '{print $3}')
-cancelled=$(grep -E '^# cancelled [0-9]+' "$logs/server-suite.log" | tail -n 1 | awk '{print $3}')
+fails=$(grep -E '^# fail [0-9]+' "$logs/server-suite.log" | tail -n 1 | awk '{print $3}') || true
+cancelled=$(grep -E '^# cancelled [0-9]+' "$logs/server-suite.log" | tail -n 1 | awk '{print $3}') || true
 [ "${fails:-x}" = 0 ] && [ "${cancelled:-0}" = 0 ] || die "gate: the server suite has ${fails:-an unknown number of} failing and ${cancelled:-0} timed-out tests"
 if grep -q '^server-suite-rerun:' "$logs/SUMMARY.txt"; then log "gate: note: $(grep '^server-suite-rerun:' "$logs/SUMMARY.txt")"; fi
 log "gate: green at $(short "$sha")"
