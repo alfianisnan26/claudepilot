@@ -29,7 +29,9 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
 4. **Heavy jobs leave the pod** (T-107; the pod has 4 CPUs and 8 GiB): typecheck, the server suite, vitest, playwright, lighthouse, production
    builds and wrangler dry runs go through `scripts/job-run.sh [--repo claudepilot|konfersi[:<org>/<repo>]] [--ref <pushed branch or commit>] -- <command>`,
    a Job on another node (push the WIP branch first: `git push origin HEAD:wip/<name>`; at most 3 Jobs at once and 2 per chat, the rest wait
-   "queued behind K"; `--list`, `--stop --chat <id>`). Lighthouse and timing measurements run there too (a quiet node). **flock only for what must
+   "queued behind K"; `--list`, `--stop --chat <id>`). An image (no Docker here, D-5) is built by `scripts/image-build.sh --repo .. --ref .. --dockerfile ..
+   --destination <registry/path:tag>` (T-141: kaniko, one at a time, the registry credential as one JSON line on stdin with `--credential-stdin`;
+   `--check` first, 0 exists, 3 not). Lighthouse and timing measurements run there too (a quiet node). **flock only for what must
    run in the pod** (a scratch portal, a browser check against it, `npm ci` of a worktree): `flock /tmp/heavy.lock nice -n 10 <command>`. A
    targeted test (one file) may run directly. At most one scratch portal and one Chromium per sub-agent; stop them when done. Keep `/tmp` clean (`/tmp/gate-*`, `/tmp/cp-*`): a full `/tmp` makes CI tests fail. **At most three sub-agents run at once.**
 5. **Do not loop.** The same command failing three times means change the approach or move to the next item and write down why.
