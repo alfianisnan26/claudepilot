@@ -5,6 +5,7 @@ import {
   TICKET_STATUS_LABEL,
   TICKET_TYPES,
   TICKET_TYPE_LABEL,
+  isTicketClosed,
   type TicketFilter,
   type TicketItem,
   type TicketList,
@@ -13,7 +14,7 @@ import {
   type TicketTag,
   type TicketType,
 } from '@portal/contracts';
-import { Bot, ChevronDown, Columns3, List, Plus, Search, Ticket as TicketIcon, X } from 'lucide-react';
+import { Bot, ChevronDown, ChevronsUp, Columns3, List, Plus, Search, Ticket as TicketIcon, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
@@ -22,7 +23,7 @@ import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
 import { BOARD_COLUMNS, ageShort } from './labels';
 import { AssigneeChip, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge } from './parts';
-import { NewTicketDialog } from './TicketDialogs';
+import { NewTicketDialog, TicketBumpDialog } from './TicketDialogs';
 
 type Scope = 'active' | TicketStatus | 'closed';
 type View = 'list' | 'board';
@@ -71,6 +72,7 @@ export function TicketsPage() {
   const [tags, setTags] = useState<TicketTag[]>([]);
   const [failed, setFailed] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [bumping, setBumping] = useState<TicketItem | null>(null);
 
   const set = (patch: Record<string, string | null>) =>
     setParams(
@@ -235,13 +237,22 @@ export function TicketsPage() {
         ) : view === 'list' ? (
           <ul className="flex flex-col gap-2">
             {data.items.map((t) => (
-              <TicketRow key={t.id} ticket={t} onOpen={() => navigate(`/admin/tickets/${t.id}`)} />
+              <TicketRow key={t.id} ticket={t} onOpen={() => navigate(`/admin/tickets/${t.id}`)} onBump={() => setBumping(t)} />
             ))}
           </ul>
         ) : (
-          <Board items={data.items} onMove={move} />
+          <Board items={data.items} onMove={move} onBump={setBumping} />
         ))}
 
+      <TicketBumpDialog
+        ticket={bumping}
+        onClose={() => setBumping(null)}
+        onBumped={(r) => {
+          setBumping(null);
+          toast(`${r.ticket.id} bumped into ${r.session.title || 'the session'}`);
+          void load();
+        }}
+      />
       <NewTicketDialog
         open={creating}
         onClose={() => setCreating(false)}
@@ -297,13 +308,18 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
   );
 }
 
-function TicketRow({ ticket: t, onOpen }: { ticket: TicketItem; onOpen: () => void }) {
+/** A row opens the ticket; its ⋯ (outside the row's button, top right) has Bump for a ticket that isn't closed. */
+function TicketRow({ ticket: t, onOpen, onBump }: { ticket: TicketItem; onOpen: () => void; onBump: () => void }) {
+  const open = !isTicketClosed(t.status);
   return (
-    <li>
+    <li className="relative">
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full min-w-0 items-start gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+        className={cn(
+          'flex w-full min-w-0 items-start gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none',
+          open && 'pr-12',
+        )}
       >
         <PriorityMark priority={t.priority} className="mt-0.5" />
         <span className="min-w-0 flex-1">
@@ -325,12 +341,17 @@ function TicketRow({ ticket: t, onOpen }: { ticket: TicketItem; onOpen: () => vo
           </span>
         </span>
       </button>
+      {open && (
+        <div className="absolute top-1.5 right-1.5">
+          <Menu label={`More for ${t.id}`} align="right" items={[{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: onBump }]} />
+        </div>
+      )}
     </li>
   );
 }
 
 /** A column per status; closed tickets share the last (newest first). Moving a card is a menu, which works on a phone and with a keyboard. */
-function Board({ items, onMove }: { items: TicketItem[]; onMove: (t: TicketItem, s: TicketStatus) => void }) {
+function Board({ items, onMove, onBump }: { items: TicketItem[]; onMove: (t: TicketItem, s: TicketStatus) => void; onBump: (t: TicketItem) => void }) {
   const columns = BOARD_COLUMNS.map((status) => {
     const cards =
       status === 'done'
@@ -360,10 +381,13 @@ function Board({ items, onMove }: { items: TicketItem[]; onMove: (t: TicketItem,
                     <span className="line-clamp-3 block text-[13.5px] font-semibold">{t.summary}</span>
                   </Link>
                   <Menu
-                    label={`Move ${t.id}`}
-                    items={(['open', 'in_progress', 'blocked', 'in_review', 'done', 'wont_do'] as TicketStatus[])
-                      .filter((s) => s !== t.status)
-                      .map((s) => ({ label: `Move to ${TICKET_STATUS_LABEL[s]}`, onSelect: () => onMove(t, s) }))}
+                    label={`More for ${t.id}`}
+                    items={[
+                      ...(isTicketClosed(t.status) ? [] : [{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: () => onBump(t) }]),
+                      ...(['open', 'in_progress', 'blocked', 'in_review', 'done', 'wont_do'] as TicketStatus[])
+                        .filter((s) => s !== t.status)
+                        .map((s) => ({ label: `Move to ${TICKET_STATUS_LABEL[s]}`, onSelect: () => onMove(t, s) })),
+                    ]}
                   />
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">

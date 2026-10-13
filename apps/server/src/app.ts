@@ -5,6 +5,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { AppError, codeForStatus, isAppError, success } from '@isnanme/core';
 import {
   API,
+  isStableWorkspaceId,
   type AccountPoolRequest,
   type AdminState,
   type AssignAccountPoolRequest,
@@ -55,6 +56,7 @@ import { RateLimiter } from './rateLimit.js';
 import { ClaudeLogins } from './workspaces/claudeLogin.js';
 import { Terminals } from './workspaces/terminals.js';
 import { deliveryState, workspaceView } from './workspaces/view.js';
+import { declareWorkspacePolicies } from './workspaces/authz.js';
 import { generateSecretKey, parseSecretKey, SecretKeyError } from './store/secretBox.js';
 import type { Store } from './store/store.js';
 import type { Workspaces } from './workspaces/manager.js';
@@ -419,6 +421,7 @@ export function createApp(
   });
   app.route('/api/admin', admin);
 
+  declareWorkspacePolicies();
   const ws = new Hono<Env>();
   ws.use(requireSession);
   // The target and name in these paths end up in Docker API URLs, tmux session names and shell commands. A name with a slash, `..`
@@ -527,6 +530,14 @@ export function createApp(
     return c.json(success({ ok: true }));
   });
   ws.get('/', async (c) => c.json(success((await workspaces.list()).map(decorate))));
+  // One workspace by either form of its id (T-42): `/api/workspaces/ws_0123456789ab` or the alias `/api/workspaces/<target>/<name>`. Both go
+  // through the manager's one resolver, which follows the alias before the seam is asked; unknown and not yours are the same 404.
+  ws.get('/:ref', async (c) => {
+    const ref = c.req.param('ref');
+    if (!isStableWorkspaceId(ref)) throw new AppError('NOT_FOUND', 'Not found.');
+    return c.json(success(decorate(await workspaces.get(ref, actorOf(c)))));
+  });
+  ws.get('/:target/:name', async (c) => c.json(success(decorate(await workspaces.get(`${c.req.param('target')}/${c.req.param('name')}`, actorOf(c))))));
   ws.post('/', async (c) => {
     const req = await body<CreateWorkspaceRequest>(c);
     const poolId = req.accountPoolId ?? null;

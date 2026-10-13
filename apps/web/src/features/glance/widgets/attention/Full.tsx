@@ -226,7 +226,7 @@ function ApprovalRow({
               </span>
             )}
           </p>
-          {a.full ? <ApprovalBlock text={a.full} onRead={setRead} /> : a.detail ? <p className="font-mono text-xs whitespace-pre-wrap text-ink-soft wrap-anywhere">{a.detail}</p> : null}
+          {a.full ? <ApprovalBlock text={a.full} tool={a.toolName} onRead={setRead} /> : a.detail ? <p className="font-mono text-xs whitespace-pre-wrap text-ink-soft wrap-anywhere">{a.detail}</p> : null}
           {note && !over && (
             <p role="status" className="text-xs font-medium text-ink-soft">
               {note}

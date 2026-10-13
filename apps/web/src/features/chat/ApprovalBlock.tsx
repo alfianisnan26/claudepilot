@@ -1,13 +1,16 @@
-import { cn } from '@isnanme/ui';
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { readAll, scrollState } from './approvalReview';
+import { ReviewText } from './CodeBlock';
+import { approvalLang } from './toolFormat';
 
 /**
- * What a person is asked to allow, whole: plain monospace text that wraps (so a long run of spaces cannot push the end out of sight
- * sideways) and scrolls, at most a few lines high. `onRead` says whether all of it has been in view (it fits, or the person scrolled to
- * the end): the buttons that allow wait for that. Focusable, so the keyboard can scroll it.
+ * What a person is asked to allow, whole, in the tool rows' renderer (`CodeBlock.tsx`, chat PRD FR7): monospace text that wraps (so a long
+ * run of spaces cannot push the end out of sight sideways), real line breaks, a command coloured as shell but never dimmed, escaped
+ * disguising characters marked, and scrolls, at most a few lines high. `onRead` says whether all of it has been in view (it fits, or the
+ * person scrolled to the end): the buttons that allow wait for that. Focusable, so the keyboard can scroll it.
  */
-export function ApprovalBlock({ text, onRead, className }: { text: string; onRead: (all: boolean) => void; className?: string }) {
+export function ApprovalBlock({ text, tool, onRead, className }: { text: string; tool?: string | null; onRead: (all: boolean) => void; className?: string }) {
+  const lang = useMemo(() => approvalLang(tool, text), [tool, text]);
   const ref = useRef<HTMLPreElement>(null);
   const latest = useRef(onRead);
   useLayoutEffect(() => {
@@ -26,19 +29,5 @@ export function ApprovalBlock({ text, onRead, className }: { text: string; onRea
     ro.observe(el);
     return () => ro.disconnect();
   }, [report]);
-  return (
-    <pre
-      ref={ref}
-      tabIndex={0}
-      role="region"
-      aria-label="What is being allowed"
-      onScroll={report}
-      className={cn(
-        'max-h-40 overflow-y-auto rounded-lg bg-surface-2 px-2.5 py-2 font-mono text-xs leading-snug break-words whitespace-pre-wrap text-ink-soft wrap-anywhere overscroll-contain',
-        className,
-      )}
-    >
-      {text}
-    </pre>
-  );
+  return <ReviewText ref={ref} text={text} lang={lang} onScroll={report} className={className} />;
 }

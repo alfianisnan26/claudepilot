@@ -1,0 +1,187 @@
+// Workspace identity (T-42, docs/prd/targets-connect.md §24). An identity must not be a name: every workspace gets a stable opaque id
+// (`ws_` and 12 hex digits) the first time the portal knows it, kept for good in `workspace_identities`, never changed, never reused (a
+// removed workspace's row stays, marked removed) and never derived from the name. The old `<target>/<name>` is the workspace's ALIAS and
+// resolves for ever, here, in one place: `resolve` takes either form.
+//
+// The runtime name (the Docker container, the Kubernetes Deployment; the home volume is `<runtimeName>-home`) is STORED here too, never
+// recomputed from the name: a new workspace gets `ws-<12 hex>`; one that existed before is recorded with what its runtime reports it is
+// called today (its list), so `kubernetes/kohi-event` keeps `ws-kohi-event` and its volume `ws-kohi-event-home`. The old derivation is
+// kept in `legacyRuntimeName` for one case only: a workspace the runtime is asked about before the portal has a record of it.
+
+import { randomBytes } from 'node:crypto';
+import type { DatabaseSync } from 'node:sqlite';
+import { isStableWorkspaceId, workspaceId, type Workspace } from '@portal/contracts';
+import { isWorkspaceId, PLAIN_NAME } from '../names.js';
+import type { RuntimeNames } from './runtime.js';
+
+export interface WorkspaceIdentity {
+  /** `ws_` and 12 hex digits. */
+  id: string;
+  target: string;
+  /** The name it was made with (the label, until names become labels of their own: T-42 slice 2). */
+  name: string;
+  /** `<target>/<name>`: the alias every older reference carries. */
+  legacyId: string;
+  /** What the runtime calls it; null until the runtime first lists it (a row the migration made). */
+  runtimeName: string | null;
+  createdAt: string;
+  /** Set when the workspace was removed: its id is never given again, and its alias goes to whichever workspace holds the name now. */
+  removedAt: string | null;
+}
+
+interface Row {
+  id: string;
+  target: string;
+  name: string;
+  legacy_id: string;
+  runtime_name: string | null;
+  created_at: string;
+  removed_at: string | null;
+}
+
+/** The runtime name a new workspace gets: `ws-` and the 12 hex digits of its stable id (a DNS label: no underscore). */
+export const newRuntimeName = (stableId: string) => `ws-${stableId.slice(3)}`;
+
+/** The home volume (Docker) or claim (Kubernetes) of a workspace: its runtime name and `-home`. */
+export const homeVolumeOf = (runtimeName: string) => `${runtimeName}-home`;
+
+/**
+ * What a workspace was named on its runtime before T-42, derived from its name. ONLY for a workspace the runtime is asked about before the
+ * portal has a record of it (the record is made from what the runtime reports, which for those workspaces is exactly this).
+ */
+export function legacyRuntimeName(kind: 'docker' | 'kubernetes', name: string): string {
+  return kind === 'docker' ? `claudepilot-${name}` : `ws-${name}`;
+}
+
+/**
+ * The registry. Reads are from memory (loaded once), so a runtime can ask on every call; writes go through to the database when it is
+ * writable. A portal whose database cannot be written (read-only, or no database at all) keeps what it learns in memory only.
+ */
+export class WorkspaceIdentities implements RuntimeNames {
+  readonly #byId = new Map<string, WorkspaceIdentity>();
+  /** Alias -> the identity of the workspace that holds that name now. */
+  readonly #live = new Map<string, WorkspaceIdentity>();
+  #loaded = false;
+
+  constructor(
+    private readonly store: { db: DatabaseSync | null; writable: boolean } | null = null,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  /** A registry that keeps nothing (tests, and a manager made without one). */
+  static memory(): WorkspaceIdentities {
+    return new WorkspaceIdentities(null);
+  }
+
+  #load() {
+    if (this.#loaded) return;
+    this.#loaded = true;
+    const db = this.store?.db;
+    if (!db) return;
+    let rows: Row[] = [];
+    try {
+      rows = db.prepare('SELECT id, target, name, legacy_id, runtime_name, created_at, removed_at FROM workspace_identities ORDER BY created_at').all() as unknown as Row[];
+    } catch (e) {
+      console.error(`[workspaces] could not read workspace identities: ${(e as Error).message}`);
+    }
+    for (const r of rows) this.#remember({ id: r.id, target: r.target, name: r.name, legacyId: r.legacy_id, runtimeName: r.runtime_name, createdAt: r.created_at, removedAt: r.removed_at });
+  }
+
+  #remember(w: WorkspaceIdentity) {
+    this.#byId.set(w.id, w);
+    if (!w.removedAt) this.#live.set(w.legacyId, w);
+    else if (this.#live.get(w.legacyId)?.id === w.id) this.#live.delete(w.legacyId);
+  }
+
+  #write(sql: string, ...args: (string | null)[]) {
+    const db = this.store?.db;
+    if (!db || !this.store?.writable) return;
+    try {
+      db.prepare(sql).run(...args);
+    } catch (e) {
+      console.error(`[workspaces] could not save a workspace identity: ${(e as Error).message}`);
+    }
+  }
+
+  #newId(): string {
+    for (;;) {
+      const id = `ws_${randomBytes(6).toString('hex')}`;
+      if (!this.#byId.has(id)) return id;
+    }
+  }
+
+  #insert(target: string, name: string, runtimeName: string | null, id = this.#newId()): WorkspaceIdentity {
+    const w: WorkspaceIdentity = { id, target, name, legacyId: workspaceId(target, name), runtimeName, createdAt: this.now().toISOString(), removedAt: null };
+    this.#remember(w);
+    this.#write('INSERT INTO workspace_identities (id, target, name, legacy_id, runtime_name, created_at) VALUES (?, ?, ?, ?, ?, ?)', w.id, w.target, w.name, w.legacyId, w.runtimeName, w.createdAt);
+    return w;
+  }
+
+  /**
+   * THE resolver: a stable id (`ws_…`) or the alias (`<target>/<name>`) to the workspace's identity; null when it is neither, unknown, or
+   * removed. Callers decide authorization on what this returns (its `legacyId`, which the seam knows), never on the string they were given.
+   */
+  resolve(ref: string): WorkspaceIdentity | null {
+    this.#load();
+    if (isStableWorkspaceId(ref)) {
+      const w = this.#byId.get(ref);
+      return w && !w.removedAt ? w : null;
+    }
+    if (isWorkspaceId(ref)) return this.#live.get(ref) ?? null;
+    return null;
+  }
+
+  /** The identity of the workspace that holds this name on this target now, if the portal has one. */
+  of(target: string, name: string): WorkspaceIdentity | null {
+    this.#load();
+    return this.#live.get(workspaceId(target, name)) ?? null;
+  }
+
+  runtimeNameOf(target: string, name: string): string | undefined {
+    return this.of(target, name)?.runtimeName ?? undefined;
+  }
+
+  /**
+   * A workspace a runtime reports (a list): its identity, made now when the portal has none, and its runtime name filled in from what the
+   * runtime says it is called when the record has none yet (a row the migration made). A runtime name on record is never replaced.
+   */
+  adopt(target: string, name: string, reported?: string): WorkspaceIdentity {
+    const runtimeName = reported && PLAIN_NAME.test(reported) ? reported : null;
+    const known = this.of(target, name);
+    if (!known) return this.#insert(target, name, runtimeName);
+    if (!known.runtimeName && runtimeName) {
+      known.runtimeName = runtimeName;
+      this.#write('UPDATE workspace_identities SET runtime_name = ? WHERE id = ? AND runtime_name IS NULL', runtimeName, known.id);
+    }
+    return known;
+  }
+
+  /**
+   * A new workspace (a create): a new id and the runtime name `ws-<12 hex>`, or the one the target's runtime must use (`pick`, see
+   * `Runtime.runtimeNameForNew`). The caller has checked the target has no workspace of that name, so a record still holding the name is a
+   * workspace that is gone: it is marked removed first (its id is never given again).
+   */
+  allocate(target: string, name: string, pick?: (stableId: string) => string | undefined): WorkspaceIdentity {
+    const stale = this.of(target, name);
+    if (stale) this.retire(target, name);
+    const id = this.#newId();
+    const picked = pick?.(id);
+    return this.#insert(target, name, picked && PLAIN_NAME.test(picked) ? picked : newRuntimeName(id), id);
+  }
+
+  /** The workspace was removed: its record stays (the id is never reused), the name is free for another. */
+  retire(target: string, name: string): void {
+    const w = this.of(target, name);
+    if (!w) return;
+    w.removedAt = this.now().toISOString();
+    this.#remember(w);
+    this.#write('UPDATE workspace_identities SET removed_at = ? WHERE id = ?', w.removedAt, w.id);
+  }
+}
+
+/** One workspace out of a list by either form of its id: the stable id or the alias. Null when none matches. */
+export function findWorkspace(all: Workspace[], ref: string): Workspace | null {
+  const wanted = ref.trim();
+  if (isStableWorkspaceId(wanted)) return all.find((w) => w.stableId === wanted) ?? null;
+  return all.find((w) => w.id === wanted) ?? null;
+}

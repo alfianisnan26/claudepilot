@@ -23,9 +23,22 @@ export interface WorkspaceTarget {
 export type WorkspaceStatus = 'creating' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error' | 'unreachable';
 
 export interface Workspace {
-  /** `<target>/<name>`: names are unique within a target. */
+  /**
+   * `<target>/<name>`: names are unique within a target. Since T-42 this is the workspace's ALIAS: every route, tool, ticket, CI remote and
+   * link that carries it keeps working for good, and the manager resolves it to `stableId`. New code should prefer `stableId`.
+   */
   id: string;
+  /**
+   * The workspace's identity (T-42): `ws_` and 12 hex digits, given once when the portal first knows the workspace, never changed, never
+   * reused and never derived from the name. Absent only from a runtime's own list before the manager adds it.
+   */
+  stableId?: string;
   name: string;
+  /**
+   * What the runtime calls it (T-42): the Docker container, the Kubernetes Deployment (its home volume is `<runtimeName>-home`), the single's
+   * workspace on a Connect or This machine target. STORED on the record, never recomputed from the name; `ws-<12 hex>` for a new workspace.
+   */
+  runtimeName?: string;
   target: string;
   image: string;
   status: WorkspaceStatus;
@@ -86,6 +99,10 @@ export function workspaceNameProblem(name: string): string | null {
 
 export const workspaceId = (target: string, name: string) => `${target}/${name}`;
 
+/** A workspace's stable id (T-42): `ws_` and 12 lowercase hex digits. */
+export const STABLE_WORKSPACE_ID = /^ws_[0-9a-f]{12}$/;
+export const isStableWorkspaceId = (value: unknown): value is string => typeof value === 'string' && STABLE_WORKSPACE_ID.test(value);
+
 /** Shell socket protocol: binary frames carry terminal bytes both ways; text frames are these. */
 export type ShellClientMessage = { type: 'resize'; cols: number; rows: number };
 export type ShellServerMessage = { type: 'ready' } | { type: 'exit'; code: number | null } | { type: 'error'; message: string };
@@ -94,7 +111,10 @@ export const WORKSPACE_API = {
   targets: '/api/workspaces/targets',
   list: '/api/workspaces',
   usage: '/api/workspaces/usage',
-  /** `/api/workspaces/<target>/<name>` (+ `/start`, `/stop`, `/shell`). */
+  /**
+   * `/api/workspaces/<target>/<name>` (+ `/start`, `/stop`, `/shell`). GET on it, or on `/api/workspaces/<stableId>`, answers the one
+   * workspace (T-42): both forms resolve through the manager to the same workspace.
+   */
   one: (id: string) => `/api/workspaces/${id}`,
   /** Claude Code's own sign-in in the workspace: POST starts it, DELETE cancels it. */
   claudeLogin: (id: string) => `/api/workspaces/${id}/claude-login`,

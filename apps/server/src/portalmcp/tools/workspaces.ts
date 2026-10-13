@@ -41,10 +41,10 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
   registerPortalTool({
     name: 'workspace_get',
     title: 'Get a workspace',
-    description: 'One workspace in full: status, limits, pools by type, delivery state, its Claudes, its chat sessions and what it is using now. Accepts the id (target/name) or the exact name.',
+    description: 'One workspace in full: status, limits, pools by type, delivery state, its Claudes, its chat sessions and what it is using now. Accepts the stable id (ws_…), the id (target/name) or the exact name.',
     scope: 'read',
     input: z.object({
-      id: z.string().max(100).describe('`<target>/<name>`, or just the name when it is unique.'),
+      id: z.string().max(100).describe('The stable id (`ws_` and 12 hex), `<target>/<name>`, or just the name when it is unique.'),
       include: z.array(z.enum(['usage', 'sessions', 'claudes', 'pools'])).max(4).optional().describe('Extras to include (default: pools, sessions and claudes).'),
     }),
     async handler(ctx, args) {

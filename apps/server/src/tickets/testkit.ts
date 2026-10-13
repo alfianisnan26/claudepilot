@@ -13,7 +13,7 @@ import type { CreateSession, TicketSessionInfo, TicketSessions } from './session
 export class FakeSessions implements TicketSessions {
   readonly sessions = new Map<string, TicketSessionInfo>();
   readonly created: CreateSession[] = [];
-  readonly sent: { sessionId: string; ticketId: string; text: string; label: string }[] = [];
+  readonly sent: { sessionId: string; ticketId: string; text: string; label: string; priority?: 'next' | 'later' }[] = [];
   /** Runs when a message is sent, before it is recorded (a test can look at the ticket at that moment). */
   onSend?: (sessionId: string) => void;
   failSend: Error | null = null;
@@ -59,10 +59,10 @@ export class FakeSessions implements TicketSessions {
     return this.add({ workspaceId: req.workspaceId, title: req.title, ticketId: req.ticketId, worktree: req.worktree ? { branch: req.worktree.branch ?? 'ticket-branch', path: `/home/node/work.worktrees/${req.worktree.branch ?? 'ticket-branch'}` } : null });
   }
 
-  async send(sessionId: string, ticketId: string, text: string, label: string) {
+  async send(sessionId: string, ticketId: string, text: string, label: string, opts: { priority?: 'next' | 'later' } = {}) {
     this.onSend?.(sessionId);
     if (this.failSend) throw this.failSend;
-    this.sent.push({ sessionId, ticketId, text, label });
+    this.sent.push({ sessionId, ticketId, text, label, ...(opts.priority ? { priority: opts.priority } : {}) });
   }
 
   onSession(cb: (s: TicketSessionInfo) => void) {

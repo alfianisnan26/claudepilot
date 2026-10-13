@@ -2,7 +2,7 @@
 // `parseLine` turns one line of `claude -p --output-format stream-json` into what the controller must
 // do; the builders turn an action into one JSON line to write into the session's stdin FIFO.
 
-import { REQUEST_FULL_MAX, type ChatEvent, type ChatInputState, type ChatModelOption, type ChatRequest, type ChatSessionState, type ChatTask } from '@portal/contracts';
+import { REQUEST_FULL_MAX, type ChatEvent, type ChatToolInputValue, type ChatInputState, type ChatModelOption, type ChatRequest, type ChatSessionState, type ChatTask } from '@portal/contracts';
 import { redact } from './redact.js';
 
 /** A base64 image as Claude Code carries it; the controller turns it into a blob and never stores this. */
@@ -420,10 +420,15 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
         const id = asStr(block.id);
         const ev: StoredEvent = { kind: 'tool_use', toolName: name ?? undefined, agentLabel, uuid, parentToolUseId: agentLabel };
         if (id) ev.toolUseId = id;
-        // The transcript's one-line summary of the call (a command, a path, a sub-agent's task); the
-        // input itself is never stored.
+        // The transcript's one-line summary of the call (a command, a path, a sub-agent's task).
         const summary = requestDetail(name, block.input);
         if (summary) ev.text = summary;
+        // What the row's Input block shows: the fields it names, as written (line breaks kept), redacted and bounded.
+        const input = toolInput(name, block.input);
+        if (input) {
+          ev.toolInput = input.input;
+          if (input.cut) ev.toolInputCut = true;
+        }
         stored.push(ev);
         const description = asStr(asObj(block.input)?.description);
         if (name && AGENT_TOOLS.has(name) && id && description) agents.push({ toolUseId: id, description: clean(description, MAX_LABEL) });
@@ -530,7 +535,7 @@ function toolResultContent(v: unknown): { text: string; images: RawImage[] } {
     else if (typeof raw === 'string') parts.push(raw);
     else parts.push(`[${type ?? 'content'}]`); // other blocks (documents, …) may carry base64 too: name them only
   }
-  return { text: clean(parts.join('\n'), 500), images };
+  return { text: resultText(parts.join('\n'), RESULT_TEXT_MAX), images };
 }
 
 /** `{type: "image", source: {type: "base64", media_type, data}}` → a raw image, else null. */
@@ -936,7 +941,130 @@ export function requestFull(toolName: string | null, input: unknown): { text: st
   return { text: shown.slice(0, end), cut: true };
 }
 
-/** Stringify a tool_result's content, redacted and kept short for the transcript row. */
+/** Stringify a tool_result's content, redacted and bounded for the transcript row. */
 function shortText(v: unknown): string {
-  return clean(typeof v === 'string' ? v : JSON.stringify(v ?? ''), 500);
+  return resultText(typeof v === 'string' ? v : JSON.stringify(v ?? ''), RESULT_TEXT_MAX);
+}
+
+/* ---------- What a tool row keeps (chat PRD FR7) ---------- */
+
+/** The most of a tool's result kept: a command's output, or a failure's text. Under the store's own cap (`EVENT_TEXT_MAX`). */
+export const RESULT_TEXT_MAX = 15_000;
+/** The most kept of what the other tools return (a file read, a search, a page): the row shows a taste; the tool's own view has the rest. */
+export const RESULT_TEXT_SHORT = 2_000;
+/** Tools whose whole output the row is for. */
+const LONG_RESULT = new Set(['Bash', 'BashOutput']);
+
+/**
+ * A result's text, redacted (whole, before it is cut) and bounded: past `max` it keeps the head and the tail, with one line between saying
+ * how much was left out, since the end of a command's output (the error, the summary) matters as much as its start.
+ */
+export function resultText(text: string, max: number): string {
+  const raw = text.length > max * 8 ? `${text.slice(0, max * 4)}\n${text.slice(-max * 4)}` : text; // megabytes are bounded before the scan
+  const shown = redact(raw);
+  if (shown.length <= max) return shown;
+  const half = Math.floor((max - 40) / 2);
+  let head = shown.slice(0, half);
+  let tail = shown.slice(shown.length - half);
+  // never half a character at either cut
+  if (/[\uD800-\uDBFF]$/.test(head)) head = head.slice(0, -1);
+  if (/^[\uDC00-\uDFFF]/.test(tail)) tail = tail.slice(1);
+  const left = Math.max(0, shown.length - head.length - tail.length + (text.length - raw.length));
+  return `${head}\n… ${left.toLocaleString('en-US')} characters not kept …\n${tail}`;
+}
+
+/** The text kept of a named tool's result: all of it (to the cap) for a command or a failure, a shorter piece for the rest. */
+export function keptResult(toolName: string | undefined, isError: boolean | undefined, text: string): string {
+  return isError || LONG_RESULT.has(toolName ?? '') ? text : resultText(text, RESULT_TEXT_SHORT);
+}
+
+/** How much of each string of a tool's input is kept, and of all of them together. */
+export const TOOL_INPUT_STRING_MAX = REQUEST_FULL_MAX;
+export const TOOL_INPUT_MAX = 24_000;
+/** Deeper than this, or more items than this, an input's value is left out (an MCP tool can be given anything). */
+const INPUT_DEPTH = 6;
+const INPUT_ITEMS = 200;
+
+/**
+ * The fields of each built-in tool's input that its row shows. Not listed (a sub-agent's `prompt`, a fetch's `prompt`, a to-do list):
+ * never stored. A tool not here and not an MCP tool stores no input.
+ */
+const INPUT_FIELDS: Record<string, readonly string[]> = {
+  Bash: ['command', 'timeout', 'run_in_background'],
+  Edit: ['file_path', 'old_string', 'new_string', 'replace_all'],
+  MultiEdit: ['file_path', 'edits'],
+  Write: ['file_path', 'content'],
+  NotebookEdit: ['notebook_path', 'cell_id', 'new_source', 'edit_mode'],
+  Read: ['file_path', 'offset', 'limit'],
+  NotebookRead: ['notebook_path'],
+  Grep: ['pattern', 'path', 'glob', 'type', 'output_mode', '-i', '-n', 'multiline'],
+  Glob: ['pattern', 'path'],
+  LS: ['path'],
+  WebFetch: ['url'],
+  WebSearch: ['query'],
+  BashOutput: ['bash_id'],
+  KillShell: ['shell_id'],
+};
+
+/** Every string in a stored input passed through `fn` (redaction at each layer that stores or sends it). */
+export function mapInputStrings<T extends ChatToolInputValue>(v: T, fn: (s: string) => string): T {
+  if (typeof v === 'string') return fn(v) as T;
+  if (Array.isArray(v)) return v.map((x) => mapInputStrings(x, fn)) as T;
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, mapInputStrings(x, fn)])) as T;
+  return v;
+}
+
+/**
+ * What a tool call's row keeps of its input (chat PRD FR7): the fields {@link INPUT_FIELDS} names, or for an MCP tool all of it. Each
+ * string as written (nothing folded: a heredoc keeps its lines), its disguising characters as `⟦U+XXXX⟧`, redacted whole before it is cut,
+ * at most {@link TOOL_INPUT_STRING_MAX} characters, and all of them together at most {@link TOOL_INPUT_MAX}; `cut` says something was
+ * left out. Null when there is nothing to keep.
+ */
+export function toolInput(toolName: string | null, input: unknown): { input: { [key: string]: ChatToolInputValue }; cut: boolean } | null {
+  const o = asObj(input);
+  if (!o || !toolName) return null;
+  const fields = INPUT_FIELDS[toolName] ?? (toolName.startsWith('mcp__') ? Object.keys(o) : null);
+  if (!fields) return null;
+  let budget = TOOL_INPUT_MAX;
+  let cut = false;
+  const keep = (v: unknown, depth: number): ChatToolInputValue | undefined => {
+    if (typeof v === 'string') {
+      const bounded = v.length > TOOL_INPUT_STRING_MAX * 8 ? v.slice(0, TOOL_INPUT_STRING_MAX * 8) : v;
+      const shown = redact(visibly(bounded));
+      let end = Math.min(shown.length, TOOL_INPUT_STRING_MAX, budget);
+      if (end < shown.length || bounded.length < v.length) cut = true;
+      if (end > 0 && end < shown.length && /[\uD800-\uDBFF]/.test(shown[end - 1]!)) end--;
+      budget -= end;
+      return shown.slice(0, end);
+    }
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    if (typeof v === 'boolean' || v === null) return v;
+    if (depth >= INPUT_DEPTH) {
+      cut = true;
+      return undefined;
+    }
+    if (Array.isArray(v)) {
+      if (v.length > INPUT_ITEMS) cut = true;
+      return v.slice(0, INPUT_ITEMS).flatMap((x) => {
+        const k = keep(x, depth + 1);
+        return k === undefined ? [] : [k];
+      });
+    }
+    const obj = asObj(v);
+    if (!obj) return undefined;
+    const out: { [key: string]: ChatToolInputValue } = {};
+    for (const [key, x] of Object.entries(obj).slice(0, INPUT_ITEMS)) {
+      const k = keep(x, depth + 1);
+      if (k !== undefined) out[redact(visibly(key)).slice(0, 200)] = k;
+    }
+    return out;
+  };
+  const out: { [key: string]: ChatToolInputValue } = {};
+  for (const field of fields.slice(0, INPUT_ITEMS)) {
+    if (!(field in o)) continue;
+    const k = keep(o[field], 1);
+    if (k !== undefined) out[redact(visibly(field)).slice(0, 200)] = k;
+  }
+  if (fields.length > INPUT_ITEMS) cut = true;
+  return Object.keys(out).length ? { input: out, cut } : null;
 }

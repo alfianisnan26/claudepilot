@@ -4,7 +4,7 @@
 | --- | --- |
 | Status | **v0.2, built** (2026-10-12). One queue of work that people and agents share, with agent sessions, priorities, summaries, tags and types, where anything a person asks for, and anything an agent needs from a person, is an open ticket. Tables, rules, REST, the tools, the Tickets page (list, board, detail, dialogs), starting a session for a ticket and the CI checks are built; the agent path was checked with Claude Code 2.1.296 inside a Docker workspace. Agents authenticate with the per-session token of [Portal MCP](portal-mcp.md) §12.6. A session started from a ticket in the UI was checked end to end with a real Claude Code in a Docker workspace. Not yet: the nav count, push (worktrees are there: `startSession` passes them and the Start dialog has "Own git worktree", checked 2026-10-12). Status per milestone: §14. 🔬 = unverified, listed in §17. |
 | Owner | Alfian Isnan |
-| Last updated | 2026-10-12 |
+| Last updated | 2026-10-13 |
 | Depends on | [Chat sessions](chat-sessions.md) (starting a session for a ticket, the actor on a portal message, session state), [Portal MCP](portal-mcp.md) (the tools agents and scripts use, tokens, audit, the sanitizer) |
 | Related | [Workspace Claudes](workspace-claudes.md) (which Claude runs the session), [MCP set pool](mcpset-pool.md) (how an agent gets the ticket tools in a workspace), [Monitoring dashboard](monitoring-dashboard.md) (attention counts), [Web app & PWA](web-app-pwa.md) (push) |
 
@@ -120,6 +120,14 @@ The tickets module owns its tables, rules, REST routes and MCP tools. It reaches
 - **FR17** A ticket shows the sessions that worked it (those whose `ticketId` is its id), each with its state. The session page shows its ticket as a chip linking to it.
 - **FR18** When a session assigned to a ticket ends while the ticket is `open`, `in_progress` or `blocked`, the ticket keeps its status and gains a `session_ended` entry with the reason. The page flags it ("Its session ended") so a person can restart it or reassign it. Nothing is closed or reassigned by the portal.
 
+### Bump (T-28, owner 2026-10-13)
+
+- **FR28** **Bump** (a person on the ticket's page or its row ⋯; a script with `ticket_bump`): push an open ticket into a session that is already running. The picker offers the ticket's assigned session first, then the live sessions of its workspace (every workspace's for the shared queue), each with its title and state; a session that ended, waits on an approval, or works in another workspace is not offered, or shown greyed with why. Two ways, explained in one ⓘ: **Prioritise** (the ticket is assigned to that session and set `in_progress`; the message goes in with the chat queue priority `next`, so it steers the running turn) and **Ask** (a question: nothing about the ticket changes; the message goes in as `later` and asks for an answer in the ticket). An optional note of one line (at most 200 characters, cleaned like any ticket text, never a credential). Start session stays as it is.
+- **FR29** The session gets a portal message from the ticket (actor `ticket:<id>`, label `T-<n>`, so the transcript says "From ticket T-12") in the opening message's style: who bumped it and how, the ticket's type, priority, tags, summary and link, the note, the description fenced as the ticket's words (cut at 4,000 characters, pointing to `ticket_get`), and what to do (Prioritise: work on it and report with the ticket tools; Ask: answer with `ticket_comment`, do not take it on). A session asked about a ticket may comment on it for a day even when FR9 alone would refuse (another session or a person holds it); it may not change or close it.
+- **FR30** Every bump is a `bumped` entry on the timeline (who, which session and its title, how, the note as its text), after the `assigned` and `status` entries of a Prioritise, and before the message is sent; a send that fails leaves a note from the portal and says so. Limits: 10 bumps of a ticket and 20 bumps into one session an hour (`RATE_LIMITED`). A bump is written to the platform audit (`ticket.bumped`: ticket, session, mode, whether there was a note; never the note's words); over MCP the call is in the Portal MCP audit too. Who may: a person, or an admin's token of operate scope or more; never an agent's token, a read token or a trigger. The route and the tool check the seam first: operate on the ticket and on the session (`tickets/authz.ts`); another person's session is the same 404 as a missing one, and the picker lists only sessions the person may operate.
+- **FR31** The session page's info shows the tickets bumped into it beside its own ticket, each as a chip with how ("T-12 · Ask"), linking to the ticket.
+- **FR32** The picker, the two ways and the message's shape are shared (`apps/web/src/components/BumpDialog.tsx`, `apps/server/src/chat/bump.ts`, `packages/contracts/src/bump.ts`), so a CI run's Bump (T-32 part 2) offers the same sessions, ways and text.
+
 ### MCP tools
 
 - **FR19** Tools (§12) register through the Portal MCP registry with scope `agent`: agents' tokens reach them, and admin tokens too (read for list and get, operate for the rest). `ticket_start_session` is admin-only and listed only while session control is on. Ticket text in every result is labelled untrusted with its source (§11).
@@ -168,6 +176,9 @@ Migrations 42 (tickets), 44 and 45 (checks). Indexes: `(status, priority, create
 | `GET /api/tickets/tags` | Tags in use with counts, for the filter and the tag field. |
 | `GET /api/tickets/:id/opening` | The opening message a session would get (shown before Start). |
 | `GET /api/tickets/:id/brief` | The summary line for the session page's chip. |
+| `GET /api/tickets/:id/bump` | The sessions it can be bumped into, the assigned one first, each with state and why not (FR28). |
+| `POST /api/tickets/:id/bump` | Bump it: `{ sessionId, mode: prioritise \| ask, note? }` (FR28 to FR30). |
+| `GET /api/tickets/bumped?session=<id>` | The tickets bumped into a session, for its page (FR31). |
 
 ## 11. Security requirements
 
@@ -182,7 +193,7 @@ Migrations 42 (tickets), 44 and 45 (checks). Indexes: `(status, priority, create
 
 ## 12. MCP tools
 
-All register through the Portal MCP registry with scope `agent` (FR19), except the last. An admin's token needs `read` for `ticket_list` and `ticket_get` and `operate` for the others; an agent's token reaches all but `ticket_start_session`.
+All register through the Portal MCP registry with scope `agent` (FR19), except the last two. An admin's token needs `read` for `ticket_list` and `ticket_get` and `operate` for the others; an agent's token reaches all but `ticket_start_session`.
 
 | Tool | Scope | Agents | Inputs | Output |
 | --- | --- | --- | --- | --- |
@@ -194,6 +205,7 @@ All register through the Portal MCP registry with scope `agent` (FR19), except t
 | `ticket_claim_next` | agent | yes | `tags[]` (all of them), `types[]`, `session_id` | The ticket claimed, or none. |
 | `ticket_close` | agent | yes | `id`, `summary`, `outcome` (`done`, `wont_do`), `session_id` | The closed ticket. |
 | `ticket_start_session` | admin | no | `id`, `workspace_id`, `claude_id`, `worktree` | The session. Listed only while session control is on. |
+| `ticket_bump` | operate | no | `id`, `session_id` (left out: the sessions that can take it), `mode` (`prioritise`, `ask`), `note`, `confirm_token` | First `confirmation_required` with a preview (the session, its state, the mode, the queue priority, what changes, the note), then the bump (FR28 to FR30). Listed only while session control is on. |
 
 ## 13. User experience
 
@@ -206,7 +218,8 @@ Existing components only, on phones and desktops. A new navigation item, **Ticke
 - **Ticket page.** Summary as the title; its status and type badges and the **check chips** (one per pipeline, with its state; a tap opens the run); fields (status, priority, type, assigned to, tags, workspace, reported by; two columns on a phone); the description; the sessions that worked it, each a link; the timeline (comments in bubbles, changes as quiet lines: "Admin set the priority to high", "CI: build passed"), an ⓘ on its title ("Agents working this ticket read your comments") and a comment box. Actions: Start session, Close, ⋯ (Edit…, Delete…; Reopen when closed).
 - **Start session dialog.** Workspace (running ones), Claude (when the workspace has several), "Own git worktree" with an ⓘ, and the opening message in a collapsed block. For an agent-written ticket one line: "Written by an agent: check the opening message."
 - **Create dialog.** Summary, description (Markdown; one line: "No keys or passwords."), type, priority, tags with suggestions, Assign to (Unassigned or Me), workspace (Any).
-- **Session page.** A chip "T-12 · Fix login redirect" under the title, linking to the ticket. The transcript's first message reads "From ticket T-12".
+- **Session page.** A chip "T-12 · Fix login redirect" under the title, linking to the ticket. The transcript's first message reads "From ticket T-12". Tickets bumped into it show as "T-12 · Ask" chips in its info (FR31).
+- **Bump dialog** (FR28; the ticket page's Bump button, a row's ⋯ → Bump…, a board card's ⋯). Title "Bump", the ticket under it; Session (a radio list: title, then state or why not; "Assigned" on the ticket's session), How (Prioritise | Ask, one ⓘ for both), Note (optional, one line). The timeline reads "Admin bumped it into “Worker” (Ask)" with the note under it.
 - **Empty states** are one line and offer "New ticket". Loading and errors use the shared states.
 
 ## 14. Rollout and milestones
@@ -226,6 +239,7 @@ Existing components only, on phones and desktops. A new navigation item, **Ticke
 - **T3** partly: the board and the tag picks are built; the nav count is not.
 - **T4** the start request carries the worktree option and the ticket keeps the branch and folder the session reports; it follows the chat side's worktree work.
 - **I10** (CI checks, FR26 and FR27) built; Local git and CI/CD calls it.
+- **Bump** (FR28 to FR32, T-28, 2026-10-13) built: the service, the routes behind the seam, `ticket_bump` with its confirmation, the shared dialog on the ticket page, rows and board cards, and the chips on the session page; tests in `tickets/bump.test.ts`, `chat/bump.test.ts` and `components/bump.test.ts`.
 
 ## 15. Success metrics
 

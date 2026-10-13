@@ -224,7 +224,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     input: z.object({ id: z.string().max(40).describe('A run id.') }),
     async handler(ctx, { id }) {
       await need(ctx, id);
-      const run = await ci.cancel(id);
+      const run = await ci.cancel(id, { actor: ctx.actor, label: ctx.actorLabel ?? null });
       ctx.affected(`ci-run:${id}`);
       return { summary: `Run #${run.number} of ${run.pipeline}: ${run.status}.`, run: runView(ctx, run) };
     },

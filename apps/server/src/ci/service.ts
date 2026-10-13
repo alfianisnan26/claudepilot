@@ -504,7 +504,7 @@ export class CiService {
       if (run.concurrency_group) {
         const others = this.#cs.activeInGroup(run.repo_id, run.concurrency_group, run.id).filter((o) => o.created_at <= run.created_at);
         if (others.length) {
-          if (run.cancel_in_progress) for (const o of others) await this.#cancelRow(o, 'superseded').catch(() => undefined);
+          if (run.cancel_in_progress) for (const o of others) await this.#cancelRow(o, 'superseded', { actor: 'pipeline', note: `for #${run.number}` }).catch(() => undefined);
           // Either way this one waits for the group to be clear; the next look starts it.
           continue;
         }
@@ -665,16 +665,18 @@ export class CiService {
 
   /* ---------- Cancelling and running again ---------- */
 
-  async cancel(id: string): Promise<CiRun> {
+  /** Cancels a run, recording who (`by`: an actor string as runs store it, and a token's label) and, optionally, why (T-95). */
+  async cancel(id: string, by: { actor?: string; label?: string | null; note?: string | null } = {}): Promise<CiRun> {
     const row = this.#need(id);
-    await this.#cancelRow(row, 'cancelled');
+    await this.#cancelRow(row, 'cancelled', { actor: by.actor ?? 'ui', label: by.label ?? null, note: by.note ?? null });
     return this.get(id);
   }
 
-  async #cancelRow(row: RunRow, reason: 'cancelled' | 'superseded'): Promise<void> {
+  async #cancelRow(row: RunRow, reason: 'cancelled' | 'superseded', by: { actor: string; label?: string | null; note?: string | null }): Promise<void> {
     const now = new Date().toISOString();
+    const who = { cancelled_by: by.actor, cancelled_by_label: oneLine(by.label)?.slice(0, 60) ?? null, cancel_note: oneLine(by.note)?.slice(0, 120) ?? null };
     if (row.status === 'queued') {
-      this.#cs.updateRun(row.id, { status: 'cancelled', reason, finished_at: now, duration_ms: 0, archived: 1 });
+      this.#cs.updateRun(row.id, { status: 'cancelled', reason, finished_at: now, duration_ms: 0, archived: 1, ...who });
       this.#settleDeployments(row.id, null);
       this.#changed();
       this.#moved(row.id, 'queued');
@@ -685,7 +687,7 @@ export class CiService {
       throw new AppError('SERVICE_UNAVAILABLE', (e as Error).message, { expose: true });
     });
     if (!reply.ok) throw fromReply(reply);
-    if (reason === 'superseded') this.#cs.updateRun(row.id, { reason: 'superseded' });
+    this.#cs.updateRun(row.id, { ...who, ...(reason === 'superseded' ? { reason: 'superseded' as const } : {}) });
     this.kick(row.workspace_id);
   }
 
@@ -699,7 +701,7 @@ export class CiService {
       const newId2 = newRunId();
       const plan = row.plan ? replan(JSON.parse(row.plan) as Plan, newId2, number) : null;
       const now = new Date().toISOString();
-      const copy: RunRow = { ...row, id: newId2, number, trigger: 'rerun', event_id: null, status: plan ? 'queued' : 'failed', reason: plan ? null : row.reason, actor, actor_label: null, plan: plan ? JSON.stringify(plan) : null, state: null, attempts: 0, created_at: now, started_at: null, finished_at: plan ? null : now, duration_ms: plan ? null : 0, archived: plan ? 0 : 1, rerun_of: row.id };
+      const copy: RunRow = { ...row, id: newId2, number, trigger: 'rerun', event_id: null, status: plan ? 'queued' : 'failed', reason: plan ? null : row.reason, actor, actor_label: null, cancelled_by: null, cancelled_by_label: null, cancel_note: null, plan: plan ? JSON.stringify(plan) : null, state: null, attempts: 0, created_at: now, started_at: null, finished_at: plan ? null : now, duration_ms: plan ? null : 0, archived: plan ? 0 : 1, rerun_of: row.id };
       // A rerun deploys again: fresh gates and its own approvals, never the old run's.
       const gates = plan ? this.#gates(repo, plan, row0(copy)) : null;
       if (gates && 'problem' in gates) throw new AppError('CONFLICT', gates.problem.message);
@@ -874,6 +876,9 @@ export class CiService {
       reason: row.reason as CiRunSummary['reason'],
       actor: row.actor,
       actorLabel: row.actor_label ?? null,
+      cancelledBy: row.cancelled_by ?? null,
+      cancelledByLabel: row.cancelled_by_label ?? null,
+      cancelNote: row.cancel_note ?? null,
       ticketId: row.ticket_id,
       sessionId: row.session_id,
       rerunOf: row.rerun_of,

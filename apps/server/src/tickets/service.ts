@@ -1,5 +1,7 @@
 import { AppError } from '@isnanme/core';
 import {
+  BUMP_PRIORITY,
+  FOUNDING_USER_ID,
   TICKET_CHECK_STATES,
   TICKET_CLOSED_STATUSES,
   TICKET_DEFAULT_USER,
@@ -13,6 +15,8 @@ import {
   parseTicketId,
   parseTicketTrailers,
   ticketIdOf,
+  type BumpRequest,
+  type BumpTarget,
   type CloseTicketRequest,
   type CreateTicketRequest,
   type PortalScope,
@@ -22,6 +26,8 @@ import {
   type TicketCheckState,
   type Ticket,
   type TicketAssignee,
+  type TicketBumped,
+  type TicketBumpResult,
   type TicketCounts,
   type TicketDetail,
   type TicketEvent,
@@ -36,10 +42,11 @@ import {
   type TicketType,
   type UpdateTicketRequest,
 } from '@portal/contracts';
+import { assertBumpable, bumpMode, bumpNote, bumpTargets as targetsFor } from '../chat/bump.js';
 import { cleanText } from '../portalmcp/sanitize.js';
 import type { Store } from '../store/store.js';
 import './errors.js';
-import { openingMessage } from './opening.js';
+import { bumpTicketMessage, openingMessage } from './opening.js';
 import type { TicketSessionInfo, TicketSessions } from './sessions.js';
 import { cleanLine, cleanMarkdown, cleanTags } from './text.js';
 
@@ -115,6 +122,11 @@ const CHECK_LINK = /^(?:https?:\/\/[^\s\u0000-\u001f]{1,480}|\/admin\/[A-Za-z0-9
 
 export const CREATE_PER_HOUR = 50;
 export const OPEN_PER_WORKSPACE = 200;
+/** FR30: bumps of one ticket, and bumps into one session, in an hour. */
+export const BUMP_PER_HOUR_TICKET = 10;
+export const BUMP_PER_HOUR_SESSION = 20;
+/** FR29: how long a session asked about a ticket (Ask) may answer on it with ticket_comment. */
+export const ASK_ANSWER_MS = 24 * HOUR_MS;
 /** How an agent session is named as a ticket's reporter (the table's kinds are fixed): its token ids change at every launch, its session id doesn't. */
 const reporterRef = (c: { sessionId: string }) => `session:${c.sessionId}`;
 const LIST_MAX = 500;
@@ -138,6 +150,18 @@ const like = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 export interface TicketsOptions {
   now?: () => Date;
+  /** Where a person sees a ticket, for the messages the portal sends (a bump's link). Default: the portal's own path. */
+  link?: (ticketId: string) => string;
+}
+
+/** One row of the platform audit (platform/audit.ts `AuditInput`): ids, labels and fixed codes only, never the note. */
+export interface TicketAudit {
+  kind: string;
+  actor: string;
+  actorLabel?: string | null;
+  userId: string | null;
+  subject?: string | null;
+  detail?: Record<string, unknown>;
 }
 
 export class Tickets {
@@ -148,9 +172,12 @@ export class Tickets {
    * work breakdown H4). `actor` is the stored actor string; `data` is the entry's own (no description, no body).
    */
   onEvent?: (e: { ticketId: string; kind: TicketEventKind; actor: string; fromAgent: boolean; data: Record<string, unknown> | null }) => void;
+  /** A person's or a script's act that reaches into a session (a bump) is written to the platform audit here (index.ts wires it). */
+  onAudit?: (e: TicketAudit) => void;
   #told: { ticketId: string; kind: TicketEventKind; actor: string; fromAgent: boolean; data: Record<string, unknown> | null }[] = [];
   #inTx = false;
   readonly #now: () => Date;
+  readonly #link: (ticketId: string) => string;
   #off: (() => void) | undefined;
 
   constructor(
@@ -159,6 +186,7 @@ export class Tickets {
     opts: TicketsOptions = {},
   ) {
     this.#now = opts.now ?? (() => new Date());
+    this.#link = opts.link ?? ((id) => `/admin/tickets/${id}`);
   }
 
   /** Follows sessions: one that ends under its ticket leaves an entry on it (FR18). */
@@ -268,6 +296,22 @@ export class Tickets {
     // Nobody, or a person, holds it: only the session that made it may still change it.
     if (!(row.reporter_kind === 'token' && row.reporter_ref === reporterRef(caller)))
       throw new AppError('FORBIDDEN', row.assignee_kind === 'user' ? `${id} is assigned to a person.` : `${id} is not assigned to you. Claim it with ticket_claim_next first.`);
+  }
+
+  /** FR29: commenting is what FR9 allows, and also the answer of a session a person asked about the ticket (Ask) in the last day. */
+  #assertCanComment(caller: Caller, row: Row, w: Writer) {
+    try {
+      this.#assertCanModify(caller, row, w);
+    } catch (e) {
+      if (caller.kind === 'agent' && !isTicketClosed(row.status) && this.#bumpedInto(row.number, caller.sessionId, ASK_ANSWER_MS)) return;
+      throw e;
+    }
+  }
+
+  /** Whether the ticket was bumped into the session within `withinMs`. */
+  #bumpedInto(number: number, sessionId: string, withinMs: number): boolean {
+    const since = new Date(this.#now().getTime() - withinMs).toISOString();
+    return !!this.#db.prepare("SELECT 1 FROM ticket_events WHERE ticket_number = ? AND kind = 'bumped' AND json_extract(data, '$.sessionId') = ? AND at > ? LIMIT 1").get(number, sessionId, since);
   }
 
   /* ---------- Reading ---------- */
@@ -630,7 +674,7 @@ export class Tickets {
   comment(caller: Caller, id: string, text: unknown, opts: { sessionId?: string | null } = {}): TicketEvent {
     const row = this.#need(caller, id);
     const w = this.#writer(caller, opts.sessionId);
-    this.#assertCanModify(caller, row, w);
+    this.#assertCanComment(caller, row, w);
     const body = cleanMarkdown(text, 'text', TICKET_LIMITS.comment, { required: true });
     const eventId = this.#tx(() => {
       this.#db.prepare('UPDATE tickets SET updated_at = ? WHERE number = ?').run(this.#now().toISOString(), row.number);
@@ -818,6 +862,115 @@ export class Tickets {
       throw e instanceof AppError ? e : new AppError('SERVICE_UNAVAILABLE', `The session started, but the ticket could not be sent to it: ${message}`);
     }
     return { ticket: this.#items([this.#row(row.number)!])[0]!, session: this.#sessionView(this.sessions.get(session.id) ?? session) };
+  }
+
+  /* ---------- Bump (FR28 to FR32) ---------- */
+
+  /** Who may bump: a person, or an admin's token of operate or admin scope (a script). Never an agent, a trigger or a read token. */
+  #assertCanBump(caller: Caller) {
+    if (caller.kind === 'ui') return;
+    if (caller.kind === 'token') return this.#assertWrites(caller);
+    throw new AppError('FORBIDDEN', 'Only a person, or a script with an operate token, bumps a ticket into a session.');
+  }
+
+  /**
+   * The sessions a ticket can be bumped into (FR28): its assigned session first (with the reason when it can't take it), then the live
+   * sessions of its workspace (any workspace's for the shared queue), each with its state, title and, when it can't, why.
+   */
+  bumpTargets(caller: Caller, id: string): BumpTarget[] {
+    this.#assertCanBump(caller);
+    const row = this.#need(caller, id);
+    const preferred = row.assignee_kind === 'session' ? this.sessions.get(row.assignee_ref!) : null;
+    const all = this.sessions.list(row.workspace_id ? { workspaceId: row.workspace_id } : {});
+    return targetsFor(all, { workspaceId: row.workspace_id, preferred });
+  }
+
+  /** FR30: a ticket isn't bumped more than 10 times an hour, a session doesn't get more than 20 bumps an hour. */
+  #bumpLimit(number: number, sessionId: string) {
+    const since = new Date(this.#now().getTime() - HOUR_MS).toISOString();
+    const ticket = (this.#db.prepare("SELECT count(*) AS n FROM ticket_events WHERE ticket_number = ? AND kind = 'bumped' AND at > ?").get(number, since) as { n: number }).n;
+    if (ticket >= BUMP_PER_HOUR_TICKET) throw new AppError('RATE_LIMITED', `${ticketIdOf(number)} was bumped ${BUMP_PER_HOUR_TICKET} times in the last hour. Wait a little.`);
+    const session = (this.#db.prepare("SELECT count(*) AS n FROM ticket_events WHERE kind = 'bumped' AND json_extract(data, '$.sessionId') = ? AND at > ?").get(sessionId, since) as { n: number }).n;
+    if (session >= BUMP_PER_HOUR_SESSION) throw new AppError('RATE_LIMITED', `That session got ${BUMP_PER_HOUR_SESSION} bumps in the last hour. Let it work.`);
+  }
+
+  /**
+   * FR28: pushes the ticket into a running session. `prioritise`: the ticket is assigned to the session and set in progress, and the
+   * message goes in with the queue priority `next` (it steers the running turn). `ask`: nothing about the ticket changes, the message
+   * waits for the running turn (`later`) and asks for an answer by ticket_comment, which the session may then write (FR29). Either way
+   * the timeline gets a `bumped` entry first, then the message is sent from `ticket:<id>`; a send that fails leaves a note and says so.
+   * The routes and the tool check the seam (operate on the ticket and on the session) before this.
+   */
+  async bump(caller: Caller, id: string, req: Partial<BumpRequest>): Promise<TicketBumpResult> {
+    this.#assertCanBump(caller);
+    const row = this.#need(caller, id);
+    const ticketId = ticketIdOf(row.number);
+    if (isTicketClosed(row.status)) throw new AppError('CONFLICT', `${ticketId} is closed. Reopen it first.`);
+    const mode = bumpMode(req.mode);
+    const note = bumpNote(req.note);
+    const sessionId = typeof req.sessionId === 'string' ? req.sessionId.trim() : '';
+    if (!sessionId) throw invalid('sessionId', 'Pick a session.');
+    const session = this.sessions.get(sessionId);
+    if (!session) throw invalid('sessionId', 'No such session.');
+    assertBumpable(session, row.workspace_id);
+    const w = this.#writer(caller);
+
+    this.#tx(() => {
+      this.#bumpLimit(row.number, session.id);
+      const cur = this.#row(row.number)!;
+      const at = this.#now().toISOString();
+      if (mode === 'prioritise') {
+        this.#db.prepare("UPDATE tickets SET assignee_kind = 'session', assignee_ref = ?, status = 'in_progress', workspace_id = ?, updated_at = ? WHERE number = ?").run(session.id, session.workspaceId, at, row.number);
+        if (cur.assignee_kind !== 'session' || cur.assignee_ref !== session.id)
+          this.#addEvent(row.number, 'assigned', w, null, { from: cur.assignee_kind ? { kind: cur.assignee_kind, ...(cur.assignee_kind === 'session' ? { sessionId: cur.assignee_ref } : { name: cur.assignee_ref }) } : null, to: { kind: 'session', sessionId: session.id } });
+        if (cur.status !== 'in_progress') this.#addEvent(row.number, 'status', w, null, { from: cur.status, to: 'in_progress' });
+        if (cur.workspace_id !== session.workspaceId) this.#addEvent(row.number, 'workspace', w, null, { from: cur.workspace_id, to: session.workspaceId });
+      } else this.#db.prepare('UPDATE tickets SET updated_at = ? WHERE number = ?').run(at, row.number);
+      this.#addEvent(row.number, 'bumped', w, note || null, { sessionId: session.id, sessionTitle: cleanText(session.title, 80), mode });
+    });
+    this.onChange?.();
+
+    const item = this.#items([this.#row(row.number)!])[0]!;
+    const by = caller.kind === 'token' ? `The MCP client “${cleanText(caller.label, 60)}”` : 'A person in the portal';
+    try {
+      await this.sessions.send(session.id, ticketId, bumpTicketMessage(item, { mode, by, note, sessionId: session.id, link: this.#link(ticketId) }), ticketId, { priority: BUMP_PRIORITY[mode] });
+    } catch (e) {
+      const message = cleanText((e as Error).message, 300);
+      this.#tx(() => this.#addEvent(row.number, 'comment', { actor: 'system', label: 'Portal' }, `The bump could not be sent to the session: ${message}. Send it a message by hand.`, null));
+      this.onChange?.();
+      throw e instanceof AppError ? e : new AppError('SERVICE_UNAVAILABLE', `The bump could not be sent to the session: ${message}`);
+    }
+    this.onAudit?.({
+      kind: 'ticket.bumped',
+      actor: w.actor,
+      actorLabel: caller.kind === 'token' ? caller.label : null,
+      userId: FOUNDING_USER_ID,
+      subject: `ticket:${ticketId}`,
+      detail: { ticketId, sessionId: session.id, mode, note: note.length > 0 },
+    });
+    return { ticket: this.#items([this.#row(row.number)!])[0]!, session: this.#sessionView(this.sessions.get(session.id) ?? session), mode };
+  }
+
+  /** FR31: the tickets bumped into a session, the latest bump of each, newest first (the session page's chips). */
+  bumpedInto(caller: Caller, sessionId: string): TicketBumped[] {
+    const rows = this.#db
+      .prepare("SELECT e.ticket_number AS number, e.at AS at, e.data AS data FROM ticket_events e WHERE e.kind = 'bumped' AND json_extract(e.data, '$.sessionId') = ? ORDER BY e.id DESC LIMIT 100")
+      .all(sessionId) as { number: number; at: string; data: string }[];
+    const out: TicketBumped[] = [];
+    for (const r of rows) {
+      if (out.some((b) => b.ticketId === ticketIdOf(r.number))) continue;
+      const t = this.#row(r.number);
+      if (!t || !this.#visible(caller, t)) continue;
+      let mode: TicketBumped['mode'] = 'ask';
+      try {
+        mode = (JSON.parse(r.data) as { mode?: string }).mode === 'prioritise' ? 'prioritise' : 'ask';
+      } catch {
+        // an unreadable entry still shows, as a question
+      }
+      out.push({ ticketId: ticketIdOf(r.number), summary: t.summary, status: t.status, mode, at: r.at });
+      if (out.length >= 10) break;
+    }
+    return out;
   }
 
   /** A session ended: any unfinished ticket assigned to it says so, once (FR18). */

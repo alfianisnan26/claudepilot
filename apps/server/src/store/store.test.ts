@@ -160,6 +160,27 @@ test('migration 720: a destination that hears CI failures hears deploys that wai
   again.close();
 });
 
+test('migration 712: every workspace the portal knew gets a stable id, the runtime name is left to the runtime, and what is not a workspace id is skipped', async () => {
+  const dir = tempDir();
+  const first = await Store.open({ dataDir: dir, secretKey: null, migrations: MIGRATIONS.filter((m) => m.version !== 712) });
+  for (const id of ['kubernetes/kohi-event', 'docker/api', 'not-a-workspace', 'x/../y']) first.db!.prepare('INSERT INTO workspace_delivery (workspace_id) VALUES (?)').run(id);
+  first.close();
+  const store = await Store.open({ dataDir: dir, secretKey: null, migrations: MIGRATIONS });
+  try {
+    const rows = store.db!.prepare('SELECT id, target, name, legacy_id, runtime_name, removed_at FROM workspace_identities ORDER BY legacy_id').all() as Record<string, string | null>[];
+    assert.deepEqual(rows.map((r) => [r.legacy_id, r.target, r.name, r.runtime_name, r.removed_at]), [
+      ['docker/api', 'docker', 'api', null, null],
+      ['kubernetes/kohi-event', 'kubernetes', 'kohi-event', null, null],
+    ]);
+    for (const r of rows) assert.match(r.id!, /^ws_[0-9a-f]{12}$/);
+    assert.notEqual(rows[0]!.id, rows[1]!.id);
+    // One live holder per alias: the database refuses a second.
+    assert.throws(() => store.db!.prepare("INSERT INTO workspace_identities (id, target, name, legacy_id, created_at) VALUES (?, 'docker', 'api', 'docker/api', 'now')").run(`ws_${'1'.repeat(12)}`));
+  } finally {
+    store.close();
+  }
+});
+
 test('a failing migration rolls back and freezes the portal', async () => {
   const dir = tempDir();
   (await Store.open({ dataDir: dir, secretKey: newKey() })).close();

@@ -1,8 +1,25 @@
 import { AppError } from '@isnanme/core';
-import { TICKET_PRIORITIES, TICKET_STATUSES, TICKET_TYPES, type PortalScope, type TicketAssignee, type TicketEvent, type TicketItem } from '@portal/contracts';
+import {
+  BUMP_MODES,
+  BUMP_NOTE_MAX,
+  BUMP_PRIORITY,
+  BUMP_REFUSAL_LABEL,
+  sessionRef,
+  ticketRef,
+  TICKET_PRIORITIES,
+  TICKET_STATUSES,
+  TICKET_TYPES,
+  type PortalScope,
+  type TicketAssignee,
+  type TicketEvent,
+  type TicketItem,
+} from '@portal/contracts';
+import { actorOfPrincipal, requireCan } from '../authz/seam.js';
+import { bumpMode, bumpNote } from '../chat/bump.js';
 import { pageInput, pageWindow } from '../portalmcp/paging.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { config } from '../config.js';
+import { declareTicketPolicies } from './authz.js';
 import type { Caller, Tickets } from './service.js';
 
 // The ticket tools of the Portal MCP (tickets PRD §12). Every one is also offered to agents (their per-session token,
@@ -78,6 +95,7 @@ function assigneeOf(tickets: Tickets, ctx: PortalToolContext, raw: string, sessi
 const assigneeArg = z.string().max(100).optional().describe('me (your session), user (a person: for an approval or a question), user:<name>, session:<id>, or none (the agents’ queue).');
 
 export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = portalTools): void {
+  declareTicketPolicies();
   const registerPortalTool = registry.register.bind(registry);
   const uiUrl = (id: string) => `${(config.portalMcp.uiUrl ?? `http://localhost:${config.port}`).replace(/\/+$/, '')}/admin/tickets/${id}`;
 
@@ -258,6 +276,59 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       const r = await tickets.startSession(callerOf(ctx), args.id, { workspaceId: args.workspace_id, claudeId: args.claude_id, worktree: args.worktree, cwd: args.folder });
       ctx.affected(`ticket:${r.ticket.id}`, `session:${r.session.id}`);
       return { summary: `Started session ${r.session.id} for ${r.ticket.id}.`, ticket: ticketView(ctx, r.ticket), session: { id: r.session.id, workspace_id: r.session.workspaceId, state: r.session.state } };
+    },
+  });
+
+  registerPortalTool({
+    name: 'ticket_bump',
+    title: 'Bump a ticket into a session',
+    description:
+      'Pushes a ticket into a running session of its workspace. mode prioritise: the ticket is assigned to the session, set in progress, and the session takes it as its next work. mode ask: a question; the session answers with a ticket comment and nothing about the ticket changes. An optional one-line note goes with it. Asks for confirmation first (shows the session and the mode). Without session_id it lists the sessions that can take it. Needs session control to be on.',
+    scope: 'operate',
+    requires: 'session_control',
+    input: z.object({
+      id: z.string().max(20).describe('T-12'),
+      session_id: z.string().max(80).optional().describe('The session to bump it into. Leave out to list the sessions that can take it.'),
+      mode: z.enum(BUMP_MODES).optional().describe('prioritise (default) or ask.'),
+      note: z.string().max(BUMP_NOTE_MAX).optional().describe('One line for the session.'),
+      confirm_token: z.string().optional(),
+    }),
+    async handler(ctx, args) {
+      const caller = callerOf(ctx);
+      const actor = actorOfPrincipal(ctx.principal);
+      requireCan(actor, 'operate', ticketRef(args.id));
+      if (!args.session_id) {
+        const targets = tickets.bumpTargets(caller, args.id);
+        return {
+          summary: `${targets.filter((t) => !t.refusal).length} sessions can take ${args.id}.`,
+          sessions: targets.map((t) => ({ id: t.id, title: ctx.untrusted(t.title, 'agent', 120), state: t.state, workspace_id: t.workspaceId, assigned: t.preferred, can_bump: !t.refusal, why_not: t.refusal ? BUMP_REFUSAL_LABEL[t.refusal] : null })),
+        };
+      }
+      requireCan(actor, 'operate', sessionRef(args.session_id));
+      const mode = bumpMode(args.mode ?? 'prioritise');
+      const note = bumpNote(args.note);
+      // The preview names what will happen; the token is bound to it, so a session that changed state since asks again.
+      const target = tickets.bumpTargets(caller, args.id).find((t) => t.id === args.session_id);
+      const ticket = tickets.get(caller, args.id, { eventsLimit: 1 }).ticket;
+      const gate = ctx.confirm(
+        args,
+        {
+          ticket: args.id,
+          summary: ctx.untrusted(ticket.summary, sourceOf(ticket), 300),
+          session: args.session_id,
+          session_title: ctx.untrusted(target?.title ?? null, 'agent', 120),
+          session_state: target?.state ?? 'not offered',
+          mode,
+          priority: BUMP_PRIORITY[mode],
+          changes: mode === 'prioritise' ? 'The ticket is assigned to the session and set in progress.' : 'Nothing about the ticket changes; the session answers in a comment.',
+          note: note || null,
+        },
+        `${args.id}:${args.session_id}:${target?.state ?? 'none'}:${ticket.updatedAt}`,
+      );
+      if (gate) return gate;
+      const r = await tickets.bump(caller, args.id, { sessionId: args.session_id, mode, note });
+      ctx.affected(`ticket:${r.ticket.id}`, `session:${r.session.id}`);
+      return { summary: `Bumped ${r.ticket.id} into session ${r.session.id} (${mode}).`, ticket: ticketView(ctx, r.ticket), session: { id: r.session.id, workspace_id: r.session.workspaceId, state: r.session.state }, mode, ui: uiUrl(r.ticket.id) };
     },
   });
 }

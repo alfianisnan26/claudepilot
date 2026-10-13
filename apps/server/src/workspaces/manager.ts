@@ -8,10 +8,11 @@ import {
   type WorkspaceTarget,
   type WorkspaceUsage,
 } from '@portal/contracts';
-import type { Actor } from '@portal/contracts';
+import { workspaceRef, type Actor } from '@portal/contracts';
 import { ownerActor, requireCan } from '../authz/seam.js';
 import type { JsonFile } from '../jsonFile.js';
 import { PLAIN_NAME } from '../names.js';
+import { findWorkspace, WorkspaceIdentities, type WorkspaceIdentity } from './identity.js';
 import { isTargetUnreachable, type Runtime, type ShellSession } from './runtime.js';
 
 /** A tunnelled runtime follows its links (and may hold a loopback listener): it lets go when it is replaced or removed. */
@@ -80,12 +81,20 @@ export class Workspaces {
   readonly #watching = new Map<string, () => void>();
   readonly #runtimeListeners = new Set<(targetId: string, runtime: Runtime | null) => void>();
 
+  /** Every workspace's stable id, its alias and its stored runtime name (T-42); the runtimes read their object names from it. */
+  readonly identities: WorkspaceIdentities;
+
   constructor(
     runtimes: Runtime[],
     private readonly saved: JsonFile<Workspace[]>,
     timing: CheckTiming = {},
+    identities: WorkspaceIdentities = WorkspaceIdentities.memory(),
   ) {
-    for (const r of runtimes) this.#runtimes.set(r.target.id, r);
+    this.identities = identities;
+    for (const r of runtimes) {
+      r.useNames?.(identities);
+      this.#runtimes.set(r.target.id, r);
+    }
     this.#ttlMs = timing.ttlMs ?? CHECK_TTL_MS;
     this.#timeoutMs = timing.timeoutMs ?? CHECK_TIMEOUT_MS;
   }
@@ -125,6 +134,7 @@ export class Workspaces {
     this.#unwatch(id);
     const old = this.#runtimes.get(id);
     if (old && old !== runtime) dispose(old);
+    runtime.useNames?.(this.identities);
     this.#runtimes.set(id, runtime);
     // A check of the old runtime may still be running: its answer is dropped when it lands (#check compares the runtime).
     this.#known.delete(id);
@@ -260,12 +270,56 @@ export class Workspaces {
               }),
       ),
     );
-    const found = lists.flat();
+    // Every workspace a runtime reports has an identity: one it has no record of yet gets its id now, with the runtime name the runtime
+    // says it has (T-42); the response carries both the id and the alias.
+    const found = lists.flat().map((w) => this.#identified(w));
     const ids = new Set(found.map((w) => w.id));
     // A create in flight shows as "creating" until the runtime has it (then the runtime's view wins).
     for (const [id, w] of this.#pending) if (w.status === 'creating' && ids.has(id)) this.#deletePending(id);
     const pending = [...this.#pending.values()].filter((w) => !ids.has(w.id));
     return [...pending, ...found].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /** A listed workspace with its identity: adopted when the portal has no record of it, the stored runtime name over the reported one. */
+  #identified(w: Workspace): Workspace {
+    const known = this.identities.adopt(w.target, w.name, w.runtimeName);
+    return { ...w, stableId: known.id, ...(known.runtimeName ? { runtimeName: known.runtimeName } : {}) };
+  }
+
+  /**
+   * THE resolver of a workspace reference (T-42): its stable id (`ws_…`) or its alias (`<target>/<name>`), to the identity the portal
+   * keeps. Null for anything else, an unknown one, or a removed one. Synchronous: it answers from the registry, so a workspace the portal
+   * has never listed resolves by its alias only after the first list (which `get` does).
+   */
+  resolve(ref: string): WorkspaceIdentity | null {
+    return this.identities.resolve(ref);
+  }
+
+  /**
+   * One workspace by either form of its id, as the list shows it. The alias is followed BEFORE anything is decided: authorization is asked
+   * about the workspace (its `<target>/<name>`, which the seam knows), never about the string given. What does not exist and what the actor
+   * may not view are the same 404.
+   */
+  async get(ref: string, actor: Actor = ownerActor()): Promise<Workspace> {
+    const missing = () => new AppError('NOT_FOUND', 'Not found.');
+    if (typeof ref !== 'string') throw missing();
+    let known = this.resolve(ref);
+    let all: Workspace[] | null = null;
+    if (!known) {
+      // A workspace the portal has not listed yet has no record: list once (which adopts it), then ask again.
+      all = await this.list();
+      known = this.resolve(ref);
+    }
+    if (!known) throw missing();
+    try {
+      requireCan(actor, 'view', workspaceRef(known.legacyId));
+    } catch (e) {
+      if (isAppError(e) && e.code === 'NOT_FOUND') throw missing();
+      throw e;
+    }
+    const found = findWorkspace(all ?? (await this.list()), known.legacyId);
+    if (!found) throw missing();
+    return found;
   }
 
   /** `actor`: who asks (the route's `actorOf(c)`); creating on a target needs `operate` on it (multi-user PRD; the single-owner seam allows the owner). */
@@ -306,9 +360,15 @@ export class Workspaces {
     // would stand in for the real workspace (and "remove" on it would delete the real one).
     if ((await runtime.list()).some((w) => w.name === name))
       throw new AppError('CONFLICT', `A workspace named “${name}” already exists on ${target.label}.`);
+    // Its identity (T-42): a new stable id, and the runtime name its container or Deployment and volume get (`ws-<12 hex>`, or the form
+    // the target's runtime must use), stored and never derived from the name again. A record still holding the name is of a workspace that
+    // is gone (the list above has none): it is retired.
+    const identity = this.identities.allocate(target.id, name, (stableId) => runtime.runtimeNameForNew?.(name, stableId));
     const workspace: Workspace = {
       id,
+      stableId: identity.id,
       name,
+      ...(identity.runtimeName ? { runtimeName: identity.runtimeName } : {}),
       target: target.id,
       image: '',
       status: 'creating',
@@ -329,8 +389,10 @@ export class Workspaces {
   /** Runs a create in the background; `workspace` (the pending entry) tracks its progress. */
   #launch(runtime: Runtime, workspace: Workspace) {
     const { id, name, cpus, memoryMb, node } = workspace;
+    // A create saved before T-42 (resumed after the restart that brought it) has no runtime name: the one on record, if any, else the runtime's.
+    const runtimeName = workspace.runtimeName ?? this.identities.runtimeNameOf(workspace.target, name);
     void runtime
-      .create({ name, cpus, memoryMb, claudeVersion: workspace.claude?.pinned ?? undefined, ...(node ? { node } : {}) }, (detail) => {
+      .create({ name, cpus, memoryMb, claudeVersion: workspace.claude?.pinned ?? undefined, ...(node ? { node } : {}), ...(runtimeName ? { runtimeName } : {}) }, (detail) => {
         workspace.detail = detail;
         this.hooks.changed?.();
       })
@@ -409,6 +471,7 @@ export class Workspaces {
     // A create that waits for its target to come back has not started here: removing it forgets it (whatever the target already made shows up in its list when it returns).
     if (this.#awaitingTarget.has(id)) {
       this.#deletePending(id);
+      this.identities.retire(target, name);
       console.log(`[workspaces] dropped the waiting create of ${id}`);
       return;
     }
@@ -420,6 +483,8 @@ export class Workspaces {
     } finally {
       this.hooks.changed?.();
     }
+    // Its identity stays on record, removed: the id is never given again, and the name is free for another workspace (T-42).
+    this.identities.retire(target, name);
     console.log(`[workspaces] removed ${id}`);
   }
 

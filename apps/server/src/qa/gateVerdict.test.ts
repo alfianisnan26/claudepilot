@@ -35,6 +35,44 @@ test('logs: the rerun alone decides (the last summary), and says which files pas
   assert.deepEqual(v.out.split('\n'), ['note: server-suite-rerun: passed alone: src/connect/hub.test.ts', 'GATE-VERDICT: green']);
 });
 
+test('logs: a file that passed only alone is reported as flaky, with the tests that failed in the full run (T-95)', () => {
+  const dir = logs([...ALL_OK, 'server-suite-rerun: passed alone: src/notify/pipeline.test.ts', 'server-suite-flaky: a deploy that waits for a person'], '# fail 1\n# fail 0\n# cancelled 0\n');
+  const v = verdict('logs', dir);
+  assert.equal(v.code, 0);
+  assert.deepEqual(v.out.split('\n'), ['note: server-suite-rerun: passed alone: src/notify/pipeline.test.ts', 'note: flaky, passed on rerun: a deploy that waits for a person', 'GATE-VERDICT: green']);
+});
+
+test('failures: each failing test with its own report, the passing ones left out (T-95: the run log showed only "not ok")', () => {
+  const f = join(tempDirectory('cp-verdict-'), 'suite.log');
+  writeFileSync(
+    f,
+    [
+      'ok 1 - fine',
+      '  ---',
+      '  duration_ms: 1',
+      '  ...',
+      '# Subtest: a deploy that waits',
+      'not ok 2 - a deploy that waits',
+      '  ---',
+      "  error: 'Expected values to be strictly equal'",
+      "  expected: 'held'",
+      "  actual: 'sent'",
+      '  stack: |-',
+      '    TestContext.<anonymous> (src/notify/pipeline.test.ts:126:12)',
+      '  ...',
+      'ok 3 - after',
+      '  ---',
+      '  ...',
+      '# fail 1',
+    ].join('\n'),
+  );
+  const out = verdict('failures', f).out;
+  assert.match(out, /^not ok 2 - a deploy that waits$/m);
+  assert.match(out, /expected: 'held'\n\s+actual: 'sent'/);
+  assert.match(out, /pipeline\.test\.ts:126:12/);
+  assert.doesNotMatch(out, /ok 1 - fine|ok 3 - after|# fail/);
+});
+
 test('logs: red for a failed step, failing or timed-out tests, a suite with no summary, or no summary at all', () => {
   assert.deepEqual(verdict('logs', logs(['npm-ci rc=0 1s', 'typecheck rc=2 50s', 'web-build rc=0 1s', 'server-suite rc=0 1s'], '# fail 0\n')), { code: 1, out: 'GATE-VERDICT: red: typecheck failed' });
   assert.deepEqual(verdict('logs', logs(['npm-ci rc=1 1s'])), { code: 1, out: 'GATE-VERDICT: red: npm-ci failed' });

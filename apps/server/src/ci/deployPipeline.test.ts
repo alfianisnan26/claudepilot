@@ -45,6 +45,7 @@ function templateFiles(): Record<string, string> {
   add('scripts/k3s-build.sh');
   add('scripts/gate-job.sh');
   add('scripts/gate-verdict.sh');
+  add('scripts/gate-job-stop.sh');
   add('images/workspace/Dockerfile');
   // The release gate itself (npm ci, the suite) is far too heavy here: a stand-in leaves the summary it would, green or red.
   out['scripts/gate.sh'] = `#!/usr/bin/env bash
@@ -65,6 +66,8 @@ args=" $* "
 manifest() { git --git-dir="$FAKE/github.git" show main:deploy/k3s/portal.yaml; }
 case $args in
   # The in-cluster gate (scripts/gate-job.sh): its Job succeeds or fails with the fake gate's mode, and its log ends with the verdict.
+  *" get job claudepilot-gate-"*"metadata.uid"*) printf 'uid-1234' ;;
+  *" get jobs,secrets -l app=claudepilot-gate,claudepilot-gate/by=pipeline "*) [ -f "$FAKE/leftover" ] && { printf 'job.batch/claudepilot-gate-aaaaaaa-0000\nsecret/claudepilot-gate-aaaaaaa-0000\n'; rm -f "$FAKE/leftover"; }; true ;;
   *" get job claudepilot-gate-"*) if [ "$(cat "$FAKE/gate-mode" 2>/dev/null)" = red ]; then printf '/1'; else printf '1/'; fi ;;
   *" logs job/claudepilot-gate-"*)
     printf '=== SUMMARY\nnpm-ci rc=0 1s\n'; [ -f "$FAKE/leak" ] && echo "npm: $(cat "$FAKE/token")"
@@ -256,7 +259,8 @@ test('a dry run says what each job would do and changes nothing: no push, no clu
   assert.equal(outFile(w, 'build.env'), `PORTAL_TAG=${today()}-2\nWORKSPACE_TAG=2.1.296-${today()}-5\n`);
   const release = w.run('release', dry);
   assert.equal(release.code, 0, release.out);
-  assert.match(release.out, /\[dry-run\] would run: git push -q --atomic origin [0-9a-f]{40}:refs\/heads\/main [0-9a-f]{40}:refs\/heads\/integration/);
+  assert.match(release.out, /\[dry-run\] would run: git push -q origin [0-9a-f]{40}:refs\/heads\/main\n/);
+  assert.match(release.out, /\[dry-run\] would run: git push -q origin [0-9a-f]{40}:refs\/heads\/integration\n/, 'the branch follows as its own step');
   assert.match(outFile(w, 'release.env'), /PUSHED=0/);
   const verify = w.run('verify', dry);
   assert.equal(verify.code, 0, verify.out);
@@ -357,6 +361,43 @@ test('a branch that moved on during the approval: main gets exactly the approved
   assert.match(outFile(w, 'release.env'), new RegExp(`BRANCH_SHA=${merged}`));
 });
 
+test('T-95: the deploy is the push to main alone; integration catches up as its own step, retried when it moves during the push, and a branch that will not take it only warns', () => {
+  const w = world();
+  assert.equal(w.run('build', { images: 'portal' }).code, 0);
+  // GitHub refuses pushes to integration while refuse-integration holds a count above 0 ("always": every one), as if it moved each time.
+  const hook = join(w.github, 'hooks', 'pre-receive');
+  shell(hook, `#!/bin/sh
+while read old new ref; do
+  [ "$ref" = refs/heads/integration ] || continue
+  f="$FAKE/refuse-integration"; [ -f "$f" ] || continue
+  n=$(cat "$f"); [ "$n" = always ] && { echo "integration moved" >&2; exit 1; }
+  [ "$n" -gt 0 ] 2>/dev/null && { echo $((n - 1)) > "$f"; echo "integration moved" >&2; exit 1; }
+done
+exit 0
+`);
+  writeFileSync(join(w.root, 'refuse-integration'), '1');
+  const once = w.run('release');
+  assert.equal(once.code, 0, once.out);
+  assert.match(once.out, /integration moved during the push \(try 1 of 3\)/);
+  const bump = w.main();
+  assert.equal(w.git(['--git-dir', w.github, 'rev-parse', `${bump}^`]), w.sha, 'main: the approved commit plus the tags');
+  assert.equal(w.branch('integration'), bump, 'the second try brought integration up');
+  assert.match(outFile(w, 'release.env'), /PUSHED=1/);
+
+  // A branch that never takes it: the deploy stands (no failure, so no rollback), and the run says to merge by hand.
+  const w2 = world();
+  assert.equal(w2.run('build', { images: 'portal' }).code, 0);
+  shell(join(w2.github, 'hooks', 'pre-receive'), readFileSync(hook, 'utf8'));
+  writeFileSync(join(w2.root, 'refuse-integration'), 'always');
+  const never = w2.run('release');
+  assert.equal(never.code, 0, never.out);
+  assert.match(never.out, /WARNING: integration was not brought up to date: merge main into it by hand \(the deploy is done\)/);
+  assert.notEqual(w2.main(), w2.base, 'main was released');
+  assert.equal(w2.branch('integration'), w2.sha, 'integration as it was');
+  assert.match(outFile(w2, 'release.env'), /PUSHED=1/);
+  assert.match(outFile(w2, 'release.env'), /BRANCH_SYNC=failed/);
+});
+
 test('the gate as a Job in the cluster (T-37, the default): a Secret for its life, a Job with small requests and no node selector, the verdict from its log', () => {
   const w = world();
   Object.assign(w.env, { DEPLOY_GATE_IN_CLUSTER: 'true', GATE_IMAGE: 'registry.test/claudepilot/workspace:dev-1', GATE_JOB_POLL_S: '1', GATE_JOB_WAIT_S: '5' });
@@ -365,8 +406,10 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
   assert.match(dry.out, /\[dry-run\] would run: scripts\/gate-job\.sh [0-9a-f]{7}/);
   assert.ok(!existsSync(join(w.root, 'applied.yaml')), 'a dry run applies nothing');
 
+  writeFileSync(join(w.root, 'leftover'), ''); // a cancelled run's Job and its Secret
   const green = w.run('gate');
   assert.equal(green.code, 0, green.out);
+  assert.match(green.out, /gate: leftover stopped claudepilot-gate-aaaaaaa-0000/);
   assert.match(green.out, new RegExp(`gate job claudepilot-gate-${w.sha.slice(0, 7)}-[0-9a-f]{4}: typecheck,web-build,server-suite at ${w.sha.slice(0, 7)} on registry\\.test/claudepilot/workspace:dev-1`));
   assert.match(green.out, /GATE-VERDICT: green/);
   assert.match(green.out, /gate: green at [0-9a-f]{7}/);
@@ -381,6 +424,10 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
   const calls = w.calls();
   assert.match(calls, /kubectl -n isnan-claudepilot create secret generic claudepilot-gate-/);
   assert.match(calls, /kubectl -n isnan-claudepilot delete secret claudepilot-gate-/, 'the Secret is deleted on exit');
+  assert.match(calls, /delete job claudepilot-gate-aaaaaaa-0000/, 'a leftover of a cancelled run is stopped at the start');
+  assert.match(calls, /patch secret claudepilot-gate-[0-9a-f]{7}-[0-9a-f]{4} --type merge -p \{"metadata":\{"ownerReferences":\[\{"apiVersion":"batch\/v1","kind":"Job","name":"claudepilot-gate-[0-9a-f-]+","uid":"uid-1234"\}\]/, 'the Secret belongs to its Job');
+  assert.equal((calls.match(/get jobs,secrets -l app=claudepilot-gate,claudepilot-gate\/by=pipeline/g) ?? []).length, 2, 'leftovers cleared at the start, ours at the end');
+  assert.match(job, /claudepilot-gate\/by: pipeline/);
 
   writeFileSync(join(w.root, 'gate-mode'), 'red');
   writeFileSync(join(w.root, 'leak'), '');

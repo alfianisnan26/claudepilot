@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import { RunChip } from '@/features/ci/RunChip';
 import type { usePersonaOf } from '@/features/personas/identities';
 import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
-import { TicketChip } from '@/features/tickets/TicketChip';
+import { BumpedChip, TicketChip, useBumpedTickets } from '@/features/tickets/TicketChip';
 
 /**
  * Session info: what the session header used to spell out under the title (persona, workspace, Claude, ticket, CI runs, worktree
@@ -29,6 +29,8 @@ export function SessionInfoDialog({
   connected: boolean;
   onRename: () => void;
 }) {
+  // Tickets pushed into this session (tickets PRD FR31): beside its own ticket, each with how it was bumped.
+  const bumped = useBumpedTickets(session?.id, open);
   return (
     <Dialog open={open} onClose={onClose} size="sm" title="Session">
       {session && (
@@ -55,9 +57,14 @@ export function SessionInfoDialog({
                 {session.endedReason === 'transferred' && <span className="text-muted"> · left behind</span>}
               </Row>
             )}
-            {session.ticketId && (
-              <Row label="Ticket">
-                <TicketChip ticketId={session.ticketId} compact />
+            {(session.ticketId || bumped.length > 0) && (
+              <Row label={bumped.length + (session.ticketId && !bumped.some((b) => b.ticketId === session.ticketId) ? 1 : 0) > 1 ? 'Tickets' : 'Ticket'}>
+                <span className="flex flex-wrap gap-x-3 gap-y-1">
+                  {session.ticketId && !bumped.some((b) => b.ticketId === session.ticketId) && <TicketChip ticketId={session.ticketId} compact />}
+                  {bumped.map((b) => (
+                    <BumpedChip key={b.ticketId} bump={b} />
+                  ))}
+                </span>
               </Row>
             )}
             {session.worktree && (

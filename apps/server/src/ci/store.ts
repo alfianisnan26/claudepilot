@@ -39,6 +39,10 @@ export interface RunRow {
   actor: string;
   /** The Portal MCP token's label when the actor is a token, as it was then. */
   actor_label: string | null;
+  /** Who cancelled the run (an actor string like `actor`; `pipeline` for a run a newer one superseded), a token's label then, and why. */
+  cancelled_by?: string | null;
+  cancelled_by_label?: string | null;
+  cancel_note?: string | null;
   inputs: string;
   ticket_id: string | null;
   ticket_source: string | null;
@@ -143,7 +147,7 @@ export interface RunFilter {
 
 const RUN_COLUMNS = [
   'status', 'reason', 'plan', 'state', 'diagnostics', 'attempts', 'started_at', 'finished_at', 'duration_ms', 'archived', 'subject',
-  'ticket_id', 'ticket_source', 'session_id', 'concurrency_group', 'cancel_in_progress',
+  'ticket_id', 'ticket_source', 'session_id', 'concurrency_group', 'cancel_in_progress', 'cancelled_by', 'cancelled_by_label', 'cancel_note',
 ] as const;
 type RunPatch = Partial<Pick<RunRow, (typeof RUN_COLUMNS)[number]>>;
 const REPO_COLUMNS = ['default_branch', 'protected', 'required_checks', 'merge_only', 'connected', 'hook_state', 'removed_at', 'source_path'] as const;

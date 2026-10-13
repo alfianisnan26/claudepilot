@@ -3,9 +3,12 @@
 
 import { AppError, success } from '@isnanme/core';
 import {
+  sessionRef,
+  ticketRef,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   TICKET_TYPES,
+  type BumpRequest,
   type CloseTicketRequest,
   type CommentTicketRequest,
   type CreateTicketRequest,
@@ -18,6 +21,8 @@ import {
   type UpdateTicketRequest,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
+import { actorOf, can, requireCan } from '../authz/seam.js';
+import { declareTicketPolicies } from './authz.js';
 import type { Caller, Tickets } from './service.js';
 
 async function body<T>(c: Context): Promise<Partial<T>> {
@@ -51,6 +56,7 @@ const int = (raw: string | undefined) => {
 };
 
 export function createTicketRoutes(tickets: Tickets): Hono {
+  declareTicketPolicies();
   const app = new Hono();
   const id = (c: Context) => c.req.param('id') ?? '';
 
@@ -78,6 +84,13 @@ export function createTicketRoutes(tickets: Tickets): Hono {
 
   // Registered before `/:id`, which would read "tags" as an id.
   app.get('/tags', (c) => c.json(success(tickets.tags(UI))));
+  // The tickets bumped into a session (FR31), for its page: whoever may view the session.
+  app.get('/bumped', (c) => {
+    const session = c.req.query('session') ?? '';
+    if (!session) throw new AppError('VALIDATION_FAILED', 'Name the session.', { details: { session: 'Required.' } });
+    requireCan(actorOf(c), 'view', sessionRef(session));
+    return c.json(success(tickets.bumpedInto(UI, session)));
+  });
 
   app.get('/:id', (c) => c.json(success(tickets.get(UI, id(c)))));
   app.get('/:id/brief', (c) => {
@@ -98,6 +111,19 @@ export function createTicketRoutes(tickets: Tickets): Hono {
   });
   app.post('/:id/close', async (c) => c.json(success(tickets.close(UI, id(c), await optionalBody<CloseTicketRequest>(c)))));
   app.delete('/:id/close', (c) => c.json(success(tickets.update(UI, id(c), { status: 'open' }))));
+  // Bump (FR28): operate on the ticket, and on the session it goes into; the picker lists only the sessions the person may operate.
+  app.get('/:id/bump', (c) => {
+    const actor = actorOf(c);
+    requireCan(actor, 'operate', ticketRef(id(c)));
+    return c.json(success(tickets.bumpTargets(UI, id(c)).filter((t) => can(actor, 'operate', sessionRef(t.id)).allow)));
+  });
+  app.post('/:id/bump', async (c) => {
+    const actor = actorOf(c);
+    const req = await body<BumpRequest>(c);
+    requireCan(actor, 'operate', ticketRef(id(c)));
+    if (typeof req.sessionId === 'string' && req.sessionId.trim()) requireCan(actor, 'operate', sessionRef(req.sessionId.trim()));
+    return c.json(success(await tickets.bump(UI, id(c), req)), 201);
+  });
   app.post('/:id/session', async (c) => c.json(success(await tickets.startSession(UI, id(c), await body<StartTicketSessionRequest>(c))), 201));
 
   return app;

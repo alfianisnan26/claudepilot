@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # The release job (environment production: it starts only after a person approved it in the portal). Puts the new tags of the portal and
 # workspace images into deploy/k3s/portal.yaml on top of the run's commit and pushes that commit to main, the branch Argo CD follows: that
-# push IS the deploy. It goes to main and to the run's branch in one atomic push, fast-forward only, so nothing is forced. When the run's
-# branch moved on while the release waited for its approval (more commits on top of the run's commit), the release commit is merged into
-# the branch's new tip, so the branch keeps them and main still gets exactly the approved commit plus the tags; a branch that no longer has
-# the run's commit, or a merge that conflicts, stops the release with nothing changed (run #4, 2026-10-13, was refused for a status commit
-# pushed during the approval). Leaves .pilot/out/release.env (what was pushed, the tags before) for verify and rollback, whatever happens.
+# push IS the deploy, and it goes to main alone (fast-forward, never forced). The run's branch then catches up as a separate step: the
+# release commit, or, when the branch moved on while the release waited for its approval, the release merged into its new tip, fetched
+# again if it moves during the push (T-95: run #4 was refused because one atomic push to both branches failed on a status commit). A branch
+# that no longer has the run's commit stops the release before anything is pushed; a conflict on the branch only warns (the deploy is done). Leaves .pilot/out/release.env (what was pushed, the tags before) for verify and rollback, whatever happens.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=.pilot/scripts/lib.sh
@@ -53,34 +52,56 @@ bump=$(git rev-parse HEAD)
   echo "BASE_SHA=$sha"
   echo "PUSHED=0"
 } >"$rel"
-refs=("$bump:refs/heads/$DEPLOY_MAIN")
+# 1. The deploy: the release commit to main alone (it fast-forwards main: main is an ancestor of the run's commit). Nothing else can make it
+#    fail: a push to the run's branch during the approval no longer matters here (T-95).
 if [ -n "${PILOT_BRANCH:-}" ] && [ "$PILOT_BRANCH" != "$DEPLOY_MAIN" ]; then
-  branch_to=$bump
   git fetch -q origin "$PILOT_BRANCH" 2>/dev/null || true
   tip=$(git rev-parse -q --verify "origin/$PILOT_BRANCH^{commit}" 2>/dev/null || true)
-  if [ -n "$tip" ] && ! git merge-base --is-ancestor "$tip" "$bump"; then
-    git merge-base --is-ancestor "$sha" "$tip" ||
-      die "$PILOT_BRANCH no longer has $(short "$sha") (it was rewritten since this run started): nothing was deployed"
-    log "release: $PILOT_BRANCH moved on to $(short "$tip") since this run started: the release is merged into it"
-    git checkout -q -B pilot-release-branch "$tip"
-    gname=$(git config user.name || true)
-    gemail=$(git config user.email || true)
-    if ! git -c user.name="${gname:-ClaudePilot CI}" -c user.email="${gemail:-ci@claudepilot.invalid}" -c commit.gpgsign=false \
-      merge -q --no-ff --no-edit -m "merge release $(short "$bump") ($what) into $PILOT_BRANCH" "$bump"; then
-      git merge --abort 2>/dev/null || true
-      die "the release does not merge cleanly into $PILOT_BRANCH at $(short "$tip"): nothing was deployed"
+  [ -z "$tip" ] || git merge-base --is-ancestor "$sha" "$tip" ||
+    die "$PILOT_BRANCH no longer has $(short "$sha") (it was rewritten since this run started): nothing was deployed"
+fi
+log "release: $(short "$bump") ($what) to $DEPLOY_MAIN"
+act git push -q origin "$bump:refs/heads/$DEPLOY_MAIN" || die "the push to $DEPLOY_MAIN was refused: nothing was deployed"
+dry || sed -i 's/^PUSHED=0$/PUSHED=1/' "$rel"
+dry || log "release: pushed $(short "$bump") to $DEPLOY_MAIN: Argo CD deploys it"
+
+# 2. The run's branch catches up, as its own step: the release commit itself when the branch is still where the run started, else the
+#    release merged into its current tip; a branch that moves between the fetch and the push is fetched again (three tries). A conflict or
+#    a branch that keeps moving leaves a warning (the deploy is done; merge main into the branch by hand), never a failed release.
+if [ -n "${PILOT_BRANCH:-}" ] && [ "$PILOT_BRANCH" != "$DEPLOY_MAIN" ]; then
+  synced=
+  for try in 1 2 3; do
+    git fetch -q origin "$PILOT_BRANCH" 2>/dev/null || true
+    tip=$(git rev-parse -q --verify "origin/$PILOT_BRANCH^{commit}" 2>/dev/null || true)
+    branch_to=$bump
+    if [ -n "$tip" ] && ! git merge-base --is-ancestor "$tip" "$bump"; then
+      log "release: $PILOT_BRANCH moved on to $(short "$tip") since this run started: the release is merged into it"
+      git checkout -q -B pilot-release-branch "$tip"
+      gname=$(git config user.name || true)
+      gemail=$(git config user.email || true)
+      if ! git -c user.name="${gname:-ClaudePilot CI}" -c user.email="${gemail:-ci@claudepilot.invalid}" -c commit.gpgsign=false \
+        merge -q --no-ff --no-edit -m "merge release $(short "$bump") ($what) into $PILOT_BRANCH" "$bump"; then
+        git merge --abort 2>/dev/null || true
+        git checkout -q pilot-release
+        log "WARNING: the release does not merge cleanly into $PILOT_BRANCH at $(short "$tip"): merge $DEPLOY_MAIN into $PILOT_BRANCH by hand (the deploy is done)"
+        break
+      fi
+      branch_to=$(git rev-parse HEAD)
+      git checkout -q pilot-release
     fi
-    branch_to=$(git rev-parse HEAD)
-    git checkout -q pilot-release
-    echo "BRANCH_SHA=$branch_to" >>"$rel"
+    if act git push -q origin "$branch_to:refs/heads/$PILOT_BRANCH"; then
+      synced=$branch_to
+      break
+    fi
+    log "release: $PILOT_BRANCH moved during the push (try $try of 3)"
+  done
+  if [ -n "$synced" ]; then
+    echo "BRANCH_SHA=$synced" >>"$rel"
+    dry || log "release: $PILOT_BRANCH is at $(short "$synced")"
+  else
+    echo "BRANCH_SYNC=failed" >>"$rel"
+    log "WARNING: $PILOT_BRANCH was not brought up to date: merge $DEPLOY_MAIN into it by hand (the deploy is done)"
   fi
-  refs+=("$branch_to:refs/heads/$PILOT_BRANCH")
 fi
-log "release: $(short "$bump") ($what) to ${refs[*]#*:refs/heads/}"
-act git push -q --atomic origin "${refs[@]}" || die "the push was refused (a branch moved since this run started?): nothing was deployed"
-if dry; then
-  log "release: dry run, nothing pushed"
-  exit 0
-fi
-sed -i 's/^PUSHED=0$/PUSHED=1/' "$rel"
-log "release: pushed $(short "$bump") to $DEPLOY_MAIN: Argo CD deploys it"
+dry && log "release: dry run, nothing pushed"
+exit 0

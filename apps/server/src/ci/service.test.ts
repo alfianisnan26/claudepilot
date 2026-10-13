@@ -203,13 +203,16 @@ test('the cap per workspace queues runs in order; cancel works on queued and run
     await h.svc.poll(WS);
     assert.equal(h.svc.list().items.find((r) => r.id === quick.id)!.status, 'queued', 'one at a time');
     // Cancel the queued one: settled in the portal. Then the running one: stopped in the workspace.
-    assert.equal((await h.svc.cancel(quick.id)).status, 'cancelled');
+    const q = await h.svc.cancel(quick.id, { actor: 'portal-mcp:ptk_x', label: 'relay' });
+    assert.deepEqual([q.status, q.cancelledBy, q.cancelledByLabel, q.cancelNote], ['cancelled', 'portal-mcp:ptk_x', 'relay', null], 'who cancelled it is kept (T-95)');
     assert.equal(await codeOf(() => h.svc.cancel(quick.id)), 'CONFLICT');
     await h.svc.cancel(slow.id);
     await h.until('the cancel to show', () => h.svc.list().items.find((r) => r.id === slow.id)!.status === 'cancelled');
     const done = await h.run(slow.id);
     assert.deepEqual([done.status, done.reason, done.detail[0]!.steps[0]!.status], ['cancelled', 'cancelled', 'cancelled']);
-    assert.equal((await h.svc.rerun(quick.id)).status, 'queued');
+    assert.equal(done.cancelledBy, 'ui', 'a cancel without an actor is the UI\'s');
+    const again = await h.svc.rerun(quick.id);
+    assert.deepEqual([again.status, again.cancelledBy], ['queued', null], 'a rerun does not inherit the cancel');
     await h.until('the rerun to pass', () => h.svc.list().items[0]!.status === 'passed');
   } finally {
     h.done();
@@ -226,6 +229,8 @@ test('concurrency.group with cancel-in-progress: the newer run cancels the older
     await h.until('the first to be superseded', () => h.svc.list().items.find((r) => r.id === first.id)!.status === 'cancelled');
     const old = await h.run(first.id);
     assert.equal(old.status, 'cancelled');
+    await h.until('the supersede to be recorded', () => h.svc.list().items.find((r) => r.id === first.id)!.cancelledBy === 'pipeline');
+    assert.equal(h.svc.list().items.find((r) => r.id === first.id)!.cancelNote, `for #${second.number}`, 'a stale run says which run replaced it (T-95)');
     await h.until('the second to start', () => h.svc.list().items.find((r) => r.id === second.id)!.status === 'running');
     await h.svc.cancel(second.id);
   } finally {

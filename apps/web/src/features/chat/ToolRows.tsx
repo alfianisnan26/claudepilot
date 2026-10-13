@@ -16,8 +16,11 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { InputBlock, OutputBlock } from './CodeBlock';
 import { ImageThumbs, type ViewerImage } from './ImageViewer';
+import { visibly } from './shellTokens';
+import { exitStatus, inputView } from './toolFormat';
 
 /** A tool call and its result (null while it runs, or when the result never came). */
 export interface ToolPair {
@@ -181,15 +184,34 @@ export function formatSeconds(ms: number): string {
   return s % 60 ? `${m} min ${s % 60} s` : `${m} min`;
 }
 
+/** Rows opened or closed by a tap, by row: kept while the page lives, so a row that leaves the page and comes back is as it was left. */
+const tapped = new Map<string, { open: boolean; details: boolean }>();
+
+/** A row's key for {@link useOpen}: the call's id, or its place in the transcript. */
+export const rowKey = (e: ChatEvent) => e.toolUseId ?? `${e.seq}@${e.at}`;
+
 /**
- * A row's open state: open by `details` (Show all details) or its own default, until it's tapped; a
- * change of `details` resets taps, so Show all details and Show less apply to every row.
+ * A row's open state: open by `details` (Show all details) or its own default, until it's tapped; a change of `details` resets taps, so
+ * Show all details and Show less apply to every row. With `key`, a tap is remembered for the page's life (chat PRD FR7).
  */
-function useOpen(details: boolean, byDefault: boolean): [boolean, () => void] {
-  const [tapped, setTapped] = useState<boolean | null>(null);
-  useEffect(() => setTapped(null), [details]);
-  const open = tapped ?? (details || byDefault);
-  return [open, () => setTapped(!open)];
+function useOpen(details: boolean, byDefault: boolean, key?: string): [boolean, () => void] {
+  const [tap, setTap] = useState<{ open: boolean; details: boolean } | null>(() => (key ? (tapped.get(key) ?? null) : null));
+  const seen = useRef(details);
+  useEffect(() => {
+    if (seen.current === details) return;
+    seen.current = details;
+    if (key) tapped.delete(key);
+    setTap(null);
+  }, [details, key]);
+  const open = tap && tap.details === details ? tap.open : details || byDefault;
+  return [
+    open,
+    () => {
+      const next = { open: !open, details };
+      if (key) tapped.set(key, next);
+      setTap(next);
+    },
+  ];
 }
 
 /** The row's line: an icon, what it is, and a chevron when there's more to see. */
@@ -222,10 +244,10 @@ function RowButton({
 }
 
 /**
- * One tool call: its name and one-line summary (a command, a path), then, opened, the summary in full
- * and what the tool returned (text, kept short by the portal, and images). A failure shows in the
- * danger tone (its turn's activity row counts it); returned images show open. `running` marks a call
- * still waiting for its result.
+ * One tool call: its name and one-line summary (a command, a path), then, opened, two blocks (chat PRD FR7): Input, what it was given
+ * (a command coloured as shell with its real line breaks, an edit's lines, a path and range, an MCP tool's JSON), and Output, what it
+ * returned (long output shows its ends and "Show all"), with any images. Closed by default; a failure opens, in the danger tone (its
+ * turn's activity row counts it), and so do returned images. `running` marks a call still waiting for its result.
  */
 export function ToolCall({
   call,
@@ -237,37 +259,28 @@ export function ToolCall({
 }: ToolPair & { agent: string | null; running: boolean; details: boolean; images: ViewerImage[] }) {
   const error = !!result?.isError;
   const Icon = toolIcon(call.toolName);
-  const [open, toggle] = useOpen(details, images.length > 0);
+  const [open, toggle] = useOpen(details, images.length > 0 || error, rowKey(call));
   const id = useId();
-  const output = result?.text?.trim() ?? '';
-  const expandable = !!(call.text || output || images.length);
+  const output = result?.text?.replace(/\s+$/, '') ?? '';
+  const input = useMemo(() => inputView(call.toolName, call.toolInput, call.text, call.toolInputCut), [call.toolName, call.toolInput, call.text, call.toolInputCut]);
+  const hasInput = !!(input.code || input.diff || input.path || input.facts.length);
+  const expandable = !!(hasInput || output || images.length);
   return (
     <div className="flex max-w-full flex-col items-start">
       <RowButton open={open} onToggle={toggle} controls={id} expandable={expandable} danger={error}>
         <Icon className="size-4 shrink-0" aria-hidden="true" />
         {/* A call still waiting for its result is a quiet shimmer on its name, not a spinner. */}
         <span className={cn('shrink-0 font-mono', running && !result && 'shimmer')}>{call.toolName ? toolLabel(call.toolName) : 'tool'}</span>
-        {call.text && <span className="min-w-0 truncate font-mono text-muted">{shortTarget(call.text)}</span>}
+        {call.text && <span className="min-w-0 truncate font-mono text-muted">{shortTarget(visibly(call.text))}</span>}
         {agent && <span className="shrink-0 truncate text-muted/80">· {agent}</span>}
         {running && !result && <span className="sr-only">(running)</span>}
         {error && <span className="sr-only">(failed)</span>}
       </RowButton>
       {open && expandable && (
-        <div id={id} className="mt-1 ml-5 flex w-[calc(100%-1.25rem)] flex-col gap-2">
-          {(call.text || output) && (
-            <div className={cn('overflow-hidden rounded-lg border text-[12px]', error ? 'border-danger/30 bg-danger-soft' : 'border-line bg-surface-2/50')}>
-              {/* The summary in full where the row can't show it all: commands, and anything long. */}
-              {call.text && (call.toolName === 'Bash' || shortTarget(call.text) !== call.text.trim()) && (
-                <p className="border-b border-line/70 px-3 py-1.5 font-mono break-all text-ink-soft">{call.text}</p>
-              )}
-              {output ? (
-                <pre className={cn('max-h-60 overflow-auto px-3 py-2 font-mono leading-relaxed break-words whitespace-pre-wrap', error ? 'text-danger' : 'text-ink')}>
-                  {output}
-                </pre>
-              ) : (
-                <p className="px-3 py-1.5 text-muted">{result ? 'No output.' : running ? 'Running…' : 'No result.'}</p>
-              )}
-            </div>
+        <div id={id} className="mt-1 ml-5 flex w-[calc(100%-1.25rem)] min-w-0 flex-col gap-2">
+          {hasInput && <InputBlock view={input} />}
+          {(output || hasInput) && (
+            <OutputBlock text={output} error={error} exit={error ? exitStatus(output) : null} empty={result ? 'No output.' : running ? 'Running…' : 'No result.'} />
           )}
           {images.length > 0 && <ImageThumbs images={images} actions />}
         </div>
@@ -278,7 +291,7 @@ export function ToolCall({
 
 /** A run of read-only calls as one row ("3 files read · 2 searches"), opening to each call. */
 export function ToolGroup({ tools, agent, running, details, render }: { tools: ToolPair[]; agent: string | null; running: boolean; details: boolean; render: (t: ToolPair) => ReactNode }) {
-  const [open, toggle] = useOpen(details, false);
+  const [open, toggle] = useOpen(details, false, `g:${rowKey(tools[0]!.call)}`);
   const id = useId();
   const pending = running && tools.some((t) => !t.result);
   return (

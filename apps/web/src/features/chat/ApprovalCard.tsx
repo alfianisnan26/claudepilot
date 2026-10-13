@@ -103,7 +103,7 @@ function ApprovalBody({
             {waiting > 1 && <span className="shrink-0 text-xs font-semibold text-muted">{waiting} waiting</span>}
           </div>
           {request.full ? (
-            <ApprovalBlock text={request.full} onRead={setRead} className="min-h-12" />
+            <ApprovalBlock text={request.full} tool={request.toolName} onRead={setRead} className="min-h-12" />
           ) : request.detail ? (
             <p className="shrink-0 font-mono text-xs break-words whitespace-pre-wrap text-ink-soft">{request.detail}</p>
           ) : null}

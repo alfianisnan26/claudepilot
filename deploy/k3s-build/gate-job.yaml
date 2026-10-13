@@ -10,7 +10,7 @@ kind: Job
 metadata:
   name: NAME
   namespace: isnan-claudepilot
-  labels: {app: claudepilot-gate}
+  labels: {app: claudepilot-gate, claudepilot-gate/by: BY_WHOM}
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 5400
@@ -36,6 +36,7 @@ spec:
             - {name: COMMIT, value: "COMMIT"}
             - {name: GATE_STEPS, value: "STEPS"}
             - {name: GATE_CONCURRENCY, value: "3"}
+            - {name: GATE_FILES, value: "FILES"}
             - {name: GATE_VERDICT_SH, value: "VERDICT"}
             - name: NODE_AUTH_TOKEN
               valueFrom: {secretKeyRef: {name: NAME, key: node-auth-token}}
@@ -47,9 +48,10 @@ spec:
               if ! git fetch -q --depth 1 https://github.com/alfianisnan26/claudepilot.git "$COMMIT" || ! git checkout -q FETCH_HEAD; then
                 echo "GATE-VERDICT: red: $COMMIT is not on GitHub (push it first)"; exit 1
               fi
+              [ -n "$GATE_FILES" ] || unset GATE_FILES
               GATE_DIR=/tmp/gate bash scripts/gate.sh HEAD
               echo "=== SUMMARY"; cat /tmp/gate.logs/SUMMARY.txt 2>/dev/null
-              grep '^not ok' /tmp/gate.logs/server-suite.log 2>/dev/null | head -20
+              [ -s /tmp/gate.logs/failures.txt ] && { echo "=== FAILURES (each failing test's own report)"; cat /tmp/gate.logs/failures.txt; }
               for s in npm-ci typecheck web-build; do grep -q "^$s rc=0 " /tmp/gate.logs/SUMMARY.txt 2>/dev/null || { [ -f "/tmp/gate.logs/$s.log" ] && { echo "=== the end of $s's log"; tail -n 40 "/tmp/gate.logs/$s.log"; }; }; done
               printf '%s' "$GATE_VERDICT_SH" | base64 -d > /tmp/gate-verdict.sh && bash /tmp/gate-verdict.sh logs /tmp/gate.logs "$GATE_STEPS"
           resources:
