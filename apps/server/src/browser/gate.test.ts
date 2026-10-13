@@ -104,6 +104,15 @@ beforeEach(() => {
   writeFileSync(join(dir, 'fake.log'), '');
 });
 
+/** Polls until `fn` holds (the fake supervisor hears the gate's fire-and-forget requests after the tool reply, not before it). */
+async function until(fn: () => boolean, ms = 10_000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!fn()) {
+    if (Date.now() > end) throw new Error('gave up waiting');
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
 const serverLog = () =>
   readFileSync(join(dir, 'fake.log'), 'utf8')
     .split('\n')
@@ -146,6 +155,8 @@ describe('the gate', () => {
       assert.equal(serverLog().filter((l) => l.started).length, 1, 'one server for both calls');
       assert.deepEqual(serverLog().find((l) => l.started)?.started, ['--cdp-endpoint', 'http://127.0.0.1:9222']);
       assert.equal(fake.requests.filter((r) => r.path === '/wake').length, 1, 'woken once');
+      // The gate posts /activity without waiting for it (nothing of the call depends on it), so under load the reply can land here first.
+      await until(() => fake.requests.filter((r) => r.path === '/activity').length === 2);
       const activity = fake.requests.filter((r) => r.path === '/activity');
       assert.equal(activity.length, 2);
       assert.equal((activity[0]!.body as { tool: string }).tool, 'browser_navigate');
@@ -307,10 +318,9 @@ describe('the gate', () => {
     } finally {
       g.close();
     }
-    // A single tab needs no such thing.
+    // A single tab needs no such thing (a fresh gate: no status cache to wait out).
     writeFileSync(join(dir, 'fake.log'), '');
     fake.state.tabs = [{ id: 'A', title: 'a', url: 'http://localhost/a' }];
-    await new Promise((r) => setTimeout(r, 1100));
     const single = gate();
     try {
       await single.init();

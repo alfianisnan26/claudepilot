@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.1, contracts landed** (2026-10-12). Contracts (`packages/contracts/src/claudeversion.ts`), the registry and this skeleton exist. The engine (image pin, recreate, canary, scheduler, routes) is in progress: §16 says what is built, with what was observed. |
+| Status | **v1 built** (2026-10-13). Pin, registry, version reading, recreate, Apply and Rollback, the canary with its safe-mode guards, the scheduler, routes and the web are built; §16 says what was observed and what was not, §16.2 is the final report. |
 | Owner | Alfian Isnan |
-| Last updated | 2026-10-12 |
+| Last updated | 2026-10-13 |
 | Depends on | [Pools foundation](foundation-pools.md) §9 (the pinned image, detection, gates), [Workspace Claudes](workspace-claudes.md) (the runtime is the record), [MCP set pool](mcpset-pool.md) (FR14, §13.3), [Claude usage](claude-usage.md) (`get_usage`, `rate_limit_event`), [Settings & policies](settings-policies.md) (managed MCP lockdown), [Chat sessions](chat-sessions.md) (the stream-json protocol) |
 | Related | [Targets: Connect](targets-connect.md) (images reach remote hosts by tag), [Portal MCP server](portal-mcp.md) (the read tools) |
 
@@ -171,13 +171,55 @@ See §18.
 | Milestone | Scope | Status |
 | --- | --- | --- |
 | V1a | Contracts, registry, this PRD | **Built** (contracts typecheck) |
-| V1b | Image pin, build argument, labels, tag scheme, auto-update off | In progress |
-| V1c | Version reading, flags, warnings plumbing, constants derived from the registry | Not built |
-| V1d | Recreate, history, Apply, Rollback, prune | Not built |
-| V1e | The canary and its checks | Not built |
-| V1e2 | The scheduled canary, candidate, report, warning | Not built |
-| V1f | Routes, Portal MCP tools, audit | Not built |
+| V1b | Image pin, build argument, labels, tag scheme, auto-update off | **Built**; images `cc-2.1.296` and `cc-2.1.287` built through the portal's build-argument path (V1, 2026-10-12) |
+| V1c | Version reading, flags, warnings plumbing, constants derived from the registry | **Built**; unit tests (`info.test.ts`, `service.test.ts`) |
+| V1d | Recreate, history, Apply, Rollback, prune | **Built**; Apply recreated a real Docker workspace on 2.1.287 keeping its home volume (a marker file in home kept, a file outside home lost, as §4 says), then Rollback to 2.1.296 (V1, 2026-10-12) |
+| V1e | The canary and its checks | **Built**: 13 checks; a real run on 2.1.296 passed 13 of 13, a real run on 2.1.287 failed `rate-limit-event` (no `usage_limit_reached` line: a real difference) (V1, 2026-10-12). The four safe-mode guards: §16.1 |
+| V1e2 | The scheduled canary, candidate, report, warning | **Built**; the scheduled canary ran by itself in a scratch portal as `system:claude-canary` (V1, 2026-10-12) |
+| V1f | Routes, Portal MCP tools, audit | **Built**; `routes.test.ts` |
 | V2 | Web: version chip (workspace row and sheet), Claude Code section in Configuration (Upgrade with canary, per-item checks, accept by name, Apply confirm naming sessions, Rollback, history), Settings panel (installed, candidate, report, Run now, run history, warnings), MCP `claude_too_old` ⓘ | **Built** against the contract; looked at in Chromium at 390 and 1280 px, light and dark, with a stubbed API (server routes had not landed). Not seen against the real server. Refused actions show disabled with the reason; a 403 on Apply or Rollback disables them with the server's message. Cadence is the Claude group's Canary setting. |
+
+### 16.1 The safe-mode guards (check `probe-safe-mode`)
+
+The usage probe and the side-question one-shot start Claude Code with `--safe-mode` so a person's own hooks never run on a poll
+(found 2026-10-12: the probe ran without it and every poll ran the workspace's SessionStart and SessionEnd hooks). The check runs the
+portal's own probe command (`probeCommand`) three times in a project whose `.claude/settings.json` and the Claude's own settings both
+carry SessionStart and SessionEnd hooks that each leave a marker file: with the flag, without it, and with `CLAUDE_CODE_SAFE_MODE=1`
+in the environment alone. `judgeSafeMode` (`canary/checks.ts`) then applies four guards, in order; the first that fails fails the check:
+
+| Guard | Passes when | Fails when |
+| --- | --- | --- |
+| (a) flag present | `claude --help` lists `--safe-mode` | the help does not list it (2.1.168 and older answer `unknown option`); nothing else is run |
+| (b) hook marker | no marker under the flag, and markers without it | a marker under the flag; or no marker without it either (the test would prove nothing, so it is a fail, not a pass) |
+| (c) `get_usage` still answers | under the flag the reply reads as a plan with at least two windows, the same windows as without the flag | no reply, not a plan, or other windows |
+| (d) the variable is not a substitute | the probe's own command passes `--safe-mode` as an argument of `claude` | the command sets `CLAUDE_CODE_SAFE_MODE` instead, or carries no flag; what the variable alone does is reported (2.1.296: it stopped no hook) |
+
+Requiring the control in (b) changed the check's meaning: `CLAUDE_CANARY_SUITE` is 2, so a canary run before it is "old" for Apply.
+
+### 16.2 Final report (2026-10-13)
+
+**Built.** Everything in §16's table; this round added the four guards as one pure judge (`judgeSafeMode`) and made the version
+service's reading pass safe to call twice at once.
+
+**Observed in tests** (`apps/server`, 2026-10-13):
+- `canary/safemode.test.ts`, 6 tests, pass: each guard passing and failing on recorded observations, and the whole check against a
+  fake CLI in a fake container (passes as 2.1.296 behaves; a CLI without the flag fails on the help and runs no probe; a CLI whose hooks
+  never run fails (b)).
+- `service.test.ts`, 21 tests: 5 runs in a row with a busy loop (`yes`) on the machine, 21 of 21 each time. Two new tests: two reading
+  passes started together read each workspace once (`[2, 1]`), and `stop()` cancels the first scheduled tick; both fail on the old code.
+- All `claudeversion` tests together with `claudeusage/probe.test.ts`: 91 tests, 89 pass, 2 skipped (the Docker canary, below).
+- The "at most two per pass" failure was reported once, from a full-suite run made while that test file was still being written in a
+  shared tree (the report is from about 07:05, the file was committed at 07:14 on 2026-10-12). It did not come back in 8 runs under load
+  on the committed code. Two real timing faults were found by reading and are fixed: two passes side by side both saw an empty cache
+  (it is written after each read's await) and read the same workspaces twice, and `stop()` left the first scheduled tick armed, so a
+  stopped service still ran one pass.
+
+**Not built or not seen.**
+- The guards have not run against the real CLI: `canary.integration.test.ts` needs Docker (`CLAUDEPILOT_DOCKER_TESTS=1`) and the image,
+  neither of which this workspace has. The real behaviour they encode (hooks run without the flag, none with it, the variable alone
+  stops none, `get_usage` the same either way) was observed on 2.1.296 on 2026-10-12 by the usage track (claude-usage.md §11).
+- The web against the real server (§16, V2).
+- Kubernetes and Connect targets keep no image per version yet (`canRecreate` is false there).
 
 ## 17. Multi-user (light touch)
 
@@ -188,7 +230,11 @@ added in one place. Today's single-owner behaviour is unchanged.
 
 ## 18. Decisions
 
-(filled in as built)
+- (2026-10-13) Guard (b) requires its control: without the flag the hooks must leave their markers, or the check fails. A marker test
+  that cannot see a hook run proves nothing, and a pass there would be a guess.
+- (2026-10-13) Guard (d) is judged on the portal's own command (the flag as an argument of `claude`), not on what the variable does: a
+  later Claude Code that honours the variable alone passes and says so, but the probe keeps passing the flag.
+- (2026-10-13) `CLAUDE_CANARY_SUITE` is 2 because (b) changed meaning; older runs need a new canary before an Apply.
 
 ## 19. Open questions
 

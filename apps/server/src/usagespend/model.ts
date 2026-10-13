@@ -18,6 +18,8 @@ export interface UsageRow {
   /** 1 on a turn's first row, else 0: the sum is the number of finished turns. */
   requests: number;
   agents: number;
+  /** `chat_usage.kind`: a turn's row, or a side question's (`side`, chat PRD §20; one row per run, `requests` 1). */
+  kind: 'turn' | 'side';
 }
 
 /** What is known of a session now: its live row, else what was kept from its last request (it was deleted). */

@@ -364,8 +364,8 @@ export interface ClaudeVersionHistoryEntry {
 
 /* ---------- The canary ---------- */
 
-/** Bump when a check is added or its meaning changes, so a report says whether two runs are comparable. */
-export const CLAUDE_CANARY_SUITE = 1;
+/** Bump when a check is added or its meaning changes, so a report says whether two runs are comparable. 2: probe-safe-mode requires its hook control (2026-10-13). */
+export const CLAUDE_CANARY_SUITE = 2;
 
 /** `pass`: every check passed. `partial`: none failed, some were skipped. `fail`: at least one failed. */
 export type ClaudeCanaryVerdict = 'pass' | 'partial' | 'fail';
@@ -434,7 +434,7 @@ export const CLAUDE_CANARY_CHECKS: readonly ClaudeCanaryCheckDef[] = [
     label: 'Probe safety',
     area: 'usage',
     features: ['usage-probe', 'safe-mode'],
-    what: 'The usage probe’s own command passes `--safe-mode`; `claude --help` lists the flag; `get_usage` answers under it with the same plan and windows as without it; a SessionStart or SessionEnd hook in the Claude’s settings and in the project’s leaves no marker during a probe. As controls, the probe without the flag is shown to run them, and `CLAUDE_CODE_SAFE_MODE=1` alone is shown not to be a substitute (reported, not required).',
+    what: 'The usage probe’s own command passes `--safe-mode`; `claude --help` lists the flag; `get_usage` answers under it with the same plan and windows as without it; a SessionStart or SessionEnd hook in the Claude’s settings and in the project’s leaves no marker during a probe. The control is required: without the flag the same hooks must leave their markers, or the marker test proves nothing. `CLAUDE_CODE_SAFE_MODE=1` is not a substitute: a probe command that sets the variable without passing the flag fails; what the variable alone does is reported.',
   },
   {
     id: 'mcp-plugin-format',

@@ -19,8 +19,31 @@ import { tempDirectory } from '../store/testTmp.js';
 const SERVER_DIR = fileURLToPath(new URL('../../', import.meta.url));
 const CODE = '24681357';
 const KEY = generateSecretKey();
+/** How long a portal may take to answer /healthz before the test gives up (and kills it). */
+const BOOT_DEADLINE_MS = 60_000;
+
+// Every portal this file starts, killed whatever happens: at the end of its test (`withPortal`'s finally), when the file ends, and when the
+// runner process exits (a test runner killed by a timeout never reaches `after`; `exit` is synchronous, so `kill` still runs). Each portal
+// is its own process group (`detached`), so what it started dies with it; a portal left behind kept 50-97 % of a CPU for half an hour once.
 const children = new Set<ChildProcess>();
-after(() => children.forEach((c) => c.kill('SIGKILL')));
+function killGroup(c: ChildProcess, signal: NodeJS.Signals): void {
+  if (c.exitCode !== null || c.signalCode !== null || !c.pid) return;
+  try {
+    process.kill(-c.pid, signal);
+  } catch {
+    try {
+      c.kill(signal);
+    } catch {
+      // gone already
+    }
+  }
+}
+const killAll = () => children.forEach((c) => killGroup(c, 'SIGKILL'));
+process.on('exit', killAll);
+after(() => {
+  killAll();
+  process.off('exit', killAll);
+});
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function freePort(): Promise<number> {
@@ -31,11 +54,29 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-/** Starts the portal on `dataDir`; resolves once it answers /healthz, with the way to ask it things and to see its output. */
-async function boot(dataDir: string) {
+interface Portal {
+  child: ChildProcess;
+  output(): string;
+  system(): Promise<SystemStatus>;
+}
+
+/** Ends a portal: SIGTERM to its process group, SIGKILL two seconds later if it is still there, and waits until it has gone. */
+async function stop(child: ChildProcess): Promise<void> {
+  children.delete(child);
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const gone = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+  killGroup(child, 'SIGTERM');
+  const hard = setTimeout(() => killGroup(child, 'SIGKILL'), 2000);
+  await gone;
+  clearTimeout(hard);
+}
+
+/** Starts the portal on `dataDir`, runs `fn` once it answers /healthz, and kills it whatever `fn` does (a thrown assertion, a hang up to the deadline). */
+async function withPortal(dataDir: string, fn: (portal: Portal) => Promise<void>): Promise<void> {
   const port = await freePort();
   const child = spawn(process.execPath, ['--import', 'tsx', '--disable-warning=ExperimentalWarning', 'src/index.ts'], {
     cwd: SERVER_DIR,
+    detached: true,
     env: {
       PATH: process.env.PATH ?? '',
       HOME: process.env.HOME ?? '',
@@ -54,28 +95,32 @@ async function boot(dataDir: string) {
   });
   children.add(child);
   let output = '';
-  child.stdout.on('data', (d) => (output += d));
-  child.stderr.on('data', (d) => (output += d));
+  child.stdout?.on('data', (d) => (output += d));
+  child.stderr?.on('data', (d) => (output += d));
   const base = `http://127.0.0.1:${port}`;
-  let up = false;
-  for (let i = 0; i < 160 && child.exitCode === null; i++) {
-    up = await fetch(`${base}/healthz`).then((r) => r.ok, () => false);
-    if (up) break;
-    await sleep(250);
+  try {
+    const deadline = Date.now() + BOOT_DEADLINE_MS;
+    let up = false;
+    while (!up && child.exitCode === null && Date.now() < deadline) {
+      up = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false);
+      if (!up) await sleep(250);
+    }
+    assert.ok(up, `the portal did not come up within ${BOOT_DEADLINE_MS / 1000} s (exit ${child.exitCode}):\n${output.slice(-1500)}`);
+    // Give start-up work (module scans, background tasks) the time that a crash would take.
+    await sleep(1500);
+    assert.equal(child.exitCode, null, `the portal died after starting:\n${output.slice(-1500)}`);
+    const system = async (): Promise<SystemStatus> => {
+      const login = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ code: CODE }), signal: AbortSignal.timeout(10_000) });
+      assert.equal(login.status, 200, 'sign-in works');
+      const cookie = /portal_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')![1];
+      const res = await fetch(`${base}/api/admin/system`, { headers: { cookie: `portal_session=${cookie}` }, signal: AbortSignal.timeout(10_000) });
+      assert.equal(res.status, 200);
+      return ((await res.json()) as { data: SystemStatus }).data;
+    };
+    await fn({ child, output: () => output, system });
+  } finally {
+    await stop(child);
   }
-  assert.ok(up, `the portal did not come up (exit ${child.exitCode}):\n${output.slice(-1500)}`);
-  // Give start-up work (module scans, background tasks) the time that a crash would take.
-  await sleep(1500);
-  assert.equal(child.exitCode, null, `the portal died after starting:\n${output.slice(-1500)}`);
-  const system = async (): Promise<SystemStatus> => {
-    const login = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ code: CODE }) });
-    assert.equal(login.status, 200, 'sign-in works');
-    const cookie = /portal_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')![1];
-    const res = await fetch(`${base}/api/admin/system`, { headers: { cookie: `portal_session=${cookie}` } });
-    assert.equal(res.status, 200);
-    return ((await res.json()) as { data: SystemStatus }).data;
-  };
-  return { child, output: () => output, system };
 }
 
 /** A complete database whose last two migrations are marked as not run, so the next start applies them on top of themselves and fails. */
@@ -92,13 +137,14 @@ async function failedMigration(): Promise<string> {
 }
 
 test('a database whose migration failed: the portal stays up, signs you in and says why it is frozen', { timeout: 120_000 }, async () => {
-  const portal = await boot(await failedMigration());
-  const s = await portal.system();
-  assert.equal(s.trust.state, 'frozen');
-  assert.deepEqual(s.trust.reasons.map((r) => r.code), ['migration-failed']);
-  assert.equal(s.secretKey.canUnlock, false);
-  assert.ok(s.portalId);
-  assert.equal(portal.child.exitCode, null, portal.output().slice(-1500));
+  await withPortal(await failedMigration(), async (portal) => {
+    const s = await portal.system();
+    assert.equal(s.trust.state, 'frozen');
+    assert.deepEqual(s.trust.reasons.map((r) => r.code), ['migration-failed']);
+    assert.equal(s.secretKey.canUnlock, false);
+    assert.ok(s.portalId);
+    assert.equal(portal.child.exitCode, null, portal.output().slice(-1500));
+  });
 });
 
 test('a database from a newer portal: the portal stays up, read-only and frozen', { timeout: 120_000 }, async () => {
@@ -107,12 +153,13 @@ test('a database from a newer portal: the portal stays up, read-only and frozen'
   const db = new DatabaseSync(join(dir, 'portal.db'));
   db.exec('PRAGMA user_version = 9999');
   db.close();
-  const portal = await boot(dir);
-  const s = await portal.system();
-  assert.equal(s.trust.state, 'frozen');
-  assert.deepEqual(s.trust.reasons.map((r) => r.code), ['db-newer']);
-  assert.equal(s.schemaVersion, 9999);
-  assert.equal(portal.child.exitCode, null, portal.output().slice(-1500));
+  await withPortal(dir, async (portal) => {
+    const s = await portal.system();
+    assert.equal(s.trust.state, 'frozen');
+    assert.deepEqual(s.trust.reasons.map((r) => r.code), ['db-newer']);
+    assert.equal(s.schemaVersion, 9999);
+    assert.equal(portal.child.exitCode, null, portal.output().slice(-1500));
+  });
 });
 
 test('a database file that is not a database: the portal stays up and frozen, and does not touch the file', { timeout: 120_000 }, async () => {
@@ -120,16 +167,34 @@ test('a database file that is not a database: the portal stays up and frozen, an
   const { writeFileSync, readFileSync } = await import('node:fs');
   const junk = Buffer.from('this is not a database '.repeat(300));
   writeFileSync(join(dir, 'portal.db'), junk);
-  const portal = await boot(dir);
-  const s = await portal.system();
-  assert.equal(s.trust.state, 'frozen');
-  assert.deepEqual(s.trust.reasons.map((r) => r.code), ['db-unreadable']);
-  assert.ok(readFileSync(join(dir, 'portal.db')).equals(junk), 'the file was left as it was (never replaced by an empty database)');
+  await withPortal(dir, async (portal) => {
+    const s = await portal.system();
+    assert.equal(s.trust.state, 'frozen');
+    assert.deepEqual(s.trust.reasons.map((r) => r.code), ['db-unreadable']);
+    assert.ok(readFileSync(join(dir, 'portal.db')).equals(junk), 'the file was left as it was (never replaced by an empty database)');
+  });
 });
 
-test('control: a fresh database comes up healthy', { timeout: 120_000 }, async () => {
-  const portal = await boot(tempDirectory('cp-qa-boot-'));
-  const s = await portal.system();
-  assert.equal(s.trust.state, 'ok');
-  assert.ok(s.schemaVersion && s.schemaVersion >= 15);
+test('control: a fresh database comes up healthy, and is gone when its test is over', { timeout: 120_000 }, async () => {
+  let child: ChildProcess | undefined;
+  await withPortal(tempDirectory('cp-qa-boot-'), async (portal) => {
+    child = portal.child;
+    const s = await portal.system();
+    assert.equal(s.trust.state, 'ok');
+    assert.ok(s.schemaVersion && s.schemaVersion >= 15);
+  });
+  assert.ok(child && (child.exitCode !== null || child.signalCode !== null), 'the portal was stopped when its test ended');
+  assert.equal(children.size, 0, 'nothing left to kill');
+});
+
+test('a test that throws still takes its portal down with it', { timeout: 120_000 }, async () => {
+  let child: ChildProcess | undefined;
+  await assert.rejects(
+    withPortal(tempDirectory('cp-qa-boot-'), async (portal) => {
+      child = portal.child;
+      throw new Error('an assertion that failed');
+    }),
+    /an assertion that failed/,
+  );
+  assert.ok(child && (child.exitCode !== null || child.signalCode !== null), 'killed in finally');
 });

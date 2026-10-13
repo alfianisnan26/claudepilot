@@ -723,7 +723,7 @@ export class UsageSpend {
         }
       },
     });
-    return { by, range, from: iso(from), to: iso(now), totals: a.totals, rows: a.rows, coverage: a.coverage, more: a.more, now: iso(now) };
+    return { by, range, from: iso(from), to: iso(now), totals: a.totals, side: a.side, rows: a.rows, coverage: a.coverage, more: a.more, now: iso(now) };
   }
 
   /** The audit trail of what people changed here, newest first (`limit` 1 to 200, default 50). */

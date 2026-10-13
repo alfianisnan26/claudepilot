@@ -515,7 +515,7 @@ A request recorded without a Claude (before Claudes existed) counts under its wo
 
 ## 22. Attribution
 
-`GET /api/usage-spend/attribution?by=session|workspace|ticket|persona|claude&range=30m|1h|12h|1d|7d|30d&claudeId=&workspaceId=&limit=&format=json|csv`: the requests of a rolling window ending now, grouped by one dimension. Every request is in exactly one row, so the rows add up to the window's total (by session, the roots do).
+`GET /api/usage-spend/attribution?by=session|workspace|ticket|persona|claude&range=30m|1h|12h|1d|7d|30d&claudeId=&workspaceId=&limit=&format=json|csv`: the requests of a rolling window ending now, grouped by one dimension. Every request is in exactly one row, so the rows add up to the window's total (by session, the roots do). A side question's row (`chat_usage.kind = 'side'`, [chat](chat-sessions.md) §20) is a request like any other, inside its session's row and the total; the report also gives those rows apart as `side` (the same `SpendTotals` shape; 0 when the window has none), so a page can say "of which side questions". Built 2026-10-13 (server; the page does not show it yet); `attribution.test.ts` and `service.test.ts` check it. A side question's row also reaches budgets and spike detection the moment it is written (`chatController.onSideUsage`, wired to the same `onTurn` as a turn's row in `index.ts`), not at the next turn.
 
 ### 22.1 The dimensions
 

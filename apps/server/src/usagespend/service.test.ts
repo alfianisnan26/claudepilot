@@ -769,3 +769,27 @@ test('the visibility seam: nobody is narrowed by default; a rule narrows attribu
     broken.done();
   }
 });
+
+test('side questions (chat PRD §20): a `kind = side` row is in the attribution totals and shown apart as `side`; told through onSideUsage, it trips a budget right then', async () => {
+  const h = await spendHarness({ settings: { 'usage.spikes.rateFactor': 100, 'usage.spikes.outlierFactor': 1000 } });
+  try {
+    h.seed.claude('c1', 'docker/api', 'Kresna');
+    h.seed.session('S1');
+    h.clock.t = at(9);
+    const created = await h.spend.createBudget({ scope: { kind: 'workspace', id: 'docker/api' }, period: 'day', limitUsd: 10 });
+    h.seed.usage({ atMs: at(1), session: 'S1', costUsd: 7.5 });
+    // A btw of $1.00 at 10:00: the row is written by the btw store, then the controller's onSideUsage (wired to onTurn like onUsage) tells the module.
+    h.clock.t = at(10);
+    h.seed.usage({ atMs: at(10), session: 'S1', costUsd: 1, input: 40, output: 20, kind: 'side' });
+    h.spend.onTurn({ sessionId: 'S1', workspaceId: 'docker/api', claudeId: 'c1', atMs: at(10) }, [{ costUsd: 1 }]);
+    assert.deepEqual(h.told.map((a) => (a.kind === 'budget' ? [a.level, a.usedPct] : null)), [['near', 85]], 'the budget heard the side question, not the next turn');
+    assert.equal(h.spend.budget(created.budget.id).usedPct.value, 85);
+    const report = h.spend.attribution({ by: 'session', range: '1d' });
+    assert.deepEqual([report.totals.costUsd, report.totals.requests], [8.5, 2], 'the side question is a request in the total');
+    assert.deepEqual(report.side, { costUsd: 1, input: 40, output: 20, cacheRead: 0, cacheWrite: 0, requests: 1, agents: 0 });
+    assert.deepEqual([report.rows[0]!.key, report.rows[0]!.total.costUsd], ['S1', 8.5], 'and inside its session’s row');
+    assert.deepEqual(h.spend.attribution({ by: 'workspace', range: '1d', workspaceId: 'docker/web' }).side.requests, 0);
+  } finally {
+    h.done();
+  }
+});

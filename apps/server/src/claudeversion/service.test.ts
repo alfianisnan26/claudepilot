@@ -56,6 +56,25 @@ test('the background pass reads old workspaces a few at a time, so the list’s 
   assert.equal(await h.svc.refreshReadings(5), 3, 'half an hour later the three running workspaces are read again');
 });
 
+test('reading passes run one after another: two started together read each workspace once, never the same ones twice', async () => {
+  h = await harness({ workspaces: [{ name: 'a' }, { name: 'b' }, { name: 'c' }] });
+  // Side by side, both passes would see an empty cache (it is written after each read's await) and both read a and b.
+  assert.deepEqual(await Promise.all([h.svc.refreshReadings(2), h.svc.refreshReadings(2)]), [2, 1]);
+  assert.equal(await h.svc.refreshReadings(5), 0, 'everything is fresh');
+});
+
+test('stop() also cancels the first scheduled tick: a stopped service reads nothing afterwards', async () => {
+  h = await harness({ workspaces: [{ name: 'b', doctor: 'Auto-updates: enabled' }], scheduleDelayMs: 1 });
+  const flags = () => h!.svc.brief({ id: 'docker/b', name: 'b', target: 'docker', image: 'x', status: 'running', createdAt: '', claude: { pinned: '2.1.296', running: null, flags: [] } }).flags;
+  h.svc.start();
+  h.svc.stop();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(flags(), [], 'no pass ran after stop()');
+  h.svc.start();
+  await until(() => flags().length > 0, 'the first tick of a started service');
+  assert.deepEqual(flags(), ['auto-update-on']);
+});
+
 test('the default pin: the built-in one until a person picks another whose image exists; PORTAL_WORKSPACE_IMAGE fixes it', async () => {
   h = await harness();
   assert.equal(h.svc.defaultVersion(), '2.1.296');

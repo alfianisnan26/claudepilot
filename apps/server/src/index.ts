@@ -404,6 +404,8 @@ const usageSpend = createUsageSpend({
   notify: () => notify('claudeusage'),
 });
 chatController.onUsage = (turn, rows) => usageSpend.onTurn(turn, rows);
+// A side question's row (`kind = 'side'`, chat PRD §20) is a request like a turn's: budgets are evaluated and spikes looked for right then, not at the next turn.
+chatController.onSideUsage = (turn, rows) => usageSpend.onTurn(turn, rows);
 chatController.onLaunch = (info) => usageSpend.onLaunch(info);
 chatController.sendGate = (info) => usageSpend.gate(info);
 registerUsageSpendTools(usageSpend);

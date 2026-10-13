@@ -132,6 +132,34 @@ test('a migration numbered below one already applied still runs (side-by-side wo
   again.close();
 });
 
+test('migration 720: a destination that hears CI failures hears deploys that wait; one that opted out stays out; twice is once', async () => {
+  const dir = tempDir();
+  const key = newKey();
+  const before = MIGRATIONS.filter((m) => m.version !== 720);
+  const first = await Store.open({ dataDir: dir, secretKey: key, migrations: before });
+  const at = new Date().toISOString();
+  const put = (id: string, kinds: string) =>
+    first.db!.prepare("INSERT INTO notify_destinations (id, type, name, kinds, quiet, created_at, updated_at) VALUES (?, 'push', ?, ?, '{}', ?, ?)").run(id, id, kinds, at, at);
+  put('d_ci', JSON.stringify(['approval', 'ci_failed', 'quota_low']));
+  put('d_no_ci', JSON.stringify(['approval', 'quota_low']));
+  put('d_has', JSON.stringify(['ci_failed', 'ci_waiting']));
+  put('d_bad', 'not json');
+  first.close();
+  const kinds = (store: Store, id: string) => (store.db!.prepare('SELECT kinds FROM notify_destinations WHERE id = ?').get(id) as { kinds: string }).kinds;
+  const store = await Store.open({ dataDir: dir, secretKey: key, migrations: MIGRATIONS });
+  assert.equal(store.trust.state, 'ok');
+  assert.deepEqual(JSON.parse(kinds(store, 'd_ci')), ['approval', 'ci_failed', 'quota_low', 'ci_waiting'], 'added after the list it had');
+  assert.deepEqual(JSON.parse(kinds(store, 'd_no_ci')), ['approval', 'quota_low'], 'opted out of CI: left alone');
+  assert.deepEqual(JSON.parse(kinds(store, 'd_has')), ['ci_failed', 'ci_waiting'], 'not added twice');
+  assert.equal(kinds(store, 'd_bad'), 'not json', 'an unreadable list is not guessed at');
+  store.close();
+  // The migration is in the applied set now: nothing runs again on the next open, and the lists stay as they are.
+  const again = await Store.open({ dataDir: dir, secretKey: key, migrations: MIGRATIONS });
+  assert.deepEqual(JSON.parse(kinds(again, 'd_ci')), ['approval', 'ci_failed', 'quota_low', 'ci_waiting']);
+  assert.equal(again.listBackups().filter((b) => b.kind === 'pre-migrate').length, 1);
+  again.close();
+});
+
 test('a failing migration rolls back and freezes the portal', async () => {
   const dir = tempDir();
   (await Store.open({ dataDir: dir, secretKey: newKey() })).close();

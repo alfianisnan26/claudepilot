@@ -30,6 +30,8 @@ export interface SeedUsage {
   cacheWrite?: number;
   requests?: number;
   agents?: number;
+  /** A side question's row (chat PRD §20); default a turn's. */
+  kind?: 'turn' | 'side';
 }
 
 export async function spendHarness(opts: { now?: { t: number }; settings?: Record<string, SettingValue>; personaOf?: SpendOptions['personaOf']; personaName?: SpendOptions['personaName']; workspaceExists?: SpendOptions['workspaceExists']; visible?: SpendOptions['visible'] } = {}) {
@@ -80,8 +82,8 @@ export async function spendHarness(opts: { now?: { t: number }; settings?: Recor
     /** One chat_usage row, as the controller's recordUsage writes it. */
     usage(u: SeedUsage) {
       db.prepare(
-        `INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests, agents, duration_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        `INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests, agents, duration_ms, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
       ).run(
         new Date(u.atMs).toISOString(),
         u.atMs,
@@ -96,6 +98,7 @@ export async function spendHarness(opts: { now?: { t: number }; settings?: Recor
         u.costUsd,
         u.requests ?? 1,
         u.agents ?? 0,
+        u.kind ?? 'turn',
       );
     },
     /** A finished turn: the row is written, then the module is told, as the controller does. */
