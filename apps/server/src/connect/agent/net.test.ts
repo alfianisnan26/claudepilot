@@ -133,6 +133,11 @@ describe('the agent’s own CONNECT dialer (PRD Q5)', () => {
     assert.equal(proxyFor(portal, { env: {} }), null);
     assert.equal(proxyFor(portal, { env: { HTTPS_PROXY: 'ftp://x' } }), null);
     assert.equal(proxyFor(new URL('http://pilot.example.test'), { env: { HTTPS_PROXY: 'http://p:1' } }), null, 'http uses HTTP_PROXY');
+    // The tunnel's own address (T6: behind a proxy the agent enrolled over https and then dialled wss directly, and never connected).
+    assert.equal(proxyFor(new URL('wss://pilot.example.test/connect/v1/tunnel'), { env: { HTTPS_PROXY: 'http://p:1' } })?.hostname, 'p', 'wss uses HTTPS_PROXY');
+    assert.equal(proxyFor(new URL('ws://pilot.example.test/connect/v1/tunnel'), { env: { HTTP_PROXY: 'http://q:1', HTTPS_PROXY: 'http://p:1' } })?.hostname, 'q', 'ws uses HTTP_PROXY');
+    assert.equal(proxyFor(new URL('wss://other.test:443/x'), { env: { HTTPS_PROXY: 'http://p:1', NO_PROXY: 'other.test:443' } }), null, 'wss defaults to port 443 for NO_PROXY');
+    assert.ok(transportAgent(new URL('wss://pilot.example.test/connect/v1/tunnel'), { env: { HTTPS_PROXY: 'http://p:1' } }) instanceof https.Agent);
     assert.equal(bypassProxy('anything.test', '443', '*'), true);
     assert.equal(bypassProxy('a.b.test', '443', '*.b.test'), true);
   });
