@@ -20,7 +20,7 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
      (the only door: `kubectl delete namespace` is denied, the script refuses any other name); delete it when you are done.
      Never touch `isnan-claudepilot`, `isnan-claudepilot-workspaces` (this workspace hosts the session: stopping, deleting or restarting it, or
      restarting the portal, kills it), Argo CD, the nodes or any other namespace. A workspace's CPU and memory are changed in the portal (T-98 replaced
-     `scripts/ws-resources.sh`: the workspace sheet's Resources row, or the admin MCP tool `workspace_resources`), by a person: Apply now restarts the pod and ends every session in it.
+     the workspace sheet's Resources row, or the admin MCP tool `workspace_resources`), by a person: Apply now restarts the pod and ends every session in it.
    - Never push `main`. Never approve a deploy or work around its approval. For anything that needs a portal, run a scratch one:
      `scripts/scratch-portal.sh` (clean environment). Never change the real portal's settings, tokens or Secrets.
    - Never force-push, rewrite pushed history, use `--no-verify` or amend a pushed commit.
@@ -29,7 +29,9 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
 4. **Heavy jobs leave the pod** (T-107; the pod has 4 CPUs and 8 GiB): typecheck, the server suite, vitest, playwright, lighthouse, production
    builds and wrangler dry runs go through `scripts/job-run.sh [--repo claudepilot|konfersi[:<org>/<repo>]] [--ref <pushed branch or commit>] -- <command>`,
    a Job on another node (push the WIP branch first: `git push origin HEAD:wip/<name>`; at most 3 Jobs at once and 2 per chat, the rest wait
-   "queued behind K"; `--list`, `--stop --chat <id>`). Lighthouse and timing measurements run there too (a quiet node). **flock only for what must
+   "queued behind K"; `--list`, `--stop --chat <id>`). An image (no Docker here, D-5) is built by `scripts/image-build.sh --repo .. --ref .. --dockerfile ..
+   --destination <registry/path:tag>` (T-141: kaniko, one at a time, the registry credential as one JSON line on stdin with `--credential-stdin`;
+   `--check` first, 0 exists, 3 not). Lighthouse and timing measurements run there too (a quiet node). **flock only for what must
    run in the pod** (a scratch portal, a browser check against it, `npm ci` of a worktree): `flock /tmp/heavy.lock nice -n 10 <command>`. A
    targeted test (one file) may run directly. At most one scratch portal and one Chromium per sub-agent; stop them when done. Keep `/tmp` clean (`/tmp/gate-*`, `/tmp/cp-*`): a full `/tmp` makes CI tests fail. **At most three sub-agents run at once.**
 5. **Do not loop.** The same command failing three times means change the approach or move to the next item and write down why.
@@ -63,7 +65,7 @@ any new slice is merged: integration stays shippable. **Heavy work leaves the po
 the pod is loaded, run as a Job in the cluster: `scripts/gate-job.sh <commit> [typecheck,web-build,server-suite]` (the commit on GitHub; push an
 unpushed merge to `wip/orchestrator-local-backup` first); the deploy pipeline's gate does too. Sub-agents run only their package's typecheck and
 their test files, never a build or a gate.
-Then the sub-agent on that branch runs `git fetch origin && git rebase origin/integration`. Remove `/tmp/gate-<sha>*` afterwards.
+Then the sub-agent on that branch brings it up to date: rebase ONLY commits that were never pushed; once a branch is pushed, merge `origin/integration` into it instead (`git merge origin/integration`), because a rebased pushed branch could only be pushed back with a force push, which is denied. Remove `/tmp/gate-<sha>*` afterwards.
 
 ## Migrations
 

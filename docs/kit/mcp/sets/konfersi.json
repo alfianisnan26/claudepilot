@@ -1,0 +1,27 @@
+{
+  "slug": "konfersi",
+  "servers": [
+    {
+      "key": "gitea",
+      "entry": "@git-host-gitea",
+      "version": "@approved",
+      "enabled": true,
+      "config": {
+        "GITEA_HOST": "https://git.konfersi.com"
+      },
+      "secrets": {
+        "GITEA_ACCESS_TOKEN_FILE": "{{secret-file:GITEA_KONFERSI_TOKEN}}"
+      }
+    },
+    {
+      "key": "docs",
+      "entry": "@outline-konfersi",
+      "version": "@approved",
+      "enabled": true,
+      "config": {},
+      "secrets": {
+        "Authorization": "{{secret-file:OUTLINE_KONFERSI_KEY}}"
+      }
+    }
+  ]
+}

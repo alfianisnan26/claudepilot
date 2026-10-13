@@ -1,0 +1,19 @@
+{
+  "slug": "github",
+  "servers": [
+    {
+      "key": "github",
+      "entry": "@git-host-github",
+      "version": "@approved",
+      "enabled": true,
+      "config": {
+        "X-MCP-Toolsets": "context,repos,issues,pull_requests",
+        "X-MCP-Lockdown": "true",
+        "X-MCP-Readonly": "true"
+      },
+      "secrets": {
+        "Authorization": "{{secret-file:GITHUB_MCP_TOKEN}}"
+      }
+    }
+  ]
+}

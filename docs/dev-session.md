@@ -65,7 +65,7 @@ It is started by hand only: in the portal, or by a session over the Portal MCP (
 | --- | --- |
 | gate | `scripts/gate-job.sh` on the commit: the release gate as a Job in the cluster (next section); fails on any red step or failing test (input `gate: false` skips it; `DEPLOY_GATE_IN_CLUSTER=false` in the workspace's `~/.profile` runs `scripts/gate.sh` here instead) |
 | build | `scripts/k3s-build.sh` per image of input `images` (`portal`, `workspace`, `workspace-dev`, or `none`) with the next date tag (`2026.10.13-2`, `2.1.296-2026.10.13-1`, `2.1.296-dev-2026.10.13-1`); the commit must be on GitHub's `integration` |
-| release | **waits for a person's approval** (environment `production`); then bumps the two tags in `deploy/k3s/portal.yaml` on top of the commit and pushes it to `main` and `integration` in one atomic, fast-forward push: that is the deploy. Input `deploy: false` leaves it out (build only) (when `integration` moved on while the release waited for its approval, the release is merged into its new tip; `main` still gets exactly the approved commit plus the tags; run #4 of 2026-10-13 was refused before this) |
+| release | **waits for a person's approval** (environment `production`); then bumps the two tags in `deploy/k3s/portal.yaml` on top of the commit and pushes it to `main` (fast-forward only: that push is the deploy) and then brings `integration` up to date as its own step (a merge of `main` into the current `integration`, never a force; a conflict only warns). Input `deploy: false` leaves it out (build only) (when `integration` moved on while the release waited for its approval, the release is merged into its new tip; `main` still gets exactly the approved commit plus the tags; run #4 of 2026-10-13 was refused before this) |
 | verify | Argo CD Synced and Healthy at the pushed commit, rollout status, the new image, `/healthz` and `/login` through the in-cluster service, no fatal line and no restart in the portal's log |
 | rollback | only when release or verify failed: the previous tags on top of `main` (a new commit, never a force), pushed, then Argo CD, rollout and `/healthz` again |
 
@@ -131,6 +131,36 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   killed outright is removed by the next run on this host.
 - **npm cache:** none shared. A cold `npm ci` in a Job is 15 to 20 s (job-run and gate logs); a shared cache would be a node-bound `local-path`
   PVC (the only storage class) for a few seconds.
+
+## Building an image in the cluster
+
+There is no Docker daemon in the workspace pod and there will not be one (D-5: one pod, no daemon, no privileged containers). `scripts/image-build.sh`
+(T-141) builds any repository's Dockerfile as a kaniko Job (`deploy/k3s-build/image-build-job.yaml`) and pushes it:
+
+```sh
+git push origin HEAD:wip/<name>                                              # the Job clones what is on the remote
+scripts/image-build.sh --check --destination registry.int.isnan.me/<path>:<tag>   # 0: the tag exists (skip the build), 3: it does not
+scripts/image-build.sh --repo claudepilot --ref wip/<name> --dockerfile deploy/k3s-build/image-build-proof/Dockerfile \
+  --context deploy/k3s-build/image-build-proof --destination registry.int.isnan.me/claudepilot/image-build-proof:<short sha>
+printf '%s\n' "$CRED_JSON" | scripts/image-build.sh --repo konfersi:<org>/<repo> --ref <branch> --dockerfile Dockerfile \
+  --destination <registry>/<path>:<tag> --credential-stdin                 # {"username":"..","password":".."} on ONE line
+scripts/image-build.sh --list ; scripts/image-build.sh --stop [--chat <session id>]
+```
+
+- **The source:** `--repo claudepilot` or `<org>/<repo>` from GitHub (public only, no credential), `konfersi:<org>/<repo>` from Gitea (the
+  token from git's credential helper, as job-run). `--ref` must be on the remote (a branch or tag is looked up there; a commit is the full sha).
+  An init container clones it into an emptyDir; kaniko builds `--context` (default the root) with `--dockerfile` for linux/amd64.
+- **The destination's credential** only as one JSON line on stdin with `--credential-stdin` (without the flag stdin is not read). It becomes a
+  docker config.json in a Secret owned by the Job, deleted on exit, never on a command line; the streamed log is masked for it and the whole log
+  searched for it before the script prints `credential in the build log: none`. `registry.int.isnan.me` needs none: it is pushed through the
+  in-cluster service (the ingress cuts a request at 60 s).
+- **Build args are not secrets:** they are in the Job's spec; letters, digits and `_.,:/@+=-` only.
+- **Caps:** one build at a time cluster-wide (`IMAGE_BUILD_MAX`, 1; the rest wait "queued behind K"), a deadline of at most 60 minutes
+  (`--timeout`), 1 CPU and 2 GiB requested, 4 and 8 GiB the limit, a node without a workspace pod preferred. Ctrl-C, a kill or the end of the
+  chat deletes the Job and its Secret.
+- **The result:** exit 0 only when the tag reads back from the registry, and then the last line is `DIGEST=sha256:<hex>`; 1 the build failed,
+  2 a usage error, 124 past the deadline. The whole log: `IMAGE_BUILD_LOG` (default `/tmp/image-build-<job>.log`; remove it when done).
+- **The door:** the dev account `claudepilot-dev-admin` through this script, as job-run and gate-job; no Role was added or widened.
 
 ## Rules that hold
 

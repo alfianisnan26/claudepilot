@@ -1,0 +1,30 @@
+# {{PROJECT}} documentation
+
+One index. Read `CLAUDE.md` at the root first.
+
+| Where | What | Who changes it |
+| --- | --- | --- |
+| [`prd/`](prd/) | One product requirements document (PRD) per area. `_template.md` is the skeleton. List each PRD in the table below. | Agents, by ticket; the owner reviews each PRD (work goes on meanwhile on its written defaults) |
+| [`design/`](design/README.md) | The design standard, or a pointer to where it lives. | The owner owns the rules; agents propose by ticket |
+| [`dev-sessions/README.md`](dev-sessions/README.md) | How the autonomous development runs: the orchestrator, sub-agents in worktrees, the lanes, the status file. | The owner; agents propose by ticket |
+| [`dev-sessions/CHARTER.md`](dev-sessions/CHARTER.md) | The autonomy charter: zero tolerance, duties, scoring, walls. Binds every agent. | The owner only |
+| [`dev-sessions/DECISIONS.md`](dev-sessions/DECISIONS.md) | Standing decisions, `D-1` onwards. Read before planning. | The owner; agents add rows for defaults they took |
+| [`dev-sessions/orchestrator.md`](dev-sessions/orchestrator.md) | The orchestrator's brief. | The owner; agents propose by ticket |
+| [`dev-sessions/status/`](dev-sessions/status/) | `orchestrator.md`: the live status (at most 80 lines). `_template.md`: its shape. | The orchestrator, with every integration |
+| [`../.pilot/`](../.pilot/README.md) | The CI pipelines: the gate and the deploy. | Agents, through the gate |
+| [`../scripts/`](../scripts/README.md) | The gate scripts and the cluster Job runners. | Agents, through the gate |
+| [`../.claude/settings.json`](../.claude/settings.json.md) | The permission baseline. Deny rules are a person's to change. | The owner only |
+
+## PRDs
+
+| PRD | What it covers | Status |
+| --- | --- | --- |
+| _none yet_ | The first ticket writes the first PRD. | |
+
+## Conventions
+
+- Short sentences, plain words, English.
+- A claim in a document says how it is known: **[observed]** (seen running), **[documented]** (from the tool's own
+  documentation) or **[unverified]** (to check; listed under open questions).
+- A document changes in the same commit as the code it describes.
+- Dates are written `YYYY-MM-DD`.

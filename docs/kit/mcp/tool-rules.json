@@ -1,0 +1,326 @@
+{
+  "description": "Recommended tool rules for the kit sets (`tools`: per server kind; `servers`: which kind each set and server key is, the program sets `isnan`, `konfersi` and `kohi-labs` each with a `gitea` and a `docs` server, and the optional `github` set; `permissions`: the full names per set, `mcp__plugin_cpm-<set>_<key>__<tool>`): read tools need no rule (Claude Code default), write tools ask, destructive or out-of-flow tools are denied. MCP set tool rules (PRD FR12, milestone M5) are not built, so until then these go into Settings & policies as custom ask and deny rules (managed settings), for the workspaces that get the set. Deny holds in Bypass; under D-3 autonomous chats have their ask rules removed, so in those workspaces only the deny list applies. Tool names change between server versions: re-check after each approved version.",
+  "checkedAt": "2026-10-13",
+  "tools": {
+    "gitea": {
+      "source": "gitea-mcp README (gitea.com/gitea/gitea-mcp, main, 2026-10-13): the Access column",
+      "read": [
+        "get_gitea_mcp_server_version",
+        "get_me",
+        "get_user_orgs",
+        "search_users",
+        "search_org_teams",
+        "search_repos",
+        "search_issues",
+        "notification_read",
+        "label_read",
+        "milestone_read",
+        "wiki_read",
+        "timetracking_read",
+        "package_read",
+        "project_read",
+        "list_issues",
+        "attachment_read",
+        "issue_read",
+        "list_pull_requests",
+        "pull_request_read",
+        "actions_run_read",
+        "list_my_repos",
+        "list_org_repos",
+        "get_repository_tree",
+        "get_file_contents",
+        "get_dir_contents",
+        "list_branches",
+        "get_tag",
+        "list_tags",
+        "list_commits",
+        "get_commit",
+        "get_release",
+        "get_latest_release",
+        "list_releases"
+      ],
+      "ask": [
+        "actions_config_read",
+        "notification_write",
+        "label_write",
+        "milestone_write",
+        "wiki_write",
+        "timetracking_write",
+        "project_write",
+        "issue_write",
+        "pull_request_write",
+        "pull_request_review_write",
+        "create_branch",
+        "rename_branch"
+      ],
+      "deny": [
+        "create_organization",
+        "create_repo",
+        "fork_repo",
+        "create_or_update_file",
+        "delete_file",
+        "delete_branch",
+        "create_tag",
+        "delete_tag",
+        "create_release",
+        "delete_release",
+        "package_write",
+        "actions_config_write",
+        "actions_run_write"
+      ]
+    },
+    "github": {
+      "source": "github-mcp-server README (main, 2026-10-13), toolsets context, repos, issues, pull_requests; the hosted server may differ",
+      "read": [
+        "get_me",
+        "get_team_members",
+        "get_teams",
+        "ui_get",
+        "get_commit",
+        "get_file_contents",
+        "get_latest_release",
+        "get_release_by_tag",
+        "get_tag",
+        "list_branches",
+        "list_commits",
+        "list_releases",
+        "list_repository_collaborators",
+        "list_tags",
+        "search_code",
+        "search_commits",
+        "search_repositories",
+        "get_label",
+        "issue_read",
+        "list_issue_fields",
+        "list_issue_types",
+        "list_issues",
+        "search_issues",
+        "list_pull_requests",
+        "pull_request_read",
+        "search_pull_requests"
+      ],
+      "ask": [
+        "create_branch",
+        "add_issue_comment",
+        "issue_write",
+        "sub_issue_write",
+        "update_issue_comment",
+        "add_comment_to_pending_review",
+        "add_reply_to_pull_request_comment",
+        "create_pull_request",
+        "pull_request_review_write",
+        "update_pull_request",
+        "update_pull_request_branch"
+      ],
+      "deny": [
+        "create_or_update_file",
+        "create_repository",
+        "delete_file",
+        "delete_repository",
+        "fork_repository",
+        "push_files",
+        "merge_pull_request"
+      ]
+    },
+    "outline": {
+      "source": "Outline source server/mcp/tools/*.ts (main after v1.11.0, 2026-10-13): readOnlyHint per tool; the instance may run an older version",
+      "read": [
+        "list_documents",
+        "list_collection_documents",
+        "list_collections",
+        "list_comments",
+        "list_templates",
+        "list_users",
+        "fetch"
+      ],
+      "ask": [
+        "create_document",
+        "update_document",
+        "move_document",
+        "restore_document",
+        "create_comment",
+        "update_comment",
+        "create_attachment",
+        "create_collection",
+        "update_collection"
+      ],
+      "deny": [
+        "delete_document",
+        "delete_collection",
+        "delete_comment"
+      ]
+    }
+  },
+  "servers": {
+    "isnan": {
+      "gitea": "gitea",
+      "docs": "outline"
+    },
+    "konfersi": {
+      "gitea": "gitea",
+      "docs": "outline"
+    },
+    "kohi-labs": {
+      "gitea": "gitea",
+      "docs": "outline"
+    },
+    "github": {
+      "github": "github"
+    }
+  },
+  "permissions": {
+    "isnan": {
+      "ask": [
+        "mcp__plugin_cpm-isnan_gitea__actions_config_read",
+        "mcp__plugin_cpm-isnan_gitea__notification_write",
+        "mcp__plugin_cpm-isnan_gitea__label_write",
+        "mcp__plugin_cpm-isnan_gitea__milestone_write",
+        "mcp__plugin_cpm-isnan_gitea__wiki_write",
+        "mcp__plugin_cpm-isnan_gitea__timetracking_write",
+        "mcp__plugin_cpm-isnan_gitea__project_write",
+        "mcp__plugin_cpm-isnan_gitea__issue_write",
+        "mcp__plugin_cpm-isnan_gitea__pull_request_write",
+        "mcp__plugin_cpm-isnan_gitea__pull_request_review_write",
+        "mcp__plugin_cpm-isnan_gitea__create_branch",
+        "mcp__plugin_cpm-isnan_gitea__rename_branch",
+        "mcp__plugin_cpm-isnan_docs__create_document",
+        "mcp__plugin_cpm-isnan_docs__update_document",
+        "mcp__plugin_cpm-isnan_docs__move_document",
+        "mcp__plugin_cpm-isnan_docs__restore_document",
+        "mcp__plugin_cpm-isnan_docs__create_comment",
+        "mcp__plugin_cpm-isnan_docs__update_comment",
+        "mcp__plugin_cpm-isnan_docs__create_attachment",
+        "mcp__plugin_cpm-isnan_docs__create_collection",
+        "mcp__plugin_cpm-isnan_docs__update_collection"
+      ],
+      "deny": [
+        "mcp__plugin_cpm-isnan_gitea__create_organization",
+        "mcp__plugin_cpm-isnan_gitea__create_repo",
+        "mcp__plugin_cpm-isnan_gitea__fork_repo",
+        "mcp__plugin_cpm-isnan_gitea__create_or_update_file",
+        "mcp__plugin_cpm-isnan_gitea__delete_file",
+        "mcp__plugin_cpm-isnan_gitea__delete_branch",
+        "mcp__plugin_cpm-isnan_gitea__create_tag",
+        "mcp__plugin_cpm-isnan_gitea__delete_tag",
+        "mcp__plugin_cpm-isnan_gitea__create_release",
+        "mcp__plugin_cpm-isnan_gitea__delete_release",
+        "mcp__plugin_cpm-isnan_gitea__package_write",
+        "mcp__plugin_cpm-isnan_gitea__actions_config_write",
+        "mcp__plugin_cpm-isnan_gitea__actions_run_write",
+        "mcp__plugin_cpm-isnan_docs__delete_document",
+        "mcp__plugin_cpm-isnan_docs__delete_collection",
+        "mcp__plugin_cpm-isnan_docs__delete_comment"
+      ]
+    },
+    "konfersi": {
+      "ask": [
+        "mcp__plugin_cpm-konfersi_gitea__actions_config_read",
+        "mcp__plugin_cpm-konfersi_gitea__notification_write",
+        "mcp__plugin_cpm-konfersi_gitea__label_write",
+        "mcp__plugin_cpm-konfersi_gitea__milestone_write",
+        "mcp__plugin_cpm-konfersi_gitea__wiki_write",
+        "mcp__plugin_cpm-konfersi_gitea__timetracking_write",
+        "mcp__plugin_cpm-konfersi_gitea__project_write",
+        "mcp__plugin_cpm-konfersi_gitea__issue_write",
+        "mcp__plugin_cpm-konfersi_gitea__pull_request_write",
+        "mcp__plugin_cpm-konfersi_gitea__pull_request_review_write",
+        "mcp__plugin_cpm-konfersi_gitea__create_branch",
+        "mcp__plugin_cpm-konfersi_gitea__rename_branch",
+        "mcp__plugin_cpm-konfersi_docs__create_document",
+        "mcp__plugin_cpm-konfersi_docs__update_document",
+        "mcp__plugin_cpm-konfersi_docs__move_document",
+        "mcp__plugin_cpm-konfersi_docs__restore_document",
+        "mcp__plugin_cpm-konfersi_docs__create_comment",
+        "mcp__plugin_cpm-konfersi_docs__update_comment",
+        "mcp__plugin_cpm-konfersi_docs__create_attachment",
+        "mcp__plugin_cpm-konfersi_docs__create_collection",
+        "mcp__plugin_cpm-konfersi_docs__update_collection"
+      ],
+      "deny": [
+        "mcp__plugin_cpm-konfersi_gitea__create_organization",
+        "mcp__plugin_cpm-konfersi_gitea__create_repo",
+        "mcp__plugin_cpm-konfersi_gitea__fork_repo",
+        "mcp__plugin_cpm-konfersi_gitea__create_or_update_file",
+        "mcp__plugin_cpm-konfersi_gitea__delete_file",
+        "mcp__plugin_cpm-konfersi_gitea__delete_branch",
+        "mcp__plugin_cpm-konfersi_gitea__create_tag",
+        "mcp__plugin_cpm-konfersi_gitea__delete_tag",
+        "mcp__plugin_cpm-konfersi_gitea__create_release",
+        "mcp__plugin_cpm-konfersi_gitea__delete_release",
+        "mcp__plugin_cpm-konfersi_gitea__package_write",
+        "mcp__plugin_cpm-konfersi_gitea__actions_config_write",
+        "mcp__plugin_cpm-konfersi_gitea__actions_run_write",
+        "mcp__plugin_cpm-konfersi_docs__delete_document",
+        "mcp__plugin_cpm-konfersi_docs__delete_collection",
+        "mcp__plugin_cpm-konfersi_docs__delete_comment"
+      ]
+    },
+    "kohi-labs": {
+      "ask": [
+        "mcp__plugin_cpm-kohi-labs_gitea__actions_config_read",
+        "mcp__plugin_cpm-kohi-labs_gitea__notification_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__label_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__milestone_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__wiki_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__timetracking_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__project_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__issue_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__pull_request_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__pull_request_review_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__create_branch",
+        "mcp__plugin_cpm-kohi-labs_gitea__rename_branch",
+        "mcp__plugin_cpm-kohi-labs_docs__create_document",
+        "mcp__plugin_cpm-kohi-labs_docs__update_document",
+        "mcp__plugin_cpm-kohi-labs_docs__move_document",
+        "mcp__plugin_cpm-kohi-labs_docs__restore_document",
+        "mcp__plugin_cpm-kohi-labs_docs__create_comment",
+        "mcp__plugin_cpm-kohi-labs_docs__update_comment",
+        "mcp__plugin_cpm-kohi-labs_docs__create_attachment",
+        "mcp__plugin_cpm-kohi-labs_docs__create_collection",
+        "mcp__plugin_cpm-kohi-labs_docs__update_collection"
+      ],
+      "deny": [
+        "mcp__plugin_cpm-kohi-labs_gitea__create_organization",
+        "mcp__plugin_cpm-kohi-labs_gitea__create_repo",
+        "mcp__plugin_cpm-kohi-labs_gitea__fork_repo",
+        "mcp__plugin_cpm-kohi-labs_gitea__create_or_update_file",
+        "mcp__plugin_cpm-kohi-labs_gitea__delete_file",
+        "mcp__plugin_cpm-kohi-labs_gitea__delete_branch",
+        "mcp__plugin_cpm-kohi-labs_gitea__create_tag",
+        "mcp__plugin_cpm-kohi-labs_gitea__delete_tag",
+        "mcp__plugin_cpm-kohi-labs_gitea__create_release",
+        "mcp__plugin_cpm-kohi-labs_gitea__delete_release",
+        "mcp__plugin_cpm-kohi-labs_gitea__package_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__actions_config_write",
+        "mcp__plugin_cpm-kohi-labs_gitea__actions_run_write",
+        "mcp__plugin_cpm-kohi-labs_docs__delete_document",
+        "mcp__plugin_cpm-kohi-labs_docs__delete_collection",
+        "mcp__plugin_cpm-kohi-labs_docs__delete_comment"
+      ]
+    },
+    "github": {
+      "ask": [
+        "mcp__plugin_cpm-github_github__create_branch",
+        "mcp__plugin_cpm-github_github__add_issue_comment",
+        "mcp__plugin_cpm-github_github__issue_write",
+        "mcp__plugin_cpm-github_github__sub_issue_write",
+        "mcp__plugin_cpm-github_github__update_issue_comment",
+        "mcp__plugin_cpm-github_github__add_comment_to_pending_review",
+        "mcp__plugin_cpm-github_github__add_reply_to_pull_request_comment",
+        "mcp__plugin_cpm-github_github__create_pull_request",
+        "mcp__plugin_cpm-github_github__pull_request_review_write",
+        "mcp__plugin_cpm-github_github__update_pull_request",
+        "mcp__plugin_cpm-github_github__update_pull_request_branch"
+      ],
+      "deny": [
+        "mcp__plugin_cpm-github_github__create_or_update_file",
+        "mcp__plugin_cpm-github_github__create_repository",
+        "mcp__plugin_cpm-github_github__delete_file",
+        "mcp__plugin_cpm-github_github__delete_repository",
+        "mcp__plugin_cpm-github_github__fork_repository",
+        "mcp__plugin_cpm-github_github__push_files",
+        "mcp__plugin_cpm-github_github__merge_pull_request"
+      ]
+    }
+  }
+}

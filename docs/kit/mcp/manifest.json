@@ -1,0 +1,79 @@
+{
+  "kit": "pilot-way",
+  "part": "mcp",
+  "status": "draft",
+  "checkedAt": "2026-10-13",
+  "placeholders": {
+    "@<entry key>": "In a set's server `entry`: the catalog entry id of the entry whose key is that (the file name under entries/), looked up in the catalog once a person approved a version of it.",
+    "@approved": "In a set's server `version`: the newest approved version of the entry that server names (`v1`, `v2`, ... for remote and command entries, the exact package version for npm). Never a draft, a revoked or a deprecated one."
+  },
+  "prerequisites": [
+    {
+      "for": ["git-host-gitea"],
+      "what": "The gitea-mcp binary at /usr/local/bin/gitea-mcp in the workspace image (images/workspace/Dockerfile), pinned to a release and checked against that release's checksums file. Not done: it needs its own ticket and an image rollout. Until then the entry can be approved but every server reports a failed start."
+    }
+  ],
+  "entries": [
+    {
+      "key": "git-host-gitea",
+      "file": "entries/git-host-gitea.json",
+      "publish": true,
+      "reason": "One reviewed gitea-mcp for the three Gitea instances (git.isnan.me, git.konfersi.com, git.kohi-labs.com): the `gitea` server of each program set names its host and its own token file. D-8: Gitea stays the git host."
+    },
+    {
+      "key": "outline-isnan",
+      "file": "entries/outline-isnan.json",
+      "publish": true,
+      "reason": "Project documents on docs.isnan.me through Outline's own MCP endpoint."
+    },
+    {
+      "key": "outline-konfersi",
+      "file": "entries/outline-konfersi.json",
+      "publish": true,
+      "reason": "Konfersi's documents on outline.int.konfersi.com (internal host, private network allowed) through Outline's own MCP endpoint."
+    },
+    {
+      "key": "outline-kohilabs",
+      "file": "entries/outline-kohilabs.json",
+      "publish": true,
+      "reason": "Kohilabs' documents on outline.int.kohi-labs.com (internal host, private network allowed) through Outline's own MCP endpoint."
+    },
+    {
+      "key": "git-host-github",
+      "file": "entries/git-host-github.json",
+      "publish": false,
+      "optional": true,
+      "reason": "OPTIONAL draft, not published by the default publish (D-8: Gitea is the git host, GitHub only a mirror): GitHub-hosted projects and the GitHub mirror, read-only by default, with lockdown on. To use it, set publish to true in a reviewed commit."
+    },
+    {
+      "key": "playwright",
+      "file": "entries/playwright.json",
+      "publish": false,
+      "reason": "Reference only: the Browser pool (cpb-browser) delivers it. See REVIEW.md."
+    },
+    {
+      "key": "chrome-devtools",
+      "file": "entries/chrome-devtools.json",
+      "publish": false,
+      "reason": "Reference only: the Browser pool (cpb-browser) delivers it. See REVIEW.md."
+    }
+  ],
+  "sets": [
+    { "slug": "isnan", "name": "Isnan", "file": "sets/isnan.json", "publish": true, "entries": ["git-host-gitea", "outline-isnan"], "secretNames": ["GITEA_ISNAN_TOKEN", "OUTLINE_ISNAN_KEY"], "forProjects": "the Isnan program: projects hosted on git.isnan.me and documented on docs.isnan.me" },
+    { "slug": "konfersi", "name": "Konfersi", "file": "sets/konfersi.json", "publish": true, "entries": ["git-host-gitea", "outline-konfersi"], "secretNames": ["GITEA_KONFERSI_TOKEN", "OUTLINE_KONFERSI_KEY"], "forProjects": "the Konfersi program: git.konfersi.com and outline.int.konfersi.com" },
+    { "slug": "kohi-labs", "name": "Kohi Labs", "file": "sets/kohi-labs.json", "publish": true, "entries": ["git-host-gitea", "outline-kohilabs"], "secretNames": ["GITEA_KOHILABS_TOKEN", "OUTLINE_KOHILABS_KEY"], "forProjects": "the Kohi Labs program: git.kohi-labs.com and outline.int.kohi-labs.com" },
+    { "slug": "github", "name": "GitHub", "file": "sets/github.json", "publish": false, "optional": true, "entries": ["git-host-github"], "secretNames": ["GITHUB_MCP_TOKEN"], "forProjects": "OPTIONAL draft, not published by default: a project hosted on GitHub, or mirrored there (read-only)" }
+  ],
+  "hosts": {
+    "description": "Hosts the sets reach from a workspace. They belong in the project-onboarding host allow-list (T-133) for the hosts a project uses, and in any workspace egress policy (network isolation exceptions).",
+    "gitea": ["git.isnan.me", "git.konfersi.com", "git.kohi-labs.com"],
+    "outline": ["docs.isnan.me", "outline.int.konfersi.com", "outline.int.kohi-labs.com"],
+    "github": ["api.githubcopilot.com (only for the optional github set)"],
+    "byProgram": {
+      "isnan": ["git.isnan.me", "docs.isnan.me"],
+      "konfersi": ["git.konfersi.com", "outline.int.konfersi.com"],
+      "kohi-labs": ["git.kohi-labs.com", "outline.int.kohi-labs.com"]
+    }
+  },
+  "toolRules": "tool-rules.json"
+}

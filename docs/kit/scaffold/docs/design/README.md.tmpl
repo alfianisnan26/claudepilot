@@ -1,0 +1,49 @@
+# Design standard
+
+**The standard for {{PROJECT}} lives here:** {{DESIGN_STANDARD}}
+
+This folder is a slot. A project fills it with its own design standard, or points to where one is kept already
+(a docs site, a wiki). A project with no user interface writes "No user interface" above and keeps only the
+generic bar below for its command-line and log output. The owner owns the rules; agents propose changes by ticket.
+
+## What the standard must contain
+
+1. **Principles** on one page, in the owner's words where they exist.
+2. **Tokens**: colour (surfaces, text, borders, status colours and their meaning, danger), type scale, spacing
+   scale, radii, elevation, motion durations, icon set and sizes. Generated from the code by a script and checked
+   in the gate, so the document cannot drift from the code.
+3. **Layout and navigation**: the app shell, pages, sheets, dialogs and popovers (when each), safe areas, the phone
+   and the desktop layouts.
+4. **Component catalogue**: per shared component, when to use it and when not, and the states it must show
+   (default, loading, empty, error, unavailable, disabled with a visible reason).
+5. **Patterns**: lists that hold still, skeletons then data, errors with an action, long content, destructive
+   actions, live updates without jumps, numbers with a source, copy tone.
+6. **Interaction and accessibility**: touch targets, gestures, keyboard paths, focus, labels, contrast, motion.
+7. **Anti-patterns with evidence**: mistakes already made, each with its cause and the check that catches it.
+8. **Checks and review**: the browser harnesses and what each proves, and a short checklist for every UI change.
+9. **Delivery to agents**: a `design-standard` skill (the rules on one page and this pointer) assigned to the
+   project's workspaces.
+
+Every rule cites where it comes from (the code, a PRD, the owner's decision) and says whether it was observed in
+the running product or decided.
+
+## The generic UI quality bar (until the standard says more)
+
+- **Phone first**: 390 px wide first, then 1280 px; light and dark; keyboard and touch.
+- **Touch targets** at least 44 px. Visible keyboard focus, a correct tab order, an accessible name on every
+  icon-only control, WCAG AA contrast, colour never the only signal.
+- **No horizontal scroll**, no cut-off or overlapping text; text breaks anywhere (`overflow-wrap: anywhere`);
+  user text never decides a container's width.
+- **Lists hold still**: stable keys, reserved space, skeletons the size of the content, nothing shifts under the
+  pointer when data arrives.
+- **Complete states**: empty, loading, error with an action, offline, unavailable, permission denied, very long
+  text, lots of data.
+- **Text diet**: titles of one or two words, explanations in a tooltip, icon-only on phones where the icon is
+  clear. No placeholder text, no generic marketing phrases.
+- **Honest numbers**: every number shown has a source; "unavailable" is a state, never a guess.
+- **Tokens only**: colour, spacing, type and radius from the design system; no ad hoc values.
+- **No decoration that does no work**: no gradients, glow, emoji or decorative icons; a translucent (glass)
+  surface only where the standard names it (in the first program: the floating header and tab bar, nowhere else).
+- **Motion**: short (about 120 to 250 ms), transform and opacity only, respects reduced motion.
+- **Evidence**: a UI change is checked in a real browser at both widths and both themes, and the screenshots are
+  looked at. A layout fix is not done without a check that fails before it.
