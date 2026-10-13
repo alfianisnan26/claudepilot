@@ -933,7 +933,8 @@ host_service_install() {
         printf 'export PILOT_DATA_DIR=%s NODE_USE_ENV_PROXY=1\n' "'$HDIR'"
         [ -n "${PILOT_CA:-}" ] && printf 'export NODE_EXTRA_CA_CERTS=%s\n' "'$HDIR/ca.pem'"
         printf 'if [ -f "$PILOT_DATA_DIR/agent.pid" ] && kill -0 "$(cat "$PILOT_DATA_DIR/agent.pid")" 2>/dev/null; then exit 0; fi\n'
-        printf 'nohup %s "$PILOT_DATA_DIR/current/agent.mjs" run >>"$PILOT_DATA_DIR/logs/agent.out" 2>&1 </dev/null &\n' "'$NODE'"
+        # 3>&-: the installer's own output (fd 3) must not stay open in the agent, or a wrapper reading it never ends (T6)
+        printf 'nohup %s "$PILOT_DATA_DIR/current/agent.mjs" run >>"$PILOT_DATA_DIR/logs/agent.out" 2>&1 </dev/null 3>&- &\n' "'$NODE'"
         printf 'echo $! >"$PILOT_DATA_DIR/agent.pid"\n'
       } >"$_tmp/start.sh"
       run cp "$_tmp/start.sh" "$HDIR/start.sh"

@@ -364,6 +364,8 @@ esac
       assert.equal(cfg.home, sb.home);
       assert.equal(portal.runs.at(-1)?.target, 'cx4-metal', 'the agent started and called home');
       for (const f of ['agent.json', 'start.sh']) assert.ok(!readFileSync(join(dataDir, f), 'utf8').includes(tok));
+      // T6: the agent started in the background held the installer's fd 3 (its stdout), so `install.sh | tee log` never ended.
+      assert.match(readFileSync(join(dataDir, 'start.sh'), 'utf8'), /<\/dev\/null 3>&- &$/m, 'the background agent closes fd 3');
 
       r = await installer(sb, { ...env, PILOT_YES: '1' });
       assert.equal(r.code, 0, r.err + r.out);
