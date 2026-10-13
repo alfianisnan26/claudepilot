@@ -382,7 +382,7 @@ export class CiService {
       status: 'queued',
       reason: null,
       actor: o.actor,
-      actor_label: o.actorLabel ? oneLine(o.actorLabel).slice(0, 60) : null,
+      actor_label: oneLine(o.actorLabel)?.slice(0, 60) ?? null,
       inputs: JSON.stringify(o.inputs),
       ticket_id: null,
       ticket_source: null,

@@ -116,6 +116,7 @@ export function run(
     subject: null,
     reason: over.status === 'failed' ? 'step_failed' : null,
     actor: 'push',
+    actorLabel: null,
     ticketId: null,
     sessionId: null,
     rerunOf: null,
