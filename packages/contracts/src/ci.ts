@@ -146,6 +146,10 @@ export interface CiRunSummary {
   actor: string;
   /** The Portal MCP token's label when `actor` is a token, as it was when the run started (a later rename changes nothing); else null. */
   actorLabel: string | null;
+  /** A cancelled run: who cancelled it (an actor like `actor`; `pipeline` when a newer run of the same group superseded it), a token's label as it was, and a short note (`for #12`). Null otherwise. */
+  cancelledBy: string | null;
+  cancelledByLabel: string | null;
+  cancelNote: string | null;
   ticketId: string | null;
   sessionId: string | null;
   rerunOf: string | null;

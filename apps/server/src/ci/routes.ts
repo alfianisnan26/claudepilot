@@ -79,7 +79,8 @@ export function createCiRoutes(ci: CiService): Hono {
   });
   app.get('/runs/:id', async (c) => (may(c, 'view', runRef), c.json(success(await ci.show(id(c))))));
   app.get('/runs/:id/log', async (c) => (may(c, 'view', runRef), c.json(success(await ci.log(id(c), c.req.query('job'), c.req.query('step'), c.req.query('offset'))))));
-  app.post('/runs/:id/cancel', async (c) => (may(c, 'operate', runRef), c.json(success(await ci.cancel(id(c))))));
+  // The UI is a person (runs they start say `ui`; a cancel says the same, T-95).
+  app.post('/runs/:id/cancel', async (c) => (may(c, 'operate', runRef), c.json(success(await ci.cancel(id(c), { actor: 'ui' })))));
   app.post('/runs/:id/rerun', async (c) => (may(c, 'operate', runRef), c.json(success(await ci.rerun(id(c))), 201)));
   // A deployment's approval (PRD FR41): a person with manage on the run, never a token or an agent. There is no tool for it.
   for (const decision of ['approve', 'reject'] as const) {

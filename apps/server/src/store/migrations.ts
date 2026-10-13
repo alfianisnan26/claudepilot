@@ -2618,6 +2618,17 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 731,
+    name: 'CI: who cancelled a run, and why',
+    up(db) {
+      // T-95: a cancelled run said only "cancelled". Now the actor who cancelled it (as `actor` is stored), a token's label as it was, and a
+      // short note (a stale run cancelled for a newer one says which). Null for every run so far and for runs nobody cancelled.
+      db.exec('ALTER TABLE ci_runs ADD COLUMN cancelled_by TEXT');
+      db.exec('ALTER TABLE ci_runs ADD COLUMN cancelled_by_label TEXT');
+      db.exec('ALTER TABLE ci_runs ADD COLUMN cancel_note TEXT');
+    },
+  },
+  {
     version: 381,
     name: 'chat sessions pinned',
     up(db) {
