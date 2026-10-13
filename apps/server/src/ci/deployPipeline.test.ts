@@ -376,8 +376,10 @@ test('the whole pipeline through the CI service and the real runner: gate, build
   const fake = world();
   try {
     // The workspace: the fakes on PATH, the cluster's names pointed at the fakes in ~/.profile (the steps' login shell reads it).
-    h.home.extraEnv.PATH = `${join(fake.root, 'bin')}:/usr/local/bin:/usr/bin:/bin`;
-    writeFileSync(join(h.home.home, '.profile'), Object.entries({ FAKE: fake.root, DEPLOY_GIT_REMOTE: fake.github, DEPLOY_URL: 'http://portal.test:3000', DEPLOY_WAIT_S: '5', DEPLOY_POLL_S: '1' }).map(([k, v]) => `export ${k}='${v}'\n`).join(''));
+    // PATH goes in ~/.profile too: /etc/profile resets PATH in a login shell, and a real kubectl on this machine would otherwise win.
+    const fakePath = `${join(fake.root, 'bin')}:/usr/local/bin:/usr/bin:/bin`;
+    h.home.extraEnv.PATH = fakePath;
+    writeFileSync(join(h.home.home, '.profile'), Object.entries({ PATH: fakePath, FAKE: fake.root, DEPLOY_GIT_REMOTE: fake.github, DEPLOY_URL: 'http://portal.test:3000', DEPLOY_WAIT_S: '5', DEPLOY_POLL_S: '1' }).map(([k, v]) => `export ${k}='${v}'\n`).join(''));
     // The development repository: integration as on GitHub, pushed to its pilot remote.
     h.home.git(['fetch', '-q', fake.github, 'integration:integration'], h.src);
     h.home.git(['checkout', '-q', 'integration'], h.src);
@@ -387,7 +389,13 @@ test('the whole pipeline through the CI service and the real runner: gate, build
     const run = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'integration', inputs: { images: 'portal' } }, 'session:s1', { sessionId: 's1', deploymentOnly: 'deployment pipelines only' });
     assert.equal(run.sha, fake.sha);
     assert.deepEqual(run.deployments.map((d) => [d.job, d.environment, d.approval]), [['release', 'production', 'pending']]);
-    await h.until('the release to wait for a person', () => h.svc.get(run.id).deployments[0]!.approval === 'waiting', 120_000);
+    await h.until('the release to wait for a person', () => h.svc.get(run.id).deployments[0]!.approval === 'waiting', 120_000).catch(async (e: Error) => {
+      // A wait that ran out says what the run did instead: the jobs' statuses and the tail of every failed step's log.
+      const r = h.svc.get(run.id);
+      const tails: string[] = [];
+      for (const j of r.detail) for (const st of j.steps) if (st.status === 'failed') tails.push(`--- ${j.id} / ${st.name}:\n${(await h.svc.log(run.id, j.id, st.idx, 0)).text.slice(-2000)}`);
+      throw new Error(`${e.message}; the run is ${r.status} (${r.reason ?? ''}): ${JSON.stringify(r.detail.map((j) => [j.id, j.status, j.reason]))}\n${tails.join('\n')}`);
+    });
     const held = h.svc.get(run.id);
     assert.deepEqual(held.detail.map((j) => [j.id, j.status]), [['gate', 'passed'], ['build', 'passed'], ['release', 'waiting'], ['verify', 'pending'], ['rollback', 'pending']]);
     assert.equal(fake.main(), fake.base, 'nothing is released before the approval');
