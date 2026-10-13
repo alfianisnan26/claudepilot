@@ -13,18 +13,18 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - C item 1, btw UI against the real engine (tools/qa/btw-real.mjs, the card says how many messages the answer saw): a97a950.
 - Gate hygiene: shellcheck SC2015 (1f045fe), repo-find sorted (8b3316a), deploy-pipeline e2e test: the fakes' PATH in ~/.profile (b893ac8; /etc/profile resets PATH in a login shell and the real kubectl installed today at /usr/local/bin won; the test's wait now says which step failed). Passes alone 7/7.
 
-## NOW (11:5x)
-- Deploys: #9 failed in its gate (notify "Deploy waits": a race in the test, not the Job; fixed twice, mine 3fe7d4b and the coordinator's 080ccb0, kept theirs). #10 cancelled by the coordinator (the gate Job got 0.4 CPU on k3s-node2: 67ff48a moves it to another node with a 1 CPU request). DEPLOY #11 runs at 67ff48a (the coordinator's). Do not push integration or pilot until #11 is released.
-- Local, not pushed (head 4a752c3), to go with the deploy after #11:
-  - T-95 (urgent): 7b45909 the release pushes main alone and integration catches up as its own step (retried, a conflict only warns, never a rollback); rollback the same; the gate log carries every failing test's own report (=== FAILURES); a rerun pass says "flaky, passed on rerun: <tests>"; gate-job.sh <commit> [steps] [files]. 690df04 a cancelled run says who and why (migration 731; "Cancelled by the pipeline, for #12"). Pipeline tests 17/17, CI service, run page words.
-  - 6c1dd47 gate Jobs never outlive their run (Secret owned by the Job, pipeline clears leftovers).
-  - 702eaef T-42 slice 1 (stable workspace id, alias, stored runtime names, migration 712).
-  - e9c241d T-24 tool rows (Input and Output blocks, one renderer for rows and approvals, the RLO escape fixed in summaries; 187 tests, browser 154/154).
-  - 4a752c3 T-28 ticket Bump (Prioritise / Ask, shared session picker, ticket_bump MCP tool; 42 tests; browser 42/44 with the one real issue fixed).
-  - T-95 item 3 (gate speed): the Job ran 1120 s of suite on k3s-node2 with 0.4 CPU of a 100m request; 67ff48a (coordinator) asks 1 CPU and avoids the dev pod's node. Concurrency 3 in the Job.
-- Sub-agents (12:2x): T-42 slice 2 built (ecd6588, migration 713, browser look) then slice 3 (dev/workspace-id); T-32 part 2 CI Bump (dev/ci-bump); T-97 Browser pool on Kubernetes (dev/browser-k8s, rig dev-rig-browser). Deploy #12 (coordinator's, 8872b5a) in its gate.
-- Next (in order): T-95 push and deploy after #11 is released; T-97 Browser pool on Kubernetes (B3, high, right after T-42; prove it on a dev-rig-browser rig, never the real workspace; fit numbers for k3s-node2); T-26 (three slices), T-27, T-30; wave 4 (T-10..T-15); T-33 last (after T-42).
-- Ticket queue: ticket_claim_next hands out the Konfersi tickets (T-51) even with a tag filter, and T-95/T-42 refuse my comments (not assigned): progress goes here until someone assigns them to this session.
+## NOW (12:30)
+- LIVE: portal 2026.10.13-4 (deploy #13, released by the coordinator; the owner skipped its gate, a gate Job on 8872b5a runs after the fact). Live tickets (closed): T-1, T-2, T-3, T-4, T-5, T-6, T-7, T-8, T-9, T-18, T-25, T-29, T-31, T-32 part 1, T-34, T-36, T-37, T-38, T-39, T-41, 005fab0 (delivery), migration 720.
+- DEPLOY #14 (rmv6nqb6ea7ab43) on f13f9b5, gate=true: T-24 tool rows, T-28 ticket Bump, T-42 slice 1 (stable workspace id, migration 712), T-95 (the release pushes main alone, failure reports in the gate log, flaky notes, gate-job files, cancel attribution, migration 731), 6c1dd47 (gate Jobs never outlive their run). Its release is the first with T-95's script; still: push integration only after it released.
+- Sub-agents: T-42 slices 2 and 3 (dev/workspace-id; slice 2 ecd6588 built, migration 713), T-32 part 2 CI Bump (dev/ci-bump), T-97 Browser pool on Kubernetes (dev/browser-k8s, rig dev-rig-browser).
+- Next (in order): T-98 workspace Resources (high, wave 2), T-26 (three slices), T-27, T-30; wave 4 (T-10..T-15); T-33 last (after T-42).
+- PACE (honest): 07:00-12:30, about 24 tickets' work merged (about 4.4 per hour); live since 12:2x for the first time today. Deploys today: 14 runs, 2 released (#13 and earlier #?), the rest failed on timing races or were cancelled to add fixes.
+
+## NEEDS A HUMAN
+- Live tickets to check on the phone: T-1 (Pinned, swipe), T-2 (no sideways scroll), T-3 (an image attaches in a cluster workspace), T-5/T-31/T-41 (sub-agents in their own rows, "Working · N agents", "Session finished" only at real idle), T-25 (Mute similar), T-34 (Home page), T-6 (MCP client labels), T-29 (auto move card words).
+- Run deploy/k3s/seed-features.sh (PORTAL_URL and the server code): automove.allowBypass (T-4) and chat.trust.autoPermissionOnly (T-38) on.
+- The coordinator relabels kubernetes/kohi-event to isnan-pod after T-42 slice 2 is deployed.
+- ticket_claim_next hands out the Konfersi tickets (T-51) even with a tag filter; T-95, T-42, T-97, T-98 are not assigned to this session (comments refused).
 
 ## WAVES (owner, 09:4x; work in this order)
 - Wave 1: T-36 fast lane (DONE, pushed) -> push (done) -> T-38 folder trust (built) -> T-18 deploy (full gate on the exact commit) -> T-3, T-2 (fixed, merged; live with the deploy) -> T-31 (with the T-5 sub-agent) -> T-1, T-4, T-29 (merged; live with the deploy).
@@ -50,13 +50,6 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - Status-file-only commits are pushed without a gate run (docs only). B's branch merges integration instead of rebasing. Merge commits are kept.
 - A side question counts as a request for spike rules; "side" is a server-side split only (PRD claude-usage §22); the Usage page does not show it yet.
 - Housekeeping at the move: two orphaned `yes` processes (a load simulation from B's worktree, 2 CPUs for 45 min) and the scratch portals 3405 and 3409 were stopped.
-
-## NEEDS A HUMAN
-- After the next deploy: run deploy/k3s/seed-features.sh (automove.allowBypass on) or turn it on in Settings > Auto move; check an image attaches and sends in a cluster workspace (T-3).
-- Multi-user (parked, not in this backlog): the owner wants the current single-owner access (workspace kohi-event, this session) reserved for a user `admin`; the password was given in chat on 2026-10-13 and is written nowhere: when that work starts, the owner sets it through the setup token or a Secret.
-- After the next deploy: on the iPhone (Home Screen PWA, quiet hours off) confirm "Deploy waits" arrives when a deploy run holds for approval; migration 720 must have run on the real portal.
-- Decide whether the Usage page should show "of which side questions".
-- T6: whatever still needs Docker, macOS, Windows or a second cluster (A's report will list it).
 
 ## NEXT
 - T-29 is being built by the orchestrator itself in worktree dev-automove-model (branch dev/automove-model): decision, engine, card words and tests done (server 194 pass, web 9 pass); typecheck under the lock; then a browser look, PRD, merge.
