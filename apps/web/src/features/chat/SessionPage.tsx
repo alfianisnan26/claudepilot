@@ -429,12 +429,13 @@ export function SessionPage() {
           */}
           <div hidden={cramped} className="pointer-events-none absolute inset-x-0 top-0 z-30 pt-[var(--bar-top)] pr-[var(--bar-right)] pl-[var(--bar-left)]">
             {/* What scrolls under the header blurs and fades out below it (T-102): no hard edge, no darker band under the pill. */}
-            <div aria-hidden="true" data-header-fade="" className="session-fade pointer-events-none absolute inset-x-0 top-0 -z-10 h-[calc(var(--session-header-bottom)+1.75rem)]" />
+            <div aria-hidden="true" data-header-fade="" className="session-fade pointer-events-none absolute inset-x-0 top-0 -z-10 h-[calc(var(--session-header-bottom)+2.75rem)]" />
             <header
               data-session-header=""
               data-popover-ceiling=""
               className={cn(
-                'glass-card pointer-events-auto relative isolate mx-auto flex h-[52px] max-w-[760px] items-center gap-1 rounded-full p-1',
+                // No drop shadow (T-102): over the fade it read as a darker band under the pill; the border draws its edge.
+                'glass-card pointer-events-auto relative isolate mx-auto flex h-[52px] max-w-[760px] items-center gap-1 rounded-full p-1 shadow-none!',
                 bypass && 'border-danger/50',
               )}
             >
@@ -525,7 +526,7 @@ export function SessionPage() {
                     )}
                   >
                     <Bot className="size-[18px]" />
-                    {running > 0 && <RunningCount count={running} small />}
+                    {running > 0 && <RunningCount count={running} />}
                     {/* Agents still at work: a small spinner on the icon, also once the main agent is idle. */}
                     {running > 0 && (
                       <span aria-hidden="true" className="absolute bottom-1.5 left-1.5 flex rounded-full bg-bg text-accent">
@@ -543,7 +544,7 @@ export function SessionPage() {
                     // The count sits at the corner of the 44 px button, clear of the dots (T-102: '14' used to cover them).
                     <span className="relative flex size-11 items-center justify-center">
                       <MoreHorizontal className="size-[18px]" data-menu-glyph="" />
-                      {!roomy && running > 0 && <RunningCount count={running} corner />}
+                      {!roomy && running > 0 && <RunningCount count={running} />}
                     </span>
                   }
                   items={menuItems}
@@ -809,19 +810,16 @@ function EndedNote({ reason }: { reason: string | null | undefined }) {
   );
 }
 
-/** How many agents are running: a green pill by Agents, or a smaller one on the ⋯ button on phones. */
-function RunningCount({ count, small, corner }: { count: number; small?: boolean; corner?: boolean }) {
+/**
+ * How many agents are running: on the corner of its own 44 px button (Agents, or ⋯ on phones), inside the button's width and clear of its
+ * glyph, so it covers neither the glyph nor the neighbouring button (T-102: '14' used to sit on ⋯).
+ */
+function RunningCount({ count }: { count: number }) {
   return (
     <span
       aria-hidden="true"
       data-running-count=""
-      className={cn(
-        'flex items-center justify-center rounded-full bg-accent font-bold text-white tabular-nums dark:text-bg',
-        small && 'absolute -top-2 -right-2 h-4 min-w-4 px-1 text-[10px] ring-2 ring-bg',
-        // On a button's own corner, above its glyph: never over it, whatever the number's width.
-        corner && 'absolute -top-1 right-0 h-4 min-w-4 px-1 text-[10px] ring-2 ring-bg',
-        !small && !corner && 'h-5 min-w-5 px-1.5 text-[11px]',
-      )}
+      className="absolute -top-1 right-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white tabular-nums ring-2 ring-bg dark:text-bg"
     >
       {count}
     </span>

@@ -527,7 +527,7 @@ const STATES = {
       await sleep(600);
       const geo = await ev(`(() => { const R = (e) => { if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, b: r.bottom, r: r.right }; };
         const header = document.querySelector('[data-session-header]');
-        const badges = [...header.querySelectorAll('[data-running-count]')].map((b) => { const btn = b.closest('button'); const glyph = btn?.querySelector('[data-menu-glyph]') ?? btn?.querySelector(':scope > svg'); return { badge: R(b), button: R(btn), glyph: R(glyph), what: btn?.getAttribute('aria-label') }; });
+        const badges = [...header.querySelectorAll('[data-running-count]')].map((b) => { const btn = b.closest('button'); const glyph = btn?.querySelector('[data-menu-glyph]') ?? btn?.querySelector(':scope > svg'); return { badge: R(b), button: R(btn), glyph: R(glyph), what: (btn?.getAttribute('aria-label') || '').slice(0, 30) }; });
         const others = [...header.querySelectorAll('a[href], button')].map((b) => ({ what: (b.getAttribute('aria-label') || '').slice(0, 30), ...R(b) }));
         const title = header.querySelector('button[aria-haspopup=dialog] span');
         const shield = header.querySelector('button[aria-label^="Bypass is on"] svg');
@@ -571,6 +571,7 @@ const STATES = {
         check(`${label}: the Bypass shield at 3:1 over the tinted header`, contrast(parseRgb(s.color), bgPx) >= 3, J({ contrast: contrast(parseRgb(s.color), bgPx) }));
       }
       await shot(`${cfg.name}-header-${label.toLowerCase()}`);
+      if (process.env.SS_DEBUG) { await ev(`document.querySelector("[data-header-fade]").style.display = "none"`); await sleep(200); await shot(`${cfg.name}-header-${label.toLowerCase()}-nofade`); await ev(`document.querySelector("[data-header-fade]").style.display = ""`); }
     }
   },
 
