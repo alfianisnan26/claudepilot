@@ -11,6 +11,8 @@ export interface AuditInput {
   kind: string;
   actor: string;
   userId: string | null;
+  /** A Portal MCP token's label as it was when it acted: kept in the row's detail, so a later rename changes nothing. */
+  actorLabel?: string | null;
   subject?: string | null;
   detail?: Record<string, unknown>;
 }
@@ -50,7 +52,7 @@ export class PlatformAudit {
     if (!db) return;
     if (!KIND.test(e.kind)) throw new Error(`audit kind "${e.kind}" must look like module.action`);
     try {
-      let detail = JSON.stringify(cleanDetail(e.detail));
+      let detail = JSON.stringify(cleanDetail(e.actorLabel ? { ...e.detail, actorLabel: e.actorLabel } : e.detail));
       if (detail.length > DETAIL_MAX) detail = '{}';
       db.prepare('INSERT INTO platform_audit (at, severity, kind, actor, user_id, subject, detail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
         this.now().toISOString(),

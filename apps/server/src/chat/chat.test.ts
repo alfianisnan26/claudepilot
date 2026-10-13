@@ -916,6 +916,24 @@ test('controller: a line split across chunks, and several lines in one chunk, ar
   }
 });
 
+test('audit: a Portal MCP token’s label is kept in the row as it was, bounded and redacted with the rest', async () => {
+  const s = await liveSession();
+  try {
+    const chat = new ChatStore(s.store);
+    const key = ['sk', 'ant', 'api03', 'A1b2C3d4E5f6G7h8'].join('-');
+    chat.addAudit({ severity: 'info', kind: 'btw.pin', sessionId: s.id, actor: 'portal-mcp:ptk_1', actorLabel: 'relay', detail: { seq: 1 } });
+    chat.addAudit({ severity: 'info', kind: 'btw.pin', sessionId: s.id, actor: 'portal-mcp:ptk_2', actorLabel: `ci ${key}`, detail: {} });
+    chat.addAudit({ severity: 'info', kind: 'btw.pin', sessionId: s.id, actor: 'ui', detail: {} });
+    const rows = chat.audit({ sessionId: s.id });
+    const by = (a: string) => rows.find((r) => r.actor === a)!;
+    assert.deepEqual([by('portal-mcp:ptk_1').detail.actorLabel, by('portal-mcp:ptk_1').detail.seq], ['relay', 1]);
+    assert.ok(!String(by('portal-mcp:ptk_2').detail.actorLabel).includes(key), 'the credential never reaches the audit row');
+    assert.equal(by('ui').detail.actorLabel, undefined);
+  } finally {
+    await s.done();
+  }
+});
+
 test('blobs: an image is read only by a session that links it', async () => {
   const { store, dataDir } = await freshStore();
   try {
