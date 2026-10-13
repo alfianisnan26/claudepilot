@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { backfillSegments, foldTransferPairs } from '../chat/legacy.js';
+import { repairSplitChains } from '../chat/lineage.js';
 import { isWorkspaceId } from '../names.js';
 
 export interface Migration {
@@ -2701,6 +2702,37 @@ export const MIGRATIONS: Migration[] = [
         ALTER TABLE chat_tasks ADD COLUMN model TEXT;
         CREATE INDEX chat_events_parent ON chat_events (session_id, parent_tool_use_id, seq) WHERE parent_tool_use_id IS NOT NULL;
       `);
+    },
+  },
+  {
+    version: 770,
+    name: 'chat sessions: the session a row continues',
+    up(db) {
+      // T-136 part E (D-30): a chat that ended and went on in a NEW row is one logical unit; the later row names the one it continues.
+      // Null for every row so far (migration 772 links the chains split on 2026-10-13).
+      db.exec(`
+        ALTER TABLE chat_sessions ADD COLUMN continued_from TEXT;
+        CREATE INDEX chat_sessions_continued_from ON chat_sessions (continued_from) WHERE continued_from IS NOT NULL;
+      `);
+    },
+  },
+  {
+    version: 771,
+    name: 'chat control lines: a digest of the first response read',
+    up(db) {
+      // T-136 part A: a second control response for a request the portal asked or answered is ignored when it is the same as the first
+      // (the same line read again) and ends the session otherwise; the first one's digest (sha256 of the parsed reply) tells them apart.
+      // Null for the lines so far: a second response to one of them still ends the session.
+      db.exec('ALTER TABLE chat_inputs ADD COLUMN digest TEXT');
+    },
+  },
+  {
+    version: 772,
+    name: 'chat sessions: link the chains split on 2026-10-13',
+    up(db) {
+      // T-136 part E, the one-time repair the owner asked for on the ticket: fe3df8bc -> fdb140be -> 5c9fcb5f (the orchestrator) and
+      // 541948a5 -> 929ae1e3 (Konfersi), matched by id prefix only when exactly one row matches; a no-op on any other database.
+      repairSplitChains(db);
     },
   },
 ];
