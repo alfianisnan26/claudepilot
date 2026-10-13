@@ -30,7 +30,7 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
 - T-98 workspace Resources: worktree dev-gate-job, branch dev/workspace-resources from 97d25c7, label workspace-resources. Migrations 716-717.
 
 ## NEXT (in order: the coordinator's rank-NN tags, 13:33; ticket_list tag=rank-NN lists them)
-- rank 01 T-42, 02 T-95, 03 T-99, 04 T-102, 05 T-100, 06 T-98, 07 T-97, 08 T-101, 09 T-28, 10 T-32, 11 T-24, 12 T-26, 13 T-27, 14 T-30, 15 T-33,
+- rank 01 T-42, 02 T-95, 03 T-99, 04 T-102, 05 T-100, 05b T-104, 06 T-98, 07 T-97, 08 T-101, 09 T-28, 10 T-32, 11 T-24, 12 T-26, 13 T-27, 14 T-30, 15 T-33,
   then T-12, T-13, T-10, T-11, T-14, T-15. De-duplication: ONE fit check (T-98 builds workspaces/fit.ts first; T-97 and workspace create use it;
   scripts/ws-resources.sh and its allow rule go when T-98 lands); T-100 uses the existing chip code (no ChipList, T-14 later); T-12 does only
   what T-95 item 2 and T-32 left; T-102's queued or automatic restart keeps Bypass or does not happen; T-33 rewritten (id + `label` per entity;
@@ -38,7 +38,10 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
 1. Pushed after run 17's release: T-99 (rank-03) is on integration; the next deploy carries T-99, T-102, T-100 and whatever lands before it.
 2. First free slot: T-102 session screen (item 1 first: the Tools changed chip with Restart after this turn, auto-apply for autonomous sessions,
    Bypass kept; then popover placement; then header blur and badge). Then T-100 Sessions list (clipped cards, attention order; existing chips).
-   Then T-101 ticket attachments (reuse chat uploads; paste/photo path first, viewer second). Migration blocks: T-101 750-754, T-102 755-756 if any.
+   Then T-104 Keep going as a portal feature (rank-05b: per-chat policy, restart-safe server loop, a time-boxed Bypass lease granted once with the
+   server code, chip with counts, kill switch, audit; replaces docs/dev-sessions/supervisor.mjs, which the coordinator extended for the Konfersi chat
+   meanwhile, 5066fd2). Then T-101 ticket attachments (reuse chat uploads; paste/photo path first, viewer second).
+   Migration blocks: T-101 750-754, T-102 755-756 if any, T-104 757-759.
 3. Then T-26 git monitoring (three slices, with T-27's commit hook; block 740-744), T-30 buckets (745-749), T-40 CI remote MCP tools, wave 4
    (T-10..T-15), T-33 rename LAST alone.
 - After each merge: gate-quick under the lock, push origin and pilot. Full gate every two hours as a Job. One deploy a day at most; the next one
