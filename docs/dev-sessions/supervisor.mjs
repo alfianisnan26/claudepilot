@@ -206,6 +206,48 @@ async function bestClaude(names) {
   return best;
 }
 
+
+/**
+ * Stopgap until the portal's auto move waits and resumes by itself (T-105): a chat that is idle on a Claude with 10% or less left (or a spent
+ * session window) moves to the delegated Claude with the most room above 10%, handoff skipped when the source is spent; with none above the
+ * threshold it stays where it is and is looked at again on every round, so it moves the moment a Claude has room again. The continue nudge
+ * that follows is the normal idle nudge. Never while a turn runs (the portal's own boundary rule).
+ */
+const LOW_USED_PCT = Number(process.env.LOW_USED_PCT ?? 90);
+async function moveIfLow(t, ts, cur) {
+  const r = await api('GET', '/api/claude-usage');
+  const used = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, Math.max(0, ...(c.windows ?? []).map((w) => (typeof w.usedPct === 'number' ? w.usedPct : 0)))]));
+  const mine = used.get(cur.claudeId);
+  if (mine === undefined || mine < LOW_USED_PCT) return false;
+  // A chat on a model only some Claudes have (Fable shows as its own window on those) must land on one that has it: otherwise the restore of its
+  // model fails quietly and it runs on whatever the other Claude defaults to (T-109 makes the portal pick the best available model instead).
+  const gated = /fable/i.exec(cur.model ?? '')?.[0]?.toLowerCase() ?? null;
+  const has = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, (c.windows ?? []).some((w) => `${w.key ?? ''} ${w.label ?? ''}`.toLowerCase().includes(gated ?? '\u0000'))]));
+  let best = null;
+  for (const name of t.claudes) {
+    const id = await claudeIdOf(name);
+    if (!id || id === cur.claudeId) continue;
+    if (gated && !has.get(id)) continue;
+    const u = used.get(id) ?? 0;
+    if (u >= LOW_USED_PCT) continue;
+    if (!best || u < best.used) best = { name, id, used: u };
+  }
+  if (!best) {
+    if (ts.lowLoggedAt === undefined || Date.now() - ts.lowLoggedAt > 30 * 60_000) log(`${t.key}: its Claude is at ${mine}% used and no delegated Claude has more than ${100 - LOW_USED_PCT}% left: waiting, looking again every round`), (ts.lowLoggedAt = Date.now());
+    return false;
+  }
+  if (DRY) return log(`[dry] ${t.key}: would move ${cur.id.slice(0, 8)} from ${mine}% used to ${best.name} (${best.used}% used)`), false;
+  const res = await api('POST', `/api/chat/sessions/${cur.id}/switch`, { claudeId: best.id, handoff: mine >= 100 ? 'skip' : 'ask' });
+  if (res.error) {
+    log(`${t.key}: could not move to ${best.name}: ${res.error.message}`);
+    ts.backoffUntil = Date.now() + 5 * 60_000;
+    return false;
+  }
+  ts.lowLoggedAt = undefined;
+  log(`${t.key}: its Claude was at ${mine}% used: moved to ${best.name} (${best.used}% used)`);
+  return true;
+}
+
 const kickoff = (t, again, reason) =>
   again
     ? `You are the continuation of the ${t.title} session, which ended (${reason}). Nobody answers questions: decide, write it down, go on. First read docs/dev-sessions/README.md, docs/dev-sessions/orchestrator.md and your status file docs/dev-sessions/status/${t.key}.md. Sub-agents of the earlier session are gone: look at git worktree list, git status -sb and git log --oneline origin/integration..HEAD in each worktree under ~/work/claudepilot.worktrees/ for what is unmerged, keep what is good, then continue from NEXT. When the whole backlog is done, make TRACK COMPLETE the first line of the status file, commit and push, and end with the final report.`
@@ -262,6 +304,7 @@ const statusSaysDone = (tstate) => {
 
 const NUDGE = 'Nobody is here to answer. Continue now: integrate what finished sub-agents brought, dispatch the next slices to up to three sub-agents in parallel, keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
 const WAKE = (why) => `This session was interrupted (${why}). Continue where you left off: read your status file docs/dev-sessions/status/orchestrator.md, look at git worktree list and git status in each worktree, and carry on. Nobody is here to answer questions.`;
+const MOVED = (to) => `This chat was moved to another Claude (${to}) and its process restarted: the sub-agents of the old process stopped. Continue now where you stopped: look at your tickets or status file, git worktree list and git status, restart the work that was in flight, commit and push WIP early. Nobody is here to answer questions.`;
 const NUDGE_AFTER_MIN = Number(process.env.NUDGE_AFTER_MIN ?? 3);
 const NUDGE_GAP_MIN = Number(process.env.NUDGE_GAP_MIN ?? 10);
 const MAX_NUDGES = Number(process.env.MAX_NUDGES ?? 40);
@@ -348,7 +391,30 @@ async function watch() {
 
       if (cur && cur.state !== 'ended' && !cur.archivedAt) {
         ts.sessionId = cur.id;
+        // A move to another Claude restarts the process and starts no turn: the chat sits idle until somebody speaks. Speak at once (not after the
+        // idle wait), when it is idle, or as soon as it is.
+        if (ts.claudeId && ts.claudeId !== cur.claudeId) {
+          log(`${t.key}: moved to another Claude (${cur.claudeName ?? cur.claudeId}): will continue it at once`);
+          ts.pendingContinue = true;
+        }
+        ts.claudeId = cur.claudeId;
+        if (ts.pendingContinue && cur.state === 'idle') {
+          try {
+            await sessionSend(cur.id, (t.moved ?? MOVED)(cur.claudeName ?? 'another Claude'));
+            ts.pendingContinue = false;
+            ts.nudges.push(Date.now());
+            log(`${t.key}: continued after the move`);
+          } catch (e) {
+            log(`${t.key}: could not continue it after the move: ${e.message}`);
+          }
+          idleSince.delete(t.key);
+          continue;
+        }
         if (cur.state === 'idle') {
+          if (await moveIfLow(t, ts, cur).catch((e) => (log(`${t.key}: low-quota check failed: ${e.message}`), false))) {
+            idleSince.delete(t.key);
+            continue;
+          }
           const since = idleSince.get(t.key) ?? Date.now();
           idleSince.set(t.key, since);
           const lastNudge = ts.nudges[ts.nudges.length - 1] ?? 0;

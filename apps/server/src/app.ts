@@ -7,6 +7,8 @@ import {
   API,
   isStableWorkspaceId,
   type RenameWorkspaceRequest,
+  type UpdateWorkspaceResourcesRequest,
+  type WorkspaceResources,
   type RenameWorkspaceResult,
   type AccountPoolRequest,
   type AdminState,
@@ -545,6 +547,22 @@ export function createApp(
     if (!isStableWorkspaceId(ref)) throw new AppError('NOT_FOUND', 'Not found.');
     return c.json(success(decorate(await workspaces.get(ref, actorOf(c)))));
   });
+  // CPU and memory of a Kubernetes workspace (T-98), by either form of the id. `/<stable id>/resources` has two segments, like
+  // `/<target>/<name>`: anything that is not a stable id goes on to those routes.
+  ws.get('/:ref/resources', async (c, next) => {
+    const ref = c.req.param('ref');
+    if (!isStableWorkspaceId(ref)) return next();
+    return c.json(success<WorkspaceResources>(await workspaces.resourcesOf(ref, actorOf(c))));
+  });
+  ws.patch('/:ref/resources', async (c, next) => {
+    const ref = c.req.param('ref');
+    if (!isStableWorkspaceId(ref)) return next();
+    return c.json(success<WorkspaceResources>(await workspaces.setResources(ref, await body<UpdateWorkspaceResourcesRequest>(c), actorOf(c))));
+  });
+  ws.get('/:target/:name/resources', async (c) => c.json(success<WorkspaceResources>(await workspaces.resourcesOf(`${c.req.param('target')}/${c.req.param('name')}`, actorOf(c)))));
+  ws.patch('/:target/:name/resources', async (c) =>
+    c.json(success<WorkspaceResources>(await workspaces.setResources(`${c.req.param('target')}/${c.req.param('name')}`, await body<UpdateWorkspaceResourcesRequest>(c), actorOf(c)))),
+  );
   ws.get('/:target/:name', async (c) => c.json(success(decorate(await workspaces.get(`${c.req.param('target')}/${c.req.param('name')}`, actorOf(c))))));
   // Rename (T-42 slice 2): the label only, by either form of the id. Nothing running is touched; the old forms keep resolving.
   const rename = async (c: Context<Env>, ref: string) => {

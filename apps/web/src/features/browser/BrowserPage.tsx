@@ -289,6 +289,7 @@ function Cover({ status, error, phase, priv, running, view, showView, onRetry }:
   else if (!status) busy = true;
   else if (status.pool === null) text = 'No browser here.';
   else if (status.state === 'workspace_stopped') text = 'Stopped.';
+  else if (status.state === 'restart_needed') text = status.detail ?? 'Restart the workspace.';
   else if (!running) busy = true;
   else if (status.state === 'error') text = status.detail ?? 'Something went wrong.';
   else if (view === null) text = 'No live view.';

@@ -2540,6 +2540,21 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 716,
+    name: 'workspace resources: the wanted CPU and memory on the workspace record',
+    up(db) {
+      // T-98 (docs/prd/targets-connect.md §25): the CPU and memory someone set for a Kubernetes workspace, kept on its record until they are
+      // applied and after. `resources` is JSON `{ cpus, memoryMb, cpuRequest, memoryRequestMb }` (cores and MiB), null until a first change;
+      // `resources_pending_at` is set while they wait for the workspace's next start; `resources_applied_at` is when they reached the
+      // Deployment. Existing workspaces get nulls: they keep what they have until someone applies.
+      db.exec(`
+        ALTER TABLE workspace_identities ADD COLUMN resources TEXT;
+        ALTER TABLE workspace_identities ADD COLUMN resources_pending_at TEXT;
+        ALTER TABLE workspace_identities ADD COLUMN resources_applied_at TEXT;
+      `);
+    },
+  },
+  {
     version: 720,
     name: 'notify: ci_waiting (Deploy waits) for every destination that already hears CI failures',
     up(db) {

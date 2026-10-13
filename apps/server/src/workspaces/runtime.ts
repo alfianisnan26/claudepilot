@@ -1,4 +1,4 @@
-import type { Workspace, WorkspaceTarget, WorkspaceUsage } from '@portal/contracts';
+import type { Workspace, WorkspaceResourceValues, WorkspaceResourcesFit, WorkspaceTarget, WorkspaceUsage } from '@portal/contracts';
 
 /** Labels (Docker) / labels and annotations (Kubernetes) that mark what the portal owns. */
 export const LABEL = {
@@ -213,6 +213,8 @@ export interface Runtime {
   readonly images?: ImageAccess;
   /** Throwaway containers for the compatibility canary. */
   readonly throwaway?: ThrowawayAccess;
+  /** CPU and memory after a create (T-98): Kubernetes only. */
+  readonly resources?: ResourceAccess;
   /**
    * Replaces the workspace's container with one made from `image`, KEEPING its home volume (everything outside the home folder, and every
    * running process, is not kept). A container that cannot be made or started is put back from the old image and the call fails.
@@ -231,4 +233,20 @@ export interface Runtime {
   listLastKnown?(): Workspace[];
   /** An enrolled target: whether the workspace's node is connected right now (sync, no call). Absent: always reachable. */
   reachable?(name: string): boolean;
+}
+
+/**
+ * CPU and memory of a workspace after its create (T-98, docs/prd/targets-connect.md §25). Kubernetes only: the values are the `workspace`
+ * container's limits and requests in its Deployment, and a change to them restarts the pod (the Deployment is Recreate).
+ */
+export interface ResourceAccess {
+  /** What the Deployment has now, and whether it is scaled up (a stopped workspace is scaled to 0). Throws 404 when there is no Deployment. */
+  read(name: string): Promise<{ live: Partial<WorkspaceResourceValues>; replicas: number }>;
+  /** The fit check for these requests (resources.ts); `unavailable` when the node or the pods could not be read. Never throws for that. */
+  fit(name: string, want: Pick<WorkspaceResourceValues, 'cpuRequest' | 'memoryRequestMb'>): Promise<WorkspaceResourcesFit>;
+  /**
+   * Writes the values into the Deployment's pod template (its pod restarts when it runs). `onlyWhenStopped`: only while it is scaled to 0
+   * (a start applies pending values before it scales up); answers whether it wrote them.
+   */
+  apply(name: string, values: WorkspaceResourceValues, opts?: { onlyWhenStopped?: boolean }): Promise<boolean>;
 }

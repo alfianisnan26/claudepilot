@@ -147,6 +147,94 @@ export interface RenameWorkspaceResult {
   previous: string;
 }
 
+/**
+ * CPU and memory of a Kubernetes workspace (T-98, docs/prd/targets-connect.md §25): the limits (`cpus`, `memoryMb`) and what the pod asks
+ * the scheduler to reserve (`cpuRequest`, `memoryRequestMb`). CPU in cores (0.25 is 250m), memory in MiB.
+ */
+export interface WorkspaceResourceValues {
+  cpus: number;
+  memoryMb: number;
+  cpuRequest: number;
+  memoryRequestMb: number;
+}
+
+/** The bounds a value must keep (the same as a create's, and a request never above its limit). */
+export const WORKSPACE_RESOURCE_BOUNDS = {
+  cpus: { min: 0.1, max: 64 },
+  memoryMb: { min: 256, max: 262_144 },
+  cpuRequest: { min: 0.01 },
+  memoryRequestMb: { min: 64 },
+} as const;
+
+/**
+ * Why these values can't be used, per field, or null when they can. CPU in steps of 1m (0.001 core), memory in whole MiB; a request at most
+ * its limit. Shared by the web (before it sends) and the server (which decides).
+ */
+export function workspaceResourcesProblem(v: Partial<Record<keyof WorkspaceResourceValues, unknown>>): Partial<Record<keyof WorkspaceResourceValues, string>> | null {
+  const out: Partial<Record<keyof WorkspaceResourceValues, string>> = {};
+  const num = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : NaN);
+  const milli = (x: number) => Math.abs(Math.round(x * 1000) - x * 1000) < 1e-6;
+  const B = WORKSPACE_RESOURCE_BOUNDS;
+  const cpus = num(v.cpus);
+  const mem = num(v.memoryMb);
+  const cpuReq = num(v.cpuRequest);
+  const memReq = num(v.memoryRequestMb);
+  if (!(cpus >= B.cpus.min && cpus <= B.cpus.max) || !milli(cpus)) out.cpus = `Between ${B.cpus.min} and ${B.cpus.max} cores.`;
+  if (!(Number.isInteger(mem) && mem >= B.memoryMb.min && mem <= B.memoryMb.max)) out.memoryMb = `Whole MiB, between ${B.memoryMb.min} and ${B.memoryMb.max}.`;
+  if (!(cpuReq >= B.cpuRequest.min) || !milli(cpuReq)) out.cpuRequest = `At least ${B.cpuRequest.min} cores, in steps of 0.001.`;
+  else if (!out.cpus && cpuReq > cpus) out.cpuRequest = 'Not above the CPU limit.';
+  if (!(Number.isInteger(memReq) && memReq >= B.memoryRequestMb.min)) out.memoryRequestMb = `Whole MiB, at least ${B.memoryRequestMb.min}.`;
+  else if (!out.memoryMb && memReq > mem) out.memoryRequestMb = 'Not above the memory limit.';
+  return Object.keys(out).length ? out : null;
+}
+
+/** When new values take effect: `now` patches the Deployment and the pod restarts (every session in it ends); `next_restart` at its next start. */
+export type WorkspaceResourcesApply = 'now' | 'next_restart';
+
+/** `PATCH WORKSPACE_API.resources(id)`: values left out keep what is stored, else what the Deployment has. */
+export interface UpdateWorkspaceResourcesRequest extends Partial<WorkspaceResourceValues> {
+  apply: WorkspaceResourcesApply;
+}
+
+/**
+ * The fit check (apps/server/src/workspaces/fit.ts, the rule the retired `scripts/ws-resources.sh` used): the requests of every other pod on the node plus this pod's new requests must stay
+ * within what the node can allocate. A running pod is checked on its node (it is recreated there, the old pod gone first); a stopped one on
+ * the nodes it may run on. `unavailable`: the portal could not read the node or its pods (it then refuses: it never guesses).
+ */
+export interface WorkspaceResourcesFit {
+  state: 'fits' | 'does_not_fit' | 'unavailable';
+  node: string | null;
+  otherCpuMilli: number | null;
+  otherMemoryMb: number | null;
+  wantCpuMilli: number;
+  wantMemoryMb: number;
+  allocatableCpuMilli: number | null;
+  allocatableMemoryMb: number | null;
+  /** One line with the numbers, for a refusal and the preview. */
+  message: string;
+}
+
+/** `GET WORKSPACE_API.resources(id)` and what a PATCH answers. */
+export interface WorkspaceResources {
+  id: string;
+  stableId: string;
+  /** Stored on the workspace's record (T-98); null until someone sets them. */
+  wanted: WorkspaceResourceValues | null;
+  /** What the Deployment has now (a value it does not set is absent). */
+  live: Partial<WorkspaceResourceValues>;
+  /** Wanted values wait for the workspace's next start. */
+  pending: boolean;
+  pendingSince: string | null;
+  appliedAt: string | null;
+  running: boolean;
+  /** Why a pending change was not applied at the last start (it did not fit, say). */
+  problem: string | null;
+  /** The fit check that a PATCH ran; absent on a GET. */
+  fit?: WorkspaceResourcesFit;
+  /** What this PATCH did: patched (the pod restarts when it ran), stored for the next start, or nothing (the values are what it has). */
+  outcome?: 'applied' | 'pending' | 'unchanged';
+}
+
 /** A workspace's stable id (T-42): `ws_` and 12 lowercase hex digits. */
 export const STABLE_WORKSPACE_ID = /^ws_[0-9a-f]{12}$/;
 export const isStableWorkspaceId = (value: unknown): value is string => typeof value === 'string' && STABLE_WORKSPACE_ID.test(value);
@@ -179,6 +267,8 @@ export const WORKSPACE_API = {
    * `?claude=<id>` for a Claude other than Default.
    */
   claudes: (id: string) => `/api/workspaces/${id}/claudes`,
+  /** GET `WorkspaceResources`; PATCH `UpdateWorkspaceResourcesRequest` (T-98): CPU and memory of a Kubernetes workspace. Either form of the id. */
+  resources: (id: string) => `/api/workspaces/${id}/resources`,
 } as const;
 
 /**

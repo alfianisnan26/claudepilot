@@ -19,7 +19,7 @@ import { KubernetesRuntime } from './kubernetes.js';
 import { PUT_INNER, READ_INNER, RUN_INNER } from './kubernetesDelivery.js';
 
 /** A KubernetesRuntime on the fake (its namespace, its token), as an enrolled cluster would make one: never `loadFromDefault()`. */
-export function kubeRuntimeOn(fake: FakeKube, delivery?: { roots?: readonly string[]; pollMs?: number }): KubernetesRuntime {
+export function kubeRuntimeOn(fake: FakeKube, delivery?: { roots?: readonly string[]; pollMs?: number }, extra: { fitCheck?: boolean } = {}): KubernetesRuntime {
   const kc = new KubeConfig();
   kc.loadFromOptions({
     clusters: [{ name: 'fake', server: fake.url, skipTLSVerify: true }],
@@ -28,7 +28,7 @@ export function kubeRuntimeOn(fake: FakeKube, delivery?: { roots?: readonly stri
     currentContext: 'fake',
   });
   return new KubernetesRuntime(
-    { namespace: fake.namespace, image: 'claudepilot-workspace:latest', storage: '1Gi', ...(delivery ? { delivery } : {}) },
+    { namespace: fake.namespace, image: 'claudepilot-workspace:latest', storage: '1Gi', ...(delivery ? { delivery } : {}), ...extra },
     { kubeConfig: kc, manageNamespace: false, target: { id: 'kd-kube', label: 'Kube', where: 'fake' } },
   );
 }
