@@ -6,6 +6,7 @@ import http from 'node:http';
 import { after, before, describe, it } from 'node:test';
 import { startDockerRig, PORTAL_ID, type DockerRig } from '../../testkit/dockerRig.js';
 import { streamPair } from '../../testkit/streams.js';
+import { withTimeout } from '../../../testkit.js';
 
 let rig: DockerRig;
 before(async () => {
@@ -68,7 +69,7 @@ describe('idle streams', () => {
       portal.on('error', () => undefined);
       portal.resume(); // 'end' is only emitted for a stream that is being read
     });
-    const after = await ended;
+    const after = await withTimeout(ended, 'the idle stream to end');
     assert.ok(after >= 150 && after < 2000, `closed after ${after} ms`);
 
     const [p2, a2] = streamPair();
@@ -77,7 +78,7 @@ describe('idle streams', () => {
     const text: Buffer[] = [];
     p2.on('data', (c: Buffer) => text.push(c));
     const t1 = Date.now();
-    await new Promise<void>((resolve) => p2.on('end', () => resolve()));
+    await withTimeout(new Promise<void>((resolve) => p2.on('end', () => resolve())), 'the kept-alive stream to end');
     assert.match(Buffer.concat(text).toString(), /^HTTP\/1\.1 200 /);
     assert.ok(Date.now() - t1 >= 150, 'the keep-alive connection waited for the idle time, then went');
   });

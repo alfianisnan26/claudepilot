@@ -10,14 +10,15 @@ import { after, afterEach, describe, test } from 'node:test';
 import { runAgent, type AgentHandle, type RunAgentOptions } from './agent/client.js';
 import { collectingLogger } from './agent/log.js';
 import { agentConfig } from './agent/testkit/agentConfig.js';
-import { helloFor, openModule, serveModule, type TestModule } from './testkit.js';
+import { helloFor, openModule, serveModule, withTimeout, type TestModule } from './testkit.js';
 import { signChallenge } from './tunnel/auth.js';
 import { dialTunnel, TunnelRejected } from './tunnel/index.js';
+import { stopAgents } from './agent/testkit/portalRig.js';
 
 const dirs: string[] = [];
 const agents: AgentHandle[] = [];
 afterEach(async () => {
-  for (const a of agents.splice(0)) await a.stop().catch(() => undefined);
+  await stopAgents(agents);
 });
 after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
@@ -155,7 +156,7 @@ describe('a key rotation with a crash at every step (FR16)', () => {
         await first.handle.whenConnected(5_000);
         const id0 = first.handle.identity()!;
         assert.equal((await m.admin('POST', `/nodes/${id0.node}/rotate`)).status, 202);
-        await first.handle.done.catch(() => undefined); // the agent dies at the step, with no cleanup
+        await withTimeout(first.handle.done, 'the crashed agent to be done'); // the agent dies at the step, with no cleanup
         await until(() => !m.connect.hub.isConnected(id0.node), 3_000);
         const second = agent(srv.origin, null, {}, first.dir);
         await second.handle.whenConnected(8_000);
@@ -189,7 +190,7 @@ describe('a key rotation with a crash at every step (FR16)', () => {
       const before = m.connect.registry.requireNode(handle.identity()!.node).keyFingerprint;
       const rekeyed = new Promise<string>((resolve) => handle.events.once('rekeyed', (e) => resolve(e.fingerprint)));
       assert.equal((await m.admin('POST', `/nodes/${handle.identity()!.node}/rotate`)).status, 202);
-      const fp = await rekeyed;
+      const fp = await withTimeout(rekeyed, "the agent's rekeyed event");
       const after = m.connect.registry.requireNode(handle.identity()!.node).keyFingerprint;
       assert.notEqual(after, before);
       assert.equal(after, fp, 'the agent prints the fingerprint the portal shows');

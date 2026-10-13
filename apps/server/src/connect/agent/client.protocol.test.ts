@@ -16,6 +16,7 @@ import { runAgent, type AgentClock, type AgentHandle } from './client.js';
 import { FileIdentityStore } from './identity.js';
 import { collectingLogger } from './log.js';
 import { agentConfig } from './testkit/agentConfig.js';
+import { stopAgents } from './testkit/portalRig.js';
 
 type Behaviour = (ws: WebSocket, auth: ConnectAuth, challenge: { connId: string; nonce: string }) => void;
 
@@ -59,7 +60,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   behaviour = () => undefined;
-  for (const a of agents.splice(0)) await a.stop().catch(() => undefined);
+  await stopAgents(agents);
   rmSync(dir, { recursive: true, force: true });
 });
 

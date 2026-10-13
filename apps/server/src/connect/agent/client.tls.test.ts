@@ -12,7 +12,7 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { runAgent, type AgentHandle } from './client.js';
 import { collectingLogger } from './log.js';
 import { agentConfig } from './testkit/agentConfig.js';
-import { openPortal, type Portal } from './testkit/portalRig.js';
+import { openPortal, stopAgents, type Portal } from './testkit/portalRig.js';
 import { TEST_TLS } from './testkit/tls.js';
 
 let portal: Portal;
@@ -72,7 +72,7 @@ beforeEach(() => {
   upgradeHeaders.length = 0;
 });
 afterEach(async () => {
-  for (const a of agents.splice(0)) await a.stop().catch(() => undefined);
+  await stopAgents(agents);
   rmSync(dir, { recursive: true, force: true });
 });
 

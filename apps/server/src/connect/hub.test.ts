@@ -7,7 +7,7 @@ import { describe, test } from 'node:test';
 import { CONNECT_LIMITS, CONNECT_REJECT_FATAL } from '@portal/contracts';
 import { WebSocket } from 'ws';
 import { ConnectError } from './seams.js';
-import { helloFor, openCore, openHub, type Core, type TestHub } from './testkit.js';
+import { helloFor, openCore, openHub, withTimeout, type Core, type TestHub } from './testkit.js';
 import { TunnelConnectError, TunnelRejected, acceptService, generateNodeKeyPair, readLine, signRekey, writeLine, type MuxStream } from './tunnel/index.js';
 
 /** Provider-shaped text for the redaction checks, built at runtime so no token-shaped literal sits in the source. */
@@ -145,9 +145,9 @@ describe('the handshake', () => {
       const t0 = Date.now();
       core.registry.revokeNode(n.nodeId, 'lost the laptop', core.ctx);
       const told = c.next();
-      await h.hub.disconnect(n.nodeId, 'revoked', 'This node was revoked.');
+      await withTimeout(h.hub.disconnect(n.nodeId, 'revoked', 'This node was revoked.'), 'the disconnect');
       assert.deepEqual(await told, { t: 'revoked', reason: 'This node was revoked.' });
-      await once(d.ws, 'close');
+      await withTimeout(once(d.ws, 'close'), 'the agent socket to close');
       assert.ok(Date.now() - t0 < 2_000, `closed after ${Date.now() - t0} ms`);
       assert.equal(h.hub.isConnected(n.nodeId), false);
       assert.equal(await rejected(h.dial(n.nodeId, n.keys)), 'revoked');
@@ -164,7 +164,7 @@ describe('the handshake', () => {
       assert.ok(await h.waitFor(() => h.hub.isConnected(n.nodeId)));
       d.ws.pause(); // the agent no longer reads: it will not answer the close handshake
       core.registry.revokeNode(n.nodeId, 'x', core.ctx);
-      await h.hub.disconnect(n.nodeId, 'revoked');
+      await withTimeout(h.hub.disconnect(n.nodeId, 'revoked'), 'the disconnect');
       assert.ok(await h.waitFor(() => !h.hub.isConnected(n.nodeId), 1_500));
     } finally {
       await h.close();
@@ -210,7 +210,7 @@ describe('one live connection per node (FR15)', () => {
       await new Promise((r) => setTimeout(r, 300));
       const taken = await h.dial(n.nodeId, n.keys);
       assert.equal(taken.welcome.node, n.nodeId);
-      await once(old, 'close');
+      await withTimeout(once(old, 'close'), 'the old socket to close');
       assert.equal(h.hub.isConnected(n.nodeId), true, 'the new one is the live one');
     } finally {
       await h.close();
@@ -328,7 +328,7 @@ describe('the control stream', () => {
       assert.equal(d.session.closed, false);
       assert.ok(h.logs.some((l) => /does not know \(from-the-future\)/.test(l)));
       c.stream.write('{not json\n');
-      await once(d.ws, 'close');
+      await withTimeout(once(d.ws, 'close'), 'the agent socket to close');
       assert.equal(h.hub.isConnected(n.nodeId), false);
     } finally {
       await h.close();
@@ -342,7 +342,7 @@ describe('the control stream', () => {
       const d = await h.dial(n.nodeId, n.keys);
       const c = await h.control(d);
       c.stream.write(`${'x'.repeat(CONNECT_LIMITS.maxControlLine + 100)}\n`);
-      await once(d.ws, 'close');
+      await withTimeout(once(d.ws, 'close'), 'the agent socket to close');
       assert.equal(h.hub.isConnected(n.nodeId), false);
     } finally {
       await h.close();
@@ -383,10 +383,10 @@ describe('streams to the agent (NodeLink.open)', () => {
       const link = h.hub.link({ id: n.nodeId, targetId: 'lab' });
       const docker = await link.open('docker');
       docker.write('GET /_ping HTTP/1.1\r\n\r\n');
-      assert.equal((await once(docker, 'data'))[0].toString(), 'GET /_ping HTTP/1.1\r\n\r\n');
+      assert.equal((await withTimeout(once(docker, 'data'), 'data on the docker stream'))[0].toString(), 'GET /_ping HTTP/1.1\r\n\r\n');
       const host = await link.open('host', { op: 'exec', argv: ['echo'] });
       host.write('x');
-      assert.equal((await once(host, 'data'))[0].toString(), 'x');
+      assert.equal((await withTimeout(once(host, 'data'), 'data on the host stream'))[0].toString(), 'x');
       await assert.rejects(link.open('host'), (e) => e instanceof ConnectError && e.code === 'bad_open');
       assert.deepEqual(seen, ['docker', 'host:exec']);
       docker.destroy();
@@ -435,7 +435,7 @@ describe('streams to the agent (NodeLink.open)', () => {
 describe('rotation (FR16)', () => {
   const rotate = async (h: TestHub, n: ReturnType<TestHub['enrollNode']>, d: Awaited<ReturnType<TestHub['dial']>>) => {
     const c = await h.control(d);
-    await h.hub.rotate(n.nodeId);
+    await withTimeout(h.hub.rotate(n.nodeId), 'the rotate notice to be sent');
     const notice = await c.next();
     const next = generateNodeKeyPair();
     await c.send({ t: 'rekey', publicKey: next.publicKey, sig: signRekey(n.keys.privateKey, n.nodeId, next.publicKey) });
@@ -496,7 +496,7 @@ describe('rotation (FR16)', () => {
       const next = generateNodeKeyPair();
       await c.send({ t: 'rekey', publicKey: next.publicKey, sig: signRekey(n.keys.privateKey, n.nodeId, next.publicKey) });
       assert.deepEqual(await c.next(), { t: 'rekey-answer', ok: false, reason: 'No rotation was asked for.' });
-      await h.hub.rotate(n.nodeId);
+      await withTimeout(h.hub.rotate(n.nodeId), 'the rotate notice to be sent');
       await c.next(); // the notice
       await c.send({ t: 'rekey', publicKey: next.publicKey, sig: signRekey(next.privateKey, n.nodeId, next.publicKey) });
       assert.deepEqual(await c.next(), { t: 'rekey-answer', ok: false, reason: 'The signature does not match the current key.' });

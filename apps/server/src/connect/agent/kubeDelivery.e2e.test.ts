@@ -15,7 +15,7 @@ import { runAgent, type AgentHandle } from './client.js';
 import { collectingLogger } from './log.js';
 import { agentConfig } from './testkit/agentConfig.js';
 import { FakeKube } from './testkit/fakeKube.js';
-import { openPortal, type Portal } from './testkit/portalRig.js';
+import { openPortal, stopAgents, type Portal } from './testkit/portalRig.js';
 
 let portal: Portal;
 let dir: string;
@@ -27,7 +27,7 @@ before(async () => {
   mkdirSync(join(dir, 'home'));
 });
 after(async () => {
-  for (const a of agents.splice(0)) await a.stop().catch(() => undefined);
+  await stopAgents(agents);
   portal.close();
   rmSync(dir, { recursive: true, force: true });
 });

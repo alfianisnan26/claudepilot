@@ -4,7 +4,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { AppError } from '@isnanme/core';
 import type { ConnectKind } from '@portal/contracts';
-import { openCore, openHub, wizard, type Core, type TestHub } from '../../testkit.js';
+import { openCore, openHub, withTimeout, wizard, type Core, type TestHub } from '../../testkit.js';
+import type { AgentHandle } from '../client.js';
+
+/**
+ * Stops the agents a test started (and empties the list). A stop that does not return within `ms` fails the hook by name instead of holding the
+ * suite: an unbounded `await a.stop()` in `afterEach` is how rekey.test.ts hung the release gate for 26 minutes. An error from the stop itself
+ * (the agent was already gone) is not a failure.
+ */
+export async function stopAgents(agents: AgentHandle[], ms = 10_000): Promise<void> {
+  for (const a of agents.splice(0)) await withTimeout(a.stop().catch(() => undefined), `the stop of an agent (state ${a.state()})`, ms);
+}
 
 const readBody = async (req: IncomingMessage) => {
   const parts: Buffer[] = [];

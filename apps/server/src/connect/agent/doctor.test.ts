@@ -14,6 +14,7 @@ import { agentConfig } from './testkit/agentConfig.js';
 import { FakeDocker } from './testkit/fakeDocker.js';
 import { FakeKube } from './testkit/fakeKube.js';
 import { openPortal, type Portal } from './testkit/portalRig.js';
+import { withTimeout } from '../testkit.js';
 import { writeFileSync } from 'node:fs';
 
 let portal: Portal;
@@ -65,7 +66,7 @@ describe('doctor on a host agent', () => {
       assert.match(text, /^pilot-agent 0\.1\.0 \(build eeeeeeeeeeee, protocol 1\)\n/);
       assert.match(text, /ok   portal\.health/);
     } finally {
-      await h.stop();
+      await withTimeout(h.stop(), 'the agent to stop');
     }
   });
 
