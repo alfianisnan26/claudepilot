@@ -206,6 +206,43 @@ async function bestClaude(names) {
   return best;
 }
 
+
+/**
+ * Stopgap until the portal's auto move waits and resumes by itself (T-105): a chat that is idle on a Claude with 10% or less left (or a spent
+ * session window) moves to the delegated Claude with the most room above 10%, handoff skipped when the source is spent; with none above the
+ * threshold it stays where it is and is looked at again on every round, so it moves the moment a Claude has room again. The continue nudge
+ * that follows is the normal idle nudge. Never while a turn runs (the portal's own boundary rule).
+ */
+const LOW_USED_PCT = Number(process.env.LOW_USED_PCT ?? 90);
+async function moveIfLow(t, ts, cur) {
+  const r = await api('GET', '/api/claude-usage');
+  const used = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, Math.max(0, ...(c.windows ?? []).map((w) => (typeof w.usedPct === 'number' ? w.usedPct : 0)))]));
+  const mine = used.get(cur.claudeId);
+  if (mine === undefined || mine < LOW_USED_PCT) return false;
+  let best = null;
+  for (const name of t.claudes) {
+    const id = await claudeIdOf(name);
+    if (!id || id === cur.claudeId) continue;
+    const u = used.get(id) ?? 0;
+    if (u >= LOW_USED_PCT) continue;
+    if (!best || u < best.used) best = { name, id, used: u };
+  }
+  if (!best) {
+    if (ts.lowLoggedAt === undefined || Date.now() - ts.lowLoggedAt > 30 * 60_000) log(`${t.key}: its Claude is at ${mine}% used and no delegated Claude has more than ${100 - LOW_USED_PCT}% left: waiting, looking again every round`), (ts.lowLoggedAt = Date.now());
+    return false;
+  }
+  if (DRY) return log(`[dry] ${t.key}: would move ${cur.id.slice(0, 8)} from ${mine}% used to ${best.name} (${best.used}% used)`), false;
+  const res = await api('POST', `/api/chat/sessions/${cur.id}/switch`, { claudeId: best.id, handoff: mine >= 100 ? 'skip' : 'ask' });
+  if (res.error) {
+    log(`${t.key}: could not move to ${best.name}: ${res.error.message}`);
+    ts.backoffUntil = Date.now() + 5 * 60_000;
+    return false;
+  }
+  ts.lowLoggedAt = undefined;
+  log(`${t.key}: its Claude was at ${mine}% used: moved to ${best.name} (${best.used}% used)`);
+  return true;
+}
+
 const kickoff = (t, again, reason) =>
   again
     ? `You are the continuation of the ${t.title} session, which ended (${reason}). Nobody answers questions: decide, write it down, go on. First read docs/dev-sessions/README.md, docs/dev-sessions/orchestrator.md and your status file docs/dev-sessions/status/${t.key}.md. Sub-agents of the earlier session are gone: look at git worktree list, git status -sb and git log --oneline origin/integration..HEAD in each worktree under ~/work/claudepilot.worktrees/ for what is unmerged, keep what is good, then continue from NEXT. When the whole backlog is done, make TRACK COMPLETE the first line of the status file, commit and push, and end with the final report.`
@@ -349,6 +386,10 @@ async function watch() {
       if (cur && cur.state !== 'ended' && !cur.archivedAt) {
         ts.sessionId = cur.id;
         if (cur.state === 'idle') {
+          if (await moveIfLow(t, ts, cur).catch((e) => (log(`${t.key}: low-quota check failed: ${e.message}`), false))) {
+            idleSince.delete(t.key);
+            continue;
+          }
           const since = idleSince.get(t.key) ?? Date.now();
           idleSince.set(t.key, since);
           const lastNudge = ts.nudges[ts.nudges.length - 1] ?? 0;
