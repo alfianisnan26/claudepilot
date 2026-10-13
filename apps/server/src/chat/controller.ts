@@ -98,7 +98,7 @@ import { ChatStore, claudeSessionOf, EVENT_TEXT_MAX, sessionCwd, type ChatSessio
 import { BtwEngine, readBtwConfig, type BtwHost } from './btw.js';
 import { BtwStore } from './btwStore.js';
 import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
-import { FOLDER_CHANGED, scanFolder, untrustedError } from './trust.js';
+import { autoTrustable, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError } from './trust.js';
 import { usageReport } from './usage.js';
 
 /** The permission mode every process starts in (`--permission-mode`); others are applied after. */
@@ -463,6 +463,8 @@ export class ChatController {
   mcpServersSeen?: (workspaceId: string, directory: string, servers: { name: string; status: string }[]) => string[];
   /** Installed by the owner: whether the policy allows Bypass in chat (the interim switch `sessions.allowBypass`). Unset: no. */
   bypassAllowed?: () => boolean;
+  /** Installed by the owner (T-38): whether a trusted folder whose changed settings hold permission rules only is trusted again by itself (`chat.trust.autoPermissionOnly`). Unset: no. */
+  autoTrustRules?: () => boolean;
   /**
    * Installed by the owner (delivery, `workspace_delivery.applied_at`): when the latest delivery that wrote into a workspace landed (MCP
    * servers, settings, secrets), or null. A live session whose process started before it shows a Restart hint (`configChangedAt`).
@@ -3544,9 +3546,31 @@ export class ChatController {
 
   /* ---------- Exec helpers ---------- */
 
-  /** What the folder's project settings would load, and whether the person trusted exactly that (FR43). */
-  #scan(workspaceId: string, folder: string): Promise<ChatFolderScan> {
-    return scanFolder(this.#workspaces, this.#store, workspaceId, folder, { timeoutMs: this.execTimeoutMs });
+  /**
+   * What the folder's project settings would load, and whether the person trusted exactly that (FR43). A folder trusted
+   * before whose changed files hold permission rules only is trusted again here when the policy allows it (T-38), so a
+   * start, resume, wake or Move (auto move's included) doesn't stop on a rules edit; audited.
+   */
+  async #scan(workspaceId: string, folder: string): Promise<ChatFolderScan> {
+    const scan = await scanFolder(this.#workspaces, this.#store, workspaceId, folder, { timeoutMs: this.execTimeoutMs });
+    const before = scan.trusted ? null : this.#chat.folderTrust(scan.workspaceId, scan.folder);
+    if (!before || !autoTrustable(scan, before)) return scan;
+    let allowed = false;
+    try {
+      allowed = this.autoTrustRules?.() === true;
+    } catch {
+      // the policy couldn't be read: no
+    }
+    if (!allowed) return scan;
+    saveTrust(this.#store, scan, 'portal:rules-only');
+    this.#chat.addAudit({
+      severity: 'medium',
+      kind: 'trust.auto',
+      workspaceId: scan.workspaceId,
+      actor: 'portal',
+      detail: { folder: scan.folder, hash: scan.hash, before: before.hash, files: scan.files, allowRules: scan.allowRules },
+    });
+    return { ...scan, trusted: true };
   }
 
   /** A new session's folder: an absolute path, tidied; the home folder when none is given. */

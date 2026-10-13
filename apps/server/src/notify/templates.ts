@@ -73,6 +73,7 @@ const REASON: Record<string, string> = {
   refused: 'refused',
   self_triggered: 'loop stopped',
   failed: 'failed',
+  folder_trust: 'trust the folder again',
 };
 const reason = (v: unknown) => (typeof v === 'string' && Object.hasOwn(REASON, v) ? REASON[v]! : 'failed');
 
@@ -169,6 +170,7 @@ function text(e: NotifyEvent, tz: string): { title: string; body: string } {
     case 'auto_move': {
       const left = pct(f.leftPct);
       if (f.warned === true) return { title: 'No Claude to move to', body: join(ws, left && `${left} left${est(e, 'leftPct')}`) };
+      if (f.blocked === 'trust') return { title: 'Move blocked', body: join(ws, 'trust the folder again', left && `${left} left${est(e, 'leftPct')}`) };
       return {
         title: f.suggested === true ? 'Move suggested' : `Moved to ${name(f.to, 'another Claude')}`,
         body: join(ws, f.suggested === true && `to ${name(f.to, 'another Claude')}`, left && `${left} left${est(e, 'leftPct')}`),

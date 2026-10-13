@@ -3,7 +3,9 @@
 // off by default. Expected values are worked out by hand: Work at 92 % used is 8 % left, under the threshold of 10.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { AUTO_SETTING_KEYS as K, type NotifyEvent } from '@portal/contracts';
+import { AUTO_SETTING_KEYS as K, CHAT_FOLDER_UNTRUSTED, type NotifyEvent } from '@portal/contracts';
+import '../chat/trust.js'; // registers FOLDER_UNTRUSTED
+import { render } from '../notify/templates.js';
 import { PlatformAudit } from '../platform/audit.js';
 import { fakeOwner, freshStore } from '../notify/testkit.js';
 import { AutoTransferEngine } from './engine.js';
@@ -246,6 +248,30 @@ test('FR14: a failed move leaves the chat where it was, records failed, pauses; 
   const st = await r.engine.state('s1', 'u_a');
   assert.ok(st.pending, 'a card remains possible');
   r.engine.stop();
+});
+
+test('T-38: a move refused because the folder needs trusting again is recorded as such and notified (not a silent stall)', async () => {
+  const r = await rig();
+  r.chat.fail = 'This folder’s project settings changed since you trusted it. Check them and trust it again.';
+  r.chat.failCode = CHAT_FOLDER_UNTRUSTED;
+  r.chat.turnEnds('s1');
+  await r.engine.settled();
+  assert.equal(r.chat.get('s1')!.claudeId, 'work');
+  assert.deepEqual(r.auto.events('u_a', { kinds: ['failed'] }).map((e) => e.code), ['folder_untrusted']);
+  assert.equal(r.emitted.length, 1);
+  assert.deepEqual(r.emitted[0]!.facts, { workspace: 'api-dev', leftPct: 8, to: 'Home', blocked: 'trust' });
+  const shown = render(r.emitted[0]!);
+  assert.equal(shown.title, 'Move blocked');
+  assert.match(shown.body, /trust the folder again/);
+  // Any other failure stays move_failed, with no notification.
+  const other = await rig();
+  other.chat.fail = 'The session host couldn’t start Home.';
+  other.chat.turnEnds('s1');
+  await other.engine.settled();
+  assert.deepEqual(other.auto.events('u_a', { kinds: ['failed'] }).map((e) => e.code), ['move_failed']);
+  assert.equal(other.emitted.length, 0);
+  r.engine.stop();
+  other.engine.stop();
 });
 
 test('S12 on the engine: after two moves in a day the chat is refused (session_cap), recorded once', async () => {

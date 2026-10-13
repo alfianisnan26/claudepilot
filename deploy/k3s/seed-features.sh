@@ -18,6 +18,7 @@ set_value automove.enabled true
 set_value automove.automatic true
 set_value automove.allowBypass true   # the owner's ask of 2026-10-13: a chat in Bypass moves by itself too, and keeps Bypass
 set_value agents.selfEdit true
+set_value chat.trust.autoPermissionOnly true   # T-38: a trusted folder whose settings changed to permission rules only is trusted again by itself (moves and restarts don't stop)
 set_value notify.baseUrl "\"$PORTAL_URL\""
 
 # The portal's own tools for sessions (Portal MCP): on, with session control, and agent access for the development workspace.

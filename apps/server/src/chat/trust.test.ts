@@ -14,7 +14,7 @@ import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { CP_SESSION, CP_SESSION_PATH, TRUST_EMPTY_HASH } from './host.js';
 import { ChatStore } from './store.js';
-import { FOLDER_CHANGED, FOLDER_NOT_TRUSTED, parseTrustScan, scanFolder, trustFolder, untrustedError, type FolderScan, type HostScan } from './trust.js';
+import { autoTrustable, FOLDER_CHANGED, FOLDER_NOT_TRUSTED, parseTrustScan, scanFolder, trustFolder, untrustedError, type FolderScan, type HostScan } from './trust.js';
 import { createChatTrustRoutes } from './trustRoutes.js';
 
 const HASH_A = 'a'.repeat(64);
@@ -30,8 +30,9 @@ const SCAN_A: HostScan = {
   plugins: ['formatter@tools'],
   allowRules: 2,
   envNames: ['NODE_OPTIONS'],
+  rulesOnly: false,
 };
-const EMPTY: HostScan = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [] };
+const EMPTY: HostScan = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [], rulesOnly: true };
 
 /* ========================= parsing (pure) ========================= */
 
@@ -45,6 +46,26 @@ test('parseTrustScan: reads the host’s line; names are one line each, redacted
   assert.deepEqual(odd.hooks, ['Stop']);
   const many = parseTrustScan(JSON.stringify({ ...SCAN_A, mcpServers: Array.from({ length: 1500 }, (_, i) => `s${i}`) }));
   assert.equal(many.mcpServers.length, 1000);
+});
+
+test('parseTrustScan: rulesOnly is the host’s word when it gives one, false from a host that doesn’t (T-38)', () => {
+  const rules = { ...EMPTY, hash: HASH_A, files: ['.claude/settings.json'], allowRules: 3 };
+  assert.equal(parseTrustScan(JSON.stringify({ ...rules, rulesOnly: true })).rulesOnly, true);
+  assert.equal(parseTrustScan(JSON.stringify({ ...rules, rulesOnly: undefined })).rulesOnly, false);
+  assert.throws(() => parseTrustScan(JSON.stringify({ ...rules, rulesOnly: 'yes' })), (e) => isAppError(e) && e.status === 503);
+});
+
+test('autoTrustable: only a folder trusted before, at another hash, whose files hold permission rules only and name nothing that loads (T-38)', () => {
+  const rules: FolderScan = { workspaceId: 'docker/ws1', folder: '/home/node/proj', ...EMPTY, hash: HASH_B, files: ['.claude/settings.json'], allowRules: 3, empty: false, trusted: false };
+  const before = { hash: HASH_A };
+  assert.equal(autoTrustable(rules, before), true);
+  assert.equal(autoTrustable(rules, null), false, 'never trusted: a person first');
+  assert.equal(autoTrustable(rules, { hash: null }), false);
+  assert.equal(autoTrustable({ ...rules, trusted: true }, before), false);
+  assert.equal(autoTrustable({ ...rules, rulesOnly: false }, before), false);
+  for (const extra of [{ hooks: ['Stop'] }, { mcpServers: ['x'] }, { plugins: ['p@m'] }, { envNames: ['NODE_OPTIONS'] }, { invalid: ['.claude/settings.json'] }, { files: ['.mcp.json'] }]) {
+    assert.equal(autoTrustable({ ...rules, ...extra }, before), false, JSON.stringify(extra));
+  }
 });
 
 test('parseTrustScan: anything off is a 503, never a scan that reads as empty', () => {
@@ -357,7 +378,7 @@ test('end to end: scan, trust, change a file, and the trust no longer holds — 
     const scan = await get();
     assert.deepEqual(
       { ...scan, hash: undefined },
-      { workspaceId: 'docker/ws1', folder: proj, hash: undefined, empty: false, files: ['.mcp.json', '.claude/settings.json'], invalid: [], mcpServers: ['github'], hooks: ['SessionStart'], plugins: [], allowRules: 0, envNames: ['FOO'], trusted: false },
+      { workspaceId: 'docker/ws1', folder: proj, hash: undefined, empty: false, files: ['.mcp.json', '.claude/settings.json'], invalid: [], mcpServers: ['github'], hooks: ['SessionStart'], plugins: [], allowRules: 0, envNames: ['FOO'], trusted: false, rulesOnly: false },
     );
     assert.ok(!JSON.stringify(scan).includes('ghp_never'));
 
@@ -369,6 +390,33 @@ test('end to end: scan, trust, change a file, and the trust no longer holds — 
     const changed = await get();
     assert.deepEqual([changed.trusted, changed.allowRules, changed.files.length], [false, 1, 3]);
     assert.equal((await post(scan.hash)).status, 409);
+
+    // rulesOnly (T-38): permission lists and $schema only, in files that were all read, and no .mcp.json.
+    const rulesDir = join(root, 'rules');
+    mkdirSync(join(rulesDir, '.claude'), { recursive: true });
+    const settings = (v: unknown, name = 'settings.json') => writeFileSync(join(rulesDir, '.claude', name), typeof v === 'string' ? v : JSON.stringify(v));
+    const rulesOnly = async () => ((await (await h.app.request(`/scan?workspaceId=docker/ws1&folder=${encodeURIComponent(rulesDir)}`)).json()) as { data: FolderScan }).data.rulesOnly;
+    settings({ $schema: 'https://json.schemastore.org/claude-code-settings.json', permissions: { allow: ['Bash(git status)'], deny: ['Read(./.env)'], ask: [] } });
+    settings({ permissions: { allow: ['Edit'] } }, 'settings.local.json');
+    assert.equal(await rulesOnly(), true);
+    for (const v of [
+      { permissions: { allow: ['Bash'], defaultMode: 'bypassPermissions' } },
+      { permissions: { allow: ['Bash'], additionalDirectories: ['/'] } },
+      { permissions: { allow: [1] } },
+      { permissions: { allow: 'Bash' } },
+      { permissions: [] },
+      { permissions: { allow: ['Bash'] }, apiKeyHelper: 'echo x' },
+      { permissions: { allow: ['Bash'] }, statusLine: { type: 'command', command: 'echo x' } },
+      { permissions: { allow: ['Bash'] }, env: {} },
+      { hooks: {} },
+      'not json',
+    ]) {
+      settings(v);
+      assert.equal(await rulesOnly(), false, JSON.stringify(v));
+    }
+    settings({ permissions: { allow: ['Bash'] } });
+    writeFileSync(join(rulesDir, '.mcp.json'), JSON.stringify({}));
+    assert.equal(await rulesOnly(), false, 'an .mcp.json, even an empty one');
 
     const home = (await (await h.app.request(`/scan?workspaceId=docker/ws1&folder=${encodeURIComponent(root)}`)).json()) as { data: FolderScan };
     assert.deepEqual([home.data.empty, home.data.hash], [true, TRUST_EMPTY_HASH]);

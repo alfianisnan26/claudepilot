@@ -150,6 +150,7 @@ export const AUTO_REFUSALS = [
   'not_signed_in',
   'owner_denied', // the session's owner may no longer operate it, or may not use that Claude: nothing moves
   'move_failed', // the Move flow refused or did not finish; the chat stays where it was
+  'folder_untrusted', // the Move flow refused because the chat's folder needs trusting again (its project settings changed)
 ] as const;
 export type AutoRefusal = (typeof AUTO_REFUSALS)[number];
 

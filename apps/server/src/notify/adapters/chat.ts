@@ -4,6 +4,7 @@
 //   and the session did not start from outside); each recipient's own switches cut it at delivery.
 // - `session_done`: a MAIN-thread `result` (a sub-agent's is not a turn), when someone asked for it on this session or the turn took 5 min.
 // - `session_failed`: a main-thread `error` event, or an end that was not a person's (`credential:`, `integrity:`, a crash mid-turn).
+//   A folder whose settings changed since it was trusted (a wake or resume refused for trust, T-38) is its own reason, `folder_trust`.
 // - `resolved`: the request is dealt with: nothing more goes out for it and its tokens die.
 // Nothing an agent wrote (a title, a command, an error text) goes into `facts`: only the workspace, the tool class, numbers; the request's
 // redacted one-line summary goes into `detail`, which only a destination with "Include detail" shows.
@@ -38,7 +39,8 @@ export function requestAction(r: Pick<ChatRequest, 'kind' | 'toolName'>): string
 }
 
 /** An error's text, read only to pick a fixed reason; the text itself goes nowhere. */
-export const errorReason = (text: string | undefined): string => (/rate.?limit|429|overloaded|usage limit/i.test(text ?? '') ? 'rate_limit' : 'error');
+export const errorReason = (text: string | undefined): string =>
+  /rate.?limit|429|overloaded|usage limit/i.test(text ?? '') ? 'rate_limit' : /project settings changed since you trusted it/i.test(text ?? '') ? 'folder_trust' : 'error';
 
 export function adaptChat(d: ChatAdapterDeps): () => void {
   const states = new Map<string, ChatSession['state']>();

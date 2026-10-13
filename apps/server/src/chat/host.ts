@@ -85,6 +85,8 @@ export const ACCOUNT_HELPER = '/etc/claudepilot/bin/account-key';
  *   ({@link TRUST_FILES}) would load, never a value or a command: `mcpServers` (keys of `mcpServers`),
  *   `hooks` (events with at least one command), `plugins` (`enabledPlugins` keys set to true),
  *   `allowRules` (entries in `permissions.allow`) and `envNames` (keys of `env`), from every file read;
+ *   `rulesOnly` (no `.mcp.json`, every file read, and each holds nothing but `$schema` and `permissions` with
+ *   `allow`, `deny` and `ask` lists of strings: no hook, server, plugin, env, helper command or default mode);
  *   `files` (those present) and `invalid` (present but not a JSON object, or not read). `hash` is the
  *   sha256 of `<sha256 of the file>  <name>` lines for the files present, in that order, so any change
  *   to any of them changes it; with none it's {@link TRUST_EMPTY_HASH}. Each file is read once, through
@@ -760,7 +762,11 @@ case "$cmd" in
         | .key] | unique),
       plugins: ([$s[] | .enabledPlugins | objects | to_entries[] | select(.value == true) | .key] | unique),
       allowRules: ([$s[] | .permissions | objects | .allow | arrays | length] | add // 0),
-      envNames: ([$s[] | .env | objects | keys[]] | unique)
+      envNames: ([$s[] | .env | objects | keys[]] | unique),
+      rulesOnly: ($invalid == "" and ($files | split(" ") | any(. == ".mcp.json") | not)
+        and all($s[]; (keys - ["$schema", "permissions"]) == []
+          and ((.permissions // {}) | type == "object" and (keys - ["allow", "deny", "ask"]) == []
+            and all(.[]; type == "array" and all(.[]; type == "string")))))
     }' "$@" </dev/null || exit 1
     exit 0
     ;;

@@ -12,7 +12,7 @@ import { HANDOFF_REQUEST } from './controller.js';
 import { NOT_SET_UP, NOT_SIGNED_IN } from './eligibility.js';
 import { ChatStore } from './store.js';
 import { cleanNote, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
-import { init, line, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
+import { EMPTY_SCAN, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
 
 const assistantText = (text: string) => line({ type: 'assistant', message: { content: [{ type: 'text', text }] }, parent_tool_use_id: null, uuid: randomUUID() });
 const resultLine = (sessionId: string, total = 0.01) =>
@@ -127,6 +127,49 @@ test('switch: an untrusted folder is refused with the scan, before the chat is t
     s.ws.scanOut = JSON.stringify({ ...JSON.parse(s.ws.scanOut), hash: 'a'.repeat(64), files: ['.mcp.json'], mcpServers: ['evil'] });
     assert.equal(await code(s.controller.switchClaude(s.id, work.id)), CHAT_FOLDER_UNTRUSTED);
     assert.equal(s.controller.get(s.id)!.process, 'live');
+  } finally {
+    await s.done();
+  }
+});
+
+test('switch (T-38): a folder trusted before whose settings now hold permission rules only is trusted again by itself when the policy allows it, audited once; a hook, or the policy off, still stops the move', async () => {
+  const s = await liveSession();
+  try {
+    fast(s);
+    const work = await withDest(s);
+    const chat = new ChatStore(s.store);
+    const [h1, h2] = ['1'.repeat(64), '2'.repeat(64)];
+    const rules = (extra: Record<string, unknown> = {}) => JSON.stringify({ ...EMPTY_SCAN, hash: h2, files: ['.claude/settings.json'], allowRules: 3, rulesOnly: true, ...extra });
+    chat.saveFolderTrust('docker/ws1', '/home/node', h1, {}, 'ui');
+    const skip = { handoff: 'skip' as const };
+
+    // The policy unset: refused as before.
+    s.ws.scanOut = rules();
+    assert.equal(await code(s.controller.switchClaude(s.id, work.id, skip)), CHAT_FOLDER_UNTRUSTED);
+    // The policy on, but the files now load a hook (the host says so), or name one while claiming rules only: refused.
+    s.controller.autoTrustRules = () => true;
+    s.ws.scanOut = rules({ hooks: ['SessionStart'], rulesOnly: false });
+    assert.equal(await code(s.controller.switchClaude(s.id, work.id, skip)), CHAT_FOLDER_UNTRUSTED);
+    s.ws.scanOut = rules({ hooks: ['SessionStart'] });
+    assert.equal(await code(s.controller.switchClaude(s.id, work.id, skip)), CHAT_FOLDER_UNTRUSTED);
+    // A host older than T-38 says nothing about rules: refused.
+    s.ws.scanOut = JSON.stringify({ ...JSON.parse(rules()), rulesOnly: undefined });
+    assert.equal(await code(s.controller.switchClaude(s.id, work.id, skip)), CHAT_FOLDER_UNTRUSTED);
+    assert.equal(chat.folderTrust('docker/ws1', '/home/node')!.hash, h1);
+    assert.equal(s.controller.audit({ kind: 'trust.auto' }).length, 0);
+    assert.equal(s.controller.get(s.id)!.claudeName, 'Default');
+
+    // Rules only: trusted again, one audit row, and the move goes through.
+    s.ws.scanOut = rules();
+    const moving = s.controller.switchClaude(s.id, work.id, skip);
+    await acknowledge(s);
+    await moving;
+    assert.equal(s.controller.get(s.id)!.claudeName, 'Work');
+    assert.equal(chat.folderTrust('docker/ws1', '/home/node')!.hash, h2);
+    const rows = s.controller.audit({ kind: 'trust.auto' });
+    assert.equal(rows.length, 1);
+    assert.deepEqual([rows[0]!.severity, rows[0]!.actor, rows[0]!.workspaceId], ['medium', 'portal', 'docker/ws1']);
+    assert.deepEqual(rows[0]!.detail, { folder: '/home/node', hash: h2, before: h1, files: ['.claude/settings.json'], allowRules: 3 });
   } finally {
     await s.done();
   }

@@ -17,6 +17,7 @@ import {
   type AutoSessionState,
   type AutoTransferEvent,
   type AutoTransferSettings,
+  CHAT_FOLDER_UNTRUSTED,
   type ChatServerMessage,
   type ChatSession,
   type ClaudeUsage,
@@ -390,12 +391,12 @@ export class AutoTransferEngine {
   }
 
   /** The `auto_move` notification: fixed text over names and numbers (notify/templates.ts). */
-  #notify(s: ChatSession, ownerId: string, f: { to?: string; suggested?: boolean; warned?: boolean; leftPct: number }): void {
+  #notify(s: ChatSession, ownerId: string, f: { to?: string; suggested?: boolean; warned?: boolean; blocked?: 'trust'; leftPct: number }): void {
     const ws = s.workspaceId.includes('/') ? s.workspaceId.slice(s.workspaceId.indexOf('/') + 1) : s.workspaceId;
     this.#d.bus?.emit({
       kind: 'auto_move',
       subject: { type: 'session', id: s.id, workspaceId: s.workspaceId },
-      facts: { workspace: ws, leftPct: f.leftPct, ...(f.to ? { to: f.to } : {}), ...(f.suggested ? { suggested: true } : {}), ...(f.warned ? { warned: true } : {}) },
+      facts: { workspace: ws, leftPct: f.leftPct, ...(f.to ? { to: f.to } : {}), ...(f.suggested ? { suggested: true } : {}), ...(f.warned ? { warned: true } : {}), ...(f.blocked ? { blocked: f.blocked } : {}) },
       audience: [ownerId],
     });
   }
@@ -449,8 +450,11 @@ export class AutoTransferEngine {
     } catch (e) {
       const now = this.#d.clock.now();
       this.#d.store.patchSession(s.id, ownerId, { pausedUntil: iso(now + m.settings.minPauseMin * MIN), deferSince: null });
-      this.#record({ ...base, kind: 'failed', code: 'move_failed' }, 'medium');
       const code = e instanceof AppError ? e.code : 'error';
+      // A folder whose settings changed since it was trusted stops every move until someone trusts it again: say so, loudly (T-38).
+      const untrusted = code === CHAT_FOLDER_UNTRUSTED;
+      this.#record({ ...base, kind: 'failed', code: untrusted ? 'folder_untrusted' : 'move_failed' }, 'medium');
+      if (untrusted && m.auto) this.#notify(s, ownerId, { to: m.to.name, blocked: 'trust', leftPct: m.facts.leftPct.value ?? 0 });
       console.error(`[autotransfer] a move did not finish (${code})`);
       this.#wake(s.id, m.settings.minPauseMin * MIN);
       return false;
