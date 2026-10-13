@@ -288,6 +288,27 @@ test('S13b on the engine: Bypass in auto with automove.allowBypass: moved by its
   r.engine.stop();
 });
 
+test('T-29 on the engine: only the Opus week is low and the platform prefers the same Claude: the model changes in place, no move; Undo is offered until it is back', async () => {
+  const r = await rig({ [K.enabled]: true, [K.automatic]: true, [K.modelFallback]: 'sonnet', [K.keepModelFirst]: false }, () => [
+    usage('work', 'Work', [win('session', 40), win('week', 50), win('week_opus', 95)]),
+    usage('home', 'Home', [win('session', 30), win('week', 40), win('week_opus', 20)]),
+  ]);
+  r.chat.sessions.set('s1', chatSession('s1', { model: 'claude-opus-4-1', mode: 'bypassPermissions' }));
+  r.chat.turnEnds('s1');
+  await r.engine.settled();
+  assert.deepEqual(r.chat.models, [{ id: 's1', model: 'sonnet' }]);
+  assert.deepEqual(r.chat.moves, [], 'no move');
+  assert.equal(r.chat.get('s1')!.mode, 'bypassPermissions', 'the permission mode is untouched');
+  const moved = r.auto.events('u_a', { kinds: ['moved'] });
+  assert.equal(moved.length, 1);
+  assert.deepEqual([moved[0]!.from?.model, moved[0]!.to?.model, moved[0]!.to?.id], ['opus', 'sonnet', 'work']);
+  const st = await r.engine.state('s1', 'u_a');
+  assert.deepEqual(st.lastMove?.undo, { ok: true, reason: null });
+  r.chat.sessions.set('s1', { ...r.chat.get('s1')!, model: 'claude-opus-4-1' });
+  assert.deepEqual((await r.engine.state('s1', 'u_a')).lastMove?.undo, { ok: false, reason: 'Already back.' });
+  r.engine.stop();
+});
+
 test('the card closes when the source recovers above the threshold, and when the chat ends', async () => {
   let used = 92;
   const r = await rig(ASK, () => [usage('work', 'Work', [win('session', used)]), usage('home', 'Home', [win('session', 60)])]);

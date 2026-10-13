@@ -11,6 +11,8 @@ export interface ChatPort {
   list(filter?: { workspaceId?: string }): ChatSession[];
   switchOptions(id: string): Promise<ChatSwitchOptions>;
   switchClaude(id: string, destClaudeId: string, opts: { handoff?: 'ask' | 'skip' }): Promise<ChatSession>;
+  /** Changes the chat's model on the Claude it runs on (`sonnet`): the chat control `model`, as a person's model picker does. */
+  setModel(id: string, model: string): Promise<void>;
   onEvent(cb: (sessionId: string, msg: ChatServerMessage) => void): () => void;
   history(id: string, after?: number): ChatEvent[];
 }

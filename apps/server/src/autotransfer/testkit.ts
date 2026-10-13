@@ -70,6 +70,8 @@ export function fakeClock(start = T0): ClockPort & { advance(min: number): void;
 export class MoveChat extends FakeChat {
   readonly events = new Map<string, ChatEvent[]>();
   readonly moves: { id: string; to: string; handoff: string | undefined }[] = [];
+  /** Model changes in place, in order. */
+  readonly models: { id: string; model: string }[] = [];
   readonly names = new Map<string, string>([
     ['work', 'Work'],
     ['home', 'Home'],
@@ -112,6 +114,14 @@ export class MoveChat extends FakeChat {
     this.sessions.set(id, moved);
     this.dispatch(id, { type: 'session', session: moved });
     return moved;
+  }
+  async setModel(id: string, model: string): Promise<void> {
+    this.models.push({ id, model });
+    if (this.fail) throw new AppError('SERVICE_UNAVAILABLE', this.fail);
+    const s = this.get(id)!;
+    const changed = { ...s, model };
+    this.sessions.set(id, changed);
+    this.dispatch(id, { type: 'session', session: changed });
   }
   /** A person moves the chat with the normal dialog (an Undo). */
   personMoves(id: string, to: string) {

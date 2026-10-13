@@ -13,6 +13,7 @@ import {
   unavailableFigure,
   type AutoClaudeRef,
   type AutoFacts,
+  type AutoLimit,
   type AutoMode,
   type AutoReason,
   type AutoRefusal,
@@ -24,6 +25,8 @@ import {
   type MoveCandidate,
   type MoveRecommendation,
 } from '@portal/contracts';
+
+import { ROOM_PCT } from '../claudeusage/recommend.js';
 
 const MIN = 60_000;
 
@@ -58,6 +61,23 @@ export interface SourceReading {
   leftPct: number;
   reason: AutoReason | null;
   facts: AutoFacts;
+  /** That window stops every model on the Claude (`shared`: the session, the week) or only the chat's model (`model`). */
+  limit: AutoLimit;
+  /** The least left over the shared windows alone (null when none has a number): what a model change on this Claude would still have. */
+  sharedLeftPct: number | null;
+}
+
+/** Whether a window stops every model (`session`, `week`) rather than one model's own. */
+export const sharedWindow = (key: string): boolean => ALL_MODEL_WINDOWS.includes(key);
+
+/**
+ * What a Claude has left for a chat on model `family` (FR6, T-29): the least left over its live shared windows and that model's own windows.
+ * Null when none of them has a number. A Claude with a lot of shared room but its Opus week used up has nothing left for an Opus chat.
+ */
+export function leftFor(c: Pick<ClaudeUsage, 'windows'>, family: string | null, nowMs: number): number | null {
+  const ws = c.windows.filter((w) => live(w, nowMs) && (sharedWindow(w.key) || windowOfFamily(w.key, family)));
+  if (!ws.length) return null;
+  return Math.max(0, round1(Math.min(...ws.map((w) => (w.level === 'exhausted' ? 100 : w.usedPct!)).map((u) => 100 - u))));
 }
 
 /** A window that has a number and has not reset (a reset, an unknown level or a reset time in the past leaves it out). */
@@ -109,7 +129,11 @@ export function sourceReading(c: ClaudeUsage, model: string | null, thresholdPct
       if (best.w.pace!.projectedPct.value !== null) facts.projectedPct = estimatedFigure(best.w.pace!.projectedPct.value);
     }
   }
-  return { window, leftPct, reason, facts };
+  const limit: AutoLimit = { key: window.key, label: window.label, kind: sharedWindow(window.key) ? 'shared' : 'model' };
+  facts.limit = limit;
+  const shared = windows.filter((w) => sharedWindow(w.key));
+  const sharedLeftPct = shared.length ? Math.max(0, round1(Math.min(...shared.map((w) => (w.level === 'exhausted' ? 0 : 100 - w.usedPct!))))) : null;
+  return { window, leftPct, reason, facts, limit, sharedLeftPct };
 }
 
 /** What the engine knows about a chat's history of moves (from its own rows), for the safeguards and the guards on the choice. */
@@ -179,11 +203,15 @@ const ref = (c: MoveCandidate): AutoClaudeRef => ({ id: c.claudeId, name: c.name
 const ZERO = { approvals: 0, queued: 0, agents: 0 };
 
 /** The candidates that qualify (FR7 to FR9), best first, and those only `ask` may list; and whether any was skipped only for being full. */
-export function candidates(input: DecideInput, mode: 'ask' | 'auto'): { eligible: MoveCandidate[]; alternatives: MoveCandidate[]; full: boolean } {
+export function candidates(
+  input: DecideInput,
+  mode: 'ask' | 'auto',
+  family: string | null = modelFamily(input.session.model),
+): { eligible: MoveCandidate[]; alternatives: MoveCandidate[]; full: boolean } {
   const { session, settings, nowMs } = input;
   const rec = input.recommend(input.claudes, { workspaceId: session.workspaceId, from: session.claudeId, nowMs, allow: input.allow });
   const ok = new Set((input.options?.options ?? []).filter((o) => o.ok).map((o) => o.claude.id));
-  const family = modelFamily(session.model);
+  const threshold = input.claudeThresholdPct ?? settings.thresholdPct;
   const usage = new Map(input.claudes.map((c) => [c.claudeId, c]));
   const allow = new Set(input.destinations);
   let full = false;
@@ -194,6 +222,12 @@ export function candidates(input: DecideInput, mode: 'ask' | 'auto'): { eligible
     if (c.reason === 'no_limits') {
       if (!settings.allowApiKey || settings.sameModelOnly) return false; // what a key's model availability is, the portal can't see
     } else if (!u || !freshReading(u, nowMs)) return false;
+    // The chat's model must have room there (T-29): its own window at or under the threshold would stop it again at once, whatever the
+    // shared windows say. A model whose family is unknown is judged on the shared windows only, as before.
+    if (c.reason !== 'no_limits' && u && family) {
+      const left = leftFor(u, family, nowMs);
+      if (left !== null && left <= threshold) return false;
+    }
     if (settings.sameModelOnly && c.reason !== 'no_limits') {
       // The family must be known, and its own window on the destination not used up.
       if (!family || !u) return false;
@@ -209,7 +243,26 @@ export function candidates(input: DecideInput, mode: 'ask' | 'auto'): { eligible
     return true;
   };
   const best = (mode === 'auto' ? ['room', 'no_limits'] : ['room', 'over_pace', 'no_limits']) as MoveCandidate['reason'][];
-  const ranked = rec.candidates.filter((c) => c.rank !== null);
+  // The ranking judges a Claude by its fullest window of all; for THIS chat only the shared windows and its model's own count (T-29): a
+  // Claude whose Opus week is full has room for a Sonnet chat. Re-classed on what is left for the chat's model, then ordered by it (the
+  // ranking's order breaks ties, so its pace and reset rules still decide between equals).
+  const forChat = (c: MoveCandidate): MoveCandidate => {
+    const u = usage.get(c.claudeId);
+    if (c.reason === 'no_limits' || !u || !family || (c.reason !== 'room' && c.reason !== 'over_pace' && c.reason !== 'tight')) return c;
+    const left = leftFor(u, family, nowMs);
+    if (left === null) return c;
+    const reason: MoveCandidate['reason'] = left < ROOM_PCT ? 'tight' : c.reason === 'over_pace' ? 'over_pace' : 'room';
+    return { ...c, reason, leftPct: measuredFigure(left) };
+  };
+  // The ranking's shape kept (room first, then Claudes without plan limits, then tight), each part by what it leaves the chat, ties in
+  // the ranking's own order (stable sort).
+  const byLeft = (a: MoveCandidate, b: MoveCandidate) => (b.leftPct.value ?? -1) - (a.leftPct.value ?? -1);
+  const all = rec.candidates.filter((c) => c.rank !== null).map(forChat);
+  const ranked = [
+    ...all.filter((c) => c.reason === 'room' || c.reason === 'over_pace').sort(byLeft),
+    ...all.filter((c) => c.reason === 'no_limits'),
+    ...all.filter((c) => c.reason === 'tight').sort(byLeft),
+  ];
   let eligible = ranked.filter((c) => best.includes(c.reason) && pass(c));
   const alternatives = mode === 'ask' ? ranked.filter((c) => c.reason === 'tight' && pass(c)) : [];
   if (allow.size) {
@@ -250,25 +303,76 @@ export function decide(input: DecideInput): Decision {
   const bypass = session.mode === 'bypassPermissions' && !settings.allowBypass;
   const failedToday = counters.failures24h >= 2;
   const autoish = input.mode === 'auto' && !bypass && !failedToday;
-  const { eligible, alternatives, full } = candidates(input, autoish ? 'auto' : 'ask');
-  const pick = eligible[0];
-  if (!pick) return { act: 'warn', code: full ? 'destination_busy' : 'no_destination', reading, period };
+  const family = modelFamily(session.model);
+  const usage = new Map(input.claudes.map((c) => [c.claudeId, c]));
+  const { eligible, alternatives, full } = candidates(input, autoish ? 'auto' : 'ask', family);
+  const fallbacks = settings.modelFallback.filter((f) => f !== family);
+  // The options (T-29): keep the model and move; change model here (only when the limit is the model's own and the shared windows have
+  // room); move with another model (only when no Claude has room on this one). `keepModelFirst` orders the first two.
+  const keep = eligible[0] ?? null;
+  let here: { model: string; left: number } | null = null;
+  if (reading.limit.kind === 'model' && reading.sharedLeftPct !== null && reading.sharedLeftPct > threshold) {
+    for (const f of fallbacks) {
+      const left = leftFor(source, f, nowMs);
+      if (left !== null && left > threshold) {
+        here = { model: f, left };
+        break;
+      }
+    }
+  }
+  let other: { pick: MoveCandidate; model: string } | null = null;
+  if (!keep) {
+    for (const f of fallbacks) {
+      const c = candidates(input, autoish ? 'auto' : 'ask', f).eligible[0];
+      if (c) {
+        other = { pick: c, model: f };
+        break;
+      }
+    }
+  }
+  const order = settings.keepModelFirst ? (['keep', 'here', 'other'] as const) : (['here', 'keep', 'other'] as const);
+  const chosen = order.find((o) => (o === 'keep' ? keep : o === 'here' ? here : other));
+  if (!chosen) return { act: 'warn', code: full ? 'destination_busy' : 'no_destination', reading, period };
   const facts: AutoFacts = { ...reading.facts };
-  if (pick.reason !== 'no_limits' && pick.leftPct.value !== null) facts.destLeftPct = measuredFigure(pick.leftPct.value);
-  const handoff: 'ask' | 'skip' = reading.reason === 'exhausted' || input.options?.handoff.ok === false ? 'skip' : 'ask';
+  const destLeft = (c: MoveCandidate, f: string | null) => {
+    if (c.reason === 'no_limits') return;
+    const u = usage.get(c.claudeId);
+    const left = u ? leftFor(u, f, nowMs) : null;
+    const value = left ?? c.leftPct.value;
+    if (value !== null) facts.destLeftPct = measuredFigure(value);
+  };
+  let to: AutoClaudeRef;
+  let alts: MoveCandidate[];
+  if (chosen === 'here') {
+    to = { id: session.claudeId, name: source.claudeName, model: here!.model };
+    facts.destLeftPct = measuredFigure(here!.left);
+    alts = eligible;
+  } else if (chosen === 'keep') {
+    to = ref(keep!);
+    destLeft(keep!, family);
+    alts = [...eligible.slice(1), ...alternatives];
+  } else {
+    to = { ...ref(other!.pick), model: other!.model };
+    destLeft(other!.pick, other!.model);
+    alts = alternatives;
+  }
+  // A model change in place keeps the conversation: no handoff, nothing dropped.
+  const inPlace = to.id === session.claudeId;
+  const handoff: 'ask' | 'skip' = inPlace || reading.reason === 'exhausted' || input.options?.handoff.ok === false ? 'skip' : 'ask';
   const choice: DecideChoice = {
     reason: reading.reason,
-    to: ref(pick),
-    alternatives: [...eligible.slice(1), ...alternatives].map(ref),
+    to,
+    alternatives: alts.map(ref),
     facts,
     handoff,
-    dropped: input.options?.dropped ?? ZERO,
+    dropped: inPlace ? ZERO : (input.options?.dropped ?? ZERO),
     period,
   };
   // 8. `ask`: the card.
   if (input.mode === 'ask') return { act: 'suggest', why: null, reading, ...choice };
-  // 9. `auto`: not Bypass unless allowed; not after two failures today; only at a quiet boundary, else wait (up to 30 minutes), then a card.
-  if (bypass) return { act: 'suggest', why: 'bypass', reading, ...choice };
+  // 9. `auto`: not Bypass unless allowed (a model change in place leaves Bypass as it is: allowed); not after two failures today; only at a
+  // quiet boundary, else wait (up to 30 minutes), then a card.
+  if (bypass && !inPlace) return { act: 'suggest', why: 'bypass', reading, ...choice };
   if (failedToday) return { act: 'suggest', why: 'failed_today', reading, ...choice };
   const d = choice.dropped;
   const quiet = session.state === 'idle' && !session.switching && d.approvals === 0 && d.queued === 0 && d.agents === 0;

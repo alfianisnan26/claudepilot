@@ -41,6 +41,10 @@ export const AUTO_SETTING_KEYS = {
   /** A Claude on a Console API key (billed per use) may be a destination. Off until a person turns it on. */
   allowApiKey: 'automove.allowApiKey',
   allowBypass: 'automove.allowBypass',
+  /** Models a chat may change to when only its own model's limit is low, best first (`sonnet`, `opus, sonnet, haiku`). Empty: never. */
+  modelFallback: 'automove.modelFallback',
+  /** When both are possible: keep the model and move to another Claude first (on), or stay on this Claude and change model first (off). */
+  keepModelFirst: 'automove.keepModelFirst',
 } as const;
 
 /** Defaults and bounds of the numeric settings. The defaults are design choices, not measurements. */
@@ -82,6 +86,17 @@ export interface AutoTransferSettings {
   allowApiKey: boolean;
   /** A chat in Bypass may be moved by itself (the move keeps Bypass while the policy allows it; chat-sessions §21 FR20a). The platform's only; off by default. */
   allowBypass: boolean;
+  /** Model families a chat may change to, best first (lower case: `opus`, `sonnet`, `haiku`); empty: a chat never changes model by itself. */
+  modelFallback: string[];
+  /** Keep the model and move first (true), or change model on the same Claude first (false). */
+  keepModelFirst: boolean;
+}
+
+/** Reads `automove.modelFallback`: a comma or space list of model families, lower case, known ones only, no repeats. */
+export function parseModelFallback(raw: unknown): string[] {
+  const out: string[] = [];
+  for (const w of String(typeof raw === 'string' ? raw : '').toLowerCase().split(/[\s,]+/)) if (/^(opus|sonnet|haiku)$/.test(w) && !out.includes(w)) out.push(w);
+  return out;
 }
 
 /** The mode two booleans make. */
@@ -142,6 +157,16 @@ export type AutoRefusal = (typeof AUTO_REFUSALS)[number];
 export interface AutoClaudeRef {
   id: string;
   name: string;
+  /** The model family the chat runs on there when the move changes it (`sonnet`); absent or null: the model stays. A ref with the
+   * chat's own Claude and a model is a model change in place (no move, no handoff). */
+  model?: string | null;
+}
+
+/** Which limit a decision is about: `shared` stops every model on that Claude (the session, the week); `model` stops only one model. */
+export interface AutoLimit {
+  key: string;
+  label: string;
+  kind: 'shared' | 'model';
 }
 
 /** The facts behind a suggestion or a move, each with its basis. */
@@ -154,8 +179,10 @@ export interface AutoFacts {
   /** `projection` only: where it is heading at its pace, and when it runs out. Estimates. */
   projectedPct?: Figure;
   etaAt?: Figure<string>;
-  /** The destination's percent left, when it has plan limits. */
+  /** The destination's percent left, when it has plan limits: over the limits that would stop the chat there (its model's and the shared ones). */
   destLeftPct?: Figure;
+  /** The limit that is low on the source, and whether it stops every model or only the chat's. */
+  limit?: AutoLimit;
 }
 
 export const AUTO_SUGGESTION_STATES = ['open', 'moved', 'later', 'always', 'expired', 'superseded'] as const;

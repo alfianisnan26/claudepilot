@@ -7,7 +7,7 @@ import type { AutoSessionState } from '@portal/contracts';
 import { InfoTip } from '@/components/InfoTip';
 import { errorText } from '@/lib/api';
 import { autoApi } from './api';
-import { droppedText, headline, offer, reasonText } from './pure';
+import { droppedText, headline, inPlace, offer, reasonText } from './pure';
 
 export function SuggestionCard({
   state,
@@ -51,7 +51,7 @@ export function SuggestionCard({
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Button size="sm" loading={busy === 'move'} disabled={disabled || !!busy} onClick={() => act('move', () => autoApi.move(s.id))}>
-          Move
+          {inPlace(s) ? 'Switch' : 'Move'}
         </Button>
         <Button size="sm" variant="secondary" loading={busy === 'later'} disabled={disabled || !!busy} onClick={() => act('later', () => autoApi.later(s.id))}>
           Later

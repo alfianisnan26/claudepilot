@@ -6,6 +6,7 @@ import {
   AUTO_BOUNDS,
   estimatedFigure,
   measuredFigure,
+  parseModelFallback,
   unavailableFigure,
   type AutoTransferSettings,
   type ChatSwitchOptions,
@@ -14,7 +15,7 @@ import {
   type WindowPace,
 } from '@portal/contracts';
 import { recommendMove } from '../claudeusage/recommend.js';
-import { decide, effectiveMode, modelFamily, sourceReading, type DecideInput } from './decide.js';
+import { decide, effectiveMode, leftFor, modelFamily, sourceReading, type DecideInput } from './decide.js';
 
 const NOW = Date.parse('2026-10-12T12:00:00.000Z');
 const min = (n: number) => new Date(NOW + n * 60_000).toISOString();
@@ -77,6 +78,8 @@ const SETTINGS: AutoTransferSettings = {
   sameModelOnly: false,
   allowApiKey: false,
   allowBypass: false,
+  modelFallback: [],
+  keepModelFirst: true,
 };
 
 function options(claudes: ClaudeUsage[], over: Partial<ChatSwitchOptions> = {}): ChatSwitchOptions {
@@ -291,11 +294,11 @@ test('S16: same model only; Home has its Opus week used up; the chat is on Opus:
   // Without Spare: nothing qualifies.
   const none = decide({ ...input([WORK_92(), home], { settings: { ...SETTINGS, sameModelOnly: true } }), session: opus });
   assert.equal(none.act === 'warn' && none.code, 'no_destination');
-  // U1a ranks a Claude by its fullest window: Home's Opus week at 100 % makes it `tight` (0 % left), so `auto` never takes it anyway;
-  // `ask` lists it as an alternative when same-model is off, and not at all when it is on.
+  // Since T-29 a destination is judged on what it has left for the chat's model: Home's Opus week at 100 % leaves nothing for an Opus
+  // chat, so it is not listed even when same-model is off (it used to be offered as an alternative: a move that stops again at once).
   const off = decide({ ...input([WORK_92(), home, spare], { mode: 'ask' }), session: opus });
   assert.equal(off.act === 'suggest' && off.to.id, 'spare');
-  assert.deepEqual(off.act === 'suggest' && off.alternatives, [{ id: 'home', name: 'Home' }]);
+  assert.deepEqual(off.act === 'suggest' && off.alternatives, []);
   const on = decide({ ...input([WORK_92(), home, spare], { mode: 'ask', settings: { ...SETTINGS, sameModelOnly: true } }), session: opus });
   assert.deepEqual(on.act === 'suggest' && on.alternatives, []);
   // An unknown model with same-model-only: no destination can be vouched for.
@@ -390,4 +393,78 @@ test('model families', () => {
   assert.equal(modelFamily('sonnet[1m]'), 'sonnet');
   assert.equal(modelFamily(null), null);
   void measuredFigure;
+});
+
+// T-29 (owner, 2026-10-13): several limits per Claude, shared and per model; a model change on the same Claude is one of the options.
+const OPUS = { session: { id: 's1', workspaceId: 'docker/api-dev', claudeId: 'work', model: 'claude-opus-4-1', state: 'idle' as const, mode: 'default' as const, switching: null } };
+// Work: the Opus week is at 95 % (5 % left), the shared windows have room. Home: room on everything. Spare: plenty of shared room, Opus used up.
+const WORK_OPUS_LOW = () => claude('work', 'Work', [win('session', 40), win('week', 50), win('week_opus', 95)]);
+const HOME_ROOM = () => claude('home', 'Home', [win('session', 30), win('week', 40), win('week_opus', 20)]);
+const SPARE_OPUS_OUT = () => claude('spare', 'Spare', [win('session', 5), win('week', 10), win('week_opus', 100)]);
+
+test('T-29: which limit binds is said: the model-only Opus week, with the shared windows still roomy', () => {
+  const r = sourceReading(WORK_OPUS_LOW(), 'claude-opus-4-1', 10, true, NOW)!;
+  assert.deepEqual(r.limit, { key: 'week_opus', label: 'Opus', kind: 'model' });
+  assert.equal(r.leftPct, 5);
+  assert.equal(r.sharedLeftPct, 50);
+  assert.equal(r.reason, 'low');
+  assert.equal(leftFor(SPARE_OPUS_OUT(), 'opus', NOW), 0, 'no room left for an Opus chat, whatever the shared windows say');
+  assert.equal(leftFor(SPARE_OPUS_OUT(), 'sonnet', NOW), 90);
+});
+
+test('T-29: a destination with shared room but its Opus week used up is not chosen for an Opus chat; one with room on Opus is', () => {
+  const d = decide(input([WORK_OPUS_LOW(), SPARE_OPUS_OUT(), HOME_ROOM()], OPUS));
+  assert.equal(d.act, 'move');
+  if (d.act !== 'move') return;
+  assert.deepEqual(d.to, { id: 'home', name: 'Home' });
+  assert.deepEqual(d.facts.destLeftPct, { value: 60, basis: 'measured' }, 'the least left over the windows that stop an Opus chat at Home (week 40 % used)');
+  assert.ok(!d.alternatives.some((a) => a.id === 'spare'));
+});
+
+test('T-29: keep the model first (the default) moves; "change model first" switches to Sonnet on the same Claude, no handoff', () => {
+  const settings = { ...SETTINGS, modelFallback: ['sonnet'] };
+  const keep = decide(input([WORK_OPUS_LOW(), HOME_ROOM()], { ...OPUS, settings }));
+  assert.equal(keep.act === 'move' && keep.to.id, 'home');
+  const here = decide(input([WORK_OPUS_LOW(), HOME_ROOM()], { ...OPUS, settings: { ...settings, keepModelFirst: false } }));
+  assert.equal(here.act, 'move');
+  if (here.act !== 'move') return;
+  assert.deepEqual(here.to, { id: 'work', name: 'Work', model: 'sonnet' });
+  assert.equal(here.handoff, 'skip');
+  assert.deepEqual(here.dropped, { approvals: 0, queued: 0, agents: 0 });
+  assert.deepEqual(here.facts.destLeftPct, { value: 50, basis: 'measured' }, 'Sonnet here has what the shared windows have (no Sonnet window on Work)');
+  assert.deepEqual(here.alternatives.map((a) => a.id), ['home'], 'the move stays on offer');
+});
+
+test('T-29: no other Claude has room on Opus: the model changes here (fallback list set); with no list, a warning and nothing moves', () => {
+  const settings = { ...SETTINGS, modelFallback: ['sonnet'] };
+  const d = decide(input([WORK_OPUS_LOW(), SPARE_OPUS_OUT()], { ...OPUS, settings }));
+  assert.equal(d.act === 'move' && JSON.stringify(d.to), JSON.stringify({ id: 'work', name: 'Work', model: 'sonnet' }));
+  const none = decide(input([WORK_OPUS_LOW(), SPARE_OPUS_OUT()], OPUS));
+  assert.equal(none.act, 'warn');
+});
+
+test('T-29: a shared limit binds (the session): changing model here would not help, so it moves; with no Claude on Opus it moves with Sonnet', () => {
+  const settings = { ...SETTINGS, modelFallback: ['sonnet'], keepModelFirst: false };
+  const workSessionLow = () => claude('work', 'Work', [win('session', 95), win('week', 50), win('week_opus', 30)]);
+  const d = decide(input([workSessionLow(), HOME_ROOM()], { ...OPUS, settings }));
+  assert.equal(d.act === 'move' && JSON.stringify(d.to), JSON.stringify({ id: 'home', name: 'Home' }), 'not in place: the session limit stops every model');
+  const withSonnet = decide(input([workSessionLow(), SPARE_OPUS_OUT()], { ...OPUS, settings }));
+  assert.equal(withSonnet.act, 'move');
+  if (withSonnet.act !== 'move') return;
+  assert.deepEqual(withSonnet.to, { id: 'spare', name: 'Spare', model: 'sonnet' });
+  assert.deepEqual(withSonnet.facts.destLeftPct, { value: 90, basis: 'measured' });
+  assert.equal(withSonnet.handoff, 'ask', 'a real move still writes its handoff');
+});
+
+test('T-29: a model change in place is not held back by Bypass (it does not touch the permission mode)', () => {
+  const settings = { ...SETTINGS, modelFallback: ['sonnet'], keepModelFirst: false };
+  const d = decide(input([WORK_OPUS_LOW(), HOME_ROOM()], { session: { ...OPUS.session, mode: 'bypassPermissions' }, settings }));
+  assert.equal(d.act, 'move');
+  assert.equal(d.act === 'move' && d.to.model, 'sonnet');
+});
+
+test('T-29: the fallback list is read from the setting: known families only, in order, no repeats', () => {
+  assert.deepEqual(parseModelFallback('Sonnet, haiku sonnet gpt'), ['sonnet', 'haiku']);
+  assert.deepEqual(parseModelFallback(''), []);
+  assert.deepEqual(parseModelFallback(42), []);
 });

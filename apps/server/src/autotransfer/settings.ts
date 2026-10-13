@@ -2,7 +2,7 @@
 // `enabled`, `automatic`, `allowApiKey` or `allowBypass` on asks for a confirmation (the settings store's CONFIRMATION_REQUIRED: `protective: false`).
 // A user's own choices (`AutoUserPrefs`) override the defaults; the caps (pause, per chat, per day, per Claude) are the platform's only.
 
-import { AUTO_BOUNDS, AUTO_SETTING_KEYS as K, autoModeOf, type AutoTransferSettings, type AutoUserPrefs } from '@portal/contracts';
+import { AUTO_BOUNDS, AUTO_SETTING_KEYS as K, autoModeOf, parseModelFallback, type AutoTransferSettings, type AutoUserPrefs } from '@portal/contracts';
 import { defineSetting, defineSettingGroup } from '../settings/registry.js';
 
 export interface AutoSettingsReader {
@@ -141,6 +141,28 @@ defineSetting({
   help: 'A chat in Bypass may be moved without asking, like any other; it keeps Bypass on the new Claude while the policy allows it. Off: a chat in Bypass only ever gets a card. The owner asked for it on 2026-10-13.',
 });
 
+defineSetting({
+  key: K.modelFallback,
+  type: 'string',
+  default: '',
+  max: 40,
+  scope: 'global',
+  group: 'automove',
+  order: 120,
+  label: 'Other models',
+  help: 'When only the chat’s own model is nearly out (its weekly limit) and the shared limits have room, the chat may change to one of these models on the same Claude instead of moving: no handoff, the conversation stays. Best first, e.g. "sonnet" or "sonnet, haiku". Empty: a chat never changes model by itself.',
+});
+defineSetting({
+  key: K.keepModelFirst,
+  type: 'boolean',
+  default: true,
+  scope: 'global',
+  group: 'automove',
+  order: 130,
+  label: 'Keep the model',
+  help: 'When a chat can either move to another Claude with room on its model or change model here: on, it moves and keeps its model; off, it stays here and changes model. When no Claude has room on its model, it moves with one of the other models.',
+});
+
 const clamp = (n: unknown, b: { min: number; max: number; default: number }) => {
   const v = typeof n === 'number' && Number.isFinite(n) ? Math.round(n) : b.default;
   return Math.min(b.max, Math.max(b.min, v));
@@ -167,6 +189,8 @@ export function platformSettings(r: AutoSettingsReader | null): AutoTransferSett
     sameModelOnly: b(K.sameModelOnly, false),
     allowApiKey: b(K.allowApiKey, false),
     allowBypass: b(K.allowBypass, false),
+    modelFallback: parseModelFallback(get(K.modelFallback)),
+    keepModelFirst: b(K.keepModelFirst, true),
   };
 }
 

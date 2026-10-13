@@ -24,7 +24,7 @@ import {
 import { AppError } from '@isnanme/core';
 import type { AuditInput } from '../platform/audit.js';
 import type { NotifyBus } from '../notify/bus.js';
-import { decide, effectiveMode, type DecideCounters, type Decision } from './decide.js';
+import { decide, effectiveMode, type DecideCounters, type Decision, modelFamily } from './decide.js';
 import type { ChatPort, ClockPort, OwnerPort, UsagePort } from './ports.js';
 import { effectiveSettings, platformSettings, type AutoSettingsReader } from './settings.js';
 import type { AutoStore, SessionRow, StoredSuggestion } from './store.js';
@@ -427,11 +427,14 @@ export class AutoTransferEngine {
     ownerId: string,
     m: { to: AutoClaudeRef; handoff: 'ask' | 'skip'; reason: AutoReason; facts: AutoFacts; mode: AutoMode; settings: { minPauseMin: number }; actor: string; auto: boolean },
   ): Promise<boolean> {
-    const from = this.#from(s);
+    // A move that changes the model says which model it left, so Undo can switch back (T-29).
+    const from = m.to.model ? { ...this.#from(s), model: modelFamily(s.model) } : this.#from(s);
+    const inPlace = m.to.id === s.claudeId;
     this.#inflight.set(s.id, m.to.id);
     const base = { ...this.#base(s, ownerId, m.mode), reason: m.reason, from, to: m.to, facts: m.facts, handoff: m.handoff, actor: m.actor };
     try {
-      await this.#d.chat.switchClaude(s.id, m.to.id, { handoff: m.handoff });
+      if (!inPlace) await this.#d.chat.switchClaude(s.id, m.to.id, { handoff: m.handoff });
+      if (m.to.model) await this.#d.chat.setModel(s.id, m.to.model);
       const now = this.#d.clock.now();
       // The move's id, from the "Moved to" row the Move flow wrote: the page finds the divider by it.
       const after = Math.max(0, (s.lastSeq ?? 0) - 1);
@@ -550,11 +553,18 @@ export class AutoTransferEngine {
     let lastMove: AutoSessionState['lastMove'] = null;
     const latest = events[0];
     if (latest?.kind === 'moved' && latest.actor === ENGINE_ACTOR && latest.from && ownerId === userId) {
-      lastMove = { event: latest, undo: this.#undoable(s, latest.from.id, claudes, now) };
+      lastMove = { event: latest, undo: latest.from.model && latest.to?.model ? this.#undoableModel(s, latest.from.model) : this.#undoable(s, latest.from.id, claudes, now) };
     }
     const pausedUntil = row?.pausedUntil && ms(row.pausedUntil) > now ? row.pausedUntil : null;
     const pending = open && open.ownerId === userId ? (({ ownerId: _o, why: _w, ...rest }) => rest)(open) : null;
     return { sessionId, mode: row?.mode ?? null, effectiveMode: mode, applicable, why, pending, pausedUntil, movesToday, lastMove };
+  }
+
+  /** Whether a model change can be undone: the chat is open and runs on another model than the one it left (T-29). */
+  #undoableModel(s: ChatSession | null, model: string): { ok: boolean; reason: string | null } {
+    if (!s || s.state === 'ended') return { ok: false, reason: 'The session has ended.' };
+    if (modelFamily(s.model) === model) return { ok: false, reason: 'Already back.' };
+    return { ok: true, reason: null };
   }
 
   /** Whether the Claude a chat left can take it back now (the Undo button; the Move dialog checks again). */
