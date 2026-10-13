@@ -14,15 +14,13 @@ import {
 import { plainName } from '../names.js';
 import { requestsFor, type RequestOptions } from './requests.js';
 import { kubernetesDelivery } from './kubernetesDelivery.js';
-import { HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type ShellSession } from './runtime.js';
+import { homeVolumeOf, legacyRuntimeName } from './identity.js';
+import { HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type RuntimeNames, type ShellSession } from './runtime.js';
 
 const LIMIT = { cpus: 'claudepilot.cpus', memoryMb: 'claudepilot.memory-mb' } as const;
 const CONTAINER = 'workspace';
 const SEEDED = '.claudepilot-seeded';
 
-// A name that is not plain is refused here and in `#runningPod` (it goes into a label selector there): QA-029, QA-032.
-const objectName = (name: string) => `ws-${plainName(name)}`;
-const claimName = (name: string) => `ws-${plainName(name)}-home`;
 const selector = `${LABEL.managed}=true`;
 
 const codeOf = (e: unknown) => (e as { code?: number }).code;
@@ -107,6 +105,21 @@ export class KubernetesRuntime implements Runtime {
     return this.opts.namespace;
   }
 
+  #names: RuntimeNames | undefined;
+
+  useNames(names: RuntimeNames) {
+    this.#names = names;
+  }
+
+  /**
+   * The Deployment of workspace `name` (T-42): the runtime name it has on record (its claim is `<runtimeName>-home`), never recomputed from
+   * the name. Only a workspace the portal has no record of yet is named the old way (`ws-<name>`), which is what such a workspace is called.
+   * A name that is not plain is refused here and in `#runningPod` (it goes into a label selector there): QA-029, QA-032.
+   */
+  #objectName(name: string): string {
+    return plainName(this.#names?.runtimeNameOf(this.target.id, plainName(name)) ?? legacyRuntimeName('kubernetes', name));
+  }
+
   /**
    * Pools, secrets, the chat host (foundation PRD §6.2) through `pods/exec` only, as root through the image's `sudo -n`
    * (kubernetesDelivery.ts). A running workspace only: a stopped one has no pod (`needsRunning`).
@@ -116,7 +129,7 @@ export class KubernetesRuntime implements Runtime {
   async #deliveryState(name: string): Promise<{ exists: boolean; running: boolean; portal: string | null }> {
     let d: V1Deployment;
     try {
-      d = await this.#apps.readNamespacedDeployment({ name: objectName(name), namespace: this.#ns });
+      d = await this.#apps.readNamespacedDeployment({ name: this.#objectName(name), namespace: this.#ns });
     } catch (e) {
       if (codeOf(e) === 404) return { exists: false, running: false, portal: null };
       throw e;
@@ -230,6 +243,8 @@ export class KubernetesRuntime implements Runtime {
       return {
         id: workspaceId(this.target.id, name),
         name,
+        // What the Deployment is called, as the cluster says: the runtime name the manager records for a workspace it has no record of (T-42).
+        ...(d.metadata?.name ? { runtimeName: d.metadata.name } : {}),
         target: this.target.id,
         image: d.spec?.template.spec?.containers[0]?.image ?? this.opts.image,
         status,
@@ -261,8 +276,11 @@ export class KubernetesRuntime implements Runtime {
 
   async create(spec: CreateSpec, progress: (detail: string) => void) {
     const ns = this.#ns;
+    // The manager gives a new workspace its runtime name (`ws-<12 hex>`); a direct call without one uses what is on record.
+    const runtimeName = spec.runtimeName ? plainName(spec.runtimeName) : this.#objectName(spec.name);
+    const claim = homeVolumeOf(runtimeName);
     const exists = await this.#apps
-      .readNamespacedDeployment({ name: objectName(spec.name), namespace: ns })
+      .readNamespacedDeployment({ name: runtimeName, namespace: ns })
       .then(() => true, (e) => (codeOf(e) === 404 ? false : Promise.reject(e)));
     if (exists) throw new AppError('CONFLICT', `A workspace named “${spec.name}” already exists here.`);
 
@@ -286,7 +304,7 @@ export class KubernetesRuntime implements Runtime {
       .createNamespacedPersistentVolumeClaim({
         namespace: ns,
         body: {
-          metadata: { name: claimName(spec.name), labels },
+          metadata: { name: claim, labels },
           spec: {
             accessModes: ['ReadWriteOnce'],
             storageClassName: this.opts.storageClass,
@@ -299,13 +317,13 @@ export class KubernetesRuntime implements Runtime {
     const limits: Record<string, string> = {};
     if (spec.cpus) limits.cpu = String(spec.cpus);
     if (spec.memoryMb) limits.memory = `${spec.memoryMb}Mi`;
-    const home = { name: 'home', persistentVolumeClaim: { claimName: claimName(spec.name) } };
+    const home = { name: 'home', persistentVolumeClaim: { claimName: claim } };
 
     progress('Creating deployment');
     await this.#apps.createNamespacedDeployment({
       namespace: ns,
       body: {
-        metadata: { name: objectName(spec.name), labels },
+        metadata: { name: runtimeName, labels },
         spec: {
           replicas: 1,
           strategy: { type: 'Recreate' },
@@ -350,11 +368,12 @@ export class KubernetesRuntime implements Runtime {
   }
 
   #scale(name: string, replicas: number) {
+    const object = this.#objectName(name);
     return this.#apps
       .replaceNamespacedDeploymentScale({
-        name: objectName(name),
+        name: object,
         namespace: this.#ns,
-        body: { metadata: { name: objectName(name), namespace: this.#ns }, spec: { replicas } },
+        body: { metadata: { name: object, namespace: this.#ns }, spec: { replicas } },
       })
       .then(() => undefined);
   }
@@ -363,10 +382,11 @@ export class KubernetesRuntime implements Runtime {
   stop = async (name: string) => this.#scale(name, 0);
 
   async remove(name: string) {
+    const object = this.#objectName(name);
     await this.#apps
-      .deleteNamespacedDeployment({ name: objectName(name), namespace: this.#ns, propagationPolicy: 'Foreground' })
+      .deleteNamespacedDeployment({ name: object, namespace: this.#ns, propagationPolicy: 'Foreground' })
       .catch(ignore(404));
-    await this.#core.deleteNamespacedPersistentVolumeClaim({ name: claimName(name), namespace: this.#ns }).catch(ignore(404));
+    await this.#core.deleteNamespacedPersistentVolumeClaim({ name: homeVolumeOf(object), namespace: this.#ns }).catch(ignore(404));
   }
 
   async usage(names: string[]) {

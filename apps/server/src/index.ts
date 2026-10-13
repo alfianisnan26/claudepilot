@@ -71,6 +71,7 @@ import { registerChatAuthz } from './chat/authz.js';
 import { KubernetesRuntime } from './workspaces/kubernetes.js';
 import { LocalRuntime } from './workspaces/local.js';
 import { Workspaces } from './workspaces/manager.js';
+import { WorkspaceIdentities } from './workspaces/identity.js';
 import { createConnect } from './connect/index.js';
 import { agentBundle } from './connect/bundle.js';
 import { wireConnect } from './workspaces/connect/wire.js';
@@ -141,7 +142,8 @@ if (ws.local.enabled && !PLAIN_NAME.test(ws.local.name)) {
   ws.local.name = 'local';
 }
 if (ws.local.enabled) runtimes.push(new LocalRuntime({ name: ws.local.name, state: new JsonFile(`${config.paths.data}/local-workspace.json`, {}) }));
-const workspaces = new Workspaces(runtimes, new JsonFile(`${config.paths.data}/pending-creates.json`, []));
+// Every workspace's stable id, its `<target>/<name>` alias and its stored runtime name (T-42), kept in the store.
+const workspaces = new Workspaces(runtimes, new JsonFile(`${config.paths.data}/pending-creates.json`, []), {}, new WorkspaceIdentities(store));
 
 // Chat sessions: one controller shared by the REST routes and the chat socket.
 const chatController = new ChatController(store, workspaces);
@@ -184,7 +186,7 @@ const personas = registerPersonas({ store, pools: poolService });
 personas.agentSelfEdit = () => settingsModule.settings.get<boolean>(SETTING_KEYS.agentsSelfEdit);
 // Browser & desktop: a browser container beside each workspace, driven over MCP and watched in the portal. Its
 // container shares the workspace's namespace and volume, so the runtimes take it away before they stop or remove one.
-const browser = new BrowserModule({ store, pools: poolService, steps: mcpSets.steps, runtimes, notify: () => poolService.onChange() });
+const browser = new BrowserModule({ store, pools: poolService, steps: mcpSets.steps, runtimes, notify: () => poolService.onChange(), names: workspaces.identities });
 for (const r of runtimes) browser.guard(r);
 // With "pool MCP only" on, the browser's servers are admitted by their command lines (the folder of the plugin spelled out).
 settingsModule.lockdown.addMatcherSource((ws) => browser.service.matchers(ws));

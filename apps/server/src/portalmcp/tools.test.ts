@@ -168,6 +168,34 @@ test('workspace_list and workspace_get: filters, paging, ids or names, and runti
   assert.deepEqual(got.usage, { cpu_percent: 150, memory_bytes: 512 * 1_048_576 });
 });
 
+test('T-42: the workspace tools take the stable id as well as the alias, and every result shows both the id and the name', async () => {
+  reset();
+  const t = h.token('operate');
+  const api = world.workspaces.find((w) => w.id === 'docker/api')!;
+  const old = world.workspaces.find((w) => w.id === 'docker/old')!;
+  // Built at run time, like every id-shaped fixture.
+  const stable = `ws_${'ab12'.repeat(3)}`;
+  const stableOld = `ws_${'ef56'.repeat(3)}`;
+  Object.assign(api, { stableId: stable, runtimeName: 'claudepilot-api' });
+  Object.assign(old, { stableId: stableOld });
+  try {
+    const got = where(await h.call(t.secret, 'workspace_get', { id: stable, include: [] })).workspace;
+    assert.deepEqual([got.id, got.stable_id, got.name, got.runtime_name], ['docker/api', stable, 'api', 'claudepilot-api']);
+    assert.equal(where(await h.call(t.secret, 'workspace_get', { id: 'docker/api', include: [] })).workspace.stable_id, stable, 'the alias resolves to the same workspace');
+    const listed = where(await h.call(t.secret, 'workspace_list')).workspaces as Row[];
+    assert.equal(listed.find((w) => w.id === 'docker/api')!.stable_id, stable);
+    assert.equal(listed.find((w) => w.id === 'docker/web')!.stable_id, null, 'one without an id says so');
+    await h.call(t.secret, 'workspace_start', { id: stableOld });
+    assert.ok(calls.includes('ws.start:docker/old'), 'an action by stable id reaches the workspace it names');
+    assert.equal(err(await h.call(t.secret, 'workspace_get', { id: `ws_${'cd34'.repeat(3)}` })), 'NOT_FOUND', 'an unknown stable id is not found');
+  } finally {
+    for (const w of [api, old]) {
+      delete w.stableId;
+      delete w.runtimeName;
+    }
+  }
+});
+
 test('workspace_start, _stop and _sync work at operate scope; read can’t; a read-only database changes nothing', async () => {
   reset();
   const read = h.token('read');

@@ -1,6 +1,7 @@
 import { AppError } from '@isnanme/core';
 import type { Workspace } from '@portal/contracts';
 import { config } from '../../config.js';
+import { findWorkspace } from '../../workspaces/identity.js';
 import { PortalToolError, type PortalToolContext } from '../registry.js';
 import { cleanText, type UntrustedText } from '../sanitize.js';
 
@@ -35,10 +36,13 @@ export function labelProse<T>(value: T, source: string, depth = 0): unknown {
   return value;
 }
 
-/** A workspace by `<target>/<name>`, or by its exact name when only one target has it. */
+/**
+ * A workspace by its stable id (`ws_…`) or its `<target>/<name>` alias, both through the workspaces' one resolver (T-42), or by its exact
+ * name when only one target has it.
+ */
 export function resolveWorkspace(all: Workspace[], idOrName: string): Workspace {
   const wanted = idOrName.trim();
-  const byId = all.find((w) => w.id === wanted);
+  const byId = findWorkspace(all, wanted);
   if (byId) return byId;
   if (!wanted.includes('/')) {
     const named = all.filter((w) => w.name === wanted);
@@ -64,8 +68,11 @@ export function assertUnlocked(store: { trust: { state: string } }): void {
 export function workspaceBrief(w: Workspace, ctx: PortalToolContext) {
   return {
     id: w.id,
+    // The workspace's identity (T-42): `id` above is its `<target>/<name>` alias, which keeps working; both resolve.
+    stable_id: w.stableId ?? null,
     name: w.name,
     target: w.target,
+    runtime_name: w.runtimeName ?? null,
     status: w.status,
     detail: ctx.untrusted(w.detail ?? null, 'runtime'),
     cpus: w.cpus ?? null,

@@ -1,5 +1,7 @@
+import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { backfillSegments, foldTransferPairs } from '../chat/legacy.js';
+import { isWorkspaceId } from '../names.js';
 
 export interface Migration {
   version: number;
@@ -2527,6 +2529,48 @@ export const MIGRATIONS: Migration[] = [
       // rename or revoke of the token changes nothing already stored. Null for everything so far and for every actor that is not a token.
       db.exec('ALTER TABLE ci_runs ADD COLUMN actor_label TEXT');
       db.exec('ALTER TABLE repo_events ADD COLUMN actor_label TEXT');
+    },
+  },
+  {
+    version: 712,
+    name: 'workspace identities: a stable id per workspace, its alias and its stored runtime name',
+    up(db) {
+      // T-42 (docs/prd/targets-connect.md §24): an identity must not be a name. One row per workspace the portal has known: `id` is `ws_`
+      // and 12 hex digits, never changed and never reused (a removed workspace keeps its row, `removed_at` set); `legacy_id` is the old
+      // `<target>/<name>`, the alias that resolves for ever, held by at most one live workspace; `runtime_name` is what the runtime calls it
+      // (container, Deployment; the volume is `<runtime_name>-home`), stored and never recomputed from the name.
+      db.exec(`
+        CREATE TABLE workspace_identities (
+          id TEXT PRIMARY KEY,
+          target TEXT NOT NULL,
+          name TEXT NOT NULL,
+          legacy_id TEXT NOT NULL,
+          runtime_name TEXT,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          created_at TEXT NOT NULL,
+          removed_at TEXT
+        ) STRICT;
+        CREATE UNIQUE INDEX workspace_identities_live ON workspace_identities (legacy_id) WHERE removed_at IS NULL;
+        CREATE INDEX workspace_identities_alias ON workspace_identities (legacy_id, created_at);
+      `);
+      // The workspaces the portal already knows (delivery's rows and the pool assignments) get their id now. Only rows are added; nothing
+      // existing changes. The runtime name stays null here, because only the runtime knows it: the manager fills it from the runtime's own
+      // list the first time it sees the workspace (`kubernetes/kohi-event` -> `ws-kohi-event`), and until then the runtimes name it as before.
+      const known = db
+        .prepare('SELECT workspace_id FROM workspace_delivery UNION SELECT workspace_id FROM assignments UNION SELECT workspace_id FROM account_assignments')
+        .all() as { workspace_id: string }[];
+      const insert = db.prepare('INSERT INTO workspace_identities (id, target, name, legacy_id, created_at) VALUES (?, ?, ?, ?, ?)');
+      const at = new Date().toISOString();
+      const taken = new Set<string>();
+      for (const { workspace_id: legacy } of known) {
+        if (!isWorkspaceId(legacy)) continue; // not a workspace id (QA-032): nothing to give an identity
+        let id = '';
+        while (!id || taken.has(id)) id = `ws_${randomBytes(6).toString('hex')}`;
+        taken.add(id);
+        const slash = legacy.indexOf('/');
+        insert.run(id, legacy.slice(0, slash), legacy.slice(slash + 1), legacy, at);
+      }
     },
   },
   {

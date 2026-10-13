@@ -78,6 +78,8 @@ export class HostRuntime implements Runtime {
     return {
       id: workspaceId(this.record.id, this.#name),
       name: this.#name,
+      // A single is the one workspace of its target: nothing is named after it, so its runtime name is its name (T-42).
+      runtimeName: this.#name,
       target: this.record.id,
       image: this.record.kind === 'container' ? this.deps.image(this.record) : `${this.#link.info()?.hello.hostname ?? this.record.id} (host)`,
       status: on ? 'running' : 'stopped',

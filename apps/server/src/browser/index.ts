@@ -4,7 +4,7 @@ import type { PoolService } from '../pools/service.js';
 import type { Portal } from '../portal.js';
 import type { Server } from 'node:http';
 import type { Store } from '../store/store.js';
-import type { Runtime } from '../workspaces/runtime.js';
+import type { Runtime, RuntimeNames } from '../workspaces/runtime.js';
 import { Companions } from './companion.js';
 import { BrowserKind } from './kind.js';
 import { createBrowserRoutes } from './routes.js';
@@ -21,9 +21,10 @@ export class BrowserModule {
   readonly service: BrowserService;
   readonly companions = new Map<string, Companions>();
 
-  constructor(deps: { store: Store; pools: PoolService; steps: WorkspaceSteps; runtimes: Runtime[]; notify: () => void }) {
+  /** `names`: the workspaces' stored runtime names (T-42), which the browser containers follow. */
+  constructor(deps: { store: Store; pools: PoolService; steps: WorkspaceSteps; runtimes: Runtime[]; notify: () => void; names?: RuntimeNames }) {
     for (const r of deps.runtimes) {
-      if (r.target.kind === 'docker') this.companions.set(r.target.id, new Companions(r.target.id, r.target.where, config.browser.image, config.browser.imageContext, () => deps.store.portalId));
+      if (r.target.kind === 'docker') this.companions.set(r.target.id, new Companions(r.target.id, r.target.where, config.browser.image, config.browser.imageContext, () => deps.store.portalId, deps.names));
     }
     this.kind = new BrowserKind({ supports: (target) => this.companions.has(target) });
     deps.pools.register(this.kind);

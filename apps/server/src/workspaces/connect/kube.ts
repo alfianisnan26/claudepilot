@@ -11,7 +11,7 @@ import type { Workspace, WorkspaceUsage } from '@portal/contracts';
 import type { ConnectNodeRecord, ConnectTargetRecord, NodeLink, RuntimeDeps } from '../../connect/seams.js';
 import { KubernetesRuntime } from '../kubernetes.js';
 import { pollStarts, START_POLL_MS } from '../kubernetesDelivery.js';
-import { TargetUnreachableError, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type ShellSession } from '../runtime.js';
+import { TargetUnreachableError, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type RuntimeNames, type ShellSession } from '../runtime.js';
 import { lastSeenText, Reachability } from './link.js';
 
 const DEFAULT_NAMESPACE = 'claudepilot-workspaces';
@@ -82,6 +82,13 @@ export class ConnectKubeRuntime implements Runtime {
   #inner: { runtime: KubernetesRuntime; loopback: KubeLoopback; token: string } | null = null;
   #making: Promise<KubernetesRuntime> | null = null;
   readonly #unsubscribe: () => void;
+  /** The manager's identity registry (T-42): each connection's KubernetesRuntime reads the stored runtime names from it. */
+  #names: RuntimeNames | undefined;
+
+  useNames(names: RuntimeNames) {
+    this.#names = names;
+    this.#inner?.runtime.useNames(names);
+  }
 
   constructor(
     private readonly record: ConnectTargetRecord,
@@ -157,6 +164,7 @@ export class ConnectKubeRuntime implements Runtime {
         },
         { kubeConfig: loopbackKubeConfig(loopback.port, token), manageNamespace: false, target: { id: this.record.id, label: this.record.label, where: this.target.where } },
       );
+      if (this.#names) runtime.useNames(this.#names);
       this.#inner = { runtime, loopback, token };
       this.#making = null;
       return runtime;

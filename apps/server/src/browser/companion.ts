@@ -4,7 +4,9 @@ import type { BrowserPoolContent } from '@portal/contracts';
 import Docker from 'dockerode';
 import { pack } from 'tar-stream';
 import { chromeSeccompProfile } from './seccomp.js';
-import { companionName, DOWNLOADS_DIR, HOME, homeVolume, LABELS, PROFILE_REL, sha256, workspaceContainer } from './spec.js';
+import { homeVolumeOf, legacyRuntimeName } from '../workspaces/identity.js';
+import type { RuntimeNames } from '../workspaces/runtime.js';
+import { companionOf, DOWNLOADS_DIR, HOME, LABELS, PROFILE_REL, sha256 } from './spec.js';
 import { chromePolicy, containerConfig } from './policy.js';
 
 /**
@@ -72,8 +74,18 @@ export class Companions {
     private readonly imageContext: string,
     /** This portal's ID: labelled onto what it creates, and the only ID whose containers it manages. */
     private readonly portalId: () => string | null,
+    /** The workspaces' stored runtime names (T-42): the container a browser joins, its home volume, and the browser's own name follow it. */
+    private readonly names?: RuntimeNames,
   ) {
     this.#docker = new Docker({ socketPath: socket });
+  }
+
+  /**
+   * The workspace's container as it has it on record (T-42), never recomputed from the name; the old form (`claudepilot-<name>`) only for a
+   * workspace the portal has no record of yet, which is what such a workspace is called.
+   */
+  #runtimeName(workspace: string): string {
+    return this.names?.runtimeNameOf(this.targetId, workspace) ?? legacyRuntimeName('docker', workspace);
   }
 
   get available() {
@@ -84,7 +96,7 @@ export class Companions {
 
   async workspace(name: string): Promise<{ id: string; running: boolean; startedAt: string } | null> {
     try {
-      const info = await this.#docker.getContainer(workspaceContainer(name)).inspect();
+      const info = await this.#docker.getContainer(this.#runtimeName(name)).inspect();
       return { id: info.Id, running: !!info.State.Running, startedAt: info.State.StartedAt };
     } catch (e) {
       if (statusOf(e) === 404) return null;
@@ -94,7 +106,7 @@ export class Companions {
 
   async inspect(workspace: string): Promise<CompanionInfo | null> {
     try {
-      const info = await this.#docker.getContainer(companionName(workspace)).inspect();
+      const info = await this.#docker.getContainer(companionOf(this.#runtimeName(workspace))).inspect();
       const labels = info.Config.Labels ?? {};
       if (labels[LABELS.browser] !== '1') return null; // not ours
       return {
@@ -218,7 +230,7 @@ export class Companions {
   /** `~/.claudepilot/browser/profile` and `~/Downloads` in the workspace's home volume, created before the container mounts them. */
   async prepareMounts(workspace: string): Promise<void> {
     const b = `${HOME}/.claudepilot/browser`;
-    const r = await this.#exec(workspaceContainer(workspace), ['sh', '-c', `mkdir -p -m 0700 "${b}" "${HOME}/${PROFILE_REL}" && chmod 0700 "${b}" "${HOME}/${PROFILE_REL}" && mkdir -p -m 0700 "${HOME}/Downloads"`], { user: 'node' });
+    const r = await this.#exec(this.#runtimeName(workspace), ['sh', '-c', `mkdir -p -m 0700 "${b}" "${HOME}/${PROFILE_REL}" && chmod 0700 "${b}" "${HOME}/${PROFILE_REL}" && mkdir -p -m 0700 "${HOME}/Downloads"`], { user: 'node' });
     if (r.code !== 0) throw new Error(`Could not prepare the browser folders in the workspace: ${r.stderr.trim() || `exit ${r.code}`}`);
   }
 
@@ -228,7 +240,7 @@ export class Companions {
     const { content } = plan;
     const res = content.resources;
     const container = await this.#docker.createContainer({
-      name: companionName(plan.workspace),
+      name: companionOf(this.#runtimeName(plan.workspace)),
       Image: this.image,
       Labels: {
         [LABELS.browser]: '1',
@@ -255,8 +267,8 @@ export class Companions {
         ShmSize: res.shmMb * MiB,
         Tmpfs: { '/run/cpb': 'rw,mode=0711,uid=1001,gid=1001,size=16m,nosuid,nodev' },
         Mounts: [
-          { Type: 'volume', Source: homeVolume(plan.workspace), Target: '/data/profile', VolumeOptions: { Subpath: PROFILE_REL } as never },
-          { Type: 'volume', Source: homeVolume(plan.workspace), Target: DOWNLOADS_DIR, VolumeOptions: { Subpath: 'Downloads' } as never },
+          { Type: 'volume', Source: homeVolumeOf(this.#runtimeName(plan.workspace)), Target: '/data/profile', VolumeOptions: { Subpath: PROFILE_REL } as never },
+          { Type: 'volume', Source: homeVolumeOf(this.#runtimeName(plan.workspace)), Target: DOWNLOADS_DIR, VolumeOptions: { Subpath: 'Downloads' } as never },
         ],
       },
     });
@@ -268,21 +280,21 @@ export class Companions {
   }
 
   async start(workspace: string) {
-    await this.#docker.getContainer(companionName(workspace)).start().catch(ignore(304));
+    await this.#docker.getContainer(companionOf(this.#runtimeName(workspace))).start().catch(ignore(304));
   }
 
   async stop(workspace: string) {
-    await this.#docker.getContainer(companionName(workspace)).stop({ t: 10 }).catch(ignore(304, 404));
+    await this.#docker.getContainer(companionOf(this.#runtimeName(workspace))).stop({ t: 10 }).catch(ignore(304, 404));
   }
 
   async restart(workspace: string) {
-    await this.#docker.getContainer(companionName(workspace)).restart({ t: 10 });
+    await this.#docker.getContainer(companionOf(this.#runtimeName(workspace))).restart({ t: 10 });
   }
 
   /** Removes the container (it must be ours). */
   async remove(workspace: string) {
     if (!(await this.inspect(workspace))) return;
-    await this.#docker.getContainer(companionName(workspace)).remove({ force: true, v: false }).catch(ignore(404));
+    await this.#docker.getContainer(companionOf(this.#runtimeName(workspace))).remove({ force: true, v: false }).catch(ignore(404));
   }
 
   /** Deletes the profile (live sign-ins) from the workspace's home volume, through the workspace itself. */
@@ -290,7 +302,7 @@ export class Companions {
     const state = await this.workspace(workspace);
     if (!state?.running) return false;
     // Contents, not the mount point; no following links.
-    const r = await this.#exec(workspaceContainer(workspace), ['sh', '-c', `find "${HOME}/${PROFILE_REL}" -mindepth 1 -delete 2>/dev/null; true`], { user: 'node' });
+    const r = await this.#exec(this.#runtimeName(workspace), ['sh', '-c', `find "${HOME}/${PROFILE_REL}" -mindepth 1 -delete 2>/dev/null; true`], { user: 'node' });
     return r.code === 0;
   }
 
@@ -298,7 +310,7 @@ export class Companions {
 
   /** Runs `cmd` in the browser container as `user` (uid 1001 is the supervisor's: only it can reach the control socket). */
   async exec(workspace: string, cmd: string[], opts: { user?: string; stdin?: string; timeoutMs?: number } = {}): Promise<ExecResult> {
-    return this.#exec(companionName(workspace), cmd, { user: opts.user ?? '1001', stdin: opts.stdin, timeoutMs: opts.timeoutMs });
+    return this.#exec(companionOf(this.#runtimeName(workspace)), cmd, { user: opts.user ?? '1001', stdin: opts.stdin, timeoutMs: opts.timeoutMs });
   }
 
   async #exec(container: string, cmd: string[], opts: { user: string; stdin?: string; timeoutMs?: number }): Promise<ExecResult> {
@@ -340,7 +352,7 @@ export class Companions {
 
   /** A long-running process (the live-view bridges): bytes in and out, until either side closes. */
   async stream(workspace: string, cmd: string[], opts: { user?: string } = {}): Promise<ExecStream> {
-    const exec = await this.#docker.getContainer(companionName(workspace)).exec({
+    const exec = await this.#docker.getContainer(companionOf(this.#runtimeName(workspace))).exec({
       Cmd: cmd,
       User: opts.user ?? '1001',
       AttachStdin: true,
