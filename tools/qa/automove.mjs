@@ -77,7 +77,7 @@ const post = `(() => {
   const settings = { mode: c.platform, thresholdPct: 10, useProjection: true, minPauseMin: 30, maxPerSessionPerDay: 2, maxPerDay: 6, maxPerDestination: 2, sameModelOnly: false, allowApiKey: false };
   const claude = (id, name) => ({ id, workspaceId: 'bv-ws', name, directory: id, removedAt: null, createdAt: ago });
   const options = { sessionId: SID, via: 'own', folder: '/work', worktree: null, handoff: { ok: true, reason: null }, working: false, dropped: { approvals: 0, queued: 0, agents: 0 },
-    options: [ { claude: claude('c-spare', spare), ok: true, reason: null, fix: null }, { claude: claude('c-work', work), ok: !c.undoBlocked, reason: c.undoBlocked ? 'Out of quota.' : null, fix: null } ] };
+    options: [ { claude: claude('c-spare', spare), ok: true, reason: null, fix: null, model: { from: 'fable', to: 'opus', known: false } }, { claude: claude('c-work', work), ok: !c.undoBlocked, reason: c.undoBlocked ? 'Out of quota.' : null, fix: null } ] };
   const calls = (window.__am = { calls: [] }).calls;
   const json = (d) => Promise.resolve(new Response(JSON.stringify({ data: d }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
   const inner = window.fetch;
@@ -290,6 +290,9 @@ async function scenario(cfg) {
     await press(Q.undo, touch);
     check('Undo opens the Move dialog', await waitFor(`!!${Q.dialog('Move chat')}`, 3000));
     check('… with the Claude the chat left chosen', await waitFor(`(() => { const d = ${Q.dialog('Move chat')}; const r = d && [...d.querySelectorAll('input[type=radio]')].find((i) => i.checked); return !!r && r.closest('div').textContent.includes('Work'); })()`, 3000));
+    // T-109: a Claude without the chat's model says, before the move, the model it would run on.
+    check('… a Claude without the chat’s model says "On Opus, was Fable"', await waitFor(`(() => { const d = ${Q.dialog('Move chat')}; return !!d && [...d.querySelectorAll('span')].some((e) => e.textContent === 'On Opus, was Fable'); })()`, 3000));
+    check('… and its line stays inside the dialog', await ev(`(() => { const d = ${Q.dialog('Move chat')}; const e = d && [...d.querySelectorAll('span')].find((x) => x.textContent === 'On Opus, was Fable'); if (!e) return false; const a = e.getBoundingClientRect(), b = d.getBoundingClientRect(); return a.left >= b.left - 0.5 && a.right <= b.right + 0.5 && document.documentElement.scrollWidth <= innerWidth; })()`));
     await shot(`${cfg.name}-3-undo-dialog`);
     await key('Escape', 'Escape', 27);
     await waitFor(`!${Q.dialog('Move chat')}`, 2000);
