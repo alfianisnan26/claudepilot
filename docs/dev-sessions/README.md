@@ -19,7 +19,8 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first. `orches
    - `kubectl`: read freely. Change things only in a namespace you create for a rig, with `scripts/dev-rig.sh create dev-rig-<name>` and `scripts/dev-rig.sh delete dev-rig-<name>`
      (the only door: `kubectl delete namespace` is denied, the script refuses any other name); delete it when you are done.
      Never touch `isnan-claudepilot`, `isnan-claudepilot-workspaces` (this workspace hosts the session: stopping, deleting or restarting it, or
-     restarting the portal, kills it), Argo CD, the nodes or any other namespace.
+     restarting the portal, kills it), Argo CD, the nodes or any other namespace. One narrow door exists for the owner's request only: `scripts/ws-resources.sh <name> --cpu-request ...` changes a
+     workspace's CPU and memory (a dry run is safe; `--apply` restarts the pod and ends every session in it, so never on your own initiative; T-98 replaces it with a portal feature).
    - Never push `main`. Never approve a deploy or work around its approval. For anything that needs a portal, run a scratch one:
      `scripts/scratch-portal.sh` (clean environment). Never change the real portal's settings, tokens or Secrets.
    - Never force-push, rewrite pushed history, use `--no-verify` or amend a pushed commit.
