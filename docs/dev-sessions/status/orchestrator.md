@@ -51,7 +51,11 @@ Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIO
 5b. T-118 multi-user MU1-min (rank-06b; WIP 7b02a4e).
 6. T-110 deploy rule, dry mode first.
 6b. T-119 slice 1 (rank-09a): the pure `ticketFlow` module (status events to spans and markers), GET /api/tickets/timeline, the MCP tool
-   ticket_timeline. The Gantt chart and the flow-metrics strip are its later slices.
+   ticket_timeline, AND the performance bars (owner, end of the ticket): a derived `ticket_spans` table kept incrementally (node:sqlite is
+   synchronous: a slow read stalls every chat stream), a window-by-scale guard, p95/p99 budgets as gate-failing tests, EXPLAIN QUERY PLAN
+   tests, an event-loop-lag probe, a load test with chats streaming, parameter fuzz, a scratch-only seed (5,000 tickets, 150,000 events).
+   No chart code before the API, table and budgets pass. Then the canvas chart (virtualised rows, tools/qa/gantt-perf.mjs at 4x CPU throttle,
+   numbers on the ticket), then the metrics strip.
 7. T-111 slices 1-2 (measuring; quality and human touch before tokens), then slice 2b: a structured estimate (effort class, severity, hours,
    risk flags, expected blockers) required to claim a ticket; 'predictability' is a scored term (charter now has eight terms, D-24).
 ---- CUT LINE: nothing below starts before 7 is merged and deployed ----
