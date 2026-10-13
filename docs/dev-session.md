@@ -117,7 +117,7 @@ after it ends), so the pod's flock queue is only for what must run in the pod:
 ```sh
 git push origin HEAD:wip/<name>                                              # the Job clones what is on the remote, nothing local
 scripts/job-run.sh -- 'cd apps/server && node --import tsx --test src/ci/jobRun.test.ts'
-scripts/job-run.sh --repo konfersi:platform/konfersi-backend --ref <branch> --also shared/konfersi-shared -- 'npx vitest run'
+scripts/job-run.sh --repo konfersi:platform/konfersi-backend --ref <branch> --also platform/konfersi-shared -- 'npx vitest run'   # platform/, not the manifest's stale shared/
 scripts/job-run.sh --artifacts test-results --out /tmp/cp-shots -- 'npx playwright test'   # files back, at most 4 MiB compressed
 scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
 ```

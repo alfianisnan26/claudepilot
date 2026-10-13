@@ -195,12 +195,12 @@ test('the token never reaches the output or the log: a Job that prints it is mas
 test('Konfersi: from Gitea with the credential helper\'s token in the Secret (never on a command line), the shared repo next to it', () => {
   const w = world();
   writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, 'git said {TOKEN}\n') }));
-  const r = w.run(['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'work/x', '--also', 'shared/konfersi-shared', '--', 'npx vitest run src/a.test.ts']);
+  const r = w.run(['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'work/x', '--also', 'platform/konfersi-shared', '--', 'npx vitest run src/a.test.ts']);
   assert.equal(r.code, 0, r.out);
   const m = yamlLoad(w.applied1()) as Manifest;
   const e = envOf(m);
   assert.equal(e.JR_REPO_URL, 'https://git.konfersi.com/platform/konfersi-backend.git');
-  assert.equal(e.JR_ALSO, 'konfersi-shared=https://git.konfersi.com/shared/konfersi-shared.git@stg');
+  assert.equal(e.JR_ALSO, 'konfersi-shared=https://git.konfersi.com/platform/konfersi-shared.git@stg');
   assert.equal(m.metadata.labels['job-run/repo'], 'konfersi-backend');
   assert.deepEqual(e.GIT_TOKEN, { secretKeyRef: { name: m.metadata.name, key: 'git-token', optional: true } });
   for (const where of [r.out, w.log(), w.calls(), w.applied1()]) assert.ok(!where.includes(w.giteaToken));
