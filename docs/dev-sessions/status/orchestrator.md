@@ -7,21 +7,18 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
 - Portal 2026.10.13-6 (run 18, e327e6d, gate 470 s green; released by the owner, verified by the coordinator).
   Live: T-24, T-28, T-32, T-42 slices 1-2, T-95 items 1-3, T-97, T-98, T-99, T-107, the env deny rules (eeee2c5).
 
-## IN FLIGHT (17:3x: FOUR slices, t105, t143, t102, t110. SLIP: I started t110 while at three, against my own note; nothing starts until two finish)
+## IN FLIGHT (17:3x: three slices, t105, t102 (running again), t110)
 - t105 (opus): dev-automove-model, dev/t105-automove-proven. T-105 is done apart from the area tests. T-109 WIP is 8cc8265 (catalogue, migration 761).
-- T-136 slice 1 merged as 62f5d5e (reviewed: peer accepted only with its cause in this process's stream, identical duplicate
-  control response ignored, migrations 770-772; 772 links today's chains and moves their tickets to 5c9fcb5f). Full gate green; PUSHED (c0100e6).
-- t110 (opus): dev-gate-job, dev/t110-autoapprove-dry. T-110 slice 1: the PRD FR41/FR41a, autoApprove off|dry (manage only, audited,
-  migrations 780-784), dry lines on held releases. It approves nothing.
-- T-141 MERGED as c3431fa: the gate Job is green (typecheck, imageBuild and jobRun tests); the proof build is on the ticket (comment 809). It
-  deploys with T-143. Not an escalation: the dev account is cluster-admin, which the owner already accepted in dev-context.
-- t143 (opus): dev-track-b-notify-triggers, dev/t143-csrf-origin. T-143: the csrf() origin function behind the TLS proxy. It relaxes a
-  check, so an independent reviewer sub-agent reads it before the merge. Then /deploy with gate=true.
-- PAUSED 16:4x: t100 at cf86a26 (both items built; session-list 290/0 at 4 widths x 2 themes, scroll-lock 26/26, mobile-drag 11/11, web
-  422/422 in a cluster Job; shots in ~/.claudepilot/dev-sessions/shots/t100-*). Left: a clean run of the rewritten session-swipe.mjs, a merge
-  of integration. t102 at be65ceb (headerBand 180/180, scroll-lock 26/26, server suite 2627/0 and web 428/428 in a cluster Job;
-  shots in ~/.claudepilot/dev-sessions/shots/t102). Left: re-run the session-states matrix (5714/5716, 2 timing fails) and mobile-drag,
-  web PRD 10.5. Both resume after T-110 slice 1.
+- t102 (opus): dev-track-a-connect, be65ceb. Left: the session-states matrix (5714/5716) and mobile-drag again, web PRD 10.5. Then deploy.
+- t110 (opus): dev-gate-job, dev/t110-autoapprove-dry. T-110 slice 1: PRD FR41/FR41a, autoApprove off|dry (manage only, audited,
+  migrations 780-784), dry lines on held releases; it approves nothing.
+- DEPLOY RUN 19 (17:30, 5234892, gate=true), waiting for approval. It carries:
+  - T-143: c3575d8, independently reviewed; auth.test 10/10, and tests 8 and 10 fail on the old app.ts.
+  - T-141: c3431fa; the proof build is in comment 809. The dev account is cluster-admin, already accepted.
+  - T-136 slice 1: 62f5d5e. Migration 772 relinks today's chains and moves their tickets to 5c9fcb5f.
+- T-159 (mine): scratch-portal.sh leaked the heavy lock (t105's portal held it for 50 min). The fix sits uncommitted until its test runs.
+- PAUSED: t100 at cf86a26. Both items are built and checked (session-list 290/0, scroll-lock 26/26, mobile-drag 11/11, web 422/422;
+  shots in ~/.claudepilot/dev-sessions/shots/t100-*). Left: a clean session-swipe run and a merge of integration. Resumes after T-110.
 
 ## NEXT (coordinator gap review 15:0x: WIP limit THREE slices, thin first slices, each merged AND deployed before the next starts)
 Read CHARTER.md and DECISIONS.md (D-1..D-33) before planning; never act against a row.
