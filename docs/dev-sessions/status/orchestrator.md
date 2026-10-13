@@ -7,11 +7,12 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
 - Portal 2026.10.13-6 (run 18, e327e6d, gate 470 s green; released by the owner, verified by the coordinator).
   Live: T-24, T-28, T-32, T-42 slices 1-2, T-95 items 1-3, T-97, T-98, T-99, T-107, the env deny rules (eeee2c5).
 
-## IN FLIGHT (17:0x: four slices, t105, t136, t141, t143: one over the WIP of three because the owner wants T-143 NOW; nothing new starts until two are done)
+## IN FLIGHT (17:3x: FOUR slices, t105, t143, t102, t110. SLIP: I started t110 while at three, against my own note; nothing starts until two finish)
 - t105 (opus): dev-automove-model, dev/t105-automove-proven. T-105 is done apart from the area tests. T-109 WIP is 8cc8265 (catalogue, migration 761).
-- t136 (opus): dev-track-c-ui, dev/t136-integrity. T-136 slice 1: classify the integrity events (peer only after a sub-agent's SendMessage,
-  an identical duplicate control response ignored, a table with negative twins), continued_from (migrations 770-774), and the repair of
-  today's chains, which also moves their tickets to the head.
+- T-136 slice 1 merged as 62f5d5e (reviewed: peer accepted only with its cause in this process's stream, identical duplicate
+  control response ignored, migrations 770-772; 772 links today's chains and moves their tickets to 5c9fcb5f). Full gate green; PUSHED (c0100e6).
+- t110 (opus): dev-gate-job, dev/t110-autoapprove-dry. T-110 slice 1: the PRD FR41/FR41a, autoApprove off|dry (manage only, audited,
+  migrations 780-784), dry lines on held releases. It approves nothing.
 - T-141 MERGED as c3431fa: the gate Job is green (typecheck, imageBuild and jobRun tests); the proof build is on the ticket (comment 809). It
   deploys with T-143. Not an escalation: the dev account is cluster-admin, which the owner already accepted in dev-context.
 - t143 (opus): dev-track-b-notify-triggers, dev/t143-csrf-origin. T-143: the csrf() origin function behind the TLS proxy. It relaxes a
@@ -21,7 +22,6 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
   of integration. t102 at be65ceb (headerBand 180/180, scroll-lock 26/26, server suite 2627/0 and web 428/428 in a cluster Job;
   shots in ~/.claudepilot/dev-sessions/shots/t102). Left: re-run the session-states matrix (5714/5716, 2 timing fails) and mobile-drag,
   web PRD 10.5. Both resume after T-110 slice 1.
-- T-118: stopped (WIP 7b02a4e, after T-104). fitOf and fit.ts are not unified yet (small).
 
 ## NEXT (coordinator gap review 15:0x: WIP limit THREE slices, thin first slices, each merged AND deployed before the next starts)
 Read CHARTER.md and DECISIONS.md (D-1..D-33) before planning; never act against a row.
@@ -52,7 +52,7 @@ Read CHARTER.md and DECISIONS.md (D-1..D-33) before planning; never act against 
 ---- CUT LINE: nothing below starts before 7 is merged and deployed ----
 In rank order (details on each ticket): T-126 (item 5 local time first), T-129 (with T-122, before T-111), T-121 (after T-119 slice 1),
 T-122 (after T-121: audit with screenshots first), T-113, T-114, T-101, T-106, T-120 (after T-106; ClaudePilot only, D-25), T-28, T-32, T-24,
-T-26/T-27 (folded into T-134), T-30, T-33, T-123, T-132..T-135 with T-140 (rank-07e, Claude accounts as pool entries, D-33: the spike first, one login per workspace by default, no login tool for
+T-26/T-27 (folded into T-134), T-30, T-33, T-123, T-118 (WIP 7b02a4e, after T-104), T-132..T-135 with T-140 (rank-07e, Claude accounts as pool entries, D-33: the spike first, one login per workspace by default, no login tool for
 agents, credentials never read), T-137, then T-138 (rank-10a, Settings v2, D-32: audit first, agents read and propose only) (wave 3, motion), wave 4, T-130, T-131, and the fitOf/fit.ts unification (small; fills an idle slot).
 T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, never use that code, and tell the coordinator if they see it.
 

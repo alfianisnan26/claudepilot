@@ -103,10 +103,11 @@ import { BtwStore } from './btwStore.js';
 import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
 import { autoTrustable, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError } from './trust.js';
 import { usageReport } from './usage.js';
+import { controlDigest, PEER_CAUSE_MS, type PeerCause } from './integrity.js';
 
 /** The permission mode every process starts in (`--permission-mode`); others are applied after. */
 const START_MODE = 'default';
-/** Origins (`kind/producer`) Claude Code puts on user lines it makes itself: seen from the real CLI (2.1.296) for a finished background command. */
+/** Origins (`kind/producer`) Claude Code puts on user lines it makes itself: seen from the real CLI (2.1.296) for a finished background command. Every accepted case is in INTEGRITY_CASES (integrity.ts). */
 const HARNESS_ORIGINS: ReadonlySet<string> = new Set(['task-notification/session-task']);
 /** The control-line key under which a turn Claude Code started by itself (T-99) is remembered; keys carry a `/`, message ids never do. */
 const HARNESS_COMMAND = (uuid: string) => `harness/${uuid}`;
@@ -290,6 +291,8 @@ export interface ChatControllerOptions {
   execTimeoutMs?: number;
   /** How long a workspace's secret values are kept in memory before they are read again. */
   valuesCacheMs?: number;
+  /** The clock the integrity checks' time windows read (a fake one in tests); `Date.now` otherwise. */
+  clock?: () => number;
 }
 
 /** A refusal Claude Code sent, made safe to show: one line, no control characters, bounded, redacted. */
@@ -527,6 +530,11 @@ export class ChatController {
   /** How long one short `cp-session` command may run. */
   execTimeoutMs: number;
 
+  /** The integrity windows' clock (T-136). */
+  readonly #clock: () => number;
+  /** Per session, the sub-agent SendMessage calls of its current process that a peer line may follow (T-136); digests only, never text. */
+  readonly #peerCauses = new Map<string, PeerCause[]>();
+
   constructor(store: Store, workspaces: Workspaces, opts: ChatControllerOptions = {}) {
     this.#store = store;
     // Sessions store their workspace as the stable id and read it as the key (T-42 slice 3); everything here keeps the key.
@@ -550,6 +558,7 @@ export class ChatController {
     this.#livenessMs = opts.livenessMs ?? LIVENESS_MS;
     this.execTimeoutMs = opts.execTimeoutMs ?? EXEC_TIMEOUT_MS;
     this.valuesCacheMs = opts.valuesCacheMs ?? VALUES_CACHE_MS;
+    this.#clock = opts.clock ?? Date.now;
   }
 
   /* ---------- Durability ---------- */
@@ -2945,6 +2954,7 @@ export class ChatController {
         }
       }
     }
+    if (parsed.peerSends || parsed.peerQueued) this.#notePeerCauses(sessionId, parsed);
     if (parsed.controlResponse && !this.#acceptControlResponse(sessionId, parsed.controlResponse)) return;
     if (parsed.replay && !this.#acceptReplay(sessionId, parsed.replay)) return;
     if (parsed.commandUuid && !this.#acceptCommand(sessionId, parsed.commandUuid, parsed.inputs?.[0]?.state)) return;
@@ -3130,13 +3140,11 @@ export class ChatController {
    */
   #acceptControlResponse(sessionId: string, reply: ControlResponse): boolean {
     const id = reply.requestId;
+    const digest = controlDigest(reply);
     const asked = this.#chat.controlState(sessionId, ASKED(id));
     if (asked !== null) {
-      if (asked === 'completed') {
-        this.#endIntegrity(sessionId, `a second control response for request ${shortId(id)}`);
-        return false;
-      }
-      this.#chat.setControlState(sessionId, ASKED(id), 'completed');
+      if (asked === 'completed') return this.#secondControlResponse(sessionId, ASKED(id), digest);
+      this.#chat.setControlState(sessionId, ASKED(id), 'completed', digest);
       this.#settleControl(sessionId, reply);
       // `set_permission_mode`'s reply confirms the mode, before the status line that reports it.
       const mode = reply.ok ? reply.response.mode : undefined;
@@ -3152,13 +3160,26 @@ export class ChatController {
     }
     const answered = this.#chat.controlState(sessionId, ANSWERED(id));
     if (answered === 'sending' || answered === 'failed') {
-      this.#chat.setControlState(sessionId, ANSWERED(id), 'completed');
+      this.#chat.setControlState(sessionId, ANSWERED(id), 'completed', digest);
       return true;
     }
-    this.#endIntegrity(
-      sessionId,
-      answered === 'completed' ? `a second control response for request ${shortId(id)}` : `a control response for request ${shortId(id)} that this portal never asked for or answered`,
-    );
+    if (answered === 'completed') return this.#secondControlResponse(sessionId, ANSWERED(id), digest);
+    this.#endIntegrity(sessionId, `a control response for request ${shortId(id)} that this portal never asked for or answered`);
+    return false;
+  }
+
+  /**
+   * A second control response for a request the portal asked or answered (INTEGRITY_CASES `control-duplicate`): the same line read again
+   * is ignored (nothing in it is new: the first copy was already acted on) and logged; anything else in it ends the session, and so does
+   * one whose first copy left no digest (read before T-136). Returns false either way: the copy is never processed.
+   */
+  #secondControlResponse(sessionId: string, key: string, digest: string): boolean {
+    const first = this.#chat.controlDigest(sessionId, key);
+    if (first !== null && first === digest) {
+      console.log(`[chat] ${shortId(sessionId)}: ignored a second, identical control response for ${shortId(key.slice(key.indexOf('/') + 1))}`);
+      return false;
+    }
+    this.#endIntegrity(sessionId, `a second control response for request ${shortId(key.slice(key.indexOf('/') + 1))}`);
     return false;
   }
 
@@ -3192,12 +3213,50 @@ export class ChatController {
   #acceptReplay(sessionId: string, replay: NonNullable<ParsedLine['replay']>): boolean {
     if (replay.uuid && this.#chat.isMessage(sessionId, replay.uuid)) return true;
     if (replay.origin && HARNESS_ORIGINS.has(`${replay.origin.kind}/${replay.origin.producer ?? ''}`)) return true;
+    // A sub-agent's SendMessage to the main conversation, delivered: only with its cause in this process's stream (T-136).
+    if (replay.origin?.kind === 'peer' && replay.peer && this.#peerCaused(sessionId, replay.peer)) {
+      // Should Claude Code report that line's command later (not seen yet), its lifecycle is the harness's, like a T-99 turn.
+      if (replay.uuid) {
+        this.#chat.addControl(sessionId, HARNESS_COMMAND(replay.uuid));
+        this.#chat.setControlState(sessionId, HARNESS_COMMAND(replay.uuid), 'completed');
+      }
+      return true;
+    }
     // `/compact` and other local commands echo their output as a replayed line under an id of its own.
     if (replay.localCommand && this.#chat.slashCommandRunning(sessionId)) return true;
     // A model change the portal asked for: Claude Code echoes "Set model to …" as a replayed line.
     if (replay.modelNote && Date.now() - (this.#modelAsked.get(sessionId) ?? 0) < MODEL_NOTE_MS) return true;
     this.#endIntegrity(sessionId, `a message this portal didn't send reached Claude Code (${shortId(replay.uuid ?? 'no id')}${replay.origin ? `, origin ${replay.origin.kind}` : ''})`);
     return false;
+  }
+
+  /** Remembers a sub-agent's SendMessage calls, and marks one queued when its own result says so (INTEGRITY_CASES `replay-peer`). */
+  #notePeerCauses(sessionId: string, parsed: ParsedLine): void {
+    const now = this.#clock();
+    const causes = (this.#peerCauses.get(sessionId) ?? []).filter((c) => now - c.at <= PEER_CAUSE_MS);
+    for (const send of parsed.peerSends ?? []) causes.push({ ...send, at: now, queued: false });
+    for (const toolUseId of parsed.peerQueued ?? []) {
+      const cause = causes.find((c) => c.toolUseId === toolUseId && !c.queued);
+      if (cause) (cause.queued = true), (cause.at = now);
+    }
+    if (causes.length) this.#peerCauses.set(sessionId, causes.slice(-32));
+    else this.#peerCauses.delete(sessionId);
+  }
+
+  /**
+   * Whether a peer line has its cause: a SendMessage by the same sub-agent, queued for the main conversation within PEER_CAUSE_MS, with
+   * the same text, by a task that ran in this process. The cause is used up, so a second identical peer line ends the session.
+   */
+  #peerCaused(sessionId: string, peer: { taskId: string | null; digest: string | null }): boolean {
+    if (!peer.taskId || !peer.digest) return false;
+    const now = this.#clock();
+    const causes = this.#peerCauses.get(sessionId) ?? [];
+    const i = causes.findIndex((c) => c.queued && c.taskId === peer.taskId && c.digest === peer.digest && now - c.at <= PEER_CAUSE_MS);
+    if (i < 0) return false;
+    if (!this.#chat.taskRanSince(sessionId, peer.taskId, this.#chat.row(sessionId)?.process_started_at ?? null)) return false;
+    causes.splice(i, 1);
+    console.log(`[chat] ${shortId(sessionId)}: a sub-agent's message (task ${shortId(peer.taskId)}) reached the main conversation after its SendMessage was queued`);
+    return true;
   }
 
   /**
@@ -3620,6 +3679,7 @@ export class ChatController {
     this.#streams.delete(sessionId);
     this.#thinkingSince.delete(sessionId);
     this.#modes.delete(sessionId);
+    this.#peerCauses.delete(sessionId);
   }
 
   /* ---------- Exec helpers ---------- */

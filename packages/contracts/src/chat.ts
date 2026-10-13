@@ -75,6 +75,11 @@ export interface ChatSession {
   predecessorId: string | null;
   /** Legacy, as above. */
   successorId: string | null;
+  /**
+   * The session this one continues (T-136, D-30): a chat that ended and went on in a new row. Root to head they are one unit: its cost is
+   * the sum over the chain (the server's lineage helper). Null when it continues nothing.
+   */
+  continuedFrom?: string | null;
   /** When it was archived (hidden from the list; an archived session has ended), or null. */
   archivedAt: string | null;
   /** When the person pinned it (FR2: the Pinned chip, first in its group), or null. Archiving unpins. */
