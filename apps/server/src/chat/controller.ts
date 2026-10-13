@@ -606,6 +606,9 @@ export class ChatController {
     this.#liveness = undefined;
     for (const timer of this.#idleTimers.values()) clearTimeout(timer);
     this.#idleTimers.clear();
+    // T-102: a boundary re-check must not run on a closed store (it did after a test's teardown).
+    for (const timer of this.#boundaryRecheck.values()) clearTimeout(timer);
+    this.#boundaryRecheck.clear();
     for (const id of [...this.#readers.keys()]) this.#stopReader(id);
     for (const [id, pending] of this.#pending) {
       this.#pending.delete(id);
@@ -2153,6 +2156,7 @@ export class ChatController {
       if (row?.state === 'idle' && row.process === 'live' && !this.#boundaryRecheck.has(id)) {
         const timer = setTimeout(() => {
           this.#boundaryRecheck.delete(id);
+          if (this.#closed) return;
           const now = this.#chat.get(id);
           if (now) this.#fireQueued(this.#decorate(now));
         }, 500);
@@ -2165,6 +2169,10 @@ export class ChatController {
     if (want === 'auto' && s.configChanged) this.#autoTried.set(id, s.configChanged.at);
     const person = this.#queuedRestart.delete(id);
     setTimeout(() => {
+      if (this.#closed) {
+        this.#queuedFiring.delete(id);
+        return;
+      }
       void this.restart(id, { why: 'mcp', actor: want === 'auto' ? 'portal' : 'ui', when: 'now', from: want === 'auto' ? 'auto' : 'queue' })
         .then(
           () => undefined,
@@ -2177,7 +2185,7 @@ export class ChatController {
         )
         .finally(() => {
           this.#queuedFiring.delete(id);
-          this.#emitSession(id);
+          if (!this.#closed) this.#emitSession(id);
         });
     }, 0);
   }
