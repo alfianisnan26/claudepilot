@@ -121,3 +121,9 @@ T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, 
   printenv, set and /proc/*/environ are on integration (eeee2c5). The sub-agent's task file is deleted. The local task-output scan is on
   T-113's hygiene slice. After the restart: T-105 merge df69d9c pushed, T-102 edits saved as d225806, T-100 at 2c69a31; all three agents
   resumed from their transcripts (WIP three). T-105 items 1, 2, PRD and 5 done; left: area tests, then T-109.
+- 15:4x LOOP AUDIT (coordinator): 29 tickets were in_progress on this chat while three slices ran. Cause: I claimed each ticket on arrival.
+  Fixed: 17 unstarted tickets released (open, no assignee, rank tag kept, one line "not started: queued at rank-NN"): T-101, T-104, T-106,
+  T-108, T-110, T-111, T-113, T-114, T-115, T-118 (WIP branch kept), T-119..T-123, T-125, T-126. Merged-and-waiting tickets to in_review:
+  T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-107. In progress now: T-105, T-109 (same slice), T-102, T-100. RULE from now: claim only when
+  work starts; the queue lives in this file. New portal tickets: the WIP limit enforced by the portal (rank-05e) and the CI read scope for
+  agents (rank-05f).
