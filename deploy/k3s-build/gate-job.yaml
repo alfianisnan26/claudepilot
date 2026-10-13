@@ -9,7 +9,7 @@ kind: Job
 metadata:
   name: NAME
   namespace: isnan-claudepilot
-  labels: {app: claudepilot-gate}
+  labels: {app: claudepilot-gate, claudepilot-gate/by: BY_WHOM}
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 5400

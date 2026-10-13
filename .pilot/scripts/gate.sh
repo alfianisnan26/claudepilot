@@ -18,8 +18,12 @@ if [ "${DEPLOY_GATE_IN_CLUSTER:-true}" = true ]; then
     log "[dry-run] would run: scripts/gate-job.sh $(short "$sha")"
     exit 0
   fi
-  export GATE_JOB_LOG="${TMPDIR:-/tmp}/pilot-gate-${PILOT_RUN_ID:-local}.log"
-  trap 'rm -f "$GATE_JOB_LOG"' EXIT
+  export GATE_JOB_LOG="${TMPDIR:-/tmp}/pilot-gate-${PILOT_RUN_ID:-local}.log" GATE_JOB_BY=pipeline
+  # A cancelled run's runner kills gate-job.sh before its trap: its Job (and the token Secret it owns) would run on. Deploy runs never overlap
+  # (concurrency group), so at the start every pipeline gate Job is a leftover; at the end, ours goes too.
+  bash scripts/gate-job-stop.sh --by pipeline | grep '^stopped ' | sed 's/^/gate: leftover /' || true
+  trap 'bash scripts/gate-job-stop.sh --by pipeline >/dev/null 2>&1 || true; rm -f "$GATE_JOB_LOG"' EXIT
+  trap 'exit 143' TERM INT
   rc=0
   bash scripts/gate-job.sh "$sha" 2>&1 | mask || rc=$?
   [ "$rc" = 0 ] || die "gate: red at $(short "$sha") (the job's verdict above)"

@@ -27,7 +27,13 @@ trap 'kubectl -n "$ns" delete job "$job" --ignore-not-found >/dev/null 2>&1 || t
 # The token reaches kubectl on stdin (printf is a builtin: no argument a process list would show), without gh's newline (npm refuses it).
 printf '%s' "$(gh auth token)" | kubectl -n "$ns" create secret generic "$job" --from-file=node-auth-token=/dev/stdin >/dev/null
 verdict=$(base64 -w0 < scripts/gate-verdict.sh)
-sed -e "s#NAME#$job#g" -e "s#\"COMMIT\"#\"$commit\"#" -e "s#\"STEPS\"#\"$steps\"#" -e "s#image: IMAGE#image: $image#" -e "s#\"VERDICT\"#\"$verdict\"#" deploy/k3s-build/gate-job.yaml | kubectl apply -f - >/dev/null
+sed -e "s#NAME#$job#g" -e "s#BY_WHOM#${GATE_JOB_BY:-manual}#g" -e "s#\"COMMIT\"#\"$commit\"#" -e "s#\"STEPS\"#\"$steps\"#" -e "s#image: IMAGE#image: $image#" -e "s#\"VERDICT\"#\"$verdict\"#" deploy/k3s-build/gate-job.yaml | kubectl apply -f - >/dev/null
+# The Secret belongs to the Job: whoever deletes the Job (its TTL, gate-job-stop.sh, a person) deletes the token with it, also when this script was
+# killed before its trap ran (a cancelled pipeline run).
+uid=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
+if [ -n "$uid" ]; then
+  kubectl -n "$ns" patch secret "$job" --type merge -p "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"name\":\"$job\",\"uid\":\"$uid\"}],\"labels\":{\"app\":\"claudepilot-gate\",\"claudepilot-gate/by\":\"${GATE_JOB_BY:-manual}\"}}}" >/dev/null || true
+fi
 echo "gate job $job: $steps at $sha on $image ..."
 state=
 for _ in $(seq 1 $(( wait_s / poll_s ))); do

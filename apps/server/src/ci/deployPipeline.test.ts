@@ -45,6 +45,7 @@ function templateFiles(): Record<string, string> {
   add('scripts/k3s-build.sh');
   add('scripts/gate-job.sh');
   add('scripts/gate-verdict.sh');
+  add('scripts/gate-job-stop.sh');
   add('images/workspace/Dockerfile');
   // The release gate itself (npm ci, the suite) is far too heavy here: a stand-in leaves the summary it would, green or red.
   out['scripts/gate.sh'] = `#!/usr/bin/env bash
@@ -65,6 +66,8 @@ args=" $* "
 manifest() { git --git-dir="$FAKE/github.git" show main:deploy/k3s/portal.yaml; }
 case $args in
   # The in-cluster gate (scripts/gate-job.sh): its Job succeeds or fails with the fake gate's mode, and its log ends with the verdict.
+  *" get job claudepilot-gate-"*"metadata.uid"*) printf 'uid-1234' ;;
+  *" get jobs,secrets -l app=claudepilot-gate,claudepilot-gate/by=pipeline "*) [ -f "$FAKE/leftover" ] && { printf 'job.batch/claudepilot-gate-aaaaaaa-0000\nsecret/claudepilot-gate-aaaaaaa-0000\n'; rm -f "$FAKE/leftover"; }; true ;;
   *" get job claudepilot-gate-"*) if [ "$(cat "$FAKE/gate-mode" 2>/dev/null)" = red ]; then printf '/1'; else printf '1/'; fi ;;
   *" logs job/claudepilot-gate-"*)
     printf '=== SUMMARY\nnpm-ci rc=0 1s\n'; [ -f "$FAKE/leak" ] && echo "npm: $(cat "$FAKE/token")"
@@ -365,8 +368,10 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
   assert.match(dry.out, /\[dry-run\] would run: scripts\/gate-job\.sh [0-9a-f]{7}/);
   assert.ok(!existsSync(join(w.root, 'applied.yaml')), 'a dry run applies nothing');
 
+  writeFileSync(join(w.root, 'leftover'), ''); // a cancelled run's Job and its Secret
   const green = w.run('gate');
   assert.equal(green.code, 0, green.out);
+  assert.match(green.out, /gate: leftover stopped claudepilot-gate-aaaaaaa-0000/);
   assert.match(green.out, new RegExp(`gate job claudepilot-gate-${w.sha.slice(0, 7)}-[0-9a-f]{4}: typecheck,web-build,server-suite at ${w.sha.slice(0, 7)} on registry\\.test/claudepilot/workspace:dev-1`));
   assert.match(green.out, /GATE-VERDICT: green/);
   assert.match(green.out, /gate: green at [0-9a-f]{7}/);
@@ -380,6 +385,10 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
   const calls = w.calls();
   assert.match(calls, /kubectl -n isnan-claudepilot create secret generic claudepilot-gate-/);
   assert.match(calls, /kubectl -n isnan-claudepilot delete secret claudepilot-gate-/, 'the Secret is deleted on exit');
+  assert.match(calls, /delete job claudepilot-gate-aaaaaaa-0000/, 'a leftover of a cancelled run is stopped at the start');
+  assert.match(calls, /patch secret claudepilot-gate-[0-9a-f]{7}-[0-9a-f]{4} --type merge -p \{"metadata":\{"ownerReferences":\[\{"apiVersion":"batch\/v1","kind":"Job","name":"claudepilot-gate-[0-9a-f-]+","uid":"uid-1234"\}\]/, 'the Secret belongs to its Job');
+  assert.equal((calls.match(/get jobs,secrets -l app=claudepilot-gate,claudepilot-gate\/by=pipeline/g) ?? []).length, 2, 'leftovers cleared at the start, ours at the end');
+  assert.match(job, /claudepilot-gate\/by: pipeline/);
 
   writeFileSync(join(w.root, 'gate-mode'), 'red');
   writeFileSync(join(w.root, 'leak'), '');
