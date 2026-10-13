@@ -1653,7 +1653,24 @@ export class ChatController {
     await this.#worktreeBefore(session, mode);
     if (session.state !== 'ended' || opts.children === 'end') await this.end(sessionId, { children: opts.children });
     if (mode !== 'keep') await this.#worktreeAfterEnd(session, mode); // archiving leaves the folder unless the person said otherwise
-    if (!session.archivedAt) this.#chat.patchSession(sessionId, { archivedAt: new Date().toISOString() });
+    if (!session.archivedAt) this.#chat.patchSession(sessionId, { archivedAt: new Date().toISOString(), pinnedAt: null }); // archived is out of the list: not pinned
+    this.#emitSession(sessionId);
+    return this.#chat.get(sessionId)!;
+  }
+
+  /** Pin (FR2): the session leads its group and the Pinned chip lists it. Any state; an archived one is unarchived first by the person, not here. */
+  pin(rawId: string): ChatSession {
+    const sessionId = this.#chat.resolveId(rawId);
+    const session = this.#require(sessionId);
+    if (!session.pinnedAt) this.#chat.patchSession(sessionId, { pinnedAt: new Date().toISOString() });
+    this.#emitSession(sessionId);
+    return this.#chat.get(sessionId)!;
+  }
+
+  unpin(rawId: string): ChatSession {
+    const sessionId = this.#chat.resolveId(rawId);
+    this.#require(sessionId);
+    this.#chat.patchSession(sessionId, { pinnedAt: null });
     this.#emitSession(sessionId);
     return this.#chat.get(sessionId)!;
   }

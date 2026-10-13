@@ -1,6 +1,6 @@
 import { cn } from '@isnanme/ui';
 import { LIST_GROUP_BYS, type ListFilter, type ListGroupBy } from '@portal/contracts';
-import { ListChecks, Rows3, Search, X } from 'lucide-react';
+import { ListChecks, Pin, Rows3, Search, X } from 'lucide-react';
 
 export interface ViewState {
   groupBy: ListGroupBy;
@@ -18,19 +18,21 @@ const GROUP_LABEL: Record<ListGroupBy, string> = {
   ticket: 'Ticket',
 };
 
-const CHIPS: { id: ListFilter | 'archived'; label: string }[] = [
-  { id: 'all', label: 'All' },
+/** The owner's order (FR2): Pinned first (shown once anything is pinned), Idle next (the default when nothing is), All last. */
+const CHIPS: { id: ListFilter | 'archived'; label: string; icon?: React.ReactNode }[] = [
+  { id: 'pinned', label: 'Pinned', icon: <Pin className="size-3.5" aria-hidden="true" /> },
+  { id: 'idle', label: 'Idle' },
   { id: 'attention', label: 'Needs you' },
   { id: 'working', label: 'Working' },
-  { id: 'idle', label: 'Idle' },
   { id: 'ended', label: 'Ended' },
   { id: 'archived', label: 'Archived' },
+  { id: 'all', label: 'All' },
 ];
 
 /**
  * Search, filters and grouping for the Sessions list. The search matches title, workspace, Claude,
- * folder, branch, ticket and state; the chips filter by what needs you, is working, idle or ended (with
- * counts); Archived is a list of its own. Select turns the rows into checkboxes for bulk End, Archive and
+ * folder, branch, ticket and state; the chips filter by what is pinned, idle, needs you, is working or ended (with
+ * counts; All last); Archived is a list of its own. Select turns the rows into checkboxes for bulk End, Archive and
  * Delete. Phones get the chips as a row that scrolls sideways, so nothing wraps into a tall block.
  */
 export function SessionsToolbar({
@@ -98,7 +100,7 @@ export function SessionsToolbar({
         </label>
       </div>
       <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden">
-        {CHIPS.filter((c) => c.id === 'all' || c.id === 'archived' || counts[c.id] > 0 || active(c.id)).map((c) => {
+        {CHIPS.filter((c) => c.id === 'all' || c.id === 'archived' || c.id === 'idle' || counts[c.id] > 0 || active(c.id)).map((c) => {
           if (c.id === 'archived' && counts.archived === 0 && !view.archived) return null;
           const on = active(c.id);
           return (
@@ -112,6 +114,7 @@ export function SessionsToolbar({
                 on ? 'border-primary bg-primary text-primary-ink' : 'border-line bg-surface text-ink-soft hover:border-line-strong hover:text-ink',
               )}
             >
+              {c.icon}
               {c.label}
               <span className={cn('tabular-nums', on ? 'text-primary-ink/70' : 'text-muted')}>{counts[c.id]}</span>
             </button>

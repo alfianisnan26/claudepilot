@@ -2619,6 +2619,38 @@ test('own sign-in: a pool on the workspace brings its checks back, so a session 
 
 /* ========================= Archive (FR4) ========================= */
 
+test('pin: any state, twice is once, unpin clears it, archiving unpins; over HTTP too', async () => {
+  const s = await liveSession();
+  try {
+    const before = s.controller.get(s.id)!.state;
+    const pinned = s.controller.pin(s.id);
+    assert.ok(pinned.pinnedAt, 'pinnedAt set');
+    assert.equal(pinned.state, before, 'the session goes on as it was');
+    assert.equal(s.controller.pin(s.id).pinnedAt, pinned.pinnedAt, 'pinning again keeps the first time');
+    assert.ok(s.controller.list().find((x) => x.id === s.id)?.pinnedAt, 'the list carries it');
+    assert.equal(s.controller.unpin(s.id).pinnedAt, null);
+
+    const app = new Hono();
+    app.onError((e, c) => {
+      const err = isAppError(e) ? e : new AppError('INTERNAL_ERROR', undefined, { cause: e });
+      return c.json(err.toJSON(), err.status as 404);
+    });
+    app.route('/', createChatRoutes(s.controller));
+    const post = await app.request(`/${s.id}/pin`, { method: 'POST' });
+    assert.equal(post.status, 200);
+    assert.ok(((await post.json()) as { data: { pinnedAt: string | null } }).data.pinnedAt);
+    assert.equal((await app.request('/nope/pin', { method: 'POST' })).status, 404);
+    // Archived is out of the list: the pin goes with it.
+    const archived = await s.controller.archive(s.id);
+    assert.equal(archived.pinnedAt, null);
+    assert.ok(archived.archivedAt);
+    const del = await app.request(`/${s.id}/pin`, { method: 'DELETE' });
+    assert.equal(((await del.json()) as { data: { pinnedAt: string | null } }).data.pinnedAt, null);
+  } finally {
+    await s.done();
+  }
+});
+
 test('archive: a running session is ended first, then archived; an ended one keeps its reason; unarchive brings it back, ended', async () => {
   const s = await liveSession();
   try {

@@ -10,6 +10,7 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - Gate hygiene: shellcheck SC2015 (1f045fe), repo-find sorted (8b3316a), deploy-pipeline e2e test: the fakes' PATH in ~/.profile (b893ac8; /etc/profile resets PATH in a login shell and the real kubectl installed today at /usr/local/bin won; the test's wait now says which step failed). Passes alone 7/7.
 
 ## IN FLIGHT
+- Owner requests (07:00, in the main folder, branch integration, uncommitted until typecheck + gate): (1) phone layout scrolls sideways: an audit at 390 px is queued on the lock (/tmp/cp-qa/hscroll.mjs against scratch portal 3417); (2) Pinned sessions: contracts, migration 381, pin/unpin routes, chips Pinned · Idle · Needs you · Working · Ended · Archived · All, default chip Pinned or Idle, pinned first in a group, ⋯ Pin/Unpin on rows and the session page; (3) swipe right = Pin, left = Archive on rows (apps/web/src/features/chat/swipe.ts, tested); (4) image upload "could not save the file in the workspace (exit 4)": the host's put now reports `#short <got> <expected>`, the portal says "X of Y bytes arrived" and tries once more (stage.test.ts); the transport was checked whole with 6 MB over the real Kubernetes exec from this pod and over the Connect host transport in memory (host.bigstdin.test.ts): the cut is not reproduced here.
 - Gate on b893ac8 (started 06:58 under the heavy lock, log /tmp/orch-gate-b893ac8.out). Green -> push integration.
 - B item 5, auto-move web half (opus, worktree dev-automove-web, branch dev/automove-web, scratch port 3411): continues the uncommitted wiring the first sub-agent left (card, divider, Undo, menu item, settings rows).
 - A item 3, T6 acceptance and abuse (opus, dev-track-a-connect, port 3413, rig namespace dev-rig-connect).
@@ -24,6 +25,7 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - Housekeeping at the move: two orphaned `yes` processes (a load simulation from B's worktree, 2 CPUs for 45 min) and the scratch portals 3405 and 3409 were stopped.
 
 ## NEEDS A HUMAN
+- Upload exit 4 (owner, 07:05): which workspace was it (kohi-event on the cluster, or a Connect target on the Mac: Docker or host)? After the next deploy the error names the byte counts; that tells whether the transfer is cut (transport) or the size is wrong (blob). A Docker-via-Connect exec goes through the agent's proxied hijack (connect/agent/services/docker/proxy.ts), not covered by the in-memory check.
 - Multi-user (parked, not in this backlog): the owner wants the current single-owner access (workspace kohi-event, this session) reserved for a user `admin`; the password was given in chat on 2026-10-13 and is written nowhere: when that work starts, the owner sets it through the setup token or a Secret.
 - After the next deploy: on the iPhone (Home Screen PWA, quiet hours off) confirm "Deploy waits" arrives when a deploy run holds for approval; migration 720 must have run on the real portal.
 - Decide whether the Usage page should show "of which side questions".

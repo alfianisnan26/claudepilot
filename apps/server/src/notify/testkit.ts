@@ -60,6 +60,7 @@ export function session(id: string, over: Partial<ChatSession> = {}): ChatSessio
     predecessorId: null,
     successorId: null,
     archivedAt: null,
+    pinnedAt: null,
     ticketId: null,
     parentId: null,
     worktree: null,

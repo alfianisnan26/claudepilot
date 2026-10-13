@@ -2519,6 +2519,14 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 381,
+    name: 'chat sessions pinned',
+    up(db) {
+      // Chat sessions PRD FR2: a pinned session leads its group and the Pinned chip lists it. Null for everything so far.
+      db.exec('ALTER TABLE chat_sessions ADD COLUMN pinned_at TEXT');
+    },
+  },
 ];
 
 /**

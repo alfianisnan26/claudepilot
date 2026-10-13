@@ -1,6 +1,7 @@
 import { Badge, Button, ConfirmDialog, EmptyState, LoadError, RowsSkeleton, useToast } from '@isnanme/ui';
 import {
   buildListView,
+  defaultListFilter,
   LIST_GROUP_BYS,
   workspaceLabel,
   type ChatSession,
@@ -63,7 +64,14 @@ export function SessionsPage() {
     next.delete('new');
     setParams(next, { replace: true });
   }, [params, setParams]);
-  const [view, setView] = useState<ViewState>(() => ({ ...savedView(), filter: 'all', query: '', archived: false }));
+  // The chip opens on Pinned when anything is pinned, else Idle (FR2); once the sessions are known, and only until the person picks one.
+  const [view, setView] = useState<ViewState>(() => ({ ...savedView(), filter: 'idle', query: '', archived: false }));
+  const [chosenFilter, setChosenFilter] = useState(false);
+  useEffect(() => {
+    if (chosenFilter || !sessions) return;
+    const filter = defaultListFilter(sessions);
+    setView((v) => (v.filter === filter ? v : { ...v, filter }));
+  }, [sessions, chosenFilter]);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
@@ -77,6 +85,7 @@ export function SessionsPage() {
   const [busy, setBusy] = useState(false);
 
   const change = (next: Partial<ViewState>) => {
+    if (next.filter !== undefined || next.archived !== undefined) setChosenFilter(true);
     setView((v) => {
       const merged = { ...v, ...next };
       try {
@@ -96,8 +105,9 @@ export function SessionsPage() {
   // Counts for the filter chips, over what's open (never changed by the search).
   const counts = useMemo(() => {
     const open = (sessions ?? []).filter((s) => !s.archivedAt);
-    const c: Record<ListFilter | 'archived', number> = { all: open.length, attention: 0, working: 0, idle: 0, ended: 0, archived: (sessions ?? []).length - open.length };
+    const c: Record<ListFilter | 'archived', number> = { pinned: 0, all: open.length, attention: 0, working: 0, idle: 0, ended: 0, archived: (sessions ?? []).length - open.length };
     for (const s of open) {
+      if (s.pinnedAt) c.pinned++;
       if (s.waiting > 0 || s.state === 'waiting' || s.state === 'interrupted' || (s.state === 'ended' && /^(credential|integrity): /.test(s.endedReason ?? ''))) c.attention++;
       if (s.state === 'working' || s.state === 'starting') c.working++;
       else if (s.state === 'idle') c.idle++;
@@ -136,7 +146,19 @@ export function SessionsPage() {
     }
   };
 
+  const togglePin = async (s: ChatSession) => {
+    try {
+      if (s.pinnedAt) await chatApi.unpin(s.id);
+      else await chatApi.pin(s.id);
+      toast(s.pinnedAt ? 'Unpinned' : 'Pinned');
+      await reload();
+    } catch (e) {
+      toast(errorText(e, 'Could not change the pin.'), 'error');
+    }
+  };
+
   const actions: RowActions = {
+    pin: (s) => void togglePin(s),
     rename: setRenaming,
     end: setEnding,
     archive: (s) => (isBusy(s) || s.worktree ? setArchiving(s) : void archive(s)),

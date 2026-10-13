@@ -7,9 +7,13 @@ import type { ChatSession } from './chat.js';
 export type ListGroupBy = 'none' | 'workspace' | 'claude' | 'worktree' | 'ticket';
 export const LIST_GROUP_BYS: readonly ListGroupBy[] = ['none', 'workspace', 'claude', 'worktree', 'ticket'];
 
-/** `attention`: waiting on you, interrupted, or ended for safety. `open`: not ended. */
-export type ListFilter = 'all' | 'attention' | 'working' | 'idle' | 'ended';
-export const LIST_FILTERS: readonly ListFilter[] = ['all', 'attention', 'working', 'idle', 'ended'];
+/** `pinned`: what the person pinned. `attention`: waiting on you, interrupted, or ended for safety. In the chips' order: All is last. */
+export type ListFilter = 'pinned' | 'idle' | 'attention' | 'working' | 'ended' | 'all';
+export const LIST_FILTERS: readonly ListFilter[] = ['pinned', 'idle', 'attention', 'working', 'ended', 'all'];
+
+/** The chip the list opens on: Pinned when anything is pinned, else Idle (the owner's choice, FR2). */
+export const defaultListFilter = (sessions: readonly Pick<ChatSession, 'pinnedAt' | 'archivedAt'>[]): ListFilter =>
+  sessions.some((s) => s.pinnedAt && !s.archivedAt) ? 'pinned' : 'idle';
 
 /** What a session's workspace is, as far as the list needs: gone, or its status. */
 export interface WorkspaceFact {
@@ -88,7 +92,9 @@ export function attentionTier(s: ChatSession): number {
   return 4;
 }
 
-const byUrgency = (a: ChatSession, b: ChatSession) => attentionTier(a) - attentionTier(b) || Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt);
+/** Pinned first, then by need, then the latest activity. */
+const byUrgency = (a: ChatSession, b: ChatSession) =>
+  Number(!!b.pinnedAt) - Number(!!a.pinnedAt) || attentionTier(a) - attentionTier(b) || Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt);
 
 /** A workspace's name without its target (`docker/api-dev` → `api-dev`). */
 export const workspaceLabel = (id: string): string => id.slice(id.indexOf('/') + 1);
@@ -99,6 +105,8 @@ function matchesFilter(s: ChatSession, filter: ListFilter): boolean {
   switch (filter) {
     case 'all':
       return true;
+    case 'pinned':
+      return !!s.pinnedAt;
     case 'attention':
       return needsYou(s);
     case 'working':

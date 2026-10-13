@@ -39,6 +39,8 @@ export class LocalHost {
   readonly commands: string[][] = [];
   /** Extra environment for the script. */
   env: NodeJS.ProcessEnv = {};
+  /** Tests of a cut transfer: the n-th exec's stdin loses everything after this many bytes (the writes are taken, nothing arrives). */
+  cutStdinAfter: { bytes: number; execs: number } | null = null;
 
   constructor() {
     mkdirSync(this.files, { recursive: true });
@@ -74,8 +76,16 @@ export class LocalHost {
       finish(127);
     });
     child.on('close', finish);
+    let took = 0;
+    const cut = this.cutStdinAfter && this.cutStdinAfter.execs-- > 0 ? this.cutStdinAfter.bytes : null;
     return {
-      write: (d) => void child.stdin.write(d),
+      write: (d) => {
+        if (cut !== null && took >= cut) return;
+        const piece = cut === null ? d : d.slice(0, cut - took);
+        took += piece.length;
+        void child.stdin.write(piece);
+        if (cut !== null && took >= cut) child.stdin.end(); // the rest never comes: the host sees the end of the input
+      },
       close: () => void child.stdin.destroy(),
       onData: (fn) => void data.push(fn),
       onExit: (fn) => void exits.push(fn),

@@ -69,6 +69,8 @@ export interface ChatSession {
   successorId: string | null;
   /** When it was archived (hidden from the list; an archived session has ended), or null. */
   archivedAt: string | null;
+  /** When the person pinned it (FR2: the Pinned chip, first in its group), or null. Archiving unpins. */
+  pinnedAt: string | null;
   /** The ticket this session works on (Tickets), or null. Set when it's created, or with `setTicket`. */
   ticketId: string | null;
   /** The session that started this one (multi-agent), or null for one a person or a ticket started. */
@@ -566,6 +568,8 @@ export const CHAT_API = {
   end: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/end`,
   /** POST `?worktree=keep|remove|force`: archive it (ending it first if it hasn't ended). DELETE: unarchive it. */
   archive: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/archive`,
+  /** POST: pin it (any state). DELETE: unpin it. */
+  pin: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/pin`,
   /** GET `?after=<seq>`: stored transcript events after a sequence number (history and resume). */
   events: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/events`,
   /** GET: models this session can switch to. */

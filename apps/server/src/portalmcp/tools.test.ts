@@ -33,6 +33,7 @@ const session = (id: string, over: Row = {}) => ({
   lastActivityAt: NOW,
   endedReason: null,
   archivedAt: null,
+  pinnedAt: null,
   ticketId: null,
   startedBy: null,
   ...over,

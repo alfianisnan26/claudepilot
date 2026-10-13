@@ -229,6 +229,7 @@ export function chatSession(over: Partial<ChatSession> & { id: string; cwd: stri
     predecessorId: null,
     successorId: null,
     archivedAt: null,
+    pinnedAt: null,
     ticketId: null,
     parentId: null,
     worktree: null,

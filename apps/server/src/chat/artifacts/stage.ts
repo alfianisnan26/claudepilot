@@ -49,6 +49,20 @@ async function* base64Pieces(path: string): AsyncGenerator<string> {
  * reports (the workspace's own: `/home/node/...` in a workspace image, the real home on this machine).
  */
 export async function stageFile(workspaces: Workspaces, workspaceId: string, sessionId: string, file: StageSource, opts: StageOptions = {}): Promise<string> {
+  try {
+    return await stageOnce(workspaces, workspaceId, sessionId, file, opts);
+  } catch (e) {
+    // Fewer bytes than sent arrived once (a transfer cut on its way): one more try before the person hears of it.
+    if (!(e instanceof AppError) || !e.message.includes('arrived')) throw e;
+    console.warn(`[chat] staging ${file.staged} in ${workspaceId}: ${e.message} Trying once more.`);
+    return stageOnce(workspaces, workspaceId, sessionId, file, opts);
+  }
+}
+
+/** `#short <got> <expected>`: what the host said arrived when it refused a size that doesn't match. */
+const SHORT = /^#short (\d+) (\d+)$/m;
+
+async function stageOnce(workspaces: Workspaces, workspaceId: string, sessionId: string, file: StageSource, opts: StageOptions): Promise<string> {
   let size: number;
   try {
     size = statSync(file.blobPath).size;
@@ -90,6 +104,8 @@ export async function stageFile(workspaces: Workspaces, workspaceId: string, ses
   }
   if (code === HOST_TOO_LARGE) throw new AppError('PAYLOAD_TOO_LARGE', 'That file is too large to save in the workspace.');
   if (code === HOST_REFUSED) throw new AppError('BAD_REQUEST', 'The workspace refused to save that file.');
+  const short = SHORT.exec(out.toString('utf8'));
+  if (short) throw new AppError('SERVICE_UNAVAILABLE', `Couldn’t save the file in the workspace: ${short[1]} of ${short[2]} bytes arrived.`, { expose: true });
   throw new AppError('SERVICE_UNAVAILABLE', `Couldn’t save the file in the workspace (exit ${code ?? 'unknown'}).`, { expose: true });
 }
 

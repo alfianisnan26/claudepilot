@@ -84,6 +84,8 @@ export const chatApi = {
   /** What removing the session's worktree would lose; null for a session in a plain folder. */
   worktreeStatus: (id: string) => request<ChatWorktreeStatus | null>('GET', CHAT_API.worktree(id)),
   unarchive: (id: string) => request<ChatSession>('DELETE', CHAT_API.archive(id)),
+  pin: (id: string) => request<ChatSession>('POST', CHAT_API.pin(id)),
+  unpin: (id: string) => request<ChatSession>('DELETE', CHAT_API.pin(id)),
   history: (id: string, after?: number) =>
     request<ChatEvent[]>('GET', CHAT_API.events(id) + (after !== undefined ? `?after=${after}` : '')),
   /** Models this session can switch to (Claude Code's own list). */

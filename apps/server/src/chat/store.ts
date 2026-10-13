@@ -66,6 +66,7 @@ export type ChatSessionRow = {
   last_activity_at: string;
   ended_reason: string | null;
   archived_at: string | null;
+  pinned_at?: string | null;
   claude_id?: string | null;
   predecessor_id?: string | null;
   successor_id?: string | null;
@@ -143,6 +144,7 @@ export interface ChatSessionPatch {
   successorId?: string | null;
   predecessorId?: string | null;
   archivedAt?: string | null;
+  pinnedAt?: string | null;
   title?: string;
   ticketId?: string | null;
   /** Sets or clears the session's worktree (its three columns together). */
@@ -425,6 +427,7 @@ export class ChatStore {
       predecessorId: row.predecessor_id ?? null,
       successorId: row.successor_id ?? null,
       archivedAt: row.archived_at ?? null,
+      pinnedAt: row.pinned_at ?? null,
       bypassCapable: row.bypass_capable === 1,
       claudeSessionId: claudeSessionOf(row),
       previousClaudes: this.#previousClaudes(row),
@@ -699,6 +702,7 @@ export class ChatStore {
     if (patch.processStartedAt !== undefined) set('process_started_at', patch.processStartedAt);
     if (patch.process !== undefined) set('process', patch.process);
     if (patch.archivedAt !== undefined) set('archived_at', patch.archivedAt);
+    if (patch.pinnedAt !== undefined) set('pinned_at', patch.pinnedAt);
     if (patch.title !== undefined) set('title', patch.title);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
     if (patch.successorId !== undefined) set('successor_id', patch.successorId);

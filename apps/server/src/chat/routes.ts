@@ -106,6 +106,9 @@ export function createChatRoutes(controller: ChatController): Hono {
   // GET /api/chat/sessions/:id/worktree — what removing the chat's worktree would lose (null when it has none).
   chat.get('/:id/worktree', async (c) => c.json(success(await controller.worktreeStatus(c.req.param('id')))));
   chat.delete('/:id/archive', (c) => c.json(success(controller.unarchive(c.req.param('id')))));
+  // POST /api/chat/sessions/:id/pin — pin it; DELETE unpins.
+  chat.post('/:id/pin', (c) => c.json(success(controller.pin(c.req.param('id')))));
+  chat.delete('/:id/pin', (c) => c.json(success(controller.unpin(c.req.param('id')))));
 
   // GET /api/chat/sessions/:id/events?after=<seq> — stored transcript events (history and resume).
   chat.get('/:id/events', (c) => c.json(success(controller.history(c.req.param('id'), Number(c.req.query('after') ?? 0) || 0))));

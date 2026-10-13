@@ -54,7 +54,7 @@ export const ACCOUNT_HELPER = '/etc/claudepilot/bin/account-key';
  * - `put <id> <name> <nchars> <nbytes>` stages an attachment (chat content, FR31): `<nchars>` characters of
  *   base64 on stdin become `${CLAUDEPILOT_UPLOADS_DIR:-$HOME/.claudepilot/uploads}/<id>/<name>` (mode 0600,
  *   written under a temporary name and renamed, never through a link), which must come to exactly `<nbytes>`
- *   (exit 4 when it doesn't, so a cut-short upload leaves nothing), and its path is printed. `<name>` is plain
+ *   (exit 4 when it doesn't, printing `#short <got> <expected>`, so a cut-short upload leaves nothing), and its path is printed. `<name>` is plain
  *   ASCII (letters, digits, dot, dash, underscore; no leading dot); exit 2 for anything else, 6 for more
  *   than {@link PUT_MAX_BASE64} characters. `unstage <id>` deletes the session's staged files.
  * - `produced <dir> <since> <max>` lists the files written in a folder since an instant (artifacts a command
@@ -416,7 +416,9 @@ case "$cmd" in
     umask 077
     tmp="$dir/.$name.$$.part"
     head -c "$nchars" | base64 -d > "$tmp" || { rm -f "$tmp"; exit 1; }
-    [ "$(wc -c < "$tmp")" -eq "$nbytes" ] || { rm -f "$tmp"; exit 4; }
+    # Fewer (or more) bytes than announced: say how many came (exit 4), so the portal can tell a cut transfer from a wrong size.
+    got="$(wc -c < "$tmp" | tr -d ' ')"
+    [ "$got" -eq "$nbytes" ] || { rm -f "$tmp"; printf '#short %s %s\\n' "$got" "$nbytes"; exit 4; }
     [ ! -L "$dir/$name" ] || { rm -f "$tmp"; exit 2; }
     mv -f "$tmp" "$dir/$name" || { rm -f "$tmp"; exit 1; }
     printf '%s\\n' "$dir/$name"

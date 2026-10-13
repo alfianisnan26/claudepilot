@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { attentionTier, buildListView, matchesQuery, needsYou, rollupLine, type ChatSession, type ListRow } from '@portal/contracts';
+import { attentionTier, buildListView, defaultListFilter, LIST_FILTERS, matchesQuery, needsYou, rollupLine, type ChatSession, type ListRow } from '@portal/contracts';
 
 let n = 0;
 /** A session as the portal lists it; `at` is minutes ago for the last activity. */
@@ -37,6 +37,7 @@ function session(over: Partial<ChatSession> & { at?: number } = {}): ChatSession
     predecessorId: null,
     successorId: null,
     archivedAt: null,
+    pinnedAt: null,
     ticketId: null,
     parentId: null,
     worktree: null,
@@ -91,6 +92,23 @@ test('filters and search: a filter keeps its states, search needs every word and
   assert.ok(matchesQuery(list[0]!, '  '), 'blank matches everything');
   const v = buildListView(list, { filter: 'working' });
   assert.deepEqual([v.shown, v.total], [1, 4]);
+});
+
+test('pinned: the Pinned chip lists what is pinned, a pinned session leads its group, and the default chip is Pinned only when something is', () => {
+  const pin = new Date().toISOString();
+  const list = [
+    session({ id: 'waiting', state: 'waiting', waiting: 1, at: 1 }),
+    session({ id: 'old-pinned', state: 'idle', at: 500, pinnedAt: pin }),
+    session({ id: 'new-idle', state: 'idle', at: 2 }),
+    session({ id: 'ended-pinned', state: 'ended', at: 900, pinnedAt: pin }),
+  ];
+  assert.deepEqual(ids(buildListView(list, { filter: 'pinned' }).groups[0]!.rows), ['old-pinned', 'ended-pinned']);
+  assert.deepEqual(ids(buildListView(list).groups[0]!.rows), ['old-pinned', 'ended-pinned', 'waiting', 'new-idle'], 'pinned first, then by need');
+  assert.deepEqual(ids(buildListView(list, { groupBy: 'workspace' }).groups[0]!.rows), ['old-pinned', 'ended-pinned', 'waiting', 'new-idle']);
+  assert.equal(defaultListFilter(list), 'pinned');
+  assert.equal(defaultListFilter([list[0]!, list[2]!]), 'idle', 'nothing pinned: Idle');
+  assert.equal(defaultListFilter([session({ pinnedAt: pin, archivedAt: pin, state: 'ended' })]), 'idle', 'an archived pin does not count');
+  assert.deepEqual(LIST_FILTERS, ['pinned', 'idle', 'attention', 'working', 'ended', 'all'], 'the chips in order: Pinned first, All last');
 });
 
 test('archived sessions are a list of their own: left out by default, and the only ones shown when asked', () => {

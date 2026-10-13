@@ -12,6 +12,8 @@ import {
   MessageSquare,
   Moon,
   Pencil,
+  Pin,
+  PinOff,
   Ticket,
   Trash2,
 } from 'lucide-react';
@@ -19,9 +21,12 @@ import { Link } from 'react-router';
 import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
 import { formatDateTime } from '@/lib/format';
 import { endedForSafety, formatUsd, StateBadge, timeShort } from './shared';
+import { useRowSwipe } from './swipe';
 
 /** What a row's ⋯ can do; the page owns the dialogs. */
 export interface RowActions {
+  /** Pin or unpin (FR2): a pinned session leads its group and the Pinned chip lists it. */
+  pin: (s: ChatSession) => void;
   rename: (s: ChatSession) => void;
   end: (s: ChatSession) => void;
   archive: (s: ChatSession) => void;
@@ -33,11 +38,14 @@ export interface RowActions {
   select: (s: ChatSession) => void;
 }
 
-/** A row's ⋯ (FR4): Rename, Move to another Claude, Archive or Unarchive, End while it hasn't ended, Select, Delete (always confirmed). */
+/** A row's ⋯ (FR4): Pin or Unpin, Rename, Move to another Claude, Archive or Unarchive, End while it hasn't ended, Select, Delete (always confirmed). */
 export function rowActions(row: ListRow, on: RowActions): MenuItem[] {
   const s = row.session;
   const gone = row.workspaceGone;
   return [
+    ...(s.archivedAt
+      ? []
+      : [s.pinnedAt ? { label: 'Unpin', icon: <PinOff className="size-4" />, onSelect: () => on.pin(s) } : { label: 'Pin', icon: <Pin className="size-4" />, onSelect: () => on.pin(s) }]),
     { label: 'Rename…', icon: <Pencil className="size-4" />, onSelect: () => on.rename(s) },
     ...(!gone && s.state !== 'ended' && !s.switching
       ? [{ label: 'Move to another Claude…', icon: <ArrowRightLeft className="size-4" />, onSelect: () => on.move(s) }]
@@ -167,9 +175,36 @@ export function SessionRow({
     onToggle(s.id);
   };
 
+  // Swipe on a touch screen: right pins (or unpins), left archives (or unarchives). The panes behind the row say so; past the threshold they
+  // fill in. The row moves by transform inside an overflow-hidden box, so the page never scrolls sideways.
+  const swipe = useRowSwipe({
+    enabled: !selecting,
+    onRight: () => actions.pin(s),
+    onLeft: () => (s.archivedAt ? actions.unarchive(s) : actions.archive(s)),
+  });
+  const rightLabel = s.pinnedAt ? 'Unpin' : 'Pin';
+  const leftLabel = s.archivedAt ? 'Unarchive' : 'Archive';
+
   return (
     <li>
-      <div className={cn('flex items-start gap-2.5 py-3 pr-2.5 pl-3 sm:pr-4 sm:pl-5', depth === 0 && 'pl-4', picked && 'bg-accent-soft/50')}>
+      <div className="relative overflow-hidden" style={{ touchAction: 'pan-y' }} {...swipe.handlers}>
+        {swipe.dx !== 0 && (
+          <div aria-hidden="true" className="absolute inset-0 flex items-stretch justify-between text-[12.5px] font-semibold">
+            <span className={cn('flex w-[104px] items-center gap-1.5 pl-4 transition-colors', swipe.armed === 'right' ? 'bg-primary text-primary-ink' : 'bg-primary/15 text-primary')}>
+              {s.pinnedAt ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+              {rightLabel}
+            </span>
+            <span className={cn('flex w-[104px] items-center justify-end gap-1.5 pr-4 transition-colors', swipe.armed === 'left' ? 'bg-danger text-white' : 'bg-danger/15 text-danger')}>
+              {leftLabel}
+              {s.archivedAt ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}
+            </span>
+          </div>
+        )}
+      <div
+        data-swipe={swipe.dx !== 0 ? 'moving' : undefined}
+        style={{ transform: swipe.dx ? `translateX(${swipe.dx}px)` : undefined, transition: swipe.dragging ? 'none' : 'transform 160ms ease-out' }}
+        className={cn('relative flex items-start gap-2.5 bg-surface py-3 pr-2.5 pl-3 sm:pr-4 sm:pl-5', depth === 0 && 'pl-4', picked && 'bg-accent-soft/50')}
+      >
         {selecting && (
           <button
             type="button"
@@ -246,6 +281,7 @@ export function SessionRow({
           </button>
         )}
         {!selecting && <Menu label={`Actions for ${title}`} items={rowActions(row, actions)} />}
+      </div>
       </div>
       {row.children.length > 0 && open && (
         <ul className="ml-4 border-l-2 border-line sm:ml-7">

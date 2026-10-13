@@ -1,6 +1,6 @@
 import { Badge, cn, ConfirmDialog, Menu, Spinner, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
 import type { ChatRequest, ChatSession } from '@portal/contracts';
-import { Archive, ArchiveRestore, ArrowLeft, Bell, BellOff, Bot, CircleStop, FolderOpen, Gauge, Info, ListCollapse, ListTree, MoreHorizontal, Pencil, PanelRight, PanelRightClose, RotateCw, ShieldAlert, Trash2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Bell, BellOff, Bot, CircleStop, FolderOpen, Gauge, Info, ListCollapse, ListTree, MoreHorizontal, Pencil, PanelRight, PanelRightClose, Pin, PinOff, RotateCw, ShieldAlert, Trash2, X } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { BRAND_NAME } from '@/components/Logo';
@@ -101,6 +101,20 @@ export function SessionPage() {
       toast('Back in Sessions');
     } catch (e) {
       toast(errorText(e, 'Could not unarchive it.'), 'error');
+    }
+  };
+  /** Pin (FR2): the session leads its group in the list and the Pinned chip lists it. */
+  const togglePin = async () => {
+    try {
+      if (session?.pinnedAt) {
+        await chatApi.unpin(id);
+        toast('Unpinned');
+      } else {
+        await chatApi.pin(id);
+        toast('Pinned');
+      }
+    } catch (e) {
+      toast(errorText(e, 'Could not change the pin.'), 'error');
     }
   };
   const composer = useRef<ComposerHandle>(null);
@@ -325,6 +339,9 @@ export function SessionPage() {
       onSelect: fromMenu(openSwitch),
       disabled: gone || ended || !!session?.switching,
     },
+    session?.pinnedAt
+      ? { label: 'Unpin', icon: <PinOff className="size-4" />, onSelect: fromMenu(() => void togglePin()) }
+      : { label: 'Pin', icon: <Pin className="size-4" />, onSelect: fromMenu(() => void togglePin()), disabled: !session || !!session.archivedAt },
     session?.archivedAt
       ? { label: 'Unarchive', icon: <ArchiveRestore className="size-4" />, onSelect: fromMenu(() => void unarchive()) }
       : {

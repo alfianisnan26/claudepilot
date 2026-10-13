@@ -102,6 +102,24 @@ test('stageFile: a big binary file goes through the exec in pieces and arrives i
   await assert.rejects(stageFile(host.asWorkspaces(), 'docker/ws1', 'S1', { blobPath, staged: staged.replace('.pdf', '2.pdf') }), /Couldn’t save the file in the workspace/);
 });
 
+test('stageFile: a transfer cut on its way is tried once more, and a second cut says how many bytes arrived', async () => {
+  const host = new LocalHost();
+  const dir = temp('blob');
+  const bytes = randomBytes(2 * 1024 * 1024 + 5);
+  const blobPath = join(dir, 'blob');
+  writeFileSync(blobPath, bytes);
+  const staged = stagedName('photo.jpg', createHash('sha256').update(bytes).digest('hex'));
+  // The first exec loses the tail of its stdin; the second is whole: the file arrives, the person hears nothing.
+  host.cutStdinAfter = { bytes: 1_000_000, execs: 1 };
+  const path = await stageFile(host.asWorkspaces(), 'docker/ws1', 'S1', { blobPath, staged });
+  assert.ok(readFileSync(path).equals(bytes));
+  assert.equal(host.commands.length, 2, 'put ran twice');
+  // Cut both times: the error says what came (750000 of the base64's 1,000,000 characters decode to 750,000 bytes), nothing is kept.
+  host.cutStdinAfter = { bytes: 1_000_000, execs: 2 };
+  await assert.rejects(stageFile(host.asWorkspaces(), 'docker/ws1', 'S2', { blobPath, staged }), /Couldn’t save the file in the workspace: 750000 of 2097157 bytes arrived\./);
+  assert.equal(existsSync(join(host.uploads, 'S2', staged)), false);
+});
+
 test('stageFile: an install that fails stops the transfer before any byte is written', async () => {
   const host = new LocalHost();
   const dir = temp('blob');
