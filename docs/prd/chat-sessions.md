@@ -887,3 +887,32 @@ The owner's three asks of 2026-10-13: (1) a way to restart a session without los
 
 - The full path through a real portal and a Docker workspace (restart of a live session with a newly delivered MCP set) was not run end to end; the CLI behaviour it relies on was run directly (21.1) and the controller against the fake host.
 - Auto with a real account and the real classifier: not run (no real credentials); its eligibility by account or plan is only what the binary's messages say.
+
+## 22. Sub-agents: whose line is whose, their models, a detail view (2026-10-13, T-5 and T-31)
+
+The owner's asks: every sub-agent row says which model it runs on and opens to what the agent did, with Stop (T-5); and a sub-agent's text must
+never stream in the main reply's place, nor the session read plain Idle while its agents still work (T-31).
+
+### 22.1 Where the facts come from (Claude Code 2.1.296 against the stand-in)
+
+- **Whose line.** Every stream line of a sub-agent carries `parent_tool_use_id`: the id of the `Task`/`Agent` call that started it. Stored events and
+  live deltas carry it as `parentToolUseId` (null for the main agent), beside the older `agentLabel`.
+- **Model.** Reliable in two places: the call's launch result (`tool_use_result.resolvedModel`, also when the call names no model) and each of the
+  agent's own lines (`message.model`, which wins). The call's `model` argument is only a request (an alias, or absent: it inherits) and is never
+  used. `ChatTask.model` (migration 382) is null until one of them is seen, and the UI then says "unavailable", never a guess.
+- **Streaming.** Claude Code doesn't stream a sub-agent's text: its finished blocks arrive one by one; a delta of an agent is still kept apart.
+
+### 22.2 Requirements and how they are built
+
+| ID | Requirement | Status |
+| --- | --- | --- |
+| FR54 | **The reply slot is the main agent's.** The live state is split (`motion/deltas.ts`, `foldLive`/`settleLive`): the main agent's reply, and each agent's own live text by its call; an agent's stored block ends only its own live text. | ✅ Built, pure tests (`agentFold.test.ts`: a background agent's deltas after the main result; two agents interleaved; a main reply while an agent streams). |
+| FR55 | **Agent lines fold into the turn that started them** (`agentFold.ts`, `buildItems`): every row whose call is in the transcript leaves the flow, however late it arrives (a background agent after the main turn ended); an agent started by an agent belongs to the one the main agent started. The call's row is the **agent row**: icon, name, model, latest line (shimmering while it runs; its result once done), opening the detail view. While one runs, the turn's activity line names it and what it does. | ✅ Built, pure tests. |
+| FR56 | **Idle with agents.** `ChatSession.agentsRunning`; the header and the Sessions row read "Idle · 2 agents" with a spinner ("Agents" on a phone); the Agents icon carries a spinner while any runs. | ✅ Built. |
+| FR57 | **Model label** on each Agents-panel row (sonnet, opus, fable, haiku; the id as reported for another; "unavailable" until reported; none for a background command). | ✅ Built. |
+| FR58 | **Detail view** (the Agents panel on wide screens, the sheet on a phone; a row of the panel or of the transcript opens it): description, type, model, status, tokens, tool uses, time, result, and its own transcript (`GET …/tasks/:taskId/events?after=`, redacted as stored, the newest 200 with `truncated`, behind the session's view permission), polled every 2 s while it runs, newest at the bottom; Stop while it runs; back returns to the list. | ✅ Built. |
+
+### 22.3 Checked in a browser
+
+`tools/qa/subagents.mjs` against a scratch portal whose local workspace runs the real Claude Code with the stand-in: `[[agent sonnet,fable,- steps 6 2 <file>]]`
+starts three background agents that work about 12 s after the main turn is done, at 390 px (touch, safe areas) and 1280 px, light and dark.

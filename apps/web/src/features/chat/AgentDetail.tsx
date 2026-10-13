@@ -217,7 +217,8 @@ export function AgentDetail({
           ) : rows.length === 0 && !liveLine ? (
             <p className="mt-2 text-[13px] text-muted">{running ? 'Nothing yet.' : 'Nothing recorded.'}</p>
           ) : (
-            <div className="mt-2 flex min-w-0 flex-col gap-2" role="log" aria-live="polite">
+            // Its tool rows stand alone here (not inside an activity line): 44 px to tap on a touch screen.
+            <div className="mt-2 flex min-w-0 flex-col gap-2 tap:[&_button[aria-expanded]]:min-h-11" role="log" aria-live="polite">
               {rows.map((r) => (
                 <DetailRow key={rowKey(r)} row={r} running={running} />
               ))}
