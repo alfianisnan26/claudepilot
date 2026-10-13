@@ -7,7 +7,7 @@ Session fe3df8bc in kubernetes/kohi-event, main folder ~/work/claudepilot, branc
 - Pipeline gate script: shellcheck SC2015 fixed (1f045fe; the suite's shellcheck test failed on the coordinator's b6f141f).
 
 ## IN FLIGHT
-- A slice 1 (fable, dispatched before the model rule): item 2 the rekey/limits hang, then T1 leftovers. The hang reproduced live in my gate at 05:56 (load 17 on 4 CPUs); A was given the PID to inspect read-only.
+- A slice 1 finished (fable): 7d41bc7 the hang's cause (a stop landing while the agent dials found no session to close; dialTunnel now takes an abort signal; every awaited Connect test event has a timeout), f31f6ca scratch-portal observations in PRD C1 and scratch-portal.sh refuses a busy port. Items 1 and 2 done; to merge after the current gate. Incident: A's scratch portal took C's port 3405 and wiped C's scratch data; C told to restart on 3409.
 - B slice 2 (opus): item 2, V1 canary guards + deterministic service.test.ts + PRD report. B slice 1 finished: 41d4dc0 (boot leak, gate flake, usagespend side split), ad0b7e6 (migration 720), 98b2e09 (merge of integration); typecheck of the final tree not yet confirmed by B.
 - C slice 1 (fable): item 1 btw UI against the real engine; two commits local, waiting on the heavy lock for its Chromium run.
 - Gate on 9dd73e8 running (npm-ci, typecheck, web-build green; suite first pass: cpb-view and the deploy-pipeline e2e failed under load, shellcheck real and fixed; rerun-alone pass pending).
@@ -27,6 +27,7 @@ Session fe3df8bc in kubernetes/kohi-event, main folder ~/work/claudepilot, branc
 - Decide whether the Usage page should show "of which side questions".
 
 ## NEXT
+- Next dispatch order (owner priority): auto-move web half (dev-automove-web, opus; npm ci queued on the lock) as soon as a slot frees, then A item 3 (T6 rig, opus), C item 2/3, B item 3.
 - Gate green -> push integration (9dd73e8 + 1f045fe + status). Then merge B's 98b2e09 (migration 720 etc.), gate, push.
 - A and C return -> review, targeted tests, gate, push; then A item 3 (T6 rig, opus), C item 2/3 (phone chrome, CI screens; opus), B item 3 (N2 web; opus).
 - First deploy of the day once migration 720 and the notification are on integration with a green gate (ci_run_trigger, gate=false).
