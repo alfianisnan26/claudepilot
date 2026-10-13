@@ -39,11 +39,11 @@ test('kinds: order, add, remove, no duplicates', () => {
   assert.deepEqual(withKind(['approval', 'ci_failed'], 'approval', false), ['ci_failed']);
   assert.deepEqual(withKind(['approval'], 'approval', true), ['approval']);
   assert.ok(!MATRIX_KINDS.includes('test'));
-  assert.equal(MATRIX_KINDS.length, 10);
+  assert.equal(MATRIX_KINDS.length, 11);
   // defaults by hand from the contract: everything phase 1 with defaultOn, which is every one except session_done (and test is defaultOn true, phase 1)
-  assert.deepEqual(defaultKinds(), ['approval', 'human_request', 'session_failed', 'ci_failed', 'quota_low', 'cost_spike', 'trigger_approval', 'trigger_failed', 'auto_move', 'test']);
+  assert.deepEqual(defaultKinds(), ['approval', 'human_request', 'session_failed', 'ci_failed', 'ci_waiting', 'quota_low', 'cost_spike', 'trigger_approval', 'trigger_failed', 'auto_move', 'test']);
   assert.equal(kindsSummary({ kinds: [] }), 'Nothing');
-  assert.equal(kindsSummary({ kinds: ['approval', 'ci_failed'] }), '2 of 10');
+  assert.equal(kindsSummary({ kinds: ['approval', 'ci_failed'] }), '2 of 11');
   assert.equal(kindsSummary({ kinds: [...MATRIX_KINDS] }), 'Everything');
 });
 
@@ -123,5 +123,5 @@ test('day labels', () => {
 
 test('type check of a destination literal used by the matrix', () => {
   const d = { kinds: ['approval'] } as Pick<NotifyDestination, 'kinds'>;
-  assert.equal(kindsSummary(d), '1 of 10');
+  assert.equal(kindsSummary(d), '1 of 11');
 });

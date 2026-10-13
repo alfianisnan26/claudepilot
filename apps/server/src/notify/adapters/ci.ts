@@ -1,5 +1,7 @@
-// The CI adapter: `ci_failed` when a run ends `failed` (not `cancelled`) and its previous status was not failed. CI has ONE hook slot
-// (`CiService.hooks.changed`): the adapter keeps any hook already set (chain-wrap) and triggers read the bus, not the slot.
+// The CI adapter: `ci_failed` when a run ends `failed` (not `cancelled`) and its previous status was not failed, and `ci_waiting` when a
+// deployment job starts waiting for a person's approval (FR41). CI has two hook slots (`CiService.hooks.changed` and `.waiting`): the
+// adapter keeps any hook already set (chain-wrap) and triggers read the bus, not the slots. Facts are names and numbers from the run row
+// (never its subject line, inputs or a gate key).
 
 import type { CiHooks } from '../../ci/service.js';
 import type { NotifyBus } from '../bus.js';
@@ -25,7 +27,21 @@ export function adaptCi(ci: { hooks: CiHooks }, bus: NotifyBus, passed?: (runId:
     }
   };
   ci.hooks.changed = mine;
+  const wasWaiting = ci.hooks.waiting;
+  const waiting: NonNullable<CiHooks['waiting']> = (run, job, environment) => {
+    try {
+      wasWaiting?.(run, job, environment);
+    } finally {
+      bus.emit({
+        kind: 'ci_waiting',
+        subject: { type: 'ci_run', id: run.id, workspaceId: run.workspace_id },
+        facts: { workspace: run.workspace_id, repo: run.repo, number: run.number, pipeline: run.pipeline, job, environment },
+      });
+    }
+  };
+  ci.hooks.waiting = waiting;
   return () => {
     if (ci.hooks.changed === mine) ci.hooks.changed = was;
+    if (ci.hooks.waiting === waiting) ci.hooks.waiting = wasWaiting;
   };
 }

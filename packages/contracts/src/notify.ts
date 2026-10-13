@@ -30,6 +30,7 @@ export const NOTIFY_KINDS = [
   'session_failed', // a turn or the session failed
   'session_done', // a session finished (opt-in per session, or by length)
   'ci_failed', // a CI run failed
+  'ci_waiting', // a deployment job waits for a person's approval (CI FR41)
   'quota_low', // a Claude's plan window is nearly used, or projected to run out before it resets
   'cost_spike', // a spend spike or a budget threshold (Usage)
   'trigger_approval', // a trigger run waits for approval
@@ -71,6 +72,7 @@ export const NOTIFY_KIND_INFO: Record<NotifyKind, NotifyKindInfo> = {
   session_failed: { kind: 'session_failed', label: 'Failed', severity: 'attention', defaultOn: true, breakthrough: false, phase: 1, urgency: 'normal', ttlSeconds: 6 * 3600 },
   session_done: { kind: 'session_done', label: 'Done', severity: 'info', defaultOn: false, breakthrough: false, phase: 1, urgency: 'low', ttlSeconds: 3600 },
   ci_failed: { kind: 'ci_failed', label: 'CI failed', severity: 'attention', defaultOn: true, breakthrough: false, phase: 1, urgency: 'normal', ttlSeconds: 6 * 3600 },
+  ci_waiting: { kind: 'ci_waiting', label: 'Deploy waits', severity: 'attention', defaultOn: true, breakthrough: false, phase: 1, urgency: 'high', ttlSeconds: 6 * 3600 },
   quota_low: { kind: 'quota_low', label: 'Quota', severity: 'attention', defaultOn: true, breakthrough: false, phase: 1, urgency: 'normal', ttlSeconds: 6 * 3600 },
   cost_spike: { kind: 'cost_spike', label: 'Cost', severity: 'urgent', defaultOn: true, breakthrough: true, phase: 1, urgency: 'high', ttlSeconds: 6 * 3600 },
   trigger_approval: { kind: 'trigger_approval', label: 'Trigger run', severity: 'attention', defaultOn: true, breakthrough: false, phase: 1, urgency: 'normal', ttlSeconds: 6 * 3600 },

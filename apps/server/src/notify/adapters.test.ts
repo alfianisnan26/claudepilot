@@ -36,6 +36,25 @@ test('CI: keeps the hook already set, notifies a failed run once (not cancelled,
   off();
 });
 
+test('CI: a deployment job that starts waiting for a person is one "Deploy waits" with the environment and the run number, linking to the run; the gate key never travels', () => {
+  const { bus, got } = collect();
+  const seen: string[] = [];
+  const ci = { hooks: { waiting: (run: { id: string }) => void seen.push(run.id) } } as never as { hooks: { waiting?: (run: never, job: string, env: string) => void } };
+  const off = adaptCi(ci as never, bus);
+  const run = { id: 'run_2', number: 15, workspace_id: 'kubernetes/kohi-event', repo: 'claudepilot', pipeline: 'deploy', status: 'running', subject: 'CANARY commit message', inputs: '{"CANARY":1}', gate_key: 'CANARY-KEY' };
+  (ci.hooks.waiting as (r: unknown, j: string, e: string) => void)(run, 'release', 'production');
+  assert.deepEqual(seen, ['run_2'], 'the earlier hook still runs');
+  assert.equal(got.length, 1);
+  assert.equal(got[0]!.kind, 'ci_waiting');
+  assert.deepEqual(got[0]!.subject, { type: 'ci_run', id: 'run_2', workspaceId: 'kubernetes/kohi-event' });
+  assert.deepEqual(render(got[0]!), { title: 'Deploy waits', body: 'production · claudepilot · #15', path: '/admin/ci/runs/run_2', tag: 'deploy:run_2:release', renotify: false, severity: 'attention' });
+  assert.ok(!JSON.stringify(got).includes('CANARY'));
+  off();
+  assert.equal(typeof ci.hooks.waiting, 'function', 'the earlier hook is put back');
+  (ci.hooks.waiting as (r: unknown, j: string, e: string) => void)(run, 'release', 'production');
+  assert.equal(got.length, 1, 'after off() the adapter is gone');
+});
+
 test('plan usage: high and exhausted notify, near is history only, projection is an estimate with an ETA', () => {
   const { bus, got } = collect();
   let fire: (a: ClaudeUsageAlert) => void = () => {};

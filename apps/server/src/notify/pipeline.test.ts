@@ -97,6 +97,40 @@ test('approval: announced 3 s later only if still open; the push carries the tok
   }
 });
 
+test('a deploy that waits for a person: "Deploy waits" reaches a new device at once (on by default, urgency high), holds in quiet hours, and carries no key', async () => {
+  const svc = await standIn();
+  const c = clock('2026-10-12T05:00:00.000Z'); // 12:00 in Jakarta
+  const ci = { hooks: {} as import('../ci/service.js').CiHooks };
+  const h = await harness({ ci, now: c.now, schedule: c.schedule });
+  try {
+    h.notify.start();
+    const browser = fakeBrowser(`http://push.example.test:${svc.port}/send/a`);
+    const dest = h.notify.destinations.registerPush('u_a', { subscription: browser.subscription, name: 'iPhone · Safari', tz: 'Asia/Jakarta' }).destination;
+    assert.ok(dest.kinds.includes('ci_waiting'), 'on for a new device');
+    const run = { id: 'run_9', number: 21, workspace_id: 'kubernetes/kohi-event', repo: 'claudepilot', pipeline: 'deploy', status: 'running', subject: 'CANARY-SUBJECT', gate_key: 'CANARY-KEY' };
+    ci.hooks.waiting!(run as never, 'release', 'production');
+    await until(() => svc.got.length === 1);
+    assert.equal(svc.got[0]!.headers.urgency, 'high');
+    const p = browser.open(svc.got[0]!.body) as PushPayload;
+    assert.equal(p.notification.title, 'Deploy waits');
+    assert.equal(p.notification.body, 'production · claudepilot · #21');
+    assert.equal(p.notification.data.path, '/admin/ci/runs/run_9');
+    assert.ok(!p.notification.data.act, 'no button approves a deploy from a notification');
+    assert.ok(!JSON.stringify(p).includes('CANARY') && !everything(h).includes('CANARY'));
+    assert.equal(h.notify.history.page('u_a').items[0]!.kind, 'ci_waiting');
+    // quiet hours: held, the Inbox row still written
+    h.notify.destinations.update(dest.id, 'u_a', { quiet: { enabled: true, start: '22:00', end: '07:00', tz: 'Asia/Jakarta', breakthrough: [] } });
+    c.set('2026-10-12T16:30:00.000Z'); // 23:30 in Jakarta
+    ci.hooks.waiting!({ ...run, id: 'run_10', number: 22 } as never, 'release', 'production');
+    await until(() => logs(h).length === 2);
+    assert.equal(logs(h)[1]!.status, 'held');
+    assert.equal(svc.got.length, 1);
+  } finally {
+    h.notify.stop();
+    await svc.close();
+  }
+});
+
 test('throttle and collapse: one per tag a minute, 10 per destination in 10 minutes, the rest one "more waiting"', async () => {
   const svc = await standIn(() => ({ status: 200 }));
   const c = clock();
