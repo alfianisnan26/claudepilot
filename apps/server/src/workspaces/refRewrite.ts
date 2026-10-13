@@ -13,12 +13,19 @@ import type { WorkspaceIdentities } from './identity.js';
 export interface RefColumn {
   table: string;
   column: string;
+  /**
+   * The column is unique (a primary key: one row per workspace). A key row whose id row already exists is the same fact twice: the key row is
+   * dropped instead of rewritten.
+   */
+  unique?: boolean;
 }
 
 /** The converted columns, in the order they are rewritten. A module joins this list when it reads and writes through the registry. */
 export const REF_COLUMNS: readonly RefColumn[] = [
   { table: 'tickets', column: 'workspace_id' },
   { table: 'chat_sessions', column: 'workspace_id' },
+  { table: 'pmcp_agent_access', column: 'workspace_id', unique: true },
+  { table: 'pmcp_agent_tokens', column: 'workspace_id' },
 ];
 
 const IDENT = /^[a-z_][a-z0-9_]{0,62}$/;
@@ -33,7 +40,8 @@ export function pinRefsOfRemoved(db: DatabaseSync, key: string, id: string, colu
   for (const col of columns) {
     if (!IDENT.test(col.table) || !IDENT.test(col.column)) throw new Error(`not a column name: ${col.table}.${col.column}`);
     try {
-      changed += Number(db.prepare(`UPDATE ${col.table} SET ${col.column} = ? WHERE ${col.column} = ?`).run(id, key).changes);
+      changed += Number(db.prepare(`UPDATE ${col.unique ? 'OR IGNORE ' : ''}${col.table} SET ${col.column} = ? WHERE ${col.column} = ?`).run(id, key).changes);
+      if (col.unique) db.prepare(`DELETE FROM ${col.table} WHERE ${col.column} = ?`).run(key);
     } catch (e) {
       console.error(`[workspaces] could not move ${col.table}.${col.column} of ${key} to its stable id: ${(e as Error).message}`);
     }
@@ -84,6 +92,8 @@ export async function rewriteWorkspaceRefs(
         `SELECT rowid AS rid, ${col.column} AS ref FROM ${col.table} WHERE rowid > ? AND ${col.column} IS NOT NULL AND ${col.column} NOT LIKE 'ws\\_%' ESCAPE '\\' ORDER BY rowid LIMIT ?`,
       );
       const write = db.prepare(`UPDATE ${col.table} SET ${col.column} = ? WHERE rowid = ? AND ${col.column} = ?`);
+      const holds = col.unique ? db.prepare(`SELECT 1 AS x FROM ${col.table} WHERE ${col.column} = ?`) : null;
+      const drop = col.unique ? db.prepare(`DELETE FROM ${col.table} WHERE rowid = ? AND ${col.column} = ?`) : null;
       let after = 0;
       for (;;) {
         if (o.signal?.aborted) break;
@@ -96,8 +106,9 @@ export async function rewriteWorkspaceRefs(
           if (o.signal?.aborted) break;
           after = r.rid;
           const id = identities.storedRef(r.ref);
-          if (id && id !== r.ref) result.rewritten += Number(write.run(id, r.rid, r.ref).changes);
-          else result.kept++;
+          if (!id || id === r.ref) result.kept++;
+          else if (holds?.get(id)) result.rewritten += Number(drop!.run(r.rid, r.ref).changes);
+          else result.rewritten += Number(write.run(id, r.rid, r.ref).changes);
         }
         if (pause) await new Promise((res) => setTimeout(res, pause));
       }

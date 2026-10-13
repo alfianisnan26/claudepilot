@@ -348,6 +348,8 @@ registerBuiltInPortalTools({ store, module: portalMcp, workspaces, chat: chatCon
 portalMcp.start();
 // What each session's Claude Code process is launched with (I8 and the Secrets & env redactor): its token for the portal's tools, the
 // account-MCP switch (belt and braces next to the managed key), and the secret values a workspace was given, read to redact chat text.
+// Agent access stores its workspace as the stable id and reads it as the key (T-42 slice 3).
+portalMcp.agents.workspaceRefs = workspaces.identities;
 chatController.agentAccess = portalMcp.agents;
 chatController.launchEnv = () => (settingsModule.settings.get<boolean>(SETTING_KEYS.mcpAccountOff) ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {});
 chatController.secretValues = (id) => exposedSecretValues(poolService, id);
