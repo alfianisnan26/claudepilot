@@ -7,7 +7,7 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
 - Portal 2026.10.13-6 (run 18, e327e6d, gate 470 s green; released by the owner, verified by the coordinator).
   Live: T-24, T-28, T-32, T-42 slices 1-2, T-95 items 1-3, T-97, T-98, T-99, T-107, the env deny rules (eeee2c5).
 
-## IN FLIGHT (16:5x: four slices; the owner's NOW for T-143 exceeds the WIP of three until t102 has paused)
+## IN FLIGHT (17:0x: four slices, t105, t136, t141, t143: one over the WIP of three because the owner wants T-143 NOW; nothing new starts until two are done)
 - t105 (opus): dev-automove-model, dev/t105-automove-proven. T-105 is done apart from the area tests. T-109 WIP is 8cc8265 (catalogue, migration 761).
 - t136 (opus): dev-track-c-ui, dev/t136-integrity. T-136 slice 1: classify the integrity events (peer only after a sub-agent's SendMessage,
   an identical duplicate control response ignored, a table with negative twins), continued_from (migrations 770-774), and the repair of
@@ -18,7 +18,9 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
   check, so an independent reviewer sub-agent reads it before the merge. Then /deploy with gate=true.
 - PAUSED 16:4x: t100 at cf86a26 (both items built; session-list 290/0 at 4 widths x 2 themes, scroll-lock 26/26, mobile-drag 11/11, web
   422/422 in a cluster Job; shots in ~/.claudepilot/dev-sessions/shots/t100-*). Left: a clean run of the rewritten session-swipe.mjs, a merge
-  of integration. t102 is pausing. Both resume after T-110 slice 1.
+  of integration. t102 at be65ceb (headerBand 180/180, scroll-lock 26/26, server suite 2627/0 and web 428/428 in a cluster Job;
+  shots in ~/.claudepilot/dev-sessions/shots/t102). Left: re-run the session-states matrix (5714/5716, 2 timing fails) and mobile-drag,
+  web PRD 10.5. Both resume after T-110 slice 1.
 - T-118: stopped (WIP 7b02a4e, after T-104). fitOf and fit.ts are not unified yet (small).
 
 ## NEXT (coordinator gap review 15:0x: WIP limit THREE slices, thin first slices, each merged AND deployed before the next starts)
