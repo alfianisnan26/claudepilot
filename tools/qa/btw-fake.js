@@ -29,7 +29,8 @@
     const base = `/api/chat/sessions/${SID}`;
     if (p === base) return json(session);
     if (p === `${base}/events`) return json(events);
-    if (p === `${base}/tasks`) return json([]);
+    // A harness may give running tasks (session-states.mjs: the header's count badge): `__FAKE_SESSION.__tasks`.
+    if (p === `${base}/tasks`) return json((window.__FAKE_SESSION || {}).__tasks || []);
     if (p === `${base}/files`) return json({ path: '/work', parent: null, entries: [] });
     if (p.startsWith(base)) return json(null);
     return realFetch(input, init);

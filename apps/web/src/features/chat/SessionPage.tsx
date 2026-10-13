@@ -428,6 +428,8 @@ export function SessionPage() {
             Session info), the state, ⋯; Bypass adds its red shield. Everything else is in ⋯.
           */}
           <div hidden={cramped} className="pointer-events-none absolute inset-x-0 top-0 z-30 pt-[var(--bar-top)] pr-[var(--bar-right)] pl-[var(--bar-left)]">
+            {/* What scrolls under the header blurs and fades out below it (T-102): no hard edge, no darker band under the pill. */}
+            <div aria-hidden="true" data-header-fade="" className="session-fade pointer-events-none absolute inset-x-0 top-0 -z-10 h-[calc(var(--session-header-bottom)+1.75rem)]" />
             <header
               data-session-header=""
               data-popover-ceiling=""
@@ -538,9 +540,10 @@ export function SessionPage() {
                 <Menu
                   label={!roomy && running ? `Session actions, ${running} ${running === 1 ? 'agent' : 'agents'} running` : 'Session actions'}
                   trigger={
-                    <span className="relative flex">
-                      <MoreHorizontal className="size-[18px]" />
-                      {!roomy && running > 0 && <RunningCount count={running} small />}
+                    // The count sits at the corner of the 44 px button, clear of the dots (T-102: '14' used to cover them).
+                    <span className="relative flex size-11 items-center justify-center">
+                      <MoreHorizontal className="size-[18px]" data-menu-glyph="" />
+                      {!roomy && running > 0 && <RunningCount count={running} corner />}
                     </span>
                   }
                   items={menuItems}
@@ -807,13 +810,17 @@ function EndedNote({ reason }: { reason: string | null | undefined }) {
 }
 
 /** How many agents are running: a green pill by Agents, or a smaller one on the ⋯ button on phones. */
-function RunningCount({ count, small }: { count: number; small?: boolean }) {
+function RunningCount({ count, small, corner }: { count: number; small?: boolean; corner?: boolean }) {
   return (
     <span
       aria-hidden="true"
+      data-running-count=""
       className={cn(
         'flex items-center justify-center rounded-full bg-accent font-bold text-white tabular-nums dark:text-bg',
-        small ? 'absolute -top-2 -right-2 h-4 min-w-4 px-1 text-[10px] ring-2 ring-bg' : 'h-5 min-w-5 px-1.5 text-[11px]',
+        small && 'absolute -top-2 -right-2 h-4 min-w-4 px-1 text-[10px] ring-2 ring-bg',
+        // On a button's own corner, above its glyph: never over it, whatever the number's width.
+        corner && 'absolute -top-1 right-0 h-4 min-w-4 px-1 text-[10px] ring-2 ring-bg',
+        !small && !corner && 'h-5 min-w-5 px-1.5 text-[11px]',
       )}
     >
       {count}
