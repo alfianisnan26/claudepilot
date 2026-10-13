@@ -231,7 +231,8 @@ if [ -n "$watch" ] && [ "$watch" != none ] && kill -0 "$watch" 2>/dev/null; then
   wd=$!
 fi
 t0=$(date +%s)
-echo "image-build: $job: $repo@${ref:0:12} $dockerfile (context $context) -> $dest"
+shown=$ref; [[ ! $ref =~ ^[0-9a-f]{40}$ ]] || shown=${ref:0:12}
+echo "image-build: $job: $repo@$shown $dockerfile (context $context) -> $dest"
 
 # The queue: unfinished Jobs in creation order; mine goes when fewer than max run and none queued before it.
 # shellcheck disable=SC2016 # jq's own variables

@@ -132,6 +132,36 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
 - **npm cache:** none shared. A cold `npm ci` in a Job is 15 to 20 s (job-run and gate logs); a shared cache would be a node-bound `local-path`
   PVC (the only storage class) for a few seconds.
 
+## Building an image in the cluster
+
+There is no Docker daemon in the workspace pod and there will not be one (D-5: one pod, no daemon, no privileged containers). `scripts/image-build.sh`
+(T-141) builds any repository's Dockerfile as a kaniko Job (`deploy/k3s-build/image-build-job.yaml`) and pushes it:
+
+```sh
+git push origin HEAD:wip/<name>                                              # the Job clones what is on the remote
+scripts/image-build.sh --check --destination registry.int.isnan.me/<path>:<tag>   # 0: the tag exists (skip the build), 3: it does not
+scripts/image-build.sh --repo claudepilot --ref wip/<name> --dockerfile deploy/k3s-build/image-build-proof/Dockerfile \
+  --context deploy/k3s-build/image-build-proof --destination registry.int.isnan.me/claudepilot/image-build-proof:<short sha>
+printf '%s\n' "$CRED_JSON" | scripts/image-build.sh --repo konfersi:<org>/<repo> --ref <branch> --dockerfile Dockerfile \
+  --destination <registry>/<path>:<tag> --credential-stdin                 # {"username":"..","password":".."} on ONE line
+scripts/image-build.sh --list ; scripts/image-build.sh --stop [--chat <session id>]
+```
+
+- **The source:** `--repo claudepilot` or `<org>/<repo>` from GitHub (public only, no credential), `konfersi:<org>/<repo>` from Gitea (the
+  token from git's credential helper, as job-run). `--ref` must be on the remote (a branch or tag is looked up there; a commit is the full sha).
+  An init container clones it into an emptyDir; kaniko builds `--context` (default the root) with `--dockerfile` for linux/amd64.
+- **The destination's credential** only as one JSON line on stdin with `--credential-stdin` (without the flag stdin is not read). It becomes a
+  docker config.json in a Secret owned by the Job, deleted on exit, never on a command line; the streamed log is masked for it and the whole log
+  searched for it before the script prints `credential in the build log: none`. `registry.int.isnan.me` needs none: it is pushed through the
+  in-cluster service (the ingress cuts a request at 60 s).
+- **Build args are not secrets:** they are in the Job's spec; letters, digits and `_.,:/@+=-` only.
+- **Caps:** one build at a time cluster-wide (`IMAGE_BUILD_MAX`, 1; the rest wait "queued behind K"), a deadline of at most 60 minutes
+  (`--timeout`), 1 CPU and 2 GiB requested, 4 and 8 GiB the limit, a node without a workspace pod preferred. Ctrl-C, a kill or the end of the
+  chat deletes the Job and its Secret.
+- **The result:** exit 0 only when the tag reads back from the registry, and then the last line is `DIGEST=sha256:<hex>`; 1 the build failed,
+  2 a usage error, 124 past the deadline. The whole log: `IMAGE_BUILD_LOG` (default `/tmp/image-build-<job>.log`; remove it when done).
+- **The door:** the dev account `claudepilot-dev-admin` through this script, as job-run and gate-job; no Role was added or widened.
+
 ## Rules that hold
 
 - Never print, log or commit a token. No token-shaped literal anywhere in the repository (GitHub push protection): build fixtures at runtime.
