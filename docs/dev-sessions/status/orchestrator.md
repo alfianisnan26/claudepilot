@@ -117,3 +117,7 @@ T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, 
   sent to t105 and t102, in t100's brief. Deny rules for env/printenv/set proposed (a person's call).
 - 15:3x Quota: this chat runs on fadlilah at 20 % used and +23 pts/h (coordinator): 10 % left in about 3 h, likely mid-turn, and T-105 is not
   live. Mitigation: turns stay short (background waits, no long foreground loops) so the live engine sees boundaries; this file stays current.
+- 15:5x T-124 closed by the coordinator: this chat was restarted at 15:49 (Bypass kept), so the printed token is dead; deny rules for env,
+  printenv, set and /proc/*/environ are on integration (eeee2c5). The sub-agent's task file is deleted. The local task-output scan is on
+  T-113's hygiene slice. After the restart: T-105 merge df69d9c pushed, T-102 edits saved as d225806, T-100 at 2c69a31; all three agents
+  resumed from their transcripts (WIP three). T-105 items 1, 2, PRD and 5 done; left: area tests, then T-109.
