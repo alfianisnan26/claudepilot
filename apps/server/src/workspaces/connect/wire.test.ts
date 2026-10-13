@@ -75,3 +75,53 @@ test('wireConnect: a Host single through the manager, across an outage', async (
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('wireConnect: with a long check cache, a target whose tunnel drops is unavailable at once and one that returns is available and Running at once (recheck)', async () => {
+  const hold = setInterval(() => undefined, 1000);
+  const home = mkdtempSync(join(tmpdir(), 'cx3-wire-'));
+  try {
+    const link = new FakeLink('n1', 'cx3-box', { host: createService({ mode: 'host', home, log: silentLogger, baseEnv: { PATH: process.env.PATH } }) }).connect();
+    const deps = memoryDeps();
+    deps.switches.set('cx3-box', true);
+    let factory: RuntimeFactory | null = null;
+    const returned: ((t: string) => void)[] = [];
+    const lost: ((t: string) => void)[] = [];
+    const connect = {
+      useRuntimeFactory: (f: RuntimeFactory) => void (factory = f),
+      bind: (ws: Workspaces) => ws.addRuntime(factory!(targetRecord({ id: 'cx3-box', kind: 'host' }), [{ record: { id: 'n1', targetId: 'cx3-box', name: 'box', drained: false, keyFingerprint: 'x' }, link }], deps)),
+      settled: async () => undefined,
+      canCreate: () => undefined,
+      onReturned: (fn: (t: string) => void) => (returned.push(fn), () => undefined),
+      onLost: (fn: (t: string) => void) => (lost.push(fn), () => undefined),
+    };
+    let saved: Workspace[] = [];
+    // A minute of cache: without the recheck the list would keep its first answer for that long.
+    const workspaces = new Workspaces([], { read: () => saved, write: (v: Workspace[]) => void (saved = v) } as unknown as JsonFile<Workspace[]>, { ttlMs: 60_000, timeoutMs: 300 });
+    const undo = wireConnect({ connect, workspaces });
+    assert.equal((await workspaces.list())[0]!.status, 'running');
+
+    link.drop();
+    lost.forEach((fn) => fn('cx3-box'));
+    await until(async () => (await workspaces.targets()).find((x) => x.id === 'cx3-box')!.available === false);
+    assert.equal((await workspaces.list())[0]!.status, 'unreachable');
+
+    link.connect();
+    returned.forEach((fn) => fn('cx3-box'));
+    await until(async () => (await workspaces.targets()).find((x) => x.id === 'cx3-box')!.available === true);
+    assert.equal((await workspaces.list())[0]!.status, 'running');
+    undo();
+    workspaces.removeRuntime('cx3-box');
+    link.drop();
+  } finally {
+    clearInterval(hold);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+async function until(ok: () => Promise<boolean>, ms = 2_000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!(await ok())) {
+    if (Date.now() > end) throw new Error('timed out');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
