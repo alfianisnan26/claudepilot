@@ -50,6 +50,7 @@ function query(f: TicketFilter): string {
   if (f.workspaceId) q.set('workspace', f.workspaceId);
   if (f.query) q.set('q', f.query);
   if (f.includeClosed) q.set('includeClosed', '1');
+  if (f.sort === 'newest') q.set('sort', 'newest');
   if (f.limit) q.set('limit', String(f.limit));
   if (f.offset) q.set('offset', String(f.offset));
   return q.size ? `?${q}` : '';

@@ -370,7 +370,7 @@ export class Tickets {
     const limit = Math.min(Math.max(Math.trunc(filter.limit ?? 100), 1), LIST_MAX);
     const offset = Math.max(Math.trunc(filter.offset ?? 0), 0);
     const closedOnly = !!filter.status?.length && filter.status.every((s) => isTicketClosed(s));
-    const order = closedOnly ? 't.closed_at DESC, t.number DESC' : 't.priority_rank ASC, t.updated_at DESC, t.number DESC';
+    const order = closedOnly ? 't.closed_at DESC, t.number DESC' : filter.sort === 'newest' ? 't.created_at DESC, t.number DESC' : 't.priority_rank ASC, t.updated_at DESC, t.number DESC';
     const rows = this.#db.prepare(`SELECT t.* FROM tickets t ${sql} ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`).all(...args) as unknown as Row[];
     const total = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${sql}`).get(...args) as { n: number }).n;
     return { items: this.#items(rows), total, counts: this.counts(caller) };
