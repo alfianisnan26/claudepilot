@@ -43,9 +43,16 @@ the trailers are their own paragraph at the end. Once the hook exists, a sub-age
 
 ```sh
 cd ~/work/claudepilot && git fetch origin && git merge --no-ff origin/<branch>     # or rebase the branch first; never discard somebody's lines
-flock /tmp/heavy.lock nice -n 10 scripts/gate.sh                                    # clean-copy gate on HEAD: every step rc=0 and "# fail 0"
-git push origin HEAD:integration                                                    # fast-forward only; if refused: fetch, merge, check again
+flock /tmp/heavy.lock nice -n 10 scripts/gate-quick.sh                              # FAST LANE: typecheck, web build+tests if web, the touched areas' tests
+git push origin HEAD:integration && git push pilot HEAD:integration                 # fast-forward only; if refused: fetch, merge, check again
 ```
+
+**Two lanes (T-36, owner 2026-10-13).** INTEGRATION is the fast lane: `scripts/gate-quick.sh` (minutes; it maps the changed paths to the server
+areas that test them, and runs the whole server suite when contracts, migrations, authz, the platform, settings or the app's own files changed),
+then push: after every slice, and at least every 8 commits or every 2 hours (nothing piles up on the pod disk). RELEASE is the full gate:
+`scripts/gate.sh` on the exact commit before any deploy (the deploy pipeline's `gate` input stays true; `gate=false` only with a green full gate
+on that very commit), and once every two hours on integration's head in the background. A red full gate on integration is fixed first, before
+any new slice is merged: integration stays shippable.
 Then the sub-agent on that branch runs `git fetch origin && git rebase origin/integration`. Remove `/tmp/gate-<sha>*` afterwards.
 
 ## Migrations

@@ -42,6 +42,10 @@ Two things come before anything else because the loop depends on them:
 3. **Keep going.** After each integration dispatch the next slices. Keep `docs/dev-sessions/status/orchestrator.md` current and commit it with the work
    (create it first). When a sub-agent returns something unusable, say why in the status file and re-dispatch with a better prompt rather than doing its
    job by hand.
+3b. **Integrate fast, release safe** (T-36). Merge a returned slice, run `scripts/gate-quick.sh` under the heavy lock, push integration at once;
+   at least every 8 commits or 2 hours. The full `scripts/gate.sh` runs in the background every two hours on integration's head and before
+   every deploy; a red full gate is fixed before the next merge. Never idle: when a sub-agent returns, dispatch the next wave item at once and
+   do the gating in the background. After a deploy, list the ticket numbers that went live under NEEDS A HUMAN for the owner to check.
 4. **Deploys.** You may start the deploy pipeline once a batch of user-visible work is integrated and the gate is green, at most once a day: the Portal MCP
    tool `ci_run_trigger` (repo `claudepilot`, pipeline `deploy`, ref `integration`, inputs `images=portal`, `gate=false` because you ran the gate on that commit,
    `deploy=true`, `dry_run=false`; first push the commit to the CI remote: `git push pilot integration`). The release then waits in the portal until the owner
