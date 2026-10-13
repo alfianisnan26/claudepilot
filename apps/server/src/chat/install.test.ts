@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { CP_SESSION, CP_SESSION_PATH } from './host.js';
-import { hostInstaller, IMAGE_HOST_OUTDATED } from './install.js';
+import { HOST_NEEDS_DELIVERY, hostInstaller, IMAGE_HOST_OUTDATED } from './install.js';
 
 /** A Docker-like workspace: reads, archive writes and root commands, recorded. */
 function fakeWorkspaces(initial: string | null) {
@@ -101,4 +101,16 @@ test('sessions started together share one install (no race on the staged file)',
   await Promise.all([install('docker/api-dev'), install('docker/api-dev'), install('docker/api-dev')]);
   assert.equal(fake.file(), CP_SESSION);
   assert.equal(fake.calls.filter((c) => c.startsWith('run(root) mv -f')).length, 1);
+});
+
+test('an enrolled Host target with delivery off says to turn delivery on, not that an image is old (T6)', async () => {
+  // Seen on a scratch portal with a real Host agent: chat ended with "this workspace's image doesn't have the current chat host", on a machine
+  // that has no image; with Delivery on, the same session answered.
+  const execs: string[] = [];
+  const workspaces = {
+    runtimeFor: () => ({ delivery: undefined, target: { id: 'metal', source: 'enrolled', kind: 'local' } }),
+    exec: async (_t: string, _n: string, command: string[]) => (execs.push(command.join(' ')), Promise.reject(new Error('not expected'))),
+  } as unknown as Workspaces;
+  await assert.rejects(hostInstaller(workspaces)('metal/metal'), (e: Error) => e.message === HOST_NEEDS_DELIVERY);
+  assert.deepEqual(execs, [], 'nothing is read on the machine');
 });
