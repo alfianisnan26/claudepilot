@@ -1,0 +1,35 @@
+# The gate of {{PROJECT}} (.pilot/README.md). Two lanes:
+#   quick: on every push of {{INTEGRATION_BRANCH}} and of a ticket branch, the checks for what changed (minutes);
+#   full:  by hand (input full=true), the full gate on a clean copy of the commit: before a deploy and every two hours.
+# The commands are the project's own; their results reach the session that owns the branch.
+name: Gate
+on:
+  push:
+    branches: ['{{INTEGRATION_BRANCH}}', 'ticket/**']
+  manual:
+    inputs:
+      full:
+        type: boolean
+        default: false
+        description: Run the full gate instead of the quick one.
+timeout: 2h
+concurrency:
+  group: gate-${{ ci.event }}-${{ ci.branch }}
+  cancel-in-progress: true
+jobs:
+  quick:
+    name: Quick gate
+    if: ci.event == 'push' || inputs.full == false
+    timeout: 20m
+    steps:
+      - name: Checks for what changed
+        run: |
+          {{TEST_QUICK}}
+  full:
+    name: Full gate
+    if: ci.event == 'manual' && inputs.full == true
+    timeout: 90m
+    steps:
+      - name: Full gate on a clean copy
+        run: |
+          {{TEST_FULL}}

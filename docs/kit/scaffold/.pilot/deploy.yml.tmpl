@@ -1,0 +1,79 @@
+# Deploy {{PROJECT}} to {{DEPLOY_ENV}} (.pilot/README.md). Started by hand only: in the portal (CI > Remotes > {{CI_REMOTE}}
+# > Run) or by an agent with the Portal MCP tool ci_run_trigger. The commit is the head of the branch the run is on.
+# gate: the full gate on the commit. build: the artifacts. release: holds for a PERSON's approval when the environment is
+# protected (the portal decides, never this file), then deploys. verify: checks the result. rollback: undoes a failed release.
+# Every command reads its inputs from PILOT_INPUT_<NAME>; with dry_run=true each one prints what it would do and changes nothing.
+name: Deploy {{DEPLOY_ENV}}
+on:
+  manual:
+    inputs:
+      images:
+        type: string
+        default: '{{IMAGES}}'
+        description: 'What to build, comma separated, or none.'
+      gate:
+        type: boolean
+        default: true
+        description: Run the full gate on the commit first.
+      deploy:
+        type: boolean
+        default: true
+        description: Release what was built; false builds only.
+      dry_run:
+        type: boolean
+        default: false
+        description: Print every action and change nothing.
+timeout: 4h
+concurrency:
+  group: deploy-{{PROJECT}}-{{DEPLOY_ENV}}
+jobs:
+  gate:
+    name: Gate
+    timeout: 90m
+    steps:
+      - name: Full gate
+        run: |
+          if [ "${PILOT_INPUT_GATE:-true}" != true ]; then echo "gate: skipped (input gate=false)"; exit 0; fi
+          {{TEST_FULL}}
+  build:
+    name: Build
+    needs: [gate]
+    timeout: 120m
+    steps:
+      - name: Build
+        run: |
+          mkdir -p .pilot/out
+          {{BUILD_CMD}}
+    artifacts:
+      paths: [.pilot/out/build.env]
+  release:
+    name: Release
+    needs: [build]
+    if: inputs.deploy
+    environment: {{DEPLOY_ENV}}
+    timeout: 15m
+    steps:
+      - name: Release
+        run: |
+          mkdir -p .pilot/out
+          {{RELEASE_CMD}}
+    artifacts:
+      paths: [.pilot/out/release.env]
+      when: always
+  verify:
+    name: Verify
+    needs: [release]
+    timeout: 30m
+    steps:
+      - name: Live and well
+        run: |
+          {{VERIFY_CMD}}
+  rollback:
+    name: Roll back
+    needs: [release, verify]
+    if: failure()
+    timeout: 30m
+    steps:
+      - name: Back to what was approved before
+        run: |
+          {{ROLLBACK_CMD}}

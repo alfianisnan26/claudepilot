@@ -57,8 +57,7 @@
       "Bash(scripts/k3s-build.sh:*)",
       "Bash(scripts/dev-rig.sh:*)",
       "Bash(scripts/gate-job-stop.sh:*)",
-      "Bash(scripts/job-run.sh:*)",
-      "Bash(scripts/ws-resources.sh:*)"
+      "Bash(scripts/job-run.sh:*)"
     ],
     "ask": [],
     "deny": [

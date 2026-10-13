@@ -1,0 +1,17 @@
+{
+  "slug": "gitea-kohi",
+  "servers": [
+    {
+      "key": "kohilabs",
+      "entry": "@git-host-gitea",
+      "version": "@approved",
+      "enabled": true,
+      "config": {
+        "GITEA_HOST": "https://git.kohi-labs.com"
+      },
+      "secrets": {
+        "GITEA_ACCESS_TOKEN_FILE": "{{secret-file:GITEA_KOHILABS_TOKEN}}"
+      }
+    }
+  ]
+}

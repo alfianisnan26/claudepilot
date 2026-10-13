@@ -1,0 +1,15 @@
+{
+  "slug": "docs-isnan",
+  "servers": [
+    {
+      "key": "isnan",
+      "entry": "@outline-isnan",
+      "version": "@approved",
+      "enabled": true,
+      "config": {},
+      "secrets": {
+        "Authorization": "{{secret-file:OUTLINE_ISNAN_KEY}}"
+      }
+    }
+  ]
+}
