@@ -102,9 +102,9 @@ export class DockerRuntime implements Runtime {
    * URL (QA-029, QA-032).
    */
   #objectName(name: string): string {
-    // The name itself first: with no registry the `?.` call would not evaluate its arguments, and the legacy name of "" is plain (QA-029).
-    plainName(name);
-    return plainName(this.#names?.runtimeNameOf(this.target.id, name) ?? legacyRuntimeName('docker', name));
+    // The name asked for is checked FIRST, whether or not a runtime name is on record: '' or 'x/../y' must never reach the legacy derivation.
+    const plain = plainName(name);
+    return plainName(this.#names?.runtimeNameOf(this.target.id, plain) ?? legacyRuntimeName('docker', plain));
   }
 
   async check() {
