@@ -18,7 +18,9 @@ async function build() {
   const chat = new MoveChat();
   chat.sessions.set('s_a', chatSession('s_a'));
   chat.sessions.set('s_b', chatSession('s_b'));
-  const u = Object.assign(fakeUsage(() => [usage('work', 'Work', [win('session', 92)], { checkedAt: new Date(Date.now() - 60_000).toISOString() }), usage('home', 'Home', [win('session', 60)], { checkedAt: new Date(Date.now() - 60_000).toISOString() })]), { onAlert: () => () => {} });
+  // This file runs on the real clock: the windows reset three hours from now (the kit's fixed T0 is in the past on any later day).
+  const soon = () => new Date(Date.now() + 3 * 3_600_000).toISOString();
+  const u = Object.assign(fakeUsage(() => [usage('work', 'Work', [win('session', 92, soon())], { checkedAt: new Date(Date.now() - 60_000).toISOString() }), usage('home', 'Home', [win('session', 60, soon())], { checkedAt: new Date(Date.now() - 60_000).toISOString() })]), { onAlert: () => () => {} });
   const owner = fakeOwner({ 'session:s_a': 'u_a', 'session:s_b': 'u_b' }, { fallback: 'u_a' });
   const settings = settingsMap({ [K.enabled]: true });
   const platform = createPlatform({ store, settings, chat, claudeUsage: u as never, uiUrl: null, pushContact: null, selfOrigin: `http://${HOST}`, owner, tools: false });
