@@ -26,7 +26,7 @@ export function AppShell() {
   const glance = useHasStrip('header');
 
   return (
-    <div className={cn('min-h-dvh pb-10 sm:pb-16 sm:pl-20 lg:pl-64 xl:pr-[var(--glance-dock-w,0px)]', showTabBar && 'pb-[calc(5rem+env(safe-area-inset-bottom))]')}>
+    <div className={cn('min-h-dvh pb-10 sm:pb-16 sm:pl-20 lg:pl-64 xl:pr-[var(--glance-dock-w,0px)]', showTabBar && 'pb-[calc(var(--tabbar-h)+1.5rem)]')}>
       {/* The first Tab stop: past the sidebar and the account menu, to the page. */}
       <a
         href="#main"
@@ -36,7 +36,7 @@ export function AppShell() {
       </a>
       <Sidebar pathname={pathname} onLogout={() => void logout()} />
 
-      <header className="sticky top-0 z-40 border-b border-line bg-bg/80 pt-[env(safe-area-inset-top)] backdrop-blur-md sm:hidden">
+      <header className="sticky top-0 z-40 border-b border-line bg-bg/80 pt-[var(--safe-top)] backdrop-blur-md sm:hidden">
         <div className="mx-auto flex h-16 max-w-4xl items-center gap-6 px-4">
           <Logo to={HOME} label={!glance} />
           <div className="ml-auto flex items-center gap-1.5">
@@ -119,14 +119,16 @@ function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => voi
 
 /**
  * The phone bar: icons only (each with its name as aria-label and title), the current one on a pill. It shows the sections
- * flagged `bar` and, when there are others, a More button that opens a sheet listing them with their labels.
+ * flagged `bar` and, when there are others, a More button that opens a sheet listing them with their labels. It floats like the
+ * session's composer: a frosted bar the same gap from the left, right and bottom edges of the screen (index.css --bar-*), the
+ * home indicator or not, and the page scrolls under it.
  */
 function TabBar({ pathname }: { pathname: string }) {
   const [more, setMore] = useState(false);
   // Lets fixed things (the toast) sit just above the bar.
   useEffect(() => {
     const root = document.documentElement;
-    root.style.setProperty('--tabbar-h', 'calc(4rem + 1px)');
+    root.style.setProperty('--tabbar-h', 'calc(60px + var(--bar-gap))');
     return () => void root.style.removeProperty('--tabbar-h');
   }, []);
   useEffect(() => setMore(false), [pathname]);
@@ -136,7 +138,8 @@ function TabBar({ pathname }: { pathname: string }) {
     <>
       <nav
         aria-label="Main"
-        className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-bg/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-md sm:hidden"
+        data-tabbar=""
+        className="glass-card fixed right-[var(--bar-right)] bottom-[var(--bar-gap)] left-[var(--bar-left)] z-30 h-[60px] overflow-hidden rounded-full sm:hidden"
       >
         <ul className="grid" style={{ gridTemplateColumns: `repeat(${BAR_ITEMS.length + (hasMore ? 1 : 0)}, minmax(0, 1fr))` }}>
           {BAR_ITEMS.map((item) => (
@@ -154,7 +157,7 @@ function TabBar({ pathname }: { pathname: string }) {
                 aria-expanded={more}
                 aria-current={inMore ? 'true' : undefined}
                 onClick={() => setMore(true)}
-                className={cn('press flex h-16 w-full items-center justify-center', inMore || more ? 'text-ink' : 'text-muted')}
+                className={cn('press flex h-[58px] w-full items-center justify-center', inMore || more ? 'text-ink' : 'text-muted')}
               >
                 <TabIcon active={inMore || more} icon={Ellipsis} />
               </button>
@@ -178,7 +181,7 @@ function TabLink({ item, active }: { item: NavItem; active: boolean }) {
       aria-label={item.label}
       title={item.label}
       aria-current={active ? 'page' : undefined}
-      className={cn('press flex h-16 items-center justify-center', active ? 'text-ink' : 'text-muted')}
+      className={cn('press flex h-[58px] items-center justify-center', active ? 'text-ink' : 'text-muted')}
     >
       <TabIcon active={active} icon={item.icon} />
     </Link>
@@ -189,7 +192,7 @@ function TabLink({ item, active }: { item: NavItem; active: boolean }) {
 function TabIcon({ active, icon: Icon }: { active: boolean; icon: NavItem['icon'] }) {
   return (
     <span className="relative flex h-10 w-14 items-center justify-center">
-      {active && <motion.span layoutId="tab-pill" transition={spring} className="absolute inset-0 rounded-full bg-surface-2" />}
+      {active && <motion.span layoutId="tab-pill" transition={spring} className="absolute inset-0 rounded-full bg-ink/[0.08]" />}
       <Icon className="relative size-[22px]" strokeWidth={active ? 2.4 : 2} />
     </span>
   );

@@ -10,6 +10,8 @@
     createdAt: now(), lastActivityAt: now(), endedReason: null, claudeId: '', claudeName: null, predecessorId: null, successorId: null, archivedAt: null,
     ticketId: null, parentId: null, worktree: null, startedBy: 'ui', bypassCapable: false, claudeSessionId: 'x', previousClaudes: [], switching: null,
   };
+  // A harness may set window.__FAKE_SESSION before this runs (session-chrome.mjs: Bypass on, a context figure) and change it live with __fake.patch.
+  Object.assign(session, window.__FAKE_SESSION || {});
   const events = [];
   let seq = 0;
   const add = (kind, extra) => events.push({ seq: ++seq, at: now(), kind, ...extra });
@@ -90,6 +92,7 @@
       emit({ type: 'events', session: SID, items: events.slice(-2) }); emit({ type: 'session', session: { ...session } });
     },
     pinned: 0, closed: [], asked: [],
+    patch(p) { Object.assign(session, p); emit({ type: 'session', session: { ...session } }); },
   };
 
   const Real = window.WebSocket;

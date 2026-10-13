@@ -20,7 +20,7 @@ export function BtwSidePanel({ width, maxWidth, onResize, children }: { width: n
     <aside
       aria-label="btw"
       style={{ width }}
-      className="relative flex shrink-0 flex-col border-l border-line bg-surface pt-[calc(3.5rem+env(safe-area-inset-top))]"
+      className="relative flex shrink-0 flex-col border-l border-line bg-surface pt-[var(--safe-top)]"
     >
       <div
         role="separator"

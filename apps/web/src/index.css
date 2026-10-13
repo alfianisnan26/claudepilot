@@ -4,17 +4,9 @@
 @source '../../../node_modules/@isnanme/ui/dist';
 
 /*
- * Liquid glass (the session screen): a frosted, see-through bar the transcript scrolls under, and a
- * frosted field sitting on it. Falls back to the plain colour where backdrop-filter isn't supported.
+ * Liquid glass (the session screen): a frosted field (the Done pill) and, below, the floating frosted card. Both fall back to the
+ * plain colour where backdrop-filter isn't supported. (The full-width `glass` bar went with the floating session header, 2026-10-13.)
  */
-@utility glass {
-  background-color: color-mix(in oklab, var(--color-bg) 92%, transparent);
-  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-    background-color: color-mix(in oklab, var(--color-bg) 76%, transparent);
-    -webkit-backdrop-filter: blur(28px) saturate(1.8);
-    backdrop-filter: blur(28px) saturate(1.8);
-  }
-}
 @utility glass-field {
   background-color: color-mix(in oklab, var(--color-surface) 85%, transparent);
   box-shadow:
@@ -27,18 +19,95 @@
   }
 }
 
-/* A floating frosted card: the composer, and what sits above it (an approval, a resume note). */
+/*
+ * A floating frosted card: the session header, the composer and what sits above it (an approval, a resume note), the phone tab bar.
+ * More see-through than a plain card, yet its text keeps 4.5:1 over anything that scrolls under it (measured over solid black and
+ * solid white by tools/qa/session-chrome.mjs): the backdrop is blurred and its contrast squeezed (`contrast()` plus a brightness
+ * step toward the theme) before the tint goes on, and grey text on the glass is the darker ink-soft (the tokens' `--muted` is
+ * redefined inside; the kit's utilities read it directly), since the lighter grey cannot hold 4.5:1 over a dark code block on see-through glass.
+ */
 @utility glass-card {
+  --muted: var(--ink-soft);
   background-color: color-mix(in oklab, var(--color-surface-2) 94%, transparent);
   border: 1px solid color-mix(in oklab, var(--color-ink) 9%, transparent);
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.06),
     0 12px 40px -16px rgb(0 0 0 / 0.55);
   @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-    background-color: color-mix(in oklab, var(--color-surface-2) 68%, transparent);
-    -webkit-backdrop-filter: blur(28px) saturate(1.8);
-    backdrop-filter: blur(28px) saturate(1.8);
+    background-color: color-mix(in oklab, var(--color-surface-2) var(--glass-tint), transparent);
+    -webkit-backdrop-filter: blur(24px) saturate(1.6) contrast(var(--glass-squeeze)) brightness(var(--glass-lift));
+    backdrop-filter: blur(24px) saturate(1.6) contrast(var(--glass-squeeze)) brightness(var(--glass-lift));
   }
+}
+
+/*
+ * The glass's numbers, per theme: how much of the tint covers the backdrop, how far the backdrop's contrast is squeezed, and the
+ * brightness step toward the theme (up in light, down in dark).
+ */
+:root {
+  --glass-tint: 60%;
+  --glass-squeeze: 0.5;
+  --glass-lift: 1.25;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --glass-tint: 60%;
+    --glass-squeeze: 0.5;
+    --glass-lift: 0.72;
+  }
+}
+:root[data-theme='dark'] {
+  --glass-tint: 60%;
+  --glass-squeeze: 0.5;
+  --glass-lift: 0.72;
+}
+
+/*
+ * The screen's edges, in ONE place. The app runs edge to edge (viewport-fit=cover; installed on an iPhone the status bar is
+ * black-translucent, so the page runs under it too): everything that must clear the notch, the status bar or the home indicator
+ * reads these, never env() itself. `--bar-gap` is the room around a floating bar (the session header and composer, the phone
+ * tab bar): the same on its sides and under it, measured from the physical edge of the screen, home indicator or not.
+ */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --bar-gap: 0.75rem;
+  --bar-left: max(var(--bar-gap), var(--safe-left));
+  --bar-right: max(var(--bar-gap), var(--safe-right));
+  /* A floating header's top: under the status bar (its inset already has room below the clock and the island), or the gap. */
+  --bar-top: max(var(--bar-gap), var(--safe-top));
+  /* Where the session screen's floating header (52 px) ends: what sits under it (the transcript's first line, the btw sheet) starts here. */
+  --session-header-bottom: calc(var(--bar-top) + 52px);
+}
+
+/*
+ * Under the status bar: a frosted band the page scrolls under. A black-translucent status bar draws WHITE text in both themes, so
+ * the band dims what passes under it enough for white to read (4.5:1 over solid white, measured), lighter in the dark theme where
+ * the page is already dark. Nothing shows where there is no inset (a browser tab, a desktop).
+ */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0 0 auto;
+  height: var(--safe-top);
+  z-index: 100;
+  pointer-events: none;
+  background-color: rgb(12 12 13 / 0.34);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4) brightness(0.62);
+  backdrop-filter: blur(20px) saturate(1.4) brightness(0.62);
+  /* Its lower edge melts into the page (the clock and icons sit above it). */
+  -webkit-mask-image: linear-gradient(#000 72%, transparent);
+  mask-image: linear-gradient(#000 72%, transparent);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) body::before {
+    background-color: rgb(11 11 12 / 0.5);
+  }
+}
+:root[data-theme='dark'] body::before {
+  background-color: rgb(11 11 12 / 0.5);
 }
 
 /* Text that's still happening ("Running ls…"): a soft light sweeps across it. Still with reduced motion. */

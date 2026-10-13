@@ -1,14 +1,11 @@
 import { Badge, cn, ConfirmDialog, Menu, Spinner, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
 import type { ChatRequest, ChatSession } from '@portal/contracts';
-import { Archive, ArchiveRestore, ArrowLeft, Bell, BellOff, Bot, CircleStop, FolderOpen, Gauge, GitBranch, ListCollapse, ListTree, MoreHorizontal, Pencil, PanelRight, PanelRightClose, ShieldAlert, Trash2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Bell, BellOff, Bot, CircleStop, FolderOpen, Gauge, Info, ListCollapse, ListTree, MoreHorizontal, Pencil, PanelRight, PanelRightClose, RotateCw, ShieldAlert, Trash2, X } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { BRAND_NAME } from '@/components/Logo';
 import { useNotifyWhenDone } from '@/features/notify/sessionFlag';
 import { usePersonaOf } from '@/features/personas/identities';
-import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
-import { TicketChip } from '@/features/tickets/TicketChip';
-import { RunChip } from '@/features/ci/RunChip';
 import { errorText } from '@/lib/api';
 import { pinnedToViewport, useVisualViewport } from '@/lib/viewport';
 import { AgentsPanel, AgentsSheet } from './AgentsPanel';
@@ -21,13 +18,15 @@ import { BtwSheet } from './btw/BtwSheet';
 import { BtwSidePanel } from './btw/BtwSidePanel';
 import { useBtwLayout } from './btw/layout';
 import { Composer, type ComposerHandle } from './Composer';
-import { Controls, modeDetails, type ControlsHandle } from './Controls';
+import { Controls, type ControlsHandle } from './Controls';
 import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './FilesPanel';
+import { SessionInfoDialog } from './SessionInfo';
 import { endedForSafety, StateBadge } from './shared';
 import { Transcript } from './Transcript';
 import { ResumeBanner } from './ResumeBanner';
 import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
 import { useMoveChat } from './SwitchDialog';
+import { canRestart, RestartChip, useRestart } from './Restart';
 import { TrustSheet, useFolderTrust, type TrustTarget } from './TrustSheet';
 import { UsageDialog } from './Usage';
 import { useChatSession, type ChatControlArgs, type ChatControlOp, type ChatSendOptions } from './useChatSocket';
@@ -85,6 +84,7 @@ export function SessionPage() {
     navigate('/admin/sessions', { replace: true });
   }, [removed, navigate, toast]);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   /** Archive (FR4): ends it if it's still going, then back to the list, where it's under Archived. */
   const archive = async () => {
     try {
@@ -264,6 +264,7 @@ export function SessionPage() {
     [tasks],
   );
   const running = tasks.filter((t) => t.status === 'running').length;
+  const restart = useRestart(session, tasks);
 
   // Withdrawn: the words come back into the box, so they can be fixed and sent again.
   const cancelQueued = useCallback(
@@ -295,19 +296,16 @@ export function SessionPage() {
     fn();
   };
   const agentsLabel = running ? `Agents, ${running} running` : 'Agents';
-  const mode = modeDetails(session?.mode ?? 'default');
-  const ModeIcon = mode.icon;
   const notifyDone = useNotifyWhenDone(id);
   const menuItems: MenuItem[] = [
+    // Bypass is one tap to leave (FR20): the header's red shield, and first here.
+    ...(bypass ? [{ label: 'Turn off Bypass', icon: <ShieldAlert className="size-4" />, onSelect: fromMenu(() => void leaveBypass()), danger: true }] : []),
+    { label: 'Info', icon: <Info className="size-4" />, onSelect: fromMenu(() => setInfoOpen(true)), disabled: !session },
     ...(roomy
       ? []
       : [
           ...(gone ? [] : [{ label: 'Files and changes', icon: <FolderOpen className="size-4" />, onSelect: fromMenu(toggleFiles) }]),
           { label: running ? `Agents · ${running} running` : 'Agents', icon: <Bot className="size-4" />, onSelect: fromMenu(toggleAgents) },
-          // Phones keep the line above the composer short: the permission mode is changed from here.
-          ...(session && !ended && !gone
-            ? [{ label: `Mode: ${mode.label}`, icon: <ModeIcon className="size-4" />, onSelect: fromMenu(() => controls.current?.openMode()) }]
-            : []),
         ]),
     { label: 'Rename…', icon: <Pencil className="size-4" />, onSelect: fromMenu(() => setRenaming(true)), disabled: !session },
     { label: 'Usage', icon: <Gauge className="size-4" />, onSelect: fromMenu(() => setUsageOpen(true)) },
@@ -315,6 +313,12 @@ export function SessionPage() {
     details
       ? { label: 'Show less', icon: <ListCollapse className="size-4" />, onSelect: fromMenu(toggleDetails) }
       : { label: 'Show all details', icon: <ListTree className="size-4" />, onSelect: fromMenu(toggleDetails) },
+    {
+      label: 'Restart',
+      icon: <RotateCw className="size-4" />,
+      onSelect: fromMenu(() => restart.start('manual')),
+      disabled: gone || !canRestart(session) || restart.busy,
+    },
     {
       label: 'Move to another Claude…',
       icon: <Bot className="size-4" />,
@@ -337,132 +341,125 @@ export function SessionPage() {
     // touch-action: pinch-zoom: a drag that starts on the header, the card or the composer pans nothing (it used to scroll the page behind and drag this
     // whole screen with it); the transcript and the panels are their own scrollers and keep scrolling.
     <div className="fixed inset-x-0 top-0 h-dvh overflow-hidden bg-bg text-ink [touch-action:pinch-zoom]" style={pinnedToViewport(viewport)}>
-      <header
-        className={cn(
-          'glass absolute inset-x-0 top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center gap-2 border-b px-2 pt-[env(safe-area-inset-top)] sm:px-3',
-          bypass ? 'border-danger/40' : 'border-ink/[0.05]',
-        )}
-      >
-        {/* Bypass is on: the whole header is tinted until it's off. */}
-        {bypass && <span aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 bg-danger/10" />}
-        <Link
-          to="/admin/sessions"
-          aria-label="Back to sessions"
-          className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface-2 hover:text-ink"
-        >
-          <ArrowLeft className="size-[18px]" />
-        </Link>
-        <div className="min-w-0 flex-1">
-          {/* Tap the title to rename (FR4). */}
-          <button
-            type="button"
-            onClick={() => setRenaming(true)}
-            disabled={!session}
-            title="Rename"
-            className="block max-w-full truncate rounded-md text-left text-[15.5px] font-semibold hover:text-ink-soft"
-          >
-            {session?.title || 'Untitled'}
-          </button>
-          <p className="truncate text-[12px] text-muted">
-            {persona && (
-              <>
-                <PersonaAvatar name={persona.name} avatar={persona.avatar} size="xs" showName className="inline-flex max-w-[40%] align-middle font-semibold text-ink-soft" />
-                {' · '}
-              </>
-            )}
-            <span className="font-mono">{session?.workspaceId ?? '…'}</span>
-            {session?.claudeName ? ` · ${session.claudeName}` : ''}
-            {session?.ticketId && (
-              <>
-                {' · '}
-                <TicketChip ticketId={session.ticketId} compact />
-              </>
-            )}
-            {session?.worktree && <RunChip sessionId={session.id} compact lead=" · " />}
-            {session?.worktree && (
-              <>
-                {' · '}
-                <span className="inline-flex max-w-[45%] items-center gap-1 align-bottom font-mono" title={session.worktree.path}>
-                  <GitBranch className="size-3 shrink-0" aria-hidden="true" />
-                  <span className="truncate">{session.worktree.branch}</span>
-                </span>
-              </>
-            )}
-            {session?.endedReason === 'transferred' ? ' · left behind' : ''}
-            {gone ? ' · workspace removed' : ''}
-            {!connected && ' · reconnecting…'}
-          </p>
-        </div>
-        {/* No Working badge and no Stop here: the composer's button shows a ring while Claude works and is the Stop. */}
-        {session &&
-          !working &&
-          (endedForSafety(session.endedReason) && ended ? <Badge tone="danger">Ended</Badge> : <StateBadge state={state} />)}
-        {bypass && (
-          <button
-            type="button"
-            onClick={() => void leaveBypass()}
-            aria-label="Turn off Bypass"
-            title="Bypass is on: Claude runs every tool without asking. Deny rules still apply. Tap to turn it off."
-            className="press inline-flex h-8 shrink-0 items-center gap-1 rounded-full bg-danger px-2.5 text-[12.5px] font-semibold text-white dark:text-bg"
-          >
-            <ShieldAlert className="size-3.5" aria-hidden="true" />
-            Bypass
-            <X className="size-3.5" aria-hidden="true" />
-          </button>
-        )}
-        {roomy && (
-          <>
-            {!gone && (
-              <button
-                type="button"
-                onClick={toggleFiles}
-                aria-label="Files"
-                aria-expanded={filesOpen}
-                aria-controls={filesOpen ? 'files-panel' : undefined}
-                title={wide ? (filesOpen ? 'Hide files' : 'Show files and changes') : 'Files and changes'}
-                className={cn(
-                  'press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold text-muted hover:bg-surface-2 hover:text-ink',
-                  filesOpen && 'bg-surface-2 text-ink',
-                )}
-              >
-                <FolderOpen className="size-[18px]" />
-                <span>Files</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={toggleAgents}
-              aria-label={agentsLabel}
-              aria-expanded={agentsOpen}
-              aria-controls={agentsOpen ? 'agents-panel' : undefined}
-              title={wide ? (agentsOpen ? 'Hide agents' : 'Show agents') : 'Agents'}
-              className={cn(
-                'press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-semibold text-muted hover:bg-surface-2 hover:text-ink',
-                agentsOpen && 'bg-surface-2 text-ink',
-              )}
-            >
-              <Bot className="size-[18px]" />
-              <span>Agents</span>
-              {running > 0 && <RunningCount count={running} />}
-            </button>
-          </>
-        )}
-        <div ref={menuRef} className="shrink-0">
-          <Menu
-            label={!roomy && running ? `Session actions, ${running} ${running === 1 ? 'agent' : 'agents'} running` : 'Session actions'}
-            trigger={
-              <span className="relative flex">
-                <MoreHorizontal className="size-[18px]" />
-                {!roomy && running > 0 && <RunningCount count={running} small />}
-              </span>
-            }
-            items={menuItems}
-          />
-        </div>
-      </header>
 
       <div ref={row} className="flex h-full min-h-0">
         <div className="relative flex min-w-0 flex-1 flex-col">
+          {/*
+            The floating header (chat PRD §12.3): a frosted bar in the composer's style, inset from the edges by the same gap (index.css
+            --bar-*), under the status bar; the transcript scrolls under it, and under the status bar's own band. Back, the title (tap:
+            Session info), the state, ⋯; Bypass adds its red shield. Everything else is in ⋯.
+          */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-30 pt-[var(--bar-top)] pr-[var(--bar-right)] pl-[var(--bar-left)]">
+            <header
+              data-session-header=""
+              className={cn(
+                'glass-card pointer-events-auto relative isolate mx-auto flex h-[52px] max-w-[760px] items-center gap-1 rounded-full p-1',
+                bypass && 'border-danger/50',
+              )}
+            >
+              {/* Bypass is on: the whole bar is tinted until it's off. */}
+              {bypass && <span aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 rounded-full bg-danger/10" />}
+              <Link
+                to="/admin/sessions"
+                aria-label="Back to sessions"
+                className="press flex size-11 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-ink/[0.07] hover:text-ink"
+              >
+                <ArrowLeft className="size-[18px]" />
+              </Link>
+              <button
+                type="button"
+                onClick={() => setInfoOpen(true)}
+                disabled={!session}
+                aria-haspopup="dialog"
+                aria-label={`${session?.title || 'Untitled'}, session info`}
+                className="press flex h-11 min-w-0 flex-1 items-center rounded-full px-1.5 text-left"
+              >
+                <span className="truncate text-[15.5px] font-semibold text-ink">{session?.title || 'Untitled'}</span>
+              </button>
+              {/* The state, always in this one slot: Reconnecting while the link is down. */}
+              <span className="flex shrink-0 items-center">
+                {!connected ? (
+                  <Badge tone="neutral">
+                    <Spinner className="size-3" />
+                    <span className="sr-only sm:not-sr-only">Reconnecting</span>
+                  </Badge>
+                ) : session && working ? (
+                  // Working: on phones the spinner alone (the composer's Stop ring says it too), the title keeps its room.
+                  <>
+                    <span role="img" aria-label="Working" className="flex size-8 items-center justify-center text-accent sm:hidden">
+                      <Spinner className="size-4" />
+                    </span>
+                    <span className="hidden sm:flex">
+                      <StateBadge state={state} />
+                    </span>
+                  </>
+                ) : session ? (
+                  endedForSafety(session.endedReason) && ended ? <Badge tone="danger">Ended</Badge> : <StateBadge state={state} />
+                ) : null}
+              </span>
+              {bypass && (
+                <button
+                  type="button"
+                  onClick={() => void leaveBypass()}
+                  aria-label="Bypass is on. Turn it off"
+                  title="Bypass is on: Claude runs every tool without asking. Deny rules still apply. Tap to turn it off."
+                  className="press inline-flex size-11 shrink-0 items-center justify-center gap-1 rounded-full text-danger hover:bg-danger-soft sm:h-9 sm:w-auto sm:bg-danger sm:px-2.5 sm:text-[12.5px] sm:font-semibold sm:text-white sm:dark:text-bg"
+                >
+                  <ShieldAlert className="size-[18px] sm:size-3.5" aria-hidden="true" />
+                  <span className="hidden sm:inline">Bypass</span>
+                  <X className="hidden size-3.5 sm:block" aria-hidden="true" />
+                </button>
+              )}
+              {roomy && (
+                <>
+                  {!gone && (
+                    <button
+                      type="button"
+                      onClick={toggleFiles}
+                      aria-label="Files"
+                      aria-expanded={filesOpen}
+                      aria-controls={filesOpen ? 'files-panel' : undefined}
+                      title={wide ? (filesOpen ? 'Hide files' : 'Show files and changes') : 'Files and changes'}
+                      className={cn(
+                        'press relative inline-flex size-11 shrink-0 items-center justify-center rounded-full text-muted hover:bg-ink/[0.07] hover:text-ink',
+                        filesOpen && 'bg-ink/[0.07] text-ink',
+                      )}
+                    >
+                      <FolderOpen className="size-[18px]" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={toggleAgents}
+                    aria-label={agentsLabel}
+                    aria-expanded={agentsOpen}
+                    aria-controls={agentsOpen ? 'agents-panel' : undefined}
+                    title={wide ? (agentsOpen ? 'Hide agents' : 'Show agents') : 'Agents'}
+                    className={cn(
+                      'press relative inline-flex size-11 shrink-0 items-center justify-center rounded-full text-muted hover:bg-ink/[0.07] hover:text-ink',
+                      agentsOpen && 'bg-ink/[0.07] text-ink',
+                    )}
+                  >
+                    <Bot className="size-[18px]" />
+                    {running > 0 && <RunningCount count={running} small />}
+                  </button>
+                </>
+              )}
+              <div ref={menuRef} className="shrink-0">
+                <Menu
+                  label={!roomy && running ? `Session actions, ${running} ${running === 1 ? 'agent' : 'agents'} running` : 'Session actions'}
+                  trigger={
+                    <span className="relative flex">
+                      <MoreHorizontal className="size-[18px]" />
+                      {!roomy && running > 0 && <RunningCount count={running} small />}
+                    </span>
+                  }
+                  items={menuItems}
+                />
+              </div>
+            </header>
+          </div>
+
           <Transcript
             sessionId={id}
             events={events}
@@ -473,20 +470,16 @@ export function SessionPage() {
             onCancelQueued={cancelQueued}
             details={details}
             working={working}
-            padTop="calc(3.5rem + env(safe-area-inset-top) + 1.25rem)"
+            padTop="calc(var(--session-header-bottom) + 1rem)"
             padBottom={dockHeight + 12}
             onOpenUsage={() => setUsageOpen(true)}
             persona={persona}
             className="h-full"
           />
 
-          <div ref={dock} className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
-            <div
-              className={cn(
-                'pointer-events-auto mx-auto flex w-full max-w-[760px] flex-col gap-2 px-3 pt-2 sm:px-4',
-                viewport?.keyboard ? 'pb-1.5' : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]',
-              )}
-            >
+          {/* The composer floats the same gap from the left, right and bottom edges of the screen, keyboard up or down (index.css --bar-*). */}
+          <div ref={dock} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pr-[var(--bar-right)] pb-[var(--bar-gap)] pl-[var(--bar-left)]">
+            <div className="pointer-events-auto mx-auto flex w-full max-w-[760px] flex-col gap-2 pt-2">
               {current && (
                 <ApprovalCard
                   request={current}
@@ -521,6 +514,7 @@ export function SessionPage() {
               ) : (
                 <>
                   {session && <ResumeBanner session={session} connected={connected} onResume={() => trustedControl('resume')} />}
+                  {session && !gone && <RestartChip session={session} busy={restart.busy} onRestart={() => restart.start('mcp')} />}
                   <Composer
                     ref={composer}
                     sessionId={id}
@@ -572,7 +566,7 @@ export function SessionPage() {
           </BtwSidePanel>
         )}
         {wide && panel === 'agents' && btwLayout.mode !== 'panel' && (
-          <aside id="agents-panel" aria-label="Agents" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[calc(3.5rem+env(safe-area-inset-top))]">
+          <aside id="agents-panel" aria-label="Agents" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)]">
             <AgentsPanel
               tasks={tasks}
               onStopTask={ended ? undefined : stopTask}
@@ -584,7 +578,7 @@ export function SessionPage() {
           </aside>
         )}
         {wide && !gone && panel === 'files' && btwLayout.mode !== 'panel' && (
-          <aside id="files-panel" aria-label="Files" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[calc(3.5rem+env(safe-area-inset-top))]">
+          <aside id="files-panel" aria-label="Files" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)]">
             <FilesPanel key={id} sessionId={id} view={filesView} onView={setFilesView} onClose={toggleFiles} closeLabel="Hide files" />
           </aside>
         )}
@@ -605,6 +599,7 @@ export function SessionPage() {
       <TrustSheet trust={trust} />
 
       {move.element}
+      {restart.element}
 
       <EndSessionDialog session={ending ? session : null} onClose={() => setEnding(false)} />
       <RenameSessionDialog session={renaming ? session : null} onClose={() => setRenaming(false)} />
@@ -614,6 +609,18 @@ export function SessionPage() {
         onDeleted={() => {
           leaving.current = true;
           navigate('/admin/sessions', { replace: true });
+        }}
+      />
+      <SessionInfoDialog
+        open={infoOpen}
+        onClose={() => setInfoOpen(false)}
+        session={session}
+        persona={persona}
+        gone={gone}
+        connected={connected}
+        onRename={() => {
+          setInfoOpen(false);
+          setRenaming(true);
         }}
       />
       <UsageDialog open={usageOpen} onClose={() => setUsageOpen(false)} events={events} session={session} />

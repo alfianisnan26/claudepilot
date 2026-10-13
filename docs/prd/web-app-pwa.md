@@ -135,7 +135,7 @@ secrets. Install and push need HTTPS: a Cloudflare Tunnel publishes a new app li
 
 | Screen | Chrome | Content |
 | --- | --- | --- |
-| Under 640 px wide | App bar (64 px) on top, tab bar (64 px) below, both padded by the safe-area insets | One column, 16 px gutters; dialogs are bottom sheets; PageTabs show one section at a time |
+| Under 640 px wide | App bar (64 px) on top, under the status bar; a **floating** tab bar (60 px, frosted, fully rounded) below, the same gap (`--bar-gap`, 12 px) from the left, right and bottom edges of the screen, measured from the physical edge with or without a home indicator, the page scrolling under it (§10.5) | One column, 16 px gutters; dialogs are bottom sheets; PageTabs show one section at a time |
 | 640–1023 px (the design system's `useIsDesktop` switch, kept) | Icon rail, 80 px, with short labels | One column up to 896 px, 24 px gutters; dialogs centred |
 | 1024 px and up | Sidebar, 256 px; the rail on `panes` routes | `wide` routes up to 1280 px; Monitor and the workspace page in two columns from 1280 px |
 | Short touch: `(pointer: coarse) and (max-height: 500px)`, such as a phone in landscape; checked at load and on orientation change, never while a field has focus, so a shrinking keyboard never switches layouts mid-typing | Compact rail: 48 px icons without labels, scrolling | Bottom sheets at any width; the session screen immersive; rail and content padded by the left and right insets |
@@ -146,7 +146,7 @@ secrets. Install and push need HTTPS: a Cloudflare Tunnel publishes a new app li
 | --- | --- | --- |
 | `wide` | Content up to 1280 px from 1024 px | Monitor, the workspace page, Settings |
 | `panes` | Full width, the sidebar narrowed to the rail from 1024 px: a 320 px list, the transcript (24 px padding, text up to 760 px) and, from 1280 px, a 360 px panel (Agents, Files, Diff). Transcript text is the window minus 808 px with the panel (472 px at 1280, 760 from 1568), minus 448 px without (760 from 1208). | Sessions |
-| `immersive` | No app bar, tab bar, rail or sidebar. A 48 px header (back, title, subtitle, StatusDot, ⋯) below the top inset, the banner line under it, and a dock above the bottom inset that sets `--tabbar-h` so toasts clear it | The terminal and the browser live view at every width; the session screen under 640 px and in short touch |
+| `immersive` | No app bar, tab bar, rail or sidebar. The session screen (2026-10-13): a floating frosted header (52 px: back, title, state, ⋯) under the status bar and a floating composer, both inset by `--bar-gap`, the transcript scrolling under both and under the status bar (§10.5; Chat §12.3). The terminal and the browser keep a 48 px header below the top inset | The terminal and the browser live view at every width; the session screen under 640 px and in short touch |
 | `task` | No tab bar on phones; actions pinned in a bottom bar; DiscardDialog guards leaving | On phones, every editor holding a list or more than one section: persona, policy, skillset, MCP set, Secrets set and browser pool editors, skill review. Never `/admin/sessions/new`, which keeps the session screen's flags (Chat A2) |
 
 ### 9.3 Terminal on touch screens
@@ -216,6 +216,29 @@ secrets. Install and push need HTTPS: a Cloudflare Tunnel publishes a new app li
 | Signed out | The portal's own JSON 401 (`UNAUTHORIZED`) | Sign-in, then back to the same URL |
 | Stale | Data older than twice its interval | Dimmed values, "Stale · 3 min" |
 | Update ready | A new worker waits until no page uses the old one ([web.dev](https://web.dev/articles/service-worker-lifecycle)). Browsers check `sw.js` on navigation and at least daily ([MDN](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API)); the app also checks on becoming visible (at most every 15 minutes), hourly, and when `X-Portal-Build` changes. Vite's `vite:preloadError` ([Vite](https://vite.dev/guide/build#load-error-handling)) counts too. | "New version · Reload". Only the tab where Reload was pressed sends `SKIP_WAITING` and reloads on `controllerchange`; other tabs show "Updated · Reload when ready" and keep their input. Holding control of a browser counts as unsaved input. `409 CLIENT_TOO_OLD` blocks until reload. |
+
+### 10.5 Edge to edge on iPhone (status bar, safe areas, floating bars)
+
+**Built (2026-10-13, UX1).** The installed app runs edge to edge: `viewport-fit=cover` and `apple-mobile-web-app-status-bar-style` `black-translucent` (`apps/web/index.html`), so the page runs under the status bar. The manifest stays `display: standalone` (iOS reads the status bar style from the meta tag, not the manifest).
+
+| Piece | Rule |
+| --- | --- |
+| Safe areas, one place | `apps/web/src/index.css` reads `env(safe-area-inset-*)` once into `--safe-top/right/bottom/left`; the floating bars use `--bar-gap` (12 px), `--bar-left/right` (the gap or the side inset, whichever is larger) and `--bar-top` (the gap or the top inset). The session screen, the tab bar and the app bar read these; older screens (terminal, browser, viewers, knowledge) still read `env()` directly and move over as they are touched. |
+| Status bar band | `black-translucent` draws the clock and icons **white in both themes**. A frosted band the height of the top inset (`body::before`, over every page, no pointer events) dims what scrolls under it so white keeps 4.5:1 over a white page: measured 5.25:1 light and 7.46:1 dark over solid white (`tools/qa/session-chrome.mjs`). Its lower edge fades into the page. Without an inset (a browser tab, a desktop) it has no height. |
+| Floating bars | The session header, the composer and the phone tab bar are one style (`glass-card`): rounded, inset by `--bar-gap` on the left, right and below (the composer and the tab bar) measured from the physical screen edge, home indicator or not, keyboard up or down. Content scrolls under them. |
+| Glass | More see-through than before (60 % tint over a 24 px blur), with the backdrop's contrast squeezed (`contrast(0.5)`, then brightness up in light, down in dark) so text on it keeps 4.5:1 over the busiest background: lowest measured 5.14:1 light and 5.94:1 dark (phone), 4.53:1 (desktop light, a muted label on a chip) over solid black, solid white and black/white stripes, sampled from screenshots. Grey text on the glass uses ink-soft. |
+
+Device checklist (🔬: only a real device shows it; emulated in Chromium with `Emulation.setSafeAreaInsetsOverride` 59/34 px; each row: Pass, Fail or Not run, with the device, iOS version, date and tester):
+
+| ID | Steps | Expected |
+| --- | --- | --- |
+| E1 | Add to Home Screen (an icon added before this change may keep the old status bar style until it is removed and added again: reported by others, not checked 🔬), open a session, light theme | Clock and icons white and readable on the dimmed band; the transcript scrolls under the band and the header |
+| E2 | The same in dark | The same |
+| E3 | Look at the composer and the Sessions tab bar on a phone with a home indicator | The gap under each equals the gap beside it; the home indicator sits in that gap and a swipe up from it still goes home (not a tap on Send) |
+| E4 | Open the keyboard in the composer, then close it | The composer rides 12 px above the keyboard, the header stays put, and both come back to the same place when it closes (iOS 26.0 once left fixed bars offset, §9.4) |
+| E5 | Turn Bypass on in a session | The composer keeps its height and place; the model chip keeps its name; the header shows the red shield |
+| E6 | Rotate to landscape | Bars clear the notch side (inset), nothing under the camera housing |
+| E7 | Scroll a dark code block and a white image under the header and the composer | Text on the bars stays readable (the glass squeezes what is behind it) |
 
 ## 11. Notifications
 
@@ -545,7 +568,7 @@ New pieces go in `apps/web/src/components` before Chat and Monitoring ship UI.
 | Push | Payload allowlist and declarative shape, `Topic` validity (≤ 32 base64url characters), RFC 8291 and 8292 vectors, 404 and 410 cleanup, throttling, quiet hours by time zone, active devices and escalation, against a mock push service; the channels' guard (private addresses, redirects, DNS answers that change), signatures and retries; every row of §11.7's abuse table; nothing sent and nothing answered while Locked | CI |
 | Sign-in | Restarts keep sessions; lifetimes; rotation's last push and sign-out; re-auth and retry; sign-out across tabs; Access token checks (bad signature, wrong `aud`, unknown `kid`, skew) | CI |
 | Edge | Behind a staging tunnel and Access: install, worker update, Access expired mid-session, tunnel down (Cloudflare's 502 and 530 pages), Renew, requests without a token refused | By hand 🔬 |
-| Devices | iPhone on iOS 18 and 26 (installed, push, badge, terminal with the keyboard, passkeys); Android Chrome (installed, push, share, link capture); Chrome and Edge desktop; Safari Add to Dock | By hand, before W4 and W5 |
+| Devices | iPhone on iOS 18 and 26 (installed, push, badge, terminal with the keyboard, passkeys, §10.5's checklist E1–E7); Android Chrome (installed, push, share, link capture); Chrome and Edge desktop; Safari Add to Dock | By hand, before W4 and W5 |
 | Speed, access | §13.1's gates; axe on every route in both themes; keyboard only; VoiceOver and TalkBack | CI; by hand |
 
 ## 17. Rollout and milestones

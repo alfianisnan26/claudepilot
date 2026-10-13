@@ -254,7 +254,7 @@ export function Composer({
           ))}
         </ul>
       )}
-      <div className="glass-card rounded-[28px]">
+      <div data-composer="" className="glass-card rounded-[28px]">
         {att.items.length > 0 && (
           <ul aria-label="Attachments" className="no-scrollbar flex gap-2 overflow-x-auto px-3.5 pt-3.5 pb-0.5">
             {att.items.map((item) => (
@@ -274,7 +274,7 @@ export function Composer({
           placeholder={working ? 'Steer Claude…' : 'Message Claude…'}
           className="block min-h-[52px] w-full resize-none bg-transparent px-[18px] pt-[15px] pb-1 text-[16.5px] leading-[1.45] text-ink outline-none placeholder:text-muted sm:text-[15.5px]"
         />
-        <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-2.5">
+        <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5 sm:gap-1.5">
           <button type="button" aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()} className={cn(ROUND, GHOST)}>
             <Plus className="size-5" />
           </button>

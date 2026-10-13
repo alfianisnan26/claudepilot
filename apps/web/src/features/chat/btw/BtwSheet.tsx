@@ -50,7 +50,7 @@ export function BtwSheet({ bottom, keyboard, onClose, children }: { bottom: numb
       style={{
         bottom,
         height: expanded ? '100%' : '50%',
-        maxHeight: `calc(100% - ${bottom}px - 3.5rem - env(safe-area-inset-top))`,
+        maxHeight: `calc(100% - ${bottom}px - var(--session-header-bottom) - 0.5rem)`,
         transform: dy ? `translateY(${Math.max(0, dy)}px)` : undefined,
       }}
       className={cn('btw-sheet absolute inset-x-0 z-30 flex flex-col rounded-t-2xl border border-b-0 border-line bg-surface shadow-lift', dy === 0 && 'transition-none')}
