@@ -12,8 +12,8 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
 - t136 (opus): dev-track-c-ui, dev/t136-integrity. T-136 slice 1: classify the integrity events (peer only after a sub-agent's SendMessage,
   an identical duplicate control response ignored, a table with negative twins), continued_from (migrations 770-774), and the repair of
   today's chains, which also moves their tickets to the head.
-- t141 (opus): dev-t107-job-run, dev/t141-image-build. T-141: scripts/image-build.sh (kaniko, credential on stdin, one at a time) and the
-  real proof build. Any RBAC widening goes on the ticket as an escalation.
+- T-141 MERGED as c3431fa: the gate Job is green (typecheck, imageBuild and jobRun tests); the proof build is on the ticket (comment 809). It
+  deploys with T-143. Not an escalation: the dev account is cluster-admin, which the owner already accepted in dev-context.
 - t143 (opus): dev-track-b-notify-triggers, dev/t143-csrf-origin. T-143: the csrf() origin function behind the TLS proxy. It relaxes a
   check, so an independent reviewer sub-agent reads it before the merge. Then /deploy with gate=true.
 - PAUSED 16:4x: t100 at cf86a26 (both items built; session-list 290/0 at 4 widths x 2 themes, scroll-lock 26/26, mobile-drag 11/11, web
@@ -26,7 +26,7 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
 ## NEXT (coordinator gap review 15:0x: WIP limit THREE slices, thin first slices, each merged AND deployed before the next starts)
 Read CHARTER.md and DECISIONS.md (D-1..D-33) before planning; never act against a row.
 1. T-105 + T-109 (running, one slice): auto move waits, resumes, fits the model (D-12).
-2. T-143 then T-141 (owner: NOW, both running), T-136 slice 1 (running). T-102 is now urgent rank-02c: it resumes in the FIRST slot
+2. T-143 (running; T-141 merged), T-136 slice 1 (running). T-102 is now urgent rank-02c: it resumes in the FIRST slot
    T-143 or T-141 frees (be65ceb; left: the session-states matrix, mobile-drag, web PRD 10.5), then it deploys with T-143. Then T-136 slice 2 (recover in place, plus the supervisor), after slice 1 is merged.
 2b. T-110 slice 1 ONLY (urgent, rank-03c, D-2): the PRD FR41 amendment, the environment option `autoApprove` (off, set only by a person with
    manage), and DRY MODE: on every held release it writes 'WOULD approve: ...' or 'WOULD NOT: <condition>' to the run page and the audit, and
