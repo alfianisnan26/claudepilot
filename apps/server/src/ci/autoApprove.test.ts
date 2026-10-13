@@ -242,6 +242,7 @@ async function setup() {
 }
 const waiting = (h: H, id: string) => h.until('the release to wait', () => h.svc.get(id).deployments.some((d) => d.approval === 'waiting'));
 const keyOf = (h: H, id: string) => (h.store.db!.prepare('SELECT gate_key FROM ci_deployments WHERE run_id = ?').get(id) as { gate_key: string | null }).gate_key;
+const approves = (h: H) => h.host.calls.filter((c) => c[0] === 'approve').length;
 const push = (h: H, files: Record<string, string>) => {
   h.home.commit(h.src, files, 'change');
   h.home.git(['push', '-q', 'pilot', 'main'], h.src);
@@ -268,7 +269,7 @@ test('service: off writes nothing; dry writes one line and one audit row, approv
     const env = h.svc.setAutoApprove(repo.id, 'production', { mode: 'dry' }, OWNER);
     assert.deepEqual([env.autoApprove, env.autoApproveWindow, env.needsPerson], ['dry', null, [...CI_AUTO_APPROVE_DEFAULT_PATHS]]);
     h.svc.setAutoApprove(repo.id, 'production', { mode: 'dry' }, OWNER);
-    assert.deepEqual(audit.map((a) => [a.kind, a.actor, a.userId, a.subject, a.detail?.environment, a.detail?.mode, a.detail?.was]), [['ci.environment_auto_approve', 'user:u_owner', 'u_owner', `ci_repo:${repo.id}`, 'production', 'dry', 'off']], 'one row; no change, no row');
+    assert.deepEqual(audit.filter((a) => a.kind !== 'ci.deploy_approved').map((a) => [a.kind, a.actor, a.userId, a.subject, a.detail?.environment, a.detail?.mode, a.detail?.was]), [['ci.environment_auto_approve', 'user:u_owner', 'u_owner', `ci_repo:${repo.id}`, 'production', 'dry', 'off']], 'one row; no change, no row');
 
     // A harmless change, then a deploy: WOULD approve, and nothing else happens.
     push(h, { 'README.md': '# app, changed\n' });
@@ -278,7 +279,7 @@ test('service: off writes nothing; dry writes one line and one audit row, approv
     const held = h.svc.get(second.id);
     const line = `auto-approve (dry): WOULD approve: gate green at ${second.sha.slice(0, 7)}, build ok, verify and rollback present, no authz/secrets/Bypass/deny-rule/released-migration change in the diff, 1 of 6 today`;
     assert.deepEqual(held.deployments.map((d) => [d.approval, d.decidedBy, d.autoApprove?.verdict, d.autoApprove?.line]), [['waiting', null, 'would', line]]);
-    assert.ok(!h.host.calls.some((c) => c[0] === 'approve'), 'cp-ci approve was never called');
+    assert.equal(approves(h), 1, 'cp-ci approve was called once, for the person’s approval of the first run, never by the rule');
     assert.match(keyOf(h, second.id) ?? '', /^[0-9a-f]{64}$/, 'the key is still in the portal, unused');
     await sleep(600);
     await h.svc.poll('docker/test');
@@ -320,7 +321,7 @@ test('service: WOULD NOT for a gate skipped by its input, a diff into authz and 
     h.home.git(['rm', '-q', 'apps/server/src/authz/seam.ts'], h.src);
     push(h, { [MIGRATIONS_FILE]: MIGS([block(1, 'A'), block(610, 'B, edited')]) });
     assert.match(await lineOf(), /WOULD NOT: the diff changes released migration 610$/);
-    assert.ok(!h.host.calls.some((c) => c[0] === 'approve'));
+    assert.equal(approves(h), 1, 'only the person’s approval of the first run reached cp-ci approve');
     assert.deepEqual(audit.filter((a) => a.kind === 'ci.deploy_auto_approve').map((a) => a.detail?.verdict), ['would_not', 'would_not', 'would_not']);
   } finally {
     h.done();
