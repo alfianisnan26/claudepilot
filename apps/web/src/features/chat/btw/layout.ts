@@ -28,13 +28,14 @@ const load = (): Pref => {
 };
 
 /**
- * Where the btw lives: a phone gets the bottom sheet; everything else the card above the composer; from 1280 px the person may expand it into a
+ * Where the btw lives: a phone (or a short touch screen) gets the bottom sheet; everything else the card above the composer; from 1280 px the person may expand it into a
  * side panel (resizable, remembered), offered only while the row leaves the chat column its minimum width, and handed back to the card by
  * itself when it does not.
  */
 export function useBtwLayout(row: RefObject<HTMLElement | null>) {
   const wide = useMediaQuery('(min-width: 1280px)');
-  const phone = useMediaQuery('(max-width: 639px)');
+  // A phone, or a short touch screen (a phone on its side; Web app §9.1: bottom sheets at any width there).
+  const phone = useMediaQuery('(max-width: 639px), (pointer: coarse) and (max-height: 500px)');
   const [pref, setPref] = useState(load);
   const [rowWidth, setRowWidth] = useState(0);
 
