@@ -4,6 +4,7 @@ import { MotionConfig, motion } from 'motion/react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { NAV } from '@/app/nav';
+import { MODAL_SELECTOR } from '@/lib/scrollGuard';
 import { pinnedToViewport, useVisualViewport } from '@/lib/viewport';
 import { LevelDot } from '../../ui';
 import { sessionLevel } from '../sessions/model';
@@ -52,11 +53,12 @@ export default function Palette() {
   // Focus the field, keep the page behind from scrolling, and give focus back where it was.
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
-    const { overflow } = document.body.style;
     document.body.style.overflow = 'hidden';
     input.current?.focus({ preventScroll: true });
     return () => {
-      document.body.style.overflow = overflow;
+      // Not "put back what was there": over a dialog that is leaving that is "hidden", and the page would stay locked for good. The page
+      // scrolls again unless another modal is still open (lib/scrollGuard also clears a lock that nobody holds).
+      if (!document.querySelector(MODAL_SELECTOR)) document.body.style.overflow = '';
       if (!document.activeElement || document.activeElement === document.body) before?.focus?.({ preventScroll: true });
     };
   }, []);
