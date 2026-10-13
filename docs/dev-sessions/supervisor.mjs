@@ -100,6 +100,21 @@ async function revokeMcpToken() {
   if (mcp.id) await api('DELETE', `/api/portal-mcp/tokens/${mcp.id}`).catch(() => {});
   mcp.token = mcp.id = '';
 }
+/** One Portal MCP tool call with the supervisor's admin token. */
+async function mcpCall(name, args) {
+  const token = await mcpToken();
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
+  const init = await fetch(`${PORTAL}/mcp`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'dev-sessions-supervisor', version: '1' } } }) });
+  const sid = init.headers.get('mcp-session-id');
+  await init.text();
+  const res = await fetch(`${PORTAL}/mcp`, { method: 'POST', headers: { ...headers, ...(sid ? { 'mcp-session-id': sid } : {}) }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }) });
+  const raw = await res.text();
+  const line = raw.split('\n').find((l) => l.startsWith('data: '));
+  const out = JSON.parse(line ? line.slice(6) : raw);
+  if (out.error || out.result?.isError) throw new Error(`${name}: ${out.error?.message ?? out.result?.content?.[0]?.text ?? 'refused'}`);
+  return out.result;
+}
+
 async function sessionSend(id, text) {
   if (DRY) return log(`[dry] would send to ${id.slice(0, 8)}: ${text.slice(0, 90)}...`);
   const token = await mcpToken();
@@ -237,6 +252,37 @@ const NUDGE_AFTER_MIN = Number(process.env.NUDGE_AFTER_MIN ?? 3);
 const NUDGE_GAP_MIN = Number(process.env.NUDGE_GAP_MIN ?? 10);
 const MAX_NUDGES = Number(process.env.MAX_NUDGES ?? 40);
 
+/**
+ * A session waiting for an answer: a QUESTION (AskUserQuestion, an elicitation) is answered with a denial that tells it to decide itself, so it goes on; nobody is
+ * here. A TOOL approval is left to a person on purpose (with the ask rules gone only Claude Code's own protection of .git and .claude can still raise one, and
+ * approving that would let an agent edit its own deny rules): it is logged once with what it asks.
+ */
+async function answerWaiting(t, ts, cur) {
+  const events = (await api('GET', `/api/chat/sessions/${cur.id}/events?after=${ts.seqFloor ?? 0}`)).data ?? [];
+  const list = Array.isArray(events) ? events : [];
+  const resolved = new Set(list.filter((e) => e.kind === 'resolved').map((e) => e.requestId));
+  ts.seqFloor = Math.max(0, (list[list.length - 1]?.seq ?? 0) - 300);
+  ts.toolWaitLogged ??= [];
+  for (const e of list.filter((x) => x.kind === 'request' && x.request && !resolved.has(x.request.requestId))) {
+    const q = e.request;
+    if (q.kind === 'question' || q.kind === 'elicitation') {
+      if (DRY) {
+        log(`[dry] ${t.key}: would deny a ${q.kind}: ${String(q.detail ?? '').slice(0, 80)}`);
+        continue;
+      }
+      try {
+        await mcpCall('session_respond', { id: cur.id, request_id: q.requestId, decision: 'deny', message: 'Nobody is here to answer. Decide yourself with the PRD default, write the decision in your status file, and go on.' });
+        log(`${t.key}: a ${q.kind} was asked (${String(q.detail ?? '').slice(0, 80)}): answered "decide yourself"`);
+      } catch (err) {
+        log(`${t.key}: could not answer a ${q.kind}: ${err.message}`);
+      }
+    } else if (q.kind === 'tool' && !ts.toolWaitLogged.includes(q.requestId)) {
+      ts.toolWaitLogged = [...ts.toolWaitLogged.slice(-20), q.requestId];
+      log(`${t.key}: a tool approval waits for a person: ${q.toolName}: ${String(q.detail ?? '').replace(/\s+/g, ' ').slice(0, 110)}`);
+    }
+  }
+}
+
 const within24h = (list) => (list ?? []).filter((x) => Date.now() - x < 24 * 3_600_000);
 
 async function watch() {
@@ -287,7 +333,7 @@ async function watch() {
           }
         } else {
           idleSince.delete(t.key);
-          if (cur.state === 'waiting') log(`${t.key}: waits for an answer (${cur.waitingFor ?? 'a request'}): only a person can give it`);
+          if (cur.state === 'waiting') await answerWaiting(t, ts, cur).catch((e) => log(`${t.key}: could not look at what waits: ${e.message}`));
         }
         continue;
       }

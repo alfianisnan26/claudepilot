@@ -42,9 +42,7 @@
       "Bash(scripts/gate.sh:*)",
       "Bash(scripts/k3s-status.sh:*)",
       "Bash(scripts/scratch-portal.sh:*)",
-      "Bash(shellcheck:*)"
-    ],
-    "ask": [
+      "Bash(shellcheck:*)",
       "Bash(git push:*)",
       "Bash(kubectl apply:*)",
       "Bash(kubectl create:*)",
@@ -58,6 +56,7 @@
       "Bash(kubectl rollout undo:*)",
       "Bash(scripts/k3s-build.sh:*)"
     ],
+    "ask": [],
     "deny": [
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
@@ -113,7 +112,13 @@
       "Bash(kubectl -n isnan-argocd edit:*)",
       "Bash(kubectl -n isnan-argocd replace:*)",
       "Bash(kubectl -n isnan-argocd annotate:*)",
-      "Bash(kubectl -n isnan-argocd label:*)"
+      "Bash(kubectl -n isnan-argocd label:*)",
+      "Bash(git push * main:*)",
+      "Bash(git push * HEAD:main:*)",
+      "Bash(git push * HEAD:refs/heads/main:*)",
+      "Bash(git push * integration:main:*)",
+      "Bash(git push * *:main:*)",
+      "Bash(git push * *:refs/heads/main:*)"
     ]
   }
 }

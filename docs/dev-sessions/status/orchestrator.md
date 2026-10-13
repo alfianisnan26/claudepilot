@@ -11,6 +11,7 @@ Session fe3df8bc in kubernetes/kohi-event, main folder ~/work/claudepilot, branc
 - C slice 1: item 1 (btw UI against the real engine via scratch portal + stand-in API) then item 2 if time. Branch dev/track-c-ui, worktree ...-c-ui (was empty).
 
 ## DECISIONS
+- Model per slice (owner, 2026-10-13): sonnet for narrow checks, opus for implementation, fable only for hard diagnosis or after two failures. The first three slices ran on fable (dispatched before the rule); from slice 2 on the model is named next to each slice.
 - Package B does item 6 (test leaks and flakes) right after item 1, before V1: the gate's reliability gates everything else.
 - The gate (b6f141f on integration) fails a hung test after GATE_TEST_TIMEOUT_MS and reruns failing files alone; package A fixes the cause, not the gate.
 - Status-file-only commits are pushed to integration without a gate run (docs only, nothing executable).
