@@ -37,26 +37,20 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
 - T-100: worktree dev-automove-web, branch dev/t100-sessions-list, WIP committed and pushed; waits for the first free slot.
 - T-99: done on integration (73b0c67); goes live with the next deploy, close then.
 
-## NEXT (coordinator order 14:5x: T-105, T-107, T-99, T-102, T-100, then T-104 with T-108's additions)
-- T-104 Keep going as a portal feature (rank-05b), now with T-108's three additions: a deterministic WATCHDOG sweep in the portal with a Home
-  'Autonomy' widget, an allow-list of protected-path approvals Keep going grants itself, the Bypass lease. Read T-108 (umbrella, rank-04b) and
-  T-104's newest comment before the brief. Migration block 757-759.
-- T-109 (rank-02b3, model fallback after a move): given to the T-105 slice, same branch, after T-105's commits.
-- T-110 (rank-04c): the portal approves ClaudePilot deploys by RULE (never an agent). PRD local-git-ci FR41 amendment first; off by default,
-  dry mode, pause switch, auto pause after a rollback; trial of 5 hand approvals by the coordinator meanwhile. (The coordinator's message
-  named it T-111; the ticket ids are T-110 = auto-approve, T-111 = self-learning.)
-- T-115 (rank-04d): the Portal MCP as every agent's operating environment. First slice: the DECISIONS REGISTRY (D-n, scope, supersedes,
-  decision_search/get/record with a contradiction check; import the owner's 2026-10-13 decisions) and `session_context` (versioned brief,
-  charter_version, decisions_version). Then instructions and the default Context, then resources and prompts for agents, then notices and restart.
-- Wave 2 after T-111 slices 1-2: T-113 (rank-09c, integrity guard: incidents, traceability check, claim audit, probation, probes, hygiene),
-  T-114 (rank-09d, scoreboard, playbooks, peer assessment with self-reflection and calibration gap; the reviewer is scored).
-- Order of the next free slots: T-100, then T-104 (with T-108's watchdog, path allow-list, lease), T-110, T-115, T-101, T-106, T-111, T-113, T-114.
-- T-108 owner decisions: item 3 yes (T-110), item 6 yes (API-key last destination; keys and cap come from the owner later).
-- Then T-101 (750-754), T-106 (rank-08b, after T-101; PRD knowledge-graph K4 FR36-FR39), T-111 (rank-09b, self-learning loop: READ the owner's correction at the top of its description first: the score is many things done, good
-  quality, proper standards, few avoidable human questions and few owner-found defects; tokens only third; required escalations never
-  penalised; the loop reads counts and links, never the owner's messages; sampled re-verification. Slices 1 and 2, the measuring, first; the wall: never safety, deny rules, authz, Bypass gates, the gates or its own scoring), T-28, T-32, T-24, T-26 (740-744), T-27, T-30 (745-749),
-  T-33 rename LAST alone, wave 4 (T-10..T-15).
-- After each merge: area tests or the gate Job, push origin and pilot. The next deploy carries T-42 slice 3, T-97, T-98, T-99, T-105, T-102, T-100.
+## NEXT (coordinator gap review 15:0x: WIP limit THREE slices, thin first slices, each merged AND deployed before the next starts)
+Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIONS.md (D-1..D-22; never act against a row, say so on a ticket).
+1. T-105 + T-109 (running, one slice): auto move waits, resumes, fits the model (D-12).
+2. T-107 job-run (running).
+3. T-99 (on integration), T-102 (running), T-100 (WIP pushed; next free slot).
+   -> deploy (gate Job, /deploy pipeline; the coordinator approves as delegate, D-2).
+4. T-115 slice 1: the decisions registry (imports DECISIONS.md) and session_context.
+5. T-104 Keep going with T-108's watchdog sweep (then the path allow-list and the lease).
+6. T-110 deploy rule, dry mode first.
+7. T-111 slices 1-2 (measuring; the owner's correction: quality and human touch before tokens).
+---- CUT LINE: nothing below starts before 7 is merged and deployed ----
+T-113 (integrity guard), T-114 (scoreboard, playbooks, peer assessment), T-101, T-106, T-28, T-32, T-24, T-26, T-27, T-30, T-33, wave 4,
+the fitOf/fit.ts unification (small; may ride with T-98 follow-ups if a slot is idle).
+T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, never use that code, and tell the coordinator if they see it.
 
 ## NEEDS A HUMAN (only what a person can do; rewritten 14:3x from the tickets, after the owner's note)
 - On the iPhone (installed PWA, 390 px, light and dark), check what is live in 2026.10.13-5: T-1 Pinned and swipe (right = Pin, left = Archive);
@@ -92,3 +86,6 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
 - 14:5x CHARTER (docs/dev-sessions/CHARTER.md) binds from now: every commit carries `Ticket: T-n` (from 3ba1b4e on; earlier commits not
   rewritten); running agents told. The force-push slip above is filed as incident T-112 (deny rule for force pushes proposed; a person's call).
 - 14:5x CHARTER is read at every start (docs/dev-sessions/CHARTER.md). Force pushes now have deny rules (coordinator). Claimed T-113, T-114, T-115.
+
+- 15:0x Coordinator gap review adopted: WIP limit 3, the order and cut line above, DECISIONS.md is the registry until T-115. Checked the three
+  running slices against D-1..D-22: no conflict (T-105 builds D-12's values; T-107 is D-5/D-11).
