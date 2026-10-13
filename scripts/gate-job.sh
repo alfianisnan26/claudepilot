@@ -24,8 +24,8 @@ fi
 cleanup() { kubectl -n "$ns" delete secret "$job" --ignore-not-found >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 trap 'kubectl -n "$ns" delete job "$job" --ignore-not-found >/dev/null 2>&1 || true; exit 130' INT TERM
-# The token reaches kubectl on stdin, never as an argument a process list would show.
-gh auth token | kubectl -n "$ns" create secret generic "$job" --from-file=node-auth-token=/dev/stdin >/dev/null
+# The token reaches kubectl on stdin (printf is a builtin: no argument a process list would show), without gh's newline (npm refuses it).
+printf '%s' "$(gh auth token)" | kubectl -n "$ns" create secret generic "$job" --from-file=node-auth-token=/dev/stdin >/dev/null
 verdict=$(base64 -w0 < scripts/gate-verdict.sh)
 sed -e "s#NAME#$job#g" -e "s#\"COMMIT\"#\"$commit\"#" -e "s#\"STEPS\"#\"$steps\"#" -e "s#image: IMAGE#image: $image#" -e "s#\"VERDICT\"#\"$verdict\"#" deploy/k3s-build/gate-job.yaml | kubectl apply -f - >/dev/null
 echo "gate job $job: $steps at $sha on $image ..."
