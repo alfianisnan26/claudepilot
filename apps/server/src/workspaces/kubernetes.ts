@@ -13,9 +13,11 @@ import {
 } from '@kubernetes/client-node';
 import { plainName } from '../names.js';
 import { requestsFor, type RequestOptions } from './requests.js';
+import { bytes, checkFit, cores, needOf, type FitPod } from './fit.js';
+import { cpuQuantity, fitView, memoryQuantity, needOfValues, valuesOf } from './resources.js';
 import { kubernetesDelivery } from './kubernetesDelivery.js';
 import { homeVolumeOf, legacyRuntimeName } from './identity.js';
-import { HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type RuntimeNames, type ShellSession } from './runtime.js';
+import { HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type ResourceAccess, type Runtime, type RuntimeNames, type ShellSession } from './runtime.js';
 
 const LIMIT = { cpus: 'claudepilot.cpus', memoryMb: 'claudepilot.memory-mb' } as const;
 const CONTAINER = 'workspace';
@@ -30,20 +32,6 @@ const ignore = (...codes: number[]) => (e: unknown) => {
 
 /** Waiting reasons that won't fix themselves. */
 const STUCK = new Set(['ErrImagePull', 'ImagePullBackOff', 'InvalidImageName', 'CrashLoopBackOff', 'CreateContainerConfigError']);
-
-/** Kubernetes quantities: CPU in cores ("250m", "1", "123456n"), memory in bytes ("512Mi"). */
-function cores(q: string): number {
-  const units: Record<string, number> = { n: 1e-9, u: 1e-6, m: 1e-3 };
-  const unit = units[q.slice(-1)];
-  return unit ? Number(q.slice(0, -1)) * unit : Number(q);
-}
-function bytes(q: string): number {
-  const m = q.match(/^(\d+(?:\.\d+)?)([KMGTE]i?|k)?$/);
-  if (!m) return Number(q) || 0;
-  const pow: Record<string, number> = { K: 1, k: 1, M: 2, G: 3, T: 4, E: 6 };
-  const base = m[2]?.endsWith('i') ? 1024 : 1000;
-  return Number(m[1]) * base ** (m[2] ? pow[m[2][0]!]! : 0);
-}
 
 export interface KubernetesOptions {
   namespace: string;
@@ -299,6 +287,22 @@ export class KubernetesRuntime implements Runtime {
     };
     const match = { [LABEL.managed]: 'true', [LABEL.name]: spec.name };
 
+    const limits: Record<string, string> = {};
+    if (spec.cpus) limits.cpu = String(spec.cpus);
+    if (spec.memoryMb) limits.memory = `${spec.memoryMb}Mi`;
+    const home = { name: 'home', persistentVolumeClaim: { claimName: claim } };
+    const requests = Object.keys(limits).length ? requestsFor(limits, this.opts.requests) : undefined;
+
+    // The fit check (fit.ts, T-98): a pod that fits on no node it may go to would stay Pending, so the create is refused with the numbers.
+    // A cluster the portal may not read (no ClusterRole claudepilot-portal-fit-check, an enrolled cluster's namespaced Role) is not
+    // checked: the create goes on as before.
+    const need = needOf([{ resources: { limits, requests } }]);
+    if (need.cpuMilli > 0 || need.memoryBytes > 0) {
+      const fit = await checkFit(this.#core, { need, nodeSelector: this.opts.nodeSelector });
+      if (fit.checked && !fit.fits) throw new AppError('CONFLICT', fit.reason);
+      if (!fit.checked) console.log(`[kubernetes] ${spec.name}: ${fit.reason}`);
+    }
+
     progress('Creating home volume');
     await this.#core
       .createNamespacedPersistentVolumeClaim({
@@ -314,10 +318,6 @@ export class KubernetesRuntime implements Runtime {
       })
       .catch(ignore(409));
 
-    const limits: Record<string, string> = {};
-    if (spec.cpus) limits.cpu = String(spec.cpus);
-    if (spec.memoryMb) limits.memory = `${spec.memoryMb}Mi`;
-    const home = { name: 'home', persistentVolumeClaim: { claimName: claim } };
 
     progress('Creating deployment');
     await this.#apps.createNamespacedDeployment({
@@ -356,7 +356,7 @@ export class KubernetesRuntime implements Runtime {
                   image: this.opts.image,
                   workingDir: HOME,
                   env: [{ name: 'TERM', value: 'xterm-256color' }],
-                  resources: Object.keys(limits).length ? { limits, requests: requestsFor(limits, this.opts.requests) } : undefined,
+                  resources: Object.keys(limits).length ? { limits, requests } : undefined,
                   volumeMounts: [{ name: 'home', mountPath: HOME }],
                 },
               ],
@@ -377,6 +377,50 @@ export class KubernetesRuntime implements Runtime {
       })
       .then(() => undefined);
   }
+
+  /**
+   * CPU and memory after a create (T-98). The values live in the `workspace` container of the Deployment's pod template; writing them is a
+   * read, change and replace (the read's resourceVersion guards against a change in between), which restarts the pod when it runs (Recreate).
+   * The limit labels the list reads are kept in step. The fit check reads the nodes and every pod on them: the portal's ClusterRole
+   * `claudepilot-portal-fit-check` (deploy/k3s/rbac.yaml); without it the check is `unavailable`, never a guess.
+   */
+  readonly resources: ResourceAccess = {
+    read: async (name) => {
+      const d = await this.#apps.readNamespacedDeployment({ name: this.#objectName(name), namespace: this.#ns });
+      const c = d.spec?.template.spec?.containers.find((x) => x.name === CONTAINER);
+      return { live: valuesOf(c?.resources as { limits?: Record<string, string>; requests?: Record<string, string> } | undefined), replicas: d.spec?.replicas ?? 1 };
+    },
+    fit: async (name, want) => {
+      let node: string | null = null;
+      try {
+        const own = await this.#core.listNamespacedPod({ namespace: this.#ns, labelSelector: `${LABEL.managed}=true,${LABEL.name}=${plainName(name)}` });
+        node = own.items.find((p) => !p.metadata?.deletionTimestamp && p.spec?.nodeName)?.spec?.nodeName ?? null;
+      } catch {
+        // No pod list: decided on the nodes it may go to, as for a stopped workspace.
+      }
+      const isSelf = (p: FitPod) => p.namespace === this.#ns && p.labels?.[LABEL.managed] === 'true' && p.labels?.[LABEL.name] === name;
+      return fitView(await checkFit(this.#core, { need: needOfValues(want), node, nodeSelector: this.opts.nodeSelector, isSelf }));
+    },
+    apply: async (name, values, opts = {}) => {
+      const object = this.#objectName(name);
+      const d = await this.#apps.readNamespacedDeployment({ name: object, namespace: this.#ns });
+      if (opts.onlyWhenStopped && (d.spec?.replicas ?? 1) !== 0) return false;
+      const c = d.spec?.template.spec?.containers.find((x) => x.name === CONTAINER);
+      if (!c || d.metadata?.labels?.[LABEL.managed] !== 'true') throw new AppError('CONFLICT', 'That Deployment is not a workspace the portal manages.');
+      c.resources = {
+        ...c.resources,
+        limits: { ...c.resources?.limits, cpu: cpuQuantity(values.cpus), memory: memoryQuantity(values.memoryMb) },
+        requests: { ...c.resources?.requests, cpu: cpuQuantity(values.cpuRequest), memory: memoryQuantity(values.memoryRequestMb) },
+      };
+      d.metadata = {
+        ...d.metadata,
+        labels: { ...d.metadata?.labels, [LIMIT.cpus]: String(values.cpus), [LIMIT.memoryMb]: String(values.memoryMb) },
+        annotations: { ...d.metadata?.annotations, 'claudepilot.resources-changed': new Date().toISOString() },
+      };
+      await this.#apps.replaceNamespacedDeployment({ name: object, namespace: this.#ns, body: d });
+      return true;
+    },
+  };
 
   start = async (name: string) => this.#scale(name, 1);
   stop = async (name: string) => this.#scale(name, 0);

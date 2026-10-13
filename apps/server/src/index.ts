@@ -383,6 +383,8 @@ const ci = new CiService(store, new WorkspacesCiHost(workspaces), {
   audit: (e) => platform.audit.record(e),
 });
 registerCiTools(ci, ciSessions);
+// A resources change that restarts a workspace's pod (T-98) waits for the CI runs running in it.
+workspaces.hooks.runningCi = (id) => ci.list({ workspace: id, status: ['running'], limit: 1 }).total;
 ci.onChange = () => notify('ci');
 if (config.ci.enabled) ci.start();
 // Claude usage: the plan limits of each Claude, read from Claude Code itself (claude-usage PRD). Its probes run only for running

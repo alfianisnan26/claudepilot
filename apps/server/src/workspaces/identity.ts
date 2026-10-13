@@ -10,7 +10,7 @@
 
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { normalizeWorkspaceLabel, STABLE_WORKSPACE_ID, workspaceId, type Workspace } from '@portal/contracts';
+import { normalizeWorkspaceLabel, STABLE_WORKSPACE_ID, workspaceId, workspaceResourcesProblem, type Workspace, type WorkspaceResourceValues } from '@portal/contracts';
 import { PLAIN_NAME, WORKSPACE_ID } from '../names.js';
 import type { RuntimeNames } from './runtime.js';
 
@@ -29,6 +29,12 @@ export interface WorkspaceIdentity {
   createdAt: string;
   /** Set when the workspace was removed: its id is never given again, and its alias goes to whichever workspace holds the name now. */
   removedAt: string | null;
+  /** The CPU and memory someone set (T-98); null until a first change. */
+  resources?: WorkspaceResourceValues | null;
+  /** Set while `resources` wait for the workspace's next start. */
+  resourcesPendingAt?: string | null;
+  /** When `resources` last reached the runtime. */
+  resourcesAppliedAt?: string | null;
 }
 
 interface Row {
@@ -40,6 +46,21 @@ interface Row {
   label: string | null;
   created_at: string;
   removed_at: string | null;
+  resources?: string | null;
+  resources_pending_at?: string | null;
+  resources_applied_at?: string | null;
+}
+
+/** Stored resources as they were written; anything that does not read back as valid values is null (never guessed at). */
+function readResources(raw: string | null | undefined): WorkspaceResourceValues | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as Partial<WorkspaceResourceValues>;
+    if (workspaceResourcesProblem(v)) return null;
+    return { cpus: v.cpus!, memoryMb: v.memoryMb!, cpuRequest: v.cpuRequest!, memoryRequestMb: v.memoryRequestMb! };
+  } catch {
+    return null;
+  }
 }
 
 /** How a form is looked up: `<target>/<name or label>`, case-insensitive (a label differing only in case is the same label). */
@@ -92,12 +113,25 @@ export class WorkspaceIdentities implements RuntimeNames {
     let rows: Row[] = [];
     let aliases: { alias: string; workspace_id: string }[] = [];
     try {
-      rows = db.prepare('SELECT id, target, name, legacy_id, runtime_name, label, created_at, removed_at FROM workspace_identities ORDER BY created_at').all() as unknown as Row[];
+      rows = db.prepare('SELECT id, target, name, legacy_id, runtime_name, label, created_at, removed_at, resources, resources_pending_at, resources_applied_at FROM workspace_identities ORDER BY created_at').all() as unknown as Row[];
       aliases = db.prepare('SELECT alias, workspace_id FROM workspace_aliases WHERE released_at IS NULL ORDER BY created_at').all() as unknown as typeof aliases;
     } catch (e) {
       console.error(`[workspaces] could not read workspace identities: ${(e as Error).message}`);
     }
-    for (const r of rows) this.#remember({ id: r.id, target: r.target, name: r.name, legacyId: r.legacy_id, runtimeName: r.runtime_name, label: r.label ?? null, createdAt: r.created_at, removedAt: r.removed_at });
+    for (const r of rows)
+      this.#remember({
+        id: r.id,
+        target: r.target,
+        name: r.name,
+        legacyId: r.legacy_id,
+        runtimeName: r.runtime_name,
+        label: r.label ?? null,
+        createdAt: r.created_at,
+        removedAt: r.removed_at,
+        resources: readResources(r.resources),
+        resourcesPendingAt: r.resources_pending_at ?? null,
+        resourcesAppliedAt: r.resources_applied_at ?? null,
+      });
     for (const a of aliases) {
       const w = this.#byId.get(a.workspace_id);
       if (w && !w.removedAt && !this.#forms.has(a.alias.normalize('NFC').toLowerCase())) this.#forms.set(a.alias.normalize('NFC').toLowerCase(), w);
@@ -192,6 +226,21 @@ export class WorkspaceIdentities implements RuntimeNames {
       this.#forms.set(form, w);
       this.#write('INSERT INTO workspace_aliases (alias, workspace_id, created_at) VALUES (?, ?, ?)', workspaceId(w.target, clean), w.id, this.now().toISOString());
     }
+    return w;
+  }
+
+  /**
+   * Stores the CPU and memory wanted for a workspace (T-98), with whether they wait for its next start (`pendingAt`) or reached the runtime
+   * (`appliedAt`). The caller has checked the values (`workspaceResourcesProblem`) and who may.
+   */
+  setResources(id: string, values: WorkspaceResourceValues, state: { pendingAt: string | null; appliedAt: string | null }): WorkspaceIdentity {
+    this.#load();
+    const w = this.#byId.get(id);
+    if (!w || w.removedAt) throw new Error('no such workspace');
+    w.resources = { cpus: values.cpus, memoryMb: values.memoryMb, cpuRequest: values.cpuRequest, memoryRequestMb: values.memoryRequestMb };
+    w.resourcesPendingAt = state.pendingAt;
+    w.resourcesAppliedAt = state.appliedAt;
+    this.#write('UPDATE workspace_identities SET resources = ?, resources_pending_at = ?, resources_applied_at = ? WHERE id = ?', JSON.stringify(w.resources), w.resourcesPendingAt, w.resourcesAppliedAt, w.id);
     return w;
   }
 
