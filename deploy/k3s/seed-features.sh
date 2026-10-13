@@ -18,4 +18,12 @@ set_value automove.enabled true
 set_value automove.automatic true
 set_value agents.selfEdit true
 set_value notify.baseUrl "\"$PORTAL_URL\""
+
+# The portal's own tools for sessions (Portal MCP): on, with session control, and agent access for the development workspace.
+put_json() { # path, json body
+  code=$(curl -sS -b "$jar" -o /tmp/seed-features.out -w '%{http_code}' -X PUT -H 'Content-Type: application/json' -H "Origin: $PORTAL_URL" -d "$2" "$PORTAL_URL$1")
+  echo "$1 $2 -> HTTP $code"; [ "$code" = 200 ] || { cat /tmp/seed-features.out; echo; return 1; }
+}
+put_json /api/portal-mcp/settings '{"enabled":true,"sessionControl":true}'
+put_json "/api/portal-mcp/agents/${PORTAL_DEV_WORKSPACE:-kubernetes/kohi-event}" '{"enabled":true}'
 rm -f /tmp/seed-features.out

@@ -6,3 +6,7 @@ dist/
 !.env.example
 *.log
 .data/
+
+# Claude Code local files
+.claude/*.lock
+.claude/settings.local.json
