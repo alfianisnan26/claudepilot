@@ -1,6 +1,6 @@
 {
   "kit": "1.0.0",
-  "at": "2026-10-13T16:54:01.552Z",
+  "at": "2026-10-13T16:57:40.457Z",
   "portal": "https://pilot.ai.isnan.me",
   "contexts": {
     "charter-essentials": "01a13624-3b6c-7087-a61d-26730374d3a6",
@@ -37,6 +37,10 @@
       "outline-konfersi": "01a1362f-759b-75fb-9896-7c12a09896ac",
       "outline-kohilabs": "01a1362f-7609-75e6-8426-a87c988d8000"
     },
-    "sets": {}
+    "sets": {
+      "isnan": "01a13632-cbed-716f-b6de-6f956771fb40",
+      "konfersi": "01a13632-cc24-7334-9f47-5dd1c0c5f048",
+      "kohi-labs": "01a13632-cc64-7c16-933c-a3650fa2f71c"
+    }
   }
 }
