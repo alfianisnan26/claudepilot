@@ -156,6 +156,61 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
   });
 
   registerPortalTool({
+    name: 'workspace_resources',
+    title: 'Change a workspace’s CPU and memory',
+    description:
+      'Sets the CPU and memory of a Kubernetes workspace: limits (cpus in cores, memory_mb in MiB) and what its pod reserves (cpu_request, memory_request_mb; never above the limits). Values left out keep what it has. apply "now" patches its Deployment and the pod restarts: EVERY session in that workspace ends; it is refused while a CI run is running there, and when the pod would not fit its node (the numbers are in the refusal). apply "next_restart" keeps them for its next start. Asks for confirmation first, showing the change and the fit check.',
+    scope: 'admin',
+    hints: { destructive: true, idempotent: true },
+    input: z.object({
+      id: z.string().max(100).describe('The stable id (`ws_` and 12 hex), `<target>/<name>`, or the name when it is unique.'),
+      apply: z.enum(['now', 'next_restart']).describe('now: patch and restart the pod (every session in it ends); next_restart: at its next start.'),
+      cpus: z.number().positive().max(64).optional().describe('CPU limit in cores, e.g. 4 or 0.5.'),
+      memory_mb: z.number().int().positive().optional().describe('Memory limit in MiB, e.g. 8192.'),
+      cpu_request: z.number().positive().max(64).optional().describe('CPU the pod reserves, in cores (at most cpus).'),
+      memory_request_mb: z.number().int().positive().optional().describe('Memory the pod reserves, in MiB (at most memory_mb).'),
+      confirm_token: z.string().optional().describe('From the confirmation_required answer.'),
+    }),
+    async handler(ctx, args) {
+      const w = await find(args.id);
+      assertCanChange(store, 'workspace');
+      const actor = actorOfPrincipal(ctx.principal);
+      const req = { apply: args.apply, cpus: args.cpus, memoryMb: args.memory_mb, cpuRequest: args.cpu_request, memoryRequestMb: args.memory_request_mb };
+      // Checked before the confirmation: values out of bounds, a request above its limit, or a target without resources are refused at once.
+      const plan = await workspaces.planResources(w.id, req, actor);
+      const show = (v: Partial<{ cpus: number; memoryMb: number; cpuRequest: number; memoryRequestMb: number }>) => ({ cpus: v.cpus ?? null, memory_mb: v.memoryMb ?? null, cpu_request: v.cpuRequest ?? null, memory_request_mb: v.memoryRequestMb ?? null });
+      const ids = { id: w.id, stable_id: w.stableId ?? plan.known.id };
+      if (plan.unchanged) return { summary: `${w.id} already has these values.`, ...ids, values: show(plan.values) };
+      const restarts = plan.apply === 'now' && plan.replicas > 0;
+      const gate = ctx.confirm(
+        args,
+        {
+          resources: w.id,
+          stable_id: ids.stable_id,
+          from: show(plan.live),
+          to: show(plan.values),
+          apply: plan.apply,
+          warning: restarts ? `The pod restarts now: every session in this workspace ends (${liveSessions(w.id).length} live).` : plan.apply === 'now' ? 'It is stopped: it starts with these values.' : 'Nothing restarts now: they apply at its next start.',
+          fit: { state: plan.fit.state, message: plan.fit.message },
+        },
+        `${ids.stable_id}@${plan.apply}:${JSON.stringify(plan.values)}`,
+      );
+      if (gate) return gate;
+      const done = await workspaces.setResources(w.id, req, actor, { actor: ctx.actor, actorLabel: ctx.actorLabel });
+      ctx.affected(`workspace:${w.id}`);
+      return {
+        summary: done.outcome === 'applied' ? (restarts ? `Applied to ${w.id}: its pod restarts.` : `Applied to ${w.id}.`) : done.outcome === 'pending' ? `Kept for the next start of ${w.id}.` : `${w.id} already has these values.`,
+        ...ids,
+        outcome: done.outcome,
+        wanted: done.wanted ? show(done.wanted) : null,
+        live: show(done.live),
+        pending: done.pending,
+        fit: done.fit ? { state: done.fit.state, message: done.fit.message } : null,
+      };
+    },
+  });
+
+  registerPortalTool({
     name: 'workspace_start',
     title: 'Start a workspace',
     description: 'Starts a stopped workspace. Returns at once; its status moves to starting, then running.',
