@@ -45,6 +45,12 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
 - T-110 (rank-04c): the portal approves ClaudePilot deploys by RULE (never an agent). PRD local-git-ci FR41 amendment first; off by default,
   dry mode, pause switch, auto pause after a rollback; trial of 5 hand approvals by the coordinator meanwhile. (The coordinator's message
   named it T-111; the ticket ids are T-110 = auto-approve, T-111 = self-learning.)
+- T-115 (rank-04d): the Portal MCP as every agent's operating environment. First slice: the DECISIONS REGISTRY (D-n, scope, supersedes,
+  decision_search/get/record with a contradiction check; import the owner's 2026-10-13 decisions) and `session_context` (versioned brief,
+  charter_version, decisions_version). Then instructions and the default Context, then resources and prompts for agents, then notices and restart.
+- Wave 2 after T-111 slices 1-2: T-113 (rank-09c, integrity guard: incidents, traceability check, claim audit, probation, probes, hygiene),
+  T-114 (rank-09d, scoreboard, playbooks, peer assessment with self-reflection and calibration gap; the reviewer is scored).
+- Order of the next free slots: T-100, then T-104 (with T-108's watchdog, path allow-list, lease), T-110, T-115, T-101, T-106, T-111, T-113, T-114.
 - T-108 owner decisions: item 3 yes (T-110), item 6 yes (API-key last destination; keys and cap come from the owner later).
 - Then T-101 (750-754), T-106 (rank-08b, after T-101; PRD knowledge-graph K4 FR36-FR39), T-111 (rank-09b, self-learning loop: READ the owner's correction at the top of its description first: the score is many things done, good
   quality, proper standards, few avoidable human questions and few owner-found defects; tokens only third; required escalations never
@@ -85,3 +91,4 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
   slice; one fit rule is still the target.
 - 14:5x CHARTER (docs/dev-sessions/CHARTER.md) binds from now: every commit carries `Ticket: T-n` (from 3ba1b4e on; earlier commits not
   rewritten); running agents told. The force-push slip above is filed as incident T-112 (deny rule for force pushes proposed; a person's call).
+- 14:5x CHARTER is read at every start (docs/dev-sessions/CHARTER.md). Force pushes now have deny rules (coordinator). Claimed T-113, T-114, T-115.
