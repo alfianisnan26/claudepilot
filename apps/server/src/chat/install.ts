@@ -7,6 +7,10 @@ import { CP_SESSION, CP_SESSION_PATH } from './host.js';
 export const IMAGE_HOST_OUTDATED =
   "This workspace's image doesn't have the current chat host yet. It ships with the next workspace image (images/workspace): once that's published, stop and start the workspace to pull it (your home folder stays).";
 
+/** Why a Host target (a machine, no image) with delivery off can't run chat: nothing put the session host there, and nothing will. */
+export const HOST_NEEDS_DELIVERY =
+  'Chat on this machine needs Delivery: turn it on in Targets > this target > Settings (it installs the chat host in the agent user’s ~/.claudepilot), then start the session again.';
+
 /**
  * Makes sure a workspace has the current session host (`/etc/claudepilot/bin/cp-session`, root-owned
  * so the agent can't change it) before a chat session starts. The chat controller does this itself,
@@ -38,7 +42,11 @@ async function install(workspaces: Workspaces, workspaceId: string): Promise<voi
     const slash = workspaceId.indexOf('/');
     const target = workspaceId.slice(0, slash);
     const name = workspaceId.slice(slash + 1);
-    const access = workspaces.runtimeFor(target)?.delivery;
+    const runtime = workspaces.runtimeFor(target);
+    const access = runtime?.delivery;
+    // A Host target (an enrolled `local` runtime) has no image to ship the host: with delivery off it never gets one (T6: the image message
+    // sent people the wrong way).
+    if (!access && runtime?.target?.source === 'enrolled' && runtime.target.kind === 'local') throw new Error(HOST_NEEDS_DELIVERY);
     if (!access) return checkImageHost(workspaces, target, name);
     const current = await access.read(name, CP_SESSION_PATH).catch(() => null);
     if (current !== CP_SESSION) {

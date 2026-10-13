@@ -5,6 +5,7 @@ metadata:
   name: "cx4-ns"
   labels:
     claudepilot.managed: "true"
+    pod-security.kubernetes.io/enforce: "baseline"
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -99,6 +100,8 @@ spec:
       claudepilot.connect/target: "cx4-lab"
   template:
     metadata:
+      annotations:
+        claudepilot.connect/enrollment: "en_test"
       labels:
         app.kubernetes.io/name: "claudepilot-agent"
         app.kubernetes.io/part-of: "claudepilot-connect"
@@ -116,7 +119,7 @@ spec:
       initContainers:
         - name: fetch
           image: "node:22-bookworm-slim"
-          command: ["node", "-e", "const [u,h,o]=process.argv.slice(1),fs=require(\"fs\"),p=require(\"path\"),c=require(\"crypto\");const die=(m)=>{console.error(\"fetch: \"+m);process.exit(13)};if(!/^[0-9a-f]{64}$|^sha512-[A-Za-z0-9+\\/]{86}==$/.test(h||\"\")||!u||!o)die(\"usage: <url> <sha256|sha512-integrity> <out>\");const sum=(b)=>h.startsWith(\"sha512-\")?\"sha512-\"+c.createHash(\"sha512\").update(b).digest(\"base64\"):c.createHash(\"sha256\").update(b).digest(\"hex\");try{if(sum(fs.readFileSync(o))===h)process.exit(0)}catch{}const hd={},hf=process.env.PILOT_HEADERS_FILE;if(hf)for(const l of fs.readFileSync(hf,\"utf8\").split(/\\r?\\n/)){const i=l.indexOf(\":\");if(i>0)hd[l.slice(0,i).trim()]=l.slice(i+1).trim()}let n=\"\";try{n=new URL(u).pathname}catch{die(\"not an address\")}fetch(u,{headers:hd,redirect:\"follow\"}).then(async(r)=>{if(!r.ok)die(\"HTTP \"+r.status+\" for \"+n);const b=Buffer.from(await r.arrayBuffer());if(sum(b)!==h)die(\"checksum mismatch for \"+n);fs.mkdirSync(p.dirname(o),{recursive:true});fs.writeFileSync(o+\".tmp\",b,{mode:0o644});fs.renameSync(o+\".tmp\",o)},(e)=>die(\"download failed for \"+n+\" (\"+String((e&&e.cause&&e.cause.code)||(e&&e.message)||e)+\")\"));", "$(PILOT_BUNDLE_URL)", "$(PILOT_BUNDLE_SHA256)", "/agent/agent.mjs"]
+          command: ["node", "-e", "const [u,h,o]=process.argv.slice(1),fs=require(\"fs\"),p=require(\"path\"),c=require(\"crypto\");const die=(m)=>{console.error(\"fetch: \"+m);process.exit(13)};if(!/^[0-9a-f]{64}$|^sha512-[A-Za-z0-9+\\/]{86}==$/.test(h||\"\")||!u||!o)die(\"usage: <url> <sha256|sha512-integrity> <out>\");const sum=(b)=>h.startsWith(\"sha512-\")?\"sha512-\"+c.createHash(\"sha512\").update(b).digest(\"base64\"):c.createHash(\"sha256\").update(b).digest(\"hex\");try{if(sum(fs.readFileSync(o))===h)process.exit(0)}catch{}const hd={},hf=process.env.PILOT_HEADERS_FILE;if(hf&&fs.existsSync(hf))for(const l of fs.readFileSync(hf,\"utf8\").split(/\\r?\\n/)){const i=l.indexOf(\":\");if(i>0)hd[l.slice(0,i).trim()]=l.slice(i+1).trim()}let n=\"\";try{n=new URL(u).pathname}catch{die(\"not an address\")}fetch(u,{headers:hd,redirect:\"follow\"}).then(async(r)=>{if(!r.ok)die(\"HTTP \"+r.status+\" for \"+n);const b=Buffer.from(await r.arrayBuffer());if(sum(b)!==h)die(\"checksum mismatch for \"+n);fs.mkdirSync(p.dirname(o),{recursive:true});fs.writeFileSync(o+\".tmp\",b,{mode:0o644});fs.renameSync(o+\".tmp\",o)},(e)=>die(\"download failed for \"+n+\" (\"+String((e&&e.cause&&e.cause.code)||(e&&e.message)||e)+\")\"));", "$(PILOT_BUNDLE_URL)", "$(PILOT_BUNDLE_SHA256)", "/agent/agent.mjs"]
           env:
             - name: PILOT_BUNDLE_URL
               value: "https://pilot.example.com/connect/v1/agent/3f9a1c07be52/agent.mjs"

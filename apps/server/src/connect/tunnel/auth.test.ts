@@ -74,10 +74,31 @@ describe('keys', () => {
     nonCanonical[0] = 0xed;
     nonCanonical[31] = 0x7f;
     assert.equal(publicKeyProblem(b64u(nonCanonical)), 'That is not an Ed25519 public key.');
-    // the identity point (y = 1) is on the curve
+    // Points of small order are on the curve but refused (T6: the all-zero key, order 4, was enrolled on a real portal): with such a key
+    // signatures nobody made verify. The eight of them, from libsodium's list (with the sign bit both ways), and the identity (y = 1).
+    const smallOrder = [
+      '0000000000000000000000000000000000000000000000000000000000000000',
+      '0100000000000000000000000000000000000000000000000000000000000000',
+      '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05',
+      'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a',
+      'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+      '0000000000000000000000000000000000000000000000000000000000000080',
+      '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85',
+      'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa',
+    ];
+    const smallRefused = smallOrder.map((h) => publicKeyProblem(b64u(Buffer.from(h, 'hex'))));
+    assert.ok(smallRefused.slice(0, 5).every((p) => /small order/.test(p ?? '')), JSON.stringify(smallRefused));
+    // with the sign bit set, x = 0 points are not canonical; the order-8 ones are their negatives, still small
+    assert.ok(smallRefused.slice(5).every((p) => p !== null), JSON.stringify(smallRefused));
+    // and every real key still passes
+    for (let i = 0; i < 50; i++) assert.equal(publicKeyProblem(generateNodeKeyPair().publicKey), null);
+  });
+
+  test('a key of small order would let anyone sign: the identity point verifies a signature made without any private key', () => {
+    // Why the check exists: R = [S]B with A = identity passes [S]B = R + [k]A for any S. Node's verifier (OpenSSL) takes it; publicKeyProblem refuses the key.
     const identity = Buffer.alloc(32);
     identity[0] = 1;
-    assert.equal(publicKeyProblem(b64u(identity)), null);
+    assert.match(publicKeyProblem(b64u(identity)) ?? '', /small order/);
   });
 
   test('a key rotation is signed with the OLD key over the new public key', () => {

@@ -70,29 +70,51 @@ export function keyFingerprint(publicKey: string): string {
   return sha256Hex(fromB64u(publicKey)).slice(0, 32);
 }
 
-/** Whether 32 bytes encode a point of the Ed25519 curve (RFC 8032 §5.1.3). Any 32 bytes load as a key; most are not on the curve. */
-function onCurve(raw: Buffer): boolean {
-  const P = (1n << 255n) - 19n;
-  const D = (((-121665n * modInv(121666n, P)) % P) + P) % P;
+const P25519 = (1n << 255n) - 19n;
+const D25519 = (((-121665n * modInv(121666n, P25519)) % P25519) + P25519) % P25519;
+
+/** The point 32 bytes encode on the Ed25519 curve (RFC 8032 §5.1.3), or null. Any 32 bytes load as a key; most are not on the curve. */
+function decodePoint(raw: Buffer): [bigint, bigint] | null {
+  const P = P25519;
   let y = 0n;
   for (let i = 31; i >= 0; i--) y = (y << 8n) | BigInt(raw[i]!);
   const sign = (y >> 255n) & 1n;
   y &= (1n << 255n) - 1n;
-  if (y >= P) return false;
+  if (y >= P) return null;
   const y2 = (y * y) % P;
   const u = (y2 - 1n + P) % P;
-  const v = (D * y2 + 1n) % P;
+  const v = (D25519 * y2 + 1n) % P;
   // x = u v^3 (u v^7)^((p-5)/8)
   const v3 = (v * v * v) % P;
   const v7 = (v3 * v3 * v) % P;
   let x = (((u * v3) % P) * modPow((u * v7) % P, (P - 5n) / 8n, P)) % P;
   const vx2 = (v * x * x) % P;
   if (vx2 !== u) {
-    if (vx2 !== (P - u) % P) return false;
+    if (vx2 !== (P - u) % P) return null;
     x = (x * modPow(2n, (P - 1n) / 4n, P)) % P;
   }
-  if (x === 0n && sign === 1n) return false;
-  return true;
+  if (x === 0n && sign === 1n) return null;
+  if ((x & 1n) !== sign) x = P - x;
+  return [x, y];
+}
+
+/** P + Q on the curve (the complete twisted Edwards addition, a = -1). */
+function addPoints([x1, y1]: [bigint, bigint], [x2, y2]: [bigint, bigint]): [bigint, bigint] {
+  const P = P25519;
+  const t = (D25519 * ((x1 * x2) % P) * ((y1 * y2) % P)) % P;
+  const x3 = (((x1 * y2 + y1 * x2) % P) * modInv((1n + t) % P, P)) % P;
+  const y3 = (((y1 * y2 + x1 * x2) % P) * modInv((1n - t + P) % P, P)) % P;
+  return [x3, y3];
+}
+
+/**
+ * Whether a point has a small order (1, 2, 4 or 8: [8]P is the identity). Such a key verifies signatures nobody made: with the identity
+ * as the key, any (R = [S]B, S) passes. T6 enrolled one (the all-zero key, order 4) on a real portal before this check.
+ */
+function smallOrder(point: [bigint, bigint]): boolean {
+  let q = point;
+  for (let i = 0; i < 3; i++) q = addPoints(q, q);
+  return q[0] === 0n && q[1] === 1n;
 }
 
 function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
@@ -107,14 +129,18 @@ function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
   return result;
 }
 
-const modInv = (a: bigint, mod: bigint): bigint => modPow(a, mod - 2n, mod);
+function modInv(a: bigint, mod: bigint): bigint {
+  return modPow(a, mod - 2n, mod);
+}
 
 /** Why `publicKey` can't be a node's key, or null when it is 32 bytes that form an Ed25519 public key. */
 export function publicKeyProblem(publicKey: unknown): string | null {
   if (typeof publicKey !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(publicKey)) return 'The key must be 32 bytes, base64url.';
   const raw = fromB64u(publicKey);
   if (raw.length !== 32 || b64u(raw) !== publicKey) return 'The key must be 32 bytes, base64url.';
-  if (!onCurve(raw)) return 'That is not an Ed25519 public key.';
+  const point = decodePoint(raw);
+  if (!point) return 'That is not an Ed25519 public key.';
+  if (smallOrder(point)) return 'That key has a small order: it would accept signatures nobody made.';
   return null;
 }
 

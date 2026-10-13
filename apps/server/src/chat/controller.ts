@@ -2832,7 +2832,11 @@ export class ChatController {
    */
   targetState?: (workspaceId: string) => 'up' | 'down';
 
-  /** An enrolled target's node came back: the readers that waited for it follow again from their stored byte offsets. */
+  /**
+   * An enrolled target's node came back: the readers that waited for it follow again from their stored byte offsets, and a live session
+   * on it that has no reader yet (the portal restarted while the target was away: its first liveness round found it unreachable) is
+   * checked now instead of at the next round, a minute later (T6, A8 on a real cluster: the chat caught up 56 s after the agent returned).
+   */
   targetReturned(targetId: string): void {
     for (const reader of this.#readers.values()) {
       if (!reader.parked || reader.stopped) continue;
@@ -2841,6 +2845,11 @@ export class ChatController {
       reader.parked = false;
       reader.retries = 0;
       void this.#tail(reader);
+    }
+    if (this.#closed) return;
+    for (const row of this.#chat.liveRows()) {
+      if (this.#split(row.workspace_id)[0] !== targetId || this.#readers.has(row.id)) continue;
+      void this.#check(row).catch(() => undefined);
     }
   }
 

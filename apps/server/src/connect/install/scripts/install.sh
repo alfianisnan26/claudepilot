@@ -35,7 +35,7 @@ export LC_ALL
 umask 022
 
 # The bootstrap fetcher (src/connect/install/fetcher.ts; a test keeps this line equal to it).
-FETCHER='const [u,h,o]=process.argv.slice(1),fs=require("fs"),p=require("path"),c=require("crypto");const die=(m)=>{console.error("fetch: "+m);process.exit(13)};if(!/^[0-9a-f]{64}$|^sha512-[A-Za-z0-9+\/]{86}==$/.test(h||"")||!u||!o)die("usage: <url> <sha256|sha512-integrity> <out>");const sum=(b)=>h.startsWith("sha512-")?"sha512-"+c.createHash("sha512").update(b).digest("base64"):c.createHash("sha256").update(b).digest("hex");try{if(sum(fs.readFileSync(o))===h)process.exit(0)}catch{}const hd={},hf=process.env.PILOT_HEADERS_FILE;if(hf)for(const l of fs.readFileSync(hf,"utf8").split(/\r?\n/)){const i=l.indexOf(":");if(i>0)hd[l.slice(0,i).trim()]=l.slice(i+1).trim()}let n="";try{n=new URL(u).pathname}catch{die("not an address")}fetch(u,{headers:hd,redirect:"follow"}).then(async(r)=>{if(!r.ok)die("HTTP "+r.status+" for "+n);const b=Buffer.from(await r.arrayBuffer());if(sum(b)!==h)die("checksum mismatch for "+n);fs.mkdirSync(p.dirname(o),{recursive:true});fs.writeFileSync(o+".tmp",b,{mode:0o644});fs.renameSync(o+".tmp",o)},(e)=>die("download failed for "+n+" ("+String((e&&e.cause&&e.cause.code)||(e&&e.message)||e)+")"));'
+FETCHER='const [u,h,o]=process.argv.slice(1),fs=require("fs"),p=require("path"),c=require("crypto");const die=(m)=>{console.error("fetch: "+m);process.exit(13)};if(!/^[0-9a-f]{64}$|^sha512-[A-Za-z0-9+\/]{86}==$/.test(h||"")||!u||!o)die("usage: <url> <sha256|sha512-integrity> <out>");const sum=(b)=>h.startsWith("sha512-")?"sha512-"+c.createHash("sha512").update(b).digest("base64"):c.createHash("sha256").update(b).digest("hex");try{if(sum(fs.readFileSync(o))===h)process.exit(0)}catch{}const hd={},hf=process.env.PILOT_HEADERS_FILE;if(hf&&fs.existsSync(hf))for(const l of fs.readFileSync(hf,"utf8").split(/\r?\n/)){const i=l.indexOf(":");if(i>0)hd[l.slice(0,i).trim()]=l.slice(i+1).trim()}let n="";try{n=new URL(u).pathname}catch{die("not an address")}fetch(u,{headers:hd,redirect:"follow"}).then(async(r)=>{if(!r.ok)die("HTTP "+r.status+" for "+n);const b=Buffer.from(await r.arrayBuffer());if(sum(b)!==h)die("checksum mismatch for "+n);fs.mkdirSync(p.dirname(o),{recursive:true});fs.writeFileSync(o+".tmp",b,{mode:0o644});fs.renameSync(o+".tmp",o)},(e)=>die("download failed for "+n+" ("+String((e&&e.cause&&e.cause.code)||(e&&e.message)||e)+")"));'
 
 CDATA=/var/lib/claudepilot-agent
 CAGENT=/opt/claudepilot-agent
@@ -707,6 +707,13 @@ install_kubernetes() {
     [ "$_a" = yes ] || _miss="$_miss, create namespaces"
   fi
   [ -z "$_miss" ] || die 10 "Your kubectl user can't${_miss#,} in $_ns."
+  if [ "$_nsx" = 1 ]; then
+    # One agent per namespace: another target's agent there would be replaced (its Deployment's selector names its target and can't change).
+    _other=$(kc -n "$_ns" get deployment claudepilot-agent -o 'jsonpath={.metadata.labels.claudepilot\.connect/target}' 2>/dev/null || :)
+    if [ -n "$_other" ] && [ "$_other" != "$P_TARGET" ]; then
+      die 14 "$_ns already runs the agent of target $_other. Uninstall it first (PILOT_TARGET=$_other PILOT_KIND=kubernetes ... sh -s -- uninstall) or choose another namespace."
+    fi
+  fi
   step "Manifest"
   _code=$(http_get "$URL/connect/v1/manifest" "$_tmp/manifest.yaml" auth) || unreachable $?
   [ "$_code" = 200 ] || die 11 "The portal answered HTTP $_code for the manifest."
@@ -926,7 +933,8 @@ host_service_install() {
         printf 'export PILOT_DATA_DIR=%s NODE_USE_ENV_PROXY=1\n' "'$HDIR'"
         [ -n "${PILOT_CA:-}" ] && printf 'export NODE_EXTRA_CA_CERTS=%s\n' "'$HDIR/ca.pem'"
         printf 'if [ -f "$PILOT_DATA_DIR/agent.pid" ] && kill -0 "$(cat "$PILOT_DATA_DIR/agent.pid")" 2>/dev/null; then exit 0; fi\n'
-        printf 'nohup %s "$PILOT_DATA_DIR/current/agent.mjs" run >>"$PILOT_DATA_DIR/logs/agent.out" 2>&1 </dev/null &\n' "'$NODE'"
+        # 3>&-: the installer's own output (fd 3) must not stay open in the agent, or a wrapper reading it never ends (T6)
+        printf 'nohup %s "$PILOT_DATA_DIR/current/agent.mjs" run >>"$PILOT_DATA_DIR/logs/agent.out" 2>&1 </dev/null 3>&- &\n' "'$NODE'"
         printf 'echo $! >"$PILOT_DATA_DIR/agent.pid"\n'
       } >"$_tmp/start.sh"
       run cp "$_tmp/start.sh" "$HDIR/start.sh"

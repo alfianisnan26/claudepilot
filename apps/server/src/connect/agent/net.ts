@@ -77,13 +77,16 @@ export function bypassProxy(host: string, port: string, noProxy: string | null |
   return false;
 }
 
-/** The proxy to use for `target`, or null: HTTPS_PROXY for https, HTTP_PROXY for http (either case), unless NO_PROXY says no. */
+/** The proxy to use for `target`, or null: HTTPS_PROXY for https and wss, HTTP_PROXY for http and ws (either case), unless NO_PROXY says no. */
 export function proxyFor(target: URL, cfg: NetConfig = {}): URL | null {
   const env = cfg.env ?? process.env;
-  const raw = cfg.proxy !== undefined ? cfg.proxy : target.protocol === 'https:' ? (env.HTTPS_PROXY ?? env.https_proxy) : (env.HTTP_PROXY ?? env.http_proxy);
+  // The tunnel is `wss:` (or `ws:`): the same as https (http) here. T6 saw an agent behind a proxy enroll (https) and then never connect
+  // (wss looked for HTTP_PROXY, found none, and resolved the portal's name itself).
+  const secure = target.protocol === 'https:' || target.protocol === 'wss:';
+  const raw = cfg.proxy !== undefined ? cfg.proxy : secure ? (env.HTTPS_PROXY ?? env.https_proxy) : (env.HTTP_PROXY ?? env.http_proxy);
   if (!raw) return null;
   const noProxy = cfg.noProxy !== undefined ? cfg.noProxy : (env.NO_PROXY ?? env.no_proxy);
-  const port = target.port || (target.protocol === 'https:' ? '443' : '80');
+  const port = target.port || (secure ? '443' : '80');
   if (bypassProxy(target.hostname, port, noProxy)) return null;
   try {
     const url = new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `http://${raw}`);

@@ -29,6 +29,7 @@ import { KubeSecretIdentityStore } from './identity.kube.js';
 import { createLogger, type Logger } from './log.js';
 import { transportAgent, type NetConfig } from './net.js';
 import { buildHello } from './hello.js';
+import { isDeadIdentity } from './reenroll.js';
 import { createServices, type ServiceDeps } from './services/index.js';
 import type { AgentService, ServiceName } from './services/types.js';
 
@@ -82,7 +83,7 @@ export interface RunAgentOptions {
   /** Kubernetes and host overrides for the service factory (a test's fake API server, a temporary home). */
   serviceDeps?: Pick<ServiceDeps, 'kube' | 'host'>;
   /** The reconnect and wait parameters; tests shrink them. */
-  timing?: { fatalMs?: number; notEnrolledPollMs?: number; rekeyWaitMs?: number };
+  timing?: { fatalMs?: number; notEnrolledPollMs?: number; rekeyWaitMs?: number; identityPollMs?: number };
   /** Called at each step of a key rotation; throwing simulates a crash right there (the agent dies without cleanup). */
   rotationHook?: (step: 'saved-next' | 'rekey-sent' | 'answered' | 'promoted') => void | Promise<void>;
 }
@@ -141,6 +142,8 @@ class AgentRuntime {
   #resolveDone!: () => void;
   readonly #done = new Promise<void>((r) => (this.#resolveDone = r));
   #stopping = false;
+  /** The token of the environment was tried on a dead identity already (it does not change while the process runs). */
+  #reenrolled = false;
 
   constructor(opts: RunAgentOptions) {
     this.#opts = opts;
@@ -289,10 +292,21 @@ class AgentRuntime {
       if (this.#abort.signal.aborted) break;
       const held = this.#clock.now() - started;
       if (outcome.kind === 'fatal') {
+        // The portal will never take this identity again, and the environment carries a token (a new command applied): enroll with it.
+        if (isDeadIdentity(outcome.code) && this.#config.enrollToken && !this.#reenrolled) {
+          this.#reenrolled = true;
+          log.warn('identity.dead', { code: outcome.code, node: this.#identity?.node ?? null, next: 'enrolling with the token of this environment' });
+          if (await this.#enrollWithToken(this.#config.enrollToken)) {
+            attempt = 0;
+            continue;
+          }
+          if (this.#abort.signal.aborted) break;
+        }
         log.error('connect.fatal', { code: outcome.code, message: outcome.message, retryInS: Math.round(this.#fatalMs / 1000) });
         this.#events.emit('refused', { code: outcome.code, message: outcome.message, fatal: true, waitMs: this.#fatalMs });
         this.#setState('waiting');
-        if (!(await this.#sleep(this.#fatalMs))) break;
+        const waited = await this.#waitFatal();
+        if (waited === 'stopped') break;
         attempt = 0;
         continue;
       }
@@ -307,6 +321,44 @@ class AgentRuntime {
       if (!(await this.#sleep(wait))) break;
     }
     return this.#finish();
+  }
+
+  /**
+   * The hour after a fatal rejection, cut short when the identity in the store changes under the agent: the installer of a new command enrolled
+   * this machine again (`enroll` replaced the identity the portal had declared dead) without restarting the agent that keeps running.
+   */
+  async #waitFatal(): Promise<'slept' | 'replaced' | 'stopped'> {
+    const local = new AbortController();
+    const onStop = () => local.abort();
+    this.#abort.signal.addEventListener('abort', onStop, { once: true });
+    let replaced: Identity | null = null;
+    const poll = setInterval(() => {
+      void this.#store.load().then(
+        (id) => {
+          if (id && this.#identity && id.publicKey !== this.#identity.publicKey && !local.signal.aborted) {
+            replaced = id;
+            local.abort();
+          }
+        },
+        () => undefined,
+      );
+    }, this.#opts.timing?.identityPollMs ?? 15_000);
+    poll.unref?.();
+    try {
+      await this.#clock.sleep(this.#fatalMs, local.signal);
+    } catch {
+      // cut short: stopped, or the identity changed
+    } finally {
+      clearInterval(poll);
+      this.#abort.signal.removeEventListener('abort', onStop);
+    }
+    if (this.#abort.signal.aborted) return 'stopped';
+    if (replaced) {
+      this.#identity = replaced;
+      this.#log.info('identity.replaced', { node: (replaced as Identity).node, fingerprint: fingerprintOf(replaced) });
+      return 'replaced';
+    }
+    return 'slept';
   }
 
   async #finish(): Promise<void> {
@@ -367,10 +419,18 @@ class AgentRuntime {
       this.#setState('waiting');
       return false;
     }
+    return this.#enrollWithToken(token, true);
+  }
+
+  /** Enrolls with `token` (the identity it makes replaces any other in the store). True on success; on a refusal, says why and, when `waitOnRefusal`, waits like any fatal answer. */
+  async #enrollWithToken(token: string, waitOnRefusal = false): Promise<boolean> {
+    const log = this.#log;
+    const url = this.#config.url ?? this.#identity?.portalUrl;
+    if (!url) return false;
     this.#setState('enrolling');
     try {
       this.#identity = await enroll({
-        url: this.#config.url,
+        url,
         token,
         hello: this.#hello(),
         nodeName: this.#config.nodeName,
@@ -388,7 +448,7 @@ class AgentRuntime {
       log.error('enroll.failed', { reason: e.reason, message: e.message, hint: e.hint });
       this.#events.emit('refused', { code: e.reason, message: e.message, fatal: !retry, waitMs: retry ? (this.#opts.timing?.notEnrolledPollMs ?? 30_000) : this.#fatalMs });
       this.#setState('waiting');
-      if (!retry && !(await this.#sleep(this.#fatalMs))) return false;
+      if (waitOnRefusal && !retry && !(await this.#sleep(this.#fatalMs))) return false;
       return false;
     }
   }

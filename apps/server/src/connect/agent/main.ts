@@ -15,6 +15,7 @@ import { enroll, EnrollError } from './enroll.js';
 import { buildHello } from './hello.js';
 import { FileIdentityStore, fingerprintOf, IdentityError, type IdentityStore } from './identity.js';
 import { createLogger, type Logger } from './log.js';
+import { probeIdentity } from './reenroll.js';
 import type { NetConfig } from './net.js';
 
 export interface MainIo {
@@ -122,14 +123,21 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, build: string
       const log = quietLog(config);
       try {
         const store = storeOf(config);
-        if (await store.load().catch(() => null)) {
-          io.stderr('This machine is already enrolled. Remove the identity (or revoke the node and uninstall) to enroll again.\n');
-          return 0;
+        const hello = () => buildHello(config, { build, version: CONNECT_AGENT_VERSION, startedAt: new Date().toISOString() });
+        const existing = await store.load().catch(() => null);
+        if (existing) {
+          // A new command on a machine that has an identity: keep it unless the portal says it is dead (revoked, removed, unknown); then the token replaces it.
+          const probe = await probeIdentity({ identity: existing, url: config.url, hello, net: await netConfig(config) });
+          if (probe.state !== 'dead') {
+            io.stderr('This machine is already enrolled. Remove the identity (or revoke the node and uninstall) to enroll again.\n');
+            return 0;
+          }
+          io.stderr(`The portal no longer accepts node ${existing.node} (${probe.code}): enrolling again with this token.\n`);
         }
         const identity = await enroll({
           url: config.url,
           token,
-          hello: buildHello(config, { build, version: CONNECT_AGENT_VERSION, startedAt: new Date().toISOString() }),
+          hello: hello(),
           nodeName: config.nodeName,
           net: await netConfig(config),
           store,

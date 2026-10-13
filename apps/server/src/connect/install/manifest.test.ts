@@ -43,6 +43,7 @@ test('the manifest’s structure: namespaced objects, the Role of §13.5, restri
   const [ns, ...objects] = docs;
   assert.equal(ns!.metadata.name, 'cx4-ns');
   assert.equal(ns!.metadata.labels?.['claudepilot.managed'], 'true');
+  assert.equal(ns!.metadata.labels?.['pod-security.kubernetes.io/enforce'], 'baseline', 'the API server refuses privileged pods there too (T6)');
   for (const d of objects) {
     assert.equal(d.metadata.namespace, 'cx4-ns', `${d.kind} is namespaced`);
     assert.equal(d.metadata.labels?.['app.kubernetes.io/part-of'], 'claudepilot-connect');
@@ -62,6 +63,9 @@ test('the manifest’s structure: namespaced objects, the Role of §13.5, restri
   assert.equal(dep.spec.strategy.type, 'Recreate');
   const pod = dep.spec.template.spec;
   assert.equal(dep.spec.template.metadata.labels['claudepilot.managed'], undefined);
+  // A new command is a new template, so applying it restarts the agent with the new token (T6: a revoked node could not be enrolled again).
+  assert.equal(dep.spec.template.metadata.annotations['claudepilot.connect/enrollment'], input().enrollment.id);
+  assert.notEqual(buildManifest(input({ enrollment: { ...input().enrollment, id: 'en_other0000000' } })), text);
   assert.deepEqual(pod.securityContext, { runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, fsGroup: 65534, seccompProfile: { type: 'RuntimeDefault' } });
   for (const c of [...pod.initContainers, ...pod.containers]) {
     assert.deepEqual(c.securityContext, { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ['ALL'] } });

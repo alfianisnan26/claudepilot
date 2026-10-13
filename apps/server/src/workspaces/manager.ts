@@ -55,6 +55,8 @@ const timeout = <T>(p: Promise<T>, ms: number) =>
 export class Workspaces {
   readonly #runtimes = new Map<string, Runtime>();
   readonly #pending = new Map<string, Workspace>();
+  /** Creates in flight at the restart whose enrolled target had not come back yet: resumed by `recheck` when it does. */
+  readonly #awaitingTarget = new Set<string>();
   /** Per target: the last check's result and when it finished, and the check in flight (one at a time). */
   readonly #known = new Map<string, { at: number; target: WorkspaceTarget }>();
   readonly #checking = new Map<string, Promise<WorkspaceTarget>>();
@@ -145,33 +147,39 @@ export class Workspaces {
     // Enrolled targets come back over their tunnels a few seconds after a restart: judge a pending create on one only after that (FR38).
     if (saved.some((w) => w.status === 'creating')) await this.hooks.settled?.(SETTLE_MS).catch(() => undefined);
     const targets = await this.targets(true);
-    await Promise.all(
-      saved
-        .filter((w) => w.status === 'creating')
-        .map(async (w) => {
-          const workspace = this.#pending.get(w.id)!;
-          const target = targets.find((t) => t.id === w.target);
-          if (!target?.available) {
-            const why = target ? `${target.label} isn’t reachable: ${target.problem}` : `No target “${w.target}”.`;
-            return this.#setPending({ ...workspace, status: 'error', detail: `Could not resume after restart. ${why}` });
-          }
-          const runtime = this.#runtime(target.id);
-          try {
-            const found = (await runtime.list()).find((x) => x.name === w.name);
-            if (found) {
-              // The runtime got far enough to hold it; finish the job if it never started.
-              if (found.status === 'stopped') await runtime.start(w.name);
-              this.#deletePending(w.id);
-              console.log(`[workspaces] ${w.id} was created before the restart`);
-              return;
-            }
-          } catch (e) {
-            return this.#setPending({ ...workspace, status: 'error', detail: runtimeMessage(e) });
-          }
-          console.log(`[workspaces] resuming create of ${w.id}`);
-          this.#launch(runtime, workspace);
-        }),
-    );
+    await Promise.all(saved.filter((w) => w.status === 'creating').map((w) => this.#resumeOne(this.#pending.get(w.id)!, targets.find((t) => t.id === w.target))));
+  }
+
+  /**
+   * One create that was in flight at the restart. An enrolled target that has not come back yet keeps it waiting (its agent may still be in
+   * its reconnect backoff, up to a minute after a crash: T6 saw one fail here 20 s after the restart); it resumes when the target returns
+   * (`recheck`), and can be removed meanwhile like any pending one. A scanned target, or one that is gone, fails it as before.
+   */
+  async #resumeOne(workspace: Workspace, target: WorkspaceTarget | undefined): Promise<void> {
+    if (!target?.available) {
+      if (target?.source === 'enrolled') {
+        this.#awaitingTarget.add(workspace.id);
+        return this.#setPending({ ...workspace, status: 'creating', detail: `Waiting for ${target.label} to reconnect` });
+      }
+      const why = target ? `${target.label} isn’t reachable: ${target.problem}` : `No target “${workspace.target}”.`;
+      return this.#setPending({ ...workspace, status: 'error', detail: `Could not resume after restart. ${why}` });
+    }
+    const runtime = this.#runtime(target.id);
+    try {
+      const found = (await runtime.list()).find((x) => x.name === workspace.name);
+      if (found) {
+        // The runtime got far enough to hold it; finish the job if it never started.
+        if (found.status === 'stopped') await runtime.start(workspace.name);
+        this.#deletePending(workspace.id);
+        console.log(`[workspaces] ${workspace.id} was created before the restart`);
+        return;
+      }
+    } catch (e) {
+      return this.#setPending({ ...workspace, status: 'error', detail: runtimeMessage(e) });
+    }
+    console.log(`[workspaces] resuming create of ${workspace.id}`);
+    this.#setPending({ ...workspace, detail: 'Resuming after restart' });
+    this.#launch(runtime, this.#pending.get(workspace.id)!);
   }
 
   /**
@@ -225,7 +233,14 @@ export class Workspaces {
     const was = this.#known.get(targetId)?.target.available;
     this.#checking.delete(targetId);
     const now = await this.#check(runtime);
-    if (this.#runtimes.get(targetId) === runtime && now.available !== was) this.hooks.changed?.();
+    if (this.#runtimes.get(targetId) !== runtime) return;
+    if (now.available !== was) this.hooks.changed?.();
+    // Creates that waited for this target since the restart go on now.
+    if (now.available) {
+      const waiting = [...this.#pending.values()].filter((w) => w.target === targetId && this.#awaitingTarget.has(w.id));
+      for (const w of waiting) this.#awaitingTarget.delete(w.id); // once: two nodes returning at once must not launch it twice
+      await Promise.all(waiting.map((w) => this.#resumeOne(w, now)));
+    }
   }
 
   async list(): Promise<Workspace[]> {
@@ -341,6 +356,7 @@ export class Workspaces {
   }
 
   #deletePending(id: string) {
+    this.#awaitingTarget.delete(id);
     if (this.#pending.delete(id)) this.#save();
     this.hooks.changed?.();
   }
@@ -390,6 +406,12 @@ export class Workspaces {
 
   async remove(target: string, name: string) {
     const id = workspaceId(target, name);
+    // A create that waits for its target to come back has not started here: removing it forgets it (whatever the target already made shows up in its list when it returns).
+    if (this.#awaitingTarget.has(id)) {
+      this.#deletePending(id);
+      console.log(`[workspaces] dropped the waiting create of ${id}`);
+      return;
+    }
     if (this.#pending.get(id)?.status === 'creating')
       throw new AppError('CONFLICT', 'Wait for it to finish creating, then remove it.');
     this.#deletePending(id);

@@ -139,9 +139,12 @@ describe('a docker agent against the real hub (A1 and A10 in their test form)', 
       assert.ok(fake.containers.has(agentOwn.id));
 
       // Counted in the status the portal got, and audited with the rule.
-      await until(() => portal.events('e2e-dock').filter((e) => e.type === 'policy.denied').length >= 6, 15_000);
+      // Five rules, one audit row each (a rule is audited once in ten minutes per node). The sixth row this waited for was a reset stream
+      // counted as a `body` denial, which T6 found false and removed.
+      await until(() => portal.events('e2e-dock').filter((e) => e.type === 'policy.denied').length >= 5, 15_000);
       const rules = new Set(portal.events('e2e-dock').filter((e) => e.type === 'policy.denied').map((e) => String(e.detail.rule)));
       for (const rule of ['create.privileged', 'create.bind', 'volume.options', 'unmanaged', 'path']) assert.ok(rules.has(rule), `${rule} was audited: ${[...rules]}`);
+      assert.ok(!rules.has('body'), `nothing was refused for its body: ${[...rules]}`);
     } finally {
       await fake.stop();
     }

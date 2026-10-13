@@ -11,7 +11,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { runMuxConformance, type MakeSessionPair, type SessionPair } from './conformance.js';
 import { FRAME_FLAG, FRAME_TYPE, dataFrame, encodeHeader, goAwayFrame, pingFrame, windowUpdateFrame } from './frame.js';
 import { memoryPair, type MemorySocket } from './memory.js';
-import { MuxSession, defaultMuxLimits, type MuxCloseInfo, type MuxStream } from './mux.js';
+import { CONTROL_BACKLOG, MuxSession, defaultMuxLimits, type MuxCloseInfo, type MuxSocket, type MuxStream } from './mux.js';
 import { TUNNEL_WS_OPTIONS, WsMuxSocket } from './ws.js';
 
 const makeMemory =
@@ -197,6 +197,56 @@ describe('mux violations', () => {
     assert.deepEqual(p.streams.map((s) => s.id), [1, 3, 5]);
     assert.equal(p.session.closed, false);
     p.session.destroy();
+  });
+});
+
+describe('a peer that reads nothing (T6)', () => {
+  /** A socket whose peer never reads: nothing handed to it ever leaves, so the mux stays over its high-water mark. The test injects what the peer sends. */
+  function stuckSocket() {
+    let deliver: (data: Buffer, isBinary: boolean) => void = () => undefined;
+    const closes: number[] = [];
+    let sent = 0;
+    const socket: MuxSocket = {
+      send: (data) => void (sent += data.length),
+      get bufferedAmount() {
+        return 1 << 20;
+      },
+      close: (code) => void closes.push(code),
+      terminate: () => void closes.push(1006),
+      onMessage: (fn) => void (deliver = fn),
+      onClose: () => undefined,
+      onError: () => undefined,
+    };
+    return { socket, closes, sent: () => sent, push: (data: Buffer) => deliver(data, true) };
+  }
+  const burst = (frame: (i: number) => Buffer, n: number) => Buffer.concat(Array.from({ length: n }, (_, i) => frame(i)));
+
+  test('a flood of pings it never reads the answers to ends the session instead of growing the queue', () => {
+    const peer = stuckSocket();
+    const log: string[] = [];
+    const session = new MuxSession({ role: 'server', socket: peer.socket, log: (l) => log.push(l) });
+    // one message holds about 87,000 pings (1 MiB); twenty such would have queued 1.7 million answers before the fix
+    for (let i = 0; i < 20 && !session.closed; i++) peer.push(burst((j) => pingFrame(false, i * 1000 + j), 1000));
+    assert.equal(session.closed, true, 'the session ended');
+    assert.equal(peer.closes[0], 1002);
+    assert.match(log.join('\n'), /asks for more than it reads/);
+  });
+
+  test('so does a flood of SYNs past the stream cap (each one would be answered with an RST)', () => {
+    const peer = stuckSocket();
+    const held: MuxStream[] = [];
+    const session = new MuxSession({ role: 'server', socket: peer.socket, limits: { maxStreams: 4 }, onStream: (s) => void held.push(s) });
+    for (let i = 0; i < 10 && !session.closed; i++) peer.push(burst((j) => dataFrame(1 + 2 * (i * 1000 + j), FRAME_FLAG.syn, Buffer.alloc(0)), 1000));
+    assert.equal(session.closed, true);
+    assert.equal(peer.closes[0], 1002);
+  });
+
+  test('a few pings while the link is busy are still answered (a legitimate slow link is not cut off)', () => {
+    const peer = stuckSocket();
+    const session = new MuxSession({ role: 'server', socket: peer.socket });
+    peer.push(burst((j) => pingFrame(false, j), Math.min(100, CONTROL_BACKLOG - 1)));
+    assert.equal(session.closed, false);
+    session.destroy();
   });
 });
 

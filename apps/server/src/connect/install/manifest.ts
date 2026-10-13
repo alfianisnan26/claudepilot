@@ -4,7 +4,8 @@
 //
 // - The Namespace is the FIRST document and ends at the first `---` line: the installer drops it when the namespace already exists, so
 //   an existing namespace is never relabelled.
-// - Namespaced objects only; the Role is the allowlist of §13.5 (the agent's proxy enforces appendix B on top of it).
+// - Namespaced objects only; the Role is the allowlist of §13.5 (the agent's proxy enforces appendix B on top of it). A namespace the
+//   manifest creates enforces Pod Security `baseline`.
 // - The token is in the Secret `claudepilot-agent-enroll` (the bearer that asked for this manifest; a used token is inert). The admin's
 //   preview passes `<token>` instead.
 // - Nothing here carries `claudepilot.managed`, so `KubernetesRuntime.list()` never sees the agent as a workspace.
@@ -62,7 +63,9 @@ export function buildManifest(input: ManifestInput): string {
   const caMount = ca ? ['            - { name: ca, mountPath: /etc/claudepilot-ca, readOnly: true }'] : [];
   const docs: string[] = [];
 
-  docs.push(['apiVersion: v1', 'kind: Namespace', 'metadata:', `  name: ${q(ns)}`, '  labels:', '    claudepilot.managed: "true"'].join('\n'));
+  // Pod Security `baseline` (T6, checked on k3s 1.35: the agent and the workspace pods pass it): the second wall behind the agent's proxy, so a
+  // Deployment made with the agent's Role can't ask for privileged mode, host paths or the host's network even if the proxy were bypassed.
+  docs.push(['apiVersion: v1', 'kind: Namespace', 'metadata:', `  name: ${q(ns)}`, '  labels:', '    claudepilot.managed: "true"', '    pod-security.kubernetes.io/enforce: "baseline"'].join('\n'));
   docs.push(['apiVersion: v1', 'kind: ServiceAccount', meta(AGENT_NAME), 'automountServiceAccountToken: true'].join('\n'));
   docs.push(
     [
@@ -106,6 +109,10 @@ export function buildManifest(input: ManifestInput): string {
       `      claudepilot.connect/target: ${q(target.id)}`,
       '  template:',
       '    metadata:',
+      // The command's enrollment: a new command changes the template, so `kubectl apply` restarts the agent with the new token (a revoked
+      // or removed node then enrolls again with it; a healthy one reconnects with its own identity). T6 saw a new command change nothing.
+      '      annotations:',
+      `        claudepilot.connect/enrollment: ${q(input.enrollment.id)}`,
       '      labels:',
       labels({}, '        '),
       '    spec:',

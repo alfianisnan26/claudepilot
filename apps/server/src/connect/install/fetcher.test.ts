@@ -84,3 +84,13 @@ test('extra headers come from PILOT_HEADERS_FILE and are never printed', async (
   assert.equal(seen[0]!['cf-access-client-secret'], 'canary-secret');
   assert.doesNotMatch(r.stdout + r.stderr, /canary/);
 });
+
+test('a PILOT_HEADERS_FILE that is not there means no extra headers (the Kubernetes manifest names one whose Secret is optional)', async () => {
+  // Seen on a real cluster (T6): every Kubernetes install without PILOT_HEADERS crashed in the fetch init container with ENOENT.
+  const out = join(dir, 'e.mjs');
+  seen = [];
+  const r = await fetchTo([`${base}/agent.mjs`, sha256(BODY), out], { PILOT_HEADERS_FILE: join(dir, 'no-such-dir', 'headers') });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(readFileSync(out), BODY);
+  assert.equal(seen[0]!['cf-access-client-secret'], undefined);
+});
