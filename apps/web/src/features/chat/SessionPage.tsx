@@ -430,6 +430,7 @@ export function SessionPage() {
           <div hidden={cramped} className="pointer-events-none absolute inset-x-0 top-0 z-30 pt-[var(--bar-top)] pr-[var(--bar-right)] pl-[var(--bar-left)]">
             <header
               data-session-header=""
+              data-popover-ceiling=""
               className={cn(
                 'glass-card pointer-events-auto relative isolate mx-auto flex h-[52px] max-w-[760px] items-center gap-1 rounded-full p-1',
                 bypass && 'border-danger/50',
