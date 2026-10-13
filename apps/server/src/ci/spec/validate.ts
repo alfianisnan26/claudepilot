@@ -43,6 +43,8 @@ export interface PJob {
   continueOnError: boolean;
   steps: PStep[];
   artifacts: { paths: string[]; expireDays: number; when: 'success' | 'always' } | null;
+  /** The environment it deploys to (PRD FR41): the portal decides from its own record whether a person must approve it first. */
+  environment: string | null;
 }
 
 export interface Pipeline {
@@ -384,9 +386,24 @@ function readOn(d: Diags, v: unknown): { on: Pipeline['on']; inputs: CiInput[] }
 const JOB_KEYS = ['name', 'needs', 'if', 'timeout', 'timeout-minutes', 'env', 'secrets', 'continue-on-error', 'strategy', 'steps', 'artifacts', 'environment', 'extends', 'runs-on'] as const;
 const STEP_KEYS = ['name', 'run', 'env', 'if', 'working-directory', 'timeout', 'timeout-minutes', 'continue-on-error', 'uses'] as const;
 const NOT_YET: Record<string, string> = {
-  environment: 'Environments and deployments arrive in a later milestone.',
   extends: 'extends arrives in a later milestone.',
 };
+const ENVIRONMENT_NAME = /^[a-z0-9][a-z0-9._-]{0,39}$/;
+
+/** `environment: production` or `environment: { name: production }` (GitHub's shapes; `url` is accepted and not used yet). */
+function environmentOf(d: Diags, raw: unknown, path: readonly PathSeg[]): string | null {
+  if (raw === undefined) return null;
+  let name: unknown = raw;
+  if (isObj(raw)) {
+    checkKeys(d, raw, path, ['name', 'url']);
+    name = raw.name;
+  }
+  if (typeof name !== 'string' || !ENVIRONMENT_NAME.test(name)) {
+    d.error(isObj(raw) ? [...path, 'name'] : path, 'bad-environment', 'An environment is a name such as production.', 'Lowercase letters, digits, . _ and -, at most 40.');
+    return null;
+  }
+  return name;
+}
 
 const USES_HINT: [RegExp, string][] = [
   [/^actions\/setup-/, 'Node, git and the usual tools are in the workspace. Install anything else with `run`.'],
@@ -613,6 +630,7 @@ function readJob(d: Diags, id: string, raw: unknown, scopeBase: { inputs: Set<st
     continueOnError: boolOf(d, raw, 'continue-on-error', path),
     steps,
     artifacts: readArtifacts(d, raw.artifacts, [...path, 'artifacts']),
+    environment: environmentOf(d, raw.environment, [...path, 'environment']),
   };
 }
 

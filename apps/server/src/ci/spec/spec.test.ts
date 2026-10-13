@@ -312,7 +312,18 @@ test('matrix: one job per combination, needs wait for all of them, names say whi
 
 test('not-yet features are errors until they are built, schedules included', () => {
   const got = codes('.pilot/x.yml', 'on:\n  schedule: [{cron: "0 3 * * *"}]\njobs:\n  a:\n    environment: prod\n    extends: .base\n    steps: [{run: x}]\n');
-  assert.equal(got.filter((c) => c === 'error:not-yet').length, 3);
+  assert.equal(got.filter((c) => c === 'error:not-yet').length, 2, 'environment is built (FR41)');
+});
+
+test('environment: a name or { name, url }; it reaches the plan, and no approval gate comes from the file', () => {
+  const ok = validatePipeline('.pilot/deploy.yml', 'on: manual\njobs:\n  a:\n    environment: production\n    steps: [{run: x}]\n  b:\n    environment: { name: staging, url: "https://x.example" }\n    steps: [{run: x}]\n');
+  assert.deepEqual(ok.info.diagnostics, []);
+  assert.deepEqual(ok.pipeline!.jobs.map((j) => j.environment), ['production', 'staging']);
+  const c = compile(ok.pipeline!, { event: 'manual', ref: 'refs/heads/main', sha: 'a'.repeat(40), base: null, actor: 'ui', repo: 'app', ticket: null, inputs: {}, workspace: 'docker/x', runId: 'rabc123', runNumber: 1 }, { maxParallel: 2 });
+  assert.ok(c.ok);
+  if (c.ok) assert.deepEqual(c.plan.jobs.map((j) => [j.environment, j.approval]), [['production', null], ['staging', null]]);
+  assert.deepEqual(codes('.pilot/d.yml', 'on: manual\njobs:\n  a:\n    environment: Production!\n    steps: [{run: x}]\n'), ['error:bad-environment']);
+  assert.deepEqual(codes('.pilot/d.yml', 'on: manual\njobs:\n  a:\n    environment: { name: prod, gate: x }\n    steps: [{run: x}]\n'), ['error:unknown-key']);
 });
 
 test('diagnostics carry the line and column of the key or value, and a syntax error says where', () => {

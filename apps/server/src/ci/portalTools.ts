@@ -2,15 +2,21 @@
 // per-session token (interface I8) reaches only its own runs: those of the branch its session works on and of its ticket, in
 // its workspace, never anyone else's. Text that came from a workspace (log lines, commit subjects, step names, diagnostics) is
 // handed over labelled as untrusted. Nothing here returns a secret: logs were redacted when they were kept.
+// Deployments (PRD FR41): an agent may START a pipeline that deploys (a job names an `environment:`) on any branch of its own workspace's
+// remotes, because the portal holds each job for a protected environment until a PERSON approves it in the UI. No tool approves, rejects or
+// changes an environment's protection: those are routes a signed-in person calls, and an agent's token reaches no route.
 import { AppError } from '@isnanme/core';
 import { CI_STATUSES, type CiRun, type CiRunSummary, type CiStatus } from '@portal/contracts';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
+import { declareCiPolicies } from './authz.js';
 import type { CiService } from './service.js';
 import type { CiSessionsPort } from './sessions.js';
 
-const forbidden = (what: string) => new AppError('FORBIDDEN', what);
+/** Where a person approves a run's deployment: the run page of the portal. */
+export const runLink = (id: string): string => `/admin/ci/runs/${encodeURIComponent(id)}`;
 
 export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefined, registry: ToolRegistry = portalTools): void {
+  declareCiPolicies();
   /** What an agent owns: runs of its session's branch, and of its session's ticket, in its workspace. */
   const own = (ctx: PortalToolContext, run: Pick<CiRunSummary, 'workspaceId' | 'sessionId' | 'ticketId' | 'branch'>): boolean => {
     if (!ctx.isAgent) return true;
@@ -87,7 +93,9 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
   registry.register({
     name: 'ci_run_get',
     title: 'Get a CI run',
-    description: 'One run with its jobs and steps, their status, exit codes and durations, and what was wrong with the pipeline file when it was invalid.',
+    description:
+      'One run with its jobs and steps, their status, exit codes and durations, and what was wrong with the pipeline file when it was invalid. ' +
+      'A job with status "waiting" is held for a person\'s approval (deployments): tell the person to approve it on the run page (`link`); you can not approve it.',
     scope: 'agent',
     hints: { readOnly: true },
     input: z.object({ id: z.string().max(40).describe('A run id from ci_runs_list.') }),
@@ -106,6 +114,9 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
           artifacts: j.artifacts.map((a) => ({ path: a.path, bytes: a.bytes })),
         })),
         diagnostics: run.diagnostics.map((d) => ({ file: d.file, line: d.line, column: d.column, code: d.code, message: ctx.untrusted(d.message, 'ci:diagnostic', 300), hint: ctx.untrusted(d.hint ?? null, 'ci:diagnostic', 300) })),
+        deployments: run.deployments.map((d) => ({ job: d.job, environment: d.environment, approval: d.approval, decided_by: d.decidedBy, decided_at: d.decidedAt, outcome: d.outcome })),
+        waiting_for_approval: run.deployments.filter((d) => d.approval === 'waiting').map((d) => `${d.job} → ${d.environment}`),
+        link: runLink(run.id),
       };
     },
   });
@@ -163,7 +174,13 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
   registry.register({
     name: 'ci_run_trigger',
     title: 'Start a CI run',
-    description: 'Starts a pipeline that has a manual trigger, on a branch or tag of a workspace remote. An agent can start one only on the branch its own session works on.',
+    description:
+      'Starts a pipeline that has a manual trigger, on a branch or tag of a workspace remote. An agent can start one on the branch its own session works on, ' +
+      'or a DEPLOYMENT pipeline (one that names an environment, e.g. "deploy") on any branch of a remote in its own workspace: its deploying job then waits ' +
+      'for a person to approve it in the portal (unless they turned that environment\'s protection off). ' +
+      'To deploy ClaudePilot from its development workspace: repo "claudepilot", pipeline "deploy", ref "integration"; inputs: images ("portal", "portal,workspace", ' +
+      '"portal,workspace,workspace-dev" or "none"), gate (true: run the release gate first), deploy (false: build only), dry_run (true: print every action, change nothing). ' +
+      'Then poll ci_run_get: say "waiting for approval" with the link when a job waits, and report the result.',
     scope: 'agent',
     rate: { perHour: 20 },
     input: z.object({
@@ -178,14 +195,22 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
       if (!workspaceId) throw new AppError('VALIDATION_FAILED', 'Say which workspace: workspace_id.');
       const repo = (await ci.repos(workspaceId)).find((r) => r.name === args.repo);
       if (!repo) throw new AppError('NOT_FOUND', `There is no remote ${args.repo} in ${workspaceId}.`);
+      let deploymentOnly: string | undefined;
       if (ctx.isAgent) {
         const me = ctx.sessionId ? sessions?.get(ctx.sessionId) : null;
         const ref = args.ref.replace(/^refs\/heads\//, '');
-        if (!me?.branch || ref !== me.branch) throw forbidden(`An agent can start a run only on the branch its own session works on${me?.branch ? ` (${me.branch})` : ', and this session has no worktree branch'}.`);
+        // Not its own branch: only a pipeline whose deploying jobs the portal holds for a person (the service checks the file it reads).
+        if (!me?.branch || ref !== me.branch)
+          deploymentOnly = `An agent can start a run only on the branch its own session works on${me?.branch ? ` (${me.branch})` : ', and this session has no worktree branch'}, or a pipeline that deploys to an environment.`;
       }
-      const run = await ci.startRun({ repoId: repo.id, pipeline: args.pipeline, ref: args.ref, inputs: args.inputs }, ctx.actor);
+      const run = await ci.startRun({ repoId: repo.id, pipeline: args.pipeline, ref: args.ref, inputs: args.inputs }, ctx.actor, { sessionId: ctx.isAgent ? ctx.sessionId : null, deploymentOnly });
       ctx.affected(`ci-run:${run.id}`);
-      return { summary: `Started run #${run.number} of ${run.pipeline} on ${run.branch ?? run.tag ?? args.ref}.`, run: runView(ctx, run) };
+      const held = run.deployments.filter((d) => d.approval === 'pending').map((d) => d.environment);
+      return {
+        summary: `Started run #${run.number} of ${run.pipeline} on ${run.branch ?? run.tag ?? args.ref}.${held.length ? ` Deploying to ${[...new Set(held)].join(', ')} waits for a person's approval in the portal.` : ''}`,
+        run: runView(ctx, run),
+        link: runLink(run.id),
+      };
     },
   });
 

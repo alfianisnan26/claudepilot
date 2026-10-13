@@ -369,6 +369,8 @@ const ci = new CiService(store, new WorkspacesCiHost(workspaces), {
   redactFor: ciValues.redactFor,
   streamFor: ciValues.streamFor,
   secrets: (id, name) => secretName(references, id, name),
+  // Deployment approvals and environment protection changes (FR41) go to the platform audit, created further down.
+  audit: (e) => platform.audit.record(e),
 });
 registerCiTools(ci, ciSessions);
 ci.onChange = () => notify('ci');

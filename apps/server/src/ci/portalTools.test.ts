@@ -99,3 +99,54 @@ test('tools: an admin reads and starts runs; an agent sees and acts on its own b
     h.done();
   }
 });
+
+const DEPLOY = 'on:\n  manual:\n    inputs:\n      images: { type: string, default: portal }\njobs:\n  build:\n    steps: [{ run: echo "build $PILOT_INPUT_IMAGES" }]\n  release:\n    needs: [build]\n    environment: production\n    steps: [{ run: echo released }]\n';
+
+test('tools: an agent may start a deployment pipeline on any branch of its own workspace, sees it wait for a person, and can not approve it', async () => {
+  const sessions = new FakeSessions();
+  const h = await harness({ sessions });
+  const mcp = await portalMcpHarness();
+  try {
+    registerCiTools(h.svc, sessions, mcp.registry);
+    sessions.add({ id: 's1', workspaceId: WS, branch: null, ticketId: null });
+    await remote(h, { '.pilot/deploy.yml': DEPLOY, '.pilot/ci.yml': 'on: manual\njobs:\n  t:\n    steps: [{ run: echo t }]\n' });
+    const agent = await mcp.agentToken(WS, 's1');
+
+    // No tool can decide an approval or an environment's protection, whatever the token.
+    const names = mcp.registry.list().map((t) => t.name);
+    assert.deepEqual(names.filter((n) => /approv|reject|environment|protect/.test(n)), []);
+
+    // Not its branch and not a deployment: refused. A deployment pipeline: started, linked to the session, held for a person.
+    const plain = await mcp.call(agent.secret, 'ci_run_trigger', { repo: 'app', pipeline: 'ci', ref: 'main' });
+    assert.equal(plain.result!.isError, true);
+    assert.match(plain.result!.content![0]!.text, /deploys to an environment/);
+    const started = await mcp.call(agent.secret, 'ci_run_trigger', { repo: 'app', pipeline: 'deploy', ref: 'main', inputs: { images: 'portal' } });
+    assert.equal(started.result!.isError, undefined, JSON.stringify(started.result));
+    const sc = started.result!.structuredContent;
+    assert.match(started.result!.content![0]!.text, /waits for a person's approval/);
+    assert.match(sc.link, /^\/admin\/ci\/runs\/r/);
+    const id = sc.run.id as string;
+    assert.equal(sc.run.actor, 'session:s1');
+    await h.until('the release to wait', () => h.svc.get(id).deployments.some((d) => d.approval === 'waiting'));
+
+    // It reads its own run (by session), sees what waits and where to send the person.
+    const got = (await mcp.call(agent.secret, 'ci_run_get', { id })).result!.structuredContent;
+    assert.deepEqual(got.waiting_for_approval, ['release → production']);
+    assert.deepEqual(got.deployments.map((d: { approval: string }) => d.approval), ['waiting']);
+    assert.ok((await mcp.call(agent.secret, 'ci_runs_list', {})).result!.structuredContent.runs.some((r: { id: string }) => r.id === id));
+    assert.ok(!JSON.stringify(got).includes((h.store.db!.prepare('SELECT gate_key FROM ci_deployments').get() as { gate_key: string }).gate_key), 'no key in a tool answer');
+
+    // An agent of another workspace can not start anything here (it is always in its own workspace).
+    const stranger = await mcp.agentToken('docker/other', 's9');
+    assert.equal((await mcp.call(stranger.secret, 'ci_run_trigger', { repo: 'app', pipeline: 'deploy', ref: 'main', workspace_id: WS })).result!.isError, true);
+
+    // It may cancel its own deployment run.
+    const cancelled = await mcp.call(agent.secret, 'ci_run_cancel', { id });
+    assert.equal(cancelled.result!.isError, undefined, JSON.stringify(cancelled.result));
+    await h.until('cancelled', () => h.svc.get(id).status === 'cancelled');
+    assert.deepEqual(h.svc.get(id).deployments.map((d) => d.approval), ['expired']);
+  } finally {
+    mcp.done();
+    h.done();
+  }
+});

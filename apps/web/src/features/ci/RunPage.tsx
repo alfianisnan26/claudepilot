@@ -1,8 +1,9 @@
 import { Button, cn, LoadError, useToast } from '@isnanme/ui';
-import { isCiActive, type CiDiagnostic, type CiJob, type CiRun } from '@portal/contracts';
-import { ChevronDown, ChevronLeft, ChevronRight, RotateCw, Square } from 'lucide-react';
+import { isCiActive, type CiDeployment, type CiDiagnostic, type CiJob, type CiRun } from '@portal/contracts';
+import { ChevronDown, ChevronLeft, ChevronRight, Hand, RotateCw, Square } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
+import { InfoTip } from '@/components/InfoTip';
 import { errorText } from '@/lib/api';
 import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
@@ -153,9 +154,15 @@ export function RunPage() {
           </p>
         )}
         {(reason || stopped) && (
-          <p className={cn('text-[13px] font-medium', stopped ? 'text-gold' : 'text-danger')}>{stopped ? 'Workspace stopped' : reason}</p>
+          <p className={cn('text-[13px] font-medium', stopped ? 'text-gold' : run.reason === 'rejected' ? 'text-muted' : 'text-danger')}>{stopped ? 'Workspace stopped' : reason}</p>
         )}
       </div>
+
+      {run.deployments
+        .filter((d) => d.approval === 'waiting')
+        .map((d) => (
+          <Approval key={d.id} run={run} deployment={d} onDecided={() => void load()} />
+        ))}
 
       {run.diagnostics.length > 0 && <Diagnostics items={run.diagnostics} />}
 
@@ -174,8 +181,12 @@ export function RunPage() {
               >
                 <StatusIcon status={j.status} />
                 <span className="min-w-0 flex-1 truncate text-[14.5px] font-semibold">{j.name}</span>
+                {j.environment && <EnvironmentTag name={j.environment} deployment={run.deployments.find((d) => d.job === j.id)} />}
                 {j.ignored && <span className="text-[12px] text-muted">ignored</span>}
-                {reasonLabel(j.reason) && j.status !== 'skipped' && <span className="hidden text-[12px] text-danger sm:inline">{reasonLabel(j.reason)}</span>}
+                {/* A rejection is said once, on the job a person refused, and is no error. */}
+                {reasonLabel(j.reason) && j.status !== 'skipped' && (j.reason !== 'rejected' || j.environment) && (
+                  <span className={cn('hidden text-[12px] sm:inline', j.reason === 'rejected' ? 'text-muted' : 'text-danger')}>{reasonLabel(j.reason)}</span>
+                )}
                 <span className="text-[12.5px] text-muted tabular-nums">{formatDuration(j.durationMs ?? (j.status === 'running' ? elapsed(j.startedAt, now) : null))}</span>
                 {isOpen ? <ChevronDown className="size-4 shrink-0 text-muted" aria-hidden="true" /> : <ChevronRight className="size-4 shrink-0 text-muted" aria-hidden="true" />}
               </button>
@@ -217,6 +228,64 @@ export function RunPage() {
         })}
       </ul>
     </>
+  );
+}
+
+const DECIDED: Partial<Record<CiDeployment['approval'], string>> = { approved: 'approved', rejected: 'rejected', auto: 'not protected', expired: 'not decided' };
+
+/** The environment a job deploys to; its title says who decided (a hover note: the approval bar is where it is decided). */
+function EnvironmentTag({ name, deployment }: { name: string; deployment: CiDeployment | undefined }) {
+  const decided = deployment ? DECIDED[deployment.approval] : undefined;
+  const note = decided ? `${name}: ${decided}${deployment?.decidedBy ? ` by ${deployment.decidedBy.replace(/^user:/, '')}` : ''}${deployment?.decidedAt ? `, ${timeAgo(deployment.decidedAt)}` : ''}` : name;
+  return (
+    <span title={note} className={cn(MONO, 'hidden max-w-[10rem] truncate rounded-full border border-line px-2 py-0.5 text-muted sm:inline')}>
+      {name}
+    </span>
+  );
+}
+
+/**
+ * A deployment held for a person (PRD FR41): where it goes, what, and the two answers. Approving lets the job start now; rejecting ends the run.
+ * Only a person can do either here; an agent can start a deployment but never approve it.
+ */
+function Approval({ run, deployment, onDecided }: { run: CiRun; deployment: CiDeployment; onDecided: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState<'approve' | 'reject' | null>(null);
+  const decide = async (what: 'approve' | 'reject') => {
+    setBusy(what);
+    try {
+      await (what === 'approve' ? ciApi.approve(run.id, deployment.job) : ciApi.reject(run.id, deployment.job));
+      toast(what === 'approve' ? `Deploying to ${deployment.environment}` : 'Rejected');
+      onDecided();
+    } catch (e) {
+      toast(errorText(e, 'That did not work.'), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+  const by = run.actor.startsWith('session:') ? 'an agent' : run.actor.startsWith('portal-mcp:') ? 'a Portal MCP token' : 'a person';
+  return (
+    <section aria-label={`Approve deploy to ${deployment.environment}`} className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-gold/50 bg-gold-soft px-3.5 py-3">
+      <Hand className="size-5 shrink-0 text-gold" aria-hidden="true" />
+      <p className="flex min-w-0 flex-1 items-center gap-1.5 text-[14px]">
+        <span className="truncate font-semibold">{deployment.environment}</span>
+        <span className={cn(MONO, 'text-muted')} title={run.sha}>
+          {shortSha(run.sha)}
+        </span>
+        <InfoTip label="About this approval">
+          Job {deployment.job} deploys to {deployment.environment}. It was started by {by} and runs only once a person approves it here. Reject ends the run.
+        </InfoTip>
+      </p>
+      {/* On a phone the two answers take their own row, so the environment's name is never cut. */}
+      <span className="flex w-full shrink-0 items-center gap-2 sm:w-auto">
+        <Button variant="secondary" size="sm" className="flex-1 sm:flex-none" loading={busy === 'reject'} disabled={busy !== null} onClick={() => void decide('reject')}>
+          Reject
+        </Button>
+        <Button size="sm" className="flex-1 sm:flex-none" loading={busy === 'approve'} disabled={busy !== null} onClick={() => void decide('approve')}>
+          Approve
+        </Button>
+      </span>
+    </section>
   );
 }
 

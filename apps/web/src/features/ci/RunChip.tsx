@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useLive } from '@/lib/live';
 import { ciApi } from './api';
-import { StatusIcon } from './parts';
+import { runLook, StatusIcon } from './parts';
 
 /**
  * What CI says about a session or a ticket (local-git-ci PRD §15): the latest run of each pipeline as a small link to it, an
@@ -38,7 +38,7 @@ export function RunChip({ sessionId, ticketId, compact, lead, className }: { ses
             compact ? 'text-[12px]' : 'border border-line bg-surface px-2.5 py-1 text-[12.5px]',
           )}
         >
-          <StatusIcon status={r.status} className="[&_svg]:size-3.5" />
+          <StatusIcon status={runLook(r)} className="[&_svg]:size-3.5" />
           <span className="tabular-nums">#{r.number}</span>
         </Link>
       ))}

@@ -204,6 +204,9 @@ export function compile(p: Pipeline, e: EventContext, opts: { maxParallel: numbe
         secrets: job.secrets,
         steps,
         artifacts: job.artifacts,
+        environment: job.environment,
+        // Set by the service from the environment's record (protected or not), never from the file.
+        approval: null,
       });
     });
   }

@@ -2450,6 +2450,53 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 610,
+    name: 'CI environments and deployments (approval before a deployment)',
+    up(db) {
+      db.exec(`
+        -- Environments and deployments (docs/prd/local-git-ci.md FR41, §12). An environment belongs to a CI remote and is made PROTECTED the
+        -- first time a pipeline names it: a job that deploys there waits for a person's approval. A deployment is one run's job tied to an
+        -- environment; run facts are copied in so the history outlives the run record. gate_key is the one-time key the runner needs to let
+        -- that job start: random, useless outside its run, never shown or logged, and cleared as soon as the job is decided or the run is over.
+        CREATE TABLE ci_environments (
+          id TEXT PRIMARY KEY,
+          repo_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          protected INTEGER NOT NULL DEFAULT 1 CHECK (protected IN (0, 1)),
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          updated_by TEXT NOT NULL
+        ) STRICT;
+        CREATE UNIQUE INDEX ci_environments_name ON ci_environments (repo_id, name);
+
+        CREATE TABLE ci_deployments (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          run_number INTEGER NOT NULL,
+          job TEXT NOT NULL,
+          repo_id TEXT NOT NULL,
+          environment TEXT NOT NULL,
+          pipeline TEXT NOT NULL,
+          sha TEXT NOT NULL,
+          ref TEXT NOT NULL,
+          actor TEXT NOT NULL,
+          approval TEXT NOT NULL CHECK (approval IN ('pending', 'waiting', 'approved', 'rejected', 'auto', 'expired', 'skipped')),
+          gate_key TEXT,
+          decided_by TEXT,
+          decided_at TEXT,
+          outcome TEXT,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          created_at TEXT NOT NULL,
+          UNIQUE (run_id, job)
+        ) STRICT;
+        CREATE INDEX ci_deployments_env ON ci_deployments (repo_id, environment, created_at);
+      `);
+    },
+  },
 ];
 
 /**

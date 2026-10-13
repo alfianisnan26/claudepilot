@@ -2,16 +2,16 @@
 // merge into a protected branch, runs the pipelines in the repository's `.pilot/` folder inside the workspace.
 // Everything that came out of a workspace (logs, commit messages, diagnostics) is untrusted text.
 
-/** A run's status. Jobs and steps add `pending` and `skipped`. */
+/** A run's status. Jobs and steps add `pending` and `skipped`; a job held for a person's approval (FR41) is `waiting` (its run stays `running`). */
 export const CI_STATUSES = ['queued', 'running', 'passed', 'failed', 'cancelled'] as const;
 export type CiStatus = (typeof CI_STATUSES)[number];
-export type CiUnitStatus = CiStatus | 'pending' | 'skipped';
+export type CiUnitStatus = CiStatus | 'pending' | 'skipped' | 'waiting';
 
 /** Not finished: it still has work to do or is doing it. */
-export const isCiActive = (s: CiUnitStatus): boolean => s === 'queued' || s === 'running' || s === 'pending';
+export const isCiActive = (s: CiUnitStatus): boolean => s === 'queued' || s === 'running' || s === 'pending' || s === 'waiting';
 
 /** Why a run or a unit failed, when it isn't just "a step exited non-zero". */
-export const CI_REASONS = ['step_failed', 'timeout', 'invalid_pipeline', 'runner_lost', 'no_space', 'runner_error', 'cancelled', 'superseded', 'needs', 'condition', 'signal', 'fail_fast'] as const;
+export const CI_REASONS = ['step_failed', 'timeout', 'invalid_pipeline', 'runner_lost', 'no_space', 'runner_error', 'cancelled', 'superseded', 'needs', 'condition', 'signal', 'fail_fast', 'rejected'] as const;
 export type CiReason = (typeof CI_REASONS)[number];
 
 /** What started a run. A rerun keeps the trigger it repeats in `rerunOf`. */
@@ -28,6 +28,7 @@ export const CI_STATUS_LABEL: Record<CiUnitStatus, string> = {
   cancelled: 'Cancelled',
   pending: 'Pending',
   skipped: 'Skipped',
+  waiting: 'Waiting',
 };
 
 /** One command of a job, as the runner records it in `state.json` and the portal shows it. */
@@ -67,6 +68,8 @@ export interface CiJob {
   artifacts: CiArtifact[];
   /** Artifact files left out (over a cap, a link, outside the checkout). */
   artifactsSkipped: number;
+  /** The environment the job deploys to (`environment:`), when it names one. */
+  environment?: string | null;
 }
 
 /** What `cp-ci` writes to `runs/<run>/state.json`: the record of a run while it runs. */
@@ -164,6 +167,58 @@ export interface CiRun extends CiRunSummary {
   workspaceState: 'running' | 'stopped' | 'gone';
   /** The logs are kept in the portal (the run is over). */
   archived: boolean;
+  /** Its jobs that deploy to an environment (FR41), with where each approval stands. */
+  deployments: CiDeployment[];
+}
+
+/**
+ * Where a deployment's approval stands. `pending`: its job has not been reached; `waiting`: held for a person; `approved` / `rejected` by a
+ * person; `auto`: the environment is not protected; `expired`: the run ended before anyone decided; `skipped`: its job did not run.
+ */
+export const CI_APPROVAL_STATES = ['pending', 'waiting', 'approved', 'rejected', 'auto', 'expired', 'skipped'] as const;
+export type CiApprovalState = (typeof CI_APPROVAL_STATES)[number];
+
+/** A run's job tied to an environment (PRD FR41). */
+export interface CiDeployment {
+  id: string;
+  runId: string;
+  runNumber: number;
+  pipeline: string;
+  job: string;
+  environment: string;
+  sha: string;
+  ref: string;
+  /** Who started the run: `ui`, `push`, `portal-mcp:<id>`, `session:<id>`. */
+  actor: string;
+  approval: CiApprovalState;
+  /** The person who approved or rejected it (an actor string). */
+  decidedBy: string | null;
+  decidedAt: string | null;
+  /** How the job ended, once it did. */
+  outcome: CiUnitStatus | null;
+  createdAt: string;
+}
+
+/** An environment of a remote (PRD FR41): created protected the first time a pipeline names it. */
+export interface CiEnvironment {
+  id: string;
+  repoId: string;
+  name: string;
+  /** A job that deploys here waits for a person's approval. */
+  protected: boolean;
+  updatedAt: string;
+  updatedBy: string;
+  /** The latest deployments, newest first (at most 20). */
+  deployments: CiDeployment[];
+}
+
+export interface UpdateCiEnvironmentRequest {
+  protected: boolean;
+}
+
+/** Approve or reject the job a run is holding for a person. */
+export interface CiApprovalRequest {
+  job: string;
 }
 
 export interface CiRunList {
@@ -310,10 +365,21 @@ export const CI_API = {
   merge: (id: string) => `/api/ci/repos/${encodeURIComponent(id)}/merge`,
   /** POST `ValidateCiRequest`: `ValidateCiResult`. */
   validate: '/api/ci/validate',
+  /** POST `CiApprovalRequest`: let the waiting job run (a person only); returns the `CiRun`. */
+  approve: (id: string) => `/api/ci/runs/${encodeURIComponent(id)}/approve`,
+  /** POST `CiApprovalRequest`: refuse it; the run ends as cancelled (`rejected`). */
+  reject: (id: string) => `/api/ci/runs/${encodeURIComponent(id)}/reject`,
+  /** GET: `CiEnvironment[]` of a remote. */
+  environments: (repoId: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments`,
+  /** PUT `UpdateCiEnvironmentRequest`: `CiEnvironment` (made when it does not exist yet). */
+  environment: (repoId: string, name: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}`,
 } as const;
 
 /** The first 7 characters of a commit. */
 export const shortSha = (sha: string): string => sha.slice(0, 7);
+
+/** An environment's name (PRD FR41). */
+export const CI_ENVIRONMENT_NAME = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 
 /** The remote name pattern (PRD FR1). */
 export const CI_REPO_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;

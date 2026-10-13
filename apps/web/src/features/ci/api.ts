@@ -3,6 +3,7 @@ import { track } from '@isnanme/ui';
 import {
   CI_API,
   type CiBranch,
+  type CiEnvironment,
   type CiLogChunk,
   type CiPipelineInfo,
   type CiRepo,
@@ -72,4 +73,8 @@ export const ciApi = {
   pipelines: (id: string, ref?: string) => request<CiPipelineInfo[]>('GET', `${CI_API.pipelines(id)}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`),
   merge: (id: string, body: MergeCiRequest) => request<MergeCiResult>('POST', CI_API.merge(id), body),
   validate: (body: ValidateCiRequest) => request<ValidateCiResult>('POST', CI_API.validate, body),
+  approve: (id: string, job: string) => request<CiRun>('POST', CI_API.approve(id), { job }),
+  reject: (id: string, job: string) => request<CiRun>('POST', CI_API.reject(id), { job }),
+  environments: (repoId: string) => request<CiEnvironment[]>('GET', CI_API.environments(repoId)),
+  setEnvironment: (repoId: string, name: string, isProtected: boolean) => request<CiEnvironment>('PUT', CI_API.environment(repoId, name), { protected: isProtected }),
 };

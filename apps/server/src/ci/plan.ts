@@ -34,6 +34,13 @@ export interface PlanJob {
   secrets: string[];
   steps: PlanStep[];
   artifacts: { paths: string[]; expireDays: number; when: 'success' | 'always' } | null;
+  /** The environment the job deploys to (`environment:`); shown on the run, decided nothing by itself. */
+  environment?: string | null;
+  /**
+   * Set when that environment is protected (PRD FR41): the job waits (`waiting`) until `cp-ci approve` hands over the key whose SHA-256 is
+   * `gate`. Only the portal holds the key, and it gives it only when a person approves, so writing a file in the workspace approves nothing.
+   */
+  approval?: { environment: string; gate: string } | null;
 }
 
 export interface Plan {

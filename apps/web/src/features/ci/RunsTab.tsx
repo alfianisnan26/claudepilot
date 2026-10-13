@@ -6,7 +6,7 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ciApi } from './api';
-import { elapsed, formatDuration, MONO, reasonLabel, refLabel, shortSha, StatusIcon } from './parts';
+import { elapsed, formatDuration, MONO, reasonLabel, refLabel, runLook, shortSha, StatusIcon } from './parts';
 
 type Scope = 'all' | 'active' | 'failed' | 'passed';
 
@@ -142,7 +142,7 @@ function RunRow({ run: r, now, remote, onOpen }: { run: CiRunSummary; now: numbe
         onClick={onOpen}
         className="flex w-full min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
       >
-        <StatusIcon status={r.status} className="[&_svg]:size-[22px]" />
+        <StatusIcon status={runLook(r)} className="[&_svg]:size-[22px]" />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">
             <span className={cn(MONO, 'truncate text-[13.5px] font-semibold')}>{refLabel(r.branch, r.tag)}</span>

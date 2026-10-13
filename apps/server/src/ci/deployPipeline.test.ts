@@ -1,0 +1,401 @@
+// The deploy pipeline of this repository (.pilot/deploy.yml and .pilot/scripts/*.sh) against a FAKE cluster and a FAKE GitHub, in a temporary
+// folder: kubectl, gh and curl are scripts that record what they were asked and answer like the real ones; "GitHub" is a bare repository.
+// Nothing here can reach a real cluster or remote: every step runs with a clean environment (no KUBECONFIG, a temporary HOME, the fakes
+// first on PATH). The real scripts/k3s-build.sh runs against the fake kubectl. Then the whole pipeline runs through the CI service and the
+// real runner, with the release held for an approval.
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { tempDirectory } from '../store/testTmp.js';
+import { compile } from './spec/compile.js';
+import { validatePipeline } from './spec/validate.js';
+import { harness, WS } from './testkit.js';
+
+const REPO = fileURLToPath(new URL('../../../../', import.meta.url));
+const today = () => new Date().toISOString().slice(0, 10).replace(/-/g, '.');
+
+/** What the fake world needs from this repository: the pipeline, its scripts, the manifests, the build script and the workspace Dockerfile. */
+function templateFiles(): Record<string, string> {
+  const out: Record<string, string> = {};
+  const add = (rel: string) => void (out[rel] = readFileSync(join(REPO, rel), 'utf8'));
+  const walk = (rel: string) => {
+    for (const name of readdirSync(join(REPO, rel))) {
+      const r = `${rel}/${name}`;
+      if (statSync(join(REPO, r)).isDirectory()) walk(r);
+      else add(r);
+    }
+  };
+  walk('.pilot');
+  walk('deploy/k3s-build');
+  add('deploy/k3s/portal.yaml');
+  add('scripts/k3s-build.sh');
+  add('images/workspace/Dockerfile');
+  // The release gate itself (npm ci, the suite) is far too heavy here: a stand-in leaves the summary it would, green or red.
+  out['scripts/gate.sh'] = `#!/usr/bin/env bash
+sha=$(git rev-parse --short "\${1:-HEAD}"); dir=\${GATE_DIR:-/tmp/gate-$sha}; logs=$dir.logs
+mkdir -p "$dir" "$logs"; mode=$(cat "$FAKE/gate-mode" 2>/dev/null || echo green)
+for s in npm-ci typecheck web-build; do echo "$s rc=0 1s" >> "$logs/SUMMARY.txt"; : > "$logs/$s.log"; done
+if [ "$mode" = red ]; then echo "server-suite rc=1 9s" >> "$logs/SUMMARY.txt"; printf 'not ok 7 - a test\\n# fail 1\\n' > "$logs/server-suite.log"
+else echo "server-suite rc=0 9s" >> "$logs/SUMMARY.txt"; printf '# tests 3\\n# pass 3\\n# fail 0\\n' > "$logs/server-suite.log"; fi
+echo "gate (stand-in) at $sha"
+`;
+  return out;
+}
+
+const FAKE_KUBECTL = `#!/usr/bin/env bash
+# A stand-in for kubectl: records the call, answers from the fake GitHub's main.
+printf 'kubectl %s\\n' "$*" >> "$FAKE/calls.log"
+args=" $* "
+manifest() { git --git-dir="$FAKE/github.git" show main:deploy/k3s/portal.yaml; }
+case $args in
+  *" get application "*)
+    health=Healthy
+    if [ -f "$FAKE/bad-tag" ] && manifest | grep -qF "portal:$(cat "$FAKE/bad-tag")"; then health=Degraded; fi
+    printf '%s Synced %s' "$(git --git-dir="$FAKE/github.git" rev-parse main)" "$health" ;;
+  *" rollout status "*) echo 'deployment "claudepilot-portal" successfully rolled out' ;;
+  *" get deploy/"*) manifest | grep -oE 'image: [^ ]*claudepilot/portal:[^ ]*' | sed 's/^image: //' ;;
+  *" logs deploy/"*) cat "$FAKE/portal.log" 2>/dev/null || echo '[store] ready (portal 1234abcd, schema 610)' ;;
+  *" get pods "*) printf '0 ' ;;
+  *" get job "*) if [ -f "$FAKE/build-fails" ]; then printf '/1'; else printf '1/'; fi ;;
+  *" logs job/"*) echo "kaniko: pushing"; [ -f "$FAKE/leak" ] && echo "auth: $(cat "$FAKE/token")"; true ;;
+  *" apply -f -"*) cat > "$FAKE/applied.yaml" ;;
+  *) ;;
+esac
+`;
+
+const FAKE_GH = `#!/usr/bin/env bash
+printf 'gh %s\\n' "$1 $2" >> "$FAKE/calls.log"
+[ "$1 $2" = "auth token" ] && cat "$FAKE/token"
+`;
+
+const FAKE_CURL = `#!/usr/bin/env bash
+# A stand-in for curl: the registry's tag list, and the portal's answers for the smoke test.
+printf 'curl %s\\n' "$*" >> "$FAKE/calls.log"
+url=\${*: -1}
+case $url in
+  */tags/list) printf '{"name":"x","tags":%s}' "$(cat "$FAKE/tags.json" 2>/dev/null || echo '[]')" ;;
+  *) if [[ " $* " == *" -w "* ]]; then if [ -f "$FAKE/unhealthy" ]; then printf 503; else printf 200; fi; fi ;;
+esac
+`;
+
+interface World {
+  root: string;
+  github: string;
+  work: string;
+  env: NodeJS.ProcessEnv;
+  token: string;
+  /** The run's commit: integration's head. */
+  sha: string;
+  base: string;
+  git(args: string[], cwd?: string): string;
+  run(script: string, inputs?: Record<string, string>): { code: number; out: string };
+  calls(): string;
+  main(): string;
+  branch(name: string): string;
+  manifestAt(ref: string): string;
+}
+
+function shell(file: string, text: string) {
+  writeFileSync(file, text);
+  chmodSync(file, 0o755);
+}
+
+/** The fakes, a fake GitHub (main, and integration one commit ahead) and a checkout of integration's head like the runner makes. */
+function world(): World {
+  const root = tempDirectory('cp-deploy-');
+  const bin = join(root, 'bin');
+  const home = join(root, 'home');
+  mkdirSync(bin);
+  mkdirSync(home);
+  shell(join(bin, 'kubectl'), FAKE_KUBECTL);
+  shell(join(bin, 'gh'), FAKE_GH);
+  shell(join(bin, 'curl'), FAKE_CURL);
+  // Built at run time: a value shaped like nothing a scanner knows, for the mask to find.
+  const token = `canary${randomBytes(12).toString('hex')}`;
+  writeFileSync(join(root, 'token'), token);
+  writeFileSync(join(root, 'tags.json'), JSON.stringify([`${today()}-1`, '2026.01.01-9', `2.1.296-${today()}-4`]));
+  writeFileSync(join(home, '.gitconfig'), '[user]\n\tname = Test User\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n[protocol "file"]\n\tallow = always\n');
+  const env: NodeJS.ProcessEnv = {
+    PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
+    HOME: home,
+    LANG: 'C.UTF-8',
+    GIT_CONFIG_NOSYSTEM: '1',
+    TMPDIR: root,
+    FAKE: root,
+    DEPLOY_GIT_REMOTE: join(root, 'github.git'),
+    DEPLOY_URL: 'http://portal.test:3000',
+    DEPLOY_WAIT_S: '2',
+    DEPLOY_POLL_S: '1',
+  };
+  const git = (args: string[], cwd = root) => {
+    const r = spawnSync('git', args, { cwd, env, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  const github = join(root, 'github.git');
+  git(['init', '-q', '--bare', github]);
+  const src = join(root, 'src');
+  mkdirSync(src);
+  git(['init', '-q'], src);
+  for (const [path, text] of Object.entries(templateFiles())) {
+    mkdirSync(dirname(join(src, path)), { recursive: true });
+    writeFileSync(join(src, path), text);
+  }
+  git(['add', '-A'], src);
+  git(['commit', '-q', '-m', 'base'], src);
+  const base = git(['rev-parse', 'HEAD'], src);
+  git(['push', '-q', github, 'HEAD:refs/heads/main'], src);
+  writeFileSync(join(src, 'feature.txt'), 'new\n');
+  git(['add', '-A'], src);
+  git(['commit', '-q', '-m', 'a feature'], src);
+  const sha = git(['rev-parse', 'HEAD'], src);
+  git(['push', '-q', github, 'HEAD:refs/heads/integration'], src);
+  // The runner's checkout: a clone of the workspace's own remote (here: src), detached at the commit.
+  const work = join(root, 'work');
+  git(['clone', '-q', '--no-checkout', src, work]);
+  git(['checkout', '-q', '--detach', sha], work);
+  const runEnv = (inputs: Record<string, string>) => ({
+    ...env,
+    PILOT_SHA: sha,
+    PILOT_BRANCH: 'integration',
+    PILOT_RUN_ID: 'rtestdeploy01',
+    PILOT_RUN_NUMBER: '7',
+    PILOT_INPUT_IMAGES: 'portal',
+    PILOT_INPUT_GATE: 'true',
+    PILOT_INPUT_DEPLOY: 'true',
+    PILOT_INPUT_DRY_RUN: 'false',
+    ...Object.fromEntries(Object.entries(inputs).map(([k, v]) => [`PILOT_INPUT_${k.toUpperCase()}`, v])),
+  });
+  return {
+    root,
+    github,
+    work,
+    env,
+    token,
+    sha,
+    base,
+    git,
+    run(script, inputs = {}) {
+      const r = spawnSync('bash', [`.pilot/scripts/${script}.sh`], { cwd: work, env: runEnv(inputs), encoding: 'utf8', timeout: 60_000 });
+      return { code: r.status ?? -1, out: `${r.stdout}${r.stderr}` };
+    },
+    calls: () => (existsSync(join(root, 'calls.log')) ? readFileSync(join(root, 'calls.log'), 'utf8') : ''),
+    main: () => git(['--git-dir', github, 'rev-parse', 'main']),
+    branch: (name) => git(['--git-dir', github, 'rev-parse', name]),
+    manifestAt: (ref) => git(['--git-dir', github, 'show', `${ref}:deploy/k3s/portal.yaml`]),
+  };
+}
+
+/** What a job leaves for the jobs that need it (the runner copies artifacts into their checkouts; here they share one). */
+const outFile = (w: World, name: string) => readFileSync(join(w.work, '.pilot/out', name), 'utf8');
+const MUTATING = /^kubectl .*\b(annotate|apply|create|delete|patch|scale|rollout (restart|undo))\b/m;
+
+test('the pipeline file: manual only, the release deploys to production, rollback only on failure; it compiles with its defaults', () => {
+  const v = validatePipeline('.pilot/deploy.yml', readFileSync(join(REPO, '.pilot/deploy.yml'), 'utf8'));
+  assert.deepEqual(v.info.diagnostics, []);
+  assert.deepEqual(v.info.triggers, ['manual'], 'no push, merge or schedule: a deploy is always asked for');
+  assert.deepEqual(v.info.inputs.map((i) => [i.name, i.type, i.default]), [['images', 'string', 'portal'], ['gate', 'boolean', true], ['deploy', 'boolean', true], ['dry_run', 'boolean', false]]);
+  const c = compile(v.pipeline!, { event: 'manual', ref: 'refs/heads/integration', sha: 'a'.repeat(40), base: null, actor: 'session:s1', repo: 'claudepilot', ticket: null, inputs: { images: 'portal', gate: true, deploy: true, dry_run: false }, workspace: 'kubernetes/kohi-event', runId: 'rabc123', runNumber: 1 }, { maxParallel: 2 });
+  assert.ok(c.ok);
+  if (!c.ok) return;
+  assert.deepEqual(c.plan.jobs.map((j) => [j.id, j.needs, j.when, j.skip, j.environment ?? null]), [
+    ['gate', [], 'success', null, null],
+    ['build', ['gate'], 'success', null, null],
+    ['release', ['build'], 'success', null, 'production'],
+    ['verify', ['release'], 'success', null, null],
+    ['rollback', ['release', 'verify'], 'failure', null, null],
+  ]);
+  assert.equal(c.group, 'deploy-claudepilot', 'one deploy at a time');
+  assert.ok(c.plan.jobs.every((j) => j.steps.every((s) => /^bash \.pilot\/scripts\/[a-z]+\.sh$/.test(s.run))), 'the logic is in the scripts');
+  const buildOnly = compile(v.pipeline!, { event: 'manual', ref: 'refs/heads/integration', sha: 'a'.repeat(40), base: null, actor: 'ui', repo: 'claudepilot', ticket: null, inputs: { images: 'portal', gate: true, deploy: false, dry_run: false }, workspace: 'x/y', runId: 'rabc124', runNumber: 2 }, { maxParallel: 2 });
+  assert.ok(buildOnly.ok && buildOnly.plan.jobs.find((j) => j.id === 'release')!.skip === 'condition', 'deploy=false leaves the release out');
+});
+
+test('the scripts pass shellcheck (when it is installed: the dev image has it)', (t) => {
+  const which = spawnSync('sh', ['-c', 'command -v shellcheck'], { encoding: 'utf8' });
+  if (which.status !== 0) return t.skip('shellcheck is not installed here');
+  const files = readdirSync(join(REPO, '.pilot/scripts')).filter((f) => f.endsWith('.sh')).map((f) => relative(REPO, join(REPO, '.pilot/scripts', f)));
+  const r = spawnSync('shellcheck', ['-x', '-P', 'SCRIPTDIR', ...files], { cwd: REPO, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+});
+
+test('a dry run says what each job would do and changes nothing: no push, no cluster change', () => {
+  const w = world();
+  const dry = { dry_run: 'true', images: 'portal,workspace' };
+  assert.equal(spawnSync('sh', ['-c', 'command -v kubectl'], { env: w.env, encoding: 'utf8' }).stdout.trim(), join(w.root, 'bin/kubectl'), 'the fake comes first');
+  const gate = w.run('gate', dry);
+  assert.equal(gate.code, 0, gate.out);
+  assert.match(gate.out, /\[dry-run\] would run: scripts\/gate\.sh [0-9a-f]{7}/);
+  const build = w.run('build', dry);
+  assert.equal(build.code, 0, build.out);
+  assert.match(build.out, new RegExp(`would run: BUILD_BRANCH=integration scripts/k3s-build.sh portal ${today().replace(/\./g, '\\.')}-2 ${w.sha}`), 'the next free tag of today');
+  assert.match(build.out, new RegExp(`scripts/k3s-build.sh workspace 2\\.1\\.296-${today().replace(/\./g, '\\.')}-5 `));
+  assert.equal(outFile(w, 'build.env'), `PORTAL_TAG=${today()}-2\nWORKSPACE_TAG=2.1.296-${today()}-5\n`);
+  const release = w.run('release', dry);
+  assert.equal(release.code, 0, release.out);
+  assert.match(release.out, /\[dry-run\] would run: git push -q --atomic origin [0-9a-f]{40}:refs\/heads\/main [0-9a-f]{40}:refs\/heads\/integration/);
+  assert.match(outFile(w, 'release.env'), /PUSHED=0/);
+  const verify = w.run('verify', dry);
+  assert.equal(verify.code, 0, verify.out);
+  assert.match(verify.out, /would wait for Argo CD/);
+  const rollback = w.run('rollback', dry);
+  assert.equal(rollback.code, 0, rollback.out);
+  assert.match(rollback.out, /nothing to roll back/);
+
+  assert.deepEqual([w.main(), w.branch('integration')], [w.base, w.sha], 'GitHub is untouched');
+  assert.doesNotMatch(w.calls(), MUTATING, 'only reads reached the cluster');
+  assert.ok(!existsSync(join(w.root, 'applied.yaml')));
+});
+
+test('a release: gate verdict, the real k3s-build.sh on a fake cluster, the bump on main and integration in one push, verify', () => {
+  const w = world();
+  assert.equal(w.run('gate').code, 0);
+  const build = w.run('build', { images: 'portal' });
+  assert.equal(build.code, 0, build.out);
+  assert.match(build.out, /building portal:\S+ from [0-9a-f]{40}/, 'k3s-build.sh ran');
+  assert.match(build.out, /token in the build log: none/);
+  assert.ok(!build.out.includes(w.token), 'the token is never printed');
+  assert.match(readFileSync(join(w.root, 'applied.yaml'), 'utf8'), new RegExp(`claudepilot/portal:${today().replace(/\./g, '\\.')}-2`), 'the job built the new tag');
+  assert.match(readFileSync(join(w.root, 'applied.yaml'), 'utf8'), new RegExp(`#refs/heads/integration#${w.sha}`), 'from the run\'s commit on integration');
+  assert.match(w.calls(), /kubectl -n isnan-claudepilot delete secret claudepilot-build/, 'the build secret is removed again');
+
+  const release = w.run('release');
+  assert.equal(release.code, 0, release.out);
+  const bump = w.main();
+  assert.notEqual(bump, w.base);
+  assert.equal(w.branch('integration'), bump, 'main and integration move together');
+  assert.equal(w.git(['--git-dir', w.github, 'rev-parse', `${bump}^`]), w.sha, 'the bump sits on the run\'s commit');
+  assert.match(w.manifestAt('main'), new RegExp(`image: registry\\.int\\.isnan\\.me/claudepilot/portal:${today().replace(/\./g, '\\.')}-2\\n`));
+  assert.match(w.manifestAt('main'), /value: registry\.int\.isnan\.me\/claudepilot\/workspace:2\.1\.296-2026\.10\.12-1\n/, 'an image not built keeps its tag');
+  const diff = w.git(['--git-dir', w.github, 'diff', '--stat', `${bump}^`, bump]);
+  assert.match(diff, /1 file changed, 1 insertion\(\+\), 1 deletion\(-\)/, 'exactly one line changed');
+  assert.match(w.git(['--git-dir', w.github, 'log', '-1', '--format=%B', bump]), /^deploy: portal \S+\n\nReleased by the deploy pipeline: pilot CI run #7 .*\n\nPilot-Run: rtestdeploy01/);
+  assert.match(outFile(w, 'release.env'), new RegExp(`PREV_PORTAL=2026\\.10\\.12-3\\nPREV_WORKSPACE=2\\.1\\.296-2026\\.10\\.12-1\\nNEW_PORTAL=${today().replace(/\./g, '\\.')}-2\\nNEW_WORKSPACE=\\nBUMP_SHA=${bump}\\nBASE_SHA=${w.sha}\\nPUSHED=1\\n`));
+
+  const verify = w.run('verify');
+  assert.equal(verify.code, 0, verify.out);
+  assert.match(verify.out, /\/healthz 200\n\/login 200/);
+  assert.match(verify.out, /verify: live and well at [0-9a-f]{7}/);
+  assert.match(w.calls(), /kubectl -n isnan-argocd annotate application isnan-claudepilot argocd\.argoproj\.io\/refresh=hard --overwrite/);
+  assert.match(w.calls(), /curl -s -o \/dev\/null -w %\{http_code\} --max-time 10 http:\/\/portal\.test:3000\/healthz/);
+});
+
+test('a verify that fails rolls back: the previous tags on main (and integration), then Argo CD, rollout and /healthz again', () => {
+  const w = world();
+  w.run('gate');
+  assert.equal(w.run('build').code, 0);
+  assert.equal(w.run('release').code, 0);
+  const bump = w.main();
+  writeFileSync(join(w.root, 'bad-tag'), `${today()}-2`);
+  const verify = w.run('verify');
+  assert.equal(verify.code, 1);
+  assert.match(verify.out, /Degraded/);
+  assert.match(verify.out, /ERROR: Argo CD is not Synced and Healthy at [0-9a-f]{7}/);
+
+  const rollback = w.run('rollback');
+  assert.equal(rollback.code, 0, rollback.out);
+  const back = w.main();
+  assert.equal(w.git(['--git-dir', w.github, 'rev-parse', `${back}^`]), bump, 'a new commit on top: nothing forced');
+  assert.equal(w.branch('integration'), back);
+  assert.match(w.manifestAt('main'), /claudepilot\/portal:2026\.10\.12-3\n/, 'the tag from before');
+  assert.match(rollback.out, /rollback: back at portal 2026\.10\.12-3/);
+
+  // A portal whose log has a fatal line fails verify too (here on the cluster as it is: nothing released in this pretend run).
+  writeFileSync(join(w.work, '.pilot/out/release.env'), 'PUSHED=0\n');
+  assert.equal(w.run('verify').code, 0);
+  writeFileSync(join(w.root, 'portal.log'), 'ok\n[store] LOCKED: The secret key is not loaded.\nTypeError: x is not a function\n');
+  const again = w.run('verify');
+  assert.equal(again.code, 1);
+  assert.match(again.out, /fatal lines/);
+});
+
+test('refusals: a red gate, a branch that moved, a main with other commits, an unknown image; a refused release changes nothing', () => {
+  const w = world();
+  writeFileSync(join(w.root, 'gate-mode'), 'red');
+  const gate = w.run('gate');
+  assert.equal(gate.code, 1);
+  assert.match(gate.out, /gate: server-suite failed/);
+  assert.equal(w.run('gate', { gate: 'false' }).code, 0, 'gate=false skips it');
+
+  const bogus = w.run('build', { images: 'portal,bogus' });
+  assert.equal(bogus.code, 1);
+  assert.match(bogus.out, /unknown image "bogus"/);
+  assert.equal(w.run('build').code, 0);
+
+  // Someone pushed to integration after the run started: the atomic push refuses both refs.
+  const other = join(w.root, 'other');
+  w.git(['clone', '-q', w.github, other]);
+  w.git(['checkout', '-q', 'integration'], other);
+  writeFileSync(join(other, 'late.txt'), 'late\n');
+  w.git(['add', '-A'], other);
+  w.git(['commit', '-q', '-m', 'late'], other);
+  w.git(['push', '-q', 'origin', 'integration'], other);
+  const moved = w.run('release');
+  assert.equal(moved.code, 1);
+  assert.match(moved.out, /the push was refused/);
+  assert.equal(w.main(), w.base, 'main did not move');
+  assert.match(outFile(w, 'release.env'), /PUSHED=0/);
+  assert.match(w.run('rollback').out, /nothing to roll back/);
+
+  // main has a commit the run's commit lacks: refused before anything is made.
+  w.git(['checkout', '-q', 'main'], other);
+  writeFileSync(join(other, 'hotfix.txt'), 'x\n');
+  w.git(['add', '-A'], other);
+  w.git(['commit', '-q', '-m', 'hotfix'], other);
+  w.git(['push', '-q', 'origin', 'main'], other);
+  const behind = w.run('release');
+  assert.equal(behind.code, 1);
+  assert.match(behind.out, /main has commits that [0-9a-f]{7} does not/);
+
+  // A failing build prints the end of its log; the token in it is masked.
+  writeFileSync(join(w.root, 'build-fails'), '');
+  writeFileSync(join(w.root, 'leak'), '');
+  const failed = w.run('build');
+  assert.equal(failed.code, 1);
+  assert.match(failed.out, /BUILD FAILED/);
+  assert.match(failed.out, /auth: \[redacted\]/);
+  assert.ok(!failed.out.includes(w.token), 'never the token');
+});
+
+test('the whole pipeline through the CI service and the real runner: gate, build, held for a person, approved, released, verified', async () => {
+  const h = await harness();
+  const fake = world();
+  try {
+    // The workspace: the fakes on PATH, the cluster's names pointed at the fakes in ~/.profile (the steps' login shell reads it).
+    h.home.extraEnv.PATH = `${join(fake.root, 'bin')}:/usr/local/bin:/usr/bin:/bin`;
+    writeFileSync(join(h.home.home, '.profile'), Object.entries({ FAKE: fake.root, DEPLOY_GIT_REMOTE: fake.github, DEPLOY_URL: 'http://portal.test:3000', DEPLOY_WAIT_S: '5', DEPLOY_POLL_S: '1' }).map(([k, v]) => `export ${k}='${v}'\n`).join(''));
+    // The development repository: integration as on GitHub, pushed to its pilot remote.
+    h.home.git(['fetch', '-q', fake.github, 'integration:integration'], h.src);
+    h.home.git(['checkout', '-q', 'integration'], h.src);
+    const repo = await h.svc.createRepo({ workspaceId: WS, name: 'claudepilot', source: h.src, connect: true });
+    await h.svc.poll(WS);
+
+    const run = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'integration', inputs: { images: 'portal' } }, 'session:s1', { sessionId: 's1', deploymentOnly: 'deployment pipelines only' });
+    assert.equal(run.sha, fake.sha);
+    assert.deepEqual(run.deployments.map((d) => [d.job, d.environment, d.approval]), [['release', 'production', 'pending']]);
+    await h.until('the release to wait for a person', () => h.svc.get(run.id).deployments[0]!.approval === 'waiting', 120_000);
+    const held = h.svc.get(run.id);
+    assert.deepEqual(held.detail.map((j) => [j.id, j.status]), [['gate', 'passed'], ['build', 'passed'], ['release', 'waiting'], ['verify', 'pending'], ['rollback', 'pending']]);
+    assert.equal(fake.main(), fake.base, 'nothing is released before the approval');
+
+    await h.svc.decide(run.id, 'release', 'approve', { actor: 'user:u_owner', userId: 'u_owner' });
+    await h.until('the run to finish', () => !['queued', 'running'].includes(h.svc.get(run.id).status), 120_000);
+    const done = h.svc.get(run.id);
+    assert.equal(done.status, 'passed', JSON.stringify(done.detail.map((j) => [j.id, j.status, j.reason])));
+    assert.deepEqual(done.detail.map((j) => [j.id, j.status]), [['gate', 'passed'], ['build', 'passed'], ['release', 'passed'], ['verify', 'passed'], ['rollback', 'skipped']]);
+    assert.notEqual(fake.main(), fake.base);
+    assert.equal(fake.branch('integration'), fake.main());
+    assert.match(fake.manifestAt('main'), new RegExp(`claudepilot/portal:${today().replace(/\./g, '\\.')}-2\\n`));
+    const buildLog = (await h.svc.log(run.id, 'build', 0, 0)).text;
+    assert.match(buildLog, /token in the build log: none/);
+    assert.ok(!buildLog.includes(fake.token));
+    assert.match((await h.svc.log(run.id, 'verify', 0, 0)).text, /verify: live and well/);
+    assert.deepEqual(done.deployments.map((d) => [d.approval, d.outcome, d.decidedBy]), [['approved', 'passed', 'user:u_owner']]);
+  } finally {
+    h.done();
+  }
+});

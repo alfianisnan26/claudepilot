@@ -1,6 +1,7 @@
-import { Button, cn, ConfirmDialog, CopyButton, EmptyState, LoadError, Menu, RowsSkeleton, useToast } from '@isnanme/ui';
-import { type CiBranch, type CiPipelineInfo, type CiRepo, type CiStatus } from '@portal/contracts';
-import { AlertTriangle, ChevronDown, ChevronRight, GitBranch, GitMerge, Lock, Play, Plus, Power } from 'lucide-react';
+import { Button, cn, ConfirmDialog, CopyButton, EmptyState, LoadError, Menu, RowsSkeleton, Switch, useToast } from '@isnanme/ui';
+import { type CiBranch, type CiDeployment, type CiEnvironment, type CiPipelineInfo, type CiRepo, type CiStatus, type CiUnitStatus } from '@portal/contracts';
+import { AlertTriangle, ChevronDown, ChevronRight, GitBranch, GitMerge, Lock, Play, Plus, Power, ShieldCheck, ShieldOff } from 'lucide-react';
+import { InfoTip } from '@/components/InfoTip';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { errorText } from '@/lib/api';
@@ -260,9 +261,94 @@ function RemoteDetail({ repo }: { repo: CiRepo }) {
         </ul>
       )}
 
+      <Environments repo={repo} />
+
       <RunDialog repo={runFor !== null ? repo : null} branch={runFor ?? ''} onClose={() => setRunFor(null)} onStarted={(r) => (setRunFor(null), navigate(`/admin/ci/runs/${r.id}`))} />
       <MergeDialog repo={mergeFor !== null ? repo : null} source={mergeFor ?? ''} branches={branches} onClose={() => setMergeFor(null)} onMerged={() => (setMergeFor(null), toast('Merged'), void load())} />
       <PipelineDialog info={info} onClose={() => setInfo(null)} />
     </div>
+  );
+}
+
+/** Where a deployment stands, as one icon: held for a person, else how its job ended. */
+const deployLook = (d: CiDeployment): CiUnitStatus => (d.approval === 'waiting' ? 'waiting' : d.approval === 'rejected' ? 'cancelled' : (d.outcome ?? 'running'));
+
+/**
+ * The remote's environments (PRD FR41): each with its latest deployment and whether a person must approve a deploy there. Made the first time a
+ * pipeline names one, protected. Turning protection off is asked once more, since agents could then deploy on their own.
+ */
+function Environments({ repo }: { repo: CiRepo }) {
+  const toast = useToast();
+  const [envs, setEnvs] = useState<CiEnvironment[] | null>(null);
+  const [offFor, setOffFor] = useState<CiEnvironment | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const seq = useRef(0);
+
+  const load = useCallback(async () => {
+    const mine = ++seq.current;
+    try {
+      const list = await ciApi.environments(repo.id);
+      if (mine === seq.current) setEnvs(list);
+    } catch {
+      // the list stays as it was; the remote's own load reports trouble
+    }
+  }, [repo.id]);
+  useEffect(() => void load(), [load]);
+  useLive('ci', () => void load());
+
+  const set = async (env: CiEnvironment, on: boolean) => {
+    setBusy(env.name);
+    try {
+      await ciApi.setEnvironment(repo.id, env.name, on);
+      toast(on ? `${env.name}: approval on` : `${env.name}: approval off`);
+      setOffFor(null);
+      await load();
+    } catch (e) {
+      toast(errorText(e, 'Could not change it.'), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!envs?.length) return null;
+  return (
+    <>
+      <ul className="mt-2 flex flex-col border-t border-line pt-2" aria-label="Environments">
+        {envs.map((e) => {
+          const last = e.deployments[0];
+          return (
+            <li key={e.id} className="flex min-w-0 items-center gap-2 rounded-xl px-1 py-1">
+              {e.protected ? <ShieldCheck className="size-4 shrink-0 text-accent" aria-hidden="true" /> : <ShieldOff className="size-4 shrink-0 text-gold" aria-hidden="true" />}
+              <span className="flex min-w-0 flex-1 items-center gap-1">
+                <span className={cn(MONO, 'truncate font-semibold')}>{e.name}</span>
+                <InfoTip label={`About ${e.name}`}>
+                  {e.protected ? `Each deploy to ${e.name} waits for a person to approve it on its run. Agents can start one, never approve it.` : `Deploys to ${e.name} run without asking, also when an agent starts them.`}
+                </InfoTip>
+              </span>
+              {last && (
+                <Link
+                  to={`/admin/ci/runs/${last.runId}`}
+                  title={`${last.pipeline} #${last.runNumber}: ${last.approval}${last.outcome ? `, ${last.outcome}` : ''} · ${timeAgo(last.createdAt)}`}
+                  className="press flex h-8 items-center gap-1 rounded-full px-2 text-[12.5px] text-ink-soft hover:bg-surface-2"
+                >
+                  <StatusIcon status={deployLook(last)} className="[&_svg]:size-4" />
+                  <span className="tabular-nums">#{last.runNumber}</span>
+                </Link>
+              )}
+              <Switch label={`Approval for ${e.name}`} checked={e.protected} disabled={busy === e.name} onChange={(on) => (on ? void set(e, true) : setOffFor(e))} />
+            </li>
+          );
+        })}
+      </ul>
+      <ConfirmDialog
+        open={!!offFor}
+        title="Deploy without approval?"
+        description={`Deploys to ${offFor?.name ?? ''} will run without asking, also when an agent starts them.`}
+        confirmLabel="Turn off"
+        loading={busy !== null}
+        onConfirm={() => offFor && void set(offFor, false)}
+        onClose={() => setOffFor(null)}
+      />
+    </>
   );
 }

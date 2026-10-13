@@ -634,3 +634,74 @@ test('a matrix group: fail-fast stops the combinations that have not started, ma
   assert.ok(spans.every(([s]) => overlapping(s) <= 2), 'never more than two at once');
   assert.ok(Math.max(...spans.map(([s]) => overlapping(s))) === 2, 'but two did run together');
 });
+
+test('a job with an approval gate waits; a forged or wrong key approves nothing; the right key lets it run; a reject ends the run as rejected', async () => {
+  const { createHash, randomBytes } = await import('node:crypto');
+  const h = new Home();
+  const sha = await repoWithCommit(h);
+  const key = randomBytes(32).toString('hex');
+  const gate = createHash('sha256').update(key).digest('hex');
+  const stateOf = async (id: string) => ((await h.ci(['poll', '--runs', id])).runs as Record<string, { state: { status: string; reason: string | null; jobs: { id: string; status: string; reason: string | null }[] } }>)[id]!.state;
+  const waitFor = async (id: string, job: string, status: string) => {
+    for (let i = 0; i < 150; i++) {
+      if ((await stateOf(id)).jobs.find((j) => j.id === job)?.status === status) return;
+      await sleep(100);
+    }
+    throw new Error(`${job} never became ${status}: ${JSON.stringify(await stateOf(id))}`);
+  };
+  const p = plan('app', sha, [
+    job('build', [step('echo built')]),
+    job('release', [step('echo released > released.txt; cat released.txt')], { needs: ['build'], environment: 'production', approval: { environment: 'production', gate } }),
+    job('after', [step('echo after')], { needs: ['release'] }),
+  ]);
+  const started = await h.start(p);
+  assert.equal(started.ok, true, JSON.stringify(started));
+  await waitFor(p.runId, 'release', 'waiting');
+  const s0 = await stateOf(p.runId);
+  assert.deepEqual([s0.status, s0.jobs.map((j) => j.status)], ['running', ['passed', 'waiting', 'pending']]);
+  assert.ok(!existsSync(join(h.home, '.claudepilot/ci/runs', p.runId, 'logs/release')), 'nothing of the held job ran');
+
+  // The workspace user writing the decision file by hand, with no key or a made-up one: thrown away, still waiting.
+  const approvals = join(h.home, '.claudepilot/ci/runs', p.runId, 'approvals');
+  mkdirSync(approvals, { recursive: true });
+  writeFileSync(join(approvals, 'release'), JSON.stringify({ decision: 'approve', key: randomBytes(32).toString('hex') }));
+  await sleep(800);
+  assert.equal(existsSync(join(approvals, 'release')), false, 'a wrong key is thrown away');
+  assert.equal((await stateOf(p.runId)).jobs[1]!.status, 'waiting');
+  // cp-ci approve refuses what can not be meant, and checks nothing it can not check (the key is the supervisor's to judge).
+  assert.equal((await h.ci(['approve', p.runId, 'build', '--bytes', '64'], { stdin: key })).error, 'no_gate');
+  assert.equal((await h.ci(['approve', p.runId, 'nope', '--bytes', '64'], { stdin: key })).error, 'no_job');
+  assert.equal((await h.ci(['approve', p.runId, 'release'])).error, 'bad_key');
+  assert.equal((await h.ci(['approve', p.runId, 'release', '--bytes', '64'], { stdin: 'z'.repeat(64) })).error, 'bad_key');
+
+  const ok = await h.ci(['approve', p.runId, 'release', '--bytes', '64'], { stdin: key });
+  assert.deepEqual([ok.ok, ok.decision], [true, 'approve'], JSON.stringify(ok));
+  const done = await h.finished(p.runId);
+  assert.equal(done.state.status, 'passed', JSON.stringify(done.state));
+  assert.deepEqual(done.state.jobs.map((j) => j.status), ['passed', 'passed', 'passed']);
+  assert.match(logOf(h, p.runId, 'release', 0), /released/);
+  assert.equal((await h.ci(['approve', p.runId, 'release', '--bytes', '64'], { stdin: key })).error, 'over');
+
+  // A reject: the held job and what waits on it are cancelled, the run ends cancelled (rejected), nothing else is started.
+  const r = plan('app', sha, [
+    job('release', [step('echo never')], { environment: 'production', approval: { environment: 'production', gate } }),
+    job('verify', [step('echo never')], { needs: ['release'] }),
+    job('rollback', [step('echo never')], { needs: ['release', 'verify'], when: 'failure' }),
+  ]);
+  await h.start(r);
+  await waitFor(r.runId, 'release', 'waiting');
+  assert.equal((await h.ci(['approve', r.runId, 'release', '--reject'])).ok, true);
+  const rejected = await h.finished(r.runId);
+  assert.deepEqual([rejected.state.status, rejected.state.reason], ['cancelled', 'rejected']);
+  assert.deepEqual(rejected.state.jobs.map((j) => [j.status, j.reason]), [['cancelled', 'rejected'], ['cancelled', 'rejected'], ['cancelled', 'rejected']], 'a rejection never starts the rollback');
+
+  // Cancelling a run that waits settles the held job; a plan with a malformed gate is refused.
+  const c = plan('app', sha, [job('release', [step('echo never')], { approval: { environment: 'production', gate } })]);
+  await h.start(c);
+  await waitFor(c.runId, 'release', 'waiting');
+  await h.ci(['cancel', c.runId]);
+  const cancelled = await h.finished(c.runId);
+  assert.deepEqual([cancelled.state.status, cancelled.state.jobs[0]!.status], ['cancelled', 'cancelled']);
+  const bad = plan('app', sha, [job('release', [step('echo never')], { approval: { environment: 'production', gate: 'nothex' } })]);
+  assert.equal((await h.start(bad)).error, 'bad_plan');
+});

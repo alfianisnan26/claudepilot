@@ -2,15 +2,18 @@
 // under a per-workspace cap, mirrors each run's state and logs from the workspace into the portal, and answers the API.
 // The workspace does the work; this only reads its files and acknowledges what it stored, so a restart loses nothing.
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { AppError } from '@isnanme/core';
 import {
   CI_REPO_NAME,
   isCiActive,
   parseTicketBranch,
   shortSha,
+  CI_ENVIRONMENT_NAME,
   type CiBranch,
+  type CiDeployment,
   type CiDiagnostic,
+  type CiEnvironment,
   type CiJob,
   type CiLogChunk,
   type CiPipelineInfo,
@@ -29,6 +32,7 @@ import {
   type MergeCiResult,
   type StartCiRunRequest,
   type UpdateCiRepoRequest,
+  type UpdateCiEnvironmentRequest,
   type ValidateCiRequest,
   type ValidateCiResult,
 } from '@portal/contracts';
@@ -39,7 +43,7 @@ import { CiUnreachable, type CiHost, type CiReply } from './host.js';
 import { CI_LIMITS } from './limits.js';
 import { replan, compile, matches, resolveInputs, branchOf, tagOf, type EventContext } from './spec/compile.js';
 import { validateFiles, type SnapshotFile, type Validated } from './spec/validate.js';
-import { CiStore, type RepoRow, type RunRow } from './store.js';
+import { CiStore, type DeploymentRow, type EnvironmentRow, type RepoRow, type RunRow } from './store.js';
 import { CiLinks } from './links.js';
 import type { CiSessionsPort } from './sessions.js';
 import type { CiTicketsPort } from './tickets.js';
@@ -55,12 +59,33 @@ const json = <T>(text: string | null | undefined, fallback: T): T => {
   }
 };
 
+/** The facts of a run a deployment row copies. */
+const row0 = (r: RunRow) => ({ id: r.id, number: r.number, pipeline: r.pipeline, sha: r.sha, ref: r.ref, actor: r.actor, created_at: r.created_at });
+
 const newRunId = () => `r${Date.now().toString(36)}${randomBytes(3).toString('hex')}`;
 const newId = (prefix: string) => `${prefix}${Date.now().toString(36)}${randomBytes(4).toString('hex')}`;
 const WORKSPACE_ID = /^[a-z0-9-]+\/[A-Za-z0-9._-]+$/;
 const SKIP = /\[(?:skip ci|ci skip)\]/i;
 const GLOB = /^[A-Za-z0-9._/*?-]{1,200}$/;
 const JOB_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+/** A deployment as the API shows it: never its key. */
+const deploymentView = (d: DeploymentRow): CiDeployment => ({
+  id: d.id,
+  runId: d.run_id,
+  runNumber: d.run_number,
+  pipeline: d.pipeline,
+  job: d.job,
+  environment: d.environment,
+  sha: d.sha,
+  ref: d.ref,
+  actor: d.actor,
+  approval: d.approval,
+  decidedBy: d.decided_by,
+  decidedAt: d.decided_at,
+  outcome: (d.outcome as CiDeployment['outcome']) ?? null,
+  createdAt: d.created_at,
+});
 
 const invalid = (field: string, message: string) => new AppError('VALIDATION_FAILED', message, { details: { [field]: message } });
 const notFound = (what: string) => new AppError('NOT_FOUND', `No such ${what}.`);
@@ -110,12 +135,22 @@ export interface CiServiceOptions {
   sessions?: CiSessionsPort;
   /** Whether a Secrets & env name reaches a workspace (names only, never a value). Without it secret names are not checked before a run. */
   secrets?: (workspaceId: string, name: string) => { kind: string; asFile: boolean; asVariable: boolean } | null;
+  /** The platform audit (approvals, protection changes). Names, ids and fixed codes only. */
+  audit?: (e: { kind: string; actor: string; userId: string | null; severity?: 'info' | 'medium' | 'high'; subject?: string; detail?: Record<string, unknown> }) => void;
+}
+
+/** Who decided something a person must decide (an approval, a protection change): the actor string for records and the user for the audit. */
+export interface CiDecider {
+  actor: string;
+  userId: string | null;
 }
 
 /** What other modules hear about (tickets, sessions): called after the change is stored, never allowed to break the service. */
 export interface CiHooks {
   created?(run: RunRow): void;
   changed?(run: RunRow, previous: CiStatus | null): void;
+  /** A job started waiting for a person's approval (PRD FR41): once per job. Notifications plug in here. */
+  waiting?(run: RunRow, job: string, environment: string): void;
 }
 
 interface Polled {
@@ -128,7 +163,9 @@ export class CiService {
   onChange?: () => void;
   hooks: CiHooks = {};
   readonly #cs: CiStore;
-  readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets'>> & Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets'>;
+  readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'audit'>> & Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'audit'>;
+  /** Runs with an approval being decided right now: one decision at a time per run. */
+  readonly #deciding = new Set<string>();
   readonly #links: CiLinks;
   readonly #polling = new Map<string, Promise<void>>();
   readonly #acks = new Map<string, string[]>();
@@ -155,6 +192,7 @@ export class CiService {
       redactFor: opts.redactFor,
       streamFor: opts.streamFor,
       secrets: opts.secrets,
+      audit: opts.audit,
     };
   }
 
@@ -321,7 +359,7 @@ export class CiService {
   #insertRun(
     repo: RepoRow,
     v: Validated,
-    o: { event: EventContext['event']; ref: string; sha: string; base: string | null; actor: string; inputs: Record<string, string | boolean>; eventId: string | null; subject: string | null; trigger: CiTrigger; rerunOf?: string },
+    o: { event: EventContext['event']; ref: string; sha: string; base: string | null; actor: string; inputs: Record<string, string | boolean>; eventId: string | null; subject: string | null; trigger: CiTrigger; rerunOf?: string; sessionId?: string | null },
   ): RunRow {
     const number = this.#cs.nextNumber(repo.id);
     const id = newRunId();
@@ -347,7 +385,7 @@ export class CiService {
       inputs: JSON.stringify(o.inputs),
       ticket_id: null,
       ticket_source: null,
-      session_id: null,
+      session_id: o.sessionId ?? null,
       rerun_of: o.rerunOf ?? null,
       concurrency_group: null,
       cancel_in_progress: 0,
@@ -368,14 +406,63 @@ export class CiService {
       const ctx: EventContext = { event: o.event, ref: o.ref, sha: o.sha, base: o.base, actor: o.actor, repo: repo.name, ticket: null, inputs: o.inputs, workspace: repo.workspace_id, runId: id, runNumber: number };
       const c = compile(v.pipeline, ctx, { maxParallel: this.#opts.maxJobsParallel });
       const missing = c.ok ? this.#missingSecrets(repo.workspace_id, c.plan.jobs.filter((j) => !j.skip), v.info.file) : [];
+      const gates = c.ok && !missing.length ? this.#gates(repo, c.plan, row0(base)) : null;
       row = !c.ok
         ? { ...base, status: 'failed', reason: 'invalid_pipeline', diagnostics: JSON.stringify(c.diagnostics), finished_at: now, duration_ms: 0, archived: 1 }
         : missing.length
           ? { ...base, status: 'failed', reason: 'invalid_pipeline', diagnostics: JSON.stringify(missing), finished_at: now, duration_ms: 0, archived: 1 }
-          : { ...base, plan: JSON.stringify(c.plan), concurrency_group: c.group, cancel_in_progress: c.cancelInProgress ? 1 : 0 };
+          : gates && 'problem' in gates
+            ? { ...base, status: 'failed', reason: 'invalid_pipeline', diagnostics: JSON.stringify([gates.problem]), finished_at: now, duration_ms: 0, archived: 1 }
+            : { ...base, plan: JSON.stringify(c.plan), concurrency_group: c.group, cancel_in_progress: c.cancelInProgress ? 1 : 0 };
+      this.#cs.insertRun(row);
+      if (gates && 'deployments' in gates && row.status === 'queued') for (const d of gates.deployments) this.#cs.insertDeployment(d);
+      return row;
     }
     this.#cs.insertRun(row);
     return row;
+  }
+
+  /**
+   * Environments for a plan's jobs (PRD FR41): each named environment is found or made (protected), and a job that deploys to a protected one
+   * gets a gate: the SHA-256 of a fresh random key, which the portal keeps and hands to the runner only when a person approves. Changes the
+   * plan in place and returns the deployment rows to store with the run. Fails closed: without the tables, a deployment can not run.
+   */
+  #gates(repo: RepoRow, plan: Plan, run: Pick<RunRow, 'id' | 'number' | 'pipeline' | 'sha' | 'ref' | 'actor' | 'created_at'>): { deployments: DeploymentRow[] } | { problem: CiDiagnostic } {
+    const jobs = plan.jobs.filter((j) => j.environment && !j.skip);
+    for (const j of plan.jobs) j.approval = null;
+    if (!jobs.length) return { deployments: [] };
+    if (!this.#cs.deploymentsReady)
+      return { problem: { file: '', line: 0, column: 0, path: `jobs.${jobs[0]!.id}.environment`, severity: 'error', code: 'no-environments', message: 'This portal can not hold deployment approvals yet (its database is not up to date).' } };
+    const deployments: DeploymentRow[] = [];
+    for (const j of jobs) {
+      const env = this.#cs.ensureEnvironment(repo.id, j.environment!, 'system', newId('e'));
+      let key: string | null = null;
+      if (env.protected) {
+        key = randomBytes(32).toString('hex');
+        j.approval = { environment: env.name, gate: createHash('sha256').update(key).digest('hex') };
+      }
+      deployments.push({
+        id: newId('d'),
+        run_id: run.id,
+        run_number: run.number,
+        job: j.id,
+        repo_id: repo.id,
+        environment: env.name,
+        pipeline: run.pipeline,
+        sha: run.sha,
+        ref: run.ref,
+        actor: run.actor,
+        approval: key ? 'pending' : 'auto',
+        gate_key: key,
+        decided_by: null,
+        decided_at: null,
+        outcome: null,
+        owner_id: env.owner_id,
+        created_by: 'u_owner',
+        created_at: run.created_at,
+      });
+    }
+    return { deployments };
   }
 
   /** The secrets jobs name that this workspace can't give them (a name not assigned, or one that reaches Claude Code only as a variable). */
@@ -452,6 +539,7 @@ export class CiService {
   #finishFailed(run: RunRow, reason: string, note: string): void {
     const now = new Date().toISOString();
     this.#cs.updateRun(run.id, { status: 'failed', reason, finished_at: now, duration_ms: 0, archived: 1, diagnostics: JSON.stringify([{ file: '', line: 0, column: 0, path: '', severity: 'error', code: reason, message: note }]) });
+    this.#settleDeployments(run.id, null);
     this.#changed();
     this.#moved(run.id, run.status);
   }
@@ -471,7 +559,28 @@ export class CiService {
     const text = JSON.stringify(s);
     if (text !== row.state) {
       this.#cs.updateRun(row.id, { state: text, started_at: s.startedAt ?? row.started_at });
+      this.#waiting(row, s);
       this.#changed();
+    }
+  }
+
+  /** A held job the runner now reports as `waiting`: its deployment says so, and the hook hears it once. */
+  #waiting(row: RunRow, s: CiRunStateFile): void {
+    for (const d of this.#cs.deploymentsOfRun(row.id)) {
+      if (d.approval !== 'pending' || s.jobs.find((j) => j.id === d.job)?.status !== 'waiting') continue;
+      if (!this.#cs.updateDeployment(d.id, { approval: 'waiting' }, ['pending'])) continue;
+      console.log(`[ci] ${row.id} ${d.job} waits for an approval to deploy to ${d.environment}`);
+      this.#hook(() => this.hooks.waiting?.(row, d.job, d.environment));
+    }
+  }
+
+  /** The run is over: each deployment gets how its job ended, an undecided approval expires, and every key is dropped. */
+  #settleDeployments(runId: string, s: CiRunStateFile | null): void {
+    for (const d of this.#cs.deploymentsOfRun(runId)) {
+      const job = s?.jobs.find((j) => j.id === d.job);
+      const undecided = d.approval === 'pending' || d.approval === 'waiting';
+      const approval: DeploymentRow['approval'] = !undecided ? d.approval : job?.reason === 'rejected' ? 'rejected' : job?.status === 'skipped' ? 'skipped' : 'expired';
+      this.#cs.updateDeployment(d.id, { approval, gate_key: null, outcome: job?.status ?? 'cancelled' });
     }
   }
 
@@ -481,7 +590,7 @@ export class CiService {
     const s: CiRunStateFile = last ?? { v: 1, runId: row.id, status: 'running', reason: null, startedAt: row.started_at, finishedAt: null, durationMs: null, jobs: this.get(row.id).detail };
     for (const j of s.jobs) {
       if (j.status === 'running') (j.status = 'failed'), (j.reason = 'runner_lost');
-      else if (j.status === 'pending') (j.status = 'cancelled'), (j.reason = 'runner_lost');
+      else if (j.status === 'pending' || j.status === 'waiting') (j.status = 'cancelled'), (j.reason = 'runner_lost');
       for (const st of j.steps) {
         if (st.status === 'running') (st.status = 'failed'), (st.reason = 'runner_lost');
         else if (st.status === 'pending') (st.status = 'cancelled'), (st.reason = 'runner_lost');
@@ -505,6 +614,7 @@ export class CiService {
       duration_ms: s.durationMs ?? Math.max(0, Date.parse(finished) - started),
     });
     console.log(`[ci] ${row.id} ${s.status}${s.reason ? ` (${s.reason})` : ''}`);
+    this.#settleDeployments(row.id, s);
     await this.#archive(row.id).catch((e: unknown) => console.error(`[ci] ${row.id}: logs not kept yet: ${(e as Error).message}`));
     this.#changed();
     this.#moved(row.id, row.status);
@@ -561,6 +671,7 @@ export class CiService {
     const now = new Date().toISOString();
     if (row.status === 'queued') {
       this.#cs.updateRun(row.id, { status: 'cancelled', reason, finished_at: now, duration_ms: 0, archived: 1 });
+      this.#settleDeployments(row.id, null);
       this.#changed();
       this.#moved(row.id, 'queued');
       return;
@@ -585,7 +696,12 @@ export class CiService {
       const plan = row.plan ? replan(JSON.parse(row.plan) as Plan, newId2, number) : null;
       const now = new Date().toISOString();
       const copy: RunRow = { ...row, id: newId2, number, trigger: 'rerun', event_id: null, status: plan ? 'queued' : 'failed', reason: plan ? null : row.reason, actor, plan: plan ? JSON.stringify(plan) : null, state: null, attempts: 0, created_at: now, started_at: null, finished_at: plan ? null : now, duration_ms: plan ? null : 0, archived: plan ? 0 : 1, rerun_of: row.id };
+      // A rerun deploys again: fresh gates and its own approvals, never the old run's.
+      const gates = plan ? this.#gates(repo, plan, row0(copy)) : null;
+      if (gates && 'problem' in gates) throw new AppError('CONFLICT', gates.problem.message);
+      if (plan) copy.plan = JSON.stringify(plan);
       this.#cs.insertRun(copy);
+      if (gates) for (const d of gates.deployments) this.#cs.insertDeployment(d);
       return copy;
     });
     this.#born(created, null);
@@ -594,9 +710,94 @@ export class CiService {
     return this.get(created.id);
   }
 
+  /* ---------- Approvals and environments (PRD FR41) ---------- */
+
+  /**
+   * A person lets a held job run, or refuses it. The caller has made sure it is a person (never a token or an agent: the routes, and no tool,
+   * reach this). Approving hands the runner the job's key through `cp-ci approve`; the decision is recorded only after the runner took it,
+   * and one decision per run is made at a time, so two people can not approve and reject the same job into a split state.
+   */
+  async decide(id: string, job: unknown, decision: 'approve' | 'reject', by: CiDecider): Promise<CiRun> {
+    const row = this.#need(id);
+    if (typeof job !== 'string' || !JOB_ID.test(job)) throw invalid('job', 'Pick the job that waits.');
+    const dep = this.#cs.deploymentsReady ? this.#cs.deployment(row.id, job) : undefined;
+    if (!dep) throw notFound('deployment');
+    if (row.status !== 'running' || dep.approval !== 'waiting' || !dep.gate_key) throw new AppError('CONFLICT', dep.approval === 'pending' ? 'That job is not waiting yet.' : 'That job is not waiting for an approval.');
+    if (this.#deciding.has(row.id)) throw new AppError('CONFLICT', 'Someone is deciding this right now.');
+    this.#deciding.add(row.id);
+    try {
+      await this.#running(row.workspace_id);
+      const key = dep.gate_key;
+      const reply = decision === 'approve' ? await this.#cp(row.workspace_id, ['approve', row.id, job, '--bytes', String(Buffer.byteLength(key))], { stdin: key }) : await this.#cp(row.workspace_id, ['approve', row.id, job, '--reject']);
+      if (!reply.ok) {
+        if (reply.error === 'over' || reply.error === 'not_waiting') throw new AppError('CONFLICT', 'That job is not waiting any more.');
+        throw fromReply(reply);
+      }
+      const at = new Date().toISOString();
+      const state = decision === 'approve' ? 'approved' : 'rejected';
+      if (!this.#cs.updateDeployment(dep.id, { approval: state, decided_by: by.actor, decided_at: at, gate_key: null }, ['waiting'])) throw new AppError('CONFLICT', 'That was decided already.');
+      this.#opts.audit?.({
+        kind: decision === 'approve' ? 'ci.deploy_approved' : 'ci.deploy_rejected',
+        severity: 'medium',
+        actor: by.actor,
+        userId: by.userId,
+        subject: `ci_run:${row.id}`,
+        detail: { workspace: row.workspace_id, repo: row.repo, pipeline: row.pipeline, run: row.number, job, environment: dep.environment, sha: shortSha(row.sha), startedBy: row.actor },
+      });
+      console.log(`[ci] ${row.id} ${job}: deployment to ${dep.environment} ${state}`);
+    } finally {
+      this.#deciding.delete(row.id);
+    }
+    this.#changed();
+    this.kick(row.workspace_id);
+    return this.get(row.id);
+  }
+
+  #envView(e: EnvironmentRow): CiEnvironment {
+    return { id: e.id, repoId: e.repo_id, name: e.name, protected: e.protected === 1, updatedAt: e.updated_at, updatedBy: e.updated_by, deployments: this.#cs.deploymentsOf(e.repo_id, e.name).map(deploymentView) };
+  }
+
+  environments(repoId: string): CiEnvironment[] {
+    const repo = this.#needRepo(repoId);
+    if (!this.#cs.deploymentsReady) return [];
+    return this.#cs.environments(repo.id).map((e) => this.#envView(e));
+  }
+
+  /**
+   * Turns an environment's protection on or off (a person, `manage`), making it when it does not exist yet. A run started before the change
+   * keeps the gates it was planned with: switching protection off never lets a job already waiting go on by itself.
+   */
+  setEnvironment(repoId: string, name: unknown, req: Partial<UpdateCiEnvironmentRequest>, by: CiDecider): CiEnvironment {
+    const repo = this.#needRepo(repoId);
+    if (typeof name !== 'string' || !CI_ENVIRONMENT_NAME.test(name)) throw invalid('name', 'Lowercase letters, digits, . _ and -.');
+    if (typeof req.protected !== 'boolean') throw invalid('protected', 'true or false.');
+    if (!this.#cs.deploymentsReady) throw new AppError('SERVICE_UNAVAILABLE', 'This portal’s database is not up to date.', { expose: true });
+    const env = this.#cs.ensureEnvironment(repo.id, name, by.actor, newId('e'));
+    if ((env.protected === 1) !== req.protected) {
+      this.#cs.setProtected(env.id, req.protected, by.actor);
+      this.#opts.audit?.({ kind: 'ci.environment_protection', severity: req.protected ? 'info' : 'high', actor: by.actor, userId: by.userId, subject: `ci_repo:${repo.id}`, detail: { workspace: repo.workspace_id, repo: repo.name, environment: name, protected: req.protected } });
+      this.#changed();
+    }
+    return this.#envView(this.#cs.environment(repo.id, name)!);
+  }
+
+  /** The workspace of a run or remote, for the authorization resolvers (null when there is none). */
+  workspaceOfRun(id: string): string | null {
+    return this.#cs.run(id)?.workspace_id ?? null;
+  }
+
+  workspaceOfRepo(id: string): string | null {
+    const r = this.#cs.repo(id);
+    return r && !r.removed_at ? r.workspace_id : null;
+  }
+
   /* ---------- Manual runs ---------- */
 
-  async startRun(req: Partial<StartCiRunRequest>, actor = 'ui'): Promise<CiRun> {
+  /**
+   * Starts a pipeline by hand (FR13). `sessionId` links the run to the session that asked (an agent's own run: it may read and cancel it).
+   * `deploymentOnly` refuses a pipeline in which no job names an environment: what an agent may start on a branch that is not its own (PRD §14).
+   */
+  async startRun(req: Partial<StartCiRunRequest>, actor = 'ui', opts: { sessionId?: string | null; deploymentOnly?: string } = {}): Promise<CiRun> {
     if (typeof req.repoId !== 'string') throw invalid('repoId', 'Pick a remote.');
     const repo = this.#needRepo(req.repoId);
     if (typeof req.pipeline !== 'string' || !req.pipeline) throw invalid('pipeline', 'Pick a pipeline.');
@@ -608,9 +809,10 @@ export class CiService {
     if (!found) throw notFound('pipeline');
     if (!found.pipeline) throw new AppError('CONFLICT', 'That pipeline has errors. Fix them and push first.', { details: { diagnostics: found.info.diagnostics } });
     if (!found.pipeline.on.manual) throw new AppError('CONFLICT', 'That pipeline can not be started by hand: it has no manual trigger.');
+    if (opts.deploymentOnly && !found.pipeline.jobs.some((j) => !j.hidden && j.environment)) throw new AppError('FORBIDDEN', opts.deploymentOnly);
     const { values, problems } = resolveInputs(found.pipeline.on.manual.inputs, req.inputs);
     if (Object.keys(problems).length) throw new AppError('VALIDATION_FAILED', 'Check the inputs.', { details: problems });
-    const row = this.#cs.tx(() => this.#insertRun(repo, found, { event: 'manual', ref: ref.ref, sha: ref.sha, base: null, actor, inputs: values, eventId: null, subject: snap.subject ?? null, trigger: 'manual' }));
+    const row = this.#cs.tx(() => this.#insertRun(repo, found, { event: 'manual', ref: ref.ref, sha: ref.sha, base: null, actor, inputs: values, eventId: null, subject: snap.subject ?? null, trigger: 'manual', sessionId: opts.sessionId ?? null }));
     this.#born(row, snap.message ?? null);
     this.#changed();
     this.kick(repo.workspace_id);
@@ -690,7 +892,7 @@ export class CiService {
   get(id: string): CiRun {
     const row = this.#need(id);
     const state = json<CiRunStateFile | null>(row.state, null);
-    const plan = json<{ jobs?: { id: string; name: string; needs: string[]; skip: string | null; steps: { name: string; skip: string | null }[] }[] }>(row.plan, {});
+    const plan = json<{ jobs?: { id: string; name: string; needs: string[]; skip: string | null; environment?: string | null; steps: { name: string; skip: string | null }[] }[] }>(row.plan, {});
     // A run that has not started has no state file yet: show its jobs and steps as the plan has them.
     const detail: CiJob[] = state
       ? state.jobs
@@ -706,6 +908,7 @@ export class CiService {
           steps: j.steps.map((s, idx) => ({ idx, name: s.name, status: (s.skip || j.skip ? 'skipped' : 'pending') as CiUnitStatus, startedAt: null, durationMs: null, exitCode: null, logBytes: 0, logTruncated: false, ignored: false, reason: s.skip || j.skip ? ('condition' as const) : null })),
           artifacts: [],
           artifactsSkipped: 0,
+          environment: j.environment ?? null,
         }));
     return {
       ...this.#summary(row),
@@ -716,6 +919,7 @@ export class CiService {
       diagnostics: json<CiDiagnostic[]>(row.diagnostics, []),
       workspaceState: 'running',
       archived: row.archived === 1,
+      deployments: this.#cs.deploymentsOfRun(row.id).map(deploymentView),
     };
   }
 

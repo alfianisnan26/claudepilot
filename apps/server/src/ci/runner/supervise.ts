@@ -3,6 +3,7 @@
 // timeouts, and writes `state.json` after every change. It never talks to the portal: the portal reads its files.
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { copyFileSync, cpSync, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync, type WriteStream } from 'node:fs';
 import { homedir, setPriority, userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -12,7 +13,7 @@ import { artifactMatches } from '../glob.js';
 import { CI_LIMITS } from '../limits.js';
 import type { Plan, PlanJob, PlanStep } from '../plan.js';
 import { bareDir, ensureDir, git, inside, nowIso, runDir, sleep, writeAtomic } from './common.js';
-import { readJson, startTicks } from './runs.js';
+import { approvalPath, readJson, startTicks } from './runs.js';
 
 /** The masked value in a log (the portal's own redactor uses the same word). */
 const MASK = Buffer.from('[redacted]');
@@ -138,6 +139,10 @@ class Supervisor {
   readonly dir: string;
   cancelled = false;
   timedOut = false;
+  /** A person refused a job's approval: the run ends like a cancel (`rejected`), without stopping what already runs. */
+  rejected = false;
+  /** Jobs whose approval arrived with the right key. */
+  readonly #approved = new Set<string>();
   readonly #children = new Map<string, Set<ChildProcess>>();
   readonly #jobTimedOut = new Set<string>();
   readonly #logBudget = { left: CI_LIMITS.runLogBytes };
@@ -219,22 +224,40 @@ class Supervisor {
     const byId = new Map(state.jobs.map((j) => [j.id, j]));
     const running = new Map<string, Promise<void>>();
     for (;;) {
-      if (this.cancelled || this.timedOut) {
-        for (const js of state.jobs) if (js.status === 'pending') this.#close(js, 'cancelled', this.cancelled ? 'cancelled' : 'timeout');
+      if (this.cancelled || this.timedOut || this.rejected) {
+        for (const js of state.jobs) if (js.status === 'pending' || js.status === 'waiting') this.#close(js, 'cancelled', this.cancelled ? 'cancelled' : this.rejected ? 'rejected' : 'timeout');
       } else {
         let started = false;
         for (const job of plan.jobs) {
           const js = byId.get(job.id)!;
-          if (js.status !== 'pending' || running.size >= plan.maxParallel) continue;
+          if ((js.status !== 'pending' && js.status !== 'waiting') || running.size >= plan.maxParallel) continue;
           if (job.group?.maxParallel && plan.jobs.filter((o) => o.group?.id === job.group!.id && byId.get(o.id)!.status === 'running').length >= job.group.maxParallel) continue;
           const deps = job.needs.map((n) => byId.get(n)!);
-          if (deps.some((d) => d.status === 'pending' || d.status === 'running')) continue;
+          if (deps.some((d) => d.status === 'pending' || d.status === 'running' || d.status === 'waiting')) continue;
           const ok = deps.every((d) => d.status === 'passed' || (d.status === 'failed' && d.ignored));
           const brokenDep = deps.some((d) => (d.status === 'failed' && !d.ignored) || d.status === 'cancelled');
           if (!(job.when === 'always' || (job.when === 'failure' ? brokenDep : ok))) {
             this.#close(js, 'skipped', 'needs');
             this.touch();
             continue;
+          }
+          // A deployment to a protected environment waits here for a person (PRD FR41); its own timeout starts once it runs.
+          if (job.approval && !this.#approved.has(job.id)) {
+            const decision = this.#decision(job);
+            if (decision === 'reject') {
+              this.rejected = true;
+              this.#close(js, 'cancelled', 'rejected');
+              break;
+            }
+            if (decision !== 'approve') {
+              if (js.status !== 'waiting') {
+                js.status = 'waiting';
+                this.flush();
+              }
+              continue;
+            }
+            this.#approved.add(job.id);
+            js.status = 'pending';
           }
           started = true;
           running.set(
@@ -259,24 +282,43 @@ class Supervisor {
               }),
           );
         }
-        if (!started && !running.size && state.jobs.some((j) => j.status === 'pending')) {
+        if (!this.rejected && !started && !running.size && !state.jobs.some((j) => j.status === 'waiting') && state.jobs.some((j) => j.status === 'pending')) {
           // Nothing can start and nothing is running: whatever waits has nothing left to wait for.
           for (const js of state.jobs) if (js.status === 'pending') this.#close(js, 'skipped', 'needs');
         }
       }
-      if (!running.size && !state.jobs.some((j) => j.status === 'pending')) break;
+      if (!running.size && !state.jobs.some((j) => j.status === 'pending' || j.status === 'waiting')) break;
       await Promise.race([...running.values(), sleep(250)]);
     }
 
     clearInterval(watch);
     clearTimeout(runTimer);
     const failed = state.jobs.filter((j) => j.status === 'failed' && !j.ignored);
-    state.status = this.cancelled ? 'cancelled' : this.timedOut || failed.length ? 'failed' : 'passed';
-    state.reason = this.cancelled ? 'cancelled' : this.timedOut ? 'timeout' : failed.length ? (failed.find((j) => j.reason === 'timeout' || j.reason === 'runner_error')?.reason ?? 'step_failed') : null;
+    state.status = this.cancelled || this.rejected ? 'cancelled' : this.timedOut || failed.length ? 'failed' : 'passed';
+    state.reason = this.cancelled ? 'cancelled' : this.rejected ? 'rejected' : this.timedOut ? 'timeout' : failed.length ? (failed.find((j) => j.reason === 'timeout' || j.reason === 'runner_error')?.reason ?? 'step_failed') : null;
     state.finishedAt = nowIso();
     state.durationMs = Math.round(performance.now() - t0);
     rmSync(join(this.dir, 'work'), { recursive: true, force: true });
     this.flush();
+  }
+
+  /**
+   * What a person decided about a held job, from the file `cp-ci approve` leaves: `approve` only with the key whose SHA-256 is the plan's
+   * gate (anything else is thrown away and the job keeps waiting), `reject` as it is (refusing can only stop a run), null while undecided.
+   */
+  #decision(job: PlanJob): 'approve' | 'reject' | null {
+    const path = approvalPath(this.plan.runId, job.id);
+    if (!existsSync(path)) return null;
+    const d = readJson<{ decision?: unknown; key?: unknown }>(path);
+    if (d?.decision === 'reject') return 'reject';
+    if (d?.decision === 'approve' && typeof d.key === 'string' && job.approval) {
+      const got = createHash('sha256').update(d.key).digest();
+      const want = Buffer.from(job.approval.gate, 'hex');
+      if (got.length === want.length && timingSafeEqual(got, want)) return 'approve';
+    }
+    rmSync(path, { force: true });
+    console.error(`[pilot] ${nowIso()} an approval for ${job.id} did not carry the right key; still waiting`);
+    return null;
   }
 
   /** Settles a job that will not run (or is cut off): every unfinished step gets the same status. */
@@ -586,7 +628,7 @@ export async function supervise(runId: string): Promise<void> {
     state.reason = 'runner_error';
     state.finishedAt = nowIso();
     for (const j of state.jobs) {
-      if (j.status === 'running' || j.status === 'pending') (j.status = 'failed'), (j.reason = 'runner_error');
+      if (j.status === 'running' || j.status === 'pending' || j.status === 'waiting') (j.status = 'failed'), (j.reason = 'runner_error');
       for (const s of j.steps) if (s.status === 'running' || s.status === 'pending') (s.status = 'failed'), (s.reason = 'runner_error');
     }
     sv.flush();

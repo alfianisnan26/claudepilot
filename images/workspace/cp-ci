@@ -2,7 +2,7 @@
 "use strict";
 
 // src/ci/runner/main.ts
-var import_node_crypto3 = require("node:crypto");
+var import_node_crypto4 = require("node:crypto");
 var import_node_fs6 = require("node:fs");
 
 // src/ci/limits.ts
@@ -463,6 +463,9 @@ var import_node_fs4 = require("node:fs");
 var import_node_os4 = require("node:os");
 var import_node_path4 = require("node:path");
 var NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+var ENV_NAME = /^[a-z0-9][a-z0-9._-]{0,39}$/;
+var GATE = /^[0-9a-f]{64}$/;
+var KEY = /^[0-9a-f]{64}$/;
 var WHENS = ["success", "failure", "always"];
 var relative = (s) => typeof s === "string" && s.length > 0 && s.length <= 200 && !s.startsWith("/") && !s.includes("\\") && !s.includes("\0") && !s.split("/").includes("..");
 function envOf(x, what) {
@@ -514,6 +517,9 @@ function parsePlan(raw) {
     }
     const a = j.artifacts;
     if (a !== null && (typeof a !== "object" || !Array.isArray(a.paths) || a.paths.length < 1 || a.paths.length > 50 || !a.paths.every(relative) || !int(a.expireDays, 1, 365) || a.when !== "success" && a.when !== "always")) throw bad(`Job ${id} has bad artifacts.`);
+    if (j.environment !== void 0 && j.environment !== null && (typeof j.environment !== "string" || !ENV_NAME.test(j.environment))) throw bad(`Job ${id} names a bad environment.`);
+    const g2 = j.approval;
+    if (g2 !== void 0 && g2 !== null && (typeof g2 !== "object" || typeof g2.environment !== "string" || !ENV_NAME.test(g2.environment) || typeof g2.gate !== "string" || !GATE.test(g2.gate))) throw bad(`Job ${id} has a bad approval gate.`);
   }
   const by = new Map(jobs.map((j) => [j.id, j.needs]));
   const seen = /* @__PURE__ */ new Set();
@@ -608,7 +614,8 @@ function initialState(plan) {
       reason: j.skip ? "condition" : null,
       steps: j.steps.map((s, idx) => ({ idx, name: s.name, status: s.skip || j.skip ? "skipped" : "pending", startedAt: null, durationMs: null, exitCode: null, logBytes: 0, logTruncated: false, ignored: false, reason: s.skip || j.skip ? "condition" : null })),
       artifacts: [],
-      artifactsSkipped: 0
+      artifactsSkipped: 0,
+      environment: j.environment ?? null
     }))
   };
 }
@@ -684,7 +691,7 @@ function cancelRun(runId) {
   }
   const now = nowIso();
   for (const j of state.jobs) {
-    if (j.status === "pending" || j.status === "running") {
+    if (j.status === "pending" || j.status === "running" || j.status === "waiting") {
       j.status = "cancelled";
       j.reason = "cancelled";
     }
@@ -695,6 +702,30 @@ function cancelRun(runId) {
   state.finishedAt = now;
   writeAtomic(path, JSON.stringify(state));
   return { ok: true, status: "cancelled", signalled: false };
+}
+var approvalPath = (runId, job) => (0, import_node_path4.join)(runDir(runId), "approvals", job);
+async function approveRun(runId, job, decision, bytes) {
+  if (!validRunId(runId)) throw new Fail("bad_run", "That is not a run id.");
+  if (typeof job !== "string" || !JOB_ID.test(job)) throw new Fail("bad_job", "That is not a job id.");
+  const dir = runDir(runId);
+  const plan = readJson((0, import_node_path4.join)(dir, "plan.json"));
+  const state = readJson((0, import_node_path4.join)(dir, "state.json"));
+  if (!plan || !state) throw new Fail("no_run", "There is no such run here.");
+  const pj = plan.jobs.find((j) => j.id === job);
+  const js = state.jobs.find((j) => j.id === job);
+  if (!pj || !js) throw new Fail("no_job", "That run has no such job.");
+  if (!pj.approval) throw new Fail("no_gate", "That job does not wait for an approval.");
+  if (isTerminal(state.status)) throw new Fail("over", "That run is already over.");
+  if (js.status !== "waiting" && js.status !== "pending") throw new Fail("not_waiting", "That job is not waiting for an approval.");
+  let key = "";
+  if (decision === "approve") {
+    if (!Number.isInteger(bytes) || bytes !== 64) throw new Fail("bad_key", "The approval key is missing.");
+    key = (await readExactly(bytes)).toString("utf8");
+    if (!KEY.test(key)) throw new Fail("bad_key", "The approval key is not valid.");
+  }
+  ensureDir((0, import_node_path4.join)(dir, "approvals"), 448);
+  writeAtomic(approvalPath(runId, job), JSON.stringify({ decision, key, at: nowIso() }));
+  return { ok: true, decision, status: js.status };
 }
 function wholeChars(buf) {
   let i = buf.length - 1;
@@ -889,6 +920,7 @@ async function snapshot(repo, sha) {
 
 // src/ci/runner/supervise.ts
 var import_node_child_process3 = require("node:child_process");
+var import_node_crypto3 = require("node:crypto");
 var import_node_fs5 = require("node:fs");
 var import_node_os5 = require("node:os");
 var import_node_path5 = require("node:path");
@@ -1027,6 +1059,10 @@ var Supervisor = class {
   dir;
   cancelled = false;
   timedOut = false;
+  /** A person refused a job's approval: the run ends like a cancel (`rejected`), without stopping what already runs. */
+  rejected = false;
+  /** Jobs whose approval arrived with the right key. */
+  #approved = /* @__PURE__ */ new Set();
   #children = /* @__PURE__ */ new Map();
   #jobTimedOut = /* @__PURE__ */ new Set();
   #logBudget = { left: CI_LIMITS.runLogBytes };
@@ -1089,22 +1125,39 @@ var Supervisor = class {
     const byId = new Map(state.jobs.map((j) => [j.id, j]));
     const running = /* @__PURE__ */ new Map();
     for (; ; ) {
-      if (this.cancelled || this.timedOut) {
-        for (const js of state.jobs) if (js.status === "pending") this.#close(js, "cancelled", this.cancelled ? "cancelled" : "timeout");
+      if (this.cancelled || this.timedOut || this.rejected) {
+        for (const js of state.jobs) if (js.status === "pending" || js.status === "waiting") this.#close(js, "cancelled", this.cancelled ? "cancelled" : this.rejected ? "rejected" : "timeout");
       } else {
         let started = false;
         for (const job of plan.jobs) {
           const js = byId.get(job.id);
-          if (js.status !== "pending" || running.size >= plan.maxParallel) continue;
+          if (js.status !== "pending" && js.status !== "waiting" || running.size >= plan.maxParallel) continue;
           if (job.group?.maxParallel && plan.jobs.filter((o) => o.group?.id === job.group.id && byId.get(o.id).status === "running").length >= job.group.maxParallel) continue;
           const deps = job.needs.map((n) => byId.get(n));
-          if (deps.some((d) => d.status === "pending" || d.status === "running")) continue;
+          if (deps.some((d) => d.status === "pending" || d.status === "running" || d.status === "waiting")) continue;
           const ok = deps.every((d) => d.status === "passed" || d.status === "failed" && d.ignored);
           const brokenDep = deps.some((d) => d.status === "failed" && !d.ignored || d.status === "cancelled");
           if (!(job.when === "always" || (job.when === "failure" ? brokenDep : ok))) {
             this.#close(js, "skipped", "needs");
             this.touch();
             continue;
+          }
+          if (job.approval && !this.#approved.has(job.id)) {
+            const decision = this.#decision(job);
+            if (decision === "reject") {
+              this.rejected = true;
+              this.#close(js, "cancelled", "rejected");
+              break;
+            }
+            if (decision !== "approve") {
+              if (js.status !== "waiting") {
+                js.status = "waiting";
+                this.flush();
+              }
+              continue;
+            }
+            this.#approved.add(job.id);
+            js.status = "pending";
           }
           started = true;
           running.set(
@@ -1125,22 +1178,40 @@ var Supervisor = class {
             })
           );
         }
-        if (!started && !running.size && state.jobs.some((j) => j.status === "pending")) {
+        if (!this.rejected && !started && !running.size && !state.jobs.some((j) => j.status === "waiting") && state.jobs.some((j) => j.status === "pending")) {
           for (const js of state.jobs) if (js.status === "pending") this.#close(js, "skipped", "needs");
         }
       }
-      if (!running.size && !state.jobs.some((j) => j.status === "pending")) break;
+      if (!running.size && !state.jobs.some((j) => j.status === "pending" || j.status === "waiting")) break;
       await Promise.race([...running.values(), sleep(250)]);
     }
     clearInterval(watch);
     clearTimeout(runTimer);
     const failed = state.jobs.filter((j) => j.status === "failed" && !j.ignored);
-    state.status = this.cancelled ? "cancelled" : this.timedOut || failed.length ? "failed" : "passed";
-    state.reason = this.cancelled ? "cancelled" : this.timedOut ? "timeout" : failed.length ? failed.find((j) => j.reason === "timeout" || j.reason === "runner_error")?.reason ?? "step_failed" : null;
+    state.status = this.cancelled || this.rejected ? "cancelled" : this.timedOut || failed.length ? "failed" : "passed";
+    state.reason = this.cancelled ? "cancelled" : this.rejected ? "rejected" : this.timedOut ? "timeout" : failed.length ? failed.find((j) => j.reason === "timeout" || j.reason === "runner_error")?.reason ?? "step_failed" : null;
     state.finishedAt = nowIso();
     state.durationMs = Math.round(import_node_perf_hooks.performance.now() - t0);
     (0, import_node_fs5.rmSync)((0, import_node_path5.join)(this.dir, "work"), { recursive: true, force: true });
     this.flush();
+  }
+  /**
+   * What a person decided about a held job, from the file `cp-ci approve` leaves: `approve` only with the key whose SHA-256 is the plan's
+   * gate (anything else is thrown away and the job keeps waiting), `reject` as it is (refusing can only stop a run), null while undecided.
+   */
+  #decision(job) {
+    const path = approvalPath(this.plan.runId, job.id);
+    if (!(0, import_node_fs5.existsSync)(path)) return null;
+    const d = readJson(path);
+    if (d?.decision === "reject") return "reject";
+    if (d?.decision === "approve" && typeof d.key === "string" && job.approval) {
+      const got = (0, import_node_crypto3.createHash)("sha256").update(d.key).digest();
+      const want = Buffer.from(job.approval.gate, "hex");
+      if (got.length === want.length && (0, import_node_crypto3.timingSafeEqual)(got, want)) return "approve";
+    }
+    (0, import_node_fs5.rmSync)(path, { force: true });
+    console.error(`[pilot] ${nowIso()} an approval for ${job.id} did not carry the right key; still waiting`);
+    return null;
   }
   /** Settles a job that will not run (or is cut off): every unfinished step gets the same status. */
   #close(js, status, reason) {
@@ -1421,7 +1492,7 @@ async function supervise(runId) {
     state.reason = "runner_error";
     state.finishedAt = nowIso();
     for (const j of state.jobs) {
-      if (j.status === "running" || j.status === "pending") j.status = "failed", j.reason = "runner_error";
+      if (j.status === "running" || j.status === "pending" || j.status === "waiting") j.status = "failed", j.reason = "runner_error";
       for (const s of j.steps) if (s.status === "running" || s.status === "pending") s.status = "failed", s.reason = "runner_error";
     }
     sv.flush();
@@ -1473,7 +1544,7 @@ async function dispatch(cmd, args, self) {
   switch (cmd) {
     case "version": {
       const v = await git(["--version"]);
-      return { ok: true, version: (0, import_node_crypto3.createHash)("sha256").update((0, import_node_fs6.readFileSync)(self)).digest("hex").slice(0, 16), node: process.version, git: v.stdout.toString("utf8").trim().replace(/^git version /, "") };
+      return { ok: true, version: (0, import_node_crypto4.createHash)("sha256").update((0, import_node_fs6.readFileSync)(self)).digest("hex").slice(0, 16), node: process.version, git: v.stdout.toString("utf8").trim().replace(/^git version /, "") };
     }
     case "repo": {
       const [sub, ...rest] = args;
@@ -1545,6 +1616,10 @@ async function dispatch(cmd, args, self) {
     }
     case "cancel":
       return cancelRun(parse(args, {}).pos[0]);
+    case "approve": {
+      const { pos, flags } = parse(args, { bytes: "value", reject: "bool" });
+      return approveRun(pos[0], pos[1], flags.reject === true ? "reject" : "approve", num(flags.bytes, 0, 0, 64));
+    }
     case "gc": {
       const { flags } = parse(args, { days: "value" });
       return gc(num(flags.days, CI_LIMITS.runDirDays, 0, 3650));

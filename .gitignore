@@ -10,3 +10,6 @@ dist/
 # Claude Code local files
 .claude/*.lock
 .claude/settings.local.json
+
+# pilot CI pipeline scratch (what one job leaves for the next)
+.pilot/out/

@@ -1,0 +1,71 @@
+# Deploy ClaudePilot to the isnan k3s cluster (docs/dev-session.md, "Deploying with pilot CI"). Started by hand only: in the portal
+# (CI > Remotes > claudepilot > Run on a branch) or by an agent with the Portal MCP tool ci_run_trigger (`/deploy`). The commit is the run's:
+# the head of the branch it runs on (default integration) or a tag. The release job deploys to the environment `production`, which the
+# portal holds for a PERSON's approval (CI > Remotes > environments); verify checks the result and rollback undoes a failed release.
+# The logic lives in .pilot/scripts/*.sh (tested in apps/server/src/ci/deployPipeline.test.ts); dry_run prints every action, changes nothing.
+name: Deploy
+on:
+  manual:
+    inputs:
+      images:
+        type: string
+        default: portal
+        description: 'Images to build, comma separated: portal, workspace, workspace-dev; or none.'
+      gate:
+        type: boolean
+        default: true
+        description: Run the release gate (typecheck, web build, server suite) on the commit first.
+      deploy:
+        type: boolean
+        default: true
+        description: Release what was built; false builds only.
+      dry_run:
+        type: boolean
+        default: false
+        description: Print every action and change nothing.
+timeout: 4h
+concurrency:
+  group: deploy-claudepilot
+jobs:
+  gate:
+    name: Gate
+    timeout: 90m
+    steps:
+      - name: Release gate
+        run: bash .pilot/scripts/gate.sh
+  build:
+    name: Build
+    needs: [gate]
+    timeout: 120m
+    steps:
+      - name: Images in the cluster
+        run: bash .pilot/scripts/build.sh
+    artifacts:
+      paths: [.pilot/out/build.env]
+  release:
+    name: Release
+    needs: [build]
+    if: inputs.deploy
+    environment: production
+    timeout: 15m
+    steps:
+      - name: Tags to main
+        run: bash .pilot/scripts/release.sh
+    artifacts:
+      paths: [.pilot/out/release.env]
+      when: always
+  verify:
+    name: Verify
+    needs: [release]
+    timeout: 30m
+    steps:
+      - name: Argo CD, rollout, smoke, logs
+        run: bash .pilot/scripts/verify.sh
+  rollback:
+    name: Roll back
+    needs: [release, verify]
+    if: failure()
+    timeout: 30m
+    steps:
+      - name: Previous tags to main
+        run: bash .pilot/scripts/rollback.sh

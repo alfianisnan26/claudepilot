@@ -35,7 +35,7 @@ scripts/scratch-portal.sh start 3403 # a throwaway portal (clean environment) fo
 scripts/k3s-status.sh                # cluster health at a glance
 ```
 
-Slash commands for the common jobs are in `.claude/commands/` (`/gate`, `/release`, `/k3s-status`, `/build-image`, `/scratch-portal`, `/ui-check`, `/new-migration`).
+Slash commands for the common jobs are in `.claude/commands/` (`/deploy`, `/gate`, `/release`, `/k3s-status`, `/build-image`, `/scratch-portal`, `/ui-check`, `/new-migration`). `/deploy` is the way to release (docs/dev-session.md, "Deploying with pilot CI").
 
 ## Rules
 
@@ -45,7 +45,7 @@ Slash commands for the common jobs are in `.claude/commands/` (`/gate`, `/releas
 - **UI quality bar** (`docs/coord/QA-STANDARDS.md` A1-A9): 44 px touch targets, no horizontal scroll, text that breaks anywhere, lists that hold still, phone width (390 px) first, then 1280 px, light and dark, keyboard and touch. **Text diet:** titles of one or two words, explanations in an InfoTip, icon-only on phones. Numbers shown must have a source; "unavailable" is a state, never a guess.
 - **Phone screens do not drag.** The page never rubber-bands (`overscroll-behavior`), full-screen pages are pinned (`lib/viewport.ts`), sheet headers are not drag handles (`lib/sheetDrag.ts`), a stale body scroll lock heals (`lib/scrollGuard.ts`). Do not undo these; `tools/qa/scroll-lock.mjs` and `tools/qa/mobile-drag.mjs` check them.
 - **Heavy jobs one at a time** (typecheck, the suite, a production build): this workspace has 4 CPUs and 8 GiB.
-- **Pushing `main` deploys to the cluster** (Argo CD follows it). Work on `integration`; push `main` only when the owner says so, or through the deploy pipeline (`.claude/commands/deploy.md`) once it exists.
+- **Pushing `main` deploys to the cluster** (Argo CD follows it). Work on `integration`; deploy with `/deploy` (the pilot CI pipeline `.pilot/deploy.yml`: gate, build, release, verify, rollback), whose release waits for the owner's approval in the portal, and never try to get around that approval. Push `main` by hand (`/release`) only when the owner has said go.
 - **Never print a credential.** Tokens live in `~/.config/gh`, `~/.git-credentials` and `~/.kube/config`; do not read those files or dump Secrets (`kubectl get secret`); the project settings deny it.
 
 ## Working with the owner

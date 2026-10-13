@@ -1,6 +1,6 @@
 import { cn } from '@isnanme/ui';
-import { CI_STATUS_LABEL, shortSha, type CiReason, type CiUnitStatus } from '@portal/contracts';
-import { Circle, CircleCheck, CircleMinus, CircleSlash, CircleX, Clock, LoaderCircle, type LucideIcon } from 'lucide-react';
+import { CI_STATUS_LABEL, shortSha, type CiReason, type CiRunSummary, type CiUnitStatus } from '@portal/contracts';
+import { Circle, CircleCheck, CircleMinus, CircleSlash, CircleX, Clock, Hand, LoaderCircle, type LucideIcon } from 'lucide-react';
 
 const LOOK: Record<CiUnitStatus, { Icon: LucideIcon; tone: string }> = {
   queued: { Icon: Clock, tone: 'text-muted' },
@@ -10,9 +10,10 @@ const LOOK: Record<CiUnitStatus, { Icon: LucideIcon; tone: string }> = {
   cancelled: { Icon: CircleSlash, tone: 'text-muted' },
   pending: { Icon: Circle, tone: 'text-muted' },
   skipped: { Icon: CircleMinus, tone: 'text-muted' },
+  waiting: { Icon: Hand, tone: 'text-gold' },
 };
 
-/** Shape and colour, not colour alone: a clock, a spinner, a tick, a cross, a slash, an empty circle, a dash. */
+/** Shape and colour, not colour alone: a clock, a spinner, a tick, a cross, a slash, an empty circle, a dash, a raised hand (waits for a person). */
 export function StatusIcon({ status, className }: { status: CiUnitStatus; className?: string }) {
   const { Icon, tone } = LOOK[status];
   return (
@@ -34,7 +35,11 @@ const REASON: Partial<Record<CiReason, string>> = {
   needs: 'Needs failed',
   condition: 'Condition',
   fail_fast: 'Matrix stopped',
+  rejected: 'Rejected',
 };
+
+/** What a run row shows: a running run with a job held for a person's approval shows the hand. */
+export const runLook = (r: Pick<CiRunSummary, 'status' | 'jobs'>): CiUnitStatus => (r.status === 'running' && r.jobs.some((j) => j.status === 'waiting') ? 'waiting' : r.status);
 
 /** The reason a unit ended, when it is more than a step that exited non-zero. */
 export const reasonLabel = (reason: CiReason | null): string | null => (reason ? (REASON[reason] ?? null) : null);

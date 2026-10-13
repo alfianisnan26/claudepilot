@@ -16,6 +16,11 @@ import { hookState, needRepo } from './repo.js';
 /* ---------- Reading a plan ---------- */
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const ENV_NAME = /^[a-z0-9][a-z0-9._-]{0,39}$/;
+/** The SHA-256 of an approval key, in hex. */
+const GATE = /^[0-9a-f]{64}$/;
+/** An approval key as the portal makes it: 32 random bytes in hex. */
+const KEY = /^[0-9a-f]{64}$/;
 const WHENS = ['success', 'failure', 'always'];
 const relative = (s: unknown): s is string => typeof s === 'string' && s.length > 0 && s.length <= 200 && !s.startsWith('/') && !s.includes('\\') && !s.includes('\0') && !s.split('/').includes('..');
 
@@ -70,6 +75,10 @@ export function parsePlan(raw: Buffer): Plan {
     }
     const a = j.artifacts as Record<string, unknown> | null;
     if (a !== null && (typeof a !== 'object' || !Array.isArray(a.paths) || a.paths.length < 1 || a.paths.length > 50 || !a.paths.every(relative) || !int(a.expireDays, 1, 365) || (a.when !== 'success' && a.when !== 'always'))) throw bad(`Job ${id} has bad artifacts.`);
+    // An environment and its approval gate (PRD FR41): both optional, so a plan from before them still reads.
+    if (j.environment !== undefined && j.environment !== null && (typeof j.environment !== 'string' || !ENV_NAME.test(j.environment))) throw bad(`Job ${id} names a bad environment.`);
+    const g2 = j.approval as { environment?: unknown; gate?: unknown } | null | undefined;
+    if (g2 !== undefined && g2 !== null && (typeof g2 !== 'object' || typeof g2.environment !== 'string' || !ENV_NAME.test(g2.environment) || typeof g2.gate !== 'string' || !GATE.test(g2.gate))) throw bad(`Job ${id} has a bad approval gate.`);
   }
   // A cycle would leave jobs waiting forever.
   const by = new Map(jobs.map((j) => [j.id as string, j.needs as string[]]));
@@ -178,6 +187,7 @@ export function initialState(plan: Plan): CiRunStateFile {
       steps: j.steps.map((s, idx) => ({ idx, name: s.name, status: s.skip || j.skip ? 'skipped' : 'pending', startedAt: null, durationMs: null, exitCode: null, logBytes: 0, logTruncated: false, ignored: false, reason: s.skip || j.skip ? 'condition' : null })),
       artifacts: [],
       artifactsSkipped: 0,
+      environment: j.environment ?? null,
     })),
   };
 }
@@ -266,7 +276,7 @@ export function cancelRun(runId: unknown): Record<string, unknown> {
   // Nobody is running it: settle the record so it doesn't stay open.
   const now = nowIso();
   for (const j of state.jobs) {
-    if (j.status === 'pending' || j.status === 'running') {
+    if (j.status === 'pending' || j.status === 'running' || j.status === 'waiting') {
       j.status = 'cancelled';
       j.reason = 'cancelled';
     }
@@ -277,6 +287,39 @@ export function cancelRun(runId: unknown): Record<string, unknown> {
   state.finishedAt = now;
   writeAtomic(path, JSON.stringify(state));
   return { ok: true, status: 'cancelled', signalled: false };
+}
+
+/* ---------- approve ---------- */
+
+export const approvalPath = (runId: string, job: string) => join(runDir(runId), 'approvals', job);
+
+/**
+ * `approve <run> <job> --bytes <n>` (the key on stdin) or `approve <run> <job> --reject` (PRD FR41): leaves the decision where the run's
+ * supervisor looks for it. The supervisor checks the key against the gate in the plan, so this command decides nothing by itself; it only
+ * refuses what can not be meant (no such run or job, a job that is not waiting, a run that is over), so the portal can say why.
+ */
+export async function approveRun(runId: unknown, job: unknown, decision: 'approve' | 'reject', bytes: number): Promise<Record<string, unknown>> {
+  if (!validRunId(runId)) throw new Fail('bad_run', 'That is not a run id.');
+  if (typeof job !== 'string' || !JOB_ID.test(job)) throw new Fail('bad_job', 'That is not a job id.');
+  const dir = runDir(runId);
+  const plan = readJson<Plan>(join(dir, 'plan.json'));
+  const state = readJson<CiRunStateFile>(join(dir, 'state.json'));
+  if (!plan || !state) throw new Fail('no_run', 'There is no such run here.');
+  const pj = plan.jobs.find((j) => j.id === job);
+  const js = state.jobs.find((j) => j.id === job);
+  if (!pj || !js) throw new Fail('no_job', 'That run has no such job.');
+  if (!pj.approval) throw new Fail('no_gate', 'That job does not wait for an approval.');
+  if (isTerminal(state.status)) throw new Fail('over', 'That run is already over.');
+  if (js.status !== 'waiting' && js.status !== 'pending') throw new Fail('not_waiting', 'That job is not waiting for an approval.');
+  let key = '';
+  if (decision === 'approve') {
+    if (!Number.isInteger(bytes) || bytes !== 64) throw new Fail('bad_key', 'The approval key is missing.');
+    key = (await readExactly(bytes)).toString('utf8');
+    if (!KEY.test(key)) throw new Fail('bad_key', 'The approval key is not valid.');
+  }
+  ensureDir(join(dir, 'approvals'), 0o700);
+  writeAtomic(approvalPath(runId, job), JSON.stringify({ decision, key, at: nowIso() }));
+  return { ok: true, decision, status: js.status };
 }
 
 /* ---------- logs ---------- */

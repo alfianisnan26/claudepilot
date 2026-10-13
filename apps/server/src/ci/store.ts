@@ -79,6 +79,41 @@ export interface LogRow {
   text: string;
 }
 
+/** An environment of a remote (migration 610, PRD FR41). */
+export interface EnvironmentRow {
+  id: string;
+  repo_id: string;
+  name: string;
+  protected: number;
+  owner_id: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  updated_by: string;
+}
+
+/** One run's job tied to an environment. `gate_key` is the runner's key for that job: never leaves the service except into `cp-ci approve`. */
+export interface DeploymentRow {
+  id: string;
+  run_id: string;
+  run_number: number;
+  job: string;
+  repo_id: string;
+  environment: string;
+  pipeline: string;
+  sha: string;
+  ref: string;
+  actor: string;
+  approval: 'pending' | 'waiting' | 'approved' | 'rejected' | 'auto' | 'expired' | 'skipped';
+  gate_key: string | null;
+  decided_by: string | null;
+  decided_at: string | null;
+  outcome: string | null;
+  owner_id: string;
+  created_by: string;
+  created_at: string;
+}
+
 export interface RunFilter {
   workspace?: string;
   repoId?: string;
@@ -325,6 +360,65 @@ export class CiStore {
     return this.log(runId, job, step)?.text ?? null;
   }
 
+  /* ---------- Environments and deployments (PRD FR41) ---------- */
+
+  /** Whether the tables of migration 610 are there (a database the migration has not reached can still run CI, just without deployments). */
+  get deploymentsReady(): boolean {
+    try {
+      this.#db.prepare('SELECT 1 FROM ci_deployments LIMIT 1').get();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  environments(repoId: string): EnvironmentRow[] {
+    return this.#db.prepare('SELECT * FROM ci_environments WHERE repo_id = ? ORDER BY name').all(repoId) as unknown as EnvironmentRow[];
+  }
+
+  environment(repoId: string, name: string): EnvironmentRow | undefined {
+    return this.#db.prepare('SELECT * FROM ci_environments WHERE repo_id = ? AND name = ?').get(repoId, name) as unknown as EnvironmentRow | undefined;
+  }
+
+  /** The environment, made protected when it does not exist yet (the safe default: a new name never deploys unattended). */
+  ensureEnvironment(repoId: string, name: string, by: string, id: string): EnvironmentRow {
+    const now = new Date().toISOString();
+    this.#writableDb
+      .prepare('INSERT OR IGNORE INTO ci_environments (id, repo_id, name, protected, created_at, updated_at, updated_by) VALUES (?, ?, ?, 1, ?, ?, ?)')
+      .run(id, repoId, name, now, now, by);
+    return this.environment(repoId, name)!;
+  }
+
+  setProtected(id: string, value: boolean, by: string): void {
+    this.#writableDb.prepare('UPDATE ci_environments SET protected = ?, updated_at = ?, updated_by = ? WHERE id = ?').run(value ? 1 : 0, new Date().toISOString(), by, id);
+  }
+
+  insertDeployment(d: DeploymentRow): void {
+    const keys = Object.keys(d) as (keyof DeploymentRow)[];
+    this.#writableDb.prepare(`INSERT INTO ci_deployments (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...keys.map((k) => d[k] ?? null));
+  }
+
+  deploymentsOfRun(runId: string): DeploymentRow[] {
+    if (!this.deploymentsReady) return [];
+    return this.#db.prepare('SELECT * FROM ci_deployments WHERE run_id = ? ORDER BY created_at, job').all(runId) as unknown as DeploymentRow[];
+  }
+
+  deployment(runId: string, job: string): DeploymentRow | undefined {
+    return this.#db.prepare('SELECT * FROM ci_deployments WHERE run_id = ? AND job = ?').get(runId, job) as unknown as DeploymentRow | undefined;
+  }
+
+  deploymentsOf(repoId: string, environment: string, limit = 20): DeploymentRow[] {
+    return this.#db.prepare('SELECT * FROM ci_deployments WHERE repo_id = ? AND environment = ? ORDER BY created_at DESC, id DESC LIMIT ?').all(repoId, environment, limit) as unknown as DeploymentRow[];
+  }
+
+  /** Moves a deployment's approval; `from` makes it a compare-and-set, so two people deciding at once can not both win. */
+  updateDeployment(id: string, patch: Partial<Pick<DeploymentRow, 'approval' | 'gate_key' | 'decided_by' | 'decided_at' | 'outcome'>>, from?: DeploymentRow['approval'][]): boolean {
+    const keys = Object.keys(patch) as (keyof typeof patch)[];
+    if (!keys.length) return false;
+    const guard = from?.length ? ` AND approval IN (${from.map(() => '?').join(', ')})` : '';
+    return Number(this.#writableDb.prepare(`UPDATE ci_deployments SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?${guard}`).run(...keys.map((k) => patch[k] ?? null), id, ...(from ?? [])).changes) > 0;
+  }
+
   /* ---------- Merges ---------- */
 
   insertMerge(m: { id: string; repo_id: string; source: string; target: string; strategy: string; result_sha: string | null; actor: string; at: string; outcome: string; note: string | null }): void {
@@ -342,6 +436,8 @@ export class CiStore {
     const eventCut = new Date(Date.now() - opts.eventDays * 86_400_000).toISOString();
     db.prepare('DELETE FROM ci_events WHERE at < ?').run(eventCut);
     db.prepare('DELETE FROM ci_messages WHERE at < ?').run(new Date(Date.now() - 7 * 86_400_000).toISOString());
+    // Deployments are the environments' history: kept a year, past their runs.
+    if (this.deploymentsReady) db.prepare('DELETE FROM ci_deployments WHERE created_at < ?').run(new Date(Date.now() - 365 * 86_400_000).toISOString());
     let n = Number(db.prepare("DELETE FROM ci_runs WHERE status IN ('passed', 'failed', 'cancelled') AND created_at < ?").run(runCut).changes);
     for (const { workspace_id } of db.prepare('SELECT DISTINCT workspace_id FROM ci_runs').all() as { workspace_id: string }[]) {
       n += Number(

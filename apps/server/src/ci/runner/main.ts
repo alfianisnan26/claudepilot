@@ -7,7 +7,7 @@ import { CI_LIMITS } from '../limits.js';
 import { Fail, git, reply } from './common.js';
 import { hookPostReceive } from './events.js';
 import { repoBranches, repoConnect, repoCreate, repoDelete, repoInfo, repoList, repoMerge, repoRev, ensureHooks, needRepo } from './repo.js';
-import { archiveLogs, cancelRun, gc, poll, readLog, startRun } from './runs.js';
+import { approveRun, archiveLogs, cancelRun, gc, poll, readLog, startRun } from './runs.js';
 import { snapshot } from './snapshot.js';
 import { supervise } from './supervise.js';
 
@@ -131,6 +131,10 @@ async function dispatch(cmd: string | undefined, args: string[], self: string): 
     }
     case 'cancel':
       return cancelRun(parse(args, {}).pos[0]);
+    case 'approve': {
+      const { pos, flags } = parse(args, { bytes: 'value', reject: 'bool' });
+      return approveRun(pos[0], pos[1], flags.reject === true ? 'reject' : 'approve', num(flags.bytes, 0, 0, 64));
+    }
     case 'gc': {
       const { flags } = parse(args, { days: 'value' });
       return gc(num(flags.days, CI_LIMITS.runDirDays, 0, 3650));
