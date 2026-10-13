@@ -790,14 +790,18 @@ function PortalMessage({ event: e }: { event: ChatEvent }) {
 function TransferMarker({ event: e, mark, icon: Icon = ArrowRightLeft }: { event: ChatEvent; mark?: ReactNode; icon?: LucideIcon }) {
   const at = new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return (
-    <div role="separator" className="flex items-center gap-3 px-1 text-[12px] text-muted">
-      <span className="h-px flex-1 bg-line" aria-hidden="true" />
-      <span className="inline-flex items-center gap-1.5">
-        <Icon className="size-3 shrink-0" aria-hidden="true" />
-        {e.text} · {at}
+    // With a mark (auto move's chip and Undo) it is a group, not a separator: a separator's content is presentational, a button in it is lost.
+    // The words and the mark wrap under each other on a narrow screen instead of pushing past its edge.
+    <div role={mark ? 'group' : 'separator'} aria-label={mark ? (e.text ?? undefined) : undefined} className="flex items-center gap-3 px-1 text-[12px] text-muted">
+      <span className="h-px min-w-4 flex-1 bg-line" aria-hidden="true" />
+      <span className="flex min-w-0 flex-wrap items-center justify-center gap-x-1.5 gap-y-1">
+        <span className="inline-flex min-w-0 items-center gap-1.5 [overflow-wrap:anywhere]">
+          <Icon className="size-3 shrink-0" aria-hidden="true" />
+          {e.text} · {at}
+        </span>
+        {mark}
       </span>
-      {mark}
-      <span className="h-px flex-1 bg-line" aria-hidden="true" />
+      <span className="h-px min-w-4 flex-1 bg-line" aria-hidden="true" />
     </div>
   );
 }

@@ -10,6 +10,11 @@ import { errorText } from '@/lib/api';
 import { pinnedToViewport, useVisualViewport } from '@/lib/viewport';
 import { AgentsPanel, AgentsSheet } from './AgentsPanel';
 import { chatApi } from './api';
+import { DividerMark } from '@/features/autotransfer/DividerMark';
+import { undoFor } from '@/features/autotransfer/pure';
+import { useAutoMoveMenu } from '@/features/autotransfer/SessionMenuItem';
+import { SuggestionCard } from '@/features/autotransfer/SuggestionCard';
+import { useAutoMove } from '@/features/autotransfer/useAutoMove';
 import { useGlanceFocus } from '@/features/glance/focus';
 import { GlanceStrip } from '@/features/glance/Strip';
 import { ApprovalCard } from './ApprovalCard';
@@ -262,6 +267,18 @@ export function SessionPage() {
   const move = useMoveChat();
   const openSwitch = () => session && move.start(session);
 
+  // Auto move (auto-transfer PRD): the card of `ask` mode, the "auto" mark and Undo on a "Moved to" divider, and the chat's own mode.
+  const auto = useAutoMove(id, session?.claudeId);
+  const moveMark = useCallback(
+    (handoffId: string) => {
+      const event = auto.marks.get(handoffId);
+      if (!event) return null;
+      // Undo is the normal Move dialog with the Claude the chat left chosen (FR19).
+      return <DividerMark event={event} undo={undoFor(auto.state?.lastMove ?? null, handoffId)} onUndo={(claudeId) => session && move.start(session, claudeId)} />;
+    },
+    [auto.marks, auto.state?.lastMove, session, move],
+  );
+
   // Open requests: a `request` with no later `resolved`, oldest first (events are seq-ordered).
   const openRequests = useMemo(() => {
     const resolved = new Set<string>();
@@ -311,6 +328,7 @@ export function SessionPage() {
   };
   const agentsLabel = running ? `Agents, ${running} running` : 'Agents';
   const notifyDone = useNotifyWhenDone(id);
+  const autoMenu = useAutoMoveMenu(id, auto.state, auto.platformMode, auto.setState, gone || ended);
   const menuItems: MenuItem[] = [
     // Bypass is one tap to leave (FR20): the header's red shield, and first here.
     ...(bypass ? [{ label: 'Turn off Bypass', icon: <ShieldAlert className="size-4" />, onSelect: fromMenu(() => void leaveBypass()), danger: true }] : []),
@@ -339,6 +357,7 @@ export function SessionPage() {
       onSelect: fromMenu(openSwitch),
       disabled: gone || ended || !!session?.switching,
     },
+    ...(autoMenu.item ? [{ ...autoMenu.item, onSelect: fromMenu(autoMenu.item.onSelect) }] : []),
     session?.pinnedAt
       ? { label: 'Unpin', icon: <PinOff className="size-4" />, onSelect: fromMenu(() => void togglePin()) }
       : { label: 'Pin', icon: <Pin className="size-4" />, onSelect: fromMenu(() => void togglePin()), disabled: !session || !!session.archivedAt },
@@ -491,6 +510,7 @@ export function SessionPage() {
             padBottom={dockHeight + 12}
             onOpenUsage={() => setUsageOpen(true)}
             persona={persona}
+            moveMark={moveMark}
             className="h-full"
           />
 
@@ -505,6 +525,9 @@ export function SessionPage() {
                   disabled={!connected}
                   agentName={current.agentLabel ? agentNames.get(current.agentLabel) : null}
                 />
+              )}
+              {auto.state?.pending && !gone && !ended && !session?.switching && (
+                <SuggestionCard state={auto.state} allowAuto={auto.allowAuto} bypass={bypass} disabled={!connected} onChange={auto.setState} />
               )}
               {btw && btwLayout.mode === 'card' &&
                 btwCard(
@@ -616,6 +639,7 @@ export function SessionPage() {
       <TrustSheet trust={trust} />
 
       {move.element}
+      {autoMenu.element}
       {restart.element}
 
       <EndSessionDialog session={ending ? session : null} onClose={() => setEnding(false)} />

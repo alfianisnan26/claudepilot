@@ -1,8 +1,9 @@
 import { Badge, Button, ConfirmDialog, FormDialog, Menu, TextField, useToast, type MenuItem } from '@isnanme/ui';
 import { CLAUDE_NAME_MAX, type Workspace, type WorkspaceClaude, type WorkspaceClaudeState, type WorkspaceTerminal } from '@portal/contracts';
-import { Bot, LogIn, LogOut, Pencil, Plus, SquareTerminal, Trash2 } from 'lucide-react';
+import { ArrowRightLeft, Bot, LogIn, LogOut, Pencil, Plus, SquareTerminal, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
+import { ClaudeAutoMoveDialog } from '@/features/autotransfer/ClaudeAutoMoveDialog';
 import { chatApi } from '@/features/chat/api';
 import { ClaudeMeter } from '@/features/usage/claude';
 import { api, errorText } from '@/lib/api';
@@ -25,6 +26,7 @@ export function ClaudesSection({ workspace: w, onLeave }: { workspace: Workspace
   const [signingOut, setSigningOut] = useState<WorkspaceClaude | null>(null);
   const [removing, setRemoving] = useState<WorkspaceClaude | null>(null);
   const [naming, setNaming] = useState<Naming>(null);
+  const [autoMove, setAutoMove] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [nameError, setNameError] = useState<string | undefined>();
   const [busy, setBusy] = useState<string | null>(null);
@@ -128,6 +130,8 @@ export function ClaudesSection({ workspace: w, onLeave }: { workspace: Workspace
               },
               ...(signedIn ? [{ label: 'Sign out', icon: <LogOut className="size-4" />, onSelect: () => setSigningOut(c), disabled: pooled }] : []),
               { label: 'Rename…', icon: <Pencil className="size-4" />, onSelect: () => (setNaming({ claude: c }), setName(c.name), setNameError(undefined)) },
+              // Auto move (FR20): this Claude's threshold and destinations; not on an account pool (no per-Claude quota there).
+              { label: 'Auto move…', icon: <ArrowRightLeft className="size-4" />, onSelect: () => setAutoMove(c.id), disabled: pooled },
               ...(c.directory
                 ? [{ label: 'Remove', icon: <Trash2 className="size-4" />, onSelect: () => setRemoving(c), danger: true, disabled: count > 0 }]
                 : []),
@@ -170,6 +174,7 @@ export function ClaudesSection({ workspace: w, onLeave }: { workspace: Workspace
       )}
       {pooled && <p className="text-[12.5px] text-muted">This workspace uses its account pool; own sign-ins wait until it’s unassigned.</p>}
 
+      <ClaudeAutoMoveDialog claudeId={autoMove} onClose={() => setAutoMove(null)} />
       <ClaudeLoginDialog
         workspace={signingIn ? w : null}
         claude={signingIn}
