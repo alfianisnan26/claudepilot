@@ -27,6 +27,27 @@ export const testConfig = (over: Partial<ConnectConfig> = {}): ConnectConfig => 
 
 export const OWNER: ActorCtx = { actor: 'user:u_owner', userId: 'u_owner', ip: '203.0.113.9' };
 
+/**
+ * `p`, or a failure after `ms` that names what did not happen. A Connect test never waits for ever for an event: one that does not come under load
+ * hung the release gate for 26 minutes at 0% CPU (rekey.test.ts), and a hang says nothing, while a timeout says what was waited for.
+ */
+export function withTimeout<T>(p: Promise<T>, what: string, ms = 10_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timed out after ${ms} ms waiting for ${what}.`)), ms);
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
+/** Polls `fn` every 20 ms until it is true; fails after `ms` naming `what`. */
+export async function until(fn: () => boolean, what: string, ms = 8_000): Promise<void> {
+  const t0 = Date.now();
+  while (!fn()) {
+    if (Date.now() - t0 > ms) throw new Error(`Timed out after ${ms} ms waiting for ${what}.`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
 export const helloFor = (mode: ConnectKind = 'docker', over: Partial<ConnectAgentHello> = {}): ConnectAgentHello => ({
   agentVersion: '0.1.0',
   agentBuild: 'aaaaaaaaaaaa',

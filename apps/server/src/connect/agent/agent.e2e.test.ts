@@ -20,7 +20,7 @@ import { collectingLogger } from './log.js';
 import { agentConfig } from './testkit/agentConfig.js';
 import { FakeDocker } from './testkit/fakeDocker.js';
 import { FakeKube } from './testkit/fakeKube.js';
-import { openPortal, type Portal } from './testkit/portalRig.js';
+import { openPortal, stopAgents, type Portal } from './testkit/portalRig.js';
 
 let portal: Portal;
 let dir: string;
@@ -36,7 +36,7 @@ beforeEach(() => {
   mkdirSync(join(dir, 'home'));
 });
 afterEach(async () => {
-  for (const a of agents.splice(0)) await a.stop().catch(() => undefined);
+  await stopAgents(agents);
   rmSync(dir, { recursive: true, force: true });
 });
 

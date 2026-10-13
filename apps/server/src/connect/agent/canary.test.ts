@@ -17,6 +17,7 @@ import { agentConfig } from './testkit/agentConfig.js';
 import { FakeDocker } from './testkit/fakeDocker.js';
 import { FakeKube } from './testkit/fakeKube.js';
 import { openPortal, type Portal } from './testkit/portalRig.js';
+import { withTimeout } from '../testkit.js';
 import { parseResult, RECORD, RecordParser, encodeRecord } from '../tunnel/records.js';
 
 const C = {
@@ -106,7 +107,7 @@ describe('what the agent never logs', () => {
       await new Promise((r) => setTimeout(r, 300));
       mustNotAppear(everythingSaid(log, 'can-host'), [C.argv, C.env, C.stdin, C.file, C.content, C.header, t.token, id.privateKey, readFileSync(join(config.dataDir, 'identity.json'), 'utf8').match(/"privateKey": "([^"]+)"/)![1]!], 'host');
     } finally {
-      await h.stop();
+      await withTimeout(h.stop(), 'the agent to stop');
     }
   });
 
@@ -147,7 +148,7 @@ describe('what the agent never logs', () => {
       assert.ok(log.text().includes('policy.denied'), 'the refusal was logged by its rule');
       mustNotAppear(everythingSaid(log, 'can-dock'), [C.dockerCmd, C.env, C.dockerArchive, C.file, C.header, t.token], 'docker');
     } finally {
-      await h.stop();
+      await withTimeout(h.stop(), 'the agent to stop');
       await fake.stop();
     }
   });
@@ -196,7 +197,7 @@ describe('what the agent never logs', () => {
       await new Promise((r) => setTimeout(r, 300));
       mustNotAppear(everythingSaid(log, 'can-kube'), [C.sa, bearer, 'a-wrong-bearer', C.content, C.file, C.header, t.token, h.identity()!.privateKey], 'kubernetes');
     } finally {
-      await h.stop();
+      await withTimeout(h.stop(), 'the agent to stop');
       await fake.stop();
     }
   });

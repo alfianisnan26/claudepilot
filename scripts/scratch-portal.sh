@@ -9,6 +9,8 @@ cmd=${1:?start|stop}; port=${2:-3403}; code=${3:-24681372}
 dir=/tmp/scratch-portal-$port
 case "$cmd" in
   start)
+    # Another portal on the port would answer /healthz for us (and `rm -rf` below would wipe ITS data dir): refuse, say whose it is.
+    if curl -fsS -m 2 "http://localhost:$port/healthz" >/dev/null 2>&1; then echo "port $port is already in use by another portal; pick another port (scratch-portal.sh start <port>)" >&2; exit 2; fi
     rm -rf "$dir"; mkdir -p "$dir/home" "$dir/data"
     key=$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("="))')
     cd "$(dirname "$0")/../apps/server"

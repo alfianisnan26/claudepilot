@@ -223,15 +223,16 @@ class AgentRuntime {
       await Promise.race([control.bye(reason), new Promise((r) => setTimeout(r, 1000).unref())]);
     }
     this.#session?.goAway();
-    this.#abort.abort();
     this.#session?.close(1000, 'agent stopping');
+    // The abort ends a wait, gives up a dial in flight, and closes the session a dial returns after this point (`#serve` listens).
+    this.#abort.abort();
     return this.#done;
   }
 
   #kill() {
     this.#stopping = true;
-    this.#abort.abort();
     this.#session?.destroy('killed');
+    this.#abort.abort();
     this.#closeServices();
   }
 
@@ -428,6 +429,7 @@ class AgentRuntime {
           privateKey: using.privateKey,
           hello: () => ({ ...this.#hello(), portalId: this.#identity?.portalId ?? null }),
           ws: { agent: transportAgent(target, this.#net), headers: this.#net.headers ?? {} },
+          signal: this.#abort.signal,
           onStream: (stream) => void this.#dispatch(stream),
           log: (line) => log.debug('mux', { line: line.slice(0, 160) }),
         });
@@ -462,6 +464,11 @@ class AgentRuntime {
     const log = this.#log;
     const identity = this.#identity!;
     this.#session = session;
+    // A stop or a kill that landed while the dial was in flight found no session to close; this one is closed now, or the moment it comes.
+    // Without this the agent served a tunnel nobody would ever close, and `stop()` waited for ever (rekey.test.ts hung the release gate twice).
+    const onAbort = () => session.close(1000, 'agent stopping');
+    if (this.#abort.signal.aborted) onAbort();
+    else this.#abort.signal.addEventListener('abort', onAbort, { once: true });
 
     // The portal's id is pinned at the first welcome; another one later means this is not the portal that enrolled the agent.
     if (welcome.portalId) {
@@ -508,6 +515,7 @@ class AgentRuntime {
     control.status(() => this.#buildStatus());
 
     const info = await closed;
+    this.#abort.signal.removeEventListener('abort', onAbort);
     this.#stopTimers();
     log.setRemote?.(null);
     this.#remote = null;

@@ -103,6 +103,8 @@ export interface DialOptions {
   ws?: ClientOptions;
   /** The handshake's overall time (default `CONNECT_LIMITS.handshakeMs`). */
   handshakeMs?: number;
+  /** Gives the dial up (TunnelConnectError) when it fires, at any point of the handshake; a session already returned is not touched. */
+  signal?: AbortSignal;
   /** Streams the portal opens, once the tunnel is up. */
   onStream?: (stream: MuxStream) => void;
   limits?: Partial<MuxLimits>;
@@ -132,8 +134,10 @@ export function dialTunnel(opts: DialOptions): Promise<Dialled> {
     let rejected: TunnelRejected | null = null;
     const timer = setTimeout(() => fail(new TunnelConnectError('The handshake took too long.')), opts.handshakeMs ?? CONNECT_LIMITS.handshakeMs);
     timer.unref();
+    const onAbort = () => fail(new TunnelConnectError('The dial was given up.'));
     const cleanup = () => {
       clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onAbort);
       ws.off('message', onMessage);
       ws.off('error', onError);
       ws.off('close', onClose);
@@ -199,5 +203,7 @@ export function dialTunnel(opts: DialOptions): Promise<Dialled> {
     ws.once('open', () => {
       stage = 'challenge';
     });
+    if (opts.signal?.aborted) onAbort();
+    else opts.signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

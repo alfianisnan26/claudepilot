@@ -13,8 +13,8 @@ import { PlanSheet, ScriptSheet } from './ScriptSheet';
 import { useEnrollment } from './useEnrollment';
 import { canAddNode, cell, formProblems, idFromInput, initialForm, offersSudo, platformChoices, toCreateRequest, toEnrollmentRequest, withKind, withPlatform, withRole, type WizardForm } from './wizard';
 
-/** A new target (step 1, then step 2), or another command for one that exists ("Command", "Add node", the Outdated upgrade). */
-export type WizardMode = { type: 'new' } | { type: 'command'; target: ConnectTargetView; upgrade?: boolean };
+/** A new target (step 1, then step 2), or another command for one that exists ("Command", "Add node"). */
+export type WizardMode = { type: 'new' } | { type: 'command'; target: ConnectTargetView };
 
 const ua = () => (typeof navigator === 'undefined' ? '' : navigator.userAgent);
 
@@ -277,7 +277,7 @@ export function AddTargetDialog({
         {step === 'command' && created && (
           <div className="flex min-w-0 flex-col gap-3">
             {!connected && (
-              <CommandBlock commands={created.commands} upgradeFirst={mode.type === 'command' && !!mode.upgrade} onViewScript={() => setScript(true)} onWhatItDoes={() => setPlan(true)} />
+              <CommandBlock commands={created.commands} onViewScript={() => setScript(true)} onWhatItDoes={() => setPlan(true)} />
             )}
             <LiveLine
               line={line}

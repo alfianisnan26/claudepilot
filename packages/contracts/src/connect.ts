@@ -388,6 +388,9 @@ export interface ConnectCommands {
   scriptSha256: string;
 }
 
+/** `GET …/commands`: the token-less commands for a target that has an agent (the Outdated chip's upgrade). No token is made. */
+export type ConnectMaintenanceCommands = Omit<ConnectCommands, 'install' | 'verified'>;
+
 /** The reply to making a target or an enrollment. */
 export interface ConnectEnrollmentCreated {
   target: ConnectTargetView;
@@ -1031,6 +1034,8 @@ export const CONNECT_API = {
   enrollments: (id: string) => `/api/connect/targets/${seg(id)}/enrollments`,
   /** DELETE: revoke the token (it stops working at once). */
   enrollment: (id: string, enrollmentId: string) => `/api/connect/targets/${seg(id)}/enrollments/${seg(enrollmentId)}`,
+  /** GET `?platform=`: `ConnectMaintenanceCommands` (upgrade, uninstall, doctor). Makes no token; the options come from the target's latest one. */
+  commands: (id: string, platform?: ConnectPlatform) => `/api/connect/targets/${seg(id)}/commands${platform ? `?platform=${platform}` : ''}`,
   /** GET: `ConnectPlanPreview`. */
   plan: (id: string, enrollmentId: string) => `/api/connect/targets/${seg(id)}/enrollments/${seg(enrollmentId)}/plan`,
   /** GET `?limit=&before=<id>`: `ConnectEvent[]`, newest first. */

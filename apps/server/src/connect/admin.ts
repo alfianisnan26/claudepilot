@@ -4,12 +4,15 @@
 
 import { AppError } from '@isnanme/core';
 import {
+  CONNECT_PLATFORMS,
   CONNECT_REMOVE_QUERY,
   CONNECT_ROLE,
   type ConnectEnrollment,
   type ConnectEnrollmentCreated,
   type ConnectEvent,
+  type ConnectMaintenanceCommands,
   type ConnectNodeView,
+  type ConnectPlatform,
   type ConnectPlanPreview,
   type ConnectRemoveBlocked,
   type ConnectScannedView,
@@ -163,6 +166,27 @@ export class ConnectAdmin {
     const made = this.d.enrollments.create(target, { platform: req.platform, options: req.options, ttlMinutes: req.ttlMinutes, maxUses: req.maxUses }, ctxOf(actor, meta.ip));
     this.d.notify();
     return this.#created(target, made.row, made.enrollment, made.token);
+  }
+
+  /**
+   * The token-less commands (upgrade, uninstall, doctor) for a target: the Outdated chip needs no new token. The platform and the options
+   * (sudo, private CA) are the target's latest token's unless the request names a platform.
+   */
+  maintenanceCommands(actor: Actor, id: string, platform: string | undefined): ConnectMaintenanceCommands {
+    requireCan(actor, 'manage', targetRef(id));
+    const target = this.d.registry.requireTarget(id);
+    if (platform !== undefined && !(CONNECT_PLATFORMS as readonly string[]).includes(platform)) throw invalid({ platform: `One of ${CONNECT_PLATFORMS.join(', ')}.` });
+    const latest = this.d.store.enrollments(id)[0];
+    const { install: _install, verified: _verified, ...rest } = this.d.install.commands({
+      portalUrl: target.portalUrl,
+      token: '',
+      kind: target.kind,
+      platform: (platform as ConnectPlatform | undefined) ?? latest?.platform ?? 'linux',
+      targetId: target.id,
+      options: latest?.params,
+      caPem: this.d.config.caFile ? this.d.caPem() : null,
+    });
+    return rest;
   }
 
   revokeEnrollment(actor: Actor, id: string, enrollmentId: string, meta: RequestMeta): void {

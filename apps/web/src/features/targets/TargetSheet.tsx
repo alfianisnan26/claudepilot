@@ -18,12 +18,15 @@ export function TargetSheet({
   onClose,
   onChanged,
   onCommand,
+  onUpgrade,
   denied,
 }: {
   target: ConnectTargetView | null;
   onClose: () => void;
   onChanged: () => void;
-  onCommand: (t: ConnectTargetView, upgrade?: boolean) => void;
+  onCommand: (t: ConnectTargetView) => void;
+  /** The Outdated chip: the token-less upgrade command. */
+  onUpgrade: (t: ConnectTargetView) => void;
   /** The server said this person may not change targets (403): every action is disabled with the reason. */
   denied?: string | null;
 }) {
@@ -83,7 +86,7 @@ export function TargetSheet({
                           {n.state === 'revoked' && <Badge tone="danger">Revoked</Badge>}
                           {n.incompatible && <Badge tone="danger">Incompatible</Badge>}
                           {n.outdated && !n.incompatible && n.state === 'enrolled' && (
-                            <button type="button" className="press shrink-0 rounded-full" aria-label={`Outdated: show the upgrade command for ${n.name}`} onClick={() => onCommand(t, true)} disabled={!!denied}>
+                            <button type="button" className="press shrink-0 rounded-full" aria-label={`Outdated: show the upgrade command for ${n.name}`} onClick={() => onUpgrade(t)} disabled={!!denied}>
                               <Badge tone="warning">Outdated</Badge>
                             </button>
                           )}

@@ -5,7 +5,7 @@ import { once } from 'node:events';
 import { describe, test } from 'node:test';
 import { CONNECT_LIMITS } from '@portal/contracts';
 import { WebSocket } from 'ws';
-import { helloFor, openCore, openHub, type TestHub } from './testkit.js';
+import { helloFor, openCore, openHub, withTimeout, type TestHub } from './testkit.js';
 import { signChallenge } from './tunnel/auth.js';
 import { dialTunnel, TunnelRejected } from './tunnel/index.js';
 
@@ -125,7 +125,7 @@ describe('the handshake itself', () => {
       assert.equal((await next()).t, 'challenge');
       const reject = await next();
       assert.deepEqual([reject.t, reject.code], ['reject', 'bad_request']);
-      const [code] = await once(ws, 'close');
+      const [code] = await withTimeout(once(ws, 'close'), 'the socket to close');
       assert.equal(code, 4408);
     } finally {
       await h.close();
@@ -164,7 +164,7 @@ describe('the handshake itself', () => {
       ws.send(JSON.stringify({ t: 'auth', node: n.nodeId, sig: signChallenge(n.keys.privateKey, challenge.connId as string, challenge.nonce as string, n.nodeId), hello: helloFor('docker') }));
       assert.equal((await next()).t, 'welcome');
       ws.send(JSON.stringify({ t: 'auth', node: n.nodeId })); // handshake text, after the handshake
-      const [code] = await once(ws, 'close');
+      const [code] = await withTimeout(once(ws, 'close'), 'the socket to close');
       assert.equal(code, 1002);
       assert.ok(await h.waitFor(() => !h.hub.isConnected(n.nodeId)));
     } finally {
@@ -181,7 +181,7 @@ describe('the handshake itself', () => {
       ws.send(JSON.stringify({ t: 'auth', node: n.nodeId, sig: signChallenge(n.keys.privateKey, challenge.connId as string, challenge.nonce as string, n.nodeId), hello: helloFor('docker') }));
       await next(); // welcome
       ws.send(Buffer.from('this is not a frame at all'));
-      const [code] = await once(ws, 'close');
+      const [code] = await withTimeout(once(ws, 'close'), 'the socket to close');
       assert.equal(code, 1002);
       // and the hub is still fine
       const again = await h.dial(n.nodeId, n.keys);
@@ -223,7 +223,7 @@ describe('before a good auth a peer may send 8 KiB at most', () => {
       await next(); // the challenge
       const closed = once(ws, 'close');
       ws.send(JSON.stringify({ t: 'auth', node: 'nd_0123456789ab', sig: 'x'.repeat(CONNECT_LIMITS.preAuth.firstMessageBytes) }));
-      const [code] = await closed;
+      const [code] = await withTimeout(closed, 'the socket to close');
       assert.equal(code, 1009);
       await h.waitFor(() => h.hub.preAuth === 0);
       assert.equal(h.hub.preAuth, 0);

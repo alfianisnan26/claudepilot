@@ -11,7 +11,8 @@ import { runAgent, type AgentClock, type AgentHandle } from './client.js';
 import { fingerprintOf, FileIdentityStore } from './identity.js';
 import { collectingLogger } from './log.js';
 import { agentConfig } from './testkit/agentConfig.js';
-import { openPortal, type Portal } from './testkit/portalRig.js';
+import { openPortal, stopAgents, type Portal } from './testkit/portalRig.js';
+import { until as untilNamed, withTimeout } from '../testkit.js';
 import { generateNodeKeyPair } from '../tunnel/auth.js';
 import { parseResult, RECORD, RecordParser } from '../tunnel/records.js';
 
@@ -30,7 +31,7 @@ beforeEach(() => {
   mkdirSync(join(dir, 'home'));
 });
 afterEach(async () => {
-  for (const a of agents.splice(0)) await a.stop().catch(() => undefined);
+  await stopAgents(agents);
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -70,6 +71,44 @@ async function hostOp(nodeId: string, targetId: string, op: Parameters<ReturnTyp
   await until(() => result !== null);
   return { text: Buffer.concat(out).toString('utf8'), result: result! };
 }
+
+describe('a stop that lands while the agent is dialling', () => {
+  // The cause of the gate's hang (rekey.test.ts, twice): a test ended when the HUB said the node was connected (it is, from `welcome` on), while
+  // the agent was still inside the dial; `stop()` then found no session to close, the agent connected anyway, served a tunnel nobody would close,
+  // and `done` never resolved. Under load the gap between the hub's welcome and the agent's serve is wide enough to land in.
+  const stopsAndIsDone = async (handle: AgentHandle, when: string) => {
+    await withTimeout(handle.stop(), `the stop that landed ${when}`, 5_000);
+    assert.equal(handle.state(), 'stopped');
+    assert.equal(handle.connected(), false);
+  };
+
+  it('given up at once: a stop before the dial starts (state "connecting") ends the agent without a connection', async () => {
+    const t = portal.target({ id: 'stop-before-dial' });
+    const { handle } = start({ enrollToken: t.token });
+    const connecting = new Promise<void>((resolve) => handle.events.on('state', (s) => s === 'connecting' && resolve()));
+    await withTimeout(connecting, 'the connecting state', 5_000);
+    await stopsAndIsDone(handle, 'before the dial');
+    assert.equal(portal.hub.hub.isConnected(handle.identity()!.node), false);
+  });
+
+  it('given up in flight: a stop while the upgrade request is at the hub ends the dial and the agent', async () => {
+    const t = portal.target({ id: 'stop-mid-dial' });
+    const { handle } = start({ enrollToken: t.token });
+    const upgrade = new Promise<void>((resolve) => portal.hub.server.once('upgrade', () => resolve()));
+    await withTimeout(upgrade, "the agent's upgrade request at the hub", 5_000);
+    await stopsAndIsDone(handle, 'during the handshake');
+    await untilNamed(() => !portal.hub.hub.isConnected(handle.identity()!.node), 'the hub to hold no connection for the node');
+  });
+
+  it('closed the moment it is there: a stop between the hub’s welcome and the agent’s serve closes the session that arrives', async () => {
+    const t = portal.target({ id: 'stop-after-welcome' });
+    const { handle } = start({ enrollToken: t.token });
+    // The hub is connected from `welcome` on; the agent is not until its serve starts. Stop in that gap, as the hung test did.
+    await untilNamed(() => handle.identity() !== null && portal.hub.hub.isConnected(handle.identity()!.node), 'the hub to see the node');
+    await stopsAndIsDone(handle, 'after the welcome');
+    await untilNamed(() => !portal.hub.hub.isConnected(handle.identity()!.node), 'the hub to drop the stopped agent');
+  });
+});
 
 describe('enroll, connect, and what the portal sees', () => {
   it('enrolls with the token, keeps the key 0600, connects, and the portal knows the node by its fingerprint', async () => {

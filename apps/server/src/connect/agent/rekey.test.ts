@@ -10,7 +10,8 @@ import { runAgent, type AgentHandle, type RunAgentOptions } from './client.js';
 import { fingerprintOf, FileIdentityStore } from './identity.js';
 import { collectingLogger } from './log.js';
 import { agentConfig } from './testkit/agentConfig.js';
-import { openPortal, type Portal } from './testkit/portalRig.js';
+import { openPortal, stopAgents, type Portal } from './testkit/portalRig.js';
+import { until, withTimeout } from '../testkit.js';
 import { writeLine } from '../tunnel/lines.js';
 
 let portal: Portal;
@@ -26,17 +27,10 @@ beforeEach(() => {
   mkdirSync(join(dir, 'home'));
 });
 afterEach(async () => {
-  for (const a of agents.splice(0)) await a.stop().catch(() => undefined);
+  await stopAgents(agents);
   rmSync(dir, { recursive: true, force: true });
 });
 
-const until = async (fn: () => boolean, ms = 8000) => {
-  const t = Date.now();
-  while (!fn()) {
-    if (Date.now() - t > ms) throw new Error('timed out waiting');
-    await new Promise((r) => setTimeout(r, 20));
-  }
-};
 const start = (over: Partial<RunAgentOptions> & { token?: string } = {}) => {
   const log = collectingLogger();
   const { token, ...rest } = over;
@@ -55,8 +49,8 @@ describe('rotating the node key', () => {
     const node = h.identity()!.node;
     const before = fingerprintOf(h.identity()!);
     const rekeyed = new Promise<string>((resolve) => h.events.once('rekeyed', (e) => resolve(e.fingerprint)));
-    await portal.hub.hub.rotate(node);
-    const fp = await rekeyed;
+    await withTimeout(portal.hub.hub.rotate(node), 'the rotate notice to be sent');
+    const fp = await withTimeout(rekeyed, "the agent's rekeyed event");
     assert.notEqual(fp, before);
     assert.equal(fingerprintOf((await files().current.load())!), fp, 'identity.json holds the new key');
     assert.equal(existsSync(files().next), false, 'nothing is left pending');
@@ -64,8 +58,9 @@ describe('rotating the node key', () => {
     assert.ok(portal.events('rot-ok').some((e) => e.type === 'node.rotated'));
     // A cut connection comes back with the new key.
     portal.hub.hub.connection(node)!.ws.terminate();
-    await until(() => !portal.hub.hub.isConnected(node));
-    await until(() => portal.hub.hub.isConnected(node));
+    await until(() => !portal.hub.hub.isConnected(node), 'the hub to drop the cut connection');
+    await until(() => portal.hub.hub.isConnected(node), 'the agent to come back with the new key');
+    await h.whenConnected();
     assert.equal(h.identity()!.node, node);
   });
 
@@ -78,10 +73,10 @@ describe('rotating the node key', () => {
     // The portal asked for nothing: the agent is told to rotate anyway (a rogue or stale notice), and the hub refuses.
     const control = portal.hub.hub.connection(node)!.control!;
     await writeLine(control, { t: 'notice', level: 'info', message: 'rotate', action: 'rotate' });
-    await until(() => /rekey\.refused/.test(log.text()));
+    await until(() => /rekey\.refused/.test(log.text()), 'rekey.refused in the log');
     assert.equal(keyOf(node), before);
     assert.equal(fingerprintOf(h.identity()!), before);
-    await until(() => !existsSync(files().next));
+    await until(() => !existsSync(files().next), 'identity.next.json to be removed');
     assert.equal(h.connected(), true);
   });
 
@@ -100,25 +95,25 @@ describe('rotating the node key', () => {
       let died = false;
       // Restart the agent on the same files, with a hook that dies at `step`; wait for the portal to have what the step implies, then die.
       await first.h.stop();
-      await until(() => !portal.hub.hub.isConnected(node));
+      await until(() => !portal.hub.hub.isConnected(node), 'the first agent to be gone from the hub');
       const crashing = start({
         rotationHook: async (s) => {
           if (s !== step) return;
-          if (step !== 'saved-next') await until(() => keyOf(node) !== oldFp);
+          if (step !== 'saved-next') await until(() => keyOf(node) !== oldFp, 'the portal to store the new key');
           died = true;
           throw new Error('crash');
         },
       });
       await crashing.h.whenConnected();
-      await portal.hub.hub.rotate(node);
-      await until(() => died);
-      await crashing.h.done;
+      await withTimeout(portal.hub.hub.rotate(node), 'the rotate notice to be sent');
+      await until(() => died, `the crash at "${step}"`);
+      await withTimeout(crashing.h.done, 'the crashed agent to be done');
       assert.equal(crashing.h.state(), 'stopped', 'the agent died without cleaning up');
 
       // Restart: whatever is on disk, it must connect, and the files and the portal must agree on the key.
       const again = start();
       await again.h.whenConnected();
-      await until(() => portal.hub.hub.isConnected(node));
+      await until(() => portal.hub.hub.isConnected(node), 'the restarted agent on the hub');
       const fp = fingerprintOf(again.h.identity()!);
       assert.equal(existsSync(files().next), false, 'no rotation is left pending');
       assert.equal(fingerprintOf((await files().current.load())!), fp);
