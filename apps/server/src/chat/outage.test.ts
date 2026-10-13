@@ -45,7 +45,7 @@ test('outage: a reader waits for its target instead of marking the session gone,
 
 test('a portal restart while the target is away: the live session is followed as soon as the target returns, not a liveness round later (T6)', async () => {
   const s = await liveSession({ livenessMs: 50 }, true);
-  let c2: InstanceType<typeof s.controller.constructor> | null = null;
+  let c2: typeof s.controller | null = null;
   try {
     // The portal stops; it starts again while the tunnel is still down: its first liveness round can't reach the workspace.
     s.controller.stop();
