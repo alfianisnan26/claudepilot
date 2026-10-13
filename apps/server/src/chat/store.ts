@@ -27,6 +27,7 @@ import type { Store } from '../store/store.js';
 import { HOME } from '../workspaces/runtime.js';
 import { mapInputStrings, type ModelTotals, type StoredEvent, type TaskPatch } from './protocol.js';
 import { fileRefs } from './artifacts/records.js';
+import { lineageOf, type Lineage } from './lineage.js';
 import { redact, redactMaybe } from './redact.js';
 
 /**
@@ -72,6 +73,7 @@ export type ChatSessionRow = {
   claude_id?: string | null;
   predecessor_id?: string | null;
   successor_id?: string | null;
+  continued_from?: string | null;
   ticket_id?: string | null;
   parent_id?: string | null;
   started_by?: string | null;
@@ -476,6 +478,7 @@ export class ChatStore {
       claudeName: this.claudeName(row.workspace_id, row.claude_id ?? ''),
       predecessorId: row.predecessor_id ?? null,
       successorId: row.successor_id ?? null,
+      continuedFrom: row.continued_from ?? null,
       archivedAt: row.archived_at ?? null,
       pinnedAt: row.pinned_at ?? null,
       bypassCapable: row.bypass_capable === 1,
@@ -487,6 +490,11 @@ export class ChatStore {
       worktree: row.worktree_path ? { path: row.worktree_path, branch: row.worktree_branch ?? '', repo: row.worktree_repo ?? '' } : null,
       startedBy: row.started_by ?? null,
     };
+  }
+
+  /** The chain this session belongs to (T-136): every row from the root to the head, each one's cost, and their sum. Null when unknown. */
+  lineage(sessionId: string): Lineage | null {
+    return lineageOf(this.#db(), sessionId);
   }
 
   /** The other Claudes this chat ran on before its current one, oldest first, each once. */
@@ -862,8 +870,16 @@ export class ChatStore {
     return row ? (row.state as ControlLineState) : null;
   }
 
-  setControlState(sessionId: string, key: string, state: ControlLineState): void {
-    this.#writable().prepare(`UPDATE chat_inputs SET state = ? WHERE session_id = ? AND uuid = ? AND kind = 'control'`).run(state, sessionId, key);
+  /** Sets a control line's state; `digest` (T-136) records the first response read for it, so a second copy can be told apart. */
+  setControlState(sessionId: string, key: string, state: ControlLineState, digest?: string): void {
+    if (digest === undefined) this.#writable().prepare(`UPDATE chat_inputs SET state = ? WHERE session_id = ? AND uuid = ? AND kind = 'control'`).run(state, sessionId, key);
+    else this.#writable().prepare(`UPDATE chat_inputs SET state = ?, digest = ? WHERE session_id = ? AND uuid = ? AND kind = 'control'`).run(state, digest, sessionId, key);
+  }
+
+  /** The digest of the first response read for a control line, or null (none read, or read before T-136). */
+  controlDigest(sessionId: string, key: string): string | null {
+    const row = this.#db().prepare(`SELECT digest FROM chat_inputs WHERE session_id = ? AND uuid = ? AND kind = 'control'`).get(sessionId, key) as { digest: string | null } | undefined;
+    return row?.digest ?? null;
   }
 
   /* ---------- Sub-agents and background tasks ---------- */
@@ -980,6 +996,14 @@ export class ChatStore {
     return !!this.#db()
       .prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running' OR started_at >= ? OR ended_at >= ?) LIMIT 1`)
       .get(sessionId, since, since);
+  }
+
+  /** Whether this one task ran in the session's current process (as {@link hasTaskActivitySince}, for one task id). T-136. */
+  taskRanSince(sessionId: string, taskId: string, since: string | null): boolean {
+    if (since === null) return !!this.#db().prepare('SELECT 1 FROM chat_tasks WHERE session_id = ? AND task_id = ? LIMIT 1').get(sessionId, taskId);
+    return !!this.#db()
+      .prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND task_id = ? AND (status IS NULL OR status = 'running' OR started_at >= ? OR ended_at >= ?) LIMIT 1`)
+      .get(sessionId, taskId, since, since);
   }
 
   hasRunningTasks(sessionId: string): boolean {
@@ -1235,6 +1259,8 @@ export class ChatStore {
       db.prepare('UPDATE chat_sessions SET successor_id = NULL WHERE successor_id = ?').run(id);
       db.prepare('UPDATE chat_sessions SET predecessor_id = NULL WHERE predecessor_id = ?').run(id);
       db.prepare('UPDATE chat_sessions SET parent_id = NULL WHERE parent_id = ?').run(id);
+      // The row that continued it now starts its chain (T-136): what it cost is gone with it.
+      db.prepare('UPDATE chat_sessions SET continued_from = NULL WHERE continued_from = ?').run(id);
       db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id);
     });
     return blobs;
