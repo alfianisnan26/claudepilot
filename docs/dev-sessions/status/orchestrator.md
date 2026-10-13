@@ -13,11 +13,14 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - C item 1, btw UI against the real engine (tools/qa/btw-real.mjs, the card says how many messages the answer saw): a97a950.
 - Gate hygiene: shellcheck SC2015 (1f045fe), repo-find sorted (8b3316a), deploy-pipeline e2e test: the fakes' PATH in ~/.profile (b893ac8; /etc/profile resets PATH in a login shell and the real kubectl installed today at /usr/local/bin won; the test's wait now says which step failed). Passes alone 7/7.
 
-## NOW (09:57, after the move to fadlilah at 09:42)
-- Moved alfian.isnan -> fadlilah by the coordinator (alfian at 87 %). The move stopped the three sub-agents; their worktree files were intact and they were re-dispatched at 09:45 to resume from the files: T-5 + T-31 (dev/subagent-visibility, opus), T-34 (dev/home-dashboard, opus), T-6 (dev/mcp-label, sonnet). The nohup'd full gate and fast lane survived.
-- Full gate on e7da20b GREEN (2475 tests; "the control stream" failed under load, passed alone), fast lane on 8c2ebf2 GREEN. Pushed integration 4995f82 to origin and pilot (with the coordinator's two supervisor notes merged). T-36 closed.
-- Deploy run #5 (rmv6i7h1p2ac08f) on 4995f82, gate=true, images=portal: in its gate. integration stays still until its release ran.
-- T-38 folder trust (urgent, built by the orchestrator): c5c8f4a on dev/folder-trust (worktree dev-automove-model); fast lane running; merges after #5's release.
+## NOW (10:25)
+- PACE (honest): today 07:00-10:25 merged into integration: T-1/T-2/T-3/T-4 (one batch), T-7, T-9, T-8 (Connect T6), T-29, T-36, T-6 = about 10 slices in 3.5 h, about 3 per hour; but nothing of it is live yet (deploy #5 is the first). Cause of the slowness at 10:10 (coordinator): every gate, build, harness and test ran on this pod's 4 CPUs, gates were run twice over (my fast lane's full suite next to deploy #5's gate suite), and waiter tasks piled up. Fixed: T-37 moves gates into the cluster; sub-agents now run only their package typecheck and their test files; one harness at a time under the lock; no waiter tasks.
+- Deploy #5 (rmv6i7h1p2ac08f, 4995f82, gate=true): in its gate (the pipeline's local suite, started 09:54). Then build, then it WAITS FOR THE OWNER'S APPROVE. integration is not pushed until its release ran.
+- Merged locally, not pushed (the deploy): bc8d222 T-6 MCP labels (231 server + 20 web tests on the touched files; the fast lane on merge runs after the deploy, in the cluster). T-6 closed.
+- T-38 folder trust: c5c8f4a on dev/folder-trust (pushed); its local fast lane was stopped at 36 % (it ran the full suite next to deploy #5's); now gated as the FIRST in-cluster Job (scripts/gate-job.sh c5c8f4a), merge after the deploy.
+- T-37 gate as a Job: 1a00a2a on dev/gate-job (pushed), 14/14 tests; first real run is T-38's gate. Merge after the deploy.
+- Running sub-agents: T-5 + T-31 + T-39 (dev/subagent-visibility: web half 9140fc3 committed; T-39 added), T-34 (dev/home-dashboard: cad50e0 Home page committed), T-25 mute rules (dev/notify-mute, dispatched 10:14). T-24 claimed, held until T-5 merges (both change Transcript.tsx).
+- The move (09:42, alfian.isnan -> fadlilah): slices resumed from their files at 09:45.
 
 ## WAVES (owner, 09:4x; work in this order)
 - Wave 1: T-36 fast lane (DONE, pushed) -> push (done) -> T-38 folder trust (built) -> T-18 deploy (full gate on the exact commit) -> T-3, T-2 (fixed, merged; live with the deploy) -> T-31 (with the T-5 sub-agent) -> T-1, T-4, T-29 (merged; live with the deploy).
