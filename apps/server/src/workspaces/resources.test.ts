@@ -52,10 +52,10 @@ async function world(opts: { otherCpu?: string } = {}) {
   const fake = await FakeKube.start();
   fake.nodes.set('n1', { metadata: { name: 'n1', labels: { 'kubernetes.io/hostname': 'n1' } }, status: { allocatable: { cpu: '8', memory: '16Gi' } } } as never);
   fake.otherPods.push({ metadata: { name: 'db-0', namespace: 'other' }, spec: { nodeName: 'n1', containers: [{ name: 'db', resources: { requests: { cpu: opts.otherCpu ?? '3', memory: '4Gi' } } }] }, status: { phase: 'Running' } } as never);
-  await kubeRuntimeOn(fake).create({ name: 'box', cpus: 4, memoryMb: 8192 }, () => undefined);
+  await kubeRuntimeOn(fake, undefined, { fitCheck: true }).create({ name: 'box', cpus: 4, memoryMb: 8192 }, () => undefined);
   const store = await Store.open({ dataDir: tempDirectory('cp-t98-'), secretKey: null });
   const make = () => {
-    const ws = new Workspaces([kubeRuntimeOn(fake)], saved, {}, new WorkspaceIdentities(store));
+    const ws = new Workspaces([kubeRuntimeOn(fake, undefined, { fitCheck: true })], saved, {}, new WorkspaceIdentities(store));
     const audit: Record<string, unknown>[] = [];
     ws.hooks.audit = (e) => void audit.push(e);
     return { ws, audit };
@@ -70,15 +70,20 @@ test('a create that fits on no node is refused with the numbers, and nothing is 
   try {
     fake.nodes.set('n1', { metadata: { name: 'n1' }, status: { allocatable: { cpu: '8', memory: '16Gi' } } } as never);
     fake.otherPods.push({ metadata: { name: 'db-0', namespace: 'other' }, spec: { nodeName: 'n1', containers: [{ name: 'db', resources: { requests: { cpu: '6', memory: '4Gi' } } }] }, status: { phase: 'Running' } } as never);
-    const refused = await refusal(kubeRuntimeOn(fake).create({ name: 'big', cpus: 4, memoryMb: 8192 }, () => undefined));
+    const refused = await refusal(kubeRuntimeOn(fake, undefined, { fitCheck: true }).create({ name: 'big', cpus: 4, memoryMb: 8192 }, () => undefined));
     assert.equal(refused.code, 'CONFLICT');
     assert.match(refused.message, /does not fit on n1 .*the other pods request 6000m and 4096Mi, this one would ask 4000m and 8192Mi, the node can allocate 8000m and 16384Mi/);
     assert.deepEqual([fake.deployments.size, fake.claims.size], [0, 0], 'nothing made');
-    await kubeRuntimeOn(fake).create({ name: 'small', cpus: 2, memoryMb: 2048 }, () => undefined);
+    await kubeRuntimeOn(fake, undefined, { fitCheck: true }).create({ name: 'small', cpus: 2, memoryMb: 2048 }, () => undefined);
     assert.equal(fake.deployments.size, 1, 'one that fits is made');
     fake.clusterReads = false;
-    await kubeRuntimeOn(fake).create({ name: 'blind', cpus: 4, memoryMb: 8192 }, () => undefined);
+    await kubeRuntimeOn(fake, undefined, { fitCheck: true }).create({ name: 'blind', cpus: 4, memoryMb: 8192 }, () => undefined);
     assert.equal(fake.deployments.size, 2, 'not checked: the create goes on as before');
+    fake.clusterReads = true;
+    const before = fake.requests.length;
+    await kubeRuntimeOn(fake).create({ name: 'enrolled', cpus: 4, memoryMb: 8192 }, () => undefined);
+    assert.ok(fake.requests.slice(before).every((r) => !/^\/api\/v1\/(nodes|pods)/.test(r.url)), 'an enrolled cluster is never asked for cluster-wide reads');
+    assert.match((await kubeRuntimeOn(fake).resources.fit('enrolled', { cpuRequest: 1, memoryRequestMb: 64 })).message, /enrolled through Connect/);
   } finally {
     await fake.stop();
   }

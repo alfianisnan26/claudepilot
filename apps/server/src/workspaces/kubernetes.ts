@@ -13,7 +13,7 @@ import {
 } from '@kubernetes/client-node';
 import { plainName } from '../names.js';
 import { requestsFor, type RequestOptions } from './requests.js';
-import { bytes, checkFit, cores, needOf, type FitPod } from './fit.js';
+import { bytes, checkFit, cores, needOf, unchecked, type FitPod } from './fit.js';
 import { cpuQuantity, fitView, memoryQuantity, needOfValues, valuesOf } from './resources.js';
 import { kubernetesDelivery } from './kubernetesDelivery.js';
 import { homeVolumeOf, legacyRuntimeName } from './identity.js';
@@ -43,6 +43,12 @@ export interface KubernetesOptions {
   nodeSelector?: Record<string, string>;
   /** What a pod asks the scheduler to reserve, at most its limits (`PORTAL_K8S_CPU_REQUEST`, `PORTAL_K8S_MEMORY_REQUEST`); unset: the limits. */
   requests?: RequestOptions;
+  /**
+   * Whether the fit check (fit.ts) may read the cluster's nodes and pods. Default: yes for the portal's own cluster, no for an enrolled one
+   * (its agent's Role is namespaced and its policy refuses cluster-wide reads): there a create is not checked and a resources change is
+   * refused as unchecked.
+   */
+  fitCheck?: boolean;
   /** Tests only: the folders delivery may write and read (default: the engine's, `DELIVERY_ROOTS`), and how often starts are polled. */
   delivery?: { roots?: readonly string[]; pollMs?: number };
 }
@@ -56,6 +62,7 @@ export class KubernetesRuntime implements Runtime {
   readonly #metrics: CustomObjectsApi;
 
   readonly #manageNamespace: boolean;
+  readonly #fitCheck: boolean;
 
   constructor(
     private readonly opts: KubernetesOptions,
@@ -68,6 +75,7 @@ export class KubernetesRuntime implements Runtime {
     if (connect) this.#kc = connect.kubeConfig;
     else this.#kc.loadFromDefault();
     this.#manageNamespace = connect?.manageNamespace ?? true;
+    this.#fitCheck = opts.fitCheck ?? !connect;
     this.#core = this.#kc.makeApiClient(CoreV1Api);
     this.#apps = this.#kc.makeApiClient(AppsV1Api);
     this.#metrics = this.#kc.makeApiClient(CustomObjectsApi);
@@ -299,7 +307,7 @@ export class KubernetesRuntime implements Runtime {
     // A cluster the portal may not read (no ClusterRole claudepilot-portal-fit-check, an enrolled cluster's namespaced Role) is not
     // checked: the create goes on as before.
     const need = needOf([{ resources: { limits, requests } }]);
-    if (need.cpuMilli > 0 || need.memoryBytes > 0) {
+    if (this.#fitCheck && (need.cpuMilli > 0 || need.memoryBytes > 0)) {
       const fit = await checkFit(this.#core, { need, nodeSelector: this.opts.nodeSelector });
       if (fit.checked && !fit.fits) throw new AppError('CONFLICT', fit.reason);
       if (!fit.checked) console.log(`[kubernetes] ${spec.name}: ${fit.reason}`);
@@ -393,6 +401,7 @@ export class KubernetesRuntime implements Runtime {
       return { live: valuesOf(c?.resources as { limits?: Record<string, string>; requests?: Record<string, string> } | undefined), replicas: d.spec?.replicas ?? 1 };
     },
     fit: async (name, want) => {
+      if (!this.#fitCheck) return fitView(unchecked(needOfValues(want), 'this cluster is enrolled through Connect; its agent may not read the cluster’s nodes and pods.'));
       let node: string | null = null;
       try {
         const own = await this.#core.listNamespacedPod({ namespace: this.#ns, labelSelector: `${LABEL.managed}=true,${LABEL.name}=${plainName(name)}` });
