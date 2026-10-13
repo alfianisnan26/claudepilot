@@ -51,6 +51,7 @@ T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, 
 - T-131: reassign T-100, T-102, T-105, T-109 (and the in_review T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-107) from the ended fdb140be
   to 5c9fcb5f. The portal refuses a takeover (FORBIDDEN), so this session cannot comment on or close them.
 - Deploy run 18 (e327e6d, full gate, includes 23384af) waits for release: integration is NOT pushed until it is released (coordinator).
+  Full gate Job on 23384af: green (typecheck 39 s, web build 25 s, suite 266 s).
 - On the iPhone (installed PWA, 390 px, light and dark), check what is live in 2026.10.13-5: T-1 Pinned and swipe (right = Pin, left = Archive);
   T-2 no sideways scroll on any page; T-3 an image attaches and uploads in this Kubernetes workspace; T-5 sub-agents in their own rows, "Working ·
   N agents", "Session finished" only at real idle; T-24 tool rows open to Input and Output blocks with real line breaks and shell colouring, the
