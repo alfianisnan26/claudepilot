@@ -130,8 +130,9 @@ test('an MCP set reaches a Kubernetes workspace: assignment, first delivery, a n
     await h.rt.start('kw');
     await until(() => manifest()?.pools[0]?.revision === 2 && h.row()?.status === 'synced', 'the delivery at the start');
     assert.ok(pod.files.has(MCP_DROPIN));
-    // The start watch asked (a reconcile already under way runs once more as "queued", which delivers the same).
-    assert.ok(asked.includes('started'), asked.join(', '));
+    // The start watch (a poll of the pod list) asks too. It may ask a moment after the delivery: a reconcile already under way runs once
+    // more as "queued", which delivers the same, so wait for the ask instead of reading it at once (a loaded machine made that a race).
+    await until(() => asked.includes('started'), `the start watch asked for a delivery (asked: ${asked.join(', ')})`);
   } finally {
     await h.done();
   }
