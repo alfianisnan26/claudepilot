@@ -25,7 +25,8 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
 
 ## IN FLIGHT (three sub-agents, opus; restarted 14:5x after the move from hasyim to fadlilah, which stopped the old ones)
 - Integration: 4b4a55a (T-97 merged; full gate Job green: typecheck 37 s, web build 24 s, suite 256 s) pushed to origin and pilot. cad27c7 merges
-  T-98 (dev/workspace-resources; conflicts in fakeKube.ts, migrations.ts 714+716, kubernetes.ts taken from both sides); its gate Job runs, then push.
+  T-98 (conflicts in fakeKube.ts, migrations.ts 714+716, kubernetes.ts taken from both sides); gate Job green (typecheck 38 s, web 25 s,
+  suite 263 s); merged with the coordinator's charter commits and pushed to origin and pilot as 3ba1b4e.
   T-97's `fitOf` (browser/kube.ts) and T-98's `fit.ts` are NOT unified yet: a follow-up slice, after T-100.
 - T-105 (label t105): worktree dev-automove-model, branch dev/t105-automove-proven (WIP pushed; 69/69 autotransfer tests, tsc clean). Left: the
   usage-refresh trigger, the web waiting line, PRD FR4a/FR10a, tools/qa/automove.mjs, merge of integration and the area tests. The live dry run
@@ -82,3 +83,5 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
   From now on each such commit goes to a fresh branch wip/orch-<sha> (plain push).
 - 14:5x T-98 merged without unifying T-97's fitOf into workspaces/fit.ts: the unification touches the browser pool's tests and is its own small
   slice; one fit rule is still the target.
+- 14:5x CHARTER (docs/dev-sessions/CHARTER.md) binds from now: every commit carries `Ticket: T-n` (from 3ba1b4e on; earlier commits not
+  rewritten); running agents told. The force-push slip above is filed as incident T-112 (deny rule for force pushes proposed; a person's call).
