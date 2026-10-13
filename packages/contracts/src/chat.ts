@@ -56,6 +56,8 @@ export interface ChatSession {
   waiting: number;
   /** What the oldest open request asks, in a few words ("Run a command: npm test"), or null when none is open. */
   waitingFor: string | null;
+  /** Sub-agents and background tasks still running (the Agents panel's running ones): the main agent may be idle while they work. */
+  agentsRunning?: number;
   createdAt: string;
   lastActivityAt: string;
   endedReason: string | null;
@@ -242,6 +244,8 @@ export interface ChatEvent {
   text?: string;
   /** Set when the line came from a sub-agent (its `parent_tool_use_id`). */
   agentLabel?: string | null;
+  /** Set when the line came from a sub-agent: the `Task` call that started it (`ChatTask.toolUseId`), whatever its label reads. */
+  parentToolUseId?: string;
   toolName?: string;
   requestId?: string;
   request?: ChatRequest;
@@ -387,6 +391,11 @@ export interface ChatTask {
   toolUseId: string | null;
   description: string;
   subagentType: string | null;
+  /**
+   * The model it runs on, as Claude Code reported it (e.g. `claude-sonnet-4-5`): the `resolvedModel` of the call that launched it, then the
+   * `message.model` of its own lines. Null when neither was seen (a background command, an older Claude Code): unavailable, never guessed.
+   */
+  model: string | null;
   status: 'running' | 'completed' | 'failed' | 'killed';
   tokens: number | null;
   toolUses: number | null;
@@ -394,6 +403,18 @@ export interface ChatTask {
   summary: string | null;
   startedAt: string;
   endedAt: string | null;
+}
+
+/** At most this many events in one answer of `CHAT_API.taskEvents` (the newest of them). */
+export const TASK_EVENTS_MAX = 200;
+
+/** A sub-agent's own transcript (`CHAT_API.taskEvents`): the stored events of its lines, redacted like the main transcript. */
+export interface ChatTaskTranscript {
+  task: ChatTask;
+  /** Oldest first; at most `TASK_EVENTS_MAX`, the newest when there are more. */
+  events: ChatEvent[];
+  /** More events (after `after`) than were returned: the oldest were left out. */
+  truncated: boolean;
 }
 
 /** A model the session can switch to (Claude Code's `list_models`). */
@@ -576,6 +597,8 @@ export const CHAT_API = {
   models: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/models`,
   /** GET: sub-agents and background tasks. */
   tasks: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/tasks`,
+  /** GET `?after=<seq>`: one sub-agent's own transcript (`ChatTaskTranscript`), bounded by `TASK_EVENTS_MAX`. */
+  taskEvents: (id: string, taskId: string) => `/api/chat/sessions/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}/events`,
   /** GET: an image's bytes (attachments and tool images). */
   blob: (id: string, blobId: string) => `/api/chat/sessions/${encodeURIComponent(id)}/blobs/${blobId}`,
   /** GET `?path=`: a folder's entries in the session's workspace (default: the session's folder). */
@@ -763,6 +786,8 @@ export type ChatServerMessage =
       type: 'delta';
       session: string;
       agentLabel: string | null;
+      /** A sub-agent's piece: the `Task` call that started it (`ChatTask.toolUseId`). Absent for the main agent. */
+      parentToolUseId?: string;
       text: string;
       /** A thinking block opened (no text); `elapsedMs` says how long ago, for a tab that joins late. */
       thinking?: boolean;

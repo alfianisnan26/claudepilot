@@ -118,7 +118,7 @@ export function attachChat(server: Server, controller: ChatController, authorize
             for (const input of controller.inputStates(id)) send({ type: 'input', session: id, uuid: input.uuid, state: input.state });
             // A thinking block already under way shows as "Thinking…", timed from its real start.
             for (const t of controller.openThinking(id))
-              send({ type: 'delta', session: id, agentLabel: t.agentLabel, text: '', thinking: true, elapsedMs: t.elapsedMs });
+              send({ type: 'delta', session: id, agentLabel: t.agentLabel, ...(t.parentToolUseId ? { parentToolUseId: t.parentToolUseId } : {}), text: '', thinking: true, elapsedMs: t.elapsedMs });
             // The person's open side questions on it (their cards survive a reload or a dropped connection).
             for (const item of controller.btw.open(actor, id)) send({ type: 'btw', session: id, item });
           } else send({ type: 'removed', session: msg.session }); // deleted (or never was)

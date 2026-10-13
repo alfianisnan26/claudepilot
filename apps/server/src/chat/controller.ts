@@ -51,6 +51,7 @@ import {
   type ChatWorktreeStatus,
   type ChatSession,
   type ChatTask,
+  type ChatTaskTranscript,
   type ChatSwitchOption,
   type ChatSwitchOptions,
   type ChatTransferContext,
@@ -350,6 +351,8 @@ export class ChatController {
   readonly #signInNoted = new Map<string, Set<string>>();
   /** Per session: a `Task` tool_use id → its sub-agent's description, to label that agent's lines. */
   readonly #agentNames = new Map<string, Map<string, string>>();
+  /** Per session: a `Task` tool_use id → the model its sub-agent was seen on, kept for a task row that arrives after it. */
+  readonly #agentModels = new Map<string, Map<string, { model: string; source: 'observed' | 'launched' }>>();
   /** Per session: tool calls still waiting for their result, tool_use id → tool name. */
   readonly #toolCalls = new Map<string, Map<string, string>>();
   /** Per session, per agent (`''` for the main thread): the open text block's redactor. */
@@ -749,6 +752,18 @@ export class ChatController {
   tasks(id: string): ChatTask[] {
     const session = this.#require(id);
     return this.#chat.tasks(session.id);
+  }
+
+  /**
+   * One sub-agent's own transcript: its task row and the stored events of its lines (those whose parent is its Task call) after `after`,
+   * bounded by `TASK_EVENTS_MAX`. The events are the stored ones, redacted as the main transcript's are. A task the session doesn't have is 404.
+   */
+  taskTranscript(id: string, taskId: string, after = 0): ChatTaskTranscript {
+    const session = this.#require(this.#chat.resolveId(id));
+    const task = typeof taskId === 'string' && taskId ? this.#chat.task(session.id, taskId) : null;
+    if (!task) throw new AppError('NOT_FOUND', 'No such agent.');
+    const { events, truncated } = task.toolUseId ? this.#chat.taskEvents(session.id, task.toolUseId, Math.max(0, Math.floor(after) || 0)) : { events: [], truncated: false };
+    return { task, events, truncated };
   }
 
   /** The runs of the chat on Claudes, oldest first, with what each cost. */
@@ -2917,9 +2932,25 @@ export class ChatController {
         }
         this.#chat.upsertTask(sessionId, t);
         if (t.toolUseId && t.description) this.#names(sessionId).set(t.toolUseId, t.description);
+        // A model seen before its task row (a line out of order) lands now.
+        const seen = t.toolUseId ? this.#agentModels.get(sessionId)?.get(t.toolUseId) : undefined;
+        if (seen && t.toolUseId) this.#chat.setTaskModel(sessionId, t.toolUseId, seen.model, { ifUnknown: seen.source === 'launched' });
       }
       this.#emitTasks(sessionId);
       this.#armIdle(sessionId); // a task that ended may be what kept it awake
+    }
+    // The model each sub-agent runs on: what its own lines report wins over what it was launched on.
+    if (parsed.agentModels?.length) {
+      let models = this.#agentModels.get(sessionId);
+      if (!models) this.#agentModels.set(sessionId, (models = new Map()));
+      let changed = false;
+      for (const m of parsed.agentModels) {
+        const known = models.get(m.toolUseId);
+        if (known?.model === m.model && (known.source === 'observed' || m.source === 'launched')) continue; // nothing new: no query, no emit
+        if (!known || m.source === 'observed' || known.source === 'launched') models.set(m.toolUseId, { model: m.model, source: m.source });
+        if (this.#chat.setTaskModel(sessionId, m.toolUseId, m.model, { ifUnknown: m.source === 'launched' })) changed = true;
+      }
+      if (changed) this.#emitTasks(sessionId);
     }
 
     // A finished block replaces its live text: what was held back goes out (redacted) just before it.
@@ -3325,10 +3356,11 @@ export class ChatController {
   }
 
   /** Thinking blocks open right now, for a tab that subscribes mid-block (each with how long it has run). */
-  openThinking(sessionId: string): { agentLabel: string | null; elapsedMs: number }[] {
+  openThinking(sessionId: string): { agentLabel: string | null; parentToolUseId?: string; elapsedMs: number }[] {
     const now = Date.now();
     return [...(this.#thinkingSince.get(sessionId) ?? [])].map(([agent, since]) => ({
       agentLabel: agent ? this.#label(sessionId, agent) : null,
+      ...(agent ? { parentToolUseId: agent } : {}),
       elapsedMs: Math.max(0, now - since),
     }));
   }
@@ -3338,12 +3370,12 @@ export class ChatController {
     let since = this.#thinkingSince.get(sessionId);
     if (!since) this.#thinkingSince.set(sessionId, (since = new Map()));
     since.set(agent ?? '', Date.now());
-    this.#emit(sessionId, { type: 'delta', session: sessionId, agentLabel: agent ? this.#label(sessionId, agent) : null, text: '', thinking: true });
+    this.#emit(sessionId, { type: 'delta', session: sessionId, agentLabel: agent ? this.#label(sessionId, agent) : null, ...(agent ? { parentToolUseId: agent } : {}), text: '', thinking: true });
   }
 
   #emitDelta(sessionId: string, agent: string | null, text: string): void {
     if (!text) return;
-    this.#emit(sessionId, { type: 'delta', session: sessionId, agentLabel: agent ? this.#label(sessionId, agent) : null, text });
+    this.#emit(sessionId, { type: 'delta', session: sessionId, agentLabel: agent ? this.#label(sessionId, agent) : null, ...(agent ? { parentToolUseId: agent } : {}), text });
   }
 
   /* ---------- Control requests ---------- */
@@ -3527,6 +3559,7 @@ export class ChatController {
     this.#appliedRead.delete(sessionId);
     this.#signInNoted.delete(sessionId);
     this.#agentNames.delete(sessionId);
+    this.#agentModels.delete(sessionId);
     this.#toolCalls.delete(sessionId);
     this.#streams.delete(sessionId);
     this.#thinkingSince.delete(sessionId);

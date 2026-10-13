@@ -36,7 +36,11 @@ export function sessionResolver(facts: (id: string) => SessionFacts | null): Obj
  */
 export function registerChatAuthz(facts: (id: string) => SessionFacts | null): void {
   registerResolver(sessionResolver(facts));
-  declarePolicies('chat', { 'ALL /api/chat/live': { kind: 'signed-in' } });
+  declarePolicies('chat', {
+    'ALL /api/chat/live': { kind: 'signed-in' },
+    // A sub-agent's own transcript: whoever may view the session (the Agents panel's detail view).
+    'GET /api/chat/sessions/:id/tasks/:taskId/events': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
+  });
 }
 
 /** The key the socket is declared under: the contract's path, so a test can pin them together. */
