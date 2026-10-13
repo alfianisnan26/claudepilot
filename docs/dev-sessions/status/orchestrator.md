@@ -9,8 +9,8 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
 
 ## IN FLIGHT (17:3x: FOUR slices, t105, t143, t102, t110. SLIP: I started t110 while at three, against my own note; nothing starts until two finish)
 - t105 (opus): dev-automove-model, dev/t105-automove-proven. T-105 is done apart from the area tests. T-109 WIP is 8cc8265 (catalogue, migration 761).
-- T-136 slice 1 merged locally as 62f5d5e (reviewed: peer accepted only with its cause in this process's stream, identical duplicate
-  control response ignored, migrations 770-772; 772 links today's chains and moves their tickets to 5c9fcb5f). Full gate Job running.
+- T-136 slice 1 merged as 62f5d5e (reviewed: peer accepted only with its cause in this process's stream, identical duplicate
+  control response ignored, migrations 770-772; 772 links today's chains and moves their tickets to 5c9fcb5f). Full gate green; PUSHED (c0100e6).
 - t110 (opus): dev-gate-job, dev/t110-autoapprove-dry. T-110 slice 1: the PRD FR41/FR41a, autoApprove off|dry (manage only, audited,
   migrations 780-784), dry lines on held releases. It approves nothing.
 - T-141 MERGED as c3431fa: the gate Job is green (typecheck, imageBuild and jobRun tests); the proof build is on the ticket (comment 809). It
