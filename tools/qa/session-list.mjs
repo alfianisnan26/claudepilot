@@ -6,6 +6,7 @@
 //     four corners of each card (just outside the curve) finds the page behind it, not a row;
 //   - the chips run Needs you, In progress, Idle, Pinned, Ended (each only when not empty), All last; the page opens on the first chip with rows;
 //   - in All the rows sit under headings in that order, each with its count; Needs you has no fold;
+//   - a row's ⋯ menu opens past its row and card with every item reachable (nothing clips it at rest);
 //   - nothing scrolls sideways (only the chip row does); 44 px targets for the chips and the group headings on touch screens.
 // usage: scripts/scratch-portal.sh start 3461 && QA_PORT=3461 QA_CODE=24681372 node tools/qa/session-list.mjs [--shots dir] [--seed-only]
 //   It seeds /tmp/scratch-portal-$QA_PORT/data/portal.db (SL_DB overrides) with rows titled "QA list …" and removes them again at the end.
@@ -87,13 +88,25 @@ const GEOMETRY = `(() => {
       if (!paints) continue;
       const q = el.getBoundingClientRect();
       if (q.width === 0 || q.height === 0) continue;
+      // What it paints: its box, cut by every ancestor inside the card that clips (the swipe box while the row moves).
       const qq = { l: q.left, t: q.top, r: q.right, b: q.bottom };
+      for (let p = el.parentElement; p && p !== box; p = p.parentElement) {
+        if (getComputedStyle(p).overflow === 'visible') continue;
+        const c = p.getBoundingClientRect();
+        qq.l = Math.max(qq.l, c.left); qq.t = Math.max(qq.t, c.top); qq.r = Math.min(qq.r, c.right); qq.b = Math.min(qq.b, c.bottom);
+      }
+      if (qq.r <= qq.l || qq.b <= qq.t) continue;
       const unclipped = [];
       for (const [name, x, y] of corners) {
-        const nearX = x === 'l' ? qq.l - r.left < R : r.right - qq.r < R;
-        const nearY = y === 't' ? qq.t - r.top < R : r.bottom - qq.b < R;
-        if (!nearX || !nearY) continue;
-        let ok = parseFloat(s['border' + name + 'Radius']) >= R - bw - 1;
+        // The layer's point nearest the card's corner (its own corner, moved in along the diagonal by its own radius) must lie inside the
+        // card's inner curve: the circle of radius R - bw about the curve's centre. A layer far enough in (an icon) passes on its own.
+        const rho = parseFloat(s['border' + name + 'Radius']) || 0;
+        const k = rho * (1 - Math.SQRT1_2);
+        const px = x === 'l' ? qq.l + k : qq.r - k, py = y === 't' ? qq.t + k : qq.b - k;
+        const cx = x === 'l' ? r.left + R : r.right - R, cy = y === 't' ? r.top + R : r.bottom - R;
+        const inCorner = (x === 'l' ? px < cx : px > cx) && (y === 't' ? py < cy : py > cy);
+        if (!inCorner || Math.hypot(px - cx, py - cy) <= R - bw + 0.75) continue;
+        let ok = false;
         for (let p = el.parentElement; !ok && p && p !== box; p = p.parentElement) {
           const ps = getComputedStyle(p);
           ok = ps.overflow !== 'visible' && parseFloat(ps['border' + name + 'Radius']) >= R - bw - 1;
@@ -195,13 +208,24 @@ for (const size of SIZES)
     // All: the rows under headings in the same order, each with its count; Needs you has no fold.
     await b.eval(`document.querySelector('[data-chip=all]')?.click()`);
     await sleep(600);
-    const heads = await b.eval(`[...document.querySelectorAll('[data-status-group]')].map((e) => ({ id: e.dataset.statusGroup, title: e.querySelector('[data-group-title]')?.textContent.trim(), count: e.querySelector('[data-group-count]')?.textContent.trim(), fold: !!e.querySelector('button[aria-expanded]'), h: e.querySelector('[data-group-head]')?.getBoundingClientRect().height ?? 0 }))`);
+    const heads = await b.eval(`[...document.querySelectorAll('[data-status-group]')].map((e) => ({ id: e.dataset.statusGroup, title: e.querySelector('[data-group-title]')?.textContent.trim(), count: e.querySelector('[data-group-count]')?.textContent.trim(), fold: !!e.querySelector('[data-group-head]')?.matches('button[aria-expanded]'), h: e.querySelector('[data-group-head]')?.getBoundingClientRect().height ?? 0 }))`);
     check(`${tag} All: grouped under the headings in order`, JSON.stringify(heads.map((h) => h.title)) === JSON.stringify(ORDER), JSON.stringify(heads.map((h) => h.title)));
     check(`${tag} All: each heading has its count`, heads.every((h) => /^\d+$/.test(h.count ?? '')), JSON.stringify(heads.map((h) => h.count)));
     check(`${tag} All: Needs you has no fold, the others do`, heads.length > 0 && !heads[0].fold && heads.slice(1).every((h) => h.fold));
     if (size.mobile) check(`${tag} All: headings are 44 px targets`, heads.every((h) => h.h >= 44), JSON.stringify(heads.map((h) => Math.round(h.h))));
     check(`${tag}: no sideways scroll`, (await b.eval('document.scrollingElement.scrollWidth <= innerWidth')) === true);
     await geometry('All');
+
+    // A row's ⋯ menu opens past its row and its card: every item can be tapped (T-100: the swipe box's clip cut it to the first item).
+    const menu = await b.eval(`(async () => {
+      const t = document.querySelectorAll('ul[data-session-rows] li button[aria-haspopup=menu]')[1]; if (!t) return null;
+      t.click(); await new Promise((r) => setTimeout(r, 400));
+      const m = document.querySelector('[role=menu]'); if (!m) return { items: [] };
+      const items = [...m.querySelectorAll('[role=menuitem]')].map((it) => { const q = it.getBoundingClientRect(); const e = document.elementFromPoint(q.left + 12, q.top + q.height / 2); return [it.textContent.trim(), !!e && m.contains(e)]; });
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); await new Promise((r) => setTimeout(r, 250));
+      return { items };
+    })()`);
+    check(`${tag} All: a row's menu opens whole, every item reachable`, !!menu && menu.items.length > 0 && menu.items.every(([, hit]) => hit), JSON.stringify(menu));
     if (shots) {
       await b.send('Emulation.setDeviceMetricsOverride', { width: size.w, height: Math.max(size.h, 1400), deviceScaleFactor: 1, mobile: size.mobile });
       await sleep(400);
@@ -211,10 +235,10 @@ for (const size of SIZES)
     }
 
     // A heading folds and unfolds.
-    await b.eval(`document.querySelector('[data-status-group=idle] button[aria-expanded]')?.click()`);
+    await b.eval(`document.querySelector('[data-status-group=idle] button[data-group-head]')?.click()`);
     await sleep(300);
     check(`${tag} All: Idle folds`, (await b.eval(`!document.querySelector('[data-status-group=idle] ul[data-session-rows]')`)) === true);
-    await b.eval(`document.querySelector('[data-status-group=idle] button[aria-expanded]')?.click()`);
+    await b.eval(`document.querySelector('[data-status-group=idle] button[data-group-head]')?.click()`);
     await sleep(200);
   }
 

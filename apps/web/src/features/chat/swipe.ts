@@ -2,8 +2,12 @@
 // release does it, short of it the row snaps back. The gesture is an addition to the row's ⋯ menu, never the only way. The rules are
 // pure (tested); the hook turns pointer events into them. Vertical scrolling wins: the axis is decided once by the first movement, and
 // `touch-action: pan-y` on the row lets the browser take a vertical drag (it then cancels our pointer). The page never scrolls sideways:
-// the row moves by transform inside an `overflow-hidden` box.
-import { useCallback, useRef, useState } from 'react';
+// the row moves by transform inside a box that clips while it moves and while it settles back (`clipped`); at rest it does not clip, so
+// the row's ⋯ menu opens past the row and past the card (T-100: an always-on clip cut the menu to its first item).
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+/** How long the row takes to settle back after a release (the transform's transition), and the clip stays on. */
+export const SWIPE_SETTLE_MS = 160;
 
 /** How far the row must travel for the release to act. */
 export const SWIPE_THRESHOLD = 72;
@@ -53,6 +57,8 @@ export interface RowSwipe {
   dragging: boolean;
   /** Past the threshold: the pane says it will act. */
   armed: 'left' | 'right' | null;
+  /** The row is off its place or settling back: its box clips it (else nothing clips, so a menu can open past it). */
+  clipped: boolean;
   handlers: {
     onPointerDown: (e: React.PointerEvent) => void;
     onPointerMove: (e: React.PointerEvent) => void;
@@ -111,5 +117,19 @@ export function useRowSwipe({ onLeft, onRight, enabled = true }: { onLeft?: () =
   const onPointerUp = useCallback((e: React.PointerEvent) => end(e, true), [end]);
   const onPointerCancel = useCallback((e: React.PointerEvent) => end(e, false), [end]);
   const armed = dx >= SWIPE_THRESHOLD ? 'right' : dx <= -SWIPE_THRESHOLD ? 'left' : null;
-  return { dx, dragging, armed, handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel } };
+  // Back at 0 after a move: the transform still runs back for SWIPE_SETTLE_MS; the clip stays on until it has (and a little more).
+  const [settling, setSettling] = useState(false);
+  const moved = useRef(false);
+  useEffect(() => {
+    if (dx !== 0) {
+      moved.current = true;
+      return;
+    }
+    if (!moved.current) return;
+    moved.current = false;
+    setSettling(true);
+    const t = setTimeout(() => setSettling(false), SWIPE_SETTLE_MS + 60);
+    return () => clearTimeout(t);
+  }, [dx]);
+  return { dx, dragging, armed, clipped: dx !== 0 || settling, handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel } };
 }

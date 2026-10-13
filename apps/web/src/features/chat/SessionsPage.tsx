@@ -338,8 +338,8 @@ function Queue({ rows }: { rows: ListRow[] }) {
 
 /**
  * A group of rows in one card. Grouped (by workspace, Claude, … or, in All, by status), it has a heading with its count that folds the group;
- * a heading without `onFold` (Needs you) never folds. The card's rows are clipped to its corners by their own radius, not by an overflow clip,
- * so a row's ⋯ menu can still open past the card (T-100).
+ * a heading without `onFold` (Needs you) never folds. The card's rows keep to its corners by their own radius (RowList), not by an overflow
+ * clip, so a row's ⋯ menu can still open past the card (T-100).
  */
 function Group({
   group,
@@ -396,11 +396,19 @@ function Group({
 }
 
 /**
- * The rows of a card. The first and last row take the card's inner corners (its 24 px radius less the 1 px border), and everything a row paints
- * inherits them, so nothing square shows past the curve (T-100: the swipe layer and a selected row did).
+ * The rows of a card. The row at the top and the row at the bottom (a nested one too: its right corner is the card's) take the card's inner
+ * corners (its 24 px radius less the 1 px border) on their swipe box, and the row's background and the swipe panes inherit them, so nothing
+ * square paints past the curve (T-100: each row's square background did, at rest and mid-swipe). The card itself does not clip, so a
+ * row's ⋯ menu opens past it.
  */
+const ROW_CORNERS =
+  '[&>li:first-child>div:first-child]:rounded-t-[23px] [&>li:last-child>div:last-child]:rounded-b-[23px] [&>li:last-child_li:last-child>div:last-child]:rounded-br-[23px]';
 function RowList({ children }: { children: React.ReactNode }) {
-  return <ul data-session-rows className="divide-y divide-line [&>li:first-child]:rounded-t-[23px] [&>li:last-child]:rounded-b-[23px]">{children}</ul>;
+  return (
+    <ul data-session-rows className={cn('divide-y divide-line', ROW_CORNERS)}>
+      {children}
+    </ul>
+  );
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
