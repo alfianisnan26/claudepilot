@@ -429,7 +429,8 @@ export class BrowserService {
         return;
       }
       await kb.setTemplate(ws, plan);
-      this.event(workspaceId, has ? 'changed' : 'added', { why, fit: fit?.reason ?? 'not checked: the portal may not read the nodes' });
+      // The egress opt-out (PRD Q12) is audited with every template change that puts a browser in the pod.
+      this.event(workspaceId, has ? 'changed' : 'added', { why, fit: fit?.reason ?? 'not checked: the portal may not read the nodes', egress: kb.egress.mode });
       this.#save(workspaceId, { ...base, container: 'workspace_stopped', spec, last_error: null });
       return;
     }

@@ -17,6 +17,7 @@ import {
 } from '@kubernetes/client-node';
 import { cpuMilli, memoryBytes, requestsFor } from '../workspaces/requests.js';
 import { seedHomeScript, type KubeBrowserAccess } from '../workspaces/kubernetes.js';
+import type { Store } from '../store/store.js';
 import { LABEL } from '../workspaces/runtime.js';
 import type { ExecResult, ExecStream } from './companion.js';
 import { chromePolicy, containerConfig } from './policy.js';
@@ -47,6 +48,17 @@ export const K8S_BROWSER_REQUESTS = { cpu: '100m', memory: '1Gi' } as const;
 export const K8S_BROWSER_CAP = 2;
 /** A pod that can't be scheduled this long after the browser was added gets its browser taken away again (PRD FR11). */
 export const PENDING_ROLLBACK_MS = 5 * 60_000;
+
+/**
+ * At most 2 assigned browsers per Kubernetes target (PRD §14.1 Caps): an assigned one holds its requests on a node even while Chrome
+ * sleeps. Null when there is room; the workspace's own assignment (a change of pool) doesn't count against it.
+ */
+export function kubeCapRefusal(store: Store, workspaceId: string): string | null {
+  const target = workspaceId.split('/')[0]!;
+  const rows = (store.db?.prepare("SELECT DISTINCT workspace_id FROM assignments WHERE pool_type = 'browser'").all() ?? []) as { workspace_id: string }[];
+  const others = rows.filter((r) => r.workspace_id !== workspaceId && r.workspace_id.split('/')[0] === target).length;
+  return others >= K8S_BROWSER_CAP ? `${others} of ${K8S_BROWSER_CAP} browsers are assigned on this Kubernetes target. Unassign one first.` : null;
+}
 
 /** The supervisor, `cpb-ctl` and the live-view helpers run as uid 1001; a Kubernetes exec has no user, so it drops to it first. */
 export const asUser = (user: string, cmd: string[]): string[] => {
@@ -261,11 +273,46 @@ export function portalException(internalUrl: string | undefined): { namespace?: 
   return svc ? { namespace: svc[1], port } : null;
 }
 
+/** An admin-listed exception (`PORTAL_K8S_BROWSER_EGRESS_ALLOW`): an IPv4 or IPv6 CIDR, or an address, with an optional TCP port. */
+export interface EgressException {
+  cidr: string;
+  port?: number;
+}
+
 /**
- * The per-pod egress policy: the internet, but no private, link-local or cluster range, except DNS and the portal. It covers Claude Code
- * and the shell too (one network namespace). Enforced only where the cluster enforces NetworkPolicy (PRD Q12).
+ * `10.43.0.1/32:443,192.168.1.10` → exceptions; anything that isn't a CIDR or an address is dropped (and said so by the caller), never
+ * widened. IPv6 takes a port only in brackets: `[fd00::1]/128:443`.
  */
-export function egressPolicy(runtimeName: string, match: Record<string, string>, opts: { portal: ReturnType<typeof portalException>; owner?: V1Deployment }): V1NetworkPolicy {
+export function parseEgressAllow(text: string | undefined): { allow: EgressException[]; bad: string[] } {
+  const allow: EgressException[] = [];
+  const bad: string[] = [];
+  for (const raw of (text ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
+    const m = /^(?:\[([0-9a-f:]+)\](\/\d{1,3})?|([0-9.]+)(\/\d{1,2})?|([0-9a-f:]+)(\/\d{1,3})?)(?::(\d{1,5}))?$/i.exec(raw);
+    const v4 = m?.[3];
+    const addr = m?.[1] ?? v4 ?? m?.[5];
+    const prefix = m?.[2] ?? m?.[4] ?? m?.[6];
+    const port = m?.[7] && !m[5] ? Number(m[7]) : undefined;
+    const okV4 = v4 ? v4.split('.').length === 4 && v4.split('.').every((o) => Number(o) <= 255) && (!prefix || Number(prefix.slice(1)) <= 32) : true;
+    const okV6 = v4 ? true : !!addr?.includes(':') && (!prefix || Number(prefix.slice(1)) <= 128);
+    if (!m || !addr || !okV4 || !okV6 || (port !== undefined && (port < 1 || port > 65535))) {
+      bad.push(raw);
+      continue;
+    }
+    allow.push({ cidr: `${addr}${prefix ?? (v4 ? '/32' : '/128')}`, ...(port ? { port } : {}) });
+  }
+  return { allow, bad };
+}
+
+/**
+ * The per-pod egress policy: the internet, but no private, link-local or cluster range, except DNS, the portal and the admin's exceptions.
+ * It covers Claude Code and the shell too (one network namespace), so a workspace that reaches the API server, a registry or the LAN needs
+ * those listed. Enforced only where the cluster enforces NetworkPolicy (PRD Q12).
+ */
+export function egressPolicy(
+  runtimeName: string,
+  match: Record<string, string>,
+  opts: { portal: ReturnType<typeof portalException>; owner?: V1Deployment; allow?: EgressException[] },
+): V1NetworkPolicy {
   const portal = opts.portal;
   return {
     apiVersion: 'networking.k8s.io/v1',
@@ -288,6 +335,7 @@ export function egressPolicy(runtimeName: string, match: Record<string, string>,
           : portal?.cidr
             ? [{ to: [{ ipBlock: { cidr: portal.cidr } }], ports: [{ protocol: 'TCP', port: portal.port }] }]
             : []),
+        ...(opts.allow ?? []).map((x) => ({ to: [{ ipBlock: { cidr: x.cidr } }], ...(x.port ? { ports: [{ protocol: 'TCP', port: x.port }] } : {}) })),
       ],
     },
   };
@@ -321,6 +369,8 @@ export class KubeBrowsers {
     readonly image: string,
     /** The portal's internal URL: the one in-cluster exception of the egress policy. */
     private readonly internalUrl?: string,
+    /** `isolate`: the per-pod egress policy with these exceptions; `off`: the admin's opt-out (PRD Q12), audited by the service. */
+    readonly egress: { mode: 'isolate' | 'off'; allow: EgressException[] } = { mode: 'isolate', allow: [] },
   ) {
     this.#core = access.kubeConfig.makeApiClient(CoreV1Api);
     this.#apps = access.kubeConfig.makeApiClient(AppsV1Api);
@@ -384,10 +434,14 @@ export class KubeBrowsers {
     }
   }
 
-  /** The per-pod egress policy, created or updated. */
+  /** The per-pod egress policy, created or updated; with the opt-out, removed. */
   async ensureEgress(ws: KubeWorkspace, name: string): Promise<void> {
     const runtimeName = ws.deployment.metadata!.name!;
-    const body = egressPolicy(runtimeName, { [LABEL.managed]: 'true', [LABEL.name]: name }, { portal: portalException(this.internalUrl), owner: ws.deployment });
+    if (this.egress.mode === 'off') {
+      await this.#net.deleteNamespacedNetworkPolicy({ name: egressPolicyName(runtimeName), namespace: this.#ns }).catch((e) => (codeOf(e) === 404 ? undefined : Promise.reject(e)));
+      return;
+    }
+    const body = egressPolicy(runtimeName, { [LABEL.managed]: 'true', [LABEL.name]: name }, { portal: portalException(this.internalUrl), owner: ws.deployment, allow: this.egress.allow });
     const policy = body.metadata!.name!;
     try {
       const cur = await this.#net.readNamespacedNetworkPolicy({ name: policy, namespace: this.#ns });
@@ -428,8 +482,9 @@ export class KubeBrowsers {
   async #pod(name: string): Promise<string> {
     const ws = await this.workspace(name);
     const pod = ws?.pod;
+    // The browser container's own state, never pod phase (PRD §20 A5).
     const running = pod?.status?.containerStatuses?.find((s) => s.name === BROWSER_CONTAINER)?.state?.running;
-    if (!pod || pod.status?.phase !== 'Running' || !running) throw new Error('The browser container isn’t running.');
+    if (!pod || !running) throw new Error('The browser container isn’t running.');
     return pod.metadata!.name!;
   }
 

@@ -7,7 +7,7 @@ import type { Store } from '../store/store.js';
 import type { Runtime, RuntimeNames } from '../workspaces/runtime.js';
 import { Companions } from './companion.js';
 import { KubernetesRuntime } from '../workspaces/kubernetes.js';
-import { K8S_BROWSER_CAP, KubeBrowsers } from './kube.js';
+import { kubeCapRefusal, KubeBrowsers, parseEgressAllow } from './kube.js';
 import { BrowserKind } from './kind.js';
 import { createBrowserRoutes } from './routes.js';
 import { attachBrowserSockets } from './socket.js';
@@ -27,10 +27,12 @@ export class BrowserModule {
 
   /** `names`: the workspaces' stored runtime names (T-42), which the browser containers follow. */
   constructor(deps: { store: Store; pools: PoolService; steps: WorkspaceSteps; runtimes: Runtime[]; notify: () => void; names?: RuntimeNames }) {
+    const egressAllow = parseEgressAllow(config.browser.kubeEgressAllow);
+    if (egressAllow.bad.length) console.error(`[browser] PORTAL_K8S_BROWSER_EGRESS_ALLOW: not a CIDR or an address, left out: ${egressAllow.bad.join(', ').slice(0, 300)}`);
     for (const r of deps.runtimes) {
       if (r.target.kind === 'docker') this.companions.set(r.target.id, new Companions(r.target.id, r.target.where, config.browser.image, config.browser.imageContext, () => deps.store.portalId, deps.names));
       const access = r instanceof KubernetesRuntime && config.browser.kubeImage ? r.browserAccess() : null;
-      if (access && config.browser.kubeImage) this.kube.set(r.target.id, new KubeBrowsers(r.target.id, access, config.browser.kubeImage, config.portalMcp.internalUrl));
+      if (access && config.browser.kubeImage) this.kube.set(r.target.id, new KubeBrowsers(r.target.id, access, config.browser.kubeImage, config.portalMcp.internalUrl, { mode: config.browser.kubeEgress, allow: egressAllow.allow }));
     }
     this.kind = new BrowserKind({
       supports: (target) => this.companions.has(target) || this.kube.has(target),
@@ -98,13 +100,3 @@ export class BrowserModule {
   }
 }
 
-/**
- * At most 2 assigned browsers per Kubernetes target (PRD §14.1 Caps): an assigned one holds its requests on a node even while Chrome
- * sleeps. Null when there is room; the workspace's own assignment (a change of pool) doesn't count against it.
- */
-export function kubeCapRefusal(store: Store, workspaceId: string): string | null {
-  const target = workspaceId.split('/')[0]!;
-  const rows = (store.db?.prepare("SELECT DISTINCT workspace_id FROM assignments WHERE pool_type = 'browser'").all() ?? []) as { workspace_id: string }[];
-  const others = rows.filter((r) => r.workspace_id !== workspaceId && r.workspace_id.split('/')[0] === target).length;
-  return others >= K8S_BROWSER_CAP ? `${others} of ${K8S_BROWSER_CAP} browsers are assigned on this Kubernetes target. Unassign one first.` : null;
-}

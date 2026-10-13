@@ -168,9 +168,12 @@ export class KubernetesRuntime implements Runtime {
     return { exists: true, running: (await this.#readyPod(name)) !== null, portal: d.metadata?.labels?.[LABEL.portal] ?? null };
   }
 
-  /** A pod that is up and whose workspace container is Ready (delivery's "running"), not one on its way out. */
+  /**
+   * A pod whose workspace container is Ready (delivery's "running"), not one on its way out. Not pod phase: it stays Pending while any
+   * container's image pulls, a browser's included (browser PRD §20 A5).
+   */
   #ready(p: V1Pod): boolean {
-    return p.status?.phase === 'Running' && !p.metadata?.deletionTimestamp && !!p.status.containerStatuses?.find((s) => s.name === CONTAINER)?.ready;
+    return !p.metadata?.deletionTimestamp && !!p.status?.containerStatuses?.find((s) => s.name === CONTAINER)?.ready;
   }
 
   async #readyPod(name: string): Promise<string | null> {
@@ -301,7 +304,8 @@ export class KubernetesRuntime implements Runtime {
     if (waiting?.reason && STUCK.has(waiting.reason))
       return { status: 'error', detail: `${waiting.reason}: ${waiting.message ?? ''}`.trim() };
     const ready = pod.status?.containerStatuses?.find((s) => s.name === CONTAINER)?.ready;
-    if (pod.status?.phase === 'Running' && ready) return { status: 'running' };
+    // The workspace container's own readiness, not pod phase (Pending while another container's image pulls).
+    if (ready && pod.status?.phase !== 'Failed') return { status: 'running' };
     if (pod.status?.phase === 'Failed') return { status: 'error', detail: pod.status.message ?? pod.status.reason };
     const unschedulable = pod.status?.conditions?.find((c) => c.type === 'PodScheduled' && c.status === 'False');
     return { status: 'starting', detail: unschedulable?.message ?? waiting?.reason ?? pod.status?.phase };
@@ -452,7 +456,8 @@ export class KubernetesRuntime implements Runtime {
       namespace: this.#ns,
       labelSelector: `${LABEL.managed}=true,${LABEL.name}=${plainName(name)}`,
     });
-    const pod = pods.items.find((p) => p.status?.phase === 'Running' && !p.metadata?.deletionTimestamp);
+    // The workspace container running is what counts (browser PRD §20 A5): the pod stays Pending while a browser image pulls.
+    const pod = pods.items.find((p) => !p.metadata?.deletionTimestamp && !!p.status?.containerStatuses?.find((s) => s.name === CONTAINER)?.state?.running);
     if (!pod) throw new AppError('CONFLICT', 'The workspace isn’t running.');
     return pod.metadata!.name!;
   }
