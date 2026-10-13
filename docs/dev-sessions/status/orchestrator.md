@@ -22,7 +22,7 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
   - 4a752c3 T-28 ticket Bump (Prioritise / Ask, shared session picker, ticket_bump MCP tool; 42 tests; browser 42/44 with the one real issue fixed).
   - T-95 item 3 (gate speed): the Job ran 1120 s of suite on k3s-node2 with 0.4 CPU of a 100m request; 67ff48a (coordinator) asks 1 CPU and avoids the dev pod's node. Concurrency 3 in the Job.
 - Sub-agents: T-42 slice 2 (the name as a label, workspace_rename; dev/workspace-id), T-24 tool rows (browser look running; dev/tool-rows), T-32 part 2 CI Bump (dev/ci-bump, reuses T-28's picker).
-- Next: T-42 slice 3, T-26 (three slices), T-27, T-30; wave 4 (T-10..T-15); T-33 last (after T-42).
+- Next (in order): T-95 push and deploy after #11 is released; T-97 Browser pool on Kubernetes (B3, high, right after T-42; prove it on a dev-rig-browser rig, never the real workspace; fit numbers for k3s-node2); T-26 (three slices), T-27, T-30; wave 4 (T-10..T-15); T-33 last (after T-42).
 - Ticket queue: ticket_claim_next hands out the Konfersi tickets (T-51) even with a tag filter, and T-95/T-42 refuse my comments (not assigned): progress goes here until someone assigns them to this session.
 
 ## WAVES (owner, 09:4x; work in this order)
