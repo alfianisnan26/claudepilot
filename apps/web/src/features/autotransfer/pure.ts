@@ -128,6 +128,8 @@ export function whyText(why: AutoRefusal | null): string | null {
       return 'Daily limit of moves reached';
     case 'owner_denied':
       return 'Not allowed for this chat';
+    case 'folder_untrusted':
+      return 'The folder needs trusting again';
     default:
       return null;
   }

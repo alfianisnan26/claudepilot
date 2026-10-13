@@ -78,6 +78,7 @@ test('undo goes with the divider of the last automatic move only', () => {
 test('why nothing happens, in a few words; nothing to say for the ordinary codes', () => {
   assert.equal(whyText('pooled'), 'Not used on an account pool');
   assert.equal(whyText('stale_reading'), 'The reading is old');
+  assert.equal(whyText('folder_untrusted'), 'The folder needs trusting again');
   assert.equal(whyText('mode_off'), null);
   assert.equal(whyText('above_threshold'), null);
   assert.equal(whyText(null), null);

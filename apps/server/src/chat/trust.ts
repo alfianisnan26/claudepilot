@@ -5,6 +5,7 @@
 
 import { AppError, defineErrorCodes, isAppError } from '@isnanme/core';
 import { CHAT_FOLDER_UNTRUSTED, type ChatFolderScan, type ChatTrustRequest } from '@portal/contracts';
+import { defineSetting } from '../settings/registry.js';
 import type { Store } from '../store/store.js';
 import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
@@ -22,6 +23,26 @@ defineErrorCodes({ [CHAT_FOLDER_UNTRUSTED]: { status: 409, message: 'Check this 
 
 /** Why a session in a folder trusted before won't start: its files changed since. */
 export const FOLDER_CHANGED = "This folder's project settings changed since you trusted it. Check them and trust it again.";
+/**
+ * Re-trusting a folder whose settings hold permission rules only (T-38). Off: any change to the files stops the next
+ * start, resume, wake or Move until a person trusts the folder again. On: a folder trusted before whose scan names no
+ * hook, server, plugin, env name, helper command or default mode (only `allow`, `deny` and `ask` lists) is trusted again
+ * by itself when its hash changes, with an audit row. Rules can widen what runs without asking, so it asks to confirm.
+ */
+export const AUTO_TRUST_SETTING = 'chat.trust.autoPermissionOnly';
+
+defineSetting({
+  key: AUTO_TRUST_SETTING,
+  type: 'boolean',
+  default: false,
+  scope: 'global',
+  group: 'sessions',
+  order: 20,
+  label: 'Re-trust rule changes',
+  help: 'When a trusted folder’s Claude Code settings change and they hold only permission rules (allow, deny, ask), the folder is trusted again by itself, so a Move, restart or auto move does not stop. A new hook, MCP server, plugin or env still needs you. Rules can let tools run without asking.',
+  protective: false,
+});
+
 /** Why a session in a folder never trusted won't start. */
 export const FOLDER_NOT_TRUSTED = 'This folder has Claude Code project settings that load when a session starts. Check them and trust the folder first.';
 
@@ -33,6 +54,7 @@ export const FOLDER_NOT_TRUSTED = 'This folder has Claude Code project settings 
 export interface FolderScan extends ChatFolderScan {
   files: string[];
   invalid: string[];
+  rulesOnly: boolean;
 }
 
 /** What `trustscan` prints, checked and cleaned. */
@@ -45,6 +67,8 @@ export interface HostScan {
   plugins: string[];
   allowRules: number;
   envNames: string[];
+  /** Nothing but permission rules (`allow`, `deny`, `ask`) in files that were all read; false from a host older than this. */
+  rulesOnly: boolean;
 }
 
 export interface TrustOptions {
@@ -104,6 +128,7 @@ export function parseTrustScan(out: string): HostScan {
   if (!o || typeof o.hash !== 'string' || !HASH.test(o.hash)) throw unexpected();
   const allowRules = o.allowRules;
   if (typeof allowRules !== 'number' || !Number.isSafeInteger(allowRules) || allowRules < 0) throw unexpected();
+  if (o.rulesOnly !== undefined && typeof o.rulesOnly !== 'boolean') throw unexpected();
   const scan: HostScan = {
     hash: o.hash,
     files: fileNames(o.files),
@@ -113,6 +138,7 @@ export function parseTrustScan(out: string): HostScan {
     plugins: names(o.plugins),
     allowRules,
     envNames: names(o.envNames),
+    rulesOnly: o.rulesOnly === true,
   };
   // Nothing there must read exactly as nothing there.
   if ((scan.files.length === 0) !== (scan.hash === TRUST_EMPTY_HASH)) throw unexpected();
@@ -235,7 +261,18 @@ export async function scanFolder(workspaces: Workspaces, store: Store, workspace
     trusted: trust !== null && trust.hash === host.hash,
     files: host.files,
     invalid: host.invalid,
+    rulesOnly: host.rulesOnly,
   };
+}
+
+/**
+ * Whether a scan may be trusted again without a person (T-38, under {@link AUTO_TRUST_SETTING}): the folder was trusted
+ * before at another hash, and its files hold permission rules only. The names are checked too, not only the host's word.
+ */
+export function autoTrustable(scan: FolderScan, before: { hash: string | null } | null): boolean {
+  if (scan.empty || scan.trusted || !before?.hash || before.hash === scan.hash) return false;
+  const loads = scan.mcpServers.length + scan.hooks.length + scan.plugins.length + scan.envNames.length + scan.invalid.length;
+  return scan.rulesOnly && loads === 0 && !scan.files.includes('.mcp.json');
 }
 
 /**
@@ -255,9 +292,14 @@ export async function trustFolder(
   if (!HASH.test(hash)) throw new AppError('VALIDATION_FAILED', 'Say which scan you checked.', { details: { hash: 'Expected the scan’s hash.' } });
   const scan = await scanFolder(workspaces, store, workspaceId, folder, opts);
   if (scan.hash !== hash) throw new AppError(CHAT_FOLDER_UNTRUSTED, 'This folder’s project settings changed while you checked them. Check them again.', { details: scan });
-  const { files, invalid, mcpServers, hooks, plugins, allowRules, envNames } = scan;
-  new ChatStore(store).saveFolderTrust(scan.workspaceId, scan.folder, scan.hash, { files, invalid, mcpServers, hooks, plugins, allowRules, envNames }, opts.actor ?? null);
+  saveTrust(store, scan, opts.actor ?? null);
   return { ...scan, trusted: true };
+}
+
+/** Stores the trust of a scan: its hash and what it named (names only), when and by whom. */
+export function saveTrust(store: Store, scan: FolderScan, actor: string | null): void {
+  const { files, invalid, mcpServers, hooks, plugins, allowRules, envNames } = scan;
+  new ChatStore(store).saveFolderTrust(scan.workspaceId, scan.folder, scan.hash, { files, invalid, mcpServers, hooks, plugins, allowRules, envNames }, actor);
 }
 
 /** The refusal a session start gets in a folder that needs trusting: 409 `FOLDER_UNTRUSTED`, the scan as details. */

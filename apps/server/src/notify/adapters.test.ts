@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ClaudeUsageAlert, NotifyEvent, SpendAlert } from '@portal/contracts';
+import { FOLDER_CHANGED } from '../chat/trust.js';
 import { createBus } from './bus.js';
 import { adaptChat, errorReason, requestAction } from './adapters/chat.js';
 import { adaptCi } from './adapters/ci.js';
@@ -123,4 +124,6 @@ test('chat: a crash mid-turn and a credential end fail; a person closing does no
   assert.equal(got[3]!.detail?.text, '/home/coder/project/CANARY.ts', 'the request summary is detail (shown only with Include detail)');
   assert.equal(requestAction({ kind: 'question', toolName: null }), 'question');
   assert.equal(errorReason('overloaded_error'), 'rate_limit');
+  assert.equal(errorReason(FOLDER_CHANGED), 'folder_trust', 'a wake refused for trust says so (T-38)');
+  assert.equal(errorReason('boom'), 'error');
 });

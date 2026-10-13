@@ -145,7 +145,7 @@ For a chat S at its turn boundary (each line stops the evaluation with its code)
 | 7 | A candidate exists after FR7 to FR9 | `no_destination`, `destination_busy` (warn once) |
 | 8 | `ask`: make or keep the suggestion, notify | |
 | 9 | `auto`: not in Bypass unless `automove.allowBypass`; the quiet boundary holds (FR12), else wait or become a card | `busy` |
-| 10 | `switchClaude` with the handoff of FR13; record, notify, pause | `move_failed` |
+| 10 | `switchClaude` with the handoff of FR13; record, notify, pause | `move_failed`; `folder_untrusted` when the folder's settings changed since it was trusted (T-38: notified as "Move blocked") |
 
 ## 10. Data model
 
