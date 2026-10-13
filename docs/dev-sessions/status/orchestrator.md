@@ -32,8 +32,10 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
   usage-refresh trigger, the web waiting line, PRD FR4a/FR10a, tools/qa/automove.mjs, merge of integration and the area tests. The live dry run
   is the orchestrator's after the deploy.
 - T-107 (label t107): worktree dev-t107-job-run, branch dev/t107-job-run from 4b4a55a: scripts/job-run.sh, fake-kubectl tests, a timed real run.
-- T-102 (label t102): worktree dev-track-a-connect, branch dev/t102-session-screen (WIP of the stopped agent committed and pushed); finish, merge
-  integration, area tests.
+- T-118 (label t118, URGENT rank-01, security): worktree dev-t118-login, branch dev/t118-login from integration: identity core from
+  wip/stopped-by-quota-20261012-0712 (new files and migrations 400-401 only), password login, code login off, Bypass reauth by password,
+  coordinator account, login page and Settings > Account. Scratch portal only; the OWNER approves its release (changes sign-in).
+- T-102 PAUSED 15:06 for T-118 (4868c46 pushed): chip and popover verified 940/940; header band, other qa states, merge and area tests left.
 - T-100: worktree dev-automove-web, branch dev/t100-sessions-list, WIP committed and pushed; waits for the first free slot.
 - T-99: done on integration (73b0c67); goes live with the next deploy, close then.
 
