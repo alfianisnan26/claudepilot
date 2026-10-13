@@ -1,6 +1,6 @@
 # Orchestrator status (2026-10-13)
 
-Tickets mirror this file (owner, 07:2x): T-1 Pinned, T-2 sideways scroll, T-3 upload exit 4, T-4 automove.allowBypass, T-5 sub-agent visibility, T-6 MCP client label, T-7 auto-move web, T-8 Connect T6, T-9 phone chrome, T-10 N2, T-11 N3, T-12 CI screens, T-13 T5 second pass, T-14 UR, T-15 GA/GB, T-16 mirror chore, T-17 vault (a person), T-18 first deploy, T-19 deploy-waits (done), T-20 flaky tests (done), T-21 V1 (done), T-22 Connect hang (done), T-23 btw real (done).
+Tickets mirror this file (owner, 07:2x): T-1 Pinned, T-2 sideways scroll, T-3 upload exit 4, T-4 automove.allowBypass, T-5 sub-agent visibility, T-6 MCP client label, T-7 auto-move web, T-8 Connect T6, T-9 phone chrome, T-10 N2, T-11 N3, T-12 CI screens, T-13 T5 second pass, T-14 UR, T-15 GA/GB, T-16 mirror chore, T-17 vault (a person), T-18 first deploy, T-19 deploy-waits (done), T-20 flaky tests (done), T-21 V1 (done), T-22 Connect hang (done), T-23 btw real (done), T-24 tool rows and approvals formatting, T-25 notification mute rules, T-26 git monitoring inside workspaces + session Git view (owner, 07:5x).
 
 Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 after a session limit), main folder ~/work/claudepilot, branch integration. Three packages, one sub-agent each.
 
@@ -35,7 +35,7 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - T6: whatever still needs Docker, macOS, Windows or a second cluster (A's report will list it).
 
 ## NEXT
-- Next slices when a slot frees: T-5 sub-agent visibility (opus), T-6 MCP client label (sonnet).
+- Next slices when a slot frees, in this order: T-5 sub-agent visibility (opus), T-6 MCP client label (sonnet), T-24 tool rows (opus), T-26 git monitoring (two or three opus slices: server scan + parsers, repos UI + overview + MCP tools, session Git view), T-25 mute rules (opus); then B3 N2, B4 N3, C3, A4, C4, C5.
 - Gate green -> push integration (19+ commits). Then merge each branch as it reports, targeted tests, gate, push.
 - After the three slices: B item 3 (N2 web, opus), B item 4 (N3 triggers, sonnet/opus), C item 3 (CI screens, opus), A item 4 (T5 second pass, opus), then C items 4 and 5.
 - First deploy of the day once integration is pushed with a green gate (ci_run_trigger, gate=false): the deploy-waits notification and migration 720 are user-visible.
