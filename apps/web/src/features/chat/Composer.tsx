@@ -274,7 +274,7 @@ export function Composer({
           placeholder={working ? 'Steer Claude…' : 'Message Claude…'}
           className="block min-h-[52px] w-full resize-none bg-transparent px-[18px] pt-[15px] pb-1 text-[16.5px] leading-[1.45] text-ink outline-none placeholder:text-muted sm:text-[15.5px]"
         />
-        <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5 sm:gap-1.5">
+        <div data-steer={working && canSend ? '' : undefined} className="flex items-center gap-1 px-2 pt-1 pb-2.5 sm:gap-1.5 sm:px-2.5">
           <button type="button" aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()} className={cn(ROUND, GHOST)}>
             <Plus className="size-5" />
           </button>
@@ -401,12 +401,18 @@ function SteerButton({
   return (
     // With nothing to send the whole pill dims as one (its menu still opens, to say what each way does).
     <div ref={wrap} className={cn('relative flex shrink-0 transition-opacity', !canSend && 'opacity-50')}>
-      <button type="button" disabled={!canSend} onClick={() => onSend('next')} className={cn(SPLIT, 'gap-1.5 rounded-l-full pr-2.5 pl-3.5 disabled:pointer-events-none')}>
+      {/* Phones show the arrow alone (the box says "Steer Claude…"): the word would squeeze the model's name out of the row. */}
+      <button
+        type="button"
+        disabled={!canSend}
+        onClick={() => onSend('next')}
+        className={cn(SPLIT, 'w-11 gap-1.5 rounded-l-full disabled:pointer-events-none sm:w-auto sm:pr-2.5 sm:pl-3.5')}
+      >
         <span className="relative inline-flex size-4 items-center justify-center">
           <WorkingRing className="-inset-1" />
           <ArrowUp className="size-4" aria-hidden="true" />
         </span>
-        Steer
+        <span className="max-sm:sr-only">Steer</span>
       </button>
       <button
         ref={trigger}
