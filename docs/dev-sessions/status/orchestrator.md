@@ -41,8 +41,9 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 ## NEXT
 - T-29 is being built by the orchestrator itself in worktree dev-automove-model (branch dev/automove-model): decision, engine, card words and tests done (server 194 pass, web 9 pass); typecheck under the lock; then a browser look, PRD, merge.
 - T-34 Home dashboard (opus, worktree dev-track-c-ui now on branch dev/home-dashboard, scratch port 3423).
-- Typecheck + web build on 64d7a96 queued; then the gate; then push.
-- Next slices when a slot frees, in this order: T-6 MCP client label (sonnet), T-24 tool rows (opus), T-26 + T-27 git monitoring with the commit trace (three opus slices: server scan + parsers + the commit hook and trailer parser; repos UI + overview + MCP tools + author sheet; session Git view), T-25 mute rules (opus), T-28 ticket Bump + T-32 CI Bump and auto-report (one opus slice, they share the picker), T-30 buckets for tickets, CI and knowledge (opus), T-33 rename everywhere (opus); then B3 N2, B4 N3, C3, A4, C4, C5.
+- Gate on bebee35 (phone chrome + T-29 + Connect T6) queued; green -> push.
+- T-6 MCP client label (sonnet, worktree dev-track-a-connect now on branch dev/mcp-label, scratch port 3425).
+- Next slices when a slot frees, in this order: T-24 tool rows (opus), T-26 + T-27 git monitoring with the commit trace (three opus slices: server scan + parsers + the commit hook and trailer parser; repos UI + overview + MCP tools + author sheet; session Git view), T-25 mute rules (opus), T-28 ticket Bump + T-32 CI Bump and auto-report (one opus slice, they share the picker), T-30 buckets for tickets, CI and knowledge (opus), T-33 rename everywhere (opus); then B3 N2, B4 N3, C3, A4, C4, C5.
 - Merge each sub-agent branch as it reports, targeted tests, gate, push; after the deploy's verify: seed-features.sh (allowBypass), the iPhone checks (T-18, T-3).
 - After the three slices: B item 3 (N2 web, opus), B item 4 (N3 triggers, sonnet/opus), C item 3 (CI screens, opus), A item 4 (T5 second pass, opus), then C items 4 and 5.
 - First deploy of the day once integration is pushed with a green gate (ci_run_trigger, gate=false): the deploy-waits notification and migration 720 are user-visible.
