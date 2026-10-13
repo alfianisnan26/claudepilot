@@ -229,6 +229,15 @@ export class Tickets {
     return this.#refs ? this.#refs.storedForms(key).includes(stored) : stored === key;
   }
 
+  /**
+   * The workspace a bump must stay in: the ticket's key while its workspace lives; for a REMOVED workspace's ticket its stored id, which no
+   * session's workspace is, so no session of a new workspace that took the name is offered or bumped into.
+   */
+  #bumpWorkspace(row: Row): string | null {
+    if (row.workspace_id === null || this.#isIn(row, row.workspace_id)) return row.workspace_id;
+    return row.stored_workspace ?? row.workspace_id;
+  }
+
   /** Follows sessions: one that ends under its ticket leaves an entry on it (FR18). */
   start(): void {
     // Not on a database the portal can't trust or write: its tables may not exist (a frozen portal must still start).
@@ -934,7 +943,7 @@ export class Tickets {
     const row = this.#need(caller, id);
     const preferred = row.assignee_kind === 'session' ? this.sessions.get(row.assignee_ref!) : null;
     const all = this.sessions.list(row.workspace_id ? { workspaceId: row.workspace_id } : {});
-    return targetsFor(all, { workspaceId: row.workspace_id, preferred });
+    return targetsFor(all, { workspaceId: this.#bumpWorkspace(row), preferred });
   }
 
   /** FR30: a ticket isn't bumped more than 10 times an hour, a session doesn't get more than 20 bumps an hour. */
@@ -964,7 +973,7 @@ export class Tickets {
     if (!sessionId) throw invalid('sessionId', 'Pick a session.');
     const session = this.sessions.get(sessionId);
     if (!session) throw invalid('sessionId', 'No such session.');
-    assertBumpable(session, row.workspace_id);
+    assertBumpable(session, this.#bumpWorkspace(row));
     const w = this.#writer(caller);
 
     this.#tx(() => {

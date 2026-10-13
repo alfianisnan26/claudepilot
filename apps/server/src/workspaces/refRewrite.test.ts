@@ -221,3 +221,20 @@ test('the rewrite stops between two rows when aborted (mid batch), records nothi
     h.done();
   }
 });
+
+test('a bump stays in the ticket’s own workspace: a removed workspace’s ticket is not offered to, nor bumped into, a session of its successor', async () => {
+  const { h, ids } = await world();
+  try {
+    ids().allocate('docker', 'api');
+    const live = h.tickets.create(UI, { summary: 'live', workspaceId: 'docker/api' });
+    h.sessions.add({ id: 'sa', workspaceId: 'docker/api', state: 'working' });
+    assert.ok(h.tickets.bumpTargets(UI, live.id).some((t) => t.id === 'sa' && !t.refusal), 'its own workspace’s session is offered');
+    ids().retire('docker', 'api');
+    ids().allocate('docker', 'api');
+    const t = h.tickets.bumpTargets(UI, live.id).find((x) => x.id === 'sa');
+    assert.ok(!t || t.refusal === 'other_workspace', 'the successor’s session is not offered');
+    await assert.rejects(h.tickets.bump(UI, live.id, { sessionId: 'sa', mode: 'ask' }), /another workspace/);
+  } finally {
+    h.done();
+  }
+});

@@ -1154,7 +1154,7 @@ workspace, and the orchestrator that runs inside `ws-kohi-event` would be killed
 
 | Column | Module | Notes |
 | --- | --- | --- |
-| `tickets.workspace_id` | Tickets service; the knowledge graphs (`Directory.workspaceKeyOf`) | An agent's visibility, its open-ticket limit, `ticket_claim_next` and the workspace filter match either form; a move between workspaces is compared on the stored form, so a row that only changed form logs no "workspace" entry. |
+| `tickets.workspace_id` | Tickets service; the knowledge graphs (`Directory.workspaceKeyOf`) | An agent's visibility, its open-ticket limit, `ticket_claim_next` and the workspace filter match either form; a move between workspaces is compared on the stored form, so a row that only changed form logs no "workspace" entry. A bump (T-28, T-32) stays in the ticket's own workspace: a removed workspace's ticket is not offered to, nor bumped into, a session of a successor of that name. |
 | `chat_sessions.workspace_id` | `ChatStore` (made with the registry by the chat controller); usage spend (`SpendStore.workspaceKeyOf`); the knowledge graphs | Only what is persisted: the controller keeps keying live processes, readers and runtime calls by the key it reads back. Usage rows written from a session (`chat_usage`, `usage_sessions`) keep the key. |
 | `pmcp_agent_access.workspace_id` (unique), `pmcp_agent_tokens.workspace_id` | `AgentAccess` | A token's principal carries the key, as before; whether its workspace still has access is decided on the workspace the token was minted for, so a removed workspace's token or opt-in never passes for a successor of that name. |
 
