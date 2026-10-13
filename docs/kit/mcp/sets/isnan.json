@@ -1,8 +1,8 @@
 {
-  "slug": "gitea-isnan",
+  "slug": "isnan",
   "servers": [
     {
-      "key": "isnan",
+      "key": "gitea",
       "entry": "@git-host-gitea",
       "version": "@approved",
       "enabled": true,
@@ -11,6 +11,16 @@
       },
       "secrets": {
         "GITEA_ACCESS_TOKEN_FILE": "{{secret-file:GITEA_ISNAN_TOKEN}}"
+      }
+    },
+    {
+      "key": "docs",
+      "entry": "@outline-isnan",
+      "version": "@approved",
+      "enabled": true,
+      "config": {},
+      "secrets": {
+        "Authorization": "{{secret-file:OUTLINE_ISNAN_KEY}}"
       }
     }
   ]

@@ -1,7 +1,7 @@
 # MCP sets of the kit: review dossier
 
-For the owner, before approving anything in the portal's MCP catalog. Draft, 2026-10-13. Nothing here was published,
-proposed or approved, and no credential was used: the facts come from the npm registry, the public GitHub and Gitea
+For the owner, before approving anything in the portal's MCP catalog. Draft, 2026-10-13, reorganised the same day into three program sets (`isnan`, `konfersi`, `kohi-labs`). Nothing here was
+approved and no credential was used (the publisher only makes drafts, and only when the owner runs it): the facts come from the npm registry, the public GitHub and Gitea
 APIs, the projects' own READMEs and sources (read, not run), this repository's PRDs, and unauthenticated probes of the six
 hosts from this dev container and from the workspace pod (no token or key was sent anywhere).
 
@@ -11,9 +11,11 @@ Marks: ✅ checked today, from the source named. 📄 documented by the project 
 ## Read this first
 
 1. **Three Gitea and three Outline instances.** Gitea: `git.isnan.me`, `git.konfersi.com`, `git.kohi-labs.com`. Outline:
-   `docs.isnan.me`, `outline.int.konfersi.com`, `outline.int.kohi-labs.com`. Each has its own set, one server and one token
-   name, so **a project gets only its own host** (the Konfersi program never sees Isnan or Kohilabs). The all-hosts sets
-   `gitea` (read-only) and `outline` exist only for a workspace that works across all three programs.
+   `docs.isnan.me`, `outline.int.konfersi.com`, `outline.int.kohi-labs.com`. Each program has **one set** (`isnan`,
+   `konfersi`, `kohi-labs`) with two servers, `gitea` and `docs`, and one token name each, so **a project gets only its own
+   program's set** (the Konfersi program never sees Isnan or Kohi Labs). There is no all-hosts set: the earlier drafts had
+   nine sets (three Gitea, three Outline, an all-hosts `gitea` and `outline`, and `github`) and were reduced to three, plus the
+   optional `github` draft that the publisher does not touch (D-8: Gitea is the git host, GitHub only a mirror).
 2. **One entry or three: the catalog decides.**
    - **Gitea: one entry.** A remote entry's URL is fixed in its version spec, and a remote server's slots can only be headers
      (`parseSlots`: "Remote servers take headers"), so a remote entry can't take a host as config. gitea-mcp also serves one
@@ -35,7 +37,10 @@ Marks: ✅ checked today, from the source named. 📄 documented by the project 
    workspaces that get each set. **Conflict to decide:** D-3 removes ask rules for autonomous chats, so there only the deny
    list holds and write tools run unasked. Options: (a) accept that (default: destructive and out-of-flow tools are denied
    everywhere, writes are allowed in Bypass chats); (b) deny the write tools too in autonomous workspaces; (c) read-only tokens
-   and `GITEA_READONLY=true` wherever a project only reads. I recommend (a) for a project's own host and (c) everywhere else.
+   and `GITEA_READONLY=true` wherever a project only reads. I recommend (a) for a program's own hosts, which is what the three program sets do: they do **not** set `GITEA_READONLY`,
+   so the program's agents can file issues and comment on their own Gitea, writes ask where ask rules exist, and the
+   destructive tools are denied. A project that only reads sets `GITEA_READONLY` to `true` in its own revision of the set and
+   gets read-only tokens (c). The token's scopes, not the set, are the real limit (§1, §2).
 6. **Secret names are dedicated, one per host:** `GITEA_ISNAN_TOKEN`, `GITEA_KONFERSI_TOKEN`, `GITEA_KOHILABS_TOKEN`,
    `OUTLINE_ISNAN_KEY`, `OUTLINE_KONFERSI_KEY`, `OUTLINE_KOHILABS_KEY`, `GITHUB_MCP_TOKEN`. Never a shared token, and never the
    conventional `GITHUB_TOKEN`, which may be the broad mirror token (D-21).
@@ -76,7 +81,7 @@ public DNS (Cloudflare DNS over HTTPS) and the catalog's own SSRF guard (`assert
 | What it is | The official Gitea MCP server. Repositories, files, branches, tags, releases, issues, pull requests, reviews, wikis, labels, milestones, projects, Actions, packages, notifications. |
 | Source and licence | `https://gitea.com/gitea/gitea-mcp`, **MIT** ✅. Not on GitHub: `github.com/gitea/gitea-mcp` answers 404 ✅. Releases every few weeks (1.7.0 2026-08-27, 1.8.0 2026-09-30, 1.8.1 2026-10-09 ✅); binaries for Linux amd64 and arm64 with a checksums file per release ✅. |
 | Version | Catalog version `v1` (a `command` entry is numbered by the portal). The catalog flags it "Not version-pinned: runs whatever the image has" ✅ (`riskFlags`): **the pin is the image's**, so the image change must name an exact release (1.8.1) and check its SHA-256. The binary is **not in the image yet**. Compatibility with the three Gitea versions (1.27.2, 1.27.3 ✅): gitea-mcp documents no minimum Gitea version (**UNVERIFIED**); Konfersi's gitea-mcp 1.8.0 📄 already runs against `git.konfersi.com` 1.27.2. |
-| What runs where | In the workspace, one process per server in the set, started per session: `/etc/claudepilot/bin/mcp-launch cpm-<set>/<key> -- cmd:/usr/local/bin/gitea-mcp -t stdio` (the review shows `/usr/local/bin/gitea-mcp -t stdio` ✅). Its environment: `GITEA_HOST` from the set's config, `GITEA_ACCESS_TOKEN_FILE` = the path of the host's Secrets & env file (a **path** slot: gitea-mcp reads the file itself, trims the line end, and the token is in no variable, ✅ `cmd/cmd.go`), and `GITEA_READONLY=true` where the set says so (compared with exactly `true` ✅). It writes a log to `$HOME/.gitea-mcp/gitea-mcp.log` 📄. The all-hosts `gitea` set starts three processes per session (MCP set FR11 warns above 8). |
+| What runs where | In the workspace, one process per server in the set, started per session: `/etc/claudepilot/bin/mcp-launch cpm-<set>/<key> -- cmd:/usr/local/bin/gitea-mcp -t stdio` (the review shows `/usr/local/bin/gitea-mcp -t stdio` ✅). Its environment: `GITEA_HOST` from the set's config, `GITEA_ACCESS_TOKEN_FILE` = the path of the host's Secrets & env file (a **path** slot: gitea-mcp reads the file itself, trims the line end, and the token is in no variable, ✅ `cmd/cmd.go`), and `GITEA_READONLY=true` where the set says so (compared with exactly `true` ✅). It writes a log to `$HOME/.gitea-mcp/gitea-mcp.log` 📄. A program set starts one gitea-mcp process per session (its Outline server is remote: no process). A workspace of two programs would start two (MCP set FR11 warns above 8). |
 | Network | Workspace → each Gitea it is configured for (table above): inside the cluster, `10.43.63.226`; no MCP server in between, no public exposure. |
 | Secrets | One path slot per server: `GITEA_ISNAN_TOKEN`, `GITEA_KONFERSI_TOKEN`, `GITEA_KOHILABS_TOKEN`, each `{{secret-file:NAME}}` in its set. |
 
@@ -84,18 +89,25 @@ public DNS (Cloudflare DNS over HTTPS) and the catalog's own SSRF guard (`assert
 boundary**: one bot user per instance, collaborator on the project's repositories only, never an organisation owner or site
 admin. No `admin`, `organization`, `package`, `activitypub` or `misc` scope.
 
-| Host | Who uses it | Token scopes | Server setting |
+| Host | Who uses it | Token scopes | Server setting (default) |
 | --- | --- | --- | --- |
-| `git.konfersi.com` | the Konfersi program (its own host) | `read:repository`, `write:issue`, `read:user` (+ `write:repository` only if agents open pull requests through MCP; 🔬 which scope Gitea checks for that) | writable in `gitea-konf`; read-only in `gitea` |
-| `git.isnan.me` | projects hosted there | the same; read-only (`read:repository`, `read:issue`, `read:user`) unless the project files issues there | writable in `gitea-isnan`; read-only in `gitea` |
-| `git.kohi-labs.com` | projects hosted there | the same; read-only unless the project files issues there | writable in `gitea-kohi`; read-only in `gitea` |
+| `git.konfersi.com` | the Konfersi program (its own host) | `read:repository`, `write:issue`, `read:user` (+ `write:repository` only if agents open pull requests through MCP; 🔬 which scope Gitea checks for that) | writable in set `konfersi` (server `gitea`); `GITEA_READONLY=true` in a read-only project's own revision |
+| `git.isnan.me` | the Isnan program's projects | the same; read-only (`read:repository`, `read:issue`, `read:user`) unless the project files issues there | writable in set `isnan` (server `gitea`); `GITEA_READONLY=true` in a read-only project's own revision |
+| `git.kohi-labs.com` | the Kohi Labs program's projects | the same; read-only unless the project files issues there | writable in set `kohi-labs` (server `gitea`); `GITEA_READONLY=true` in a read-only project's own revision |
 
 `read:user` lets `get_me` answer. Agents push with git and their own credential, never with this token.
 
-**Least privilege, two layers.** A program's workspace gets its single-host set only (`gitea-konf` for Konfersi), so the other
-hosts' servers and token names are not even delivered. Why copies rather than one set with the secrets deciding: a server whose
-name is missing is left out (Secrets & env FR22), so one set would also work, but every workspace would then show two servers as
-"Needs NAME" for good, and one wrong Secrets & env assignment would hand over a host. Separate sets keep it explicit.
+**Least privilege, two layers.** A program's workspace gets its own program set only (`konfersi` for Konfersi), so the other
+programs' servers and token names are not even delivered. Why three sets rather than one set with the secrets deciding: a
+server whose name is missing is left out (Secrets & env FR22), so one set would also work, but every workspace would then show
+four servers as "Needs NAME" for good, and one wrong Secrets & env assignment would hand over a host. Separate sets keep it
+explicit.
+
+**The default is writable, on purpose.** The program sets leave `GITEA_READONLY` unset (the earlier single-host drafts did the
+same; only the dropped all-hosts `gitea` set was read-only). A program's agents work on their own Gitea: they file and comment
+on issues and pull requests there, and the rules below ask before every write tool and deny the destructive ones. A project
+that only reads sets `GITEA_READONLY` to `true` in its own revision of the set (every write tool then disappears on the
+server side) and gets a read-only bot token; the token stays the limit if a revision ever goes wrong.
 
 **Tools** (58, from the README's Access column ✅; several are consolidated tools with a `method` parameter, so one rule covers
 all of a tool's operations; `GITEA_READONLY=true` hides every Write tool on the server side ✅ README):
@@ -172,7 +184,11 @@ key's scope maps through `AuthenticationHelper.canAccess`, for read-only keys.
 
 ---
 
-## 3. git-host-github: GitHub's remote MCP server
+## 3. git-host-github: GitHub's remote MCP server (OPTIONAL draft, not published by default)
+
+Kept in the folder (`entries/git-host-github.json`, `sets/github.json`) for a project that lives on GitHub. `manifest.json` marks
+the entry and the set `publish: false, optional: true`, so `publish.mjs` does not put it in the catalog; the owner decides, and
+then sets `publish` to `true` in a reviewed commit. D-8: Gitea is the git host, GitHub only a mirror.
 
 | | |
 | --- | --- |
@@ -202,7 +218,7 @@ filter, not a security boundary" ✅. Writes publish agent text on GitHub, which
 `docs/remote-server.md` still lists `X-MCP-Toolsets`, `X-MCP-Lockdown` and `X-MCP-Readonly` with the same meaning. (3) No set on
 the same workspaces uses `https://api.githubcopilot.com/mcp` (the built-in GitHub).
 
-**RECOMMENDATION: approve with the tool rules above**, used through the read-only `github` set. Lowest priority of the three:
+**RECOMMENDATION: approve with the tool rules above**, used through the read-only `github` set, **only if** a project needs it. Lowest priority:
 the current programs work on Gitea (D-8), and ClaudePilot's own work runs on pilot tickets and git, not GitHub issues.
 
 ---
@@ -273,16 +289,32 @@ this catalog takes, and not in a shape the tool rules can hold:
 | `outline-konfersi` | remote, private network | v1; instance **UNVERIFIED** (1.9+ inferred) | `OUTLINE_KONFERSI_KEY` | Approve with tool rules |
 | `outline-isnan` | remote | v1; instance **UNVERIFIED** (1.9+ inferred) | `OUTLINE_ISNAN_KEY` | Approve with tool rules |
 | `outline-kohilabs` | remote, private network | v1; instance **UNVERIFIED** (1.9+ inferred) | `OUTLINE_KOHILABS_KEY` | Approve when a project needs it |
-| `git-host-github` | remote | v1; hosted, not pinnable; OSS v2.0.2 (2026-10-08) ✅ | `GITHUB_MCP_TOKEN` | Approve with tool rules, read-only set |
+| `git-host-github` | remote | v1; hosted, not pinnable; OSS v2.0.2 (2026-10-08) ✅ | `GITHUB_MCP_TOKEN` | OPTIONAL, not published by default; if a project needs it, approve with tool rules, read-only set |
 | `playwright` | npm | 0.0.83 (2026-09-28) ✅ | none | Do not approve: Browser pool |
 | `chrome-devtools` | npm | 1.10.1 (2026-09-23) ✅ | none | Do not approve: Browser pool |
 | `issues-plane` | | not drafted | | Nothing to review |
 
 **Checked against the portal's own rules** (2026-10-13: the server's `parseSpec`, `parseSlots`, `commandOf`, `riskFlags`, key and
 slug rules, `configValue`, the `{{secret-file:NAME}}` form and `redact()` run on every file; the SSRF guard `assertPublicUrl` on
-every remote URL and Gitea host): all entries and sets pass. Flags the review will show: `git-host-gitea` "Not version-pinned",
+every remote URL and Gitea host): all entries and sets pass. After the reorganisation into program sets the files were run through a scratch portal (a throwaway instance, never the real one): `publish.mjs --only=mcp --apply` made the four entries and the optional `git-host-github` as drafts, and after a test approval there the three program sets were accepted by the set kind and compiled to the plugins `cpm-isnan`, `cpm-konfersi` and `cpm-kohi-labs` with servers `gitea` and `docs`. Flags the review will show: `git-host-gitea` "Not version-pinned",
 `outline-konfersi` and `outline-kohilabs` "Private network allowed"; no others. The commands above are what `commandOf` printed.
 
+**The three program sets** (what the publisher makes once the entries are approved; each holds `git-host-gitea` and its program's
+Outline):
+
+| Set | Server `gitea` (host, secret name) | Server `docs` (entry, secret name) | Tool names look like |
+| --- | --- | --- | --- |
+| `isnan` | `https://git.isnan.me`, `GITEA_ISNAN_TOKEN` | `outline-isnan`, `OUTLINE_ISNAN_KEY` | `mcp__plugin_cpm-isnan_gitea__issue_read`, `mcp__plugin_cpm-isnan_docs__fetch` |
+| `konfersi` | `https://git.konfersi.com`, `GITEA_KONFERSI_TOKEN` | `outline-konfersi`, `OUTLINE_KONFERSI_KEY` | `mcp__plugin_cpm-konfersi_gitea__issue_read`, `mcp__plugin_cpm-konfersi_docs__fetch` |
+| `kohi-labs` | `https://git.kohi-labs.com`, `GITEA_KOHILABS_TOKEN` | `outline-kohilabs`, `OUTLINE_KOHILABS_KEY` | `mcp__plugin_cpm-kohi-labs_gitea__issue_read`, `mcp__plugin_cpm-kohi-labs_docs__fetch` |
+
+A set is created only when both its entries are approved. Approving `git-host-gitea` is not enough for any set, and
+`outline-kohilabs` approved alone gives only `kohi-labs` half of its entries: that set still waits. **Which set for which project:**
+a project of a program gets that program's set and no other (a workspace never gets two programs' sets by default).
+
 **Review order:** 1. `outline-konfersi` (Konfersi's docs, usable today), 2. `git-host-gitea` (once the image change is
-ticketed: approving early is harmless, it only fails to start), 3. `outline-isnan`, 4. `git-host-github`, 5. `outline-kohilabs`.
-Skip `playwright` and `chrome-devtools`. Before the first approval, decide item 5 of "Read this first" (D-3 and ask rules).
+ticketed: approving early is harmless, it only fails to start; every set needs it), 3. `outline-isnan`, 4. `outline-kohilabs`.
+Skip `playwright` and `chrome-devtools`; `git-host-github` only when a project needs it. Before the first approval, decide item 5
+of "Read this first" (D-3 and ask rules): under D-3 the autonomous chats of a program run in Bypass with the ask rules removed, so
+the program sets' write tools run unasked there and only the deny list holds; the answer decides whether a program's set is
+accepted as it is (option a, the default) or with `GITEA_READONLY=true` in its revision.
