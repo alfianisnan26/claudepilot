@@ -23,11 +23,16 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
   again (T-42 slice 1 let "" through: the `?.` call skipped plainName; expect the coordinator's gate to fail on qa/runtimes.test.ts, 2 tests)
   and chat/host.test no longer inherits this pod's PILOT_* env. The fast gate on 97d25c7: 2548 pass, 5 fail (3 load-flaky, passed alone).
 
-## IN FLIGHT (three sub-agents, opus, dispatched 12:50)
-- T-42 slice 3 (stored refs move to the stable id: tickets + the background rewrite, migration 714; then sessions, pool assignments, agent access,
-  CI remotes as far as an hour allows): worktree dev-track-a-connect, branch dev/workspace-id, label workspace-id. Migrations 714-715.
-- T-97 browser pool on Kubernetes (B3): worktree dev-automove-web, branch dev/browser-k8s (WIP committed as 9fca355), rig dev-rig-browser. Migrations 735-736.
-- T-98 workspace Resources: worktree dev-gate-job, branch dev/workspace-resources from 97d25c7, label workspace-resources. Migrations 716-717.
+## IN FLIGHT (three sub-agents, opus)
+- T-102 session screen (dispatched 13:54): worktree dev-track-a-connect, branch dev/t102-session-screen from 2466ff1, label t102-session-screen,
+  scratch port > 3450. Item 1 (Tools changed chip: Restart after this turn, auto-apply for autonomous sessions, Bypass kept or no auto-restart),
+  then the popover placement, then the header blur and badge with a session-states.mjs check. Migrations 755-756 if any.
+- T-97 browser pool on Kubernetes (B3, since 12:50): worktree dev-automove-web, branch dev/browser-k8s, rig dev-rig-browser; told to use T-98's
+  workspaces/fit.ts and small browser requests (100m / 512Mi to try; node2 has about 0.6 CPU of requests free). Migrations 735-736.
+- T-98 workspace Resources (since 12:50): worktree dev-gate-job, branch dev/workspace-resources; told to build workspaces/fit.ts first (one fit
+  check for apply, create and T-97), push it early, and remove scripts/ws-resources.sh with its allow rule when the feature lands. Migrations 716-717.
+- T-42 slice 3 DONE: merged as 2466ff1 (tickets, chat sessions, agent access; migration 714; 1005 area tests, 0 fail); fast gate running (whole
+  suite). Slice 4 (pool assignments, CI, the small tables) needs its own ticket (asked on T-42).
 
 ## NEXT (in order: the coordinator's rank-NN tags, 13:33; ticket_list tag=rank-NN lists them)
 - rank 01 T-42, 02 T-95, 03 T-99, 04 T-102, 05 T-100, 05b T-104, 06 T-98, 07 T-97, 08 T-101, 09 T-28, 10 T-32, 11 T-24, 12 T-26, 13 T-27, 14 T-30, 15 T-33,
