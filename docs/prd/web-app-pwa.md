@@ -264,6 +264,7 @@ The ids are `NotifyKind` in the contract. One list: the owner's six events, the 
 | `session_failed` | On | A turn fails (an `error` event) or a session ends for a reason that is not a person ending it (`credential:`, `integrity:`, a crash) | Session failed · api-dev · rate limit | The session |
 | `session_done` | Off | A turn ends while "Notify when done" is on for the session (Chat's ⋯), or a turn of 5 minutes or more ends while this destination's device is not active | Session finished · api-dev · 12 min | The session |
 | `ci_failed` | On | A CI run ends `failed` (not `cancelled`) | CI failed · api · #14 · test | `/admin/ci/runs/<id>` |
+| `ci_waiting` | On, urgency high | A deployment job starts waiting for a person's approval ([CI](local-git-ci.md) FR41); quiet hours hold it; no button approves | Deploy waits · production · claudepilot · #21 | `/admin/ci/runs/<id>` |
 | `quota_low` | On | A usage alert at `high` (95 %), `exhausted`, or a `projection` alert (an estimate); `near` (80 %) goes to the history only | Quota low · Work · Session · 4 % left · resets 14:00 | `/admin/usage?claude=<id>` |
 | `cost_spike` | On, breaks through quiet hours | A spend spike, or a budget at its critical or exceeded threshold ([Claude usage](claude-usage.md), U1b) | Cost spike · api-dev · $12.40 est. today | `/admin/usage` |
 | `trigger_approval` | On | A trigger run waits for approval ([Triggers](triggers.md)) | Run needs approval · nightly-lint · push | `/admin/triggers/<id>?run=<rid>` |

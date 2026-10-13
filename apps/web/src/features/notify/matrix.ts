@@ -7,6 +7,7 @@ export const KIND_WHEN: Record<NotifyKind, string> = {
   session_failed: 'A turn or a session failed.',
   session_done: 'A session finished. Off until you switch it on, or turn on "Notify when done" in one session.',
   ci_failed: 'A CI run failed.',
+  ci_waiting: 'A deploy waits for your approval on the run page.',
   quota_low: "A Claude's plan window is nearly used, or will run out before it resets.",
   cost_spike: 'Spend jumped, or a budget line was crossed. Comes through quiet hours.',
   trigger_approval: 'A trigger run waits for your approval.',

@@ -111,6 +111,8 @@ export function tagOf(e: NotifyEvent): string {
       return `session:${s.id}`;
     case 'ci_failed':
       return `ci:${s.id}`;
+    case 'ci_waiting':
+      return `deploy:${s.id}:${name(e.facts.job, 'job')}`;
     case 'quota_low':
       return `quota:${s.id}:${name(e.facts.window, 'window')}`;
     case 'human_request':
@@ -145,6 +147,8 @@ function text(e: NotifyEvent, tz: string): { title: string; body: string } {
     }
     case 'ci_failed':
       return { title: 'CI failed', body: join(name(f.repo, 'repo'), num(f.number) !== null && `#${num(f.number)}`, f.pipeline !== undefined && name(f.pipeline, '')) };
+    case 'ci_waiting':
+      return { title: 'Deploy waits', body: join(name(f.environment, 'environment'), name(f.repo, 'repo'), num(f.number) !== null && `#${num(f.number)}`) };
     case 'quota_low': {
       const resets = typeof f.resetsAt === 'string' && !Number.isNaN(Date.parse(f.resetsAt)) ? `resets ${clock(new Date(f.resetsAt), tz)}` : null;
       if (f.projection === true) {
