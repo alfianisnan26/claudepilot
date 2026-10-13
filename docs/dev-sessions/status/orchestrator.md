@@ -1,4 +1,4 @@
-# Orchestrator status (2026-10-13, session 5c9fcb5f, started 15:4x after the integrity ending of fdb140be: "origin peer", T-130)
+# Orchestrator status (2026-10-13, session 5c9fcb5f, started 15:4x after the integrity ending of fdb140be: a sub-agent's SendMessage to main, origin peer, T-136)
 
 Knowledge: vault "ClaudePilot dev" (6cd11f710cc3), folder Dev loop/. The queue lives in NEXT; tickets are claimed only when work starts.
 Models: opus for implementation, sonnet for checks, fable for diagnosis.
@@ -23,7 +23,7 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
 ## NEXT (coordinator gap review 15:0x: WIP limit THREE slices, thin first slices, each merged AND deployed before the next starts)
 Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIONS.md (D-1..D-22; never act against a row, say so on a ticket).
 1. T-105 + T-109 (running, one slice): auto move waits, resumes, fits the model (D-12).
-2. T-107 job-run (merged; in review).
+2. T-136 (rank-02a): recover an integrity ending in place; first free slot after the running three.
 3. T-99 (on integration), T-102 (running), T-100 (WIP pushed; next free slot).
    T-125 (rank-05d, same screen as T-102: the stack above the composer shows only THIS chat; Show more in place; shortcuts that say where)
    follows T-102 in its worktree; ship the compact contextual row first, the pace line after T-122.
@@ -44,14 +44,13 @@ Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIO
 ---- CUT LINE: nothing below starts before 7 is merged and deployed ----
 In rank order (details on each ticket): T-126 (item 5 local time first), T-129 (with T-122, before T-111), T-121 (after T-119 slice 1),
 T-122 (after T-121: audit with screenshots first), T-113, T-114, T-101, T-106, T-120 (after T-106; ClaudePilot only, D-25), T-28, T-32, T-24,
-T-26, T-27, T-30, T-33, T-123 (wave 3, motion), wave 4, T-130, T-131, and the fitOf/fit.ts unification (small; fills an idle slot).
+T-26/T-27 (folded into T-134), T-30, T-33, T-123, T-132..T-135, T-137 by their rank tags (wave 3, motion), wave 4, T-130, T-131, and the fitOf/fit.ts unification (small; fills an idle slot).
 T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, never use that code, and tell the coordinator if they see it.
 
 ## NEEDS A HUMAN (only what a person can do; rewritten 14:3x from the tickets, after the owner's note)
 - T-131: reassign T-100, T-102, T-105, T-109 (and the in_review T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-107) from the ended fdb140be
   to 5c9fcb5f. The portal refuses a takeover (FORBIDDEN), so this session cannot comment on or close them.
-- T-130: who sent the peer message that ended fdb140be. Default taken: peer stays refused; chats talk only through session_message
-  (README rule 7).
+- Deploy run 18 (e327e6d, full gate, includes 23384af) waits for release: integration is NOT pushed until it is released (coordinator).
 - On the iPhone (installed PWA, 390 px, light and dark), check what is live in 2026.10.13-5: T-1 Pinned and swipe (right = Pin, left = Archive);
   T-2 no sideways scroll on any page; T-3 an image attaches and uploads in this Kubernetes workspace; T-5 sub-agents in their own rows, "Working ·
   N agents", "Session finished" only at real idle; T-24 tool rows open to Input and Output blocks with real line breaks and shell colouring, the
@@ -65,7 +64,8 @@ T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, 
 ## DECISIONS
 - 15:5x (5c9fcb5f) The restart left no unmerged work behind: all three branches were pushed. The uncommitted T-109 work (330 lines) and
   the T-102 one-line edit are saved as WIP commits. Same three slices resumed with the same models. Filed T-130 (peer ending) and T-131 (takeover).
-  This session does not use SendMessage to other sessions.
+  Coordinator 16:0x: the cause was a sub-agent's SendMessage to main (T-136, urgent rank-02a). No sub-agent calls SendMessage (README 7); the
+  three running ones were told; T-130 corrected. New owner tickets T-132..T-137 queue behind the earlier ranks (WIP three stands).
 - Binding, kept from earlier entries (the full log is in git history of this file):
   - Before a merge, run the touched AREAS' tests (src/qa, src/workspaces, the module's neighbours), not only the slice's own files (13:25).
   - The gate fails a hung test after GATE_TEST_TIMEOUT_MS and reruns failing files alone. Status-only commits are pushed without a gate.
