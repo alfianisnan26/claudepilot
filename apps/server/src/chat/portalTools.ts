@@ -96,7 +96,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         },
         { actor: ctx.actor, parentId },
       );
-      await chat.send(child.id, randomUUID(), args.prompt, { actor: ctx.actor });
+      await chat.send(child.id, randomUUID(), args.prompt, { actor: ctx.actor, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
       ctx.affected(`session:${child.id}`);
       return {
         summary: `Started worker ${child.id}${child.worktree ? ` on branch ${child.worktree.branch}` : ''}. It reports to you; message it with session_message.`,

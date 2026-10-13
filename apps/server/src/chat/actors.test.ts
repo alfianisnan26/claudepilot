@@ -163,3 +163,23 @@ test('portalFrame: says who sent it and that the person did not, for every kind 
   assert.ok(portalFrame('ticket:T-1', undefined, 'body').endsWith('\n\nbody'));
 });
 
+
+test('send: an MCP token’s label reaches the transcript event and the frame Claude reads, and is redacted like any actor label', async () => {
+  const s = await liveSession();
+  try {
+    await s.controller.send(s.id, 'm-relay', 'status?', { actor: 'portal-mcp:ptk_1', actorLabel: 'relay' });
+    const ev = s.controller.history(s.id).find((e) => e.kind === 'user' && e.uuid === 'm-relay')!;
+    assert.equal(ev.actor, 'portal-mcp:ptk_1');
+    assert.equal(ev.actorLabel, 'relay');
+    await until(() => s.ws.sends.some((x) => x.line.includes('MCP client “relay”')));
+
+    // A label shaped like a credential is redacted before it is stored, as every actor label is (built at runtime: no token-shaped literal).
+    const key = ['sk', 'ant', 'api03', 'A1b2C3d4E5f6G7h8'].join('-');
+    await s.controller.send(s.id, 'm-leak', 'hi', { actor: 'portal-mcp:ptk_2', actorLabel: `ci ${key}` });
+    const leaked = s.controller.history(s.id).find((e) => e.kind === 'user' && e.uuid === 'm-leak')!;
+    assert.ok(!leaked.actorLabel!.includes(key), 'the credential never reaches the stored label');
+    assert.ok(leaked.actorLabel!.startsWith('ci '));
+  } finally {
+    await s.done();
+  }
+});

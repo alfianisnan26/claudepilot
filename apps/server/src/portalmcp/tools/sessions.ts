@@ -194,7 +194,7 @@ export function registerSessionTools(deps: PortalToolDeps): void {
   async function sendChecked(id: string, text: string, priority: 'next' | 'later' | undefined, ctx: PortalToolContext) {
     const first = text.trimStart().split(/\s/)[0] ?? '';
     if (first.startsWith('/') && !SLASH_ALLOWED.has(first)) throw new PortalToolError('FORBIDDEN', `${cleanText(first, 40)} is for the terminal. Over MCP only ${[...SLASH_ALLOWED].join(', ')} are allowed.`);
-    await chat.send(id, randomUUID(), text, { actor: ctx.actor, ...(priority ? { priority } : {}) });
+    await chat.send(id, randomUUID(), text, { actor: ctx.actor, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}), ...(priority ? { priority } : {}) });
   }
 
   registerPortalTool({

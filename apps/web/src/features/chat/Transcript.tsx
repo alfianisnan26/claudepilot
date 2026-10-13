@@ -13,6 +13,7 @@ import { artifactTurns, type TurnFiles } from './artifacts/turns';
 import { imageAlt, imageFileName, ImageThumbs, type ViewerImage } from './ImageViewer';
 import { Markdown, QuietCopyButton } from './Markdown';
 import { MOTION, StreamingMarkdown, useFollow, useHandover } from './motion';
+import { portalSender } from './portalSender';
 import { buildRows, LiveThinking, ThinkingRow, ToolCall, ToolGroup, toolLabel, type ToolPair, type TranscriptRow } from './ToolRows';
 import { TurnDone, turnUsage, type TurnUsage } from './Usage';
 import type { ChatDelta, ChatOutgoing } from './useChatSocket';
@@ -744,25 +745,8 @@ function MoveRow({ move, moveMark }: { move: ChatMove; moveMark?: (handoffId: st
  * client. It reads as coming from that sender, never as something you typed, and says so in words.
  */
 function PortalMessage({ event: e }: { event: ChatEvent }) {
-  const actor = e.actor ?? '';
-  const sep = actor.indexOf(':');
-  // CI sends as `ci:<run id>` (until its adapter does, as `portal:ci-<run id>`): a pipeline run, named by its pipeline.
-  const ci = actor.startsWith('ci:') || actor.startsWith('portal:ci-');
-  const kind = ci ? 'ci' : actor.slice(0, sep);
-  const id = ci ? actor.slice(actor.startsWith('ci:') ? 3 : 'portal:ci-'.length) : actor.slice(sep + 1);
+  const { kind, id, who } = portalSender(e.actor ?? '', e.actorLabel);
   const Icon = kind === 'ticket' ? Ticket : kind === 'session' ? Bot : kind === 'ci' ? Workflow : Plug;
-  const who =
-    kind === 'ticket'
-      ? `ticket ${e.actorLabel ?? id}`
-      : kind === 'session'
-        ? e.actorLabel
-          ? `session “${e.actorLabel}”`
-          : 'another session'
-        : kind === 'ci'
-          ? `CI${e.actorLabel ? ` · ${e.actorLabel}` : ''}`
-          : e.actorLabel
-            ? `MCP client “${e.actorLabel}”`
-            : 'an MCP client';
   return (
     <div className="flex flex-col items-start gap-1.5">
       <div className="max-w-[92%] rounded-2xl border border-line bg-surface px-3.5 py-2.5">

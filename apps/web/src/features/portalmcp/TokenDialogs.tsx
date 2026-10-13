@@ -2,6 +2,7 @@ import { Button, Dialog, FormDialog, Segmented, Select, TextField } from '@isnan
 import { PORTAL_TOKEN_LABEL_MAX, type CreatedPortalToken, type PortalScope } from '@portal/contracts';
 import { TriangleAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { InfoTip } from '@/components/InfoTip';
 import { errorText } from '@/lib/api';
 import { portalMcpApi } from './api';
 import { DAYS, SCOPE_HELP, SCOPE_LABEL } from './labels';
@@ -45,7 +46,16 @@ export function NewTokenDialog({ open, onClose, onCreated }: { open: boolean; on
   return (
     <FormDialog open={open} onClose={onClose} size="sm" title="New token" onSubmit={submit} submitLabel="Create" saving={saving} error={error} dirty={label.trim() !== ''}>
       <div className="flex flex-col gap-4">
-        <TextField label="Label" placeholder="Claude Code, laptop" maxLength={PORTAL_TOKEN_LABEL_MAX} autoComplete="off" value={label} onChange={(e) => (setLabel(e.target.value), setLabelError(undefined))} error={labelError} />
+        <TextField
+          label="Label"
+          placeholder="Claude Code, laptop"
+          suffix={<InfoTip label="About the label">The name shown everywhere this client acts: chats, tickets, CI and the audit. Required, one line.</InfoTip>}
+          maxLength={PORTAL_TOKEN_LABEL_MAX}
+          autoComplete="off"
+          value={label}
+          onChange={(e) => (setLabel(e.target.value), setLabelError(undefined))}
+          error={labelError}
+        />
         <div className="flex flex-col gap-1.5">
           <Segmented<PortalScope> label="Scope" value={scope} onChange={setScope} options={SCOPES.map((s) => ({ value: s, label: SCOPE_LABEL[s] }))} />
           <p className="text-[13px] text-muted">{SCOPE_HELP[scope]}</p>
