@@ -93,6 +93,19 @@
     },
     pinned: 0, closed: [], asked: [],
     patch(p) { Object.assign(session, p); emit({ type: 'session', session: { ...session } }); },
+    // An approval waiting (session-states.mjs): a stored `request` event, and the session says it waits; `resolve` answers it.
+    request(r) {
+      const request = { requestId: `r${seq + 1}`, kind: 'tool', toolName: 'Bash', agentLabel: null, title: 'Run a command', detail: null, full: 'npm test', createdAt: now(), ...r };
+      add('request', { request });
+      Object.assign(session, { state: 'waiting', waiting: session.waiting + 1, waitingFor: request.title });
+      emit({ type: 'events', session: SID, items: events.slice(-1) }); emit({ type: 'session', session: { ...session } });
+      return request.requestId;
+    },
+    resolve(requestId) {
+      add('resolved', { requestId });
+      Object.assign(session, { state: 'idle', waiting: Math.max(0, session.waiting - 1), waitingFor: null });
+      emit({ type: 'events', session: SID, items: events.slice(-1) }); emit({ type: 'session', session: { ...session } });
+    },
   };
 
   const Real = window.WebSocket;
@@ -102,6 +115,7 @@
       const m = JSON.parse(d);
       if (m.type === 'subscribe') { emit({ type: 'session', session: { ...session } }); }
       else if (m.type === 'send' || m.type === 'control') emit({ type: 'ack', uuid: m.uuid, ok: true });
+      else if (m.type === 'respond') window.__fake.resolve(m.requestId);
       else if (m.type === 'btw_ask') {
         window.__fake.asked.push(m.question);
         if (m.question.includes('REFUSE')) emit({ type: 'ack', uuid: m.btw, ok: false, error: 'One at a time.', code: 'busy' });

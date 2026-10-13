@@ -153,7 +153,9 @@ async function openSession(init) {
 const geometry = async () => ({ box: await ev(rect(Q.box)), header: await ev(rect(Q.header)), model: await ev(rect(Q.model)), mode: await ev(rect(Q.mode)), ring: await ev(rect(Q.ring)), view: await ev(view) });
 const keyboard = async (cfg, up) => {
   // An on-screen keyboard: the composer focused on a touch screen and the visible area shorter.
-  if (up) { await send('Emulation.setDeviceMetricsOverride', { width: cfg.w, height: Math.round(cfg.h * 0.55), deviceScaleFactor: 1, mobile: true }); await send('Emulation.setSafeAreaInsetsOverride', { insets: { ...cfg.insets, bottom: 0 } }); await ev(`${Q.composer}.focus()`); }
+  // As on a phone: focus first, then the visible area shrinks (the page sees focusin, then a resize; session-states.mjs found the other
+  // order never told the page the keyboard was up).
+  if (up) { await ev(`${Q.composer}.focus()`); await send('Emulation.setDeviceMetricsOverride', { width: cfg.w, height: Math.round(cfg.h * 0.55), deviceScaleFactor: 1, mobile: true }); await send('Emulation.setSafeAreaInsetsOverride', { insets: { ...cfg.insets, bottom: 0 } }); }
   else { await ev(`document.activeElement?.blur()`); await send('Emulation.setDeviceMetricsOverride', { width: cfg.w, height: cfg.h, deviceScaleFactor: 1, mobile: !!cfg.mobile }); await send('Emulation.setSafeAreaInsetsOverride', { insets: cfg.insets }); }
   await sleep(500);
 };
@@ -350,6 +352,8 @@ try {
   await send('Network.setCookie', { name: 'portal_session', value: cookie, domain: 'localhost', path: '/' });
   await send('Page.enable');
   await send('Runtime.enable');
+  // A headless page has no window focus: without this, focus() fires no focusin.
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true });
   for (const cfg of MATRIX) {
     if (only && !cfg.name.includes(only)) continue;
     console.log(`> ${cfg.name}`);
