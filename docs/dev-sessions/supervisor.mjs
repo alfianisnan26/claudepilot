@@ -1,19 +1,17 @@
 #!/usr/bin/env node
-// The supervisor of the autonomous development sessions (docs/dev-sessions/README.md). It runs INSIDE the dev workspace
-// (kubernetes/kohi-event) as a plain background process, so it goes on when the coordinator's own session is closed:
+// The supervisor of the autonomous development session (docs/dev-sessions/README.md): ONE orchestrator session that works with sub-agents.
+// It runs INSIDE the dev workspace (kubernetes/kohi-event) as a plain background process, so it goes on when the coordinator's own session is closed:
 //   PORTAL_SERVER_CODE=<the 8-character sign-in code> [DEPLOY_RUN=<run id>] nohup node docs/dev-sessions/supervisor.mjs >> ~/.claudepilot/dev-sessions/supervisor.log 2>&1 &
-// What it does, as the owner's delegate (it signs in with the owner's code, which the owner asked for: "start the sessions in Bypass mode
-// without asking a human again"):
+// What it does, as the owner's delegate (it signs in with the owner's code, which the owner asked for: "run it autonomously, in Bypass mode, without
+// asking a human again"):
 //   1. With DEPLOY_RUN: waits until that run's release job waits for its approval, approves it (once, that run only), and waits for the run to
-//      pass. A run that fails or is cancelled stops everything: the sessions are not started on a portal that was not updated.
-//   2. Brings the main folder's `integration` up to date (git pull --ff-only), the base of every session's worktree.
-//   3. Starts one Bypass session per track (own worktree, own Claude), unless one already lives.
-//   4. Keeps watching, every ROUND_S seconds, per track: a session idle for a few minutes gets a nudge to carry on (nobody else will);
-//      an interrupted one (its process is gone) is woken by a message; one that ended is started again in the same worktree on the next
-//      Claude of its list, told to continue from its status file (at most MAX_STARTS per track per 24 h, 3 after integrity endings,
-//      RESTART_GAP_MIN apart). A track whose status file starts with TRACK COMPLETE, or whose session a person closed, is left alone.
-//      One live session per track at most; it touches nothing else.
-// Stop it: touch ~/.claudepilot/dev-sessions/STOP (checked every round), or kill the process. State: ~/.claudepilot/dev-sessions/state.json.
+//      pass. A run that fails or is cancelled stops everything.
+//   2. Brings the main folder's `integration` up to date (git pull --ff-only).
+//   3. Starts the orchestrator (a Bypass session in the main folder, on the Claude with the most room) unless one already lives.
+//   4. Keeps watching, every ROUND_S seconds: a session idle for a few minutes gets a nudge to carry on (nobody else will); an interrupted one (its
+//      process is gone) is woken by a message; one that ended is started again, told to continue from its status file (at most MAX_STARTS per 24 h,
+//      3 after integrity endings, RESTART_GAP_MIN apart). A status file that starts with TRACK COMPLETE, or a session a person closed, is left alone.
+// Stop it: touch ~/.claudepilot/dev-sessions/STOP (checked every round), or kill the process by PID. State: ~/.claudepilot/dev-sessions/state.json.
 // Never logs the code, a cookie or a token.
 
 import { execFileSync } from 'node:child_process';
@@ -35,12 +33,8 @@ const STAGGER_S = Number(process.env.STAGGER_S ?? 90);
 /** DRY_RUN=1: reads the portal and says what it would do; changes nothing. */
 const DRY = process.env.DRY_RUN === '1';
 
-/** The tracks: which Claude (by its name on the workspace) and which brief. A Claude's name is looked up, so a changed id does not matter. */
-const TRACKS = [
-  { key: 'track-a-connect', title: 'Track A: Connect', branch: 'dev/track-a-connect', claudes: ['fadlilah', 'hasyim', 'alfian.isnan'] },
-  { key: 'track-b-notify-triggers', title: 'Track B: Notify, triggers, version, auto move', branch: 'dev/track-b-notify-triggers', claudes: ['hasyim', 'alfian.isnan', 'fadlilah'] },
-  { key: 'track-c-ui', title: 'Track C: UI', branch: 'dev/track-c-ui', claudes: ['alfian.isnan', 'fadlilah', 'hasyim'] },
-];
+/** What is kept alive: one orchestrator in the main folder (no worktree of its own: its sub-agents make theirs). The Claudes are tried by name, best room first. */
+const TRACKS = [{ key: 'orchestrator', title: 'Orchestrator: ClaudePilot dev', claudes: ['hasyim', 'fadlilah', 'alfian.isnan'] }];
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
@@ -169,19 +163,32 @@ async function claudeIdOf(name) {
   }
   return claudeIds.get(name) ?? null;
 }
+/** The Claude of `names` with the most room (the lowest used share of its fullest plan window); a Claude whose usage is unknown counts as empty. */
+async function bestClaude(names) {
+  const r = await api('GET', '/api/claude-usage');
+  const used = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, Math.max(0, ...(c.windows ?? []).map((w) => (typeof w.usedPct === 'number' ? w.usedPct : 0)))]));
+  let best = null;
+  for (const name of names) {
+    const id = await claudeIdOf(name);
+    if (!id) continue;
+    const u = used.get(id) ?? 0;
+    if (!best || u < best.used) best = { name, id, used: u };
+  }
+  return best;
+}
 
 const kickoff = (t, again, reason) =>
   again
-    ? `You are the continuation of the ${t.title} session, which ended (${reason}). Nobody answers questions: decide, write it down, go on. This is the same worktree and branch. First read docs/dev-sessions/README.md, your track file docs/dev-sessions/${t.key}.md and your status file docs/dev-sessions/status/${t.key}.md; run git status and git log --oneline origin/integration..HEAD to see what is unmerged here, and git fetch origin && git rebase origin/integration when the worktree is clean. Then continue from NEXT. When the whole track list is done, make TRACK COMPLETE the first line of your status file, commit and push, and end with the final report.`
-    : `You are the autonomous development session for ${t.title}. Nobody answers questions: decide, write it down, go on. First: git fetch origin && git rebase origin/integration (your branch has no work yet). Then read docs/dev-sessions/README.md (how you work: your worktree, the heavy-job lock, the integration cycle, the safety rules, status files), then your track file docs/dev-sessions/${t.key}.md, and do the track's items in order until it is done. Your status file is docs/dev-sessions/status/${t.key}.md (create it; at most 60 lines: DONE, DECISIONS, NEEDS A HUMAN, NEXT). When the whole track list is done, make TRACK COMPLETE the first line of that file, commit and push, and end with the final report. A supervisor watches you: if you go idle it tells you to continue.`;
+    ? `You are the continuation of the ${t.title} session, which ended (${reason}). Nobody answers questions: decide, write it down, go on. First read docs/dev-sessions/README.md, docs/dev-sessions/orchestrator.md and your status file docs/dev-sessions/status/${t.key}.md. Sub-agents of the earlier session are gone: look at git worktree list, git status -sb and git log --oneline origin/integration..HEAD in each worktree under ~/work/claudepilot.worktrees/ for what is unmerged, keep what is good, then continue from NEXT. When the whole backlog is done, make TRACK COMPLETE the first line of the status file, commit and push, and end with the final report.`
+    : `You are the ${t.title} session: the one autonomous development session of ClaudePilot, working with sub-agents (the Agent tool) in git worktrees. Nobody answers questions: decide, write it down, go on. First read docs/dev-sessions/README.md (the rules that bind you and every sub-agent) and docs/dev-sessions/orchestrator.md (your brief), then start: look at the three prepared worktrees, create your status file docs/dev-sessions/status/${t.key}.md, and dispatch up to three sub-agents in parallel, one per work package. A supervisor watches you: if you go idle it tells you to continue. Do not rename the chat.`;
 
 async function startSession(t, tstate, again, reason) {
-  if (DRY) return log(`[dry] ${t.key}: would ${again ? 'start again' : 'start'} (${reason})`);
-  const claudeName = t.claudes[(tstate.starts?.length ?? 0) % t.claudes.length];
-  const claudeId = await claudeIdOf(claudeName);
-  if (!claudeId) throw new Error(`no Claude named ${claudeName} on ${WORKSPACE}`);
-  let body = { workspaceId: WORKSPACE, title: t.title, claudeId, allowBypass: true };
-  body = again && tstate.cwd ? { ...body, cwd: tstate.cwd } : { ...body, cwd: MAIN, worktree: { branch: t.branch, base: 'integration' } };
+  const pick = await bestClaude(t.claudes);
+  if (!pick) throw new Error(`none of ${t.claudes.join(', ')} is a Claude on ${WORKSPACE}`);
+  if (DRY) return log(`[dry] ${t.key}: would ${again ? 'start again' : 'start'} on ${pick.name} (${pick.used}% used) (${reason})`);
+  const claudeName = pick.name;
+  const claudeId = pick.id;
+  const body = { workspaceId: WORKSPACE, title: t.title, claudeId, allowBypass: true, cwd: MAIN };
   let r = await api('POST', '/api/chat/sessions', body);
   if (r.error?.code === 'FOLDER_UNTRUSTED') {
     // The folder holds the repository's own .claude/settings.json (allow and deny rules only: no hooks, MCP servers, plugins or env).
@@ -190,7 +197,7 @@ async function startSession(t, tstate, again, reason) {
     const tr = await api('POST', '/api/chat/trust', { workspaceId: WORKSPACE, folder: scan.folder, hash: scan.hash });
     if (tr.error) throw new Error(`trust refused: ${tr.error.message}`);
     log(`${t.key}: trusted ${scan.folder} (${scan.allowRules} allow rules)`);
-    r = await api('POST', '/api/chat/sessions', scan.worktree ? { ...body, worktree: scan.worktree } : body);
+    r = await api('POST', '/api/chat/sessions', body);
   }
   const s = r.data;
   if (!s?.id) throw new Error(`create refused: ${r.error?.code ?? r.status} ${r.error?.message ?? ''}`);
@@ -224,14 +231,13 @@ const statusSaysDone = (tstate) => {
   }
 };
 
-const NUDGE = 'Nobody is here to answer. Continue with your track now: take the next item (your status file says where you stopped; if you asked a question, answer it yourself with the PRD default and go on). When the whole track list is done, write TRACK COMPLETE as the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
-const WAKE = (why) => `This session was interrupted (${why}). Continue where you left off: read your status file docs/dev-sessions/status/<your track>.md, check git status, and carry on with the next item. Nobody is here to answer questions.`;
+const NUDGE = 'Nobody is here to answer. Continue now: integrate what finished sub-agents brought, dispatch the next slices to up to three sub-agents in parallel, keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
+const WAKE = (why) => `This session was interrupted (${why}). Continue where you left off: read your status file docs/dev-sessions/status/orchestrator.md, look at git worktree list and git status in each worktree, and carry on. Nobody is here to answer questions.`;
 const NUDGE_AFTER_MIN = Number(process.env.NUDGE_AFTER_MIN ?? 3);
 const NUDGE_GAP_MIN = Number(process.env.NUDGE_GAP_MIN ?? 10);
 const MAX_NUDGES = Number(process.env.MAX_NUDGES ?? 40);
 
 const within24h = (list) => (list ?? []).filter((x) => Date.now() - x < 24 * 3_600_000);
-const slugOf = (t) => t.branch.replace(/\//g, '-');
 
 async function watch() {
   const until = Date.now() + LIFETIME_H * 3_600_000;
@@ -248,7 +254,7 @@ async function watch() {
       ts.wakes ??= [];
       if (ts.done) continue;
       // A track's sessions are found by their worktree folder (a session may rename itself), or by title.
-      const mine = sessions.filter((x) => x.cwd?.endsWith(`/${slugOf(t)}`) || x.title === t.title).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      const mine = sessions.filter((x) => x.id === ts.sessionId || String(x.title ?? '').startsWith(t.title.split(':')[0])).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
       const cur = mine.find((x) => !x.archivedAt) ?? mine[0];
       if (cur?.cwd) ts.cwd = cur.cwd;
       if (statusSaysDone(ts)) {

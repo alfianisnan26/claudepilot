@@ -1,5 +1,9 @@
 # Track B: deploy notification, notifications, triggers, version pin, auto move, flaky tests
 
+> **A work package of the orchestrator** (`orchestrator.md`, rules in `README.md`): a sub-agent takes slices of it, in this package's worktree and branch, and reports to the
+> orchestrator in its final message (commits, tests run with their results, what is left, anything for a human). Where this file says "your status file" or
+> "merged on `integration`", read: the orchestrator's status file and the orchestrator's merge.
+
 Read: `CLAUDE.md`, the PRDs named per item, `docs/open-items.md` sections 3 (rows V1, N2, N3, N4) and 6 (known problems), and the earlier work:
 `docs/coord/prompts/n2.md` `n3.md` `n4.md` `v1.md`, `docs/coord/RESUME-BLOCKS.md` (status-n2, n3, n4, v1), `docs/coord/TODO-coordinator.md`.
 

@@ -1,5 +1,9 @@
 # Track A: Connect, finish it and prove it
 
+> **A work package of the orchestrator** (`orchestrator.md`, rules in `README.md`): a sub-agent takes slices of it, in this package's worktree and branch, and reports to the
+> orchestrator in its final message (commits, tests run with their results, what is left, anything for a human). Where this file says "your status file" or
+> "merged on `integration`", read: the orchestrator's status file and the orchestrator's merge.
+
 Connect is how a machine, cluster or Docker host enrolls from the web and then dials OUT to the portal (an install script and an agent). It is
 switched on in both deployments, but its acceptance and abuse suite never ran: **treat its endpoints as exposed.** Do not change `PORTAL_CONNECT_*`
 on the real portal, and do not make Connect reachable from anywhere new.
@@ -15,8 +19,11 @@ scripts are in `apps/server/scripts/`), `apps/web/src/features/targets/**`.
 1. **T1 leftovers.** A stub agent and the performance test (T-PERF); a test that a target that returns is Running at once (`workspaces.recheck`);
    the token-less upgrade endpoint (the Outdated chip must not make a new enrollment only to show an upgrade command); a run of the whole server
    side in a scratch portal started in a clean environment.
-2. **T2 leftovers.** The remaining agent service tests. `docker/limits.test.ts` once hung for 8 minutes in a loaded full-suite run (it passes alone):
-   reproduce with `--test-concurrency=3`, find the cause, fix it for good (a timeout that fails fast is the minimum, the cause is the goal).
+2. **T2 leftovers, FIRST: the release gate hangs.** The remaining agent service tests. `connect/agent/rekey.test.ts` hung twice inside the full suite (once in the pod,
+   once on a Mac; 9 to 26 minutes at 0% CPU, two loopback sockets connected to each other, idle in epoll) and passes alone in seconds (6 of 6): an awaited event with
+   no timeout (`await h.whenConnected()`, `await rekeyed`, `portal.hub.hub.rotate`) that never fires under load. `docker/limits.test.ts` hung the same way earlier.
+   Reproduce with `--test-concurrency=2` and 3, find the cause, fix it for good, and give every awaited event in the Connect tests a timeout that fails fast (the
+   cause is the goal, a timeout is the minimum).
 3. **T6, acceptance and abuse, as far as this pod can.** There is no Docker daemon here, so the 23 Docker-only tests skip and a rig of Docker hosts is
    not possible. What you can do: a scratch portal (`scripts/scratch-portal.sh`) plus an agent as a Kubernetes target on a rig of your own, in a
    namespace `dev-rig-connect` (least-privilege RBAC for the agent, delete the namespace when done), and the host kind against a throwaway folder.

@@ -1,5 +1,9 @@
 # Track C: the phone and desktop UI, checked for real
 
+> **A work package of the orchestrator** (`orchestrator.md`, rules in `README.md`): a sub-agent takes slices of it, in this package's worktree and branch, and reports to the
+> orchestrator in its final message (commits, tests run with their results, what is left, anything for a human). Where this file says "your status file" or
+> "merged on `integration`", read: the orchestrator's status file and the orchestrator's merge.
+
 The owner uses ClaudePilot daily from an iPhone (installed PWA, Safari) and a laptop. Read: `CLAUDE.md` (the UI rules), `docs/coord/QA-STANDARDS.md`
 (A1-A9), `docs/prd/web-app-pwa.md` (section 10.5 is the phone chrome and the real-device checklist E1-E7), `docs/prd/chat-sessions.md` (btw, restart,
 modes), and the earlier work: `docs/coord/prompts/s2.md` `ur.md` `ga.md` `gb.md`, `docs/coord/RESUME-BLOCKS.md` (status-s2, ur), `docs/coord/PLAN-21.md`.
