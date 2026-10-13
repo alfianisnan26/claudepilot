@@ -198,3 +198,17 @@ export function splitEscapes(text: string): { text: string; escape: boolean }[] 
   if (last < text.length) out.push({ text: text.slice(last), escape: false });
   return out;
 }
+
+/**
+ * Characters that can make text read as something else, or not read at all (the portal's own list, `protocol.ts`): control characters
+ * other than the tab, the newline and the carriage return (a browser draws that as a line break), the bidirectional overrides and isolates,
+ * the zero-width and invisible ones, the line and paragraph separators.
+ */
+// eslint-disable-next-line no-control-regex
+const DISGUISE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0000}-\u{E007F}]/gu;
+
+/**
+ * A text with each disguising character shown as the portal escapes it (`⟦U+202E⟧`), for what the portal stored before it escaped them
+ * (a row's one-line summary, a tool's output): a right-to-left override in an output must not turn `abc<U+202E>def` into "abcfed". Display only.
+ */
+export const visibly = (text: string): string => text.replace(DISGUISE, (c) => `⟦U+${(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}⟧`);

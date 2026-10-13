@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { splitEscapes, tokenizeShell, type ShellKind } from './shellTokens.js';
+import { splitEscapes, tokenizeShell, visibly, type ShellKind } from './shellTokens.js';
 
 /** The tokens as [kind, text] pairs, whitespace left out, for reading. */
 const pairs = (src: string) => tokenizeShell(src).filter((t) => t.text.trim()).map((t) => [t.kind, t.text.trim()] as [ShellKind, string]);
@@ -136,4 +136,12 @@ test('splitEscapes: the portal’s escapes for disguising characters are marked,
   assert.deepEqual(splitEscapes(''), []);
   // a look-alike that is not one of the portal's escapes stays text
   assert.deepEqual(splitEscapes('⟦U+zz⟧'), [{ text: '⟦U+zz⟧', escape: false }]);
+});
+
+test('visibly: disguising characters a stored text still has are shown as escapes; line breaks, tabs and what was escaped stay', () => {
+  assert.equal(visibly('abc\u202Edef'), 'abc⟦U+202E⟧def');
+  assert.equal(visibly('a\u200Bb\u0007c\u{E0041}'), 'a⟦U+200B⟧b⟦U+0007⟧c⟦U+E0041⟧');
+  assert.equal(visibly('line 1\r\n\tline 2\n'), 'line 1\r\n\tline 2\n');
+  assert.equal(visibly('ünïcødé 😀 你好'), 'ünïcødé 😀 你好');
+  assert.equal(visibly(visibly('x\u202Ey')), 'x⟦U+202E⟧y', 'escaping twice changes nothing');
 });

@@ -36,7 +36,7 @@ const MATRIX = [
 ];
 
 const BASE = `http://localhost:${PORT}`;
-const RLO = '‮';
+const RLO = '\u202E';
 // The commands, each its own turn. The stand-in reads `[[bash <command>]]` up to the first `]`: none of them has one.
 const CMD = {
   pipes: `cd /tmp && printf 'alpha\\nbeta\\ngamma\\n' | grep -v beta | sort -r | sed -e 's/a/A/g' | tee /tmp/cp-tr-out.txt | wc -l # count what is left after the filter`,
@@ -46,7 +46,8 @@ const CMD = {
   rlo: `echo "abc${RLO}def" && echo 'ünïcødé 😀'`,
   fail: 'ls /nonexistent-cp-tr && echo never',
 };
-const HIDDEN_TAIL = `echo safe${' '.repeat(150)}; echo tail-visible | cat`;
+// Claude Code runs a plain echo without asking: the tail writes a file, so it asks.
+const HIDDEN_TAIL = `echo safe${' '.repeat(150)}; touch /tmp/cp-tr-tail-visible`;
 
 let cookie = '';
 let SID = null;
@@ -66,7 +67,7 @@ const login = async () => {
 const openChat = async () => {
   const ws = new WebSocket(`ws://localhost:${PORT}/api/chat/live`, { headers: { Cookie: `portal_session=${cookie}`, Origin: BASE } });
   await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
-  const chat = { ws, state: null, acks: new Map(), requests: [], resolved: new Set(), autoAllow: true };
+  const chat = { ws, state: null, acks: new Map(), requests: [], resolved: new Set(), autoAllow: true, seen: [] };
   let n = 0;
   const allow = (requestId) => ws.send(JSON.stringify({ type: 'respond', session: SID, requestId, decision: 'allow' }));
   ws.on('message', (raw) => {
@@ -74,6 +75,7 @@ const openChat = async () => {
     if (m.type === 'session') chat.state = m.session.state;
     if (m.type === 'ack') chat.acks.set(m.uuid, m);
     if (m.type === 'events') for (const e of m.items) {
+      chat.seen.push(`${e.kind}${e.outcome ? `:${e.outcome}` : ''}`);
       if (e.kind === 'request' && e.request) { chat.requests.push(e.request); if (chat.autoAllow) allow(e.request.requestId); }
       if (e.kind === 'resolved' && e.requestId) chat.resolved.add(e.requestId);
     }
@@ -114,6 +116,15 @@ const ev = async (expr) => {
 };
 const shot = async (name) => { if (shots) writeFileSync(join(shots, `${name}.png`), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64')); };
 const waitFor = async (expr, ms = 4000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr)) return true; await sleep(80); } return false; };
+/** A screenshot with `el` at the top of the transcript (the transcript keeps to its bottom while rows open: scroll again once it settles). */
+const shotAt = async (el, name) => {
+  // Only the reader leaves the bottom (a scroll right after a wheel, touch or key): a wheel first, then the scroll.
+  await ev(`${LOG}.dispatchEvent(new WheelEvent('wheel', { deltaY: -40, bubbles: true }))`);
+  await ev(`(() => { const e = ${el}; const l = ${LOG}; if (e) l.scrollTop += e.getBoundingClientRect().top - l.getBoundingClientRect().top - 120; })()`);
+  await sleep(300);
+  if (process.env.TR_DEBUG) console.log(name, await ev(`(() => { const e = ${el}; const l = ${LOG}; return { found: !!e, top: e && Math.round(e.getBoundingClientRect().top), st: Math.round(l.scrollTop), sh: l.scrollHeight, ch: l.clientHeight, scroller: getComputedStyle(l).overflowY }; })()`));
+  await shot(name);
+};
 const click = (sel) => ev(`(() => { const e = ${sel}; if (!e) return false; e.click(); return true; })()`);
 
 const LOG = `document.querySelector('[role=log][aria-label=Transcript]')`;
@@ -123,7 +134,7 @@ const hscroll = `(() => { const scrollsX = (e) => { for (let p = e.parentElement
 /** Buttons inside `root` under 44 px on touch. */
 const small = (root) => `(() => [...(${root})?.querySelectorAll('button') ?? []].filter((b) => { const r = b.getBoundingClientRect(); return r.width && (r.height < 43.5 || r.width < 43.5) && !b.closest('[aria-hidden=true]'); }).map((b) => (b.getAttribute('aria-label') ?? b.innerText).slice(0, 30) + ' ' + Math.round(b.getBoundingClientRect().width) + 'x' + Math.round(b.getBoundingClientRect().height)))()`;
 /** The tool row's button whose one-line summary starts like `cmd` (folded as the portal folds it). */
-const rowButton = (cmd) => `[...${LOG}.querySelectorAll('button[aria-expanded]')].find((b) => b.innerText.startsWith('Bash') && b.innerText.replace(/\\s+/g, ' ').includes(${JSON.stringify(cmd.replace(/\s+/g, ' ').slice(0, 24))}))`;
+const rowButton = (cmd) => `[...${LOG}.querySelectorAll('button[aria-expanded]:not([aria-label*="Latest:"])')].find((b) => b.innerText.startsWith('Bash') && b.innerText.replace(/\\s+/g, ' ').includes(${JSON.stringify(cmd.replace(/\s+/g, ' ').replaceAll(RLO, '⟦U+202E⟧').slice(0, 24))}))`;
 /** The open body of a row (the element its button controls). */
 const rowBody = (cmd) => `(() => { const b = ${rowButton(cmd)}; return b ? document.getElementById(b.getAttribute('aria-controls')) : null; })()`;
 
@@ -158,7 +169,7 @@ async function approval(cfg) {
   if (!(await open(cfg))) return check('page loads', false);
   check('the card shows', await waitFor(`!!${CARD}`, 8000));
   const text = await ev(`${REVIEW}?.innerText ?? ''`);
-  check('the whole command, its tail included', text.includes('; echo tail-visible | cat') && text.includes(' '.repeat(150)), JSON.stringify(text.slice(-40)));
+  check('the whole command, its tail included', text.includes('; touch /tmp/cp-tr-tail-visible') && text.includes(' '.repeat(150)), JSON.stringify(text.slice(-40)));
   check('coloured as shell (commands and operators marked)', await ev(`${REVIEW}.querySelectorAll('span.font-semibold').length >= 3`));
   check('always wrapped', (await ev(`getComputedStyle(${REVIEW}).whiteSpace`)) === 'pre-wrap');
   check('the same code font as the rows', /monospace/.test(await ev(`getComputedStyle(${REVIEW}).fontFamily`)));
@@ -189,7 +200,7 @@ async function rows(cfg) {
   check('Output shows what it printed', /2/.test(await ev(`${body}.querySelector('section[aria-label=Output] pre')?.innerText ?? ''`)));
   check('Copy and the wrap switch', await ev(`!!${body}.querySelector('button[aria-label=Copy]') && !!${body}.querySelector('button[aria-pressed]')`));
   if (cfg.mobile) check('block buttons are 44 px on touch', (await ev(small(body))).length === 0, JSON.stringify(await ev(small(body))));
-  await shot(`${cfg.name}-2-pipes`);
+  await shotAt(rowButton(CMD.pipes), `${cfg.name}-2-pipes`);
   await click(`${body}.querySelector('section[aria-label=Input] button[aria-pressed]')`);
   await sleep(100);
   check('unwrapped, the line scrolls inside its block', await ev(`getComputedStyle(${input}).whiteSpace === 'pre' && ${input}.scrollWidth > ${input}.clientWidth`) || !cfg.mobile);
@@ -205,7 +216,7 @@ async function rows(cfg) {
   check('the body is one heredoc colour, nothing in it a comment', await ev(`(() => { const s = [...${hd}.querySelectorAll('section[aria-label=Input] pre span')]; return !s.some((e) => e.className.includes('italic')) && s.some((e) => e.innerText.includes('#!/bin/sh') && e.className.includes('emerald')); })()`));
   check('unicode comes out whole', (await ev(`${hd}.querySelector('section[aria-label=Output]').innerText`)).includes('héllo wörld ✓ — 你好 😀'));
   await noOverflow('heredoc');
-  await shot(`${cfg.name}-3-heredoc`);
+  await shotAt(rowButton(CMD.heredoc), `${cfg.name}-3-heredoc`);
 
   // 3. 5,000 lines: its ends and Show all, then all of it.
   check('the 5,000-line row opens', await openRow(CMD.many));
@@ -213,13 +224,13 @@ async function rows(cfg) {
   const outText = `${many}.querySelector('section[aria-label=Output]').innerText`;
   check('"5,000 lines" and Show all', /5,000 lines/.test(await ev(outText)) && !!(await ev(`!!${many}.querySelector('section[aria-label=Output] pre button')`)));
   check('only the ends are drawn at first', (await ev(`${many}.querySelector('section[aria-label=Output] pre').innerText.split('\\n').length`)) < 100);
-  await shot(`${cfg.name}-4-many-clipped`);
+  await shotAt(rowButton(CMD.many), `${cfg.name}-4-many-clipped`);
   const t0 = Date.now();
   await click(`${many}.querySelector('section[aria-label=Output] pre button')`);
   check('Show all draws every line', await waitFor(`${many}.querySelector('section[aria-label=Output] pre').innerText.split('\\n').filter(Boolean).length >= 5000`, 3000));
   check('quickly', Date.now() - t0 < 1500, `${Date.now() - t0} ms`);
   await noOverflow('5,000 lines');
-  await shot(`${cfg.name}-5-many-all`);
+  await shotAt(rowButton(CMD.many), `${cfg.name}-5-many-all`);
 
   // 4. Longer than the portal keeps: the head, the tail and what was left out between.
   check('the seq row opens', await openRow(CMD.seq));
@@ -228,7 +239,8 @@ async function rows(cfg) {
   // 5. A disguising character is marked as its escape.
   check('the RLO row opens', await openRow(CMD.rlo));
   check('the override shows as ⟦U+202E⟧, marked', await ev(`[...${rowBody(CMD.rlo)}.querySelectorAll('section[aria-label=Input] span')].some((s) => s.innerText === '⟦U+202E⟧' && s.className.includes('danger'))`));
-  await shot(`${cfg.name}-6-escape`);
+  check('nor does the row’s line or the output carry the raw override', await ev(`!${rowButton(CMD.rlo)}.innerText.includes('\u202E') && !${rowBody(CMD.rlo)}.innerText.includes('\u202E') && ${rowBody(CMD.rlo)}.querySelector('section[aria-label=Output]').innerText.includes('⟦U+202E⟧')`));
+  await shotAt(rowButton(CMD.rlo), `${cfg.name}-6-escape`);
 
   // 6. A failure opens by itself, its exit status in the danger tone.
   await openActivities();
@@ -237,10 +249,10 @@ async function rows(cfg) {
   const failOut = `${rowBody(CMD.fail)}?.querySelector('section[aria-label=Output]')`;
   check('its exit status, in the danger tone', await ev(`/exit [1-9]/.test(${failOut}.innerText) && ${failOut}.querySelector('pre').className.includes('text-danger')`), await ev(`${failOut}?.innerText.slice(0, 80) ?? ''`));
   await ev(`${rowButton(CMD.fail)}.scrollIntoView({ block: 'center' })`);
-  await shot(`${cfg.name}-7-failure`);
+  await shotAt(rowButton(CMD.fail), `${cfg.name}-7-failure`);
 
   // 7. A Write: its path and its lines, added.
-  const write = `[...${LOG}.querySelectorAll('button[aria-expanded]')].find((b) => b.innerText.startsWith('Write'))`;
+  const write = `[...${LOG}.querySelectorAll('button[aria-expanded]:not([aria-label*="Latest:"])')].find((b) => b.innerText.startsWith('Write'))`;
   if (await waitFor(`!!${write}`, 2000)) {
     if ((await ev(`${write}.getAttribute('aria-expanded')`)) !== 'true') await click(write);
     const w = `document.getElementById(${write}.getAttribute('aria-controls'))`;
@@ -281,11 +293,11 @@ try {
   chat.autoAllow = false;
   await chat.send(`[[bash ${HIDDEN_TAIL}]]`);
   const t = Date.now();
-  while (Date.now() - t < 30000 && !chat.requests.length && chat.state !== 'idle') await sleep(150);
+  while (Date.now() - t < 30000 && !chat.requests.length) await sleep(150);
   if (chat.requests.length) {
     for (const cfg of MATRIX) if (!only || cfg.name.includes(only)) await approval(cfg);
     for (const r of chat.requests) chat.allow(r.requestId);
-  } else console.log('  (no approval asked: the session runs Bash without asking; the card was not looked at)');
+  } else console.log(`  (no approval asked: the session runs Bash without asking; the card was not looked at; events ${chat.seen.join(' ')})`);
   chat.autoAllow = true;
   await chat.idle(60000);
 

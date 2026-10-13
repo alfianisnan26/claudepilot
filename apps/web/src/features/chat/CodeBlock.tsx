@@ -1,7 +1,7 @@
 import { cn, useToast } from '@isnanme/ui';
 import { Check, Copy, WrapText } from 'lucide-react';
 import { forwardRef, useEffect, useMemo, useState, type ReactNode, type UIEventHandler } from 'react';
-import { splitEscapes, tokenizeShell, type ShellKind } from './shellTokens';
+import { splitEscapes, tokenizeShell, visibly, type ShellKind } from './shellTokens';
 import { clipOutput, linesLabel, lineCount, type CodeLang, type DiffLine, type InputView } from './toolFormat';
 
 // The one renderer of a tool's text (chat PRD FR7): a tool row's Input and Output blocks, the approval card, and the glance widget's
@@ -23,10 +23,10 @@ const KIND_CLASS: Record<ShellKind, string> = {
   comment: 'italic text-muted',
 };
 
-/** Plain text with each escaped disguising character marked. */
+/** Plain text with each disguising character escaped (if the portal had not) and marked. */
 function Marked({ text, className }: { text: string; className?: string }) {
-  const parts = splitEscapes(text);
-  if (parts.length === 1 && !parts[0]!.escape) return className ? <span className={className}>{text}</span> : <>{text}</>;
+  const parts = splitEscapes(visibly(text));
+  if (parts.length === 1 && !parts[0]!.escape) return className ? <span className={className}>{parts[0]!.text}</span> : <>{parts[0]!.text}</>;
   return (
     <span className={className}>
       {parts.map((p, i) =>

@@ -31,7 +31,7 @@ test('toolInput: an MCP tool keeps its whole input, nested values included', () 
 
 test('toolInput: redacted, and disguising characters shown as escapes', () => {
   const token = ghToken();
-  const kept = toolInput('Bash', { command: `curl -H "Authorization: token ${token}" x‮evil` })!;
+  const kept = toolInput('Bash', { command: `curl -H "Authorization: token ${token}" x\u202Eevil` })!;
   const command = kept.input.command as string;
   assert.ok(!command.includes(token), 'the token is not kept');
   assert.ok(command.includes('⟦U+202E⟧'), 'the override shows as an escape');

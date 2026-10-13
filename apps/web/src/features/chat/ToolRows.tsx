@@ -19,6 +19,7 @@ import {
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { InputBlock, OutputBlock } from './CodeBlock';
 import { ImageThumbs, type ViewerImage } from './ImageViewer';
+import { visibly } from './shellTokens';
 import { exitStatus, inputView } from './toolFormat';
 
 /** A tool call and its result (null while it runs, or when the result never came). */
@@ -270,7 +271,7 @@ export function ToolCall({
         <Icon className="size-4 shrink-0" aria-hidden="true" />
         {/* A call still waiting for its result is a quiet shimmer on its name, not a spinner. */}
         <span className={cn('shrink-0 font-mono', running && !result && 'shimmer')}>{call.toolName ? toolLabel(call.toolName) : 'tool'}</span>
-        {call.text && <span className="min-w-0 truncate font-mono text-muted">{shortTarget(call.text)}</span>}
+        {call.text && <span className="min-w-0 truncate font-mono text-muted">{shortTarget(visibly(call.text))}</span>}
         {agent && <span className="shrink-0 truncate text-muted/80">· {agent}</span>}
         {running && !result && <span className="sr-only">(running)</span>}
         {error && <span className="sr-only">(failed)</span>}
