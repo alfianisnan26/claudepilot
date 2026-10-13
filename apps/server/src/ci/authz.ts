@@ -39,6 +39,9 @@ export const CI_POLICIES = {
   'GET /api/ci/runs/:id/log': run('view'),
   'POST /api/ci/runs/:id/cancel': run('operate'),
   'POST /api/ci/runs/:id/rerun': run('operate'),
+  // Bump (FR37a): the picker lists only sessions the person may operate; the bump needs operate on the run AND on the session.
+  'GET /api/ci/runs/:id/bump': { ...run('operate'), filter: 'session' },
+  'POST /api/ci/runs/:id/bump': { kind: 'objects', checks: [{ type: 'ci_run', verb: 'operate', from: 'path', param: 'id' }, { type: 'session', verb: 'operate', from: 'body', param: 'sessionId' }], audit: 'ci.run_bumped' },
   // A person only (the handler refuses tokens, agents and jobs); recorded in the platform audit.
   'POST /api/ci/runs/:id/approve': { ...run('manage'), audit: 'ci.deploy_approved' },
   'POST /api/ci/runs/:id/reject': { ...run('manage'), audit: 'ci.deploy_rejected' },
@@ -65,5 +68,14 @@ export function declareCiPolicies(): void {
     ci_validate: { kind: 'signed-in' },
     ci_run_trigger: { kind: 'signed-in', creates: 'ci_run' },
     ci_run_cancel: { kind: 'objects', checks: [{ type: 'ci_run', verb: 'operate', arg: 'id' }] },
+    ci_run_bump: {
+      kind: 'objects',
+      checks: [
+        { type: 'ci_run', verb: 'operate', arg: 'id' },
+        { type: 'session', verb: 'operate', arg: 'session_id', optional: true },
+      ],
+      confirm: true,
+      audit: 'ci.run_bumped',
+    },
   });
 }

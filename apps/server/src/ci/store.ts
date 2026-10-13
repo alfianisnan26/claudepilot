@@ -126,10 +126,10 @@ export interface MessageRow {
   session_id: string;
   ticket_id: string | null;
   at: string;
-  /** sent, refused, capped, paused, ended */
+  /** sent, refused, capped, paused, ended; a bump (FR37a): bumped, bump_refused */
   outcome: string;
   note: string | null;
-  /** The run's state it was about: failed, passed, cancelled, waiting. */
+  /** The run's state it was about: failed, passed, cancelled, waiting; a bump: `bump:prioritise` or `bump:ask`. */
   state: string;
 }
 
@@ -362,6 +362,15 @@ export class CiStore {
     const row = by.ticketId
       ? this.#db.prepare("SELECT count(*) AS n FROM ci_messages WHERE ticket_id = ? AND outcome = 'sent' AND at > ?").get(by.ticketId, since)
       : this.#db.prepare("SELECT count(*) AS n FROM ci_messages WHERE ticket_id IS NULL AND session_id = ? AND outcome = 'sent' AND at > ?").get(by.sessionId, since);
+    return Number((row as { n: number }).n);
+  }
+
+  /** Bumps of a run, or into a session, since a time (FR37a's limits). Bump rows have the state `bump:<mode>`. */
+  bumpsSince(by: { runId: string } | { sessionId: string }, since: string): number {
+    const row =
+      'runId' in by
+        ? this.#db.prepare("SELECT count(*) AS n FROM ci_messages WHERE run_id = ? AND state LIKE 'bump:%' AND at > ?").get(by.runId, since)
+        : this.#db.prepare("SELECT count(*) AS n FROM ci_messages WHERE session_id = ? AND state LIKE 'bump:%' AND at > ?").get(by.sessionId, since);
     return Number((row as { n: number }).n);
   }
 

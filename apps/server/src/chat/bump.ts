@@ -30,13 +30,17 @@ export function bumpRefusal(s: Pick<BumpCandidate, 'state' | 'workspaceId'>, wor
 /** Throws the refusal as a CONFLICT a person can read ("That session is waiting on an approval: answer it first."). */
 export function assertBumpable(s: Pick<BumpCandidate, 'state' | 'workspaceId'>, workspaceId: string | null): void {
   const why = bumpRefusal(s, workspaceId);
-  if (!why) return;
+  if (why) throw bumpRefusalError(why, s, workspaceId);
+}
+
+/** A refusal as the CONFLICT the routes and tools answer, with the reason's code and label in its details. */
+export function bumpRefusalError(why: BumpRefusal, s: Pick<BumpCandidate, 'workspaceId'>, workspaceId: string | null): AppError {
   const text: Record<BumpRefusal, string> = {
     ended: 'That session has ended.',
     waiting: 'That session is waiting on an approval: answer it first.',
-    other_workspace: `That session works in another workspace (${s.workspaceId}); pick one in ${workspaceId}.`,
+    other_workspace: `That session works in another workspace (${s.workspaceId})${workspaceId ? `; pick one in ${workspaceId}` : ''}.`,
   };
-  throw new AppError('CONFLICT', text[why], { details: { sessionId: text[why], refusal: why, label: BUMP_REFUSAL_LABEL[why] } });
+  return new AppError('CONFLICT', text[why], { details: { sessionId: text[why], refusal: why, label: BUMP_REFUSAL_LABEL[why] } });
 }
 
 /**

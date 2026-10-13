@@ -2,6 +2,8 @@
 // merge into a protected branch, runs the pipelines in the repository's `.pilot/` folder inside the workspace.
 // Everything that came out of a workspace (logs, commit messages, diagnostics) is untrusted text.
 
+import type { BumpMode } from './bump.js';
+
 /** A run's status. Jobs and steps add `pending` and `skipped`; a job held for a person's approval (FR41) is `waiting` (its run stays `running`). */
 export const CI_STATUSES = ['queued', 'running', 'passed', 'failed', 'cancelled'] as const;
 export type CiStatus = (typeof CI_STATUSES)[number];
@@ -177,7 +179,24 @@ export interface CiRun extends CiRunSummary {
   deployments: CiDeployment[];
   /** What CI told the run's session, or why it did not (FR36, FR37), oldest first: at most one per state. */
   reports: CiRunReport[];
+  /** The times a person (or a script) bumped the run into a session (FR37a), oldest first. */
+  bumps: CiRunBump[];
 }
+
+/**
+ * A bump of a run into a session (FR37a): `prioritise` is shown as "Fix" (the report goes in as `next`, the session acts on it), `ask` is a
+ * question (`later`). `refused`: the session would not take the message (`note` says why); otherwise `note` is the person's one line.
+ */
+export interface CiRunBump {
+  sessionId: string;
+  mode: BumpMode;
+  outcome: 'sent' | 'refused';
+  at: string;
+  note: string | null;
+}
+
+/** What the run's two bump modes are called (the shared Bump dialog's labels). */
+export const CI_BUMP_MODE_LABEL: Record<BumpMode, string> = { prioritise: 'Fix', ask: 'Ask' };
 
 /**
  * The states a run reports to its session (FR36). `failed` always does (but never for a run a person started by hand); the others do for
@@ -378,6 +397,8 @@ export const CI_API = {
   cancel: (id: string) => `/api/ci/runs/${encodeURIComponent(id)}/cancel`,
   /** POST: run it again; returns the new `CiRun`. */
   rerun: (id: string) => `/api/ci/runs/${encodeURIComponent(id)}/rerun`,
+  /** GET: the sessions it can be bumped into (`BumpTarget[]`). POST `BumpRequest`: bump it; returns the `CiRun` (FR37a). */
+  bump: (id: string) => `/api/ci/runs/${encodeURIComponent(id)}/bump`,
   /** GET `?workspace=`: `CiRepo[]`. POST `CreateCiRepoRequest`: `CiRepo`. */
   repos: '/api/ci/repos',
   /** PATCH `UpdateCiRepoRequest`: `CiRepo`. DELETE: remove it and its folder. */

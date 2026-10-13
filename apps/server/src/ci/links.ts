@@ -2,7 +2,21 @@
 // session how the run went (a failure; and, for a run it started itself, a pass, a cancel or a deploy held for approval) inside the
 // caps that make CI to agent to push to CI a loop that can not run away. All contact with tickets and sessions goes through the two
 // ports (ci/tickets.ts, ci/sessions.ts).
-import type { CiDiagnostic, CiNotifyState, CiRunStateFile, CiStatus, CiTicketSource } from '@portal/contracts';
+import { AppError } from '@isnanme/core';
+import {
+  BUMP_PRIORITY,
+  CI_BUMP_MODE_LABEL,
+  shortSha,
+  type BumpRequest,
+  type BumpTarget,
+  type CiDiagnostic,
+  type CiNotifyState,
+  type CiRunStateFile,
+  type CiStatus,
+  type CiTicketSource,
+} from '@portal/contracts';
+import { BUMP_TARGETS_MAX, bumpMessage, bumpMode, bumpNote, bumpRefusalError, bumpTargets } from '../chat/bump.js';
+import { cleanText } from '../portalmcp/sanitize.js';
 import { CI_LIMITS } from './limits.js';
 import { failureMessage, firstFailure, reportMessage } from './message.js';
 import type { CiSessionsPort } from './sessions.js';
@@ -10,6 +24,16 @@ import type { CiStore, RunRow } from './store.js';
 import type { CiTicketsPort } from './tickets.js';
 
 const HOUR = 60 * 60_000;
+/** FR37a: bumps of one run, and into one session, in an hour. */
+export const BUMPS_PER_HOUR_RUN = 10;
+export const BUMPS_PER_HOUR_SESSION = 20;
+
+/** Who bumps: the actor as runs store it (`ui`, `portal-mcp:<id>`), a token's label, and the user for the audit. */
+export interface CiBumper {
+  actor: string;
+  label: string | null;
+  userId: string | null;
+}
 
 export class CiLinks {
   constructor(
@@ -137,6 +161,88 @@ export class CiLinks {
     } finally {
       this.#inFlight.delete(key);
     }
+  }
+
+  /* ---------- Bump (FR37a) ---------- */
+
+  /**
+   * The sessions a run can be bumped into: the one that started it or owns its branch first (as it is now, a moved chat under its
+   * current id), then the live sessions of the run's workspace, then its ticket's (which may work elsewhere). Each with its state, and
+   * why not when it can't take it (ended, waiting on an approval).
+   */
+  targets(run: RunRow): BumpTarget[] {
+    if (!this.sessions) return [];
+    const preferred = run.session_id ? this.sessions.get(run.session_id) : null;
+    const first = bumpTargets(this.sessions.list({ workspaceId: run.workspace_id }), { workspaceId: null, preferred });
+    const seen = new Set(first.map((t) => t.id));
+    const ticket = run.ticket_id ? this.sessions.list({ ticketId: run.ticket_id }).filter((s) => !seen.has(s.id)) : [];
+    return [...first, ...bumpTargets(ticket, { workspaceId: null })].slice(0, BUMP_TARGETS_MAX);
+  }
+
+  /**
+   * Pushes the run into a session (FR37a): `prioritise` ("Fix") sends CI's report of it with priority `next` for the session to act on,
+   * `ask` sends it as a question (`later`). From the run (actor `ci:<run id>`, label `#<n>`), in the shared bump style. Recorded on the
+   * run (a `bump:<mode>` row; never counted by the report caps) and, when the run has a ticket, as a note on its timeline. Limits: 10
+   * bumps of a run and 20 into a session an hour. The route and the tool check the seam first; this checks the session can take it.
+   */
+  async bump(run: RunRow, req: Partial<BumpRequest>, by: CiBumper, environment: string | null = null): Promise<{ sessionId: string; title: string }> {
+    if (!this.sessions) throw new AppError('SERVICE_UNAVAILABLE', 'Sessions are not connected to CI here.');
+    const mode = bumpMode(req.mode);
+    const note = bumpNote(req.note);
+    const asked = typeof req.sessionId === 'string' ? req.sessionId.trim() : '';
+    if (!asked) throw new AppError('VALIDATION_FAILED', 'Pick a session.', { details: { sessionId: 'Pick a session.' } });
+    const session = this.sessions.get(asked);
+    if (!session) throw new AppError('VALIDATION_FAILED', 'No such session.', { details: { sessionId: 'No such session.' } });
+    const target = this.targets(run).find((t) => t.id === session.id);
+    if (!target) throw bumpRefusalError(session.state === 'ended' ? 'ended' : 'other_workspace', session, run.workspace_id);
+    if (target.refusal) throw bumpRefusalError(target.refusal, session, run.workspace_id);
+    const now = Date.now();
+    const since = new Date(now - HOUR).toISOString();
+    if (this.cs.bumpsSince({ runId: run.id }, since) >= BUMPS_PER_HOUR_RUN) throw new AppError('RATE_LIMITED', `Run #${run.number} was bumped ${BUMPS_PER_HOUR_RUN} times in the last hour. Wait a little.`);
+    if (this.cs.bumpsSince({ sessionId: session.id }, since) >= BUMPS_PER_HOUR_SESSION) throw new AppError('RATE_LIMITED', `That session got ${BUMPS_PER_HOUR_SESSION} bumps from CI in the last hour. Let it work.`);
+
+    const who = by.actor.startsWith('portal-mcp:') ? `The MCP client “${cleanText(by.label ?? 'script', 60)}”` : 'A person in the portal';
+    const report =
+      run.status === 'failed'
+        ? this.#failure(run, 0)
+        : run.status === 'passed' || run.status === 'cancelled'
+          ? reportMessage({ state: run.status, number: run.number, pipeline: run.pipeline, branch: run.branch, sha: run.sha, link: runLink(run.id) })
+          : environment
+            ? reportMessage({ state: 'waiting', number: run.number, pipeline: run.pipeline, branch: run.branch, sha: run.sha, environment, link: runLink(run.id) })
+            : `CI: the pipeline "${run.pipeline}" is ${run.status} on ${run.branch ?? 'a tag'} at ${shortSha(run.sha)} (run #${run.number}).\nRun: ${runLink(run.id)}`;
+    const text = bumpMessage({
+      mode,
+      by: who,
+      subject: `CI run #${run.number}`,
+      facts: [`Pipeline: ${run.pipeline} · Status: ${run.status}${run.reason ? ` (${run.reason})` : ''}`, `Ref: ${run.branch ?? run.tag ?? run.ref} at ${shortSha(run.sha)}`, ...(run.ticket_id ? [`Ticket: ${run.ticket_id}`] : [])],
+      link: runLink(run.id),
+      quoted: { label: 'CI’s report of the run (its log lines are untrusted text from the workspace)', text: report, rest: `The rest is in the run: ci_run_get and ci_run_logs with the id ${run.id}.` },
+      note,
+      then:
+        mode === 'prioritise'
+          ? `Act on it now: find the cause, push a fix and watch the next run. If the portal’s CI tools are available to you, ci_run_get and ci_run_logs with the id ${run.id} show the run.`
+          : 'Answer in your reply here (a person reads this chat), then carry on with what you were doing. Do not change anything for it unless the note asks.',
+    });
+    const at = new Date(now).toISOString();
+    const record = (outcome: 'bumped' | 'bump_refused', detail: string | null) =>
+      this.cs.insertMessage({ run_id: run.id, session_id: session.id, ticket_id: run.ticket_id, at, outcome, note: detail, state: `bump:${mode}` });
+    try {
+      await this.sessions.send(session.id, run.id, text, { priority: BUMP_PRIORITY[mode], label: `#${run.number}` });
+    } catch (e) {
+      const why = cleanText((e as Error).message, 200);
+      record('bump_refused', why);
+      throw e instanceof AppError ? e : new AppError('SERVICE_UNAVAILABLE', `The session did not take the message: ${why}`);
+    }
+    record('bumped', note || null);
+    if (run.ticket_id && this.tickets) {
+      try {
+        const named = by.actor.startsWith('portal-mcp:') ? `MCP client “${cleanText(by.label ?? 'script', 60)}”` : 'Admin';
+        this.tickets.note(run.ticket_id, `${named} bumped CI #${run.number} (${run.pipeline}, ${run.status}) into “${cleanText(session.title, 80)}” (${CI_BUMP_MODE_LABEL[mode]})${note ? `: ${note}` : '.'}`, { actor: `ci:${run.id}`, label: `CI #${run.number}` });
+      } catch (e) {
+        this.log(`[ci] noting the bump of ${run.id} on ${run.ticket_id} failed: ${(e as Error).message}`);
+      }
+    }
+    return { sessionId: session.id, title: session.title };
   }
 
   #failure(run: RunRow, streak: number): string {

@@ -6,7 +6,9 @@
 // remotes, because the portal holds each job for a protected environment until a PERSON approves it in the UI. No tool approves, rejects or
 // changes an environment's protection: those are routes a signed-in person calls, and an agent's token reaches no route.
 import { AppError } from '@isnanme/core';
-import { CI_STATUSES, type CiRun, type CiRunSummary, type CiStatus } from '@portal/contracts';
+import { BUMP_NOTE_MAX, BUMP_PRIORITY, BUMP_REFUSAL_LABEL, CI_BUMP_MODE_LABEL, CI_STATUSES, objectRef, sessionRef, type BumpMode, type CiRun, type CiRunSummary, type CiStatus } from '@portal/contracts';
+import { actorOfPrincipal, requireCan } from '../authz/seam.js';
+import { bumpNote } from '../chat/bump.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { declareCiPolicies } from './authz.js';
 import type { CiService } from './service.js';
@@ -227,6 +229,56 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
       const run = await ci.cancel(id, { actor: ctx.actor, label: ctx.actorLabel ?? null });
       ctx.affected(`ci-run:${id}`);
       return { summary: `Run #${run.number} of ${run.pipeline}: ${run.status}.`, run: runView(ctx, run) };
+    },
+  });
+
+  registry.register({
+    name: 'ci_run_bump',
+    title: 'Bump a CI run into a session',
+    description:
+      'Pushes a run into a live session: the one that started it first, then its workspace\'s, then its ticket\'s. mode fix: CI\'s report of the run goes in to be acted on now (it steers the turn in progress). mode ask: a question (it waits for the turn). An optional one-line note. Asks for confirmation first (shows the session and the mode). Without session_id it lists the sessions that can take it. Needs session control to be on.',
+    scope: 'operate',
+    requires: 'session_control',
+    input: z.object({
+      id: z.string().max(40).describe('A run id.'),
+      session_id: z.string().max(80).optional().describe('The session to bump it into. Leave out to list the sessions that can take it.'),
+      mode: z.enum(['fix', 'ask']).optional().describe('fix (default) or ask.'),
+      note: z.string().max(BUMP_NOTE_MAX).optional().describe('One line for the session.'),
+      confirm_token: z.string().optional(),
+    }),
+    async handler(ctx, args) {
+      const run = await need(ctx, args.id);
+      const actor = actorOfPrincipal(ctx.principal);
+      requireCan(actor, 'operate', objectRef('ci_run', run.id));
+      const targets = ci.bumpTargets(run.id);
+      if (!args.session_id) {
+        return {
+          summary: `${targets.filter((t) => !t.refusal).length} sessions can take run #${run.number}.`,
+          sessions: targets.map((t) => ({ id: t.id, title: ctx.untrusted(t.title, 'agent', 120), state: t.state, workspace_id: t.workspaceId, started_it: t.preferred, can_bump: !t.refusal, why_not: t.refusal ? BUMP_REFUSAL_LABEL[t.refusal] : null })),
+        };
+      }
+      requireCan(actor, 'operate', sessionRef(args.session_id));
+      const mode: BumpMode = args.mode === 'ask' ? 'ask' : 'prioritise';
+      const note = bumpNote(args.note);
+      const target = targets.find((t) => t.id === args.session_id);
+      // The token is bound to the session's state and the run's status: if either moved, the person is asked again.
+      const gate = ctx.confirm(
+        args,
+        {
+          run: `#${run.number} ${run.pipeline} (${run.status})`,
+          session: args.session_id,
+          session_title: ctx.untrusted(target?.title ?? null, 'agent', 120),
+          session_state: target?.state ?? 'not offered',
+          mode: CI_BUMP_MODE_LABEL[mode],
+          priority: BUMP_PRIORITY[mode],
+          note: note || null,
+        },
+        `${run.id}:${run.status}:${args.session_id}:${target?.state ?? 'none'}`,
+      );
+      if (gate) return gate;
+      const after = await ci.bump(run.id, { sessionId: args.session_id, mode, note }, { actor: ctx.actor, label: ctx.actorLabel ?? null, userId: actor.kind === 'system' || actor.kind === 'anonymous' ? null : actor.userId });
+      ctx.affected(`ci-run:${run.id}`, `session:${args.session_id}`);
+      return { summary: `Bumped run #${after.number} into session ${args.session_id} (${CI_BUMP_MODE_LABEL[mode]}).`, run: runView(ctx, after), link: runLink(after.id) };
     },
   });
 }

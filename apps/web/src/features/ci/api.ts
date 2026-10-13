@@ -2,6 +2,8 @@ import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
 import { track } from '@isnanme/ui';
 import {
   CI_API,
+  type BumpRequest,
+  type BumpTarget,
   type CiBranch,
   type CiEnvironment,
   type CiLogChunk,
@@ -63,6 +65,8 @@ export const ciApi = {
   log: (id: string, job: string, step: number, offset: number) => request<CiLogChunk>('GET', `${CI_API.log(id)}?job=${encodeURIComponent(job)}&step=${step}&offset=${offset}`),
   cancel: (id: string) => request<CiRun>('POST', CI_API.cancel(id)),
   rerun: (id: string) => request<CiRun>('POST', CI_API.rerun(id)),
+  bumpTargets: (id: string) => request<BumpTarget[]>('GET', CI_API.bump(id)),
+  bump: (id: string, body: BumpRequest) => request<CiRun>('POST', CI_API.bump(id), body),
   start: (body: StartCiRunRequest) => request<CiRun>('POST', CI_API.runs, body),
   repos: (workspace?: string) => request<CiRepo[]>('GET', `${CI_API.repos}${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
   createRepo: (body: CreateCiRepoRequest) => request<CiRepo>('POST', CI_API.repos, body),

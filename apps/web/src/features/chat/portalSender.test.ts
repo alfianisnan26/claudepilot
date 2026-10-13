@@ -17,4 +17,6 @@ test('a session, a ticket and CI keep their words', () => {
   assert.equal(portalSender('ticket:T-4', undefined).who, 'ticket T-4');
   assert.equal(portalSender('ci:r1', 'deploy').who, 'CI · deploy');
   assert.equal(portalSender('portal:ci-r9', undefined).who, 'CI');
+  assert.equal(portalSender('ci:r9', '#12').who, 'CI #12', 'a bumped run says its number');
+  assert.equal(portalSender('ci:r9', 'CI').who, 'CI', 'a report is not “CI · CI”');
 });
