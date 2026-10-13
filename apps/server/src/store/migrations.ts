@@ -2521,6 +2521,25 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 714,
+    name: 'workspace references move to the stable id: the progress of the background rewrite',
+    up(db) {
+      // T-42 slice 3 (docs/prd/targets-connect.md §24.4): stored workspace references move from `<target>/<name>` to the stable id, lazily
+      // (converted modules write the id on save and read either form) and by a one-time background rewrite, column by column. A row here
+      // says a column was rewritten to the end (done_at) and how many rows changed; a run stopped half way leaves no row and starts again,
+      // which is safe: only rows still holding a key are touched, one at a time, each only if it still holds that key.
+      db.exec(`
+        CREATE TABLE workspace_ref_rewrites (
+          table_name TEXT NOT NULL,
+          column_name TEXT NOT NULL,
+          rewritten INTEGER NOT NULL DEFAULT 0,
+          done_at TEXT NOT NULL,
+          PRIMARY KEY (table_name, column_name)
+        ) STRICT;
+      `);
+    },
+  },
+  {
     version: 720,
     name: 'notify: ci_waiting (Deploy waits) for every destination that already hears CI failures',
     up(db) {

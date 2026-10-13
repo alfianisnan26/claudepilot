@@ -63,6 +63,12 @@ export const GRAPH_POOL_TYPES = ['persona', 'skillset', 'mcpset', 'context'] as 
 export class Directory {
   constructor(private readonly dbOf: () => DatabaseSync | null) {}
 
+  /**
+   * A ticket's stored workspace as the `<target>/<name>` key the graphs link by (T-42 slice 3: tickets store the stable id). index.ts sets it
+   * to the workspaces' registry; as it is, a stored value is taken as it is.
+   */
+  workspaceKeyOf: (stored: string | null) => string | null = (stored) => stored;
+
   /** Runs the first query that the database can answer (later ones are for databases with fewer columns). */
   #all(variants: string[], params: SQLInputValue[] = []): Row[] {
     const db = this.dbOf();
@@ -151,7 +157,12 @@ export class Directory {
     return this.#all(
       [`SELECT ${Directory.#TICKET} FROM tickets WHERE status NOT IN ('done', 'wont_do') OR updated_at >= ? ORDER BY updated_at DESC LIMIT ?`],
       [since, limit],
-    ).map(Directory.#ticket);
+    ).map((r) => this.#ticketKeyed(r));
+  }
+
+  #ticketKeyed(r: Row): TicketInfo {
+    const t = Directory.#ticket(r);
+    return { ...t, workspaceId: this.workspaceKeyOf(t.workspaceId) };
   }
 
   /** Tickets by id (`T-12`; anything else is ignored). */
@@ -161,7 +172,7 @@ export class Directory {
     for (const chunk of chunked(numbers)) {
       const marks = chunk.map(() => '?').join(', ');
       for (const r of this.#all([`SELECT ${Directory.#TICKET} FROM tickets WHERE number IN (${marks})`], chunk.map(Number))) {
-        const t = Directory.#ticket(r);
+        const t = this.#ticketKeyed(r);
         out.set(t.id, t);
       }
     }

@@ -72,6 +72,7 @@ import { KubernetesRuntime } from './workspaces/kubernetes.js';
 import { LocalRuntime } from './workspaces/local.js';
 import { Workspaces } from './workspaces/manager.js';
 import { WorkspaceIdentities } from './workspaces/identity.js';
+import { rewriteWorkspaceRefs } from './workspaces/refRewrite.js';
 import { createConnect } from './connect/index.js';
 import { agentBundle } from './connect/bundle.js';
 import { wireConnect } from './workspaces/connect/wire.js';
@@ -192,6 +193,8 @@ for (const r of runtimes) browser.guard(r);
 settingsModule.lockdown.addMatcherSource((ws) => browser.service.matchers(ws));
 // Knowledge: vaults of Markdown notes the admin and agents share, with search, history and graphs.
 const knowledge = createKnowledge(store, { dataDir: config.paths.data, repoRoot: config.paths.root, dev: config.dev, log: console.log });
+// Tickets store their workspace as the stable id (T-42 slice 3); the graphs link by the key.
+knowledge.directory.workspaceKeyOf = (stored) => workspaces.identities.keyOf(stored);
 knowledge.start();
 const reconciler = new Reconciler(store, (t) => workspaces.runtimeFor(t), () => workspaces.runtimeList(), providers);
 pools.reconciler = reconciler;
@@ -269,6 +272,16 @@ connect.start();
 reconciler.start();
 // After the manager's hooks are set (Connect's `wireConnect` sets `settled`, which resume waits on for enrolled targets: FR38).
 void workspaces.resume().catch((e: unknown) => console.error(`[workspaces] resume failed: ${(e as Error).message}`));
+// T-42 slice 3: stored workspace references move to the stable id, once, in the background, a minute after the start (the first list has
+// given every workspace its identity by then). Safe to stop (a shutdown aborts it between two rows) and to run again on the next start.
+const refRewrite = new AbortController();
+setTimeout(() => {
+  void (async () => {
+    await workspaces.list().catch(() => undefined);
+    const results = await rewriteWorkspaceRefs(store, workspaces.identities, { signal: refRewrite.signal });
+    for (const r of results) console.log(`[workspaces] ${r.table}.${r.column}: ${r.rewritten} references moved to stable ids, ${r.kept} kept as they were${r.done ? '' : ' (stopped; continues next start)'}`);
+  })().catch((e: unknown) => console.error(`[workspaces] reference rewrite failed: ${(e as Error).message}`));
+}, 60_000).unref();
 browser.start();
 outbox.start();
 health.start();
@@ -344,8 +357,10 @@ mcpSets.oauth.host = workspaces;
 mcpSets.oauth.claudeDirectory = (id, claudeId) => chatController.claudeOf(id, claudeId)?.directory ?? null;
 chatController.mcpServersSeen = (id, directory, servers) => mcpSets.oauth.seen(id, directory, servers).map((s) => s.name);
 // Tickets: one queue of work for people and agents; reaches chat sessions only through its adapter (tickets PRD).
+// A ticket's workspace is stored as the stable id and read as the key (T-42 slice 3).
 const tickets = new Tickets(store, new ChatTicketSessions(chatController), {
   link: (id) => `${(config.portalMcp.uiUrl ?? `http://localhost:${config.port}`).replace(/\/+$/, '')}/admin/tickets/${id}`,
+  workspaceRefs: workspaces.identities,
 });
 tickets.onChange = () => notify('tickets');
 // A bump reaches into a session: the platform audit (created further down) records who, which ticket, which session and how (FR30).
@@ -507,6 +522,7 @@ server.listen(config.port, config.host, () => {
 for (const signal of ['SIGINT', 'SIGTERM'] as const)
   process.on(signal, () => {
     server.close();
+    refRewrite.abort();
     clearInterval(backupTimer);
     claudeVersions.stop();
     reconciler.stop();

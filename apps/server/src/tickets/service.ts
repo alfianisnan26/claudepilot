@@ -1,4 +1,5 @@
 import { AppError } from '@isnanme/core';
+import type { WorkspaceRefs } from '../workspaces/identity.js';
 import {
   BUMP_PRIORITY,
   FOUNDING_USER_ID,
@@ -95,6 +96,8 @@ interface Row {
   assignee_kind: 'session' | 'user' | null;
   assignee_ref: string | null;
   workspace_id: string | null;
+  /** The workspace column as stored (T-42 slice 3: a stable id or a key), set by `#keyed`; `workspace_id` is then the key. */
+  stored_workspace?: string | null;
   worktree_branch: string | null;
   worktree_path: string | null;
   closing_summary: string | null;
@@ -152,6 +155,11 @@ export interface TicketsOptions {
   now?: () => Date;
   /** Where a person sees a ticket, for the messages the portal sends (a bump's link). Default: the portal's own path. */
   link?: (ticketId: string) => string;
+  /**
+   * The workspaces' identity registry (T-42 slice 3): a ticket's workspace is stored as the stable id and read back as the `<target>/<name>`
+   * key the rest of the portal speaks; rows written before (a key) read as they are. Absent (tests): stored as given.
+   */
+  workspaceRefs?: WorkspaceRefs;
 }
 
 /** One row of the platform audit (platform/audit.ts `AuditInput`): ids, labels and fixed codes only, never the note. */
@@ -180,6 +188,8 @@ export class Tickets {
   readonly #link: (ticketId: string) => string;
   #off: (() => void) | undefined;
 
+  readonly #refs: TicketsOptions['workspaceRefs'];
+
   constructor(
     private readonly store: Store,
     private readonly sessions: TicketSessions,
@@ -187,6 +197,36 @@ export class Tickets {
   ) {
     this.#now = opts.now ?? (() => new Date());
     this.#link = opts.link ?? ((id) => `/admin/tickets/${id}`);
+    this.#refs = opts.workspaceRefs;
+  }
+
+  /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
+
+  /** A row with its workspace as the key, whichever form it is stored in: everything past the query compares keys. */
+  #keyed<R extends Row | undefined>(row: R): R {
+    if (!row || !this.#refs || row.workspace_id === null) return row;
+    return { ...row, workspace_id: this.#refs.keyOf(row.workspace_id), stored_workspace: row.workspace_id } as R;
+  }
+
+  /** What a write stores for a workspace: its stable id when it has one. */
+  #stored(key: string | null): string | null {
+    return this.#refs ? this.#refs.storedRef(key) : key;
+  }
+
+  /** `t.workspace_id IN (…)` for one workspace, in every form its rows may hold while the move runs. */
+  #inWorkspace(column: string, key: string): { sql: string; args: string[] } {
+    const forms = this.#refs ? this.#refs.storedForms(key) : [key];
+    return { sql: `${column} IN (${forms.map(() => '?').join(', ')})`, args: forms };
+  }
+
+  /**
+   * Whether a row is in this workspace, on what is STORED, not on the key it reads as: a ticket of a REMOVED workspace (its id) is not in a
+   * new workspace that took the name, though both read as the same key. `null` is the shared queue.
+   */
+  #isIn(row: Row, key: string | null): boolean {
+    const stored = row.stored_workspace ?? row.workspace_id;
+    if (key === null || stored === null) return key === stored;
+    return this.#refs ? this.#refs.storedForms(key).includes(stored) : stored === key;
   }
 
   /** Follows sessions: one that ends under its ticket leaves an entry on it (FR18). */
@@ -280,7 +320,7 @@ export class Tickets {
   /** Whether the caller may see a ticket: an agent sees its workspace's tickets and the shared queue. */
   #visible(caller: Caller, row: Row): boolean {
     if (caller.kind !== 'agent') return true;
-    return row.workspace_id === null || row.workspace_id === caller.workspaceId;
+    return row.workspace_id === null || this.#isIn(row, caller.workspaceId);
   }
 
   /** FR9: what an agent may change. People, the portal and an admin's operate token may change anything. */
@@ -317,7 +357,7 @@ export class Tickets {
   /* ---------- Reading ---------- */
 
   #row(number: number): Row | undefined {
-    return this.#db.prepare('SELECT * FROM tickets WHERE number = ?').get(number) as unknown as Row | undefined;
+    return this.#keyed(this.#db.prepare('SELECT * FROM tickets WHERE number = ?').get(number) as unknown as Row | undefined);
   }
 
   #need(caller: Caller, idOrNumber: string | number): Row {
@@ -378,7 +418,11 @@ export class Tickets {
   #where(caller: Caller, f: TicketFilter, forCounts = false): { sql: string; args: (string | number)[] } {
     const where: string[] = [];
     const args: (string | number)[] = [];
-    if (caller.kind === 'agent') (where.push('(t.workspace_id IS NULL OR t.workspace_id = ?)'), args.push(caller.workspaceId));
+    if (caller.kind === 'agent') {
+      const mine = this.#inWorkspace('t.workspace_id', caller.workspaceId);
+      where.push(`(t.workspace_id IS NULL OR ${mine.sql})`);
+      args.push(...mine.args);
+    }
     if (forCounts) return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', args };
     const statuses = f.status?.filter((s) => (TICKET_STATUSES as readonly string[]).includes(s));
     if (statuses?.length) (where.push(`t.status IN (${statuses.map(() => '?').join(',')})`), args.push(...statuses));
@@ -391,7 +435,11 @@ export class Tickets {
     if (f.assignee === 'unassigned') where.push('t.assignee_kind IS NULL');
     else if (f.assignee === 'user') where.push("t.assignee_kind = 'user'");
     else if (f.assignee?.startsWith('session:')) (where.push("t.assignee_kind = 'session' AND t.assignee_ref = ?"), args.push(f.assignee.slice(8)));
-    if (f.workspaceId) (where.push('t.workspace_id = ?'), args.push(f.workspaceId));
+    if (f.workspaceId) {
+      const one = this.#inWorkspace('t.workspace_id', f.workspaceId);
+      where.push(one.sql);
+      args.push(...one.args);
+    }
     if (f.query?.trim()) {
       const q = like(f.query.trim().slice(0, 100));
       where.push("(t.summary LIKE ? ESCAPE '\\' OR t.description LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM ticket_tags g WHERE g.ticket_number = t.number AND g.tag LIKE ? ESCAPE '\\'))");
@@ -416,7 +464,7 @@ export class Tickets {
     const offset = Math.max(Math.trunc(filter.offset ?? 0), 0);
     const closedOnly = !!filter.status?.length && filter.status.every((s) => isTicketClosed(s));
     const order = closedOnly ? 't.closed_at DESC, t.number DESC' : filter.sort === 'newest' ? 't.created_at DESC, t.number DESC' : 't.priority_rank ASC, t.updated_at DESC, t.number DESC';
-    const rows = this.#db.prepare(`SELECT t.* FROM tickets t ${sql} ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`).all(...args) as unknown as Row[];
+    const rows = (this.#db.prepare(`SELECT t.* FROM tickets t ${sql} ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`).all(...args) as unknown as Row[]).map((r) => this.#keyed(r));
     const total = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${sql}`).get(...args) as { n: number }).n;
     return { items: this.#items(rows), total, counts: this.counts(caller) };
   }
@@ -534,7 +582,8 @@ export class Tickets {
     const recent = (this.#db.prepare("SELECT count(*) AS n FROM tickets WHERE reporter_kind = 'token' AND reporter_ref = ? AND created_at > ?").get(ref, since) as { n: number }).n;
     if (recent >= CREATE_PER_HOUR) throw new AppError('RATE_LIMITED', `${caller.kind === 'agent' ? 'This session' : 'This token'} has made ${CREATE_PER_HOUR} tickets in the last hour. Wait, or ask a person to look at the queue.`);
     if (caller.kind === 'agent') {
-      const open = (this.#db.prepare(`SELECT count(*) AS n FROM tickets WHERE source = 'agent' AND workspace_id = ? AND status IN (${OPEN_SQL})`).get(caller.workspaceId) as { n: number }).n;
+      const mine = this.#inWorkspace('workspace_id', caller.workspaceId);
+      const open = (this.#db.prepare(`SELECT count(*) AS n FROM tickets WHERE source = 'agent' AND ${mine.sql} AND status IN (${OPEN_SQL})`).get(...mine.args) as { n: number }).n;
       if (open >= OPEN_PER_WORKSPACE) throw new AppError('RATE_LIMITED', `${caller.workspaceId} already has ${OPEN_PER_WORKSPACE} open tickets made by agents. Close some first.`);
     }
   }
@@ -571,7 +620,7 @@ export class Tickets {
              assignee_kind, assignee_ref, workspace_id, created_at, updated_at)
            VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(type, priority, RANK[priority], summary, description, source, reporter.kind, reporter.ref, reporter.label, reporter.workspace, assignee ? assignee.kind : null, assignee ? (assignee.kind === 'session' ? assignee.session.id : assignee.name) : null, workspaceId, at, at);
+        .run(type, priority, RANK[priority], summary, description, source, reporter.kind, reporter.ref, reporter.label, reporter.workspace, assignee ? assignee.kind : null, assignee ? (assignee.kind === 'session' ? assignee.session.id : assignee.name) : null, this.#stored(workspaceId), at, at);
       const n = Number(r.lastInsertRowid);
       this.#setTags(n, tags);
       this.#addEvent(n, 'created', w, null, { type, priority, tags, workspaceId, source });
@@ -630,14 +679,14 @@ export class Tickets {
             to: a ? (a.kind === 'session' ? { kind: 'session', sessionId: a.session.id } : { kind: 'user', name: a.name }) : null,
           },
         });
-        if (a?.kind === 'session' && row.workspace_id !== a.session.workspaceId) (sets.workspace_id = a.session.workspaceId, entries.push({ kind: 'workspace', data: { from: row.workspace_id, to: a.session.workspaceId } }));
+        if (a?.kind === 'session' && !this.#isIn(row, a.session.workspaceId)) (sets.workspace_id = a.session.workspaceId, entries.push({ kind: 'workspace', data: { from: row.workspace_id, to: a.session.workspaceId } }));
         if (!a && status === 'in_progress') status = 'open';
       }
     }
     if (req.workspaceId !== undefined && !('workspace_id' in sets)) {
       if (agent) throw new AppError('FORBIDDEN', 'An agent’s tickets stay in its own workspace.');
       const v = workspaceIdOf(req.workspaceId);
-      if (v !== row.workspace_id) (sets.workspace_id = v, entries.push({ kind: 'workspace', data: { from: row.workspace_id, to: v } }));
+      if (!this.#isIn(row, v)) (sets.workspace_id = v, entries.push({ kind: 'workspace', data: { from: row.workspace_id, to: v } }));
     }
     if (req.status !== undefined) {
       const v = oneOf(req.status, TICKET_STATUSES, 'status');
@@ -662,6 +711,7 @@ export class Tickets {
     if (!entries.length) return this.#items([row])[0]!;
     this.#tx(() => {
       sets.updated_at = this.#now().toISOString();
+      if ('workspace_id' in sets) sets.workspace_id = this.#stored(sets.workspace_id as string | null);
       const cols = Object.keys(sets);
       this.#db.prepare(`UPDATE tickets SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE number = ?`).run(...cols.map((c) => sets[c]!), row.number);
       if (newTags) this.#setTags(row.number, newTags);
@@ -723,19 +773,21 @@ export class Tickets {
         "t.status = 'open'",
         't.assignee_kind IS NULL',
         "t.type <> 'approval'",
-        '(t.workspace_id IS NULL OR t.workspace_id = ?)',
       ];
-      const args: (string | number)[] = [session.workspaceId];
+      const args: (string | number)[] = [];
+      const mine = this.#inWorkspace('t.workspace_id', session.workspaceId);
+      where.push(`(t.workspace_id IS NULL OR ${mine.sql})`);
+      args.push(...mine.args);
       if (wantedNumber !== null) (where.push('t.number = ?'), args.push(wantedNumber));
       for (const tag of tags) (where.push('EXISTS (SELECT 1 FROM ticket_tags g WHERE g.ticket_number = t.number AND g.tag = ?)'), args.push(tag));
       if (types.length) (where.push(`t.type IN (${types.map(() => '?').join(',')})`), args.push(...types));
-      const row = this.#db.prepare(`SELECT t.* FROM tickets t WHERE ${where.join(' AND ')} ORDER BY t.priority_rank ASC, t.created_at ASC, t.number ASC LIMIT 1`).get(...args) as unknown as Row | undefined;
+      const row = this.#keyed(this.#db.prepare(`SELECT t.* FROM tickets t WHERE ${where.join(' AND ')} ORDER BY t.priority_rank ASC, t.created_at ASC, t.number ASC LIMIT 1`).get(...args) as unknown as Row | undefined);
       if (!row) return null;
       const at = this.#now().toISOString();
-      this.#db.prepare("UPDATE tickets SET assignee_kind = 'session', assignee_ref = ?, status = 'in_progress', workspace_id = ?, updated_at = ? WHERE number = ?").run(session.id, session.workspaceId, at, row.number);
+      this.#db.prepare("UPDATE tickets SET assignee_kind = 'session', assignee_ref = ?, status = 'in_progress', workspace_id = ?, updated_at = ? WHERE number = ?").run(session.id, this.#stored(session.workspaceId), at, row.number);
       this.#addEvent(row.number, 'assigned', w, null, { from: null, to: { kind: 'session', sessionId: session.id }, claimed: true });
       this.#addEvent(row.number, 'status', w, null, { from: 'open', to: 'in_progress' });
-      if (row.workspace_id !== session.workspaceId) this.#addEvent(row.number, 'workspace', w, null, { from: row.workspace_id, to: session.workspaceId });
+      if (!this.#isIn(row, session.workspaceId)) this.#addEvent(row.number, 'workspace', w, null, { from: row.workspace_id, to: session.workspaceId });
       return row.number;
     });
     if (claimed === null) return null;
@@ -840,14 +892,14 @@ export class Tickets {
     this.#tx(() => {
       const cur = this.#row(row.number)!;
       const at = this.#now().toISOString();
-      const sets: Record<string, string | number | null> = { assignee_kind: 'session', assignee_ref: session.id, status: 'in_progress', workspace_id: session.workspaceId, updated_at: at };
+      const sets: Record<string, string | number | null> = { assignee_kind: 'session', assignee_ref: session.id, status: 'in_progress', workspace_id: this.#stored(session.workspaceId), updated_at: at };
       if (session.worktree) (sets.worktree_branch = session.worktree.branch, sets.worktree_path = session.worktree.path);
       const cols = Object.keys(sets);
       this.#db.prepare(`UPDATE tickets SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE number = ?`).run(...cols.map((c) => sets[c]!), row.number);
       this.#addEvent(row.number, 'session_started', w, null, { sessionId: session.id, workspaceId: session.workspaceId, worktree: session.worktree });
       if (cur.assignee_kind !== 'session' || cur.assignee_ref !== session.id) this.#addEvent(row.number, 'assigned', w, null, { from: cur.assignee_kind ? { kind: cur.assignee_kind, ...(cur.assignee_kind === 'session' ? { sessionId: cur.assignee_ref } : { name: cur.assignee_ref }) } : null, to: { kind: 'session', sessionId: session.id } });
       if (cur.status !== 'in_progress') this.#addEvent(row.number, 'status', w, null, { from: cur.status, to: 'in_progress' });
-      if (cur.workspace_id !== session.workspaceId) this.#addEvent(row.number, 'workspace', w, null, { from: cur.workspace_id, to: session.workspaceId });
+      if (!this.#isIn(cur, session.workspaceId)) this.#addEvent(row.number, 'workspace', w, null, { from: cur.workspace_id, to: session.workspaceId });
     });
     this.onChange?.();
 
