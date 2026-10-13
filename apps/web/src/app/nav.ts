@@ -1,4 +1,4 @@
-import { Bell, Boxes, ChartColumn, KeyRound, Layers, Library, MessagesSquare, Server, Settings, Ticket, Workflow, type LucideIcon } from 'lucide-react';
+import { Bell, Boxes, ChartColumn, House, KeyRound, Layers, Library, MessagesSquare, Server, Settings, Ticket, Workflow, type LucideIcon } from 'lucide-react';
 
 export interface NavItem {
   id: string;
@@ -16,12 +16,15 @@ export interface NavItem {
  * then admin with a divider between, and the phone bar shows only the `bar` ones, icon only, with the rest in its More sheet.
  */
 export const NAV: NavItem[] = [
+  // The first page (glance-widgets PRD §18): what needs you and how things stand. The app opens here.
+  { id: 'home', to: '/admin/home', label: 'Home', icon: House, group: 'work', bar: true },
   { id: 'workspaces', to: '/admin/workspaces', label: 'Workspaces', icon: Boxes, group: 'work', bar: true },
   { id: 'sessions', to: '/admin/sessions', label: 'Sessions', icon: MessagesSquare, group: 'work', bar: true },
   // One queue of work for people and agents (Tickets PRD).
   { id: 'tickets', to: '/admin/tickets', label: 'Tickets', icon: Ticket, group: 'work', bar: true },
   // Vaults of Markdown notes people and agents share, with their graphs (Knowledge PRD).
-  { id: 'knowledge', to: '/admin/knowledge', label: 'Knowledge', icon: Library, group: 'work', bar: true },
+  // In More since Home took a place in the phone bar (at most five there: web-app-pwa PRD G2).
+  { id: 'knowledge', to: '/admin/knowledge', label: 'Knowledge', icon: Library, group: 'work' },
   // A git remote on each workspace and the runs of the pipelines in its repositories (Local git and CI/CD PRD).
   { id: 'ci', to: '/admin/ci', label: 'CI', icon: Workflow, group: 'work' },
   { id: 'usage', to: '/admin/usage', label: 'Usage', icon: ChartColumn, group: 'admin' },

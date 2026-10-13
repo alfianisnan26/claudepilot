@@ -29,6 +29,7 @@ const NO_DEPLOYS: GlanceDeploy[] = [];
 const approvalKey = (a: GlanceApproval) => a.requestId;
 const ticketKey = (t: GlanceTicket) => t.id;
 const runKey = (r: GlanceCiRun) => r.id;
+const deployKey = (d: GlanceDeploy) => d.id;
 
 /**
  * Needs attention: the requests waiting on you with what each asks (the whole text, in a block that scrolls) and Allow or Deny right
@@ -55,7 +56,7 @@ export function AttentionFull({ close }: GlanceFullProps) {
   const approvals = useSteadyRows(data?.attention.approvals.items ?? NO_APPROVALS, approvalKey, engaged, true);
   const tickets = useSteadyRows(data?.attention.tickets.items ?? NO_TICKETS, ticketKey, engaged, true);
   const runs = useSteadyRows(data?.attention.ci.items ?? NO_RUNS, runKey, engaged, true);
-  const deploys = useSteadyRows(data?.attention.deploys.items ?? NO_DEPLOYS, runKey, engaged, true);
+  const deploys = useSteadyRows(data?.attention.deploys.items ?? NO_DEPLOYS, deployKey, engaged, true);
   const settling = useSettling(approvals.map((r) => r.row.requestId));
 
   if (!data) return failed ? <GlanceFailed reload={reload} denied={denied} /> : <GlanceSkeleton />;

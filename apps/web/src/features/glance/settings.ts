@@ -13,6 +13,8 @@ export interface GlanceSettings {
   order: string[];
   /** Widgets the person switched off. */
   hidden: string[];
+  /** Widgets that start off (`defaultHidden`) and the person switched on. */
+  shown: string[];
   /** The places that draw widgets. */
   places: Record<GlancePlacement, boolean>;
   /** Quota: the active Claude only, or every Claude (the chip then shows the one with the least left). */
@@ -28,6 +30,7 @@ export interface GlanceSettings {
 export const DEFAULT_SETTINGS: GlanceSettings = {
   order: [],
   hidden: [],
+  shown: [],
   // The dock takes the right edge of every page, so it is a choice; the others are quiet by nature.
   places: { header: true, dock: false, list: true, composer: true },
   quotaMode: 'active',
@@ -55,6 +58,7 @@ export function cleanSettings(raw: unknown): GlanceSettings {
   return {
     order: ids(r.order),
     hidden: ids(r.hidden),
+    shown: ids(r.shown),
     places: Object.fromEntries(GLANCE_PLACEMENTS.map((p) => [p, typeof places[p] === 'boolean' ? places[p] : DEFAULT_SETTINGS.places[p]])) as Record<GlancePlacement, boolean>,
     quotaMode: r.quotaMode === 'all' ? 'all' : 'active',
     thresholds: cleanThresholds(r.thresholds),
@@ -63,12 +67,23 @@ export function cleanSettings(raw: unknown): GlanceSettings {
   };
 }
 
-/** The widgets in the person's order (registry order for any they have not placed), without the ones they switched off unless asked. */
-export function orderWidgets<T extends { id: string }>(widgets: readonly T[], s: Pick<GlanceSettings, 'order' | 'hidden'>, includeHidden = false): T[] {
+/** Whether a widget is off: switched off, or off by default (`defaultHidden`) and not switched on. */
+export const isHidden = (w: { id: string; defaultHidden?: boolean }, s: Pick<GlanceSettings, 'hidden'> & { shown?: string[] }): boolean =>
+  s.hidden.includes(w.id) || (!!w.defaultHidden && !(s.shown ?? []).includes(w.id));
+
+/** The lists after switching `w` on or off: an explicit choice either way, so a default can change later without overriding it. */
+export function setShown(w: { id: string }, on: boolean, s: Pick<GlanceSettings, 'hidden' | 'shown'>): Pick<GlanceSettings, 'hidden' | 'shown'> {
+  const hidden = s.hidden.filter((h) => h !== w.id);
+  const shown = s.shown.filter((h) => h !== w.id);
+  return on ? { hidden, shown: [...shown, w.id] } : { hidden: [...hidden, w.id], shown };
+}
+
+/** The widgets in the person's order (registry order for any they have not placed), without the ones that are off unless asked. */
+export function orderWidgets<T extends { id: string; defaultHidden?: boolean }>(widgets: readonly T[], s: Pick<GlanceSettings, 'order' | 'hidden'> & { shown?: string[] }, includeHidden = false): T[] {
   const byId = new Map(widgets.map((w) => [w.id, w]));
   const placed = s.order.map((id) => byId.get(id)).filter((w): w is T => !!w);
   const rest = widgets.filter((w) => !s.order.includes(w.id));
-  return [...placed, ...rest].filter((w) => includeHidden || !s.hidden.includes(w.id));
+  return [...placed, ...rest].filter((w) => includeHidden || !isHidden(w, s));
 }
 
 /** The order after moving `id` one place up (-1) or down (+1) among `allIds` as they show now; the same order at either end. */

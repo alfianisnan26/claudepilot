@@ -5,7 +5,7 @@ import { InfoTip } from '@/components/InfoTip';
 import { badgeSupported } from './badge';
 import { GLANCE_WIDGETS } from './registry';
 import { Row } from './settingsParts';
-import { DEFAULT_SETTINGS, moveInOrder, orderWidgets, resetGlanceSettings, updateGlanceSettings, useGlanceSettings } from './settings';
+import { DEFAULT_SETTINGS, isHidden, moveInOrder, orderWidgets, resetGlanceSettings, setShown, updateGlanceSettings, useGlanceSettings } from './settings';
 import type { GlancePlacement } from './types';
 
 const PLACES: { id: GlancePlacement; label: string; about: string }[] = [
@@ -24,7 +24,7 @@ export function GlanceSettingsSection() {
   const all = orderWidgets(GLANCE_WIDGETS, s, true);
   const ids = all.map((w) => w.id);
   const changed = JSON.stringify(s) !== JSON.stringify(DEFAULT_SETTINGS);
-  const setHidden = (id: string, on: boolean) => updateGlanceSettings({ hidden: on ? s.hidden.filter((h) => h !== id) : [...s.hidden, id] });
+  const setOn = (id: string, on: boolean) => updateGlanceSettings(setShown({ id }, on, s));
   return (
     <section aria-labelledby="settings-glance">
       <h2 id="settings-glance" className="mb-2 flex items-center gap-1 px-1 text-[13px] font-semibold text-muted">
@@ -39,7 +39,7 @@ export function GlanceSettingsSection() {
       <Card>
         <ul className="divide-y divide-line">
           {all.map((w, i) => {
-            const on = !s.hidden.includes(w.id);
+            const on = !isHidden(w, s);
             const Icon = w.icon;
             return (
               <li key={w.id}>
@@ -57,7 +57,7 @@ export function GlanceSettingsSection() {
                       <ArrowDown className="size-4" />
                     </MoveButton>
                   </span>
-                  <Switch label={`Show ${w.label}`} checked={on} onChange={(v) => setHidden(w.id, v)} />
+                  <Switch label={`Show ${w.label}`} checked={on} onChange={(v) => setOn(w.id, v)} />
                 </div>
                 {w.Settings && on && (
                   <div className="border-t border-line px-4 pl-11 sm:px-5 sm:pl-12">

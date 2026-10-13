@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cleanSettings, cleanThresholds, DEFAULT_SETTINGS, moveInOrder, orderWidgets } from './settings.js';
+import { cleanSettings, cleanThresholds, DEFAULT_SETTINGS, isHidden, moveInOrder, orderWidgets, setShown } from './settings.js';
 import { currentUserId, glanceKey, OWNER_ID } from './user.js';
 
 const W = [{ id: 'quota' }, { id: 'sessions' }, { id: 'agents' }, { id: 'attention' }, { id: 'shortcuts' }];
@@ -35,6 +35,24 @@ test('order: the person’s order first, new widgets after in registry order, hi
   assert.deepEqual(orderWidgets(W, { order: ['attention', 'quota', 'gone'], hidden: [] }).map((w) => w.id), ['attention', 'quota', 'sessions', 'agents', 'shortcuts'], 'an id the registry no longer has is ignored');
   assert.deepEqual(orderWidgets(W, { order: ['attention'], hidden: ['agents', 'quota'] }).map((w) => w.id), ['attention', 'sessions', 'shortcuts']);
   assert.deepEqual(orderWidgets(W, { order: [], hidden: ['agents'] }, true).map((w) => w.id), ['quota', 'sessions', 'agents', 'attention', 'shortcuts'], 'Settings lists the switched-off ones too');
+});
+
+test('a widget that starts off stays out of the strips until switched on; switching is an explicit choice either way', () => {
+  const ws = [...W, { id: 'tickets', defaultHidden: true }];
+  assert.deepEqual(orderWidgets(ws, { order: [], hidden: [] }).map((w) => w.id), ['quota', 'sessions', 'agents', 'attention', 'shortcuts']);
+  assert.deepEqual(orderWidgets(ws, { order: [], hidden: [], shown: ['tickets'] }).map((w) => w.id).at(-1), 'tickets');
+  assert.equal(orderWidgets(ws, { order: [], hidden: [] }, true).length, 6, 'Settings lists it, off');
+  const t = ws[5]!;
+  assert.equal(isHidden(t, { hidden: [], shown: [] }), true);
+  const on = setShown(t, true, { hidden: ['tickets'], shown: [] });
+  assert.deepEqual(on, { hidden: [], shown: ['tickets'] });
+  assert.equal(isHidden(t, on), false);
+  const off = setShown(t, false, on);
+  assert.deepEqual(off, { hidden: ['tickets'], shown: [] });
+  // a plain widget switched off and on again
+  assert.deepEqual(setShown({ id: 'quota' }, false, { hidden: [], shown: [] }), { hidden: ['quota'], shown: [] });
+  assert.equal(isHidden({ id: 'quota' }, setShown({ id: 'quota' }, true, { hidden: ['quota'], shown: [] })), false);
+  assert.deepEqual(cleanSettings({ shown: ['tickets', 7] }).shown, ['tickets']);
 });
 
 test('moving a widget up or down swaps it with its neighbour and stops at the ends', () => {

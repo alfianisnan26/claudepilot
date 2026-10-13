@@ -12,6 +12,7 @@ const withTranscript = sessions.find((s) => s.title === 'QA xss transcript') ?? 
 const ws = (await call('GET', '/api/workspaces')).data ?? [];
 const mine = ws.find((w) => w.name.startsWith('qa-'));
 const pages = [
+  ['home', '/admin/home'],
   ['workspaces', '/admin/workspaces'],
   ['sessions', '/admin/sessions'],
   ['usage', '/admin/usage'],
