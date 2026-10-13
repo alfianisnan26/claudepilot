@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AutoTransferEvent } from '@portal/contracts';
-import { autoMarks, clockText, droppedText, holdLine, headline, inPlace, modeChoices, moveItem, offer, parseThreshold, pctText, reasonText, toggleItem, undoFor, whyText } from './pure';
+import { modelChange, autoMarks, clockText, droppedText, holdLine, headline, inPlace, modeChoices, moveItem, offer, parseThreshold, pctText, reasonText, toggleItem, undoFor, whyText } from './pure';
 
 const m = (value: number) => ({ value, basis: 'measured' as const });
 
@@ -105,6 +105,13 @@ test('T-29: the card names the limit that is low and offers a model change in wo
   assert.equal(headline({ ...here, reason: 'exhausted' }), 'Work: Opus limit is used up');
 });
 
+test('T-109: a move to a Claude without the chat’s model says the change before it happens', () => {
+  const facts = { leftPct: m(5), thresholdPct: 10, resetsAt: { value: null, basis: 'unavailable' as const, reason: 'no_reading' as const }, destLeftPct: m(80) };
+  const s = { from: { id: 'h', name: 'Hasyim', model: 'fable' }, to: { id: 'k', name: 'Sekar', model: 'opus' }, facts };
+  assert.equal(offer(s), 'Move to Sekar on Opus, was Fable (80 % left)');
+  assert.equal(offer({ ...s, from: { id: 'h', name: 'Hasyim' } }), 'Move to Sekar on Opus (80 % left)', 'the model it left unknown: just the one it gets');
+});
+
 test('the hold line (T-105): waiting with and without a known reset, a move at the end of this turn, nothing', () => {
   // Local times, so "today" is today in any time zone.
   const now = new Date(2026, 9, 12, 12, 0).getTime();
@@ -122,4 +129,11 @@ test('the hold line (T-105): waiting with and without a known reset, a move at t
   assert.equal(clockText(reset, now), time(reset), 'today: the time alone');
   const later = new Date(2026, 9, 14, 15, 0).toISOString();
   assert.equal(clockText(later, now), `${new Date(later).toLocaleDateString([], { weekday: 'short' })} ${time(later)}`, 'another day: with the weekday');
+});
+
+test('T-109: the Move dialog says the model a Claude would run the chat on, and nothing when it keeps it', () => {
+  assert.deepEqual(modelChange({ model: { from: 'fable', to: 'opus', known: false } }), { to: 'opus', text: 'On Opus, was Fable' });
+  assert.equal(modelChange({ model: { from: 'opus', to: 'opus', known: true } }), null);
+  assert.equal(modelChange({}), null);
+  assert.deepEqual(modelChange({ model: { from: 'haiku', to: null, known: true } }), { to: null, text: 'No model at or below Haiku' });
 });

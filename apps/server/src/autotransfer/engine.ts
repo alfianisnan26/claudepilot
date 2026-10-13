@@ -573,7 +573,9 @@ export class AutoTransferEngine {
       return;
     }
     if (open) this.#d.store.closeSuggestion(open.id, 'superseded');
-    this.#d.store.addSuggestion({ ownerId, sessionId: s.id, reason: d.reason, from: this.#from(s), to: d.to, alternatives: d.alternatives, facts: d.facts, handoff: d.handoff, dropped: d.dropped, why: d.why });
+    // The card says a model change before it happens (T-109): the model the chat leaves goes with `from`.
+    const from = d.to.model ? { ...this.#from(s), model: modelFamily(s.model) } : this.#from(s);
+    this.#d.store.addSuggestion({ ownerId, sessionId: s.id, reason: d.reason, from, to: d.to, alternatives: d.alternatives, facts: d.facts, handoff: d.handoff, dropped: d.dropped, why: d.why });
     this.#cards.add(s.id);
     this.#record({ ...this.#base(s, ownerId, mode), kind: 'suggested', reason: d.reason, to: d.to, facts: d.facts, handoff: d.handoff, code: d.why === 'deferred' ? 'busy' : null }, 'info');
     this.#notify(s, ownerId, { to: d.to.name, suggested: true, leftPct: d.reading.leftPct });

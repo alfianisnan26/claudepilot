@@ -1,5 +1,5 @@
 // Auto move: the words and numbers the page shows, as pure functions (tested under Node).
-import { AUTO_BOUNDS, type AutoMode, type AutoRefusal, type AutoSessionState, type AutoSuggestion, type AutoTransferEvent, type Figure } from '@portal/contracts';
+import { AUTO_BOUNDS, modelDisplayName, type AutoMode, type AutoRefusal, type AutoSessionState, type AutoSuggestion, type AutoTransferEvent, type ChatSwitchOption, type Figure } from '@portal/contracts';
 
 export const MODE_LABEL: Record<AutoMode, string> = { off: 'Off', ask: 'Ask', auto: 'Automatic' };
 
@@ -11,7 +11,7 @@ export function pctText(f: Figure | undefined | null): string {
 }
 
 /** A model family as people say it: "Sonnet". */
-export const modelName = (family: string): string => family.charAt(0).toUpperCase() + family.slice(1);
+export const modelName = (family: string): string => (modelDisplayName(family) || family).replace(/^./, (c) => c.toUpperCase());
 
 /** Whether the suggestion changes the model on the Claude the chat is on (no move). */
 export const inPlace = (s: Pick<AutoSuggestion, 'from' | 'to'>): boolean => s.from.id === s.to.id && !!s.to.model;
@@ -29,7 +29,9 @@ export function headline(s: Pick<AutoSuggestion, 'from' | 'reason' | 'facts'>): 
 export function offer(s: Pick<AutoSuggestion, 'from' | 'to' | 'facts'>): string {
   const left = s.facts.destLeftPct && s.facts.destLeftPct.value !== null ? ` (${pctText(s.facts.destLeftPct)} left)` : '';
   if (inPlace(s)) return `Use ${modelName(s.to.model!)} here${left}`;
-  if (s.to.model) return `Move to ${s.to.name} on ${modelName(s.to.model)}${left}`;
+  // A move that changes the model says it before it happens (T-109): "Move to Sekar on Opus, was Fable".
+  const was = s.from.model && s.from.model !== s.to.model ? `, was ${modelName(s.from.model)}` : '';
+  if (s.to.model) return `Move to ${s.to.name} on ${modelName(s.to.model)}${was}${left}`;
   return `Move to ${s.to.name}${left}`;
 }
 
@@ -174,4 +176,11 @@ export function holdLine(s: Pick<AutoSessionState, 'waiting' | 'pendingMove'> | 
     title: w.nextFreeAt ? `Waiting for quota: next Claude free at ${clockText(w.nextFreeAt, nowMs)}` : 'Waiting for quota',
     tip: `${why} The portal looks again every 2 minutes; as soon as a Claude has room, or this one resets, the chat moves or goes on by itself.`,
   };
+}
+
+/** The model a Claude would run the chat on when it is not the chat's own (T-109): its best one at or below it; null when the same. */
+export function modelChange(o: Pick<ChatSwitchOption, 'model'>): { to: string | null; text: string } | null {
+  const m = o.model;
+  if (!m || m.to === m.from) return null;
+  return m.to ? { to: m.to, text: `On ${modelDisplayName(m.to)}, was ${modelDisplayName(m.from)}` } : { to: null, text: `No model at or below ${modelDisplayName(m.from)}` };
 }
