@@ -25,7 +25,7 @@ Any one of these voids the unit of work that caused it (it does not count as del
 
 Delivered and verified work per **tokens and money**; **CI/CD** (pipeline minutes, flaky reruns, orphan Jobs); **memory** (session context size and growth, memory and knowledge noise, cache-hit share, pod memory); **human touch** (avoidable questions, owner-found defects after delivery).
 
-## Scoring and consequences (T-111, T-112)
+## Scoring and consequences (T-111 measuring, T-113 integrity, T-114 scoreboard)
 
 Seven terms side by side, never one number: delivered, quality and standards, safety, honesty, traceability, human touch, efficiency. A unit is ranked only when it passes the hard bars (gate green, independent QA with evidence, the standards check). A zero-tolerance event puts the role on **probation**: a second independent verification before any merge, and no auto-approve for its changes, until it delivers N clean units. **Probes** (planted canaries in a scratch environment: a request with a wrong premise, an unsafe request, a failing test the QA role must catch, a claim to verify) measure pleasing and flopping without waiting for a real incident.
 
