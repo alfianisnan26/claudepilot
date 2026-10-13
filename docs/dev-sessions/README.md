@@ -51,6 +51,20 @@ you work, your track file is what you work on.
 Append only, by version number. Your block: track A 710-719, track B 720-729, track C 730-739. Never edit a released migration (everything
 up to 610 is released or committed). Parked on the WIP branch and NOT to be merged: 400-401 (multi-user identity).
 
+## The supervisor
+
+A small process, `docs/dev-sessions/supervisor.mjs`, runs inside the dev workspace (started by the coordinator with the owner's sign-in code in its
+environment; the code is never in a file) and keeps the tracks going when nobody else is there: a session that goes idle for a few minutes is told to
+continue, an interrupted one is woken, one that ended is started again in the same worktree (at most 6 starts per track per day, 3 after integrity
+endings) and told to continue from its status file. It leaves a track alone when its status file starts with `TRACK COMPLETE` or when a person closed
+its session. Its log is `~/.claudepilot/dev-sessions/supervisor.log`, its state `state.json` next to it.
+**Stop it:** `touch ~/.claudepilot/dev-sessions/STOP` (checked every two minutes) or kill the process. **Start it again** (it needs `PORTAL_SERVER_CODE`):
+`cd ~/work/claudepilot && PORTAL_SERVER_CODE=... setsid nohup node docs/dev-sessions/supervisor.mjs >> ~/.claudepilot/dev-sessions/supervisor.log 2>&1 < /dev/null &`.
+`DRY_RUN=1` reads the portal and says what it would do. It never approves anything unless `DEPLOY_RUN=<run id>` is given, and then only that run.
+Not for sessions to run: a session that starts other Bypass sessions burns the quota; the coordinator and the owner start them.
+
+**When your track list is empty:** make `TRACK COMPLETE` the first line of your status file, commit and push it, and end with the final report.
+
 ## Status and final report
 
 `docs/dev-sessions/status/<track>.md`, at most 60 lines, overwritten, committed with your work: DONE (item and commit), DECISIONS, NEEDS A
