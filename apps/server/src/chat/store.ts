@@ -24,7 +24,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { posix } from 'node:path';
 import type { Store } from '../store/store.js';
 import { HOME } from '../workspaces/runtime.js';
-import type { ModelTotals, StoredEvent, TaskPatch } from './protocol.js';
+import { mapInputStrings, type ModelTotals, type StoredEvent, type TaskPatch } from './protocol.js';
 import { fileRefs } from './artifacts/records.js';
 import { redact, redactMaybe } from './redact.js';
 
@@ -1263,6 +1263,9 @@ export class ChatStore {
     // A call's id, on the call and its result: a result read after a restart can still be named, and the
     // transcript pairs each call with its result.
     if ((ev.kind === 'tool_use' || ev.kind === 'tool_result') && ev.toolUseId) p.toolUseId = ev.toolUseId;
+    // What a call was given (its row's Input block): redacted again here, as `request.full` is.
+    if (ev.kind === 'tool_use' && ev.toolInput) p.toolInput = mapInputStrings(ev.toolInput, redact);
+    if (ev.kind === 'tool_use' && ev.toolInputCut) p.toolInputCut = true;
     if (ev.kind === 'tool_result' && ev.isError) p.isError = true;
     if ((ev.kind === 'thinking' || ev.kind === 'result') && ev.durationMs !== undefined) p.durationMs = ev.durationMs;
     if (ev.kind === 'result' && ev.turnCostUsd !== undefined) p.turnCostUsd = ev.turnCostUsd;
@@ -1302,6 +1305,8 @@ export class ChatStore {
     if (typeof payload.outcome === 'string') ev.outcome = payload.outcome;
     if (typeof payload.costUsd === 'number') ev.costUsd = payload.costUsd;
     if (typeof payload.toolUseId === 'string') ev.toolUseId = payload.toolUseId;
+    if (payload.toolInput && typeof payload.toolInput === 'object' && !Array.isArray(payload.toolInput)) ev.toolInput = payload.toolInput as NonNullable<ChatEvent['toolInput']>;
+    if (payload.toolInputCut === true) ev.toolInputCut = true;
     if (payload.isError === true) ev.isError = true;
     if (typeof payload.durationMs === 'number') ev.durationMs = payload.durationMs;
     if (typeof payload.turnCostUsd === 'number') ev.turnCostUsd = payload.turnCostUsd;
