@@ -34,7 +34,21 @@ const STAGGER_S = Number(process.env.STAGGER_S ?? 90);
 const DRY = process.env.DRY_RUN === '1';
 
 /** What is kept alive: one orchestrator in the main folder (no worktree of its own: its sub-agents make theirs). The Claudes are tried by name, best room first. */
-const TRACKS = [{ key: 'orchestrator', title: 'Orchestrator: ClaudePilot dev', claudes: ['hasyim', 'fadlilah', 'alfian.isnan'] }];
+const KONFERSI = process.env.KONFERSI_FOLDER ?? join(homedir(), 'work/konfersi-universe');
+const TRACKS = [
+  { key: 'orchestrator', title: 'Orchestrator: ClaudePilot dev', claudes: ['hasyim', 'fadlilah', 'alfian.isnan'] },
+  // The Konfersi migration chat (its own folder, tickets instead of a status file). Not named Orchestrator: the title prefix finds the track's chats.
+  {
+    key: 'konfersi',
+    title: 'Konfersi: migration',
+    folder: KONFERSI,
+    claudes: ['alfian.isnan', 'hasyim', 'satria', 'one.claude', 'two.claude', 'sekar'],
+    kickoff: (again, reason) =>
+      `You are the Konfersi orchestrator, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; your role-subagents are gone)` : ''}. Nobody answers questions: decide, write it on the ticket, go on. Read first: your pilot tickets (ticket_list, tag konfersi-migration; T-94, T-96 and T-103 especially), then git worktree list and git status in ~/work/agentic-worktrees and ~/work/konfersi-universe; git fetch origin stg; docs/agentic/pilot-migration/*.md. Rules: run every role as a SUB-AGENT of this chat (Agent tool, a git worktree each, they inherit Bypass); never session_spawn (never Bypass, capped at 4 sessions); one heavy job at a time through flock /tmp/heavy.lock nice -n 10; stg only (uat and prod are never touched; uat waits for T-103); production-only questions are one line on T-93; secrets arrive through the Secrets pool, never print them; status on pilot tickets (T-84 every ~2 h). Keep every role busy.`,
+    nudge: 'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag konfersi-migration) and your sub-agents, start or restart the roles that have work, one heavy job at a time. If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
+    wake: (why) => `This chat was interrupted (${why}). Continue where you left off: look at your pilot tickets, git worktree list and git status in ~/work/agentic-worktrees, restart the roles that had work in flight, and carry on. Nobody is here to answer questions.`,
+  },
+];
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
@@ -203,7 +217,7 @@ async function startSession(t, tstate, again, reason) {
   if (DRY) return log(`[dry] ${t.key}: would ${again ? 'start again' : 'start'} on ${pick.name} (${pick.used}% used) (${reason})`);
   const claudeName = pick.name;
   const claudeId = pick.id;
-  const body = { workspaceId: WORKSPACE, title: t.title, claudeId, allowBypass: true, cwd: MAIN };
+  const body = { workspaceId: WORKSPACE, title: t.title, claudeId, allowBypass: true, cwd: t.folder ?? MAIN };
   let r = await api('POST', '/api/chat/sessions', body);
   if (r.error?.code === 'FOLDER_UNTRUSTED') {
     // The folder holds the repository's own .claude/settings.json (allow and deny rules only: no hooks, MCP servers, plugins or env).
@@ -229,7 +243,7 @@ async function startSession(t, tstate, again, reason) {
   if (bp.error) throw new Error(`Bypass refused: ${bp.error.code} ${bp.error.message}`);
   const mode = (await api('GET', `/api/chat/sessions/${s.id}`)).data?.mode;
   if (mode !== 'bypassPermissions') throw new Error(`Bypass did not turn on (mode ${mode})`);
-  await sessionSend(s.id, kickoff(t, again, reason));
+  await sessionSend(s.id, t.kickoff ? t.kickoff(again, reason) : kickoff(t, again, reason));
   tstate.sessionId = s.id;
   tstate.cwd = s.cwd;
   (tstate.starts ??= []).push(Date.now());
@@ -289,15 +303,18 @@ async function answerWaiting(t, ts, cur) {
  * whose scan lists NO hooks, MCP servers, plugins or env names (only permission rules), and says so; anything else is left for a person and logged.
  */
 async function ensureTrust() {
-  const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(MAIN)}`)).data;
+  for (const folder of new Set(TRACKS.map((t) => t.folder ?? MAIN))) await ensureTrustOf(folder);
+}
+async function ensureTrustOf(folder) {
+  const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`)).data;
   if (!scan || scan.trusted || scan.empty) return;
   if (scan.hooks?.length || scan.mcpServers?.length || scan.plugins?.length || scan.envNames?.length) {
-    if (!trustLogged.has(scan.hash)) log(`folder trust: the project settings now load hooks, MCP servers, plugins or env: a person must look (${MAIN})`), trustLogged.add(scan.hash);
+    if (!trustLogged.has(scan.hash)) log(`folder trust: the project settings now load hooks, MCP servers, plugins or env: a person must look (${folder})`), trustLogged.add(scan.hash);
     return;
   }
-  if (DRY) return log(`[dry] would trust ${MAIN} (${scan.allowRules} permission rules, nothing else)`);
-  const tr = await api('POST', '/api/chat/trust', { workspaceId: WORKSPACE, folder: scan.folder ?? MAIN, hash: scan.hash });
-  log(tr.error ? `folder trust: refused: ${tr.error.message}` : `folder trust: the permission rules of ${MAIN} changed (${scan.allowRules} rules, no hooks, servers, plugins or env): trusted again`);
+  if (DRY) return log(`[dry] would trust ${folder} (${scan.allowRules} permission rules, nothing else)`);
+  const tr = await api('POST', '/api/chat/trust', { workspaceId: WORKSPACE, folder: scan.folder ?? folder, hash: scan.hash });
+  log(tr.error ? `folder trust: refused: ${tr.error.message}` : `folder trust: the permission rules of ${folder} changed (${scan.allowRules} rules, no hooks, servers, plugins or env): trusted again`);
 }
 const trustLogged = new Set();
 
@@ -340,7 +357,7 @@ async function watch() {
               if (!ts.nudgeCapLogged) log(`${t.key}: ${MAX_NUDGES} nudges in 24 h: leaving it for a person`), (ts.nudgeCapLogged = true);
             } else {
               try {
-                await sessionSend(cur.id, NUDGE);
+                await sessionSend(cur.id, t.nudge ?? NUDGE);
                 ts.nudges.push(Date.now());
                 log(`${t.key}: idle for ${Math.round((Date.now() - since) / 60_000)} min: nudged`);
                 idleSince.delete(t.key);
@@ -363,7 +380,7 @@ async function watch() {
         const lastWake = ts.wakes[ts.wakes.length - 1] ?? 0;
         if (Date.now() - lastWake >= 5 * 60_000 && within24h(ts.wakes).length < 12) {
           try {
-            await sessionSend(cur.id, WAKE(String(cur.endedReason ?? 'its process stopped').slice(0, 120)));
+            await sessionSend(cur.id, (t.wake ?? WAKE)(String(cur.endedReason ?? 'its process stopped').slice(0, 120)));
             ts.wakes.push(Date.now());
             log(`${t.key}: interrupted (${String(cur.endedReason ?? '').slice(0, 80)}): woken`);
           } catch (e) {
