@@ -184,8 +184,10 @@ export function Controls({
           <ModeIcon className="size-4 shrink-0 sm:size-3.5" aria-hidden="true" />
           <span className="hidden sm:inline">{mode.label}</span>
         </Quiet>
-        <span className="min-w-1 flex-1" />
-        <ContextRing context={session.context} />
+        {/* At the row's end, by Send. On phones it makes way for the wider Steer while a turn runs and words are in the box (Composer's data-steer). */}
+        <span className="ml-auto flex shrink-0 max-sm:in-data-steer:hidden">
+          <ContextRing context={session.context} />
+        </span>
       </div>
 
       <Dialog open={open === 'model'} onClose={close} size="sm" title="Model and effort">
@@ -266,7 +268,7 @@ function Quiet({
       title={title}
       className={cn(
         'press inline-flex h-10 min-w-0 items-center gap-1 rounded-full text-[14px] font-semibold whitespace-nowrap transition-colors tap:h-11 sm:text-[13.5px]',
-        iconOnPhone ? 'w-10 justify-center tap:w-11 sm:w-auto sm:px-3' : 'px-3',
+        iconOnPhone ? 'w-10 justify-center tap:w-11 sm:w-auto sm:px-3' : 'px-2 sm:px-3',
         tone === 'danger'
           ? 'bg-danger-soft text-danger'
           : tone === 'gold'

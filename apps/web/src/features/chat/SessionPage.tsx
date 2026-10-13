@@ -1,7 +1,7 @@
 import { Badge, cn, ConfirmDialog, Menu, Spinner, useMediaQuery, useToast, type MenuItem } from '@isnanme/ui';
 import type { ChatRequest, ChatSession } from '@portal/contracts';
 import { Archive, ArchiveRestore, ArrowLeft, Bell, BellOff, Bot, CircleStop, FolderOpen, Gauge, Info, ListCollapse, ListTree, MoreHorizontal, Pencil, PanelRight, PanelRightClose, Pin, PinOff, RotateCw, ShieldAlert, Trash2, X } from 'lucide-react';
-import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { BRAND_NAME } from '@/components/Logo';
 import { useNotifyWhenDone } from '@/features/notify/sessionFlag';
@@ -17,7 +17,7 @@ import { SuggestionCard } from '@/features/autotransfer/SuggestionCard';
 import { useAutoMove } from '@/features/autotransfer/useAutoMove';
 import { useGlanceFocus } from '@/features/glance/focus';
 import { GlanceStrip } from '@/features/glance/Strip';
-import { ApprovalCard } from './ApprovalCard';
+import { ApprovalBar, ApprovalCard } from './ApprovalCard';
 import { BtwCard } from './btw/BtwCard';
 import { BtwSheet } from './btw/BtwSheet';
 import { BtwSidePanel } from './btw/BtwSidePanel';
@@ -172,15 +172,29 @@ export function SessionPage() {
   // page instead of resizing it); the transcript scrolls under the glass header and dock.
   // A focused composer on a phone means the keyboard: the dock drops its safe-area gap at once.
   const viewport = useVisualViewport({ keyboardOnFocus: true });
+  // The keyboard up on a short screen (a phone on its side: under 320 px left to see): the composer (and an approval's bar) need all of
+  // it, so the header steps aside until the keyboard goes down.
+  const cramped = !!viewport?.keyboard && viewport.height < CRAMPED_PX;
+  // A short screen (under 500 px to see, a phone on its side; Web app §9.1): the glance strip steps aside and an approval waits as a bar,
+  // so the transcript keeps its quarter.
+  const short = !!viewport && viewport.height < SHORT_PX;
   const dock = useRef<HTMLDivElement>(null);
   const [dockHeight, setDockHeight] = useState(0);
+  // The composer and its notes, at the bottom of the dock: the phone's btw sheet sits on them (over an approval, if one waits, so the
+  // sheet keeps its room on a short screen; the header's state says one waits).
+  const base = useRef<HTMLDivElement>(null);
+  const [baseHeight, setBaseHeight] = useState(0);
   useLayoutEffect(() => {
     const el = dock.current;
     if (!el) return;
-    const measure = () => setDockHeight(el.offsetHeight);
+    const measure = () => {
+      setDockHeight(el.offsetHeight);
+      setBaseHeight(base.current ? el.offsetHeight - base.current.offsetTop : el.offsetHeight);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
+    if (base.current) observer.observe(base.current);
     return () => observer.disconnect();
   }, []);
 
@@ -288,6 +302,14 @@ export function SessionPage() {
     return open;
   }, [events]);
   const current = openRequests[0] ?? null;
+  // The approval as a bar (the keyboard up, or a short screen) until Review: that puts the keyboard away and opens the card. The next
+  // request, or the keyboard coming back, starts as a bar again.
+  const [reviewing, setReviewing] = useState<string | null>(null);
+  const keyboardUp = !!viewport?.keyboard;
+  useEffect(() => {
+    if (keyboardUp) setReviewing(null);
+  }, [keyboardUp]);
+  const approvalBar = !!current && (keyboardUp || short) && reviewing !== current.requestId;
 
   // Sub-agent lines carry the `Task` tool_use id as their label; people read the task's description.
   const agentNames = useMemo(
@@ -375,8 +397,12 @@ export function SessionPage() {
 
   return (
     // touch-action: pinch-zoom: a drag that starts on the header, the card or the composer pans nothing (it used to scroll the page behind and drag this
-    // whole screen with it); the transcript and the panels are their own scrollers and keep scrolling.
-    <div className="fixed inset-x-0 top-0 h-dvh overflow-hidden bg-bg text-ink [touch-action:pinch-zoom]" style={pinnedToViewport(viewport)}>
+    // whole screen with it); the transcript and the panels are their own scrollers and keep scrolling. overflow: clip, not hidden: a hidden
+    // box can still be scrolled by a focus(), which shifted the whole screen up under a landscape keyboard (tools/qa/session-states.mjs).
+    <div
+      className="fixed inset-x-0 top-0 h-dvh overflow-clip bg-bg text-ink [touch-action:pinch-zoom]"
+      style={{ ...pinnedToViewport(viewport), ...(cramped ? ({ '--session-header-bottom': 'var(--bar-top)' } as CSSProperties) : null) }}
+    >
 
       <div ref={row} className="flex h-full min-h-0">
         <div className="relative flex min-w-0 flex-1 flex-col">
@@ -385,7 +411,7 @@ export function SessionPage() {
             --bar-*), under the status bar; the transcript scrolls under it, and under the status bar's own band. Back, the title (tap:
             Session info), the state, ⋯; Bypass adds its red shield. Everything else is in ⋯.
           */}
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-30 pt-[var(--bar-top)] pr-[var(--bar-right)] pl-[var(--bar-left)]">
+          <div hidden={cramped} className="pointer-events-none absolute inset-x-0 top-0 z-30 pt-[var(--bar-top)] pr-[var(--bar-right)] pl-[var(--bar-left)]">
             <header
               data-session-header=""
               className={cn(
@@ -439,11 +465,14 @@ export function SessionPage() {
                   onClick={() => void leaveBypass()}
                   aria-label="Bypass is on. Turn it off"
                   title="Bypass is on: Claude runs every tool without asking. Deny rules still apply. Tap to turn it off."
-                  className="press inline-flex size-11 shrink-0 items-center justify-center gap-1 rounded-full text-danger hover:bg-danger-soft sm:h-9 sm:w-auto sm:bg-danger sm:px-2.5 sm:text-[12.5px] sm:font-semibold sm:text-white sm:dark:text-bg"
+                  className="press inline-flex size-11 shrink-0 items-center justify-center rounded-full text-danger hover:bg-danger-soft sm:w-auto sm:hover:bg-transparent"
                 >
-                  <ShieldAlert className="size-[18px] sm:size-3.5" aria-hidden="true" />
-                  <span className="hidden sm:inline">Bypass</span>
-                  <X className="hidden size-3.5 sm:block" aria-hidden="true" />
+                  {/* From 640 px the red pill is 36 px high inside a 44 px target. */}
+                  <span className="inline-flex items-center gap-1 sm:h-9 sm:rounded-full sm:bg-danger sm:px-2.5 sm:text-[12.5px] sm:font-semibold sm:text-white sm:dark:text-bg">
+                    <ShieldAlert className="size-[18px] sm:size-3.5" aria-hidden="true" />
+                    <span className="hidden sm:inline">Bypass</span>
+                    <X className="hidden size-3.5 sm:block" aria-hidden="true" />
+                  </span>
                 </button>
               )}
               {roomy && (
@@ -481,7 +510,8 @@ export function SessionPage() {
                   </button>
                 </>
               )}
-              <div ref={menuRef} className="shrink-0">
+              {/* The kit's ⋯ is 36 px; on this bar every target is 44 (and its items too, for a thumb). */}
+              <div ref={menuRef} className="shrink-0 [&_[aria-haspopup=menu]]:size-11 [&_[role=menuitem]]:min-h-11">
                 <Menu
                   label={!roomy && running ? `Session actions, ${running} ${running === 1 ? 'agent' : 'agents'} running` : 'Session actions'}
                   trigger={
@@ -514,18 +544,43 @@ export function SessionPage() {
             className="h-full"
           />
 
-          {/* The composer floats the same gap from the left, right and bottom edges of the screen, keyboard up or down (index.css --bar-*). */}
-          <div ref={dock} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pr-[var(--bar-right)] pb-[var(--bar-gap)] pl-[var(--bar-left)]">
-            <div className="pointer-events-auto mx-auto flex w-full max-w-[760px] flex-col gap-2 pt-2">
-              {current && (
+          {/*
+            The composer floats the same gap from the left, right and bottom edges of the screen, keyboard up or down (index.css --bar-*).
+            What stacks above it leaves the transcript a quarter of the screen below the header (chat PRD, Dock): the stack is capped, and
+            an approval's text and a btw answer are what give way (each scrolls in a shorter block); anything that still does not fit leaves
+            at the top, never the composer at the bottom.
+          */}
+          <div
+            ref={dock}
+            data-session-dock=""
+            className={cn(
+              'pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col justify-end pr-[var(--bar-right)] pb-[var(--bar-gap)] pl-[var(--bar-left)]',
+              // Review on a short screen asked for the whole card: then the stack may take everything below the header.
+              current && short && !approvalBar ? 'max-h-[calc(100%-var(--session-header-bottom)-0.25rem)]' : 'max-h-[calc(75%-var(--session-header-bottom))]',
+            )}
+          >
+            <div className="pointer-events-auto mx-auto flex min-h-0 w-full max-w-[760px] flex-col justify-end gap-2 pt-2">
+              {/* The oldest open request: the card, at most 45 % of what is visible; with the keyboard up or on a short screen, a bar whose Review opens it (chat PRD, Dock). */}
+              {current && approvalBar ? (
+                <ApprovalBar
+                  request={current}
+                  waiting={openRequests.length}
+                  onReview={() => {
+                    (document.activeElement as HTMLElement | null)?.blur();
+                    setReviewing(current.requestId);
+                  }}
+                />
+              ) : current ? (
                 <ApprovalCard
+                  className="min-h-0"
+                  style={viewport ? { maxHeight: Math.floor(viewport.height * 0.45) } : undefined}
                   request={current}
                   waiting={openRequests.length}
                   onRespond={respond}
                   disabled={!connected}
                   agentName={current.agentLabel ? agentNames.get(current.agentLabel) : null}
                 />
-              )}
+              ) : null}
               {auto.state?.pending && !gone && !ended && !session?.switching && (
                 <SuggestionCard state={auto.state} allowAuto={auto.allowAuto} bypass={bypass} disabled={!connected} onChange={auto.setState} />
               )}
@@ -544,46 +599,48 @@ export function SessionPage() {
                     </button>
                   ),
                 )}
-              {!viewport?.keyboard && <GlanceStrip placement="composer" side="above" dense className="justify-end" />}
-              {gone ? (
-                <GoneNote />
-              ) : ended ? (
-                <EndedNote reason={session?.endedReason} />
-              ) : session?.switching ? (
-                <MovingNote to={session.switching.toClaude} step={session.switching.step} from={session.claudeName} />
-              ) : (
-                <>
-                  {session && <ResumeBanner session={session} connected={connected} onResume={() => trustedControl('resume')} />}
-                  {session && !gone && <RestartChip session={session} busy={restart.busy} onRestart={() => restart.start('mcp')} />}
-                  <Composer
-                    ref={composer}
-                    sessionId={id}
-                    onSend={trustedSend}
-                    connected={connected}
-                    working={working}
-                    onStop={stop}
-                    onBtw={askBtw}
-                    btwBusy={btw?.status === 'running'}
-                    accessory={
-                      session && (
-                        <Controls
-                          ref={controls}
-                          sessionId={id}
-                          session={session}
-                          connected={connected}
-                          control={trustedControl}
-                          suspended={trust.prompt !== null}
-                          className="min-w-0 flex-1"
-                        />
-                      )
-                    }
-                  />
-                </>
-              )}
+              {!viewport?.keyboard && !short && <GlanceStrip placement="composer" side="above" dense className="justify-end" />}
+              <div ref={base} className="flex flex-col gap-2">
+                {gone ? (
+                  <GoneNote />
+                ) : ended ? (
+                  <EndedNote reason={session?.endedReason} />
+                ) : session?.switching ? (
+                  <MovingNote to={session.switching.toClaude} step={session.switching.step} from={session.claudeName} />
+                ) : (
+                  <>
+                    {session && <ResumeBanner session={session} connected={connected} onResume={() => trustedControl('resume')} />}
+                    {session && !gone && <RestartChip session={session} busy={restart.busy} onRestart={() => restart.start('mcp')} />}
+                    <Composer
+                      ref={composer}
+                      sessionId={id}
+                      onSend={trustedSend}
+                      connected={connected}
+                      working={working}
+                      onStop={stop}
+                      onBtw={askBtw}
+                      btwBusy={btw?.status === 'running'}
+                      accessory={
+                        session && (
+                          <Controls
+                            ref={controls}
+                            sessionId={id}
+                            session={session}
+                            connected={connected}
+                            control={trustedControl}
+                            suspended={trust.prompt !== null}
+                            className="min-w-0 flex-1"
+                          />
+                        )
+                      }
+                    />
+                  </>
+                )}
+              </div>
             </div>
           </div>
           {btw && btwLayout.mode === 'sheet' && (
-            <BtwSheet bottom={dockHeight} keyboard={!!viewport?.keyboard} onClose={closeBtw}>
+            <BtwSheet bottom={baseHeight + 8} keyboard={!!viewport?.keyboard} onClose={closeBtw}>
               {btwCard('sheet')}
             </BtwSheet>
           )}
@@ -676,6 +733,11 @@ export function SessionPage() {
     </div>
   );
 }
+
+/** Below this visible height with the keyboard up, the session screen is cramped (see `cramped`). */
+const CRAMPED_PX = 320;
+/** Below this visible height the screen is short (see `short`): the same 500 px as the short-touch layout (Web app §9.1). */
+const SHORT_PX = 500;
 
 /** The session's workspace was removed: the transcript stays, and that's all. */
 function GoneNote() {
