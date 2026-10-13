@@ -50,6 +50,7 @@ Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIO
 3. T-99 (on integration), T-102 (running), T-100 (WIP pushed; next free slot).
    T-125 (rank-05d, same screen as T-102: the stack above the composer shows only THIS chat; Show more in place; shortcuts that say where)
    follows T-102 in its worktree; ship the compact contextual row first, the pace line after T-122.
+   T-127 (portal WIP limit, rank-05e) and T-128 (CI read scope, rank-05f) after T-125.
    -> deploy (gate Job, /deploy pipeline; the coordinator approves as delegate, D-2).
 4. T-115 slice 1: the decisions registry (imports DECISIONS.md) and session_context.
 5. T-104 Keep going with T-108's watchdog sweep (then the path allow-list and the lease).
@@ -65,7 +66,8 @@ Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIO
    risk flags, expected blockers) required to claim a ticket; 'predictability' is a scored term (charter now has eight terms, D-24).
 ---- CUT LINE: nothing below starts before 7 is merged and deployed ----
 T-126 (rank-08d, notifications: item 5 local time FIRST (small bug: Inbox UTC vs Quota sheet local), then item 1 relevance, then one row
-that updates, identity, the plan in words), T-121 (rank-09a2, after T-119 slice 1: ticket and CI/CD charts and Home widgets; one chart kit extending charts.tsx, no library; one
+that updates, identity, the plan in words), T-129 (rank-09a4, with T-122, before T-111: spikes calibrated on 14 days of history first, baselines by kind of work, new rules,
+in-flight detection with one steer, cause and unit on every event, a Spikes view in T-122's Alerts, only wasteful spend scored), T-121 (rank-09a2, after T-119 slice 1: ticket and CI/CD charts and Home widgets; one chart kit extending charts.tsx, no library; one
 stats API that T-119's strip uses; the timeline's state palette; hard performance budgets and a harness like T-119), T-122 (rank-09a3, after T-121, before T-111: the Usage dashboard; first the AUDIT with screenshots of the running app on the ticket, then
 data and the series API with downsampling, then components on T-121's chart kit, then the navigation of at most four items with ?tab=
 redirects; same performance budgets as T-119/T-121), T-113 (integrity guard), T-114 (scoreboard, playbooks, peer assessment), T-101, T-106, T-120 (rank-08c, after T-106: ClaudePilot
@@ -125,5 +127,5 @@ T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, 
   Fixed: 17 unstarted tickets released (open, no assignee, rank tag kept, one line "not started: queued at rank-NN"): T-101, T-104, T-106,
   T-108, T-110, T-111, T-113, T-114, T-115, T-118 (WIP branch kept), T-119..T-123, T-125, T-126. Merged-and-waiting tickets to in_review:
   T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-107. In progress now: T-105, T-109 (same slice), T-102, T-100. RULE from now: claim only when
-  work starts; the queue lives in this file. New portal tickets: the WIP limit enforced by the portal (rank-05e) and the CI read scope for
-  agents (rank-05f).
+  work starts; the queue lives in this file. The coordinator filed the portal tickets: T-127 WIP limit enforced (rank-05e), T-128 CI read scope for
+  agents (rank-05f); both open, unclaimed, in the queue after T-125.
