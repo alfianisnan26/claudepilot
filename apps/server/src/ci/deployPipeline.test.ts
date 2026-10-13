@@ -323,6 +323,31 @@ test('a verify that fails rolls back: the previous tags on main (and integration
   assert.match(again.out, /fatal lines/);
 });
 
+test('a branch that moved on during the approval: main gets exactly the approved commit and the tags, the branch gets the release merged in (run #4, 2026-10-13)', () => {
+  const w = world();
+  assert.equal(w.run('build', { images: 'portal' }).code, 0);
+  // A status commit pushed to integration while the release waited for its approval.
+  const other = join(w.root, 'other');
+  w.git(['clone', '-q', w.github, other]);
+  w.git(['checkout', '-q', 'integration'], other);
+  writeFileSync(join(other, 'status.md'), 'status\n');
+  w.git(['add', '-A'], other);
+  w.git(['commit', '-q', '-m', 'status while waiting'], other);
+  w.git(['push', '-q', 'origin', 'integration'], other);
+  const tip = w.branch('integration');
+  const release = w.run('release');
+  assert.equal(release.code, 0, release.out);
+  assert.match(release.out, /integration moved on to [0-9a-f]{7} since this run started: the release is merged into it/);
+  const bump = w.main();
+  assert.equal(w.git(['--git-dir', w.github, 'rev-parse', `${bump}^`]), w.sha, 'main: the bump on the approved commit, nothing else');
+  assert.ok(!w.git(['--git-dir', w.github, 'ls-tree', '--name-only', bump]).split('\n').includes('status.md'), 'the later commit is not deployed');
+  const merged = w.branch('integration');
+  assert.deepEqual(w.git(['--git-dir', w.github, 'rev-list', '--parents', '-n', '1', merged]).split(' ').slice(1), [tip, bump], 'integration: its own tip and the release, merged');
+  assert.match(w.manifestAt('integration'), new RegExp(`claudepilot/portal:${today().replace(/\./g, '\\.')}-2\n`), 'integration has the new tags too');
+  assert.match(outFile(w, 'release.env'), /PUSHED=1/);
+  assert.match(outFile(w, 'release.env'), new RegExp(`BRANCH_SHA=${merged}`));
+});
+
 test('refusals: a red gate, a branch that moved, a main with other commits, an unknown image; a refused release changes nothing', () => {
   const w = world();
   writeFileSync(join(w.root, 'gate-mode'), 'red');
@@ -336,20 +361,22 @@ test('refusals: a red gate, a branch that moved, a main with other commits, an u
   assert.match(bogus.out, /unknown image "bogus"/);
   assert.equal(w.run('build').code, 0);
 
-  // Someone pushed to integration after the run started: the atomic push refuses both refs.
+  // Someone rewrote integration after the run started (the run's commit is gone from it): refused, nothing changes.
   const other = join(w.root, 'other');
   w.git(['clone', '-q', w.github, other]);
   w.git(['checkout', '-q', 'integration'], other);
+  w.git(['reset', '-q', '--hard', 'HEAD~1'], other);
   writeFileSync(join(other, 'late.txt'), 'late\n');
   w.git(['add', '-A'], other);
-  w.git(['commit', '-q', '-m', 'late'], other);
-  w.git(['push', '-q', 'origin', 'integration'], other);
+  w.git(['commit', '-q', '-m', 'rewritten'], other);
+  w.git(['push', '-q', '--force', 'origin', 'integration'], other);
   const moved = w.run('release');
   assert.equal(moved.code, 1);
-  assert.match(moved.out, /the push was refused/);
+  assert.match(moved.out, /no longer has [0-9a-f]{7}/);
   assert.equal(w.main(), w.base, 'main did not move');
   assert.match(outFile(w, 'release.env'), /PUSHED=0/);
   assert.match(w.run('rollback').out, /nothing to roll back/);
+  w.git(['--git-dir', w.github, 'update-ref', 'refs/heads/integration', w.sha]); // put integration back for the cases below
 
   // main has a commit the run's commit lacks: refused before anything is made.
   w.git(['checkout', '-q', 'main'], other);

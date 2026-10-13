@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # The release job (environment production: it starts only after a person approved it in the portal). Puts the new tags of the portal and
 # workspace images into deploy/k3s/portal.yaml on top of the run's commit and pushes that commit to main, the branch Argo CD follows: that
-# push IS the deploy. It goes to main and to the run's branch in one atomic push, fast-forward only, so nothing is forced and a branch that
-# moved meanwhile stops the release with nothing changed. Leaves .pilot/out/release.env (what was pushed, the tags before) for verify and
-# rollback, whatever happens.
+# push IS the deploy. It goes to main and to the run's branch in one atomic push, fast-forward only, so nothing is forced. When the run's
+# branch moved on while the release waited for its approval (more commits on top of the run's commit), the release commit is merged into
+# the branch's new tip, so the branch keeps them and main still gets exactly the approved commit plus the tags; a branch that no longer has
+# the run's commit, or a merge that conflicts, stops the release with nothing changed (run #4, 2026-10-13, was refused for a status commit
+# pushed during the approval). Leaves .pilot/out/release.env (what was pushed, the tags before) for verify and rollback, whatever happens.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=.pilot/scripts/lib.sh
@@ -52,7 +54,28 @@ bump=$(git rev-parse HEAD)
   echo "PUSHED=0"
 } >"$rel"
 refs=("$bump:refs/heads/$DEPLOY_MAIN")
-if [ -n "${PILOT_BRANCH:-}" ] && [ "$PILOT_BRANCH" != "$DEPLOY_MAIN" ]; then refs+=("$bump:refs/heads/$PILOT_BRANCH"); fi
+if [ -n "${PILOT_BRANCH:-}" ] && [ "$PILOT_BRANCH" != "$DEPLOY_MAIN" ]; then
+  branch_to=$bump
+  git fetch -q origin "$PILOT_BRANCH" 2>/dev/null || true
+  tip=$(git rev-parse -q --verify "origin/$PILOT_BRANCH^{commit}" 2>/dev/null || true)
+  if [ -n "$tip" ] && ! git merge-base --is-ancestor "$tip" "$bump"; then
+    git merge-base --is-ancestor "$sha" "$tip" ||
+      die "$PILOT_BRANCH no longer has $(short "$sha") (it was rewritten since this run started): nothing was deployed"
+    log "release: $PILOT_BRANCH moved on to $(short "$tip") since this run started: the release is merged into it"
+    git checkout -q -B pilot-release-branch "$tip"
+    gname=$(git config user.name || true)
+    gemail=$(git config user.email || true)
+    if ! git -c user.name="${gname:-ClaudePilot CI}" -c user.email="${gemail:-ci@claudepilot.invalid}" -c commit.gpgsign=false \
+      merge -q --no-ff --no-edit -m "merge release $(short "$bump") ($what) into $PILOT_BRANCH" "$bump"; then
+      git merge --abort 2>/dev/null || true
+      die "the release does not merge cleanly into $PILOT_BRANCH at $(short "$tip"): nothing was deployed"
+    fi
+    branch_to=$(git rev-parse HEAD)
+    git checkout -q pilot-release
+    echo "BRANCH_SHA=$branch_to" >>"$rel"
+  fi
+  refs+=("$branch_to:refs/heads/$PILOT_BRANCH")
+fi
 log "release: $(short "$bump") ($what) to ${refs[*]#*:refs/heads/}"
 act git push -q --atomic origin "${refs[@]}" || die "the push was refused (a branch moved since this run started?): nothing was deployed"
 if dry; then
