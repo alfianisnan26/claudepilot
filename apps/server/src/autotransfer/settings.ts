@@ -33,7 +33,7 @@ defineSetting({
   protective: false,
   confirmText: 'Chats move to another Claude by themselves when a quota is low.',
   label: 'Without asking',
-  help: 'On: chats move by themselves at the end of a turn, within the pause and the caps below; each move leaves an audit row, a notification and an Undo. Off: a card asks every time.',
+  help: 'On: chats move by themselves at the end of a turn, within the pause and the caps below (a Claude already out of quota moves at once, and such a move is not counted); each move leaves an audit row, a notification and an Undo. Off: a card asks every time.',
 });
 defineSetting({
   key: K.thresholdPct,

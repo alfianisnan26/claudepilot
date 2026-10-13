@@ -139,3 +139,39 @@ export function whyText(why: AutoRefusal | null): string | null {
 export function modeChoices(platform: AutoMode): Array<AutoMode | 'default'> {
   return platform === 'auto' ? ['default', 'off', 'ask', 'auto'] : ['default', 'off', 'ask'];
 }
+
+/** A clock time as the page shows it: "15:00", with the weekday when it is not today ("Tue 09:30"). */
+export function clockText(iso: string, nowMs: number): string {
+  const d = new Date(iso);
+  const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date(nowMs).toDateString() ? t : `${d.toLocaleDateString([], { weekday: 'short' })} ${t}`;
+}
+
+/**
+ * The status line of a chat the engine holds (T-105): "Moving at the end of this turn" (told to finish its step), "Waiting for quota: next
+ * Claude free at 15:00" (no destination; the soonest reset among the delegated Claudes), or "Waiting for quota" when no reset is known
+ * (never a guessed time). Null when there is nothing to say.
+ */
+export function holdLine(s: Pick<AutoSessionState, 'waiting' | 'pendingMove'> | null, nowMs: number): { title: string; tip: string } | null {
+  if (!s) return null;
+  if (s.pendingMove) {
+    return {
+      title: 'Moving at the end of this turn',
+      tip: `This Claude is at or under the threshold. The chat was told to finish its step and stop; when the turn ends it moves to ${s.pendingMove.to.name} and continues there by itself. Running agents stop with the old process.`,
+    };
+  }
+  const w = s.waiting;
+  if (!w) return null;
+  const why =
+    w.code === 'session_cap' || w.code === 'day_cap'
+      ? 'The limit of automatic moves is reached.'
+      : w.code === 'paused'
+        ? 'Auto move is paused for this chat.'
+        : w.code === 'destination_busy'
+          ? 'Every other Claude already carries its most chats.'
+          : 'No other Claude has more than the threshold left.';
+  return {
+    title: w.nextFreeAt ? `Waiting for quota: next Claude free at ${clockText(w.nextFreeAt, nowMs)}` : 'Waiting for quota',
+    tip: `${why} The portal looks again every 2 minutes; as soon as a Claude has room, or this one resets, the chat moves or goes on by itself.`,
+  };
+}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AutoTransferEvent } from '@portal/contracts';
-import { autoMarks, droppedText, headline, inPlace, modeChoices, moveItem, offer, parseThreshold, pctText, reasonText, toggleItem, undoFor, whyText } from './pure';
+import { autoMarks, clockText, droppedText, holdLine, headline, inPlace, modeChoices, moveItem, offer, parseThreshold, pctText, reasonText, toggleItem, undoFor, whyText } from './pure';
 
 const m = (value: number) => ({ value, basis: 'measured' as const });
 
@@ -103,4 +103,23 @@ test('T-29: the card names the limit that is low and offers a model change in wo
   assert.equal(offer(away), 'Move to Home on Sonnet (50 % left)');
   assert.ok(!inPlace(away));
   assert.equal(headline({ ...here, reason: 'exhausted' }), 'Work: Opus limit is used up');
+});
+
+test('the hold line (T-105): waiting with and without a known reset, a move at the end of this turn, nothing', () => {
+  // Local times, so "today" is today in any time zone.
+  const now = new Date(2026, 9, 12, 12, 0).getTime();
+  const reset = new Date(2026, 9, 12, 15, 0).toISOString();
+  const w = (code: 'no_destination' | 'day_cap', nextFreeAt: string | null) => ({ waiting: { since: '2026-10-12T11:58:00Z', code, nextFreeAt }, pendingMove: null });
+  assert.equal(holdLine(w('no_destination', reset), now)!.title, `Waiting for quota: next Claude free at ${clockText(reset, now)}`);
+  assert.equal(holdLine(w('no_destination', null), now)!.title, 'Waiting for quota', 'no reset known: no time, never a guess');
+  assert.match(holdLine(w('day_cap', null), now)!.tip, /^The limit of automatic moves is reached\./);
+  const pending = { waiting: w('no_destination', reset).waiting, pendingMove: { to: { id: 'h', name: 'Home' }, reason: 'low' as const, steeredAt: null } };
+  assert.equal(holdLine(pending, now)!.title, 'Moving at the end of this turn', 'a decided move wins over the wait');
+  assert.match(holdLine(pending, now)!.tip, /moves to Home/);
+  assert.equal(holdLine({ waiting: null, pendingMove: null }, now), null);
+  assert.equal(holdLine(null, now), null);
+  const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  assert.equal(clockText(reset, now), time(reset), 'today: the time alone');
+  const later = new Date(2026, 9, 14, 15, 0).toISOString();
+  assert.equal(clockText(later, now), `${new Date(later).toLocaleDateString([], { weekday: 'short' })} ${time(later)}`, 'another day: with the weekday');
 });
