@@ -40,6 +40,7 @@ npm run typecheck                                 # all three packages
 npm run build -w @portal/web
 (cd apps/server && npm test)                      # about 2,400 tests, a few minutes
 scripts/gate.sh                                   # the same on a clean copy of HEAD: the release gate
+scripts/gate-job.sh <commit> [steps]              # the release gate as a Job in the cluster (other CPUs); the commit must be on GitHub
 scripts/scratch-portal.sh start 3403              # a clean-environment portal; tools/qa/*.mjs drive a real browser against it
 scripts/k3s-status.sh                             # Argo CD, pods, node load, warnings, the portal log
 kubectl -n isnan-claudepilot logs deploy/claudepilot-portal --tail=50
@@ -62,7 +63,7 @@ It is started by hand only: in the portal, or by a session over the Portal MCP (
 
 | Job | Does |
 | --- | --- |
-| gate | `scripts/gate.sh` on the commit; fails on any red step or failing test (input `gate: false` skips it) |
+| gate | `scripts/gate-job.sh` on the commit: the release gate as a Job in the cluster (next section); fails on any red step or failing test (input `gate: false` skips it; `DEPLOY_GATE_IN_CLUSTER=false` in the workspace's `~/.profile` runs `scripts/gate.sh` here instead) |
 | build | `scripts/k3s-build.sh` per image of input `images` (`portal`, `workspace`, `workspace-dev`, or `none`) with the next date tag (`2026.10.13-2`, `2.1.296-2026.10.13-1`, `2.1.296-dev-2026.10.13-1`); the commit must be on GitHub's `integration` |
 | release | **waits for a person's approval** (environment `production`); then bumps the two tags in `deploy/k3s/portal.yaml` on top of the commit and pushes it to `main` and `integration` in one atomic, fast-forward push: that is the deploy. Input `deploy: false` leaves it out (build only) (when `integration` moved on while the release waited for its approval, the release is merged into its new tip; `main` still gets exactly the approved commit plus the tags; run #4 of 2026-10-13 was refused before this) |
 | verify | Argo CD Synced and Healthy at the pushed commit, rollout status, the new image, `/healthz` and `/login` through the in-cluster service, no fatal line and no restart in the portal's log |
@@ -88,6 +89,24 @@ guards the sanctioned path (and every caller that only has MCP or the API), not 
 
 **Every deploy:** push `integration` to GitHub and to `pilot` (`git push origin integration && git push pilot integration`), then run `/deploy`
 (or Run in the portal), approve when the hand shows, and `git pull` afterwards (the release commit is on `integration`).
+
+## Gates in the cluster
+
+The workspace pod has 4 CPUs shared with the agents, their scratch portals and Chromium; the full gate took 15 to 40 minutes there and hung
+twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a Job in `isnan-claudepilot` instead, on whichever node has CPU:
+
+- **The Job** (`deploy/k3s-build/gate-job.yaml`): the newest development workspace image (or `GATE_IMAGE`), a shallow clone of the commit from
+  GitHub, `GATE_CONCURRENCY=3`; requests 100m CPU and 512 MiB, limits 4 CPUs and 6 GiB, no node selector (k3s-node2's requests are nearly all
+  allocated: the master may take it), no service account token, gone an hour after it ends. A name per call
+  (`claudepilot-gate-<sha>-<4 hex>`), so gates for different commits run side by side.
+- **The token** for `npm ci` (the private `@isnanme` packages) is a Secret named like the Job, made from `gh auth token` on stdin, deleted on
+  exit; the log is searched for it and masked if it is there.
+- **Steps:** `typecheck,web-build,server-suite` by default; fewer for a heavy check without the suite, e.g. `typecheck,web-build`.
+- **The verdict:** the Job ends with one `GATE-VERDICT: green` or `GATE-VERDICT: red: <why>` line from `scripts/gate-verdict.sh` (the same
+  reading the local gate uses: every step at rc=0, the last suite summary at 0 failing and 0 timed out). The script prints the summary and
+  that line, keeps the whole log in `GATE_JOB_LOG` (default `/tmp/gate-job-<sha>.log`), exits 0 green, 1 red.
+- **The commit must be on GitHub** (any branch: a sub-agent's pushed branch, `integration`, or `wip/orchestrator-local-backup` for an
+  unpushed merge). The deploy pipeline's gate job uses it by default.
 
 ## Rules that hold
 
