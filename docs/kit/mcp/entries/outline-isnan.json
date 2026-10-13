@@ -1,0 +1,22 @@
+{
+  "key": "outline-isnan",
+  "displayName": "Outline Isnan",
+  "description": "Outline's own MCP endpoint on docs.isnan.me (part of Outline, not a third-party package): search, read, create and edit documents. Token mode: an Outline API key for this instance only, from a Secrets & env file. Outline registers each tool only if the key's scopes allow it.",
+  "kind": "remote",
+  "spec": {
+    "url": "https://docs.isnan.me/mcp",
+    "transport": "http",
+    "auth": "headers"
+  },
+  "slots": [
+    {
+      "name": "Authorization",
+      "target": "header",
+      "secret": true,
+      "required": true,
+      "template": "Bearer {value}",
+      "description": "An API key of a Isnan Outline user that sees only the project's collections; read scope unless the project writes documents.",
+      "docUrl": "https://docs.getoutline.com/s/guide/doc/mcp-6j9jtENNKL"
+    }
+  ]
+}

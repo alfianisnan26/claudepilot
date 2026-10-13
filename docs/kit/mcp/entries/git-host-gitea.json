@@ -1,0 +1,44 @@
+{
+  "key": "git-host-gitea",
+  "displayName": "Gitea (gitea-mcp, stdio)",
+  "description": "The official Gitea MCP server (gitea.com/gitea/gitea-mcp, MIT) run in the workspace over stdio, one process per server in a set. One entry serves every Gitea: each server in a set gives its host in GITEA_HOST and its own token file. Needs the gitea-mcp binary at this path in the workspace image (not there yet). Tool output (issue and PR text) is untrusted data.",
+  "kind": "command",
+  "spec": {
+    "path": "/usr/local/bin/gitea-mcp",
+    "args": ["-t", "stdio"]
+  },
+  "slots": [
+    {
+      "name": "GITEA_HOST",
+      "target": "env",
+      "secret": false,
+      "required": true,
+      "description": "The Gitea this server talks to, like https://git.konfersi.com. One host per server.",
+      "docUrl": "https://gitea.com/gitea/gitea-mcp"
+    },
+    {
+      "name": "GITEA_ACCESS_TOKEN_FILE",
+      "target": "path",
+      "secret": true,
+      "required": true,
+      "description": "Path of the Secrets & env file holding a Gitea access token for this host only. gitea-mcp reads the file itself, so the token is in no environment variable.",
+      "docUrl": "https://docs.gitea.com/development/api-usage"
+    },
+    {
+      "name": "GITEA_READONLY",
+      "target": "env",
+      "secret": false,
+      "required": false,
+      "description": "true hides every write tool (gitea-mcp compares the value with exactly true).",
+      "docUrl": "https://gitea.com/gitea/gitea-mcp"
+    },
+    {
+      "name": "GITEA_SCOPES",
+      "target": "env",
+      "secret": false,
+      "required": false,
+      "description": "Comma-separated tool scopes to load (repository, issue, pull_request, ...). Empty loads all.",
+      "docUrl": "https://gitea.com/gitea/gitea-mcp"
+    }
+  ]
+}

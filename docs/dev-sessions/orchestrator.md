@@ -47,7 +47,7 @@ Two things come before anything else because the loop depends on them:
    every deploy; a red full gate is fixed before the next merge. Never idle: when a sub-agent returns, dispatch the next wave item at once and
    do the gating in the background. After a deploy, list the ticket numbers that went live under NEEDS A HUMAN for the owner to check.
 4. **Deploys.** You may start the deploy pipeline once a batch of user-visible work is integrated and the gate is green, at most once a day: the Portal MCP
-   tool `ci_run_trigger` (repo `claudepilot`, pipeline `deploy`, ref `integration`, inputs `images=portal`, `gate=false` because you ran the gate on that commit,
+   tool `ci_run_trigger` (repo `claudepilot`, pipeline `deploy`, ref `integration`, inputs `images=portal`, `gate=true` (the full gate runs as a cluster Job in about 5-8 minutes; `gate=false` only on the owner's explicit word, D-7),
    `deploy=true`, `dry_run=false`; first push the commit to the CI remote: `git push pilot integration`). The release then waits in the portal until the owner
    presses Approve: do not wait for it and do not try to approve it; carry on and look at the run (`ci_run_get`) later. Note the run in the status file.
 5. **When the owner is needed** (an approval, a real device, a decision, a credential): put it under NEEDS A HUMAN in the status file with exact steps, and

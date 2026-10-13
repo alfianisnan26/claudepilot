@@ -1,0 +1,96 @@
+# Autonomous development
+
+{{PROJECT}} is developed by **one orchestrator session** in Bypass mode, in `{{PROJECT_DIR}}`, with **sub-agents**
+(Claude Code's own Agent tool) doing the work in git worktrees, without a person in the loop. A person approves
+deploys to protected environments and answers the required escalations; nothing else waits for one.
+
+Read first: `CLAUDE.md`, `CHARTER.md` (binds every agent), `DECISIONS.md` (never act against a row) and
+`orchestrator.md` (the orchestrator's brief). Everything below binds the orchestrator AND every sub-agent.
+
+## Ground rules
+
+1. **No questions.** Nobody answers in real time. Take the PRD's recommended default, write the decision on the
+   ticket and in the status file, go on. Do not use AskUserQuestion. Only a required escalation (a credential is
+   one) goes under NEEDS A HUMAN in the status file; move to the next item. A check you cannot do here (a real
+   device) is written on its ticket as not verified, not handed to the owner.
+2. **Worktrees.** A sub-agent works in its own git worktree, never in `{{PROJECT_DIR}}` and never in another
+   agent's worktree: `git worktree add {{PROJECT_DIR}}.worktrees/<name> -b ticket/T-<n>-<slug> origin/{{INTEGRATION_BRANCH}}`.
+   The Agent tool's `isolation: "worktree"` also works for a short task that needs no installed dependencies.
+3. **Safety, whatever Bypass lets you do.**
+   - Never print, log, commit or paste a credential. No token-shaped literal anywhere in the repository.
+   - Do not print the environment, read credential files or dump cluster Secrets.
+   - `kubectl`: read freely. Change things only in a rig namespace you made with `scripts/dev-rig.sh`, and delete
+     it when you are done. Never touch the application's, the workspaces' or the GitOps namespaces.
+   - Never push `{{DEFAULT_BRANCH}}`. Never approve a deploy or work around its approval.
+   - Never force push, rewrite pushed history, delete a remote branch, use `--no-verify` or amend a pushed commit.
+   - `.claude/settings.json` denies these even in Bypass. That is deliberate: do not look for another way (a script,
+     `sh -c`, another tool). Write it under NEEDS A HUMAN instead.
+4. **Heavy jobs leave the workspace.** Full suites, typechecks, production builds, browsers and timing runs go
+   through `scripts/job-run.sh -- '<command>'`, a cluster Job on another node (push the branch first:
+   `git push origin HEAD:wip/<name>`). At most 3 Jobs at once and 2 per chat. Only what must run in the workspace
+   (installing a worktree's dependencies, a local preview) runs there, one at a time through the shared lock:
+   `flock /tmp/heavy.lock nice -n 10 <command>`. Until `scripts/job-run.sh` exists, EVERY heavy job runs that way.
+   A single test file may run directly. Keep `/tmp` clean.
+5. **WIP limit three.** At most three sub-agents run at once.
+6. **Do not loop.** The same command failing three times means: change the approach, or move to the next item and
+   write down why.
+7. **Quota.** The portal moves a chat to another Claude when one runs out. On a limit error, wait a few minutes and
+   go on.
+8. **No SendMessage to the main conversation.** A sub-agent reports in its final message, its commits, files and
+   tickets only, and every brief says so. Chat to chat goes through the Portal MCP `session_message`.
+9. **No other Bypass sessions.** Sub-agents of the Agent tool are the way to run work in parallel.
+
+## Who integrates
+
+Sub-agents commit on their own branch and push it (`git push -u origin <branch>`). Every commit ends with its
+trailers as their own paragraph:
+
+```text
+Ticket: T-<n>
+Pilot-Session: <the orchestrator's chat session id>
+Pilot-Agent: main | <the sub-agent's label>
+```
+
+When a commit hook writes these, a sub-agent exports `PILOT_AGENT=<label>` instead. **Only the orchestrator
+pushes `{{INTEGRATION_BRANCH}}`:**
+
+```sh
+cd {{PROJECT_DIR}} && git fetch origin && git merge --no-ff origin/<branch>   # never discard somebody's lines
+{{TEST_QUICK}}                                                                  # the fast lane
+git push origin HEAD:{{INTEGRATION_BRANCH}} && git push pilot HEAD:{{INTEGRATION_BRANCH}}   # if refused: fetch, merge, gate again
+```
+
+Then the sub-agent on that branch brings it up to date: rebase ONLY commits that were never pushed; once a branch is
+pushed, merge `origin/{{INTEGRATION_BRANCH}}` into it instead, because a rebased pushed branch could only go back with
+a force push, which is denied.
+
+## Two lanes
+
+- **Integration, the fast lane.** `{{TEST_QUICK}}` (minutes: the checks for what changed), then push. After every
+  slice, and at least every 8 commits or every 2 hours: nothing piles up in a workspace.
+- **Release, the full lane.** `{{TEST_FULL}}` on the exact commit before any deploy (the deploy pipeline's `gate`
+  input stays true; `false` only on the owner's explicit word for that run), and every two hours on the head of `{{INTEGRATION_BRANCH}}`, as a cluster Job
+  (`scripts/gate-job.sh <commit>`). A red full gate on `{{INTEGRATION_BRANCH}}` is fixed first, before any new
+  slice is merged: `{{INTEGRATION_BRANCH}}` stays shippable.
+
+Sub-agents run only their own package's checks and test files, never a full gate or a build.
+
+## Migrations
+
+If the project has database migrations: append only, never edit a released one, and give each parallel slice its
+own block of numbers (written in the status file) so two slices never take the same number.
+
+## Status and final report
+
+`docs/dev-sessions/status/orchestrator.md`, at most 80 lines, overwritten, committed with the work, in the shape of
+`status/_template.md`: DONE, IN FLIGHT, DECISIONS, NEEDS A HUMAN, NEXT. After a restart, the orchestrator and the
+Keep going prompt read it first. When the backlog is empty: make `TRACK COMPLETE` its first line, commit and push
+it, and end with a final report of at most 25 lines.
+
+## Keeping it going
+
+The portal's **Keep going** policy on the orchestrator chat nudges it when idle, wakes it when interrupted and
+starts it again from the status file when it ends (with caps), and leaves it alone once the status file starts with
+`TRACK COMPLETE` or a person closed the chat. It never answers a tool approval and never approves a deploy. Bypass
+survives a restart only under a time-boxed lease the owner grants. Where Keep going is not available, a monitor
+runs **outside** the workspace: a credential that can steer chats is never kept where agents can read it.
