@@ -36,6 +36,9 @@ import {
   type ValidateCiRequest,
   type ValidateCiResult,
   type CiRunReport,
+  type CiRunBump,
+  type BumpRequest,
+  type BumpTarget,
 } from '@portal/contracts';
 import { NO_VALUES, SessionStream } from '../chat/valueRedact.js';
 import type { Store } from '../store/store.js';
@@ -45,7 +48,7 @@ import { CI_LIMITS } from './limits.js';
 import { replan, compile, matches, resolveInputs, branchOf, tagOf, type EventContext } from './spec/compile.js';
 import { validateFiles, type SnapshotFile, type Validated } from './spec/validate.js';
 import { CiStore, type DeploymentRow, type EnvironmentRow, type RepoRow, type RunRow } from './store.js';
-import { CiLinks } from './links.js';
+import { CiLinks, type CiBumper } from './links.js';
 import type { CiSessionsPort } from './sessions.js';
 import type { CiTicketsPort } from './tickets.js';
 import { cleanLog, oneLine, redactSecrets } from './text.js';
@@ -930,8 +933,39 @@ export class CiService {
       workspaceState: 'running',
       archived: row.archived === 1,
       deployments: this.#cs.deploymentsOfRun(row.id).map(deploymentView),
-      reports: this.#cs.messagesOfRun(row.id).map((m) => ({ state: (m.state ?? 'failed') as CiRunReport['state'], outcome: m.outcome as CiRunReport['outcome'], sessionId: m.session_id, at: m.at, note: m.note })),
+      ...this.#messages(row.id),
     };
+  }
+
+  /** What CI told the run's session (one per state), and the bumps (`bump:<mode>` rows), apart. */
+  #messages(runId: string): Pick<CiRun, 'reports' | 'bumps'> {
+    const reports: CiRunReport[] = [];
+    const bumps: CiRunBump[] = [];
+    for (const m of this.#cs.messagesOfRun(runId)) {
+      if (m.state?.startsWith('bump:')) bumps.push({ sessionId: m.session_id, mode: m.state === 'bump:prioritise' ? 'prioritise' : 'ask', outcome: m.outcome === 'bumped' ? 'sent' : 'refused', at: m.at, note: m.note });
+      else reports.push({ state: (m.state ?? 'failed') as CiRunReport['state'], outcome: m.outcome as CiRunReport['outcome'], sessionId: m.session_id, at: m.at, note: m.note });
+    }
+    return { reports, bumps };
+  }
+
+  /* ---------- Bump (FR37a) ---------- */
+
+  /** The sessions a run can be bumped into: its own session first, then its workspace's, then its ticket's. */
+  bumpTargets(id: string): BumpTarget[] {
+    return this.#links.targets(this.#need(id));
+  }
+
+  /**
+   * Bumps a run into a session ("Fix" or "Ask", with a note), records it on the run and its ticket, and writes it to the platform audit.
+   * The caller checked the seam (operate on the run and on the session).
+   */
+  async bump(id: string, req: Partial<BumpRequest>, by: CiBumper): Promise<CiRun> {
+    const row = this.#need(id);
+    const waiting = this.#cs.deploymentsOfRun(row.id).find((d) => d.approval === 'waiting');
+    const to = await this.#links.bump(row, req, by, waiting?.environment ?? null);
+    this.#opts.audit?.({ kind: 'ci.run_bumped', actor: by.actor, userId: by.userId, subject: `ci_run:${row.id}`, detail: { workspace: row.workspace_id, run: row.number, pipeline: row.pipeline, sessionId: to.sessionId, mode: req.mode ?? null, ticketId: row.ticket_id, note: typeof req.note === 'string' && req.note.trim().length > 0 } });
+    this.#changed();
+    return this.get(id);
   }
 
   /** The run with the workspace's state filled in (one listing for however many runs). */

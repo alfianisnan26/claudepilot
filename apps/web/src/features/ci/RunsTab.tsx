@@ -1,12 +1,13 @@
-import { Button, cn, EmptyState, LoadError, RowsSkeleton } from '@isnanme/ui';
+import { Button, cn, EmptyState, LoadError, Menu, RowsSkeleton, useToast } from '@isnanme/ui';
 import { isCiActive, type CiRunList, type CiRunSummary, type CiStatus } from '@portal/contracts';
-import { ChevronDown, CircleCheck, CircleX, List, LoaderCircle, Plus, Workflow, X } from 'lucide-react';
+import { ChevronDown, ChevronsUp, CircleCheck, CircleX, List, LoaderCircle, Plus, Workflow, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ciApi } from './api';
 import { elapsed, formatDuration, MONO, reasonLabel, refLabel, runLook, shortSha, StatusIcon } from './parts';
+import { RunBumpDialog } from './RunBump';
 
 type Scope = 'all' | 'active' | 'failed' | 'passed';
 
@@ -20,6 +21,7 @@ const SCOPES: { id: Scope; label: string; Icon: typeof List; status?: CiStatus[]
 /** The runs of every remote, newest first (local-git-ci PRD §15). Follows the live socket; while something runs it also asks every few seconds. */
 export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
   const navigate = useNavigate();
+  const toast = useToast();
   const [params, setParams] = useSearchParams();
   const scope = (SCOPES.find((s) => s.id === params.get('s'))?.id ?? 'all') as Scope;
   const repo = params.get('repo');
@@ -28,6 +30,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
   const [repos, setRepos] = useState<{ id: string; name: string; workspaceId: string }[]>([]);
   const [failed, setFailed] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [bumping, setBumping] = useState<CiRunSummary | null>(null);
   const seq = useRef(0);
 
   const set = (patch: Record<string, string | null>) =>
@@ -124,23 +127,33 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
         ) : (
           <ul className="flex flex-col gap-2">
             {data.items.map((r) => (
-              <RunRow key={r.id} run={r} now={now} remote={repos.length > 1 ? names.get(r.repoId) : undefined} onOpen={() => navigate(`/admin/ci/runs/${r.id}`)} />
+              <RunRow key={r.id} run={r} now={now} remote={repos.length > 1 ? names.get(r.repoId) : undefined} onOpen={() => navigate(`/admin/ci/runs/${r.id}`)} onBump={() => setBumping(r)} />
             ))}
           </ul>
         ))}
+      <RunBumpDialog
+        run={bumping}
+        onClose={() => setBumping(null)}
+        onBumped={(r) => {
+          setBumping(null);
+          toast(`Bumped #${r.number}`);
+          void load();
+        }}
+      />
     </>
   );
 }
 
-function RunRow({ run: r, now, remote, onOpen }: { run: CiRunSummary; now: number; remote?: string; onOpen: () => void }) {
+/** A row opens the run; its ⋯ (outside the row's button, on the right) has Bump (FR37a). */
+function RunRow({ run: r, now, remote, onOpen, onBump }: { run: CiRunSummary; now: number; remote?: string; onOpen: () => void; onBump: () => void }) {
   const duration = r.durationMs ?? (isCiActive(r.status) ? elapsed(r.startedAt ?? r.createdAt, now) : null);
   const reason = r.status === 'failed' ? reasonLabel(r.reason) : null;
   return (
-    <li>
+    <li className="relative">
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
+        className="flex w-full min-w-0 items-center gap-3 rounded-2xl border border-line bg-surface py-3 pr-12 pl-3.5 text-left transition-colors hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none"
       >
         <StatusIcon status={runLook(r)} className="[&_svg]:size-[22px]" />
         <span className="min-w-0 flex-1">
@@ -160,6 +173,9 @@ function RunRow({ run: r, now, remote, onOpen }: { run: CiRunSummary; now: numbe
           </span>
         </span>
       </button>
+      <div className="absolute top-1/2 right-1.5 -translate-y-1/2">
+        <Menu label={`More for #${r.number}`} align="right" items={[{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: onBump }]} />
+      </div>
     </li>
   );
 }

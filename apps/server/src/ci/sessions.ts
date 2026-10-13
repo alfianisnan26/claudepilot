@@ -1,7 +1,7 @@
 // The one place CI touches chat sessions (interface I10 with the chat area): find the session that owns a branch, and tell it how
 // a run went as a portal message. CI talks to `CiSessionsPort`; a fake stands in for it in tests and nothing else imports the controller.
 import { randomUUID } from 'node:crypto';
-import { isChatActor } from '@portal/contracts';
+import { isChatActor, type ChatSessionState } from '@portal/contracts';
 import type { ChatController } from '../chat/controller.js';
 
 export interface CiSession {
@@ -12,6 +12,16 @@ export interface CiSession {
   branch: string | null;
   /** Not ended: a message can reach it. */
   live: boolean;
+  /** For the Bump picker (T-32): its state, workspace and last activity. */
+  state: ChatSessionState;
+  workspaceId: string;
+  lastActivityAt: string;
+}
+
+/** How a message from a run goes in: `later` (the default) queues behind the turn, `next` steers it; `label` names the sender ("#12"). */
+export interface CiSendOptions {
+  priority?: 'next' | 'later';
+  label?: string;
 }
 
 export interface CiSessionsPort {
@@ -22,8 +32,10 @@ export interface CiSessionsPort {
    * (an id folded by a Move, or the end of a legacy successor chain), so `id` may differ from the one asked for.
    */
   get(sessionId: string): CiSession | null;
-  /** Sends the text to the session as a portal message from the run (it queues behind the turn in progress). Throws when the session refuses. */
-  send(sessionId: string, runId: string, text: string): Promise<void>;
+  /** The sessions of a workspace, or of a ticket, newest activity first (the Bump picker). */
+  list(filter: { workspaceId?: string; ticketId?: string }): CiSession[];
+  /** Sends the text to the session as a portal message from the run (by default it queues behind the turn in progress). Throws when the session refuses. */
+  send(sessionId: string, runId: string, text: string, opts?: CiSendOptions): Promise<void>;
 }
 
 /** `ci:<run id>` once the chat area allows that actor; until then `portal:ci-<run id>`, which its pattern already does. */
@@ -34,7 +46,13 @@ export class ChatSessionsAdapter implements CiSessionsPort {
   constructor(private readonly chat: ChatController) {}
 
   #view(s: ReturnType<ChatController['get']>): CiSession | null {
-    return s ? { id: s.id, title: s.title, ticketId: s.ticketId ?? null, branch: s.worktree?.branch ?? null, live: s.state !== 'ended' } : null;
+    return s
+      ? { id: s.id, title: s.title, ticketId: s.ticketId ?? null, branch: s.worktree?.branch ?? null, live: s.state !== 'ended', state: s.state, workspaceId: s.workspaceId, lastActivityAt: s.lastActivityAt }
+      : null;
+  }
+
+  list(filter: { workspaceId?: string; ticketId?: string }): CiSession[] {
+    return this.chat.list(filter).map((s) => this.#view(s)!);
   }
 
   byBranch(workspaceId: string, branch: string): CiSession | null {
@@ -56,21 +74,26 @@ export class ChatSessionsAdapter implements CiSessionsPort {
     return this.#view(s);
   }
 
-  async send(sessionId: string, runId: string, text: string): Promise<void> {
-    await this.chat.send(sessionId, randomUUID(), text, { actor: ciActor(runId), actorLabel: 'CI', priority: 'later' });
+  async send(sessionId: string, runId: string, text: string, opts: CiSendOptions = {}): Promise<void> {
+    await this.chat.send(sessionId, randomUUID(), text, { actor: ciActor(runId), actorLabel: opts.label ?? 'CI', priority: opts.priority ?? 'later' });
   }
 }
 
 /** For tests: sessions by branch, and a record of what was sent. */
 export class FakeSessions implements CiSessionsPort {
   readonly sessions = new Map<string, CiSession & { workspaceId: string }>();
-  readonly sent: { sessionId: string; runId: string; text: string }[] = [];
+  readonly sent: { sessionId: string; runId: string; text: string; priority: 'next' | 'later'; label: string }[] = [];
   /** Old id -> the id the chat goes by now (a Move folded it). */
   readonly moved = new Map<string, string>();
   failSend: Error | null = null;
 
   add(s: Partial<CiSession> & { id: string; workspaceId: string; branch: string | null }): void {
-    this.sessions.set(s.id, { title: `Session ${s.id}`, ticketId: null, live: true, ...s });
+    const state = s.state ?? (s.live === false ? 'ended' : 'idle');
+    this.sessions.set(s.id, { title: `Session ${s.id}`, ticketId: null, lastActivityAt: new Date(Date.now() - this.sessions.size).toISOString(), ...s, state, live: state !== 'ended' });
+  }
+
+  list(filter: { workspaceId?: string; ticketId?: string }): CiSession[] {
+    return [...this.sessions.values()].filter((s) => (!filter.workspaceId || s.workspaceId === filter.workspaceId) && (!filter.ticketId || s.ticketId === filter.ticketId));
   }
 
   byBranch(workspaceId: string, branch: string): CiSession | null {
@@ -83,9 +106,9 @@ export class FakeSessions implements CiSessionsPort {
     return this.sessions.get(id) ?? null;
   }
 
-  async send(sessionId: string, runId: string, text: string): Promise<void> {
+  async send(sessionId: string, runId: string, text: string, opts: CiSendOptions = {}): Promise<void> {
     if (this.failSend) throw this.failSend;
     if (!this.sessions.has(sessionId)) throw new Error(`No session ${sessionId}: send to the id it goes by now.`);
-    this.sent.push({ sessionId, runId, text });
+    this.sent.push({ sessionId, runId, text, priority: opts.priority ?? 'later', label: opts.label ?? 'CI' });
   }
 }
