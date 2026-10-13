@@ -130,7 +130,15 @@
       "Bash(git push * +*)",
       "Bash(git push +*)",
       "Bash(git push * --delete*)",
-      "Bash(git push origin :*)"
+      "Bash(git push origin :*)",
+      "Bash(env)",
+      "Bash(printenv)",
+      "Bash(set)",
+      "Bash(env | *)",
+      "Bash(printenv | *)",
+      "Bash(set | *)",
+      "Bash(* /proc/*/environ*)",
+      "Bash(cat /proc/*/environ*)"
     ]
   }
 }
