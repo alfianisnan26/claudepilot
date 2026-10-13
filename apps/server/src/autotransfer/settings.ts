@@ -150,7 +150,7 @@ defineSetting({
   group: 'automove',
   order: 120,
   label: 'Other models',
-  help: 'When only the chat’s own model is nearly out (its weekly limit) and the shared limits have room, the chat may change to one of these models on the same Claude instead of moving: no handoff, the conversation stays. Best first, e.g. "sonnet" or "sonnet, haiku". Empty: a chat never changes model by itself.',
+  help: 'Model families, best first, separated by commas, e.g. "sonnet" or "opus, sonnet, haiku" (known: fable, opus, sonnet, haiku). Two uses. When only the chat’s own model is nearly out and the shared limits have room, the chat may change to the first of these with room on the same Claude (no handoff, the conversation stays); empty: never. And when a chat moves to a Claude without its model, this order replaces the built-in one (Fable, then Opus, Sonnet, Haiku), never above the chat’s model; empty: the built-in order.',
 });
 defineSetting({
   key: K.keepModelFirst,
@@ -161,6 +161,17 @@ defineSetting({
   order: 130,
   label: 'Keep the model',
   help: 'When a chat can either move to another Claude with room on its model or change model here: on, it moves and keeps its model; off, it stays here and changes model. When no Claude has room on its model, it moves with one of the other models.',
+});
+
+defineSetting({
+  key: K.returnToOriginalModel,
+  type: 'boolean',
+  default: false,
+  scope: 'global',
+  group: 'automove',
+  order: 135,
+  label: 'Back to model',
+  help: 'A chat moved to a Claude without its model runs on the best model that Claude has (Fable to Opus, say). On: when it later moves to a Claude that has its original model, by itself or by a person, it goes back to that model. Off: it keeps the model it runs on.',
 });
 
 defineSetting({

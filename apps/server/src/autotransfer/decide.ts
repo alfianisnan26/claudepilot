@@ -8,7 +8,11 @@
 import {
   ALL_MODEL_WINDOWS,
   AUTO_CONSTANTS,
+  downgradeChain,
   estimatedFigure,
+  isWindowOfFamily,
+  modelFamilyOf,
+  modelInfo,
   measuredFigure,
   unavailableFigure,
   type AutoClaudeRef,
@@ -41,17 +45,22 @@ export function effectiveMode(platform: AutoMode, user: AutoMode | null, session
   return wanted;
 }
 
-/** `opus`, `sonnet` or `haiku` from a model id (`claude-opus-4-1`, `sonnet[1m]`), or null. */
-export function modelFamily(model: string | null | undefined): string | null {
-  const m = /(opus|sonnet|haiku)/i.exec(model ?? '');
-  return m ? m[1]!.toLowerCase() : null;
-}
+/** The family of a model id from the catalogue (T-109): `fable`, `opus`, `sonnet`, `haiku` (`claude-fable-5-1`, `sonnet[1m]`), or null. */
+export const modelFamily = modelFamilyOf;
 
-/** Whether a usage window is the per-model window of a model family (`week_opus`, `model:claude-opus-4`). */
-export function windowOfFamily(key: string, family: string | null): boolean {
-  if (!family) return false;
-  if (key === `week_${family}`) return true;
-  return key.startsWith('model:') && key.slice(6).toLowerCase().includes(family);
+/** Whether a usage window is the per-model window of a model family (`week_opus`, `model:fable`, `model:claude-opus-4`). */
+export const windowOfFamily = (key: string, family: string | null): boolean => isWindowOfFamily(key, family);
+
+/**
+ * Whether a Claude can run a model family (T-109): what its `list_models` said (`listed`, when known), else the catalogue: a family every
+ * plan has (`assumed`) yes, one only some plans have (Fable) only when the Claude shows that family's usage window. A family the catalogue
+ * doesn't know is judged as before (yes).
+ */
+export function claudeHasFamily(u: Pick<ClaudeUsage, 'windows'> | undefined, family: string | null, listed: boolean | null): boolean {
+  if (listed !== null) return listed;
+  const info = modelInfo(family);
+  if (!info || info.assumed) return true;
+  return !!u?.windows.some((w) => isWindowOfFamily(w.key, family));
 }
 
 /** Where the source Claude stands for THIS chat (FR5, FR6): the windows that stop it, the fullest of them, and why a move is wanted. */
@@ -178,6 +187,8 @@ export interface DecideInput {
   load: (claudeId: string) => number;
   counters: DecideCounters;
   recommend: RecommendFn;
+  /** What a Claude's `list_models` said about a family (T-109), null when not known (then the catalogue and the usage windows decide). */
+  listed?: (claudeId: string, family: string) => boolean | null;
 }
 
 export interface DecideChoice {
@@ -219,6 +230,9 @@ export function candidates(
     if (!ok.has(c.claudeId) || !input.allow(c.claudeId)) return false;
     if (allow.size && !allow.has(c.claudeId)) return false;
     const u = usage.get(c.claudeId);
+    // The Claude must be able to run the model at all (T-109): a Fable chat never goes to a Claude without Fable on its own model; such a
+    // Claude is a candidate only with a model it has (the downgrade chain, below).
+    if (family && c.reason !== 'no_limits' && !claudeHasFamily(u, family, input.listed?.(c.claudeId, family) ?? null)) return false;
     if (c.reason === 'no_limits') {
       if (!settings.allowApiKey || settings.sameModelOnly) return false; // what a key's model availability is, the portal can't see
     } else if (!u || !freshReading(u, nowMs)) return false;
@@ -326,7 +340,10 @@ export function decide(input: DecideInput): Decision {
   }
   let other: { pick: MoveCandidate; model: string } | null = null;
   if (!keep) {
-    for (const f of fallbacks) {
+    // Move with another model (T-109): the best one at or below the chat's by the catalogue's rank (Fable, then Opus, Sonnet, Haiku), or
+    // the owner's order in `automove.modelFallback`; never a model above the chat's. With "Same model" on, only the owner's own list.
+    const chain = settings.sameModelOnly ? fallbacks : downgradeChain(family, settings.modelFallback).filter((x) => x !== family);
+    for (const f of chain) {
       const c = candidates(input, autoish ? 'auto' : 'ask', f).eligible[0];
       if (c) {
         other = { pick: c, model: f };

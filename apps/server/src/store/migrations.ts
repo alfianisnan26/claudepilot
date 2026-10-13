@@ -2744,6 +2744,15 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 761,
+    name: 'chat sessions: the model a chat had before a move changed it (T-109)',
+    up(db) {
+      // T-109: a move to a Claude without the chat's model applies the best model it has; the row keeps what APPLIES (`model`) and what the
+      // chat had before (`original_model`, null when they are the same family), so a later move can go back to it.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN original_model TEXT;`);
+    },
+  },
 ];
 
 /**

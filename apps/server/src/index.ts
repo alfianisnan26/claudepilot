@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { getRequestListener } from '@hono/node-server';
-import { formatCode, SETTING_KEYS, type LiveTopic } from '@portal/contracts';
+import { AUTO_SETTING_KEYS, formatCode, isWindowOfFamily, SETTING_KEYS, type LiveTopic } from '@portal/contracts';
 import { AccountHealthService } from './accounts/health.js';
 import { AccountPools } from './accounts/pools.js';
 import { AccountsService } from './accounts/service.js';
@@ -411,6 +411,9 @@ claudeUsage.start();
 registerClaudeUsageTools(claudeUsage);
 // The chat reader's hook: each rate_limit_info of a session on its Claude's own sign-in (the raw object, never stored as it came).
 chatController.onRateLimit = (sessionId, claudeId, info) => claudeUsage.onRateLimit(sessionId, claudeId, info);
+// T-109: whether a Claude shows a model's own usage window (a Fable week): how the Move flow knows it has Fable before its list_models is read.
+chatController.modelWindow = (claudeId, family) => claudeUsage.windowKeys(claudeId).some((k) => isWindowOfFamily(k, family));
+chatController.returnToOriginalModel = () => settingsModule.settings.get<boolean>(AUTO_SETTING_KEYS.returnToOriginalModel) === true;
 // Usage spend: who spent what (per session, workspace, ticket, persona), budgets with alerts and spike detection, over the recorded requests
 // (claude-usage PRD §21 to §26). The chat controller tells it of each recorded turn and each process start, and asks it before a message
 // whether a budget a person set to pause is used up. Its pages hear of changes on the `claudeusage` topic; `usageSpend.onAlert` is where

@@ -498,6 +498,15 @@ export class ClaudeUsageMonitor {
     };
   }
 
+  /** The usage window keys of a Claude's last reading (T-109: whether it shows a model's own limit, like Fable's week); [] when none. */
+  windowKeys(claudeId: string): string[] {
+    try {
+      return (this.#store.latest(claudeId)?.windows ?? []).map((w) => w.key);
+    } catch {
+      return [];
+    }
+  }
+
   /** Calls `fn` after every new reading of any Claude (a probe or a live `rate_limit_info`); returns the way to stop. Never with data. */
   onReading(fn: () => void): () => void {
     this.#readings.add(fn);

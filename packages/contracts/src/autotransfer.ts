@@ -47,6 +47,8 @@ export const AUTO_SETTING_KEYS = {
   modelFallback: 'automove.modelFallback',
   /** When both are possible: keep the model and move to another Claude first (on), or stay on this Claude and change model first (off). */
   keepModelFirst: 'automove.keepModelFirst',
+  /** A move (automatic or by a person) to a Claude that has the chat's original model goes back to it (T-109). Off by default. */
+  returnToOriginalModel: 'automove.returnToOriginalModel',
 } as const;
 
 /** Defaults and bounds of the numeric settings. The defaults are design choices, not measurements. */

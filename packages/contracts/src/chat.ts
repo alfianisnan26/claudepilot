@@ -38,6 +38,11 @@ export interface ChatSession {
   origin: ChatOrigin;
   /** The model in effect (Claude Code's `applied.model`), or null before the first report. */
   model: string | null;
+  /**
+   * The model the chat had before a move to a Claude without it changed the model (T-109): `model` is what applies there. Null (or absent)
+   * when the chat runs on its own model.
+   */
+  originalModel?: string | null;
   mode: ChatPermissionMode;
   /** Effort in effect (`low` … `max`), or null when the model has none. */
   effort: string | null;
@@ -546,6 +551,11 @@ export interface SwitchChatRequest {
   /** The Claude to move the chat to, on the same workspace. */
   claudeId: string;
   /**
+   * The model to run there (T-109), e.g. `opus` when the destination has no Fable: applied after the start and verified; when refused, the
+   * next one down the catalogue's chain. Absent: the chat's own model (verified the same way).
+   */
+  model?: string;
+  /**
    * `ask` (the default) first asks the Claude the chat runs on, with a message the portal sends, to compact what it
    * knows into a handoff document. `skip` moves with the conversation as the portal stored it. When the Claude
    * can't answer in time, the move goes ahead as if skipped and says why.
@@ -561,6 +571,12 @@ export interface ChatSwitchOption {
   reason: string | null;
   /** What would fix it: sign that Claude in, deal with the workspace's account pool, or start the workspace. */
   fix: 'sign_in' | 'pool' | 'start_workspace' | null;
+  /**
+   * The chat's model there (T-109): `from` the family the chat runs on, `to` the best family this Claude has at or below it (the catalogue's
+   * downgrade chain; null when it has none of them or the chat's model is unknown), `known` whether its `list_models` was read (else the
+   * catalogue and its usage windows decided). Absent when the chat's model isn't known.
+   */
+  model?: { from: string; to: string | null; known: boolean };
 }
 
 /** `GET CHAT_API.switchOptions(id)`: where a chat can move, before the person confirms (Workspace Claudes FR9, §11). */
