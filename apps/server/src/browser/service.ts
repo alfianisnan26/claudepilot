@@ -19,7 +19,7 @@ import type { AssignedPool } from '../pools/kinds.js';
 import type { PoolService } from '../pools/service.js';
 import type { Store } from '../store/store.js';
 import { type Companions, type CompanionPlan, type ExecResult, type ExecStream } from './companion.js';
-import { browserContainerState, hasBrowser, PENDING_ROLLBACK_MS, specIn, specOf, type KubeBrowsers, type KubePlan } from './kube.js';
+import { browserContainerState, hasBrowser, workspaceRunning, PENDING_ROLLBACK_MS, specIn, specOf, type KubeBrowsers, type KubePlan } from './kube.js';
 import { browserMatchers, compileBrowser, LOCK_HASH } from './compile.js';
 import { DEVICE_ID, deviceLabel, LEASE_TTL_S, Leases, refuse, type Lease } from './control.js';
 import type { BrowserKind } from './kind.js';
@@ -387,9 +387,12 @@ export class BrowserService {
     const template = ws.deployment.spec?.template;
     const has = hasBrowser(template);
     const stopped = ws.replicas === 0;
+    // The template may change while no workspace container runs: stopped, about to start, or still coming up (a new workspace, its
+    // pod waiting for an image or a node). Nothing can be lost then; a running one waits for its next start ("Restart needed").
+    const quiet = stopped || !workspaceRunning(ws.pod);
 
     if (!assigned) {
-      if (has && stopped) {
+      if (has && quiet) {
         await kb.setTemplate(ws, null);
         await kb.removeExtras(ws);
         this.event(workspaceId, 'removed', { why });
@@ -400,7 +403,7 @@ export class BrowserService {
         this.#save(workspaceId, { wipe_profile: 0 });
         this.event(workspaceId, 'profile_wiped', {});
       }
-      if (row) this.#save(workspaceId, has && !stopped ? { container: 'restart_needed', pool_id: null, revision: null, last_error: 'Restart the workspace to remove its browser.' } : { container: 'none', pool_id: null, revision: null, last_error: null });
+      if (row) this.#save(workspaceId, has && !quiet ? { container: 'restart_needed', pool_id: null, revision: null, last_error: 'Restart the workspace to remove its browser.' } : { container: 'none', pool_id: null, revision: null, last_error: null });
       return;
     }
 
@@ -412,15 +415,16 @@ export class BrowserService {
     // Refused for room at the last start: tried again at the next one (or when the pool changes, which is a new spec).
     if (row?.spec === `unfit:${spec}` && why !== 'workspace starting') return;
 
-    if (specIn(template) !== spec) {
-      if (!stopped) {
-        this.#save(workspaceId, {
-          ...base,
-          container: 'restart_needed',
-          last_error: has ? 'The browser changed: restart the workspace to apply it (its pod restarts).' : 'Restart the workspace to add its browser (its pod restarts).',
-        });
-        return;
-      }
+    const applied = specIn(template);
+    if (applied !== spec && !quiet && !has) {
+      this.#kubePending.delete(workspaceId);
+      this.#save(workspaceId, { ...base, container: 'restart_needed', last_error: 'Restart the workspace to add its browser (its pod restarts).' });
+      return;
+    }
+    // A running browser keeps working with what it was made from; the change waits for the workspace's next start, and says so.
+    if (applied !== spec && !quiet) this.#kubePending.set(workspaceId, 'The browser changed: restart the workspace to apply it.');
+    else this.#kubePending.delete(workspaceId);
+    if (applied !== spec && quiet) {
       const fit = await kb.fit(ws, plan, name);
       if (fit && !fit.fits) {
         if (has) await kb.setTemplate(ws, null);
@@ -431,7 +435,7 @@ export class BrowserService {
       await kb.setTemplate(ws, plan);
       // The egress opt-out (PRD Q12) is audited with every template change that puts a browser in the pod.
       this.event(workspaceId, has ? 'changed' : 'added', { why, fit: fit?.reason ?? 'not checked: the portal may not read the nodes', egress: kb.egress.mode });
-      this.#save(workspaceId, { ...base, container: 'workspace_stopped', spec, last_error: null });
+      this.#save(workspaceId, { ...base, container: stopped ? 'workspace_stopped' : 'starting', spec, last_error: null });
       return;
     }
     if (stopped) {
@@ -447,8 +451,11 @@ export class BrowserService {
       return;
     }
     if (st.restarts > (row?.restarts ?? 0) && row?.container === 'running') this.event(workspaceId, 'restarted', { why: 'container restarted', restarts: st.restarts });
-    this.#save(workspaceId, { ...base, container: st.state, spec, restarts: st.restarts, last_error: st.state === 'error' ? st.detail : null });
+    this.#save(workspaceId, { ...base, container: st.state, spec: applied, restarts: st.restarts, last_error: st.state === 'error' ? st.detail : null });
   }
+
+  /** Kubernetes workspaces whose running browser differs from its pool: applied at the next start (in memory; the next pass refills it). */
+  readonly #kubePending = new Map<string, string>();
 
   /** What the browser refuses on Kubernetes: the portal as workspaces reach it (`cluster.local` is refused anyway). */
   #kubePortalHosts(): string[] {
@@ -675,7 +682,7 @@ export class BrowserService {
     return {
       ...base,
       state,
-      detail: sup.chrome.error,
+      detail: sup.chrome.error ?? this.#kubePending.get(workspaceId) ?? null,
       chrome: sup.chrome.state,
       sandbox: sup.sandbox,
       display: sup.display,

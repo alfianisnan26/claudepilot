@@ -64,7 +64,7 @@ export function BrowserConfiguration({ workspace, assignments }: { workspace: Wo
         )}
       </div>
       {status?.state === 'error' && status.detail && <p className="text-danger">{status.detail}</p>}
-      {status?.state === 'restart_needed' && status.detail && <p className="text-muted">{status.detail}</p>}
+      {status && status.state !== 'error' && status.detail && <p className="text-muted">{status.detail}</p>}
       {failed && (
         <div className="flex items-start gap-2">
           <p className="min-w-0 flex-1 text-danger">Tools install failed{config?.install?.error ? `: ${config.install.error}` : ''}</p>

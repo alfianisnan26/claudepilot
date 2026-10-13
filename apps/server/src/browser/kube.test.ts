@@ -20,7 +20,7 @@ import {
   PRIVATE_V4,
   type KubePlan,
 } from './kube.js';
-import { browserHarness } from './testkit.js';
+import { browserHarness, supervisorStatus } from './testkit.js';
 
 type Harness = Awaited<ReturnType<typeof browserHarness>>;
 
@@ -153,6 +153,49 @@ describe('the pod template', () => {
     assert.equal(template().spec!.containers.length, 2, 'applied at the restart');
   });
 
+  test('a workspace still coming up (no workspace container running yet: a new one, an image pulling) takes it at once', async () => {
+    fake.clusterReads = false;
+    await workspace('dev');
+    podOf()!.status = { phase: 'Pending', containerStatuses: [{ name: 'workspace', ready: false, restartCount: 0, image: 'w', imageID: '', state: { waiting: { reason: 'ContainerCreating' } } }] } as never;
+    assign();
+    await h.service.converge(id(), 'assigned');
+    assert.equal(template().spec!.containers.length, 2);
+    assert.equal(h.service.configuration(id()).container, 'starting');
+  });
+
+  test('a pool change while the browser runs: it keeps working (the live view stays) and says the change waits for a restart', async () => {
+    fake.clusterReads = false;
+    await workspace('dev', { running: false });
+    const p = assign();
+    await h.service.beforeStart(id());
+    await rt.start('dev');
+    const pod = podOf()!;
+    pod.status = {
+      phase: 'Running',
+      containerStatuses: [
+        { name: 'workspace', ready: true, restartCount: 0, image: 'w', imageID: '', state: { running: {} } },
+        { name: BROWSER_CONTAINER, ready: true, restartCount: 0, image: IMAGE, imageID: '', state: { running: {} } },
+      ],
+    };
+    fake.onExec = (io) => {
+      io.stdout(JSON.stringify({ ok: true, result: supervisorStatus() }));
+      io.exit(0);
+    };
+    await h.service.converge(id(), 'timer');
+    assert.equal((await h.service.status(id())).state, 'ready');
+    const before = JSON.stringify(template());
+    h.pools.update(p.id, { content: { idleMinutes: 5 } });
+    await h.service.converge(id(), 'pool changed');
+    assert.equal(JSON.stringify(template()), before, 'not applied while it runs');
+    h.service.invalidate(id());
+    const st = await h.service.status(id());
+    assert.equal(st.state, 'ready', 'still usable');
+    assert.equal(st.detail, 'The browser changed: restart the workspace to apply it.');
+    await rt.stop('dev');
+    await h.service.beforeStart(id());
+    assert.notEqual(JSON.stringify(template()), before, 'applied at the next start');
+  });
+
   test('unassigning: a running workspace keeps its browser until it restarts; then the container, ConfigMap and policy go', async () => {
     await workspace('dev', { running: false });
     assign();
@@ -203,7 +246,7 @@ describe('caps and fit', () => {
     assert.equal(template().spec!.containers.length, 1, 'no browser in the template');
     const st = await h.service.status(id());
     assert.equal(st.state, 'error');
-    assert.match(st.detail ?? '', /Doesn't fit: n1 has 0\.5 CPU and 3\.0 GiB free by requests; the workspace with its browser asks 1\.1 CPU and 3\.0 GiB/);
+    assert.match(st.detail ?? '', /Doesn't fit: n1 has 0\.5 CPU and 3\.0 GiB free by requests; the workspace with its browser asks 1\.1 CPU and 2\.5 GiB/);
     const before = fake.requests.length;
     await h.service.converge(id(), 'timer');
     assert.equal(fake.requests.filter((r, i) => i >= before && r.url.startsWith('/api/v1/nodes')).length, 0, 'not checked again until a start');
@@ -256,7 +299,7 @@ describe('caps and fit', () => {
     const pods = [own, otherPod('k3s-node2', '6810m', '22524Mi'), otherPod('k3s-master', '3915m', '10432Mi')];
     const plan: KubePlan = { workspace: 'kohi-event', poolId: 'p', content: BROWSER_POOL_DEFAULTS, portalHosts: [], image: IMAGE };
     const need = podRequest({ containers: [{ name: 'workspace', resources: { requests: { cpu: '1', memory: GiText(2) } } }, browserContainer(plan)] });
-    assert.deepEqual(need, { cpu: 1100, memory: 3 * GiB });
+    assert.deepEqual(need, { cpu: 1100, memory: 2.5 * GiB });
     const selector = { 'kubernetes.io/hostname': 'k3s-node2' };
     const fit = fitOf({ need, nodes, pods, nodeSelector: selector, ownPod: (p) => p === own });
     assert.equal(fit.fits, true);

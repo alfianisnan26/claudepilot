@@ -37,13 +37,14 @@ const WORKSPACE_CONTAINER = 'workspace';
 export const SPEC_ANNOTATION = 'claudepilot.io/browser-spec';
 
 /**
- * What a browser container asks the scheduler to reserve (decided 2026-10-13 with the cluster's numbers, PRD §14.1 Kubernetes fit).
- * Requests are held while Chrome sleeps, and k3s-node2, where workspaces run, had 1.44 CPU and 7.3 GiB free by requests (0.69 CPU once
- * kohi-event restarts at its new 1 CPU request). CPU is compressible: an idle supervisor uses next to nothing and a busy Chrome is only
- * slowed when the node is contended, so 100m. Memory is not: a container above its request makes the whole pod, Claude Code included,
- * an eviction candidate, so the request sits above measured heavy use (0.71-0.75 GiB with three heavy tabs): 1 GiB. Limits are the pool's.
+ * What a browser container asks the scheduler to reserve (decided 2026-10-13 with the cluster's numbers, PRD §14.1 Kubernetes fit, and the
+ * coordinator's capacity order): requests are held while Chrome sleeps, workspace pods are pinned to k3s-node2, and it has well under a
+ * CPU of requests free. CPU is compressible: a sleeping supervisor uses next to nothing and a busy Chrome is only slowed when the node is
+ * contended, so 100m. Memory: measured on the rig 121 MB asleep and 601 MiB with three light tabs, so 512Mi sits at light use; above it
+ * the pod becomes an eviction candidate only under node memory pressure (k3s-node2 had 4.8 to 10 GiB free by requests). Limits are the
+ * pool's (2 CPU, 3 GiB by default).
  */
-export const K8S_BROWSER_REQUESTS = { cpu: '100m', memory: '1Gi' } as const;
+export const K8S_BROWSER_REQUESTS = { cpu: '100m', memory: '512Mi' } as const;
 /** Assigned browsers per Kubernetes target (PRD §14.1 Caps, A8): assigned ones hold requests. */
 export const K8S_BROWSER_CAP = 2;
 /** A pod that can't be scheduled this long after the browser was added gets its browser taken away again (PRD FR11). */
@@ -580,6 +581,11 @@ export class KubeBrowsers {
     const r = await this.exec(workspace, ['sh', '-c', `find "${HOME}/${PROFILE_REL}" -mindepth 1 -delete 2>/dev/null; true`], { container: 'workspace' }).catch(() => null);
     return r?.code === 0;
   }
+}
+
+/** Whether the workspace's own container runs in this pod (sessions may be in it), whatever the pod's phase. */
+export function workspaceRunning(pod: V1Pod | null): boolean {
+  return !!pod?.status?.containerStatuses?.find((c) => c.name === WORKSPACE_CONTAINER)?.state?.running;
 }
 
 /** The browser container's state in a pod, as the browser's row says it (PRD §20 A5: never the workspace's). */
