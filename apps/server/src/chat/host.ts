@@ -606,6 +606,8 @@ case "$cmd" in
     trap 'exit 1' HUP INT TERM
     timeout "\${CLAUDEPILOT_FIND_SECONDS:-25}" find . -mindepth 1 -maxdepth "$depth" \\( -name node_modules -o -name vendor -o -name __pycache__ -o -name venv -o -name site-packages -o -name bower_components -o \\( -name '.*' ! -name .git \\) -o -path "*$nl*" \\) -prune -o -name .git -prune -printf '%y\\t%P\\n' > "$t"
     rc=$?
+    # find prints in the file system's order (overlayfs and APFS differ): sorted, the list and what a cut at <max> keeps are the same everywhere.
+    LC_ALL=C sort -o "$t" "$t"
     printf '#root\\t%s\\n' "$here"
     head -n "$max" "$t"
     if [ "$(wc -l < "$t")" -gt "$max" ]; then echo '#truncated'; fi
