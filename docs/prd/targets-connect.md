@@ -1126,8 +1126,8 @@ workspace, and the orchestrator that runs inside `ws-kohi-event` would be killed
 ### 24.2 What follows
 
 - ~~Slice 2, the name becomes a label~~: built, §24.3. Then the coordinator sets `kubernetes/kohi-event` to the label `isnan-pod` (item 5), after the deploy.
-- **Slice 3, stored references move to the id** (T-42 item 4): tickets, sessions, CI remotes, agent access, pool assignments and audit rows are
-  resolved through the alias on read and written with the id on save, with a one-time background rewrite that is safe to stop and rerun.
+- ~~Slice 3, stored references move to the id~~ (T-42 item 4): tickets, chat sessions and agent access built, §24.4.
+- **Slice 4**: the rest of the columns in §24.4 (pool and account-pool assignments, CI, delivery, and the smaller ones), the same way.
 - The same thinking for the other named things in T-33 (Claudes, pools, remotes, targets, vaults).
 
 ### 24.3 The name becomes a label (slice 2, built)
@@ -1140,6 +1140,34 @@ workspace, and the orchestrator that runs inside `ws-kohi-event` would be killed
 | L4 | **Unique per target, across every form**: a label is refused (409, "“x” is already a workspace on Docker. Pick another name.") when another live workspace on the target answers to it: its name, its label, or a label it had; case does not make a label different. A new workspace may not take such a name either. Another target may use it. | One `<target>/<label>` must mean one workspace. |
 | L5 | **Who and how**: `PATCH /api/workspaces/<target>/<name>` or `/<stable id>` `{ label }`, and the admin Portal MCP tool `workspace_rename` (scope admin, a `confirmation_required` preview showing from, to and what stays). Both ask the seam for `operate` on the workspace after the alias is followed (unknown and not-yours are the same 404; a read token is refused); both write a `workspace.rename` row to the platform audit (actor, subject the stable id, from, to). | The ticket: authorised through the seam and audited. |
 | L6 | **Where it shows**: the workspace sheet's title and a Name row with a rename button (an InfoTip: a rename touches nothing running) and an ID row with the stable id and a copy button; the workspace list, dialogs, the New session picker, the glance widgets and palette. Places that hold only an id (sessions, glance) name it by its label through `workspaceLabel(id)`, which the web teaches from every workspace list, every live push and `GET /api/workspaces/labels` (read once at the app's start; records only, no runtime asked). | Text diet and phone first: one row, an icon button of 44 px, the explanation in an InfoTip. |
+
+### 24.4 Stored references move to the id (slice 3, built for tickets, chat sessions and agent access)
+
+| ID | Decision | Why |
+| --- | --- | --- |
+| R1 | **Column by column, module by module.** A module is converted when it writes the stable id on save (`WorkspaceIdentities.storedRef`), reads either form back as the key (`keyOf`: a stable id gives its workspace's `<target>/<name>`, a removed one's too; an old row's key is read as it is), and matches either form in a filter (`storedForms`: `IN (key, id)`; the three are the `WorkspaceRefs` interface). Everything past its queries keeps speaking the key, so runtimes, routes, live processes and the other modules see no change. | The key is what the rest of the portal splits into target and name; converting the readers of ~50 columns at once would be a rewrite of every module. One column at a time stays reviewable and testable. |
+| R2 | **Who a row belongs to is decided on what is STORED, not on the key it reads as.** A row holding a removed workspace's id reads as that workspace's old key, but never matches a new workspace that took the name: not in a filter, not for an agent's visibility, not for a claim, not for an opt-in. | The owner's rule in its strong form: an identity is not a name, not even a freed one. Before, a new workspace of the same name inherited the old one's tickets, sessions and, worse, its agent access. |
+| R3 | **A remove pins what the rewrite has not reached.** `WorkspaceIdentities.retire` first gives every row of the converted columns that still holds the workspace's key its id (`pinRefsOfRemoved`, synchronous, in the remove), then frees the name. | Without it, an old row written before slice 3 would still pass for the next workspace of that name until the rewrite came by, which is never for a key nobody holds. |
+| R4 | **The one-time background rewrite** (`workspaces/refRewrite.ts`), a minute after the start (after a list has given every workspace its identity): for each converted column (`REF_COLUMNS`), rows that still hold a key are rewritten to the id of the live workspace holding it, one row at a time (`UPDATE … WHERE rowid = ? AND col = <the key read>`, so a row its module changed meanwhile is left as written), in batches of 200 with a pause; a key no live workspace holds is left (readers take it as it is). On a unique column (one row per workspace) a key row whose id row exists is the same fact twice and is dropped. A column is recorded in `workspace_ref_rewrites` (migration 714: the rows moved, when) only when a pass reached its end; a done column is skipped. A shutdown aborts it between two rows; the next start continues from what is left. An error on one column is logged and tried at the next start. | Safe to stop and to rerun, and never in the way of the portal's own writes. |
+
+**Converted** (writes, reads and filters through the registry, and in `REF_COLUMNS`):
+
+| Column | Module | Notes |
+| --- | --- | --- |
+| `tickets.workspace_id` | Tickets service; the knowledge graphs (`Directory.workspaceKeyOf`) | An agent's visibility, its open-ticket limit, `ticket_claim_next` and the workspace filter match either form; a move between workspaces is compared on the stored form, so a row that only changed form logs no "workspace" entry. |
+| `chat_sessions.workspace_id` | `ChatStore` (made with the registry by the chat controller); usage spend (`SpendStore.workspaceKeyOf`); the knowledge graphs | Only what is persisted: the controller keeps keying live processes, readers and runtime calls by the key it reads back. Usage rows written from a session (`chat_usage`, `usage_sessions`) keep the key. |
+| `pmcp_agent_access.workspace_id` (unique), `pmcp_agent_tokens.workspace_id` | `AgentAccess` | A token's principal carries the key, as before; whether its workspace still has access is decided on the workspace the token was minted for, so a removed workspace's token or opt-in never passes for a successor of that name. |
+
+**Not converted yet** (slice 4; each one: its writes through `storedRef`, its reads through `keyOf`, its filters through `storedForms`, then it
+joins `REF_COLUMNS`): pool assignments (`assignments`, keyed `(workspace_id, pool_id)` and read by some fourteen modules: pools, delivery,
+secrets and rotation, personas, contexts, skills, MCP, browser, knowledge), account-pool assignments (`account_assignments`, `exposures`), CI
+(`ci_repos`, `ci_runs`, `ci_workspaces`: some sixty queries, and the git remote and runner token carry the workspace), delivery
+(`workspace_delivery`, `delivery_events`, `mcp_*`, `outbox_seen`), the rest of chat (`workspace_claudes`, `chat_worktrees`,
+`chat_folder_trust`, `chat_btw`, uploads and files), repos, browser, Claude Code version history, usage, notifications.
+
+**Not converted, on purpose: history.** Audit and event rows (`chat_audit`, the platform audit, `ticket_events`, the Portal MCP audit,
+`chat_usage`, `usage_sessions`, `usage_spikes`) and `tickets.reporter_workspace` say where something happened, as it was called then; they keep
+the key they were written with, are never rewritten, and a reader that needs the workspace now resolves the key through the alias.
 
 What the label is not yet used for: notifications and texts the server writes (they still say the name it was made with), and the `<target>/<label>`
 path where a label is not a plain name (it resolves through the API and the MCP tools, not as a URL path segment).
