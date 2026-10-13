@@ -4,18 +4,17 @@ Knowledge: vault "ClaudePilot dev" (6cd11f710cc3), folder Dev loop/. The queue l
 Models: opus for implementation, sonnet for checks, fable for diagnosis.
 
 ## LIVE
+- Run 19 (5234892, 17:39): T-143, T-141, T-136 slice 1. RELEASED WITH NO APPROVAL: production protection is off (see NEEDS A HUMAN).
 - Portal 2026.10.13-6 (run 18, e327e6d, gate 470 s green; released by the owner, verified by the coordinator).
   Live: T-24, T-28, T-32, T-42 slices 1-2, T-95 items 1-3, T-97, T-98, T-99, T-107, the env deny rules (eeee2c5).
 
 ## IN FLIGHT (17:3x: three slices, t105, t102 (running again), t110)
-- t105 (opus): dev-automove-model, dev/t105-automove-proven. T-105 is done apart from the area tests. T-109 WIP is 8cc8265 (catalogue, migration 761).
+- t105 (opus): dev-automove-model, dev/t105-automove-proven. T-105 plus T-109 (WIP 8cc8265, migration 761) PLUS D-39 (pace rule: respectPace
+  on, paceMinPct 90; evaluate on the usage poll while working; message, move, continue). It goes in the same slice, before the merge.
 - t102 (opus): dev-track-a-connect, be65ceb. Left: the session-states matrix (5714/5716) and mobile-drag again, web PRD 10.5. Then deploy.
 - t110 (opus): dev-gate-job, dev/t110-autoapprove-dry. T-110 slice 1: PRD FR41/FR41a, autoApprove off|dry (manage only, audited,
   migrations 780-784), dry lines on held releases; it approves nothing.
-- DEPLOY RUN 19 (17:30, 5234892, gate=true), waiting for approval. It carries:
-  - T-143: c3575d8, independently reviewed; auth.test 10/10, and tests 8 and 10 fail on the old app.ts.
-  - T-141: c3431fa; the proof build is in comment 809. The dev account is cluster-admin, already accepted.
-  - T-136 slice 1: 62f5d5e. Migration 772 relinks today's chains and moves their tickets to 5c9fcb5f.
+- RUN 19 LIVE (17:39, 5234892): T-143 (live probe: own https Origin 401, foreign 403), T-141, T-136 slice 1 (+772). In review: T-141, T-143.
 - T-159 (mine): scratch-portal.sh leaked the heavy lock (t105's portal held it for 50 min). The fix sits uncommitted until its test runs.
 - PAUSED: t100 at cf86a26. Both items are built and checked (session-list 290/0, scroll-lock 26/26, mobile-drag 11/11, web 422/422;
   shots in ~/.claudepilot/dev-sessions/shots/t100-*). Left: a clean session-swipe run and a merge of integration. Resumes after T-110.
@@ -54,7 +53,8 @@ agents, credentials never read), T-137, then T-138 (rank-10a, Settings v2, D-32:
 T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, never use that code, and tell the coordinator if they see it.
 
 ## NEEDS A HUMAN (required escalations only, D-10 and D-34)
-- None open. If t141 finds that the image-build door needs a wider Role, the exact diff goes here and on T-141 (permissions).
+- PRODUCTION: run 19 shows approval `auto` (decided_by null): someone turned off production protection for claudepilot after run 18.
+  If that was the owner's choice, write it as a DECISIONS row; if not, switch it back on (CI > Remotes > claudepilot). Details: T-110 comment 955.
 
 ## DECISIONS
 - 16:5x D-34 adopted: the iPhone checklist leaves NEEDS A HUMAN and becomes item 3c (agents verify with evidence). T-131's reassignment is
