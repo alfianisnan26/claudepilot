@@ -171,7 +171,7 @@ defineSetting({
   group: 'automove',
   order: 140,
   label: 'Dry run',
-  help: 'On: the engine records in the trail what it would do (move, tell a chat to stop, continue it) and does none of it. For checking a portal before trusting it to move chats by itself (T-105).',
+  help: 'On: the engine records in the trail what it would do (move a chat, tell it to finish and stop) and does none of it. For checking a portal before trusting it to move chats by itself (T-105).',
 });
 
 const clamp = (n: unknown, b: { min: number; max: number; default: number }) => {
