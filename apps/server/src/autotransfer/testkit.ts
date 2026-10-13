@@ -155,7 +155,8 @@ export function chatSession(id: string, over: Partial<ChatSession> = {}): ChatSe
 }
 
 /** The usage monitor over fixtures (read as given; `calls` counts reads). */
-export function fakeUsage(claudes: () => ClaudeUsage[]): UsagePort & { calls: number } {
+export function fakeUsage(claudes: () => ClaudeUsage[]): UsagePort & { calls: number; reading(): void } {
+  const listeners = new Set<() => void>();
   const u = {
     calls: 0,
     async report() {
@@ -163,6 +164,14 @@ export function fakeUsage(claudes: () => ClaudeUsage[]): UsagePort & { calls: nu
       return { claudes: claudes() };
     },
     recommend: recommendMove,
+    onReading(fn: () => void) {
+      listeners.add(fn);
+      return () => void listeners.delete(fn);
+    },
+    /** The monitor took a new reading. */
+    reading() {
+      for (const fn of listeners) fn();
+    },
   };
   return u;
 }

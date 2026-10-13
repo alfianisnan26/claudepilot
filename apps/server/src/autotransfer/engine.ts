@@ -40,6 +40,9 @@ const RECHECK_MS = 60_000;
 /** Every chat at or under the threshold, waiting or working, is looked at again this often (T-105): the tick, jittered up to 20 s. */
 const TICK_MS = AUTO_CONSTANTS.waitRecheckMin * MIN;
 const JITTER_MS = 20_000;
+/** A new usage reading asks for a tick too (T-105 item 2): a burst of readings is one tick, and never sooner than this after the last one. */
+const REFRESH_DEBOUNCE_MS = 5_000;
+const REFRESH_MIN_GAP_MS = 30_000;
 /** The refusals that make a chat at or under the threshold wait for quota rather than give up (T-105 R3). */
 const WAIT_CODES: ReadonlySet<string> = new Set(['no_destination', 'destination_busy', 'session_cap', 'day_cap', 'paused']);
 /** What the engine says to a chat (fixed text over names and numbers; never anyone else's words). */
@@ -90,6 +93,10 @@ export class AutoTransferEngine {
   readonly last = new Map<string, Decision>();
   #sweep: (() => void) | null = null;
   #tick: (() => void) | null = null;
+  #offUsage: (() => void) | null = null;
+  #refresh: (() => void) | null = null;
+  #lastTickMs = Number.NEGATIVE_INFINITY;
+  #ticking = false;
   #idle: Promise<void> = Promise.resolve();
 
   constructor(deps: EngineDeps) {
@@ -112,6 +119,7 @@ export class AutoTransferEngine {
       void this.tick().catch((e: unknown) => console.error(`[autotransfer] tick failed: ${(e as Error).message}`));
     };
     this.#tick = this.#d.clock.timer(TICK_MS + Math.random() * JITTER_MS, tick);
+    this.#offUsage = this.#d.usage.onReading?.(() => this.usageRefreshed()) ?? null;
   }
 
   stop(): void {
@@ -120,6 +128,10 @@ export class AutoTransferEngine {
     this.#sweep?.();
     this.#tick?.();
     this.#tick = null;
+    this.#offUsage?.();
+    this.#offUsage = null;
+    this.#refresh?.();
+    this.#refresh = null;
     for (const cancel of this.#timers.values()) cancel();
     this.#timers.clear();
   }
@@ -243,9 +255,33 @@ export class AutoTransferEngine {
    * (the monitor's snapshot, never a probe). Off when the platform's mode is off.
    */
   async tick(): Promise<void> {
+    if (this.#ticking) return;
+    this.#ticking = true;
+    try {
+      await this.#tickOnce();
+    } finally {
+      this.#ticking = false;
+    }
+  }
+
+  /**
+   * The usage monitor has a new reading (a probe, a chat's live `rate_limit_info`): a tick soon, so a chat crossing the threshold mid-turn
+   * is steered within seconds rather than at the next 2-minute tick. Cheap: a burst is one tick, at most one every 30 s, none while one runs.
+   */
+  usageRefreshed(): void {
+    if (this.#refresh || !this.#off) return;
+    const delay = Math.max(REFRESH_DEBOUNCE_MS, this.#lastTickMs + REFRESH_MIN_GAP_MS - this.#d.clock.now());
+    this.#refresh = this.#d.clock.timer(delay, () => {
+      this.#refresh = null;
+      void this.tick().catch((e: unknown) => console.error(`[autotransfer] tick failed: ${(e as Error).message}`));
+    });
+  }
+
+  async #tickOnce(): Promise<void> {
     const platform = platformSettings(this.#d.settings);
     if (platform.mode === 'off') return;
     const now = this.#d.clock.now();
+    this.#lastTickMs = now;
     const reports = new Map<string, Promise<ClaudeUsage[]>>();
     for (const s of this.#d.chat.list()) {
       if (s.state === 'ended' || s.process === 'gone' || this.#inflight.has(s.id) || s.switching) continue;

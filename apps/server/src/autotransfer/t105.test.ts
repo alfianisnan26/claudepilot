@@ -34,6 +34,7 @@ async function rig(opts: { settings?: Record<string, unknown>; used: Record<stri
     chat,
     auto,
     used,
+    usage: u,
     get engine() {
       return engine;
     },
@@ -181,4 +182,25 @@ test('the mode off: the tick reads nothing', async () => {
   assert.equal(r.chat.moves.length, 0);
   assert.deepEqual(r.kinds(), []);
   r.engine.stop();
+});
+
+test('item 2: a new usage reading is evaluated within seconds, not at the next tick; a burst is one look, and looks are 30 s apart at least', async () => {
+  const r = await rig({ used: { work: 80, home: 50 }, session: { state: 'working' } });
+  r.used.work = 92;
+  for (let i = 0; i < 5; i++) r.usage.reading();
+  await r.tick(0.25); // 15 s: before the 2-minute tick
+  const first = r.usage.calls;
+  assert.ok(first >= 1 && first <= 2, 'five readings, one look (one report for the tick, one for the evaluation it queued)');
+  assert.equal(r.chat.sent.length, 1, 'the steer came from the reading');
+  assert.match(r.chat.sent[0]!.text, /^Your Claude \(Work\) is at 8% left/);
+  r.usage.reading();
+  await r.tick(0.25); // 15 s after the first look: not yet
+  assert.equal(r.usage.calls, first);
+  await r.tick(0.25); // 30 s after it
+  assert.ok(r.usage.calls > first, 'the next look, 30 s after the last');
+  const after = r.usage.calls;
+  r.engine.stop();
+  r.usage.reading();
+  await r.tick(1);
+  assert.equal(r.usage.calls, after, 'a stopped engine no longer listens');
 });

@@ -26,6 +26,8 @@ export interface UsagePort {
   /** The snapshot, filtered to the Claudes `actorId` may use. Never probes. */
   report(opts: { actorId?: string }): Promise<{ claudes: ClaudeUsage[] }>;
   recommend: RecommendFn;
+  /** Calls `fn` after every new reading (the monitor's `onReading`); absent in some tests. Returns the way to stop. */
+  onReading?(fn: () => void): () => void;
 }
 
 export interface OwnerPort {

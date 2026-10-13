@@ -20,11 +20,11 @@ export { AutoStore } from './store.js';
 /** The chat controller and the usage monitor as the engine needs them; null when what was handed over lacks them (some tests). */
 function ports(deps: Platform['deps']): { chat: ChatPort; usage: UsagePort } | null {
   const chat = deps.chat as unknown as Partial<ChatPort> | null;
-  const usage = deps.claudeUsage as unknown as Partial<Pick<UsagePort, 'report'>> | null;
+  const usage = deps.claudeUsage as unknown as Partial<Pick<UsagePort, 'report' | 'onReading'>> | null;
   if (!chat || typeof chat.switchClaude !== 'function' || typeof chat.switchOptions !== 'function' || typeof chat.onEvent !== 'function' || typeof chat.history !== 'function' || typeof chat.list !== 'function' || typeof (chat as { send?: unknown }).send !== 'function') return null;
   if (!usage || typeof usage.report !== 'function') return null;
   const c = chat as ChatPort;
-  const u = usage as Pick<UsagePort, 'report'>;
+  const u = usage as Pick<UsagePort, 'report' | 'onReading'>;
   return {
     chat: {
       get: (id) => c.get(id),
@@ -36,7 +36,7 @@ function ports(deps: Platform['deps']): { chat: ChatPort; usage: UsagePort } | n
       history: (id, after) => c.history(id, after),
       send: (id, text, o) => (chat as unknown as { send(id: string, uuid: string, text: string, opts: object): Promise<void> }).send(id, randomUUID(), text, o),
     },
-    usage: { report: (o) => u.report(o), recommend: recommendMove },
+    usage: { report: (o) => u.report(o), recommend: recommendMove, ...(typeof u.onReading === 'function' ? { onReading: (fn: () => void) => u.onReading!(fn) } : {}) },
   };
 }
 

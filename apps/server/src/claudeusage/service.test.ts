@@ -286,6 +286,31 @@ test('passive: a Claude with no reading yet gets one; a refused request is exhau
   }
 });
 
+test('onReading: told after a probe that read and after a live reading, not after rubbish; a listener that throws harms nothing (T-105)', async () => {
+  const s = scripted(() => planResult([win('session', 10, reset5h, 'Session')]));
+  const h = await usageHarness({ probe: s.probe });
+  try {
+    let n = 0;
+    const off = h.usage.onReading(() => n++);
+    h.usage.onReading(() => {
+      throw new Error('boom');
+    });
+    await h.usage.tick();
+    await sleep(5);
+    assert.equal(n, 1, 'the probe');
+    h.source.sessions.set('s1', { workspaceId: 'docker/ws1', claudeId: 'c1' });
+    h.usage.onRateLimit('s1', 'c1', INFO_WARNING);
+    assert.equal(n, 2, 'the live reading');
+    h.usage.onRateLimit('s1', 'c1', null);
+    assert.equal(n, 2, 'nothing read, nobody told');
+    off();
+    h.usage.onRateLimit('s1', 'c1', INFO_WARNING);
+    assert.equal(n, 2, 'stopped listening');
+  } finally {
+    h.done();
+  }
+});
+
 const alertsOf = (log: ClaudeUsageAlert[]) => log.map((a) => `${a.window}:${a.level}`);
 
 test('alerts: once per window, level and period; rising levels alert again; a reset starts a new period', async () => {
