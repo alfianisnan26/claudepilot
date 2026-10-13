@@ -16,6 +16,9 @@
 //   [[big <kilobytes>]]        one reply of roughly that many kilobytes
 //   [[err <status>]]           that HTTP error (429, 500, 529 …) with Anthropic's error body
 //   [[usage <in> <out> <cacheRead> <cacheWrite>]]   a reply reporting exactly these token counts
+//   [[agent <models> <directive> <arg>]]   sub-agents: one Task (Agent) call per comma-separated model (sonnet, opus, haiku, or - for none:
+//                              the call carries no model argument), all in one message so they run side by side; each sub-agent's prompt is
+//                              [[<directive> <arg>]], so `[[agent opus,- slow 8]]` starts two that stream for 8 s, `[[agent sonnet bash ls]]` one that runs ls
 //
 // A request that only carries tool results gets "Tool finished: …". Requests without tools (titles) get "ok", except a side question (btw: its
 // instructions say "answer one side question about a coding session"): the directive is read from its <side_question> text, so [[slow 5]], [[long 8]],
@@ -181,6 +184,21 @@ function plan(body) {
       return { text: Array.from({ length: Math.max(1, Math.round((Number(arg) || 10) * 1024 / 80)) }, (_, i) => `Line ${i + 1}: the quick brown fox jumps over the lazy dog, again.`).join('\n') };
     case 'err':
       return { error: Number(arg) || 500 };
+    case 'agent': {
+      // The tool Claude Code offers for sub-agents (`Agent` in newer versions, `Task` before).
+      const tool = (body.tools ?? []).map((t) => t?.name).find((n) => n === 'Agent' || n === 'Task') ?? 'Task';
+      const [models = '-', inner = 'echo', ...rest] = arg.split(' ');
+      const tools = models.split(',').map((model, i) => ({
+        tool,
+        input: {
+          description: `QA agent ${i + 1}${model === '-' ? '' : ` (${model})`}`,
+          subagent_type: 'general-purpose',
+          prompt: `[[${inner}${rest.length ? ` ${rest.join(' ')}` : ''}]]`,
+          ...(model === '-' ? {} : { model }),
+        },
+      }));
+      return { text: 'Starting agents.', tools };
+    }
     case 'usage': {
       const [i = 1000, o = 200, cr = 0, cw = 0] = arg.split(/\s+/).map(Number);
       return { text: `Usage reported: in ${i}, out ${o}, cache read ${cr}, cache write ${cw}.`, usage: { input_tokens: i, output_tokens: o, cache_read_input_tokens: cr, cache_creation_input_tokens: cw } };
@@ -234,13 +252,13 @@ async function stream(res, p, body) {
     ev('content_block_stop', { index });
     index++;
   }
-  if (p.tool) {
-    ev('content_block_start', { index, content_block: { type: 'tool_use', id: `toolu_qa${++counter}`, name: p.tool, input: {} } });
-    ev('content_block_delta', { index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(p.input) } });
+  for (const call of p.tools ?? (p.tool ? [{ tool: p.tool, input: p.input }] : [])) {
+    ev('content_block_start', { index, content_block: { type: 'tool_use', id: `toolu_qa${++counter}`, name: call.tool, input: {} } });
+    ev('content_block_delta', { index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(call.input) } });
     ev('content_block_stop', { index });
     index++;
   }
-  ev('message_delta', { delta: { stop_reason: p.tool ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: usageOf(p) });
+  ev('message_delta', { delta: { stop_reason: p.tool || p.tools ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: usageOf(p) });
   ev('message_stop', {});
   res.end();
 }
