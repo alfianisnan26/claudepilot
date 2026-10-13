@@ -8,7 +8,8 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
   Live: T-24, T-28, T-32, T-42 slices 1-2, T-95 items 1-3, T-97, T-98, T-99, T-107, the env deny rules (eeee2c5).
 
 ## IN FLIGHT (17:3x: three slices, t105, t102 (running again), t110)
-- t105 (opus): dev-automove-model, dev/t105-automove-proven. T-105 is done apart from the area tests. T-109 WIP is 8cc8265 (catalogue, migration 761).
+- t105 (opus): dev-automove-model, dev/t105-automove-proven. T-105 plus T-109 (WIP 8cc8265, migration 761) PLUS D-39 (pace rule: respectPace
+  on, paceMinPct 90; evaluate on the usage poll while working; message, move, continue). It goes in the same slice, before the merge.
 - t102 (opus): dev-track-a-connect, be65ceb. Left: the session-states matrix (5714/5716) and mobile-drag again, web PRD 10.5. Then deploy.
 - t110 (opus): dev-gate-job, dev/t110-autoapprove-dry. T-110 slice 1: PRD FR41/FR41a, autoApprove off|dry (manage only, audited,
   migrations 780-784), dry lines on held releases; it approves nothing.
