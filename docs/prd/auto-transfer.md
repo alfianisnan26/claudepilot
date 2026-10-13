@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.1** (2026-10-12). Design only: `packages/contracts/src/autotransfer.ts` has landed and nothing else is built (**Not built**). It extends the Move flow of [Workspace Claudes](workspace-claudes.md) and the recommendation of [Claude usage](claude-usage.md) §20, and it reverses two of Workspace Claudes' decisions (owner decision O2, §4). ✅ = checked here, 📄 = documented, 🔬 = unverified. |
+| Status | **v0.2** (2026-10-13). **Server built** (`apps/server/src/autotransfer`: decision, engine, routes, `automove.*` settings, migration 220, Undo's server side, notification). **Web built** (`apps/web/src/features/autotransfer`: the card, the divider mark and Undo, the session ⋯ item, the per-Claude dialog; the platform rows come from the settings registry), checked in a real browser at 390 and 1280 px, light and dark, against a scripted session (§14). Not yet seen: a real move on real plan readings (🔬, owner). It extends the Move flow of [Workspace Claudes](workspace-claudes.md) and the recommendation of [Claude usage](claude-usage.md) §20, and it reverses two of Workspace Claudes' decisions (owner decision O2, §4). ✅ = checked here, 📄 = documented, 🔬 = unverified. |
 | Owner | Alfian Isnan |
-| Last updated | 2026-10-12 |
+| Last updated | 2026-10-13 |
 | Depends on | [Workspace Claudes](workspace-claudes.md) (`switchOptions`, `switchClaude`, handoff and skip), [Claude usage](claude-usage.md) (headroom, pace, `recommendMove`; U1a), [Web app & PWA](web-app-pwa.md) §11 (the bus, notifications), [Settings & policies](settings-policies.md) |
 | Related | [Platform roadmap](platform-roadmap.md), [Triggers](triggers.md), [Chat sessions](chat-sessions.md) |
 
@@ -227,20 +227,34 @@ Scenario tests with expected results worked out by hand and written in the test 
 | --- | --- | --- |
 | Decision function | S1 to S20 as pure tests over fixtures | Not built |
 | The move | A real `switchClaude` against the stand-in API in a scratch Docker workspace (Kubernetes off, `KUBECONFIG` unset): one chat id across the move, the divider mark, the audit row, the undo | Not built |
-| Web | The card, the divider mark and the Undo at 390 and 1280 px, light and dark, keyboard and touch | Not built |
+| Web | The card, the divider mark and the Undo at 390 and 1280 px, light and dark, keyboard and touch | **Checked** 2026-10-13 (`tools/qa/automove.mjs`, see §14.1); keyboard order not walked by hand |
 | Real accounts | A real plan reading and a real move on the owner's Claudes | 🔬 manual, owner |
+
+### 14.1 The web half, as observed (2026-10-13)
+
+`tools/qa/automove.mjs` runs the real session page in headless Chromium over CDP against a scripted session (`btw-fake.js`) and a stand-in for `/api/autotransfer` (a chat moved by itself from Work to Home an hour ago, and a card offering Spare), and the real Settings page and Claudes list of a scratch portal (a local workspace with three Claudes; the per-Claude route was called for real: a threshold of 15 and two destinations saved, 0 refused with 422). Sizes: 390 x 844 with touch and the iPhone's safe areas (59 top, 34 bottom), and 1280 x 800; light and dark; four cases (platform `auto`; long names with no spaces, an Undo that can't run and a used-up source; platform `ask`; platform `off`). Result: **520 of 520 checks** on the full matrix; then a check that no text spills out of the card or the divider was added (with the old alternative button it fails, 35 of 37 at 390 px; fixed, the long-name case passes 148 of 148 at both sizes, light and dark).
+
+| What | Observed |
+| --- | --- |
+| The card | "Home has 8 % left" (or "… is used up"), "Move to Spare (40 % left)", "Drops 1 agent"; Move, Later, Always automatic (only when the platform is `auto`), Other (the alternatives inline, each a full button). ⓘ: the reason, each number's basis, the handoff or the stored conversation, and, in Bypass, that the move keeps it (chat-sessions §21 FR20a). Every button 44 px tall on touch; the card stays clear of the composer; no horizontal scroll with names of 60+ characters without spaces (found and fixed: an alternative's button didn't wrap its name; the harness now checks that no text spills out of its box). Later and Move call their routes and the card goes. No card when the platform is off. |
+| The divider | "Moved to Home · 07:20" with an **auto** chip, an ⓘ and **Undo**; on a phone the chip and Undo wrap under the words. Undo is 44 px on touch and opens the Move dialog with Work (the Claude the chat left) chosen; when it can't run it is disabled and the ⓘ says why ("Out of quota until it resets."). The row is a named group, not a separator, so its button is announced. |
+| Session ⋯ | "Auto move: Ask" (or Automatic); a dialog with Default, Off, Ask and, only when the platform allows it, Automatic, as 44 px rows (the 40 px segmented control was replaced); "Now: …" with the reason it does nothing (pooled, no plan reading, an old reading, …) and a pause. No item when the platform is off. Choosing sets the chat's override (`PUT …/sessions/:id`). |
+| Settings | The "Auto move" group's rows from the server's registry: Auto move, Without asking, Threshold, Projection, Pause, Per chat, Per day, Per Claude, Same model, API keys, each with its ⓘ; no horizontal scroll at 390. |
+| A Claude's ⋯ "Auto move…" | Its threshold (empty follows the default) and its destinations in order (up, down, remove, add); a line "Auto move is off. Settings" while the platform is off; 44 px buttons on touch. |
+
+Decided here (PRD defaults, no owner question): the user's own choices (`AutoUserPrefs`) have no screen yet: with one owner who is also the admin, the platform rows are the choices; the route exists for multi-user. The session ⋯ item is hidden while the platform is off (a chat's choice can't raise the ceiling, FR1). Not done: the keyboard order walked by hand, phone landscape, 768, 1024 and 1920 (the harness runs 390 and 1280), and a real move on real readings (🔬).
 
 ## 15. Milestones
 
 | Milestone | Scope | Status |
 | --- | --- | --- |
 | Contracts | `packages/contracts/src/autotransfer.ts` | **Built** 2026-10-12 |
-| N4a | Server: the decision function, safeguards, the engine on `onEvent`, tables, routes, settings, audit, notification, tests; migrations 220 to 229 | **Not built** |
-| N4b | Web: the card, the divider mark and Undo, the session menu item, the settings section, the per-Claude choice | **Not built** |
+| N4a | Server: the decision function, safeguards, the engine on `onEvent`, tables, routes, settings, audit, notification, tests; migrations 220 to 229 | **Built** (on integration) |
+| N4b | Web: the card, the divider mark and Undo, the session menu item, the settings section, the per-Claude choice | **Built** 2026-10-13 (branch `dev/automove-web`); §14.1 |
 
 ## 16. Decisions and open questions
 
-Decided here (owner decisions in the [roadmap](platform-roadmap.md) §11): opt-in, off, `ask` and `auto` (O2); the destination stays in the same workspace and a paid API-key Claude is off by default (O9); "same model" means the family is not blocked, not a promise about plans (O9); "Always automatic" is per chat, never global. Open: 🔬 does a plan that lacks a model show it in any reading the portal gets; should a long idle chat on a low Claude be moved at its next message instead of at a turn's end (the PRD says no: a turn boundary is the only moment); whether the handoff turn of a Claude at 8 % is acceptable (it costs a turn of that Claude's last quota).
+Decided here (owner decisions in the [roadmap](platform-roadmap.md) §11): opt-in, off, `ask` and `auto` (O2); the destination stays in the same workspace and a paid API-key Claude is off by default (O9); "same model" means the family is not blocked, not a promise about plans (O9); "Always automatic" is per chat, never global. Open: 🔬 does a plan that lacks a model show it in any reading the portal gets; should a long idle chat on a low Claude be moved at its next message instead of at a turn's end (the PRD says no: a turn boundary is the only moment); whether the handoff turn of a Claude at 8 % is acceptable (it costs a turn of that Claude's last quota). **Open since 2026-10-13:** [chat-sessions](chat-sessions.md) §21 FR20a (decision SR) says an automatic move keeps Bypass, while FR9 here still says a chat in Bypass is never moved by itself and the engine follows FR9 (`decide.ts`: Bypass only gets a card). The web says "Bypass stays on after the move" in the card's ⓘ, which is true of the Move the card starts; whether `auto` may now move a Bypass chat by itself is the owner's call.
 
 ## 17. Multi-user (PLAN-10)
 
