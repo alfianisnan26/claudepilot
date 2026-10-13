@@ -108,6 +108,8 @@ import { usageReport } from './usage.js';
 const START_MODE = 'default';
 /** Origins (`kind/producer`) Claude Code puts on user lines it makes itself: seen from the real CLI (2.1.296) for a finished background command. */
 const HARNESS_ORIGINS: ReadonlySet<string> = new Set(['task-notification/session-task']);
+/** The control-line key under which a turn Claude Code started by itself (T-99) is remembered; keys carry a `/`, message ids never do. */
+const HARNESS_COMMAND = (uuid: string) => `harness/${uuid}`;
 /** The claude flags cp-session runs after `--`; `--resume` or `--session-id` plus the id are spliced in. */
 const BASE_FLAGS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', START_MODE];
 /** The tools of the portal's own MCP connector (named `pilot`), pre-allowed for a session that holds an agent token. */
@@ -2944,8 +2946,7 @@ export class ChatController {
     }
     if (parsed.controlResponse && !this.#acceptControlResponse(sessionId, parsed.controlResponse)) return;
     if (parsed.replay && !this.#acceptReplay(sessionId, parsed.replay)) return;
-    if (parsed.commandUuid && !this.#chat.isMessage(sessionId, parsed.commandUuid))
-      return void this.#endIntegrity(sessionId, `Claude Code queued a message this portal didn't send (${shortId(parsed.commandUuid)})`);
+    if (parsed.commandUuid && !this.#acceptCommand(sessionId, parsed.commandUuid, parsed.inputs?.[0]?.state)) return;
     if (parsed.enterPlan) this.#mode(sessionId).enterPlan = true;
     if (parsed.modeSeen !== undefined && !this.#acceptMode(sessionId, parsed.modeSeen)) return;
 
@@ -3165,6 +3166,28 @@ export class ChatController {
    * command it started finishing (a user line it marks `origin: task-notification` from `session-task`): without that, any session that
    * ran a command in the background ended for integrity when the command did. Any other origin, or none, is still refused.
    */
+  /**
+   * A `command_lifecycle` line names a message this portal sent. One it never sent is an intrusion, with one exception (T-99): Claude
+   * Code starts a turn of its own for a sub-agent or background task that finished, and that turn's command shows up as `started`
+   * with no `queued` before it and no replayed user line (then `system/init` and the turn). It is accepted only when a task ran in
+   * this process (the portal tracks them: chat_tasks), and the rest of that command's lifecycle (completed, cancelled) is then its
+   * own, remembered as a control line `harness/<uuid>`. A `queued` line for an unknown command, or a `started` one in a process
+   * without any task, still ends the session.
+   */
+  #acceptCommand(sessionId: string, uuid: string, state: string | undefined): boolean {
+    if (this.#chat.isMessage(sessionId, uuid)) return true;
+    const key = HARNESS_COMMAND(uuid);
+    if (this.#chat.controlState(sessionId, key) !== null) return true;
+    if (state === 'started' && this.#chat.hasTaskActivitySince(sessionId, this.#chat.row(sessionId)?.process_started_at ?? null)) {
+      this.#chat.addControl(sessionId, key);
+      this.#chat.setControlState(sessionId, key, 'completed');
+      console.log(`[chat] ${shortId(sessionId)}: Claude Code started a turn of its own (${shortId(uuid)}) after a sub-agent or background task`);
+      return true;
+    }
+    this.#endIntegrity(sessionId, `Claude Code queued a message this portal didn't send (${shortId(uuid)})`);
+    return false;
+  }
+
   #acceptReplay(sessionId: string, replay: NonNullable<ParsedLine['replay']>): boolean {
     if (replay.uuid && this.#chat.isMessage(sessionId, replay.uuid)) return true;
     if (replay.origin && HARNESS_ORIGINS.has(`${replay.origin.kind}/${replay.origin.producer ?? ''}`)) return true;
