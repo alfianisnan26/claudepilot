@@ -16,6 +16,7 @@ export * from './personas.js';
 export * from './settings.js';
 export * from './portalmcp.js';
 export * from './tickets.js';
+export * from './bump.js';
 export * from './browser.js';
 export * from './knowledge.js';
 export * from './ci.js';

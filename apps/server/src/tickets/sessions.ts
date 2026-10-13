@@ -28,8 +28,11 @@ export interface TicketSessions {
   list(filter?: { workspaceId?: string; ticketId?: string }): TicketSessionInfo[];
   /** Creates the session, its ticket recorded on it. Nothing is sent yet. */
   create(req: CreateSession): Promise<TicketSessionInfo>;
-  /** Sends the ticket as a message to the session, as the actor `ticket:<id>`; `label` is what the transcript calls the sender. */
-  send(sessionId: string, ticketId: string, text: string, label: string): Promise<void>;
+  /**
+   * Sends the ticket as a message to the session, as the actor `ticket:<id>`; `label` is what the transcript calls the sender. `priority`
+   * is the chat queue's (a bump: `next` steers the running turn, `later` waits for it).
+   */
+  send(sessionId: string, ticketId: string, text: string, label: string, opts?: { priority?: 'next' | 'later' }): Promise<void>;
   /** Calls `cb` whenever a session changes (created, a new state, ended). Returns an unsubscribe. */
   onSession(cb: (session: TicketSessionInfo) => void): () => void;
 }
@@ -68,8 +71,8 @@ export class ChatTicketSessions implements TicketSessions {
     return info(session);
   }
 
-  async send(sessionId: string, ticketId: string, text: string, label: string): Promise<void> {
-    await this.chat.send(sessionId, randomUUID(), text, { actor: `ticket:${ticketId}`, actorLabel: label });
+  async send(sessionId: string, ticketId: string, text: string, label: string, opts: { priority?: 'next' | 'later' } = {}): Promise<void> {
+    await this.chat.send(sessionId, randomUUID(), text, { actor: `ticket:${ticketId}`, actorLabel: label, ...(opts.priority ? { priority: opts.priority } : {}) });
   }
 
   onSession(cb: (session: TicketSessionInfo) => void): () => void {

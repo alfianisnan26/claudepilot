@@ -2,11 +2,15 @@ import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
 import { track } from '@isnanme/ui';
 import {
   TICKET_API,
+  type BumpRequest,
+  type BumpTarget,
   type CloseTicketRequest,
   type CommentTicketRequest,
   type CreateTicketRequest,
   type StartTicketSessionRequest,
   type StartTicketSessionResult,
+  type TicketBumped,
+  type TicketBumpResult,
   type TicketDetail,
   type TicketEvent,
   type TicketFilter,
@@ -69,4 +73,7 @@ export const ticketsApi = {
   opening: (id: string) => request<{ text: string }>('GET', TICKET_API.opening(id)),
   tags: () => request<TicketTag[]>('GET', TICKET_API.tags),
   brief: (id: string) => request<{ id: string; summary: string; status: string }>('GET', TICKET_API.brief(id)),
+  bumpTargets: (id: string) => request<BumpTarget[]>('GET', TICKET_API.bump(id)),
+  bump: (id: string, body: BumpRequest) => request<TicketBumpResult>('POST', TICKET_API.bump(id), body),
+  bumped: (sessionId: string) => request<TicketBumped[]>('GET', TICKET_API.bumped(sessionId)),
 };
