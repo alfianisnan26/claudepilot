@@ -1,33 +1,35 @@
 # Orchestrator status (2026-10-13)
 
-Session fe3df8bc in kubernetes/kohi-event, main folder ~/work/claudepilot, branch integration. Three packages, one sub-agent each.
+Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 after a session limit), main folder ~/work/claudepilot, branch integration. Three packages, one sub-agent each.
 
-## DONE
-- B item 1, deploy waits -> "Deploy waits" notification (ci_waiting): merged as 9dd73e8 (notify tests 18/18 here). Migration 720 (existing devices that hear CI failures get it) is on B's branch, next merge.
-- Pipeline gate script: shellcheck SC2015 fixed (1f045fe; the suite's shellcheck test failed on the coordinator's b6f141f).
+## DONE (on local integration, push waits for the gate on b893ac8)
+- B item 1, deploy waits -> "Deploy waits" notification (ci_waiting): 9dd73e8; migration 720 (existing devices that hear CI failures get it): ad0b7e6 via cc838d9.
+- B item 6, tests that leak or flake, side-usage split: 41d4dc0 via cc838d9. B item 2, V1 canary guards + report: e818540, af7bf08.
+- A items 1 and 2: the gate hang's cause (a stop landing while the agent dials; 7d41bc7), scratch-portal observations (f31f6ca) via e653847.
+- C item 1, btw UI against the real engine (tools/qa/btw-real.mjs, the card says how many messages the answer saw): a97a950.
+- Gate hygiene: shellcheck SC2015 (1f045fe), repo-find sorted (8b3316a), deploy-pipeline e2e test: the fakes' PATH in ~/.profile (b893ac8; /etc/profile resets PATH in a login shell and the real kubectl installed today at /usr/local/bin won; the test's wait now says which step failed). Passes alone 7/7.
 
 ## IN FLIGHT
-- A slice 1 finished (fable): 7d41bc7 the hang's cause (a stop landing while the agent dials found no session to close; dialTunnel now takes an abort signal; every awaited Connect test event has a timeout), f31f6ca scratch-portal observations in PRD C1 and scratch-portal.sh refuses a busy port. Items 1 and 2 done; to merge after the current gate. Incident: A's scratch portal took C's port 3405 and wiped C's scratch data; C told to restart on 3409.
-- B slice 2 (opus): item 2, V1 canary guards + deterministic service.test.ts + PRD report. B slice 1 finished: 41d4dc0 (boot leak, gate flake, usagespend side split), ad0b7e6 (migration 720), 98b2e09 (merge of integration); typecheck of the final tree not yet confirmed by B.
-- C slice 1 (fable): item 1 btw UI against the real engine; two commits local, waiting on the heavy lock for its Chromium run.
-- Gate on 9dd73e8 running (npm-ci, typecheck, web-build green; suite first pass: cpb-view and the deploy-pipeline e2e failed under load, shellcheck real and fixed; rerun-alone pass pending).
+- Gate on b893ac8 (started 06:58 under the heavy lock, log /tmp/orch-gate-b893ac8.out). Green -> push integration.
+- B item 5, auto-move web half (opus, worktree dev-automove-web, branch dev/automove-web, scratch port 3411): continues the uncommitted wiring the first sub-agent left (card, divider, Undo, menu item, settings rows).
+- A item 3, T6 acceptance and abuse (opus, dev-track-a-connect, port 3413, rig namespace dev-rig-connect).
+- C item 2, phone chrome all states (opus, dev-track-c-ui, port 3415).
 
 ## DECISIONS
-- Owner (2026-10-13 06:05): prioritise the auto-move web half (B item 5: suggestion card, divider mark, Undo, settings rows for threshold and destinations). It runs as its own slice in a new worktree dev-automove-web (branch dev/automove-web, opus) as soon as a sub-agent slot frees, ahead of N2 and N3.
-- Model per slice (owner, 2026-10-13): sonnet for narrow checks, opus for implementation, fable only for hard diagnosis or after two failures. The first three slices ran on fable (dispatched before the rule); from slice 2 on the model is named next to each slice.
-- Package B does item 6 (test leaks and flakes) right after item 1, before V1: the gate's reliability gates everything else. (Done.)
-- The gate (b6f141f on integration) fails a hung test after GATE_TEST_TIMEOUT_MS and reruns failing files alone; package A fixes the cause, not the gate.
-- Status-file-only commits are pushed to integration without a gate run (docs only, nothing executable). Same for a one-line script fix verified by its own test (shellcheck) when a gate is already queued behind it.
-- B's branch merges integration instead of rebasing (its commits were already pushed; no force-push). Merge commits are kept as they are.
-- A side question counts as a request for spike rules; "side" is a server-side split only, the Usage page does not show it yet (B's call, PRD claude-usage §22).
+- Owner (06:05): the auto-move web half runs ahead of N2 and N3.
+- Model per slice (owner): sonnet for narrow checks, opus for implementation, fable only for hard diagnosis or after two failures.
+- The gate fails a hung test after GATE_TEST_TIMEOUT_MS and reruns failing files alone; the cause is fixed in the package, not the gate.
+- Status-file-only commits are pushed without a gate run (docs only). B's branch merges integration instead of rebasing. Merge commits are kept.
+- A side question counts as a request for spike rules; "side" is a server-side split only (PRD claude-usage §22); the Usage page does not show it yet.
+- Housekeeping at the move: two orphaned `yes` processes (a load simulation from B's worktree, 2 CPUs for 45 min) and the scratch portals 3405 and 3409 were stopped.
 
 ## NEEDS A HUMAN
-- Multi-user (parked, not in this backlog): the owner wants the current single-owner access (workspace kohi-event, this session) reserved for a user `admin`; the password was given in chat on 2026-10-13 and must not be written anywhere: when that work starts, the owner sets it through the setup token or a Secret.
+- Multi-user (parked, not in this backlog): the owner wants the current single-owner access (workspace kohi-event, this session) reserved for a user `admin`; the password was given in chat on 2026-10-13 and is written nowhere: when that work starts, the owner sets it through the setup token or a Secret.
 - After the next deploy: on the iPhone (Home Screen PWA, quiet hours off) confirm "Deploy waits" arrives when a deploy run holds for approval; migration 720 must have run on the real portal.
 - Decide whether the Usage page should show "of which side questions".
+- T6: whatever still needs Docker, macOS, Windows or a second cluster (A's report will list it).
 
 ## NEXT
-- Next dispatch order (owner priority): auto-move web half (dev-automove-web, opus; npm ci queued on the lock) as soon as a slot frees, then A item 3 (T6 rig, opus), C item 2/3, B item 3.
-- Gate green -> push integration (9dd73e8 + 1f045fe + status). Then merge B's 98b2e09 (migration 720 etc.), gate, push.
-- A and C return -> review, targeted tests, gate, push; then A item 3 (T6 rig, opus), C item 2/3 (phone chrome, CI screens; opus), B item 3 (N2 web; opus).
-- First deploy of the day once migration 720 and the notification are on integration with a green gate (ci_run_trigger, gate=false).
+- Gate green -> push integration (19+ commits). Then merge each branch as it reports, targeted tests, gate, push.
+- After the three slices: B item 3 (N2 web, opus), B item 4 (N3 triggers, sonnet/opus), C item 3 (CI screens, opus), A item 4 (T5 second pass, opus), then C items 4 and 5.
+- First deploy of the day once integration is pushed with a green gate (ci_run_trigger, gate=false): the deploy-waits notification and migration 720 are user-visible.
