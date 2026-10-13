@@ -44,6 +44,8 @@ export interface AttributionInput {
 
 export interface Attribution {
   totals: ChatUsageTotals;
+  /** The side questions' part of `totals` (rows with `kind = 'side'`); they are inside every row too. */
+  side: ChatUsageTotals;
   rows: AttributionRow[];
   coverage: SpendFigure;
   more: number;
@@ -349,13 +351,18 @@ function sessionTree(input: AttributionInput, grand: ChatUsageTotals): { rows: A
 /** Groups the window's requests by one dimension (§22). */
 export function attribute(input: AttributionInput): Attribution {
   const grand = zeroTotals();
-  for (const r of input.rows) addRow(grand, r);
+  const sideAcc = zeroTotals();
+  for (const r of input.rows) {
+    addRow(grand, r);
+    if (r.kind === 'side') addRow(sideAcc, r);
+  }
   const totals = clean(grand);
+  const side = clean(sideAcc);
   if (input.by === 'session') {
     const { rows, more } = sessionTree(input, grand);
     const coverage: SpendFigure = grand.requests === 0 ? unavailableFigure('no_samples') : !(grand.costUsd > 0) ? { value: null, basis: 'unavailable', reason: 'no_cost' } : estimatedFigure(100);
-    return { totals, rows, coverage, more };
+    return { totals, side, rows, coverage, more };
   }
   const { rows, coverage, more } = groups(input, grand);
-  return { totals, rows, coverage, more };
+  return { totals, side, rows, coverage, more };
 }

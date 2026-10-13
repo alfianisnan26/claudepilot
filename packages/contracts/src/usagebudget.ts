@@ -99,6 +99,8 @@ export interface AttributionReport {
   to: string;
   /** Every request in the window, attributed or not. The rows' totals add up to it (by `session`, the roots'). */
   totals: SpendTotals;
+  /** The side questions' part of `totals` (`chat_usage.kind = 'side'`, chat PRD §20): counted in every row and total above, shown apart here. */
+  side: SpendTotals;
   rows: AttributionRow[];
   /** The percent (0 to 100) of the window's dollars whose row is `known` or `none` (not `unknown`). 100 for every dimension but `persona` and `ticket` (a deleted session's ticket is unknown). */
   coverage: SpendFigure;

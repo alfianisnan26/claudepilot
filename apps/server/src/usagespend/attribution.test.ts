@@ -32,6 +32,7 @@ const row = (session: string, workspaceId: string, claudeId: string, atMin: numb
   costUsd,
   requests: 1,
   agents: 0,
+  kind: 'turn',
   ...over,
 });
 
@@ -310,4 +311,15 @@ test('a new dimension plugs in as one grouper: usage per user, children rolled u
   // Today the creator is the one owner, whoever is asked about.
   assert.equal(creatorOf(sessions.get('G1')), OWNER_ACTOR);
   assert.equal(creatorOf(undefined), 'u_owner');
+});
+
+test('side questions: a `side` row is inside the window total and its session’s row, and shown apart in `side`; a window without one says 0', () => {
+  const plain = attribute(input('workspace'));
+  assert.deepEqual(plain.side, { costUsd: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: 0, agents: 0 });
+  const withSide = attribute(input('session', { rows: [...ROWS, row('S5', 'docker/web', 'c2', 8, 0.2, { input: 20, output: 10, kind: 'side' })] }));
+  assert.deepEqual(withSide.side, { costUsd: 0.2, input: 20, output: 10, cacheRead: 0, cacheWrite: 0, requests: 1, agents: 0 });
+  assert.equal(withSide.totals.costUsd, 11.7, 'counted in the window');
+  assert.equal(withSide.totals.requests, 8);
+  const solo = withSide.rows.find((r) => r.key === 'S5')!;
+  assert.deepEqual([solo.own.costUsd, solo.own.requests], [4.2, 2], 'and in its session’s row');
 });

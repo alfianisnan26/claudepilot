@@ -51,11 +51,10 @@ Each has a recommended default in its PRD; agents used the default and said so.
 
 ## 6. Known problems and risks
 
-- `qa/boot.test.ts` leaves portal processes running when it fails or hangs: three `cp-qa-boot-*` portals burned 50-97 % CPU for 30 minutes during the round and made the load average climb. Kill the child in a `finally` and add a timeout.
-- Flaky under load, pass alone: `browser/gate.test.ts`, `claudeversion/service.test.ts` ("at most two per pass").
+- Done on `dev/track-b-notify-triggers` (2026-10-13): `qa/boot.test.ts` kills its portal (its process group) in a `finally`, with a 60 s boot deadline and an `exit` backstop; `browser/gate.test.ts` asserted the count of the gate's fire-and-forget `/activity` posts right after the tool reply, the one ordering assumption in the file (now it polls for them; the 1100 ms sleeps are safe: the cache stamp is taken before the reply). Found by reading; the old file did not fail in 3 runs under 6 busy loops, so if it flakes again the cause is elsewhere.
+- Flaky under load, pass alone: `claudeversion/service.test.ts` ("at most two per pass").
 - Real-device checks are not done and cannot be done here: iOS Safari keyboard and bottom sheet (btw), Home Screen push, screen readers. The checklist items are in `docs/coord/s2-checklist-items.md` and should be merged into `docs/prd/platform-roadmap.md`.
 - Dark mode, 768 and 1920 px, and several wizard and list states were not looked at for the Connect web UI.
-- Usage side questions: `usagespend` should subscribe to `chatController.onSideUsage` and split by `chat_usage.kind='side'`.
 - Incidents disclosed during the round: two scratch portals saw the real kubeconfig for a short time (read-only listing, nothing created); one scratch portal inherited the owner's Claude profile (profile file rewritten by Claude Code, backup kept); a Docker pull briefly started on the Mac host Docker (killed); one early test run may have sent test data to a public address (no credentials).
 - Commits are unsigned (no GPG key in the sandbox).
 

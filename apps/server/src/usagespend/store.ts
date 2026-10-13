@@ -179,7 +179,7 @@ export class SpendStore {
       }
       const rows = db
         .prepare(
-          `SELECT at_ms, session_id, workspace_id, claude_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests, agents
+          `SELECT at_ms, session_id, workspace_id, claude_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests, agents, kind
            FROM chat_usage WHERE ${where.join(' AND ')} ORDER BY at_ms, id`,
         )
         .all(...args) as unknown as {
@@ -195,6 +195,7 @@ export class SpendStore {
         cost_usd: number;
         requests: number;
         agents: number;
+        kind: string;
       }[];
       const out: UsageRow[] = [];
       for (const r of rows) {
@@ -212,6 +213,7 @@ export class SpendStore {
           costUsd: r.cost_usd,
           requests: r.requests,
           agents: r.agents,
+          kind: r.kind === 'side' ? 'side' : 'turn',
         });
       }
       return out;
