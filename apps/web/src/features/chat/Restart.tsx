@@ -28,7 +28,8 @@ export function useRestart(session: ChatSession | null | undefined, tasks: ChatT
   const toast = useToast();
   const now = useMinute();
   const roomy = useMediaQuery('(min-width: 640px)');
-  const anchor = useRef<HTMLButtonElement>(null);
+  // The chip as a whole (not its button): the popover sits above all of it, Cancel and Restart now included.
+  const anchor = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState<'mcp' | 'manual' | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -202,20 +203,19 @@ export function RestartChip({
   onNow,
 }: {
   hint: HintView | null;
-  anchor: RefObject<HTMLButtonElement | null>;
+  anchor: RefObject<HTMLDivElement | null>;
   onOpen: () => void;
   onCancel: () => void;
   onNow: () => void;
 }) {
   if (!hint) return null;
   return (
-    <div data-restart-chip="" className="glass-card flex max-w-full min-w-0 items-center gap-1 self-center rounded-full p-1 text-[13px] text-ink-soft">
+    <div ref={anchor} data-restart-chip="" className="glass-card flex max-w-full min-w-0 items-center gap-1 self-center rounded-full p-1 text-[13px] text-ink-soft">
       <button
-        ref={anchor}
         type="button"
         aria-haspopup="dialog"
         onClick={onOpen}
-        className="press flex min-h-9 min-w-0 items-center gap-2 rounded-full pr-2 pl-2.5 font-semibold tap:min-h-11"
+        className="press flex min-h-9 min-w-0 items-center gap-2 rounded-full pr-2 pl-2.5 font-semibold tap:min-h-11 pointer-coarse:min-h-11"
       >
         <RotateCw className={`size-4 shrink-0 ${hint.state === 'restarting' ? 'animate-spin' : ''}`} aria-hidden="true" />
         <span role="status" className="min-w-0 break-words [overflow-wrap:anywhere]">
@@ -224,12 +224,12 @@ export function RestartChip({
         <ChevronUp className="size-4 shrink-0 text-muted" aria-hidden="true" />
       </button>
       {hint.inline === 'cancel' && (
-        <Button size="sm" variant="secondary" onClick={onCancel}>
+        <Button size="sm" variant="secondary" className="pointer-coarse:h-11" onClick={onCancel}>
           Cancel
         </Button>
       )}
       {hint.inline === 'now' && (
-        <Button size="sm" variant="primary" icon={<RotateCw className="size-4" />} onClick={onNow}>
+        <Button size="sm" variant="primary" className="pointer-coarse:h-11" icon={<RotateCw className="size-4" />} onClick={onNow}>
           Restart now
         </Button>
       )}

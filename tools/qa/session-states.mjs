@@ -429,7 +429,7 @@ const STATES = {
     await ev(`__fake.patch(${JSON.stringify({ state: 'working', configChangedAt: at, configChanged: { at, reasons: ['mcpset', 'settings', 'portal_tools'] }, busySince: at, autoApply: false, autonomous: false })})`);
     await sleep(350);
     const CHIP = `(() => { const c = document.querySelector('[data-restart-chip]'); if (!c) return null; const R = (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, b: r.bottom, r: r.right }; };
-      return { ...R(c), text: c.innerText.replace(/\s+/g, ' ').trim(), buttons: [...c.querySelectorAll('button')].map((b) => ({ what: b.innerText.trim() || b.getAttribute('aria-label'), disabled: b.disabled, ...R(b) })) }; })()`;
+      return { ...R(c), text: c.innerText.replace(/\\s+/g, ' ').trim(), buttons: [...c.querySelectorAll('button')].map((b) => ({ what: b.innerText.trim() || b.getAttribute('aria-label'), disabled: b.disabled, ...R(b) })) }; })()`;
     const chipOk = async (label, expect) => {
       const c = await ev(CHIP);
       check(`${label}: the chip shows`, !!c, '');
@@ -477,7 +477,8 @@ const STATES = {
       check(`${label}: the note inside the visible screen`, n.x >= -0.5 && n.r <= n.view.w + 0.5 && n.y >= -0.5 && n.b <= n.view.h + 0.5, J(n));
       check(`${label}: the note wraps its text`, n.sw <= n.cw + 1, J({ sw: n.sw, cw: n.cw }));
       if (composer && n.composer) check(`${label}: the note never over the composer`, !intersects(n, n.composer), J({ note: n, composer: n.composer }));
-      await ev(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
+      // Outside the note but inside what holds it (the sheet or the popover: a tap outside that would close it too).
+      await ev(`((${opener})?.closest('[role=dialog]') ?? document.body).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
       await sleep(150);
       check(`${label}: a tap outside closes it`, !(await ev(NOTE)));
       await ev(`${opener}.click()`);
