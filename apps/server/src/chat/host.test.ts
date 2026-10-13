@@ -524,9 +524,10 @@ type TrustScanOut = {
   plugins: string[];
   allowRules: number;
   envNames: string[];
+  rulesOnly: boolean;
 };
 
-const EMPTY_TRUST_SCAN: TrustScanOut = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [] };
+const EMPTY_TRUST_SCAN: TrustScanOut = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [], rulesOnly: true };
 const sha = (b: string | Buffer) => createHash('sha256').update(b).digest('hex');
 
 /** Runs `trustscan`, expecting one JSON line and exit 0. */
@@ -593,6 +594,7 @@ test('trustscan: names what .mcp.json and .claude/settings*.json would load, nev
     plugins: ['formatter@tools'],
     allowRules: 3,
     envNames: ['DEBUG', 'NODE_OPTIONS'],
+    rulesOnly: false,
   });
   for (const value of ['ghp_VALUE', 'npx', 'gh-mcp', 'docs.example', 'curl', 'evil', 'judge it', 'npm test', 'Read(.env)', 'sk-never', '/tmp/', 'off@tools'])
     assert.ok(!raw.includes(value), `${value} is never printed`);

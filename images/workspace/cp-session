@@ -654,7 +654,11 @@ case "$cmd" in
         | .key] | unique),
       plugins: ([$s[] | .enabledPlugins | objects | to_entries[] | select(.value == true) | .key] | unique),
       allowRules: ([$s[] | .permissions | objects | .allow | arrays | length] | add // 0),
-      envNames: ([$s[] | .env | objects | keys[]] | unique)
+      envNames: ([$s[] | .env | objects | keys[]] | unique),
+      rulesOnly: ($invalid == "" and ($files | split(" ") | any(. == ".mcp.json") | not)
+        and all($s[]; (keys - ["$schema", "permissions"]) == []
+          and ((.permissions // {}) | type == "object" and (keys - ["allow", "deny", "ask"]) == []
+            and all(.[]; type == "array" and all(.[]; type == "string")))))
     }' "$@" </dev/null || exit 1
     exit 0
     ;;
