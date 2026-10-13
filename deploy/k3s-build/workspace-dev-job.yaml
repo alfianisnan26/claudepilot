@@ -1,0 +1,32 @@
+# Builds the DEVELOPMENT workspace image IN the cluster (kaniko, linux/amd64): the workspace image plus Chromium, shellcheck and kubectl
+# (images/workspace/Dockerfile.dev). Build the normal workspace image first (its tag is the BASE build argument's default).
+#   scripts/k3s-build.sh workspace-dev <tag>
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: claudepilot-build-workspace-dev
+  namespace: isnan-claudepilot
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: k3s-node2
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:v1.23.2
+          args:
+            - --context=git://github.com/alfianisnan26/claudepilot.git#refs/heads/main#COMMIT
+            - --context-sub-path=images/workspace
+            - --dockerfile=Dockerfile.dev
+            - --destination=registry.isnan-registry.svc.cluster.local:5000/claudepilot/workspace:TAG
+            - --insecure
+            - --insecure-registry=registry.int.isnan.me
+            - --cache=false
+            - --snapshot-mode=redo
+            - --push-retry=3
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "4", memory: 6Gi}
