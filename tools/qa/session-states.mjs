@@ -295,15 +295,28 @@ async function invariants(cfg, label, { kb = false, reviewed = false } = {}) {
   }
   // The transcript: where its first line sits when scrolled to the top and its last when scrolled to the end, computed from the content's
   // own coordinates (scrolling it would fight the follow-the-end of a streaming turn).
-  const ends = await ev(`(() => {
+  const END = `(() => {
     const log = ${Q.log}; const items = log.firstElementChild?.children; if (!items?.length) return null;
     const box = log.getBoundingClientRect(); const at = (e) => e.getBoundingClientRect();
     const firstIn = at(items[0]).top - box.top + log.scrollTop, lastIn = at(items[items.length - 1]).bottom - box.top + log.scrollTop;
     return { first: box.top + firstIn, last: box.top + lastIn - Math.max(0, log.scrollHeight - log.clientHeight) };
-  })()`);
+  })()`;
+  let ends = await ev(END);
+  let endTop = top;
+  // The transcript's bottom room follows the stack's height through a ResizeObserver and a render: on a loaded machine that can land after
+  // the fixed pause above (two cases in 5,716 on a busy pod, both passing 3 of 3 alone). Wait for it to settle, at most a second, and say
+  // how long it took; a padding that never catches up still fails.
+  let settledMs = 0;
+  while (ends && ends.last > endTop + 0.5 && settledMs < 1000) {
+    await sleep(100);
+    settledMs += 100;
+    ends = await ev(END);
+    const again = await ev(MEASURE);
+    endTop = Math.min(...again.stack.map((x) => x.y));
+  }
   // Cramped (a landscape keyboard), the composer and its notes take the screen; nothing is left to show the transcript in.
   if (ends && !reviewed && !cramped) {
-    check(t('the transcript\'s end clears the stack'), ends.last <= top + 0.5, J({ last: ends.last, stackTop: top }));
+    check(t('the transcript\'s end clears the stack'), ends.last <= endTop + 0.5, J({ last: ends.last, stackTop: endTop, settledMs }));
     check(t('the transcript\'s start clears the header'), ends.first >= h.b - 0.5, J({ first: ends.first, headerBottom: h.b }));
   }
   return m;
