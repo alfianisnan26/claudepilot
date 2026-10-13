@@ -26,11 +26,12 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
 ## NEXT (coordinator gap review 15:0x: WIP limit THREE slices, thin first slices, each merged AND deployed before the next starts)
 Read CHARTER.md and DECISIONS.md (D-1..D-33) before planning; never act against a row.
 1. T-105 + T-109 (running, one slice): auto move waits, resumes, fits the model (D-12).
-2. T-143 then T-141 (owner: NOW, both running), T-136 slice 1 (running). Then T-136 slice 2 (recover in place, plus the supervisor), after slice 1 is merged.
+2. T-143 then T-141 (owner: NOW, both running), T-136 slice 1 (running). T-102 is now urgent rank-02c: it resumes in the FIRST slot
+   T-143 or T-141 frees (be65ceb; left: the session-states matrix, mobile-drag, web PRD 10.5), then it deploys with T-143. Then T-136 slice 2 (recover in place, plus the supervisor), after slice 1 is merged.
 2b. T-110 slice 1 ONLY (urgent, rank-03c, D-2): the PRD FR41 amendment, the environment option `autoApprove` (off, set only by a person with
    manage), and DRY MODE: on every held release it writes 'WOULD approve: ...' or 'WOULD NOT: <condition>' to the run page and the audit, and
    approves nothing. The NEXT free slot. Slice 2 (real approval, pause, rollback pause) waits until the owner has read five dry lines.
-3. T-102, then T-100 (paused; their WIP is pushed).
+3. T-100 (paused; WIP pushed).
    T-125 (rank-05d) follows T-102 in its worktree: the compact contextual row first, the pace line after T-122.
    T-127 (portal WIP limit, rank-05e) and T-128 (CI read scope, rank-05f) after T-125.
    -> deploy (/deploy pipeline with gate=true, D-7; the coordinator approves as delegate, D-2).
