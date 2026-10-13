@@ -12,6 +12,7 @@ import {
   type V1Status,
 } from '@kubernetes/client-node';
 import { plainName } from '../names.js';
+import { requestsFor, type RequestOptions } from './requests.js';
 import { HOME, LABEL, type CreateSpec, type ExecSession, type Runtime, type ShellSession } from './runtime.js';
 
 const LIMIT = { cpus: 'claudepilot.cpus', memoryMb: 'claudepilot.memory-mb' } as const;
@@ -53,6 +54,8 @@ export interface KubernetesOptions {
   storage: string;
   /** Nodes workspace pods may run on (`PORTAL_K8S_NODE_SELECTOR`); unset: the scheduler decides. */
   nodeSelector?: Record<string, string>;
+  /** What a pod asks the scheduler to reserve, at most its limits (`PORTAL_K8S_CPU_REQUEST`, `PORTAL_K8S_MEMORY_REQUEST`); unset: the limits. */
+  requests?: RequestOptions;
 }
 
 /** One namespace in a cluster: a Deployment (scaled 1/0 to start/stop) and a PVC per workspace. */
@@ -222,7 +225,7 @@ export class KubernetesRuntime implements Runtime {
                   image: this.opts.image,
                   workingDir: HOME,
                   env: [{ name: 'TERM', value: 'xterm-256color' }],
-                  resources: Object.keys(limits).length ? { limits } : undefined,
+                  resources: Object.keys(limits).length ? { limits, requests: requestsFor(limits, this.opts.requests) } : undefined,
                   volumeMounts: [{ name: 'home', mountPath: HOME }],
                 },
               ],

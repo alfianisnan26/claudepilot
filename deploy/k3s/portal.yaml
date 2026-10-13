@@ -70,6 +70,12 @@ spec:
             # Keep workspace pods off the control-plane node (it is short of memory).
             - name: PORTAL_K8S_NODE_SELECTOR
               value: kubernetes.io/hostname=k3s-node2
+            # What a workspace pod asks the scheduler to reserve (its limits stay): with only limits set Kubernetes reserves the whole
+            # limit, and a 2-CPU workspace stayed Pending ("Insufficient cpu") while the node was 40% busy.
+            - name: PORTAL_K8S_CPU_REQUEST
+              value: 250m
+            - name: PORTAL_K8S_MEMORY_REQUEST
+              value: 1Gi
             # How workspaces (other namespace) reach the portal: its Portal MCP tools, session events.
             - name: PORTAL_INTERNAL_URL
               value: http://claudepilot-portal.isnan-claudepilot.svc.cluster.local:3000

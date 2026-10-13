@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { CLAUDE_IMAGE_REPO, claudeImageRef, DEFAULT_CLAUDE_CODE_VERSION } from '@portal/contracts';
 import { parseNodeSelector } from './workspaces/nodeSelector.js';
+import { parseRequests } from './workspaces/requests.js';
 
 const env = (name: string) => process.env[name]?.trim() || undefined;
 
@@ -108,6 +109,8 @@ export const config = {
       storage: env('PORTAL_K8S_STORAGE') ?? '10Gi',
       /** `key=value[,key=value]`: which nodes workspace pods may run on (for example `kubernetes.io/hostname=k3s-node2`). */
       nodeSelector: parseNodeSelector(env('PORTAL_K8S_NODE_SELECTOR')),
+      /** What a workspace pod asks the scheduler to reserve, at most its limits (for example `250m` and `1Gi`); unset: the limits. */
+      requests: parseRequests(env('PORTAL_K8S_CPU_REQUEST'), env('PORTAL_K8S_MEMORY_REQUEST')),
     },
   },
   /** Local git and CI/CD (docs/prd/local-git-ci.md §11.5): how many runs a workspace carries at once. */
