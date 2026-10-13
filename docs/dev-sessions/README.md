@@ -22,7 +22,8 @@ you work, your track file is what you work on.
    - Never force-push, rewrite pushed history, use `--no-verify` or amend a pushed commit.
 4. **Heavy jobs one at a time, across all sessions** (the pod has 4 CPUs and 8 GiB): typecheck, the server suite, a production build, `gate.sh` and
    Chromium runs go through `flock /tmp/heavy.lock nice -n 10 <command>`. Targeted tests (one file) run directly. One scratch portal and one
-   Chromium per session at most; stop them when you are done. Keep `/tmp` clean (`/tmp/gate-*`, `/tmp/cp-*`): a full `/tmp` makes CI tests fail.
+   Chromium per session at most; stop them when you are done. A fresh worktree has no `node_modules`: run `flock /tmp/heavy.lock npm ci` once
+   (`NODE_AUTH_TOKEN` is set in your shell; the private `@isnanme/ui` package needs it). Keep `/tmp` clean (`/tmp/gate-*`, `/tmp/cp-*`): a full `/tmp` makes CI tests fail.
 5. **Do not loop.** The same command failing three times means change the approach or move to the next item and write down why.
 6. **Quota.** The portal moves your chat to another Claude by itself when one runs out. If a turn fails with a limit error, wait a few minutes and carry on.
 
