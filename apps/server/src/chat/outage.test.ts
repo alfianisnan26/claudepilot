@@ -42,3 +42,33 @@ test('outage: a reader waits for its target instead of marking the session gone,
     await s.done();
   }
 });
+
+test('a portal restart while the target is away: the live session is followed as soon as the target returns, not a liveness round later (T6)', async () => {
+  const s = await liveSession({ livenessMs: 50 }, true);
+  let c2: InstanceType<typeof s.controller.constructor> | null = null;
+  try {
+    // The portal stops; it starts again while the tunnel is still down: its first liveness round can't reach the workspace.
+    s.controller.stop();
+    let down = true;
+    const exec = s.ws.exec.bind(s.ws);
+    s.ws.exec = async (...args: Parameters<typeof exec>) => {
+      if (down) throw new TargetUnreachableError('docker', new Date().toISOString());
+      return exec(...args);
+    };
+    const Ctor = s.controller.constructor as new (...a: unknown[]) => typeof s.controller;
+    c2 = new Ctor(s.store, s.ws, { livenessMs: 60_000 });
+    c2.targetState = () => (down ? 'down' : 'up');
+    c2.start();
+    await sleep(100);
+    const tails = s.ws.tails.length;
+    // The agent is back: the session is followed now, not in a minute.
+    down = false;
+    c2.targetReturned('docker');
+    await until(() => s.ws.tails.length === tails + 1, 2_000).catch(() => undefined);
+    assert.equal(s.ws.tails.length, tails + 1, 'the session is followed within 2 s of the return (its liveness round is a minute away)');
+    assert.equal(c2.get(s.id)!.process, 'live');
+  } finally {
+    c2?.stop();
+    await s.done();
+  }
+});
