@@ -6,6 +6,7 @@ import { beforeEach, test } from 'node:test';
 import { isAppError } from '@isnanme/core';
 import type Docker from 'dockerode';
 import { DockerRuntime, repoOf } from './docker.js';
+import { WorkspaceIdentities } from './identity.js';
 import { LABEL } from './runtime.js';
 
 interface Img {
@@ -111,6 +112,7 @@ function fakeDocker() {
       return handle(c);
     },
     getNetwork: (name: string) => ({ disconnect: async (o: unknown) => void calls.push({ op: 'disconnect', arg: { name, ...(o as object) } }) }),
+    getVolume: (name: string) => ({ remove: async () => void calls.push({ op: 'removeVolume', arg: name }) }),
   } as unknown as Docker;
 
   let mismatch = false;
@@ -313,4 +315,40 @@ test('an optional moving alias follows the default pin’s image after it is bui
   const rt2 = new DockerRuntime({ id: 'docker', label: 'Docker', socket: '/nonexistent.sock' }, `${REPO}:cc-2.1.296`, '/ctx', () => PORTAL, plain.docker);
   await rt2.create({ name: 'b' }, () => undefined);
   assert.ok(!plain.calls.some((c) => c.op === 'tag'));
+});
+
+test('T-42: a workspace’s container and home volume follow its stored runtime name, never its name; one made before keeps its own', async () => {
+  const ids = WorkspaceIdentities.memory();
+  rt.useNames(ids);
+  // Made before T-42 (no record yet): named the old way, and recorded from what Docker says it is called.
+  await rt.create({ name: 'old' }, () => undefined);
+  assert.ok(d.containers.has('claudepilot-old'));
+  const listed = (await rt.list()).find((w) => w.name === 'old')!;
+  assert.equal(listed.runtimeName, 'claudepilot-old');
+  ids.adopt('docker', 'old', listed.runtimeName);
+
+  // A new one: its container and volume come from its id, its label and hostname are its name.
+  const fresh = ids.allocate('docker', 'fresh');
+  const rn = fresh.runtimeName!;
+  assert.match(rn, /^ws-[0-9a-f]{12}$/);
+  await rt.create({ name: 'fresh', runtimeName: rn }, () => undefined);
+  const c = d.containers.get(rn)!;
+  assert.deepEqual([c.labels[LABEL.name], c.volume, c.spec.Hostname], ['fresh', `${rn}-home`, 'fresh']);
+  assert.ok(!d.containers.has('claudepilot-fresh'), 'nothing is named after the workspace');
+  assert.equal((await rt.list()).find((w) => w.name === 'fresh')!.runtimeName, rn);
+
+  d.calls.length = 0;
+  await rt.stop('fresh');
+  await rt.stop('old');
+  assert.deepEqual(d.calls.filter((x) => x.op === 'stop').map((x) => x.arg), [rn, 'claudepilot-old'], 'calls by name reach the stored runtime name');
+
+  // A recreate keeps the same container name and home volume; a remove takes exactly those.
+  const newer = await rt.images.ensure('2.1.300', () => undefined);
+  await rt.recreate('fresh', newer, () => undefined);
+  assert.deepEqual([d.containers.get(rn)!.image, d.containers.get(rn)!.volume], [newer, `${rn}-home`]);
+  d.calls.length = 0;
+  await rt.remove('fresh');
+  assert.ok(!d.containers.has(rn));
+  assert.deepEqual(d.calls.filter((x) => x.op === 'removeVolume').map((x) => x.arg), [`${rn}-home`]);
+  assert.ok(d.containers.has('claudepilot-old'), 'the other workspace is untouched');
 });

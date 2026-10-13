@@ -25,6 +25,11 @@ export const HOME = '/home/node';
 
 export interface CreateSpec {
   name: string;
+  /**
+   * What the runtime names its objects (T-42): the container or Deployment, and `<runtimeName>-home` for the home volume. The manager gives
+   * every new workspace `ws-<12 hex>` from its stable id; absent (a direct call in a test), the name it has on record, else the old form.
+   */
+  runtimeName?: string;
   cpus?: number;
   memoryMb?: number;
   /** The exact Claude Code version to pin the workspace to (x.y.z); the target's default image when absent (claude-version-pinning PRD). */
@@ -160,13 +165,34 @@ export interface ThrowawayAccess {
 }
 
 /**
- * One place workspaces run. The runtime is the record: list() reads what exists from it, so the
- * portal keeps no state of its own and survives restarts.
+ * Where a runtime reads the runtime name a workspace has on record (T-42): the manager's identity registry. Runtimes are still called with
+ * the workspace's name (its `<target>/<name>` alias, which never changes); this says which container or Deployment that is, so nothing
+ * recomputes it from the name.
+ */
+export interface RuntimeNames {
+  /** The stored runtime name of workspace `name` on `target`; undefined when the portal has no record of it yet. */
+  runtimeNameOf(target: string, name: string): string | undefined;
+}
+
+/**
+ * One place workspaces run. The runtime is the record of what exists: list() reads it from the runtime. What the portal keeps of its own
+ * is each workspace's identity (T-42: its stable id and its runtime name), which the manager hands in through `useNames`.
  */
 export interface Runtime {
+  /**
+   * The manager hands in its identity registry when it takes the runtime on. A runtime that names objects after the workspace (Docker,
+   * Kubernetes, and the Connect runtimes over them) reads the stored runtime name from it; a single (This machine, a Connect host) has none.
+   */
+  useNames?(names: RuntimeNames): void;
   /** Present when the delivery engine can write into this runtime's workspaces. */
   readonly delivery?: DeliveryAccess;
   readonly target: Omit<WorkspaceTarget, 'available' | 'problem'>;
+  /**
+   * The runtime name a NEW workspace gets on this target when it cannot be the manager's `ws-<12 hex>` (T-42): Docker over Connect, whose
+   * installed agents admit only `claudepilot-<name>` containers labelled with that name (targets-connect PRD appendix A). Chosen once, at
+   * the create, and stored; never recomputed afterwards. Absent: `ws-<12 hex>`.
+   */
+  runtimeNameForNew?(name: string, stableId: string): string;
   /** Throws when the target can't be used right now. */
   check(): Promise<void>;
   list(): Promise<Workspace[]>;

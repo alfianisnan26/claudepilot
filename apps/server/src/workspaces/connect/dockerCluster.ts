@@ -7,7 +7,8 @@ import { AppError } from '@isnanme/core';
 import type { Workspace, WorkspaceUsage } from '@portal/contracts';
 import type { ConnectNodeRecord, ConnectTargetRecord, NodeLink, RuntimeDeps } from '../../connect/seams.js';
 import { DockerRuntime } from '../docker.js';
-import { TargetUnreachableError, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type ShellSession } from '../runtime.js';
+import { legacyRuntimeName } from '../identity.js';
+import { TargetUnreachableError, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type RuntimeNames, type ShellSession } from '../runtime.js';
 import { lastSeenText, Reachability } from './link.js';
 import { tunnelDocker } from './tunnelAgent.js';
 
@@ -60,6 +61,20 @@ export class ConnectDockerRuntime implements Runtime {
 
   dispose() {
     this.#unsubscribe.splice(0).forEach((fn) => fn());
+  }
+
+  /**
+   * A new workspace's container here is `claudepilot-<name>`, not `ws-<12 hex>` (T-42): the agents already installed on Docker and Swarm hosts
+   * admit only that form, labelled with the same name (targets-connect PRD appendix A). It is chosen once, at the create, and stored like any
+   * runtime name, so a later rename of the workspace's label never touches it. An agent policy that admits `ws-*` would lift this.
+   */
+  runtimeNameForNew(name: string): string {
+    return legacyRuntimeName('docker', name);
+  }
+
+  /** The manager's identity registry (T-42): every node's DockerRuntime reads the stored runtime names (containers, volumes) from it. */
+  useNames(names: RuntimeNames) {
+    for (const n of this.#nodes) n.docker.useNames(names);
   }
 
   get target() {

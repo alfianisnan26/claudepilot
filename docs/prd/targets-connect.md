@@ -1105,6 +1105,33 @@ Each row is a decision, or an explicit owner's call (§23).
 | Q7 | Is a 128 KiB socket high-water mark enough throughput on a high-latency link (the bandwidth-delay product)? The budget test measures it with a delay proxy; the mark may become adaptive. |
 | Q8 | Should enrolled targets feed the Monitoring dashboard (when it exists) from `status`? Nothing blocks it. |
 
+## 24. Workspace identity: an id that is not a name (T-42)
+
+The owner, 2026-10-13: **an identity must not be a name.** Until now a workspace's id was `<target>/<name>` (`kubernetes/kohi-event`): the name was the key,
+the runtime objects were derived from the name (`ws-kohi-event`, `ws-kohi-event-home`, `claudepilot-<name>`), so renaming a workspace meant a new
+workspace, and the orchestrator that runs inside `ws-kohi-event` would be killed by it. T-42 fixes it at the root in three slices.
+
+### 24.1 Decisions (slice 1, built)
+
+| ID | Decision | Why |
+| --- | --- | --- |
+| I1 | **A stable opaque id per workspace**: `ws_` and 12 lowercase hex digits (`STABLE_WORKSPACE_ID` in `packages/contracts/src/workspace.ts`), random, given once when the portal first knows the workspace, never changed, **never reused** (a removed workspace keeps its row in `workspace_identities` with `removed_at`), never derived from the name. | An id that carries meaning has to change when the meaning does. 48 random bits per portal is far beyond the number of workspaces one portal makes; the registry also refuses an id it has given before. |
+| I2 | **`<target>/<name>` stays as an ALIAS that resolves for ever.** Every route, MCP tool, URL, ticket, CI remote and link that carries it keeps working; responses carry both (`Workspace.id` is the alias, `Workspace.stableId` the id; MCP results show `id`, `stable_id` and `name`). One live workspace holds an alias at a time (a unique index); a removed one gives it up for the next workspace of that name, exactly as before. | Nothing stored or bookmarked breaks. Slice 3 moves stored references to the id lazily; until then the alias is what the rest of the portal speaks. |
+| I3 | **One resolver**, in the workspaces manager: `Workspaces.resolve(ref)` (and `get(ref, actor)`), backed by `WorkspaceIdentities` (`apps/server/src/workspaces/identity.ts`); the MCP's `resolveWorkspace` uses the same matching (`findWorkspace`). `GET /api/workspaces/<stable id>` and `GET /api/workspaces/<target>/<name>` answer the same workspace. | A second resolver would drift. |
+| I4 | **Authorization is decided on the workspace, after the alias is followed**, never on the string given: the seam is asked about the workspace's `<target>/<name>` (what it knows today), so an agent boxed to its workspace reaches it by either form and nothing else by either form. What does not exist and what you may not see are the same 404. No resolver for the `workspace` type is registered: the single-owner seam answers as before. | The resolver contract (`authz/seam.ts`): aliases are followed before anything is decided. |
+| I5 | **Runtime names are STORED, not derived.** `workspace_identities.runtime_name` (and `Workspace.runtimeName`) is the Docker container or the Kubernetes Deployment; the home volume or claim is `<runtimeName>-home`; the browser container is `<runtimeName>.browser`. Docker, Kubernetes, the Connect runtimes over them and the browser module read it from the registry the manager hands them (`Runtime.useNames`); none computes it from the name again. A single (This machine, a Connect host or container) has nothing named after it: its runtime name is its name. | A rename (slice 2) must never touch a pod or a volume. |
+| I6 | **Existing workspaces keep the names they have.** Migration 712 creates `workspace_identities` and gives every workspace the store knew (delivery rows, pool and account-pool assignments) its id, with the runtime name left empty: only the runtime knows it. The manager fills it from the runtime's own list the first time it sees the workspace (the Deployment's or container's real name: `kubernetes/kohi-event` → `ws-kohi-event`, volume `ws-kohi-event-home`), and a workspace the store did not know gets its id the same way. Until a row has a runtime name the runtimes name it the old way, which is what such a workspace is called. Nothing is restarted, renamed or recreated. | Read the truth from the runtime rather than guess it in a migration; the migration only adds rows. |
+| I7 | **New workspaces get `ws-<12 hex>`** (the id's hex: a DNS label, no underscore), container or Deployment and `ws-<12 hex>-home`, labelled with their name as before. **Exception: Docker and Swarm over Connect** name a new workspace `claudepilot-<name>` (`Runtime.runtimeNameForNew`), because the agents already installed admit only that form, labelled with the same name (appendix A); it is chosen once, at the create, and stored like any runtime name, so a later rename still never touches it. An agent policy that admits `ws-*` lifts the exception. | Breaking every enrolled Docker host to change a string would be worse than the exception. |
+
+### 24.2 What follows (not in slice 1)
+
+- **Slice 2, the name becomes a label** (T-42 item 2): a mutable display name (1 to 40 characters, one line, plain text, unique per target), editable in
+  the workspace sheet and by an admin MCP tool, shown everywhere a workspace is named with the id next to it where it helps; renaming changes the label
+  only (never `runtimeName`, never the alias). Then the coordinator sets `kubernetes/kohi-event` to the label `isnan-pod` (item 5).
+- **Slice 3, stored references move to the id** (T-42 item 4): tickets, sessions, CI remotes, agent access, pool assignments and audit rows are
+  resolved through the alias on read and written with the id on save, with a one-time background rewrite that is safe to stop and rerun.
+- The same thinking for the other named things in T-33 (Claudes, pools, remotes, targets, vaults).
+
 ## Appendix A: the Docker policy (profile `managed`)
 
 Normalisation first: remove an optional `/v<digits>.<digits>` prefix; deny a path with `//`, `/./`, `/../`, a NUL, a backslash, or a percent-encoding that changes the path's meaning; deny a request whose target is not origin-form; deny a request with both `Content-Length` and `Transfer-Encoding` or duplicate `Content-Length`; a header block over 16 KiB; a JSON body over 1 MiB. Then:

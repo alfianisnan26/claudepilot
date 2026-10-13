@@ -102,6 +102,8 @@ export class LocalRuntime implements Runtime {
       {
         id: workspaceId(this.target.id, this.opts.name),
         name: this.opts.name,
+        // The machine itself is the workspace: nothing on a runtime is named after it, so its runtime name is its name (T-42).
+        runtimeName: this.opts.name,
         target: this.target.id,
         image: `${hostname()} (host)`,
         status: state.running ? 'running' : 'stopped',

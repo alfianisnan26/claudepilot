@@ -7,16 +7,13 @@ import Docker from 'dockerode';
 import { extract } from 'tar-stream';
 import { tarOf } from './tar.js';
 import { PLAIN_NAME, plainName } from '../names.js';
-import { createdByAnotherPortal, HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type ImageAccess, type ImageInfo, type Runtime, type ShellSession, type TarEntry, type ThrowawayAccess } from './runtime.js';
+import { homeVolumeOf, legacyRuntimeName } from './identity.js';
+import { createdByAnotherPortal, HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type ImageAccess, type ImageInfo, type Runtime, type RuntimeNames, type ShellSession, type TarEntry, type ThrowawayAccess } from './runtime.js';
 
 const LIMIT = { cpus: 'claudepilot.cpus', memoryMb: 'claudepilot.memory-mb' } as const;
 /** Marks a throwaway container of the compatibility canary (never `claudepilot.managed`: it is not a workspace); its value is the portal's id. */
 const CANARY_LABEL = 'claudepilot.canary';
 
-// Every Docker call builds its container and volume id here, so a name that is not plain (`x/../../containers`, `x?force=true`) is refused
-// before it can become part of a Docker Engine URL (QA-029, QA-032).
-const containerName = (name: string) => `claudepilot-${plainName(name)}`;
-const volumeName = (name: string) => `claudepilot-${plainName(name)}-home`;
 
 /** Docker answers "already started/stopped" with 304 and "no such thing" with 404. */
 const statusOf = (e: unknown) => (e as { statusCode?: number }).statusCode;
@@ -92,6 +89,21 @@ export class DockerRuntime implements Runtime {
 
   readonly #alias: string | undefined;
   readonly #tunnel: { reach: () => Promise<void>; where?: string } | undefined;
+  #names: RuntimeNames | undefined;
+
+  useNames(names: RuntimeNames) {
+    this.#names = names;
+  }
+
+  /**
+   * The container of workspace `name` (T-42): the runtime name it has on record, never recomputed from the name. Only a workspace the
+   * portal has no record of yet is named the old way (`claudepilot-<name>`), which is what such a workspace is called. A name or a
+   * stored runtime name that is not plain (`x/../../containers`, `x?force=true`) is refused before it can become part of a Docker Engine
+   * URL (QA-029, QA-032).
+   */
+  #objectName(name: string): string {
+    return plainName(this.#names?.runtimeNameOf(this.target.id, plainName(name)) ?? legacyRuntimeName('docker', name));
+  }
 
   async check() {
     if (this.#tunnel) await this.#tunnel.reach();
@@ -252,11 +264,14 @@ export class DockerRuntime implements Runtime {
     const mine = this.portal();
     return containers.filter((c) => !createdByAnotherPortal(c.Labels, mine)).map((c) => {
       const name = c.Labels[LABEL.name] ?? c.Names[0]?.replace(/^\/claudepilot-/, '') ?? c.Id;
+      // What the container is called, as Docker says: the runtime name the manager records for a workspace it has no record of (T-42).
+      const runtimeName = c.Names[0]?.replace(/^\//, '');
       const cpus = Number(c.Labels[LIMIT.cpus]) || undefined;
       const memoryMb = Number(c.Labels[LIMIT.memoryMb]) || undefined;
       return {
         id: workspaceId(this.target.id, name),
         name,
+        ...(runtimeName ? { runtimeName } : {}),
         target: this.target.id,
         image: c.Image,
         status: STATUS[c.State] ?? 'error',
@@ -271,16 +286,18 @@ export class DockerRuntime implements Runtime {
   }
 
   async create(spec: CreateSpec, progress: (detail: string) => void) {
+    // The manager gives a new workspace its runtime name (`ws-<12 hex>`); a direct call without one uses what is on record.
+    const runtimeName = spec.runtimeName ? plainName(spec.runtimeName) : this.#objectName(spec.name);
     const existing = await this.#docker.listContainers({
       all: true,
-      filters: { name: [`^/${containerName(spec.name)}$`] },
+      filters: { name: [`^/${runtimeName}$`] },
     });
     if (existing.length) throw new AppError('CONFLICT', `A workspace named “${spec.name}” already exists here.`);
 
     const image = spec.claudeVersion ? this.#refFor(spec.claudeVersion) : this.image;
     await this.#ensureImage(image, progress);
     progress('Creating container');
-    const container = await this.#docker.createContainer(await this.#spec(spec.name, { cpus: spec.cpus, memoryMb: spec.memoryMb, portal: this.portal() }, image));
+    const container = await this.#docker.createContainer(await this.#spec(spec.name, runtimeName, { cpus: spec.cpus, memoryMb: spec.memoryMb, portal: this.portal() }, image));
     progress('Starting');
     await container.start();
   }
@@ -288,12 +305,12 @@ export class DockerRuntime implements Runtime {
   /**
    * What a workspace's container is made of, in one place so `create` and `recreate` cannot drift: a recreate is the same container
    * (name, limits, home volume, labels) on another image. `labelRef` is the reference the image label records (the id of the old
-   * image when a recreate puts the old container back).
+   * image when a recreate puts the old container back). `runtimeName` names the container and its home volume (T-42).
    */
-  async #spec(name: string, o: { cpus?: number; memoryMb?: number; portal: string | null }, image: string, labelRef = image): Promise<Docker.ContainerCreateOptions> {
+  async #spec(name: string, runtimeName: string, o: { cpus?: number; memoryMb?: number; portal: string | null }, image: string, labelRef = image): Promise<Docker.ContainerCreateOptions> {
     const version = (await this.#inspectImage(image).catch(() => null))?.version ?? null;
     return {
-      name: containerName(name),
+      name: runtimeName,
       Image: image,
       Hostname: name,
       User: 'node',
@@ -311,7 +328,7 @@ export class DockerRuntime implements Runtime {
       HostConfig: {
         RestartPolicy: { Name: 'unless-stopped' },
         // A fresh named volume is seeded with the image's home (dotfiles, ~/work); an existing one keeps what it holds.
-        Mounts: [{ Type: 'volume', Source: volumeName(name), Target: HOME }],
+        Mounts: [{ Type: 'volume', Source: homeVolumeOf(runtimeName), Target: HOME }],
         NanoCpus: o.cpus ? Math.round(o.cpus * 1e9) : undefined,
         Memory: o.memoryMb ? o.memoryMb * 1024 * 1024 : undefined,
       },
@@ -323,8 +340,9 @@ export class DockerRuntime implements Runtime {
   stop = async (name: string) => this.#container(name).stop({ t: 5 }).catch(ignore(304));
 
   async remove(name: string) {
-    await this.#container(name).remove({ force: true }).catch(ignore(404));
-    await this.#docker.getVolume(volumeName(name)).remove().catch(ignore(404));
+    const runtimeName = this.#objectName(name);
+    await this.#docker.getContainer(runtimeName).remove({ force: true }).catch(ignore(404));
+    await this.#docker.getVolume(homeVolumeOf(runtimeName)).remove().catch(ignore(404));
   }
 
   usage(names: string[]) {
@@ -397,7 +415,7 @@ export class DockerRuntime implements Runtime {
   }
 
   #container(name: string) {
-    return this.#docker.getContainer(containerName(name));
+    return this.#docker.getContainer(this.#objectName(name));
   }
 
   /* ---------- Images and recreation (docs/prd/claude-version-pinning.md) ---------- */
@@ -463,20 +481,22 @@ export class DockerRuntime implements Runtime {
   }
 
   async recreate(name: string, image: string, progress: (detail: string) => void, opts: { label?: string } = {}) {
-    const container = this.#container(name);
+    // The same container name and home volume as before: the runtime name on record (T-42).
+    const runtimeName = this.#objectName(name);
+    const container = this.#docker.getContainer(runtimeName);
     const info = await container.inspect();
     const labels = info.Config?.Labels ?? {};
     if (labels[LABEL.managed] !== 'true') throw new AppError('CONFLICT', 'That is not one of this portal’s workspaces.');
     if (createdByAnotherPortal(labels, this.portal())) throw new AppError('CONFLICT', 'Another portal created this workspace.');
     // Only a workspace whose home is its own named volume is recreated: a home that is anything else could be lost with the container.
     const home = (info.Mounts ?? []).find((m) => m.Destination === HOME);
-    if (home?.Type !== 'volume' || home.Name !== volumeName(name)) throw new AppError('CONFLICT', 'This workspace’s home folder is not a volume of its own, so it cannot be recreated without risk.');
+    if (home?.Type !== 'volume' || home.Name !== homeVolumeOf(runtimeName)) throw new AppError('CONFLICT', 'This workspace’s home folder is not a volume of its own, so it cannot be recreated without risk.');
     if (!(await this.#inspectImage(image))) throw new AppError('CONFLICT', `The image ${image} is not on this target yet.`);
     const was = labels[CLAUDE_LABELS.image] ?? info.Config?.Image ?? null;
     const limits = { cpus: Number(labels[LIMIT.cpus]) || undefined, memoryMb: Number(labels[LIMIT.memoryMb]) || undefined, portal: labels[LABEL.portal] ?? null };
     const running = !!info.State?.Running;
     const make = async (ref: string, labelRef: string) => {
-      const c = await this.#docker.createContainer(await this.#spec(name, limits, ref, labelRef));
+      const c = await this.#docker.createContainer(await this.#spec(name, runtimeName, limits, ref, labelRef));
       if (running) {
         await c.start();
         if (!(await c.inspect()).State?.Running) throw new Error('the container stopped right after it started');
@@ -492,7 +512,7 @@ export class DockerRuntime implements Runtime {
     } catch (e) {
       const why = runtimeText(e);
       progress('Putting the previous container back');
-      await this.#docker.getContainer(containerName(name)).remove({ force: true, v: false }).catch(ignore(404));
+      await this.#docker.getContainer(runtimeName).remove({ force: true, v: false }).catch(ignore(404));
       // From the image the old container ran, by id: its tag may have moved since.
       try {
         await make(info.Image, was ?? info.Image);

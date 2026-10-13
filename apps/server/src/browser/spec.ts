@@ -45,12 +45,13 @@ export const LABELS = {
 } as const;
 
 /**
- * `claudepilot-<name>.browser`: a dot can't be in a workspace name, so this never equals the name of another
- * workspace's container (`claudepilot-<name>-browser` would, for a workspace called `<name>-browser`).
+ * `<runtime name>.browser` (T-42: after the workspace container's stored runtime name, never the workspace's name): no runtime name the
+ * portal gives has a dot (`ws-<hex>`, `claudepilot-<name>`), so this never equals another workspace's container (`<runtime name>-browser` could).
  */
-export const companionName = (workspace: string) => `claudepilot-${workspace}.browser`;
+export const companionOf = (runtimeName: string) => `${runtimeName}.browser`;
+/** The old forms, for a workspace whose runtime name is `claudepilot-<name>` (every workspace made before T-42 on Docker): tests use them. */
+export const companionName = (workspace: string) => companionOf(`claudepilot-${workspace}`);
 export const workspaceContainer = (workspace: string) => `claudepilot-${workspace}`;
-export const homeVolume = (workspace: string) => `claudepilot-${workspace}-home`;
 
 /** `<target>/<name>` → its parts. */
 export function splitWorkspaceId(id: string): { target: string; name: string } {
