@@ -13,6 +13,12 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - C item 1, btw UI against the real engine (tools/qa/btw-real.mjs, the card says how many messages the answer saw): a97a950.
 - Gate hygiene: shellcheck SC2015 (1f045fe), repo-find sorted (8b3316a), deploy-pipeline e2e test: the fakes' PATH in ~/.profile (b893ac8; /etc/profile resets PATH in a login shell and the real kubectl installed today at /usr/local/bin won; the test's wait now says which step failed). Passes alone 7/7.
 
+## WAVES (owner, 09:4x; work in this order)
+- Wave 1: T-36 fast lane (built 2485f67, in review) -> push -> T-18 deploy (full gate on the exact commit) -> T-3, T-2 (fixed, merged; live with the deploy) -> T-31 (with the T-5 sub-agent) -> T-1, T-4, T-29 (merged; live with the deploy).
+- Wave 2: T-37 gate as an in-cluster Job, T-5, T-6 (running), T-24, T-25, T-34 (running), T-16.
+- Wave 3: T-32, T-28, T-26 + T-27, T-30. Wave 4: T-10, T-11, T-12, T-13, T-14, T-15; T-33 rename LAST, alone, with no branch open.
+- Next free slot: T-37 (opus), then T-24, then T-25.
+
 ## IN FLIGHT
 - Owner requests (07:00-07:50), committed on integration as d716245, bd91572 and 7c3d6d5, gate queued on 7c3d6d5 (T-1, T-2, T-3, T-4): (1) sideways scroll on the phone: not reproduced in Chromium (11 pages, 360/390/430/landscape, safe-area insets); the app root now clips horizontal overflow, mobile-drag.mjs checks it; (2) Pinned sessions: migration 381, POST/DELETE …/pin, chips Pinned · Idle · Needs you · Working · Ended · Archived · All, Pinned shown once anything is pinned and the default chip, else Idle; pinned leads its group; ⋯ Pin/Unpin on rows and the session page; a pin marker on the row; (3) swipe right = Pin, left = Archive (unarchive in Archived) on touch (swipe.ts, tested; tools/qa/session-swipe.mjs ran green on a scratch portal); (4) image upload "exit 4" (T-3): CAUSE FOUND: cp-session `put` began with `exec 2>/dev/null`; a Kubernetes exec (containerd) closes stdin once the last holder of an output pipe is gone, so head saw EOF at once; `put` keeps stderr's pipe open on fd 3 now (7c3d6d5), verified through the portal's own path (KubernetesRuntime + hostInstaller + stageFile) into the kohi-event pod with 6 MB; a test holds the pipe rule; a short arrival says "X of Y bytes arrived" and is tried once more. (5) automove.allowBypass (T-4, owner 07:2x): setting, decide rule, decide/engine tests, a controller test that a move keeps Bypass, PRD §16 decision, seeded on (7c3d6d5).
 - Deploy (T-18): run #4 FAILED at the release after approval (integration had moved: the orchestrator pushed status commits while it waited); nothing deployed. Fixed in ffde31e (the release merges into a branch that moved on; deployPipeline.test 8/8). Next: gate on e7da20b green -> push (ffde31e verified by its own test file) -> a new deploy run on the head.
@@ -42,7 +48,7 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 ## NEXT
 - T-29 is being built by the orchestrator itself in worktree dev-automove-model (branch dev/automove-model): decision, engine, card words and tests done (server 194 pass, web 9 pass); typecheck under the lock; then a browser look, PRD, merge.
 - T-34 Home dashboard (opus, worktree dev-track-c-ui now on branch dev/home-dashboard, scratch port 3423).
-- Gate on bebee35 (phone chrome + T-29 + Connect T6) queued; green -> push.
+- Full gate on e7da20b (phone chrome + T-29 + Connect T6) in its suite; the fast lane on the commits after it queued; both green -> push -> deploy with the pipeline's full gate.
 - T-6 MCP client label (sonnet, worktree dev-track-a-connect now on branch dev/mcp-label, scratch port 3425).
 - Next slices when a slot frees, in this order: T-24 tool rows (opus), T-26 + T-27 git monitoring with the commit trace (three opus slices: server scan + parsers + the commit hook and trailer parser; repos UI + overview + MCP tools + author sheet; session Git view), T-25 mute rules (opus), T-28 ticket Bump + T-32 CI Bump and auto-report (one opus slice, they share the picker), T-30 buckets for tickets, CI and knowledge (opus), T-33 rename everywhere (opus); then B3 N2, B4 N3, C3, A4, C4, C5.
 - Merge each sub-agent branch as it reports, targeted tests, gate, push; after the deploy's verify: seed-features.sh (allowBypass), the iPhone checks (T-18, T-3).
