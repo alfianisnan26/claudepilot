@@ -98,7 +98,7 @@ case "$repo" in
 esac
 alsos=
 for a in ${also[@]+"${also[@]}"}; do
-  [[ $a =~ ^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(@([A-Za-z0-9][A-Za-z0-9._/-]{0,199}))?$ && ! $a =~ \.\. ]] || die "--also <org>/<repo>[@<ref>] (got $a)"
+  [[ ! $a =~ \.\. && $a =~ ^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(@([A-Za-z0-9][A-Za-z0-9._/-]{0,199}))?$ ]] || die "--also <org>/<repo>[@<ref>] (got $a)"
   p=${BASH_REMATCH[1]}; r=${BASH_REMATCH[3]:-stg}
   if [ "$kind" = gitea ]; then base=https://$gitea; else base=https://github.com; fi
   alsos="$alsos ${p#*/}=$base/$p.git@$r"
