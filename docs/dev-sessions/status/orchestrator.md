@@ -38,8 +38,8 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
   suite). Slice 4 (pool assignments, CI, the small tables) needs its own ticket (asked on T-42).
 
 ## NEXT (in order: the coordinator's rank-NN tags, 13:33; ticket_list tag=rank-NN lists them)
-- rank 01 T-42, 02 T-95, 03 T-99, 04 T-102, 05 T-100, 05b T-104, 06 T-98, 07 T-97, 08 T-101, 09 T-28, 10 T-32, 11 T-24, 12 T-26, 13 T-27, 14 T-30, 15 T-33,
-  then T-12, T-13, T-10, T-11, T-14, T-15. De-duplication: ONE fit check (T-98 builds workspaces/fit.ts first; T-97 and workspace create use it;
+- rank 01 T-42, 02 T-95, 02b T-105 (overrides the order: being built by the orchestrator in dev-automove-model, branch dev/t105-automove-proven), 03 T-99, 04 T-102, 05 T-100, 05b T-104, 06 T-98, 07 T-97, 08 T-101, 09 T-28, 10 T-32, 11 T-24, 12 T-26, 13 T-27, 14 T-30, 15 T-33,
+  14b T-106 (knowledge skill + agent attachments over MCP, after T-101), then T-12, T-13, T-10, T-11, T-14, T-15. The supervisor moves an IDLE chat at 10% left meanwhile (stopgap). De-duplication: ONE fit check (T-98 builds workspaces/fit.ts first; T-97 and workspace create use it;
   scripts/ws-resources.sh and its allow rule go when T-98 lands); T-100 uses the existing chip code (no ChipList, T-14 later); T-12 does only
   what T-95 item 2 and T-32 left; T-102's queued or automatic restart keeps Bypass or does not happen; T-33 rewritten (id + `label` per entity;
   the workspace rename is T-42's). Running sub-agents were told (13:37).
@@ -55,18 +55,16 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
 - After each merge: gate-quick under the lock, push origin and pilot. Full gate every two hours as a Job. One deploy a day at most; the next one
   carries T-42 slice 3, T-97, T-98, T-100, T-102 as they land.
 
-## NEEDS A HUMAN
-- APPROVE the deploy started by this session (the run number is on T-42 and below once started). Then check on the phone: tool rows (T-24),
-  ticket Bump (T-28), CI Bump (T-32), the workspace sheet's Name and ID rows and a rename (T-42), that this chat survives a finished sub-agent (T-99).
-- The coordinator relabels kubernetes/kohi-event to isnan-pod after the release (workspace_rename or the sheet).
-- Live tickets to check on the phone (deploy #13): T-1 Pinned and swipe, T-2 no sideways scroll, T-3 image upload, T-5/T-31/T-41 sub-agent rows,
-  T-25 Mute similar, T-34 Home page, T-6 MCP client labels, T-29 auto move card.
-- Run deploy/k3s/seed-features.sh: chat.trust.autoPermissionOnly (T-38) on (automove.allowBypass is on already).
-- "Deploy waits" on the iPhone when a deploy holds for approval. Multi-user (parked): the `admin` password lives nowhere. Usage page "side
-  questions": decide. T6 (Connect): whatever needs Docker, macOS, Windows or a second cluster.
-- After T-97 is deployed: set PORTAL_K8S_BROWSER_IMAGE in deploy/k3s/portal.yaml and assign a Browser pool to kohi-event (the report says the tag).
-- The previous orchestrator session ended on "a second control response for request 2e919c3c" (controller #acceptControlResponse: a reply to a
-  request already completed): not in T-99; the raw lines are in ~/.claudepilot/sessions/fe3df8bc-…/out.*.jsonl if it happens again.
+## NEEDS A HUMAN (only what a person can do; rewritten 14:3x from the tickets, after the owner's note)
+- On the iPhone (installed PWA, 390 px, light and dark), check what is live in 2026.10.13-5: T-1 Pinned and swipe (right = Pin, left = Archive);
+  T-2 no sideways scroll on any page; T-3 an image attaches and uploads in this Kubernetes workspace; T-5 sub-agents in their own rows, "Working ·
+  N agents", "Session finished" only at real idle; T-24 tool rows open to Input and Output blocks with real line breaks and shell colouring, the
+  approval card the same; T-25 Mute similar on a notification; T-28 Bump on a ticket pushes it into a running session (priority or question);
+  T-32 Bump on a CI run (Fix or Ask) and the auto-report of a finished run to the session that started it; T-34 the Home page as the first page;
+  T-42 the workspace sheet shows the label isnan-pod with the id next to it, every old link and MCP call by kubernetes/kohi-event still works;
+  T-99 this chat survives a finished sub-agent (no "Ended for integrity"), and CI works within a minute of a pod restart.
+- Open questions parked on tickets: T-97 (NetworkPolicy not enforced on the cluster; the browser image tag and the pool assignment after the
+  next deploy), T-95 item 4 (close if the run summary already reports flaky-passed-alone), T-42 slice 4 (needs its own ticket number).
 
 ## DECISIONS
 - 13:25 (coordinator) Deploy run 16 went red in the gate on qa/runtimes.test.ts (the empty-name bug of T-42 slice 1); fixed upstream as dca2a99
