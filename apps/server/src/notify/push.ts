@@ -20,6 +20,8 @@ export interface PushMessage {
   /** Present only when this device may answer: the single-use token, its decisions and expiry. */
   act?: { t: string; d: NotifyDecision[]; exp: number };
   badge?: number;
+  /** Offer "Mute" (opens the mute sheet for this event). Never on approvals, deploy waits, tests or summaries. */
+  mute?: boolean;
 }
 
 /** The payload, as the PRD shows it. `origin` makes the absolute `navigate` the declarative form requires. */
@@ -36,7 +38,11 @@ export function pushPayload(m: PushMessage, origin: string): PushPayload {
       ...(m.renotify ? { renotify: true } : {}),
       silent: false,
       ...(m.badge !== undefined ? { app_badge: String(Math.max(0, Math.floor(m.badge))) } : {}),
-      ...(m.kind === 'approval' ? { actions: [{ action: 'review', title: 'Review', navigate }] } : {}),
+      ...(m.kind === 'approval'
+        ? { actions: [{ action: 'review', title: 'Review', navigate }] }
+        : m.mute
+          ? { actions: [{ action: 'mute', title: 'Mute', navigate: `${origin}/admin/notifications?mute=${encodeURIComponent(m.eventId)}` }] }
+          : {}),
       data: { v: 1, id: m.eventId, kind: m.kind, path: m.path, ...(m.act ? { act: m.act } : {}) },
     },
   };

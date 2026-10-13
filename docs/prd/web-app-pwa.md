@@ -348,7 +348,8 @@ The unit is the **destination**: a push device, a webhook, a Discord or a Slack 
 | Notifications page (`/admin/notifications`, Bell in the nav; the unread count on it) | Two tabs: **Inbox** (the history, newest first, unread dot, dimmed when dealt with; tap opens the item) and **Setup**. |
 | Setup | **This device**: state chip (Unsupported, Add to Home Screen, Blocked, Off, On), "Turn on", "Send test", name, zone. **Devices** and **Channels**: one row each (name, host, state dot, last error code), a ⋯ menu (Test, Rename, Remove); "Add channel" (type, name, URL, Sign for a webhook). **Events**: kinds as rows, destinations as columns, switches; a row's ⓘ says when it fires. **Quiet hours**: per destination, one line (22:00 to 07:00, zone) and the break-through kinds. **Answers**: Deny, Read, Edit, Command: four switches with ⓘ (§11.7), the caller's own; greyed with a line when the platform ceiling is off. A destination's "Also shared with me" switch (off) lets it hear of sessions others shared to this user. |
 | Session ⋯ | "Notify when done" (a per-session flag, `PUT /api/notify/sessions/<id>`). |
-| Toasts | An item for a visible, active tab arrives as a toast and in the Inbox (the existing `ToastProvider`). |
+| Toasts | An item for a visible, active tab arrives as a toast and in the Inbox (the existing `ToastProvider`); a muted one does neither (§11.11). |
+| Muted (Setup) | The person's mute rules (§11.11): one line each, Add, Unmute all. |
 
 ### 11.7 Answering from a notification
 
@@ -420,6 +421,7 @@ Routes (the table is `NOTIFY_API`; all behind the session guard and the Origin c
 | `GET /api/notify/log` | Delivery log (30 days): status and fixed codes only |
 | `GET`, `PUT /api/notify/sessions/:id` | "Notify when done" for one session (`{done}`; reading needs `view` on the session, changing it `operate`) |
 | `POST /api/notify/act` | Answer from a notification (§11.7) |
+| `GET`, `POST`, `DELETE /api/notify/mutes`; `DELETE .../mutes/:id`; `GET .../mutes/offer/:ref` | Mute rules (§11.11) |
 | `GET /api/platform/audit` | The audit rows every platform module writes |
 
 Data (migrations 200 to 209 are N1's; shapes, not SQL; every per-person table carries `user_id TEXT NOT NULL DEFAULT 'u_owner'`, the platform-wide ones are named as such; **as built** (migration 200, 2026-10-12) that column is `owner_id` with a `created_by` beside it, the authorization seam's adoption rule 4, and the wire still says `userId`): `notify_destinations` (id, **user_id**, type, name, include_shared, enabled, kinds, quiet, include_detail, allow_private, signed, tz, hint, state, failures, last_ok_at, last_error_at, last_error, created_at, and a **sealed** `config`: a push endpoint and its two keys, or a channel URL and signing secret); `notify_keys` (**platform-wide**: id `vapid` or `topic`, a **sealed** `value`, a public key); `notify_user_prefs` (**user_id** primary key, deny, allow_read, allow_edit, allow_command); `notify_history` (**user_id**); `notify_log` (**user_id** copied from the destination, so a user reads only their own); `notify_held` (**user_id**; what quiet hours kept back); `notify_action_tokens` (hash, **user_id**, destination, event, session, request, decisions, class, expiry, used_at); `notify_session_flags` (session_id, **user_id**: "Notify when done" is each user's own); `platform_audit` (**platform-wide**, each row with a nullable `user_id` of the person it concerns). `ENCRYPTED_COLUMNS` gains `notify_destinations.config` and `notify_keys.value`. Retention: history and log 30 days, audit 90 days, used and expired tokens 1 day. Settings (group `notify`, platform-wide, an admin's): `notify.actions.enabled` (the ceiling on answers, on), `notify.baseUrl`, `notify.contact`. The four answer switches (Deny on; Read, Edit, Command off; turning one on asks for a confirmation, `PUT /api/notify/prefs` with `confirm: true`) are each user's own, in `notify_user_prefs`. Live: a topic `notify` ("changed, load again") and the `presence` message on the socket. The redactor learns `cpna_`, `cpwh_`, `cpws_` and the two webhook URL shapes. No Portal MCP tool changes a destination, a policy or answers a request: reads only, at the read scope, and none for agents.
@@ -448,6 +450,22 @@ Milestones: **N1** (server: bus, adapters, destinations, pipeline, sender, chann
 | Devices | A push endpoint has one user at a time; an explicit sign-out removes the browser's registration; a handed-over phone stops notifying the first person (§11.4). |
 | Admin acts | The ceiling on answers, the VAPID contact, the base URL and the emergency stop (roadmap phase 2) are admin settings. |
 | Today | One user, `u_owner`; no screen shows users; the single-owner behaviour is the whole of what is built. |
+
+### 11.11 Mute rules ("Mute similar", T-25)
+
+A person can hush a kind of notification without turning the kind off for a device: a **mute rule** is theirs alone (`notify_mutes`, migration 721), matches one kind, optionally narrowed to one **scope**, optionally to one of their destinations, and may expire.
+
+| What | Rule |
+| --- | --- |
+| Scope | Built by the server from the event, narrowest first (`notify/mutes.ts` `muteScopesOf`): a CI run's `environment` (`repo/environment`), `pipeline` (`repo/pipeline`), `repo`, else the subject (session, ticket, Claude, trigger, budget), then the `workspace`. Names and ids from `facts` only, never free text. "Mute similar" offers the narrowest one or "All <kind>"; a rule made by hand picks a kind and, optionally, a workspace, repository, pipeline, environment, session or ticket. |
+| Time | 1 hour, 1 day or forever. An expired rule matches nothing, is not listed, and the hourly sweep deletes it (and any rule for a destination that is gone). At most 100 rules per person. |
+| Where | Default: all of the person's devices and channels; then the Inbox row is stored **marked muted** and nothing is delivered (each destination's log says `suppressed` `muted`). A rule for one destination hushes that one only; the Inbox row is not marked. |
+| Inbox | Muted rows are kept 30 days like the rest, left out of the list (`GET /api/notify/history?muted=1` includes them, the Inbox's Muted button) and never counted unread, so they never toast. |
+| Never-mute guard | `approval` (it blocks a session) and `ci_waiting` (a deploy waits for a person) are never muted from a notification: no Mute action on their push, no "Mute similar" in their ⋯, and `POST /api/notify/mutes` with `from` answers 403 `guarded`. A person may still pick one of those kinds in Setup > Muted on purpose: an ⓘ says why it is risky, a confirmation follows, and the request needs `confirm: true` (409 `CONFIRMATION_REQUIRED` without it). The rule row is `confirmed = 1`; the pipeline ignores any rule on those kinds without it. Its audit row is `medium`. |
+| Where to mute | The Inbox row's ⋯ ("Mute similar…"); the push's **Mute** action (every kind but the guarded ones, tests and summaries), which opens `/admin/notifications?mute=<event id>` and the same sheet; **Setup > Muted**: the rules in words ("CI failed · claudepilot · deploy"), where, time left, how many each hushed, when made; remove one, **Add**, **Unmute all**. |
+| Routes | `GET`, `POST`, `DELETE /api/notify/mutes`; `DELETE /api/notify/mutes/:id`; `GET /api/notify/mutes/offer/:ref` (an Inbox item `nh_…` or an event `evt_…`). All `self` in the seam (`notify/authz.ts`); another user's rule, item or destination answers 404. Create, delete and Unmute all write a `notify.mute` audit row (kind, scope, destination, expiry; no text). |
+| Tests | `notify/mutes.test.ts` (scopes, matching, expiry, per destination, the guard, the history mark, the push action), `routes.test.ts` (two users, audit rows), the worker's Mute button in `sw.test.ts`. |
+| Not yet | The toast has one action (Open; `@isnanme/ui` `ToastAction`), so "Mute similar" from a toast is the Inbox ⋯ for now. |
 
 ## 12. HTTPS and sign-in
 

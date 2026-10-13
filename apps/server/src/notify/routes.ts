@@ -4,7 +4,7 @@
 // an endpoint, a key or a signing secret (a new signing secret once, when it is made).
 
 import { AppError, defineErrorCodes, success } from '@isnanme/core';
-import { REAUTH_REQUIRED, type NotifyOverview, type NotifyUserPrefs, type SessionNotifyRequest } from '@portal/contracts';
+import { isMuteGuarded, REAUTH_REQUIRED, type CreateMuteRequest, type NotifyMute, type NotifyOverview, type NotifyUserPrefs, type SessionNotifyRequest } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { PlatformAudit } from '../platform/audit.js';
@@ -12,6 +12,7 @@ import type { PlatformOwner } from '../platform/owner.js';
 import type { NotifyActions } from './actions.js';
 import type { Destinations } from './destinations.js';
 import type { NotifyHistory } from './history.js';
+import type { NotifyMutes } from './mutes.js';
 import type { NotifyPipeline } from './pipeline.js';
 import type { NotifyKeys } from './vapid.js';
 
@@ -22,6 +23,7 @@ export interface NotifyRouteDeps {
   owner: PlatformOwner;
   destinations: Destinations;
   history: NotifyHistory;
+  mutes: NotifyMutes;
   pipeline: NotifyPipeline;
   actions: NotifyActions;
   keys: NotifyKeys;
@@ -158,7 +160,7 @@ export function createNotifyRoutes(d: NotifyRouteDeps): Hono {
   });
   r.get('/history', (c) => {
     const n = Number(c.req.query('limit'));
-    return c.json(success(d.history.page(who(c).userId, { before: c.req.query('before') || undefined, limit: Number.isFinite(n) && n > 0 ? n : undefined })));
+    return c.json(success(d.history.page(who(c).userId, { before: c.req.query('before') || undefined, limit: Number.isFinite(n) && n > 0 ? n : undefined, muted: c.req.query('muted') === '1' })));
   });
   r.post('/history/read', async (c) => {
     const a = who(c);
@@ -171,6 +173,41 @@ export function createNotifyRoutes(d: NotifyRouteDeps): Hono {
     d.history.clear(who(c).userId);
     d.publish();
     return c.json(success({ ok: true }));
+  });
+
+  // Mute rules ("Mute similar"): the caller's own; another user's rule or Inbox item answers like an unknown one. Create and delete audit.
+  const muteAudit = (a: ReturnType<typeof who>, action: string, m: NotifyMute | null, extra: Record<string, unknown> = {}) =>
+    d.audit.record({
+      kind: 'notify.mute',
+      // A rule on an approval or a deploy wait hushes something that blocks: worth a second look.
+      severity: m && isMuteGuarded(m.kind) ? 'medium' : 'info',
+      actor: a.label,
+      userId: a.userId,
+      subject: m ? `mute:${m.id}` : null,
+      detail: { action, ...(m ? { kind: m.kind, scope: m.scope ? `${m.scope.type}:${m.scope.id}` : null, destination: m.destinationId, expiresAt: m.expiresAt } : {}), ...extra },
+    });
+  r.get('/mutes', (c) => c.json(success(d.mutes.list(who(c).userId))));
+  r.get('/mutes/offer/:ref', (c) => c.json(success(d.mutes.offer(who(c).userId, c.req.param('ref')))));
+  r.post('/mutes', async (c) => {
+    const a = who(c);
+    const m = d.mutes.create(a.userId, await body<CreateMuteRequest>(c));
+    muteAudit(a, 'created', m);
+    d.publish();
+    return c.json(success(m));
+  });
+  r.delete('/mutes/:id', (c) => {
+    const a = who(c);
+    const m = d.mutes.remove(a.userId, c.req.param('id'));
+    muteAudit(a, 'removed', m);
+    d.publish();
+    return c.json(success({ ok: true }));
+  });
+  r.delete('/mutes', (c) => {
+    const a = who(c);
+    const removed = d.mutes.clear(a.userId);
+    muteAudit(a, 'cleared', null, { removed });
+    d.publish();
+    return c.json(success({ removed }));
   });
 
   // "Notify when done": reading it needs `view` on the session, changing it `operate`; an unknown or foreign session is 404.

@@ -178,3 +178,31 @@ test('guards: no session 401 (a valid token alone answers nothing), foreign Orig
     platform.stop();
   }
 });
+
+test('mute routes: the caller’s own through the seam, 404 for another user’s, an audit row on create, delete and Unmute all', async () => {
+  const { call, platform } = await build();
+  try {
+    const e = platform.bus.emit({ kind: 'session_failed', subject: { type: 'session', id: 's_a', workspaceId: 'docker/api' }, facts: { workspace: 'docker/api', reason: 'error' } })!;
+    await platform.notify.pipeline.handle(e);
+    const offer = await call('u_a', 'GET', `/api/notify/mutes/offer/${e.id}`);
+    assert.deepEqual([offer.status, offer.data?.scope?.type], [200, 'session']);
+    assert.equal((await call('u_b', 'GET', `/api/notify/mutes/offer/${e.id}`)).status, 404);
+    assert.equal((await call('u_b', 'POST', '/api/notify/mutes', { from: e.id, duration: '1h' })).status, 404);
+    const made = await call('u_a', 'POST', '/api/notify/mutes', { from: e.id, duration: '1h' });
+    assert.equal(made.status, 200);
+    assert.equal((await call('u_a', 'GET', '/api/notify/mutes')).data.length, 1);
+    assert.equal((await call('u_b', 'GET', '/api/notify/mutes')).data.length, 0);
+    assert.equal((await call('u_b', 'DELETE', `/api/notify/mutes/${made.data.id}`)).status, 404);
+    const guarded = await call('u_a', 'POST', '/api/notify/mutes', { kind: 'approval', duration: '1h' });
+    assert.deepEqual([guarded.status, guarded.error?.code], [409, 'CONFIRMATION_REQUIRED']);
+    assert.equal((await call('u_a', 'POST', '/api/notify/mutes', { kind: 'approval', duration: '1h', confirm: true })).status, 200);
+    assert.equal((await call('u_a', 'DELETE', `/api/notify/mutes/${made.data.id}`)).status, 200);
+    assert.deepEqual((await call('u_a', 'DELETE', '/api/notify/mutes')).data, { removed: 1 });
+    const rows = platform.audit.list({ kind: 'notify.mute' }, 'u_a');
+    assert.deepEqual(rows.map((r) => r.detail.action).sort(), ['cleared', 'created', 'created', 'removed']);
+    assert.equal(rows.find((r) => r.detail.kind === 'approval')!.severity, 'medium');
+    assert.equal(platform.audit.list({ kind: 'notify.mute' }, 'u_b').length, 0);
+  } finally {
+    platform.stop();
+  }
+});
