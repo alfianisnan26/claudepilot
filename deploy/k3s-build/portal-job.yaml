@@ -37,5 +37,5 @@ spec:
             - --snapshot-mode=redo
             - --push-retry=3
           resources:
-            requests: {cpu: 500m, memory: 1Gi}
+            requests: {cpu: 100m, memory: 1Gi}
             limits: {cpu: "4", memory: 6Gi}
