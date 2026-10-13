@@ -3,7 +3,8 @@
 // real cluster. It keeps pods, deployments, claims and secrets in memory and records every request with its headers, so a test can assert
 // what the "API server" saw: the service account's token and never the client's, no impersonation, only labelled lists.
 //
-// It speaks the part of the API `KubernetesRuntime` and the agent use: `/version`, pod and deployment and claim lists (selectors, watch),
+// It speaks the part of the API `KubernetesRuntime`, the agent and the browser pool use: `/version`, pod, deployment, claim, ConfigMap and
+// NetworkPolicy lists (selectors, watch), nodes and pods across namespaces (or 403 with `clusterReads` off),
 // create, replace, scale and delete (a deployment brings a pod up and down), secrets by name, pod metrics, SelfSubjectAccessReview, and
 // `pods/exec` over a WebSocket with the channel subprotocol (stdin 0, stdout 1, stderr 2, status 3, resize 4).
 import { randomBytes } from 'node:crypto';
@@ -48,6 +49,15 @@ export class FakeKube {
   readonly claims = new Map<string, Obj>();
   readonly secrets = new Map<string, Obj>();
   readonly pods = new Map<string, Obj>();
+  readonly configMaps = new Map<string, Obj>();
+  readonly networkPolicies = new Map<string, Obj>();
+  /** Cluster-scoped nodes (`GET /api/v1/nodes`) and pods in other namespaces (`GET /api/v1/pods` lists these with the namespace's). */
+  readonly nodes = new Map<string, Obj>();
+  readonly otherPods: Obj[] = [];
+  /** Whether cluster-scoped reads (nodes, pods in every namespace) are allowed; a namespaced Role only answers 403. */
+  clusterReads = true;
+  /** Per-container usage the metrics API reports for a pod; default one `workspace` container. */
+  podMetrics: (pod: Obj) => { name: string; usage: { cpu: string; memory: string } }[] = () => [{ name: 'workspace', usage: { cpu: '250m', memory: '512Mi' } }];
   /** Scripts an exec: default echoes stdin to stdout and ends on `exit`. */
   onExec: (io: ExecIo) => void = (io) => io.onStdin((d) => (io.stdout(d), d.toString().includes('exit') && io.exit(0)));
   /** Answers SelfSubjectAccessReview. */
@@ -149,8 +159,19 @@ export class FakeKube {
       return send(201, { kind: 'SelfSubjectAccessReview', status: { allowed: this.rbac(spec) } });
     }
     if (path === `/apis/metrics.k8s.io/v1beta1/namespaces/${ns}/pods` && method === 'GET') {
-      const items = [...this.pods.values()].filter((p) => matchesSelector(p.metadata.labels ?? {}, url.searchParams.get('labelSelector') ?? '')).map((p) => ({ metadata: p.metadata, containers: [{ name: 'workspace', usage: { cpu: '250m', memory: '512Mi' } }] }));
+      const items = [...this.pods.values()].filter((p) => matchesSelector(p.metadata.labels ?? {}, url.searchParams.get('labelSelector') ?? '')).map((p) => ({ metadata: p.metadata, containers: this.podMetrics(p) }));
       return send(200, { kind: 'PodMetricsList', apiVersion: 'metrics.k8s.io/v1beta1', items });
+    }
+
+    if ((path === '/api/v1/nodes' || path === '/api/v1/pods') && method === 'GET') {
+      if (!this.clusterReads) return status(403, 'Forbidden', `${path.slice(8)} is forbidden: cannot list resource at the cluster scope`);
+      const items = path === '/api/v1/nodes' ? [...this.nodes.values()] : [...this.pods.values(), ...this.otherPods];
+      return send(200, { kind: path === '/api/v1/nodes' ? 'NodeList' : 'PodList', apiVersion: 'v1', metadata: { resourceVersion: String(this.#rv) }, items });
+    }
+
+    if (path === '/api/v1/namespaces' && method === 'POST') {
+      if (!this.clusterReads) return status(403, 'Forbidden', 'namespaces is forbidden: cannot create resource "namespaces" at the cluster scope');
+      return status(409, 'AlreadyExists', `namespaces "${ns}" already exists`);
     }
 
     const collections: [RegExp, Map<string, Obj>, string, string, string][] = [
@@ -158,6 +179,8 @@ export class FakeKube {
       [new RegExp(`^/apis/apps/v1/namespaces/${ns}/deployments$`), this.deployments, 'deployment', 'DeploymentList', 'apps/v1'],
       [new RegExp(`^/api/v1/namespaces/${ns}/persistentvolumeclaims$`), this.claims, 'claim', 'PersistentVolumeClaimList', 'v1'],
       [new RegExp(`^/api/v1/namespaces/${ns}/secrets$`), this.secrets, 'secret', 'SecretList', 'v1'],
+      [new RegExp(`^/api/v1/namespaces/${ns}/configmaps$`), this.configMaps, 'configmap', 'ConfigMapList', 'v1'],
+      [new RegExp(`^/apis/networking.k8s.io/v1/namespaces/${ns}/networkpolicies$`), this.networkPolicies, 'networkpolicy', 'NetworkPolicyList', 'networking.k8s.io/v1'],
     ];
     for (const [re, store, kind, listKind, apiVersion] of collections) {
       if (!re.test(path)) continue;
@@ -194,6 +217,8 @@ export class FakeKube {
       [new RegExp(`^/api/v1/namespaces/${ns}/persistentvolumeclaims/([^/]+)$`), this.claims, 'claim'],
       [new RegExp(`^/api/v1/namespaces/${ns}/secrets/([^/]+)$`), this.secrets, 'secret'],
       [new RegExp(`^/api/v1/namespaces/${ns}/pods/([^/]+)$`), this.pods, 'pod'],
+      [new RegExp(`^/api/v1/namespaces/${ns}/configmaps/([^/]+)$`), this.configMaps, 'configmap'],
+      [new RegExp(`^/apis/networking.k8s.io/v1/namespaces/${ns}/networkpolicies/([^/]+)$`), this.networkPolicies, 'networkpolicy'],
     ];
     for (const [re, store, kind] of named) {
       if (!(m = re.exec(path))) continue;

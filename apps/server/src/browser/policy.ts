@@ -40,7 +40,11 @@ export function chromePolicy(content: BrowserPoolContent, ctx: { portalHosts: st
 }
 
 /** `/etc/cpb/config.json`: read by the init and the supervisor, never by anything in the workspace. */
-export function containerConfig(content: BrowserPoolContent, opts: { sandbox: boolean }): Record<string, unknown> {
+/**
+ * `sandbox`: on or off as the target's probe found (Docker), or `auto` (Kubernetes): the container's init tries it before Chrome's first
+ * start and runs without it only when the pool doesn't require it.
+ */
+export function containerConfig(content: BrowserPoolContent, opts: { sandbox: boolean | 'auto' }): Record<string, unknown> {
   const [width, height] = content.display.split('x').map(Number);
   return {
     tier: content.tier,
@@ -49,6 +53,7 @@ export function containerConfig(content: BrowserPoolContent, opts: { sandbox: bo
     idleMinutes: content.idleMinutes,
     startWithWorkspace: content.start === 'with_workspace',
     sandbox: opts.sandbox,
+    ...(opts.sandbox === 'auto' ? { requireSandbox: content.requireSandbox } : {}),
     liveView: content.tier !== 'headless' && content.liveView,
     takeOver: content.takeOver,
     private: content.privateTakeOvers,
