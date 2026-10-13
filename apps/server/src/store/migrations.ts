@@ -2497,6 +2497,28 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 720,
+    name: 'notify: ci_waiting (Deploy waits) for every destination that already hears CI failures',
+    up(db) {
+      // A destination keeps an explicit list of kinds, filled from the defaults when it is made (notify/destinations.ts), so a device
+      // registered before the kind `ci_waiting` existed (docs/prd/local-git-ci.md FR41) would never hear "Deploy waits". Whoever hears
+      // `ci_failed` hears deploys that wait too; a destination that opted out of CI stays out. Only the list changes; a list that already
+      // has it is left alone, so running this twice is the same as once.
+      const rows = db.prepare('SELECT id, kinds FROM notify_destinations').all() as { id: string; kinds: string }[];
+      const write = db.prepare('UPDATE notify_destinations SET kinds = ? WHERE id = ?');
+      for (const r of rows) {
+        let kinds: unknown;
+        try {
+          kinds = JSON.parse(r.kinds);
+        } catch {
+          continue; // a list that cannot be read is not guessed at
+        }
+        if (!Array.isArray(kinds) || !kinds.includes('ci_failed') || kinds.includes('ci_waiting')) continue;
+        write.run(JSON.stringify([...kinds, 'ci_waiting']), r.id);
+      }
+    },
+  },
 ];
 
 /**
