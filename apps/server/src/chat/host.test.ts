@@ -60,7 +60,9 @@ function mkEnv() {
   const sessions = mkdtempSync(join(tmpdir(), 'cp-sess-'));
   const work = mkdtempSync(join(tmpdir(), 'cp-work-'));
   dirs.push(sessions, work);
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}`, CLAUDEPILOT_SESSIONS_DIR: sessions };
+  // Not this process's own PILOT_* (a test run inside a pilot session inherits them: the chat host exports them into the agent's process).
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('PILOT_')));
+  const env = { ...inherited, PATH: `${binDir}:${process.env.PATH ?? ''}`, CLAUDEPILOT_SESSIONS_DIR: sessions };
   return { sessions, work, env };
 }
 
