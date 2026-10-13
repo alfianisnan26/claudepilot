@@ -25,6 +25,10 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - Run deploy/k3s/seed-features.sh (PORTAL_URL and the server code): automove.allowBypass (T-4) and chat.trust.autoPermissionOnly (T-38) on.
 - The coordinator relabels kubernetes/kohi-event to isnan-pod after T-42 slice 2 is deployed.
 - ticket_claim_next hands out the Konfersi tickets (T-51) even with a tag filter; T-95, T-42, T-97, T-98 are not assigned to this session (comments refused).
+- On the iPhone (Home Screen PWA, quiet hours off): "Deploy waits" arrives when a deploy holds for approval (migration 720 is live).
+- Multi-user (parked, not in this backlog): the owner's current single-owner access (workspace kohi-event, this session) reserved for a user `admin`; the password was given in chat on 2026-10-13 and is written nowhere: when that work starts, the owner sets it through the setup token or a Secret.
+- Decide whether the Usage page should show "of which side questions".
+- T6 (Connect): whatever still needs Docker, macOS, Windows or a second cluster.
 
 ## WAVES (owner, 09:4x; work in this order)
 - Wave 1: T-36 fast lane (DONE, pushed) -> push (done) -> T-38 folder trust (built) -> T-18 deploy (full gate on the exact commit) -> T-3, T-2 (fixed, merged; live with the deploy) -> T-31 (with the T-5 sub-agent) -> T-1, T-4, T-29 (merged; live with the deploy).
