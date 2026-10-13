@@ -23,7 +23,7 @@ export interface ModelTotals {
   costUsd: number;
 }
 
-export type StoredEvent = Omit<ChatEvent, 'seq' | 'at'> & {
+export type StoredEvent = Omit<ChatEvent, 'seq' | 'at' | 'parentToolUseId'> & {
   /** For `result`: each model's running totals, so the controller can tell what this turn used. */
   modelTotals?: ModelTotals[];
   uuid?: string;
