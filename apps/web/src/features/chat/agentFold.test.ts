@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ChatEvent } from '@portal/contracts';
-import { agentLatest, buildItems, latestLine, modelShort, type Item } from './agentFold';
+import { agentLatest, buildItems, latestLine, modelShort, tasksSummary, type Item } from './agentFold';
+import type { ChatTask } from '@portal/contracts';
 import { foldLive, NO_LIVE, settleLive, type DeltaMessage, type LiveState } from './motion/deltas';
 import { buildRows } from './ToolRows';
 
@@ -170,5 +171,30 @@ describe('labels', () => {
     const rows = buildRows([call('t1', 'Read', '/etc/hostname', 'toolu_a')], false);
     assert.equal(agentLatest(rows, undefined), 'Read hostname');
     assert.equal(agentLatest([], undefined), null);
+  });
+});
+
+describe('tasksSummary: sub-agents and background commands are counted apart (T-39)', () => {
+  const task = (taskId: string, status: ChatTask['status'], agent: boolean): ChatTask => ({
+    taskId,
+    toolUseId: null,
+    description: taskId,
+    subagentType: agent ? 'general-purpose' : null,
+    model: null,
+    status,
+    tokens: null,
+    toolUses: null,
+    durationMs: null,
+    summary: null,
+    startedAt: '2026-10-13T08:00:00.000Z',
+    endedAt: null,
+  });
+  it('running agents, running commands, then what ended', () => {
+    const tasks = [task('a', 'running', true), task('b', 'running', true), task('c', 'running', false), task('d', 'completed', true), task('e', 'killed', false)];
+    assert.equal(tasksSummary(tasks), '2 agents, 1 command · 1 done · 1 stopped');
+    assert.equal(tasksSummary([task('a', 'running', false), task('b', 'running', false)]), '2 commands');
+    assert.equal(tasksSummary([task('a', 'running', true)]), '1 agent');
+    assert.equal(tasksSummary([task('a', 'failed', true)]), '1 failed');
+    assert.equal(tasksSummary([]), 'Nothing running');
   });
 });

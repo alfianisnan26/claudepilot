@@ -553,6 +553,12 @@ export class ChatController {
   start(): void {
     if (this.#started || this.#closed) return;
     this.#started = true;
+    // Tasks of a process that is no longer there are over (T-39): a portal stopped mid-move or mid-restart left them "running".
+    try {
+      for (const id of this.#chat.endOrphanTasks()) this.#emitTasks(id);
+    } catch {
+      // the store is unavailable: the liveness rounds and the next launch close them
+    }
     this.#content.start();
     this.btw.start();
     this.#liveness = setInterval(() => void this.#tick(), this.#livenessMs);
@@ -708,6 +714,7 @@ export class ChatController {
     this.#stopReader(sessionId);
     this.#forget(sessionId, 'The session went to sleep.');
     this.#chat.patchSession(sessionId, { process: 'asleep' });
+    if (this.#chat.endRunningTasks(sessionId)) this.#emitTasks(sessionId); // none should be (it sleeps only when none run); never left running
     this.#bypassOver(sessionId, 'sleep');
     this.#emitSession(sessionId);
   }
@@ -1214,6 +1221,8 @@ export class ChatController {
 
       // 4. The chat follows the new run: its reader, row and segment, and then the opening goes in.
       const restore: Restore = { model: row.model, effort: row.effort, ultracode: row.ultracode === 1, mode: row.mode === 'bypassPermissions' ? START_MODE : row.mode };
+      // What the old run still has running ends with it in step 5 (the new run may start its own meanwhile).
+      const oldTasks = this.#chat.runningTaskIds(sessionId);
       this.#stopReader(sessionId);
       this.#forget(sessionId, 'The chat moved to another Claude.');
       kept = { costBase: this.#costBase.get(sessionId), modelBase: this.#modelBase.get(sessionId), mode: this.#modes.get(sessionId) };
@@ -1242,6 +1251,7 @@ export class ChatController {
       this.#append(sessionId, { kind: 'system', text: `Moved to ${dest.name}`, transfer });
       const old = undo.row;
       await this.#runOnce(workspaceId, ['stop', claudeSessionOf(old)]).catch(() => undefined);
+      if (this.#chat.endRunningTasks(sessionId, oldTasks)) this.#emitTasks(sessionId);
       // The new run started on the start mode and took the context in it (its tool requests denied): Bypass comes back only now, the move done.
       if (wasBypass) await this.#keepBypass(sessionId, 'move');
       return this.#chat.get(sessionId)!;
@@ -2554,9 +2564,10 @@ export class ChatController {
     }
     if (code === 0) {
       const started = parseStartOutput(out);
-      // A new process: nothing of the previous one carries over, and its reader must not read this log.
+      // A new process: nothing of the previous one carries over (its tasks included: they ended with it), and its reader must not read this log.
       this.#stopReader(sessionId);
       this.#forget(sessionId, 'Claude Code restarted.');
+      if (this.#chat.endRunningTasks(sessionId)) this.#emitTasks(sessionId);
       this.#chat.patchSession(sessionId, {
         parentPid: started?.pid ?? null,
         processStartedAt: started?.startedAt ?? null,

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import { errorText } from '@/lib/api';
 import { AgentDetail, TASK_STATUS as STATUS, taskMs } from './AgentDetail';
-import { isAgentTask, modelShort } from './agentFold';
+import { isAgentTask, modelShort, tasksSummary } from './agentFold';
 import type { AgentLive } from './motion/deltas';
 import { AgentTag, formatDuration, formatTokens, useModal, useNow } from './shared';
 
@@ -16,18 +16,6 @@ const STOP_GRACE_MS = 15_000;
 /** Running first, then the most recently started. */
 const byActivity = (a: ChatTask, b: ChatTask) =>
   Number(b.status === 'running') - Number(a.status === 'running') || Date.parse(b.startedAt) - Date.parse(a.startedAt);
-
-/** "2 running · 3 done · 1 failed". */
-function tasksSummary(tasks: ChatTask[]): string {
-  const count = (status: ChatTask['status']) => tasks.filter((t) => t.status === status).length;
-  const parts = [
-    [count('running'), 'running'],
-    [count('completed'), 'done'],
-    [count('failed'), 'failed'],
-    [count('killed'), 'stopped'],
-  ].flatMap(([n, word]) => (n ? [`${n} ${word}`] : []));
-  return parts.length ? parts.join(' · ') : 'Nothing running';
-}
 
 interface AgentsProps {
   /** The session: a sub-agent's detail view reads its transcript from it. */

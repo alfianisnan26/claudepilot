@@ -947,12 +947,38 @@ export class ChatStore {
     return !!this.#db().prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running') LIMIT 1`).get(sessionId);
   }
 
-  /** Its process is gone, and its sub-agents and background tasks with it: they read `killed`. Says whether any did. */
-  endRunningTasks(sessionId: string): boolean {
+  /**
+   * Its process is gone, and its sub-agents and background tasks with it: they read `killed`, ended now. `only` limits it to those tasks
+   * (a move: the old run's, while the new run may already have its own). Says whether any did.
+   */
+  endRunningTasks(sessionId: string, only?: readonly string[]): boolean {
+    if (only && !only.length) return false;
+    const pick = only ? ` AND task_id IN (${only.map(() => '?').join(', ')})` : '';
     const result = this.#writable()
-      .prepare(`UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE session_id = ? AND (status IS NULL OR status = 'running')`)
-      .run(this.#stamp(), sessionId);
+      .prepare(`UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE session_id = ? AND (status IS NULL OR status = 'running')${pick}`)
+      .run(this.#stamp(), sessionId, ...(only ?? []));
     return Number(result.changes) > 0;
+  }
+
+  /** The tasks of a session still running, by id. */
+  runningTaskIds(sessionId: string): string[] {
+    return (
+      this.#db().prepare(`SELECT task_id FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running') ORDER BY task_id`).all(sessionId) as {
+        task_id: string;
+      }[]
+    ).map((r) => r.task_id);
+  }
+
+  /**
+   * At a portal start: a session whose process isn't live (asleep, gone, ended) has nothing running, whatever its tasks last said (a
+   * portal that stopped mid-move or mid-restart never closed them). They read `killed`, ended now. Returns the sessions it changed.
+   */
+  endOrphanTasks(): string[] {
+    const db = this.#writable();
+    const where = `(status IS NULL OR status = 'running') AND session_id IN (SELECT id FROM chat_sessions WHERE coalesce(process, '') != 'live' OR state = 'ended')`;
+    const ids = (db.prepare(`SELECT DISTINCT session_id FROM chat_tasks WHERE ${where}`).all() as { session_id: string }[]).map((r) => r.session_id);
+    if (ids.length) db.prepare(`UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE ${where}`).run(this.#stamp());
+    return ids;
   }
 
   /** The description of the task a `Task` tool_use started, to label its sub-agent's lines. */

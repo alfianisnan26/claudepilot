@@ -165,3 +165,22 @@ export function modelShort(model: string | null | undefined): string | null {
 
 /** Whether a task is a sub-agent (which runs on a model), not a background command. */
 export const isAgentTask = (t: Pick<ChatTask, 'subagentType' | 'model'>): boolean => !!t.subagentType || !!t.model;
+
+/** What runs, sub-agents and background commands counted apart, then what ended: "2 agents, 3 commands · 4 done · 1 stopped". */
+export function tasksSummary(tasks: readonly ChatTask[]): string {
+  const running = tasks.filter((t) => t.status === 'running');
+  const agents = running.filter(isAgentTask).length;
+  const commands = running.length - agents;
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const runs = [agents && plural(agents, 'agent', 'agents'), commands && plural(commands, 'command', 'commands')].filter(Boolean).join(', ');
+  const count = (status: ChatTask['status']) => tasks.filter((t) => t.status === status).length;
+  const parts = [
+    runs,
+    ...([
+      [count('completed'), 'done'],
+      [count('failed'), 'failed'],
+      [count('killed'), 'stopped'],
+    ] as const).flatMap(([n, word]) => (n ? [`${n} ${word}`] : [])),
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : 'Nothing running';
+}
