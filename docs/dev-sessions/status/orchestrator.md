@@ -59,7 +59,9 @@ Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIO
 7. T-111 slices 1-2 (measuring; quality and human touch before tokens), then slice 2b: a structured estimate (effort class, severity, hours,
    risk flags, expected blockers) required to claim a ticket; 'predictability' is a scored term (charter now has eight terms, D-24).
 ---- CUT LINE: nothing below starts before 7 is merged and deployed ----
-T-113 (integrity guard), T-114 (scoreboard, playbooks, peer assessment), T-101, T-106, T-28, T-32, T-24, T-26, T-27, T-30, T-33, wave 4,
+T-113 (integrity guard), T-114 (scoreboard, playbooks, peer assessment), T-101, T-106, T-120 (rank-08c, after T-106: ClaudePilot
+DESIGN STANDARD in docs/design/, ClaudePilot only, never Konfersi; small doc slices between the larger tickets; every rule cites its file or
+PRD and says observed or decided; D-25), T-28, T-32, T-24, T-26, T-27, T-30, T-33, wave 4,
 the fitOf/fit.ts unification (small; may ride with T-98 follow-ups if a slot is idle).
 T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, never use that code, and tell the coordinator if they see it.
 
