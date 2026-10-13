@@ -148,7 +148,10 @@ describe('enroll', () => {
     const core = await openCore({ config: { allowHttp: true } });
     const w = wizard(core);
     assert.equal(refused(() => core.enrollments.enroll(w.token, { publicKey: core.keys().publicKey, hello: helloFor('host') }, '198.51.100.7')), '422:VALIDATION_FAILED');
-    for (const bad of [b64u(randomBytes(31)), 'not a key', '', undefined as unknown as string]) {
+    // the all-zero key (a point of order 4) was enrolled on a real portal before T6: a small-order key verifies signatures nobody made
+    const identityPoint = Buffer.alloc(32);
+    identityPoint[0] = 1;
+    for (const bad of [b64u(randomBytes(31)), 'not a key', '', undefined as unknown as string, b64u(Buffer.alloc(32)), b64u(identityPoint)]) {
       assert.equal(refused(() => core.enrollments.enroll(w.token, { publicKey: bad, hello: helloFor('docker') }, '198.51.100.7')), '422:bad_key');
     }
     assert.equal(refused(() => core.enrollments.enroll(w.token, { publicKey: core.keys().publicKey, hello: null as never }, '198.51.100.7')), '422:VALIDATION_FAILED');
