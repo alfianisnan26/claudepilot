@@ -32,10 +32,11 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
   usage-refresh trigger, the web waiting line, PRD FR4a/FR10a, tools/qa/automove.mjs, merge of integration and the area tests. The live dry run
   is the orchestrator's after the deploy.
 - T-107 (label t107): worktree dev-t107-job-run, branch dev/t107-job-run from 4b4a55a: scripts/job-run.sh, fake-kubectl tests, a timed real run.
-- T-118 (label t118, URGENT rank-01, security): worktree dev-t118-login, branch dev/t118-login from integration: identity core from
-  wip/stopped-by-quota-20261012-0712 (new files and migrations 400-401 only), password login, code login off, Bypass reauth by password,
-  coordinator account, login page and Settings > Account. Scratch portal only; the OWNER approves its release (changes sign-in).
-- T-102 PAUSED 15:06 for T-118 (4868c46 pushed): chip and popover verified 940/940; header band, other qa states, merge and area tests left.
+- T-102 (label t102): RESUMED 15:11 from 4868c46 (chip and popover verified 940/940); left: headerBand, the other qa states, scroll-lock,
+  mobile-drag, merge of integration, area tests.
+- T-118 STOPPED 15:1x after the owner's re-rank to rank-06b (accepted risk, T-117 closed, D-14/D-21/D-23): WIP 7b02a4e on dev/t118-login
+  (does not compile yet; identity core and migrations 400-401 taken over). Two decisions needed at resume: the seed past the reserved name
+  `admin`, and whether the seam treats admin users like the owner (PRD D12). Slot only after T-104.
 - T-100: worktree dev-automove-web, branch dev/t100-sessions-list, WIP committed and pushed; waits for the first free slot.
 - T-99: done on integration (73b0c67); goes live with the next deploy, close then.
 
@@ -47,6 +48,7 @@ Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIO
    -> deploy (gate Job, /deploy pipeline; the coordinator approves as delegate, D-2).
 4. T-115 slice 1: the decisions registry (imports DECISIONS.md) and session_context.
 5. T-104 Keep going with T-108's watchdog sweep (then the path allow-list and the lease).
+5b. T-118 multi-user MU1-min (rank-06b; WIP 7b02a4e).
 6. T-110 deploy rule, dry mode first.
 7. T-111 slices 1-2 (measuring; the owner's correction: quality and human touch before tokens).
 ---- CUT LINE: nothing below starts before 7 is merged and deployed ----
