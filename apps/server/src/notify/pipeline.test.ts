@@ -118,9 +118,9 @@ test('a deploy that waits for a person: "Deploy waits" reaches a new device at o
     assert.ok(!p.notification.data.act, 'no button approves a deploy from a notification');
     assert.ok(!JSON.stringify(p).includes('CANARY') && !everything(h).includes('CANARY'));
     assert.equal(h.notify.history.page('u_a').items[0]!.kind, 'ci_waiting');
-    // The first delivery's log row is written when the push service has answered, which can be after the request arrived: wait for it, or
-    // under load the second event's "held" row lands first (deploy #9's gate failed on exactly that).
+    // the push reaches the stand-in before its delivery row is written: wait for the row, or it lands after the held one under load
     await until(() => logs(h).length === 1);
+    assert.equal(logs(h)[0]!.status, 'sent');
     // quiet hours: held, the Inbox row still written
     h.notify.destinations.update(dest.id, 'u_a', { quiet: { enabled: true, start: '22:00', end: '07:00', tz: 'Asia/Jakarta', breakthrough: [] } });
     c.set('2026-10-12T16:30:00.000Z'); // 23:30 in Jakarta
