@@ -2961,7 +2961,10 @@ test('a Read of a file the portal staged for this chat’s attachment is answere
 
     ask('R-up', 'Read', { file_path: staged });
     await until(() => s.controller.history(s.id).some((e) => e.kind === 'resolved' && e.requestId === 'R-up'));
-    const answer = s.ws.sends.map((x) => x.line).find((l) => l.includes('"request_id":"R-up"') && l.includes('control_response'))!;
+    // The answer is written to the host a moment after it is recorded as resolved: wait for the line (a loaded machine made that a race).
+    const sent = () => s.ws.sends.map((x) => x.line).find((l) => l.includes('"request_id":"R-up"') && l.includes('control_response'));
+    await until(() => sent() !== undefined);
+    const answer = sent()!;
     assert.match(answer, /"behavior":"allow"/);
     assert.equal(s.controller.history(s.id).find((e) => e.kind === 'resolved' && e.requestId === 'R-up')!.outcome, 'allowed_once');
     assert.equal(s.store.db!.prepare(`SELECT actor FROM chat_requests WHERE request_id = 'R-up'`).get()!['actor'], 'portal:attachment', 'who answered is on the record');

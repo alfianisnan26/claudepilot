@@ -20,6 +20,8 @@ you work, your track file is what you work on.
    - Never push `main`. Never start, approve or work around the deploy pipeline: the coordinator and the owner do that. Never change the real
      portal's settings, tokens or Secrets. For anything that needs a portal, run a scratch one: `scripts/scratch-portal.sh` (clean environment).
    - Never force-push, rewrite pushed history, use `--no-verify` or amend a pushed commit.
+   - `.claude/settings.json` denies pushing `main` and changing the portal, workspace and Argo CD namespaces with `kubectl`, even in Bypass. That is
+     deliberate: do not look for another way to do those things (a script, `sh -c`, another tool); write it under NEEDS A HUMAN instead.
 4. **Heavy jobs one at a time, across all sessions** (the pod has 4 CPUs and 8 GiB): typecheck, the server suite, a production build, `gate.sh` and
    Chromium runs go through `flock /tmp/heavy.lock nice -n 10 <command>`. Targeted tests (one file) run directly. One scratch portal and one
    Chromium per session at most; stop them when you are done. A fresh worktree has no `node_modules`: run `flock /tmp/heavy.lock npm ci` once
