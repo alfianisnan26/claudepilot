@@ -36,6 +36,7 @@ export function declareConnectPolicies(): void {
     'POST /api/connect/targets/:id/enrollments': { ...target('manage'), audit: 'connect.enrollment.create' },
     'DELETE /api/connect/targets/:id/enrollments/:eid': { ...target('manage'), audit: 'connect.enrollment.revoke' },
     'GET /api/connect/targets/:id/enrollments/:eid/plan': target('manage'),
+    'GET /api/connect/targets/:id/commands': target('manage'),
     'GET /api/connect/targets/:id/events': target('manage'),
     'PATCH /api/connect/nodes/:nid': { kind: 'platform', area: 'targets', verb: 'manage', audit: 'connect.node.update' },
     'DELETE /api/connect/nodes/:nid': { kind: 'platform', area: 'targets', verb: 'manage', audit: 'connect.node.revoke' },

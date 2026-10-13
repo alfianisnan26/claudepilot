@@ -425,6 +425,28 @@ describe('with the real installers (T4)', () => {
   });
 });
 
+describe('the token-less commands (the Outdated chip)', () => {
+  test('GET …/commands gives upgrade, uninstall and doctor with the latest token’s platform and options, and makes no token', async () => {
+    const { realInstall } = await import('./installPort.js');
+    const m = await openModule({ install: realInstall });
+    const made = (await create(m, { options: { sudo: true } })).json.data;
+    const before = (await m.admin('GET', '/targets/lab/enrollments')).json.data.length;
+    const res = await m.admin('GET', CONNECT_API.commands('lab').replace('/api/connect', ''));
+    assert.equal(res.status, 200);
+    const cmds = res.json.data;
+    assert.deepEqual(Object.keys(cmds).sort(), ['doctor', 'scriptSha256', 'scriptUrl', 'uninstall', 'upgrade']);
+    assert.equal(cmds.upgrade, made.commands.upgrade, 'the same command the wizard showed');
+    assert.match(cmds.upgrade, /^curl .*\| sudo env .*PILOT_TARGET=lab sh -s -- upgrade$/);
+    assert.ok(!res.text.includes('PILOT_TOKEN') && !res.text.includes(made.token));
+    assert.equal((await m.admin('GET', '/targets/lab/enrollments')).json.data.length, before, 'no token was made');
+    const win = (await m.admin('GET', CONNECT_API.commands('lab', 'windows').replace('/api/connect', ''))).json.data;
+    assert.match(win.upgrade, /install\.ps1\)\)\) upgrade$/);
+    assert.equal((await m.admin('GET', '/targets/lab/commands?platform=beos')).status, 422);
+    assert.equal((await m.admin('GET', '/targets/nope/commands')).status, 404);
+    await m.close();
+  });
+});
+
 describe('wrong tokens count once across plan, enroll and status', () => {
   test('six wrong plan requests and four wrong enrolls make ten: the next call of any of the three is 429', async () => {
     const { realInstall } = await import('./installPort.js');

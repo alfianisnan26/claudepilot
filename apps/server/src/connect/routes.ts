@@ -76,6 +76,7 @@ export function createConnectRoutes(admin: ConnectAdmin, opts: { clientIp(req: I
     admin.revokeEnrollment(actorOf(c), idOf(c, 'id'), idOf(c, 'eid'), meta(c));
     return c.json(success({ ok: true }));
   });
+  r.get('/targets/:id/commands', (c) => c.json(success(admin.maintenanceCommands(actorOf(c), idOf(c, 'id'), c.req.query('platform')))));
   r.get('/targets/:id/enrollments/:eid/plan', (c) => c.json(success(admin.planPreview(actorOf(c), idOf(c, 'id'), idOf(c, 'eid')))));
   r.get('/targets/:id/events', (c) => c.json(success(admin.events(actorOf(c), idOf(c, 'id'), { limit: intQuery(c, 'limit'), before: intQuery(c, 'before') }))));
 

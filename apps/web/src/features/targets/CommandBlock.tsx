@@ -10,17 +10,14 @@ type Which = 'install' | 'verified' | 'upgrade';
  */
 export function CommandBlock({
   commands,
-  upgradeFirst,
   onViewScript,
   onWhatItDoes,
 }: {
   commands: ConnectCommands;
-  /** Open on the upgrade command (the Outdated chip). */
-  upgradeFirst?: boolean;
   onViewScript: () => void;
   onWhatItDoes: () => void;
 }) {
-  const [which, setWhich] = useState<Which>(upgradeFirst ? 'upgrade' : 'install');
+  const [which, setWhich] = useState<Which>('install');
   const text = commands[which];
   return (
     <div className="flex min-w-0 flex-col gap-2">

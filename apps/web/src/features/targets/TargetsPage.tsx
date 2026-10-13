@@ -11,6 +11,7 @@ import { AddTargetDialog, type WizardMode } from './AddTargetDialog';
 import { Dot } from './Dot';
 import { PortalSettingsDialog } from './SettingsSheet';
 import { TargetSheet } from './TargetSheet';
+import { UpgradeSheet } from './UpgradeSheet';
 import { dotOf, isEnrolled, rowLine } from './view';
 
 const POLL_MS = 10_000;
@@ -29,6 +30,7 @@ export function TargetsPage() {
   const [denied, setDenied] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [wizard, setWizard] = useState<WizardMode | null>(null);
+  const [upgradeFor, setUpgradeFor] = useState<string | null>(null);
   const [gear, setGear] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
 
@@ -133,10 +135,12 @@ export function TargetsPage() {
         target={open}
         onClose={() => setOpenId(null)}
         onChanged={() => void load()}
-        onCommand={(t, upgrade) => setWizard({ type: 'command', target: t, upgrade })}
+        onCommand={(t) => setWizard({ type: 'command', target: t })}
+        onUpgrade={(t) => setUpgradeFor(t.id)}
         denied={null}
       />
       <AddTargetDialog open={!!wizard} mode={wizard ?? { type: 'new' }} rows={rows ?? []} settings={settings} onClose={() => setWizard(null)} onChanged={() => void load()} />
+      <UpgradeSheet targetId={upgradeFor} onClose={() => setUpgradeFor(null)} />
       <PortalSettingsDialog open={gear} rows={rows ?? []} settings={settings} onClose={() => setGear(false)} onSaved={setSettings} />
     </>
   );

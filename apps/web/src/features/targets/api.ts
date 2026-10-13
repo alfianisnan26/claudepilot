@@ -5,6 +5,7 @@ import {
   type ConnectEnrollment,
   type ConnectEnrollmentCreated,
   type ConnectEvent,
+  type ConnectMaintenanceCommands,
   type ConnectNodeView,
   type ConnectPlanPreview,
   type ConnectScannedView,
@@ -42,23 +43,19 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   throw new ApiError('INTERNAL_ERROR', `Unexpected response (${res.status}).`, res.status);
 }
 
-/**
- * The query that says what happens to a target's workspaces. The contract names it only in CONNECT_API.target's comment today (`workspaces`,
- * which app.ts's guard refuses); T1 renames it (planned `onWorkspaces`): this is the one place to follow it, never a literal elsewhere.
- */
-const REMOVE_QUERY = 'workspaces';
-
 export const connectApi = {
   list: () => request<ConnectTargetRow[]>('GET', CONNECT_API.targets),
   create: (body: CreateConnectTargetRequest) => request<ConnectEnrollmentCreated>('POST', CONNECT_API.targets, body),
   get: (id: string) => request<ConnectTargetView>('GET', CONNECT_API.target(id)),
   update: (id: string, body: UpdateConnectTargetRequest) => request<ConnectTargetView>('PATCH', CONNECT_API.target(id), body),
-  /** `workspaces` only when the target has some: the query is what the 428 asks for (and, with none, is left out). */
-  remove: (id: string, workspaces?: 'keep' | 'remove') => request<{ ok: true }>('DELETE', workspaces ? `${CONNECT_API.target(id)}?${REMOVE_QUERY}=${workspaces}` : CONNECT_API.target(id)),
+  /** `onWorkspaces` only when the target has some: the query is what the 428 asks for (and, with none, is left out). */
+  remove: (id: string, onWorkspaces?: 'keep' | 'remove') => request<{ ok: true }>('DELETE', CONNECT_API.removeTarget(id, onWorkspaces)),
   check: (id: string) => request<ConnectTargetView>('POST', CONNECT_API.check(id)),
   enrollments: (id: string) => request<ConnectEnrollment[]>('GET', CONNECT_API.enrollments(id)),
   enroll: (id: string, body: CreateConnectEnrollmentRequest) => request<ConnectEnrollmentCreated>('POST', CONNECT_API.enrollments(id), body),
   revokeEnrollment: (id: string, enrollmentId: string) => request<{ ok: true }>('DELETE', CONNECT_API.enrollment(id, enrollmentId)),
+  /** The token-less commands (upgrade, doctor): makes no token. */
+  commands: (id: string) => request<ConnectMaintenanceCommands>('GET', CONNECT_API.commands(id)),
   plan: (id: string, enrollmentId: string) => request<ConnectPlanPreview>('GET', CONNECT_API.plan(id, enrollmentId)),
   events: (id: string, limit = 20) => request<ConnectEvent[]>('GET', `${CONNECT_API.events(id)}?limit=${limit}`),
   updateNode: (nodeId: string, body: UpdateConnectNodeRequest) => request<ConnectNodeView>('PATCH', CONNECT_API.node(nodeId), body),
