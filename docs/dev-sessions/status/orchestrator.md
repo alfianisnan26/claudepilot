@@ -7,27 +7,30 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
 - Portal 2026.10.13-6 (run 18, e327e6d, gate 470 s green; released by the owner, verified by the coordinator).
   Live: T-24, T-28, T-32, T-42 slices 1-2, T-95 items 1-3, T-97, T-98, T-99, T-107, the env deny rules (eeee2c5).
 
-## IN FLIGHT (three sub-agents, opus, restarted 15:5x by 5c9fcb5f from the pushed branches; ticket comments may fail: T-131)
-- t105 (opus): dev-automove-model, dev/t105-automove-proven. T-105 items 1, 2, 5 and the PRD are done. T-109 WIP is saved as 8cc8265
-  (model catalogue, migration 761 original_model). Left: make it compile, T-109 a-h, the area tests, the merge of integration.
-- t100 (opus): dev-automove-web, dev/t100-sessions-list (2c69a31). Left: the clipped card and the attention order, harness checks,
-  the browser look, the PRD.
-- t102 (opus): dev-track-a-connect, dev/t102-session-screen (4817c7f, which drops the SS_DEBUG line). Items 1-2 are checked (940/940).
-  Left: item 3 (header band and badge), the headerBand check, scroll-lock, mobile-drag, the PRD, the merge.
-- T-118: stopped, WIP 7b02a4e on dev/t118-login (after T-104). T-97 fitOf and T-98 fit.ts are still not unified (a small slice).
+## IN FLIGHT (WIP three; 16:4x re-slotted by rank, D-19)
+- t105 (opus): dev-automove-model, dev/t105-automove-proven. T-105 is done apart from the area tests. T-109 WIP is 8cc8265 (catalogue, migration 761).
+- t136 (opus): dev-track-c-ui, dev/t136-integrity. T-136 slice 1: classify the integrity events (peer only after a sub-agent's SendMessage,
+  an identical duplicate control response ignored, a table with negative twins), continued_from (migrations 770-774), and the repair of
+  today's chains, which also moves their tickets to the head.
+- t141 (opus): dev-t107-job-run, dev/t141-image-build. T-141: scripts/image-build.sh (kaniko, credential on stdin, one at a time) and the
+  real proof build. Any RBAC widening goes on the ticket as an escalation.
+- PAUSED 16:4x (save and push, then report): t100 (dev/t100-sessions-list, rank-05) and t102 (dev/t102-session-screen, rank-04). They
+  resume after T-110 slice 1.
+- T-118: stopped (WIP 7b02a4e, after T-104). fitOf and fit.ts are not unified yet (small).
 
 ## NEXT (coordinator gap review 15:0x: WIP limit THREE slices, thin first slices, each merged AND deployed before the next starts)
-Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIONS.md (D-1..D-22; never act against a row, say so on a ticket).
+Read CHARTER.md and DECISIONS.md (D-1..D-33) before planning; never act against a row.
 1. T-105 + T-109 (running, one slice): auto move waits, resumes, fits the model (D-12).
-2. T-136 (rank-02a): recover an integrity ending in place. It takes the FIRST free slot.
+2. T-136 slice 1 and T-141 (running). Then T-136 slice 2 (recover in place, plus the supervisor), after slice 1 is merged.
 2b. T-110 slice 1 ONLY (urgent, rank-03c, D-2): the PRD FR41 amendment, the environment option `autoApprove` (off, set only by a person with
    manage), and DRY MODE: on every held release it writes 'WOULD approve: ...' or 'WOULD NOT: <condition>' to the run page and the audit, and
-   approves nothing. The SECOND free slot. Slice 2 (real approval, pause, rollback pause) waits until the owner has read five dry lines.
-3. T-99 (on integration), T-102 (running), T-100 (WIP pushed; next free slot).
-   T-125 (rank-05d, same screen as T-102: the stack above the composer shows only THIS chat; Show more in place; shortcuts that say where)
-   follows T-102 in its worktree; ship the compact contextual row first, the pace line after T-122.
+   approves nothing. The NEXT free slot. Slice 2 (real approval, pause, rollback pause) waits until the owner has read five dry lines.
+3. T-102, then T-100 (paused; their WIP is pushed).
+   T-125 (rank-05d) follows T-102 in its worktree: the compact contextual row first, the pace line after T-122.
    T-127 (portal WIP limit, rank-05e) and T-128 (CI read scope, rank-05f) after T-125.
-   -> deploy (gate Job, /deploy pipeline; the coordinator approves as delegate, D-2).
+   -> deploy (/deploy pipeline with gate=true, D-7; the coordinator approves as delegate, D-2).
+3c. A post-deploy check (sonnet, D-34) of what is live in 2026.10.13-6, in the pilot browser and the harnesses at 390 px, light and dark:
+   T-1, T-2, T-3, T-5, T-24, T-25, T-28, T-32, T-34, T-42, T-99. Limits are stated on each ticket, never turned into an owner task.
 4. T-115 slice 1: the decisions registry (imports DECISIONS.md) and session_context.
 5. T-104 Keep going with T-108's watchdog sweep (then the path allow-list and the lease).
 5b. T-118 multi-user MU1-min (rank-06b; WIP 7b02a4e).
@@ -47,21 +50,12 @@ T-26/T-27 (folded into T-134), T-30, T-33, T-123, T-132..T-135 with T-140 (rank-
 agents, credentials never read), T-137, then T-138 (rank-10a, Settings v2, D-32: audit first, agents read and propose only) (wave 3, motion), wave 4, T-130, T-131, and the fitOf/fit.ts unification (small; fills an idle slot).
 T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, never use that code, and tell the coordinator if they see it.
 
-## NEEDS A HUMAN (only what a person can do; rewritten 14:3x from the tickets, after the owner's note)
-- T-131: reassign T-100, T-102, T-105, T-109 (and the in_review T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-107) from the ended fdb140be
-  to 5c9fcb5f. The portal refuses a takeover (FORBIDDEN), so this session cannot comment on or close them.
-- The eight in_review tickets (T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-107) are reassigned to 5c9fcb5f and LIVE in 2026.10.13-6.
-  The coordinator verifies and closes them, not this session. T-100, T-102, T-105, T-109 still sit on the ended fdb140be (T-131).
-- On the iPhone (installed PWA, 390 px, light and dark), check what is live in 2026.10.13-6: T-1 Pinned and swipe (right = Pin, left = Archive);
-  T-2 no sideways scroll on any page; T-3 an image attaches and uploads in this Kubernetes workspace; T-5 sub-agents in their own rows, "Working ·
-  N agents", "Session finished" only at real idle; T-24 tool rows open to Input and Output blocks with real line breaks and shell colouring, the
-  approval card the same; T-25 Mute similar on a notification; T-28 Bump on a ticket pushes it into a running session (priority or question);
-  T-32 Bump on a CI run (Fix or Ask) and the auto-report of a finished run to the session that started it; T-34 the Home page as the first page;
-  T-42 the workspace sheet shows the label isnan-pod with the id next to it, every old link and MCP call by kubernetes/kohi-event still works;
-  T-99 a chat survives a finished sub-agent (no "Ended for integrity"), and CI works within a minute of a pod restart.
-- Parked on tickets: T-97 (NetworkPolicy not enforced; browser image tag and pool after deploy), T-95 item 4, T-42 slice 4 (own number).
+## NEEDS A HUMAN (required escalations only, D-10 and D-34)
+- None open. If t141 finds that the image-build door needs a wider Role, the exact diff goes here and on T-141 (permissions).
 
 ## DECISIONS
+- 16:5x D-34 adopted: the iPhone checklist leaves NEEDS A HUMAN and becomes item 3c (agents verify with evidence). T-131's reassignment is
+  not a required escalation: T-136 slice 1's repair moves the chain's tickets to the head.
 - 16:1x Run 18 released, so the held status commits are pushed. The three running slices are NOT preempted for T-136 or T-110: they are
   mid-slice with WIP pushed, and a restart costs more than the wait. The next two free slots go to T-136, then T-110 (rank order).
 - 15:5x (5c9fcb5f) The restart left no unmerged work behind: all three branches were pushed. The uncommitted T-109 work (330 lines) and
