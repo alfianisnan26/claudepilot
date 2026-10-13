@@ -13,16 +13,17 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - C item 1, btw UI against the real engine (tools/qa/btw-real.mjs, the card says how many messages the answer saw): a97a950.
 - Gate hygiene: shellcheck SC2015 (1f045fe), repo-find sorted (8b3316a), deploy-pipeline e2e test: the fakes' PATH in ~/.profile (b893ac8; /etc/profile resets PATH in a login shell and the real kubectl installed today at /usr/local/bin won; the test's wait now says which step failed). Passes alone 7/7.
 
-## NOW (10:55)
-- DEPLOY #9 (rmv6kxutl606916) on af52ad8, gate=true (11:10): #8 was cancelled by the coordinator (the same Connect test, a literal 100 ms sleep: fixed 3674941). #9 carries everything of #8 plus T-5/T-31/T-39/T-41, T-32 part 1, T-25, 3674941, fef6852 (gate-job-stop.sh). Waits for the coordinator's Approve after build. integration not pushed until it released.
-- Local, after #9: 6c1dd47 gate Jobs never outlive their run (Secret owned by the Job, pipeline clears leftovers at start and its own at exit; pipeline tests 14/14).
-- In #9 (were local): T-5 + T-31 + T-39 + T-41 (cbd640d), T-32 part 1 CI auto-report (c31a429, migration 730), T-25 mute rules (e0e4de8, migration 721). Head e0e4de8 typechecks clean. Gate them (cluster Job) once #8's gate is through; deploy #9 after #8.
-- Local after #9 (not pushed): 6c1dd47 gate Job clean-up; 702eaef T-42 slice 1 (stable id, alias, stored runtime names, migration 712; 136 tests, typecheck clean).
-- Sub-agents (11:28): T-42 slice 2 (the name as a label, workspace_rename MCP tool; dev/workspace-id); T-24 tool rows (cdecf11, b90275f: typechecks clean, 186 tests) and T-28 ticket Bump (e35d665: typechecks clean, 42 tests) wait only for their browser look, which waits for #9's gate (harness pause).
-- Next: T-32 part 2 (CI Bump, reuses T-28's picker), T-42 slices 2 and 3, T-26 (three slices), T-27, T-30; wave 4; T-33 last (after T-42).
-- PACE (honest): 07:00-10:55 merged about 16 tickets' work (T-1..T-9, T-29, T-36, T-6, T-34, T-37, T-38, T-5/31/39/41, T-32a, T-25) = about 4 per hour; live: still nothing new of today until #8 releases.
-- T-37 follow-up: cancelling a pipeline run does not delete its gate Job (the runner's cancel never reaches gate-job.sh's trap): #7's Job claudepilot-gate-3b2917c-4272 ran on next to #8's. Fix: the Job carries the run id and the next gate-job.sh (or the pipeline's cancel hook) removes Jobs whose run ended; meanwhile activeDeadlineSeconds 5400 ends it. The coordinator may delete it by hand (my settings deny deletes in isnan-claudepilot).
-- Ticket queue: ticket_claim_next hands out the Konfersi tickets (T-51, workspace kubernetes/kohi-event, urgent) even with a tag filter; I returned T-51 twice. Claim our tickets by id through their owner, or retag the Konfersi ones (NEEDS A HUMAN / coordinator).
+## NOW (11:5x)
+- Deploys: #9 failed in its gate (notify "Deploy waits": a race in the test, not the Job; fixed twice, mine 3fe7d4b and the coordinator's 080ccb0, kept theirs). #10 cancelled by the coordinator (the gate Job got 0.4 CPU on k3s-node2: 67ff48a moves it to another node with a 1 CPU request). DEPLOY #11 runs at 67ff48a (the coordinator's). Do not push integration or pilot until #11 is released.
+- Local, not pushed (head 4a752c3), to go with the deploy after #11:
+  - T-95 (urgent): 7b45909 the release pushes main alone and integration catches up as its own step (retried, a conflict only warns, never a rollback); rollback the same; the gate log carries every failing test's own report (=== FAILURES); a rerun pass says "flaky, passed on rerun: <tests>"; gate-job.sh <commit> [steps] [files]. 690df04 a cancelled run says who and why (migration 731; "Cancelled by the pipeline, for #12"). Pipeline tests 17/17, CI service, run page words.
+  - 6c1dd47 gate Jobs never outlive their run (Secret owned by the Job, pipeline clears leftovers).
+  - 702eaef T-42 slice 1 (stable workspace id, alias, stored runtime names, migration 712).
+  - 4a752c3 T-28 ticket Bump (Prioritise / Ask, shared session picker, ticket_bump MCP tool; 42 tests; browser 42/44 with the one real issue fixed).
+  - T-95 item 3 (gate speed): the Job ran 1120 s of suite on k3s-node2 with 0.4 CPU of a 100m request; 67ff48a (coordinator) asks 1 CPU and avoids the dev pod's node. Concurrency 3 in the Job.
+- Sub-agents: T-42 slice 2 (the name as a label, workspace_rename; dev/workspace-id), T-24 tool rows (browser look running; dev/tool-rows), T-32 part 2 CI Bump (dev/ci-bump, reuses T-28's picker).
+- Next: T-42 slice 3, T-26 (three slices), T-27, T-30; wave 4 (T-10..T-15); T-33 last (after T-42).
+- Ticket queue: ticket_claim_next hands out the Konfersi tickets (T-51) even with a tag filter, and T-95/T-42 refuse my comments (not assigned): progress goes here until someone assigns them to this session.
 
 ## WAVES (owner, 09:4x; work in this order)
 - Wave 1: T-36 fast lane (DONE, pushed) -> push (done) -> T-38 folder trust (built) -> T-18 deploy (full gate on the exact commit) -> T-3, T-2 (fixed, merged; live with the deploy) -> T-31 (with the T-5 sub-agent) -> T-1, T-4, T-29 (merged; live with the deploy).
