@@ -6,9 +6,9 @@ Resources, T-99 harness turn + CI after a restart, T-100 Sessions list, T-101 ti
 T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with ticket_claim_next id=...). Models: opus implementation, sonnet checks, fable diagnosis.
 
 ## LIVE
-- Portal 2026.10.13-4 (deploy #13). Live (closed): T-1..T-9, T-18, T-25, T-29, T-31, T-32 part 1, T-34, T-36..T-39, T-41, migration 720.
-- Deploy #14 was CANCELLED by the coordinator (the pod was restarted for requests 1 CPU / 2 GiB; automove.allowBypass is ON now). The pod restart
-  happened before this session started: sub-agents and the fast gate survived.
+- Portal 2026.10.13-5 (deploy run 17, released 13:4x; gate green in 282 s at dca2a99 with /tmp in memory, was 31+ min). Live: T-24, T-28, T-32 part 2,
+  T-42 slices 1-2 (the workspace is labelled isnan-pod, stable id ws_7fea17373588, runtime ws-kohi-event kept), T-95 items 1-3, plus everything of -4.
+- Run 14 cancelled (pod restart for requests 1 CPU / 2 GiB; automove.allowBypass ON), run 16 red on qa/runtimes.test.ts (fixed as dca2a99).
 
 ## DONE THIS SESSION (741ff4d pushed to origin and pilot by the coordinator at 13:13 with a deploy run, full gate; T-99 merged locally after it)
 - 77c0e33 merge origin/integration (scripts/ws-resources.sh, the coordinator's narrow door; README rule).
@@ -35,8 +35,7 @@ T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-100, T-101, T-102 (claimed with tick
   scripts/ws-resources.sh and its allow rule go when T-98 lands); T-100 uses the existing chip code (no ChipList, T-14 later); T-12 does only
   what T-95 item 2 and T-32 left; T-102's queued or automatic restart keeps Bypass or does not happen; T-33 rewritten (id + `label` per entity;
   the workspace rename is T-42's). Running sub-agents were told (13:37).
-1. The coordinator's deploy run on 741ff4d (T-24, T-28, T-32 part 2, T-42 slices 1-2, T-95): NO push to integration or pilot until it is released
-   or fails (coordinator, 13:13). Then push 73b0c67+ (T-99, the runtimes fix) and the next deploy carries T-99, T-100, T-102.
+1. Pushed after run 17's release: T-99 (rank-03) is on integration; the next deploy carries T-99, T-102, T-100 and whatever lands before it.
 2. First free slot: T-102 session screen (item 1 first: the Tools changed chip with Restart after this turn, auto-apply for autonomous sessions,
    Bypass kept; then popover placement; then header blur and badge). Then T-100 Sessions list (clipped cards, attention order; existing chips).
    Then T-101 ticket attachments (reuse chat uploads; paste/photo path first, viewer second). Migration blocks: T-101 750-754, T-102 755-756 if any.
