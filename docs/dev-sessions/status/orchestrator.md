@@ -50,7 +50,10 @@ Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIO
 5. T-104 Keep going with T-108's watchdog sweep (then the path allow-list and the lease).
 5b. T-118 multi-user MU1-min (rank-06b; WIP 7b02a4e).
 6. T-110 deploy rule, dry mode first.
-7. T-111 slices 1-2 (measuring; the owner's correction: quality and human touch before tokens).
+6b. T-119 slice 1 (rank-09a): the pure `ticketFlow` module (status events to spans and markers), GET /api/tickets/timeline, the MCP tool
+   ticket_timeline. The Gantt chart and the flow-metrics strip are its later slices.
+7. T-111 slices 1-2 (measuring; quality and human touch before tokens), then slice 2b: a structured estimate (effort class, severity, hours,
+   risk flags, expected blockers) required to claim a ticket; 'predictability' is a scored term (charter now has eight terms, D-24).
 ---- CUT LINE: nothing below starts before 7 is merged and deployed ----
 T-113 (integrity guard), T-114 (scoreboard, playbooks, peer assessment), T-101, T-106, T-28, T-32, T-24, T-26, T-27, T-30, T-33, wave 4,
 the fitOf/fit.ts unification (small; may ride with T-98 follow-ups if a slot is idle).
