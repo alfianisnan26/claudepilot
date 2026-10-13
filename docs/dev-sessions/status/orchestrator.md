@@ -7,25 +7,26 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
 - Portal 2026.10.13-6 (run 18, e327e6d, gate 470 s green; released by the owner, verified by the coordinator).
   Live: T-24, T-28, T-32, T-42 slices 1-2, T-95 items 1-3, T-97, T-98, T-99, T-107, the env deny rules (eeee2c5).
 
-## IN FLIGHT (three sub-agents, opus, restarted 15:5x by 5c9fcb5f from the pushed branches; ticket comments may fail: T-131)
-- t105 (opus): dev-automove-model, dev/t105-automove-proven. T-105 items 1, 2, 5 and the PRD are done. T-109 WIP is saved as 8cc8265
-  (model catalogue, migration 761 original_model). Left: make it compile, T-109 a-h, the area tests, the merge of integration.
-- t100 (opus): dev-automove-web, dev/t100-sessions-list (2c69a31). Left: the clipped card and the attention order, harness checks,
-  the browser look, the PRD.
-- t102 (opus): dev-track-a-connect, dev/t102-session-screen (4817c7f, which drops the SS_DEBUG line). Items 1-2 are checked (940/940).
-  Left: item 3 (header band and badge), the headerBand check, scroll-lock, mobile-drag, the PRD, the merge.
-- T-118: stopped, WIP 7b02a4e on dev/t118-login (after T-104). T-97 fitOf and T-98 fit.ts are still not unified (a small slice).
+## IN FLIGHT (WIP three; 16:4x re-slotted by rank, D-19)
+- t105 (opus): dev-automove-model, dev/t105-automove-proven. T-105 is done apart from the area tests. T-109 WIP is 8cc8265 (catalogue, migration 761).
+- t136 (opus): dev-track-c-ui, dev/t136-integrity. T-136 slice 1: classify the integrity events (peer only after a sub-agent's SendMessage,
+  an identical duplicate control response ignored, a table with negative twins), continued_from (migrations 770-774), and the repair of
+  today's chains, which also moves their tickets to the head.
+- t141 (opus): dev-t107-job-run, dev/t141-image-build. T-141: scripts/image-build.sh (kaniko, credential on stdin, one at a time) and the
+  real proof build. Any RBAC widening goes on the ticket as an escalation.
+- PAUSED 16:4x (save and push, then report): t100 (dev/t100-sessions-list, rank-05) and t102 (dev/t102-session-screen, rank-04). They
+  resume after T-110 slice 1.
+- T-118: stopped (WIP 7b02a4e, after T-104). fitOf and fit.ts are not unified yet (small).
 
 ## NEXT (coordinator gap review 15:0x: WIP limit THREE slices, thin first slices, each merged AND deployed before the next starts)
-Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIONS.md (D-1..D-22; never act against a row, say so on a ticket).
+Read CHARTER.md and DECISIONS.md (D-1..D-33) before planning; never act against a row.
 1. T-105 + T-109 (running, one slice): auto move waits, resumes, fits the model (D-12).
-2. T-136 (rank-02a): recover an integrity ending in place. It takes the FIRST free slot.
+2. T-136 slice 1 and T-141 (running). Then T-136 slice 2 (recover in place, plus the supervisor), after slice 1 is merged.
 2b. T-110 slice 1 ONLY (urgent, rank-03c, D-2): the PRD FR41 amendment, the environment option `autoApprove` (off, set only by a person with
    manage), and DRY MODE: on every held release it writes 'WOULD approve: ...' or 'WOULD NOT: <condition>' to the run page and the audit, and
-   approves nothing. The SECOND free slot. Slice 2 (real approval, pause, rollback pause) waits until the owner has read five dry lines.
-3. T-99 (on integration), T-102 (running), T-100 (WIP pushed; next free slot).
-   T-125 (rank-05d, same screen as T-102: the stack above the composer shows only THIS chat; Show more in place; shortcuts that say where)
-   follows T-102 in its worktree; ship the compact contextual row first, the pace line after T-122.
+   approves nothing. The NEXT free slot. Slice 2 (real approval, pause, rollback pause) waits until the owner has read five dry lines.
+3. T-102, then T-100 (paused; their WIP is pushed).
+   T-125 (rank-05d) follows T-102 in its worktree: the compact contextual row first, the pace line after T-122.
    T-127 (portal WIP limit, rank-05e) and T-128 (CI read scope, rank-05f) after T-125.
    -> deploy (gate Job, /deploy pipeline; the coordinator approves as delegate, D-2).
 4. T-115 slice 1: the decisions registry (imports DECISIONS.md) and session_context.
