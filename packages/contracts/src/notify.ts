@@ -180,7 +180,7 @@ export const NOTIFY_ERRORS = [
 export type NotifyError = (typeof NOTIFY_ERRORS)[number];
 
 /** Why a delivery was not attempted. */
-export const NOTIFY_SUPPRESSIONS = ['kind_off', 'quiet_hours', 'active_device', 'throttled', 'collapsed', 'disabled', 'resolved'] as const;
+export const NOTIFY_SUPPRESSIONS = ['kind_off', 'quiet_hours', 'active_device', 'throttled', 'collapsed', 'disabled', 'resolved', 'muted'] as const;
 export type NotifySuppression = (typeof NOTIFY_SUPPRESSIONS)[number];
 
 /** Quiet hours of one destination, in the IANA zone stored with it. The window may cross midnight. Off by default (PWA PRD Q4). */
@@ -356,6 +356,8 @@ export interface NotifyHistoryItem {
   /** The thing it was about is dealt with (a request answered, a run passed): the row is shown dimmed. */
   resolvedAt: string | null;
   resolution: string | null;
+  /** A mute rule hushed it: stored, never buzzed, toasted or pushed; left out of the list unless `?muted=1`, and never unread. */
+  muted: boolean;
 }
 
 export interface NotifyHistoryPage {
@@ -368,6 +370,78 @@ export interface NotifyHistoryPage {
 /** `PUT NOTIFY_API.session(id)`: "Notify when done" for one session (the session menu). */
 export interface SessionNotifyRequest {
   done: boolean;
+}
+
+/* ---------- Mute rules ("Mute similar") ---------- */
+
+/**
+ * What a rule narrows to, besides the kind: the event's subject, or a name from its facts (a CI run's repository, pipeline or
+ * environment). Built by the server from the event (`notify/mutes.ts`, narrowest first), so a rule never matches on free text.
+ */
+export const MUTE_SCOPE_TYPES = ['session', 'ticket', 'ci_run', 'claude', 'trigger', 'trigger_run', 'budget', 'environment', 'pipeline', 'repo', 'workspace'] as const;
+export type MuteScopeType = (typeof MUTE_SCOPE_TYPES)[number];
+
+export interface MuteScope {
+  type: MuteScopeType;
+  /** The subject id, or `repo`, `repo/pipeline`, `repo/environment` for a CI run's names. */
+  id: string;
+  /** Short words for the rule list ("claudepilot · deploy", "T-25"); names and ids only. */
+  label: string;
+}
+
+/**
+ * Never hushed by "Mute similar": an approval blocks a session until somebody answers, and a deploy waits for a person. A rule for
+ * one of these is made only in Settings, with `confirm: true`, and the pipeline also ignores any such rule made without it.
+ */
+export const MUTE_GUARDED_KINDS: readonly NotifyKind[] = ['approval', 'ci_waiting'];
+export const isMuteGuarded = (kind: NotifyKind): boolean => MUTE_GUARDED_KINDS.includes(kind);
+
+export const MUTE_DURATIONS = ['1h', '1d', 'forever'] as const;
+export type MuteDuration = (typeof MUTE_DURATIONS)[number];
+export const MUTE_DURATION_MS: Record<MuteDuration, number | null> = { '1h': 3600_000, '1d': 86_400_000, forever: null };
+/** At most this many rules per person. */
+export const MUTE_RULES_MAX = 100;
+
+/** One rule of the caller's. Expired rules are not listed (and are swept). */
+export interface NotifyMute {
+  /** `mut_` + 12 hex. */
+  id: string;
+  kind: NotifyKind;
+  /** Null: every event of the kind. */
+  scope: MuteScope | null;
+  /** Null: all of the person's devices and channels (the history row is marked muted); else only that one destination is hushed. */
+  destinationId: string | null;
+  createdAt: string;
+  /** Null: until removed. */
+  expiresAt: string | null;
+  /** How many events it hushed. */
+  hushed: number;
+  lastHushedAt: string | null;
+}
+
+/**
+ * `POST NOTIFY_API.mutes`. From a notification: `from` (an Inbox item or event id), `wide` for "all of this kind"; the server reads the
+ * kind and the scope from the stored item, and refuses a guarded kind. By hand (Settings): `kind`, optional `scope` (type and id); a
+ * guarded kind needs `confirm: true` (409 `CONFIRMATION_REQUIRED` without it).
+ */
+export interface CreateMuteRequest {
+  from?: string;
+  wide?: boolean;
+  kind?: NotifyKind;
+  scope?: { type: MuteScopeType; id: string } | null;
+  destinationId?: string | null;
+  duration: MuteDuration;
+  confirm?: boolean;
+}
+
+/** `GET NOTIFY_API.muteOffer(ref)`: what "Mute similar" would make for that item. */
+export interface MuteOffer {
+  ref: string;
+  kind: NotifyKind;
+  /** The narrowest sensible scope; null when the event has none (then the only choice is all of the kind). */
+  scope: MuteScope | null;
+  /** Approvals and deploy waits: not muted from a notification (Settings only). */
+  guarded: boolean;
 }
 
 /* ---------- Answering from a notification ---------- */
@@ -489,6 +563,12 @@ export const NOTIFY_API = {
   prefs: '/api/notify/prefs',
   /** POST `NotifyActRequest`: `NotifyActResult`. */
   act: '/api/notify/act',
+  /** GET: `NotifyMute[]` (the caller's live rules). POST `CreateMuteRequest`: `NotifyMute`. DELETE: Unmute all, `{ removed }`. */
+  mutes: '/api/notify/mutes',
+  /** DELETE: remove one rule. */
+  mute: (id: string) => `/api/notify/mutes/${encodeURIComponent(id)}`,
+  /** GET: `MuteOffer` for an Inbox item (`nh_…`) or an event of the caller (`evt_…`, from a push's Mute action). */
+  muteOffer: (ref: string) => `/api/notify/mutes/offer/${encodeURIComponent(ref)}`,
   /** GET `?kind=&limit=&before=`: `PlatformAuditEntry[]` (every platform module writes here): the caller's own rows, all rows for an admin. */
   audit: '/api/platform/audit',
 } as const;

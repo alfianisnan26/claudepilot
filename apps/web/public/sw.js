@@ -47,6 +47,8 @@ const PILOT_PUSH_URL = '/api/notify/push';
 const PILOT_FALLBACK_PATH = '/admin/';
 const PILOT_PATH = /^\/admin\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$/;
 const PILOT_TOKEN = /^cpna_[A-Za-z0-9_-]{20,100}$/;
+const PILOT_EVENT = /^evt_[0-9a-f]{16}$/;
+const PILOT_NEVER_MUTE = ['approval', 'ci_waiting'];
 const PILOT_REFUSALS = {
   expired: 'It took too long',
   used: 'Already answered',
@@ -104,6 +106,9 @@ function pilotPlan(raw, nowMs, maxActions) {
     buttons.push({ action: 'review', title: 'Review' });
     // The body is itself "review", so when the browser shows fewer buttons the answers win over Review.
     options.actions = buttons.slice(0, Math.max(1, typeof maxActions === 'number' ? maxActions : 2));
+  } else if (Array.isArray(n.actions) && n.actions.some((a) => a && a.action === 'mute') && PILOT_EVENT.test(options.data.id || '') && !PILOT_NEVER_MUTE.includes(options.data.kind)) {
+    // "Mute" opens the mute sheet for this event; approvals and deploy waits never carry it.
+    options.actions = [{ action: 'mute', title: 'Mute' }];
   }
   const badge = typeof n.app_badge === 'string' && /^\d{1,4}$/.test(n.app_badge) ? Number(n.app_badge) : null;
   return { valid: true, title: pilotClip(n.title, 120), options: options, badge: badge };
@@ -116,6 +121,7 @@ function pilotClickPlan(action, data, nowMs) {
     const act = pilotAct(data.act, nowMs);
     if (act && act.d.includes(action)) return { kind: 'act', decision: action, token: act.t, path: path };
   }
+  if (action === 'mute' && data && typeof data.id === 'string' && PILOT_EVENT.test(data.id)) return { kind: 'open', path: '/admin/notifications?mute=' + data.id };
   return { kind: 'open', path: path };
 }
 

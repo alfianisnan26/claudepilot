@@ -3,6 +3,9 @@ import { track } from '@isnanme/ui';
 import {
   NOTIFY_API,
   type CreateChannelRequest,
+  type CreateMuteRequest,
+  type MuteOffer,
+  type NotifyMute,
   type CreatedChannel,
   type NotifyActRequest,
   type NotifyActResult,
@@ -49,10 +52,11 @@ export const notifyApi = {
   test: (id: string) => request<TestResult>('POST', NOTIFY_API.test(id)),
   rotateSecret: (id: string) => request<{ signingSecret: string }>('POST', NOTIFY_API.rotateSecret(id)),
   log: (destination: string, limit = 20) => request<NotifyDelivery[]>('GET', `${NOTIFY_API.log}?destination=${encodeURIComponent(destination)}&limit=${limit}`),
-  history: (opts: { before?: string | null; limit?: number } = {}) => {
+  history: (opts: { before?: string | null; limit?: number; muted?: boolean } = {}) => {
     const q = new URLSearchParams();
     if (opts.before) q.set('before', opts.before);
     if (opts.limit) q.set('limit', String(opts.limit));
+    if (opts.muted) q.set('muted', '1');
     return request<NotifyHistoryPage>('GET', `${NOTIFY_API.history}${q.size ? `?${q}` : ''}`);
   },
   clearHistory: () => request<{ ok: true }>('DELETE', NOTIFY_API.history),
@@ -63,4 +67,9 @@ export const notifyApi = {
   setPrefs: (body: NotifyUserPrefs) => request<NotifyUserPrefs>('PUT', NOTIFY_API.prefs, body),
   /** The page's own answer path (the Allow and Deny buttons are the worker's; this is for a person who taps a token, which the page never holds). */
   act: (body: NotifyActRequest) => request<NotifyActResult>('POST', NOTIFY_API.act, body),
+  mutes: () => request<NotifyMute[]>('GET', NOTIFY_API.mutes),
+  muteOffer: (ref: string) => request<MuteOffer>('GET', NOTIFY_API.muteOffer(ref)),
+  mute: (body: CreateMuteRequest) => request<NotifyMute>('POST', NOTIFY_API.mutes, body),
+  unmute: (id: string) => request<{ ok: true }>('DELETE', NOTIFY_API.mute(id)),
+  unmuteAll: () => request<{ removed: number }>('DELETE', NOTIFY_API.mutes),
 };

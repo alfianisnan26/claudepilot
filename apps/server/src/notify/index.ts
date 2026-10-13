@@ -16,6 +16,7 @@ import type { NotifyBus } from './bus.js';
 import { Destinations } from './destinations.js';
 import { createEgress, type Egress } from './egress.js';
 import { NotifyHistory } from './history.js';
+import { NotifyMutes } from './mutes.js';
 import { NotifyPipeline } from './pipeline.js';
 import { registerNotifyTools } from './portalTools.js';
 import { createNotifyRoutes } from './routes.js';
@@ -90,6 +91,7 @@ export function createNotify(d: NotifyDeps) {
   const egress = d.egress ?? createEgress();
   const destinations = new Destinations(d.store, egress, now);
   const history = new NotifyHistory(d.store, now);
+  const mutes = new NotifyMutes(d.store, (id, userId) => void destinations.get(id, userId), now);
   const keys = new NotifyKeys(d.store, now);
   const ceiling = () => actionsCeiling(d.settings);
   const baseUrl = () => baseUrlOf(d.settings, d.uiUrl);
@@ -113,6 +115,7 @@ export function createNotify(d: NotifyDeps) {
     owner: d.owner,
     destinations,
     history,
+    mutes,
     actions,
     egress,
     keys,
@@ -131,6 +134,7 @@ export function createNotify(d: NotifyDeps) {
     owner: d.owner,
     destinations,
     history,
+    mutes,
     pipeline,
     actions,
     keys,
@@ -148,6 +152,7 @@ export function createNotify(d: NotifyDeps) {
   return {
     destinations,
     history,
+    mutes,
     keys,
     actions,
     pipeline,
@@ -178,12 +183,14 @@ export function createNotify(d: NotifyDeps) {
       if (d.tickets) stops.push(adaptTickets(d.tickets, d.bus, { info: (id) => d.ticketInfo?.(id) ?? null, closed: (id) => pipeline.resolveTag(`ticket:${id}`, 'closed') }));
       try {
         history.sweep();
+        mutes.sweep();
       } catch {
         // a database that cannot be written: nothing to sweep
       }
       sweep = setInterval(() => {
         try {
           history.sweep();
+          mutes.sweep();
         } catch {
           // as above
         }

@@ -3,6 +3,7 @@ import { LoadError, RowsSkeleton, Section } from '@isnanme/ui';
 import { AnswersSection } from './AnswersSection';
 import { DevicesSection } from './DevicesSection';
 import { EventsMatrix } from './EventsMatrix';
+import { MutedSection } from './MutedSection';
 import { QuietSection } from './QuietSection';
 import { StateBanner } from './StateBanner';
 import { ThisDevice } from './ThisDeviceCard';
@@ -24,6 +25,7 @@ export function SetupTab() {
       <Section title={<Titled title="Quiet hours">Held messages arrive as one summary when the window ends. Events marked to break through are delivered anyway.</Titled>} visibleTitle>
         <QuietSection destinations={overview.destinations} />
       </Section>
+      <MutedSection destinations={overview.destinations} />
       <Section title={<Titled title="Answers">Which requests you may answer from a notification, on this account. Deny is on by default; Allow is off until you switch it on. A tap on the notification itself always opens the request.</Titled>} visibleTitle>
         <AnswersSection overview={overview} />
       </Section>

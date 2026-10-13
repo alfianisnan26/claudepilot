@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { NotifyDestination, NotifyHistoryItem } from '@portal/contracts';
+import { expiryText, hushedText, muteLine, muteWhere } from './mutes';
 import { dayLabel, freshItems, newest, resolvedIds, toastText, toastTone } from './inbox';
 import { defaultKinds, kindsSummary, MATRIX_KINDS, stateOf, withKind } from './matrix';
 import { ACTIVE_MS, presenceOf, samePresence, sessionOfPath } from './presence';
@@ -95,7 +96,7 @@ test('presence: active for two minutes after input, never when hidden; the sessi
   assert.equal(samePresence(null, a), false);
 });
 
-const item = (id: string, at: string, over: Partial<NotifyHistoryItem> = {}): NotifyHistoryItem => ({ id, kind: 'approval', at, title: 'Approval needed', body: 'api-dev', path: '/admin/sessions/s_1', subject: { type: 'session', id: 's_1' }, readAt: null, resolvedAt: null, resolution: null, ...over });
+const item = (id: string, at: string, over: Partial<NotifyHistoryItem> = {}): NotifyHistoryItem => ({ id, kind: 'approval', at, title: 'Approval needed', body: 'api-dev', path: '/admin/sessions/s_1', subject: { type: 'session', id: 's_1' }, readAt: null, resolvedAt: null, resolution: null, muted: false, ...over });
 
 test('inbox: fresh items are newer than the mark, unread, oldest first; the first load toasts nothing', () => {
   const items = [item('c', '2026-10-12T10:03:00Z'), item('b', '2026-10-12T10:02:00Z', { readAt: '2026-10-12T10:02:30Z' }), item('a', '2026-10-12T10:01:00Z')];
@@ -124,4 +125,26 @@ test('day labels', () => {
 test('type check of a destination literal used by the matrix', () => {
   const d = { kinds: ['approval'] } as Pick<NotifyDestination, 'kinds'>;
   assert.equal(kindsSummary(d), '1 of 11');
+});
+
+test('inbox: a muted item never toasts', () => {
+  const items = [item('m', '2026-10-12T10:03:00Z', { muted: true }), item('a', '2026-10-12T10:01:00Z')];
+  assert.deepEqual(freshItems(items, '2026-10-12T10:00:00Z').map((i) => i.id), ['a']);
+});
+
+test('mute rules in words: kind and scope, where, what is left, what it hushed', () => {
+  assert.equal(muteLine({ kind: 'ci_failed', scope: { type: 'pipeline', id: 'claudepilot/deploy', label: 'claudepilot · deploy' } }), 'CI failed · claudepilot · deploy');
+  assert.equal(muteLine({ kind: 'session_done', scope: null }), 'Done · all');
+  const dests = [{ id: 'dst_1', name: 'iPhone' }];
+  assert.equal(muteWhere({ destinationId: null }, dests), 'Everywhere');
+  assert.equal(muteWhere({ destinationId: 'dst_1' }, dests), 'iPhone');
+  assert.equal(muteWhere({ destinationId: 'dst_2' }, dests), 'A removed device');
+  const now = Date.parse('2026-10-12T10:00:00Z');
+  assert.equal(expiryText(null, now), 'Forever');
+  assert.equal(expiryText('2026-10-12T10:45:00Z', now), '45 min left');
+  assert.equal(expiryText('2026-10-12T15:00:00Z', now), '5 h left');
+  assert.equal(expiryText('2026-10-15T10:00:00Z', now), '3 d left');
+  assert.equal(expiryText('2026-10-12T09:00:00Z', now), 'Ended');
+  assert.equal(hushedText(0), 'None hushed yet');
+  assert.equal(hushedText(3), 'Hushed 3');
 });

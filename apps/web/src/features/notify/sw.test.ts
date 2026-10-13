@@ -265,3 +265,18 @@ test('the worker never intercepts /api, /hooks or sockets: its fetch handler onl
   calls.listeners.fetch!({ request: { method: 'GET', mode: 'cors', url: 'https://portal.test/api/live' }, respondWith: () => (responded = true) });
   assert.equal(responded, false);
 });
+
+test('Mute: a button only when the server offered it, on a well-formed event id, never on approvals or deploy waits; it opens the mute sheet', () => {
+  const { hook } = load();
+  const ID = 'evt_' + '0123456789abcdef';
+  const mute = [{ action: 'mute', title: 'Mute', navigate: `https://portal.test/admin/notifications?mute=${ID}` }];
+  const ci = (data: Record<string, unknown>, over: Record<string, unknown> = { actions: mute }) => plan(hook, payload({ title: 'CI failed', ...over }, { kind: 'ci_failed', id: ID, path: '/admin/ci/runs/r_1', ...data }));
+  assert.deepEqual(ci({}).options.actions, [{ action: 'mute', title: 'Mute' }]);
+  assert.equal(ci({}, {}).options.actions, undefined, 'not offered: no button');
+  assert.equal(ci({ id: 'evt_x' }).options.actions, undefined, 'a bad id: no button');
+  assert.equal(ci({ kind: 'approval' }).options.actions, undefined);
+  assert.equal(ci({ kind: 'ci_waiting' }).options.actions, undefined);
+  const f = (a: string, d: unknown) => JSON.parse(JSON.stringify(hook.clickPlan!(a, d, NOW)));
+  assert.deepEqual(f('mute', { id: ID, path: '/admin/ci/runs/r_1' }), { kind: 'open', path: `/admin/notifications?mute=${ID}` });
+  assert.deepEqual(f('mute', { id: '../x', path: '/admin/ci/runs/r_1' }), { kind: 'open', path: '/admin/ci/runs/r_1' });
+});

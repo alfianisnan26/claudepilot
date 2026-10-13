@@ -3,7 +3,7 @@
 // numbers); the log keeps a status and a fixed code, never a URL, a path or a provider's reply. 30 days each.
 
 import { randomBytes } from 'node:crypto';
-import type { NotifyDelivery, NotifyError, NotifyEvent, NotifyHistoryItem, NotifyHistoryPage, NotifyKind, NotifySuppression } from '@portal/contracts';
+import type { MuteScope, NotifyDelivery, NotifyError, NotifyEvent, NotifyHistoryItem, NotifyHistoryPage, NotifyKind, NotifySuppression } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import type { Rendered } from './templates.js';
 
@@ -23,6 +23,7 @@ interface HistoryRow {
   read_at: string | null;
   resolved_at: string | null;
   resolution: string | null;
+  muted: number;
 }
 
 export interface HeldItem {
@@ -43,24 +44,29 @@ export class NotifyHistory {
     return this.store.writable ? this.store.db : null;
   }
 
-  /** One Inbox row for one user. The body is the first line only: detail never goes in the history. */
-  add(ownerId: string, e: NotifyEvent, r: Rendered): string | null {
+  /**
+   * One Inbox row for one user. The body is the first line only: detail never goes in the history. `muted`: a rule hushed it (stored,
+   * marked, left out of the list and the unread count by default). `scope`: the event's narrowest mute scope, for "Mute similar" later.
+   */
+  add(ownerId: string, e: NotifyEvent, r: Rendered, opts: { muted?: boolean; scope?: MuteScope | null } = {}): string | null {
     const db = this.#w;
     if (!db) return null;
     const id = `nh_${randomBytes(8).toString('hex')}`;
     db.prepare(
-      'INSERT INTO notify_history (id, owner_id, event_id, kind, at, title, body, path, subject_type, subject_id, workspace_id, tag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run(id, ownerId, e.id, e.kind, e.at, r.title, r.body.split('\n')[0] ?? '', r.path, e.subject.type, e.subject.id, e.subject.workspaceId ?? null, r.tag);
+      'INSERT INTO notify_history (id, owner_id, event_id, kind, at, title, body, path, subject_type, subject_id, workspace_id, tag, muted, scope_type, scope_id, scope_label) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(id, ownerId, e.id, e.kind, e.at, r.title, r.body.split('\n')[0] ?? '', r.path, e.subject.type, e.subject.id, e.subject.workspaceId ?? null, r.tag, opts.muted ? 1 : 0, opts.scope?.type ?? null, opts.scope?.id ?? null, opts.scope?.label ?? null);
     return id;
   }
 
-  page(ownerId: string, opts: { before?: string; limit?: number } = {}): NotifyHistoryPage {
+  page(ownerId: string, opts: { before?: string; limit?: number; muted?: boolean } = {}): NotifyHistoryPage {
     const db = this.store.db;
     if (!db) return { items: [], next: null, unread: 0 };
     const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 50)));
     const before = opts.before && !Number.isNaN(Date.parse(opts.before)) ? opts.before : null;
     const rows = db
-      .prepare(`SELECT id, kind, at, title, body, path, subject_type, subject_id, workspace_id, read_at, resolved_at, resolution FROM notify_history WHERE owner_id = ? ${before ? 'AND at < ?' : ''} ORDER BY at DESC, id DESC LIMIT ?`)
+      .prepare(
+        `SELECT id, kind, at, title, body, path, subject_type, subject_id, workspace_id, read_at, resolved_at, resolution, muted FROM notify_history WHERE owner_id = ? ${opts.muted ? '' : 'AND muted = 0'} ${before ? 'AND at < ?' : ''} ORDER BY at DESC, id DESC LIMIT ?`,
+      )
       .all(...(before ? [ownerId, before, limit + 1] : [ownerId, limit + 1])) as unknown as HistoryRow[];
     const items = rows.slice(0, limit).map(
       (r): NotifyHistoryItem => ({
@@ -74,13 +80,14 @@ export class NotifyHistory {
         readAt: r.read_at,
         resolvedAt: r.resolved_at,
         resolution: r.resolution,
+        muted: r.muted === 1,
       }),
     );
     return { items, next: rows.length > limit ? items.at(-1)!.at : null, unread: this.unread(ownerId) };
   }
 
   unread(ownerId: string): number {
-    return (this.store.db?.prepare('SELECT COUNT(*) AS n FROM notify_history WHERE owner_id = ? AND read_at IS NULL').get(ownerId) as { n: number } | undefined)?.n ?? 0;
+    return (this.store.db?.prepare('SELECT COUNT(*) AS n FROM notify_history WHERE owner_id = ? AND read_at IS NULL AND muted = 0').get(ownerId) as { n: number } | undefined)?.n ?? 0;
   }
 
   markRead(ownerId: string, upTo?: string | null): number {

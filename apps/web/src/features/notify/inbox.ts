@@ -8,12 +8,12 @@ export const toastTone = (kind: NotifyKind): 'success' | 'error' => (BAD.has(kin
 export const toastText = (i: Pick<NotifyHistoryItem, 'title' | 'body'>) => (i.body ? `${i.title} · ${i.body}` : i.title);
 
 /**
- * Items to toast: newer than what this tab has already seen, unread, oldest first. `seenAt` is the ISO time of the newest item the tab
+ * Items to toast: newer than what this tab has already seen, unread, not muted, oldest first. `seenAt` is the ISO time of the newest item the tab
  * has looked at (null on the first load, which toasts nothing: opening the page is not an event).
  */
 export function freshItems(items: readonly NotifyHistoryItem[], seenAt: string | null): NotifyHistoryItem[] {
   if (seenAt === null) return [];
-  return items.filter((i) => i.at > seenAt && !i.readAt).sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  return items.filter((i) => i.at > seenAt && !i.readAt && !i.muted).sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 }
 
 export const newest = (items: readonly NotifyHistoryItem[]): string | null => items.reduce<string | null>((m, i) => (m === null || i.at > m ? i.at : m), null);

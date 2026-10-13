@@ -2,7 +2,7 @@
 // checked again with `can(view)`), the Inbox row, then for each of their destinations: kind on? ▸ state ▸ quiet hours ▸ presence ▸
 // announce delay ▸ collapse and throttle ▸ render ▸ send (with retries) ▸ the delivery log. Nothing here ever throws into the bus.
 
-import { NOTIFY_KIND_INFO, type NotifyDecision, type NotifyDestination, type NotifyError, type NotifyEvent, type NotifyKind, type TestResult } from '@portal/contracts';
+import { isMuteGuarded, NOTIFY_KIND_INFO, type NotifyDecision, type NotifyDestination, type NotifyError, type NotifyEvent, type NotifyKind, type TestResult } from '@portal/contracts';
 import type { PlatformOwner } from '../platform/owner.js';
 import type { Store } from '../store/store.js';
 import { answerOffer, type ActChat, type NotifyActions } from './actions.js';
@@ -13,6 +13,7 @@ import { webhookMessage, type ChannelMessage } from './channels/webhook.js';
 import type { DestinationConfig, Destinations } from './destinations.js';
 import type { Egress, EgressResult } from './egress.js';
 import type { NotifyHistory } from './history.js';
+import { muteScopesOf, type NotifyMutes } from './mutes.js';
 import { sendPush, type PushMessage } from './push.js';
 import { holds, inQuietHours } from './quiet.js';
 import { render, summary, tagOf, type Rendered } from './templates.js';
@@ -34,6 +35,8 @@ export interface PipelineDeps {
   owner: PlatformOwner;
   destinations: Destinations;
   history: NotifyHistory;
+  /** The person's mute rules ("Mute similar"). */
+  mutes: NotifyMutes;
   actions: NotifyActions;
   egress: Egress;
   keys: NotifyKeys;
@@ -146,12 +149,19 @@ export class NotifyPipeline {
     if (!recipients.length) return;
     const historyOnly = e.kind === 'quota_low' && e.facts.level === 'near';
     const forHistory = render(e, { tz: 'UTC' });
+    const scope = muteScopesOf(e)[0] ?? null;
     for (const r of recipients) {
       // A sharer gets an Inbox row only where they asked to hear of shared things.
       const dests = this.d.destinations.forUsers([r.userId]).filter((x) => x.userId === r.userId && (r.owner || x.includeShared));
-      if (r.owner || dests.length) this.d.history.add(r.userId, e, forHistory);
+      // Mute rules: one for all destinations marks the Inbox row muted and sends nothing; one for a destination hushes that one only.
+      const muted = this.d.mutes.match(r.userId, e);
+      const stored = r.owner || dests.length ? this.d.history.add(r.userId, e, forHistory, { muted: muted.everywhere, scope }) : null;
+      if (stored || dests.some((x) => muted.destinations.has(x.id))) this.d.mutes.hushed(muted.ids);
       if (historyOnly) continue;
-      for (const dest of dests) this.#route(e, dest, r.userId);
+      for (const dest of dests) {
+        if (muted.everywhere || muted.destinations.has(dest.id)) this.#log(r.userId, e, dest, 'suppressed', 'muted');
+        else this.#route(e, dest, r.userId);
+      }
     }
     this.d.publish();
   }
@@ -303,7 +313,7 @@ export class NotifyPipeline {
       if (!('endpoint' in config)) return { ok: false, status: null, error: 'bad_subscription', retryAfterS: null };
       const keys = this.d.keys.keys();
       if (!keys) return { ok: false, status: null, error: this.d.store.secrets ? 'no_key' : 'locked', retryAfterS: null };
-      const message: PushMessage = { eventId: e.id, kind: e.kind, title: r.title, body: r.body, path: r.path, tag: r.tag, renotify: r.renotify };
+      const message: PushMessage = { eventId: e.id, kind: e.kind, title: r.title, body: r.body, path: r.path, tag: r.tag, renotify: r.renotify, mute: !isSummary && e.kind !== 'test' && !isMuteGuarded(e.kind) };
       const offer = isSummary ? null : this.#decisions(e, userId);
       if (offer) {
         const t = this.d.actions.issue({ ownerId: userId, destinationId: dest.id, eventId: e.id, sessionId: e.answer!.sessionId, requestId: e.answer!.requestId, decisions: offer.decisions, toolClass: e.answer!.toolClass, request: offer.request });

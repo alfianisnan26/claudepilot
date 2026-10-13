@@ -2530,6 +2530,39 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 721,
+    name: 'notify: mute rules ("Mute similar") and the muted mark on the history',
+    up(db) {
+      db.exec(`
+        -- Mute rules (T-25, docs/prd/web-app-pwa.md §11.11): one person's rule hushes events of a kind, optionally narrowed to one scope
+        -- (a subject, or a CI run's repository, pipeline or environment) and to one destination; it may expire. confirmed = 1 only for a rule
+        -- on a guarded kind (approval, ci_waiting) the person picked in Settings and confirmed; the pipeline ignores a guarded rule without it.
+        CREATE TABLE notify_mutes (
+          id TEXT PRIMARY KEY,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          kind TEXT NOT NULL,
+          scope_type TEXT,
+          scope_id TEXT,
+          scope_label TEXT,
+          destination_id TEXT,
+          confirmed INTEGER NOT NULL DEFAULT 0 CHECK (confirmed IN (0, 1)),
+          created_at TEXT NOT NULL,
+          expires_at TEXT,
+          hushed INTEGER NOT NULL DEFAULT 0,
+          last_hushed_at TEXT
+        ) STRICT;
+        CREATE INDEX notify_mutes_owner ON notify_mutes (owner_id, kind);
+
+        -- A muted event is still stored in the Inbox, marked, and left out of the list and the unread count by default. The narrowest scope
+        -- of the event is kept with it, so "Mute similar" on an old item knows what to offer without the event's facts.
+        ALTER TABLE notify_history ADD COLUMN muted INTEGER NOT NULL DEFAULT 0 CHECK (muted IN (0, 1));
+        ALTER TABLE notify_history ADD COLUMN scope_type TEXT;
+        ALTER TABLE notify_history ADD COLUMN scope_id TEXT;
+        ALTER TABLE notify_history ADD COLUMN scope_label TEXT;
+      `);
+    },
+  },
+  {
     version: 730,
     name: 'CI: the state each message to a session reports',
     up(db) {
