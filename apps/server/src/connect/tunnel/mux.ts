@@ -10,6 +10,9 @@
 //  - Violations (wrong version, unknown type, an id of the wrong parity or reused, a window overflow, an oversize frame, a stream that was
 //    never opened) answer GO_AWAY(1), close 1002 and log a line without payload. Data for a stream that was closed or reset a moment ago
 //    is dropped: it is a race with our own RST, not a violation (yamux does the same); data after the peer's FIN is answered with RST.
+//  - Answers the peer asks for (a ping's ACK, the RST of a SYN past the stream cap) wait in the control queue like everything else; a peer
+//    that keeps asking while it reads nothing (the socket stays over the high-water mark) would grow that queue without end, so more than
+//    `CONTROL_BACKLOG` queued control frames is a violation (a legitimate peer has a few: one ping per 15 s, a few frames per open stream).
 //  - SYN rides on a stream's first frame (the open request line) and ids reach the wire in order: if a later stream sends first, the
 //    earlier ones' SYNs go out ahead of it as empty frames.
 //
@@ -99,6 +102,9 @@ export interface MuxCloseInfo {
   remote: boolean;
   error: Error | null;
 }
+
+/** Control frames that may wait for the socket: far above what 256 streams and the pings of a slow link need (T6: a peer that floods pings and reads nothing). */
+export const CONTROL_BACKLOG = 4096;
 
 function remove<T>(list: T[], item: T): void {
   const i = list.indexOf(item);
@@ -309,10 +315,8 @@ export class MuxSession implements StreamHost {
     switch (f.type) {
       case FRAME_TYPE.ping:
         if (f.streamId !== 0) return this.#protocolError('a ping on a stream');
-        if (f.flags & FRAME_FLAG.syn) {
-          this.#control.push({ raw: pingFrame(true, f.length) });
-          this.#pump();
-        } else if (f.flags & FRAME_FLAG.ack) {
+        if (f.flags & FRAME_FLAG.syn) this.#answer(pingFrame(true, f.length));
+        else if (f.flags & FRAME_FLAG.ack) {
           const sentAt = this.#pings.get(f.length);
           if (sentAt !== undefined) {
             this.#pings.delete(f.length);
@@ -339,11 +343,7 @@ export class MuxSession implements StreamHost {
       if (!this.#remoteParity(id)) return this.#protocolError(`stream id ${id} has the wrong parity`);
       if (id <= this.#lastRemoteId) return this.#protocolError(`stream id ${id} was used before`);
       this.#lastRemoteId = id;
-      if (this.#goneAway || this.#streams.size >= this.limits.maxStreams) {
-        this.#control.push({ raw: rstFrame(id) });
-        this.#pump();
-        return;
-      }
+      if (this.#goneAway || this.#streams.size >= this.limits.maxStreams) return this.#answer(rstFrame(id));
       s = new MuxStream(this, id, false);
       this.#streams.set(id, s);
       this.#apply(s, f);
@@ -365,6 +365,13 @@ export class MuxSession implements StreamHost {
       return; // closed or reset a moment ago: what the peer sent meanwhile is dropped
     }
     this.#apply(s, f);
+  }
+
+  /** Queues a frame the peer asked for; a peer that asks faster than it reads is cut off instead of growing the queue. */
+  #answer(raw: Buffer): void {
+    if (this.#control.length >= CONTROL_BACKLOG) return this.#protocolError(`the peer asks for more than it reads (${CONTROL_BACKLOG} control frames waiting)`);
+    this.#control.push({ raw });
+    this.#pump();
   }
 
   #apply(s: MuxStream, f: Frame): void {
