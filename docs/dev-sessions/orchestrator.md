@@ -32,6 +32,10 @@ Two things come before anything else because the loop depends on them:
    house style: observed, not hoped), the rules of the README (safety, heavy lock, no `integration` or `main` push, commit often, push the branch), and what to
    report: commits, files, tests run and their results, what is left, anything that needs a human. Cut work into slices a sub-agent finishes in about an
    hour (one to three items), not a whole package: you integrate between slices.
+   **Pick the model per slice** (the Agent tool's `model`), by what the slice needs, never Fable for everything: `sonnet` for narrow, well-specified
+   work (a scratch-portal run, a screenshot sweep, a PRD update, a single test); `opus` for ordinary implementation (a feature, a fix with its test, UI
+   work); `fable` only for diagnosis nobody else cracked (a hang's root cause, a security finding) or a slice that failed twice on a smaller model.
+   Write the choice in the status file next to the slice.
 2. **Integrate** each finished slice as the README says (merge, gate, push `integration`); look at the diff first, read the risky parts (auth, secrets,
    migrations, anything touching Bypass or the integrity checks), and run the touched areas' tests yourself. A slice that fails the gate goes back to its
    sub-agent with the failing output.
