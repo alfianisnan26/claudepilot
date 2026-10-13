@@ -26,6 +26,7 @@ import {
   autoModeAllowed,
   BYPASS_BLOCKED,
   BYPASS_NOT_CAPABLE,
+  BYPASS_NOT_KEPT,
   CHAT_ACTOR_UI,
   CHAT_ENDED_CREDENTIAL,
   CHAT_ENDED_INTEGRITY,
@@ -35,6 +36,7 @@ import {
   REAUTH_REQUIRED,
   requestReview,
   WORKTREE_DIRTY,
+  type ChatConfigChange,
   type ChatControl,
   type ChatFile,
   type ChatFolderScan,
@@ -103,6 +105,12 @@ import { BtwStore } from './btwStore.js';
 import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
 import { autoTrustable, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError } from './trust.js';
 import { usageReport } from './usage.js';
+
+/** T-102: the areas a hint may name (anything else a reader returns is left out). */
+const CONFIG_CHANGES: ReadonlySet<string> = new Set<ChatConfigChange>(['mcpset', 'settings', 'policy', 'secrets', 'account', 'persona', 'context', 'skillset', 'browser', 'foundation', 'portal_tools', 'other']);
+const isConfigChange = (v: string): v is ChatConfigChange => CONFIG_CHANGES.has(v);
+/** T-102: how long a forced restart gives the interrupted turn to end before the process is stopped anyway. */
+const INTERRUPT_WAIT_MS = 5_000;
 
 /** The permission mode every process starts in (`--permission-mode`); others are applied after. */
 const START_MODE = 'default';
@@ -393,6 +401,15 @@ export class ChatController {
   readonly #launchedAt = new Map<string, number>();
   /** Per workspace: the last delivery time the sessions' tabs were told about (`deliveryChanged`). */
   readonly #deliveredSeen = new Map<string, string | null>();
+  /** T-102, per workspace: when its agent access (the portal's tools for its sessions) was last turned on or off (`portalToolsChanged`). */
+  readonly #toolsChangedAt = new Map<string, number>();
+  /** T-102: sessions whose person asked "Restart after this turn": it fires at the next boundary (no turn, no task, nothing waiting). */
+  readonly #queuedRestart = new Set<string>();
+  /** T-102: per session, the change an automatic restart was tried for (or cancelled for): never tried twice for the same change. */
+  readonly #autoTried = new Map<string, string>();
+  /** T-102: sessions whose queued or automatic restart is being started now, and a pending re-check of a boundary. */
+  readonly #queuedFiring = new Set<string>();
+  readonly #boundaryRecheck = new Map<string, ReturnType<typeof setTimeout>>();
   /** The move whose events are being written: they carry its id, so the transcript folds them into one card. */
   readonly #tags = new Map<string, string>();
   /** Git worktrees: made and removed through the session host's hardened git. */
@@ -480,6 +497,11 @@ export class ChatController {
    * Unset, no hint.
    */
   deliveredAt?: (workspaceId: string) => string | null;
+  /**
+   * Installed by the owner (T-102): the areas the deliveries that landed in a workspace after `sinceMs` changed (the reconciler's
+   * `changesSince`, owner names), for the hint's sheet. Unset, or a throw, and the hint says only that something changed (`other`).
+   */
+  configChanges?: (workspaceId: string, sinceMs: number) => readonly string[];
   /**
    * Installed by Portal MCP (I8): a per-session token for the process, minted at every launch (a new session, a resume,
    * a wake, a move to another Claude), which replaces the one before. Unset, or null for a workspace that hasn't opted
@@ -821,30 +843,106 @@ export class ChatController {
     const moving = this.#moving.get(session.id);
     let out = moving ? { ...session, switching: { ...moving } } : session;
     if (this.#restarting.has(session.id)) out = { ...out, restarting: true };
-    const changed = this.#configChangedAt(session);
-    if (changed) out = { ...out, configChangedAt: changed };
+    const change = this.#configChange(session);
+    if (change) out = { ...out, configChangedAt: change.at, configChanged: change };
     // One definition of working (T-41): the main turn runs, or a task of its live process does. The stored state stays the turn's (what
     // a send, a restart or a move go by); what is shown, listed and notified on is this one.
     if (out.state === 'idle' && out.process === 'live' && (out.agentsRunning ?? 0) > 0) out = { ...out, state: 'working', tasksOnly: true };
-    return out;
+    return this.#restartPlan(out, change);
   }
 
   /**
-   * When the workspace's latest delivery landed, if that was after this session's process started (Claude Code reads its MCP servers and
-   * settings once, at start): the Restart hint. Null for a process that isn't running, or when nothing newer landed.
+   * T-102: what the "Tools changed" hint needs beyond the change itself: whether nobody may be watching (autonomous), whether the portal
+   * applies the change by itself at the next boundary, a restart queued for it, one held because Bypass could not be kept, the hint's
+   * hidden memory, and since when the session is busy (for "Restart now" after a long turn).
    */
-  #configChangedAt(session: ChatSession): string | null {
-    if (!this.deliveredAt || session.process !== 'live' || session.state === 'ended') return null;
-    let at: string | null;
-    try {
-      at = this.deliveredAt(session.workspaceId);
-    } catch {
-      return null;
-    }
-    const landed = at ? Date.parse(at) : NaN;
-    if (!Number.isFinite(landed)) return null;
+  #restartPlan(out: ChatSession, change: { at: string } | null): ChatSession {
+    if (out.state === 'ended') return out;
+    const row = this.#chat.row(out.id);
+    if (!row) return out;
+    const autonomous = out.mode === 'bypassPermissions' || out.origin === 'mcp' || isPortalActor(out.startedBy);
+    const stored = row.auto_apply;
+    const autoApply = stored === 1 ? true : stored === 0 ? false : autonomous;
+    let plan: Partial<ChatSession> = { autonomous, autoApply };
+    if (row.config_hidden_at) plan.configHiddenAt = row.config_hidden_at;
+    const wanted: 'person' | 'auto' | null = this.#queuedRestart.has(out.id)
+      ? 'person'
+      : change && autoApply && out.process === 'live' && this.#autoTried.get(out.id) !== change.at
+        ? 'auto'
+        : null;
+    // The coordinator's rule: a queued or automatic restart is a deliberate one, so it keeps Bypass only where a restart can; where it
+    // can't, the portal does not restart by itself (the chat would come back in Manual and wait for approvals): it says so.
+    const held = out.mode === 'bypassPermissions' && !this.#keepsBypass(row);
+    if (held && (wanted || change)) plan.restartHeld = 'bypass';
+    else if (wanted) plan.restartQueued = wanted;
+    if (out.state === 'working' || out.state === 'waiting') plan.busySince = this.#busySince(out, row);
+    return { ...out, ...plan };
+  }
+
+  /** A restart now would keep this session's Bypass: it is bypass-capable and the policy allows it (what `#restart`'s `keep` asks). */
+  #keepsBypass(row: ChatSessionRow): boolean {
+    return row.bypass_capable === 1 && this.#bypassAllowed();
+  }
+
+  /** Since when a working or waiting session has been busy: its main turn's start, or (tasks only) the oldest running task's. */
+  #busySince(out: ChatSession, row: ChatSessionRow): string | null {
+    if (!out.tasksOnly) return row.state_since ?? null;
+    const starts = this.#chat
+      .tasks(out.id)
+      .filter((t) => t.status === 'running')
+      .map((t) => t.startedAt)
+      .filter((t) => Number.isFinite(Date.parse(t)))
+      .sort();
+    return starts[0] ?? row.state_since ?? null;
+  }
+
+  /**
+   * What changed after this session's process started (Claude Code reads its MCP servers, settings and portal tools once, at start): the
+   * workspace's latest delivery when it landed after the start (FR53), with the areas it and any other delivery since changed (T-102), and
+   * the workspace's agent access turned on or off since (`portal_tools`). `at` is the newest. Null for a process that isn't running, or when
+   * nothing newer landed.
+   */
+  #configChange(session: ChatSession): { at: string; reasons: ChatConfigChange[] } | null {
+    if (session.process !== 'live' || session.state === 'ended') return null;
     const started = this.#launchedAt.get(session.id) ?? Date.parse(this.#chat.row(session.id)?.process_started_at ?? '');
-    return Number.isFinite(started) && landed > started ? at : null;
+    if (!Number.isFinite(started)) return null;
+    let at: string | null = null;
+    const reasons: ChatConfigChange[] = [];
+    if (this.deliveredAt) {
+      let delivered: string | null;
+      try {
+        delivered = this.deliveredAt(session.workspaceId);
+      } catch {
+        delivered = null;
+      }
+      const landed = delivered ? Date.parse(delivered) : NaN;
+      if (Number.isFinite(landed) && landed > started) {
+        at = delivered;
+        let areas: readonly string[] = [];
+        try {
+          areas = this.configChanges?.(session.workspaceId, started) ?? [];
+        } catch {
+          areas = [];
+        }
+        for (const a of areas) if (isConfigChange(a) && !reasons.includes(a)) reasons.push(a);
+        if (!reasons.length) reasons.push('other');
+      }
+    }
+    const tools = this.#toolsChangedAt.get(session.workspaceId);
+    if (tools !== undefined && tools > started) {
+      reasons.push('portal_tools');
+      if (!at || tools > Date.parse(at)) at = new Date(tools).toISOString();
+    }
+    return at ? { at, reasons } : null;
+  }
+
+  /**
+   * Installed by the owner (T-102): a workspace's agent access was turned on or off, so its live sessions' processes run with the portal
+   * tools they started with until a restart (the token is minted at launch): their hint names `portal_tools`.
+   */
+  portalToolsChanged(workspaceId: string): void {
+    this.#toolsChangedAt.set(workspaceId, Date.now());
+    for (const row of this.#chat.liveRows()) if (row.workspace_id === workspaceId) this.#emitSession(row.id);
   }
 
   /**
@@ -1953,15 +2051,31 @@ export class ChatController {
    * moves; a move is refused while it runs. Messages sent meanwhile wait for the new process, in order. Running background tasks stop with
    * the old process (the app lists them before asking). Audited (`session.restart`), and the transcript marks it.
    */
-  async restart(rawId: string, opts: { why?: unknown } = {}): Promise<ChatSession> {
+  async restart(rawId: string, opts: { why?: unknown; when?: unknown; interrupt?: unknown; actor?: 'ui' | 'portal'; from?: 'queue' | 'auto' } = {}): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
     const session = this.#require(sessionId);
     this.#notMoving(sessionId);
     const why = opts.why === undefined || opts.why === 'manual' ? 'manual' : opts.why === 'mcp' ? 'mcp' : null;
     if (!why) throw new AppError('VALIDATION_FAILED', 'Unknown reason.', { details: { why: 'Expected mcp or manual.' } });
+    const when = opts.when === undefined || opts.when === 'now' ? 'now' : opts.when === 'turn_end' ? 'turn_end' : null;
+    if (!when) throw new AppError('VALIDATION_FAILED', 'Unknown time.', { details: { when: 'Expected now or turn_end.' } });
+    const interrupt = when === 'now' && opts.interrupt === true;
     if (this.#restarting.has(sessionId)) throw new AppError('CONFLICT', 'This chat is already restarting.');
-    this.#restartable(session);
-    const op = this.#restart(sessionId, why);
+    if (when === 'turn_end') {
+      if (session.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
+      const row = this.#chat.row(sessionId)!;
+      // A queued restart is one nobody may be watching when it fires: it must keep Bypass, or it doesn't happen by itself (T-102).
+      if (row.mode === 'bypassPermissions' && !this.#keepsBypass(row)) {
+        throw new AppError(BYPASS_NOT_KEPT, 'A restart can’t keep Bypass here: restart it yourself (Bypass turns off).', { status: 409 });
+      }
+      if (!this.#atBoundary(sessionId)) {
+        this.#queuedRestart.add(sessionId);
+        this.#emitSession(sessionId);
+        return this.#decorate(this.#chat.get(sessionId)!);
+      }
+    }
+    this.#restartable(session, interrupt);
+    const op = this.#restart(sessionId, why, { interrupt, actor: opts.actor ?? 'ui', how: opts.from ?? (when === 'turn_end' ? 'queue' : interrupt ? 'interrupt' : 'now') });
     const settled = op.then(
       () => undefined,
       () => undefined,
@@ -1976,22 +2090,129 @@ export class ChatController {
     }
   }
 
-  /** A restart happens only at a turn boundary, with nothing waiting for an answer and nothing on its way: else it throws why not. */
-  #restartable(session: ChatSession): void {
+  /**
+   * T-102: cancels a restart that waits for the turn's end: the person's, or the automatic one for the change shown now (a newer change
+   * queues it again where the setting is on). Nothing waiting is not an error.
+   */
+  cancelRestart(rawId: string): ChatSession {
+    const sessionId = this.#chat.resolveId(rawId);
+    const session = this.#require(sessionId);
+    this.#queuedRestart.delete(sessionId);
+    const change = this.#configChange(session);
+    if (change) this.#autoTried.set(sessionId, change.at);
+    this.#emitSession(sessionId);
+    return this.#decorate(this.#chat.get(sessionId)!);
+  }
+
+  /**
+   * T-102: the hint's memory for this session: hidden until a change newer than the one shown now (`hidden`), and "Apply tool changes at
+   * the next turn end" (`autoApply`, null for the default). Stored on the session, so every tab and device hears it.
+   */
+  setRestartHint(rawId: string, req: { hidden?: unknown; autoApply?: unknown }): ChatSession {
+    const sessionId = this.#chat.resolveId(rawId);
+    const session = this.#require(sessionId);
+    if (req.hidden !== undefined && typeof req.hidden !== 'boolean') throw new AppError('VALIDATION_FAILED', 'hidden is true or false.', { details: { hidden: 'Expected a boolean.' } });
+    if (req.autoApply !== undefined && req.autoApply !== null && typeof req.autoApply !== 'boolean') {
+      throw new AppError('VALIDATION_FAILED', 'autoApply is true, false or null.', { details: { autoApply: 'Expected a boolean or null.' } });
+    }
+    const patch: ChatSessionPatch = {};
+    if (req.hidden === true) patch.configHiddenAt = this.#configChange(session)?.at ?? new Date().toISOString();
+    if (req.hidden === false) patch.configHiddenAt = null;
+    if (req.autoApply !== undefined) patch.autoApply = req.autoApply as boolean | null;
+    if (Object.keys(patch).length) this.#chat.patchSession(sessionId, patch);
+    // Turned on again: the change shown now counts again.
+    if (req.autoApply === true) this.#autoTried.delete(sessionId);
+    this.#emitSession(sessionId);
+    return this.#decorate(this.#chat.get(sessionId)!);
+  }
+
+  /** T-102: the boundary a queued restart waits for (T-41): no turn and no task running, no approval waiting, no message on its way, nothing under way. */
+  #atBoundary(sessionId: string): boolean {
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state !== 'idle' || row.process !== 'live') return false;
+    if (this.#moving.has(sessionId) || this.#restarting.has(sessionId) || this.#busy.has(sessionId) || this.#sending.has(sessionId)) return false;
+    return !this.#chat.hasRunningTasks(sessionId) && !this.#chat.openRequests(sessionId).length && !this.#chat.hasOpenInputs(sessionId);
+  }
+
+  /**
+   * T-102: after tabs heard of a session, a restart that waits for the boundary starts once it is there (a person's "Restart after this
+   * turn", or the automatic one). It never runs twice at once, an automatic one is tried once per change, and a refusal because things
+   * moved on leaves it waiting. A session that is idle but not quite at the boundary (a message's last mark, a task's end on its way) is
+   * looked at again shortly.
+   */
+  #fireQueued(s: ChatSession): void {
+    const id = s.id;
+    if (s.state === 'ended' || s.process !== 'live') {
+      this.#queuedRestart.delete(id);
+      return;
+    }
+    const want = s.restartQueued;
+    if (!want || s.restartHeld || this.#queuedFiring.has(id) || this.#closed) return;
+    if (!this.#atBoundary(id)) {
+      const row = this.#chat.row(id);
+      if (row?.state === 'idle' && row.process === 'live' && !this.#boundaryRecheck.has(id)) {
+        const timer = setTimeout(() => {
+          this.#boundaryRecheck.delete(id);
+          const now = this.#chat.get(id);
+          if (now) this.#fireQueued(this.#decorate(now));
+        }, 500);
+        timer.unref?.();
+        this.#boundaryRecheck.set(id, timer);
+      }
+      return;
+    }
+    this.#queuedFiring.add(id);
+    if (want === 'auto' && s.configChanged) this.#autoTried.set(id, s.configChanged.at);
+    const person = this.#queuedRestart.delete(id);
+    setTimeout(() => {
+      void this.restart(id, { why: 'mcp', actor: want === 'auto' ? 'portal' : 'ui', when: 'now', from: want === 'auto' ? 'auto' : 'queue' })
+        .then(
+          () => undefined,
+          (e: unknown) => {
+            const raced = isAppError(e) && e.code === 'CONFLICT';
+            if (raced && person) this.#queuedRestart.add(id); // things moved on: it waits for the next boundary
+            else if (raced) this.#autoTried.delete(id);
+            else this.#note(id, `Couldn’t restart to load the tool changes: ${this.#message(e)}`);
+          },
+        )
+        .finally(() => {
+          this.#queuedFiring.delete(id);
+          this.#emitSession(id);
+        });
+    }, 0);
+  }
+
+  /** A restart happens only at a turn boundary, with nothing waiting for an answer and nothing on its way: else it throws why not. `interrupt` (T-102): a running turn and open approvals don't stop it. */
+  #restartable(session: ChatSession, interrupt = false): void {
     if (session.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
+    if (interrupt) {
+      if (this.#sending.has(session.id)) throw new AppError('CONFLICT', 'A message is still on its way. Try again in a moment.');
+      return;
+    }
     if (session.state === 'waiting' || this.#chat.openRequests(session.id).length) throw new AppError('CONFLICT', 'An approval is waiting. Answer it first, then restart.');
     if (session.state === 'working') throw new AppError('CONFLICT', 'Wait for the turn to end, then restart.');
     if (this.#chat.hasOpenInputs(session.id) || this.#sending.has(session.id)) throw new AppError('CONFLICT', 'A message is still on its way. Try again in a moment.');
   }
 
-  async #restart(sessionId: string, why: 'mcp' | 'manual'): Promise<ChatSession> {
+  async #restart(sessionId: string, why: 'mcp' | 'manual', o: { interrupt: boolean; actor: 'ui' | 'portal'; how: 'now' | 'queue' | 'auto' | 'interrupt' } = { interrupt: false, actor: 'ui', how: 'now' }): Promise<ChatSession> {
     await this.#busy.get(sessionId); // a launch or a sleep in flight settles first
-    this.#restartable(this.#require(sessionId)); // and things may have moved on while it did
+    this.#restartable(this.#require(sessionId), o.interrupt); // and things may have moved on while it did
+    const busy = () => {
+      const state = this.#chat.get(sessionId)?.state;
+      return state === 'working' || state === 'waiting';
+    };
+    if (o.interrupt && busy()) {
+      // The person chose to stop the turn in flight: asked to end the way Stop does, then the process stops anyway.
+      await this.interrupt(sessionId).catch(() => undefined);
+      const end = Date.now() + INTERRUPT_WAIT_MS;
+      while (busy() && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
+    }
     const row = this.#chat.row(sessionId)!;
     const agents = this.#chat.tasks(sessionId).filter((t) => t.status === 'running').length;
     // A deliberate restart keeps Bypass (the person confirmed it for this chat), while the policy allows it and the session can.
-    const keep = row.mode === 'bypassPermissions' && row.bypass_capable === 1 && this.#bypassAllowed();
+    const keep = row.mode === 'bypassPermissions' && this.#keepsBypass(row);
     await this.#stopForRestart(sessionId, 'The session restarted.', keep);
+    this.#queuedRestart.delete(sessionId); // whatever waited for the turn's end is done by this one
     await this.#live(sessionId); // `--resume` on a new segment; its settings are put back
     this.#append(sessionId, { kind: 'system', text: 'Restarted: MCP reconnected', restart: true });
     if (keep) await this.#keepBypass(sessionId, 'restart');
@@ -2001,8 +2222,8 @@ export class ChatController {
       kind: 'session.restart',
       sessionId,
       workspaceId: row.workspace_id,
-      actor: 'ui',
-      detail: { why, agents, bypass: keep ? (now?.mode === 'bypassPermissions' ? 'kept' : 'dropped') : 'none' },
+      actor: o.actor,
+      detail: { why, agents, bypass: keep ? (now?.mode === 'bypassPermissions' ? 'kept' : 'dropped') : 'none', ...(o.how === 'now' ? {} : { how: o.how }) },
     });
     return this.#chat.get(sessionId)!;
   }
@@ -3811,8 +4032,10 @@ export class ChatController {
   #emitSession(sessionId: string): void {
     const session = this.#chat.get(sessionId);
     if (session) this.#tasksRunning.set(sessionId, session.agentsRunning ?? 0);
-    if (session) this.#emit(sessionId, { type: 'session', session: this.#decorate(session) });
+    const shown = session ? this.#decorate(session) : null;
+    if (shown) this.#emit(sessionId, { type: 'session', session: shown });
     this.#armIdle(sessionId);
+    if (shown) this.#fireQueued(shown);
   }
 
   #require(sessionId: string): ChatSession {

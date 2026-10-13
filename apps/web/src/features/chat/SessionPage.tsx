@@ -31,7 +31,7 @@ import { Transcript } from './Transcript';
 import { ResumeBanner } from './ResumeBanner';
 import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
 import { useMoveChat } from './SwitchDialog';
-import { canRestart, RestartChip, useRestart } from './Restart';
+import { RestartChip, useRestart } from './Restart';
 import { TrustSheet, useFolderTrust, type TrustTarget } from './TrustSheet';
 import { UsageDialog } from './Usage';
 import { useChatSession, type ChatControlArgs, type ChatControlOp, type ChatSendOptions } from './useChatSocket';
@@ -386,7 +386,8 @@ export function SessionPage() {
       label: 'Restart',
       icon: <RotateCw className="size-4" />,
       onSelect: fromMenu(() => restart.start('manual')),
-      disabled: gone || !canRestart(session) || restart.busy,
+      // T-102: never disabled for a running turn: the sheet offers Restart after this turn, or now behind a confirmation.
+      disabled: gone || ended || !!session?.switching || restart.busy,
     },
     {
       label: 'Move to another Claude…',
@@ -634,7 +635,9 @@ export function SessionPage() {
                 ) : (
                   <>
                     {session && <ResumeBanner session={session} connected={connected} onResume={() => trustedControl('resume')} />}
-                    {session && !gone && <RestartChip session={session} busy={restart.busy} onRestart={() => restart.start('mcp')} />}
+                    {session && !gone && (
+                      <RestartChip hint={restart.hint} anchor={restart.anchor} onOpen={() => restart.start('mcp')} onCancel={() => void restart.actions.cancel()} onNow={restart.actions.now} />
+                    )}
                     <Composer
                       ref={composer}
                       sessionId={id}

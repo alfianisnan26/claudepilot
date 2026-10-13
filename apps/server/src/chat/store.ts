@@ -69,6 +69,10 @@ export type ChatSessionRow = {
   ended_reason: string | null;
   archived_at: string | null;
   pinned_at?: string | null;
+  /** T-102: the hint hidden until a change newer than this; null: shown. */
+  config_hidden_at?: string | null;
+  /** T-102: "Apply tool changes at the next turn end" as the person set it (1 on, 0 off); null: the default. */
+  auto_apply?: number | null;
   claude_id?: string | null;
   predecessor_id?: string | null;
   successor_id?: string | null;
@@ -167,6 +171,9 @@ export interface ChatSessionPatch {
   predecessorId?: string | null;
   archivedAt?: string | null;
   pinnedAt?: string | null;
+  /** T-102: the restart hint's memory. */
+  configHiddenAt?: string | null;
+  autoApply?: boolean | null;
   title?: string;
   ticketId?: string | null;
   /** Sets or clears the session's worktree (its three columns together). */
@@ -753,6 +760,8 @@ export class ChatStore {
     if (patch.process !== undefined) set('process', patch.process);
     if (patch.archivedAt !== undefined) set('archived_at', patch.archivedAt);
     if (patch.pinnedAt !== undefined) set('pinned_at', patch.pinnedAt);
+    if (patch.configHiddenAt !== undefined) set('config_hidden_at', patch.configHiddenAt);
+    if (patch.autoApply !== undefined) set('auto_apply', patch.autoApply === null ? null : patch.autoApply ? 1 : 0);
     if (patch.title !== undefined) set('title', patch.title);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
     if (patch.successorId !== undefined) set('successor_id', patch.successorId);

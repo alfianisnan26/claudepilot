@@ -40,6 +40,10 @@ export function registerChatAuthz(facts: (id: string) => SessionFacts | null): v
     'ALL /api/chat/live': { kind: 'signed-in' },
     // A sub-agent's own transcript: whoever may view the session (the Agents panel's detail view).
     'GET /api/chat/sessions/:id/tasks/:taskId/events': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
+    // T-102: a restart (now, queued, or interrupting the turn), cancelling a queued one and the restart hint's memory operate the session.
+    'POST /api/chat/sessions/:id/restart': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
+    'DELETE /api/chat/sessions/:id/restart': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
+    'PATCH /api/chat/sessions/:id/restart-hint': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
   });
 }
 
