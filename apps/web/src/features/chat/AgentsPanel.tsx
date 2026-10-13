@@ -1,18 +1,14 @@
-import { Badge, Button, ease, Spinner, useToast, type BadgeTone } from '@isnanme/ui';
+import { Badge, Button, ease, Spinner, useToast } from '@isnanme/ui';
 import type { ChatTask } from '@portal/contracts';
-import { Bot, Square, X } from 'lucide-react';
+import { Bot, ChevronRight, Square, X } from 'lucide-react';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { errorText } from '@/lib/api';
+import { AgentDetail, TASK_STATUS as STATUS, taskMs } from './AgentDetail';
+import { isAgentTask, modelShort } from './agentFold';
+import type { AgentLive } from './motion/deltas';
 import { AgentTag, formatDuration, formatTokens, useModal, useNow } from './shared';
-
-const STATUS: Record<ChatTask['status'], { label: string; tone: BadgeTone }> = {
-  running: { label: 'Running', tone: 'success' },
-  completed: { label: 'Done', tone: 'neutral' },
-  failed: { label: 'Failed', tone: 'danger' },
-  killed: { label: 'Stopped', tone: 'danger' },
-};
 
 /** After its ack, how long a stopped task's row waits for the task to report it ended before Stop is offered again. */
 const STOP_GRACE_MS = 15_000;
@@ -34,7 +30,14 @@ function tasksSummary(tasks: ChatTask[]): string {
 }
 
 interface AgentsProps {
+  /** The session: a sub-agent's detail view reads its transcript from it. */
+  sessionId: string;
   tasks: ChatTask[];
+  /** What each sub-agent is writing now, by its Task call: the detail view's live line. */
+  agentLive?: ReadonlyMap<string, AgentLive>;
+  /** The sub-agent whose detail view is open (its task id), or null for the list; the transcript's agent rows open one too. */
+  selected: string | null;
+  onSelect: (taskId: string | null) => void;
   /** Stops one running task (`stop_task`), settling on its ack. Without it there's no Stop. */
   onStopTask?: (taskId: string) => Promise<void>;
   /** Interrupts the turn (`stop`): the first half of Stop all. */
@@ -49,7 +52,11 @@ interface AgentsProps {
  * content fills the side panel on wide screens and the sheet below them.
  */
 export function AgentsPanel({
+  sessionId,
   tasks,
+  agentLive,
+  selected,
+  onSelect,
   onStopTask,
   onInterrupt,
   connected = true,
@@ -146,6 +153,24 @@ export function AgentsPanel({
     else if (problem) toast(problem, 'error');
   };
 
+  const chosen = selected ? tasks.find((t) => t.taskId === selected) : undefined;
+  if (chosen)
+    return (
+      <AgentDetail
+        sessionId={sessionId}
+        task={chosen}
+        live={chosen.toolUseId ? agentLive?.get(chosen.toolUseId) : undefined}
+        onBack={() => onSelect(null)}
+        onClose={onClose}
+        closeLabel={closeLabel}
+        titleId={titleId}
+        onStop={onStopTask ? () => void stopOne(chosen.taskId) : undefined}
+        stopping={stopping.has(chosen.taskId)}
+        stopDisabled={!connected}
+        failure={chosen.status === 'running' ? failures.get(chosen.taskId) : undefined}
+      />
+    );
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-14 shrink-0 items-center gap-2 border-b border-line pr-2 pl-4">
@@ -193,6 +218,7 @@ export function AgentsPanel({
                 key={t.taskId}
                 task={t}
                 now={now}
+                onOpen={() => onSelect(t.taskId)}
                 onStop={onStopTask ? () => void stopOne(t.taskId) : undefined}
                 stopping={stopping.has(t.taskId)}
                 stopDisabled={!connected}
@@ -209,6 +235,7 @@ export function AgentsPanel({
 function TaskRow({
   task: t,
   now,
+  onOpen,
   onStop,
   stopping,
   stopDisabled,
@@ -216,46 +243,53 @@ function TaskRow({
 }: {
   task: ChatTask;
   now: number;
+  onOpen: () => void;
   onStop?: () => void;
   stopping: boolean;
   stopDisabled: boolean;
   failure?: string;
 }) {
   const status = STATUS[t.status] ?? STATUS.running;
-  const started = Date.parse(t.startedAt);
-  // Running: live from its start. Finished: what it reported, else start to end.
-  const ms =
-    t.status === 'running'
-      ? now - started
-      : (t.durationMs ?? (t.endedAt ? Date.parse(t.endedAt) - started : Number.NaN));
+  const ms = taskMs(t, now);
   const facts = [
     t.tokens != null && `${formatTokens(t.tokens)} tokens`,
     t.toolUses != null && `${t.toolUses} ${t.toolUses === 1 ? 'tool use' : 'tool uses'}`,
     Number.isFinite(ms) && formatDuration(ms),
   ].filter((f): f is string => !!f);
   const name = t.description || 'Task';
+  // A sub-agent's model as Claude Code reported it; "unavailable" until it did. A background command has none.
+  const model = isAgentTask(t) ? (modelShort(t.model) ?? 'unavailable') : null;
   return (
-    <li className="px-4 py-3">
-      <div className="flex items-start gap-2">
-        <p className="min-w-0 flex-1 text-[13.5px] leading-snug font-semibold break-words">{name}</p>
-        <Badge tone={status.tone} className="shrink-0">
-          {t.status === 'running' && <Spinner className="size-3" />}
-          {status.label}
-        </Badge>
-      </div>
-      {(t.subagentType || facts.length > 0) && (
-        <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] text-muted">
-          {t.subagentType && <AgentTag label={t.subagentType} />}
-          {facts.length > 0 && <span className="tabular-nums">{facts.join(' · ')}</span>}
-        </div>
-      )}
-      {t.summary && (
-        <p title={t.summary} className="mt-1.5 line-clamp-2 text-[12.5px] break-words text-ink-soft">
-          {t.summary}
-        </p>
-      )}
+    <li>
+      <button type="button" onClick={onOpen} aria-label={`${name}, ${status.label}${model ? `, model ${model}` : ''}. Open`} className="press flex w-full items-start gap-2 px-4 pt-3 pb-3 text-left hover:bg-surface-2/60">
+        <span className="min-w-0 flex-1">
+          <span className="flex items-start gap-2">
+            <span className="min-w-0 flex-1 text-[13.5px] leading-snug font-semibold break-words">{name}</span>
+            {model && (
+              <span
+                title={t.model ?? 'Not reported yet'}
+                className={`mt-0.5 shrink-0 rounded px-1.5 py-px text-[10.5px] font-semibold tracking-wide uppercase ${t.model ? 'bg-surface-2 text-ink-soft' : 'text-muted'}`}
+              >
+                {model}
+              </span>
+            )}
+            <Badge tone={status.tone} className="shrink-0">
+              {t.status === 'running' && <Spinner className="size-3" />}
+              {status.label}
+            </Badge>
+          </span>
+          {(t.subagentType || facts.length > 0) && (
+            <span className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] text-muted">
+              {t.subagentType && <AgentTag label={t.subagentType} />}
+              {facts.length > 0 && <span className="tabular-nums">{facts.join(' · ')}</span>}
+            </span>
+          )}
+          {t.summary && <span className="mt-1.5 line-clamp-2 block text-[12.5px] break-words text-ink-soft">{t.summary}</span>}
+        </span>
+        <ChevronRight className="mt-0.5 size-4 shrink-0 text-muted" aria-hidden="true" />
+      </button>
       {onStop && t.status === 'running' && (
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <div className="-mt-1 flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-3">
           <Button
             size="sm"
             variant="secondary"

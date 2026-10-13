@@ -73,7 +73,7 @@ export function SessionPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
-  const { connected, events, delta, session, removed, inputs, outbox, tasks, btw, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end } = useChatSession(id);
+  const { connected, events, delta, agentLive, session, removed, inputs, outbox, tasks, btw, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end } = useChatSession(id);
   // The glance widgets follow this session: Quota shows its Claude.
   useGlanceFocus({ sessionId: id, claudeId: session?.claudeId, workspaceId: session?.workspaceId });
   const [ending, setEnding] = useState(false);
@@ -242,7 +242,21 @@ export function SessionPage() {
       // private window: just not remembered
     }
   };
-  const toggleAgents = () => toggle('agents');
+  const toggleAgents = () => {
+    setAgentOpen(null); // the panel opens on its list
+    toggle('agents');
+  };
+  // The sub-agent whose detail view is open in the Agents panel or sheet; its row in the transcript opens it.
+  const [agentOpen, setAgentOpen] = useState<string | null>(null);
+  const openAgent = useCallback(
+    (taskId: string) => {
+      setAgentOpen(taskId);
+      if (wide) {
+        if (panel !== 'agents') setPanel('agents');
+      } else setSheet('agents');
+    },
+    [wide, panel],
+  );
   const toggleFiles = () => toggle('files');
   // Where Files is (tab, folder) survives closing the panel; another session starts fresh, before
   // anything renders with this one's folder.
@@ -430,7 +444,7 @@ export function SessionPage() {
                     </span>
                   </>
                 ) : session ? (
-                  endedForSafety(session.endedReason) && ended ? <Badge tone="danger">Ended</Badge> : <StateBadge state={state} />
+                  endedForSafety(session.endedReason) && ended ? <Badge tone="danger">Ended</Badge> : <StateBadge state={state} agents={running} />
                 ) : null}
               </span>
               {bypass && (
@@ -478,6 +492,12 @@ export function SessionPage() {
                   >
                     <Bot className="size-[18px]" />
                     {running > 0 && <RunningCount count={running} small />}
+                    {/* Agents still at work: a small spinner on the icon, also once the main agent is idle. */}
+                    {running > 0 && (
+                      <span aria-hidden="true" className="absolute bottom-1.5 left-1.5 flex rounded-full bg-bg text-accent">
+                        <Spinner className="size-3" />
+                      </span>
+                    )}
                   </button>
                 </>
               )}
@@ -511,6 +531,9 @@ export function SessionPage() {
             onOpenUsage={() => setUsageOpen(true)}
             persona={persona}
             moveMark={moveMark}
+            tasks={tasks}
+            agentLive={agentLive}
+            onOpenAgent={openAgent}
             className="h-full"
           />
 
@@ -608,7 +631,11 @@ export function SessionPage() {
         {wide && panel === 'agents' && btwLayout.mode !== 'panel' && (
           <aside id="agents-panel" aria-label="Agents" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)]">
             <AgentsPanel
+              sessionId={id}
               tasks={tasks}
+              agentLive={agentLive}
+              selected={agentOpen}
+              onSelect={setAgentOpen}
               onStopTask={ended ? undefined : stopTask}
               onInterrupt={interrupt}
               connected={connected}
@@ -627,7 +654,11 @@ export function SessionPage() {
       {!wide && (
         <AgentsSheet
           open={sheet === 'agents'}
+          sessionId={id}
           tasks={tasks}
+          agentLive={agentLive}
+          selected={agentOpen}
+          onSelect={setAgentOpen}
           onStopTask={ended ? undefined : stopTask}
           onInterrupt={interrupt}
           connected={connected}

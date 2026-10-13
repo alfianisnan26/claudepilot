@@ -1,5 +1,5 @@
 import { cn, Spinner } from '@isnanme/ui';
-import { foldMoves, type ChatEvent, type ChatFile, type ChatImage, type ChatInputState, type ChatMove } from '@portal/contracts';
+import { foldMoves, type ChatEvent, type ChatFile, type ChatImage, type ChatInputState, type ChatMove, type ChatTask } from '@portal/contracts';
 import { ArrowDown, ArrowRightLeft, Bot, ChevronDown, Clock3, ImageIcon, Plug, RotateCw, Ticket, Workflow, X, type LucideIcon } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -7,6 +7,8 @@ import { Link } from 'react-router';
 import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
 import { PinnedBtw } from './btw/PinnedBtw';
 import { ActivityBlock } from './Activity';
+import { AGENT_TOOLS, buildItems, rowSeq } from './agentFold';
+import { AgentRow, AgentsContext, type AgentsView } from './AgentRow';
 import { chatApi } from './api';
 import { ArtifactBlock, FileChips } from './artifacts/ArtifactCards';
 import { artifactTurns, type TurnFiles } from './artifacts/turns';
@@ -15,16 +17,11 @@ import { Markdown, QuietCopyButton } from './Markdown';
 import { MOTION, StreamingMarkdown, useFollow, useHandover } from './motion';
 import { buildRows, LiveThinking, ThinkingRow, ToolCall, ToolGroup, toolLabel, type ToolPair, type TranscriptRow } from './ToolRows';
 import { TurnDone, turnUsage, type TurnUsage } from './Usage';
+import type { AgentLive } from './motion/deltas';
 import type { ChatDelta, ChatOutgoing } from './useChatSocket';
 
-/** What the transcript shows, in order: a row as it is, a turn's work folded into one activity row, or a turn just done. */
-type Item =
-  | { kind: 'row'; key: string; row: TranscriptRow; fresh: boolean }
-  | { kind: 'activity'; key: string; rows: TranscriptRow[]; result: ChatEvent | null; fresh: boolean }
-  | { kind: 'done'; key: string; result: ChatEvent };
-
-const rowSeq = (r: TranscriptRow): number =>
-  r.type === 'tool' ? r.call.seq : r.type === 'group' ? r.tools[0]!.call.seq : r.event.seq;
+const NO_TASKS: ChatTask[] = [];
+const NO_LIVE_AGENTS: ReadonlyMap<string, AgentLive> = new Map();
 
 /** New lines rise in; what was already there when the page opened doesn't move. */
 const RISE = { initial: { opacity: 0, y: 10 }, animate: { opacity: 1, y: 0 }, transition: MOTION.rise } as const;
@@ -85,10 +82,14 @@ export function Transcript({
   onOpenUsage,
   persona,
   moveMark,
+  tasks = NO_TASKS,
+  agentLive = NO_LIVE_AGENTS,
+  onOpenAgent,
   className,
 }: {
   sessionId: string;
   events: ChatEvent[];
+  /** The main agent's live reply: the only thing the reply slot shows (a sub-agent's live text goes to its row). */
   delta: ChatDelta | null;
   outbox?: ChatOutgoing[];
   inputs?: ReadonlyMap<string, ChatInputState>;
@@ -108,6 +109,12 @@ export function Transcript({
   persona?: { name: string; avatar?: string | null } | null;
   /** Auto move (FR18): what a "Moved to" divider carries beside it (the auto mark and Undo), by the move's id. */
   moveMark?: (handoffId: string) => ReactNode;
+  /** The session's sub-agents: their rows show each one's name, model and latest line. */
+  tasks?: ChatTask[];
+  /** What each sub-agent is writing now, by its Task call. */
+  agentLive?: ReadonlyMap<string, AgentLive>;
+  /** Opens a sub-agent's detail view (its row is the way in). */
+  onOpenAgent?: (taskId: string) => void;
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -218,53 +225,12 @@ export function Transcript({
   const rows = useMemo(() => buildRows(folded.events, !details), [folded, details]);
   const usage = useMemo(() => new Map<number, TurnUsage>(turnUsage(events).map((u) => [u.seq, u])), [events]);
 
-  // A turn's work (thinking, tool calls, notes between them, sub-agents' lines) folds into activity rows;
-  // the reply that ends the turn, what you sent, errors and tool images stay out. A turn's result goes to
-  // its activity rows (their usage), and a result that just came in shows the Done pill.
-  const items = useMemo(() => {
-    const isActivity = (r: TranscriptRow): boolean => {
-      if (r.type === 'thinking' || r.type === 'group') return true;
-      if (r.type === 'tool') return !r.result?.images?.length;
-      const e = r.event;
-      if (e.kind === 'assistant') return !!e.agentLabel || !finals.has(e.seq);
-      // What stands for a move stays where it is, in the open.
-      if (e.kind === 'system' && (e.transfer || e.btw || e.restart || moves.has(e.seq))) return false;
-      return e.kind === 'system' || e.kind === 'retry' || e.kind === 'resolved';
-    };
-    // "Ready" (the process started) says nothing a reader needs, except in Show all details.
-    const quiet = (r: TranscriptRow) => !details && r.type === 'event' && r.event.kind === 'system' && r.event.text === 'Ready';
-    const substantive = (r: TranscriptRow) => r.type !== 'event' || r.event.kind === 'assistant';
-    const out: Item[] = [];
-    let run: TranscriptRow[] = [];
-    let turn: Extract<Item, { kind: 'activity' }>[] = [];
-    const flush = () => {
-      if (!run.length) return;
-      if (run.some(substantive)) {
-        const block: Extract<Item, { kind: 'activity' }> = { kind: 'activity', key: `a${rowSeq(run[0]!)}`, rows: run, result: null, fresh: rowSeq(run[0]!) > base };
-        out.push(block);
-        turn.push(block);
-      } else for (const r of run) out.push({ kind: 'row', key: `r${rowSeq(r)}`, row: r, fresh: rowSeq(r) > base });
-      run = [];
-    };
-    for (const r of rows) {
-      if (quiet(r)) continue;
-      if (isActivity(r)) {
-        run.push(r);
-        continue;
-      }
-      flush();
-      if (r.type === 'event' && r.event.kind === 'result') {
-        for (const b of turn) b.result = r.event;
-        if (r.event.seq > base) out.push({ kind: 'done', key: `d${r.event.seq}`, result: r.event });
-        turn = [];
-        continue;
-      }
-      if (r.type === 'event' && r.event.kind === 'user') turn = [];
-      out.push({ kind: 'row', key: `r${rowSeq(r)}`, row: r, fresh: rowSeq(r) > base });
-    }
-    flush();
-    return out;
-  }, [rows, finals, base, details, moves]);
+  // A turn's work folds into activity rows, and a sub-agent's lines into the row of the call that started it (agentFold.ts).
+  const { items, agentRows } = useMemo(() => buildItems({ rows, finals, moves, base, details }), [rows, finals, base, details, moves]);
+  const agentsView = useMemo<AgentsView>(
+    () => ({ byCall: new Map(tasks.flatMap((t) => (t.toolUseId ? [[t.toolUseId, t] as const] : []))), live: agentLive, rows: agentRows, open: onOpenAgent }),
+    [tasks, agentLive, agentRows, onOpenAgent],
+  );
   const lastActivity = items.findLast((i) => i.kind === 'activity')?.key;
   const turns = useMemo(() => artifactTurns(events), [events]);
 
@@ -283,6 +249,8 @@ export function Transcript({
   };
 
   const toolCall = (t: ToolPair) => {
+    // The call that started a sub-agent is that agent's row: it opens the agent's own transcript.
+    if (AGENT_TOOLS.has(t.call.toolName ?? '') && t.call.toolUseId) return <AgentRow key={`t${t.call.seq}`} call={t.call} result={t.result} />;
     const tool = t.call.toolName ? toolLabel(t.call.toolName) : 'a tool';
     return (
       <ToolCall
@@ -351,6 +319,7 @@ export function Transcript({
                 rows={it.rows}
                 usage={it.result ? (usage.get(it.result.seq) ?? null) : null}
                 live={working && !it.result && it.key === lastActivity}
+                agents={it.agents}
                 details={details}
                 render={(r) => renderRow(r, true)}
               />
@@ -366,68 +335,70 @@ export function Transcript({
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className={cn('relative', className)}>
-        <div
-          ref={ref}
-          onScroll={onScroll}
-          onWheel={reading}
-          onTouchMove={reading}
-          onKeyDown={reading}
-          onPointerDown={reading}
-          role="log"
-          aria-live="polite"
-          aria-busy={!!live}
-          aria-label="Transcript"
-          style={{ paddingTop: padTop, paddingBottom: padBottom }}
-          className="h-full overflow-y-auto overscroll-contain px-5 py-5 [overflow-anchor:none] sm:px-6"
-        >
-          <div ref={content} className="relative mx-auto flex w-full max-w-[720px] flex-col gap-5">
-            {storedRows}
-            {outbox.map((o) => (
-              <motion.div
-                key={o.uuid}
-                initial={{ opacity: 0, y: 16, scale: 0.94 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                transition={MOTION.pop}
-                style={{ transformOrigin: 'bottom right' }}
-              >
-                <UserMessage
-                  text={o.text}
-                  images={o.images.map((img, i, all) => ({ ...img, alt: imageAlt('Image you sent', i, all.length) }))}
-                  files={o.files}
-                  sessionId={sessionId}
-                  state={inputs.get(o.uuid)}
-                  sending
-                  onCancel={onCancelQueued ? () => onCancelQueued(o.uuid, o.text) : undefined}
-                />
-              </motion.div>
-            ))}
-            {/* Thinking enters and leaves like any row; the reply itself has no frame to animate: its words do (motion/). */}
-            <AnimatePresence initial={false} mode="popLayout">
-              {live?.thinking && (
-                <motion.div key="thinking" {...RISE} exit={{ opacity: 0, y: -4, transition: MOTION.exit }}>
-                  <LiveThinking since={live.thinking.since} agent={ctx.agentName(live.agentLabel)} />
+      <AgentsContext.Provider value={agentsView}>
+        <div className={cn('relative', className)}>
+          <div
+            ref={ref}
+            onScroll={onScroll}
+            onWheel={reading}
+            onTouchMove={reading}
+            onKeyDown={reading}
+            onPointerDown={reading}
+            role="log"
+            aria-live="polite"
+            aria-busy={!!live}
+            aria-label="Transcript"
+            style={{ paddingTop: padTop, paddingBottom: padBottom }}
+            className="h-full overflow-y-auto overscroll-contain px-5 py-5 [overflow-anchor:none] sm:px-6"
+          >
+            <div ref={content} className="relative mx-auto flex w-full max-w-[720px] flex-col gap-5">
+              {storedRows}
+              {outbox.map((o) => (
+                <motion.div
+                  key={o.uuid}
+                  initial={{ opacity: 0, y: 16, scale: 0.94 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  transition={MOTION.pop}
+                  style={{ transformOrigin: 'bottom right' }}
+                >
+                  <UserMessage
+                    text={o.text}
+                    images={o.images.map((img, i, all) => ({ ...img, alt: imageAlt('Image you sent', i, all.length) }))}
+                    files={o.files}
+                    sessionId={sessionId}
+                    state={inputs.get(o.uuid)}
+                    sending
+                    onCancel={onCancelQueued ? () => onCancelQueued(o.uuid, o.text) : undefined}
+                  />
                 </motion.div>
-              )}
-            </AnimatePresence>
-            {live && !live.thinking && <AssistantReply key={live.id} text={live.text} agentLabel={ctx.agentName(live.agentLabel)} live ended={live.ended} onSettled={handover.settled} />}
+              ))}
+              {/* Thinking enters and leaves like any row; the reply itself has no frame to animate: its words do (motion/). */}
+              <AnimatePresence initial={false} mode="popLayout">
+                {live?.thinking && (
+                  <motion.div key="thinking" {...RISE} exit={{ opacity: 0, y: -4, transition: MOTION.exit }}>
+                    <LiveThinking since={live.thinking.since} agent={ctx.agentName(live.agentLabel)} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              {live && !live.thinking && <AssistantReply key={live.id} text={live.text} agentLabel={ctx.agentName(live.agentLabel)} live ended={live.ended} onSettled={handover.settled} />}
+            </div>
           </div>
+          {/* Back to the latest, floating over the transcript above the composer. */}
+          <motion.button
+            type="button"
+            aria-label="Jump to latest"
+            onClick={toBottom}
+            initial={false}
+            animate={awayFromBottom ? { opacity: 1, scale: 1, y: 0 } : { opacity: 0, scale: 0.8, y: 8 }}
+            transition={MOTION.pop}
+            style={{ bottom: (padBottom ?? 0) + 4, pointerEvents: awayFromBottom ? 'auto' : 'none' }}
+            tabIndex={awayFromBottom ? 0 : -1}
+            className="glass-card press absolute left-1/2 z-10 -ml-[22px] flex size-11 items-center justify-center rounded-full text-ink"
+          >
+            <ArrowDown className="size-5" />
+          </motion.button>
         </div>
-        {/* Back to the latest, floating over the transcript above the composer. */}
-        <motion.button
-          type="button"
-          aria-label="Jump to latest"
-          onClick={toBottom}
-          initial={false}
-          animate={awayFromBottom ? { opacity: 1, scale: 1, y: 0 } : { opacity: 0, scale: 0.8, y: 8 }}
-          transition={MOTION.pop}
-          style={{ bottom: (padBottom ?? 0) + 4, pointerEvents: awayFromBottom ? 'auto' : 'none' }}
-          tabIndex={awayFromBottom ? 0 : -1}
-          className="glass-card press absolute left-1/2 z-10 -ml-[22px] flex size-11 items-center justify-center rounded-full text-ink"
-        >
-          <ArrowDown className="size-5" />
-        </motion.button>
-      </div>
+      </AgentsContext.Provider>
     </MotionConfig>
   );
 }
