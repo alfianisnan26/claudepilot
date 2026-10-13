@@ -4,7 +4,8 @@
 #   scripts/scratch-portal.sh stop  [port]
 #   scripts/scratch-portal.sh restart [port] [code]   stops the process and starts it again on the SAME data dir (a portal restart, Connect's A8)
 #   PORTAL_CONNECT_ALLOW_HTTP=true PORTAL_CONNECT_URL=http://<pod ip>:3413 scripts/scratch-portal.sh start 3413   Connect variables
-#       (PORTAL_CONNECT_*, PORTAL_TRUST_PROXY) are passed through when set, so a rig agent can dial a lab portal over plain http
+#       (PORTAL_CONNECT_*, PORTAL_TRUST_PROXY, PORTAL_HOST) are passed through when set, so a rig agent can dial a lab portal over plain http;
+#       PORTAL_HOST=127.0.0.1 keeps it off the network (do that before enrolling a Host agent: it gives the portal a shell)
 #   PORTAL_LOCAL_ENABLED=true scripts/scratch-portal.sh start 3405   also offers "This machine" as a workspace (its home is the private one under /tmp;
 #       a tools/qa/mock-anthropic.mjs stand-in reached through $dir/home/.claude/settings.json lets the real Claude Code answer without a credential)
 # `env -i` matters in a workspace like this one: without it the portal would inherit ~/.kube/config (cluster-admin) and could create or
@@ -16,7 +17,7 @@ dir=/tmp/scratch-portal-$port
 launch() {
   key=$(cat "$dir/key")
   # Connect's variables, when the caller set them (a lab portal for a rig agent); nothing else of the caller's environment.
-  passthru=$(env | grep -E '^(PORTAL_CONNECT_[A-Z_]+|PORTAL_TRUST_PROXY)=' || :)
+  passthru=$(env | grep -E '^(PORTAL_CONNECT_[A-Z_]+|PORTAL_TRUST_PROXY|PORTAL_HOST)=' || :)
   cd "$(dirname "$0")/../apps/server"
   # Its own session and no stdin or stdout of ours: the script (and a tool that waits for its output) must be able to end while it runs on.
   # shellcheck disable=SC2086 # one VAR=value word per line of $passthru
