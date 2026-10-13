@@ -14,8 +14,9 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis.
   today's chains, which also moves their tickets to the head.
 - t141 (opus): dev-t107-job-run, dev/t141-image-build. T-141: scripts/image-build.sh (kaniko, credential on stdin, one at a time) and the
   real proof build. Any RBAC widening goes on the ticket as an escalation.
-- PAUSED 16:4x (save and push, then report): t100 (dev/t100-sessions-list, rank-05) and t102 (dev/t102-session-screen, rank-04). They
-  resume after T-110 slice 1.
+- PAUSED 16:4x: t100 at cf86a26 (both items built; session-list 290/0 at 4 widths x 2 themes, scroll-lock 26/26, mobile-drag 11/11, web
+  422/422 in a cluster Job; shots in ~/.claudepilot/dev-sessions/shots/t100-*). Left: a clean run of the rewritten session-swipe.mjs, a merge
+  of integration. t102 is pausing. Both resume after T-110 slice 1.
 - T-118: stopped (WIP 7b02a4e, after T-104). fitOf and fit.ts are not unified yet (small).
 
 ## NEXT (coordinator gap review 15:0x: WIP limit THREE slices, thin first slices, each merged AND deployed before the next starts)
