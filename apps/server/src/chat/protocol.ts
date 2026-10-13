@@ -23,7 +23,7 @@ export interface ModelTotals {
   costUsd: number;
 }
 
-export type StoredEvent = Omit<ChatEvent, 'seq' | 'at'> & {
+export type StoredEvent = Omit<ChatEvent, 'seq' | 'at' | 'parentToolUseId'> & {
   /** For `result`: each model's running totals, so the controller can tell what this turn used. */
   modelTotals?: ModelTotals[];
   uuid?: string;
@@ -91,6 +91,11 @@ export interface ParsedLine {
   tasks?: TaskPatch[];
   /** `Task`/`Agent` tool calls and their descriptions, to label sub-agent lines. */
   agents?: { toolUseId: string; description: string }[];
+  /**
+   * The model a sub-agent runs on, by the Task call that started it: `observed` from its own line's `message.model` (what answered), else
+   * `launched` from the call's result (`tool_use_result.resolvedModel`). Never the call's `model` argument: that is only what was asked for.
+   */
+  agentModels?: { toolUseId: string; model: string; source: 'observed' | 'launched' }[];
   /**
    * From a `result`: the tokens its `usage` counts (input, cache reads and writes, output) and each
    * model's context window from `modelUsage`; the controller picks the window of the model in use.
@@ -384,6 +389,13 @@ function parseStreamEvent(obj: Record<string, unknown>): ParsedLine {
   }
 }
 
+/** A model id as Claude Code reports it (`claude-sonnet-4-5`, `claude-opus-4-6[1m]`, a Bedrock or Vertex id); `<synthetic>` and anything else is not one. */
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/[\]-]{0,119}$/;
+const modelId = (v: unknown): string | null => {
+  const s = asStr(v);
+  return s && MODEL_ID.test(s) ? s : null;
+};
+
 /** Tools that start a sub-agent; their `description` input names it. */
 const AGENT_TOOLS = new Set(['Task', 'Agent']);
 
@@ -421,6 +433,9 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
   const out: ParsedLine = { stored };
   if (agents.length) out.agents = agents;
   if (enterPlan) out.enterPlan = true;
+  // A sub-agent's line says which model answered it.
+  const model = agentLabel ? modelId(asObj(obj.message)?.model) : null;
+  if (agentLabel && model) out.agentModels = [{ toolUseId: agentLabel, model, source: 'observed' }];
   // A turn that failed on the plan's usage limit carries its limit info on the assistant line itself.
   if (asStr(obj.api_error) === 'usage_limit_reached') {
     const info = asObj(obj.api_error_params)?.rate_limit_info;
@@ -493,6 +508,9 @@ function parseUser(obj: Record<string, unknown>): ParsedLine {
   }
   // Image blocks next to a tool result are what that tool returned; without one, the line isn't a tool's.
   if (last && beside.length) last.rawImages = [...(last.rawImages ?? []), ...beside];
+  // The result of a call that launched a sub-agent names the model Claude Code started it on.
+  const launched = modelId(asObj(obj.tool_use_result)?.resolvedModel);
+  if (launched && stored.length === 1 && last?.toolUseId) return { stored, agentModels: [{ toolUseId: last.toolUseId, model: launched, source: 'launched' }] };
   return { stored };
 }
 

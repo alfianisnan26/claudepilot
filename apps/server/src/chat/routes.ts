@@ -3,8 +3,19 @@
 
 import { AppError, success } from '@isnanme/core';
 import { createHash } from 'node:crypto';
-import type { ChatWorktreeRemoval, CreateChatSessionRequest, CreateWorkspaceClaudeRequest, EnterBypassRequest, ReauthRequest, RestartChatRequest, SwitchChatRequest, UpdateChatSessionRequest } from '@portal/contracts';
+import {
+  sessionRef,
+  type ChatWorktreeRemoval,
+  type CreateChatSessionRequest,
+  type CreateWorkspaceClaudeRequest,
+  type EnterBypassRequest,
+  type ReauthRequest,
+  type RestartChatRequest,
+  type SwitchChatRequest,
+  type UpdateChatSessionRequest,
+} from '@portal/contracts';
 import { Hono, type Context } from 'hono';
+import { actorOf, requireCan } from '../authz/seam.js';
 import { RateLimiter } from '../rateLimit.js';
 import { serveBlob } from './artifacts/index.js';
 import type { ChatController } from './controller.js';
@@ -118,6 +129,12 @@ export function createChatRoutes(controller: ChatController): Hono {
 
   // GET /api/chat/sessions/:id/tasks — sub-agents and background tasks.
   chat.get('/:id/tasks', (c) => c.json(success(controller.tasks(c.req.param('id')))));
+
+  // GET /api/chat/sessions/:id/tasks/:taskId/events?after=<seq> — one sub-agent's own transcript (bounded), for whoever may view the session.
+  chat.get('/:id/tasks/:taskId/events', (c) => {
+    requireCan(actorOf(c), 'view', sessionRef(c.req.param('id')));
+    return c.json(success(controller.taskTranscript(c.req.param('id'), c.req.param('taskId'), Number(c.req.query('after') ?? 0) || 0)));
+  });
 
   // GET /api/chat/sessions/:id/blobs/:blobId — a stored file's bytes (attachment, artifact, tool image), only when this
   // session links it: inline for the types a browser may show or play (Range answered), a download for the rest.

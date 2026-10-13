@@ -2537,6 +2537,18 @@ export const MIGRATIONS: Migration[] = [
       db.exec('ALTER TABLE chat_sessions ADD COLUMN pinned_at TEXT');
     },
   },
+  {
+    version: 382,
+    name: 'chat sub-agents: the model, and their own transcript',
+    up(db) {
+      // Chat sessions PRD, the Agents panel: the model a sub-agent runs on as Claude Code reported it (null: unavailable), and an index for
+      // reading one sub-agent's own lines (the events whose parent_tool_use_id is its Task call) without walking the whole transcript.
+      db.exec(`
+        ALTER TABLE chat_tasks ADD COLUMN model TEXT;
+        CREATE INDEX chat_events_parent ON chat_events (session_id, parent_tool_use_id, seq) WHERE parent_tool_use_id IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 /**

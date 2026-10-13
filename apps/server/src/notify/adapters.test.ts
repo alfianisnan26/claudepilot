@@ -127,3 +127,92 @@ test('chat: a crash mid-turn and a credential end fail; a person closing does no
   assert.equal(errorReason(FOLDER_CHANGED), 'folder_trust', 'a wake refused for trust says so (T-38)');
   assert.equal(errorReason('boom'), 'error');
 });
+
+// T-41: done means the session went idle and stayed so. Working is the main turn OR a task of its process running (the controller
+// presents that as `working`, `tasksOnly`), so a turn's result while sub-agents run is not done.
+const doneRig = (wanted = true) => {
+  const { bus, got } = collect();
+  const chat = new FakeChat();
+  let clock = 1_000_000;
+  const off = adaptChat({ chat, bus, untrusted: () => false, doneWanted: () => wanted, resolved: () => {}, doneDebounceMs: 30, now: () => clock });
+  const s0 = session('s1', { state: 'idle' });
+  const set = (over: Partial<typeof s0>) => {
+    const s = { ...s0, ...over };
+    chat.sessions.set('s1', s);
+    chat.dispatch('s1', { type: 'session', session: s });
+  };
+  const result = () => chat.dispatch('s1', { type: 'events', session: 's1', items: [{ seq: 1, at: '', kind: 'result', durationMs: 400_000 }] });
+  const advance = (ms: number) => (clock += ms);
+  const done = () => got.filter((e) => e.kind === 'session_done');
+  return { set, result, advance, done, off, wait: (ms = 60) => new Promise((r) => setTimeout(r, ms)) };
+};
+
+test('chat: a result while tasks run is no session_done: it stays working; the last task ending emits it once, after the debounce', async () => {
+  const r = doneRig();
+  try {
+    r.set({ state: 'idle' });
+    r.set({ state: 'working' });
+    r.advance(6 * 60_000);
+    r.result(); // the main turn's result: its tasks still run, so the controller still says working
+    r.set({ state: 'working', tasksOnly: true, agentsRunning: 2 });
+    await r.wait();
+    assert.equal(r.done().length, 0, 'no session_done for a result, nor while tasks run');
+    r.set({ state: 'working', tasksOnly: true, agentsRunning: 1 });
+    r.set({ state: 'idle', agentsRunning: 0 });
+    assert.equal(r.done().length, 0, 'not at once: after the debounce');
+    await r.wait();
+    assert.equal(r.done().length, 1);
+    assert.equal(r.done()[0]!.facts.minutes, 6, 'from the first working moment of the stretch');
+    r.set({ state: 'idle', agentsRunning: 0 }); // the same state again
+    await r.wait();
+    assert.equal(r.done().length, 1, 'once per move to idle');
+  } finally {
+    r.off();
+  }
+});
+
+test('chat: a new turn before the debounce ends cancels the done; the stretch goes on and is counted whole', async () => {
+  const r = doneRig(false);
+  try {
+    r.set({ state: 'working' });
+    r.advance(3 * 60_000);
+    r.set({ state: 'idle' });
+    r.set({ state: 'working' }); // a task's notification started the next turn
+    await r.wait();
+    assert.equal(r.done().length, 0);
+    r.advance(3 * 60_000);
+    r.set({ state: 'idle' });
+    await r.wait();
+    assert.deepEqual(r.done().map((e) => e.facts.minutes), [6], 'not asked for, but 6 minutes of work: long enough');
+  } finally {
+    r.off();
+  }
+});
+
+test('chat: no session_done mid-move, for an ended session, or when nobody asked and it was short', async () => {
+  const r = doneRig(false);
+  try {
+    r.set({ state: 'working' });
+    r.set({ state: 'idle' });
+    await r.wait();
+    assert.equal(r.done().length, 0, 'short and not asked for');
+  } finally {
+    r.off();
+  }
+  const m = doneRig();
+  try {
+    m.set({ state: 'working' });
+    m.set({ state: 'idle', switching: { toClaude: 'Work', step: 'starting' } });
+    await m.wait();
+    m.set({ state: 'ended' });
+    await m.wait();
+    assert.equal(m.done().length, 0);
+    m.set({ state: 'working' });
+    m.set({ state: 'idle' });
+    m.set({ state: 'ended' }); // ended within the debounce
+    await m.wait();
+    assert.equal(m.done().length, 0);
+  } finally {
+    m.off();
+  }
+});

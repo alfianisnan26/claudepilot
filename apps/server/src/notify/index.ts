@@ -62,6 +62,8 @@ export interface NotifyDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Registers `notify_status` on the Portal MCP (once per process: tests pass false). */
   tools?: boolean;
+  /** How long a chat stays idle before it counts as done (`DONE_DEBOUNCE_MS`; tests shorten it). */
+  doneDebounceMs?: number;
 }
 
 /**
@@ -166,6 +168,8 @@ export function createNotify(d: NotifyDeps) {
           untrusted,
           doneWanted: (id) => !!d.store.db?.prepare('SELECT 1 FROM notify_session_flags WHERE session_id = ? AND done = 1 LIMIT 1').get(id),
           resolved: (s, r, outcome) => pipeline.resolveRequest(s, r, outcome),
+          doneDebounceMs: d.doneDebounceMs,
+          now: d.now ? () => d.now!().getTime() : undefined,
         }),
       );
       if (d.ci) stops.push(adaptCi(d.ci, d.bus));

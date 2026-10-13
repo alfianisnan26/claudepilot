@@ -51,6 +51,7 @@ import {
   type ChatWorktreeStatus,
   type ChatSession,
   type ChatTask,
+  type ChatTaskTranscript,
   type ChatSwitchOption,
   type ChatSwitchOptions,
   type ChatTransferContext,
@@ -350,6 +351,8 @@ export class ChatController {
   readonly #signInNoted = new Map<string, Set<string>>();
   /** Per session: a `Task` tool_use id → its sub-agent's description, to label that agent's lines. */
   readonly #agentNames = new Map<string, Map<string, string>>();
+  /** Per session: a `Task` tool_use id → the model its sub-agent was seen on, kept for a task row that arrives after it. */
+  readonly #agentModels = new Map<string, Map<string, { model: string; source: 'observed' | 'launched' }>>();
   /** Per session: tool calls still waiting for their result, tool_use id → tool name. */
   readonly #toolCalls = new Map<string, Map<string, string>>();
   /** Per session, per agent (`''` for the main thread): the open text block's redactor. */
@@ -376,6 +379,8 @@ export class ChatController {
   readonly #bypassGrant = new Set<string>();
   /** Chats moving to another Claude right now (a second move, a message, a control or an end is refused meanwhile), and how far along. */
   readonly #moving = new Map<string, { toClaude: string; step: 'handoff' | 'starting' | 'finishing' }>();
+  /** How many tasks each session had running when tabs last heard of it: a change is news (its count, and whether it reads working). */
+  readonly #tasksRunning = new Map<string, number>();
   /** Chats whose process a Restart is replacing (`restart`): a move or a second restart is refused meanwhile; messages wait for the new process. */
   readonly #restarting = new Map<string, Promise<void>>();
   /** Per session: messages a caller handed to `send` that haven't been written yet (a Restart waits for none to be on its way). */
@@ -552,6 +557,12 @@ export class ChatController {
   start(): void {
     if (this.#started || this.#closed) return;
     this.#started = true;
+    // Tasks of a process that is no longer there are over (T-39): a portal stopped mid-move or mid-restart left them "running".
+    try {
+      for (const id of this.#chat.endOrphanTasks()) this.#emitTasks(id);
+    } catch {
+      // the store is unavailable: the liveness rounds and the next launch close them
+    }
     this.#content.start();
     this.btw.start();
     this.#liveness = setInterval(() => void this.#tick(), this.#livenessMs);
@@ -707,6 +718,7 @@ export class ChatController {
     this.#stopReader(sessionId);
     this.#forget(sessionId, 'The session went to sleep.');
     this.#chat.patchSession(sessionId, { process: 'asleep' });
+    if (this.#chat.endRunningTasks(sessionId)) this.#emitTasks(sessionId); // none should be (it sleeps only when none run); never left running
     this.#bypassOver(sessionId, 'sleep');
     this.#emitSession(sessionId);
   }
@@ -753,6 +765,18 @@ export class ChatController {
     return this.#chat.tasks(session.id);
   }
 
+  /**
+   * One sub-agent's own transcript: its task row and the stored events of its lines (those whose parent is its Task call) after `after`,
+   * bounded by `TASK_EVENTS_MAX`. The events are the stored ones, redacted as the main transcript's are. A task the session doesn't have is 404.
+   */
+  taskTranscript(id: string, taskId: string, after = 0): ChatTaskTranscript {
+    const session = this.#require(this.#chat.resolveId(id));
+    const task = typeof taskId === 'string' && taskId ? this.#chat.task(session.id, taskId) : null;
+    if (!task) throw new AppError('NOT_FOUND', 'No such agent.');
+    const { events, truncated } = task.toolUseId ? this.#chat.taskEvents(session.id, task.toolUseId, Math.max(0, Math.floor(after) || 0)) : { events: [], truncated: false };
+    return { task, events, truncated };
+  }
+
   /** The runs of the chat on Claudes, oldest first, with what each cost. */
   segments(id: string): ChatSegment[] {
     const session = this.#require(id);
@@ -794,6 +818,9 @@ export class ChatController {
     if (this.#restarting.has(session.id)) out = { ...out, restarting: true };
     const changed = this.#configChangedAt(session);
     if (changed) out = { ...out, configChangedAt: changed };
+    // One definition of working (T-41): the main turn runs, or a task of its live process does. The stored state stays the turn's (what
+    // a send, a restart or a move go by); what is shown, listed and notified on is this one.
+    if (out.state === 'idle' && out.process === 'live' && (out.agentsRunning ?? 0) > 0) out = { ...out, state: 'working', tasksOnly: true };
     return out;
   }
 
@@ -1201,6 +1228,8 @@ export class ChatController {
 
       // 4. The chat follows the new run: its reader, row and segment, and then the opening goes in.
       const restore: Restore = { model: row.model, effort: row.effort, ultracode: row.ultracode === 1, mode: row.mode === 'bypassPermissions' ? START_MODE : row.mode };
+      // What the old run still has running ends with it in step 5 (the new run may start its own meanwhile).
+      const oldTasks = this.#chat.runningTaskIds(sessionId);
       this.#stopReader(sessionId);
       this.#forget(sessionId, 'The chat moved to another Claude.');
       kept = { costBase: this.#costBase.get(sessionId), modelBase: this.#modelBase.get(sessionId), mode: this.#modes.get(sessionId) };
@@ -1229,6 +1258,7 @@ export class ChatController {
       this.#append(sessionId, { kind: 'system', text: `Moved to ${dest.name}`, transfer });
       const old = undo.row;
       await this.#runOnce(workspaceId, ['stop', claudeSessionOf(old)]).catch(() => undefined);
+      if (this.#chat.endRunningTasks(sessionId, oldTasks)) this.#emitTasks(sessionId);
       // The new run started on the start mode and took the context in it (its tool requests denied): Bypass comes back only now, the move done.
       if (wasBypass) await this.#keepBypass(sessionId, 'move');
       return this.#chat.get(sessionId)!;
@@ -1739,6 +1769,7 @@ export class ChatController {
     pruneBlobs(this.#store, blobs);
     this.#forget(sessionId, 'The session was deleted.');
     this.#pilotTools.delete(sessionId);
+    this.#tasksRunning.delete(sessionId);
     this.#emit(sessionId, { type: 'removed', session: sessionId });
     return { purged: code === 0, worktree };
   }
@@ -2541,9 +2572,10 @@ export class ChatController {
     }
     if (code === 0) {
       const started = parseStartOutput(out);
-      // A new process: nothing of the previous one carries over, and its reader must not read this log.
+      // A new process: nothing of the previous one carries over (its tasks included: they ended with it), and its reader must not read this log.
       this.#stopReader(sessionId);
       this.#forget(sessionId, 'Claude Code restarted.');
+      if (this.#chat.endRunningTasks(sessionId)) this.#emitTasks(sessionId);
       this.#chat.patchSession(sessionId, {
         parentPid: started?.pid ?? null,
         processStartedAt: started?.startedAt ?? null,
@@ -2928,9 +2960,25 @@ export class ChatController {
         }
         this.#chat.upsertTask(sessionId, t);
         if (t.toolUseId && t.description) this.#names(sessionId).set(t.toolUseId, t.description);
+        // A model seen before its task row (a line out of order) lands now.
+        const seen = t.toolUseId ? this.#agentModels.get(sessionId)?.get(t.toolUseId) : undefined;
+        if (seen && t.toolUseId) this.#chat.setTaskModel(sessionId, t.toolUseId, seen.model, { ifUnknown: seen.source === 'launched' });
       }
       this.#emitTasks(sessionId);
       this.#armIdle(sessionId); // a task that ended may be what kept it awake
+    }
+    // The model each sub-agent runs on: what its own lines report wins over what it was launched on.
+    if (parsed.agentModels?.length) {
+      let models = this.#agentModels.get(sessionId);
+      if (!models) this.#agentModels.set(sessionId, (models = new Map()));
+      let changed = false;
+      for (const m of parsed.agentModels) {
+        const known = models.get(m.toolUseId);
+        if (known?.model === m.model && (known.source === 'observed' || m.source === 'launched')) continue; // nothing new: no query, no emit
+        if (!known || m.source === 'observed' || known.source === 'launched') models.set(m.toolUseId, { model: m.model, source: m.source });
+        if (this.#chat.setTaskModel(sessionId, m.toolUseId, m.model, { ifUnknown: m.source === 'launched' })) changed = true;
+      }
+      if (changed) this.#emitTasks(sessionId);
     }
 
     // A finished block replaces its live text: what was held back goes out (redacted) just before it.
@@ -3336,10 +3384,11 @@ export class ChatController {
   }
 
   /** Thinking blocks open right now, for a tab that subscribes mid-block (each with how long it has run). */
-  openThinking(sessionId: string): { agentLabel: string | null; elapsedMs: number }[] {
+  openThinking(sessionId: string): { agentLabel: string | null; parentToolUseId?: string; elapsedMs: number }[] {
     const now = Date.now();
     return [...(this.#thinkingSince.get(sessionId) ?? [])].map(([agent, since]) => ({
       agentLabel: agent ? this.#label(sessionId, agent) : null,
+      ...(agent ? { parentToolUseId: agent } : {}),
       elapsedMs: Math.max(0, now - since),
     }));
   }
@@ -3349,12 +3398,12 @@ export class ChatController {
     let since = this.#thinkingSince.get(sessionId);
     if (!since) this.#thinkingSince.set(sessionId, (since = new Map()));
     since.set(agent ?? '', Date.now());
-    this.#emit(sessionId, { type: 'delta', session: sessionId, agentLabel: agent ? this.#label(sessionId, agent) : null, text: '', thinking: true });
+    this.#emit(sessionId, { type: 'delta', session: sessionId, agentLabel: agent ? this.#label(sessionId, agent) : null, ...(agent ? { parentToolUseId: agent } : {}), text: '', thinking: true });
   }
 
   #emitDelta(sessionId: string, agent: string | null, text: string): void {
     if (!text) return;
-    this.#emit(sessionId, { type: 'delta', session: sessionId, agentLabel: agent ? this.#label(sessionId, agent) : null, text });
+    this.#emit(sessionId, { type: 'delta', session: sessionId, agentLabel: agent ? this.#label(sessionId, agent) : null, ...(agent ? { parentToolUseId: agent } : {}), text });
   }
 
   /* ---------- Control requests ---------- */
@@ -3538,6 +3587,7 @@ export class ChatController {
     this.#appliedRead.delete(sessionId);
     this.#signInNoted.delete(sessionId);
     this.#agentNames.delete(sessionId);
+    this.#agentModels.delete(sessionId);
     this.#toolCalls.delete(sessionId);
     this.#streams.delete(sessionId);
     this.#thinkingSince.delete(sessionId);
@@ -3660,7 +3710,11 @@ export class ChatController {
   }
 
   #emitTasks(sessionId: string): void {
-    this.#emit(sessionId, { type: 'tasks', session: sessionId, tasks: this.#chat.tasks(sessionId) });
+    const tasks = this.#chat.tasks(sessionId);
+    this.#emit(sessionId, { type: 'tasks', session: sessionId, tasks });
+    // How many run is part of the session (its count, and whether it reads working): tabs and the notifier hear when that changes.
+    const running = tasks.filter((t) => t.status === 'running').length;
+    if (this.#tasksRunning.get(sessionId) !== running) this.#emitSession(sessionId);
   }
 
   #names(sessionId: string): Map<string, string> {
@@ -3727,6 +3781,7 @@ export class ChatController {
   /** Tells the tabs the session changed, and (re)schedules its idle check. */
   #emitSession(sessionId: string): void {
     const session = this.#chat.get(sessionId);
+    if (session) this.#tasksRunning.set(sessionId, session.agentsRunning ?? 0);
     if (session) this.#emit(sessionId, { type: 'session', session: this.#decorate(session) });
     this.#armIdle(sessionId);
   }

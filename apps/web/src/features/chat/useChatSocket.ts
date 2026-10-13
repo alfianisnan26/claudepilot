@@ -20,7 +20,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { chatApi } from './api';
 import { foldBtw, refusedBtw, type BtwState } from './btw/state';
-import { createDeltaBatcher, foldDelta } from './motion/deltas';
+import { createDeltaBatcher, foldLive, NO_LIVE, settleLive, type AgentLive, type LiveState } from './motion/deltas';
 
 /** The live partial assistant text for the open block, before it's stored as an event. */
 export interface ChatDelta {
@@ -66,7 +66,10 @@ export interface ChatSessionApi {
   connected: boolean;
   /** Stored transcript, ordered and deduped by `seq`. */
   events: ChatEvent[];
+  /** The main agent's live reply (a sub-agent's never shows here). */
   delta: ChatDelta | null;
+  /** What each sub-agent is writing right now, by its Task call (`ChatTask.toolUseId`). */
+  agentLive: ReadonlyMap<string, AgentLive>;
   session: ChatSession | null;
   /** The session was deleted (here or in another tab), or never existed. */
   removed: boolean;
@@ -132,7 +135,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
   const toast = useToast();
   const [connected, setConnected] = useState(false);
   const [events, setEvents] = useState<ChatEvent[]>([]);
-  const [delta, setDelta] = useState<ChatDelta | null>(null);
+  const [live, setLive] = useState<LiveState>(NO_LIVE);
   const [session, setSession] = useState<ChatSession | null>(null);
   const [removed, setRemoved] = useState(false);
   const [inputs, setInputs] = useState<Map<string, ChatInputState>>(() => new Map());
@@ -158,7 +161,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
   useEffect(() => {
     seqRef.current = 0;
     setEvents([]);
-    setDelta(null);
+    setLive(NO_LIVE);
     setSession(null);
     setRemoved(false);
     setInputs(new Map());
@@ -169,7 +172,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
     const waiters = new Map<string, Waiter>();
     waitersRef.current = waiters;
     // Deltas are applied once per frame, not once per message (each one re-renders the whole page).
-    const deltas = createDeltaBatcher((messages) => setDelta((d) => messages.reduce<ChatDelta | null>(foldDelta, d)));
+    const deltas = createDeltaBatcher((messages) => setLive((l) => messages.reduce<LiveState>(foldLive, l)));
 
     let closed = false;
     let retry = 0;
@@ -184,10 +187,8 @@ export function useChatSession(sessionId: string): ChatSessionApi {
       deltas.flush(); // the deltas first, then whatever supersedes them
       for (const e of items) if (e.seq > seqRef.current) seqRef.current = e.seq;
       setEvents((prev) => mergeEvents(prev, items));
-      // A finished assistant block or a turn result supersedes whatever the live delta was showing;
-      // a finished thinking block ends a "Thinking…" delta.
-      if (items.some((e) => e.kind === 'assistant' || e.kind === 'result')) setDelta(null);
-      else if (items.some((e) => e.kind === 'thinking')) setDelta((d) => (d?.thinking ? null : d));
+      // A finished block or a turn result supersedes what was live, each agent's its own (settleLive).
+      setLive((l) => settleLive(l, items));
       // Stored now: the transcript shows the real event instead of the optimistic copy.
       const stored = new Set(items.flatMap((e) => (e.kind === 'user' && e.uuid ? [e.uuid] : [])));
       if (stored.size) setOutbox((o) => (o.some((x) => stored.has(x.uuid)) ? o.filter((x) => !stored.has(x.uuid)) : o));
@@ -465,7 +466,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
   const stop = useCallback(() => void control('stop').catch(fail), [control, fail]);
   const end = useCallback(() => void control('end').catch(fail), [control, fail]);
 
-  return { connected, events, delta, session, removed, inputs, outbox, tasks, btw: btwState?.item ?? null, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end };
+  return { connected, events, delta: live.main, agentLive: live.agents, session, removed, inputs, outbox, tasks, btw: btwState?.item ?? null, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end };
 }
 
 export interface ChatListApi {

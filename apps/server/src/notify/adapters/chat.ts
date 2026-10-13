@@ -2,7 +2,10 @@
 // - `approval`: a stored `request` event (a tool request, a question, a plan). The pipeline announces it 3 s later and only if it is still
 //   open; the history row is written at once. The answer offer is the most the request allows (Deny; Allow when the whole request is shown
 //   and the session did not start from outside); each recipient's own switches cut it at delivery.
-// - `session_done`: a MAIN-thread `result` (a sub-agent's is not a turn), when someone asked for it on this session or the turn took 5 min.
+// - `session_done`: the session went IDLE and stayed so (T-41): working is the main turn OR a task of its process running (the controller's
+//   one definition), so a turn that ends while sub-agents or background commands run is not done. It fires `DONE_DEBOUNCE_MS` after the
+//   move to idle, once, if by then no new turn started, no task runs, no move is under way and it hasn't ended; when someone asked for it
+//   on this session or the stretch took 5 min ("minutes" is from the first working moment of the stretch).
 // - `session_failed`: a main-thread `error` event, or an end that was not a person's (`credential:`, `integrity:`, a crash mid-turn).
 //   A folder whose settings changed since it was trusted (a wake or resume refused for trust, T-38) is its own reason, `folder_trust`.
 // - `resolved`: the request is dealt with: nothing more goes out for it and its tokens die.
@@ -25,7 +28,15 @@ export interface ChatAdapterDeps {
   /** Someone asked "Notify when done" on this session. */
   doneWanted: (sessionId: string) => boolean;
   resolved: (sessionId: string, requestId: string, outcome: string) => void;
+  /** How long a session must stay idle before it counts as done (tests shorten it). */
+  doneDebounceMs?: number;
+  now?: () => number;
 }
+
+/** A session is done only once it stayed idle this long: a task's notification often starts the next turn within seconds. */
+export const DONE_DEBOUNCE_MS = 20_000;
+
+const BUSY: ReadonlySet<ChatSession['state']> = new Set(['working', 'waiting', 'starting']);
 
 /** What the request asks, as a word the template knows (never its text). */
 export function requestAction(r: Pick<ChatRequest, 'kind' | 'toolName'>): string {
@@ -44,15 +55,52 @@ export const errorReason = (text: string | undefined): string =>
 
 export function adaptChat(d: ChatAdapterDeps): () => void {
   const states = new Map<string, ChatSession['state']>();
-  return d.chat.onEvent((sessionId, msg) => {
+  const debounce = d.doneDebounceMs ?? DONE_DEBOUNCE_MS;
+  const now = d.now ?? Date.now;
+  /** When each session's current working stretch began. */
+  const since = new Map<string, number>();
+  /** A session that went idle, waiting out the debounce. */
+  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const cancel = (id: string) => {
+    const t = timers.get(id);
+    if (t) clearTimeout(t);
+    timers.delete(id);
+  };
+  const done = (id: string) => {
+    timers.delete(id);
+    const s = d.chat.get(id);
+    const start = since.get(id);
+    // Still idle, nothing running, not moving, not ended: the work is over. Else a later move to idle tries again.
+    if (!s || s.state !== 'idle' || (s.agentsRunning ?? 0) > 0 || s.switching || start === undefined) return;
+    since.delete(id);
+    const minutes = Math.round(((now() - start) / 60_000) * 10) / 10;
+    if (d.doneWanted(id) || minutes >= 5) d.bus.emit({ kind: 'session_done', subject: { type: 'session', id: s.id, workspaceId: s.workspaceId }, facts: { workspace: s.workspaceId, minutes } });
+  };
+  const off = d.chat.onEvent((sessionId, msg) => {
     if (msg.type === 'removed') {
       states.delete(sessionId);
+      since.delete(sessionId);
+      cancel(sessionId);
       return;
     }
     if (msg.type === 'session') {
       const s = msg.session;
       const was = states.get(s.id);
       states.set(s.id, s.state);
+      if (BUSY.has(s.state)) {
+        // Working again (a new turn, or a task): not done; the stretch goes on from where it began.
+        cancel(s.id);
+        if (!since.has(s.id)) since.set(s.id, now());
+      } else if (s.state === 'idle' && since.has(s.id) && !s.switching) {
+        if (!timers.has(s.id)) {
+          const t = setTimeout(() => done(s.id), debounce);
+          t.unref?.();
+          timers.set(s.id, t);
+        }
+      } else if (s.state !== 'idle') {
+        cancel(s.id);
+        since.delete(s.id); // ended or interrupted: that stretch is over without being done
+      }
       if (!was || was === s.state) return;
       const reason = s.endedReason ?? '';
       let why: string | null = null;
@@ -81,13 +129,13 @@ export function adaptChat(d: ChatAdapterDeps): () => void {
         });
       } else if (ev.kind === 'resolved' && ev.requestId) {
         d.resolved(session.id, ev.requestId, ev.outcome ?? 'resolved');
-      } else if (ev.kind === 'result' && !ev.agentLabel) {
-        const minutes = typeof ev.durationMs === 'number' ? ev.durationMs / 60_000 : null;
-        if (d.doneWanted(session.id) || (minutes !== null && minutes >= 5))
-          d.bus.emit({ kind: 'session_done', subject, facts: { workspace: session.workspaceId, minutes: minutes === null ? null : Math.round(minutes * 10) / 10 } });
       } else if (ev.kind === 'error' && !ev.agentLabel) {
         d.bus.emit({ kind: 'session_failed', subject, facts: { workspace: session.workspaceId, reason: errorReason(ev.text) } });
       }
     }
   });
+  return () => {
+    off();
+    for (const id of [...timers.keys()]) cancel(id);
+  };
 }

@@ -1,11 +1,14 @@
 import { cn } from '@isnanme/ui';
 import type { ChatEvent } from '@portal/contracts';
-import { ChevronRight, Lightbulb, type LucideIcon } from 'lucide-react';
+import { Bot, ChevronRight, Lightbulb, type LucideIcon } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useAgentLine } from './AgentRow';
 import { MOTION } from './motion';
 import { formatSeconds, shortTarget, toolIcon, toolLabel, type TranscriptRow } from './ToolRows';
 import { usageLine, type TurnUsage } from './Usage';
+
+const NO_AGENTS: readonly string[] = [];
 
 /** One step of a turn's work, as the collapsed row shows it: a tool call or a thinking block. */
 type Step = { kind: 'tool'; call: ChatEvent; result: ChatEvent | null } | { kind: 'thinking'; event: ChatEvent };
@@ -54,11 +57,14 @@ export function ActivityBlock({
   live,
   details,
   render,
+  agents = NO_AGENTS,
 }: {
   rows: TranscriptRow[];
   usage: TurnUsage | null;
   /** The turn is still running and this is its latest work. */
   live: boolean;
+  /** The sub-agents this turn's calls started (their Task call ids): while one runs, the line says what it does, even after the turn ended. */
+  agents?: readonly string[];
   details: boolean;
   render: (r: TranscriptRow) => ReactNode;
 }) {
@@ -75,9 +81,11 @@ export function ActivityBlock({
   const earlier = steps.slice(0, -1);
   const hidden = Math.max(0, earlier.length - SHOWN);
   const shown = earlier.slice(hidden);
-  const text = latest ? stepText(latest, live) : live ? 'Writing' : 'Notes';
+  // A sub-agent of this turn that still runs speaks for the line (the main agent may be done): its name, what it does, shimmering.
+  const agent = useAgentLine(agents);
+  const text = agent ? `${agent.label} · ${agent.line}` : latest ? stepText(latest, live) : live ? 'Writing' : 'Notes';
   const failures = steps.filter(failed).length;
-  const LatestIcon = latest ? iconFor(latest) : Lightbulb;
+  const LatestIcon = agent ? Bot : latest ? iconFor(latest) : Lightbulb;
 
   return (
     <div className="flex max-w-full flex-col items-start">
@@ -127,12 +135,13 @@ export function ActivityBlock({
         <span className="relative min-w-0 overflow-hidden">
           <AnimatePresence mode="popLayout" initial={false}>
             <motion.span
-              key={text}
+              // An agent's words change as it writes: they update in place, and crossfade only when another agent (or step) speaks.
+              key={agent ? `agent:${agent.label}` : text}
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={MOTION.swap}
-              className={cn('block truncate', live ? 'shimmer' : latest && failed(latest) ? 'text-danger' : 'text-ink-soft')}
+              className={cn('block truncate', live || agent ? 'shimmer' : latest && failed(latest) ? 'text-danger' : 'text-ink-soft')}
             >
               {text}
             </motion.span>

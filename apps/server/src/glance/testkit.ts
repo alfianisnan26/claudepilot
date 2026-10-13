@@ -65,6 +65,7 @@ export function task(over: Partial<ChatTask> & { taskId: string }): ChatTask {
     toolUseId: null,
     description: 'A task',
     subagentType: null,
+    model: null,
     status: 'running',
     tokens: null,
     toolUses: null,

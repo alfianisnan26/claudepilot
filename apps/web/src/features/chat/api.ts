@@ -12,6 +12,7 @@ import {
   type ChatSegment,
   type ChatSwitchOptions,
   type ChatTask,
+  type ChatTaskTranscript,
   type ChatTrustRequest,
   type ChatWorktreeRemoval,
   type ChatWorktreeStatus,
@@ -92,6 +93,8 @@ export const chatApi = {
   models: (id: string) => request<ChatModelOption[]>('GET', CHAT_API.models(id)),
   /** Sub-agents and background tasks, the full current list. */
   tasks: (id: string) => request<ChatTask[]>('GET', CHAT_API.tasks(id)),
+  /** One sub-agent's own transcript after a seq (bounded): the detail view's lines. */
+  taskEvents: (id: string, taskId: string, after = 0) => request<ChatTaskTranscript>('GET', `${CHAT_API.taskEvents(id, taskId)}?after=${after}`),
   /** Where an image's bytes are served (attachments and tool images); plain same-origin GET. */
   blobUrl: (id: string, blobId: string) => CHAT_API.blob(id, blobId),
   /** A folder in the session's workspace; without a path, the session's own folder. */

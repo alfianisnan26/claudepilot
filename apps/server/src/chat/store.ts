@@ -19,6 +19,7 @@ import type {
   ChatTask,
   ChatWorktree,
 } from '@portal/contracts';
+import { TASK_EVENTS_MAX } from '@portal/contracts';
 import { createHash, randomBytes } from 'node:crypto';
 import { posix } from 'node:path';
 import type { Store } from '../store/store.js';
@@ -100,6 +101,7 @@ type TaskRow = {
   tool_use_id: string | null;
   label: string | null;
   subagent_type: string | null;
+  model: string | null;
   status: string | null;
   tokens: number | null;
   tool_uses: number | null;
@@ -108,6 +110,25 @@ type TaskRow = {
   started_at: string | null;
   ended_at: string | null;
 };
+
+const TASK_COLUMNS = 'task_id, tool_use_id, label, subagent_type, model, status, tokens, tool_uses, duration_ms, summary, started_at, ended_at';
+
+function taskOut(r: TaskRow): ChatTask {
+  return {
+    taskId: r.task_id,
+    toolUseId: r.tool_use_id,
+    description: r.label ?? '',
+    subagentType: r.subagent_type,
+    model: r.model,
+    status: r.status && TASK_STATUSES.has(r.status) ? (r.status as ChatTask['status']) : 'running',
+    tokens: r.tokens,
+    toolUses: r.tool_uses,
+    durationMs: r.duration_ms,
+    summary: r.summary,
+    startedAt: r.started_at ?? '',
+    endedAt: r.ended_at,
+  };
+}
 
 type RequestRow = {
   request_id: string;
@@ -419,6 +440,7 @@ export class ChatStore {
       lastSeq: row.last_seq,
       waiting,
       waitingFor,
+      agentsRunning: (this.#db().prepare(`SELECT count(*) AS n FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running')`).get(row.id) as { n: number }).n,
       createdAt: row.created_at,
       lastActivityAt: row.last_activity_at,
       endedReason: row.ended_reason ?? null,
@@ -885,22 +907,39 @@ export class ChatStore {
   tasks(sessionId: string): ChatTask[] {
     const rows = this.#db()
       .prepare(
-        'SELECT task_id, tool_use_id, label, subagent_type, status, tokens, tool_uses, duration_ms, summary, started_at, ended_at FROM chat_tasks WHERE session_id = ? ORDER BY started_at, task_id',
+        `SELECT ${TASK_COLUMNS} FROM chat_tasks WHERE session_id = ? ORDER BY started_at, task_id`,
       )
       .all(sessionId) as TaskRow[];
-    return rows.map((r) => ({
-      taskId: r.task_id,
-      toolUseId: r.tool_use_id,
-      description: r.label ?? '',
-      subagentType: r.subagent_type,
-      status: r.status && TASK_STATUSES.has(r.status) ? (r.status as ChatTask['status']) : 'running',
-      tokens: r.tokens,
-      toolUses: r.tool_uses,
-      durationMs: r.duration_ms,
-      summary: r.summary,
-      startedAt: r.started_at ?? '',
-      endedAt: r.ended_at,
-    }));
+    return rows.map(taskOut);
+  }
+
+  /** One sub-agent or background task, or null. */
+  task(sessionId: string, taskId: string): ChatTask | null {
+    const row = this.#db().prepare(`SELECT ${TASK_COLUMNS} FROM chat_tasks WHERE session_id = ? AND task_id = ?`).get(sessionId, taskId) as TaskRow | undefined;
+    return row ? taskOut(row) : null;
+  }
+
+  /**
+   * The model a sub-agent runs on, by the Task call that started it. `ifUnknown` (what Claude Code launched it on) only fills a gap; what its
+   * own lines report (`message.model`) always wins. Says whether a row changed.
+   */
+  setTaskModel(sessionId: string, toolUseId: string, model: string, opts: { ifUnknown?: boolean } = {}): boolean {
+    const result = this.#writable()
+      .prepare(`UPDATE chat_tasks SET model = ? WHERE session_id = ? AND tool_use_id = ? AND (model IS NULL OR (? = 0 AND model <> ?))`)
+      .run(model, sessionId, toolUseId, opts.ifUnknown ? 1 : 0, model);
+    return Number(result.changes) > 0;
+  }
+
+  /**
+   * A sub-agent's own transcript: the events of the lines that carry its Task call as their parent, after `after`, oldest first. At most
+   * `limit` (the newest of them); `truncated` says older ones were left out. Payloads are stored redacted, as for `history`.
+   */
+  taskEvents(sessionId: string, toolUseId: string, after = 0, limit = TASK_EVENTS_MAX): { events: ChatEvent[]; truncated: boolean } {
+    const rows = this.#db()
+      .prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND parent_tool_use_id = ? AND seq > ? ORDER BY seq DESC LIMIT ?')
+      .all(sessionId, toolUseId, after, limit + 1) as EventRow[];
+    const truncated = rows.length > limit;
+    return { events: rows.slice(0, limit).reverse().map((r) => this.#toEvent(r)), truncated };
   }
 
   /** Whether a sub-agent or background task is still running. */
@@ -908,12 +947,38 @@ export class ChatStore {
     return !!this.#db().prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running') LIMIT 1`).get(sessionId);
   }
 
-  /** Its process is gone, and its sub-agents and background tasks with it: they read `killed`. Says whether any did. */
-  endRunningTasks(sessionId: string): boolean {
+  /**
+   * Its process is gone, and its sub-agents and background tasks with it: they read `killed`, ended now. `only` limits it to those tasks
+   * (a move: the old run's, while the new run may already have its own). Says whether any did.
+   */
+  endRunningTasks(sessionId: string, only?: readonly string[]): boolean {
+    if (only && !only.length) return false;
+    const pick = only ? ` AND task_id IN (${only.map(() => '?').join(', ')})` : '';
     const result = this.#writable()
-      .prepare(`UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE session_id = ? AND (status IS NULL OR status = 'running')`)
-      .run(this.#stamp(), sessionId);
+      .prepare(`UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE session_id = ? AND (status IS NULL OR status = 'running')${pick}`)
+      .run(this.#stamp(), sessionId, ...(only ?? []));
     return Number(result.changes) > 0;
+  }
+
+  /** The tasks of a session still running, by id. */
+  runningTaskIds(sessionId: string): string[] {
+    return (
+      this.#db().prepare(`SELECT task_id FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running') ORDER BY task_id`).all(sessionId) as {
+        task_id: string;
+      }[]
+    ).map((r) => r.task_id);
+  }
+
+  /**
+   * At a portal start: a session whose process isn't live (asleep, gone, ended) has nothing running, whatever its tasks last said (a
+   * portal that stopped mid-move or mid-restart never closed them). They read `killed`, ended now. Returns the sessions it changed.
+   */
+  endOrphanTasks(): string[] {
+    const db = this.#writable();
+    const where = `(status IS NULL OR status = 'running') AND session_id IN (SELECT id FROM chat_sessions WHERE coalesce(process, '') != 'live' OR state = 'ended')`;
+    const ids = (db.prepare(`SELECT DISTINCT session_id FROM chat_tasks WHERE ${where}`).all() as { session_id: string }[]).map((r) => r.session_id);
+    if (ids.length) db.prepare(`UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE ${where}`).run(this.#stamp());
+    return ids;
   }
 
   /** The description of the task a `Task` tool_use started, to label its sub-agent's lines. */
@@ -1230,6 +1295,7 @@ export class ChatStore {
     if (typeof payload.text === 'string') ev.text = payload.text;
     const agentLabel = typeof payload.agentLabel === 'string' ? payload.agentLabel : row.parent_tool_use_id;
     if (agentLabel !== null) ev.agentLabel = agentLabel;
+    if (row.parent_tool_use_id) ev.parentToolUseId = row.parent_tool_use_id;
     if (typeof payload.toolName === 'string') ev.toolName = payload.toolName;
     if (row.request_id !== null) ev.requestId = row.request_id;
     if (payload.request && typeof payload.request === 'object') ev.request = payload.request as ChatRequest;
