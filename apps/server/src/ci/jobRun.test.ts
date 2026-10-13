@@ -110,7 +110,8 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
   const edit = (fn: (s: ReturnType<typeof state>) => void) => { const s = state(); fn(s); writeFileSync(join(root, 'state.json'), JSON.stringify(s)); };
   const calls = () => (existsSync(join(root, 'calls.log')) ? readFileSync(join(root, 'calls.log'), 'utf8') : '');
   const applied = () => { const d = join(root, 'applied'); return existsSync(d) ? readdirSync(d).map((f) => readFileSync(join(d, f), 'utf8')) : []; };
-  return { root, npmToken, giteaToken, start, run, state, edit, calls, applied, log: () => readFileSync(join(root, 'job.log'), 'utf8') };
+  const applied1 = () => { const [m] = applied(); assert.ok(m, 'a manifest was applied'); return m; };
+  return { root, npmToken, giteaToken, start, run, state, edit, calls, applied, applied1, log: () => readFileSync(join(root, 'job.log'), 'utf8') };
 }
 
 async function waitFor(what: string, cond: () => boolean, ms = 15_000) {
@@ -122,7 +123,8 @@ async function waitFor(what: string, cond: () => boolean, ms = 15_000) {
 }
 
 type Manifest = { metadata: { name: string; labels: Record<string, string>; annotations: Record<string, string> }; spec: Record<string, unknown> & { template: { metadata: { labels: Record<string, string> }; spec: Record<string, unknown> & { containers: { image: string; env: { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string } } }[]; resources: unknown; args: string[]; volumeMounts: unknown }[]; volumes: unknown } } } };
-const envOf = (m: Manifest) => Object.fromEntries(m.spec.template.spec.containers[0].env.map((e) => [e.name, e.value ?? e.valueFrom]));
+const container = (m: Manifest) => { const c = m.spec.template.spec.containers[0]; assert.ok(c); return c; };
+const envOf = (m: Manifest) => Object.fromEntries(container(m).env.map((e) => [e.name, e.value ?? e.valueFrom]));
 
 test('a run: the suspended Job manifest, the stream, the exit code, the artifacts, the Secret gone and the Job kept for its TTL', () => {
   const w = world([], { rc: 3 });
@@ -135,16 +137,16 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   assert.equal(readFileSync(join(w.root, 'got/reports/junit.xml'), 'utf8'), '<testsuites tests="1"/>');
   assert.match(w.log(), /hello from the job/);
 
-  const [text] = w.applied();
+  const text = w.applied1();
   const m = yamlLoad(text) as Manifest;
   assert.match(m.metadata.name, /^claudepilot-job-[0-9a-f]{8}$/);
   assert.deepEqual(m.metadata.labels, { app: 'claudepilot-job-run', 'job-run/chat': 'chat-a', 'job-run/role': 't107-runner', 'job-run/repo': 'claudepilot' });
-  assert.match(m.metadata.annotations['job-run/owner'], new RegExp(`^${hostname()}/\\d+/\\d+$`));
+  assert.match(m.metadata.annotations['job-run/owner'] ?? '', new RegExp(`^${hostname()}/\\d+/\\d+$`));
   assert.equal(m.spec.suspend, true, 'created suspended: the queue lets it out');
   assert.equal(m.spec.backoffLimit, 0);
   assert.equal(m.spec.activeDeadlineSeconds, 3600);
   assert.equal(m.spec.ttlSecondsAfterFinished, 1800);
-  const pod = m.spec.template.spec, c = pod.containers[0];
+  const pod = m.spec.template.spec, c = container(m);
   assert.equal(pod.automountServiceAccountToken, false);
   assert.match(JSON.stringify(pod.affinity), /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces"\].*"claudepilot.managed":"true"/);
   assert.deepEqual(c.resources, { requests: { cpu: '1000m', memory: '2Gi' }, limits: { cpu: '4', memory: '8Gi' } });
@@ -173,7 +175,7 @@ test('several words are one command, each quoted; the exit code 0 is passed on',
   const w = world();
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'node', '--test', 'src/a b.test.ts']);
   assert.equal(r.code, 0, r.out);
-  const e = envOf(yamlLoad(w.applied()[0]) as Manifest);
+  const e = envOf(yamlLoad(w.applied1()) as Manifest);
   assert.equal(Buffer.from(String(e.JR_CMD), 'base64').toString(), 'node --test src/a\\ b.test.ts ');
   assert.equal(e.JR_STEPS, 'none');
 });
@@ -195,13 +197,13 @@ test('Konfersi: from Gitea with the credential helper\'s token in the Secret (ne
   writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, 'git said {TOKEN}\n') }));
   const r = w.run(['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'work/x', '--also', 'shared/konfersi-shared', '--', 'npx vitest run src/a.test.ts']);
   assert.equal(r.code, 0, r.out);
-  const m = yamlLoad(w.applied()[0]) as Manifest;
+  const m = yamlLoad(w.applied1()) as Manifest;
   const e = envOf(m);
   assert.equal(e.JR_REPO_URL, 'https://git.konfersi.com/platform/konfersi-backend.git');
   assert.equal(e.JR_ALSO, 'konfersi-shared=https://git.konfersi.com/shared/konfersi-shared.git@stg');
   assert.equal(m.metadata.labels['job-run/repo'], 'konfersi-backend');
   assert.deepEqual(e.GIT_TOKEN, { secretKeyRef: { name: m.metadata.name, key: 'git-token', optional: true } });
-  for (const where of [r.out, w.log(), w.calls(), w.applied()[0]]) assert.ok(!where.includes(w.giteaToken));
+  for (const where of [r.out, w.log(), w.calls(), w.applied1()]) assert.ok(!where.includes(w.giteaToken));
   assert.match(r.out, /git said \[redacted\]/);
 });
 
@@ -211,7 +213,7 @@ test('the cluster-wide cap: three running Jobs, the fourth says "queued behind 3
   await waitFor('the queue line', () => /queued behind 3 \(at most 3 at once, 2 per chat\)/.test(s.out()));
   await new Promise((r) => setTimeout(r, 400));
   assert.ok(w.state().jobs.find((j) => j.name.startsWith('claudepilot-job-') && !/0000000\d$/.test(j.name))?.suspend, 'still suspended');
-  w.edit((st) => { st.jobs[0].done = true; st.jobs[0].rc = 0; });
+  w.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
   const r = await s.done;
   assert.equal(r.code, 0, r.out);
   assert.equal((r.out.match(/queued behind/g) ?? []).length, 1, 'said once, not every poll');
@@ -225,7 +227,7 @@ test('the per-chat cap: a chat with two running waits, another chat goes past it
   assert.equal(b.code, 0, b.out);
   assert.doesNotMatch(b.out, /queued behind/, 'room cluster-wide: chat-b is not held up by chat-a\'s queued Job');
   assert.doesNotMatch(a.out(), /rc=/, 'chat-a still waits');
-  w.edit((st) => { st.jobs[1].done = true; st.jobs[1].rc = 0; });
+  w.edit((st) => { Object.assign(st.jobs[1] ?? {}, { done: true, rc: 0 }); });
   const r = await a.done;
   assert.equal(r.code, 0, r.out);
 });
@@ -315,7 +317,7 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   assert.match(r.stdout, /ran in claudepilot\n/);
   assert.match(r.stdout, /=== JOB-RUN ARTIFACTS BEGIN\n[A-Za-z0-9+/=\n]+=== JOB-RUN ARTIFACTS END\n/);
   assert.match(r.stdout, /=== JOB-RUN SUMMARY claudepilot@[0-9a-f]+ checkout=\d+s steps=\d+s run=\d+s rc=3 node=k3s-master\n=== JOB-RUN EXIT 3\n$/);
-  const b64 = r.stdout.split('=== JOB-RUN ARTIFACTS BEGIN\n')[1].split('=== JOB-RUN ARTIFACTS END')[0].replace(/\s/g, '');
+  const b64 = (r.stdout.split('=== JOB-RUN ARTIFACTS BEGIN\n')[1] ?? '').split('=== JOB-RUN ARTIFACTS END')[0]?.replace(/\s/g, '') ?? '';
   const list = spawnSync('tar', ['-tzf', '-'], { input: Buffer.from(b64, 'base64'), encoding: 'utf8' }).stdout;
   assert.match(list, /out\/r\.txt/);
   const missing = pod('no-such-branch', 'true');
