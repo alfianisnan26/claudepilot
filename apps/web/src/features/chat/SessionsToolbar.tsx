@@ -1,6 +1,7 @@
 import { cn } from '@isnanme/ui';
 import { LIST_GROUP_BYS, type ListFilter, type ListGroupBy } from '@portal/contracts';
-import { ListChecks, Pin, Rows3, Search, X } from 'lucide-react';
+import { Archive, CircleAlert, CircleStop, Layers, ListChecks, LoaderCircle, Moon, Pin, Rows3, Search, X } from 'lucide-react';
+import { STATUS_TITLE, visibleChips, type ChipCounts } from './listOrder';
 
 export interface ViewState {
   groupBy: ListGroupBy;
@@ -18,22 +19,23 @@ const GROUP_LABEL: Record<ListGroupBy, string> = {
   ticket: 'Ticket',
 };
 
-/** The owner's order (FR2): Pinned first (shown once anything is pinned), Idle next (the default when nothing is), All last. */
-const CHIPS: { id: ListFilter | 'archived'; label: string; icon?: React.ReactNode }[] = [
-  { id: 'pinned', label: 'Pinned', icon: <Pin className="size-3.5" aria-hidden="true" /> },
-  { id: 'idle', label: 'Idle' },
-  { id: 'attention', label: 'Needs you' },
-  { id: 'working', label: 'Working' },
-  { id: 'ended', label: 'Ended' },
-  { id: 'archived', label: 'Archived' },
-  { id: 'all', label: 'All' },
-];
+/** The chips' names and icons; their order and which show is `listOrder.ts`'s (T-100: what needs attention first, All last). */
+const CHIP: Record<ListFilter | 'archived', { label: string; icon: React.ReactNode }> = {
+  attention: { label: STATUS_TITLE.attention, icon: <CircleAlert className="size-4" aria-hidden="true" /> },
+  working: { label: STATUS_TITLE.working, icon: <LoaderCircle className="size-4" aria-hidden="true" /> },
+  idle: { label: STATUS_TITLE.idle, icon: <Moon className="size-4" aria-hidden="true" /> },
+  pinned: { label: STATUS_TITLE.pinned, icon: <Pin className="size-4" aria-hidden="true" /> },
+  ended: { label: STATUS_TITLE.ended, icon: <CircleStop className="size-4" aria-hidden="true" /> },
+  archived: { label: 'Archived', icon: <Archive className="size-4" aria-hidden="true" /> },
+  all: { label: 'All', icon: <Layers className="size-4" aria-hidden="true" /> },
+};
 
 /**
  * Search, filters and grouping for the Sessions list. The search matches title, workspace, Claude,
- * folder, branch, ticket and state; the chips filter by what is pinned, idle, needs you, is working or ended (with
- * counts; All last); Archived is a list of its own. Select turns the rows into checkboxes for bulk End, Archive and
- * Delete. Phones get the chips as a row that scrolls sideways, so nothing wraps into a tall block.
+ * folder, branch, ticket and state; the chips filter by what needs you, is in progress, idle, pinned or ended (with counts, each
+ * only when it has sessions; All last); Archived is a list of its own. Select turns the rows into checkboxes for bulk End, Archive
+ * and Delete. Phones get the chips as a row that scrolls sideways, so nothing wraps into a tall block, and icon only (with the count)
+ * except the chip you are on, which says its name (the text diet); every chip is a 44 px target there.
  */
 export function SessionsToolbar({
   view,
@@ -43,7 +45,7 @@ export function SessionsToolbar({
   onSelect,
 }: {
   view: ViewState;
-  counts: Record<ListFilter | 'archived', number>;
+  counts: ChipCounts;
   onChange: (next: Partial<ViewState>) => void;
   selecting: boolean;
   onSelect: () => void;
@@ -100,23 +102,26 @@ export function SessionsToolbar({
         </label>
       </div>
       <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden">
-        {CHIPS.filter((c) => c.id === 'all' || c.id === 'archived' || c.id === 'idle' || counts[c.id] > 0 || active(c.id)).map((c) => {
-          if (c.id === 'archived' && counts.archived === 0 && !view.archived) return null;
-          const on = active(c.id);
+        {visibleChips(counts, view.archived ? 'archived' : view.filter).map((id) => {
+          const c = CHIP[id];
+          const on = active(id);
           return (
             <button
-              key={c.id}
+              key={id}
               type="button"
+              data-chip={id}
               aria-pressed={on}
-              onClick={() => onChange(c.id === 'archived' ? { archived: !view.archived, filter: 'all' } : { archived: false, filter: c.id })}
+              aria-label={`${c.label} ${counts[id]}`}
+              title={c.label}
+              onClick={() => onChange(id === 'archived' ? { archived: !view.archived, filter: 'all' } : { archived: false, filter: id })}
               className={cn(
-                'press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[13.5px] font-semibold transition-colors',
+                'press inline-flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-full border px-3 text-[13.5px] font-semibold transition-colors sm:h-9 sm:min-w-0 sm:px-3.5',
                 on ? 'border-primary bg-primary text-primary-ink' : 'border-line bg-surface text-ink-soft hover:border-line-strong hover:text-ink',
               )}
             >
               {c.icon}
-              {c.label}
-              <span className={cn('tabular-nums', on ? 'text-primary-ink/70' : 'text-muted')}>{counts[c.id]}</span>
+              <span className={cn(!on && 'max-sm:sr-only')}>{c.label}</span>
+              <span className={cn('tabular-nums', on ? 'text-primary-ink/70' : 'text-muted')}>{counts[id]}</span>
             </button>
           );
         })}
@@ -124,9 +129,11 @@ export function SessionsToolbar({
           <button
             type="button"
             onClick={onSelect}
-            className="press ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13.5px] font-semibold text-muted hover:bg-surface-2 hover:text-ink"
+            aria-label="Select"
+            title="Select"
+            className="press ml-auto inline-flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-full px-3 text-[13.5px] font-semibold text-muted hover:bg-surface-2 hover:text-ink sm:h-9"
           >
-            <ListChecks className="size-4" aria-hidden="true" /> Select
+            <ListChecks className="size-4" aria-hidden="true" /> <span className="max-sm:sr-only">Select</span>
           </button>
         )}
       </div>

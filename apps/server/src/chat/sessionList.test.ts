@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { attentionTier, buildListView, defaultListFilter, LIST_FILTERS, matchesQuery, needsYou, rollupLine, type ChatSession, type ListRow } from '@portal/contracts';
+import { attentionTier, buildListView, LIST_FILTERS, matchesQuery, needsYou, rollupLine, type ChatSession, type ListRow } from '@portal/contracts';
 
 let n = 0;
 /** A session as the portal lists it; `at` is minutes ago for the last activity. */
@@ -94,7 +94,7 @@ test('filters and search: a filter keeps its states, search needs every word and
   assert.deepEqual([v.shown, v.total], [1, 4]);
 });
 
-test('pinned: the Pinned chip lists what is pinned, a pinned session leads its group, and the default chip is Pinned only when something is', () => {
+test('pinned: the Pinned chip lists what is pinned and a pinned session leads its group; the chips run in the order of attention (T-100)', () => {
   const pin = new Date().toISOString();
   const list = [
     session({ id: 'waiting', state: 'waiting', waiting: 1, at: 1 }),
@@ -105,10 +105,7 @@ test('pinned: the Pinned chip lists what is pinned, a pinned session leads its g
   assert.deepEqual(ids(buildListView(list, { filter: 'pinned' }).groups[0]!.rows), ['old-pinned', 'ended-pinned']);
   assert.deepEqual(ids(buildListView(list).groups[0]!.rows), ['old-pinned', 'ended-pinned', 'waiting', 'new-idle'], 'pinned first, then by need');
   assert.deepEqual(ids(buildListView(list, { groupBy: 'workspace' }).groups[0]!.rows), ['old-pinned', 'ended-pinned', 'waiting', 'new-idle']);
-  assert.equal(defaultListFilter(list), 'pinned');
-  assert.equal(defaultListFilter([list[0]!, list[2]!]), 'idle', 'nothing pinned: Idle');
-  assert.equal(defaultListFilter([session({ pinnedAt: pin, archivedAt: pin, state: 'ended' })]), 'idle', 'an archived pin does not count');
-  assert.deepEqual(LIST_FILTERS, ['pinned', 'idle', 'attention', 'working', 'ended', 'all'], 'the chips in order: Pinned first, All last');
+  assert.deepEqual(LIST_FILTERS, ['attention', 'working', 'idle', 'pinned', 'ended', 'all'], 'the chips in order: Needs you first, All last');
 });
 
 test('archived sessions are a list of their own: left out by default, and the only ones shown when asked', () => {

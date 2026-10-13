@@ -7,13 +7,12 @@ import type { ChatSession } from './chat.js';
 export type ListGroupBy = 'none' | 'workspace' | 'claude' | 'worktree' | 'ticket';
 export const LIST_GROUP_BYS: readonly ListGroupBy[] = ['none', 'workspace', 'claude', 'worktree', 'ticket'];
 
-/** `pinned`: what the person pinned. `attention`: waiting on you, interrupted, or ended for safety. In the chips' order: All is last. */
-export type ListFilter = 'pinned' | 'idle' | 'attention' | 'working' | 'ended' | 'all';
-export const LIST_FILTERS: readonly ListFilter[] = ['pinned', 'idle', 'attention', 'working', 'ended', 'all'];
-
-/** The chip the list opens on: Pinned when anything is pinned, else Idle (the owner's choice, FR2). */
-export const defaultListFilter = (sessions: readonly Pick<ChatSession, 'pinnedAt' | 'archivedAt'>[]): ListFilter =>
-  sessions.some((s) => s.pinnedAt && !s.archivedAt) ? 'pinned' : 'idle';
+/**
+ * `attention`: waiting on you, interrupted, or ended for safety. `working`: in progress. `pinned`: what the person pinned. In the chips'
+ * order (T-100): what needs attention first, All last. The web's `features/chat/listOrder.ts` decides which chips show and which one opens.
+ */
+export type ListFilter = 'attention' | 'working' | 'idle' | 'pinned' | 'ended' | 'all';
+export const LIST_FILTERS: readonly ListFilter[] = ['attention', 'working', 'idle', 'pinned', 'ended', 'all'];
 
 /** What a session's workspace is, as far as the list needs: gone, or its status. */
 export interface WorkspaceFact {
@@ -75,6 +74,11 @@ export interface ListOptions {
   archived?: boolean;
   /** What is known of a workspace, by its id. */
   workspaces?: (workspaceId: string) => WorkspaceFact | undefined;
+  /**
+   * Groups of the caller's own (the web's status headings in All, T-100), in place of `groupBy`: each session's group and the group's
+   * place in the list (lower first). Nesting, rollups and "started by" work as for any grouping.
+   */
+  groupOf?: (s: ChatSession) => { key: string; title: string; order: number };
 }
 
 /** Ended for a safety or integrity stop (chat PRD §6 rule 1, §10.4): something to look at. */
@@ -174,7 +178,7 @@ function rollupOf(root: ChatSession, kids: ReadonlyMap<string, ChatSession[]>): 
  * came from. Groups are ordered by their most urgent session; "no ticket" and "no worktree" come last.
  */
 export function buildListView(all: readonly ChatSession[], opts: ListOptions = {}): ListView {
-  const { groupBy = 'none', filter = 'all', query = '', archived = false, workspaces } = opts;
+  const { groupBy = 'none', filter = 'all', query = '', archived = false, workspaces, groupOf } = opts;
   const byId = new Map(all.map((s) => [s.id, s]));
   const kids = new Map<string, ChatSession[]>();
   for (const s of all) if (s.parentId && byId.has(s.parentId)) kids.set(s.parentId, [...(kids.get(s.parentId) ?? []), s]);
@@ -183,7 +187,11 @@ export function buildListView(all: readonly ChatSession[], opts: ListOptions = {
   const visible = pool.filter((s) => matchesFilter(s, filter) && matchesQuery(s, query));
   const shownIds = new Set(visible.map((s) => s.id));
 
-  const groupKey = (s: ChatSession): { key: string; title: string; subtitle: string | null; last: boolean } => {
+  const groupKey = (s: ChatSession): { key: string; title: string; subtitle: string | null; last: boolean; order?: number } => {
+    if (groupOf) {
+      const g = groupOf(s);
+      return { key: g.key, title: g.title, subtitle: null, last: false, order: g.order };
+    }
     switch (groupBy) {
       case 'workspace':
         return { key: s.workspaceId, title: workspaceLabel(s.workspaceId), subtitle: targetOf(s.workspaceId), last: false };
@@ -255,7 +263,7 @@ export function buildListView(all: readonly ChatSession[], opts: ListOptions = {
   }
   // Grouped by Claude, a chat that moved shows under each Claude it ran on: running under its current one, and as
   // "ran here earlier" under the others (the same chat, one tap to open it; never a second session).
-  if (groupBy === 'claude') {
+  if (groupBy === 'claude' && !groupOf) {
     for (const s of visible) {
       for (const p of s.previousClaudes) {
         const key = `${s.workspaceId}\u0000${p.claudeId}`;
@@ -273,7 +281,8 @@ export function buildListView(all: readonly ChatSession[], opts: ListOptions = {
   const real = (g: ListGroup) => g.rows.filter((r) => !r.earlier);
   const rank = (g: ListGroup) => Math.min(5, ...real(g).map((r) => attentionTier(r.session)), ...real(g).flatMap((r) => r.children.map((c) => attentionTier(c.session))));
   const newest = (g: ListGroup) => Math.max(...g.rows.map((r) => Date.parse(r.session.lastActivityAt)));
-  groups.sort((a, b) => Number(members.get(a.key)!.meta.last) - Number(members.get(b.key)!.meta.last) || rank(a) - rank(b) || newest(b) - newest(a) || a.title.localeCompare(b.title));
+  const order = (g: ListGroup) => members.get(g.key)!.meta.order ?? 0;
+  groups.sort((a, b) => order(a) - order(b) || Number(members.get(a.key)!.meta.last) - Number(members.get(b.key)!.meta.last) || rank(a) - rank(b) || newest(b) - newest(a) || a.title.localeCompare(b.title));
 
   // The queue of what waits on you: sessions with a request open, not ended, not archived.
   const attention = visible
