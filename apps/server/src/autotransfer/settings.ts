@@ -58,6 +58,28 @@ defineSetting({
   help: 'Also move when, at its current pace, a limit runs out within 2 hours, with 30 % or less left (an estimate, used only with enough readings).',
 });
 defineSetting({
+  key: K.respectPace,
+  type: 'boolean',
+  default: true,
+  scope: 'global',
+  group: 'automove',
+  order: 42,
+  label: 'Respect pace',
+  help: 'On: a chat at the threshold moves only when its Claude, at its current pace, is projected to use at least the "Pace" percent by its next reset; under that it stays (a move stops running agents and costs a new cache). A used-up Claude always moves at once. With no confident projection yet (one reading, a short span) the threshold alone decides, and the trail says so. Owner decision D-39.',
+});
+defineSetting({
+  key: K.paceMinPct,
+  type: 'number',
+  default: AUTO_BOUNDS.paceMinPct.default,
+  min: AUTO_BOUNDS.paceMinPct.min,
+  max: AUTO_BOUNDS.paceMinPct.max,
+  scope: 'global',
+  group: 'automove',
+  order: 44,
+  label: 'Pace',
+  help: 'With "Respect pace" on: the projected use at the reset, in percent, from which a chat at the threshold moves. 90 by default: projected 85 % stays, 92 % moves.',
+});
+defineSetting({
   key: K.minPauseMin,
   type: 'number',
   default: AUTO_BOUNDS.minPauseMin.default,
@@ -214,6 +236,8 @@ export function platformSettings(r: AutoSettingsReader | null): AutoTransferSett
     modelFallback: parseModelFallback(get(K.modelFallback)),
     keepModelFirst: b(K.keepModelFirst, true),
     dryRun: b(K.dryRun, false),
+    respectPace: b(K.respectPace, true),
+    paceMinPct: clamp(get(K.paceMinPct), AUTO_BOUNDS.paceMinPct),
   };
 }
 

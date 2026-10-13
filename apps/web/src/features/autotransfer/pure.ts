@@ -132,6 +132,8 @@ export function whyText(why: AutoRefusal | null): string | null {
       return 'Not allowed for this chat';
     case 'folder_untrusted':
       return 'The folder needs trusting again';
+    case 'pace_under':
+      return 'On pace to last until the reset';
     default:
       return null;
   }

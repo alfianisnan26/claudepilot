@@ -74,6 +74,8 @@ export interface SourceReading {
   limit: AutoLimit;
   /** The least left over the shared windows alone (null when none has a number): what a model change on this Claude would still have. */
   sharedLeftPct: number | null;
+  /** D-39: at the threshold, held back by the pace rule (projected under `paceMinPct` at the reset). */
+  paceHold?: boolean;
 }
 
 /** Whether a window stops every model (`session`, `week`) rather than one model's own. */
@@ -107,7 +109,14 @@ export function freshReading(c: Pick<ClaudeUsage, 'checkedAt' | 'stale'>, nowMs:
  * `exhausted` when one of them is at 100 %; `low` at or under the threshold; `projection` when on, confident, within 2 hours and at most 30 % left.
  * Null when no window applies (no number yet).
  */
-export function sourceReading(c: ClaudeUsage, model: string | null, thresholdPct: number, useProjection: boolean, nowMs: number): SourceReading | null {
+export function sourceReading(
+  c: ClaudeUsage,
+  model: string | null,
+  thresholdPct: number,
+  useProjection: boolean,
+  nowMs: number,
+  pace: { respect: boolean; minPct: number } = { respect: false, minPct: 90 },
+): SourceReading | null {
   const family = modelFamily(model);
   const windows = c.windows.filter((w) => live(w, nowMs) && (ALL_MODEL_WINDOWS.includes(w.key) || windowOfFamily(w.key, family)));
   if (!windows.length) return null;
@@ -120,9 +129,26 @@ export function sourceReading(c: ClaudeUsage, model: string | null, thresholdPct
     resetsAt: window.resetsAt ? measuredFigure(window.resetsAt) : unavailableFigure('no_reset_time'),
   };
   let reason: AutoReason | null = null;
+  let paceHold = false;
   if (exhausted) reason = 'exhausted';
-  else if (leftPct <= thresholdPct) reason = 'low';
-  else if (useProjection && leftPct <= AUTO_CONSTANTS.projectionMaxLeftPct) {
+  else if (leftPct <= thresholdPct) {
+    reason = 'low';
+    // D-39: at the threshold the chat moves only when the binding window is projected to reach `minPct` by its reset (the projection the
+    // usage summary shows: its pace, when confident). No confident projection: the threshold alone decides, and the facts say so.
+    if (pace.respect) {
+      const p = window.pace;
+      const projected = p && !p.lowConfidence && p.projectedPct.value !== null ? p.projectedPct.value : null;
+      if (projected === null) facts.pace = { verdict: 'unavailable', minPct: pace.minPct };
+      else {
+        facts.projectedPct = estimatedFigure(projected);
+        if (p!.etaAt.value !== null) facts.etaAt = estimatedFigure(p!.etaAt.value);
+        const under = projected < pace.minPct;
+        facts.pace = { verdict: under ? 'under' : 'over', minPct: pace.minPct };
+        if (under) (reason = null), (paceHold = true);
+      }
+    }
+  }
+  else if (useProjection && !paceHold && leftPct <= AUTO_CONSTANTS.projectionMaxLeftPct) {
     // The window that runs out first at its pace, among those that stop the chat, counts only with confidence and within the horizon.
     let best: { eta: number; w: ClaudeUsageWindow } | null = null;
     for (const w of windows) {
@@ -142,7 +168,7 @@ export function sourceReading(c: ClaudeUsage, model: string | null, thresholdPct
   facts.limit = limit;
   const shared = windows.filter((w) => sharedWindow(w.key));
   const sharedLeftPct = shared.length ? Math.max(0, round1(Math.min(...shared.map((w) => (w.level === 'exhausted' ? 0 : 100 - w.usedPct!))))) : null;
-  return { window, leftPct, reason, facts, limit, sharedLeftPct };
+  return { window, leftPct, reason, facts, limit, sharedLeftPct, paceHold };
 }
 
 /** What the engine knows about a chat's history of moves (from its own rows), for the safeguards and the guards on the choice. */
@@ -297,12 +323,12 @@ export function decide(input: DecideInput): Decision {
   const source = input.claudes.find((c) => c.claudeId === session.claudeId);
   if (!source || source.runsOn !== 'plan' || !source.checkedAt) return { act: 'none', code: 'no_plan_reading', reading: null };
   const threshold = input.claudeThresholdPct ?? settings.thresholdPct;
-  const reading = sourceReading(source, session.model, threshold, settings.useProjection, nowMs);
+  const reading = sourceReading(source, session.model, threshold, settings.useProjection, nowMs, { respect: settings.respectPace, minPct: settings.paceMinPct });
   if (!reading) return { act: 'none', code: 'no_plan_reading', reading: null };
   // 3. A fresh reading.
   if (!freshReading(source, nowMs)) return { act: 'none', code: 'stale_reading', reading };
   // 4. A reason.
-  if (!reading.reason) return { act: 'none', code: 'above_threshold', reading };
+  if (!reading.reason) return { act: 'none', code: reading.paceHold ? 'pace_under' : 'above_threshold', reading };
   // 5. The owner.
   if (!input.ownerOk) return { act: 'none', code: 'owner_denied', reading };
   // 6. The safeguards. Not for a source already out of quota (R2, T-105): the chat can do nothing there, so it moves at once, pause and

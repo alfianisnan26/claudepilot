@@ -10,6 +10,7 @@
 // Numbers are never invented: a percent left is `measured` (a reading Claude Code gave); a projection is an `estimate`; a figure that is
 // not available says why (`Figure`, claude-usage PRD section 20).
 
+import { modelInfo } from './models.js';
 import type { Figure } from './usage.js';
 
 /** `off`: nothing. `ask`: a card in the chat. `auto`: it moves by itself. */
@@ -49,6 +50,9 @@ export const AUTO_SETTING_KEYS = {
   keepModelFirst: 'automove.keepModelFirst',
   /** A move (automatic or by a person) to a Claude that has the chat's original model goes back to it (T-109). Off by default. */
   returnToOriginalModel: 'automove.returnToOriginalModel',
+  /** D-39 (T-105): the threshold rule moves a chat only when the Claude's projected use at its next reset is at least `paceMinPct`. */
+  respectPace: 'automove.respectPace',
+  paceMinPct: 'automove.paceMinPct',
 } as const;
 
 /** Defaults and bounds of the numeric settings. The defaults are design choices, not measurements. */
@@ -58,6 +62,8 @@ export const AUTO_BOUNDS = {
   maxPerSessionPerDay: { min: 1, max: 10, default: 8 },
   maxPerDay: { min: 1, max: 50, default: 30 },
   maxPerDestination: { min: 1, max: 10, default: 3 },
+  /** D-39: under this projected use at the reset, a chat at the threshold stays (owner, 2026-10-13). */
+  paceMinPct: { min: 50, max: 100, default: 90 },
 } as const;
 
 /** Constants, not settings (the PRD gives each one's reason). */
@@ -98,12 +104,16 @@ export interface AutoTransferSettings {
   keepModelFirst: boolean;
   /** Record what would happen, do nothing (T-105). */
   dryRun: boolean;
+  /** D-39: the threshold rule waits for the pace (the projected use at the reset at least `paceMinPct`); exhausted always moves. */
+  respectPace: boolean;
+  paceMinPct: number;
 }
 
 /** Reads `automove.modelFallback`: a comma or space list of model families, lower case, known ones only, no repeats. */
 export function parseModelFallback(raw: unknown): string[] {
   const out: string[] = [];
-  for (const w of String(typeof raw === 'string' ? raw : '').toLowerCase().split(/[\s,]+/)) if (/^(opus|sonnet|haiku)$/.test(w) && !out.includes(w)) out.push(w);
+  // The families the model catalogue knows (T-109: Fable too).
+  for (const w of String(typeof raw === 'string' ? raw : '').toLowerCase().split(/[\s,]+/)) if (modelInfo(w) && !out.includes(w)) out.push(w);
   return out;
 }
 
@@ -158,6 +168,7 @@ export const AUTO_REFUSALS = [
   'not_signed_in',
   'owner_denied', // the session's owner may no longer operate it, or may not use that Claude: nothing moves
   'move_failed', // the Move flow refused or did not finish; the chat stays where it was
+  'pace_under', // D-39: at the threshold, but the projected use at the reset is under `paceMinPct`: the chat stays (a move stops its agents)
   'folder_untrusted', // the Move flow refused because the chat's folder needs trusting again (its project settings changed)
 ] as const;
 export type AutoRefusal = (typeof AUTO_REFUSALS)[number];
@@ -192,6 +203,12 @@ export interface AutoFacts {
   destLeftPct?: Figure;
   /** The limit that is low on the source, and whether it stops every model or only the chat's. */
   limit?: AutoLimit;
+  /**
+   * D-39, with `respectPace`: how the pace rule judged a chat at the threshold. `over`: projected at least `paceMinPct` at the reset (it
+   * moves); `under`: projected below it (it stays); `unavailable`: no confident projection (a short span, one reading), so the threshold
+   * rule alone decided. `projectedPct` is that projection when there is one.
+   */
+  pace?: { verdict: 'over' | 'under' | 'unavailable'; minPct: number };
 }
 
 export const AUTO_SUGGESTION_STATES = ['open', 'moved', 'later', 'always', 'expired', 'superseded'] as const;

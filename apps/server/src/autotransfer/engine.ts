@@ -46,10 +46,37 @@ const REFRESH_MIN_GAP_MS = 30_000;
 /** The refusals that make a chat at or under the threshold wait for quota rather than give up (T-105 R3). */
 const WAIT_CODES: ReadonlySet<string> = new Set(['no_destination', 'destination_busy', 'session_cap', 'day_cap', 'paused']);
 /** What the engine says to a chat (fixed text over names and numbers; never anyone else's words). */
-const STEER_TEXT = (claude: string, leftPct: number, to: string) =>
-  `Your Claude (${claude}) is at ${leftPct}% left: finish the current step, commit and push your work, then stop. The portal moves this chat to ${to} and you continue there.`;
+/**
+ * The steer (T-105, the coordinator's way of moving a working chat): commit and push every sub-agent's work, the move comes at the end of
+ * this turn (in about N minutes at the latest when a run-out is projected), then restart the roles the move stops.
+ */
+const STEER_TEXT = (claude: string, leftPct: number, to: string, inMin: number | null) =>
+  `Your Claude (${claude}) is at ${leftPct}% left: finish the current step, commit and push your work and every sub-agent's work in progress, then stop. The portal moves this chat to ${to} ${inMin === null ? 'at the end of this turn' : `in about ${inMin} minute${inMin === 1 ? '' : 's'} at the latest (at the end of this turn)`}; after the move, start again the sub-agents and roles it interrupted.`;
 const CONTINUE_TEXT = (to: string, why: 'exhausted' | 'steered') =>
-  `Moved to ${to} by the portal (${why === 'exhausted' ? 'the Claude you were on ran out of quota' : 'as announced'}). Continue where you stopped.`;
+  `Moved to ${to} by the portal (${why === 'exhausted' ? 'the Claude you were on ran out of quota' : 'as announced'}). Continue where you stopped, and start again the sub-agents and roles the move interrupted.`;
+
+/**
+ * Minutes until the steer's move at the latest: the projected run-out (the limit ends the turn then, and an exhausted source moves at once);
+ * null when no run-out is projected (the move comes at the end of the turn, whenever that is).
+ */
+function minutesUntil(facts: AutoFacts, nowMs: number): number | null {
+  const t = facts.etaAt?.value ? Date.parse(facts.etaAt.value) : NaN;
+  return Number.isFinite(t) && t > nowMs ? Math.max(1, Math.round((t - nowMs) / 60_000)) : null;
+}
+
+const fig = (f: { value: number | string | null } | undefined, unit = '') => (f && f.value !== null ? `${f.value}${unit}` : 'unavailable');
+
+/** One line per trail row for the log (D-39): what, the chat, left, reset, projected at the reset, the threshold, the pace rule, where to, why. */
+export function decisionLine(e: Pick<AutoTransferEvent, 'kind' | 'sessionId' | 'reason' | 'from' | 'to' | 'facts' | 'code'>): string {
+  const f = e.facts;
+  const parts = [`${e.kind} session=${e.sessionId.slice(0, 8)}`, `from=${e.from?.name ?? '-'}`];
+  if (f) {
+    parts.push(`left=${fig(f.leftPct, '%')}`, `resets=${fig(f.resetsAt)}`, `projected=${fig(f.projectedPct, '%')}`, `threshold=${f.thresholdPct}%`);
+    if (f.pace) parts.push(`pace=${f.pace.verdict}(min ${f.pace.minPct}%)`);
+  }
+  parts.push(`to=${e.to ? `${e.to.name}${e.to.model ? ` on ${e.to.model}` : ''}` : '-'}`, `reason=${e.reason ?? '-'}`, `code=${e.code ?? '-'}`);
+  return parts.join(' ');
+}
 
 export interface EngineDeps {
   chat: ChatPort;
@@ -304,8 +331,9 @@ export class AutoTransferEngine {
       if (!src || src.runsOn !== 'plan' || !src.checkedAt) continue;
       const settings = effectiveSettings(platform, prefs);
       const threshold = this.#d.store.claude(ownerId, s.claudeId).thresholdPct ?? settings.thresholdPct;
-      const reading = sourceReading(src, s.model, threshold, settings.useProjection, now);
-      if (reading?.reason) this.enqueue(s.id);
+      const reading = sourceReading(src, s.model, threshold, settings.useProjection, now, { respect: settings.respectPace, minPct: settings.paceMinPct });
+      // A chat the pace rule holds (D-39) is looked at too: the hold is recorded once, and it moves when the projection climbs.
+      if (reading?.reason || reading?.paceHold) this.enqueue(s.id);
     }
   }
 
@@ -418,22 +446,23 @@ export class AutoTransferEngine {
       const code = d.act === 'warn' ? d.code : (d as { code: AutoRefusal }).code;
       this.#d.store.patchSession(id, ownerId, { waitingSince: iso(now), waitingCode: code });
       this.#record({ ...this.#base(s, ownerId, mode), kind: 'waiting', reason: d.reading!.reason, facts: { ...d.reading!.facts, ...this.#nextFreeFacts(s, claudes, settings.thresholdPct, now) }, code }, 'medium');
-    } else if (!holds && row.waitingSince && (d.act === 'move' || d.act === 'suggest' || d.act === 'wait' || (d.act === 'none' && d.code === 'above_threshold'))) {
+    } else if (!holds && row.waitingSince && (d.act === 'move' || d.act === 'suggest' || d.act === 'wait' || (d.act === 'none' && (d.code === 'above_threshold' || d.code === 'pace_under')))) {
       this.#d.store.patchSession(id, ownerId, { waitingSince: null, waitingCode: null });
       this.#record({ ...this.#base(s, ownerId, mode), kind: 'resumed', reason: d.reading?.reason ?? null, facts: d.reading?.facts ?? null, to: d.act === 'move' || d.act === 'wait' || d.act === 'suggest' ? d.to : null, code: d.act === 'none' ? d.code : null }, 'info');
     }
     switch (d.act) {
       case 'none': {
-        if (d.code === 'above_threshold' || d.code === 'stale_reading' || d.code === 'pooled' || d.code === 'no_plan_reading' || d.code === 'owner_denied') {
+        if (d.code === 'above_threshold' || d.code === 'pace_under' || d.code === 'stale_reading' || d.code === 'pooled' || d.code === 'no_plan_reading' || d.code === 'owner_denied') {
           // The source recovered (or can no longer be judged): an open card closes, a waiting move stops waiting.
           if (this.#d.store.openSuggestion(id)) this.#closeCard(id, 'expired');
           if (row.deferSince) this.#d.store.patchSession(id, ownerId, { deferSince: null });
         }
-        if (d.code === 'session_cap' || d.code === 'day_cap' || d.code === 'owner_denied') {
+        // The pace rule's hold (D-39) is said once per source window period, with its numbers (left, reset, projected, threshold).
+        if (d.code === 'session_cap' || d.code === 'day_cap' || d.code === 'owner_denied' || d.code === 'pace_under') {
           const key = `${d.code}|${s.claudeId}|${d.reading?.window.resetsAt ?? ''}`;
           if (row.refusedKey !== key) {
             this.#d.store.patchSession(id, ownerId, { refusedKey: key });
-            this.#record({ ...this.#base(s, ownerId, mode), kind: 'refused', reason: d.reading?.reason ?? null, facts: d.reading?.facts ?? null, code: d.code }, 'medium');
+            this.#record({ ...this.#base(s, ownerId, mode), kind: 'refused', reason: d.reading?.reason ?? (d.code === 'pace_under' ? 'low' : null), facts: d.reading?.facts ?? null, code: d.code }, d.code === 'pace_under' ? 'info' : 'medium');
           }
         }
         if (d.code === 'paused' && row.pausedUntil && ms(row.pausedUntil) > now) this.#wake(id, ms(row.pausedUntil) - now);
@@ -479,7 +508,7 @@ export class AutoTransferEngine {
       return;
     }
     try {
-      await this.#d.chat.send(s.id, STEER_TEXT(s.claudeName ?? 'Claude', d.reading.leftPct, d.to.name), { priority: 'next', actor: ENGINE_ACTOR, actorLabel: 'Auto move' });
+      await this.#d.chat.send(s.id, STEER_TEXT(s.claudeName ?? 'Claude', d.reading.leftPct, d.to.name, minutesUntil(d.facts, this.#d.clock.now())), { priority: 'next', actor: ENGINE_ACTOR, actorLabel: 'Auto move' });
       this.#record({ ...base, kind: 'steered' }, 'info');
     } catch (e) {
       this.#d.store.patchSession(s.id, ownerId, { steeredPeriod: null });
@@ -520,6 +549,8 @@ export class AutoTransferEngine {
   /** One trail row and one platform audit row (names, ids, numbers, codes: never message text). */
   #record(e: Omit<AutoTransferEvent, 'id' | 'at'>, severity: AuditInput['severity']): AutoTransferEvent {
     const row = this.#d.store.addEvent(e);
+    // The log line says the decision's numbers (D-39): names, ids and numbers only, never message text.
+    console.info(`[autotransfer] ${decisionLine(e)}`);
     this.#d.audit?.record({
       kind: `autotransfer.${e.kind}`,
       severity,

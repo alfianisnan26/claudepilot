@@ -83,6 +83,8 @@ const SETTINGS: AutoTransferSettings = {
   modelFallback: [],
   keepModelFirst: true,
   dryRun: false,
+  respectPace: true,
+  paceMinPct: 90,
 };
 
 function options(claudes: ClaudeUsage[], over: Partial<ChatSwitchOptions> = {}): ChatSwitchOptions {

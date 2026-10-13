@@ -79,7 +79,7 @@ test('a window past its reset has no number now, and the Claude is ranked by wha
   assert.deepEqual(row.windows.map((w) => [w.label, w.usedPct, w.reset]), [['Session', null, true], ['Week', 40, false]]);
 });
 
-const settings = (mode: AutoTransferSettings['mode'], thresholdPct = 10): AutoTransferSettings => ({ mode, thresholdPct, useProjection: true, minPauseMin: 30, maxPerSessionPerDay: 3, maxPerDay: 10, maxPerDestination: 4, sameModelOnly: true, allowApiKey: false, allowBypass: false, modelFallback: [], keepModelFirst: true, dryRun: false });
+const settings = (mode: AutoTransferSettings['mode'], thresholdPct = 10): AutoTransferSettings => ({ mode, thresholdPct, useProjection: true, minPauseMin: 30, maxPerSessionPerDay: 3, maxPerDay: 10, maxPerDestination: 4, sameModelOnly: true, allowApiKey: false, allowBypass: false, modelFallback: [], keepModelFirst: true, dryRun: false, respectPace: true, paceMinPct: 90 });
 const event = (id: number, actor: string, kind: AutoTransferEvent['kind'] = 'moved'): AutoTransferEvent => ({
   id, at: at(-id), userId: 'u_owner', sessionId: 's1', workspaceId: 'w1', kind, mode: 'auto', reason: 'low',
   from: { id: 'c1', name: 'Work' }, to: { id: 'c2', name: 'Home' }, facts: null, handoff: null, handoffId: null, code: null, actor,
