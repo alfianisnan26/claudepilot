@@ -2,14 +2,16 @@
 // listens on 127.0.0.1:0 (never 0.0.0.0), one listener per connection of the connector; each accepted connection becomes a `kube`
 // stream to the agent's proxy, which checks the per-connection bearer (`kubeToken()`), drops it and sets the service account's own.
 // The listener closes with the connection; the next connection brings a new port and token, so the KubernetesRuntime is made again.
-// The runtime never creates the namespace (the manifest did). Delivery stays "unsupported" until foundation F3 (FR44).
+// The runtime never creates the namespace (the manifest did). Delivery (FR44) is the KubernetesRuntime's, through the same tunnel: exec
+// only, as root through the image's `sudo -n` (kubernetesDelivery.ts); `settings.delivery: false` switches it off for the target (FR43).
 import net from 'node:net';
 import { AppError } from '@isnanme/core';
 import { KubeConfig } from '@kubernetes/client-node';
 import type { Workspace, WorkspaceUsage } from '@portal/contracts';
 import type { ConnectNodeRecord, ConnectTargetRecord, NodeLink, RuntimeDeps } from '../../connect/seams.js';
 import { KubernetesRuntime } from '../kubernetes.js';
-import { TargetUnreachableError, type CreateSpec, type ExecSession, type Runtime, type ShellSession } from '../runtime.js';
+import { pollStarts, START_POLL_MS } from '../kubernetesDelivery.js';
+import { TargetUnreachableError, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type ShellSession } from '../runtime.js';
 import { lastSeenText, Reachability } from './link.js';
 
 const DEFAULT_NAMESPACE = 'claudepilot-workspaces';
@@ -74,6 +76,7 @@ export function loopbackKubeConfig(port: number, token: string): KubeConfig {
 
 export class ConnectKubeRuntime implements Runtime {
   readonly portalUrl: string;
+  readonly delivery?: DeliveryAccess;
   readonly #link: NodeLink;
   readonly #reach: Reachability;
   #inner: { runtime: KubernetesRuntime; loopback: KubeLoopback; token: string } | null = null;
@@ -84,11 +87,30 @@ export class ConnectKubeRuntime implements Runtime {
     private readonly record: ConnectTargetRecord,
     node: { record: ConnectNodeRecord; link: NodeLink },
     private readonly deps: RuntimeDeps,
+    /** Tests only: how often starts are polled, and the folders delivery may write (an enrolled target always has the engine's). */
+    private readonly testing: { startPollMs?: number; deliveryRoots?: readonly string[] } = {},
   ) {
     this.portalUrl = record.portalUrl;
     this.#link = node.link;
     this.#reach = new Reachability(node.link, record.id, deps.snapshots.last(record.id)?.at ?? null);
     this.#unsubscribe = node.link.onChange(() => this.#close());
+    // FR43: delivery can be switched off per target; pools, secrets and the chat host then read "unsupported" here.
+    if (record.settings.delivery !== false) this.delivery = this.#delivery();
+  }
+
+  /**
+   * The inner runtime's delivery, made again with each connection; an outage is `TargetUnreachableError` (pending, never failed). Starts are
+   * polled here, not by the inner runtime, so the watch outlives a reconnect and a pod that started while the tunnel was down still counts.
+   */
+  #delivery(): DeliveryAccess {
+    return {
+      needsRunning: true,
+      state: (name) => this.#call((r) => r.delivery.state(name)),
+      run: (name, script, opts) => this.#call((r) => r.delivery.run(name, script, opts)),
+      put: (name, entries) => this.#call((r) => r.delivery.put(name, entries)),
+      read: (name, path) => this.#call((r) => r.delivery.read(name, path)),
+      watchStarts: (onStart) => pollStarts(() => this.#call((r) => r.startKeys()), onStart, this.testing.startPollMs ?? START_POLL_MS),
+    };
   }
 
   get #namespace() {
@@ -131,6 +153,7 @@ export class ConnectKubeRuntime implements Runtime {
           image: this.deps.image(this.record),
           storage: this.record.settings.storage ?? '10Gi',
           ...(this.record.settings.storageClass ? { storageClass: this.record.settings.storageClass } : {}),
+          ...(this.testing.deliveryRoots ? { delivery: { roots: this.testing.deliveryRoots } } : {}),
         },
         { kubeConfig: loopbackKubeConfig(loopback.port, token), manageNamespace: false, target: { id: this.record.id, label: this.record.label, where: this.target.where } },
       );

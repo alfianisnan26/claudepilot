@@ -30,7 +30,7 @@ export function createRepos(deps: ReposModuleDeps): ReposService {
   return new ReposService({
     store: deps.store,
     host: workspacesHost(deps.workspaces, deps.installHost),
-    workspaces: async () => (await deps.workspaces.list()).map((w) => ({ id: w.id, name: w.name, running: w.status === 'running', supported: deps.workspaces.runtimeFor(w.target)?.target.kind !== 'kubernetes' })),
+    workspaces: async () => (await deps.workspaces.list()).map((w) => ({ id: w.id, name: w.name, running: w.status === 'running', supported: ((r) => r?.target.kind !== 'kubernetes' || !!r.delivery)(deps.workspaces.runtimeFor(w.target)) })),
     sessions: deps.sessions,
     scrub: deps.scrub,
     notify: deps.notify,

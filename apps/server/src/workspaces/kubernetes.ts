@@ -13,7 +13,8 @@ import {
 } from '@kubernetes/client-node';
 import { plainName } from '../names.js';
 import { requestsFor, type RequestOptions } from './requests.js';
-import { HOME, LABEL, type CreateSpec, type ExecSession, type Runtime, type ShellSession } from './runtime.js';
+import { kubernetesDelivery } from './kubernetesDelivery.js';
+import { HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type Runtime, type ShellSession } from './runtime.js';
 
 const LIMIT = { cpus: 'claudepilot.cpus', memoryMb: 'claudepilot.memory-mb' } as const;
 const CONTAINER = 'workspace';
@@ -56,6 +57,8 @@ export interface KubernetesOptions {
   nodeSelector?: Record<string, string>;
   /** What a pod asks the scheduler to reserve, at most its limits (`PORTAL_K8S_CPU_REQUEST`, `PORTAL_K8S_MEMORY_REQUEST`); unset: the limits. */
   requests?: RequestOptions;
+  /** Tests only: the folders delivery may write and read (default: the engine's, `DELIVERY_ROOTS`), and how often starts are polled. */
+  delivery?: { roots?: readonly string[]; pollMs?: number };
 }
 
 /** One namespace in a cluster: a Deployment (scaled 1/0 to start/stop) and a PVC per workspace. */
@@ -89,10 +92,120 @@ export class KubernetesRuntime implements Runtime {
       kind: 'kubernetes' as const,
       where: connect?.target.where ?? (context ? `${context} / ${opts.namespace}` : opts.namespace),
     };
+    this.delivery = kubernetesDelivery(
+      {
+        state: (name) => this.#deliveryState(name),
+        readyPod: (name) => this.#readyPod(name),
+        capture: (pod, argv, payload, o) => this.#capture(pod, argv, payload, o),
+        startKeys: () => this.startKeys(),
+      },
+      opts.delivery,
+    );
   }
 
   get #ns() {
     return this.opts.namespace;
+  }
+
+  /**
+   * Pools, secrets, the chat host (foundation PRD §6.2) through `pods/exec` only, as root through the image's `sudo -n`
+   * (kubernetesDelivery.ts). A running workspace only: a stopped one has no pod (`needsRunning`).
+   */
+  readonly delivery: DeliveryAccess;
+
+  async #deliveryState(name: string): Promise<{ exists: boolean; running: boolean; portal: string | null }> {
+    let d: V1Deployment;
+    try {
+      d = await this.#apps.readNamespacedDeployment({ name: objectName(name), namespace: this.#ns });
+    } catch (e) {
+      if (codeOf(e) === 404) return { exists: false, running: false, portal: null };
+      throw e;
+    }
+    return { exists: true, running: (await this.#readyPod(name)) !== null, portal: d.metadata?.labels?.[LABEL.portal] ?? null };
+  }
+
+  /** A pod that is up and whose workspace container is Ready (delivery's "running"), not one on its way out. */
+  #ready(p: V1Pod): boolean {
+    return p.status?.phase === 'Running' && !p.metadata?.deletionTimestamp && !!p.status.containerStatuses?.find((s) => s.name === CONTAINER)?.ready;
+  }
+
+  async #readyPod(name: string): Promise<string | null> {
+    const pods = await this.#core.listNamespacedPod({ namespace: this.#ns, labelSelector: `${LABEL.managed}=true,${LABEL.name}=${plainName(name)}` });
+    return pods.items.find((p) => this.#ready(p))?.metadata?.name ?? null;
+  }
+
+  /** Workspace name → its Ready pods' uid and container restart count: a new value is a start (scale 0 to 1, a new pod, a restart). */
+  async startKeys(): Promise<Map<string, string>> {
+    const pods = await this.#core.listNamespacedPod({ namespace: this.#ns, labelSelector: selector });
+    const keys = new Map<string, string[]>();
+    for (const p of pods.items) {
+      const name = p.metadata?.labels?.[LABEL.name];
+      if (!name || !this.#ready(p)) continue;
+      const restarts = p.status?.containerStatuses?.find((s) => s.name === CONTAINER)?.restartCount ?? 0;
+      keys.set(name, [...(keys.get(name) ?? []), `${p.metadata?.uid ?? p.metadata?.name}:${restarts}`]);
+    }
+    return new Map([...keys].map(([name, k]) => [name, k.sort().join(',')]));
+  }
+
+  /**
+   * `argv` in the workspace container with `payload` on stdin, stdout and stderr apart. Stdin is written and never ended (over the v4
+   * channel protocol an end closes the socket, status and all); the command reads only as many bytes as it was told. No status before the
+   * socket closes is a dropped connection, and fails.
+   */
+  #capture(pod: string, argv: string[], payload: Buffer, o: { timeoutMs: number; maxOutputBytes: number }): Promise<{ code: number; stdout: Buffer; stderr: Buffer }> {
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    let size = 0;
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const stdin = payload.length ? new PassThrough() : null;
+    stdin?.on('error', () => undefined);
+    return new Promise((resolve, reject) => {
+      let socket: { close(): void } | null = null;
+      let status: V1Status | null = null;
+      let settled = false;
+      const settle = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        stdin?.destroy();
+        socket?.close();
+        fn();
+      };
+      const collect = (into: Buffer[]) => (c: Buffer) => {
+        size += c.length;
+        if (size > o.maxOutputBytes) return settle(() => reject(new Error(`The command printed more than ${o.maxOutputBytes} bytes.`)));
+        into.push(c);
+      };
+      stdout.on('data', collect(out));
+      stderr.on('data', collect(err));
+      const timer = setTimeout(() => settle(() => reject(new Error(`command timed out after ${o.timeoutMs} ms`))), o.timeoutMs);
+      const closed = () =>
+        // The last output frames are handled before the close; a turn of the loop lets the streams deliver them.
+        setImmediate(() =>
+          settle(() => {
+            if (!status) return reject(new Error('The connection to the workspace dropped before the command finished.'));
+            if (status.status === 'Success') return resolve({ code: 0, stdout: Buffer.concat(out), stderr: Buffer.concat(err) });
+            const cause = status.details?.causes?.find((c) => c.reason === 'ExitCode');
+            if (!cause?.message || !Number.isInteger(Number(cause.message))) return reject(new Error(`The command could not run in the workspace: ${status.message ?? status.reason ?? 'no reason given'}`));
+            resolve({ code: Number(cause.message), stdout: Buffer.concat(out), stderr: Buffer.concat(err) });
+          }),
+        );
+      new Exec(this.#kc)
+        .exec(this.#ns, pod, CONTAINER, argv, stdout, stderr, stdin, false, (s: V1Status) => {
+          status = s;
+        })
+        .then(
+          (ws) => {
+            socket = ws;
+            if (settled) return ws.close();
+            ws.on('close', closed);
+            ws.on('error', closed);
+            for (let at = 0; stdin && at < payload.length; at += 64 * 1024) stdin.write(payload.subarray(at, at + 64 * 1024));
+          },
+          (e: unknown) => settle(() => reject(e)),
+        );
+    });
   }
 
   async check() {

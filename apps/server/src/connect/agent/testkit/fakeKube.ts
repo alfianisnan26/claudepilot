@@ -31,6 +31,8 @@ export interface ExecIo {
   stderr(data: string | Buffer): void;
   /** Ends the session with the status channel (0 is Success). */
   exit(code: number): void;
+  /** Ends the session with this status as it is (a Failure without an exit code: the container is gone, say). */
+  status(value: Record<string, unknown>): void;
   onResize(fn: (size: { width: number; height: number }) => void): void;
 }
 
@@ -273,6 +275,10 @@ export class FakeKube {
       onResize: (fn) => void resizeFns.push(fn),
       stdout: (d) => frame(1, d),
       stderr: (d) => frame(2, d),
+      status: (value) => {
+        frame(3, JSON.stringify(value));
+        ws.close(1000);
+      },
       exit: (code) => {
         frame(3, JSON.stringify(code === 0 ? { metadata: {}, status: 'Success' } : { metadata: {}, status: 'Failure', message: `command terminated with non-zero exit code: Error executing in Docker Container: ${code}`, reason: 'NonZeroExitCode', details: { causes: [{ reason: 'ExitCode', message: String(code) }] } }));
         ws.close(1000);

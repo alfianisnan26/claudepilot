@@ -239,7 +239,7 @@ export class Reconciler {
     const { target, name } = splitId(workspaceId);
     const access = this.runtimes(target)?.delivery;
     if (!access) {
-      this.#save(workspaceId, { status: 'unsupported', reason: 'Delivery to this target comes with Kubernetes support (F3).', checked_at: now.toISOString() });
+      this.#save(workspaceId, { status: 'unsupported', reason: 'Delivery is switched off for this target.', checked_at: now.toISOString() });
       return;
     }
 
@@ -254,6 +254,13 @@ export class Reconciler {
       // it existed) a workspace stays adoptable.
       if (foreignPortal(state.portal, this.store.portalId)) {
         if (this.row(workspaceId)) this.#save(workspaceId, { status: 'frozen', reason: 'Created by another portal.', checked_at: now.toISOString() });
+        return;
+      }
+      // Kubernetes (`needsRunning`): a stopped workspace has no pod to write into, and its next pod starts from the image outside the home
+      // volume, so everything is delivered at that start (watchStarts), not now.
+      if (!state.running && access.needsRunning) {
+        const waiting = this.providers.some((p) => p.fragments(workspaceId, { running: false, now }).length > 0);
+        this.#save(workspaceId, { status: waiting ? 'pending' : 'none', reason: waiting ? 'Delivered when the workspace starts.' : null, checked_at: now.toISOString() });
         return;
       }
       const row = this.row(workspaceId) ?? ({ generation: 0, applied_hash: null, pending_deletes: '[]', secret_paths: '{}' } as DeliveryRow);

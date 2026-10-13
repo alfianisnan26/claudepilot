@@ -67,7 +67,7 @@ export interface SessionSource {
 export interface ReposDeps {
   store: Store;
   host: RepoHost;
-  /** Every workspace and whether it runs; `supported: false` for a target that isn't scanned (Kubernetes: the portal never execs into pods on its own). */
+  /** Every workspace and whether it runs; `supported: false` for a target that isn't scanned (Kubernetes with delivery switched off: no session host). */
   workspaces: () => Promise<{ id: string; name: string; running: boolean; supported?: boolean }[]>;
   sessions: SessionSource;
   /** Text from a workspace with the workspace's secret values and credential shapes taken out. */

@@ -94,10 +94,16 @@ export interface DeliveryAccess {
   state(name: string): Promise<{ exists: boolean; running: boolean; portal?: string | null }>;
   /** Runs `sh -c script` in a running workspace. */
   run(name: string, script: string, opts?: { user?: 'root' | 'node'; stdin?: string; timeoutMs?: number }): Promise<{ code: number; stdout: string; stderr: string }>;
-  /** Writes files and folders (with owner and mode) into a running or stopped workspace. */
+  /** Writes files and folders (with owner and mode) into a running or stopped workspace (a running one only, when `needsRunning`). */
   put(name: string, entries: TarEntry[]): Promise<void>;
-  /** Reads one file from a running or stopped workspace; null when it doesn't exist. */
+  /** Reads one file from a running or stopped workspace; null when it doesn't exist (and, when `needsRunning`, while it is stopped). */
   read(name: string, path: string): Promise<string | null>;
+  /**
+   * True when `put` and `run` need a running workspace and `read` answers null while it is stopped: Kubernetes, where a stopped workspace
+   * has no pod and each start begins from the image everywhere but the home volume, so the reconciler delivers at the start instead.
+   * Absent: they work on a stopped workspace too (Docker, This machine, Connect hosts).
+   */
+  readonly needsRunning?: boolean;
   /** Calls `onStart` whenever a workspace starts, from inside or outside the portal. Returns a stop function. */
   watchStarts(onStart: (name: string) => void): () => void;
 }

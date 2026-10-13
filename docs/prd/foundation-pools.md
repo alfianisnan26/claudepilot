@@ -165,11 +165,42 @@ What a running session picks up (✅ rows observed on 2.1.296, print mode):
   nothing for the standard image, which has passwordless `sudo`. The locked image
   ([Settings & policies](settings-policies.md) amendment 6) mounts them read-only.
 
+**Built (2026-10-13): an interim `exec` + `sudo` path, not the Secret design above.** `KubernetesRuntime.delivery`
+(`apps/server/src/workspaces/kubernetesDelivery.ts`) needs nothing but `pods/exec`, the RBAC the portal and the Connect agent
+already have, and changes nothing in the pod spec (no root, no new volumes, no Secret). In-cluster and through a Connect tunnel alike.
+
+| | What it does |
+| --- | --- |
+| Root | The pod runs as uid 1000. A root `run`, every `put` and every `read` go through the image's `sudo -n` (passwordless for `node`). No `sudo`, or a refused one, is exit 125 with one sentence on stderr: the write fails, it never goes somewhere else. |
+| Command line | Fixed wrapper text and byte counts only. The script, its stdin, the tar archive and the path travel on the exec's stdin. Stdin is never closed: over the `v4.channel.k8s.io` protocol closing it closes the socket (output and exit status lost), so the counts go first and `head -c` in the pod bounds each read. |
+| Writes | One tar archive per `put`, extracted as root with the headers' owners and modes, parents made. Refused before anything is sent: a path that is not absolute and plain (`..`, `.`, `//`, a trailing `/`, control characters, a name over 255 bytes), a path outside `/etc/claudepilot`, `/etc/claude-code`, `/home/node` and `/etc/profile.d/claudepilot.sh`, a type other than file or folder, set-user-ID or set-group-ID modes, odd owners, more than 128 MiB or 20,000 entries. Refused in the pod, as root, before tar writes anything: a symbolic link at any entry or any of its folders inside its root. |
+| Running vs stopped | Running only (`DeliveryAccess.needsRunning`). A stopped workspace has no pod, and each new pod starts from the image everywhere but the home volume. `put` and `run` refuse with "needs it running", `read` answers null, and the reconciler marks the workspace Pending ("Delivered when the workspace starts.") without writing. The start delivers everything again (the manifest is gone, so it is a full delivery). |
+| Starts | The pod list is read every 5 s; a Ready pod whose uid or restart count changed is a start (scale 0 to 1, a new pod, a container restart), from inside or outside the portal. The first answer is the baseline; API errors and tunnel outages are survived, and a start that happened meanwhile still counts. |
+| Running is | A pod in phase Running whose `workspace` container is Ready and that is not being deleted. |
+
+Limits: a namespace whose pods may not escalate privileges (Pod Security `restricted`, `allowPrivilegeEscalation: false`)
+or an image without passwordless `sudo` gets a clear failure, not delivery. Delivered files under `/etc` live in the
+container's writable layer: lost at every restart and delivered again at the start, so a session that starts in the
+first seconds of a pod may start without them (the window is the 5 s poll plus one delivery). No delivery while stopped,
+no outbox pull while stopped (as §8 says). The workspace user has `sudo` anyway, so the link check guards against
+mistakes and a confused agent, not against that user. Kubernetes Deployments carry no `claudepilot.portal` label yet,
+so the reconciler treats them as adoptable (§6.5).
+
+Verified with fakes only (no cluster): `workspaces/kubernetesDelivery.test.ts` (the wrapper scripts run for real under
+`dash` and GNU tar against the in-process fake API, with a stand-in `sudo`: modes, owners in the archive, refusals,
+links, sizes, no or refused `sudo`, a dropped exec, a timeout, a stopped workspace, start polling);
+`connect/agent/kubeDelivery.e2e.test.ts` (through the real agent and hub: the kube policy passes delivery's execs);
+`delivery/kubernetes.e2e.test.ts` (the reconciler delivering an MCP set: assignment, first delivery, a new revision, a
+stop, a new pod delivered to by the start watch; the chat host install; and with `CLAUDEPILOT_DOCKER_TESTS=1` the real
+workspace image entered as uid 1000: `sudo -n`, `root:root 644` drop-in and manifest, `node:node 700` outbox, an
+unchanged second pass, a planted link refused). The real-cluster check (k3s pod with a root-owned `/etc/claude-code`,
+`sudo`, uid 1000) is the coordinator's.
+
 ### 6.3 Reconcile
 
 - **Triggers:** an assignment changes, a pool gets a new revision, a workspace starts, the portal starts,
-  and timers. Starts come from Docker's event stream and a Kubernetes pod watch, so a start outside
-  the portal counts too.
+  and timers. Starts come from Docker's event stream and a Kubernetes pod watch (built as a 5 s poll of
+  the pod list, §6.2), so a start outside the portal counts too.
 - **Every change reaches stopped workspaces at once:** through the archive API on Docker and the
   Secret on Kubernetes. Revocations and rotations never wait for a timer, so a stopped workspace that
   someone starts outside the portal already has current files.
@@ -236,7 +267,8 @@ to remove something.
   reconciler reads and writes nothing in one, the first manifest included, whatever global fragments it has (a
   lockdown, say). Before this, a portal with "Pool MCP only" on delivered its lockdown into another portal's
   brand-new container, before the owner's first manifest existed. A container without the label (made before it
-  existed) stays adoptable. Kubernetes resources are not labelled yet: delivery there comes with F3.
+  existed) stays adoptable. Kubernetes resources are not labelled yet: the interim delivery (§6.2) treats every
+  Deployment as adoptable.
 
 **If the portal is gone for good**
 
@@ -438,7 +470,7 @@ mode in every row except the last.
 | --- | --- | --- |
 | F1 | SQLite store, migrations, startup checks, backups and restore, encryption with key check, portal ID | |
 | F2 | Compiler with ownership checks and version gating, manifest, pinned image, Docker delivery (running, stopped, write-through, start detection), reconcile with drift repair, failing safe, preflight, delivery status in the workspace list | Docker atomicity and fault-injection tests pass |
-| F3 | Kubernetes delivery (primary and fallback), "Enable pools" | Kubernetes tests pass on k3s |
+| F3 | Kubernetes delivery (primary and fallback), "Enable pools" | Kubernetes tests pass on k3s. **Partly built** (2026-10-13): the interim `exec` + `sudo` path (§6.2), running workspaces only, verified on fakes and on the real image in Docker; the Secret, `emptyDir`, fallback and "Enable pools" are not built, and the k3s check is pending |
 | F4 | Outbox pull, event log, exposure records | Outbox tests pass |
 | F5 | Shared UI: pool page pattern, workspace Configuration panel, create-dialog add-ons, bulk assignment | |
 | F6 | Plugin marketplace (for skillsets, MCP sets and personas) | Q1 |

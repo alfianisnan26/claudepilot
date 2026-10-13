@@ -196,7 +196,7 @@ How one target comes to life:
 | FR41 | **Image provisioning.** The installer makes the workspace image exist on the host (pull, or build from the portal's context with `PILOT_BUILD_IMAGE=1`). The tunnel may pull the allowlisted reference again (updates) and never builds. | T-INST, T-POL |
 | FR42 | **Browser pool** is not offered on enrolled targets (its `supports` says no, with the existing wording). | T-REG |
 | FR43 | **Delivery switch.** `settings.delivery=false` makes the runtime expose no `delivery`, so pools, secrets and the chat host read "unsupported" there. Default on. | T-RT |
-| FR44 | **Kubernetes delivery** works through the tunnel as soon as foundation F3 exists; until then Kubernetes workspaces read "unsupported" as they do today. | T-MGR |
+| FR44 | **Kubernetes delivery** works through the tunnel as soon as foundation F3 exists; until then Kubernetes workspaces read "unsupported" as they do today. **Built** (2026-10-13): `ConnectKubeRuntime.delivery` is the wrapped `KubernetesRuntime`'s (foundation §6.2, the interim `exec` + `sudo` path), unless FR43 switches it off; an outage is unreachable (pending), and the start poll outlives a reconnect. | T-MGR |
 
 ### Install and packaging (detail in §13)
 
@@ -495,6 +495,8 @@ The rule (FR37, FR39): **an outage is not a state change.** Every dependant belo
 ### 12.6 Kubernetes over the tunnel (T3)
 
 `KubernetesRuntime` builds its `KubeConfig` with `loadFromDefault()` today. It gets an optional constructor argument, a ready `KubeConfig`, and `manageNamespace: false` (the manifest created the namespace, and a namespaced Role can't create one: authorization precedes existence, so the current `createNamespace(...).catch(ignore(409))` would fail with 403). For a tunnelled target the portal listens on `127.0.0.1:0` (never `0.0.0.0`), one listener per connected connector; each accepted connection opens a `kube` stream; the `KubeConfig` is `loadFromOptions({ clusters: [{ server: 'http://127.0.0.1:<port>', skipTLSVerify: true }], users: [{ token: <kubeLocalToken> }] })` ✅. The listener closes with the connection and a new port and token come with the next. `metrics.k8s.io` and `exec` work as they do against a real API server.
+
+Delivery (FR44, built 2026-10-13) needs nothing beyond `pods/exec`: the command line carries a fixed wrapper and byte counts (each well under the policy's 64 KiB per argument), and the content (scripts, archives, paths) goes on stdin, which is never closed. Root comes from the image's `sudo -n` inside the uid 1000 pod, so the policy's "no root in a pod spec" holds. Starts are polled through the tunnel every 5 s by `ConnectKubeRuntime` itself, so the watch survives the inner runtime being made again at each connection. Verified with fakes only: `workspaces/connect/kubeDelivery.test.ts` (a FakeLink to the fake API: run, put, read, modes, FR43 off, an outage and a restart during it) and `connect/agent/kubeDelivery.e2e.test.ts` (through the real agent's kube proxy and the real hub: put, read and run pass the policy). Limits: as foundation §6.2 (running workspaces only; a pod that may not escalate privileges gets a clear failure).
 
 ### 12.7 The Host runtime (T3), and sharing `LocalRuntime`'s logic (T2)
 

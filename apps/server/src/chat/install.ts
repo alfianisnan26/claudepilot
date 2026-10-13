@@ -3,7 +3,7 @@ import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { CP_SESSION, CP_SESSION_PATH } from './host.js';
 
-/** Why a Kubernetes workspace can't run chat yet: its image predates the current session host. */
+/** Why a workspace without delivery (a target that switched it off) can't run chat yet: its image predates the current session host. */
 export const IMAGE_HOST_OUTDATED =
   "This workspace's image doesn't have the current chat host yet. It ships with the next workspace image (images/workspace): once that's published, stop and start the workspace to pull it (your home folder stays).";
 
@@ -13,10 +13,10 @@ export const IMAGE_HOST_OUTDATED =
  * right before each start, rather than leaving it to pool delivery: a start needs the current host
  * then, not whenever the next delivery runs.
  *
- * Docker (runtimes with delivery): installs it when missing or out of date. The file is staged under a
- * temp name and renamed as root, so a concurrent call never runs half a script.
+ * Runtimes with delivery (Docker, This machine, Kubernetes through `sudo -n`: workspaces/kubernetesDelivery.ts): installs it when missing or
+ * out of date. The file is staged under a temp name and renamed as root, so a concurrent call never runs half a script.
  *
- * Kubernetes (no delivery): the workspace image ships it (images/workspace/cp-session, generated from
+ * No delivery (an enrolled target with delivery switched off): the workspace image ships it (images/workspace/cp-session, generated from
  * CP_SESSION), so this only checks that the workspace has the current one.
  */
 export function hostInstaller(workspaces: Workspaces) {
