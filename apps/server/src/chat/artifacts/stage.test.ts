@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,6 +36,33 @@ test('host put: the bytes arrive exactly, 0600, under the session’s folder, an
   // The same name again replaces it (same name means same content in practice).
   const again = await put(host, ['S1', 'photo-1234abcd.jpg', String(text.length), String(bytes.length)], text);
   assert.equal(again.code, 0);
+});
+
+test('host put keeps the stderr pipe open until it ends (a Kubernetes exec closes stdin once the last output pipe is gone: every upload on a cluster workspace failed with exit 4)', async () => {
+  const host = new LocalHost();
+  const bytes = randomBytes(300_000);
+  const text = b64(bytes);
+  const child = spawn('sh', [host.script, 'put', 'S1', 'keep.bin', String(text.length), String(bytes.length)], {
+    env: { ...process.env, CLAUDEPILOT_UPLOADS_DIR: host.uploads },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stderrEndedAt: number | null = null;
+  child.stderr.on('end', () => (stderrEndedAt = Date.now()));
+  child.stderr.resume(); // 'end' only comes to a flowing stream
+  const exited = new Promise<number | null>((resolve) => child.on('close', resolve));
+  // The bytes come slowly, as over a tunnel: if the script had dropped its stderr, the pipe's end would fire long before the exit.
+  await new Promise((r) => setTimeout(r, 150));
+  const beforeWrite = stderrEndedAt;
+  for (let at = 0; at < text.length; at += 65_536) {
+    child.stdin.write(text.slice(at, at + 65_536));
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  const exitedAt = Date.now();
+  const code = await exited;
+  assert.equal(code, 0);
+  assert.equal(beforeWrite, null, 'stderr was still open while the script waited for its input');
+  assert.ok(stderrEndedAt !== null && stderrEndedAt >= exitedAt - 5, 'stderr closed with the exit, not before');
+  assert.ok(readFileSync(join(host.uploads, 'S1', 'keep.bin')).equals(bytes));
 });
 
 test('host put: refuses names that are not plain, a size that doesn’t match, a folder that is a link, and too much', async () => {

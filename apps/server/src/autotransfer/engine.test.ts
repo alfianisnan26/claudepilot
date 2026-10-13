@@ -277,6 +277,17 @@ test('S13 on the engine: Bypass in auto: a card, never a move', async () => {
   r.engine.stop();
 });
 
+test('S13b on the engine: Bypass in auto with automove.allowBypass: moved by itself, through the Move flow that keeps Bypass', async () => {
+  const r = await rig({ [K.enabled]: true, [K.automatic]: true, [K.allowBypass]: true });
+  r.chat.sessions.set('s1', chatSession('s1', { mode: 'bypassPermissions' }));
+  r.chat.turnEnds('s1');
+  await r.engine.settled();
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'ask' }]);
+  assert.equal((await r.engine.state('s1', 'u_a')).pending, null);
+  assert.equal(r.auto.events('u_a', { kinds: ['moved'] }).length, 1);
+  r.engine.stop();
+});
+
 test('the card closes when the source recovers above the threshold, and when the chat ends', async () => {
   let used = 92;
   const r = await rig(ASK, () => [usage('work', 'Work', [win('session', used)]), usage('home', 'Home', [win('session', 60)])]);

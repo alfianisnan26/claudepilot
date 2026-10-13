@@ -294,7 +294,10 @@ case "$cmd" in
   put)
     # An attachment, staged for Claude to read: ~/.claudepilot/uploads/<id>/<name>. The bytes arrive as base64 on
     # stdin (exactly <nchars> characters), so the same exec works on every target. Never written through a link.
-    exec 2>/dev/null
+    # Quiet, but stderr's pipe is KEPT OPEN on fd 3: a Kubernetes exec (containerd) closes stdin as soon as the last holder of an
+    # output pipe goes away, and `exec 2>/dev/null` here made head see EOF at once (every upload on a cluster workspace failed
+    # with exit 4, 2026-10-13).
+    exec 3>&2 2>/dev/null
     id="${1:-}"; name="${2:-}"; nchars="${3:-}"; nbytes="${4:-}"
     valid "$id" || exit 2
     case "$name" in ''|.*|*[!A-Za-z0-9._-]*) exit 2 ;; esac

@@ -251,6 +251,36 @@ test('restart keeps Bypass: relaunched with the flag and switched back through t
   }
 });
 
+test('a move keeps Bypass: on the new Claude the chat is still in Bypass, launched with the flag, through the grant (so an automatic move with automove.allowBypass keeps it too)', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.controlTimeoutMs = 150;
+    const state = policy(s, true);
+    const id = await inBypass(s);
+    state.fresh = false;
+    const work = await s.controller.createClaude('docker/ws1', 'Work');
+    const moving = modesAnswered(s, s.controller.switchClaude(id, work.id, { handoff: 'skip' }));
+    // The new Claude acknowledges the opening: its init, a line, its result and the usage check.
+    await until(() => csidOf(s, id) !== id);
+    const nid = csidOf(s, id);
+    await until(() => s.ws.sends.some((x) => x.args[1] === nid && x.line.includes('transferred_context')));
+    const tail = s.ws.tails.at(-1)!;
+    tail.push(init(nid));
+    tail.push(assistantText('Got it.'));
+    tail.push(result(nid));
+    tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+    const moved = await moving;
+    assert.equal(moved.claudeName, 'Work');
+    assert.equal(moved.mode, 'bypassPermissions', 'still in Bypass on the new Claude');
+    assert.ok(lastStart(s).includes(FLAG), 'the new process was launched with the flag');
+    assert.ok(s.controller.history(id).some((e) => e.kind === 'system' && /Bypass kept/.test(e.text ?? '')));
+    const entered = s.controller.audit({ kind: 'bypass.entered' });
+    assert.deepEqual([entered[0]!.actor, entered[0]!.detail.how], ['portal', 'move'], 'the newest audit row: kept across the move');
+  } finally {
+    await s.done();
+  }
+});
+
 test('restart with the policy now off: no flag, no request to enter Bypass, it is off, said so and audited', async () => {
   const s = await liveSession();
   try {

@@ -245,8 +245,9 @@ export function decide(input: DecideInput): Decision {
   if (counters.movesOwner24h >= settings.maxPerDay) return { act: 'none', code: 'day_cap', reading };
   // 7. A destination.
   const period = `${session.claudeId}|${reading.window.key}|${reading.window.resetsAt ?? ''}`;
-  // A chat in Bypass, or one whose automatic moves failed twice today, only ever gets a card: rank it as `ask` would.
-  const bypass = session.mode === 'bypassPermissions';
+  // A chat in Bypass (unless the platform allows moving those: `allowBypass`, the owner's ask of 2026-10-13; the move keeps Bypass),
+  // or one whose automatic moves failed twice today, only ever gets a card: rank it as `ask` would.
+  const bypass = session.mode === 'bypassPermissions' && !settings.allowBypass;
   const failedToday = counters.failures24h >= 2;
   const autoish = input.mode === 'auto' && !bypass && !failedToday;
   const { eligible, alternatives, full } = candidates(input, autoish ? 'auto' : 'ask');
@@ -266,7 +267,7 @@ export function decide(input: DecideInput): Decision {
   };
   // 8. `ask`: the card.
   if (input.mode === 'ask') return { act: 'suggest', why: null, reading, ...choice };
-  // 9. `auto`: never Bypass; not after two failures today; only at a quiet boundary, else wait (up to 30 minutes), then a card.
+  // 9. `auto`: not Bypass unless allowed; not after two failures today; only at a quiet boundary, else wait (up to 30 minutes), then a card.
   if (bypass) return { act: 'suggest', why: 'bypass', reading, ...choice };
   if (failedToday) return { act: 'suggest', why: 'failed_today', reading, ...choice };
   const d = choice.dropped;

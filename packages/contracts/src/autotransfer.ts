@@ -40,6 +40,7 @@ export const AUTO_SETTING_KEYS = {
   sameModelOnly: 'automove.sameModelOnly',
   /** A Claude on a Console API key (billed per use) may be a destination. Off until a person turns it on. */
   allowApiKey: 'automove.allowApiKey',
+  allowBypass: 'automove.allowBypass',
 } as const;
 
 /** Defaults and bounds of the numeric settings. The defaults are design choices, not measurements. */
@@ -79,6 +80,8 @@ export interface AutoTransferSettings {
   maxPerDestination: number;
   sameModelOnly: boolean;
   allowApiKey: boolean;
+  /** A chat in Bypass may be moved by itself (the move keeps Bypass while the policy allows it; chat-sessions §21 FR20a). The platform's only; off by default. */
+  allowBypass: boolean;
 }
 
 /** The mode two booleans make. */

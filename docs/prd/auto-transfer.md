@@ -21,7 +21,7 @@ Checked in the code on 2026-10-12 (✅; symbols, not line numbers).
 | A move stays inside one workspace: `switchClaude` refuses a destination whose `workspaceId` differs ("Pick a Claude on this workspace") | `chat/controller.ts` `switchClaude`; workspace-claudes FR9 | The destinations are the other Claudes of the chat's workspace; "another workspace" is out of scope |
 | `switchOptions(id)` tells for each other Claude whether a session could start there now (`ok`, a reason and the fix), whether the handoff can be asked, and what a move drops (`approvals`, `queued`, `agents`) | `chat/controller.ts`, contracts `ChatSwitchOptions` | The engine asks it before acting, and waits for `dropped` to be all zero |
 | `switchClaude(id, claudeId, {handoff})` (`handoff` is `ask` or `skip`) writes the handoff, starts the new run, repoints the chat, and undoes itself on failure; an unanswered handoff falls back to the stored conversation | workspace-claudes FR11, FR12 | The automatic move is this call; the "source exhausted" case is `handoff: 'skip'` |
-| Bypass never carries over: a move ends it | workspace-claudes FR16 | A session in Bypass is never moved by itself (§8 FR9) |
+| Bypass across a move: kept while the policy allows it (chat-sessions §21 FR20a) | workspace-claudes FR16 | A session in Bypass is moved by itself only when `automove.allowBypass` is on (§8 FR9; the owner's decision of 2026-10-13: their own Bypass chats ran out and only ever got a card) |
 | With an account pool all Claudes of a workspace share the pool's keys (`Headroom.kind: 'no_limits'`) | `claudeusage/derive.ts`, `chat/controller.ts` `pooled` | On a pooled workspace the feature is inert: there is no per-Claude quota to run out |
 | `ClaudeUsageMonitor.headroom(claudeId)` never throws and never probes; `report()` returns every Claude's windows (`usedPct`, `resetsAt`, `level`, and, with U1a, `pace` and `outlook`) | `claudeusage/service.ts` | The engine reads the snapshot; it never starts a probe |
 | U1a's contract has `MoveRecommendation` (candidates with `reason` `room`, `over_pace`, `tight`, `no_limits`, `exhausted`, `signed_out`, `unknown`; "room" is at least 20 % left) and `recommendMove(claudes, {workspaceId, from, nowMs, allow})` is a pure function with an `allow` hook for "Claudes the asking user may use" | `packages/contracts/src/usage.ts`, `claudeusage/recommend.ts` (untracked, in progress) | The engine composes `recommendMove` with the Move flow's own check |
@@ -141,7 +141,7 @@ For a chat S at its turn boundary (each line stops the evaluation with its code)
 | 6 | Not paused, minimum pause over, chat and day caps not reached (FR11) | `paused`, `min_pause`, `session_cap`, `day_cap` |
 | 7 | A candidate exists after FR7 to FR9 | `no_destination`, `destination_busy` (warn once) |
 | 8 | `ask`: make or keep the suggestion, notify | |
-| 9 | `auto`: not in Bypass; the quiet boundary holds (FR12), else wait or become a card | `busy` |
+| 9 | `auto`: not in Bypass unless `automove.allowBypass`; the quiet boundary holds (FR12), else wait or become a card | `busy` |
 | 10 | `switchClaude` with the handoff of FR13; record, notify, pause | `move_failed` |
 
 ## 10. Data model
@@ -180,7 +180,7 @@ The table is `AUTOTRANSFER_API` (behind the session guard and the Origin check; 
 | Dropping work | Automatic only at a quiet boundary; otherwise a card that says what it drops; an approval is never answered | S14 |
 | Silent change of who pays | API-key destinations off by default and behind a confirmation; pooled workspaces inert; the card names the Claude and its kind | S8, S18 |
 | A move into a Claude the owner may not use | `allow` in `recommendMove` and the owner's `can` before the call; a refusal is `owner_denied` | S19 |
-| Bypass ended unseen | A chat in Bypass is never moved by itself | S13 |
+| Bypass ended unseen | A chat in Bypass is moved by itself only with `automove.allowBypass`, and the move keeps Bypass (FR20a) | S13, S13b |
 | A handoff leaking a secret | The Move flow's own redaction of the context file; nothing here adds text | (workspace-claudes §13) |
 | Notification text carrying session titles or message text | Fixed templates over names and numbers ([web-app-pwa](web-app-pwa.md) §11.1) | canary |
 | Another user acting on a chat | Every route filters by the owner and `can`; a suggestion id of another user answers like an unknown id | S20 |
@@ -215,6 +215,7 @@ Scenario tests with expected results worked out by hand and written in the test 
 | S11 | A move 10 minutes ago | `min_pause`, nothing moves |
 | S12 | Two moves for the chat in the last 24 hours | `session_cap` |
 | S13 | A chat in Bypass, mode `auto` | Only an `ask` card; no move |
+| S13b | A chat in Bypass, mode `auto`, `automove.allowBypass` on (2026-10-13) | Moved like any other; the chat is still in Bypass on the destination |
 | S14 | An approval is open | `busy`; re-evaluated; after 30 minutes a card that says "drops 1 approval" |
 | S15 | A chat on Opus; `session` 40 % used, `week` 40 %, `week_opus` 95 % used | `low` (5 % left on its model's window); the same state for a chat on Sonnet: nothing |
 | S16 | `sameModelOnly`; Home's `blockedModels` includes "Opus"; the chat is on Opus | Home excluded |
@@ -241,6 +242,8 @@ Scenario tests with expected results worked out by hand and written in the test 
 ## 16. Decisions and open questions
 
 Decided here (owner decisions in the [roadmap](platform-roadmap.md) §11): opt-in, off, `ask` and `auto` (O2); the destination stays in the same workspace and a paid API-key Claude is off by default (O9); "same model" means the family is not blocked, not a promise about plans (O9); "Always automatic" is per chat, never global. Open: 🔬 does a plan that lacks a model show it in any reading the portal gets; should a long idle chat on a low Claude be moved at its next message instead of at a turn's end (the PRD says no: a turn boundary is the only moment); whether the handoff turn of a Claude at 8 % is acceptable (it costs a turn of that Claude's last quota).
+
+**2026-10-13, owner:** a chat in Bypass is moved by itself too, when the platform setting `automove.allowBypass` (group Auto move, a confirmation to turn on, off by default, the platform's only) is on; the move keeps Bypass on the destination while the policy allows it (chat-sessions §21 FR20a, the Move flow's `#keepBypass`). Why: the owner's own chats run in Bypass, and until now a Bypass chat that ran out only ever got a card (events `suggested` at 06:08, 06:18 and 06:35 on 2026-10-13, never `moved`), which defeats automatic moves for the way the portal is used. Seeded on in `deploy/k3s/seed-features.sh`.
 
 ## 17. Multi-user (PLAN-10)
 

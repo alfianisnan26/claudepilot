@@ -76,6 +76,7 @@ const SETTINGS: AutoTransferSettings = {
   maxPerDestination: 2,
   sameModelOnly: false,
   allowApiKey: false,
+  allowBypass: false,
 };
 
 function options(claudes: ClaudeUsage[], over: Partial<ChatSwitchOptions> = {}): ChatSwitchOptions {
@@ -239,6 +240,14 @@ test('S13: a chat in Bypass, mode auto: only a card, never a move', () => {
   const d = decide({ ...base, session: { ...base.session, mode: 'bypassPermissions' } });
   assert.equal(d.act, 'suggest');
   assert.equal(d.act === 'suggest' && d.why, 'bypass');
+});
+
+test('S13b: with automove.allowBypass the chat in Bypass is moved like any other (the move itself keeps Bypass)', () => {
+  const base = input([WORK_92(), HOME_60()], { settings: { ...SETTINGS, allowBypass: true } });
+  const d = decide({ ...base, session: { ...base.session, mode: 'bypassPermissions' } });
+  assert.equal(d.act, 'move');
+  assert.equal(d.act === 'move' && d.to.id, 'home');
+  // The setting is the platform's only: a user's prefs cannot turn it on (effectiveSettings copies the platform's value).
 });
 
 test('S14: an approval is open: busy (waits); after 30 minutes of waiting: a card that says it drops 1 approval', () => {

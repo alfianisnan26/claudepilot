@@ -1,7 +1,7 @@
 #!/bin/sh
 # Turns on the portal's optional (beta) features through the settings API; safe to run again.
 #   PORTAL_URL=https://pilot.ai.isnan.me PORTAL_SERVER_CODE=<8 characters> sh deploy/k3s/seed-features.sh
-# Left OFF on purpose (they are protections or cost switches, not features): sessions.allowBypass, automove.allowApiKey,
+# Left OFF on purpose (they are protections or cost switches, not features): sessions.allowBypass, automove.allowApiKey (automove.allowBypass is ON: the owner's choice),
 # mcp.accountOff, mcp.poolOnly. The "This machine" target is an environment switch (PORTAL_LOCAL_ENABLED) and stays off.
 set -eu
 : "${PORTAL_URL:?set PORTAL_URL}" "${PORTAL_SERVER_CODE:?set PORTAL_SERVER_CODE}"
@@ -16,6 +16,7 @@ set_value() { # key, json value
 set_value triggers.enabled true
 set_value automove.enabled true
 set_value automove.automatic true
+set_value automove.allowBypass true   # the owner's ask of 2026-10-13: a chat in Bypass moves by itself too, and keeps Bypass
 set_value agents.selfEdit true
 set_value notify.baseUrl "\"$PORTAL_URL\""
 

@@ -1,5 +1,5 @@
 // Auto transfer's platform settings (docs/prd/auto-transfer.md FR20), an admin's, group "Auto move" on the Settings page. Turning
-// `enabled`, `automatic` or `allowApiKey` on asks for a confirmation (the settings store's CONFIRMATION_REQUIRED: `protective: false`).
+// `enabled`, `automatic`, `allowApiKey` or `allowBypass` on asks for a confirmation (the settings store's CONFIRMATION_REQUIRED: `protective: false`).
 // A user's own choices (`AutoUserPrefs`) override the defaults; the caps (pause, per chat, per day, per Claude) are the platform's only.
 
 import { AUTO_BOUNDS, AUTO_SETTING_KEYS as K, autoModeOf, type AutoTransferSettings, type AutoUserPrefs } from '@portal/contracts';
@@ -128,6 +128,19 @@ defineSetting({
   help: 'A Claude on a Console API key (billed per use) may take a chat, after any Claude with plan room.',
 });
 
+defineSetting({
+  key: K.allowBypass,
+  type: 'boolean',
+  default: false,
+  scope: 'global',
+  group: 'automove',
+  order: 110,
+  protective: false,
+  confirmText: 'Chats in Bypass may move to another Claude by themselves, and stay in Bypass there.',
+  label: 'Bypass too',
+  help: 'A chat in Bypass may be moved without asking, like any other; it keeps Bypass on the new Claude while the policy allows it. Off: a chat in Bypass only ever gets a card. The owner asked for it on 2026-10-13.',
+});
+
 const clamp = (n: unknown, b: { min: number; max: number; default: number }) => {
   const v = typeof n === 'number' && Number.isFinite(n) ? Math.round(n) : b.default;
   return Math.min(b.max, Math.max(b.min, v));
@@ -153,6 +166,7 @@ export function platformSettings(r: AutoSettingsReader | null): AutoTransferSett
     maxPerDestination: clamp(get(K.maxPerDestination), AUTO_BOUNDS.maxPerDestination),
     sameModelOnly: b(K.sameModelOnly, false),
     allowApiKey: b(K.allowApiKey, false),
+    allowBypass: b(K.allowBypass, false),
   };
 }
 
