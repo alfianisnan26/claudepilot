@@ -6,6 +6,7 @@ import {
   type BumpTarget,
   type CiBranch,
   type CiEnvironment,
+  type UpdateCiAutoApproveRequest,
   type CiLogChunk,
   type CiPipelineInfo,
   type CiRepo,
@@ -81,4 +82,6 @@ export const ciApi = {
   reject: (id: string, job: string) => request<CiRun>('POST', CI_API.reject(id), { job }),
   environments: (repoId: string) => request<CiEnvironment[]>('GET', CI_API.environments(repoId)),
   setEnvironment: (repoId: string, name: string, isProtected: boolean) => request<CiEnvironment>('PUT', CI_API.environment(repoId, name), { protected: isProtected }),
+  /** The auto-approve rule (T-110 FR41a): a person with manage; slice 1 knows off and dry. */
+  setAutoApprove: (repoId: string, name: string, body: UpdateCiAutoApproveRequest) => request<CiEnvironment>('PUT', CI_API.environmentAutoApprove(repoId, name), body),
 };
