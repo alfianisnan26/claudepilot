@@ -322,6 +322,8 @@ export interface RepoEvent {
   kind: RepoEventKind;
   /** Who: `ui` (a person), `session:<id>`, `ticket:<id>`, `portal-mcp:<token id>`, `portal:<what>` (the portal on its own timer), or `workspace` (it changed inside the workspace and nothing the portal started explains it). */
   actor: string;
+  /** The Portal MCP token's label when `actor` is a token, as it was when it acted (a later rename changes nothing); else null. */
+  actorLabel: string | null;
   /** The chat that was in the repository when it changed (the only one that could have), or that did the action. */
   sessionId: string | null;
   /** One short line, ready to show. */

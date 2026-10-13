@@ -37,6 +37,8 @@ export interface RunRow {
   status: 'queued' | 'running' | 'passed' | 'failed' | 'cancelled';
   reason: string | null;
   actor: string;
+  /** The Portal MCP token's label when the actor is a token, as it was then. */
+  actor_label: string | null;
   inputs: string;
   ticket_id: string | null;
   ticket_source: string | null;

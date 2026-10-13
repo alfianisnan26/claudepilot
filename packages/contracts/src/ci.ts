@@ -144,6 +144,8 @@ export interface CiRunSummary {
   reason: CiReason | null;
   /** `ui`, `push`, `portal-mcp:<id>`, `session:<id>`. */
   actor: string;
+  /** The Portal MCP token's label when `actor` is a token, as it was when the run started (a later rename changes nothing); else null. */
+  actorLabel: string | null;
   ticketId: string | null;
   sessionId: string | null;
   rerunOf: string | null;

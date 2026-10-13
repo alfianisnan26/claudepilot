@@ -36,11 +36,14 @@ export const SESSION_STATE_LABEL: Record<TicketSessionState, string> = {
   ended: 'Ended',
 };
 
+/** A Portal MCP token, by the label its owner gave it: never anonymous when the label is known. */
+export const mcpClientName = (label: string | null | undefined): string => (label?.trim() ? `MCP client “${label.trim()}”` : 'An MCP client');
+
 /** How an actor string reads on a timeline: who, not an id. */
 export function actorName(actor: string, label: string): string {
   if (actor === 'ui') return 'Admin';
   if (actor === 'system') return 'Portal';
-  if (actor.startsWith('portal-mcp:')) return label || 'An agent';
+  if (actor.startsWith('portal-mcp:')) return mcpClientName(label);
   if (actor.startsWith('session:')) return label || 'A session';
   if (actor.startsWith('ticket:')) return label || 'A ticket';
   return label || actor;

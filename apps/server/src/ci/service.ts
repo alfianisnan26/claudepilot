@@ -359,7 +359,7 @@ export class CiService {
   #insertRun(
     repo: RepoRow,
     v: Validated,
-    o: { event: EventContext['event']; ref: string; sha: string; base: string | null; actor: string; inputs: Record<string, string | boolean>; eventId: string | null; subject: string | null; trigger: CiTrigger; rerunOf?: string; sessionId?: string | null },
+    o: { event: EventContext['event']; ref: string; sha: string; base: string | null; actor: string; inputs: Record<string, string | boolean>; eventId: string | null; subject: string | null; trigger: CiTrigger; rerunOf?: string; sessionId?: string | null; actorLabel?: string | null },
   ): RunRow {
     const number = this.#cs.nextNumber(repo.id);
     const id = newRunId();
@@ -382,6 +382,7 @@ export class CiService {
       status: 'queued',
       reason: null,
       actor: o.actor,
+      actor_label: o.actorLabel ? oneLine(o.actorLabel).slice(0, 60) : null,
       inputs: JSON.stringify(o.inputs),
       ticket_id: null,
       ticket_source: null,
@@ -695,7 +696,7 @@ export class CiService {
       const newId2 = newRunId();
       const plan = row.plan ? replan(JSON.parse(row.plan) as Plan, newId2, number) : null;
       const now = new Date().toISOString();
-      const copy: RunRow = { ...row, id: newId2, number, trigger: 'rerun', event_id: null, status: plan ? 'queued' : 'failed', reason: plan ? null : row.reason, actor, plan: plan ? JSON.stringify(plan) : null, state: null, attempts: 0, created_at: now, started_at: null, finished_at: plan ? null : now, duration_ms: plan ? null : 0, archived: plan ? 0 : 1, rerun_of: row.id };
+      const copy: RunRow = { ...row, id: newId2, number, trigger: 'rerun', event_id: null, status: plan ? 'queued' : 'failed', reason: plan ? null : row.reason, actor, actor_label: null, plan: plan ? JSON.stringify(plan) : null, state: null, attempts: 0, created_at: now, started_at: null, finished_at: plan ? null : now, duration_ms: plan ? null : 0, archived: plan ? 0 : 1, rerun_of: row.id };
       // A rerun deploys again: fresh gates and its own approvals, never the old run's.
       const gates = plan ? this.#gates(repo, plan, row0(copy)) : null;
       if (gates && 'problem' in gates) throw new AppError('CONFLICT', gates.problem.message);
@@ -797,7 +798,7 @@ export class CiService {
    * Starts a pipeline by hand (FR13). `sessionId` links the run to the session that asked (an agent's own run: it may read and cancel it).
    * `deploymentOnly` refuses a pipeline in which no job names an environment: what an agent may start on a branch that is not its own (PRD §14).
    */
-  async startRun(req: Partial<StartCiRunRequest>, actor = 'ui', opts: { sessionId?: string | null; deploymentOnly?: string } = {}): Promise<CiRun> {
+  async startRun(req: Partial<StartCiRunRequest>, actor = 'ui', opts: { sessionId?: string | null; deploymentOnly?: string; actorLabel?: string | null } = {}): Promise<CiRun> {
     if (typeof req.repoId !== 'string') throw invalid('repoId', 'Pick a remote.');
     const repo = this.#needRepo(req.repoId);
     if (typeof req.pipeline !== 'string' || !req.pipeline) throw invalid('pipeline', 'Pick a pipeline.');
@@ -812,7 +813,7 @@ export class CiService {
     if (opts.deploymentOnly && !found.pipeline.jobs.some((j) => !j.hidden && j.environment)) throw new AppError('FORBIDDEN', opts.deploymentOnly);
     const { values, problems } = resolveInputs(found.pipeline.on.manual.inputs, req.inputs);
     if (Object.keys(problems).length) throw new AppError('VALIDATION_FAILED', 'Check the inputs.', { details: problems });
-    const row = this.#cs.tx(() => this.#insertRun(repo, found, { event: 'manual', ref: ref.ref, sha: ref.sha, base: null, actor, inputs: values, eventId: null, subject: snap.subject ?? null, trigger: 'manual', sessionId: opts.sessionId ?? null }));
+    const row = this.#cs.tx(() => this.#insertRun(repo, found, { event: 'manual', ref: ref.ref, sha: ref.sha, base: null, actor, inputs: values, eventId: null, subject: snap.subject ?? null, trigger: 'manual', sessionId: opts.sessionId ?? null, actorLabel: opts.actorLabel ?? null }));
     this.#born(row, snap.message ?? null);
     this.#changed();
     this.kick(repo.workspace_id);
@@ -869,6 +870,7 @@ export class CiService {
       status: row.status,
       reason: row.reason as CiRunSummary['reason'],
       actor: row.actor,
+      actorLabel: row.actor_label ?? null,
       ticketId: row.ticket_id,
       sessionId: row.session_id,
       rerunOf: row.rerun_of,

@@ -83,6 +83,8 @@ export interface ReposDeps {
 interface ScanOptions {
   /** Who asked (`ui`, `portal-mcp:<id>`, `portal:timer`, `portal:session`...). */
   actor: string;
+  /** A Portal MCP token's label as it is now, kept on the events this look records. */
+  actorLabel?: string;
   /** Looks again at this repository only; `deep` also what is inside it and its worktrees. */
   scope?: { path: string; deep: boolean } | null;
   /** The events this look finds are the doing of `actor` (a sync it just made), not something to attribute. */
@@ -719,10 +721,12 @@ export class ReposService {
    */
   #attribute(ws: string, d: EventDraft, o: ScanOptions, at: string, pathById: ReadonlyMap<string, string>, owners: ReadonlyMap<string, ChatSession[]>, sinceOf: (repoId: string | null) => number): NewEvent {
     let actor = 'workspace';
+    let actorLabel: string | null = null;
     let sessionId: string | null = null;
     const data: RepoEventData = { ...d.data };
     if (o.claim) {
       actor = o.actor;
+      actorLabel = o.actorLabel ? plain(o.actorLabel, 60) : null;
       const m = /^session:(.+)$/.exec(o.actor);
       sessionId = m ? m[1]! : null;
     } else if (d.attributable && d.repoId) {
@@ -737,12 +741,12 @@ export class ReposService {
         sessionId = candidates[0]!.id;
       } else if (candidates.length > 1) data.sessions = candidates.slice(0, 3).map((s) => s.id);
     }
-    return { at, workspaceId: ws, repoId: d.repoId, repo: d.repo ? plain(d.repo, 120) : null, kind: d.kind, actor, sessionId, summary: d.summary, data };
+    return { at, workspaceId: ws, repoId: d.repoId, repo: d.repo ? plain(d.repo, 120) : null, kind: d.kind, actor, actorLabel, sessionId, summary: d.summary, data };
   }
 
-  #record(ws: string, repo: { id: string; name: string } | null, kind: RepoEventKind, actor: string, data: RepoEventData): void {
+  #record(ws: string, repo: { id: string; name: string } | null, kind: RepoEventKind, actor: string, data: RepoEventData, actorLabel?: string): void {
     const m = /^session:(.+)$/.exec(actor);
-    this.#db.addEvents([{ at: this.#iso(), workspaceId: ws, repoId: repo?.id ?? null, repo: repo ? plain(repo.name, 120) : null, kind, actor, sessionId: m ? m[1]! : null, summary: describe(kind, repo?.name ?? null, data), data }]);
+    this.#db.addEvents([{ at: this.#iso(), workspaceId: ws, repoId: repo?.id ?? null, repo: repo ? plain(repo.name, 120) : null, kind, actor, actorLabel: actorLabel ? plain(actorLabel, 60) : null, sessionId: m ? m[1]! : null, summary: describe(kind, repo?.name ?? null, data), data }]);
   }
 
   /* ---------- Worktrees ---------- */
@@ -768,7 +772,7 @@ export class ReposService {
   }
 
   /** Makes a worktree of the repository (the session host's hardened `wt-add`: no hook, filter or fsmonitor of the repository runs). */
-  async createWorktree(id: string, req: CreateRepoWorktreeRequest, actor: string): Promise<CreateRepoWorktreeResult> {
+  async createWorktree(id: string, req: CreateRepoWorktreeRequest, actor: string, actorLabel?: string): Promise<CreateRepoWorktreeResult> {
     const row = this.#row(id);
     if (row.kind === 'missing') throw new AppError('CONFLICT', 'That submodule isn’t cloned.');
     const ws = row.workspaceId;
@@ -794,8 +798,8 @@ export class ReposService {
       // Known before the scan reads it, so the scan doesn't announce what the portal itself just did.
       this.#db.save([{ id: wid, workspaceId: ws, path: made.path, name: basename(made.path), kind: 'worktree', parentId: mainRow?.id ?? null, mainId: repoId(ws, made.repo), state: null, error: null, worktree: { locked: false, prunable: false }, submodule: null, drifted: 0 }], at);
       if (req.sync === true) this.#db.setSync(wid, true);
-      this.#record(ws, row, 'worktree_created', actor, { path: made.path, branch: made.branch, sha: made.commit, ...(req.sync === true ? { enabled: true } : {}) });
-      await this.#exclusive(ws, () => this.#scan(ws, { actor, scope: { path: made.path, deep: false }, claim: true })).catch(() => undefined);
+      this.#record(ws, row, 'worktree_created', actor, { path: made.path, branch: made.branch, sha: made.commit, ...(req.sync === true ? { enabled: true } : {}) }, actorLabel);
+      await this.#exclusive(ws, () => this.#scan(ws, { actor, ...(actorLabel ? { actorLabel } : {}), scope: { path: made.path, deep: false }, claim: true })).catch(() => undefined);
       this.#deps.notify();
       const nodes = this.#nodes(ws, this.#db.rows(ws));
       const node = nodes.find((n) => n.id === wid);

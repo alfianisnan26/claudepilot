@@ -148,6 +148,9 @@ test('the timeline: filters stand for server queries; an actor reads as a word',
   assert.equal(actorLabel('session:abc'), 'Session');
   assert.equal(actorLabel('ticket:T-12'), 'Ticket T-12');
   assert.equal(actorLabel('portal-mcp:tok1'), 'Agent token');
+  assert.equal(actorLabel('portal-mcp:tok1', 'relay'), 'MCP client “relay”', 'a token is named by its label');
+  assert.equal(actorLabel('portal-mcp:tok1', '  '), 'Agent token');
+  assert.equal(actorLabel('session:abc', 'relay'), 'Session', 'only a token takes a label');
   assert.equal(actorLabel('portal:sync'), 'Keep synced');
   assert.equal(actorLabel('workspace'), 'Workspace');
   assert.equal(ticketOf('ticket:T-12'), 'T-12');

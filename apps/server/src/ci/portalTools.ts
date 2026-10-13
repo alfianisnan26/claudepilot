@@ -48,6 +48,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     status: r.status,
     reason: r.reason,
     actor: r.actor,
+    actor_label: r.actorLabel,
     ticket_id: r.ticketId,
     session_id: r.sessionId,
     created_at: r.createdAt,
@@ -203,7 +204,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
         if (!me?.branch || ref !== me.branch)
           deploymentOnly = `An agent can start a run only on the branch its own session works on${me?.branch ? ` (${me.branch})` : ', and this session has no worktree branch'}, or a pipeline that deploys to an environment.`;
       }
-      const run = await ci.startRun({ repoId: repo.id, pipeline: args.pipeline, ref: args.ref, inputs: args.inputs }, ctx.actor, { sessionId: ctx.isAgent ? ctx.sessionId : null, deploymentOnly });
+      const run = await ci.startRun({ repoId: repo.id, pipeline: args.pipeline, ref: args.ref, inputs: args.inputs }, ctx.actor, { sessionId: ctx.isAgent ? ctx.sessionId : null, deploymentOnly, actorLabel: ctx.actorLabel ?? null });
       ctx.affected(`ci-run:${run.id}`);
       const held = run.deployments.filter((d) => d.approval === 'pending').map((d) => d.environment);
       return {

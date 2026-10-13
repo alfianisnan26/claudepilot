@@ -170,6 +170,12 @@ test('manual runs: a branch, inputs checked, a pipeline without a manual trigger
     const repo = await remote(h, { '.pilot/ci.yml': PIPELINE, '.pilot/auto.yml': 'on: push\njobs:\n  a:\n    steps: [{run: echo x}]\n' });
     const run = await h.svc.startRun({ repoId: repo.id, pipeline: 'ci', ref: 'main', inputs: { target: 'production' } }, 'portal-mcp:t1');
     assert.deepEqual([run.trigger, run.actor, run.branch, run.status, run.inputs], ['manual', 'portal-mcp:t1', 'main', 'queued', { target: 'production' }]);
+    assert.equal(run.actorLabel, null, 'no label given, none made up');
+    // T-6: a Portal MCP token's label is kept with the run, one line and bounded; a person's run has none
+    const labelled = await h.svc.startRun({ repoId: repo.id, pipeline: 'ci', ref: 'main', inputs: { target: 'production' } }, 'portal-mcp:t1', { actorLabel: 'relay\n  ' + 'x'.repeat(100) });
+    assert.equal(labelled.actorLabel, ('relay ' + 'x'.repeat(100)).slice(0, 60));
+    assert.equal(h.svc.get(labelled.id).actorLabel, labelled.actorLabel, 'stored, not recomputed');
+    assert.equal((await h.svc.startRun({ repoId: repo.id, pipeline: 'ci', ref: 'main', inputs: { target: 'production' } })).actorLabel, null);
     await h.until('it to pass', () => h.svc.list().items[0]!.status === 'passed');
     assert.equal(await codeOf(() => h.svc.startRun({ repoId: repo.id, pipeline: 'auto', ref: 'main' })), 'CONFLICT');
     assert.equal(await codeOf(() => h.svc.startRun({ repoId: repo.id, pipeline: 'ci', ref: 'main', inputs: { target: 'mars' } })), 'VALIDATION_FAILED');
