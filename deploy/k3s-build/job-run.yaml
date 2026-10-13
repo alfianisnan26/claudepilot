@@ -1,0 +1,101 @@
+# Heavy agent work (a test file, the suite, tsc, a build, a browser check) as a Job in the cluster, on CPUs other than the development pod's
+# (T-107). Started only by scripts/job-run.sh, which fills in the __PLACEHOLDERS__ (the command
+# base64, everything else validated by the script), makes the Secret of the same name (npm or Gitea credentials) for the Job's life, and lets the Job out
+# of suspend when the caps allow (3 at once cluster-wide, 2 per chat; the queue is the creation order of the suspended Jobs).
+# Like gate-job.yaml: it prefers a node WITHOUT a development workspace pod, requests 1 CPU (limit 4), and /tmp (the clone, node_modules, the
+# tests' databases) is an emptyDir in memory. npm's cache is in /tmp too: a cold `npm ci` is about 20 s in a Job (gate logs), a shared cache
+# volume would have to be a node-bound local-path PVC (the only storage class) for a few seconds' gain.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __NAME__
+  namespace: isnan-claudepilot
+  labels: {app: claudepilot-job-run, job-run/chat: __CHAT__, job-run/role: __ROLE__, job-run/repo: __REPO__}
+  annotations: {job-run/owner: "__OWNER__"}
+spec:
+  suspend: true
+  backoffLimit: 0
+  activeDeadlineSeconds: __DEADLINE__
+  ttlSecondsAfterFinished: 1800
+  template:
+    metadata:
+      labels: {app: claudepilot-job-run, job-run/chat: __CHAT__, job-run/role: __ROLE__}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                namespaces: [isnan-claudepilot-workspaces]
+                labelSelector: {matchLabels: {claudepilot.managed: "true"}}
+      containers:
+        - name: run
+          image: __IMAGE__
+          env:
+            - {name: JR_REPO_URL, value: "__REPO_URL__"}
+            - {name: JR_REF, value: "__REF__"}
+            - {name: JR_ALSO, value: "__ALSO__"}
+            - {name: JR_STEPS, value: "__STEPS__"}
+            - {name: JR_ARTIFACTS, value: "__ARTIFACTS__"}
+            - {name: JR_ARTIFACT_MAX, value: "__ARTMAX__"}
+            - {name: JR_CMD, value: "__CMD__"}
+            - {name: NODE_NAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}
+            - {name: NODE_AUTH_TOKEN, valueFrom: {secretKeyRef: {name: __NAME__, key: node-auth-token, optional: true}}}
+            - {name: GIT_USER, valueFrom: {secretKeyRef: {name: __NAME__, key: git-user, optional: true}}}
+            - {name: GIT_TOKEN, valueFrom: {secretKeyRef: {name: __NAME__, key: git-token, optional: true}}}
+          command: [bash, -c]
+          args:
+            - |
+              # JOB-RUN-SCRIPT BEGIN (the test runs this part on its own, with JR_ROOT pointing elsewhere)
+              set -u
+              root=${JR_ROOT:-/tmp}; say() { echo "=== JOB-RUN $*"; }
+              export HOME=$root/home npm_config_cache=$root/npm-cache npm_config_update_notifier=false CI=1
+              mkdir -p "$HOME" "$root/w"
+              # Credentials only through a helper that reads the environment: the token is never on a command line or in a URL.
+              git config --global credential.helper '!f() { [ -n "${GIT_TOKEN:-}" ] || exit 0; echo "username=${GIT_USER:-git}"; echo "password=$GIT_TOKEN"; }; f'
+              t0=$(date +%s)
+              fetch() { # <dir> <url> <ref>
+                git init -q "$root/w/$1" && git -C "$root/w/$1" fetch -q --depth 1 "$2" "$3" && git -C "$root/w/$1" checkout -q FETCH_HEAD \
+                  || { say "EXIT 2"; echo "job-run: $3 of $2 is not on the remote (push it first)"; exit 2; }
+              }
+              main=$(basename "$JR_REPO_URL" .git)
+              for a in $JR_ALSO; do fetch "${a%%=*}" "$(printf '%s' "${a#*=}" | sed 's/@[^@]*$//')" "${a##*@}"; done
+              fetch "$main" "$JR_REPO_URL" "$JR_REF"
+              sha=$(git -C "$root/w/$main" rev-parse --short HEAD); t1=$(date +%s)
+              say "checked out $main at $sha in $((t1 - t0))s"
+              if [ "$JR_STEPS" = npm-ci ]; then
+                for d in $(for a in $JR_ALSO; do echo "${a%%=*}"; done) "$main"; do
+                  [ -f "$root/w/$d/package-lock.json" ] || continue
+                  (cd "$root/w/$d" && npm ci --no-audit --no-fund --loglevel=error) || { rc=$?; say "npm ci failed in $d (rc=$rc)"; say "EXIT $rc"; exit "$rc"; }
+                done
+              fi
+              t2=$(date +%s); say "steps ($JR_STEPS) in $((t2 - t1))s; running the command"
+              cd "$root/w/$main" && printf '%s' "$JR_CMD" | base64 -d > "$root/cmd.sh"
+              bash -o pipefail "$root/cmd.sh"; rc=$?
+              t3=$(date +%s)
+              if [ -n "$JR_ARTIFACTS" ]; then
+                # shellcheck disable=SC2086 # a list of paths
+                if tar -czf "$root/artifacts.tgz" --ignore-failed-read -C "$root/w/$main" -- $JR_ARTIFACTS 2>/dev/null || [ -s "$root/artifacts.tgz" ]; then
+                  size=$(stat -c %s "$root/artifacts.tgz")
+                  if [ "$size" -le "$JR_ARTIFACT_MAX" ]; then say "ARTIFACTS BEGIN"; base64 -w 4000 "$root/artifacts.tgz"; echo; say "ARTIFACTS END"
+                  else say "artifacts not copied back: $size bytes compressed, over the cap of $JR_ARTIFACT_MAX"; fi
+                else say "artifacts: nothing at $JR_ARTIFACTS"; fi
+              fi
+              say "SUMMARY $main@$sha checkout=$((t1 - t0))s steps=$((t2 - t1))s run=$((t3 - t2))s rc=$rc node=${NODE_NAME:-?}"
+              say "EXIT $rc"
+              exit "$rc"
+              # JOB-RUN-SCRIPT END
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: shm, mountPath: /dev/shm}
+          resources:
+            requests: {cpu: 1000m, memory: 2Gi}
+            limits: {cpu: "4", memory: 8Gi}
+      volumes:
+        - name: tmp
+          emptyDir: {medium: Memory, sizeLimit: 3Gi}
+        - name: shm
+          emptyDir: {medium: Memory, sizeLimit: 1Gi}
