@@ -68,6 +68,8 @@ try {
 
   check('the page never rubber-bands: html', (await ev(`getComputedStyle(document.documentElement).overscrollBehaviorY`)) === 'none');
   check('the page never rubber-bands: body', (await ev(`getComputedStyle(document.body).overscrollBehaviorY`)) === 'none');
+  check('the page never scrolls sideways: the root clips', (await ev(`getComputedStyle(document.getElementById('root')).overflowX`)) === 'clip');
+  check('the page never scrolls sideways: nothing is wider than the screen', (await ev(`document.scrollingElement.scrollWidth <= innerWidth`)) === true);
 
   await ev(`document.querySelector('nav[aria-label=Main] [aria-label=More]').click()`);
   check('the More sheet opens', await waitFor(`document.querySelector('[role=dialog][aria-modal=true]') !== null`, 4000));

@@ -159,6 +159,13 @@ body {
   overscroll-behavior-y: none;
 }
 
+/* The page never scrolls sideways (A2): whatever sticks out of a row or a card is clipped at the app's edge, not panned to. On the
+   root, not html or body: an overflow there would stop body's `overflow: hidden` (the scroll lock) from reaching the viewport. `clip`
+   makes no scroll container, so sticky and the pinned full-screen pages are untouched. */
+#root {
+  overflow-x: clip;
+}
+
 /* A slider (effort): a thin track filled up to the thumb (`--fill`), and a round thumb that lifts off it. */
 @utility range {
   -webkit-appearance: none;
