@@ -370,9 +370,10 @@ requests get an error response.
 The controller records every UUID and `request_id` it sends and ends the session at once
 (`end_session`, then SIGTERM after 10 s), with a High event, when it reads:
 
-- a `control_response` for a `request_id` it never issued, or a second one for one it did;
+- a `control_response` for a `request_id` it never issued, or a second one for one it did whose content differs from the first
+  (an identical second copy is ignored and logged, T-136);
 - a replayed user line, or a `command_lifecycle` `queued` state, for a UUID it never sent (peer
-  messages included; commands the CLI queues itself emit no `queued`);
+  messages included, unless their cause is in the stream, T-136; commands the CLI queues itself emit no `queued`);
 - a `tool_result` or `permission_denied` for a tool whose request is still unanswered, other than
   after the portal's own Stop or `stop_task`;
 - a turn with nothing behind it: no input from the controller, no finished background task and no
@@ -389,6 +390,39 @@ replayed user line (then `system/init` and the turn). The controller accepts it,
 task ran in the session's current process (`chat_tasks` since the process start), and logs it as a harness turn; the same line in a
 process without any task, or a `queued` state for an unknown UUID, still ends the session. Observed on the Konfersi session at 12:50
 (a role sub-agent finished; the session ended "queued a message this portal didn't send"); the raw lines are a test fixture.
+
+**Accepted cases, one table (T-136, 2026-10-13).** Every line the controller believes without having sent it is an entry of
+`INTEGRITY_CASES` (`apps/server/src/chat/integrity.ts`): the line, the rule, the evidence it rests on, and its negative twin, which still
+ends the session; `integrity.test.ts` holds a positive fixture and the negative twins for each, built at runtime. Two were added after
+three integrity endings in one day:
+
+- **A sub-agent's message to the main conversation** (origin `peer`). Observed on the orchestrator fdb140be at 15:45 (raw `out.1.jsonl`,
+  Claude Code 2.1.296): an assistant line on the sub-agent's thread (`parent_tool_use_id` its Agent call, `agent_id` its task id) with
+  a `SendMessage` tool use `{to: "main", message}`; then that call's tool result, one text block `{"success":true,"message":"Message
+  queued for the main conversation's next turn."}`; then `system/init` (a new turn); then a replayed, synthetic user line with
+  `origin: {kind: "peer", from, senderTaskId, name, body}` whose `body` is exactly the message. No `command_lifecycle` for that line was
+  seen. The controller accepts the peer line only when all of it is there: the SendMessage of a sub-agent (never the main thread's), its
+  own result saying exactly that (the phrase inside any other text, a ticket quoting it, does not count), the same task id, a task that
+  ran in the current process (`chat_tasks`), the same text (compared as a sha256 digest; the text is never kept), within 2 minutes; each
+  cause is used once. Otherwise (no cause, another body, another task, too late, a second copy) it still ends the session. A later
+  lifecycle of that line's command, should one come, is the harness's, like a T-99 turn. Sub-agents are still told not to call
+  SendMessage (dev-sessions README rule 7) until this is deployed.
+- **A second, identical control response.** The orchestrator fe3df8bc ended "a second control response for request …"; no request id
+  appears twice in any raw `out.*.jsonl` on the dev workspace, so the second copy was the same line read again by the portal, not a
+  second answer from Claude Code. The first response's digest (sha256 of the parsed reply) is kept on its control line (migration 771);
+  an identical second copy is ignored and logged, never processed again; a different one, one whose first copy has no digest (read before
+  the change), or one for an id the portal never asked or answered still ends the session.
+
+Nothing else was loosened: an invented uuid, an unknown origin, a lifecycle in a process with no task and a message with no cause end the
+session as before, and the Bypass checks are unchanged.
+
+**Lineage (T-136 part E, data).** A session that continues an ended one names it in `continued_from` (migration 770; `continuedFrom` on
+the wire); root to head the rows are one unit, and the server's lineage read (`ChatStore.lineage`) gives the chain and its cost summed.
+Migration 772 repaired the chains split on 2026-10-13 (fe3df8bc → fdb140be → 5c9fcb5f, the orchestrator; 541948a5 → 929ae1e3,
+Konfersi): matched by id prefix only when exactly one row matches, all in one workspace, never overwriting another link, otherwise a
+no-op; a pin moves to the head, the head takes an earlier row's ticket link when it has none, and tickets held by an ended row of the
+chain are assigned to the head with an `assigned` entry (actor `system`) on each timeline. Sessions carry no tags today, so none move.
+Not yet: recovery in place (part B), grouping usage and scores by lineage root (slice 3).
 
 ### 10.5 Browser protocol
 
