@@ -6,7 +6,9 @@ import {
   TICKET_TYPES,
   TICKET_TYPE_LABEL,
   type CreateTicketRequest,
+  type BumpMode,
   type StartTicketSessionResult,
+  type TicketBumpResult,
   type TicketAssignee,
   type TicketItem,
   type TicketPriority,
@@ -14,6 +16,7 @@ import {
   type Workspace,
 } from '@portal/contracts';
 import { useEffect, useState } from 'react';
+import { BumpDialog } from '@/components/BumpDialog';
 import { InfoTip } from '@/components/InfoTip';
 import { chatApi } from '@/features/chat/api';
 import { api, errorText } from '@/lib/api';
@@ -464,5 +467,26 @@ export function StartSessionDialog({ ticket, onClose, onStarted }: { ticket: Tic
         </Disclosure>
       </div>
     </FormDialog>
+  );
+}
+
+/** The two ways, in the dialog's one ⓘ (tickets PRD FR28). */
+const BUMP_HELP: Record<BumpMode, string> = {
+  prioritise: 'the session takes it as its next work. It is assigned to that session and set in progress.',
+  ask: 'a question. The session answers in a comment here; the ticket stays as it is.',
+};
+
+/** Bump (FR28): the shared Bump dialog over this ticket's sessions; its assigned session comes first. */
+export function TicketBumpDialog({ ticket, onClose, onBumped }: { ticket: TicketItem | null; onClose: () => void; onBumped: (r: TicketBumpResult) => void }) {
+  const id = ticket?.id ?? '';
+  return (
+    <BumpDialog
+      open={!!ticket}
+      onClose={onClose}
+      subject={ticket ? `${ticket.id} · ${ticket.summary}` : undefined}
+      modeHelp={BUMP_HELP}
+      load={() => ticketsApi.bumpTargets(id)}
+      onBump={async (req) => onBumped(await ticketsApi.bump(id, req))}
+    />
   );
 }

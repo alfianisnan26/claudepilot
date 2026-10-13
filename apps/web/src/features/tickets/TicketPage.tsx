@@ -1,5 +1,6 @@
 import { Badge, Button, ConfirmDialog, LoadError, Menu, Select, useToast } from '@isnanme/ui';
 import {
+  BUMP_MODE_LABEL,
   TICKET_LIMITS,
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABEL,
@@ -14,7 +15,7 @@ import {
   type TicketStatus,
   type TicketType,
 } from '@portal/contracts';
-import { Bot, ChevronLeft, Circle, GitBranch, MessageSquare, Play, RotateCcw, Trash2, User } from 'lucide-react';
+import { Bot, ChevronLeft, ChevronsUp, Circle, GitBranch, MessageSquare, Play, RotateCcw, Trash2, User } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { Card } from '@/components/Card';
@@ -26,9 +27,9 @@ import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
 import { SESSION_STATE_LABEL, actorName } from './labels';
 import { AssigneeChip, CheckChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge } from './parts';
-import { AssignDialog, CloseDialog, EditTicketDialog, StartSessionDialog, TagsDialog } from './TicketDialogs';
+import { AssignDialog, CloseDialog, EditTicketDialog, StartSessionDialog, TagsDialog, TicketBumpDialog } from './TicketDialogs';
 
-type Dialog = 'edit' | 'tags' | 'assign' | 'close' | 'start' | 'delete' | null;
+type Dialog = 'edit' | 'tags' | 'assign' | 'close' | 'start' | 'bump' | 'delete' | null;
 
 /**
  * One ticket (tickets PRD §13): its fields, description, the sessions that worked it and its timeline,
@@ -119,6 +120,11 @@ export function TicketPage() {
           {!closed && (
             <Button icon={<Play className="size-4" />} onClick={() => setDialog('start')}>
               Start session
+            </Button>
+          )}
+          {!closed && (
+            <Button variant="secondary" icon={<ChevronsUp className="size-4" />} onClick={() => setDialog('bump')}>
+              Bump
             </Button>
           )}
           {!closed && (
@@ -233,6 +239,15 @@ export function TicketPage() {
           navigate(`/admin/sessions/${r.session.id}`);
         }}
       />
+      <TicketBumpDialog
+        ticket={dialog === 'bump' ? t : null}
+        onClose={() => setDialog(null)}
+        onBumped={(r) => {
+          setDialog(null);
+          toast(`Bumped into ${r.session.title || 'the session'}`);
+          void load();
+        }}
+      />
       <ConfirmDialog
         open={dialog === 'delete'}
         title={`Delete ${t.id}?`}
@@ -306,6 +321,8 @@ function sentence(e: TicketEvent): string {
       return d.claimed ? `${who} claimed it` : `${who} assigned it to ${assignee(d.to)}`;
     case 'session_started':
       return `${who} started a session for it`;
+    case 'bumped':
+      return `${who} bumped it into ${typeof d.sessionTitle === 'string' && d.sessionTitle ? `“${d.sessionTitle}”` : 'a session'} (${d.mode === 'prioritise' ? BUMP_MODE_LABEL.prioritise : BUMP_MODE_LABEL.ask})`;
     case 'session_ended':
       return `The session ended${typeof d.reason === 'string' && d.reason ? `: ${d.reason}` : ''}`;
     case 'ci':
@@ -360,7 +377,7 @@ function Timeline({ events, ticketId, onChanged }: { events: TicketEvent[]; tick
               </span>
               <p className="min-w-0 flex-1 pt-0.5">
                 {sentence(e)} · <span title={formatDateTime(e.at)}>{timeAgo(e.at)}</span>
-                {e.kind === 'closed' && e.body && <span className="mt-1 block rounded-xl bg-surface-2/60 px-3 py-2 text-ink-soft">{e.body}</span>}
+                {(e.kind === 'closed' || e.kind === 'bumped') && e.body && <span className="mt-1 block rounded-xl bg-surface-2/60 px-3 py-2 [overflow-wrap:anywhere] text-ink-soft">{e.body}</span>}
               </p>
             </li>
           ),

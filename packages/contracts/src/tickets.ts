@@ -2,6 +2,8 @@
 // a one-line summary, a Markdown description, tags and a status; it is assigned to an agent session or a
 // person; every change is an entry on its timeline. The text of a ticket is untrusted input.
 
+import type { BumpMode } from './bump.js';
+
 export const TICKET_TYPES = ['task', 'bug', 'feature', 'question', 'request', 'incident', 'approval', 'chore'] as const;
 export type TicketType = (typeof TICKET_TYPES)[number];
 
@@ -110,7 +112,9 @@ export type TicketEventKind =
   | 'session_ended'
   | 'ci'
   | 'closed'
-  | 'reopened';
+  | 'reopened'
+  /** A person (or a script) pushed it into a running session (FR28): `data` `{ sessionId, sessionTitle, mode }`, `body` the note. */
+  | 'bumped';
 
 /** One entry on a ticket's timeline: who did what, when. Never edited. */
 export interface TicketEvent {
@@ -242,6 +246,22 @@ export interface StartTicketSessionResult {
   session: TicketSession;
 }
 
+/** What a bump returns (FR28): the ticket as it is now (assigned and in progress after Prioritise; unchanged after Ask) and the session. */
+export interface TicketBumpResult {
+  ticket: TicketItem;
+  session: TicketSession;
+  mode: BumpMode;
+}
+
+/** A ticket bumped into a session, for the session page's chip (FR31): the latest bump per ticket, newest first. */
+export interface TicketBumped {
+  ticketId: string;
+  summary: string;
+  status: TicketStatus;
+  mode: BumpMode;
+  at: string;
+}
+
 export interface TicketTag {
   tag: string;
   count: number;
@@ -264,6 +284,10 @@ export const TICKET_API = {
   brief: (id: string) => `/api/tickets/${encodeURIComponent(id)}/brief`,
   /** GET: the opening message a session started for it would get, as `{ text }` (tickets PRD FR15). */
   opening: (id: string) => `/api/tickets/${encodeURIComponent(id)}/opening`,
+  /** GET: the sessions it can be bumped into, as `BumpTarget[]`. POST `BumpRequest`: `TicketBumpResult` (FR28). */
+  bump: (id: string) => `/api/tickets/${encodeURIComponent(id)}/bump`,
+  /** GET: the tickets bumped into a session, as `TicketBumped[]` (FR31). */
+  bumped: (sessionId: string) => `/api/tickets/bumped?session=${encodeURIComponent(sessionId)}`,
 } as const;
 
 /** `T-12` for 12. */

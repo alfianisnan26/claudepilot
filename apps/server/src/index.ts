@@ -340,8 +340,12 @@ mcpSets.oauth.host = workspaces;
 mcpSets.oauth.claudeDirectory = (id, claudeId) => chatController.claudeOf(id, claudeId)?.directory ?? null;
 chatController.mcpServersSeen = (id, directory, servers) => mcpSets.oauth.seen(id, directory, servers).map((s) => s.name);
 // Tickets: one queue of work for people and agents; reaches chat sessions only through its adapter (tickets PRD).
-const tickets = new Tickets(store, new ChatTicketSessions(chatController));
+const tickets = new Tickets(store, new ChatTicketSessions(chatController), {
+  link: (id) => `${(config.portalMcp.uiUrl ?? `http://localhost:${config.port}`).replace(/\/+$/, '')}/admin/tickets/${id}`,
+});
 tickets.onChange = () => notify('tickets');
+// A bump reaches into a session: the platform audit (created further down) records who, which ticket, which session and how (FR30).
+tickets.onAudit = (e) => platform.audit.record(e);
 tickets.start();
 chatController.ticketExists = (id) => tickets.exists(id);
 registerTicketTools(tickets);
