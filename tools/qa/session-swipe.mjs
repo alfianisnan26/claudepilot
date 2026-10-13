@@ -1,5 +1,5 @@
-// The Sessions list on a phone (chat PRD FR2, 2026-10-13): the chips run Pinned · Idle · … · All, Pinned appears once something is pinned and
-// is the chip the list opens on, a pinned row leads, and a swipe to the right on a row pins (left archives). Real app in headless Chromium
+// The Sessions list on a phone (chat PRD FR2, 2026-10-13; the order of T-100): the chips run in the order of attention with All last, the list
+// opens on the first chip with sessions, Pinned is always there and counts a pin, and a swipe to the right on a row pins (left archives). Real app in headless Chromium
 // over CDP with touch emulation at 390 x 844 against a scratch portal that has at least two sessions.
 // usage: QA_PORT=3417 QA_CODE=<server code> node tools/qa/session-swipe.mjs [--shots dir]
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -30,10 +30,13 @@ const shot = async (name) => {
   const r = await b.send('Page.captureScreenshot', { format: 'png' });
   writeFileSync(join(shots, `${name}.png`), Buffer.from(r.data, 'base64'));
 };
-const chips = () => b.eval(`[...document.querySelectorAll('button[aria-pressed]')].map((e) => e.textContent.replace(/\\d+$/, '').trim())`);
-const pressed = () => b.eval(`document.querySelector('button[aria-pressed=true]')?.textContent.replace(/\\d+$/, '').trim() ?? null`);
-const rowBox = (title) =>
-  b.eval(`(() => { const a = [...document.querySelectorAll('a[href^="/admin/sessions/"]')].find((e) => e.textContent.includes(${JSON.stringify(title)})); if (!a) return null; const r = a.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`);
+// The chips as [id, count], from their aria-label ("<name> <count>").
+const chips = () => b.eval(`[...document.querySelectorAll('[data-chip]')].map((e) => [e.dataset.chip, Number(e.getAttribute('aria-label').match(/(\\d+)$/)?.[1] ?? -1)])`);
+const pressed = () => b.eval(`document.querySelector('[data-chip][aria-pressed=true]')?.dataset.chip ?? null`);
+const firstFull = (c) => c.find(([id, n]) => id !== 'all' && id !== 'archived' && n > 0)?.[0] ?? 'all';
+const chip = (id) => b.eval(`document.querySelector('[data-chip=${id}]')?.click()`);
+const rowBox = (id) =>
+  b.eval(`(() => { const a = document.querySelector('ul a[href="/admin/sessions/${id}"]'); if (!a) return null; const r = a.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`);
 const touch = async (type, x, y) => b.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }] });
 const swipe = async (from, dx) => {
   await touch('touchStart', from.x, from.y);
@@ -45,17 +48,18 @@ const swipe = async (from, dx) => {
 };
 
 await b.goto('/admin/sessions', 2500);
-check('nothing pinned: the list opens on Idle', (await pressed()) === 'Idle', String(await pressed()));
 const order = await chips();
-check('the chips: Idle first (Pinned hidden while nothing is pinned), All last', order[0] === 'Idle' && order[order.length - 1] === 'All', JSON.stringify(order));
+check('the list opens on the first chip with sessions', (await pressed()) === firstFull(order), JSON.stringify({ on: await pressed(), order }));
+check('the chips: Pinned there while nothing is pinned, All last', order.some(([id, n]) => id === 'pinned' && n === 0) && order.at(-1)?.[0] === 'all', JSON.stringify(order));
 check('no sideways scroll', (await b.eval('document.scrollingElement.scrollWidth <= innerWidth')) === true);
-await shot('list-idle');
+await shot('list-first');
 
-// Swipe the second session to the right: it is pinned, the Pinned chip appears and leads.
-await b.eval(`[...document.querySelectorAll('button[aria-pressed]')].find((e) => e.textContent.startsWith('All')).click()`); // All: every row is on screen
+// Swipe the second session to the right: it is pinned and the Pinned chip counts it.
+await chip('all'); // All: every row is on screen
 await sleep(500);
-const target = sessions[1];
-const box = await rowBox(target.title.slice(0, 20));
+// A calm one: archiving a busy session or one with a worktree asks first (a dialog), which is not what this checks.
+const target = sessions.find((x) => (x.state === 'idle' || x.state === 'ended') && !x.worktree && !x.waiting) ?? sessions[1];
+const box = await rowBox(target.id);
 check('the row is on screen', !!box);
 await swipe(box, 120);
 await sleep(1200);
@@ -63,19 +67,21 @@ const after = (await call('GET', `/api/chat/sessions/${target.id}`)).data;
 check('a swipe to the right pins it', !!after?.pinnedAt);
 await sleep(800);
 const order2 = await chips();
-check('the Pinned chip is first once something is pinned', order2[0] === 'Pinned', JSON.stringify(order2));
+check('the Pinned chip counts it', order2.find(([id]) => id === 'pinned')?.[1] === 1, JSON.stringify(order2));
 check('no sideways scroll after the swipe', (await b.eval('document.scrollingElement.scrollWidth <= innerWidth')) === true);
 check('the row is back in place', (await b.eval(`!document.querySelector('[data-swipe]')`)) === true);
 await shot('list-pinned');
 
-// A fresh load opens on Pinned, with the pinned session in it.
+// A fresh load still opens on the first chip with sessions; Pinned lists the pinned session.
 await b.goto('/admin/sessions', 2500);
-check('something pinned: the list opens on Pinned', (await pressed()) === 'Pinned', String(await pressed()));
-check('the pinned session is listed', (await b.eval(`document.body.innerText.includes(${JSON.stringify(target.title.slice(0, 20))})`)) === true);
-await shot('list-opens-pinned');
+check('a fresh load opens on the first chip with sessions', (await pressed()) === firstFull(await chips()), String(await pressed()));
+await chip('pinned');
+await sleep(500);
+check('the pinned session is listed under Pinned', (await rowBox(target.id)) !== null);
+await shot('list-pinned-chip');
 
 // A swipe to the left on the pinned row archives it: it leaves the list and the pin goes with it.
-const box2 = await rowBox(target.title.slice(0, 20));
+const box2 = await rowBox(target.id);
 await swipe(box2, -120);
 await sleep(1500);
 const archived = (await call('GET', `/api/chat/sessions/${target.id}`)).data;
