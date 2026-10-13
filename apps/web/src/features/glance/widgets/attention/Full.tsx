@@ -1,6 +1,6 @@
 import { Button, buttonClass, useToast } from '@isnanme/ui';
-import type { GlanceApproval, GlanceCiRun, GlanceTicket } from '@portal/contracts';
-import { Check, ShieldQuestion, Ticket, Workflow } from 'lucide-react';
+import type { GlanceApproval, GlanceCiRun, GlanceDeploy, GlanceTicket } from '@portal/contracts';
+import { Check, Rocket, ShieldQuestion, Ticket, Workflow } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ApprovalBlock } from '@/features/chat/ApprovalBlock';
@@ -15,7 +15,7 @@ import { GlanceFailed, GlanceLine, GlanceSkeleton, StaleNote } from '../shared/s
 import { useEngaged, useSettling, useSteadyRows } from '../shared/steady';
 import { reloadGlance, useGlance } from '../shared/store';
 import { useNow } from '../shared/useNow';
-import { approvalMode, approvalNote, approvalTitle, ciMeta, ciRunHref, ciTitle, PRIORITY_WORD, sessionHref, ticketHref } from './model';
+import { approvalMode, approvalNote, approvalTitle, ciMeta, ciRunHref, ciTitle, deployMeta, deployTitle, PRIORITY_WORD, sessionHref, ticketHref } from './model';
 
 /** How long an answered row keeps saying so before the snapshot is trusted again (the portal normally drops it within a second). */
 const ANSWERED_MS = 8_000;
@@ -25,6 +25,7 @@ type Answer = 'allow' | 'deny';
 const NO_APPROVALS: GlanceApproval[] = [];
 const NO_TICKETS: GlanceTicket[] = [];
 const NO_RUNS: GlanceCiRun[] = [];
+const NO_DEPLOYS: GlanceDeploy[] = [];
 const approvalKey = (a: GlanceApproval) => a.requestId;
 const ticketKey = (t: GlanceTicket) => t.id;
 const runKey = (r: GlanceCiRun) => r.id;
@@ -54,11 +55,12 @@ export function AttentionFull({ close }: GlanceFullProps) {
   const approvals = useSteadyRows(data?.attention.approvals.items ?? NO_APPROVALS, approvalKey, engaged, true);
   const tickets = useSteadyRows(data?.attention.tickets.items ?? NO_TICKETS, ticketKey, engaged, true);
   const runs = useSteadyRows(data?.attention.ci.items ?? NO_RUNS, runKey, engaged, true);
+  const deploys = useSteadyRows(data?.attention.deploys.items ?? NO_DEPLOYS, runKey, engaged, true);
   const settling = useSettling(approvals.map((r) => r.row.requestId));
 
   if (!data) return failed ? <GlanceFailed reload={reload} denied={denied} /> : <GlanceSkeleton />;
   const att = data.attention;
-  if (!att.approvals.ok && !att.tickets.ok && !att.ci.ok) return <GlanceFailed reload={reload} message="Could not read what needs attention." />;
+  if (!att.approvals.ok && !att.deploys.ok && !att.tickets.ok && !att.ci.ok) return <GlanceFailed reload={reload} message="Could not read what needs attention." />;
 
   const answer = async (a: GlanceApproval, decision: Answer) => {
     setPending((m) => new Map(m).set(a.requestId, decision));
@@ -88,11 +90,11 @@ export function AttentionFull({ close }: GlanceFullProps) {
     }
   };
 
-  const listed = approvals.length > 0 || tickets.length > 0 || runs.length > 0;
+  const listed = approvals.length > 0 || deploys.length > 0 || tickets.length > 0 || runs.length > 0;
   return (
     <>
       {stale && <StaleNote reload={reload} />}
-      {att.count === 0 && !listed && att.approvals.ok && att.tickets.ok && att.ci.ok && <GlanceLine>Nothing needs you.</GlanceLine>}
+      {att.count === 0 && !listed && att.approvals.ok && att.deploys.ok && att.tickets.ok && att.ci.ok && <GlanceLine>Nothing needs you.</GlanceLine>}
       {listed && (
         <div {...bind}>
           <GlanceList label="Needs attention">
@@ -107,6 +109,18 @@ export function AttentionFull({ close }: GlanceFullProps) {
                 settling={settling}
                 onAnswer={(d) => answer(a, d)}
               />
+            ))}
+            {deploys.map(({ row: d, gone }) => (
+              <GlanceRow key={d.id} className={`p-0 ${gone ? 'opacity-60' : ''}`}>
+                <ItemLink to={ciRunHref(d.id)} close={close} icon={<Rocket className="size-4 text-danger" />}>
+                  <span dir="auto" title={deployTitle(d)} className="block truncate text-sm font-medium">
+                    {deployTitle(d)}
+                  </span>
+                  <span dir="auto" className="block truncate text-xs text-muted tabular-nums">
+                    {deployMeta(d)} · {shortAgo(d.startedAt, now)}
+                  </span>
+                </ItemLink>
+              </GlanceRow>
             ))}
             {tickets.map(({ row: t, gone }) => (
               <GlanceRow key={t.id} className={`p-0 ${gone ? 'opacity-60' : ''}`}>
@@ -136,11 +150,12 @@ export function AttentionFull({ close }: GlanceFullProps) {
         </div>
       )}
       <More to="/admin/sessions" close={close} n={att.approvals.count - att.approvals.items.length} what="approvals" />
+      <More to="/admin/ci" close={close} n={att.deploys.count - att.deploys.items.length} what="deploys" />
       <More to="/admin/tickets?assignee=user" close={close} n={att.tickets.count - att.tickets.items.length} what="tickets" />
       <More to="/admin/ci" close={close} n={att.ci.count - att.ci.items.length} what="failed runs" />
-      {(!att.approvals.ok || !att.tickets.ok || !att.ci.ok) && (
+      {(!att.approvals.ok || !att.deploys.ok || !att.tickets.ok || !att.ci.ok) && (
         <p role="status" className="pt-2 text-center text-xs text-muted">
-          {[!att.approvals.ok && 'Requests', !att.tickets.ok && 'Tickets', !att.ci.ok && 'CI'].filter(Boolean).join(', ')} could not be read.
+          {[!att.approvals.ok && 'Requests', !att.deploys.ok && 'Deploys', !att.tickets.ok && 'Tickets', !att.ci.ok && 'CI'].filter(Boolean).join(', ')} could not be read.
         </p>
       )}
     </>

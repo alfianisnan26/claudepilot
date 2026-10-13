@@ -5,9 +5,9 @@ import { agentLevel, agentsCompact, agentSubline, stopCall, stopLabel } from './
 
 const snapshot = (agents: Partial<GlanceSnapshot['agents']>): GlanceSnapshot => ({
   at: '2026-10-12T12:00:00.000Z',
-  sessions: { ok: true, running: 0, waiting: 0, open: 0, items: [] },
+  sessions: { ok: true, running: 0, waiting: 0, open: 0, interrupted: 0, items: [], recent: [] },
   agents: { ok: true, running: 0, waiting: 0, rows: [], more: 0, ...agents },
-  attention: { count: 0, approvals: { ok: true, count: 0, items: [] }, tickets: { ok: true, count: 0, items: [] }, ci: { ok: true, count: 0, items: [] } },
+  attention: { count: 0, approvals: { ok: true, count: 0, items: [] }, tickets: { ok: true, count: 0, items: [] }, ci: { ok: true, count: 0, items: [] }, deploys: { ok: true, count: 0, items: [] } },
 });
 const ok = { failed: false, stale: false };
 const NOW = Date.parse('2026-10-12T12:00:00Z');

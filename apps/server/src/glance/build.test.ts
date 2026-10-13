@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { GLANCE_CI_WINDOW_MS, GLANCE_LIMITS } from '@portal/contracts';
 import { ownerActor } from '../authz/seam.js';
-import { buildSnapshot, failedRuns } from './build.js';
+import { buildSnapshot, failedRuns, waitingDeploys } from './build.js';
 import { ago, DAY, fakeCi, HOUR, MIN, NOW, request, run, session, sources, task, ticket, userActor } from './testkit.js';
 
 const OWNER = ownerActor();
@@ -57,6 +57,49 @@ test('sessions: running, waiting and open are counted over what is not archived 
   assert.equal(s.items.length, GLANCE_LIMITS.sessions);
   assert.equal(s.items[1]!.waitingFor, 'Run a command: npm test');
   assert.deepEqual([s.items[1]!.claudeId, s.items[1]!.claudeName], ['c1', 'Default']);
+});
+
+test('sessions for Home: interrupted counted; the recent list is pinned first (latest pin first), then the latest activity, without workers unless pinned; each row has its branch and the agents under it', () => {
+  const rows = fleet().map((x) =>
+    x.id === 'c' ? { ...x, pinnedAt: ago(DAY) } : x.id === 'w2' ? { ...x, pinnedAt: ago(HOUR) } : x.id === 'a' ? { ...x, worktree: { path: '/w/a', branch: 'feat/auth', repo: '/w', base: 'main' } as never } : x,
+  );
+  const s = buildSnapshot(sources({ sessions: rows, requests, tasks }), OWNER, NOW).sessions;
+  // g is the one interrupted
+  assert.equal(s.interrupted, 1);
+  // open: a b c f g w1 w2 w3. Workers w1 (of a) and w3 (of w1) are left out; w2 is a worker but pinned. Pinned: w2 (1 h ago) then c (1 d ago);
+  // then by activity: f (10 s), a (1 m), b (5 m), g (3 h). d is ended, e archived.
+  assert.deepEqual(s.recent.map((x) => x.id), ['w2', 'c', 'f', 'a', 'b', 'g']);
+  assert.deepEqual(s.recent.map((x) => x.pinned), [true, true, false, false, false, false]);
+  const a = s.recent.find((x) => x.id === 'a')!;
+  // a: task t1 running (t2 finished), worker w1 working (w2 idle does not count) = 2; c: task t3 = 1; b: nothing = 0
+  assert.deepEqual([a.branch, a.agents], ['feat/auth', 2]);
+  assert.equal(s.recent.find((x) => x.id === 'c')!.agents, 1);
+  assert.equal(s.recent.find((x) => x.id === 'b')!.agents, 0);
+  assert.equal(s.recent.find((x) => x.id === 'b')!.branch, null);
+  // w1's worker w3 waits: it counts under w1 in the by-need list
+  assert.equal(s.items.find((x) => x.id === 'w1')!.agents, 1);
+  // the cap: 20 open sessions list 8 and the open count stays whole
+  const many = Array.from({ length: 20 }, (_, i) => session({ id: `m${i}`, lastActivityAt: ago(i * MIN) }));
+  const big = buildSnapshot(sources({ sessions: many }), OWNER, NOW).sessions;
+  assert.equal(big.recent.length, GLANCE_LIMITS.recent);
+  assert.equal(big.open, 20);
+  assert.deepEqual(big.recent.slice(0, 2).map((x) => x.id), ['m0', 'm1']);
+});
+
+test('deploys: running runs holding a job for approval are listed and added to what needs attention', () => {
+  const held = run({ id: 'D1', repoId: 'r1', pipeline: 'deploy', branch: 'main', status: 'running', created: 20 * MIN, jobs: [{ id: 'gate', status: 'passed' }, { id: 'release', status: 'waiting' }] });
+  const busy = run({ id: 'D2', repoId: 'r1', pipeline: 'ci', branch: 'dev', status: 'running', created: 5 * MIN, jobs: [{ id: 'test', status: 'running' }] });
+  const done = run({ id: 'D3', repoId: 'r1', pipeline: 'deploy', branch: 'main', status: 'passed', created: 2 * HOUR, finished: HOUR, jobs: [{ id: 'release', status: 'passed' }] });
+  const found = waitingDeploys(fakeCi([held, busy, done]), 5);
+  assert.deepEqual([found.count, found.items.map((r) => r.id)], [1, ['D1']]);
+  const att = buildSnapshot(sources({ sessions: fleet(), requests, tasks, deploys: found }), OWNER, NOW).attention;
+  assert.equal(att.deploys.count, 1);
+  assert.deepEqual(att.deploys.items[0], { id: 'D1', number: 1, repo: 'r1', pipeline: 'deploy', job: 'release', branch: 'main', workspaceId: 'docker/dev', startedAt: ago(20 * MIN) });
+  // 3 approvals + 1 deploy
+  assert.equal(att.count, 4);
+  const broken = buildSnapshot({ ...sources({ sessions: fleet(), requests, tasks }), deploys: () => { throw new Error('ci off'); } }, OWNER, NOW, () => undefined).attention;
+  assert.deepEqual(broken.deploys, { ok: false, count: 0, items: [] });
+  assert.equal(broken.count, 3);
 });
 
 test('agents: workers and running tasks under their parents, depth first; a finished worker and a finished task are left out', () => {

@@ -158,6 +158,7 @@ export function sources(over: {
   tasks?: Record<string, ChatTask[]>;
   tickets?: { count: number; items: TicketItem[] };
   failed?: { count: number; items: CiRunSummary[] };
+  deploys?: { count: number; items: CiRunSummary[] };
 }): GlanceSources & { reads: { sessions: number }; asked: string[] } {
   const reads = { sessions: 0 };
   const asked: string[] = [];
@@ -169,5 +170,6 @@ export function sources(over: {
     tasks: (actor, id) => (asked.push(actorString(actor)), over.tasks?.[id] ?? []),
     tickets: (actor) => (asked.push(actorString(actor)), over.tickets ?? { count: 0, items: [] }),
     failedRuns: (actor) => (asked.push(actorString(actor)), over.failed ?? { count: 0, items: [] }),
+    deploys: (actor) => (asked.push(actorString(actor)), over.deploys ?? { count: 0, items: [] }),
   };
 }

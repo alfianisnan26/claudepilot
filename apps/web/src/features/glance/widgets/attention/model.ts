@@ -1,4 +1,4 @@
-import { requestReview, TICKET_PRIORITY_LABEL, type CiReason, type GlanceApproval, type GlanceCiRun, type GlanceTicket } from '@portal/contracts';
+import { requestReview, TICKET_PRIORITY_LABEL, type CiReason, type GlanceApproval, type GlanceCiRun, type GlanceDeploy, type GlanceTicket } from '@portal/contracts';
 import type { GlanceCompact, GlanceLevel } from '../../types';
 import { chipCount, listWords, plural } from '../shared/format';
 import type { Readings } from '../shared/readings';
@@ -6,17 +6,19 @@ import type { Readings } from '../shared/readings';
 // The Needs-attention widget's logic, apart from React so it can be tested (docs/prd/glance-widgets.md §6.4).
 
 /**
- * The chip: what waits on a person, added up (open requests, tickets assigned to a person, failed CI runs that still stand). Red while a
- * request waits (a session is stopped on it), amber for the rest, grey when nothing waits. `count` is what the installed app's badge shows.
+ * The chip: what waits on a person, added up (open requests, deploys held for approval, tickets assigned to a person, failed CI runs that
+ * still stand). Red while a request or a deploy waits (a session or a pipeline is stopped on it), amber for the rest, grey when nothing
+ * waits. `count` is what the installed app's badge shows.
  */
 export function attentionCompact({ data, failed, stale }: Readings): GlanceCompact {
   if (!data) return failed ? { value: '-', level: 'unknown', title: 'Needs attention: not available', stale: true } : { value: null, level: 'unknown', title: 'Needs attention: loading', loading: true };
   const a = data.attention;
-  const blind = [!a.approvals.ok && 'requests', !a.tickets.ok && 'tickets', !a.ci.ok && 'CI'].filter((x): x is string => !!x);
-  if (blind.length === 3) return { value: '-', level: 'unknown', title: 'Needs attention: could not be read', stale };
-  const level: GlanceLevel = a.approvals.count > 0 ? 'critical' : a.tickets.count + a.ci.count > 0 ? 'warn' : blind.length ? 'unknown' : 'idle';
+  const blind = [!a.approvals.ok && 'requests', !a.deploys.ok && 'deploys', !a.tickets.ok && 'tickets', !a.ci.ok && 'CI'].filter((x): x is string => !!x);
+  if (blind.length === 4) return { value: '-', level: 'unknown', title: 'Needs attention: could not be read', stale };
+  const level: GlanceLevel = a.approvals.count + a.deploys.count > 0 ? 'critical' : a.tickets.count + a.ci.count > 0 ? 'warn' : blind.length ? 'unknown' : 'idle';
   const found = listWords([
     a.approvals.count ? plural(a.approvals.count, 'approval') : null,
+    a.deploys.count ? plural(a.deploys.count, 'deploy') + ' to approve' : null,
     a.tickets.count ? plural(a.tickets.count, 'ticket') : null,
     a.ci.count ? `${a.ci.count} failed CI ${a.ci.count === 1 ? 'run' : 'runs'}` : null,
   ]);
@@ -75,3 +77,7 @@ export const ciTitle = (r: GlanceCiRun): string => `${r.repo} · ${r.pipeline} #
 
 /** A failed run's second line: the branch (or "tag") and why it failed. */
 export const ciMeta = (r: GlanceCiRun): string => [r.branch ?? 'tag', r.reason ? REASON_WORD[r.reason] : 'failed'].join(' · ');
+
+/** A held deploy's title and second line: where, and which job waits on which branch. */
+export const deployTitle = (d: GlanceDeploy): string => `${d.repo} · ${d.pipeline} #${d.number}`;
+export const deployMeta = (d: GlanceDeploy): string => `${d.job} waits · ${d.branch ?? 'tag'}`;
