@@ -72,10 +72,12 @@ spec:
               value: kubernetes.io/hostname=k3s-node2
             # What a workspace pod asks the scheduler to reserve (its limits stay): with only limits set Kubernetes reserves the whole
             # limit, and a 2-CPU workspace stayed Pending ("Insufficient cpu") while the node was 40% busy.
+            # 1 CPU and 2 GiB (owner, 2026-10-13): at 250m the dev workspace lost every fight for CPU against Jobs and neighbours on a busy node
+            # (limits 4 CPU and 8 GiB stay). A pod picks the new values up at its next restart.
             - name: PORTAL_K8S_CPU_REQUEST
-              value: 250m
+              value: "1"
             - name: PORTAL_K8S_MEMORY_REQUEST
-              value: 1Gi
+              value: 2Gi
             # How workspaces (other namespace) reach the portal: its Portal MCP tools, session events.
             - name: PORTAL_INTERNAL_URL
               value: http://claudepilot-portal.isnan-claudepilot.svc.cluster.local:3000
