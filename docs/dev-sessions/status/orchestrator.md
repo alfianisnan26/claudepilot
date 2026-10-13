@@ -13,8 +13,14 @@ Session in kubernetes/kohi-event (moved from hasyim to alfian.isnan at 06:45 aft
 - C item 1, btw UI against the real engine (tools/qa/btw-real.mjs, the card says how many messages the answer saw): a97a950.
 - Gate hygiene: shellcheck SC2015 (1f045fe), repo-find sorted (8b3316a), deploy-pipeline e2e test: the fakes' PATH in ~/.profile (b893ac8; /etc/profile resets PATH in a login shell and the real kubectl installed today at /usr/local/bin won; the test's wait now says which step failed). Passes alone 7/7.
 
+## NOW (09:57, after the move to fadlilah at 09:42)
+- Moved alfian.isnan -> fadlilah by the coordinator (alfian at 87 %). The move stopped the three sub-agents; their worktree files were intact and they were re-dispatched at 09:45 to resume from the files: T-5 + T-31 (dev/subagent-visibility, opus), T-34 (dev/home-dashboard, opus), T-6 (dev/mcp-label, sonnet). The nohup'd full gate and fast lane survived.
+- Full gate on e7da20b GREEN (2475 tests; "the control stream" failed under load, passed alone), fast lane on 8c2ebf2 GREEN. Pushed integration 4995f82 to origin and pilot (with the coordinator's two supervisor notes merged). T-36 closed.
+- Deploy run #5 (rmv6i7h1p2ac08f) on 4995f82, gate=true, images=portal: in its gate. integration stays still until its release ran.
+- T-38 folder trust (urgent, built by the orchestrator): c5c8f4a on dev/folder-trust (worktree dev-automove-model); fast lane running; merges after #5's release.
+
 ## WAVES (owner, 09:4x; work in this order)
-- Wave 1: T-36 fast lane (built 2485f67, in review) -> push -> T-18 deploy (full gate on the exact commit) -> T-3, T-2 (fixed, merged; live with the deploy) -> T-31 (with the T-5 sub-agent) -> T-1, T-4, T-29 (merged; live with the deploy).
+- Wave 1: T-36 fast lane (DONE, pushed) -> push (done) -> T-38 folder trust (built) -> T-18 deploy (full gate on the exact commit) -> T-3, T-2 (fixed, merged; live with the deploy) -> T-31 (with the T-5 sub-agent) -> T-1, T-4, T-29 (merged; live with the deploy).
 - Wave 2: T-37 gate as an in-cluster Job, T-5, T-6 (running), T-24, T-25, T-34 (running), T-16.
 - Wave 3: T-32, T-28, T-26 + T-27, T-30. Wave 4: T-10, T-11, T-12, T-13, T-14, T-15; T-33 rename LAST, alone, with no branch open.
 - Next free slot: T-37 (opus), then T-24, then T-25.
