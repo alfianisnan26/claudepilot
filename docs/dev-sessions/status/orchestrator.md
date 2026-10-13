@@ -28,7 +28,9 @@ Read CHARTER.md and DECISIONS.md (D-1..D-33) before planning; never act against 
 3. T-102, then T-100 (paused; their WIP is pushed).
    T-125 (rank-05d) follows T-102 in its worktree: the compact contextual row first, the pace line after T-122.
    T-127 (portal WIP limit, rank-05e) and T-128 (CI read scope, rank-05f) after T-125.
-   -> deploy (gate Job, /deploy pipeline; the coordinator approves as delegate, D-2).
+   -> deploy (/deploy pipeline with gate=true, D-7; the coordinator approves as delegate, D-2).
+3c. A post-deploy check (sonnet, D-34) of what is live in 2026.10.13-6, in the pilot browser and the harnesses at 390 px, light and dark:
+   T-1, T-2, T-3, T-5, T-24, T-25, T-28, T-32, T-34, T-42, T-99. Limits are stated on each ticket, never turned into an owner task.
 4. T-115 slice 1: the decisions registry (imports DECISIONS.md) and session_context.
 5. T-104 Keep going with T-108's watchdog sweep (then the path allow-list and the lease).
 5b. T-118 multi-user MU1-min (rank-06b; WIP 7b02a4e).
@@ -48,21 +50,12 @@ T-26/T-27 (folded into T-134), T-30, T-33, T-123, T-132..T-135 with T-140 (rank-
 agents, credentials never read), T-137, then T-138 (rank-10a, Settings v2, D-32: audit first, agents read and propose only) (wave 3, motion), wave 4, T-130, T-131, and the fitOf/fit.ts unification (small; fills an idle slot).
 T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, never use that code, and tell the coordinator if they see it.
 
-## NEEDS A HUMAN (only what a person can do; rewritten 14:3x from the tickets, after the owner's note)
-- T-131: reassign T-100, T-102, T-105, T-109 (and the in_review T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-107) from the ended fdb140be
-  to 5c9fcb5f. The portal refuses a takeover (FORBIDDEN), so this session cannot comment on or close them.
-- The eight in_review tickets (T-24, T-32, T-42, T-95, T-97, T-98, T-99, T-107) are reassigned to 5c9fcb5f and LIVE in 2026.10.13-6.
-  The coordinator verifies and closes them, not this session. T-100, T-102, T-105, T-109 still sit on the ended fdb140be (T-131).
-- On the iPhone (installed PWA, 390 px, light and dark), check what is live in 2026.10.13-6: T-1 Pinned and swipe (right = Pin, left = Archive);
-  T-2 no sideways scroll on any page; T-3 an image attaches and uploads in this Kubernetes workspace; T-5 sub-agents in their own rows, "Working ·
-  N agents", "Session finished" only at real idle; T-24 tool rows open to Input and Output blocks with real line breaks and shell colouring, the
-  approval card the same; T-25 Mute similar on a notification; T-28 Bump on a ticket pushes it into a running session (priority or question);
-  T-32 Bump on a CI run (Fix or Ask) and the auto-report of a finished run to the session that started it; T-34 the Home page as the first page;
-  T-42 the workspace sheet shows the label isnan-pod with the id next to it, every old link and MCP call by kubernetes/kohi-event still works;
-  T-99 a chat survives a finished sub-agent (no "Ended for integrity"), and CI works within a minute of a pod restart.
-- Parked on tickets: T-97 (NetworkPolicy not enforced; browser image tag and pool after deploy), T-95 item 4, T-42 slice 4 (own number).
+## NEEDS A HUMAN (required escalations only, D-10 and D-34)
+- None open. If t141 finds that the image-build door needs a wider Role, the exact diff goes here and on T-141 (permissions).
 
 ## DECISIONS
+- 16:5x D-34 adopted: the iPhone checklist leaves NEEDS A HUMAN and becomes item 3c (agents verify with evidence). T-131's reassignment is
+  not a required escalation: T-136 slice 1's repair moves the chain's tickets to the head.
 - 16:1x Run 18 released, so the held status commits are pushed. The three running slices are NOT preempted for T-136 or T-110: they are
   mid-slice with WIP pushed, and a restart costs more than the wait. The next two free slots go to T-136, then T-110 (rank order).
 - 15:5x (5c9fcb5f) The restart left no unmerged work behind: all three branches were pushed. The uncommitted T-109 work (330 lines) and
