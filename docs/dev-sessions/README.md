@@ -72,8 +72,7 @@ backlog is done: make `TRACK COMPLETE` the first line of that file, commit and p
 
 ## The supervisor
 
-A small process, `docs/dev-sessions/supervisor.mjs`, runs inside the dev workspace (started by the coordinator with the owner's sign-in code in its
-environment; the code is never in a file) and keeps the orchestrator going when nobody else is there: a session idle for a few minutes is told to
+A small process, `docs/dev-sessions/supervisor.mjs`, runs OUTSIDE the dev pod, on the coordinator's machine, with the owner's sign-in code in its environment (inside the pod every agent runs as the same user and could read that environment, so the code must never live there; T-104's lease replaces the code), and keeps the orchestrator going when nobody else is there: a session idle for a few minutes is told to
 continue, an interrupted one is woken, one that ended is started again in the main folder and told to continue from its status file (at most 6
 starts per day, 3 after integrity endings). It leaves the work alone when the status file starts with `TRACK COMPLETE` or when a person closed the
 session. It restarts only the orchestrator: any other chat that ends (an integrity ending, say) is started again by a person; the harness-turn
