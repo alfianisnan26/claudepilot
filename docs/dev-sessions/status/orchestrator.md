@@ -43,7 +43,8 @@ Read before planning: docs/dev-sessions/CHARTER.md and docs/dev-sessions/DECISIO
 ---- CUT LINE: nothing below starts before 7 is merged and deployed ----
 In rank order (details on each ticket): T-126 (item 5 local time first), T-129 (with T-122, before T-111), T-121 (after T-119 slice 1),
 T-122 (after T-121: audit with screenshots first), T-113, T-114, T-101, T-106, T-120 (after T-106; ClaudePilot only, D-25), T-28, T-32, T-24,
-T-26/T-27 (folded into T-134), T-30, T-33, T-123, T-132..T-135, T-137 by their rank tags, then T-138 (rank-10a, Settings v2, D-32: audit first, agents read and propose only) (wave 3, motion), wave 4, T-130, T-131, and the fitOf/fit.ts unification (small; fills an idle slot).
+T-26/T-27 (folded into T-134), T-30, T-33, T-123, T-132..T-135 with T-140 (rank-07e, Claude accounts as pool entries, D-33: the spike first, one login per workspace by default, no login tool for
+agents, credentials never read), T-137, then T-138 (rank-10a, Settings v2, D-32: audit first, agents read and propose only) (wave 3, motion), wave 4, T-130, T-131, and the fitOf/fit.ts unification (small; fills an idle slot).
 T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, never use that code, and tell the coordinator if they see it.
 
 ## NEEDS A HUMAN (only what a person can do; rewritten 14:3x from the tickets, after the owner's note)
@@ -58,8 +59,7 @@ T-117: owner step (rotate the sign-in code). Agents never read /proc/*/environ, 
   T-32 Bump on a CI run (Fix or Ask) and the auto-report of a finished run to the session that started it; T-34 the Home page as the first page;
   T-42 the workspace sheet shows the label isnan-pod with the id next to it, every old link and MCP call by kubernetes/kohi-event still works;
   T-99 a chat survives a finished sub-agent (no "Ended for integrity"), and CI works within a minute of a pod restart.
-- Open questions parked on tickets: T-97 (NetworkPolicy not enforced on the cluster; the browser image tag and the pool assignment after the
-  next deploy), T-95 item 4 (close if the run summary already reports flaky-passed-alone), T-42 slice 4 (needs its own ticket number).
+- Parked on tickets: T-97 (NetworkPolicy not enforced; browser image tag and pool after deploy), T-95 item 4, T-42 slice 4 (own number).
 
 ## DECISIONS
 - 16:1x Run 18 released, so the held status commits are pushed. The three running slices are NOT preempted for T-136 or T-110: they are
