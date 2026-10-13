@@ -219,10 +219,15 @@ async function moveIfLow(t, ts, cur) {
   const used = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, Math.max(0, ...(c.windows ?? []).map((w) => (typeof w.usedPct === 'number' ? w.usedPct : 0)))]));
   const mine = used.get(cur.claudeId);
   if (mine === undefined || mine < LOW_USED_PCT) return false;
+  // A chat on a model only some Claudes have (Fable shows as its own window on those) must land on one that has it: otherwise the restore of its
+  // model fails quietly and it runs on whatever the other Claude defaults to (T-109 makes the portal pick the best available model instead).
+  const gated = /fable/i.exec(cur.model ?? '')?.[0]?.toLowerCase() ?? null;
+  const has = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, (c.windows ?? []).some((w) => `${w.key ?? ''} ${w.label ?? ''}`.toLowerCase().includes(gated ?? '\u0000'))]));
   let best = null;
   for (const name of t.claudes) {
     const id = await claudeIdOf(name);
     if (!id || id === cur.claudeId) continue;
+    if (gated && !has.get(id)) continue;
     const u = used.get(id) ?? 0;
     if (u >= LOW_USED_PCT) continue;
     if (!best || u < best.used) best = { name, id, used: u };

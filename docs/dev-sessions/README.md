@@ -2,7 +2,7 @@
 
 ClaudePilot is developed by **one orchestrator session** in the cluster's dev workspace (`kubernetes/kohi-event`, folder `~/work/claudepilot`), in Bypass
 mode, with **sub-agents** (Claude Code's own Agent tool) doing the work in git worktrees, without a person in the loop. The owner approves deploys only.
-Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first. `orchestrator.md` is the brief of the orchestrator; `track-a-connect.md`,
+Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, and `CHARTER.md` (the owner's autonomy charter: zero tolerance, duties, scoring; it binds every agent, here and in the Konfersi program). `orchestrator.md` is the brief of the orchestrator; `track-a-connect.md`,
 `track-b-notify-triggers.md` and `track-c-ui.md` are the work packages it hands out. Everything below binds the orchestrator AND every sub-agent.
 
 ## Ground rules
