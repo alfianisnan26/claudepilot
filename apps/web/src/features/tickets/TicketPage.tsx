@@ -124,7 +124,8 @@ export function TicketPage() {
           )}
           {!closed && (
             <Button variant="secondary" icon={<ChevronsUp className="size-4" />} onClick={() => setDialog('bump')}>
-              Bump
+              {/* Icon only on a phone, so the actions keep to one line at 390 px. */}
+              <span className="max-sm:sr-only">Bump</span>
             </Button>
           )}
           {!closed && (
