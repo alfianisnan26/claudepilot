@@ -1,0 +1,30 @@
+{
+  "key": "chrome-devtools",
+  "displayName": "Chrome DevTools MCP (standalone)",
+  "description": "The Chrome DevTools team's MCP server, standalone: launches its own headless Chrome with a temporary profile; Google usage statistics, CrUX lookups and update checks off. NOT for the kit: the Browser pool delivers this exact version through its gate. Needs Google Chrome, which the workspace image does not have.",
+  "kind": "npm",
+  "version": "1.10.1",
+  "spec": {
+    "package": "chrome-devtools-mcp",
+    "bin": "chrome-devtools-mcp",
+    "args": ["--headless", "--isolated", "--no-usage-statistics", "--no-performance-crux", "--redact-network-headers"]
+  },
+  "slots": [
+    {
+      "name": "CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS",
+      "target": "env",
+      "secret": false,
+      "required": false,
+      "default": "1",
+      "description": "Turns off Google's usage statistics (also turned off by the flag)."
+    },
+    {
+      "name": "CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS",
+      "target": "env",
+      "secret": false,
+      "required": false,
+      "default": "1",
+      "description": "Turns off the periodic npm update check."
+    }
+  ]
+}

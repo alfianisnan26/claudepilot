@@ -4,7 +4,7 @@ Extend what exists (tools/qa/*, docs/qa/qa-report.md with QA-001..036, apps/serv
 
 ## A. UI/UX design strictness
 Principles: clean, friendly, simple, polished, not "AI slop"; smooth animation; end-to-end flows tested. Rate EVERY screen pass/fail WITH screenshot evidence.
-A1 CONSISTENCY: only the design system's colour, spacing, typography and radius tokens; no ad hoc values; no gradients, glow, glass effects, emoji, or decorative icons that do no work.
+A1 CONSISTENCY: only the design system's colour, spacing, typography and radius tokens; no ad hoc values; no gradients, glow, emoji, or decorative icons that do no work; glass is allowed ONLY for the floating header and tab bar (the decided phone chrome, docs/prd/web-app-pwa.md 10.5, with a fade so nothing shows a hard edge under it), nowhere else.
 A2 CLEANLINESS: titles of 1-2 words, explanations in InfoTip, no card inside a card, no badge repeating what the row says, ONE primary action per screen, a clear hierarchy.
 A3 TEXT: no placeholder or lorem; no generic AI phrases ("Seamless", "Powerful", "Let's get started!"); consistent terms across the app.
 A4 COMPLETE STATES: empty, loading (skeleton, not a long spinner), error (a clear message + an action), offline, very long text, lots of data, permission denied.

@@ -20,7 +20,7 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
      (the only door: `kubectl delete namespace` is denied, the script refuses any other name); delete it when you are done.
      Never touch `isnan-claudepilot`, `isnan-claudepilot-workspaces` (this workspace hosts the session: stopping, deleting or restarting it, or
      restarting the portal, kills it), Argo CD, the nodes or any other namespace. A workspace's CPU and memory are changed in the portal (T-98 replaced
-     `scripts/ws-resources.sh`: the workspace sheet's Resources row, or the admin MCP tool `workspace_resources`), by a person: Apply now restarts the pod and ends every session in it.
+     the workspace sheet's Resources row, or the admin MCP tool `workspace_resources`), by a person: Apply now restarts the pod and ends every session in it.
    - Never push `main`. Never approve a deploy or work around its approval. For anything that needs a portal, run a scratch one:
      `scripts/scratch-portal.sh` (clean environment). Never change the real portal's settings, tokens or Secrets.
    - Never force-push, rewrite pushed history, use `--no-verify` or amend a pushed commit.
@@ -63,7 +63,7 @@ any new slice is merged: integration stays shippable. **Heavy work leaves the po
 the pod is loaded, run as a Job in the cluster: `scripts/gate-job.sh <commit> [typecheck,web-build,server-suite]` (the commit on GitHub; push an
 unpushed merge to `wip/orchestrator-local-backup` first); the deploy pipeline's gate does too. Sub-agents run only their package's typecheck and
 their test files, never a build or a gate.
-Then the sub-agent on that branch runs `git fetch origin && git rebase origin/integration`. Remove `/tmp/gate-<sha>*` afterwards.
+Then the sub-agent on that branch brings it up to date: rebase ONLY commits that were never pushed; once a branch is pushed, merge `origin/integration` into it instead (`git merge origin/integration`), because a rebased pushed branch could only be pushed back with a force push, which is denied. Remove `/tmp/gate-<sha>*` afterwards.
 
 ## Migrations
 

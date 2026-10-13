@@ -1,0 +1,142 @@
+[
+  {
+    "summary": "Plan the PRD of {{PROJECT}}: goals, the first milestone, open questions",
+    "type": "task",
+    "priority": "high",
+    "tags": [
+      "rank-01",
+      "prd",
+      "planning",
+      "kit"
+    ],
+    "description": "**Why.** Nothing is built before a PRD says what and why. The owner's brief: {{PROJECT_SUMMARY}}\n\n**Read first.** `CLAUDE.md`, `docs/README.md`, `docs/prd/_template.md`, `docs/dev-sessions/DECISIONS.md`.\n\n**Do.**\n1. Copy `docs/prd/_template.md` to `docs/prd/overview.md` (or one file per area when there are clearly several) and fill every section. Label each claim [observed], [documented] or [unverified].\n2. Make milestone M1 the thinnest slice that a user can try end to end.\n3. Each open question gets a default an agent can act on; a question in a required-escalation class (production, uat, secrets and permissions, billing, legal, destructive data) goes under NEEDS A HUMAN in the status file instead.\n4. Add the PRD to the table in `docs/README.md`.\n5. Open one ticket per M1 slice (about an hour each), with a `rank-NN` tag from `rank-05` on, an estimate, and done criteria.\n6. Commit with the trailers and push `{{INTEGRATION_BRANCH}}` after the quick gate (documents only: nothing to check).\n\n**Done when.**\n- The PRD has all ten sections, none left as a `<...>` fill-in.\n- M1 tickets exist; their ids are in the closing summary.\n- One line on the owner's checklist asks the owner to review the PRD; it blocks nothing: M1 starts on the written defaults.\n- The closing summary links the commit.",
+    "estimate": {
+      "effort": "M",
+      "severity": 3,
+      "hours": 2,
+      "risks": [
+        "the brief is short: scope may be guessed",
+        "a wrong default shapes every later slice"
+      ]
+    }
+  },
+  {
+    "summary": "Set up CI: the quick and the full gate, locally and in the pilot pipeline",
+    "type": "task",
+    "priority": "high",
+    "tags": [
+      "rank-02a",
+      "ci",
+      "gate",
+      "kit"
+    ],
+    "description": "**Why.** No slice is integrated without a green quick gate and no deploy without a green full gate.\n\n**Read first.** `scripts/README.md`, `.pilot/README.md`, `.pilot/gate.yml`, `docs/dev-sessions/README.md` (Two lanes), `.claude/settings.json.md`.\n\n**Do.**\n1. Set up the stack's test runner with one real smoke test, if the project has none yet ({{STACK}}).\n2. Write `scripts/gate.sh` (the full gate on a clean copy of a commit), `scripts/gate-verdict.sh` (one verdict line) and `scripts/gate-quick.sh` (the checks for what changed since a base), as `scripts/README.md` describes. Make `{{TEST_QUICK}}` and `{{TEST_FULL}}` run them, or change those commands everywhere they appear (CLAUDE.md, `.pilot/gate.yml`, `.claude/settings.json`) in the same commit; a change to `.claude/settings.json` needs the owner, so prefer keeping the names.\n3. If the workspace runs on a cluster: write `scripts/gate-job.sh`, `scripts/gate-job-stop.sh`, `scripts/job-run.sh` and `scripts/dev-rig.sh` with tests against a fake `kubectl`. If it does not, record the decision under DECISIONS in the status file (D-3's fallback: one heavy job at a time in the workspace).\n4. Prove red: on a local throwaway commit with a failing test, `{{TEST_FULL}}` must report red and exit non-zero. Do not push that commit.\n5. Push `{{INTEGRATION_BRANCH}}` to `origin` and to `pilot`; the `Gate` pipeline must run and pass. If the `pilot` remote is missing, write the exact setup step under NEEDS A HUMAN.\n6. `shellcheck` every script.\n\n**Done when.**\n- The closing summary shows: the green quick gate output, the green full gate output, the red proof output, the `Gate` run id and its result, and `shellcheck` clean.\n- The minutes from the project's creation to this first green gate are written in the status file.",
+    "estimate": {
+      "effort": "L",
+      "severity": 2,
+      "hours": 4,
+      "risks": [
+        "no test framework yet",
+        "the CI remote or cluster access may be missing",
+        "a gate that passes a broken commit is worse than none"
+      ]
+    }
+  },
+  {
+    "summary": "Deploy pipeline with approval, verify and rollback: a dry run to stg",
+    "type": "task",
+    "priority": "high",
+    "tags": [
+      "rank-02b",
+      "ci",
+      "deploy",
+      "kit"
+    ],
+    "description": "**Why.** Work is delivered when it runs somewhere a person can try it, through a pipeline with verify and rollback.\n\n**Read first.** `.pilot/README.md`, `.pilot/deploy.yml`, `docs/dev-sessions/README.md`, the PRD's milestones.\n\n**Do.**\n1. Decide where stg runs, from the PRD (the default when it says nothing: the simplest target the workspace can reach). Write the decision under DECISIONS in the status file. A target that needs a new credential, a paid service or a production system is a required escalation: NEEDS A HUMAN, then go on with the dry run.\n2. Make `.pilot/deploy.yml` deploy to the environment `stg`, with `.pilot/scripts/build.sh`, `release.sh`, `verify.sh`, `rollback.sh`. Each honours `PILOT_INPUT_DRY_RUN=true`, never prints a credential, never force pushes, and has tests against fakes.\n3. Start it with `ci_run_trigger` (pipeline `deploy`, ref `{{INTEGRATION_BRANCH}}`, `dry_run=true`) after pushing to `pilot`. The first run creates the environment `stg` as protected: write under NEEDS A HUMAN that the owner switches stg protection off. Never try to approve.\n4. Only after the owner switched stg protection off and the target exists: run it for real (`dry_run=false`) and check `verify`. Never uat or production.\n\n**Done when.**\n- The dry run's id and each job's result are in the closing summary.\n- The script tests pass (output linked).\n- A real stg run passed verify, or the NEEDS A HUMAN line that holds it is named (that line does not keep this ticket open: close it on the dry run and open a follow-up).",
+    "estimate": {
+      "effort": "L",
+      "severity": 2,
+      "hours": 4,
+      "risks": [
+        "the release pushes the protected branch",
+        "a credential is needed: by Secrets pool name only",
+        "the stg target may not exist yet"
+      ]
+    }
+  },
+  {
+    "summary": "Definition of done and project standards: fill every slot of project-standards",
+    "type": "task",
+    "priority": "high",
+    "tags": [
+      "rank-03",
+      "standards",
+      "process",
+      "kit"
+    ],
+    "description": "**Why.** \"Done\" must mean the same for every agent, and an independent verifier needs a checklist to verify against.\n\n**Read first.** `docs/dev-sessions/CHARTER.md` (Duties, Scoring), `docs/design/README.md`, `CLAUDE.md` (Rules).\n\n**Do.**\n1. Write `docs/standards.md` with every slot of the kit's `project-standards` context filled (the context is delivered to this workspace; its slots are marked FILL, its *Example* lines are not rules): the language and stack ({{STACK}}), the commands (install, quick gate, full gate, one test file), code style and the linters that enforce it, and the **definition of done** as a checklist: ticket claimed with an estimate; tests written and run (output linked); quick gate green; PRD and docs updated in the same change; trailers on every commit; UI checked in a browser at 390 and 1280 px, light and dark, with screenshots looked at (if there is a UI); verified by a role other than the author; closing summary with evidence links.\n2. Add a short review checklist for the independent verifier.\n3. Link `docs/standards.md` from `docs/README.md` and from the Start here line of `CLAUDE.md`.\n4. If `docs/design/README.md` still has no standard, decide the default (the generic bar in that file) and write it under DECISIONS in the status file.\n5. Pool entries are read-only to agents: put the filled text in the repository file, and one NEEDS A HUMAN line asking the owner to review it and apply it to this project's `project-standards` context. Do not try to edit a pool.\n\n**Done when.**\n- `docs/standards.md` exists and is linked from both places.\n- No FILL slot is left empty; an unknown value has a written default.\n- The NEEDS A HUMAN line for the context exists, and the closing summary links the commit.",
+    "estimate": {
+      "effort": "M",
+      "severity": 3,
+      "hours": 1.5,
+      "risks": [
+        "standards written without running code can be wrong: revisit after the first slice"
+      ]
+    }
+  },
+  {
+    "summary": "Status file, trailers and work cadence for the orchestrator",
+    "type": "chore",
+    "priority": "high",
+    "tags": [
+      "rank-04",
+      "process",
+      "kit"
+    ],
+    "description": "**Why.** A restarted or moved orchestrator continues from the status file; without it, work is lost or repeated.\n\n**Read first.** `docs/dev-sessions/README.md` (Status and final report, Two lanes), `docs/dev-sessions/status/_template.md`.\n\n**Do.**\n1. Create `docs/dev-sessions/status/orchestrator.md` from the template: DONE, IN FLIGHT, DECISIONS, NEEDS A HUMAN, NEXT. Fill NEXT from the ranked tickets.\n2. Keep the cadence written in the README: integrate after every slice and at least every 8 commits or 2 hours; the full gate every two hours on `{{INTEGRATION_BRANCH}}` and before every deploy; the status file overwritten and committed with each integration.\n3. Check the monitor list of the `work-rhythm` context (sub-agents alive, CI runs, quota, tickets, free disk) once and write what you found in the status file.\n4. If the chat has a Keep going policy, check that its continuation prompt names this file; if it cannot be checked, write that under NEEDS A HUMAN.\n5. Commit with the trailers and push `{{INTEGRATION_BRANCH}}`.\n\n**Done when.**\n- The file exists, has the five sections, and is at most 80 lines (`wc -l` output in the closing summary).\n- The commit carries the `Ticket`, `Pilot-Session` and `Pilot-Agent` trailers (`git log -1 --format=%B` in the closing summary).",
+    "estimate": {
+      "effort": "S",
+      "severity": 3,
+      "hours": 0.5,
+      "risks": []
+    }
+  },
+  {
+    "summary": "First product slice: {{FIRST_SLICE}}",
+    "type": "feature",
+    "priority": "normal",
+    "tags": [
+      "rank-05",
+      "feature",
+      "m1"
+    ],
+    "description": "**Why.** The first thing a user can try, end to end, proving the loop: ticket, worktree, tests, gate, verification, deploy.\n\n**Read first.** The PRD (`docs/prd/`, milestone M1), `docs/standards.md`, `docs/dev-sessions/README.md`.\n\n**Do.**\n1. If the PRD's M1 names a different first slice, follow the PRD and change this ticket's summary to match.\n2. Work in a worktree on `ticket/T-<this ticket>-<slug>` from `origin/{{INTEGRATION_BRANCH}}`.\n3. Build the thinnest end-to-end path, with tests for each behaviour and the error path.\n4. Update the PRD in the same change: what was observed, not hoped.\n5. The orchestrator integrates after the quick gate; a different sub-agent verifies against the definition of done; then deploy to stg.\n\n**Done when.**\n- The definition of done in `docs/standards.md` is met item by item, with links.\n- The independent verification is written on this ticket by a role other than the author.\n- The stg run that carries it is named in the closing summary.",
+    "estimate": {
+      "effort": "M",
+      "severity": 3,
+      "hours": 3,
+      "risks": [
+        "depends on the PRD's M1",
+        "first use of every process step: expect friction"
+      ]
+    }
+  },
+  {
+    "summary": "Owner's checklist for {{PROJECT}}: required escalations only",
+    "type": "approval",
+    "priority": "high",
+    "tags": [
+      "owner-checklist",
+      "kit"
+    ],
+    "description": "**Why.** One place for everything only a person can do, so agents never send a stream of questions. Assign this ticket to {{OWNER}}; it carries no rank and blocks nothing.\n\n**What goes on it** (one line each, with exact steps, added by the orchestrator as they come up): production and uat; secrets and permissions (creating or rotating a secret or a pool entry, granting access, trusting a folder); billing; legal; destructive data; a change to the charter, the deny rules, the gates or the scoring; a deploy approval on a protected environment; a Bypass lease. Optional checks (a real device, polish) are not lines here: the agents verify what they can and write any limit on the ticket.\n\n**First lines** (from the bootstrap): review the PRD (not blocking); switch protection off for `stg` only; review and apply the filled `project-standards` context; review each third-party MCP set before it is assigned.\n\n**Done when.** Never closed while the project runs; each line is ticked with the date and who did it.",
+    "estimate": {
+      "effort": "S",
+      "severity": 2,
+      "hours": 0.5,
+      "risks": [
+        "a stream of questions instead of one list costs the owner's attention"
+      ]
+    }
+  }
+]

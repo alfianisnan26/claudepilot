@@ -1,0 +1,35 @@
+{
+  "slug": "outline",
+  "servers": [
+    {
+      "key": "isnan",
+      "entry": "@outline-isnan",
+      "version": "@approved",
+      "enabled": true,
+      "config": {},
+      "secrets": {
+        "Authorization": "{{secret-file:OUTLINE_ISNAN_KEY}}"
+      }
+    },
+    {
+      "key": "konfersi",
+      "entry": "@outline-konfersi",
+      "version": "@approved",
+      "enabled": true,
+      "config": {},
+      "secrets": {
+        "Authorization": "{{secret-file:OUTLINE_KONFERSI_KEY}}"
+      }
+    },
+    {
+      "key": "kohilabs",
+      "entry": "@outline-kohilabs",
+      "version": "@approved",
+      "enabled": true,
+      "config": {},
+      "secrets": {
+        "Authorization": "{{secret-file:OUTLINE_KOHILABS_KEY}}"
+      }
+    }
+  ]
+}
