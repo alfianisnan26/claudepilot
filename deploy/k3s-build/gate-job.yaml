@@ -1,0 +1,48 @@
+# The release gate (scripts/gate.sh) as a Job in the cluster, on CPUs other than the development pod's (T-37). Started only by
+# scripts/gate-job.sh, which fills in NAME, COMMIT, STEPS, IMAGE and VERDICT (its own scripts/gate-verdict.sh, base64, so an older commit is
+# read the same way), makes the Secret NAME (the GitHub Packages token for npm ci,
+# the private @isnanme packages) for the Job's life, and reads the verdict from the log. Several can run at once, one per name.
+# No node selector: the scheduler may put it on the master when it has CPU (k3s-node2's requests are nearly all allocated), so the
+# requests are small like the image builds', and the limits let it use up to 4 CPUs where it lands.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: NAME
+  namespace: isnan-claudepilot
+  labels: {app: claudepilot-gate}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 5400
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels: {app: claudepilot-gate}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: gate
+          image: IMAGE
+          env:
+            - {name: COMMIT, value: "COMMIT"}
+            - {name: GATE_STEPS, value: "STEPS"}
+            - {name: GATE_CONCURRENCY, value: "3"}
+            - {name: GATE_VERDICT_SH, value: "VERDICT"}
+            - name: NODE_AUTH_TOKEN
+              valueFrom: {secretKeyRef: {name: NAME, key: node-auth-token}}
+          command: [bash, -c]
+          args:
+            - |
+              set -u
+              cd /tmp && git init -q src && cd src || exit 1
+              if ! git fetch -q --depth 1 https://github.com/alfianisnan26/claudepilot.git "$COMMIT" || ! git checkout -q FETCH_HEAD; then
+                echo "GATE-VERDICT: red: $COMMIT is not on GitHub (push it first)"; exit 1
+              fi
+              GATE_DIR=/tmp/gate bash scripts/gate.sh HEAD
+              echo "=== SUMMARY"; cat /tmp/gate.logs/SUMMARY.txt 2>/dev/null
+              grep '^not ok' /tmp/gate.logs/server-suite.log 2>/dev/null | head -20
+              for s in npm-ci typecheck web-build; do grep -q "^$s rc=0 " /tmp/gate.logs/SUMMARY.txt 2>/dev/null || { [ -f "/tmp/gate.logs/$s.log" ] && { echo "=== the end of $s's log"; tail -n 40 "/tmp/gate.logs/$s.log"; }; }; done
+              printf '%s' "$GATE_VERDICT_SH" | base64 -d > /tmp/gate-verdict.sh && bash /tmp/gate-verdict.sh logs /tmp/gate.logs "$GATE_STEPS"
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {cpu: "4", memory: 6Gi}

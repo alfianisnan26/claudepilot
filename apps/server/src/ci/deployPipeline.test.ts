@@ -43,6 +43,8 @@ function templateFiles(): Record<string, string> {
     .replace(/(claudepilot\/portal:)\S+/, (_m, head: string) => `${head}${FAKE_TAGS.portal}`)
     .replace(/(claudepilot\/workspace:)\S+/, (_m, head: string) => `${head}${FAKE_TAGS.workspace}`);
   add('scripts/k3s-build.sh');
+  add('scripts/gate-job.sh');
+  add('scripts/gate-verdict.sh');
   add('images/workspace/Dockerfile');
   // The release gate itself (npm ci, the suite) is far too heavy here: a stand-in leaves the summary it would, green or red.
   out['scripts/gate.sh'] = `#!/usr/bin/env bash
@@ -62,6 +64,11 @@ printf 'kubectl %s\\n' "$*" >> "$FAKE/calls.log"
 args=" $* "
 manifest() { git --git-dir="$FAKE/github.git" show main:deploy/k3s/portal.yaml; }
 case $args in
+  # The in-cluster gate (scripts/gate-job.sh): its Job succeeds or fails with the fake gate's mode, and its log ends with the verdict.
+  *" get job claudepilot-gate-"*) if [ "$(cat "$FAKE/gate-mode" 2>/dev/null)" = red ]; then printf '/1'; else printf '1/'; fi ;;
+  *" logs job/claudepilot-gate-"*)
+    printf '=== SUMMARY\nnpm-ci rc=0 1s\n'; [ -f "$FAKE/leak" ] && echo "npm: $(cat "$FAKE/token")"
+    if [ "$(cat "$FAKE/gate-mode" 2>/dev/null)" = red ]; then echo 'GATE-VERDICT: red: typecheck failed'; else echo 'GATE-VERDICT: green'; fi ;;
   *" get application "*)
     health=Healthy
     if [ -f "$FAKE/bad-tag" ] && manifest | grep -qF "portal:$(cat "$FAKE/bad-tag")"; then health=Degraded; fi
@@ -140,6 +147,8 @@ function world(): World {
     DEPLOY_URL: 'http://portal.test:3000',
     DEPLOY_WAIT_S: '2',
     DEPLOY_POLL_S: '1',
+    // The gate here, with the stand-in gate.sh; the in-cluster path (the default) has a test of its own.
+    DEPLOY_GATE_IN_CLUSTER: 'false',
   };
   const git = (args: string[], cwd = root) => {
     const r = spawnSync('git', args, { cwd, env, encoding: 'utf8' });
@@ -348,6 +357,39 @@ test('a branch that moved on during the approval: main gets exactly the approved
   assert.match(outFile(w, 'release.env'), new RegExp(`BRANCH_SHA=${merged}`));
 });
 
+test('the gate as a Job in the cluster (T-37, the default): a Secret for its life, a Job with small requests and no node selector, the verdict from its log', () => {
+  const w = world();
+  Object.assign(w.env, { DEPLOY_GATE_IN_CLUSTER: 'true', GATE_IMAGE: 'registry.test/claudepilot/workspace:dev-1', GATE_JOB_POLL_S: '1', GATE_JOB_WAIT_S: '5' });
+  const dry = w.run('gate', { dry_run: 'true' });
+  assert.equal(dry.code, 0, dry.out);
+  assert.match(dry.out, /\[dry-run\] would run: scripts\/gate-job\.sh [0-9a-f]{7}/);
+  assert.ok(!existsSync(join(w.root, 'applied.yaml')), 'a dry run applies nothing');
+
+  const green = w.run('gate');
+  assert.equal(green.code, 0, green.out);
+  assert.match(green.out, new RegExp(`gate job claudepilot-gate-${w.sha.slice(0, 7)}-[0-9a-f]{4}: typecheck,web-build,server-suite at ${w.sha.slice(0, 7)} on registry\\.test/claudepilot/workspace:dev-1`));
+  assert.match(green.out, /GATE-VERDICT: green/);
+  assert.match(green.out, /gate: green at [0-9a-f]{7}/);
+  const job = readFileSync(join(w.root, 'applied.yaml'), 'utf8');
+  assert.match(job, new RegExp(`value: "${w.sha}"`));
+  assert.match(job, /image: registry\.test\/claudepilot\/workspace:dev-1/);
+  assert.match(job, /requests: \{cpu: 100m/);
+  assert.match(job, /GATE_VERDICT_SH, value: "[A-Za-z0-9+/=]{100,}"/, 'the caller’s verdict script travels with the Job');
+  assert.doesNotMatch(job, /nodeSelector/);
+  assert.ok(!job.includes(w.token), 'the token is in the Secret, never the Job');
+  const calls = w.calls();
+  assert.match(calls, /kubectl -n isnan-claudepilot create secret generic claudepilot-gate-/);
+  assert.match(calls, /kubectl -n isnan-claudepilot delete secret claudepilot-gate-/, 'the Secret is deleted on exit');
+
+  writeFileSync(join(w.root, 'gate-mode'), 'red');
+  writeFileSync(join(w.root, 'leak'), '');
+  const red = w.run('gate');
+  assert.equal(red.code, 1);
+  assert.match(red.out, /GATE-VERDICT: red: typecheck failed/);
+  assert.match(red.out, /gate: red at [0-9a-f]{7}/);
+  assert.ok(!red.out.includes(w.token), 'a token in the job log never reaches the run log');
+});
+
 test('refusals: a red gate, a branch that moved, a main with other commits, an unknown image; a refused release changes nothing', () => {
   const w = world();
   writeFileSync(join(w.root, 'gate-mode'), 'red');
@@ -406,7 +448,7 @@ test('the whole pipeline through the CI service and the real runner: gate, build
     // PATH goes in ~/.profile too: /etc/profile resets PATH in a login shell, and a real kubectl on this machine would otherwise win.
     const fakePath = `${join(fake.root, 'bin')}:/usr/local/bin:/usr/bin:/bin`;
     h.home.extraEnv.PATH = fakePath;
-    writeFileSync(join(h.home.home, '.profile'), Object.entries({ PATH: fakePath, FAKE: fake.root, DEPLOY_GIT_REMOTE: fake.github, DEPLOY_URL: 'http://portal.test:3000', DEPLOY_WAIT_S: '5', DEPLOY_POLL_S: '1' }).map(([k, v]) => `export ${k}='${v}'\n`).join(''));
+    writeFileSync(join(h.home.home, '.profile'), Object.entries({ PATH: fakePath, FAKE: fake.root, DEPLOY_GIT_REMOTE: fake.github, DEPLOY_URL: 'http://portal.test:3000', DEPLOY_WAIT_S: '5', DEPLOY_POLL_S: '1', DEPLOY_GATE_IN_CLUSTER: 'false' }).map(([k, v]) => `export ${k}='${v}'\n`).join(''));
     // The development repository: integration as on GitHub, pushed to its pilot remote.
     h.home.git(['fetch', '-q', fake.github, 'integration:integration'], h.src);
     h.home.git(['checkout', '-q', 'integration'], h.src);

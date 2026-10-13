@@ -4,6 +4,8 @@
 # GATE_CONCURRENCY (default 2): test files run at once; this workspace has 4 CPUs and 8 GiB, so keep it low. The tests that need a
 # Docker daemon are skipped here (CLAUDEPILOT_DOCKER_TESTS unset): they run on a machine with Docker. The suite runs from `env -i`:
 # no credentials, no kubeconfig, no Claude profile reach a test. GATE_TEST_TIMEOUT_MS (default 600000): a test or file that takes longer fails.
+# GATE_STEPS (default typecheck,web-build,server-suite): which steps run after npm ci (scripts/gate-job.sh runs only typecheck,web-build, say).
+# The verdict: scripts/gate-verdict.sh logs <logs dir>.
 set -u
 sha=$(git rev-parse --short "${1:-HEAD}")
 dir=${GATE_DIR:-/tmp/gate-$sha}; logs=$dir.logs
@@ -14,8 +16,10 @@ step() { local name=$1; shift; local t0; t0=$(date +%s); "$@" > "$logs/$name.log
 export NODE_AUTH_TOKEN=${NODE_AUTH_TOKEN:-$(gh auth token 2>/dev/null || true)}
 step npm-ci npm ci --no-audit --no-fund || { echo "npm ci failed: see $logs/npm-ci.log"; exit 1; }
 clean=(env -i "PATH=$PATH" "HOME=$dir/.home" LANG=C.UTF-8 PORTAL_K8S_ENABLED=false NODE_OPTIONS=--disable-warning=ExperimentalWarning)
-step typecheck "${clean[@]}" nice -n 10 npm run typecheck
-step web-build "${clean[@]}" nice -n 10 npm run build -w @portal/web
+steps=",${GATE_STEPS:-typecheck,web-build,server-suite},"
+wants() { [[ $steps == *",$1,"* ]]; }
+if wants typecheck; then step typecheck "${clean[@]}" nice -n 10 npm run typecheck; fi
+if wants web-build; then step web-build "${clean[@]}" nice -n 10 npm run build -w @portal/web; fi
 # The server suite. A test, or a whole test file, that runs longer than GATE_TEST_TIMEOUT_MS (default 10 minutes) FAILS instead of blocking the run
 # for ever (connect/agent/rekey.test.ts hung 9 to 26 minutes inside the full suite, twice, and passes alone in seconds), and the files with a failing
 # or timed-out test run once more, alone: a test that hangs or races under load passes alone (the known ones are in docs/open-items.md). The verdict
@@ -34,6 +38,7 @@ run_suite() {
   [ "$rc" = 0 ] && echo "server-suite-rerun: passed alone: $(echo $files)" >> "$logs/SUMMARY.txt"
   return "$rc"
 }
+wants server-suite || exit 0
 step server-suite run_suite
 grep -E '^# (tests|pass|fail|cancelled|skipped)' "$logs/server-suite.log" | tr '\n' ' '; echo
 grep '^not ok' "$logs/server-suite.log" | head -5 || true

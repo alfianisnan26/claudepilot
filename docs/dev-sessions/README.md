@@ -52,7 +52,10 @@ areas that test them, and runs the whole server suite when contracts, migrations
 then push: after every slice, and at least every 8 commits or every 2 hours (nothing piles up on the pod disk). RELEASE is the full gate:
 `scripts/gate.sh` on the exact commit before any deploy (the deploy pipeline's `gate` input stays true; `gate=false` only with a green full gate
 on that very commit), and once every two hours on integration's head in the background. A red full gate on integration is fixed first, before
-any new slice is merged: integration stays shippable.
+any new slice is merged: integration stays shippable. **Heavy work leaves the pod (T-37):** a full gate, and a typecheck plus web build when
+the pod is loaded, run as a Job in the cluster: `scripts/gate-job.sh <commit> [typecheck,web-build,server-suite]` (the commit on GitHub; push an
+unpushed merge to `wip/orchestrator-local-backup` first); the deploy pipeline's gate does too. Sub-agents run only their package's typecheck and
+their test files, never a build or a gate.
 Then the sub-agent on that branch runs `git fetch origin && git rebase origin/integration`. Remove `/tmp/gate-<sha>*` afterwards.
 
 ## Migrations
