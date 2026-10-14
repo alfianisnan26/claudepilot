@@ -167,7 +167,7 @@ test('R4: a long turn with a sub-agent running crosses the threshold: told once 
   r.engine.stop();
 });
 
-test('T-280: the probe's reset time jitters by milliseconds between readings (.000, .119, .267): the working chat is steered once, not on every reading', async () => {
+test('T-280: the reset time the probe reports jitters by milliseconds between readings (.000, .119, .267): the working chat is steered once, not on every reading', async () => {
   const r = await rig({ used: { work: 92, home: 50 }, session: { state: 'working' }, resetJitterMs: [0, 119, 0, 267, 0, 472] });
   for (let i = 0; i < 6; i++) await r.tick();
   assert.equal(r.chat.moves.length, 0, 'never mid-turn');
