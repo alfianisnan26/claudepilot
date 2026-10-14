@@ -228,6 +228,9 @@ test('sub-agents off: the process starts with --disallowedTools Agent Task Workf
     assert.equal(disallowedOf(lastStart(s)), null);
     // The same value again needs no restart.
     assert.equal(s.controller.setLimits(s.id, { subagents: true }, { actor: 'ui' }).restartNeeded, false);
+    // Off and back on before any restart: the process still runs as it was started (on), so nothing is needed (T-294 slice 6 finding).
+    assert.equal(s.controller.setLimits(s.id, { subagents: false }, { actor: 'ui' }).restartNeeded, true);
+    assert.equal(s.controller.setLimits(s.id, { subagents: true }, { actor: 'ui' }).restartNeeded, false, 'back to what the process runs with');
   } finally {
     await s.done();
   }

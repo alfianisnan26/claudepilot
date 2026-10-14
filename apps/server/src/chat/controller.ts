@@ -1344,6 +1344,9 @@ export class ChatController {
     }
   }
 
+  /** Whether each session's current process was started with sub-agents on (T-294); unknown after a portal restart. */
+  readonly #launchedSubagents = new Map<string, boolean>();
+
   /** The spawns under way per parent (checked, not yet a row): they count against its limits (T-295). */
   readonly #spawning = new Map<string, number>();
 
@@ -2987,7 +2990,10 @@ export class ChatController {
     const now = { maxWorkers: after.maxWorkers ?? null, subagents: after.subagents !== false };
     this.#chat.addAudit({ severity: 'medium', kind: 'session.limits', sessionId: id, workspaceId: after.workspaceId, actor: opts.actor, detail: { from: was, to: now } });
     // The live process keeps the tools it was launched with: a change of sub-agents waits for its next start.
-    const restartNeeded = was.subagents !== now.subagents && after.process === 'live' && after.state !== 'ended';
+    // A restart is needed when the live process runs with other sub-agents than now saved: compared with what it was started with when
+    // this portal started it, else (a process from before a portal restart) with the value saved before this change.
+    const launchedWith = this.#launchedSubagents.get(id) ?? was.subagents;
+    const restartNeeded = launchedWith !== now.subagents && after.process === 'live' && after.state !== 'ended';
     if (was.subagents !== now.subagents) this.#note(id, `Sub-agents ${now.subagents ? 'on' : 'off'}${restartNeeded ? ' from the next restart' : ''}.`);
     this.#emitSession(id);
     return { session: this.#decorate(this.#chat.get(id)!), restartNeeded };
@@ -3677,6 +3683,8 @@ export class ChatController {
     // T-294: the agent it runs as, at EVERY start (new, resume, wake, restart, recover, a Move: they all come through here), read from the
     // row so a Move keeps it. Checked again here: nothing but a plain name ever reaches the command line.
     const launched = this.#chat.row(o.sessionId);
+    // What this process starts with (T-294): a limits change compares with it, not with the value saved before the change.
+    this.#launchedSubagents.set(o.sessionId, launched?.subagents !== 0);
     const agent = launched?.agent;
     // `--allow-dangerously-skip-permissions` only for a session that opted in, and only while the policy allows it: without it
     // Claude Code refuses the switch to Bypass (`bypass_not_launched`). It never turns Bypass on by itself.
