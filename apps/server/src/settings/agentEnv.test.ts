@@ -7,7 +7,7 @@ import { isAppError } from '@isnanme/core';
 import { SETTING_KEYS, workspaceRef, type Actor, type AgentEnvStatus, type SettingsView, type UserId } from '@portal/contracts';
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { clearResolvers, registerResolver } from '../authz/seam.js';
+import { clearResolvers, declaredPolicies, registerResolver } from '../authz/seam.js';
 import { compile } from '../delivery/compile.js';
 import { mayUseEnv } from '../delivery/ownership.js';
 import { FOUNDATION, Reconciler, type FragmentProvider } from '../delivery/reconciler.js';
@@ -227,6 +227,8 @@ test('routes: a workspace’s agent policy asks the seam; one that is not yours 
     assert.equal((JSON.parse(a) as { error: { code: string } }).error.code, 'NOT_FOUND');
     // Not signed in at all: nothing.
     assert.equal((await routes(h, null).request('/api/settings/agent-env/docker/ws1')).status, 401);
+    // The route is declared with the seam, as `view` on the workspace.
+    assert.deepEqual(declaredPolicies().get('GET /api/settings/agent-env/:target/:name'), { kind: 'objects', checks: [{ type: 'workspace', verb: 'view', from: 'path', param: 'target+name' }] });
   } finally {
     clearResolvers();
     h.done();
