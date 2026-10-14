@@ -53,6 +53,7 @@ function ticketView(ctx: PortalToolContext, t: TicketItem, full = false) {
     workspace_id: t.workspaceId,
     worktree: t.worktree,
     session_ended: t.sessionEnded,
+    orphan: t.orphan ? { since: t.orphan.since, session_id: t.orphan.sessionId, why: t.orphan.why } : null,
     created_at: t.createdAt,
     updated_at: t.updatedAt,
     closed_at: t.closedAt,
@@ -184,7 +185,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     name: 'ticket_update',
     title: 'Change a ticket',
     description:
-      'Changes fields of a ticket assigned to you (or one you made that nobody holds): summary, description, type, priority, tags, status (in_progress, blocked, in_review, open) or assignee. To finish a ticket use ticket_close. Unassigning (assignee none) returns it to the queue.',
+      'Changes fields of a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds): summary, description, type, priority, tags, status (in_progress, blocked, in_review, open) or assignee. To finish a ticket use ticket_close. Unassigning (assignee none) returns it to the queue.',
     scope: 'agent',
     hints: { idempotent: true },
     input: z.object({
@@ -209,7 +210,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
   registerPortalTool({
     name: 'ticket_comment',
     title: 'Comment on a ticket',
-    description: 'Adds a comment to a ticket assigned to you (or one you made that nobody holds). Use it to report progress, ask for what you need, or record what you found.',
+    description: 'Adds a comment to a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds). Use it to report progress, ask for what you need, or record what you found.',
     scope: 'agent',
     input: z.object({ id: z.string().max(20), text: z.string().min(1).max(8_000).describe('Markdown.'), session_id: sessionIdArg }),
     handler(ctx, args) {
@@ -242,7 +243,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
   registerPortalTool({
     name: 'ticket_close',
     title: 'Close a ticket',
-    description: 'Closes a ticket assigned to you (or one you made that nobody holds) as done or wont_do, with a short summary of what was done or why not. A closed ticket can only be reopened by a person.',
+    description: 'Closes a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds) as done or wont_do, with a short summary of what was done or why not. A closed ticket can only be reopened by a person.',
     scope: 'agent',
     input: z.object({
       id: z.string().max(20),
@@ -254,6 +255,32 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       const t = tickets.close(callerOf(ctx), args.id, { summary: args.summary, outcome: args.outcome as 'done' | 'wont_do' | undefined }, { sessionId: args.session_id });
       ctx.affected(`ticket:${t.id}`);
       return { summary: `Closed ${t.id} as ${t.status}.`, ticket: ticketView(ctx, t, true) };
+    },
+  });
+
+  registerPortalTool({
+    name: 'ticket_adopt',
+    title: 'Take over an ended session’s tickets',
+    description:
+      'Takes over every unfinished ticket of a chat session that has ENDED in your workspace: the one you continue (an earlier chat of your track), or one nobody continues. Use it when ticket_comment or ticket_update says a ticket is assigned to another session that ended: it is a tool step, not something to ask a person for. Refused for a live session (it keeps its work), for a session another live chat continues, and outside your workspace. Asks for confirmation first (shows the tickets); returns the ids moved.',
+    scope: 'agent',
+    input: z.object({
+      from_session: z.string().min(1).max(80).describe('The id of the ended session whose tickets you take over.'),
+      session_id: sessionIdArg,
+      confirm_token: z.string().optional(),
+    }),
+    handler(ctx, args) {
+      const caller = callerOf(ctx);
+      const plan = tickets.adoptPlan(caller, args.from_session, { sessionId: args.session_id });
+      const gate = ctx.confirm(
+        args,
+        { from_session: plan.from, to_session: plan.me.id, why: plan.why === 'lineage' ? 'you continue that session' : 'that session ended and nobody continues it', tickets: plan.tickets, changes: 'Each ticket is assigned to your session; its status and notes stay.' },
+        `${plan.from}:${plan.me.id}:${plan.tickets.join(',')}`,
+      );
+      if (gate) return gate;
+      const r = tickets.adopt(caller, args.from_session, { sessionId: args.session_id });
+      ctx.affected(...r.tickets.map((id) => `ticket:${id}`));
+      return { summary: r.tickets.length ? `Took over ${r.tickets.length} tickets: ${r.tickets.join(', ')}.` : 'That session holds no unfinished tickets.', tickets: r.tickets, why: r.why, from_session: r.from };
     },
   });
 

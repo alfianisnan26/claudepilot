@@ -181,6 +181,15 @@ export interface CiRun extends CiRunSummary {
   reports: CiRunReport[];
   /** The times a person (or a script) bumped the run into a session (FR37a), oldest first. */
   bumps: CiRunBump[];
+  /** Per job, the tests its log named as flaky (passed on rerun) and their tickets (T-95 item 4); empty until the run's logs are kept. */
+  flaky: CiRunFlaky[];
+}
+
+/** A job's flaky tests: how many, and the ticket of each (one ticket per test across runs). */
+export interface CiRunFlaky {
+  job: string;
+  tests: number;
+  tickets: string[];
 }
 
 /**
@@ -243,7 +252,41 @@ export interface CiDeployment {
   /** How the job ended, once it did. */
   outcome: CiUnitStatus | null;
   createdAt: string;
+  /** The auto-approve rule's verdict (T-110, PRD FR41a), or null when the rule did not look (mode off, or before the job waited). */
+  autoApprove: CiAutoApproveVerdict | null;
 }
+
+/**
+ * An environment's auto-approve mode (T-110, PRD FR41a), set only by a person with manage on the remote. `off`: a person approves, as
+ * always. `dry`: when a deploy waits, the portal says on the run and in the audit whether the rule WOULD approve it, and approves nothing.
+ * A real `on` comes with slice 2; until then the API refuses it.
+ */
+export const CI_AUTO_APPROVE_MODES = ['off', 'dry'] as const;
+export type CiAutoApproveMode = (typeof CI_AUTO_APPROVE_MODES)[number];
+
+/** What the rule said about one waiting deployment: one line, starting `auto-approve (dry): WOULD approve` or `... WOULD NOT`. */
+export interface CiAutoApproveVerdict {
+  mode: 'dry';
+  verdict: 'would' | 'would_not';
+  line: string;
+  at: string;
+}
+
+/** The paths a deploy may not change without a person (globs, `**` crosses folders), unless an environment lists its own. */
+export const CI_AUTO_APPROVE_DEFAULT_PATHS = [
+  'apps/server/src/authz/**',
+  'apps/server/src/**/authz.ts',
+  'apps/server/src/secrets/**',
+  'apps/server/src/chat/bypass*.ts',
+  'apps/web/src/features/chat/Bypass*',
+  '.claude/settings.json',
+  '.pilot/**',
+  'scripts/gate*.sh',
+  'apps/server/src/ci/autoApprove*.ts',
+] as const;
+
+/** Auto approvals (or, dry, would-be approvals) per environment in 24 hours. */
+export const CI_AUTO_APPROVE_DAILY_CAP = 6;
 
 /** An environment of a remote (PRD FR41): created protected the first time a pipeline names it. */
 export interface CiEnvironment {
@@ -254,12 +297,28 @@ export interface CiEnvironment {
   protected: boolean;
   updatedAt: string;
   updatedBy: string;
+  /** The auto-approve mode (FR41a); `off` unless a person set it. */
+  autoApprove: CiAutoApproveMode;
+  /** When the rule may approve, `HH:MM-HH:MM` in UTC; null: always. */
+  autoApproveWindow: string | null;
+  /** The paths a deploy may not change without a person, as in force (the defaults unless the environment lists its own). */
+  needsPerson: string[];
   /** The latest deployments, newest first (at most 20). */
   deployments: CiDeployment[];
 }
 
 export interface UpdateCiEnvironmentRequest {
   protected: boolean;
+}
+
+/**
+ * PUT an environment's auto-approve rule (a person with manage only; audited as `ci.environment_auto_approve`). Fields left out keep their
+ * value; `window: null` means always, `needsPerson: null` the defaults.
+ */
+export interface UpdateCiAutoApproveRequest {
+  mode: CiAutoApproveMode;
+  window?: string | null;
+  needsPerson?: string[] | null;
 }
 
 /** Approve or reject the job a run is holding for a person. */
@@ -421,6 +480,8 @@ export const CI_API = {
   environments: (repoId: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments`,
   /** PUT `UpdateCiEnvironmentRequest`: `CiEnvironment` (made when it does not exist yet). */
   environment: (repoId: string, name: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}`,
+  /** PUT `UpdateCiAutoApproveRequest`: `CiEnvironment` (FR41a; a person with manage only). */
+  environmentAutoApprove: (repoId: string, name: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}/auto-approve`,
 } as const;
 
 /** The first 7 characters of a commit. */

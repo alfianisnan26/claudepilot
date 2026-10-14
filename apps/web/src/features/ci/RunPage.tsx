@@ -1,6 +1,6 @@
 import { Button, cn, LoadError, useToast } from '@isnanme/ui';
-import { isCiActive, type CiDeployment, type CiDiagnostic, type CiJob, type CiRun } from '@portal/contracts';
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Hand, RotateCw, Square } from 'lucide-react';
+import { isCiActive, type CiDeployment, type CiDiagnostic, type CiJob, type CiRun, type CiRunFlaky } from '@portal/contracts';
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Hand, RotateCw, Square } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
@@ -199,6 +199,12 @@ export function RunPage() {
           <Approval key={d.id} run={run} deployment={d} onDecided={() => void load()} />
         ))}
 
+      {run.deployments
+        .filter((d) => d.autoApprove)
+        .map((d) => (
+          <RuleLine key={`rule-${d.id}`} deployment={d} />
+        ))}
+
       {run.diagnostics.length > 0 && <Diagnostics items={run.diagnostics} />}
 
       {run.detail.length === 0 && run.diagnostics.length === 0 && <p className="text-[14px] text-muted">No jobs</p>}
@@ -225,6 +231,7 @@ export function RunPage() {
                 <span className="text-[12.5px] text-muted tabular-nums">{formatDuration(j.durationMs ?? (j.status === 'running' ? elapsed(j.startedAt, now) : null))}</span>
                 {isOpen ? <ChevronDown className="size-4 shrink-0 text-muted" aria-hidden="true" /> : <ChevronRight className="size-4 shrink-0 text-muted" aria-hidden="true" />}
               </button>
+              <FlakyLine flaky={(run.flaky ?? []).find((f) => f.job === j.id)} />
               {isOpen && (
                 <ul className="border-t border-line px-2 py-1.5">
                   {j.steps.map((s) => {
@@ -324,6 +331,19 @@ function Approval({ run, deployment, onDecided }: { run: CiRun; deployment: CiDe
   );
 }
 
+/** The auto-approve rule's one line on a deployment (T-110 FR41a; slice 1 is a dry run: it approved nothing). */
+function RuleLine({ deployment }: { deployment: CiDeployment }) {
+  const v = deployment.autoApprove!;
+  return (
+    <p className="mb-4 flex items-start gap-2 rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-[13px] leading-snug [overflow-wrap:anywhere]" aria-label={`Auto-approve rule for ${deployment.environment}`}>
+      <Bot className={cn('mt-0.5 size-4 shrink-0', v.verdict === 'would' ? 'text-accent' : 'text-gold')} aria-hidden="true" />
+      <span className="min-w-0 flex-1" title={timeAgo(v.at)}>
+        {v.line}
+      </span>
+    </p>
+  );
+}
+
 /** What is wrong with a pipeline file, one line each: where, what, and what to write instead. Plain text. */
 export function Diagnostics({ items }: { items: CiDiagnostic[] }) {
   return (
@@ -339,5 +359,22 @@ export function Diagnostics({ items }: { items: CiDiagnostic[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/** A job whose log named flaky tests (passed on rerun, T-95 item 4): how many, and the ticket the portal keeps for each. */
+function FlakyLine({ flaky }: { flaky: CiRunFlaky | undefined }) {
+  if (!flaky || flaky.tests === 0) return null;
+  return (
+    <p className="-mt-2 flex min-w-0 flex-wrap items-center gap-x-1.5 px-3.5 text-[12.5px] break-words text-muted">
+      <span>flaky: {flaky.tests}</span>
+      {flaky.tickets.length > 0 && <span>, tickets</span>}
+      {flaky.tickets.map((t, i) => (
+        <Link key={t} to={`/admin/tickets/${t}`} className="inline-flex min-h-11 items-center text-accent hover:underline">
+          {t}
+          {i < flaky.tickets.length - 1 ? ',' : ''}
+        </Link>
+      ))}
+    </p>
   );
 }

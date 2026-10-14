@@ -4,9 +4,18 @@
 
 import type { IncomingMessage } from 'node:http';
 import { AppError, success } from '@isnanme/core';
-import type { CreatePortalTokenRequest, PortalAgentWorkspace, PortalAuditOutcome, SetAgentAccessRequest, UpdatePortalMcpSettingsRequest } from '@portal/contracts';
+import type {
+  CreatePortalTokenRequest,
+  PortalAgentWorkspace,
+  PortalAuditOutcome,
+  RevokePortalTokenLabelRequest,
+  SetAgentAccessRequest,
+  UpdatePortalMcpSettingsRequest,
+} from '@portal/contracts';
 import { Hono, type Context } from 'hono';
+import { actorOf, actorString, requireCan } from '../authz/seam.js';
 import { config } from '../config.js';
+import { declarePortalMcpPolicies, tokenRef } from './authz.js';
 import type { PortalMcpModule } from './module.js';
 
 async function body<T>(c: Context): Promise<Partial<T>> {
@@ -48,6 +57,7 @@ export interface PortalMcpRoutesDeps {
 
 /** `/api/portal-mcp`: switches, access tokens, audit, agent access. Mount under a guarded group. */
 export function createPortalMcpRoutes(module: PortalMcpModule, deps?: PortalMcpRoutesDeps): Hono {
+  declarePortalMcpPolicies();
   const app = new Hono();
 
   app.get('/', (c) => c.json(success(module.state(mcpUrl(c)))));
@@ -61,15 +71,30 @@ export function createPortalMcpRoutes(module: PortalMcpModule, deps?: PortalMcpR
     return c.json(success(settings));
   });
 
+  // Minting and revoking need `manage` on the person's tokens: a read or operate token is below it, an agent's token is refused (authz.ts).
   app.post('/tokens', async (c) => {
+    const actor = actorOf(c);
+    requireCan(actor, 'manage', tokenRef());
     const req = await body<CreatePortalTokenRequest>(c);
-    return c.json(success(module.createToken(req, mcpUrl(c))), 201);
+    return c.json(success(module.createToken(req, mcpUrl(c), actorString(actor))), 201);
+  });
+
+  // "Revoke older" and "Revoke all of this label" on the tokens page: one audit row per token, with who.
+  app.post('/tokens/revoke-label', async (c) => {
+    const actor = actorOf(c);
+    requireCan(actor, 'manage', tokenRef());
+    const req = await body<RevokePortalTokenLabelRequest>(c);
+    if (typeof req.label !== 'string' || !req.label.trim()) throw new AppError('VALIDATION_FAILED', 'Name the label.', { details: { label: 'Required.' } });
+    if (req.keepNewest !== undefined && typeof req.keepNewest !== 'boolean') throw new AppError('VALIDATION_FAILED', '`keepNewest` must be true or false.', { details: { keepNewest: 'Use true or false.' } });
+    return c.json(success({ revoked: module.revokeLabel(req.label.trim(), req.keepNewest === true, actorString(actor)) }));
   });
 
   app.delete('/tokens/:id', (c) => {
+    const actor = actorOf(c);
     const id = c.req.param('id');
+    requireCan(actor, 'manage', tokenRef(id));
     if (!module.tokens.get(id)) throw new AppError('NOT_FOUND', 'No such token.');
-    module.revokeToken(id);
+    module.revokeToken(id, undefined, actorString(actor));
     return c.json(success({ ok: true }));
   });
 

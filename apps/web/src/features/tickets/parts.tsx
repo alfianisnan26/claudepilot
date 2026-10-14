@@ -13,7 +13,7 @@ import {
 import { Ban, Bot, ChevronDown, ChevronsUp, ChevronUp, CircleCheck, CircleX, Clock, GitBranch, Loader2, Minus, User, type LucideIcon } from 'lucide-react';
 import { Link } from 'react-router';
 import { timeAgo } from '@/lib/format';
-import { PRIORITY_TONE, SESSION_STATE_LABEL, STATUS_TONE, TYPE_TONE, ageShort } from './labels';
+import { ORPHAN_BADGE, PRIORITY_TONE, SESSION_STATE_LABEL, STATUS_TONE, TYPE_TONE, ageShort } from './labels';
 
 /** Shape and colour, not colour alone (tickets PRD §13): chevrons up for urgent and high, a dash for normal, down for low. */
 export function PriorityMark({ priority, className }: { priority: TicketPriority; className?: string }) {
@@ -74,7 +74,7 @@ export function TicketFlags({ ticket: t }: { ticket: TicketItem }) {
   return (
     <>
       {t.assignee?.kind === 'user' && t.status !== 'done' && t.status !== 'wont_do' && <Badge tone="warning">Needs you</Badge>}
-      {t.sessionEnded && <Badge tone="danger">Session ended</Badge>}
+      {t.orphan ? <Badge tone="danger">{ORPHAN_BADGE[t.orphan.why]}</Badge> : t.sessionEnded && <Badge tone="danger">Session ended</Badge>}
       {t.worktree && (
         <span className="inline-flex items-center gap-1 text-[12px] text-muted" title={t.worktree.path}>
           <GitBranch className="size-3.5" aria-hidden="true" />

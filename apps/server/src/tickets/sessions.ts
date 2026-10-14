@@ -8,6 +8,10 @@ import type { ChatController } from '../chat/controller.js';
 /** A session as tickets need it. */
 export interface TicketSessionInfo extends TicketSession {
   ticketId: string | null;
+  /** The session this one continues (T-136 lineage), or null. What the ended-session rule (authz.ts) walks. */
+  continuedFrom?: string | null;
+  /** When it was archived (an archived session has ended), or null. The orphan sweep counts it dead (T-270). */
+  archivedAt?: string | null;
 }
 
 /** Creating the session a ticket starts (tickets PRD FR15). */
@@ -47,6 +51,8 @@ function info(s: ChatSession): TicketSessionInfo {
     endedReason: s.endedReason,
     worktree: s.worktree ? { branch: s.worktree.branch, path: s.worktree.path } : null,
     ticketId: s.ticketId ?? null,
+    continuedFrom: s.continuedFrom ?? null,
+    archivedAt: s.archivedAt ?? null,
   };
 }
 

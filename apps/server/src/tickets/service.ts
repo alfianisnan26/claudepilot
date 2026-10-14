@@ -36,6 +36,8 @@ import {
   type TicketFilter,
   type TicketItem,
   type TicketList,
+  type TicketOrphan,
+  type TicketOrphanWhy,
   type TicketPriority,
   type TicketSession,
   type TicketStatus,
@@ -46,6 +48,7 @@ import {
 import { assertBumpable, bumpMode, bumpNote, bumpTargets as targetsFor } from '../chat/bump.js';
 import { cleanText } from '../portalmcp/sanitize.js';
 import type { Store } from '../store/store.js';
+import { canActForEnded, type EndedGrantReason } from './authz.js';
 import './errors.js';
 import { bumpTicketMessage, openingMessage } from './opening.js';
 import type { TicketSessionInfo, TicketSessions } from './sessions.js';
@@ -70,6 +73,12 @@ export type Caller =
    * actor `trigger:<id>`, and its text (an event's words) is untrusted. The session it starts carries `portal:trigger-<id>`.
    */
   | { kind: 'trigger'; triggerId: string; ownerId: string; label: string };
+
+/** FR9a (T-270): an agent acts on a ticket an ENDED session holds, and why it may. */
+interface EndedGrant {
+  forSession: string;
+  why: EndedGrantReason;
+}
 
 /** The identity a change is recorded under. */
 interface Writer {
@@ -160,6 +169,39 @@ export interface TicketsOptions {
    * key the rest of the portal speaks; rows written before (a key) read as they are. Absent (tests): stored as given.
    */
   workspaceRefs?: WorkspaceRefs;
+  /** T-270: minutes a ticket's session must be dead before the orphan sweep moves the ticket (`tickets.orphanAfterMin`). Default 3. */
+  orphanAfterMin?: () => number;
+}
+
+/** One move the orphan sweep made (T-270 layer 3): where the ticket went and why. `to` null: back in the agents' queue. */
+export interface OrphanMove {
+  ticketId: string;
+  from: string;
+  to: string | null;
+  reason: 'lineage' | 'title' | 'queue';
+  holder: TicketOrphanWhy;
+}
+
+/** The sweep's state in `portal_meta` (restart safe): its last pass and, per dead holder, when the portal first saw it dead. */
+const ORPHAN_META = 'tickets:orphans';
+const ORPHAN_DEFAULT_MIN = 3;
+/** At most this many tickets move in one pass (the rest wait for the next minute). */
+export const ORPHAN_MOVES_PER_PASS = 200;
+export const ORPHAN_QUEUE_COMMENT = 'Its session ended: back in the queue.';
+
+/** Dead for the sweep: the portal no longer has the session, it was archived, or it ended. `interrupted` can be woken: it is live. */
+export function deadWhy(s: TicketSessionInfo | null): TicketOrphanWhy | null {
+  if (!s) return 'missing';
+  if (s.archivedAt) return 'archived';
+  return s.state === 'ended' ? 'ended' : null;
+}
+
+/** A title's track, the text before its first ":" ("Orchestrator: ClaudePilot dev" is "Orchestrator"); null without a ":" (no match). */
+export function titlePrefix(title: string | null | undefined): string | null {
+  const i = title ? title.indexOf(':') : -1;
+  if (i <= 0) return null;
+  const p = title!.slice(0, i).trim();
+  return p || null;
 }
 
 /** One row of the platform audit (platform/audit.ts `AuditInput`): ids, labels and fixed codes only, never the note. */
@@ -189,6 +231,8 @@ export class Tickets {
   #off: (() => void) | undefined;
 
   readonly #refs: TicketsOptions['workspaceRefs'];
+  readonly #orphanAfterMin: () => number;
+  #orphans: { lastRunAt: string | null; dead: Record<string, string> } | null = null;
 
   constructor(
     private readonly store: Store,
@@ -198,6 +242,7 @@ export class Tickets {
     this.#now = opts.now ?? (() => new Date());
     this.#link = opts.link ?? ((id) => `/admin/tickets/${id}`);
     this.#refs = opts.workspaceRefs;
+    this.#orphanAfterMin = opts.orphanAfterMin ?? (() => ORPHAN_DEFAULT_MIN);
   }
 
   /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
@@ -244,6 +289,8 @@ export class Tickets {
     if (!this.store.writable || !this.store.deliveryAllowed) return;
     this.#off ??= this.sessions.onSession((s) => {
       if (s.state === 'ended') this.#sessionEnded(s);
+      // Back to live within the delay (in-place recovery, T-136 keeps the id): its tickets stay where they are (T-270).
+      else if (!s.archivedAt) this.#markAlive(s.id);
     });
   }
 
@@ -266,6 +313,16 @@ export class Tickets {
 
   #tx<T>(fn: () => T): T {
     const db = this.#writableDb;
+    // Inside a transaction someone else opened (a continuation's, T-270: the chat row and the tickets commit together): join it.
+    if (db.isTransaction && !this.#inTx) {
+      this.#inTx = true;
+      try {
+        return fn();
+      } finally {
+        this.#inTx = false;
+        queueMicrotask(() => this.#tell());
+      }
+    }
     db.exec('BEGIN IMMEDIATE');
     this.#inTx = true;
     try {
@@ -332,27 +389,85 @@ export class Tickets {
     return row.workspace_id === null || this.#isIn(row, caller.workspaceId);
   }
 
-  /** FR9: what an agent may change. People, the portal and an admin's operate token may change anything. */
-  #assertCanModify(caller: Caller, row: Row, w: Writer) {
-    if (caller.kind === 'token') return this.#assertWrites(caller);
-    if (caller.kind !== 'agent') return;
+  /**
+   * FR9: what an agent may change. People, the portal and an admin's operate token may change anything. Returns the grant when the agent
+   * acts on a ticket an ENDED session holds (FR9a, T-270): the caller writes the audit row for it once the write is done.
+   */
+  #assertCanModify(caller: Caller, row: Row, w: Writer): EndedGrant | null {
+    if (caller.kind === 'token') return (this.#assertWrites(caller), null);
+    if (caller.kind !== 'agent') return null;
     const id = ticketIdOf(row.number);
     if (isTicketClosed(row.status)) throw new AppError('FORBIDDEN', `${id} is closed. A person can reopen it.`);
     if (row.assignee_kind === 'session') {
-      if (row.assignee_ref !== w.session!.id) throw new AppError('FORBIDDEN', `${id} is assigned to another session. Only the session it is assigned to can change it.`);
-      return;
+      if (row.assignee_ref === w.session!.id) return null;
+      const grant = this.#forEnded(w.session!, row.assignee_ref!);
+      if (grant) return grant;
+      throw new AppError('FORBIDDEN', `${id} is assigned to another session. Only the session it is assigned to can change it (one that ended is taken over with ticket_adopt).`);
     }
     // Nobody, or a person, holds it: only the session that made it may still change it.
     if (!(row.reporter_kind === 'token' && row.reporter_ref === reporterRef(caller)))
       throw new AppError('FORBIDDEN', row.assignee_kind === 'user' ? `${id} is assigned to a person.` : `${id} is not assigned to you. Claim it with ticket_claim_next first.`);
+    return null;
+  }
+
+  /** The actor's predecessors, nearest first (`continued_from` back; bounded, cycle safe). */
+  #ancestors(s: TicketSessionInfo): string[] {
+    const out: string[] = [];
+    let cur: TicketSessionInfo | null = s;
+    while (cur?.continuedFrom && out.length < 100 && !out.includes(cur.continuedFrom) && cur.continuedFrom !== s.id) {
+      out.push(cur.continuedFrom);
+      cur = this.sessions.get(cur.continuedFrom);
+    }
+    return out;
+  }
+
+  /** Whether a live session continues `id`, directly or down its chain (in its workspace). */
+  #hasLiveSuccessor(id: string, workspaceId: string): boolean {
+    const all = this.sessions.list({ workspaceId });
+    const seen = new Set<string>([id]);
+    let frontier = [id];
+    while (frontier.length && seen.size < 500) {
+      const next = all.filter((s) => s.continuedFrom && frontier.includes(s.continuedFrom) && !seen.has(s.id));
+      if (next.some((s) => s.state !== 'ended')) return true;
+      for (const s of next) seen.add(s.id);
+      frontier = next.map((s) => s.id);
+    }
+    return false;
+  }
+
+  /** FR9a (T-270): the ended-session rule (authz.ts `canActForEnded`) for a ticket `holderId` holds; null when it refuses. */
+  #forEnded(actor: TicketSessionInfo, holderId: string): EndedGrant | null {
+    const holder = this.sessions.get(holderId);
+    const d = canActForEnded({
+      actor,
+      holder,
+      holderKind: 'session',
+      actorAncestors: this.#ancestors(actor),
+      holderHasLiveSuccessor: holder ? this.#hasLiveSuccessor(holder.id, holder.workspaceId) : false,
+    });
+    return d.allow ? { forSession: holderId, why: d.why } : null;
+  }
+
+  /** The audit row of a write made under FR9a: which session acted for which ended one, and why. */
+  #auditForEnded(grant: EndedGrant | null, w: Writer, row: Row, action: 'update' | 'comment' | 'close') {
+    if (!grant) return;
+    const ticketId = ticketIdOf(row.number);
+    this.onAudit?.({
+      kind: 'ticket.acted_for_ended',
+      actor: w.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: `ticket:${ticketId}`,
+      detail: { ticketId, action, sessionId: w.session?.id ?? null, forSession: grant.forSession, why: grant.why },
+    });
   }
 
   /** FR29: commenting is what FR9 allows, and also the answer of a session a person asked about the ticket (Ask) in the last day. */
-  #assertCanComment(caller: Caller, row: Row, w: Writer) {
+  #assertCanComment(caller: Caller, row: Row, w: Writer): EndedGrant | null {
     try {
-      this.#assertCanModify(caller, row, w);
+      return this.#assertCanModify(caller, row, w);
     } catch (e) {
-      if (caller.kind === 'agent' && !isTicketClosed(row.status) && this.#bumpedInto(row.number, caller.sessionId, ASK_ANSWER_MS)) return;
+      if (caller.kind === 'agent' && !isTicketClosed(row.status) && this.#bumpedInto(row.number, caller.sessionId, ASK_ANSWER_MS)) return null;
       throw e;
     }
   }
@@ -415,7 +530,9 @@ export class Tickets {
       updatedAt: r.updated_at,
       closedAt: r.closed_at,
     };
-    return { ...ticket, assigneeSession: session ? this.#sessionView(session) : null, sessionEnded: !!session && session.state === 'ended' && !isTicketClosed(r.status) };
+    const why = r.assignee_kind === 'session' && !isTicketClosed(r.status) ? deadWhy(session ?? null) : null;
+    const orphan: TicketOrphan | null = why ? { since: this.#orphanState().dead[r.assignee_ref!] ?? null, sessionId: r.assignee_ref!, why } : null;
+    return { ...ticket, assigneeSession: session ? this.#sessionView(session) : null, sessionEnded: !!session && session.state === 'ended' && !isTicketClosed(r.status), orphan };
   }
 
   #items(rows: Row[]): TicketItem[] {
@@ -444,6 +561,11 @@ export class Tickets {
     if (f.assignee === 'unassigned') where.push('t.assignee_kind IS NULL');
     else if (f.assignee === 'user') where.push("t.assignee_kind = 'user'");
     else if (f.assignee?.startsWith('session:')) (where.push("t.assignee_kind = 'session' AND t.assignee_ref = ?"), args.push(f.assignee.slice(8)));
+    if (f.orphan) {
+      const o = this.#orphanSql();
+      where.push(o.sql);
+      args.push(...o.args);
+    }
     if (f.workspaceId) {
       const one = this.#inWorkspace('t.workspace_id', f.workspaceId);
       where.push(one.sql);
@@ -464,7 +586,9 @@ export class Tickets {
     const and = sql ? `${sql} AND` : 'WHERE';
     const needsYou = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${and} t.assignee_kind = 'user' AND t.status IN (${OPEN_SQL})`).get(...args) as { n: number }).n;
     const unassigned = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${and} t.assignee_kind IS NULL AND t.status = 'open'`).get(...args) as { n: number }).n;
-    return { byStatus, needsYou, unassigned, total: Object.values(byStatus).reduce((a, b) => a + b, 0) };
+    const o = this.#orphanSql();
+    const orphans = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${and} ${o.sql}`).get(...args, ...o.args) as { n: number }).n;
+    return { byStatus, needsYou, unassigned, orphans, total: Object.values(byStatus).reduce((a, b) => a + b, 0) };
   }
 
   list(caller: Caller, filter: TicketFilter = {}): TicketList {
@@ -643,7 +767,7 @@ export class Tickets {
   update(caller: Caller, id: string, req: Partial<UpdateTicketRequest>, opts: { sessionId?: string | null } = {}): TicketItem {
     const row = this.#need(caller, id); // visibility first: a ticket it can't see doesn't exist for it
     const w = this.#writer(caller, opts.sessionId);
-    this.#assertCanModify(caller, row, w);
+    const grant = this.#assertCanModify(caller, row, w);
     const agent = caller.kind === 'agent';
     const tags = this.#tagsOf([row.number]).get(row.number) ?? [];
     const sets: Record<string, string | number | null> = {};
@@ -726,6 +850,7 @@ export class Tickets {
       if (newTags) this.#setTags(row.number, newTags);
       for (const e of entries) this.#addEvent(row.number, e.kind, w, e.body ?? null, e.data);
     });
+    this.#auditForEnded(grant, w, row, 'update');
     this.onChange?.();
     return this.#items([this.#row(row.number)!])[0]!;
   }
@@ -733,13 +858,14 @@ export class Tickets {
   comment(caller: Caller, id: string, text: unknown, opts: { sessionId?: string | null } = {}): TicketEvent {
     const row = this.#need(caller, id);
     const w = this.#writer(caller, opts.sessionId);
-    this.#assertCanComment(caller, row, w);
+    const grant = this.#assertCanComment(caller, row, w);
     const body = cleanMarkdown(text, 'text', TICKET_LIMITS.comment, { required: true });
     const eventId = this.#tx(() => {
       this.#db.prepare('UPDATE tickets SET updated_at = ? WHERE number = ?').run(this.#now().toISOString(), row.number);
       this.#addEvent(row.number, 'comment', w, body, w.session ? { session: w.session.id } : null);
       return Number((this.#db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id);
     });
+    this.#auditForEnded(grant, w, row, 'comment');
     this.onChange?.();
     return this.#events(row.number).find((e) => e.id === eventId)!;
   }
@@ -747,7 +873,7 @@ export class Tickets {
   close(caller: Caller, id: string, req: Partial<CloseTicketRequest> = {}, opts: { sessionId?: string | null } = {}): TicketItem {
     const row = this.#need(caller, id);
     const w = this.#writer(caller, opts.sessionId);
-    this.#assertCanModify(caller, row, w);
+    const grant = this.#assertCanModify(caller, row, w);
     if (isTicketClosed(row.status)) throw new AppError('CONFLICT', `${ticketIdOf(row.number)} is already closed.`);
     const outcome = req.outcome === undefined ? 'done' : oneOf(req.outcome, TICKET_CLOSED_STATUSES, 'outcome');
     const summary = cleanMarkdown(req.summary, 'summary', TICKET_LIMITS.closing, { required: caller.kind === 'token' || caller.kind === 'agent' });
@@ -756,6 +882,7 @@ export class Tickets {
       this.#db.prepare('UPDATE tickets SET status = ?, closed_at = ?, closing_summary = ?, updated_at = ? WHERE number = ?').run(outcome, at, summary || null, at, row.number);
       this.#addEvent(row.number, 'closed', w, summary || null, { from: row.status, to: outcome, ...(w.session ? { session: w.session.id } : {}) });
     });
+    this.#auditForEnded(grant, w, row, 'close');
     this.onChange?.();
     return this.#items([this.#row(row.number)!])[0]!;
   }
@@ -1034,12 +1161,258 @@ export class Tickets {
     return out;
   }
 
+  /* ---------- Tickets follow the track (T-270) ---------- */
+
+  /** The unfinished tickets `from` holds, oldest first. */
+  #heldBy(from: string): Row[] {
+    return (this.#db.prepare(`SELECT * FROM tickets WHERE assignee_kind = 'session' AND assignee_ref = ? AND status IN (${OPEN_SQL}) ORDER BY number`).all(from) as unknown as Row[]).map((r) => this.#keyed(r));
+  }
+
+  /**
+   * A continuation was created (chat controller `continueTickets`, inside its transaction): every unfinished ticket held by the ENDED
+   * sessions of `from` (the predecessor and its ended predecessors) is assigned to `to`, an `assigned` entry each (actor system,
+   * `continued: true`, as migration 772 wrote them), status kept. A `from` that is not ended, or in another workspace, is skipped.
+   * Closed tickets keep their assignee: that is who did the work. Returns the ticket ids moved.
+   */
+  continueFrom(to: string, from: readonly string[]): string[] {
+    const head = this.sessions.get(to);
+    if (!head || !from.length) return [];
+    const w = { actor: 'system', label: 'Portal' };
+    const moved = this.#tx(() => {
+      const out: string[] = [];
+      const at = this.#now().toISOString();
+      for (const f of from) {
+        const s = this.sessions.get(f);
+        if (!s || s.state !== 'ended' || s.workspaceId !== head.workspaceId || f === to) continue;
+        for (const r of this.#heldBy(f)) {
+          this.#db.prepare('UPDATE tickets SET assignee_ref = ?, updated_at = ? WHERE number = ?').run(to, at, r.number);
+          this.#addEvent(r.number, 'assigned', w, null, { from: { kind: 'session', sessionId: f }, to: { kind: 'session', sessionId: to }, continued: true });
+          out.push(ticketIdOf(r.number));
+        }
+      }
+      return out;
+    });
+    if (moved.length) {
+      this.onAudit?.({ kind: 'ticket.continued', actor: 'system', userId: FOUNDING_USER_ID, subject: `session:${to}`, detail: { sessionId: to, fromSessions: [...from], tickets: moved } });
+      this.onChange?.();
+    }
+    return moved;
+  }
+
+  /** What `ticket_adopt` would do: the rule's reason and the tickets it would move. Refused like the rule: 404, 409 live, 403 live successor. */
+  adoptPlan(caller: Caller, fromSessionId: string, opts: { sessionId?: string | null } = {}): { me: TicketSessionInfo; from: string; why: EndedGrantReason; tickets: string[] } {
+    this.#assertWrites(caller);
+    const w = this.#writer(caller, opts.sessionId);
+    const me = this.#needSession(w, 'To adopt tickets');
+    const from = typeof fromSessionId === 'string' ? this.sessions.get(fromSessionId.trim()) : null;
+    // Another workspace's session doesn't exist for it, as its tickets don't.
+    if (!from || from.workspaceId !== me.workspaceId) throw new AppError('NOT_FOUND', 'No such session in your workspace.');
+    if (from.id === me.id) throw invalid('from_session', 'That is your own session.');
+    if (from.state !== 'ended') throw new AppError('CONFLICT', 'That session is still live: it keeps its tickets. Ask it, or wait until it has ended.');
+    const grant = this.#forEnded(me, from.id);
+    if (!grant) throw new AppError('FORBIDDEN', 'A live session continues that one: its tickets are that session’s to take.');
+    const tickets = this.#heldBy(from.id)
+      .filter((r) => r.workspace_id === null || this.#isIn(r, me.workspaceId))
+      .map((r) => ticketIdOf(r.number));
+    return { me, from: from.id, why: grant.why, tickets };
+  }
+
+  /**
+   * `ticket_adopt` (T-270): the calling session takes over every unfinished ticket of an ENDED session of its workspace that is in its lineage
+   * or has no live successor (the FR9a rule). One `assigned` entry each (the caller, `adopted: true` and why), one audit row. Returns the ids.
+   */
+  adopt(caller: Caller, fromSessionId: string, opts: { sessionId?: string | null } = {}): { tickets: string[]; why: EndedGrantReason; from: string } {
+    const plan = this.adoptPlan(caller, fromSessionId, opts);
+    const w = this.#writer(caller, opts.sessionId);
+    const moved = this.#tx(() => {
+      const out: string[] = [];
+      const at = this.#now().toISOString();
+      for (const r of this.#heldBy(plan.from)) {
+        if (!(r.workspace_id === null || this.#isIn(r, plan.me.workspaceId))) continue;
+        this.#db.prepare('UPDATE tickets SET assignee_ref = ?, updated_at = ? WHERE number = ?').run(plan.me.id, at, r.number);
+        this.#addEvent(r.number, 'assigned', w, null, { from: { kind: 'session', sessionId: plan.from }, to: { kind: 'session', sessionId: plan.me.id }, adopted: true, why: plan.why });
+        out.push(ticketIdOf(r.number));
+      }
+      return out;
+    });
+    this.onAudit?.({
+      kind: 'ticket.adopted',
+      actor: w.actor,
+      actorLabel: caller.kind === 'token' ? caller.label : null,
+      userId: FOUNDING_USER_ID,
+      subject: `session:${plan.from}`,
+      detail: { sessionId: plan.me.id, forSession: plan.from, why: plan.why, tickets: moved },
+    });
+    if (moved.length) this.onChange?.();
+    return { tickets: moved, why: plan.why, from: plan.from };
+  }
+
+  /* ---------- Orphans: detect and fall back (T-270 layers 2 and 3) ---------- */
+
+  #orphanState(): { lastRunAt: string | null; dead: Record<string, string> } {
+    if (this.#orphans) return this.#orphans;
+    const st: { lastRunAt: string | null; dead: Record<string, string> } = { lastRunAt: null, dead: {} };
+    try {
+      const row = this.store.db?.prepare('SELECT value FROM portal_meta WHERE key = ?').get(ORPHAN_META) as { value: string } | undefined;
+      const p = row ? (JSON.parse(row.value) as { lastRunAt?: unknown; dead?: unknown }) : null;
+      if (p && typeof p.lastRunAt === 'string') st.lastRunAt = p.lastRunAt;
+      if (p?.dead && typeof p.dead === 'object') for (const [k, v] of Object.entries(p.dead)) if (typeof v === 'string') st.dead[k] = v;
+    } catch {
+      // unreadable: start afresh (the delay starts again, nothing moves early)
+    }
+    return (this.#orphans = st);
+  }
+
+  #saveOrphanState() {
+    if (!this.store.writable || !this.#orphans) return;
+    try {
+      this.#db.prepare('INSERT INTO portal_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(ORPHAN_META, JSON.stringify(this.#orphans));
+    } catch (e) {
+      console.error(`[tickets] saving the orphan sweep's state failed: ${(e as Error).message}`);
+    }
+  }
+
+  /** When the sweep last ran (restart safe: the loop waits for the rest of its minute). */
+  orphanLastRun(): string | null {
+    return this.#orphanState().lastRunAt;
+  }
+
+  #markDead(id: string, at: string) {
+    const st = this.#orphanState();
+    if (st.dead[id]) return;
+    st.dead[id] = at;
+    this.#saveOrphanState();
+  }
+
+  #markAlive(id: string) {
+    const st = this.#orphans ?? (this.store.db ? this.#orphanState() : null);
+    if (!st?.dead[id]) return;
+    delete st.dead[id];
+    this.#saveOrphanState();
+  }
+
+  /** The sessions that hold an unfinished ticket and are dead now. */
+  #deadHolders(): Map<string, { s: TicketSessionInfo | null; why: TicketOrphanWhy }> {
+    const out = new Map<string, { s: TicketSessionInfo | null; why: TicketOrphanWhy }>();
+    const ids = this.#db.prepare(`SELECT DISTINCT assignee_ref AS id FROM tickets WHERE assignee_kind = 'session' AND status IN (${OPEN_SQL})`).all() as { id: string }[];
+    for (const { id } of ids) {
+      const s = this.sessions.get(id);
+      const why = deadWhy(s);
+      if (why) out.set(id, { s, why });
+    }
+    return out;
+  }
+
+  /** The SQL for "an orphan": unfinished, held by one of the dead sessions. */
+  #orphanSql(): { sql: string; args: string[] } {
+    const ids = [...this.#deadHolders().keys()];
+    if (!ids.length) return { sql: '0', args: [] };
+    return { sql: `(t.assignee_kind = 'session' AND t.status IN (${OPEN_SQL}) AND t.assignee_ref IN (${ids.map(() => '?').join(', ')}))`, args: ids };
+  }
+
+  /**
+   * Who takes a dead session's ticket (T-270 layer 3a): the live session whose `continued_from` chain reaches the dead one (the nearest,
+   * then the latest active), else a live session in the same workspace whose title has the same track prefix (up to its first ":"; a title
+   * without one matches nothing). Only within the holder's workspace, and only when the ticket is in that workspace or the shared queue.
+   */
+  #successorOf(deadId: string, dead: TicketSessionInfo | null, r: Row): { s: TicketSessionInfo; reason: 'lineage' | 'title' } | null {
+    const ws = dead?.workspaceId ?? r.workspace_id;
+    if (!ws) return null;
+    if (r.workspace_id !== null && !this.#isIn(r, ws)) return null;
+    const all = this.sessions.list({ workspaceId: ws });
+    const live = (x: TicketSessionInfo) => x.id !== deadId && !deadWhy(x);
+    const latest = (a: TicketSessionInfo, b: TicketSessionInfo) => b.lastActivityAt.localeCompare(a.lastActivityAt);
+    const seen = new Set([deadId]);
+    let frontier = [deadId];
+    while (frontier.length && seen.size < 500) {
+      const next = all.filter((x) => x.continuedFrom && frontier.includes(x.continuedFrom) && !seen.has(x.id));
+      const heir = next.filter(live).sort(latest)[0];
+      if (heir) return { s: heir, reason: 'lineage' };
+      for (const x of next) seen.add(x.id);
+      frontier = next.map((x) => x.id);
+    }
+    const prefix = titlePrefix(dead?.title);
+    const same = prefix ? all.filter((x) => live(x) && titlePrefix(x.title) === prefix).sort(latest)[0] : undefined;
+    return same ? { s: same, reason: 'title' } : null;
+  }
+
+  /** Moves one orphan (its own transaction, checked again inside): to the successor, or back to the queue. Null when it no longer is one. */
+  #fallback(number: number, deadId: string, dead: TicketSessionInfo | null, why: TicketOrphanWhy): OrphanMove | null {
+    const w = { actor: 'system', label: 'Portal' };
+    const move = this.#tx((): OrphanMove | null => {
+      const r = this.#row(number);
+      if (!r || r.assignee_kind !== 'session' || r.assignee_ref !== deadId || isTicketClosed(r.status)) return null;
+      if (!deadWhy(this.sessions.get(deadId))) return null;
+      const at = this.#now().toISOString();
+      const from = { kind: 'session', sessionId: deadId };
+      const heir = this.#successorOf(deadId, dead, r);
+      if (heir) {
+        this.#db.prepare('UPDATE tickets SET assignee_ref = ?, updated_at = ? WHERE number = ?').run(heir.s.id, at, number);
+        this.#addEvent(number, 'assigned', w, null, { from, to: { kind: 'session', sessionId: heir.s.id }, fallback: true, reason: heir.reason, holder: why });
+        return { ticketId: ticketIdOf(number), from: deadId, to: heir.s.id, reason: heir.reason, holder: why };
+      }
+      // Back to the agents' queue: the status stays (in_review waits for a verifier, blocked stays blocked) except in_progress, which
+      // nobody is doing any more; the description and every comment stay.
+      const status: TicketStatus = r.status === 'in_progress' ? 'open' : r.status;
+      this.#db.prepare('UPDATE tickets SET assignee_kind = NULL, assignee_ref = NULL, status = ?, updated_at = ? WHERE number = ?').run(status, at, number);
+      this.#addEvent(number, 'assigned', w, null, { from, to: null, fallback: true, reason: 'queue', holder: why });
+      if (status !== r.status) this.#addEvent(number, 'status', w, null, { from: r.status, to: status, fallback: true });
+      this.#addEvent(number, 'comment', w, ORPHAN_QUEUE_COMMENT, { fallback: true });
+      return { ticketId: ticketIdOf(number), from: deadId, to: null, reason: 'queue', holder: why };
+    });
+    if (move)
+      this.onAudit?.({ kind: 'ticket.fallback', actor: 'system', userId: FOUNDING_USER_ID, subject: `ticket:${move.ticketId}`, detail: { ticketId: move.ticketId, from: move.from, to: move.to, reason: move.reason, holder: move.holder } });
+    return move;
+  }
+
+  /**
+   * One pass of the orphan sweep (T-270): finds every unfinished ticket held by a dead session (ended, archived, missing), notes when it
+   * first saw each such session dead (in `portal_meta`, so a restart neither resets nor skips the delay), and once `orphanAfterMin` has
+   * passed moves its tickets (`#fallback`), at most ORPHAN_MOVES_PER_PASS. A session back to live is forgotten: nothing of it moves. It
+   * creates no ticket, assigns nothing to a person, sends no notification.
+   */
+  sweepOrphans(opts: { max?: number } = {}): { moved: OrphanMove[]; waiting: number } {
+    if (!this.store.writable || !this.store.deliveryAllowed) return { moved: [], waiting: 0 };
+    const now = this.#now();
+    const nowIso = now.toISOString();
+    const afterMs = Math.max(0, Number(this.#orphanAfterMin()) || 0) * 60_000;
+    const st = this.#orphanState();
+    const dead = this.#deadHolders();
+    for (const id of Object.keys(st.dead)) if (!dead.has(id)) delete st.dead[id];
+    for (const id of dead.keys()) st.dead[id] ??= nowIso;
+    st.lastRunAt = nowIso;
+    this.#saveOrphanState();
+    const max = opts.max ?? ORPHAN_MOVES_PER_PASS;
+    const moved: OrphanMove[] = [];
+    let waiting = 0;
+    for (const [id, { s, why }] of dead) {
+      const held = this.#heldBy(id);
+      if (now.getTime() - Date.parse(st.dead[id]!) < afterMs) {
+        waiting += held.length;
+        continue;
+      }
+      for (const r of held) {
+        if (moved.length >= max) return (moved.length && this.onChange?.(), { moved, waiting });
+        try {
+          const m = this.#fallback(r.number, id, s, why);
+          if (m) moved.push(m);
+        } catch (e) {
+          console.error(`[tickets] moving ${ticketIdOf(r.number)} off an ended session failed: ${(e as Error).message}`);
+        }
+      }
+    }
+    if (moved.length) this.onChange?.();
+    return { moved, waiting };
+  }
+
   /** A session ended: any unfinished ticket assigned to it says so, once (FR18). */
   #sessionEnded(s: TicketSessionInfo) {
     if (!this.store.writable) return;
     try {
       const rows = this.#db.prepare(`SELECT number FROM tickets WHERE assignee_kind = 'session' AND assignee_ref = ? AND status IN (${OPEN_SQL})`).all(s.id) as { number: number }[];
       let changed = false;
+      // The orphan delay counts from here (T-270), not from the sweep's next look.
+      if (rows.length) this.#markDead(s.id, this.#now().toISOString());
       for (const { number } of rows) {
         const last = this.#db.prepare("SELECT kind, data FROM ticket_events WHERE ticket_number = ? AND kind IN ('session_ended', 'session_started', 'assigned') ORDER BY id DESC LIMIT 1").get(number) as { kind: string; data: string | null } | undefined;
         if (last?.kind === 'session_ended' && last.data?.includes(s.id)) continue;

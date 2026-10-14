@@ -36,6 +36,7 @@ export const NOTIFY_KINDS = [
   'trigger_approval', // a trigger run waits for approval
   'trigger_failed', // a trigger run failed, or a limit stopped it
   'auto_move', // a chat was moved to another Claude, or a move is suggested, because a quota is low
+  'keepgoing_attention', // Keep going (T-259) found what it may not repair: an approval waits, out of Bypass, ended, down
   'test', // the Send test button
   // Later (PWA PRD 11.1); not emitted by the platform track.
   'workspace',
@@ -78,6 +79,7 @@ export const NOTIFY_KIND_INFO: Record<NotifyKind, NotifyKindInfo> = {
   trigger_approval: { kind: 'trigger_approval', label: 'Trigger run', severity: 'attention', defaultOn: true, breakthrough: false, phase: 1, urgency: 'normal', ttlSeconds: 6 * 3600 },
   trigger_failed: { kind: 'trigger_failed', label: 'Trigger', severity: 'attention', defaultOn: true, breakthrough: false, phase: 1, urgency: 'normal', ttlSeconds: 6 * 3600 },
   auto_move: { kind: 'auto_move', label: 'Moved', severity: 'info', defaultOn: true, breakthrough: false, phase: 1, urgency: 'normal', ttlSeconds: 6 * 3600 },
+  keepgoing_attention: { kind: 'keepgoing_attention', label: 'Keep going', severity: 'attention', defaultOn: true, breakthrough: false, phase: 1, urgency: 'high', ttlSeconds: 6 * 3600 },
   test: { kind: 'test', label: 'Test', severity: 'info', defaultOn: true, breakthrough: true, phase: 1, urgency: 'normal', ttlSeconds: 60 },
   workspace: { kind: 'workspace', label: 'Workspace', severity: 'attention', defaultOn: true, breakthrough: false, phase: 'later', urgency: 'normal', ttlSeconds: 6 * 3600 },
   account: { kind: 'account', label: 'Account', severity: 'attention', defaultOn: true, breakthrough: false, phase: 'later', urgency: 'normal', ttlSeconds: 6 * 3600 },

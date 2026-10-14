@@ -7,6 +7,7 @@ import {
   type ChatEvent,
   type ChatFolder,
   type ChatFolderScan,
+  type ChatKeepGoing,
   type ChatModelOption,
   type ChatSession,
   type ChatSegment,
@@ -18,13 +19,16 @@ import {
   type ChatWorktreeStatus,
   type ChatUsageRange,
   type ChatUsageReport,
+  type UpdateKeepGoingRequest,
   type CreateChatSessionRequest,
   type CreateWorkspaceClaudeRequest,
   type DeleteChatSessionResult,
   type EnterBypassRequest,
   type ReauthRequest,
+  type RestartChatRequest,
   type SwitchChatRequest,
   type UpdateChatSessionRequest,
+  type UpdateRestartHintRequest,
   type WorkspaceClaude,
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
@@ -124,7 +128,15 @@ export const chatApi = {
   /** Restarts the session so it can enter Bypass, at its next turn boundary. */
   allowBypass: (id: string) => request<ChatSession>('POST', CHAT_API.bypassAllow(id)),
   /** Restarts the session's Claude Code on the same conversation, at a turn boundary, so its MCP servers reconnect. */
-  restart: (id: string, why: 'mcp' | 'manual') => request<ChatSession>('POST', CHAT_API.restart(id), { why }),
+  restart: (id: string, why: 'mcp' | 'manual', opts: Omit<RestartChatRequest, 'why'> = {}) => request<ChatSession>('POST', CHAT_API.restart(id), { why, ...opts } satisfies RestartChatRequest),
+  /** Cancels a restart that waits for the turn's end (T-102). */
+  cancelRestart: (id: string) => request<ChatSession>('DELETE', CHAT_API.restart(id)),
+  /** The "Tools changed" hint's memory: hidden until the next change, and applying changes at the turn's end by itself (T-102). */
+  restartHint: (id: string, body: UpdateRestartHintRequest) => request<ChatSession>('PATCH', CHAT_API.restartHint(id), body),
+  /** Keep going (T-259): the chat's policy, today's counts and its last action; null when it never had one. */
+  keepGoing: (id: string) => request<ChatKeepGoing | null>('GET', CHAT_API.keepGoing(id)),
+  /** Sets Keep going (a person only). */
+  setKeepGoing: (id: string, body: UpdateKeepGoingRequest) => request<ChatKeepGoing>('PUT', CHAT_API.keepGoing(id), body),
   /** Checks the server code again (what Bypass guards). */
   reauth: (code: string) => request<{ ok: true }>('POST', CHAT_API.reauth, { code } satisfies ReauthRequest),
   /** What the chat policy allows: whether a session can be started to allow Bypass. */

@@ -318,9 +318,40 @@ OAuth discovery metadata for about 5 minutes.
 
 A PAT is `cpat_` plus 43 base64url characters (256 random bits), stored as SHA-256 and shown as
 `cpat_…3f9a`. It's accepted only as `Authorization: Bearer`, never in a query string, on the public
-listener and on the main listener's loopback `/mcp`. It expires after 7, 30, 90 (default) or 365
-days and is shown once. PATs serve Claude Code, scripts and MCP Inspector. Claude Desktop can send a
+listener and on the main listener's loopback `/mcp`. It expires after 15 minutes, 1 hour, 1 day, 7, 30,
+90 (default) or 365 days (§12.1b) and is shown once. PATs serve Claude Code, scripts and MCP Inspector. Claude Desktop can send a
 static token only through the unsupported community `mcp-remote` bridge, so it uses OAuth.
+
+### 12.1b Short lifetimes, one label one client, the cap and bulk revoke (T-258, built)
+
+Found 2026-10-13: a coordinator's helper minted a new 7-day admin token on every message, and 13 live `coordinator` admin tokens piled up.
+As built:
+
+- **Lifetimes.** `POST /api/portal-mcp/tokens` takes `expiresIn`: `15m`, `1h`, `1d`, `7d`, `30d`, `90d` or `365d`
+  (`PORTAL_TOKEN_LIFETIMES`); the older `expiresInDays` (7, 30, 90, 365) still works; both at once, or any other value, is `422`. Neither
+  is 90 days. Expiry is checked on every request where it already was (`PortalTokens.verify`): a 15-minute token answers 401 from its
+  fifteenth minute (tested on a fake clock). The picker offers all seven; its ⓘ says automation should mint one token per run, valid
+  1 hour, and revoke it at the end. A token's time left reads in minutes, hours or days.
+- **One label, one client.** Minting with a label that has live tokens (any scope; exact label after trimming) is refused:
+  `409 TOKEN_LABEL_IN_USE` with `details: { label, live, newest: { id, expiresAt } }`, never a secret or its last four. The request
+  says what to do instead: `replace: true` revokes every live token with the label (one `token_revoked` audit row each, `by` the caller,
+  `replacedBy` the new id) and mints the new one; `addAnother: true` keeps them. Both at once is `422`. The New token dialog shows
+  "N live with this label" with Replace and Add another.
+- **The cap.** With `addAnother`, an admin-scope token is refused once the label has as many live admin tokens as the setting
+  `mcp.tokens.maxActivePerLabel` (Settings → MCP, "Admin tokens per label", default 3, 1 to 20, read on every mint):
+  `409 TOKEN_CAP` with the same details plus `max`. Read and operate tokens are not capped; `replace` always fits.
+- **Agents' per-session tokens (`cpst_`, §12.6) are exempt** from the label rule and the cap: they are another table, have no label, and
+  are minted per session by `AgentAccess.mint`, one live per session already.
+- **Bulk revoke.** `POST /api/portal-mcp/tokens/revoke-label` `{ label, keepNewest? }` revokes the label's live tokens, or all but the newest
+  ("Revoke older"), and answers `{ revoked }`; one `token_revoked` audit row per token, each with `by` (`user:<id>`). A single revoke and a
+  mint now carry `by` too (the mint also its `expiresAt`).
+- **Access → MCP, Tokens:** grouped by label. A label with one token is its row as before; a label with more shows the live count, its scopes,
+  the newest expiry and the last use of any, opens to the tokens (each with Revoke), and its Menu has "Revoke older (N)" and "Revoke all
+  (N)", each behind a ConfirmDialog that names how many.
+- **Authorization:** the token routes ask the seam for `manage` on the person's tokens (`personal`, `pmcp_token:*` or `pmcp_token:<id>`) and
+  are declared in `portalmcp/authz.ts` (with the rest of `/api/portal-mcp`): a read or operate token is below it, an agent's token is boxed
+  out, nobody signed in is 401. No migration: the rules read `pmcp_tokens` as it is.
+- **Not here:** the coordinator's own helpers (one token per run, revoked at the end) are its scripts' change, outside the portal.
 
 ### 12.1a The client's name: every token has a label (T-6, built)
 
@@ -690,8 +721,8 @@ Access page gets PageTabs "Sign-in" (today's sections) and "MCP".
   needs a ConfirmDialog naming them. **Claude Code** (§10.2) and **scripts** (curl) follow.
 - **Connections** and **Access tokens:** one row per grant (client, scope Badges, last used,
   "Expires in 5 days" near the 90-day limit) or per PAT (label, `cpat_…3f9a`, scope, expiry, last
-  used), each with Menu → Revoke, plus "Revoke all". "New token" opens a FormDialog (label; scope as
-  Segmented Read, Operate, Admin, default Read; expiry as Select, default 90 days), then shows the
+  used), each with Menu → Revoke, plus "Revoke all"; tokens are grouped by label (§12.1b). "New token" opens a FormDialog (label; scope as
+  Segmented Read, Operate, Admin, default Read; expiry as Select, 15 minutes to 365 days, default 90 days), then shows the
   token and the ready-to-paste commands once, with CopyButtons.
 - **Recent activity** (the last 20 audit rows, linking to [Monitoring](monitoring-dashboard.md)),
   then **Advanced**, a Section behind a "Show advanced" ghost Button: "Allow session control over

@@ -6,7 +6,7 @@
 # no credentials, no kubeconfig, no Claude profile reach a test. GATE_TEST_TIMEOUT_MS (default 600000): a test or file that takes longer fails.
 # GATE_FILES (default every src/**/*.test.ts): the server test files to run, space separated, relative to apps/server (one file in a Job, say).
 # Every failing test's own report (its error, expected and actual, the stack) goes to <logs>/failures.txt; a file that passes when rerun
-# alone is written to the summary as flaky, with the names of the tests that failed in the full run.
+# alone is written to the summary as flaky, one line per test that failed in the full run (`<file>;<test name>`: the portal opens a ticket per test).
 # GATE_STEPS (default typecheck,web-build,server-suite): which steps run after npm ci (scripts/gate-job.sh runs only typecheck,web-build, say).
 # The verdict: scripts/gate-verdict.sh logs <logs dir>.
 set -u
@@ -44,7 +44,7 @@ run_suite() {
   rc=$?
   if [ "$rc" = 0 ]; then
     echo "server-suite-rerun: passed alone: $(echo $files)" >> "$logs/SUMMARY.txt"
-    echo "server-suite-flaky: $(sed -nE 's/^ *not ok [0-9]+ - //p' "$first" | grep -v '\.test\.ts$' | sort -u | head -n 10 | paste -sd ';' -)" >> "$logs/SUMMARY.txt"
+    bash "$dir/scripts/gate-verdict.sh" flaky "$first" | sed 's/^/server-suite-flaky: /' >> "$logs/SUMMARY.txt"
   fi
   return "$rc"
 }

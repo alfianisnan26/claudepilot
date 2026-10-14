@@ -3,6 +3,7 @@
 
 import type { ChatFile, ChatUploadRef } from './artifacts.js';
 import type { BtwClientMessage, BtwServerMessage, ChatPinnedBtw } from './chatBtw.js';
+import type { ChatKeepGoing } from './keepgoing.js';
 
 /** `starting` launching; `idle` waiting for you; `working` a turn is running; `waiting` needs an answer; `interrupted` the process is gone but resumable; `ended` closed. */
 export type ChatSessionState = 'starting' | 'idle' | 'working' | 'waiting' | 'interrupted' | 'ended';
@@ -111,9 +112,57 @@ export interface ChatSession {
    * when nothing newer landed, or the process isn't running.
    */
   configChangedAt?: string | null;
+  /**
+   * T-102: what changed since this session's process started, for the hint's sheet. `at` is the newest change (the same time as
+   * {@link configChangedAt} when it came from a delivery); `reasons` names the areas, newest delivery first, each once. Absent with the hint.
+   */
+  configChanged?: { at: string; reasons: ChatConfigChange[] } | null;
   /** A Restart is under way (`CHAT_API.restart`): the composer waits; messages sent meanwhile go to the new process, in order. */
   restarting?: boolean;
+  /**
+   * T-102: a Restart waits for the next boundary (no turn and no task running, T-41): `person` asked for it ("Restart after this turn"),
+   * `auto` the session applies tool changes by itself ({@link autoApply}). Absent: none waits.
+   */
+  restartQueued?: 'person' | 'auto' | null;
+  /**
+   * T-102: a queued or automatic Restart that the portal will NOT do by itself, and why: `bypass`, the session is in Bypass and a restart
+   * could not keep it (the policy no longer allows it, or the session is not bypass-capable), so it would come back in Manual and wait for
+   * approvals. A person restarts it by hand (the confirmation says Bypass turns off).
+   */
+  restartHeld?: 'bypass' | null;
+  /** T-102: the hint was hidden until the next change: hidden while {@link configChanged}'s `at` is not newer than this. */
+  configHiddenAt?: string | null;
+  /** T-102: nobody may be watching (Bypass, started by a portal actor, or the person turned {@link autoApply} on): the hint informs rather than asks. */
+  autonomous?: boolean;
+  /** T-102: "Apply tool changes at the next turn end": the portal queues the Restart by itself. Its default is on for an autonomous session, off otherwise. */
+  autoApply?: boolean;
+  /** T-102: while it reads working or waiting, since when (the main turn's start, or the oldest running task's): the hint offers Restart now after 30 minutes. */
+  busySince?: string | null;
+  /** T-259: Keep going (the watchdog's policy for this chat, today's counts and its last action); absent or null when no policy was ever set. */
+  keepGoing?: ChatKeepGoing | null;
 }
+
+/**
+ * T-102: an area whose change a running Claude Code process has not read: a pool type's delivery (`mcpset` MCP servers, `settings`, `policy`,
+ * `secrets`, `account`, `persona`, `context`, `skillset` skills, `browser`), the portal's own files (`foundation`), the portal's tools for
+ * agents (`portal_tools`, the workspace's agent access turned on or off), or `other` (a delivery from before the portal recorded what it held).
+ */
+export type ChatConfigChange =
+  | 'mcpset'
+  | 'settings'
+  | 'policy'
+  | 'secrets'
+  | 'account'
+  | 'persona'
+  | 'context'
+  | 'skillset'
+  | 'browser'
+  | 'foundation'
+  | 'portal_tools'
+  | 'other';
+
+/** T-102: how long a turn may run before the hint offers "Restart now" prominently (an autonomous session's turn can last hours). */
+export const RESTART_LONG_TURN_MS = 30 * 60_000;
 
 /** One run of a chat on a Claude: its Claude Code session, when, why it ended, and what it cost. */
 export interface ChatSegment {
@@ -471,6 +520,12 @@ export interface CreateChatSessionRequest {
   /** The ticket it works on (Tickets). An opaque id: the portal only records it. */
   ticketId?: string;
   /**
+   * The session this one continues (T-270, T-136 lineage): an ENDED session of the same workspace, else 409 and nothing is created. The
+   * new row is linked to it (`continuedFrom`), and in the same transaction every unfinished ticket held by it and by its ended predecessors
+   * down the chain is assigned to the new session (an `assigned` entry each, actor system, `continued: true`).
+   */
+  continuedFrom?: string;
+  /**
    * Run it in a git worktree of its own: the portal adds one from `repo` (default: the repository
    * containing `cwd`) on `branch` (default: a new branch named after the session), starting from `base`
    * (default: the repository's current branch), and the session's folder is that worktree. Nothing is
@@ -550,7 +605,26 @@ export interface CreateWorkspaceClaudeRequest {
 /** `POST CHAT_API.restart(id)`: why the person restarts it (`mcp`: the hint that something was delivered; `manual`: the menu). */
 export interface RestartChatRequest {
   why?: 'mcp' | 'manual';
+  /**
+   * T-102. `now` (the default): restart at once, and only at a turn boundary unless `interrupt`. `turn_end`: queue it for the next boundary
+   * (no turn and no task running), or restart at once when the session is already there; refused for a Bypass session a restart could not
+   * keep in Bypass (`BYPASS_NOT_KEPT`).
+   */
+  when?: 'now' | 'turn_end';
+  /** T-102, with `now`: also while a turn runs or an approval waits: the turn is interrupted, open approvals expire, running agents stop. */
+  interrupt?: boolean;
 }
+
+/** T-102: `PATCH CHAT_API.restartHint(id)`: the hint's per-session memory. Each field is optional; absent leaves it as it is. */
+export interface UpdateRestartHintRequest {
+  /** true: hide the hint until a newer change; false: show it again. */
+  hidden?: boolean;
+  /** "Apply tool changes at the next turn end"; null goes back to the default (on for an autonomous session). */
+  autoApply?: boolean | null;
+}
+
+/** The error code (409) of a queued or automatic restart refused because Bypass could not be kept (T-102). */
+export const BYPASS_NOT_KEPT = 'BYPASS_NOT_KEPT';
 
 export interface SwitchChatRequest {
   /** The Claude to move the chat to, on the same workspace. */
@@ -629,6 +703,10 @@ export const CHAT_API = {
   archive: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/archive`,
   /** POST: pin it (any state). DELETE: unpin it. */
   pin: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/pin`,
+  /** PATCH `UpdateRestartHintRequest`: hide the "Tools changed" hint until the next change, or the automatic restart setting (T-102). */
+  restartHint: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/restart-hint`,
+  /** GET: the chat's Keep going (`ChatKeepGoing`). PUT `UpdateKeepGoingRequest`: set it (a person; T-259). */
+  keepGoing: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/keep-going`,
   /** GET `?after=<seq>`: stored transcript events after a sequence number (history and resume). */
   events: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/events`,
   /** GET: models this session can switch to. */
@@ -652,7 +730,8 @@ export const CHAT_API = {
   /**
    * POST `RestartChatRequest`: stop the session's Claude Code process at a turn boundary and start it again on the same conversation
    * (`--resume`), so it reconnects its MCP servers and reads what was delivered since. Model, effort and mode come back; Bypass too
-   * when the policy still allows it. Refused while a turn runs or an approval waits.
+   * when the policy still allows it. Refused while a turn runs or an approval waits, unless `interrupt`; `when: 'turn_end'` queues it
+   * for the next boundary (T-102). DELETE: cancel a queued restart.
    */
   restart: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/restart`,
   /** POST `ReauthRequest`: check the server code again. */

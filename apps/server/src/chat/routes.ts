@@ -13,6 +13,7 @@ import {
   type RestartChatRequest,
   type SwitchChatRequest,
   type UpdateChatSessionRequest,
+  type UpdateRestartHintRequest,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { actorOf, requireCan } from '../authz/seam.js';
@@ -91,8 +92,21 @@ export function createChatRoutes(controller: ChatController): Hono {
   chat.post('/:id/bypass/allow', async (c) => c.json(success(await controller.allowBypass(c.req.param('id')))));
   // POST /api/chat/sessions/:id/restart — stop its process at a turn boundary and resume the same conversation (MCP servers reconnect).
   chat.post('/:id/restart', async (c) => {
+    requireCan(actorOf(c), 'operate', sessionRef(c.req.param('id')));
     const req = await body<RestartChatRequest>(c);
-    return c.json(success(await controller.restart(c.req.param('id'), { why: req.why })));
+    // T-102: `when: 'turn_end'` queues it for the next boundary; `interrupt` lets "Restart now" stop a running turn (the person confirmed it).
+    return c.json(success(await controller.restart(c.req.param('id'), { why: req.why, when: req.when, interrupt: req.interrupt === true })));
+  });
+  // DELETE /api/chat/sessions/:id/restart — cancel a restart that waits for the turn's end (T-102).
+  chat.delete('/:id/restart', (c) => {
+    requireCan(actorOf(c), 'operate', sessionRef(c.req.param('id')));
+    return c.json(success(controller.cancelRestart(c.req.param('id'))));
+  });
+  // PATCH /api/chat/sessions/:id/restart-hint — the "Tools changed" hint's memory: hidden until the next change, and applying changes by itself (T-102).
+  chat.patch('/:id/restart-hint', async (c) => {
+    requireCan(actorOf(c), 'operate', sessionRef(c.req.param('id')));
+    const req = await body<UpdateRestartHintRequest>(c);
+    return c.json(success(controller.setRestartHint(c.req.param('id'), { hidden: req.hidden, autoApply: req.autoApply })));
   });
 
   // GET /api/chat/sessions/:id/segments — the runs of the chat on Claudes.

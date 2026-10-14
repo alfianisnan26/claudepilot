@@ -35,7 +35,7 @@ test('an agent works the queue over MCP: claim, comment, block, close; ticket te
     const { client, close } = await r.h.client(a.secret, 'modern');
     try {
       const names = (await client.listTools()).tools.map((t) => t.name).filter((n) => n.startsWith('ticket_')).sort();
-      assert.deepEqual(names, ['ticket_claim_next', 'ticket_close', 'ticket_comment', 'ticket_create', 'ticket_get', 'ticket_list', 'ticket_update'], 'no start_session for agents');
+      assert.deepEqual(names, ['ticket_adopt', 'ticket_claim_next', 'ticket_close', 'ticket_comment', 'ticket_create', 'ticket_get', 'ticket_list', 'ticket_update'], 'no start_session for agents');
       const call = async (name: string, args: Record<string, unknown> = {}) => (await client.callTool({ name, arguments: args })) as { isError?: boolean; structuredContent?: any; content: { text: string }[] };
 
       const listed = (await call('ticket_list', { assignee: 'unassigned' })).structuredContent;
@@ -177,6 +177,46 @@ test('tickets are a resource for an admin’s token, listed by id and read with 
     } finally {
       await close();
     }
+  } finally {
+    r.done();
+  }
+});
+
+test('ticket_adopt over MCP (T-270): a confirmation with the tickets first, then the move, audited; a live session and another workspace are refused', async () => {
+  const r = await rig();
+  try {
+    r.sessions.add({ id: 'old', workspaceId: 'docker/api', title: 'Orchestrator' });
+    const a = await r.agent('docker/api', 'me');
+    r.sessions.sessions.get('me')!.continuedFrom = 'old';
+    r.sessions.add({ id: 'busy', workspaceId: 'docker/api' });
+    r.sessions.add({ id: 'far', workspaceId: 'docker/web', state: 'ended' });
+    const t1 = r.tickets.update(UI, r.tickets.create(UI, { summary: 'one', workspaceId: 'docker/api' }).id, { assignee: { kind: 'session', sessionId: 'old' }, status: 'in_progress' }).id;
+    r.sessions.sessions.get('old')!.state = 'ended';
+
+    const { client, close } = await r.h.client(a.secret, 'modern');
+    try {
+      const call = async (args: Record<string, unknown>) => (await client.callTool({ name: 'ticket_adopt', arguments: args })) as { isError?: boolean; structuredContent?: any; content: { text: string }[] };
+      const ask = (await call({ from_session: 'old' })).structuredContent;
+      assert.equal(ask.status, 'confirmation_required');
+      assert.deepEqual([ask.preview.from_session, ask.preview.to_session, ask.preview.tickets], ['old', 'me', [t1]]);
+      assert.deepEqual(r.tickets.get(UI, t1).ticket.assignee, { kind: 'session', sessionId: 'old' }, 'asking moves nothing');
+      const done = (await call({ from_session: 'old', confirm_token: ask.confirm_token })).structuredContent;
+      assert.deepEqual([done.tickets, done.why], [[t1], 'lineage']);
+      assert.deepEqual(r.tickets.get(UI, t1).ticket.assignee, { kind: 'session', sessionId: 'me' });
+      // The ticket is now its own: the comment that was refused before goes through.
+      assert.equal((await client.callTool({ name: 'ticket_comment', arguments: { id: t1, text: 'Mine now.' } }) as { isError?: boolean }).isError, undefined);
+
+      const live = await call({ from_session: 'busy' });
+      assert.equal(live.isError, true);
+      assert.match(live.content[0]!.text, /CONFLICT/);
+      const far = await call({ from_session: 'far' });
+      assert.equal(far.isError, true);
+      assert.match(far.content[0]!.text, /NOT_FOUND/);
+    } finally {
+      await close();
+    }
+    const audited = r.h.module.audit.list({ limit: 100 }).filter((x) => x.tool === 'ticket_adopt');
+    assert.ok(audited.length >= 1 && audited.every((x) => x.actor === 'session:me'), JSON.stringify(audited.map((x) => [x.tool, x.actor, x.outcome])));
   } finally {
     r.done();
   }

@@ -72,6 +72,10 @@ export type ChatSessionRow = {
   ended_reason: string | null;
   archived_at: string | null;
   pinned_at?: string | null;
+  /** T-102: the hint hidden until a change newer than this; null: shown. */
+  config_hidden_at?: string | null;
+  /** T-102: "Apply tool changes at the next turn end" as the person set it (1 on, 0 off); null: the default. */
+  auto_apply?: number | null;
   claude_id?: string | null;
   predecessor_id?: string | null;
   successor_id?: string | null;
@@ -173,6 +177,9 @@ export interface ChatSessionPatch {
   predecessorId?: string | null;
   archivedAt?: string | null;
   pinnedAt?: string | null;
+  /** T-102: the restart hint's memory. */
+  configHiddenAt?: string | null;
+  autoApply?: boolean | null;
   title?: string;
   ticketId?: string | null;
   /** Sets or clears the session's worktree (its three columns together). */
@@ -359,14 +366,16 @@ export class ChatStore {
     startedBy?: string | null;
     worktree?: ChatWorktree | null;
     bypassCapable?: boolean;
+    /** The ended session it continues (T-270). */
+    continuedFrom?: string | null;
   }): ChatSession {
     const now = this.#stamp();
     const db = this.#writable();
     db
       .prepare(
         `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
-           ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         opts.id,
@@ -387,6 +396,7 @@ export class ChatStore {
         opts.worktree?.repo ?? null,
         opts.id,
         opts.bypassCapable ? 1 : 0,
+        opts.continuedFrom ?? null,
       );
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(opts.id, opts.claudeId ?? '', opts.id, opts.cwd, now);
@@ -767,6 +777,8 @@ export class ChatStore {
     if (patch.process !== undefined) set('process', patch.process);
     if (patch.archivedAt !== undefined) set('archived_at', patch.archivedAt);
     if (patch.pinnedAt !== undefined) set('pinned_at', patch.pinnedAt);
+    if (patch.configHiddenAt !== undefined) set('config_hidden_at', patch.configHiddenAt);
+    if (patch.autoApply !== undefined) set('auto_apply', patch.autoApply === null ? null : patch.autoApply ? 1 : 0);
     if (patch.title !== undefined) set('title', patch.title);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
     if (patch.successorId !== undefined) set('successor_id', patch.successorId);
@@ -1090,6 +1102,12 @@ export class ChatStore {
     this.#writable()
       .prepare('UPDATE chat_requests SET answered_at = NULL, outcome = NULL, actor = NULL WHERE session_id = ? AND request_id = ?')
       .run(sessionId, requestId);
+  }
+
+  /** How the portal answered a request Claude Code raised (allowed_once, allowed_session, denied, …), or null while open or unknown. */
+  requestOutcome(sessionId: string, requestId: string): string | null {
+    const row = this.#db().prepare('SELECT outcome FROM chat_requests WHERE session_id = ? AND request_id = ?').get(sessionId, requestId) as { outcome: string | null } | undefined;
+    return row?.outcome ?? null;
   }
 
   openRequests(sessionId: string): ChatRequest[] {

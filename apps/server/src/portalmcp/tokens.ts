@@ -1,13 +1,20 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { AppError } from '@isnanme/core';
+import { AppError, defineErrorCodes } from '@isnanme/core';
 import {
   PORTAL_SCOPES,
+  PORTAL_TOKEN_CAP,
+  PORTAL_TOKEN_CAP_DEFAULT,
   PORTAL_TOKEN_DAYS,
+  PORTAL_TOKEN_LABEL_IN_USE,
   PORTAL_TOKEN_LABEL_MAX,
+  PORTAL_TOKEN_LIFETIMES,
+  PORTAL_TOKEN_LIFETIME_MS,
   PORTAL_TOKEN_PREFIX,
   type CreatePortalTokenRequest,
   type PortalScope,
   type PortalToken,
+  type PortalTokenLabelConflict,
+  type PortalTokenLifetime,
 } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import type { PortalPrincipal } from './registry.js';
@@ -28,7 +35,39 @@ interface Row {
   revoked_reason: string | null;
 }
 
+declare module '@isnanme/core' {
+  interface ErrorCodeRegistry {
+    TOKEN_LABEL_IN_USE: true;
+    TOKEN_CAP: true;
+  }
+}
+defineErrorCodes({
+  [PORTAL_TOKEN_LABEL_IN_USE]: { status: 409, message: 'Live tokens with this label exist.' },
+  [PORTAL_TOKEN_CAP]: { status: 409, message: 'This label has as many live admin tokens as allowed.' },
+});
+
 const DAY_MS = 24 * 60 * 60 * 1000;
+const LIFETIMES_TEXT = '15 minutes, 1 hour, 1 day, 7, 30, 90 or 365 days';
+
+/** How long a new token lives: `expiresIn` (`15m` … `365d`) or the older `expiresInDays`; 90 days when neither is given. */
+export function lifetimeMs(req: Partial<CreatePortalTokenRequest>): number {
+  if (req.expiresIn !== undefined) {
+    if (req.expiresInDays !== undefined)
+      throw new AppError('VALIDATION_FAILED', 'Give expiresIn or expiresInDays, not both.', { details: { expiresIn: 'Not with expiresInDays.' } });
+    if (!(PORTAL_TOKEN_LIFETIMES as readonly unknown[]).includes(req.expiresIn))
+      throw new AppError('VALIDATION_FAILED', `Pick ${LIFETIMES_TEXT}.`, { details: { expiresIn: `One of ${PORTAL_TOKEN_LIFETIMES.join(', ')}.` } });
+    return PORTAL_TOKEN_LIFETIME_MS[req.expiresIn as PortalTokenLifetime];
+  }
+  const days = req.expiresInDays ?? 90;
+  if (!(PORTAL_TOKEN_DAYS as readonly number[]).includes(days))
+    throw new AppError('VALIDATION_FAILED', `Pick ${PORTAL_TOKEN_DAYS.join(', ')} days.`, { details: { expiresInDays: `One of ${PORTAL_TOKEN_DAYS.join(', ')}.` } });
+  return days * DAY_MS;
+}
+
+export interface CreateTokenRules {
+  /** Live admin-scope tokens one label may have (the setting `mcp.tokens.maxActivePerLabel`). */
+  maxAdminPerLabel?: number;
+}
 /** `last_used_at` is written at most this often per token: a busy script must not turn every call into a write. */
 const TOUCH_EVERY_MS = 60_000;
 
@@ -108,8 +147,19 @@ export class PortalTokens {
     return row?.n ?? 0;
   }
 
-  /** Makes a token. Returns the view and the secret, which exists nowhere else. */
-  create(req: Partial<CreatePortalTokenRequest>): { token: PortalToken; secret: string } {
+  /** Live tokens with exactly this label, newest first. */
+  liveWithLabel(label: string): PortalToken[] {
+    const rows = this.#db
+      ?.prepare('SELECT * FROM pmcp_tokens WHERE label = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC, rowid DESC')
+      .all(label, this.now().toISOString()) as unknown as Row[] | undefined;
+    return (rows ?? []).map(view);
+  }
+
+  /**
+   * Makes a token. Returns the view, the secret (which exists nowhere else) and the ids of the tokens a `replace` revoked, for the
+   * caller's audit rows.
+   */
+  create(req: Partial<CreatePortalTokenRequest>, rules: CreateTokenRules = {}): { token: PortalToken; secret: string; replaced: string[] } {
     const db = this.#writable;
     if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
     const label = typeof req.label === 'string' ? req.label.trim() : '';
@@ -123,19 +173,42 @@ export class PortalTokens {
       throw new AppError('VALIDATION_FAILED', `Use at most ${PORTAL_TOKEN_LABEL_MAX} characters.`, { details: { label: `At most ${PORTAL_TOKEN_LABEL_MAX} characters.` } });
     if (looksLikeSecret(label)) throw new AppError('VALIDATION_FAILED', 'That label looks like a secret. Name the token after what uses it.', { details: { label: 'Not a secret.' } });
     if (!req.scope || !PORTAL_SCOPES.includes(req.scope)) throw new AppError('VALIDATION_FAILED', 'Pick read, operate or admin.', { details: { scope: 'Pick a scope.' } });
-    const days = req.expiresInDays ?? 90;
-    if (!(PORTAL_TOKEN_DAYS as readonly number[]).includes(days))
-      throw new AppError('VALIDATION_FAILED', `Pick ${PORTAL_TOKEN_DAYS.join(', ')} days.`, { details: { expiresInDays: `One of ${PORTAL_TOKEN_DAYS.join(', ')}.` } });
+    const ttl = lifetimeMs(req);
+    if (req.replace !== undefined && typeof req.replace !== 'boolean') throw new AppError('VALIDATION_FAILED', '`replace` must be true or false.', { details: { replace: 'Use true or false.' } });
+    if (req.addAnother !== undefined && typeof req.addAnother !== 'boolean') throw new AppError('VALIDATION_FAILED', '`addAnother` must be true or false.', { details: { addAnother: 'Use true or false.' } });
+    if (req.replace && req.addAnother) throw new AppError('VALIDATION_FAILED', 'Pick replace or addAnother, not both.', { details: { replace: 'Not with addAnother.' } });
+
+    // A label names one client (T-258): live tokens with it are refused unless the request says replace (revoke them) or addAnother
+    // (keep them; admin scope only up to the cap). Agents' per-session tokens are another table (agents.ts) and none of this applies to them.
+    const name = cleanText(label, PORTAL_TOKEN_LABEL_MAX);
+    const live = this.liveWithLabel(name);
+    const conflict = (rows: PortalToken[], max?: number): PortalTokenLabelConflict => ({
+      label: name,
+      live: rows.length,
+      newest: { id: rows[0]!.id, expiresAt: rows[0]!.expiresAt },
+      ...(max !== undefined ? { max } : {}),
+    });
+    if (live.length > 0 && !req.replace && !req.addAnother)
+      throw new AppError(PORTAL_TOKEN_LABEL_IN_USE, `“${name}” has ${live.length} live token${live.length === 1 ? '' : 's'}. Replace ${live.length === 1 ? 'it' : 'them'}, add another or pick another label.`, { details: conflict(live) });
+    const max = Math.max(1, Math.floor(rules.maxAdminPerLabel ?? PORTAL_TOKEN_CAP_DEFAULT));
+    const liveAdmin = live.filter((t) => t.scope === 'admin');
+    if (req.scope === 'admin' && req.addAnother && liveAdmin.length >= max)
+      throw new AppError(PORTAL_TOKEN_CAP, `“${name}” has ${liveAdmin.length} live admin tokens, the most allowed (${max}). Revoke older ones or replace them.`, { details: conflict(liveAdmin, max) });
 
     const now = this.now();
+    const replaced: string[] = [];
+    if (req.replace) {
+      const stmt = db.prepare('UPDATE pmcp_tokens SET revoked_at = ?, revoked_reason = ? WHERE id = ? AND revoked_at IS NULL');
+      for (const t of live) if (stmt.run(now.toISOString(), 'replaced by a new token with this label', t.id).changes > 0) replaced.push(t.id);
+    }
     const secret = newTokenSecret();
     const id = `ptk_${randomBytes(6).toString('hex')}`;
     db.prepare(
       `INSERT INTO pmcp_tokens (id, label, token_hash, last4, scope, purpose, created_at, expires_at)
        VALUES (?, ?, ?, ?, ?, 'user', ?, ?)`,
-    ).run(id, cleanText(label, PORTAL_TOKEN_LABEL_MAX), hashToken(secret), secret.slice(-4), req.scope, now.toISOString(), new Date(now.getTime() + days * DAY_MS).toISOString());
+    ).run(id, name, hashToken(secret), secret.slice(-4), req.scope, now.toISOString(), new Date(now.getTime() + ttl).toISOString());
     this.onChange?.();
-    return { token: this.get(id)!, secret };
+    return { token: this.get(id)!, secret, replaced };
   }
 
   /** Checks a bearer token: whether it exists, wasn't revoked and hasn't expired, and who it is. */
@@ -182,6 +255,18 @@ export class PortalTokens {
     const r = db.prepare('UPDATE pmcp_tokens SET revoked_at = ?, revoked_reason = ? WHERE id = ? AND revoked_at IS NULL').run(this.now().toISOString(), reason, id);
     if (r.changes > 0) this.onChange?.();
     return r.changes > 0;
+  }
+
+  /** Revokes the live tokens with this label, or all but the newest with `keepNewest`; returns the ids it revoked. */
+  revokeLabel(label: string, keepNewest: boolean, reason: string): string[] {
+    const db = this.#writable;
+    if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
+    const live = this.liveWithLabel(label);
+    const stmt = db.prepare('UPDATE pmcp_tokens SET revoked_at = ?, revoked_reason = ? WHERE id = ? AND revoked_at IS NULL');
+    const at = this.now().toISOString();
+    const done = (keepNewest ? live.slice(1) : live).filter((t) => stmt.run(at, reason, t.id).changes > 0).map((t) => t.id);
+    if (done.length > 0) this.onChange?.();
+    return done;
   }
 
   /** Revokes every token that is still live; returns how many. */

@@ -95,7 +95,26 @@ export interface TicketItem extends Ticket {
   assigneeSession: TicketSession | null;
   /** The assigned session has ended while the ticket is still open (tickets PRD FR18). */
   sessionEnded: boolean;
+  /**
+   * T-270 (FR18b): the ticket is unfinished and the session holding it is dead (ended, archived or gone), so nobody works it. Derived when
+   * read, never stored on the ticket: the orphan sweep moves it to the track's live successor or back to the queue once
+   * `tickets.orphanAfterMin` has passed since `since`. Null for every other ticket.
+   */
+  orphan: TicketOrphan | null;
 }
+
+/** Why the holder counts as dead: its state is `ended`, it was archived (ended and hidden), or the portal no longer has the session. */
+export type TicketOrphanWhy = 'ended' | 'archived' | 'missing';
+
+export interface TicketOrphan {
+  /** When the portal saw the session dead (the end it heard of, or the sweep's first look); null until the sweep has looked. */
+  since: string | null;
+  sessionId: string;
+  why: TicketOrphanWhy;
+}
+
+/** The tickets module's settings (the shared settings registry). */
+export const TICKET_SETTING_KEYS = { orphanAfterMin: 'tickets.orphanAfterMin' } as const;
 
 export type TicketEventKind =
   | 'created'
@@ -166,6 +185,8 @@ export interface TicketCounts {
   needsYou: number;
   /** Open and assigned to nobody: the agents' queue. */
   unassigned: number;
+  /** Unfinished and held by a dead session (T-270); the sweep resolves them. Absent from an older server. */
+  orphans?: number;
   total: number;
 }
 
@@ -189,6 +210,8 @@ export interface TicketFilter {
   workspaceId?: string;
   /** Matches summary, description and tags. */
   query?: string;
+  /** Only orphans (T-270): unfinished tickets whose session is dead. */
+  orphan?: boolean;
   /** Closed tickets are left out unless asked for (or `status` names one). */
   includeClosed?: boolean;
   /** `priority` (the default): the most urgent first, then the latest update. `newest`: the latest made first (the Home page). */

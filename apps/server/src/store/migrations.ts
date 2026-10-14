@@ -2705,6 +2705,16 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 755,
+    name: 'chat sessions: the restart hint, hidden until the next change, and applying tool changes by itself',
+    up(db) {
+      // T-102: "Hide until the next change" remembers the change it hid (null: shown); "Apply tool changes at the next turn end" is the
+      // person's choice for this session (null: the default, on for an autonomous session). Null for every session so far.
+      db.exec('ALTER TABLE chat_sessions ADD COLUMN config_hidden_at TEXT');
+      db.exec('ALTER TABLE chat_sessions ADD COLUMN auto_apply INTEGER');
+    },
+  },
+  {
     version: 760,
     name: 'auto move: the wait for quota and the steer, per chat (T-105)',
     up(db) {
@@ -2783,6 +2793,120 @@ export const MIGRATIONS: Migration[] = [
       // T-136 part E, the one-time repair the owner asked for on the ticket: fe3df8bc -> fdb140be -> 5c9fcb5f (the orchestrator) and
       // 541948a5 -> 929ae1e3 (Konfersi), matched by id prefix only when exactly one row matches; a no-op on any other database.
       repairSplitChains(db);
+    },
+  },
+  {
+    version: 780,
+    name: 'CI: the auto-approve rule of an environment, and its verdict on each deployment',
+    up(db) {
+      // T-110 slice 1 (local-git-ci PRD FR41a): an environment's auto-approve mode, set only by a person ('off' for every environment so
+      // far and for new ones; 'dry' says what the rule WOULD do and approves nothing; 'on' is reserved for slice 2 and the service treats it
+      // as 'dry' until then), its allowed window (null: always) and its 'needs a person' path list (null: the defaults). Each deployment
+      // keeps the rule's verdict and its one line (null: the rule did not look, as for every deployment so far).
+      db.exec(`
+        ALTER TABLE ci_environments ADD COLUMN auto_approve TEXT NOT NULL DEFAULT 'off' CHECK (auto_approve IN ('off', 'dry', 'on'));
+        ALTER TABLE ci_environments ADD COLUMN auto_window TEXT;
+        ALTER TABLE ci_environments ADD COLUMN auto_paths TEXT;
+        ALTER TABLE ci_deployments ADD COLUMN auto_verdict TEXT CHECK (auto_verdict IN ('would', 'would_not'));
+        ALTER TABLE ci_deployments ADD COLUMN auto_line TEXT;
+        ALTER TABLE ci_deployments ADD COLUMN auto_at TEXT;
+      `);
+    },
+  },
+  {
+    version: 790,
+    name: 'keep going: a policy per chat, its trail and its reports',
+    up(db) {
+      // T-259 slice 1 (T-104, T-108 item 1): the watchdog inside the portal. `keepgoing_policies` is a person's choice for one chat (off by
+      // default) and the sweep's own state (when the chat is next due, the idle period already nudged, a continue owed after a wake, a
+      // back-off), so a portal restart resumes where it was. `keepgoing_events` is the trail (one row per action, fixed sentences, never message
+      // text): the counts per 24 h are read from it. `keepgoing_reports` holds one row per chat and cause (`cleared_at` null while the cause
+      // stands), so a cause is reported once (a notification and a ticket) and not again until it has cleared; when it comes back, its ticket
+      // gets a comment while it is open.
+      db.exec(`
+        CREATE TABLE keepgoing_policies (
+          session_id TEXT PRIMARY KEY,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          enabled INTEGER NOT NULL DEFAULT 0,
+          nudge_after_min INTEGER NOT NULL DEFAULT 4,
+          prompt TEXT,
+          status_file TEXT,
+          max_nudges INTEGER NOT NULL DEFAULT 60,
+          max_wakes INTEGER NOT NULL DEFAULT 20,
+          next_due_at TEXT,
+          nudged_period TEXT,
+          continue_owed INTEGER NOT NULL DEFAULT 0,
+          backoff_until TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX keepgoing_policies_due ON keepgoing_policies (next_due_at) WHERE enabled = 1;
+        CREATE TABLE keepgoing_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          at TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          cause TEXT,
+          reason TEXT NOT NULL,
+          actor TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX keepgoing_events_session ON keepgoing_events (session_id, at);
+        CREATE TABLE keepgoing_reports (
+          session_id TEXT NOT NULL,
+          cause TEXT NOT NULL,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          since TEXT NOT NULL,
+          reported_at TEXT NOT NULL,
+          cleared_at TEXT,
+          ticket_id TEXT,
+          PRIMARY KEY (session_id, cause)
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 791,
+    name: 'notify: keepgoing_attention (Keep going) for every destination that hears failed sessions',
+    up(db) {
+      // As migration 720 did for ci_waiting: a destination keeps an explicit list of kinds, so one made before `keepgoing_attention` existed
+      // would never hear it. Whoever hears `session_failed` (a chat in trouble) hears Keep going's reports too; a destination that opted out
+      // of failed sessions stays out. Only the list changes; a list that has it already is left alone (twice is once).
+      const rows = db.prepare('SELECT id, kinds FROM notify_destinations').all() as { id: string; kinds: string }[];
+      const write = db.prepare('UPDATE notify_destinations SET kinds = ? WHERE id = ?');
+      for (const r of rows) {
+        let kinds: unknown;
+        try {
+          kinds = JSON.parse(r.kinds);
+        } catch {
+          continue; // a list that cannot be read is not guessed at
+        }
+        if (!Array.isArray(kinds) || !kinds.includes('session_failed') || kinds.includes('keepgoing_attention')) continue;
+        write.run(JSON.stringify([...kinds, 'keepgoing_attention']), r.id);
+      }
+    },
+  },
+  {
+    version: 732,
+    name: 'CI: the flaky tests a gate saw, and the ticket of each',
+    up(db) {
+      // T-95 item 4: a gate that passed only because a failing test passed when its file ran again alone writes `flaky, passed on rerun:
+      // <file>;<test name>` in its log. One row per run and test (a run read twice counts once); the ticket of a test is the one its latest
+      // sighting names, so a second sighting comments there instead of opening another. Not pruned with the runs: the count outlives them.
+      db.exec(`
+        CREATE TABLE ci_flaky (
+          run_id TEXT NOT NULL,
+          repo TEXT NOT NULL,
+          job TEXT NOT NULL,
+          file TEXT NOT NULL,
+          test TEXT NOT NULL,
+          ticket_id TEXT,
+          at TEXT NOT NULL,
+          PRIMARY KEY (run_id, repo, file, test)
+        ) STRICT;
+        CREATE INDEX ci_flaky_test ON ci_flaky (repo, file, test, at);
+      `);
     },
   },
   {

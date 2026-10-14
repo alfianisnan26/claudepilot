@@ -6,6 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { AppError } from '@isnanme/core';
 import {
   CI_REPO_NAME,
+  type CiRunFlaky,
   isCiActive,
   parseTicketBranch,
   shortSha,
@@ -39,8 +40,11 @@ import {
   type CiRunBump,
   type BumpRequest,
   type BumpTarget,
+  type CiAutoApproveMode,
+  type UpdateCiAutoApproveRequest,
 } from '@portal/contracts';
 import { NO_VALUES, SessionStream } from '../chat/valueRedact.js';
+import { evaluateRule, needsPersonOf, WINDOW } from './autoApprove.js';
 import type { Store } from '../store/store.js';
 import { globMatches } from './glob.js';
 import { CiUnreachable, type CiHost, type CiReply } from './host.js';
@@ -48,11 +52,24 @@ import { CI_LIMITS } from './limits.js';
 import { replan, compile, matches, resolveInputs, branchOf, tagOf, type EventContext } from './spec/compile.js';
 import { validateFiles, type SnapshotFile, type Validated } from './spec/validate.js';
 import { CiStore, type DeploymentRow, type EnvironmentRow, type RepoRow, type RunRow } from './store.js';
-import { CiLinks, type CiBumper } from './links.js';
+import { CiLinks, runLink, type CiBumper } from './links.js';
 import type { CiSessionsPort } from './sessions.js';
 import type { CiTicketsPort } from './tickets.js';
 import { cleanLog, oneLine, redactSecrets } from './text.js';
+import { flakyComment, flakyDescription, flakyExcerpt, flakyTitle, parseFlaky, repoTag, type FlakySighting } from './flaky.js';
 import type { CiEventFile, Plan } from './plan.js';
+
+/** The flaky rows of a run, per job: the count and the distinct tickets, in order. */
+function flakyOfJobs(rows: { job: string; ticket_id: string | null }[]): CiRunFlaky[] {
+  const out: CiRunFlaky[] = [];
+  for (const r of rows) {
+    let j = out.find((x) => x.job === r.job);
+    if (!j) out.push((j = { job: r.job, tests: 0, tickets: [] }));
+    j.tests++;
+    if (r.ticket_id && !j.tickets.includes(r.ticket_id)) j.tickets.push(r.ticket_id);
+  }
+  return out;
+}
 
 const json = <T>(text: string | null | undefined, fallback: T): T => {
   if (!text) return fallback;
@@ -89,6 +106,7 @@ const deploymentView = (d: DeploymentRow): CiDeployment => ({
   decidedAt: d.decided_at,
   outcome: (d.outcome as CiDeployment['outcome']) ?? null,
   createdAt: d.created_at,
+  autoApprove: d.auto_verdict && d.auto_line && d.auto_at ? { mode: 'dry', verdict: d.auto_verdict, line: d.auto_line, at: d.auto_at } : null,
 });
 
 const invalid = (field: string, message: string) => new AppError('VALIDATION_FAILED', message, { details: { [field]: message } });
@@ -141,6 +159,8 @@ export interface CiServiceOptions {
   secrets?: (workspaceId: string, name: string) => { kind: string; asFile: boolean; asVariable: boolean } | null;
   /** The platform audit (approvals, protection changes). Names, ids and fixed codes only. */
   audit?: (e: { kind: string; actor: string; userId: string | null; severity?: 'info' | 'medium' | 'high'; subject?: string; detail?: Record<string, unknown> }) => void;
+  /** The clock of the auto-approve rule (its daily cap and window, FR41a); tests pass a fake one. */
+  now?: () => Date;
 }
 
 /** Who decided something a person must decide (an approval, a protection change): the actor string for records and the user for the audit. */
@@ -168,9 +188,12 @@ export class CiService {
   hooks: CiHooks = {};
   readonly #cs: CiStore;
   readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'audit'>> & Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'audit'>;
+  /** The auto-approve rule's evaluations in flight (dry mode), so a test or a shutdown can wait for them. */
+  readonly #ruling = new Set<Promise<void>>();
   /** Runs with an approval being decided right now: one decision at a time per run. */
   readonly #deciding = new Set<string>();
   readonly #links: CiLinks;
+  readonly #tickets: CiTicketsPort | undefined;
   readonly #polling = new Map<string, Promise<void>>();
   readonly #acks = new Map<string, string[]>();
   readonly #lastPoll = new Map<string, number>();
@@ -188,6 +211,7 @@ export class CiService {
   ) {
     this.#cs = new CiStore(store);
     this.#links = new CiLinks(this.#cs, opts.tickets, opts.sessions);
+    this.#tickets = opts.tickets;
     this.#opts = {
       maxRunsPerWorkspace: opts.maxRunsPerWorkspace ?? 2,
       maxJobsParallel: opts.maxJobsParallel ?? 2,
@@ -197,6 +221,7 @@ export class CiService {
       streamFor: opts.streamFor,
       secrets: opts.secrets,
       audit: opts.audit,
+      now: opts.now ?? (() => new Date()),
     };
   }
 
@@ -578,7 +603,46 @@ export class CiService {
       this.#hook(() => this.hooks.waiting?.(row, d.job, d.environment));
       // The session hears it too, once per run (its own run, or the pipeline asked for it): it should not wait on a deploy nobody approved.
       void this.#links.waiting(row, d.environment).catch((e: unknown) => console.error(`[ci] ${row.id}: reporting the wait failed: ${(e as Error).message}`));
+      this.#rule(row.id, d.id);
     }
+  }
+
+  /**
+   * The auto-approve rule (FR41a), slice 1: when the environment's mode is `dry` (or `on`, which is `dry` until slice 2), says once on the
+   * deployment and in the audit what the rule WOULD do. It reads facts and writes that line, nothing else: no key, no `cp-ci approve`, no
+   * `decide`. Mode `off` writes nothing. Never breaks the poll.
+   */
+  #rule(runId: string, deploymentId: string): void {
+    if (!this.#cs.autoApproveReady) return;
+    const p = (async () => {
+      const run = this.#cs.run(runId);
+      const dep = this.#cs.deploymentsOfRun(runId).find((d) => d.id === deploymentId);
+      if (!run || !dep || dep.approval !== 'waiting' || dep.auto_verdict) return;
+      const env = this.#cs.environment(dep.repo_id, dep.environment);
+      if (!env || (env.auto_approve ?? 'off') === 'off') return;
+      const deps = { cs: this.#cs, now: this.#opts.now, cp: (ws: string, args: string[]) => this.host.cp(ws, args, { timeoutMs: 30_000 }) };
+      const v = await evaluateRule(deps, run, dep, env);
+      const at = this.#opts.now().toISOString();
+      if (!this.#cs.setAutoVerdict(dep.id, v.verdict, v.line, at)) return;
+      this.#opts.audit?.({
+        kind: 'ci.deploy_auto_approve',
+        severity: 'info',
+        actor: `rule:${dep.environment}`,
+        userId: null,
+        subject: `ci_run:${run.id}`,
+        detail: { workspace: run.workspace_id, repo: run.repo, pipeline: run.pipeline, run: run.number, job: dep.job, environment: dep.environment, sha: shortSha(run.sha), mode: 'dry', verdict: v.verdict, line: v.line },
+      });
+      console.log(`[ci] ${run.id} ${dep.job}: ${v.line}`);
+      this.#changed();
+    })()
+      .catch((e: unknown) => console.error(`[ci] ${runId}: the auto-approve rule failed: ${(e as Error).message}`))
+      .finally(() => this.#ruling.delete(p));
+    this.#ruling.add(p);
+  }
+
+  /** Waits for the auto-approve evaluations in flight (tests). */
+  async settled(): Promise<void> {
+    while (this.#ruling.size) await Promise.all([...this.#ruling]);
   }
 
   /** The run is over: each deployment gets how its job ended, an undecided approval expires, and every key is dropped. */
@@ -645,6 +709,47 @@ export class CiService {
         text: redact(cleanLog(s.tail === null ? s.head : `${s.head}${s.head.endsWith('\n') ? '' : '\n'}[… ${s.omitted} bytes omitted …]\n${s.tail}`)),
       })),
     );
+    this.#flaky(runId);
+  }
+
+  /**
+   * T-95 item 4: the tests a passed step's log names as `flaky, passed on rerun: <file>;<test>` (the gate's verdict), one ticket per test
+   * across runs. Read from the kept logs (cleaned and redacted already), once per run and test. Never breaks the archive.
+   */
+  #flaky(runId: string): void {
+    const tickets = this.#tickets;
+    const row = this.#cs.run(runId);
+    if (!tickets || !row || !this.#cs.flakyReady) return;
+    const state = json<CiRunStateFile | null>(row.state, null);
+    const redact = this.#redactor(row.workspace_id);
+    const sighting = (job: string): FlakySighting => ({ runNumber: row.number, link: runLink(row.id), sha: row.sha, repo: row.repo, job });
+    for (const j of state?.jobs ?? []) {
+      for (const st of j.steps) {
+        if (st.status !== 'passed') continue;
+        const log = this.#cs.log(runId, j.id, st.idx)?.text ?? '';
+        for (const f of parseFlaky(log)) {
+          try {
+            const at = new Date().toISOString();
+            const before = this.#cs.flakyOf(row.repo, f.file, f.test);
+            if (!this.#cs.insertFlaky({ run_id: row.id, repo: row.repo, job: j.id, file: f.file, test: f.test, ticket_id: null, at })) continue;
+            const s = sighting(j.id);
+            let ticketId = before.ticketId;
+            const closed = ticketId ? tickets.closed(ticketId) : null;
+            if (ticketId && closed !== null) {
+              if (closed) tickets.reopen(ticketId);
+              tickets.note(ticketId, flakyComment(s, before.runs + 1, closed), { actor: `ci:${row.id}`, label: 'CI' });
+            } else {
+              const tags = ['flaky', 'area-qa', ...[repoTag(row.repo)].filter((t): t is string => !!t && t !== 'flaky' && t !== 'area-qa')];
+              ticketId = tickets.open({ summary: flakyTitle(f), description: flakyDescription(f, s, flakyExcerpt(log, f.test, redact)), tags, workspaceId: row.workspace_id });
+            }
+            this.#cs.setFlakyTicket(row.id, row.repo, f.file, f.test, ticketId);
+            console.log(`[ci] ${row.id} ${j.id}: flaky ${f.file} (${ticketId})`);
+          } catch (e) {
+            console.error(`[ci] ${row.id}: the ticket of a flaky test could not be written: ${(e as Error).message}`);
+          }
+        }
+      }
+    }
   }
 
   #redactor(workspaceId: string): (text: string) => string {
@@ -763,7 +868,20 @@ export class CiService {
   }
 
   #envView(e: EnvironmentRow): CiEnvironment {
-    return { id: e.id, repoId: e.repo_id, name: e.name, protected: e.protected === 1, updatedAt: e.updated_at, updatedBy: e.updated_by, deployments: this.#cs.deploymentsOf(e.repo_id, e.name).map(deploymentView) };
+    // `on` is reserved for slice 2 (T-110) and behaves as `dry` until then, so it shows as `dry`.
+    const mode: CiAutoApproveMode = (e.auto_approve ?? 'off') === 'off' ? 'off' : 'dry';
+    return {
+      id: e.id,
+      repoId: e.repo_id,
+      name: e.name,
+      protected: e.protected === 1,
+      updatedAt: e.updated_at,
+      updatedBy: e.updated_by,
+      autoApprove: mode,
+      autoApproveWindow: e.auto_window ?? null,
+      needsPerson: needsPersonOf(e),
+      deployments: this.#cs.deploymentsOf(e.repo_id, e.name).map(deploymentView),
+    };
   }
 
   environments(repoId: string): CiEnvironment[] {
@@ -785,6 +903,42 @@ export class CiService {
     if ((env.protected === 1) !== req.protected) {
       this.#cs.setProtected(env.id, req.protected, by.actor);
       this.#opts.audit?.({ kind: 'ci.environment_protection', severity: req.protected ? 'info' : 'high', actor: by.actor, userId: by.userId, subject: `ci_repo:${repo.id}`, detail: { workspace: repo.workspace_id, repo: repo.name, environment: name, protected: req.protected } });
+      this.#changed();
+    }
+    return this.#envView(this.#cs.environment(repo.id, name)!);
+  }
+
+  /**
+   * Sets an environment's auto-approve rule (FR41a): a person with manage (the route refuses tokens and agents; no Portal MCP tool reaches
+   * this), audited as `ci.environment_auto_approve`. Slice 1 knows `off` and `dry`; `on` is refused until the real approval exists.
+   */
+  setAutoApprove(repoId: string, name: unknown, req: Partial<UpdateCiAutoApproveRequest>, by: CiDecider): CiEnvironment {
+    const repo = this.#needRepo(repoId);
+    if (typeof name !== 'string' || !CI_ENVIRONMENT_NAME.test(name)) throw invalid('name', 'Lowercase letters, digits, . _ and -.');
+    if ((req.mode as string) === 'on') throw invalid('mode', 'The real auto-approval comes later (T-110 slice 2): use dry to see what it would do.');
+    if (req.mode !== 'off' && req.mode !== 'dry') throw invalid('mode', 'off or dry.');
+    if (req.window !== undefined && req.window !== null && (typeof req.window !== 'string' || !WINDOW.test(req.window))) throw invalid('window', 'HH:MM-HH:MM in UTC, or null for always.');
+    if (req.needsPerson !== undefined && req.needsPerson !== null && (!Array.isArray(req.needsPerson) || req.needsPerson.length > 50 || req.needsPerson.some((g) => typeof g !== 'string' || !GLOB.test(g))))
+      throw invalid('needsPerson', 'Up to 50 path patterns, or null for the defaults.');
+    if (!this.#cs.deploymentsReady || !this.#cs.autoApproveReady) throw new AppError('SERVICE_UNAVAILABLE', 'This portal’s database is not up to date.', { expose: true });
+    const env = this.#cs.environment(repo.id, name);
+    if (!env) throw notFound('environment');
+    const next = {
+      mode: req.mode,
+      window: req.window === undefined ? (env.auto_window ?? null) : req.window,
+      paths: req.needsPerson === undefined ? (env.auto_paths ?? null) : req.needsPerson === null ? null : JSON.stringify([...new Set(req.needsPerson)]),
+    };
+    const was = { mode: env.auto_approve ?? 'off', window: env.auto_window ?? null, paths: env.auto_paths ?? null };
+    if (was.mode !== next.mode || was.window !== next.window || was.paths !== next.paths) {
+      this.#cs.setAutoApprove(env.id, next, by.actor);
+      this.#opts.audit?.({
+        kind: 'ci.environment_auto_approve',
+        severity: next.mode === 'off' ? 'info' : 'medium',
+        actor: by.actor,
+        userId: by.userId,
+        subject: `ci_repo:${repo.id}`,
+        detail: { workspace: repo.workspace_id, repo: repo.name, environment: name, mode: next.mode, was: was.mode, window: next.window, needsPerson: next.paths === null ? 'defaults' : 'own list' },
+      });
       this.#changed();
     }
     return this.#envView(this.#cs.environment(repo.id, name)!);
@@ -934,6 +1088,7 @@ export class CiService {
       archived: row.archived === 1,
       deployments: this.#cs.deploymentsOfRun(row.id).map(deploymentView),
       ...this.#messages(row.id),
+      flaky: flakyOfJobs(this.#cs.flakyOfRun(row.id)),
     };
   }
 

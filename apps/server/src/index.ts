@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { getRequestListener } from '@hono/node-server';
-import { AUTO_SETTING_KEYS, formatCode, isWindowOfFamily, SETTING_KEYS, type LiveTopic } from '@portal/contracts';
+import { AUTO_SETTING_KEYS, formatCode, isWindowOfFamily, PORTAL_TOKEN_CAP_SETTING, SETTING_KEYS, TICKET_SETTING_KEYS, type LiveTopic } from '@portal/contracts';
 import { AccountHealthService } from './accounts/health.js';
 import { AccountPools } from './accounts/pools.js';
 import { AccountsService } from './accounts/service.js';
@@ -36,6 +36,7 @@ import { BrowserModule } from './browser/index.js';
 import { PortalMcpModule } from './portalmcp/module.js';
 import { registerBuiltInPortalTools } from './portalmcp/tools/index.js';
 import { internalUrlResolver } from './portalmcp/internalUrl.js';
+import { OrphanSweep } from './tickets/orphans.js';
 import { Tickets } from './tickets/service.js';
 import { CiService } from './ci/service.js';
 import { WorkspacesCiHost } from './ci/host.js';
@@ -228,6 +229,7 @@ chatController.agentCaps = () => ({
 settingsModule.settings.onChange((key) => key === BYPASS_SETTING && void chatController.bypassPolicyChanged());
 // The Restart hint (chat PRD, Restart): when the latest delivery into a workspace landed; a session whose process is older offers a Restart.
 chatController.deliveredAt = (id) => reconciler.row(id)?.applied_at ?? null;
+chatController.configChanges = (id, sinceMs) => reconciler.changesSince(id, sinceMs);
 reconciler.onChange((id) => chatController.deliveryChanged(id));
 chatController.bypassFacts = (id) => ({
   internet: true,
@@ -324,6 +326,8 @@ claudeVersions.start();
 const agentUrls = internalUrlResolver({ workspaces, port: config.port, configured: config.portalMcp.internalUrl ?? null });
 const portalMcp = new PortalMcpModule(store, {
   internalUrl: config.portalMcp.internalUrl,
+  // T-258: live admin tokens per label, from the shared settings (Settings → MCP).
+  maxActivePerLabel: () => settingsModule.settings.get<number>(PORTAL_TOKEN_CAP_SETTING),
   extraOrigins: config.portalMcp.origins,
   // Agents' per-session tokens (interface I8): alive while the chat session is, aimed at the portal as a workspace reaches it.
   agentHost: {
@@ -351,6 +355,14 @@ portalMcp.start();
 // Agent access stores its workspace as the stable id and reads it as the key (T-42 slice 3).
 portalMcp.agents.workspaceRefs = workspaces.identities;
 chatController.agentAccess = portalMcp.agents;
+{
+  // T-102: agent access turned on or off changes the portal tools a session's NEXT process gets: its "Tools changed" hint says so.
+  const accessChanged = portalMcp.agents.onAccessChange;
+  portalMcp.agents.onAccessChange = (workspaceId) => {
+    accessChanged?.(workspaceId);
+    chatController.portalToolsChanged(workspaceId);
+  };
+}
 chatController.launchEnv = () => (settingsModule.settings.get<boolean>(SETTING_KEYS.mcpAccountOff) ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {});
 chatController.secretValues = (id) => exposedSecretValues(poolService, id);
 // MCP OAuth (MCP set PRD §13.3): the guided sign-in runs Claude Code's login in a workspace terminal, for one of its Claudes, and a chat
@@ -363,12 +375,18 @@ chatController.mcpServersSeen = (id, directory, servers) => mcpSets.oauth.seen(i
 const tickets = new Tickets(store, new ChatTicketSessions(chatController), {
   link: (id) => `${(config.portalMcp.uiUrl ?? `http://localhost:${config.port}`).replace(/\/+$/, '')}/admin/tickets/${id}`,
   workspaceRefs: workspaces.identities,
+  orphanAfterMin: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.orphanAfterMin),
 });
 tickets.onChange = () => notify('tickets');
 // A bump reaches into a session: the platform audit (created further down) records who, which ticket, which session and how (FR30).
 tickets.onAudit = (e) => platform.audit.record(e);
 tickets.start();
+// T-270: tickets of a dead session move by themselves (to the track's live successor, else back to the queue), once a minute.
+const orphanSweep = new OrphanSweep(tickets);
+orphanSweep.start();
 chatController.ticketExists = (id) => tickets.exists(id);
+// T-270: a continuation takes its predecessors' tickets in the transaction that creates it.
+chatController.continueTickets = (to, from) => tickets.continueFrom(to, from);
 registerTicketTools(tickets);
 // The chat's own tools for its Claude (rename itself); bound to the session its token was minted for.
 registerChatTools(chatController);
@@ -542,6 +560,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
     sockets.close();
     chatController.stop();
     portalMcp.stop();
+    orphanSweep.stop();
     tickets.stop();
     ci.stop();
     claudeUsage.stop();

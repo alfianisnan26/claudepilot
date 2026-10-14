@@ -9,6 +9,8 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
 
 1. **No questions.** Nobody answers in real time. Take the PRD's recommended default, write the decision in the status file, go on. Do not use
    AskUserQuestion. A thing that needs a real device, a credential or an owner decision goes under NEEDS A HUMAN in the status file; skip to the next item.
+   An agent never files a needs-a-person ticket for a platform step it can do with a tool (taking over an ended chat's tickets with `ticket_adopt`,
+   a continuation with `continuedFrom`, a restart, a move): it does the step and says so in one line on its status ticket instead (T-270, D-34).
 2. **Worktrees.** Sub-agents work in a git worktree each, never in the main folder `~/work/claudepilot`, and never in another agent's worktree. Prepared
    ones (with `node_modules`) are in `~/work/claudepilot.worktrees/`; a new one is `git worktree add ~/work/claudepilot.worktrees/<name> -b dev/<name> origin/integration`
    and then `flock /tmp/heavy.lock npm ci` (`NODE_AUTH_TOKEN` is set in the shell; the private `@isnanme/ui` package needs it). The Agent tool's
@@ -32,8 +34,9 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
    "queued behind K"; `--list`, `--stop --chat <id>`). An image (no Docker here, D-5) is built by `scripts/image-build.sh --repo .. --ref .. --dockerfile ..
    --destination <registry/path:tag>` (T-141: kaniko, one at a time, the registry credential as one JSON line on stdin with `--credential-stdin`;
    `--check` first, 0 exists, 3 not). Lighthouse and timing measurements run there too (a quiet node). **flock only for what must
-   run in the pod** (a scratch portal, a browser check against it, `npm ci` of a worktree): `flock /tmp/heavy.lock nice -n 10 <command>`. A
-   targeted test (one file) may run directly. At most one scratch portal and one Chromium per sub-agent; stop them when done. Keep `/tmp` clean (`/tmp/gate-*`, `/tmp/cp-*`): a full `/tmp` makes CI tests fail. **At most three sub-agents run at once.**
+   run in the pod** (a scratch portal, a browser check against it, `npm ci` of a worktree): `flock /tmp/heavy.lock nice -n 10 <command>`; a command that leaves a process running (a scratch
+   portal) takes `flock -o`, so the lock ends with the command (T-159: a portal held it for 50 minutes). A
+   targeted test (one file) may run directly. At most one scratch portal and one Chromium per sub-agent; stop them when done. Keep `/tmp` clean (`/tmp/gate-*`, `/tmp/cp-*`): a full `/tmp` makes CI tests fail. **At most five sub-agents run at once** (D-43).
 5. **Do not loop.** The same command failing three times means change the approach or move to the next item and write down why.
 6. **Quota.** The portal moves the chat to another Claude by itself when one runs out. If a turn fails with a limit error, wait a few minutes and go on.
 7. **No SendMessage** (coordinator, T-136, until the portal accepts the case): a sub-agent NEVER calls SendMessage to the main conversation
@@ -83,7 +86,9 @@ backlog is done: make `TRACK COMPLETE` the first line of that file, commit and p
 A small process, `docs/dev-sessions/supervisor.mjs`, runs OUTSIDE the dev pod, on the coordinator's machine, with the owner's sign-in code in its environment (inside the pod every agent runs as the same user and could read that environment, so the code must never live there; T-104's lease replaces the code), and keeps the orchestrator going when nobody else is there: a session idle for a few minutes is told to
 continue, an interrupted one is woken, one that ended is started again in the main folder and told to continue from its status file (at most 6
 starts per day, 3 after integrity endings). It leaves the work alone when the status file starts with `TRACK COMPLETE` or when a person closed the
-session. It restarts only the orchestrator: any other chat that ends (an integrity ending, say) is started again by a person; the harness-turn
+session. On every round it reads each track chat's `mode`: one that is not in Bypass (a wake from sleep or a Resume starts on the start
+mode, FR20) gets it back through the person's gates, the server code again and the acknowledgement, and a tool approval asked before that
+is denied with "run it again" (T-256; one log line each). It restarts only the orchestrator: any other chat that ends (an integrity ending, say) is started again by a person; the harness-turn
 ending that hit the Konfersi chat on 2026-10-13 is fixed (T-99), so that should no longer be needed. Log: `~/.claudepilot/dev-sessions/supervisor.log`; state: `state.json` next to it.
 **Stop it:** `touch ~/.claudepilot/dev-sessions/STOP` (checked every two minutes) or kill the process by PID. **Start it again** (needs `PORTAL_SERVER_CODE`):
 `cd ~/work/claudepilot && PORTAL_SERVER_CODE=... setsid nohup node docs/dev-sessions/supervisor.mjs >> ~/.claudepilot/dev-sessions/supervisor.log 2>&1 < /dev/null &`.

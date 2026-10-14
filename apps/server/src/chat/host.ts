@@ -47,7 +47,9 @@ export const ACCOUNT_HELPER = '/etc/claudepilot/bin/account-key';
  * - `send <id> <uuid> <nbytes>` stages exactly `<nbytes>` from stdin, checks it is one JSON line, and
  *   appends it to the FIFO under a lock.
  * - `tail <id> <seg> <offset>` streams the segment from a byte offset and follows it, ending when the
- *   exec stdin closes or after 600 s.
+ *   exec stdin closes or after 600 s. An offset past the segment's end is refused: exit 6 with the size on
+ *   stdout (GNU tail would take the next write for a truncation and replay the file from byte 0; T-265).
+ *   tail's own stderr goes to `tail.err` in the session folder, never into the stream.
  * - `stop <id>` SIGTERMs the whole process group; `status <id>` prints `live <pid>` or `gone`.
  * - `purge <id>` deletes the session's directory (segments, uploads, staged inputs) for a deleted
  *   session; exit 3, nothing deleted, while its process is still alive.
@@ -376,8 +378,10 @@ case "$cmd" in
     dir="$base/$id"
     mkdir -p "$dir"
     : >> "$dir/out.$seg.jsonl"
+    size=$(( $(wc -c < "$dir/out.$seg.jsonl") ))
+    if [ "$offset" -gt "$size" ]; then printf '%s' "$size"; exit 6; fi
     # Follow from a 1-based byte position; stop when our own stdin closes (portal ends the exec).
-    timeout 600 sh -c 'tail -c "+$(($3 + 1))" -f "$1/out.$2.jsonl" & tp=$!; cat >/dev/null; kill "$tp" 2>/dev/null' sh "$dir" "$seg" "$offset"
+    timeout 600 sh -c 'tail -c "+$(($3 + 1))" -f "$1/out.$2.jsonl" 2>>"$1/tail.err" & tp=$!; cat >/dev/null; kill "$tp" 2>/dev/null' sh "$dir" "$seg" "$offset"
     ;;
   stop)
     id="\${1:-}"

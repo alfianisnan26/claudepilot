@@ -73,6 +73,7 @@ export function createTicketRoutes(tickets: Tickets): Hono {
       workspaceId: q.workspace || undefined,
       query: q.q || undefined,
       includeClosed: q.includeClosed === '1' || q.includeClosed === 'true',
+      orphan: q.orphan === '1' || q.orphan === 'true' || undefined,
       sort: q.sort === 'newest' ? 'newest' : undefined,
       limit: int(q.limit),
       offset: int(q.offset),

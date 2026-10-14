@@ -31,6 +31,7 @@ export class FakeSessions implements TicketSessions {
       endedReason: null,
       worktree: null,
       ticketId: null,
+      continuedFrom: null,
       ...over,
     };
     this.sessions.set(id, s);
@@ -79,11 +80,11 @@ export const token = (id: string, scope: 'read' | 'operate' | 'admin'): Caller =
 /** An agent's per-session token: the session and workspace it was minted for. */
 export const agent = (workspaceId: string, sessionId: string, tokenId = `agt_${sessionId}`): Caller => ({ kind: 'agent', tokenId, label: `session ${sessionId} in ${workspaceId}`, workspaceId, sessionId });
 
-export async function ticketsHarness(opts: { now?: () => Date; workspaceRefs?: TicketsOptions['workspaceRefs'] } = {}) {
+export async function ticketsHarness(opts: { now?: () => Date; workspaceRefs?: TicketsOptions['workspaceRefs']; orphanAfterMin?: () => number } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'cp-tickets-'));
   const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
   const sessions = new FakeSessions();
-  const tickets = new Tickets(store, sessions, { now: opts.now, workspaceRefs: opts.workspaceRefs });
+  const tickets = new Tickets(store, sessions, { now: opts.now, workspaceRefs: opts.workspaceRefs, orphanAfterMin: opts.orphanAfterMin });
   tickets.start();
   let changes = 0;
   tickets.onChange = () => void changes++;
@@ -92,5 +93,5 @@ export async function ticketsHarness(opts: { now?: () => Date; workspaceRefs?: T
     store.close();
     rmSync(dataDir, { recursive: true, force: true });
   };
-  return { store, sessions, tickets, done, changes: () => changes };
+  return { store, sessions, tickets, done, changes: () => changes, dataDir };
 }
