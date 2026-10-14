@@ -32,7 +32,8 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
    "queued behind K"; `--list`, `--stop --chat <id>`). An image (no Docker here, D-5) is built by `scripts/image-build.sh --repo .. --ref .. --dockerfile ..
    --destination <registry/path:tag>` (T-141: kaniko, one at a time, the registry credential as one JSON line on stdin with `--credential-stdin`;
    `--check` first, 0 exists, 3 not). Lighthouse and timing measurements run there too (a quiet node). **flock only for what must
-   run in the pod** (a scratch portal, a browser check against it, `npm ci` of a worktree): `flock /tmp/heavy.lock nice -n 10 <command>`. A
+   run in the pod** (a scratch portal, a browser check against it, `npm ci` of a worktree): `flock /tmp/heavy.lock nice -n 10 <command>`; a command that leaves a process running (a scratch
+   portal) takes `flock -o`, so the lock ends with the command (T-159: a portal held it for 50 minutes). A
    targeted test (one file) may run directly. At most one scratch portal and one Chromium per sub-agent; stop them when done. Keep `/tmp` clean (`/tmp/gate-*`, `/tmp/cp-*`): a full `/tmp` makes CI tests fail. **At most three sub-agents run at once.**
 5. **Do not loop.** The same command failing three times means change the approach or move to the next item and write down why.
 6. **Quota.** The portal moves the chat to another Claude by itself when one runs out. If a turn fails with a limit error, wait a few minutes and go on.
