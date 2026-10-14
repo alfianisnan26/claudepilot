@@ -25,6 +25,7 @@ import { useBtwLayout } from './btw/layout';
 import { Composer, type ComposerHandle } from './Composer';
 import { Controls, type ControlsHandle } from './Controls';
 import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './FilesPanel';
+import { KeepGoingChip } from './KeepGoing';
 import { SessionInfoDialog } from './SessionInfo';
 import { endedForSafety, StateBadge } from './shared';
 import { Transcript } from './Transcript';
@@ -480,6 +481,7 @@ export function SessionPage() {
                   endedForSafety(session.endedReason) && ended ? <Badge tone="danger">Ended</Badge> : <StateBadge state={state} agents={running} />
                 ) : null}
               </span>
+              <KeepGoingChip session={session} onOpen={() => setInfoOpen(true)} />
               {bypass && (
                 <button
                   type="button"

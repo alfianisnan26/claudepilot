@@ -3,7 +3,7 @@
 // A number says what it is (an estimate carries "est."). A destination with "Include detail" adds the event's redacted detail, clipped
 // and labelled untrusted. Pure.
 
-import { NOTIFY_KIND_INFO, notifyPath, type NotifyEvent, type NotifyKind, type NotifySeverity } from '@portal/contracts';
+import { KEEPGOING_CAUSE_TEXT, NOTIFY_KIND_INFO, notifyPath, type NotifyEvent, type NotifyKind, type NotifySeverity } from '@portal/contracts';
 import { clock } from './quiet.js';
 
 export interface Rendered {
@@ -125,6 +125,8 @@ export function tagOf(e: NotifyEvent): string {
       return `move:${s.id}`;
     case 'cost_spike':
       return `cost:${s.id}`;
+    case 'keepgoing_attention':
+      return `keepgoing:${s.id}:${name(e.facts.what, 'what')}`;
     case 'test':
       return `test:${e.id}`;
     default:
@@ -175,6 +177,11 @@ function text(e: NotifyEvent, tz: string): { title: string; body: string } {
         title: f.suggested === true ? 'Move suggested' : `Moved to ${name(f.to, 'another Claude')}`,
         body: join(ws, f.suggested === true && `to ${name(f.to, 'another Claude')}`, left && `${left} left${est(e, 'leftPct')}`),
       };
+    }
+    case 'keepgoing_attention': {
+      // What Keep going may not repair, by its fixed words; never the chat's title (that is the untrusted detail, where a destination asked).
+      const what = typeof f.what === 'string' && Object.hasOwn(KEEPGOING_CAUSE_TEXT, f.what) ? KEEPGOING_CAUSE_TEXT[f.what as keyof typeof KEEPGOING_CAUSE_TEXT] : 'needs you';
+      return { title: 'Keep going', body: join(ws, what, typeof f.ticket === 'string' && name(f.ticket, '')) };
     }
     case 'test':
       return { title: 'Test', body: 'Notifications work' };

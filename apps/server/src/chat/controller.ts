@@ -43,6 +43,7 @@ import {
   type ChatFolderScan,
   type ChatImage,
   type ChatInputState,
+  type ChatKeepGoing,
   type ChatModelOption,
   type ChatRequest,
   type ChatServerMessage,
@@ -561,6 +562,8 @@ export class ChatController {
    * ticket ids moved.
    */
   continueTickets?: (to: string, from: readonly string[]) => string[];
+  /** Installed by the Keep going module (T-259): the chat's policy, today's counts and its last action, for the session payload. */
+  keepGoingOf?: (sessionId: string) => ChatKeepGoing | null;
   /** Installed at start-up (T-136): reads a setting (the recover cap and pause, `recover.ts`); unset, the defaults. */
   recoverSettings?: (key: string) => unknown;
   /**
@@ -885,6 +888,14 @@ export class ChatController {
     // One definition of working (T-41): the main turn runs, or a task of its live process does. The stored state stays the turn's (what
     // a send, a restart or a move go by); what is shown, listed and notified on is this one.
     if (out.state === 'idle' && out.process === 'live' && (out.agentsRunning ?? 0) > 0) out = { ...out, state: 'working', tasksOnly: true };
+    if (this.keepGoingOf) {
+      try {
+        const kg = this.keepGoingOf(session.id);
+        if (kg) out = { ...out, keepGoing: kg };
+      } catch {
+        // Keep going's figures never get in the way of a session
+      }
+    }
     return this.#restartPlan(out, change);
   }
 
@@ -997,6 +1008,12 @@ export class ChatController {
     if (this.#deliveredSeen.get(workspaceId) === at) return;
     this.#deliveredSeen.set(workspaceId, at);
     for (const row of this.#chat.liveRows()) if (row.workspace_id === workspaceId) this.#emitSession(row.id);
+  }
+
+  /** Keep going changed what a chat's payload shows (its policy, its counts, its last action): its tabs hear the session again. */
+  keepGoingChanged(rawId: string): void {
+    const session = this.#chat.get(this.#chat.resolveId(rawId));
+    if (session) this.#emit(session.id, { type: 'session', session: this.#decorate(session) });
   }
 
   /** The chat takes no message, control or end while it moves to another Claude: nothing is queued. */

@@ -6,6 +6,7 @@ import { RunChip } from '@/features/ci/RunChip';
 import type { usePersonaOf } from '@/features/personas/identities';
 import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
 import { BumpedChip, TicketChip, useBumpedTickets } from '@/features/tickets/TicketChip';
+import { KeepGoingSection } from './KeepGoing';
 
 /**
  * Session info: what the session header used to spell out under the title (persona, workspace, Claude, ticket, CI runs, worktree
@@ -80,6 +81,7 @@ export function SessionInfoDialog({
             )}
             {!connected && <Row label="Link">Reconnecting…</Row>}
           </dl>
+          <KeepGoingSection session={session} />
         </div>
       )}
     </Dialog>
