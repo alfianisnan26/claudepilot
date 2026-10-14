@@ -23,6 +23,14 @@ Models (coordinator 02:2x, evaluation 2026-10-14): ALWAYS passed explicitly; son
 
 ## HANDOFF NOTE (03:3x): this session's context is 412k, above the 200k guideline. The state is in this file; a fresh continuation picks up at NEXT 0. Local integration (e6a383d = origin/integration + the T-270 layers 2-3 merge 1d893f5 under gate Job + status commits) is NOT pushed until that gate is green; if the gate is lost, re-run `scripts/gate-job.sh 1d893f5`, then push origin and pilot.
 
+## MOVE (03:5x): the portal moves this chat hasyim -> fadlilah at the end of this turn (30 % left). Every sub-agent below is INTERRUPTED by the move: each pushed its branch at every step; restart each one after the move with "continue from your branch <branch> in your worktree; read your own last commits and the ticket's last comment first", same model.
+- t277 (opus) T-277 layer 1: dev-track-a-connect, dev/t277-mode-downgrade. FIRST after the move; then the opus security reviewer; gate; merge; /deploy gate=true.
+- t255 (opus) T-255: dev-automove-model, dev/t255-unknown-usage.
+- t146 (opus) T-146 slice 1: dev-t107-job-run, dev/t146-attention.
+- t136-2 (opus) T-136 slice 2: dev-track-c-ui, dev/t136-recover.
+- t100 (sonnet) T-100 finish: dev-automove-web, dev/t100-sessions-list.
+- Orchestrator: local HEAD = e6a383d (on integration) + the T-95 merge (gate Job running on it, log /tmp/gate-job-<sha>.out; pushed as wip/orch-<sha>); when green push origin and pilot. T-270 layers 2-3 are on integration (e6a383d).
+
 ## IN FLIGHT (03:3x: six slices: five plus the owner's urgent hotfix, on the record)
 - DONE t265 (fable): root cause proven (GNU tail past the end replays the file; a doubled follower pushed the cursor past the end), fixed and merged (74e1f22, gate green 43/26/318 s, pushed). T-265 in_review; T-268 filed (orphaned tails).
 - DONE t258 (opus): tokens lifetimes, label rule, cap, revoke by label, declared authz; merged locally, gate Job running. BREAKS the coordinator's helper (409 on a duplicate label: send expiresIn 1h and replace true): on T-258 and under NEEDS A HUMAN.
