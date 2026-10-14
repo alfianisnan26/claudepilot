@@ -19,6 +19,7 @@ import { seamOwner, type PlatformOwner } from './owner.js';
 import { createPlatformRoutes } from './routes.js';
 import { createTriggersModule } from '../triggers/index.js';
 import { createAutoTransferModule } from '../autotransfer/index.js';
+import { createKeepGoingModule } from '../keepgoing/index.js';
 
 export type { PlatformOwner, PlatformActor } from './owner.js';
 export type { PlatformAudit } from './audit.js';
@@ -149,6 +150,8 @@ export function createPlatform(deps: PlatformDeps): Platform {
   //   platform.register(createAutoTransferModule(platform));
   platform.register(createTriggersModule(platform));
   platform.register(createAutoTransferModule(platform));
+  // T-259: Keep going, the watchdog inside the portal.
+  platform.register(createKeepGoingModule(platform));
 
   return platform;
 }

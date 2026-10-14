@@ -13,12 +13,16 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis. WIP lim
 - Still in_review from 2026.10.13-6: T-42, T-95, T-99 (the post-deploy check, item 3c, not yet run).
 
 ## DONE this session (on integration, 2901ca5, pushed to origin and pilot 01:1x)
-- T-102 (merge 9e15498, full gate green 51/28/309 s), T-110 slice 1 dry mode (a4f18be, gate green 41/32/331 s; 14/14 in the pod), T-256 (4abe211, gate green 60/33/321 s), T-159 (2901ca5; test on a private lock: no fd held, lock free; the README rule). Not yet deployed.
+- T-102 (merge 9e15498, full gate green 51/28/309 s), T-110 slice 1 dry mode (a4f18be, 41/32/331 s; 14/14 in the pod), T-256 (4abe211, 60/33/321 s), T-159 (2901ca5; test on a private lock), T-265 (74e1f22, 43/26/318 s), T-258 (e263796, 54/35/340 s), T-270 slice 1 (76566fd, 40/26/304 s). Integration 76566fd on origin and pilot. Not yet deployed.
 
-## IN FLIGHT (01:1x: three slices)
-- t265 (fable): dev-track-c-ui, dev/t265-replay. Root cause of the re-read (host.ts tail offset), the duplicate rule without a digest, the ending logged, PRD §10.4.
+## IN FLIGHT (02:1x: three slices)
+- DONE t265 (fable): root cause proven (GNU tail past the end replays the file; a doubled follower pushed the cursor past the end), fixed and merged (74e1f22, gate green 43/26/318 s, pushed). T-265 in_review; T-268 filed (orphaned tails).
+- DONE t258 (opus): tokens lifetimes, label rule, cap, revoke by label, declared authz; merged locally, gate Job running. BREAKS the coordinator's helper (409 on a duplicate label: send expiresIn 1h and replace true): on T-258 and under NEEDS A HUMAN.
 - t105 (opus): dev-automove-model, dev/t105-automove-proven (303e376). Finish T-105 + T-109 + D-39 (re-evaluated on every poll, never latched), the coordinator's acceptance list (comment 910), the harness, area tests as a Job, PRD. Then T-255 in the same worktree.
-- t259 (opus, 00:5x): dev-t107-job-run, dev/t259-watchdog. T-259 slice 1: the keepGoing policy (migration 790), the sweep inside the portal (nudge, wake, answer a question, report an approval, out-of-Bypass, ended or down: one notification kind and one ticket per cause), Session info row and chip, T-257 items 1-2 in supervisor.mjs, PRD. No Bypass re-entry (the lease is slice 2).
+- t136-2 (opus, 02:1x): dev-track-c-ui, dev/t136-recover. T-136 slice 2: recover in place (POST recover, session_recover, Resume button, caps, suspicious cause needs a person), the supervisor tries recover first.
+- t270b (opus, 01:5x): dev-track-b-notify-triggers, dev/t270-orphans. T-270 layers 2-3: the orphan sweep, the fallback to the successor or the queue, the orphan state on the Tickets page.
+- DONE t259 (opus): T-259 slice 1 merged locally (06b69e1; conflicts with T-270 in controller.ts and supervisor.mjs kept both), gate Job running. T-259 in_review; T-257 items 1-2 in it.
+- DONE t270 (opus): T-270 layers 1 and 4 merged (76566fd, gate green, pushed).
 - t256 done (opus, 00:4x): not a move bug: the move kept Bypass, the idle chat SLEPT and the wake came back on the start mode (FR20); the coordinator's inline supervisor block c349364 was replaced by t256's paced ensureBypass in the merge. T-256 in_review.
 - T-110 slice 1 review (orchestrator): the new route is manage-only with the person guard, dry mode approves nothing, the runner's `changes` is plumbing only; migration 780.
   T-159 (fix uncommitted in the main folder: scratch-portal.sh closes fds 3-9, README `flock -o`): its test waits for /tmp/heavy.lock, held by the Event and Konfersi chats' npm runs since 00:2x; commits when the test has passed.
@@ -27,8 +31,7 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis. WIP lim
 ## NEXT (rank order; the coordinator 00:2x: T-259, T-255, T-256, T-257, T-258 right after T-136)
 1. T-265 (running), T-105/T-109 (running), T-259 slice 1 (running).
 2. When T-105 and T-265 are merged: ONE deploy today (gate=true, D-7; images=portal), then the post-deploy check (8). Production protection is OFF, so the release will go out with no approval unless a person turns it on first (NEEDS A HUMAN).
-3. T-270 (rank-02g, next free slot): tickets follow the track: a continuation takes its predecessor's tickets (continued_from), an audited ticket authz rule for ended sessions of the same workspace, Portal MCP `ticket_adopt`, tests.
-3b. T-259 slice 2 (the restart of an ended chat from its status file, the Bypass lease T-104 item 3, the Home Autonomy widget, session_keepgoing_set); then delete supervisor.mjs (T-104 item 6).
+3. T-259 slice 2 (the restart of an ended chat from its status file, the Bypass lease T-104 item 3, the Home Autonomy widget, session_keepgoing_set); then delete supervisor.mjs (T-104 item 6).
 4. T-255 (after T-105 merges, same worktree): unknown usage never wins; a limit message in the transcript marks the Claude exhausted.
 5. T-257 items 3-4 (supervisor.mjs: notify when left down, cap per cause) if not covered by 3; T-258 (tokens: short lifetimes, cap, bulk revoke).
 6. T-136 slice 2 (recover in place, the supervisor uses it) after T-265; then slice 3.
@@ -39,6 +42,7 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis. WIP lim
 T-126, T-129, T-121, T-122, T-113, T-114, T-101, T-106, T-120, T-26/T-27 (in T-134), T-30, T-33, T-123, T-132..T-135 with T-140, T-137, T-138, T-130, T-131, fitOf/fit.ts.
 
 ## NEEDS A HUMAN (required escalations only, D-10 and D-34)
+- COORDINATOR'S HELPER (before the deploy): T-258 makes a duplicate token label a 409; the helper must send `expiresIn: "1h"` and `replace: true` (or `addAnother: true`) and revoke its token at the end of a run. Details on T-258.
 - BYPASS RULE (the owner's, charter walls): a wake from sleep drops Bypass as FR20/FR20a are written, which is what idled the Event chat for 5 hours (T-256). Options: (a) Keep-going chats do not sleep; (b) a wake keeps Bypass under the T-104 lease the owner grants once (recommended: the sanctioned path for the in-portal watchdog, no owner code in a pod); (c) leave it, the supervisor re-asserts (built, works only while the supervisor runs). (c) holds until the owner answers; T-259 slice 2 builds the lease.
 - PRODUCTION: run 19 was released with approval `auto` (protection off). If that is the owner's choice, write it as a DECISIONS row; if not, switch it back on (CI > Remotes > claudepilot). T-110 comment 955.
 

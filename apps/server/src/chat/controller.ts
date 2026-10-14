@@ -42,6 +42,7 @@ import {
   type ChatFolderScan,
   type ChatImage,
   type ChatInputState,
+  type ChatKeepGoing,
   type ChatModelOption,
   type ChatRequest,
   type ChatServerMessage,
@@ -551,6 +552,14 @@ export class ChatController {
    * linked to it. Unset, any well-formed id is accepted (the portal only records it).
    */
   ticketExists?: (ticketId: string) => boolean;
+  /**
+   * Installed by the tickets module (T-270): a continuation was created; assign every unfinished ticket held by `from` (ended sessions, the
+   * predecessor first) to `to`. Called INSIDE the transaction that inserts the new row, so the link and the move commit together. Returns the
+   * ticket ids moved.
+   */
+  continueTickets?: (to: string, from: readonly string[]) => string[];
+  /** Installed by the Keep going module (T-259): the chat's policy, today's counts and its last action, for the session payload. */
+  keepGoingOf?: (sessionId: string) => ChatKeepGoing | null;
   /** How long the handoff may take (Workspace Claudes Q3), how long the new Claude gets to acknowledge, and how long a running turn gets to finish before a move. */
   noteWaitMs = NOTE_WAIT_MS;
   ackWaitMs = ACK_WAIT_MS;
@@ -868,6 +877,14 @@ export class ChatController {
     // One definition of working (T-41): the main turn runs, or a task of its live process does. The stored state stays the turn's (what
     // a send, a restart or a move go by); what is shown, listed and notified on is this one.
     if (out.state === 'idle' && out.process === 'live' && (out.agentsRunning ?? 0) > 0) out = { ...out, state: 'working', tasksOnly: true };
+    if (this.keepGoingOf) {
+      try {
+        const kg = this.keepGoingOf(session.id);
+        if (kg) out = { ...out, keepGoing: kg };
+      } catch {
+        // Keep going's figures never get in the way of a session
+      }
+    }
     return this.#restartPlan(out, change);
   }
 
@@ -982,6 +999,12 @@ export class ChatController {
     for (const row of this.#chat.liveRows()) if (row.workspace_id === workspaceId) this.#emitSession(row.id);
   }
 
+  /** Keep going changed what a chat's payload shows (its policy, its counts, its last action): its tabs hear the session again. */
+  keepGoingChanged(rawId: string): void {
+    const session = this.#chat.get(this.#chat.resolveId(rawId));
+    if (session) this.#emit(session.id, { type: 'session', session: this.#decorate(session) });
+  }
+
   /** The chat takes no message, control or end while it moves to another Claude: nothing is queued. */
   #notMoving(sessionId: string): void {
     const moving = this.#moving.get(sessionId);
@@ -1018,6 +1041,8 @@ export class ChatController {
     if (this.workspaceExists && !(await this.workspaceExists(workspaceId))) throw new AppError('VALIDATION_FAILED', 'That workspace doesn’t exist.', { details: { workspaceId: 'Unknown workspace.' } });
     let cwd = this.#folder(req.cwd);
     const title = (typeof req.title === 'string' && req.title.trim() ? req.title.trim() : 'New session').slice(0, CHAT_SESSION_TITLE_MAX);
+    // A continuation (T-270): refused before anything is made when the session it names is live or elsewhere.
+    const continuedFrom = this.#continuation(req.continuedFrom, workspaceId);
     this.#requireEligible(workspaceId);
     const claude = typeof req.claudeId === 'string' && req.claudeId.trim() ? this.#chat.claude(req.claudeId.trim()) : this.#chat.ensureDefault(workspaceId);
     if (!claude || claude.workspaceId !== workspaceId || claude.removedAt) {
@@ -1053,19 +1078,30 @@ export class ChatController {
       }
       bypassCapable = true;
     }
-    const session = this.#chat.create({
+    const row = {
       id,
       workspaceId,
       cwd,
       title,
-      origin: actor === CHAT_ACTOR_UI ? 'ui' : 'mcp',
+      origin: (actor === CHAT_ACTOR_UI ? 'ui' : 'mcp') as 'ui' | 'mcp',
       claudeId: claude.id,
       ticketId,
       parentId,
       startedBy: actor,
       bypassCapable,
       worktree,
-    });
+    };
+    let session!: ChatSession;
+    if (continuedFrom) {
+      // The link and the tickets in ONE transaction: the predecessor is asked again inside it (it may have been woken meanwhile).
+      let moved: string[] = [];
+      this.#chat.transaction(() => {
+        const chain = this.#continuation(continuedFrom.id, workspaceId)!.chain;
+        session = this.#chat.create({ ...row, continuedFrom: continuedFrom.id });
+        moved = this.continueTickets?.(id, chain) ?? [];
+      });
+      this.#chat.addAudit({ severity: 'info', kind: 'session.continued', sessionId: id, workspaceId, actor, detail: { from: continuedFrom.id, chain: continuedFrom.chain.length, tickets: moved } });
+    } else session = this.#chat.create(row);
     if (worktree) {
       this.#chat.activateWorktree(workspaceId, worktree.path, id);
       this.#chat.addAudit({ severity: 'info', kind: 'worktree.created', sessionId: id, workspaceId, actor, detail: { branch: worktree.branch } });
@@ -1090,6 +1126,29 @@ export class ChatController {
     this.#chat.patchSession(sessionId, { ticketId: this.#ticket(ticketId) });
     this.#emitSession(sessionId);
     return this.#chat.get(sessionId)!;
+  }
+
+  /**
+   * The session a new one continues (T-270): null for none; else the predecessor, which must exist (404), be in the same workspace and have
+   * ENDED (409 otherwise: a live session keeps its work), and its chain: it and its ended predecessors (`continued_from` back, same workspace,
+   * bounded and cycle safe), the ones whose tickets move.
+   */
+  #continuation(raw: unknown, workspaceId: string): { id: string; chain: string[] } | null {
+    if (raw === undefined || raw === null || raw === '') return null;
+    if (typeof raw !== 'string' || !/^[A-Za-z0-9-]{1,80}$/.test(raw)) throw new AppError('VALIDATION_FAILED', 'That session id isn’t valid.', { details: { continuedFrom: 'A session id.' } });
+    const prev = this.#chat.row(raw);
+    if (!prev) throw new AppError('NOT_FOUND', 'No such session to continue.', { details: { continuedFrom: 'Unknown session.' } });
+    if (prev.workspace_id !== workspaceId) throw new AppError('CONFLICT', 'A session continues one of its own workspace.', { details: { continuedFrom: 'Another workspace.' } });
+    if (prev.state !== 'ended') throw new AppError('CONFLICT', 'That session is still live: it keeps its work. Continue it only once it has ended.', { details: { continuedFrom: 'Still live.' } });
+    const chain = [prev.id];
+    let cur = prev;
+    while (cur.continued_from && chain.length < 100) {
+      const before = this.#chat.row(cur.continued_from);
+      if (!before || chain.includes(before.id) || before.workspace_id !== workspaceId || before.state !== 'ended') break;
+      chain.push(before.id);
+      cur = before;
+    }
+    return { id: prev.id, chain };
   }
 
   /** A ticket id from a caller: null for none, else a short opaque id (and a known ticket when the tickets module says how to tell). */

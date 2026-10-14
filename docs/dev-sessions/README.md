@@ -9,6 +9,8 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
 
 1. **No questions.** Nobody answers in real time. Take the PRD's recommended default, write the decision in the status file, go on. Do not use
    AskUserQuestion. A thing that needs a real device, a credential or an owner decision goes under NEEDS A HUMAN in the status file; skip to the next item.
+   An agent never files a needs-a-person ticket for a platform step it can do with a tool (taking over an ended chat's tickets with `ticket_adopt`,
+   a continuation with `continuedFrom`, a restart, a move): it does the step and says so in one line on its status ticket instead (T-270, D-34).
 2. **Worktrees.** Sub-agents work in a git worktree each, never in the main folder `~/work/claudepilot`, and never in another agent's worktree. Prepared
    ones (with `node_modules`) are in `~/work/claudepilot.worktrees/`; a new one is `git worktree add ~/work/claudepilot.worktrees/<name> -b dev/<name> origin/integration`
    and then `flock /tmp/heavy.lock npm ci` (`NODE_AUTH_TOKEN` is set in the shell; the private `@isnanme/ui` package needs it). The Agent tool's
