@@ -2,7 +2,7 @@
 
 ## State
 - LIVE: portal 2026.10.14-10 (run 30 rmv8nked07c2fcf, b71f94f; release commit 28d553c on integration). Read the run's "chats" job once (it was still running at 22:10).
-- LOCAL integration is AHEAD of origin: batch 3 = b3c160c (merge dev/t293-5: factory --start + T-338 fixes; --start off, unwired) + 44ab7d0 (status, pack) + this hand-over commit. Pushed as wip/batch-3 (NOT integration). Gate-job on 44ab7d0 running in the background of the old chat: if no verdict reached you, re-run `scripts/gate-job.sh <head of wip/batch-3>` in the background; when green push integration and pilot; deploy with the next batch.
+- Batch 3 (merge of dev/t293-5, T-338: factory --start off and unwired) is ON integration and pilot (6e1e6ad), gate-job 44ab7d0 GREEN (cpbview flakes T-330/T-331 passed on rerun). NOT deployed: deploy it with batch 4 (dev/t-333-1 ready; dev/t-336-1, dev/t-343-1, dev/t293-6 after their verdicts). wip/batch-* branches can be deleted.
 - Workers can't be read by a new chat: every worker was told to post its final report as a comment on its ticket (all tickets claimed by 75f044fb; adopt them with ticket_adopt from 75f044fb-168c-458a-a646-e5742109b072 once this chat ends).
 
 ## In flight (workers of 75f044fb; their reports land on the tickets)
@@ -16,7 +16,7 @@
 Claim before dispatch (ticket_claim_next WITH id works), in_review at merge, close on the verifier verdict, a follow-up ticket for each gap. In review now: T-321, T-312, T-317 (live Keep going run not done), T-334 (needs a verifier), T-338 (rest in T-342), T-333. Blocked on the owner: T-315, T-319, T-339 (factory admin path; recommendation C = after T-336). T-306 in progress (item 3 lab A/B, item 4 owner approval; gaps T-341, T-340).
 
 ## Next (ranked)
-1. Gate batch 3, push, deploy with the next batch. 2. Reports of the five workers above (read the ticket comments). 3. Verifier for T-334. 4. Backlog: T-330/T-331 cpbview flakes, T-344, T-345, T-341, T-332, T-335, T-313, T-314, T-306 item 3, T-149 leftovers. Konfersi and Event stay paused (D-45).
+1. Batch 4: merge what passed (T-333 now; T-336, T-343, T-342 per the verdicts on their tickets), pack, wip branch, ONE gate-job, push, deploy. 2. Reports of the five workers above (read the ticket comments). 3. Verifier for T-334. 4. Backlog: T-330/T-331 cpbview flakes, T-344, T-345, T-341, T-332, T-335, T-313, T-314, T-306 item 3, T-149 leftovers. Konfersi and Event stay paused (D-45).
 
 ## Lessons (tonight)
 - A dontAsk worker is refused `git -C`, `cd &&`, pipes, /tmp, quiet.sh, sed -i, heredocs, and edits under .claude/agents: brief with one plain job-run call and the Read/Edit tools; the lead applies role-file text.
