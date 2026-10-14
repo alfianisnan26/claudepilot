@@ -20,7 +20,7 @@ const repoDeny: string[] = hook.loadDeny([[join(ROOT, '.claude/settings.json'), 
 const decide = (cmd: string, deny: string[] = repoDeny, rtkOnPath = true): Decision => hook.classify(cmd, { deny, rtkOnPath });
 
 test('allowlisted read-only commands are rewritten to their rtk form', () => {
-  for (const [cmd, cls] of [
+  for (const [cmd, cls] of <[string, string][]>[
     ['git status', 'git-status'], ['git status -sb', 'git-status'], ['git status --short --branch', 'git-status'],
     ['git log --oneline -20', 'git-log'], ['git log -5', 'git-log'], ['git log --stat -3 main', 'git-log'],
     ['ls', 'ls'], ['ls -la', 'ls'], ['ls -la apps/server/src/chat', 'ls'], ['ls -lh docs/prd', 'ls'],
