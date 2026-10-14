@@ -188,7 +188,7 @@ Until the portal has an external heartbeat, that is the relay:
    name does not resolve from the coordinator's machine.
 2. On the workstation, work in a new scratch directory. Make the same calls `ph.sh` makes (log in, then one API call). You may copy in a
    helper script for this, such as `sess.py` or `reassign.py`.
-3. **Leave nothing of the owner's there.** Runner jobs on that workstation run as the same user (D-14), so they can read what you leave. Do
+3. **Leave nothing of the owner's there.** Agents and jobs on that workstation can read what you leave there, and D-14 says the owner's sign-in code must never be where agents can read it. Do
    not write the sign-in code to a file, a shell history or a lasting environment, and do not leave a cookie jar, a copy of the repository or
    a helper script. Delete the scratch directory when you are done.
 4. Write on the ticket what you ran there (calls and chat ids, never the code or a cookie). Use T-259 or the ticket of the outage.
