@@ -199,7 +199,11 @@ export interface AutoFacts {
   /** `projection` only: where it is heading at its pace, and when it runs out. Estimates. */
   projectedPct?: Figure;
   etaAt?: Figure<string>;
-  /** The destination's percent left, when it has plan limits: over the limits that would stop the chat there (its model's and the shared ones). */
+  /**
+   * The destination's percent left, when it has plan limits: over the limits that would stop the chat there (its model's and the shared ones).
+   * Unavailable (with why) when its usage is unknown (T-255): such a Claude is chosen only when no measured one qualifies, and the chat is
+   * watched there (a limit answer moves it on at once).
+   */
   destLeftPct?: Figure;
   /** The limit that is low on the source, and whether it stops every model or only the chat's. */
   limit?: AutoLimit;

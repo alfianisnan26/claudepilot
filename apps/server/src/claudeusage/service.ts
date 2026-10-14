@@ -11,6 +11,8 @@ import {
   CHAT_USAGE_RANGES,
   USAGE_RANGES,
   USAGE_THRESHOLDS,
+  usageUnavailable,
+  type ClaudeLimitReport,
   type ClaudeRunsOn,
   type ClaudeUsage,
   type ClaudeUsageAlert,
@@ -31,7 +33,8 @@ import {
 import { isUsageRange } from '../chat/usage.js';
 import type { Store } from '../store/store.js';
 import type { ExecSession } from '../workspaces/runtime.js';
-import { ALERT_RANK, alertLevelOf, headroomOf, stateOf, viewWindows } from './derive.js';
+import { ALERT_RANK, alertLevelOf, headroomOf, stateOf, viewWindows, withLimitReport } from './derive.js';
+import { LIMIT_MESSAGE_SOURCE } from './limitMessage.js';
 import { OWNER_ACTOR } from './actor.js';
 import { exportFileName, quotaCsv, requestsCsv } from './exporter.js';
 import { outlookOf, unavailableOutlook, windowLengthMs, windowPace } from './pace.js';
@@ -383,6 +386,18 @@ export class ClaudeUsageMonitor {
       const target = this.o.source.sessionClaude(sessionId, claudeId);
       if (!target || this.o.source.pooled(target.workspaceId)) return;
       const now = this.#now();
+      // T-255: Claude Code's limit message in the chat (the chat reader made it a refusal of that window): kept as a report until its reset.
+      const fromMessage = (info as Record<string, unknown>).reportedBy === LIMIT_MESSAGE_SOURCE;
+      let limitReport: LatestRow['limitReport'] = undefined;
+      if (fromMessage) {
+        const w = parsed.windows.find((x) => parsed.rejected.includes(x.key));
+        const raw = info as Record<string, unknown>;
+        // A line read again later (a reader that starts over) whose reset is past says nothing about now.
+        if (!w || w.resetsAtMs === null || w.resetsAtMs <= now) return;
+        const at = typeof raw.reportedAtMs === 'number' && Number.isFinite(raw.reportedAtMs) && raw.reportedAtMs <= now ? raw.reportedAtMs : now;
+        limitReport = { window: w.key, atMs: at, untilMs: w.resetsAtMs, guessed: raw.resetGuessed === true, sessionId };
+        console.info(`[claudeusage] limit reported by a chat: claude=${target.claudeId} window=${w.key} until=${new Date(w.resetsAtMs).toISOString()}${limitReport.guessed ? ' (guessed: no reset time in the message)' : ''}`);
+      }
       const prev = this.#store.latest(target.claudeId);
       const byKey = new Map((prev?.windows ?? []).map((w) => [w.key, w]));
       for (const w of parsed.windows) byKey.set(w.key, { ...w, label: w.label || byKey.get(w.key)?.label || w.key });
@@ -395,8 +410,10 @@ export class ClaudeUsageMonitor {
         checkedAtMs: now,
         source: 'live',
         problem: prev?.problem === 'unavailable' || prev?.problem === 'no_scope' ? null : prev?.problem ?? null,
+        ...(limitReport ? { limitReport } : {}),
       };
-      this.#store.addSamples(target.claudeId, target.workspaceId, now, parsed.windows, 'live');
+      // A guessed reset time is no reading of the window's period: no sample from it.
+      if (!limitReport?.guessed) this.#store.addSamples(target.claudeId, target.workspaceId, now, parsed.windows, 'live');
       const who: SourceClaude = { id: target.claudeId, name: target.name, directory: '', workspaceId: target.workspaceId, workspaceName: target.workspaceName, target: '', running: true };
       this.#store.saveLatest(this.#alerts(who, row, now));
       this.o.notify?.();
@@ -560,20 +577,28 @@ export class ClaudeUsageMonitor {
   #view(c: SourceClaude, row: LatestRow | null, now: number, slot: PaletteSlot = this.#slotOf(c, now)): ClaudeUsage {
     const pooled = this.o.source.pooled(c.workspaceId);
     const runsOn: ClaudeRunsOn = pooled ? 'pool' : row?.runsOn ?? 'unknown';
-    const windows = pooled ? [] : row?.windows ?? [];
+    const report = pooled || !row?.limitReport || row.limitReport.untilMs <= now ? null : row.limitReport;
+    const windows = pooled ? [] : withLimitReport(row?.windows ?? [], report, now);
     const checkedMs = pooled ? null : row?.checkedAtMs ?? null;
     const snoozed = row?.snoozedUntilMs != null && row.snoozedUntilMs > now;
     const stale = checkedMs !== null && (!c.running || now - checkedMs > STALE_AFTER * this.#settings.intervalMs);
     const checkedAt = checkedMs === null ? null : new Date(checkedMs).toISOString();
     const view = viewWindows(windows, now).map((w) => ({ ...w, pace: this.#pace(c.id, w.key, w.usedPct, w.resetsAt ? Date.parse(w.resetsAt) : null, checkedMs, stale, now) }));
     const projSnoozed = row?.projSnoozedUntilMs != null && row.projSnoozedUntilMs > now;
+    const limitReport: ClaudeLimitReport | null = report
+      ? { window: report.window, label: windows.find((w) => w.key === report.window)?.label ?? report.window, at: new Date(report.atMs).toISOString(), until: new Date(report.untilMs).toISOString(), guessed: report.guessed, sessionId: report.sessionId }
+      : null;
+    const problem = pooled ? null : row?.problem ?? null;
+    // T-255: why the usage is not known (never 0 %); a Claude whose numbers can't be trusted is `unknown`, not `ok`.
+    const unavailable = pooled ? null : usageUnavailable({ runsOn, windows: view, checkedAt, problem, limitReport }, now);
+    const state0 = pooled ? 'no_limits' : stateOf(runsOn, windows, now);
     return {
       claudeId: c.id,
       claudeName: c.name,
       workspaceId: c.workspaceId,
       workspaceName: c.workspaceName,
       runsOn,
-      state: pooled ? 'no_limits' : stateOf(runsOn, windows, now),
+      state: unavailable && state0 === 'ok' ? 'unknown' : state0,
       plan: pooled ? null : row?.plan ?? null,
       windows: view,
       extra: pooled || !row?.extra ? null : { enabled: row.extra.enabled, usedPct: row.extra.usedPct, limit: row.extra.limit, used: row.extra.used, currency: row.extra.currency },
@@ -581,7 +606,9 @@ export class ClaudeUsageMonitor {
       source: pooled ? null : row?.source ?? null,
       stale,
       workspaceRunning: c.running,
-      problem: pooled ? null : row?.problem ?? null,
+      problem,
+      unavailable,
+      limitReport,
       snoozedUntil: snoozed ? new Date(row!.snoozedUntilMs!).toISOString() : null,
       projectionSnoozedUntil: projSnoozed ? new Date(row!.projSnoozedUntilMs!).toISOString() : null,
       slot,
@@ -668,7 +695,7 @@ export class ClaudeUsageMonitor {
       const row = this.#store.latest(claudeId);
       const pooled = c ? this.o.source.pooled(c.workspaceId) : false;
       const stale = row?.checkedAtMs != null && ((c ? !c.running : false) || now - row.checkedAtMs > STALE_AFTER * this.#settings.intervalMs);
-      return headroomOf(claudeId, row, { pooled, stale }, now);
+      return headroomOf(claudeId, row ? { ...row, windows: withLimitReport(row.windows, row.limitReport, now) } : null, { pooled, stale }, now);
     } catch {
       return { claudeId, kind: 'unknown', limiting: null, exhausted: false, availableAt: null, blockedModels: [], checkedAt: null, stale: false };
     }
