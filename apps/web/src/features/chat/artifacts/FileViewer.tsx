@@ -1,10 +1,12 @@
 import { cn, ease, Spinner, useMediaQuery } from '@isnanme/ui';
 import type { ChatFile, ChatTextPreview } from '@portal/contracts';
-import { Code2, Download, ExternalLink, X } from 'lucide-react';
+import { Code2, Download, ExternalLink, WrapText, X } from 'lucide-react';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { errorText } from '@/lib/api';
+import { CodeViewer } from '../../code/CodeViewer';
+import { LANGUAGE_LABEL, languageFor } from '../../code/language';
 import { Markdown, QuietCopyButton } from '../Markdown';
 import { useModal } from '../shared';
 import { fetchTextPreview, fileUrl } from './contentApi';
@@ -101,6 +103,7 @@ function useTextPreview(sessionId: string, file: ChatFile, enabled: boolean) {
 function TextBody({ sessionId, file }: { sessionId: string; file: ChatFile }) {
   const { preview, error } = useTextPreview(sessionId, file, true);
   const [source, setSource] = useState(false);
+  const [wrap, setWrap] = useState(true);
   const delimited = isDelimited(file);
   const md = isMarkdown(file);
   const rows = useMemo(() => (preview && delimited ? parseDelimited(preview.text, file.mediaType === 'text/tab-separated-values' ? '\t' : ',') : null), [preview, delimited, file.mediaType]);
@@ -121,9 +124,21 @@ function TextBody({ sessionId, file }: { sessionId: string; file: ChatFile }) {
       </div>
     );
   const tableRows = rows && rows.length > 0 && (rows[0]?.length ?? 0) > 1 ? rows : null;
+  const asCode = !((md || tableRows) && !source);
+  const language = delimited ? 'plain' : languageFor(file.name, file.mediaType);
   return (
     <div className="p-4">
       <div className="mb-3 flex items-center justify-end gap-1">
+        {asCode && (
+          <span data-testid="code-language" className="mr-auto truncate text-[12px] font-medium text-muted">
+            {LANGUAGE_LABEL[language]}
+          </span>
+        )}
+        {asCode && (
+          <button type="button" onClick={() => setWrap((v) => !v)} aria-pressed={wrap} aria-label="Wrap lines" title="Wrap lines" className={cn(BAR_BUTTON, wrap && 'bg-surface-2 text-ink')}>
+            <WrapText className="size-4" />
+          </button>
+        )}
         {(md || tableRows) && (
           <button type="button" onClick={() => setSource((v) => !v)} aria-pressed={source} aria-label="Show source" title="Source" className={cn(BAR_BUTTON, 'size-9', source && 'bg-surface-2 text-ink')}>
             <Code2 className="size-4" />
@@ -136,7 +151,7 @@ function TextBody({ sessionId, file }: { sessionId: string; file: ChatFile }) {
       ) : tableRows && !source ? (
         <Table rows={tableRows} />
       ) : (
-        <pre className="font-mono text-[12.5px] leading-relaxed break-words whitespace-pre-wrap">{pretty ?? preview.text}</pre>
+        <CodeViewer text={pretty ?? preview.text} language={language} wrap={wrap} />
       )}
       {preview.truncated && <p className="mt-3 text-[12px] text-muted">First {formatSize(preview.text.length)} only.</p>}
     </div>
