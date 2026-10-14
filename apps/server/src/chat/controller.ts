@@ -24,6 +24,11 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { AppError, isAppError } from '@isnanme/core';
 import {
   autoModeAllowed,
+  downgradeChain,
+  modelDisplayName,
+  modelFamilyOf,
+  modelInfo,
+  nearestEffort,
   BYPASS_BLOCKED,
   BYPASS_NOT_CAPABLE,
   BYPASS_NOT_KEPT,
@@ -247,7 +252,15 @@ interface Restore {
   effort: string | null;
   ultracode: boolean;
   mode: string;
+  /**
+   * A move (T-109): the model is applied and VERIFIED, falling down the catalogue's chain when the destination refuses it or runs another
+   * one; `from` is the model the chat had before the move.
+   */
+  move?: { claudeId: string; name: string; from: string | null; prev: string | null; back?: string };
 }
+
+/** How long what a Claude's `list_models` said is trusted (T-109); older, it is read again at the next start on that Claude. */
+const CLAUDE_MODELS_TTL_MS = 60 * 60_000;
 
 interface LaunchOptions {
   /** Relaunch with `--resume` (Interrupted, or asleep). */
@@ -394,6 +407,8 @@ export class ChatController {
   readonly #costBase = new Map<string, number>();
   /** Per session: when the portal last asked Claude Code to change the model (its note may follow). */
   readonly #modelAsked = new Map<string, number>();
+  /** Per Claude: what its `list_models` offered and when (T-109), from any chat on it. */
+  readonly #claudeModels = new Map<string, { atMs: number; options: ChatModelOption[] }>();
   /** Per session: each model's running totals its process last reported, for each turn's usage metrics. */
   readonly #modelBase = new Map<string, Map<string, ModelTotals>>();
   /**
@@ -505,6 +520,13 @@ export class ChatController {
   mcpServersSeen?: (workspaceId: string, directory: string, servers: { name: string; status: string }[]) => string[];
   /** Installed by the owner: whether the policy allows Bypass in chat (the interim switch `sessions.allowBypass`). Unset: no. */
   bypassAllowed?: () => boolean;
+  /**
+   * Installed by the owner (T-109): whether a Claude shows a usage window of a model family (the Fable week), from the usage monitor's last
+   * reading; what decides whether it has a family only some plans include until its `list_models` is known. Unset: no window known.
+   */
+  modelWindow?: (claudeId: string, family: string) => boolean;
+  /** Installed by the owner (T-109, `automove.returnToOriginalModel`): a move to a Claude that has the chat's original model goes back to it. Unset: no. */
+  returnToOriginalModel?: () => boolean;
   /** Installed by the owner (T-38): whether a trusted folder whose changed settings hold permission rules only is trusted again by itself (`chat.trust.autoPermissionOnly`). Unset: no. */
   autoTrustRules?: () => boolean;
   /**
@@ -875,7 +897,71 @@ export class ChatController {
     const id = this.#require(rawId).id;
     this.#notMoving(id);
     await this.#live(id);
-    return pickModels(await this.#request(id, 'list_models'));
+    const options = pickModels(await this.#request(id, 'list_models'));
+    this.#learnModels(this.#chat.get(id)?.claudeId ?? null, options);
+    return options;
+  }
+
+  #learnModels(claudeId: string | null, options: ChatModelOption[]): void {
+    if (claudeId && options.length) this.#claudeModels.set(claudeId, { atMs: Date.now(), options });
+  }
+
+  /** What a Claude's `list_models` offered, while fresh (T-109), else null. */
+  #listedOptions(claudeId: string): ChatModelOption[] | null {
+    const known = this.#claudeModels.get(claudeId);
+    return known && Date.now() - known.atMs < CLAUDE_MODELS_TTL_MS ? known.options : null;
+  }
+
+  /**
+   * The model families a Claude's `list_models` offered (T-109), while fresh; null when not known. Auto move asks it before choosing a
+   * destination; a Claude's login change makes it read again ({@link forgetClaudeModels}).
+   */
+  modelFamilies(claudeId: string): string[] | null {
+    const options = this.#listedOptions(claudeId);
+    if (!options) return null;
+    return [...new Set(options.flatMap((o) => [modelFamilyOf(o.value), modelFamilyOf(o.resolvedModel)]).filter((f): f is string => !!f))];
+  }
+
+  /** A Claude signed in again or out: what its `list_models` said no longer holds. */
+  forgetClaudeModels(claudeId: string): void {
+    this.#claudeModels.delete(claudeId);
+  }
+
+  /** The same, by where the Claude signs in (a workspace and its Claude's directory, '' for Default): what the sign-in routes know. */
+  forgetClaudeModelsAt(workspaceId: string, directory: string): void {
+    if (!this.#chat.hasClaudes(workspaceId)) return;
+    for (const c of this.#chat.listClaudes(workspaceId)) if (c.directory === directory) this.#claudeModels.delete(c.id);
+  }
+
+  /**
+   * Whether a Claude can run a model family (T-109): its `list_models` when known, else the catalogue (a family every plan has: yes; one
+   * only some plans have, like Fable: only with its usage window). Unknown families: yes.
+   */
+  #claudeHas(claudeId: string, family: string): { has: boolean; known: boolean } {
+    const listed = this.modelFamilies(claudeId);
+    if (listed) return { has: listed.includes(family), known: true };
+    const info = modelInfo(family);
+    if (!info || info.assumed) return { has: true, known: false };
+    let window = false;
+    try {
+      window = !!this.modelWindow?.(claudeId, family);
+    } catch {
+      window = false;
+    }
+    return { has: window, known: false };
+  }
+
+  /** The best family at or below the chat's that a Claude has (T-109), with whether its list was read. */
+  #bestModelOn(claudeId: string, model: string | null): ChatSwitchOption['model'] {
+    const from = modelFamilyOf(model);
+    if (!from) return undefined;
+    let known = false;
+    for (const f of downgradeChain(from)) {
+      const h = this.#claudeHas(claudeId, f);
+      known ||= h.known;
+      if (h.has) return { from, to: f, known };
+    }
+    return { from, to: null, known };
   }
 
   /** A session as tabs see it: while its chat moves to another Claude, where to and how far along. */
@@ -1301,7 +1387,8 @@ export class ChatController {
     const options = await Promise.all(
       others.map(async (claude): Promise<ChatSwitchOption> => {
         const v = shared ?? (await check(claude));
-        return { claude, ok: v.ok, reason: v.ok ? null : v.reason, fix: v.ok ? null : v.fix };
+        const model = this.#bestModelOn(claude.id, source.model);
+        return { claude, ok: v.ok, reason: v.ok ? null : v.reason, fix: v.ok ? null : v.fix, ...(model ? { model } : {}) };
       }),
     );
     // The handoff is asked of the Claude the chat runs on now, on its own credential.
@@ -1341,7 +1428,7 @@ export class ChatController {
    * has acknowledged it, the old process is stopped and its segment closed. While it runs the chat takes no
    * messages (`switching`): nothing is queued. Does not copy a login.
    */
-  async switchClaude(rawId: string, destClaudeId: string, opts: { handoff?: 'ask' | 'skip' } = {}): Promise<ChatSession> {
+  async switchClaude(rawId: string, destClaudeId: string, opts: { handoff?: 'ask' | 'skip'; model?: string } = {}): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
     const source = this.#require(sessionId);
     if (source.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
@@ -1351,12 +1438,13 @@ export class ChatController {
     }
     if (dest.id === source.claudeId) throw new AppError('VALIDATION_FAILED', 'That session is already on this Claude.');
     if (opts.handoff !== undefined && opts.handoff !== 'ask' && opts.handoff !== 'skip') throw new AppError('VALIDATION_FAILED', 'Unknown handoff choice.', { details: { handoff: 'Expected ask or skip.' } });
+    if (opts.model !== undefined && (typeof opts.model !== 'string' || !MODEL_VALUE.test(opts.model.trim()))) throw new AppError('VALIDATION_FAILED', 'Pick a model.', { details: { model: 'Unknown model.' } });
     if (this.#moving.has(sessionId)) throw new AppError('CONFLICT', 'This chat is already moving.');
     if (this.#restarting.has(sessionId)) throw new AppError('CONFLICT', 'This chat is restarting. Try again in a moment.');
     this.#moving.set(sessionId, { toClaude: dest.name, step: 'handoff' });
     this.#emitSession(sessionId);
     try {
-      return await this.#switch(source, dest, opts.handoff !== 'skip');
+      return await this.#switch(source, dest, opts.handoff !== 'skip', opts.model?.trim());
     } finally {
       this.#moving.delete(sessionId);
       this.#tags.delete(sessionId);
@@ -1372,7 +1460,7 @@ export class ChatController {
     this.#emitSession(sessionId);
   }
 
-  async #switch(source: ChatSession, dest: WorkspaceClaude, ask: boolean): Promise<ChatSession> {
+  async #switch(source: ChatSession, dest: WorkspaceClaude, ask: boolean, model?: string): Promise<ChatSession> {
     const sessionId = source.id;
     const workspaceId = source.workspaceId;
     const from = source.claudeName ?? 'Claude';
@@ -1420,7 +1508,17 @@ export class ChatController {
       if (r.code !== 0) throw new AppError('SERVICE_UNAVAILABLE', `The session host couldn’t start ${dest.name} (exit ${r.code ?? 'unknown'}).`, { expose: true });
 
       // 4. The chat follows the new run: its reader, row and segment, and then the opening goes in.
-      const restore: Restore = { model: row.model, effort: row.effort, ultracode: row.ultracode === 1, mode: row.mode === 'bypassPermissions' ? START_MODE : row.mode };
+      // The model (T-109): the one asked for, else the chat's own, else (with `automove.returnToOriginalModel`) the one it had before an
+      // earlier move changed it, when this Claude has it. Applied and verified after the start, down the chain when refused.
+      const original = row.original_model ?? null;
+      const back = !model && original && this.returnToOriginalModel?.() ? original : null;
+      const restore: Restore = {
+        model: model ?? row.model ?? back,
+        effort: row.effort,
+        ultracode: row.ultracode === 1,
+        mode: row.mode === 'bypassPermissions' ? START_MODE : row.mode,
+        move: { claudeId: dest.id, name: dest.name, from: original ?? row.model, prev: row.model, ...(back ? { back } : {}) },
+      };
       // What the old run still has running ends with it in step 5 (the new run may start its own meanwhile).
       const oldTasks = this.#chat.runningTaskIds(sessionId);
       this.#stopReader(sessionId);
@@ -3150,12 +3248,18 @@ export class ChatController {
     }
     const now = await this.#request(sessionId, 'get_settings').then(pickApplied, () => null);
     const failed: string[] = [];
-    if (r.model && now?.model !== r.model) {
+    let effort = r.effort;
+    if (r.model && r.move) {
+      const got = await this.#applyModel(sessionId, r.model, r.move, now?.model ?? null);
+      if (!this.#isLive(sessionId)) return;
+      // Effort only where the model has it: the nearest level otherwise (T-109).
+      if (got && effort) effort = nearestEffort(effort, this.#effortLevels(r.move.claudeId, got));
+    } else if (r.model && now?.model !== r.model) {
       this.#modelAsked.set(sessionId, Date.now());
       await this.#request(sessionId, 'set_model', { model: r.model }).catch(() => failed.push('model'));
     }
     const settings: { effort?: string; ultracode?: boolean } = {};
-    if (r.effort && now?.effort !== r.effort) settings.effort = r.effort;
+    if (effort && now?.effort !== effort) settings.effort = effort;
     if (r.ultracode && now?.ultracode !== true) settings.ultracode = true;
     if (settings.effort !== undefined || settings.ultracode !== undefined)
       await this.#request(sessionId, 'apply_flag_settings', { settings: flagSettings(settings) }).catch(() => failed.push(settings.ultracode ? 'effort and ultracode' : 'effort'));
@@ -3173,6 +3277,87 @@ export class ChatController {
     await this.#refreshApplied(sessionId).catch(() => undefined);
     // A process stopped meanwhile (ended, a pool change) failed them all: nothing worth a note.
     if (failed.length && this.#isLive(sessionId)) this.#note(sessionId, `Couldn’t restore the ${failed.join(', ')} after resuming.`);
+  }
+
+  /**
+   * A move's model (T-109): asks the destination for `wanted`, then reads what APPLIES; when it refuses or runs another model, the next
+   * family down the catalogue's chain (skipping families its `list_models` lacks). Stores what applies on the row (never what was asked)
+   * and the chat's model before the move as `originalModel` when they differ; a note says the change ("Model: Fable to Opus (Sekar has no
+   * Fable).") or that none could be set. Returns the model that applies, or null.
+   */
+  async #applyModel(sessionId: string, asked: string, move: NonNullable<Restore['move']>, current: string | null): Promise<string | null> {
+    // What the destination offers, read once per hour per Claude: it lets the chain skip what it lacks.
+    if (!this.#listedOptions(move.claudeId)) {
+      const options = await this.#request(sessionId, 'list_models').then(pickModels, () => [] as ChatModelOption[]);
+      if (!this.#isLive(sessionId)) return null;
+      this.#learnModels(move.claudeId, options);
+    }
+    const listed = this.modelFamilies(move.claudeId);
+    // `automove.returnToOriginalModel`: the chat's original model when this Claude has it (known only now, from its list).
+    const backFam = modelFamilyOf(move.back);
+    const wanted = move.back && backFam && (listed ? listed.includes(backFam) : this.#claudeHas(move.claudeId, backFam).has) ? move.back : asked;
+    const fam = modelFamilyOf(wanted);
+    const tries = fam ? [wanted, ...downgradeChain(fam).slice(1)].filter((m, i) => !listed || listed.includes(i === 0 ? fam : m)) : [wanted];
+    const same = (a: string | null, b: string) => !!a && (modelFamilyOf(a) && modelFamilyOf(b) ? modelFamilyOf(a) === modelFamilyOf(b) : a === b);
+    let got: string | null = null;
+    for (const m of tries) {
+      if (same(current, m)) {
+        got = current;
+        break;
+      }
+      this.#modelAsked.set(sessionId, Date.now());
+      const asked = await this.#request(sessionId, 'set_model', { model: m }).then(
+        () => true,
+        () => false,
+      );
+      if (!this.#isLive(sessionId)) return null;
+      if (!asked) continue;
+      const applied = await this.#request(sessionId, 'get_settings').then(pickApplied, () => null);
+      if (!this.#isLive(sessionId)) return null;
+      if (applied?.model) current = applied.model;
+      if (same(applied?.model ?? null, m)) {
+        got = applied!.model!;
+        break;
+      }
+    }
+    const original = move.from;
+    const origFam = modelFamilyOf(original);
+    if (got) {
+      const back = origFam ? modelFamilyOf(got) === origFam : got === original;
+      const wasChanged = !!this.#chat.row(sessionId)?.original_model;
+      this.#chat.patchSession(sessionId, { model: got, originalModel: back ? null : original });
+      // A note and one audit row only when the model that runs changed with this move (what ran before it, `prev`).
+      if (!same(move.prev, got)) {
+        this.#chat.addAudit({
+          severity: 'info',
+          kind: 'model.changed',
+          sessionId,
+          workspaceId: this.#chat.row(sessionId)?.workspace_id ?? null,
+          actor: 'portal',
+          detail: { at: 'move', claude: move.claudeId, from: modelFamilyOf(move.prev) ?? move.prev, to: modelFamilyOf(got) ?? got, asked: modelFamilyOf(wanted) ?? wanted, original: back ? null : (origFam ?? original) },
+        });
+        if (back && wasChanged) this.#note(sessionId, `Model: back to ${modelDisplayName(got)}.`);
+        else {
+          // Why: the destination refused or lacks what was asked, or (a person asked for a lower model) it lacks the chat's own.
+          const why = !same(got, wanted) ? wanted : origFam && !back && !this.#claudeHas(move.claudeId, origFam).has ? original : null;
+          const lacks = why ? ` (${move.name} has no ${modelDisplayName(why)})` : '';
+          this.#note(sessionId, `Model: ${modelDisplayName(move.prev ?? original ?? wanted)} to ${modelDisplayName(got)}${lacks}.`);
+        }
+      }
+    } else {
+      // Nothing could be set: say what runs, and remember what the chat had.
+      if (current) this.#chat.patchSession(sessionId, { model: current, originalModel: original && !same(current, original) ? original : null });
+      this.#note(sessionId, `Couldn’t set ${modelDisplayName(wanted)} or a model below it on ${move.name}; it runs on ${current ? modelDisplayName(current) : 'its default model'}.`);
+    }
+    this.#emitSession(sessionId);
+    return got;
+  }
+
+  /** The effort levels a Claude's `list_models` gives for a model (T-109), [] when not known. */
+  #effortLevels(claudeId: string, model: string): string[] {
+    const fam = modelFamilyOf(model);
+    const o = (this.#listedOptions(claudeId) ?? []).find((x) => x.value === model || x.resolvedModel === model || (!!fam && (modelFamilyOf(x.value) === fam || modelFamilyOf(x.resolvedModel) === fam)));
+    return o?.effortLevels ?? [];
   }
 
   /** Makes sure there is a running process to talk to: waits out work in flight, resumes or wakes one that isn't running. */

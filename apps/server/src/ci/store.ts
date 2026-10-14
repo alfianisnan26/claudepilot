@@ -19,6 +19,17 @@ export interface RepoRow {
   removed_at: string | null;
 }
 
+/** A test a gate saw pass only on its rerun (T-95 item 4). */
+export interface FlakyRow {
+  run_id: string;
+  repo: string;
+  job: string;
+  file: string;
+  test: string;
+  ticket_id: string | null;
+  at: string;
+}
+
 export interface RunRow {
   id: string;
   number: number;
@@ -347,6 +358,38 @@ export class CiStore {
 
   log(runId: string, job: string, step: number): LogRow | undefined {
     return this.#db.prepare('SELECT * FROM ci_logs WHERE run_id = ? AND job = ? AND step = ?').get(runId, job, step) as unknown as LogRow | undefined;
+  }
+
+  /* ---------- Flaky tests (T-95 item 4) ---------- */
+
+  get flakyReady(): boolean {
+    try {
+      this.#db.prepare('SELECT 1 FROM ci_flaky LIMIT 1').get();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The test's latest sighting that has a ticket, and how many runs have seen it (this one included once it is stored). */
+  flakyOf(repo: string, file: string, test: string): { ticketId: string | null; runs: number } {
+    const last = this.#db.prepare('SELECT ticket_id FROM ci_flaky WHERE repo = ? AND file = ? AND test = ? AND ticket_id IS NOT NULL ORDER BY at DESC, rowid DESC LIMIT 1').get(repo, file, test) as { ticket_id: string } | undefined;
+    const n = this.#db.prepare('SELECT count(*) AS n FROM ci_flaky WHERE repo = ? AND file = ? AND test = ?').get(repo, file, test) as { n: number };
+    return { ticketId: last?.ticket_id ?? null, runs: Number(n.n) };
+  }
+
+  /** Records a sighting; false when this run already recorded that test. */
+  insertFlaky(f: FlakyRow): boolean {
+    return Number(this.#writableDb.prepare('INSERT OR IGNORE INTO ci_flaky (run_id, repo, job, file, test, ticket_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(f.run_id, f.repo, f.job, f.file, f.test, f.ticket_id, f.at).changes) > 0;
+  }
+
+  setFlakyTicket(runId: string, repo: string, file: string, test: string, ticketId: string): void {
+    this.#writableDb.prepare('UPDATE ci_flaky SET ticket_id = ? WHERE run_id = ? AND repo = ? AND file = ? AND test = ?').run(ticketId, runId, repo, file, test);
+  }
+
+  flakyOfRun(runId: string): FlakyRow[] {
+    if (!this.flakyReady) return [];
+    return this.#db.prepare('SELECT run_id, repo, job, file, test, ticket_id, at FROM ci_flaky WHERE run_id = ? ORDER BY rowid').all(runId) as unknown as FlakyRow[];
   }
 
   /* ---------- Messages to sessions (PRD FR37) ---------- */

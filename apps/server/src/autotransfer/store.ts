@@ -31,6 +31,11 @@ export interface SessionRow {
   lastEvalAt: string | null;
   warnedPeriod: string | null;
   refusedKey: string | null;
+  /** Waiting for quota (T-105 R3): since when and why; null when not waiting. */
+  waitingSince: string | null;
+  waitingCode: string | null;
+  /** The source window period in which the chat was told to finish and stop (the steer, once per period), null when none. */
+  steeredPeriod: string | null;
 }
 
 export interface StoredSuggestion extends AutoSuggestion {
@@ -131,6 +136,9 @@ export class AutoStore {
       lastEvalAt: s('last_eval_at'),
       warnedPeriod: s('warned_period'),
       refusedKey: s('refused_key'),
+      waitingSince: s('waiting_since'),
+      waitingCode: s('waiting_code'),
+      steeredPeriod: s('steered_period'),
     };
   }
 
@@ -147,17 +155,20 @@ export class AutoStore {
         lastEvalAt: 'last_eval_at',
         warnedPeriod: 'warned_period',
         refusedKey: 'refused_key',
+        waitingSince: 'waiting_since',
+        waitingCode: 'waiting_code',
+        steeredPeriod: 'steered_period',
       };
       const keys = (Object.keys(patch) as (keyof typeof patch)[]).filter((k) => k in cols);
       if (keys.length) db.prepare(`UPDATE autotransfer_sessions SET ${keys.map((k) => `${cols[k]} = ?`).join(', ')} WHERE session_id = ?`).run(...keys.map((k) => patch[k] ?? null), sessionId);
     }
-    return this.session(sessionId) ?? { sessionId, ownerId, mode: null, lastClaudeId: null, pausedUntil: null, deferSince: null, lastEvalAt: null, warnedPeriod: null, refusedKey: null };
+    return this.session(sessionId) ?? { sessionId, ownerId, mode: null, lastClaudeId: null, pausedUntil: null, deferSince: null, lastEvalAt: null, warnedPeriod: null, refusedKey: null, waitingSince: null, waitingCode: null, steeredPeriod: null };
   }
 
-  /** Sessions with a pause or a deferral still to come (re-evaluated when it ends). */
+  /** Sessions with a pause, a deferral or a wait for quota still to come (re-evaluated when it ends; a wait at once, a portal restart included: T-105). */
   pending(): { sessionId: string; at: string }[] {
-    const rows = (this.#db?.prepare('SELECT session_id, paused_until, defer_since FROM autotransfer_sessions WHERE paused_until IS NOT NULL OR defer_since IS NOT NULL').all() ?? []) as Record<string, string | null>[];
-    return rows.map((r) => ({ sessionId: r.session_id!, at: r.paused_until ?? r.defer_since! }));
+    const rows = (this.#db?.prepare('SELECT session_id, paused_until, defer_since, waiting_since FROM autotransfer_sessions WHERE paused_until IS NOT NULL OR defer_since IS NOT NULL OR waiting_since IS NOT NULL').all() ?? []) as Record<string, string | null>[];
+    return rows.map((r) => ({ sessionId: r.session_id!, at: r.waiting_since ? this.#at() : (r.paused_until ?? r.defer_since!) }));
   }
 
   /* ---------- the card ---------- */
@@ -264,9 +275,12 @@ export class AutoStore {
     return rows.map((r) => this.#event(r));
   }
 
-  /** How many events of a kind an owner had since a time (the day cap). */
-  countOwner(ownerId: string, kind: AutoEventKind, sinceMs: number): number {
-    return (this.#db?.prepare('SELECT COUNT(*) AS n FROM autotransfer_events WHERE owner_id = ? AND kind = ? AND at >= ?').get(ownerId, kind, new Date(sinceMs).toISOString()) as { n: number } | undefined)?.n ?? 0;
+  /** How many events of a kind an owner had since a time (the day cap); `excludeReason` leaves out, say, moves forced by exhaustion (T-105). */
+  countOwner(ownerId: string, kind: AutoEventKind, sinceMs: number, excludeReason: AutoReason | null = null): number {
+    const extra = excludeReason ? ' AND (reason IS NULL OR reason <> ?)' : '';
+    const args: (string | number)[] = [ownerId, kind, new Date(sinceMs).toISOString()];
+    if (excludeReason) args.push(excludeReason);
+    return (this.#db?.prepare(`SELECT COUNT(*) AS n FROM autotransfer_events WHERE owner_id = ? AND kind = ? AND at >= ?${extra}`).get(...args) as { n: number } | undefined)?.n ?? 0;
   }
 
   /** Sessions that had an automatic move in the last day (the engine watches them for an Undo). */

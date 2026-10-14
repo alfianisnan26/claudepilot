@@ -22,7 +22,7 @@ One orchestrator chat per program runs the work as sub-agents of the Agent tool,
 
 ## 3. Dispatch
 
-- **At most three sub-agents at once** (WIP limit three). Send the Agent calls in one message so they run in parallel.
+- **At most five sub-agents at once** (WIP limit five). Send the Agent calls in one message so they run in parallel.
 - Each sub-agent works in its own worktree on its own branch (`ticket/T-n-slug`), never in the main folder or another agent's worktree. Use a prepared worktree, or the Agent tool's worktree isolation for a short task.
 - The brief is **self-contained**: the sub-agent has not seen this chat. Use `references/brief-template.md`: goal, ticket, worktree and branch, files to read, the exact items, done criteria, the rules, what to report.
 - **Pick the model per slice**, by what the slice needs, and write the choice in the status file next to it:
@@ -72,7 +72,7 @@ Sub-agents stop when the chat restarts, moves to another account or ends; anythi
 
 ## Self-check (each round)
 
-- At most three sub-agents run; each brief was self-contained and named the model and the rules.
+- At most five sub-agents run; each brief was self-contained and named the model and the rules.
 - The integration branch is green on the quick gate; the full gate ran within two hours or before the last deploy.
 - The status file is current, under 80 lines, pushed; NEEDS A HUMAN holds required items only.
 - No agent waits idle; no ticket is `in_progress` without a live worker.

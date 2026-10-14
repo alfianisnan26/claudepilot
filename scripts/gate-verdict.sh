@@ -6,6 +6,9 @@
 #   scripts/gate-verdict.sh joblog <file>             the log of a gate Job: its last `GATE-VERDICT:` line.
 #   scripts/gate-verdict.sh failures <suite log>      every failing test with its own report (TAP's YAML block: error, expected, actual,
 #                                                     location, stack), at most 80 lines each and 600 in all; prints, no verdict.
+#   scripts/gate-verdict.sh flaky <suite log>         every failing test (not a whole file) as `<file>;<test name>`, the file from its report's
+#                                                     location, at most 10, one per line; prints, no verdict. scripts/gate.sh writes them to the
+#                                                     summary as `server-suite-flaky:` when the rerun passed, and the portal opens a ticket per test.
 # Prints one line, `GATE-VERDICT: green` or `GATE-VERDICT: red: <why>` (plus a note when a file passed only alone), and exits 0 or 1.
 set -u
 green() { echo "GATE-VERDICT: green"; exit 0; }
@@ -43,5 +46,13 @@ case ${1:-} in
     ' "${2:?suite log}" 2>/dev/null | head -n 600
     exit 0
     ;;
-  *) echo "usage: scripts/gate-verdict.sh logs <dir> [steps] | joblog <file> | failures <suite log>" >&2; exit 2 ;;
+  flaky)
+    awk -v q="'" '
+      match($0, /^ *not ok [0-9]+ - /) { n = substr($0, RLENGTH + 1); if (n ~ /\.test\.ts$/) n = ""; next }
+      /^ *ok [0-9]+ - / { n = ""; next }
+      n != "" && /location: / { l = $0; sub(".*location: " q, "", l); sub(":[0-9]+:[0-9]+" q ".*$", "", l); sub(".*/apps/server/", "", l); print l ";" n; n = "" }
+    ' "${2:?suite log}" 2>/dev/null | grep -E '^src/[^;]*\.test\.ts;.' | sort -u | head -n 10
+    exit 0
+    ;;
+  *) echo "usage: scripts/gate-verdict.sh logs <dir> [steps] | joblog <file> | failures <suite log> | flaky <suite log>" >&2; exit 2 ;;
 esac

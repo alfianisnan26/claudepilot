@@ -36,6 +36,8 @@ import {
   type TicketFilter,
   type TicketItem,
   type TicketList,
+  type TicketOrphan,
+  type TicketOrphanWhy,
   type TicketPriority,
   type TicketSession,
   type TicketStatus,
@@ -167,6 +169,39 @@ export interface TicketsOptions {
    * key the rest of the portal speaks; rows written before (a key) read as they are. Absent (tests): stored as given.
    */
   workspaceRefs?: WorkspaceRefs;
+  /** T-270: minutes a ticket's session must be dead before the orphan sweep moves the ticket (`tickets.orphanAfterMin`). Default 3. */
+  orphanAfterMin?: () => number;
+}
+
+/** One move the orphan sweep made (T-270 layer 3): where the ticket went and why. `to` null: back in the agents' queue. */
+export interface OrphanMove {
+  ticketId: string;
+  from: string;
+  to: string | null;
+  reason: 'lineage' | 'title' | 'queue';
+  holder: TicketOrphanWhy;
+}
+
+/** The sweep's state in `portal_meta` (restart safe): its last pass and, per dead holder, when the portal first saw it dead. */
+const ORPHAN_META = 'tickets:orphans';
+const ORPHAN_DEFAULT_MIN = 3;
+/** At most this many tickets move in one pass (the rest wait for the next minute). */
+export const ORPHAN_MOVES_PER_PASS = 200;
+export const ORPHAN_QUEUE_COMMENT = 'Its session ended: back in the queue.';
+
+/** Dead for the sweep: the portal no longer has the session, it was archived, or it ended. `interrupted` can be woken: it is live. */
+export function deadWhy(s: TicketSessionInfo | null): TicketOrphanWhy | null {
+  if (!s) return 'missing';
+  if (s.archivedAt) return 'archived';
+  return s.state === 'ended' ? 'ended' : null;
+}
+
+/** A title's track, the text before its first ":" ("Orchestrator: ClaudePilot dev" is "Orchestrator"); null without a ":" (no match). */
+export function titlePrefix(title: string | null | undefined): string | null {
+  const i = title ? title.indexOf(':') : -1;
+  if (i <= 0) return null;
+  const p = title!.slice(0, i).trim();
+  return p || null;
 }
 
 /** One row of the platform audit (platform/audit.ts `AuditInput`): ids, labels and fixed codes only, never the note. */
@@ -196,6 +231,8 @@ export class Tickets {
   #off: (() => void) | undefined;
 
   readonly #refs: TicketsOptions['workspaceRefs'];
+  readonly #orphanAfterMin: () => number;
+  #orphans: { lastRunAt: string | null; dead: Record<string, string> } | null = null;
 
   constructor(
     private readonly store: Store,
@@ -205,6 +242,7 @@ export class Tickets {
     this.#now = opts.now ?? (() => new Date());
     this.#link = opts.link ?? ((id) => `/admin/tickets/${id}`);
     this.#refs = opts.workspaceRefs;
+    this.#orphanAfterMin = opts.orphanAfterMin ?? (() => ORPHAN_DEFAULT_MIN);
   }
 
   /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
@@ -251,6 +289,8 @@ export class Tickets {
     if (!this.store.writable || !this.store.deliveryAllowed) return;
     this.#off ??= this.sessions.onSession((s) => {
       if (s.state === 'ended') this.#sessionEnded(s);
+      // Back to live within the delay (in-place recovery, T-136 keeps the id): its tickets stay where they are (T-270).
+      else if (!s.archivedAt) this.#markAlive(s.id);
     });
   }
 
@@ -490,7 +530,9 @@ export class Tickets {
       updatedAt: r.updated_at,
       closedAt: r.closed_at,
     };
-    return { ...ticket, assigneeSession: session ? this.#sessionView(session) : null, sessionEnded: !!session && session.state === 'ended' && !isTicketClosed(r.status) };
+    const why = r.assignee_kind === 'session' && !isTicketClosed(r.status) ? deadWhy(session ?? null) : null;
+    const orphan: TicketOrphan | null = why ? { since: this.#orphanState().dead[r.assignee_ref!] ?? null, sessionId: r.assignee_ref!, why } : null;
+    return { ...ticket, assigneeSession: session ? this.#sessionView(session) : null, sessionEnded: !!session && session.state === 'ended' && !isTicketClosed(r.status), orphan };
   }
 
   #items(rows: Row[]): TicketItem[] {
@@ -519,6 +561,11 @@ export class Tickets {
     if (f.assignee === 'unassigned') where.push('t.assignee_kind IS NULL');
     else if (f.assignee === 'user') where.push("t.assignee_kind = 'user'");
     else if (f.assignee?.startsWith('session:')) (where.push("t.assignee_kind = 'session' AND t.assignee_ref = ?"), args.push(f.assignee.slice(8)));
+    if (f.orphan) {
+      const o = this.#orphanSql();
+      where.push(o.sql);
+      args.push(...o.args);
+    }
     if (f.workspaceId) {
       const one = this.#inWorkspace('t.workspace_id', f.workspaceId);
       where.push(one.sql);
@@ -539,7 +586,9 @@ export class Tickets {
     const and = sql ? `${sql} AND` : 'WHERE';
     const needsYou = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${and} t.assignee_kind = 'user' AND t.status IN (${OPEN_SQL})`).get(...args) as { n: number }).n;
     const unassigned = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${and} t.assignee_kind IS NULL AND t.status = 'open'`).get(...args) as { n: number }).n;
-    return { byStatus, needsYou, unassigned, total: Object.values(byStatus).reduce((a, b) => a + b, 0) };
+    const o = this.#orphanSql();
+    const orphans = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${and} ${o.sql}`).get(...args, ...o.args) as { n: number }).n;
+    return { byStatus, needsYou, unassigned, orphans, total: Object.values(byStatus).reduce((a, b) => a + b, 0) };
   }
 
   list(caller: Caller, filter: TicketFilter = {}): TicketList {
@@ -1198,12 +1247,172 @@ export class Tickets {
     return { tickets: moved, why: plan.why, from: plan.from };
   }
 
+  /* ---------- Orphans: detect and fall back (T-270 layers 2 and 3) ---------- */
+
+  #orphanState(): { lastRunAt: string | null; dead: Record<string, string> } {
+    if (this.#orphans) return this.#orphans;
+    const st: { lastRunAt: string | null; dead: Record<string, string> } = { lastRunAt: null, dead: {} };
+    try {
+      const row = this.store.db?.prepare('SELECT value FROM portal_meta WHERE key = ?').get(ORPHAN_META) as { value: string } | undefined;
+      const p = row ? (JSON.parse(row.value) as { lastRunAt?: unknown; dead?: unknown }) : null;
+      if (p && typeof p.lastRunAt === 'string') st.lastRunAt = p.lastRunAt;
+      if (p?.dead && typeof p.dead === 'object') for (const [k, v] of Object.entries(p.dead)) if (typeof v === 'string') st.dead[k] = v;
+    } catch {
+      // unreadable: start afresh (the delay starts again, nothing moves early)
+    }
+    return (this.#orphans = st);
+  }
+
+  #saveOrphanState() {
+    if (!this.store.writable || !this.#orphans) return;
+    try {
+      this.#db.prepare('INSERT INTO portal_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(ORPHAN_META, JSON.stringify(this.#orphans));
+    } catch (e) {
+      console.error(`[tickets] saving the orphan sweep's state failed: ${(e as Error).message}`);
+    }
+  }
+
+  /** When the sweep last ran (restart safe: the loop waits for the rest of its minute). */
+  orphanLastRun(): string | null {
+    return this.#orphanState().lastRunAt;
+  }
+
+  #markDead(id: string, at: string) {
+    const st = this.#orphanState();
+    if (st.dead[id]) return;
+    st.dead[id] = at;
+    this.#saveOrphanState();
+  }
+
+  #markAlive(id: string) {
+    const st = this.#orphans ?? (this.store.db ? this.#orphanState() : null);
+    if (!st?.dead[id]) return;
+    delete st.dead[id];
+    this.#saveOrphanState();
+  }
+
+  /** The sessions that hold an unfinished ticket and are dead now. */
+  #deadHolders(): Map<string, { s: TicketSessionInfo | null; why: TicketOrphanWhy }> {
+    const out = new Map<string, { s: TicketSessionInfo | null; why: TicketOrphanWhy }>();
+    const ids = this.#db.prepare(`SELECT DISTINCT assignee_ref AS id FROM tickets WHERE assignee_kind = 'session' AND status IN (${OPEN_SQL})`).all() as { id: string }[];
+    for (const { id } of ids) {
+      const s = this.sessions.get(id);
+      const why = deadWhy(s);
+      if (why) out.set(id, { s, why });
+    }
+    return out;
+  }
+
+  /** The SQL for "an orphan": unfinished, held by one of the dead sessions. */
+  #orphanSql(): { sql: string; args: string[] } {
+    const ids = [...this.#deadHolders().keys()];
+    if (!ids.length) return { sql: '0', args: [] };
+    return { sql: `(t.assignee_kind = 'session' AND t.status IN (${OPEN_SQL}) AND t.assignee_ref IN (${ids.map(() => '?').join(', ')}))`, args: ids };
+  }
+
+  /**
+   * Who takes a dead session's ticket (T-270 layer 3a): the live session whose `continued_from` chain reaches the dead one (the nearest,
+   * then the latest active), else a live session in the same workspace whose title has the same track prefix (up to its first ":"; a title
+   * without one matches nothing). Only within the holder's workspace, and only when the ticket is in that workspace or the shared queue.
+   */
+  #successorOf(deadId: string, dead: TicketSessionInfo | null, r: Row): { s: TicketSessionInfo; reason: 'lineage' | 'title' } | null {
+    const ws = dead?.workspaceId ?? r.workspace_id;
+    if (!ws) return null;
+    if (r.workspace_id !== null && !this.#isIn(r, ws)) return null;
+    const all = this.sessions.list({ workspaceId: ws });
+    const live = (x: TicketSessionInfo) => x.id !== deadId && !deadWhy(x);
+    const latest = (a: TicketSessionInfo, b: TicketSessionInfo) => b.lastActivityAt.localeCompare(a.lastActivityAt);
+    const seen = new Set([deadId]);
+    let frontier = [deadId];
+    while (frontier.length && seen.size < 500) {
+      const next = all.filter((x) => x.continuedFrom && frontier.includes(x.continuedFrom) && !seen.has(x.id));
+      const heir = next.filter(live).sort(latest)[0];
+      if (heir) return { s: heir, reason: 'lineage' };
+      for (const x of next) seen.add(x.id);
+      frontier = next.map((x) => x.id);
+    }
+    const prefix = titlePrefix(dead?.title);
+    const same = prefix ? all.filter((x) => live(x) && titlePrefix(x.title) === prefix).sort(latest)[0] : undefined;
+    return same ? { s: same, reason: 'title' } : null;
+  }
+
+  /** Moves one orphan (its own transaction, checked again inside): to the successor, or back to the queue. Null when it no longer is one. */
+  #fallback(number: number, deadId: string, dead: TicketSessionInfo | null, why: TicketOrphanWhy): OrphanMove | null {
+    const w = { actor: 'system', label: 'Portal' };
+    const move = this.#tx((): OrphanMove | null => {
+      const r = this.#row(number);
+      if (!r || r.assignee_kind !== 'session' || r.assignee_ref !== deadId || isTicketClosed(r.status)) return null;
+      if (!deadWhy(this.sessions.get(deadId))) return null;
+      const at = this.#now().toISOString();
+      const from = { kind: 'session', sessionId: deadId };
+      const heir = this.#successorOf(deadId, dead, r);
+      if (heir) {
+        this.#db.prepare('UPDATE tickets SET assignee_ref = ?, updated_at = ? WHERE number = ?').run(heir.s.id, at, number);
+        this.#addEvent(number, 'assigned', w, null, { from, to: { kind: 'session', sessionId: heir.s.id }, fallback: true, reason: heir.reason, holder: why });
+        return { ticketId: ticketIdOf(number), from: deadId, to: heir.s.id, reason: heir.reason, holder: why };
+      }
+      // Back to the agents' queue: the status stays (in_review waits for a verifier, blocked stays blocked) except in_progress, which
+      // nobody is doing any more; the description and every comment stay.
+      const status: TicketStatus = r.status === 'in_progress' ? 'open' : r.status;
+      this.#db.prepare('UPDATE tickets SET assignee_kind = NULL, assignee_ref = NULL, status = ?, updated_at = ? WHERE number = ?').run(status, at, number);
+      this.#addEvent(number, 'assigned', w, null, { from, to: null, fallback: true, reason: 'queue', holder: why });
+      if (status !== r.status) this.#addEvent(number, 'status', w, null, { from: r.status, to: status, fallback: true });
+      this.#addEvent(number, 'comment', w, ORPHAN_QUEUE_COMMENT, { fallback: true });
+      return { ticketId: ticketIdOf(number), from: deadId, to: null, reason: 'queue', holder: why };
+    });
+    if (move)
+      this.onAudit?.({ kind: 'ticket.fallback', actor: 'system', userId: FOUNDING_USER_ID, subject: `ticket:${move.ticketId}`, detail: { ticketId: move.ticketId, from: move.from, to: move.to, reason: move.reason, holder: move.holder } });
+    return move;
+  }
+
+  /**
+   * One pass of the orphan sweep (T-270): finds every unfinished ticket held by a dead session (ended, archived, missing), notes when it
+   * first saw each such session dead (in `portal_meta`, so a restart neither resets nor skips the delay), and once `orphanAfterMin` has
+   * passed moves its tickets (`#fallback`), at most ORPHAN_MOVES_PER_PASS. A session back to live is forgotten: nothing of it moves. It
+   * creates no ticket, assigns nothing to a person, sends no notification.
+   */
+  sweepOrphans(opts: { max?: number } = {}): { moved: OrphanMove[]; waiting: number } {
+    if (!this.store.writable || !this.store.deliveryAllowed) return { moved: [], waiting: 0 };
+    const now = this.#now();
+    const nowIso = now.toISOString();
+    const afterMs = Math.max(0, Number(this.#orphanAfterMin()) || 0) * 60_000;
+    const st = this.#orphanState();
+    const dead = this.#deadHolders();
+    for (const id of Object.keys(st.dead)) if (!dead.has(id)) delete st.dead[id];
+    for (const id of dead.keys()) st.dead[id] ??= nowIso;
+    st.lastRunAt = nowIso;
+    this.#saveOrphanState();
+    const max = opts.max ?? ORPHAN_MOVES_PER_PASS;
+    const moved: OrphanMove[] = [];
+    let waiting = 0;
+    for (const [id, { s, why }] of dead) {
+      const held = this.#heldBy(id);
+      if (now.getTime() - Date.parse(st.dead[id]!) < afterMs) {
+        waiting += held.length;
+        continue;
+      }
+      for (const r of held) {
+        if (moved.length >= max) return (moved.length && this.onChange?.(), { moved, waiting });
+        try {
+          const m = this.#fallback(r.number, id, s, why);
+          if (m) moved.push(m);
+        } catch (e) {
+          console.error(`[tickets] moving ${ticketIdOf(r.number)} off an ended session failed: ${(e as Error).message}`);
+        }
+      }
+    }
+    if (moved.length) this.onChange?.();
+    return { moved, waiting };
+  }
+
   /** A session ended: any unfinished ticket assigned to it says so, once (FR18). */
   #sessionEnded(s: TicketSessionInfo) {
     if (!this.store.writable) return;
     try {
       const rows = this.#db.prepare(`SELECT number FROM tickets WHERE assignee_kind = 'session' AND assignee_ref = ? AND status IN (${OPEN_SQL})`).all(s.id) as { number: number }[];
       let changed = false;
+      // The orphan delay counts from here (T-270), not from the sweep's next look.
+      if (rows.length) this.#markDead(s.id, this.#now().toISOString());
       for (const { number } of rows) {
         const last = this.#db.prepare("SELECT kind, data FROM ticket_events WHERE ticket_number = ? AND kind IN ('session_ended', 'session_started', 'assigned') ORDER BY id DESC LIMIT 1").get(number) as { kind: string; data: string | null } | undefined;
         if (last?.kind === 'session_ended' && last.data?.includes(s.id)) continue;

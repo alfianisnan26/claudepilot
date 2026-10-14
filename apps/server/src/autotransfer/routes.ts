@@ -145,6 +145,11 @@ export function createAutoTransferRoutes(d: AutoRouteDeps): Hono {
     if (!d.owner.can(userId, verb, { type: 'session', id: s.id })) throw new AppError('FORBIDDEN', 'You can’t do that here.');
     return s.id;
   };
+  // What the engine waits for, per live chat the caller may view (T-105 item 5): the engine filters by `can(view)`.
+  r.get('/state', async (c) => {
+    const a = who(c);
+    return c.json(success(await d.engine.engineState(a.userId)));
+  });
   r.get('/sessions/:id', async (c) => {
     const a = who(c);
     return c.json(success(await d.engine.state(sessionFor(c, a.userId, 'view'), a.userId)));

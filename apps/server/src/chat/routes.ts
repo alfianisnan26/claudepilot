@@ -75,7 +75,8 @@ export function createChatRoutes(controller: ChatController): Hono {
   chat.post('/:id/switch', async (c) => {
     const req = await body<SwitchChatRequest>(c);
     if (typeof req.claudeId !== 'string' || !req.claudeId.trim()) throw new AppError('VALIDATION_FAILED', 'Pick a Claude.', { details: { claudeId: 'Required.' } });
-    return c.json(success(await controller.switchClaude(c.req.param('id'), req.claudeId, { handoff: req.handoff })));
+    if (req.model !== undefined && typeof req.model !== 'string') throw new AppError('VALIDATION_FAILED', 'Pick a model.', { details: { model: 'Expected a model name.' } });
+    return c.json(success(await controller.switchClaude(c.req.param('id'), req.claudeId, { handoff: req.handoff, ...(req.model ? { model: req.model } : {}) })));
   });
 
   // GET /api/chat/sessions/:id/switch-options — where it can move and whether each Claude can take it now.

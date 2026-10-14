@@ -130,7 +130,13 @@ if (ONLY.includes('skills')) {
     for (const s of imp.skills) log(`  ${s.name}: ${s.status}, ${s.review}, findings ${JSON.stringify(s.findings)}${s.scripted ? ', SCRIPTED' : ''}`);
     if (imp.refused?.length) throw new Error(`refused: ${JSON.stringify(imp.refused)}`);
     const library = await api('GET', '/api/skills/library');
-    const versions = library.versions.filter((v) => names.includes(v.name));
+    // A re-publish adds a NEW version of a changed skill: take the newest version of each name (a set refuses two skills with one name).
+    const newest = new Map();
+    for (const v of library.versions.filter((x) => names.includes(x.name))) {
+      const cur = newest.get(v.name);
+      if (!cur || String(v.createdAt ?? '') > String(cur.createdAt ?? '')) newest.set(v.name, v);
+    }
+    const versions = [...newest.values()];
     for (const v of versions) {
       if (v.scripted || v.hooks || v.network) throw new Error(`${v.name} is scripted or has hooks or network use: not approving a kit skill with those`);
       if (v.review !== 'approved') {

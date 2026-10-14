@@ -2715,6 +2715,56 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 760,
+    name: 'auto move: the wait for quota and the steer, per chat (T-105)',
+    up(db) {
+      // T-105 (docs/prd/auto-transfer.md FR10a, FR4a): a chat at or under the threshold with nowhere to go keeps a waiting state the engine
+      // re-evaluates by itself (restart-safe: `pending()` wakes it); a chat told mid-turn to finish and stop remembers the period, so it is told once.
+      db.exec(`
+        ALTER TABLE autotransfer_sessions ADD COLUMN waiting_since TEXT;
+        ALTER TABLE autotransfer_sessions ADD COLUMN waiting_code TEXT;
+        ALTER TABLE autotransfer_sessions ADD COLUMN steered_period TEXT;
+      `);
+      // The trail takes the new kinds (waiting, resumed, steered, continued, dry_run): SQLite can't change a CHECK, so the table is rebuilt
+      // with every row and id kept (the migration runs in the store's transaction).
+      db.exec(`
+        CREATE TABLE autotransfer_events_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at TEXT NOT NULL,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          session_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('suggested', 'moved', 'declined', 'deferred', 'warned', 'refused', 'failed', 'undone', 'mode_set', 'waiting', 'resumed', 'steered', 'continued', 'dry_run')),
+          mode TEXT NOT NULL,
+          reason TEXT,
+          from_claude TEXT,
+          to_claude TEXT,
+          facts TEXT,
+          handoff TEXT,
+          handoff_id TEXT,
+          code TEXT,
+          actor TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO autotransfer_events_new (id, at, owner_id, created_by, session_id, workspace_id, kind, mode, reason, from_claude, to_claude, facts, handoff, handoff_id, code, actor)
+          SELECT id, at, owner_id, created_by, session_id, workspace_id, kind, mode, reason, from_claude, to_claude, facts, handoff, handoff_id, code, actor FROM autotransfer_events;
+        DROP TABLE autotransfer_events;
+        ALTER TABLE autotransfer_events_new RENAME TO autotransfer_events;
+        CREATE INDEX autotransfer_events_session ON autotransfer_events (session_id, at);
+        CREATE INDEX autotransfer_events_owner ON autotransfer_events (owner_id, at);
+      `);
+    },
+  },
+  {
+    version: 761,
+    name: 'chat sessions: the model a chat had before a move changed it (T-109)',
+    up(db) {
+      // T-109: a move to a Claude without the chat's model applies the best model it has; the row keeps what APPLIES (`model`) and what the
+      // chat had before (`original_model`, null when they are the same family), so a later move can go back to it.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN original_model TEXT;`);
+    },
+  },
+  {
     version: 770,
     name: 'chat sessions: the session a row continues',
     up(db) {
@@ -2835,6 +2885,28 @@ export const MIGRATIONS: Migration[] = [
         if (!Array.isArray(kinds) || !kinds.includes('session_failed') || kinds.includes('keepgoing_attention')) continue;
         write.run(JSON.stringify([...kinds, 'keepgoing_attention']), r.id);
       }
+    },
+  },
+  {
+    version: 732,
+    name: 'CI: the flaky tests a gate saw, and the ticket of each',
+    up(db) {
+      // T-95 item 4: a gate that passed only because a failing test passed when its file ran again alone writes `flaky, passed on rerun:
+      // <file>;<test name>` in its log. One row per run and test (a run read twice counts once); the ticket of a test is the one its latest
+      // sighting names, so a second sighting comments there instead of opening another. Not pruned with the runs: the count outlives them.
+      db.exec(`
+        CREATE TABLE ci_flaky (
+          run_id TEXT NOT NULL,
+          repo TEXT NOT NULL,
+          job TEXT NOT NULL,
+          file TEXT NOT NULL,
+          test TEXT NOT NULL,
+          ticket_id TEXT,
+          at TEXT NOT NULL,
+          PRIMARY KEY (run_id, repo, file, test)
+        ) STRICT;
+        CREATE INDEX ci_flaky_test ON ci_flaky (repo, file, test, at);
+      `);
     },
   },
   {

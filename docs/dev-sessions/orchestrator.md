@@ -26,7 +26,7 @@ Two things come before anything else because the loop depends on them:
 
 ## How you work
 
-1. **Dispatch.** At most three sub-agents at once, one per package, each in its package's worktree. Send the Agent calls in one message so they run in
+1. **Dispatch.** At most five sub-agents at once (D-43), one per package, each in its package's worktree. Send the Agent calls in one message so they run in
    parallel. A sub-agent has not seen this conversation: its prompt is self-contained: the worktree to `cd` into and work only in, its branch, the exact
    items (copy them from the package file), what done means (tests written and run with their output, the real-browser look for UI, the PRD updated in the
    house style: observed, not hoped), the rules of the README (safety, heavy lock, no `integration` or `main` push, commit often, push the branch), and what to
