@@ -29,6 +29,9 @@
 //      iPhone safe areas) and 1280 px, light and dark; 44 px targets, no sideways scroll, no page errors; screenshots
 // usage: node tools/qa/crew-e2e.mjs [--port 3431] [--mock 4631] [--proxy-port 4632] [--shots /tmp/t294qa-shots] [--keep] [--only 1,2]
 //        node tools/qa/crew-e2e.mjs --stop [--port 3431]     stops the scratch portal, the stand-in and the proxy a --keep run left
+//        --no-agent-access   a self-test (T-322): the workspace does not opt in, so the first [[mcp …]] step must fail at once with the reason.
+//   A session whose model request has no mcp__pilot__ tool fails the run at once, naming why (token minted, --mcp-config, the CLI's init
+//   line, this machine's managed MCP settings: a workspace pod under the portal's "Pool MCP only" lockdown blocks the scratch portal's URL).
 //   Needs `claude` on PATH, chromium, python3, flock, and apps/web/dist built. Writes /tmp/t294qa-*.jsonl (the stand-in's and the proxy's logs)
 //   and /tmp/t294qa-results.json. Exit 1 on any FAIL.
 import { spawn, spawnSync } from 'node:child_process';
@@ -253,7 +256,8 @@ async function main() {
   await until('the Default Claude signed in (the stand-in key)', async () => ((await ok('GET', '/api/workspaces/local/local/claudes')) ?? []).some((c) => c.auth?.loggedIn), 60_000, 1500);
   for (const key of ['sessions.maxLivePerWorkspace', 'sessions.maxLiveTotal']) await ok('PUT', `/api/settings/${key}`, { value: 14, confirm: true });
   await ok('PUT', '/api/portal-mcp/settings', { enabled: true, sessionControl: true });
-  await ok('PUT', '/api/portal-mcp/agents/local/local', { enabled: true });
+  // --no-agent-access: a self-test of the fail-fast diagnosis (T-322): sessions get no portal tools, and the first [[mcp …]] step must say why.
+  if (!args.includes('--no-agent-access')) await ok('PUT', '/api/portal-mcp/agents/local/local', { enabled: true });
   const minted = await ok('POST', '/api/portal-mcp/tokens', { label: 'qa-crew-e2e', scope: 'admin', expiresIn: '1h', addAnother: true });
   const bearer = minted?.secret;
   if (!bearer) throw new Error('the minted token has no value field');
