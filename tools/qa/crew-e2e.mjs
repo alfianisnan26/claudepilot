@@ -17,6 +17,10 @@
 //      (the lead's own token, three concurrent HTTP calls from its shell) make one worker; depth
 //   5  Claude choice: same, a named Claude billed per use (refused), auto with no plan Claude (stays, why), an unknown name
 //   6  admin tree tools: session_list parent_id, session_get workers
+//   8  (runs first) THE REAL JOB: a qa-verifier worker in dontAsk, in a small git repository holding the repository's own
+//      .claude/settings.json, runs a verifier's commands (git log, with a cd prefix, node --import tsx --test, npm test, scripts/job-run.sh
+//      as a stub): each REFUSED one FAILS; it comments on its lead's ticket (and can not change it); the lead reads its whole reply with
+//      session_family reply_of after a report line that says the head was cut. Prints "worker can do a verifier's job: YES/NO".
 //   7  the UI with these real workers: nested under the lead, "N done", "from <lead>" for an orphan, lead and worker pages; 390 px (touch,
 //      iPhone safe areas) and 1280 px, light and dark; 44 px targets, no sideways scroll, no page errors; screenshots
 // usage: node tools/qa/crew-e2e.mjs [--port 3431] [--mock 4631] [--proxy-port 4632] [--shots /tmp/t294qa-shots] [--keep] [--only 1,2]
@@ -24,7 +28,7 @@
 //   Needs `claude` on PATH, chromium, python3, flock, and apps/web/dist built. Writes /tmp/t294qa-*.jsonl (the stand-in's and the proxy's logs)
 //   and /tmp/t294qa-results.json. Exit 1 on any FAIL.
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -50,7 +54,7 @@ function lastToolResult(messages = []) {
   if (!m || m.role !== 'user' || !Array.isArray(m.content)) return null;
   const r = m.content.filter((b) => b.type === 'tool_result');
   if (!r.length) return null;
-  return r.map((b) => (typeof b.content === 'string' ? b.content : textOf(b.content))).join(' ').slice(0, 1500);
+  return r.map((b) => (typeof b.content === 'string' ? b.content : textOf(b.content))).join(' ').slice(0, 12_000);
 }
 if (args[0] === '--proxy') {
   const [, listen, target, logFile] = args;
@@ -200,6 +204,28 @@ async function main() {
     join(CREW, '.claude', 'agents', 'qa-probe.md'),
     `---\nname: qa-probe\ndescription: QA probe agent for the crew harness (T-294).\nmodel: haiku\n---\n\nYou are the QA probe agent. Start every reply with ${MARKER} and then answer briefly.\n`,
   );
+
+  // The real job's folder (section 8): a small git repository with the repository's own .claude/settings.json and qa-verifier agent, a tiny
+  // TypeScript test, a tiny npm package and a stub at scripts/job-run.sh (the real one starts Jobs in the cluster: never from here).
+  const JOB = join(home, 'realjob');
+  mkdirSync(join(JOB, '.claude', 'agents'), { recursive: true });
+  mkdirSync(join(JOB, 'scripts'), { recursive: true });
+  copyFileSync(join(repo, '.claude', 'settings.json'), join(JOB, '.claude', 'settings.json'));
+  copyFileSync(join(repo, '.claude', 'agents', 'qa-verifier.md'), join(JOB, '.claude', 'agents', 'qa-verifier.md'));
+  writeFileSync(join(JOB, 'qa.test.ts'), "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('qa realjob', () => {\n  const n: number = 1 + 1;\n  assert.equal(n, 2);\n});\n");
+  writeFileSync(join(JOB, 'qa-npm.test.mjs'), "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('qa npm', () => assert.ok(true));\n");
+  writeFileSync(join(JOB, 'package.json'), `${JSON.stringify({ name: 'qa-realjob', version: '0.0.0', private: true, type: 'module', scripts: { test: 'node --test qa-npm.test.mjs' } }, null, 2)}\n`);
+  writeFileSync(join(JOB, 'scripts', 'job-run.sh'), '#!/bin/sh\necho "job-run stub (QA): $*"\n');
+  chmodSync(join(JOB, 'scripts', 'job-run.sh'), 0o755);
+  if (!existsSync(join(JOB, 'node_modules'))) symlinkSync(join(repo, 'node_modules'), join(JOB, 'node_modules')); // tsx for --import tsx
+  writeFileSync(join(JOB, '.gitignore'), 'node_modules\n');
+  const gitIn = (...a) => spawnSync('git', ['-c', 'user.name=qa', '-c', 'user.email=qa@example.invalid', '-c', 'commit.gpgsign=false', ...a], { cwd: JOB, encoding: 'utf8' });
+  gitIn('init', '-q');
+  for (const n of [1, 2, 3]) {
+    writeFileSync(join(JOB, 'NOTES.md'), `qa realjob ${n}\n`);
+    gitIn('add', '-A');
+    gitIn('commit', '-q', '-m', `qa realjob commit ${n}`);
+  }
 
   let cookie = await login(CODE);
   let call = api(cookie);
@@ -357,7 +383,130 @@ async function main() {
   const reportsOn = async (leadId, workerId) => (await events(leadId)).filter((e) => e.kind === 'user' && e.actor === 'portal:crew' && (e.text ?? '').includes(workerId));
 
   const S = {}; // the sessions of the run, by role
+  let REALJOB = null; // section 8's summary line
   try {
+    /* ======================= 8. REAL JOB: what a verifier worker must be able to do (run first) ======================= */
+    // The first crew run on pilot (2026-10-14 17:41-17:44 UTC) failed at the job itself, which checks 1 to 7 never exercised: in dontAsk the
+    // worker's Bash was refused for a verifier's commands, ticket_comment on the lead's ticket was FORBIDDEN, and the lead had to ask again for
+    // a report the 300-character head had cut. Here the worker's folder is a small git repository with the repository's own
+    // .claude/settings.json (its real allow and deny rules) and the real qa-verifier agent, and the worker runs the verifier's commands.
+    // These are product expectations: a command a verifier needs that is refused FAILS.
+    if (want(8)) {
+      S.jobLead = await create('QA Job lead', { cwd: JOB });
+      const ticket = await ok('POST', '/api/tickets', { summary: 'QA real-job ticket held by the job lead', description: 'Seeded by tools/qa/crew-e2e.mjs.', assignee: { kind: 'session', sessionId: S.jobLead.id }, workspaceId: 'local/local' });
+      const T = ticket?.id ?? ticket?.ticket?.id;
+      const { worker: W, res } = await spawnVia(S.jobLead.id, { prompt: 'Verify the job: run what I send you.', title: 'Job verifier', role: 'qa-verifier', mode: 'dontAsk' });
+      S.jobWorker = W;
+      if (!W) throw new Error(`the job worker did not start: ${res.text.slice(0, 200)}`);
+      const w0 = await idleTurn(W.id, 1);
+      const argvW = argvOf(W.id);
+      const outDirW = join(home, '.claudepilot', 'sessions', W.id);
+      const outW = existsSync(outDirW) ? readdirSync(outDirW).filter((f) => f.startsWith('out.')).map((f) => readFileSync(join(outDirW, f), 'utf8')).join('\n') : '';
+      check(
+        '8.0',
+        'set-up: the lead holds a ticket; its qa-verifier worker runs in dontAsk in the repository folder with the real .claude/settings.json',
+        !!T && w0.mode === 'dontAsk' && w0.cwd === JOB && JSON.stringify(flagRun(argvW, '--agent', 1)) === JSON.stringify(['--agent', 'qa-verifier']) && outW.includes('"permissionMode":"dontAsk"'),
+        `ticket ${T} assigned to the lead; worker mode ${w0.mode}, folder ${w0.cwd === JOB ? 'the repository' : w0.cwd}, ${JSON.stringify(flagRun(argvW, '--agent', 1))}, allow rules ${JSON.parse(readFileSync(join(JOB, '.claude', 'settings.json'), 'utf8')).permissions.allow.length}`,
+      );
+      const refusedRe = /Permission to use Bash[^.]*has been denied|running in don.t ask mode/i;
+      const JOB_CMDS = [
+        ['git log', 'git log --oneline -3', /qa realjob commit 3/],
+        ['cd <folder> && git log', `cd ${JOB} && git log --oneline -3`, /qa realjob commit 3/],
+        ['node --import tsx --test <file>', 'node --import tsx --test qa.test.ts', /pass 1/],
+        ['npm test (a tiny package)', 'npm test', /pass 1/],
+        ['scripts/job-run.sh --help (a stub)', 'scripts/job-run.sh --help', /job-run stub/],
+        ['cd <folder> && npm test', `cd ${JOB} && npm test`, /pass 1/],
+      ];
+      /** Runs each command in the worker (the stand-in's [[bash …]]); returns the refused ones and the worker's turn count, checking each. */
+      const runJob = async (wid, startTurns, cmds, idOf) => {
+        const out = [];
+        let n = startTurns;
+        for (const [i, [label, cmd, ran]] of cmds.entries()) {
+          const after = await lastSeq(wid);
+          await say(wid, `[[bash ${cmd}]]`);
+          const r = await eventWhere(wid, (e) => e.kind === 'tool_result', `the result of ${label}`, 90_000, after).catch(() => null);
+          const asked = (await events(wid)).some((e) => e.seq > after && e.kind === 'request');
+          n = (await idleTurn(wid, n + 1, 120_000).catch(async () => one(wid))).turns;
+          const text = r?.text ?? '';
+          const isRefused = !r || refusedRe.test(text) || asked;
+          if (isRefused) out.push(cmd);
+          check(idOf(i), `the verifier may run: ${label}`, !isRefused, `${isRefused ? 'REFUSED' : 'ALLOWED'}${!isRefused ? (ran.test(text) ? ', ran as expected' : ', ran but not as expected') : ''}; a person asked: ${asked}; result ${JSON.stringify(text.replace(/\s+/g, ' ').slice(0, 170))}`);
+        }
+        return { refused: out, turns: n };
+      };
+      const first = await runJob(W.id, w0.turns, JOB_CMDS, (i) => `8.${i + 1}`);
+      const refused = first.refused;
+      let turns = first.turns;
+      // Its report goes on the lead's ticket as a comment; it can not change the ticket.
+      let after = await lastSeq(W.id);
+      const note = `QA realjob: the verifier's report on ${T} (a comment from the worker).`;
+      await say(W.id, mcpLine('ticket_comment', { id: T, text: note }));
+      const com = await toolResultOf(W.id, 'ticket_comment', after);
+      turns = (await idleTurn(W.id, turns + 1)).turns;
+      const detail = await ok('GET', `/api/tickets/${T}`);
+      const posted = (detail?.events ?? []).find((e) => e.kind === 'comment' && (e.body ?? '').includes('QA realjob') && e.actor === `session:${W.id}`);
+      check('8.7', "the worker comments on its lead's ticket (ticket_comment)", !com.isError && !!posted, `result ${JSON.stringify(com.text.slice(0, 140))}; on the ticket: ${posted ? `a comment by ${posted.actor === `session:${W.id}` ? 'the worker' : posted.actor}` : 'none'}`);
+      after = await lastSeq(W.id);
+      const statusBefore = detail?.ticket?.status;
+      await say(W.id, mcpLine('ticket_update', { id: T, status: 'blocked' }));
+      const upd = await toolResultOf(W.id, 'ticket_update', after);
+      turns = (await idleTurn(W.id, turns + 1)).turns;
+      const statusAfter = (await ok('GET', `/api/tickets/${T}`))?.ticket?.status;
+      check('8.8', "the worker can not change its lead's ticket (ticket_update FORBIDDEN)", upd.isError && /FORBIDDEN/.test(upd.text) && statusAfter === statusBefore, `result ${JSON.stringify(upd.text.slice(0, 160))}; status ${statusBefore} -> ${statusAfter}`);
+      // A long reply: the report line says where the whole reply is, and the lead reads it whole with reply_of.
+      const tLong = Date.now();
+      await say(W.id, '[[long 3]]');
+      await idleTurn(W.id, turns + 1);
+      const whole = (await events(W.id)).filter((e) => e.kind === 'assistant').at(-1)?.text ?? '';
+      const hinted = await until('a report with the hint', async () => (await reportsOn(S.jobLead.id, W.id)).find((e) => Date.parse(e.at) >= tLong - 1000 && /Paragraph 1/.test(e.text ?? '')), 60_000).catch(() => null);
+      check('8.9', "the report on a long reply ends with where the whole reply is (session_family reply_of)", !!hinted && /The whole reply: session_family with reply_of and the worker.s id\.$/.test(hinted.text), `reply ${whole.length} chars; line ends ${JSON.stringify((hinted?.text ?? 'none').slice(-120))}`);
+      await until('the job lead idle', async () => ((await one(S.jobLead.id)).state === 'idle' ? true : null), 60_000).catch(() => null);
+      after = await lastSeq(S.jobLead.id);
+      await say(S.jobLead.id, mcpLine('session_family', { reply_of: W.id }));
+      const fam = await toolResultOf(S.jobLead.id, 'session_family', after);
+      let got = null;
+      try {
+        got = JSON.parse(fam.text);
+      } catch {
+        got = null;
+      }
+      const text = got?.reply?.untrusted_text ?? got?.reply ?? '';
+      check('8.10', "the lead reads the worker's whole reply with session_family reply_of (not 300 characters)", !fam.isError && typeof text === 'string' && text.length === whole.length && text === whole && whole.length > 300, `reply_of gave ${typeof text === 'string' ? text.length : 'no'} chars of ${whole.length}; same text ${text === whole}`);
+      const nf = {};
+      for (const [k, id] of [['unknown', 'qa-no-such-session-0000'], ['itself', S.jobLead.id]]) {
+        await until('the job lead idle', async () => ((await one(S.jobLead.id)).state === 'idle' ? true : null), 60_000).catch(() => null);
+        after = await lastSeq(S.jobLead.id);
+        await say(S.jobLead.id, mcpLine('session_family', { reply_of: id }));
+        nf[k] = await toolResultOf(S.jobLead.id, 'session_family', after);
+      }
+      check('8.11', 'reply_of outside the family: the same NOT_FOUND for an unknown id and for itself', nf.unknown.isError && nf.itself.isError && nf.unknown.text === nf.itself.text, `unknown ${JSON.stringify(nf.unknown.text.slice(0, 120))} | itself ${JSON.stringify(nf.itself.text.slice(0, 120))}`);
+      // Diagnosis (only when something was refused): the same commands from a second worker after Claude Code's OWN trust is accepted for the
+      // folder (~/.claude.json projects[folder].hasTrustDialogAccepted, in the scratch home only). Seen 2026-10-14: Claude Code 2.1.296 lists the
+      // project's allow rules in its effective settings but does not apply them while the folder is untrusted; the same rule given by
+      // --settings, or the folder trusted, lets the command run.
+      let diagnosis = '';
+      if (refused.length) {
+        const cfgPath = join(home, '.claude.json');
+        if (!cfgPath.startsWith('/tmp/scratch-portal-')) throw new Error('refusing to touch a Claude Code config outside a scratch portal');
+        const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+        cfg.projects ??= {};
+        cfg.projects[JOB] = { ...(cfg.projects[JOB] ?? {}), hasTrustDialogAccepted: true };
+        writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+        const { worker: W2 } = await spawnVia(S.jobLead.id, { prompt: 'Verify again.', title: 'Job verifier, folder trusted', role: 'qa-verifier', mode: 'dontAsk' });
+        S.jobWorker2 = W2;
+        const w2 = await idleTurn(W2.id, 1);
+        const again = await runJob(W2.id, w2.turns, JOB_CMDS.filter(([, cmd]) => refused.includes(cmd)), (i) => `8.12.${i + 1} (diagnosis, folder trusted by Claude Code)`);
+        diagnosis = again.refused.length === 0
+          ? "; cause seen here: Claude Code applies the project's allow rules only in a folder it trusts itself (~/.claude.json hasTrustDialogAccepted), which the portal's folder trust does not set: with it, every refused command ran (8.12)"
+          : `; with Claude Code's own trust for the folder still refused: ${again.refused.join(', ')}`;
+        await ok('POST', `/api/chat/sessions/${W2.id}/end`);
+      }
+      const can = refused.length === 0 && !com.isError && !!posted;
+      REALJOB = `worker can do a verifier's job: ${can ? 'YES' : 'NO'}${refused.length ? ` (refused in dontAsk with the repository's allow rules: ${refused.map((c) => `\`${c}\``).join(', ')})` : ''}${com.isError || !posted ? ' (its report could not go on the lead\'s ticket)' : ''}${diagnosis}`;
+      console.log(`\n=== REAL-JOB SUMMARY: ${REALJOB} ===\n`);
+      await ok('POST', `/api/chat/sessions/${W.id}/end`);
+    }
+
     /* ======================= 1. Spawn over MCP with a role, dontAsk, report idle ======================= */
     S.lead = await create('QA Lead');
     if (want(1) || want(2) || want(3) || want(7)) {
@@ -942,7 +1091,8 @@ async function main() {
   } catch (e) {
     check('run', 'the run went through', false, e?.stack?.split('\n').slice(0, 3).join(' / ') ?? String(e));
   } finally {
-    writeFileSync('/tmp/t294qa-results.json', JSON.stringify({ at: new Date().toISOString(), sessions: Object.fromEntries(Object.entries(S).map(([k, v]) => [k, v?.id ?? null])), results }, null, 1));
+    if (REALJOB) console.log(`REAL-JOB SUMMARY: ${REALJOB}`);
+    writeFileSync('/tmp/t294qa-results.json', JSON.stringify({ at: new Date().toISOString(), realJob: REALJOB, sessions: Object.fromEntries(Object.entries(S).map(([k, v]) => [k, v?.id ?? null])), results }, null, 1));
     if (!KEEP) console.log(stopAll());
     else console.log(`kept: portal ${PORT}, stand-in ${MOCK}, proxy ${PROXY} (node tools/qa/crew-e2e.mjs --stop --port ${PORT})`);
   }
