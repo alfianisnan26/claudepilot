@@ -39,6 +39,10 @@ export interface SettingDef<T extends SettingValue = SettingValue> {
   /** Strings: the longest allowed (default 500). Numbers: the range. */
   max?: number;
   min?: number;
+  /** Numbers only: whole numbers. */
+  integer?: boolean;
+  /** Strings only: the values it may take (the page shows a choice). */
+  choices?: string[];
 }
 
 const KEY = /^[a-z][a-z0-9]*(?:\.[a-z][A-Za-z0-9]*)+$/;
@@ -50,6 +54,7 @@ export function defineSetting<T extends SettingValue>(def: SettingDef<T>): Setti
   if (!KEY.test(def.key)) throw new Error(`Setting key “${def.key}” must look like group.name.`);
   if (typeof def.default !== def.type) throw new Error(`Setting ${def.key}: the default must be a ${def.type}.`);
   if (def.protective !== undefined && typeof def.protective !== def.type) throw new Error(`Setting ${def.key}: protective must be a ${def.type}.`);
+  if (def.choices && (def.type !== 'string' || !def.choices.includes(def.default as string))) throw new Error(`Setting ${def.key}: choices need a string default that is one of them.`);
   const known = defs.get(def.key);
   if (known && JSON.stringify(known) !== JSON.stringify(def)) throw new Error(`Setting ${def.key} is already defined differently.`);
   defs.set(def.key, def as SettingDef);

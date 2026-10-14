@@ -127,7 +127,29 @@ export function SettingsPage() {
 /** The control at the end of a row: a switch for on/off, a small field for a number or a text. */
 function Control({ setting, busy, onChange }: { setting: SettingView; busy: boolean; onChange: (v: SettingValue) => void }) {
   if (setting.type === 'boolean') return <Switch label={setting.label} checked={setting.value === true} disabled={busy} onChange={onChange} />;
+  if (setting.choices) return <Choice setting={setting} choices={setting.choices} busy={busy} onChange={onChange} />;
   return <ValueField key={String(setting.value)} setting={setting} busy={busy} onCommit={onChange} />;
+}
+
+/** A string setting with a few allowed values: one segmented control, each segment a 44 px target. */
+function Choice({ setting, choices, busy, onChange }: { setting: SettingView; choices: string[]; busy: boolean; onChange: (v: SettingValue) => void }) {
+  return (
+    <div role="radiogroup" aria-label={setting.label} className="flex shrink-0 rounded-xl border border-line bg-surface p-0.5">
+      {choices.map((c) => (
+        <button
+          key={c}
+          type="button"
+          role="radio"
+          aria-checked={setting.value === c}
+          disabled={busy}
+          onClick={() => setting.value !== c && onChange(c)}
+          className={`min-h-11 min-w-11 rounded-[10px] px-3 text-[13px] font-semibold disabled:opacity-50 ${setting.value === c ? 'bg-ink text-surface' : 'text-ink-soft hover:text-ink'}`}
+        >
+          {c}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function ValueField({ setting, busy, onCommit }: { setting: SettingView; busy: boolean; onCommit: (v: SettingValue) => void }) {

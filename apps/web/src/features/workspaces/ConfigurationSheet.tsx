@@ -6,6 +6,7 @@ import { DELIVERY_LABEL } from '@/features/pools/labels';
 import { PoolPickerDialog } from '@/features/pools/PoolPicker';
 import { ClaudeCodeSection } from '@/features/claudeversion/ClaudeCodeSection';
 import { multiPoolTabs, type MultiPoolTab } from '@/features/pools/registry';
+import { AgentEnvLine } from '@/features/settings/AgentEnvLine';
 import { LockdownLine } from '@/features/settings/LockdownLine';
 import { api } from '@/lib/api';
 import { formatDateTime, formatUntil, timeAgo } from '@/lib/format';
@@ -73,6 +74,7 @@ export function ConfigurationSheet({
           <div className="flex flex-col gap-4">
             <DeliveryLine delivery={delivery} checkedAt={data?.delivery?.checkedAt ?? null} />
             <LockdownLine workspaceId={workspace.id} />
+            <AgentEnvLine workspaceId={workspace.id} />
             <ClaudeCodeSection workspace={workspace} />
             <ul className="divide-y divide-line rounded-2xl border border-line">
               <Row

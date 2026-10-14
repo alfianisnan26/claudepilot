@@ -28,6 +28,8 @@ export interface SettingView {
    * confirmation, and the server refuses the change without one (`confirm: true`).
    */
   protective?: SettingValue;
+  /** A string setting that takes one of these values only: the page shows a choice. */
+  choices?: string[];
   /** Sort order within the group. */
   order: number;
   updatedAt: string | null;
@@ -70,7 +72,40 @@ export const SETTING_KEYS = {
   mcpPoolOnly: 'mcp.poolOnly',
   /** Agents (I11): a session's Claude may propose changes to its own persona and skills. Always reviewed by a person. */
   agentsSelfEdit: 'agents.selfEdit',
+  /** Agents (T-285): the prompt cache of sub-agents' requests, `5m` or `1h` (CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL). */
+  agentsSubagentCacheTtl: 'agents.subagentCacheTtl',
+  /** Agents (T-285): sub-agents one Claude runs at once (CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS). */
+  agentsMaxSubagents: 'agents.maxSubagents',
+  /** Agents (T-285): how deep sub-agents may spawn sub-agents (CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH). */
+  agentsSpawnDepth: 'agents.spawnDepth',
+  /** Agents (T-285): characters of a Bash result Claude keeps (BASH_MAX_OUTPUT_LENGTH). */
+  agentsBashOutputMax: 'agents.bashOutputMax',
+  /** Agents (T-285): tokens of an MCP result Claude keeps (MAX_MCP_OUTPUT_TOKENS). */
+  agentsMcpOutputMax: 'agents.mcpOutputMax',
 } as const;
+
+/**
+ * One variable of the agent policy (T-285) in one workspace: what the portal asks for and what last landed in
+ * the workspace's policy drop-in. `applied` is null while nothing has landed: the page says "unavailable", never a guess.
+ */
+export interface AgentEnvValue {
+  /** The setting it comes from (`agents.maxSubagents`). */
+  key: string;
+  /** The variable Claude Code reads. */
+  env: string;
+  desired: string;
+  applied: string | null;
+}
+
+/** `GET /api/settings/agent-env/:target/:name`: the agent policy as it stands in one workspace. */
+export interface AgentEnvStatus {
+  workspaceId: string;
+  /** `applied` when every value landed, `pending` while a change is on its way, `unavailable` when nothing landed yet. */
+  state: 'applied' | 'pending' | 'unavailable';
+  values: AgentEnvValue[];
+  /** When the drop-in last changed here. A running Claude reads it at its next start. */
+  appliedAt: string | null;
+}
 
 /** Where one workspace stands with the MCP lockdown (portal-mcp.md §10.1's statuses). */
 export type LockdownState = 'off' | 'locked' | 'pending' | 'not_protected';
@@ -94,4 +129,6 @@ export const SETTINGS_API = {
   audit: '/api/settings/audit',
   /** `/api/settings/lockdown/<target>/<name>` */
   lockdown: (workspaceId: string) => `/api/settings/lockdown/${workspaceId}`,
+  /** `/api/settings/agent-env/<target>/<name>` */
+  agentEnv: (workspaceId: string) => `/api/settings/agent-env/${workspaceId}`,
 } as const;

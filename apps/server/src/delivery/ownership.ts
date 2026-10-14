@@ -103,7 +103,16 @@ export const OWNERSHIP: Record<Owner, Declaration> = {
     dropIn: '10-claudepilot-policy.json',
     paths: [],
     settings: ['permissions', 'sandbox', 'availableModels', 'maxEffortLevel', 'deniedMcpServers', 'env'],
-    env: ['CLAUDEPILOT_POLICY', 'CLAUDE_CODE_MAX_RETRIES'],
+    // The agent policy (settings/agentEnv.ts, T-285): exact names, so no pool's catch-all can set them (`mayUseEnv`).
+    env: [
+      'CLAUDEPILOT_POLICY',
+      'CLAUDE_CODE_MAX_RETRIES',
+      'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL',
+      'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS',
+      'CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH',
+      'BASH_MAX_OUTPUT_LENGTH',
+      'MAX_MCP_OUTPUT_TOKENS',
+    ],
     // `sandbox` merges key by key across drop-ins; its credentials belong to Secrets & env.
     validate: { sandbox: (v) => (isObject(v) && 'credentials' in v ? 'sandbox.credentials belongs to Secrets & env' : null) },
   },
