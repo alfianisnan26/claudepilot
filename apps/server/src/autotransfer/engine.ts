@@ -26,7 +26,7 @@ import {
 import { AppError } from '@isnanme/core';
 import type { AuditInput } from '../platform/audit.js';
 import type { NotifyBus } from '../notify/bus.js';
-import { decide, effectiveMode, leftFor, modelFamily, sourceReading, type DecideCounters, type Decision } from './decide.js';
+import { decide, effectiveMode, leftFor, modelFamily, sourceReading, windowPeriod, type DecideCounters, type Decision } from './decide.js';
 import type { ChatPort, ClockPort, OwnerPort, UsagePort } from './ports.js';
 import { effectiveSettings, platformSettings, type AutoSettingsReader } from './settings.js';
 import type { AutoStore, SessionRow, StoredSuggestion } from './store.js';
@@ -462,7 +462,7 @@ export class AutoTransferEngine {
         }
         // The pace rule's hold (D-39) is said once per source window period, with its numbers (left, reset, projected, threshold).
         if (d.code === 'session_cap' || d.code === 'day_cap' || d.code === 'owner_denied' || d.code === 'pace_under') {
-          const key = `${d.code}|${s.claudeId}|${d.reading?.window.resetsAt ?? ''}`;
+          const key = `${d.code}|${d.reading ? windowPeriod(s.claudeId, d.reading.window) : s.claudeId}`;
           if (row.refusedKey !== key) {
             this.#d.store.patchSession(id, ownerId, { refusedKey: key });
             this.#record({ ...this.#base(s, ownerId, mode), kind: 'refused', reason: d.reading?.reason ?? (d.code === 'pace_under' ? 'low' : null), facts: d.reading?.facts ?? null, code: d.code }, d.code === 'pace_under' ? 'info' : 'medium');
