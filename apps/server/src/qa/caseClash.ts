@@ -7,11 +7,12 @@ const MODULE_EXT = /\.(d\.ts|tsx?|jsx?|mjs|cjs|mts|cts)$/;
 
 /** Groups of paths that collide on a case-insensitive file system; empty when there are none. */
 export function caseClashes(paths: readonly string[]): string[][] {
-  const groups = new Map<string, Set<string>>();
+  const groups = new Map<string, { originals: Set<string>; shown: Set<string> }>();
   const add = (key: string, original: string, shown: string) => {
     let g = groups.get(key);
-    if (!g) groups.set(key, (g = new Set()));
-    g.add(`${original}\u0000${shown}`);
+    if (!g) groups.set(key, (g = { originals: new Set(), shown: new Set() }));
+    g.originals.add(original);
+    g.shown.add(shown);
   };
   for (const path of paths) {
     const parts = path.split('/');
@@ -26,9 +27,6 @@ export function caseClashes(paths: readonly string[]): string[][] {
     }
   }
   const out: string[][] = [];
-  for (const g of groups.values()) {
-    const originals = new Set([...g].map((e) => e.split('\u0000')[0]));
-    if (originals.size > 1) out.push([...new Set([...g].map((e) => e.split('\u0000')[1]))].sort());
-  }
+  for (const g of groups.values()) if (g.originals.size > 1) out.push([...g.shown].sort());
   return out;
 }
