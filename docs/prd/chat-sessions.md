@@ -1075,6 +1075,12 @@ watched chats on Home. Neither ever repairs Bypass (the lease is the owner's ope
 | FR68 | **The Home card "Autonomy"** (and its glance chip, off in the strips by default): `GET /api/keepgoing` (`self`: only the chats the caller may view; an agent its own at most) lists the chats with Keep going on, the ones with a cause standing first, then by their last action. The card shows Watched, Down, Reported and Today (nudges and wakes in 24 h) from that answer, then one 44 px row per chat (its title, cut; its state and what stands or the last action; how long ago), opening the chat; "Paused" when the kill switch is off; "No chat has Keep going on." when none. The explanation is the card's InfoTip. It is loaded again on the live topic `keepgoing`, which the sweep publishes on every action and when a watched chat's state changed between two looks. The chip: the number watched, red while one is left down, amber for another report or the pause. | ✅ Built; web tests (`glance/widgets/autonomy/model.test.ts`), server test (`keepgoing/routes.test.ts`), browser check below. |
 | FR69 | **The supervisor steps back** (`docs/dev-sessions/supervisor.mjs`): a track whose newest chat has Keep going on (and not paused) is the portal's: the script neither nudges, wakes, recovers nor starts it; it still re-asserts Bypass on it as before (the lease is not built). | ✅ Built; `node --check`. |
 
+**Browser check (slice 2, 2026-10-14):** `tools/qa/keepgoing.mjs` against a scratch portal in a Job (`claudepilot-job-9c63d87c`, commit
+6d0028f): 139/139 checks at 390 px (touch, safe areas) and 1280 px, light and dark: slice 1's chip and Session info, and the Autonomy card
+(the chat left down first, the four figures from the answer, every row a 44 px link to its chat, a long title cut inside the card, nothing
+wider than the card, no sideways scroll, the InfoTip inside the screen, "Paused" and the empty list in words). Not run against a real chat:
+the scratch portal has no workspace (the restart is covered by `keepgoing/controller.test.ts` on the real controller).
+
 ### 23.2 What is still open
 
 The Bypass LEASE (T-104 item 3: re-entering Bypass after a wake or a restart under a time-boxed grant the owner gives once with the server
