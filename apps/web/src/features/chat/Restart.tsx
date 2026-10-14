@@ -31,6 +31,9 @@ export function useRestart(session: ChatSession | null | undefined, tasks: ChatT
   // The chip as a whole (not its button): the popover sits above all of it, Cancel and Restart now included.
   const anchor = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState<'mcp' | 'manual' | null>(null);
+  // The popover hangs from the chip. With no chip on screen (a Restart from ⋯ or Session info while nothing changed) the sheet opens as a
+  // dialog at every width: a popover placed against nothing stays hidden. Decided when it opens, so it doesn't switch while it is open.
+  const [popover, setPopover] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const running = tasks.filter((t) => t.status === 'running');
@@ -72,7 +75,7 @@ export function useRestart(session: ChatSession | null | undefined, tasks: ChatT
   );
   const element = (
     <>
-      {roomy ? (
+      {popover ? (
         <Popover anchor={anchor} open={open !== null && !!session} onClose={close} label="Restart">
           {body}
         </Popover>
@@ -93,8 +96,12 @@ export function useRestart(session: ChatSession | null | undefined, tasks: ChatT
     </>
   );
   return {
-    /** Opens the sheet (the menu's Restart, the chip). */
-    start: (w: 'mcp' | 'manual') => session && session.state !== 'ended' && !session.switching && setOpen(w),
+    /** Opens the sheet (the menu's Restart, the chip, Session info's line after a sub-agents change). */
+    start: (w: 'mcp' | 'manual') => {
+      if (!session || session.state === 'ended' || session.switching) return;
+      setPopover(roomy && !!hint);
+      setOpen(w);
+    },
     element,
     busy: busy || !!session?.restarting,
     hint,

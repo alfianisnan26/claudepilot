@@ -28,6 +28,7 @@ import { Controls, type ControlsHandle } from './Controls';
 import { CrewLine, crewShown, useCrew } from './CrewLine';
 import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './FilesPanel';
 import { KeepGoingChip } from './KeepGoing';
+import { RoleChip } from './RoleBadge';
 import { SessionInfoDialog } from './SessionInfo';
 import { endedForSafety, StateBadge } from './shared';
 import { Transcript } from './Transcript';
@@ -465,6 +466,8 @@ export function SessionPage() {
               >
                 <span className="truncate text-[15.5px] font-semibold text-ink">{session?.title || 'Untitled'}</span>
               </button>
+              {/* T-294: the role it runs as, when it has one (the badge from 640 px, its icon on a phone); a tap opens Session info. */}
+              <RoleChip session={session} onOpen={() => setInfoOpen(true)} />
               {/* The state, always in this one slot: Reconnecting while the link is down. */}
               <span className="flex shrink-0 items-center">
                 {!connected ? (
@@ -769,6 +772,10 @@ export function SessionPage() {
         onRename={() => {
           setInfoOpen(false);
           setRenaming(true);
+        }}
+        onRestart={() => {
+          setInfoOpen(false);
+          restart.start('manual');
         }}
       />
       <UsageDialog open={usageOpen} onClose={() => setUsageOpen(false)} events={events} session={session} />

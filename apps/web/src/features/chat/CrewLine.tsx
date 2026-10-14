@@ -6,6 +6,8 @@ import { Link } from 'react-router';
 import { Popover } from '@/components/Popover';
 import { chatApi } from './api';
 import { crewOfSessions, otherClaude } from './crew';
+import { roleOf } from './crewLimits';
+import { RoleBadge } from './RoleBadge';
 import { StateBadge } from './shared';
 
 export interface CrewState {
@@ -129,7 +131,10 @@ export function CrewLine({ session, crew, roomy }: { session: ChatSession; crew:
   );
 }
 
-/** The workers, each a link: title, state, and its Claude when it differs from this session's; the done ones behind one row. */
+/**
+ * The workers, each a link: title (its role under it, when it has one), state, and its Claude when it differs from this session's; the
+ * done ones behind one row.
+ */
 function WorkerList({ session, workers, onPick }: { session: ChatSession; workers: ChatSession[]; onPick: () => void }) {
   const [doneOpen, setDoneOpen] = useState(false);
   const { live, done } = crewOfSessions(workers);
@@ -139,7 +144,14 @@ function WorkerList({ session, workers, onPick }: { session: ChatSession; worker
     return (
       <li key={w.id}>
         <Link to={`/admin/sessions/${w.id}`} onClick={onPick} className="press flex min-h-11 items-center gap-2 rounded-xl px-2 py-1.5 hover:bg-surface-2">
-          <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{w.title || 'Untitled'}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[14px] font-medium">{w.title || 'Untitled'}</span>
+            {roleOf(w) && (
+              <span className="mt-0.5 flex min-w-0">
+                <RoleBadge session={w} />
+              </span>
+            )}
+          </span>
           {claude && (
             <Badge className="max-w-[40%] min-w-0">
               <span className="min-w-0 truncate">{claude}</span>
