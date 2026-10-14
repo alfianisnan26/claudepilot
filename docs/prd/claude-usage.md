@@ -930,22 +930,34 @@ the shared `Segmented` at 40 px high (as on the Spikes tab).
   get the same arms, and the arms are balanced within one slice per stratum (tested on four sizes, interleaved). `lab_experiment_set`
   takes `strata` (admin, confirmation; the preview shows them); `lab_summary` shows `result_tok_p50` and, in full, each experiment's keys.
 
-### 28.13 Draws: the arm before the brief (T-292 slice 3)
+### 28.13 Draws: the arm before the brief (T-292 slice 3, migration 854)
 
 An experiment whose treatment is the brief itself (E2, the context compiler: the pack line, the plan step's file manifest and the
 preloaded files, against today's brief) needs the arm before the brief is written; a slice gets its arm only when its Agent call starts.
 - **`lab_arm_draw`** (Portal MCP, agent reach `session`, audited `lab.arm.draw`; input ticket, role, model, effort as the slice will be
   dispatched): the same block draw as at a slice start (§28.12; the size from the ticket's ESTIMATE), held as an assignment under
-  `draw:<key>` in the caller's own session (`lab_assignments`, no migration), answered as the key (`d-` and 12 hex) and the arm per running
-  randomized experiment. No experiment running: no arm, and the brief is the ordinary one. An admin token has no session: refused.
-- **Binding**: the brief's first line carries `Lab-Draw: <key>` (read in the first 2,500 characters of the Agent prompt, like the ticket).
-  When that Agent call starts in the same session the draw's rows move to the slice, so it keeps the drawn arms; experiments the draw did
-  not cover assign as usual. Once only: the key in a second call, or in another session, binds nothing (that slice is assigned as usual).
-- **No picking**: a draw keeps its place in the block whether it is used or not, so the arms stay balanced; draws no slice bound are
-  counted per experiment (`draws_unbound` in `lab_summary` full), so drawing until an arm suits would show.
-- The brief heads per arm come from `scripts/plan-step.mjs` (`head --arm control|treatment --draw <key>`), the E2 experiment's arguments
-  from `plan-step.mjs e2` (randomized, arms `control` and `treatment`, strata size, role and model, minimum 30 per arm, primary the median
-  loaded cost per accepted slice; adopt at −15 percent with yield not down). Procedure: `docs/dev-sessions/orchestrator.md`.
-- Source: `lab/experiments.ts` (`drawArms`, `bindDraw`, `unboundDraws`), `lab/classify.ts` (`drawOf`); tests `lab/draw.test.ts` (the drawn
-  arm is kept: without the bind the slice gets the other arm of the block and the test fails; balance and replay; another session;
-  the tool) and `qa/planStep.test.ts`.
+  `draw:<key>` in the caller's own session, with what it was drawn for (`lab_draws`: ticket, role, model, effort, size, status open,
+  bound or refused), answered as the key (`d-` and 12 hex) and the arm per running randomized experiment. No experiment running: no arm,
+  and the brief is the ordinary one. An admin token has no session: refused.
+- **Binding**: read only from a top-level Agent call (not one made inside a sub-agent) and only on the FIRST line of its prompt
+  (`Lab-Draw: <key>`). The draw binds when the call is in the session that drew it, the draw is not bound yet, and the call's ticket, role,
+  requested model and effort are the ones it was drawn for; then its rows move to the slice and the slice keeps the drawn arms (a replayed
+  line of the same call changes nothing). Otherwise (another session, a key used already, an unknown key, a mismatch) nothing binds, a
+  mismatch marks the draw `refused` (still bindable by a matching call, counted as unbound meanwhile), and the calling slice is EXCLUDED
+  from every running randomized experiment (`draw not bound`): its brief was written for an arm it was not given. An honest mismatch (drawn
+  for `opus`, dispatched with the model left out) therefore loses that slice from the experiment, never biases it.
+- **Not predictable, not pickable**: a randomized experiment made after migration 854 orders its blocks with a random secret seed kept in
+  `lab_experiments.seed` and never shown (older experiments keep their id as the seed, so their blocks do not move). A draw keeps its place
+  in the block whether it is used or not, so the arms stay balanced. `lab_summary` full shows per experiment `draws_unbound`: per session,
+  the draws no slice bound and how many of them are **redraws** (a later draw of the same session for the same ticket, role, model and
+  effort exists), so drawing until an arm suits shows. Limit: a throwaway call that matches the draw in every attribute binds it and is
+  then a slice of that arm with its own cost and outcome (intention to treat); it is visible as a second slice on the ticket.
+- **Retention**: an unbound draw older than 14 days goes (its held assignments and its `lab_draws` row, `prune().draws`); a bound draw stays.
+- The brief heads per arm come from `scripts/plan-step.mjs` (`head --arm control|treatment --draw <key>`; the explorer's manifest is
+  labelled untrusted in the brief, its `run:` lines are limited to npm test/run/ci, `npx tsc`, `node --test`, `scripts/` and `tools/`, and
+  `cd`, and preloaded paths are checked on their real path against the repository and a credential deny list), the E2 experiment's
+  arguments from `plan-step.mjs e2` (randomized, arms `control` and `treatment`, strata size, role and model, minimum 30 per arm, primary
+  the median loaded cost per accepted slice; adopt at −15 percent with yield not down). Procedure: `docs/dev-sessions/orchestrator.md`.
+- Source: `lab/experiments.ts` (`drawArms`, `bindDraw`, `drawStats`), `lab/classify.ts` (`drawOf`), `lab/retention.ts`; tests
+  `lab/draw.test.ts` (the drawn arm kept; probe A, a draw taken by another role; the honest mismatch; probe B, a redraw behind a throwaway
+  call; another session, a nested call, the second line; the seed; retention; the tool) and `qa/planStep.test.ts`.
