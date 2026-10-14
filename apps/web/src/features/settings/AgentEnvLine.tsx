@@ -1,5 +1,5 @@
 import { Badge, type BadgeTone } from '@isnanme/ui';
-import type { AgentEnvStatus } from '@portal/contracts';
+import type { AgentEnvApplies, AgentEnvStatus } from '@portal/contracts';
 import { useCallback, useEffect, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { useLive } from '@/lib/live';
@@ -10,6 +10,12 @@ const STATE: Record<AgentEnvStatus['state'], { label: string; tone: BadgeTone }>
   pending: { label: 'Pending', tone: 'warning' },
   unavailable: { label: 'Unavailable', tone: 'neutral' },
 };
+
+/** When a change takes effect (T-302, T-309): sub-agent values at once for new sub-agents, the rest at the next start. */
+const GROUPS: { applies: AgentEnvApplies; title: string }[] = [
+  { applies: 'new-subagents', title: 'At once, for new sub-agents' },
+  { applies: 'restart', title: 'At the next start (a new chat or a Restart)' },
+];
 
 /**
  * One terse line in a workspace's Configuration sheet: the agent policy (Settings, Agents) as it stands here.
@@ -39,16 +45,23 @@ export function AgentEnvLine({ workspaceId }: { workspaceId: string }) {
       <Badge tone={s.tone}>{s.label}</Badge>
       <span className="min-w-0 flex-1 truncate text-ink-soft">{overridden.length ? `${overridden.length} overridden by policy` : 'Agent policy'}</span>
       <InfoTip label="About the agent policy">
-        <span className="block">Set on the Settings page, under Agents. A running Claude reads a change at its next start.</span>
-        <span className="mt-2 block">
-          {status.values.map((v) => (
-            <span key={v.env} className="block [overflow-wrap:anywhere]">
-              {v.env}: {v.applied ?? 'unavailable'}
-              {v.applied !== null && v.applied !== v.desired ? ` (next: ${v.desired})` : ''}
-              {v.overriddenPool ? ` (overridden by policy: the entry in “${v.overriddenPool}” is skipped)` : ''}
+        <span className="block">Set on the Settings page, under Agents.</span>
+        {GROUPS.map((g) => {
+          const values = status.values.filter((v) => v.applies === g.applies);
+          if (!values.length) return null;
+          return (
+            <span key={g.applies} className="mt-2 block" data-applies={g.applies}>
+              <span className="block font-medium">{g.title}</span>
+              {values.map((v) => (
+                <span key={v.env} className="block [overflow-wrap:anywhere]">
+                  {v.env}: {v.applied ?? 'unavailable'}
+                  {v.applied !== null && v.applied !== v.desired ? ` (next: ${v.desired})` : ''}
+                  {v.overriddenPool ? ` (overridden by policy: the entry in “${v.overriddenPool}” is skipped)` : ''}
+                </span>
+              ))}
             </span>
-          ))}
-        </span>
+          );
+        })}
       </InfoTip>
     </div>
   );

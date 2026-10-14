@@ -1,8 +1,8 @@
 // The agent policy (T-285) in a real browser: Settings, Agents, and the workspace's Configuration sheet, against a scratch portal with
 // "This machine" (PORTAL_LOCAL_ENABLED=true), in headless Chromium over CDP at 390 px (touch, the iPhone's safe areas) and 1280 px, light and
 // dark (QA-STANDARDS A1-A9). Asserts:
-//   - Settings: the Agents section has the five rows; each label is one or two words, has its InfoTip (which names its source and the restart
-//     and opens inside the screen); every control is at least 44 px tall (the 5m/1h choice: each segment 44 x 44); a tap on 5m sends the
+//   - Settings: the Agents section has the five rows; each label is one or two words, has its InfoTip (which names its source and when a
+//     change applies: at once for new sub-agents, or at the next start for the output caps; T-302, T-309; and opens inside the screen); every control is at least 44 px tall (the 5m/1h choice: each segment 44 x 44); a tap on 5m sends the
 //     change and the choice follows; nothing scrolls sideways;
 //   - the Configuration sheet: the agent-policy line says Unavailable while nothing landed (the real server), and, with a fixture answer,
 //     Applied with "1 overridden by policy", its InfoTip naming BASH_MAX_OUTPUT_LENGTH and the set; nothing wider than the screen;
@@ -127,12 +127,12 @@ const FIXTURE = {
   state: 'applied',
   appliedAt: '2026-10-14T05:00:00.000Z',
   values: [
-    ['agents.subagentCacheTtl', 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', '1h', null],
-    ['agents.maxSubagents', 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS', '5', null],
-    ['agents.spawnDepth', 'CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH', '3', null],
-    ['agents.bashOutputMax', 'BASH_MAX_OUTPUT_LENGTH', '8000', 'agent-limits'],
-    ['agents.mcpOutputMax', 'MAX_MCP_OUTPUT_TOKENS', '25000', null],
-  ].map(([key, env, v, pool]) => ({ key, env, desired: v, applied: v, overriddenPool: pool })),
+    ['agents.subagentCacheTtl', 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', '1h', null, 'new-subagents'],
+    ['agents.maxSubagents', 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS', '5', null, 'new-subagents'],
+    ['agents.spawnDepth', 'CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH', '3', null, 'new-subagents'],
+    ['agents.bashOutputMax', 'BASH_MAX_OUTPUT_LENGTH', '8000', 'agent-limits', 'restart'],
+    ['agents.mcpOutputMax', 'MAX_MCP_OUTPUT_TOKENS', '25000', null, 'restart'],
+  ].map(([key, env, v, pool, applies]) => ({ key, env, applies, desired: v, applied: v, overriddenPool: pool })),
 };
 let fixtureScript = null;
 const useFixture = async (on) => {
@@ -201,6 +201,15 @@ for (const cfg of MATRIX) {
   check('the InfoTip opens inside the screen', inside(tip), JSON.stringify(tip));
   await shot(`settings-${cfg.name}-tip`);
   await closeTips();
+  // A sub-agent value applies at once to new sub-agents, no restart (T-302, T-309).
+  await ev(`document.getElementById('setting-agents.maxSubagents').closest('li').scrollIntoView({ block: 'center' })`);
+  await sleep(400);
+  await ev(`document.getElementById('setting-agents.maxSubagents').closest('li').querySelector('button[aria-label^="About "]').click()`);
+  await sleep(300);
+  const subTip = await ev(tipBox('CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS'));
+  check('a sub-agent InfoTip says at once for new sub-agents, no restart', !!subTip && /applies at once to new sub-agents/.test(subTip.text) && !/next start/.test(subTip.text), subTip && subTip.text);
+  check('the sub-agent InfoTip opens inside the screen', inside(subTip), JSON.stringify(subTip));
+  await closeTips();
   // A tap on 5m changes it (the real server), then back to 1h.
   for (const want of ['5m', '1h']) {
     await ev(`[...document.getElementById('setting-agents.subagentCacheTtl').closest('li').querySelectorAll('[role=radio]')].find((b) => b.textContent === '${want}').click()`);
@@ -236,6 +245,7 @@ for (const cfg of MATRIX) {
     await sleep(300);
     const t = await ev(tipBox('next start'));
     check(`the line's InfoTip inside the screen (${which})`, inside(t), JSON.stringify(t));
+    check(`the InfoTip separates at once from next start (${which})`, !!t && /At once, for new sub-agents[\s\S]*CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS[\s\S]*At the next start[\s\S]*BASH_MAX_OUTPUT_LENGTH/.test(t.text), t && t.text);
     if (!fixture) check('the InfoTip says unavailable per value', !!t && (t.text.match(/unavailable/g) ?? []).length === 5, t && t.text);
     else check('the InfoTip names the overridden variable and the set', !!t && /BASH_MAX_OUTPUT_LENGTH: 8000 \(overridden by policy: the entry in “agent-limits” is skipped\)/.test(t.text), t && t.text);
     await shot(`sheet-${cfg.name}-${which}-tip`);

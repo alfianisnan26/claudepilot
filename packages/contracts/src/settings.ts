@@ -88,11 +88,18 @@ export const SETTING_KEYS = {
  * One variable of the agent policy (T-285) in one workspace: what the portal asks for and what last landed in
  * the workspace's policy drop-in. `applied` is null while nothing has landed: the page says "unavailable", never a guess.
  */
+export type AgentEnvApplies = 'new-subagents' | 'restart';
+
 export interface AgentEnvValue {
   /** The setting it comes from (`agents.maxSubagents`). */
   key: string;
   /** The variable Claude Code reads. */
   env: string;
+  /**
+   * When a change takes effect (T-302, T-309): `new-subagents` at once for sub-agents started after it (ones
+   * running keep theirs); `restart` is read when Claude starts, so a running one takes it in a new chat or a Restart.
+   */
+  applies: AgentEnvApplies;
   desired: string;
   applied: string | null;
   /** A Secrets & env set assigned here that also sets this name: its entry is skipped, the policy wins (T-285). */
@@ -105,7 +112,7 @@ export interface AgentEnvStatus {
   /** `applied` when every value landed, `pending` while a change is on its way, `unavailable` when nothing landed yet. */
   state: 'applied' | 'pending' | 'unavailable';
   values: AgentEnvValue[];
-  /** When the drop-in last changed here. A running Claude reads it at its next start. */
+  /** When the drop-in last changed here. Each value's `applies` says when a running Claude takes it. */
   appliedAt: string | null;
 }
 
