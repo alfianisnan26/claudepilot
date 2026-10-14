@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { AppError, isAppError } from '@isnanme/core';
-import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, type ChatEvent, type ChatPermissionMode, type ChatRequest, type ChatSession } from '@portal/contracts';
+import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, sessionRef, type ChatEvent, type ChatPermissionMode, type ChatRequest, type ChatSession } from '@portal/contracts';
 import { z } from 'zod';
+import { actorOfPrincipal, requireCan } from '../../authz/seam.js';
+import { WORKER_REPORTS } from '../../chat/agents.js';
 import { paginate, pageInput } from '../paging.js';
-import { PortalToolError, registerPortalTool, type PortalToolContext } from '../registry.js';
+import { PortalToolError, portalTools, type PortalToolContext, type ToolRegistry } from '../registry.js';
 import { cleanText } from '../sanitize.js';
 import { assertCanChange, uiLink } from './common.js';
 import type { PortalToolDeps } from './deps.js';
@@ -55,13 +57,33 @@ function pendingRequests(events: ChatEvent[]): ChatRequest[] {
 }
 
 /** Chat sessions over MCP (portal-mcp PRD §13.3). The write tools are listed only while session control is on. */
-export function registerSessionTools(deps: PortalToolDeps): void {
+export function registerSessionTools(deps: Pick<PortalToolDeps, 'store' | 'chat'>, registry: ToolRegistry = portalTools): void {
   const { store, chat } = deps;
+  const registerPortalTool: ToolRegistry['register'] = (tool) => registry.register(tool);
 
   const need = (id: string): ChatSession => {
     const s = chat.get(id);
     if (!s) throw new AppError('NOT_FOUND', 'No such session. List them with session_list.');
     return s;
+  };
+
+  /**
+   * T-336: the lead a session_start names: a live session of the same workspace the caller may operate (the authz seam). Missing, ended,
+   * elsewhere or refused are ONE answer, so the call tells nothing of a session the caller may not see. The limits on its workers (depth,
+   * how many at once, how many an hour, a worker's own limits) are the controller's, checked at create as for session_spawn.
+   */
+  const leadFor = (raw: string, workspaceId: string, ctx: PortalToolContext): string => {
+    const p = chat.get(raw);
+    let ok = !!p && p.state !== 'ended' && !p.archivedAt && p.workspaceId === workspaceId.trim();
+    if (ok) {
+      try {
+        requireCan(actorOfPrincipal(ctx.principal), 'operate', sessionRef(p!.id));
+      } catch {
+        ok = false;
+      }
+    }
+    if (!ok) throw new AppError('NOT_FOUND', 'No such live session in that workspace to be the parent. List them with session_list.');
+    return p!.id;
   };
 
   registerPortalTool({
@@ -191,7 +213,7 @@ export function registerSessionTools(deps: PortalToolDeps): void {
     name: 'session_start',
     title: 'Start a chat session',
     description:
-      'Starts a Claude Code session in a workspace, optionally with a first prompt. The folder must already be trusted in the portal; this cannot trust it. Sessions started here never run in bypass mode.',
+      'Starts a Claude Code session in a workspace, optionally with a first prompt. The folder must already be trusted in the portal; this cannot trust it. Sessions started here never run in bypass mode. With parent (a live session of the same workspace) it starts as that session’s worker, as session_spawn does: in its family and crew, under its limits (depth, workers at once, an hour’s starts), and the parent hears of it in one line as report says.',
     scope: 'admin',
     requires: 'session_control',
     hints: { destructive: true, openWorld: true },
@@ -203,16 +225,21 @@ export function registerSessionTools(deps: PortalToolDeps): void {
       claude_id: z.string().max(80).optional(),
       ticket_id: z.string().max(64).optional(),
       agent: z.string().regex(CHAT_AGENT_NAME).optional().describe('The agent it runs as, .claude/agents/<agent>.md in its folder (e.g. implementer): its prompt, its tools and its model, at every start of its process.'),
+      parent: z.string().max(80).optional().describe('A live session of this workspace it starts as a worker of (session_family, crew reports).'),
+      report: z.enum(WORKER_REPORTS).optional().describe('With parent: what the parent hears of it unasked, one line each: idle (the default) when its turn ends, when it waits on a person and when it ends; end only when it ends; none nothing.'),
     }),
     async handler(ctx, args) {
       assertCanChange(store, 'workspace');
+      if (args.report && !args.parent) throw new AppError('VALIDATION_FAILED', 'report needs a parent.', { details: { report: 'Only with parent.' } });
+      const parentId = args.parent ? leadFor(args.parent, args.workspace_id, ctx) : null;
       const s = await chat.create(
         { workspaceId: args.workspace_id, cwd: args.folder, title: args.title, claudeId: args.claude_id, ticketId: args.ticket_id, ...(args.agent ? { agent: args.agent } : {}) },
-        { actor: ctx.actor },
+        // T-336: the same create a session_spawn makes (its parent's limits held in one step), never a new approval path or a wider mode.
+        { actor: ctx.actor, ...(parentId ? { parentId, ...(args.report ? { report: args.report } : {}) } : {}) },
       );
       if (args.prompt) await sendChecked(s.id, args.prompt, undefined, ctx);
       ctx.affected(`session:${s.id}`, `workspace:${s.workspaceId}`);
-      return { summary: `Started session ${s.id} in ${s.workspaceId}.`, session: sessionBrief(s, ctx), ui: uiLink(`/admin/sessions/${s.id}`) };
+      return { summary: `Started session ${s.id} in ${s.workspaceId}${parentId ? `, a worker of ${parentId}` : ''}.`, session: sessionBrief(s, ctx), ui: uiLink(`/admin/sessions/${s.id}`) };
     },
   });
 
