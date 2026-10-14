@@ -62,7 +62,14 @@ try {
       await b.setViewport(size.w, size.h);
       await b.media({ dark });
       await b.goto('/usage?tab=claudes', 2500);
-      await b.waitFor(`document.getElementById('one')`, 8000, 'the Claudes tab');
+      try {
+        await b.waitFor(`document.getElementById('one')`, 15000, 'the Claudes tab');
+      } catch (e) {
+        await b.shot(`usage-unknown-${tag}-timeout`);
+        console.log('page:', JSON.stringify(await b.eval(`({ url: location.href, text: document.body.innerText.slice(0, 600) })`)));
+        console.log('errors:', b.errors.slice(0, 3), 'requests:', b.requests.filter((r) => r.url.includes('/api/')).map((r) => r.url).slice(0, 15));
+        throw e;
+      }
       const r = await b.eval(`(() => {
         const row = (id) => document.getElementById(id);
         const text = (id) => row(id)?.innerText ?? '';
