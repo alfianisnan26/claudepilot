@@ -31,7 +31,7 @@ function oldRequest(s: Live, requestId: string, o: { proc?: string | null; at?: 
 }
 
 test('a request records the process that raised it; the liveness round resolves the ones of another process stale and keeps the live one’s', async () => {
-  const s = await liveSession({ livenessMs: 40 });
+  const s = await liveSession({ livenessMs: 40 }, true);
   try {
     await firstTurn(s);
     s.tail.push(ask('R-live'));
@@ -56,7 +56,7 @@ test('a request records the process that raised it; the liveness round resolves 
 });
 
 test('the chat leaves waiting when its only request was of a process that is gone', async () => {
-  const s = await liveSession({ livenessMs: 40 });
+  const s = await liveSession({ livenessMs: 40 }, true);
   try {
     await firstTurn(s);
     oldRequest(s, 'R-old');
@@ -153,9 +153,6 @@ test('the clear route: operate on the session (another user: the same 404); a st
     assert.equal((await post({ kind: 'user', userId: 'u_a', loginSessionId: 'l1', via: 'ui' }, 'R-stale')).status, 404, 'another user: the same 404');
     assert.equal(outcome(s, 'R-stale'), null, 'a denial changes nothing');
     assert.equal((await post('owner', 'R-nothing')).status, 404, 'an id the session never had');
-    const live = await post('owner', 'R-live');
-    assert.equal(live.status, 409, 'a request of the live process is answered, never cleared');
-    assert.equal(outcome(s, 'R-live'), null);
 
     const res = await post('owner', 'R-stale');
     assert.equal(res.status, 200);
@@ -166,6 +163,9 @@ test('the clear route: operate on the session (another user: the same 404); a st
       [['ui', 'clear', ['R-stale']]],
     );
     assert.equal((await post('owner', 'R-stale')).status, 409, 'no longer open');
+    const live = await post('owner', 'R-live');
+    assert.equal(live.status, 409, 'a request of the live process is answered, never cleared');
+    assert.equal(outcome(s, 'R-live'), null);
     assert.equal(s.state(), 'waiting', 'still waits on the live request');
   } finally {
     await s.done();
@@ -192,15 +192,15 @@ test('session_request_clear over MCP: an agent of the workspace clears a stale r
     const far = await h.call(other.secret, 'session_request_clear', { session_id: s.id, request_id: 'R-stale' });
     assert.equal(far.result?.structuredContent.error.code, 'NOT_FOUND', JSON.stringify(far.raw));
     assert.equal(outcome(s, 'R-stale'), null, 'a denial changes nothing');
-    const live = await h.call(mine.secret, 'session_request_clear', { session_id: s.id, request_id: 'R-live' });
-    assert.equal(live.result?.structuredContent.error.code, 'CONFLICT', JSON.stringify(live.raw));
-    assert.equal(outcome(s, 'R-live'), null);
-
     const done = await h.call(mine.secret, 'session_request_clear', { session_id: s.id, request_id: 'R-stale' });
     assert.equal(done.result?.isError, undefined, JSON.stringify(done.raw));
     assert.equal(done.result!.structuredContent.outcome, 'stale');
     assert.equal(outcome(s, 'R-stale'), 'stale');
     assert.deepEqual(s.controller.audit({ kind: 'session.request_stale' }).map((a) => a.actor), [`session:${asker.id}`]);
+
+    const live = await h.call(mine.secret, 'session_request_clear', { session_id: s.id, request_id: 'R-live' });
+    assert.equal(live.result?.structuredContent.error.code, 'CONFLICT', JSON.stringify(live.raw));
+    assert.equal(outcome(s, 'R-live'), null);
   } finally {
     h.done();
     await s.done();
