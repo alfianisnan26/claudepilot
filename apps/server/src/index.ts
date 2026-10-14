@@ -24,7 +24,8 @@ import { registerClaudeUsageTools } from './claudeusage/portalTools.js';
 import { ClaudeVersions, registerClaudeVersionTools } from './claudeversion/index.js';
 import { createUsageSpend, registerUsageSpendTools } from './usagespend/index.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
-import { createGlance } from './glance/index.js';
+import { changesGlance, createGlance } from './glance/index.js';
+import { createAttention } from './attention/index.js';
 import { createPlatform } from './platform/index.js';
 import { createCodespaces } from './codespaces/index.js';
 import { registerPersonas } from './personas/index.js';
@@ -309,7 +310,15 @@ const live = new LiveHub(
   { workspaces: async () => (await workspaces.list()).map(view), usage: () => workspaces.usage() },
   (req) => !!portal.session(cookie(req, config.session.cookie)),
 );
-const notify = (...topics: LiveTopic[]) => topics.forEach((t) => live.publish(t));
+// Needs you (docs/prd/attention.md): what waits for a person, read from each module's own state. The topics of the modules it reads
+// (pools: MCP catalog and skills; tickets; CI) make it look again; the chat's events and a minute's tick are chained further down.
+const attention = createAttention(store, { publish: () => live.publish('attention') });
+const ATTENTION_TOPICS = new Set<LiveTopic>(['pools', 'tickets', 'ci']);
+const notify = (...topics: LiveTopic[]) =>
+  topics.forEach((t) => {
+    live.publish(t);
+    if (ATTENTION_TOPICS.has(t)) attention.changed();
+  });
 connectChanged = () => notify('connect');
 workspaces.hooks.changed = () => notify('workspaces');
 reconciler.onChange(() => notify('workspaces'));
@@ -473,6 +482,9 @@ for (const source of [tickets, ci]) {
   const was = source.onChange;
   source.onChange = () => (was?.(), glance.changed());
 }
+// A tool request asked or answered, a session's state: Needs you looks again (its tool approvals past ten minutes come with the tick).
+chatController.onEvent((_id, msg) => changesGlance(msg) && attention.changed());
+attention.start();
 // GitHub Codespaces POC: GitHub connections (token or device flow with a client ID only; the token is a sealed secret) and the codespace
 // lifecycle through GitHub's REST API (docs/prd/codespaces-poc.md).
 const codespaces = createCodespaces({ store, pools: poolService, values: secretsKind.values, dataDir: config.paths.data });
@@ -498,7 +510,7 @@ const platform = createPlatform({
 });
 live.onPresence = (connection, presence, req) => platform.presence(connection, presence, req);
 platform.start();
-const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage, usageSpend, repos, glance, codespaces, platform, claudeVersions, connect });
+const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage, usageSpend, repos, glance, attention, codespaces, platform, claudeVersions, connect });
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
 // Before the socket modules: ties their connections to the sign-in that opened them (QA-001) and drops unanswered upgrades.
@@ -566,6 +578,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
     claudeUsage.stop();
     repos.stop();
     glance.stop();
+    attention.stop();
     platform.stop();
     codespaces.stop();
     connect.stop();

@@ -7,6 +7,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { Unreachable } from '@/components/Unreachable';
 import { AccessPage } from '@/features/admin/AccessPage';
 import { HomePage } from '@/features/home/HomePage';
+import { NeedsYouPage } from '@/features/attention/NeedsYouPage';
 import { SessionsPage } from '@/features/chat/SessionsPage';
 import { TicketsPage } from '@/features/tickets/TicketsPage';
 import { CiPage } from '@/features/ci/CiPage';
@@ -103,6 +104,7 @@ function Pages() {
       >
         <Route index element={<Navigate to={HOME} replace />} />
         <Route path="home" element={<HomePage />} />
+        <Route path="attention" element={<NeedsYouPage />} />
         <Route path="workspaces" element={<WorkspacesPage />} />
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="tickets" element={<TicketsPage />} />

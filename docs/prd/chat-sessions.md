@@ -1024,3 +1024,5 @@ T-256); the Home widget ("Autonomy", "Pause all"); the admin MCP tool `session_k
 ticket closing); the move by D-12/D-39 from the sweep; editing the prompt, the caps and N in the UI (the API takes them); the portal's own
 external heartbeat. Until then `supervisor.mjs` stays, and since T-257 it opens one watchdog ticket when it leaves a track down and counts
 starts after a harmless integrity ending (T-136) apart from its cap.
+
+**Needs you (T-146):** a tool request a waiting session has held for ten minutes or more is listed on Needs you ([attention.md](attention.md) §2, `chat/attention.ts`); answering stays on the session page.
