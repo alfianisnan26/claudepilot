@@ -17,7 +17,8 @@
 //
 // The pure functions (exported; tests in apps/server/src/qa/factory.test.ts):
 //   intake(tickets, opts)       the plan: the next ranked tickets (a `rank-NN` tag) that are open, carry an ESTIMATE comment with a size
-//                               S, M or L (XL is split first), within the WIP limit (in flight: in_progress tickets and open dispatches)
+//                               S, M or L (XL is split first), not held (heldOn), within the WIP limit (in flight: in progress, in review
+//                               and blocked tickets, BUSY, and open dispatches)
 //                               and within the run's request budget. The first ticket over the budget STOPS the plan (it does not skip
 //                               to a cheaper one: the rank order holds). Same input, same plan.
 //   renderBrief(template, vars) the brief from docs/dev-sessions/factory-brief.md; an unfilled or unknown placeholder throws.
@@ -39,23 +40,38 @@
 //                               by=) under the exact title, and the model session_configure answers must be the role's.
 //   portalWorktrees(o)          --start: the worktree made IN THE WORKSPACE through the portal (worktree_create, repos_list; T-337), the folder
 //                               taken from the portal's answer and checked to lie in <repository>.worktrees/. No local git with --start.
-//   watchBudget(t, deps)        the started slice's COST: session_get's cost_usd (the portal's count for the session, in US dollars) against
-//                               SIZE_COST_USD. At 150 percent it is interrupted, told to commit WIP and report, and the dispatch ends
-//                               (FACTORY END ... stopped: budget). The request budget (SIZE_BUDGET) is NOT measured by the engine: it plans a
-//                               run (--budget) and is the agent's own count in its brief.
+//   watchBudget(t, deps)        the started slice, from ONE session_get each round (T-342), three measures against the size's budgets:
+//                               wall = minutes since the session's created_at (SIZE_WALL_MIN, the floor), events = the transcript's sequence
+//                               number next_seq (SIZE_EVENTS; it grows with every model and tool call WHILE the turn runs), cost = cost_usd
+//                               (SIZE_COST_USD; the portal sets it only when a turn ends, chat/protocol.ts:640-676, so it is the after-turn
+//                               check). All numbers PROVISIONAL (see there). At 150 percent of ANY one it is interrupted (mid-turn too), told
+//                               to commit WIP and report, and the dispatch ends (FACTORY END ... stopped: budget <measure>). The request
+//                               budget (SIZE_BUDGET) is not measured by the engine: it plans a run (--budget) and is the agent's own count.
+//   heldOn(t)                   no unbounded re-dispatch (T-342): a ticket whose last dispatch ended `stopped: ...` (a budget stop) or
+//                               `failed: ...` (worktree or start) is HELD: never dispatched again by the engine, one EXCEPTION line per round
+//                               and no comment (the END is the one comment of that state change), until a PERSON writes the comment
+//                               `FACTORY RETRY <dispatchId>` on the ticket; that releases one more dispatch, which holds again if it fails.
 //   engineLock(path), leaseLabel(), onStop(cleanup): one engine run per host (a lock file with the pid; a dead pid's lock is stale), an admin
 //                               token label per run (a run never revokes another run's token), SIGINT/SIGTERM revoke the token and exit.
+//                               The token is leased for 15 minutes (SHORT_LEASE_LIFETIME, the portal's shortest) and renewed while the run
+//                               lasts: a run killed hard (SIGKILL, OOM) leaves its token alive at most 15 minutes.
+//   runId()                     two hosts (no shared lock): every DISPATCH carries its run (run=), an END carries the run it ends, and an
+//                               END with run= ends only that run's dispatch; after writing its DISPATCH a run reads the ticket again and, when
+//                               an earlier DISPATCH of the same id from another run is there, ends its own (`lost: race`) and does nothing.
 // One round for a supervisor hook: docs/dev-sessions/factory-round.mjs (prints NEXT and EXCEPTION lines; NOT wired into supervisor.mjs: an
 // independent reviewer reads the engine before it runs unattended; the admin credential path for workers is T-339, an owner decision).
 //
 // State lives in the portal's tickets only, as comments whose first line is a marker the engine writes and reads back. A marker (and an
-// ACTUAL) counts ONLY when the engine's own actor wrote it: actor `ui` (the signed-in REST path the engine uses: the owner's) and not flagged
-// fromAgent. A comment an agent or a token wrote (contracts TicketEvent.fromAgent), or one without an actor, is never read as a marker. The
-// role, model, branch and budget of a dispatch are re-derived (ROLES, the role files, branchOf, SIZE_BUDGET), never taken from comment text.
-//   FACTORY DISPATCH <dispatchId> v=<engine version> role=<role> model=<model> size=<S|M|L> budget=<n> branch=<branch>
+// ACTUAL) counts ONLY when actor `ui` wrote it, not flagged fromAgent. `ui` is the portal's signed-in REST path: ANYONE WITH THE SIGN-IN CODE
+// (PORTAL_SERVER_CODE) writes as `ui`: the owner in the browser, the supervisor (supervisor.mjs), ph.sh and this engine alike; the portal
+// does not tell them apart, so the trust is in who holds the code, not in the engine. A comment an agent or a token wrote (contracts
+// TicketEvent.fromAgent), or one without an actor, is never read as a marker. The role, model, branch and budget of a dispatch are
+// re-derived (ROLES, the role files, branchOf, SIZE_BUDGET), never taken from comment text.
+//   FACTORY DISPATCH <dispatchId> v=<engine version> role=<role> model=<model> size=<S|M|L> budget=<n> branch=<branch> run=<runId>
 //   FACTORY STARTING <dispatchId> by=portal-mcp:<token id>                          (--start: written right before session_start)
 //   FACTORY START <dispatchId> session=<sessionId> mode=dontAsk model=<model>      (--start: the session that runs the slice)
-//   FACTORY END <dispatchId> <outcome>
+//   FACTORY END <dispatchId> [run=<runId>] <outcome>                                (stopped: ... and failed: ... hold the ticket)
+//   FACTORY RETRY <dispatchId>                                                      (written by a PERSON only: releases a held ticket)
 //   FACTORY RESUME <dispatchId> run=<runId> state=<state> next=<review|fix>
 //   FACTORY REVIEW <dispatchId> verdict=<pass|changes>   FACTORY VERIFY <dispatchId> verdict=<pass|sendback>
 //   FACTORY INTEGRATE <dispatchId> result=<merged|conflict> [commit=<sha>]
@@ -66,7 +82,9 @@ import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tokenLease } from '../../tools/coordinator/tokenLease.mjs';
+import { SHORT_LEASE_LIFETIME, tokenLease } from '../../tools/coordinator/tokenLease.mjs';
+
+export { SHORT_LEASE_LIFETIME };
 
 /** Requests per slice by size: what a run plans with (--budget) and the agent's own count in its brief. The engine does not measure it. */
 export const SIZE_BUDGET = Object.freeze({ S: 25, M: 60, L: 120 });
@@ -76,6 +94,21 @@ export const SIZE_BUDGET = Object.freeze({ S: 25, M: 60, L: 120 });
  * of an S, M and L slice. Replace them with the median cost_usd of the first ten factory slices per size and name that source here.
  */
 export const SIZE_COST_USD = Object.freeze({ S: 4, M: 10, L: 20 });
+/**
+ * The MID-TURN budgets (T-342 B3): the portal sets cost_usd only when a turn ends (chat/protocol.ts:640-676, store.ts:797-799), and a dontAsk
+ * worker does its whole brief in ONE turn, so cost cannot stop it in time. Two measures that do move while a turn runs:
+ *   SIZE_WALL_MIN  minutes since the session was created (session_get created_at, portalmcp/tools/sessions.ts:42) on the engine's clock:
+ *                  the floor. PROVISIONAL: the hours of the ESTIMATE sizes (S about 1 h, M about 3 h, L about 6 h), not measured.
+ *   SIZE_EVENTS    the transcript's sequence number (session_get max_events 1 -> next_seq, sessions.ts:136-151): the portal stores every
+ *                  text, thinking and tool_use block of every assistant line as it arrives (protocol.ts:430-449) and bumps the gap-free seq
+ *                  per stored event (store.ts:668-683), so it grows with each model call and tool call of the turn, sub-agents included.
+ *                  PROVISIONAL: SIZE_BUDGET requests times EVENTS_PER_REQUEST (8, a guess: a call's text, thinking, tool_use and result
+ *                  rows with headroom), not measured. Replace both with the medians of the first ten --start slices per size, named here.
+ * Each stops at STOP_FACTOR of its budget, like the cost (which stays as the after-the-turn check).
+ */
+export const SIZE_WALL_MIN = Object.freeze({ S: 60, M: 180, L: 360 });
+export const EVENTS_PER_REQUEST = 8;
+export const SIZE_EVENTS = Object.freeze({ S: 25 * EVENTS_PER_REQUEST, M: 60 * EVENTS_PER_REQUEST, L: 120 * EVENTS_PER_REQUEST });
 export const STOP_FACTOR = 1.5;
 export const DEFAULT_WIP = 5;
 export const DEFAULT_RESUME_MAX_AGE_MIN = 360;
@@ -87,6 +120,11 @@ export const ENGINE_ACTOR = 'ui';
 export const ROLES = Object.freeze(['implementer']);
 const DEFAULT_WORKTREES = '../claudepilot.worktrees';
 const CLOSED = new Set(['done', 'wont_do']);
+/** Someone has the ticket: it counts against WIP and its started slice stays in the budget watch (T-342: in review and blocked too). */
+export const BUSY = new Set(['in_progress', 'in_review', 'blocked']);
+/** The statuses the engine reads from the portal: the open ones it plans and every busy one it counts and watches. */
+export const FETCH_STATUSES = ['open', ...BUSY];
+const holdReason = (d) => `held: ${d.id} ended (${String(d.ended).slice(0, 120)}); not dispatched again until a person writes FACTORY RETRY ${d.id} on the ticket`;
 
 /** Portal MCP wraps outside text as { untrusted_text }; the REST API gives plain strings. */
 const textOf = (v) => (v && typeof v === 'object' ? String(v.untrusted_text ?? '') : String(v ?? ''));
@@ -131,8 +169,12 @@ function cmpRank(a, b) {
 /** The first line of each comment the ENGINE wrote, with its time (every marker reader goes through this: B1, T-338). */
 const engineLines = (t) => t.comments.filter((c) => c.engine).map((c) => ({ at: c.at, first: c.text.split('\n', 1)[0].trim() }));
 
-/** The ticket's dispatch markers (the engine's own only): every DISPATCH with its fields, whether an END closed it, oldest first. */
-export function dispatchesOf(t) {
+/**
+ * Every DISPATCH marker (the engine's own only) with its fields and whether an END closed it, oldest first, including those that lost a
+ * race. An END that names a run (`FACTORY END <id> run=<run> ...`) ends only the dispatch of that id written by that run (two hosts that
+ * both wrote <id>: the loser's END never closes the winner's); an END without run= (older markers) ends every dispatch of that id.
+ */
+function allDispatches(t) {
   const list = [];
   const ended = new Map();
   for (const c of engineLines(t)) {
@@ -143,14 +185,45 @@ export function dispatchesOf(t) {
       list.push({ id: d[1], at: c.at, ...fields });
       continue;
     }
-    const e = /^FACTORY END (\S+)\s*(.*)$/.exec(first);
-    if (e) ended.set(e[1], e[2] || 'ended');
+    const e = /^FACTORY END (\S+)(?: run=(\S+))?\s*(.*)$/.exec(first);
+    if (e) {
+      const key = e[2] ? `${e[1]} run=${e[2]}` : e[1];
+      if (!ended.has(key)) ended.set(key, e[3] || 'ended');
+    }
     // An ACTUAL comment (the slice's closing record) ends every dispatch before it that is still open.
-    else if (/^ACTUAL\b/.test(first)) for (const d of list) if (!ended.has(d.id)) ended.set(d.id, 'actual');
+    else if (/^ACTUAL\b/.test(first)) for (const x of list) if (!ended.has(`${x.id} run=${x.run}`) && !ended.has(x.id)) ended.set(`${x.id} run=${x.run}`, 'actual');
   }
-  return list.map((d) => ({ ...d, ended: ended.get(d.id) ?? null }));
+  return list.map((x) => ({ ...x, ended: ended.get(`${x.id} run=${x.run}`) ?? ended.get(x.id) ?? null }));
+}
+/** The outcome of a dispatch that lost the two-host race: it never ran (applyPlan ended it right after its DISPATCH). */
+const LOST = /^lost\b/;
+/** The ticket's dispatches (the engine's own only), oldest first, without those that lost a race: what every reader works from. */
+export function dispatchesOf(t) {
+  return allDispatches(t).filter((d) => !(d.ended && LOST.test(d.ended)));
 }
 const openDispatches = (t) => dispatchesOf(t).filter((d) => !d.ended);
+
+/** An outcome after which the engine does NOT dispatch the ticket again on its own (T-342): a budget stop or a failure. */
+export const HOLD_OUTCOME = /^(stopped|failed)\b/;
+/**
+ * The dispatch a ticket is held on, or null: its latest dispatch ended `stopped: ...` or `failed: ...` and no `FACTORY RETRY <id>` was
+ * written after it. Nobody but a person writes RETRY (the engine never does), on the signed-in REST path (the `ui` actor); a RETRY
+ * releases exactly that one dispatch: the next dispatch that stops or fails holds the ticket again. So there is no automatic re-dispatch.
+ */
+export function heldOn(t) {
+  const all = dispatchesOf(t);
+  const last = all[all.length - 1];
+  if (all.some((d) => !d.ended)) return null; // a dispatch still runs: in flight, not held
+  if (!last?.ended || !HOLD_OUTCOME.test(last.ended)) return null;
+  const retried = engineLines(t).some((c) => c.first === `FACTORY RETRY ${last.id}`);
+  return retried ? null : last;
+}
+
+/** The END marker of a dispatch: with the run that wrote its DISPATCH when it has one (so it ends only that run's dispatch). */
+export function endMarker(d, outcome) {
+  const id = d.dispatchId ?? d.id;
+  return `FACTORY END ${id}${d.run ? ` run=${d.run}` : ''} ${outcome}`;
+}
 
 /** `ticket/T-12-short-slug` from the summary (lowercase words, at most 40 characters). A ticket id that is not `T-<n>` throws. */
 export function branchOf(t) {
@@ -173,6 +246,30 @@ export function costBudget(size, usd = 0) {
   if (!budget) throw new Error(`no cost budget for size ${size} (XL is split first)`);
   const stopAt = Math.round(budget * STOP_FACTOR * 100) / 100;
   return { budget, stopAt, used: usd, state: usd >= stopAt ? 'stop' : usd > budget ? 'over' : 'ok' };
+}
+
+/**
+ * What watchBudget measures of a started slice, each against its size's budget and stopping at STOP_FACTOR of it: wall (minutes since the
+ * session was created), events (the transcript's sequence number), cost (cost_usd, set only at a turn's end). A measure that is not a
+ * number is unknown and left out (unknown is a state, never a guess). Returns [{ name, unit, used, budget, stopAt, state: ok|over|stop }].
+ */
+export function sliceMeasures(size, { wallMin, events, costUsd } = {}) {
+  if (!(size in SIZE_BUDGET)) throw new Error(`no budget for size ${size} (XL is split first)`);
+  const out = [];
+  const add = (name, unit, used, budget) => {
+    if (!Number.isFinite(used)) return;
+    const stopAt = Math.round(budget * STOP_FACTOR * 100) / 100;
+    out.push({ name, unit, used, budget, stopAt, state: used >= stopAt ? 'stop' : used > budget ? 'over' : 'ok' });
+  };
+  add('wall', 'min', wallMin, SIZE_WALL_MIN[size]);
+  add('events', 'events', events, SIZE_EVENTS[size]);
+  add('cost', 'USD', costUsd, SIZE_COST_USD[size]);
+  return out;
+}
+/** `wall 271 of 180 min (stop at 270)`, `cost 15.00 of 10.00 USD (stop at 15.00)`. */
+export function formatMeasure(m) {
+  const v = (x) => (m.unit === 'USD' ? Number(x).toFixed(2) : String(x));
+  return `${m.name} ${v(m.used)} of ${v(m.budget)} ${m.unit} (stop at ${v(m.stopAt)})`;
 }
 
 /**
@@ -213,7 +310,7 @@ export function intake(rawTickets, opts = {}) {
     tickets.push(t);
   }
   const live = tickets.filter((t) => !CLOSED.has(t.status));
-  const inFlight = live.filter((t) => t.status === 'in_progress' || openDispatches(t).length > 0).map((t) => t.id).sort();
+  const inFlight = live.filter((t) => BUSY.has(t.status) || openDispatches(t).length > 0).map((t) => t.id).sort();
   const ranked = live
     .map((t) => ({ t, rank: rankOf(t) }))
     .sort((a, b) => (a.rank && b.rank ? cmpRank(a.rank, b.rank) : a.rank ? -1 : b.rank ? 1 : 0) || a.t.number - b.t.number);
@@ -230,6 +327,10 @@ export function intake(rawTickets, opts = {}) {
       const age = ageMin(d.at, opts.now);
       if (age !== null && age > staleMin) exceptions.push({ ticket: t.id, dispatchId: d.id, reason: `stale dispatch ${d.id}: open ${age} min (limit ${staleMin}), no END and no ACTUAL` });
     }
+    // A ranked open ticket whose last dispatch was stopped or failed is held for a person (T-342): an EXCEPTION line each round (a line, not
+    // a comment: the END already is the one comment of that state change), never a new dispatch.
+    const held = t.status === 'open' && rankOf(t) ? heldOn(t) : null;
+    if (held) exceptions.push({ ticket: t.id, dispatchId: held.id, reason: holdReason(held) });
   }
   for (const { t, rank } of ranked) {
     const open = openDispatches(t);
@@ -237,8 +338,10 @@ export function intake(rawTickets, opts = {}) {
       skipped.push({ ticket: t.id, reason: `dispatched (${open.map((d) => d.id).join(', ')})` });
       continue;
     }
-    if (t.status !== 'open') continue; // in progress, blocked or in review: someone has it; counted as in flight when in progress
+    if (t.status !== 'open') continue; // in progress, blocked or in review: someone has it; counted as in flight
     if (!rank) { skipped.push({ ticket: t.id, reason: 'no rank tag' }); continue; }
+    const held = heldOn(t);
+    if (held) { skipped.push({ ticket: t.id, reason: `held (${held.id} ${held.ended.split(' ')[0]})` }); continue; }
     const est = estimateOf(t);
     if (!est) { skipped.push({ ticket: t.id, reason: 'no ESTIMATE' }); continue; }
     if (!est.size) { skipped.push({ ticket: t.id, reason: 'ESTIMATE without a size' }); continue; }
@@ -262,7 +365,12 @@ function ageMin(at, now) {
 
 /** The comment the dispatcher (a later slice) writes when it starts a slice: the marker this engine reads back. */
 export function dispatchMarker(d) {
-  return `FACTORY DISPATCH ${d.dispatchId} v=${ENGINE_VERSION} role=${d.role} model=${d.model} size=${d.size} budget=${d.budget} branch=${d.branch}`;
+  return `FACTORY DISPATCH ${d.dispatchId} v=${ENGINE_VERSION} role=${d.role} model=${d.model} size=${d.size} budget=${d.budget} branch=${d.branch}${d.run ? ` run=${d.run}` : ''}`;
+}
+
+/** The id of one engine run (`<pid>-<start time>`, base 36): its DISPATCH markers carry it, and only its own END matches them. */
+export function runId({ pid = process.pid, now = Date.now() } = {}) {
+  return `${pid.toString(36)}-${now.toString(36)}`;
 }
 
 /** The longest ticket summary a brief carries. */
@@ -295,8 +403,8 @@ export function renderBrief(template, vars) {
 
 /** The brief's variables for one planned dispatch. */
 export function briefVars(d, { session, contextPack = 'docs/context-pack.md', tokenDiscipline }) {
-  const cost = costBudget(d.size);
-  return { ticket: d.ticket, summary: briefSummary(d.summary), dispatchId: d.dispatchId, role: d.role, model: d.model, contextPack, worktree: d.worktree, branch: d.branch, size: d.size, budget: d.budget, stopAt: d.stopAt, costBudget: cost.budget, costStop: cost.stopAt, session, agent: `${d.role}-${d.dispatchId.toLowerCase()}`, tokenDiscipline };
+  const stop = Object.fromEntries(sliceMeasures(d.size, { wallMin: 0, events: 0, costUsd: 0 }).map((m) => [m.name, m.stopAt]));
+  return { ticket: d.ticket, summary: briefSummary(d.summary), dispatchId: d.dispatchId, role: d.role, model: d.model, contextPack, worktree: d.worktree, branch: d.branch, size: d.size, budget: d.budget, stopAt: d.stopAt, wallStop: stop.wall, eventStop: stop.events, costStop: stop.cost, session, agent: `${d.role}-${d.dispatchId.toLowerCase()}`, tokenDiscipline };
 }
 
 /** The numbered rules of token-discipline.md (the block every brief carries). */
@@ -389,15 +497,15 @@ export function portalClient({ url = 'https://pilot.ai.isnan.me', code, fetch: f
   };
 }
 
-/** The tickets intake needs, from the portal: open and in-progress ones; the ranked open ones read whole (their comments). */
+/** The tickets intake needs, from the portal: open, in progress, in review and blocked (FETCH_STATUSES); the ranked open ones read whole. */
 export async function fetchTickets(portal, { workspace } = {}) {
-  const q = new URLSearchParams({ status: 'open,in_progress', limit: '500' });
+  const q = new URLSearchParams({ status: FETCH_STATUSES.join(','), limit: '500' });
   if (workspace) q.set('workspace', workspace);
   const list = await portal.list(q.toString());
   const out = [];
   for (const it of list?.items ?? []) {
     const ranked = (it.tags ?? []).some((g) => /^rank-\d+[a-z]*$/.test(g));
-    out.push(it.status === 'open' && ranked ? await portal.get(it.id) : it); // in progress counts against WIP; its comments are not needed
+    out.push(it.status === 'open' && ranked ? await portal.get(it.id) : it); // a busy one counts against WIP; the round reads it whole
   }
   return out;
 }
@@ -419,6 +527,12 @@ export function gitOps(repo, run = (args) => execFileSync('git', ['-C', repo, ..
 }
 
 /**
+ * A control, format or line-separator character (a line break, a bidi override, a zero-width space): a path from the portal that holds one
+ * is REFUSED, not cleaned (T-342; a cleaned path would name another folder), before it reaches a brief or session_start.
+ */
+export const UNSAFE_PATH = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+/**
  * The worktree IN THE WORKSPACE, through the portal (T-337; --start uses only this, never local git): the same shape as gitOps, over the
  * admin Portal MCP tools. repos_list (the portal's last scan of the workspace) says whether a worktree already has the branch and where
  * repository `repoId` lives; worktree_create makes the worktree there (in `<repository>.worktrees/`, git hardened by the portal) and its
@@ -428,6 +542,11 @@ export function gitOps(repo, run = (args) => execFileSync('git', ['-C', repo, ..
  */
 export function portalWorktrees({ mcp, workspace, repoId }) {
   if (!repoId) throw new Error('portalWorktrees needs the repository id (repos_list)');
+  const pathOf = (v) => {
+    const p = textOf(v);
+    if (UNSAFE_PATH.test(p)) throw new Error('a path from the portal with a control or format character: refused');
+    return p;
+  };
   async function scan() {
     const nodes = [];
     let cursor = null;
@@ -439,7 +558,7 @@ export function portalWorktrees({ mcp, workspace, repoId }) {
     }
     const main = nodes.find((n) => n.id === repoId);
     if (!main) throw new Error(`repository ${repoId} not found in ${workspace}`);
-    const path = textOf(main.path).replace(/\/+$/, '');
+    const path = pathOf(main.path).replace(/\/+$/, '');
     if (!posix.isAbsolute(path)) throw new Error(`repository ${repoId} has no absolute path`);
     return { root: `${path}.worktrees`, nodes };
   }
@@ -455,13 +574,15 @@ export function portalWorktrees({ mcp, workspace, repoId }) {
       const r = await mcp.call('worktree_create', { repo_id: repoId, branch, ...(base ? { base } : {}) });
       const made = textOf(r?.worktree?.branch);
       if (made !== branch) throw new Error(`worktree_create made branch ${made.slice(0, 100)}, not ${branch}`);
-      const folder = posix.resolve('/', textOf(r?.worktree?.path));
-      if (!posix.isAbsolute(textOf(r?.worktree?.path)) || !insideFolder(folder, root)) throw new Error(`worktree ${folder.slice(0, 160)} is outside ${root.slice(0, 160)}`);
+      const raw = pathOf(r?.worktree?.path);
+      const folder = posix.resolve('/', raw);
+      if (!posix.isAbsolute(raw) || !insideFolder(folder, root)) throw new Error(`worktree ${folder.slice(0, 160)} is outside ${root.slice(0, 160)}`);
       return folder;
     },
     async find(branch) {
       const { root, nodes } = await scan();
-      const n = on(nodes, branch).find((x) => posix.isAbsolute(textOf(x.path)) && insideFolder(textOf(x.path), root));
+      const ok = (x) => !UNSAFE_PATH.test(textOf(x.path)) && posix.isAbsolute(textOf(x.path)) && insideFolder(textOf(x.path), root);
+      const n = on(nodes, branch).find(ok);
       return n ? posix.resolve('/', textOf(n.path)) : null;
     },
   };
@@ -474,10 +595,11 @@ export function portalWorktrees({ mcp, workspace, repoId }) {
  * only when `start` is given (--start: startSlice for each dispatch whose worktree was made; its outcome is the result's `start`).
  * Returns { results: [{ ticket, dispatchId, action: dispatched|skipped|refused|failed, reason? }], exceptions } (the plan's and its own).
  */
-export async function applyPlan(plan, { portal, git, base = 'origin/integration', start = null }) {
+export async function applyPlan(plan, { portal, git, base = 'origin/integration', start = null, run = runId() }) {
   const results = [];
   const exceptions = [...(plan.exceptions ?? [])];
-  for (const d of plan.dispatch) {
+  for (const planned of plan.dispatch) {
+    const d = { ...planned, run };
     const r = { ticket: d.ticket, dispatchId: d.dispatchId };
     const fresh = normalizeTicket(await portal.get(d.ticket));
     const open = openDispatches(fresh);
@@ -485,6 +607,7 @@ export async function applyPlan(plan, { portal, git, base = 'origin/integration'
       results.push({ ...r, action: 'skipped', reason: open.length ? `dispatched since the plan (${open.map((x) => x.id).join(', ')})` : `now ${fresh.status}` });
       continue;
     }
+    if (heldOn(fresh)) { results.push({ ...r, action: 'skipped', reason: 'held since the plan' }); continue; }
     if (`${fresh.id}-F${dispatchesOf(fresh).length + 1}` !== d.dispatchId) { results.push({ ...r, action: 'skipped', reason: 'changed since the plan' }); continue; }
     // --start: the worktree is made in the workspace through the portal (T-337), never with git on the engine's host.
     if (start && !git.viaPortal) throw new Error('--start makes worktrees through the portal (portalWorktrees), never with local git');
@@ -495,12 +618,20 @@ export async function applyPlan(plan, { portal, git, base = 'origin/integration'
       continue;
     }
     await portal.comment(d.ticket, dispatchMarker(d));
+    // Two hosts (no shared lock) may both have written this id: the portal's order decides, the first DISPATCH of the id wins. The loser
+    // ends its own (run=) at once, before any worktree or session; its END matches only its own marker, never the winner's.
+    const same = allDispatches(normalizeTicket(await portal.get(d.ticket))).filter((x) => x.id === d.dispatchId);
+    if (same.length > 1 && same[0].run !== run) {
+      await portal.comment(d.ticket, endMarker(d, `lost: race with run ${String(same[0].run ?? 'unknown').slice(0, 40)}`));
+      results.push({ ...r, action: 'skipped', reason: 'lost the dispatch race to another run' });
+      continue;
+    }
     let folder = null;
     try {
       folder = (await git.addWorktree(d.branch, d.worktree, base)) ?? null;
     } catch (e) {
       const why = String(e?.stderr || e?.message || e).split('\n').find(Boolean)?.slice(0, 160) ?? 'error';
-      await portal.comment(d.ticket, `FACTORY END ${d.dispatchId} failed: worktree (${why})`);
+      await portal.comment(d.ticket, endMarker(d, `failed: worktree (${why})`));
       results.push({ ...r, action: 'failed', reason: why });
       exceptions.push({ ticket: d.ticket, dispatchId: d.dispatchId, reason: `worktree failed: ${why}` });
       continue;
@@ -561,7 +692,7 @@ export function dispatchFrom(t, d, { worktrees = DEFAULT_WORKTREES, models = {} 
   const branch = branchOf(t);
   if (d.branch !== branch) throw new Error(`dispatch ${d.id}: its branch is not ${branch}`);
   const b = sliceBudget(d.size);
-  return { ticket: t.id, summary: t.summary, size: d.size, budget: b.budget, stopAt: b.stopAt, role: d.role, model: models?.[d.role] ?? 'unset', branch, worktree: worktreeOf(worktrees, branch), dispatchId: d.id, version: Number(d.v) || null };
+  return { ticket: t.id, summary: t.summary, size: d.size, budget: b.budget, stopAt: b.stopAt, role: d.role, model: models?.[d.role] ?? 'unset', branch, worktree: worktreeOf(worktrees, branch), dispatchId: d.id, version: Number(d.v) || null, ...(d.run ? { run: String(d.run) } : {}) };
 }
 
 /**
@@ -600,12 +731,9 @@ export function mcpClient({ url, token, tokenId = () => null, fetch: f = globalT
   };
 }
 
-const usd = (n) => `${Number(n).toFixed(2)} USD`;
-/** What the worker is told when the engine stops it at 150 percent of its size's cost budget. */
-export const stopText = (d, used) => {
-  const b = costBudget(d.size, used);
-  return `FACTORY STOP ${d.dispatchId}: the cost budget is spent (${usd(used)} of ${usd(b.budget)}, stop at ${usd(b.stopAt)}). Stop now: commit and push what is done as WIP, then report in at most 25 lines what is done and what is left. Start nothing new.`;
-};
+/** What the worker is told when the engine stops it: one measure (sliceMeasures) at 150 percent of its size's budget. */
+export const stopText = (d, m) =>
+  `FACTORY STOP ${d.dispatchId}: the ${m.name} budget is spent (${formatMeasure(m)}). Stop now: commit and push what is done as WIP, then report in at most 25 lines what is done and what is left. Start nothing new.`;
 
 /**
  * Start a dispatched slice as a non-Bypass worker session, through the admin Portal MCP tools a person's automation already uses
@@ -650,9 +778,10 @@ export async function startSlice(d, { portal, mcp, workspace, folder = null, loc
     }
   }
   if (!where) return refuse('no worktree', `no worktree on ${d.branch} in ${workspace ?? 'the workspace'}: not started`);
+  if (UNSAFE_PATH.test(String(where))) return refuse('worktree path with a control character', `the worktree path of ${d.dispatchId} has a control or format character: not started`);
   const fail = async (sessionId, why) => {
     if (sessionId) await mcp.call('session_end', { id: sessionId }).catch(() => undefined);
-    await portal.comment(d.ticket, `FACTORY END ${d.dispatchId} failed: start (${why})`);
+    await portal.comment(d.ticket, endMarker({ ...d, run: d.run ?? last.run }, `failed: start (${why})`));
     except(`start failed: ${why}`);
     return { action: 'failed', reason: why, ...(sessionId ? { sessionId } : {}), exceptions };
   };
@@ -706,13 +835,17 @@ export async function startSlice(d, { portal, mcp, workspace, folder = null, loc
 }
 
 /**
- * The budget watch of a started slice (each round). What it measures: the session's cost_usd from session_get (the portal's own sum of the
- * session's cost, US dollars), against SIZE_COST_USD of the dispatch's size (provisional numbers, see there). Under 150 percent nothing is
- * done ('ok', or 'over' past 100 percent: a line); AT 150 percent the engine stops it and reports: session_interrupt, the FACTORY STOP
- * message (commit WIP, report), FACTORY END <id> stopped: budget, and one line to reportTo. Never continues silently. No cost in the answer
- * is 'none' (unknown is a state, not a guess). Returns { action: none|ok|over|stopped|ended, used? (USD), budget?, exceptions }.
+ * The budget watch of a started slice (each round). What it measures, from ONE session_get (max_events 1) of the slice's session, against
+ * the budgets of the dispatch's size (sliceMeasures; provisional numbers, see SIZE_WALL_MIN):
+ *   wall    minutes from the session's created_at to `now` (the engine's clock): moves mid-turn, the floor;
+ *   events  next_seq, the transcript's sequence number: grows with every model and tool call while the turn runs;
+ *   cost    cost_usd: the portal sets it only when a turn ends (protocol.ts:640-676), so it is the after-the-turn check only.
+ * Under 150 percent of every measure nothing is done ('ok', or 'over' past 100 percent of one: a line); when ANY measure is at 150 percent
+ * the engine stops it, mid-turn too: session_interrupt (it stops the running turn), the FACTORY STOP message (commit WIP, report), FACTORY
+ * END <id> stopped: budget <measure>, and one line to reportTo. Never continues silently. No measure in the answer is 'none' (unknown is a
+ * state, not a guess). Returns { action: none|ok|over|stopped|ended, measures?, over? (lines), used? (USD), exceptions }.
  */
-export async function watchBudget(rawTicket, { portal, mcp, reportTo = null, worktrees, models }) {
+export async function watchBudget(rawTicket, { portal, mcp, reportTo = null, worktrees, models, now = null }) {
   const t = normalizeTicket(rawTicket);
   const exceptions = [];
   if (CLOSED.has(t.status)) return { action: 'none', exceptions };
@@ -727,20 +860,27 @@ export async function watchBudget(rawTicket, { portal, mcp, reportTo = null, wor
     exceptions.push({ ticket: t.id, dispatchId: last.id, reason: `budget not watched: ${e.message}` });
     return { action: 'none', exceptions };
   }
-  const got = await mcp.call('session_get', { id: sid });
-  if (got?.session?.state === 'ended') return { action: 'ended', exceptions };
-  const raw = got?.session?.cost_usd;
-  const used = raw === null || raw === undefined || raw === '' ? NaN : Number(raw);
-  if (!Number.isFinite(used)) return { action: 'none', exceptions };
-  const b = costBudget(d.size, used);
-  if (b.state !== 'stop') return { action: b.state, used, budget: b.budget, exceptions };
+  const got = await mcp.call('session_get', { id: sid, max_events: 1 });
+  const s = got?.session;
+  if (s?.state === 'ended') return { action: 'ended', exceptions };
+  const num = (v) => (v === null || v === undefined || v === '' ? NaN : Number(v));
+  const created = Date.parse(String(s?.created_at ?? ''));
+  const wallMin = Number.isFinite(now) && Number.isFinite(created) ? Math.floor((now - created) / 60000) : NaN;
+  // wall and events move while the turn runs (the stop that acts mid-turn); cost only after it (T-342 B3)
+  const measures = sliceMeasures(d.size, { wallMin, events: num(got?.next_seq), costUsd: num(s?.cost_usd) });
+  const used = measures.find((m) => m.name === 'cost')?.used ?? null;
+  if (!measures.length) return { action: 'none', exceptions };
+  const hit = measures.find((m) => m.state === 'stop');
+  const over = measures.filter((m) => m.state === 'over').map(formatMeasure);
+  if (!hit) return { action: over.length ? 'over' : 'ok', measures, over, used, exceptions };
+  const what = formatMeasure(hit);
   await mcp.call('session_interrupt', { id: sid }).catch(() => undefined);
-  await mcp.call('session_send', { id: sid, text: stopText(d, used), priority: 'next' }).catch(() => undefined);
-  await portal.comment(t.id, `FACTORY END ${d.dispatchId} stopped: budget ${usd(used)} of ${usd(b.budget)} (stop at ${usd(b.stopAt)})`);
-  const reason = `budget stop: ${d.dispatchId} at ${usd(used)} of ${usd(b.budget)} (stop at ${usd(b.stopAt)}); session ${sid} told to commit WIP and report`;
+  await mcp.call('session_send', { id: sid, text: stopText(d, hit), priority: 'next' }).catch(() => undefined);
+  await portal.comment(t.id, endMarker(d, `stopped: budget ${what}`));
+  const reason = `budget stop: ${d.dispatchId} at ${what}; session ${sid} interrupted and told to commit WIP and report`;
   exceptions.push({ ticket: t.id, dispatchId: d.dispatchId, reason });
   if (reportTo) await mcp.call('session_send', { id: reportTo, text: `FACTORY: ${reason}.`, priority: 'later' }).catch(() => undefined);
-  return { action: 'stopped', used, exceptions };
+  return { action: 'stopped', measures, used, exceptions };
 }
 
 /* ---------- Resume on a CI event (pure) ---------- */
@@ -1069,8 +1209,9 @@ async function main() {
   const tokenDiscipline = tokenRules(readFileSync(join(here, 'token-discipline.md'), 'utf8'));
   const session = o.session ?? process.env.PILOT_SESSION ?? 'unset';
   const briefs = o.briefs ? plan.dispatch.map((d) => ({ dispatchId: d.dispatchId, marker: dispatchMarker(d), brief: renderBrief(template, briefVars(d, { session, tokenDiscipline })) })) : [];
-  // --apply: one writing run per host (M1). --start: an admin Portal MCP token leased for this run only, under this run's own label (1 hour,
-  // revoked at the end and on SIGINT/SIGTERM), held in memory and never printed; worktrees are made in the workspace through the portal.
+  // --apply: one writing run per host (M1). --start: an admin Portal MCP token leased for this run only, under this run's own label (15
+  // minutes, renewed while the run lasts, revoked at the end and on SIGINT/SIGTERM; a run killed hard leaves it alive at most 15 minutes),
+  // held in memory and never printed; worktrees are made in the workspace through the portal.
   let lock = null;
   if (o.apply) {
     try {
@@ -1080,7 +1221,7 @@ async function main() {
       process.exit(3);
     }
   }
-  const lease = o.start ? tokenLease({ api: portal.raw, label: leaseLabel() }) : null;
+  const lease = o.start ? tokenLease({ api: portal.raw, label: leaseLabel(), lifetime: SHORT_LEASE_LIFETIME }) : null;
   const unhook = onStop(async () => { await lease?.revoke(); lock?.release(); });
   const mcp = lease ? mcpClient({ url: portal.url, token: lease.get, tokenId: () => lease.id }) : null;
   const wt = mcp ? portalWorktrees({ mcp, workspace: o.workspace, repoId: o.repoId }) : null;
