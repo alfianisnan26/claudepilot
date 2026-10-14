@@ -420,6 +420,86 @@ test('fourth review: opt-outs show by ticket, whichever session drew (P1, P2, P3
   }
 });
 
+test('fifth review, 1: only a drawing role opts out by going without a draw; a reviewer, QA or explorer slice of a drawn ticket is no opt-out', async () => {
+  const h = await harness();
+  try {
+    drawOk(h.lab, forT1);
+    for (const role of ['reviewer', 'qa-verifier', 'scribe', 'explorer']) h.lab.line('orch', agentCall(`toolu_${role}`, 'Ticket T-1, size M.', { role }));
+    h.lab.line('orch', agentCall('toolu_helper', 'Look this up.', { role: 'explorer' }));
+    for (const role of ['reviewer', 'qa-verifier', 'scribe', 'explorer']) assert.equal(row(h, 'orch', `toolu_${role}`)?.excluded, 'no draw', role);
+    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(1, 0, 0)], 'out of the experiment, but no opt-out');
+    // The twin: the implementer slice of the same ticket without its draw is one.
+    h.lab.line('orch', agentCall('toolu_impl', 'Ticket T-1, size M.'));
+    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(1, 0, 0, 'orch', 1)]);
+    // A role this experiment drew for draws too.
+    drawOk(h.lab, { ...forT1, ticket: 'T-2', role: 'perf-tester' });
+    h.lab.line('orch', agentCall('toolu_perf', 'Ticket T-2, size M.', { role: 'perf-tester' }));
+    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(2, 0, 0, 'orch', 2)]);
+  } finally {
+    h.done();
+  }
+});
+
+test('fifth review, 2: a slice that started before the draw is no opt-out; one that started after it is', async () => {
+  const h = await harness(T0 + 300_000);
+  try {
+    h.lab.line('orch', agentCall('toolu_before', 'Ticket T-1, size M.', { at: T0 + 120_000 }));
+    h.lab.line('orch', agentCall('toolu_before_none', 'Just do the thing.', { at: T0 + 120_000 }));
+    drawOk(h.lab, forT1); // at T0 + 300 s
+    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(1, 0, 0)], 'both started before anything was drawn');
+    h.lab.line('orch', agentCall('toolu_after', 'Ticket T-1, size M.', { at: T0 + 400_000 }));
+    h.lab.line('orch', agentCall('toolu_after_none', 'Just do the thing.', { at: T0 + 400_000 }));
+    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(1, 0, 0, 'orch', 2)]);
+  } finally {
+    h.done();
+  }
+});
+
+test('fifth review, 3: a draws-only experiment counts only its own draws, by ticket and by session', async () => {
+  const h = await harness();
+  try {
+    drawOk(h.lab, forT1); // at T0 + 60 s: E2 only
+    const later = h.lab.createExperiment({ name: 'later', design: 'randomized', arms: ['a', 'b'], primaryMetric: 'm', drawsOnly: true, startMs: T0 + 90_000 });
+    h.lab.line('orch', agentCall('toolu_t1', 'Ticket T-1, size M.'));
+    h.lab.line('orch', agentCall('toolu_none', 'Just do the thing.'));
+    assert.equal(row(h, 'orch', 'toolu_t1')?.excluded, 'no draw');
+    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(1, 0, 0, 'orch', 2)]);
+    assert.deepEqual(h.lab.drawStats(later.id), [], 'no draw of its own: nothing to opt out of');
+    // The twin: a draw for the later experiment counts there too.
+    h.setNow(T0 + 200_000);
+    drawOk(h.lab, { ...forT1, ticket: 'T-2' });
+    h.lab.line('orch', agentCall('toolu_t2', 'Ticket T-2, size M.', { at: T0 + 300_000 }));
+    assert.deepEqual(h.lab.drawStats(later.id), [stat(1, 0, 0, 'orch', 1)]);
+  } finally {
+    h.done();
+  }
+});
+
+test('fifth review, 4: a slice naming a ticket the portal does not have names no ticket (the tickets table, no injected reader)', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'labdraw-real-'));
+  const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
+  const lab = new Lab({ store, now: () => T0 + 60_000 });
+  try {
+    const db = store.db!;
+    const at = new Date(T0).toISOString();
+    db.prepare("INSERT INTO tickets (type, priority, priority_rank, status, summary, source, reporter_kind, reporter_label, created_at, updated_at) VALUES ('task', 'normal', 2, 'open', 'One', 'human', 'ui', 'Admin', ?, ?)").run(at, at);
+    const e = lab.createExperiment({ name: 'E2', design: 'randomized', arms: ['a', 'b'], primaryMetric: 'm', drawsOnly: true, startMs: T0 });
+    assert.ok(lab.drawArms(forT1).draw, 'T-1 is in the tickets table');
+    assert.throws(() => lab.drawArms({ ...forT1, ticket: 'T-40' }), /no such ticket/);
+    lab.line('orch', agentCall('toolu_ghost', 'Ticket T-40, size M.'));
+    lab.line('C', agentCall('toolu_ghost_c', 'Ticket T-40, size M.'));
+    assert.deepEqual(lab.drawStats(e.id), [stat(1, 0, 0, 'orch', 1)], 'a made-up ticket in a session that drew counts; C never drew');
+    // The twin: a real ticket nobody drew for is no opt-out.
+    db.prepare("INSERT INTO tickets (type, priority, priority_rank, status, summary, source, reporter_kind, reporter_label, created_at, updated_at) VALUES ('task', 'normal', 2, 'open', 'Two', 'human', 'ui', 'Admin', ?, ?)").run(at, at);
+    lab.line('orch', agentCall('toolu_real2', 'Ticket T-2, size M.'));
+    assert.deepEqual(lab.drawStats(e.id), [stat(1, 0, 0, 'orch', 1)]);
+  } finally {
+    lab.close();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 type Row = { result?: { isError?: boolean; structuredContent?: any }; error?: unknown };
 const where = (m: Row) => m.result?.structuredContent as any;
 const refused = (m: Row) => !!(m.error || m.result?.isError);
@@ -429,6 +509,9 @@ test('MCP: lab_arm_draw is an agent tool for its own session; the coordinator se
   const registry = new ToolRegistry();
   const mcp = await portalMcpHarness({ registry });
   registerLabTools(h.lab, registry);
+  let statCalls = 0;
+  const realStats = h.lab.drawStats.bind(h.lab);
+  h.lab.drawStats = (id) => (statCalls++, realStats(id));
   try {
     assert.deepEqual(declaredToolPolicies().get('lab_arm_draw'), LAB_TOOL_POLICIES.lab_arm_draw);
     assert.deepEqual(LAB_TOOL_POLICIES.lab_arm_draw, { kind: 'agent', reach: 'session', audit: 'lab.arm.draw' });
@@ -447,7 +530,9 @@ test('MCP: lab_arm_draw is an agent tool for its own session; the coordinator se
     assert.ok(refused(await mcp.call(agent.secret, 'lab_arm_draw', { role: 'implementer' })), 'a draw names its ticket');
     assert.ok(refused(await mcp.call(agent.secret, 'lab_arm_draw', { ticket: 'T-99999' })), 'a ticket that does not exist (P5)');
     assert.ok(refused(await mcp.call(mcp.token('admin').secret, 'lab_arm_draw', { ticket: 'T-1' })), 'an admin token has no session to draw for');
+    statCalls = 0;
     const full = where(await mcp.call(mcp.token('admin').secret, 'lab_summary', { full: true }));
+    assert.equal(statCalls, full.experiments.length, 'drawStats once per experiment row');
     assert.deepEqual(full.experiments.find((e: { id: string }) => e.id === h.e2.id).draws, [stat(2, 0, 1, 'orch-session')]);
     assert.equal(full.experiments.find((e: { id: string }) => e.id === h.e2.id).draws_only, true);
     assert.equal(full.experiments.find((e: { id: string }) => e.id === h.e2.id).opted_out, 0, 'the experiment total');

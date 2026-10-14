@@ -42,18 +42,21 @@ export function compactRow(r: LabSummaryRow) {
   };
 }
 
-const experimentRow = (v: LabExperimentView, ctx: PortalToolContext, lab: Lab) => ({
-  id: v.experiment.id,
-  name: ctx.untrusted(v.experiment.name, 'lab', 80),
-  status: v.experiment.status,
-  design: v.experiment.design,
-  strata: v.experiment.strata,
-  draws_only: v.experiment.drawsOnly,
-  excluded: v.excluded,
-  draws: lab.drawStats(v.experiment.id),
-  opted_out: lab.drawStats(v.experiment.id).reduce((n, d) => n + d.opted_out, 0),
-  arms: v.arms.map((a) => ({ arm: a.arm, n: a.n, accepted: a.accepted, cost_per_accepted: r2(a.costPerAccepted), ci90: ci(a.costPerAcceptedInterval) })),
-});
+const experimentRow = (v: LabExperimentView, ctx: PortalToolContext, lab: Lab) => {
+  const draws = lab.drawStats(v.experiment.id);
+  return {
+    id: v.experiment.id,
+    name: ctx.untrusted(v.experiment.name, 'lab', 80),
+    status: v.experiment.status,
+    design: v.experiment.design,
+    strata: v.experiment.strata,
+    draws_only: v.experiment.drawsOnly,
+    excluded: v.excluded,
+    draws,
+    opted_out: draws.reduce((n, d) => n + d.opted_out, 0),
+    arms: v.arms.map((a) => ({ arm: a.arm, n: a.n, accepted: a.accepted, cost_per_accepted: r2(a.costPerAccepted), ci90: ci(a.costPerAcceptedInterval) })),
+  };
+};
 
 export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools): void {
   registry.register({

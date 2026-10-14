@@ -964,10 +964,15 @@ preloaded files, against today's brief) needs the arm before the brief is writte
   given stay). Drawn arms are not block places: the blocks (§28.12) are the slices that got their arm at the start, so a draw, used or
   not, moves no other slice's arm. `lab_summary` full shows per experiment `draws_only` and `draws`: per session, every draw (`draws`),
   `bound`, `unbound` (abandoned: open, refused or expired), `redraw` (a draw for a ticket the session drew for before, whatever the role;
-  a later slice of the same ticket counts too) and `opted_out`: slices of the session kept out (`no draw` or `draw not bound`) whose
-  ticket has any draw, from any session, bound or not (a peek in one session and the work in another, a throwaway bound first and the
-  real work without a draw, a follow-up slice without one), or that name no ticket while that session has drawn; per experiment also the
-  total `opted_out`. The plan step's explorer slice of a drawn ticket counts too (it carries no draw). A draw is never deleted.
+  a later slice of the same ticket counts too) and `opted_out`: slices of the session kept out that should have carried a draw, namely
+  any slice whose draw line did not bind (`draw not bound`, whatever its role) and a slice of a drawing role that started without one
+  (`no draw`; the drawing roles are `implementer`, per `docs/dev-sessions/orchestrator.md`, and any role this experiment drew for, so a
+  reviewer, QA, scribe or explorer slice, the plan step's explorer included, is out of the experiment but no opt-out). Such a slice
+  counts when its ticket has a draw of THIS experiment (`lab_assignments.experiment_id`; any session, bound or not) made before the
+  slice started (a peek in one session and the work in another, a throwaway bound first and the real work without a draw, a follow-up
+  slice without one), or, when it names no ticket or a ticket the portal's tickets table does not have, when its own session drew for
+  this experiment before it started; per experiment also the total `opted_out`. A slice naming another real ticket that nobody drew
+  for is no opt-out. A draw is never deleted.
 - **Retention**: an unbound draw older than 14 days expires (`prune().draws`): it can no longer bind, its row and held arms stay, so it is
   still counted. `lab_draws` therefore only grows, one short row per draw, at most 120 per hour per token (the tool's rate limit).
 - **Known limits.** The unit of the drawn arm is the ticket: a ticket's slices share one arm, so they are not independent (an interval
@@ -990,4 +995,5 @@ preloaded files, against today's brief) needs the arm before the brief is writte
   `lab/draw.test.ts` (the drawn arm kept; probe A, a draw taken by another role; the honest mismatch; probe B, a redraw behind a throwaway
   call; the second review's throwaway that matches, the peek, the changed size and retention keeping the evidence; the third review's
   ticket spelling and role, draws only and the opt-out count, the upgrade from 854; another session, a nested call, the second line;
-  draws outside the blocks and the seed; the tool) and `qa/planStep.test.ts`.
+  draws outside the blocks and the seed; the fifth review's opt-outs only for drawing roles, only after the draw, only the experiment's
+  own draws, a made-up ticket as no ticket on the real tickets table; the tool) and `qa/planStep.test.ts`.
