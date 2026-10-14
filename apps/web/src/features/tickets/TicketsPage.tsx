@@ -21,7 +21,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { errorText } from '@/lib/api';
 import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
-import { BOARD_COLUMNS, ageShort } from './labels';
+import { BOARD_COLUMNS, ageShort, pageFilter } from './labels';
 import { AssigneeChip, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge } from './parts';
 import { NewTicketDialog, TicketBumpDialog } from './TicketDialogs';
 
@@ -62,6 +62,7 @@ export function TicketsPage() {
   const scope = (params.get('s') ?? 'active') as Scope;
   const needs = params.get('assignee') === 'user';
   const queue = params.get('assignee') === 'unassigned';
+  const orphans = params.get('orphan') === '1';
   const priority = params.get('priority') as TicketPriority | null;
   const type = params.get('type') as TicketType | null;
   const tag = params.get('tag');
@@ -84,19 +85,7 @@ export function TicketsPage() {
       { replace: true },
     );
 
-  const filter = useMemo<TicketFilter>(() => {
-    const f: TicketFilter = { limit: 300 };
-    if (view === 'board') f.includeClosed = true;
-    else if (scope === 'closed') f.status = ['done', 'wont_do'];
-    else if (scope !== 'active') f.status = [scope];
-    if (needs) f.assignee = 'user';
-    if (queue) f.assignee = 'unassigned';
-    if (priority && TICKET_PRIORITIES.includes(priority)) f.priority = [priority];
-    if (type && TICKET_TYPES.includes(type)) f.type = [type];
-    if (tag) f.tag = tag;
-    if (q) f.query = q;
-    return f;
-  }, [view, scope, needs, queue, priority, type, tag, q]);
+  const filter = useMemo<TicketFilter>(() => pageFilter({ view, scope, needs, queue, orphans, priority, type, tag, q }), [view, scope, needs, queue, orphans, priority, type, tag, q]);
 
   const seq = useRef(0);
   const load = useCallback(async () => {
@@ -214,12 +203,17 @@ export function TicketsPage() {
                 </Chip>
               );
             })}
-          <Chip on={needs} tone="warning" onClick={() => set({ assignee: needs ? null : 'user', s: null })} count={counts?.needsYou ?? null}>
+          <Chip on={needs} tone="warning" onClick={() => set({ assignee: needs ? null : 'user', s: null, orphan: null })} count={counts?.needsYou ?? null}>
             Needs you
           </Chip>
-          <Chip on={queue} title="Nobody has these: agents can take them" onClick={() => set({ assignee: queue ? null : 'unassigned', s: null })} count={counts?.unassigned ?? null}>
+          <Chip on={queue} title="Nobody has these: agents can take them" onClick={() => set({ assignee: queue ? null : 'unassigned', s: null, orphan: null })} count={counts?.unassigned ?? null}>
             Unassigned
           </Chip>
+          {(orphans || !!counts?.orphans) && (
+            <Chip on={orphans} tone="danger" title="Their session ended: the portal moves them in a few minutes" onClick={() => set({ orphan: orphans ? null : '1', assignee: null })} count={counts?.orphans ?? null}>
+              Orphans
+            </Chip>
+          )}
         </div>
 
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 [&::-webkit-scrollbar]:hidden">
@@ -233,7 +227,7 @@ export function TicketsPage() {
       {!data && !failed && <RowsSkeleton rows={4} lines={2} trailing icon="rounded-2xl" />}
       {data &&
         (data.items.length === 0 ? (
-          <EmptyState icon={<TicketIcon className="size-6" />} title={q || needs || queue || priority || type || tag ? 'No match' : 'No tickets'} action={q || needs || queue || priority || type || tag ? undefined : add} />
+          <EmptyState icon={<TicketIcon className="size-6" />} title={q || needs || queue || orphans || priority || type || tag ? 'No match' : 'No tickets'} action={q || needs || queue || orphans || priority || type || tag ? undefined : add} />
         ) : view === 'list' ? (
           <ul className="flex flex-col gap-2">
             {data.items.map((t) => (
@@ -266,7 +260,7 @@ export function TicketsPage() {
   );
 }
 
-function Chip({ on, onClick, count, tone, title, children }: { on: boolean; onClick: () => void; count: number | null; tone?: 'warning'; title?: string; children: React.ReactNode }) {
+function Chip({ on, onClick, count, tone, title, children }: { on: boolean; onClick: () => void; count: number | null; tone?: 'warning' | 'danger'; title?: string; children: React.ReactNode }) {
   return (
     <button
       type="button"
@@ -275,7 +269,13 @@ function Chip({ on, onClick, count, tone, title, children }: { on: boolean; onCl
       onClick={onClick}
       className={cn(
         'press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[13.5px] font-semibold transition-colors',
-        on ? 'border-primary bg-primary text-primary-ink' : tone === 'warning' && count ? 'border-gold/50 bg-gold-soft text-ink hover:border-gold' : 'border-line bg-surface text-ink-soft hover:border-line-strong hover:text-ink',
+        on
+          ? 'border-primary bg-primary text-primary-ink'
+          : tone === 'warning' && count
+            ? 'border-gold/50 bg-gold-soft text-ink hover:border-gold'
+            : tone === 'danger' && count
+              ? 'border-danger/50 bg-danger-soft text-ink hover:border-danger'
+              : 'border-line bg-surface text-ink-soft hover:border-line-strong hover:text-ink',
       )}
     >
       {children}
