@@ -61,9 +61,11 @@ export async function spendHarness(opts: { now?: { t: number }; settings?: Recor
     claude(id: string, workspaceId: string, name: string, directory = `claudes/${id.padEnd(16, '0').slice(0, 16)}`) {
       db.prepare('INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES (?, ?, ?, ?, ?)').run(id, workspaceId, name, directory, new Date(NOW).toISOString());
     },
-    session(id: string, s: { workspaceId?: string; claudeId?: string; parentId?: string | null; ticketId?: string | null; title?: string } = {}) {
+    session(id: string, s: { workspaceId?: string; claudeId?: string; parentId?: string | null; ticketId?: string | null; title?: string; continuedFrom?: string | null } = {}) {
       const at = new Date(NOW).toISOString();
-      db.prepare('INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, ticket_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      db.prepare(
+        'INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, ticket_id, continued_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(
         id,
         s.workspaceId ?? 'docker/api',
         s.title ?? id,
@@ -74,6 +76,7 @@ export async function spendHarness(opts: { now?: { t: number }; settings?: Recor
         s.claudeId ?? '',
         s.parentId ?? null,
         s.ticketId ?? null,
+        s.continuedFrom ?? null,
       );
     },
     deleteSession(id: string) {

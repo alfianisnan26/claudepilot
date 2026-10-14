@@ -570,6 +570,39 @@ test('attribution from the database: children roll up into their parent, even af
   }
 });
 
+test('attribution from the database follows continued_from: a chat split over rows is one unit under its first row, even one with no request in the window (T-312)', async () => {
+  const h = await spendHarness();
+  try {
+    h.seed.claude('c1', 'docker/api', 'Kresna');
+    // A (ticket T-7) ended and was continued by B, B by C; C started a worker WK. A's only request is two days old, outside the 1d window.
+    h.seed.session('A', { claudeId: 'c1', ticketId: 'T-7', title: 'Orchestrator' });
+    h.seed.session('B', { claudeId: 'c1', title: 'Orchestrator', continuedFrom: 'A' });
+    h.seed.session('C', { claudeId: 'c1', title: 'Orchestrator', continuedFrom: 'B' });
+    h.seed.session('WK', { claudeId: 'c1', title: 'Worker', parentId: 'C' });
+    h.clock.t = NOW;
+    h.seed.usage({ atMs: NOW - 2 * DAY, session: 'A', costUsd: 9 });
+    h.seed.usage({ atMs: NOW - 3 * HOUR, session: 'B', costUsd: 1 });
+    h.seed.usage({ atMs: NOW - 2 * HOUR, session: 'C', costUsd: 2 });
+    h.seed.usage({ atMs: NOW - HOUR, session: 'WK', costUsd: 0.5 });
+
+    const tree = h.spend.attribution({ by: 'session', range: '1d' });
+    assert.deepEqual(tree.rows.map((r) => [r.key, r.session!.depth, r.own.costUsd, r.total.costUsd, r.session!.continuedFrom]), [
+      ['A', 0, 0, 3.5, null],
+      ['C', 1, 2, 2.5, 'B'],
+      ['WK', 2, 0.5, 0.5, null],
+      ['B', 1, 1, 1, 'A'],
+    ]);
+    assert.equal(tree.totals.costUsd, 3.5);
+    assert.deepEqual(h.spend.attribution({ by: 'ticket', range: '1d' }).rows.map((r) => [r.key, r.total.costUsd]), [['T-7', 3.5]], 'the chain’s ticket, not "No ticket"');
+
+    // A session's own view starts at itself: nothing it continues is shown above it.
+    const own = h.spend.attribution({ by: 'session', range: '1d', sessionId: 'C' });
+    assert.deepEqual(own.rows.map((r) => [r.key, r.session!.depth, r.total.costUsd]), [['C', 0, 2.5], ['WK', 1, 0.5]]);
+  } finally {
+    h.done();
+  }
+});
+
 test('a session’s title and links are kept from its latest request', async () => {
   const h = await spendHarness();
   try {

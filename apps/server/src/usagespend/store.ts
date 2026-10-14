@@ -300,8 +300,17 @@ export class SpendStore {
         for (let i = 0; i < want.length; i += CHUNK) {
           const part = want.slice(i, i + CHUNK);
           const live = db
-            .prepare(`SELECT id, workspace_id, claude_id, parent_id, ticket_id, title, state FROM chat_sessions WHERE id IN ${inList(part.length)}`)
-            .all(...part) as unknown as { id: string; workspace_id: string; claude_id: string; parent_id: string | null; ticket_id: string | null; title: string; state: string }[];
+            .prepare(`SELECT id, workspace_id, claude_id, parent_id, continued_from, ticket_id, title, state FROM chat_sessions WHERE id IN ${inList(part.length)}`)
+            .all(...part) as unknown as {
+            id: string;
+            workspace_id: string;
+            claude_id: string;
+            parent_id: string | null;
+            continued_from: string | null;
+            ticket_id: string | null;
+            title: string;
+            state: string;
+          }[];
           for (const r of live) {
             r.workspace_id = this.workspaceKeyOf(r.workspace_id);
             out.set(r.id, {
@@ -309,6 +318,7 @@ export class SpendStore {
               workspaceId: r.workspace_id,
               claudeId: this.claudeKey(r.claude_id, r.workspace_id, defaults),
               parentId: r.parent_id,
+              continuedFrom: r.continued_from,
               ticketId: r.ticket_id,
               title: r.title,
               state: SESSION_STATES.includes(r.state) ? (r.state as ChatSessionState) : null,
@@ -334,10 +344,10 @@ export class SpendStore {
             }
           }
         }
-        // The ancestors not yet loaded.
+        // The ancestors not yet loaded: the parent, and the session it continues (T-312: its chain rolls up to the root).
         for (const id of want) {
-          const p = out.get(id)?.parentId;
-          if (p && !out.has(p)) next.add(p);
+          const s = out.get(id);
+          for (const p of [s?.parentId, s?.continuedFrom]) if (p && !out.has(p)) next.add(p);
         }
         want = [...next];
       }
