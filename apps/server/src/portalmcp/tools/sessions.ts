@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
-import type { ChatEvent, ChatPermissionMode, ChatRequest, ChatSession } from '@portal/contracts';
+import { CHAT_AGENT_NAME, type ChatEvent, type ChatPermissionMode, type ChatRequest, type ChatSession } from '@portal/contracts';
 import { z } from 'zod';
 import { paginate, pageInput } from '../paging.js';
 import { PortalToolError, registerPortalTool, type PortalToolContext } from '../registry.js';
@@ -25,6 +25,7 @@ const sessionBrief = (s: ChatSession, ctx: PortalToolContext) => ({
   origin: s.origin,
   started_by: s.startedBy ?? null,
   ticket_id: s.ticketId ?? null,
+  agent: s.agent ?? null,
   model: s.model,
   effort: s.effort,
   mode: s.mode,
@@ -180,10 +181,14 @@ export function registerSessionTools(deps: PortalToolDeps): void {
       title: z.string().max(80).optional(),
       claude_id: z.string().max(80).optional(),
       ticket_id: z.string().max(64).optional(),
+      agent: z.string().regex(CHAT_AGENT_NAME).optional().describe('The agent it runs as, .claude/agents/<agent>.md in its folder (e.g. implementer): its prompt, its tools and its model, at every start of its process.'),
     }),
     async handler(ctx, args) {
       assertCanChange(store, 'workspace');
-      const s = await chat.create({ workspaceId: args.workspace_id, cwd: args.folder, title: args.title, claudeId: args.claude_id, ticketId: args.ticket_id }, { actor: ctx.actor });
+      const s = await chat.create(
+        { workspaceId: args.workspace_id, cwd: args.folder, title: args.title, claudeId: args.claude_id, ticketId: args.ticket_id, ...(args.agent ? { agent: args.agent } : {}) },
+        { actor: ctx.actor },
+      );
       if (args.prompt) await sendChecked(s.id, args.prompt, undefined, ctx);
       ctx.affected(`session:${s.id}`, `workspace:${s.workspaceId}`);
       return { summary: `Started session ${s.id} in ${s.workspaceId}.`, session: sessionBrief(s, ctx), ui: uiLink(`/admin/sessions/${s.id}`) };

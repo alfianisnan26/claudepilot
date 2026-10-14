@@ -315,7 +315,7 @@ test('over MCP a session starts a worker in its own workspace, on its own Claude
   }
 });
 
-test('T-294 over MCP: a worker on auto runs on a Claude with room, by its role, mode first; an unconfirmed narrowing mode ends it before any instruction; its crew sees and messages each other', async () => {
+test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (--agent), mode first; an unconfirmed narrowing mode ends it before any instruction; its crew sees and messages each other', async () => {
   const r = await rig();
   try {
     r.s.controller.controlTimeoutMs = 150;
@@ -340,9 +340,12 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, by its role, 
     assert.deepEqual([out.role, out.applied, out.unconfirmed], ['qa-verifier', ['mode dontAsk'], []]);
     assert.match(started.result!.content![0]!.text, /^Started worker \S+ on Work, a Claude with room by a fresh, measured reading, mode dontAsk\./);
     const worker = r.s.controller.get(out.id)!;
-    assert.deepEqual([worker.claudeId, worker.parentId, worker.bypassCapable, worker.mode], [work.id, r.s.id, false, 'dontAsk']);
+    assert.deepEqual([worker.claudeId, worker.parentId, worker.bypassCapable, worker.mode, worker.agent], [work.id, r.s.id, false, 'dontAsk', 'qa-verifier']);
+    // The role is its agent: its process starts as `claude --agent qa-verifier`, so the first instruction is the parent's, as written.
+    const launch = r.s.ws.startArgs.find((x) => x.includes(worker.claudeSessionId))!;
+    assert.equal(launch[launch.indexOf('--agent') + 1], 'qa-verifier');
     const opening = r.s.controller.history(worker.id).find((e) => e.kind === 'user')!;
-    assert.equal(opening.text, 'You work as the qa-verifier role: read .claude/agents/qa-verifier.md in your folder first and follow it.\n\nVerify T-7 against its done criteria.');
+    assert.equal(opening.text, 'Verify T-7 against its done criteria.');
     const spawned = r.s.controller.audit({ kind: 'agent.spawned' }).find((x) => x.sessionId === worker.id)!;
     assert.deepEqual(spawned.detail.spawn, { claude: work.id, why: 'room', role: 'qa-verifier', model: null, effort: null, mode: 'dontAsk' }, 'the audit row says how');
 
@@ -362,6 +365,9 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, by its role, 
     assert.match(s2.unconfirmed.join(' '), /^model sonnet: /);
     assert.match(second.result!.content![0]!.text, /Not confirmed: model sonnet: /);
     assert.ok(r.s.controller.history(s2.id).some((e) => e.kind === 'user' && e.text === 'Review the diff of T-7.'), 'its first instruction went in');
+    await until(() => r.s.ws.startArgs.some((a) => a.includes(s2.id)));
+    assert.equal(r.s.controller.get(s2.id)!.agent, null, 'no role, no agent');
+    assert.ok(!r.s.ws.startArgs.find((a) => a.includes(s2.id))!.includes('--agent'));
 
     // Refused before anything starts: an unknown Claude, a bad role, and the modes a session can't hand a worker.
     const count = r.s.controller.children(r.s.id).length;

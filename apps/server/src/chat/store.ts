@@ -89,6 +89,8 @@ export type ChatSessionRow = {
   ticket_id?: string | null;
   parent_id?: string | null;
   started_by?: string | null;
+  /** T-294 (migration 773): the agent it runs as (`--agent`); null: Claude Code's default. */
+  agent?: string | null;
   worktree_path?: string | null;
   worktree_branch?: string | null;
   worktree_repo?: string | null;
@@ -378,14 +380,16 @@ export class ChatStore {
     bypassCapable?: boolean;
     /** The ended session it continues (T-270). */
     continuedFrom?: string | null;
+    /** T-294: the agent it runs as, already checked against `CHAT_AGENT_NAME`. */
+    agent?: string | null;
   }): ChatSession {
     const now = this.#stamp();
     const db = this.#writable();
     db
       .prepare(
         `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
-           ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from, agent)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         opts.id,
@@ -407,6 +411,7 @@ export class ChatStore {
         opts.id,
         opts.bypassCapable ? 1 : 0,
         opts.continuedFrom ?? null,
+        opts.agent ?? null,
       );
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(opts.id, opts.claudeId ?? '', opts.id, opts.cwd, now);
@@ -515,6 +520,7 @@ export class ChatStore {
       parentId: row.parent_id ?? null,
       worktree: row.worktree_path ? { path: row.worktree_path, branch: row.worktree_branch ?? '', repo: row.worktree_repo ?? '' } : null,
       startedBy: row.started_by ?? null,
+      agent: row.agent ?? null,
     };
   }
 

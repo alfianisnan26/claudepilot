@@ -544,7 +544,7 @@ session control over MCP" is on (off by default); otherwise only `session_list`,
 | `session_interrupt` | operate | I | `id` | State; the turn stops and work already done is kept |
 | `session_end` | operate | D I | `id` | Final state |
 | `session_respond` | operate; `allow` needs admin | D U; C for `allow` | `id`, `request_id`, `answer` or `decision` (`allow`, `deny`), plan `mode`, `message`, `confirm_token` | Accepted; the first answer per `request_id` wins. `allow` covers a tool, a plan, a workflow or an MCP elicitation, and its preview shows the exact request, sanitized. |
-| `session_start` | admin | D O U | `workspace_id`, `folder` (default `~/work`), `prompt`, `model`, `effort`, `mode` | Session id and state |
+| `session_start` | admin | D O U | `workspace_id`, `folder` (default `~/work`), `prompt`, `model`, `effort`, `mode`, `agent` (T-294: the agent it runs as, `claude --agent <name>`) | Session id and state |
 | `session_send` | admin | D O U | `id`, `text`, `priority` (`next` steers this turn, `later` waits for it to end) | Accepted, message state |
 | `session_configure` | admin | D U; C when raising the mode | `id`, `model`, `effort`, `mode` | Values after policy caps. Modes rank `plan`, then `default` or `dontAsk`, then `acceptEdits` ([Monitoring](monitoring-dashboard.md) §12). |
 

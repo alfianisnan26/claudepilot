@@ -181,6 +181,24 @@ test('migration 712: every workspace the portal knew gets a stable id, the runti
   }
 });
 
+test('migration 773 (T-294): a session gets the agent it runs as; every session from before runs as none', async () => {
+  const dir = tempDir();
+  const key = newKey();
+  const first = await Store.open({ dataDir: dir, secretKey: key, migrations: MIGRATIONS.filter((m) => m.version !== 773) });
+  const at = new Date().toISOString();
+  first.db!.prepare("INSERT INTO chat_sessions (id, workspace_id, state_since, created_at, last_activity_at) VALUES ('old', 'docker/api', ?, ?, ?)").run(at, at, at);
+  first.close();
+  const store = await Store.open({ dataDir: dir, secretKey: key, migrations: MIGRATIONS });
+  try {
+    assert.equal(store.trust.state, 'ok');
+    assert.deepEqual(store.db!.prepare("SELECT id, agent FROM chat_sessions").all().map((r) => ({ ...r })), [{ id: 'old', agent: null }]);
+    store.db!.prepare("UPDATE chat_sessions SET agent = 'implementer' WHERE id = 'old'").run();
+    assert.equal((store.db!.prepare("SELECT agent FROM chat_sessions WHERE id = 'old'").get() as { agent: string }).agent, 'implementer');
+  } finally {
+    store.close();
+  }
+});
+
 test('a failing migration rolls back and freezes the portal', async () => {
   const dir = tempDir();
   (await Store.open({ dataDir: dir, secretKey: newKey() })).close();

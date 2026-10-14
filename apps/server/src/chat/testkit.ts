@@ -4,7 +4,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ChatServerMessage, ChatTask } from '@portal/contracts';
+import type { ChatServerMessage, ChatTask, CreateChatSessionRequest } from '@portal/contracts';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import type { Workspaces } from '../workspaces/manager.js';
@@ -234,15 +234,16 @@ export function controls(ws: FakeWorkspaces): Control[] {
 }
 
 /** A started session with its reader attached, a log of everything dispatched, and a way to take each
- *  new control request of a subtype as the controller writes it. `start` also starts durability work. */
-export async function liveSession(opts: ChatControllerOptions = {}, start = false) {
+ *  new control request of a subtype as the controller writes it. `start` also starts durability work; `req` adds to the create request
+ *  (an agent, say). */
+export async function liveSession(opts: ChatControllerOptions = {}, start = false, req: Partial<CreateChatSessionRequest> = {}) {
   const { store, dataDir } = await freshStore();
   const ws = new FakeWorkspaces();
   const controller = new ChatController(store, ws as unknown as Workspaces, opts);
   if (start) controller.start();
   const messages: ChatServerMessage[] = [];
   controller.onEvent((_id, msg) => messages.push(msg));
-  const id = (await controller.create({ workspaceId: 'docker/ws1' })).id;
+  const id = (await controller.create({ workspaceId: 'docker/ws1', ...req })).id;
   await until(() => ws.tails.length === 1);
   await until(() => controller.get(id)?.state === 'idle');
   await sleep(20); // let the tail attach its data handler
