@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { ControlResponse } from './protocol.js';
 
 /**
  * The integrity checks' accepted cases (chat-sessions PRD §10.4, T-136): the ONLY lines Claude Code writes that the controller believes
@@ -72,7 +73,49 @@ export const INTEGRITY_CASES: readonly IntegrityCase[] = [
       'out.*.jsonl on the dev workspace, so the second copy was the same line read again, not a second answer',
     negative: 'a second response with different content, or a response for an id the portal never asked or answered',
   },
+  {
+    id: 'control-replay-undigested',
+    line: 'a second control_response for a request the portal asked (or an answer it gave) and completed before T-136, whose first copy kept no digest',
+    rule:
+      'ignored and logged only when it is a success whose body is one the portal\'s own requests produce (sameAnswer): empty (set_model, ' +
+      'interrupt, apply_flag_settings, stop_task, cancel_async_message), {mode} for a mode the portal set or expects on this session ' +
+      '(set_permission_mode), or only the keys get_settings, list_models or get_usage reply with; for an answer the portal gave, a ' +
+      '{behavior} that is the outcome it recorded (allow, deny)',
+    evidence:
+      'orchestrator 5c9fcb5f, 2026-10-13 17:58 (raw out.1.jsonl): line 1, the set_permission_mode reply {mode: "bypassPermissions"} of ' +
+      '15:46 (asked before migration 771, so no digest), read again when the follower replayed the file from byte 0 (T-265); the id ' +
+      'appears once in the file, and the portal ended the session on it',
+    negative:
+      'a different mode, an error reply, a body of another shape, an echo whose behavior is not the recorded outcome, or an id the ' +
+      'portal never asked or answered',
+  },
 ];
+
+/** What the portal knows of a completed control line whose first response kept no digest (asked before migration 771). */
+export type ControlExpectation = { kind: 'asked'; modes: readonly string[] } | { kind: 'answered'; outcome: string | null };
+
+/** The keys of the replies the portal's own requests read (Claude Code 2.1.296): get_settings, list_models, get_usage. */
+const REPLY_KEYS: readonly (readonly string[])[] = [['applied'], ['models'], ['session', 'subscription_type', 'rate_limits_available', 'rate_limits', 'behaviors']];
+
+/**
+ * Whether a second response for a control line that kept no digest is the same answer by shape (INTEGRITY_CASES
+ * `control-replay-undigested`): a success, with a body the portal's own request can have produced, and for an echo of the portal's
+ * answer, the behavior it recorded. Anything else is a different answer.
+ */
+export function sameAnswer(reply: ControlResponse, expect: ControlExpectation): boolean {
+  if (!reply.ok) return false;
+  const body = reply.response;
+  const keys = Object.keys(body);
+  if (expect.kind === 'answered') {
+    const behavior = body.behavior;
+    if (behavior === 'allow') return expect.outcome === 'allowed_once' || expect.outcome === 'allowed_session';
+    if (behavior === 'deny') return expect.outcome === 'denied';
+    return false;
+  }
+  if (keys.length === 0) return true;
+  if (keys.length === 1 && keys[0] === 'mode') return typeof body.mode === 'string' && expect.modes.includes(body.mode);
+  return REPLY_KEYS.some((shape) => keys.every((k) => shape.includes(k)));
+}
 
 /** How long after a sub-agent's SendMessage was queued its peer line may arrive (observed: the same second). */
 export const PEER_CAUSE_MS = 120_000;

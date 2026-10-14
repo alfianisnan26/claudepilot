@@ -268,8 +268,10 @@ case "$cmd" in
     dir="$base/$id"
     mkdir -p "$dir"
     : >> "$dir/out.$seg.jsonl"
+    size=$(( $(wc -c < "$dir/out.$seg.jsonl") ))
+    if [ "$offset" -gt "$size" ]; then printf '%s' "$size"; exit 6; fi
     # Follow from a 1-based byte position; stop when our own stdin closes (portal ends the exec).
-    timeout 600 sh -c 'tail -c "+$(($3 + 1))" -f "$1/out.$2.jsonl" & tp=$!; cat >/dev/null; kill "$tp" 2>/dev/null' sh "$dir" "$seg" "$offset"
+    timeout 600 sh -c 'tail -c "+$(($3 + 1))" -f "$1/out.$2.jsonl" 2>>"$1/tail.err" & tp=$!; cat >/dev/null; kill "$tp" 2>/dev/null' sh "$dir" "$seg" "$offset"
     ;;
   stop)
     id="${1:-}"

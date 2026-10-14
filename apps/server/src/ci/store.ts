@@ -96,6 +96,10 @@ export interface EnvironmentRow {
   created_at: string;
   updated_at: string;
   updated_by: string;
+  /** Migration 780 (T-110): the auto-approve mode, its window (null: always) and its 'needs a person' globs as JSON (null: the defaults). */
+  auto_approve?: 'off' | 'dry' | 'on';
+  auto_window?: string | null;
+  auto_paths?: string | null;
 }
 
 /** One run's job tied to an environment. `gate_key` is the runner's key for that job: never leaves the service except into `cp-ci approve`. */
@@ -118,6 +122,10 @@ export interface DeploymentRow {
   owner_id: string;
   created_by: string;
   created_at: string;
+  /** Migration 780 (T-110): the auto-approve rule's verdict on this deployment and its one line; null when the rule did not look. */
+  auto_verdict?: 'would' | 'would_not' | null;
+  auto_line?: string | null;
+  auto_at?: string | null;
 }
 
 /** A message CI sent to a session about a run, or decided not to (migrations 81 and 730). */
@@ -429,6 +437,54 @@ export class CiStore {
 
   setProtected(id: string, value: boolean, by: string): void {
     this.#writableDb.prepare('UPDATE ci_environments SET protected = ?, updated_at = ?, updated_by = ? WHERE id = ?').run(value ? 1 : 0, new Date().toISOString(), by, id);
+  }
+
+  /* ---------- The auto-approve rule (T-110, PRD FR41a) ---------- */
+
+  /** Whether the columns of migration 780 are there. */
+  get autoApproveReady(): boolean {
+    try {
+      this.#db.prepare('SELECT auto_approve FROM ci_environments LIMIT 1').get();
+      this.#db.prepare('SELECT auto_verdict FROM ci_deployments LIMIT 1').get();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  setAutoApprove(id: string, patch: { mode: 'off' | 'dry'; window: string | null; paths: string | null }, by: string): void {
+    this.#writableDb
+      .prepare('UPDATE ci_environments SET auto_approve = ?, auto_window = ?, auto_paths = ?, updated_at = ?, updated_by = ? WHERE id = ?')
+      .run(patch.mode, patch.window, patch.paths, new Date().toISOString(), by, id);
+  }
+
+  /** Records the rule's verdict on a deployment, once: a second look at the same deployment writes nothing. */
+  setAutoVerdict(id: string, verdict: 'would' | 'would_not', line: string, at: string): boolean {
+    return Number(this.#writableDb.prepare('UPDATE ci_deployments SET auto_verdict = ?, auto_line = ?, auto_at = ? WHERE id = ? AND auto_verdict IS NULL').run(verdict, line, at, id).changes) > 0;
+  }
+
+  /**
+   * The deployments of an environment the rule approved, or (dry) would have approved, newest first. `rule:<environment>` is the actor of a
+   * real rule approval (slice 2); today only the dry verdicts exist.
+   */
+  ruleDeployments(repoId: string, environment: string, limit = 50): (DeploymentRow & { run_status: string | null })[] {
+    return this.#db
+      .prepare(
+        `SELECT d.*, r.status AS run_status FROM ci_deployments d LEFT JOIN ci_runs r ON r.id = d.run_id
+         WHERE d.repo_id = ? AND d.environment = ? AND (d.auto_verdict = 'would' OR d.decided_by = ?) ORDER BY d.created_at DESC, d.id DESC LIMIT ?`,
+      )
+      .all(repoId, environment, `rule:${environment}`, limit) as unknown as (DeploymentRow & { run_status: string | null })[];
+  }
+
+  /** The last deployment of an environment that was released and held: its job passed and its run passed (verify too), newest first. */
+  lastReleased(repoId: string, environment: string, exceptRun: string): DeploymentRow | undefined {
+    return this.#db
+      .prepare(
+        `SELECT d.* FROM ci_deployments d JOIN ci_runs r ON r.id = d.run_id
+         WHERE d.repo_id = ? AND d.environment = ? AND d.run_id <> ? AND d.approval IN ('approved', 'auto') AND d.outcome = 'passed' AND r.status = 'passed'
+         ORDER BY d.created_at DESC, d.id DESC LIMIT 1`,
+      )
+      .get(repoId, environment, exceptRun) as unknown as DeploymentRow | undefined;
   }
 
   insertDeployment(d: DeploymentRow): void {

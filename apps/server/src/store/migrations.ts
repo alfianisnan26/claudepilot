@@ -2746,6 +2746,24 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 780,
+    name: 'CI: the auto-approve rule of an environment, and its verdict on each deployment',
+    up(db) {
+      // T-110 slice 1 (local-git-ci PRD FR41a): an environment's auto-approve mode, set only by a person ('off' for every environment so
+      // far and for new ones; 'dry' says what the rule WOULD do and approves nothing; 'on' is reserved for slice 2 and the service treats it
+      // as 'dry' until then), its allowed window (null: always) and its 'needs a person' path list (null: the defaults). Each deployment
+      // keeps the rule's verdict and its one line (null: the rule did not look, as for every deployment so far).
+      db.exec(`
+        ALTER TABLE ci_environments ADD COLUMN auto_approve TEXT NOT NULL DEFAULT 'off' CHECK (auto_approve IN ('off', 'dry', 'on'));
+        ALTER TABLE ci_environments ADD COLUMN auto_window TEXT;
+        ALTER TABLE ci_environments ADD COLUMN auto_paths TEXT;
+        ALTER TABLE ci_deployments ADD COLUMN auto_verdict TEXT CHECK (auto_verdict IN ('would', 'would_not'));
+        ALTER TABLE ci_deployments ADD COLUMN auto_line TEXT;
+        ALTER TABLE ci_deployments ADD COLUMN auto_at TEXT;
+      `);
+    },
+  },
+  {
     version: 790,
     name: 'keep going: a policy per chat, its trail and its reports',
     up(db) {

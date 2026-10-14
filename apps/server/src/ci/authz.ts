@@ -55,6 +55,8 @@ export const CI_POLICIES = {
   'POST /api/ci/repos/:id/merge': repo('operate'),
   'GET /api/ci/repos/:id/environments': repo('view'),
   'PUT /api/ci/repos/:id/environments/:name': { ...repo('manage'), audit: 'ci.environment_protection' },
+  // The auto-approve rule (T-110, FR41a): a person with manage only (the handler refuses tokens and agents); no tool reaches it.
+  'PUT /api/ci/repos/:id/environments/:name/auto-approve': { ...repo('manage'), audit: 'ci.environment_auto_approve' },
   'POST /api/ci/validate': { kind: 'signed-in' },
 } satisfies RoutePolicies;
 
