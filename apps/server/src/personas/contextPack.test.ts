@@ -114,7 +114,8 @@ test('a pool of that name on another workspace is not overwritten; one a person 
     h.pools.setAssignments(WS, 'context', []);
     const r = syncContextPack(h.pools, push('later'));
     assert.deepEqual([r.outcome, r.outcome === 'updated' && r.assigned], ['updated', false]);
-    assert.deepEqual(h.pools.assignmentsFor(WS).filter((a) => a.poolId === h.pool()!.id), []);
+    // Only the removal record is left (it holds the manifest's pool until the files are gone), no assignment again.
+    assert.deepEqual(h.pools.assignmentsFor(WS).filter((a) => a.poolId === h.pool()!.id).map((a) => a.state), ['removing']);
   } finally {
     h.done();
   }
