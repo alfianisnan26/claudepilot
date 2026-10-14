@@ -42,7 +42,7 @@ export function AgentEnvLine({ workspaceId }: { workspaceId: string }) {
         <span className="block">Set on the Settings page, under Agents. A running Claude reads a change at its next start.</span>
         <span className="mt-2 block">
           {status.values.map((v) => (
-            <span key={v.env} className="block break-all">
+            <span key={v.env} className="block [overflow-wrap:anywhere]">
               {v.env}: {v.applied ?? 'unavailable'}
               {v.applied !== null && v.applied !== v.desired ? ` (next: ${v.desired})` : ''}
               {v.overriddenPool ? ` (overridden by policy: the entry in “${v.overriddenPool}” is skipped)` : ''}
