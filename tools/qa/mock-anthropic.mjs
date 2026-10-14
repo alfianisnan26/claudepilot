@@ -9,6 +9,8 @@
 //   [[md]]                     a long Markdown reply: headings, lists, table, code, links, raw HTML
 //   [[xss]]                    stored-XSS probes in Markdown/HTML; any that runs sets window.__xss
 //   [[bash <command>]]         a Bash tool call (asks for approval in Manual mode)
+//   [[bg <spec>;;<spec>…]]     background commands: one Bash call with run_in_background per spec, all in one message; a spec is
+//                              `<description>::<command>`, or just `<command>` for a call without a description (the Agents panel's labels)
 //   [[write <path> <text>]]    a Write tool call;  [[read <path>]] a Read tool call;  [[ask]] a question to answer
 //   [[think <text>]]           a thinking block, then a reply
 //   [[slow <seconds>]]         streams text for that long (to test Stop)
@@ -174,6 +176,18 @@ function plan(body) {
       return { text: XSS };
     case 'bash':
       return { text: 'Running it.', tool: 'Bash', input: { command: arg || 'echo qa', description: 'QA command' } };
+    case 'bg': {
+      const tools = arg
+        .split(';;')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((spec) => {
+          const at = spec.indexOf('::');
+          const [description, command] = at === -1 ? [null, spec] : [spec.slice(0, at).trim(), spec.slice(at + 2).trim()];
+          return { tool: 'Bash', input: { command, run_in_background: true, ...(description ? { description } : {}) } };
+        });
+      return { text: 'Starting commands.', tools };
+    }
     case 'write': {
       const [path, ...rest] = arg.split(' ');
       return { tool: 'Write', input: { file_path: path || '/home/node/qa-out.txt', content: rest.join(' ') || 'written by qa\n' } };
