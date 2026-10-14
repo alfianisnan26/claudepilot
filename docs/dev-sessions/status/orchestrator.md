@@ -16,7 +16,7 @@
 Claim before dispatch (ticket_claim_next WITH id works), in_review at merge, close on the verifier verdict, a follow-up ticket for each gap. In review now: T-321, T-312, T-317 (live Keep going run not done), T-334 (needs a verifier), T-338 (rest in T-342), T-333. Blocked on the owner: T-315, T-319, T-339 (factory admin path; recommendation C = after T-336). T-306 in progress (item 3 lab A/B, item 4 owner approval; gaps T-341, T-340).
 
 ## Next (ranked)
-1. Batch 4: merge what passed (T-333 now; T-336, T-343, T-342 per the verdicts on their tickets), pack, wip branch, ONE gate-job, push, deploy. 2. Reports of the five workers above (read the ticket comments). 3. Verifier for T-334. 4. Backlog: T-330/T-331 cpbview flakes, T-344, T-345, T-341, T-332, T-335, T-313, T-314, T-306 item 3, T-149 leftovers. Konfersi and Event stay paused (D-45).
+1. Batch 4 MERGED locally (93fcaf5 T-333, b71d9a6 T-336, 6cf51a3 T-343) and pushed as wip/batch-4; gate-job running from chat 75f044fb. If no verdict is recorded below: re-run scripts/gate-job.sh on the head of wip/batch-4 in the background; green -> push integration and pilot, deploy (T-336 touches portalmcp tools: may need a person), then close T-333, T-336, T-343 with follow-ups for the gaps in their verifier comments. 2. Reports of the five workers above (read the ticket comments). 3. Verifier for T-334. 4. Backlog: T-330/T-331 cpbview flakes, T-344, T-345, T-341, T-332, T-335, T-313, T-314, T-306 item 3, T-149 leftovers. Konfersi and Event stay paused (D-45).
 
 ## Lessons (tonight)
 - A dontAsk worker is refused `git -C`, `cd &&`, pipes, /tmp, quiet.sh, sed -i, heredocs, and edits under .claude/agents: brief with one plain job-run call and the Read/Edit tools; the lead applies role-file text.
