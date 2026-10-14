@@ -136,3 +136,10 @@ test('joblog: the last verdict line of a Job’s log; none is red', () => {
   assert.deepEqual(verdict('joblog', '/nonexistent/job.log'), { code: 1, out: 'GATE-VERDICT: red: the job gave no verdict' });
   assert.equal(verdict('nonsense').code, 2);
 });
+
+test('logs: a stale context pack (T-292) is red whatever the steps; a gate from before the check (no line) is not', () => {
+  const suite = '# tests 3\n# pass 3\n# fail 0\n# cancelled 0\n';
+  assert.deepEqual(verdict('logs', logs(['context-pack rc=1 1s', ...ALL_OK], suite)), { code: 1, out: 'GATE-VERDICT: red: docs/context-pack.md is stale (run scripts/context-pack.sh and commit it)' });
+  assert.equal(verdict('logs', logs(['context-pack rc=1 1s', 'npm-ci rc=0 1s', 'typecheck rc=0 1s'], suite), 'typecheck').code, 1);
+  assert.deepEqual(verdict('logs', logs(['context-pack rc=0 1s', ...ALL_OK], suite)), { code: 0, out: 'GATE-VERDICT: green' });
+});

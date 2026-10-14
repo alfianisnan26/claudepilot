@@ -33,6 +33,7 @@ npm run build -w @portal/web
 scripts/gate.sh                      # the release gate on a clean copy of HEAD
 scripts/scratch-portal.sh start 3403 # a throwaway portal (clean environment) for looking at the UI; then tools/qa/*.mjs
 scripts/k3s-status.sh                # cluster health at a glance
+scripts/context-pack.sh              # regenerate docs/context-pack.md (read it first) after a merge; the gate fails on a stale pack
 ```
 
 Slash commands for the common jobs are in `.claude/commands/` (`/deploy`, `/gate`, `/release`, `/k3s-status`, `/build-image`, `/scratch-portal`, `/ui-check`, `/new-migration`). `/deploy` is the way to release (docs/dev-session.md, "Deploying with pilot CI").
