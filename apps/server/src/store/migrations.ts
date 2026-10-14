@@ -2941,6 +2941,17 @@ export const MIGRATIONS: Migration[] = [
       db.exec('ALTER TABLE chat_sessions ADD COLUMN control_state TEXT');
     },
   },
+  {
+    version: 830,
+    name: 'chat requests: the process that raised each one',
+    up(db) {
+      // T-284: a request raised by a process that is no longer the live one (a move, a restart, a crash, a resume) can never be answered;
+      // it is resolved `stale` instead of keeping the chat waiting. The process it belongs to, as integrity.ts controlProc (Claude Code
+      // session id, segment, process start: ids only, never text). Null for every row so far: those are judged by their time against the
+      // live process's start.
+      db.exec('ALTER TABLE chat_requests ADD COLUMN proc TEXT');
+    },
+  },
 ];
 
 /**

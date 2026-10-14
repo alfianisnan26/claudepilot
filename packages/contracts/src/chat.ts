@@ -322,7 +322,7 @@ export interface ChatEvent {
   toolName?: string;
   requestId?: string;
   request?: ChatRequest;
-  /** For `resolved`: `allowed_once`, `allowed_session`, `denied`, `withdrawn`, `expired`. */
+  /** For `resolved`: `allowed_once`, `allowed_session`, `denied`, `withdrawn`, `expired`, `stale` (its process was not the live one; T-284). */
   outcome?: string;
   /** For `result`: Claude Code's running cost for the process so far (it reports a total, not the turn's). */
   costUsd?: number;
@@ -648,6 +648,13 @@ export interface ChatEndedFor {
   origin: string;
 }
 
+/** `POST CHAT_API.clearRequest(id, requestId)` (T-284): the request and how it was resolved (`stale`), and the chat as it is now. */
+export interface ClearChatRequestResult {
+  requestId: string;
+  outcome: string;
+  session: ChatSession;
+}
+
 /** `POST CHAT_API.recover(id)`: bring a session ended for integrity back in place (the same row, its conversation resumed). */
 export interface RecoverChatRequest {
   /** A person confirmed the sheet that showed the line's origin and classification (needed for a `suspicious` cause). */
@@ -776,6 +783,12 @@ export const CHAT_API = {
    * a person closed. Capped per day, with a pause between recoveries.
    */
   recover: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/recover`,
+  /**
+   * POST (no body; T-284): clear a request no Claude Code process can answer any more (the process that raised it is not the live one:
+   * a move, a restart, a crash, a resume). Every stale request of the chat is resolved `stale` with it, audited. Refused (409) for a
+   * request of the live process: that one is answered. Returns `ClearChatRequestResult`.
+   */
+  clearRequest: (id: string, requestId: string) => `/api/chat/sessions/${encodeURIComponent(id)}/requests/${encodeURIComponent(requestId)}/clear`,
   /** POST `ReauthRequest`: check the server code again. */
   reauth: '/api/chat/reauth',
   /** GET: the chat policy (`{ bypass: { allowed } }`). */

@@ -1084,16 +1084,44 @@ export class ChatStore {
   }
 
   /** Records a request the agent raised and returns it with its stored timestamp. Throws on a duplicate id. */
-  addRequest(sessionId: string, req: ChatRequest & { toolUseId?: string }): ChatRequest {
+  addRequest(sessionId: string, req: ChatRequest & { toolUseId?: string }, proc: string | null = null): ChatRequest {
     const createdAt = this.#stamp();
     const detail = redactMaybe(req.detail ?? null);
     // What is being allowed, whole (the card and the widget show it): redacted here too, whoever built the request.
     const full = redactMaybe(req.full ?? null);
     const fullCut = req.fullCut === true;
     this.#writable()
-      .prepare(`INSERT INTO chat_requests (session_id, request_id, tool_use_id, kind, tool_name, agent_label, title, detail, full, full_cut, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(sessionId, req.requestId, req.toolUseId ?? null, req.kind, req.toolName ?? null, req.agentLabel ?? null, req.title, detail, full, fullCut ? 1 : 0, createdAt);
+      .prepare(
+        `INSERT INTO chat_requests (session_id, request_id, tool_use_id, kind, tool_name, agent_label, title, detail, full, full_cut, created_at, proc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(sessionId, req.requestId, req.toolUseId ?? null, req.kind, req.toolName ?? null, req.agentLabel ?? null, req.title, detail, full, fullCut ? 1 : 0, createdAt, proc);
     return { requestId: req.requestId, kind: req.kind, toolName: req.toolName ?? null, agentLabel: req.agentLabel ?? null, title: req.title, detail, full, fullCut, createdAt };
+  }
+
+  /** T-284: the open requests with the process that raised each (null: raised before migration 830) and when the portal read them. */
+  openRequestOrigins(sessionId: string): { requestId: string; proc: string | null; createdAt: string }[] {
+    const rows = this.#db().prepare('SELECT request_id, proc, created_at FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid').all(sessionId) as {
+      request_id: string;
+      proc: string | null;
+      created_at: string;
+    }[];
+    return rows.map((r) => ({ requestId: r.request_id, proc: r.proc, createdAt: r.created_at }));
+  }
+
+  /** T-284: the sessions (not ended) that have an open request, for the liveness round's stale sweep. */
+  sessionsWithOpenRequests(): string[] {
+    const rows = this.#db()
+      .prepare("SELECT DISTINCT r.session_id FROM chat_requests r JOIN chat_sessions s ON s.id = r.session_id WHERE r.answered_at IS NULL AND s.state != 'ended'")
+      .all() as { session_id: string }[];
+    return rows.map((r) => r.session_id);
+  }
+
+  /** T-284: an open request nobody can answer any more (its process is not the live one) reads `stale`. False when it was not open. */
+  staleRequest(sessionId: string, requestId: string, actor: string | null): boolean {
+    const r = this.#writable()
+      .prepare(`UPDATE chat_requests SET answered_at = ?, outcome = 'stale', actor = ? WHERE session_id = ? AND request_id = ? AND answered_at IS NULL`)
+      .run(this.#stamp(), actor, sessionId, requestId);
+    return Number(r.changes) > 0;
   }
 
   /** Its process is gone: requests nobody can answer any more read `expired`. Returns their ids. */

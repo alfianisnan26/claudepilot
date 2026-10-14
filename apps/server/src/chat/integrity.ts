@@ -136,6 +136,20 @@ export const INTEGRITY_CASES: readonly IntegrityCase[] = [
       'a Bypass reply to any other request id (one never sent under the grant), the same late reply in the SAME portal life (the grant ' +
       'is gone: it still ends), and a Bypass status report while nothing is pending',
   },
+  {
+    id: 'control-stale',
+    line: 'a control_response for a request Claude Code raised that the portal resolved `stale` (its process was no longer the live one; T-284)',
+    rule:
+      'ignored and logged (the ids only), never processed: only for an id THIS session recorded as a request (chat_requests) whose outcome ' +
+      'is stale, and only when the portal holds no answer of its own for it; nothing is allowed or denied by it',
+    evidence:
+      'T-284 (Konfersi chat 93b468c8, 2026-10-14 04:02 to 05:00 UTC): a tool request of a process that was gone stayed open, could not ' +
+      'be answered and blocked Restart; T-284 resolves such requests stale. A late answer for one was not seen in a raw stream: this case ' +
+      'keeps a stale request from ever reading as one "this portal never asked for" (the twins below show nothing else moved)',
+    negative:
+      'an id the portal never asked or answered, the same answer for a request still open (of the live process), and a stale id of ANOTHER ' +
+      'session: each still ends the session "a control response for request … that this portal never asked for or answered"',
+  },
 ];
 
 /**

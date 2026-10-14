@@ -501,7 +501,43 @@ const FIXTURES: Record<string, Fixture> = {
       },
     ],
   },
+  'control-stale': {
+    accept: async (s) => {
+      // A tool request an earlier process raised (another proc), resolved stale by the explicit clear; its late answer is ignored.
+      await firstTurn(s);
+      staleRequest(s, s.id, 'R-s');
+      assert.equal((await s.controller.clearRequest(s.id, 'R-s')).outcome, 'stale');
+      await expectAccepted(s, [allowResponse('R-s')]);
+      assert.equal(new ChatStore(s.store).requestOutcome(s.id, 'R-s'), 'stale', 'nothing was allowed by it');
+    },
+    reject: [
+      { name: 'an id never asked', run: (s) => expectIntegrityEnd(s, allowResponse('R-never'), /a control response for request R-never that this portal never asked for or answered/) },
+      {
+        name: 'the same answer for a request still open (of the live process)',
+        run: async (s) => {
+          s.tail.push(line({ type: 'control_request', request_id: 'R-o', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_o' } }));
+          await until(() => s.state() === 'waiting');
+          await expectIntegrityEnd(s, allowResponse('R-o'), /a control response for request R-o that this portal never asked for or answered/);
+        },
+      },
+      {
+        name: 'a stale id of another session',
+        run: async (s) => {
+          const other = await s.controller.create({ workspaceId: 'docker/ws1', title: 'Other' });
+          await until(() => s.ws.tails.length === 2); // its process is up: a launch would resolve what it finds open
+          staleRequest(s, other.id, 'R-x');
+          assert.equal((await s.controller.clearRequest(other.id, 'R-x')).outcome, 'stale');
+          await expectIntegrityEnd(s, allowResponse('R-x'), /a control response for request R-x that this portal never asked for or answered/);
+        },
+      },
+    ],
+  },
 };
+
+/** T-284: an open tool request recorded for a process that is not the session's live one (an earlier process's). */
+function staleRequest(s: Live, sessionId: string, requestId: string) {
+  new ChatStore(s.store).addRequest(sessionId, { requestId, kind: 'tool', toolName: 'Bash', agentLabel: null, title: 'Run a command', detail: 'ls', createdAt: '' }, 'an-earlier-process/0/');
+}
 
 const statusMode = (mode: string) => line({ type: 'system', subtype: 'status', status: null, permissionMode: mode });
 
