@@ -282,7 +282,9 @@ describe('cpb-view', opts, () => {
         send({ reset: true });
         await view.until(() => `window frame ${i} (${trace()})`, () => view.frames.slice(mark).find((f) => !f.header.emu && f.header.dw === 1000));
       }
-      assert.equal(view.frames.filter((f) => f.header.emu && f.header.dw === 1000).length, 0, `no window-size frame called emulated: ${trace()}`);
+      // A frame painted before the change has the old size (seen: `>w400,E1000x613,E400x700`): it is not called emulated (T-330).
+      const asked = [390, 400, 410, 420];
+      assert.equal(view.frames.filter((f) => f.header.emu && !asked.includes(f.header.dw)).length, 0, `no frame called emulated at a size not asked for: ${trace()}`);
       assert.deepEqual(view.events.filter((e) => e.e === 'error'), [], `no error: ${trace()}`);
     });
   });
