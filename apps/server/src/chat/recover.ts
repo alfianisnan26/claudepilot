@@ -79,7 +79,7 @@ export type RecoverBy = 'person' | 'agent';
  * integrity. `recent` are the times (ms) of this session's recoveries in the last 24 hours, oldest first.
  */
 export function recoverRefusal(
-  row: { state: string; ended_reason: string | null },
+  row: { state: string; ended_reason: string | null; archived_at?: string | null },
   ending: EndingRecord | null,
   o: { by: RecoverBy; confirm: boolean; recent: readonly number[]; now: number; config: RecoverConfig },
 ): void {
@@ -90,6 +90,7 @@ export function recoverRefusal(
     throw new AppError('CONFLICT', why, { details: { recover: /closed by operator/i.test(reason) ? 'closed' : 'not_integrity' } });
   }
   if (!ending) throw new AppError('CONFLICT', 'Only a session ended for integrity is recovered in place.', { details: { recover: 'not_integrity' } });
+  if (row.archived_at) throw new AppError('CONFLICT', 'This session is archived: unarchive it first.', { details: { recover: 'archived' } });
   const facts = { classified: ending.classified, case: ending.case, origin: ending.origin };
   if (ending.classified === 'suspicious') {
     if (o.by === 'agent') throw new AppError(CHAT_RECOVER_SUSPICIOUS, `The line that ended it is suspicious (${ending.origin}): only a person can bring it back.`, { status: 403, details: facts, expose: true });

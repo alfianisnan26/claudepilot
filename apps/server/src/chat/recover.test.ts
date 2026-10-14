@@ -197,6 +197,16 @@ test('recover refuses: a session a person closed (409 closed), a live one, one t
     assert.equal(s.controller.get(s.id)!.state, 'ended');
     assert.equal(s.controller.audit({ kind: 'session.recover.refused' }).length, 2);
     assert.equal(await codeOf(s.controller.recover('nope')), 'NOT_FOUND');
+    // An archived one is unarchived first (it would come back hidden).
+    const t = await s.controller.create({ workspaceId: 'docker/ws1' });
+    await until(() => s.ws.tails.length === 2);
+    await until(() => s.controller.get(t.id)?.state === 'idle');
+    await sleep(20);
+    s.ws.tails.at(-1)!.push(replayed(csidOf(s, t.id), { kind: 'channel' }));
+    await until(() => s.controller.get(t.id)!.state === 'ended');
+    await s.controller.archive(t.id);
+    const archived = await s.controller.recover(t.id, { confirm: true }).catch((x: unknown) => x as AppError);
+    assert.deepEqual([isAppError(archived) && archived.code, (archived as AppError).details], ['CONFLICT', { recover: 'archived' }]);
   } finally {
     await s.done();
   }
