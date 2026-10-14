@@ -23,7 +23,8 @@
 //      session_family reply_of after a report line that says the head was cut. Prints "worker can do a verifier's job: YES/NO".
 //   9  (runs second) THE IMPLEMENTER'S JOB (D-49): an implementer worker in dontAsk in a worktree of its own edits and writes there, runs a
 //      test, commits and pushes its branch to a local bare remote (each ALLOWED); a push to main, a force push and a write or edit outside
-//      the repository and its worktrees are REFUSED. Prints "worker can do an implementer's job: YES/NO".
+//      the repository and its worktrees are REFUSED; read utilities (git grep, ls) ALLOWED, wrappers (flock …, bash -c …) REFUSED by design.
+//      Prints "worker can do an implementer's job: YES/NO".
 //   7  the UI with these real workers: nested under the lead, "N done", "from <lead>" for an orphan, lead and worker pages; 390 px (touch,
 //      iPhone safe areas) and 1280 px, light and dark; 44 px targets, no sideways scroll, no page errors; screenshots
 // usage: node tools/qa/crew-e2e.mjs [--port 3431] [--mock 4631] [--proxy-port 4632] [--shots /tmp/t294qa-shots] [--keep] [--only 1,2]
@@ -610,6 +611,16 @@ async function main() {
       };
       const mainBefore = bare('rev-parse', 'refs/heads/main');
       await allowSteps('9', allowedOk);
+      // Safe read utilities (8535032 allows git grep, git ls-files, ls, wc, echo, pwd …) and wrappers, which stay refused by design (a wrapper
+      // would run anything inside it).
+      let u = await step('[[bash git grep realjob]]', 'git grep');
+      mustAllow('9.10', 'a read utility: git grep', u, /NOTES\.md:qa realjob/.test(u.text), 'git grep realjob in the worktree');
+      u = await step('[[bash ls]]', 'ls');
+      mustAllow('9.11', 'a read utility: ls', u, /NOTES\.md/.test(u.text), 'ls in the worktree');
+      u = await step('[[bash flock /tmp/heavy.lock npm test]]', 'flock … npm test');
+      mustRefuse('9.12', 'a wrapper: flock /tmp/heavy.lock npm test', { ...u, refused: deniedRe.test(u.text) }, !/pass 1/.test(u.text), 'refused by design (no rule allows a wrapper)');
+      u = await step("[[bash bash -c 'npm test']]", "bash -c 'npm test'");
+      mustRefuse('9.13', "a wrapper: bash -c 'npm test'", { ...u, refused: deniedRe.test(u.text) }, !/pass 1/.test(u.text), 'refused by design (no rule allows a wrapper)');
       /** What the deny rules (and dontAsk) must keep out: a push to main, a force push, a write or edit outside the repository. */
       const denySteps = async (idp, fails) => {
         let r = await step('[[bash git push origin HEAD:main]]', 'git push to main');
@@ -1259,6 +1270,7 @@ async function main() {
   } catch (e) {
     check('run', 'the run went through', false, e?.stack?.split('\n').slice(0, 3).join(' / ') ?? String(e));
   } finally {
+    if (REALJOB || IMPLJOB) console.log('\n=== SUMMARY ===');
     if (REALJOB) console.log(`REAL-JOB SUMMARY: ${REALJOB}`);
     if (IMPLJOB) console.log(`IMPLEMENTER SUMMARY: ${IMPLJOB}`);
     writeFileSync('/tmp/t294qa-results.json', JSON.stringify({ at: new Date().toISOString(), realJob: REALJOB, implJob: IMPLJOB, sessions: Object.fromEntries(Object.entries(S).map(([k, v]) => [k, v?.id ?? null])), results }, null, 1));
