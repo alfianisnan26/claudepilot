@@ -3162,6 +3162,17 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`ALTER TABLE chat_sessions ADD COLUMN agent TEXT;`);
     },
   },
+  {
+    version: 775,
+    name: 'chat sessions: what a worker reports to its lead (T-294)',
+    up(db) {
+      // T-294 (chat-sessions PRD FR51, Crew over MCP): a worker started with session_spawn tells its lead when its turn ends, when it
+      // waits on a person and when it ends (`idle`), only when it ends (`end`), or nothing (`none`). Null for every row so far: a worker
+      // reports as `idle`, the default; a session with no parent reports nothing. (774 is the per-session limits migration on
+      // dev/t294-limits.)
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN report TEXT CHECK (report IN ('idle', 'end', 'none'));`);
+    },
+  },
 ];
 
 /**
