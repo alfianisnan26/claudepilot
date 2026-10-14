@@ -7,6 +7,7 @@ import {
   type ChatEvent,
   type ChatFolder,
   type ChatFolderScan,
+  type ChatKeepGoing,
   type ChatModelOption,
   type ChatSession,
   type ChatSegment,
@@ -18,6 +19,7 @@ import {
   type ChatWorktreeStatus,
   type ChatUsageRange,
   type ChatUsageReport,
+  type UpdateKeepGoingRequest,
   type CreateChatSessionRequest,
   type CreateWorkspaceClaudeRequest,
   type DeleteChatSessionResult,
@@ -131,6 +133,10 @@ export const chatApi = {
   cancelRestart: (id: string) => request<ChatSession>('DELETE', CHAT_API.restart(id)),
   /** The "Tools changed" hint's memory: hidden until the next change, and applying changes at the turn's end by itself (T-102). */
   restartHint: (id: string, body: UpdateRestartHintRequest) => request<ChatSession>('PATCH', CHAT_API.restartHint(id), body),
+  /** Keep going (T-259): the chat's policy, today's counts and its last action; null when it never had one. */
+  keepGoing: (id: string) => request<ChatKeepGoing | null>('GET', CHAT_API.keepGoing(id)),
+  /** Sets Keep going (a person only). */
+  setKeepGoing: (id: string, body: UpdateKeepGoingRequest) => request<ChatKeepGoing>('PUT', CHAT_API.keepGoing(id), body),
   /** Checks the server code again (what Bypass guards). */
   reauth: (code: string) => request<{ ok: true }>('POST', CHAT_API.reauth, { code } satisfies ReauthRequest),
   /** What the chat policy allows: whether a session can be started to allow Bypass. */
