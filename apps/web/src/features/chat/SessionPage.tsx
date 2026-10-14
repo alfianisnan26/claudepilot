@@ -25,6 +25,7 @@ import { BtwSidePanel } from './btw/BtwSidePanel';
 import { useBtwLayout } from './btw/layout';
 import { Composer, type ComposerHandle } from './Composer';
 import { Controls, type ControlsHandle } from './Controls';
+import { CrewLine, crewShown, useCrew } from './CrewLine';
 import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './FilesPanel';
 import { KeepGoingChip } from './KeepGoing';
 import { SessionInfoDialog } from './SessionInfo';
@@ -230,6 +231,9 @@ export function SessionPage() {
   const wide = useMediaQuery('(min-width: 1280px)');
   // Below 640 px the title needs the room: Files and Agents live in the ⋯ menu.
   const roomy = useMediaQuery('(min-width: 640px)');
+  // Its lead and its workers (T-294): a line under the header, and the transcript starts below it.
+  const crew = useCrew(session);
+  const crewLine = !!session && crewShown(crew);
   const [panel, setPanel] = useState(savedPanel);
   const [sheet, setSheet] = useState<Side | null>(null);
   const open = wide ? panel : sheet;
@@ -555,6 +559,7 @@ export function SessionPage() {
                 />
               </div>
             </header>
+            {session && <CrewLine session={session} crew={crew} roomy={roomy} />}
           </div>
 
           <Transcript
@@ -567,7 +572,7 @@ export function SessionPage() {
             onCancelQueued={cancelQueued}
             details={details}
             working={working}
-            padTop="calc(var(--session-header-bottom) + 1rem)"
+            padTop={crewLine ? 'calc(var(--session-header-bottom) + 3.75rem)' : 'calc(var(--session-header-bottom) + 1rem)'}
             padBottom={dockHeight + 12}
             onOpenUsage={() => setUsageOpen(true)}
             persona={persona}

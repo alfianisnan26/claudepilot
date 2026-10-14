@@ -18,7 +18,8 @@ import { usePersonaIdentities } from '@/features/personas/identities';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { BulkBar, runBulk, type BulkAction } from './BulkBar';
-import { canFold, chipCounts, defaultChip, ofProgram, programCounts, statusGroup } from './listOrder';
+import { crewStatusGroup } from './crew';
+import { canFold, chipCounts, defaultChip, ofProgram, programCounts } from './listOrder';
 import { NewSessionDialog } from './NewSessionDialog';
 import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
 import { SessionRow, type RowActions } from './SessionRow';
@@ -105,7 +106,9 @@ export function SessionsPage() {
     });
   };
 
-  // All without another grouping is grouped under the status headings, in the chips' order (T-100).
+  // All without another grouping is grouped under the status headings, in the chips' order (T-100); a worker that does not need you sits
+  // under its lead's heading, nested under it (T-294, crew.ts). A chip lists only what matches it: a worker whose lead does not match is a
+  // row of its own with "from" its lead (crew.ts says why).
   const byStatus = !view.archived && view.filter === 'all' && view.groupBy === 'none';
   const list = useMemo(
     () =>
@@ -116,7 +119,7 @@ export function SessionsPage() {
             query: view.query,
             archived: view.archived,
             workspaces: workspacesLoaded ? factOf : undefined,
-            groupOf: byStatus ? statusGroup : undefined,
+            groupOf: byStatus ? crewStatusGroup(shown, view.query) : undefined,
           })
         : null,
     [shown, view, factOf, workspacesLoaded, byStatus],
