@@ -711,7 +711,8 @@ test('--start stale resume: an open dispatch without a session past --stale-min 
   assert.ok(one.lines.includes(`START ${fresh.id} started session s-1`));
   assert.ok(!one.lines.some((l: string) => l.startsWith(`START ${old.id}`)));
   assert.equal(one.lines.filter((l: string) => l.startsWith(`EXCEPTION ${old.t.id}`)).length, 1, 'stale: one EXCEPTION line, from intake');
-  assert.deepEqual(portal.writes.map(([id]) => id), [fresh.t.id]);
+  // (the cast: deepEqual against [] above narrowed the array's type)
+  assert.deepEqual((portal.writes as Array<[string, string]>).map(([id]) => id), [fresh.t.id]);
   await r.runRound({ portal, now: NOW, models: MODELS, changed: () => [], apply: true, git, start });
   assert.equal(mcp.names().filter((n) => n === 'session_start').length, 1, 'the next round starts nothing again');
   // a session started before its marker (the engine stopped in between) is adopted, not started twice
@@ -788,7 +789,7 @@ test('mcpClient: the structuredContent, or an error with the code and message; t
 });
 
 test('--start is off by default and needs --apply and --workspace; supervisor.mjs does not run the engine', () => {
-  const env = { ...process.env, PORTAL_URL: 'http://127.0.0.1:9' };
+  const env: NodeJS.ProcessEnv = { ...process.env, PORTAL_URL: 'http://127.0.0.1:9' };
   delete env.PORTAL_SERVER_CODE;
   for (const script of [FACTORY, ROUND]) {
     const noApply = spawnSync(process.execPath, [script, ...(script === FACTORY ? ['--portal'] : []), '--start', '--workspace', WS], { encoding: 'utf8', env });
