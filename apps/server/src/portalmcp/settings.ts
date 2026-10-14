@@ -1,6 +1,21 @@
 import { AppError } from '@isnanme/core';
-import type { PortalMcpSettings, UpdatePortalMcpSettingsRequest } from '@portal/contracts';
+import { PORTAL_TOKEN_CAP_DEFAULT, PORTAL_TOKEN_CAP_SETTING, type PortalMcpSettings, type UpdatePortalMcpSettingsRequest } from '@portal/contracts';
+import { defineSetting } from '../settings/registry.js';
 import type { Store } from '../store/store.js';
+
+/** T-258: how many live admin tokens one label may have. Read on every mint (`PortalMcpModule`'s `maxActivePerLabel`, wired in index.ts). */
+export const TOKEN_CAP_SETTING = defineSetting({
+  key: PORTAL_TOKEN_CAP_SETTING,
+  type: 'number',
+  default: PORTAL_TOKEN_CAP_DEFAULT,
+  scope: 'global',
+  group: 'mcp',
+  order: 90,
+  label: 'Admin tokens per label',
+  help: 'How many live admin-scope Portal MCP tokens one label may have at once. A label names one client: making a token with a label that has live tokens asks to replace them or add another, and adding stops at this number. Agents’ per-session tokens are not counted. Automation should use one short-lived token per run (1 hour) and revoke it at the end.',
+  min: 1,
+  max: 20,
+});
 
 interface Row {
   enabled: number;
