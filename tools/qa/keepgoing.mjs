@@ -259,6 +259,8 @@ async function openHome(list) {
     await send('Page.reload');
     if (!(await waitFor(ready, 30000))) return false;
   }
+  // The card is the last on Home: brought into view as a person would scroll to it.
+  await ev(`document.querySelector('[data-home-card="autonomy"]').scrollIntoView({ block: 'start' })`);
   await sleep(500);
   return true;
 }
@@ -294,7 +296,7 @@ for (const cfg of MATRIX) {
   check('the card has its InfoTip', !!c.tip);
   await shot(`home-${cfg.name}-autonomy`);
   if (c.tip) {
-    await ev(`document.querySelector('[data-home-card="autonomy"] header button[aria-label="About Autonomy"]').click()`);
+    await ev(`(() => { const b = document.querySelector('[data-home-card="autonomy"] header button[aria-label="About Autonomy"]'); b.scrollIntoView({ block: 'center' }); b.click(); })()`);
     await sleep(400);
     const tip = await ev(`(() => { const t = [...document.querySelectorAll('[role=tooltip], [role=note], [data-infotip]')].find((e) => /never turns Bypass on/.test(e.innerText)); if (!t) return null; const r = t.getBoundingClientRect(); return { x: r.x, r: r.right, y: r.y, b: r.bottom, w: innerWidth, h: innerHeight }; })()`);
     check('the InfoTip opens inside the screen', !!tip && tip.x >= 0 && tip.r <= tip.w + 1 && tip.y >= 0 && tip.b <= tip.h + 1, JSON.stringify(tip));
