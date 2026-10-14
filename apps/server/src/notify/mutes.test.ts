@@ -41,8 +41,11 @@ test('matching and the history mark: a muted event is stored and marked, left ou
   const h = await harness({ now: c.now });
   try {
     const { destination: d } = h.notify.destinations.createChannel('u_a', { type: 'webhook', name: 'Ops', url: `http://hooks.example.test:${svc.port}/in` });
+    // Each event one millisecond after the one before, on the test's clock (T-324). The Inbox orders by `at`, then by a random row id:
+    // with the bus's real clock two events in the same millisecond (run_5 and run_6 below) came back in either order.
+    let seq = 0;
     const offerRef = async (run: string, facts?: Record<string, string>) => {
-      const e = h.bus.emit(ciFailed(run, facts))!;
+      const e = h.bus.emit({ ...ciFailed(run, facts), at: new Date(c.now().getTime() + ++seq).toISOString() })!;
       await h.notify.pipeline.handle(e);
       return e;
     };
