@@ -12,6 +12,8 @@ export interface TicketSessionInfo extends TicketSession {
   continuedFrom?: string | null;
   /** When it was archived (an archived session has ended), or null. The orphan sweep counts it dead (T-270). */
   archivedAt?: string | null;
+  /** The session that started it (a crew worker's lead, T-294), or null. */
+  parentId?: string | null;
 }
 
 /** Creating the session a ticket starts (tickets PRD FR15). */
@@ -53,6 +55,7 @@ function info(s: ChatSession): TicketSessionInfo {
     ticketId: s.ticketId ?? null,
     continuedFrom: s.continuedFrom ?? null,
     archivedAt: s.archivedAt ?? null,
+    parentId: s.parentId ?? null,
   };
 }
 

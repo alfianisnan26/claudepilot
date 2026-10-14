@@ -468,8 +468,17 @@ export class Tickets {
       return this.#assertCanModify(caller, row, w);
     } catch (e) {
       if (caller.kind === 'agent' && !isTicketClosed(row.status) && this.#bumpedInto(row.number, caller.sessionId, ASK_ANSWER_MS)) return null;
+      // T-294: a crew worker reports on its lead's tickets (a comment only: the status, the assignee and the rest stay its lead's).
+      if (caller.kind === 'agent' && !isTicketClosed(row.status) && row.assignee_kind === 'session' && this.#workerOf(caller.sessionId, row.assignee_ref)) return null;
       throw e;
     }
+  }
+
+  /** Whether `sessionId` is a live worker that `leadId` started (T-294 crew). */
+  #workerOf(sessionId: string, leadId: string | null): boolean {
+    if (!leadId) return false;
+    const s = this.sessions.get(sessionId);
+    return !!s && s.parentId === leadId && s.state !== 'ended';
   }
 
   /** Whether the ticket was bumped into the session within `withinMs`. */

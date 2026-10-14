@@ -310,3 +310,24 @@ test('T-282: ticket_list rows are short, 20 a page; ticket_comment and ticket_up
     r.done();
   }
 });
+
+test('T-294: a crew worker comments on its lead’s ticket and changes nothing else; an ended worker or a stranger may not', async () => {
+  const r = await rig();
+  try {
+    await r.agent('docker/api', 'lead');
+    const w = await r.agent('docker/api', 'wk');
+    const other = await r.agent('docker/api', 'other');
+    r.sessions.sessions.set('wk', { ...r.sessions.sessions.get('wk')!, parentId: 'lead' });
+    r.tickets.create(UI, { summary: 'held by the lead', assignee: { kind: 'session', sessionId: 'lead' } });
+    const code = async (t: { secret: string }, tool: string, args: Record<string, unknown>) => (await r.h.call(t.secret, tool, args)).result?.structuredContent?.error?.code;
+    assert.equal(await code(w, 'ticket_comment', { id: 'T-1', text: 'QA verifier: PASS, evidence below.' }), undefined, 'its lead’s ticket: a comment');
+    assert.ok(r.tickets.get(UI, 'T-1').events.some((e) => e.kind === 'comment' && e.body === 'QA verifier: PASS, evidence below.'));
+    assert.equal(await code(w, 'ticket_update', { id: 'T-1', priority: 'urgent' }), 'FORBIDDEN', 'not a change');
+    assert.equal(await code(w, 'ticket_close', { id: 'T-1', summary: 'x' }), 'FORBIDDEN', 'not a close');
+    assert.equal(await code(other, 'ticket_comment', { id: 'T-1', text: 'hi' }), 'FORBIDDEN', 'not its lead');
+    r.sessions.sessions.set('wk', { ...r.sessions.sessions.get('wk')!, state: 'ended' });
+    assert.equal(await code(w, 'ticket_comment', { id: 'T-1', text: 'late' }), 'FORBIDDEN', 'an ended worker');
+  } finally {
+    r.done();
+  }
+});
