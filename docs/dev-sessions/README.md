@@ -99,3 +99,16 @@ ending that hit the Konfersi chat on 2026-10-13 is fixed (T-99), so that should 
 **Stop it:** `touch ~/.claudepilot/dev-sessions/STOP` (checked every two minutes) or kill the process by PID. **Start it again** (needs `PORTAL_SERVER_CODE`):
 `cd ~/work/claudepilot && PORTAL_SERVER_CODE=... setsid nohup node docs/dev-sessions/supervisor.mjs >> ~/.claudepilot/dev-sessions/supervisor.log 2>&1 < /dev/null &`.
 `DRY_RUN=1` reads the portal and says what it would do. It approves nothing unless `DEPLOY_RUN=<run id>` is given, and then only that run.
+
+## The factory engine (T-293, dry only)
+
+`docs/dev-sessions/factory.mjs` is engine v0 of design v2 layer 3 (`overhaul/token-economy-design.md` sections 3 and 4): orchestration as code.
+Today it only PLANS: `node docs/dev-sessions/factory.mjs --tickets tickets.json [--wip 5] [--budget <requests>] [--briefs] [--json]` reads ticket
+data passed in (a TicketList, TicketItems or TicketDetails) and prints what it would dispatch; it calls no model, writes nothing to the portal and
+creates no worktree. Intake takes the next tickets by `rank-NN` tag that are open, carry an ESTIMATE comment with a size S, M or L (XL is split
+first), within WIP (in-progress tickets and open dispatches, five by default) and within the run's request budget (the first ticket over it
+stops the plan). Each slice gets a request budget by size (S 25, M 60, L 120) and stops at 150 percent. The brief comes from
+`factory-brief.md` (context pack, role and model from `.claude/agents/`, budget, trailers, token discipline). State lives only in ticket
+comments: `FACTORY DISPATCH <ticket>-F<n> ...` and `FACTORY END <ticket>-F<n> <outcome>`; an open dispatch is never dispatched again, and a
+resume of a dispatch that ended, was superseded or is older than six hours is refused. The check step is `scripts/slice-check.sh` (typecheck
+plus the server test files the diff touched, at most 20 lines, no model). Not yet: the dispatch itself, the resume on CI events, review and verify.
