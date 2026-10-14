@@ -775,7 +775,8 @@ test('m1: --start starts only a dispatch of this engine version (v=2) whose work
   assert.deepEqual(portal.writes, []);
   const c = await start(firstDispatch(ok.t));
   assert.equal(c.action, 'started');
-  assert.equal(mcp.calls.find(([n]) => n === 'session_start')![1].folder, folderOf(ok.branch), 'the folder repos_list reported');
+  // (the cast: deepEqual against [] above narrowed the array's type)
+  assert.equal((mcp.calls as Call[]).find(([n]) => n === 'session_start')![1].folder, folderOf(ok.branch), 'the folder repos_list reported');
 });
 
 test('--start stale resume: an open dispatch without a session past --stale-min is never started (negative twin: a fresh one is started on the next round, once)', async () => {
