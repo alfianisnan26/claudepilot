@@ -13,7 +13,8 @@
 //     44 x 44 px Resume that sends PUT /api/keepgoing/pauses { paused: false }; the 44 px Pause opens the form, the program and the reason
 //     go out as PUT { paused: true }; the pause InfoTip opens inside the screen; nothing scrolls sideways;
 //   - no page errors.
-// usage: KG_PORT=3471 KG_CDP=9671 node tools/qa/keepgoing.mjs [--shots dir]
+// usage: KG_PORT=3471 KG_CDP=9671 node tools/qa/keepgoing.mjs [--shots dir]   against a running scratch portal on KG_PORT; in a Job (or
+//   anywhere nothing else starts one): tools/qa/with-portal.sh 3471 env KG_PORT=3471 node tools/qa/keepgoing.mjs
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -39,6 +40,13 @@ const SIZES = [
 const MATRIX = SIZES.flatMap((s) => [{ ...s, name: `${s.name}-light` }, { ...s, name: `${s.name}-dark`, dark: true }]);
 
 const login = async () => {
+  // No portal on the port: say so in one line (a bare ECONNREFUSED told QA 4A nothing about what to start).
+  try {
+    await fetch(`http://localhost:${PORT}/healthz`);
+  } catch {
+    console.error(`no portal on port ${PORT}: start one (scripts/scratch-portal.sh start ${PORT}) or run through tools/qa/with-portal.sh ${PORT} ...`);
+    process.exit(2);
+  }
   const r = await fetch(`http://localhost:${PORT}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: `http://localhost:${PORT}` }, body: JSON.stringify({ code: CODE }) });
   const m = /portal_session=([^;]+)/.exec(r.headers.get('set-cookie') ?? '');
   if (!m) throw new Error(`login failed ${r.status}`);
@@ -111,7 +119,7 @@ const harness = `(() => {
     const p = new URL(typeof input === 'string' ? input : input.url, location.origin).pathname;
     if (p.endsWith('/bypass') && (!init || !init.method || init.method === 'GET'))
       return Promise.resolve(new Response(JSON.stringify({ data: { allowed: true, capable: true, active: true, busy: false, reauthed: true, facts: { workspace: 'bv-ws', isolated: true, network: 'open', credentials: [] } } }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-    if (p.endsWith('/keep-going') && init && init.method === 'PUT') window.__kgPuts = (window.__kgPuts || 0) + 1;
+    if (p.endsWith('/keep-going') && init && init.method === 'PUT') (window.__kgPuts = (window.__kgPuts || 0) + 1), (window.__kgBodies ??= []).push(JSON.parse(init.body || 'null'));
     return real(input, init);
   };
 })();`;
@@ -211,6 +219,22 @@ for (const cfg of MATRIX) {
   await shot(`${cfg.name}-info-tip`);
   await ev(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
   await sleep(200);
+
+  // Slice 3 (T-259): the Program field, 44 px tall, inside the dialog; a name typed and left goes out as PUT { program } and comes back.
+  const pf = await ev(`(() => { const f = document.querySelector('[data-keep-going-program] input'); const dl = f?.closest('[role=dialog]'); if (!f) return null; const r = f.getBoundingClientRect(); const q = dl?.getBoundingClientRect();
+    return { h: r.height, x: r.x, r: r.right, dx: q?.x ?? 0, dr: q?.right ?? innerWidth, fs: parseFloat(getComputedStyle(f).fontSize) }; })()`);
+  check('Program field there', !!pf);
+  if (pf) {
+    check('Program field 44 px tall', Math.round(pf.h) >= 44, String(pf.h));
+    check('Program field inside the dialog', pf.x >= pf.dx - 1 && pf.r <= pf.dr + 1, JSON.stringify(pf));
+    if (touch) check('Program field text 16 px on a phone (no zoom)', pf.fs >= 16, String(pf.fs));
+    await ev(`(() => { window.__kgBodies = []; const f = document.querySelector('[data-keep-going-program] input'); f.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(f, ' Event '); f.dispatchEvent(new Event('input', { bubbles: true })); f.blur(); })()`);
+    const back = await waitFor(`document.querySelector('[data-keep-going-program] input')?.value === 'event'`, 3000);
+    const bodies = await ev(`window.__kgBodies`);
+    check('Program goes out as PUT { program } and comes back', back && bodies?.length === 1 && bodies[0].program === 'event', JSON.stringify(bodies));
+    await shot(`${cfg.name}-info-program`);
+  }
 
   // Off: the PUT goes, the payload comes back off, the chip goes.
   await ev(`document.querySelector('[data-keep-going] [role=switch]').click()`);
