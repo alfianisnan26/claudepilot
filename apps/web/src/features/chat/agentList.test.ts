@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ChatEvent, ChatTask } from '@portal/contracts';
-import { callCommand, countTasks, exitCode, firstLine, groupTasks, namedByCommand, NO_FILTER, taskLabel, taskLine, ticketOf, uniqueTasks } from './agentList';
+import { callCommand, countTasks, exitCode, exitNote, firstLine, groupTasks, namedByCommand, NO_FILTER, taskLabel, taskLine, ticketOf, uniqueTasks } from './agentList';
 
 let n = 0;
 const at = (min: number) => new Date(Date.UTC(2026, 9, 14, 12, min)).toISOString();
@@ -93,10 +93,19 @@ describe('taskLine: one line, nothing printed twice', () => {
     assert.deepEqual(taskLine(command('running', 'QA sleeper'), 'QA sleeper', 'sleep 4', null), { lead: null, tone: 'live', code: 'sleep 4' });
   });
 
+  it('an exit code Claude Code does not count as a failure reads with its reason, not as an error', () => {
+    // Observed with 2.1.296: a pipe ending in grep that matched nothing.
+    const line = 'node --test x.test.ts | grep -E fail';
+    const t = command('completed', line, { summary: `Background command "${line}" completed (exit code 1: No matches found)` });
+    assert.deepEqual(taskLine(t, 'node test: x.test.ts', line, null), { lead: 'exit 1: No matches found', tone: 'muted', code: line });
+  });
+
   it('exitCode and firstLine read what Claude Code reports', () => {
     assert.equal(exitCode('Background command "exit 3" failed with exit code 3'), 3);
     assert.equal(exitCode('Background command "x" completed (exit code 0)'), 0);
     assert.equal(exitCode(null), null);
+    assert.equal(exitNote('Background command "x" completed (exit code 1: No matches found)'), 'No matches found');
+    assert.equal(exitNote('Background command "x" failed with exit code 3'), null);
     assert.equal(firstLine('\n\n- **Done**: all good\nmore'), 'Done: all good');
   });
 });

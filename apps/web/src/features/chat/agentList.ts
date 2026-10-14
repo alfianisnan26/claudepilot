@@ -56,6 +56,14 @@ export function exitCode(summary: string | null | undefined): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/**
+ * What Claude Code says about an exit code it does not count as a failure: `completed (exit code 1: No matches found)` (grep finding
+ * nothing). Null when it says nothing.
+ */
+export function exitNote(summary: string | null | undefined): string | null {
+  return /\bexit code -?\d+: ([^)\n]{1,80})\)/i.exec(summary ?? '')?.[1]?.trim() || null;
+}
+
 /** The first line of a result that says something, without Markdown's heading, list and emphasis marks. */
 export function firstLine(text: string | null | undefined): string | null {
   for (const raw of (text ?? '').split('\n')) {
@@ -97,7 +105,9 @@ export function taskLine(t: ChatTask, label: string, command: string | null, lat
   if (t.status === 'running') return { lead: shown ? null : 'Running', tone: 'live', code: shown };
   if (t.status === 'killed') return { lead: 'Stopped', tone: 'warn', code: shown };
   if (t.status === 'failed') return { lead: exit !== null ? `exit ${exit}` : 'Failed', tone: 'danger', code: shown };
-  return { lead: exit !== null ? `exit ${exit}` : 'Done', tone: exit !== null && exit !== 0 ? 'danger' : 'muted', code: shown };
+  // Done is Claude Code's call: an exit code it does not count as a failure (grep that found nothing) reads with its reason, not in red.
+  const note = exitNote(t.summary);
+  return { lead: exit !== null ? `exit ${exit}${note ? `: ${note}` : ''}` : 'Done', tone: 'muted', code: shown };
 }
 
 export interface Counts {
