@@ -3,7 +3,7 @@ import { AppError, isAppError } from '@isnanme/core';
 import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, type ChatEvent, type ChatPermissionMode, type ChatRequest, type ChatSession } from '@portal/contracts';
 import { z } from 'zod';
 import { paginate, pageInput } from '../paging.js';
-import { PortalToolError, registerPortalTool, type PortalToolContext } from '../registry.js';
+import { PortalToolError, portalTools, type PortalToolContext, type ToolRegistry } from '../registry.js';
 import { cleanText } from '../sanitize.js';
 import { assertCanChange, uiLink } from './common.js';
 import type { PortalToolDeps } from './deps.js';
@@ -55,8 +55,9 @@ function pendingRequests(events: ChatEvent[]): ChatRequest[] {
 }
 
 /** Chat sessions over MCP (portal-mcp PRD §13.3). The write tools are listed only while session control is on. */
-export function registerSessionTools(deps: PortalToolDeps): void {
+export function registerSessionTools(deps: Pick<PortalToolDeps, 'store' | 'chat'>, registry: ToolRegistry = portalTools): void {
   const { store, chat } = deps;
+  const registerPortalTool: ToolRegistry['register'] = (tool) => registry.register(tool);
 
   const need = (id: string): ChatSession => {
     const s = chat.get(id);
