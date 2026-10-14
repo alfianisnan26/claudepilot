@@ -1092,9 +1092,14 @@ test('m3: SIGINT and SIGTERM revoke the lease and drop the lock once, then exit 
     let cleaned = 0;
     const unhook = f.onStop(async () => { cleaned++; }, proc);
     proc.emit(sig, sig);
-    proc.emit(sig === 'SIGINT' ? 'SIGTERM' : 'SIGINT', 'again');
     await new Promise((res) => setImmediate(res));
-    assert.equal(cleaned, 1, sig);
+    assert.equal(cleaned, 1, `${sig}: cleaned up`);
+    assert.deepEqual(proc.exits, [code]);
+    // a second signal does not clean up or exit twice
+    const other = sig === 'SIGINT' ? 'SIGTERM' : 'SIGINT';
+    proc.emit(other, other);
+    await new Promise((res) => setImmediate(res));
+    assert.equal(cleaned, 1);
     assert.deepEqual(proc.exits, [code]);
     unhook();
     assert.equal(proc.listenerCount('SIGINT') + proc.listenerCount('SIGTERM'), 0);
