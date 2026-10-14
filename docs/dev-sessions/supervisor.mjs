@@ -39,6 +39,9 @@ const RESTART_GAP_MIN = Number(process.env.RESTART_GAP_MIN ?? 5);
 const ROUND_S = Number(process.env.ROUND_S ?? 120);
 const LIFETIME_H = Number(process.env.LIFETIME_H ?? 24);
 const STAGGER_S = Number(process.env.STAGGER_S ?? 90);
+/** The orchestrator chat's own model and effort (D-46): a create takes none and falls to the portal's default (sonnet on 2026-10-14), which put an orchestrator on sonnet unannounced. */
+const ORCH_MODEL = process.env.ORCH_MODEL ?? 'opus';
+const ORCH_EFFORT = process.env.ORCH_EFFORT ?? 'medium';
 /** DRY_RUN=1: reads the portal and says what it would do; changes nothing. */
 const DRY = process.env.DRY_RUN === '1';
 
@@ -324,6 +327,13 @@ async function startSession(t, tstate, again, reason, continuedFrom = null) {
   if (bp.error) throw new Error(`Bypass refused: ${bp.error.code} ${bp.error.message}`);
   const mode = (await api('GET', `/api/chat/sessions/${s.id}`)).data?.mode;
   if (mode !== 'bypassPermissions') throw new Error(`Bypass did not turn on (mode ${mode})`);
+  // The model and effort are set on the record (D-46) before the kickoff, through the Portal MCP (session_configure); a refusal is logged, not fatal.
+  const model = t.model ?? ORCH_MODEL, effort = t.effort ?? ORCH_EFFORT;
+  try {
+    const out = await mcpCall('session_configure', { id: s.id, model, effort });
+    if (out?.error || out?.result?.isError) throw new Error(out.error?.message ?? out.result?.content?.[0]?.text ?? 'refused');
+    log(`${t.key}: model ${model}, effort ${effort}`);
+  } catch (e) { log(`${t.key}: could not set model ${model}: ${e.message}; it runs on the portal default`); }
   await sessionSend(s.id, t.kickoff ? t.kickoff(again, reason) : kickoff(t, again, reason));
   tstate.sessionId = s.id;
   tstate.cwd = s.cwd;
