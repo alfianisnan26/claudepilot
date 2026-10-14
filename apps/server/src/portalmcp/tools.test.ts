@@ -680,7 +680,7 @@ test('session_interrupt and session_end are operate work and name their session'
   await h.call(op.secret, 'session_interrupt', { id: 's2' });
   await h.call(op.secret, 'session_end', { id: 's1' });
   assert.equal(err(await h.call(op.secret, 'session_end', { id: 'ghost' })), 'NOT_FOUND');
-  assert.deepEqual(calls, ['chat.interrupt:s2', 'chat.end:s1']);
+  assert.deepEqual(calls, ['chat.control:s2:stop:undefined', 'chat.end:s1'], 'an interrupt is a Stop (T-294: it holds the crew reports too)');
 });
 
 test('accounts: keys are masked, provider text is untrusted and redacted, a locked portal can’t check, and a pool change asks first', async () => {

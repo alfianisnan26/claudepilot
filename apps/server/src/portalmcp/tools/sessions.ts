@@ -163,7 +163,8 @@ export function registerSessionTools(deps: PortalToolDeps): void {
     input: z.object({ id: z.string().max(80) }),
     async handler(ctx, args) {
       need(args.id);
-      await chat.interrupt(args.id);
+      // The same as a person's Stop (T-294): its workers' reports wait until someone else's message lets it run again.
+      await chat.control(args.id, 'stop');
       ctx.affected(`session:${args.id}`);
       return { summary: `Interrupted ${args.id}.`, session: sessionBrief(need(args.id), ctx) };
     },
