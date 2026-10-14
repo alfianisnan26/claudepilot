@@ -25,6 +25,7 @@ import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
 import { formatDateTime } from '@/lib/format';
 import { crewCount, crewOfRows, fromLead, otherClaude } from './crew';
 import { RecoverButton } from './Recover';
+import { RoleBadge } from './RoleBadge';
 import { endedForSafety, formatUsd, StateBadge, timeShort } from './shared';
 import { SWIPE_SETTLE_MS, useRowSwipe } from './swipe';
 
@@ -75,7 +76,7 @@ const folderName = (s: ChatSession) => s.cwd.replace(/\/+$/, '').slice(s.cwd.rep
  *
  * Crew (T-294, crew.ts): a lead's row counts what it started (an icon and a number; the words in the tip); its workers sit under it on a
  * rail, the live ones in spawn order, the done ones behind one "N done" row; a worker names its Claude only when it differs from its
- * lead's. A worker shown away from its lead links to it ("from …").
+ * lead's. A worker shown away from its lead links to it ("from …"). A session that runs as an agent shows its role (a badge), only when set.
  */
 export function SessionRow({
   row,
@@ -289,6 +290,7 @@ export function SessionRow({
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <p className="min-w-0 truncate font-semibold">{title}</p>
               {s.pinnedAt && <Pin className="size-3.5 shrink-0 text-muted" aria-label="Pinned" />}
+              <RoleBadge session={s} />
               {ownClaude && (
                 <Badge className="max-w-full min-w-0">
                   <span className="min-w-0 truncate">{ownClaude}</span>

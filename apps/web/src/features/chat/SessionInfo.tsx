@@ -1,16 +1,20 @@
 import { Button, Dialog } from '@isnanme/ui';
 import type { ChatSession } from '@portal/contracts';
-import { GitBranch, Pencil } from 'lucide-react';
+import { GitBranch, IdCard, Pencil } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { InfoTip } from '@/components/InfoTip';
 import { RunChip } from '@/features/ci/RunChip';
 import type { usePersonaOf } from '@/features/personas/identities';
 import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
 import { BumpedChip, TicketChip, useBumpedTickets } from '@/features/tickets/TicketChip';
+import { roleOf } from './crewLimits';
 import { KeepGoingSection } from './KeepGoing';
+import { LimitsSection } from './LimitsSection';
 
 /**
- * Session info: what the session header used to spell out under the title (persona, workspace, Claude, ticket, CI runs, worktree
- * branch), behind a tap on the title or ⋯ → Info, so the floating header keeps to back, title, state and ⋯ (chat PRD §12.3).
+ * Session info: what the session header used to spell out under the title (persona, workspace, Claude, role, ticket, CI runs, worktree
+ * branch), behind a tap on the title or ⋯ → Info, so the floating header keeps to back, title, state and ⋯ (chat PRD §12.3). Below them,
+ * Keep going and the session's limits (Workers, Sub-agents: T-294).
  */
 export function SessionInfoDialog({
   open,
@@ -20,6 +24,7 @@ export function SessionInfoDialog({
   gone,
   connected,
   onRename,
+  onRestart,
 }: {
   open: boolean;
   onClose: () => void;
@@ -29,7 +34,10 @@ export function SessionInfoDialog({
   gone: boolean;
   connected: boolean;
   onRename: () => void;
+  /** The existing Restart (its sheet), for a sub-agents change the running process takes only at its next start. */
+  onRestart: () => void;
 }) {
+  const role = roleOf(session);
   // Tickets pushed into this session (tickets PRD FR31): beside its own ticket, each with how it was bumped.
   const bumped = useBumpedTickets(session?.id, open);
   return (
@@ -58,6 +66,18 @@ export function SessionInfoDialog({
                 {session.endedReason === 'transferred' && <span className="text-muted"> · left behind</span>}
               </Row>
             )}
+            {role && (
+              <Row label="Role">
+                <span className="inline-flex max-w-full items-center gap-1" data-session-role="">
+                  <IdCard className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span className="font-mono [overflow-wrap:anywhere]">{role}</span>
+                  <InfoTip label="About the role">
+                    It runs as this agent: .claude/agents/{role}.md in its folder (its prompt, its tools and, unless a model is set, its model). Kept
+                    across a restart and a move.
+                  </InfoTip>
+                </span>
+              </Row>
+            )}
             {(session.ticketId || bumped.length > 0) && (
               <Row label={bumped.length + (session.ticketId && !bumped.some((b) => b.ticketId === session.ticketId) ? 1 : 0) > 1 ? 'Tickets' : 'Ticket'}>
                 <span className="flex flex-wrap gap-x-3 gap-y-1">
@@ -82,6 +102,7 @@ export function SessionInfoDialog({
             {!connected && <Row label="Link">Reconnecting…</Row>}
           </dl>
           <KeepGoingSection session={session} />
+          <LimitsSection session={session} onRestart={gone ? undefined : onRestart} />
         </div>
       )}
     </Dialog>

@@ -10,6 +10,7 @@ import {
   type ChatFolder,
   type ChatFolderScan,
   type ChatKeepGoing,
+  type ChatLimitsResult,
   type ChatModelOption,
   type ChatSession,
   type ChatSegment,
@@ -32,6 +33,7 @@ import {
   type RecoverChatRequest,
   type RestartChatRequest,
   type SwitchChatRequest,
+  type UpdateChatLimitsRequest,
   type UpdateChatSessionRequest,
   type UpdateRestartHintRequest,
   type WorkspaceClaude,
@@ -140,6 +142,8 @@ export const chatApi = {
   cancelRestart: (id: string) => request<ChatSession>('DELETE', CHAT_API.restart(id)),
   /** The "Tools changed" hint's memory: hidden until the next change, and applying changes at the turn's end by itself (T-102). */
   restartHint: (id: string, body: UpdateRestartHintRequest) => request<ChatSession>('PATCH', CHAT_API.restartHint(id), body),
+  /** T-294: its workers at once and its sub-agents on or off (a person only); `restartNeeded` when the live process needs a Restart for it. */
+  setLimits: (id: string, body: UpdateChatLimitsRequest) => request<ChatLimitsResult>('PATCH', CHAT_API.limits(id), body),
   /** Keep going (T-259): the chat's policy, today's counts and its last action; null when it never had one. */
   keepGoing: (id: string) => request<ChatKeepGoing | null>('GET', CHAT_API.keepGoing(id)),
   /** The chats with Keep going on (the Home card "Autonomy", T-259 slice 2). */
