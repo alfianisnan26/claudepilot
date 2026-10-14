@@ -1,7 +1,7 @@
 # Orchestrator status (2026-10-14, session 619018ca, started 00:22 UTC after 5c9fcb5f ended 17:58 for integrity: the T-265 case; down 6 h, T-257)
 
 Knowledge: vault "ClaudePilot dev" (6cd11f710cc3), folder Dev loop/. The queue lives in NEXT; tickets are claimed only when work starts.
-Models: opus for implementation, sonnet for checks, fable for diagnosis. WIP limit three. Heavy work through scripts/job-run.sh and gate-job.sh.
+Models (coordinator 02:2x, evaluation 2026-10-14): ALWAYS passed explicitly; sonnet for verification, harness, sweep and scribe slices; opus for implementers and security or migration reviews; fable only for a diagnosis nobody cracked. WIP limit three. Heavy work through scripts/job-run.sh and gate-job.sh. The orchestrator hands off at about 200k context (status file, fresh continuation).
 
 ## LIVE
 - Portal 2026.10.13-7 (run 19, 5234892 + tags f94dca4; Argo Synced/Healthy at f94dca4; pod up since 17:38, 0 restarts; /healthz ok at 00:2x).
