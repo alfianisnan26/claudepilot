@@ -31,6 +31,7 @@ test('a figure without a reading is "unavailable", never 0', () => {
   assert.equal(f.insp, UNAVAILABLE, 'no Bash call: no share');
   assert.equal(f.fpy, UNAVAILABLE);
   assert.equal(f.cpa, UNAVAILABLE);
+  assert.equal(f.ci, UNAVAILABLE, 'no accepted slice: no interval');
   assert.equal(f.req, '47 / 120', 'median / p90');
   assert.equal(f.ctx, '77k', 'p90 equal to the median is not repeated');
   assert.equal(fmtStat({ median: null, p90: null }, fmtCount), UNAVAILABLE);
@@ -42,5 +43,7 @@ test('titles and intervals', () => {
   assert.equal(fmtInterval('n too small'), 'n too small');
   assert.equal(fmtInterval({ low: 1.2, high: 1.9 }), '$1.2–$1.9');
   const f = Object.fromEntries(figures(row({ bashCalls: 4, bashShare: { inspect: 0.25 }, firstPassYield: 0.6, costPerAccepted: 0.36 })).map((x) => [x.key, x.value]));
-  assert.deepEqual([f.insp, f.fpy, f.cpa], ['25 %', '60 %', '$0.36']);
+  assert.deepEqual([f.insp, f.fpy, f.cpa, f.ci], ['25 %', '60 %', '$0.36', 'n too small']);
+  const g = Object.fromEntries(figures(row({ costPerAccepted: 0.65, costPerAcceptedN: 24, costPerAcceptedInterval: { low: 0.44, high: 0.91 } })).map((x) => [x.key, x.value]));
+  assert.equal(g.ci, '$0.44–$0.91');
 });

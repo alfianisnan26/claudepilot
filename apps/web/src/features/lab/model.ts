@@ -46,5 +46,6 @@ export function figures(r: LabSummaryRow): Figure[] {
     { key: 'rew', label: 'Re-write', value: fmtShare(r.rewriteShare), basis: 'rewriteTokens' },
     { key: 'fpy', label: 'First pass', value: fmtShare(r.firstPassYield), basis: 'firstPassYield' },
     { key: 'cpa', label: 'Per accepted', value: fmtCost(r.costPerAccepted), basis: 'costPerAccepted' },
+    { key: 'ci', label: '90 % interval', value: r.costPerAcceptedN ? fmtInterval(r.costPerAcceptedInterval) : UNAVAILABLE, basis: 'costPerAccepted' },
   ];
 }

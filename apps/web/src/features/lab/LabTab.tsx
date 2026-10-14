@@ -57,6 +57,17 @@ function RowCard({ r }: { r: LabSummaryRow }) {
   );
 }
 
+/** A table cell: the median, and the p90 under it (muted) when the figure has one. */
+function Stacked({ v }: { v: string }) {
+  const [median, p90] = v.split(' / ');
+  return (
+    <>
+      <Value v={median!} />
+      {p90 && <span className="block text-[12px] text-muted tabular-nums">{p90}</span>}
+    </>
+  );
+}
+
 /** Desktop: one table, a row per period, role and model. */
 function RowsTable({ rows }: { rows: LabSummaryRow[] }) {
   const head = figures(rows[0]!).map((f) => f.label);
@@ -64,8 +75,7 @@ function RowsTable({ rows }: { rows: LabSummaryRow[] }) {
     <table className="w-full text-[13px]">
       <thead>
         <tr className="border-b border-line text-left text-[12px] text-muted">
-          <th className="px-4 py-2 font-normal">Period</th>
-          <th className="px-2 py-2 font-normal">Role</th>
+          <th className="px-4 py-2 font-normal">Role</th>
           {head.map((h) => (
             <th key={h} className="px-2 py-2 text-right font-normal">
               {h}
@@ -76,13 +86,15 @@ function RowsTable({ rows }: { rows: LabSummaryRow[] }) {
       <tbody className="divide-y divide-line">
         {rows.map((r) => (
           <tr key={`${r.period}|${r.role}|${r.model ?? ''}`} data-lab-row="">
-            <td className="whitespace-nowrap px-4 py-2 text-muted">{r.period}</td>
-            <td dir="auto" className="px-2 py-2 font-semibold [overflow-wrap:anywhere]">
-              {rowTitle(r)}
+            <td className="min-w-[9.5rem] px-4 py-2">
+              <span dir="auto" className="block font-semibold [overflow-wrap:anywhere]">
+                {rowTitle(r)}
+              </span>
+              <span className="block text-[12px] text-muted">{r.period}</span>
             </td>
             {figures(r).map((f) => (
-              <td key={f.key} className="px-2 py-2 text-right">
-                <Value v={f.value} />
+              <td key={f.key} className="whitespace-nowrap px-2 py-2 text-right">
+                <Stacked v={f.value} />
               </td>
             ))}
           </tr>
