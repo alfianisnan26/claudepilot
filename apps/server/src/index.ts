@@ -45,6 +45,7 @@ import { registerCiTools } from './ci/portalTools.js';
 import { valueRedactors } from './ci/values.js';
 import { secretName } from './secrets/names.js';
 import { ChatSessionsAdapter } from './ci/sessions.js';
+import { pendingControlRequests } from './chat/liveControls.js';
 import { TicketsAdapter } from './ci/tickets.js';
 import { ChatTicketSessions } from './tickets/sessions.js';
 import { registerChatTools } from './chat/portalTools.js';
@@ -427,7 +428,8 @@ registerPersonaTools(personas, {
 registerSkillTools(skills, { agentSelfEdit: () => settingsModule.settings.get<boolean>(SETTING_KEYS.agentsSelfEdit) });
 // CI: a git remote on each workspace and a self-hosted runner in it (local-git-ci PRD). It follows the remotes of running workspaces
 // by reading their files, and does nothing unless a workspace has one and the store allows work.
-const ciSessions = new ChatSessionsAdapter(chatController);
+// T-277 layer 4: the attached chats and their open control requests (read only), for the deploy pipeline's record.
+const ciSessions = new ChatSessionsAdapter(chatController, (ids) => pendingControlRequests(store.db, ids));
 // Secrets in logs: the values delivered to a workspace are taken out by value (the chat's redactor); a job's secrets are checked by name.
 const ciValues = valueRedactors((id) => exposedSecretValues(poolService, id));
 const ci = new CiService(store, new WorkspacesCiHost(workspaces), {

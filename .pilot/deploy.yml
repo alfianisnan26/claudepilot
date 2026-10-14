@@ -1,7 +1,9 @@
 # Deploy ClaudePilot to the isnan k3s cluster (docs/dev-session.md, "Deploying with pilot CI"). Started by hand only: in the portal
 # (CI > Remotes > claudepilot > Run on a branch) or by an agent with the Portal MCP tool ci_run_trigger (`/deploy`). The commit is the run's:
 # the head of the branch it runs on (default integration) or a tag. The release job deploys to the environment `production`, which the
-# portal holds for a PERSON's approval (CI > Remotes > environments); verify checks the result and rollback undoes a failed release.
+# portal holds for a PERSON's approval (CI > Remotes > environments); verify checks the result and rollback undoes a failed release. The
+# release records the chats attached to a live process (and waits, bounded, while one answers a control request); chats then fails the run
+# when one of them ended for integrity within 10 minutes of the restart, without a rollback (T-277 layer 4).
 # The logic lives in .pilot/scripts/*.sh (tested in apps/server/src/ci/deployPipeline.test.ts); dry_run prints every action, changes nothing.
 name: Deploy
 on:
@@ -52,7 +54,7 @@ jobs:
       - name: Tags to main
         run: bash .pilot/scripts/release.sh
     artifacts:
-      paths: [.pilot/out/release.env]
+      paths: [.pilot/out/release.env, .pilot/out/chats.env]
       when: always
   verify:
     name: Verify
@@ -61,6 +63,14 @@ jobs:
     steps:
       - name: Argo CD, rollout, smoke, logs
         run: bash .pilot/scripts/verify.sh
+  chats:
+    name: Chats
+    # release for its artifacts (chats.env: the chats attached at release); not a need of rollback, so a failure here rolls nothing back.
+    needs: [release, verify]
+    timeout: 20m
+    steps:
+      - name: Attached chats survived the restart
+        run: bash .pilot/scripts/chats.sh
   rollback:
     name: Roll back
     needs: [release, verify]
