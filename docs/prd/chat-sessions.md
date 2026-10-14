@@ -1117,6 +1117,14 @@ watched chats on Home. Neither ever repairs Bypass (the lease is the owner's ope
 wider than the card, no sideways scroll, the InfoTip inside the screen, "Paused" and the empty list in words). Not run against a real chat:
 the scratch portal has no workspace (the restart is covered by `keepgoing/controller.test.ts` on the real controller).
 
+**Browser check (slice 3, 2026-10-14):** the same harness in a Job (`claudepilot-job-f858c03f`, commit 2edaafb): 183/183 checks at 390 px
+and 1280 px, light and dark, now with the pause rows (all first, the program, a long reason wrapping inside the card, how long ago), a
+44 x 44 px Resume that sends `{ paused: false }` for its program, the 44 px Pause opening 44 px fields and "Pause event" sending the program
+and the reason, the pause InfoTip inside the screen, no sideways scroll. The first run (`claudepilot-job-7a6726fc`) caught the library's icon
+button at 36 px from 640 px up; Resume is a plain 44 px button since. In the same Job: typecheck, the keepgoing server tests (41/41) and the
+web glance and chat tests passed; the earlier Job also ran the store, Portal MCP tools and authz tests (118/120, the two failures the 790
+table list that 792 extends, fixed).
+
 ### 23.2 What is still open
 
 The Bypass LEASE (T-104 item 3: re-entering Bypass after a wake or a restart under a time-boxed grant the owner gives once with the server
