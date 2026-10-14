@@ -19,11 +19,10 @@ async function rig(opts: { settings?: Record<string, unknown>; used: Record<stri
   chat.sessions.set('s1', chatSession('s1', opts.session));
   const used = { ...opts.used };
   const names: Record<string, string> = { work: 'Work', home: 'Home', spare: 'Spare' };
-  // `resetJitterMs`: each reading of the usage moves the reset time by the next offset, as the live probe does (T-280).
-  let reads = 0;
+  // `resetJitterMs`: each tick (3 minutes on the clock) reads the reset time moved by the next offset, as the live probe does (T-280).
   const reset = () => {
     const j = opts.resetJitterMs;
-    return j?.length ? new Date(Date.parse(at(180)) + j[reads++ % j.length]!).toISOString() : at(180);
+    return j?.length ? new Date(Date.parse(at(180)) + j[Math.floor((clock.now() - Date.parse(at(0))) / 180_000) % j.length]!).toISOString() : at(180);
   };
   const claudes = (): ClaudeUsage[] =>
     Object.entries(used).map(([id, pct]) => ({ ...usage(id, names[id]!, [win('session', pct, reset())]), checkedAt: new Date(clock.now() - 60_000).toISOString() }));
