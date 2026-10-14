@@ -43,8 +43,11 @@ const ev = async (expr) => {
   return r.result?.result?.value;
 };
 const waitFor = async (expr, ms = 6000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr)) return true; await sleep(50); } return false; };
+// The wheel goes to the middle of the page's content, right of the sidebar: at 1280 px a fixed x of 200 lands on the sidebar, whose nav
+// scrolls by itself once its items outgrow an 800 px screen (T-288: one more nav item in T-146 made it 628 px in a 597 px box).
+let wheelX = 200;
 const wheel = async (dy) => {
-  await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 200, y: 400, deltaX: 0, deltaY: dy });
+  await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: wheelX, y: 400, deltaX: 0, deltaY: dy });
   await sleep(250);
 };
 const scrollY = () => ev('Math.round(scrollY)');
@@ -65,6 +68,8 @@ async function run(c) {
   await sleep(500);
   check('the page is taller than the screen', (await ev('document.scrollingElement.scrollHeight - innerHeight')) > 100);
 
+  wheelX = await ev(`(() => { const a = document.querySelector('aside'); const l = a && getComputedStyle(a).display !== 'none' ? a.getBoundingClientRect().right : 0; return Math.round((l + innerWidth) / 2); })()`);
+  check('the wheel aims at the page, not the sidebar', await ev(`!document.elementFromPoint(${wheelX}, 400)?.closest('aside')`), `x=${wheelX}`);
   await ev('scrollTo(0, 0)');
   await wheel(400);
   const base = await scrollY();
