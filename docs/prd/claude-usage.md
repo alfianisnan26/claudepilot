@@ -860,7 +860,7 @@ is writable.
 ### 28.6 Not built yet (later slices of T-287)
 
 Gate first try, human touches and ESTIMATE against ACTUAL hours per slice; delivered units per hour and per dollar; per-protocol
-analysis; result tokens, effort and idle gaps on the Lab tab (they are in the API and `lab_summary`, §28.12); telling a sub-agent its arm in the brief; `efficiency_me` and `experiment_get` as their own tools (`lab_summary`
+analysis; result tokens, effort and idle gaps on the Lab tab (they are in the API and `lab_summary`, §28.12); `efficiency_me` and `experiment_get` as their own tools (`lab_summary`
 covers the coordinator's pass); the Home widget, the weekly digest and the regression alerts.
 
 ### 28.7 Outcomes (slice 2, as built)
@@ -899,7 +899,8 @@ its own session only and no experiments; every denial is the same 404 as a route
 reach `session`: an agent's token reads its own session; an admin's token the portal) answers short rows by default (period, role, model,
 n, median requests, context, minutes, cost, inspection share, re-write share, first-pass yield, cost per accepted) and everything with
 `full: true` (p90s, outcomes, Bash classes, the experiments with intervals, the source of each figure); `lab_experiment_set` (admin
-tokens, confirmation round trip) starts a randomized or before-and-after experiment or stops one. Counts and ids only.
+tokens, confirmation round trip) starts a randomized or before-and-after experiment or stops one; `lab_arm_draw` (agent reach
+`session`, §28.13) draws a slice's arms before its brief. Counts and ids only.
 
 ### 28.11 Usage → Lab
 
@@ -928,3 +929,23 @@ the shared `Segmented` at 40 px high (as on the Spikes tab).
   still `blockOrder(experiment, stratum, floor(k / arms))[k mod arms]` for the k-th slice of the stratum: the same slices in the same order
   get the same arms, and the arms are balanced within one slice per stratum (tested on four sizes, interleaved). `lab_experiment_set`
   takes `strata` (admin, confirmation; the preview shows them); `lab_summary` shows `result_tok_p50` and, in full, each experiment's keys.
+
+### 28.13 Draws: the arm before the brief (T-292 slice 3)
+
+An experiment whose treatment is the brief itself (E2, the context compiler: the pack line, the plan step's file manifest and the
+preloaded files, against today's brief) needs the arm before the brief is written; a slice gets its arm only when its Agent call starts.
+- **`lab_arm_draw`** (Portal MCP, agent reach `session`, audited `lab.arm.draw`; input ticket, role, model, effort as the slice will be
+  dispatched): the same block draw as at a slice start (§28.12; the size from the ticket's ESTIMATE), held as an assignment under
+  `draw:<key>` in the caller's own session (`lab_assignments`, no migration), answered as the key (`d-` and 12 hex) and the arm per running
+  randomized experiment. No experiment running: no arm, and the brief is the ordinary one. An admin token has no session: refused.
+- **Binding**: the brief's first line carries `Lab-Draw: <key>` (read in the first 2,500 characters of the Agent prompt, like the ticket).
+  When that Agent call starts in the same session the draw's rows move to the slice, so it keeps the drawn arms; experiments the draw did
+  not cover assign as usual. Once only: the key in a second call, or in another session, binds nothing (that slice is assigned as usual).
+- **No picking**: a draw keeps its place in the block whether it is used or not, so the arms stay balanced; draws no slice bound are
+  counted per experiment (`draws_unbound` in `lab_summary` full), so drawing until an arm suits would show.
+- The brief heads per arm come from `scripts/plan-step.mjs` (`head --arm control|treatment --draw <key>`), the E2 experiment's arguments
+  from `plan-step.mjs e2` (randomized, arms `control` and `treatment`, strata size, role and model, minimum 30 per arm, primary the median
+  loaded cost per accepted slice; adopt at −15 percent with yield not down). Procedure: `docs/dev-sessions/orchestrator.md`.
+- Source: `lab/experiments.ts` (`drawArms`, `bindDraw`, `unboundDraws`), `lab/classify.ts` (`drawOf`); tests `lab/draw.test.ts` (the drawn
+  arm is kept: without the bind the slice gets the other arm of the block and the test fails; balance and replay; another session;
+  the tool) and `qa/planStep.test.ts`.
