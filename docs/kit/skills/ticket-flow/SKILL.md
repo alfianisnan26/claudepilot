@@ -30,7 +30,7 @@ A closed ticket is reopened only by a person. `in_progress` on a ticket nobody i
 ## Claim only when work starts
 
 - Claim at the moment you start (`ticket_claim_next` with `id`, or without it for the next in the queue that matches your tags). Never claim to reserve.
-- **WIP limit three**: at most three tickets in `in_progress` per orchestrator (slices in flight) and one per sub-agent. A fourth waits in the queue, unclaimed.
+- **WIP limit five**: at most five tickets in `in_progress` per orchestrator (slices in flight) and one per sub-agent. A fourth waits in the queue, unclaimed.
 - In the same minute, write the **estimate** (below) as the first comment. A ticket without an estimate is not claimed (the portal enforces it when available).
 
 ## The structured estimate
