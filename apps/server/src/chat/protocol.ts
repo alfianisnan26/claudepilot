@@ -86,6 +86,8 @@ export interface ParsedLine {
   mcpServers?: { name: string; status: string }[];
   /** A reply to one of the portal's own control requests. */
   controlResponse?: ControlResponse;
+  /** The line's `type` (and `subtype`, as `type/subtype`), for logs only: never its content. */
+  kind?: string;
   /** Lines the portal sent moving through Claude Code's queue, by their client uuid. */
   inputs?: { uuid: string; state: ChatInputState }[];
   /** Sub-agent and background task changes. */
@@ -182,6 +184,14 @@ export function parseLine(raw: string): ParsedLine {
     return { stored: [] };
   }
   if (!obj) return { stored: [] };
+  const parsed = parseKnown(obj);
+  const type = asStr(obj.type);
+  const subtype = asStr(obj.subtype);
+  if (type) parsed.kind = subtype ? `${type}/${subtype}` : type;
+  return parsed;
+}
+
+function parseKnown(obj: Record<string, unknown>): ParsedLine {
   switch (asStr(obj.type)) {
     case 'system':
       return parseSystem(obj);

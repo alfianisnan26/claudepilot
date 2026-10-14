@@ -233,7 +233,8 @@ export function Composer({
   };
 
   return (
-    <div className="relative">
+    // The floor of a popover opened above it (lib/popover.ts): a note from the stack above never covers the composer.
+    <div data-popover-floor="" className="relative">
       {listOpen && (
         <ul id={listId} role="listbox" aria-label="Commands" className="absolute right-0 bottom-full left-0 z-40 mb-2 max-w-xs rounded-2xl border border-line bg-surface p-1.5 shadow-lift">
           {matches.map((c, i) => (

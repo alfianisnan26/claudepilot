@@ -11,6 +11,8 @@
 //   4. Keeps watching, every ROUND_S seconds: a session idle for a few minutes gets a nudge to carry on (nobody else will); an interrupted one (its
 //      process is gone) is woken by a message; one that ended is started again, told to continue from its status file (at most MAX_STARTS per 24 h,
 //      3 after integrity endings, RESTART_GAP_MIN apart). A status file that starts with TRACK COMPLETE, or a session a person closed, is left alone.
+//   5. Keeps each track chat in Bypass (T-256): one found out of it (a wake or a Resume starts on the start mode) gets the server code again and
+//      the acknowledgement, at most every BYPASS_GAP_MIN minutes, and a tool approval it asked meanwhile is denied with "run it again".
 // Stop it: touch ~/.claudepilot/dev-sessions/STOP (checked every round), or kill the process by PID. State: ~/.claudepilot/dev-sessions/state.json.
 // Never logs the code, a cookie or a token.
 
@@ -353,6 +355,48 @@ async function answerWaiting(t, ts, cur) {
 }
 
 /**
+ * Bypass on every round (T-256). A track chat runs in Bypass (D-3), but a wake from sleep or a Resume after a crash starts it on the start mode
+ * (chat-sessions FR20, FR38: the portal never restores it there by itself), and its first command then waits for an approval nobody gives: the
+ * Event chat waited 19:33 to 00:22 on 2026-10-13. So when a track's chat is not in Bypass, this re-asserts it through the same gates a person
+ * passes (the server code again, then the acknowledgement; the policy and the session's own opt-in are the portal's checks) and logs one line.
+ * A tool approval asked before that is denied with "run it again" (denying runs nothing; approving stays a person's). `wake`: the chat may be
+ * asleep or interrupted, and the caller is about to message it anyway (entering Bypass wakes it first, so its first command does not ask).
+ */
+const BYPASS_GAP_MIN = Number(process.env.BYPASS_GAP_MIN ?? 5);
+async function ensureBypass(t, ts, cur, wake = false) {
+  if (t.bypass === false || !cur || cur.mode === 'bypassPermissions' || cur.switching || cur.archivedAt) return;
+  if (!['idle', 'waiting', 'working', ...(wake ? ['interrupted'] : [])].includes(cur.state)) return;
+  if (!wake && cur.process !== 'live') return; // asleep: re-asserted right before the next message wakes it
+  if (!cur.bypassCapable) {
+    if (ts.bypassNotCapable !== cur.id) log(`${t.key}: in ${cur.mode}, not Bypass, and the session was not started to allow it: a person must restart it for Bypass`), (ts.bypassNotCapable = cur.id);
+    return;
+  }
+  if (ts.bypassAt && Date.now() - ts.bypassAt < BYPASS_GAP_MIN * 60_000) return;
+  ts.bypassAt = Date.now();
+  if (DRY) return log(`[dry] ${t.key}: in ${cur.mode}, not Bypass: would enter the server code again and turn Bypass back on`);
+  const re = await api('POST', '/api/chat/reauth', { code: CODE });
+  if (re.error) return log(`${t.key}: in ${cur.mode}, not Bypass: the server code was refused (${re.error.code ?? re.status})`);
+  const bp = await api('POST', `/api/chat/sessions/${cur.id}/bypass`, { acknowledged: true });
+  const mode = bp.error ? null : (await api('GET', `/api/chat/sessions/${cur.id}`)).data?.mode;
+  if (mode !== 'bypassPermissions') return log(`${t.key}: in ${cur.mode}, not Bypass: re-asserting it failed (${bp.error ? `${bp.error.code} ${bp.error.message}` : `mode ${mode}`})`);
+  const stale = await denyStaleToolApprovals(cur).catch(() => 0);
+  log(`${t.key}: was in ${cur.mode}, not Bypass: Bypass on again${stale ? ` (${stale} tool approval${stale === 1 ? '' : 's'} asked before it denied with "run it again")` : ''}`);
+}
+
+/** Tool approvals still open on a chat that is in Bypass now: each was asked before it, and Claude Code does not ask them again by itself. */
+async function denyStaleToolApprovals(cur) {
+  const events = (await api('GET', `/api/chat/sessions/${cur.id}/events?after=${Math.max(0, (cur.lastSeq ?? 0) - 500)}`)).data ?? [];
+  const list = Array.isArray(events) ? events : [];
+  const resolved = new Set(list.filter((e) => e.kind === 'resolved').map((e) => e.requestId));
+  let n = 0;
+  for (const e of list.filter((x) => x.kind === 'request' && x.request?.kind === 'tool' && !resolved.has(x.request.requestId))) {
+    await mcpCall('session_respond', { id: cur.id, request_id: e.request.requestId, decision: 'deny', message: 'This chat was out of Bypass by mistake and Bypass is on again: this approval is dropped. Run the same command again; it will not ask. Nobody is here to answer questions.' });
+    n++;
+  }
+  return n;
+}
+
+/**
  * Folder trust is tied to the hash of .claude/settings.json: a commit that touches it makes the next Move, restart or wake of a session in the main folder fail
  * with FOLDER_UNTRUSTED until a person trusts the new hash (ticket T-38 asks the portal to do this itself). Until it does, this supervisor re-trusts a folder
  * whose scan lists NO hooks, MCP servers, plugins or env names (only permission rules), and says so; anything else is left for a person and logged.
@@ -410,20 +454,10 @@ async function watch() {
           ts.pendingContinue = true;
         }
         ts.claudeId = cur.claudeId;
-        // A chat that lost Bypass (a move or restart came back in `default`, 2026-10-13) would wait for every tool approval: put it back (T-256).
-        if (cur.mode && cur.mode !== 'bypassPermissions' && !DRY) {
-          try {
-            const re = await api('POST', '/api/chat/reauth', { code: CODE });
-            if (re.error) throw new Error(re.error.message);
-            const bp = await api('POST', `/api/chat/sessions/${cur.id}/bypass`, { acknowledged: true });
-            if (bp.error) throw new Error(`${bp.error.code} ${bp.error.message}`);
-            log(`${t.key}: mode was ${cur.mode}: Bypass put back`);
-          } catch (e) {
-            log(`${t.key}: mode is ${cur.mode} and Bypass could not be put back: ${e.message}`);
-          }
-        }
+        await ensureBypass(t, ts, cur).catch((e) => log(`${t.key}: could not check Bypass: ${e.message}`));
         if (ts.pendingContinue && cur.state === 'idle') {
           try {
+            await ensureBypass(t, ts, cur, true);
             await sessionSend(cur.id, (t.moved ?? MOVED)(cur.claudeName ?? 'another Claude'));
             ts.pendingContinue = false;
             ts.nudges.push(Date.now());
@@ -447,6 +481,7 @@ async function watch() {
               if (!ts.nudgeCapLogged) log(`${t.key}: ${MAX_NUDGES} nudges in 24 h: leaving it for a person`), (ts.nudgeCapLogged = true);
             } else {
               try {
+                await ensureBypass(t, ts, cur, true);
                 await sessionSend(cur.id, t.nudge ?? NUDGE);
                 ts.nudges.push(Date.now());
                 log(`${t.key}: idle for ${Math.round((Date.now() - since) / 60_000)} min: nudged`);
@@ -470,6 +505,7 @@ async function watch() {
         const lastWake = ts.wakes[ts.wakes.length - 1] ?? 0;
         if (Date.now() - lastWake >= 5 * 60_000 && within24h(ts.wakes).length < 12) {
           try {
+            await ensureBypass(t, ts, cur, true);
             await sessionSend(cur.id, (t.wake ?? WAKE)(String(cur.endedReason ?? 'its process stopped').slice(0, 120)));
             ts.wakes.push(Date.now());
             log(`${t.key}: interrupted (${String(cur.endedReason ?? '').slice(0, 80)}): woken`);

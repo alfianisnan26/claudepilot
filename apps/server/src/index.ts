@@ -228,6 +228,7 @@ chatController.agentCaps = () => ({
 settingsModule.settings.onChange((key) => key === BYPASS_SETTING && void chatController.bypassPolicyChanged());
 // The Restart hint (chat PRD, Restart): when the latest delivery into a workspace landed; a session whose process is older offers a Restart.
 chatController.deliveredAt = (id) => reconciler.row(id)?.applied_at ?? null;
+chatController.configChanges = (id, sinceMs) => reconciler.changesSince(id, sinceMs);
 reconciler.onChange((id) => chatController.deliveryChanged(id));
 chatController.bypassFacts = (id) => ({
   internet: true,
@@ -351,6 +352,14 @@ portalMcp.start();
 // Agent access stores its workspace as the stable id and reads it as the key (T-42 slice 3).
 portalMcp.agents.workspaceRefs = workspaces.identities;
 chatController.agentAccess = portalMcp.agents;
+{
+  // T-102: agent access turned on or off changes the portal tools a session's NEXT process gets: its "Tools changed" hint says so.
+  const accessChanged = portalMcp.agents.onAccessChange;
+  portalMcp.agents.onAccessChange = (workspaceId) => {
+    accessChanged?.(workspaceId);
+    chatController.portalToolsChanged(workspaceId);
+  };
+}
 chatController.launchEnv = () => (settingsModule.settings.get<boolean>(SETTING_KEYS.mcpAccountOff) ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {});
 chatController.secretValues = (id) => exposedSecretValues(poolService, id);
 // MCP OAuth (MCP set PRD §13.3): the guided sign-in runs Claude Code's login in a workspace terminal, for one of its Claudes, and a chat

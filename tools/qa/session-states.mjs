@@ -12,12 +12,21 @@
 //   - the btw sheet starts below the header and is tall enough to read;
 //   - the composer does not move or change size when the state changes (working, a mode, the chip coming and going), only when what is above
 //     it is meant to grow.
+// T-102 adds two states:
+//   - restartSheet: the "Tools changed" chip in each state (working, queued with Cancel, automatic with Restart now after a long turn, held
+//     for Bypass) is one tappable line with 44 px targets and no disabled button; a tap opens the sheet (phone) or the popover (laptop),
+//     inside the visible screen and, as a popover, above the chip and never over the composer; every InfoTip in it and in the stack above
+//     the composer opens inside the screen, wraps its text, never covers the composer, and closes on a tap outside and on a scroll;
+//   - headerBand: a long transcript scrolled to the middle, Bypass off and on, 14 agents running: no hard edge in the band right under the
+//     header (adjacent pixel rows and columns of a screenshot, against what a blur leaves), no darker band, the count badge clear of its
+//     button's glyph and of every other control, and the title (and the Bypass shield) at AA contrast over the tinted glass.
 // usage: SS_PORT=3415 SS_CODE=<server code> SS_CDP=9615 node tools/qa/session-states.mjs [--only name] [--state name] [--shots dir]
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inflateSync } from 'node:zlib';
 import WebSocket from 'ws';
 
 const PORT = Number(process.env.SS_PORT ?? 3415);
@@ -137,6 +146,44 @@ const same = (a, b) => !!a && !!b && ['x', 'y', 'w', 'h'].every((k) => near(a[k]
 const overlap = (a, b) => Math.max(0, Math.min(a.r, b.r) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.b, b.b) - Math.max(a.y, b.y));
 const J = (o) => JSON.stringify(o, (k, v) => (typeof v === 'number' ? Math.round(v * 10) / 10 : v));
 
+/** A screenshot as RGB pixels (Chromium's PNG: 8-bit RGB or RGBA, not interlaced). */
+function decodePng(buf) {
+  let pos = 8;
+  let width = 0, height = 0, type = 0;
+  const idat = [];
+  while (pos < buf.length) {
+    const len = buf.readUInt32BE(pos);
+    const kind = buf.toString('ascii', pos + 4, pos + 8);
+    const data = buf.subarray(pos + 8, pos + 8 + len);
+    if (kind === 'IHDR') { width = data.readUInt32BE(0); height = data.readUInt32BE(4); type = data[9]; }
+    if (kind === 'IDAT') idat.push(data);
+    pos += 12 + len;
+  }
+  const bpp = type === 6 ? 4 : 3;
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = width * bpp;
+  const out = Buffer.alloc(height * stride);
+  for (let y = 0; y < height; y++) {
+    const f = raw[y * (stride + 1)];
+    const line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? out[y * stride + x - bpp] : 0;
+      const b = y > 0 ? out[(y - 1) * stride + x] : 0;
+      const c = x >= bpp && y > 0 ? out[(y - 1) * stride + x - bpp] : 0;
+      const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+      const pred = f === 1 ? a : f === 2 ? b : f === 3 ? (a + b) >> 1 : f === 4 ? (pa <= pb && pa <= pc ? a : pb <= pc ? b : c) : 0;
+      out[y * stride + x] = (line[x] + pred) & 255;
+    }
+  }
+  const px = (x, y) => { const i = Math.round(y) * stride + Math.round(x) * bpp; return [out[i], out[i + 1], out[i + 2]]; };
+  return { width, height, px };
+}
+const luma = ([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+const relLum = ([r, g, b]) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+const contrast = (a, b) => { const [x, y] = [relLum(a), relLum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+const parseRgb = (s) => (/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)/.exec(s) ?? []).slice(1, 4).map(Number);
+const intersects = (a, b) => !!a && !!b && Math.min(a.r, b.r) - Math.max(a.x, b.x) > 0.5 && Math.min(a.b, b.b) - Math.max(a.y, b.y) > 0.5;
+
 // Where Bypass stands (the picker reads it), as in session-chrome.mjs.
 const harness = `(() => {
   const real = window.fetch;
@@ -248,15 +295,28 @@ async function invariants(cfg, label, { kb = false, reviewed = false } = {}) {
   }
   // The transcript: where its first line sits when scrolled to the top and its last when scrolled to the end, computed from the content's
   // own coordinates (scrolling it would fight the follow-the-end of a streaming turn).
-  const ends = await ev(`(() => {
+  const END = `(() => {
     const log = ${Q.log}; const items = log.firstElementChild?.children; if (!items?.length) return null;
     const box = log.getBoundingClientRect(); const at = (e) => e.getBoundingClientRect();
     const firstIn = at(items[0]).top - box.top + log.scrollTop, lastIn = at(items[items.length - 1]).bottom - box.top + log.scrollTop;
     return { first: box.top + firstIn, last: box.top + lastIn - Math.max(0, log.scrollHeight - log.clientHeight) };
-  })()`);
+  })()`;
+  let ends = await ev(END);
+  let endTop = top;
+  // The transcript's bottom room follows the stack's height through a ResizeObserver and a render: on a loaded machine that can land after
+  // the fixed pause above (two cases in 5,716 on a busy pod, both passing 3 of 3 alone). Wait for it to settle, at most a second, and say
+  // how long it took; a padding that never catches up still fails.
+  let settledMs = 0;
+  while (ends && ends.last > endTop + 0.5 && settledMs < 1000) {
+    await sleep(100);
+    settledMs += 100;
+    ends = await ev(END);
+    const again = await ev(MEASURE);
+    endTop = Math.min(...again.stack.map((x) => x.y));
+  }
   // Cramped (a landscape keyboard), the composer and its notes take the screen; nothing is left to show the transcript in.
   if (ends && !reviewed && !cramped) {
-    check(t('the transcript\'s end clears the stack'), ends.last <= top + 0.5, J({ last: ends.last, stackTop: top }));
+    check(t('the transcript\'s end clears the stack'), ends.last <= endTop + 0.5, J({ last: ends.last, stackTop: endTop, settledMs }));
     check(t('the transcript\'s start clears the header'), ends.first >= h.b - 0.5, J({ first: ends.first, headerBottom: h.b }));
   }
   return m;
@@ -371,6 +431,159 @@ const STATES = {
       await invariants(cfg, 'Tools changed, keyboard up', { kb: true });
       await shot(`${cfg.name}-restart-chip-kb`);
       await keyboard(cfg, false);
+    }
+  },
+
+  // T-102: the Tools changed chip in each state, its sheet (phone) or popover (laptop), and the notes in it and in the stack above the composer.
+  async restartSheet(cfg) {
+    if (!(await openSession(BASE))) return check('page loads', false, errors.join(' | '));
+    const touch = !!cfg.mobile;
+    const at = new Date().toISOString();
+    await ev(`__fake.patch(${JSON.stringify({ state: 'working', configChangedAt: at, configChanged: { at, reasons: ['mcpset', 'settings', 'portal_tools'] }, busySince: at, autoApply: false, autonomous: false })})`);
+    await sleep(350);
+    const CHIP = `(() => { const c = document.querySelector('[data-restart-chip]'); if (!c) return null; const R = (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, b: r.bottom, r: r.right }; };
+      return { ...R(c), text: c.innerText.replace(/\\s+/g, ' ').trim(), buttons: [...c.querySelectorAll('button')].map((b) => ({ what: b.innerText.trim() || b.getAttribute('aria-label'), disabled: b.disabled, ...R(b) })) }; })()`;
+    const chipOk = async (label, expect) => {
+      const c = await ev(CHIP);
+      check(`${label}: the chip shows`, !!c, '');
+      if (!c) return;
+      check(`${label}: the chip says ${JSON.stringify(expect)}`, c.text.includes(expect), J(c.text));
+      check(`${label}: the chip inside the screen`, c.x >= -0.5 && c.r <= cfg.w + 0.5, J(c));
+      check(`${label}: no disabled button in the chip`, c.buttons.every((b) => !b.disabled), J(c.buttons));
+      if (touch) check(`${label}: the chip's targets are 44 px`, c.buttons.every((b) => b.h >= 43.5), J(c.buttons));
+      return c;
+    };
+    await invariants(cfg, 'Tools changed, working');
+    await chipOk('working', 'Tools changed · turn running');
+    await shot(`${cfg.name}-restart-working`);
+
+    // The sheet (phone) or the popover (laptop).
+    await ev(`document.querySelector('[data-restart-chip] button').click()`);
+    const opened = await waitFor(`[...document.querySelectorAll('[role=dialog]')].some((d) => d.innerText.includes('Restart after this turn'))`, 3000);
+    check('the chip opens the sheet', opened);
+    await sleep(450);
+    const SHEET = `(() => { const d = [...document.querySelectorAll('[role=dialog]')].find((x) => x.innerText.includes('Restart after this turn')); if (!d) return null; const R = (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, b: r.bottom, r: r.right }; };
+      const box = document.querySelector('[data-composer]'); const chip = document.querySelector('[data-restart-chip]');
+      return { ...R(d), composer: box && R(box), chip: chip && R(chip), text: d.innerText, disabled: [...d.querySelectorAll('button')].filter((b) => b.disabled).map((b) => b.innerText.trim()), view: { w: innerWidth, h: visualViewport.height + visualViewport.offsetTop } }; })()`;
+    const sh = await ev(SHEET);
+    if (sh) {
+      check('sheet: inside the visible screen', sh.x >= -0.5 && sh.r <= sh.view.w + 0.5 && sh.y >= -0.5 && sh.b <= sh.view.h + 0.5, J(sh));
+      check('sheet: names what changed', ['MCP servers', 'Settings', 'Portal tools'].every((w) => sh.text.includes(w)), J(sh.text.slice(0, 200)));
+      check('sheet: says agents are not stopped by the queued restart', sh.text.includes('nothing is stopped'), '');
+      check('sheet: no disabled button', sh.disabled.length === 0, J(sh.disabled));
+      if (cfg.w >= 640) {
+        check('popover: never over the composer', sh.b <= sh.composer.y + 0.5, J({ popover: sh, composer: sh.composer }));
+        check('popover: above the chip', sh.b <= sh.chip.y + 0.5, J({ popover: sh.b, chip: sh.chip.y }));
+      }
+    }
+    await shot(`${cfg.name}-restart-sheet`);
+
+    // Its note: inside the screen, wrapped, never over the composer (on a laptop the composer is visible), closes on a tap outside and on scroll.
+    const NOTE = `(() => { const n = document.querySelector('[role=note]'); if (!n) return null; const r = n.getBoundingClientRect(); const box = document.querySelector('[data-composer]')?.getBoundingClientRect();
+      return { x: r.x, y: r.y, w: r.width, h: r.height, b: r.bottom, r: r.right, sw: n.scrollWidth, cw: n.clientWidth, composer: box && { x: box.x, y: box.y, r: box.right, b: box.bottom, w: box.width, h: box.height }, view: { w: innerWidth, h: visualViewport.height + visualViewport.offsetTop } }; })()`;
+    const noteOk = async (label, opener, { composer = true } = {}) => {
+      await ev(`${opener}.click()`);
+      await sleep(250);
+      const n = await ev(NOTE);
+      check(`${label}: the note opens`, !!n);
+      if (!n) return;
+      check(`${label}: the note inside the visible screen`, n.x >= -0.5 && n.r <= n.view.w + 0.5 && n.y >= -0.5 && n.b <= n.view.h + 0.5, J(n));
+      check(`${label}: the note wraps its text`, n.sw <= n.cw + 1, J({ sw: n.sw, cw: n.cw }));
+      if (composer && n.composer) check(`${label}: the note never over the composer`, !intersects(n, n.composer), J({ note: n, composer: n.composer }));
+      // Outside the note but inside what holds it (the sheet or the popover: a tap outside that would close it too).
+      await ev(`((${opener})?.closest('[role=dialog]') ?? document.body).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
+      await sleep(150);
+      check(`${label}: a tap outside closes it`, !(await ev(NOTE)));
+      await ev(`${opener}.click()`);
+      await sleep(200);
+      await ev(`(() => { const l = document.querySelector('[role=log]'); l.scrollTop = Math.max(0, l.scrollTop - 120); })()`);
+      await sleep(200);
+      check(`${label}: a scroll closes it`, !(await ev(NOTE)));
+    };
+    await noteOk('sheet note', `document.querySelector('[role=dialog] button[aria-label="About tools changed"]')`, { composer: cfg.w >= 640 });
+    // Every other note in the stack above the composer (outside the composer itself).
+    const others = await ev(`[...document.querySelectorAll('[data-session-dock] button[aria-controls], [data-session-dock] button[aria-expanded]')].filter((b) => !b.closest('[data-composer]') && b.querySelector('svg.lucide-info, svg')).filter((b) => /^About|Details/.test(b.getAttribute('aria-label') || '')).length`);
+    for (let i = 0; i < others; i++) await noteOk(`stack note ${i + 1}`, `[...document.querySelectorAll('[data-session-dock] button')].filter((b) => !b.closest('[data-composer]')).filter((b) => /^About|Details/.test(b.getAttribute('aria-label') || ''))[${i}]`);
+    await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await sleep(400);
+    if (await ev(`!!document.querySelector('[role=dialog]')`)) { await ev(`document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(400); }
+
+    // Queued: Restarts when the turn ends · Cancel.
+    await ev(`__fake.patch({ restartQueued: 'person' })`);
+    await sleep(300);
+    const q = await chipOk('queued', 'Restarts when the turn ends');
+    check('queued: Cancel in the chip', !!q?.buttons.some((b) => b.what === 'Cancel'), J(q?.buttons));
+    await invariants(cfg, 'restart queued');
+    await shot(`${cfg.name}-restart-queued`);
+    // Automatic, after a long turn: Restart now in the chip.
+    await ev(`__fake.patch({ restartQueued: 'auto', autonomous: true, autoApply: true, busySince: new Date(Date.now() - 45 * 60_000).toISOString() })`);
+    await sleep(300);
+    const a = await chipOk('automatic, long turn', 'Restarts after this turn');
+    check('automatic, long turn: Restart now in the chip', !!a?.buttons.some((b) => b.what === 'Restart now'), J(a?.buttons));
+    await invariants(cfg, 'restart automatic');
+    await shot(`${cfg.name}-restart-auto-long`);
+    // Held for Bypass: the chip says a person restarts it.
+    await ev(`__fake.patch({ restartQueued: null, restartHeld: 'bypass', mode: 'bypassPermissions' })`);
+    await sleep(300);
+    await chipOk('held for Bypass', 'restart by hand');
+    await shot(`${cfg.name}-restart-held`);
+    await ev(`__fake.patch({ state: 'idle', restartHeld: null, configChanged: null, configChangedAt: null, mode: 'default' })`);
+  },
+
+  // T-102: the band under the floating header, a long transcript scrolled to the middle; Bypass off and on; 14 agents running.
+  async headerBand(cfg) {
+    const tasks = Array.from({ length: 14 }, (_, i) => ({ taskId: `t${i}`, toolUseId: `toolu_${i}`, description: `agent ${i}`, subagentType: 'general-purpose', model: null, status: 'running', tokens: null, toolUses: null, durationMs: null, summary: null, startedAt: new Date().toISOString(), endedAt: null }));
+    for (const bypass of [false, true]) {
+      const label = bypass ? 'Bypass' : 'plain';
+      if (!(await openSession({ ...BASE, mode: bypass ? 'bypassPermissions' : 'default', agentsRunning: 14, __tasks: tasks }))) return check('page loads', false, errors.join(' | '));
+      await ev(`(() => { const l = document.querySelector('[role=log]'); l.scrollTop = (l.scrollHeight - l.clientHeight) / 2; })()`);
+      await sleep(600);
+      const geo = await ev(`(() => { const R = (e) => { if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, b: r.bottom, r: r.right }; };
+        const header = document.querySelector('[data-session-header]');
+        const badges = [...header.querySelectorAll('[data-running-count]')].map((b) => { const btn = b.closest('button'); const glyph = btn?.querySelector('[data-menu-glyph]') ?? btn?.querySelector(':scope > svg'); return { badge: R(b), button: R(btn), glyph: R(glyph), what: (btn?.getAttribute('aria-label') || '').slice(0, 30) }; });
+        const others = [...header.querySelectorAll('a[href], button')].map((b) => ({ what: (b.getAttribute('aria-label') || '').slice(0, 30), ...R(b) }));
+        const title = header.querySelector('button[aria-haspopup=dialog] span');
+        const shield = header.querySelector('button[aria-label^="Bypass is on"] svg');
+        const bg = getComputedStyle(document.body).backgroundColor;
+        return { header: R(header), badges, others, title: title && { ...R(title), color: getComputedStyle(title).color, button: R(title.parentElement) }, shield: shield && { ...R(shield), color: getComputedStyle(shield).color }, bg }; })()`);
+      // The count badge: at its button's corner, clear of the glyph and of every other control.
+      for (const g of geo.badges) {
+        check(`${label}: the count badge clear of its button's glyph (${g.what})`, !intersects(g.badge, g.glyph), J(g));
+        const hits = geo.others.filter((o) => o.what !== g.what && intersects(g.badge, o)).map((o) => o.what);
+        check(`${label}: the count badge over no other control`, hits.length === 0, J(hits));
+      }
+      if (cfg.w < 640) check(`${label}: a phone shows the count on ⋯`, geo.badges.length === 1, J(geo.badges.length));
+      // Pixels: the band right under the header (no hard edge, no darker band), and the title's contrast.
+      const png = decodePng(Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'));
+      const h = geo.header;
+      const x0 = Math.max(2, h.x + 28), x1 = Math.min(png.width - 3, h.r - 28);
+      const y0 = Math.ceil(h.b + 2), y1 = Math.min(png.height - 2, Math.floor(h.b + 14));
+      let rowJump = 0, colJump = 0, sum = 0, count = 0;
+      for (let y = y0; y < y1; y++) {
+        let jump = 0;
+        for (let x = x0; x < x1; x++) { const l = luma(png.px(x, y)); jump += Math.abs(luma(png.px(x, y + 1)) - l); sum += l; count++; colJump = Math.max(colJump, Math.abs(luma(png.px(x + 1, y)) - l)); }
+        rowJump = Math.max(rowJump, jump / (x1 - x0));
+      }
+      const bgLuma = luma(parseRgb(geo.bg));
+      const bandMean = sum / count;
+      check(`${label}: no hard horizontal edge under the header`, rowJump <= 4, J({ rowJump, y0, y1 }));
+      check(`${label}: no hard vertical edge under the header`, colJump <= 24, J({ colJump }));
+      check(`${label}: no darker band under the header`, bandMean >= bgLuma - 18, J({ bandMean, bgLuma }));
+      if (geo.title) {
+        const t = geo.title.button;
+        const samples = [];
+        for (let x = t.x + 4; x < Math.min(t.r - 4, t.x + 4 + geo.title.w); x += 3) samples.push(png.px(x, t.y + 3), png.px(x, t.b - 3));
+        const bgPx = [0, 1, 2].map((k) => samples.reduce((a, p) => a + p[k], 0) / samples.length);
+        const c = contrast(parseRgb(geo.title.color), bgPx);
+        check(`${label}: the title at AA contrast over the header`, c >= 4.5, J({ contrast: c, text: geo.title.color, bg: bgPx }));
+      }
+      if (geo.shield) {
+        const s = geo.shield;
+        const ring = [png.px(s.x - 3, s.y + s.h / 2), png.px(s.r + 3, s.y + s.h / 2), png.px(s.x + s.w / 2, s.y - 3), png.px(s.x + s.w / 2, s.b + 3)];
+        const bgPx = [0, 1, 2].map((k) => ring.reduce((a, p) => a + p[k], 0) / ring.length);
+        check(`${label}: the Bypass shield at 3:1 over the tinted header`, contrast(parseRgb(s.color), bgPx) >= 3, J({ contrast: contrast(parseRgb(s.color), bgPx) }));
+      }
+      await shot(`${cfg.name}-header-${label.toLowerCase()}`);
     }
   },
 

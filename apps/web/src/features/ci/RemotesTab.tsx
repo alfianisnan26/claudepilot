@@ -310,6 +310,19 @@ function Environments({ repo }: { repo: CiRepo }) {
     }
   };
 
+  const setDry = async (env: CiEnvironment, on: boolean) => {
+    setBusy(env.name);
+    try {
+      await ciApi.setAutoApprove(repo.id, env.name, { mode: on ? 'dry' : 'off' });
+      toast(on ? `${env.name}: dry run on` : `${env.name}: dry run off`);
+      await load();
+    } catch (e) {
+      toast(errorText(e, 'Could not change it.'), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (!envs?.length) return null;
   return (
     <>
@@ -334,6 +347,28 @@ function Environments({ repo }: { repo: CiRepo }) {
                   <StatusIcon status={deployLook(last)} className="[&_svg]:size-4" />
                   <span className="tabular-nums">#{last.runNumber}</span>
                 </Link>
+              )}
+              {e.protected && (
+                <span className="flex shrink-0 items-center">
+                  {/* Auto-approve, slice 1 (T-110): only the dry run exists; a person still approves every deploy. */}
+                  <button
+                    type="button"
+                    aria-pressed={e.autoApprove === 'dry'}
+                    aria-label={`Auto-approve dry run for ${e.name}`}
+                    disabled={busy === e.name}
+                    onClick={() => void setDry(e, e.autoApprove !== 'dry')}
+                    className={cn(
+                      'press flex h-11 min-w-11 items-center justify-center rounded-full px-2.5 text-[12.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none disabled:opacity-60',
+                      e.autoApprove === 'dry' ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-surface-2',
+                    )}
+                  >
+                    Dry
+                  </button>
+                  <InfoTip label={`About auto-approve for ${e.name}`}>
+                    Auto-approve, dry run. When a deploy to {e.name} waits, the portal writes on its run whether its rule WOULD approve it: gate green on the commit, build ok, verify and rollback
+                    present, nothing in the diff that needs a person, at most 6 a day. It approves nothing: a person still decides.
+                  </InfoTip>
+                </span>
               )}
               <Switch label={`Approval for ${e.name}`} checked={e.protected} disabled={busy === e.name} onChange={(on) => (on ? void set(e, true) : setOffFor(e))} />
             </li>

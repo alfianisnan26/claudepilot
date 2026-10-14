@@ -41,6 +41,23 @@
 }
 
 /*
+ * Behind the session screen's floating header (T-102): a band from the top of the screen to 2.75rem below the header. Down to 0.75rem
+ * under the header it blurs what scrolls under it for real and covers it with most of the page's colour; below that, both fade out to
+ * nothing, so a card passing under the pill never shows a hard edge or a darker band right below it. Without backdrop-filter: the colour
+ * fade alone, opaque. The element's height is var(--session-header-bottom) + 2.75rem.
+ */
+@utility session-fade {
+  background-image: linear-gradient(to bottom, var(--color-bg) 0, var(--color-bg) calc(var(--session-header-bottom) + 0.75rem), transparent 100%);
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    background-image: linear-gradient(to bottom, color-mix(in oklab, var(--color-bg) 85%, transparent) 0, color-mix(in oklab, var(--color-bg) 85%, transparent) calc(var(--session-header-bottom) + 0.75rem), transparent 100%);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(var(--session-header-bottom) + 0.75rem), transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 0, #000 calc(var(--session-header-bottom) + 0.75rem), transparent 100%);
+  }
+}
+
+/*
  * The glass's numbers, per theme: how much of the tint covers the backdrop, how far the backdrop's contrast is squeezed, and the
  * brightness step toward the theme (up in light, down in dark).
  */
