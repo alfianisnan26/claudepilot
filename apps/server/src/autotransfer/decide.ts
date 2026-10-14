@@ -8,7 +8,11 @@
 import {
   ALL_MODEL_WINDOWS,
   AUTO_CONSTANTS,
+  downgradeChain,
   estimatedFigure,
+  isWindowOfFamily,
+  modelFamilyOf,
+  modelInfo,
   measuredFigure,
   unavailableFigure,
   type AutoClaudeRef,
@@ -41,17 +45,22 @@ export function effectiveMode(platform: AutoMode, user: AutoMode | null, session
   return wanted;
 }
 
-/** `opus`, `sonnet` or `haiku` from a model id (`claude-opus-4-1`, `sonnet[1m]`), or null. */
-export function modelFamily(model: string | null | undefined): string | null {
-  const m = /(opus|sonnet|haiku)/i.exec(model ?? '');
-  return m ? m[1]!.toLowerCase() : null;
-}
+/** The family of a model id from the catalogue (T-109): `fable`, `opus`, `sonnet`, `haiku` (`claude-fable-5-1`, `sonnet[1m]`), or null. */
+export const modelFamily = modelFamilyOf;
 
-/** Whether a usage window is the per-model window of a model family (`week_opus`, `model:claude-opus-4`). */
-export function windowOfFamily(key: string, family: string | null): boolean {
-  if (!family) return false;
-  if (key === `week_${family}`) return true;
-  return key.startsWith('model:') && key.slice(6).toLowerCase().includes(family);
+/** Whether a usage window is the per-model window of a model family (`week_opus`, `model:fable`, `model:claude-opus-4`). */
+export const windowOfFamily = (key: string, family: string | null): boolean => isWindowOfFamily(key, family);
+
+/**
+ * Whether a Claude can run a model family (T-109): what its `list_models` said (`listed`, when known), else the catalogue: a family every
+ * plan has (`assumed`) yes, one only some plans have (Fable) only when the Claude shows that family's usage window. A family the catalogue
+ * doesn't know is judged as before (yes).
+ */
+export function claudeHasFamily(u: Pick<ClaudeUsage, 'windows'> | undefined, family: string | null, listed: boolean | null): boolean {
+  if (listed !== null) return listed;
+  const info = modelInfo(family);
+  if (!info || info.assumed) return true;
+  return !!u?.windows.some((w) => isWindowOfFamily(w.key, family));
 }
 
 /** Where the source Claude stands for THIS chat (FR5, FR6): the windows that stop it, the fullest of them, and why a move is wanted. */
@@ -65,6 +74,8 @@ export interface SourceReading {
   limit: AutoLimit;
   /** The least left over the shared windows alone (null when none has a number): what a model change on this Claude would still have. */
   sharedLeftPct: number | null;
+  /** D-39: at the threshold, held back by the pace rule (projected under `paceMinPct` at the reset). */
+  paceHold?: boolean;
 }
 
 /** Whether a window stops every model (`session`, `week`) rather than one model's own. */
@@ -98,7 +109,14 @@ export function freshReading(c: Pick<ClaudeUsage, 'checkedAt' | 'stale'>, nowMs:
  * `exhausted` when one of them is at 100 %; `low` at or under the threshold; `projection` when on, confident, within 2 hours and at most 30 % left.
  * Null when no window applies (no number yet).
  */
-export function sourceReading(c: ClaudeUsage, model: string | null, thresholdPct: number, useProjection: boolean, nowMs: number): SourceReading | null {
+export function sourceReading(
+  c: ClaudeUsage,
+  model: string | null,
+  thresholdPct: number,
+  useProjection: boolean,
+  nowMs: number,
+  pace: { respect: boolean; minPct: number } = { respect: false, minPct: 90 },
+): SourceReading | null {
   const family = modelFamily(model);
   const windows = c.windows.filter((w) => live(w, nowMs) && (ALL_MODEL_WINDOWS.includes(w.key) || windowOfFamily(w.key, family)));
   if (!windows.length) return null;
@@ -111,9 +129,26 @@ export function sourceReading(c: ClaudeUsage, model: string | null, thresholdPct
     resetsAt: window.resetsAt ? measuredFigure(window.resetsAt) : unavailableFigure('no_reset_time'),
   };
   let reason: AutoReason | null = null;
+  let paceHold = false;
   if (exhausted) reason = 'exhausted';
-  else if (leftPct <= thresholdPct) reason = 'low';
-  else if (useProjection && leftPct <= AUTO_CONSTANTS.projectionMaxLeftPct) {
+  else if (leftPct <= thresholdPct) {
+    reason = 'low';
+    // D-39: at the threshold the chat moves only when the binding window is projected to reach `minPct` by its reset (the projection the
+    // usage summary shows: its pace, when confident). No confident projection: the threshold alone decides, and the facts say so.
+    if (pace.respect) {
+      const p = window.pace;
+      const projected = p && !p.lowConfidence && p.projectedPct.value !== null ? p.projectedPct.value : null;
+      if (projected === null) facts.pace = { verdict: 'unavailable', minPct: pace.minPct };
+      else {
+        facts.projectedPct = estimatedFigure(projected);
+        if (p!.etaAt.value !== null) facts.etaAt = estimatedFigure(p!.etaAt.value);
+        const under = projected < pace.minPct;
+        facts.pace = { verdict: under ? 'under' : 'over', minPct: pace.minPct };
+        if (under) (reason = null), (paceHold = true);
+      }
+    }
+  }
+  else if (useProjection && !paceHold && leftPct <= AUTO_CONSTANTS.projectionMaxLeftPct) {
     // The window that runs out first at its pace, among those that stop the chat, counts only with confidence and within the horizon.
     let best: { eta: number; w: ClaudeUsageWindow } | null = null;
     for (const w of windows) {
@@ -133,7 +168,7 @@ export function sourceReading(c: ClaudeUsage, model: string | null, thresholdPct
   facts.limit = limit;
   const shared = windows.filter((w) => sharedWindow(w.key));
   const sharedLeftPct = shared.length ? Math.max(0, round1(Math.min(...shared.map((w) => (w.level === 'exhausted' ? 0 : 100 - w.usedPct!))))) : null;
-  return { window, leftPct, reason, facts, limit, sharedLeftPct };
+  return { window, leftPct, reason, facts, limit, sharedLeftPct, paceHold };
 }
 
 /** What the engine knows about a chat's history of moves (from its own rows), for the safeguards and the guards on the choice. */
@@ -178,6 +213,8 @@ export interface DecideInput {
   load: (claudeId: string) => number;
   counters: DecideCounters;
   recommend: RecommendFn;
+  /** What a Claude's `list_models` said about a family (T-109), null when not known (then the catalogue and the usage windows decide). */
+  listed?: (claudeId: string, family: string) => boolean | null;
 }
 
 export interface DecideChoice {
@@ -219,6 +256,9 @@ export function candidates(
     if (!ok.has(c.claudeId) || !input.allow(c.claudeId)) return false;
     if (allow.size && !allow.has(c.claudeId)) return false;
     const u = usage.get(c.claudeId);
+    // The Claude must be able to run the model at all (T-109): a Fable chat never goes to a Claude without Fable on its own model; such a
+    // Claude is a candidate only with a model it has (the downgrade chain, below).
+    if (family && c.reason !== 'no_limits' && !claudeHasFamily(u, family, input.listed?.(c.claudeId, family) ?? null)) return false;
     if (c.reason === 'no_limits') {
       if (!settings.allowApiKey || settings.sameModelOnly) return false; // what a key's model availability is, the portal can't see
     } else if (!u || !freshReading(u, nowMs)) return false;
@@ -283,19 +323,23 @@ export function decide(input: DecideInput): Decision {
   const source = input.claudes.find((c) => c.claudeId === session.claudeId);
   if (!source || source.runsOn !== 'plan' || !source.checkedAt) return { act: 'none', code: 'no_plan_reading', reading: null };
   const threshold = input.claudeThresholdPct ?? settings.thresholdPct;
-  const reading = sourceReading(source, session.model, threshold, settings.useProjection, nowMs);
+  const reading = sourceReading(source, session.model, threshold, settings.useProjection, nowMs, { respect: settings.respectPace, minPct: settings.paceMinPct });
   if (!reading) return { act: 'none', code: 'no_plan_reading', reading: null };
   // 3. A fresh reading.
   if (!freshReading(source, nowMs)) return { act: 'none', code: 'stale_reading', reading };
   // 4. A reason.
-  if (!reading.reason) return { act: 'none', code: 'above_threshold', reading };
+  if (!reading.reason) return { act: 'none', code: reading.paceHold ? 'pace_under' : 'above_threshold', reading };
   // 5. The owner.
   if (!input.ownerOk) return { act: 'none', code: 'owner_denied', reading };
-  // 6. The safeguards.
-  if (counters.pausedUntilMs !== null && counters.pausedUntilMs > nowMs) return { act: 'none', code: 'paused', reading };
-  if (counters.lastMoveMs !== null && nowMs - counters.lastMoveMs < settings.minPauseMin * MIN) return { act: 'none', code: 'paused', reading };
-  if (counters.movesSession24h >= settings.maxPerSessionPerDay) return { act: 'none', code: 'session_cap', reading };
-  if (counters.movesOwner24h >= settings.maxPerDay) return { act: 'none', code: 'day_cap', reading };
+  // 6. The safeguards. Not for a source already out of quota (R2, T-105): the chat can do nothing there, so it moves at once, pause and
+  // caps or not; the ping-pong guard (step 7) still keeps it off the Claude it just left. The caps count only moves that were not forced.
+  const forced = reading.reason === 'exhausted';
+  if (!forced) {
+    if (counters.pausedUntilMs !== null && counters.pausedUntilMs > nowMs) return { act: 'none', code: 'paused', reading };
+    if (counters.lastMoveMs !== null && nowMs - counters.lastMoveMs < settings.minPauseMin * MIN) return { act: 'none', code: 'paused', reading };
+    if (counters.movesSession24h >= settings.maxPerSessionPerDay) return { act: 'none', code: 'session_cap', reading };
+    if (counters.movesOwner24h >= settings.maxPerDay) return { act: 'none', code: 'day_cap', reading };
+  }
   // 7. A destination.
   const period = `${session.claudeId}|${reading.window.key}|${reading.window.resetsAt ?? ''}`;
   // A chat in Bypass (unless the platform allows moving those: `allowBypass`, the owner's ask of 2026-10-13; the move keeps Bypass),
@@ -322,7 +366,10 @@ export function decide(input: DecideInput): Decision {
   }
   let other: { pick: MoveCandidate; model: string } | null = null;
   if (!keep) {
-    for (const f of fallbacks) {
+    // Move with another model (T-109): the best one at or below the chat's by the catalogue's rank (Fable, then Opus, Sonnet, Haiku), or
+    // the owner's order in `automove.modelFallback`; never a model above the chat's. With "Same model" on, only the owner's own list.
+    const chain = settings.sameModelOnly ? fallbacks : downgradeChain(family, settings.modelFallback).filter((x) => x !== family);
+    for (const f of chain) {
       const c = candidates(input, autoish ? 'auto' : 'ask', f).eligible[0];
       if (c) {
         other = { pick: c, model: f };
@@ -377,7 +424,10 @@ export function decide(input: DecideInput): Decision {
   const d = choice.dropped;
   const quiet = session.state === 'idle' && !session.switching && d.approvals === 0 && d.queued === 0 && d.agents === 0;
   if (!quiet) {
-    if (counters.deferSinceMs !== null && nowMs - counters.deferSinceMs >= AUTO_CONSTANTS.deferMaxMin * MIN) return { act: 'suggest', why: 'deferred', reading, ...choice };
+    // A turn that runs (or sub-agents that do) is waited for however long it takes: the chat is told to finish its step and stop (T-105
+    // item 2, the engine's steer) and moves at the boundary. Only an idle chat held by an open approval or a queue becomes a card after 30 minutes.
+    const turnRuns = session.state === 'working';
+    if (!turnRuns && counters.deferSinceMs !== null && nowMs - counters.deferSinceMs >= AUTO_CONSTANTS.deferMaxMin * MIN) return { act: 'suggest', why: 'deferred', reading, ...choice };
     return { act: 'wait', code: 'busy', reading, ...choice };
   }
   // 10. The move.

@@ -2,6 +2,7 @@
 // `/api/autotransfer`, the settings (group "Auto move"), the read tool. platform/index.ts registers it with ONE line. Off by default:
 // with `automove.enabled` off the engine reads one setting per turn boundary and does nothing else.
 
+import { randomUUID } from 'node:crypto';
 import type { ChatSession } from '@portal/contracts';
 import { recommendMove } from '../claudeusage/recommend.js';
 import type { Platform, PlatformModule } from '../platform/index.js';
@@ -19,22 +20,24 @@ export { AutoStore } from './store.js';
 /** The chat controller and the usage monitor as the engine needs them; null when what was handed over lacks them (some tests). */
 function ports(deps: Platform['deps']): { chat: ChatPort; usage: UsagePort } | null {
   const chat = deps.chat as unknown as Partial<ChatPort> | null;
-  const usage = deps.claudeUsage as unknown as Partial<Pick<UsagePort, 'report'>> | null;
-  if (!chat || typeof chat.switchClaude !== 'function' || typeof chat.switchOptions !== 'function' || typeof chat.onEvent !== 'function' || typeof chat.history !== 'function' || typeof chat.list !== 'function') return null;
+  const usage = deps.claudeUsage as unknown as Partial<Pick<UsagePort, 'report' | 'onReading'>> | null;
+  if (!chat || typeof chat.switchClaude !== 'function' || typeof chat.switchOptions !== 'function' || typeof chat.onEvent !== 'function' || typeof chat.history !== 'function' || typeof chat.list !== 'function' || typeof (chat as { send?: unknown }).send !== 'function') return null;
   if (!usage || typeof usage.report !== 'function') return null;
   const c = chat as ChatPort;
-  const u = usage as Pick<UsagePort, 'report'>;
+  const u = usage as Pick<UsagePort, 'report' | 'onReading'>;
   return {
     chat: {
       get: (id) => c.get(id),
       list: (f) => c.list(f) as ChatSession[],
       switchOptions: (id) => c.switchOptions(id),
       switchClaude: (id, to, o) => c.switchClaude(id, to, o),
+      ...(typeof (chat as { modelFamilies?: unknown }).modelFamilies === 'function' ? { modelFamilies: (claudeId: string) => (chat as unknown as { modelFamilies(id: string): string[] | null }).modelFamilies(claudeId) } : {}),
       setModel: (id, model) => (chat as unknown as { control(id: string, op: 'model', args: { model: string }): Promise<void> }).control(id, 'model', { model }),
       onEvent: (cb) => c.onEvent(cb),
       history: (id, after) => c.history(id, after),
+      send: (id, text, o) => (chat as unknown as { send(id: string, uuid: string, text: string, opts: object): Promise<void> }).send(id, randomUUID(), text, o),
     },
-    usage: { report: (o) => u.report(o), recommend: recommendMove },
+    usage: { report: (o) => u.report(o), recommend: recommendMove, ...(typeof u.onReading === 'function' ? { onReading: (fn: () => void) => u.onReading!(fn) } : {}) },
   };
 }
 

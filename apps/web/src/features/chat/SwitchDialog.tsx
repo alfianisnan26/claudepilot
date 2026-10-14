@@ -4,6 +4,7 @@ import { CircleAlert } from 'lucide-react';
 import { useCallback, useEffect, useId, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
+import { modelChange } from '@/features/autotransfer/pure';
 import { ClaudeHeadroom, NoRecommendation, RecommendedMark, recommendedId, useMoveAdvice } from '@/features/usage/claude';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
@@ -43,7 +44,7 @@ export function SwitchDialog({
   session: ChatSession | null;
   open: boolean;
   onClose: () => void;
-  onConfirm: (claudeId: string, handoff: 'ask' | 'skip') => void;
+  onConfirm: (claudeId: string, handoff: 'ask' | 'skip', model?: string) => void;
   /** A Claude chosen up front (auto move's Undo: the Claude the chat left), when it can take the chat. */
   preselect?: string | null;
 }) {
@@ -68,7 +69,9 @@ export function SwitchDialog({
       (r) => {
         if (!current) return;
         setInfo(r);
-        setPick((preselect && r.options.find((o) => o.ok && o.claude.id === preselect)?.claude.id) || (r.options.find((o) => o.ok)?.claude.id ?? ''));
+        // A Claude that keeps the chat's model first (T-109), then any that can take it.
+        const first = r.options.find((o) => o.ok && !modelChange(o)) ?? r.options.find((o) => o.ok);
+        setPick((preselect && r.options.find((o) => o.ok && o.claude.id === preselect)?.claude.id) || (first?.claude.id ?? ''));
       },
       (e: unknown) => current && setFailed(errorText(e, 'Couldn’t check where this chat can move.')),
     );
@@ -99,7 +102,9 @@ export function SwitchDialog({
         </span>
       }
       onSubmit={() => {
-        if (pick) onConfirm(pick, ask && info?.handoff.ok ? 'ask' : 'skip');
+        if (!pick) return;
+        const change = modelChange(info?.options.find((o) => o.claude.id === pick) ?? {});
+        onConfirm(pick, ask && info?.handoff.ok ? 'ask' : 'skip', change?.to ?? undefined);
       }}
       submitLabel="Move"
       submitDisabled={!pick || !info}
@@ -165,6 +170,7 @@ export function SwitchDialog({
 /** One Claude as a radio row: ready, or why it can't take the chat now, with the way out in a note. */
 function OptionRow({ option: o, selected, onPick, mark }: { option: ChatSwitchOption; selected: boolean; onPick: () => void; mark?: ReactNode }) {
   const id = useId();
+  const change = modelChange(o);
   const fix: ReactNode =
     o.fix === 'sign_in' ? (
       <Link to="/admin/workspaces" className="font-semibold text-ink underline underline-offset-2">
@@ -187,6 +193,8 @@ function OptionRow({ option: o, selected, onPick, mark }: { option: ChatSwitchOp
           <span className={cn('block truncate text-[14.5px] font-semibold', !o.ok && 'text-muted')}>{o.claude.name}</span>
           {/* What the destination has left, so a chat isn't moved onto a Claude that is nearly out. */}
           {o.ok && <ClaudeHeadroom claudeId={o.claude.id} className="mt-0.5" />}
+          {/* T-109: a Claude without the chat's model says the model it would run on, before the move. */}
+          {o.ok && change && <span className="mt-0.5 block text-[12.5px] font-medium [overflow-wrap:anywhere] text-amber-700 dark:text-amber-400">{change.text}</span>}
         </span>
         {o.ok && mark}
       </label>
@@ -213,12 +221,12 @@ export function useMoveChat(): { start: (session: ChatSession, preselect?: strin
   const [preselect, setPreselect] = useState<string | null>(null);
   const locate = useCallback(async () => ({ workspaceId: session!.workspaceId, folder: session!.cwd }), [session]);
   const trust = useFolderTrust(session?.id ?? '', locate);
-  const confirm = (claudeId: string, handoff: 'ask' | 'skip') => {
+  const confirm = (claudeId: string, handoff: 'ask' | 'skip', model?: string) => {
     if (!session) return;
     setOpen(false);
     const id = session.id;
     void trust
-      .guard(async () => void (await chatApi.switch(id, { claudeId, handoff })))
+      .guard(async () => void (await chatApi.switch(id, { claudeId, handoff, ...(model ? { model } : {}) })))
       .catch((e: unknown) => {
         if (!isTrustDeclined(e)) toast(errorText(e, 'Couldn’t move the chat.'), 'error');
       });
