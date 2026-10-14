@@ -788,6 +788,32 @@ Generated from the registered tool list (18 files) and checked for coverage. Sco
 | `skill_propose` | agent | own workspace's persona/skills; proposal owned by the owner of the target set | never approves |
 | `skill_proposals_list` | agent R | own workspace's persona/skills; proposal owned by the owner of the target set | never approves |
 
+### B.1 Declared and enforced today (T-348, observed)
+
+The table above is the target. What is true today: 26 tools carry a declaration (`declareToolPolicies` in the module's `authz.ts`); the rest have none and their handler is all there is (the registry does not refuse an undeclared tool yet, FR19 is open). Since T-348 the dispatch (`portalmcp/server.ts`, `requireToolPolicy` in `authz/seam.ts`) enforces a declaration's `objects` checks (each through `can()`, an optional argument left out or empty is skipped, a required one missing is refused) and its `platform` area **before** the handler runs. Every refusal there is `NOT_FOUND` with the check's `notFound` text, the tool's own answer for a missing object, so a call cannot tell what it may not reach from what does not exist. It only adds refusals; the handlers' own checks stay. `signed-in`, `self`, `filter`, `creates` and `agent` (reach from the token, no argument to check) stay the handler's. `portalmcp/toolPolicy.test.ts` proves denied = missing per family and walks every declared check against its tool's input.
+
+| Tool | Declared | Dispatch enforces | Handler enforces |
+| --- | --- | --- | --- |
+| `session_start` | workspace operate `workspace_id`; claude operate `claude_id`?; session operate `parent`? | all three (parent: `NO_PARENT` text) | parent live, same workspace, `requireCan` (`portalmcp/tools/sessions.ts:76-86`) |
+| `workspace_rename`, `workspace_resources` | workspace operate `id` | workspace operate (an agent outside its box; nothing more while `workspace` has no resolver) | scope admin only (`portalmcp/tools/workspaces.ts:131`, `:174`) |
+| `autotransfer_status` | session view `session_id` | yes ("No such session.") | `owner.can(view)` (`autotransfer/portalTools.ts:22`) |
+| `session_keepgoing_set` | session operate `session_id`, confirm, audit | yes ("No such session.") | agents refused, `owner.can(view, operate)` (`keepgoing/portalTools.ts:44`) |
+| `ticket_bump` | ticket operate `id`; session operate `session_id`? (was required: corrected, the tool lists targets without it) | both | `requireCan` both (`tickets/portalTools.ts:425`, `:433`) |
+| `ci_run_get`, `ci_run_logs`, `ci_run_cancel` | ci_run view/view/operate `id` | yes (`NO_RUN`): the only ownership check for a person's token | an agent: its branch, ticket or session (`ci/portalTools.ts:24-36`) |
+| `ci_run_bump` | ci_run operate `id`; session operate `session_id`? | both | `requireCan` both (`ci/portalTools.ts:268`, `:276`) |
+| `claude_versions`, `claude_minimums` | platform(version, view) | yes | nothing beyond scope read |
+| `keepgoing_pause_set` | platform(settings, manage) | yes | `mayPause`, agents refused (`keepgoing/portalTools.ts:99`) |
+| `lab_experiment_set` | platform(usage, manage) | yes | nothing beyond scope admin |
+| `ci_runs_list` | signed-in, filter ci_run | nothing | an agent: own runs (`ci/portalTools.ts:94-102`); a person's token: no `visible()` filter yet |
+| `ci_run_trigger` | signed-in, creates ci_run | nothing | an agent: its own workspace (`ci/portalTools.ts:213`); a person's token: no `ci_repo` check yet (the repo is named, not an id) |
+| `ci_validate` | signed-in | nothing | nothing (no object) |
+| `trigger_list`, `trigger_runs` | signed-in, filter trigger | nothing | `owner.can(view)` per trigger (`triggers/portalTools.ts:12`) |
+| `attention_list` | signed-in | nothing | each source's own `can()` (`attention/portalTools.ts:19`) |
+| `notify_status` | self | nothing | the token's own user (`notify/portalTools.ts:21`) |
+| `session_recover`, `session_request_clear` | agent, reach workspace | nothing | `requireCan` workspace (agent) or session (person) (`chat/portalTools.ts:357`, `:403`) |
+| `ticket_adopt` | agent, reach workspace | nothing | the adopt rule in the service (`tickets/portalTools.ts:372`) |
+| `lab_summary`, `lab_arm_draw` | agent, reach session | nothing | its own session only (`lab/portalTools.ts:81-82`, `:114`) |
+
 ## Appendix C. Sockets and other doors outside the route table
 
 Declared in the same table under `ALL <path>` (the chat socket already is: `chat/authz.ts` declares `ALL /api/chat/live`), because an upgrade request is not in `app.routes`. The enumeration test also checks that every upgrade handler path found by `server.on('upgrade')` has a declaration.
