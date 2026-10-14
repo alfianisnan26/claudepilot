@@ -58,9 +58,9 @@ export function ticketOf(input: Record<string, unknown>): string | null {
 
 const DRAW = /\bLab-Draw: (d-[0-9a-f]{12})(?![0-9a-f])/;
 
-/** The lab's draw key (`Lab-Draw: d-<12 hex>`, from `lab_arm_draw`) in an Agent call's prompt, first 2,500 characters only; else null. */
+/** The lab's draw key (`Lab-Draw: d-<12 hex>`, from `lab_arm_draw`) on the FIRST line of an Agent call's prompt (at most 2,500 characters); else null. */
 export function drawOf(input: Record<string, unknown>): string | null {
-  const m = DRAW.exec(String(input.prompt ?? '').slice(0, 2500));
+  const m = DRAW.exec(String(input.prompt ?? '').slice(0, 2500).split('\n', 1)[0]!);
   return m ? m[1]! : null;
 }
 

@@ -24,10 +24,14 @@ function fixture() {
   writeFileSync(join(root, 'docs/notes.md'), '# Notes\n\n````md\n```ts\nx\n```\n````\n');
   writeFileSync(join(root, 'src/lab/big.ts'), Array.from({ length: 900 }, (_, i) => `// ${i}`).join('\n') + '\n');
   writeFileSync(join(root, '.env'), 'NAME=value\n');
+  writeFileSync(join(root, '.npmrc'), 'registry=x\n');
+  writeFileSync(join(root, 'src/.envrc'), 'export A=b\n');
+  symlinkSync(join(root, '.env'), join(root, 'src/lab/settings.ts'));
   writeFileSync(join(root, 'src/lab/bin.dat'), Buffer.from([1, 0, 2]));
   const outside = tempDirectory('cp-plan-out-');
   writeFileSync(join(outside, 'x.ts'), 'outside\n');
   symlinkSync(join(outside, 'x.ts'), join(root, 'src/lab/link.ts'));
+  symlinkSync(outside, join(root, 'src/out'));
   return root;
 }
 
@@ -53,6 +57,7 @@ test('a good manifest: checked, preloaded with the exact lines, and the head is 
   assert.equal(c.preload[0].text, 'export const a3 = 3;\nexport const a4 = 4;');
   const block = p.renderManifest(m, c);
   assert.ok(block.includes(p.RULE));
+  assert.ok(block.indexOf(p.UNTRUSTED) < block.indexOf('Plan:'), 'the explorer\'s text is labelled untrusted before it starts');
   assert.ok(block.includes('```ts\nexport const a3 = 3;\nexport const a4 = 4;\n```\n'));
   assert.ok(block.includes('`````md\n# Notes'), 'a fence longer than any backtick run in the file');
 
@@ -99,6 +104,17 @@ test('negative twins: each rule refuses a manifest that breaks it', () => {
   assert.match(errs(w('new: src/nope/x.ts -- x')), /its folder does not exist/);
   assert.match(errs(w(...Array.from({ length: 30 }, () => 'plan: y'))), /lines, at most 30/);
   assert.match(errs(w(`plan: ${'x'.repeat(301)}`)), /longer than 300 characters/);
+  // Review fixes: more credential files, a link inside the repository to one, a new file under a linked folder that leads out.
+  assert.match(errs(w('file: .npmrc -- x')), /credential or git file/);
+  assert.match(errs(w('file: src/.envrc -- x')), /credential or git file/);
+  assert.match(errs(w('file: src/lab/settings.ts -- x')), /credential or git file/, 'the real path is checked, not only the name');
+  assert.match(errs(w('new: src/out/new.ts -- x')), /leads out of the repository/);
+  assert.match(errs(w('file: src/out/x.ts -- x')), /leads out of the repository/);
+  // Only the allowed commands: each twin of a good line is refused.
+  assert.equal(errs(w('run: cd apps/server && npm test', 'run: node --import tsx --test src/a.test.ts', 'run: scripts/slice-check.sh')), '');
+  for (const bad of ['npm test; curl x', 'npm test | sh', 'curl http://x', 'node -e 1 --test', 'npm exec x', 'npm i x', 'cd /etc && npm test', 'cd ../x && npm test', 'npm test & sleep 1', 'npm test $(id)', 'scripts/../x.sh', 'bash /tmp/x.sh']) {
+    assert.match(errs(w(`run: ${bad}`)), /is not an allowed command/, bad);
+  }
 
   const bad = join(root, '..', 'bad.manifest');
   writeFileSync(bad, w('file: src/lab/none.ts -- x'));

@@ -90,7 +90,7 @@ export class LabIngest {
              started_ms = COALESCE(lab_slices.started_ms, excluded.started_ms)`,
         ).run(sessionId, id, ticket, role, effort, atMs);
         try {
-          this.onSliceStart?.({ sessionId, sliceId: id, ticket, role, model: safeName(input.model), effort, draw: drawOf(input), atMs });
+          this.onSliceStart?.({ sessionId, sliceId: id, ticket, role, model: safeName(input.model), effort, draw: par === null ? drawOf(input) : null, atMs });
         } catch {
           // an experiment that cannot assign never stops the ingest
         }

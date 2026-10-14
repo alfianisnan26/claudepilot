@@ -49,7 +49,7 @@ const experimentRow = (v: LabExperimentView, ctx: PortalToolContext, lab: Lab) =
   design: v.experiment.design,
   strata: v.experiment.strata,
   excluded: v.excluded,
-  draws_unbound: lab.unboundDraws(v.experiment.id),
+  draws_unbound: lab.drawStats(v.experiment.id),
   arms: v.arms.map((a) => ({ arm: a.arm, n: a.n, accepted: a.accepted, cost_per_accepted: r2(a.costPerAccepted), ci90: ci(a.costPerAcceptedInterval) })),
 });
 

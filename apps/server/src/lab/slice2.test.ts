@@ -168,7 +168,7 @@ test('retention: after 14 days the request and tool rows go, the slices keep the
   try {
     const count = (t: string) => (h.db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n;
     const before = h.lab.slices();
-    assert.deepEqual(h.lab.prune(), { frozen: 0, requests: 0, tools: 0 }, 'nothing is 14 days old yet');
+    assert.deepEqual(h.lab.prune(), { frozen: 0, requests: 0, tools: 0, draws: 0 }, 'nothing is 14 days old yet');
     const reqs = count('lab_requests'), tools = count('lab_tools');
     assert.ok(reqs > 0 && tools > 0);
     now = T0 + 15 * DAY_MS;
@@ -178,7 +178,7 @@ test('retention: after 14 days the request and tool rows go, the slices keep the
     assert.equal(r.tools, tools);
     assert.deepEqual([count('lab_requests'), count('lab_tools')], [0, 0]);
     assert.deepEqual(h.lab.slices(), before, 'the frozen numbers are the numbers');
-    assert.deepEqual(h.lab.prune(), { frozen: 0, requests: 0, tools: 0 });
+    assert.deepEqual(h.lab.prune(), { frozen: 0, requests: 0, tools: 0, draws: 0 });
     // A frozen row holds counts only: no text of the tape.
     const frozen = (h.db.prepare('SELECT frozen FROM lab_slices').all() as { frozen: string }[]).map((x) => x.frozen).join('');
     assert.ok(!frozen.includes(MARKER));
