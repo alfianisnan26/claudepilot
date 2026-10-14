@@ -3,7 +3,7 @@
 // do; the builders turn an action into one JSON line to write into the session's stdin FIFO.
 
 import { REQUEST_FULL_MAX, type ChatEvent, type ChatToolInputValue, type ChatInputState, type ChatModelOption, type ChatRequest, type ChatSessionState, type ChatTask } from '@portal/contracts';
-import { PEER_QUEUED_MESSAGE, textDigest } from './integrity.js';
+import { PEER_QUEUED_MESSAGE, TASK_STOPPED_LINE, textDigest } from './integrity.js';
 import { redact } from './redact.js';
 import { limitInfoOf, parseLimitMessage } from '../claudeusage/limitMessage.js';
 
@@ -125,8 +125,12 @@ export interface ParsedLine {
     localCommand: boolean;
     modelNote?: boolean;
     origin?: { kind: string; producer: string | null };
+    /** Whether the origin carries a `producer` key at all, whatever its value (`producer` above is null for one that isn't a plain token). */
+    originProducerKey?: boolean;
     /** For origin `peer` (a sub-agent's SendMessage delivered to the main conversation): the sending task and a digest of the body. */
     peer?: { taskId: string | null; digest: string | null };
+    /** The task id when the line's text is exactly Claude Code's report of a task the host stopped (TASK_STOPPED_LINE; T-318). */
+    taskStopped?: string;
   };
   /** A sub-agent's `SendMessage` tool use (T-136): its call, the sending task (`agent_id`) and a digest of its text, never the text. */
   peerSends?: { toolUseId: string; taskId: string; digest: string }[];
@@ -532,11 +536,14 @@ function parseUser(obj: Record<string, unknown>): ParsedLine {
     const text = typeof content === 'string' ? content : (asStr(asObj(Array.isArray(content) ? content[0] : null)?.text) ?? '');
     const origin = replayOrigin(obj.origin);
     const replay: NonNullable<ParsedLine['replay']> = { uuid: asStr(obj.uuid), localCommand: isLocalOutput(content), modelNote: MODEL_NOTE.test(text), ...(origin ? { origin } : {}) };
+    if (origin) replay.originProducerKey = Object.prototype.hasOwnProperty.call(asObj(obj.origin), 'producer');
     if (origin?.kind === 'peer') {
       const o = asObj(obj.origin);
       const body = asStr(o?.body);
       replay.peer = { taskId: taskToken(o?.senderTaskId), digest: body === null ? null : textDigest(body) };
     }
+    const stopped = typeof content === 'string' ? TASK_STOPPED_LINE.exec(content) : null;
+    if (stopped) replay.taskStopped = stopped[1]!;
     return { stored: [], replay };
   }
   if (typeof content === 'string') return { stored: [] }; // a replay: the user event was stored when we sent it

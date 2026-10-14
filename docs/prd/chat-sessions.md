@@ -421,6 +421,20 @@ three integrity endings in one day:
   an answer the portal gave, the `behavior` it recorded (allow, deny). A different mode, an error, another shape, another behavior or an
   id never asked still ends the session.
 
+**The report of a task the portal stopped (T-318, observed 2026-10-14).** When the host stops a background command (`stop_task`),
+Claude Code 2.1.296 queues its own report of it, passive (it starts no turn), and delivers it with the NEXT turn, after that turn's
+`system/init`: a replayed user line with `origin: {kind: "task-notification", runId}` and **no** `producer` (the CLI enqueues it
+without the attribution that sets `session-task`), no `command_lifecycle` of its own, and exactly this text: `<task-notification>`,
+`<task-id>`, an optional `<tool-use-id>`, `<status>killed</status>`, `<summary>Task "<description>" was stopped by the
+user</summary>` (`TASK_STOPPED_LINE`; Claude Code escapes the description). The T-149 harness ended a session on it ("origin
+task-notification"); it was reproduced with the real CLI against the stand-in API (`tools/qa/mock-anthropic.mjs`, a background `sleep`,
+then `stop_task`, then a message). Case `replay-task-stopped`: the line is believed only when this portal sent `stop_task` for that very
+task id to this session's current process within `TASK_STOP_MS` (12 h: the report waits for the next message) and Claude Code did not
+refuse it (a stop it did not answer in time is kept: it may have stopped the task); each stop is used once and is kept with the process's control state (so a portal restart in between keeps it, a new process
+drops it). The same line with no stop, a stop for another task, in another session, too old, from an earlier process or already used, a
+`producer` key on it of any value (also one that is not a plain token), and any other text (another status, words added) still end the session. A stop by another agent (status `stopped`, "was
+stopped by <agent>") and an MCP task's stop note are not accepted: not observed.
+
 **A mode less permissive than expected (T-277, observed 2026-10-14).** The Konfersi chat 3907db7f ended at 02:50:24 UTC, during deploy
 #20 (02:43 to 02:53), with "the permission mode changed to default without this portal (expected bypassPermissions)": after the portal
 restarted, the expected mode was rebuilt from the stored row (Bypass), and a main-thread `system/init` or `system/status` reported
@@ -443,8 +457,9 @@ restarted under the real Claude Code CLI (`tools/qa/restart-survive.mjs`, the pr
 report from the row. What the integrity checks decide by is stored on the session (`chat_sessions.control_state`, migration 820, JSON
 `StoredControl` in `chat/integrity.ts`) for the process it belongs to (Claude Code session id, segment and start): the expected mode, the
 mode before plan, plan entered (EnterPlanMode seen), leaving plan approved (ExitPlanMode allowed), the id of a Bypass request sent under
-the grant whose reply was not read yet, and the sub-agent SendMessage causes a peer line may follow (tool use id, task id, sha256 digest,
-time, queued; never text). It is written with every change: a line's change commits in the same transaction as the line's byte offset,
+the grant whose reply was not read yet, the sub-agent SendMessage causes a peer line may follow (tool use id, task id, sha256 digest,
+time, queued; never text), and the `stop_task` requests whose report has not arrived (task id, time; `stops`, only when there are any,
+T-318). It is written with every change: a line's change commits in the same transaction as the line's byte offset,
 so a restart resumes from exactly the state that line left; an answer (ExitPlanMode), a launch, a move and the gated Bypass request
 write at once; it is cleared when the process is over. Control lines and the digest of their first reply were already stored
 (`chat_inputs`, migration 771). When the portal attaches to a live process it holds nothing for, it reloads that state exactly; a state
