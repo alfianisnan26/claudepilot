@@ -9,7 +9,7 @@
 - T-321: verifier 0f4f96a6 FAIL on the proof (comment 1919); back in progress, next slice scoped in comment 1923 (missing crew list at 390-light). T-312: PASS WITH GAPS (comment 1920); back in progress, remaining scope in comment 1925 (spikes, lab scoring, chips + screenshots). Verifier ended.
 - T-342: BUILT by b41b0cca (ended) on dev/t293-6, report = T-342 comment 1927 (58/58, typecheck, all eight fixes fail sed-ed out job e3baffac). Blind re-review 3 by 86aada13 (opus) running; its verdict lands on T-342. Merge dev/t293-6 only after SAFE; --start stays off until T-339.
 - T-343 (live cost estimate mid-turn): implementer 8d08616a, dev/t-343-1 (may touch UI: send a ux-checker).
-- T-336 (session_start takes a parent): implementer 692c90b5, dev/t-336-1.
+- T-336: BUILT by 692c90b5 (ended) on dev/t-336-1, report = T-336 comment 1928. Verifier 85e8ac41 (opus) running; its verdict lands on T-336. After PASS: merge, then T-339 option C becomes possible.
 - T-333 (job-run --against/--keep-tests proof, DONE d65eb5f): verifier fdd39fed PASS WITH GAPS (comment 1921; it ran from the main checkout, which lacks --against, so the real proof rests on the implementer's job ff684d30). READY TO MERGE in batch 4: merge dev/t-333-1, close T-333 (gap: show the new tests fail on the old script, once merged run it with --against origin/integration~), and and add to .claude/agents/implementer.md: for a fix use `scripts/job-run.sh --ref <branch> --against <full hash of fix~1> --keep-tests <test files> -- '<cmd>'` and paste the PROOF line.
 
 ## Ticket flow (coordinator rule, 22:15)
