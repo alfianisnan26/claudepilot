@@ -112,7 +112,21 @@ import { BtwStore } from './btwStore.js';
 import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
 import { autoTrustable, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError } from './trust.js';
 import { usageReport } from './usage.js';
-import { controlDigest, endingRecord, lessPermissive, PEER_CAUSE_MS, readEnding, sameAnswer, type ControlExpectation, type EndingCase, type PeerCause } from './integrity.js';
+import {
+  controlDigest,
+  controlJson,
+  controlProc,
+  endingRecord,
+  lessPermissive,
+  PEER_CAUSE_MS,
+  readControl,
+  readEnding,
+  RESYNC_MS,
+  sameAnswer,
+  type ControlExpectation,
+  type EndingCase,
+  type PeerCause,
+} from './integrity.js';
 import { DAY_MS, readRecoverConfig, recoverContinuation, recoverRefusal, type RecoverBy } from './recover.js';
 
 /** T-102: the areas a hint may name (anything else a reader returns is left out). */
@@ -244,6 +258,12 @@ interface ModeTrack {
   enterPlan: boolean;
   /** The portal approved ExitPlanMode: leaving plan mode may follow. */
   exitPlan: boolean;
+  /** T-277 layer 2: the id of a `set_permission_mode` Bypass request sent under the grant whose reply was not read yet (stored). */
+  bypassPending?: string | null;
+  /** T-277 layer 2: this track was reloaded from the store when the portal attached to the process again (not stored). */
+  reloaded?: boolean;
+  /** T-277 layer 2: until when (the integrity clock) the first mode report is the resync comparison; that report closes it (not stored). */
+  resyncUntil?: number;
 }
 
 /** Values a resumed process gets back (it starts on defaults). */
@@ -606,6 +626,8 @@ export class ChatController {
   readonly #clock: () => number;
   /** Per session, the sub-agent SendMessage calls of its current process that a peer line may follow (T-136); digests only, never text. */
   readonly #peerCauses = new Map<string, PeerCause[]>();
+  /** Per session, the control state last written and the process it is for (T-277 layer 2): an unchanged one is not written again. */
+  readonly #controlSaved = new Map<string, { proc: string; json: string }>();
 
   constructor(store: Store, workspaces: Workspaces, opts: ChatControllerOptions = {}) {
     this.#store = store;
@@ -1527,6 +1549,7 @@ export class ChatController {
       undo = this.#chat.switchSegment(sessionId, { claudeId: dest.id, claudeSessionId: newCsid, pid: started?.pid ?? null, startedAt: started?.startedAt ?? null });
       this.#launchedAt.set(sessionId, Date.now());
       this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
+      this.#saveControl(sessionId);
       this.#costBase.set(sessionId, 0); // a new process counts its cost from zero
       this.#modelBase.set(sessionId, new Map());
       this.#launched(sessionId, workspaceId);
@@ -1567,6 +1590,7 @@ export class ChatController {
         if (kept?.modelBase) this.#modelBase.set(sessionId, kept.modelBase);
         else this.#modelBase.delete(sessionId);
         if (kept?.mode) this.#modes.set(sessionId, kept.mode);
+        this.#saveControl(sessionId);
         this.#emitSession(sessionId);
         this.#ensureReader(sessionId);
       } else if (started) await this.#runOnce(workspaceId, ['stop', newCsid]).catch(() => undefined);
@@ -1882,12 +1906,14 @@ export class ChatController {
     // Approving ExitPlanMode lets Claude Code leave plan mode by itself.
     const exitPlan = decision !== 'deny' && open.toolName === 'ExitPlanMode';
     if (exitPlan) this.#mode(sessionId).exitPlan = true;
+    if (exitPlan) this.#saveControl(sessionId);
     try {
       await this.#writeLine(sessionId, line);
     } catch (e) {
       // It never arrived: Claude Code is still waiting, so the request is open again.
       this.#chat.setControlState(sessionId, ANSWERED(requestId), 'failed');
       if (exitPlan) this.#mode(sessionId).exitPlan = false;
+      if (exitPlan) this.#saveControl(sessionId);
       this.#chat.reopenRequest(sessionId, requestId);
       this.#append(sessionId, { kind: 'error', text: `Your answer didn't reach Claude Code: ${(e as Error).message}` });
       this.#append(sessionId, { kind: 'request', requestId, request: open });
@@ -2600,6 +2626,14 @@ export class ChatController {
         await this.#setMode(sessionId, START_MODE).catch(() => this.#stopForRestart(sessionId, 'Bypass is no longer allowed.').catch(() => undefined));
         return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
       }
+      // A lower mode reported after the switch's reply (a status line read before this resumed) was taken as a downgrade (T-277): the
+      // portal expects that mode now, so it never claims Bypass over it. Fail closed by design: the process is taken out of Bypass, and
+      // the session says Bypass was not kept (review note c; before, the row said Bypass and the next report of it ended the session).
+      const track = this.#modes.get(sessionId);
+      if (track && track.expected !== 'bypassPermissions') {
+        await this.#leaveBypass(sessionId, `Bypass not kept ${after}.`);
+        return drop('downgrade', `Bypass not kept ${after}: Claude Code reported another mode during the switch.`);
+      }
       this.#chat.patchSession(sessionId, { mode: 'bypassPermissions' });
       this.#note(sessionId, `Bypass kept ${after}.`);
       this.#chat.addAudit({
@@ -3099,6 +3133,7 @@ export class ChatController {
         endedReason: null,
       });
       this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
+      this.#saveControl(sessionId);
       this.#launchedAt.set(sessionId, Date.now());
       this.#costBase.set(sessionId, 0); // a new process counts its cost from zero
       this.#modelBase.set(sessionId, new Map());
@@ -3381,6 +3416,8 @@ export class ChatController {
     } else {
       reader = { sessionId, partial: [], offset: 0, ready: this.#chat.hasReady(sessionId), stopped: false, retries: 0, tailStart: 0 };
       this.#readers.set(sessionId, reader);
+      // Attaching to a process this portal holds no state for (it restarted): the stored control state comes back first (T-277 layer 2).
+      if (!this.#modes.has(sessionId)) this.#mode(sessionId);
     }
     void this.#tail(reader);
   }
@@ -3433,16 +3470,21 @@ export class ChatController {
       unsaved = true;
       reader.at = { start: offset - lineBuf.length, segment: reader.segment ?? 0 };
       try {
-        // The line's effects and its byte offset commit together, so a restart never applies it twice.
+        // The line's effects and its byte offset commit together, so a restart never applies it twice; so does the control state the line
+        // changed (T-277 layer 2), so a restart resumes from exactly the state that line left.
         this.#chat.transaction(
-          () => this.#handleLine(reader, lineBuf.toString('utf8')),
+          () => {
+            this.#handleLine(reader, lineBuf.toString('utf8'));
+            this.#saveControl(reader.sessionId);
+          },
           () => {
             this.#chat.patchSession(reader.sessionId, { byteOffset: offset });
             unsaved = false;
           },
         );
       } catch (e) {
-        // One line the store couldn't take: skip it rather than stall the session.
+        // One line the store couldn't take: skip it rather than stall the session. The control state is written again with the next line.
+        this.#controlSaved.delete(reader.sessionId);
         console.error(`[chat] skipped a line of session ${reader.sessionId}: ${this.#message(e)}`);
       } finally {
         reader.at = undefined;
@@ -3768,11 +3810,20 @@ export class ChatController {
       if (asked === 'completed') return this.#secondControlResponse(sessionId, ASKED(id), reply, digest);
       this.#chat.setControlState(sessionId, ASKED(id), 'completed', digest);
       this.#settleControl(sessionId, reply);
+      // The Bypass request stored as pending is answered (T-277 layer 2); only a portal that reloaded it may find it unfinished below.
+      const track = this.#modes.get(sessionId);
+      const unfinished = track?.reloaded === true && !!track.bypassPending && track.bypassPending === id;
+      if (track?.bypassPending === id) track.bypassPending = null;
       // `set_permission_mode`'s reply confirms the mode, before the status line that reports it.
       const mode = reply.ok ? reply.response.mode : undefined;
       if (typeof mode === 'string' && mode) {
         // Bypass is accepted only as the answer to an entry the portal made after every check (a grant held for that one request).
         if (mode === 'bypassPermissions' && !this.#bypassGrant.has(sessionId)) {
+          // That request, sent under the grant by the portal before it restarted: not an intrusion, and not an entry either (fail closed).
+          if (unfinished && track) {
+            this.#bypassUnfinished(sessionId, track, 'reply');
+            return true;
+          }
           this.#endIntegrity(sessionId, 'Claude Code switched to Bypass permissions, which chat sessions never allow', 'mode-bypass');
           return false;
         }
@@ -3922,6 +3973,12 @@ export class ChatController {
    */
   #acceptMode(sessionId: string, mode: string): boolean {
     const m = this.#mode(sessionId);
+    // The first report after the portal attached again is compared once with the state stored for the process (INTEGRITY_CASES
+    // `mode-resync`, T-277 layer 2); it is judged by exactly the rules below, which that stored state feeds.
+    if (m.resyncUntil !== undefined) {
+      if (this.#clock() <= m.resyncUntil) console.log(`[chat] ${shortId(sessionId)}: resync: expected ${m.expected}${m.enterPlan ? ' (plan entered)' : ''}${m.exitPlan ? ` (leaving plan approved, before it ${m.prePlan ?? 'none'})` : ''}, reported ${shortId(mode)}`);
+      m.resyncUntil = undefined;
+    }
     // Bypass reads as expected only after the portal entered it itself (enterBypass); any other report of it ends the session.
     if (mode === 'bypassPermissions' && m.expected !== 'bypassPermissions') {
       this.#endIntegrity(sessionId, 'the agent reported Bypass permissions, which chat sessions never allow', 'mode-bypass');
@@ -3969,13 +4026,94 @@ export class ChatController {
   }
 
   #mode(sessionId: string): ModeTrack {
-    let m = this.#modes.get(sessionId);
-    if (!m) {
-      // After a portal restart: the last mode stored is the last one set or confirmed.
-      m = { expected: this.#chat.row(sessionId)?.mode ?? START_MODE, prePlan: null, enterPlan: false, exitPlan: false };
-      this.#modes.set(sessionId, m);
+    return this.#modes.get(sessionId) ?? this.#reloadControl(sessionId);
+  }
+
+  /* ---------- The control state that decides integrity, persisted (T-277 layer 2) ---------- */
+
+  /**
+   * The portal holds no state for this session's process (it restarted, or attaches to a process it did not launch): the state stored for
+   * THAT process comes back exactly (the expected mode and its flags, a pending Bypass request, the peer causes), and the resync window
+   * opens. A state stored for another process, or none (a row from before migration 820), is never applied: then the row's mode is the
+   * expected one, as before. Bypass is expected after a reload only when the row recorded the entry too; otherwise it is unfinished.
+   */
+  #reloadControl(sessionId: string): ModeTrack {
+    const row = this.#chat.row(sessionId);
+    const stored = row ? readControl(row.control_state, controlProc(row)) : null;
+    const m: ModeTrack = stored
+      ? { ...stored.mode, reloaded: true, resyncUntil: this.#clock() + RESYNC_MS }
+      : { expected: row?.mode ?? START_MODE, prePlan: null, enterPlan: false, exitPlan: false, reloaded: true, resyncUntil: this.#clock() + RESYNC_MS };
+    this.#modes.set(sessionId, m);
+    if (stored?.peers.length) this.#peerCauses.set(sessionId, stored.peers);
+    if (stored) this.#controlSaved.set(sessionId, { proc: stored.proc, json: row!.control_state! });
+    if (row && row.state !== 'ended' && row.process === 'live') {
+      console.log(`[chat] ${shortId(sessionId)}: control state ${stored ? 'reloaded' : 'not stored for this process: the row\'s mode'} (expected ${m.expected}${stored?.mode.bypassPending ? ', a Bypass request pending' : ''})`);
+      if (stored && m.expected === 'bypassPermissions' && row.mode !== 'bypassPermissions') this.#bypassUnfinished(sessionId, m, 'stored');
     }
     return m;
+  }
+
+  /** Writes the session's control state when it changed (T-277 layer 2); nothing while the portal holds none for it. */
+  #saveControl(sessionId: string): void {
+    const m = this.#modes.get(sessionId);
+    if (!m) return;
+    const saved = this.#controlSaved.get(sessionId);
+    let proc = saved?.proc;
+    if (!proc) {
+      // The first write for this process (the cache is dropped with every process: #forget): which process it is comes from the row.
+      const row = this.#chat.row(sessionId);
+      if (!row || row.state === 'ended') return;
+      proc = controlProc(row);
+    }
+    const json = controlJson(proc, { ...m, bypassPending: m.bypassPending ?? null }, this.#peerCauses.get(sessionId) ?? []);
+    if (saved?.json === json) return;
+    this.#chat.patchSession(sessionId, { controlState: json });
+    this.#controlSaved.set(sessionId, { proc, json });
+  }
+
+  /**
+   * INTEGRITY_CASES `control-bypass-unfinished` (T-277 layer 2): Claude Code is in Bypass through the request the portal sent under the
+   * grant (every gate passed), but the portal that sent it stopped before it recorded the entry. The entry is not finished now, and is
+   * never shown or audited as entered: fail closed. The process is taken out of Bypass at once (the start mode; if Claude Code refuses or
+   * doesn't answer, the process is stopped), the transcript says so and the trail records `bypass.left`. Until that reply the stream
+   * truthfully reports Bypass, so it is expected meanwhile (a status line may show it on the row for that moment, as for any report).
+   */
+  #bypassUnfinished(sessionId: string, m: ModeTrack, how: 'reply' | 'stored'): void {
+    m.expected = 'bypassPermissions';
+    m.prePlan = null;
+    m.enterPlan = false;
+    m.exitPlan = false;
+    m.bypassPending = null;
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state === 'ended') return;
+    console.warn(`[chat] ${shortId(sessionId)}: a Bypass entry the portal began before it restarted was not finished (${how}): taking the process out of it`);
+    this.#note(sessionId, 'Bypass is off in this chat: the portal restarted while turning it on.');
+    this.#chat.addAudit({ severity: 'medium', kind: 'bypass.left', sessionId, workspaceId: row.workspace_id, actor: 'portal', detail: { why: 'restart_unfinished', how } });
+    this.#saveControl(sessionId);
+    void Promise.resolve().then(() => this.#leaveBypass(sessionId, 'Bypass was not finished before the portal restarted.'));
+  }
+
+  /**
+   * Takes a live process out of a Bypass the portal does not stand behind (T-277): `set_permission_mode` to the start mode (its reply is
+   * confirmed by the reader like any), the row says the start mode; if Claude Code refuses or doesn't answer, the process is stopped (the
+   * next launch starts on the start mode); if even that fails, the session ends for integrity. Fail closed at every step. Never throws.
+   */
+  async #leaveBypass(sessionId: string, why: string): Promise<void> {
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state === 'ended' || row.process !== 'live') return; // no process left in it
+    try {
+      const reply = await this.#request(sessionId, 'set_permission_mode', { mode: START_MODE });
+      if (typeof reply.mode === 'string' && reply.mode && reply.mode !== START_MODE) throw new AppError('CONFLICT', 'Claude Code didn’t leave Bypass.');
+      const now = this.#chat.row(sessionId);
+      if (now && now.state !== 'ended' && now.mode !== START_MODE) this.#chat.patchSession(sessionId, { mode: START_MODE });
+      this.#emitSession(sessionId);
+    } catch {
+      try {
+        await this.#stopForRestart(sessionId, why);
+      } catch {
+        this.#endIntegrity(sessionId, 'Claude Code stayed in Bypass permissions, which this portal did not finish entering', 'mode-bypass');
+      }
+    }
   }
 
   #confirmMode(sessionId: string, mode: string): void {
@@ -4213,6 +4351,12 @@ export class ChatController {
         if (this.#pending.delete(requestId)) reject(new ControlTimeout());
       }, this.controlTimeoutMs);
       this.#pending.set(requestId, { sessionId, resolve, reject, timer });
+      // The one request that enters Bypass, sent under the grant (every gate passed): its id is stored, so a portal that restarts before
+      // its reply is read knows the reply is its own (T-277 layer 2, INTEGRITY_CASES `control-bypass-unfinished`). Grants nothing by itself.
+      if (subtype === 'set_permission_mode' && fields.mode === 'bypassPermissions' && this.#bypassGrant.has(sessionId)) {
+        this.#mode(sessionId).bypassPending = requestId;
+        this.#saveControl(sessionId);
+      }
       this.#ensureReader(sessionId); // the reply arrives on stdout
       this.#writeLine(sessionId, controlRequest(requestId, subtype, fields)).catch((e: unknown) => {
         if (!this.#pending.delete(requestId)) return;
@@ -4369,6 +4513,13 @@ export class ChatController {
     this.#thinkingSince.delete(sessionId);
     this.#modes.delete(sessionId);
     this.#peerCauses.delete(sessionId);
+    // The process is over: its control state with it (T-277 layer 2); the next process starts its own.
+    this.#controlSaved.delete(sessionId);
+    try {
+      this.#chat.patchSession(sessionId, { controlState: null });
+    } catch {
+      // the store went away (shutdown): a state stored for an old process is never applied to another one (its proc differs)
+    }
   }
 
   /* ---------- Exec helpers ---------- */

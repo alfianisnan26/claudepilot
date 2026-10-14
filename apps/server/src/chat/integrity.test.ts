@@ -6,17 +6,18 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import type { ChatPermissionMode } from '@portal/contracts';
 import { allowResponse, denyResponse, parseLine } from './protocol.js';
-import { INTEGRITY_CASES, lessPermissive, MODE_RANK, modeRank, PEER_CAUSE_MS, PEER_QUEUED_MESSAGE, sameAnswer } from './integrity.js';
+import { controlJson, INTEGRITY_CASES, lessPermissive, MODE_RANK, modeRank, PEER_CAUSE_MS, PEER_QUEUED_MESSAGE, readControl, RESYNC_MS, sameAnswer } from './integrity.js';
 import { ChatStore } from './store.js';
-import { APPLIED, fail, firstTurn, init, line, liveSession, ok, sleep, until, type Live } from './testkit.js';
+import { APPLIED, fail, firstTurn, init, line, liveSession, ok, restartPortal, sleep, until, type Live } from './testkit.js';
 
 const assistantText = (text: string) => line({ type: 'assistant', message: { content: [{ type: 'text', text }] }, parent_tool_use_id: null, uuid: randomUUID() });
 
 /** A live session on a fake clock for the integrity windows. */
 async function clocked() {
   let now = Date.now();
-  const s = await liveSession({ clock: () => now });
-  return Object.assign(s, { advance: (ms: number) => void (now += ms) });
+  const clock = () => now;
+  const s = await liveSession({ clock });
+  return Object.assign(s, { clock, advance: (ms: number) => void (now += ms) });
 }
 type Clocked = Awaited<ReturnType<typeof clocked>>;
 
@@ -389,9 +390,136 @@ const FIXTURES: Record<string, Fixture> = {
       },
     ],
   },
+  'mode-resync': {
+    accept: async (s) => {
+      await planLeaveApproved(s);
+      await restartPortal(s, { clock: s.clock });
+      // The stored state, not the row: leaving plan was approved, back to the mode before it.
+      await expectAccepted(s, [statusMode('acceptEdits'), init(s.id, 'acceptEdits')]);
+      assert.equal(s.controller.get(s.id)!.mode, 'acceptEdits');
+      assert.ok(!s.controller.history(s.id).some((e) => e.kind === 'system' && /^Mode is /.test(e.text ?? '')), 'nothing inferred, nothing downgraded');
+    },
+    reject: [
+      {
+        name: 'a report more permissive than the stored state',
+        run: async (s) => {
+          await askMode(s, 'acceptEdits');
+          await restartPortal(s, { clock: s.clock });
+          await expectIntegrityEnd(s, statusMode('auto'), /the permission mode changed to auto without this portal \(expected acceptEdits\)$/);
+        },
+      },
+      {
+        name: 'Bypass the stored state does not expect',
+        run: async (s) => {
+          await askMode(s, 'acceptEdits');
+          await restartPortal(s, { clock: s.clock });
+          await expectIntegrityEnd(s, init(s.id, 'bypassPermissions'), /the agent reported Bypass permissions, which chat sessions never allow$/);
+        },
+      },
+      {
+        name: 'a state stored for another process (the row is used, as before layer 2)',
+        run: async (s) => {
+          await planLeaveApproved(s);
+          s.store.db!.prepare(`UPDATE chat_sessions SET control_state = replace(control_state, '"proc":"', '"proc":"another-') WHERE id = ?`).run(s.id);
+          await restartPortal(s, { clock: s.clock });
+          await expectIntegrityEnd(s, statusMode('acceptEdits'), /the permission mode changed to acceptEdits without this portal \(expected plan\)$/);
+        },
+      },
+      {
+        name: 'a second differing report after the first one closed the window',
+        run: async (s) => {
+          await planLeaveApproved(s);
+          await restartPortal(s, { clock: s.clock });
+          await expectAccepted(s, [statusMode('acceptEdits')]);
+          await expectIntegrityEnd(s, statusMode('auto'), /the permission mode changed to auto without this portal \(expected acceptEdits\)$/);
+        },
+      },
+      {
+        name: 'a more permissive first report after the window ran out',
+        run: async (s) => {
+          await askMode(s, 'acceptEdits');
+          await restartPortal(s, { clock: s.clock });
+          s.advance(RESYNC_MS + 1);
+          await expectIntegrityEnd(s, init(s.id, 'auto'), /the permission mode changed to auto without this portal \(expected acceptEdits\)$/);
+        },
+      },
+    ],
+  },
+  'control-bypass-unfinished': {
+    accept: async (s) => {
+      bypassReady(s.controller, s.store, s.id);
+      const entering = s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' });
+      const ask = await s.take('set_permission_mode');
+      assert.equal(ask.request.mode, 'bypassPermissions');
+      await restartPortal(s, { clock: s.clock }, (c) => bypassReady(c, s.store, s.id));
+      await assert.rejects(entering, 'the portal that asked is gone');
+      s.tail.push(ok(ask.id, { mode: 'bypassPermissions' }));
+      // Not an ending: the process is taken out of Bypass at once, never shown or audited as entered.
+      const out = await s.take('set_permission_mode');
+      assert.equal(out.request.mode, 'default');
+      s.tail.push(ok(out.id, { mode: 'default' }));
+      await expectAccepted(s, [statusMode('default'), init(s.id, 'default')]);
+      assert.equal(s.controller.get(s.id)!.mode, 'default');
+      assert.ok(s.controller.history(s.id).some((e) => e.kind === 'system' && e.text === 'Bypass is off in this chat: the portal restarted while turning it on.'));
+      assert.deepEqual(s.controller.audit({ kind: 'bypass.left' }).map((a) => a.detail), [{ why: 'restart_unfinished', how: 'reply' }]);
+      assert.equal(s.controller.audit({ kind: 'bypass.entered' }).length, 0, 'never entered on the record');
+      // Bypass is not expected any more: reported now, it ends the session as always.
+      await expectIntegrityEnd(s, statusMode('bypassPermissions'), /the agent reported Bypass permissions, which chat sessions never allow$/);
+    },
+    reject: [
+      {
+        name: 'a Bypass reply to a request never sent under the grant',
+        run: async (s) => {
+          bypassReady(s.controller, s.store, s.id);
+          void s.controller.control(s.id, 'model', { model: 'sonnet' }).catch(() => undefined);
+          const asked = await s.take('set_model');
+          await restartPortal(s, { clock: s.clock }, (c) => bypassReady(c, s.store, s.id));
+          await expectIntegrityEnd(s, ok(asked.id, { mode: 'bypassPermissions' }), /Claude Code switched to Bypass permissions, which chat sessions never allow$/);
+        },
+      },
+      {
+        name: 'the same late reply in the same portal life (the grant is gone)',
+        run: async (s) => {
+          bypassReady(s.controller, s.store, s.id);
+          s.controller.controlTimeoutMs = 40;
+          const entering = s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' });
+          const ask = await s.take('set_permission_mode');
+          await assert.rejects(entering, /answer in time/);
+          await expectIntegrityEnd(s, ok(ask.id, { mode: 'bypassPermissions' }), /Claude Code switched to Bypass permissions, which chat sessions never allow$/);
+        },
+      },
+      {
+        name: 'a Bypass status report while nothing is pending',
+        run: async (s) => {
+          bypassReady(s.controller, s.store, s.id);
+          await restartPortal(s, { clock: s.clock }, (c) => bypassReady(c, s.store, s.id));
+          await expectIntegrityEnd(s, statusMode('bypassPermissions'), /the agent reported Bypass permissions, which chat sessions never allow$/);
+        },
+      },
+    ],
+  },
 };
 
 const statusMode = (mode: string) => line({ type: 'system', subtype: 'status', status: null, permissionMode: mode });
+
+/** The portal may enter Bypass on this session: the policy allows it, the session is capable, the server code is fresh for 'tok'. */
+function bypassReady(c: Live['controller'], store: Live['store'], sessionId: string) {
+  c.bypassAllowed = () => true;
+  c.reauth = { fresh: (token) => token === 'tok' };
+  store.db!.prepare('UPDATE chat_sessions SET bypass_capable = 1 WHERE id = ?').run(sessionId);
+}
+
+/** In acceptEdits, the agent entered plan mode by itself and the portal approved leaving it (ExitPlanMode); nothing reported since. */
+async function planLeaveApproved(s: Live) {
+  await askMode(s, 'acceptEdits');
+  await expectAccepted(s, [line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `toolu_${randomUUID()}`, name: 'EnterPlanMode', input: {} }] }, parent_tool_use_id: null, uuid: randomUUID() }), statusMode('plan')]);
+  assert.equal(s.controller.get(s.id)!.mode, 'plan');
+  const requestId = `R-xp-${randomUUID()}`;
+  s.tail.push(line({ type: 'control_request', request_id: requestId, request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', input: {}, tool_use_id: `toolu_${randomUUID()}` } }));
+  await until(() => s.state() === 'waiting');
+  await s.controller.respond(s.id, requestId, 'allow');
+  await expectAccepted(s, [allowResponse(requestId)]);
+}
 
 /** The portal asks for a mode and Claude Code confirms it; returns the request id. */
 async function askMode(s: Live, mode: ChatPermissionMode): Promise<string> {
@@ -550,4 +678,228 @@ test('parse (T-136): a sub-agent SendMessage gives its task and a digest, never 
   assert.deepEqual(peer.origin, { kind: 'peer', producer: null });
   assert.equal(peer.peer?.taskId, 'w1');
   assert.equal(peer.peer?.digest, send.peerSends![0]!.digest, 'the body and the message digest alike');
+});
+
+/* ---------- T-277 layer 2: the control state that decides integrity survives a portal restart ---------- */
+
+const stored = (s: Live) => {
+  const v = (s.store.db!.prepare('SELECT control_state AS c FROM chat_sessions WHERE id = ?').get(s.id) as { c: string | null }).c;
+  return v ? (JSON.parse(v) as { proc: string; mode: Record<string, unknown>; peers: Record<string, unknown>[] }) : null;
+};
+/** A row from before migration 820 (or a portal that never wrote): no state stored. */
+const unstore = (s: Live) => s.store.db!.prepare('UPDATE chat_sessions SET control_state = NULL WHERE id = ?').run(s.id);
+const enterPlanLine = () => line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `toolu_${randomUUID()}`, name: 'EnterPlanMode', input: {} }] }, parent_tool_use_id: null, uuid: randomUUID() });
+
+test('control state (T-277 layer 2): written with every change, ids and digests only, and cleared when the process is over', async () => {
+  const s = await clocked();
+  try {
+    const first = stored(s)!;
+    assert.deepEqual(first.mode, { expected: 'default', prePlan: null, enterPlan: false, exitPlan: false, bypassPending: null }, 'written at launch');
+    const row = s.store.db!.prepare('SELECT claude_session_id, segment, process_started_at FROM chat_sessions WHERE id = ?').get(s.id) as Record<string, unknown>;
+    assert.equal(first.proc, `${row.claude_session_id || s.id}/${row.segment}/${row.process_started_at ?? ''}`, 'the process it belongs to');
+    await withTask(s);
+    await askMode(s, 'acceptEdits');
+    assert.equal(stored(s)!.mode.expected, 'acceptEdits');
+    await expectAccepted(s, [enterPlanLine()]);
+    assert.equal(stored(s)!.mode.enterPlan, true);
+    await expectAccepted(s, [statusMode('plan')]);
+    assert.deepEqual(stored(s)!.mode, { expected: 'plan', prePlan: 'acceptEdits', enterPlan: false, exitPlan: false, bypassPending: null });
+    s.tail.push(line({ type: 'control_request', request_id: 'R-xp', request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', input: {}, tool_use_id: 'toolu_xp' } }));
+    await until(() => s.state() === 'waiting');
+    await s.controller.respond(s.id, 'R-xp', 'allow');
+    assert.equal(stored(s)!.mode.exitPlan, true, 'written when the portal answers, not only with a line');
+    const secret = `report ${randomUUID()}`;
+    const [send, queued] = peerSequence(s.id, { taskId: 'w1', call: 'toolu_send_s', message: secret });
+    await expectAccepted(s, [send!, queued!]);
+    const peers = stored(s)!.peers;
+    assert.equal(peers.length, 1);
+    assert.deepEqual(Object.keys(peers[0]!).sort(), ['at', 'digest', 'queued', 'taskId', 'toolUseId']);
+    assert.equal(peers[0]!.queued, true);
+    assert.ok(!JSON.stringify(stored(s)).includes(secret), 'never the text');
+    bypassReady(s.controller, s.store, s.id);
+    s.controller.controlTimeoutMs = 40;
+    const entering = s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' });
+    const ask = await s.take('set_permission_mode');
+    assert.equal(stored(s)!.mode.bypassPending, ask.id, 'the gated request, stored before it is written');
+    await assert.rejects(entering);
+    await s.controller.end(s.id);
+    assert.equal(stored(s), null, 'the process is over: its state with it');
+  } finally {
+    await s.done();
+  }
+});
+
+test('control state (T-277 layer 2): the expected mode comes back from the stored state, not inferred from the row', async () => {
+  const s = await clocked();
+  try {
+    await askMode(s, 'acceptEdits');
+    // The row lost the change (a portal stopped between the reply and its row write): the stored state, written with the reply, has it.
+    s.store.db!.prepare(`UPDATE chat_sessions SET mode = 'default' WHERE id = ?`).run(s.id);
+    await restartPortal(s, { clock: s.clock });
+    await expectAccepted(s, [statusMode('acceptEdits')]);
+    assert.ok(!s.controller.history(s.id).some((e) => /^Mode is /.test(e.text ?? '')));
+    await expectIntegrityEnd(s, statusMode('auto'), /the permission mode changed to auto without this portal \(expected acceptEdits\)$/);
+  } finally {
+    await s.done();
+  }
+});
+
+test('control state (T-277 layer 2): plan entered before a restart is still a transition after it (the mode before plan kept), and leaving it works', async () => {
+  const s = await clocked();
+  try {
+    await askMode(s, 'acceptEdits');
+    await expectAccepted(s, [enterPlanLine()]);
+    await restartPortal(s, { clock: s.clock });
+    await expectAccepted(s, [statusMode('plan')]);
+    assert.ok(!s.controller.history(s.id).some((e) => e.text === 'Mode is Plan in this chat'), 'a transition, not a downgrade');
+    s.tail.push(line({ type: 'control_request', request_id: 'R-xp2', request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', input: {}, tool_use_id: 'toolu_xp2' } }));
+    await until(() => s.state() === 'waiting');
+    await s.controller.respond(s.id, 'R-xp2', 'allow');
+    await expectAccepted(s, [allowResponse('R-xp2'), statusMode('acceptEdits')]);
+    assert.equal(s.controller.get(s.id)!.mode, 'acceptEdits');
+  } finally {
+    await s.done();
+  }
+});
+
+test('control state (T-277 layer 2): without the stored flag (a row from before migration 820) the same lines are judged as before: plan is a downgrade, and leaving it ends', async () => {
+  const s = await clocked();
+  try {
+    await askMode(s, 'acceptEdits');
+    await expectAccepted(s, [enterPlanLine()]);
+    unstore(s);
+    await restartPortal(s, { clock: s.clock });
+    await expectAccepted(s, [statusMode('plan')]);
+    assert.ok(s.controller.history(s.id).some((e) => e.text === 'Mode is Plan in this chat'), 'inferred from the row: a downgrade');
+    s.tail.push(line({ type: 'control_request', request_id: 'R-xp3', request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', input: {}, tool_use_id: 'toolu_xp3' } }));
+    await until(() => s.state() === 'waiting');
+    await s.controller.respond(s.id, 'R-xp3', 'allow');
+    await expectAccepted(s, [allowResponse('R-xp3')]);
+    await expectIntegrityEnd(s, statusMode('acceptEdits'), /the permission mode changed to acceptEdits without this portal \(expected plan\)$/);
+  } finally {
+    await s.done();
+  }
+});
+
+test('control state (T-277 layer 2): a sub-agent SendMessage queued before a restart is the cause of its peer line after it, within the same window', async () => {
+  const s = await clocked();
+  try {
+    await withTask(s);
+    const [send, queued, turn, peer] = peerSequence(s.id, { taskId: 'w1', call: 'toolu_send_r', message: 'slice green' });
+    await expectAccepted(s, [send!, queued!]);
+    await restartPortal(s, { clock: s.clock });
+    await expectAccepted(s, [turn!, peer!]);
+  } finally {
+    await s.done();
+  }
+});
+
+for (const twin of [
+  { name: 'no state stored (as before layer 2)', before: (s: Clocked) => void unstore(s), after: () => undefined },
+  { name: 'the window ran out across the restart', before: () => undefined, after: (s: Clocked) => s.advance(PEER_CAUSE_MS + 1) },
+])
+  test(`control state (T-277 layer 2): a peer line after a restart still ends the session with ${twin.name}`, async () => {
+    const s = await clocked();
+    try {
+      await withTask(s);
+      const [send, queued, turn, peer] = peerSequence(s.id, { taskId: 'w1', call: 'toolu_send_t', message: 'slice green' });
+      await expectAccepted(s, [send!, queued!]);
+      twin.before(s);
+      await restartPortal(s, { clock: s.clock });
+      twin.after(s);
+      await expectAccepted(s, [turn!]);
+      await expectIntegrityEnd(s, peer!, /a message this portal didn't send reached Claude Code .*origin peer/);
+    } finally {
+      await s.done();
+    }
+  });
+
+test('control state (T-277 layer 2): a control reply read before a restart, read again after it, is the same line (ignored); a different one ends', async () => {
+  const s = await clocked();
+  try {
+    const { model } = await askModel(s);
+    await restartPortal(s, { clock: s.clock });
+    await expectAccepted(s, [ok(model)]);
+    await expectIntegrityEnd(s, ok(model, { mode: 'acceptEdits' }), new RegExp(`a second, different control response for request ${model.slice(0, 8)}`));
+  } finally {
+    await s.done();
+  }
+});
+
+test('control state (T-277 layer 2): Bypass stored as expected while the row never recorded the entry is unfinished: taken out, never entered', async () => {
+  const s = await clocked();
+  try {
+    bypassReady(s.controller, s.store, s.id);
+    // The reply was read (the stored state expects Bypass) and the portal stopped before enterBypass wrote the row and the audit.
+    const json = stored(s)!;
+    s.store.db!.prepare('UPDATE chat_sessions SET control_state = ? WHERE id = ?').run(JSON.stringify({ ...json, v: 1, mode: { ...json.mode, expected: 'bypassPermissions' } }), s.id);
+    await restartPortal(s, { clock: s.clock }, (c) => bypassReady(c, s.store, s.id));
+    const out = await s.take('set_permission_mode');
+    assert.equal(out.request.mode, 'default');
+    // Until its reply the process truthfully reports Bypass: not an ending.
+    await expectAccepted(s, [statusMode('bypassPermissions')]);
+    s.tail.push(ok(out.id, { mode: 'default' }));
+    await expectAccepted(s, [statusMode('default')]);
+    await until(() => s.controller.get(s.id)!.mode === 'default');
+    assert.deepEqual(s.controller.audit({ kind: 'bypass.left' }).map((a) => a.detail), [{ why: 'restart_unfinished', how: 'stored' }]);
+    assert.equal(s.controller.audit({ kind: 'bypass.entered' }).length, 0);
+    await expectIntegrityEnd(s, statusMode('bypassPermissions'), /the agent reported Bypass permissions, which chat sessions never allow$/);
+  } finally {
+    await s.done();
+  }
+});
+
+test('control state (T-277 layer 2): Claude Code refusing to leave an unfinished Bypass stops the process (fail closed)', async () => {
+  const s = await clocked();
+  try {
+    bypassReady(s.controller, s.store, s.id);
+    const entering = s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' });
+    const ask = await s.take('set_permission_mode');
+    await restartPortal(s, { clock: s.clock }, (c) => bypassReady(c, s.store, s.id));
+    await assert.rejects(entering);
+    const stops = s.ws.stops;
+    s.tail.push(ok(ask.id, { mode: 'bypassPermissions' }));
+    const out = await s.take('set_permission_mode');
+    s.tail.push(fail(out.id, 'no'));
+    await until(() => s.ws.stops > stops);
+    await until(() => s.controller.get(s.id)!.process !== 'live');
+    assert.notEqual(s.controller.get(s.id)!.state, 'ended');
+    assert.equal(s.controller.get(s.id)!.mode, 'default');
+  } finally {
+    await s.done();
+  }
+});
+
+test('readControl (T-277 layer 2): only a well-formed state for this very process; anything else is not applied', () => {
+  const proc = 'csid/1/2026-10-10T12:00:00Z';
+  const peer = { toolUseId: 'toolu_1', taskId: 'w1', digest: 'a'.repeat(64), at: 1, queued: true };
+  const good = { v: 1, proc, mode: { expected: 'acceptEdits', prePlan: null, enterPlan: false, exitPlan: false, bypassPending: null }, peers: [peer] };
+  assert.deepEqual(readControl(JSON.stringify(good), proc), good);
+  assert.equal(readControl(controlJson(proc, good.mode, [peer]), proc)?.peers.length, 1, 'what controlJson writes, readControl reads');
+  for (const [name, v] of [
+    ['another process', { ...good, proc: 'csid/2/2026-10-10T12:00:00Z' }],
+    ['another version', { ...good, v: 2 }],
+    ['a mode that is not a string', { ...good, mode: { ...good.mode, expected: 4 } }],
+    ['an empty mode', { ...good, mode: { ...good.mode, expected: '' } }],
+    ['a flag that is not a boolean', { ...good, mode: { ...good.mode, exitPlan: 'yes' } }],
+    ['a pending id that is not a string', { ...good, mode: { ...good.mode, bypassPending: 7 } }],
+    ['a digest that is not sha256 hex', { ...good, peers: [{ ...peer, digest: 'body text' }] }],
+    ['a peer time that is not a number', { ...good, peers: [{ ...peer, at: 'now' }] }],
+    ['more than 32 peers', { ...good, peers: Array.from({ length: 33 }, () => peer) }],
+  ] as const)
+    assert.equal(readControl(JSON.stringify(v), proc), null, name);
+  assert.equal(readControl('{not json', proc), null);
+  assert.equal(readControl(null, proc), null);
+  assert.equal(readControl('null', proc), null);
+});
+
+test('MODE_RANK (T-277 review note e): frozen, so no code can add a mode or move one down at run time', () => {
+  assert.ok(Object.isFrozen(MODE_RANK));
+  assert.throws(() => {
+    (MODE_RANK as Record<string, number>).dontAsk = 0;
+  }, TypeError);
+  assert.throws(() => {
+    (MODE_RANK as Record<string, number>).bypassPermissions = 0;
+  }, TypeError);
+  assert.equal(lessPermissive('bypassPermissions', 'default'), false);
 });

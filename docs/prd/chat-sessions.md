@@ -378,8 +378,10 @@ The controller records every UUID and `request_id` it sends and ends the session
   after the portal's own Stop or `stop_task`;
 - a turn with nothing behind it: no input from the controller, no finished background task and no
   scheduled task Settings allowed;
-- a permission mode, in a `set_permission_mode` reply or `system/init`, other than the expected one, unless it is less permissive
-  (case `mode-downgrade` below, T-277), or a `session_id` that changes.
+- a permission mode in a main-thread `system/init` or `system/status` other than the expected one, unless it is less permissive (case
+  `mode-downgrade` below, T-277) or a plan transition the portal allowed; Bypass in a `set_permission_mode` reply other than the answer
+  to the one request the portal sent under the Bypass grant (a reply to the portal's own `set_permission_mode` otherwise confirms the
+  mode it carries; the downgrade rule is not about replies); or a `session_id` that changes.
 
 Contract tests inject each kind of line through the FIFO and from a stdio MCP server and expect the
 session to end.
@@ -424,12 +426,42 @@ restarted, the expected mode was rebuilt from the stored row (Bypass), and a mai
 `default`. The rule (case `mode-downgrade`): the modes are ordered `plan < default < acceptEdits < auto < bypassPermissions`
 (`MODE_RANK`), and a main-thread report strictly lower than the expected one, both in that table, is taken: the portal expects that mode
 from then on, the row shows it, the transcript says "Bypass is off in this chat" (audited `bypass.left`, why `downgrade`) or "Mode is
-<mode> in this chat", and the session event goes out; the portal does not re-enter Bypass there, only the gated path does (`enterBypass`
-with acknowledgement and fresh server code, or the restart and move re-assert). The negative twins still end the session with the same
+<mode> in this chat", and the session event goes out; the portal does not re-enter Bypass there. **How Bypass comes back** after a
+downgrade: only through `enterBypass` (`POST /api/chat/sessions/:id/bypass`), with every gate: the policy, a bypass-capable session, the
+acknowledgement and a fresh server code; the supervisor does exactly that as the owner's delegate (T-256, at most every
+`BYPASS_GAP_MIN` minutes). A Restart, a Move or a recover in place does NOT bring it back: their re-assert (`#keepBypass`) runs only
+for a row that is in Bypass when they start, and after a downgrade the row is not. Keep going (T-259) reports a chat out of Bypass and
+never re-enters it (the lease is its slice 2). The negative twins still end the session with the same
 text: a report more permissive than expected (also back up after a downgrade), Bypass the portal did not enter, an unknown mode string
 (`dontAsk` included, ranked above Bypass; an expected mode outside the table is never downgraded from), and a sub-agent thread's mode,
 which is never a mode report (the expected mode stays and the next main-thread report is judged against it). Observed in
 `integrity.test.ts` and `restart.test.ts` (a portal restart under a Bypass chat on the controller testkit); not yet seen on the cluster.
+
+**The control state, persisted (T-277 layer 2, 2026-10-14).** After a portal restart the portal no longer infers what the stream must
+report from the row. What the integrity checks decide by is stored on the session (`chat_sessions.control_state`, migration 820, JSON
+`StoredControl` in `chat/integrity.ts`) for the process it belongs to (Claude Code session id, segment and start): the expected mode, the
+mode before plan, plan entered (EnterPlanMode seen), leaving plan approved (ExitPlanMode allowed), the id of a Bypass request sent under
+the grant whose reply was not read yet, and the sub-agent SendMessage causes a peer line may follow (tool use id, task id, sha256 digest,
+time, queued; never text). It is written with every change: a line's change commits in the same transaction as the line's byte offset,
+so a restart resumes from exactly the state that line left; an answer (ExitPlanMode), a launch, a move and the gated Bypass request
+write at once; it is cleared when the process is over. Control lines and the digest of their first reply were already stored
+(`chat_inputs`, migration 771). When the portal attaches to a live process it holds nothing for, it reloads that state exactly; a state
+stored for another process, or none (every row before migration 820, so the deploy that ships it), is never applied, and the row's
+mode is expected as before. **Resync** (case `mode-resync`): the first main-thread mode report after that attach is compared once with
+the stored state, within `RESYNC_MS` (60 s), and logged (`[chat] <id>: resync: expected …, reported …`); it is judged by the same rules
+(equal, a plan transition the stored flags allow, or a downgrade), so it accepts nothing more permissive. **An unfinished Bypass entry**
+(case `control-bypass-unfinished`): a portal that stopped between sending the gated `set_permission_mode` and reading its reply used to
+end the session on that reply ("Claude Code switched to Bypass permissions"). Now, only for the stored request id and only after a
+reload, the reply is the portal's own, and the entry is NOT finished: never shown or audited as entered; the process is taken out of
+Bypass at once (`set_permission_mode` to the start mode; if refused or unanswered, the process is stopped; if that fails too, the session
+ends), the transcript says "Bypass is off in this chat: the portal restarted while turning it on." and `bypass.left` (why
+`restart_unfinished`) is recorded; the same when the stored state expects Bypass but the row never recorded the entry. A Bypass reply to
+any other id, the same late reply in the same portal life, and a Bypass report with nothing pending still end the session. **A lower
+mode during a re-assert** (review note c): when a status line saying a lower mode is read after the switch's reply and before `#keepBypass`
+resumes, the portal never writes "Bypass kept" over it: the process is taken out of Bypass the same way and the transcript says "Bypass
+not kept after the <restart|move|recovery>: Claude Code reported another mode during the switch." (`bypass.left`, why `downgrade`).
+`MODE_RANK` is frozen. Observed in `integrity.test.ts` and `restart.test.ts` (a portal restart on the controller testkit); not yet seen
+on the cluster.
 
 **Why a line is read twice (T-265, observed 2026-10-13).** The orchestrator 5c9fcb5f ended at 17:58:46 on the FIRST line of its stream
 (the `set_permission_mode` reply of 15:46, which appears once in the 12 MB file), 20 minutes after the portal restarted at 17:38:44 for a

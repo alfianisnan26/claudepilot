@@ -308,6 +308,34 @@ export async function firstTurn(s: Live) {
   await until(() => s.controller.get(s.id)!.effort === 'medium');
 }
 
+/**
+ * The portal restarts under a live session (a deploy; T-277 layer 2): the controller stops (the processes keep running), a new one on the
+ * same store and workspaces starts and attaches again. `s.controller`, `s.tail` and `s.state` become the new ones and `s.done` stops it
+ * too. `setup` installs what the owner installs (the Bypass policy, the server code check) before it starts.
+ */
+export async function restartPortal(s: Live, opts: ChatControllerOptions = {}, setup?: (c: ChatController) => void): Promise<ChatController> {
+  s.controller.stop();
+  const tails = s.ws.tails.length;
+  const next = new ChatController(s.store, s.ws as unknown as Workspaces, opts);
+  next.onEvent((_id, msg) => s.messages.push(msg));
+  setup?.(next);
+  next.start();
+  await until(() => s.ws.tails.length > tails);
+  await sleep(20);
+  const done = s.done;
+  Object.assign(s, {
+    controller: next,
+    tail: s.ws.tails.at(-1)!,
+    state: () => next.get(s.id)!.state,
+    done: async () => {
+      await next.end(s.id).catch(() => undefined);
+      next.stop();
+      await done();
+    },
+  });
+  return next;
+}
+
 /** The process vanishes (its reader drops and `status` says gone): the session reads Interrupted. */
 export async function vanish(s: Live) {
   s.ws.alive = false;

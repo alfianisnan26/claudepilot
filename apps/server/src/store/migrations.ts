@@ -2929,6 +2929,18 @@ export const MIGRATIONS: Migration[] = [
       db.exec('ALTER TABLE claude_usage_latest ADD COLUMN limit_report TEXT');
     },
   },
+  {
+    version: 820,
+    name: 'chat sessions: the control state that decides integrity',
+    up(db) {
+      // T-277 layer 2: after a portal restart the portal does not infer. The state the integrity checks decide by, for the process the row
+      // follows, as JSON (chat/integrity.ts StoredControl): the process it belongs to, the expected mode and its transition flags (plan
+      // entered or approved to leave, the mode before plan), the id of a Bypass request sent under the grant whose reply was not read yet,
+      // and the sub-agent SendMessage causes a peer line may follow (ids and sha256 digests, never text). Written with the line that changes
+      // it (one transaction with the byte offset), cleared when the process is over; null for every row so far (the row's mode is used).
+      db.exec('ALTER TABLE chat_sessions ADD COLUMN control_state TEXT');
+    },
+  },
 ];
 
 /**

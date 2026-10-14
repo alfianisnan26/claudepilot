@@ -74,6 +74,8 @@ export type ChatSessionRow = {
   ended_reason: string | null;
   /** T-136 slice 2: what an integrity ending was for (an `EndingRecord` as JSON); null otherwise and for rows ended before migration 805. */
   ended_for?: string | null;
+  /** T-277 layer 2 (migration 820): the control state that decides integrity, as JSON (integrity.ts StoredControl); null: none stored. */
+  control_state?: string | null;
   archived_at: string | null;
   pinned_at?: string | null;
   /** T-102: the hint hidden until a change newer than this; null: shown. */
@@ -179,6 +181,8 @@ export interface ChatSessionPatch {
   endedReason?: string | null;
   /** T-136: what an integrity ending was for (JSON), or null to clear it. */
   endedFor?: string | null;
+  /** T-277 layer 2: the control state that decides integrity (JSON), or null to clear it. */
+  controlState?: string | null;
   successorId?: string | null;
   predecessorId?: string | null;
   archivedAt?: string | null;
@@ -789,6 +793,7 @@ export class ChatStore {
     if (patch.title !== undefined) set('title', patch.title);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
     if (patch.endedFor !== undefined) set('ended_for', patch.endedFor);
+    if (patch.controlState !== undefined) set('control_state', patch.controlState);
     if (patch.successorId !== undefined) set('successor_id', patch.successorId);
     if (patch.predecessorId !== undefined) set('predecessor_id', patch.predecessorId);
     if (patch.ticketId !== undefined) set('ticket_id', patch.ticketId);

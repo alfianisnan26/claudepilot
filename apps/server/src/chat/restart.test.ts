@@ -253,6 +253,57 @@ test('restart keeps Bypass: relaunched with the flag and switched back through t
   }
 });
 
+test('T-277 review note c: a lower mode read right after the restart\'s Bypass switch is never covered by "Bypass kept": the process is taken out, fail closed', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.controlTimeoutMs = 300;
+    policy(s, true);
+    const id = await inBypass(s);
+    const restarting = s.controller.restart(id);
+    // The new process answers the switch, and a status line saying default follows in the same chunk (read before #keepBypass resumes).
+    const seen = new Set(controlsOf(s).map((c) => c.id));
+    let settled = false;
+    restarting.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    const asked: string[] = [];
+    while (!settled) {
+      for (const c of controlsOf(s)) {
+        if (seen.has(c.id)) continue;
+        seen.add(c.id);
+        const tail = s.ws.tails.at(-1)!;
+        if (c.request.subtype === 'get_settings') tail.push(ok(c.id, APPLIED));
+        else if (c.request.subtype === 'set_permission_mode') {
+          const mode = String(c.request.mode);
+          asked.push(mode);
+          tail.push(ok(c.id, { mode }) + (mode === 'bypassPermissions' ? line({ type: 'system', subtype: 'status', status: null, permissionMode: 'default', session_id: csidOf(s, id) }) : ''));
+        } else tail.push(ok(c.id));
+      }
+      await sleep(5);
+    }
+    const after = await restarting;
+    assert.equal(after.mode, 'default', 'the row never claims Bypass over the lower report');
+    assert.deepEqual(asked.slice(-2), ['bypassPermissions', 'default'], 'the switch, then the process taken out of it');
+    const texts = s.controller.history(id).filter((e) => e.kind === 'system').map((e) => e.text);
+    assert.ok(!texts.includes('Bypass kept after the restart.'));
+    assert.ok(texts.includes('Bypass not kept after the restart: Claude Code reported another mode during the switch.'));
+    assert.deepEqual(
+      s.controller.audit({ kind: 'bypass.left' }).map((a) => a.detail).filter((d) => d.how === 'restart'),
+      [{ why: 'downgrade', how: 'restart' }],
+    );
+    assert.equal(s.controller.audit({ kind: 'bypass.entered' }).length, 1, 'only the first entry, by the person');
+    assert.equal(s.controller.audit({ kind: 'session.restart' })[0]!.detail.bypass, 'dropped');
+    assert.notEqual(s.controller.get(id)!.state, 'ended');
+    // Default is what the portal expects and what the process was told: a report of Bypass now ends the session, as always.
+    s.ws.tails.at(-1)!.push(init(csidOf(s, id), 'bypassPermissions'));
+    await until(() => s.controller.get(id)!.state === 'ended');
+    assert.equal(s.controller.get(id)!.endedReason, 'integrity: the agent reported Bypass permissions, which chat sessions never allow');
+  } finally {
+    await s.done();
+  }
+});
+
 test('T-277: after a portal restart, a process that reports default while the row says Bypass is a downgrade: alive, flagged, and the gated path brings Bypass back', async () => {
   const s = await liveSession();
   try {
