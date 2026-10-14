@@ -267,13 +267,19 @@ const kickoff = (t, again, reason) =>
     ? `You are the continuation of the ${t.title} session, which ended (${reason}). Nobody answers questions: decide, write it down, go on. First read docs/dev-sessions/README.md, docs/dev-sessions/orchestrator.md and your status file docs/dev-sessions/status/${t.key}.md. Sub-agents of the earlier session are gone: look at git worktree list, git status -sb and git log --oneline origin/integration..HEAD in each worktree under ~/work/claudepilot.worktrees/ for what is unmerged, keep what is good, then continue from NEXT. When the whole backlog is done, make TRACK COMPLETE the first line of the status file, commit and push, and end with the final report.`
     : `You are the ${t.title} session: the one autonomous development session of ClaudePilot, working with sub-agents (the Agent tool) in git worktrees. Nobody answers questions: decide, write it down, go on. First read docs/dev-sessions/README.md (the rules that bind you and every sub-agent) and docs/dev-sessions/orchestrator.md (your brief), then start: look at the three prepared worktrees, create your status file docs/dev-sessions/status/${t.key}.md, and dispatch up to three sub-agents in parallel, one per work package. A supervisor watches you: if you go idle it tells you to continue. Do not rename the chat.`;
 
-async function startSession(t, tstate, again, reason) {
+/**
+ * The create request. A start again names the ended session it continues (T-270): the portal links the lineage and moves that chat's tickets
+ * (and its ended predecessors') to the new one in the same step, so nobody has to reassign them by hand.
+ */
+const createBody = (t, claudeId, continuedFrom) => ({ workspaceId: WORKSPACE, title: t.title, claudeId, allowBypass: true, cwd: t.folder ?? MAIN, ...(continuedFrom ? { continuedFrom } : {}) });
+
+async function startSession(t, tstate, again, reason, continuedFrom = null) {
   const pick = await bestClaude(t.claudes);
   if (!pick) throw new Error(`none of ${t.claudes.join(', ')} is a Claude on ${WORKSPACE}`);
   if (DRY) return log(`[dry] ${t.key}: would ${again ? 'start again' : 'start'} on ${pick.name} (${pick.used}% used) (${reason})`);
   const claudeName = pick.name;
   const claudeId = pick.id;
-  const body = { workspaceId: WORKSPACE, title: t.title, claudeId, allowBypass: true, cwd: t.folder ?? MAIN };
+  const body = createBody(t, claudeId, continuedFrom);
   let r = await api('POST', '/api/chat/sessions', body);
   if (r.error?.code === 'FOLDER_UNTRUSTED') {
     // The folder holds the repository's own .claude/settings.json (allow and deny rules only: no hooks, MCP servers, plugins or env).
@@ -303,7 +309,7 @@ async function startSession(t, tstate, again, reason) {
   tstate.sessionId = s.id;
   tstate.cwd = s.cwd;
   (tstate.starts ??= []).push(Date.now());
-  log(`${t.key}: ${again ? 'started again' : 'started'} session ${s.id.slice(0, 8)} on ${claudeName} in ${s.cwd}`);
+  log(`${t.key}: ${again ? 'started again' : 'started'} session ${s.id.slice(0, 8)} on ${claudeName} in ${s.cwd}${continuedFrom ? ` (continues ${continuedFrom.slice(0, 8)}: its tickets moved with it)` : ''}`);
 }
 
 const statusSaysDone = (tstate) => {
@@ -547,7 +553,7 @@ async function watch() {
       if (recent.length && Date.now() - recent[recent.length - 1] < RESTART_GAP_MIN * 60_000) continue;
       if (stagger && !DRY) await sleep(STAGGER_S);
       try {
-        await startSession(t, ts, !!cur, cur?.endedReason ?? 'it was not running');
+        await startSession(t, ts, !!cur, cur?.endedReason ?? 'it was not running', cur?.state === 'ended' ? cur.id : null);
         ts.capLogged = false;
         stagger = true;
       } catch (e) {
