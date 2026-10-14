@@ -2,7 +2,7 @@
 // Negative twins: the budget stop, the stale resume, the double dispatch. No clock is read: every time is built from a fixed `now`.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -149,9 +149,223 @@ test('dry-run CLI: prints the plan, writes nothing, refuses unknown arguments; m
     assert.equal(json.dispatch[0].model, 'opus');
     const bad = spawnSync(process.execPath, [FACTORY, '--tickets', file, '--apply'], { encoding: 'utf8' });
     assert.equal(bad.status, 2);
-    assert.match(bad.stderr, /unknown argument --apply \(this engine is dry only\)/);
+    assert.match(bad.stderr, /--apply needs --portal/);
+    assert.match(spawnSync(process.execPath, [FACTORY, '--tickets', file, '--nope'], { encoding: 'utf8' }).stderr, /unknown argument --nope/);
+    assert.match(spawnSync(process.execPath, [FACTORY, '--tickets', file, '--portal'], { encoding: 'utf8' }).stderr, /name one source/);
     assert.equal(spawnSync(process.execPath, [FACTORY], { encoding: 'utf8' }).status, 2);
+    // --portal without the sign-in code: a usage error that names the variable and prints no value
+    const env = { ...process.env };
+    delete env.PORTAL_SERVER_CODE;
+    const noCode = spawnSync(process.execPath, [FACTORY, '--portal', '--apply'], { encoding: 'utf8', env: { ...env, PORTAL_URL: 'http://127.0.0.1:9' } });
+    assert.equal(noCode.status, 2);
+    assert.match(noCode.stderr, /PORTAL_SERVER_CODE is not set/);
+    assert.equal(noCode.stdout, '');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/* ---------- slice 2: ACTUAL, stale exceptions, the portal client, --apply, resume on CI events ---------- */
+
+type C = { kind: string; at: string; text: string };
+type T = ReturnType<typeof ticket> & { comments: C[]; checks?: unknown[] };
+const say = (min: number, text: string): C => ({ kind: 'comment', at: ago(min), text });
+
+test('an ACTUAL comment ends the dispatch before it (negative twin: without it the dispatch stays open)', () => {
+  const t = ticket({ tags: ['rank-01'] });
+  const d = `FACTORY DISPATCH ${t.id}-F1 role=implementer model=opus size=M budget=60 branch=b`;
+  const open = { ...t, comments: [...t.comments, say(50, d)] };
+  assert.deepEqual(f.intake([open]).dispatch, []);
+  const closed = { ...open, comments: [...open.comments, say(10, 'ACTUAL: 2 h, 3 commits')] };
+  assert.equal(f.dispatchesOf(f.normalizeTicket(closed))[0].ended, 'actual');
+  assert.deepEqual(f.intake([closed]).dispatch.map((x: { dispatchId: string }) => x.dispatchId), [`${t.id}-F2`]);
+  // an ACTUAL from BEFORE the dispatch does not end it
+  const before = { ...t, comments: [...t.comments, say(60, 'ACTUAL: earlier slice'), say(50, d)] };
+  assert.deepEqual(f.intake([before]).dispatch, []);
+});
+
+test('stale dispatch: open past the limit is an EXCEPTION, never re-dispatched (negative twin: a fresh one is only skipped; no clock, no stale)', () => {
+  const t = ticket({ tags: ['rank-01'] });
+  const marker = (min: number) => ({ ...t, comments: [...t.comments, say(min, `FACTORY DISPATCH ${t.id}-F1 role=implementer model=opus size=M budget=60 branch=b`)] });
+  const stale = f.intake([marker(361)], { now: NOW });
+  assert.deepEqual(stale.dispatch, []);
+  assert.deepEqual(stale.exceptions, [{ ticket: t.id, dispatchId: `${t.id}-F1`, reason: `stale dispatch ${t.id}-F1: open 361 min (limit 360), no END and no ACTUAL` }]);
+  assert.match(f.formatPlan(stale), new RegExp(`EXCEPTION ${t.id}: stale dispatch`));
+  assert.equal(f.intake([marker(61)], { now: NOW, staleMin: 60 }).exceptions.length, 1);
+  const fresh = f.intake([marker(30)], { now: NOW });
+  assert.deepEqual(fresh.exceptions, []);
+  assert.deepEqual(fresh.dispatch, []);
+  assert.deepEqual(f.intake([marker(9999)]).exceptions, [], 'without now nothing is stale');
+});
+
+/** An in-memory portal with the client's shape; comments are appended with a time `step` minutes after the last. */
+function fakePortal(tickets: T[]) {
+  const byId = new Map(tickets.map((t) => [t.id, structuredClone(t)]));
+  const writes: Array<[string, string]> = [];
+  return {
+    writes,
+    byId,
+    list: async () => ({ items: [...byId.values()].map(({ comments: _c, ...rest }) => rest) }),
+    get: async (id: string) => structuredClone(byId.get(id)),
+    comment: async (id: string, text: string) => {
+      writes.push([id, text]);
+      byId.get(id)!.comments.push(say(1, text));
+      return { ok: true };
+    },
+  };
+}
+function gitRepo() {
+  const dir = mkdtempSync(join(tmpdir(), 'factory-git-'));
+  const repo = join(dir, 'repo');
+  mkdirSync(repo);
+  const g = (...args: string[]) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  g('init', '-q', '-b', 'main');
+  writeFileSync(join(repo, 'a.txt'), 'a\n');
+  g('add', 'a.txt');
+  g('commit', '-q', '-m', 'init');
+  return { dir, repo, g, worktrees: join(dir, 'wt') };
+}
+
+test('--apply: writes the DISPATCH comment and creates the worktree and branch; a second run and a stale plan write nothing (double dispatch)', async () => {
+  const { dir, repo, g, worktrees } = gitRepo();
+  try {
+    const t = ticket({ tags: ['rank-01'] }) as T;
+    const portal = fakePortal([t]);
+    const plan = f.intake(await f.fetchTickets(portal), { worktrees, models: { implementer: 'opus' } });
+    const out = await f.applyPlan(plan, { portal, git: f.gitOps(repo), base: 'main' });
+    const d = plan.dispatch[0];
+    assert.deepEqual(out.results, [{ ticket: t.id, dispatchId: `${t.id}-F1`, action: 'dispatched', branch: d.branch, worktree: d.worktree }]);
+    assert.deepEqual(portal.writes, [[t.id, f.dispatchMarker(d)]]);
+    assert.ok(existsSync(join(d.worktree, 'a.txt')));
+    assert.equal(g('rev-parse', '--abbrev-ref', 'HEAD').trim(), 'main', 'the main folder stays on its branch');
+    assert.match(g('branch', '--list', d.branch), new RegExp(d.branch));
+    // the next run reads the comment back: nothing to dispatch
+    const again = f.intake(await f.fetchTickets(portal), { worktrees });
+    assert.deepEqual(again.dispatch, []);
+    assert.deepEqual((await f.applyPlan(again, { portal, git: f.gitOps(repo), base: 'main' })).results, []);
+    // the OLD plan applied again (a second engine racing the first): the ticket is read again and skipped
+    const race = await f.applyPlan(plan, { portal, git: f.gitOps(repo), base: 'main' });
+    assert.deepEqual(race.results, [{ ticket: t.id, dispatchId: `${t.id}-F1`, action: 'skipped', reason: `dispatched since the plan (${t.id}-F1)` }]);
+    assert.equal(portal.writes.length, 1, 'one comment in all');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--apply refuses a branch or a folder that exists: no comment, an exception (negative twin of the dispatch above)', async () => {
+  const { dir, repo, g, worktrees } = gitRepo();
+  try {
+    const a = ticket({ tags: ['rank-01'] }) as T;
+    const b = ticket({ tags: ['rank-02'] }) as T;
+    const portal = fakePortal([a, b]);
+    const plan = f.intake(await f.fetchTickets(portal), { worktrees });
+    const [da, db] = plan.dispatch;
+    g('branch', da.branch);
+    mkdirSync(db.worktree, { recursive: true });
+    const out = await f.applyPlan(plan, { portal, git: f.gitOps(repo), base: 'main' });
+    assert.deepEqual(out.results.map((r: { action: string; reason: string }) => [r.action, r.reason]), [['refused', `branch ${da.branch} exists`], ['refused', `folder ${db.worktree} exists`]]);
+    assert.deepEqual(out.exceptions.map((x: { ticket: string }) => x.ticket), [a.id, b.id]);
+    assert.deepEqual(portal.writes, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--apply: a worktree that fails after the comment gets a FACTORY END, so the ticket is free again', async () => {
+  const { dir, repo, worktrees } = gitRepo();
+  try {
+    const t = ticket({ tags: ['rank-01'] }) as T;
+    const portal = fakePortal([t]);
+    const plan = f.intake(await f.fetchTickets(portal), { worktrees });
+    const out = await f.applyPlan(plan, { portal, git: f.gitOps(repo), base: 'no-such-base' });
+    assert.equal(out.results[0].action, 'failed');
+    assert.equal(portal.writes.length, 2);
+    assert.match(portal.writes[1]![1], new RegExp(`^FACTORY END ${t.id}-F1 failed: worktree \\(`));
+    assert.equal(out.exceptions.length, 1);
+    assert.deepEqual(f.intake(await f.fetchTickets(portal), { worktrees }).dispatch.map((x: { dispatchId: string }) => x.dispatchId), [`${t.id}-F2`]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('fetchTickets reads the ranked open tickets whole and counts the in-progress ones from the list', async () => {
+  const ranked = ticket({ tags: ['rank-01'] }) as T;
+  const unranked = ticket({ tags: ['x'] }) as T;
+  const busy = ticket({ status: 'in_progress', tags: ['rank-02'] }) as T;
+  const portal = fakePortal([ranked, unranked, busy]);
+  const got: string[] = [];
+  const spy = { ...portal, get: async (id: string) => { got.push(id); return portal.get(id); } };
+  const list = await f.fetchTickets(spy);
+  assert.deepEqual(got, [ranked.id]);
+  assert.equal(list.length, 3);
+  assert.deepEqual(f.intake(list).inFlight, [busy.id]);
+});
+
+test('portal client: signs in with the code, sends the cookie, signs in again once on a 401; errors carry no code and no cookie', async () => {
+  const code = ['c', 'o', 'd', 'e'].join('') + String(Date.now() % 1000);
+  const cookie = `pilot_session=s${Date.now() % 997}`;
+  const calls: Array<{ url: string; init: { method: string; headers: Record<string, string>; body?: string } }> = [];
+  let expire = true;
+  const resp = (status: number, body: unknown, setCookie: string[] = []) => ({ ok: status < 300, status, text: async () => JSON.stringify(body), headers: { getSetCookie: () => setCookie } });
+  const fetch = async (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => {
+    calls.push({ url, init });
+    if (url.endsWith('/api/login')) return resp(200, { data: { ok: true } }, [`${cookie}; Path=/; HttpOnly`]);
+    if (url.includes('/comments')) { if (expire) { expire = false; return resp(401, { error: { code: 'UNAUTHENTICATED' } }); } return resp(201, { data: { ok: true } }); }
+    if (url.includes('/api/tickets/T-1')) return resp(404, { error: { code: 'NOT_FOUND' } });
+    return resp(200, { data: { items: [] } });
+  };
+  const p = f.portalClient({ url: 'https://portal.example.invalid/', code, fetch });
+  assert.deepEqual(await p.list('status=open'), { items: [] });
+  assert.equal(JSON.parse(calls[0]!.init.body!).code, code);
+  assert.equal(calls[1]!.init.headers.cookie, cookie);
+  assert.equal(calls[1]!.url, 'https://portal.example.invalid/api/tickets?status=open');
+  await p.comment('T-2', 'FACTORY DISPATCH x');
+  assert.deepEqual(calls.slice(2).map((c) => c.url.replace('https://portal.example.invalid', '')), ['/api/tickets/T-2/comments', '/api/login', '/api/tickets/T-2/comments']);
+  const err = await p.get('T-1').catch((e: Error) => e);
+  assert.equal(err.message, 'GET /api/tickets/T-1: NOT_FOUND');
+  assert.ok(!err.message.includes(code) && !err.message.includes(cookie));
+  assert.throws(() => f.portalClient({ code: '' }), /PORTAL_SERVER_CODE is not set/);
+});
+
+test('resume on a CI event: passed -> review, failed -> fix; running, other branch, before the dispatch, handled, ended and closed are ignored; stale and cancelled are exceptions', () => {
+  const base = ticket({ status: 'in_progress' }, []) as T;
+  const id = `${base.id}-F1`;
+  const d = `FACTORY DISPATCH ${id} role=implementer model=opus size=M budget=60 branch=ticket/${base.id}-x`;
+  const t = (...cs: C[]) => ({ ...base, comments: cs });
+  const ev = (over: Record<string, unknown> = {}) => ({ runId: 'r1', state: 'passed', branch: `ticket/${base.id}-x`, at: ago(10), ...over });
+  const o = { now: NOW };
+  const ok = f.resumeDecision(t(say(30, d)), ev(), o);
+  assert.equal(ok.action, 'resume');
+  assert.equal(ok.next, 'review');
+  assert.equal(ok.dispatch.id, id);
+  assert.equal(ok.marker, `FACTORY RESUME ${id} run=r1 state=passed next=review`);
+  assert.equal(f.resumeDecision(t(say(30, d)), ev({ state: 'failed' }), o).next, 'fix');
+  // negative twins
+  assert.match(f.resumeDecision(t(say(30, d)), ev({ state: 'running' }), o).reason, /running: wait/);
+  assert.match(f.resumeDecision(t(say(30, d)), ev({ branch: 'other' }), o).reason, /another branch/);
+  assert.match(f.resumeDecision(t(say(30, d)), ev({ at: ago(40) }), o).reason, /from before/);
+  assert.deepEqual(f.resumeDecision(t(say(30, d), say(5, ok.marker)), ev(), o), { action: 'ignore', reason: `run r1 already handled for ${id}` }, 'the same event twice resumes once');
+  assert.equal(f.resumeDecision(t(say(30, d), say(5, ok.marker)), ev({ runId: 'r2' }), o).action, 'resume', 'a new run after a handled one resumes');
+  assert.equal(f.resumeDecision(t(say(30, d), say(20, `FACTORY END ${id} merged`)), ev(), o).action, 'ignore');
+  assert.equal(f.resumeDecision({ ...t(say(30, d)), status: 'done' }, ev(), o).action, 'ignore');
+  assert.equal(f.resumeDecision(t(), ev(), o).reason, 'no dispatch');
+  assert.deepEqual(f.resumeDecision(t(say(400, d)), ev({ at: ago(10) }), o), { action: 'exception', reason: `stale: dispatch ${id} is 400 min old (limit 360)` });
+  assert.equal(f.resumeDecision(t(say(30, d)), ev({ state: 'cancelled' }), o).action, 'exception');
+  assert.throws(() => f.resumeDecision(t(say(30, d)), ev(), {}), /needs now/);
+});
+
+test('pendingResumes: a restarted engine finds what its CI checks still ask for (negative twin: handled checks are quiet)', () => {
+  const base = ticket({ status: 'in_progress' }, []) as T;
+  const id = `${base.id}-F1`;
+  const d = say(30, `FACTORY DISPATCH ${id} role=implementer model=opus size=M budget=60 branch=b`);
+  const checks = [
+    { name: 'gate', state: 'passed', runId: 'r1', commit: null, link: null, updatedAt: ago(10) },
+    { name: 'lint', state: 'running', runId: 'r2', commit: null, link: null, updatedAt: ago(9) },
+    { name: 'old', state: 'failed', runId: 'r0', commit: null, link: null, updatedAt: ago(50) },
+  ];
+  const detail = { ticket: { ...base, comments: undefined }, events: [d], checks };
+  const pending = f.pendingResumes(detail, { now: NOW });
+  assert.deepEqual(pending.map((p: { check: string; decision: { action: string; next: string } }) => [p.check, p.decision.action, p.decision.next]), [['gate', 'resume', 'review']]);
+  const handled = { ...detail, events: [d, say(5, pending[0].decision.marker)] };
+  assert.deepEqual(f.pendingResumes(handled, { now: NOW }), []);
 });
