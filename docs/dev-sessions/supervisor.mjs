@@ -515,6 +515,12 @@ async function watch() {
       ts.nudges ??= [];
       ts.wakes ??= [];
       if (ts.done) continue;
+      // A paused program (the owner's order, 2026-10-14): `touch ~/.claudepilot/dev-sessions/PAUSE-<track key>` (orchestrator, konfersi, event); nothing is nudged, woken, moved or restarted until the file is removed.
+      if (existsSync(join(STATE_DIR, `PAUSE-${t.key}`))) {
+        if (!ts.pausedLogged) { log(`${t.key}: PAUSED by the owner (file PAUSE-${t.key}): left alone`); ts.pausedLogged = true; }
+        continue;
+      }
+      ts.pausedLogged = false;
       // A track's sessions are found by their worktree folder (a session may rename itself), or by title.
       const mine = sessions.filter((x) => x.id === ts.sessionId || String(x.title ?? '').startsWith(t.title.split(':')[0])).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
       const cur = mine.find((x) => !x.archivedAt) ?? mine[0];
