@@ -1,5 +1,5 @@
 // Auto move: the words and numbers the page shows, as pure functions (tested under Node).
-import { AUTO_BOUNDS, modelDisplayName, type AutoMode, type AutoRefusal, type AutoSessionState, type AutoSuggestion, type AutoTransferEvent, type ChatSwitchOption, type Figure } from '@portal/contracts';
+import { AUTO_BOUNDS, modelDisplayName, reasonText as usageReasonText, type AutoMode, type AutoRefusal, type AutoSessionState, type AutoSuggestion, type AutoTransferEvent, type ChatSwitchOption, type Figure } from '@portal/contracts';
 
 export const MODE_LABEL: Record<AutoMode, string> = { off: 'Off', ask: 'Ask', auto: 'Automatic' };
 
@@ -27,7 +27,8 @@ export function headline(s: Pick<AutoSuggestion, 'from' | 'reason' | 'facts'>): 
 /** The card's second line: "Move to Home (40 % left)", "Use Sonnet here (55 % left)", "Move to Home on Sonnet (40 % left)", or for a
  * Claude without plan limits "Move to Console". */
 export function offer(s: Pick<AutoSuggestion, 'from' | 'to' | 'facts'>): string {
-  const left = s.facts.destLeftPct && s.facts.destLeftPct.value !== null ? ` (${pctText(s.facts.destLeftPct)} left)` : '';
+  // T-255: a destination whose usage is unknown says so (it is only ever the last resort).
+  const left = s.facts.destLeftPct && s.facts.destLeftPct.value !== null ? ` (${pctText(s.facts.destLeftPct)} left)` : s.facts.destLeftPct?.basis === 'unavailable' ? ' (unknown usage)' : '';
   if (inPlace(s)) return `Use ${modelName(s.to.model!)} here${left}`;
   // A move that changes the model says it before it happens (T-109): "Move to Sekar on Opus, was Fable".
   const was = s.from.model && s.from.model !== s.to.model ? `, was ${modelName(s.from.model)}` : '';
@@ -66,7 +67,12 @@ export function reasonText(s: Pick<AutoSuggestion, 'reason' | 'facts' | 'handoff
       : ' It writes a handoff first.';
   const d = f.destLeftPct;
   const where = here ? `${modelName(s.to!.model!)} here` : s.to?.model ? `${s.to.name} on ${modelName(s.to.model)}` : s.to?.name;
-  const dest = s.to && d && d.value !== null ? ` ${where} has ${pctText(d)} left (${d.basis === 'estimate' ? 'an estimate' : 'measured'}).` : '';
+  const dest =
+    s.to && d && d.value !== null
+      ? ` ${where} has ${pctText(d)} left (${d.basis === 'estimate' ? 'an estimate' : 'measured'}).`
+      : s.to && d?.basis === 'unavailable'
+        ? ` ${where} has unknown usage (${usageReasonText(d.reason).replace(/\.$/, '').toLowerCase()}): no Claude with a measured reading could take the chat. If it answers with its limit message, the chat moves on at once.`
+        : '';
   // A move keeps Bypass while the policy allows it (chat-sessions §21, FR20a).
   return base + dest + handoff + (bypass && !here ? ' Bypass stays on after the move while the policy allows it.' : '');
 }

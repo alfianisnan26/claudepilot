@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { fullest, leftText, localTime, pctText, STATE_WORDS, stateTone, TONE_TEXT, toneOf, type Tone } from './format';
 import { projectionSpan } from './pace';
+import { blindWindow } from './unknownWords';
 import { useClaudeRow, useNow, windowAt } from './useClaudeUsage';
 
 /** What the bar adds when a window has a pace (docs/prd/claude-usage.md §20.2): where it is estimated to reach by the reset, and where an even spend would be. */
@@ -51,14 +52,16 @@ function Reset({ w, nowMs }: { w: ClaudeUsageWindow; nowMs: number }) {
 /** One window of a plan: label, bar, percent, reset. */
 export function WindowLine({ w, nowMs }: { w: ClaudeUsageWindow; nowMs: number }) {
   const v = windowAt(w, nowMs);
-  const tone = toneOf(v.level);
+  // T-255: 0 % with no reset time is no reading: shown as a dash, never 0 %.
+  const blind = blindWindow(v);
+  const tone = blind ? 'quiet' : toneOf(v.level);
   return (
     <li className="grid grid-cols-[3.75rem_minmax(0,1fr)_2.75rem_4.25rem] items-center gap-2 text-[13px]">
       <span className="truncate text-ink-soft" title={v.label}>
         {v.label}
       </span>
-      <Bar pct={v.level === 'reset' ? 0 : v.usedPct} tone={tone} mark={projectionSpan(v)} />
-      <span className={cn('text-right font-semibold tabular-nums', v.level === 'reset' || v.level === 'unknown' ? 'text-muted' : TONE_TEXT[tone])}>{v.level === 'reset' ? '—' : pctText(v.usedPct)}</span>
+      <Bar pct={v.level === 'reset' || blind ? 0 : v.usedPct} tone={tone} mark={blind ? null : projectionSpan(v)} />
+      <span className={cn('text-right font-semibold tabular-nums', v.level === 'reset' || v.level === 'unknown' || blind ? 'text-muted' : TONE_TEXT[tone])}>{v.level === 'reset' || blind ? '—' : pctText(v.usedPct)}</span>
       <Reset w={v} nowMs={nowMs} />
     </li>
   );

@@ -10,6 +10,7 @@ import { agoText, localTime, pctText, planText, PROBLEM_WORDS, STATE_WORDS, stat
 import { aheadText, paceRows, projectionRisk, riskWords } from './pace';
 import { WindowLine } from './Meter';
 import { Spark } from './Spark';
+import { limitReportWords, unavailableWords } from './unknownWords';
 import { headroomOfClaude, replaceClaude, windowAt } from './useClaudeUsage';
 
 const ICON: Record<ClaudeUsage['state'], LucideIcon> = {
@@ -64,12 +65,42 @@ function CheckButton({ c }: { c: ClaudeUsage }) {
 
 /** One line for a Claude without plan windows. */
 function Plain({ c }: { c: ClaudeUsage }) {
-  const text = c.state === 'no_limits' ? 'No plan limits' : c.state === 'signed_out' ? 'Not signed in' : c.problem ? 'Couldn’t read usage' : 'Not read yet';
+  // T-255: an unknown plan reading says why (no usage endpoint, not read yet), with the probe's own problem in the ⓘ.
+  const why = c.state === 'unknown' ? unavailableWords(c) : null;
+  const text = c.state === 'no_limits' ? 'No plan limits' : c.state === 'signed_out' ? 'Not signed in' : why ? why.line : c.problem ? 'Couldn’t read usage' : 'Not read yet';
   return (
     <p className="flex items-center gap-1 text-[13px] text-muted">
       {text}
-      {c.state === 'unknown' && c.problem && <InfoTip label="Why">{PROBLEM_WORDS[c.problem]}.</InfoTip>}
+      {c.state === 'unknown' && (c.problem || why) && (
+        <InfoTip label="Why">
+          {c.problem ? `${PROBLEM_WORDS[c.problem]}. ` : ''}
+          {why?.tip ?? ''}
+        </InfoTip>
+      )}
     </p>
+  );
+}
+
+/** T-255: why its usage is unknown (never 0 %), and a limit a chat reported, each a short line with its detail in the ⓘ. */
+function UnknownLines({ c, nowMs }: { c: ClaudeUsage; nowMs: number }) {
+  const why = c.state === 'signed_out' || c.state === 'no_limits' ? null : unavailableWords(c);
+  const report = limitReportWords(c, nowMs);
+  if (!why && !report) return null;
+  return (
+    <>
+      {report && (
+        <p className="mt-1.5 flex items-center gap-1 text-[13px] text-danger [overflow-wrap:anywhere]">
+          {report.line}
+          <InfoTip label="Where this comes from">{report.tip}</InfoTip>
+        </p>
+      )}
+      {why && (
+        <p className="mt-1.5 flex items-center gap-1 text-[13px] text-muted [overflow-wrap:anywhere]">
+          {why.line}
+          <InfoTip label="Why">{why.tip}</InfoTip>
+        </p>
+      )}
+    </>
   );
 }
 
@@ -295,6 +326,7 @@ export function ClaudeRow({ c, peers, nowMs, open, onToggle }: { c: ClaudeUsage;
         ) : (
           <Plain c={c} />
         )}
+        {windows.length > 0 && <UnknownLines c={c} nowMs={nowMs} />}
         <RiskLine c={c} />
         <Extra c={c} />
         {room && <p className="mt-1.5 text-[13px] text-ink-soft [overflow-wrap:anywhere]">{room}</p>}
