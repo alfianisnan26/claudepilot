@@ -38,7 +38,7 @@ const now = Date.now();
 const iso = (ms) => new Date(ms).toISOString();
 db.prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES ('qacrew-work', ?, 'Work', '', ?)`).run(WS, iso(now));
 const ins = db.prepare(`INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, process, model, mode, cost_est_usd, launch, created_at,
-  last_activity_at, ended_reason, parent_id, claude_id, archived_at, started_by) VALUES (?, ?, '/home/node', ?, 'ui', ?, ?, 'gone', 'claude-opus-5-5', 'default', 0, '{}', ?, ?, ?, ?, ?, ?, ?)`);
+  last_activity_at, ended_reason, parent_id, claude_id, archived_at, started_by) VALUES (?, ?, '/home/node', ?, 'ui', ?, ?, ?, 'claude-opus-5-5', 'default', 0, '{}', ?, ?, ?, ?, ?, ?, ?)`);
 const LONG = 'QA crew worker with a very long title that has to truncate on a narrow phone screen without pushing anything sideways at all';
 // [id, title, state, parent, claude, born (min ago), archived]
 const rows = [
@@ -52,9 +52,12 @@ const rows = [
   ['qacrew-old', 'QA crew old lead', 'ended', null, '', 120, true],
   ['qacrew-f', 'QA crew worker F', 'idle', 'qacrew-old', '', 110, false],
 ];
+// T-321: the waiting worker's process is 'live'. A request with no live process behind it is one nobody can answer: the portal's liveness
+// tick (every 60 s) resolves it `stale` and the session reads Interrupted (T-284), so with 'gone' the check failed whenever a tick fell
+// inside the run. The scratch portal cannot reach docker/qa-crew, so its status check answers "unknown" and leaves the live row alone.
 for (const [id, title, state, parent, claude, born, archived] of rows) {
   const at = iso(now - born * 60_000);
-  ins.run(id, WS, title, state, at, at, at, state === 'ended' ? 'ended by you' : null, parent, claude, archived ? at : null, parent ? `session:${parent}` : 'ui');
+  ins.run(id, WS, title, state, at, state === 'waiting' ? 'live' : 'gone', at, at, state === 'ended' ? 'ended by you' : null, parent, claude, archived ? at : null, parent ? `session:${parent}` : 'ui');
 }
 db.prepare(`INSERT INTO chat_requests (session_id, request_id, kind, tool_name, title, detail, created_at) VALUES ('qacrew-e', 'r1', 'tool', 'Bash', 'Run a command', 'npm test', ?)`).run(iso(now));
 
@@ -174,7 +177,7 @@ for (const size of SIZES) {
     await b.waitFor(`!!document.querySelector('[data-crew-list]')`, 4000, 'workers list').catch(() => {});
     await sleep(400);
     const listed = await b.eval(`(() => { const ul = document.querySelector('[data-crew-list]'); if (!ul) return null; return [...ul.querySelectorAll(':scope > li')].map((li) => li.textContent.trim()); })()`);
-    check(`${tag} lead page: the list (live in spawn order, then "2 done")`, Array.isArray(listed) && listed.length === 5 && /^QA crew worker A/.test(listed[0]) && /Work/.test(listed[1]) && /Needs you|Interrupted/.test(listed[3]) && listed[4] === '2 done', JSON.stringify(listed));
+    check(`${tag} lead page: the list (live in spawn order, then "2 done")`, Array.isArray(listed) && listed.length === 5 && /^QA crew worker A/.test(listed[0]) && /Work/.test(listed[1]) && /Needs you/.test(listed[3]) && listed[4] === '2 done', JSON.stringify(listed));
     check(`${tag} lead page: no sideways scroll with the list open`, (await sideways()) === true);
     await shot(`lead-page-${tag}`);
     await b.key('Escape');
