@@ -41,15 +41,50 @@ test('a request records the process that raised it; the liveness round resolves 
     oldRequest(s, 'R-other'); // another process's
     oldRequest(s, 'R-legacy', { proc: null, at: '2026-10-10T11:59:00.000Z' }); // before migration 830, read before this process started (the fake host's start)
     oldRequest(s, 'R-legacy-live', { proc: null, at: '2026-10-10T12:00:00.500Z' }); // the same second as the start: never judged stale by the rounding
+    // T-284 note D: 30 s before the host's start is within the clock-skew margin (a host clock ahead of the portal's): not stale.
+    oldRequest(s, 'R-legacy-skew', { proc: null, at: '2026-10-10T11:59:30.000Z' });
     await until(() => outcome(s, 'R-other') === 'stale' && outcome(s, 'R-legacy') === 'stale');
     assert.equal(outcome(s, 'R-live'), null, 'the live process’s request stays open');
     assert.equal(outcome(s, 'R-legacy-live'), null);
+    assert.equal(outcome(s, 'R-legacy-skew'), null, 'less than 60 s older than the start: kept');
     assert.equal(s.state(), 'waiting', 'it still waits on its own request');
     assert.ok(s.controller.history(s.id).some((e) => e.kind === 'resolved' && e.requestId === 'R-other' && e.outcome === 'stale'), 'the transcript shows it resolved');
     const audit = staleAudits(s);
     assert.equal(audit.length, 1);
     assert.deepEqual([audit[0]!.why, [...audit[0]!.requestIds].sort()], ['sweep', ['R-legacy', 'R-other']]);
     assert.doesNotMatch(JSON.stringify(s.controller.audit({ kind: 'session.request_stale' })), /Run a command|"ls"/, 'never the request’s text');
+  } finally {
+    await s.done();
+  }
+});
+
+test('Restart with the host unreachable (T-284 note B): the live process’s request is kept and the restart refused (fail closed)', async () => {
+  const s = await liveSession();
+  try {
+    await firstTurn(s);
+    s.tail.push(ask('R-live'));
+    await until(() => s.controller.get(s.id)!.waiting === 1);
+    s.ws.statusUnreachable = true;
+    const starts = s.ws.starts;
+    assert.equal(await code(s.controller.restart(s.id)), 'CONFLICT');
+    s.ws.statusUnreachable = false;
+    assert.equal(s.ws.starts, starts, 'not restarted');
+    assert.equal(outcome(s, 'R-live'), null, 'the request stays open');
+    assert.equal(s.controller.get(s.id)!.process, 'live', 'never marked gone on an unknown');
+    assert.deepEqual(staleAudits(s), []);
+  } finally {
+    await s.done();
+  }
+});
+
+test('the audit row clips a request id to 80 characters (T-284)', async () => {
+  const s = await liveSession({ livenessMs: 40 }, true);
+  try {
+    await firstTurn(s);
+    const long = `R-${'x'.repeat(150)}`;
+    oldRequest(s, long);
+    await until(() => outcome(s, long) === 'stale');
+    assert.deepEqual(staleAudits(s).map((a) => a.requestIds), [[long.slice(0, 80)]]);
   } finally {
     await s.done();
   }
