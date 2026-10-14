@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { isAppError } from '@isnanme/core';
-import { SETTING_KEYS, type AgentEnvStatus, type SettingsView } from '@portal/contracts';
+import { SETTING_KEYS, workspaceRef, type Actor, type AgentEnvStatus, type SettingsView, type UserId } from '@portal/contracts';
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { clearResolvers, registerResolver } from '../authz/seam.js';
 import { compile } from '../delivery/compile.js';
 import { mayUseEnv } from '../delivery/ownership.js';
 import { FOUNDATION, Reconciler, type FragmentProvider } from '../delivery/reconciler.js';
@@ -176,12 +177,23 @@ test('status per workspace: unavailable until the drop-in lands, applied after, 
   }
 });
 
+/** The settings routes behind a stand-in for the sign-in guard: the owner (a session token) by default, `actor` when given, nobody for null. */
+function routes(h: Awaited<ReturnType<typeof setup>>, actor?: Actor | null) {
+  const app = new Hono<{ Variables: { token: string; actor: Actor } }>();
+  app.use(async (c, next) => {
+    if (actor) c.set('actor', actor);
+    else if (actor === undefined) c.set('token', 'signed-in');
+    await next();
+  });
+  app.onError((err, c) => (isAppError(err) ? c.json({ success: false, error: { code: err.code } }, err.status as ContentfulStatusCode) : c.json({}, 500)));
+  app.route('/api/settings', createSettingsRoutes(h.mod));
+  return app;
+}
+
 test('routes: the Agents settings are listed, and a workspace’s agent policy has its own route', async () => {
   const h = await setup();
   try {
-    const app = new Hono();
-    app.onError((err, c) => (isAppError(err) ? c.json({ success: false, error: { code: err.code } }, err.status as ContentfulStatusCode) : c.json({}, 500)));
-    app.route('/api/settings', createSettingsRoutes(h.mod));
+    const app = routes(h);
     const get = async <T>(path: string) => ((await (await app.request(path)).json()) as { data: T }).data;
     const list = await get<SettingsView>('/api/settings');
     const agents = list.settings.filter((s) => s.group === 'agents').map((s) => s.key);
@@ -191,6 +203,32 @@ test('routes: the Agents settings are listed, and a workspace’s agent policy h
     const bad = await app.request(`/api/settings/${SETTING_KEYS.agentsSubagentCacheTtl}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: '10m' }) });
     assert.equal(bad.status, 422);
   } finally {
+    h.done();
+  }
+});
+
+test('routes: a workspace’s agent policy asks the seam; one that is not yours answers as one that does not exist (T-309)', async () => {
+  const h = await setup();
+  // Two fake users: docker/ws1 is u_b's, docker/theirs is u_a's, anything else does not exist.
+  const owners: Record<string, string> = { [WS]: 'u_b', 'docker/theirs': 'u_a' };
+  registerResolver({ type: 'workspace', resolve: (id) => (owners[id] ? { ref: workspaceRef(id), owner: { kind: 'user', id: owners[id] as UserId } } : null) });
+  try {
+    const bob = routes(h, { kind: 'user', userId: 'u_b', loginSessionId: 'x', via: 'ui' } as Actor);
+    // Allowed: the answer is the status, unchanged.
+    const mine = await bob.request('/api/settings/agent-env/docker/ws1');
+    assert.equal(mine.status, 200);
+    assert.deepEqual(((await mine.json()) as { data: AgentEnvStatus }).data, JSON.parse(JSON.stringify(h.agentEnv.status(WS))));
+    // Denied: the same 404, byte for byte, as a workspace that does not exist.
+    const theirs = await bob.request('/api/settings/agent-env/docker/theirs');
+    const missing = await bob.request('/api/settings/agent-env/docker/nope');
+    assert.deepEqual([theirs.status, missing.status], [404, 404]);
+    const [a, b] = [await theirs.text(), await missing.text()];
+    assert.equal(a, b);
+    assert.equal((JSON.parse(a) as { error: { code: string } }).error.code, 'NOT_FOUND');
+    // Not signed in at all: nothing.
+    assert.equal((await routes(h, null).request('/api/settings/agent-env/docker/ws1')).status, 401);
+  } finally {
+    clearResolvers();
     h.done();
   }
 });
