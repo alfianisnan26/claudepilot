@@ -3,7 +3,7 @@
 // own checks. Only REQUIRED items appear (D-10, D-34): an optional check never does.
 
 /** What waits. One per source. */
-export const ATTENTION_KINDS = ['mcp_version', 'skill_version', 'ci_deploy', 'ticket_approval', 'tool_approval'] as const;
+export const ATTENTION_KINDS = ['mcp_version', 'skill_version', 'ci_deploy', 'ticket_approval', 'tool_approval', 'keepgoing_down'] as const;
 export type AttentionKind = (typeof ATTENTION_KINDS)[number];
 
 /** Why a person is required (D-10's classes). The order is the page's group order. */
@@ -25,6 +25,7 @@ export const ATTENTION_KIND_LABEL: Record<AttentionKind, string> = {
   ci_deploy: 'Deploys',
   ticket_approval: 'Tickets',
   tool_approval: 'Sessions',
+  keepgoing_down: 'Down',
 };
 
 /** A session's tool approval is listed once it has waited this long (T-256 item 4); a fresh one is the session's own card. */

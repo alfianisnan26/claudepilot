@@ -40,7 +40,7 @@ import type { ClockPort, OwnerPort } from '../autotransfer/ports.js';
 import { cleanDetail, type NotifyBus } from '../notify/bus.js';
 import type { AuditInput } from '../platform/audit.js';
 import { closedByPerson, decide, restartClass, type Decision } from './decide.js';
-import { keepGoingOn, type KeepGoingSettingsReader } from './settings.js';
+import { keepGoingCoordinator, keepGoingOn, type KeepGoingSettingsReader } from './settings.js';
 import type { KeepGoingStore, PolicyRow } from './store.js';
 
 const MIN = 60_000;
@@ -447,7 +447,31 @@ export class KeepGoingEngine {
       detail: cleanDetail(s.title || 'Untitled chat', 120),
       audience: [ownerId],
     });
+    if (cause === 'down') await this.#escalate(s, ownerId, ticketId);
     this.#changed(s.id);
+  }
+
+  /**
+   * T-257 item 4: a chat left down is told to the coordinator's chat too (the setting `keepgoing.coordinator`, else the chat's parent), as a
+   * message at priority later, as the portal. Fixed words and ids only (the chat's title is agent text). Only a coordinator chat that runs and
+   * that the owner may operate; never the chat itself. One `escalated` trail row; never throws.
+   */
+  async #escalate(s: ChatSession, ownerId: string, ticketId: string | null): Promise<void> {
+    const id = keepGoingCoordinator(this.#d.settings) ?? s.parentId ?? null;
+    if (!id || id === s.id) return;
+    const c = this.#d.chat.get(id);
+    if (!c || c.state === 'ended' || !this.#d.owner.can(ownerId, 'operate', { type: 'session', id: c.id, workspaceId: c.workspaceId })) return;
+    const text = [
+      `Keep going: the chat ${s.id} in ${s.workspaceId} is left down (${KEEPGOING_CAUSE_TEXT.down}) and needs a person or its coordinator${ticketId ? `; the ticket is ${ticketId}` : ''}.`,
+      `Open it: ${notifyPath.session(s.id)}. Recover it or continue it, or say on the ticket why it stays down.`,
+    ].join('\n');
+    try {
+      await this.#d.chat.send(c.id, randomUUID(), text, { priority: 'later', actor: KEEPGOING_ACTOR, actorLabel: 'Keep going' });
+      this.#trail(s.id, ownerId, 'escalated', 'down', `Told the coordinator's chat ${short(c.id)}.`, { coordinator: c.id });
+    } catch (e) {
+      const code = (e as { code?: unknown })?.code;
+      this.#trail(s.id, ownerId, 'failed', 'down', `The coordinator's chat ${short(c.id)} could not be told (${typeof code === 'string' ? code : 'error'}).`);
+    }
   }
 
   /** What a ticket says: the state, the mode, what waits and since when, the last trail entry. Never transcript text, never a secret. */

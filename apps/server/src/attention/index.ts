@@ -4,6 +4,7 @@
 import type { Store } from '../store/store.js';
 import { toolApprovalAttentionSource } from '../chat/attention.js';
 import { ciAttentionSource } from '../ci/attention.js';
+import { keepGoingAttentionSource } from '../keepgoing/attention.js';
 import { mcpAttentionSource } from '../mcp/attention.js';
 import { skillAttentionSource } from '../skills/attention.js';
 import { ticketAttentionSource } from '../tickets/attention.js';
@@ -25,5 +26,6 @@ export function createAttention(store: Pick<Store, 'db'>, opts: AttentionOptions
   registry.register(ciAttentionSource(db));
   registry.register(ticketAttentionSource(db));
   registry.register(toolApprovalAttentionSource(db));
+  registry.register(keepGoingAttentionSource(db));
   return registry;
 }
