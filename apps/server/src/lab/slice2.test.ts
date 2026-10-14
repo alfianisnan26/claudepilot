@@ -215,8 +215,8 @@ test('routes: declared with the seam; the owner reads; another user and an agent
     assert.deepEqual([sl.data.total, sl.data.slices[0]!.ticket], [1, 'T-287']);
     assert.equal((await owner.request('/api/lab/summary?period=week')).status, 200);
     assert.equal((await owner.request('/api/lab/experiments')).status, 200);
-    assert.equal((await owner.request('/api/lab/summary?period=year')).status, 400);
-    assert.equal((await owner.request('/api/lab/slices?since=yesterday')).status, 400);
+    assert.equal((await owner.request("/api/lab/summary?period=year")).status, 422);
+    assert.equal((await owner.request("/api/lab/slices?since=yesterday")).status, 422);
 
     const bob = app(h.lab, { kind: 'user', userId: 'u_bob', loginSessionId: 'x', via: 'ui' } as Actor);
     for (const p of ['/api/lab/slices', '/api/lab/summary', '/api/lab/experiments']) {
