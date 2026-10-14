@@ -447,8 +447,10 @@ test('service, mode on: protection or the mode switched off while the rule read 
     h.svc.setAutoApprove(repo.id, 'production', { mode: 'on' }, OWNER);
 
     // A person approves while the rule reads: the person's approval stands, the rule's does not go through, and the line says so.
+    // (The job waits only for a moment here, so the test waits for the rule's line, not for the wait.)
     meanwhile = (runId) => h.svc.decide(runId, 'release', 'approve', OWNER);
-    const c = await deploy(h, repo.id);
+    const c = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'main' });
+    await h.until('the rule’s line', () => !!h.svc.get(c.id).deployments[0]!.autoApprove);
     await h.svc.settled();
     const dc = h.svc.get(c.id).deployments[0]!;
     assert.deepEqual([dc.approval, dc.decidedBy, dc.autoApprove?.mode, dc.autoApprove?.verdict], ['approved', 'user:u_owner', 'on', 'would_not']);
