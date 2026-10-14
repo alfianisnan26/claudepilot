@@ -1487,7 +1487,7 @@ test('integrity: an echoed control response the portal never gave ends the sessi
     twice.tail.push(allowResponse('R-y')); // the same line read again: ignored (T-136)
     await sleep(20);
     assert.equal(twice.state(), 'working');
-    await expectIntegrityEnd(twice, denyResponse('R-y', 'changed'), /a second control response for request R-y/);
+    await expectIntegrityEnd(twice, denyResponse('R-y', 'changed'), /a second, different control response for request R-y/);
   } finally {
     await twice.done();
   }

@@ -35,6 +35,7 @@ import {
   CHAT_ACTOR_UI,
   CHAT_ENDED_CREDENTIAL,
   CHAT_ENDED_INTEGRITY,
+  CHAT_RECOVER_CAPPED,
   CHAT_SESSION_TITLE_MAX,
   isChatActor,
   isPortalActor,
@@ -111,7 +112,8 @@ import { BtwStore } from './btwStore.js';
 import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
 import { autoTrustable, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError } from './trust.js';
 import { usageReport } from './usage.js';
-import { controlDigest, lessPermissive, PEER_CAUSE_MS, sameAnswer, type ControlExpectation, type PeerCause } from './integrity.js';
+import { controlDigest, endingRecord, lessPermissive, PEER_CAUSE_MS, readEnding, sameAnswer, type ControlExpectation, type EndingCase, type PeerCause } from './integrity.js';
+import { DAY_MS, readRecoverConfig, recoverContinuation, recoverRefusal, type RecoverBy } from './recover.js';
 
 /** T-102: the areas a hint may name (anything else a reader returns is left out). */
 const CONFIG_CHANGES: ReadonlySet<string> = new Set<ChatConfigChange>(['mcpset', 'settings', 'policy', 'secrets', 'account', 'persona', 'context', 'skillset', 'browser', 'foundation', 'portal_tools', 'other']);
@@ -422,6 +424,8 @@ export class ChatController {
   readonly #tasksRunning = new Map<string, number>();
   /** Chats whose process a Restart is replacing (`restart`): a move or a second restart is refused meanwhile; messages wait for the new process. */
   readonly #restarting = new Map<string, Promise<void>>();
+  /** Sessions a recover in place (T-136) is bringing back: a second recover is refused meanwhile. */
+  readonly #recovering = new Set<string>();
   /** Per session: messages a caller handed to `send` that haven't been written yet (a Restart waits for none to be on its way). */
   readonly #sending = new Map<string, number>();
   /** When the portal saw each session's current process start (its own clock), for the "delivered since" hint; the stored start time after a portal restart. */
@@ -582,6 +586,13 @@ export class ChatController {
   continueTickets?: (to: string, from: readonly string[]) => string[];
   /** Installed by the Keep going module (T-259): the chat's policy, today's counts and its last action, for the session payload. */
   keepGoingOf?: (sessionId: string) => ChatKeepGoing | null;
+  /** Installed at start-up (T-136): reads a setting (the recover cap and pause, `recover.ts`); unset, the defaults. */
+  recoverSettings?: (key: string) => unknown;
+  /**
+   * Installed by the tickets module (T-136): a session reached its recover cap for the day and stays ended; open ONE ticket (tag watchdog)
+   * for it. Called at most once per session per 24 hours. Facts only: the id, the workspace, the reason (fixed text), the counts.
+   */
+  onRecoverCapped?: (info: { sessionId: string; workspaceId: string; reason: string; count: number; max: number; case: string; classified: string }) => void;
   /** How long the handoff may take (Workspace Claudes Q3), how long the new Claude gets to acknowledge, and how long a running turn gets to finish before a move. */
   noteWaitMs = NOTE_WAIT_MS;
   ackWaitMs = ACK_WAIT_MS;
@@ -2410,6 +2421,96 @@ export class ChatController {
     return this.#chat.get(sessionId)!;
   }
 
+  /* ---------- Recover in place (T-136 slice 2, D-30) ---------- */
+
+  /**
+   * Brings a session ended for integrity back IN PLACE (chat-sessions PRD §10.4): the same row (id, title, pin, tags, tickets, parent and
+   * children, cost series), its conversation resumed with `--resume` on a fresh log segment, the path a wake and a Restart use, on the
+   * Claude it ran on (when that one is out of quota, the auto move takes it on from there, as for any live chat). The line that ended it
+   * is never read again (the old segment is not followed) and the transcript says so. Bypass comes back only through `#keepBypass`
+   * (`recover`): the policy and the session's capability, as a Restart; otherwise the start mode, and the transcript says why. One trail
+   * entry, then the short continuation message. Refused (`recover.ts`): a session a person closed, any other ending, a suspicious cause
+   * for an agent (403) or for a person who did not confirm (409), the day's cap (one watchdog ticket) and the pause. Audited.
+   */
+  async recover(rawId: string, opts: { by?: RecoverBy; confirm?: boolean; actor?: string } = {}): Promise<ChatSession> {
+    const sessionId = this.#chat.resolveId(rawId);
+    this.#require(sessionId);
+    const row = this.#chat.row(sessionId)!;
+    const by: RecoverBy = opts.by === 'agent' ? 'agent' : 'person';
+    const actor = opts.actor ?? (by === 'agent' ? 'agent' : CHAT_ACTOR_UI);
+    if (this.#recovering.has(sessionId)) throw new AppError('CONFLICT', 'This session is already being recovered.');
+    const ending = readEnding(row.ended_reason, row.ended_for);
+    const now = this.#clock();
+    const trail = this.#chat.audit({ kind: 'session.recover', sessionId, limit: 100 });
+    const recent = trail
+      .filter((a) => a.kind === 'session.recover.done' || a.kind === 'session.recover.failed')
+      .map((a) => Date.parse(a.at))
+      .filter((t) => Number.isFinite(t) && now - t < DAY_MS)
+      .sort((a, b) => a - b);
+    const config = readRecoverConfig(this.recoverSettings);
+    try {
+      recoverRefusal(row, ending, { by, confirm: opts.confirm === true, recent, now, config });
+    } catch (e) {
+      const code = isAppError(e) ? e.code : 'ERROR';
+      this.#chat.addAudit({ severity: 'medium', kind: 'session.recover.refused', sessionId, workspaceId: row.workspace_id, actor, detail: { by, code, case: ending?.case ?? null, classified: ending?.classified ?? null } });
+      if (code === CHAT_RECOVER_CAPPED && ending) {
+        const told = trail.some((a) => a.kind === 'session.recover.capped' && now - Date.parse(a.at) < DAY_MS);
+        if (!told) {
+          this.#chat.addAudit({ severity: 'high', kind: 'session.recover.capped', sessionId, workspaceId: row.workspace_id, actor: 'portal', detail: { count: recent.length, max: config.maxPerDay } });
+          try {
+            this.onRecoverCapped?.({ sessionId, workspaceId: row.workspace_id, reason: (row.ended_reason ?? '').slice(CHAT_ENDED_INTEGRITY.length), count: recent.length, max: config.maxPerDay, case: ending.case, classified: ending.classified });
+          } catch (err) {
+            console.warn(`[chat] ${shortId(sessionId)}: the recover cap's ticket could not be opened: ${this.#message(err)}`);
+          }
+        }
+      }
+      throw e;
+    }
+    const why = (row.ended_reason ?? '').slice(CHAT_ENDED_INTEGRITY.length);
+    // Was it in Bypass when it ended? Stored with the ending since T-136; an older row: its last Bypass record is "left, ended".
+    const wasBypass = ending!.bypass || (row.ended_for == null && this.#chat.audit({ kind: 'bypass', sessionId, limit: 1 }).some((a) => a.kind === 'bypass.left' && a.detail.why === 'ended'));
+    this.#recovering.add(sessionId);
+    this.#emitSession(sessionId);
+    try {
+      // No process, not ended: the next launch resumes the conversation (`--resume`) on a NEW segment, so the old log (and the line that
+      // ended it) is never followed again.
+      this.#chat.patchSession(sessionId, { state: 'interrupted', process: 'gone', endedFor: null });
+      this.#append(sessionId, { kind: 'system', text: `Recovered in place after an integrity ending: ${why}`, recovered: true });
+      this.#note(sessionId, `The line that ended it was dropped: it isn’t read again (${ending!.classified}, ${ending!.origin}).`);
+      try {
+        await this.#live(sessionId);
+      } catch (e) {
+        // It stays ended, as it was, with its reason and its classification: a later recover (or a new session) is still possible.
+        this.#stopReader(sessionId);
+        const now2 = this.#chat.row(sessionId);
+        if (now2?.process === 'live') await this.#runOnce(row.workspace_id, ['stop', claudeSessionOf(now2)]).catch(() => undefined);
+        this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason: row.ended_reason, endedFor: row.ended_for ?? null });
+        this.#note(sessionId, `Couldn’t recover it: ${isAppError(e) ? e.message : this.#message(e)}`);
+        this.#chat.addAudit({ severity: 'medium', kind: 'session.recover.failed', sessionId, workspaceId: row.workspace_id, actor, detail: { by, case: ending!.case } });
+        throw e;
+      }
+      if (wasBypass) await this.#keepBypass(sessionId, 'recover');
+      const after = this.#chat.row(sessionId);
+      this.#chat.addAudit({
+        severity: 'info',
+        kind: 'session.recover.done',
+        sessionId,
+        workspaceId: row.workspace_id,
+        actor,
+        detail: { by, case: ending!.case, classified: ending!.classified, confirmed: opts.confirm === true, bypass: wasBypass ? (after?.mode === 'bypassPermissions' ? 'kept' : 'dropped') : 'none', claude: this.#chat.get(sessionId)?.claudeName ?? null },
+      });
+      try {
+        await this.#send(sessionId, randomUUID(), recoverContinuation(why), { actor: 'portal:recover', actorLabel: 'Recovered' });
+      } catch (e) {
+        this.#note(sessionId, `Couldn’t send the continuation: ${isAppError(e) ? e.message : this.#message(e)}`);
+      }
+      return this.#decorate(this.#chat.get(sessionId)!);
+    } finally {
+      this.#recovering.delete(sessionId);
+      this.#emitSession(sessionId);
+    }
+  }
+
   /**
    * Stops a running process for a deliberate restart (the session is left asleep; the next `#live` resumes it). The reader goes first, so the
    * process's end isn't read as a crash. `quiet`: the session was in Bypass and keeps it, so it reads the start mode now (what the new process
@@ -2838,7 +2939,7 @@ export class ChatController {
       this.#chat.addAudit({ severity: 'info', kind: 'bypass.left', sessionId, workspaceId: row?.workspace_id, actor: 'ui', detail: { to: applied } });
     }
     if (applied === 'bypassPermissions') {
-      this.#endIntegrity(sessionId, 'Claude Code switched to Bypass permissions, which chat sessions never allow');
+      this.#endIntegrity(sessionId, 'Claude Code switched to Bypass permissions, which chat sessions never allow', 'mode-bypass');
       throw new AppError('CONFLICT', 'The session ended: Claude Code switched to Bypass permissions.');
     }
     this.#chat.patchSession(sessionId, { mode: applied });
@@ -3458,7 +3559,7 @@ export class ChatController {
     // Integrity (PRD §10.4): the stream may show only what this portal started.
     // The stream reports Claude Code's own session id, which changes only when the portal moves the chat to
     // another Claude (the row is repointed first, and this reader reads that run's log).
-    if (parsed.sessionIdSeen && parsed.sessionIdSeen !== this.#csid(sessionId)) return void this.#endIntegrity(sessionId, `the agent reported a different session id (${shortId(parsed.sessionIdSeen)})`);
+    if (parsed.sessionIdSeen && parsed.sessionIdSeen !== this.#csid(sessionId)) return void this.#endIntegrity(sessionId, `the agent reported a different session id (${shortId(parsed.sessionIdSeen)})`, 'session-id');
     // Credentials (§6 rules 1 and 3), on a pool: every turn on its helper, and never plan limits. The source
     // Claude Code reported is only compared, never kept. On a Claude's own sign-in both are its own.
     if ((parsed.apiKeySource !== undefined || parsed.rateLimitEvent) && this.#viaPool(this.#chat.row(sessionId)?.workspace_id ?? '')) {
@@ -3573,7 +3674,7 @@ export class ChatController {
       try {
         canonical = this.#chat.addRequest(sessionId, { ...parsed.request, agentLabel: parent ? this.#label(sessionId, parent) : null });
       } catch {
-        return void this.#endIntegrity(sessionId, `a tool request id arrived twice (${shortId(parsed.request.requestId)})`);
+        return void this.#endIntegrity(sessionId, `a tool request id arrived twice (${shortId(parsed.request.requestId)})`, 'request-duplicate');
       }
       this.#append(sessionId, { kind: 'request', requestId: canonical.requestId, request: canonical, agentLabel: canonical.agentLabel, parentToolUseId: parent });
       // A file the portal itself staged for this chat's attachment: Claude Code asks to read it only because it lies outside
@@ -3672,7 +3773,7 @@ export class ChatController {
       if (typeof mode === 'string' && mode) {
         // Bypass is accepted only as the answer to an entry the portal made after every check (a grant held for that one request).
         if (mode === 'bypassPermissions' && !this.#bypassGrant.has(sessionId)) {
-          this.#endIntegrity(sessionId, 'Claude Code switched to Bypass permissions, which chat sessions never allow');
+          this.#endIntegrity(sessionId, 'Claude Code switched to Bypass permissions, which chat sessions never allow', 'mode-bypass');
           return false;
         }
         this.#confirmMode(sessionId, mode);
@@ -3685,7 +3786,7 @@ export class ChatController {
       return true;
     }
     if (answered === 'completed') return this.#secondControlResponse(sessionId, ANSWERED(id), reply, digest);
-    this.#endIntegrity(sessionId, `a control response for request ${shortId(id)} that this portal never asked for or answered`);
+    this.#endIntegrity(sessionId, `a control response for request ${shortId(id)} that this portal never asked for or answered`, 'control-unknown');
     return false;
   }
 
@@ -3706,7 +3807,7 @@ export class ChatController {
       console.log(`[chat] ${shortId(sessionId)}: ignored a second control response for ${shortId(id)} (the same answer by shape; its first copy kept no digest)`);
       return false;
     }
-    this.#endIntegrity(sessionId, `a second control response for request ${shortId(id)}`);
+    this.#endIntegrity(sessionId, `a second, different control response for request ${shortId(id)}`, 'control-different');
     return false;
   }
 
@@ -3747,7 +3848,7 @@ export class ChatController {
       console.log(`[chat] ${shortId(sessionId)}: Claude Code started a turn of its own (${shortId(uuid)}) after a sub-agent or background task`);
       return true;
     }
-    this.#endIntegrity(sessionId, `Claude Code queued a message this portal didn't send (${shortId(uuid)})`);
+    this.#endIntegrity(sessionId, `Claude Code queued a message this portal didn't send (${shortId(uuid)})`, 'command-unknown', `a command this portal never sent (${state ?? 'no state'})`);
     return false;
   }
 
@@ -3767,8 +3868,22 @@ export class ChatController {
     if (replay.localCommand && this.#chat.slashCommandRunning(sessionId)) return true;
     // A model change the portal asked for: Claude Code echoes "Set model to …" as a replayed line.
     if (replay.modelNote && Date.now() - (this.#modelAsked.get(sessionId) ?? 0) < MODEL_NOTE_MS) return true;
-    this.#endIntegrity(sessionId, `a message this portal didn't send reached Claude Code (${shortId(replay.uuid ?? 'no id')}${replay.origin ? `, origin ${replay.origin.kind}` : ''})`);
+    this.#endIntegrity(sessionId, `a message this portal didn't send reached Claude Code (${shortId(replay.uuid ?? 'no id')}${replay.origin ? `, origin ${replay.origin.kind}` : ''})`, ...this.#replayCase(sessionId, replay));
     return false;
+  }
+
+  /**
+   * How a refused replayed line is classified (T-136 slice 2): a peer line from a sub-agent that ran in THIS process is `replay-peer`'s near
+   * miss (harmless: an agent may recover it); a peer line from anything else, another origin or none is suspicious. The origin's kind is
+   * Claude Code's own word, clipped; never the line's text.
+   */
+  #replayCase(sessionId: string, replay: NonNullable<ParsedLine['replay']>): [EndingCase, string] {
+    const kind = replay.origin?.kind ? String(replay.origin.kind).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) : '';
+    if (kind === 'peer') {
+      const own = !!replay.peer?.taskId && this.#chat.taskRanSince(sessionId, replay.peer.taskId, this.#chat.row(sessionId)?.process_started_at ?? null);
+      return own ? ['replay-peer', 'a sub-agent of this process'] : ['replay-peer-unknown', 'peer: not a task of this process'];
+    }
+    return ['replay-unknown', kind ? `unknown origin: ${kind}` : 'no origin'];
   }
 
   /** Remembers a sub-agent's SendMessage calls, and marks one queued when its own result says so (INTEGRITY_CASES `replay-peer`). */
@@ -3809,7 +3924,7 @@ export class ChatController {
     const m = this.#mode(sessionId);
     // Bypass reads as expected only after the portal entered it itself (enterBypass); any other report of it ends the session.
     if (mode === 'bypassPermissions' && m.expected !== 'bypassPermissions') {
-      this.#endIntegrity(sessionId, 'the agent reported Bypass permissions, which chat sessions never allow');
+      this.#endIntegrity(sessionId, 'the agent reported Bypass permissions, which chat sessions never allow', 'mode-bypass');
       return false;
     }
     if (mode === m.expected) return true;
@@ -3830,7 +3945,7 @@ export class ChatController {
       this.#modeDowngraded(sessionId, m, mode);
       return true;
     }
-    this.#endIntegrity(sessionId, `the permission mode changed to ${shortId(mode)} without this portal (expected ${m.expected})`);
+    this.#endIntegrity(sessionId, `the permission mode changed to ${shortId(mode)} without this portal (expected ${m.expected})`, 'mode-changed');
     return false;
   }
 
@@ -3883,12 +3998,18 @@ export class ChatController {
     });
   }
 
-  /** Integrity failure (§10.4): end the session at once and SIGTERM the process. */
-  #endIntegrity(sessionId: string, why: string): void {
+  /**
+   * Integrity failure (§10.4): end the session at once and SIGTERM the process. `kind` is the ending's case (integrity.ts ENDING_CASES:
+   * harmless or suspicious, default suspicious), stored with the origin in words and whether it was in Bypass, so a recover in place
+   * (T-136) knows what it brings back. Never the line's text.
+   */
+  #endIntegrity(sessionId: string, why: string, kind: EndingCase = 'unknown', origin?: string): void {
     // The log says where it happened (the line's kind and byte position), never what the line held (T-265).
     const at = this.#readers.get(sessionId)?.at;
     console.warn(`[chat] ${shortId(sessionId)}: ended for integrity: ${why}${at ? ` (line ${at.kind ?? 'unparsed'} at byte ${at.start} of segment ${at.segment})` : ''}`);
-    this.#endForSafety(sessionId, 'The session ended for integrity.', `Integrity check failed: ${why}`, `${CHAT_ENDED_INTEGRITY}${why}`);
+    const row = this.#chat.row(sessionId);
+    const record = endingRecord(kind, { origin, bypass: row?.mode === 'bypassPermissions' });
+    this.#endForSafety(sessionId, 'The session ended for integrity.', `Integrity check failed: ${why}`, `${CHAT_ENDED_INTEGRITY}${why}`, JSON.stringify(record));
   }
 
   /**
@@ -3901,14 +4022,14 @@ export class ChatController {
   }
 
   /** Ends the session at once, with an error event and its reason, and SIGTERMs the process. */
-  #endForSafety(sessionId: string, forget: string, text: string, endedReason: string): void {
+  #endForSafety(sessionId: string, forget: string, text: string, endedReason: string, endedFor: string | null = null): void {
     this.#stopReader(sessionId);
     this.#forget(sessionId, forget);
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended') return; // already ended (by the operator, or an earlier check)
     this.#append(sessionId, { kind: 'error', text });
     this.#closeOut(sessionId, 'ended');
-    this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason });
+    this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason, endedFor });
     this.#emitSession(sessionId);
     void this.#runOnce(row.workspace_id, ['stop', claudeSessionOf(row)]).catch(() => undefined);
   }

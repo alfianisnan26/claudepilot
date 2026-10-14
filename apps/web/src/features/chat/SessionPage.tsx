@@ -30,6 +30,7 @@ import { KeepGoingChip } from './KeepGoing';
 import { SessionInfoDialog } from './SessionInfo';
 import { endedForSafety, StateBadge } from './shared';
 import { Transcript } from './Transcript';
+import { RecoverButton } from './Recover';
 import { ResumeBanner } from './ResumeBanner';
 import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
 import { useMoveChat } from './SwitchDialog';
@@ -638,7 +639,7 @@ export function SessionPage() {
                 {gone ? (
                   <GoneNote />
                 ) : ended ? (
-                  <EndedNote reason={session?.endedReason} />
+                  <EndedNote session={session} />
                 ) : session?.switching ? (
                   <MovingNote to={session.switching.toClaude} step={session.switching.step} from={session.claudeName} />
                 ) : (
@@ -804,13 +805,18 @@ function MovingNote({ to, step, from }: { to: string; step: 'handoff' | 'startin
   );
 }
 
-/** An ended session. A safety or integrity stop says so; why is in the transcript's last error. */
-function EndedNote({ reason }: { reason: string | null | undefined }) {
-  const stop = endedForSafety(reason);
+/**
+ * An ended session. A safety or integrity stop says so; why is in the transcript's last error. One ended for integrity offers Resume (T-136):
+ * it comes back in place, the same chat.
+ */
+function EndedNote({ session }: { session: ChatSession | null | undefined }) {
+  const stop = endedForSafety(session?.endedReason);
+  const resumable = session?.state === 'ended' && !!session.endedFor;
   return (
-    <p role="status" className="glass-card rounded-full px-4 py-3 text-center text-[13.5px] text-muted">
-      {stop ? <span className="font-semibold text-danger">{stop.label}</span> : 'Ended'}
-    </p>
+    <div role="status" className={cn('glass-card flex items-center justify-center gap-2 rounded-full py-1 text-center text-[13.5px] text-muted', resumable ? 'pr-1.5 pl-4' : 'px-4 py-3')}>
+      <span className="min-w-0 break-words">{stop ? <span className="font-semibold text-danger">{stop.label}</span> : 'Ended'}</span>
+      {resumable && session && <RecoverButton session={session} />}
+    </div>
   );
 }
 

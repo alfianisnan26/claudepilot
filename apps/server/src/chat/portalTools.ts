@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
-import { CHAT_SESSION_TITLE_MAX, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
+import { CHAT_SESSION_TITLE_MAX, sessionRef, workspaceRef, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
+import { actorOfPrincipal, requireCan } from '../authz/seam.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 
 // The chat's own tools for the Portal MCP (interface I2): the ones a session's Claude may call about itself. They are
@@ -18,6 +19,8 @@ export interface ChatToolHost {
   end(id: string): Promise<void>;
   /** The text of the session's latest reply, or null. */
   lastReply(id: string): string | null;
+  /** T-136: recover a session ended for integrity in place (the controller's rules: never a person's close, the cap, the pause, a suspicious cause). */
+  recover(id: string, opts: { by: 'agent'; actor: string }): Promise<ChatSession>;
 }
 
 /** The session behind an agent's token: only a session may start workers, message its family or look at it. */
@@ -174,6 +177,52 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       else await chat.interrupt(worker.id);
       ctx.affected(`session:${worker.id}`);
       return { summary: `${args.action === 'end' ? 'Ended' : 'Interrupted'} ${worker.id}.` };
+    },
+  });
+
+  // T-136 slice 2: recover in place over MCP. An agent reaches the ended sessions of its own workspace (another workspace's: not found,
+  // like a missing id); an admin's token, the sessions it may operate. Always a confirmation first (an agent asks; a person uses the app's
+  // Resume, which never needs one for a harmless cause). A suspicious cause is refused for every MCP caller, before any confirmation.
+  registry.register({
+    name: 'session_recover',
+    title: 'Recover an ended session in place',
+    description:
+      'Brings a chat session that ENDED FOR INTEGRITY back as the same session: the same id, title, pin, tags, tickets and cost, its conversation resumed from where it stopped (the line that ended it is not read again), with a short continuation message. Refused for a session a person closed or one that ended otherwise, when the line that ended it is suspicious (only a person can bring that back, in the app), past the day\'s cap, and right after another recovery. Asks for confirmation first.',
+    scope: 'agent',
+    rate: { perMinute: 6, perHour: 30 },
+    input: z.object({
+      session_id: z.string().min(1).max(80).describe('The ended session to bring back.'),
+      confirm_token: z.string().optional(),
+    }),
+    async handler(ctx, args) {
+      const actor = actorOfPrincipal(ctx.principal);
+      const s = chat.get(args.session_id);
+      let reachable = false;
+      if (s && actor) {
+        try {
+          requireCan(actor, 'operate', ctx.isAgent ? workspaceRef(s.workspaceId) : sessionRef(s.id));
+          reachable = true;
+        } catch {
+          reachable = false;
+        }
+      }
+      if (!s || !reachable) throw new AppError('NOT_FOUND', 'No such session.');
+      // Anything the rules refuse (a person's close, a suspicious cause, the cap, the pause) is refused now, without a confirmation.
+      if (s.state !== 'ended' || !s.endedFor || s.endedFor.classified !== 'harmless') await chat.recover(s.id, { by: 'agent', actor: ctx.actor });
+      const gate = ctx.confirm(
+        args,
+        {
+          session_id: s.id,
+          title: ctx.untrusted(s.title, 'agent', 120),
+          ended_for: { reason: s.endedFor!.reason, classified: s.endedFor!.classified, origin: s.endedFor!.origin },
+          changes: 'A new Claude Code process resumes this session’s conversation in place (the same row); its old sub-agents stay stopped; a short continuation message is sent.',
+        },
+        `${s.id}:${s.endedReason ?? ''}`,
+      );
+      if (gate) return gate;
+      const back = await chat.recover(s.id, { by: 'agent', actor: ctx.actor });
+      ctx.affected(`session:${back.id}`);
+      return { summary: `Recovered ${back.id} in place (${back.state}${back.mode === 'bypassPermissions' ? ', Bypass kept' : ''}).`, session: { id: back.id, state: back.state, mode: back.mode } };
     },
   });
 }

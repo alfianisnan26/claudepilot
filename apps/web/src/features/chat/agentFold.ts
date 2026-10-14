@@ -64,7 +64,7 @@ export function buildItems({ rows, finals, moves, base, details }: ItemsInput): 
     const e = r.event;
     if (e.kind === 'assistant') return !!e.agentLabel || !finals.has(e.seq);
     // What stands for a move stays where it is, in the open.
-    if (e.kind === 'system' && (e.transfer || e.btw || e.restart || moves.has(e.seq))) return false;
+    if (e.kind === 'system' && (e.transfer || e.btw || e.restart || e.recovered || moves.has(e.seq))) return false;
     return e.kind === 'system' || e.kind === 'retry' || e.kind === 'resolved';
   };
   // "Ready" (the process started) says nothing a reader needs, except in Show all details.

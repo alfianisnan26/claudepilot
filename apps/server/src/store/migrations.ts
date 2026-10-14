@@ -2909,6 +2909,16 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 805,
+    name: 'chat sessions: what an integrity ending was for',
+    up(db) {
+      // T-136 slice 2 (recover in place): the case an integrity ending is recorded under, its classification (harmless or suspicious),
+      // the line's origin in words and whether the session was in Bypass, as JSON (chat/integrity.ts EndingRecord). Never the line's text.
+      // Null for every row so far: those are classified from their reason.
+      db.exec('ALTER TABLE chat_sessions ADD COLUMN ended_for TEXT');
+    },
+  },
 ];
 
 /**
