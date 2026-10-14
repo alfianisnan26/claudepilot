@@ -11,7 +11,7 @@
 // usage: scripts/scratch-portal.sh start 3417 && QA_PORT=3417 QA_CODE=24681372 node tools/qa/session-crew.mjs [--shots dir] [--keep]
 //   It seeds /tmp/scratch-portal-$QA_PORT/data/portal.db (CREW_DB overrides) with rows whose ids start "qacrew-" and removes them at the end
 //   (--keep leaves them, to look by hand).
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Browser } from './browser.mjs';
@@ -103,6 +103,36 @@ const shot = async (name) => {
   writeFileSync(join(shots, `t294-${name}.png`), Buffer.from(r.data, 'base64'));
 };
 
+// T-321: --diag <dir> writes what the page held when the lead's row was missing (rows, chips, the API calls and their timings, the
+// portal's log), a screenshot, and when (if ever) the row showed up after that.
+const diag = args.includes('--diag') ? args[args.indexOf('--diag') + 1] : null;
+if (diag) mkdirSync(diag, { recursive: true });
+const PAGE_STATE = `(() => ({
+  now: Math.round(performance.now()),
+  rows: [...document.querySelectorAll('ul[data-session-rows] li')].map((li) => li.querySelector(':scope > div > div > a p.font-semibold')?.textContent ?? '?').slice(0, 30),
+  lists: document.querySelectorAll('ul[data-session-rows]').length,
+  chips: [...document.querySelectorAll('[data-chip]')].map((c) => [c.dataset.chip, c.getAttribute('aria-pressed') ?? c.getAttribute('aria-checked') ?? c.getAttribute('data-active'), c.textContent.trim()].join('|')),
+  api: performance.getEntriesByType('resource').filter((e) => e.name.includes('/api/')).map((e) => [e.name.replace(location.origin, ''), Math.round(e.startTime), Math.round(e.duration)]),
+  nav: Math.round(performance.getEntriesByType('navigation')[0]?.duration ?? -1),
+  text: document.body.innerText.slice(0, 800),
+}))()`;
+const diagnose = async (tag) => {
+  const stamp = `${Date.now()}-${tag}`;
+  const first = await b.eval(PAGE_STATE).catch((e) => ({ error: String(e) }));
+  const r = await b.send('Page.captureScreenshot', { format: 'png' }).catch(() => null);
+  if (r) writeFileSync(join(diag, `${stamp}.png`), Buffer.from(r.data, 'base64'));
+  let shownAfter = null;
+  for (let waited = 0; waited <= 20_000; waited += 250) {
+    if (await b.eval(`(${HELPERS}) && !!__row('QA crew lead')`).catch(() => false)) { shownAfter = waited; break; }
+    await sleep(250);
+  }
+  const later = await b.eval(PAGE_STATE).catch((e) => ({ error: String(e) }));
+  let log = '';
+  try { log = readFileSync(`/tmp/scratch-portal-${PORT}/log`, 'utf8').split('\n').slice(-80).join('\n'); } catch (e) { log = String(e); }
+  writeFileSync(join(diag, `${stamp}.json`), JSON.stringify({ tag, first, shownAfter, later, log }, null, 1));
+  console.log(`  diag ${tag}: lead row shown after ${shownAfter ?? 'never (20 s)'} ms; rows then ${JSON.stringify(first.rows?.length)}; api ${JSON.stringify(first.api)}`);
+};
+
 for (const size of SIZES) {
   for (const dark of [false, true]) {
     const tag = `${size.name}-${dark ? 'dark' : 'light'}`;
@@ -117,6 +147,7 @@ for (const size of SIZES) {
     await sleep(500);
 
     const lead = await fact('QA crew lead');
+    if (!lead && diag) await diagnose(tag);
     check(`${tag} All: the lead is a top-level row`, !!lead?.top, JSON.stringify(lead?.group));
     check(`${tag} All: its live workers sit under it, in spawn order`, JSON.stringify(lead?.kids) === JSON.stringify(['QA crew worker A', 'QA crew worker B', LONG]), JSON.stringify(lead?.kids));
     check(`${tag} All: the ended ones are behind one shut "2 done" row`, lead?.done?.text === '2 done' && lead.done.open === 'false', JSON.stringify(lead?.done));
