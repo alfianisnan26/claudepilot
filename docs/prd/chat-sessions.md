@@ -1199,6 +1199,85 @@ after a NEW chat (a recover in place keeps Bypass); a track that must stay in By
 off for it). Also open: agents' runner and pipeline triggers for a paused program (the coordinator's item; CI does not know programs); the status
 file marker as a done condition (needs a file read in the workspace; a closed ticket is one already); the move by D-12/D-39 from the sweep;
 editing the prompt, the caps and N in the UI (the API and the MCP tool take them); a portal setting for the number of sub-agents (D-43);
-the portal's own external heartbeat; deleting `supervisor.mjs` (after the lease).
+the portal's own external heartbeat (designed in §23.3, T-315, not built); deleting `supervisor.mjs` (after the lease).
 
 **Needs you (T-146):** a tool request a waiting session has held for ten minutes or more is listed on Needs you ([attention.md](attention.md) §2, `chat/attention.ts`); answering stays on the session page.
+
+### 23.3 The external heartbeat (design for a decision, T-315; nothing below is built)
+
+**Why.** Keep going runs inside the portal (§23, `apps/server/src/keepgoing/`), so it cannot see the portal go away, and it cannot see the
+outage of 2026-10-14 either: then the portal was not the thing that broke; `pilot.ai.isnan.me` did not resolve from the owner's dev
+container and the k3s API timed out (T-259; `docs/dev-session.md:181`). What exists today, checked in the repository:
+
+- `GET /healthz` answers `{ ok: true, service: 'portal' }` without sign-in, before any route (`apps/server/src/app.ts:265`). It is a constant:
+  it says the process serves HTTP, not that the database opens or the portal is unlocked.
+- Kubernetes probes it: readiness every 10 s, liveness every 30 s, restart after 5 failures (`deploy/k3s/portal.yaml:96-107`). That
+  restarts a hung pod; it tells nobody.
+- The only route in is the Traefik `IngressRoute` for `Host(\`pilot.ai.isnan.me\`)` (`deploy/k3s/portal.yaml:149-164`), a name that resolves
+  only on the cluster's private network; public resolvers answer NXDOMAIN (T-259). **An outside uptime service therefore cannot probe the
+  portal** without a new inbound path, which this design refuses.
+- The portal already sends outbound HTTPS through one guarded client, `notify/egress.ts` (https only, no redirect, private and metadata
+  addresses refused with the name checked at connect time, 5 s to connect, 10 s in all; `apps/server/src/notify/egress.ts:1-12`, the
+  `Egress` interface at `:51-55`). Channel URLs are sealed and never returned (`packages/contracts/src/notify.ts:298`).
+- Every notification channel (Web Push, webhook, Discord, Slack) is sent BY the portal, so none of them can report the portal's own death.
+  The kind `portal` ("Portal", urgent, `phase: 'later'`, `packages/contracts/src/notify.ts:88`) is declared and never sent.
+- The only heartbeats built are Connect's, between the hub and a dialled-in agent (`packages/contracts/src/connect.ts:145-147`); they
+  watch remote hosts, not the portal.
+- The relay (`docs/dev-session.md:173-206`) is the manual stand-in and says this heartbeat is not built (`:205`).
+
+**Two failures, two probes.** "The portal is down" and "the owner cannot reach the portal" are different, and T-259 was the second.
+
+| | A. Check-in (dead man's switch) | B. Reach probe on the owner's side |
+| --- | --- | --- |
+| Where it runs | In the portal, outbound only, to an outside check-in service | On the coordinator's machine (where the supervisor runs, D-14), outside the cluster |
+| What it proves | The portal process lives, its database answers, it is not Locked, and the cluster still has a way out | From the owner's network: the name resolves, the usual path (`tools/coordinator/up.sh`, `tunnel 1080 up`) is up, TLS holds, `/healthz` answers 200 |
+| How often | One check-in every 60 s | One probe every 60 s |
+| Down | The service saw no check-in for 60 s + a 120 s grace (two missed) | Two probes in a row failed (10 s limit each); the report names the stage: dns, tunnel, tls or http |
+| Catches | Process dead or hung, pod not scheduled, node or cluster down, database broken, Locked, cluster uplink down | The T-259 case, a broken tunnel or Cloudflare Access login, an expired certificate, and everything A catches |
+| Misses | The owner's own path (T-259) | A machine that is off or asleep goes silent; A covers the portal side meanwhile |
+
+A is the portal's job (no person, no machine of the owner's); B is the coordinator's, as the supervisor is. A check-in is sent only when the
+portal checks itself first: a `SELECT 1` on the store, not Locked, the Keep going sweep ran in the last 3 minutes (the 60-second sweep,
+`apps/server/src/keepgoing/index.ts:1`; the round needs a "last ran" it can read, part of the slice). A sick portal goes quiet and the outside service raises the alarm, so one rule covers "dead" and
+"alive but broken".
+
+**Who is told, and how.** The owner, on the iPhone, through a channel that does not need the portal: the check-in service's own alerts (a
+push app, a message app or e-mail, the owner's choice). B posts its failure to the SAME service (a second check that it fails explicitly), so
+the owner has one place to look and one app to install. One message when down, one when up again; no repeat while it stays down. The
+owner sets up: an account at the service; two checks ("portal", period 1 min, grace 2 min; "reach", the same); the alert integration to
+the phone; and gives the two ping URLs: A's goes into a Kubernetes Secret made by hand, like `claudepilot-secret-key`
+(`deploy/k3s/portal.yaml:122-133`), mounted read-only and named by a `PORTAL_HEARTBEAT_URL_FILE` environment variable; B's stays on the
+coordinator's machine, never in the repository or a ticket. Candidates (the owner picks; the design does not depend on which): a hosted
+check-in service with period and grace (Healthchecks.io-style), or one the owner runs on another network. Not the portal's Web Push, not a
+portal webhook, not a workspace in the same cluster, not the Coder workstation (inside the cluster network, `docs/dev-session.md:182`).
+
+**What it must never do.**
+
+- Act on a chat, a workspace or a ticket. A sends one request and reads its status; B calls `/healthz` and nothing else. Neither nudges,
+  restarts, recovers, moves or answers; that stays with Keep going (§23.1) and the supervisor.
+- Carry a secret. The check-in body is empty (or a fixed version string); no session id, title, user, token or transcript text. B uses no
+  sign-in code and no cookie (`/healthz` needs none), so it can run where the supervisor's code is not loaded. The ping URLs are
+  credentials: sealed or in a Secret, never logged, never in an error, an audit row or a response (`chat/redact.ts` covers transcripts;
+  the heartbeat logs a fixed code and the HTTP status only).
+- Open an inbound hole: no new IngressRoute, public DNS name, port forward or tunnel to the portal.
+- Call out except through the guard: A uses `notify/egress.ts` as it is (https, no redirect, public addresses only; no `allowPrivate`).
+- Flap or spam: one state change, one message; a failing check-in is retried at the next minute, never in a loop.
+
+**The smallest first slice (A only, effort S, about 3 hours).** `apps/server/src/heartbeat/`: a 60 s timer started by the server, the three
+self-checks above, one POST through the notify `Egress` to the URL read from `PORTAL_HEARTBEAT_URL_FILE` (no file: off, said once in the
+log). A platform audit row only on a state change (`heartbeat.ok`, `heartbeat.failing`, with the fixed code), never per minute. Tests on a
+fake clock and a fake egress: a check-in every minute when healthy; none when the store throws, when Locked or when the sweep is stale;
+the URL never in a log, an error or an audit row; no file, nothing sent. Docs: this section built, `docs/dev-session.md` (the relay: the
+heartbeat tells the owner first), `deploy/k3s/README.md` (making the Secret). No migration, no UI, no new route. The owner's part: the
+account, the check, the alert, the Secret. Slice 2: B as `tools/coordinator/heartbeat.mjs` (Node, no dependency, run by the same loop as
+the supervisor, its URL from a local file). Slice 3, if wanted: a "Heartbeat" row in Settings (last check-in, state; never the URL) and the
+`portal` notification kind when the portal comes back after a gap.
+
+**Questions for the owner.**
+
+1. Which outside service and which alert channel on the phone (a push app, Telegram, e-mail)? The account is yours; agents never hold it.
+2. Do you want B, and where does it run: the coordinator's machine (it sleeps when you close it) or a small always-on box on your network?
+3. A's URL in a hand-made Kubernetes Secret (recommended, no UI) or a sealed field in Settings?
+4. Two misses at 60 s (alarm after about 3 minutes, as T-315 asks), or a longer grace at night to avoid waking you for a short deploy? A
+   deploy restarts the pod (`/deploy`): should the check pause for it, or is one "down, up again" pair acceptable?
+5. Should the Docker deployment on the Mac (`pilot.dev.isnan.me`) get its own check, or only the cluster portal?
