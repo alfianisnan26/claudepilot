@@ -181,6 +181,8 @@ const mcpSets = registerMcpSets({ store, pools: poolService, references, access:
 // as the `settings` owner's drop-in. The MCP pool reports what it delivers, so "pool only" allows exactly that.
 const settingsModule = registerSettings({ store, providers });
 settingsModule.lockdown.addMatcherSource((ws) => mcpSets.matchers(ws));
+// The agent policy wins over a Secrets & env entry with one of its names (T-285): the sheet names the entries it overrides.
+settingsModule.agentEnv.addOverrideSource((ws) => secretsKind.policyOverrides(ws));
 // Skillsets: the reviewed skill library, delivered as one plugin per set; verified in running workspaces.
 const skills = new SkillsModule(store, poolService, { runtimes: (t) => workspaces.runtimeFor(t) });
 skills.start();

@@ -889,10 +889,14 @@ managed `env` when a process starts, so a running Claude gets a change at its ne
 | MCP output (`agents.mcpOutputMax`, 1000 to 200000) | `MAX_MCP_OUTPUT_TOKENS` | 25000 | Claude Code's own default |
 
 - The names are the policy owner's by exact name (`delivery/ownership.ts`), so no pool can override one
-  (`mayUseEnv`); a Secrets & env set saved earlier with one of them fails its workspaces' delivery until the
-  entry is removed (FR4). `ENABLE_PROMPT_CACHING_1H` stays a pool name.
+  (`mayUseEnv`): a new Secrets & env entry with one is refused when the set is saved (422). An entry saved
+  before is tolerated: the policy wins, the entry is skipped at delivery (never a failed delivery), the
+  reconciler logs one warning line per workspace, and the Configuration sheet says "N overridden by policy"
+  with the variable and the set behind its ⓘ. `ENABLE_PROMPT_CACHING_1H` stays a pool name.
 - A change asks every known workspace to deliver again. What landed is recorded per workspace
   (`policy_env_state`, migration 840: names and values, none secret).
+- Secrets & env FR4 (a name another owner claimed after the set was saved fails delivery) has this one
+  exception: names the agent policy sets.
 - The Configuration sheet shows one line: Applied, Pending (a change on its way), or Unavailable (nothing
   landed yet: never the setting's value as a guess); the values in effect are behind its ⓘ.
 

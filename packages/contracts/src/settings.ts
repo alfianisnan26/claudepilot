@@ -95,6 +95,8 @@ export interface AgentEnvValue {
   env: string;
   desired: string;
   applied: string | null;
+  /** A Secrets & env set assigned here that also sets this name: its entry is skipped, the policy wins (T-285). */
+  overriddenPool: string | null;
 }
 
 /** `GET /api/settings/agent-env/:target/:name`: the agent policy as it stands in one workspace. */

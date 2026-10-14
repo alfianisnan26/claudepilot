@@ -142,13 +142,13 @@ test('status per workspace: unavailable until the drop-in lands, applied after, 
     await h.reconciler.request(WS, 'test');
     const after = h.agentEnv.status(WS);
     assert.equal(after.state, 'applied');
-    assert.deepEqual(after.values.find((v) => v.env === 'MAX_MCP_OUTPUT_TOKENS'), { key: SETTING_KEYS.agentsMcpOutputMax, env: 'MAX_MCP_OUTPUT_TOKENS', desired: '25000', applied: '25000' });
+    assert.deepEqual(after.values.find((v) => v.env === 'MAX_MCP_OUTPUT_TOKENS'), { key: SETTING_KEYS.agentsMcpOutputMax, env: 'MAX_MCP_OUTPUT_TOKENS', desired: '25000', applied: '25000', overriddenPool: null });
     assert.ok(after.appliedAt);
 
     h.settings.set(SETTING_KEYS.agentsMcpOutputMax, 10000, { actor: 'Admin' });
     const pending = h.agentEnv.status(WS);
     assert.equal(pending.state, 'pending');
-    assert.deepEqual(pending.values.find((v) => v.env === 'MAX_MCP_OUTPUT_TOKENS'), { key: SETTING_KEYS.agentsMcpOutputMax, env: 'MAX_MCP_OUTPUT_TOKENS', desired: '10000', applied: '25000' });
+    assert.deepEqual(pending.values.find((v) => v.env === 'MAX_MCP_OUTPUT_TOKENS'), { key: SETTING_KEYS.agentsMcpOutputMax, env: 'MAX_MCP_OUTPUT_TOKENS', desired: '10000', applied: '25000', overriddenPool: null });
 
     await h.reconciler.request(WS, 'test');
     assert.equal(h.agentEnv.status(WS).state, 'applied');

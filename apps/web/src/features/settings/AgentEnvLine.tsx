@@ -33,10 +33,11 @@ export function AgentEnvLine({ workspaceId }: { workspaceId: string }) {
 
   if (!status) return null;
   const s = STATE[status.state];
+  const overridden = status.values.filter((v) => v.overriddenPool);
   return (
     <div className="flex items-center gap-2 rounded-2xl bg-surface-2 px-4 py-2.5 text-[13px]" data-testid="agent-env-line">
       <Badge tone={s.tone}>{s.label}</Badge>
-      <span className="min-w-0 flex-1 truncate text-ink-soft">Agent policy</span>
+      <span className="min-w-0 flex-1 truncate text-ink-soft">{overridden.length ? `${overridden.length} overridden by policy` : 'Agent policy'}</span>
       <InfoTip label="About the agent policy">
         <span className="block">Set on the Settings page, under Agents. A running Claude reads a change at its next start.</span>
         <span className="mt-2 block">
@@ -44,6 +45,7 @@ export function AgentEnvLine({ workspaceId }: { workspaceId: string }) {
             <span key={v.env} className="block break-all">
               {v.env}: {v.applied ?? 'unavailable'}
               {v.applied !== null && v.applied !== v.desired ? ` (next: ${v.desired})` : ''}
+              {v.overriddenPool ? ` (overridden by policy: the entry in “${v.overriddenPool}” is skipped)` : ''}
             </span>
           ))}
         </span>

@@ -103,10 +103,29 @@ export const AGENT_ENV_KEYS: ReadonlySet<string> = new Set(AGENT_ENV.map((a) => 
 export class AgentEnvPolicy implements FragmentProvider {
   readonly type = 'policy' as const;
 
+  readonly #overrides: ((workspaceId: string) => { env: string; pool: string }[])[] = [];
+
   constructor(
     private readonly store: Store,
     private readonly settings: Settings,
   ) {}
+
+  /** A part of the portal whose pools may hold an entry the policy overrides (Secrets & env) reports them here. */
+  addOverrideSource(source: (workspaceId: string) => { env: string; pool: string }[]): void {
+    this.#overrides.push(source);
+  }
+
+  #overridden(workspaceId: string): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const source of this.#overrides) {
+      try {
+        for (const o of source(workspaceId)) if (!out.has(o.env)) out.set(o.env, o.pool);
+      } catch (e) {
+        console.error(`[settings] an override source failed for ${workspaceId}: ${(e as Error).message}`);
+      }
+    }
+    return out;
+  }
 
   /** Every variable with its value, in a stable order. */
   desired(): Record<string, string> {
@@ -153,7 +172,8 @@ export class AgentEnvPolicy implements FragmentProvider {
       applied = null;
     }
     const desired = this.desired();
-    const values = AGENT_ENV.map((a) => ({ key: a.def.key, env: a.env, desired: desired[a.env]!, applied: applied?.[a.env] ?? null }));
+    const overridden = this.#overridden(workspaceId);
+    const values = AGENT_ENV.map((a) => ({ key: a.def.key, env: a.env, desired: desired[a.env]!, applied: applied?.[a.env] ?? null, overriddenPool: overridden.get(a.env) ?? null }));
     const state = !applied ? 'unavailable' : values.every((v) => v.applied === v.desired) ? 'applied' : 'pending';
     return { workspaceId, state, values, appliedAt };
   }
