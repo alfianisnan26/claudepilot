@@ -378,8 +378,8 @@ The controller records every UUID and `request_id` it sends and ends the session
   after the portal's own Stop or `stop_task`;
 - a turn with nothing behind it: no input from the controller, no finished background task and no
   scheduled task Settings allowed;
-- a permission mode, in a `set_permission_mode` reply or `system/init`, other than the expected one,
-  or a `session_id` that changes.
+- a permission mode, in a `set_permission_mode` reply or `system/init`, other than the expected one, unless it is less permissive
+  (case `mode-downgrade` below, T-277), or a `session_id` that changes.
 
 Contract tests inject each kind of line through the FIFO and from a stdio MCP server and expect the
 session to end.
@@ -417,6 +417,19 @@ three integrity endings in one day:
   the portal set or expects on the session; only the keys `get_settings`, `list_models` or `get_usage` reply with), or, for the echo of
   an answer the portal gave, the `behavior` it recorded (allow, deny). A different mode, an error, another shape, another behavior or an
   id never asked still ends the session.
+
+**A mode less permissive than expected (T-277, observed 2026-10-14).** The Konfersi chat 3907db7f ended at 02:50:24 UTC, during deploy
+#20 (02:43 to 02:53), with "the permission mode changed to default without this portal (expected bypassPermissions)": after the portal
+restarted, the expected mode was rebuilt from the stored row (Bypass), and a main-thread `system/init` or `system/status` reported
+`default`. The rule (case `mode-downgrade`): the modes are ordered `plan < default < acceptEdits < auto < bypassPermissions`
+(`MODE_RANK`), and a main-thread report strictly lower than the expected one, both in that table, is taken: the portal expects that mode
+from then on, the row shows it, the transcript says "Bypass is off in this chat" (audited `bypass.left`, why `downgrade`) or "Mode is
+<mode> in this chat", and the session event goes out; the portal does not re-enter Bypass there, only the gated path does (`enterBypass`
+with acknowledgement and fresh server code, or the restart and move re-assert). The negative twins still end the session with the same
+text: a report more permissive than expected (also back up after a downgrade), Bypass the portal did not enter, an unknown mode string
+(`dontAsk` included, ranked above Bypass; an expected mode outside the table is never downgraded from), and a sub-agent thread's mode,
+which is never a mode report (the expected mode stays and the next main-thread report is judged against it). Observed in
+`integrity.test.ts` and `restart.test.ts` (a portal restart under a Bypass chat on the controller testkit); not yet seen on the cluster.
 
 **Why a line is read twice (T-265, observed 2026-10-13).** The orchestrator 5c9fcb5f ended at 17:58:46 on the FIRST line of its stream
 (the `set_permission_mode` reply of 15:46, which appears once in the 12 MB file), 20 minutes after the portal restarted at 17:38:44 for a
