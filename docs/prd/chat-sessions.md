@@ -1129,7 +1129,7 @@ Done folded, the failing command's exit code on its second line, every running a
 labels (`QA described`, `node test: qa-none.test.mjs`), the command's detail (the whole command, exit code, copy), back keeping the filter,
 search (a field on 1280 px, behind its button on a phone), and Stop on a running command's row on a session of its own. Before the
 change: 135/138 (the three misses were the first run's timing: a cold page compile let the agents finish before the detail opened);
-after: 233/233 on a clean scratch portal at 390 px (touch, safe areas) and 1280 px, light and dark. **Seen once, not reproduced in three later runs:**
+after: 233/233 at 390 px (touch, safe areas) and 1280 px, light and dark, in five runs in a row (the first on a clean scratch portal). Not built: a journey with 80 done and 300 rows on the phone profile. **Seen once, not reproduced in five later runs:**
 a harness session ended for integrity in a run where a background command was stopped (Claude Code replayed a user line with origin
 `task-notification` and no `session-task` producer); the harness now stops a command on a session of its own and checks that it lives on.
 
