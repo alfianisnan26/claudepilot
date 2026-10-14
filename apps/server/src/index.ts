@@ -466,8 +466,9 @@ registerClaudeUsageTools(claudeUsage);
 chatController.onRateLimit = (sessionId, claudeId, info) => claudeUsage.onRateLimit(sessionId, claudeId, info);
 // T-109: whether a Claude shows a model's own usage window (a Fable week): how the Move flow knows it has Fable before its list_models is read.
 chatController.modelWindow = (claudeId, family) => claudeUsage.windowKeys(claudeId).some((k) => isWindowOfFamily(k, family));
-// T-294: a worker started on `auto` goes to the Claude of its workspace with the most room, by the same ranking as Move (every Claude included).
-chatController.claudeRanking = (workspaceId) => claudeUsage.recommend(workspaceId, null);
+// T-294: a worker started on `auto` goes to a Claude of its workspace with room by a fresh, measured reading (the Move ranking and the
+// auto-transfer's freshness test, chat/agents.ts); a named Claude must run on a plan. Both read the usage report's rows.
+chatController.spawnUsage = async () => (await claudeUsage.report()).claudes;
 chatController.returnToOriginalModel = () => settingsModule.settings.get<boolean>(AUTO_SETTING_KEYS.returnToOriginalModel) === true;
 // Usage spend: who spent what (per session, workspace, ticket, persona), budgets with alerts and spike detection, over the recorded requests
 // (claude-usage PRD §21 to §26). The chat controller tells it of each recorded turn and each process start, and asks it before a message

@@ -13,14 +13,17 @@ import { SPAWN_CLAUDE_HELP, type SpawnClaudeWhy } from './agents.js';
 export interface ChatToolHost {
   rename(sessionId: string, title: unknown, opts: { actor: string }): ChatSession;
   get(id: string): ChatSession | null;
-  create(req: Partial<CreateChatSessionRequest>, opts: { actor: string; parentId: string }): Promise<ChatSession>;
+  create(
+    req: Partial<CreateChatSessionRequest>,
+    opts: { actor: string; parentId: string; spawn?: { claude: string; why: string; role?: string | null; model?: string | null; effort?: string | null; mode?: string | null } },
+  ): Promise<ChatSession>;
   send(id: string, uuid: string, text: string, opts: { actor: string }): Promise<void>;
   messageFamily(fromId: string, toId: string, text: string, opts?: { priority?: 'next' | 'later' }): Promise<void>;
   children(id: string): ChatSession[];
   /** T-294: the other workers of a session's parent. */
   crew(id: string): ChatSession[];
   /** T-294: the Claude a worker of `parentId` starts on, and why. */
-  spawnClaude(parentId: string, want?: string): Promise<{ claudeId: string; name: string; why: SpawnClaudeWhy }>;
+  spawnClaude(parentId: string, want?: string, model?: string | null): Promise<{ claudeId: string; name: string; why: SpawnClaudeWhy }>;
   /** A model, effort or mode change (the controller's rules: never Bypass or Auto from here). */
   control(id: string, op: ChatControl['op'], args?: ChatControl['args']): Promise<void>;
   interrupt(id: string): Promise<void>;
@@ -45,15 +48,21 @@ function plainText(text: string): string {
   return text;
 }
 
-/** The modes a worker may be started in (the same as session_configure over MCP): never Auto or Bypass. */
-const WORKER_MODES = ['plan', 'default', 'acceptEdits', 'dontAsk'] as const satisfies readonly ChatPermissionMode[];
+/**
+ * The modes a session may start a worker in: what a worker got before T-294 (`default`, a person answers) or something narrower
+ * (`plan` never changes a file; `dontAsk` runs only what the folder's rules allow and refuses the rest without waiting). Never Auto,
+ * Bypass or acceptEdits: a session can't hand a worker more than it had to ask for.
+ */
+const WORKER_MODES = ['plan', 'default', 'dontAsk'] as const satisfies readonly ChatPermissionMode[];
+/** The modes that narrow a worker: unconfirmed, the worker is ended before it gets its instruction. */
+const NARROWING: ReadonlySet<string> = new Set(['plan', 'dontAsk']);
 /** A role is the name of an agent definition in the worker's folder, `.claude/agents/<role>.md` (T-294). */
 const ROLE_NAME = /^[a-z][a-z0-9-]{1,40}$/;
 /** What a worker's Claude choice says in a result (T-294). */
 const WHY_TEXT: Record<SpawnClaudeWhy, string> = {
   parent: 'your Claude',
   named: 'the Claude you named',
-  most_room: 'the Claude with the most room',
+  room: 'a Claude with room by a fresh, measured reading',
   no_room: 'your Claude: no other has room by a measured reading',
   usage_unknown: 'your Claude: usage is not readable now',
 };
@@ -110,15 +119,15 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       role: z.string().regex(ROLE_NAME).optional().describe('An agent definition in its folder (.claude/agents/<role>.md, e.g. implementer, qa-verifier): it is told to work by it.'),
       model: z.string().min(1).max(80).optional().describe('Its model (sonnet, opus, haiku or a full id), set before its first instruction.'),
       effort: z.string().min(1).max(20).optional().describe('Its effort level (low, medium, high), set before its first instruction.'),
-      mode: z.enum(WORKER_MODES).optional().describe('Its permission mode: dontAsk runs only what the folder allows and refuses the rest without waiting; acceptEdits takes file edits; default asks a person.'),
+      mode: z.enum(WORKER_MODES).optional().describe('Its permission mode: dontAsk runs only what the folder allows and refuses the rest without waiting; plan changes no file; default (as before) asks a person.'),
     }),
     async handler(ctx, args) {
       const parentId = self(ctx);
       const parent = chat.get(parentId);
       if (!parent) throw new AppError('NOT_FOUND', 'This session is gone.');
       plainText(args.prompt);
-      // T-294: the Claude first (a name that is not a Claude of this workspace is refused before anything starts).
-      const on = await chat.spawnClaude(parentId, args.claude);
+      // T-294: the Claude first (an unknown name, or a Claude billed per use, is refused before anything starts).
+      const on = await chat.spawnClaude(parentId, args.claude, args.model ?? null);
       const child = await chat.create(
         {
           workspaceId: parent.workspaceId,
@@ -127,21 +136,32 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
           claudeId: on.claudeId,
           ...(args.worktree ? { worktree: args.worktree === true ? {} : args.worktree } : {}),
         },
-        { actor: ctx.actor, parentId },
+        {
+          actor: ctx.actor,
+          parentId,
+          spawn: { claude: on.claudeId, why: on.why, role: args.role ?? null, model: args.model ?? null, effort: args.effort ?? null, mode: args.mode ?? null },
+        },
       );
-      // Model, effort and mode before the first instruction, so it runs with them from its first turn; one refused is said, not fatal.
+      // Mode first (it narrows what the worker may do), then model and effort, all before the first instruction. A narrowing mode that is
+      // not confirmed ends the worker before it gets any instruction (fail closed); a model or effort not confirmed is said, not fatal. A
+      // control that timed out may still apply later, so it is "not confirmed", never "not applied".
       const applied: string[] = [];
-      const refused: string[] = [];
+      const unconfirmed: string[] = [];
       const asks: [ChatControl['op'], ChatControl['args'], string][] = [];
+      if (args.mode) asks.push(['mode', { mode: args.mode }, `mode ${args.mode}`]);
       if (args.model) asks.push(['model', { model: args.model }, `model ${args.model}`]);
       if (args.effort) asks.push(['effort', { effort: args.effort }, `effort ${args.effort}`]);
-      if (args.mode) asks.push(['mode', { mode: args.mode }, `mode ${args.mode}`]);
       for (const [op, value, label] of asks) {
         try {
           await chat.control(child.id, op, value);
           applied.push(label);
         } catch (e) {
-          refused.push(`${label}: ${e instanceof Error ? e.message.slice(0, 120) : 'refused'}`);
+          const why = e instanceof Error ? e.message.slice(0, 120) : 'refused';
+          if (op === 'mode' && NARROWING.has(args.mode ?? '')) {
+            await chat.end(child.id).catch(() => undefined);
+            throw new AppError('CONFLICT', `The worker could not be confirmed in ${args.mode} mode (${why}), so it was ended before it got any instruction. Try again.`);
+          }
+          unconfirmed.push(`${label}: ${why}`);
         }
       }
       const first = args.role ? `You work as the ${args.role} role: read .claude/agents/${args.role}.md in your folder first and follow it.\n\n${args.prompt}` : args.prompt;
@@ -151,7 +171,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       return {
         summary:
           `Started worker ${child.id} on ${where}${child.worktree ? `, branch ${child.worktree.branch}` : ''}${applied.length ? `, ${applied.join(', ')}` : ''}.` +
-          `${refused.length ? ` Not applied: ${refused.join('; ')}.` : ''} It reports to you; message it with session_message.`,
+          `${unconfirmed.length ? ` Not confirmed: ${unconfirmed.join('; ')}.` : ''} It reports to you; message it with session_message.`,
         session: {
           id: child.id,
           title: ctx.untrusted(child.title, 'agent'),
@@ -161,7 +181,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
           claude: { id: on.claudeId, name: on.name, why: on.why },
           role: args.role ?? null,
           applied,
-          refused,
+          unconfirmed,
         },
       };
     },
@@ -237,7 +257,8 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     async handler(ctx, args) {
       const me = self(ctx);
       const worker = chat.get(args.session_id);
-      if (!worker || worker.parentId !== me) throw new AppError('FORBIDDEN', 'You can only stop the workers you started.');
+      // Not one of its own workers: the same 404 as no session at all (what a session may not reach, it does not learn exists).
+      if (!worker || worker.parentId !== me) throw new AppError('NOT_FOUND', 'No such worker of yours (session_family lists them).');
       if (args.action === 'end') await chat.end(worker.id);
       else await chat.interrupt(worker.id);
       ctx.affected(`session:${worker.id}`);

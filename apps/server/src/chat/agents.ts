@@ -6,7 +6,9 @@
 // read through `agentCaps`.
 
 import { AppError } from '@isnanme/core';
-import type { MoveRecommendation, WorkspaceClaude } from '@portal/contracts';
+import type { ClaudeUsage, WorkspaceClaude } from '@portal/contracts';
+import { unknownUsage } from '../autotransfer/decide.js';
+import { recommendMove } from '../claudeusage/recommend.js';
 import { defineSetting } from '../settings/registry.js';
 import { SESSION_CAP } from './caps.js';
 
@@ -61,7 +63,7 @@ defineSetting({
   group: 'sessions',
   order: 70,
   label: 'Messages an hour',
-  help: 'How many messages one session may send to its workers or its parent in an hour. Stops two sessions from answering each other forever.',
+  help: 'How many messages one session may send to its parent, its workers or its crew in an hour. Stops two sessions from answering each other forever.',
 });
 
 /** The limits on sessions starting and messaging sessions, read each time. */
@@ -116,40 +118,61 @@ export class MessageRate {
   }
 }
 
-/** Why a worker runs on the Claude it got (T-294): its parent's, the one it was told, the one with the most room, or its parent's for want of one. */
-export type SpawnClaudeWhy = 'parent' | 'named' | 'most_room' | 'no_room' | 'usage_unknown';
+/** Why a worker runs on the Claude it got (T-294): its parent's, the one it was told, one with room, or its parent's for want of one. */
+export type SpawnClaudeWhy = 'parent' | 'named' | 'room' | 'no_room' | 'usage_unknown';
 
 /** What a worker may be told to run on: `same` (its parent's Claude, the default), `auto`, or a Claude's name or id. */
-export const SPAWN_CLAUDE_HELP = 'same (your Claude, the default), auto (the Claude of this workspace with the most room by a measured reading), or a Claude’s name';
+export const SPAWN_CLAUDE_HELP = 'same (your Claude, the default), auto (a Claude of this workspace with room by a fresh, measured reading, the least busy first), or a Claude’s name';
+
+/** What the worker's Claude is chosen from (T-294). */
+export interface SpawnPick {
+  want: string | undefined;
+  workspaceId: string;
+  parentClaudeId: string;
+  claudes: readonly Pick<WorkspaceClaude, 'id' | 'name' | 'removedAt'>[];
+  /** The Claude usage report's rows, or null when it could not be read. */
+  usage: readonly ClaudeUsage[] | null;
+  /** The model family the worker will run (its asked model, else its parent's): a model window of that family counts. */
+  family: string | null;
+  /** The sessions on a Claude now that have not ended: a burst spreads over the Claudes with room. */
+  load: (claudeId: string) => number;
+  nowMs: number;
+}
 
 /**
- * T-294: the Claude a worker starts on. `same` (or nothing) is the parent's. A name (any case) or an id must be a Claude of the workspace
- * that is not removed. `auto` takes the Move ranking's best Claude of the workspace, the parent's own included, only when a measured,
- * fresh reading says it has room (`room`): never a pool's or an API key's (billed per use), and never one that is tight, over its pace,
- * exhausted, signed out or unknown. With none, or with no ranking, the worker stays on the parent's Claude and says why.
+ * T-294: the Claude a worker starts on. `same` (or nothing) is the parent's. `auto` takes the Claudes the Move ranking classes `room`
+ * (every Claude of the workspace, the parent's included) whose reading is measured AND fresh by the auto-transfer's own test
+ * (`unknownUsage`: a reading Claude Code could not give, no reset time, older than 15 minutes, or no window: unknown), that run on a
+ * plan (never an API key or a pool, billed per use), and of those the one with the fewest live sessions, the ranking's order between
+ * equals. With none, or with no usage report, the parent's, and why. A name (any case) or an id must be a Claude of the workspace on a
+ * plan: one billed per use, or one whose plan can't be read now, is refused. The refusals never list the Claudes.
  */
-export function pickSpawnClaude(
-  want: string | undefined,
-  parentClaudeId: string,
-  claudes: readonly Pick<WorkspaceClaude, 'id' | 'name' | 'removedAt'>[],
-  ranking: MoveRecommendation | null,
-): { claudeId: string; why: SpawnClaudeWhy } {
-  const w = (want ?? '').trim();
-  if (!w || w.toLowerCase() === 'same') return { claudeId: parentClaudeId, why: 'parent' };
-  const live = claudes.filter((c) => !c.removedAt);
+export function pickSpawnClaude(p: SpawnPick): { claudeId: string; why: SpawnClaudeWhy } {
+  const w = (p.want ?? '').trim();
+  if (!w || w.toLowerCase() === 'same') return { claudeId: p.parentClaudeId, why: 'parent' };
+  const live = p.claudes.filter((c) => !c.removedAt);
+  const usageOf = (id: string) => p.usage?.find((u) => u.claudeId === id);
   if (w.toLowerCase() === 'auto') {
-    if (!ranking) return { claudeId: parentClaudeId, why: 'usage_unknown' };
+    if (!p.usage) return { claudeId: p.parentClaudeId, why: 'usage_unknown' };
     const ids = new Set(live.map((c) => c.id));
-    // The ranking lists `room` first by what is left, then the rest; the first `room` one with a measured, fresh reading is the best.
-    const best = ranking.candidates.find((c) => c.rank !== null && c.reason === 'room' && c.basis === 'measured' && !c.stale && ids.has(c.claudeId));
-    if (!best) return { claudeId: parentClaudeId, why: 'no_room' };
-    return { claudeId: best.claudeId, why: best.claudeId === parentClaudeId ? 'parent' : 'most_room' };
+    const ranking = recommendMove([...p.usage], { workspaceId: p.workspaceId, from: null, nowMs: p.nowMs });
+    const fit = ranking.candidates.filter((c) => {
+      const u = usageOf(c.claudeId);
+      return c.rank !== null && c.reason === 'room' && c.basis === 'measured' && !c.stale && ids.has(c.claudeId) && u?.runsOn === 'plan' && unknownUsage(u, p.family, p.nowMs) === null;
+    });
+    if (!fit.length) return { claudeId: p.parentClaudeId, why: 'no_room' };
+    const best = fit.reduce((a, b) => (p.load(b.claudeId) < p.load(a.claudeId) ? b : a));
+    return { claudeId: best.claudeId, why: best.claudeId === p.parentClaudeId ? 'parent' : 'room' };
   }
   const hit = live.find((c) => c.id === w || c.name.toLowerCase() === w.toLowerCase());
-  if (!hit) {
-    throw new AppError('VALIDATION_FAILED', `No Claude “${w.slice(0, 40)}” on this workspace. Use same, auto or one of: ${live.map((c) => c.name).join(', ')}.`, {
-      details: { claude: 'Unknown Claude.' },
-    });
+  if (!hit) throw new AppError('VALIDATION_FAILED', 'No such Claude on this workspace. Use same, auto or the name of one of its Claudes.', { details: { claude: 'Unknown Claude.' } });
+  if (hit.id === p.parentClaudeId) return { claudeId: hit.id, why: 'parent' };
+  const runsOn = usageOf(hit.id)?.runsOn;
+  if (runsOn !== 'plan') {
+    throw new AppError(
+      'FORBIDDEN',
+      runsOn === 'key' || runsOn === 'pool' ? 'A worker never runs on a Claude billed per use (an API key or a pool). Use same or auto.' : 'That Claude’s plan can’t be read now. Use same or auto, or name it again later.',
+    );
   }
-  return { claudeId: hit.id, why: hit.id === parentClaudeId ? 'parent' : 'named' };
+  return { claudeId: hit.id, why: 'named' };
 }
