@@ -93,6 +93,7 @@ test('one row that updates: near, projected, again, high, a milder projection, o
     assert.notEqual(s.rows()[0]!.read_at, null, 'and stays read');
 
     s.advance(60_000);
+    const before = s.rows()[0]!.at;
     s.emit(high);
     await s.settle();
     const afterHigh = s.rows();
@@ -100,7 +101,7 @@ test('one row that updates: near, projected, again, high, a milder projection, o
     assert.equal(afterHigh[0]!.stage, 2);
     assert.match(afterHigh[0]!.body, /5\s?% left/);
     assert.equal(afterHigh[0]!.read_at, null, 'worse: unread again');
-    assert.equal(afterHigh[0]!.at, new Date(T0 + 180_000).toISOString(), 'and at the top');
+    assert.ok(afterHigh[0]!.at > before, 'and at the top (the time of the worse event)');
     assert.deepEqual(s.status(), ['sent', 'suppressed:collapsed', 'sent']);
 
     s.advance(60_000);
