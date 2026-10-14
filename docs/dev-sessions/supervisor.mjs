@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The supervisor of the autonomous development session (docs/dev-sessions/README.md): ONE orchestrator session that works with sub-agents.
-// It runs INSIDE the dev workspace (kubernetes/kohi-event) as a plain background process, so it goes on when the coordinator's own session is closed:
+// It runs OUTSIDE the pod (D-14: the owner's sign-in code is never where agents can read it; tools/coordinator/up.sh starts it) as a plain background process, so it goes on when the coordinator's own session is closed:
 //   PORTAL_SERVER_CODE=<the 8-character sign-in code> [DEPLOY_RUN=<run id>] nohup node docs/dev-sessions/supervisor.mjs >> ~/.claudepilot/dev-sessions/supervisor.log 2>&1 &
 // What it does, as the owner's delegate (it signs in with the owner's code, which the owner asked for: "run it autonomously, in Bypass mode, without
 // asking a human again"):
