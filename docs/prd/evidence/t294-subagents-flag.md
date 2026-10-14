@@ -54,3 +54,15 @@ Lines below are cut to the fields that matter (jq); nothing else was kept.
   workflow started from a portal session runs sub-agents was not tried. Taking it away too (`--disallowedTools Agent Task Workflow`) is a
   one-word change once a probe shows it does.
 - `--resume` with the flag (the portal passes it at every start, resume included, so it does not depend on the transcript remembering it).
+
+## Second probe (coordinator, 2026-10-14): Workflow and RemoteTrigger
+
+The first run left `Workflow` (a script that orchestrates sub-agents) in the tools, and the agent itself named it as a way to run agents. One more
+run, the same recipe with `--disallowedTools Agent Task Workflow RemoteTrigger`, model haiku, cost $0.0055, exit 0, nothing on stderr:
+
+- `system/init` tools: 26; `Agent`, `Task`, `Workflow` and `RemoteTrigger` absent; `Skill` present.
+- The answer: "None of my tools is a dedicated agent launcher, but SendMessage and ListAgents work with existing agents, Skill can run some
+  skills in a subagent, and CronCreate and ScheduleWakeup schedule later runs."
+
+So the portal's list is `Agent Task Workflow RemoteTrigger` (`SUBAGENT_TOOLS`, apps/server/src/chat/agents.ts). Known gap: `Skill` stays on,
+and a skill that runs in a forked context runs in a sub-agent; `SendMessage` reaches only agents that already exist.

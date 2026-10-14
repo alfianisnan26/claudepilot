@@ -86,8 +86,13 @@ export function effectiveMaxWorkers(caps: Pick<AgentCaps, 'maxChildren'> | null 
   return mine === null ? caps.maxChildren : Math.min(mine, caps.maxChildren);
 }
 
-/** T-294: the Claude Code tools a session with sub-agents off is launched without (`--disallowedTools`): the sub-agent tool under both its names. */
-export const SUBAGENT_TOOLS = ['Agent', 'Task'] as const;
+/**
+ * T-294: the Claude Code tools a session with sub-agents off is launched without (`--disallowedTools`): the sub-agent tool under both its
+ * names, `Workflow` (a script that orchestrates sub-agents) and `RemoteTrigger` (starts remote agents). Verified with Claude Code 2.1.296
+ * (docs/prd/evidence/t294-subagents-flag.md): none of the four is in `system/init`'s tools then. Known gap: `Skill` stays (skills are how
+ * a session works), and a skill that runs in a forked context runs in a sub-agent.
+ */
+export const SUBAGENT_TOOLS = ['Agent', 'Task', 'Workflow', 'RemoteTrigger'] as const;
 
 /**
  * Why a session may not start another, or null when it may. `parent` is the session that would start it, with its own limit on workers

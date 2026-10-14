@@ -1,6 +1,6 @@
 // T-294 (chat-sessions PRD FR51, "Limits per session"): how many workers a session may run at once (its own, clamped to the global
 // sessions.maxChildren; 0 none) and whether its Claude may start Claude Code sub-agents (off: every start of its process carries
-// `--disallowedTools Agent Task`). A worker's limits are never wider than its parent's; a person or an admin token changes them, a session
+// `--disallowedTools Agent Task Workflow RemoteTrigger`). A worker's limits are never wider than its parent's; a person or an admin token changes them, a session
 // never does. What the real CLI does with the flag (2.1.296): docs/prd/evidence/t294-subagents-flag.md.
 
 import assert from 'node:assert/strict';
@@ -200,14 +200,14 @@ test('a worker’s limits are never wider than its parent’s; what it is not gi
 
 /* ---------- The launch ---------- */
 
-test('sub-agents off: the process starts with --disallowedTools Agent Task; on (the default) without it; a change waits for the next start', async () => {
+test('sub-agents off: the process starts with --disallowedTools Agent Task Workflow RemoteTrigger; on (the default) without it; a change waits for the next start', async () => {
   const s = await liveSession();
   try {
     s.controller.controlTimeoutMs = 150;
     assert.equal(disallowedOf(lastStart(s)), null, 'on by default: no flag');
     const off = await worker(s, s.id, { subagents: false });
     const args = s.ws.startArgs.find((a) => a.includes(off.id))!;
-    assert.deepEqual(disallowedOf(args), ['Agent', 'Task']);
+    assert.deepEqual(disallowedOf(args), ['Agent', 'Task', 'Workflow', 'RemoteTrigger']);
     assert.ok(args.indexOf('--disallowedTools') > args.indexOf('--'), 'a flag of claude, after the host’s own arguments');
     const on = await worker(s, s.id, { subagents: true });
     assert.equal(disallowedOf(s.ws.startArgs.find((a) => a.includes(on.id))!), null);
@@ -221,7 +221,7 @@ test('sub-agents off: the process starts with --disallowedTools Agent Task; on (
     const starts = s.ws.startArgs.length;
     await answered(s, s.controller.restart(s.id, { why: 'mcp' }));
     assert.equal(s.ws.startArgs.length, starts + 1);
-    assert.deepEqual(disallowedOf(lastStart(s)), ['Agent', 'Task'], 'restart');
+    assert.deepEqual(disallowedOf(lastStart(s)), ['Agent', 'Task', 'Workflow', 'RemoteTrigger'], 'restart');
     // And on again.
     assert.equal(s.controller.setLimits(s.id, { subagents: true }, { actor: 'ui' }).restartNeeded, true);
     await answered(s, s.controller.restart(s.id, { why: 'mcp' }));
@@ -244,7 +244,7 @@ test('sub-agents off is kept at every relaunch: a resume after the process went 
     const waking = s.controller.control(s.id, 'resume');
     await until(() => s.controller.get(s.id)!.process === 'live' && s.ws.startArgs.length === starts + 1);
     await answered(s, waking).catch(() => undefined);
-    assert.deepEqual(disallowedOf(lastStart(s)), ['Agent', 'Task'], 'wake');
+    assert.deepEqual(disallowedOf(lastStart(s)), ['Agent', 'Task', 'Workflow', 'RemoteTrigger'], 'wake');
 
     // The process goes away; the next resume relaunches it.
     await until(() => s.controller.get(s.id)!.state === 'idle');
@@ -257,7 +257,7 @@ test('sub-agents off is kept at every relaunch: a resume after the process went 
     await until(() => s.controller.get(s.id)!.process === 'live' && s.ws.startArgs.length === starts + 1);
     await answered(s, resuming).catch(() => undefined);
     assert.ok(lastStart(s).includes('--resume'), 'resumed');
-    assert.deepEqual(disallowedOf(lastStart(s)), ['Agent', 'Task'], 'resume');
+    assert.deepEqual(disallowedOf(lastStart(s)), ['Agent', 'Task', 'Workflow', 'RemoteTrigger'], 'resume');
   } finally {
     await s.done();
   }
@@ -284,7 +284,7 @@ test('a Move keeps the limits: the new Claude Code session on the other Claude s
     assert.deepEqual([moved.subagents, moved.maxWorkers], [false, 2], 'the session keeps its limits');
     const started = s.ws.startArgs.find((a) => a.includes(newId))!;
     assert.ok(started.includes('--session-id'), 'a new Claude Code session there');
-    assert.deepEqual(disallowedOf(started), ['Agent', 'Task']);
+    assert.deepEqual(disallowedOf(started), ['Agent', 'Task', 'Workflow', 'RemoteTrigger']);
   } finally {
     await s.done();
   }
@@ -358,7 +358,7 @@ test('session_spawn with max_workers and subagents: the worker gets them, never 
     assert.deepEqual([w.max_workers, w.subagents], [1, false]);
     await until(() => s.ws.startArgs.length === before + 1);
     assert.deepEqual([s.controller.get(w.id)!.maxWorkers, s.controller.get(w.id)!.subagents], [1, false]);
-    assert.deepEqual(disallowedOf(s.ws.startArgs.find((x) => x.includes(w.id))!), ['Agent', 'Task']);
+    assert.deepEqual(disallowedOf(s.ws.startArgs.find((x) => x.includes(w.id))!), ['Agent', 'Task', 'Workflow', 'RemoteTrigger']);
 
     // Its own limit (2) holds over MCP too: the second is fine, the third refused as its own.
     h.alive.add(w.id);
