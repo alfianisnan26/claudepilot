@@ -34,22 +34,18 @@ Today an LLM chat (the orchestrator) does the plumbing: picks the ticket, writes
 
 The orchestrator chat shrinks to an exception handler: conflicts, decisions with no written default, escalations. Its context stays small because it no longer carries the plumbing. Expected effect: the orchestrator share of the bill falls from 21 percent to about 8 percent, and integrity endings of the main chat stop dominating because nothing long-lived depends on it.
 
-## 4. The levers, ranked by estimated saving per unit of effort
+## 4. The levers, ranked by MEASURED saving (evidence in section 9)
 
-| # | Lever | Mechanism | Est. saving of total | Effort |
-| --- | --- | --- | --- | --- |
-| 1 | Availability (no idle, no re-built contexts) | T-259 watchdog in the portal, T-277 integrity fix, T-255, T-256, T-257, T-270 | output per dollar +25 percent | in progress |
-| 2 | Context pack | a generated file (architecture map, routes, commands, conventions, where things live), at most 6 k tokens, rebuilt by CI at each merge; agents read it first instead of exploring | 8 to 12 percent (inspection is 23 percent of sub-agent Bash) | small |
-| 3 | Task scripts and macro tools | `slice-check.sh`, `commit.sh` (adds the trailers), `integrate.sh`, `status.sh`; Portal MCP `ticket_start`, `ticket_finish`, `ci_wait` (blocks, no polling); each replaces 3 to 10 round trips | 8 to 12 percent | small to medium |
-| 4 | Output budgets | `quiet.sh`, `BASH_MAX_OUTPUT_LENGTH=8000`, compact MCP results (T-282); a 5 k character cap trims 34 percent of result characters | 5 to 10 percent | done in part |
-| 5 | Model by role | agent definitions with fixed models; explorer on haiku, review and verification on sonnet; opus for implementation and security | 10 to 15 percent | done, to be enforced |
-| 6 | Diff-only review and verification | the reviewer never loads the repo; the verifier runs a harness and reads its summary | 3 to 5 percent | small |
-| 7 | Stable cache prefix | the system prompt, CLAUDE.md and the primer identical across agents of a program, volatile facts only in the user message: the first agent writes the cache, the rest read it at a tenth of the price; never edit CLAUDE.md in the middle of a busy hour | 3 to 6 percent | small |
-| 8 | Quota-aware concurrency | agents allowed by the projection at reset (under 60 percent five, 60 to 90 three, above one or two); deploy batching | avoids stalls and re-builds | done as a rule |
-| 9 | Per-ticket token budget | size S, M, L, XL from the ESTIMATE comment maps to a request and context budget; the engine stops at 150 percent, writes why, and the overrun feeds the scoreboard | caps the tail (the worst tickets) | medium |
-| 10 | Orchestrator as exception handler | the factory engine above | 8 to 12 percent | large (phase 2) |
+| # | Lever | Evidence | Saving of the bill | Effort | Status |
+| --- | --- | --- | --- | --- | --- |
+| 1 | One hour prompt cache for sub-agents | Sub-agent cache writes are 100 percent 5 minute TTL (66.7 M tokens) while main chats are 100 percent 1 hour; 47.1 M tokens (65 percent of all cache writes, 46.1 M of them in sub-agents) re-write context after a 5 to 60 minute gap (median 10 min). Claude Code 2.1.296 itself: sub-agent TTL is 5 minutes unless ENABLE_PROMPT_CACHING_1H=1 or CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h. | about 15 percent (computed: writes 66.7 M x 1.25 = 83 M units today against 19.6 M new x 2.0 = 39 M units with 1 h; rewrites vanish) | one variable | SET in pool agent-limits 2026-10-14 (ENABLE_PROMPT_CACHING_1H=1); applies when a Claude process starts; verify by experiment (section 6) |
+| 2 | Cap tool results | counterfactual replay of all 184 threads: a cap of 5,000 characters saves 8.9 percent of input-side cost, 8,000 saves 5.7, 15,000 saves 2.3 | about 5 percent at 8,000 | one variable | SET (BASH_MAX_OUTPUT_LENGTH=8000, MAX_MCP_OUTPUT_TOKENS=5000) |
+| 3 | Batch consecutive inspection, git-read and api calls | counterfactual: only the re-read of the removed requests' context counts: 3.1 percent (more with their writes and output) | 3 to 5 percent | discipline and task scripts | rules sent; scripts in phase 1 |
+| 4 | Model by role | request cost ratio opus to sonnet about 12 to 1 (not like for like), sonnet share went from 1.4 percent to about 10 percent in the first hour after the order | to be measured; 10 to 15 percent is an estimate | agent definitions | done, being measured |
+| 5 | Orchestrator chat as exception handler | main chats are 21 percent of cost, 49 percent of that hands-on Bash at 156 to 430 k context | 3 to 8 percent (estimate) | phase 2 | designed |
+| 6 | Availability (no idle, no re-built contexts) | 25 percent of wall time idle; 6 endings | output per dollar, not dollars | in progress | T-259, T-277, T-255, T-256, T-257, T-270 |
 
-Sum of 2 to 7 with overlap: about 30 to 40 percent of spend for the same output; with 1 and 10 the output per dollar roughly doubles. These are estimates; the experiment in section 6 settles them.
+Evidence-based total of 1 to 3: about 23 to 25 percent. With 4 and 5 (estimates): 30 to 40 percent. Earlier claims in this document that were NOT supported by the replay were withdrawn: a rule against short sub-agent runs (runs of 8 requests or fewer are 3 percent of runs and 0.1 percent of cost) and the 10 to 12 percent expected from a context pack (not measured; the inspection share of Bash calls is 23 percent of read cost, but replay shows batching returns about 3 percent).
 
 ## 5. Rules that stay (from the charter)
 
@@ -71,3 +67,16 @@ A smaller context can drop a fact the agent needed: the context pack is generate
 ## 8. Decisions the owner may want to make
 
 (a) Phase 2 on Event first: default yes. (b) The program budget split (ClaudePilot, Konfersi, Event): default 40, 25, 35 percent of the day's spend. (c) Whether the engine lives in the portal (phase 3) or stays a script run by the supervisor: default decided by the phase 2 numbers. Nothing here needs a secret or a permission.
+
+## 9. Evidence (reproducible, read only)
+
+All numbers come from the portal's raw session tapes and usage report. Scripts: `docs/dev-sessions/overhaul/evidence/`. Run them inside the workspace pod: `kubectl -n isnan-claudepilot-workspaces exec -i <pod> -c workspace -- python3 - < <script>`.
+
+- `tape_counterfactual.py` (11,869 assistant messages, 184 threads: 29 sessions plus their sub-agents): savings of capping tool results at 5,000 / 8,000 / 15,000 characters (8.9 / 5.7 / 2.3 percent of input-side cost), of batching consecutive inspection calls (3.1 percent), and sub-agent size: 155 sub-agent runs, median 49 requests, runs with 8 requests or fewer are 3 percent of runs and 0.1 percent of cost, the first request of a sub-agent is a median 12 k units.
+- `tape_cache_breaks.py`: cache writes 72.3 M tokens; 47.1 M (65 percent) re-write context after a cache miss; 46.1 M in sub-agents, 1.0 M in main chats; the gap before the miss is 5 to 60 minutes (46.5 M tokens), under 5 minutes 0.4 M, over 60 minutes 0.2 M, median 10 minutes.
+- TTL split (inline in this document's author's session, same method): main chats write 5.7 M tokens, 100 percent 1 hour TTL; sub-agents write 66.7 M tokens, 100 percent 5 minute TTL.
+- Cost shape (calibrated to the usage report): cache read about 55 percent, cache write about 32 percent, output about 13 percent; main chats 21 percent of cost, sub-agents 79 percent; sub-agent Bash calls 8,458: test and build 26 percent, inspection 23, other 17, edit by script 10, git read 6, api 6, waiting 6, git write 6 (percent of read cost); main chats 1,287 Bash calls: git write 28, test 23, inspection 18.5, git read 14.
+- Tool results: 12,582 results, p50 786 characters, p90 6.5 k, p99 22 k; Bash is 80 percent of result characters, Read 8.8, ticket_get 5.5.
+- Claude Code behaviour: the installed 2.1.296 settings schema states: sub-agent, workflow, background and helper requests use a 5 minute cache unless ENABLE_PROMPT_CACHING_1H=1, and CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL ("5m" or "1h") takes precedence; the main conversation is automatic: 1 hour on a subscription within its limits.
+- Limits of this evidence: the output share is calibrated, not read from the tapes (the stream snapshot undercounts output); cost weights are the standard cache price ratios (read 0.1, write 1.25 or 2.0, output 5); the replay does not change what the agents would have done; the coordinator's own VS Code session is not in the tapes; quota (windows per account), not dollars, is the binding limit.
+- Experiment to confirm lever 1 (owner can ask for the numbers at any time): after the Claude processes restart with ENABLE_PROMPT_CACHING_1H=1, rerun `tape_cache_breaks.py` and the TTL split on tapes written after the restart; expected: sub-agent writes mostly 1 hour TTL, re-written tokens under 10 percent of writes. If the variable has no effect, the alternative is the managed setting or CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL through the policy owner (the secrets pool refuses CLAUDE_* names).
