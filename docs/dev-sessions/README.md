@@ -11,6 +11,11 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
    AskUserQuestion. A thing that needs a real device, a credential or an owner decision goes under NEEDS A HUMAN in the status file; skip to the next item.
    An agent never files a needs-a-person ticket for a platform step it can do with a tool (taking over an ended chat's tickets with `ticket_adopt`,
    a continuation with `continuedFrom`, a restart, a move): it does the step and says so in one line on its status ticket instead (T-270, D-34).
+   A ticket held by an ended session falls back by itself to the live successor of its track, else to the queue (never to a person); `ticket_adopt`
+   takes one by hand (CONFLICT while the holder is live, NOT_FOUND when unknown); `ticket_claim_next` takes only `open` tickets (T-275).
+   Working a ticket (coordinator, 2026-10-14): CLAIM before work (`in_progress` and an ESTIMATE comment: size S|M|L|XL, hours, severity 1-4, risks);
+   CLOSE with an ACTUAL comment (hours, sub-agent runs, commits, rework, defects after delivery, cost estimate) and the `Ticket`, `Pilot-Session`,
+   `Pilot-Agent` trailers on every commit; MODEL by role (`.claude/agents`).
 2. **Worktrees.** Sub-agents work in a git worktree each, never in the main folder `~/work/claudepilot`, and never in another agent's worktree. Prepared
    ones (with `node_modules`) are in `~/work/claudepilot.worktrees/`; a new one is `git worktree add ~/work/claudepilot.worktrees/<name> -b dev/<name> origin/integration`
    and then `flock /tmp/heavy.lock npm ci` (`NODE_AUTH_TOKEN` is set in the shell; the private `@isnanme/ui` package needs it). The Agent tool's
