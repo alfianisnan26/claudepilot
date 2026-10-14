@@ -148,14 +148,14 @@ export function McpAccess() {
         {(gone > 0 || live.length > 1) && (
           <div className="mt-2 flex items-center justify-between gap-3 text-[13px] text-muted">
             {gone > 0 ? (
-              <button type="button" className="rounded-lg font-semibold hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" onClick={() => setShowAll((v) => !v)}>
+              <button type="button" className="rounded-lg font-semibold hover:text-ink tap:min-h-11 tap:px-1 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" onClick={() => setShowAll((v) => !v)}>
                 {showAll ? 'Hide' : 'Show'} {gone} ended
               </button>
             ) : (
               <span />
             )}
             {live.length > 1 && (
-              <button type="button" className="rounded-lg font-semibold text-danger focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" onClick={() => setConfirm({ kind: 'all' })}>
+              <button type="button" className="rounded-lg font-semibold text-danger tap:min-h-11 tap:px-1 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" onClick={() => setConfirm({ kind: 'all' })}>
                 Revoke all
               </button>
             )}
