@@ -106,7 +106,8 @@ async function bareThroughput(total: number): Promise<number> {
 // under the skip threshold it measured the load. So the suite checks the mux against the bare WebSocket under it, measured in the same
 // run, round by round (each pair of numbers a moment apart sees the same load): the mux's own cost, which a regression moves and load does
 // not. The best round counts, so one round hit by a burst of load does not decide. The absolute number is printed for the budget runs.
-const MUX_SHARE_MIN = 0.3;
+// Measured on the 8-CPU nodes (T-297, 20 runs): best round 82 to 99 % idle, 80 to 131 % beside a busy loop per CPU; one bad round 49 %.
+const MUX_SHARE_MIN = 0.5;
 test(`one stream moves at least ${MUX_SHARE_MIN * 100} % of the bare WebSocket's throughput (80 MB/s on a quiet machine)`, async () => {
   const total = 64 * 1024 * 1024;
   const rounds: { bare: number; mux: number }[] = [];
