@@ -36,10 +36,46 @@ test('logs: the rerun alone decides (the last summary), and says which files pas
 });
 
 test('logs: a file that passed only alone is reported as flaky, with the tests that failed in the full run (T-95)', () => {
-  const dir = logs([...ALL_OK, 'server-suite-rerun: passed alone: src/notify/pipeline.test.ts', 'server-suite-flaky: a deploy that waits for a person'], '# fail 1\n# fail 0\n# cancelled 0\n');
+  const dir = logs([...ALL_OK, 'server-suite-rerun: passed alone: src/notify/pipeline.test.ts', 'server-suite-flaky: src/notify/pipeline.test.ts;a deploy that waits for a person', 'server-suite-flaky: src/connect/hub.test.ts;the control stream'], '# fail 1\n# fail 0\n# cancelled 0\n');
   const v = verdict('logs', dir);
   assert.equal(v.code, 0);
-  assert.deepEqual(v.out.split('\n'), ['note: server-suite-rerun: passed alone: src/notify/pipeline.test.ts', 'note: flaky, passed on rerun: a deploy that waits for a person', 'GATE-VERDICT: green']);
+  assert.deepEqual(v.out.split('\n'), [
+    'note: server-suite-rerun: passed alone: src/notify/pipeline.test.ts',
+    'note: flaky, passed on rerun: src/notify/pipeline.test.ts;a deploy that waits for a person',
+    'note: flaky, passed on rerun: src/connect/hub.test.ts;the control stream',
+    'GATE-VERDICT: green',
+  ]);
+});
+
+test('flaky: each failing test of the full run as <file>;<name>, the file from its location; a failing file and a test with no location are left out (T-95 item 4)', () => {
+  const f = join(tempDirectory('cp-verdict-'), 'suite.log');
+  const loc = (file: string) => `      location: '/tmp/gate-abc/apps/server/${file}:12:3'`;
+  writeFileSync(
+    f,
+    [
+      '# Subtest: the hub',
+      '    not ok 3 - the control stream',
+      '      ---',
+      loc('src/connect/hub.test.ts'),
+      '      ...',
+      '    ok 4 - fine',
+      'not ok 5 - src/x.test.ts',
+      '  ---',
+      loc('src/x.test.ts'),
+      '  ...',
+      'not ok 6 - a deploy waits; in quiet hours',
+      '  ---',
+      loc('src/notify/pipeline.test.ts'),
+      '  ...',
+      'not ok 7 - no location',
+      'ok 8 - after',
+      '',
+    ].join('\n'),
+  );
+  assert.deepEqual(verdict('flaky', f), { code: 0, out: 'src/connect/hub.test.ts;the control stream\nsrc/notify/pipeline.test.ts;a deploy waits; in quiet hours' });
+  const none = join(tempDirectory('cp-verdict-'), 'none.log');
+  writeFileSync(none, 'ok 1 - fine\n# fail 0\n');
+  assert.deepEqual(verdict('flaky', none), { code: 0, out: '' });
 });
 
 test('failures: each failing test with its own report, the passing ones left out (T-95: the run log showed only "not ok")', () => {
