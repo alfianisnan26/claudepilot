@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AttributionBy } from '@portal/contracts';
 import { creatorOf, OWNER_ACTOR } from './actor.js';
-import { attribute, lineage, rootOf, shareOf, unattributed, workspaceNameOf, type AttributionInput, type GrouperFactory } from './attribution.js';
+import { attribute, chainRootOf, lineage, rootOf, shareOf, unattributed, workspaceNameOf, type AttributionInput, type GrouperFactory } from './attribution.js';
 import type { PersonaRecord, SessionInfo, UsageRow } from './model.js';
 
 // The fixture, worked out by hand (dollars; t0 + n is "n minutes in"):
@@ -311,6 +311,83 @@ test('a new dimension plugs in as one grouper: usage per user, children rolled u
   // Today the creator is the one owner, whoever is asked about.
   assert.equal(creatorOf(sessions.get('G1')), OWNER_ACTOR);
   assert.equal(creatorOf(undefined), 'u_owner');
+});
+
+// T-312: the chains split on 2026-10-13 (chat/lineage.ts SPLIT_CHAINS_2026_10_13), by hand. Ids are the real prefixes with a made-up tail.
+//   Orchestrator: O1 fe3df8bc (ticket T-136) $1.00 -> O2 fdb140be $2.00 -> O3 5c9fcb5f $3.00; O2 started worker W $0.50 (no ticket).
+//   Konfersi:     K1 541948a5 (ticket T-51) $0.40 -> K2 929ae1e3 $0.60.
+// The orchestrator's chain is one unit: O1 holds 1 + 2 + 3 + 0.5 = $6.50, O3 and O2 one level down (O2 with W under it); Konfersi $1.00.
+test('a chat continued as new rows rolls up under the first row of its chain: the head holds the sum, each segment is a row (T-312)', () => {
+  const id = (prefix: string) => `${prefix}-0000-4000-8000-${prefix}0000`;
+  const [O1, O2, O3, K1, K2, W] = [id('fe3df8bc'), id('fdb140be'), id('5c9fcb5f'), id('541948a5'), id('929ae1e3'), id('aaaaaaaa')];
+  const sessions = new Map<string, SessionInfo>([
+    info(O1, 'kubernetes/kohi-event', 'c1', 'Orchestrator', { ticketId: 'T-136', state: 'ended' }),
+    info(O2, 'kubernetes/kohi-event', 'c1', 'Orchestrator', { continuedFrom: O1, state: 'ended' }),
+    info(O3, 'kubernetes/kohi-event', 'c1', 'Orchestrator', { continuedFrom: O2 }),
+    info(W, 'kubernetes/kohi-event', 'c1', 'Worker', { parentId: O2 }),
+    info(K1, 'kubernetes/konfersi', 'c1', 'Konfersi', { ticketId: 'T-51', state: 'ended' }),
+    info(K2, 'kubernetes/konfersi', 'c1', 'Konfersi', { continuedFrom: K1 }),
+  ]);
+  const rows = [
+    row(O1, 'kubernetes/kohi-event', 'c1', 1, 1.0),
+    row(O2, 'kubernetes/kohi-event', 'c1', 2, 2.0),
+    row(W, 'kubernetes/kohi-event', 'c1', 3, 0.5),
+    row(O3, 'kubernetes/kohi-event', 'c1', 4, 3.0),
+    row(K1, 'kubernetes/konfersi', 'c1', 5, 0.4),
+    row(K2, 'kubernetes/konfersi', 'c1', 6, 0.6),
+  ];
+  const tree = attribute(input('session', { rows, sessions }));
+  assert.deepEqual(
+    tree.rows.map((r) => [r.key, r.session!.depth, r.own.costUsd, r.total.costUsd, r.sessions, r.session!.continuedFrom, r.session!.children]),
+    [
+      [O1, 0, 1, 6.5, 4, null, 2],
+      [O3, 1, 3, 3, 1, O2, 0],
+      [O2, 1, 2, 2.5, 2, O1, 1],
+      [W, 2, 0.5, 0.5, 1, null, 0],
+      [K1, 0, 0.4, 1, 2, null, 1],
+      [K2, 1, 0.6, 0.6, 1, K1, 0],
+    ],
+  );
+  const roots = tree.rows.filter((r) => r.session!.depth === 0);
+  assert.equal(roots.reduce((s, r) => s + r.total.costUsd, 0), tree.totals.costUsd, 'the roots still add up to the window');
+
+  // By ticket: the later rows carry no ticket of their own and take the chain's, the worker its parent's: nothing splits into "No ticket".
+  const byTicket = attribute(input('ticket', { rows, sessions }));
+  assert.deepEqual(byTicket.rows.map((r) => [r.key, r.state, r.total.costUsd, r.sessions]), [
+    ['T-136', 'known', 6.5, 4],
+    ['T-51', 'known', 1, 2],
+  ]);
+
+  // The lineage walks the chain before the parent; the chain root is its first row.
+  assert.deepEqual(lineage(W, sessions).sessions.map((s) => s.sessionId), [W, O2, O1]);
+  assert.deepEqual([chainRootOf(O3, sessions), chainRootOf(O1, sessions), chainRootOf(W, sessions)], [O1, O1, W]);
+});
+
+test('continuation links that cannot be followed: a predecessor not known falls back to the parent; a cycle ends without looping (T-312)', () => {
+  const sessions = new Map<string, SessionInfo>([
+    info('P', 'docker/api', 'c1', 'Parent', { ticketId: 'T-9' }),
+    info('C', 'docker/api', 'c1', 'Continues a gone one', { parentId: 'P', continuedFrom: 'GONE' }),
+    info('A', 'docker/api', 'c1', 'A', { continuedFrom: 'B' }),
+    info('B', 'docker/api', 'c1', 'B', { continuedFrom: 'A' }), // a cycle of continuation links (corrupt data)
+    info('SELF', 'docker/api', 'c1', 'Self', { continuedFrom: 'SELF' }),
+  ]);
+  assert.deepEqual(lineage('C', sessions), { sessions: [sessions.get('C')!, sessions.get('P')!], broken: false }, 'the parent, not a broken walk');
+  assert.equal(lineage('A', sessions).broken, true);
+  assert.deepEqual([chainRootOf('A', sessions), chainRootOf('B', sessions), chainRootOf('SELF', sessions)], ['B', 'A', 'SELF']);
+  const rows = [row('P', 'docker/api', 'c1', 1, 1), row('C', 'docker/api', 'c1', 2, 2), row('A', 'docker/api', 'c1', 3, 0.25), row('B', 'docker/api', 'c1', 4, 0.5), row('SELF', 'docker/api', 'c1', 5, 0.1)];
+  const tree = attribute(input('session', { rows, sessions }));
+  // Every dollar once: P 1 + C 2 = 3; the cycle is broken at its first id (A) so B sits under it: 0.75; SELF alone 0.1.
+  assert.deepEqual(
+    tree.rows.map((r) => [r.key, r.session!.depth, r.total.costUsd]),
+    [
+      ['P', 0, 3],
+      ['C', 1, 2],
+      ['A', 0, 0.75],
+      ['B', 1, 0.5],
+      ['SELF', 0, 0.1],
+    ],
+  );
+  assert.equal(tree.totals.costUsd, 3.85);
 });
 
 test('side questions: a `side` row is inside the window total and its session’s row, and shown apart in `side`; a window without one says 0', () => {

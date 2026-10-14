@@ -706,10 +706,13 @@ export class UsageSpend {
     );
     const ids = new Set(rows.map((r) => r.sessionId));
     const sessions = this.#store.sessions(ids);
-    // An agent's view of its own tree starts at its own session: nothing above it is shown.
-    if (q.sessionId) {
-      const root = sessions.get(q.sessionId);
-      if (root) sessions.set(q.sessionId, { ...root, parentId: null });
+    // An agent's view of its own tree starts at its own session: nothing above it is shown, neither its parent nor a chat it continues (T-312),
+    // and a continuation link that leaves the tree is not followed.
+    if (tree) {
+      for (const [id, s] of sessions) {
+        if (id === q.sessionId) sessions.set(id, { ...s, parentId: null, continuedFrom: null });
+        else if (s.continuedFrom && !tree.has(s.continuedFrom)) sessions.set(id, { ...s, continuedFrom: null });
+      }
     }
     const personas = by === 'persona' ? this.#store.personaRecords(ids) : new Map();
     const a = attribute({

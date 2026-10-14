@@ -28,6 +28,11 @@ export interface SessionInfo {
   workspaceId: string;
   claudeId: string;
   parentId: string | null;
+  /**
+   * The session this one continues (`chat_sessions.continued_from`, T-136 lineage), or null/absent. A continuation rolls up under the ROOT
+   * of its chain (T-312), so a chat split over several rows is one unit. Not kept after a delete (`usage_sessions` has no such column).
+   */
+  continuedFrom?: string | null;
   ticketId: string | null;
   title: string;
   state: ChatSessionState | null;
