@@ -67,14 +67,14 @@ class View {
     this.child.stdin!.write(`${JSON.stringify(m)}\n`);
   }
   /** Polls `find` until it answers; the timeout (times CP_TEST_TIME_SCALE) says what was seen: the last events and frames. */
-  async until<T>(what: string, find: () => T | undefined, ms = 8000): Promise<T> {
+  async until<T>(what: string | (() => string), find: () => T | undefined, ms = 8000): Promise<T> {
     const t0 = Date.now();
     for (;;) {
       const v = find();
       if (v !== undefined) return v;
       if (Date.now() - t0 > ms * TIME_SCALE) {
         const frames = this.frames.slice(-4).map((f) => f.header);
-        throw new Error(`timed out waiting for ${what}; events ${JSON.stringify(this.events.slice(-6))}; ${this.frames.length} frames, last ${JSON.stringify(frames)}; stderr ${this.stderr.join('').slice(-300)}`);
+        throw new Error(`timed out waiting for ${typeof what === 'string' ? what : what()}; events ${JSON.stringify(this.events.slice(-6))}; ${this.frames.length} frames, last ${JSON.stringify(frames)}; stderr ${this.stderr.join('').slice(-300)}`);
       }
       await sleep(40);
     }
@@ -265,17 +265,25 @@ describe('cpb-view', opts, () => {
 
   test('viewport: every change shows on a still page, and no frame is labelled with a size it does not have', async () => {
     await fresh(async (view) => {
+      // What was sent when, between the frames: the failure message carries it (T-330), e.g. `W1000x700 >w390 E390x700 >reset W1000x700`.
+      const sent = new Map<number, string[]>();
+      const send = (m: { w?: number; reset?: boolean }) => {
+        sent.set(view.frames.length, [...(sent.get(view.frames.length) ?? []), m.reset ? '>reset' : `>w${m.w}`]);
+        view.send({ t: 'viewport', ...m, ...(m.reset ? {} : { h: 700, dpr: 2, mobile: true }) });
+      };
+      const trace = () =>
+        `trace=${view.frames.map((f, i) => [...(sent.get(i) ?? []), `${f.header.emu ? 'E' : 'W'}${f.header.dw}x${f.header.dh}`].join(',')).join(',')}${(sent.get(view.frames.length) ?? []).map((s) => `,${s}`).join('')}`;
       // A still page paints nothing by itself: the frame of the new size must come from the view, every time (T-331).
       for (let i = 0; i < 4; i++) {
         let mark = view.frames.length;
-        view.send({ t: 'viewport', w: 390 + i * 10, h: 700, dpr: 2, mobile: true });
-        await view.until(`phone frame ${i}`, () => view.frames.slice(mark).find((f) => f.header.emu && f.header.dw === 390 + i * 10));
+        send({ w: 390 + i * 10 });
+        await view.until(() => `phone frame ${i} (${trace()})`, () => view.frames.slice(mark).find((f) => f.header.emu && f.header.dw === 390 + i * 10));
         mark = view.frames.length;
-        view.send({ t: 'viewport', reset: true });
-        await view.until(`window frame ${i}`, () => view.frames.slice(mark).find((f) => !f.header.emu && f.header.dw === 1000));
+        send({ reset: true });
+        await view.until(() => `window frame ${i} (${trace()})`, () => view.frames.slice(mark).find((f) => !f.header.emu && f.header.dw === 1000));
       }
-      assert.equal(view.frames.filter((f) => f.header.emu && f.header.dw === 1000).length, 0, 'no window-size frame called emulated');
-      assert.equal(view.events.filter((e) => e.e === 'error').length, 0);
+      assert.equal(view.frames.filter((f) => f.header.emu && f.header.dw === 1000).length, 0, `no window-size frame called emulated: ${trace()}`);
+      assert.deepEqual(view.events.filter((e) => e.e === 'error'), [], `no error: ${trace()}`);
     });
   });
 
