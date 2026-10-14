@@ -3,6 +3,8 @@
 // - `lab_summary`: the coordinator's pass in one call. Short rows by default (T-282's compact rule: a result is read again on every later
 //   request), `full: true` for every field, the experiments and the sources. An admin's token reads the portal; an agent's token reads only
 //   its own session's slices (no experiments).
+// - `lab_arm_draw` (T-292 slice 3): the arms of a slice drawn BEFORE its brief is written, for an experiment whose treatment is the brief
+//   itself (E2: pack on or off). The caller's own session only; the lab draws, the caller never picks; the brief carries the draw key.
 // - `lab_experiment_set`: admin tokens only, with the confirmation round trip: start a randomized or before-and-after experiment, or stop one.
 //
 // Counts and ids only; an experiment's name and hypothesis are a person's text and come back labelled untrusted.
@@ -40,15 +42,21 @@ export function compactRow(r: LabSummaryRow) {
   };
 }
 
-const experimentRow = (v: LabExperimentView, ctx: PortalToolContext) => ({
-  id: v.experiment.id,
-  name: ctx.untrusted(v.experiment.name, 'lab', 80),
-  status: v.experiment.status,
-  design: v.experiment.design,
-  strata: v.experiment.strata,
-  excluded: v.excluded,
-  arms: v.arms.map((a) => ({ arm: a.arm, n: a.n, accepted: a.accepted, cost_per_accepted: r2(a.costPerAccepted), ci90: ci(a.costPerAcceptedInterval) })),
-});
+const experimentRow = (v: LabExperimentView, ctx: PortalToolContext, lab: Lab) => {
+  const draws = lab.drawStats(v.experiment.id);
+  return {
+    id: v.experiment.id,
+    name: ctx.untrusted(v.experiment.name, 'lab', 80),
+    status: v.experiment.status,
+    design: v.experiment.design,
+    strata: v.experiment.strata,
+    draws_only: v.experiment.drawsOnly,
+    excluded: v.excluded,
+    draws,
+    opted_out: draws.reduce((n, d) => n + d.opted_out, 0),
+    arms: v.arms.map((a) => ({ arm: a.arm, n: a.n, accepted: a.accepted, cost_per_accepted: r2(a.costPerAccepted), ci90: ci(a.costPerAcceptedInterval) })),
+  };
+};
 
 export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools): void {
   registry.register({
@@ -82,8 +90,41 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
         period: s.period,
         since_ms: s.sinceMs,
         rows: s.rows,
-        ...(own ? {} : { experiments: lab.experimentViews().map((v) => experimentRow(v, ctx)) }),
+        ...(own ? {} : { experiments: lab.experimentViews().map((v) => experimentRow(v, ctx, lab)) }),
         basis: s.basis,
+      };
+    },
+  });
+
+  registry.register({
+    name: 'lab_arm_draw',
+    title: 'Draw a slice\'s arm',
+    description:
+      'Draws the arm of a sub-agent slice before you write its brief, in every running draws-only experiment (the arm is fixed per ticket, so drawing again gives the same arm; the ticket must exist; the stratum from the ticket\'s ESTIMATE size and the role, model and effort you will dispatch with). Put `Lab-Draw: <draw>` in the brief\'s first line: when that Agent call starts in this session, with the same ticket, role, model and effort (and the ticket\'s ESTIMATE size unchanged), the slice keeps these arms. One draw per slice; every draw is counted, used or not, and a slice of a drawn ticket dispatched without its draw is out and counted. No draws-only experiment running: no draw, nothing recorded. Your own session only.',
+    scope: 'agent',
+    hints: { idempotent: false },
+    rate: { perHour: 120 },
+    input: z.object({
+      ticket: z.string().regex(/^T-\d{1,6}$/).describe('The slice\'s ticket (its ESTIMATE size is the size stratum).'),
+      role: z.string().regex(/^[A-Za-z0-9_.:-]{1,80}$/).optional().describe('The Agent call\'s subagent_type.'),
+      model: z.string().regex(/^[A-Za-z0-9_.:-]{1,80}$/).optional().describe('The Agent call\'s model; absent: inherit.'),
+      effort: z.string().regex(/^[A-Za-z0-9_.:-]{1,80}$/).optional().describe('The Agent call\'s effort.'),
+    }),
+    handler(ctx, args) {
+      if (!ctx.sessionId) throw new PortalToolError('FORBIDDEN', 'A draw belongs to a chat session: call it with the token of the session that dispatches the slice.');
+      let d: ReturnType<Lab['drawArms']>;
+      try {
+        d = lab.drawArms({ sessionId: ctx.sessionId, ticket: args.ticket, role: args.role ?? null, model: args.model ?? null, effort: args.effort ?? null });
+      } catch (e) {
+        if (e instanceof Error && e.message === 'no such ticket') throw new PortalToolError('NOT_FOUND', 'No such ticket: a draw is for a ticket that exists.');
+        throw e;
+      }
+      const arms = d.arms.map((a) => ({ experiment: a.experiment, name: ctx.untrusted(a.name, 'lab', 80), arm: a.arm }));
+      if (d.draw) ctx.affected(`lab_draw:${d.draw}`);
+      return {
+        summary: d.draw ? `Drew ${arms.map((a) => a.arm).join(', ')} for this slice. First line of the brief: Lab-Draw: ${d.draw}` : 'No draws-only experiment is running: no draw, nothing recorded, the ordinary brief.',
+        draw: d.draw,
+        arms,
       };
     },
   });
@@ -104,6 +145,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       design: z.enum(['randomized', 'before_after']).optional(),
       arms: z.array(z.string().max(40)).max(6).optional(),
       strata: z.array(z.enum(LAB_STRATUM_KEYS)).min(1).max(4).optional().describe('randomized: the stratum keys; default role and requested model.'),
+      draws_only: z.boolean().optional().describe('randomized: only a bound draw (lab_arm_draw) gives an arm; a slice without one is excluded (E2).'),
       primary_metric: z.string().max(80).optional().describe('Default: median cost per accepted slice.'),
       min_n: z.number().int().min(0).max(100000).optional(),
       thresholds: z.record(z.string().max(40), z.union([z.number(), z.string().max(80)])).optional(),
@@ -130,7 +172,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       } catch {
         throw new PortalToolError('VALIDATION_FAILED', 'start and switch_at: ms since the epoch or an ISO time.', { start: 'ms or ISO time' });
       }
-      const preview = { start: args.name, design: args.design, arms: args.design === 'before_after' ? ['before', 'after'] : (args.arms ?? []), strata: args.strata ?? ['role', 'model'], primary_metric: args.primary_metric ?? 'median cost per accepted slice', min_n: args.min_n ?? 0, effect: args.design === 'randomized' ? 'Every new sub-agent slice gets an arm.' : 'Slices in the window are split at the moment of the change.' };
+      const preview = { start: args.name, design: args.design, arms: args.design === 'before_after' ? ['before', 'after'] : (args.arms ?? []), strata: args.strata ?? ['role', 'model'], draws_only: args.draws_only ?? false, primary_metric: args.primary_metric ?? 'median cost per accepted slice', min_n: args.min_n ?? 0, effect: args.design === 'randomized' ? (args.draws_only ? 'Only a slice whose brief names a bound draw gets an arm; every other slice is excluded.' : 'Every new sub-agent slice gets an arm.') : 'Slices in the window are split at the moment of the change.' };
       const gate = ctx.confirm(args, preview, `new:${args.name}`);
       if (gate) return gate;
       try {
@@ -140,6 +182,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
           design: args.design,
           ...(args.arms ? { arms: args.arms } : {}),
           ...(args.strata ? { strata: args.strata } : {}),
+          ...(args.draws_only ? { drawsOnly: true } : {}),
           primaryMetric: args.primary_metric ?? 'median cost per accepted slice',
           ...(args.thresholds ? { thresholds: args.thresholds } : {}),
           ...(args.min_n !== undefined ? { minN: args.min_n } : {}),

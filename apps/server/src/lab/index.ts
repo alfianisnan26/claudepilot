@@ -3,11 +3,11 @@
 // ingest keeps counts and ids, and `slices` and `report` answer the coordinator's measurement as a query. Slice 2 adds the derived views
 // (outcomes, the summary, the experiments' primary), retention (start), the routes (routes.ts), the Portal MCP tools (portalTools.ts) and
 // their declarations with the authz seam (authz.ts). Slice 3 adds result tokens, effort and idle gaps per slice, and stratum keys for
-// randomized experiments (ESTIMATE size, role, model, effort).
+// randomized experiments (ESTIMATE size, role, model, effort). T-292 slice 3 adds draws: the arms of a slice drawn before its brief (E2).
 
 import type { LabExperiment, LabExperimentReport, LabExperimentView, LabPeriod, LabSliceMetrics, LabSliceView, LabSummary } from '@portal/contracts';
 import type { Store } from '../store/store.js';
-import { armMembers, assignSlice, createExperiment, decideExperiment, excludeSlice, experimentReport, listExperiments, stopExperiment, type NewExperiment } from './experiments.js';
+import { armMembers, assignSlice, bindDraw, createExperiment, decideExperiment, drawArms, excludeSlice, experimentReport, listExperiments, drawStats, newDrawKey, ticketExistsIn, normTicket, stopExperiment, type DrawStat, type NewExperiment } from './experiments.js';
 import { LabIngest } from './ingest.js';
 import { sliceMetrics, type SliceFilter } from './metrics.js';
 import { DAY_MS, dbTicketReader, outcomeOf, type TicketFacts, type TicketReader } from './outcomes.js';
@@ -29,7 +29,14 @@ export class Lab {
       const db = this.#db();
       if (!db) return;
       // The ticket's ESTIMATE size as it stands when the slice starts (a stratum key, slice 3); read only when a ticket is named.
-      const size = s.ticket ? ((opts.tickets ?? dbTicketReader(db))(s.ticket)?.estimateSize ?? null) : null;
+      const size = s.ticket ? ((opts.tickets ?? dbTicketReader(db))(normTicket(s.ticket)!)?.estimateSize ?? null) : null;
+      // A brief that names a draw (T-292 slice 3) keeps the arms drawn before it was written; experiments the draw did not cover assign now.
+      // A draw that does not bind (another session, used already, expired, drawn for another ticket, role, model, effort or ESTIMATE size)
+      // leaves the draw unbound and counted, and keeps this slice out of every running experiment: its brief was written for an arm the lab
+      // did not give it.
+      if (s.draw && bindDraw(db, { sessionId: s.sessionId, draw: s.draw, sliceId: s.sliceId, for: { ticket: s.ticket, role: s.role, model: s.model, effort: s.effort }, size, atMs: s.atMs }) !== 'bound') {
+        for (const e of listExperiments(db)) if (e.status === 'running' && e.design === 'randomized' && e.startMs <= s.atMs) excludeSlice(db, e.id, s.sessionId, s.sliceId, 'draw not bound', s.atMs);
+      }
       assignSlice(db, { sessionId: s.sessionId, sliceId: s.sliceId, attrs: { size, role: s.role, model: s.model, effort: s.effort }, atMs: s.atMs });
     });
   }
@@ -61,6 +68,34 @@ export class Lab {
   experiments(): LabExperiment[] {
     const db = this.opts.store.db;
     return db ? listExperiments(db) : [];
+  }
+
+  /**
+   * Draws the arms of a slice before its brief is written (T-292 slice 3, §28.13), in the caller's session: the size from the ticket's
+   * ESTIMATE as at a slice start. Returns the draw key the brief carries (`Lab-Draw: <key>`) and the arm per running draws-only experiment;
+   * none running: no key, no arm, nothing recorded. A ticket that does not exist is refused (`no such ticket`).
+   */
+  drawArms(info: { sessionId: string; ticket: string; role: string | null; model: string | null; effort: string | null }): { draw: string | null; arms: { experiment: string; name: string; arm: string }[] } {
+    const db = this.#db();
+    if (!db) throw new Error('the store is not writable');
+    const ticket = normTicket(info.ticket)!;
+    const facts = (this.opts.tickets ?? dbTicketReader(db))(ticket);
+    // The portal's tickets table (as the ticket service reads it); with an injected reader (tests) a ticket it knows.
+    const exists = this.opts.tickets ? facts !== null : ticketExistsIn(db, ticket);
+    if (!exists) throw new Error('no such ticket');
+    const size = facts?.estimateSize ?? null;
+    const draw = newDrawKey();
+    const got = drawArms(db, { sessionId: info.sessionId, draw, for: { ticket, role: info.role, model: info.model, effort: info.effort }, size, atMs: this.#now() });
+    const names = new Map(listExperiments(db).map((e) => [e.id, e.name]));
+    if (!got.size) return { draw: null, arms: [] };
+    return { draw, arms: [...got].map(([id, arm]) => ({ experiment: id, name: names.get(id) ?? id, arm })) };
+  }
+
+  /** Per session, an experiment's draws: all, bound, unbound, redraws, opted out (a ticket known as in `drawArms`). */
+  drawStats(experimentId: string): DrawStat[] {
+    const db = this.opts.store.db;
+    const read = this.opts.tickets;
+    return db ? drawStats(db, experimentId, read ? (t) => read(t) !== null : undefined) : [];
   }
 
   stop(id: string): void {
@@ -157,7 +192,7 @@ export class Lab {
     const db = this.#db();
     if (!db) return null;
     const r = pruneLab(db, this.#now());
-    if (r.frozen || r.requests || r.tools) this.opts.log?.(`lab: retention froze ${r.frozen} slices, dropped ${r.requests} request and ${r.tools} tool rows`);
+    if (r.frozen || r.requests || r.tools || r.draws) this.opts.log?.(`lab: retention froze ${r.frozen} slices, dropped ${r.requests} request and ${r.tools} tool rows and expired ${r.draws} unbound draws`);
     return r;
   }
 

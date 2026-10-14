@@ -860,7 +860,7 @@ is writable.
 ### 28.6 Not built yet (later slices of T-287)
 
 Gate first try, human touches and ESTIMATE against ACTUAL hours per slice; delivered units per hour and per dollar; per-protocol
-analysis; result tokens, effort and idle gaps on the Lab tab (they are in the API and `lab_summary`, §28.12); telling a sub-agent its arm in the brief; `efficiency_me` and `experiment_get` as their own tools (`lab_summary`
+analysis; result tokens, effort and idle gaps on the Lab tab (they are in the API and `lab_summary`, §28.12); `efficiency_me` and `experiment_get` as their own tools (`lab_summary`
 covers the coordinator's pass); the Home widget, the weekly digest and the regression alerts.
 
 ### 28.7 Outcomes (slice 2, as built)
@@ -899,7 +899,8 @@ its own session only and no experiments; every denial is the same 404 as a route
 reach `session`: an agent's token reads its own session; an admin's token the portal) answers short rows by default (period, role, model,
 n, median requests, context, minutes, cost, inspection share, re-write share, first-pass yield, cost per accepted) and everything with
 `full: true` (p90s, outcomes, Bash classes, the experiments with intervals, the source of each figure); `lab_experiment_set` (admin
-tokens, confirmation round trip) starts a randomized or before-and-after experiment or stops one. Counts and ids only.
+tokens, confirmation round trip) starts a randomized or before-and-after experiment or stops one; `lab_arm_draw` (agent reach
+`session`, §28.13) draws a slice's arms before its brief. Counts and ids only.
 
 ### 28.11 Usage → Lab
 
@@ -928,3 +929,71 @@ the shared `Segmented` at 40 px high (as on the Spikes tab).
   still `blockOrder(experiment, stratum, floor(k / arms))[k mod arms]` for the k-th slice of the stratum: the same slices in the same order
   get the same arms, and the arms are balanced within one slice per stratum (tested on four sizes, interleaved). `lab_experiment_set`
   takes `strata` (admin, confirmation; the preview shows them); `lab_summary` shows `result_tok_p50` and, in full, each experiment's keys.
+
+### 28.13 Draws: the arm before the brief (T-292 slice 3, migrations 854 and 855)
+
+An experiment whose treatment is the brief itself (E2, the context compiler: the pack line, the plan step's file manifest and the
+preloaded files, against today's brief) needs the arm before the brief is written; a slice gets its arm only when its Agent call starts.
+- **`lab_arm_draw`** (Portal MCP, agent reach `session`, audited `lab.arm.draw`, 120 calls per hour per token; input the ticket
+  (required; a ticket that does not exist in the portal is refused, nothing recorded), role, model, effort as the slice will be
+  dispatched): per running **draws-only** randomized experiment (no other: a peek must not show a block arm) the **drawn arm** of that ticket
+  (`drawnArm`: a hash of the experiment's secret seed and the ticket number; `T-12`, `T-012` and `T-0012` are one ticket), held as an
+  assignment under `draw:<key>` in the caller's own session (`lab_assignments.draw` names the draw, migration 855), with what it was drawn
+  for (`lab_draws`: the ticket in one spelling, role, model, effort, the ESTIMATE size then, status open, bound, refused or expired),
+  answered as the key (`d-` and 12 hex) and the arm per experiment. No draws-only experiment running: no key, no arm, nothing recorded,
+  and the brief is the ordinary one. An admin token has no session: refused. An experiment without a secret seed gets no draw (migration
+  855 gave every older one a seed).
+- **Binding**: read only from a top-level Agent call (not one made inside a sub-agent) and only on the FIRST line of its prompt
+  (`Lab-Draw: <key>`). The draw binds when the call is in the session that drew it, the draw is not bound or expired, and the call's
+  ticket (any spelling), role, requested model and effort, and the ticket's ESTIMATE size now, are the ones it was drawn for; then its rows
+  move to the slice and the slice keeps the drawn arms (a replayed line of the same call changes nothing). Otherwise (another session, a
+  key used already, an unknown or expired key, a mismatch) nothing binds, a mismatch marks the draw `refused` (still bindable by a
+  matching call, counted as unbound meanwhile), and the calling slice is EXCLUDED from every running randomized experiment (`draw not
+  bound`): its brief was written for an arm it was not given. An honest mismatch (drawn for `opus`, dispatched with the model left out)
+  therefore loses that slice from the experiment, never biases it. Any first line with a well-formed `Lab-Draw: d-<12 hex>` counts, also
+  one copied from untrusted text into a brief: that slice is then excluded (lost, not biased); accepted.
+- **Draws only** (`lab_experiments.draws_only`, migration 855; `lab_experiment_set` `draws_only: true`, which `plan-step.mjs e2` sets):
+  only a bound draw gives an arm; a slice that starts without one is excluded (`no draw`), never given a block arm. So a session cannot
+  look at a ticket's arm and then dispatch the ticket without the draw (or with a made-up key) to get a block arm instead. Without the
+  flag a slice without a draw gets its block arm as before (§28.12).
+- **Nothing to pick**: the drawn arm is fixed per experiment and ticket, so drawing again (a redraw, after a throwaway call bound the
+  first draw, or with another role, model or effort) gives the same arm. A draw does show that ticket's own arm, also when it is drawn
+  only to look (a peek); in a draws-only experiment the ticket's slice then has the arm or is out, and either way it is counted. The seed
+  is random per experiment, kept in `lab_experiments.seed` and never shown; migration 855 gave every experiment made before 854 (seeded by
+  its id, which is shown) a random seed, so the next block of each running one is reordered (still balanced from there; the arms already
+  given stay). Drawn arms are not block places: the blocks (§28.12) are the slices that got their arm at the start, so a draw, used or
+  not, moves no other slice's arm. `lab_summary` full shows per experiment `draws_only` and `draws`: per session, every draw (`draws`),
+  `bound`, `unbound` (abandoned: open, refused or expired), `redraw` (a draw for a ticket the session drew for before, whatever the role;
+  a later slice of the same ticket counts too) and `opted_out`: slices of the session kept out that should have carried a draw, namely
+  any slice whose draw line did not bind (`draw not bound`, whatever its role) and a slice of a drawing role that started without one
+  (`no draw`; the drawing roles are `implementer`, per `docs/dev-sessions/orchestrator.md`, and any role this experiment drew for, so a
+  reviewer, QA, scribe or explorer slice, the plan step's explorer included, is out of the experiment but no opt-out). Such a slice
+  counts when its ticket has a draw of THIS experiment (`lab_assignments.experiment_id`; any session, bound or not) made before the
+  slice started (a peek in one session and the work in another, a throwaway bound first and the real work without a draw, a follow-up
+  slice without one), or, when it names no ticket or a ticket the portal's tickets table does not have, when its own session drew for
+  this experiment before it started; per experiment also the total `opted_out`. A slice naming another real ticket that nobody drew
+  for is no opt-out. A draw is never deleted.
+- **Retention**: an unbound draw older than 14 days expires (`prune().draws`): it can no longer bind, its row and held arms stay, so it is
+  still counted. `lab_draws` therefore only grows, one short row per draw, at most 120 per hour per token (the tool's rate limit).
+- **Known limits.** The unit of the drawn arm is the ticket: a ticket's slices share one arm, so they are not independent (an interval
+  over slices is narrower than it should be when one ticket has many slices), and a draws-only experiment's arms are simple
+  randomization per ticket, not blocked (the n per arm can differ). Migration 855 backfills `lab_assignments.draw` only for draws still
+  held under `draw:<key>` at 854; a draw bound under 854 is counted as a block place (none were released). A bound throwaway call of a
+  different kind (another role, matching the draw's role only by name) is still a slice of that arm. The orchestrator knows a ticket's arm once drawn and could delay that ticket or
+  drop it; that shows as an abandoned draw (and, if the slice runs without the draw, as `opted_out`). A throwaway call that matches a draw
+  binds it and is a slice of that arm with its own cost and outcome (intention to treat), visible as an extra slice on the ticket.
+- The brief heads per arm come from `scripts/plan-step.mjs` (`head --arm control|treatment --draw <key>`; the explorer's manifest is
+  labelled untrusted in the brief; its `run:` lines are one of a fixed list word for word: `npm run typecheck` (optionally
+  `-w @portal/server|web|contracts`), `cd apps/server|apps/web && node --import tsx --test <files>`, `scripts/slice-check.sh [<files>]`,
+  where each file is one of the manifest's own `test:` lines, and no quote, metacharacter, other flag, `.` or `..` passes; preloaded paths
+  are checked on their real path (a link is followed) against the repository and a case-insensitive credential deny list: `.env*`,
+  `*.env`, `.dev.vars`, `*.tfvars`, `credentials.json`, `.npmrc`, `.yarnrc*`, `.netrc`, `.pypirc`, keys, `.git`, `node_modules`,
+  `.kube/`, `.config/gh/`, `.aws/`, `.ssh/`, `.docker/config.json`; a `new:` path where anything is, a dangling link too, is refused), the E2 experiment's
+  arguments from `plan-step.mjs e2` (randomized, arms `control` and `treatment`, strata size, role and model, draws only, minimum 30 per
+  arm, primary the median loaded cost per accepted slice; adopt at −15 percent with yield not down). Procedure: `docs/dev-sessions/orchestrator.md`.
+- Source: `lab/experiments.ts` (`drawnArm`, `drawArms`, `bindDraw`, `drawStats`), `lab/classify.ts` (`drawOf`), `lab/retention.ts`; tests
+  `lab/draw.test.ts` (the drawn arm kept; probe A, a draw taken by another role; the honest mismatch; probe B, a redraw behind a throwaway
+  call; the second review's throwaway that matches, the peek, the changed size and retention keeping the evidence; the third review's
+  ticket spelling and role, draws only and the opt-out count, the upgrade from 854; another session, a nested call, the second line;
+  draws outside the blocks and the seed; the fifth review's opt-outs only for drawing roles, only after the draw, only the experiment's
+  own draws, a made-up ticket as no ticket on the real tickets table; the tool) and `qa/planStep.test.ts`.

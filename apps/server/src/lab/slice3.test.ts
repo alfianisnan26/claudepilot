@@ -120,7 +120,8 @@ test('stratified assignment by ESTIMATE size: balanced within one slice per stra
     const h = await harness({ tape: false });
     try {
       const e = createExperiment(h.db, { name: 'rtk', design: 'randomized', arms: ['on', 'off'], primaryMetric: 'p', startMs: T0, strata: ['size', 'role'] }, T0);
-      h.db.prepare('UPDATE lab_experiments SET id = ? WHERE id = ?').run(id, e.id);
+      // A fixed id and seed (migration 854: new experiments get a random secret seed) so two runs can be compared.
+      h.db.prepare('UPDATE lab_experiments SET id = ?, seed = ? WHERE id = ?').run(id, id, e.id);
       const out: string[] = [];
       // Interleaved starts, as slices arrive: S, M, L, XL, S, M, ...
       for (let i = 0; i < 7; i++) {
