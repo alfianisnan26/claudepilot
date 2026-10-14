@@ -328,7 +328,11 @@ for (const cfg of MATRIX) {
   check('the card has its InfoTip', !!c.tip);
   await shot(`home-${cfg.name}-autonomy`);
   if (c.tip) {
-    await ev(`(() => { const b = document.querySelector('[data-home-card="autonomy"] header button[aria-label="About Autonomy"]'); b.scrollIntoView({ block: 'center' }); b.click(); })()`);
+    // Scrolled there first and let it settle, then the tap, as a person does: the InfoTip closes on any scroll by design (InfoTip.tsx), and
+    // since the Review card (fd3d63b) follows Autonomy on Home the centring scrolls, its event landing after a click in the same tick.
+    await ev(`document.querySelector('[data-home-card="autonomy"] header button[aria-label="About Autonomy"]').scrollIntoView({ block: 'center' })`);
+    await sleep(400);
+    await ev(`document.querySelector('[data-home-card="autonomy"] header button[aria-label="About Autonomy"]').click()`);
     await sleep(400);
     const tip = await ev(`(() => { const t = [...document.querySelectorAll('[role=tooltip], [role=note], [data-infotip]')].find((e) => /never turns Bypass on/.test(e.innerText)); if (!t) return null; const r = t.getBoundingClientRect(); return { x: r.x, r: r.right, y: r.y, b: r.bottom, w: innerWidth, h: innerHeight }; })()`);
     check('the InfoTip opens inside the screen', !!tip && tip.x >= 0 && tip.r <= tip.w + 1 && tip.y >= 0 && tip.b <= tip.h + 1, JSON.stringify(tip));
