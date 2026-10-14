@@ -106,6 +106,7 @@ import {
 import { type BypassFacts, type BypassRefusal, type BypassState } from './bypass.js';
 import { isStagedUpload } from './artifacts/records.js';
 import { redact } from './redact.js';
+import { TurnCost } from './turnCost.js';
 import { redactSecrets, stripUnsafe } from '../portalmcp/sanitize.js';
 import { NO_VALUES, SessionStream, ValueRedactor } from './valueRedact.js';
 import { MessageRate, pickSpawnClaude, spawnProblem, SUBAGENT_TOOLS, WORKER_REPORTS, workerLimits, type AgentCaps, type SpawnClaudeWhy, type WorkerLimitsAsk, type WorkerReport } from './agents.js';
@@ -485,6 +486,8 @@ export class ChatController {
   readonly #idleTimers = new Map<string, NodeJS.Timeout>();
   /** Per session: the running cost its process last reported, so each `result` can say what its turn cost. */
   readonly #costBase = new Map<string, number>();
+  /** T-343: per session, the running turn's calls for the cost estimate until its result (turnCost.ts), and the estimate last shown. */
+  readonly #turnCost = new Map<string, { cost: TurnCost; shown: number | null | undefined }>();
   /** Per session: when the portal last asked Claude Code to change the model (its note may follow). */
   readonly #modelAsked = new Map<string, number>();
   /** Per Claude: what its `list_models` offered and when (T-109), from any chat on it. */
@@ -1185,6 +1188,9 @@ export class ChatController {
     // One definition of working (T-41): the main turn runs, or a task of its live process does. The stored state stays the turn's (what
     // a send, a restart or a move go by); what is shown, listed and notified on is this one.
     if (out.state === 'idle' && out.process === 'live' && (out.agentsRunning ?? 0) > 0) out = { ...out, state: 'working', tasksOnly: true };
+    // T-343: the running turn's cost so far, an estimate on top of the reported total, until the turn's result replaces it.
+    const turn = this.#turnCost.get(session.id);
+    if (turn && out.state !== 'ended') out = { ...out, turnCostEstimateUsd: turn.cost.estimateUsd() };
     if (this.keepGoingOf) {
       try {
         const kg = this.keepGoingOf(session.id);
@@ -4308,6 +4314,20 @@ export class ChatController {
         output: Math.max(same ? last.output : 0, u.output ?? 0),
       });
     }
+    // T-343: the running turn's cost estimate. The result's reported total replaces it; until then a change a tab would show is sent.
+    if (parsed.result) this.#turnCost.delete(sessionId);
+    else if (parsed.spend) {
+      const turn = this.#turnCost.get(sessionId) ?? { cost: new TurnCost(), shown: undefined };
+      this.#turnCost.set(sessionId, turn);
+      turn.cost.add(parsed.spend, this.#chat.row(sessionId)?.model ?? null);
+      const now = turn.cost.estimateUsd();
+      const moved = now === null || turn.shown == null ? now !== turn.shown : Math.abs(now - turn.shown) >= 0.001;
+      if (moved) turn.shown = now;
+      if (moved && !parsed.sessionPatch && !parsed.context) {
+        const session = this.#chat.get(sessionId);
+        if (session) this.#emit(sessionId, { type: 'session', session: this.#decorate(session) });
+      }
+    }
     if (parsed.sessionPatch || parsed.context) {
       const patch: ChatSessionPatch = { ...parsed.sessionPatch };
       if (parsed.context) {
@@ -5114,6 +5134,7 @@ export class ChatController {
     this.#toolCalls.delete(sessionId);
     this.#streams.delete(sessionId);
     this.#thinkingSince.delete(sessionId);
+    this.#turnCost.delete(sessionId); // a turn cut off without its result has no figure to replace the estimate: the stored total stands
     this.#modes.delete(sessionId);
     this.#peerCauses.delete(sessionId);
     this.#taskStops.delete(sessionId);

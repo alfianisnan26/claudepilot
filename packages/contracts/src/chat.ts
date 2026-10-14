@@ -54,7 +54,14 @@ export interface ChatSession {
   process: 'live' | 'asleep' | 'gone';
   /** How full the context window was after the last turn, from Claude Code's own usage report. */
   context: { usedTokens: number; windowTokens: number | null } | null;
+  /** What the session cost, as Claude Code reported it at the end of its last turn (list price: for a plan not a bill). */
   costUsd: number;
+  /**
+   * T-343: the running turn's cost so far, an ESTIMATE on top of `costUsd`: its API calls' tokens times each model's list price. Absent
+   * when no turn is running (or none of its calls reported yet); null when a call's model has no known price ("unavailable"). The turn's
+   * result replaces it. {@link sessionCost} adds the two.
+   */
+  turnCostEstimateUsd?: number | null;
   turns: number;
   /** The last stored event's sequence number; a reconnecting tab resumes after it. */
   lastSeq: number;
@@ -183,6 +190,18 @@ export type ChatConfigChange =
   | 'foundation'
   | 'portal_tools'
   | 'other';
+
+/**
+ * T-343: what a session cost so far: the reported total plus the running turn's estimate. `basis` says how it is known: `reported` (no
+ * turn running), `estimate` (it includes the running turn's estimate) or `unavailable` (a turn runs whose model has no known price: `usd`
+ * is the reported total only, the turn's part is not guessed).
+ */
+export function sessionCost(s: Pick<ChatSession, 'costUsd' | 'turnCostEstimateUsd'>): { usd: number; basis: 'reported' | 'estimate' | 'unavailable' } {
+  const turn = s.turnCostEstimateUsd;
+  if (turn === undefined) return { usd: s.costUsd, basis: 'reported' };
+  if (turn === null) return { usd: s.costUsd, basis: 'unavailable' };
+  return { usd: s.costUsd + turn, basis: 'estimate' };
+}
 
 /** T-102: how long a turn may run before the hint offers "Restart now" prominently (an autonomous session's turn can last hours). */
 export const RESTART_LONG_TURN_MS = 30 * 60_000;

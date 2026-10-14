@@ -7,7 +7,7 @@ import { WORKER_REPORTS } from '../../chat/agents.js';
 import { paginate, pageInput } from '../paging.js';
 import { PortalToolError, portalTools, type PortalToolContext, type ToolRegistry } from '../registry.js';
 import { cleanText } from '../sanitize.js';
-import { assertCanChange, uiLink } from './common.js';
+import { assertCanChange, costFields, uiLink } from './common.js';
 import type { PortalToolDeps } from './deps.js';
 
 const STATES = ['starting', 'idle', 'working', 'waiting', 'interrupted', 'ended'] as const;
@@ -40,7 +40,7 @@ const sessionBrief = (s: ChatSession, ctx: PortalToolContext) => ({
   mode: s.mode,
   folder: s.cwd,
   turns: s.turns,
-  cost_usd: Math.round(s.costUsd * 10_000) / 10_000,
+  ...costFields(s),
   created_at: s.createdAt,
   last_activity_at: s.lastActivityAt,
   ended_reason: ctx.untrusted(s.endedReason, 'runtime'),
