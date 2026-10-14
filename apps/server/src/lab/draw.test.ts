@@ -34,8 +34,10 @@ async function harness() {
 const agentCall = (toolUseId: string, prompt: string, at = T0 + 120_000) =>
   JSON.stringify({ type: 'assistant', parent_tool_use_id: null, timestamp: new Date(at).toISOString(), message: { id: `msg_${toolUseId}`, model: 'claude-opus-5-5', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id: toolUseId, name: 'Agent', input: { subagent_type: 'implementer', model: 'opus', prompt } }] } });
 
-const armOf = (h: Awaited<ReturnType<typeof harness>>, session: string, slice: string) =>
-  (h.db.prepare('SELECT arm, stratum FROM lab_assignments WHERE experiment_id = ? AND session_id = ? AND slice_id = ?').get(h.e2.id, session, slice) as { arm: string; stratum: string } | undefined) ?? null;
+const armOf = (h: Awaited<ReturnType<typeof harness>>, session: string, slice: string) => {
+  const r = h.db.prepare('SELECT arm, stratum FROM lab_assignments WHERE experiment_id = ? AND session_id = ? AND slice_id = ?').get(h.e2.id, session, slice) as { arm: string; stratum: string } | undefined;
+  return r ? { arm: r.arm, stratum: r.stratum } : null;
+};
 
 test('a draw made before the brief is the arm the slice keeps; the stratum is the ticket’s ESTIMATE size', async () => {
   const h = await harness();
@@ -49,6 +51,7 @@ test('a draw made before the brief is the arm the slice keeps; the stratum is th
     assert.equal(h.lab.unboundDraws(h.e2.id), 1);
 
     const head = plan.briefHead({ ticket: 'T-1', size: 'M', arm: drawn.arm, draw: d.draw, manifestBlock: drawn.arm === 'treatment' ? 'manifest' : null });
+    // Without the bind the slice would be the stratum's second and get the other arm of the block (checked by removing bindDraw).
     h.lab.line('orch', agentCall('toolu_draw_1', head + '\nThe rest of the brief.'));
     assert.deepEqual(armOf(h, 'orch', 'toolu_draw_1'), { arm: drawn.arm, stratum: 'size=M|role=implementer|model=opus' });
     assert.equal(armOf(h, 'orch', DRAW_SLICE + d.draw), null, 'the draw row moved to the slice');
