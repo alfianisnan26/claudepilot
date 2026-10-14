@@ -2,6 +2,7 @@ import { Button } from '@isnanme/ui';
 import type { PoolSummary } from '@portal/contracts';
 import { Inbox, Star } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { api } from '@/lib/api';
 import { useLive } from '@/lib/live';
 import { usePersonaPoolInfo } from './identities';
@@ -38,25 +39,45 @@ export function PersonaSummary({ pool }: { pool: PoolSummary }) {
   );
 }
 
-/** Beside "New persona": the review queue, only while something waits (Persona PRD A10). */
+/**
+ * Beside "New persona": the review queue, only while something waits (Persona PRD A10). `?proposal=<id>` (Needs you's link, T-146) opens it
+ * at that proposal, and also when it was decided meanwhile, so the link never lands on nothing.
+ */
 export function ProposalsAction() {
   const info = usePersonaPoolInfo();
-  const [open, setOpen] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const linked = params.get('proposal');
+  const [open, setOpen] = useState(!!linked);
   const [names, setNames] = useState<Record<string, string>>({});
   const total = Object.values(info ?? {}).reduce((n, p) => n + p.pendingProposals, 0);
   const load = () => void api.pools.list('persona').then((list) => setNames(Object.fromEntries(list.map((p) => [p.id, p.name]))), () => undefined);
   useEffect(() => {
     if (open) load();
   }, [open]);
+  useEffect(() => {
+    if (linked) setOpen(true);
+  }, [linked]);
   useLive('pools', () => open && load(), open);
-  if (total === 0) return null;
+  const close = () => {
+    setOpen(false);
+    if (linked)
+      setParams(
+        (p) => {
+          p.delete('proposal');
+          return p;
+        },
+        { replace: true },
+      );
+  };
+  const dialog = <ProposalsDialog open={open} onClose={close} names={names} focus={linked} />;
+  if (total === 0) return linked ? dialog : null;
   return (
     <>
       <Button variant="secondary" icon={<Inbox className="size-4" />} aria-label={`Proposals: ${total} waiting`} onClick={() => setOpen(true)}>
         <span className="hidden sm:inline">Proposals</span>
         <span className="rounded-full bg-accent px-1.5 text-[11px] font-semibold text-white">{total}</span>
       </Button>
-      <ProposalsDialog open={open} onClose={() => setOpen(false)} names={names} />
+      {dialog}
     </>
   );
 }
