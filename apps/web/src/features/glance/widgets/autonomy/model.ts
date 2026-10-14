@@ -1,4 +1,4 @@
-import { KEEPGOING_CAUSE_TEXT, workspaceLabel, type KeepGoingChat, type KeepGoingList } from '@portal/contracts';
+import { KEEPGOING_CAUSE_TEXT, workspaceLabel, type KeepGoingChat, type KeepGoingList, type KeepGoingPause } from '@portal/contracts';
 import type { GlanceCompact, GlanceLevel } from '../../types';
 import { chipCount, listWords, plural } from '../shared/format';
 
@@ -27,7 +27,12 @@ export interface AutonomyRow {
 }
 
 export interface AutonomyView {
+  /** The kill switch (Settings, Keep going) is off. */
   paused: boolean;
+  /** The pauses that stand (slice 3): all first, then by program. */
+  pauses: KeepGoingPause[];
+  /** Watched chats a pause holds. */
+  held: number;
   watched: number;
   /** Chats left down (reported `down`). */
   down: number;
@@ -62,6 +67,8 @@ export function autonomyView(list: KeepGoingList): AutonomyView {
   });
   return {
     paused: list.paused,
+    pauses: list.pauses ?? [],
+    held: list.chats.filter((c) => !!c.keepGoing.pause).length,
     watched: list.chats.length,
     down: list.chats.filter((c) => c.keepGoing.standing?.includes('down')).length,
     reported: list.chats.filter((c) => (c.keepGoing.standing ?? []).some((s) => s !== 'down')).length,
@@ -73,7 +80,8 @@ export function autonomyView(list: KeepGoingList): AutonomyView {
 /** The chip: how many chats are kept going; red while one is left down, amber for another report or the pause, green while one is watched. */
 export function autonomyCompact(v: AutonomyView | null, failed: boolean): GlanceCompact {
   if (!v) return failed ? { value: '-', level: 'unknown', title: 'Autonomy: not available', stale: true } : { value: null, level: 'unknown', title: 'Autonomy: loading', loading: true };
-  const level: GlanceLevel = v.down ? 'critical' : v.reported || v.paused ? 'warn' : v.watched ? 'ok' : 'idle';
-  const parts = listWords([v.paused ? 'paused' : null, v.down ? `${v.down} left down` : null, v.reported ? `${v.reported} reported` : null]);
+  const paused = v.paused || v.pauses.length > 0;
+  const level: GlanceLevel = v.down ? 'critical' : v.reported || paused ? 'warn' : v.watched ? 'ok' : 'idle';
+  const parts = listWords([v.paused ? 'paused' : v.pauses.length ? `paused: ${v.pauses.map((p) => p.program ?? 'all').join(', ')}` : null, v.down ? `${v.down} left down` : null, v.reported ? `${v.reported} reported` : null]);
   return { value: chipCount(v.watched), level, title: `Autonomy: ${v.watched ? plural(v.watched, 'chat') : 'no chats'} kept going${parts ? `, ${parts}` : ''}` };
 }

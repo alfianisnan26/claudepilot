@@ -9,6 +9,9 @@
 //   - slice 2, the Home card "Autonomy" (GET /api/keepgoing answered by the harness): the card is there, the chat left down first, the
 //     figures (watched, down, reported, today) from the answer, every row a 44 px link to its chat, a long title cut inside the card, nothing
 //     wider than the card, no sideways scroll, the card's InfoTip inside the screen, the pause and the empty list as words;
+//   - slice 3, the pause switch on the card: each pause a row with its program (or All), the reason (a long one wraps inside the card) and a
+//     44 x 44 px Resume that sends PUT /api/keepgoing/pauses { paused: false }; the 44 px Pause opens the form, the program and the reason
+//     go out as PUT { paused: true }; the pause InfoTip opens inside the screen; nothing scrolls sideways;
 //   - no page errors.
 // usage: KG_PORT=3471 KG_CDP=9671 node tools/qa/keepgoing.mjs [--shots dir]
 import { spawn } from 'node:child_process';
@@ -246,6 +249,10 @@ const homeHarness = (list) => `(() => {
   const real = window.fetch;
   window.fetch = (input, init) => {
     const p = new URL(typeof input === 'string' ? input : input.url, location.origin).pathname;
+    if (p === '/api/keepgoing/pauses') {
+      (window.__kgPuts ??= []).push(JSON.parse(init?.body ?? 'null'));
+      return Promise.resolve(new Response(JSON.stringify({ data: { pause: null, changed: true } }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    }
     if (p === '/api/keepgoing') return Promise.resolve(new Response(JSON.stringify({ data: ${JSON.stringify(list)} }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     return real(input, init);
   };
@@ -310,6 +317,60 @@ for (const cfg of MATRIX) {
   check('the empty list is said', /No chat has Keep going on\./.test(e.text), e.text);
   check('no sideways scroll (empty)', e.sw <= e.w + 1);
   await shot(`home-${cfg.name}-autonomy-empty`);
+
+  // Slice 3: the pauses on the card, Resume and Pause.
+  const since = new Date(Date.now() - 2 * 3600_000).toISOString();
+  const pauses = [
+    { program: null, reason: 'Owner away', since, by: 'user:u_owner' },
+    { program: 'konfersi', reason: 'Focus on ClaudePilot while the release of the portal and its new watchdog settles over the next two days', since, by: 'user:u_owner' },
+  ];
+  await openHome({ ...LIST, pauses, chats: LIST.chats.map((c, i) => (i === 1 ? { ...c, keepGoing: { ...c.keepGoing, paused: true, pause: pauses[0] } } : c)) });
+  const P = await ev(`(() => {
+    const R = ${R};
+    const card = document.querySelector('[data-home-card="autonomy"]');
+    const cr = card.getBoundingClientRect();
+    const rows = [...card.querySelectorAll('[data-autonomy-pause]')].map((e) => ({ key: e.getAttribute('data-autonomy-pause'), text: e.innerText, ...R(e), btn: R(e.querySelector('[data-autonomy-resume]')) }));
+    const open = R(card.querySelector('[data-autonomy-pause-open]'));
+    const wide = [...card.querySelectorAll('*')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && (r.right > cr.right + 1 || r.left < cr.left - 1); }).length;
+    return { rows, open, wide, card: R(card), sw: document.scrollingElement.scrollWidth, w: innerWidth };
+  })()`);
+  check('a row per pause, all first', P.rows.length === 2 && P.rows[0].key === '*' && P.rows[1].key === 'konfersi', JSON.stringify(P.rows.map((r) => r.key)));
+  check('each pause says program, reason and since', /Paused · All/.test(P.rows[0]?.text ?? '') && /Paused · konfersi/.test(P.rows[1]?.text ?? '') && /settles over the next two days/.test(P.rows[1]?.text ?? '') && /2h/.test(P.rows[1]?.text ?? ''), JSON.stringify(P.rows.map((r) => r.text)));
+  check('Resume is 44 x 44 px', P.rows.every((r) => r.btn && Math.round(r.btn.w) >= 44 && Math.round(r.btn.h) >= 44), JSON.stringify(P.rows.map((r) => r.btn)));
+  check('Pause is 44 px high', !!P.open && Math.round(P.open.h) >= 44 && Math.round(P.open.w) >= 44, JSON.stringify(P.open));
+  check('pauses inside the card, nothing wider', P.wide === 0 && P.rows.every((r) => r.x >= P.card.x - 1 && r.r <= P.card.r + 1), String(P.wide));
+  check('no sideways scroll (paused)', P.sw <= P.w + 1, `${P.sw} > ${P.w}`);
+  await shot(`home-${cfg.name}-autonomy-paused`);
+  await ev(`(() => { window.__kgPuts = []; const b = document.querySelectorAll('[data-autonomy-resume]')[1]; b.scrollIntoView({ block: 'center' }); b.click(); })()`);
+  await sleep(500);
+  const resumed = await ev(`window.__kgPuts`);
+  check('Resume sends paused false for that program', resumed?.length === 1 && resumed[0].program === 'konfersi' && resumed[0].paused === false, JSON.stringify(resumed));
+  await ev(`(() => { const b = document.querySelector('[data-autonomy-pause-open]'); b.scrollIntoView({ block: 'center' }); b.click(); })()`);
+  await sleep(300);
+  const tipBtn = await ev(`!!document.querySelector('[data-autonomy-pause-form] button[aria-label="What a pause holds"]')`);
+  if (tipBtn) {
+    await ev(`document.querySelector('[data-autonomy-pause-form] button[aria-label="What a pause holds"]').click()`);
+    await sleep(400);
+    const tip = await ev(`(() => { const t = [...document.querySelectorAll('[role=tooltip], [role=note], [data-infotip]')].find((e) => /no nudge, wake, answer/.test(e.innerText)); if (!t) return null; const r = t.getBoundingClientRect(); return { x: r.x, r: r.right, y: r.y, b: r.bottom, w: innerWidth, h: innerHeight }; })()`);
+    check('the pause InfoTip opens inside the screen', !!tip && tip.x >= 0 && tip.r <= tip.w + 1 && tip.y >= 0 && tip.b <= tip.h + 1, JSON.stringify(tip));
+    await ev(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
+    await sleep(200);
+  } else check('the pause InfoTip opens inside the screen', false, 'no InfoTip in the form');
+  await ev(`(() => {
+    const set = (el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); };
+    const f = document.querySelector('[data-autonomy-pause-form]');
+    set(f.querySelector('input[aria-label="Program"]'), 'event');
+    set(f.querySelector('input[aria-label="Reason"]'), 'Owner paused Event');
+  })()`);
+  await sleep(200);
+  const F = await ev(`(() => { const R = ${R}; const f = document.querySelector('[data-autonomy-pause-form]'); return { inputs: [...f.querySelectorAll('input')].map(R), ok: R(f.querySelector('[data-autonomy-pause-confirm]')), label: f.querySelector('[data-autonomy-pause-confirm]').innerText, sw: document.scrollingElement.scrollWidth, w: innerWidth }; })()`);
+  check('the form: 44 px fields and button', F.inputs.every((r) => Math.round(r.h) >= 44) && Math.round(F.ok.h) >= 44 && F.label === 'Pause event', JSON.stringify(F));
+  check('no sideways scroll (form)', F.sw <= F.w + 1);
+  await shot(`home-${cfg.name}-autonomy-pause-form`);
+  await ev(`(() => { window.__kgPuts = []; document.querySelector('[data-autonomy-pause-confirm]').click(); })()`);
+  await sleep(500);
+  const paused = await ev(`window.__kgPuts`);
+  check('Pause sends the program and the reason', paused?.length === 1 && paused[0].program === 'event' && paused[0].paused === true && paused[0].reason === 'Owner paused Event', JSON.stringify(paused));
 }
 
 check('no page errors', errors.length === 0, errors.join(' | '));

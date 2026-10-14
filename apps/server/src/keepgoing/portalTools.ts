@@ -2,15 +2,16 @@
 // token). Scope `admin`, so an agent's per-session token never reaches it (a chat may not keep itself, or another chat, going: the same rule
 // as the PUT route); the session control switch must be on. A chat the token's user may not operate answers like an unknown one (404).
 // Turning it ON asks for a confirmation first (the preview says what the portal will then do by itself); turning it off or changing a number
-// does not. Audited `keepgoing.set` by the engine, with the token as the actor.
+// does not. Audited `keepgoing.set` by the engine, with the token as the actor. Slice 3: `keepgoing_pause_set` pauses or resumes a program
+// (or all) for a platform admin's token, after a confirmation; anyone else is answered NOT_FOUND; audited `keepgoing.pause`.
 
 import { AppError } from '@isnanme/core';
-import { actorUserId, KEEPGOING_BOUNDS as B, KEEPGOING_RESTART_CAPS } from '@portal/contracts';
+import { actorUserId, KEEPGOING_BOUNDS as B, KEEPGOING_PROGRAM_RE, KEEPGOING_RESTART_CAPS } from '@portal/contracts';
 import { actorOfPrincipal } from '../authz/seam.js';
 import type { PlatformOwner } from '../platform/owner.js';
 import { portalTools, z, type ToolRegistry } from '../portalmcp/registry.js';
 import type { KeepGoingChatPort, KeepGoingEngine } from './engine.js';
-import { parsePatch } from './routes.js';
+import { mayPause, parsePatch, parsePause } from './routes.js';
 
 export function registerKeepGoingTools(d: { engine: KeepGoingEngine; chat: Pick<KeepGoingChatPort, 'get'>; owner: PlatformOwner }, registry: ToolRegistry = portalTools): void {
   registry.register({
@@ -31,6 +32,7 @@ export function registerKeepGoingTools(d: { engine: KeepGoingEngine; chat: Pick<
       status_file: z.string().max(B.statusFileMax).nullable().optional().describe('The status file {status} names, inside the chat’s folder; null for the default.'),
       max_nudges_per_day: z.number().int().min(B.maxNudgesPerDay.min).max(B.maxNudgesPerDay.max).optional(),
       max_wakes_per_day: z.number().int().min(B.maxWakesPerDay.min).max(B.maxWakesPerDay.max).optional(),
+      program: z.string().max(40).regex(KEEPGOING_PROGRAM_RE).nullable().optional().describe('The program the chat belongs to (a pause of it holds the chat); null for none.'),
       confirm_token: z.string().optional(),
     }),
     async handler(ctx, args) {
@@ -49,6 +51,7 @@ export function registerKeepGoingTools(d: { engine: KeepGoingEngine; chat: Pick<
       if (args.status_file !== undefined) raw.statusFile = args.status_file;
       if (args.max_nudges_per_day !== undefined) raw.maxNudgesPerDay = args.max_nudges_per_day;
       if (args.max_wakes_per_day !== undefined) raw.maxWakesPerDay = args.max_wakes_per_day;
+      if (args.program !== undefined) raw.program = args.program;
       const patch = parsePatch(raw);
       if (!Object.keys(patch).length) throw new AppError('VALIDATION_FAILED', 'Nothing to change.', { details: { enabled: 'Give at least one field.' } });
       const was = d.engine.view(s.id);
@@ -69,8 +72,44 @@ export function registerKeepGoingTools(d: { engine: KeepGoingEngine; chat: Pick<
       const kg = d.engine.set(s.id, ownerId, ctx.actor, patch);
       ctx.affected(`session:${s.id}`);
       return {
-        summary: `Keep going is ${kg.enabled ? 'on' : 'off'} for ${s.id}${kg.paused ? ' (paused for the whole portal)' : ''}.`,
-        keep_going: { enabled: kg.enabled, nudge_after_min: kg.nudgeAfterMin, prompt_default: kg.prompt === null, status_file: kg.statusFile, max_nudges_per_day: kg.maxNudgesPerDay, max_wakes_per_day: kg.maxWakesPerDay, paused: kg.paused },
+        summary: `Keep going is ${kg.enabled ? 'on' : 'off'} for ${s.id}${kg.pause ? ` (paused: ${kg.pause.program ?? 'all'})` : kg.paused ? ' (paused for the whole portal)' : ''}.`,
+        keep_going: { enabled: kg.enabled, nudge_after_min: kg.nudgeAfterMin, prompt_default: kg.prompt === null, status_file: kg.statusFile, max_nudges_per_day: kg.maxNudgesPerDay, max_wakes_per_day: kg.maxWakesPerDay, program: kg.program ?? null, paused: kg.paused },
+      };
+    },
+  });
+
+  registry.register({
+    name: 'keepgoing_pause_set',
+    title: 'Pause or resume Keep going for a program',
+    description:
+      "Pauses or resumes the portal's Keep going for one program (the label a chat's Keep going policy carries, like the supervisor's track keys) or, with program null, for every chat. While paused the portal starts no new chat, sends no nudge, wake or answer and raises no report for the chats it holds; it keeps watching their state. Resuming looks at them again at once. Admin tokens of a platform admin only; asks for confirmation first; audited.",
+    scope: 'admin',
+    hints: { destructive: true, idempotent: true },
+    rate: { perMinute: 6, perHour: 60 },
+    maxArgsBytes: 2_048,
+    input: z.object({
+      program: z.string().max(40).regex(KEEPGOING_PROGRAM_RE).nullable().describe('The program, or null for all.'),
+      paused: z.boolean().describe('True to pause, false to resume.'),
+      reason: z.string().max(B.pauseReasonMax).optional().describe('Why (one line); required to pause.'),
+      confirm_token: z.string().optional(),
+    }),
+    async handler(ctx, args) {
+      const actor = actorOfPrincipal(ctx.principal);
+      const userId = actorUserId(actor);
+      if (ctx.isAgent || !mayPause(d.owner, { actor: actor as { kind: string; scope?: string }, userId })) throw new AppError('NOT_FOUND', 'Not found.');
+      const p = parsePause({ program: args.program, paused: args.paused, ...(args.reason !== undefined ? { reason: args.reason } : {}) });
+      const what = p.program ?? 'every chat';
+      const gate = ctx.confirm(args, {
+        program: p.program,
+        changes: p.paused
+          ? `PAUSE Keep going for ${what}: no new chat, nudge, wake, answer or report until it is resumed. Reason: ${p.reason}`
+          : `RESUME Keep going for ${what}: its chats are looked at again at once (an idle one is told to continue, an ended one is brought back).`,
+      });
+      if (gate) return gate;
+      const out = d.engine.setPause(p.program, p.paused, ctx.actor, userId, p.reason);
+      return {
+        summary: `Keep going is ${p.paused ? 'paused' : 'resumed'} for ${what}${out.changed ? '' : ' (no change)'}.`,
+        pause: out.pause,
       };
     },
   });

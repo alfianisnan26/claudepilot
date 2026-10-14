@@ -33,6 +33,7 @@ import {
   type KeepGoingChat,
   type KeepGoingList,
   type KeepGoingRestartClass,
+  type KeepGoingPause,
 } from '@portal/contracts';
 import { redact } from '../chat/redact.js';
 import type { ClockPort, OwnerPort } from '../autotransfer/ports.js';
@@ -220,8 +221,10 @@ export class KeepGoingEngine {
     if (this.#seen.get(s.id) !== sig) (this.#seen.set(s.id, sig), (this.#dirty = true));
     const since24 = iso(now - DAY);
     const ended = s.state === 'ended';
-    // An ending is marked quietly the first time the sweep sees it (no ticket, no notification): `down` counts from there.
-    if (ended && !closedByPerson(s) && !this.#d.store.standing(s.id).some((r) => r.cause === 'ended')) this.#d.store.putReport(s.id, ownerId, 'ended', iso(now), null);
+    const held = this.pauseOf(p);
+    // An ending is marked quietly the first time the sweep sees it (no ticket, no notification): `down` counts from there. While a pause
+    // holds the chat the mark moves with the clock, so the 15 minutes of "left down" count from the resume, not from the pause.
+    if (ended && !closedByPerson(s) && (held || !this.#d.store.standing(s.id).some((r) => r.cause === 'ended'))) this.#d.store.putReport(s.id, ownerId, 'ended', iso(now), null);
     const standing = this.#d.store.standing(s.id);
     const endedMark = standing.find((r) => r.cause === 'ended')?.since ?? null;
     const lastRefusal = ended ? this.#d.store.lastAt(s.id, 'recover_refused') : null;
@@ -244,6 +247,9 @@ export class KeepGoingEngine {
     });
     this.last.set(s.id, decision);
     for (const r of standing) if (!causes.has(r.cause)) this.#d.store.clearReport(s.id, r.cause);
+    // Paused (slice 3): the state is recorded above (the look, the reports that clear), but nothing is done: no nudge, wake, answer, recover,
+    // new chat or report. Turning itself off (a person closed the chat, its ticket closed) touches only the policy and still happens.
+    if (held && decision.act !== 'stand_down') return decision;
     await this.#act(s, ownerId, p, decision);
     return decision;
   }
@@ -467,6 +473,44 @@ export class KeepGoingEngine {
     return lines.join('\n');
   }
 
+  /* ---------- the pause switch (slice 3) ---------- */
+
+  /** The pause that holds a policy's chat: all first, then its program; null when none does. */
+  pauseOf(p: Pick<PolicyRow, 'program'>, pauses: KeepGoingPause[] = this.#d.store.pauses()): KeepGoingPause | null {
+    return pauses.find((x) => x.program === null) ?? (p.program ? (pauses.find((x) => x.program === p.program) ?? null) : null);
+  }
+
+  /**
+   * Pauses or resumes a program (null: all); the route or the tool checked who may (a platform admin, an admin token). One audit row
+   * `keepgoing.pause` either way. A resume makes the program's chats due and starts a round at once.
+   */
+  setPause(program: string | null, paused: boolean, by: string, userId: string | null, reason: string | null): { pause: KeepGoingPause | null; changed: boolean } {
+    const was = this.#d.store.pauses().find((x) => x.program === program) ?? null;
+    let pause: KeepGoingPause | null = null;
+    let changed: boolean;
+    if (paused) {
+      pause = this.#d.store.pause(program, reason ?? 'Paused.', by);
+      changed = !was || was.reason !== pause.reason;
+    } else {
+      changed = this.#d.store.resume(program);
+      if (changed) this.#d.store.dueNow(program);
+    }
+    if (changed) {
+      this.#d.audit?.record({
+        kind: 'keepgoing.pause',
+        severity: 'info',
+        actor: by,
+        userId,
+        subject: `keepgoing:${program ?? 'all'}`,
+        detail: { program, paused, reasonChars: pause?.reason.length ?? 0 },
+      });
+      for (const p of this.#d.store.enabled()) if (program === null || p.program === program) this.#changed(p.sessionId);
+      this.#publish();
+      if (!paused) void this.round();
+    }
+    return { pause, changed };
+  }
+
   /* ---------- the policy, for the routes and the session payload ---------- */
 
   /** What the session payload carries, or null when the chat never had a policy. */
@@ -481,10 +525,12 @@ export class KeepGoingEngine {
       statusFile: p.statusFile,
       maxNudgesPerDay: p.maxNudgesPerDay,
       maxWakesPerDay: p.maxWakesPerDay,
+      program: p.program ?? null,
       nudgesToday: this.#d.store.count(sessionId, 'nudged', since24),
       wakesToday: this.#d.store.count(sessionId, 'woke', since24),
       last: this.#d.store.events(sessionId, 1)[0] ?? null,
-      paused: !keepGoingOn(this.#d.settings),
+      paused: !keepGoingOn(this.#d.settings) || !!this.pauseOf(p),
+      pause: this.pauseOf(p),
       standing: this.#d.store
         .standing(sessionId)
         .map((r) => r.cause)
@@ -506,7 +552,7 @@ export class KeepGoingEngine {
     }
     const rank = (c: KeepGoingChat) => (c.keepGoing.standing?.length ? 0 : 1);
     chats.sort((a, b) => rank(a) - rank(b) || (b.keepGoing.last?.at ?? '').localeCompare(a.keepGoing.last?.at ?? ''));
-    return { paused: !keepGoingOn(this.#d.settings), chats };
+    return { paused: !keepGoingOn(this.#d.settings), pauses: this.#d.store.pauses(), chats };
   }
 
   /** A person's (or an admin token's) change; the route checked who may. One trail row and one audit row. */
@@ -521,7 +567,7 @@ export class KeepGoingEngine {
       actor: by,
       userId: ownerId,
       subject: `session:${sessionId}`,
-      detail: { enabled: p.enabled, nudgeAfterMin: p.nudgeAfterMin, maxNudgesPerDay: p.maxNudgesPerDay, maxWakesPerDay: p.maxWakesPerDay, promptDefault: p.prompt === null, promptChars: p.prompt?.length ?? 0, statusFile: p.statusFile },
+      detail: { enabled: p.enabled, program: p.program ?? null, nudgeAfterMin: p.nudgeAfterMin, maxNudgesPerDay: p.maxNudgesPerDay, maxWakesPerDay: p.maxWakesPerDay, promptDefault: p.prompt === null, promptChars: p.prompt?.length ?? 0, statusFile: p.statusFile },
     });
     this.#changed(sessionId);
     return this.view(sessionId)!;

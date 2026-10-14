@@ -22,6 +22,8 @@ import {
   type ChatUsageRange,
   type ChatUsageReport,
   type UpdateKeepGoingRequest,
+  type SetKeepGoingPauseRequest,
+  type KeepGoingPause,
   type CreateChatSessionRequest,
   type CreateWorkspaceClaudeRequest,
   type DeleteChatSessionResult,
@@ -144,6 +146,8 @@ export const chatApi = {
   keepGoingList: () => request<KeepGoingList>('GET', KEEPGOING_API.list),
   /** Sets Keep going (a person only). */
   setKeepGoing: (id: string, body: UpdateKeepGoingRequest) => request<ChatKeepGoing>('PUT', CHAT_API.keepGoing(id), body),
+  /** Pauses or resumes Keep going for a program, or all (a platform admin; T-259 slice 3). */
+  setKeepGoingPause: (body: SetKeepGoingPauseRequest) => request<{ pause: KeepGoingPause | null; changed: boolean }>('PUT', KEEPGOING_API.pauses, body),
   /** Checks the server code again (what Bypass guards). */
   reauth: (code: string) => request<{ ok: true }>('POST', CHAT_API.reauth, { code } satisfies ReauthRequest),
   /** What the chat policy allows: whether a session can be started to allow Bypass. */

@@ -1,19 +1,29 @@
 // `GET` and `PUT /api/chat/sessions/:id/keep-going` (T-259, `CHAT_API.keepGoing`), mounted behind the session guard and the Origin check, and
-// `GET /api/keepgoing` (slice 2, `KEEPGOING_API.list`): the Home card's chats, each one the caller may view.
+// `GET /api/keepgoing` (slice 2, `KEEPGOING_API.list`): the Home card's chats, each one the caller may view, and the pauses that stand;
+// `PUT /api/keepgoing/pauses` (slice 3, the pause switch): a platform admin (a person, or an admin's token) pauses or resumes a program or
+// all; anyone else gets the same 404 as an unknown route.
 // Who is asking is read ONCE (`owner.actorOf(c)`). Reading needs `view` on the chat; setting needs `operate`, and only a person or an admin
 // token sets it: an agent (a chat keeping itself, or another chat, going) and a token below admin are refused, whatever the seam would allow.
 // A chat of another user answers like an unknown one. Bodies at most 8 KB.
 
 import { AppError, success } from '@isnanme/core';
-import { KEEPGOING_BOUNDS as B, type ChatKeepGoingPolicy, type UpdateKeepGoingRequest } from '@portal/contracts';
+import { KEEPGOING_BOUNDS as B, KEEPGOING_PROGRAM_RE, type ChatKeepGoingPolicy, type UpdateKeepGoingRequest } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { PlatformOwner } from '../platform/owner.js';
 import type { KeepGoingChatPort, KeepGoingEngine } from './engine.js';
 
 /** `GET /api/keepgoing`: the chats with Keep going on that the caller may view (an agent: its own chat at most). */
-export function createKeepGoingListRoutes(d: { owner: PlatformOwner; engine: Pick<KeepGoingEngine, 'list'> }): Hono {
+export function createKeepGoingListRoutes(d: { owner: PlatformOwner; engine: Pick<KeepGoingEngine, 'list' | 'setPause'> }): Hono {
   const app = new Hono();
+  app.use('/pauses', bodyLimit({ maxSize: 4 * 1024, onError: (c) => c.json({ ok: false, error: { code: 'PAYLOAD_TOO_LARGE', message: 'That request is too large.' } }, 413) }));
+  app.put('/pauses', async (c) => {
+    const who = d.owner.actorOf(c);
+    if (!mayPause(d.owner, who)) throw new AppError('NOT_FOUND', 'Not found.');
+    const p = parsePause(await body(c));
+    const out = d.engine.setPause(p.program, p.paused, who.label, who.userId, p.reason);
+    return c.json(success(out));
+  });
   app.get('/', (c) => {
     const who = d.owner.actorOf(c);
     const userId = who.userId;
@@ -22,6 +32,30 @@ export function createKeepGoingListRoutes(d: { owner: PlatformOwner; engine: Pic
     return c.json(success(d.engine.list((s) => (own === null || own === s.id) && d.owner.can(userId, 'view', { type: 'session', id: s.id, workspaceId: s.workspaceId }))));
   });
   return app;
+}
+
+/** Who may pause: a platform admin, as a person or through an admin-scoped token; never an agent. */
+export function mayPause(owner: Pick<PlatformOwner, 'isAdmin'>, who: { actor: { kind: string; scope?: string }; userId: string | null }): boolean {
+  const k = who.actor.kind;
+  if (!who.userId || !owner.isAdmin(who.userId)) return false;
+  return k === 'user' || (k === 'token' && who.actor.scope === 'admin');
+}
+
+/** A program's name, or null for all; anything else is refused. */
+export function program(v: unknown, field = 'program'): string | null {
+  if (v === null) return null;
+  if (typeof v !== 'string' || !KEEPGOING_PROGRAM_RE.test(v)) throw bad(field, 'Lowercase letters, digits and hyphens (at most 40), or null.');
+  return v;
+}
+
+/** A pause or a resume, checked: `reason` is required to pause (one line). */
+export function parsePause(raw: Record<string, unknown>): { program: string | null; paused: boolean; reason: string | null } {
+  for (const k of Object.keys(raw)) if (!['program', 'paused', 'reason'].includes(k)) throw bad(k, 'Unknown field.');
+  if (raw.program === undefined) throw bad('program', 'A program, or null for all.');
+  if (typeof raw.paused !== 'boolean') throw bad('paused', 'True or false.');
+  const reason = raw.reason === undefined ? null : text(raw.reason, 'reason', B.pauseReasonMax, true);
+  if (raw.paused && !reason) throw bad('reason', 'Say why (one line).');
+  return { program: program(raw.program), paused: raw.paused, reason };
 }
 
 export interface KeepGoingRouteDeps {
@@ -62,7 +96,7 @@ function text(v: unknown, field: string, max: number, oneLine: boolean): string 
 
 /** The fields of a change, checked; absent fields stay. */
 export function parsePatch(raw: Record<string, unknown>): Partial<ChatKeepGoingPolicy> {
-  const known = new Set<keyof UpdateKeepGoingRequest>(['enabled', 'nudgeAfterMin', 'prompt', 'statusFile', 'maxNudgesPerDay', 'maxWakesPerDay']);
+  const known = new Set<keyof UpdateKeepGoingRequest>(['enabled', 'nudgeAfterMin', 'prompt', 'statusFile', 'maxNudgesPerDay', 'maxWakesPerDay', 'program']);
   for (const k of Object.keys(raw)) if (!known.has(k as keyof UpdateKeepGoingRequest)) throw bad(k, 'Unknown field.');
   const p: Partial<ChatKeepGoingPolicy> = {};
   if (raw.enabled !== undefined) {
@@ -78,6 +112,7 @@ export function parsePatch(raw: Record<string, unknown>): Partial<ChatKeepGoingP
     if (f && (f.startsWith('/') || f.split('/').includes('..'))) throw bad('statusFile', 'A path inside the chat’s folder.');
     p.statusFile = f;
   }
+  if (raw.program !== undefined) p.program = program(raw.program);
   return p;
 }
 

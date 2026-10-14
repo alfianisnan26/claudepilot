@@ -513,14 +513,20 @@ async function watch() {
       if (mins >= 15) for (const t of TRACKS) await reportDown(t, (state.tracks[t.key] ??= { key: t.key, starts: [], nudges: [], wakes: [] }), 'network', `the portal was unreachable from the supervisor for about ${mins} minutes`);
     }
     const sessions = Array.isArray(list) ? list : (list.items ?? []);
+    // The portal's pause switch (T-259 slice 3) is the source of truth: a pause of all, or of a track's key as the program, holds the track
+    // here too. Read once a round; a portal that does not answer it (older) holds nothing, and the PAUSE files below still hold a track.
+    const portalPauses = await api('GET', '/api/keepgoing')
+      .then((r) => (Array.isArray(r.data?.pauses) ? r.data.pauses : []))
+      .catch(() => []);
     for (const t of TRACKS) {
       const ts = (state.tracks[t.key] ??= { key: t.key, starts: [], nudges: [], wakes: [] });
       ts.nudges ??= [];
       ts.wakes ??= [];
       if (ts.done) continue;
       // A paused program (the owner's order, 2026-10-14): `touch ~/.claudepilot/dev-sessions/PAUSE-<track key>` (orchestrator, konfersi, event); nothing is nudged, woken, moved or restarted until the file is removed.
-      if (existsSync(join(STATE_DIR, `PAUSE-${t.key}`))) {
-        if (!ts.pausedLogged) { log(`${t.key}: PAUSED by the owner (file PAUSE-${t.key}): left alone`); ts.pausedLogged = true; }
+      const held = portalPauses.find((p) => p.program === null || p.program === t.key);
+      if (held || existsSync(join(STATE_DIR, `PAUSE-${t.key}`))) {
+        if (!ts.pausedLogged) { log(`${t.key}: PAUSED by the owner (${held ? `the portal: ${held.program ?? 'all'}` : `file PAUSE-${t.key}`}): left alone`); ts.pausedLogged = true; }
         continue;
       }
       ts.pausedLogged = false;

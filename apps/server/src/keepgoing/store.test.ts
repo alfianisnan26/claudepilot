@@ -11,7 +11,7 @@ const tables = (s: Store) => (s.db!.prepare("SELECT name FROM sqlite_master WHER
 
 test('migration 790 on a fresh database: the three tables; the store reads and writes them', async () => {
   const store = await Store.open({ dataDir: tempDirectory('cp-kg-'), secretKey: parseSecretKey(generateSecretKey()) });
-  assert.deepEqual(tables(store), ['keepgoing_events', 'keepgoing_policies', 'keepgoing_reports']);
+  assert.deepEqual(tables(store), ['keepgoing_events', 'keepgoing_pauses', 'keepgoing_policies', 'keepgoing_reports']);
   const kg = new KeepGoingStore(store, () => new Date('2026-01-01T00:00:00.000Z'));
   assert.equal(kg.policy('s1'), null);
   const p = kg.setPolicy('s1', 'u_owner', 'ui', { enabled: true });
@@ -46,7 +46,7 @@ test('migrations 790 and 791 on an existing database: the tables appear; a desti
   const kinds = (s: Store, id: string) => (s.db!.prepare('SELECT kinds FROM notify_destinations WHERE id = ?').get(id) as { kinds: string }).kinds;
   const store = await Store.open({ dataDir: dir, secretKey: parseSecretKey(key), migrations: MIGRATIONS });
   assert.equal(store.trust.state, 'ok');
-  assert.deepEqual(tables(store), ['keepgoing_events', 'keepgoing_policies', 'keepgoing_reports']);
+  assert.deepEqual(tables(store), ['keepgoing_events', 'keepgoing_pauses', 'keepgoing_policies', 'keepgoing_reports']);
   assert.deepEqual(JSON.parse(kinds(store, 'd_failed')), ['approval', 'session_failed', 'keepgoing_attention']);
   assert.deepEqual(JSON.parse(kinds(store, 'd_quiet')), ['approval'], 'opted out of failed sessions: left alone');
   assert.deepEqual(JSON.parse(kinds(store, 'd_has')), ['session_failed', 'keepgoing_attention'], 'not added twice');
