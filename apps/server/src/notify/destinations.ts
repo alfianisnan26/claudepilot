@@ -220,7 +220,8 @@ export class Destinations {
     if (!p256dh || !validP256(p256dh)) throw invalid('p256dh', 'The key is not a P-256 point.');
     const auth = b64u(sub.keys?.auth, 16);
     if (!auth) throw invalid('auth', 'The auth secret must be 16 bytes.');
-    const tz = isTimeZone(input.tz) ? input.tz : 'UTC';
+    const sent = isTimeZone(input.tz) ? input.tz : null;
+    const tz = sent ?? 'UTC';
     const host = hostOf(endpoint);
     const hash = createHash('sha256').update(endpoint).digest('hex');
     const box = this.#box;
@@ -228,7 +229,7 @@ export class Destinations {
     const at = this.now().toISOString();
     db.exec('BEGIN IMMEDIATE');
     try {
-      const existing = db.prepare('SELECT id, owner_id FROM notify_destinations WHERE endpoint_hash = ?').get(hash) as { id: string; owner_id: string } | undefined;
+      const existing = db.prepare('SELECT id, owner_id, tz, quiet FROM notify_destinations WHERE endpoint_hash = ?').get(hash) as { id: string; owner_id: string; tz: string; quiet: string } | undefined;
       let id: string;
       let movedFrom: string | null = null;
       if (existing) {
@@ -249,11 +250,22 @@ export class Destinations {
         }
         const count = (db.prepare("SELECT COUNT(*) AS n FROM notify_destinations WHERE owner_id = ? AND type = 'push' AND id != ?").get(ownerId, id) as { n: number }).n;
         if (count >= PUSH_MAX) throw invalid('subscription', `At most ${PUSH_MAX} devices.`);
+        // T-126: the zone the text is written in is the quiet hours' zone. A device that sends none keeps what it had; one that reports a
+        // zone repairs a zone that was never really chosen (missing or UTC); a zone the person picked under Quiet hours stays.
+        if (!movedFrom && sent) {
+          let q: Partial<QuietHours> | null = null;
+          try {
+            q = JSON.parse(existing.quiet) as Partial<QuietHours>;
+          } catch {
+            q = null;
+          }
+          if (q && typeof q === 'object' && (!isTimeZone(q.tz) || q.tz === 'UTC') && sent !== 'UTC') db.prepare('UPDATE notify_destinations SET quiet = ? WHERE id = ?').run(JSON.stringify({ ...q, tz: sent }), id);
+        }
         db.prepare("UPDATE notify_destinations SET config = ?, hint = ?, unrecognised = ?, tz = ?, name = COALESCE(?, name), state = 'ok', failures = 0, last_error = NULL, updated_at = ? WHERE id = ?").run(
           box.seal(JSON.stringify({ endpoint, p256dh: p256dh.toString('base64url'), auth: auth.toString('base64url') }), slot(id)),
           host,
           knownPushService(host) ? 0 : 1,
-          tz,
+          movedFrom ? tz : (sent ?? existing.tz),
           typeof input.name === 'string' && input.name.trim() ? cleanName(input.name, 'This device') : null,
           at,
           id,

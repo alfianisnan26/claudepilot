@@ -30,6 +30,8 @@ export type { Presence } from './pipeline.js';
 export interface NotifyChat {
   onEvent(cb: (sessionId: string, msg: ChatServerMessage) => void): () => void;
   get(id: string): ChatSession | null;
+  /** Every chat (T-126: which run on a Claude, for the relevance of a quota alert). Absent in some tests: every alert is relevant. */
+  list?(): ChatSession[];
   openRequests(id: string): ChatRequest[];
   respond(id: string, requestId: string, decision: 'allow' | 'allow_session' | 'deny', opts?: { note?: string; actor?: string }): Promise<void>;
 }
@@ -178,7 +180,9 @@ export function createNotify(d: NotifyDeps) {
         }),
       );
       if (d.ci) stops.push(adaptCi(d.ci, d.bus));
-      if (d.claudeUsage) stops.push(adaptUsage(d.claudeUsage, d.bus));
+      const list = d.chat.list?.bind(d.chat);
+      const chatsOn = list ? (claudeId: string) => list().filter((s) => s.claudeId === claudeId && s.state !== 'ended').length : undefined;
+      if (d.claudeUsage) stops.push(adaptUsage(d.claudeUsage, d.bus, chatsOn));
       if (d.usageSpend) stops.push(adaptSpend(d.usageSpend, d.bus));
       if (d.tickets) stops.push(adaptTickets(d.tickets, d.bus, { info: (id) => d.ticketInfo?.(id) ?? null, closed: (id) => pipeline.resolveTag(`ticket:${id}`, 'closed') }));
       try {

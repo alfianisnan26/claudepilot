@@ -65,9 +65,9 @@ test('plan usage: high and exhausted notify, near is history only, projection is
   fire({ ...base, level: 'near', usedPct: 81 });
   fire({ ...base, level: 'near', kind: 'projection', etaAt: '2026-10-12T06:30:00.000Z', projectedPct: 130, newField: 1 } as ClaudeUsageAlert);
   assert.equal(got.length, 3);
-  assert.equal(render(got[0]!, { tz: 'Asia/Jakarta' }).body, 'Work · Session · 4 % left · resets 14:00'); // 100 - 96 = 4; 07:00Z is 14:00 WIB
+  assert.equal(render(got[0]!, { tz: 'Asia/Jakarta', now: Date.parse(base.at) }).body, 'Work · Session · 4 % left · resets 14:00'); // 100 - 96 = 4; 07:00Z is 14:00 WIB
   assert.equal(got[1]!.facts.level, 'near');
-  assert.equal(render(got[2]!, { tz: 'UTC' }).body, 'Work · Session · out by 06:30 est. · resets 07:00');
+  assert.equal(render(got[2]!, { tz: 'UTC', now: Date.parse(base.at) }).body, 'Work · Session · out by 06:30 est. · resets 07:00');
   assert.deepEqual(got[2]!.estimates, ['etaAt', 'projectedPct']);
 });
 

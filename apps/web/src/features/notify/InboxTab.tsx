@@ -8,7 +8,7 @@ import { errorText } from '@/lib/api';
 import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { notifyApi } from './api';
-import { dayLabel } from './inbox';
+import { bodyText, dayLabel } from './inbox';
 import { MuteDialog } from './MuteDialog';
 import { loadNotifyOverview, patchOverview, useNotifyOverview } from './store';
 
@@ -183,7 +183,7 @@ export function InboxTab() {
                         {timeAgo(i.at)}
                       </time>
                     </span>
-                    <ClampedText lines={2} className="text-[13px] text-muted">{i.body}</ClampedText>
+                    <ClampedText lines={2} className="text-[13px] text-muted">{bodyText(i)}</ClampedText>
                     {i.resolvedAt && i.resolution && <ClampedText className="mt-0.5 text-[12.5px] text-muted">{i.resolution}</ClampedText>}
                   </span>
                 </button>

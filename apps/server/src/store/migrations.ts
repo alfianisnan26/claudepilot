@@ -3153,6 +3153,26 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`ALTER TABLE ci_deployments ADD COLUMN auto_mode TEXT CHECK (auto_mode IN ('dry', 'on'));`);
     },
   },
+  {
+    version: 870,
+    name: 'notify: quota alerts as one row that updates, and the Claudes a person hears of when idle (T-126)',
+    up(db) {
+      db.exec(`
+        -- T-126 item 2: a quota alert is one Inbox row per (Claude, window, period) that updates as its stage changes. stage ranks how bad
+        -- it is (0 near, 1 projected to run out, 2 high, 3 out): a push only when it gets worse. period is the window's reset (ms); the row
+        -- closes as Recovered once it has passed. Both are null on every other kind and on rows from before this column.
+        ALTER TABLE notify_history ADD COLUMN stage INTEGER;
+        ALTER TABLE notify_history ADD COLUMN period INTEGER;
+        -- T-126 item 1: a quota alert reaches a person only for a Claude a chat runs on, unless they asked to hear of it when idle too.
+        CREATE TABLE notify_quota_watch (
+          owner_id TEXT NOT NULL,
+          claude_id TEXT NOT NULL,
+          at TEXT NOT NULL,
+          PRIMARY KEY (owner_id, claude_id)
+        ) STRICT;
+      `);
+    },
+  },
 ];
 
 /**

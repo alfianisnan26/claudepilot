@@ -6,6 +6,7 @@ import { useLive, usePresenceSender } from '@/lib/live';
 import { notifyApi } from './api';
 import { freshItems, newest, resolvedIds, toastText, toastTone } from './inbox';
 import { presenceOf, samePresence } from './presence';
+import { browserZone, needsZoneRepair } from './quiet';
 import { loadNotifyOverview, useNotifyOverview } from './store';
 import { thisDeviceId } from './deviceId';
 import { syncPush } from './usePush';
@@ -107,13 +108,15 @@ function NotifyRootInner() {
     void look.current(true);
   });
 
-  // A browser with a subscription the portal no longer knows (signed out elsewhere, the database restored): register it again.
+  // A browser with a subscription the portal no longer knows (signed out elsewhere, the database restored): register it again. So does
+  // one the portal knows in UTC while this device is elsewhere (T-126): the registration repairs the zone its notifications are written in.
   const synced = useRef(false);
   useEffect(() => {
     if (!overview || synced.current) return;
     synced.current = true;
     const id = thisDeviceId();
-    if (id && overview.destinations.some((d) => d.id === id)) return;
+    const known = id ? overview.destinations.find((d) => d.id === id) : undefined;
+    if (known && !needsZoneRepair(known.quiet.tz, browserZone())) return;
     void syncPush(overview.vapidPublicKey).then(() => loadNotifyOverview());
   }, [overview]);
 

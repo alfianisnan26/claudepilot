@@ -47,9 +47,3 @@ export function holds(q: QuietHours, kind: NotifyKind, at: Date): boolean {
   if (q.breakthrough.includes(kind)) return false;
   return inQuietHours(q, at);
 }
-
-/** The time in `tz`, `HH:MM`. */
-export function clock(at: Date, tz: string): string {
-  const m = localMinutes(at, isTimeZone(tz) ? tz : 'UTC');
-  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-}
