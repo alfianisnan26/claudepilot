@@ -29,6 +29,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { tokenLease } from '../../tools/coordinator/tokenLease.mjs';
 
 const PORTAL = (process.env.PORTAL_URL ?? 'https://pilot.ai.isnan.me').replace(/\/$/, '');
 const CODE = process.env.PORTAL_SERVER_CODE ?? '';
@@ -128,22 +129,13 @@ async function api(method, path, body) {
   }
 }
 
-/** Portal MCP over HTTP with a short-lived admin token made for this process (only `session_send` needs it) and revoked at exit. */
-const mcp = { token: '', id: '' };
-async function mcpToken() {
-  if (mcp.token) return mcp.token;
-  // The portal caps live tokens per label (T-258): revoke this label's leftovers before minting (a crash leaves them behind).
-  { const st = (await api('GET', '/api/portal-mcp')).data; for (const t of st?.tokens ?? []) if (!t.revokedAt && t.label === 'dev-sessions-supervisor') await api('DELETE', `/api/portal-mcp/tokens/${t.id}`); } // replaced stale
-  const r = await api('POST', '/api/portal-mcp/tokens', { label: 'dev-sessions-supervisor', scope: 'admin', expiresInDays: 7 });
-  if (!r.data?.secret) throw new Error(`no MCP token: ${r.error?.message ?? r.status}`);
-  mcp.token = r.data.secret;
-  mcp.id = r.data.token?.id ?? '';
-  return mcp.token;
-}
-async function revokeMcpToken() {
-  if (mcp.id) await api('DELETE', `/api/portal-mcp/tokens/${mcp.id}`).catch(() => {});
-  mcp.token = mcp.id = '';
-}
+/**
+ * Portal MCP over HTTP with one admin token for this process (only `session_send` and a few tool calls need it): 1 hour, reused while it
+ * has more than 5 minutes left, renewed with `replace` (which also revokes a crashed run's leftover), revoked at exit (T-258).
+ */
+const mcp = tokenLease({ api, label: 'dev-sessions-supervisor' });
+const mcpToken = () => mcp.get();
+const revokeMcpToken = () => mcp.revoke();
 /** One Portal MCP tool call with the supervisor's admin token. */
 async function mcpCall(name, args) {
   const token = await mcpToken();
