@@ -351,7 +351,13 @@ As built:
 - **Authorization:** the token routes ask the seam for `manage` on the person's tokens (`personal`, `pmcp_token:*` or `pmcp_token:<id>`) and
   are declared in `portalmcp/authz.ts` (with the rest of `/api/portal-mcp`): a read or operate token is below it, an agent's token is boxed
   out, nobody signed in is 401. No migration: the rules read `pmcp_tokens` as it is.
-- **Not here:** the coordinator's own helpers (one token per run, revoked at the end) are its scripts' change, outside the portal.
+- **The repository's own helpers** (`tools/coordinator/portal.mjs`, `docs/dev-sessions/supervisor.mjs`) hold one token per run through
+  `tools/coordinator/tokenLease.mjs`: admin scope, `expiresIn: 1h`, `replace: true` (so a crashed run's leftover is revoked, never a 409),
+  reused while more than 5 minutes are left, renewed with `replace` after that, revoked at the end of the run (also when the call fails,
+  and on SIGINT or SIGTERM). The secret stays in the process's memory; an error names the code, never the token. Before this,
+  `portal.mjs` revoked `tokens/undefined` (the mint answer is `{token, secret}`), so each call's 7-day token stayed live until the next call.
+  Tested against the real routes and endpoint in `portalmcp/tokenLease.test.ts`, including the twin that an expired, a revoked and an
+  unknown token get the same 401.
 
 ### 12.1a The client's name: every token has a label (T-6, built)
 

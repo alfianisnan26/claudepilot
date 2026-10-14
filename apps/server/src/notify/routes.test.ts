@@ -206,3 +206,22 @@ test('mute routes: the caller’s own through the seam, 404 for another user’s
     platform.stop();
   }
 });
+
+test('T-126 "Alert when idle": each person’s own, per Claude; a Claude B may not see answers 404; on or off only', async () => {
+  const { call, owner, platform } = await build();
+  try {
+    // the fake owner: Claude c_a is A's, nobody may see c_b
+    const own = owner as unknown as { can: (u: string, v: string, s: { type: string; id: string }) => boolean };
+    const can = own.can;
+    own.can = (u, v, s) => (s.type === 'claude' ? s.id === 'c_a' && u === 'u_a' : can(u, v, s));
+    assert.deepEqual((await call('u_a', 'GET', '/api/notify/quota-watch/c_a')).data, { watch: false });
+    assert.deepEqual((await call('u_a', 'PUT', '/api/notify/quota-watch/c_a', { watch: true })).data, { watch: true });
+    assert.deepEqual((await call('u_a', 'GET', '/api/notify/quota-watch/c_a')).data, { watch: true });
+    assert.equal((await call('u_a', 'PUT', '/api/notify/quota-watch/c_a', { watch: 'yes' })).status, 422);
+    assert.equal((await call('u_b', 'GET', '/api/notify/quota-watch/c_a')).status, 404);
+    assert.equal((await call('u_b', 'PUT', '/api/notify/quota-watch/c_a', { watch: true })).status, 404);
+    assert.equal((await call('u_a', 'GET', '/api/notify/quota-watch/c_b')).status, 404);
+  } finally {
+    platform.stop();
+  }
+});

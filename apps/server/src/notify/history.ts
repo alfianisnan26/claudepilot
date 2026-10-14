@@ -3,12 +3,15 @@
 // numbers); the log keeps a status and a fixed code, never a URL, a path or a provider's reply. 30 days each.
 
 import { randomBytes } from 'node:crypto';
-import type { MuteScope, NotifyDelivery, NotifyError, NotifyEvent, NotifyHistoryItem, NotifyHistoryPage, NotifyKind, NotifySuppression } from '@portal/contracts';
+import { fillTimeMarks, hasTimeMarks, zonedTime, type MuteScope, type NotifyDelivery, type NotifyError, type NotifyEvent, type NotifyHistoryItem, type NotifyHistoryPage, type NotifyKind, type NotifySuppression } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import type { Rendered } from './templates.js';
 
 const RETENTION_MS = 30 * 86_400_000;
 const TOKEN_KEEP_MS = 86_400_000;
+/** Reset times this close are one period (as the usage monitor's pace reads them). */
+const QUOTA_SAME_PERIOD_MS = 60_000;
+export const QUOTA_RECOVERED = 'Recovered';
 
 interface HistoryRow {
   id: string;
@@ -58,10 +61,71 @@ export class NotifyHistory {
     return id;
   }
 
+  /**
+   * T-126 item 2: a quota alert is ONE row per (person, Claude, window, period) that updates as its stage changes. `worse` says whether
+   * this event made it worse (or opened it): only then is it pushed, and the row is unread again and moves to the top. The same stage
+   * refreshes the numbers in place; a milder one (a projection after 95 %) leaves the row as it is. A row of an earlier period is closed
+   * as Recovered and a new one opened. Without a period (no reset time) every alert is a row of its own, as before.
+   */
+  addQuota(ownerId: string, e: NotifyEvent, r: Rendered, q: { stage: number; period: number | null }, opts: { muted?: boolean; scope?: MuteScope | null } = {}): { id: string; worse: boolean } | null {
+    const db = this.#w;
+    if (!db) return null;
+    const open =
+      q.period === null
+        ? undefined
+        : (db
+            .prepare("SELECT id, stage, period FROM notify_history WHERE owner_id = ? AND tag = ? AND kind = 'quota_low' AND resolved_at IS NULL AND period IS NOT NULL ORDER BY at DESC LIMIT 1")
+            .get(ownerId, r.tag) as { id: string; stage: number | null; period: number } | undefined);
+    if (open && q.period !== null && Math.abs(open.period - q.period) < QUOTA_SAME_PERIOD_MS) {
+      const was = open.stage ?? -1;
+      if (q.stage < was) return { id: open.id, worse: false };
+      const worse = q.stage > was;
+      db.prepare(
+        `UPDATE notify_history SET event_id = ?, title = ?, body = ?, path = ?, stage = ?, period = ?${worse ? ', at = ?, read_at = NULL, muted = ?' : ''} WHERE id = ?`,
+      ).run(...([e.id, r.title, r.body.split('\n')[0] ?? '', r.path, q.stage, q.period, ...(worse ? [e.at, opts.muted ? 1 : 0] : []), open.id] as (string | number | null)[]));
+      return { id: open.id, worse };
+    }
+    if (open) db.prepare('UPDATE notify_history SET resolved_at = ?, resolution = ? WHERE id = ?').run(this.now().toISOString(), QUOTA_RECOVERED, open.id);
+    const id = this.add(ownerId, e, r, opts);
+    if (id) db.prepare('UPDATE notify_history SET stage = ?, period = ? WHERE id = ?').run(q.stage, q.period, id);
+    return id ? { id, worse: true } : null;
+  }
+
+  /** T-126 item 2: a quota row whose window has reset is closed as Recovered. Returns how many closed. */
+  recoverQuota(): number {
+    const db = this.#w;
+    if (!db) return 0;
+    const now = this.now();
+    return Number(
+      db
+        .prepare("UPDATE notify_history SET resolved_at = ?, resolution = ? WHERE kind = 'quota_low' AND resolved_at IS NULL AND period IS NOT NULL AND period <= ?")
+        .run(now.toISOString(), QUOTA_RECOVERED, now.getTime()).changes,
+    );
+  }
+
+  /* ---------- Quota alerts for an idle Claude (T-126 item 1) ---------- */
+
+  /** Whether the person hears of this Claude's quota even when no chat runs on it. */
+  watches(ownerId: string, claudeId: string): boolean {
+    return !!this.store.db?.prepare('SELECT 1 FROM notify_quota_watch WHERE owner_id = ? AND claude_id = ?').get(ownerId, claudeId);
+  }
+
+  watched(ownerId: string): string[] {
+    return ((this.store.db?.prepare('SELECT claude_id FROM notify_quota_watch WHERE owner_id = ? ORDER BY claude_id').all(ownerId) ?? []) as { claude_id: string }[]).map((r) => r.claude_id);
+  }
+
+  setWatch(ownerId: string, claudeId: string, on: boolean): void {
+    const db = this.#w;
+    if (!db) return;
+    if (on) db.prepare('INSERT OR IGNORE INTO notify_quota_watch (owner_id, claude_id, at) VALUES (?, ?, ?)').run(ownerId, claudeId, this.now().toISOString());
+    else db.prepare('DELETE FROM notify_quota_watch WHERE owner_id = ? AND claude_id = ?').run(ownerId, claudeId);
+  }
+
   page(ownerId: string, opts: { before?: string; limit?: number; muted?: boolean } = {}): NotifyHistoryPage {
     const db = this.store.db;
     if (!db) return { items: [], next: null, unread: 0 };
     const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 50)));
+    const nowMs = this.now().getTime();
     const before = opts.before && !Number.isNaN(Date.parse(opts.before)) ? opts.before : null;
     const rows = db
       .prepare(
@@ -74,7 +138,7 @@ export class NotifyHistory {
         kind: r.kind,
         at: r.at,
         title: r.title,
-        body: r.body,
+        ...(hasTimeMarks(r.body) ? { body: fillTimeMarks(r.body, (iso) => `${zonedTime(iso, nowMs, 'UTC')} UTC`), bodyMarked: r.body } : { body: r.body }),
         path: r.path,
         subject: { type: r.subject_type, id: r.subject_id, ...(r.workspace_id ? { workspaceId: r.workspace_id } : {}) },
         readAt: r.read_at,
@@ -113,8 +177,10 @@ export class NotifyHistory {
     return owners;
   }
 
+  /** Whether the latest row under the tag is dealt with (a quota tag is reused period after period: an older Recovered row says nothing). */
   resolved(tag: string): boolean {
-    return !!this.store.db?.prepare('SELECT 1 FROM notify_history WHERE tag = ? AND resolved_at IS NOT NULL LIMIT 1').get(tag);
+    const r = this.store.db?.prepare('SELECT resolved_at FROM notify_history WHERE tag = ? ORDER BY at DESC, rowid DESC LIMIT 1').get(tag) as { resolved_at: string | null } | undefined;
+    return !!r && r.resolved_at !== null;
   }
 
   /* ---------- Delivery log ---------- */

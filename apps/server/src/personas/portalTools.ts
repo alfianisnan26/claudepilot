@@ -1,6 +1,6 @@
 import { posix } from 'node:path';
 import { AppError } from '@isnanme/core';
-import { PERSONA_AVATAR, PERSONA_PROPOSAL_LIMITS, type PersonaProposal } from '@portal/contracts';
+import { attentionDeckPath, PERSONA_AVATAR, PERSONA_PROPOSAL_LIMITS, type PersonaProposal } from '@portal/contracts';
 import { PortalToolError, portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { normalizeAvatar } from './avatar.js';
 import type { Personas } from './index.js';
@@ -37,6 +37,8 @@ const proposalView = (ctx: PortalToolContext, p: PersonaProposal) => ({
   status: p.status,
   ...(p.name ? { name: ctx.untrusted(p.name, 'agent', 120) } : {}),
   decided_by: p.decidedBy,
+  // Waiting: the Needs you card a person opens to decide it (T-146), to give on the ticket instead of describing where to look.
+  ...(p.status === 'pending' ? { link: attentionDeckPath({ kind: 'persona_proposal', id: p.id }) } : {}),
 });
 
 /** `~/avatar.png`, `avatar.png` or `/home/node/work/avatar.png` as an absolute path in the workspace user's home, or an error. */

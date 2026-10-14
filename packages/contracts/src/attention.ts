@@ -3,7 +3,7 @@
 // own checks. Only REQUIRED items appear (D-10, D-34): an optional check never does.
 
 /** What waits. One per source. */
-export const ATTENTION_KINDS = ['mcp_version', 'skill_version', 'ci_deploy', 'ticket_approval', 'tool_approval', 'keepgoing_down'] as const;
+export const ATTENTION_KINDS = ['mcp_version', 'skill_version', 'ci_deploy', 'ticket_approval', 'tool_approval', 'keepgoing_down', 'persona_proposal'] as const;
 export type AttentionKind = (typeof ATTENTION_KINDS)[number];
 
 /** Why a person is required (D-10's classes). The order is the page's group order. */
@@ -26,6 +26,7 @@ export const ATTENTION_KIND_LABEL: Record<AttentionKind, string> = {
   ticket_approval: 'Tickets',
   tool_approval: 'Sessions',
   keepgoing_down: 'Down',
+  persona_proposal: 'Personas',
 };
 
 /** A session's tool approval is listed once it has waited this long (T-256 item 4); a fresh one is the session's own card. */
@@ -96,4 +97,12 @@ export const attentionDeckPath = (i: { kind: AttentionKind; id: string }): strin
 export const ATTENTION_PAGE_MAX = 200;
 export const ATTENTION_PAGE_DEFAULT = 100;
 
-export const isAttentionKind = (v: unknown): v is AttentionKind => typeof v === 'string' && (ATTENTION_KINDS as readonly string[]).includes(v);
+/**
+ * Which view of the registry (T-146 slice 3). `decide` (the page, the badge, Later, notifications): what the actor may DECIDE. `see` (the
+ * Portal MCP's `attention_list` with `scope: "see"`, for the coordinator): what the actor may VIEW through each module's own `can()`, so an
+ * agent can say what blocks it; it shows nothing the module's own read tools would not, and deciding stays a person's on the module's route.
+ */
+export const ATTENTION_SCOPES = ['decide', 'see'] as const;
+export type AttentionScope = (typeof ATTENTION_SCOPES)[number];
+
+export const isAttentionKind =(v: unknown): v is AttentionKind => typeof v === 'string' && (ATTENTION_KINDS as readonly string[]).includes(v);

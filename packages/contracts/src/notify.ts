@@ -352,7 +352,13 @@ export interface NotifyHistoryItem {
   kind: NotifyKind;
   at: string;
   title: string;
+  /** The text with any clock time in UTC, said as such ("resets 19:40 UTC"): for a reader that cannot show the reader's own zone. */
   body: string;
+  /**
+   * T-126: the same text with its clock times as marks (`timeMark`), present only when it has any. The web shows each in the device's
+   * own zone with `zonedTime` (`fillTimeMarks`), the same formatter as the Quota sheet.
+   */
+  bodyMarked?: string;
   /** A portal path (`/admin/sessions/s_41?request=r_7`), never an absolute URL. */
   path: string | null;
   subject: NotifySubject;
@@ -374,6 +380,17 @@ export interface NotifyHistoryPage {
 /** `PUT NOTIFY_API.session(id)`: "Notify when done" for one session (the session menu). */
 export interface SessionNotifyRequest {
   done: boolean;
+}
+
+/**
+ * T-126 item 1: a quota alert reaches a person only for a Claude a chat runs on; "Alert when idle" (`watch`, off by default) asks for it
+ * on a Claude with no chat too. `GET`/`PUT NOTIFY_API.quotaWatch(claudeId)`, the caller's own.
+ */
+export interface QuotaWatchRequest {
+  watch: boolean;
+}
+export interface QuotaWatchState {
+  watch: boolean;
 }
 
 /* ---------- Mute rules ("Mute similar") ---------- */
@@ -563,6 +580,8 @@ export const NOTIFY_API = {
   read: '/api/notify/history/read',
   /** PUT `SessionNotifyRequest`. */
   session: (sessionId: string) => `/api/notify/sessions/${encodeURIComponent(sessionId)}`,
+  /** GET: `QuotaWatchState` for one Claude. PUT `QuotaWatchRequest`: the same (T-126: its quota alerts even when no chat runs on it). */
+  quotaWatch: (claudeId: string) => `/api/notify/quota-watch/${encodeURIComponent(claudeId)}`,
   /** GET: `NotifyUserPrefs` (the caller's). PUT `NotifyUserPrefs`: the same. */
   prefs: '/api/notify/prefs',
   /** POST `NotifyActRequest`: `NotifyActResult`. */

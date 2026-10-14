@@ -6,7 +6,7 @@
 import { CHAT_API, sessionRef, type AttentionItem } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, present, sessionWho, ticketWho, type AttentionSource } from '../attention/registry.js';
+import { clip, present, sessionWho, ticketWho, verbFor, type AttentionSource } from '../attention/registry.js';
 
 interface Row {
   session_id: string;
@@ -19,7 +19,7 @@ interface Row {
 export function keepGoingAttentionSource(db: () => DatabaseSync | null): AttentionSource {
   return {
     kind: 'keepgoing_down',
-    list(actor) {
+    list(actor, _now, scope) {
       const d = db();
       if (!d) throw new Error('the database is not available');
       // One query: the standing `down` reports of chats whose policy is on, with the chat's title and workspace when the chat still exists.
@@ -32,7 +32,7 @@ export function keepGoingAttentionSource(db: () => DatabaseSync | null): Attenti
         )
         .all() as unknown as Row[];
       return rows
-        .filter((r) => can(actor, 'operate', sessionRef(r.session_id)).allow)
+        .filter((r) => can(actor, verbFor(scope, 'operate'), sessionRef(r.session_id)).allow)
         .map(
           (r): AttentionItem => ({
             kind: 'keepgoing_down',

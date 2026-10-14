@@ -2,7 +2,7 @@
 // checked again with `can(view)`), the Inbox row, then for each of their destinations: kind on? ▸ state ▸ quiet hours ▸ presence ▸
 // announce delay ▸ collapse and throttle ▸ render ▸ send (with retries) ▸ the delivery log. Nothing here ever throws into the bus.
 
-import { isMuteGuarded, NOTIFY_KIND_INFO, type NotifyDecision, type NotifyDestination, type NotifyError, type NotifyEvent, type NotifyKind, type TestResult } from '@portal/contracts';
+import { isMuteGuarded, NOTIFY_KIND_INFO, type NotifyDecision, type NotifyDestination, type NotifyError, type NotifyEvent, type NotifyKind, type TestResult, zonedTime, zoneLabel } from '@portal/contracts';
 import type { PlatformOwner } from '../platform/owner.js';
 import type { Store } from '../store/store.js';
 import { answerOffer, type ActChat, type NotifyActions } from './actions.js';
@@ -148,18 +148,26 @@ export class NotifyPipeline {
     );
     if (!recipients.length) return;
     const historyOnly = e.kind === 'quota_low' && e.facts.level === 'near';
-    const forHistory = render(e, { tz: 'UTC' });
+    const quota = e.kind === 'quota_low' ? quotaStage(e) : null;
+    // T-126: the Inbox row keeps its times as instants (marks), shown in the reader's own zone; never the server's UTC.
+    const forHistory = render(e, { marks: true });
     const scope = muteScopesOf(e)[0] ?? null;
     for (const r of recipients) {
+      // T-126 item 1: a Claude no chat runs on is information (its own page lists the alert), not an alert, unless the person watches it.
+      if (quota && e.facts.chats === 0 && !this.d.history.watches(r.userId, e.subject.id)) continue;
       // A sharer gets an Inbox row only where they asked to hear of shared things.
       const dests = this.d.destinations.forUsers([r.userId]).filter((x) => x.userId === r.userId && (r.owner || x.includeShared));
       // Mute rules: one for all destinations marks the Inbox row muted and sends nothing; one for a destination hushes that one only.
       const muted = this.d.mutes.match(r.userId, e);
-      const stored = r.owner || dests.length ? this.d.history.add(r.userId, e, forHistory, { muted: muted.everywhere, scope }) : null;
+      const keep = r.owner || dests.length;
+      // T-126 item 2: one quota row per Claude, window and period, updated in place; a push only when it got worse.
+      const row = keep && quota ? this.d.history.addQuota(r.userId, e, forHistory, quota, { muted: muted.everywhere, scope }) : null;
+      const stored = keep ? (quota ? row?.id ?? null : this.d.history.add(r.userId, e, forHistory, { muted: muted.everywhere, scope })) : null;
       if (stored || dests.some((x) => muted.destinations.has(x.id))) this.d.mutes.hushed(muted.ids);
       if (historyOnly) continue;
       for (const dest of dests) {
-        if (muted.everywhere || muted.destinations.has(dest.id)) this.#log(r.userId, e, dest, 'suppressed', 'muted');
+        if (row && !row.worse) this.#log(r.userId, e, dest, 'suppressed', 'collapsed');
+        else if (muted.everywhere || muted.destinations.has(dest.id)) this.#log(r.userId, e, dest, 'suppressed', 'muted');
         else this.#route(e, dest, r.userId);
       }
     }
@@ -289,7 +297,8 @@ export class NotifyPipeline {
       this.#log(userId, e, dest, 'failed', 'locked');
       return { ok: false, error: 'locked' };
     }
-    const r = render(e, { tz: dest.quiet.tz, includeDetail: dest.includeDetail, detailMax: dest.type === 'push' ? 160 : 600 });
+    // The recipient's zone (a device reports its own at registration); a channel that is not a device says which zone it is.
+    const r = render(e, { tz: dest.quiet.tz, labelZone: dest.type !== 'push', now: this.#now().getTime(), includeDetail: dest.includeDetail, detailMax: dest.type === 'push' ? 160 : 600 });
     const rendered: Rendered = opts.summary ? { ...r, ...opts.summary, path: '/admin/notifications', tag: `summary:${dest.id}`, renotify: false } : r;
     let attempt = 0;
     let res: EgressResult;
@@ -333,7 +342,7 @@ export class NotifyPipeline {
     let m: ChannelMessage;
     if (dest.type === 'webhook') m = webhookMessage(e, r, { url, deliveryId: `dlv_${e.id.slice(4)}_${dest.id.slice(4)}`, nowS: Math.floor(this.#now().getTime() / 1000), secret: dest.signed ? config.secret : null, detail });
     else if (dest.type === 'discord') m = discordMessage(r, { url, detail: detail?.text ?? null });
-    else m = slackMessage(r, { url, detail: detail?.text ?? null, kindLabel: NOTIFY_KIND_INFO[e.kind].label, when: `${e.at.slice(11, 16)} UTC` });
+    else m = slackMessage(r, { url, detail: detail?.text ?? null, kindLabel: NOTIFY_KIND_INFO[e.kind].label, when: `${zonedTime(e.at, this.#now().getTime(), dest.quiet.tz)} ${zoneLabel(e.at, dest.quiet.tz)}` });
     return this.d.egress.send({ url: config.url, headers: m.headers, body: m.body, allowPrivate: dest.type === 'webhook' && dest.allowPrivateNetwork });
   }
 
@@ -371,6 +380,7 @@ export class NotifyPipeline {
   async tick(): Promise<void> {
     if (this.state() !== 'ready') return;
     const now = this.#now();
+    if (this.d.history.recoverQuota() > 0) this.d.publish();
     for (const id of this.d.history.heldDestinations()) {
       const dest = this.d.destinations.find(id);
       if (!dest) continue;
@@ -392,4 +402,12 @@ export class NotifyPipeline {
     const e: NotifyEvent = { id: `evt_${Date.now().toString(16).padStart(16, '0').slice(-16)}`, kind, at: this.#now().toISOString(), subject: { type: 'portal', id: 'summary' }, facts: {} };
     await this.#limit(dest.id, () => this.#deliver(e, dest, dest.userId, { retries: true, summary: text }));
   }
+}
+
+/** How bad a quota alert is (T-126 item 2): near 0, projected to run out 1, high 2, out 3; and its period (the window's reset, ms). */
+export function quotaStage(e: NotifyEvent): { stage: number; period: number | null } {
+  const level = e.facts.level;
+  const stage = level === 'exhausted' ? 3 : level === 'high' ? 2 : level === 'projection' || e.facts.projection === true ? 1 : 0;
+  const reset = typeof e.facts.resetsAt === 'string' ? Date.parse(e.facts.resetsAt) : Number.NaN;
+  return { stage, period: Number.isNaN(reset) ? null : reset };
 }

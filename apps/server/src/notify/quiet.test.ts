@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { QuietHours } from '@portal/contracts';
-import { clock, holds, inQuietHours, localMinutes } from './quiet.js';
+import { zonedTime } from '@portal/contracts';
+import { holds, inQuietHours, localMinutes } from './quiet.js';
 
 const q = (start: string, end: string, tz: string, breakthrough: QuietHours['breakthrough'] = ['cost_spike']): QuietHours => ({ enabled: true, start, end, tz, breakthrough });
 const at = (iso: string) => new Date(iso);
@@ -42,7 +43,7 @@ test('Europe/London, 2026-10-25 (02:00 BST becomes 01:00 GMT at 01:00Z): 22:00 t
   assert.equal(inQuietHours(w, at('2026-10-25T06:30:00Z')), true); // 06:30 GMT (a fixed BST offset would say 07:30 and miss it)
   assert.equal(inQuietHours(w, at('2026-10-25T06:59:00Z')), true); // 06:59 GMT
   assert.equal(inQuietHours(w, at('2026-10-25T07:00:00Z')), false); // 07:00 GMT
-  assert.equal(clock(at('2026-10-25T06:30:00Z'), 'Europe/London'), '06:30');
+  assert.equal(zonedTime('2026-10-25T06:30:00Z', Date.parse('2026-10-25T06:00:00Z'), 'Europe/London'), '06:30'); // the text's clock agrees
 });
 
 test('break-through kinds and the test always go; a window of equal ends is empty; a bad zone holds nothing', () => {

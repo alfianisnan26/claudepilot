@@ -30,8 +30,8 @@ module's own route that decides it: a POST path, or `SOCKET` for the chat).
   approval, the chat's whole-text rule).
 - **Authorization.** Each source filters through its module's own `can()`; a denied item is absent and not counted, the same as a missing one.
   `GET /api/attention` is declared `signed-in` in `attention/authz.ts`.
-- **One query per source.** Each source runs one SELECT (session titles joined in), so the aggregate is five queries whatever the number of
-  items (a test counts the `prepare` calls).
+- **One query per source.** Each source runs one SELECT (session titles joined in), so the aggregate is one query per source (seven) plus
+  one for the person's Later, whatever the number of items (a test counts the `prepare` calls).
 - **Unavailable is a state.** A source that throws gives `counts[kind] = null` and its kind in `unavailable`; the page says "Unavailable:
   Tickets", never 0.
 - **Order.** Grouped by class in the order above, then the oldest first.
@@ -47,8 +47,11 @@ module's own route that decides it: a POST path, or `SOCKET` for the chat).
 | `tool_approval` | `chat/attention.ts` | a request a session's live process has held for 10 minutes or more while its turn runs (`waiting`, or `working` with a second request still open; T-256 item 4, T-284 item 4); a fresh one stays the session's own card; a request of a process that is gone is not listed (it is resolved `stale`, chat-sessions FR25b) | gate | the tool · the workspace | operate on the session |
 | `keepgoing_down` | `keepgoing/attention.ts` | a chat with Keep going on that the sweep reported left down (the cap, a refused start, still ended 15 minutes after it ended; T-257 item 1) and that has not run again; it goes when the chat runs (the next look clears the report). Announced by Keep going's own `keepgoing_attention` notification, so the bridge stays quiet | question | ended · the workspace | operate on the session |
 
-Not a source in slice 1: pool revisions in `waiting_review` (they follow from unapproved versions), settings an agent proposed (T-138),
-stg PRs (T-116), the login queue (T-140), Bypass acknowledgements. Each is one file and one line in `attention/index.ts`.
+| `persona_proposal` | `personas/attention.ts` | a session's `pending` proposal to change its own persona: instructions (never auto-approved), or a name or avatar the persona's switch did not let through (Persona PRD I11; slice 3) | gate | what changes · its size (`adds 120 chars, 2 replacements`, never the text) · the revision it was made against · the workspace | a person with manage on the persona |
+
+Not a source yet: pool revisions in `waiting_review` (they follow from unapproved versions), Bypass acknowledgements, and three that do
+not exist in the code yet: settings an agent proposed (T-138), stg PRs (T-116), the login queue (T-140). Each is one file and one line in
+`attention/index.ts`.
 
 ## 3. Changes and the event (built)
 
@@ -123,10 +126,25 @@ Not observed in a browser: the CI deploy and tool approval rows (they need a run
   actor, so it sees what that actor may decide: an agent sees its own session's stuck approvals (not another session's, not a deploy or an
   approval ticket, which are a person's); one it does not see is the same NOT_FOUND as one that does not exist. It approves nothing.
 
-Not built (slice 3): `blocking` per item and ordering by it, the second step and undo for high-risk approvals done in the deck itself, reject
-reasons, batch review, "Ask the agent", a bar place on the phone, "explain what disappeared", the corner banners (Pools, Skills, CI), the
-program filter (T-137), and the sources of §2 not yet built. The tool's view for an admin token or the coordinator ("what may I see", not
-"what may I decide") is a separate decision.
+## 7a. Slice 3 (built): persona proposals, and the "see" view for the coordinator
+
+- **Persona proposals** are a source (§2). The item's link is `/admin/pools?tab=personas&proposal=<id>`: the Personas tab opens its
+  Proposals dialog with that proposal ringed (`aria-current`) and scrolled into view, also when it was decided meanwhile (the dialog then
+  says "Nothing to review"); closing it drops `?proposal=`. Nothing else announces a proposal, so the notify bridge sends `attention` for it.
+  `persona_propose_update` and `persona_set_avatar_proposal` return, for a proposal still waiting, `link`: the Needs you card
+  (`/admin/attention?item=persona_proposal:<id>`) the agent gives on its ticket.
+- **`attention_list` scope** (decided on the ticket by the written defaults): `decide` (default, as before) lists what the caller may
+  decide; `see` lists what it may VIEW through the same module `can()` (view on the run, the ticket, the entry, the version, the session,
+  the persona), with the person-only filter of deploys and approval tickets lifted for reading. So the coordinator's token sees the deploy
+  held for approval or the approval ticket that blocks it and can say so on its ticket, without a person sending a link. Why it is safe: it
+  shows nothing the module's own read tools (`ci_run_get`, `ticket_get`, ...) would not; an agent stays boxed to its own session (another
+  session's tool approval is still absent and uncounted); the registry stays read only and the decide routes keep refusing tokens and
+  agents. The HTTP page, the badge, Later and the notifications keep `decide`. The summary names the scope; an empty `decide` view says
+  that `see` exists.
+
+Not built (later slices): `blocking` per item and ordering by it, the second step and undo for high-risk approvals done in the deck itself,
+reject reasons, batch review, "Ask the agent", a bar place on the phone, "explain what disappeared", the corner banners (Pools, Skills, CI),
+the program filter (T-137), and the sources of §2 not yet built.
 
 ## 8. QA record
 

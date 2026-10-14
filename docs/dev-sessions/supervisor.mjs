@@ -15,8 +15,9 @@
 //   5. Keeps each track chat in Bypass (T-256): one found out of it (a wake or a Resume starts on the start mode) gets the server code again and
 //      the acknowledgement, at most every BYPASS_GAP_MIN minutes, and a tool approval it asked meanwhile is denied with "run it again".
 //   6. T-257: a track left down for any reason (the start cap, a refusal, a missing Claude, the portal unreachable) opens ONE ticket (tag
-//      watchdog) through the API and logs it; starts after a harmless integrity ending (T-136: a second control response, a peer message)
-//      count apart from the cap (MAX_HARMLESS_STARTS of their own). The portal's own watchdog (Keep going, T-259) replaces this script.
+//      watchdog) through the API and logs it; starts after an integrity ending the portal classifies as harmless (T-136 `endedFor`; a
+//      legacy row: only a second control response) count apart from the cap (MAX_HARMLESS_STARTS of their own). Tested by
+//      apps/server/src/keepgoing/supervisor.test.ts. The portal's own watchdog (Keep going, T-259) replaces this script.
 //   7. T-259 slice 2: a track whose newest chat has Keep going ON is the portal's (it nudges, wakes, recovers and starts it again itself,
 //      inside the cluster): this script leaves that track alone, so the two never both start a chat. It still keeps Bypass on such a chat
 //      (the portal does not: the lease is the owner's open decision on T-256) and still answers for the tracks without Keep going.
@@ -27,6 +28,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { tokenLease } from '../../tools/coordinator/tokenLease.mjs';
 
 const PORTAL = (process.env.PORTAL_URL ?? 'https://pilot.ai.isnan.me').replace(/\/$/, '');
 const CODE = process.env.PORTAL_SERVER_CODE ?? '';
@@ -76,7 +79,9 @@ const TRACKS = [
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
-if (!CODE) {
+/** Run as a script (not imported by its test, apps/server/src/keepgoing/supervisor.test.ts). */
+const IS_MAIN = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (IS_MAIN && !CODE) {
   console.error('PORTAL_SERVER_CODE is not set');
   process.exit(1);
 }
@@ -124,22 +129,13 @@ async function api(method, path, body) {
   }
 }
 
-/** Portal MCP over HTTP with a short-lived admin token made for this process (only `session_send` needs it) and revoked at exit. */
-const mcp = { token: '', id: '' };
-async function mcpToken() {
-  if (mcp.token) return mcp.token;
-  // The portal caps live tokens per label (T-258): revoke this label's leftovers before minting (a crash leaves them behind).
-  { const st = (await api('GET', '/api/portal-mcp')).data; for (const t of st?.tokens ?? []) if (!t.revokedAt && t.label === 'dev-sessions-supervisor') await api('DELETE', `/api/portal-mcp/tokens/${t.id}`); } // replaced stale
-  const r = await api('POST', '/api/portal-mcp/tokens', { label: 'dev-sessions-supervisor', scope: 'admin', expiresInDays: 7 });
-  if (!r.data?.secret) throw new Error(`no MCP token: ${r.error?.message ?? r.status}`);
-  mcp.token = r.data.secret;
-  mcp.id = r.data.token?.id ?? '';
-  return mcp.token;
-}
-async function revokeMcpToken() {
-  if (mcp.id) await api('DELETE', `/api/portal-mcp/tokens/${mcp.id}`).catch(() => {});
-  mcp.token = mcp.id = '';
-}
+/**
+ * Portal MCP over HTTP with one admin token for this process (only `session_send` and a few tool calls need it): 1 hour, reused while it
+ * has more than 5 minutes left, renewed with `replace` (which also revokes a crashed run's leftover), revoked at exit (T-258).
+ */
+const mcp = tokenLease({ api, label: 'dev-sessions-supervisor' });
+const mcpToken = () => mcp.get();
+const revokeMcpToken = () => mcp.revoke();
 /** One Portal MCP tool call with the supervisor's admin token. */
 async function mcpCall(name, args) {
   const token = await mcpToken();
@@ -458,9 +454,16 @@ const within24h = (list) => (list ?? []).filter((x) => Date.now() - x < 24 * 3_6
  * T-257 item 2: an integrity ending T-136 classifies as harmless (a duplicate control response, a peer message after a sub-agent's) is the
  * harness's, not the chat's: a start after one does not count against MAX_STARTS or the 3-after-integrity cap. It has its own ceiling,
  * MAX_HARMLESS_STARTS per 24 h, so a loop of them still stops (and is reported).
+ * The portal's own classification (`endedFor.classified`, T-136 slice 2) decides; a row without one (a portal before slice 2) is read from
+ * its reason the way the portal reads legacy rows (chat/integrity.ts readEnding): only "a second control response for request <id>" is
+ * harmless. "origin peer" alone is NOT: a peer line that no task of the process sent ends the same way and is suspicious.
  */
 const MAX_HARMLESS_STARTS = Number(process.env.MAX_HARMLESS_STARTS ?? 12);
-const harmlessEnding = (reason) => /^integrity/i.test(reason ?? '') && /a second control response|origin peer/i.test(reason ?? '');
+const harmlessEnding = (s) => {
+  if (!/^integrity: /.test(s?.endedReason ?? '')) return false;
+  if (s.endedFor?.classified) return s.endedFor.classified === 'harmless';
+  return /^integrity: a second control response for request \S+$/.test(s.endedReason);
+};
 
 /**
  * T-257 item 1: a track left down for any reason (the start cap, a refusal, a missing Claude, a network error) opens ONE ticket through the
@@ -500,12 +503,13 @@ async function reportDown(t, ts, cause, detail) {
 const downCause = (msg) =>
   /is a Claude on/.test(msg) ? 'missing_claude' : /fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|network/i.test(msg) ? 'network' : /refused|did not turn on|not trusting/i.test(msg) ? 'refused' : 'start_failed';
 
-async function watch() {
+/** `rounds`: how many rounds to watch before returning (the test runs one or two; the script runs until LIFETIME_H). */
+async function watch({ rounds = Infinity } = {}) {
   const until = Date.now() + LIFETIME_H * 3_600_000;
   const idleSince = new Map();
   let stagger = false;
   let netDownSince = null;
-  while (Date.now() < until) {
+  while (Date.now() < until && rounds-- > 0) {
     if (existsSync(join(STATE_DIR, 'STOP'))) return log('STOP file found: leaving the sessions as they are');
     await ensureTrust().catch((e) => log(`folder trust: could not check: ${e.message}`));
     const state = readState();
@@ -666,7 +670,7 @@ async function watch() {
       const recent = within24h(ts.starts);
       ts.harmless = within24h(ts.harmless);
       // The cap counts per root cause (T-257 item 2): starts after a harmless integrity ending are not the chat's and count apart.
-      const harmless = harmlessEnding(cur?.endedReason);
+      const harmless = harmlessEnding(cur);
       const counted = recent.filter((x) => !ts.harmless.includes(x));
       const integrityEnds = counted.length && /^integrity/.test(cur?.endedReason ?? '');
       const capped = harmless ? ts.harmless.length >= MAX_HARMLESS_STARTS : counted.length >= MAX_STARTS || (integrityEnds && counted.length >= 3);
@@ -698,22 +702,25 @@ async function watch() {
 
 /* ---------- Go ---------- */
 
-process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
-process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));
-try {
-  log(`supervisor up: portal ${PORTAL}, workspace ${WORKSPACE}${DEPLOY_RUN ? `, deploy run ${DEPLOY_RUN}` : ''}`);
-  if (DEPLOY_RUN) await deploy();
+export { harmlessEnding, watch, STATE_FILE };
+if (IS_MAIN) {
+  process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
+  process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));
   try {
-    execFileSync('git', ['-C', MAIN, 'pull', '--ff-only', '-q', 'origin', 'integration'], { stdio: 'pipe' });
-    log(`main folder at ${execFileSync('git', ['-C', MAIN, 'log', '--oneline', '-1'], { encoding: 'utf8' }).trim()}`);
+    log(`supervisor up: portal ${PORTAL}, workspace ${WORKSPACE}${DEPLOY_RUN ? `, deploy run ${DEPLOY_RUN}` : ''}`);
+    if (DEPLOY_RUN) await deploy();
+    try {
+      execFileSync('git', ['-C', MAIN, 'pull', '--ff-only', '-q', 'origin', 'integration'], { stdio: 'pipe' });
+      log(`main folder at ${execFileSync('git', ['-C', MAIN, 'log', '--oneline', '-1'], { encoding: 'utf8' }).trim()}`);
+    } catch (e) {
+      // The orchestrator keeps its own commits in this folder until it integrates them, so it is ahead of GitHub and often diverged: not a reason to stop.
+      log(`main folder not pulled (it is ahead of or diverged from GitHub; the orchestrator integrates it): ${String(e.stderr ?? e.message).replace(/\s+/g, ' ').slice(0, 120)}`);
+    }
+    await watch();
   } catch (e) {
-    // The orchestrator keeps its own commits in this folder until it integrates them, so it is ahead of GitHub and often diverged: not a reason to stop.
-    log(`main folder not pulled (it is ahead of or diverged from GitHub; the orchestrator integrates it): ${String(e.stderr ?? e.message).replace(/\s+/g, ' ').slice(0, 120)}`);
+    log(`STOPPED: ${e.message}`);
+    process.exitCode = 2;
+  } finally {
+    await revokeMcpToken();
   }
-  await watch();
-} catch (e) {
-  log(`STOPPED: ${e.message}`);
-  process.exitCode = 2;
-} finally {
-  await revokeMcpToken();
 }

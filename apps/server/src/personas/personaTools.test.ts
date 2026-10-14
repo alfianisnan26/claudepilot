@@ -98,6 +98,8 @@ test('a proposal waits: the text and name are not live, nothing the agent can ca
     const body = h.out(made);
     assert.equal(made.result?.isError, undefined, h.text(made));
     assert.deepEqual(body.proposals.map((p: { kind: string; status: string }) => [p.kind, p.status]), [['name', 'pending'], ['instructions', 'pending']]);
+    for (const p of body.proposals as { id: string; link?: string }[])
+      assert.equal(p.link, `/admin/attention?item=${encodeURIComponent(`persona_proposal:${p.id}`)}`, 'a waiting proposal gives the Needs you card to send the person');
     assert.match(h.text(made), /2 proposals waiting for a person/);
     assert.equal(h.pools.get(h.mine.id).name, 'Reviewer');
     assert.equal(h.pools.currentContent<PersonaContent>(h.mine.id)!.content.instructions, '# Role\nYou review pull requests.\nBe terse.');
@@ -144,6 +146,7 @@ test('the switches: the portal-wide one, then the persona’s own; auto-approval
     const avatar = h.out(await h.call(a.secret, 'persona_set_avatar_proposal', { image_base64: (await h.png()).toString('base64'), reason: 'A friendly face.' }));
     assert.equal(avatar.proposal.status, 'approved');
     assert.equal(avatar.proposal.decided_by, 'auto');
+    assert.equal(avatar.proposal.link, undefined, 'a decided proposal waits for nobody: no link');
     assert.ok(h.personas.identity.meta(h.mine.id).avatar);
     assert.equal(h.pools.get(h.mine.id).latestRevision, 1, 'instructions are still only a proposal');
   } finally {
