@@ -12,6 +12,8 @@
 - T-336: BUILT by 692c90b5 (ended) on dev/t-336-1, report = T-336 comment 1928. Verifier 85e8ac41 (ended): PASS WITH GAPS, comment 1931 (head ddb006b). READY for batch 4: merge dev/t-336-1, file a follow-up per gap in 1931, close T-336; then T-339 option C becomes possible.
 - T-333 (job-run --against/--keep-tests proof, DONE d65eb5f): verifier fdd39fed PASS WITH GAPS (comment 1921; it ran from the main checkout, which lacks --against, so the real proof rests on the implementer's job ff684d30). READY TO MERGE in batch 4: merge dev/t-333-1, close T-333 (gap: show the new tests fail on the old script, once merged run it with --against origin/integration~), and and add to .claude/agents/implementer.md: for a fix use `scripts/job-run.sh --ref <branch> --against <full hash of fix~1> --keep-tests <test files> -- '<cmd>'` and paste the PROOF line.
 
+- NEW in flight (22:45): implementer 77671a92 (T-342 N1, dev/t293-7 from dev/t293-6; report on T-342), implementer c378d9e7 (cpbview flakes T-330/T-331/T-272, dev/t-330-1; report on T-330). Both tickets claimed by 75f044fb.
+
 ## Ticket flow (coordinator rule, 22:15)
 Claim before dispatch (ticket_claim_next WITH id works), in_review at merge, close on the verifier verdict, a follow-up ticket for each gap. In review now: T-321, T-312, T-317 (live Keep going run not done), T-334 (needs a verifier), T-338 (rest in T-342), T-333. Blocked on the owner: T-315, T-319, T-339 (factory admin path; recommendation C = after T-336). T-306 in progress (item 3 lab A/B, item 4 owner approval; gaps T-341, T-340).
 
