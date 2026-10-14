@@ -13,3 +13,4 @@ dist/
 
 # pilot CI pipeline scratch (what one job leaves for the next)
 .pilot/out/
+job-run-artifacts/
