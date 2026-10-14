@@ -115,7 +115,7 @@ export const INTEGRITY_CASES: readonly IntegrityCase[] = [
     evidence:
       'T-277 (2026-10-14): before layer 2 the portal rebuilt only the expected mode from the row after a restart and lost the plan flags, ' +
       'so a chat whose leaving plan mode the portal had approved (back to acceptEdits) ended "the permission mode changed to acceptEdits ' +
-      'without this portal (expected plan)" when its report came after the restart (restart.test.ts reproduces it on the testkit)',
+      'without this portal (expected plan)" when its report came after the restart (integrity.test.ts reproduces it on the testkit: the twin with no state stored)',
     negative:
       'a report more permissive than the stored state, Bypass the stored state does not expect, a state stored for ANOTHER process (its ' +
       'session id, segment or start differ: the row is used, as before), and a second differing report after the first one closed the window',
