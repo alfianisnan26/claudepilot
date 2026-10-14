@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
-import { CHAT_SESSION_TITLE_MAX, sessionRef, workspaceRef, type ChatControl, type ChatPermissionMode, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
+import { CHAT_AGENT_NAME, CHAT_SESSION_TITLE_MAX, sessionRef, workspaceRef, type ChatControl, type ChatPermissionMode, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
 import { actorOfPrincipal, requireCan } from '../authz/seam.js';
 import { fullInput } from '../portalmcp/compact.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
@@ -56,8 +56,6 @@ function plainText(text: string): string {
 const WORKER_MODES = ['plan', 'default', 'dontAsk'] as const satisfies readonly ChatPermissionMode[];
 /** The modes that narrow a worker: unconfirmed, the worker is ended before it gets its instruction. */
 const NARROWING: ReadonlySet<string> = new Set(['plan', 'dontAsk']);
-/** A role is the name of an agent definition in the worker's folder, `.claude/agents/<role>.md` (T-294). */
-const ROLE_NAME = /^[a-z][a-z0-9-]{1,40}$/;
 /** What a worker's Claude choice says in a result (T-294). */
 const WHY_TEXT: Record<SpawnClaudeWhy, string> = {
   parent: 'your Claude',
@@ -105,7 +103,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     name: 'session_spawn',
     title: 'Start a worker session',
     description:
-      'Starts another chat session in this workspace to do part of the work, and gives it a first instruction. It runs on your Claude unless claude says otherwise (auto: the Claude of this workspace with the most room, so the work spreads over the accounts), never in bypass mode, and reports to you: you can message it, see how it is doing and stop it; the workers you start can message each other (your crew). The folder must already be trusted. With worktree it works on a branch of its own, apart from your files; with role it works by .claude/agents/<role>.md; model, effort and mode apply before its first instruction. How many may run, how deep and how often are limited in the portal.',
+      'Starts another chat session in this workspace to do part of the work, and gives it a first instruction. It runs on your Claude unless claude says otherwise (auto: the Claude of this workspace with the most room, so the work spreads over the accounts), never in bypass mode, and reports to you: you can message it, see how it is doing and stop it; the workers you start can message each other (your crew). The folder must already be trusted. With worktree it works on a branch of its own, apart from your files; with role it runs as the agent .claude/agents/<role>.md; model, effort and mode apply before its first instruction. How many may run, how deep and how often are limited in the portal.',
     scope: 'agent',
     hints: { openWorld: true },
     rate: { perMinute: 10, perHour: 60 },
@@ -116,7 +114,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       folder: z.string().max(300).optional().describe('Where it works, inside the home folder. Default: your folder.'),
       worktree: z.union([z.boolean(), z.object({ branch: z.string().max(100).optional(), base: z.string().max(100).optional() })]).optional().describe('Run it in a git worktree of its own: true, or the branch and the base to start from.'),
       claude: z.string().min(1).max(80).optional().describe(`Which Claude it runs on: ${SPAWN_CLAUDE_HELP}.`),
-      role: z.string().regex(ROLE_NAME).optional().describe('An agent definition in its folder (.claude/agents/<role>.md, e.g. implementer, qa-verifier): it is told to work by it.'),
+      role: z.string().regex(CHAT_AGENT_NAME).optional().describe('An agent definition in its folder (.claude/agents/<role>.md, e.g. implementer, qa-verifier): it runs as that agent, with its prompt, its tools and, unless model is given, its model. A name with no definition there is ignored by Claude Code.'),
       model: z.string().min(1).max(80).optional().describe('Its model (sonnet, opus, haiku or a full id), set before its first instruction.'),
       effort: z.string().min(1).max(20).optional().describe('Its effort level (low, medium, high), set before its first instruction.'),
       mode: z.enum(WORKER_MODES).optional().describe('Its permission mode: dontAsk runs only what the folder allows and refuses the rest without waiting; plan changes no file; default (as before) asks a person.'),
@@ -134,6 +132,8 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
           cwd: args.folder ?? parent.cwd,
           title: args.title ?? args.prompt.replace(/\s+/g, ' ').slice(0, 60),
           claudeId: on.claudeId,
+          // The role is its agent: every start of its process is `claude --agent <role>` (the controller's launch), so it needs no telling.
+          ...(args.role ? { agent: args.role } : {}),
           ...(args.worktree ? { worktree: args.worktree === true ? {} : args.worktree } : {}),
         },
         {
@@ -164,8 +164,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
           unconfirmed.push(`${label}: ${why}`);
         }
       }
-      const first = args.role ? `You work as the ${args.role} role: read .claude/agents/${args.role}.md in your folder first and follow it.\n\n${args.prompt}` : args.prompt;
-      await chat.send(child.id, randomUUID(), first, { actor: ctx.actor, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
+      await chat.send(child.id, randomUUID(), args.prompt, { actor: ctx.actor, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
       ctx.affected(`session:${child.id}`);
       const where = on.claudeId === parent.claudeId ? WHY_TEXT[on.why] : `${on.name}, ${WHY_TEXT[on.why]}`;
       return {

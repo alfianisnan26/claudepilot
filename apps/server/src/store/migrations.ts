@@ -3153,6 +3153,15 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`ALTER TABLE ci_deployments ADD COLUMN auto_mode TEXT CHECK (auto_mode IN ('dry', 'on'));`);
     },
   },
+  {
+    version: 773,
+    name: 'chat sessions: the agent a session runs as (T-294)',
+    up(db) {
+      // T-294 (chat-sessions PRD FR51): a session may run as an agent, `.claude/agents/<name>.md` in its folder; every start of its process
+      // passes `--agent <name>`. Null for every row so far: they run as Claude Code's default, as before.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN agent TEXT;`);
+    },
+  },
 ];
 
 /**

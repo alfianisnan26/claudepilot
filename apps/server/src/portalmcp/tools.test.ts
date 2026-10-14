@@ -110,7 +110,9 @@ const fakes = {
     usage: () => ({ range: '1d', from: NOW, to: NOW, totals: { costUsd: 1.234, requests: 9, input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }, byModel: [{ model: 'sonnet', costUsd: 1.2, requests: 9 }], byClaude: [] }),
     interrupt: async (id: string) => void calls.push(`chat.interrupt:${id}`),
     end: async (id: string) => void calls.push(`chat.end:${id}`),
-    create: async (req: Row, o: Row) => (calls.push(`chat.create:${req.workspaceId}:${o.actor}`), session('s-new', { workspaceId: req.workspaceId, startedBy: o.actor })),
+    create: async (req: Row, o: Row) => (
+      calls.push(`chat.create:${req.workspaceId}:${o.actor}${req.agent ? `:agent=${req.agent}` : ''}`), session('s-new', { workspaceId: req.workspaceId, startedBy: o.actor, agent: req.agent ?? null })
+    ),
     send: async (id: string, _uuid: string, text: string, o: Row) => void (calls.push(`chat.send:${id}:${o.actor}:${text}`), sentLabels.push(o.actorLabel)),
     respond: async (id: string, req: string, decision: string, o: Row) => void calls.push(`chat.respond:${id}:${req}:${decision}:${o.actor}`),
     control: async (id: string, kind: string, v: Row) => void calls.push(`chat.control:${id}:${kind}:${JSON.stringify(v)}`),
@@ -504,6 +506,25 @@ test('session_start and session_configure: the actor is the token, and a session
     assert.equal(err(await h.call(admin.secret, 'session_configure', { id: 's1' })), 'VALIDATION_FAILED');
     await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'plan', effort: 'high' });
     assert.deepEqual(calls, ['chat.control:s1:effort:{"effort":"high"}', 'chat.control:s1:mode:{"mode":"plan"}']);
+  } finally {
+    h.module.settings.update({ sessionControl: false });
+  }
+});
+
+test('session_start (T-294): an agent it runs as is passed on and shown; a name that is not a plain agent name is refused before anything starts', async () => {
+  reset();
+  h.module.settings.update({ sessionControl: true });
+  try {
+    const admin = h.token('admin');
+    const started = where(await h.call(admin.secret, 'session_start', { workspace_id: 'docker/api', agent: 'implementer' }));
+    assert.equal(started.session.agent, 'implementer');
+    assert.deepEqual(calls, [`chat.create:docker/api:portal-mcp:${admin.id}:agent=implementer`]);
+    reset();
+    for (const agent of ['../implementer', '.claude/agents/x.md', '--resume', 'Implementer']) {
+      const refused = await h.call(admin.secret, 'session_start', { workspace_id: 'docker/api', agent });
+      assert.ok(refused.result?.isError || refused.error, agent);
+    }
+    assert.deepEqual(calls, [], 'nothing was started');
   } finally {
     h.module.settings.update({ sessionControl: false });
   }

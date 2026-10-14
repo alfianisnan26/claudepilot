@@ -103,6 +103,12 @@ export interface ChatSession {
   worktree: ChatWorktree | null;
   /** Who started it: `ui` (a person), `ticket:<id>`, `session:<id>` or `portal-mcp:<token id>`; null for sessions from before this field. */
   startedBy: string | null;
+  /**
+   * T-294: the agent it runs as: every start of its process (new, resume, wake, restart, recover, a Move) is `claude --agent <name>`, the
+   * definition `.claude/agents/<name>.md` in its folder (its prompt, its tools and, until the session's model is set, its model). Kept across
+   * a Move. Claude Code ignores a name it finds no definition for. Null (or absent) when it runs as Claude Code's default.
+   */
+  agent?: string | null;
   /** The session was started with, or restarted for, Bypass permissions: only then can the person turn it on (FR20). */
   bypassCapable: boolean;
   /** The Claude Code session of the run going now. A chat that moved to another Claude has had several; this id is the portal's own, for every one of them. */
@@ -526,6 +532,8 @@ export interface CreateChatSessionRequest {
   allowBypass?: boolean;
   /** The ticket it works on (Tickets). An opaque id: the portal only records it. */
   ticketId?: string;
+  /** T-294: the agent it runs as ({@link CHAT_AGENT_NAME}; `ChatSession.agent`). Any other name is refused (422) before anything is created. */
+  agent?: string;
   /**
    * The session this one continues (T-270, T-136 lineage): an ENDED session of the same workspace, else 409 and nothing is created. The
    * new row is linked to it (`continuedFrom`), and in the same transaction every unfinished ticket held by it and by its ended predecessors
@@ -733,6 +741,12 @@ export interface DeleteChatSessionResult {
 export const CLAUDE_NAME_MAX = 40;
 
 export const CHAT_SESSION_TITLE_MAX = 80;
+
+/**
+ * T-294: the name of an agent a session runs as (`ChatSession.agent`, a worker's `role`): an agent definition in the session's folder,
+ * `.claude/agents/<name>.md`. A plain name, never a path, and never starting with `-` (it is passed to Claude Code as `--agent <name>`).
+ */
+export const CHAT_AGENT_NAME = /^[a-z][a-z0-9-]{1,40}$/;
 
 export const CHAT_API = {
   /** GET: sessions, newest activity first. POST: create one. */

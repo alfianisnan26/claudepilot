@@ -33,6 +33,7 @@ import {
   BYPASS_NOT_CAPABLE,
   BYPASS_NOT_KEPT,
   CHAT_ACTOR_UI,
+  CHAT_AGENT_NAME,
   CHAT_ENDED_CREDENTIAL,
   CHAT_ENDED_INTEGRITY,
   CHAT_RECOVER_CAPPED,
@@ -1249,6 +1250,7 @@ export class ChatController {
     const actor = opts.actor ?? CHAT_ACTOR_UI;
     if (!isChatActor(actor)) throw new AppError('VALIDATION_FAILED', 'Unknown actor.', { details: { actor: 'Expected ui, ticket:<id>, session:<id> or portal-mcp:<id>.' } });
     const ticketId = this.#ticket(req.ticketId);
+    const agent = this.#agent(req.agent);
     const parentId = opts.parentId ? this.#require(opts.parentId).id : null;
     if (parentId) this.#checkSpawn(parentId);
     const wtReq = this.#worktreeRequest(req.worktree);
@@ -1308,6 +1310,7 @@ export class ChatController {
       startedBy: actor,
       bypassCapable,
       worktree,
+      agent,
     };
     let session!: ChatSession;
     if (continuedFrom) {
@@ -1367,6 +1370,15 @@ export class ChatController {
       cur = before;
     }
     return { id: prev.id, chain };
+  }
+
+  /** T-294: the agent a session runs as, from a caller: null for none, else a plain name (`CHAT_AGENT_NAME`), never a path or a flag. */
+  #agent(raw: unknown): string | null {
+    if (raw === undefined || raw === null || raw === '') return null;
+    if (typeof raw !== 'string' || !CHAT_AGENT_NAME.test(raw)) {
+      throw new AppError('VALIDATION_FAILED', 'That agent name isn’t valid.', { details: { agent: 'The name of a file in .claude/agents: lowercase letters, digits and -, 2 to 41.' } });
+    }
+    return raw;
   }
 
   /** A ticket id from a caller: null for none, else a short opaque id (and a known ticket when the tickets module says how to tell). */
@@ -3316,10 +3328,14 @@ export class ChatController {
     else this.#pilotTools.delete(o.sessionId);
     const env = { ...this.#launchEnv(workspaceId), ...grant?.env };
     const lines = Object.entries(env).flatMap(([k, v]) => ((HOST_ENV_NAMES as readonly string[]).includes(k) && typeof v === 'string' && v && !/[\r\n]/.test(v) ? [`${k}=${v}`] : []));
+    // T-294: the agent it runs as, at EVERY start (new, resume, wake, restart, recover, a Move: they all come through here), read from the
+    // row so a Move keeps it. Checked again here: nothing but a plain name ever reaches the command line.
+    const agent = this.#chat.row(o.sessionId)?.agent;
     // `--allow-dangerously-skip-permissions` only for a session that opted in, and only while the policy allows it: without it
     // Claude Code refuses the switch to Bypass (`bypass_not_launched`). It never turns Bypass on by itself.
     const flags = [
       ...BASE_FLAGS,
+      ...(agent && CHAT_AGENT_NAME.test(agent) ? ['--agent', agent] : []),
       // The portal's own tools, for a workspace that opted in: the agent scope is rate-limited, labelled and never destructive, deny rules
       // still win, and without this the first call of each tool waits for a tap in Manual mode.
       ...(grant ? ['--mcp-config', grant.mcpConfig, '--allowedTools', PILOT_TOOLS] : []),
