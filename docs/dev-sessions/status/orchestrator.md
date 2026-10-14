@@ -6,6 +6,7 @@
 - 23:05 N1 re-read SAFE (comment 1979; 54/54 job bd0161da, fails with engine reverted job f37aed1c). dev/t293-7 (incl. t293-6) merged (factory-brief conflict: new budget line + dontAsk check line), 58/58 factory+tokenLease+contextPack, pack, pushed 1ea2dbf. CLOSED T-342 (minors -> T-352). T-338 not claimable ("no ticket to claim"): its verdict is in T-342's closing summary.
 - DEPLOY DECISION: today (UTC) already had 3 portal deploys (runs 28-30) = the D-cap; batches 3+4 (+T-342, docs/qa only) deploy after 00:00 UTC with /deploy. T-336 touches portalmcp tools: the release may wait for a person.
 - In flight (5): verifier T-330 (sonnet), worker d9a3cdd8 T-334, implementers T-312 slice A (dev/t-312-2), T-321 (dev/t-321-2), T-348 (dev/t-348-1, opus, high; claimed). Briefs' heads in ~/work/briefs/.
+- 23:15 COORDINATOR CORRECTION (accepted, D-49 + orchestration SKILL §3): new slices go ONLY to session_spawn workers (claude auto, role, dontAsk, explicit model, worktree for implementers, report idle), at most five in flight incl. the running sub-agents, at most one own sub-agent for what the allow rules cannot do. The four running sub-agents (T-330 verifier, T-312, T-321, T-348 implementers) finish; nothing more dispatched as a sub-agent. Workers cannot read ~/work/briefs (outside the repo): worker briefs carry the head inline or point at a file in the worktree.
 
 ---
 
