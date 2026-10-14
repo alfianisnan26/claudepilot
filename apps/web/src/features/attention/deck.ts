@@ -1,7 +1,7 @@
 import { attentionItemKey, type AttentionItem } from '@portal/contracts';
 
 // The swipe deck's pure parts (docs/prd/attention.md, T-146 slice 2): which cards are in the deck, which are put off, where the deck
-// opens, and what a drag means. Tested on their own (deck.test.ts); Deck.tsx only draws them.
+// opens, and what a drag means. Tested on their own (deck.test.ts); SwipeDeck.tsx only draws them.
 
 /** Put off by the person and not yet due (`snoozedUntil` in the future). */
 export const isLater = (i: AttentionItem, now: number): boolean => !!i.snoozedUntil && Date.parse(i.snoozedUntil) > now;
