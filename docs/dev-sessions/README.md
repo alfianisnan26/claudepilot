@@ -84,7 +84,9 @@ backlog is done: make `TRACK COMPLETE` the first line of that file, commit and p
 A small process, `docs/dev-sessions/supervisor.mjs`, runs OUTSIDE the dev pod, on the coordinator's machine, with the owner's sign-in code in its environment (inside the pod every agent runs as the same user and could read that environment, so the code must never live there; T-104's lease replaces the code), and keeps the orchestrator going when nobody else is there: a session idle for a few minutes is told to
 continue, an interrupted one is woken, one that ended is started again in the main folder and told to continue from its status file (at most 6
 starts per day, 3 after integrity endings). It leaves the work alone when the status file starts with `TRACK COMPLETE` or when a person closed the
-session. It restarts only the orchestrator: any other chat that ends (an integrity ending, say) is started again by a person; the harness-turn
+session. On every round it reads each track chat's `mode`: one that is not in Bypass (a wake from sleep or a Resume starts on the start
+mode, FR20) gets it back through the person's gates, the server code again and the acknowledgement, and a tool approval asked before that
+is denied with "run it again" (T-256; one log line each). It restarts only the orchestrator: any other chat that ends (an integrity ending, say) is started again by a person; the harness-turn
 ending that hit the Konfersi chat on 2026-10-13 is fixed (T-99), so that should no longer be needed. Log: `~/.claudepilot/dev-sessions/supervisor.log`; state: `state.json` next to it.
 **Stop it:** `touch ~/.claudepilot/dev-sessions/STOP` (checked every two minutes) or kill the process by PID. **Start it again** (needs `PORTAL_SERVER_CODE`):
 `cd ~/work/claudepilot && PORTAL_SERVER_CODE=... setsid nohup node docs/dev-sessions/supervisor.mjs >> ~/.claudepilot/dev-sessions/supervisor.log 2>&1 < /dev/null &`.

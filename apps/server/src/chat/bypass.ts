@@ -4,7 +4,8 @@
 // bypass-capable (the person opted in when starting it, or restarted it for Bypass); a confirmation that says
 // what is true of the workspace; and a fresh re-check of the server code (web-app-pwa §12.5). Capability is
 // never inherited and never granted to another module's request: only the person's own request through the app's
-// route sets it. Wakes, resumes and moves never restore Bypass. Entering and leaving it is audited.
+// route sets it. Wakes and resumes never restore Bypass; a deliberate restart (a move, a Restart) keeps it while the
+// policy allows it (FR20a, `#keepBypass` in the controller). Entering and leaving it is audited.
 
 import { defineErrorCodes } from '@isnanme/core';
 import { BYPASS_BLOCKED, BYPASS_NOT_CAPABLE, BYPASS_NOT_KEPT, REAUTH_REQUIRED } from '@portal/contracts';
