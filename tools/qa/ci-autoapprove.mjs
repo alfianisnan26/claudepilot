@@ -40,21 +40,11 @@ const repoId = repo.data.id;
 // A protected environment with the rule off, and a run whose release waits, with the rule's (dry) line on its deployment.
 const db = new DatabaseSync(`/tmp/scratch-portal-${PORT}/data/portal.db`, { timeout: 10_000 });
 const now = new Date().toISOString();
-const runId = `rqa${randomUUID().slice(0, 8)}`;
 const step = (status) => ({ idx: 0, name: 'Do it', status, startedAt: now, durationMs: status === 'passed' ? 1200 : null, exitCode: status === 'passed' ? 0 : null, logBytes: 0, logTruncated: false, ignored: false, reason: null });
 const job = (id, status, needs, environment = null) => ({ id, name: id[0].toUpperCase() + id.slice(1), status, needs, startedAt: now, durationMs: null, ignored: false, reason: null, steps: [step(status)], artifacts: [], artifactsSkipped: 0, environment });
 const jobs = [job('gate', 'passed', []), job('build', 'passed', ['gate']), job('release', 'waiting', ['build'], 'production'), job('verify', 'pending', ['release']), job('rollback', 'pending', ['release', 'verify'])];
-const state = { v: 1, runId, status: 'running', reason: null, startedAt: now, finishedAt: null, durationMs: null, jobs };
+const state = { v: 1, runId: '', status: 'running', reason: null, startedAt: now, finishedAt: null, durationMs: null, jobs };
 db.prepare("INSERT INTO ci_environments (id, repo_id, name, protected, created_at, updated_at, updated_by) VALUES (?, ?, 'production', 1, ?, ?, 'system')").run(`eqa${randomUUID().slice(0, 8)}`, repoId, now, now);
-db.prepare(
-  `INSERT INTO ci_runs (id, number, workspace_id, repo_id, repo, pipeline, trigger, ref, branch, sha, subject, status, actor, state, created_at, started_at)
-   VALUES (?, 19, 'local/local', ?, 'qa-app', 'deploy', 'manual', 'refs/heads/main', 'main', ?, 'Deploy the portal', 'running', 'ui', ?, ?, ?)`,
-).run(runId, repoId, sha, JSON.stringify(state), now, now);
-const line = `auto-approve (dry): WOULD approve: gate green at ${sha.slice(0, 7)}, build ok, verify and rollback present, no authz/secrets/Bypass/deny-rule/released-migration change in the diff, 2 of 6 today`;
-db.prepare(
-  `INSERT INTO ci_deployments (id, run_id, run_number, job, repo_id, environment, pipeline, sha, ref, actor, approval, created_at, auto_verdict, auto_line, auto_at)
-   VALUES (?, ?, 19, 'release', ?, 'production', 'deploy', ?, 'refs/heads/main', 'ui', 'waiting', ?, 'would', ?, ?)`,
-).run(`dqa${randomUUID().slice(0, 8)}`, runId, repoId, sha, now, line, now);
 // A second run the rule approved (slice 2, mode on): decided by rule:production, its line, the release going on.
 const ruledId = `rqa${randomUUID().slice(0, 8)}`;
 const ruledJobs = [job('gate', 'passed', []), job('build', 'passed', ['gate']), job('release', 'running', ['build'], 'production'), job('verify', 'pending', ['release']), job('rollback', 'pending', ['release', 'verify'])];
@@ -68,6 +58,29 @@ db.prepare(
    VALUES (?, ?, 20, 'release', ?, 'production', 'deploy', ?, 'refs/heads/main', 'ui', 'approved', 'rule:production', ?, ?, 'would', ?, ?, 'on')`,
 ).run(`dqa${randomUUID().slice(0, 8)}`, ruledId, repoId, sha, now, now, approvedLine, now);
 db.close();
+
+/**
+ * A run whose release waits, with the rule's dry line: seeded right before each look, since the portal calls a run with no runner behind it
+ * lost after 30 s (the desktop passes came later and found it lost).
+ */
+const line = `auto-approve (dry): WOULD approve: gate green at ${sha.slice(0, 7)}, build ok, verify and rollback present, no authz/secrets/Bypass/deny-rule/released-migration change in the diff, 2 of 6 today`;
+let number = 19;
+function seedWaiting() {
+  const db = new DatabaseSync(`/tmp/scratch-portal-${PORT}/data/portal.db`, { timeout: 10_000 });
+  const now = new Date().toISOString();
+  const runId = `rqa${randomUUID().slice(0, 8)}`;
+  number += 2;
+  db.prepare(
+    `INSERT INTO ci_runs (id, number, workspace_id, repo_id, repo, pipeline, trigger, ref, branch, sha, subject, status, actor, state, created_at, started_at)
+     VALUES (?, ?, 'local/local', ?, 'qa-app', 'deploy', 'manual', 'refs/heads/main', 'main', ?, 'Deploy the portal', 'running', 'ui', ?, ?, ?)`,
+  ).run(runId, number, repoId, sha, JSON.stringify({ ...state, runId }), now, now);
+  db.prepare(
+    `INSERT INTO ci_deployments (id, run_id, run_number, job, repo_id, environment, pipeline, sha, ref, actor, approval, created_at, auto_verdict, auto_line, auto_at)
+     VALUES (?, ?, ?, 'release', ?, 'production', 'deploy', ?, 'refs/heads/main', 'ui', 'waiting', ?, 'would', ?, ?)`,
+  ).run(`dqa${randomUUID().slice(0, 8)}`, runId, number, repoId, sha, now, line, now);
+  db.close();
+  return runId;
+}
 
 const env = async () => (await call('GET', `/api/ci/repos/${repoId}/environments`)).data?.[0];
 check('api', 'the rule starts off', (await env())?.autoApprove === 'off');
@@ -140,7 +153,7 @@ for (const cfg of MATRIX) {
     check(cfg.name, 'back to Off', await seen(`document.querySelector('${MODE}')?.innerText.trim() === 'Off'`));
     check(cfg.name, 'the API says off', (await env())?.autoApprove === 'off', String(await word()));
 
-    await b.goto(`/admin/ci/runs/${runId}`, 2500);
+    await b.goto(`/admin/ci/runs/${seedWaiting()}`, 2500);
     check(cfg.name, 'the waiting run shows the dry line', await seen(`document.body.innerText.includes('auto-approve (dry): WOULD approve')`, 20000));
     check(cfg.name, 'a person still decides (Approve and Reject)', await b.eval(`['Approve', 'Reject'].every((t) => [...document.querySelectorAll('button')].some((x) => x.innerText.trim() === t))`));
     check(cfg.name, 'run: no horizontal scroll', await b.eval(`document.scrollingElement.scrollWidth <= innerWidth + 1`));
