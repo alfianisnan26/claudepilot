@@ -3071,6 +3071,21 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 853,
+    name: 'efficiency lab: result tokens, effort and stratum keys',
+    up(db) {
+      // T-287 slice 3 (docs/prd/claude-usage.md §28.12): a tool call keeps the id of the assistant message that made it, so the next request's
+      // context growth can be laid on that message's results (result tokens, an estimate from the usage the stream reports); a sub-agent slice
+      // keeps the effort its Agent call asked for; an experiment may name its stratum keys (JSON list of size, role, model, effort; NULL keeps
+      // slice 1's role and requested model). Ids and plain names only.
+      db.exec(`
+        ALTER TABLE lab_tools ADD COLUMN message_id TEXT;
+        ALTER TABLE lab_slices ADD COLUMN effort TEXT;
+        ALTER TABLE lab_experiments ADD COLUMN strata TEXT;
+      `);
+    },
+  },
+  {
     version: 792,
     name: 'keep going: a program per policy and the pause switch',
     up(db) {

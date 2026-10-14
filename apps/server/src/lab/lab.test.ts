@@ -62,9 +62,9 @@ function asScript(m: LabSliceMetrics): ScriptRow {
 
 const byT0 = (a: { t0: string }, b: { t0: string }) => a.t0.localeCompare(b.t0);
 
-test('migrations 850 to 852: the lab tables, in the block T-287 was given (850 to 854)', async () => {
+test('migrations 850 to 853: the lab tables, in the block T-287 was given (850 to 854)', async () => {
   const lab = MIGRATIONS.filter((m) => m.name.startsWith('efficiency lab'));
-  assert.deepEqual(lab.map((m) => m.version), [850, 851, 852]);
+  assert.deepEqual(lab.map((m) => m.version), [850, 851, 852, 853]);
   const h = await harness();
   try {
     const tables = (h.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'lab_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);

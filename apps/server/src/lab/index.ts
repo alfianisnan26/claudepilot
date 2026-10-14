@@ -2,7 +2,8 @@
 // Slice 1 is the data layer: the chat controller hands every accepted stream line to `line` (read only, after the integrity checks), the
 // ingest keeps counts and ids, and `slices` and `report` answer the coordinator's measurement as a query. Slice 2 adds the derived views
 // (outcomes, the summary, the experiments' primary), retention (start), the routes (routes.ts), the Portal MCP tools (portalTools.ts) and
-// their declarations with the authz seam (authz.ts).
+// their declarations with the authz seam (authz.ts). Slice 3 adds result tokens, effort and idle gaps per slice, and stratum keys for
+// randomized experiments (ESTIMATE size, role, model, effort).
 
 import type { LabExperiment, LabExperimentReport, LabExperimentView, LabPeriod, LabSliceMetrics, LabSliceView, LabSummary } from '@portal/contracts';
 import type { Store } from '../store/store.js';
@@ -26,7 +27,10 @@ export class Lab {
     const now = opts.now ?? Date.now;
     this.#ingest = new LabIngest(() => (opts.store.writable ? opts.store.db : null), now, (s) => {
       const db = this.#db();
-      if (db) assignSlice(db, { sessionId: s.sessionId, sliceId: s.sliceId, stratum: `${s.role ?? '-'}|${s.model ?? 'inherit'}`, atMs: s.atMs });
+      if (!db) return;
+      // The ticket's ESTIMATE size as it stands when the slice starts (a stratum key, slice 3); read only when a ticket is named.
+      const size = s.ticket ? ((opts.tickets ?? dbTicketReader(db))(s.ticket)?.estimateSize ?? null) : null;
+      assignSlice(db, { sessionId: s.sessionId, sliceId: s.sliceId, attrs: { size, role: s.role, model: s.model, effort: s.effort }, atMs: s.atMs });
     });
   }
 

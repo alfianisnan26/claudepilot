@@ -18,6 +18,8 @@ export interface LabSliceMetrics {
   role: string | null;
   /** The model the slice's requests reported last. */
   model: string | null;
+  /** The effort the Agent call asked for (`low` to `max`) when it is a plain name; null otherwise or for a main-thread turn (slice 3). */
+  effort: string | null;
   /** Assistant messages, deduplicated by message id. */
   requests: number;
   /** Context per request = cache read + cache write tokens (as the reference script): median (truncated) and the 90th percentile. */
@@ -40,6 +42,21 @@ export interface LabSliceMetrics {
   rewriteTokens: number;
   results: number;
   resultChars: number;
+  /**
+   * Result tokens (slice 3), an ESTIMATE read from the usage the stream reports: for each request after the first, its context (input + cache
+   * read + cache write) less the previous request's context and output, at least 0, laid on the results of the tool calls the previous
+   * request made (split by their characters). Context growth after a request without a tool call is not counted. null when the slice has
+   * results but none can be laid on a request (rows from before migration 853, or a frozen slice from before slice 3).
+   */
+  resultTokens: number | null;
+  /** The same per class of the tool call, rounded (the classes may differ from the total by rounding); empty when unavailable. */
+  resultTokensByClass: Partial<Record<LabToolClass, number>>;
+  /**
+   * Minutes between consecutive requests over 5 minutes (the short cache's life), summed, one decimal; and the longest gap (slice 3). null for
+   * a slice frozen before slice 3.
+   */
+  idleMinutes: number | null;
+  maxGapMinutes: number | null;
   bashCalls: number;
   rtkCalls: number;
   inspectCalls: number;
@@ -56,6 +73,13 @@ export interface LabSliceMetrics {
 export type LabExperimentDesign = 'randomized' | 'before_after';
 export type LabExperimentStatus = 'running' | 'stopped' | 'decided';
 export type LabDecision = 'adopt' | 'reject' | 'iterate';
+
+/**
+ * What a randomized experiment stratifies by (slice 3): the ticket's ESTIMATE size when the slice starts, the Agent call's role, its requested
+ * model and its effort. A missing value is its own level (`-`).
+ */
+export const LAB_STRATUM_KEYS = ['size', 'role', 'model', 'effort'] as const;
+export type LabStratumKey = (typeof LAB_STRATUM_KEYS)[number];
 
 export interface LabExperiment {
   id: string;
@@ -75,13 +99,15 @@ export interface LabExperiment {
   decision: LabDecision | null;
   verdict: string | null;
   createdMs: number;
+  /** randomized: the stratum keys in order; null keeps slice 1's stratum (role and requested model, `role|model`). */
+  strata: LabStratumKey[] | null;
 }
 
 export interface LabArmSummary {
   arm: string;
   n: number;
   /** Medians over the arm's slices (null with no slice). */
-  medians: { requests: number | null; ctxP50: number | null; costUsd: number | null; resultChars: number | null; minutes: number | null };
+  medians: { requests: number | null; ctxP50: number | null; costUsd: number | null; resultChars: number | null; resultTokens: number | null; minutes: number | null };
   /** Sum of rewrite tokens / sum of cache write tokens; null with no write. */
   rewriteShare: number | null;
   /** Inspection calls / Bash calls; null with no Bash call. */
@@ -135,8 +161,10 @@ export interface LabSummaryRow {
   requests: LabStat;
   /** Over the slices' own context p50 (tokens per request). */
   ctxP50: LabStat;
-  /** Tool result size in characters (the lab measures characters; result tokens are not measured, so not shown). */
+  /** Tool result size in characters. */
   resultChars: LabStat;
+  /** Result tokens per slice (an estimate from the stream's usage, see LabSliceMetrics), over the slices that have the figure. */
+  resultTokens: LabStat;
   minutes: LabStat;
   /** Over the slices with a price; null when none has one. */
   costUsd: LabStat | null;
