@@ -15,6 +15,12 @@ export function keepGoingCounts(kg: Pick<ChatKeepGoing, 'nudgesToday' | 'wakesTo
   return `${n} · ${w}`;
 }
 
+/** Why nothing is done for the chat: a pause of all, of its program (with the reason), or the portal's switch. */
+export function pausedWord(kg: Pick<ChatKeepGoing, 'pause'>): string {
+  if (!kg.pause) return 'Paused for the portal';
+  return `Paused (${kg.pause.program ?? 'all'}): ${kg.pause.reason}`;
+}
+
 /**
  * Keep going in Session info (T-259): the switch, today's counts and the last action. The portal watches a chat with it on: an idle one is
  * told to continue, an interrupted one is woken, a question is told to decide; a tool approval, Bypass off or an ending is reported.
@@ -59,7 +65,8 @@ export function KeepGoingSection({ session }: { session: ChatSession }) {
       />
       {kg && (on || kg.nudgesToday > 0 || kg.wakesToday > 0) && (
         <p className="text-[12.5px] [overflow-wrap:anywhere] text-muted">
-          {kg.paused ? <span className="text-amber-700 dark:text-amber-400">Paused for the portal · </span> : null}
+          {kg.paused ? <span className="text-amber-700 dark:text-amber-400">{pausedWord(kg)} · </span> : null}
+          {kg.program ? <span className="text-ink-soft">{kg.program} · </span> : null}
           Today: {keepGoingCounts(kg)}
           {kg.last && kg.last.kind !== 'set' && (
             <>
@@ -79,7 +86,7 @@ export function KeepGoingSection({ session }: { session: ChatSession }) {
 export function KeepGoingChip({ session, onOpen }: { session: ChatSession | null | undefined; onOpen: () => void }) {
   const kg = session?.keepGoing;
   if (!session || !kg?.enabled || session.state === 'ended') return null;
-  const label = `Keep going is on${kg.paused ? ', paused for the portal' : ''}: ${keepGoingCounts(kg)} today`;
+  const label = `Keep going is on${kg.paused ? (kg.pause ? `, paused (${kg.pause.program ?? 'all'})` : ', paused for the portal') : ''}: ${keepGoingCounts(kg)} today`;
   return (
     <button
       type="button"

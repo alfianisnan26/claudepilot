@@ -2968,6 +2968,24 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 792,
+    name: 'keep going: a program per policy and the pause switch',
+    up(db) {
+      // T-259 slice 3 (the program pause switch): a policy may name its program (a slug like the supervisor's track keys), and
+      // `keepgoing_pauses` holds the pauses that stand, one row per program (`*` for all) with a person's one-line reason, since when and
+      // who. A paused chat is looked at but nothing is done for it; deleting the row resumes it.
+      db.exec(`
+        ALTER TABLE keepgoing_policies ADD COLUMN program TEXT;
+        CREATE TABLE keepgoing_pauses (
+          scope TEXT PRIMARY KEY,
+          reason TEXT NOT NULL,
+          since TEXT NOT NULL,
+          by TEXT NOT NULL
+        ) STRICT;
+      `);
+    },
+  },
 ];
 
 /**

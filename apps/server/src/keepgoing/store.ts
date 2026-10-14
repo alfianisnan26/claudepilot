@@ -5,11 +5,13 @@ import {
   KEEPGOING_ACTIONS,
   KEEPGOING_BOUNDS as B,
   KEEPGOING_CAUSES,
+  KEEPGOING_PAUSE_ALL,
   KEEPGOING_RESTART_CLASSES,
   type ChatKeepGoingPolicy,
   type KeepGoingAction,
   type KeepGoingActionKind,
   type KeepGoingCause,
+  type KeepGoingPause,
   type KeepGoingRestartClass,
 } from '@portal/contracts';
 import type { Store } from '../store/store.js';
@@ -59,6 +61,7 @@ function policyOf(r: Raw): PolicyRow {
     statusFile: str(r.status_file),
     maxNudgesPerDay: num(r.max_nudges, B.maxNudgesPerDay.default),
     maxWakesPerDay: num(r.max_wakes, B.maxWakesPerDay.default),
+    program: str(r.program),
     nextDueAt: str(r.next_due_at),
     nudgedPeriod: str(r.nudged_period),
     continueOwed: r.continue_owed === 1,
@@ -116,18 +119,19 @@ export class KeepGoingStore {
       statusFile: patch.statusFile !== undefined ? patch.statusFile : (was?.statusFile ?? null),
       maxNudgesPerDay: patch.maxNudgesPerDay ?? was?.maxNudgesPerDay ?? B.maxNudgesPerDay.default,
       maxWakesPerDay: patch.maxWakesPerDay ?? was?.maxWakesPerDay ?? B.maxWakesPerDay.default,
+      program: patch.program !== undefined ? patch.program : (was?.program ?? null),
     };
     const turnedOn = next.enabled && !was?.enabled;
     if (!was) {
       db.prepare(
-        `INSERT INTO keepgoing_policies (session_id, owner_id, created_by, enabled, nudge_after_min, prompt, status_file, max_nudges, max_wakes, next_due_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(sessionId, ownerId, by, next.enabled ? 1 : 0, next.nudgeAfterMin, next.prompt, next.statusFile, next.maxNudgesPerDay, next.maxWakesPerDay, null, at, at);
+        `INSERT INTO keepgoing_policies (session_id, owner_id, created_by, enabled, nudge_after_min, prompt, status_file, max_nudges, max_wakes, program, next_due_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(sessionId, ownerId, by, next.enabled ? 1 : 0, next.nudgeAfterMin, next.prompt, next.statusFile, next.maxNudgesPerDay, next.maxWakesPerDay, next.program ?? null, null, at, at);
     } else {
       db.prepare(
-        `UPDATE keepgoing_policies SET enabled = ?, nudge_after_min = ?, prompt = ?, status_file = ?, max_nudges = ?, max_wakes = ?, updated_at = ?${turnedOn ? ', next_due_at = NULL, backoff_until = NULL' : ''}
+        `UPDATE keepgoing_policies SET enabled = ?, nudge_after_min = ?, prompt = ?, status_file = ?, max_nudges = ?, max_wakes = ?, program = ?, updated_at = ?${turnedOn ? ', next_due_at = NULL, backoff_until = NULL' : ''}
          WHERE session_id = ?`,
-      ).run(next.enabled ? 1 : 0, next.nudgeAfterMin, next.prompt, next.statusFile, next.maxNudgesPerDay, next.maxWakesPerDay, at, sessionId);
+      ).run(next.enabled ? 1 : 0, next.nudgeAfterMin, next.prompt, next.statusFile, next.maxNudgesPerDay, next.maxWakesPerDay, next.program ?? null, at, sessionId);
     }
     return this.policy(sessionId)!;
   }
@@ -172,9 +176,9 @@ export class KeepGoingStore {
     db.exec('BEGIN');
     try {
       db.prepare(
-        `INSERT INTO keepgoing_policies (session_id, owner_id, created_by, enabled, nudge_after_min, prompt, status_file, max_nudges, max_wakes, next_due_at, created_at, updated_at)
-         SELECT ?, owner_id, created_by, 1, nudge_after_min, prompt, status_file, max_nudges, max_wakes, NULL, ?, ? FROM keepgoing_policies WHERE session_id = ?
-         ON CONFLICT (session_id) DO UPDATE SET enabled = 1, nudge_after_min = excluded.nudge_after_min, prompt = excluded.prompt, status_file = excluded.status_file,
+        `INSERT INTO keepgoing_policies (session_id, owner_id, created_by, enabled, nudge_after_min, prompt, status_file, max_nudges, max_wakes, program, next_due_at, created_at, updated_at)
+         SELECT ?, owner_id, created_by, 1, nudge_after_min, prompt, status_file, max_nudges, max_wakes, program, NULL, ?, ? FROM keepgoing_policies WHERE session_id = ?
+         ON CONFLICT (session_id) DO UPDATE SET enabled = 1, nudge_after_min = excluded.nudge_after_min, prompt = excluded.prompt, status_file = excluded.status_file, program = excluded.program,
            max_nudges = excluded.max_nudges, max_wakes = excluded.max_wakes, next_due_at = NULL, backoff_until = NULL, updated_at = excluded.updated_at`,
       ).run(to, at, at, from);
       db.prepare('UPDATE keepgoing_policies SET enabled = 0, updated_at = ? WHERE session_id = ?').run(at, from);
@@ -184,6 +188,42 @@ export class KeepGoingStore {
       throw e;
     }
     return this.policy(to);
+  }
+
+  /* ---------- the pause switch (slice 3) ---------- */
+
+  /** The pauses that stand: all first, then by program. */
+  pauses(): KeepGoingPause[] {
+    const rows = this.#db?.prepare('SELECT * FROM keepgoing_pauses ORDER BY scope').all() as Raw[] | undefined;
+    return (rows ?? []).map((r) => ({ program: r.scope === KEEPGOING_PAUSE_ALL ? null : String(r.scope), reason: String(r.reason), since: String(r.since), by: String(r.by) }));
+  }
+
+  /** Pauses a program (null: all); a pause that stands keeps its `since` and takes the new reason. */
+  pause(program: string | null, reason: string, by: string): KeepGoingPause {
+    const db = this.#w;
+    if (!db) throw new Error('read-only');
+    db.prepare('INSERT INTO keepgoing_pauses (scope, reason, since, by) VALUES (?, ?, ?, ?) ON CONFLICT (scope) DO UPDATE SET reason = excluded.reason, by = excluded.by').run(
+      program ?? KEEPGOING_PAUSE_ALL,
+      reason,
+      this.#at(),
+      by,
+    );
+    return this.pauses().find((p) => p.program === program)!;
+  }
+
+  /** Resumes a program (null: all); false when it was not paused. */
+  resume(program: string | null): boolean {
+    const db = this.#w;
+    if (!db) throw new Error('read-only');
+    return Number(db.prepare('DELETE FROM keepgoing_pauses WHERE scope = ?').run(program ?? KEEPGOING_PAUSE_ALL).changes) > 0;
+  }
+
+  /** Makes every policy that is on and in `program` (null: all) due at the next round (a resume looks again at once; a back-off after a failure stands). */
+  dueNow(program: string | null): void {
+    const db = this.#w;
+    if (!db) return;
+    if (program === null) db.prepare('UPDATE keepgoing_policies SET next_due_at = NULL WHERE enabled = 1').run();
+    else db.prepare('UPDATE keepgoing_policies SET next_due_at = NULL WHERE enabled = 1 AND program = ?').run(program);
   }
 
   /** Removes a chat's policy (the chat was deleted). */
