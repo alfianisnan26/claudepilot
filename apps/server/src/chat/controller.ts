@@ -137,6 +137,10 @@ const INTERRUPT_WAIT_MS = 5_000;
 
 /** The permission mode every process starts in (`--permission-mode`); others are applied after. */
 const START_MODE = 'default';
+/** T-284 note D: how much later than the portal's read of a pre-830 request (no proc) the live process must have started to call it stale. */
+const LEGACY_STALE_MARGIN_MS = 60_000;
+/** Request ids in an audit row are cut to this length (they come from the stream; T-284). */
+const AUDIT_ID_MAX = 80;
 /** Origins (`kind/producer`) Claude Code puts on user lines it makes itself: seen from the real CLI (2.1.296) for a finished background command. Every accepted case is in INTEGRITY_CASES (integrity.ts). */
 const HARNESS_ORIGINS: ReadonlySet<string> = new Set(['task-notification/session-task']);
 /** The control-line key under which a turn Claude Code started by itself (T-99) is remembered; keys carry a `/`, message ids never do. */
@@ -766,8 +770,8 @@ export class ChatController {
   /**
    * T-284: the open requests no process can answer any more. With no live process, every one; with a live one, those another process
    * raised (`chat_requests.proc` is not this process's controlProc). A row from before migration 830 has no proc: it is stale when the
-   * portal read it before the live process started (process_started_at is whole seconds, so a request of the live process is never judged
-   * stale by the rounding). Nothing while a launch, a sleep, a move or a restart is deciding, nor for an ended session.
+   * portal read it at least LEGACY_STALE_MARGIN_MS before the live process started (a clock-skew margin; it also covers the rounding of
+   * process_started_at to whole seconds). Nothing while a launch, a sleep, a move or a restart is deciding, nor for an ended session.
    */
   #staleIds(sessionId: string): string[] {
     if (this.#busy.has(sessionId) || this.#moving.has(sessionId) || this.#restarting.has(sessionId)) return [];
@@ -777,7 +781,11 @@ export class ChatController {
     if (!open.length || row.process !== 'live') return open.map((r) => r.requestId);
     const proc = controlProc(row);
     const started = Date.parse(row.process_started_at ?? '');
-    return open.filter((r) => (r.proc !== null ? r.proc !== proc : Number.isFinite(started) && Date.parse(r.createdAt) < started)).map((r) => r.requestId);
+    // A legacy row is stale only when the live process started at least LEGACY_STALE_MARGIN_MS after the portal read it: the start is the
+    // host's clock, the read the portal's, and a host clock ahead must not make a request of the live process stale (T-284 note D).
+    return open
+      .filter((r) => (r.proc !== null ? r.proc !== proc : Number.isFinite(started) && started - Date.parse(r.createdAt) >= LEGACY_STALE_MARGIN_MS))
+      .map((r) => r.requestId);
   }
 
   /**
@@ -792,7 +800,7 @@ export class ChatController {
     for (const requestId of dropped) this.#append(sessionId, { kind: 'resolved', requestId, outcome: 'stale' });
     const row = this.#chat.row(sessionId);
     if (row?.state === 'waiting' && this.#chat.openRequests(sessionId).length === 0) this.#chat.patchSession(sessionId, { state: row.process === 'live' ? 'idle' : 'interrupted' });
-    this.#chat.addAudit({ severity: 'info', kind: 'session.request_stale', sessionId, workspaceId: row?.workspace_id ?? null, actor: actor ?? 'portal', detail: { why, requestIds: dropped } });
+    this.#chat.addAudit({ severity: 'info', kind: 'session.request_stale', sessionId, workspaceId: row?.workspace_id ?? null, actor: actor ?? 'portal', detail: { why, requestIds: dropped.map((id) => id.slice(0, AUDIT_ID_MAX)) } });
     this.#emitSession(sessionId);
     return dropped;
   }
@@ -4435,7 +4443,9 @@ export class ChatController {
         return reject(e instanceof Error ? e : new Error(String(e)));
       }
       const timer = setTimeout(() => {
-        if (this.#pending.delete(requestId)) reject(new ControlTimeout());
+        if (!this.#pending.delete(requestId)) return;
+        this.#bypassRequestOver(sessionId, requestId);
+        reject(new ControlTimeout());
       }, this.controlTimeoutMs);
       this.#pending.set(requestId, { sessionId, resolve, reject, timer });
       // The one request that enters Bypass, sent under the grant (every gate passed): its id is stored, so a portal that restarts before
@@ -4448,9 +4458,21 @@ export class ChatController {
       this.#writeLine(sessionId, controlRequest(requestId, subtype, fields)).catch((e: unknown) => {
         if (!this.#pending.delete(requestId)) return;
         clearTimeout(timer);
+        this.#bypassRequestOver(sessionId, requestId);
         reject(e instanceof Error ? e : new Error(String(e)));
       });
     });
+  }
+
+  /**
+   * The Bypass request stored as pending got no reply (it timed out, or its line was never written): it is not pending any more, so a
+   * portal that restarts later never takes a late reply to it as its own unfinished entry (T-277 layer 2 review note).
+   */
+  #bypassRequestOver(sessionId: string, requestId: string): void {
+    const m = this.#modes.get(sessionId);
+    if (m?.bypassPending !== requestId) return;
+    m.bypassPending = null;
+    this.#saveControl(sessionId);
   }
 
   /** Hands a reply to the request waiting for it (one that already timed out has nobody waiting). */

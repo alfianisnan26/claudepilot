@@ -83,6 +83,8 @@ export class FakeWorkspaces {
   /** What `status` reports (per session when set there), and the exit code `send` returns. */
   alive = true;
   readonly status = new Map<string, boolean>();
+  /** The host cannot be reached for `status` (the exec fails): the portal reads it as unknown. */
+  statusUnreachable = false;
   sendCode = 0;
   /** A host that takes stdin but never exits. */
   hangSends = false;
@@ -171,6 +173,8 @@ export class FakeWorkspaces {
         }
         exec.exit(this.sendCode);
       }, 0);
+    } else if (cmd === 'status' && this.statusUnreachable) {
+      throw new Error('the session host is unreachable');
     } else if (cmd === 'status') {
       const alive = this.status.get(command[3] ?? '') ?? this.alive;
       setTimeout(() => {
