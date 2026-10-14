@@ -86,6 +86,19 @@ test('spend: a spike and a budget at high or exhausted are cost_spike for the al
   assert.ok(!JSON.stringify(got).includes('CANARY'));
 });
 
+test('spend: the spikes of a continued chat share one tag, its first row’s; the subject stays the row it happened in (T-312)', () => {
+  const { bus, got } = collect();
+  let fire: (a: SpendAlert) => void = () => {};
+  adaptSpend({ onAlert: (fn) => ((fire = fn), () => {}) }, bus);
+  const spike = (id: string, sessionId: string, rootSessionId: string): SpendAlert => ({
+    kind: 'spike', id, at: '', level: 'near', scope: { kind: 'session', id: sessionId, label: null }, owner: 'u_owner', summary: '', spikeId: id, spikeKind: 'burst', sessionId, rootSessionId, claudeId: 'c1', workspaceId: 'docker/api', heuristic: true,
+  });
+  fire(spike('s1', 'O2', 'O1'));
+  fire(spike('s2', 'O3', 'O1'));
+  fire(spike('s3', 'K1', 'K1'));
+  assert.deepEqual(got.map((e) => [e.subject.id, e.facts.root, render(e).tag]), [['O2', 'O1', 'cost:O1'], ['O3', 'O1', 'cost:O1'], ['K1', 'K1', 'cost:K1']]);
+});
+
 test('tickets: assigned to a person by an agent or the portal is a human_request; by the person, or to a session, is not; closed dims it', () => {
   const { bus, got } = collect();
   const src: { onEvent?: (e: TicketEventLike) => void } = { onEvent: () => {} };

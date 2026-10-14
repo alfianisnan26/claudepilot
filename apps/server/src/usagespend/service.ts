@@ -35,7 +35,7 @@ import {
 } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import { OWNER_ACTOR, UI_OWNER, type SpendObject, type Visibility, type Who } from './actor.js';
-import { attribute, workspaceNameOf } from './attribution.js';
+import { attribute, chainOf, chainRootOf, workspaceNameOf } from './attribution.js';
 import { alertKey, levelOf, MAX_BUDGETS, measure, parseBudget, type BudgetFields } from './budgets.js';
 import { addRow, roundUsd, zeroTotals, type UsageRow } from './model.js';
 import { DAY, HOUR, periodBounds } from './periods.js';
@@ -502,11 +502,11 @@ export class UsageSpend {
     // Today everything is the one owner's; with several users this is where the manager of the workspace is found.
     const owner = OWNER_ACTOR;
     const id = this.#store.insertSpike({ atMs: at, kind, subject, sessionId: who.sessionId, workspaceId: who.workspaceId, claudeId: who.claudeId, evidence, alerted: !snoozed, owner });
-    if (!snoozed) this.#raise(this.#spikeAlert({ id, atMs: at, kind, sessionId: who.sessionId, workspaceId: who.workspaceId, claudeId: who.claudeId, evidence, owner }));
+    if (!snoozed) this.#raise(this.#spikeAlert({ id, atMs: at, kind, subject, sessionId: who.sessionId, workspaceId: who.workspaceId, claudeId: who.claudeId, evidence, owner }));
   }
 
   /** A spike event as an alert: a rate spike is about a Claude, a loop or a single large request about a session. */
-  #spikeAlert(e: Pick<SpikeRow, 'id' | 'atMs' | 'kind' | 'sessionId' | 'workspaceId' | 'claudeId' | 'evidence' | 'owner'>): SpendAlert {
+  #spikeAlert(e: Pick<SpikeRow, 'id' | 'atMs' | 'kind' | 'subject' | 'sessionId' | 'workspaceId' | 'claudeId' | 'evidence' | 'owner'>): SpendAlert {
     return {
       kind: 'spike',
       id: `spike|${e.id}`,
@@ -518,6 +518,8 @@ export class UsageSpend {
       spikeId: String(e.id),
       spikeKind: e.kind,
       sessionId: e.sessionId,
+      // The first row of the continued chain the spike is about: a loop or a large request is recorded under it, a rate spike names it (T-312).
+      rootSessionId: e.kind === 'rate' ? e.sessionId : e.subject,
       claudeId: e.claudeId,
       workspaceId: e.workspaceId,
       heuristic: true,
@@ -530,20 +532,23 @@ export class UsageSpend {
     if (!cfg.enabled) return false;
     let hit = false;
     const who = { sessionId: turn.sessionId, workspaceId: turn.workspaceId, claudeId: claude };
+    // A chat continued as new rows is one subject (T-312): its rows count together, and the subject (cooldown, snooze) is the chain's first row.
+    const known = this.#store.sessions([turn.sessionId]);
+    const root = chainRootOf(turn.sessionId, known);
 
-    // A loop between turns: this session finished many requests in a few minutes.
-    const w = this.#store.sessionWindow(turn.sessionId, at - BURST_WINDOW_MIN * MIN, at);
+    // A loop between turns: this session (with the rows it continues) finished many requests in a few minutes.
+    const w = this.#store.sessionWindow(chainOf(turn.sessionId, known), at - BURST_WINDOW_MIN * MIN, at);
     const burst = burstVerdict(w.requests, { ...cfg, burstWindowMin: BURST_WINDOW_MIN });
-    if (burst.state === 'hit' && this.#cooled('burst', turn.sessionId, at)) {
-      this.#record('burst', turn.sessionId, who, burstEvidence(burst.evidence.requests, burst.evidence.threshold, w.costUsd), at);
+    if (burst.state === 'hit' && this.#cooled('burst', root, at)) {
+      this.#record('burst', root, who, burstEvidence(burst.evidence.requests, burst.evidence.threshold, w.costUsd), at);
       hit = true;
     }
 
     // One request far above the median one of this Claude (the median is over the 7 days before it).
     if (turnCost >= cfg.minUsd && turnCost > 0) {
       const out = outlierVerdict(turnCost, this.#store.requestCosts(claude, at - BASELINE_MS, at), cfg);
-      if (out.state === 'hit' && this.#cooled('outlier', turn.sessionId, at)) {
-        this.#record('outlier', turn.sessionId, who, outlierEvidence(turnCost, out.evidence), at);
+      if (out.state === 'hit' && this.#cooled('outlier', root, at)) {
+        this.#record('outlier', root, who, outlierEvidence(turnCost, out.evidence), at);
         hit = true;
       }
     }
@@ -556,8 +561,16 @@ export class UsageSpend {
         const periods = this.#store.activePeriods(claude, at - RATE_WINDOW_MS, at - RATE_WINDOW_MS - BASELINE_MS, RATE_WINDOW_MS);
         const rate = rateVerdict(win.costUsd, periods, cfg);
         if (rate.state === 'hit' && this.#cooled('rate', claude, at)) {
-          const share = win.top && win.costUsd > 0 ? (win.top.costUsd / win.costUsd) * 100 : 0;
-          const top = win.top && share >= 50 ? { sessionId: win.top.sessionId, share: Math.round(share * 100) / 100 } : null;
+          // The chat that spent most of it: the rows of a continued chain summed under their first row (T-312).
+          const all = this.#store.sessions(win.bySession.map((r) => r.sessionId));
+          const byRoot = new Map<string, number>();
+          for (const r of win.bySession) {
+            const k = chainRootOf(r.sessionId, all);
+            byRoot.set(k, (byRoot.get(k) ?? 0) + r.costUsd);
+          }
+          const [lead] = [...byRoot].sort((a, b) => b[1] - a[1]);
+          const share = lead && win.costUsd > 0 ? (lead[1] / win.costUsd) * 100 : 0;
+          const top = lead && share >= 50 ? { sessionId: lead[0], share: Math.round(share * 100) / 100 } : null;
           this.#record('rate', claude, { ...who, sessionId: top?.sessionId ?? null }, rateEvidence(win.costUsd, rate.evidence, top), at);
           hit = true;
         }
