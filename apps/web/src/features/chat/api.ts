@@ -23,6 +23,7 @@ import {
   type DeleteChatSessionResult,
   type EnterBypassRequest,
   type ReauthRequest,
+  type RecoverChatRequest,
   type RestartChatRequest,
   type SwitchChatRequest,
   type UpdateChatSessionRequest,
@@ -127,6 +128,8 @@ export const chatApi = {
   allowBypass: (id: string) => request<ChatSession>('POST', CHAT_API.bypassAllow(id)),
   /** Restarts the session's Claude Code on the same conversation, at a turn boundary, so its MCP servers reconnect. */
   restart: (id: string, why: 'mcp' | 'manual', opts: Omit<RestartChatRequest, 'why'> = {}) => request<ChatSession>('POST', CHAT_API.restart(id), { why, ...opts } satisfies RestartChatRequest),
+  /** T-136: brings a session ended for integrity back in place (the same row); `confirm` after the sheet for a suspicious cause. */
+  recover: (id: string, body: RecoverChatRequest = {}) => request<ChatSession>('POST', CHAT_API.recover(id), body),
   /** Cancels a restart that waits for the turn's end (T-102). */
   cancelRestart: (id: string) => request<ChatSession>('DELETE', CHAT_API.restart(id)),
   /** The "Tools changed" hint's memory: hidden until the next change, and applying changes at the turn's end by itself (T-102). */

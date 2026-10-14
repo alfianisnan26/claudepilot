@@ -20,6 +20,7 @@ import {
 import { Link } from 'react-router';
 import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
 import { formatDateTime } from '@/lib/format';
+import { RecoverButton } from './Recover';
 import { endedForSafety, formatUsd, StateBadge, timeShort } from './shared';
 import { useRowSwipe } from './swipe';
 
@@ -281,6 +282,7 @@ export function SessionRow({
             <ChevronDown className={cn('size-[18px] transition-transform', !open && '-rotate-90')} />
           </button>
         )}
+        {!selecting && s.endedFor && !s.archivedAt && <RecoverButton session={s} />}
         {!selecting && <Menu label={`Actions for ${title}`} items={rowActions(row, actions)} />}
       </div>
       </div>

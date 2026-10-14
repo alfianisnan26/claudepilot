@@ -2,10 +2,25 @@
 // conversation resumed from its tape. This file holds what is pure about it: the two settings (a cap per day and a pause between
 // recoveries), whether an ending may be recovered at all, by whom, and the short continuation message. The controller does the rest.
 
-import { AppError } from '@isnanme/core';
+import { AppError, defineErrorCodes } from '@isnanme/core';
 import { CHAT_ENDED_CREDENTIAL, CHAT_ENDED_INTEGRITY, CHAT_RECOVER_CAPPED, CHAT_RECOVER_CONFIRM, CHAT_RECOVER_PAUSED, CHAT_RECOVER_SUSPICIOUS } from '@portal/contracts';
 import { defineSetting } from '../settings/registry.js';
 import type { EndingRecord } from './integrity.js';
+
+declare module '@isnanme/core' {
+  interface ErrorCodeRegistry {
+    RECOVER_SUSPICIOUS: true;
+    RECOVER_CONFIRM: true;
+    RECOVER_CAPPED: true;
+    RECOVER_PAUSED: true;
+  }
+}
+defineErrorCodes({
+  [CHAT_RECOVER_SUSPICIOUS]: { status: 403, message: 'Only a person can bring this session back.' },
+  [CHAT_RECOVER_CONFIRM]: { status: 409, message: 'Confirm first.' },
+  [CHAT_RECOVER_CAPPED]: { status: 409, message: 'Recovered too often today.' },
+  [CHAT_RECOVER_PAUSED]: { status: 409, message: 'Recovered a moment ago.' },
+});
 
 export const RECOVER_MAX_PER_DAY = 'chat.recover.maxPerDay';
 export const RECOVER_PAUSE_MIN = 'chat.recover.pauseMin';

@@ -1,6 +1,6 @@
 import { cn, Spinner } from '@isnanme/ui';
 import { foldMoves, type ChatEvent, type ChatFile, type ChatImage, type ChatInputState, type ChatMove, type ChatTask } from '@portal/contracts';
-import { ArrowDown, ArrowRightLeft, Bot, ChevronDown, Clock3, ImageIcon, Plug, RotateCw, Ticket, Workflow, X, type LucideIcon } from 'lucide-react';
+import { ArrowDown, ArrowRightLeft, Bot, ChevronDown, Clock3, ImageIcon, Plug, RotateCcw, RotateCw, Ticket, Workflow, X, type LucideIcon } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -485,6 +485,7 @@ function EventRow({ event: e, ctx }: { event: ChatEvent; ctx: RowContext }) {
       if (move) return <MoveRow move={move} moveMark={ctx.moveMark} />;
       if (e.btw) return <PinnedBtw btw={e.btw} />;
       if (e.restart) return <TransferMarker event={e} icon={RotateCw} />;
+      if (e.recovered) return <TransferMarker event={e} icon={RotateCcw} />;
       return e.transfer ? <TransferMarker event={e} mark={e.transfer.handoffId ? ctx.moveMark?.(e.transfer.handoffId) : null} /> : <CenterLine>{e.text}</CenterLine>;
     }
     case 'retry':

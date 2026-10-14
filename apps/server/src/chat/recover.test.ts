@@ -319,7 +319,7 @@ test('the route: operate on the session (another user: 404); a person’s sign-i
     assert.equal(asAgent.status, 403);
     assert.equal(((await asAgent.json()) as { error: { code: string } }).error.code, CHAT_RECOVER_SUSPICIOUS);
     assert.equal((await post('owner', {})).status, 409);
-    const ok2 = answered(s, post('owner', { confirm: true }));
+    const ok2 = answered(s, Promise.resolve(post('owner', { confirm: true })));
     assert.equal((await ok2).status, 200);
     assert.notEqual(s.controller.get(s.id)!.state, 'ended');
   } finally {
