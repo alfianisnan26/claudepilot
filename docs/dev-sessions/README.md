@@ -102,17 +102,17 @@ ending that hit the Konfersi chat on 2026-10-13 is fixed (T-99), so that should 
 When the coordinator's machine cannot reach the portal (the tunnel is down or the name does not resolve), see the relay in
 `docs/dev-session.md` ("When the coordinator cannot reach the portal").
 
-## The factory engine (T-293, no sessions yet)
+## The factory engine (T-293; sessions only with --start)
 
 `docs/dev-sessions/factory.mjs` is engine v0 of design v2 layer 3 (`overhaul/token-economy-design.md` sections 3 and 4): orchestration as code.
-It PLANS, and with `--apply` it prepares, but it starts no session and calls no model (the Bypass lease is the owner's open decision; until
-then the orchestrator runs the slice through its Agent tool with the printed brief).
+It PLANS, and with `--apply` it prepares; it calls no model, and it starts a session only with `--start` (below; off by default, never
+Bypass). Without it the orchestrator runs the slice with the printed brief.
 `node docs/dev-sessions/factory.mjs (--tickets tickets.json | --portal [--apply]) [--wip 5] [--budget <requests>] [--stale-min 360] [--briefs] [--json]`
 reads ticket data passed in (a TicketList, TicketItems or TicketDetails) or, with `--portal`, from the portal (open and in-progress tickets,
 the ranked open ones whole) with the supervisor's auth path (`PORTAL_URL`, `PORTAL_SERVER_CODE`; the cookie stays in memory and is never
 printed). Intake takes the next tickets by `rank-NN` tag that are open, carry an ESTIMATE comment with a size S, M or L (XL is split
 first), within WIP (in-progress tickets and open dispatches, five by default) and within the run's request budget (the first ticket over it
-stops the plan). Each slice gets a request budget by size (S 25, M 60, L 120) and stops at 150 percent. The brief comes from
+stops the plan). Each slice gets a request budget by size (S 25, M 60, L 120; the agent's own count: the engine measures cost, below) and stops at 150 percent. The brief comes from
 `factory-brief.md` (context pack, role and model from `.claude/agents/`, budget, trailers, token discipline). State lives only in ticket
 comments: `FACTORY DISPATCH <ticket>-F<n> ...`, `FACTORY END <ticket>-F<n> <outcome>` and `FACTORY RESUME <ticket>-F<n> run=<id> ...`; an
 ACTUAL comment ends the dispatches before it. An open dispatch is never dispatched again; one open past `--stale-min` is printed as an
@@ -137,5 +137,38 @@ One round, for a supervisor hook or by hand: `node docs/dev-sessions/factory-rou
 RESUME, and prints one line each: `DISPATCH`, `RESUME`, `NEXT <ticket> <id> <step> <role>/<model>: <why>`, `LEARN <id>: would comment` with
 the ACTUAL text, and `EXCEPTION <ticket> <id>: <why>` for the coordinator. Dry by default; `--apply` writes only the DISPATCH comments
 (with their worktrees) and the RESUME markers, never an ACTUAL. Exit 0 after a round, 1 when the portal could not be read (one EXCEPTION
-line), 2 for usage. It is a separate script: `supervisor.mjs` does not call it yet.
-Not yet: starting the sessions (the Bypass decision), the supervisor wiring, writing the ACTUAL, audit rows of their own.
+line), 2 for usage. It is a separate script: `supervisor.mjs` does not call it, on purpose (an independent reviewer reads the engine before it
+runs unattended).
+
+**Whose markers count (T-338).** A marker (DISPATCH, STARTING, START, END, RESUME, REVIEW, VERIFY, INTEGRATE) and an ACTUAL count only
+when the engine's own actor wrote them: the portal's `ui` actor (the signed-in REST path the engine uses, the owner's) with `fromAgent`
+false. A comment an agent, a session or a token wrote is never read as a marker, so the step markers are posted by the engine (or the owner),
+not by the step's agent. A dispatch's role (the role table `ROLES`, today `implementer`), model (the role file), branch (`branchOf`) and
+budgets (the size) are re-derived, never taken from the marker text; a worktree must lie inside the worktrees folder.
+
+**Starting the slice (`--start`, off by default; slice 4, D-49; the admin credential path is T-339).** With
+`--apply --start --workspace <id> --repo-id <id> [--report-to <session>]` (both scripts) the engine starts each slice it dispatched as a
+worker session, never in Bypass, through the admin Portal MCP tools a person's automation already uses (`session_start`,
+`session_configure`, `session_send`: the same controller calls `session_spawn` makes; no new authz or approval path), with an admin token
+leased for the run under the run's own label (one hour, revoked at the end and on SIGINT or SIGTERM, never printed; a run never replaces
+another run's token). `--apply` takes one lock per host (a lock file with the pid, `--lock`; a lock whose pid is gone is stale). With
+`--start` the worktree is made IN THE WORKSPACE through the portal (`worktree_create` on `--repo-id`, in `<repository>.worktrees/`), never
+with git on the engine's host (T-337), and the session runs in the folder the portal answered. In order, failing closed: the ticket is read
+again (the dispatch must be the latest, open, not started, not stale and written by this engine version, `v=`); the portal must report its
+worktree; `FACTORY STARTING <id> by=portal-mcp:<token id>`; `session_start` in that folder with `agent` = the role and the ticket, without a
+prompt; `session_configure` mode `dontAsk` and the role's explicit model (a mode or model the answer does not confirm ends the session
+before it gets any instruction); the comment `FACTORY START <id> session=<sessionId> mode=dontAsk model=<model>` (the audit trail next to
+the DISPATCH); `session_send` with the rendered brief (the ticket summary in it is one line, at most 120 characters, quoted as ticket
+text); one line to the `--report-to` session. A start that fails ends its session and writes `FACTORY END <id> failed: start (...)`. A
+dispatch is started once: a START marker, an ended or superseded dispatch, a branch checked out in the workspace (refused at `--apply`) or a
+dispatch past `--stale-min` is never started; a live session titled exactly `<id> <role>` that the engine's token started (a STARTING
+marker's `by=`) is adopted, with an EXCEPTION line; the same title from anyone else is refused. Each round with `--start` also resumes the
+start of an open, fresh dispatch that has none, and watches the budget. **What the budget measures:** the session's `cost_usd` from
+`session_get` (the portal's sum of the session's cost, US dollars) against a cost budget by size (`SIZE_COST_USD`: S 4, M 10, L 20 USD,
+PROVISIONAL, not yet measured); at 150 percent the session is interrupted, told to commit WIP and report, the dispatch ends with
+`FACTORY END <id> stopped: budget ...`, and the coordinator gets an EXCEPTION line (and `--report-to` one message). The request budget by
+size (S 25, M 60, L 120) is not measured by the engine: it plans a run (`--budget`) and is the agent's own count in its brief. The worker is
+not a child of the orchestrator (the admin tools set no parent): it is not in its crew and cannot `session_message` it; its report is its
+final message, read with `session_get`.
+Not yet: the supervisor wiring (after the independent review), writing the ACTUAL, audit rows of their own (the portal's own audit rows
+of the session start and the comments are the trail today).
