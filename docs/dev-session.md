@@ -202,7 +202,8 @@ What the relay is not:
 - **Still the only way** to keep a chat in Bypass and to move one on low quota (D-12, D-39). Keep going reports a chat that lost Bypass and
   never re-enters it, and it does not move chats (T-316). The supervisor does both, and it is cut off with the coordinator. The same goes
   for tracks that do not have Keep going on.
-- **Not built:** an external heartbeat that notices the portal itself is down (T-315; only Connect's hub heartbeats exist), and a relay
+- **Not built:** an external heartbeat that notices the portal itself is down (T-315; only Connect's hub heartbeats exist; the design waiting for the owner's choices is in
+  `docs/prd/chat-sessions.md` §23.3), and a relay
   script: the steps above are by hand. T-104's lease will replace the sign-in code the helpers use.
 
 ## Rules that hold
