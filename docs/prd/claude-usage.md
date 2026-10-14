@@ -587,15 +587,27 @@ Three rules of thumb, each a comparison of one number with a baseline the portal
 
 | Rule | Fires when | Needs | Subject, cool-down |
 | --- | --- | --- | --- |
-| **rate** | a Claude's spend in the trailing 15 minutes is at least `rateFactor` (default 3) x P90, the 90th percentile (nearest rank: the value at rank ceil(0.9 x n)) of that Claude's **active** 15-minute periods (spend above 0) over the 7 days before, and at least `minUsd` | 8 active periods (else no baseline: `no_history`, and nothing is said) | the Claude, 30 min. The session is named when one spent at least half of the window. Looked at most once a minute per Claude. |
-| **burst** (loop) | one session finished at least `burstRequests` (default 20) requests inside 10 minutes, whatever they cost: a loop **between** turns (a ticket, CI or another session answering each other) | nothing | the session, 60 min |
-| **outlier** | one request cost at least `outlierFactor` (default 10) x the median request of its Claude over the 7 days before (the mean of the two middle values when even), and at least `minUsd` | 20 earlier requests that cost something (else `no_history`) | the session, 5 min |
+| **rate** | a Claude's spend in the trailing 15 minutes is at least `rateFactor` (default 3) x P90, the 90th percentile (nearest rank: the value at rank ceil(0.9 x n)) of that Claude's **active** 15-minute periods (spend above 0) over the 7 days before, and at least `minUsd` | 8 active periods (else no baseline: `no_history`, and nothing is said) | the Claude, 30 min. The chat is named when one spent at least half of the window (a continued chat's rows summed, named by its first row). Looked at most once a minute per Claude. |
+| **burst** (loop) | one session (with the rows of its continued chat before it) finished at least `burstRequests` (default 20) requests inside 10 minutes, whatever they cost: a loop **between** turns (a ticket, CI or another session answering each other) | nothing | the chat's first row, 60 min |
+| **outlier** | one request cost at least `outlierFactor` (default 10) x the median request of its Claude over the 7 days before (the mean of the two middle values when even), and at least `minUsd` | 20 earlier requests that cost something (else `no_history`) | the chat's first row, 5 min |
 
 Why P90 and not the mean or the median for `rate`: the spend of an active period is right-skewed, so "5 x the median" is exceeded by roughly one active period in twenty on an ordinary day; "3 x the 90th percentile" by roughly one in a hundred. By hand (the test): periods of $1 to $10 have P90 = $9, so the line is $27: $26.50 is quiet, $30 is a spike at 3.33 x; eight periods of $1 put the line at $3.
 
 ### 24.2 Events and alerts
 
 An event keeps its evidence, every number with its basis (dollars and ratios `estimate`, counts `measured`): `rate` has the spend, the P90 baseline, the factor, the number of periods and the top session; `burst` the requests, the window, the threshold and the spend; `outlier` the cost, the median, the factor and the number of requests it is the median of. `summary` is one terse line ("20 requests in 10 min (limit 20)", "$30 in 15 min, 3.3x the usual", "A $11 request, 10x the median"), and every event says `heuristic: true`. An alert carries a stable id `spike|<event id>`, level `near` (a heads-up, not a quota level), its scope (a Claude for `rate`, a session for the other two) and no session text. A **snooze** (`PUT /spikes/snooze`, subject = the session or the Claude, 1 h, 4 h or a day) records further events without alerting and hides the earlier alerts of that subject while it lasts. Events are kept 90 days.
+
+**A continued chat is one subject (T-312).** A chat continued as a new row (`continued_from`) is one unit, as in attribution (§22): the
+subject of a burst or an outlier, and so its cool-down and its snooze, is the **first** row of the chain (`chainRootOf` in
+`usagespend/attribution.ts`, the one grouping); the burst counts the requests of the session and of the rows it continues
+(`chainOf`); a rate spike sums each chat's rows in the window and names the first row. The event still names the row it happened in
+(`sessionId`), so every segment stays visible; the alert carries `rootSessionId`, and its notification (`cost_spike`) keeps the row it
+happened in as its subject (the link, the "already looking at it" check) with `root` in its facts and the tag `cost:<root>`, so a
+chain's notifications replace each other instead of piling up. Events recorded before this keep the row as their subject. As tested
+(`usagespend/service.test.ts`, the 2026-10-13 orchestrator chain fe3df8bc → fdb140be → 5c9fcb5f): 10 requests in the second row and 10 in
+the third inside 9.5 minutes is one burst under the first row (each row alone is under the limit of 20, and without the chain nothing is
+said); a snooze of the first row mutes a later loop in the third; $3 + $3 of the chain against $4 of another chat is a rate spike that
+names the chain at 60 % (no row alone has half). Events of a parent and the sessions it started are not merged: a child is its own chat.
 
 ### 24.3 Settings
 
@@ -901,6 +913,16 @@ n, median requests, context, minutes, cost, inspection share, re-write share, fi
 `full: true` (p90s, outcomes, Bash classes, the experiments with intervals, the source of each figure); `lab_experiment_set` (admin
 tokens, confirmation round trip) starts a randomized or before-and-after experiment or stops one; `lab_arm_draw` (agent reach
 `session`, §28.13) draws a slice's arms before its brief. Counts and ids only.
+
+**A session is its chat (T-312).** Where the lab reads one session (an agent's own read on a route or through `lab_summary`, and
+`?session=` on `GET /api/lab/slices`), it reads the session and the rows of its `continued_from` chain before it (`chainOf` over usage
+spend's session loader: the same grouping as §22 and §24), so a chat continued as a new row (a Move, an auto-move on quota) still scores
+its earlier turns and sub-agents as its own. A chain's first row reads only itself (nothing came before it); another chat, a parent or
+a child is never in it. The scoring over every session (the summary rows, the experiments) had no session dimension to split: its
+units are slices (a main-thread turn, a sub-agent thread) keyed by session and slice, grouped by period, role, model and ticket, so a
+chain is not one slice and nothing there changed. A draw still binds only in the session that drew it (§28.13): a draw made before a
+continuation and named after it is unbound, as before; changing that is a decision on the draw rule, not part of this. As tested
+(`lab/lab.test.ts`, the same 2026-10-13 ids): the third row reads three turns, the first row one, Konfersi its own one.
 
 ### 28.11 Usage → Lab
 

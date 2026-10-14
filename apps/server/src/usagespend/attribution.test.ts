@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AttributionBy } from '@portal/contracts';
 import { creatorOf, OWNER_ACTOR } from './actor.js';
-import { attribute, chainRootOf, lineage, rootOf, shareOf, unattributed, workspaceNameOf, type AttributionInput, type GrouperFactory } from './attribution.js';
+import { attribute, chainOf, chainRootOf, lineage, rootOf, shareOf, unattributed, workspaceNameOf, type AttributionInput, type GrouperFactory } from './attribution.js';
 import type { PersonaRecord, SessionInfo, UsageRow } from './model.js';
 
 // The fixture, worked out by hand (dollars; t0 + n is "n minutes in"):
@@ -399,4 +399,21 @@ test('side questions: a `side` row is inside the window total and its session’
   assert.equal(withSide.totals.requests, 8);
   const solo = withSide.rows.find((r) => r.key === 'S5')!;
   assert.deepEqual([solo.own.costUsd, solo.own.requests], [4.2, 2], 'and in its session’s row');
+});
+
+test('chainOf: the session and the rows of its continued chain the map holds, never a parent or another chain; cycle safe (T-312)', () => {
+  const sessions = new Map<string, SessionInfo>([
+    info('O1', 'docker/api', 'c1', 'O', { parentId: 'P' }),
+    info('O2', 'docker/api', 'c1', 'O', { continuedFrom: 'O1' }),
+    info('O3', 'docker/api', 'c1', 'O', { continuedFrom: 'O2' }),
+    info('P', 'docker/api', 'c1', 'Parent'),
+    info('W', 'docker/api', 'c1', 'Worker', { parentId: 'O2' }),
+    info('A', 'docker/api', 'c1', 'A', { continuedFrom: 'B' }),
+    info('B', 'docker/api', 'c1', 'B', { continuedFrom: 'A' }),
+  ]);
+  assert.deepEqual(chainOf('O3', sessions).sort(), ['O1', 'O2', 'O3']);
+  assert.deepEqual(chainOf('O1', sessions).sort(), ['O1', 'O2', 'O3'], 'every row of the chain the map holds');
+  assert.deepEqual(chainOf('W', sessions), ['W'], 'a child is its own chat');
+  assert.deepEqual(chainOf('GONE', sessions), ['GONE'], 'a session the map does not hold is itself');
+  assert.deepEqual(chainOf('A', sessions), ['A'], 'a cycle of links (corrupt data) ends: each walk stops before the repeat');
 });
