@@ -1,5 +1,5 @@
 import { Button, cn, ConfirmDialog, CopyButton, EmptyState, LoadError, Menu, RowsSkeleton, Switch, useToast } from '@isnanme/ui';
-import { type CiBranch, type CiDeployment, type CiEnvironment, type CiPipelineInfo, type CiRepo, type CiStatus, type CiUnitStatus } from '@portal/contracts';
+import { type CiAutoApproveMode, type CiBranch, type CiDeployment, type CiEnvironment, type CiPipelineInfo, type CiRepo, type CiStatus, type CiUnitStatus } from '@portal/contracts';
 import { AlertTriangle, ChevronDown, ChevronRight, GitBranch, GitMerge, Lock, Play, Plus, Power, ShieldCheck, ShieldOff } from 'lucide-react';
 import { InfoTip } from '@/components/InfoTip';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -9,7 +9,7 @@ import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ciApi } from './api';
 import { MONO, StatusIcon } from './parts';
-import { ConnectDialog, MergeDialog, NewRemoteDialog, PipelineDialog, ProtectedDialog, RunDialog } from './RemoteDialogs';
+import { AutoApproveDialog, ConnectDialog, MergeDialog, NewRemoteDialog, PipelineDialog, ProtectedDialog, RunDialog } from './RemoteDialogs';
 
 /** The remotes workspaces host: their branches with where the checks stand, and the pipelines in them (local-git-ci PRD §15). */
 export function RemotesTab({ creating, onCloseCreate, onNew }: { creating: boolean; onCloseCreate: () => void; onNew: () => void }) {
@@ -273,6 +273,9 @@ function RemoteDetail({ repo }: { repo: CiRepo }) {
 /** Where a deployment stands, as one icon: held for a person, else how its job ended. */
 const deployLook = (d: CiDeployment): CiUnitStatus => (d.approval === 'waiting' ? 'waiting' : d.approval === 'rejected' ? 'cancelled' : (d.outcome ?? 'running'));
 
+/** The auto-approve rule's mode in one word (T-110 FR41a). */
+const RULE_WORD: Record<CiAutoApproveMode, string> = { off: 'Off', dry: 'Dry', on: 'Auto' };
+
 /**
  * The remote's environments (PRD FR41): each with its latest deployment and whether a person must approve a deploy there. Made the first time a
  * pipeline names one, protected. Turning protection off is asked once more, since agents could then deploy on their own.
@@ -281,6 +284,7 @@ function Environments({ repo }: { repo: CiRepo }) {
   const toast = useToast();
   const [envs, setEnvs] = useState<CiEnvironment[] | null>(null);
   const [offFor, setOffFor] = useState<CiEnvironment | null>(null);
+  const [ruleFor, setRuleFor] = useState<CiEnvironment | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const seq = useRef(0);
 
@@ -310,19 +314,6 @@ function Environments({ repo }: { repo: CiRepo }) {
     }
   };
 
-  const setDry = async (env: CiEnvironment, on: boolean) => {
-    setBusy(env.name);
-    try {
-      await ciApi.setAutoApprove(repo.id, env.name, { mode: on ? 'dry' : 'off' });
-      toast(on ? `${env.name}: dry run on` : `${env.name}: dry run off`);
-      await load();
-    } catch (e) {
-      toast(errorText(e, 'Could not change it.'), 'error');
-    } finally {
-      setBusy(null);
-    }
-  };
-
   if (!envs?.length) return null;
   return (
     <>
@@ -335,7 +326,11 @@ function Environments({ repo }: { repo: CiRepo }) {
               <span className="flex min-w-0 flex-1 items-center gap-1">
                 <span className={cn(MONO, 'truncate font-semibold')}>{e.name}</span>
                 <InfoTip label={`About ${e.name}`}>
-                  {e.protected ? `Each deploy to ${e.name} waits for a person to approve it on its run. Agents can start one, never approve it.` : `Deploys to ${e.name} run without asking, also when an agent starts them.`}
+                  {e.protected
+                    ? e.autoApprove === 'on'
+                      ? `Each deploy to ${e.name} waits for an approval: the portal's rule gives it when every condition holds, else a person on its run. Agents can start one, never approve it.`
+                      : `Each deploy to ${e.name} waits for a person to approve it on its run. Agents can start one, never approve it.`
+                    : `Deploys to ${e.name} run without asking, also when an agent starts them.`}
                 </InfoTip>
               </span>
               {last && (
@@ -349,26 +344,19 @@ function Environments({ repo }: { repo: CiRepo }) {
                 </Link>
               )}
               {e.protected && (
-                <span className="flex shrink-0 items-center">
-                  {/* Auto-approve, slice 1 (T-110): only the dry run exists; a person still approves every deploy. */}
-                  <button
-                    type="button"
-                    aria-pressed={e.autoApprove === 'dry'}
-                    aria-label={`Auto-approve dry run for ${e.name}`}
-                    disabled={busy === e.name}
-                    onClick={() => void setDry(e, e.autoApprove !== 'dry')}
-                    className={cn(
-                      'press flex h-11 min-w-11 items-center justify-center rounded-full px-2.5 text-[12.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none disabled:opacity-60',
-                      e.autoApprove === 'dry' ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-surface-2',
-                    )}
-                  >
-                    Dry
-                  </button>
-                  <InfoTip label={`About auto-approve for ${e.name}`}>
-                    Auto-approve, dry run. When a deploy to {e.name} waits, the portal writes on its run whether its rule WOULD approve it: gate green on the commit, build ok, verify and rollback
-                    present, nothing in the diff that needs a person, at most 6 a day. It approves nothing: a person still decides.
-                  </InfoTip>
-                </span>
+                // The auto-approve rule (T-110 FR41a): its mode in one word; a tap opens its settings (a person only, as the route says).
+                <button
+                  type="button"
+                  aria-label={`Auto-approve for ${e.name}: ${RULE_WORD[e.autoApprove]}`}
+                  disabled={busy === e.name}
+                  onClick={() => setRuleFor(e)}
+                  className={cn(
+                    'press flex h-11 min-w-11 shrink-0 items-center justify-center rounded-full px-2.5 text-[12.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none disabled:opacity-60',
+                    e.autoApprove === 'on' ? 'bg-accent text-white' : e.autoApprove === 'dry' ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-surface-2',
+                  )}
+                >
+                  {RULE_WORD[e.autoApprove]}
+                </button>
               )}
               <Switch label={`Approval for ${e.name}`} checked={e.protected} disabled={busy === e.name} onChange={(on) => (on ? void set(e, true) : setOffFor(e))} />
             </li>
@@ -383,6 +371,16 @@ function Environments({ repo }: { repo: CiRepo }) {
         loading={busy !== null}
         onConfirm={() => offFor && void set(offFor, false)}
         onClose={() => setOffFor(null)}
+      />
+      <AutoApproveDialog
+        repoId={repo.id}
+        env={ruleFor}
+        onClose={() => setRuleFor(null)}
+        onSaved={(e) => {
+          toast(`${e.name}: auto-approve ${RULE_WORD[e.autoApprove].toLowerCase()}`);
+          setRuleFor(null);
+          void load();
+        }}
       />
     </>
   );

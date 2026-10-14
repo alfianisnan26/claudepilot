@@ -88,6 +88,8 @@ import { createReposRoutes, createWorkspaceReposRoutes, type ReposService } from
 import { isWorkspaceId, PLAIN_NAME } from './names.js';
 import { createClaudeUsageRoutes, type ClaudeUsageMonitor } from './claudeusage/index.js';
 import { createUsageSpendRoutes, type UsageSpend } from './usagespend/index.js';
+import type { Lab } from './lab/index.js';
+import { createLabRoutes } from './lab/routes.js';
 import { createGlanceRoutes, type Glance } from './glance/index.js';
 import { createAttentionRoutes, type AttentionRegistry } from './attention/index.js';
 import type { ConnectModule } from './connect/index.js';
@@ -154,6 +156,7 @@ export function createApp(
     browser,
     claudeUsage,
     usageSpend,
+    lab,
     repos,
     glance,
     attention,
@@ -190,6 +193,8 @@ export function createApp(
     claudeUsage?: ClaudeUsageMonitor;
     /** Usage spend: who spent what, budgets and spikes (`/api/usage-spend`). */
     usageSpend?: UsageSpend;
+    /** Efficiency lab: slice economy, outcomes, the summary and experiments, read only (`/api/lab`, docs/prd/claude-usage.md §28). */
+    lab?: Lab;
     /** Workspace git: the repositories inside each workspace (`/api/repos`, `/api/workspaces/:target/:name/repos`). */
     repos?: ReposService;
     /** Glance widgets: sessions, agents and what needs attention in one snapshot (`/api/glance`). */
@@ -836,6 +841,14 @@ export function createApp(
     us.use(requireSession);
     us.route('/', createUsageSpendRoutes(usageSpend));
     app.route('/api/usage-spend', us);
+  }
+
+  // Efficiency lab: slices, the summary and experiments, read only (docs/prd/claude-usage.md §28.10; lab/authz.ts).
+  if (lab) {
+    const lb = new Hono<Env>();
+    lb.use(requireSession);
+    lb.route('/', createLabRoutes(lab));
+    app.route('/api/lab', lb);
   }
 
   // Chat sessions (REST); the live part rides its own socket (chat/socket.ts).

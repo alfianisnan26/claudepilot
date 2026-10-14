@@ -624,6 +624,10 @@ test('the whole pipeline through the CI service and the real runner: gate, build
     h.home.git(['checkout', '-q', 'integration'], h.src);
     const repo = await h.svc.createRepo({ workspaceId: WS, name: 'claudepilot', source: h.src, connect: true });
     await h.svc.poll(WS);
+    // T-110 slice 2: the auto-approve rule in place, mode on, set by a person on the protected environment before the first deploy.
+    const owner = { actor: 'user:u_owner', userId: 'u_owner' };
+    h.svc.setEnvironment(repo.id, 'production', { protected: true }, owner);
+    h.svc.setAutoApprove(repo.id, 'production', { mode: 'on' }, owner);
 
     const run = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'integration', inputs: { images: 'portal' } }, 'session:s1', { sessionId: 's1', deploymentOnly: 'deployment pipelines only' });
     assert.equal(run.sha, fake.sha);
@@ -638,8 +642,15 @@ test('the whole pipeline through the CI service and the real runner: gate, build
     const held = h.svc.get(run.id);
     assert.deepEqual(held.detail.map((j) => [j.id, j.status]), [['gate', 'passed'], ['build', 'passed'], ['release', 'waiting'], ['verify', 'pending'], ['chats', 'pending'], ['rollback', 'pending']]);
     assert.equal(fake.main(), fake.base, 'nothing is released before the approval');
+    // The rule read the real pipeline: the gate's verdict, the build, verify and rollback after release all held; it stopped at the first
+    // release (nothing to roll back to), approved nothing, and a person decides as before.
+    await h.svc.settled();
+    assert.deepEqual(
+      h.svc.get(run.id).deployments.map((d) => [d.approval, d.decidedBy, d.autoApprove?.mode, d.autoApprove?.line]),
+      [['waiting', null, 'on', 'auto-approve: not approved: no earlier release of production is recorded, so the rollback’s previous tag is not known; a person decides']],
+    );
 
-    await h.svc.decide(run.id, 'release', 'approve', { actor: 'user:u_owner', userId: 'u_owner' });
+    await h.svc.decide(run.id, 'release', 'approve', owner);
     await h.until('the run to finish', () => !['queued', 'running'].includes(h.svc.get(run.id).status), 120_000);
     const done = h.svc.get(run.id);
     assert.equal(done.status, 'passed', JSON.stringify(done.detail.map((j) => [j.id, j.status, j.reason])));
@@ -658,6 +669,18 @@ test('the whole pipeline through the CI service and the real runner: gate, build
     const chatsLog = (await h.svc.log(run.id, 'chats', 0, 0)).text;
     assert.match(chatsLog, /survived: 7e57c4a7  followers 1\n/);
     assert.match(chatsLog, /chats: all 1 attached at release survived/);
+
+    // A second deploy of the same commit: every condition holds now (gate green on it, build ok, verify and rollback, the release before
+    // it on the same branch, nothing in the diff), so the portal approves it itself, as the rule, through the runner's key.
+    const again = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'integration', inputs: { images: 'portal' } }, 'session:s1', { sessionId: 's1', deploymentOnly: 'deployment pipelines only' });
+    await h.until('the rule to approve the second release', () => h.svc.get(again.id).deployments[0]!.approval === 'approved', 120_000);
+    await h.svc.settled();
+    const ruled = h.svc.get(again.id).deployments[0]!;
+    assert.deepEqual([ruled.decidedBy, ruled.autoApprove?.mode, ruled.autoApprove?.verdict], ['rule:production', 'on', 'would']);
+    assert.match(ruled.autoApprove!.line, new RegExp(`^auto-approve: approved: gate green at ${fake.sha.slice(0, 7)}, build ok, .*, 1 of 6 today$`));
+    assert.equal(h.host.calls.filter((c) => c[0] === 'approve').length, 2, 'the person’s approval of the first, the rule’s of the second');
+    await h.svc.cancel(again.id).catch(() => undefined);
+    await h.until('the second run to end', () => !['queued', 'running'].includes(h.svc.get(again.id).status), 120_000);
   } finally {
     console.log = realLog;
     h.done();

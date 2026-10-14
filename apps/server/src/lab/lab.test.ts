@@ -62,9 +62,9 @@ function asScript(m: LabSliceMetrics): ScriptRow {
 
 const byT0 = (a: { t0: string }, b: { t0: string }) => a.t0.localeCompare(b.t0);
 
-test('migrations 850 and 851: the lab tables, in the block T-287 was given (850 to 854)', async () => {
+test('migrations 850 to 853: the lab tables, in the block T-287 was given (850 to 854)', async () => {
   const lab = MIGRATIONS.filter((m) => m.name.startsWith('efficiency lab'));
-  assert.deepEqual(lab.map((m) => m.version), [850, 851]);
+  assert.deepEqual(lab.map((m) => m.version), [850, 851, 852, 853]);
   const h = await harness();
   try {
     const tables = (h.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'lab_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);
@@ -123,8 +123,9 @@ test('a replayed tape changes nothing; the main thread is measured per turn', as
     assert.deepEqual(a.toolCalls, { inspect: 2, git_read: 2, test: 2, wait: 1 });
     assert.equal(a.cacheWrite1h, 1500);
     assert.equal(a.output, 830);
-    // Cost: units x the model's input price (opus 5.5: 4 dollars per million input tokens).
-    assert.equal(a.costUsd, (a.units.input + a.units.read + a.units.write + a.units.out) * 4e-6);
+    // Cost: units x the model's input price (opus 5.5: 4 dollars per million input tokens), the cache read at Opus 5.5's own weight 0.05
+    // (slice 2; units.read stays at the script's 0.1).
+    assert.equal(a.costUsd, (a.units.input + 0.05 * a.cacheRead + a.units.write + a.units.out) * 4e-6);
     const b = once.find((m) => m.role === 'qa')!;
     assert.deepEqual(b.toolCalls, { inspect: 1, api: 1 });
     // The next main-thread request after the turn's result is the next turn.

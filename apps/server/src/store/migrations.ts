@@ -3059,6 +3059,33 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 852,
+    name: 'efficiency lab: frozen slice numbers for retention',
+    up(db) {
+      // T-287 slice 2 (docs/prd/claude-usage.md §28.9): the request and tool rows are kept 14 days; before a finished slice's rows go, its
+      // numbers (counts only, the LabSliceMetrics shape as JSON) are frozen on its row, so slices and summaries are kept.
+      db.exec(`
+        ALTER TABLE lab_slices ADD COLUMN frozen TEXT;
+        ALTER TABLE lab_slices ADD COLUMN frozen_ms INTEGER;
+      `);
+    },
+  },
+  {
+    version: 853,
+    name: 'efficiency lab: result tokens, effort and stratum keys',
+    up(db) {
+      // T-287 slice 3 (docs/prd/claude-usage.md §28.12): a tool call keeps the id of the assistant message that made it, so the next request's
+      // context growth can be laid on that message's results (result tokens, an estimate from the usage the stream reports); a sub-agent slice
+      // keeps the effort its Agent call asked for; an experiment may name its stratum keys (JSON list of size, role, model, effort; NULL keeps
+      // slice 1's role and requested model). Ids and plain names only.
+      db.exec(`
+        ALTER TABLE lab_tools ADD COLUMN message_id TEXT;
+        ALTER TABLE lab_slices ADD COLUMN effort TEXT;
+        ALTER TABLE lab_experiments ADD COLUMN strata TEXT;
+      `);
+    },
+  },
+  {
     version: 792,
     name: 'keep going: a program per policy and the pause switch',
     up(db) {
@@ -3114,6 +3141,16 @@ export const MIGRATIONS: Migration[] = [
         if (!Array.isArray(kinds) || !kinds.includes('human_request') || kinds.includes('attention')) continue;
         write.run(JSON.stringify([...kinds, 'attention']), r.id);
       }
+    },
+  },
+  {
+    version: 781,
+    name: 'CI: the mode the auto-approve rule judged in, on each deployment',
+    up(db) {
+      // T-110 slice 2 (local-git-ci PRD FR41a): the rule now approves for real in mode 'on'. Each deployment keeps the mode its verdict was
+      // made in, so the run page and the audit never mistake a dry WOULD for a real approval. Null: the verdict was made before this column
+      // (slice 1 knew only 'dry') or the rule did not look.
+      db.exec(`ALTER TABLE ci_deployments ADD COLUMN auto_mode TEXT CHECK (auto_mode IN ('dry', 'on'));`);
     },
   },
 ];

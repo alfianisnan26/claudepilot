@@ -1,12 +1,12 @@
 // Efficiency lab (T-287): experiments. A randomized experiment gives each sub-agent slice an arm when the slice starts, in blocks per
-// stratum (role and model): within every block of as many slices as arms each arm comes once, in an order drawn from a hash of the
+// stratum (role and model by default; slice 3: the experiment's own stratum keys, any of ESTIMATE size, role, model and effort): within every block of as many slices as arms each arm comes once, in an order drawn from a hash of the
 // experiment, the stratum and the block, so the arms stay balanced within one slice per stratum and the draw can be recomputed. A
 // before-and-after experiment (a global change such as the 1 hour cache) splits its window at the moment of the change. An excluded slice
 // (an outage) is in no arm. The report is a query over the slices: n and medians per arm, the shares that are sums over sums.
 
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import type { LabArmSummary, LabDecision, LabExperiment, LabExperimentDesign, LabExperimentReport, LabSliceMetrics } from '@portal/contracts';
+import { LAB_STRATUM_KEYS, type LabArmSummary, type LabDecision, type LabExperiment, type LabExperimentDesign, type LabExperimentReport, type LabSliceMetrics, type LabStratumKey } from '@portal/contracts';
 import { sliceMetrics } from './metrics.js';
 
 interface ExperimentRow {
@@ -26,6 +26,7 @@ interface ExperimentRow {
   decision: LabDecision | null;
   verdict: string | null;
   created_ms: number;
+  strata: string | null;
 }
 
 const toExperiment = (r: ExperimentRow): LabExperiment => ({
@@ -45,6 +46,7 @@ const toExperiment = (r: ExperimentRow): LabExperiment => ({
   decision: r.decision,
   verdict: r.verdict,
   createdMs: r.created_ms,
+  strata: r.strata ? (JSON.parse(r.strata) as LabStratumKey[]) : null,
 });
 
 export interface NewExperiment {
@@ -60,6 +62,24 @@ export interface NewExperiment {
   startMs: number;
   /** before_after: the moment of the change. */
   switchMs?: number;
+  /** randomized: the stratum keys (slice 3); absent keeps role and requested model. */
+  strata?: LabStratumKey[];
+}
+
+/** What a starting slice is stratified by; null is a missing value. */
+export interface SliceAttrs {
+  size: string | null;
+  role: string | null;
+  model: string | null;
+  effort: string | null;
+}
+
+/** Slice 1's stratum, kept for experiments without stratum keys: the role and the requested model. */
+export const defaultStratum = (a: Pick<SliceAttrs, 'role' | 'model'>): string => `${a.role ?? '-'}|${a.model ?? 'inherit'}`;
+
+/** The stratum of a slice for the given keys, in their order (`size=M|role=implementer`); a missing value is `-`. */
+export function stratumOf(keys: readonly LabStratumKey[], a: SliceAttrs): string {
+  return keys.map((k) => `${k}=${a[k] ?? '-'}`).join('|');
 }
 
 const ARM = /^[A-Za-z0-9_.:=-]{1,40}$/;
@@ -69,11 +89,14 @@ export function createExperiment(db: DatabaseSync, e: NewExperiment, nowMs: numb
   if (e.design === 'randomized' && arms.length < 2) throw new Error('a randomized experiment needs two or more arms');
   if (arms.some((a) => !ARM.test(a))) throw new Error('an arm name is a short plain name');
   if (e.design === 'before_after' && (e.switchMs === undefined || e.switchMs < e.startMs)) throw new Error('a before-and-after experiment needs the moment of the change, after its start');
+  const strata = e.strata === undefined ? null : [...new Set(e.strata)];
+  if (strata && e.design !== 'randomized') throw new Error('stratum keys are for a randomized experiment');
+  if (strata && (!strata.length || strata.some((k) => !(LAB_STRATUM_KEYS as readonly string[]).includes(k)))) throw new Error(`stratum keys: one or more of ${LAB_STRATUM_KEYS.join(', ')}`);
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO lab_experiments (id, name, hypothesis, design, arms, primary_metric, guardrails, thresholds, min_n, status, start_ms, switch_ms, created_ms)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
-  ).run(id, e.name, e.hypothesis ?? '', e.design, JSON.stringify(arms), e.primaryMetric, JSON.stringify(e.guardrails ?? []), JSON.stringify(e.thresholds ?? {}), e.minN ?? 0, e.startMs, e.switchMs ?? null, nowMs);
+    `INSERT INTO lab_experiments (id, name, hypothesis, design, arms, primary_metric, guardrails, thresholds, min_n, status, start_ms, switch_ms, created_ms, strata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
+  ).run(id, e.name, e.hypothesis ?? '', e.design, JSON.stringify(arms), e.primaryMetric, JSON.stringify(e.guardrails ?? []), JSON.stringify(e.thresholds ?? {}), e.minN ?? 0, e.startMs, e.switchMs ?? null, nowMs, strata ? JSON.stringify(strata) : null);
   return getExperiment(db, id)!;
 }
 
@@ -108,9 +131,12 @@ export function blockOrder(experimentId: string, stratum: string, block: number,
 
 /**
  * Gives a starting slice its arm in every running randomized experiment whose window holds `atMs`; returns them (experiment id to arm).
- * Asking again for the same slice returns the arm it already has.
+ * Asking again for the same slice returns the arm it already has. The stratum per experiment: its stratum keys over `attrs`, else `stratum`
+ * (a caller's own key, slice 1), else role and requested model from `attrs`. The draw depends only on the experiment id, the stratum and how
+ * many slices of that stratum came before, so the same slices in the same order get the same arms.
  */
-export function assignSlice(db: DatabaseSync, info: { sessionId: string; sliceId: string; stratum: string; atMs: number }): Map<string, string> {
+export function assignSlice(db: DatabaseSync, info: { sessionId: string; sliceId: string; stratum?: string; attrs?: SliceAttrs; atMs: number }): Map<string, string> {
+  const attrs: SliceAttrs = info.attrs ?? { size: null, role: null, model: null, effort: null };
   const out = new Map<string, string>();
   const running = db.prepare("SELECT * FROM lab_experiments WHERE status = 'running' AND design = 'randomized' AND start_ms <= ?").all(info.atMs) as unknown as ExperimentRow[];
   for (const r of running) {
@@ -120,9 +146,10 @@ export function assignSlice(db: DatabaseSync, info: { sessionId: string; sliceId
       continue;
     }
     const arms = JSON.parse(r.arms) as string[];
-    const k = (db.prepare('SELECT COUNT(*) AS n FROM lab_assignments WHERE experiment_id = ? AND stratum = ? AND arm IS NOT NULL').get(r.id, info.stratum) as { n: number }).n;
-    const arm = blockOrder(r.id, info.stratum, Math.floor(k / arms.length), arms)[k % arms.length]!;
-    db.prepare('INSERT INTO lab_assignments (experiment_id, session_id, slice_id, arm, stratum, assigned_ms) VALUES (?, ?, ?, ?, ?, ?)').run(r.id, info.sessionId, info.sliceId, arm, info.stratum, info.atMs);
+    const stratum = r.strata ? stratumOf(JSON.parse(r.strata) as LabStratumKey[], attrs) : (info.stratum ?? defaultStratum(attrs));
+    const k = (db.prepare('SELECT COUNT(*) AS n FROM lab_assignments WHERE experiment_id = ? AND stratum = ? AND arm IS NOT NULL').get(r.id, stratum) as { n: number }).n;
+    const arm = blockOrder(r.id, stratum, Math.floor(k / arms.length), arms)[k % arms.length]!;
+    db.prepare('INSERT INTO lab_assignments (experiment_id, session_id, slice_id, arm, stratum, assigned_ms) VALUES (?, ?, ?, ?, ?, ?)').run(r.id, info.sessionId, info.sliceId, arm, stratum, info.atMs);
     out.set(r.id, arm);
   }
   return out;
@@ -155,6 +182,7 @@ export function summarizeArm(arm: string, slices: readonly LabSliceMetrics[]): L
       ctxP50: median(slices.map((m) => m.ctxP50)),
       costUsd: costs.length === slices.length ? median(costs) : null,
       resultChars: median(slices.map((m) => m.resultChars)),
+      resultTokens: median(slices.map((m) => m.resultTokens).filter((x): x is number => x !== null)),
       minutes: median(slices.map((m) => m.minutes)),
     },
     rewriteShare: share(sum((m) => m.rewriteTokens), sum((m) => m.cacheWrite5m + m.cacheWrite1h)),
@@ -163,10 +191,9 @@ export function summarizeArm(arm: string, slices: readonly LabSliceMetrics[]): L
   };
 }
 
-/** The experiment's arms over the sub-agent slices that fall into it (excluded ones out). Intention to treat: the assigned arm counts. */
-export function experimentReport(db: DatabaseSync, id: string): LabExperimentReport | null {
-  const e = getExperiment(db, id);
-  if (!e) return null;
+/** The experiment's sub-agent slices per arm (excluded ones out), and how many were excluded. Intention to treat: the assigned arm counts. */
+export function armMembers(db: DatabaseSync, e: LabExperiment): { byArm: Map<string, LabSliceMetrics[]>; excluded: number } {
+  const id = e.id;
   const rows = db.prepare('SELECT session_id, slice_id, arm, excluded FROM lab_assignments WHERE experiment_id = ?').all(id) as { session_id: string; slice_id: string; arm: string | null; excluded: string | null }[];
   const excluded = new Set(rows.filter((r) => r.excluded).map((r) => `${r.session_id}\u0000${r.slice_id}`));
   const key = (m: LabSliceMetrics) => `${m.sessionId}\u0000${m.sliceId}`;
@@ -181,5 +208,13 @@ export function experimentReport(db: DatabaseSync, id: string): LabExperimentRep
       byArm.get(m.startMs! < e.switchMs! ? 'before' : 'after')!.push(m);
     }
   }
-  return { experiment: e, arms: e.arms.map((a) => summarizeArm(a, byArm.get(a) ?? [])), excluded: excluded.size };
+  return { byArm, excluded: excluded.size };
+}
+
+/** The experiment's arms over the sub-agent slices that fall into it (excluded ones out). Intention to treat: the assigned arm counts. */
+export function experimentReport(db: DatabaseSync, id: string): LabExperimentReport | null {
+  const e = getExperiment(db, id);
+  if (!e) return null;
+  const { byArm, excluded } = armMembers(db, e);
+  return { experiment: e, arms: e.arms.map((a) => summarizeArm(a, byArm.get(a) ?? [])), excluded };
 }

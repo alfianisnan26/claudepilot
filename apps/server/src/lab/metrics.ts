@@ -5,9 +5,11 @@
 
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { LabSliceKind, LabSliceMetrics, LabToolClass } from '@portal/contracts';
-import { inputPricePerToken } from './prices.js';
+import { cacheReadWeight, inputPricePerToken } from './prices.js';
 
 export interface RequestRow {
+  /** The assistant message id (slice 3: the key that links a request to the tool calls it made). Absent in old callers. */
+  message_id?: string;
   at_ms: number | null;
   model: string | null;
   input: number;
@@ -24,6 +26,8 @@ export interface ToolRow {
   rtk: number;
   results: number;
   result_chars: number;
+  /** The assistant message that made the call (migration 853); null for older rows or a result whose call was not seen. */
+  message_id?: string | null;
 }
 
 export interface SliceRow {
@@ -34,6 +38,47 @@ export interface SliceRow {
   role: string | null;
   model: string | null;
   started_ms: number | null;
+  effort?: string | null;
+}
+
+/** A gap between two requests longer than the short cache's life is idle time (§28.12). */
+export const IDLE_GAP_MS = 5 * 60_000;
+
+/**
+ * Result tokens (§28.12), an estimate from the usage the stream reports. For each request after the first (in time order) the context it
+ * sent (input + cache read + cache write) less the previous request's context and output is what came in between, at least 0; when the
+ * previous request made tool calls, that growth is laid on their results, split by result characters (evenly when they are all empty).
+ * Growth after a request without a tool call (a user's message) is not a result. null when the slice has results but none could be laid on
+ * a request (tool rows from before migration 853).
+ */
+export function resultTokensOf(L: readonly RequestRow[], tools: readonly ToolRow[]): { total: number | null; byClass: Partial<Record<LabToolClass, number>> } {
+  const byMessage = new Map<string, ToolRow[]>();
+  for (const t of tools) {
+    if (!t.message_id || !t.tool) continue;
+    const list = byMessage.get(t.message_id) ?? [];
+    list.push(t);
+    byMessage.set(t.message_id, list);
+  }
+  const results = tools.reduce((n, t) => n + t.results, 0);
+  if (!byMessage.size) return { total: results ? null : 0, byClass: {} };
+  let total = 0;
+  const exact: Partial<Record<LabToolClass, number>> = {};
+  for (let i = 1; i < L.length; i++) {
+    const p = L[i - 1]!, r = L[i]!;
+    const calls = (p.message_id ? byMessage.get(p.message_id) : undefined)?.filter((t) => t.results > 0);
+    if (!calls?.length) continue;
+    const grew = Math.max(0, r.input + r.cache_read + r.cache_write - (p.input + p.cache_read + p.cache_write) - p.output);
+    if (!grew) continue;
+    total += grew;
+    const chars = calls.reduce((n, t) => n + t.result_chars, 0);
+    for (const t of calls) {
+      const c = (t.class ?? 'other') as LabToolClass;
+      exact[c] = (exact[c] ?? 0) + (chars > 0 ? (grew * t.result_chars) / chars : grew / calls.length);
+    }
+  }
+  const byClass: Partial<Record<LabToolClass, number>> = {};
+  for (const [c, v] of Object.entries(exact) as [LabToolClass, number][]) byClass[c] = Math.round(v);
+  return { total, byClass };
 }
 
 /** Python's round(x, 1) for the values we meet: half to even on an exact tie. */
@@ -80,9 +125,17 @@ export function computeSlice(meta: SliceRow, requests: readonly RequestRow[], to
     output += r.output;
   }
   const times = L.map((r) => r.at_ms).filter((t): t is number => t !== null);
+  let idleMs = 0, maxGapMs = 0;
+  for (let i = 1; i < times.length; i++) {
+    const gap = times[i]! - times[i - 1]!;
+    if (gap > IDLE_GAP_MS) idleMs += gap;
+    maxGapMs = Math.max(maxGapMs, gap);
+  }
+  const rt = resultTokensOf(L, tools);
   const startMs = times.length ? Math.min(...times) : null;
   const endMs = times.length ? Math.max(...times) : null;
   const toolCalls: Partial<Record<LabToolClass, number>> = {};
+  const bashByClass: Partial<Record<LabToolClass, number>> = {};
   let bash = 0, rtk = 0, inspect = 0, results = 0, chars = 0;
   for (const t of tools) {
     results += t.results;
@@ -92,6 +145,7 @@ export function computeSlice(meta: SliceRow, requests: readonly RequestRow[], to
     toolCalls[c] = (toolCalls[c] ?? 0) + 1;
     if (t.tool === 'Bash') {
       bash++;
+      bashByClass[c] = (bashByClass[c] ?? 0) + 1;
       if (t.rtk) rtk++;
       if (c === 'inspect') inspect++;
     }
@@ -104,6 +158,7 @@ export function computeSlice(meta: SliceRow, requests: readonly RequestRow[], to
     ticket: meta.ticket,
     role: meta.role,
     model: meta.model,
+    effort: meta.effort ?? null,
     requests: L.length,
     ctxP50: L.length ? medianInt(sorted) : 0,
     ctxP90: L.length ? sorted[Math.floor(L.length * 0.9)]! : 0,
@@ -113,14 +168,19 @@ export function computeSlice(meta: SliceRow, requests: readonly RequestRow[], to
     cacheWrite1h: cw1,
     output,
     units: { input, read, write, out },
-    costUsd: price === null ? null : (input + read + write + out) * price,
+    costUsd: price === null ? null : (input + cacheReadWeight(meta.model) * cacheRead + write + out) * price,
     rewriteTokens: rewrite,
     results,
     resultChars: chars,
+    resultTokens: rt.total,
+    resultTokensByClass: rt.byClass,
+    idleMinutes: round1(idleMs / 60000),
+    maxGapMinutes: round1(maxGapMs / 60000),
     bashCalls: bash,
     rtkCalls: rtk,
     inspectCalls: inspect,
     toolCalls,
+    bashByClass,
     startMs,
     endMs,
     minutes: times.length > 1 ? round1((endMs! - startMs!) / 60000) : 0,
@@ -130,6 +190,9 @@ export function computeSlice(meta: SliceRow, requests: readonly RequestRow[], to
 export interface SliceFilter {
   sessionId?: string;
   kind?: LabSliceKind;
+  ticket?: string;
+  role?: string;
+  model?: string;
   /** Slices whose first request is at or after this. */
   fromMs?: number;
   /** Slices whose first request is before this. */
@@ -144,16 +207,35 @@ export function sliceMetrics(db: DatabaseSync, filter: SliceFilter = {}): LabSli
   const args: SQLInputValue[] = [];
   if (filter.sessionId) (where.push('session_id = ?'), args.push(filter.sessionId));
   if (filter.kind) (where.push('kind = ?'), args.push(filter.kind));
-  const metas = db.prepare(`SELECT session_id, slice_id, kind, ticket, role, model, started_ms FROM lab_slices${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY session_id, slice_id`).all(...args) as unknown as SliceRow[];
+  if (filter.ticket) (where.push('ticket = ?'), args.push(filter.ticket));
+  if (filter.role) (where.push('role = ?'), args.push(filter.role));
+  if (filter.model) (where.push('model = ?'), args.push(filter.model));
+  const metas = db.prepare(`SELECT session_id, slice_id, kind, ticket, role, model, started_ms, effort, frozen FROM lab_slices${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY session_id, slice_id`).all(...args) as unknown as (SliceRow & { frozen: string | null })[];
   const wanted = filter.keys ? new Set(filter.keys.map((k) => `${k.sessionId}\u0000${k.sliceId}`)) : null;
-  const reqQ = db.prepare('SELECT at_ms, model, input, cache_read, cache_write_5m, cache_write_1h, cache_write, output FROM lab_requests WHERE session_id = ? AND slice_id = ? ORDER BY rowid');
-  const toolQ = db.prepare('SELECT tool, class, rtk, results, result_chars FROM lab_tools WHERE session_id = ? AND slice_id = ?');
+  const reqQ = db.prepare('SELECT message_id, at_ms, model, input, cache_read, cache_write_5m, cache_write_1h, cache_write, output FROM lab_requests WHERE session_id = ? AND slice_id = ? ORDER BY rowid');
+  const toolQ = db.prepare('SELECT tool, class, rtk, results, result_chars, message_id FROM lab_tools WHERE session_id = ? AND slice_id = ?');
   const out: LabSliceMetrics[] = [];
   for (const meta of metas) {
     if (wanted && !wanted.has(`${meta.session_id}\u0000${meta.slice_id}`)) continue;
-    const reqs = reqQ.all(meta.session_id, meta.slice_id) as unknown as RequestRow[];
-    if (!reqs.length) continue;
-    const m = computeSlice(meta, reqs, toolQ.all(meta.session_id, meta.slice_id) as unknown as ToolRow[]);
+    let m: LabSliceMetrics;
+    if (meta.frozen) {
+      // Retention (§28.9) froze the numbers before the request rows went: the slice keeps them as they were.
+      const f = JSON.parse(meta.frozen) as LabSliceMetrics;
+      // Slices frozen before slice 3 have no result tokens (unavailable, never 0), effort or gaps.
+      m = {
+        ...f,
+        bashByClass: f.bashByClass ?? {},
+        effort: f.effort ?? null,
+        resultTokens: f.resultTokens === undefined ? (f.results ? null : 0) : f.resultTokens,
+        resultTokensByClass: f.resultTokensByClass ?? {},
+        idleMinutes: f.idleMinutes ?? null,
+        maxGapMinutes: f.maxGapMinutes ?? null,
+      };
+    } else {
+      const reqs = reqQ.all(meta.session_id, meta.slice_id) as unknown as RequestRow[];
+      if (!reqs.length) continue;
+      m = computeSlice(meta, reqs, toolQ.all(meta.session_id, meta.slice_id) as unknown as ToolRow[]);
+    }
     if (filter.fromMs !== undefined && (m.startMs === null || m.startMs < filter.fromMs)) continue;
     if (filter.toMs !== undefined && (m.startMs === null || m.startMs >= filter.toMs)) continue;
     out.push(m);

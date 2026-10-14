@@ -11,7 +11,7 @@ const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
 
 /** Called when a sub-agent slice starts (its Agent call was seen): experiments assign it an arm then. */
-export type SliceStart = (info: { sessionId: string; sliceId: string; role: string | null; model: string | null; atMs: number }) => void;
+export type SliceStart = (info: { sessionId: string; sliceId: string; ticket: string | null; role: string | null; model: string | null; effort: string | null; atMs: number }) => void;
 
 export class LabIngest {
   /** The main-thread turn each session is in (`turn:<n>`); a `result` line ends it. Read back from the store after a restart. */
@@ -73,6 +73,7 @@ export class LabIngest {
     const model = typeof m.model === 'string' ? m.model : '';
     if (!model || model === '<synthetic>') return; // the script's rule: no model, or Claude Code's own message, is not a request
     const slice = this.#slice(db, sessionId, par);
+    const mid = safeId(m.id);
     for (const b of Array.isArray(m.content) ? m.content : []) {
       if (!isObj(b) || b.type !== 'tool_use') continue;
       const id = safeId(b.id);
@@ -81,24 +82,26 @@ export class LabIngest {
       const input = isObj(b.input) ? b.input : {};
       if (name === 'Agent' || name === 'Task') {
         const role = safeName(input.subagent_type);
+        const effort = safeName(input.effort);
+        const ticket = ticketOf(input);
         db.prepare(
-          `INSERT INTO lab_slices (session_id, slice_id, kind, ticket, role, started_ms) VALUES (?, ?, 'agent', ?, ?, ?)
-           ON CONFLICT DO UPDATE SET ticket = excluded.ticket, role = excluded.role, started_ms = COALESCE(lab_slices.started_ms, excluded.started_ms)`,
-        ).run(sessionId, id, ticketOf(input), role, atMs);
+          `INSERT INTO lab_slices (session_id, slice_id, kind, ticket, role, effort, started_ms) VALUES (?, ?, 'agent', ?, ?, ?, ?)
+           ON CONFLICT DO UPDATE SET ticket = excluded.ticket, role = excluded.role, effort = excluded.effort,
+             started_ms = COALESCE(lab_slices.started_ms, excluded.started_ms)`,
+        ).run(sessionId, id, ticket, role, effort, atMs);
         try {
-          this.onSliceStart?.({ sessionId, sliceId: id, role, model: safeName(input.model), atMs });
+          this.onSliceStart?.({ sessionId, sliceId: id, ticket, role, model: safeName(input.model), effort, atMs });
         } catch {
           // an experiment that cannot assign never stops the ingest
         }
       }
       const rtk = name === 'Bash' && typeof input.command === 'string' && RTK.test(input.command) ? 1 : 0;
       db.prepare(
-        `INSERT INTO lab_tools (session_id, tool_use_id, slice_id, tool, class, rtk, at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO lab_tools (session_id, tool_use_id, slice_id, tool, class, rtk, at_ms, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT DO UPDATE SET tool = excluded.tool, class = excluded.class, rtk = excluded.rtk, at_ms = excluded.at_ms,
-           slice_id = COALESCE(lab_tools.slice_id, excluded.slice_id)`,
-      ).run(sessionId, id, slice, name, toolClass(name, input), rtk, atMs);
+           slice_id = COALESCE(lab_tools.slice_id, excluded.slice_id), message_id = COALESCE(excluded.message_id, lab_tools.message_id)`,
+      ).run(sessionId, id, slice, name, toolClass(name, input), rtk, atMs, mid);
     }
-    const mid = safeId(m.id);
     if (!mid) return;
     const u = isObj(m.usage) ? m.usage : {};
     const cc = isObj(u.cache_creation) ? u.cache_creation : {};
