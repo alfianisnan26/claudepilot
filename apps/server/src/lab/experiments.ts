@@ -191,7 +191,7 @@ export function normTicket(t: string | null): string | null {
  * A drawn arm: fixed per experiment and ticket (normalised), from the experiment's secret seed (never shown). So drawing again (a redraw,
  * after a throwaway call bound the first draw, with another role, model or effort) gives the same arm. A draw does reveal that ticket's
  * own arm, also when it is drawn only to look (a peek). The caller can still leave the ticket undispatched; a slice of it without a bound
- * draw gets no arm (draws only) and is counted as `opted_out` (drawStats), but a ticket never dispatched leaves only an unbound draw.
+ * draw gets no arm (draws only) and, for a drawing role, is counted as `opted_out` (drawStats), but a ticket never dispatched leaves only an unbound draw.
  * Simple randomization per ticket, not blocked. Not a block place, so a draw nobody uses moves no other slice's arm.
  */
 export function drawnArm(seed: string, ticket: string, arms: readonly string[]): string {
@@ -256,50 +256,76 @@ export interface DrawStat {
   unbound: number;
   /** Draws for a ticket this session had drawn for before, whatever the role (a redraw, or a later slice of the ticket): the same arm. */
   redraw: number;
-  /** Slices of the session kept out (`no draw` or `draw not bound`) whose ticket has any draw (any session, bound or not), or that name no
-   * ticket while this session has drawn: work on a drawn ticket done without its draw (a peek elsewhere, a throwaway bound first, a
-   * follow-up slice). The plan step's explorer slice of a drawn ticket counts too. */
+  /** Slices of the session kept out of this experiment that started after a draw of THIS experiment: a slice that carried a draw line
+   * which did not bind (`draw not bound`, any role), or a slice of a drawing role (`DRAW_ROLES`, or a role this experiment drew for)
+   * that started without one (`no draw`). It counts when its ticket was drawn for before it started (any session, bound or not), or,
+   * when it names no ticket (or a ticket the portal does not have), when its own session had drawn before it started: work on a drawn
+   * ticket done without its draw (a peek elsewhere, a throwaway bound first, a follow-up slice). */
   opted_out: number;
 }
 
-/** Per session, an experiment's draws: all of them, bound, unbound, the redraws, and the slices that went without their ticket's draw. */
-export function drawStats(db: DatabaseSync, experimentId: string): DrawStat[] {
+/** The roles whose slices draw (docs/dev-sessions/orchestrator.md: every implementer slice while E2 runs). */
+export const DRAW_ROLES: readonly string[] = ['implementer'];
+
+/** Whether ticket `T-<n>` exists in the portal's tickets table; false without the table (a bare store). */
+export function ticketExistsIn(db: DatabaseSync, ticket: string): boolean {
+  const m = /^T-(\d{1,9})$/.exec(ticket);
+  if (!m) return false;
+  try {
+    return db.prepare('SELECT 1 FROM tickets WHERE number = ?').get(Number(m[1])) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Per session, an experiment's draws: all of them, bound, unbound, the redraws, and the slices that went without their ticket's draw.
+ * `ticketExists` (normalised `T-<n>`): the portal's tickets table unless a reader is given (tests).
+ */
+export function drawStats(db: DatabaseSync, experimentId: string, ticketExists: (ticket: string) => boolean = (t) => ticketExistsIn(db, t)): DrawStat[] {
   const draws = db
     .prepare(
-      `SELECT d.session_id AS session, d.ticket AS ticket, d.status AS status,
+      `SELECT d.session_id AS session, d.ticket AS ticket, d.role AS role, d.drawn_ms AS at, d.status AS status,
          EXISTS (SELECT 1 FROM lab_draws e WHERE e.session_id = d.session_id AND e.rowid < d.rowid AND e.ticket IS d.ticket) AS redraw
        FROM lab_assignments a JOIN lab_draws d ON d.draw = a.draw WHERE a.experiment_id = ?`,
     )
-    .all(experimentId) as { session: string; ticket: string | null; status: string; redraw: number }[];
-  const out = new Map<string, DrawStat & { open: Set<string> }>();
+    .all(experimentId) as { session: string; ticket: string | null; role: string | null; at: number; status: string; redraw: number }[];
+  const out = new Map<string, DrawStat>();
   const of = (session: string) => {
     let st = out.get(session);
-    if (!st) out.set(session, (st = { session, draws: 0, bound: 0, unbound: 0, redraw: 0, opted_out: 0, open: new Set() }));
+    if (!st) out.set(session, (st = { session, draws: 0, bound: 0, unbound: 0, redraw: 0, opted_out: 0 }));
     return st;
   };
+  // Only this experiment's draws (lab_assignments.experiment_id), each kept as the first moment per ticket and per session.
+  const firstByTicket = new Map<string, number>();
+  const firstBySession = new Map<string, number>();
+  const roles = new Set(DRAW_ROLES);
+  const earliest = (m: Map<string, number>, k: string, at: number) => m.set(k, Math.min(m.get(k) ?? at, at));
   for (const d of draws) {
     const st = of(d.session);
     st.draws++;
     if (d.status === 'bound') st.bound++;
-    else {
-      st.unbound++;
-      if (d.ticket) st.open.add(d.ticket);
-    }
+    else st.unbound++;
     if (d.redraw) st.redraw++;
+    if (d.ticket) earliest(firstByTicket, d.ticket, d.at);
+    earliest(firstBySession, d.session, d.at);
+    if (d.role) roles.add(d.role);
   }
-  const drawnTickets = new Set((db.prepare('SELECT DISTINCT ticket FROM lab_draws WHERE ticket IS NOT NULL').all() as { ticket: string }[]).map((r) => r.ticket));
   const kept = db
     .prepare(
-      `SELECT a.session_id AS session, s.ticket AS ticket FROM lab_assignments a JOIN lab_slices s ON s.session_id = a.session_id AND s.slice_id = a.slice_id
+      `SELECT a.session_id AS session, a.excluded AS excluded, a.assigned_ms AS at, s.ticket AS ticket, s.role AS role
+       FROM lab_assignments a JOIN lab_slices s ON s.session_id = a.session_id AND s.slice_id = a.slice_id
        WHERE a.experiment_id = ? AND a.excluded IN ('no draw', 'draw not bound')`,
     )
-    .all(experimentId) as { session: string; ticket: string | null }[];
-  const drew = new Set((db.prepare('SELECT DISTINCT session_id FROM lab_draws').all() as { session_id: string }[]).map((r) => r.session_id));
+    .all(experimentId) as { session: string; excluded: string; at: number; ticket: string | null; role: string | null }[];
   for (const k of kept) {
-    const t = normTicket(k.ticket);
-    if (t ? drawnTickets.has(t) : drew.has(k.session)) of(k.session).opted_out++;
+    if (k.excluded === 'no draw' && !(k.role && roles.has(k.role))) continue; // a reviewer, QA, explorer or helper slice draws nothing
+    let t = normTicket(k.ticket);
+    if (t && !ticketExists(t)) t = null; // a made-up ticket names no ticket
+    const first = t ? firstByTicket.get(t) : firstBySession.get(k.session);
+    if (first !== undefined && first <= k.at) of(k.session).opted_out++;
   }
-  return [...out.values()].sort((a, b) => (a.session < b.session ? -1 : a.session > b.session ? 1 : 0)).map(({ open: _open, ...st }) => st);
+  return [...out.values()].sort((a, b) => (a.session < b.session ? -1 : a.session > b.session ? 1 : 0));
 }
 
 /** Takes a slice out of an experiment's analysis, with the reason (`outage`). Its arm, if any, is kept for the record. */

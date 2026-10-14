@@ -7,7 +7,7 @@
 
 import type { LabExperiment, LabExperimentReport, LabExperimentView, LabPeriod, LabSliceMetrics, LabSliceView, LabSummary } from '@portal/contracts';
 import type { Store } from '../store/store.js';
-import { armMembers, assignSlice, bindDraw, createExperiment, decideExperiment, drawArms, excludeSlice, experimentReport, listExperiments, drawStats, newDrawKey, normTicket, stopExperiment, type DrawStat, type NewExperiment } from './experiments.js';
+import { armMembers, assignSlice, bindDraw, createExperiment, decideExperiment, drawArms, excludeSlice, experimentReport, listExperiments, drawStats, newDrawKey, ticketExistsIn, normTicket, stopExperiment, type DrawStat, type NewExperiment } from './experiments.js';
 import { LabIngest } from './ingest.js';
 import { sliceMetrics, type SliceFilter } from './metrics.js';
 import { DAY_MS, dbTicketReader, outcomeOf, type TicketFacts, type TicketReader } from './outcomes.js';
@@ -81,7 +81,7 @@ export class Lab {
     const ticket = normTicket(info.ticket)!;
     const facts = (this.opts.tickets ?? dbTicketReader(db))(ticket);
     // The portal's tickets table (as the ticket service reads it); with an injected reader (tests) a ticket it knows.
-    const exists = this.opts.tickets ? facts !== null : ticketExists(db, ticket);
+    const exists = this.opts.tickets ? facts !== null : ticketExistsIn(db, ticket);
     if (!exists) throw new Error('no such ticket');
     const size = facts?.estimateSize ?? null;
     const draw = newDrawKey();
@@ -91,10 +91,11 @@ export class Lab {
     return { draw, arms: [...got].map(([id, arm]) => ({ experiment: id, name: names.get(id) ?? id, arm })) };
   }
 
-  /** Per session, an experiment's draws: all, bound, unbound, redraws. */
+  /** Per session, an experiment's draws: all, bound, unbound, redraws, opted out (a ticket known as in `drawArms`). */
   drawStats(experimentId: string): DrawStat[] {
     const db = this.opts.store.db;
-    return db ? drawStats(db, experimentId) : [];
+    const read = this.opts.tickets;
+    return db ? drawStats(db, experimentId, read ? (t) => read(t) !== null : undefined) : [];
   }
 
   stop(id: string): void {
@@ -214,16 +215,5 @@ export class Lab {
   close(): void {
     for (const t of this.#timers) clearTimeout(t);
     this.#timers = [];
-  }
-}
-
-/** Whether ticket `T-<n>` exists in the portal's tickets table; false without the table (a bare store). */
-function ticketExists(db: import('node:sqlite').DatabaseSync, ticket: string): boolean {
-  const m = /^T-(\d{1,9})$/.exec(ticket);
-  if (!m) return false;
-  try {
-    return db.prepare('SELECT 1 FROM tickets WHERE number = ?').get(Number(m[1])) !== undefined;
-  } catch {
-    return false;
   }
 }
