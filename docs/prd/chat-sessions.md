@@ -444,7 +444,7 @@ Migration 772 repaired the chains split on 2026-10-13 (fe3df8bc → fdb140be →
 Konfersi): matched by id prefix only when exactly one row matches, all in one workspace, never overwriting another link, otherwise a
 no-op; a pin moves to the head, the head takes an earlier row's ticket link when it has none, and tickets held by an ended row of the
 chain are assigned to the head with an `assigned` entry (actor `system`) on each timeline. Sessions carry no tags today, so none move.
-Not yet: recovery in place (part B), grouping usage and scores by lineage root (slice 3).
+Recovery in place (part B) is below; not yet: grouping usage and scores by lineage root (slice 3).
 
 **Continuation (T-270, 2026-10-14).** `POST /api/chat/sessions` takes `continuedFrom: <session id>`. The session named must exist (404),
 be in the same workspace and have ended (409 otherwise: a live or interrupted session keeps its work); this is checked before anything is
@@ -453,6 +453,46 @@ and by its ended predecessors down the chain is assigned to the new session ([Ti
 row. A `session.continued` audit row names the predecessor and the tickets moved. The supervisor's start-again path sends it
 (`createBody` in `docs/dev-sessions/supervisor.mjs`). Observed in `chat/continuation.test.ts` (real controller and tickets service, fake
 workspaces); not yet seen on the cluster.
+
+**Recovery in place (T-136 slice 2, D-30, 2026-10-14).** A session ended for integrity comes back as the SAME row: `POST
+/api/chat/sessions/:id/recover` (operate on the session; `RecoverChatRequest {confirm?, by?}`), the Portal MCP tool `session_recover`, and
+Resume on the ended row and on the session page. What it does, in order: the row goes from ended to Interrupted (no process); the trail
+gets one marker, "Recovered in place after an integrity ending: <reason>" (`recovered: true`, shown like a Restart's divider), and a note
+that the line that ended it was dropped; the process starts with `--resume <claude session id>` on a NEW log segment, the path a wake
+and a Restart use, on the Claude it ran on (when that Claude is out of quota the auto move takes the live chat on from there, as for any
+chat); model, effort and mode come back as after any resume; Bypass comes back only through `#keepBypass(id, 'recover')`, the grant a
+Restart and a Move use (the policy and the session's capability; otherwise the start mode, and the transcript says "Bypass not kept after
+the recovery: <why>"), and no sign-in code is involved; then the portal sends one short continuation (`portal:recover`, the supervisor's
+MOVED shape: same conversation, new process, the old sub-agents stopped, carry on). The id, title, pin, ticket link, parent and children,
+the URL and the cost (one series: the row's own, the recovery an event in its transcript) are the row's and stay. "Dropped" means the
+portal never reads that line again (the old segment is not followed and nothing of it is resent); the line was already part of Claude
+Code's own conversation when the portal saw it, and it stays there: that is why a suspicious cause needs a person (below).
+
+What it is refused for (`chat/recover.ts`): a session that hasn't ended (409, a message or Resume picks it up), one a person closed
+("closed by operator", 409), any other ending (a credential ending is for safety: a new session); past `chat.recover.maxPerDay` recoveries
+in 24 hours (default 4; 409 `RECOVER_CAPPED`: it stays ended, and ONE incident ticket tagged `watchdog` is opened per session per 24 h);
+within `chat.recover.pauseMin` of the last one (default 2; 409 `RECOVER_PAUSED` with `retryAfterS`). Both settings are in the registry,
+explained in their InfoTip. Every refusal and every recovery is audited (`session.recover.{done,failed,refused,capped}`).
+
+**A suspicious cause.** An integrity ending now records what it was for (`chat_sessions.ended_for`, migration 805): its case
+(`ENDING_CASES` in `chat/integrity.ts`), the classification, the line's origin in words (never its text) and whether the session was in
+Bypass; the payload carries `endedFor: {reason, classified, case, origin}`. **Harmless** are only the near misses of an accepted case
+whose line came from the process's own machinery: a peer line from a sub-agent that ran in this process whose SendMessage cause was not
+matched (`replay-peer`), and, for rows ended before this, the pre-T-265 "a second control response for request …" (the same line read
+twice, `control-duplicate`). Everything else is **suspicious**: an unknown origin or none, a peer line from no task of the process, a
+command the portal never sent, a different or unknown control answer, a tool request id seen twice, another session id, a mode or Bypass
+the portal did not set, and any older reason. (The ending text for a different second control response is now "a second, different
+control response for request …", so the two never read alike.) An agent (the MCP tool, or a person's sign-in that says `by: "agent"`,
+as the supervisor does) is refused a suspicious cause (403 `RECOVER_SUSPICIOUS`, with the classification); a person gets 409
+`RECOVER_CONFIRM` until they confirm a sheet that shows the reason, the origin and the classification. `session_recover` asks for a
+confirmation every time (preview: the session, its ending and what happens); a person's Resume never needs one for a harmless cause.
+
+**The supervisor** (`docs/dev-sessions/supervisor.mjs`) calls recover first for a track chat ended for integrity, as an agent
+(`recoverBody`), and reads the answer with `recoverVerdict`: back in place; wait for the next round (the pause, a portal restarting); or a
+NEW session continuing it (`continuedFrom`) when refused (absent, the cap, a suspicious cause, a person's close). Its "too many starts"
+cap counts new sessions only. `DRY_RUN=1` makes no call. Observed in `chat/recover.test.ts` (fake workspaces: the row kept, the fresh
+segment, the caps and the pause, Bypass kept and not, the refusals, the route, the MCP tool, the supervisor's shapes); not yet seen on the
+cluster, and the tokens a recovery costs against a new session's start were not measured (they need a real Claude).
 
 ### 10.5 Browser protocol
 
