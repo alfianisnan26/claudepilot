@@ -118,12 +118,13 @@ test('MCP: lab_arm_draw is an agent tool for its own session; the coordinator se
     assert.deepEqual(declaredToolPolicies().get('lab_arm_draw'), LAB_TOOL_POLICIES.lab_arm_draw);
     assert.deepEqual(LAB_TOOL_POLICIES.lab_arm_draw, { kind: 'agent', reach: 'session', audit: 'lab.arm.draw' });
     const agent = await mcp.agentToken('docker/api', 'orch-session');
-    const r = where(await mcp.call(agent.secret, 'lab_arm_draw', { ticket: 'T-1', role: 'implementer', model: 'opus' }));
+    const raw = await mcp.call(agent.secret, 'lab_arm_draw', { ticket: 'T-1', role: 'implementer', model: 'opus' });
+    const r = where(raw);
     assert.match(r.draw, plan.DRAW);
     assert.equal(r.arms.length, 1);
     assert.ok(plan.ARMS.includes(r.arms[0].arm));
     assert.equal(r.arms[0].experiment, h.e2.id);
-    assert.ok(r.summary.includes(`Lab-Draw: ${r.draw}`));
+    assert.ok(JSON.stringify(raw.result).includes(`Lab-Draw: ${r.draw}`), 'the summary line names what to put in the brief');
     assert.ok(armOf(h, 'orch-session', DRAW_SLICE + r.draw), 'held under the caller’s own session');
     assert.ok(refused(await mcp.call(agent.secret, 'lab_arm_draw', { ticket: 'not a ticket' })), 'validated input');
     assert.ok(refused(await mcp.call(mcp.token('admin').secret, 'lab_arm_draw', { ticket: 'T-1' })), 'an admin token has no session to draw for');
