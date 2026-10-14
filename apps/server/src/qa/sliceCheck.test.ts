@@ -29,7 +29,10 @@ test('scripts/slice-check.sh parses', () => {
   assert.equal(r.status, 0, r.stderr);
 });
 
-test('a named test file that does not exist is a usage error before any check runs (node --test would pass over it silently)', () => {
+// The release gate runs on a clean copy that is not a git work tree; the script needs one (it exits 2 before it can say anything).
+const inGitTree = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: fileURLToPath(new URL('.', import.meta.url)) }).status === 0;
+
+test('a named test file that does not exist is a usage error before any check runs (node --test would pass over it silently)', { skip: !inGitTree && 'not a git work tree (the gate copy)' }, () => {
   const r = spawnSync('bash', [SCRIPT, '--base', 'HEAD', 'src/qa/sliceCheck.test.ts', 'apps/server/src/qa/no-such-file.test.ts'], { encoding: 'utf8', cwd: fileURLToPath(new URL('.', import.meta.url)) });
   assert.equal(r.status, 2, r.stdout + r.stderr);
   assert.match(r.stdout, /no such test file: src\/qa\/no-such-file\.test\.ts $/m);
