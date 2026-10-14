@@ -362,14 +362,16 @@ export class ChatStore {
     startedBy?: string | null;
     worktree?: ChatWorktree | null;
     bypassCapable?: boolean;
+    /** The ended session it continues (T-270). */
+    continuedFrom?: string | null;
   }): ChatSession {
     const now = this.#stamp();
     const db = this.#writable();
     db
       .prepare(
         `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
-           ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         opts.id,
@@ -390,6 +392,7 @@ export class ChatStore {
         opts.worktree?.repo ?? null,
         opts.id,
         opts.bypassCapable ? 1 : 0,
+        opts.continuedFrom ?? null,
       );
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(opts.id, opts.claudeId ?? '', opts.id, opts.cwd, now);

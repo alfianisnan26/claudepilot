@@ -512,6 +512,12 @@ export interface CreateChatSessionRequest {
   /** The ticket it works on (Tickets). An opaque id: the portal only records it. */
   ticketId?: string;
   /**
+   * The session this one continues (T-270, T-136 lineage): an ENDED session of the same workspace, else 409 and nothing is created. The
+   * new row is linked to it (`continuedFrom`), and in the same transaction every unfinished ticket held by it and by its ended predecessors
+   * down the chain is assigned to the new session (an `assigned` entry each, actor system, `continued: true`).
+   */
+  continuedFrom?: string;
+  /**
    * Run it in a git worktree of its own: the portal adds one from `repo` (default: the repository
    * containing `cwd`) on `branch` (default: a new branch named after the session), starting from `base`
    * (default: the repository's current branch), and the session's folder is that worktree. Nothing is
