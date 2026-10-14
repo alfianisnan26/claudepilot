@@ -3,6 +3,7 @@ import { USAGE_RANGES, type ClaudeUsage, type ClaudeUsageHistory, type SnoozeKin
 import { BellOff, ChevronDown, CircleCheck, CircleQuestionMark, CircleX, Infinity as NoLimit, RefreshCw, TriangleAlert, UserX, type LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
+import { notifyApi } from '@/features/notify/api';
 import { errorText } from '@/lib/api';
 import { FigureValue } from '../figure';
 import { claudeUsageApi } from './api';
@@ -258,6 +259,23 @@ function Snooze({ c }: { c: ClaudeUsage }) {
       toast(errorText(e, 'Couldn’t change the snooze.'), 'error');
     }
   };
+  // T-126: a quota alert reaches you only while a chat runs on this Claude, unless you ask for it when idle too. null: not known yet.
+  const [watch, setWatch] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    notifyApi.quotaWatch(c.claudeId).then(
+      (r) => live && setWatch(r.watch),
+      () => undefined,
+    );
+    return () => void (live = false);
+  }, [c.claudeId]);
+  const setIdle = async (on: boolean) => {
+    try {
+      setWatch((await notifyApi.setQuotaWatch(c.claudeId, on)).watch);
+    } catch (e) {
+      toast(errorText(e, 'Couldn’t change the alert.'), 'error');
+    }
+  };
   const quiet = !!c.snoozedUntil || !!c.projectionSnoozedUntil;
   return (
     <div className="flex items-center gap-1.5 text-[12.5px] text-muted">
@@ -271,6 +289,7 @@ function Snooze({ c }: { c: ClaudeUsage }) {
           { label: 'Snooze 4 hours', onSelect: () => void set('4h') },
           { label: 'Until it resets', onSelect: () => void set('reset') },
           ...(c.snoozedUntil ? [{ label: 'Alert me again', onSelect: () => void set(null) }] : []),
+          ...(watch === null ? [] : [watch ? { label: 'Alert only with a chat', onSelect: () => void setIdle(false) } : { label: 'Alert when idle too', onSelect: () => void setIdle(true) }]),
           ...(c.runsOn === 'plan' ? [c.projectionSnoozedUntil ? { label: 'Warn about pace again', onSelect: () => void set(null, 'projection') } : { label: 'Mute pace warnings', onSelect: () => void set('reset', 'projection') }] : []),
         ]}
       />

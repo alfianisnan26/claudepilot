@@ -147,6 +147,13 @@ export function tagOf(e: NotifyEvent): string {
   }
 }
 
+/** T-126: who the quota alert concerns: the chats on the Claude (`1 chat`), `idle` for a watched Claude none runs on; absent: not known. */
+function chatsOn(v: unknown): string | null {
+  const n = num(v);
+  if (n === null) return null;
+  return n === 0 ? 'idle' : `${n} chat${n === 1 ? '' : 's'}`;
+}
+
 /** How a clock time is written for one recipient. */
 type Clock = (at: Date) => string;
 
@@ -183,10 +190,10 @@ function text(e: NotifyEvent, clock: Clock): { title: string; body: string } {
       const resets = typeof f.resetsAt === 'string' && !Number.isNaN(Date.parse(f.resetsAt)) ? `resets ${clock(new Date(f.resetsAt))}` : null;
       if (f.projection === true) {
         const eta = typeof f.etaAt === 'string' && !Number.isNaN(Date.parse(f.etaAt)) ? `out by ${clock(new Date(f.etaAt))} est.` : 'may run out est.';
-        return { title: 'Quota low', body: join(name(f.claude, 'Claude'), name(f.window, ''), eta, resets) };
+        return { title: 'Quota low', body: join(name(f.claude, 'Claude'), name(f.window, ''), eta, resets, chatsOn(f.chats)) };
       }
       const left = pct(f.leftPct);
-      return { title: 'Quota low', body: join(name(f.claude, 'Claude'), name(f.window, ''), left && `${left} left${est(e, 'leftPct')}`, resets) };
+      return { title: 'Quota low', body: join(name(f.claude, 'Claude'), name(f.window, ''), left && `${left} left${est(e, 'leftPct')}`, resets, chatsOn(f.chats)) };
     }
     case 'cost_spike': {
       if (f.what === 'budget') return { title: 'Budget alert', body: join(name(f.name, 'budget'), pct(f.usedPct) && `${pct(f.usedPct)} used est.`) };

@@ -148,19 +148,26 @@ export class NotifyPipeline {
     );
     if (!recipients.length) return;
     const historyOnly = e.kind === 'quota_low' && e.facts.level === 'near';
+    const quota = e.kind === 'quota_low' ? quotaStage(e) : null;
     // T-126: the Inbox row keeps its times as instants (marks), shown in the reader's own zone; never the server's UTC.
     const forHistory = render(e, { marks: true });
     const scope = muteScopesOf(e)[0] ?? null;
     for (const r of recipients) {
+      // T-126 item 1: a Claude no chat runs on is information (its own page lists the alert), not an alert, unless the person watches it.
+      if (quota && e.facts.chats === 0 && !this.d.history.watches(r.userId, e.subject.id)) continue;
       // A sharer gets an Inbox row only where they asked to hear of shared things.
       const dests = this.d.destinations.forUsers([r.userId]).filter((x) => x.userId === r.userId && (r.owner || x.includeShared));
       // Mute rules: one for all destinations marks the Inbox row muted and sends nothing; one for a destination hushes that one only.
       const muted = this.d.mutes.match(r.userId, e);
-      const stored = r.owner || dests.length ? this.d.history.add(r.userId, e, forHistory, { muted: muted.everywhere, scope }) : null;
+      const keep = r.owner || dests.length;
+      // T-126 item 2: one quota row per Claude, window and period, updated in place; a push only when it got worse.
+      const row = keep && quota ? this.d.history.addQuota(r.userId, e, forHistory, quota, { muted: muted.everywhere, scope }) : null;
+      const stored = keep ? (quota ? row?.id ?? null : this.d.history.add(r.userId, e, forHistory, { muted: muted.everywhere, scope })) : null;
       if (stored || dests.some((x) => muted.destinations.has(x.id))) this.d.mutes.hushed(muted.ids);
       if (historyOnly) continue;
       for (const dest of dests) {
-        if (muted.everywhere || muted.destinations.has(dest.id)) this.#log(r.userId, e, dest, 'suppressed', 'muted');
+        if (row && !row.worse) this.#log(r.userId, e, dest, 'suppressed', 'collapsed');
+        else if (muted.everywhere || muted.destinations.has(dest.id)) this.#log(r.userId, e, dest, 'suppressed', 'muted');
         else this.#route(e, dest, r.userId);
       }
     }
@@ -373,6 +380,7 @@ export class NotifyPipeline {
   async tick(): Promise<void> {
     if (this.state() !== 'ready') return;
     const now = this.#now();
+    if (this.d.history.recoverQuota() > 0) this.d.publish();
     for (const id of this.d.history.heldDestinations()) {
       const dest = this.d.destinations.find(id);
       if (!dest) continue;
@@ -394,4 +402,12 @@ export class NotifyPipeline {
     const e: NotifyEvent = { id: `evt_${Date.now().toString(16).padStart(16, '0').slice(-16)}`, kind, at: this.#now().toISOString(), subject: { type: 'portal', id: 'summary' }, facts: {} };
     await this.#limit(dest.id, () => this.#deliver(e, dest, dest.userId, { retries: true, summary: text }));
   }
+}
+
+/** How bad a quota alert is (T-126 item 2): near 0, projected to run out 1, high 2, out 3; and its period (the window's reset, ms). */
+export function quotaStage(e: NotifyEvent): { stage: number; period: number | null } {
+  const level = e.facts.level;
+  const stage = level === 'exhausted' ? 3 : level === 'high' ? 2 : level === 'projection' || e.facts.projection === true ? 1 : 0;
+  const reset = typeof e.facts.resetsAt === 'string' ? Date.parse(e.facts.resetsAt) : Number.NaN;
+  return { stage, period: Number.isNaN(reset) ? null : reset };
 }

@@ -4,7 +4,7 @@
 // an endpoint, a key or a signing secret (a new signing secret once, when it is made).
 
 import { AppError, defineErrorCodes, success } from '@isnanme/core';
-import { isMuteGuarded, REAUTH_REQUIRED, type CreateMuteRequest, type NotifyMute, type NotifyOverview, type NotifyUserPrefs, type SessionNotifyRequest } from '@portal/contracts';
+import { isMuteGuarded, REAUTH_REQUIRED, type CreateMuteRequest, type NotifyMute, type NotifyOverview, type NotifyUserPrefs, type QuotaWatchRequest, type QuotaWatchState, type SessionNotifyRequest } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { PlatformAudit } from '../platform/audit.js';
@@ -229,6 +229,27 @@ export function createNotifyRoutes(d: NotifyRouteDeps): Hono {
     if (typeof req.done !== 'boolean') throw new AppError('VALIDATION_FAILED', 'On or off.', { details: { done: 'On or off.' } });
     d.destinations.setSessionDone(id, a.userId, req.done);
     return c.json(success({ done: req.done }));
+  });
+
+  // T-126 item 1: "Alert when idle" for one Claude, the caller's own; a Claude they may not see answers like an unknown one.
+  const claudeFor = (c: Context, userId: string) => {
+    const id = c.req.param('claudeId') ?? '';
+    if (!/^[A-Za-z0-9_.:-]{1,100}$/.test(id) || !d.owner.can(userId, 'view', { type: 'claude', id })) throw new AppError('NOT_FOUND', 'No such Claude.');
+    return id;
+  };
+  r.get('/quota-watch/:claudeId', (c) => {
+    const a = who(c);
+    const state: QuotaWatchState = { watch: d.history.watches(a.userId, claudeFor(c, a.userId)) };
+    return c.json(success(state));
+  });
+  r.put('/quota-watch/:claudeId', async (c) => {
+    const a = who(c);
+    const id = claudeFor(c, a.userId);
+    const req = await body<QuotaWatchRequest>(c);
+    if (typeof req.watch !== 'boolean') throw new AppError('VALIDATION_FAILED', 'On or off.', { details: { watch: 'On or off.' } });
+    d.history.setWatch(a.userId, id, req.watch);
+    const state: QuotaWatchState = { watch: req.watch };
+    return c.json(success(state));
   });
 
   r.post('/act', async (c) => {

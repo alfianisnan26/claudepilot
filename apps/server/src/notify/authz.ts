@@ -27,6 +27,8 @@ export function declareNotifyPolicies(): void {
     'DELETE /api/notify/mutes': { kind: 'self', audit: 'notify.mute' },
     'GET /api/notify/sessions/:id': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
     'PUT /api/notify/sessions/:id': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
+    'GET /api/notify/quota-watch/:claudeId': { kind: 'objects', checks: [{ type: 'claude', verb: 'view', from: 'path', param: 'claudeId' }] },
+    'PUT /api/notify/quota-watch/:claudeId': { kind: 'objects', checks: [{ type: 'claude', verb: 'view', from: 'path', param: 'claudeId' }], audit: 'notify.prefs' },
     'POST /api/notify/act': { kind: 'self', audit: 'notify.action' },
   });
   declarePolicies('platform', {

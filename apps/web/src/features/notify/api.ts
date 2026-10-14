@@ -14,6 +14,8 @@ import {
   type NotifyHistoryPage,
   type NotifyOverview,
   type NotifyUserPrefs,
+  type QuotaWatchRequest,
+  type QuotaWatchState,
   type RegisterPushRequest,
   type SessionNotifyRequest,
   type TestResult,
@@ -63,6 +65,8 @@ export const notifyApi = {
   markRead: (upTo?: string) => request<{ unread: number }>('POST', NOTIFY_API.read, upTo ? { upTo } : {}),
   sessionDone: (sessionId: string) => request<{ done: boolean }>('GET', NOTIFY_API.session(sessionId)),
   setSessionDone: (sessionId: string, done: boolean) => request<{ ok: true }>('PUT', NOTIFY_API.session(sessionId), { done } satisfies SessionNotifyRequest),
+  quotaWatch: (claudeId: string) => request<QuotaWatchState>('GET', NOTIFY_API.quotaWatch(claudeId)),
+  setQuotaWatch: (claudeId: string, watch: boolean) => request<QuotaWatchState>('PUT', NOTIFY_API.quotaWatch(claudeId), { watch } satisfies QuotaWatchRequest),
   prefs: () => request<NotifyUserPrefs>('GET', NOTIFY_API.prefs),
   setPrefs: (body: NotifyUserPrefs) => request<NotifyUserPrefs>('PUT', NOTIFY_API.prefs, body),
   /** The page's own answer path (the Allow and Deny buttons are the worker's; this is for a person who taps a token, which the page never holds). */
