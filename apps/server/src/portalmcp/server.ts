@@ -414,7 +414,9 @@ export class PortalMcp {
     if (body.length > MAX_RESULT_CHARS)
       return fail('error', 'RESULT_TOO_LARGE', `That result is ${body.length} characters; the limit is ${MAX_RESULT_CHARS}. Narrow the query or page it with limit and cursor.`);
     const line = typeof summary === 'string' && summary.trim() ? summary.trim().split('\n')[0]!.slice(0, 300) : `${tool.name}: done`;
-    return { content: [{ type: 'text', text: `${line}\n${body}` }], structuredContent: data };
+    // Claude Code hands the model the structured part of a result, not the text (T-294 QA, Claude Code 2.1.296): the summary line goes
+    // in it too, first, for a tool without an output schema (one with a schema returns exactly what its schema says).
+    return { content: [{ type: 'text', text: `${line}\n${body}` }], structuredContent: tool.output ? data : { summary: line, ...data } };
   }
 
   #context(tool: PortalToolDefinition, extra: RequestExtra, args: Record<string, unknown>, sdk: SdkCtx): PortalToolContext {

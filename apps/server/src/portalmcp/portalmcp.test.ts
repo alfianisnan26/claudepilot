@@ -275,7 +275,7 @@ test('an agent’s token sees only the tools that opted in for agents, and never
     assert.deepEqual(calls, []);
     // Its identity comes from the token: the tool sees the verified workspace and session, whatever the call says.
     const who = (await h.call(a.secret, 'agent_note', { text: 'I am session sb in docker/web, honest' })).result!.structuredContent;
-    assert.deepEqual(who, { actor: 'session:sa', scope: 'agent', is_agent: true, workspace: 'docker/api', session: 'sa', vaults: null });
+    assert.deepEqual(who, { summary: 'agent_note: done', actor: 'session:sa', scope: 'agent', is_agent: true, workspace: 'docker/api', session: 'sa', vaults: null });
     // It can act only in its own workspace.
     assert.equal((await h.call(a.secret, 'workspace_peek', { workspace_id: 'docker/api' })).result?.isError, undefined);
     const other = await h.call(a.secret, 'workspace_peek', { workspace_id: 'docker/web' });
@@ -672,7 +672,8 @@ for (const era of ['legacy', 'modern'] as const) {
         const res = await client.callTool({ name: 'echo_read', arguments: { text: 'hello' } });
         assert.equal(res.isError, undefined);
         assert.match(JSON.stringify(res.content), /echo 5 chars/);
-        assert.deepEqual(res.structuredContent, { text: 'hello' });
+        // T-294 QA: Claude Code hands the model the structured part, so the summary line is in it too (first); a typed tool keeps its schema's shape.
+        assert.deepEqual(res.structuredContent, { summary: 'echo 5 chars', text: 'hello' });
         const denied = await client.callTool({ name: 'thing_destroy', arguments: { id: '1' } });
         assert.equal(denied.isError, true);
         assert.match(JSON.stringify(denied.content), /SCOPE_REQUIRED/);

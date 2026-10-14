@@ -187,6 +187,9 @@ test('a session messages its parent, its workers and its crew (T-294), nobody el
     assert.equal(await code(s.controller.messageFamily(w1.id, theirs.id, 'hi')), 'NOT_FOUND:', 'not its crew');
     assert.equal(await code(s.controller.messageFamily(theirs.id, w2.id, 'hi')), 'NOT_FOUND:', 'not its crew either way');
     assert.equal(await code(s.controller.messageFamily(w1.id, w1.id, 'me')), 'NOT_FOUND:', 'not itself');
+    // T-294 QA: an id that exists nowhere and a stranger get the very same answer (a different text told which ids exist).
+    const answer = (p: Promise<unknown>) => p.then(() => 'ok', (e: unknown) => (isAppError(e) ? `${e.code}|${e.message}` : String(e)));
+    assert.equal(await answer(s.controller.messageFamily(w1.id, 'no-such-session', 'hi')), await answer(s.controller.messageFamily(w1.id, stranger.id, 'hi')));
     // What Claude reads says the relation: the parent to a worker, a worker to its parent, a peer to a peer.
     const framed = (id: string, from: string) => s.ws.sends.filter((x) => x.args[1] === s.controller.get(id)!.claudeSessionId && x.line.includes(`(session:${from})`)).map((x) => x.line);
     assert.ok(framed(w1.id, s.id).some((l) => l.includes('from your parent session')), 'to a worker: from your parent');
@@ -346,6 +349,9 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
     assert.equal(launch[launch.indexOf('--agent') + 1], 'qa-verifier');
     const opening = r.s.controller.history(worker.id).find((e) => e.kind === 'user')!;
     assert.equal(opening.text, '[Your role: qa-verifier. If .claude/agents/qa-verifier.md is not in your folder, tell your parent with session_message before you start.]\n\nVerify T-7 against its done criteria.');
+    // What the worker's Claude reads: its first instruction framed as from its parent (T-294 QA: it said "another session").
+    const firstLine = r.s.ws.sends.find((x) => x.args[1] === worker.claudeSessionId && x.line.includes('Verify T-7'))!.line;
+    assert.match(firstLine, /Portal message from your parent session/);
     const spawned = r.s.controller.audit({ kind: 'agent.spawned' }).find((x) => x.sessionId === worker.id)!;
     assert.deepEqual(spawned.detail.spawn, { claude: work.id, why: 'room', role: 'qa-verifier', model: null, effort: null, mode: 'dontAsk' }, 'the audit row says how');
 
@@ -385,7 +391,7 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
     assert.ok(r.s.controller.history(s2.id).some((e) => e.kind === 'user' && e.actor === `session:${out.id}` && e.text === 'I found a gap in criterion 2.'));
     const toStranger = (await r.h.call(w1.secret, 'session_message', { session_id: r.stranger.id, text: 'hi' })).result!;
     const toNobody = (await r.h.call(w1.secret, 'session_message', { session_id: 'no-such-session', text: 'hi' })).result!;
-    assert.equal(toStranger.structuredContent.error.code, toNobody.structuredContent.error.code, 'a stranger answers like a session that does not exist');
+    assert.deepEqual(toStranger.structuredContent.error, toNobody.structuredContent.error, 'a stranger answers exactly like a session that does not exist');
     assert.equal((await r.h.call(w1.secret, 'session_stop_worker', { session_id: s2.id, action: 'end' })).result?.structuredContent.error.code, 'NOT_FOUND', 'a peer is not its worker');
     const parentView = (await r.h.call(a.secret, 'session_family', {})).result!.structuredContent;
     assert.deepEqual(new Set(parentView.workers.filter((w: { state: string }) => w.state !== 'ended').map((w: { claude: string }) => w.claude)), new Set(['Work', 'Default']));

@@ -20,3 +20,7 @@ test('a session, a ticket and CI keep their words', () => {
   assert.equal(portalSender('ci:r9', '#12').who, 'CI #12', 'a bumped run says its number');
   assert.equal(portalSender('ci:r9', 'CI').who, 'CI', 'a report is not “CI · CI”');
 });
+
+test('a crew report (T-294) is from the crew, not an MCP client', () => {
+  assert.deepEqual(portalSender('portal:crew', 'Crew report'), { kind: 'crew', id: '', who: 'your crew' });
+});

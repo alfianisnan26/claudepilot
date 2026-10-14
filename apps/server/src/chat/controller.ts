@@ -3050,11 +3050,18 @@ export class ChatController {
    */
   async messageFamily(fromId: string, toId: string, text: string, opts: { priority?: 'next' | 'later' } = {}): Promise<void> {
     const from = this.#require(this.#chat.resolveId(fromId));
-    const to = this.#require(this.#chat.resolveId(toId));
-    const relation: 'parent' | 'worker' | 'crew' | null =
-      from.parentId === to.id ? 'parent' : to.parentId === from.id ? 'worker' : from.parentId && from.parentId === to.parentId && from.id !== to.id ? 'crew' : null;
-    // Anyone else is the same 404 as a session that doesn't exist (what a session may not reach, it does not learn exists).
-    if (!relation) throw new AppError('NOT_FOUND', 'No such session in your family: your parent, your workers and your crew (session_family lists them).');
+    // An id that exists nowhere and one outside the family get the SAME answer (T-294 QA: a different text told a session which ids exist).
+    const to = this.#chat.get(this.#chat.resolveId(toId));
+    const relation: 'parent' | 'worker' | 'crew' | null = !to
+      ? null
+      : from.parentId === to.id
+        ? 'parent'
+        : to.parentId === from.id
+          ? 'worker'
+          : from.parentId && from.parentId === to.parentId && from.id !== to.id
+            ? 'crew'
+            : null;
+    if (!to || !relation) throw new AppError('NOT_FOUND', 'No such session in your family: your parent, your workers and your crew (session_family lists them).');
     if (to.state === 'ended') throw new AppError('CONFLICT', 'That session has ended.');
     const caps = this.agentCaps?.();
     if (caps && !this.#familyRate.allow(from.id, caps.messagesPerHour)) {

@@ -25,7 +25,7 @@ export interface ChatToolHost {
       report?: WorkerReport;
     },
   ): Promise<ChatSession>;
-  send(id: string, uuid: string, text: string, opts: { actor: string }): Promise<void>;
+  send(id: string, uuid: string, text: string, opts: { actor: string; actorLabel?: string; relation?: 'parent' | 'worker' | 'crew' }): Promise<void>;
   messageFamily(fromId: string, toId: string, text: string, opts?: { priority?: 'next' | 'later' }): Promise<void>;
   /** T-294: one message to every live worker, or every live crew member, of the sender; refused whole over the hourly limit. */
   messageGroup(fromId: string, to: 'workers' | 'crew', text: string, opts?: { priority?: 'next' | 'later' }): Promise<{ sent: string[]; failed: string[] }>;
@@ -185,7 +185,8 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       }
       // Claude Code runs an agent name it has no definition for as the default, silently: one line lets the worker say so (T-294 slice 2).
       const first = args.role ? `[Your role: ${args.role}. If .claude/agents/${args.role}.md is not in your folder, tell your parent with session_message before you start.]\n\n${args.prompt}` : args.prompt;
-      await chat.send(child.id, randomUUID(), first, { actor: ctx.actor, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
+      // From its parent, said so in the frame its Claude reads (T-294 QA: the first instruction said "another session").
+      await chat.send(child.id, randomUUID(), first, { actor: ctx.actor, relation: 'parent', ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
       ctx.affected(`session:${child.id}`);
       const where = on.claudeId === parent.claudeId ? WHY_TEXT[on.why] : `${on.name}, ${WHY_TEXT[on.why]}`;
       return {
