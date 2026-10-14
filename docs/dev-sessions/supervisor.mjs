@@ -25,7 +25,7 @@
 // Never logs the code, a cookie or a token.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -538,7 +538,15 @@ async function watch({ rounds = Infinity } = {}) {
       const ts = (state.tracks[t.key] ??= { key: t.key, starts: [], nudges: [], wakes: [] });
       ts.nudges ??= [];
       ts.wakes ??= [];
-      if (ts.done) continue;
+      if (ts.done) {
+        // A newer live chat of this track (a continuation someone started after a hand-over) is adopted: the track is watched again.
+        const newer = sessions.find((x) => x.state !== 'ended' && !x.archivedAt && x.id !== ts.sessionId && String(x.title ?? '').startsWith(t.title.split(':')[0]));
+        if (!newer) continue;
+        ts.done = false;
+        ts.sessionId = newer.id;
+        log(`${t.key}: adopted the newer live chat ${newer.id.slice(0, 8)}: watched again`);
+        saveState(state);
+      }
       // A paused program (the owner's order, 2026-10-14): `touch ~/.claudepilot/dev-sessions/PAUSE-<track key>` (orchestrator, konfersi, event); nothing is nudged, woken, moved or restarted until the file is removed.
       const held = portalPauses.find((p) => p.program === null || p.program === t.key);
       if (held || existsSync(join(STATE_DIR, `PAUSE-${t.key}`))) {
@@ -639,9 +647,16 @@ async function watch({ rounds = Infinity } = {}) {
 
       // Ended (or never started). A person who closed it stays obeyed.
       if (cur && /closed by operator/i.test(cur.endedReason ?? '')) {
-        ts.done = true;
-        log(`${t.key}: closed by a person: not started again`);
-        continue;
+        // A hand-over (the coordinator wrote HANDOVER-<track> before ending it at a full context) is started again as a continuation.
+        const handover = join(STATE_DIR, `HANDOVER-${t.key}`);
+        if (existsSync(handover)) {
+          rmSync(handover, { force: true });
+          log(`${t.key}: handed over: starting a continuation of ${cur.id.slice(0, 8)}`);
+        } else {
+          ts.done = true;
+          log(`${t.key}: closed by a person: not started again`);
+          continue;
+        }
       }
       // An integrity ending is recovered IN PLACE when the portal can (T-136: same session, tags, pins and numbers, no new row); a new session is the
       // fallback when the endpoint is absent or refuses (the day's cap, a suspicious cause, a person's close). The pause or a portal restarting:
