@@ -27,7 +27,8 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis. WIP lim
 ## NEXT (rank order; the coordinator 00:2x: T-259, T-255, T-256, T-257, T-258 right after T-136)
 1. T-265 (running), T-105/T-109 (running), T-259 slice 1 (running).
 2. When T-105 and T-265 are merged: ONE deploy today (gate=true, D-7; images=portal), then the post-deploy check (8). Production protection is OFF, so the release will go out with no approval unless a person turns it on first (NEEDS A HUMAN).
-3. T-259 slice 2 (the restart of an ended chat from its status file, the Bypass lease T-104 item 3, the Home Autonomy widget, session_keepgoing_set); then delete supervisor.mjs (T-104 item 6).
+3. T-270 (rank-02g, next free slot): tickets follow the track: a continuation takes its predecessor's tickets (continued_from), an audited ticket authz rule for ended sessions of the same workspace, Portal MCP `ticket_adopt`, tests.
+3b. T-259 slice 2 (the restart of an ended chat from its status file, the Bypass lease T-104 item 3, the Home Autonomy widget, session_keepgoing_set); then delete supervisor.mjs (T-104 item 6).
 4. T-255 (after T-105 merges, same worktree): unknown usage never wins; a limit message in the transcript marks the Claude exhausted.
 5. T-257 items 3-4 (supervisor.mjs: notify when left down, cap per cause) if not covered by 3; T-258 (tokens: short lifetimes, cap, bulk revoke).
 6. T-136 slice 2 (recover in place, the supervisor uses it) after T-265; then slice 3.
@@ -38,13 +39,11 @@ Models: opus for implementation, sonnet for checks, fable for diagnosis. WIP lim
 T-126, T-129, T-121, T-122, T-113, T-114, T-101, T-106, T-120, T-26/T-27 (in T-134), T-30, T-33, T-123, T-132..T-135 with T-140, T-137, T-138, T-130, T-131, fitOf/fit.ts.
 
 ## NEEDS A HUMAN (required escalations only, D-10 and D-34)
-- PERMISSIONS: ten tickets are assigned to the ended session 5c9fcb5f and an agent cannot take them over (ticket_update: "assigned to another session"):
-  T-136, T-143, T-141, T-105, T-109, T-102, T-110, T-100, T-159, T-42, T-95, T-99. Reassign them to session 619018ca (the orchestrator) so it can write
-  on them; until then its evidence is in this file. (T-136 slice 2 should make this automatic: a continued session takes its predecessor's tickets.)
 - BYPASS RULE (the owner's, charter walls): a wake from sleep drops Bypass as FR20/FR20a are written, which is what idled the Event chat for 5 hours (T-256). Options: (a) Keep-going chats do not sleep; (b) a wake keeps Bypass under the T-104 lease the owner grants once (recommended: the sanctioned path for the in-portal watchdog, no owner code in a pod); (c) leave it, the supervisor re-asserts (built, works only while the supervisor runs). (c) holds until the owner answers; T-259 slice 2 builds the lease.
 - PRODUCTION: run 19 was released with approval `auto` (protection off). If that is the owner's choice, write it as a DECISIONS row; if not, switch it back on (CI > Remotes > claudepilot). T-110 comment 955.
 
 ## DECISIONS
+- 01:0x The coordinator reassigned the ended session's tickets to 619018ca (T-270 filed for the mechanism). Closed: T-143 and T-141 (verified live, evidence on the tickets), T-159 (test passed on a private lock). In review: T-102, T-110, T-256. Duplicates closed wont_do: T-252 (= T-256), T-253 (= T-257). T-142 is Konfersi's and stays with its chat.
 - 01:1x One deploy today, after T-105 and T-265 merge (the integrity re-read fix protects every live session; the orchestrator brief allows at most one deploy a day), not now for T-102 alone.
 - 00:3x Ranking: the coordinator's five tickets (T-259, T-255, T-256, T-257, T-258) go right after T-136; T-265 (the actual cause of the 17:58 ending) is worked
   first as the T-136 part A gap, with fable (a diagnosis nobody cracked). T-256 and T-105 fill the other two slots (both built or nearly, highest value per hour).

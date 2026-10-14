@@ -306,7 +306,7 @@ In the portal database ([Pools foundation](foundation-pools.md) §4); redacted (
 | `start <id> <n> -- <flags>` | Recreates the FIFO, clears `in.d/`, and `setsid`s a parent shell that runs `flock -n -o run.lock claude …` with stdin `<>` the FIFO, stdout `>>` segment `n`, stderr to `err.log` and §10.2's environment. With `-o`, children never inherit the lock, so a dev server the agent left running can't hold it. When `claude` exits, the shell writes `exit.json`. Prints the parent's PID and start time. |
 | `send <id> <uuid> <bytes>` | Reads exactly that many bytes (`head -c`, so Kubernetes needs no stdin half-close) into `in.d/<uuid>.jsonl`, checks it's one JSON line ending in a newline, then a detached copier writes it into the FIFO under `send.lock` and deletes it. A dropped exec leaves a whole line or nothing. The controller writes the `chat_inputs` row first and, before a retry, looks for the UUID in `command_lifecycle` or the replay. Unstaged sends took 37–270 ms ✅ (S8). |
 | `run <id> -- <flags>` | One-shot runs (persona tests): stdin is a regular file holding the prompt line, so EOF arrives and Claude Code drains and exits (✅ on a plain pipe, S7a). A FIFO opened `<>` never sees EOF. |
-| `tail <id> <n> <offset>` | Replays segment `n` from a byte offset and follows it for at most 10 minutes (`timeout 600`); exits when its own stdin closes, so a dropped client leaves nothing behind ✅ (S8). |
+| `tail <id> <n> <offset>` | Replays segment `n` from a byte offset and follows it for at most 10 minutes (`timeout 600`); exits when its own stdin closes, so a dropped client leaves nothing behind ✅ (S8). An offset past the segment's end is refused (exit 6, the size on stdout) rather than followed (GNU tail would replay the file from byte 0 at the next write; T-265); tail's stderr goes to `tail.err` in the session folder. |
 | `ls`, `cat`, `diff` | Files and Diff (§13): open, then check the opened descriptor; git with command-bearing config neutralized. |
 | `put`, `unstage`, `produced` | Chat content (FR31, FR32): `put <id> <name> <nchars> <nbytes>` writes an attachment (base64 on stdin, exactly the announced size, a plain ASCII name, never through a link) to `~/.claudepilot/uploads/<id>/`; `unstage` deletes a chat's folder; `produced <dir> <since> <max>` lists the files a folder gained since an instant (no `.git`, `node_modules` or caches, one file system, the same path policy as `ls`). |
 | `trustscan <folder>`, `authcheck` | FR43's names and hash; `pass` or `fail` for §6 item 1, nothing else. |
@@ -410,8 +410,30 @@ three integrity endings in one day:
 - **A second, identical control response.** The orchestrator fe3df8bc ended "a second control response for request …"; no request id
   appears twice in any raw `out.*.jsonl` on the dev workspace, so the second copy was the same line read again by the portal, not a
   second answer from Claude Code. The first response's digest (sha256 of the parsed reply) is kept on its control line (migration 771);
-  an identical second copy is ignored and logged, never processed again; a different one, one whose first copy has no digest (read before
-  the change), or one for an id the portal never asked or answered still ends the session.
+  an identical second copy is ignored and logged, never processed again; a different one, or one for an id the portal never asked or
+  answered, still ends the session. One whose first copy kept no digest (completed before migration 771) is ignored only when it is
+  **the same answer by shape** (`sameAnswer`, case `control-replay-undigested`, T-265): a success whose body is one the portal's own
+  requests produce (empty for `set_model`, `interrupt`, `apply_flag_settings`, `stop_task`, `cancel_async_message`; `{mode}` for a mode
+  the portal set or expects on the session; only the keys `get_settings`, `list_models` or `get_usage` reply with), or, for the echo of
+  an answer the portal gave, the `behavior` it recorded (allow, deny). A different mode, an error, another shape, another behavior or an
+  id never asked still ends the session.
+
+**Why a line is read twice (T-265, observed 2026-10-13).** The orchestrator 5c9fcb5f ended at 17:58:46 on the FIRST line of its stream
+(the `set_permission_mode` reply of 15:46, which appears once in the 12 MB file), 20 minutes after the portal restarted at 17:38:44 for a
+deploy. The reader follows a segment with `tail -c +<offset> -f` under `timeout 600`, renewed every 10 minutes from the stored byte
+offset. Two things met. (1) GNU tail (coreutils 9.1 in the workspace image), started with an offset past the file's end, seeks there
+anyway; at the next write it sees a size smaller than its position, prints `file truncated` on stderr, seeks to 0 and re-emits the
+whole file: line 1 again. The stderr was merged into the stream (Kubernetes exec), dropped as non-JSON and even counted into the
+offset. (2) The offset got past the end because two `tail` execs fed one reader: `#ensureReader` (a liveness round, or a tab's
+`attach`) opened a follower while `#checkAndRetail` was still awaiting the dropped one's status, and the re-follow then opened
+another; every byte counted twice. After a restart the liveness round (60 s) and the renewal (600 s) are phase-locked, so it hit at
+the second renewal (17:48:45 two followers; 17:58:45 the next one started past the end; 17:58:46 Claude Code wrote, tail replayed).
+Fixed: one follower per reader (the status check holds the reader; a replaced follower's exit is ignored; a new follower closes the
+one it replaces); `cp-session tail` refuses an offset past the segment's end (exit 6 with the size on stdout; the controller moves the
+cursor to the size and logs both numbers) and sends tail's stderr to `tail.err` in the session folder, never into the byte count;
+and every integrity ending is logged (`[chat] <id>: ended for integrity: <reason> (line <type/subtype> at byte <start> of segment
+<n>)`), never with the line's content. Not proven for want of the database: that two followers ran on 5c9fcb5f between 17:48 and
+17:58 (its row's `byte_offset` would be larger than the file, 12,144,016 bytes).
 
 Nothing else was loosened: an invented uuid, an unknown origin, a lifecycle in a process with no task and a message with no cause end the
 session as before, and the Bypass checks are unchanged.
