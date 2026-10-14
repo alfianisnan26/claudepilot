@@ -2,9 +2,11 @@ import { Badge, Button, Spinner, type BadgeTone } from '@isnanme/ui';
 import type { ChatEvent, ChatTask } from '@portal/contracts';
 import { ArrowLeft, Square, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Link } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
 import { errorText } from '@/lib/api';
 import { latestLine, modelShort } from './agentFold';
+import { ticketOf } from './agentList';
 import { chatApi } from './api';
 import { Markdown } from './Markdown';
 import type { AgentLive } from './motion/deltas';
@@ -97,6 +99,9 @@ export function AgentDetail({
   const name = t.description || 'Task';
   const { events, truncated, error, loaded } = useTaskTranscript(sessionId, t.taskId, running);
   const rows = useMemo(() => buildRows(events, false), [events]);
+  // Claude Code reports an agent's tool uses when it ends; while it runs, the count is its own transcript's (the newest 200 lines at most).
+  const toolsSoFar = useMemo(() => rows.reduce((n, r) => n + (r.type === 'tool' ? 1 : r.type === 'group' ? r.tools.length : 0), 0), [rows]);
+  const ticket = ticketOf(t.description);
   const liveLine = running && live ? (live.thinking ? 'Thinking' : latestLine(live.text)) : '';
 
   // Newest at the bottom, followed while the reader is there.
@@ -127,9 +132,29 @@ export function AgentDetail({
       ),
     ],
     ['Tokens', t.tokens != null ? <span className="tabular-nums">{formatTokens(t.tokens)}</span> : <span className="text-muted">–</span>],
-    ['Tool uses', t.toolUses != null ? <span className="tabular-nums">{t.toolUses}</span> : <span className="text-muted">–</span>],
+    [
+      'Tool uses',
+      t.toolUses != null ? (
+        <span className="tabular-nums">{t.toolUses}</span>
+      ) : running && loaded ? (
+        <span className="tabular-nums">
+          {truncated ? 'over ' : ''}
+          {toolsSoFar} so far
+        </span>
+      ) : (
+        <span className="text-muted">–</span>
+      ),
+    ],
     ['Time', Number.isFinite(ms) ? <span className="tabular-nums">{formatDuration(ms)}</span> : <span className="text-muted">–</span>],
   ];
+  // The ticket its description names (`T-149 slice 1: …`), a way to the ticket.
+  if (ticket)
+    facts.unshift([
+      'Ticket',
+      <Link to={`/admin/tickets/${ticket}`} className="inline-flex items-center font-medium text-ink underline decoration-line-strong underline-offset-2 hover:decoration-ink tap:min-h-11">
+        {ticket}
+      </Link>,
+    ]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">

@@ -16,6 +16,7 @@ import { imageAlt, imageFileName, ImageThumbs, type ViewerImage } from './ImageV
 import { Markdown, QuietCopyButton } from './Markdown';
 import { MOTION, StreamingMarkdown, useFollow, useHandover } from './motion';
 import { portalSender } from './portalSender';
+import { publishTaskFeed, taskCalls } from './taskFeed';
 import { buildRows, LiveThinking, ThinkingRow, ToolCall, ToolGroup, toolLabel, type ToolPair, type TranscriptRow } from './ToolRows';
 import { TurnDone, turnUsage, type TurnUsage } from './Usage';
 import type { AgentLive } from './motion/deltas';
@@ -233,6 +234,10 @@ export function Transcript({
     () => ({ byCall: new Map(tasks.flatMap((t) => (t.toolUseId ? [[t.toolUseId, t] as const] : []))), live: agentLive, rows: agentRows, open: onOpenAgent }),
     [tasks, agentLive, agentRows, onOpenAgent],
   );
+  // The Agents panel beside the transcript reads the calls behind the tasks and each agent's own rows from here (taskFeed.ts).
+  const calls = useMemo(() => taskCalls(events, tasks), [events, tasks]);
+  useEffect(() => publishTaskFeed(sessionId, { calls, rows: agentRows }), [sessionId, calls, agentRows]);
+  useEffect(() => () => publishTaskFeed(sessionId, null), [sessionId]);
   const lastActivity = items.findLast((i) => i.kind === 'activity')?.key;
   const turns = useMemo(() => artifactTurns(events), [events]);
 
