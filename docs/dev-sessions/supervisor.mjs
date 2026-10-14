@@ -410,6 +410,18 @@ async function watch() {
           ts.pendingContinue = true;
         }
         ts.claudeId = cur.claudeId;
+        // A chat that lost Bypass (a move or restart came back in `default`, 2026-10-13) would wait for every tool approval: put it back (T-256).
+        if (cur.mode && cur.mode !== 'bypassPermissions' && !DRY) {
+          try {
+            const re = await api('POST', '/api/chat/reauth', { code: CODE });
+            if (re.error) throw new Error(re.error.message);
+            const bp = await api('POST', `/api/chat/sessions/${cur.id}/bypass`, { acknowledged: true });
+            if (bp.error) throw new Error(`${bp.error.code} ${bp.error.message}`);
+            log(`${t.key}: mode was ${cur.mode}: Bypass put back`);
+          } catch (e) {
+            log(`${t.key}: mode is ${cur.mode} and Bypass could not be put back: ${e.message}`);
+          }
+        }
         if (ts.pendingContinue && cur.state === 'idle') {
           try {
             await sessionSend(cur.id, (t.moved ?? MOVED)(cur.claudeName ?? 'another Claude'));
