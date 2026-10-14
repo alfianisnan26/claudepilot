@@ -76,25 +76,75 @@ export interface AgentCaps {
 
 const HOUR_MS = 3_600_000;
 
-/** Why a session may not start another, or null when it may. `parent` is the session that would start it. */
+/**
+ * T-294: how many workers a session may run at once: its own limit (`ChatSession.maxWorkers`) clamped to the global `sessions.maxChildren`,
+ * or the global cap when it has none. The global settings stay the ceiling. Null only with no caps installed and no own limit: no limit.
+ */
+export function effectiveMaxWorkers(caps: Pick<AgentCaps, 'maxChildren'> | null | undefined, own: number | null | undefined): number | null {
+  const mine = typeof own === 'number' && Number.isInteger(own) && own >= 0 ? own : null;
+  if (!caps) return mine;
+  return mine === null ? caps.maxChildren : Math.min(mine, caps.maxChildren);
+}
+
+/** T-294: the Claude Code tools a session with sub-agents off is launched without (`--disallowedTools`): the sub-agent tool under both its names. */
+export const SUBAGENT_TOOLS = ['Agent', 'Task'] as const;
+
+/**
+ * Why a session may not start another, or null when it may. `parent` is the session that would start it, with its own limit on workers
+ * (T-294: null for the global one, 0 for none). `caps` null: no global limits installed (tests); the session's own limit still holds.
+ */
 export function spawnProblem(
-  caps: AgentCaps,
-  parent: { id: string; depth: number },
+  caps: AgentCaps | null,
+  parent: { id: string; depth: number; maxWorkers?: number | null },
   children: { state: string; createdAt: string }[],
   now = Date.now(),
 ): AppError | null {
   const refuse = (scope: string, message: string, limit: number) => new AppError(SESSION_CAP, message, { status: 409, details: { scope, limit } });
-  if (parent.depth + 1 > caps.maxDepth)
+  if (caps && parent.depth + 1 > caps.maxDepth)
     return refuse(
       'depth',
       caps.maxDepth === 0 ? 'Sessions may not start sessions here (Settings › Sessions).' : `Sessions started by sessions may go ${caps.maxDepth} ${caps.maxDepth === 1 ? 'level' : 'levels'} deep, and this session is at that depth (Settings › Sessions).`,
       caps.maxDepth,
     );
+  const own = effectiveMaxWorkers(null, parent.maxWorkers);
+  if (own === 0) return refuse('session_workers', 'This session may not start workers: its own limit is 0 (a person or an admin sets it).', 0);
   const live = children.filter((c) => c.state !== 'ended').length;
-  if (live >= caps.maxChildren) return refuse('children', `This session already has ${live} workers running, which is the limit (Settings › Sessions). Wait for one to finish, or end one.`, caps.maxChildren);
+  // Its own limit when that is the tighter one, named as its own; else the global one.
+  if (own !== null && (!caps || own < caps.maxChildren) && live >= own)
+    return refuse('session_workers', `This session already has ${live} workers running, which is its own limit. Wait for one to finish, or end one.`, own);
+  if (caps && live >= caps.maxChildren) return refuse('children', `This session already has ${live} workers running, which is the limit (Settings › Sessions). Wait for one to finish, or end one.`, caps.maxChildren);
   const recent = children.filter((c) => Date.parse(c.createdAt) > now - HOUR_MS).length;
-  if (recent >= caps.spawnsPerHour) return refuse('rate', `This session has started ${recent} workers in the last hour, which is the limit (Settings › Sessions).`, caps.spawnsPerHour);
+  if (caps && recent >= caps.spawnsPerHour) return refuse('rate', `This session has started ${recent} workers in the last hour, which is the limit (Settings › Sessions).`, caps.spawnsPerHour);
   return null;
+}
+
+/** T-294: the limits a worker asks for (`session_spawn`); absent fields take its parent's. */
+export interface WorkerLimitsAsk {
+  maxWorkers?: number;
+  subagents?: boolean;
+}
+
+/**
+ * T-294: a worker's limits, never wider than its parent's: `maxWorkers` at most the parent's effective value (its own clamped to the global
+ * cap), and sub-agents on only when the parent has them. What is not asked is the parent's own (a null `maxWorkers` stays the global
+ * setting). A wider ask is refused, naming the field, before anything is made.
+ */
+export function workerLimits(
+  caps: Pick<AgentCaps, 'maxChildren'> | null | undefined,
+  parent: { maxWorkers?: number | null; subagents?: boolean },
+  ask: WorkerLimitsAsk = {},
+): { maxWorkers: number | null; subagents: boolean } {
+  const parentOn = parent.subagents !== false;
+  const ceiling = effectiveMaxWorkers(caps, parent.maxWorkers);
+  let maxWorkers = parent.maxWorkers ?? null;
+  if (ask.maxWorkers !== undefined) {
+    if (!Number.isInteger(ask.maxWorkers) || ask.maxWorkers < 0) throw new AppError('VALIDATION_FAILED', 'max_workers is a whole number, 0 or more.', { details: { max_workers: 'A whole number, 0 or more.' } });
+    if (ceiling !== null && ask.maxWorkers > ceiling)
+      throw new AppError('VALIDATION_FAILED', `A worker can run at most ${ceiling} workers of its own: your own limit.`, { details: { max_workers: `At most ${ceiling}.` } });
+    maxWorkers = ask.maxWorkers;
+  }
+  if (ask.subagents === true && !parentOn) throw new AppError('VALIDATION_FAILED', 'You may not start sub-agents, so a worker of yours may not either.', { details: { subagents: 'Off, as yours.' } });
+  return { maxWorkers, subagents: ask.subagents ?? parentOn };
 }
 
 /** A sliding hour of message times per sender, for the rate limit on messages between sessions. */

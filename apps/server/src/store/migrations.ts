@@ -3162,6 +3162,19 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`ALTER TABLE chat_sessions ADD COLUMN agent TEXT;`);
     },
   },
+  {
+    version: 774,
+    name: 'chat sessions: the workers and sub-agents a session may start (T-294)',
+    up(db) {
+      // T-294 (chat-sessions PRD FR51, "Limits per session"): `max_workers` is how many workers this session may run at once (null: the
+      // global sessions.maxChildren; 0: none; above the global cap counts as the cap); `subagents` 0 launches its process with
+      // `--disallowedTools Agent Task`. Every row so far keeps today's behaviour: null and 1.
+      db.exec(`
+        ALTER TABLE chat_sessions ADD COLUMN max_workers INTEGER CHECK (max_workers IS NULL OR max_workers >= 0);
+        ALTER TABLE chat_sessions ADD COLUMN subagents INTEGER NOT NULL DEFAULT 1 CHECK (subagents IN (0, 1));
+      `);
+    },
+  },
 ];
 
 /**

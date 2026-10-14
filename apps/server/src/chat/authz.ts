@@ -44,6 +44,8 @@ export function registerChatAuthz(facts: (id: string) => SessionFacts | null): v
     'POST /api/chat/sessions/:id/restart': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
     'DELETE /api/chat/sessions/:id/restart': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
     'PATCH /api/chat/sessions/:id/restart-hint': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
+    // T-294: a session's limits (workers at once, sub-agents) widen or narrow what it may start: `manage` (a person, an admin's token), audited.
+    'PATCH /api/chat/sessions/:id/limits': { kind: 'objects', checks: [{ type: 'session', verb: 'manage', from: 'path', param: 'id' }], audit: 'session.limits' },
     // T-136: recover in place (an ended-for-integrity session comes back as the same row): operates the session; audited by the controller.
     'POST /api/chat/sessions/:id/recover': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }], audit: 'session.recover' },
     // T-284: clearing a request no process can answer any more operates the session; the controller audits what it resolved (session.request_stale).
