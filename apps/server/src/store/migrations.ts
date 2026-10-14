@@ -3090,8 +3090,10 @@ export const MIGRATIONS: Migration[] = [
     name: 'efficiency lab: draws before the brief and a secret block seed',
     up(db) {
       // T-292 slice 3 (docs/prd/claude-usage.md §28.13): a draw made before a brief is written keeps the attributes it was drawn for (ticket,
-      // role, requested model, effort, the ESTIMATE size then) so a slice that starts with a different role, model, ticket or effort cannot
-      // take it; `status` open, bound (to `slice_id`) or refused (the last bind attempt did not match). A randomized experiment's block order
+      // role, requested model, effort, the ESTIMATE size then) so a slice that starts with a different role, model, ticket, effort or size
+      // cannot take it; `status` open, bound (to `slice_id`), refused (the last bind attempt did not match) or expired (unbound past the
+      // 14 day horizon; the row stays as evidence). `lab_assignments.draw` names the draw an arm came from (NULL: a block place, assigned at
+      // the slice start), so drawn arms are kept out of the block count and counted per session. A randomized experiment's block order
       // is seeded with a random value kept here, never shown, so an arm cannot be worked out from the experiment's id; NULL (experiments made
       // before this migration) keeps the id as the seed, so their blocks do not move. Ids and plain names only.
       db.exec(`
@@ -3110,6 +3112,8 @@ export const MIGRATIONS: Migration[] = [
           status_ms INTEGER
         ) STRICT;
         CREATE INDEX lab_draws_session ON lab_draws (session_id, status);
+        ALTER TABLE lab_assignments ADD COLUMN draw TEXT;
+        UPDATE lab_assignments SET draw = substr(slice_id, 6) WHERE substr(slice_id, 1, 5) = 'draw:';
       `);
     },
   },

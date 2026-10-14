@@ -149,7 +149,8 @@ export function assignSlice(db: DatabaseSync, info: { sessionId: string; sliceId
     }
     const arms = JSON.parse(r.arms) as string[];
     const stratum = r.strata ? stratumOf(JSON.parse(r.strata) as LabStratumKey[], attrs) : (info.stratum ?? defaultStratum(attrs));
-    const k = (db.prepare('SELECT COUNT(*) AS n FROM lab_assignments WHERE experiment_id = ? AND stratum = ? AND arm IS NOT NULL').get(r.id, stratum) as { n: number }).n;
+    // Drawn arms (`draw` set, T-292 slice 3) are not block places: the blocks are the slices that got their arm at the start.
+    const k = (db.prepare('SELECT COUNT(*) AS n FROM lab_assignments WHERE experiment_id = ? AND stratum = ? AND arm IS NOT NULL AND draw IS NULL').get(r.id, stratum) as { n: number }).n;
     const arm = blockOrder(r.seed ?? r.id, stratum, Math.floor(k / arms.length), arms)[k % arms.length]!;
     db.prepare('INSERT INTO lab_assignments (experiment_id, session_id, slice_id, arm, stratum, assigned_ms) VALUES (?, ?, ?, ?, ?, ?)').run(r.id, info.sessionId, info.sliceId, arm, stratum, info.atMs);
     out.set(r.id, arm);
@@ -170,32 +171,53 @@ export interface DrawFor {
 }
 
 /**
- * Draws the arms for a slice that has not started yet (an arm the brief depends on, E2): the same block draw as `assignSlice`, held under
- * `draw:<key>` in the caller's session, with what it was drawn for (`lab_draws`). The orchestrator writes `Lab-Draw: <key>` in the brief's
- * first line; `bindDraw` moves the rows to the slice when that Agent call starts. A draw nobody binds keeps its place in the block, is
- * counted per session, and as a redraw when a later draw of the same session was made for the same ticket, role, model and effort.
+ * A drawn arm: fixed per experiment, ticket and role, from the experiment's secret seed (never shown). So drawing again (a redraw, a
+ * throwaway call that binds the first draw, a second slice of the ticket) gives the same arm, and a draw for another ticket (a peek) says
+ * nothing about this one: there is nothing to draw until an arm suits. Not a block place, so a draw nobody uses moves no other slice's arm.
+ */
+export function drawnArm(seed: string, ticket: string, role: string | null, arms: readonly string[]): string {
+  const h = createHash('sha256').update(`${seed}\u0000draw\u0000${ticket}\u0000${role ?? '-'}`).digest();
+  return arms[h.readUInt32BE(0) % arms.length]!;
+}
+
+/**
+ * Draws the arms for a slice that has not started yet (an arm the brief depends on, E2): per running randomized experiment the drawn arm
+ * for its ticket and role (`drawnArm`), held under `draw:<key>` in the caller's session (`lab_assignments.draw` names the draw), with what
+ * it was drawn for (`lab_draws`). The orchestrator writes `Lab-Draw: <key>` in the brief's first line; `bindDraw` moves the rows to the
+ * slice when that Agent call starts. Every draw is kept and counted (`drawStats`), used or not. A draw needs a ticket.
  */
 export function drawArms(db: DatabaseSync, info: { sessionId: string; draw: string; for: DrawFor; size: string | null; atMs: number }): Map<string, string> {
   const f = info.for;
+  if (!f.ticket) throw new Error('a draw is for a ticket');
   db.prepare('INSERT INTO lab_draws (draw, session_id, ticket, role, model, effort, size, drawn_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(info.draw, info.sessionId, f.ticket, f.role, f.model, f.effort, info.size, info.atMs);
-  return assignSlice(db, { sessionId: info.sessionId, sliceId: DRAW_SLICE + info.draw, attrs: { size: info.size, role: f.role, model: f.model, effort: f.effort }, atMs: info.atMs });
+  const attrs: SliceAttrs = { size: info.size, role: f.role, model: f.model, effort: f.effort };
+  const out = new Map<string, string>();
+  const running = db.prepare("SELECT * FROM lab_experiments WHERE status = 'running' AND design = 'randomized' AND start_ms <= ?").all(info.atMs) as unknown as ExperimentRow[];
+  for (const r of running) {
+    const arm = drawnArm(r.seed ?? r.id, f.ticket, f.role, JSON.parse(r.arms) as string[]);
+    const stratum = r.strata ? stratumOf(JSON.parse(r.strata) as LabStratumKey[], attrs) : defaultStratum(attrs);
+    db.prepare('INSERT INTO lab_assignments (experiment_id, session_id, slice_id, arm, stratum, assigned_ms, draw) VALUES (?, ?, ?, ?, ?, ?, ?)').run(r.id, info.sessionId, DRAW_SLICE + info.draw, arm, stratum, info.atMs, info.draw);
+    out.set(r.id, arm);
+  }
+  return out;
 }
 
 export type BindResult = 'bound' | 'refused' | 'none';
 
 /**
- * Binds a draw to the Agent call that names it: only in the session that drew it, only once, and only when the call's ticket, role, model and
- * effort are the ones it was drawn for. `refused` (a mismatch) leaves the draw unbound and counted; `none`: no such open draw in this session.
- * The same slice again (a replayed line) answers `bound`.
+ * Binds a draw to the Agent call that names it: only in the session that drew it, only once, only while it is not expired (retention), and
+ * only when the call's ticket, role, model and effort, and the ticket's ESTIMATE size now, are the ones it was drawn for. `refused` (a
+ * mismatch, or expired) leaves the draw unbound and counted; `none`: no such draw in this session. The same slice again answers `bound`.
  */
-export function bindDraw(db: DatabaseSync, info: { sessionId: string; draw: string; sliceId: string; for: DrawFor; atMs: number }): BindResult {
-  const d = db.prepare('SELECT ticket, role, model, effort, status, slice_id FROM lab_draws WHERE draw = ? AND session_id = ?').get(info.draw, info.sessionId) as
-    | (DrawFor & { status: string; slice_id: string | null })
+export function bindDraw(db: DatabaseSync, info: { sessionId: string; draw: string; sliceId: string; for: DrawFor; size: string | null; atMs: number }): BindResult {
+  const d = db.prepare('SELECT ticket, role, model, effort, size, status, slice_id FROM lab_draws WHERE draw = ? AND session_id = ?').get(info.draw, info.sessionId) as
+    | (DrawFor & { size: string | null; status: string; slice_id: string | null })
     | undefined;
   if (!d) return 'none';
   if (d.status === 'bound') return d.slice_id === info.sliceId ? 'bound' : 'none';
+  if (d.status === 'expired') return 'refused';
   const f = info.for;
-  if (d.ticket !== f.ticket || d.role !== f.role || d.model !== f.model || d.effort !== f.effort) {
+  if (d.ticket !== f.ticket || d.role !== f.role || d.model !== f.model || d.effort !== f.effort || d.size !== info.size) {
     db.prepare("UPDATE lab_draws SET status = 'refused', status_ms = ? WHERE draw = ?").run(info.atMs, info.draw);
     return 'refused';
   }
@@ -204,18 +226,28 @@ export function bindDraw(db: DatabaseSync, info: { sessionId: string; draw: stri
   return 'bound';
 }
 
-/** Per session, an experiment's draws no slice has bound, and how many of them a later draw for the same ticket, role, model and effort followed. */
-export function drawStats(db: DatabaseSync, experimentId: string): { session: string; unbound: number; redraw: number }[] {
+export interface DrawStat {
+  session: string;
+  /** Every draw of the session that holds an arm in the experiment, bound or not; retention never drops one. */
+  draws: number;
+  bound: number;
+  /** Open, refused or expired. */
+  unbound: number;
+  /** Draws for a ticket and role this session had drawn for before (a redraw, or a later slice of the ticket): the same arm either way. */
+  redraw: number;
+}
+
+/** Per session, an experiment's draws: all of them, bound, unbound, and the redraws. */
+export function drawStats(db: DatabaseSync, experimentId: string): DrawStat[] {
   return db
     .prepare(
-      `SELECT a.session_id AS session, COUNT(*) AS unbound,
-         SUM(EXISTS (SELECT 1 FROM lab_draws n WHERE n.session_id = d.session_id AND n.rowid > d.rowid AND n.ticket IS d.ticket AND n.role IS d.role
-           AND n.model IS d.model AND n.effort IS d.effort)) AS redraw
-       FROM lab_assignments a LEFT JOIN lab_draws d ON d.draw = substr(a.slice_id, 6)
-       WHERE a.experiment_id = ? AND substr(a.slice_id, 1, 5) = ? GROUP BY a.session_id ORDER BY a.session_id`,
+      `SELECT d.session_id AS session, COUNT(*) AS draws, SUM(d.status = 'bound') AS bound,
+         SUM(EXISTS (SELECT 1 FROM lab_draws e WHERE e.session_id = d.session_id AND e.rowid < d.rowid AND e.ticket IS d.ticket AND e.role IS d.role)) AS redraw
+       FROM lab_assignments a JOIN lab_draws d ON d.draw = a.draw
+       WHERE a.experiment_id = ? GROUP BY d.session_id ORDER BY d.session_id`,
     )
-    .all(experimentId, DRAW_SLICE)
-    .map((r) => ({ session: String(r.session), unbound: Number(r.unbound), redraw: Number(r.redraw ?? 0) }));
+    .all(experimentId)
+    .map((r) => ({ session: String(r.session), draws: Number(r.draws), bound: Number(r.bound ?? 0), unbound: Number(r.draws) - Number(r.bound ?? 0), redraw: Number(r.redraw ?? 0) }));
 }
 
 /** Takes a slice out of an experiment's analysis, with the reason (`outage`). Its arm, if any, is kept for the record. */

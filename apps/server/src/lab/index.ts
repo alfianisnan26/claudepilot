@@ -7,7 +7,7 @@
 
 import type { LabExperiment, LabExperimentReport, LabExperimentView, LabPeriod, LabSliceMetrics, LabSliceView, LabSummary } from '@portal/contracts';
 import type { Store } from '../store/store.js';
-import { armMembers, assignSlice, bindDraw, createExperiment, decideExperiment, drawArms, excludeSlice, experimentReport, listExperiments, drawStats, newDrawKey, stopExperiment, type NewExperiment } from './experiments.js';
+import { armMembers, assignSlice, bindDraw, createExperiment, decideExperiment, drawArms, excludeSlice, experimentReport, listExperiments, drawStats, newDrawKey, stopExperiment, type DrawStat, type NewExperiment } from './experiments.js';
 import { LabIngest } from './ingest.js';
 import { sliceMetrics, type SliceFilter } from './metrics.js';
 import { DAY_MS, dbTicketReader, outcomeOf, type TicketFacts, type TicketReader } from './outcomes.js';
@@ -31,9 +31,10 @@ export class Lab {
       // The ticket's ESTIMATE size as it stands when the slice starts (a stratum key, slice 3); read only when a ticket is named.
       const size = s.ticket ? ((opts.tickets ?? dbTicketReader(db))(s.ticket)?.estimateSize ?? null) : null;
       // A brief that names a draw (T-292 slice 3) keeps the arms drawn before it was written; experiments the draw did not cover assign now.
-      // A draw that does not bind (another session, used already, drawn for another ticket, role, model or effort) leaves the draw unbound
-      // and counted, and keeps this slice out of every running experiment: its brief was written for an arm the lab did not give it.
-      if (s.draw && bindDraw(db, { sessionId: s.sessionId, draw: s.draw, sliceId: s.sliceId, for: { ticket: s.ticket, role: s.role, model: s.model, effort: s.effort }, atMs: s.atMs }) !== 'bound') {
+      // A draw that does not bind (another session, used already, expired, drawn for another ticket, role, model, effort or ESTIMATE size)
+      // leaves the draw unbound and counted, and keeps this slice out of every running experiment: its brief was written for an arm the lab
+      // did not give it.
+      if (s.draw && bindDraw(db, { sessionId: s.sessionId, draw: s.draw, sliceId: s.sliceId, for: { ticket: s.ticket, role: s.role, model: s.model, effort: s.effort }, size, atMs: s.atMs }) !== 'bound') {
         for (const e of listExperiments(db)) if (e.status === 'running' && e.design === 'randomized' && e.startMs <= s.atMs) excludeSlice(db, e.id, s.sessionId, s.sliceId, 'draw not bound', s.atMs);
       }
       assignSlice(db, { sessionId: s.sessionId, sliceId: s.sliceId, attrs: { size, role: s.role, model: s.model, effort: s.effort }, atMs: s.atMs });
@@ -73,18 +74,18 @@ export class Lab {
    * Draws the arms of a slice before its brief is written (T-292 slice 3, §28.13), in the caller's session: the size from the ticket's
    * ESTIMATE as at a slice start. Returns the draw key the brief carries (`Lab-Draw: <key>`) and the arm per running experiment.
    */
-  drawArms(info: { sessionId: string; ticket: string | null; role: string | null; model: string | null; effort: string | null }): { draw: string; arms: { experiment: string; name: string; arm: string }[] } {
+  drawArms(info: { sessionId: string; ticket: string; role: string | null; model: string | null; effort: string | null }): { draw: string; arms: { experiment: string; name: string; arm: string }[] } {
     const db = this.#db();
     if (!db) throw new Error('the store is not writable');
-    const size = info.ticket ? ((this.opts.tickets ?? dbTicketReader(db))(info.ticket)?.estimateSize ?? null) : null;
+    const size = (this.opts.tickets ?? dbTicketReader(db))(info.ticket)?.estimateSize ?? null;
     const draw = newDrawKey();
     const got = drawArms(db, { sessionId: info.sessionId, draw, for: { ticket: info.ticket, role: info.role, model: info.model, effort: info.effort }, size, atMs: this.#now() });
     const names = new Map(listExperiments(db).map((e) => [e.id, e.name]));
     return { draw, arms: [...got].map(([id, arm]) => ({ experiment: id, name: names.get(id) ?? id, arm })) };
   }
 
-  /** Per session, the draws of an experiment no slice has bound, and how many of them were redrawn. */
-  drawStats(experimentId: string): { session: string; unbound: number; redraw: number }[] {
+  /** Per session, an experiment's draws: all, bound, unbound, redraws. */
+  drawStats(experimentId: string): DrawStat[] {
     const db = this.opts.store.db;
     return db ? drawStats(db, experimentId) : [];
   }
@@ -183,7 +184,7 @@ export class Lab {
     const db = this.#db();
     if (!db) return null;
     const r = pruneLab(db, this.#now());
-    if (r.frozen || r.requests || r.tools || r.draws) this.opts.log?.(`lab: retention froze ${r.frozen} slices, dropped ${r.requests} request and ${r.tools} tool rows and ${r.draws} unbound draws`);
+    if (r.frozen || r.requests || r.tools || r.draws) this.opts.log?.(`lab: retention froze ${r.frozen} slices, dropped ${r.requests} request and ${r.tools} tool rows and expired ${r.draws} unbound draws`);
     return r;
   }
 
