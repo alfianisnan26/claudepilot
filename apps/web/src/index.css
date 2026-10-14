@@ -4,6 +4,19 @@
 @source '../../../node_modules/@isnanme/ui/dist';
 
 /*
+ * The size classes (T-158), as variants `medium:` (a tablet, 600 px), `expanded:` (an HD desktop, 1024), `large:` (FHD and QHD, 1600)
+ * and `xlarge:` (4K and ultrawide, 2560); below them is compact (a phone). lib/size.ts holds the same numbers (useSize) and
+ * size.test.ts keeps the two equal. `max-w-measure` is prose's readable line (about 70 characters) inside a panel.
+ */
+@theme {
+  --breakpoint-medium: 37.5rem;
+  --breakpoint-expanded: 64rem;
+  --breakpoint-large: 100rem;
+  --breakpoint-xlarge: 160rem;
+  --container-measure: 70ch;
+}
+
+/*
  * Liquid glass (the session screen): a frosted field (the Done pill) and, below, the floating frosted card. Both fall back to the
  * plain colour where backdrop-filter isn't supported. (The full-width `glass` bar went with the floating session header, 2026-10-13.)
  */
