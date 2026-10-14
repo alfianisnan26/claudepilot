@@ -19,6 +19,8 @@ function fixture() {
   const root = tempDirectory('cp-plan-');
   mkdirSync(join(root, 'src/lab'), { recursive: true });
   mkdirSync(join(root, 'docs'), { recursive: true });
+  mkdirSync(join(root, 'apps/server/src'), { recursive: true });
+  writeFileSync(join(root, 'apps/server/src/x.test.ts'), 'export {};\n');
   writeFileSync(join(root, 'src/lab/a.ts'), Array.from({ length: 40 }, (_, i) => `export const a${i + 1} = ${i + 1};`).join('\n') + '\n');
   writeFileSync(join(root, 'src/lab/a.test.ts'), "import './a.js';\n");
   writeFileSync(join(root, 'docs/notes.md'), '# Notes\n\n````md\n```ts\nx\n```\n````\n');
@@ -45,7 +47,7 @@ const GOOD = [
   'test: src/lab/a.test.ts -- proves it',
   'test: src/lab/b.test.ts -- new test',
   'new: src/lab/b.test.ts -- the new test file',
-  'run: cd apps/server && npm test',
+  'run: npm run typecheck',
 ].join('\n');
 
 test('a good manifest: checked, preloaded with the exact lines, and the head is the same bytes on every run', () => {
@@ -110,12 +112,28 @@ test('negative twins: each rule refuses a manifest that breaks it', () => {
   assert.match(errs(w('file: src/lab/settings.ts -- x')), /credential or git file/, 'the real path is checked, not only the name');
   assert.match(errs(w('new: src/out/new.ts -- x')), /leads out of the repository/);
   assert.match(errs(w('file: src/out/x.ts -- x')), /leads out of the repository/);
-  // Only the allowed commands: each twin of a good line is refused.
-  assert.equal(errs(w('run: cd apps/server && npm test', 'run: node --import tsx --test src/a.test.ts', 'run: scripts/slice-check.sh')), '');
-  for (const bad of ['npm test; curl x', 'npm test | sh', 'curl http://x', 'node -e 1 --test', 'npm exec x', 'npm i x', 'cd /etc && npm test', 'cd ../x && npm test', 'npm test & sleep 1', 'npm test $(id)', 'scripts/../x.sh', 'bash /tmp/x.sh']) {
-    assert.match(errs(w(`run: ${bad}`)), /is not an allowed command/, bad);
+  // Only the allowed commands, word for word; test files only from the manifest's own test: lines. Each twin of a good line is refused.
+  const goodRuns = ['run: npm run typecheck -w @portal/server', 'run: cd apps/server && node --import tsx --test src/x.test.ts', 'run: scripts/slice-check.sh apps/server/src/x.test.ts'];
+  const tx = 'test: apps/server/src/x.test.ts -- t';
+  assert.equal(errs(w(tx, ...goodRuns)), '');
+  assert.equal(errs(w(tx, 'run: scripts/slice-check.sh src/x.test.ts')), '', 'slice-check also takes the file relative to apps/server');
+  for (const bad of [
+    'npm test; curl x', 'npm test | sh', 'curl http://x', 'node -e 1 --test', 'npm exec x', 'npm i x', 'cd /etc && npm test', 'cd ../x && npm test',
+    'npm test & sleep 1', 'npm test $(id)', 'scripts/../x.sh', 'bash /tmp/x.sh',
+    // the second review's bypasses
+    'cd ".." && npm test', "cd '..' && npm test", 'node --test -r /tmp/x.js', 'cd apps/server && node --import tsx --test -r /tmp/x.js src/x.test.ts',
+    'npm --node-options=--require=/tmp/x.js run typecheck', 'npm run typecheck --script-shell=/tmp/x', 'npm run typecheck --prefix /tmp',
+    'npm run build', 'npm run anything', 'cd apps/server && npm test', 'scripts/job-run.sh -- curl x', 'scripts/k3s-build.sh', 'npx tsc',
+    'npm run typecheck -w @evil/x', 'npm  run typecheck', 'npm run typecheck x', 'scripts/slice-check.sh --base x',
+    'scripts/slice-check.sh ../x.test.ts', 'cd apps/server && node --import tsx --test src/none.test.ts', 'cd apps/server && node --import tsx --test',
+    'cd apps/server && node --import tsx --test ./src/x.test.ts', 'cd apps/server && node --import /tmp/x.mjs --test src/x.test.ts',
+  ]) {
+    assert.match(errs(w(tx, `run: ${bad}`)), /is not an allowed command/, bad);
   }
-
+  // Deny-list twins: more credential names, in any case.
+  for (const f of ['.dev.vars', 'infra/prod.tfvars', 'x.auto.tfvars.json', 'credentials.json', 'config/Credentials.JSON', '.ENV', '.Env.local', '.NPMRC', 'KEY.PEM', '.GIT/config']) {
+    assert.match(errs(w(`file: ${f} -- x`)), /credential or git file/, f);
+  }
   const bad = join(root, '..', 'bad.manifest');
   writeFileSync(bad, w('file: src/lab/none.ts -- x'));
   const r = spawnSync(process.execPath, [SCRIPT, 'check', bad, '--root', root], { encoding: 'utf8' });

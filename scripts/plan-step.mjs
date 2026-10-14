@@ -24,7 +24,7 @@
 //   file: <path>[:<from>-<to>] -- <why>             at most 10; preloaded; no range: the whole file
 //   new: <path> -- <why>                            a file to create; its folder must exist
 //   test: <path> -- <why>                           a test file to run or extend (exists, or is also a `new:`)
-//   run: <command>                                  the commands that check the slice, at most 3
+//   run: <command>                                  the commands that check the slice, at most 3, each one of a fixed list (runAllowed)
 // Honest limit: a manifest can miss a file. The implementer then says which file and why before reading it, and a missed test shows as a
 // failing check (scripts/slice-check.sh), never silently.
 
@@ -54,7 +54,8 @@ export const E2 = Object.freeze({
   thresholds: { adopt_cost_change: -0.15, interval: 'above zero', guardrail_yield: 'not down', guardrail_defects: 'not up' },
 });
 
-const DENY = [/(^|\/)\.env(\.|rc$|$)/, /(^|\/)\.npmrc$/, /(^|\/)\.netrc$/, /(^|\/)\.git(\/|$)/, /(^|\/)node_modules\//, /\.(pem|key|p12|pfx|keystore)$/i, /(^|\/)id_(rsa|ed25519|ecdsa)/, /git-credentials/, /(^|\/)\.kube\//, /(^|\/)\.config\/gh\//];
+// Case-insensitive: a case-insensitive file system (a Mac) opens `.ENV` as `.env`.
+const DENY = [/(^|\/)\.env(\.|rc$|$)/i, /(^|\/)\.dev\.vars$/i, /\.tfvars(\.json)?$/i, /(^|\/)credentials\.json$/i, /(^|\/)\.npmrc$/i, /(^|\/)\.netrc$/i, /(^|\/)\.git(\/|$)/i, /(^|\/)node_modules\//i, /\.(pem|key|p12|pfx|keystore)$/i, /(^|\/)id_(rsa|ed25519|ecdsa)/i, /git-credentials/i, /(^|\/)\.kube\//i, /(^|\/)\.config\/gh\//i];
 
 /** Parses the explorer's answer. Never throws: every problem is an error line with its line number. */
 export function parseManifest(text) {
@@ -102,23 +103,32 @@ function inside(root, p) {
 }
 
 /**
- * A `run:` line is one or more commands joined by `&&`, each of: `cd <folder in the repository>`, `npm test|run|run-script|ci <words>`,
- * `npx tsc <words>`, `node <words>` with `--test` (no `-e`, `-p`, `--eval`, `--print` or a `data:` import), or a script under `scripts/` or `tools/` (also through bash or sh). Words are plain: no `;`, `|`, `$`,
- * backticks, redirection, parentheses or backslashes, so the explorer cannot hand the implementer anything else to run.
+ * A `run:` line is one command from a fixed list, word for word; the only free words are test files, and each must be one of the manifest's
+ * own `test:` lines (so it exists in the repository or is a `new:` file the slice writes). The forms:
+ *   npm run typecheck                                              the whole typecheck
+ *   npm run typecheck -w @portal/server|@portal/web|@portal/contracts
+ *   cd apps/server && node --import tsx --test <test file>...      (or apps/web) the files relative to that folder
+ *   scripts/slice-check.sh [<test file>...]                        the files relative to the repository or to apps/server
+ * Words are split on single spaces and are plain (letters, digits, `_./@=-`): no quotes, no `;|&$` or backticks, no redirection, no
+ * backslash, no flag the list does not name (so no `-r`, `--node-options`, `--script-shell`, `--prefix`), no `..` and no absolute path.
+ * Anything else is refused: the explorer is a model, and its lines are untrusted data.
  */
-export function runAllowed(line) {
-  if (/[;|$`<>()\\\n\r&]/.test(line.replace(/&&/g, ' '))) return false;
-  const WORD = /^[A-Za-z0-9_./:=@,*+'"-]+$/;
-  return line.split('&&').every((seg) => {
-    const w = seg.trim().split(/\s+/);
-    if (!w[0] || !w.every((x) => WORD.test(x))) return false;
-    if (w[0] === 'cd') return w.length === 2 && !isAbsolute(w[1]) && !w[1].split('/').includes('..');
-    if (w[0] === 'npm') return ['test', 't', 'run', 'run-script', 'ci'].includes(w[1] ?? '');
-    if (w[0] === 'npx') return w[1] === 'tsc';
-    if (w[0] === 'node') return w.includes('--test') && !w.some((x) => /^(-e|-p|--eval|--print)(=|$)|data:/.test(x));
-    const script = w[0] === 'bash' || w[0] === 'sh' ? w[1] : w[0];
-    return !!script && /^(\.\/)?(scripts|tools)\/[A-Za-z0-9_./-]+$/.test(script) && !script.split('/').includes('..');
-  });
+const WORKSPACES = Object.freeze(['@portal/server', '@portal/web', '@portal/contracts']);
+const TEST_FILE = /^[A-Za-z0-9_][A-Za-z0-9_./-]*\.test\.(ts|tsx|mjs)$/;
+export function runAllowed(line, tests = new Set()) {
+  const s = String(line);
+  if (!/^[A-Za-z0-9_./@=& -]+$/.test(s) || /\s{2}|^\s|\s$/.test(s)) return false;
+  const w = s.split(' ');
+  const isTest = (f, base) => TEST_FILE.test(f) && !f.split('/').includes('..') && !f.split('/').includes('.') && tests.has(base + f);
+  const eq = (xs) => xs.length <= w.length && xs.every((x, i) => w[i] === x);
+  if (w.join(' ') === 'npm run typecheck') return true;
+  if (w.length === 5 && eq(['npm', 'run', 'typecheck', '-w']) && WORKSPACES.includes(w[4])) return true;
+  for (const pkg of ['apps/server', 'apps/web']) {
+    const head = ['cd', pkg, '&&', 'node', '--import', 'tsx', '--test'];
+    if (eq(head) && w.length > head.length) return w.slice(head.length).every((f) => isTest(f, `${pkg}/`));
+  }
+  if (w[0] === 'scripts/slice-check.sh') return w.slice(1).every((f) => isTest(f.replace(/^apps\/server\//, ''), 'apps/server/'));
+  return false;
 }
 
 const textLines = (abs) => {
@@ -141,7 +151,8 @@ export function checkManifest(m, { root, ticket } = {}) {
   if (m.plan.length > CAPS.plan) errors.push(`${m.plan.length} plan lines, at most ${CAPS.plan}`);
   if (m.files.length > CAPS.files) errors.push(`${m.files.length} files, at most ${CAPS.files}`);
   if (m.runs.length > CAPS.runs) errors.push(`${m.runs.length} run lines, at most ${CAPS.runs}`);
-  for (const r of m.runs) if (!runAllowed(r)) errors.push(`run: "${r.slice(0, 80)}" is not an allowed command (npm, npx tsc, node --test, scripts/ or tools/, cd, joined by &&)`);
+  const testPaths = new Set(m.tests.map((t) => t.path));
+  for (const r of m.runs) if (!runAllowed(r, testPaths)) errors.push(`run: "${r.slice(0, 80)}" is not an allowed command (npm run typecheck [-w @portal/<x>], cd apps/server && node --import tsx --test <test: files>, scripts/slice-check.sh [<test: files>])`);
   if (!m.tests.length) errors.push('no test: line (every slice names the test it runs or writes)');
   const seen = new Set();
   let lines = 0;
@@ -231,7 +242,7 @@ export function explorerBrief({ ticket, size, slice = '' }) {
     'file: <path>[:<from>-<to>] -- <why it is read or changed>   (at most 10; a range when the file is long)',
     'new: <path> -- <why>                                  (a file to create)',
     'test: <path> -- <what it proves>                      (at least one; a new test file is also a new: line)',
-    'run: <command>                                        (at most 3: the typecheck and the touched tests)',
+    'run: <command>                                        (at most 3, exactly one of: npm run typecheck | npm run typecheck -w @portal/server | cd apps/server && node --import tsx --test <test: files> | scripts/slice-check.sh <test: files>)',
     `Every file the implementer must read or change is a file: line; the preloaded text is capped at ${CAPS.preloadLines} lines and ${CAPS.preloadBytes} bytes, so name ranges for long files. Paths are relative to the repository root and must exist. No credential file, no .env, nothing under .git or node_modules.`,
   ].join('\n') + '\n';
 }
