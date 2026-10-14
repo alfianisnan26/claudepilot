@@ -54,6 +54,7 @@ import { validateFiles, type SnapshotFile, type Validated } from './spec/validat
 import { CiStore, type DeploymentRow, type EnvironmentRow, type RepoRow, type RunRow } from './store.js';
 import { CiLinks, runLink, type CiBumper } from './links.js';
 import type { CiSessionsPort } from './sessions.js';
+import { DeployChatsWatch } from './deployChats.js';
 import type { CiTicketsPort } from './tickets.js';
 import { cleanLog, oneLine, redactSecrets } from './text.js';
 import { flakyComment, flakyDescription, flakyExcerpt, flakyTitle, parseFlaky, repoTag, type FlakySighting } from './flaky.js';
@@ -201,6 +202,8 @@ export class CiService {
   readonly #complained = new Map<string, string>();
   readonly #live = new Map<string, { stream: SessionStream; offset: number }>();
   #timer: NodeJS.Timeout | undefined;
+  /** T-277 layer 4: says in the log which chats are attached while a deploying job runs (null without a sessions port that can tell). */
+  readonly #deployChats: DeployChatsWatch | null;
   readonly #maintained = new Map<string, number>();
   #lastPrune = 0;
 
@@ -212,6 +215,8 @@ export class CiService {
     this.#cs = new CiStore(store);
     this.#links = new CiLinks(this.#cs, opts.tickets, opts.sessions);
     this.#tickets = opts.tickets;
+    const sessions = opts.sessions;
+    this.#deployChats = sessions?.attached ? new DeployChatsWatch(() => sessions.attached!()) : null;
     this.#opts = {
       maxRunsPerWorkspace: opts.maxRunsPerWorkspace ?? 2,
       maxJobsParallel: opts.maxJobsParallel ?? 2,
@@ -586,6 +591,8 @@ export class CiService {
     }
     if (s.status === 'passed' || s.status === 'failed' || s.status === 'cancelled') return this.#complete(row, s);
     if (!polled.alive) return this.#lost(row, s);
+    // Every poll, changed or not: the open control requests of attached chats change while the release step waits on them.
+    if (this.#deployChats) this.#deployChats.observe(row.id, this.#cs.deploymentsOfRun(row.id), s.jobs);
     const text = JSON.stringify(s);
     if (text !== row.state) {
       this.#cs.updateRun(row.id, { state: text, started_at: s.startedAt ?? row.started_at });
@@ -685,6 +692,7 @@ export class CiService {
       duration_ms: s.durationMs ?? Math.max(0, Date.parse(finished) - started),
     });
     console.log(`[ci] ${row.id} ${s.status}${s.reason ? ` (${s.reason})` : ''}`);
+    this.#deployChats?.forget(row.id);
     this.#settleDeployments(row.id, s);
     await this.#archive(row.id).catch((e: unknown) => console.error(`[ci] ${row.id}: logs not kept yet: ${(e as Error).message}`));
     this.#changed();

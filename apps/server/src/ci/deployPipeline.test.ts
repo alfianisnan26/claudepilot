@@ -6,13 +6,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { tempDirectory } from '../store/testTmp.js';
 import { compile } from './spec/compile.js';
 import { validatePipeline } from './spec/validate.js';
+import type { CiAttachedChat, CiSessionsPort } from './sessions.js';
 import { harness, WS } from './testkit.js';
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -78,7 +79,10 @@ case $args in
     printf '%s Synced %s' "$(git --git-dir="$FAKE/github.git" rev-parse main)" "$health" ;;
   *" rollout status "*) echo 'deployment "claudepilot-portal" successfully rolled out' ;;
   *" get deploy/"*) manifest | grep -oE 'image: [^ ]*claudepilot/portal:[^ ]*' | sed 's/^image: //' ;;
-  *" logs deploy/"*) cat "$FAKE/portal.log" 2>/dev/null || echo '[store] ready (portal 1234abcd, schema 610)' ;;
+  # The portal's log; a portal.log.next becomes the log after this read (the portal said something new in between).
+  *" logs deploy/"*) cat "$FAKE/portal.log" 2>/dev/null || echo '[store] ready (portal 1234abcd, schema 610)'; [ -f "$FAKE/portal.log.next" ] && mv "$FAKE/portal.log.next" "$FAKE/portal.log"; true ;;
+  # The new portal pod's start (the chats job's window, T-277 layer 4): a file, or now.
+  *" get pods "*"startTime"*) cat "$FAKE/started" 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ ;;
   *" get pods "*) printf '0 ' ;;
   *" get job "*) if [ -f "$FAKE/build-fails" ]; then printf '/1'; else printf '1/'; fi ;;
   *" logs job/"*) echo "kaniko: pushing"; [ -f "$FAKE/leak" ] && echo "auth: $(cat "$FAKE/token")"; true ;;
@@ -90,6 +94,11 @@ esac
 const FAKE_GH = `#!/usr/bin/env bash
 printf 'gh %s\\n' "$1 $2" >> "$FAKE/calls.log"
 [ "$1 $2" = "auth token" ] && cat "$FAKE/token"
+`;
+
+/** The workspace's processes: the \`cp-session tail\` followers the chats job counts. */
+const FAKE_PS = `#!/usr/bin/env bash
+cat "$FAKE/ps.txt" 2>/dev/null || true
 `;
 
 const FAKE_CURL = `#!/usr/bin/env bash
@@ -134,6 +143,7 @@ function world(): World {
   shell(join(bin, 'kubectl'), FAKE_KUBECTL);
   shell(join(bin, 'gh'), FAKE_GH);
   shell(join(bin, 'curl'), FAKE_CURL);
+  shell(join(bin, 'ps'), FAKE_PS);
   // Built at run time: a value shaped like nothing a scanner knows, for the mask to find.
   const token = `canary${randomBytes(12).toString('hex')}`;
   writeFileSync(join(root, 'token'), token);
@@ -152,6 +162,11 @@ function world(): World {
     DEPLOY_POLL_S: '1',
     // The gate here, with the stand-in gate.sh; the in-cluster path (the default) has a test of its own.
     DEPLOY_GATE_IN_CLUSTER: 'false',
+    // The chats a release restarts (T-277 layer 4): seconds here, not the minutes of the cluster.
+    DEPLOY_CHATS_SEEN_S: '1',
+    DEPLOY_CHATS_WAIT_S: '2',
+    DEPLOY_CHATS_WINDOW_S: '2',
+    DEPLOY_CHATS_POLL_S: '1',
   };
   const git = (args: string[], cwd = root) => {
     const r = spawnSync('git', args, { cwd, env, encoding: 'utf8' });
@@ -180,12 +195,14 @@ function world(): World {
   const work = join(root, 'work');
   git(['clone', '-q', '--no-checkout', src, work]);
   git(['checkout', '-q', '--detach', sha], work);
-  const runEnv = (inputs: Record<string, string>) => ({
+  const runEnv = (script: string, inputs: Record<string, string>) => ({
     ...env,
     PILOT_SHA: sha,
     PILOT_BRANCH: 'integration',
     PILOT_RUN_ID: 'rtestdeploy01',
     PILOT_RUN_NUMBER: '7',
+    PILOT_JOB: script === 'chats' ? 'chats' : 'release',
+    PILOT_WORKSPACE: 'kubernetes/kohi-event',
     PILOT_INPUT_IMAGES: 'portal',
     PILOT_INPUT_GATE: 'true',
     PILOT_INPUT_DEPLOY: 'true',
@@ -202,7 +219,7 @@ function world(): World {
     base,
     git,
     run(script, inputs = {}) {
-      const r = spawnSync('bash', [`.pilot/scripts/${script}.sh`], { cwd: work, env: runEnv(inputs), encoding: 'utf8', timeout: 60_000 });
+      const r = spawnSync('bash', [`.pilot/scripts/${script}.sh`], { cwd: work, env: runEnv(script, inputs), encoding: 'utf8', timeout: 60_000 });
       return { code: r.status ?? -1, out: `${r.stdout}${r.stderr}` };
     },
     calls: () => (existsSync(join(root, 'calls.log')) ? readFileSync(join(root, 'calls.log'), 'utf8') : ''),
@@ -229,10 +246,13 @@ test('the pipeline file: manual only, the release deploys to production, rollbac
     ['build', ['gate'], 'success', null, null],
     ['release', ['build'], 'success', null, 'production'],
     ['verify', ['release'], 'success', null, null],
+    ['chats', ['release', 'verify'], 'success', null, null],
     ['rollback', ['release', 'verify'], 'failure', null, null],
   ]);
   assert.equal(c.group, 'deploy-claudepilot', 'one deploy at a time');
   assert.ok(c.plan.jobs.every((j) => j.steps.every((s) => /^bash \.pilot\/scripts\/[a-z]+\.sh$/.test(s.run))), 'the logic is in the scripts');
+  assert.ok(!c.plan.jobs.find((j) => j.id === 'rollback')!.needs.includes('chats'), 'a chat that ended fails the run but never rolls a healthy release back (a second restart)');
+  assert.deepEqual(c.plan.jobs.find((j) => j.id === 'release')!.artifacts?.paths, ['.pilot/out/release.env', '.pilot/out/chats.env']);
   const buildOnly = compile(v.pipeline!, { event: 'manual', ref: 'refs/heads/integration', sha: 'a'.repeat(40), base: null, actor: 'ui', repo: 'claudepilot', ticket: null, inputs: { images: 'portal', gate: true, deploy: false, dry_run: false }, workspace: 'x/y', runId: 'rabc124', runNumber: 2 }, { maxParallel: 2 });
   assert.ok(buildOnly.ok && buildOnly.plan.jobs.find((j) => j.id === 'release')!.skip === 'condition', 'deploy=false leaves the release out');
 });
@@ -265,6 +285,9 @@ test('a dry run says what each job would do and changes nothing: no push, no clu
   const verify = w.run('verify', dry);
   assert.equal(verify.code, 0, verify.out);
   assert.match(verify.out, /would wait for Argo CD/);
+  const chats = w.run('chats', dry);
+  assert.equal(chats.code, 0, chats.out);
+  assert.match(chats.out, /\[dry-run\] would watch the chats attached at release \(unavailable\)/);
   const rollback = w.run('rollback', dry);
   assert.equal(rollback.code, 0, rollback.out);
   assert.match(rollback.out, /nothing to roll back/);
@@ -398,6 +421,94 @@ exit 0
   assert.match(outFile(w2, 'release.env'), /BRANCH_SYNC=failed/);
 });
 
+/** The portal's `[deploy-chats]` line about the fake run's release (apps/server/src/ci/deployChats.ts): two chats, the first in this workspace. */
+const chatsLine = (pending: number) =>
+  `[deploy-chats] run=rtestdeploy01 job=release attached=2 pending=${pending} chats=3907db7f:cl_a:bypassPermissions:aa11bb22:${pending}:kubernetes/kohi-event,5c9fcb5f:cl_b:default:cc33dd44:0:ws_other\n`;
+
+test('T-277 layer 4: the release records the chats attached at release, waits while one answers a control request, and the wait ends at its bound', () => {
+  const w = world();
+  assert.equal(w.run('build', { images: 'portal' }).code, 0);
+  // Another run's line, then ours (open: 1), then a line that only CONTAINS the tag (a chat's text echoed in a log line) and must not count.
+  writeFileSync(join(w.root, 'portal.log'), `[ci] noise\n[deploy-chats] run=rother job=release attached=0 pending=0 chats=-\n${chatsLine(1)}[x] said: [deploy-chats] run=rtestdeploy01 job=release attached=0 pending=0 chats=-\n`);
+  writeFileSync(join(w.root, 'portal.log.next'), chatsLine(0)); // the next read: answered
+  const release = w.run('release');
+  assert.equal(release.code, 0, release.out);
+  assert.match(release.out, /chats: 1 control request\(s\) of attached chats not answered yet: waiting up to 2s\nchats: answered after [12]s\n/);
+  assert.match(release.out, /chats: 2 attached to a live process at release \(the portal's line: attached=2 pending=0\)\n  3907db7f  claude cl_a  mode bypassPermissions  open 0  workspace kubernetes\/kohi-event\n  5c9fcb5f  claude cl_b  mode default  open 0  workspace ws_other\n/);
+  assert.ok(release.out.indexOf('answered after') < release.out.indexOf('release: '), 'the wait comes before the push');
+  assert.match(outFile(w, 'chats.env'), /^CHATS_STATE=recorded\nCHATS_AT=\d{4}-\d\d-\d\dT[\d:]+Z\nCHATS_ATTACHED=2\nCHATS_PENDING=0\nCHATS=3907db7f:cl_a:bypassPermissions:aa11bb22:0:kubernetes\/kohi-event,5c9fcb5f:cl_b:default:cc33dd44:0:ws_other\n$/);
+  assert.notEqual(w.main(), w.base, 'released');
+
+  // A request that is never answered: the wait ends at DEPLOY_CHATS_WAIT_S and the release goes out anyway.
+  const w2 = world();
+  assert.equal(w2.run('build', { images: 'portal' }).code, 0);
+  writeFileSync(join(w2.root, 'portal.log'), chatsLine(2));
+  const t0 = Date.now();
+  const bounded = w2.run('release');
+  const took = Date.now() - t0;
+  assert.equal(bounded.code, 0, bounded.out);
+  assert.match(bounded.out, /WARNING: chats: 2 control request\(s\) still open after 2s: releasing anyway/);
+  assert.ok(took < 20_000, `the wait is bounded (${took} ms)`);
+  assert.match(outFile(w2, 'chats.env'), /CHATS_PENDING=2\n/);
+  assert.match(outFile(w2, 'release.env'), /PUSHED=1/);
+
+  // A portal that says nothing (one from before this change): unavailable, never a guess, and the release is not held.
+  const w3 = world();
+  assert.equal(w3.run('build', { images: 'portal' }).code, 0);
+  const silent = w3.run('release');
+  assert.equal(silent.code, 0, silent.out);
+  assert.match(silent.out, /chats: unavailable: the portal did not say which chats are attached within 1s/);
+  assert.equal(outFile(w3, 'chats.env'), 'CHATS_STATE=unavailable\n');
+  assert.match(outFile(w3, 'release.env'), /PUSHED=1/);
+  const unchecked = w3.run('chats');
+  assert.equal(unchecked.code, 0, unchecked.out);
+  assert.match(unchecked.out, /WARNING: chats: unavailable: the release step has no record/);
+});
+
+test('T-277 layer 4: the chats job fails loudly when a chat attached at release ended for integrity after the restart; survivors pass with their followers', () => {
+  const w = world();
+  assert.equal(w.run('build', { images: 'portal' }).code, 0);
+  writeFileSync(join(w.root, 'portal.log'), chatsLine(0));
+  assert.equal(w.run('release').code, 0);
+  writeFileSync(join(w.root, 'started'), new Date().toISOString().replace(/\.\d+Z$/, 'Z'));
+  // The new portal's log: a chat that was not attached at release ended (a note), one that was ended (the failure), and a line that only
+  // quotes the pattern after other text (a chat's words in a log line) does not count.
+  const newPortal = [
+    '2026-10-14T05:01:02.123456789Z [store] ready (portal 1234abcd, schema 810)',
+    '2026-10-14T05:01:30.000000000Z [chat] 9999aaaa-0000-4000-8000-000000000009: ended for integrity: a message this portal didn\'t send',
+    '2026-10-14T05:01:31.000000000Z [chat] 3907db7f-1111-4222-8333-444455556666: ended for integrity: the permission mode changed to default without this portal (expected bypassPermissions) (line system at byte 10 of segment 1)',
+    '2026-10-14T05:01:40.000000000Z [x] quoted: [chat] 5c9fcb5f-0000: ended for integrity: not a real ending',
+  ];
+  writeFileSync(join(w.root, 'portal.log'), `${newPortal.join('\n')}\n`);
+  const failed = w.run('chats');
+  assert.equal(failed.code, 1, failed.out);
+  assert.match(failed.out, /chats: 2 attached at release \(\S+\); the portal restarted \S+; watching its log for integrity endings until \d\d:\d\d:\d\dZ \(2s\)/);
+  assert.match(failed.out, /ENDED: 3907db7f ended for integrity at 2026-10-14T05:01:31\.000000000Z: the permission mode changed to default without this portal \(expected bypassPermissions\)/);
+  assert.match(failed.out, /note: a chat not attached at release: 9999aaaa ended for integrity at 2026-10-14T05:01:30\.000000000Z: a message this portal didn't send/);
+  assert.match(failed.out, /ERROR: 1 chat\(s\) attached at release ended for integrity after the restart: 3907db7f \(the reasons are above; recover them in place/);
+  assert.doesNotMatch(failed.out, /5c9fcb5f ended|not a real ending/, 'only a line the portal wrote counts');
+  assert.match(w.calls(), /kubectl -n isnan-claudepilot logs deploy\/claudepilot-portal --timestamps --since-time=\S+Z/);
+
+  // The same restart with no ending of theirs: both survived the window, the one of this workspace with its follower counted.
+  writeFileSync(join(w.root, 'portal.log'), `${[newPortal[0], newPortal[1], newPortal[3]].join('\n')}\n`);
+  writeFileSync(join(w.root, 'ps.txt'), 'bash -lc something\nsh /opt/claudepilot/cp-session tail aa11bb22-9999-4000-8000-000000000001 3 1024\nsh /opt/claudepilot/cp-session tail cc33dd44-0000 1 0\n');
+  const passed = w.run('chats');
+  assert.equal(passed.code, 0, passed.out);
+  assert.match(passed.out, /survived: 3907db7f  followers 1\n/);
+  assert.match(passed.out, /survived: 5c9fcb5f  followers not counted \(workspace ws_other, this job runs in kubernetes\/kohi-event\)/);
+  assert.match(passed.out, /chats: all 2 attached at release survived 2s after the restart/);
+
+  // Two followers of one chat (the double read behind "a second control response"): said, not failed.
+  writeFileSync(join(w.root, 'ps.txt'), 'sh /x/cp-session tail aa11bb22-9999 3 1024\nsh /x/cp-session tail aa11bb22-9999 3 2048\n');
+  const doubled = w.run('chats');
+  assert.equal(doubled.code, 0, doubled.out);
+  assert.match(doubled.out, /survived: 3907db7f  followers 2 \(WARNING: one is expected\)/);
+
+  // Nothing released: nothing restarted, nothing to check.
+  writeFileSync(join(w.work, '.pilot/out/release.env'), 'PUSHED=0\n');
+  assert.match(w.run('chats').out, /nothing was released in this run/);
+});
+
 test('the gate as a Job in the cluster (T-37, the default): a Secret for its life, a Job with small requests and no node selector, the verdict from its log', () => {
   const w = world();
   Object.assign(w.env, { DEPLOY_GATE_IN_CLUSTER: 'true', GATE_IMAGE: 'registry.test/claudepilot/workspace:dev-1', GATE_JOB_POLL_S: '1', GATE_JOB_WAIT_S: '5' });
@@ -489,15 +600,25 @@ test('refusals: a red gate, a branch that moved, a main with other commits, an u
   assert.ok(!failed.out.includes(w.token), 'never the token');
 });
 
-test('the whole pipeline through the CI service and the real runner: gate, build, held for a person, approved, released, verified', async () => {
-  const h = await harness();
+test('the whole pipeline through the CI service and the real runner: gate, build, held for a person, approved, released, verified, chats checked', async () => {
+  // The portal's side of T-277 layer 4: a chat attached to a live process; the CI service's `[deploy-chats]` line reaches the fake portal log.
+  const attached: CiAttachedChat = { id: '7e57c4a7-0000-4000-8000-000000000001', workspaceId: WS, claudeId: 'cl_test', mode: 'bypassPermissions', tail: 'feedc0de-0000-4000-8000-000000000002', pending: 0 };
+  const sessions: CiSessionsPort = { byBranch: () => null, get: () => null, list: () => [], send: async () => undefined, attached: () => [attached] };
+  const h = await harness({ sessions });
   const fake = world();
+  const realLog = console.log;
+  console.log = (...args: unknown[]) => {
+    const line = args.map(String).join(' ');
+    if (line.startsWith('[deploy-chats] ')) appendFileSync(join(fake.root, 'portal.log'), `${line}\n`);
+    realLog(...args);
+  };
+  writeFileSync(join(fake.root, 'ps.txt'), `sh /opt/claudepilot/cp-session tail ${attached.tail} 1 2048\n`);
   try {
     // The workspace: the fakes on PATH, the cluster's names pointed at the fakes in ~/.profile (the steps' login shell reads it).
     // PATH goes in ~/.profile too: /etc/profile resets PATH in a login shell, and a real kubectl on this machine would otherwise win.
     const fakePath = `${join(fake.root, 'bin')}:/usr/local/bin:/usr/bin:/bin`;
     h.home.extraEnv.PATH = fakePath;
-    writeFileSync(join(h.home.home, '.profile'), Object.entries({ PATH: fakePath, FAKE: fake.root, DEPLOY_GIT_REMOTE: fake.github, DEPLOY_URL: 'http://portal.test:3000', DEPLOY_WAIT_S: '5', DEPLOY_POLL_S: '1', DEPLOY_GATE_IN_CLUSTER: 'false' }).map(([k, v]) => `export ${k}='${v}'\n`).join(''));
+    writeFileSync(join(h.home.home, '.profile'), Object.entries({ PATH: fakePath, FAKE: fake.root, DEPLOY_GIT_REMOTE: fake.github, DEPLOY_URL: 'http://portal.test:3000', DEPLOY_WAIT_S: '5', DEPLOY_POLL_S: '1', DEPLOY_GATE_IN_CLUSTER: 'false', DEPLOY_CHATS_SEEN_S: '20', DEPLOY_CHATS_WAIT_S: '2', DEPLOY_CHATS_WINDOW_S: '1', DEPLOY_CHATS_POLL_S: '1' }).map(([k, v]) => `export ${k}='${v}'\n`).join(''));
     // The development repository: integration as on GitHub, pushed to its pilot remote.
     h.home.git(['fetch', '-q', fake.github, 'integration:integration'], h.src);
     h.home.git(['checkout', '-q', 'integration'], h.src);
@@ -515,14 +636,14 @@ test('the whole pipeline through the CI service and the real runner: gate, build
       throw new Error(`${e.message}; the run is ${r.status} (${r.reason ?? ''}): ${JSON.stringify(r.detail.map((j) => [j.id, j.status, j.reason]))}\n${tails.join('\n')}`);
     });
     const held = h.svc.get(run.id);
-    assert.deepEqual(held.detail.map((j) => [j.id, j.status]), [['gate', 'passed'], ['build', 'passed'], ['release', 'waiting'], ['verify', 'pending'], ['rollback', 'pending']]);
+    assert.deepEqual(held.detail.map((j) => [j.id, j.status]), [['gate', 'passed'], ['build', 'passed'], ['release', 'waiting'], ['verify', 'pending'], ['chats', 'pending'], ['rollback', 'pending']]);
     assert.equal(fake.main(), fake.base, 'nothing is released before the approval');
 
     await h.svc.decide(run.id, 'release', 'approve', { actor: 'user:u_owner', userId: 'u_owner' });
     await h.until('the run to finish', () => !['queued', 'running'].includes(h.svc.get(run.id).status), 120_000);
     const done = h.svc.get(run.id);
     assert.equal(done.status, 'passed', JSON.stringify(done.detail.map((j) => [j.id, j.status, j.reason])));
-    assert.deepEqual(done.detail.map((j) => [j.id, j.status]), [['gate', 'passed'], ['build', 'passed'], ['release', 'passed'], ['verify', 'passed'], ['rollback', 'skipped']]);
+    assert.deepEqual(done.detail.map((j) => [j.id, j.status]), [['gate', 'passed'], ['build', 'passed'], ['release', 'passed'], ['verify', 'passed'], ['chats', 'passed'], ['rollback', 'skipped']]);
     assert.notEqual(fake.main(), fake.base);
     assert.equal(fake.branch('integration'), fake.main());
     assert.match(fake.manifestAt('main'), new RegExp(`claudepilot/portal:${today().replace(/\./g, '\\.')}-2\\n`));
@@ -531,7 +652,14 @@ test('the whole pipeline through the CI service and the real runner: gate, build
     assert.ok(!buildLog.includes(fake.token));
     assert.match((await h.svc.log(run.id, 'verify', 0, 0)).text, /verify: live and well/);
     assert.deepEqual(done.deployments.map((d) => [d.approval, d.outcome, d.decidedBy]), [['approved', 'passed', 'user:u_owner']]);
+    const releaseLog = (await h.svc.log(run.id, 'release', 0, 0)).text;
+    assert.match(releaseLog, /chats: 1 attached to a live process at release \(the portal's line: attached=1 pending=0\)/, 'the release step read the CI service\'s line');
+    assert.match(releaseLog, /  7e57c4a7  claude cl_test  mode bypassPermissions  open 0  workspace docker\/test/);
+    const chatsLog = (await h.svc.log(run.id, 'chats', 0, 0)).text;
+    assert.match(chatsLog, /survived: 7e57c4a7  followers 1\n/);
+    assert.match(chatsLog, /chats: all 1 attached at release survived/);
   } finally {
+    console.log = realLog;
     h.done();
   }
 });

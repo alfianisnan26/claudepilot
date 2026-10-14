@@ -17,6 +17,12 @@ DEPLOY_MANIFEST=${DEPLOY_MANIFEST:-deploy/k3s/portal.yaml}
 # How long verify waits for Argo CD, and how often it looks (seconds).
 DEPLOY_WAIT_S=${DEPLOY_WAIT_S:-900}
 DEPLOY_POLL_S=${DEPLOY_POLL_S:-10}
+# The chats a release restarts (T-277 layer 4): how long the release step waits for the portal to say which chats are attached, how long it
+# then waits while one of them is answering a control request, how long after the restart the chats job watches them, and how often (s).
+DEPLOY_CHATS_SEEN_S=${DEPLOY_CHATS_SEEN_S:-30}
+DEPLOY_CHATS_WAIT_S=${DEPLOY_CHATS_WAIT_S:-120}
+DEPLOY_CHATS_WINDOW_S=${DEPLOY_CHATS_WINDOW_S:-600}
+DEPLOY_CHATS_POLL_S=${DEPLOY_CHATS_POLL_S:-5}
 # Where the jobs leave what the next job needs (the pipeline's artifacts).
 # shellcheck disable=SC2034 # used by the scripts that source this
 OUT=.pilot/out
@@ -202,4 +208,83 @@ scan_logs() {
   fi
   restarts=$(kubectl -n "$DEPLOY_NAMESPACE" get pods -l "app=$DEPLOY_DEPLOYMENT" -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{" "}{end}' 2>/dev/null || true)
   for n in $restarts; do [ "$n" = 0 ] || die "a portal pod restarted ($n times)"; done
+}
+
+# ---------- The chats a release restarts (T-277 layer 4) ----------
+# Steps hold no portal credential (PRD FR20), so the portal says it in its own log, which verify already reads: while a deploying job runs,
+# apps/server/src/ci/deployChats.ts writes `[deploy-chats] run=<id> job=<job> attached=<n> pending=<n|?> chats=<id8>:<claude>:<mode>:<tail8>:<open>:<workspace>,...`
+# (ids and facts only, every field cut to [A-Za-z0-9._/-]), and the controller writes `[chat] <id>: ended for integrity: <why>` when it ends one.
+
+# The portal's latest line about this run's job, from the tag on (empty when it has said nothing yet).
+chats_line() {
+  local key="[deploy-chats] run=${PILOT_RUN_ID:-} job=${PILOT_JOB:-release} "
+  kubectl -n "$DEPLOY_NAMESPACE" logs "deploy/$DEPLOY_DEPLOYMENT" --since=30m 2>/dev/null | grep -F -- "$key" | grep -E '^\[deploy-chats\] ' | tail -1 || true
+}
+
+# One word of a chats line: `pending` of `... pending=2 ...`.
+chats_word() { printf '%s\n' "$1" | tr ' ' '\n' | sed -n "s/^$2=//p" | head -1; }
+
+# The release step, before the push: records the chats attached to a live process into $OUT/chats.env (for the chats job) and the step's log,
+# and waits (at most DEPLOY_CHATS_WAIT_S) while one is answering a control request the portal asked. Never fails the release: a portal that
+# says nothing (one from before this, or a log that can not be read) leaves CHATS_STATE=unavailable, and the wait ends at its bound.
+record_chats() {
+  local out="$OUT/chats.env" line='' deadline start pending chats n entry id claude mode open ws entries=()
+  printf 'CHATS_STATE=unavailable\n' >"$out"
+  deadline=$((SECONDS + DEPLOY_CHATS_SEEN_S))
+  while :; do
+    line=$(chats_line)
+    [ -n "$line" ] && break
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      log "chats: unavailable: the portal did not say which chats are attached within ${DEPLOY_CHATS_SEEN_S}s (a portal from before T-277 layer 4, or its log can not be read); the chats job will not check them"
+      return 0
+    fi
+    sleep "$DEPLOY_CHATS_POLL_S"
+  done
+  pending=$(chats_word "$line" pending)
+  if [ "$pending" = '?' ]; then
+    log "chats: the portal can not tell whether a control request is open: not waiting"
+  elif [ "${pending:-0}" != 0 ]; then
+    log "chats: $pending control request(s) of attached chats not answered yet: waiting up to ${DEPLOY_CHATS_WAIT_S}s"
+    start=$SECONDS
+    deadline=$((SECONDS + DEPLOY_CHATS_WAIT_S))
+    while :; do
+      if [ "$SECONDS" -ge "$deadline" ]; then
+        log "WARNING: chats: $pending control request(s) still open after ${DEPLOY_CHATS_WAIT_S}s: releasing anyway"
+        break
+      fi
+      sleep "$DEPLOY_CHATS_POLL_S"
+      line=$(chats_line)
+      pending=$(chats_word "$line" pending)
+      if [ "$pending" = 0 ]; then
+        log "chats: answered after $((SECONDS - start))s"
+        break
+      fi
+      [ "$pending" = '?' ] && break
+    done
+  fi
+  n=$(chats_word "$line" attached)
+  chats=$(chats_word "$line" chats)
+  if ! [[ $n =~ ^[0-9]+$ ]] || ! [[ $chats =~ ^[A-Za-z0-9._/:,?-]*$ ]]; then
+    log "chats: unavailable: the portal's line is not one this script reads"
+    return 0
+  fi
+  {
+    echo "CHATS_STATE=recorded"
+    echo "CHATS_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "CHATS_ATTACHED=$n"
+    echo "CHATS_PENDING=${pending:-?}"
+    echo "CHATS=$chats"
+  } >"$out"
+  log "chats: $n attached to a live process at release (the portal's line: attached=$n pending=${pending:-?})"
+  [ "$chats" = - ] && return 0
+  IFS=, read -r -a entries <<<"$chats"
+  for entry in "${entries[@]}"; do
+    IFS=: read -r id claude mode _ open ws <<<"$entry"
+    log "  $id  claude $claude  mode $mode  open $open  workspace $ws"
+  done
+}
+
+# When the newest portal pod started (RFC 3339), or empty.
+portal_started() {
+  kubectl -n "$DEPLOY_NAMESPACE" get pods -l "app=$DEPLOY_DEPLOYMENT" -o jsonpath='{range .items[*]}{.status.startTime}{"\n"}{end}' 2>/dev/null | grep -E '^[0-9]{4}-' | sort | tail -1 || true
 }
