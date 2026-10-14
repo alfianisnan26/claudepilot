@@ -3,15 +3,18 @@
 // reads. A SEPARATE script on purpose: supervisor.mjs does not call it (an independent reviewer reads the engine before it runs unattended).
 // It calls no model; it starts sessions ONLY with --apply --start (off by default: factory.mjs startSlice, non-Bypass, mode dontAsk) and then
 // also watches their budget (watchBudget). It reads the portal, plans, and prints one line per thing to do:
-//   node docs/dev-sessions/factory-round.mjs [--apply [--start --workspace W [--report-to SESSION] [--session ID]]] [--wip 5] [--budget N]
-//        [--workspace W] [--repo DIR] [--base REF] [--stale-min 360] [--worktrees DIR]
+//   node docs/dev-sessions/factory-round.mjs [--apply [--start --workspace W --repo-id ID [--report-to SESSION] [--session ID]]] [--wip 5]
+//        [--budget N] [--workspace W] [--repo DIR] [--base REF] [--stale-min 360] [--worktrees DIR] [--lock FILE]
+//   --apply takes the host's engine lock (factory.mjs engineLock; a live holder: one EXCEPTION line, exit 3). --start makes worktrees in the
+//   workspace through the portal (worktree_create on --repo-id), never with local git, and leases a token under this round's own label.
 //   PORTAL_URL (default https://pilot.ai.isnan.me) and PORTAL_SERVER_CODE: the supervisor's auth path; the cookie stays in memory, never printed.
 // Output (stdout), one line each:
 //   factory-round: <summary>
 //   DISPATCH <id> ...                  intake's plan (dry: "would"; --apply: the result of applyPlan)
 //   RESUME <id> run=<r> next=<step>    a finished CI run of a dispatch (--apply writes the FACTORY RESUME marker; dry says "would")
 //   START <id> <started|adopted|skipped|refused|failed> [session <sid>][: why]   --start: the slice's worker session
-//   BUDGET <id> over: <used> of <budget> requests     --start: past 100 percent (at 150 percent it is stopped: an EXCEPTION line)
+//   BUDGET <id> over: <used> of <budget> USD          --start: the session's cost_usd past 100 percent of its size's cost budget (at 150
+//                                                     percent it is stopped: an EXCEPTION line)
 //   NEXT <ticket> <id> <step> <role>/<model>: <why>   the step a role runs now (review, verify, fix) or the coordinator (integrate)
 //   LEARN <id>: would comment          followed by the ACTUAL text, indented (printed, never written by this script)
 //   EXCEPTION <ticket> <id>: <why>     the coordinator's: stale, cancelled, out of order, conflict, rework limit, budget stop, refused, errors
@@ -76,14 +79,23 @@ export async function runRound(deps) {
       if (!f.startsOf(t).has(last.id)) {
         // An open dispatch without a session (the engine stopped after the worktree): started now, unless intake already called it stale.
         if (start && !exceptions.some((x) => x.dispatchId === last.id)) {
-          const s = await start(f.dispatchFrom(t, last, { worktrees: deps.worktrees }));
-          lines.push(startLine(last.id, s));
-          for (const x of s.exceptions ?? []) except(x.ticket, x.dispatchId, x.reason);
+          // Role, model, branch and budget re-derived (dispatchFrom), never read from the marker; one that does not derive is an exception.
+          let d = null;
+          try {
+            d = f.dispatchFrom(t, last, { worktrees: deps.worktrees, models: deps.models });
+          } catch (e) {
+            except(t.id, last.id, `not started: ${e.message}`);
+          }
+          if (d) {
+            const s = await start(d);
+            lines.push(startLine(last.id, s));
+            for (const x of s.exceptions ?? []) except(x.ticket, x.dispatchId, x.reason);
+          }
         }
       } else if (watch) {
         const w = await watch(raw);
         for (const x of w.exceptions ?? []) except(x.ticket, x.dispatchId, x.reason);
-        if (w.action === 'over') lines.push(`BUDGET ${last.id} over: ${w.used} of ${last.budget} requests`);
+        if (w.action === 'over') lines.push(`BUDGET ${last.id} over: ${w.used.toFixed(2)} of ${w.budget.toFixed(2)} USD`);
         if (w.action === 'stopped') continue; // the dispatch has ended: no next step
       }
     }
@@ -98,7 +110,7 @@ export async function runRound(deps) {
       const run = /run=(\S+)/.exec(marker)?.[1];
       if (apply) await portal.comment(t.id, marker);
       lines.push(`RESUME ${dispatch.id} run=${run} next=${step}${apply ? '' : ' (would write)'}`);
-      markers.push({ kind: 'comment', at: new Date(now).toISOString(), text: marker });
+      markers.push({ kind: 'comment', at: new Date(now).toISOString(), text: marker, actor: f.ENGINE_ACTOR, fromAgent: false }); // the engine's own, as written
     }
     const withMarkers = { ...t, comments: [...t.comments, ...markers] };
     const open = f.dispatchesOf(t).filter((d) => !d.ended);
@@ -130,10 +142,13 @@ function parseArgs(argv) {
     else if (a === '--start') o.start = true;
     else if (a === '--report-to') o.reportTo = val();
     else if (a === '--session') o.session = val();
+    else if (a === '--repo-id') o.repoId = val();
+    else if (a === '--lock') o.lock = val();
     else throw new Error(`unknown argument ${a}`);
   }
   if (o.start && !o.apply) throw new Error('--start needs --apply');
   if (o.start && !o.workspace) throw new Error('--start needs --workspace (the workspace the worker sessions run in)');
+  if (o.start && !o.repoId) throw new Error('--start needs --repo-id (the repository in the workspace its worktrees are made from: repos_list)');
   return o;
 }
 
@@ -152,22 +167,36 @@ async function main() {
   const base = o.base ?? 'origin/integration';
   const models = f.modelsFrom((r) => readFileSync(join(here, '../../.claude/agents', `${r}.md`), 'utf8'), ['implementer', 'reviewer', 'qa-verifier']);
   const now = Date.now();
-  // --start: an admin Portal MCP token leased for this round (one hour, revoked at the end), held in memory and never printed.
-  const lease = o.start ? tokenLease({ api: portal.raw, label: 'factory-engine' }) : null;
+  // --apply: one writing run per host (M1: the same lock as factory.mjs). --start: an admin Portal MCP token leased for this round under its
+  // own label (one hour, revoked at the end and on SIGINT/SIGTERM), held in memory and never printed; worktrees made through the portal.
+  let lock = null;
+  if (o.apply) {
+    try {
+      lock = f.engineLock(o.lock ?? f.DEFAULT_LOCK);
+    } catch (e) {
+      process.stdout.write(`EXCEPTION factory: round not run: ${e.message}\n`);
+      process.exit(3);
+    }
+  }
+  const lease = o.start ? tokenLease({ api: portal.raw, label: f.leaseLabel() }) : null;
+  const unhook = f.onStop(async () => { await lease?.revoke(); lock?.release(); });
   let sessions = {};
+  let git = f.gitOps(repo);
   if (lease) {
-    const mcp = f.mcpClient({ url: portal.url, token: lease.get });
+    const mcp = f.mcpClient({ url: portal.url, token: lease.get, tokenId: () => lease.id });
+    const wt = f.portalWorktrees({ mcp, workspace: o.workspace, repoId: o.repoId });
+    git = wt;
     const template = readFileSync(join(here, 'factory-brief.md'), 'utf8');
     const tokenDiscipline = f.tokenRules(readFileSync(join(here, 'token-discipline.md'), 'utf8'));
     const reportTo = o.reportTo ?? null;
     sessions = {
-      start: f.starter({ portal, mcp, workspace: o.workspace, repo, template, tokenDiscipline, session: o.session ?? process.env.PILOT_SESSION ?? 'unset', reportTo, now, staleMin: o.staleMin }),
-      watch: (raw) => f.watchBudget(raw, { portal, mcp, reportTo, worktrees: o.worktrees }),
+      start: f.starter({ portal, mcp, workspace: o.workspace, locate: wt.find, template, tokenDiscipline, session: o.session ?? process.env.PILOT_SESSION ?? 'unset', reportTo, now, staleMin: o.staleMin }),
+      watch: (raw) => f.watchBudget(raw, { portal, mcp, reportTo, worktrees: o.worktrees, models }),
     };
   }
   let rc = 0;
   try {
-    const { lines } = await runRound({ portal, git: f.gitOps(repo), changed: gitChanged(repo, base), models, now, apply: o.apply, wip: o.wip, budget: o.budget, workspace: o.workspace, base, staleMin: o.staleMin, worktrees: o.worktrees, ...sessions });
+    const { lines } = await runRound({ portal, git, changed: gitChanged(repo, base), models, now, apply: o.apply, wip: o.wip, budget: o.budget, workspace: o.workspace, base, staleMin: o.staleMin, worktrees: o.worktrees, ...sessions });
     process.stdout.write(`${lines.join('\n')}\n`);
   } catch (e) {
     // The message carries a method, a path and a status (portalClient and mcpClient never put the code, the cookie or the token in one).
@@ -175,6 +204,8 @@ async function main() {
     rc = 1;
   } finally {
     await lease?.revoke();
+    lock?.release();
+    unhook();
   }
   process.exit(rc);
 }

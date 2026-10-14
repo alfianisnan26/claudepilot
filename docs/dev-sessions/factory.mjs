@@ -2,9 +2,11 @@
 // The factory engine v0 (T-293, design v2 layer 3: docs/dev-sessions/overhaul/token-economy-design.md sections 3 and 4): orchestration as
 // code, judgment as agents. A sibling of supervisor.mjs. It calls no model itself. Without --start it starts no session; with --start (OFF by
 // default, slice 4, D-49) it starts each slice it dispatched as a NON-Bypass worker session in mode dontAsk (startSlice below; never Bypass).
-//   node docs/dev-sessions/factory.mjs (--tickets <file.json|-> | --portal [--apply [--start --workspace <id> [--report-to <session>]]])
+//   node docs/dev-sessions/factory.mjs (--tickets <file.json|-> | --portal [--apply [--start --workspace <id> --repo-id <id> [--report-to <session>]]])
 //        [--wip 5] [--budget <requests>] [--role implementer] [--session <id>] [--worktrees <dir>] [--repo <dir>] [--base origin/integration]
-//        [--stale-min 360] [--json] [--briefs]
+//        [--stale-min 360] [--lock <file>] [--json] [--briefs]
+// --apply takes the host's engine lock (--lock, default <tmp>/claudepilot-factory.lock; a live holder: exit 3). Without --start, --apply
+// makes the worktree with local git in --repo (a run inside the pod); with --start, in the workspace through the portal (--repo-id).
 // Without --apply it prints what it WOULD dispatch and writes nothing. --portal reads the open and in-progress tickets from the portal (the
 // ranked open ones whole) with the supervisor's auth path: PORTAL_URL and PORTAL_SERVER_CODE, a sign-in cookie in memory, never printed.
 // --apply (needs --portal) per planned dispatch reads the ticket again, refuses a branch or folder that exists, writes the FACTORY DISPATCH
@@ -32,14 +34,26 @@
 //                               LESSON line), or an exception (out of order, conflict, rework limit, budget stop). stepMarker writes the markers.
 //   startSlice(d, deps)         --start: the dispatched slice as a worker session through the admin Portal MCP tools (session_start, then
 //                               session_configure mode dontAsk + the role's model, then session_send with the brief): fail closed, once per
-//                               dispatch (FACTORY START marker; a live session titled with the dispatch id is adopted), never when stale.
-//   watchBudget(t, deps)        the started slice's requests (its session's turns): at 150 percent of the size budget it is interrupted,
-//                               told to commit WIP and report, and the dispatch ends (FACTORY END ... stopped: budget).
+//                               dispatch (FACTORY START marker), only for a dispatch of this engine version (v=) whose worktree the portal
+//                               reports, never when stale. A session is adopted only when the engine's own token started it (FACTORY STARTING
+//                               by=) under the exact title, and the model session_configure answers must be the role's.
+//   portalWorktrees(o)          --start: the worktree made IN THE WORKSPACE through the portal (worktree_create, repos_list; T-337), the folder
+//                               taken from the portal's answer and checked to lie in <repository>.worktrees/. No local git with --start.
+//   watchBudget(t, deps)        the started slice's COST: session_get's cost_usd (the portal's count for the session, in US dollars) against
+//                               SIZE_COST_USD. At 150 percent it is interrupted, told to commit WIP and report, and the dispatch ends
+//                               (FACTORY END ... stopped: budget). The request budget (SIZE_BUDGET) is NOT measured by the engine: it plans a
+//                               run (--budget) and is the agent's own count in its brief.
+//   engineLock(path), leaseLabel(), onStop(cleanup): one engine run per host (a lock file with the pid; a dead pid's lock is stale), an admin
+//                               token label per run (a run never revokes another run's token), SIGINT/SIGTERM revoke the token and exit.
 // One round for a supervisor hook: docs/dev-sessions/factory-round.mjs (prints NEXT and EXCEPTION lines; NOT wired into supervisor.mjs: an
-// independent reviewer reads the engine before it runs unattended).
+// independent reviewer reads the engine before it runs unattended; the admin credential path for workers is T-339, an owner decision).
 //
-// State lives in the portal's tickets only, as comments whose first line is a marker the engine writes and reads back:
-//   FACTORY DISPATCH <dispatchId> role=<role> model=<model> size=<S|M|L> budget=<n> branch=<branch>
+// State lives in the portal's tickets only, as comments whose first line is a marker the engine writes and reads back. A marker (and an
+// ACTUAL) counts ONLY when the engine's own actor wrote it: actor `ui` (the signed-in REST path the engine uses: the owner's) and not flagged
+// fromAgent. A comment an agent or a token wrote (contracts TicketEvent.fromAgent), or one without an actor, is never read as a marker. The
+// role, model, branch and budget of a dispatch are re-derived (ROLES, the role files, branchOf, SIZE_BUDGET), never taken from comment text.
+//   FACTORY DISPATCH <dispatchId> v=<engine version> role=<role> model=<model> size=<S|M|L> budget=<n> branch=<branch>
+//   FACTORY STARTING <dispatchId> by=portal-mcp:<token id>                          (--start: written right before session_start)
 //   FACTORY START <dispatchId> session=<sessionId> mode=dontAsk model=<model>      (--start: the session that runs the slice)
 //   FACTORY END <dispatchId> <outcome>
 //   FACTORY RESUME <dispatchId> run=<runId> state=<state> next=<review|fix>
@@ -48,25 +62,48 @@
 // An ACTUAL comment ends every dispatch before it. A ticket with a DISPATCH and no END or ACTUAL has an open dispatch: it counts as in flight and is never dispatched again (the double-dispatch guard).
 // Dispatch ids are `<ticket>-F<n>` (n = the ticket's earlier dispatches + 1), so a restart computes the same ids from the same tickets.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tokenLease } from '../../tools/coordinator/tokenLease.mjs';
 
+/** Requests per slice by size: what a run plans with (--budget) and the agent's own count in its brief. The engine does not measure it. */
 export const SIZE_BUDGET = Object.freeze({ S: 25, M: 60, L: 120 });
+/**
+ * The cost budget per slice by size, in US dollars of the slice's session (session_get cost_usd): what the engine MEASURES and stops at
+ * (STOP_FACTOR of it). PROVISIONAL: there is no measured source yet (no slice has run through --start); the numbers are a guess of the order
+ * of an S, M and L slice. Replace them with the median cost_usd of the first ten factory slices per size and name that source here.
+ */
+export const SIZE_COST_USD = Object.freeze({ S: 4, M: 10, L: 20 });
 export const STOP_FACTOR = 1.5;
 export const DEFAULT_WIP = 5;
 export const DEFAULT_RESUME_MAX_AGE_MIN = 360;
+/** The version a DISPATCH marker carries (v=): --start starts only a dispatch this engine version wrote. */
+export const ENGINE_VERSION = 2;
+/** The actor the engine writes its comments as: the signed-in REST path (PORTAL_SERVER_CODE) is the portal's `ui` actor. */
+export const ENGINE_ACTOR = 'ui';
+/** The role table: the roles the engine dispatches and starts (a DISPATCH naming another role is refused). Models come from their role files. */
+export const ROLES = Object.freeze(['implementer']);
+const DEFAULT_WORKTREES = '../claudepilot.worktrees';
 const CLOSED = new Set(['done', 'wont_do']);
 
 /** Portal MCP wraps outside text as { untrusted_text }; the REST API gives plain strings. */
 const textOf = (v) => (v && typeof v === 'object' ? String(v.untrusted_text ?? '') : String(v ?? ''));
 
-/** A ticket from any of the shapes the portal returns, with its comments as { at, text }, oldest first. */
+/** A comment the engine wrote (and so may read back as a marker): the engine's actor, not flagged as an agent's, plain text (not MCP-wrapped). */
+export function isEngineComment(e) {
+  const body = e.body ?? e.text;
+  return e.actor === ENGINE_ACTOR && e.fromAgent === false && typeof body === 'string';
+}
+
+/** A ticket from any of the shapes the portal returns, with its comments as { at, text, actor, fromAgent, engine }, oldest first. */
 export function normalizeTicket(raw) {
   const t = raw?.ticket && (raw.events || raw.comments) ? { ...raw.ticket, events: raw.events, comments: raw.comments } : raw;
   const entries = [...(t.comments ?? []), ...(t.events ?? [])].filter((e) => (e.kind ?? 'comment') === 'comment');
-  const comments = entries.map((e) => ({ at: String(e.at ?? ''), text: textOf(e.body ?? e.text) })).sort((a, b) => a.at.localeCompare(b.at));
+  const comments = entries
+    .map((e) => ({ at: String(e.at ?? ''), text: textOf(e.body ?? e.text), actor: e.actor ?? null, fromAgent: e.fromAgent ?? null, engine: isEngineComment(e) }))
+    .sort((a, b) => a.at.localeCompare(b.at));
   const number = Number(t.number ?? String(t.id).replace(/^T-/, ''));
   return { id: String(t.id), number, status: String(t.status ?? 'open'), tags: (t.tags ?? []).map(String), summary: textOf(t.summary), comments };
 }
@@ -91,12 +128,15 @@ function cmpRank(a, b) {
   return a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
 }
 
-/** The ticket's dispatch markers: every DISPATCH with its fields, whether an END closed it, oldest first. */
+/** The first line of each comment the ENGINE wrote, with its time (every marker reader goes through this: B1, T-338). */
+const engineLines = (t) => t.comments.filter((c) => c.engine).map((c) => ({ at: c.at, first: c.text.split('\n', 1)[0].trim() }));
+
+/** The ticket's dispatch markers (the engine's own only): every DISPATCH with its fields, whether an END closed it, oldest first. */
 export function dispatchesOf(t) {
   const list = [];
   const ended = new Map();
-  for (const c of t.comments) {
-    const first = c.text.split('\n', 1)[0].trim();
+  for (const c of engineLines(t)) {
+    const first = c.first;
     const d = /^FACTORY DISPATCH (\S+)(.*)$/.exec(first);
     if (d) {
       const fields = Object.fromEntries([...d[2].matchAll(/(\w+)=(\S+)/g)].map((m) => [m[1], m[2]]));
@@ -112,8 +152,9 @@ export function dispatchesOf(t) {
 }
 const openDispatches = (t) => dispatchesOf(t).filter((d) => !d.ended);
 
-/** `ticket/T-12-short-slug` from the summary (lowercase words, at most 40 characters). */
+/** `ticket/T-12-short-slug` from the summary (lowercase words, at most 40 characters). A ticket id that is not `T-<n>` throws. */
 export function branchOf(t) {
+  if (!/^T-\d+$/.test(t.id)) throw new Error(`not a ticket id: ${String(t.id).slice(0, 20)}`);
   const slug = t.summary.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
   return `ticket/${t.id}${slug ? `-${slug}` : ''}`;
 }
@@ -126,6 +167,31 @@ export function sliceBudget(size, used = 0) {
   return { budget, stopAt, used, state: used >= stopAt ? 'stop' : used > budget ? 'over' : 'ok' };
 }
 
+/** The cost budget of a slice by size (US dollars, SIZE_COST_USD) and its state after `usd` spent: what watchBudget measures. */
+export function costBudget(size, usd = 0) {
+  const budget = SIZE_COST_USD[size];
+  if (!budget) throw new Error(`no cost budget for size ${size} (XL is split first)`);
+  const stopAt = Math.round(budget * STOP_FACTOR * 100) / 100;
+  return { budget, stopAt, used: usd, state: usd >= stopAt ? 'stop' : usd > budget ? 'over' : 'ok' };
+}
+
+/**
+ * Whether `path` lies strictly inside `folder` once both are resolved (`..` cannot climb out). POSIX paths (the workspace is Linux); two
+ * relative paths are compared from the same base, an absolute path against a relative folder is never inside.
+ */
+export function insideFolder(path, folder) {
+  const p = posix.resolve('/base', String(path));
+  const f = posix.resolve('/base', String(folder));
+  return p !== f && p.startsWith(f === '/' ? '/' : `${f}/`);
+}
+
+/** The worktree of a branch under `worktrees` (`ticket/T-1-x` -> `<worktrees>/ticket-T-1-x`); throws when it would not lie inside it. */
+export function worktreeOf(worktrees, branch) {
+  const path = `${worktrees}/${String(branch).replace(/\//g, '-')}`;
+  if (!insideFolder(path, worktrees)) throw new Error(`worktree ${path.slice(0, 160)} is outside ${worktrees}`);
+  return path;
+}
+
 /**
  * The plan of one run. opts: wip (in-flight limit, default 5), budget (requests this run may commit, default unlimited), role (default
  * implementer), models ({ role: model }), worktrees (the folder worktrees go in), now (epoch ms; without it nothing is stale), staleMin (an open
@@ -135,8 +201,9 @@ export function intake(rawTickets, opts = {}) {
   const wip = opts.wip ?? DEFAULT_WIP;
   const limit = opts.budget ?? Infinity;
   const role = opts.role ?? 'implementer';
+  if (!ROLES.includes(role)) throw new Error(`role ${role} is not in the role table (${ROLES.join(', ')})`);
   const model = opts.models?.[role] ?? 'unset';
-  const worktrees = opts.worktrees ?? '../claudepilot.worktrees';
+  const worktrees = opts.worktrees ?? DEFAULT_WORKTREES;
   const seen = new Set();
   const tickets = [];
   for (const raw of rawTickets) {
@@ -182,7 +249,7 @@ export function intake(rawTickets, opts = {}) {
     planned += b.budget;
     const branch = branchOf(t);
     const n = dispatchesOf(t).length + 1;
-    dispatch.push({ ticket: t.id, summary: t.summary, rank: `rank-${String(rank[0]).padStart(2, '0')}${rank[1]}`, size: est.size, budget: b.budget, stopAt: b.stopAt, role, model, branch, worktree: `${worktrees}/${branch.replace(/\//g, '-')}`, dispatchId: `${t.id}-F${n}` });
+    dispatch.push({ ticket: t.id, summary: t.summary, rank: `rank-${String(rank[0]).padStart(2, '0')}${rank[1]}`, size: est.size, budget: b.budget, stopAt: b.stopAt, role, model, branch, worktree: worktreeOf(worktrees, branch), dispatchId: `${t.id}-F${n}` });
   }
   return { dispatch, skipped, exceptions, inFlight, wip, budget: { limit: Number.isFinite(limit) ? limit : null, planned }, stopped };
 }
@@ -195,7 +262,22 @@ function ageMin(at, now) {
 
 /** The comment the dispatcher (a later slice) writes when it starts a slice: the marker this engine reads back. */
 export function dispatchMarker(d) {
-  return `FACTORY DISPATCH ${d.dispatchId} role=${d.role} model=${d.model} size=${d.size} budget=${d.budget} branch=${d.branch}`;
+  return `FACTORY DISPATCH ${d.dispatchId} v=${ENGINE_VERSION} role=${d.role} model=${d.model} size=${d.size} budget=${d.budget} branch=${d.branch}`;
+}
+
+/** The longest ticket summary a brief carries. */
+export const SUMMARY_MAX = 120;
+/**
+ * The ticket summary as the brief shows it (M3, T-338): one line, control and format characters (line breaks, bidi overrides, zero-width)
+ * removed, double quotes made single (the brief quotes it), at most SUMMARY_MAX characters. It is ticket text: the brief labels it so.
+ */
+export function briefSummary(s) {
+  const one = String(s ?? '')
+    .replace(/[\p{Cc}\p{Cf}  ]+/gu, ' ')
+    .replace(/"/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  return one.length > SUMMARY_MAX ? `${one.slice(0, SUMMARY_MAX - 1)}…` : one;
 }
 
 /** Fill {{name}} placeholders; a placeholder without a value, or a value the template does not use, throws (template and code stay in step). */
@@ -213,7 +295,8 @@ export function renderBrief(template, vars) {
 
 /** The brief's variables for one planned dispatch. */
 export function briefVars(d, { session, contextPack = 'docs/context-pack.md', tokenDiscipline }) {
-  return { ticket: d.ticket, summary: d.summary, dispatchId: d.dispatchId, role: d.role, model: d.model, contextPack, worktree: d.worktree, branch: d.branch, size: d.size, budget: d.budget, stopAt: d.stopAt, session, agent: `${d.role}-${d.dispatchId.toLowerCase()}`, tokenDiscipline };
+  const cost = costBudget(d.size);
+  return { ticket: d.ticket, summary: briefSummary(d.summary), dispatchId: d.dispatchId, role: d.role, model: d.model, contextPack, worktree: d.worktree, branch: d.branch, size: d.size, budget: d.budget, stopAt: d.stopAt, costBudget: cost.budget, costStop: cost.stopAt, session, agent: `${d.role}-${d.dispatchId.toLowerCase()}`, tokenDiscipline };
 }
 
 /** The numbered rules of token-discipline.md (the block every brief carries). */
@@ -336,6 +419,55 @@ export function gitOps(repo, run = (args) => execFileSync('git', ['-C', repo, ..
 }
 
 /**
+ * The worktree IN THE WORKSPACE, through the portal (T-337; --start uses only this, never local git): the same shape as gitOps, over the
+ * admin Portal MCP tools. repos_list (the portal's last scan of the workspace) says whether a worktree already has the branch and where
+ * repository `repoId` lives; worktree_create makes the worktree there (in `<repository>.worktrees/`, git hardened by the portal) and its
+ * answer is the folder. A folder outside `<repository>.worktrees/`, or another branch than asked, throws. find(branch): the folder of the
+ * worktree on that branch, or null (m1: a dispatch is started only when the portal reports its worktree). A branch that exists without a
+ * worktree is not visible here: worktree_create checks it out (the earlier dispatch's work), it is not made twice.
+ */
+export function portalWorktrees({ mcp, workspace, repoId }) {
+  if (!repoId) throw new Error('portalWorktrees needs the repository id (repos_list)');
+  async function scan() {
+    const nodes = [];
+    let cursor = null;
+    for (let page = 0; page < 20; page++) {
+      const r = await mcp.call('repos_list', { workspace_id: workspace, limit: 100, ...(cursor ? { cursor } : {}) });
+      nodes.push(...(r?.repos ?? []));
+      cursor = r?.next_cursor ?? null;
+      if (!cursor) break;
+    }
+    const main = nodes.find((n) => n.id === repoId);
+    if (!main) throw new Error(`repository ${repoId} not found in ${workspace}`);
+    const path = textOf(main.path).replace(/\/+$/, '');
+    if (!posix.isAbsolute(path)) throw new Error(`repository ${repoId} has no absolute path`);
+    return { root: `${path}.worktrees`, nodes };
+  }
+  const on = (nodes, branch) => nodes.filter((n) => n.branch !== null && n.branch !== undefined && textOf(n.branch) === branch);
+  return {
+    viaPortal: true,
+    async taken(branch) {
+      const { nodes } = await scan();
+      return on(nodes, branch).length ? `branch ${branch} is checked out in ${workspace}` : null;
+    },
+    async addWorktree(branch, _worktree, base) {
+      const { root } = await scan();
+      const r = await mcp.call('worktree_create', { repo_id: repoId, branch, ...(base ? { base } : {}) });
+      const made = textOf(r?.worktree?.branch);
+      if (made !== branch) throw new Error(`worktree_create made branch ${made.slice(0, 100)}, not ${branch}`);
+      const folder = posix.resolve('/', textOf(r?.worktree?.path));
+      if (!posix.isAbsolute(textOf(r?.worktree?.path)) || !insideFolder(folder, root)) throw new Error(`worktree ${folder.slice(0, 160)} is outside ${root.slice(0, 160)}`);
+      return folder;
+    },
+    async find(branch) {
+      const { root, nodes } = await scan();
+      const n = on(nodes, branch).find((x) => posix.isAbsolute(textOf(x.path)) && insideFolder(textOf(x.path), root));
+      return n ? posix.resolve('/', textOf(n.path)) : null;
+    },
+  };
+}
+
+/**
  * Carry out a plan: per planned dispatch, read the ticket again (another run may have taken it), refuse a branch or folder that exists,
  * write the FACTORY DISPATCH comment (the state, in the portal only), then create the worktree and branch from `base`. A worktree that fails
  * after the comment gets a FACTORY END ... failed comment, so the ticket is free again and nothing is left half done. Starts a session
@@ -354,15 +486,18 @@ export async function applyPlan(plan, { portal, git, base = 'origin/integration'
       continue;
     }
     if (`${fresh.id}-F${dispatchesOf(fresh).length + 1}` !== d.dispatchId) { results.push({ ...r, action: 'skipped', reason: 'changed since the plan' }); continue; }
-    const taken = git.taken(d.branch, d.worktree);
+    // --start: the worktree is made in the workspace through the portal (T-337), never with git on the engine's host.
+    if (start && !git.viaPortal) throw new Error('--start makes worktrees through the portal (portalWorktrees), never with local git');
+    const taken = await git.taken(d.branch, d.worktree);
     if (taken) {
       results.push({ ...r, action: 'refused', reason: taken });
       exceptions.push({ ticket: d.ticket, dispatchId: d.dispatchId, reason: `not dispatched: ${taken}` });
       continue;
     }
     await portal.comment(d.ticket, dispatchMarker(d));
+    let folder = null;
     try {
-      git.addWorktree(d.branch, d.worktree, base);
+      folder = (await git.addWorktree(d.branch, d.worktree, base)) ?? null;
     } catch (e) {
       const why = String(e?.stderr || e?.message || e).split('\n').find(Boolean)?.slice(0, 160) ?? 'error';
       await portal.comment(d.ticket, `FACTORY END ${d.dispatchId} failed: worktree (${why})`);
@@ -370,10 +505,11 @@ export async function applyPlan(plan, { portal, git, base = 'origin/integration'
       exceptions.push({ ticket: d.ticket, dispatchId: d.dispatchId, reason: `worktree failed: ${why}` });
       continue;
     }
-    const done = { ...r, action: 'dispatched', branch: d.branch, worktree: d.worktree };
+    const done = { ...r, action: 'dispatched', branch: d.branch, worktree: folder ?? d.worktree };
     if (start) {
-      // --start: the slice as a worker session, right after its worktree (startSlice reads the ticket again and writes its own markers).
-      const s = await start(d);
+      // --start: the slice as a worker session, right after its worktree, in the folder the portal answered (startSlice reads the ticket
+      // again and writes its own markers).
+      const s = await start({ ...d, worktree: folder, folder });
       done.start = { action: s.action, ...(s.sessionId ? { sessionId: s.sessionId } : {}), ...(s.reason ? { reason: s.reason } : {}) };
       exceptions.push(...(s.exceptions ?? []));
     }
@@ -394,31 +530,49 @@ export function startMarker(d, sessionId) {
   return `FACTORY START ${d.dispatchId} session=${sessionId} mode=${START_MODE} model=${d.model}`;
 }
 
-/** dispatchId -> session id of every FACTORY START comment. */
+/** dispatchId -> session id of every FACTORY START comment the engine wrote. */
 export function startsOf(t) {
   const out = new Map();
-  for (const c of t.comments) {
-    const m = /^FACTORY START (\S+) session=(\S+)/.exec(c.text.split('\n', 1)[0].trim());
+  for (const c of engineLines(t)) {
+    const m = /^FACTORY START (\S+) session=(\S+)/.exec(c.first);
     if (m) out.set(m[1], m[2]);
   }
   return out;
 }
 
-/** A planned dispatch rebuilt from its DISPATCH marker (to start or watch one a restarted engine finds open). */
-export function dispatchFrom(t, d, { worktrees = '../claudepilot.worktrees' } = {}) {
-  const size = d.size;
-  const b = SIZE_BUDGET[size] ? sliceBudget(size) : { budget: Number(d.budget) || 0, stopAt: 0 };
-  return { ticket: t.id, summary: t.summary, size, budget: Number(d.budget) || b.budget, stopAt: b.stopAt, role: d.role, model: d.model, branch: d.branch, worktree: `${worktrees}/${String(d.branch).replace(/\//g, '-')}`, dispatchId: d.id };
+/** dispatchId -> the token actors (`portal-mcp:<id>`) the engine wrote a FACTORY STARTING for: the only sessions it may adopt (m2). */
+export function startingOf(t) {
+  const out = new Map();
+  for (const c of engineLines(t)) {
+    const m = /^FACTORY STARTING (\S+) by=(portal-mcp:\S+)$/.exec(c.first);
+    if (m) out.set(m[1], new Set([...(out.get(m[1]) ?? []), m[2]]));
+  }
+  return out;
+}
+
+/**
+ * A planned dispatch rebuilt from its DISPATCH marker (to start or watch one a restarted engine finds open). Only the id, the size and the
+ * time are read from the marker; the role must be in ROLES, the branch must be the one branchOf derives, the model is the role file's
+ * (models), the budgets come from the size, the worktree lies inside `worktrees`. Anything else throws (the caller reports an exception).
+ */
+export function dispatchFrom(t, d, { worktrees = DEFAULT_WORKTREES, models = {} } = {}) {
+  if (!ROLES.includes(d.role)) throw new Error(`dispatch ${d.id}: role ${String(d.role).slice(0, 40)} is not in the role table`);
+  if (!(d.size in SIZE_BUDGET)) throw new Error(`dispatch ${d.id}: no size budget for ${String(d.size).slice(0, 10)}`);
+  const branch = branchOf(t);
+  if (d.branch !== branch) throw new Error(`dispatch ${d.id}: its branch is not ${branch}`);
+  const b = sliceBudget(d.size);
+  return { ticket: t.id, summary: t.summary, size: d.size, budget: b.budget, stopAt: b.stopAt, role: d.role, model: models?.[d.role] ?? 'unset', branch, worktree: worktreeOf(worktrees, branch), dispatchId: d.id, version: Number(d.v) || null };
 }
 
 /**
  * Portal MCP over HTTP, the admin tools a person's automation uses (the supervisor's path, T-258): `token()` gives the leased admin token
  * (tools/coordinator/tokenLease.mjs). call(name, args) returns the tool's structuredContent, or throws `<name>: <code> <message>`; the token
- * never appears in an error.
+ * never appears in an error. actor(): `portal-mcp:<token id>` of the token held now (an id is not a secret), the actor the portal records.
  */
-export function mcpClient({ url, token, fetch: f = globalThis.fetch, label = 'factory-engine' }) {
+export function mcpClient({ url, token, tokenId = () => null, fetch: f = globalThis.fetch, label = 'factory-engine' }) {
   const base = String(url).replace(/\/$/, '');
   return {
+    actor: () => (tokenId() ? `portal-mcp:${tokenId()}` : null),
     async call(name, args) {
       const headers = { authorization: `Bearer ${await token()}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
       const init = await f(`${base}/mcp`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: label, version: '1' } } }) });
@@ -446,28 +600,36 @@ export function mcpClient({ url, token, fetch: f = globalThis.fetch, label = 'fa
   };
 }
 
-/** What the worker is told when the engine stops it at 150 percent of its size budget. */
-export const stopText = (d, used) =>
-  `FACTORY STOP ${d.dispatchId}: the request budget is spent (${used} of ${d.budget}, stop at ${d.stopAt}). Stop now: commit and push what is done as WIP, then report in at most 25 lines what is done and what is left. Start nothing new.`;
+const usd = (n) => `${Number(n).toFixed(2)} USD`;
+/** What the worker is told when the engine stops it at 150 percent of its size's cost budget. */
+export const stopText = (d, used) => {
+  const b = costBudget(d.size, used);
+  return `FACTORY STOP ${d.dispatchId}: the cost budget is spent (${usd(used)} of ${usd(b.budget)}, stop at ${usd(b.stopAt)}). Stop now: commit and push what is done as WIP, then report in at most 25 lines what is done and what is left. Start nothing new.`;
+};
 
 /**
  * Start a dispatched slice as a non-Bypass worker session, through the admin Portal MCP tools a person's automation already uses
  * (session_start, session_configure, session_send: the same controller calls as session_spawn's create, mode and first instruction; no new
  * authz or approval path). In order, fail closed:
- *   1. read the ticket again: the dispatch must be the ticket's latest, open, not started (no FACTORY START), and not stale (a dispatch past
- *      staleMin is the coordinator's: never started late). A live session on the ticket titled with the dispatch id (a crash between the
- *      start and its marker) is adopted, not started twice.
- *   2. session_start: the worktree folder, agent = the role, ticket = the ticket, NO first prompt (the mode comes first).
- *   3. session_configure: mode dontAsk and the role's explicit model; a mode the answer does not confirm ends the session (fail closed).
- *   4. the FACTORY START comment (the audit trail: the session id next to the DISPATCH), then session_send with the rendered brief.
- *   5. one line to the orchestrator session (reportTo), when one is given.
+ *   1. read the ticket again: the dispatch must be the ticket's latest, open, not started (no FACTORY START), written by this engine
+ *      version (v=ENGINE_VERSION), and not stale (a dispatch past staleMin is the coordinator's: never started late).
+ *   2. the folder: `folder` (worktree_create's answer) or locate(branch) (repos_list); no worktree in the workspace, no start (m1).
+ *   3. session_list: a live session titled exactly `<dispatchId> <role>` on the ticket that THE ENGINE's token started (started_by is a
+ *      `by=` of a FACTORY STARTING marker: a crash between the start and its marker) is adopted, not started twice. Such a title from anyone
+ *      else is refused (an exception), never adopted.
+ *   4. FACTORY STARTING <id> by=<the engine's token actor>, then session_start: the folder, agent = the role, ticket = the ticket, NO first
+ *      prompt (the mode comes first).
+ *   5. session_configure: mode dontAsk and the role's explicit model; a mode or a model the answer does not confirm ends it (fail closed).
+ *   6. the FACTORY START comment (the audit trail: the session id next to the DISPATCH), then session_send with the rendered brief.
+ *   7. one line to the orchestrator session (reportTo), when one is given.
  * A start that fails ends its session and writes FACTORY END <id> failed: start (...), so the dispatch is not left half done.
- * deps: { portal, mcp, workspace, folder (absolute worktree), brief, reportTo?, now?, staleMin? }.
- * Returns { action: started|adopted|skipped|refused|failed, sessionId?, reason?, exceptions }.
+ * deps: { portal, mcp (with actor()), workspace, folder? (absolute, the portal's answer) | locate? (branch -> folder | null), brief (text, or
+ * folder -> text), reportTo?, now?, staleMin? }. Returns { action: started|adopted|skipped|refused|failed, sessionId?, reason?, exceptions }.
  */
-export async function startSlice(d, { portal, mcp, workspace, folder, brief, reportTo = null, now, staleMin = DEFAULT_RESUME_MAX_AGE_MIN }) {
+export async function startSlice(d, { portal, mcp, workspace, folder = null, locate = null, brief, reportTo = null, now, staleMin = DEFAULT_RESUME_MAX_AGE_MIN }) {
   const exceptions = [];
   const except = (reason) => exceptions.push({ ticket: d.ticket, dispatchId: d.dispatchId, reason });
+  const refuse = (reason, line) => { except(line ?? reason); return { action: 'refused', reason, exceptions }; };
   const fresh = normalizeTicket(await portal.get(d.ticket));
   const all = dispatchesOf(fresh);
   const last = all[all.length - 1];
@@ -476,11 +638,18 @@ export async function startSlice(d, { portal, mcp, workspace, folder, brief, rep
   if (last.ended) return { action: 'skipped', reason: `dispatch ended (${last.ended})`, exceptions };
   const started = startsOf(fresh).get(d.dispatchId);
   if (started) return { action: 'skipped', reason: `started already (session ${started})`, sessionId: started, exceptions };
+  if (Number(last.v) !== ENGINE_VERSION) return refuse(`not dispatched by engine version ${ENGINE_VERSION}`, `dispatch ${d.dispatchId} is not from engine version ${ENGINE_VERSION}: not started`);
   const age = ageMin(last.at, now);
-  if (age !== null && age > staleMin) {
-    except(`stale dispatch ${d.dispatchId}: ${age} min old (limit ${staleMin}), not started`);
-    return { action: 'refused', reason: 'stale', exceptions };
+  if (age !== null && age > staleMin) return refuse('stale', `stale dispatch ${d.dispatchId}: ${age} min old (limit ${staleMin}), not started`);
+  let where = folder;
+  if (!where && locate) {
+    try {
+      where = await locate(d.branch);
+    } catch (e) {
+      return refuse(`worktree unknown: ${String(e.message).slice(0, 160)}`);
+    }
   }
+  if (!where) return refuse('no worktree', `no worktree on ${d.branch} in ${workspace ?? 'the workspace'}: not started`);
   const fail = async (sessionId, why) => {
     if (sessionId) await mcp.call('session_end', { id: sessionId }).catch(() => undefined);
     await portal.comment(d.ticket, `FACTORY END ${d.dispatchId} failed: start (${why})`);
@@ -488,8 +657,10 @@ export async function startSlice(d, { portal, mcp, workspace, folder, brief, rep
     return { action: 'failed', reason: why, ...(sessionId ? { sessionId } : {}), exceptions };
   };
   if (!workspace) return fail(null, 'no workspace');
+  if (!ROLES.includes(d.role)) return fail(null, `role ${String(d.role).slice(0, 40)} is not in the role table`);
   if (!d.model || d.model === 'unset') return fail(null, `no model for role ${d.role}`);
-  if (String(brief).length > SEND_MAX) return fail(null, `brief over ${SEND_MAX} characters`);
+  const text = typeof brief === 'function' ? brief(where) : brief;
+  if (String(text).length > SEND_MAX) return fail(null, `brief over ${SEND_MAX} characters`);
   const title = `${d.dispatchId} ${d.role}`;
   // A start whose marker was never written (the engine stopped between the two): the portal's own list says so.
   let list = null;
@@ -498,25 +669,32 @@ export async function startSlice(d, { portal, mcp, workspace, folder, brief, rep
   } catch (e) {
     return fail(null, String(e.message));
   }
-  const prior = (list?.sessions ?? []).find((s) => String(typeof s.title === 'object' ? s.title?.untrusted_text : s.title).startsWith(`${d.dispatchId} `) && s.state !== 'ended');
+  const ours = startingOf(fresh).get(d.dispatchId) ?? new Set();
+  const titled = (list?.sessions ?? []).filter((s) => textOf(s.title) === title && s.state !== 'ended' && (s.ticket_id ?? d.ticket) === d.ticket);
+  const prior = titled.find((s) => typeof s.started_by === 'string' && ours.has(s.started_by));
   if (prior) {
     await portal.comment(d.ticket, startMarker(d, prior.id));
-    except(`adopted session ${prior.id}: started before its marker; check it got its brief`);
+    except(`adopted session ${prior.id}: started by this engine before its marker; check it got its brief`);
     return { action: 'adopted', sessionId: prior.id, exceptions };
   }
+  if (titled.length) return refuse(`a session titled ${title} exists that this engine did not start`, `session ${String(titled[0].id).slice(0, 80)} is titled ${title} but this engine did not start it: not adopted, not started`);
+  const actor = typeof mcp.actor === 'function' ? mcp.actor() : null;
+  if (!actor) return fail(null, 'no token actor to record the start');
+  await portal.comment(d.ticket, `FACTORY STARTING ${d.dispatchId} by=${actor}`);
   let sessionId = null;
   try {
-    const s = await mcp.call('session_start', { workspace_id: workspace, folder, title, agent: d.role, ticket_id: d.ticket });
+    const s = await mcp.call('session_start', { workspace_id: workspace, folder: where, title, agent: d.role, ticket_id: d.ticket });
     sessionId = s?.session?.id ?? null;
     if (!sessionId) return fail(null, 'session_start gave no session');
     const c = await mcp.call('session_configure', { id: sessionId, mode: START_MODE, model: d.model });
     if (c?.session?.mode !== START_MODE) return fail(sessionId, `mode ${START_MODE} not confirmed (${c?.session?.mode ?? 'no answer'})`);
+    if (c?.session?.model !== d.model) return fail(sessionId, `model ${d.model} not confirmed (${String(c?.session?.model ?? 'no answer').slice(0, 60)})`);
   } catch (e) {
     return fail(sessionId, String(e.message));
   }
   await portal.comment(d.ticket, startMarker(d, sessionId));
   try {
-    await mcp.call('session_send', { id: sessionId, text: brief });
+    await mcp.call('session_send', { id: sessionId, text });
   } catch (e) {
     return fail(sessionId, `brief not sent: ${e.message}`);
   }
@@ -528,30 +706,38 @@ export async function startSlice(d, { portal, mcp, workspace, folder, brief, rep
 }
 
 /**
- * The budget watch of a started slice (each round): its requests are the session's turns (the portal's own count). Under 150 percent of the
- * size budget nothing is done ('ok', or 'over' past 100 percent: a line); AT 150 percent the engine stops it and reports: session_interrupt,
- * the FACTORY STOP message (commit WIP, report), FACTORY END <id> stopped: budget, and one line to reportTo. Never continues silently.
- * Returns { action: none|ok|over|stopped|ended, used?, exceptions }.
+ * The budget watch of a started slice (each round). What it measures: the session's cost_usd from session_get (the portal's own sum of the
+ * session's cost, US dollars), against SIZE_COST_USD of the dispatch's size (provisional numbers, see there). Under 150 percent nothing is
+ * done ('ok', or 'over' past 100 percent: a line); AT 150 percent the engine stops it and reports: session_interrupt, the FACTORY STOP
+ * message (commit WIP, report), FACTORY END <id> stopped: budget, and one line to reportTo. Never continues silently. No cost in the answer
+ * is 'none' (unknown is a state, not a guess). Returns { action: none|ok|over|stopped|ended, used? (USD), budget?, exceptions }.
  */
-export async function watchBudget(rawTicket, { portal, mcp, reportTo = null, worktrees }) {
+export async function watchBudget(rawTicket, { portal, mcp, reportTo = null, worktrees, models }) {
   const t = normalizeTicket(rawTicket);
   const exceptions = [];
   if (CLOSED.has(t.status)) return { action: 'none', exceptions };
   const open = openDispatches(t);
   const last = open[open.length - 1];
   const sid = last ? startsOf(t).get(last.id) : null;
-  if (!sid || !(last.size in SIZE_BUDGET)) return { action: 'none', exceptions };
-  const d = dispatchFrom(t, last, { worktrees });
+  if (!sid) return { action: 'none', exceptions };
+  let d;
+  try {
+    d = dispatchFrom(t, last, { worktrees, models });
+  } catch (e) {
+    exceptions.push({ ticket: t.id, dispatchId: last.id, reason: `budget not watched: ${e.message}` });
+    return { action: 'none', exceptions };
+  }
   const got = await mcp.call('session_get', { id: sid });
   if (got?.session?.state === 'ended') return { action: 'ended', exceptions };
-  const used = Number(got?.session?.turns);
+  const raw = got?.session?.cost_usd;
+  const used = raw === null || raw === undefined || raw === '' ? NaN : Number(raw);
   if (!Number.isFinite(used)) return { action: 'none', exceptions };
-  const b = sliceBudget(d.size, used);
-  if (b.state !== 'stop') return { action: b.state, used, exceptions };
+  const b = costBudget(d.size, used);
+  if (b.state !== 'stop') return { action: b.state, used, budget: b.budget, exceptions };
   await mcp.call('session_interrupt', { id: sid }).catch(() => undefined);
   await mcp.call('session_send', { id: sid, text: stopText(d, used), priority: 'next' }).catch(() => undefined);
-  await portal.comment(t.id, `FACTORY END ${d.dispatchId} stopped: budget ${used} of ${d.budget} requests (stop at ${b.stopAt})`);
-  const reason = `budget stop: ${d.dispatchId} at ${used} of ${d.budget} requests (stop at ${b.stopAt}); session ${sid} told to commit WIP and report`;
+  await portal.comment(t.id, `FACTORY END ${d.dispatchId} stopped: budget ${usd(used)} of ${usd(b.budget)} (stop at ${usd(b.stopAt)})`);
+  const reason = `budget stop: ${d.dispatchId} at ${usd(used)} of ${usd(b.budget)} (stop at ${usd(b.stopAt)}); session ${sid} told to commit WIP and report`;
   exceptions.push({ ticket: t.id, dispatchId: d.dispatchId, reason });
   if (reportTo) await mcp.call('session_send', { id: reportTo, text: `FACTORY: ${reason}.`, priority: 'later' }).catch(() => undefined);
   return { action: 'stopped', used, exceptions };
@@ -564,8 +750,8 @@ const ENDED_RUN = new Set(['passed', 'failed', 'cancelled']);
 /** `<dispatchId> <runId>` of every FACTORY RESUME comment: the events already handled. */
 function resumedOf(t) {
   const out = new Set();
-  for (const c of t.comments) {
-    const m = /^FACTORY RESUME (\S+) run=(\S+)/.exec(c.text.split('\n', 1)[0].trim());
+  for (const c of engineLines(t)) {
+    const m = /^FACTORY RESUME (\S+) run=(\S+)/.exec(c.first);
     if (m) out.add(`${m[1]} ${m[2]}`);
   }
   return out;
@@ -632,11 +818,11 @@ export function stepMarker(kind, dispatchId, verdict, extra = {}) {
   return `FACTORY ${kind} ${dispatchId} ${key}=${verdict}${more}`;
 }
 
-/** The step markers (RESUME, REVIEW, VERIFY, INTEGRATE) of one dispatch, oldest first: { kind, at, fields }. */
+/** The step markers (RESUME, REVIEW, VERIFY, INTEGRATE) of one dispatch that the engine wrote, oldest first: { kind, at, fields }. */
 function stepsOf(t, dispatchId) {
   const out = [];
-  for (const c of t.comments) {
-    const m = /^FACTORY (RESUME|REVIEW|VERIFY|INTEGRATE) (\S+)(.*)$/.exec(c.text.split('\n', 1)[0].trim());
+  for (const c of engineLines(t)) {
+    const m = /^FACTORY (RESUME|REVIEW|VERIFY|INTEGRATE) (\S+)(.*)$/.exec(c.first);
     if (m && m[2] === dispatchId) out.push({ kind: m[1], at: c.at, fields: Object.fromEntries([...m[3].matchAll(/(\w+)=(\S+)/g)].map((x) => [x[1], x[2]])) });
   }
   return out;
@@ -718,6 +904,86 @@ export function learnText(t, d, counts, { mergedAt, commit, used } = {}) {
   return { actual, lesson };
 }
 
+/* ---------- One run per host, a token per run, a clean stop (M1, m3; T-338) ---------- */
+
+/** Whether a process with this pid lives on this host (EPERM: it lives, under another user). */
+export function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e?.code === 'EPERM';
+  }
+}
+
+export const DEFAULT_LOCK = join(tmpdir(), 'claudepilot-factory.lock');
+/** A lock file younger than this without a readable pid is being written by another run: held, not stale. */
+const LOCK_FRESH_MS = 10_000;
+
+/**
+ * One engine run that writes (--apply) per host: a lock file holding the pid, created exclusively (O_EXCL). A lock whose pid no longer
+ * lives is stale and taken over; a live one throws `another factory run holds <path> (pid <n>)`. release() removes it only while it is still
+ * this run's. Two hosts are not covered (the dispatch id and the ticket re-read before every write are the guard there).
+ */
+export function engineLock(path = DEFAULT_LOCK, { pid = process.pid, alive = pidAlive, now = () => Date.now() } = {}) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      writeFileSync(path, `${pid}\n`, { flag: 'wx', mode: 0o600 });
+      return {
+        path,
+        release() {
+          try {
+            if (readFileSync(path, 'utf8').trim() === String(pid)) unlinkSync(path);
+          } catch {
+            // gone already
+          }
+        },
+      };
+    } catch (e) {
+      if (e?.code !== 'EEXIST') throw e;
+    }
+    let other = NaN;
+    let age = Infinity;
+    try {
+      other = Number(readFileSync(path, 'utf8').trim());
+      age = now() - statSync(path).mtimeMs;
+    } catch {
+      continue; // removed between the two calls: try again
+    }
+    if (Number.isInteger(other) && other > 0 ? alive(other) : age < LOCK_FRESH_MS) throw new Error(`another factory run holds ${path} (pid ${Number.isInteger(other) ? other : 'unknown'})`);
+    try {
+      unlinkSync(path); // stale: its process is gone
+    } catch {
+      // another run took it over first: the next attempt sees its lock
+    }
+  }
+  throw new Error(`could not take ${path}`);
+}
+
+/** The admin token label of ONE run (M1): `factory-engine <pid>-<start time>`, so replace:true only ever replaces this run's own token. */
+export function leaseLabel({ pid = process.pid, now = Date.now() } = {}) {
+  return `factory-engine ${pid}-${now.toString(36)}`;
+}
+
+/** On SIGINT or SIGTERM: run cleanup (revoke the token, drop the lock) once, then exit 130 or 143. Returns a function that unhooks it. */
+export function onStop(cleanup, proc = process) {
+  let done = false;
+  const handler = (sig) => {
+    if (done) return;
+    done = true;
+    Promise.resolve()
+      .then(cleanup)
+      .catch(() => undefined)
+      .finally(() => proc.exit(sig === 'SIGINT' ? 130 : 143));
+  };
+  proc.once('SIGINT', handler);
+  proc.once('SIGTERM', handler);
+  return () => {
+    proc.off('SIGINT', handler);
+    proc.off('SIGTERM', handler);
+  };
+}
+
 function parseArgs(argv) {
   const o = { json: false, briefs: false };
   const num = (v, f) => { const n = Number(v); if (!Number.isFinite(n) || n < 0) throw new Error(`${f} needs a number`); return n; };
@@ -740,19 +1006,36 @@ function parseArgs(argv) {
     else if (a === '--stale-min') o.staleMin = num(val(), a);
     else if (a === '--start') o.start = true;
     else if (a === '--report-to') o.reportTo = val();
+    else if (a === '--repo-id') o.repoId = val();
+    else if (a === '--lock') o.lock = val();
     else throw new Error(`unknown argument ${a}`);
   }
   if (!o.tickets === !o.portal) throw new Error('name one source: --tickets <file.json|-> or --portal');
   if (o.apply && !o.portal) throw new Error('--apply needs --portal (the state is read from the portal right before it is written)');
+  if (o.role && !ROLES.includes(o.role)) throw new Error(`--role takes ${ROLES.join(', ')}`);
   if (o.start && !o.apply) throw new Error('--start needs --apply (a session is started only for a dispatch written in the same run)');
   if (o.start && !o.workspace) throw new Error('--start needs --workspace (the workspace the worker session runs in)');
+  if (o.start && !o.repoId) throw new Error('--start needs --repo-id (the repository in the workspace its worktrees are made from: repos_list)');
   return o;
 }
 
-/** The start step for applyPlan / a round: the brief rendered per dispatch, the folder absolute, the MCP client given. */
-export function starter({ portal, mcp, workspace, repo, template, tokenDiscipline, session, reportTo = null, now, staleMin }) {
+/**
+ * The start step for applyPlan / a round: the folder is the portal's (worktree_create's answer, or `locate` = portalWorktrees.find), the
+ * brief is rendered for that folder, the MCP client given.
+ */
+export function starter({ portal, mcp, workspace, locate, template, tokenDiscipline, session, reportTo = null, now, staleMin }) {
   return (d) =>
-    startSlice(d, { portal, mcp, workspace, folder: resolve(repo, d.worktree), brief: renderBrief(template, briefVars(d, { session, tokenDiscipline })), reportTo, now, staleMin });
+    startSlice(d, {
+      portal,
+      mcp,
+      workspace,
+      folder: d.folder ?? null,
+      locate,
+      brief: (folder) => renderBrief(template, briefVars({ ...d, worktree: folder }, { session, tokenDiscipline })),
+      reportTo,
+      now,
+      staleMin,
+    });
 }
 
 async function main() {
@@ -760,7 +1043,7 @@ async function main() {
   try {
     o = parseArgs(process.argv.slice(2));
   } catch (e) {
-    process.stderr.write(`factory: ${e.message}\nusage: factory.mjs (--tickets <file.json|-> | --portal [--apply [--start --workspace W [--report-to SESSION]]]) [--wip N] [--budget N] [--role R] [--session ID] [--worktrees DIR] [--workspace W] [--repo DIR] [--base REF] [--stale-min N] [--json] [--briefs]\n`);
+    process.stderr.write(`factory: ${e.message}\nusage: factory.mjs (--tickets <file.json|-> | --portal [--apply [--start --workspace W --repo-id ID [--report-to SESSION]]]) [--wip N] [--budget N] [--role R] [--session ID] [--worktrees DIR] [--workspace W] [--repo DIR] [--base REF] [--stale-min N] [--lock FILE] [--json] [--briefs]\n`);
     process.exit(2);
   }
   const here = dirname(fileURLToPath(import.meta.url));
@@ -786,16 +1069,31 @@ async function main() {
   const tokenDiscipline = tokenRules(readFileSync(join(here, 'token-discipline.md'), 'utf8'));
   const session = o.session ?? process.env.PILOT_SESSION ?? 'unset';
   const briefs = o.briefs ? plan.dispatch.map((d) => ({ dispatchId: d.dispatchId, marker: dispatchMarker(d), brief: renderBrief(template, briefVars(d, { session, tokenDiscipline })) })) : [];
-  // --start: an admin Portal MCP token leased for this run only (1 hour, revoked at the end), held in memory and never printed.
-  const lease = o.start ? tokenLease({ api: portal.raw, label: 'factory-engine' }) : null;
-  const start = lease
-    ? starter({ portal, mcp: mcpClient({ url: portal.url, token: lease.get }), workspace: o.workspace, repo: o.repo ?? repo, template, tokenDiscipline, session, reportTo: o.reportTo ?? null, now: Date.now(), staleMin: o.staleMin })
+  // --apply: one writing run per host (M1). --start: an admin Portal MCP token leased for this run only, under this run's own label (1 hour,
+  // revoked at the end and on SIGINT/SIGTERM), held in memory and never printed; worktrees are made in the workspace through the portal.
+  let lock = null;
+  if (o.apply) {
+    try {
+      lock = engineLock(o.lock ?? DEFAULT_LOCK);
+    } catch (e) {
+      process.stderr.write(`factory: ${e.message}\n`);
+      process.exit(3);
+    }
+  }
+  const lease = o.start ? tokenLease({ api: portal.raw, label: leaseLabel() }) : null;
+  const unhook = onStop(async () => { await lease?.revoke(); lock?.release(); });
+  const mcp = lease ? mcpClient({ url: portal.url, token: lease.get, tokenId: () => lease.id }) : null;
+  const wt = mcp ? portalWorktrees({ mcp, workspace: o.workspace, repoId: o.repoId }) : null;
+  const start = mcp
+    ? starter({ portal, mcp, workspace: o.workspace, locate: wt.find, template, tokenDiscipline, session, reportTo: o.reportTo ?? null, now: Date.now(), staleMin: o.staleMin })
     : null;
   let applied = null;
   try {
-    applied = o.apply ? await applyPlan(plan, { portal, git: gitOps(o.repo ?? repo), base: o.base, start }) : null;
+    applied = o.apply ? await applyPlan(plan, { portal, git: wt ?? gitOps(o.repo ?? repo), base: o.base, start }) : null;
   } finally {
     await lease?.revoke();
+    lock?.release();
+    unhook();
   }
   if (o.json) process.stdout.write(`${JSON.stringify({ ...plan, briefs, ...(applied ? { applied } : {}) }, null, 2)}\n`);
   else if (applied) {

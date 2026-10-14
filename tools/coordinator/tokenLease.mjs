@@ -4,7 +4,9 @@
 // - Minted for 1 hour (`expiresIn: '1h'`), never the old 7 days.
 // - Reused while it has more than `renewBeforeMs` left: a helper that makes many calls holds one token, not one per call.
 // - Minted with `replace: true`: the portal revokes this label's live tokens first (a crashed run's leftover, or this run's
-//   own token when it renews), one audit row each, so a label never piles up and never meets the 409 or the cap.
+//   own token when it renews), one audit row each, so a label never piles up and never meets the 409 or the cap. So a label must
+//   belong to ONE run: a helper that may run twice at once gives each run its own label (docs/dev-sessions/factory.mjs leaseLabel, T-338),
+//   or the second run's mint revokes the first run's token mid-run.
 // - `revoke()` at the end of the run (and on SIGINT/SIGTERM in long-running helpers).
 // The secret lives only in this process's memory and is never printed: errors name the code and message, never the token.
 //
