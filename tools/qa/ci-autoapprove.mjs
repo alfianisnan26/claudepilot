@@ -81,6 +81,7 @@ const MATRIX = [
 const MODE = 'button[aria-label^="Auto-approve for production"]';
 const DIALOG = '[role="dialog"]';
 const button = (text) => `[...document.querySelectorAll('${DIALOG} button')].find((x) => x.innerText.trim() === ${JSON.stringify(text)})`;
+const radio = (text) => `[...document.querySelectorAll('${DIALOG} [role="radio"]')].find((x) => x.innerText.trim() === ${JSON.stringify(text)})`;
 
 for (const cfg of MATRIX) {
   await call('PUT', `/api/ci/repos/${repoId}/environments/production/auto-approve`, { mode: 'off', window: null });
@@ -88,9 +89,12 @@ for (const cfg of MATRIX) {
   const seen = (expr, ms = 8000) => b.waitFor(expr, ms).then(() => true, () => false);
   const word = () => b.eval(`document.querySelector('${MODE}')?.innerText.trim() ?? ''`);
   const choose = async (label) => {
+    // The last dialog has gone (its close animation too) before the button is tapped again.
+    await seen(`!document.querySelector('${DIALOG}')`);
     await b.clickSel(MODE);
-    if (!(await seen(`!!${button(label)}`))) return false;
-    await b.eval(`${button(label)}.click()`);
+    if (!(await seen(`!!${radio(label)}`))) return false;
+    await b.eval(`${radio(label)}.click()`);
+    if (!(await seen(`${radio(label)}.getAttribute('aria-checked') === 'true'`))) return false;
     await sleep(200);
     return true;
   };
@@ -109,7 +113,7 @@ for (const cfg of MATRIX) {
 
     // Off -> Dry through the dialog.
     check(cfg.name, 'the dialog opens with Off, Dry and Auto', await choose('Dry'));
-    const sizes = await b.eval(`['Off', 'Dry', 'Auto'].map((t) => { const r = [...document.querySelectorAll('${DIALOG} button')].find((x) => x.innerText.trim() === t)?.getBoundingClientRect(); return r ? Math.round(r.height) : 0; })`);
+    const sizes = await b.eval(`['Off', 'Dry', 'Auto'].map((t) => { const r = [...document.querySelectorAll('${DIALOG} [role="radio"]')].find((x) => x.innerText.trim() === t)?.getBoundingClientRect(); return r ? Math.round(r.height) : 0; })`);
     check(cfg.name, 'the choices are 44 px tall', sizes.every((h) => h >= 44), JSON.stringify(sizes));
     check(cfg.name, 'dialog: no horizontal scroll', await b.eval(`(() => { const d = document.querySelector('${DIALOG}'); return !!d && d.scrollWidth <= d.clientWidth + 1 && document.scrollingElement.scrollWidth <= innerWidth + 1; })()`));
     check(cfg.name, 'the dialog has its InfoTips', await b.eval(`document.querySelectorAll('${DIALOG} [aria-label^="About"]').length >= 3`));
@@ -120,6 +124,7 @@ for (const cfg of MATRIX) {
 
     // Dry -> Auto with hours: the button says Turn on.
     await choose('Auto');
+    await seen(`[...document.querySelectorAll('${DIALOG} input')].some((x) => x.placeholder === 'always')`);
     await b.eval(`(() => { const i = [...document.querySelectorAll('${DIALOG} input')].find((x) => x.placeholder === 'always'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, '06:00-18:00'); i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
     check(cfg.name, 'Auto asks to Turn on', await seen(`!!${button('Turn on')}`));
     await b.shot(`${cfg.name}-3-dialog-auto`);

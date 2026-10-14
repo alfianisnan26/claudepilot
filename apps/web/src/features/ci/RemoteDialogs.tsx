@@ -1,6 +1,6 @@
-import { Dialog, FormDialog, Segmented, Select, Switch, TextArea, TextField } from '@isnanme/ui';
+import { cn, Dialog, FormDialog, Segmented, Select, Switch, TextArea, TextField } from '@isnanme/ui';
 import { type CiAutoApproveMode, type CiBranch, type CiEnvironment, type CiInput, type CiPipelineInfo, type CiRepo, type CiRun, type Workspace } from '@portal/contracts';
-import { useEffect, useMemo, useState } from 'react';
+import { type KeyboardEvent, useEffect, useMemo, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { api, errorText } from '@/lib/api';
 import { ciApi } from './api';
@@ -150,6 +150,39 @@ const RULE_MODES: { value: CiAutoApproveMode; label: string }[] = [
 ];
 const HOURS = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/;
 
+/** The rule's three modes as a radio group with 44 px choices (the shared Segmented is 40 px tall); arrow keys move the choice. */
+function ModePicker({ value, onChange }: { value: CiAutoApproveMode; onChange: (m: CiAutoApproveMode) => void }) {
+  const move = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const next = RULE_MODES[(i + step + RULE_MODES.length) % RULE_MODES.length]!;
+    onChange(next.value);
+    (e.currentTarget.parentElement?.children[RULE_MODES.indexOf(next)] as HTMLElement | undefined)?.focus();
+  };
+  return (
+    <div role="radiogroup" aria-labelledby="rule-mode" className="flex gap-1 rounded-full bg-surface-2 p-1">
+      {RULE_MODES.map((m, i) => (
+        <button
+          key={m.value}
+          type="button"
+          role="radio"
+          aria-checked={value === m.value}
+          tabIndex={value === m.value ? 0 : -1}
+          onClick={() => onChange(m.value)}
+          onKeyDown={(e) => move(e, i)}
+          className={cn(
+            'press h-11 flex-1 rounded-full text-[14px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none',
+            value === m.value ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink',
+          )}
+        >
+          {m.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /**
  * An environment's auto-approve rule (T-110, local-git-ci PRD FR41a): the mode, the hours (UTC) and the paths that need a person. Only a
  * person reaches it (the route refuses tokens and agents). `Auto` lets the portal approve a waiting deploy whose every condition holds.
@@ -207,7 +240,7 @@ export function AutoApproveDialog({ repoId, env, onClose, onSaved }: { repoId: s
               Agents can never approve.
             </InfoTip>
           </span>
-          <Segmented<CiAutoApproveMode> label="Mode" labelledBy="rule-mode" value={mode} onChange={setMode} options={RULE_MODES} />
+          <ModePicker value={mode} onChange={setMode} />
         </div>
         <TextField
           label="Hours (UTC)"
