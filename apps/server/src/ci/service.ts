@@ -176,6 +176,11 @@ export interface CiHooks {
   changed?(run: RunRow, previous: CiStatus | null): void;
   /** A job started waiting for a person's approval (PRD FR41): once per job. Notifications plug in here. */
   waiting?(run: RunRow, job: string, environment: string): void;
+  /**
+   * A push to a remote's default branch whose commit has `docs/context-pack.md` (T-292): the file as the snapshot read it (text,
+   * or why not). The portal keeps the repository's context pack pool in step with it (personas/contextPack.ts).
+   */
+  contextPack?(e: { workspaceId: string; repo: string; branch: string; sha: string; file: SnapshotFile }): void;
 }
 
 interface Polled {
@@ -363,11 +368,14 @@ export class CiService {
     const protectedBranch = !!branch && globMatches(json<string[]>(repo.protected, []), branch);
     const trigger: CiTrigger = protectedBranch ? 'merge' : 'push';
 
-    const snap = (await this.host.cp(workspaceId, ['snapshot', repo.name, ev.new], { timeoutMs: 30_000 })) as CiReply & { message?: string; subject?: string; hasPilot?: boolean; files?: SnapshotFile[] };
+    const snap = (await this.host.cp(workspaceId, ['snapshot', repo.name, ev.new], { timeoutMs: 30_000 })) as CiReply & { message?: string; subject?: string; hasPilot?: boolean; files?: SnapshotFile[]; contextPack?: SnapshotFile | null };
     if (!snap.ok) {
       if (snap.error === 'no_commit') return record('ignored', 'the commit is no longer in the remote');
       throw new Error(snap.message ?? snap.error ?? 'snapshot failed');
     }
+    // The context pack follows the default branch, whatever the pipelines do with the push ([skip ci] included).
+    const pack = snap.contextPack;
+    if (pack && branch === repo.default_branch) this.#hook(() => this.hooks.contextPack?.({ workspaceId, repo: repo.name, branch, sha: ev.new, file: pack }));
     if (SKIP.test(snap.message ?? '')) return record('skipped', '[skip ci] in the commit message');
     if (!snap.hasPilot) return record('no_pipeline', 'no .pilot folder');
     const { pipelines } = validateFiles(snap.files ?? []);
