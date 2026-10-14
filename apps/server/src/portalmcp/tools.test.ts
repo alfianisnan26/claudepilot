@@ -676,7 +676,7 @@ test('mcp_propose_entry: only a draft, the portal says who proposed it, no secre
   const admin = h.token('admin');
   await h.call(admin.secret, 'mcp_propose_entry', { ...base, key: 'viaadmin' });
   assert.equal(world.proposals.at(-1)!.actor, `portal-mcp:${admin.id}`);
-  assert.match(world.proposals.at(-1)!.req.reason, /^\[proposed over MCP by token “admin-test”\]/);
+  assert.match(world.proposals.at(-1)!.req.reason, /^\[proposed over MCP by token “admin-test(?: \d+)?”\]/);
 
   // Ten an hour per token, then it stops.
   const b = await h.agentToken('docker/api', 's-loop');

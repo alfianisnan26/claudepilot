@@ -8,11 +8,18 @@ import { SettingRow } from '@/components/SettingRow';
 import { errorText } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { portalMcpApi } from './api';
-import { OUTCOME, SCOPE_LABEL, SCOPE_TONE, tokenState } from './labels';
+import { groupTokens, OUTCOME, SCOPE_LABEL, SCOPE_TONE, timeLeft, tokenState, type TokenGroup } from './labels';
 import { CodeBlock, MONO } from './parts';
 import { CreatedTokenDialog, NewTokenDialog } from './TokenDialogs';
 
-type Confirm = { kind: 'off' } | { kind: 'sessions' } | { kind: 'revoke'; token: PortalToken } | { kind: 'all' } | { kind: 'agent-off'; workspace: PortalAgentWorkspace } | null;
+type Confirm =
+  | { kind: 'off' }
+  | { kind: 'sessions' }
+  | { kind: 'revoke'; token: PortalToken }
+  | { kind: 'label'; group: TokenGroup; keepNewest: boolean }
+  | { kind: 'all' }
+  | { kind: 'agent-off'; workspace: PortalAgentWorkspace }
+  | null;
 
 /** How often the page looks again while it is open, for the activity list and "last used". */
 const REFRESH_MS = 20_000;
@@ -77,7 +84,8 @@ export function McpAccess() {
   const now = Date.now();
   const live = state.tokens.filter((t) => tokenState(t, now).live);
   const gone = state.tokens.length - live.length;
-  const shown = showAll ? state.tokens : live;
+  const groups = groupTokens(showAll ? state.tokens : live, now);
+  const labelCount = confirm?.kind === 'label' ? (confirm.keepNewest ? confirm.group.live.length - 1 : confirm.group.live.length) : 0;
   const agentTokens = (agents ?? []).reduce((n, a) => n + a.liveTokens, 0);
 
   return (
@@ -109,35 +117,45 @@ export function McpAccess() {
       <section>
         <Heading
           title="Tokens"
-          tip="One scope each, and it expires. Revoking ends it on its next call."
+          tip="One scope each, and it expires. Revoking ends it on its next call. A label names one client: its tokens are grouped, and a new token with a used label replaces them or is added next to them."
           action={
             <Button size="sm" icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>
               New
             </Button>
           }
         />
-        {shown.length === 0 ? (
+        {groups.length === 0 ? (
           <p className="rounded-2xl border border-dashed border-line px-4 py-5 text-center text-sm text-muted">No tokens.</p>
         ) : (
           <Card>
             <ul className="divide-y divide-line">
-              {shown.map((t) => (
-                <TokenRow key={t.id} token={t} now={now} onRevoke={() => setConfirm({ kind: 'revoke', token: t })} />
-              ))}
+              {groups.map((g) =>
+                g.tokens.length === 1 ? (
+                  <TokenRow key={g.label} token={g.tokens[0]!} now={now} onRevoke={() => setConfirm({ kind: 'revoke', token: g.tokens[0]! })} />
+                ) : (
+                  <GroupRow
+                    key={g.label}
+                    group={g}
+                    now={now}
+                    onRevoke={(t) => setConfirm({ kind: 'revoke', token: t })}
+                    onRevokeLabel={(keepNewest) => setConfirm({ kind: 'label', group: g, keepNewest })}
+                  />
+                ),
+              )}
             </ul>
           </Card>
         )}
         {(gone > 0 || live.length > 1) && (
           <div className="mt-2 flex items-center justify-between gap-3 text-[13px] text-muted">
             {gone > 0 ? (
-              <button type="button" className="rounded-lg font-semibold hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" onClick={() => setShowAll((v) => !v)}>
+              <button type="button" className="rounded-lg font-semibold hover:text-ink tap:min-h-11 tap:px-1 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" onClick={() => setShowAll((v) => !v)}>
                 {showAll ? 'Hide' : 'Show'} {gone} ended
               </button>
             ) : (
               <span />
             )}
             {live.length > 1 && (
-              <button type="button" className="rounded-lg font-semibold text-danger focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" onClick={() => setConfirm({ kind: 'all' })}>
+              <button type="button" className="rounded-lg font-semibold text-danger tap:min-h-11 tap:px-1 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none" onClick={() => setConfirm({ kind: 'all' })}>
                 Revoke all
               </button>
             )}
@@ -270,6 +288,17 @@ export function McpAccess() {
         onClose={() => !busy && setConfirm(null)}
       />
       <ConfirmDialog
+        open={confirm?.kind === 'label'}
+        title={confirm?.kind === 'label' ? `Revoke ${labelCount} “${confirm.group.label}” token${labelCount === 1 ? '' : 's'}?` : 'Revoke?'}
+        description={confirm?.kind === 'label' && confirm.keepNewest ? 'The newest one stays.' : 'They stop working on their next call.'}
+        confirmLabel="Revoke"
+        loading={busy}
+        onConfirm={() =>
+          confirm?.kind === 'label' && void act(() => portalMcpApi.revokeLabel({ label: confirm.group.label, keepNewest: confirm.keepNewest }), 'Revoked', 'Couldn’t revoke them.')
+        }
+        onClose={() => !busy && setConfirm(null)}
+      />
+      <ConfirmDialog
         open={confirm?.kind === 'all'}
         title={`Revoke ${live.length + agentTokens} tokens?`}
         description="Agents’ tokens too. MCP stays on."
@@ -301,6 +330,52 @@ function Heading({ title, tip, action }: { title: string; tip: string; action?: 
       </h2>
       {action}
     </div>
+  );
+}
+
+/** A label with more than one token: the count, the newest expiry and the last use; it opens to the tokens. */
+function GroupRow({ group: g, now, onRevoke, onRevokeLabel }: { group: TokenGroup; now: number; onRevoke: (t: PortalToken) => void; onRevokeLabel: (keepNewest: boolean) => void }) {
+  const [open, setOpen] = useState(false);
+  const scopes = [...new Set((g.live.length ? g.live : g.tokens).map((t) => t.scope))];
+  const items = [
+    ...(g.live.length > 1 ? [{ label: `Revoke older (${g.live.length - 1})`, danger: true, icon: <Ban className="size-4" />, onSelect: () => onRevokeLabel(true) }] : []),
+    ...(g.live.length > 0 ? [{ label: `Revoke all (${g.live.length})`, danger: true, icon: <Ban className="size-4" />, onSelect: () => onRevokeLabel(false) }] : []),
+  ];
+  return (
+    <li>
+      <div className="flex items-center gap-3 px-4 py-1.5 sm:px-5">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-xl py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <ChevronRight className={`size-4 shrink-0 text-muted transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
+          <span className="min-w-0 flex-1">
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="min-w-0 text-sm font-semibold break-words">{g.label}</span>
+              <Badge tone={g.live.length > 1 ? 'warning' : 'neutral'}>{g.live.length > 0 ? `${g.live.length} live` : `${g.tokens.length} ended`}</Badge>
+              {scopes.map((sc) => (
+                <Badge key={sc} tone={SCOPE_TONE[sc]}>
+                  {SCOPE_LABEL[sc]}
+                </Badge>
+              ))}
+            </span>
+            <span className="mt-0.5 block truncate text-[12.5px] text-muted">
+              {g.expiresAt ? `newest ${timeLeft(Date.parse(g.expiresAt) - now)} left` : 'none live'} · {g.lastUsedAt ? `used ${timeAgo(g.lastUsedAt)}` : 'never used'}
+            </span>
+          </span>
+        </button>
+        {items.length > 0 && <Menu label={`Actions for ${g.label}`} items={items} />}
+      </div>
+      {open && (
+        <ul className="divide-y divide-line border-t border-line bg-surface-2/40 pl-4">
+          {g.tokens.map((t) => (
+            <TokenRow key={t.id} token={t} now={now} onRevoke={() => onRevoke(t)} />
+          ))}
+        </ul>
+      )}
+    </li>
   );
 }
 

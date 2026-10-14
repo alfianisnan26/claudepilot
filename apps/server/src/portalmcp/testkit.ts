@@ -57,9 +57,16 @@ export async function portalMcpHarness(opts: HarnessOptions = {}) {
   /** A fetch that goes straight into the endpoint, as a client's would over HTTP. */
   const fetcher: typeof fetch = async (input, init) => module.mcp.handle(new Request(input as string, init), { ip: ip.value });
 
-  /** An admin's token of the given scope; returns its secret and id. */
-  const token = (scope: PortalScope, label = `${scope}-test`) => {
-    const { token: t, secret } = module.createToken({ label, scope }, URL_);
+  /**
+   * An admin's token of the given scope; returns its secret and id. A label names one client (T-258), so a second token with the
+   * default label gets its own (`read-test 2`); a test that wants a label's duplicate rules calls `module.createToken` itself.
+   */
+  const minted = new Map<string, number>();
+  const token = (scope: PortalScope, label?: string) => {
+    const base = label ?? `${scope}-test`;
+    const n = (minted.get(base) ?? 0) + 1;
+    minted.set(base, n);
+    const { token: t, secret } = module.createToken({ label: n === 1 || label ? base : `${base} ${n}`, scope, addAnother: !!label && n > 1 }, URL_);
     return { id: t.id, secret };
   };
 
