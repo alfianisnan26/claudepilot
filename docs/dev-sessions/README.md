@@ -100,15 +100,24 @@ ending that hit the Konfersi chat on 2026-10-13 is fixed (T-99), so that should 
 `cd ~/work/claudepilot && PORTAL_SERVER_CODE=... setsid nohup node docs/dev-sessions/supervisor.mjs >> ~/.claudepilot/dev-sessions/supervisor.log 2>&1 < /dev/null &`.
 `DRY_RUN=1` reads the portal and says what it would do. It approves nothing unless `DEPLOY_RUN=<run id>` is given, and then only that run.
 
-## The factory engine (T-293, dry only)
+## The factory engine (T-293, no sessions yet)
 
 `docs/dev-sessions/factory.mjs` is engine v0 of design v2 layer 3 (`overhaul/token-economy-design.md` sections 3 and 4): orchestration as code.
-Today it only PLANS: `node docs/dev-sessions/factory.mjs --tickets tickets.json [--wip 5] [--budget <requests>] [--briefs] [--json]` reads ticket
-data passed in (a TicketList, TicketItems or TicketDetails) and prints what it would dispatch; it calls no model, writes nothing to the portal and
-creates no worktree. Intake takes the next tickets by `rank-NN` tag that are open, carry an ESTIMATE comment with a size S, M or L (XL is split
+It PLANS, and with `--apply` it prepares, but it starts no session and calls no model (the Bypass lease is the owner's open decision; until
+then the orchestrator runs the slice through its Agent tool with the printed brief).
+`node docs/dev-sessions/factory.mjs (--tickets tickets.json | --portal [--apply]) [--wip 5] [--budget <requests>] [--stale-min 360] [--briefs] [--json]`
+reads ticket data passed in (a TicketList, TicketItems or TicketDetails) or, with `--portal`, from the portal (open and in-progress tickets,
+the ranked open ones whole) with the supervisor's auth path (`PORTAL_URL`, `PORTAL_SERVER_CODE`; the cookie stays in memory and is never
+printed). Intake takes the next tickets by `rank-NN` tag that are open, carry an ESTIMATE comment with a size S, M or L (XL is split
 first), within WIP (in-progress tickets and open dispatches, five by default) and within the run's request budget (the first ticket over it
 stops the plan). Each slice gets a request budget by size (S 25, M 60, L 120) and stops at 150 percent. The brief comes from
 `factory-brief.md` (context pack, role and model from `.claude/agents/`, budget, trailers, token discipline). State lives only in ticket
-comments: `FACTORY DISPATCH <ticket>-F<n> ...` and `FACTORY END <ticket>-F<n> <outcome>`; an open dispatch is never dispatched again, and a
-resume of a dispatch that ended, was superseded or is older than six hours is refused. The check step is `scripts/slice-check.sh` (typecheck
-plus the server test files the diff touched, at most 20 lines, no model). Not yet: the dispatch itself, the resume on CI events, review and verify.
+comments: `FACTORY DISPATCH <ticket>-F<n> ...`, `FACTORY END <ticket>-F<n> <outcome>` and `FACTORY RESUME <ticket>-F<n> run=<id> ...`; an
+ACTUAL comment ends the dispatches before it. An open dispatch is never dispatched again; one open past `--stale-min` is printed as an
+`EXCEPTION` line for the coordinator and left alone. `--apply` (needs `--portal`) reads each planned ticket again, refuses a branch
+`ticket/T-n-slug` or a worktree folder that exists, writes the DISPATCH comment, then creates the worktree from `--base` (default
+`origin/integration`); a worktree that fails gets a `FACTORY END ... failed` comment so the ticket is free again. On a CI event,
+`resumeDecision` says what to do with the ticket's latest dispatch (passed: review; failed: fix; cancelled or stale: exception; a run still
+going, another branch, an ended dispatch or an event already handled: nothing), and `pendingResumes` does the same from a ticket's checks after
+a restart. The check step is `scripts/slice-check.sh` (typecheck plus the server test files the diff touched, at most 20 lines, no model).
+Not yet: starting the session, the supervisor hook that runs it and relays EXCEPTION lines, audit rows of their own, review and verify.
