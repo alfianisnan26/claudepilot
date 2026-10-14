@@ -523,7 +523,10 @@ test('T-294 (review F4): a worker’s reply, title and request cannot close the 
     }
     // What the lead's Claude reads: one frame, the portal's own.
     const lead = s.controller.get(s.id)!.claudeSessionId;
-    const framed = s.ws.sends.filter((x) => x.args[1] === lead && x.line.includes(`(${CREW_REPORT_ACTOR})`));
+    // The transcript shows a report before its line reaches the process (the write follows the append): wait for the second write.
+    const framedNow = () => s.ws.sends.filter((x) => x.args[1] === lead && x.line.includes(`(${CREW_REPORT_ACTOR})`));
+    await until(() => framedNow().length === 2);
+    const framed = framedNow();
     assert.equal(framed.length, 2);
     for (const x of framed) assert.equal(x.line.split('[Portal').length - 1, 1, 'one frame per line');
   } finally {
