@@ -103,6 +103,10 @@ const shot = async (name) => {
   writeFileSync(join(shots, `t294-${name}.png`), Buffer.from(r.data, 'base64'));
 };
 
+// T-321: how long a page may take to load. Under load (scripts/test-repeat.sh --hogs cpus in a Job, 8 busy loops) a cold /admin/sessions
+// took 20 to 26 s, so the old 2.5 + 8 s wait clicked an All chip that was not there yet and read the list on its default chip (Needs you,
+// worker E alone): the lead's row "missing". A wait ends as soon as its condition holds, so the long deadline costs nothing when it passes.
+const LOAD_MS = 60_000;
 // T-321: --diag <dir> writes what the page held when the lead's row was missing (rows, chips, the API calls and their timings, the
 // portal's log), a screenshot, and when (if ever) the row showed up after that.
 const diag = args.includes('--diag') ? args[args.indexOf('--diag') + 1] : null;
@@ -112,7 +116,7 @@ const PAGE_STATE = `(() => ({
   rows: [...document.querySelectorAll('ul[data-session-rows] li')].map((li) => li.querySelector(':scope > div > div > a p.font-semibold')?.textContent ?? '?').slice(0, 30),
   lists: document.querySelectorAll('ul[data-session-rows]').length,
   chips: [...document.querySelectorAll('[data-chip]')].map((c) => [c.dataset.chip, c.getAttribute('aria-pressed') ?? c.getAttribute('aria-checked') ?? c.getAttribute('data-active'), c.textContent.trim()].join('|')),
-  api: performance.getEntriesByType('resource').filter((e) => e.name.includes('/api/')).map((e) => [e.name.replace(location.origin, ''), Math.round(e.startTime), Math.round(e.duration)]),
+  api: performance.getEntriesByType('resource').filter((e) => e.initiatorType === 'fetch' || e.initiatorType === 'xmlhttprequest').map((e) => [e.name.replace(location.origin, ''), Math.round(e.startTime), Math.round(e.duration)]),
   nav: Math.round(performance.getEntriesByType('navigation')[0]?.duration ?? -1),
   text: document.body.innerText.slice(0, 800),
 }))()`;
@@ -142,8 +146,10 @@ for (const size of SIZES) {
     await b.media({ dark });
     await b.eval(`localStorage.removeItem('claudepilot.sessions-view')`).catch(() => {});
     await b.goto('/admin/sessions', 2500);
-    await b.waitFor(`!!document.querySelector('[data-chip=all]')`, 8000, 'chips').catch(() => {});
+    await b.waitFor(`!!document.querySelector('[data-chip=all]')`, LOAD_MS, 'chips').catch(() => {});
     await b.eval(`document.querySelector('[data-chip=all]')?.click()`);
+    // One tap, never repeated: it has to stick (T-321, listOrder.ts withDefaultChip), and All has to list the lead.
+    await b.waitFor(`document.querySelector('[data-chip=all]')?.getAttribute('aria-pressed') === 'true' && (${HELPERS}) && !!__row('QA crew lead')`, LOAD_MS, 'All with the lead').catch(() => {});
     await sleep(500);
 
     const lead = await fact('QA crew lead');
@@ -191,7 +197,7 @@ for (const size of SIZES) {
 
     // A worker's page: up to its lead.
     await b.goto('/admin/sessions/qacrew-a', 2500);
-    await b.waitFor(`!!document.querySelector('[data-crew-lead]')`, 8000, 'lead link').catch(() => {});
+    await b.waitFor(`!!document.querySelector('[data-crew-lead]')`, LOAD_MS, 'lead link').catch(() => {});
     const up = await b.eval(`(() => { const a = document.querySelector('[data-crew-lead]'); if (!a) return null; const r = a.getBoundingClientRect(); return { href: a.getAttribute('href'), text: a.textContent.trim(), h: r.height, right: r.right }; })()`);
     check(`${tag} worker page: a link up to its lead, with its Claude`, up?.href === '/admin/sessions/qacrew-lead' && /QA crew lead/.test(up.text) && /Default/.test(up.text), JSON.stringify(up));
     if (size.mobile) check(`${tag} worker page: the link is a 44 px target`, up?.h >= 44, String(up?.h));
@@ -200,12 +206,12 @@ for (const size of SIZES) {
 
     // The lead's page: its workers on a tap.
     await b.goto('/admin/sessions/qacrew-lead', 2500);
-    await b.waitFor(`!!document.querySelector('[data-crew-workers]')`, 8000, 'workers button').catch(() => {});
+    await b.waitFor(`!!document.querySelector('[data-crew-workers]')`, LOAD_MS, 'workers button').catch(() => {});
     const down = await b.eval(`(() => { const x = document.querySelector('[data-crew-workers]'); if (!x) return null; return { label: x.getAttribute('aria-label'), text: x.textContent.trim(), h: x.getBoundingClientRect().height }; })()`);
     check(`${tag} lead page: its workers counted, the words in the label`, down?.text === '6' && down.label === '6 workers, 1 needs you', JSON.stringify(down));
     if (size.mobile) check(`${tag} lead page: the button is a 44 px target`, down?.h >= 44, String(down?.h));
     await b.clickSel('[data-crew-workers]');
-    await b.waitFor(`!!document.querySelector('[data-crew-list]')`, 4000, 'workers list').catch(() => {});
+    await b.waitFor(`!!document.querySelector('[data-crew-list]')`, LOAD_MS, 'workers list').catch(() => {});
     await sleep(400);
     const listed = await b.eval(`(() => { const ul = document.querySelector('[data-crew-list]'); if (!ul) return null; return [...ul.querySelectorAll(':scope > li')].map((li) => li.textContent.trim()); })()`);
     check(`${tag} lead page: the list (live in spawn order, then "2 done")`, Array.isArray(listed) && listed.length === 5 && /^QA crew worker A/.test(listed[0]) && /Work/.test(listed[1]) && /Needs you/.test(listed[3]) && listed[4] === '2 done', JSON.stringify(listed));
