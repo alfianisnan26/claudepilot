@@ -156,3 +156,10 @@ T-126, T-129, T-121, T-122, T-113, T-114, T-101, T-106, T-120, T-26/T-27 (in T-1
   - Never print the environment in any form (T-124); every sub-agent brief says so. A scratch portal under the heavy lock takes `flock -o` (T-159).
   - Migration blocks: T-42 710-715, T-98 716-717, B 720-729, C 730-734, T-97 735-736, T-26/27 740-744, T-30 745-749, T-101 750-754, T-102 755, T-105 760, T-109 761, T-136 770-772, T-110 780-784.
   - Quota: keep turns short (background waits) so auto move sees turn boundaries (T-105 G2).
+
+## CONTINUATION 5802dfa4 (started 12:30 UTC 2026-10-14; the maintenance is over, the pod is healthy on 2026.10.14-4)
+- a11ebf2's gate was green (424 s) and is on origin. Adopted the 15 tickets of 619018ca (ticket_adopt). Opened T-290 (context compiler, rank-02m) and T-291 (factory engine, rank-02n) with ESTIMATE comments; not started.
+- Verifier 4A/4B: CLOSED T-288, T-284, T-270. Open with comments: T-259 (engine never ran live; keepgoing.mjs failed in a Job on ECONNREFUSED 3471), T-257 (items 2-3 only syntax-checked, no escalation test), T-136 (no live in-place recovery yet; E/F/Resume button unchecked), T-277 (0 integrity endings since 06:50Z; layer 4 proof needs the next deploy), T-285 (drop-in present, MCP output still 25000), T-280 (no steer lines to prove), T-282, T-287, T-146 s2, T-110 s2 (scratch evidence only).
+- T-287 slice 3 (dev/t287-lab-3, merge 04c8f0a, gate green) PUSHED to origin and pilot integration. Migration 853.
+- RUNNING: ace3e891 implementer opus on dev/t259-3 (T-257 tests, keepgoing.mjs runnable, program filter + Session info). Quota projection 105 percent at 12:48: one agent only until it falls under 90.
+- Deploy: runs 20-23 used today's deploys; next deploy in the 2026-10-15 00:00 UTC batch (T-146 s2, T-110 s2, T-287 s2-3), then verifier pass 5 with the chats job.
