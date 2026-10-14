@@ -932,6 +932,49 @@ test('budget stop mid-turn (T-342 B3): a worker in its one turn (working, cost_u
   assert.deepEqual(m3.calls, []);
 });
 
+test('budget watch (T-342 N1): a session_get that fails for one ticket does not switch the stop off for the others; a deleted session ends its dispatch once, held; a transient error is one line (negative: the round never throws)', async () => {
+  const gone = () => Object.assign(new Error('session_get: NOT_FOUND No such session.'), { code: 'NOT_FOUND' });
+  const flaky = () => new Error('session_get: no answer (502)');
+  for (const [failure, order] of [[gone, 'bad first'], [gone, 'bad last'], [flaky, 'bad first'], [flaky, 'bad last']] as const) {
+    const bad = started('s-8');
+    const good = started('s-9');
+    const portal = fakePortal(order === 'bad first' ? [bad.t, good.t] : [good.t, bad.t]);
+    const mcp = fakeMcp({ session_get: (a) => { if (a.id === 's-8') throw failure(); return sessionGet(String(a.id), { createdMin: 300 }); } });
+    const round = await r.runRound({ portal, now: NOW, models: MODELS, changed: () => [], apply: true, git: NO_GIT, watch: (raw: unknown) => f.watchBudget(raw, { portal, mcp, now: NOW }) });
+    const tag = `${failure.name} ${order}`;
+    // the good one is still stopped mid-turn in the same round
+    assert.ok(portal.writes.some(([id, text]: [string, string]) => id === good.t.id && text.startsWith(`FACTORY END ${good.id} stopped: budget wall 300`)), tag);
+    assert.ok(round.lines.some((l: string) => l.startsWith(`EXCEPTION ${good.t.id} ${good.id}: budget stop: `)), tag);
+    assert.ok(mcp.calls.some(([n, a]) => n === 'session_interrupt' && a.id === 's-9'), tag);
+    assert.ok(!mcp.calls.some(([n, a]) => n === 'session_interrupt' && a.id === 's-8'), tag);
+    const badWrites = portal.writes.filter(([id]: [string]) => id === bad.t.id);
+    if (failure === gone) {
+      assert.deepEqual(badWrites, [[bad.t.id, `FACTORY END ${bad.id} failed: session gone`]], tag);
+      assert.ok(round.lines.includes(`EXCEPTION ${bad.t.id} ${bad.id}: session s-8 of ${bad.id} is gone: dispatch ended, held until FACTORY RETRY`), tag);
+      // held (no re-dispatch), and the next round writes nothing more for it
+      const after = portal.byId.get(bad.t.id);
+      assert.equal(f.heldOn(f.normalizeTicket(after))?.id, bad.id, tag);
+      assert.equal((await f.watchBudget(after, { portal, mcp, now: NOW })).action, 'none', tag);
+      assert.equal(portal.writes.filter(([id]: [string]) => id === bad.t.id).length, 1, tag);
+    } else {
+      assert.deepEqual(badWrites, [], tag);
+      assert.ok(round.lines.includes(`EXCEPTION ${bad.t.id} ${bad.id}: budget not watched this round: session_get: no answer (502)`), tag);
+      assert.ok(!round.lines.some((l: string) => l.startsWith(`NEXT ${bad.t.id}`)), tag);
+    }
+  }
+  // a watch that throws (any cause) is that ticket's EXCEPTION line, never the round's end
+  const bad = started('s-8');
+  const good = started('s-9');
+  const portal = fakePortal([bad.t, good.t]);
+  const mcp = fakeMcp({ session_get: (a) => sessionGet(String(a.id), { createdMin: 300 }) });
+  const round = await r.runRound({ portal, now: NOW, models: MODELS, changed: () => [], apply: true, git: NO_GIT, watch: (raw: unknown) => {
+    if (f.normalizeTicket(raw).id === bad.t.id) throw new Error('portal: GET /api/x 500');
+    return f.watchBudget(raw, { portal, mcp, now: NOW });
+  } });
+  assert.ok(round.lines.includes(`EXCEPTION ${bad.t.id} ${bad.id}: budget not watched this round: portal: GET /api/x 500`));
+  assert.ok(portal.writes.some(([id, text]: [string, string]) => id === good.t.id && text.startsWith(`FACTORY END ${good.id} stopped:`)));
+});
+
 test('mcpClient: the structuredContent, or an error with the code and message; the token is never in an error', async () => {
   const secret = ['lease', String(NOW).slice(-6), 'x'].join('-');
   const seen: string[] = [];
@@ -1148,14 +1191,14 @@ test('m3: SIGINT and SIGTERM revoke the lease and drop the lock once, then exit 
 const NO_GIT = { taken: () => null, addWorktree: () => { throw new Error('no worktree may be made'); } };
 const dispatchLine = (t: T, n: number, run: string) => `FACTORY DISPATCH ${t.id}-F${n} v=2 role=implementer model=opus size=M budget=60 branch=${f.branchOf(f.normalizeTicket(t))} run=${run}`;
 
-test('T-342 no unbounded re-dispatch: after END stopped: budget or END failed the ticket is HELD (one EXCEPTION line a round, no comment, no F2) until a PERSON writes FACTORY RETRY (negative twins: an agent\'s RETRY, other outcomes)', async () => {
+test('T-342 no unbounded re-dispatch: after END stopped: budget or END failed the ticket is HELD (one EXCEPTION line a round, no comment, no F2) until a signed-in ui writer writes FACTORY RETRY (negative twins: an agent\'s RETRY, other outcomes)', async () => {
   for (const outcome of ['stopped: budget wall 270 of 180 min (stop at 270)', 'failed: worktree (fatal: bad base)', 'failed: start (session_start: refused)']) {
     const t = ticket({ tags: ['rank-01'] }) as T;
     t.comments.push(say(50, dispatchLine(t, 1, 'run-a')), say(40, `FACTORY END ${t.id}-F1 run=run-a ${outcome}`));
     const plan = f.intake([t], { now: NOW });
     assert.deepEqual(plan.dispatch, [], outcome);
     assert.deepEqual(plan.inFlight, [], 'a held ticket is not in flight');
-    assert.deepEqual(plan.exceptions, [{ ticket: t.id, dispatchId: `${t.id}-F1`, reason: `held: ${t.id}-F1 ended (${outcome}); not dispatched again until a person writes FACTORY RETRY ${t.id}-F1 on the ticket` }]);
+    assert.deepEqual(plan.exceptions, [{ ticket: t.id, dispatchId: `${t.id}-F1`, reason: `held: ${t.id}-F1 ended (${outcome}); not dispatched again until FACTORY RETRY ${t.id}-F1 is written on the ticket, signed in` }]);
     // two rounds with --apply: one EXCEPTION line each, no comment, no worktree, no dispatch
     const portal = fakePortal([t]);
     for (let i = 0; i < 2; i++) {

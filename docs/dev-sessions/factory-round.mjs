@@ -19,7 +19,8 @@
 //   NEXT <ticket> <id> <step> <role>/<model>: <why>   the step a role runs now (review, verify, fix) or the coordinator (integrate)
 //   LEARN <id>: wrote | would comment  followed by the ACTUAL text, indented: --apply writes it (it ends the dispatch), dry prints it
 //   EXCEPTION <ticket> <id>: <why>     the coordinator's: stale, cancelled, out of order, conflict, rework limit, budget stop, held after a
-//                                      stop or failure (a person writes FACTORY RETRY <id>), refused, errors
+//                                      stop or failure (a signed-in ui writer writes FACTORY RETRY <id>), refused, a session gone
+//                                      (END failed: session gone) and errors (one ticket's error is its own line; the round goes on)
 // Exit: 0 after a round (exceptions are lines, not a failure), 1 when the portal could not be read (an EXCEPTION line says so), 2 usage.
 // Ticket text is untrusted data and is not printed: lines carry ids, states and the engine's own words.
 import { execFileSync } from 'node:child_process';
@@ -39,6 +40,9 @@ export function gitChanged(repo, base = 'origin/integration', run = (args) => ex
     }
   };
 }
+
+/** The first line of an error, cut (portalClient and mcpClient errors carry a method, a path, a status or a tool code; never a secret). */
+const oneLine = (e) => String(e?.message ?? e).split('\n')[0].slice(0, 160);
 
 /**
  * One round: intake (and with apply, applyPlan), then for every ticket with an open dispatch its pending CI resumes and its next step.
@@ -91,16 +95,31 @@ export async function runRound(deps) {
             except(t.id, last.id, `not started: ${e.message}`);
           }
           if (d) {
-            const s = await start(d);
-            lines.push(startLine(last.id, s));
-            for (const x of s.exceptions ?? []) except(x.ticket, x.dispatchId, x.reason);
+            // One ticket's error is that ticket's EXCEPTION line, never the round's end (N1): the tickets after it are still started/watched.
+            let s = null;
+            try {
+              s = await start(d);
+            } catch (e) {
+              except(t.id, last.id, `not started: ${oneLine(e)}`);
+            }
+            if (s) {
+              lines.push(startLine(last.id, s));
+              for (const x of s.exceptions ?? []) except(x.ticket, x.dispatchId, x.reason);
+            }
           }
         }
       } else if (watch) {
-        const w = await watch(raw);
+        let w;
+        try {
+          w = await watch(raw);
+        } catch (e) {
+          except(t.id, last.id, `budget not watched this round: ${oneLine(e)}`);
+          continue; // unknown state: no next step this round either
+        }
         for (const x of w.exceptions ?? []) except(x.ticket, x.dispatchId, x.reason);
         if (w.action === 'over') lines.push(`BUDGET ${last.id} over: ${w.over.join('; ')}`);
-        if (w.action === 'stopped') continue; // the dispatch has ended: no next step
+        if (w.action === 'stopped' || w.action === 'gone') continue; // the dispatch has ended: no next step
+        if (w.action === 'error') continue; // not watched this round: no next step either
       }
     }
     // CI first: a finished run becomes a RESUME marker (red ones last, so a red run wins over a green one in the same round).

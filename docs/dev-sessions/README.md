@@ -121,8 +121,11 @@ ACTUAL comment ends the dispatches before it. An open dispatch is never dispatch
 `origin/integration`); a worktree that fails gets a `FACTORY END ... failed` comment so no dispatch is left half done. **No automatic
 re-dispatch (T-342):** a ticket whose last dispatch ended `stopped: ...` (a budget stop) or `failed: ...` (worktree or start) is HELD: the
 engine never dispatches it again, writes no further comment (the END is the one comment of that change) and prints one `EXCEPTION ... held`
-line a round, until a person writes the comment `FACTORY RETRY <dispatchId>` on the ticket (signed in; an agent's comment does not count),
-which allows one more dispatch. **Two hosts:** every DISPATCH carries its run (`run=<pid>-<time>`) and every END the run it ends; after
+line a round, until the comment `FACTORY RETRY <dispatchId>` is written on the ticket by a signed-in `ui` writer (an agent's or a token's
+comment does not count; the owner, but also anything holding the sign-in code, the supervisor included), which allows one more dispatch:
+the guard is one release per RETRY, never an automatic loop. A worker session that is gone (deleted: `session_get` NOT_FOUND) ends its
+dispatch `failed: session gone` and holds the ticket the same way; any other error reading one session is one `EXCEPTION` line for that
+ticket and the round goes on watching the others (T-342 N1). **Two hosts:** every DISPATCH carries its run (`run=<pid>-<time>`) and every END the run it ends; after
 writing its DISPATCH a run reads the ticket again and, if another run wrote the same id first, ends its own (`lost: race`) and does nothing
 else; an END with `run=` never closes another run's dispatch. On a CI event,
 `resumeDecision` says what to do with the ticket's latest dispatch (passed: review; failed: fix; cancelled or stale: exception; a run still

@@ -49,8 +49,9 @@
 //                               budget (SIZE_BUDGET) is not measured by the engine: it plans a run (--budget) and is the agent's own count.
 //   heldOn(t)                   no unbounded re-dispatch (T-342): a ticket whose last dispatch ended `stopped: ...` (a budget stop) or
 //                               `failed: ...` (worktree or start) is HELD: never dispatched again by the engine, one EXCEPTION line per round
-//                               and no comment (the END is the one comment of that state change), until a PERSON writes the comment
-//                               `FACTORY RETRY <dispatchId>` on the ticket; that releases one more dispatch, which holds again if it fails.
+//                               and no comment (the END is the one comment of that state change), until a `ui` writer (the owner, or
+//                               anything holding the sign-in code: see below) writes the comment `FACTORY RETRY <dispatchId>` on the
+//                               ticket; that releases one more dispatch, which holds again if it fails. The engine never writes RETRY.
 //   engineLock(path), leaseLabel(), onStop(cleanup): one engine run per host (a lock file with the pid; a dead pid's lock is stale), an admin
 //                               token label per run (a run never revokes another run's token), SIGINT/SIGTERM revoke the token and exit.
 //                               The token is leased for 15 minutes (SHORT_LEASE_LIFETIME, the portal's shortest) and renewed while the run
@@ -71,7 +72,7 @@
 //   FACTORY STARTING <dispatchId> by=portal-mcp:<token id>                          (--start: written right before session_start)
 //   FACTORY START <dispatchId> session=<sessionId> mode=dontAsk model=<model>      (--start: the session that runs the slice)
 //   FACTORY END <dispatchId> [run=<runId>] <outcome>                                (stopped: ... and failed: ... hold the ticket)
-//   FACTORY RETRY <dispatchId>                                                      (written by a PERSON only: releases a held ticket)
+//   FACTORY RETRY <dispatchId>                                                      (a `ui` writer, never the engine: releases a held ticket)
 //   FACTORY RESUME <dispatchId> run=<runId> state=<state> next=<review|fix>
 //   FACTORY REVIEW <dispatchId> verdict=<pass|changes>   FACTORY VERIFY <dispatchId> verdict=<pass|sendback>
 //   FACTORY INTEGRATE <dispatchId> result=<merged|conflict> [commit=<sha>]
@@ -124,7 +125,7 @@ const CLOSED = new Set(['done', 'wont_do']);
 export const BUSY = new Set(['in_progress', 'in_review', 'blocked']);
 /** The statuses the engine reads from the portal: the open ones it plans and every busy one it counts and watches. */
 export const FETCH_STATUSES = ['open', ...BUSY];
-const holdReason = (d) => `held: ${d.id} ended (${String(d.ended).slice(0, 120)}); not dispatched again until a person writes FACTORY RETRY ${d.id} on the ticket`;
+const holdReason = (d) => `held: ${d.id} ended (${String(d.ended).slice(0, 120)}); not dispatched again until FACTORY RETRY ${d.id} is written on the ticket, signed in`;
 
 /** Portal MCP wraps outside text as { untrusted_text }; the REST API gives plain strings. */
 const textOf = (v) => (v && typeof v === 'object' ? String(v.untrusted_text ?? '') : String(v ?? ''));
@@ -207,7 +208,8 @@ const openDispatches = (t) => dispatchesOf(t).filter((d) => !d.ended);
 export const HOLD_OUTCOME = /^(stopped|failed)\b/;
 /**
  * The dispatch a ticket is held on, or null: its latest dispatch ended `stopped: ...` or `failed: ...` and no `FACTORY RETRY <id>` was
- * written after it. Nobody but a person writes RETRY (the engine never does), on the signed-in REST path (the `ui` actor); a RETRY
+ * written after it. The engine never writes RETRY; it counts only on the signed-in REST path (the `ui` actor: the owner, or anything
+ * holding the sign-in code, the supervisor included; see the header), never from an agent or a token; a RETRY
  * releases exactly that one dispatch: the next dispatch that stops or fails holds the ticket again. So there is no automatic re-dispatch.
  */
 export function heldOn(t) {
@@ -843,7 +845,9 @@ export async function startSlice(d, { portal, mcp, workspace, folder = null, loc
  * Under 150 percent of every measure nothing is done ('ok', or 'over' past 100 percent of one: a line); when ANY measure is at 150 percent
  * the engine stops it, mid-turn too: session_interrupt (it stops the running turn), the FACTORY STOP message (commit WIP, report), FACTORY
  * END <id> stopped: budget <measure>, and one line to reportTo. Never continues silently. No measure in the answer is 'none' (unknown is a
- * state, not a guess). Returns { action: none|ok|over|stopped|ended, measures?, over? (lines), used? (USD), exceptions }.
+ * state, not a guess). A session_get that fails is never thrown (N1): NOT_FOUND writes FACTORY END <id> failed: session gone ('gone');
+ * another error is an exception line ('error'). Returns { action: none|ok|over|stopped|ended|gone|error, measures?, over? (lines), used?
+ * (USD), exceptions }.
  */
 export async function watchBudget(rawTicket, { portal, mcp, reportTo = null, worktrees, models, now = null }) {
   const t = normalizeTicket(rawTicket);
@@ -860,7 +864,21 @@ export async function watchBudget(rawTicket, { portal, mcp, reportTo = null, wor
     exceptions.push({ ticket: t.id, dispatchId: last.id, reason: `budget not watched: ${e.message}` });
     return { action: 'none', exceptions };
   }
-  const got = await mcp.call('session_get', { id: sid, max_events: 1 });
+  // A session_get that errors never throws out of the watch (T-342 N1: one bad session must not switch the stop off for the rest of the
+  // round). NOT_FOUND (a deleted session) ends the dispatch once, held like any failure; any other error is one line, and next round retries.
+  let got;
+  try {
+    got = await mcp.call('session_get', { id: sid, max_events: 1 });
+  } catch (e) {
+    const why = String(e?.message ?? e).split('\n')[0].slice(0, 160);
+    if (e?.code === 'NOT_FOUND') {
+      await portal.comment(t.id, endMarker(d, 'failed: session gone'));
+      exceptions.push({ ticket: t.id, dispatchId: d.dispatchId, reason: `session ${sid} of ${d.dispatchId} is gone: dispatch ended, held until FACTORY RETRY` });
+      return { action: 'gone', exceptions };
+    }
+    exceptions.push({ ticket: t.id, dispatchId: d.dispatchId, reason: `budget not watched this round: ${why}` });
+    return { action: 'error', exceptions };
+  }
   const s = got?.session;
   if (s?.state === 'ended') return { action: 'ended', exceptions };
   const num = (v) => (v === null || v === undefined || v === '' ? NaN : Number(v));
