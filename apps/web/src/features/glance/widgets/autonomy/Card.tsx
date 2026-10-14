@@ -91,9 +91,17 @@ function PauseRow({ pause, now, done }: { pause: KeepGoingPause; now: number; do
           · {pause.reason} · <time dateTime={pause.since} title={new Date(pause.since).toLocaleString()}>{shortAgo(pause.since, now)}</time>
         </span>
       </p>
-      <Button variant="ghost" size="icon" className="size-11 shrink-0" disabled={busy} aria-label={`Resume ${name}`} title={`Resume ${name}`} data-autonomy-resume="" onClick={() => void resume()}>
+      <button
+        type="button"
+        disabled={busy}
+        aria-label={`Resume ${name}`}
+        title={`Resume ${name}`}
+        data-autonomy-resume=""
+        onClick={() => void resume()}
+        className="press inline-flex size-11 shrink-0 items-center justify-center rounded-full text-ink hover:bg-ink/[0.07] disabled:opacity-50"
+      >
         <Play className="size-[18px]" aria-hidden="true" />
-      </Button>
+      </button>
     </div>
   );
 }
