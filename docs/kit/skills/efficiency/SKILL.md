@@ -25,7 +25,7 @@ The objective, in the owner's order: **many** things done, at **good quality**, 
 | Context bloat | a chat whose context keeps growing: whole files re-read, long logs pasted, many hours of turns | read the part you need; trim logs to the failing lines; checkpoint and restart from the status file |
 | Whole suite per edit | the full test suite or a production build after every small change | run the touched files and the touched areas' tests; the full suite runs in the gate |
 | Model mismatch | the top tier on a mechanical sweep | the tier that fits the slice (`orchestration`) |
-| Fan-out | more sub-agents than the WIP limit, two agents on the same files | at most three at once, disjoint files |
+| Fan-out | more sub-agents than the WIP limit, two agents on the same files | at most five at once, disjoint files |
 | Duplicate work | building what is already on the integration branch or in another ticket | check the branch log and the queue first |
 | Heavy work in the shared pod | builds and suites competing for the same CPUs | the project's job runner, or the heavy lock, one at a time |
 
