@@ -7,7 +7,12 @@
 #     --repo claudepilot | konfersi[:<org>/<repo>]      default: from the current folder's origin (konfersi alone: the folder's Gitea repo)
 #     --ref <branch or commit>                          default: HEAD of the current folder, which must be on the remote (push it first:
 #                                                       git push origin HEAD:wip/<name>); uncommitted changes are NOT in the Job
-#     --also <org>/<repo>[@<ref>]                       one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg
+#     --against <ref>                                   PROOF (T-333): run the command on --ref, then on <ref> in the same Job (a full commit hash or
+#                                                       branch; the parent of a fix: git rev-parse <fix>~1). npm ci again only when the lockfile
+#                                                       differs. Prints "PROOF: passes on <ref>, fails on <against>" (exit 0) or "NO PROOF: <why>"
+#                                                       (exit 1; 2 when <ref> or a kept path is missing). Without it nothing changes.
+#     --keep-tests <paths>                              with --against: these files (comma separated) are taken from --ref onto the other ref
+#     --also <org>/<repo>[@<ref>]                     one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg
 #     --steps npm-ci|none                               before the command (default npm-ci, in each repository with a package-lock.json)
 #     --artifacts <paths>  --out <dir>                  files in the repository (comma separated) copied back into <dir> (default
 #                                                       ./job-run-artifacts/<job>); at most JOB_RUN_ARTIFACT_MAX bytes compressed (4 MiB)
@@ -18,6 +23,7 @@
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3) and JOB_RUN_MAX_PER_CHAT per chat (2). A Job over a cap is created suspended and waits
 # its turn (creation order), with "queued behind K". The Job stops when this script is interrupted or killed (the next run removes a Job whose
 # script is gone), and when the chat ends (the Claude process, CLAUDE_PID or JOB_RUN_WATCH_PID, exits).
+# A failed `npm ci` in the Job is tried once more (it says so in the log). Exit 0 of a proof means the proof held, not only the command.
 # Credentials (the npm token for GitHub Packages, Gitea's from git's credential helper) go to kubectl on stdin into a Secret that belongs to
 # the Job and is deleted on exit; they are never on a command line, and the streamed log is masked for them. The whole log: JOB_RUN_LOG
 # (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish, 2 for a usage error, 124 past the deadline.
@@ -55,12 +61,14 @@ case "${1:-}" in
     echo "$n job(s) stopped"; exit 0 ;;
 esac
 
-repo=; ref=; steps=npm-ci; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=()
+repo=; ref=; against=; keep=; steps=npm-ci; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo|--ref|--also|--steps|--artifacts|--out|--timeout|--role) [ $# -ge 2 ] || die "$1 needs a value" ;;&
+    --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role) [ $# -ge 2 ] || die "$1 needs a value" ;;&
     --repo) repo=$2; shift 2 ;;
     --ref) ref=$2; shift 2 ;;
+    --against) against=$2; shift 2 ;;
+    --keep-tests) keep=${2//,/ }; shift 2 ;;
     --also) also+=("$2"); shift 2 ;;
     --steps) steps=$2; shift 2 ;;
     --artifacts) artifacts=${2//,/ }; shift 2 ;;
@@ -76,6 +84,9 @@ if [ $# -eq 1 ]; then cmd=$1; else cmd=$(printf '%q ' "$@"); fi
 [[ $steps =~ ^(npm-ci|none)$ ]] || die "--steps: npm-ci or none"
 { [[ $timeout =~ ^[0-9]+$ ]] && [ "$timeout" -ge 60 ] && [ "$timeout" -le 5400 ]; } || die "--timeout: 60 to 5400 seconds"
 for a in $artifacts; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./*-]*$ && ! $a =~ (^|/)\.\.(/|$) ]] || die "--artifacts: paths inside the repository (got $a)"; done
+[[ -z $against || ( $against =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ && ! $against =~ \.\. ) ]] || die "--against: a branch or commit name (got $against)"
+[ -z "$keep" ] || [ -n "$against" ] || die "--keep-tests needs --against"
+for a in $keep; do [[ $a =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ && ! $a =~ (^|/)\.\.(/|$) ]] || die "--keep-tests: file paths inside the repository (got $a)"; done
 
 # The repository: named, or the current folder's origin (its user and password part never kept or shown).
 origin=$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://)[^@/]*@#\1#' || true)
@@ -165,7 +176,7 @@ printf '%s\n' "$secret" | kubectl -n "$ns" create secret generic "$job" --from-e
 unset secret
 sed -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
     -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" \
-    -e "s#__STEPS__#$steps#" -e "s#__ARTIFACTS__#$artifacts#" -e "s#__ARTMAX__#$art_max#" -e "s#__CMD__#$(printf '%s' "$cmd" | base64 -w0)#" \
+    -e "s#__AGAINST__#$against#" -e "s#__KEEP__#$keep#" -e "s#__STEPS__#$steps#" -e "s#__ARTIFACTS__#$artifacts#" -e "s#__ARTMAX__#$art_max#" -e "s#__CMD__#$(printf '%s' "$cmd" | base64 -w0)#" \
     "$here/deploy/k3s-build/job-run.yaml" | kubectl apply -f - >/dev/null
 # The Secret belongs to the Job: whoever deletes the Job (its TTL, --stop, a person) deletes the token with it.
 uid=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
