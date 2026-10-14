@@ -11,6 +11,8 @@ export const CI_LIMITS = {
   /** `.pilot/*.yml` files read per commit, and the size of each. */
   pipelineFiles: 20,
   pipelineFileBytes: 128 * KiB,
+  /** The context pack (`docs/context-pack.md`, T-292) a snapshot reads: an instruction context's cap (PERSONA_LIMITS.contextBytes). */
+  contextPackBytes: 20 * KiB,
   /** How deep a YAML file may nest, and how many aliases (`*name`) it may use. */
   yamlDepth: 40,
   yamlAliases: 20,
