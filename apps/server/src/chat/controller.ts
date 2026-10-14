@@ -67,6 +67,7 @@ import {
   type ChatUsageReport,
   type CreateChatSessionRequest,
   type DeleteChatSessionResult,
+  type MoveRecommendation,
   type WorkspaceClaude,
 } from '@portal/contracts';
 import type { Store } from '../store/store.js';
@@ -103,7 +104,7 @@ import { type BypassFacts, type BypassRefusal, type BypassState } from './bypass
 import { isStagedUpload } from './artifacts/records.js';
 import { redact } from './redact.js';
 import { NO_VALUES, SessionStream, ValueRedactor } from './valueRedact.js';
-import { MessageRate, spawnProblem, type AgentCaps } from './agents.js';
+import { MessageRate, pickSpawnClaude, spawnProblem, type AgentCaps, type SpawnClaudeWhy } from './agents.js';
 import { capError, makeRoom, SESSION_CAP, weightOf, type LiveCaps } from './caps.js';
 import { defaultBranch, Worktrees, type MadeWorktree } from './worktrees.js';
 import { ChatStore, claudeSessionOf, EVENT_TEXT_MAX, sessionCwd, type ChatSessionPatch, type ChatSessionRow, type InputState } from './store.js';
@@ -591,6 +592,11 @@ export class ChatController {
    * or its workers (agents.ts). Unset, no limits (tests).
    */
   agentCaps?: () => AgentCaps;
+  /**
+   * Installed by the owner (T-294): the Move ranking of a workspace's Claudes, every one included (claude-usage `recommend`), for a worker
+   * started on `auto`. Unset or failing, such a worker stays on its parent's Claude and says why.
+   */
+  claudeRanking?: (workspaceId: string) => Promise<MoveRecommendation>;
   /** Installed by the owner: what is true of a workspace, for the Bypass confirmation (what it can reach, what was delivered into it). */
   bypassFacts?: (workspaceId: string) => { internet: boolean; credentials: string[] };
   /** Installed by the owner: the re-check of the server code. Entering Bypass needs it fresh for the signed-in session; unset, Bypass can't be entered. */
@@ -2800,6 +2806,21 @@ export class ChatController {
     }
   }
 
+  /** T-294: the Claude a worker of `parentId` starts on (agents.ts `pickSpawnClaude`): its id and name, and why that one. */
+  async spawnClaude(parentId: string, want?: string): Promise<{ claudeId: string; name: string; why: SpawnClaudeWhy }> {
+    const parent = this.#require(this.#chat.resolveId(parentId));
+    let ranking: MoveRecommendation | null = null;
+    if ((want ?? '').trim().toLowerCase() === 'auto' && this.claudeRanking) ranking = await this.claudeRanking(parent.workspaceId).catch(() => null);
+    const pick = pickSpawnClaude(want, parent.claudeId, this.#chat.listClaudes(parent.workspaceId), ranking);
+    return { ...pick, name: this.#chat.claudeName(parent.workspaceId, pick.claudeId) ?? pick.claudeId };
+  }
+
+  /** The other workers of this session's parent (its crew, T-294), newest activity first; none for a session nobody's session started. */
+  crew(rawId: string): ChatSession[] {
+    const me = this.#require(this.#chat.resolveId(rawId));
+    return me.parentId ? this.children(me.parentId).filter((s) => s.id !== me.id) : [];
+  }
+
   /** The sessions a session started, newest activity first. */
   children(rawId: string): ChatSession[] {
     return this.#chat.list({ parentId: this.#chat.resolveId(rawId) }).map((s) => this.#decorate(s));
@@ -2820,13 +2841,17 @@ export class ChatController {
   }
 
   /**
-   * A session messaging its parent or one of its workers, and nobody else, as the portal's message framed as from it: its
-   * transcript shows the card, the sender's shows the tool call that sent it. At most `messagesPerHour` an hour from one sender.
+   * A session messaging its parent, one of its workers or one of its crew (another worker of its parent, T-294), and nobody else, as
+   * the portal's message framed as from it: its transcript shows the card, the sender's shows the tool call that sent it. At most
+   * `messagesPerHour` an hour from one sender, whoever it writes to.
    */
   async messageFamily(fromId: string, toId: string, text: string, opts: { priority?: 'next' | 'later' } = {}): Promise<void> {
     const from = this.#require(this.#chat.resolveId(fromId));
     const to = this.#require(this.#chat.resolveId(toId));
-    if (to.parentId !== from.id && from.parentId !== to.id) throw new AppError('FORBIDDEN', 'A session can message the session that started it and the sessions it started, nobody else.');
+    const crew = !!from.parentId && from.parentId === to.parentId && from.id !== to.id;
+    if (to.parentId !== from.id && from.parentId !== to.id && !crew) {
+      throw new AppError('FORBIDDEN', 'A session can message the session that started it, the sessions it started and the other sessions its parent started, nobody else.');
+    }
     if (to.state === 'ended') throw new AppError('CONFLICT', 'That session has ended.');
     const caps = this.agentCaps?.();
     if (caps && !this.#familyRate.allow(from.id, caps.messagesPerHour)) {

@@ -1,14 +1,16 @@
 // Sessions starting and messaging sessions: the limits (depth, running workers, an hour's spawns and messages), both transcripts
-// saying so, who may message whom, ending a parent and what becomes of its workers, and the MCP tools a session's token opens.
+// saying so, who may message whom (parent, workers, crew), ending a parent and what becomes of its workers, the Claude a worker runs
+// on (T-294), and the MCP tools a session's token opens.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { isAppError } from '@isnanme/core';
+import type { ChatSession, MoveCandidate, MoveRecommendation } from '@portal/contracts';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
-import { MessageRate, spawnProblem, type AgentCaps } from './agents.js';
+import { MessageRate, pickSpawnClaude, spawnProblem, type AgentCaps } from './agents.js';
 import { SESSION_CAP } from './caps.js';
-import { registerChatTools } from './portalTools.js';
+import { registerChatTools, type ChatToolHost } from './portalTools.js';
 import { liveSession, until, type Live } from './testkit.js';
 
 const CAPS: AgentCaps = { maxDepth: 1, maxChildren: 2, spawnsPerHour: 3, messagesPerHour: 3 };
@@ -21,6 +23,52 @@ async function child(s: Live, parentId: string, title = 'Worker') {
   await until(() => s.ws.tails.length === before + 1);
   return made;
 }
+
+/** A Move ranking's candidate as `recommendMove` makes it: ranked when it can take a chat, measured unless over its pace or unknown. */
+const cand = (claudeId: string, reason: MoveCandidate['reason'], o: Partial<MoveCandidate> = {}) =>
+  ({
+    claudeId,
+    name: claudeId,
+    workspaceId: 'docker/ws1',
+    rank: ['room', 'over_pace', 'no_limits', 'tight'].includes(reason) ? 1 : null,
+    recommended: false,
+    reason,
+    basis: reason === 'over_pace' ? 'estimate' : reason === 'unknown' ? 'unavailable' : 'measured',
+    stale: false,
+    ...o,
+  }) as MoveCandidate;
+const ranking = (...candidates: MoveCandidate[]) => ({ now: '', workspaceId: 'docker/ws1', from: null, recommended: null, none: null, candidates }) as MoveRecommendation;
+const CLAUDES = [
+  { id: 'p', name: 'Default', removedAt: null },
+  { id: 'a', name: 'Sekar', removedAt: null },
+  { id: 'b', name: 'Hasyim', removedAt: null },
+  { id: 'gone', name: 'Old', removedAt: '2026-01-01T00:00:00.000Z' },
+];
+
+test('pickSpawnClaude (T-294): the parent’s by default, a named one, or on auto the first with measured room; never billed per use, tight, over pace, stale, unknown or removed', () => {
+  assert.deepEqual(pickSpawnClaude(undefined, 'p', CLAUDES, null), { claudeId: 'p', why: 'parent' });
+  assert.deepEqual(pickSpawnClaude(' same ', 'p', CLAUDES, null), { claudeId: 'p', why: 'parent' });
+  assert.deepEqual(pickSpawnClaude('hasyim', 'p', CLAUDES, null), { claudeId: 'b', why: 'named' }, 'by name, any case');
+  assert.deepEqual(pickSpawnClaude('a', 'p', CLAUDES, null), { claudeId: 'a', why: 'named' }, 'by id');
+  assert.deepEqual(pickSpawnClaude('Default', 'p', CLAUDES, null), { claudeId: 'p', why: 'parent' }, 'naming its own is its own');
+  assert.throws(() => pickSpawnClaude('Old', 'p', CLAUDES, null), /No Claude “Old” on this workspace\. Use same, auto or one of: Default, Sekar, Hasyim\./, 'a removed Claude is none');
+  assert.throws(() => pickSpawnClaude('nobody', 'p', CLAUDES, null), (e: unknown) => isAppError(e) && e.code === 'VALIDATION_FAILED');
+
+  assert.deepEqual(pickSpawnClaude('auto', 'p', CLAUDES, null), { claudeId: 'p', why: 'usage_unknown' }, 'no ranking: stays');
+  assert.deepEqual(pickSpawnClaude('auto', 'p', CLAUDES, ranking(cand('b', 'room'), cand('a', 'room'), cand('p', 'tight'))), { claudeId: 'b', why: 'most_room' }, 'the ranking’s first with room');
+  assert.deepEqual(pickSpawnClaude('AUTO', 'p', CLAUDES, ranking(cand('p', 'room'), cand('a', 'room'))), { claudeId: 'p', why: 'parent' }, 'its own when that has the most room');
+  const none = ranking(
+    cand('a', 'over_pace'),
+    cand('pool', 'no_limits'),
+    cand('b', 'room', { stale: true }),
+    cand('gone', 'room'),
+    cand('p', 'tight'),
+    cand('a', 'exhausted'),
+    cand('b', 'unknown'),
+    cand('a', 'room', { basis: 'estimate' }),
+  );
+  assert.deepEqual(pickSpawnClaude('auto', 'p', CLAUDES, none), { claudeId: 'p', why: 'no_room' });
+});
 
 test('spawnProblem: depth, running workers and spawns an hour, each with its own words', () => {
   const kids = (...states: [string, number][]) => states.map(([state, minutesAgo]) => ({ state, createdAt: new Date(Date.now() - minutesAgo * 60_000).toISOString() }));
@@ -69,7 +117,7 @@ test('a session starts workers within the limits; both transcripts say so; the w
   }
 });
 
-test('a session messages its parent and its workers, nobody else, a few an hour; the other transcript shows who it is from', async () => {
+test('a session messages its parent, its workers and its crew (T-294), nobody else, a few an hour; the other transcript shows who it is from', async () => {
   const s = await liveSession();
   try {
     s.controller.agentCaps = () => ({ ...CAPS, maxChildren: 5, spawnsPerHour: 10 });
@@ -81,17 +129,24 @@ test('a session messages its parent and its workers, nobody else, a few an hour;
     assert.equal(card.actorLabel, s.controller.get(s.id)!.title, 'labelled with the sender’s title as it was then');
     await s.controller.messageFamily(w1.id, s.id, 'Done: the router is split.'); // up to its parent
     assert.ok(s.controller.history(s.id).some((e) => e.kind === 'user' && e.actor === `session:${w1.id}`));
-    // Siblings and strangers: no.
-    assert.equal(await code(s.controller.messageFamily(w1.id, w2.id, 'hi')), 'FORBIDDEN:');
+    // Its crew (another worker of its parent, T-294): yes, framed as from it.
+    await s.controller.messageFamily(w1.id, w2.id, 'I take the router, you take the tests.');
+    const crewCard = s.controller.history(w2.id).find((e) => e.kind === 'user' && e.actor === `session:${w1.id}`)!;
+    assert.equal(crewCard.text, 'I take the router, you take the tests.');
+    // Strangers, and the workers of another parent: no.
     const stranger = await s.controller.create({ workspaceId: 'docker/ws1', title: 'Stranger' });
     assert.equal(await code(s.controller.messageFamily(s.id, stranger.id, 'hi')), 'FORBIDDEN:');
     assert.equal(await code(s.controller.messageFamily(stranger.id, s.id, 'hi')), 'FORBIDDEN:');
+    await until(() => s.controller.get(stranger.id)?.state === 'idle');
+    const theirs = await child(s, stranger.id, 'Theirs');
+    assert.equal(await code(s.controller.messageFamily(w1.id, theirs.id, 'hi')), 'FORBIDDEN:', 'not its crew');
+    assert.equal(await code(s.controller.messageFamily(theirs.id, w2.id, 'hi')), 'FORBIDDEN:', 'not its crew either way');
     // An hour's messages: three sent by w1's parent so far (one to w1... counting), the limit is 3.
     await s.controller.messageFamily(s.id, w1.id, 'again');
     await s.controller.messageFamily(s.id, w1.id, 'and again');
     assert.equal(await code(s.controller.messageFamily(s.id, w1.id, 'once more')), `${SESSION_CAP}:messages`);
     await s.controller.end(w2.id);
-    assert.equal(await code(s.controller.messageFamily(w1.id, w2.id, 'x')), 'FORBIDDEN:', 'siblings stay refused');
+    assert.equal(await code(s.controller.messageFamily(w1.id, w2.id, 'x')), 'CONFLICT:', 'an ended crew member is not messaged');
     assert.equal(await code(s.controller.messageFamily(s.id, w2.id, 'to an ended worker')), 'CONFLICT:');
   } finally {
     await s.done();
@@ -113,6 +168,32 @@ test('ending a parent asks what becomes of its workers: left running by default,
     assert.deepEqual([a, b, c].map((x) => s.controller.get(x.id)!.state), ['ended', 'ended', 'ended']);
     assert.ok(order.indexOf(b.id) < order.indexOf(a.id), 'the grandchild first');
     assert.deepEqual(s.controller.audit({ kind: 'agent.ended_children' }).map((x) => x.detail.count), [3]);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-294: a worker’s Claude is its parent’s, a named one, or on auto the one with the most room (a failing ranking keeps the parent’s); its crew is its parent’s other workers', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.agentCaps = () => ({ ...CAPS, maxChildren: 5, spawnsPerHour: 10 });
+    const work = await s.controller.createClaude('docker/ws1', 'Work');
+    const mine = s.controller.get(s.id)!.claudeId;
+    assert.deepEqual(await s.controller.spawnClaude(s.id), { claudeId: mine, name: 'Default', why: 'parent' });
+    assert.deepEqual(await s.controller.spawnClaude(s.id, 'work'), { claudeId: work.id, name: 'Work', why: 'named' });
+    assert.equal((await s.controller.spawnClaude(s.id, 'auto')).why, 'usage_unknown', 'no ranking installed');
+    s.controller.claudeRanking = async () => ranking(cand(work.id, 'room'), cand(mine, 'room'));
+    assert.deepEqual(await s.controller.spawnClaude(s.id, 'auto'), { claudeId: work.id, name: 'Work', why: 'most_room' });
+    s.controller.claudeRanking = async () => {
+      throw new Error('usage is down');
+    };
+    assert.deepEqual(await s.controller.spawnClaude(s.id, 'auto'), { claudeId: mine, name: 'Default', why: 'usage_unknown' });
+    await assert.rejects(s.controller.spawnClaude(s.id, 'nobody'), /No Claude “nobody”/);
+
+    const a = await child(s, s.id, 'A');
+    const b = await child(s, s.id, 'B');
+    assert.deepEqual(s.controller.crew(a.id).map((c) => c.id), [b.id]);
+    assert.deepEqual(s.controller.crew(s.id), [], 'a session no session started has no crew');
   } finally {
     await s.done();
   }
@@ -171,6 +252,59 @@ test('over MCP a session starts a worker in its own workspace, on its own Claude
     const admin = r.h.token('admin');
     assert.equal((await r.h.call(admin.secret, 'session_spawn', { prompt: 'x' })).result?.isError, true);
     assert.equal((await r.h.call(admin.secret, 'session_family', {})).result?.isError, true);
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-294 over MCP: a worker on auto runs on the Claude with the most room, works by its role, and its crew sees and messages each other; a refused model is said, not fatal', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.controlTimeoutMs = 150;
+    const work = await r.s.controller.createClaude('docker/ws1', 'Work');
+    const mine = r.s.controller.get(r.s.id)!.claudeId;
+    r.s.controller.claudeRanking = async () => ranking(cand(work.id, 'room'), cand(mine, 'tight'));
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    const before = r.s.ws.tails.length;
+    const started = await r.h.call(a.secret, 'session_spawn', { prompt: 'Verify T-7 against its done criteria.', title: 'Verify T-7', claude: 'auto', role: 'qa-verifier' });
+    assert.equal(started.result?.isError, undefined, JSON.stringify(started.raw));
+    const out = started.result!.structuredContent.session as { id: string; claude: { id: string; name: string; why: string }; role: string; applied: string[]; refused: string[] };
+    assert.deepEqual(out.claude, { id: work.id, name: 'Work', why: 'most_room' });
+    assert.equal(out.role, 'qa-verifier');
+    assert.match(started.result!.content![0]!.text, /^Started worker \S+ on Work, the Claude with the most room\./);
+    await until(() => r.s.ws.tails.length === before + 1);
+    const worker = r.s.controller.get(out.id)!;
+    assert.deepEqual([worker.claudeId, worker.parentId, worker.bypassCapable], [work.id, r.s.id, false]);
+    const opening = r.s.controller.history(worker.id).find((e) => e.kind === 'user')!;
+    assert.equal(opening.text, 'You work as the qa-verifier role: read .claude/agents/qa-verifier.md in your folder first and follow it.\n\nVerify T-7 against its done criteria.');
+
+    // A second worker on its parent's Claude by name, with a model the process never confirms: started anyway, the refusal said.
+    const second = await r.h.call(a.secret, 'session_spawn', { prompt: 'Review the diff of T-7.', title: 'Review T-7', claude: 'same', model: 'sonnet' });
+    assert.equal(second.result?.isError, undefined, JSON.stringify(second.raw));
+    const s2 = second.result!.structuredContent.session as { id: string; claude: { why: string }; applied: string[]; refused: string[] };
+    assert.equal(s2.claude.why, 'parent');
+    assert.deepEqual(s2.applied, []);
+    assert.match(s2.refused.join(' '), /^model sonnet: /);
+    assert.match(second.result!.content![0]!.text, /Not applied: model sonnet: /);
+    assert.ok(r.s.controller.history(s2.id).some((e) => e.kind === 'user' && e.text === 'Review the diff of T-7.'), 'its first instruction went in');
+
+    // Unknown Claude: refused before anything starts; a bad role name: refused by the input check.
+    const count = r.s.controller.children(r.s.id).length;
+    assert.equal((await r.h.call(a.secret, 'session_spawn', { prompt: 'x', claude: 'nobody' })).result?.isError, true);
+    assert.equal((await r.h.call(a.secret, 'session_spawn', { prompt: 'x', role: '../etc' })).result?.isError, true);
+    assert.equal(r.s.controller.children(r.s.id).length, count, 'nothing started');
+
+    // The crew: each worker sees the other with its Claude, and messages it.
+    const w1 = await r.h.agentToken('docker/ws1', out.id);
+    const fam = (await r.h.call(w1.secret, 'session_family', {})).result!;
+    assert.deepEqual(fam.structuredContent.crew.map((c: { id: string; claude: string }) => [c.id, c.claude]), [[s2.id, 'Default']]);
+    assert.match(fam.content![0]!.text, /Crew: 1 \(/);
+    assert.equal((await r.h.call(w1.secret, 'session_message', { session_id: s2.id, text: 'I found a gap in criterion 2.' })).result?.isError, undefined);
+    assert.ok(r.s.controller.history(s2.id).some((e) => e.kind === 'user' && e.actor === `session:${out.id}` && e.text === 'I found a gap in criterion 2.'));
+    assert.equal((await r.h.call(w1.secret, 'session_message', { session_id: r.stranger.id, text: 'hi' })).result?.isError, true, 'a stranger is not crew');
+    // The parent sees its workers with their Claudes.
+    const parentView = (await r.h.call(a.secret, 'session_family', {})).result!.structuredContent;
+    assert.deepEqual(new Set(parentView.workers.map((w: { claude: string }) => w.claude)), new Set(['Work', 'Default']));
   } finally {
     await r.done();
   }
