@@ -117,7 +117,7 @@ export interface ChatSession {
   maxWorkers?: number | null;
   /**
    * T-294: whether its Claude may start Claude Code sub-agents (the Agent tool, older name Task). False: every start of its process is
-   * launched with `--disallowedTools Agent Task`, so a change applies at the next start (a Restart). On or off only: Claude Code has no count.
+   * launched with `--disallowedTools Agent Task Workflow RemoteTrigger`, so a change applies at the next start (a Restart). On or off only: Claude Code has no count.
    * Absent on rows from before (true).
    */
   subagents?: boolean;

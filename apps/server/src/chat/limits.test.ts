@@ -373,3 +373,25 @@ test('session_spawn with max_workers and subagents: the worker gets them, never 
     await s.done();
   }
 });
+
+test('T-295: parallel spawns see each other: with max_workers 1 only one of three spawns at once is made, the others refused at the cap; the global cap the same', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.agentCaps = () => ({ maxDepth: 1, maxChildren: 5, spawnsPerHour: 20, messagesPerHour: 60 });
+    s.controller.setLimits(s.id, { maxWorkers: 1 }, { actor: 'ui' });
+    const spawn = (title: string) => s.controller.create({ workspaceId: 'docker/ws1', title }, { actor: `session:${s.id}`, parentId: s.id });
+    const settled = await Promise.allSettled([spawn('One'), spawn('Two'), spawn('Three')]);
+    assert.deepEqual(settled.map((x) => x.status).sort(), ['fulfilled', 'rejected', 'rejected']);
+    for (const x of settled) if (x.status === 'rejected') assert.equal((x.reason as { code?: string }).code, SESSION_CAP);
+    assert.equal(s.controller.children(s.id).length, 1, 'one worker, not three');
+
+    // The global cap holds the same way, and a refused or finished spawn gives its place back.
+    s.controller.setLimits(s.id, { maxWorkers: null }, { actor: 'ui' });
+    s.controller.agentCaps = () => ({ maxDepth: 1, maxChildren: 3, spawnsPerHour: 20, messagesPerHour: 60 });
+    const more = await Promise.allSettled([spawn('Four'), spawn('Five'), spawn('Six')]);
+    assert.equal(more.filter((x) => x.status === 'fulfilled').length, 2, 'two more fit under 3 with one running');
+    assert.equal(s.controller.children(s.id).filter((c) => c.state !== 'ended').length, 3);
+  } finally {
+    await s.done();
+  }
+});

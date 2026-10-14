@@ -93,7 +93,7 @@ export type ChatSessionRow = {
   agent?: string | null;
   /** T-294 (migration 774): how many workers it may run at once; null: the global setting. */
   max_workers?: number | null;
-  /** T-294 (migration 774): 1 (default) lets its Claude start sub-agents; 0 launches it with `--disallowedTools Agent Task`. */
+  /** T-294 (migration 774): 1 (default) lets its Claude start sub-agents; 0 launches it with `--disallowedTools Agent Task Workflow RemoteTrigger`. */
   subagents?: number | null;
   /** T-294 (migration 775): what a worker reports to its lead unasked (`idle`, `end`, `none`); null: `idle`. */
   report?: string | null;

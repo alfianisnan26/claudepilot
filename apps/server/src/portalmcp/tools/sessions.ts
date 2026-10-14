@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { AppError } from '@isnanme/core';
+import { AppError, isAppError } from '@isnanme/core';
 import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, type ChatEvent, type ChatPermissionMode, type ChatRequest, type ChatSession } from '@portal/contracts';
 import { z } from 'zod';
 import { paginate, pageInput } from '../paging.js';
@@ -111,7 +111,8 @@ export function registerSessionTools(deps: PortalToolDeps): void {
         }
       }
       // T-294: its workers, compact: the live ones first, then the ended, newest activity first within each.
-      const kids = chat.list({ parentId: s.id });
+      // Archived workers are left out, as session_list leaves them out.
+      const kids = chat.list({ parentId: s.id }).filter((w) => !w.archivedAt);
       const ordered = [...kids.filter((w) => w.state !== 'ended'), ...kids.filter((w) => w.state === 'ended')];
       const live = kids.length - kids.filter((w) => w.state === 'ended').length;
       const out: Record<string, unknown> = {
@@ -297,9 +298,16 @@ export function registerSessionTools(deps: PortalToolDeps): void {
       const changed = limits
         ? chat.setLimits(args.id, { ...(args.max_workers !== undefined ? { maxWorkers: args.max_workers } : {}), ...(args.subagents !== undefined ? { subagents: args.subagents } : {}) }, { actor: ctx.actor })
         : null;
-      if (args.model) await chat.control(args.id, 'model', { model: args.model });
-      if (args.effort) await chat.control(args.id, 'effort', { effort: args.effort });
-      if (args.mode) await chat.control(args.id, 'mode', { mode: args.mode });
+      // A control that fails after the limits changed says so (the limits stay changed and audited: they are not undone).
+      try {
+        if (args.model) await chat.control(args.id, 'model', { model: args.model });
+        if (args.effort) await chat.control(args.id, 'effort', { effort: args.effort });
+        if (args.mode) await chat.control(args.id, 'mode', { mode: args.mode });
+      } catch (e) {
+        if (!changed) throw e;
+        const why = e instanceof Error ? e.message : 'refused';
+        throw new AppError(isAppError(e) ? e.code : 'CONFLICT', `The limits were changed, but ${why.replace(/\.$/, '')}.`);
+      }
       ctx.affected(`session:${args.id}`);
       const restartNeeded = changed?.restartNeeded === true;
       return {

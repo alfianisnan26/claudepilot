@@ -1270,6 +1270,25 @@ export class ChatController {
    * at this exact hash, this throws a 409 `FOLDER_UNTRUSTED` carrying the scan. Refused, nothing is created.
    */
   async create(req: Partial<CreateChatSessionRequest>, opts: ChatCreateOptions = {}): Promise<ChatSession> {
+    if (!opts.parentId) return this.#create(req, opts);
+    // A worker: its parent's limits are checked and a place is held in ONE synchronous step, so parallel spawns (several session_spawn calls
+    // in one turn run at once) see each other; the place is given back when the row exists or the start was refused.
+    const parentId = this.#require(this.#chat.resolveId(opts.parentId)).id;
+    this.#checkSpawn(parentId);
+    this.#spawning.set(parentId, (this.#spawning.get(parentId) ?? 0) + 1);
+    try {
+      return await this.#create(req, { ...opts, parentId }, true);
+    } finally {
+      const n = (this.#spawning.get(parentId) ?? 1) - 1;
+      if (n > 0) this.#spawning.set(parentId, n);
+      else this.#spawning.delete(parentId);
+    }
+  }
+
+  /** The spawns under way per parent (checked, not yet a row): they count against its limits (T-295). */
+  readonly #spawning = new Map<string, number>();
+
+  async #create(req: Partial<CreateChatSessionRequest>, opts: ChatCreateOptions, spawnChecked = false): Promise<ChatSession> {
     const actor = opts.actor ?? CHAT_ACTOR_UI;
     if (!isChatActor(actor)) throw new AppError('VALIDATION_FAILED', 'Unknown actor.', { details: { actor: 'Expected ui, ticket:<id>, session:<id> or portal-mcp:<id>.' } });
     const ticketId = this.#ticket(req.ticketId);
@@ -1278,7 +1297,7 @@ export class ChatController {
       throw new AppError('VALIDATION_FAILED', 'Only a worker reports, as idle, end or none.', { details: { report: 'idle, end or none, for a session another started.' } });
     }
     const parentId = opts.parentId ? this.#require(opts.parentId).id : null;
-    if (parentId) this.#checkSpawn(parentId);
+    if (parentId && !spawnChecked) this.#checkSpawn(parentId);
     // T-294: a worker's own limits, no wider than its parent's (refused before anything is made).
     const limits = parentId ? this.#workerLimits(parentId, opts.limits) : null;
     const wtReq = this.#worktreeRequest(req.worktree);
@@ -2850,7 +2869,9 @@ export class ChatController {
     const caps = this.agentCaps?.() ?? null;
     const row = this.#chat.row(parentId);
     // T-294: the session's own limit on workers holds with or without the global caps (clamped to them when they are installed).
-    const problem = spawnProblem(caps, { id: parentId, depth: this.#depth(parentId), maxWorkers: row?.max_workers ?? null }, this.#chat.list({ parentId }));
+    // The spawns under way count as running, started now (T-295: a check-then-insert window let parallel spawns pass the caps).
+    const pending = Array.from({ length: this.#spawning.get(parentId) ?? 0 }, () => ({ state: 'starting', createdAt: new Date().toISOString() }));
+    const problem = spawnProblem(caps, { id: parentId, depth: this.#depth(parentId), maxWorkers: row?.max_workers ?? null }, [...this.#chat.list({ parentId }), ...pending]);
     if (problem) {
       this.#chat.addAudit({ severity: 'medium', kind: 'agent.refused', sessionId: parentId, workspaceId: row?.workspace_id, actor: `session:${parentId}`, detail: { scope: (problem.details as { scope?: string } | undefined)?.scope ?? 'cap' } });
       throw problem;

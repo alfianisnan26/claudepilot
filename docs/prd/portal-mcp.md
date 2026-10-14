@@ -538,7 +538,10 @@ session control over MCP" is on (off by default); otherwise only `session_list`,
 `session_interrupt` and `session_end` exist.
 
 A session's own tools for a crew (agent scope, [Chat sessions](chat-sessions.md) FR51, "Crew over MCP"):
-`session_spawn` takes `report` (`idle`, the default: the portal tells the lead in one line when the worker's turn
+`session_spawn` takes `claude` (`same`, a plan Claude's name, or `auto`: room by a fresh, measured reading, the least
+busy first), `role` (the worker runs as `.claude/agents/<role>.md`), `model`, `effort`, `mode` (`default`, `plan`,
+`dontAsk`), `max_workers` and `subagents` (the worker's own limits, never wider than the caller's) and `report`
+(`idle`, the default: the portal tells the lead in one line when the worker's turn
 ends, when it waits on a person and when it ends; `end`: only the end; `none`), `session_message` takes `to`
 (`workers` or `crew`) instead of `session_id`, every recipient counted against the hourly limit, and
 `session_family` items carry `agent` and `mode`, with how many wait on a person in its summary.
