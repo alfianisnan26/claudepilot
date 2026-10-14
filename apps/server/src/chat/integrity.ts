@@ -105,13 +105,51 @@ export const INTEGRITY_CASES: readonly IntegrityCase[] = [
       'mode string (dontAsk, anything new), and a downgrade on a sub-agent thread (parent_tool_use_id set: never a mode report, so the ' +
       'expected mode stays and a later main-thread report is judged against it)',
   },
+  {
+    id: 'mode-resync',
+    line: 'the first main-thread system/init or system/status after the portal attached to a live process again (a portal restart, a deploy)',
+    rule:
+      'judged against the control state STORED for that very process (migration 820: the expected mode, the mode before plan, plan ' +
+      'entered, leaving plan approved), not against a mode inferred from the row; the same mode or a transition those stored flags allow ' +
+      'is taken, a lower one is mode-downgrade; the comparison is made once, within RESYNC_MS, and logged with what was stored',
+    evidence:
+      'T-277 (2026-10-14): before layer 2 the portal rebuilt only the expected mode from the row after a restart and lost the plan flags, ' +
+      'so a chat whose leaving plan mode the portal had approved (back to acceptEdits) ended "the permission mode changed to acceptEdits ' +
+      'without this portal (expected plan)" when its report came after the restart (integrity.test.ts reproduces it on the testkit: the twin with no state stored)',
+    negative:
+      'a report more permissive than the stored state, Bypass the stored state does not expect, a state stored for ANOTHER process (its ' +
+      'session id, segment or start differ: the row is used, as before), and a second differing report after the first one closed the window',
+  },
+  {
+    id: 'control-bypass-unfinished',
+    line: 'the set_permission_mode reply {mode: "bypassPermissions"} to the Bypass request the portal sent under the grant, read after a portal restart',
+    rule:
+      'only for the one request id stored as pending when it was sent (every Bypass gate passed: the grant was held for it) and only by a ' +
+      'portal that reloaded that state at attach; the entry is NOT finished: never shown or audited as entered; the process is taken out ' +
+      'of Bypass at once (set_permission_mode to the start mode, else stopped), the transcript says so and bypass.left (why ' +
+      'restart_unfinished) is recorded; the same holds when the stored expected mode is Bypass but the row never recorded the entry',
+    evidence:
+      'T-277 layer 2 (2026-10-14): a portal stopped between sending the gated set_permission_mode and reading its reply (a deploy during ' +
+      'enterBypass, the supervisor\'s re-assert or a restart\'s keep) read that reply after it came back without the grant and ended the ' +
+      'session "Claude Code switched to Bypass permissions"',
+    negative:
+      'a Bypass reply to any other request id (one never sent under the grant), the same late reply in the SAME portal life (the grant ' +
+      'is gone: it still ends), and a Bypass status report while nothing is pending',
+  },
 ];
 
 /**
- * The permission modes by how much they let the agent do without asking (T-277): plan < default < acceptEdits < auto < bypassPermissions.
- * Any other string (dontAsk included, and anything Claude Code may add) ranks above Bypass, so it is never "less permissive".
+ * How long after the portal attached to a live process again (its state reloaded from the store) the first mode report is the resync
+ * comparison (INTEGRITY_CASES `mode-resync`). The comparison is made once; it accepts nothing the stored state and mode-downgrade don't.
  */
-export const MODE_RANK: Readonly<Record<string, number>> = { plan: 0, default: 1, acceptEdits: 2, auto: 3, bypassPermissions: 4 };
+export const RESYNC_MS = 60_000;
+
+/**
+ * The permission modes by how much they let the agent do without asking (T-277): plan < default < acceptEdits < auto < bypassPermissions.
+ * Any other string (dontAsk included, and anything Claude Code may add) ranks above Bypass, so it is never "less permissive". Frozen: no
+ * code may add a mode or move one down at run time (T-277 review note e).
+ */
+export const MODE_RANK: Readonly<Record<string, number>> = Object.freeze({ plan: 0, default: 1, acceptEdits: 2, auto: 3, bypassPermissions: 4 });
 
 /** The rank of a mode string; an unknown one ranks above Bypass. */
 export function modeRank(mode: string): number {
@@ -165,6 +203,71 @@ export interface PeerCause {
   digest: string;
   at: number;
   queued: boolean;
+}
+
+/* ---------- The control state that decides integrity, persisted (T-277 layer 2, migration 820) ---------- */
+
+/** The permission mode the stream must report and the changes Claude Code may make by itself (the controller's track, as stored). */
+export interface StoredMode {
+  expected: string;
+  prePlan: string | null;
+  enterPlan: boolean;
+  exitPlan: boolean;
+  /** The id of a `set_permission_mode` Bypass request sent under the grant whose reply was not read yet. */
+  bypassPending: string | null;
+}
+
+/**
+ * What `chat_sessions.control_state` holds: the process it belongs to (`proc`: Claude Code session id, segment and start, so a state is
+ * never applied to another process), the mode track and the peer causes. Ids, modes and sha256 digests only: never a line's text.
+ */
+export interface StoredControl {
+  v: 1;
+  proc: string;
+  mode: StoredMode;
+  peers: PeerCause[];
+}
+
+/** The process a stored state belongs to. */
+export function controlProc(row: { claude_session_id?: string | null; id: string; segment: number; process_started_at: string | null }): string {
+  return `${row.claude_session_id || row.id}/${row.segment}/${row.process_started_at ?? ''}`;
+}
+
+/** The stored form; the peer causes are kept as the controller holds them (at most 32, digests). */
+export function controlJson(proc: string, mode: StoredMode, peers: readonly PeerCause[]): string {
+  const m: StoredMode = { expected: mode.expected, prePlan: mode.prePlan, enterPlan: mode.enterPlan, exitPlan: mode.exitPlan, bypassPending: mode.bypassPending };
+  const p = peers.slice(-32).map((c) => ({ toolUseId: c.toolUseId, taskId: c.taskId, digest: c.digest, at: c.at, queued: c.queued }));
+  return JSON.stringify({ v: 1, proc, mode: m, peers: p } satisfies StoredControl);
+}
+
+const str = (v: unknown, max = 200): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
+
+/**
+ * The stored state for the process `proc`, or null: nothing stored, another process's state, or anything unreadable or out of shape
+ * (then the controller uses the row's mode, as before layer 2). Strict: every field has its type and bounds, digests are sha256 hex.
+ */
+export function readControl(stored: string | null | undefined, proc: string): StoredControl | null {
+  if (!stored) return null;
+  let v: unknown;
+  try {
+    v = JSON.parse(stored);
+  } catch {
+    return null;
+  }
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (o.v !== 1 || o.proc !== proc || !o.mode || typeof o.mode !== 'object' || !Array.isArray(o.peers) || o.peers.length > 32) return null;
+  const m = o.mode as Record<string, unknown>;
+  if (!str(m.expected, 40) || !(m.prePlan === null || str(m.prePlan, 40)) || typeof m.enterPlan !== 'boolean' || typeof m.exitPlan !== 'boolean') return null;
+  if (!(m.bypassPending === null || str(m.bypassPending))) return null;
+  const peers: PeerCause[] = [];
+  for (const p of o.peers as unknown[]) {
+    if (!p || typeof p !== 'object') return null;
+    const c = p as Record<string, unknown>;
+    if (!str(c.toolUseId) || !str(c.taskId) || typeof c.digest !== 'string' || !/^[0-9a-f]{64}$/.test(c.digest) || typeof c.at !== 'number' || !Number.isFinite(c.at) || typeof c.queued !== 'boolean') return null;
+    peers.push({ toolUseId: c.toolUseId, taskId: c.taskId, digest: c.digest, at: c.at, queued: c.queued });
+  }
+  return { v: 1, proc, mode: { expected: m.expected, prePlan: (m.prePlan as string | null) ?? null, enterPlan: m.enterPlan, exitPlan: m.exitPlan, bypassPending: (m.bypassPending as string | null) ?? null }, peers };
 }
 
 /** A digest of a control response as parsed (its id, outcome and body), so a second copy can be compared with the first. */
