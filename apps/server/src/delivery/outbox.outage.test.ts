@@ -24,8 +24,10 @@ test('outbox: an unreachable target is one log line per outage', async () => {
   } as unknown as Runtime;
   const outbox = new Outbox(store, () => runtime);
   outbox.subscribe('account', () => undefined, () => ['cx3-t/w1']);
+  // Only the outbox's own lines: Node prints its warnings through console.error too (the MockTimers API's ExperimentalWarning, emitted
+  // on the next tick after mock.timers.enable), and a run without --disable-warning=ExperimentalWarning caught it as a second line.
   const lines: string[] = [];
-  const error = mock.method(console, 'error', (l: string) => void lines.push(l));
+  const error = mock.method(console, 'error', (l: unknown) => void (typeof l === 'string' && l.startsWith('[outbox]') && lines.push(l)));
   mock.timers.enable({ apis: ['setInterval'] });
   const settle = () => new Promise((r) => setImmediate(r));
   try {
