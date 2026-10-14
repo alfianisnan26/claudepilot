@@ -120,4 +120,20 @@ ACTUAL comment ends the dispatches before it. An open dispatch is never dispatch
 `resumeDecision` says what to do with the ticket's latest dispatch (passed: review; failed: fix; cancelled or stale: exception; a run still
 going, another branch, an ended dispatch or an event already handled: nothing), and `pendingResumes` does the same from a ticket's checks after
 a restart. The check step is `scripts/slice-check.sh` (typecheck plus the server test files the diff touched, at most 20 lines, no model).
-Not yet: starting the session, the supervisor hook that runs it and relays EXCEPTION lines, audit rows of their own, review and verify.
+
+After the implementer, `nextStep` reads the open dispatch's markers in order and says what comes next: no CI result yet, wait; a red run,
+fix (back to the implementer); a green run, review (the reviewer on the diff only, sonnet, opus when the diff touches authz, secrets,
+migrations, Bypass code or `.claude/settings`, or when the changed paths are unknown); `FACTORY REVIEW <id> verdict=pass`, verify
+(qa-verifier); `verdict=changes`, fix; `FACTORY VERIFY <id> verdict=pass`, integrate (the coordinator: merge, quick gate, push integration,
+batch the deploy); `verdict=sendback`, fix; `FACTORY INTEGRATE <id> result=merged commit=<sha>`, learn: the ACTUAL comment (which ends the
+dispatch) with one `LESSON` line, both built from the engine's own counts (CI runs, red runs, review rounds, send-backs, requests when known)
+and never from ticket text. A marker out of order, an unknown verdict, `result=conflict`, more than 3 red runs or 2 send-backs, or a slice at
+150 percent of its requests is an EXCEPTION instead. `stepMarker` writes the markers the steps' roles (or the coordinator) post.
+
+One round, for a supervisor hook or by hand: `node docs/dev-sessions/factory-round.mjs [--apply] [--wip 5] [--budget N] [--stale-min 360]`
+(same `PORTAL_URL` and `PORTAL_SERVER_CODE`). It reads the open and in-progress tickets, plans intake, turns each finished CI check into a
+RESUME, and prints one line each: `DISPATCH`, `RESUME`, `NEXT <ticket> <id> <step> <role>/<model>: <why>`, `LEARN <id>: would comment` with
+the ACTUAL text, and `EXCEPTION <ticket> <id>: <why>` for the coordinator. Dry by default; `--apply` writes only the DISPATCH comments
+(with their worktrees) and the RESUME markers, never an ACTUAL. Exit 0 after a round, 1 when the portal could not be read (one EXCEPTION
+line), 2 for usage. It is a separate script: `supervisor.mjs` does not call it yet.
+Not yet: starting the sessions (the Bypass decision), the supervisor wiring, writing the ACTUAL, audit rows of their own.
