@@ -45,12 +45,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // A budget is a number about a quiet machine. On a loaded one (the release gate runs beside other suites on a 4-CPU pod; the 1-minute load
 // average was 17 to 30 when "80 MB/s" measured 33) the number says nothing about the code, so the budget tests skip and say why; the
-// measurement is still printed. The skip is by the load average at the start of the file, not by a retry.
+// measurement is still printed. The skip is by the load average at the start of the file, not by a retry. Throughput needs no skip: it is
+// checked against a baseline taken in the same run (T-297, below).
 const load = os.loadavg()[0]!;
 const cpus = os.cpus().length || 1;
 const loaded = load > cpus ? `the machine is loaded (load ${load.toFixed(1)} on ${cpus} CPUs): a budget would measure the load, not the code` : false;
 
-test('one stream moves at least 80 MB/s', { skip: loaded }, async () => {
+/** MB/s of one mux stream over a fresh pair: `total` bytes written with backpressure, until the far end has seen the end. */
+async function muxThroughput(total: number): Promise<number> {
   const p = await pair();
   try {
     const a = p.client.open();
@@ -58,19 +60,65 @@ test('one stream moves at least 80 MB/s', { skip: loaded }, async () => {
     const b = await p.next();
     let got = 0;
     b.on('data', (d: Buffer) => (got += d.length));
-    const total = 200 * 1024 * 1024;
     const chunk = Buffer.alloc(64 * 1024, 1);
     const t0 = performance.now();
     for (let sent = 0; sent < total; sent += chunk.length) if (!a.write(chunk)) await once(a, 'drain');
     a.end();
     await once(b, 'end');
     const mbps = total / 1e6 / ((performance.now() - t0) / 1000);
-    console.log(`mux throughput of one stream: ${mbps.toFixed(0)} MB/s (budget 80)`);
-    assert.ok(mbps >= 80, `${mbps.toFixed(0)} MB/s`);
     assert.ok(got >= total);
+    return mbps;
   } finally {
     await p.close();
   }
+}
+
+/** MB/s of the bare WebSocket the mux stands on: the same loopback, options and chunk size, no mux. */
+async function bareThroughput(total: number): Promise<number> {
+  const http = createServer();
+  const wss = new WebSocketServer({ server: http, ...TUNNEL_WS_OPTIONS });
+  await new Promise<void>((r) => http.listen(0, '127.0.0.1', r));
+  const serverWs = new Promise<WebSocket>((resolve) => wss.once('connection', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${(http.address() as AddressInfo).port}/`, TUNNEL_WS_OPTIONS);
+  try {
+    await once(ws, 'open');
+    let got = 0;
+    const s = await serverWs;
+    const done = new Promise<void>((r) => s.on('message', (d) => void ((got += (d as Buffer).length) >= total && r())));
+    const chunk = Buffer.alloc(64 * 1024, 1);
+    const t0 = performance.now();
+    for (let sent = 0; sent < total; sent += chunk.length) {
+      // backpressure like the mux's: past 1 MiB queued, wait until this chunk is handed to the socket
+      if (ws.bufferedAmount < 1024 * 1024) ws.send(chunk, { binary: true, compress: false });
+      else await new Promise<void>((r, j) => ws.send(chunk, { binary: true, compress: false }, (e) => (e ? j(e) : r())));
+    }
+    await done;
+    return total / 1e6 / ((performance.now() - t0) / 1000);
+  } finally {
+    ws.terminate();
+    wss.close();
+    http.closeAllConnections();
+    await new Promise<void>((r) => http.close(() => r()));
+  }
+}
+
+// T-297: the 80 MB/s of the PRD (targets-connect.md §19.6) is a number about a quiet machine, and the load average lags: on a busy box
+// under the skip threshold it measured the load. So the suite checks the mux against the bare WebSocket under it, measured in the same
+// run, round by round (each pair of numbers a moment apart sees the same load): the mux's own cost, which a regression moves and load does
+// not. The best round counts, so one round hit by a burst of load does not decide. The absolute number is printed for the budget runs.
+// Measured on the 8-CPU nodes (T-297, 20 runs): best round 82 to 99 % idle, 80 to 131 % beside a busy loop per CPU; one bad round 49 %.
+const MUX_SHARE_MIN = 0.5;
+test(`one stream moves at least ${MUX_SHARE_MIN * 100} % of the bare WebSocket's throughput (80 MB/s on a quiet machine)`, async () => {
+  const total = 64 * 1024 * 1024;
+  const rounds: { bare: number; mux: number }[] = [];
+  for (let i = 0; i < 3; i++) rounds.push({ bare: await bareThroughput(total), mux: await muxThroughput(total) });
+  const best = rounds.reduce((a, r) => (r.mux / r.bare > a.mux / a.bare ? r : a));
+  const share = best.mux / best.bare;
+  console.log(
+    `mux throughput of one stream: ${best.mux.toFixed(0)} MB/s, bare WebSocket ${best.bare.toFixed(0)} MB/s, share ${(share * 100).toFixed(0)} % (min ${MUX_SHARE_MIN * 100} %; budget 80 MB/s on a quiet machine)` +
+      ` rounds ${rounds.map((r) => `${r.mux.toFixed(0)}/${r.bare.toFixed(0)}`).join(' ')}`,
+  );
+  assert.ok(share >= MUX_SHARE_MIN, `the mux moved ${(share * 100).toFixed(0)} % of the bare WebSocket's throughput`);
 });
 
 test('opening a stream takes at most 5 ms (median)', { skip: loaded }, async () => {

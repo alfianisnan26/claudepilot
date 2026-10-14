@@ -6,12 +6,17 @@ import type { Store } from '../store/store.js';
 import { defineSetting } from './registry.js';
 import type { Settings } from './store.js';
 
-const RESTART = 'A running Claude reads it at its next start.';
+/**
+ * When a change takes effect (T-302, T-309): the sub-agent values apply at once to new sub-agents; the output
+ * caps are read when the Claude process starts, so a running one takes a change in a new chat or a Restart.
+ */
+const AT_ONCE = 'A change applies at once to new sub-agents; ones already running keep theirs.';
+const RESTART = 'Read when Claude starts: a running Claude takes a change at its next start (a new chat or a Restart).';
 
 /**
  * The agent policy (T-285, settings-policies PRD §10.1): portal settings that reach every Claude process in
  * every workspace as `env` in the policy owner's drop-in (`10-claudepilot-policy.json`). Claude Code applies a
- * managed `env` to itself and to its sub-agents at start. Each value is always written, a default included:
+ * managed `env` to itself and to its sub-agents at start; `applies` says when a change takes effect. Each value is always written, a default included:
  * a value is overwritten, never removed (the PRD row), and no pool can set these names (`ownership.ts`).
  * Every default has a source, named in its help.
  */
@@ -26,9 +31,10 @@ export const AGENT_ENV = [
       group: 'agents',
       order: 20,
       label: 'Sub-agent cache',
-      help: `How long the prompt cache of sub-agents’ requests lives (CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL). 1h keeps it warm across waits; 5m is Claude Code’s own default and re-writes the context after a longer wait. Source: T-285, sub-agents re-wrote 47 M tokens of context after waits on the 5 minute cache. Claude Code ignores 1h while a subscription is in overage. ${RESTART}`,
+      help: `How long the prompt cache of sub-agents’ requests lives (CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL). 1h keeps it warm across waits; 5m is Claude Code’s own default and re-writes the context after a longer wait. Source: T-285, sub-agents re-wrote 47 M tokens of context after waits on the 5 minute cache. Claude Code ignores 1h while a subscription is in overage. ${AT_ONCE}`,
     }),
     env: 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL',
+    applies: 'new-subagents',
   },
   {
     def: defineSetting({
@@ -42,9 +48,10 @@ export const AGENT_ENV = [
       group: 'agents',
       order: 30,
       label: 'Sub-agents',
-      help: `How many sub-agents one Claude runs at once (CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS). Source: the owner’s decision D-43, five. ${RESTART}`,
+      help: `How many sub-agents one Claude runs at once (CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS). Source: the owner’s decision D-43, five. ${AT_ONCE}`,
     }),
     env: 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS',
+    applies: 'new-subagents',
   },
   {
     def: defineSetting({
@@ -58,9 +65,10 @@ export const AGENT_ENV = [
       group: 'agents',
       order: 40,
       label: 'Spawn depth',
-      help: `How deep sub-agents may start sub-agents of their own (CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH). Source: the Standard preset of the settings PRD, 3. ${RESTART}`,
+      help: `How deep sub-agents may start sub-agents of their own (CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH). Source: the Standard preset of the settings PRD, 3. ${AT_ONCE}`,
     }),
     env: 'CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH',
+    applies: 'new-subagents',
   },
   {
     def: defineSetting({
@@ -77,6 +85,7 @@ export const AGENT_ENV = [
       help: `Characters of a command’s output Claude keeps; the middle of a longer one is cut (BASH_MAX_OUTPUT_LENGTH). Source: the token-economy design, lever 4, 8000. ${RESTART}`,
     }),
     env: 'BASH_MAX_OUTPUT_LENGTH',
+    applies: 'restart',
   },
   {
     def: defineSetting({
@@ -93,6 +102,7 @@ export const AGENT_ENV = [
       help: `Tokens of a tool result from an MCP server Claude keeps (MAX_MCP_OUTPUT_TOKENS). Source: Claude Code’s own default, 25000. ${RESTART}`,
     }),
     env: 'MAX_MCP_OUTPUT_TOKENS',
+    applies: 'restart',
   },
 ] as const;
 
@@ -173,7 +183,7 @@ export class AgentEnvPolicy implements FragmentProvider {
     }
     const desired = this.desired();
     const overridden = this.#overridden(workspaceId);
-    const values = AGENT_ENV.map((a) => ({ key: a.def.key, env: a.env, desired: desired[a.env]!, applied: applied?.[a.env] ?? null, overriddenPool: overridden.get(a.env) ?? null }));
+    const values = AGENT_ENV.map((a) => ({ key: a.def.key, env: a.env, applies: a.applies, desired: desired[a.env]!, applied: applied?.[a.env] ?? null, overriddenPool: overridden.get(a.env) ?? null }));
     const state = !applied ? 'unavailable' : values.every((v) => v.applied === v.desired) ? 'applied' : 'pending';
     return { workspaceId, state, values, appliedAt };
   }

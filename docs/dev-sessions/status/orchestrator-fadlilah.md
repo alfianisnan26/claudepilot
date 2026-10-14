@@ -1,22 +1,21 @@
-# Orchestrator status (2026-10-14, chat 5802dfa4, moved from two.claude to fadlilah ~18:10 UTC)
+# Orchestrator hand-off (2026-10-14 ~20:40 UTC, chat 5802dfa4 on fadlilah; read this first, the older log is in `orchestrator.md`)
 
-Older log: `orchestrator.md`; the hand-off before the move is on branch `wip/orch-status-two`.
-
-## Now (19:15 UTC)
-- LIVE: portal 2026.10.14-6 (run 25) and 2026.10.14-7 (coordinator). RUNNING: deploy run 28 on 7591f31 (T-318 merged, worktree-rules fix, allow-list additions).
-- T-318 (stopped-task integrity line): built dev/t318 f35e509 + review fixes 0b7c715 (producer key absent, timed-out stop kept); reviewed clean by opus; merged into integration, goes live with run 28. T-318 stays open until seen live.
-- Crew (D-47, D-49): V1/V2 verifiers ended with reports (comments 1767-1773). I1 (T-296) ended: already done in 85870f7 (case-clash test 3/3 run by me). I2 `7530ae9e-7352-4025-88de-de5fa33507fb` (T-324, T-297, dev/t-324-1) and I3 `08cf748d-3bef-47b5-9219-28d1217e8230` (T-302, T-309, dev/t-302-1) are idle, WAITING for run 28 then a Restart (they launched without the project rules).
-
-## Verdicts of the second verifier pass (none closable)
-- T-109 PASS WITH GAPS; T-136 PASS WITH GAPS (E, F: T-312, T-313, T-314); T-259 FAIL against the full text (T-315, T-316, T-317).
-- T-280, T-282, T-285, T-287 PASS WITH GAPS (T-287 much unbuilt, T-305; T-285 MAX_MCP_OUTPUT_TOKENS still 25000, human step).
+## State
+- LIVE: portal 2026.10.14-8 (run 28, 7591f31: T-318, worktree rules for workers, allow-list additions).
+- BATCH, not on integration yet: local `integration` = 0a37182, pushed ONLY to `origin wip/orch-batch-fadlilah`. Gate job `claudepilot-gate-0a37182-49d6` running (log /tmp/gate-job-0a37182.log; `tail -2 /tmp/gate-job-batch.out`). If GREEN: `git push origin integration && git push pilot integration`, post the merged list on T-294 (needs the ticket assigned or adopted), then `/deploy` (images portal, gate true). If RED: find the failing test, drop the branch that broke it (`git revert -m 1` its merge), send its worker back with the output.
+- Merged in the batch (branch, commit, ticket, what): dev/t-302-1 af3e442 T-302/T-309 policy help text (T-309 still open: the can() check on GET /api/settings/agent-env/:target/:name); dev/t-319-1 7885c28 T-319 PRD sentence (band is by design; the owner decides if it goes); dev/t-317-1 baa2e31 T-317 relay doc (the live Keep going run is NOT done); dev/t-322-1 40dd842 T-322 crew-e2e fails fast with its cause (cause only likely: a Pool-MCP-only drop-in blocks --mcp-config; a person runs crew-e2e.mjs --only 1 in the pod); dev/t-324-1 161688a T-324/T-297 flaky tests deterministic + scripts/test-repeat.sh (mode set +x by me; the worker's perf "after" job was never seen); dev/t-321-1 be2e4e2 T-321 session-crew seeds a live process (its 12-run proof was never seen); dev/t-312-1 d0656ff/05e3e10 T-312 server grouping by continued_from root (chips NOT built; the old-code failing run was never seen); dev/t-320-1 abc6839 T-320 PRD status of T-294 (built / not built table); dev/t-315-1 be1ed0d T-315 external heartbeat DESIGN (§23.3, questions for the owner).
+- Also on integration earlier today: T-318 (stopped-task integrity line; stays open until seen live).
+- Workers: all ended. Nothing in flight.
 
 ## Next
-1. After run 28 is live: Restart I2 and I3, check one edits, tests, commits and pushes its branch; merge their branches, gate, push integration, deploy batched.
-2. T-293 current slice, T-306 (RTK step 2, safe subset), T-319, T-149 leftovers, T-302/T-304/T-305 triage (T-304, T-305 hold verifier reports: wont_do with a pointer; needs the ticket assigned or adopted).
-3. Not mine (VS Code crew holds): T-294, T-149, T-158.
+1. Batch gate green -> push -> deploy. Then two qa-verifier workers (sonnet, claude auto, dontAsk, brief: tests through `scripts/job-run.sh --ref integration -- '<cmd>'`, comment on the lead's tickets): V-A = T-324/T-297, T-321, T-312 (run test-repeat.sh, session-crew.mjs 12x, usagespend tests, show each test fails without the fix); V-B = T-302/T-309, T-322, T-317, T-320, T-315 (docs vs code facts, agent-policy.mjs). Close nothing without the full text met.
+2. T-296 is DONE (85870f7, case-clash test 3/3); no re-spawn needed.
+3. Owner decisions waiting: T-315 questions (service, alert channel, probe B host, secret vs Settings); T-319 band; T-294 item 7 (stored channel vs session_message to: crew) and Bypass by lease (T-316); T-286.
+4. Backlog: T-313, T-314, T-316 (needs the lease decision), T-293 current slice, T-306, T-149 leftovers, T-309 can() check, supervisor.mjs line 3 contradicts D-14 (file a ticket), T-302..T-305 triage (T-304/T-305 wont_do with a pointer), T-320.
+5. Not mine: T-294, T-149, T-158 (VS Code crew).
 
 ## Lessons
-- A coordinator message can name a commit that is not on origin yet: `git ls-remote origin integration` before triggering a deploy (run 27 deployed the wrong head and was cancelled).
-- Workers cannot comment on unassigned tickets (T-294, T-323, T-296): give them tickets assigned to the lead.
-- The pod sets ENABLE_PROMPT_CACHING_1H, which fails host.test.ts "start --env" here (passes with `env -u`); gate-quick in the pod is flaky under load.
+- Name a commit only after `git ls-remote origin integration` shows it (run 27 deployed a stale head and was cancelled).
+- Gate ONLY with scripts/gate-job.sh in the background on a pushed commit (a wip branch is fine); gate-quick in the pod is killed at its time limit.
+- Workers cannot comment on unassigned tickets (T-294, T-323, T-296, T-319); a new worktree has no node_modules (tests via job-run.sh --ref <branch>); a worker that sits "idle" waiting on a job has not finished: its report says "waiting".
+- host.test.ts "start --env" fails in the pod only (ENABLE_PROMPT_CACHING_1H is set there; passes with `env -u`).

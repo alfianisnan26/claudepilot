@@ -5,7 +5,7 @@ import { countsLine, coverageNote, maxTotal, rowName, sessionLine, shareText } f
 
 const totals = (costUsd: number, requests: number): ChatUsageTotals => ({ costUsd, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests, agents: 0 });
 const row = (over: Partial<AttributionRow>): AttributionRow => ({ by: 'session', key: 'uus-1', label: 'Refactor billing', state: 'known', own: totals(0.5, 2), total: totals(1, 3), share: estimatedFigure(23.75), sessions: 2, firstAt: null, lastAt: null, ...over });
-const session = (over: Partial<NonNullable<AttributionRow['session']>> = {}): NonNullable<AttributionRow['session']> => ({ sessionId: 'uus-1', title: 'Refactor billing', workspaceId: 'docker/uuws', workspaceName: 'uuws', claudeId: 'c1', claudeName: 'Satria', ticketId: 'T-12', parentId: null, depth: 0, children: 1, exists: true, state: 'ended', ...over });
+const session = (over: Partial<NonNullable<AttributionRow['session']>> = {}): NonNullable<AttributionRow['session']> => ({ sessionId: 'uus-1', title: 'Refactor billing', workspaceId: 'docker/uuws', workspaceName: 'uuws', claudeId: 'c1', claudeName: 'Satria', ticketId: 'T-12', parentId: null, continuedFrom: null, depth: 0, children: 1, exists: true, state: 'ended', ...over });
 
 // The seeded fixture, by hand: "Refactor billing" ran two requests of its own ($0.30 + $0.20 = $0.50) and started "Write the tests" ($0.50), so its
 // total is $1.00 of the window's $4.21 (23.75 %), and the child's own and total are both $0.50.

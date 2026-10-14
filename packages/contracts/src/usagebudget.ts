@@ -46,6 +46,11 @@ export interface SessionFacts {
   ticketId: string | null;
   /** The session that started this one, or null. A parent that is gone still shows here. */
   parentId: string | null;
+  /**
+   * The session this one continues (T-136 lineage, T-312), or null. A continuation's row sits right under the first row of its chain, whose
+   * `total` is then the whole chain's.
+   */
+  continuedFrom: string | null;
   /** 0 for a root; rows of a session report come in tree order (a session, then the sessions it started), so this is the indent. */
   depth: number;
   /** Sessions this one started that have rows in the tree. */

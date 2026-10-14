@@ -29,6 +29,9 @@
 //      iPhone safe areas) and 1280 px, light and dark; 44 px targets, no sideways scroll, no page errors; screenshots
 // usage: node tools/qa/crew-e2e.mjs [--port 3431] [--mock 4631] [--proxy-port 4632] [--shots /tmp/t294qa-shots] [--keep] [--only 1,2]
 //        node tools/qa/crew-e2e.mjs --stop [--port 3431]     stops the scratch portal, the stand-in and the proxy a --keep run left
+//        --no-agent-access   a self-test (T-322): the workspace does not opt in, so the first [[mcp …]] step must fail at once with the reason.
+//   A session whose model request has no mcp__pilot__ tool fails the run at once, naming why (token minted, --mcp-config, the CLI's init
+//   line, this machine's managed MCP settings: a workspace pod under the portal's "Pool MCP only" lockdown blocks the scratch portal's URL).
 //   Needs `claude` on PATH, chromium, python3, flock, and apps/web/dist built. Writes /tmp/t294qa-*.jsonl (the stand-in's and the proxy's logs)
 //   and /tmp/t294qa-results.json. Exit 1 on any FAIL.
 import { spawn, spawnSync } from 'node:child_process';
@@ -253,7 +256,8 @@ async function main() {
   await until('the Default Claude signed in (the stand-in key)', async () => ((await ok('GET', '/api/workspaces/local/local/claudes')) ?? []).some((c) => c.auth?.loggedIn), 60_000, 1500);
   for (const key of ['sessions.maxLivePerWorkspace', 'sessions.maxLiveTotal']) await ok('PUT', `/api/settings/${key}`, { value: 14, confirm: true });
   await ok('PUT', '/api/portal-mcp/settings', { enabled: true, sessionControl: true });
-  await ok('PUT', '/api/portal-mcp/agents/local/local', { enabled: true });
+  // --no-agent-access: a self-test of the fail-fast diagnosis (T-322): sessions get no portal tools, and the first [[mcp …]] step must say why.
+  if (!args.includes('--no-agent-access')) await ok('PUT', '/api/portal-mcp/agents/local/local', { enabled: true });
   const minted = await ok('POST', '/api/portal-mcp/tokens', { label: 'qa-crew-e2e', scope: 'admin', expiresIn: '1h', addAnother: true });
   const bearer = minted?.secret;
   if (!bearer) throw new Error('the minted token has no value field');
@@ -370,12 +374,95 @@ async function main() {
     await until(`${title} live`, async () => ((await one(s.id)).process === 'live' ? true : null), 60_000);
     return s;
   };
+  /**
+   * T-322: why a session's Claude Code has no mcp__pilot__* tool, from what the run can read without a credential: the portal's token row,
+   * the --mcp-config flag, the `pilot` entry of the CLI's own init line, the managed settings of this machine (Claude Code reads them whatever
+   * HOME is: a workspace pod the portal delivers a "Pool MCP only" lockdown to blocks the scratch portal's URL), and the tool list the model got.
+   * Names, statuses and counts only: no token, no header, no environment.
+   */
+  const pilotDiagnosis = (id, sent) => {
+    const why = [];
+    const csid = claudeSid(id) ?? id;
+    const minted = dbRow('SELECT count(*) AS n FROM pmcp_agent_tokens WHERE session_id = ?', id)?.n ?? 0;
+    why.push(minted ? `portal minted ${minted} agent token(s)` : 'the portal minted NO agent token (Portal MCP off, the workspace not opted in, or no /mcp URL for it)');
+    const argv = argvOf(id);
+    why.push(argv ? `--mcp-config ${argv.includes('--mcp-config') ? 'given' : 'ABSENT'}` : 'the process was not found');
+    let pilot = 'no init line yet';
+    for (const dir of new Set([id, csid])) {
+      const d = join(home, '.claudepilot', 'sessions', dir);
+      if (!existsSync(d)) continue;
+      for (const f of readdirSync(d).filter((x) => x.startsWith('out.'))) {
+        for (const l of readFileSync(join(d, f), 'utf8').split('\n')) {
+          if (!l.includes('"subtype":"init"')) continue;
+          try {
+            const o = JSON.parse(l);
+            if (o.parent_tool_use_id) continue;
+            const s = (o.mcp_servers ?? []).find((x) => x?.name === 'pilot');
+            pilot = s ? `status ${String(s.status).slice(0, 24)}` : `NOT LISTED (servers: ${(o.mcp_servers ?? []).map((x) => String(x?.name).slice(0, 40)).join(', ') || 'none'})`;
+          } catch {
+            // a cut line: the next one
+          }
+        }
+      }
+    }
+    why.push(`init line's pilot server: ${pilot}`);
+    // Managed settings: what blocks an MCP server named on the command line (settings/lockdown.ts: --mcp-config is blocked unless its URL is listed).
+    const url = `http://127.0.0.1:${PORT}/mcp`;
+    const managed = ['/etc/claude-code/managed-settings.json'];
+    const dropins = '/etc/claude-code/managed-settings.d';
+    try {
+      for (const f of readdirSync(dropins).filter((x) => x.endsWith('.json')).sort()) managed.push(join(dropins, f));
+    } catch {
+      // none
+    }
+    for (const f of managed) {
+      let o;
+      try {
+        o = JSON.parse(readFileSync(f, 'utf8'));
+      } catch (e) {
+        if (existsSync(f)) why.push(`${f}: unreadable (${e.code ?? 'not JSON'})`);
+        continue;
+      }
+      const allowed = Array.isArray(o.allowedMcpServers) ? o.allowedMcpServers : null;
+      const denied = Array.isArray(o.deniedMcpServers) ? o.deniedMcpServers : null;
+      if (o.allowManagedMcpServersOnly || allowed || denied) {
+        // A matcher is a URL (`*` a wildcard), a command, or a name.
+        const glob = (p) => new RegExp(`^${p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+        const admits = allowed?.some((m) => (typeof m?.serverUrl === 'string' && glob(m.serverUrl).test(url)) || m?.serverName === 'pilot');
+        why.push(
+          `MANAGED ${f}: allowManagedMcpServersOnly ${!!o.allowManagedMcpServersOnly}, allowedMcpServers ${allowed ? `${allowed.length} (admits ${url}: ${admits ? 'yes' : 'NO'})` : 'unset'}, deniedMcpServers ${denied ? denied.length : 'unset'}`,
+        );
+      }
+    }
+    if (sent) {
+      const tools = sent.tools ?? [];
+      why.push(`the model got ${tools.length} tools, ${tools.filter((t) => t.startsWith('mcp__')).length} MCP ones${tools.includes('ToolSearch') ? ', ToolSearch among them (deferred tools)' : ''}`);
+    }
+    why.push(`Claude Code's stderr: ${join(home, '.claudepilot', 'sessions', csid, 'err.log').replace(home, '~')} (not printed)`);
+    return why.join('; ');
+  };
+  /** The session's first model request since `since` that carries tools (a side request, a title or a summary, has none). */
+  const turnRequest = (id, since) => proxyOf(id).find((r) => r.t >= since && (r.tools ?? []).length > 0) ?? null;
+  /**
+   * Waits for the session's model request after `since` (the proxy's log) and fails fast, with the reason, when it carries no mcp__pilot__
+   * tool: every [[mcp …]] step would otherwise wait out its timeout (T-322).
+   */
+  const assertPilotTools = async (id, since, ms = 60_000) => {
+    const sent = await until(`${id.slice(0, 8)}'s first model request`, async () => turnRequest(id, since), ms, 500).catch(() => null);
+    // No request matched to the session: nothing to judge here; the step's own wait says the reason if it times out.
+    if (!sent || (sent.tools ?? []).some((t) => t.startsWith('mcp__pilot__'))) return;
+    throw new Error(`no mcp__pilot__ tool in ${id.slice(0, 8)}'s model request: ${pilotDiagnosis(id, sent)}`);
+  };
   /** A lead starts a worker over MCP; returns the worker (or null) and the tool's result as the lead's Claude read it. */
   const spawnVia = async (leadId, input, ms = 120_000) => {
     const known = new Set((await childrenOf(leadId)).map((s) => s.id));
     const after = await lastSeq(leadId);
+    const since = new Date().toISOString();
     await say(leadId, mcpLine('session_spawn', input));
-    const res = await toolResultOf(leadId, 'session_spawn', after, ms);
+    await assertPilotTools(leadId, since);
+    const res = await toolResultOf(leadId, 'session_spawn', after, ms).catch((e) => {
+      throw new Error(`${e.message}: ${pilotDiagnosis(leadId, turnRequest(leadId, since))}`);
+    });
     const fresh = (await childrenOf(leadId)).filter((s) => !known.has(s.id));
     return { worker: fresh[0] ?? null, res };
   };

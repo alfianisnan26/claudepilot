@@ -7,6 +7,8 @@
 // - A fact the portal never recorded is `unknown` with a reason, never guessed and never zero: a persona before launches were recorded
 //   (`not_recorded`), the ticket of a session deleted before its links were kept (`session_deleted`).
 // - A session's own requests already hold its sub-agents (they run inside the request); children are other sessions (`parent_id`).
+// - A chat continued as a new row (`continued_from`, T-136 lineage) is one unit (T-312): each later row is a child of the chain's first row, so
+//   that row's total is the chain's and every segment stays visible; a ticket is the nearest one up the chain.
 //
 // Open to one more dimension (PLAN-12: `by=user`, usage per user): each flat dimension is one entry of `GROUPERS`, a function of the request and the
 // session that made it, so a new `by` is one entry (the compiler asks for it as soon as the union grows). The roll-up of a child into its parent lives in
@@ -106,8 +108,34 @@ const UNATTRIBUTED_LABEL: Partial<Record<SpendReason, string>> = { not_recorded:
 export const unattributed = (reason: SpendReason): Cell => ({ state: 'unknown', key: '', label: UNATTRIBUTED_LABEL[reason] ?? 'Unknown', reason });
 
 /**
- * A session and then each parent, as far as the portal knows them: the one place a child rolls up into its parent. `broken` is true when the walk
- * stopped at a session the portal has no record of (deleted before its links were kept), or at a cycle of parent links, rather than at a root.
+ * The one step up from a session: the session it continues when the portal knows it (T-312: a chat continued as a new row is one unit with the
+ * rows before it), else its parent. A continuation whose predecessor is not known falls back to its parent, so a lost link never hides a known one.
+ */
+function upOf(s: SessionInfo, sessions: ReadonlyMap<string, SessionInfo>): string | null {
+  const c = s.continuedFrom;
+  return c && c !== s.sessionId && sessions.has(c) ? c : s.parentId;
+}
+
+/**
+ * The first row of the `continued_from` chain a session is part of (the session itself when it continues nothing known). Bounded and cycle safe:
+ * on a cycle it stops at the last session before the repeat.
+ */
+export function chainRootOf(id: string, sessions: ReadonlyMap<string, SessionInfo>): string {
+  const seen = new Set<string>([id]);
+  let cur = id;
+  for (let hops = 0; hops < 64; hops++) {
+    const c = sessions.get(cur)?.continuedFrom;
+    if (!c || seen.has(c) || !sessions.has(c)) break;
+    seen.add(c);
+    cur = c;
+  }
+  return cur;
+}
+
+/**
+ * A session and then each step up (the session it continues, else its parent; `upOf`), as far as the portal knows them: the one place a child or a
+ * continuation rolls up. `broken` is true when the walk stopped at a session the portal has no record of (deleted before its links were kept), or
+ * at a cycle of links, rather than at a root.
  */
 export function lineage(id: string, sessions: ReadonlyMap<string, SessionInfo>): { sessions: SessionInfo[]; broken: boolean } {
   const chain: SessionInfo[] = [];
@@ -119,7 +147,7 @@ export function lineage(id: string, sessions: ReadonlyMap<string, SessionInfo>):
     const s = sessions.get(cur);
     if (!s) return { sessions: chain, broken: true };
     chain.push(s);
-    cur = s.parentId;
+    cur = upOf(s, sessions);
   }
   return { sessions: chain, broken: false };
 }
@@ -231,8 +259,13 @@ function sessionTree(input: AttributionInput, grand: ChatUsageTotals): { rows: A
   // The nodes: the sessions with requests, and the ancestors still known (so the tree has no holes).
   const nodes = new Set<string>(own.keys());
   for (const id of [...own.keys()]) for (const s of lineage(id, input.sessions).sessions) nodes.add(s.sessionId);
+  // A continuation sits right under the ROOT of its chain (T-312: the root's total is the chain's, each segment is a row one level down, however
+  // long the chain); any other session under its parent.
   const parent = (id: string): string | null => {
-    const p = input.sessions.get(id)?.parentId ?? null;
+    const s = input.sessions.get(id);
+    if (!s) return null;
+    const root = s.continuedFrom && input.sessions.has(s.continuedFrom) ? chainRootOf(id, input.sessions) : id;
+    const p = root !== id ? root : s.parentId;
     return p && p !== id && nodes.has(p) ? p : null;
   };
   const kids = new Map<string, string[]>();
@@ -313,6 +346,7 @@ function sessionTree(input: AttributionInput, grand: ChatUsageTotals): { rows: A
       claudeName: input.claudeName(claudeId, workspaceId),
       ticketId: info?.ticketId ?? null,
       parentId: info?.parentId ?? null,
+      continuedFrom: info?.continuedFrom ?? null,
       depth,
       children: children.length,
       exists: info?.exists ?? false,

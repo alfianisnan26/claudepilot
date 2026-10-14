@@ -934,6 +934,8 @@ Agent-supplied text (hostnames, versions, log lines, Docker's error messages) is
 
 On loopback and DinD: mux throughput of one stream at least 80 MB/s; the round trip of a 1-byte stream under a concurrent 50 MB transfer, 95th percentile at most 50 ms; opening a stream at most 5 ms; a terminal's echo through portal, agent and `docker exec` at most 15 ms more than `docker exec` directly (median); `list()` of 20 workspaces at most 300 ms; the agent's idle memory at most 100 MB; `put` of 100 MB streamed with less than 50 MB of growth in either process; 20 agents back within 10 s of a portal restart.
 
+The server suite (`connect/tunnel/perf.test.ts`) prints these numbers but holds the throughput to a share of the bare WebSocket measured in the same run (at least 50 %, the best of three alternating rounds; T-297), so a busy machine does not fail it; the absolute 80 MB/s is for budget runs on a quiet machine. The latency budgets skip when the load average is above the CPU count.
+
 ### 19.7 Failure injection
 
 Kill the WebSocket mid-exec, mid-`put`, mid-create; stop the portal and start it; stop and start the agent container; revoke during an exec; a clock one hour off on the agent; a full disk on the host; the Docker daemon restarting under the agent; a slow consumer; a malformed frame; an agent that never answers a stream open; the pending enrollment expiring while the installer waits; two hosts using one token at once.

@@ -60,11 +60,27 @@ test('the policy drop-in carries exactly the declared names, with the defaults a
       BASH_MAX_OUTPUT_LENGTH: '8000',
       MAX_MCP_OUTPUT_TOKENS: '25000',
     });
-    // Every setting names its source and the restart in the help behind its ⓘ.
+    // Every setting names its source and, behind its ⓘ, when a change takes effect (T-302, T-309): the
+    // sub-agent values at once for new sub-agents, the output caps at Claude's next start.
+    const applies = Object.fromEntries(AGENT_ENV.map((a) => [a.env, a.applies]));
+    assert.deepEqual(applies, {
+      CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: 'new-subagents',
+      CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: 'new-subagents',
+      CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: 'new-subagents',
+      BASH_MAX_OUTPUT_LENGTH: 'restart',
+      MAX_MCP_OUTPUT_TOKENS: 'restart',
+    });
     for (const a of AGENT_ENV) {
-      assert.match(a.def.help ?? '', /Source: /, a.def.key);
-      assert.match(a.def.help ?? '', new RegExp(a.env), a.def.key);
-      assert.match(a.def.help ?? '', /next start/, a.def.key);
+      const help = a.def.help ?? '';
+      assert.match(help, /Source: /, a.def.key);
+      assert.match(help, new RegExp(a.env), a.def.key);
+      if (a.applies === 'new-subagents') {
+        assert.match(help, /applies at once to new sub-agents; ones already running keep theirs\./, a.def.key);
+        assert.doesNotMatch(help, /next start/, a.def.key);
+      } else {
+        assert.match(help, /Read when Claude starts: a running Claude takes a change at its next start \(a new chat or a Restart\)\./, a.def.key);
+        assert.doesNotMatch(help, /at once/, a.def.key);
+      }
     }
   } finally {
     h.done();
@@ -142,13 +158,14 @@ test('status per workspace: unavailable until the drop-in lands, applied after, 
     await h.reconciler.request(WS, 'test');
     const after = h.agentEnv.status(WS);
     assert.equal(after.state, 'applied');
-    assert.deepEqual(after.values.find((v) => v.env === 'MAX_MCP_OUTPUT_TOKENS'), { key: SETTING_KEYS.agentsMcpOutputMax, env: 'MAX_MCP_OUTPUT_TOKENS', desired: '25000', applied: '25000', overriddenPool: null });
+    assert.deepEqual(after.values.find((v) => v.env === 'MAX_MCP_OUTPUT_TOKENS'), { key: SETTING_KEYS.agentsMcpOutputMax, env: 'MAX_MCP_OUTPUT_TOKENS', applies: 'restart', desired: '25000', applied: '25000', overriddenPool: null });
+    assert.equal(after.values.find((v) => v.env === 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS')?.applies, 'new-subagents');
     assert.ok(after.appliedAt);
 
     h.settings.set(SETTING_KEYS.agentsMcpOutputMax, 10000, { actor: 'Admin' });
     const pending = h.agentEnv.status(WS);
     assert.equal(pending.state, 'pending');
-    assert.deepEqual(pending.values.find((v) => v.env === 'MAX_MCP_OUTPUT_TOKENS'), { key: SETTING_KEYS.agentsMcpOutputMax, env: 'MAX_MCP_OUTPUT_TOKENS', desired: '10000', applied: '25000', overriddenPool: null });
+    assert.deepEqual(pending.values.find((v) => v.env === 'MAX_MCP_OUTPUT_TOKENS'), { key: SETTING_KEYS.agentsMcpOutputMax, env: 'MAX_MCP_OUTPUT_TOKENS', applies: 'restart', desired: '10000', applied: '25000', overriddenPool: null });
 
     await h.reconciler.request(WS, 'test');
     assert.equal(h.agentEnv.status(WS).state, 'applied');
