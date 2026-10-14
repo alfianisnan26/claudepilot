@@ -42,6 +42,7 @@ Scripts:
 - `scripts/k3s-status.sh`: One screen of cluster health for ClaudePilot: Argo CD app, portal and workspace pods, node load, warnings, the portal's last log lines.
 - `scripts/quiet.sh`: quiet.sh [-n LINES] -- <command...>: run a command with its FULL output in a log file and print only a short result, so a long output does not
 - `scripts/scratch-portal.sh`: A throwaway portal for looking at the UI or trying an API: its own data dir, a fixed sign-in code, from a CLEAN environment.
+- `scripts/slice-check.sh`: The slice check (T-293, design v2 layer 3 "CHECK"): the typecheck plus the server test FILES a slice touched, no model, at most 20 lines out.
 
 Browser and API checks in `tools/qa/`: agent-policy.mjs attention.mjs automove.mjs browser.mjs btw-layout.mjs btw-real.mjs canary-run.mjs chat-once.mjs ci-autoapprove.mjs ci-bump.mjs claude-shim.mjs contrast.mjs crawl-get.mjs focus.mjs fuzz-api.mts home.mjs keepgoing.mjs lib.mjs mobile-drag.mjs mock-anthropic.mjs recover.mjs restart-survive.mjs rtk-deny-parity.mjs rtk-fidelity.mjs rtk-measure.sh scroll-lock.mjs seed-perf.mjs seed-placement.mts session-chrome.mjs session-list.mjs session-states.mjs session-swipe.mjs subagents.mjs sweep.mjs textdiet.mjs ticket-bump.mjs ticket-orphans.mjs tokens-group.mjs tool-rows.mjs usage-unknown.mjs with-portal.sh.
 
