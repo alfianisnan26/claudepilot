@@ -27,7 +27,7 @@ Models (coordinator 02:2x, evaluation 2026-10-14): ALWAYS passed explicitly; son
 - DONE t277 (opus): T-277 layer 1 built on dev/t277-mode-downgrade at 30c849c (Job 78e5c910: typecheck clean, chat tests 492 run, 489 pass, 0 fail). The independent security reviewer (opus) is reading it now (04:1x); on APPROVE: merge, gate, push, /deploy gate=true, tell the coordinator on T-277.
 - t255 (opus) T-255: dev-automove-model, dev/t255-unknown-usage.
 - DONE t146 (opus): T-146 slice 1 merged locally (gate Job running; push when green). T-146 in_review.
-- t136-2 (opus) T-136 slice 2: dev-track-c-ui, dev/t136-recover.
+- DONE t136-2 (opus): T-136 slice 2 built on dev/t136-recover at 641bf05 (628 tests, 0 fail; recover.mjs green). Merges AFTER T-277 (same controller), own gate, the NEXT deploy (decision: the hotfix deploy stays small). Slice 3 remains.
 - t100 (sonnet) T-100 finish: dev-automove-web, dev/t100-sessions-list.
 - Orchestrator: integration 270e752 on origin and pilot (T-270 layers 2-3 and T-95 item 4, both gated green). Local HEAD = 270e752 + the T-146 merge (gate Job running; pushed as wip/orch-<sha>); when green push origin and pilot.
 
