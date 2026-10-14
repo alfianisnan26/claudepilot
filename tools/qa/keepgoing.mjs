@@ -229,7 +229,8 @@ for (const cfg of MATRIX) {
     check('Program field inside the dialog', pf.x >= pf.dx - 1 && pf.r <= pf.dr + 1, JSON.stringify(pf));
     if (touch) check('Program field text 16 px on a phone (no zoom)', pf.fs >= 16, String(pf.fs));
     await ev(`(() => { window.__kgBodies = []; const f = document.querySelector('[data-keep-going-program] input'); f.focus();
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(f, ' Event '); f.dispatchEvent(new Event('input', { bubbles: true })); f.blur(); })()`);
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(f, ' Event '); f.dispatchEvent(new Event('input', { bubbles: true }));
+      f.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); })()`); // leaving the field (React's onBlur); a headless page may not hold focus
     const back = await waitFor(`document.querySelector('[data-keep-going-program] input')?.value === 'event'`, 3000);
     const bodies = await ev(`window.__kgBodies`);
     check('Program goes out as PUT { program } and comes back', back && bodies?.length === 1 && bodies[0].program === 'event', JSON.stringify(bodies));
