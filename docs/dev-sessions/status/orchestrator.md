@@ -7,6 +7,35 @@ Owner-approved rules (evaluation 2026-10-14, coordinator 02:3x):
 3. The orchestrator keeps its own context under about 200k: at that size it writes this file and asks the supervisor for a fresh continuation.
 Models (coordinator 02:2x, evaluation 2026-10-14): ALWAYS passed explicitly; sonnet for verification, harness, sweep and scribe slices; opus for implementers and security or migration reviews; fable only for a diagnosis nobody cracked. WIP limit FIVE sub-agents at once (D-43, owner 2026-10-14; was three); still one scratch portal and one Chromium per sub-agent, 3 Jobs cluster-wide and 2 per chat; five agents burn quota about 65 percent faster, D-39 moves by pace. Heavy work through scripts/job-run.sh and gate-job.sh. The orchestrator hands off at about 200k context (status file, fresh continuation).
 
+## STATUS FOR THE CONTINUATION (written 07:1x UTC 2026-10-14 by session 619018ca on fadlilah; this section is the handoff; everything below it is the day's log)
+
+DONE today (all gated green per merge head, all on origin and pilot integration unless noted):
+- LIVE in portal 2026.10.14-4 (run 23, 07:0x): T-277 layers 1-4 + review notes; T-280; T-270 layer 5 (kit 1.0.1 NOT published); T-259 slice 2 + the pause switch; T-282; T-284; T-285; T-288; T-287 slice 1; T-136 slices 1-3 (harness); T-286 evidence (step 1 FAILED: blocked, owner decides).
+- LIVE since runs 20-22: T-102, T-110 slice 1, T-256, T-159, T-265, T-258 items 1-4, T-270 l1-4, T-259 s1, T-105/T-109, T-95 item 4, T-146 slice 1, T-100, T-255.
+- CLOSED with evidence today: T-141, T-143, T-159, T-42, T-99, T-107, T-98, T-24, T-32, T-97, T-102, T-256, T-265, T-95, T-100, T-255.
+- MERGED, pushed, NOT yet deployed (next deploy): T-146 slice 2 (005022a).
+- MERGED locally, gate RUNNING on a11ebf2 (= T-110 slice 2 reviewed + T-287 slice 2): FIRST STEP of the continuation: `tail -2 /tmp/gate-job-a11ebf2.out` (if the file is gone: `kubectl -n isnan-claudepilot get jobs | grep a11ebf2`, else `scripts/gate-job.sh a11ebf2`); when green `git push origin a11ebf2:integration && git push pilot a11ebf2:integration` (or the local HEAD of /home/node/work/claudepilot, which is a11ebf2 + status commits); then the status commits.
+
+IN FLIGHT: nothing (no sub-agent running; every branch is pushed). Worktrees under /home/node/work/claudepilot.worktrees are free to reuse.
+
+NEXT (rank order; the owner's standing orders: availability first, then the token economy; three portal deploys a day, urgent fixes at once; concurrency by the quota rule unless the owner says go):
+1. The next deploy (carries T-146 s2, T-110 s2, T-287 s2; and it is T-277 layer 4's real proof: the `chats` job must list the attached chats and their survival). Then verifier pass 4 (qa-verifier, sonnet, effort medium) with the ACTUAL block in the brief for each ticket it may close: T-277 (close if the chats job is clean and no integrity ending at two restarts), T-280 (one steer per chat per window in the log), T-284 (the Konfersi stale request cleared), T-282 (live sizes), T-285 (a process reads the drop-in: this chat after a restart), T-288 (harnesses on the live build), T-259 s2 + pause, T-287 s1-2 (lab_summary numbers vs slice_metrics.py), T-136 (a real recovery), T-146 s2, T-110 s2 (dry line only until protection is on), T-270 l5, T-105 (steers), T-109 (needs an admin sign-in: leave).
+2. T-286: owner's decision (recommended reject).
+3. Then: T-146 slice 3, T-110 slice 3 (resume after a failed rule deploy; the refusal notification), T-259 next (CI runners per program, chat-list program filter, program in Session info; the Bypass lease after the owner's decision), T-287 slice 3 (result tokens from the stream; stratum keys), T-283, T-158, T-149, T-148, T-210-T-212, T-275, T-274 (+ the shared Segmented control at 40 px: A1), T-272, T-268, tools/qa/home.mjs refresh; T-258 item 5 is the coordinator's helper (outside this repo).
+4. Below the cut line: the old NEXT list further down.
+
+NEEDS A HUMAN (D-10, D-34):
+- Settings → Agents: set MCP output to 5000 (T-285); remove BASH_MAX_OUTPUT_LENGTH and MAX_MCP_OUTPUT_TOKENS from the agent-limits pool (overridden, harmless).
+- Production protection: ON if the owner wants the T-110 rule (and run approvals) to be real; then set the rule's mode. Off since run 19.
+- T-286 decision; the Bypass-on-wake rule (T-256/T-259 lease); kit 1.0.1 publish (--apply).
+- Delete stray branches on origin: wip/qa3-d6144e7, wip/qa3-b208a51, wip/qa3-6164d0a, wip/qa3-1f49c0d, wip/t277-2-mutant, wip/orch-61e8fc2 (contains conflict markers: never merge it), and the wip/orch-* branches older than today.
+- T-111: assign to the orchestrator session if the coordinator wants comments there (FORBIDDEN today).
+- T-258 item 5: the coordinator's token helper (expiresIn 1h, replace true).
+
+LESSONS of this session (for the continuation's own conduct): never `pkill -f` a pattern that is in your own command line; after a conflict resolution check the markers are 0 before any commit; a chained `&&` after a script that may fail must not include a commit; wait loops must not pgrep their own pattern; tickets closed take no comment (ACTUAL goes in the closing comment); the Agent tool loads project roles at process start.
+
+STATUS WRITTEN 07:1x UTC.
+
 ## WIND-DOWN (06:5x UTC, coordinator: context 327k; the supervisor is not running, so this session writes the status and stops by itself; the coordinator starts the continuation from this file)
 - Run 23 LIVE 07:0x (portal 2026.10.14-4, main merged back): pod healthy, schema 851 (820-861, 792); the log shows layer 2 reload + resync for this chat, the T-285 policy override line, no integrity ending; one follower per live session here. Comments on T-277 and T-285. The verifier of the continuation does the rest (T-284 stale clear, T-282 sizes, T-288 harnesses, T-280 steers, T-259, T-287) with the ACTUAL data per ticket.
 - (was) DEPLOY run 23 rmv7r7dx2d7f2d6 TRIGGERED 06:5x on integration b9d1a20 (gate=true, images=portal) under the urgent exception for T-277 (the coordinator's call, as the owner's delegate). CI reports to this chat; if this session is gone, read it with ci_run_get. Post-deploy checks are on T-277 comment (06:5x): chats survived, the Konfersi stale request cleared, Settings → Agents values, the `chats` job says unavailable this first time.
