@@ -7,7 +7,7 @@ import { ATTENTION_TOOL_WAIT_MS, sessionRef, type AttentionItem } from '@portal/
 import { CHAT_SOCKET_PATH } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, present, sessionWho, type AttentionSource } from '../attention/registry.js';
+import { clip, present, sessionWho, verbFor, type AttentionSource } from '../attention/registry.js';
 
 interface Row {
   session_id: string;
@@ -23,7 +23,7 @@ interface Row {
 export function toolApprovalAttentionSource(db: () => DatabaseSync | null): AttentionSource {
   return {
     kind: 'tool_approval',
-    list(actor, now) {
+    list(actor, now, scope) {
       const d = db();
       if (!d) throw new Error('the database is not available');
       const before = new Date(now - ATTENTION_TOOL_WAIT_MS).toISOString();
@@ -39,7 +39,7 @@ export function toolApprovalAttentionSource(db: () => DatabaseSync | null): Atte
         )
         .all(before) as unknown as Row[];
       return rows
-        .filter((r) => can(actor, 'operate', sessionRef(r.session_id)).allow)
+        .filter((r) => can(actor, verbFor(scope, 'operate'), sessionRef(r.session_id)).allow)
         .map(
           (r): AttentionItem => ({
             kind: 'tool_approval',

@@ -16,7 +16,8 @@ const KIND = { name: { label: 'Name', icon: Tag }, avatar: { label: 'Avatar', ic
  * proposal is not live; approving it is one tap, and so is rejecting it. What an agent wrote is shown as plain
  * text and never acted on. `poolId` narrows it to one persona; `names` says whose each one is.
  */
-export function ProposalsDialog({ open, onClose, poolId, names }: { open: boolean; onClose: () => void; poolId?: string; names: Record<string, string> }) {
+/** `focus`: one proposal to ring and scroll to (a link from Needs you). */
+export function ProposalsDialog({ open, onClose, poolId, names, focus }: { open: boolean; onClose: () => void; poolId?: string; names: Record<string, string>; focus?: string | null }) {
   const toast = useToast();
   const [items, setItems] = useState<PersonaProposal[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -31,6 +32,10 @@ export function ProposalsDialog({ open, onClose, poolId, names }: { open: boolea
     if (open) void load();
   }, [open, load]);
   useLive('pools', () => void load(), open);
+  const focused = !!focus && !!items?.some((p) => p.id === focus);
+  useEffect(() => {
+    if (focused) document.getElementById(`proposal-${focus}`)?.scrollIntoView({ block: 'nearest' });
+  }, [focused, focus]);
 
   const decide = async (p: PersonaProposal, verb: 'approve' | 'reject') => {
     setBusy(p.id);
@@ -56,7 +61,12 @@ export function ProposalsDialog({ open, onClose, poolId, names }: { open: boolea
           {items.map((p) => {
             const { label, icon: Icon } = KIND[p.kind];
             return (
-              <li key={p.id} className="flex flex-col gap-2 rounded-2xl border border-line px-3.5 py-3">
+              <li
+                key={p.id}
+                id={`proposal-${p.id}`}
+                aria-current={p.id === focus ? 'true' : undefined}
+                className={`flex flex-col gap-2 rounded-2xl border px-3.5 py-3 ${p.id === focus ? 'border-accent ring-2 ring-accent' : 'border-line'}`}
+              >
                 <div className="flex items-center gap-2">
                   <Icon className="size-4 shrink-0 text-muted" />
                   <p className="min-w-0 flex-1 truncate text-sm font-semibold">

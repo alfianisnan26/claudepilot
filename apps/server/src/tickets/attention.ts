@@ -5,7 +5,7 @@
 import { objectRef, ticketIdOf, type AttentionItem, type TicketPriority } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, isPerson, present, type AttentionSource } from '../attention/registry.js';
+import { clip, present, readsPersonOnly, verbFor, type AttentionSource } from '../attention/registry.js';
 
 interface Row {
   number: number;
@@ -20,10 +20,10 @@ interface Row {
 export function ticketAttentionSource(db: () => DatabaseSync | null): AttentionSource {
   return {
     kind: 'ticket_approval',
-    list(actor) {
+    list(actor, _now, scope) {
       const d = db();
       if (!d) throw new Error('the database is not available');
-      if (!isPerson(actor)) return [];
+      if (!readsPersonOnly(actor, scope)) return [];
       const rows = d
         .prepare(
           `SELECT number, priority, summary, reporter_kind, reporter_label, workspace_id, created_at FROM tickets
@@ -33,7 +33,7 @@ export function ticketAttentionSource(db: () => DatabaseSync | null): AttentionS
         .all() as unknown as Row[];
       return rows
         .map((r) => ({ r, id: ticketIdOf(r.number) }))
-        .filter(({ id }) => can(actor, 'operate', objectRef('ticket', id)).allow)
+        .filter(({ id }) => can(actor, verbFor(scope, 'operate'), objectRef('ticket', id)).allow)
         .map(
           ({ r, id }): AttentionItem => ({
             kind: 'ticket_approval',

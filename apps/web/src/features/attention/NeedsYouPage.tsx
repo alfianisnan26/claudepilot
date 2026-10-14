@@ -7,7 +7,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { InfoTip } from '@/components/InfoTip';
 import { useEngaged, useSteadyRows } from '@/features/glance/widgets/shared/steady';
 import { useNow } from '@/features/glance/widgets/shared/useNow';
-import { Deck } from './Deck';
+import { SwipeDeck } from './SwipeDeck';
 import { isLater, untilText } from './deck';
 import { KIND_ICON, WHY_ABOUT, WHY_TONE } from './look';
 import { groupByWhy, kindChoices, waited } from './model';
@@ -61,7 +61,7 @@ export function NeedsYouPage() {
       </div>
       {!list && failed && <LoadError onRetry={reload} message="Could not read what needs you." />}
       {!list && !failed && <RowsSkeleton rows={3} lines={2} card label="Loading what needs you" />}
-      {list && view === 'deck' && <Deck items={list.items} now={now} openKey={params.get('item')} />}
+      {list && view === 'deck' && <SwipeDeck items={list.items} now={now} openKey={params.get('item')} />}
       {list && view === 'list' && (
         <>
           {choices.length > 2 && (
