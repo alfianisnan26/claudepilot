@@ -1,3 +1,31 @@
+# HAND-OVER FROM CHAT 75f044fb (continued 5802dfa4), 2026-10-14 ~22:20 UTC. READ THIS FIRST. Details of tonight follow below; older log under "OLDER LOG".
+
+## State
+- LIVE: portal 2026.10.14-10 (run 30 rmv8nked07c2fcf, b71f94f; release commit 28d553c on integration). Read the run's "chats" job once (it was still running at 22:10).
+- LOCAL integration is AHEAD of origin: batch 3 = b3c160c (merge dev/t293-5: factory --start + T-338 fixes; --start off, unwired) + 44ab7d0 (status, pack) + this hand-over commit. Pushed as wip/batch-3 (NOT integration). Gate-job on 44ab7d0 running in the background of the old chat: if no verdict reached you, re-run `scripts/gate-job.sh <head of wip/batch-3>` in the background; when green push integration and pilot; deploy with the next batch.
+- Workers can't be read by a new chat: every worker was told to post its final report as a comment on its ticket (all tickets claimed by 75f044fb; adopt them with ticket_adopt from 75f044fb-168c-458a-a646-e5742109b072 once this chat ends).
+
+## In flight (workers of 75f044fb; their reports land on the tickets)
+- T-321 + T-312: verifier 0f4f96a6 (T-312 chips and 2026-10-13 fixture NOT built: close only per criteria, follow-up for the rest).
+- T-342 (factory: a stop that acts mid-turn, no unbounded re-dispatch, minors): implementer b41b0cca, branch dev/t293-6 from dev/t293-5. Then a BLIND re-review (opus) must say SAFE TO RUN UNATTENDED.
+- T-343 (live cost estimate mid-turn): implementer 8d08616a, dev/t-343-1 (may touch UI: send a ux-checker).
+- T-336 (session_start takes a parent): implementer 692c90b5, dev/t-336-1.
+- T-333 (job-run --against/--keep-tests proof, DONE d65eb5f, in review): verifier fdd39fed. After PASS: merge dev/t-333-1 and add to .claude/agents/implementer.md: for a fix use `scripts/job-run.sh --ref <branch> --against <full hash of fix~1> --keep-tests <test files> -- '<cmd>'` and paste the PROOF line.
+
+## Ticket flow (coordinator rule, 22:15)
+Claim before dispatch (ticket_claim_next WITH id works), in_review at merge, close on the verifier verdict, a follow-up ticket for each gap. In review now: T-321, T-312, T-317 (live Keep going run not done), T-334 (needs a verifier), T-338 (rest in T-342), T-333. Blocked on the owner: T-315, T-319, T-339 (factory admin path; recommendation C = after T-336). T-306 in progress (item 3 lab A/B, item 4 owner approval; gaps T-341, T-340).
+
+## Next (ranked)
+1. Gate batch 3, push, deploy with the next batch. 2. Reports of the five workers above (read the ticket comments). 3. Verifier for T-334. 4. Backlog: T-330/T-331 cpbview flakes, T-344, T-345, T-341, T-332, T-335, T-313, T-314, T-306 item 3, T-149 leftovers. Konfersi and Event stay paused (D-45).
+
+## Lessons (tonight)
+- A dontAsk worker is refused `git -C`, `cd &&`, pipes, /tmp, quiet.sh, sed -i, heredocs, and edits under .claude/agents: brief with one plain job-run call and the Read/Edit tools; the lead applies role-file text.
+- Workers of an ended chat cannot be read by its successor: have workers comment their report on a ticket the lead holds.
+- The portal rate-limits MCP calls (about 12 ticket calls in a burst): spread a ticket pass.
+- A worktree spawned before a local rebase carries the pre-rebase commit; harmless when identical.
+
+---
+
 # ORCHESTRATOR CHAT 75f044fb (continues 5802dfa4), 2026-10-14 ~21:40 UTC
 
 - Run 29 PASSED: main 26c4630 "deploy: portal 2026.10.14-9"; Argo CD Synced/Healthy on 26c4630; the portal pod runs image portal:2026.10.14-9 (scripts/k3s-status.sh). integration d89d370 has the release merge. (ci_run_get from this chat says NOT_FOUND: an agent sees only the runs of its own branch or ticket; the evidence is git and the cluster.)
