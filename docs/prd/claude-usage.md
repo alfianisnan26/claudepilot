@@ -935,12 +935,14 @@ the shared `Segmented` at 40 px high (as on the Spikes tab).
 An experiment whose treatment is the brief itself (E2, the context compiler: the pack line, the plan step's file manifest and the
 preloaded files, against today's brief) needs the arm before the brief is written; a slice gets its arm only when its Agent call starts.
 - **`lab_arm_draw`** (Portal MCP, agent reach `session`, audited `lab.arm.draw`, 120 calls per hour per token; input the ticket
-  (required), role, model, effort as the slice will be dispatched): per running randomized experiment the **drawn arm** of that ticket
+  (required; a ticket that does not exist in the portal is refused, nothing recorded), role, model, effort as the slice will be
+  dispatched): per running **draws-only** randomized experiment (no other: a peek must not show a block arm) the **drawn arm** of that ticket
   (`drawnArm`: a hash of the experiment's secret seed and the ticket number; `T-12`, `T-012` and `T-0012` are one ticket), held as an
   assignment under `draw:<key>` in the caller's own session (`lab_assignments.draw` names the draw, migration 855), with what it was drawn
   for (`lab_draws`: the ticket in one spelling, role, model, effort, the ESTIMATE size then, status open, bound, refused or expired),
-  answered as the key (`d-` and 12 hex) and the arm per experiment. No experiment running: no arm, and the brief is the ordinary one. An
-  admin token has no session: refused. An experiment without a secret seed gets no draw (migration 855 gave every older one a seed).
+  answered as the key (`d-` and 12 hex) and the arm per experiment. No draws-only experiment running: no key, no arm, nothing recorded,
+  and the brief is the ordinary one. An admin token has no session: refused. An experiment without a secret seed gets no draw (migration
+  855 gave every older one a seed).
 - **Binding**: read only from a top-level Agent call (not one made inside a sub-agent) and only on the FIRST line of its prompt
   (`Lab-Draw: <key>`). The draw binds when the call is in the session that drew it, the draw is not bound or expired, and the call's
   ticket (any spelling), role, requested model and effort, and the ticket's ESTIMATE size now, are the ones it was drawn for; then its rows
@@ -962,13 +964,17 @@ preloaded files, against today's brief) needs the arm before the brief is writte
   given stay). Drawn arms are not block places: the blocks (§28.12) are the slices that got their arm at the start, so a draw, used or
   not, moves no other slice's arm. `lab_summary` full shows per experiment `draws_only` and `draws`: per session, every draw (`draws`),
   `bound`, `unbound` (abandoned: open, refused or expired), `redraw` (a draw for a ticket the session drew for before, whatever the role;
-  a later slice of the same ticket counts too) and `opted_out` (slices kept out, `no draw` or `draw not bound`, whose ticket has an
-  unbound draw in that session: a peek, then the slice dispatched without its draw). A draw is never deleted.
+  a later slice of the same ticket counts too) and `opted_out`: slices of the session kept out (`no draw` or `draw not bound`) whose
+  ticket has any draw, from any session, bound or not (a peek in one session and the work in another, a throwaway bound first and the
+  real work without a draw, a follow-up slice without one), or that name no ticket while that session has drawn; per experiment also the
+  total `opted_out`. The plan step's explorer slice of a drawn ticket counts too (it carries no draw). A draw is never deleted.
 - **Retention**: an unbound draw older than 14 days expires (`prune().draws`): it can no longer bind, its row and held arms stay, so it is
   still counted. `lab_draws` therefore only grows, one short row per draw, at most 120 per hour per token (the tool's rate limit).
 - **Known limits.** The unit of the drawn arm is the ticket: a ticket's slices share one arm, so they are not independent (an interval
-  over slices is narrower than it should be when one ticket has many slices), and the arms are not balanced by blocks (simple
-  randomization over tickets: the n per arm can differ). The orchestrator knows a ticket's arm once drawn and could delay that ticket or
+  over slices is narrower than it should be when one ticket has many slices), and a draws-only experiment's arms are simple
+  randomization per ticket, not blocked (the n per arm can differ). Migration 855 backfills `lab_assignments.draw` only for draws still
+  held under `draw:<key>` at 854; a draw bound under 854 is counted as a block place (none were released). A bound throwaway call of a
+  different kind (another role, matching the draw's role only by name) is still a slice of that arm. The orchestrator knows a ticket's arm once drawn and could delay that ticket or
   drop it; that shows as an abandoned draw (and, if the slice runs without the draw, as `opted_out`). A throwaway call that matches a draw
   binds it and is a slice of that arm with its own cost and outcome (intention to treat), visible as an extra slice on the ticket.
 - The brief heads per arm come from `scripts/plan-step.mjs` (`head --arm control|treatment --draw <key>`; the explorer's manifest is

@@ -140,7 +140,7 @@ test('negative twins: each rule refuses a manifest that breaks it', () => {
     assert.match(errs(w(tx, `run: ${bad}`)), /is not an allowed command/, bad);
   }
   // Deny-list twins: more credential names, in any case.
-  for (const f of ['.env-prod', 'prod.env', '.envrc.local', '.yarnrc', '.yarnrc.yml', '.aws/credentials', '.ssh/config', '.ssh/id_x', '.pypirc', '.docker/config.json', '.dev.vars', 'infra/prod.tfvars', 'x.auto.tfvars.json', 'credentials.json', 'config/Credentials.JSON', '.ENV', '.Env.local', '.NPMRC', 'KEY.PEM', '.GIT/config']) {
+  for (const f of ['kubeconfig', 'deploy/kubeconfig.yaml', 'service-account.json', 'gcp/service-account-prod.json', 'k8s/secrets.yaml', 'Secrets.yml', 'secret.yaml', '.env-prod', 'prod.env', '.envrc.local', '.yarnrc', '.yarnrc.yml', '.aws/credentials', '.ssh/config', '.ssh/id_x', '.pypirc', '.docker/config.json', '.dev.vars', 'infra/prod.tfvars', 'x.auto.tfvars.json', 'credentials.json', 'config/Credentials.JSON', '.ENV', '.Env.local', '.NPMRC', 'KEY.PEM', '.GIT/config']) {
     assert.match(errs(w(`file: ${f} -- x`)), /credential or git file/, f);
   }
   for (const f of ['.env-prod', 'prod.env', '.envrc.local', '.yarnrc.yml', '.aws/credentials', '.ssh/config', '.pypirc', '.docker/config.json']) {

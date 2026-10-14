@@ -61,6 +61,7 @@ const DENY = [
   /(^|\/)\.env[^/]*$/i, /\.env$/i, /(^|\/)\.dev\.vars$/i, /\.tfvars(\.json)?$/i, /(^|\/)credentials\.json$/i, /(^|\/)\.npmrc$/i, /(^|\/)\.yarnrc[^/]*$/i,
   /(^|\/)\.netrc$/i, /(^|\/)\.pypirc$/i, /(^|\/)\.git(\/|$)/i, /(^|\/)node_modules\//i, /\.(pem|key|p12|pfx|keystore)$/i, /(^|\/)id_(rsa|ed25519|ecdsa)/i,
   /git-credentials/i, /(^|\/)\.kube\//i, /(^|\/)\.config\/gh\//i, /(^|\/)\.aws\//i, /(^|\/)\.ssh\//i, /(^|\/)\.docker\/config\.json$/i,
+  /(^|\/)kubeconfig[^/]*$/i, /(^|\/)service-account[^/]*\.json$/i, /(^|\/)secrets?\.ya?ml$/i,
 ];
 
 /** Parses the explorer's answer. Never throws: every problem is an error line with its line number. */

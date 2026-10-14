@@ -51,6 +51,7 @@ const experimentRow = (v: LabExperimentView, ctx: PortalToolContext, lab: Lab) =
   draws_only: v.experiment.drawsOnly,
   excluded: v.excluded,
   draws: lab.drawStats(v.experiment.id),
+  opted_out: lab.drawStats(v.experiment.id).reduce((n, d) => n + d.opted_out, 0),
   arms: v.arms.map((a) => ({ arm: a.arm, n: a.n, accepted: a.accepted, cost_per_accepted: r2(a.costPerAccepted), ci90: ci(a.costPerAcceptedInterval) })),
 });
 
@@ -96,7 +97,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
     name: 'lab_arm_draw',
     title: 'Draw a slice\'s arm',
     description:
-      'Draws the arm of a sub-agent slice before you write its brief, in every running randomized experiment (the arm is fixed per ticket and role, so drawing again gives the same arm; the stratum from the ticket\'s ESTIMATE size and the role, model and effort you will dispatch with). Put `Lab-Draw: <draw>` in the brief\'s first line: when that Agent call starts in this session, with the same ticket, role, model and effort (and the ticket\'s ESTIMATE size unchanged), the slice keeps these arms. One draw per slice; every draw is counted, used or not. Your own session only.',
+      'Draws the arm of a sub-agent slice before you write its brief, in every running draws-only experiment (the arm is fixed per ticket, so drawing again gives the same arm; the ticket must exist; the stratum from the ticket\'s ESTIMATE size and the role, model and effort you will dispatch with). Put `Lab-Draw: <draw>` in the brief\'s first line: when that Agent call starts in this session, with the same ticket, role, model and effort (and the ticket\'s ESTIMATE size unchanged), the slice keeps these arms. One draw per slice; every draw is counted, used or not, and a slice of a drawn ticket dispatched without its draw is out and counted. No draws-only experiment running: no draw, nothing recorded. Your own session only.',
     scope: 'agent',
     hints: { idempotent: false },
     rate: { perHour: 120 },
@@ -108,11 +109,17 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
     }),
     handler(ctx, args) {
       if (!ctx.sessionId) throw new PortalToolError('FORBIDDEN', 'A draw belongs to a chat session: call it with the token of the session that dispatches the slice.');
-      const d = lab.drawArms({ sessionId: ctx.sessionId, ticket: args.ticket, role: args.role ?? null, model: args.model ?? null, effort: args.effort ?? null });
+      let d: ReturnType<Lab['drawArms']>;
+      try {
+        d = lab.drawArms({ sessionId: ctx.sessionId, ticket: args.ticket, role: args.role ?? null, model: args.model ?? null, effort: args.effort ?? null });
+      } catch (e) {
+        if (e instanceof Error && e.message === 'no such ticket') throw new PortalToolError('NOT_FOUND', 'No such ticket: a draw is for a ticket that exists.');
+        throw e;
+      }
       const arms = d.arms.map((a) => ({ experiment: a.experiment, name: ctx.untrusted(a.name, 'lab', 80), arm: a.arm }));
-      ctx.affected(`lab_draw:${d.draw}`);
+      if (d.draw) ctx.affected(`lab_draw:${d.draw}`);
       return {
-        summary: arms.length ? `Drew ${arms.map((a) => a.arm).join(', ')} for this slice. First line of the brief: Lab-Draw: ${d.draw}` : 'No randomized experiment is running: no arm, the ordinary brief.',
+        summary: d.draw ? `Drew ${arms.map((a) => a.arm).join(', ')} for this slice. First line of the brief: Lab-Draw: ${d.draw}` : 'No draws-only experiment is running: no draw, nothing recorded, the ordinary brief.',
         draw: d.draw,
         arms,
       };

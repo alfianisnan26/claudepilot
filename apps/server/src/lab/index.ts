@@ -72,16 +72,22 @@ export class Lab {
 
   /**
    * Draws the arms of a slice before its brief is written (T-292 slice 3, §28.13), in the caller's session: the size from the ticket's
-   * ESTIMATE as at a slice start. Returns the draw key the brief carries (`Lab-Draw: <key>`) and the arm per running experiment.
+   * ESTIMATE as at a slice start. Returns the draw key the brief carries (`Lab-Draw: <key>`) and the arm per running draws-only experiment;
+   * none running: no key, no arm, nothing recorded. A ticket that does not exist is refused (`no such ticket`).
    */
-  drawArms(info: { sessionId: string; ticket: string; role: string | null; model: string | null; effort: string | null }): { draw: string; arms: { experiment: string; name: string; arm: string }[] } {
+  drawArms(info: { sessionId: string; ticket: string; role: string | null; model: string | null; effort: string | null }): { draw: string | null; arms: { experiment: string; name: string; arm: string }[] } {
     const db = this.#db();
     if (!db) throw new Error('the store is not writable');
     const ticket = normTicket(info.ticket)!;
-    const size = (this.opts.tickets ?? dbTicketReader(db))(ticket)?.estimateSize ?? null;
+    const facts = (this.opts.tickets ?? dbTicketReader(db))(ticket);
+    // The portal's tickets table (as the ticket service reads it); with an injected reader (tests) a ticket it knows.
+    const exists = this.opts.tickets ? facts !== null : ticketExists(db, ticket);
+    if (!exists) throw new Error('no such ticket');
+    const size = facts?.estimateSize ?? null;
     const draw = newDrawKey();
     const got = drawArms(db, { sessionId: info.sessionId, draw, for: { ticket, role: info.role, model: info.model, effort: info.effort }, size, atMs: this.#now() });
     const names = new Map(listExperiments(db).map((e) => [e.id, e.name]));
+    if (!got.size) return { draw: null, arms: [] };
     return { draw, arms: [...got].map(([id, arm]) => ({ experiment: id, name: names.get(id) ?? id, arm })) };
   }
 
@@ -208,5 +214,16 @@ export class Lab {
   close(): void {
     for (const t of this.#timers) clearTimeout(t);
     this.#timers = [];
+  }
+}
+
+/** Whether ticket `T-<n>` exists in the portal's tickets table; false without the table (a bare store). */
+function ticketExists(db: import('node:sqlite').DatabaseSync, ticket: string): boolean {
+  const m = /^T-(\d{1,9})$/.exec(ticket);
+  if (!m) return false;
+  try {
+    return db.prepare('SELECT 1 FROM tickets WHERE number = ?').get(Number(m[1])) !== undefined;
+  } catch {
+    return false;
   }
 }

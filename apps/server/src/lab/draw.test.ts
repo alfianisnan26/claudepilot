@@ -30,7 +30,8 @@ async function harness(nowMs = T0 + 60_000, drawsOnly: boolean = plan.E2.draws_o
   const dataDir = mkdtempSync(join(tmpdir(), 'labdraw-'));
   const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
   let now = nowMs;
-  const lab = new Lab({ store, now: () => now, tickets: (t) => (SIZES[t] ? { changes: [], estimateSize: SIZES[t]! } : null) });
+  // T-1..T-3 have sizes; other tickets under T-90000 exist with size M; T-90000 and up do not exist (P5).
+  const lab = new Lab({ store, now: () => now, tickets: (t) => (SIZES[t] ? { changes: [], estimateSize: SIZES[t]! } : Number(t.slice(2)) < 90_000 ? { changes: [], estimateSize: 'M' } : null) });
   const e2 = lab.createExperiment({ name: plan.E2.name, hypothesis: plan.E2.hypothesis, design: plan.E2.design, arms: [...plan.E2.arms], strata: [...plan.E2.strata], primaryMetric: plan.E2.primary_metric, minN: plan.E2.min_n, thresholds: { ...plan.E2.thresholds }, drawsOnly, startMs: T0 });
   const seedOf = () => (store.db!.prepare('SELECT seed FROM lab_experiments WHERE id = ?').get(e2.id) as { seed: string }).seed;
   return { store, lab, db: store.db!, e2, sizes: SIZES, seedOf, setNow: (ms: number) => (now = ms), done: () => (lab.close(), store.close(), rmSync(dataDir, { recursive: true, force: true })) };
@@ -51,13 +52,19 @@ const row = (h: H, session: string, slice: string) => {
   return r ? { arm: r.arm, stratum: r.stratum, excluded: r.excluded } : null;
 };
 const statusOf = (h: H, draw: string) => (h.db.prepare('SELECT status FROM lab_draws WHERE draw = ?').get(draw) as { status: string } | undefined)?.status;
+/** The Lab's draw, asserting it made one (a draws-only experiment is running). */
+const drawOk = (lab: Lab, info: Parameters<Lab['drawArms']>[0]) => {
+  const d = lab.drawArms(info);
+  assert.ok(d.draw, 'a draw was made');
+  return d as { draw: string; arms: typeof d.arms };
+};
 const forT1 = { sessionId: 'orch', ticket: 'T-1', role: 'implementer', model: 'opus', effort: null };
 const stat = (draws: number, bound: number, redraw: number, session = 'orch', optedOut = 0) => ({ session, draws, bound, unbound: draws - bound, redraw, opted_out: optedOut });
 
 test('a draw made before the brief is the arm the slice keeps; the stratum is the ticket’s ESTIMATE size', async () => {
   const h = await harness();
   try {
-    const d = h.lab.drawArms(forT1);
+    const d = drawOk(h.lab, forT1);
     assert.match(d.draw, plan.DRAW);
     assert.equal(d.arms.length, 1);
     const drawn = d.arms[0]!;
@@ -88,14 +95,14 @@ test('a draw made before the brief is the arm the slice keeps; the stratum is th
 test('probe A: a draw made for one role cannot be taken by a call of another role; the draw stays unbound and the call is excluded', async () => {
   const h = await harness();
   try {
-    const d = h.lab.drawArms({ ...forT1, role: 'perf-tester' });
+    const d = drawOk(h.lab, { ...forT1, role: 'perf-tester' });
     h.lab.line('orch', agentCall('toolu_a', `Ticket T-1, size M. Lab-Draw: ${d.draw}`, { role: 'implementer' }));
     assert.equal(statusOf(h, d.draw), 'refused');
     assert.ok(row(h, 'orch', DRAW_SLICE + d.draw)?.arm, 'still held under the draw');
     assert.deepEqual(row(h, 'orch', 'toolu_a'), { arm: null, stratum: '', excluded: 'draw not bound' });
     assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(1, 0, 0, 'orch', 1)], 'the excluded call went without its ticket’s draw');
     // Ticket, effort and the ESTIMATE size are checked too.
-    const t = h.lab.drawArms(forT1);
+    const t = drawOk(h.lab, forT1);
     const f1 = { ticket: 'T-1', role: 'implementer', model: 'opus', effort: null };
     assert.equal(bindDraw(h.db, { sessionId: 'orch', draw: t.draw, sliceId: 'x', for: { ...f1, ticket: 'T-2' }, size: 'M', atMs: T0 }), 'refused');
     assert.equal(bindDraw(h.db, { sessionId: 'orch', draw: t.draw, sliceId: 'x', for: { ...f1, effort: 'high' }, size: 'M', atMs: T0 }), 'refused');
@@ -110,7 +117,7 @@ test('probe A: a draw made for one role cannot be taken by a call of another rol
 test('the honest mismatch: drawn for opus, dispatched with the model left out; refused, counted, the slice out of the experiment', async () => {
   const h = await harness();
   try {
-    const d = h.lab.drawArms(forT1);
+    const d = drawOk(h.lab, forT1);
     h.lab.line('orch', agentCall('toolu_h', `Ticket T-1, size M. Lab-Draw: ${d.draw}`, { model: null }));
     assert.equal(statusOf(h, d.draw), 'refused');
     assert.equal(row(h, 'orch', 'toolu_h')?.excluded, 'draw not bound');
@@ -125,8 +132,8 @@ test('the honest mismatch: drawn for opus, dispatched with the model left out; r
 test('probe B: a redraw bound to a throwaway call of another role does not hide it: unbound, counted as a redraw, the throwaway excluded', async () => {
   const h = await harness();
   try {
-    const first = h.lab.drawArms(forT1);
-    const second = h.lab.drawArms(forT1);
+    const first = drawOk(h.lab, forT1);
+    const second = drawOk(h.lab, forT1);
     h.lab.line('orch', agentCall('toolu_real', `Ticket T-1, size M. Lab-Draw: ${second.draw}`));
     h.lab.line('orch', agentCall('toolu_throwaway', `Ticket T-1, size M. Lab-Draw: ${first.draw}`, { role: 'explorer', model: 'haiku' }));
     assert.equal(statusOf(h, first.draw), 'refused');
@@ -134,7 +141,7 @@ test('probe B: a redraw bound to a throwaway call of another role does not hide 
     assert.equal(row(h, 'orch', 'toolu_throwaway')?.excluded, 'draw not bound');
     assert.equal(row(h, 'orch', 'toolu_real')?.arm, second.arms[0]!.arm, 'the bound slice keeps its drawn arm');
     // Two draws for different tickets (two slices dispatched together) are no redraw.
-    h.lab.drawArms({ ...forT1, ticket: 'T-2' });
+    drawOk(h.lab, { ...forT1, ticket: 'T-2' });
     assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(3, 1, 1, 'orch', 1)]);
   } finally {
     h.done();
@@ -144,16 +151,16 @@ test('probe B: a redraw bound to a throwaway call of another role does not hide 
 test('second review, defect 1: a throwaway call that matches the draw in every attribute neither changes the arm nor hides the redraw', async () => {
   const h = await harness();
   try {
-    const first = h.lab.drawArms(forT1);
+    const first = drawOk(h.lab, forT1);
     // The throwaway: the same ticket, role, model and effort, so it binds the first draw.
     h.lab.line('orch', agentCall('toolu_throwaway', `Ticket T-1, size M. Lab-Draw: ${first.draw}`));
     assert.equal(statusOf(h, first.draw), 'bound');
-    const second = h.lab.drawArms(forT1);
+    const second = drawOk(h.lab, forT1);
     assert.equal(second.arms[0]!.arm, first.arms[0]!.arm, 'drawing again gives the same arm: nothing to gain');
     h.lab.line('orch', agentCall('toolu_real', `Ticket T-1, size M. Lab-Draw: ${second.draw}`));
     assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(2, 2, 1)], 'both draws counted, the second as a redraw, though both are bound');
-    // Another model or effort for the same ticket and role is the same arm too (no shopping by changing the dispatch).
-    assert.equal(h.lab.drawArms({ ...forT1, model: 'sonnet', effort: 'high' }).arms[0]!.arm, first.arms[0]!.arm);
+    // Another model or effort for the same ticket is the same arm too (no shopping by changing the dispatch).
+    assert.equal(drawOk(h.lab, { ...forT1, model: 'sonnet', effort: 'high' }).arms[0]!.arm, first.arms[0]!.arm);
   } finally {
     h.done();
   }
@@ -163,8 +170,8 @@ test('second review, defect 1: a peek draw for another ticket of the same size s
   const run = async (peeks: number) => {
     const h = await harness();
     try {
-      for (let i = 0; i < peeks; i++) h.lab.drawArms({ ...forT1, ticket: `T-${200 + i}` });
-      return { arm: h.lab.drawArms({ ...forT1, ticket: 'T-2' }).arms[0]!.arm, want: drawnArm(h.seedOf(), 'T-2', plan.ARMS) };
+      for (let i = 0; i < peeks; i++) drawOk(h.lab, { ...forT1, ticket: `T-${200 + i}` });
+      return { arm: drawOk(h.lab, { ...forT1, ticket: 'T-2' }).arms[0]!.arm, want: drawnArm(h.seedOf(), 'T-2', plan.ARMS) };
     } finally {
       h.done();
     }
@@ -179,7 +186,7 @@ test('second review, defect 1: a peek draw for another ticket of the same size s
 test('a draw binds only in its session, from a top-level call, on the prompt’s first line', async () => {
   const h = await harness();
   try {
-    const d = h.lab.drawArms({ ...forT1, ticket: 'T-3' });
+    const d = drawOk(h.lab, { ...forT1, ticket: 'T-3' });
     h.lab.line('someone-else', agentCall('toolu_other', `Ticket T-3, size L. Lab-Draw: ${d.draw}`));
     assert.equal(row(h, 'someone-else', 'toolu_other')?.excluded, 'draw not bound', 'another session’s call carrying the key is kept out');
     assert.equal(statusOf(h, d.draw), 'open', 'the draw is untouched');
@@ -193,26 +200,35 @@ test('a draw binds only in its session, from a top-level call, on the prompt’s
     assert.equal(row(h, 'orch', 'toolu_line2')?.excluded, 'no draw');
     // No running experiment: a draw has no arm and the brief is the ordinary one.
     h.lab.stop(h.e2.id);
-    assert.deepEqual(h.lab.drawArms({ ...forT1, ticket: 'T-2' }).arms, []);
+    assert.deepEqual(h.lab.drawArms({ ...forT1, ticket: 'T-2' }), { draw: null, arms: [] }, 'no draws-only experiment: no draw');
+    assert.equal(h.db.prepare("SELECT COUNT(*) AS n FROM lab_draws WHERE ticket = 'T-2'").get()!.n, 0, 'nothing recorded');
   } finally {
     h.done();
   }
 });
 
-test('draws are not block places: ordinary slices keep balanced blocks around them; the drawn arm comes from the secret seed, not the id', async () => {
+test('draws are not block places, and only draws-only experiments are drawn: ordinary slices keep their blocks; P4, a peek shows no block arm', async () => {
   const run = async (withDraws: boolean) => {
-    const h = await harness(T0 + 60_000, false);
+    const h = await harness();
     try {
       const seed = h.seedOf();
       assert.match(seed, /^[0-9a-f]{32}$/);
       assert.ok(!JSON.stringify(h.lab.experiments()).includes(seed), 'the seed is never shown');
       h.db.prepare('UPDATE lab_experiments SET id = ?, seed = ? WHERE id = ?').run('exp-e2-fixed', 'seed-fixed', h.e2.id);
+      const plainExp = h.lab.createExperiment({ name: 'plain', design: 'randomized', arms: ['control', 'treatment'], strata: ['size', 'role', 'model'], primaryMetric: 'm', startMs: T0 });
+      h.db.prepare('UPDATE lab_experiments SET id = ?, seed = ? WHERE id = ?').run('exp-plain', 'seed-plain', plainExp.id);
       const plain: string[] = [];
       const drawn: string[] = [];
       const attrs = { size: 'M', role: 'implementer', model: 'opus', effort: null };
       for (let i = 0; i < 6; i++) {
-        if (withDraws) drawn.push(drawArms(h.db, { sessionId: 'orch', draw: `d-00000000000${i}`, for: { ticket: `T-${100 + i}`, role: 'implementer', model: 'opus', effort: null }, size: 'M', atMs: T0 + i }).get('exp-e2-fixed')!);
-        plain.push(assignSlice(h.db, { sessionId: 'orch', sliceId: `plain-${i}`, attrs, atMs: T0 + i }).get('exp-e2-fixed')!);
+        if (withDraws) {
+          const got = drawArms(h.db, { sessionId: 'orch', draw: `d-00000000000${i}`, for: { ticket: `T-${100 + i}`, role: 'implementer', model: 'opus', effort: null }, size: 'M', atMs: T0 + i });
+          assert.deepEqual([...got.keys()], ['exp-e2-fixed'], 'a draw holds an arm only in the draws-only experiment (P4)');
+          drawn.push(got.get('exp-e2-fixed')!);
+        }
+        const got = assignSlice(h.db, { sessionId: 'orch', sliceId: `plain-${i}`, attrs, atMs: T0 + i });
+        assert.equal(got.get('exp-e2-fixed'), undefined, 'no block arm in a draws-only experiment');
+        plain.push(got.get('exp-plain')!);
       }
       return { plain, drawn };
     } finally {
@@ -223,7 +239,7 @@ test('draws are not block places: ordinary slices keep balanced blocks around th
   assert.deepEqual(a, await run(true), 'deterministic for a given seed');
   assert.deepEqual(a.plain, (await run(false)).plain, 'the draws moved no ordinary slice');
   const stratum = 'size=M|role=implementer|model=opus';
-  assert.deepEqual(a.plain, a.plain.map((_, k) => blockOrder('seed-fixed', stratum, Math.floor(k / 2), plan.ARMS)[k % 2]), 'the seed, not the id, orders the block');
+  assert.deepEqual(a.plain, a.plain.map((_, k) => blockOrder('seed-plain', stratum, Math.floor(k / 2), plan.ARMS)[k % 2]), 'the seed, not the id, orders the block');
   for (let b = 0; b < 3; b++) assert.deepEqual([a.plain[2 * b], a.plain[2 * b + 1]].sort(), ['control', 'treatment'], `block ${b}`);
   assert.deepEqual(a.drawn, a.drawn.map((_, i) => drawnArm('seed-fixed', `T-${100 + i}`, plan.ARMS)));
 });
@@ -240,7 +256,7 @@ test('a draw is for a ticket', async () => {
 test('the ESTIMATE size changed between the draw and the call: refused, the slice out', async () => {
   const h = await harness();
   try {
-    const d = h.lab.drawArms(forT1);
+    const d = drawOk(h.lab, forT1);
     h.sizes['T-1'] = 'L';
     h.lab.line('orch', agentCall('toolu_resized', `Ticket T-1, size L. Lab-Draw: ${d.draw}`));
     assert.equal(statusOf(h, d.draw), 'refused');
@@ -253,11 +269,11 @@ test('the ESTIMATE size changed between the draw and the call: refused, the slic
 test('second review, defect 3: retention expires unbound draws and keeps them as evidence; an expired draw no longer binds', async () => {
   const h = await harness();
   try {
-    const old = h.lab.drawArms(forT1);
-    const used = h.lab.drawArms({ ...forT1, ticket: 'T-2' });
+    const old = drawOk(h.lab, forT1);
+    const used = drawOk(h.lab, { ...forT1, ticket: 'T-2' });
     h.lab.line('orch', agentCall('toolu_used', `Ticket T-2, size M. Lab-Draw: ${used.draw}`));
     h.setNow(T0 + 60_000 + KEEP_REQUESTS_MS - 1000);
-    const recent = h.lab.drawArms({ ...forT1, ticket: 'T-3' });
+    const recent = drawOk(h.lab, { ...forT1, ticket: 'T-3' });
     h.setNow(T0 + 60_000 + KEEP_REQUESTS_MS + 1000);
     assert.equal(h.lab.prune()!.draws, 1);
     assert.equal(statusOf(h, old.draw), 'expired');
@@ -268,7 +284,7 @@ test('second review, defect 3: retention expires unbound draws and keeps them as
     assert.equal(statusOf(h, recent.draw), 'open');
     assert.equal(h.lab.prune()!.draws, 0, 'safe to run again');
     // A redraw after the expiry is still a redraw.
-    h.lab.drawArms(forT1);
+    drawOk(h.lab, forT1);
     assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(4, 1, 1)]);
     // Too late: the expired draw is refused and the call kept out.
     h.lab.line('orch', agentCall('toolu_late', `Ticket T-1, size M. Lab-Draw: ${old.draw}`, { at: T0 + 60_000 + KEEP_REQUESTS_MS + 2000 }));
@@ -282,9 +298,9 @@ test('second review, defect 3: retention expires unbound draws and keeps them as
 test('third review, defect 2: the ticket’s spelling and the role do not steer the arm; redraws count by ticket', async () => {
   const h = await harness();
   try {
-    const a = h.lab.drawArms({ ...forT1, ticket: 'T-12' });
-    const b = h.lab.drawArms({ ...forT1, ticket: 'T-012' });
-    const c = h.lab.drawArms({ ...forT1, ticket: 'T-0012', role: 'general-purpose' });
+    const a = drawOk(h.lab, { ...forT1, ticket: 'T-12' });
+    const b = drawOk(h.lab, { ...forT1, ticket: 'T-012' });
+    const c = drawOk(h.lab, { ...forT1, ticket: 'T-0012', role: 'general-purpose' });
     assert.deepEqual([b.arms[0]!.arm, c.arms[0]!.arm], [a.arms[0]!.arm, a.arms[0]!.arm], 'one ticket, one arm, whatever the spelling or the role');
     // Over many tickets and roles, so a hash that read the spelling or the role could not pass by chance (two arms: 1 in 2 per draw).
     for (let n = 30; n < 38; n++) {
@@ -312,7 +328,7 @@ test('third review, defect 3: a draws-only experiment gives no block arm; a peek
   const h = await harness();
   try {
     assert.equal(h.e2.drawsOnly, true, 'E2 is draws-only (plan-step.mjs e2)');
-    const peek = h.lab.drawArms(forT1);
+    const peek = drawOk(h.lab, forT1);
     h.lab.line('orch', agentCall('toolu_nodraw', 'Ticket T-1, size M.'));
     assert.deepEqual(row(h, 'orch', 'toolu_nodraw'), { arm: null, stratum: '', excluded: 'no draw' }, 'no block arm');
     h.lab.line('orch', agentCall('toolu_madeup', 'Ticket T-1, size M. Lab-Draw: d-0123456789ab'));
@@ -356,11 +372,13 @@ test('third review, defect 1: a database at migration 854 upgrades (855): the dr
       const seed = (db.prepare("SELECT seed, draws_only FROM lab_experiments WHERE id = 'exp-old'").get() as { seed: string; draws_only: number });
       assert.match(seed.seed, /^[0-9a-f]{32}$/, 'a fresh secret seed, not the id');
       assert.equal(seed.draws_only, 0);
+      assert.ok(assignSlice(db, { sessionId: 'orch', sliceId: 'plain-2', attrs: { size: 'M', role: 'implementer', model: 'opus', effort: null }, atMs: T0 + 2 }).get('exp-old'));
+      // Made draws-only to draw for it (a draw is only for a draws-only experiment).
+      db.prepare("UPDATE lab_experiments SET draws_only = 1 WHERE id = 'exp-old'").run();
       const lab = new Lab({ store, now: () => T0 + 60_000, tickets: () => ({ changes: [], estimateSize: 'M' }) });
       try {
         const d = lab.drawArms(forT1);
         assert.equal(d.arms[0]!.arm, drawnArm(seed.seed, 'T-1', ['a', 'b']));
-        assert.ok(assignSlice(db, { sessionId: 'orch', sliceId: 'plain-2', attrs: { size: 'M', role: 'implementer', model: 'opus', effort: null }, atMs: T0 + 2 }).get('exp-old'));
         assert.deepEqual(lab.drawStats('exp-old'), [stat(2, 0, 1)]);
       } finally {
         lab.close();
@@ -370,6 +388,35 @@ test('third review, defect 1: a database at migration 854 upgrades (855): the dr
     }
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('fourth review: opt-outs show by ticket, whichever session drew (P1, P2, P3, P6); a ticket that does not exist is refused (P5)', async () => {
+  const h = await harness();
+  try {
+    const f = (ticket: string, sessionId = 'orch') => ({ ...forT1, sessionId, ticket });
+    // P1: one session peeks at T-5, another dispatches T-5 without the draw.
+    drawOk(h.lab, f('T-5', 'A'));
+    h.lab.line('B', agentCall('toolu_p1', 'Ticket T-5, size M.'));
+    // P2: a throwaway binds the draw of T-6, then the real work on T-6 goes without a draw.
+    const d6 = drawOk(h.lab, f('T-6'));
+    h.lab.line('orch', agentCall('toolu_throw', `Ticket T-6, size M. Lab-Draw: ${d6.draw}`));
+    h.lab.line('orch', agentCall('toolu_p2', 'Ticket T-6, size M.'));
+    // P3: no ticket in the prompt, from a session that has drawn; the same from a session that never drew is not counted.
+    h.lab.line('orch', agentCall('toolu_p3', 'Just do the thing.'));
+    h.lab.line('C', agentCall('toolu_c', 'Just do the thing.'));
+    // P6: a follow-up slice of a drawn and bound ticket, without a draw.
+    const d7 = drawOk(h.lab, f('T-7'));
+    h.lab.line('orch', agentCall('toolu_t7', `Ticket T-7, size M. Lab-Draw: ${d7.draw}`));
+    h.lab.line('orch', agentCall('toolu_p6', 'Ticket T-7, the follow-up.'));
+    for (const id of ['toolu_p1', 'toolu_p2', 'toolu_p3', 'toolu_c', 'toolu_p6']) assert.equal(row(h, id === 'toolu_p1' ? 'B' : id === 'toolu_c' ? 'C' : 'orch', id)?.excluded, 'no draw', id);
+    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(1, 0, 0, 'A'), stat(0, 0, 0, 'B', 1), stat(2, 2, 0, 'orch', 3)]);
+    // P5: no draw for a ticket that is not there; nothing recorded.
+    const before = (h.db.prepare('SELECT COUNT(*) AS n FROM lab_draws').get() as { n: number }).n;
+    assert.throws(() => h.lab.drawArms(f('T-99999')), /no such ticket/);
+    assert.equal((h.db.prepare('SELECT COUNT(*) AS n FROM lab_draws').get() as { n: number }).n, before);
+  } finally {
+    h.done();
   }
 });
 
@@ -395,13 +442,15 @@ test('MCP: lab_arm_draw is an agent tool for its own session; the coordinator se
     assert.ok(JSON.stringify(raw.result).includes(`Lab-Draw: ${r.draw}`), 'the summary line names what to put in the brief');
     assert.ok(row(h, 'orch-session', DRAW_SLICE + r.draw), 'held under the caller’s own session');
     const again = where(await mcp.call(agent.secret, 'lab_arm_draw', { ticket: 'T-1', role: 'implementer', model: 'opus' }));
-    assert.equal(again.arms[0].arm, r.arms[0].arm, 'the same arm for the same ticket and role');
+    assert.equal(again.arms[0].arm, r.arms[0].arm, 'the same arm for the same ticket');
     assert.ok(refused(await mcp.call(agent.secret, 'lab_arm_draw', { ticket: 'not a ticket' })), 'validated input');
     assert.ok(refused(await mcp.call(agent.secret, 'lab_arm_draw', { role: 'implementer' })), 'a draw names its ticket');
+    assert.ok(refused(await mcp.call(agent.secret, 'lab_arm_draw', { ticket: 'T-99999' })), 'a ticket that does not exist (P5)');
     assert.ok(refused(await mcp.call(mcp.token('admin').secret, 'lab_arm_draw', { ticket: 'T-1' })), 'an admin token has no session to draw for');
     const full = where(await mcp.call(mcp.token('admin').secret, 'lab_summary', { full: true }));
     assert.deepEqual(full.experiments.find((e: { id: string }) => e.id === h.e2.id).draws, [stat(2, 0, 1, 'orch-session')]);
     assert.equal(full.experiments.find((e: { id: string }) => e.id === h.e2.id).draws_only, true);
+    assert.equal(full.experiments.find((e: { id: string }) => e.id === h.e2.id).opted_out, 0, 'the experiment total');
     assert.ok(!JSON.stringify(full).includes('"seed"'), 'no seed in the answer');
   } finally {
     mcp.done();
