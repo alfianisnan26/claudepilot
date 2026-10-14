@@ -43,7 +43,7 @@ One file per role, at `docs/dev-sessions/status/<role>.md` unless `project-stand
 - Rewrite the status file at every change of state: dispatch, return, merge, decision, escalation, deploy.
 - Comment on the ticket (`ticket_comment`) at claim (estimate and plan), at each pushed slice (commit, tests run and their result), and at each decision.
 - Hand in with the closing summary (`ticket-flow`): what was done, with evidence links, and what was not verified. `ticket_close` is the verifier's, or the orchestrator's on the verifier's PASS; never the author's.
-- Sub-agents report only in their final message, commits, files and tickets. They never message the main conversation. Chat to chat goes through `session_message`.
+- Sub-agents report only in their final message, commits, files and tickets. They never message the main conversation. Chat to chat goes through `session_message` (to your lead, a worker or a crew member; `to: workers` or `to: crew` broadcasts).
 
 ## Monitor
 
