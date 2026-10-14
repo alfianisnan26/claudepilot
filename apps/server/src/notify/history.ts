@@ -3,7 +3,7 @@
 // numbers); the log keeps a status and a fixed code, never a URL, a path or a provider's reply. 30 days each.
 
 import { randomBytes } from 'node:crypto';
-import type { MuteScope, NotifyDelivery, NotifyError, NotifyEvent, NotifyHistoryItem, NotifyHistoryPage, NotifyKind, NotifySuppression } from '@portal/contracts';
+import { fillTimeMarks, hasTimeMarks, zonedTime, type MuteScope, type NotifyDelivery, type NotifyError, type NotifyEvent, type NotifyHistoryItem, type NotifyHistoryPage, type NotifyKind, type NotifySuppression } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import type { Rendered } from './templates.js';
 
@@ -62,6 +62,7 @@ export class NotifyHistory {
     const db = this.store.db;
     if (!db) return { items: [], next: null, unread: 0 };
     const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 50)));
+    const nowMs = this.now().getTime();
     const before = opts.before && !Number.isNaN(Date.parse(opts.before)) ? opts.before : null;
     const rows = db
       .prepare(
@@ -74,7 +75,7 @@ export class NotifyHistory {
         kind: r.kind,
         at: r.at,
         title: r.title,
-        body: r.body,
+        ...(hasTimeMarks(r.body) ? { body: fillTimeMarks(r.body, (iso) => `${zonedTime(iso, nowMs, 'UTC')} UTC`), bodyMarked: r.body } : { body: r.body }),
         path: r.path,
         subject: { type: r.subject_type, id: r.subject_id, ...(r.workspace_id ? { workspaceId: r.workspace_id } : {}) },
         readAt: r.read_at,

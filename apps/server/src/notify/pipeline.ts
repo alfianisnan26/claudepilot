@@ -2,7 +2,7 @@
 // checked again with `can(view)`), the Inbox row, then for each of their destinations: kind on? ▸ state ▸ quiet hours ▸ presence ▸
 // announce delay ▸ collapse and throttle ▸ render ▸ send (with retries) ▸ the delivery log. Nothing here ever throws into the bus.
 
-import { isMuteGuarded, NOTIFY_KIND_INFO, type NotifyDecision, type NotifyDestination, type NotifyError, type NotifyEvent, type NotifyKind, type TestResult } from '@portal/contracts';
+import { isMuteGuarded, NOTIFY_KIND_INFO, type NotifyDecision, type NotifyDestination, type NotifyError, type NotifyEvent, type NotifyKind, type TestResult, zonedTime, zoneLabel } from '@portal/contracts';
 import type { PlatformOwner } from '../platform/owner.js';
 import type { Store } from '../store/store.js';
 import { answerOffer, type ActChat, type NotifyActions } from './actions.js';
@@ -148,7 +148,8 @@ export class NotifyPipeline {
     );
     if (!recipients.length) return;
     const historyOnly = e.kind === 'quota_low' && e.facts.level === 'near';
-    const forHistory = render(e, { tz: 'UTC' });
+    // T-126: the Inbox row keeps its times as instants (marks), shown in the reader's own zone; never the server's UTC.
+    const forHistory = render(e, { marks: true });
     const scope = muteScopesOf(e)[0] ?? null;
     for (const r of recipients) {
       // A sharer gets an Inbox row only where they asked to hear of shared things.
@@ -289,7 +290,8 @@ export class NotifyPipeline {
       this.#log(userId, e, dest, 'failed', 'locked');
       return { ok: false, error: 'locked' };
     }
-    const r = render(e, { tz: dest.quiet.tz, includeDetail: dest.includeDetail, detailMax: dest.type === 'push' ? 160 : 600 });
+    // The recipient's zone (a device reports its own at registration); a channel that is not a device says which zone it is.
+    const r = render(e, { tz: dest.quiet.tz, labelZone: dest.type !== 'push', now: this.#now().getTime(), includeDetail: dest.includeDetail, detailMax: dest.type === 'push' ? 160 : 600 });
     const rendered: Rendered = opts.summary ? { ...r, ...opts.summary, path: '/admin/notifications', tag: `summary:${dest.id}`, renotify: false } : r;
     let attempt = 0;
     let res: EgressResult;
@@ -333,7 +335,7 @@ export class NotifyPipeline {
     let m: ChannelMessage;
     if (dest.type === 'webhook') m = webhookMessage(e, r, { url, deliveryId: `dlv_${e.id.slice(4)}_${dest.id.slice(4)}`, nowS: Math.floor(this.#now().getTime() / 1000), secret: dest.signed ? config.secret : null, detail });
     else if (dest.type === 'discord') m = discordMessage(r, { url, detail: detail?.text ?? null });
-    else m = slackMessage(r, { url, detail: detail?.text ?? null, kindLabel: NOTIFY_KIND_INFO[e.kind].label, when: `${e.at.slice(11, 16)} UTC` });
+    else m = slackMessage(r, { url, detail: detail?.text ?? null, kindLabel: NOTIFY_KIND_INFO[e.kind].label, when: `${zonedTime(e.at, this.#now().getTime(), dest.quiet.tz)} ${zoneLabel(e.at, dest.quiet.tz)}` });
     return this.d.egress.send({ url: config.url, headers: m.headers, body: m.body, allowPrivate: dest.type === 'webhook' && dest.allowPrivateNetwork });
   }
 

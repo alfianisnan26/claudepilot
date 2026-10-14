@@ -29,6 +29,7 @@ export * from './glance.js';
 export * from './attention.js';
 export * from './connect.js';
 export * from './notify.js';
+export * from './zonedTime.js';
 export * from './triggers.js';
 export * from './autotransfer.js';
 export * from './keepgoing.js';

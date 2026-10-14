@@ -24,6 +24,12 @@ export function browserZone(): string {
   }
 }
 
+/**
+ * A known device whose notifications are written in UTC (or no zone) while this browser is elsewhere: register it again, which repairs
+ * the zone on the server (T-126). A zone the person picked stays, so only a missing or UTC one asks.
+ */
+export const needsZoneRepair = (stored: string | undefined, here: string): boolean => (!stored || stored === 'UTC') && here !== 'UTC';
+
 /** The zones for the picker: the browser's list when it has one (always with the current zone and UTC in it). */
 export function zoneList(current: string): string[] {
   let all: string[] = [];

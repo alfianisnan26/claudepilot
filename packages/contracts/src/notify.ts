@@ -352,7 +352,13 @@ export interface NotifyHistoryItem {
   kind: NotifyKind;
   at: string;
   title: string;
+  /** The text with any clock time in UTC, said as such ("resets 19:40 UTC"): for a reader that cannot show the reader's own zone. */
   body: string;
+  /**
+   * T-126: the same text with its clock times as marks (`timeMark`), present only when it has any. The web shows each in the device's
+   * own zone with `zonedTime` (`fillTimeMarks`), the same formatter as the Quota sheet.
+   */
+  bodyMarked?: string;
   /** A portal path (`/admin/sessions/s_41?request=r_7`), never an absolute URL. */
   path: string | null;
   subject: NotifySubject;

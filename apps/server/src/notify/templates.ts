@@ -3,8 +3,7 @@
 // A number says what it is (an estimate carries "est."). A destination with "Include detail" adds the event's redacted detail, clipped
 // and labelled untrusted. Pure.
 
-import { isPortalPath, KEEPGOING_CAUSE_TEXT, NOTIFY_KIND_INFO, notifyPath, type NotifyEvent, type NotifyKind, type NotifySeverity } from '@portal/contracts';
-import { clock } from './quiet.js';
+import { isPortalPath, KEEPGOING_CAUSE_TEXT, NOTIFY_KIND_INFO, notifyPath, timeMark, zonedTime, zoneLabel, type NotifyEvent, type NotifyKind, type NotifySeverity } from '@portal/contracts';
 
 export interface Rendered {
   title: string;
@@ -18,8 +17,14 @@ export interface Rendered {
 }
 
 export interface RenderOptions {
-  /** The destination's zone, for clock times in the text. */
+  /** The destination's zone, for clock times in the text (T-126: the recipient's zone, never the server's). */
   tz?: string;
+  /** Say the zone after each time ("19:26 UTC"): a destination that is not a device of the person (a webhook, Slack, Discord). */
+  labelZone?: boolean;
+  /** The Inbox row: times as marks (`timeMark`), shown later in the reader's own zone. Wins over `tz`. */
+  marks?: boolean;
+  /** Now, for the day part of a time ("Wed 02:40"); default the real clock. */
+  now?: number;
   /** Add the detail (untrusted), clipped at `detailMax`. */
   includeDetail?: boolean;
   detailMax?: number;
@@ -142,7 +147,21 @@ export function tagOf(e: NotifyEvent): string {
   }
 }
 
-function text(e: NotifyEvent, tz: string): { title: string; body: string } {
+/** How a clock time is written for one recipient. */
+type Clock = (at: Date) => string;
+
+function clockOf(opts: RenderOptions): Clock {
+  if (opts.marks) return timeMark;
+  const tz = opts.tz ?? 'UTC';
+  const now = opts.now ?? Date.now();
+  return (at) => {
+    const iso = at.toISOString();
+    const t = zonedTime(iso, now, tz);
+    return opts.labelZone ? `${t} ${zoneLabel(iso, tz)}` : t;
+  };
+}
+
+function text(e: NotifyEvent, clock: Clock): { title: string; body: string } {
   const f = e.facts;
   const ws = workspaceName(f.workspace ?? e.subject.workspaceId);
   switch (e.kind) {
@@ -161,9 +180,9 @@ function text(e: NotifyEvent, tz: string): { title: string; body: string } {
     case 'ci_waiting':
       return { title: 'Deploy waits', body: join(name(f.environment, 'environment'), name(f.repo, 'repo'), num(f.number) !== null && `#${num(f.number)}`) };
     case 'quota_low': {
-      const resets = typeof f.resetsAt === 'string' && !Number.isNaN(Date.parse(f.resetsAt)) ? `resets ${clock(new Date(f.resetsAt), tz)}` : null;
+      const resets = typeof f.resetsAt === 'string' && !Number.isNaN(Date.parse(f.resetsAt)) ? `resets ${clock(new Date(f.resetsAt))}` : null;
       if (f.projection === true) {
-        const eta = typeof f.etaAt === 'string' && !Number.isNaN(Date.parse(f.etaAt)) ? `out by ${clock(new Date(f.etaAt), tz)} est.` : 'may run out est.';
+        const eta = typeof f.etaAt === 'string' && !Number.isNaN(Date.parse(f.etaAt)) ? `out by ${clock(new Date(f.etaAt))} est.` : 'may run out est.';
         return { title: 'Quota low', body: join(name(f.claude, 'Claude'), name(f.window, ''), eta, resets) };
       }
       const left = pct(f.leftPct);
@@ -204,7 +223,7 @@ function text(e: NotifyEvent, tz: string): { title: string; body: string } {
 /** The text and link of one event for one destination. */
 export function render(e: NotifyEvent, opts: RenderOptions = {}): Rendered {
   const info = NOTIFY_KIND_INFO[e.kind];
-  const { title, body } = text(e, opts.tz ?? 'UTC');
+  const { title, body } = text(e, clockOf(opts));
   let full = body;
   if (opts.includeDetail && e.detail?.text) {
     const max = opts.detailMax ?? 160;

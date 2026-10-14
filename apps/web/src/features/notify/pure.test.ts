@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { NotifyDestination, NotifyHistoryItem } from '@portal/contracts';
+import { timeMark, type NotifyDestination, type NotifyHistoryItem } from '@portal/contracts';
 import { expiryText, hushedText, muteLine, muteWhere } from './mutes';
-import { dayLabel, freshItems, newest, resolvedIds, toastText, toastTone } from './inbox';
+import { bodyText, dayLabel, freshItems, newest, resolvedIds, toastText, toastTone } from './inbox';
 import { defaultKinds, kindsSummary, MATRIX_KINDS, stateOf, withKind } from './matrix';
 import { ACTIVE_MS, presenceOf, samePresence, sessionOfPath } from './presence';
 import { deviceName, keyBytes, pushSupport, type PushEnv } from './push';
-import { insideWindow, isTime, isZone, quietDefault, quietLine, quietProblem, windowMinutes, zoneList } from './quiet';
+import { insideWindow, isTime, isZone, needsZoneRepair, quietDefault, quietLine, quietProblem, windowMinutes, zoneList } from './quiet';
 
 const env = (o: Partial<PushEnv> = {}): PushEnv => ({ hasServiceWorker: true, hasPushManager: true, hasNotification: true, permission: 'default', subscribed: false, standalone: false, ios: false, ...o });
 
@@ -113,6 +113,24 @@ test('inbox text and tone', () => {
   assert.equal(toastText({ title: 'Test', body: '' }), 'Test');
   assert.equal(toastTone('ci_failed'), 'error');
   assert.equal(toastTone('approval'), 'success');
+});
+
+test('inbox times are on this device’s clock, the same formatter as the Quota sheet (T-126)', () => {
+  // Local dates, so this holds in any zone the test runs in (TZ=Asia/Jakarta or TZ=UTC alike).
+  const now = new Date(2026, 9, 12, 22, 34).getTime();
+  const same = new Date(2026, 9, 12, 23, 50);
+  const next = new Date(2026, 9, 13, 2, 40);
+  const marked = `fadlilah · Session · out by ${timeMark(same)} est. · resets ${timeMark(next)}`;
+  assert.equal(bodyText({ body: 'x UTC', bodyMarked: marked }, now), 'fadlilah · Session · out by 23:50 est. · resets Tue 02:40');
+  assert.equal(bodyText({ body: 'CI failed · api' }, now), 'CI failed · api', 'a row without times is its body');
+  assert.equal(toastText({ title: 'Quota low', body: 'old', bodyMarked: `resets ${timeMark(next)}` }).startsWith('Quota low · resets '), true);
+});
+
+test('a known device in UTC on a browser elsewhere registers again to repair its zone; a picked zone stays (T-126)', () => {
+  assert.equal(needsZoneRepair('UTC', 'Asia/Jakarta'), true);
+  assert.equal(needsZoneRepair(undefined, 'Asia/Jakarta'), true);
+  assert.equal(needsZoneRepair('UTC', 'UTC'), false);
+  assert.equal(needsZoneRepair('Europe/London', 'Asia/Jakarta'), false);
 });
 
 test('day labels', () => {

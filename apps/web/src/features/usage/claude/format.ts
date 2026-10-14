@@ -1,4 +1,4 @@
-import type { ClaudeUsage, ClaudeUsageState, ClaudeUsageWindow, Headroom, UsageLevel } from '@portal/contracts';
+import { zonedTime, type ClaudeUsage, type ClaudeUsageState, type ClaudeUsageWindow, type Headroom, type UsageLevel } from '@portal/contracts';
 
 /** "2 h 10 m", "3 d 4 h", "12 m", "<1 m": how long until `iso`, from `nowMs`. Empty when there is no time. */
 export function leftText(iso: string | null, nowMs: number): string {
@@ -15,16 +15,12 @@ export function leftText(iso: string | null, nowMs: number): string {
   return `${m} m`;
 }
 
-/** The time on this device's clock: "14:20" today, "Tue 09:00" within a week, else "15 Oct 09:00". */
+/**
+ * The time on this device's clock: "14:20" today, "Tue 09:00" within a week, else "15 Oct 09:00". The one formatter the Inbox and the
+ * notifications use too (`zonedTime`, T-126), so the same fact reads the same everywhere.
+ */
 export function localTime(iso: string | null, nowMs: number = Date.now()): string {
-  if (!iso) return '';
-  const t = new Date(iso);
-  if (Number.isNaN(t.getTime())) return '';
-  const clock = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-  const sameDay = new Date(nowMs).toDateString() === t.toDateString();
-  if (sameDay) return clock;
-  if (Math.abs(t.getTime() - nowMs) < 6 * 86_400_000) return `${t.toLocaleDateString([], { weekday: 'short' })} ${clock}`;
-  return `${t.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${clock}`;
+  return zonedTime(iso, nowMs);
 }
 
 /** "12 m ago", "3 h ago", "2 d ago". */

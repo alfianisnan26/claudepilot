@@ -1,11 +1,18 @@
-import type { NotifyHistoryItem, NotifyKind } from '@portal/contracts';
+import { fillTimeMarks, zonedTime, type NotifyHistoryItem, type NotifyKind } from '@portal/contracts';
 
 /** Kinds whose toast is red: something went wrong. */
 const BAD = new Set<NotifyKind>(['session_failed', 'ci_failed', 'trigger_failed']);
 export const toastTone = (kind: NotifyKind): 'success' | 'error' => (BAD.has(kind) ? 'error' : 'success');
 
+/** A row's text with its clock times on this device's clock (T-126): the same formatter as the Quota sheet (`zonedTime`). */
+export const bodyText = (i: Pick<NotifyHistoryItem, 'body' | 'bodyMarked'>, nowMs = Date.now()): string =>
+  i.bodyMarked ? fillTimeMarks(i.bodyMarked, (iso) => zonedTime(iso, nowMs)) : i.body;
+
 /** The line a toast shows: the title, then the body when there is one. Fixed templates from the server, so no free text. */
-export const toastText = (i: Pick<NotifyHistoryItem, 'title' | 'body'>) => (i.body ? `${i.title} · ${i.body}` : i.title);
+export const toastText = (i: Pick<NotifyHistoryItem, 'title' | 'body' | 'bodyMarked'>) => {
+  const body = bodyText(i);
+  return body ? `${i.title} · ${body}` : i.title;
+};
 
 /**
  * Items to toast: newer than what this tab has already seen, unread, not muted, oldest first. `seenAt` is the ISO time of the newest item the tab
