@@ -286,7 +286,10 @@ async function scenario(cfg) {
     await key('Escape', 'Escape', 27);
     await sleep(200);
   } else {
-    // Undo opens the normal Move dialog with the Claude the chat left chosen (FR19).
+    // Undo opens the normal Move dialog with the Claude the chat left chosen (FR19). The card's ⓘ scrolled the transcript to its end: the
+    // divider back into the free part first (`press` scrolls only to the nearest edge, where the floating header covers it at 390 px).
+    await ev(`(() => { const l = ${Q.log}, m = ${Q.mark}; l.scrollTop += m.getBoundingClientRect().top - innerHeight * 0.3; })()`);
+    await sleep(300);
     await press(Q.undo, touch);
     check('Undo opens the Move dialog', await waitFor(`!!${Q.dialog('Move chat')}`, 3000));
     check('… with the Claude the chat left chosen', await waitFor(`(() => { const d = ${Q.dialog('Move chat')}; const r = d && [...d.querySelectorAll('input[type=radio]')].find((i) => i.checked); return !!r && r.closest('div').textContent.includes('Work'); })()`, 3000));
