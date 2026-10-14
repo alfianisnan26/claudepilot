@@ -4,9 +4,11 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
+import type { ChatPermissionMode } from '@portal/contracts';
 import { allowResponse, denyResponse, parseLine } from './protocol.js';
-import { INTEGRITY_CASES, PEER_CAUSE_MS, PEER_QUEUED_MESSAGE } from './integrity.js';
-import { APPLIED, firstTurn, init, line, liveSession, ok, sleep, until, type Live } from './testkit.js';
+import { INTEGRITY_CASES, PEER_CAUSE_MS, PEER_QUEUED_MESSAGE, sameAnswer } from './integrity.js';
+import { ChatStore } from './store.js';
+import { APPLIED, fail, firstTurn, init, line, liveSession, ok, sleep, until, type Live } from './testkit.js';
 
 const assistantText = (text: string) => line({ type: 'assistant', message: { content: [{ type: 'text', text }] }, parent_tool_use_id: null, uuid: randomUUID() });
 
@@ -289,7 +291,115 @@ const FIXTURES: Record<string, Fixture> = {
       { name: 'an unknown id', run: (s) => expectIntegrityEnd(s, allowResponse('R-unknown'), /a control response for request R-unknown that this portal never asked for or answered/) },
     ],
   },
+  'control-replay-undigested': {
+    accept: async (s) => {
+      // The session's first line, as observed: the set_permission_mode reply, completed and digested (every completed line keeps one since 771)…
+      const setMode = await askMode(s, 'acceptEdits');
+      assert.ok(new ChatStore(s.store).controlDigest(s.id, `req/${setMode}`), 'a completed request keeps its digest');
+      // …then as a line completed before 771 (no digest), read again: the same answer by shape is ignored.
+      undigest(s, `req/${setMode}`);
+      await expectAccepted(s, [ok(setMode, { mode: 'acceptEdits' })]);
+      // An empty reply (set_model) and a settings reply (get_settings), likewise.
+      const setModel = await askModel(s);
+      undigest(s, `req/${setModel.model}`);
+      undigest(s, `req/${setModel.settings}`);
+      await expectAccepted(s, [ok(setModel.model), ok(setModel.settings, APPLIED)]);
+      // An echo of the portal's own answer, without its digest: the recorded outcome is the same answer.
+      await answered(s, 'R-u', 'allow');
+      undigest(s, 'ans/R-u');
+      await expectAccepted(s, [allowResponse('R-u')]);
+    },
+    reject: [
+      {
+        name: 'a different mode',
+        run: async (s) => {
+          const setMode = await askMode(s, 'acceptEdits');
+          undigest(s, `req/${setMode}`);
+          await expectIntegrityEnd(s, ok(setMode, { mode: 'plan' }), new RegExp(`a second control response for request ${setMode.slice(0, 8)}`));
+        },
+      },
+      {
+        name: 'an error reply',
+        run: async (s) => {
+          const setMode = await askMode(s, 'acceptEdits');
+          undigest(s, `req/${setMode}`);
+          await expectIntegrityEnd(s, fail(setMode, 'nope'), new RegExp(`a second control response for request ${setMode.slice(0, 8)}`));
+        },
+      },
+      {
+        name: 'a body of another shape',
+        run: async (s) => {
+          const setModel = await askModel(s);
+          undigest(s, `req/${setModel.model}`);
+          await expectIntegrityEnd(s, ok(setModel.model, { behavior: 'allow' }), new RegExp(`a second control response for request ${setModel.model.slice(0, 8)}`));
+        },
+      },
+      {
+        name: 'an echo whose behavior is not the recorded outcome',
+        run: async (s) => {
+          await answered(s, 'R-v', 'deny');
+          undigest(s, 'ans/R-v');
+          await expectIntegrityEnd(s, allowResponse('R-v'), /a second control response for request R-v/);
+        },
+      },
+      { name: 'an id never asked', run: (s) => expectIntegrityEnd(s, ok('R-never', { mode: 'default' }), /a control response for request R-never that this portal never asked for or answered/) },
+    ],
+  },
 };
+
+/** The portal asks for a mode and Claude Code confirms it; returns the request id. */
+async function askMode(s: Live, mode: ChatPermissionMode): Promise<string> {
+  const pending = s.controller.control(s.id, 'mode', { mode });
+  const ask = await s.take('set_permission_mode');
+  s.tail.push(ok(ask.id, { mode }));
+  await pending;
+  return ask.id;
+}
+
+/** The portal sets a model (an empty reply) and reads what applies; returns both request ids. */
+async function askModel(s: Live): Promise<{ model: string; settings: string }> {
+  const pending = s.controller.control(s.id, 'model', { model: 'sonnet' });
+  const model = await s.take('set_model');
+  s.tail.push(ok(model.id));
+  const settings = await s.take('get_settings');
+  s.tail.push(ok(settings.id, APPLIED));
+  await pending;
+  return { model: model.id, settings: settings.id };
+}
+
+/** Claude Code asks for a tool, the portal answers, and its echo is read once. */
+async function answered(s: Live, requestId: string, decision: 'allow' | 'deny') {
+  s.tail.push(line({ type: 'control_request', request_id: requestId, request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: `toolu_${requestId}` } }));
+  await until(() => s.state() === 'waiting');
+  await s.controller.respond(s.id, requestId, decision);
+  await expectAccepted(s, [decision === 'allow' ? allowResponse(requestId) : denyResponse(requestId, 'no')]);
+}
+
+/** A control line as it was before migration 771: completed, no digest kept. */
+function undigest(s: Live, key: string) {
+  s.store.db!.prepare(`UPDATE chat_inputs SET digest = NULL WHERE session_id = ? AND uuid = ?`).run(s.id, key);
+}
+
+test('sameAnswer (T-265): the shapes the portal\'s own requests produce, the modes it holds, the outcome it recorded; nothing else', () => {
+  const asked = { kind: 'asked' as const, modes: ['default', 'acceptEdits'] };
+  const okWith = (response: Record<string, unknown>) => ({ requestId: 'r', ok: true as const, response });
+  assert.ok(sameAnswer(okWith({}), asked), 'set_model, interrupt, apply_flag_settings');
+  assert.ok(sameAnswer(okWith({ mode: 'acceptEdits' }), asked));
+  assert.ok(!sameAnswer(okWith({ mode: 'bypassPermissions' }), asked), 'a mode the portal never set');
+  assert.ok(!sameAnswer(okWith({ mode: 'default', extra: 1 }), asked));
+  assert.ok(sameAnswer(okWith({ applied: { model: 'x' } }), asked), 'get_settings');
+  assert.ok(sameAnswer(okWith({ models: [] }), asked), 'list_models');
+  assert.ok(sameAnswer(okWith({ session: {}, rate_limits_available: false }), asked), 'get_usage');
+  assert.ok(!sameAnswer(okWith({ behavior: 'allow' }), asked), 'an echo is not a reply');
+  assert.ok(!sameAnswer(okWith({ anything: true }), asked));
+  assert.ok(!sameAnswer({ requestId: 'r', ok: false, error: 'x' }, asked), 'an error is never the same answer');
+  assert.ok(sameAnswer(okWith({ behavior: 'allow' }), { kind: 'answered', outcome: 'allowed_once' }));
+  assert.ok(sameAnswer(okWith({ behavior: 'allow' }), { kind: 'answered', outcome: 'allowed_session' }));
+  assert.ok(sameAnswer(okWith({ behavior: 'deny', message: 'no' }), { kind: 'answered', outcome: 'denied' }));
+  assert.ok(!sameAnswer(okWith({ behavior: 'deny' }), { kind: 'answered', outcome: 'allowed_once' }));
+  assert.ok(!sameAnswer(okWith({ behavior: 'allow' }), { kind: 'answered', outcome: null }), 'no outcome recorded: not the same');
+  assert.ok(!sameAnswer(okWith({}), { kind: 'answered', outcome: 'allowed_once' }), 'an echo without a behavior');
+});
 
 test('integrity table: every accepted case says what it rests on and has its fixtures, and nothing else is listed', () => {
   assert.deepEqual(Object.keys(FIXTURES).sort(), INTEGRITY_CASES.map((c) => c.id).sort());

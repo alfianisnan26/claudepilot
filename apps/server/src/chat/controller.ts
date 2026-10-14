@@ -105,7 +105,7 @@ import { BtwStore } from './btwStore.js';
 import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
 import { autoTrustable, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError } from './trust.js';
 import { usageReport } from './usage.js';
-import { controlDigest, PEER_CAUSE_MS, type PeerCause } from './integrity.js';
+import { controlDigest, PEER_CAUSE_MS, sameAnswer, type ControlExpectation, type PeerCause } from './integrity.js';
 
 /** T-102: the areas a hint may name (anything else a reader returns is left out). */
 const CONFIG_CHANGES: ReadonlySet<string> = new Set<ChatConfigChange>(['mcpset', 'settings', 'policy', 'secrets', 'account', 'persona', 'context', 'skillset', 'browser', 'foundation', 'portal_tools', 'other']);
@@ -134,6 +134,8 @@ const RETAIL_MS = 1_000;
 const MAX_IMMEDIATE_RETRIES = 5;
 /** A `tail` that ran at least this long counts as healthy (it hit its 600 s limit), so retries reset. */
 const HEALTHY_TAIL_MS = 5_000;
+/** `cp-session tail`'s exit when the cursor is past the segment's end (it prints the size; T-265): the cursor heals to the size. */
+const TAIL_PAST_END = 6;
 
 /** How long a control request waits for Claude Code's `control_response`. */
 const CONTROL_TIMEOUT_MS = 15_000;
@@ -202,6 +204,12 @@ interface Reader {
   parked?: boolean;
   /** A `tail` exec is being opened (so a second one never is). */
   connecting?: boolean;
+  /** A dropped `tail` is being checked (its process's status) before it is re-followed: no other follower opens meanwhile (T-265). */
+  checking?: boolean;
+  /** The segment being followed. */
+  segment?: number;
+  /** The line being handled right now (where it starts and what kind it is), for the log of an ending; never its content. */
+  at?: { start: number; segment: number; kind?: string };
 }
 
 /** A control request waiting for its `control_response` (Claude Code's success or error reply). */
@@ -3024,7 +3032,7 @@ export class ChatController {
   #ensureReader(sessionId: string): void {
     let reader = this.#readers.get(sessionId);
     if (reader) {
-      if (reader.exec || reader.connecting || reader.timer || reader.stopped) return; // already following, opening, scheduled, or stopped
+      if (reader.exec || reader.connecting || reader.checking || reader.timer || reader.stopped) return; // already following, opening, checking, scheduled, or stopped
     } else {
       reader = { sessionId, partial: [], offset: 0, ready: this.#chat.hasReady(sessionId), stopped: false, retries: 0, tailStart: 0 };
       this.#readers.set(sessionId, reader);
@@ -3037,8 +3045,16 @@ export class ChatController {
     const row = this.#chat.row(reader.sessionId);
     if (!row || row.state === 'ended') return;
     reader.offset = row.byte_offset;
+    reader.segment = row.segment;
     reader.partial = [];
     reader.tailStart = Date.now();
+    // One follower per reader (T-265): two counted every byte twice, pushed the cursor past the segment's end, and GNU tail then replayed
+    // the file from byte 0 at the next write (the session ended on its first line, read again).
+    const replaced = reader.exec;
+    if (replaced) {
+      reader.exec = undefined;
+      replaced.close();
+    }
     let exec: ExecSession;
     reader.connecting = true;
     try {
@@ -3053,7 +3069,7 @@ export class ChatController {
     if (reader.stopped) return void exec.close();
     reader.exec = exec;
     exec.onData((b) => this.#onBytes(reader, b));
-    exec.onExit(() => this.#onTailExit(reader));
+    exec.onExit((code) => this.#onTailExit(reader, exec, code));
   }
 
   #onBytes(reader: Reader, chunk: Buffer): void {
@@ -3070,6 +3086,7 @@ export class ChatController {
       reader.retries = 0; // progress: the follow is healthy
       const offset = reader.offset;
       unsaved = true;
+      reader.at = { start: offset - lineBuf.length, segment: reader.segment ?? 0 };
       try {
         // The line's effects and its byte offset commit together, so a restart never applies it twice.
         this.#chat.transaction(
@@ -3082,6 +3099,8 @@ export class ChatController {
       } catch (e) {
         // One line the store couldn't take: skip it rather than stall the session.
         console.error(`[chat] skipped a line of session ${reader.sessionId}: ${this.#message(e)}`);
+      } finally {
+        reader.at = undefined;
       }
     }
     if (reader.stopped) return;
@@ -3090,18 +3109,42 @@ export class ChatController {
     if (unsaved) this.#chat.patchSession(reader.sessionId, { byteOffset: reader.offset });
   }
 
-  #onTailExit(reader: Reader): void {
+  #onTailExit(reader: Reader, exec: ExecSession, code: number | null): void {
+    // A follower this reader already replaced (or is replacing: one is opening): the current one decides.
+    if (reader.connecting || (reader.exec && reader.exec !== exec)) return;
     reader.exec = undefined;
     if (reader.stopped) return;
+    if (code === TAIL_PAST_END) this.#healCursor(reader);
     if (Date.now() - reader.tailStart >= HEALTHY_TAIL_MS) reader.retries = 0; // hit its 600 s limit: normal renewal
     void this.#checkAndRetail(reader);
   }
 
-  /** On a dropped `tail`: if the process is gone, mark the session interrupted; otherwise re-follow. */
+  /**
+   * The host refused to follow from a cursor past the segment's end and printed the size (T-265). Everything up to the size was read
+   * (the cursor only runs ahead when bytes were counted twice), so the cursor becomes the size; the log keeps both numbers, since a
+   * cursor past the end is the symptom of a reader that counted something not in the file.
+   */
+  #healCursor(reader: Reader): void {
+    const size = Number.parseInt(Buffer.concat(reader.partial).toString('utf8').trim(), 10);
+    reader.partial = [];
+    if (!Number.isInteger(size) || size < 0) return;
+    const row = this.#chat.row(reader.sessionId);
+    if (!row || row.state === 'ended') return;
+    console.warn(`[chat] ${shortId(reader.sessionId)}: cursor ${row.byte_offset} past the end of segment ${row.segment} (${size} bytes); following from ${size}`);
+    this.#chat.patchSession(reader.sessionId, { byteOffset: size });
+  }
+
+  /** On a dropped `tail`: if the process is gone, mark the session interrupted; otherwise re-follow. Nobody else opens a follower meanwhile. */
   async #checkAndRetail(reader: Reader): Promise<void> {
     const row = this.#chat.row(reader.sessionId);
     if (!row || row.state === 'ended' || reader.stopped) return;
-    const status = await this.#status(row.workspace_id, claudeSessionOf(row));
+    reader.checking = true;
+    let status: 'live' | 'gone' | 'unknown';
+    try {
+      status = await this.#status(row.workspace_id, claudeSessionOf(row));
+    } finally {
+      reader.checking = false;
+    }
     if (reader.stopped || this.#readers.get(reader.sessionId) !== reader) return; // replaced meanwhile
     if (status === 'gone') return this.#markGone(reader.sessionId);
     this.#scheduleRetail(reader); // live, or unreachable (which runs out of retries if it stays so)
@@ -3166,6 +3209,7 @@ export class ChatController {
     if (!raw.trim()) return;
     const sessionId = reader.sessionId;
     const parsed = parseLine(raw);
+    if (reader.at) reader.at.kind = parsed.kind;
 
     // Integrity (PRD §10.4): the stream may show only what this portal started.
     // The stream reports Claude Code's own session id, which changes only when the portal moves the chat to
@@ -3376,7 +3420,7 @@ export class ChatController {
     const digest = controlDigest(reply);
     const asked = this.#chat.controlState(sessionId, ASKED(id));
     if (asked !== null) {
-      if (asked === 'completed') return this.#secondControlResponse(sessionId, ASKED(id), digest);
+      if (asked === 'completed') return this.#secondControlResponse(sessionId, ASKED(id), reply, digest);
       this.#chat.setControlState(sessionId, ASKED(id), 'completed', digest);
       this.#settleControl(sessionId, reply);
       // `set_permission_mode`'s reply confirms the mode, before the status line that reports it.
@@ -3396,24 +3440,44 @@ export class ChatController {
       this.#chat.setControlState(sessionId, ANSWERED(id), 'completed', digest);
       return true;
     }
-    if (answered === 'completed') return this.#secondControlResponse(sessionId, ANSWERED(id), digest);
+    if (answered === 'completed') return this.#secondControlResponse(sessionId, ANSWERED(id), reply, digest);
     this.#endIntegrity(sessionId, `a control response for request ${shortId(id)} that this portal never asked for or answered`);
     return false;
   }
 
   /**
    * A second control response for a request the portal asked or answered (INTEGRITY_CASES `control-duplicate`): the same line read again
-   * is ignored (nothing in it is new: the first copy was already acted on) and logged; anything else in it ends the session, and so does
-   * one whose first copy left no digest (read before T-136). Returns false either way: the copy is never processed.
+   * is ignored (nothing in it is new: the first copy was already acted on) and logged; anything else in it ends the session. One whose
+   * first copy left no digest (completed before migration 771) is ignored only when it is the same answer by shape (`sameAnswer`,
+   * INTEGRITY_CASES `control-replay-undigested`; T-265). Returns false either way: the copy is never processed.
    */
-  #secondControlResponse(sessionId: string, key: string, digest: string): boolean {
+  #secondControlResponse(sessionId: string, key: string, reply: ControlResponse, digest: string): boolean {
+    const id = key.slice(key.indexOf('/') + 1);
     const first = this.#chat.controlDigest(sessionId, key);
     if (first !== null && first === digest) {
-      console.log(`[chat] ${shortId(sessionId)}: ignored a second, identical control response for ${shortId(key.slice(key.indexOf('/') + 1))}`);
+      console.log(`[chat] ${shortId(sessionId)}: ignored a second, identical control response for ${shortId(id)}`);
       return false;
     }
-    this.#endIntegrity(sessionId, `a second control response for request ${shortId(key.slice(key.indexOf('/') + 1))}`);
+    if (first === null && sameAnswer(reply, this.#controlExpectation(sessionId, key))) {
+      console.log(`[chat] ${shortId(sessionId)}: ignored a second control response for ${shortId(id)} (the same answer by shape; its first copy kept no digest)`);
+      return false;
+    }
+    this.#endIntegrity(sessionId, `a second control response for request ${shortId(id)}`);
     return false;
+  }
+
+  /** What a completed control line's answer must look like when its first copy kept no digest: the modes the portal set or expects, or the outcome it recorded. */
+  #controlExpectation(sessionId: string, key: string): ControlExpectation {
+    if (key.startsWith('ans/')) return { kind: 'answered', outcome: this.#chat.requestOutcome(sessionId, key.slice(4)) };
+    const track = this.#modes.get(sessionId);
+    const modes = new Set<string>([START_MODE]);
+    const row = this.#chat.row(sessionId);
+    if (row?.mode) modes.add(row.mode);
+    if (track) {
+      modes.add(track.expected);
+      if (track.prePlan) modes.add(track.prePlan);
+    }
+    return { kind: 'asked', modes: [...modes] };
   }
 
   /**
@@ -3553,6 +3617,9 @@ export class ChatController {
 
   /** Integrity failure (§10.4): end the session at once and SIGTERM the process. */
   #endIntegrity(sessionId: string, why: string): void {
+    // The log says where it happened (the line's kind and byte position), never what the line held (T-265).
+    const at = this.#readers.get(sessionId)?.at;
+    console.warn(`[chat] ${shortId(sessionId)}: ended for integrity: ${why}${at ? ` (line ${at.kind ?? 'unparsed'} at byte ${at.start} of segment ${at.segment})` : ''}`);
     this.#endForSafety(sessionId, 'The session ended for integrity.', `Integrity check failed: ${why}`, `${CHAT_ENDED_INTEGRITY}${why}`);
   }
 

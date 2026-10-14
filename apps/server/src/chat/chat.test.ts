@@ -2091,7 +2091,7 @@ test('parseLine: a main-thread system/init carries its credential source (null w
   // What Claude Code emits "when rate limit info changes": flagged, nothing stored; the object itself goes to Claude usage's hook as emitted.
   const info = { status: 'allowed_warning', resetsAt: 1_791_700_000, rateLimitType: 'five_hour', isUsingOverage: false };
   const event = parseLine(line({ type: 'rate_limit_event', rate_limit_info: info, uuid: 'u', session_id: 'S' }));
-  assert.deepEqual(event, { stored: [], rateLimitEvent: true, rateLimitInfo: info });
+  assert.deepEqual(event, { stored: [], rateLimitEvent: true, rateLimitInfo: info, kind: 'rate_limit_event' });
   assert.equal(parseLine(line({ type: 'result', subtype: 'success', session_id: 'S' })).result, true);
   assert.equal(parseLine(init('S')).result, undefined);
 });
