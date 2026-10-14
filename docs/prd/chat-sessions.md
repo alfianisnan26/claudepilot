@@ -267,7 +267,7 @@ Checked on 2026-10-14 against `integration` (T-320, after the T-294 verifier pas
 | --- | --- | --- |
 | Parent on a session | Built | `chat_sessions.parent_id` (`apps/server/src/store/migrations.ts:789`); `session_list` `parent_id` (`apps/server/src/portalmcp/tools/sessions.ts:77`) |
 | Crew id (`crewId`) | **NOT BUILT** | nothing found for `crewId` or `crew_id`; the crew is worked out from the parent (`to: crew`, `apps/server/src/chat/portalTools.ts:228`) |
-| Admin `session_start` with a parent | **NOT BUILT** | `session_start` takes `agent` but no parent (`apps/server/src/portalmcp/tools/sessions.ts:205-210`); only `session_spawn` sets a parent |
+| Admin `session_start` with a parent | Built (T-336) | `session_start` `parent` and `report` (`apps/server/src/portalmcp/tools/sessions.ts`, `leadFor`): a live session of the same workspace the token may operate, else one not found; the controller's `create` with `parentId` holds the limits as for `session_spawn`; tests `apps/server/src/chat/sessionStartParent.test.ts` |
 | Role per session (`--agent`) | Built | migration 773 (`migrations.ts:3204`); `session_spawn` `role`, `session_start` `agent` (`sessions.ts:205`) |
 | Persona from a Persona pool per session | **NOT BUILT** | nothing found for `persona` in `apps/server/src/chat/agents.ts` or `portalTools.ts`; the role (an agent file) stands in for it |
 | Limits per session (workers, sub-agents) | Built | migration 774 (`migrations.ts:3213`); `apps/server/src/chat/agents.ts:80` |
@@ -292,7 +292,7 @@ Checked on 2026-10-14 against `integration` (T-320, after the T-294 verifier pas
 
 1. **Orphans to the queue, and the T-270 sweep over children** (M): when a lead ends and leaves workers running, or a worker ends holding a ticket, the ticket goes back to the queue (or to the lead's successor), and the ended-holder rule follows the parent as well as `continued_from`. Without it a crew's tickets can stay held by an ended session.
 2. **A running worker is never moved** (S): the auto-transfer leaves a session with a parent alone (a move kills its sub-agents and re-writes its context, the spike T-294 is about); a test with a worker on a Claude over its threshold.
-3. **Admin `session_start` with a parent** (S): the factory engine (T-293) starts slices as children of the orchestrator; the same checks as `session_spawn` (depth, caps, the same workspace).
+3. ~~**Admin `session_start` with a parent**~~ (S): built by T-336 (see the table).
 4. **Choose by projection and cache affinity** (M): the 60 percent rule, the account that last ran the repo first, the context cap; unit tests with a fake usage summary. `auto` today picks the fewest open sessions.
 5. **Reuse an idle child** (M, after 4): an idle worker of the same role and repo on a Claude under 60 percent with context under the cap gets the next slice by message instead of a new start.
 6. **Persona from a pool on spawn** (M): `session_spawn` and `session_start` take a Persona pool entry (brief, model, effort); today only the role (an agent file) exists.
@@ -328,6 +328,15 @@ In the portal database ([Pools foundation](foundation-pools.md) §4); redacted (
   per-model tokens and cost against `usage_baseline` (after a resume, against the restored totals; a
   decrease counts as a reset) and hands only deltas to Monitoring's `usage_minutes` (source `chat`)
   and Settings' session total.
+- A running turn's cost (T-343): `total_cost_usd` arrives only with the turn's `result`, and a crew
+  worker may do its whole brief in one turn. Until then the controller adds up the turn's API calls
+  from the stream (each `assistant` line's `message.usage`, a sub-agent's too, the main call's final
+  output from `message_delta`; one call counted once, at its largest counts) times the model's list
+  price from the lab's one price table (`lab/prices.ts`). It lives in memory only and is shown as
+  `turnCostEstimateUsd` on the session (on top of `costUsd`; null when a call's model has no known
+  price: "unavailable", never a guess), `cost_usd` plus `cost_basis: estimate | unavailable` in
+  `session_get`, `session_list` and `session_family`, and "≈ $x" on the session row. The `result`
+  replaces it; a turn cut off without one keeps the stored total.
 - The persona revision in effect is the first launch's until a `compact_boundary`, because a resume
   keeps the recorded system prompt ([Persona](persona-pool.md) §10.3).
 - Files live in `<dataDir>/chat-blobs/<sha256>` (0700, files 0600), served only to a chat that links them. A chat may keep 500 MB and the portal 10 GB (`PORTAL_CHAT_SESSION_QUOTA_MB`, `PORTAL_CHAT_BLOB_QUOTA_MB`); they are kept 90 days after the chat's last activity (FR42), unlinked ones are swept after a day, and a deleted chat takes its files and its staged folder in the workspace with it. Backups carry the database (which files a chat had, their names and sizes), not the blob store's bytes.

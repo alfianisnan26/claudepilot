@@ -2,7 +2,7 @@
 // searched, grouped by workspace, Claude, worktree or ticket, ordered by what needs you, and nested under
 // the session that started them. Pure functions, so the page stays thin and the rules are tested.
 
-import type { ChatSession } from './chat.js';
+import { sessionCost, type ChatSession } from './chat.js';
 
 export type ListGroupBy = 'none' | 'workspace' | 'claude' | 'worktree' | 'ticket';
 export const LIST_GROUP_BYS: readonly ListGroupBy[] = ['none', 'workspace', 'claude', 'worktree', 'ticket'];
@@ -159,7 +159,7 @@ function rollupOf(root: ChatSession, kids: ReadonlyMap<string, ChatSession[]>): 
       if (seen.has(c.id)) continue; // a cycle can't happen, but a list must never loop
       seen.add(c.id);
       out.total++;
-      out.costUsd += c.costUsd;
+      out.costUsd += sessionCost(c).usd; // T-343: a working worker's running turn counts (an estimate until its result)
       if (c.waiting > 0 || c.state === 'waiting') out.waiting++;
       else if (c.state === 'working' || c.state === 'starting') out.working++;
       else if (c.state === 'idle') out.idle++;

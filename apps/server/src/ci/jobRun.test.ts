@@ -324,3 +324,95 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   assert.equal(missing.status, 2);
   assert.match(missing.stdout, /=== JOB-RUN EXIT 2\njob-run: no-such-branch of .* is not on the remote \(push it first\)/);
 });
+
+test('--against and --keep-tests: parsed into the manifest, validated; absent, the manifest carries nothing', () => {
+  const w = world();
+  assert.equal(w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']).code, 0);
+  const none = envOf(yamlLoad(w.applied1()) as Manifest);
+  assert.equal(none.JR_AGAINST, '');
+  assert.equal(none.JR_KEEP, '');
+  const w2 = world();
+  const r = w2.run(['--repo', 'claudepilot', '--ref', 'dev/x', '--against', 'abc1234def', '--keep-tests', 'a/x.test.ts,b/y.test.ts', '--', 'true']);
+  assert.equal(r.code, 0, r.out);
+  const e = envOf(yamlLoad(w2.applied1()) as Manifest);
+  assert.equal(e.JR_AGAINST, 'abc1234def');
+  assert.equal(e.JR_KEEP, 'a/x.test.ts b/y.test.ts');
+  const bad: [string[], RegExp][] = [
+    [['--against', 'a b'], /--against: a branch or commit/],
+    [['--against', 'x..y'], /--against: a branch or commit/],
+    [['--keep-tests', 'a.ts'], /--keep-tests needs --against/],
+    [['--against', 'main', '--keep-tests', '../x'], /--keep-tests: file paths/],
+  ];
+  const w3 = world();
+  for (const [argv, re] of bad) {
+    const x = w3.run(['--repo', 'claudepilot', '--ref', 'main', ...argv, '--', 'true']);
+    assert.equal(x.code, 2, x.out);
+    assert.match(x.out, re);
+  }
+  assert.equal(w3.calls(), '');
+});
+
+test('the Job\'s own script: the proof (passes on the ref, fails on the other, kept test files), no proof, a missing ref; npm ci retried once', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-proof-'));
+  roots.push(root);
+  const env0 = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (args: string[], cwd: string) => spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8', env: env0 });
+  const src = join(root, 'src');
+  mkdirSync(src);
+  git(['init', '-q', '-b', 'main'], src);
+  writeFileSync(join(src, 'value.txt'), 'old');
+  writeFileSync(join(src, 'package-lock.json'), '{}');
+  git(['add', '.'], src); git(['commit', '-qm', 'old'], src);
+  const oldSha = git(['rev-parse', 'HEAD'], src).stdout.trim();
+  // The fix: the source changes, and the test file arrives with it.
+  writeFileSync(join(src, 'value.txt'), 'new');
+  writeFileSync(join(src, 'check.sh'), 'test "$(cat value.txt)" = new\n');
+  git(['add', '.'], src); git(['commit', '-qm', 'fix'], src);
+  git(['clone', '-q', '--bare', src, join(root, 'claudepilot.git')], root);
+  const tpl = readFileSync(TEMPLATE, 'utf8');
+  const body = tpl.slice(tpl.indexOf('# JOB-RUN-SCRIPT BEGIN'), tpl.indexOf('# JOB-RUN-SCRIPT END')).replace(/^ {14}/gm, '');
+  // A fake npm that fails until it has been called NPM_FAIL_UNTIL times (a flake), and counts its calls.
+  const bin = join(root, 'bin'); mkdirSync(bin);
+  writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho x >> "${root}/npm.calls"\n[ "$(wc -l < "${root}/npm.calls")" -ge "\${NPM_FAIL_UNTIL:-2}" ] || exit 7\nmkdir -p node_modules\n`);
+  chmodSync(join(bin, 'npm'), 0o755);
+  const pod = (over: Record<string, string>) => {
+    rmSync(join(root, 'npm.calls'), { force: true });
+    return spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
+      PATH: `${bin}:${process.env.PATH}`, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
+      JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('bash check.sh').toString('base64'), NODE_NAME: 'k3s-master', ...over } });
+  };
+  const text = (r: ReturnType<typeof pod>) => r.stdout + r.stderr;
+
+  const ok = pod({ JR_AGAINST: oldSha, JR_KEEP: 'check.sh' });
+  assert.equal(ok.status, 0, text(ok));
+  assert.match(ok.stdout, /SUMMARY claudepilot@[0-9a-f]+ .* rc=0/);
+  assert.match(ok.stdout, /SUMMARY-AGAINST claudepilot@[0-9a-f]+ tests-from=[0-9a-f]+ kept=check.sh run=\d+s rc=1/);
+  assert.match(ok.stdout, /=== JOB-RUN PROOF: passes on main \([0-9a-f]+\), fails on [0-9a-f]{40} \([0-9a-f]+\) \(rc=1\)\n=== JOB-RUN EXIT 0\n$/);
+
+  const same = pod({ JR_AGAINST: 'main', JR_KEEP: 'check.sh' });
+  assert.equal(same.status, 1, text(same));
+  assert.match(same.stdout, /PROOF: NO PROOF: it passes on both main/);
+
+  const failing = pod({ JR_CMD: Buffer.from('false').toString('base64'), JR_AGAINST: oldSha });
+  assert.equal(failing.status, 1);
+  assert.match(failing.stdout, /PROOF: NO PROOF: it fails on main \([0-9a-f]+\) already \(rc=1\)/);
+
+  const missing = pod({ JR_AGAINST: 'no-such-branch' });
+  assert.equal(missing.status, 2);
+  assert.match(missing.stdout, /PROOF: NO PROOF: no-such-branch is not on the remote.*\n=== JOB-RUN EXIT 2\n$/);
+  const nokeep = pod({ JR_AGAINST: oldSha, JR_KEEP: 'nope.test.ts' });
+  assert.equal(nokeep.status, 2);
+  assert.match(nokeep.stdout, /NO PROOF: kept test path not at main: nope.test.ts/);
+
+  const plain = pod({});
+  assert.equal(plain.status, 0, text(plain));
+  assert.doesNotMatch(plain.stdout, /PROOF|SUMMARY-AGAINST/, 'without --against the output is the old one');
+
+  // npm ci: the first call fails, the retry passes and says so; two failures end the Job with npm's code.
+  const retry = pod({ JR_STEPS: 'npm-ci', NPM_FAIL_UNTIL: '2' });
+  assert.equal(retry.status, 0, text(retry));
+  assert.match(retry.stdout, /npm ci failed in claudepilot \(rc=7\); retrying once\n=== JOB-RUN npm ci passed on the retry in claudepilot/);
+  const dead = pod({ JR_STEPS: 'npm-ci', NPM_FAIL_UNTIL: '9' });
+  assert.equal(dead.status, 7);
+  assert.match(dead.stdout, /retrying once[\s\S]*npm ci failed in claudepilot \(rc=7\)\n=== JOB-RUN EXIT 7\n$/);
+});
