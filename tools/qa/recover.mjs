@@ -88,7 +88,7 @@ const ev = async (expr) => {
   return r.result?.result?.value;
 };
 const shot = async (name) => { if (shots) writeFileSync(join(shots, `${name}.png`), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64')); };
-const waitFor = async (expr, ms = 8000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr)) return true; await sleep(80); } return false; };
+const waitFor = async (expr, ms = 8000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr).catch(() => false)) return true; await sleep(80); } return false; };
 
 const cookie = await login();
 await send('Page.enable');
@@ -113,10 +113,9 @@ for (const cfg of SIZES) {
   script = (await send('Page.addScriptToEvaluateOnNewDocument', { source: listFake })).result.identifier;
   await send('Page.navigate', { url: `http://localhost:${PORT}/admin/sessions` });
   if (!(await waitFor(`document.body.innerText.includes('Konfersi: migration')`, 20000))) {
-    // The list may open on a filter that hides ended rows: show all.
-    await ev(`localStorage.setItem('claudepilot.sessions-view', JSON.stringify({ groupBy: 'none', filter: 'all', query: '', archived: false }))`);
-    await send('Page.reload');
-    if (!(await waitFor(`document.body.innerText.includes('Konfersi: migration')`, 20000))) { fail(cfg, 'list did not show the sessions'); await shot(`${cfg.name}-list-missing`); continue; }
+    // The list opens on Pinned when anything is pinned: the All chip shows every row.
+    await ev(`[...document.querySelectorAll('button')].find((b) => /^All\\s*\\d/.test(b.innerText.trim()))?.click()`);
+    if (!(await waitFor(`document.body.innerText.includes('Konfersi: migration')`, 8000))) { fail(cfg, 'list did not show the sessions'); await shot(`${cfg.name}-list-missing`); continue; }
   }
   await sleep(600);
   let b = await ev(BUTTONS);
@@ -132,10 +131,10 @@ for (const cfg of SIZES) {
   await ev(`[...document.querySelectorAll('li')].find((l) => l.innerText.includes('Konfersi: migration'))?.querySelector('button[aria-label="Resume"]')?.click()`);
   if (!(await waitFor(`!!document.querySelector('[role=dialog], [role=alertdialog]')`, 4000))) fail(cfg, 'suspicious: no sheet');
   else {
+    await sleep(600); // the sheet slides up first
     const sheet = await ev(`(() => { const d = document.querySelector('[role=dialog], [role=alertdialog]'); const r = d.getBoundingClientRect(); return { text: d.innerText, x: r.x, r: r.right, y: r.y, b: r.bottom }; })()`);
     if (!/unknown origin: channel/.test(sheet.text) || !/suspicious/.test(sheet.text)) fail(cfg, `suspicious sheet text: ${sheet.text.slice(0, 120)}`);
     if (sheet.x < -1 || sheet.r > cfg.w + 1 || sheet.y < -1 || sheet.b > cfg.h + 1) fail(cfg, `sheet outside the screen ${JSON.stringify(sheet)}`);
-    await sleep(300);
     await shot(`${cfg.name}-sheet`);
     await ev(`[...document.querySelectorAll('[role=dialog] button, [role=alertdialog] button')].find((x) => x.innerText.trim() === 'Cancel')?.click()`);
     await sleep(300);

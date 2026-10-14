@@ -9,8 +9,9 @@ import { chatApi } from './api';
 /**
  * Resume for a session ended for integrity (T-136, D-30): it comes back IN PLACE, the same row and conversation. A harmless cause resumes in
  * one tap; a suspicious one opens a sheet first with where the line came from and how the portal classified it. 44 px, icon-only on phones.
+ * `tip`: the InfoTip beside it (the session page); a list row leaves it out (its room is the title's, and the page explains).
  */
-export function RecoverButton({ session, onDone }: { session: ChatSession; onDone?: (s: ChatSession) => void }) {
+export function RecoverButton({ session, onDone, tip = true }: { session: ChatSession; onDone?: (s: ChatSession) => void; tip?: boolean }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -51,11 +52,13 @@ export function RecoverButton({ session, onDone }: { session: ChatSession; onDon
           {busy ? <Spinner className="size-[18px]" /> : <RotateCcw className="size-[18px]" aria-hidden="true" />}
           <span className="hidden sm:inline">Resume</span>
         </button>
-        <InfoTip label="About Resume">
-          {suspicious
-            ? `Brings this session back as it was: same chat, same conversation. The line that ended it looks suspicious (${ended.origin}), so you confirm first.`
-            : 'Brings this session back as it was: same chat, conversation, tags and cost. The line that ended it is not read again.'}
-        </InfoTip>
+        {tip && (
+          <InfoTip label="About Resume">
+            {suspicious
+              ? `Brings this session back as it was: same chat, same conversation. The line that ended it looks suspicious (${ended.origin}), so you confirm first.`
+              : 'Brings this session back as it was: same chat, conversation, tags and cost. The line that ended it is not read again.'}
+          </InfoTip>
+        )}
       </span>
       <ConfirmDialog
         open={confirming}

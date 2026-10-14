@@ -282,7 +282,7 @@ export function SessionRow({
             <ChevronDown className={cn('size-[18px] transition-transform', !open && '-rotate-90')} />
           </button>
         )}
-        {!selecting && s.endedFor && !s.archivedAt && <RecoverButton session={s} />}
+        {!selecting && s.endedFor && !s.archivedAt && <RecoverButton session={s} tip={false} />}
         {!selecting && <Menu label={`Actions for ${title}`} items={rowActions(row, actions)} />}
       </div>
       </div>
