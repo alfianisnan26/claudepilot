@@ -6,6 +6,7 @@ import type { WorkspaceRefs } from '../workspaces/identity.js';
 import type {
   WorkspaceClaude,
   ChatAuditEntry,
+  ChatEndedFor,
   ChatEvent,
   ChatEventKind,
   ChatImage,
@@ -28,6 +29,7 @@ import { HOME } from '../workspaces/runtime.js';
 import { mapInputStrings, type ModelTotals, type StoredEvent, type TaskPatch } from './protocol.js';
 import { fileRefs } from './artifacts/records.js';
 import { lineageOf, type Lineage } from './lineage.js';
+import { readEnding } from './integrity.js';
 import { redact, redactMaybe } from './redact.js';
 
 /**
@@ -68,6 +70,8 @@ export type ChatSessionRow = {
   created_at: string;
   last_activity_at: string;
   ended_reason: string | null;
+  /** T-136 slice 2: what an integrity ending was for (an `EndingRecord` as JSON); null otherwise and for rows ended before migration 805. */
+  ended_for?: string | null;
   archived_at: string | null;
   pinned_at?: string | null;
   /** T-102: the hint hidden until a change newer than this; null: shown. */
@@ -169,6 +173,8 @@ export interface ChatSessionPatch {
   processStartedAt?: string | null;
   process?: 'live' | 'asleep' | 'gone';
   endedReason?: string | null;
+  /** T-136: what an integrity ending was for (JSON), or null to clear it. */
+  endedFor?: string | null;
   successorId?: string | null;
   predecessorId?: string | null;
   archivedAt?: string | null;
@@ -484,6 +490,7 @@ export class ChatStore {
       createdAt: row.created_at,
       lastActivityAt: row.last_activity_at,
       endedReason: row.ended_reason ?? null,
+      endedFor: endedForOf(row),
       claudeId: row.claude_id ?? '',
       claudeName: this.claudeName(row.workspace_id, row.claude_id ?? ''),
       predecessorId: row.predecessor_id ?? null,
@@ -775,6 +782,7 @@ export class ChatStore {
     if (patch.autoApply !== undefined) set('auto_apply', patch.autoApply === null ? null : patch.autoApply ? 1 : 0);
     if (patch.title !== undefined) set('title', patch.title);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
+    if (patch.endedFor !== undefined) set('ended_for', patch.endedFor);
     if (patch.successorId !== undefined) set('successor_id', patch.successorId);
     if (patch.predecessorId !== undefined) set('predecessor_id', patch.predecessorId);
     if (patch.ticketId !== undefined) set('ticket_id', patch.ticketId);
@@ -1361,6 +1369,7 @@ export class ChatStore {
     if (ev.kind === 'system' && ev.btw) p.btw = pinnedBtwOut(ev.btw);
     // A Restart's divider (chat PRD, Restart).
     if (ev.kind === 'system' && ev.restart === true) p.restart = true;
+    if (ev.kind === 'system' && ev.recovered === true) p.recovered = true;
     if (ev.kind === 'user' && ev.actor) {
       p.actor = redact(ev.actor);
       if (ev.actorLabel) p.actorLabel = redact(ev.actorLabel);
@@ -1428,6 +1437,7 @@ export class ChatStore {
       };
     }
     if (row.kind === 'system' && payload.restart === true) ev.restart = true;
+    if (row.kind === 'system' && payload.recovered === true) ev.recovered = true;
     if (row.kind === 'system' && payload.btw) {
       const btw = pinnedBtwIn(payload.btw);
       if (btw) ev.btw = btw;
@@ -1512,4 +1522,11 @@ function toClaude(row: ClaudeRow): WorkspaceClaude {
     removedAt: row.removed_at,
     createdAt: row.created_at,
   };
+}
+
+/** T-136: an ended-for-integrity session's classification as the payload carries it; null for any other session. */
+function endedForOf(row: ChatSessionRow): ChatEndedFor | null {
+  if (row.state !== 'ended') return null;
+  const e = readEnding(row.ended_reason, row.ended_for);
+  return e ? { reason: (row.ended_reason ?? '').slice('integrity: '.length), classified: e.classified, case: e.case, origin: e.origin } : null;
 }

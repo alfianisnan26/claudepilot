@@ -3,8 +3,8 @@
 // resolver says every session is the founding user's (until `chat_sessions` records an owner); the seam already refuses another user (`u_a`) on a
 // session that exists, which is how the tests run the abuse cases across users.
 
-import { CHAT_SOCKET_PATH, FOUNDING_USER_ID, sessionRef, workspaceRef } from '@portal/contracts';
-import { declarePolicies, registerResolver, type ObjectResolver } from '../authz/seam.js';
+import { CHAT_SOCKET_PATH, FOUNDING_USER_ID, sessionRef, workspaceRef, type ToolPolicies } from '@portal/contracts';
+import { declarePolicies, declareToolPolicies, registerResolver, type ObjectResolver } from '../authz/seam.js';
 
 /** What the resolver needs of a session; the controller answers it. */
 export interface SessionFacts {
@@ -44,8 +44,16 @@ export function registerChatAuthz(facts: (id: string) => SessionFacts | null): v
     'POST /api/chat/sessions/:id/restart': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
     'DELETE /api/chat/sessions/:id/restart': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
     'PATCH /api/chat/sessions/:id/restart-hint': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
+    // T-136: recover in place (an ended-for-integrity session comes back as the same row): operates the session; audited by the controller.
+    'POST /api/chat/sessions/:id/recover': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }], audit: 'session.recover' },
   });
+  declareToolPolicies('chat', CHAT_RECOVER_TOOL_POLICIES);
 }
+
+/** T-136: `session_recover` reaches an ended session of the agent's own workspace (another workspace's: not found); always confirmed; audited. */
+export const CHAT_RECOVER_TOOL_POLICIES = {
+  session_recover: { kind: 'agent', reach: 'workspace', confirm: true, audit: 'session.recover' },
+} satisfies ToolPolicies;
 
 /** The key the socket is declared under: the contract's path, so a test can pin them together. */
 export const CHAT_SOCKET_POLICY_KEY = `ALL ${CHAT_SOCKET_PATH}`;

@@ -10,13 +10,14 @@ import {
   type CreateWorkspaceClaudeRequest,
   type EnterBypassRequest,
   type ReauthRequest,
+  type RecoverChatRequest,
   type RestartChatRequest,
   type SwitchChatRequest,
   type UpdateChatSessionRequest,
   type UpdateRestartHintRequest,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { actorOf, requireCan } from '../authz/seam.js';
+import { actorOf, actorString, requireCan } from '../authz/seam.js';
 import { RateLimiter } from '../rateLimit.js';
 import { serveBlob } from './artifacts/index.js';
 import type { ChatController } from './controller.js';
@@ -95,6 +96,16 @@ export function createChatRoutes(controller: ChatController): Hono {
     const req = await body<RestartChatRequest>(c);
     // T-102: `when: 'turn_end'` queues it for the next boundary; `interrupt` lets "Restart now" stop a running turn (the person confirmed it).
     return c.json(success(await controller.restart(c.req.param('id'), { why: req.why, when: req.when, interrupt: req.interrupt === true })));
+  });
+  // POST /api/chat/sessions/:id/recover — bring a session ended for integrity back in place (T-136): the same row, its conversation resumed.
+  // A person's sign-in is a person unless the body says `by: 'agent'` (the dev supervisor), which only makes it stricter: an agent never
+  // recovers a suspicious cause, and only a person's `confirm` counts.
+  chat.post('/:id/recover', async (c) => {
+    const actor = actorOf(c);
+    requireCan(actor, 'operate', sessionRef(c.req.param('id')));
+    const req = c.req.header('content-length') === '0' ? {} : await body<RecoverChatRequest>(c).catch(() => ({}) as Partial<RecoverChatRequest>);
+    const by = req.by === 'agent' || actor.kind !== 'user' ? 'agent' : 'person';
+    return c.json(success(await controller.recover(c.req.param('id'), { by, confirm: by === 'person' && req.confirm === true, actor: actor.kind === 'user' ? 'ui' : actorString(actor) })));
   });
   // DELETE /api/chat/sessions/:id/restart — cancel a restart that waits for the turn's end (T-102).
   chat.delete('/:id/restart', (c) => {

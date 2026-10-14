@@ -382,6 +382,21 @@ tickets.start();
 chatController.ticketExists = (id) => tickets.exists(id);
 // T-270: a continuation takes its predecessors' tickets in the transaction that creates it.
 chatController.continueTickets = (to, from) => tickets.continueFrom(to, from);
+// T-136: recover in place reads its cap and pause from the settings; past the cap, ONE watchdog ticket says so (facts, no transcript).
+chatController.recoverSettings = (key) => settingsModule.settings.get(key);
+chatController.onRecoverCapped = (i) => {
+  tickets.create(
+    { kind: 'system' },
+    {
+      summary: `Session ${i.sessionId.slice(0, 8)} ended for integrity again: recover cap reached`,
+      description: `The session \`${i.sessionId}\` (workspace \`${i.workspaceId}\`) was recovered in place ${i.count} times in 24 hours (the cap is ${i.max}, setting chat.recover.maxPerDay) and ended for integrity again: ${i.reason}. The portal's classification: ${i.classified} (${i.case}). It stays ended. Look at why it keeps ending before starting it again (T-136).`,
+      type: 'incident',
+      priority: 'high',
+      tags: ['watchdog', 'chat'],
+      workspaceId: i.workspaceId,
+    },
+  );
+};
 registerTicketTools(tickets);
 // The chat's own tools for its Claude (rename itself); bound to the session its token was minted for.
 registerChatTools(chatController);

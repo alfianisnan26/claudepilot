@@ -141,3 +141,65 @@ export function controlDigest(reply: unknown): string {
 export function textDigest(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
+
+/* ---------- What an integrity ending was for (T-136 slice 2, recover in place) ---------- */
+
+/**
+ * The cases an integrity ending is recorded under (`chat_sessions.ended_for`), and whether each is HARMLESS: a near miss of an accepted
+ * case above, where the line still came from this process's own machinery. Only a harmless ending may be recovered by an agent (the MCP
+ * tool, the supervisor); a suspicious one needs a person, after a sheet that shows the origin and this classification. Default suspicious.
+ */
+export const ENDING_CASES = {
+  /** A peer line from a sub-agent that ran in THIS process, whose SendMessage cause was not matched (the window, the body): `replay-peer`'s near miss. */
+  'replay-peer': { classified: 'harmless', origin: 'a sub-agent of this process' },
+  /** The same control response read twice by the portal before T-265 healed the follower (5c9fcb5f, fe3df8bc): `control-duplicate`. Legacy rows only. */
+  'control-duplicate': { classified: 'harmless', origin: 'the portal read the same line twice' },
+  'replay-peer-unknown': { classified: 'suspicious', origin: 'peer: not a task of this process' },
+  'replay-unknown': { classified: 'suspicious', origin: 'unknown origin' },
+  'command-unknown': { classified: 'suspicious', origin: 'a command this portal never sent' },
+  'control-different': { classified: 'suspicious', origin: 'a different control answer' },
+  'control-unknown': { classified: 'suspicious', origin: 'a control answer for an id never asked' },
+  'request-duplicate': { classified: 'suspicious', origin: 'a tool request id seen twice' },
+  'session-id': { classified: 'suspicious', origin: 'another Claude Code session' },
+  'mode-bypass': { classified: 'suspicious', origin: 'Bypass the portal did not enter' },
+  'mode-changed': { classified: 'suspicious', origin: 'a mode the portal did not set' },
+  unknown: { classified: 'suspicious', origin: 'unclassified' },
+} as const satisfies Record<string, { classified: 'harmless' | 'suspicious'; origin: string }>;
+
+export type EndingCase = keyof typeof ENDING_CASES;
+
+/** What is stored with an integrity ending: the case, the classification, the origin in words, and whether the session was in Bypass. */
+export interface EndingRecord {
+  case: EndingCase;
+  classified: 'harmless' | 'suspicious';
+  origin: string;
+  bypass: boolean;
+}
+
+export function endingRecord(c: EndingCase, o: { origin?: string; bypass: boolean }): EndingRecord {
+  const d = ENDING_CASES[c] ?? ENDING_CASES.unknown;
+  return { case: c, classified: d.classified, origin: o.origin ?? d.origin, bypass: o.bypass };
+}
+
+/**
+ * The record of an ending as stored, or, for a row that ended before slice 2 (none stored), read from its reason: only the pre-T-265
+ * "a second control response" (the same line read twice; evidence on T-136 and T-265) is harmless; every other legacy reason is
+ * suspicious. Null when the row did not end for integrity.
+ */
+export function readEnding(endedReason: string | null | undefined, stored: string | null | undefined): EndingRecord | null {
+  if (!endedReason?.startsWith('integrity: ')) return null;
+  if (stored) {
+    try {
+      const v = JSON.parse(stored) as Partial<EndingRecord>;
+      if (v && typeof v.case === 'string' && v.case in ENDING_CASES) return endingRecord(v.case as EndingCase, { origin: typeof v.origin === 'string' ? v.origin.slice(0, 80) : undefined, bypass: v.bypass === true });
+    } catch {
+      // unreadable: classified from the reason below
+    }
+  }
+  const why = endedReason.slice('integrity: '.length);
+  if (/^a second control response for request \S+$/.test(why)) return endingRecord('control-duplicate', { bypass: false });
+  if (/^a message this portal didn't send reached Claude Code/.test(why)) return endingRecord('replay-unknown', { bypass: false });
+  if (/^Claude Code queued a message this portal didn't send/.test(why)) return endingRecord('command-unknown', { bypass: false });
+  if (/^a tool request id arrived twice/.test(why)) return endingRecord('request-duplicate', { bypass: false });
+  return endingRecord('unknown', { bypass: false });
+}

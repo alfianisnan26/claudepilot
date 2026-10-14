@@ -275,7 +275,7 @@ const FIXTURES: Record<string, Fixture> = {
           s.tail.push(ok(setModel.id));
           s.tail.push(ok((await s.take('get_settings')).id, APPLIED));
           await pending;
-          await expectIntegrityEnd(s, ok(setModel.id, { model: 'opus' }), new RegExp(`a second control response for request ${setModel.id.slice(0, 8)}`));
+          await expectIntegrityEnd(s, ok(setModel.id, { model: 'opus' }), new RegExp(`a second, different control response for request ${setModel.id.slice(0, 8)}`));
         },
       },
       {
@@ -285,7 +285,7 @@ const FIXTURES: Record<string, Fixture> = {
           await until(() => s.state() === 'waiting');
           await s.controller.respond(s.id, 'R-e', 'deny');
           await expectAccepted(s, [denyResponse('R-e', 'no')]);
-          await expectIntegrityEnd(s, allowResponse('R-e'), /a second control response for request R-e/);
+          await expectIntegrityEnd(s, allowResponse('R-e'), /a second, different control response for request R-e/);
         },
       },
       { name: 'an unknown id', run: (s) => expectIntegrityEnd(s, allowResponse('R-unknown'), /a control response for request R-unknown that this portal never asked for or answered/) },
@@ -315,7 +315,7 @@ const FIXTURES: Record<string, Fixture> = {
         run: async (s) => {
           const setMode = await askMode(s, 'acceptEdits');
           undigest(s, `req/${setMode}`);
-          await expectIntegrityEnd(s, ok(setMode, { mode: 'plan' }), new RegExp(`a second control response for request ${setMode.slice(0, 8)}`));
+          await expectIntegrityEnd(s, ok(setMode, { mode: 'plan' }), new RegExp(`a second, different control response for request ${setMode.slice(0, 8)}`));
         },
       },
       {
@@ -323,7 +323,7 @@ const FIXTURES: Record<string, Fixture> = {
         run: async (s) => {
           const setMode = await askMode(s, 'acceptEdits');
           undigest(s, `req/${setMode}`);
-          await expectIntegrityEnd(s, fail(setMode, 'nope'), new RegExp(`a second control response for request ${setMode.slice(0, 8)}`));
+          await expectIntegrityEnd(s, fail(setMode, 'nope'), new RegExp(`a second, different control response for request ${setMode.slice(0, 8)}`));
         },
       },
       {
@@ -331,7 +331,7 @@ const FIXTURES: Record<string, Fixture> = {
         run: async (s) => {
           const setModel = await askModel(s);
           undigest(s, `req/${setModel.model}`);
-          await expectIntegrityEnd(s, ok(setModel.model, { behavior: 'allow' }), new RegExp(`a second control response for request ${setModel.model.slice(0, 8)}`));
+          await expectIntegrityEnd(s, ok(setModel.model, { behavior: 'allow' }), new RegExp(`a second, different control response for request ${setModel.model.slice(0, 8)}`));
         },
       },
       {
@@ -339,7 +339,7 @@ const FIXTURES: Record<string, Fixture> = {
         run: async (s) => {
           await answered(s, 'R-v', 'deny');
           undigest(s, 'ans/R-v');
-          await expectIntegrityEnd(s, allowResponse('R-v'), /a second control response for request R-v/);
+          await expectIntegrityEnd(s, allowResponse('R-v'), /a second, different control response for request R-v/);
         },
       },
       { name: 'an id never asked', run: (s) => expectIntegrityEnd(s, ok('R-never', { mode: 'default' }), /a control response for request R-never that this portal never asked for or answered/) },
