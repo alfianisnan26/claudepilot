@@ -380,6 +380,8 @@ tickets.onChange = () => notify('tickets');
 tickets.onAudit = (e) => platform.audit.record(e);
 tickets.start();
 chatController.ticketExists = (id) => tickets.exists(id);
+// T-270: a continuation takes its predecessors' tickets in the transaction that creates it.
+chatController.continueTickets = (to, from) => tickets.continueFrom(to, from);
 registerTicketTools(tickets);
 // The chat's own tools for its Claude (rename itself); bound to the session its token was minted for.
 registerChatTools(chatController);

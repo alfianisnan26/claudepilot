@@ -31,6 +31,7 @@ export class FakeSessions implements TicketSessions {
       endedReason: null,
       worktree: null,
       ticketId: null,
+      continuedFrom: null,
       ...over,
     };
     this.sessions.set(id, s);

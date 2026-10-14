@@ -46,6 +46,7 @@ import {
 import { assertBumpable, bumpMode, bumpNote, bumpTargets as targetsFor } from '../chat/bump.js';
 import { cleanText } from '../portalmcp/sanitize.js';
 import type { Store } from '../store/store.js';
+import { canActForEnded, type EndedGrantReason } from './authz.js';
 import './errors.js';
 import { bumpTicketMessage, openingMessage } from './opening.js';
 import type { TicketSessionInfo, TicketSessions } from './sessions.js';
@@ -70,6 +71,12 @@ export type Caller =
    * actor `trigger:<id>`, and its text (an event's words) is untrusted. The session it starts carries `portal:trigger-<id>`.
    */
   | { kind: 'trigger'; triggerId: string; ownerId: string; label: string };
+
+/** FR9a (T-270): an agent acts on a ticket an ENDED session holds, and why it may. */
+interface EndedGrant {
+  forSession: string;
+  why: EndedGrantReason;
+}
 
 /** The identity a change is recorded under. */
 interface Writer {
@@ -266,6 +273,16 @@ export class Tickets {
 
   #tx<T>(fn: () => T): T {
     const db = this.#writableDb;
+    // Inside a transaction someone else opened (a continuation's, T-270: the chat row and the tickets commit together): join it.
+    if (db.isTransaction && !this.#inTx) {
+      this.#inTx = true;
+      try {
+        return fn();
+      } finally {
+        this.#inTx = false;
+        queueMicrotask(() => this.#tell());
+      }
+    }
     db.exec('BEGIN IMMEDIATE');
     this.#inTx = true;
     try {
@@ -332,27 +349,85 @@ export class Tickets {
     return row.workspace_id === null || this.#isIn(row, caller.workspaceId);
   }
 
-  /** FR9: what an agent may change. People, the portal and an admin's operate token may change anything. */
-  #assertCanModify(caller: Caller, row: Row, w: Writer) {
-    if (caller.kind === 'token') return this.#assertWrites(caller);
-    if (caller.kind !== 'agent') return;
+  /**
+   * FR9: what an agent may change. People, the portal and an admin's operate token may change anything. Returns the grant when the agent
+   * acts on a ticket an ENDED session holds (FR9a, T-270): the caller writes the audit row for it once the write is done.
+   */
+  #assertCanModify(caller: Caller, row: Row, w: Writer): EndedGrant | null {
+    if (caller.kind === 'token') return (this.#assertWrites(caller), null);
+    if (caller.kind !== 'agent') return null;
     const id = ticketIdOf(row.number);
     if (isTicketClosed(row.status)) throw new AppError('FORBIDDEN', `${id} is closed. A person can reopen it.`);
     if (row.assignee_kind === 'session') {
-      if (row.assignee_ref !== w.session!.id) throw new AppError('FORBIDDEN', `${id} is assigned to another session. Only the session it is assigned to can change it.`);
-      return;
+      if (row.assignee_ref === w.session!.id) return null;
+      const grant = this.#forEnded(w.session!, row.assignee_ref!);
+      if (grant) return grant;
+      throw new AppError('FORBIDDEN', `${id} is assigned to another session. Only the session it is assigned to can change it (one that ended is taken over with ticket_adopt).`);
     }
     // Nobody, or a person, holds it: only the session that made it may still change it.
     if (!(row.reporter_kind === 'token' && row.reporter_ref === reporterRef(caller)))
       throw new AppError('FORBIDDEN', row.assignee_kind === 'user' ? `${id} is assigned to a person.` : `${id} is not assigned to you. Claim it with ticket_claim_next first.`);
+    return null;
+  }
+
+  /** The actor's predecessors, nearest first (`continued_from` back; bounded, cycle safe). */
+  #ancestors(s: TicketSessionInfo): string[] {
+    const out: string[] = [];
+    let cur: TicketSessionInfo | null = s;
+    while (cur?.continuedFrom && out.length < 100 && !out.includes(cur.continuedFrom) && cur.continuedFrom !== s.id) {
+      out.push(cur.continuedFrom);
+      cur = this.sessions.get(cur.continuedFrom);
+    }
+    return out;
+  }
+
+  /** Whether a live session continues `id`, directly or down its chain (in its workspace). */
+  #hasLiveSuccessor(id: string, workspaceId: string): boolean {
+    const all = this.sessions.list({ workspaceId });
+    const seen = new Set<string>([id]);
+    let frontier = [id];
+    while (frontier.length && seen.size < 500) {
+      const next = all.filter((s) => s.continuedFrom && frontier.includes(s.continuedFrom) && !seen.has(s.id));
+      if (next.some((s) => s.state !== 'ended')) return true;
+      for (const s of next) seen.add(s.id);
+      frontier = next.map((s) => s.id);
+    }
+    return false;
+  }
+
+  /** FR9a (T-270): the ended-session rule (authz.ts `canActForEnded`) for a ticket `holderId` holds; null when it refuses. */
+  #forEnded(actor: TicketSessionInfo, holderId: string): EndedGrant | null {
+    const holder = this.sessions.get(holderId);
+    const d = canActForEnded({
+      actor,
+      holder,
+      holderKind: 'session',
+      actorAncestors: this.#ancestors(actor),
+      holderHasLiveSuccessor: holder ? this.#hasLiveSuccessor(holder.id, holder.workspaceId) : false,
+    });
+    return d.allow ? { forSession: holderId, why: d.why } : null;
+  }
+
+  /** The audit row of a write made under FR9a: which session acted for which ended one, and why. */
+  #auditForEnded(grant: EndedGrant | null, w: Writer, row: Row, action: 'update' | 'comment' | 'close') {
+    if (!grant) return;
+    const ticketId = ticketIdOf(row.number);
+    this.onAudit?.({
+      kind: 'ticket.acted_for_ended',
+      actor: w.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: `ticket:${ticketId}`,
+      detail: { ticketId, action, sessionId: w.session?.id ?? null, forSession: grant.forSession, why: grant.why },
+    });
   }
 
   /** FR29: commenting is what FR9 allows, and also the answer of a session a person asked about the ticket (Ask) in the last day. */
-  #assertCanComment(caller: Caller, row: Row, w: Writer) {
+  #assertCanComment(caller: Caller, row: Row, w: Writer): EndedGrant | null {
     try {
-      this.#assertCanModify(caller, row, w);
+      return this.#assertCanModify(caller, row, w);
     } catch (e) {
-      if (caller.kind === 'agent' && !isTicketClosed(row.status) && this.#bumpedInto(row.number, caller.sessionId, ASK_ANSWER_MS)) return;
+      if (caller.kind === 'agent' && !isTicketClosed(row.status) && this.#bumpedInto(row.number, caller.sessionId, ASK_ANSWER_MS)) return null;
       throw e;
     }
   }
@@ -643,7 +718,7 @@ export class Tickets {
   update(caller: Caller, id: string, req: Partial<UpdateTicketRequest>, opts: { sessionId?: string | null } = {}): TicketItem {
     const row = this.#need(caller, id); // visibility first: a ticket it can't see doesn't exist for it
     const w = this.#writer(caller, opts.sessionId);
-    this.#assertCanModify(caller, row, w);
+    const grant = this.#assertCanModify(caller, row, w);
     const agent = caller.kind === 'agent';
     const tags = this.#tagsOf([row.number]).get(row.number) ?? [];
     const sets: Record<string, string | number | null> = {};
@@ -726,6 +801,7 @@ export class Tickets {
       if (newTags) this.#setTags(row.number, newTags);
       for (const e of entries) this.#addEvent(row.number, e.kind, w, e.body ?? null, e.data);
     });
+    this.#auditForEnded(grant, w, row, 'update');
     this.onChange?.();
     return this.#items([this.#row(row.number)!])[0]!;
   }
@@ -733,13 +809,14 @@ export class Tickets {
   comment(caller: Caller, id: string, text: unknown, opts: { sessionId?: string | null } = {}): TicketEvent {
     const row = this.#need(caller, id);
     const w = this.#writer(caller, opts.sessionId);
-    this.#assertCanComment(caller, row, w);
+    const grant = this.#assertCanComment(caller, row, w);
     const body = cleanMarkdown(text, 'text', TICKET_LIMITS.comment, { required: true });
     const eventId = this.#tx(() => {
       this.#db.prepare('UPDATE tickets SET updated_at = ? WHERE number = ?').run(this.#now().toISOString(), row.number);
       this.#addEvent(row.number, 'comment', w, body, w.session ? { session: w.session.id } : null);
       return Number((this.#db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id);
     });
+    this.#auditForEnded(grant, w, row, 'comment');
     this.onChange?.();
     return this.#events(row.number).find((e) => e.id === eventId)!;
   }
@@ -747,7 +824,7 @@ export class Tickets {
   close(caller: Caller, id: string, req: Partial<CloseTicketRequest> = {}, opts: { sessionId?: string | null } = {}): TicketItem {
     const row = this.#need(caller, id);
     const w = this.#writer(caller, opts.sessionId);
-    this.#assertCanModify(caller, row, w);
+    const grant = this.#assertCanModify(caller, row, w);
     if (isTicketClosed(row.status)) throw new AppError('CONFLICT', `${ticketIdOf(row.number)} is already closed.`);
     const outcome = req.outcome === undefined ? 'done' : oneOf(req.outcome, TICKET_CLOSED_STATUSES, 'outcome');
     const summary = cleanMarkdown(req.summary, 'summary', TICKET_LIMITS.closing, { required: caller.kind === 'token' || caller.kind === 'agent' });
@@ -756,6 +833,7 @@ export class Tickets {
       this.#db.prepare('UPDATE tickets SET status = ?, closed_at = ?, closing_summary = ?, updated_at = ? WHERE number = ?').run(outcome, at, summary || null, at, row.number);
       this.#addEvent(row.number, 'closed', w, summary || null, { from: row.status, to: outcome, ...(w.session ? { session: w.session.id } : {}) });
     });
+    this.#auditForEnded(grant, w, row, 'close');
     this.onChange?.();
     return this.#items([this.#row(row.number)!])[0]!;
   }
@@ -1032,6 +1110,92 @@ export class Tickets {
       if (out.length >= 10) break;
     }
     return out;
+  }
+
+  /* ---------- Tickets follow the track (T-270) ---------- */
+
+  /** The unfinished tickets `from` holds, oldest first. */
+  #heldBy(from: string): Row[] {
+    return (this.#db.prepare(`SELECT * FROM tickets WHERE assignee_kind = 'session' AND assignee_ref = ? AND status IN (${OPEN_SQL}) ORDER BY number`).all(from) as unknown as Row[]).map((r) => this.#keyed(r));
+  }
+
+  /**
+   * A continuation was created (chat controller `continueTickets`, inside its transaction): every unfinished ticket held by the ENDED
+   * sessions of `from` (the predecessor and its ended predecessors) is assigned to `to`, an `assigned` entry each (actor system,
+   * `continued: true`, as migration 772 wrote them), status kept. A `from` that is not ended, or in another workspace, is skipped.
+   * Closed tickets keep their assignee: that is who did the work. Returns the ticket ids moved.
+   */
+  continueFrom(to: string, from: readonly string[]): string[] {
+    const head = this.sessions.get(to);
+    if (!head || !from.length) return [];
+    const w = { actor: 'system', label: 'Portal' };
+    const moved = this.#tx(() => {
+      const out: string[] = [];
+      const at = this.#now().toISOString();
+      for (const f of from) {
+        const s = this.sessions.get(f);
+        if (!s || s.state !== 'ended' || s.workspaceId !== head.workspaceId || f === to) continue;
+        for (const r of this.#heldBy(f)) {
+          this.#db.prepare('UPDATE tickets SET assignee_ref = ?, updated_at = ? WHERE number = ?').run(to, at, r.number);
+          this.#addEvent(r.number, 'assigned', w, null, { from: { kind: 'session', sessionId: f }, to: { kind: 'session', sessionId: to }, continued: true });
+          out.push(ticketIdOf(r.number));
+        }
+      }
+      return out;
+    });
+    if (moved.length) {
+      this.onAudit?.({ kind: 'ticket.continued', actor: 'system', userId: FOUNDING_USER_ID, subject: `session:${to}`, detail: { sessionId: to, fromSessions: [...from], tickets: moved } });
+      this.onChange?.();
+    }
+    return moved;
+  }
+
+  /** What `ticket_adopt` would do: the rule's reason and the tickets it would move. Refused like the rule: 404, 409 live, 403 live successor. */
+  adoptPlan(caller: Caller, fromSessionId: string, opts: { sessionId?: string | null } = {}): { me: TicketSessionInfo; from: string; why: EndedGrantReason; tickets: string[] } {
+    this.#assertWrites(caller);
+    const w = this.#writer(caller, opts.sessionId);
+    const me = this.#needSession(w, 'To adopt tickets');
+    const from = typeof fromSessionId === 'string' ? this.sessions.get(fromSessionId.trim()) : null;
+    // Another workspace's session doesn't exist for it, as its tickets don't.
+    if (!from || from.workspaceId !== me.workspaceId) throw new AppError('NOT_FOUND', 'No such session in your workspace.');
+    if (from.id === me.id) throw invalid('from_session', 'That is your own session.');
+    if (from.state !== 'ended') throw new AppError('CONFLICT', 'That session is still live: it keeps its tickets. Ask it, or wait until it has ended.');
+    const grant = this.#forEnded(me, from.id);
+    if (!grant) throw new AppError('FORBIDDEN', 'A live session continues that one: its tickets are that session’s to take.');
+    const tickets = this.#heldBy(from.id)
+      .filter((r) => r.workspace_id === null || this.#isIn(r, me.workspaceId))
+      .map((r) => ticketIdOf(r.number));
+    return { me, from: from.id, why: grant.why, tickets };
+  }
+
+  /**
+   * `ticket_adopt` (T-270): the calling session takes over every unfinished ticket of an ENDED session of its workspace that is in its lineage
+   * or has no live successor (the FR9a rule). One `assigned` entry each (the caller, `adopted: true` and why), one audit row. Returns the ids.
+   */
+  adopt(caller: Caller, fromSessionId: string, opts: { sessionId?: string | null } = {}): { tickets: string[]; why: EndedGrantReason; from: string } {
+    const plan = this.adoptPlan(caller, fromSessionId, opts);
+    const w = this.#writer(caller, opts.sessionId);
+    const moved = this.#tx(() => {
+      const out: string[] = [];
+      const at = this.#now().toISOString();
+      for (const r of this.#heldBy(plan.from)) {
+        if (!(r.workspace_id === null || this.#isIn(r, plan.me.workspaceId))) continue;
+        this.#db.prepare('UPDATE tickets SET assignee_ref = ?, updated_at = ? WHERE number = ?').run(plan.me.id, at, r.number);
+        this.#addEvent(r.number, 'assigned', w, null, { from: { kind: 'session', sessionId: plan.from }, to: { kind: 'session', sessionId: plan.me.id }, adopted: true, why: plan.why });
+        out.push(ticketIdOf(r.number));
+      }
+      return out;
+    });
+    this.onAudit?.({
+      kind: 'ticket.adopted',
+      actor: w.actor,
+      actorLabel: caller.kind === 'token' ? caller.label : null,
+      userId: FOUNDING_USER_ID,
+      subject: `session:${plan.from}`,
+      detail: { sessionId: plan.me.id, forSession: plan.from, why: plan.why, tickets: moved },
+    });
+    if (moved.length) this.onChange?.();
+    return { tickets: moved, why: plan.why, from: plan.from };
   }
 
   /** A session ended: any unfinished ticket assigned to it says so, once (FR18). */

@@ -446,6 +446,14 @@ no-op; a pin moves to the head, the head takes an earlier row's ticket link when
 chain are assigned to the head with an `assigned` entry (actor `system`) on each timeline. Sessions carry no tags today, so none move.
 Not yet: recovery in place (part B), grouping usage and scores by lineage root (slice 3).
 
+**Continuation (T-270, 2026-10-14).** `POST /api/chat/sessions` takes `continuedFrom: <session id>`. The session named must exist (404),
+be in the same workspace and have ended (409 otherwise: a live or interrupted session keeps its work); this is checked before anything is
+made. The new row is written with `continued_from` and, in the same SQLite transaction, every unfinished ticket held by the predecessor
+and by its ended predecessors down the chain is assigned to the new session ([Tickets](tickets.md) FR18a); a failure of the move leaves no
+row. A `session.continued` audit row names the predecessor and the tickets moved. The supervisor's start-again path sends it
+(`createBody` in `docs/dev-sessions/supervisor.mjs`). Observed in `chat/continuation.test.ts` (real controller and tickets service, fake
+workspaces); not yet seen on the cluster.
+
 ### 10.5 Browser protocol
 
 | Direction | Messages |
