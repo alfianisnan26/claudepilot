@@ -4,7 +4,7 @@
 // before-and-after experiment (a global change such as the 1 hour cache) splits its window at the moment of the change. An excluded slice
 // (an outage) is in no arm. The report is a query over the slices: n and medians per arm, the shares that are sums over sums.
 
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { LAB_STRATUM_KEYS, type LabArmSummary, type LabDecision, type LabExperiment, type LabExperimentDesign, type LabExperimentReport, type LabSliceMetrics, type LabStratumKey } from '@portal/contracts';
 import { sliceMetrics } from './metrics.js';
@@ -153,6 +153,30 @@ export function assignSlice(db: DatabaseSync, info: { sessionId: string; sliceId
     out.set(r.id, arm);
   }
   return out;
+}
+
+/** The slice id a draw holds until a slice binds it (T-292 slice 3). No Agent tool_use id starts this way. */
+export const DRAW_SLICE = 'draw:';
+export const newDrawKey = (): string => `d-${randomBytes(6).toString('hex')}`;
+
+/**
+ * Draws the arms for a slice that has not started yet (an arm the brief depends on, E2): the same block draw as `assignSlice`, held under
+ * `draw:<key>` in the caller's session. The orchestrator writes `Lab-Draw: <key>` in the brief's first line; when that Agent call starts in the
+ * same session, `bindDraw` moves the rows to the real slice, so the slice keeps the drawn arms. A draw nobody binds keeps its place in the
+ * block (the next draw does not get it again) and is counted as unbound, so drawing until an arm suits would show.
+ */
+export function drawArms(db: DatabaseSync, info: { sessionId: string; draw: string; attrs: SliceAttrs; atMs: number }): Map<string, string> {
+  return assignSlice(db, { sessionId: info.sessionId, sliceId: DRAW_SLICE + info.draw, attrs: info.attrs, atMs: info.atMs });
+}
+
+/** Binds a draw to the slice that started with it, in the same session only; returns how many experiments' rows moved. Once only. */
+export function bindDraw(db: DatabaseSync, sessionId: string, draw: string, sliceId: string): number {
+  return Number(db.prepare('UPDATE OR IGNORE lab_assignments SET slice_id = ? WHERE session_id = ? AND slice_id = ?').run(sliceId, sessionId, DRAW_SLICE + draw).changes);
+}
+
+/** Draws of an experiment no slice has bound (yet). */
+export function unboundDraws(db: DatabaseSync, experimentId: string): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM lab_assignments WHERE experiment_id = ? AND substr(slice_id, 1, 5) = ?').get(experimentId, DRAW_SLICE) as { n: number }).n;
 }
 
 /** Takes a slice out of an experiment's analysis, with the reason (`outage`). Its arm, if any, is kept for the record. */

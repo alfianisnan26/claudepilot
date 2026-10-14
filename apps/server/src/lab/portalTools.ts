@@ -3,6 +3,8 @@
 // - `lab_summary`: the coordinator's pass in one call. Short rows by default (T-282's compact rule: a result is read again on every later
 //   request), `full: true` for every field, the experiments and the sources. An admin's token reads the portal; an agent's token reads only
 //   its own session's slices (no experiments).
+// - `lab_arm_draw` (T-292 slice 3): the arms of a slice drawn BEFORE its brief is written, for an experiment whose treatment is the brief
+//   itself (E2: pack on or off). The caller's own session only; the lab draws, the caller never picks; the brief carries the draw key.
 // - `lab_experiment_set`: admin tokens only, with the confirmation round trip: start a randomized or before-and-after experiment, or stop one.
 //
 // Counts and ids only; an experiment's name and hypothesis are a person's text and come back labelled untrusted.
@@ -40,13 +42,14 @@ export function compactRow(r: LabSummaryRow) {
   };
 }
 
-const experimentRow = (v: LabExperimentView, ctx: PortalToolContext) => ({
+const experimentRow = (v: LabExperimentView, ctx: PortalToolContext, lab: Lab) => ({
   id: v.experiment.id,
   name: ctx.untrusted(v.experiment.name, 'lab', 80),
   status: v.experiment.status,
   design: v.experiment.design,
   strata: v.experiment.strata,
   excluded: v.excluded,
+  draws_unbound: lab.unboundDraws(v.experiment.id),
   arms: v.arms.map((a) => ({ arm: a.arm, n: a.n, accepted: a.accepted, cost_per_accepted: r2(a.costPerAccepted), ci90: ci(a.costPerAcceptedInterval) })),
 });
 
@@ -82,8 +85,35 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
         period: s.period,
         since_ms: s.sinceMs,
         rows: s.rows,
-        ...(own ? {} : { experiments: lab.experimentViews().map((v) => experimentRow(v, ctx)) }),
+        ...(own ? {} : { experiments: lab.experimentViews().map((v) => experimentRow(v, ctx, lab)) }),
         basis: s.basis,
+      };
+    },
+  });
+
+  registry.register({
+    name: 'lab_arm_draw',
+    title: 'Draw a slice\'s arm',
+    description:
+      'Draws the arm of a sub-agent slice before you write its brief, in every running randomized experiment (the same balanced draw as at a slice start; the stratum from the ticket\'s ESTIMATE size and the role, model and effort you will dispatch with). Put `Lab-Draw: <draw>` in the brief\'s first line: when that Agent call starts in this session the slice keeps these arms. One draw per slice; a draw never used is counted. Your own session only.',
+    scope: 'agent',
+    hints: { idempotent: false },
+    rate: { perHour: 120 },
+    input: z.object({
+      ticket: z.string().regex(/^T-\d{1,6}$/).optional().describe('The slice\'s ticket (its ESTIMATE size is the size stratum).'),
+      role: z.string().regex(/^[A-Za-z0-9_.:-]{1,80}$/).optional().describe('The Agent call\'s subagent_type.'),
+      model: z.string().regex(/^[A-Za-z0-9_.:-]{1,80}$/).optional().describe('The Agent call\'s model; absent: inherit.'),
+      effort: z.string().regex(/^[A-Za-z0-9_.:-]{1,80}$/).optional().describe('The Agent call\'s effort.'),
+    }),
+    handler(ctx, args) {
+      if (!ctx.sessionId) throw new PortalToolError('FORBIDDEN', 'A draw belongs to a chat session: call it with the token of the session that dispatches the slice.');
+      const d = lab.drawArms({ sessionId: ctx.sessionId, ticket: args.ticket ?? null, role: args.role ?? null, model: args.model ?? null, effort: args.effort ?? null });
+      const arms = d.arms.map((a) => ({ experiment: a.experiment, name: ctx.untrusted(a.name, 'lab', 80), arm: a.arm }));
+      ctx.affected(`lab_draw:${d.draw}`);
+      return {
+        summary: arms.length ? `Drew ${arms.map((a) => a.arm).join(', ')} for this slice. First line of the brief: Lab-Draw: ${d.draw}` : 'No randomized experiment is running: no arm, the ordinary brief.',
+        draw: d.draw,
+        arms,
       };
     },
   });

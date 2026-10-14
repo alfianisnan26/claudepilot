@@ -4,14 +4,14 @@
 // tool_use id, and a request's last report wins (as in the reference script).
 
 import type { DatabaseSync } from 'node:sqlite';
-import { codePoints, RTK, safeId, safeName, ticketOf, toolClass } from './classify.js';
+import { codePoints, drawOf, RTK, safeId, safeName, ticketOf, toolClass } from './classify.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
 
-/** Called when a sub-agent slice starts (its Agent call was seen): experiments assign it an arm then. */
-export type SliceStart = (info: { sessionId: string; sliceId: string; ticket: string | null; role: string | null; model: string | null; effort: string | null; atMs: number }) => void;
+/** Called when a sub-agent slice starts (its Agent call was seen): experiments assign it an arm then, or bind the draw its brief names. */
+export type SliceStart = (info: { sessionId: string; sliceId: string; ticket: string | null; role: string | null; model: string | null; effort: string | null; draw: string | null; atMs: number }) => void;
 
 export class LabIngest {
   /** The main-thread turn each session is in (`turn:<n>`); a `result` line ends it. Read back from the store after a restart. */
@@ -90,7 +90,7 @@ export class LabIngest {
              started_ms = COALESCE(lab_slices.started_ms, excluded.started_ms)`,
         ).run(sessionId, id, ticket, role, effort, atMs);
         try {
-          this.onSliceStart?.({ sessionId, sliceId: id, ticket, role, model: safeName(input.model), effort, atMs });
+          this.onSliceStart?.({ sessionId, sliceId: id, ticket, role, model: safeName(input.model), effort, draw: drawOf(input), atMs });
         } catch {
           // an experiment that cannot assign never stops the ingest
         }
