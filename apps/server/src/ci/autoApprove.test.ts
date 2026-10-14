@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { CI_AUTO_APPROVE_DEFAULT_PATHS, type CiJob, type CiRunStateFile, type CiUnitStatus } from '@portal/contracts';
-import { evaluateRule, gateVerdict, inWindow, MIGRATIONS_FILE, releasedMigrationChanges, type RuleDeps } from './autoApprove.js';
+import { evaluateRule, gateVerdict, inWindow, MIGRATIONS_FILE, releasedMigrationChanges, ruleLine, type RuleDeps } from './autoApprove.js';
 import type { CiReply } from './host.js';
 import type { Plan } from './plan.js';
 import type { CiDecider } from './service.js';
@@ -128,7 +128,9 @@ const NOT = (why: RegExp) => async (change: (w: World) => void) => {
 test('WOULD approve: every condition holds; the line names the commit and the count, and the rule only reads', async () => {
   const w = world();
   const v = await judge(w);
-  assert.deepEqual(v, { verdict: 'would', line: 'auto-approve (dry): WOULD approve: gate green at ccccccc, build ok, verify and rollback present, no authz/secrets/Bypass/deny-rule/released-migration change in the diff, 1 of 6 today' });
+  const why = 'gate green at ccccccc, build ok, verify and rollback present, no authz/secrets/Bypass/deny-rule/released-migration change in the diff, 1 of 6 today';
+  assert.deepEqual(v, { verdict: 'would', code: 'ok', why, line: `auto-approve (dry): WOULD approve: ${why}` });
+  assert.equal(ruleLine('on', v), `auto-approve: approved: ${why}`, 'mode on: the same facts, as an approval');
   assert.deepEqual(w.calls.map((c) => c[0]), ['log', 'changes'], 'reads only: never approve');
   assert.deepEqual(w.calls[1], ['changes', 'app', BASE, SHA, '--show', MIGRATIONS_FILE], 'the diff since the last release');
   w.others = [1, 2].map((n) => depRow({ id: `w${n}`, run_id: `x${n}`, run_number: n, approval: 'expired', auto_verdict: 'would', auto_at: new Date(w.now.getTime() - n * 3_600_000).toISOString(), run_status: 'cancelled' }));
@@ -153,6 +155,11 @@ test('3. verify and rollback present and following the deploy; the previous rele
   await NOT(/the pipeline has no rollback job/)((w) => (w.run = runRow('r1', JOBS().filter((j) => j.id !== 'rollback'))));
   await NOT(/the rollback job does not follow release/)((w) => (w.run = runRow('r1', JOBS().map((j) => (j.id === 'rollback' ? { ...j, needs: ['verify'] } : j)))));
   await NOT(/no earlier release of production is recorded, so the rollback’s previous tag is not known/)((w) => (w.released = undefined));
+  // 3b (slice 2, the strictest reading of the ref): the same branch the environment was last released from.
+  const w = await NOT(/the run is on dev\/x, not on main, where production was last released from$/)((w) => (w.run = { ...w.run, ref: 'refs/heads/dev/x', branch: 'dev/x' }));
+  const v = await judge(w);
+  assert.equal(v.code, 'ref');
+  assert.equal(ruleLine('on', v), 'auto-approve: not approved: the run is on dev/x, not on main, where production was last released from; a person decides');
 });
 
 test('4. the diff: a path that needs a person, a released migration, a diff that can not be read', async () => {
@@ -263,7 +270,7 @@ test('service: off writes nothing; dry writes one line and one audit row, approv
     await h.until('the first release to pass', () => h.svc.get(first.id).status === 'passed');
 
     // Dry, set by a person: audited.
-    assert.equal(await codeOf(async () => h.svc.setAutoApprove(repo.id, 'production', { mode: 'on' as 'dry' }, OWNER)), 'VALIDATION_FAILED', 'on does not exist yet');
+    assert.equal(await codeOf(async () => h.svc.setAutoApprove(repo.id, 'production', { mode: 'always' as 'dry' }, OWNER)), 'VALIDATION_FAILED');
     assert.equal(await codeOf(async () => h.svc.setAutoApprove(repo.id, 'production', { mode: 'dry', window: '9-17' }, OWNER)), 'VALIDATION_FAILED');
     assert.equal(await codeOf(async () => h.svc.setAutoApprove(repo.id, 'staging', { mode: 'dry' }, OWNER)), 'NOT_FOUND');
     const env = h.svc.setAutoApprove(repo.id, 'production', { mode: 'dry' }, OWNER);
@@ -285,7 +292,8 @@ test('service: off writes nothing; dry writes one line and one audit row, approv
     await h.svc.poll('docker/test');
     assert.equal(h.svc.get(second.id).detail.find((j) => j.id === 'release')!.status, 'waiting', 'dry approves nothing: the job still waits');
     const rows = audit.filter((a) => a.kind === 'ci.deploy_auto_approve');
-    assert.deepEqual(rows.map((a) => [a.actor, a.userId, a.subject, a.detail?.verdict, a.detail?.mode, a.detail?.line]), [['rule:production', null, `ci_run:${second.id}`, 'would', 'dry', line]]);
+    assert.deepEqual(rows.map((a) => [a.actor, a.userId, a.subject, a.detail?.verdict, a.detail?.mode, a.detail?.condition]), [['rule:production', null, `ci_run:${second.id}`, 'would', 'dry', 'ok']]);
+    assert.ok(!JSON.stringify(rows).includes('auto-approve'), 'ids and codes only in the audit: the line is on the run');
     assert.ok(!JSON.stringify(audit).includes(keyOf(h, second.id)!), 'the key is in no audit row');
     // The environment list shows the line on its deployment too, and a person still decides.
     assert.equal(h.svc.environments(repo.id)[0]!.deployments[0]!.autoApprove?.line, line);
@@ -328,7 +336,142 @@ test('service: WOULD NOT for a gate skipped by its input, a diff into authz and 
   }
 });
 
-test('migration 780: every environment starts off, the mode and the verdict take only their values', async () => {
+/* ---------- Slice 2: mode on, the portal approves for real ---------- */
+
+/** The first deploy, approved by a person and released: what the rule's later deploys roll back to. Then the rule `on`. */
+async function released(h: H, repoId: string) {
+  const first = await h.svc.startRun({ repoId, pipeline: 'deploy', ref: 'main' });
+  await waiting(h, first.id);
+  await h.svc.decide(first.id, 'release', 'approve', OWNER);
+  await h.until('the first release to pass', () => h.svc.get(first.id).status === 'passed');
+  return first;
+}
+const deploy = async (h: H, repoId: string, inputs: Record<string, boolean> = {}) => {
+  const run = await h.svc.startRun({ repoId, pipeline: 'deploy', ref: 'main', inputs });
+  await waiting(h, run.id);
+  await h.svc.settled();
+  return run;
+};
+const ruleRows = (audit: Audit[]) => audit.filter((a) => a.kind === 'ci.deploy_auto_approve').map((a) => [a.actor, a.userId, a.detail?.mode, a.detail?.verdict, a.detail?.condition]);
+
+test('service, mode on: the portal approves as rule:<environment> when every condition holds, once, through the runner’s key; the run goes on', async () => {
+  const { h, repo, audit } = await setup();
+  try {
+    await released(h, repo.id);
+    // `on` only while protection is on; a person sets it, audited.
+    h.svc.setEnvironment(repo.id, 'production', { protected: false }, OWNER);
+    assert.equal(await codeOf(async () => h.svc.setAutoApprove(repo.id, 'production', { mode: 'on' }, OWNER)), 'VALIDATION_FAILED', 'on needs protection');
+    h.svc.setEnvironment(repo.id, 'production', { protected: true }, OWNER);
+    assert.equal(h.svc.setAutoApprove(repo.id, 'production', { mode: 'on' }, OWNER).autoApprove, 'on');
+    assert.deepEqual(audit.filter((a) => a.kind === 'ci.environment_auto_approve').map((a) => [a.actor, a.detail?.mode, a.detail?.was]), [['user:u_owner', 'on', 'off']]);
+
+    push(h, { 'README.md': '# app, changed\n' });
+    const run = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'main' });
+    await h.until('the rule to approve', () => h.svc.get(run.id).deployments[0]!.approval === 'approved');
+    await h.svc.settled();
+    const d = h.svc.get(run.id).deployments[0]!;
+    const why = `gate green at ${run.sha.slice(0, 7)}, build ok, verify and rollback present, no authz/secrets/Bypass/deny-rule/released-migration change in the diff, 1 of 6 today`;
+    assert.deepEqual([d.approval, d.decidedBy, d.autoApprove?.mode, d.autoApprove?.verdict, d.autoApprove?.line], ['approved', 'rule:production', 'on', 'would', `auto-approve: approved: ${why}`]);
+    assert.equal(approves(h), 2, 'the person’s approval of the first run, and the rule’s of this one: one cp-ci approve each');
+    assert.equal(keyOf(h, run.id), null, 'the key went to the runner and is gone from the portal');
+    await h.until('the run to pass', () => h.svc.get(run.id).status === 'passed');
+    assert.deepEqual(h.svc.get(run.id).detail.map((j) => [j.id, j.status]), [['gate', 'passed'], ['build', 'passed'], ['release', 'passed'], ['verify', 'passed'], ['rollback', 'skipped']]);
+
+    // The audit: the approval itself, as the rule (no user), and the rule's own row; codes and ids, no line, no key.
+    const approved = audit.filter((a) => a.kind === 'ci.deploy_approved').map((a) => [a.actor, a.userId, a.detail?.by, a.detail?.condition, a.detail?.run]);
+    assert.deepEqual(approved, [['user:u_owner', 'u_owner', undefined, undefined, 1], ['rule:production', null, 'rule', 'ok', 2]]);
+    assert.deepEqual(ruleRows(audit), [['rule:production', null, 'on', 'approved', 'ok']]);
+    assert.ok(!JSON.stringify(audit).includes('auto-approve:'), 'no free text in the audit');
+
+    // Never twice: another look approves nothing, and a person can not decide it again either.
+    await h.svc.poll('docker/test');
+    await h.svc.settled();
+    assert.equal(approves(h), 2);
+    assert.equal(await codeOf(() => h.svc.decide(run.id, 'release', 'approve', OWNER)), 'CONFLICT');
+
+    // A refusal (the gate skipped by its input): nothing approved, the line says why, a person decides. Nobody can pass as the rule or an
+    // agent through decide: only a person.
+    const held = await deploy(h, repo.id, { gate: false });
+    const hd = h.svc.get(held.id).deployments[0]!;
+    assert.deepEqual(
+      [hd.approval, hd.decidedBy, hd.autoApprove?.mode, hd.autoApprove?.line],
+      ['waiting', null, 'on', 'auto-approve: not approved: the gate job did not say green (“gate: skipped (input gate=false)”); a person decides'],
+    );
+    for (const by of [{ actor: 'rule:production', userId: null }, { actor: 'session:s1', userId: null }, { actor: 'rule:production', userId: 'u_owner' }])
+      assert.equal(await codeOf(() => h.svc.decide(held.id, 'release', 'approve', by)), 'FORBIDDEN', by.actor);
+    assert.equal(approves(h), 2, 'the refusal approved nothing');
+    assert.match(keyOf(h, held.id) ?? '', /^[0-9a-f]{64}$/);
+    assert.deepEqual(ruleRows(audit).at(-1), ['rule:production', null, 'on', 'refused', 'gate']);
+    await h.svc.decide(held.id, 'release', 'reject', OWNER);
+    await h.until('the held run to end', () => h.svc.get(held.id).status === 'cancelled');
+  } finally {
+    h.done();
+  }
+});
+
+test('service, mode on: protection or the mode switched off while the rule read gives the dry line only; a person deciding first wins', async () => {
+  const { h, repo, audit } = await setup();
+  try {
+    await released(h, repo.id);
+    h.svc.setAutoApprove(repo.id, 'production', { mode: 'on' }, OWNER);
+    // While the rule reads the diff, something changes; the rule acts on what is in force when it decides.
+    let meanwhile: ((runId: string) => Promise<unknown> | unknown) | null = null;
+    const cp = h.host.cp.bind(h.host);
+    h.host.cp = async (id, args, opts) => {
+      if (args[0] === 'changes' && meanwhile) {
+        const runId = (h.store.db!.prepare("SELECT run_id FROM ci_deployments WHERE approval = 'waiting'").get() as { run_id: string }).run_id;
+        await meanwhile(runId);
+      }
+      return cp(id, args, opts);
+    };
+    const settle = async (runId: string) => {
+      await h.svc.cancel(runId).catch(() => undefined);
+      await h.until('the run to end', () => !['queued', 'running'].includes(h.svc.get(runId).status));
+    };
+
+    push(h, { 'README.md': '# one\n' });
+    meanwhile = () => h.svc.setEnvironment(repo.id, 'production', { protected: false }, OWNER);
+    const a = await deploy(h, repo.id);
+    const da = h.svc.get(a.id).deployments[0]!;
+    assert.deepEqual([da.approval, da.autoApprove?.mode, da.autoApprove?.verdict], ['waiting', 'dry', 'would']);
+    assert.match(da.autoApprove!.line, /^auto-approve \(dry\): WOULD approve: /);
+    assert.equal(approves(h), 1, 'protection went off: the rule approved nothing');
+    await settle(a.id);
+    h.svc.setEnvironment(repo.id, 'production', { protected: true }, OWNER);
+
+    meanwhile = () => h.svc.setAutoApprove(repo.id, 'production', { mode: 'dry' }, OWNER);
+    const b = await deploy(h, repo.id);
+    assert.deepEqual([h.svc.get(b.id).deployments[0]!.approval, h.svc.get(b.id).deployments[0]!.autoApprove?.mode], ['waiting', 'dry']);
+    assert.equal(approves(h), 1, 'the mode went to dry: nothing approved');
+    await settle(b.id);
+    h.svc.setAutoApprove(repo.id, 'production', { mode: 'on' }, OWNER);
+
+    // A person approves while the rule reads: the person's approval stands, the rule's does not go through, and the line says so.
+    // (The job waits only for a moment here, so the test waits for the rule's line, not for the wait.)
+    meanwhile = (runId) => h.svc.decide(runId, 'release', 'approve', OWNER);
+    const c = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'main' });
+    await h.until('the rule’s line', () => !!h.svc.get(c.id).deployments[0]!.autoApprove);
+    await h.svc.settled();
+    const dc = h.svc.get(c.id).deployments[0]!;
+    assert.deepEqual([dc.approval, dc.decidedBy, dc.autoApprove?.mode, dc.autoApprove?.verdict], ['approved', 'user:u_owner', 'on', 'would_not']);
+    assert.equal(dc.autoApprove!.line, 'auto-approve: not approved: every condition held, but the approval did not go through (it was decided or ended meanwhile); a person decides');
+    assert.equal(approves(h), 2, 'one approval reached the runner: the person’s');
+    meanwhile = null;
+    assert.deepEqual(
+      ruleRows(audit).map((r) => r.slice(2)),
+      [
+        ['dry', 'would', 'ok'],
+        ['dry', 'would', 'ok'],
+        ['on', 'failed', 'approve'],
+      ],
+    );
+    await h.until('the third run to end', () => !['queued', 'running'].includes(h.svc.get(c.id).status));
+  } finally {
+    h.done();
+  }
+});
+
+test('migrations 780 and 781: every environment starts off, the mode and the verdict take only their values', async () => {
   const h = await harness();
   try {
     const db = h.store.db!;
@@ -338,6 +481,9 @@ test('migration 780: every environment starts off, the mode and the verdict take
     assert.throws(() => db.prepare("UPDATE ci_environments SET auto_approve = 'always'").run(), /CHECK/);
     db.prepare("INSERT INTO ci_deployments (id, run_id, run_number, job, repo_id, environment, pipeline, sha, ref, actor, approval, created_at) VALUES ('d1', 'r1', 1, 'release', 'p1', 'production', 'deploy', ?, 'refs/heads/main', 'ui', 'waiting', ?)").run(SHA, now);
     assert.throws(() => db.prepare("UPDATE ci_deployments SET auto_verdict = 'approved'").run(), /CHECK/);
+    // Migration 781 (slice 2): the mode the verdict was made in, dry or on, nothing else.
+    db.prepare("UPDATE ci_deployments SET auto_mode = 'on'").run();
+    assert.throws(() => db.prepare("UPDATE ci_deployments SET auto_mode = 'off'").run(), /CHECK/);
   } finally {
     h.done();
   }

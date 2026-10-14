@@ -1,8 +1,8 @@
-// The auto-approve rule of an environment (T-110, PRD FR41a), slice 1: DRY MODE ONLY. When a deployment of a protected environment whose
-// rule is `dry` starts waiting, the rule reads the facts of the run, the pipeline and the diff since the last release, and writes ONE line on
-// the deployment (the run page shows it) and one audit row: what it WOULD do. It approves nothing: it never reads the gate key, never calls
-// `cp-ci approve` and never calls the service's decide path. Every fact it can not read reliably is a WOULD NOT with that reason: an
-// unreadable fact is a state, never a guess.
+// The auto-approve rule of an environment (T-110, PRD FR41a). When a deployment of a protected environment whose rule is `dry` or `on`
+// starts waiting, the rule reads the facts of the run, the pipeline and the diff since the last release and returns a verdict: every
+// condition holds, or the first that fails. This file only READS: it never sees the gate key and never approves. The service records the
+// verdict (one line on the deployment, one audit row) and, in mode `on` with protection on, approves through its own decide path as
+// `rule:<environment>`. Every fact it can not read reliably is a no with that reason: an unreadable fact is a state, never a guess.
 
 import { CI_AUTO_APPROVE_DAILY_CAP, CI_AUTO_APPROVE_DEFAULT_PATHS, shortSha, type CiRunStateFile } from '@portal/contracts';
 import { globMatches } from './glob.js';
@@ -96,17 +96,34 @@ export interface RuleDeps {
   now(): Date;
 }
 
+/** Which condition said no (a fixed code: the audit row carries this, never the free text). `ok` when every condition holds. */
+export type RuleCode = 'ok' | 'state' | 'gate' | 'build' | 'pipeline' | 'release' | 'ref' | 'diff' | 'busy' | 'cap' | 'window' | 'previous' | 'read';
+
 export interface RuleVerdict {
   verdict: 'would' | 'would_not';
+  code: RuleCode;
+  /** Why, without the prefix: the facts that held, or the condition that failed. */
+  why: string;
+  /** The dry line (`auto-approve (dry): WOULD approve: ...` or `... WOULD NOT: ...`). */
   line: string;
 }
 
-const PREFIX = 'auto-approve (dry): ';
-const would = (sha: string, n: number): RuleVerdict => ({
-  verdict: 'would',
-  line: `${PREFIX}WOULD approve: gate green at ${shortSha(sha)}, build ok, verify and rollback present, no authz/secrets/Bypass/deny-rule/released-migration change in the diff, ${n} of ${CI_AUTO_APPROVE_DAILY_CAP} today`,
-});
-const wouldNot = (why: string): RuleVerdict => ({ verdict: 'would_not', line: `${PREFIX}WOULD NOT: ${why}` });
+const DRY = 'auto-approve (dry): ';
+const verdict = (v: 'would' | 'would_not', code: RuleCode, why: string): RuleVerdict => ({ verdict: v, code, why, line: `${DRY}${v === 'would' ? 'WOULD approve' : 'WOULD NOT'}: ${why}` });
+const would = (sha: string, n: number): RuleVerdict =>
+  verdict('would', 'ok', `gate green at ${shortSha(sha)}, build ok, verify and rollback present, no authz/secrets/Bypass/deny-rule/released-migration change in the diff, ${n} of ${CI_AUTO_APPROVE_DAILY_CAP} today`);
+const wouldNot = (code: RuleCode, why: string): RuleVerdict => verdict('would_not', code, why);
+
+/**
+ * The line of a verdict as the run page shows it. Dry: the WOULD line. On: `auto-approve: approved: <facts>` once the portal approved, or
+ * `auto-approve: not approved: <why>; a person decides`.
+ */
+export function ruleLine(mode: 'dry' | 'on', v: Pick<RuleVerdict, 'verdict' | 'why' | 'line'>): string {
+  if (mode === 'dry') return v.line;
+  return v.verdict === 'would' ? `auto-approve: approved: ${v.why}` : `auto-approve: not approved: ${v.why}; a person decides`;
+}
+
+const refName = (ref: string) => ref.replace(/^refs\/(heads|tags)\//, '');
 
 const json = <T>(text: string | null | undefined): T | null => {
   if (!text) return null;
@@ -125,60 +142,63 @@ export async function evaluateRule(deps: RuleDeps, run: RunRow, dep: DeploymentR
   try {
     return await evaluate(deps, run, dep, env);
   } catch {
-    return wouldNot('a fact could not be read (the rule failed while reading)');
+    return wouldNot('read', 'a fact could not be read (the rule failed while reading)');
   }
 }
 
 async function evaluate(deps: RuleDeps, run: RunRow, dep: DeploymentRow, env: EnvironmentRow): Promise<RuleVerdict> {
   const state = json<CiRunStateFile>(run.state);
   const plan = json<Plan>(run.plan);
-  if (!state || !plan) return wouldNot('the run’s state can not be read');
+  if (!state || !plan) return wouldNot('state', 'the run’s state can not be read');
   const jobState = (id: string) => state.jobs.find((j) => j.id === id);
   const planJob = (id: string) => plan.jobs.find((j) => j.id === id);
 
   // 1. The full gate is green on this exact commit: the gate job's verdict in this run.
   const gate = jobState(RULE_JOBS.gate);
-  if (!gate || !planJob(RULE_JOBS.gate)) return wouldNot('the pipeline has no gate job');
-  if (gate.status !== 'passed' || gate.ignored) return wouldNot(`the gate job is ${gate.status}, not passed`);
+  if (!gate || !planJob(RULE_JOBS.gate)) return wouldNot('gate', 'the pipeline has no gate job');
+  if (gate.status !== 'passed' || gate.ignored) return wouldNot('gate', `the gate job is ${gate.status}, not passed`);
   const gateWhy = await gateFromLog(deps, run, gate);
-  if (gateWhy) return wouldNot(gateWhy);
+  if (gateWhy) return wouldNot('gate', gateWhy);
 
   // 2. The build for this commit succeeded.
   const build = jobState(RULE_JOBS.build);
-  if (!build || !planJob(RULE_JOBS.build)) return wouldNot('the pipeline has no build job');
-  if (build.status !== 'passed' || build.ignored) return wouldNot(`the build job is ${build.status}, not passed`);
+  if (!build || !planJob(RULE_JOBS.build)) return wouldNot('build', 'the pipeline has no build job');
+  if (build.status !== 'passed' || build.ignored) return wouldNot('build', `the build job is ${build.status}, not passed`);
 
   // 3. verify and rollback exist and follow the deploying job; the rollback's previous release is known.
   for (const id of [RULE_JOBS.verify, RULE_JOBS.rollback]) {
     const j = planJob(id);
-    if (!j) return wouldNot(`the pipeline has no ${id} job`);
-    if (j.skip) return wouldNot(`the ${id} job is left out of this run`);
-    if (!j.needs.includes(dep.job)) return wouldNot(`the ${id} job does not follow ${dep.job}`);
+    if (!j) return wouldNot('pipeline', `the pipeline has no ${id} job`);
+    if (j.skip) return wouldNot('pipeline', `the ${id} job is left out of this run`);
+    if (!j.needs.includes(dep.job)) return wouldNot('pipeline', `the ${id} job does not follow ${dep.job}`);
   }
   const released = deps.cs.lastReleased(dep.repo_id, dep.environment, run.id);
-  if (!released) return wouldNot(`no earlier release of ${dep.environment} is recorded, so the rollback’s previous tag is not known`);
+  if (!released) return wouldNot('release', `no earlier release of ${dep.environment} is recorded, so the rollback’s previous tag is not known`);
+  // 3b. The same ref as that release (the PRD leaves the ref open; the strictest reading, T-110 slice 2): a branch other than the one the
+  // environment is released from waits for a person, even when it descends from the release.
+  if (run.ref !== released.ref) return wouldNot('ref', `the run is on ${refName(run.ref)}, not on ${refName(released.ref)}, where ${dep.environment} was last released from`);
 
   // 4. The diff since the last released commit: nothing that needs a person, no released migration changed.
   const diffWhy = await diffProblem(deps, run, released, needsPersonOf(env));
-  if (diffWhy) return wouldNot(diffWhy);
+  if (diffWhy) return wouldNot('diff', diffWhy);
 
   // 5. At most N a day, one at a time.
   const now = deps.now();
   const others = deps.cs.ruleDeployments(dep.repo_id, dep.environment).filter((d) => d.id !== dep.id);
   const busy = others.find((d) => d.run_status === 'queued' || d.run_status === 'running');
-  if (busy) return wouldNot(`#${busy.run_number}, approved by the rule, is still running (one at a time)`);
+  if (busy) return wouldNot('busy', `#${busy.run_number}, approved by the rule, is still running (one at a time)`);
   const today = others.filter((d) => {
     const at = Date.parse(d.auto_at ?? d.decided_at ?? '');
     return Number.isFinite(at) && now.getTime() - at < DAY_MS && at <= now.getTime();
   }).length;
-  if (today >= CI_AUTO_APPROVE_DAILY_CAP) return wouldNot(`${today} of ${CI_AUTO_APPROVE_DAILY_CAP} today already`);
+  if (today >= CI_AUTO_APPROVE_DAILY_CAP) return wouldNot('cap', `${today} of ${CI_AUTO_APPROVE_DAILY_CAP} today already`);
 
   // 6. Inside the allowed window.
-  if (!inWindow(env.auto_window, now)) return wouldNot(env.auto_window && WINDOW.test(env.auto_window) ? `outside the allowed window ${env.auto_window} UTC` : 'the allowed window can not be read');
+  if (!inWindow(env.auto_window, now)) return wouldNot('window', env.auto_window && WINDOW.test(env.auto_window) ? `outside the allowed window ${env.auto_window} UTC` : 'the allowed window can not be read');
 
   // 7. The previous auto-approved deploy is not failing or rolled back.
   const prevWhy = previousProblem(deps, others);
-  if (prevWhy) return wouldNot(prevWhy);
+  if (prevWhy) return wouldNot('previous', prevWhy);
 
   return would(run.sha, today + 1);
 }
