@@ -38,7 +38,8 @@ export const INTEGRITY_CASES: readonly IntegrityCase[] = [
     rule:
       'only when THIS portal sent stop_task for that very task id in this session, for the current process (a stop is dropped with ' +
       'its process: #forget; stored with the control state of that process only), within TASK_STOP_MS before it; each stop is used ' +
-      'once; T-318',
+      'once; a stop Claude Code refused, or whose process dropped it, is forgotten; one it did not answer in time is kept under the ' +
+      'same rules (it may have stopped the task); T-318',
     evidence:
       'Claude Code 2.1.296 against the stand-in API (T-318, 2026-10-14): a background Bash (task_type local_bash), then the host\'s ' +
       'stop_task -> task_updated {status: killed} -> task_notification {status: stopped} -> the success reply; the report is queued ' +
@@ -47,7 +48,8 @@ export const INTEGRITY_CASES: readonly IntegrityCase[] = [
       'producer "session-task" is never set (the T-149 harness ended a session on it: "origin task-notification")',
     negative:
       'the same line with no stop sent, a stop for another task id, a stop sent in another session, a stale stop (after the window, ' +
-      'from an earlier process, or used once already), a producer of any kind, and a task-notification of other content (another ' +
+      'from an earlier process, or used once already, also after a stop that timed out), a producer key of any value (also one ' +
+      'that is not a plain token: "Session-Task", 123, "", "mcp!"), and a task-notification of other content (another ' +
       'status, extra text) even after the right stop',
   },
   {

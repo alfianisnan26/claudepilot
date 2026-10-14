@@ -430,9 +430,9 @@ user</summary>` (`TASK_STOPPED_LINE`; Claude Code escapes the description). The 
 task-notification"); it was reproduced with the real CLI against the stand-in API (`tools/qa/mock-anthropic.mjs`, a background `sleep`,
 then `stop_task`, then a message). Case `replay-task-stopped`: the line is believed only when this portal sent `stop_task` for that very
 task id to this session's current process within `TASK_STOP_MS` (12 h: the report waits for the next message) and Claude Code did not
-refuse it; each stop is used once and is kept with the process's control state (so a portal restart in between keeps it, a new process
+refuse it (a stop it did not answer in time is kept: it may have stopped the task); each stop is used once and is kept with the process's control state (so a portal restart in between keeps it, a new process
 drops it). The same line with no stop, a stop for another task, in another session, too old, from an earlier process or already used, a
-producer on it, and any other text (another status, words added) still end the session. A stop by another agent (status `stopped`, "was
+`producer` key on it of any value (also one that is not a plain token), and any other text (another status, words added) still end the session. A stop by another agent (status `stopped`, "was
 stopped by <agent>") and an MCP task's stop note are not accepted: not observed.
 
 **A mode less permissive than expected (T-277, observed 2026-10-14).** The Konfersi chat 3907db7f ended at 02:50:24 UTC, during deploy

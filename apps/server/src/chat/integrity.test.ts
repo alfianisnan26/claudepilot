@@ -140,6 +140,15 @@ async function stopByPortal(s: Live, taskId: string, refuse = false) {
   await pending;
 }
 
+/** The portal stops `taskId`, Claude Code stops it but its reply comes too late: the request times out. */
+async function stopTimesOut(s: Live, taskId: string) {
+  s.controller.controlTimeoutMs = 40;
+  const pending = s.controller.control(s.id, 'stop_task', { taskId });
+  await s.take('stop_task');
+  s.tail.push(line({ type: 'system', subtype: 'task_updated', task_id: taskId, run_id: BG_RUN, patch: { status: 'killed', end_time: Date.now() }, uuid: randomUUID(), session_id: s.id }));
+  await assert.rejects(pending, /answer in time/);
+}
+
 const STOPPED_REFUSED = /a message this portal didn't send reached Claude Code \([^)]*, origin task-notification\)/;
 
 /* ---------- Every case: its positive fixture and its negative twins ---------- */
@@ -238,6 +247,46 @@ const FIXTURES: Record<string, Fixture> = {
           await withBackground(s);
           await stopByPortal(s, 'bgtask1');
           await expectIntegrityEnd(s, stoppedLine(s.id, 'bgtask1', { origin: { kind: 'task-notification', producer: 'mcp', runId: BG_RUN } }), STOPPED_REFUSED);
+        },
+      },
+      // A producer that is not a plain token parses to null; the key itself still refuses (T-318 review).
+      ...(['Session-Task', 123, '', 'mcp!'] as const).map((producer) => ({
+        name: `a producer on the line that is not a plain token (${JSON.stringify(producer)})`,
+        run: async (s: Clocked) => {
+          await withBackground(s);
+          await stopByPortal(s, 'bgtask1');
+          await expectIntegrityEnd(s, stoppedLine(s.id, 'bgtask1', { origin: { kind: 'task-notification', producer, runId: BG_RUN } }), STOPPED_REFUSED);
+        },
+      })),
+      {
+        name: 'a stop that timed out, after the window',
+        run: async (s) => {
+          await withBackground(s);
+          await stopTimesOut(s, 'bgtask1');
+          s.advance(TASK_STOP_MS + 1);
+          await expectIntegrityEnd(s, stoppedLine(s.id, 'bgtask1'), STOPPED_REFUSED);
+        },
+      },
+      {
+        name: 'a stop that timed out, the report a second time',
+        run: async (s) => {
+          await withBackground(s);
+          await stopTimesOut(s, 'bgtask1');
+          await expectAccepted(s, [stoppedLine(s.id, 'bgtask1')]);
+          await expectIntegrityEnd(s, stoppedLine(s.id, 'bgtask1'), STOPPED_REFUSED);
+        },
+      },
+      {
+        name: 'a stop that timed out, then another process',
+        run: async (s) => {
+          await withBackground(s);
+          await stopTimesOut(s, 'bgtask1');
+          await vanish(s);
+          await s.answering(s.controller.control(s.id, 'resume'));
+          await until(() => s.controller.get(s.id)!.process === 'live');
+          s.tail = s.ws.tails.at(-1)!;
+          await sleep(20);
+          await expectIntegrityEnd(s, stoppedLine(s.id, 'bgtask1'), STOPPED_REFUSED);
         },
       },
       {
@@ -873,6 +922,28 @@ for (const c of INTEGRITY_CASES) {
       }
     });
 }
+
+test('integrity (T-318): a stop_task that timed out is kept, so the report of the task Claude Code did stop is believed (once)', async () => {
+  const s = await clocked();
+  try {
+    await withBackground(s);
+    await stopTimesOut(s, 'bgtask1');
+    await expectAccepted(s, [init(s.id), stoppedLine(s.id, 'bgtask1')]);
+  } finally {
+    await s.done();
+  }
+});
+
+test('integrity (T-318): the parse says whether the origin has a producer key at all, whatever its value', () => {
+  const parse = (origin: unknown) => parseLine(line({ type: 'user', isReplay: true, uuid: randomUUID(), message: { role: 'user', content: stoppedText('b1') }, origin })).replay;
+  assert.equal(parse({ kind: 'task-notification', runId: BG_RUN })?.originProducerKey, false);
+  for (const producer of ['session-task', 'Session-Task', 123, '', 'mcp!', null]) {
+    const r = parse({ kind: 'task-notification', producer, runId: BG_RUN });
+    assert.equal(r?.originProducerKey, true, JSON.stringify(producer));
+    if (producer !== 'session-task') assert.equal(r?.origin?.producer, null, JSON.stringify(producer));
+  }
+  assert.equal(parse(undefined)?.originProducerKey, undefined, 'no origin, no flag');
+});
 
 test('integrity (T-318): the report of a stopped task parses only in its exact shape, and never from a string inside another shape', () => {
   const parse = (content: unknown) => parseLine(line({ type: 'user', isReplay: true, uuid: randomUUID(), message: { role: 'user', content }, origin: { kind: 'task-notification', runId: BG_RUN } })).replay;

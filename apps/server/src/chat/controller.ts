@@ -3535,8 +3535,9 @@ export class ChatController {
     try {
       await this.#request(sessionId, 'stop_task', { task_id: id });
     } catch (e) {
-      // Refused or unanswered: no report is owed, so none is believed.
-      this.#dropStop(sessionId, stop);
+      // Refused, or the process's requests were dropped: no report is owed, so none is believed. Unanswered in time (ControlTimeout):
+      // Claude Code may still have stopped the task, so the stop is kept, under the same rules (once, this process, TASK_STOP_MS).
+      if (!(e instanceof ControlTimeout)) this.#dropStop(sessionId, stop);
       throw e;
     }
   }
@@ -4478,8 +4479,9 @@ export class ChatController {
   #acceptReplay(sessionId: string, replay: NonNullable<ParsedLine['replay']>): boolean {
     if (replay.uuid && this.#chat.isMessage(sessionId, replay.uuid)) return true;
     if (replay.origin && HARNESS_ORIGINS.has(`${replay.origin.kind}/${replay.origin.producer ?? ''}`)) return true;
-    // The report of a task the portal stopped (T-318): Claude Code sets no producer on it; only for a stop sent here, used once.
-    if (replay.origin?.kind === 'task-notification' && replay.origin.producer === null && replay.taskStopped && this.#stoppedByPortal(sessionId, replay.taskStopped)) {
+    // The report of a task the portal stopped (T-318): Claude Code sets no producer key on it (any value, even one parsed to null, refuses);
+    // only for a stop sent here, used once.
+    if (replay.origin?.kind === 'task-notification' && replay.originProducerKey === false && replay.taskStopped && this.#stoppedByPortal(sessionId, replay.taskStopped)) {
       console.log(`[chat] ${shortId(sessionId)}: the report of task ${replay.taskStopped} that this portal stopped`);
       return true;
     }

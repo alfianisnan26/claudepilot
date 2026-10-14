@@ -125,6 +125,8 @@ export interface ParsedLine {
     localCommand: boolean;
     modelNote?: boolean;
     origin?: { kind: string; producer: string | null };
+    /** Whether the origin carries a `producer` key at all, whatever its value (`producer` above is null for one that isn't a plain token). */
+    originProducerKey?: boolean;
     /** For origin `peer` (a sub-agent's SendMessage delivered to the main conversation): the sending task and a digest of the body. */
     peer?: { taskId: string | null; digest: string | null };
     /** The task id when the line's text is exactly Claude Code's report of a task the host stopped (TASK_STOPPED_LINE; T-318). */
@@ -534,6 +536,7 @@ function parseUser(obj: Record<string, unknown>): ParsedLine {
     const text = typeof content === 'string' ? content : (asStr(asObj(Array.isArray(content) ? content[0] : null)?.text) ?? '');
     const origin = replayOrigin(obj.origin);
     const replay: NonNullable<ParsedLine['replay']> = { uuid: asStr(obj.uuid), localCommand: isLocalOutput(content), modelNote: MODEL_NOTE.test(text), ...(origin ? { origin } : {}) };
+    if (origin) replay.originProducerKey = Object.prototype.hasOwnProperty.call(asObj(obj.origin), 'producer');
     if (origin?.kind === 'peer') {
       const o = asObj(obj.origin);
       const body = asStr(o?.body);
