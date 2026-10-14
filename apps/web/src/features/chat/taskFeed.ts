@@ -30,21 +30,24 @@ export function publishTaskFeed(sessionId: string, feed: TaskFeed | null): void 
   for (const l of listeners.get(sessionId) ?? []) l();
 }
 
-/** A session's feed: empty until its transcript publishes one. */
+/** Calls `onChange` whenever a session's feed changes; returns the way to stop. */
+export function subscribeTaskFeed(sessionId: string, onChange: () => void): () => void {
+  let set = listeners.get(sessionId);
+  if (!set) listeners.set(sessionId, (set = new Set()));
+  set.add(onChange);
+  return () => {
+    set.delete(onChange);
+    if (!set.size && listeners.get(sessionId) === set) listeners.delete(sessionId);
+  };
+}
+
+/** A session's feed now: empty until its transcript publishes one. */
+export const readTaskFeed = (sessionId: string): TaskFeed => feeds.get(sessionId) ?? EMPTY;
+
+/** A session's feed, kept current. */
 export function useTaskFeed(sessionId: string): TaskFeed {
-  const subscribe = useCallback(
-    (onChange: () => void) => {
-      let set = listeners.get(sessionId);
-      if (!set) listeners.set(sessionId, (set = new Set()));
-      set.add(onChange);
-      return () => {
-        set.delete(onChange);
-        if (!set.size) listeners.delete(sessionId);
-      };
-    },
-    [sessionId],
-  );
-  const read = useCallback(() => feeds.get(sessionId) ?? EMPTY, [sessionId]);
+  const subscribe = useCallback((onChange: () => void) => subscribeTaskFeed(sessionId, onChange), [sessionId]);
+  const read = useCallback(() => readTaskFeed(sessionId), [sessionId]);
   return useSyncExternalStore(subscribe, read, read);
 }
 

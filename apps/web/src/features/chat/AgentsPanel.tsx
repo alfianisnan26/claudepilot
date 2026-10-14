@@ -49,7 +49,6 @@ interface AgentsProps {
 
 /** What one row shows, worked out once per change of the task or its feed (not every second). */
 interface RowView {
-  task: ChatTask;
   agent: boolean;
   label: string;
   line: TaskLine;
@@ -190,7 +189,7 @@ export function AgentsPanel({
       const command = agent ? null : (callCommand(call)?.text ?? null);
       const label = taskLabel(t, command);
       const doing = agent && t.status === 'running' && t.toolUseId ? agentLatest(feed.rows.get(t.toolUseId), agentLive?.get(t.toolUseId)) : null;
-      out.set(t.taskId, { task: t, agent, label, line: taskLine(t, label, command, doing), model: agent ? (modelShort(t.model) ?? 'unavailable') : null, command });
+      out.set(t.taskId, { agent, label, line: taskLine(t, label, command, doing), model: agent ? (modelShort(t.model) ?? 'unavailable') : null, command });
     }
     return out;
   }, [tasks, feed, agentLive]);
@@ -245,7 +244,14 @@ export function AgentsPanel({
     return (
       <TaskRow
         key={t.taskId}
-        view={v}
+        id={t.taskId}
+        status={t.status}
+        label={v.label}
+        model={v.model}
+        modelId={t.model}
+        lead={v.line.lead}
+        tone={v.line.tone}
+        code={v.line.code}
         elapsed={Number.isFinite(ms) ? formatDuration(ms) : ''}
         onOpen={openRow}
         onStop={onStopTask && t.status === 'running' ? stopRow : undefined}
@@ -491,10 +497,17 @@ const TONE: Record<TaskLine['tone'], string> = {
 /**
  * One task, always two lines and the same height (the list holds still while lines change): its state as a dot, a short label, the model
  * of a sub-agent and the time; then what it does now or how it ended, one line, cut with an ellipsis. It opens the detail view; a running
- * one has Stop beside it.
+ * one has Stop beside it. Plain values only, so a row renders again only when what it shows changed (a live line, its clock).
  */
 const TaskRow = memo(function TaskRow({
-  view: v,
+  id,
+  status,
+  label,
+  model,
+  modelId,
+  lead,
+  tone,
+  code,
   elapsed,
   onOpen,
   onStop,
@@ -502,7 +515,16 @@ const TaskRow = memo(function TaskRow({
   stopDisabled,
   failure,
 }: {
-  view: RowView;
+  id: string;
+  status: ChatTask['status'];
+  label: string;
+  /** A sub-agent's model label ("unavailable" until reported); null for a command. */
+  model: string | null;
+  /** The model id as Claude Code reported it, for the label's tooltip. */
+  modelId: string | null;
+  lead: string | null;
+  tone: TaskLine['tone'];
+  code: string | null;
   elapsed: string;
   onOpen: (taskId: string) => void;
   onStop?: (taskId: string) => void;
@@ -510,31 +532,30 @@ const TaskRow = memo(function TaskRow({
   stopDisabled: boolean;
   failure?: string;
 }) {
-  const t = v.task;
-  const state = (TASK_STATUS[t.status] ?? TASK_STATUS.running).label;
+  const state = (TASK_STATUS[status] ?? TASK_STATUS.running).label;
   return (
-    <li className="flex h-15 items-stretch" data-task={t.taskId}>
+    <li className="flex h-15 items-stretch" data-task={id}>
       <button
         type="button"
-        onClick={() => onOpen(t.taskId)}
-        aria-label={`${v.label}, ${state}${v.model ? `, model ${v.model}` : ''}. Open`}
+        onClick={() => onOpen(id)}
+        aria-label={`${label}, ${state}${model ? `, model ${model}` : ''}. Open`}
         className="press flex min-w-0 flex-1 items-center gap-3 pr-2 pl-4 text-left hover:bg-surface-2/60"
       >
-        <span className={cn('size-2 shrink-0 rounded-full', DOT[t.status])} aria-hidden="true" />
+        <span className={cn('size-2 shrink-0 rounded-full', DOT[status])} aria-hidden="true" />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-[13.5px] leading-5 font-semibold">{v.label}</span>
-            {v.model && (
+            <span className="min-w-0 flex-1 truncate text-[13.5px] leading-5 font-semibold">{label}</span>
+            {model && (
               <span
-                title={t.model ?? 'Not reported yet'}
-                className={cn('shrink-0 rounded px-1.5 py-px text-[10.5px] font-semibold tracking-wide uppercase', t.model ? 'bg-surface-2 text-ink-soft' : 'text-muted')}
+                title={modelId ?? 'Not reported yet'}
+                className={cn('shrink-0 rounded px-1.5 py-px text-[10.5px] font-semibold tracking-wide uppercase', modelId ? 'bg-surface-2 text-ink-soft' : 'text-muted')}
               >
-                {v.model}
+                {model}
               </span>
             )}
             {elapsed && <span className="shrink-0 text-[12px] text-muted tabular-nums">{elapsed}</span>}
           </span>
-          <Line line={v.line} failure={failure && !stopping ? failure : undefined} />
+          <Line lead={lead} tone={tone} code={code} failure={failure && !stopping ? failure : undefined} />
         </span>
         {!onStop && <ChevronRight className="size-4 shrink-0 text-muted" aria-hidden="true" />}
       </button>
@@ -546,8 +567,8 @@ const TaskRow = memo(function TaskRow({
             icon={<CircleStop className="size-[18px]" aria-hidden="true" />}
             loading={stopping}
             disabled={stopDisabled}
-            onClick={() => onStop(t.taskId)}
-            aria-label={stopping ? `Stopping ${v.label}` : `Stop ${v.label}`}
+            onClick={() => onStop(id)}
+            aria-label={stopping ? `Stopping ${label}` : `Stop ${label}`}
             title={stopping ? 'Stopping…' : 'Stop'}
           />
         </span>
@@ -557,7 +578,7 @@ const TaskRow = memo(function TaskRow({
 });
 
 /** A row's second line: one line, cut with an ellipsis. A Stop that failed says why, in its place. */
-function Line({ line, failure }: { line: TaskLine; failure?: string }) {
+function Line({ lead, tone, code, failure }: TaskLine & { failure?: string }) {
   if (failure)
     return (
       <span role="alert" className="block truncate text-[12.5px] leading-[18px] font-medium text-danger">
@@ -566,10 +587,10 @@ function Line({ line, failure }: { line: TaskLine; failure?: string }) {
     );
   return (
     <span className="flex min-w-0 items-baseline gap-1.5 text-[12.5px] leading-[18px]">
-      {line.lead && <span className={cn(line.code ? 'shrink-0' : 'min-w-0 truncate', TONE[line.tone])}>{line.lead}</span>}
-      {line.code && (
+      {lead && <span className={cn(code ? 'shrink-0' : 'min-w-0 truncate', TONE[tone])}>{lead}</span>}
+      {code && (
         <span className="min-w-0 truncate text-[12px] text-muted" style={{ fontFamily: MONO }}>
-          {line.code}
+          {code}
         </span>
       )}
     </span>
