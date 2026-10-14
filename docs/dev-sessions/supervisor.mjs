@@ -11,6 +11,9 @@
 //   4. Keeps watching, every ROUND_S seconds: a session idle for a few minutes gets a nudge to carry on (nobody else will); an interrupted one (its
 //      process is gone) is woken by a message; one that ended is started again, told to continue from its status file (at most MAX_STARTS per 24 h,
 //      3 after integrity endings, RESTART_GAP_MIN apart). A status file that starts with TRACK COMPLETE, or a session a person closed, is left alone.
+//   5. T-257: a track left down for any reason (the start cap, a refusal, a missing Claude, the portal unreachable) opens ONE ticket (tag
+//      watchdog) through the API and logs it; starts after a harmless integrity ending (T-136: a second control response, a peer message)
+//      count apart from the cap (MAX_HARMLESS_STARTS of their own). The portal's own watchdog (Keep going, T-259) replaces this script.
 // Stop it: touch ~/.claudepilot/dev-sessions/STOP (checked every round), or kill the process by PID. State: ~/.claudepilot/dev-sessions/state.json.
 // Never logs the code, a cookie or a token.
 
@@ -375,15 +378,76 @@ const trustLogged = new Set();
 
 const within24h = (list) => (list ?? []).filter((x) => Date.now() - x < 24 * 3_600_000);
 
+/**
+ * T-257 item 2: an integrity ending T-136 classifies as harmless (a duplicate control response, a peer message after a sub-agent's) is the
+ * harness's, not the chat's: a start after one does not count against MAX_STARTS or the 3-after-integrity cap. It has its own ceiling,
+ * MAX_HARMLESS_STARTS per 24 h, so a loop of them still stops (and is reported).
+ */
+const MAX_HARMLESS_STARTS = Number(process.env.MAX_HARMLESS_STARTS ?? 12);
+const harmlessEnding = (reason) => /^integrity/i.test(reason ?? '') && /a second control response|origin peer/i.test(reason ?? '');
+
+/**
+ * T-257 item 1: a track left down for any reason (the start cap, a refusal, a missing Claude, a network error) opens ONE ticket through the
+ * API (`POST /api/tickets`, type bug, priority high, tag watchdog) and logs it; the same cause is not reported again until the track runs
+ * again. DRY_RUN only says what it would open. The ticket holds the reason the portal gave (never the code, a cookie or a token).
+ */
+async function reportDown(t, ts, cause, detail) {
+  ts.downReported ??= {};
+  if (ts.downReported[cause]) return;
+  const at = new Date().toISOString();
+  const summary = `${t.title}: left down (${cause}) since ${at.slice(11, 16)} UTC`.slice(0, 140);
+  const description = [
+    `The supervisor (docs/dev-sessions/supervisor.mjs) left the track \`${t.key}\` down and cannot start it again by itself.`,
+    '',
+    `- Cause: ${cause}`,
+    `- Since: ${at}`,
+    `- Last session: ${ts.sessionId ?? 'none'}`,
+    `- Detail: ${String(detail ?? '').replace(/\s+/g, ' ').slice(0, 300)}`,
+    `- Starts in 24 h: ${within24h(ts.starts).length} (after harmless endings: ${within24h(ts.harmless).length})`,
+    '',
+    'A person (or the portal watchdog, T-259) starts it again. This ticket is not repeated while the cause stands.',
+  ].join('\n');
+  if (DRY) {
+    ts.downReported[cause] = { at, id: null };
+    return log(`[dry] ${t.key}: would open a watchdog ticket: ${summary}`);
+  }
+  try {
+    const r = await api('POST', '/api/tickets', { type: 'bug', priority: 'high', tags: ['watchdog'], summary, description, workspaceId: WORKSPACE });
+    if (r.error || !r.data?.id) throw new Error(r.error?.message ?? `status ${r.status}`);
+    ts.downReported[cause] = { at, id: r.data.id };
+    log(`${t.key}: left down (${cause}): opened ${r.data.id}`);
+  } catch (e) {
+    log(`${t.key}: left down (${cause}) and the ticket could not be opened: ${e.message}`);
+  }
+}
+/** What a failed start says about why the track is left down. */
+const downCause = (msg) =>
+  /is a Claude on/.test(msg) ? 'missing_claude' : /fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|network/i.test(msg) ? 'network' : /refused|did not turn on|not trusting/i.test(msg) ? 'refused' : 'start_failed';
+
 async function watch() {
   const until = Date.now() + LIFETIME_H * 3_600_000;
   const idleSince = new Map();
   let stagger = false;
+  let netDownSince = null;
   while (Date.now() < until) {
     if (existsSync(join(STATE_DIR, 'STOP'))) return log('STOP file found: leaving the sessions as they are');
     await ensureTrust().catch((e) => log(`folder trust: could not check: ${e.message}`));
     const state = readState();
-    const list = (await api('GET', '/api/chat/sessions')).data ?? [];
+    let list;
+    try {
+      list = (await api('GET', '/api/chat/sessions')).data ?? [];
+    } catch (e) {
+      // The portal cannot be reached (T-259: the private network dropped): every track counts as down; reported once the portal answers again.
+      netDownSince ??= Date.now();
+      log(`portal unreachable (${e.message}): looking again in ${ROUND_S} s`);
+      await sleep(ROUND_S);
+      continue;
+    }
+    if (netDownSince) {
+      const mins = Math.round((Date.now() - netDownSince) / 60_000);
+      netDownSince = null;
+      if (mins >= 15) for (const t of TRACKS) await reportDown(t, (state.tracks[t.key] ??= { key: t.key, starts: [], nudges: [], wakes: [] }), 'network', `the portal was unreachable from the supervisor for about ${mins} minutes`);
+    }
     const sessions = Array.isArray(list) ? list : (list.items ?? []);
     for (const t of TRACKS) {
       const ts = (state.tracks[t.key] ??= { key: t.key, starts: [], nudges: [], wakes: [] });
@@ -403,6 +467,7 @@ async function watch() {
 
       if (cur && cur.state !== 'ended' && !cur.archivedAt) {
         ts.sessionId = cur.id;
+        ts.downReported = {}; // it runs: a later stop is reported again
         // A move to another Claude restarts the process and starts no turn: the chat sits idle until somebody speaks. Speak at once (not after the
         // idle wait), when it is idle, or as soon as it is.
         if (ts.claudeId && ts.claudeId !== cur.claudeId) {
@@ -503,20 +568,29 @@ async function watch() {
         }
       }
       const recent = within24h(ts.starts);
-      const integrityEnds = recent.length && /^integrity/.test(cur?.endedReason ?? '');
-      if (recent.length >= MAX_STARTS || (integrityEnds && recent.length >= 3)) {
-        if (!ts.capLogged) log(`${t.key}: too many starts in 24 h (${recent.length}): leaving it for a person (${String(cur?.endedReason ?? '').slice(0, 120)})`), (ts.capLogged = true);
+      ts.harmless = within24h(ts.harmless);
+      // The cap counts per root cause (T-257 item 2): starts after a harmless integrity ending are not the chat's and count apart.
+      const harmless = harmlessEnding(cur?.endedReason);
+      const counted = recent.filter((x) => !ts.harmless.includes(x));
+      const integrityEnds = counted.length && /^integrity/.test(cur?.endedReason ?? '');
+      const capped = harmless ? ts.harmless.length >= MAX_HARMLESS_STARTS : counted.length >= MAX_STARTS || (integrityEnds && counted.length >= 3);
+      if (capped) {
+        if (!ts.capLogged) log(`${t.key}: too many starts in 24 h (${counted.length}, ${ts.harmless.length} after harmless endings): leaving it for a person (${String(cur?.endedReason ?? '').slice(0, 120)})`), (ts.capLogged = true);
+        await reportDown(t, ts, 'start_cap', `${counted.length} starts in 24 h (${ts.harmless.length} after harmless endings); the last ending: ${cur?.endedReason ?? 'none'}`);
+        saveState(state);
         continue;
       }
       if (recent.length && Date.now() - recent[recent.length - 1] < RESTART_GAP_MIN * 60_000) continue;
       if (stagger && !DRY) await sleep(STAGGER_S);
       try {
         await startSession(t, ts, !!cur, cur?.endedReason ?? 'it was not running');
+        if (harmless && !DRY) ts.harmless.push(ts.starts[ts.starts.length - 1]);
         ts.capLogged = false;
         stagger = true;
       } catch (e) {
         log(`${t.key}: could not start: ${e.message}`);
         ts.backoffUntil = Date.now() + 10 * 60_000;
+        await reportDown(t, ts, downCause(e.message), e.message);
       }
       saveState(state);
     }
