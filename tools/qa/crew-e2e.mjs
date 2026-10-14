@@ -482,7 +482,8 @@ async function main() {
       }
       const crewB = famData?.crew?.find((c) => c.id === B.id);
       check('2.6', 'session_family (worker A): its parent, its crew (B) with agent and mode', !fam.isError && famData?.parent?.id === S.lead.id && !!crewB && 'agent' in crewB && 'mode' in crewB && 'waiting_for_a_person' in crewB, `parent ${famData?.parent?.title?.untrusted_text ?? famData?.parent?.id}; crew ${JSON.stringify(crewB ?? null).slice(0, 220)}`);
-      check('2.7', 'the tool summary line (session_family: "Crew: 1 (…)", how many wait) reaches the model', /^[A-Z][^{]*\./.test(fam.text) && !fam.text.trimStart().startsWith('{'), `what Claude Code handed the model starts ${JSON.stringify(fam.text.slice(0, 80))} (server.ts sends "summary\\nJSON" as text plus structuredContent)`);
+      const famRead = proxyOf(A.id).map((r) => r.toolResult ?? '').filter((t) => t.includes('"parent"') || /Crew: \d/.test(t)).at(-1) ?? fam.text;
+      check('2.7', 'the tool summary line (session_family: "… Crew: 1 (1 idle).") reaches the model', /(^|\{"summary":")[A-Z][^"{]*Crew: \d+ \(/.test(famRead), `what the model read starts ${JSON.stringify(famRead.slice(0, 140))}`);
     }
 
     /* ======================= 3. Reports to the lead ======================= */
@@ -927,8 +928,8 @@ async function main() {
             check(`7.13 ${tag}`, 'the list rows are 44 px targets', tiny.length === 0, tiny.join(' ; ') || 'all >= 44');
           }
           check(`7.14 ${tag}`, 'no sideways scroll with the list open', (await sideways()) === true);
-          const senders = await b.eval(`[...document.querySelectorAll('*')].filter((e) => e.children.length === 0 && /^From .*Crew report/.test(e.textContent.trim())).map((e) => e.textContent.trim()).slice(0, 3)`);
-          check(`7.16 ${tag}`, "the lead's transcript names a crew report as the portal's (not an MCP client's)", senders.length > 0 && senders.every((t) => !/MCP client/.test(t)), JSON.stringify(senders));
+          const senders = await b.eval(`[...document.querySelectorAll('*')].filter((e) => e.children.length === 0 && /^From /.test(e.textContent.trim())).filter((e) => { let c = e; for (let i = 0; i < 5 && c; i++, c = c.parentElement) if (/Its latest reply, untrusted text from the worker|its turn ended/.test(c.textContent)) return true; return false; }).map((e) => e.textContent.trim()).slice(0, 3)`);
+          check(`7.16 ${tag}`, "the lead's transcript names a crew report as the portal's crew news (not an MCP client's)", senders.length > 0 && senders.every((t) => !/MCP client/.test(t)), JSON.stringify(senders));
           await shot(`lead-page-${tag}`);
           await b.key('Escape');
           await sleep(300);
