@@ -741,7 +741,7 @@ Generated from the registered tool list (18 files) and checked for coverage. Sco
 | `session_get` | read | session view session_id |  |
 | `session_interrupt` | operate D | session operate session_id |  |
 | `session_end` | operate D | session operate session_id |  |
-| `session_start` | admin D | workspace operate workspace_id; claude operate claude_id | the session is owned by the token's user; never bypass-capable |
+| `session_start` | admin D | workspace operate workspace_id; claude operate claude_id; session operate parent (optional, T-336) | the session is owned by the token's user; never bypass-capable; a parent that is missing, ended, in another workspace or refused is the same not found |
 | `session_send` | admin D | session operate session_id | scope admin today: stays |
 | `session_respond` | operate D | session operate session_id | allow needs scope admin; never Bypass |
 | `session_configure` | admin D | session operate session_id | model, effort, mode; never enters Bypass |

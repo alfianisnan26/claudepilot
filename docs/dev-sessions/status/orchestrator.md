@@ -1,3 +1,56 @@
+# ORCHESTRATOR CHAT a8393f6b (continues 75f044fb), 2026-10-14 ~22:50 UTC
+
+- Tickets of 75f044fb already assigned to this chat (ticket_adopt: nothing to move). Workers 77671a92 and c378d9e7 are gone, no reports posted; their commits are pushed: dev/t293-7 b460fcc (T-342 N1), dev/t-330-1 143e863 (cpbview flakes T-330/T-331/T-272).
+- In flight: gate-job on origin/wip/batch-4 ce7014a (background); reviewer sub-agent (opus, medium) blind re-read of N1 on b460fcc; qa-verifier sub-agent (sonnet, medium) for 143e863 with before/after counts under hogs; worker d9a3cdd8 (qa-verifier, sonnet, dontAsk, on sekar) verifies T-334 by following the text; explorers (haiku, low) plan steps for T-312 slice A (spikes + lab by root) and T-321 (empty crew list). No E2 experiment running (lab_arm_draw: no draw).
+- 22:56 gate-job ce7014a GREEN (suite 405 s) -> wip/batch-4 merged into integration (2f3de50, status conflict kept ours), pack 3da7eb7, pushed origin + pilot. CLOSED T-333 (gap T-347), T-336 (gaps T-348 high authz, T-349), T-343 (gaps T-350, T-351).
+- 23:05 N1 re-read SAFE (comment 1979; 54/54 job bd0161da, fails with engine reverted job f37aed1c). dev/t293-7 (incl. t293-6) merged (factory-brief conflict: new budget line + dontAsk check line), 58/58 factory+tokenLease+contextPack, pack, pushed 1ea2dbf. CLOSED T-342 (minors -> T-352). T-338 not claimable ("no ticket to claim"): its verdict is in T-342's closing summary.
+- DEPLOY DECISION: today (UTC) already had 3 portal deploys (runs 28-30) = the D-cap; batches 3+4 (+T-342, docs/qa only) deploy after 00:00 UTC with /deploy. T-336 touches portalmcp tools: the release may wait for a person.
+- In flight (5): verifier T-330 (sonnet), worker d9a3cdd8 T-334, implementers T-312 slice A (dev/t-312-2), T-321 (dev/t-321-2), T-348 (dev/t-348-1, opus, high; claimed). Briefs' heads in ~/work/briefs/.
+
+---
+
+# HAND-OVER FROM CHAT 75f044fb (continued 5802dfa4), 2026-10-14 ~22:50 UTC. READ THIS FIRST. Details of tonight below; older log under "OLDER LOG".
+
+## State
+- LIVE: portal 2026.10.14-10, deploy run 30 (rmv8nked07c2fcf, b71f94f), every job passed incl. chats, no rollback. Carries T-329, T-328, T-334, T-306 items 1-2.
+- integration (origin and pilot) = this commit: batches 1-3 (batch 3 = factory --start with the T-338 fixes, OFF by default, unwired; gate-job 44ab7d0 green). Batches 2-3 extras NOT deployed yet (batch 3).
+- BATCH 4 is NOT on integration: branch wip/batch-4 (head bfd7ec6 + status) = merges of dev/t-333-1 (T-333), dev/t-336-1 (T-336), dev/t-343-1 (T-343), pack regenerated. Its gate-job ran from the old chat; its verdict is lost with the chat: re-run `scripts/gate-job.sh <head of wip/batch-4>` in the background; green -> merge wip/batch-4 into integration (ff or merge), push origin and pilot, deploy batches 3+4 with /deploy (T-336 touches portalmcp tools: the release may need a person). Then close T-333, T-336, T-343 (verdicts PASS WITH GAPS in comments 1921, 1931, 1932/1933; a follow-up ticket per gap first).
+
+## Workers still running (started by 75f044fb; they post their report as a comment on their ticket; adopt the tickets with ticket_adopt from 75f044fb-168c-458a-a646-e5742109b072)
+- 77671a92 implementer: T-342 blocker N1 (the third blind review, comment 1930), branch dev/t293-7 from dev/t293-6. After its report: a short blind re-read of N1 only; SAFE -> merge dev/t293-6 + dev/t293-7. --start stays off until the owner answers T-339.
+- c378d9e7 implementer: cpbview gate flakes T-330, T-331, T-272 (one file, apps/server/src/browser/cpbview.test.ts), branch dev/t-330-1; report on T-330 with before/after counts under load. Then a verifier.
+
+## Ticket states (all claimed by 75f044fb unless noted)
+- Closed done tonight: T-302, T-309, T-320, T-322, T-324, T-297, T-296, T-328, T-329.
+- In review: T-333, T-336, T-343 (batch 4, waiting for the gate), T-338 (merged in batch 3; rest is T-342), T-334 (built and live; needs a verifier), T-317 (live Keep going run not done).
+- In progress: T-342 (N1), T-330/T-331/T-272 (flakes), T-321 (FAIL on the proof; next slice in comment 1923: why the crew list is empty at 390-light), T-312 (server grouping done; spikes, lab scoring, chips + screenshots left, comment 1925), T-306 (item 3 lab A/B, item 4 owner approval).
+- Blocked on the owner: T-315, T-319.
+- Filed tonight: T-332..T-345 (follow-ups and findings; T-339 is the owner question).
+
+## Owner questions open
+- T-339: may the factory engine start autonomous workers through the owner-credential admin tools (M2)? Recommendation C: only after T-336 (now built) so they are the lead's crew. Default: --start off.
+- T-315: external heartbeat: service, alert channel, probe B host, where its credential lives.
+- T-319: does the grey band on the phone sheet go?
+- Also owner-gated: T-306 item 4 (install the rtk hook) and T-340 (close the typed `rtk git push` bypass before rtk is on PATH).
+
+## Ranked queue
+1. Gate wip/batch-4, integrate, deploy batches 3+4, close T-333/T-336/T-343 with follow-ups.
+2. Read the two workers' reports on T-342 and T-330; re-read N1 (blind, opus); verifier for the flakes.
+3. Verifier for T-334 (then close).
+4. T-321 next slice; T-312 rest (spikes, lab scoring, chips with a ux-checker).
+5. T-341 (rtk fidelity gaps), T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149 leftovers. Konfersi and Event stay paused (D-45).
+
+## Lessons (tonight)
+- Claim before dispatch: ticket_claim_next WITH an id works (the context-pack lesson "takes no id" is out of date); workers may then comment on the ticket; in_review at merge, close on the verifier verdict, a follow-up ticket per gap.
+- Workers of an ended chat cannot be read by its successor: every worker posts its report as a comment on its ticket.
+- dontAsk workers are refused `git -C`, `cd &&`, pipes, /tmp, quiet.sh, sed -i, heredocs, and edits under .claude/agents: brief one plain job-run call and the Read/Edit tools; the lead applies role-file text (T-334).
+- Job checkouts are shallow: no parent checkout; use scripts/job-run.sh --against <full hash> --keep-tests <files> (T-333, on wip/batch-4) or sed the fix out in the job.
+- The portal rate-limits MCP calls (about 12 ticket calls in a burst): spread a ticket pass.
+- A worktree spawned before a local rebase carries the pre-rebase commit (harmless when identical).
+- A test fixture must describe a state the real portal produces (the factory's cost stop passed tests yet could never fire: cost_usd is set only at turn end; T-343 adds a live estimate).
+
+---
+
 # ORCHESTRATOR CHAT 75f044fb (continues 5802dfa4), 2026-10-14 ~21:40 UTC
 
 - Run 29 PASSED: main 26c4630 "deploy: portal 2026.10.14-9"; Argo CD Synced/Healthy on 26c4630; the portal pod runs image portal:2026.10.14-9 (scripts/k3s-status.sh). integration d89d370 has the release merge. (ci_run_get from this chat says NOT_FOUND: an agent sees only the runs of its own branch or ticket; the evidence is git and the cluster.)
@@ -10,6 +63,11 @@
 - T-293 slice 4 DONE by 2ffc9db7 (dev/t293-4 37bcb98 6bfe9a3; job 26c076dc 35/35, typecheck rc 0). Blind review bceef522 (opus): SAFE AFTER FIXES, safety 2/5: B1 forged markers drive admin session_interrupt/send, B2 = T-337, B3 budget counts turns (never fires); M1 two rounds, M2 admin path vs D-49, M3 brief injection. dev/t293-4 is HELD out of integration. Filed T-336 (no parent), T-337 (worktree on the wrong machine), T-338 (the fixes, high), T-339 (owner: admin path, recommendation C; default --start stays off). Implementer df708399 (opus) on T-338, branch dev/t293-5 from dev/t293-4.
 - T-306 items 1-2 DONE by d0448e00 (dev/t-306-1 469c7e3..4a6a219; job 5f80192c: keep git status, git log -N, grep -rl/rg -l at 100 percent fidelity, 17-42 percent fewer bytes; drop ls, find, grep -n; 0 bypass on 70 deny rules; hook installed nowhere). Filed T-340 (typed `rtk git push` past the deny rules once rtk is on PATH; no exposure today). .gitignore job-run-artifacts/ by me (78373ec). Verifier fc00f9af checks it; then batch 2.
 - Batch 2 = T-306 items 1-2 (verifier fc00f9af PASS WITH GAPS: 0 bypass job ca4591ed, rtkHook 12/12 job b9c1d026; fidelity gaps filed T-341) + T-334 (dev/t-334-1 667859c docs and briefs; role files by me 978888b: the worker was refused edits under .claude/agents) + .gitignore. Gate on a wip branch, then integration, then ONE deploy of batches 1+2 (T-329 is authz: the release waits for a person).
+- RUN 30 PASSED: portal 2026.10.14-10 from b71f94f (batches 1+2: T-329, T-328, T-334, T-306 items 1-2); release auto; release commit 28d553c on integration.
+- T-338 fixes DONE by df708399 (dev/t293-5 644bdb4..e4efeca, 47/47 job 6aebea8f, each fix fails sed-ed out job d2bc39e7). Re-review 40e22622: SAFE AFTER FIXES (B1 B2 M3 m1-m3 closed; B3 only partly: cost_usd is set at turn end; unbounded re-dispatch) -> T-342 (implementer b41b0cca, dev/t293-6). Filed T-343 (live cost mid-turn). Batch 3 = merge of dev/t293-5 (b3c160c; brief conflict resolved keeping the cost line and the dontAsk line).
+- TICKET FLOW (coordinator 22:15): claim before dispatch (ticket_claim_next WITH id works; the old lesson "takes no id" is wrong now), in_review at merge, close on the verifier verdict with follow-ups for gaps. Done 22:16: CLOSED T-302, T-309, T-320, T-322 (+T-345), T-324, T-297 (+T-344), T-296, T-328, T-329. IN REVIEW T-321, T-312, T-317, T-334, T-338. BLOCKED (owner) T-315, T-319. IN PROGRESS T-306 (items 3-4). T-294 could not be claimed ("no ticket to claim"): this line is its report.
+- In flight (5): verifier 0f4f96a6 (T-321, T-312); implementers b41b0cca (T-342, dev/t293-6), 8d08616a (T-343, dev/t-343-1), 692c90b5 (T-336, dev/t-336-1), 9df88461 (T-333, dev/t-333-1). All their tickets are claimed by me.
+- Filed tonight: T-332..T-345 (T-339 is an owner question: factory admin path, recommendation C).
 - T-313 (needs real-Claude measurements) and T-314 (needs a live integrity ending) wait: low, situational.
 - Next: their reports; integrate dev/t-329-1 in a batch with ONE background gate-job; queue item 2 onward (T-313, T-314, T-293 slice, T-306, T-149 leftovers).
 
