@@ -36,6 +36,7 @@ const OUTCOME: Record<string, string> = {
   denied: 'Denied',
   withdrawn: 'Withdrawn',
   expired: 'Expired',
+  stale: 'Cleared', // T-284: its process was gone (a move, a restart, a crash, a resume)
 };
 
 const NO_INPUTS: ReadonlyMap<string, ChatInputState> = new Map();

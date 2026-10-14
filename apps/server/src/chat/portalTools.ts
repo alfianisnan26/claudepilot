@@ -21,6 +21,8 @@ export interface ChatToolHost {
   lastReply(id: string): string | null;
   /** T-136: recover a session ended for integrity in place (the controller's rules: never a person's close, the cap, the pause, a suspicious cause). */
   recover(id: string, opts: { by: 'agent'; actor: string }): Promise<ChatSession>;
+  /** T-284: clear a request no process can answer any more (refused for one of the live process). */
+  clearRequest(id: string, requestId: string, opts: { actor: string }): Promise<{ requestId: string; outcome: string; session: ChatSession }>;
 }
 
 /** The session behind an agent's token: only a session may start workers, message its family or look at it. */
@@ -223,6 +225,39 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       const back = await chat.recover(s.id, { by: 'agent', actor: ctx.actor });
       ctx.affected(`session:${back.id}`);
       return { summary: `Recovered ${back.id} in place (${back.state}${back.mode === 'bypassPermissions' ? ', Bypass kept' : ''}).`, session: { id: back.id, state: back.state, mode: back.mode } };
+    },
+  });
+
+  // T-284: a request whose process is gone (a move, a restart, a crash, a resume) can't be answered and keeps the chat waiting. An agent
+  // reaches the chats of its own workspace (another workspace's: not found, like a missing id); an admin's token, the chats it may operate.
+  // A request of the live process is refused: it is answered with session_respond, never cleared.
+  registry.register({
+    name: 'session_request_clear',
+    title: 'Clear a request nobody can answer',
+    description:
+      'Clears a request (a tool approval, a question, a plan) that the chat still lists but whose Claude Code process is gone (the chat moved, restarted, crashed or resumed since), so the chat stops waiting and can restart. Every such request of the chat is cleared with it, audited. A request of the running process is refused: answer it instead.',
+    scope: 'agent',
+    rate: { perMinute: 6, perHour: 30 },
+    input: z.object({
+      session_id: z.string().min(1).max(80).describe('The chat that lists the request.'),
+      request_id: z.string().min(1).max(120).describe('The request’s id (session_get shows it).'),
+    }),
+    async handler(ctx, args) {
+      const actor = actorOfPrincipal(ctx.principal);
+      const s = chat.get(args.session_id);
+      let reachable = false;
+      if (s && actor) {
+        try {
+          requireCan(actor, 'operate', ctx.isAgent ? workspaceRef(s.workspaceId) : sessionRef(s.id));
+          reachable = true;
+        } catch {
+          reachable = false;
+        }
+      }
+      if (!s || !reachable) throw new AppError('NOT_FOUND', 'No such session.');
+      const done = await chat.clearRequest(s.id, args.request_id, { actor: ctx.actor });
+      ctx.affected(`session:${s.id}`);
+      return { summary: `Cleared request ${done.requestId} (${done.outcome}).`, request_id: done.requestId, outcome: done.outcome, session: { id: done.session.id, state: done.session.state, waiting: done.session.waiting } };
     },
   });
 }

@@ -711,6 +711,8 @@ export class ChatController {
     this.#ticking = true;
     try {
       await Promise.allSettled(this.#chat.liveRows().map((row) => this.#check(row)));
+      // T-284: a request of a process that is no longer the live one (a move, a restart, a crash, a resume) is resolved `stale`.
+      if (!this.#closed) for (const id of this.#chat.sessionsWithOpenRequests()) this.#dropStale(id, 'sweep');
     } catch {
       // the store is unavailable: try again next round
     } finally {
@@ -759,6 +761,75 @@ export class ChatController {
     for (const requestId of this.#chat.expireOpenRequests(sessionId)) this.#append(sessionId, { kind: 'resolved', requestId, outcome: 'expired' });
     if (this.#chat.endRunningTasks(sessionId)) this.#emitTasks(sessionId);
     this.#bypassOver(sessionId, how);
+  }
+
+  /**
+   * T-284: the open requests no process can answer any more. With no live process, every one; with a live one, those another process
+   * raised (`chat_requests.proc` is not this process's controlProc). A row from before migration 830 has no proc: it is stale when the
+   * portal read it before the live process started (process_started_at is whole seconds, so a request of the live process is never judged
+   * stale by the rounding). Nothing while a launch, a sleep, a move or a restart is deciding, nor for an ended session.
+   */
+  #staleIds(sessionId: string): string[] {
+    if (this.#busy.has(sessionId) || this.#moving.has(sessionId) || this.#restarting.has(sessionId)) return [];
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state === 'ended') return [];
+    const open = this.#chat.openRequestOrigins(sessionId);
+    if (!open.length || row.process !== 'live') return open.map((r) => r.requestId);
+    const proc = controlProc(row);
+    const started = Date.parse(row.process_started_at ?? '');
+    return open.filter((r) => (r.proc !== null ? r.proc !== proc : Number.isFinite(started) && Date.parse(r.createdAt) < started)).map((r) => r.requestId);
+  }
+
+  /**
+   * T-284: resolves requests nobody can answer any more as `stale` (the transcript shows each resolved, the chat leaves `waiting`, one
+   * audit row with the ids and why, never a request's text). `all`: every open request, whoever raised it (a new process was just
+   * launched and has raised none yet; or the host said the process is gone). Returns the ids it resolved.
+   */
+  #dropStale(sessionId: string, why: 'launch' | 'sweep' | 'restart' | 'clear' | 'gone', actor: string | null = null, all = false): string[] {
+    const ids = all ? this.#chat.openRequests(sessionId).map((r) => r.requestId) : this.#staleIds(sessionId);
+    const dropped = ids.filter((id) => this.#chat.staleRequest(sessionId, id, actor));
+    if (!dropped.length) return [];
+    for (const requestId of dropped) this.#append(sessionId, { kind: 'resolved', requestId, outcome: 'stale' });
+    const row = this.#chat.row(sessionId);
+    if (row?.state === 'waiting' && this.#chat.openRequests(sessionId).length === 0) this.#chat.patchSession(sessionId, { state: row.process === 'live' ? 'idle' : 'interrupted' });
+    this.#chat.addAudit({ severity: 'info', kind: 'session.request_stale', sessionId, workspaceId: row?.workspace_id ?? null, actor: actor ?? 'portal', detail: { why, requestIds: dropped } });
+    this.#emitSession(sessionId);
+    return dropped;
+  }
+
+  /**
+   * T-284: before a Restart or an explicit clear. The stale requests go; when requests are still open for the process the row calls live,
+   * the host is asked: a process it says is gone is marked gone (its requests resolved `stale` first), so nothing waits on a dead process.
+   * A process the host says is running, or cannot say (unreachable), keeps its requests: they are answered, never dropped.
+   */
+  async #settleStale(sessionId: string, why: 'restart' | 'clear', actor: string | null): Promise<void> {
+    await this.#busy.get(sessionId); // a launch or a sleep in flight settles first
+    this.#dropStale(sessionId, why, actor);
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state === 'ended' || row.process !== 'live' || !this.#chat.openRequests(sessionId).length) return;
+    const status = await this.#status(row.workspace_id, claudeSessionOf(row));
+    const now = this.#chat.row(sessionId);
+    if (status !== 'gone' || !now || now.state === 'ended' || now.process !== 'live' || controlProc(now) !== controlProc(row) || this.#busy.has(sessionId)) return;
+    this.#dropStale(sessionId, 'gone', actor, true);
+    this.#markGone(sessionId);
+  }
+
+  /**
+   * T-284: clears an open request that no process can answer any more (POST CHAT_API.clearRequest, the Portal MCP `session_request_clear`).
+   * Every stale request of the session goes with it (audited, `session.request_stale`). Refused for a request of the live process: that
+   * one is answered (allow or deny), never cleared. NOT_FOUND for an id the session never had; CONFLICT when it is no longer open.
+   */
+  async clearRequest(rawId: string, requestId: string, opts: { actor?: string } = {}): Promise<{ requestId: string; outcome: string; session: ChatSession }> {
+    const sessionId = this.#chat.resolveId(rawId);
+    this.#require(sessionId);
+    if (!this.#chat.openRequests(sessionId).some((r) => r.requestId === requestId)) {
+      if (this.#chat.requestOutcome(sessionId, requestId) === null) throw new AppError('NOT_FOUND', 'No such request.');
+      throw new AppError('CONFLICT', 'That request is no longer open.');
+    }
+    await this.#settleStale(sessionId, 'clear', opts.actor ?? 'ui');
+    const outcome = this.#chat.requestOutcome(sessionId, requestId);
+    if (outcome === null) throw new AppError('CONFLICT', 'That request is from the running Claude Code process: answer it (allow or deny); it is not stale.');
+    return { requestId, outcome, session: this.#decorate(this.#chat.get(sessionId)!) };
   }
 
   /**
@@ -2267,7 +2338,7 @@ export class ChatController {
    */
   async restart(rawId: string, opts: { why?: unknown; when?: unknown; interrupt?: unknown; actor?: 'ui' | 'portal'; from?: 'queue' | 'auto' } = {}): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
-    const session = this.#require(sessionId);
+    let session = this.#require(sessionId);
     this.#notMoving(sessionId);
     const why = opts.why === undefined || opts.why === 'manual' ? 'manual' : opts.why === 'mcp' ? 'mcp' : null;
     if (!why) throw new AppError('VALIDATION_FAILED', 'Unknown reason.', { details: { why: 'Expected mcp or manual.' } });
@@ -2275,6 +2346,12 @@ export class ChatController {
     if (!when) throw new AppError('VALIDATION_FAILED', 'Unknown time.', { details: { when: 'Expected now or turn_end.' } });
     const interrupt = when === 'now' && opts.interrupt === true;
     if (this.#restarting.has(sessionId)) throw new AppError('CONFLICT', 'This chat is already restarting.');
+    // T-284: requests no process can answer any more never block a restart (they are dropped, audited); only one of the live process does.
+    if (this.#chat.openRequests(sessionId).length) {
+      await this.#settleStale(sessionId, 'restart', opts.actor ?? 'ui');
+      if (this.#restarting.has(sessionId)) throw new AppError('CONFLICT', 'This chat is already restarting.');
+      session = this.#require(sessionId);
+    }
     if (when === 'turn_end') {
       if (session.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
       const row = this.#chat.row(sessionId)!;
@@ -3132,6 +3209,8 @@ export class ChatController {
         byteOffset: 0,
         endedReason: null,
       });
+      // T-284: what an earlier process asked can never be answered now (this one has asked nothing yet): resolved `stale`.
+      this.#dropStale(sessionId, 'launch', null, true);
       this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
       this.#saveControl(sessionId);
       this.#launchedAt.set(sessionId, Date.now());
@@ -3714,7 +3793,9 @@ export class ChatController {
       }
       let canonical;
       try {
-        canonical = this.#chat.addRequest(sessionId, { ...parsed.request, agentLabel: parent ? this.#label(sessionId, parent) : null });
+        // T-284: the process that raised it, so a request of a process that is no longer the live one is known to be stale.
+        const row = this.#chat.row(sessionId);
+        canonical = this.#chat.addRequest(sessionId, { ...parsed.request, agentLabel: parent ? this.#label(sessionId, parent) : null }, row ? controlProc(row) : null);
       } catch {
         return void this.#endIntegrity(sessionId, `a tool request id arrived twice (${shortId(parsed.request.requestId)})`, 'request-duplicate');
       }
@@ -3837,6 +3918,12 @@ export class ChatController {
       return true;
     }
     if (answered === 'completed') return this.#secondControlResponse(sessionId, ANSWERED(id), reply, digest);
+    // T-284 (INTEGRITY_CASES `control-stale`): Claude Code raised this request and the portal resolved it `stale` (its process was not the
+    // live one); a late answer for it is not one "this portal never asked for": ignored and logged (id only), the session goes on.
+    if (answered === null && this.#chat.requestOutcome(sessionId, id) === 'stale') {
+      console.log(`[chat] ${shortId(sessionId)}: ignored a control response for stale request ${shortId(id)} (T-284)`);
+      return false;
+    }
     this.#endIntegrity(sessionId, `a control response for request ${shortId(id)} that this portal never asked for or answered`, 'control-unknown');
     return false;
   }
