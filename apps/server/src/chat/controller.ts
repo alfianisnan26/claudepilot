@@ -35,6 +35,7 @@ import {
   CHAT_ACTOR_UI,
   CHAT_AGENT_NAME,
   CHAT_ENDED_CREDENTIAL,
+  CHAT_MAX_WORKERS_MAX,
   CHAT_ENDED_INTEGRITY,
   CHAT_RECOVER_CAPPED,
   CHAT_SESSION_TITLE_MAX,
@@ -50,6 +51,7 @@ import {
   type ChatImage,
   type ChatInputState,
   type ChatKeepGoing,
+  type ChatLimitsResult,
   type ChatModelOption,
   type ChatRequest,
   type ChatServerMessage,
@@ -105,7 +107,7 @@ import { type BypassFacts, type BypassRefusal, type BypassState } from './bypass
 import { isStagedUpload } from './artifacts/records.js';
 import { redact } from './redact.js';
 import { NO_VALUES, SessionStream, ValueRedactor } from './valueRedact.js';
-import { MessageRate, pickSpawnClaude, spawnProblem, type AgentCaps, type SpawnClaudeWhy } from './agents.js';
+import { MessageRate, pickSpawnClaude, spawnProblem, SUBAGENT_TOOLS, workerLimits, type AgentCaps, type SpawnClaudeWhy, type WorkerLimitsAsk } from './agents.js';
 import { capError, makeRoom, SESSION_CAP, weightOf, type LiveCaps } from './caps.js';
 import { defaultBranch, Worktrees, type MadeWorktree } from './worktrees.js';
 import { ChatStore, claudeSessionOf, EVENT_TEXT_MAX, sessionCwd, type ChatSessionPatch, type ChatSessionRow, type InputState } from './store.js';
@@ -316,6 +318,8 @@ export interface ChatCreateOptions {
   bypassOptIn?: boolean;
   /** T-294: how a worker's Claude and settings were chosen, for the `agent.spawned` audit row. */
   spawn?: { claude: string; why: string; role?: string | null; model?: string | null; effort?: string | null; mode?: string | null };
+  /** T-294: a worker's limits as its parent asked (`session_spawn`); absent fields take the parent's, and none may be wider. Only with `parentId`. */
+  limits?: WorkerLimitsAsk;
 }
 
 export interface ChatSendOptions {
@@ -1253,6 +1257,8 @@ export class ChatController {
     const agent = this.#agent(req.agent);
     const parentId = opts.parentId ? this.#require(opts.parentId).id : null;
     if (parentId) this.#checkSpawn(parentId);
+    // T-294: a worker's own limits, no wider than its parent's (refused before anything is made).
+    const limits = parentId ? this.#workerLimits(parentId, opts.limits) : null;
     const wtReq = this.#worktreeRequest(req.worktree);
     const workspaceId = typeof req.workspaceId === 'string' ? req.workspaceId.trim() : '';
     if (!workspaceId) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
@@ -1311,6 +1317,7 @@ export class ChatController {
       bypassCapable,
       worktree,
       agent,
+      ...(limits ? { maxWorkers: limits.maxWorkers, subagents: limits.subagents } : {}),
     };
     let session!: ChatSession;
     if (continuedFrom) {
@@ -1330,7 +1337,7 @@ export class ChatController {
     if (parentId) {
       // Both transcripts say it: the worker's opens with the message that started it, framed as from the parent; the parent notes it here.
       this.#note(parentId, `Started “${title}”.`);
-      this.#chat.addAudit({ severity: 'info', kind: 'agent.spawned', sessionId: id, workspaceId, actor, detail: { parent: parentId, ...(opts.spawn ? { spawn: opts.spawn } : {}) } });
+      this.#chat.addAudit({ severity: 'info', kind: 'agent.spawned', sessionId: id, workspaceId, actor, detail: { parent: parentId, ...(opts.spawn ? { spawn: opts.spawn } : {}), ...(limits ? { limits } : {}) } });
     }
     if (bypassCapable) this.#chat.addAudit({ severity: 'medium', kind: 'bypass.capable', sessionId: id, workspaceId, actor, detail: { how: 'start' } });
     void this.#startProcess(id, { checked: installed }).catch(() => undefined);
@@ -2816,14 +2823,60 @@ export class ChatController {
 
   /** The limits on starting a worker under `parentId`: depth, how many are running, how many an hour. */
   #checkSpawn(parentId: string): void {
-    const caps = this.agentCaps?.();
-    if (!caps) return;
-    const problem = spawnProblem(caps, { id: parentId, depth: this.#depth(parentId) }, this.#chat.list({ parentId }));
+    const caps = this.agentCaps?.() ?? null;
+    const row = this.#chat.row(parentId);
+    // T-294: the session's own limit on workers holds with or without the global caps (clamped to them when they are installed).
+    const problem = spawnProblem(caps, { id: parentId, depth: this.#depth(parentId), maxWorkers: row?.max_workers ?? null }, this.#chat.list({ parentId }));
     if (problem) {
-      const row = this.#chat.row(parentId);
       this.#chat.addAudit({ severity: 'medium', kind: 'agent.refused', sessionId: parentId, workspaceId: row?.workspace_id, actor: `session:${parentId}`, detail: { scope: (problem.details as { scope?: string } | undefined)?.scope ?? 'cap' } });
       throw problem;
     }
+  }
+
+  /** T-294: a worker's limits from its parent's (agents.ts `workerLimits`); a wider ask is refused and audited like the caps. */
+  #workerLimits(parentId: string, ask: WorkerLimitsAsk | undefined): { maxWorkers: number | null; subagents: boolean } {
+    const parent = this.#chat.get(parentId)!;
+    try {
+      return workerLimits(this.agentCaps?.() ?? null, parent, ask);
+    } catch (e) {
+      this.#chat.addAudit({ severity: 'medium', kind: 'agent.refused', sessionId: parentId, workspaceId: parent.workspaceId, actor: `session:${parentId}`, detail: { scope: 'worker_limits' } });
+      throw e;
+    }
+  }
+
+  /**
+   * T-294: a person's or an admin token's change of a session's limits (the route `PATCH CHAT_API.limits`, the tool `session_configure`).
+   * `maxWorkers` (0 to CHAT_MAX_WORKERS_MAX, or null for the global setting) applies at once: it is read at each spawn, and a value above
+   * the global cap counts as the cap. `subagents` applies at the next start of its process (`--disallowedTools`): `restartNeeded` says
+   * when the live process was launched otherwise. A session never changes its own limits (nor any session's): a `session:` actor is refused.
+   */
+  setLimits(rawId: string, req: unknown, opts: { actor: string }): ChatLimitsResult {
+    if (opts.actor.startsWith('session:')) throw new AppError('FORBIDDEN', 'A session can’t change limits, its own or another’s. A person or an admin token sets them.');
+    const id = this.#chat.resolveId(rawId);
+    const before = this.#require(id);
+    const body = req && typeof req === 'object' ? (req as Record<string, unknown>) : {};
+    const patch: { maxWorkers?: number | null; subagents?: boolean } = {};
+    if (body.maxWorkers !== undefined) {
+      const v = body.maxWorkers;
+      if (v !== null && (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > CHAT_MAX_WORKERS_MAX))
+        throw new AppError('VALIDATION_FAILED', `Workers at once is a whole number from 0 to ${CHAT_MAX_WORKERS_MAX}, or none for the global setting.`, { details: { maxWorkers: `0 to ${CHAT_MAX_WORKERS_MAX}, or null.` } });
+      patch.maxWorkers = v;
+    }
+    if (body.subagents !== undefined) {
+      if (typeof body.subagents !== 'boolean') throw new AppError('VALIDATION_FAILED', 'Sub-agents is on or off.', { details: { subagents: 'true or false.' } });
+      patch.subagents = body.subagents;
+    }
+    if (patch.maxWorkers === undefined && patch.subagents === undefined) throw new AppError('VALIDATION_FAILED', 'Give maxWorkers or subagents.', { details: { maxWorkers: 'Or subagents.' } });
+    this.#chat.patchSession(id, patch);
+    const after = this.#chat.get(id)!;
+    const was = { maxWorkers: before.maxWorkers ?? null, subagents: before.subagents !== false };
+    const now = { maxWorkers: after.maxWorkers ?? null, subagents: after.subagents !== false };
+    this.#chat.addAudit({ severity: 'medium', kind: 'session.limits', sessionId: id, workspaceId: after.workspaceId, actor: opts.actor, detail: { from: was, to: now } });
+    // The live process keeps the tools it was launched with: a change of sub-agents waits for its next start.
+    const restartNeeded = was.subagents !== now.subagents && after.process === 'live' && after.state !== 'ended';
+    if (was.subagents !== now.subagents) this.#note(id, `Sub-agents ${now.subagents ? 'on' : 'off'}${restartNeeded ? ' from the next restart' : ''}.`);
+    this.#emitSession(id);
+    return { session: this.#decorate(this.#chat.get(id)!), restartNeeded };
   }
 
   /**
@@ -3330,12 +3383,16 @@ export class ChatController {
     const lines = Object.entries(env).flatMap(([k, v]) => ((HOST_ENV_NAMES as readonly string[]).includes(k) && typeof v === 'string' && v && !/[\r\n]/.test(v) ? [`${k}=${v}`] : []));
     // T-294: the agent it runs as, at EVERY start (new, resume, wake, restart, recover, a Move: they all come through here), read from the
     // row so a Move keeps it. Checked again here: nothing but a plain name ever reaches the command line.
-    const agent = this.#chat.row(o.sessionId)?.agent;
+    const launched = this.#chat.row(o.sessionId);
+    const agent = launched?.agent;
     // `--allow-dangerously-skip-permissions` only for a session that opted in, and only while the policy allows it: without it
     // Claude Code refuses the switch to Bypass (`bypass_not_launched`). It never turns Bypass on by itself.
     const flags = [
       ...BASE_FLAGS,
       ...(agent && CHAT_AGENT_NAME.test(agent) ? ['--agent', agent] : []),
+      // T-294: sub-agents off takes the sub-agent tool away (both its names), at every start like the agent; Claude Code 2.1.296 checked:
+      // docs/prd/evidence/t294-subagents-flag.md. On or off only: Claude Code has no count.
+      ...(launched?.subagents === 0 ? ['--disallowedTools', ...SUBAGENT_TOOLS] : []),
       // The portal's own tools, for a workspace that opted in: the agent scope is rate-limited, labelled and never destructive, deny rules
       // still win, and without this the first call of each tool waits for a tap in Manual mode.
       ...(grant ? ['--mcp-config', grant.mcpConfig, '--allowedTools', PILOT_TOOLS] : []),

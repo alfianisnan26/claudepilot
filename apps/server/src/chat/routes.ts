@@ -13,6 +13,7 @@ import {
   type RecoverChatRequest,
   type RestartChatRequest,
   type SwitchChatRequest,
+  type UpdateChatLimitsRequest,
   type UpdateChatSessionRequest,
   type UpdateRestartHintRequest,
 } from '@portal/contracts';
@@ -125,6 +126,16 @@ export function createChatRoutes(controller: ChatController): Hono {
     requireCan(actorOf(c), 'operate', sessionRef(c.req.param('id')));
     const req = await body<UpdateRestartHintRequest>(c);
     return c.json(success(controller.setRestartHint(c.req.param('id'), { hidden: req.hidden, autoApply: req.autoApply })));
+  });
+
+  // PATCH /api/chat/sessions/:id/limits — its workers at once and its sub-agents on or off (T-294): `manage` on the session (a person, an
+  // admin's token), never the session itself; another user's session is the same 404 as none. Sub-agents apply at its next start.
+  chat.patch('/:id/limits', async (c) => {
+    const actor = actorOf(c);
+    if (actor.kind === 'agent') throw new AppError('FORBIDDEN', 'A session can’t change limits, its own or another’s.');
+    requireCan(actor, 'manage', sessionRef(c.req.param('id')));
+    const req = await body<UpdateChatLimitsRequest>(c);
+    return c.json(success(controller.setLimits(c.req.param('id'), req, { actor: actor.kind === 'user' ? 'ui' : actorString(actor) })));
   });
 
   // GET /api/chat/sessions/:id/segments — the runs of the chat on Claudes.

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
-import { CHAT_AGENT_NAME, type ChatEvent, type ChatPermissionMode, type ChatRequest, type ChatSession } from '@portal/contracts';
+import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, type ChatEvent, type ChatPermissionMode, type ChatRequest, type ChatSession } from '@portal/contracts';
 import { z } from 'zod';
 import { paginate, pageInput } from '../paging.js';
 import { PortalToolError, registerPortalTool, type PortalToolContext } from '../registry.js';
@@ -26,6 +26,8 @@ const sessionBrief = (s: ChatSession, ctx: PortalToolContext) => ({
   started_by: s.startedBy ?? null,
   ticket_id: s.ticketId ?? null,
   agent: s.agent ?? null,
+  max_workers: s.maxWorkers ?? null,
+  subagents: s.subagents !== false,
   model: s.model,
   effort: s.effort,
   mode: s.mode,
@@ -256,20 +258,38 @@ export function registerSessionTools(deps: PortalToolDeps): void {
 
   registerPortalTool({
     name: 'session_configure',
-    title: 'Change a session’s model, effort or mode',
-    description: 'Changes what applies from the session’s next request. Over MCP the mode is limited to plan, default, acceptEdits and dontAsk; auto and bypass are never available here (a person turns them on in the app).',
+    title: 'Change a session’s model, effort, mode or limits',
+    description:
+      'Changes what applies from the session’s next request. Over MCP the mode is limited to plan, default, acceptEdits and dontAsk; auto and bypass are never available here (a person turns them on in the app). Its limits: max_workers (how many workers it may run at once; 0 none, null the global setting, above the global cap counts as the cap) applies at once; subagents (whether its Claude may start Claude Code sub-agents) applies at its next start, so restart_needed says when a Restart is due.',
     scope: 'admin',
     requires: 'session_control',
     hints: { destructive: true, idempotent: true },
-    input: z.object({ id: z.string().max(80), model: z.string().max(80).optional(), effort: z.string().max(20).optional(), mode: z.enum(MCP_MODES).optional() }),
+    input: z.object({
+      id: z.string().max(80),
+      model: z.string().max(80).optional(),
+      effort: z.string().max(20).optional(),
+      mode: z.enum(MCP_MODES).optional(),
+      max_workers: z.number().int().min(0).max(CHAT_MAX_WORKERS_MAX).nullable().optional().describe('Workers it may run at once: 0 none, null the global setting.'),
+      subagents: z.boolean().optional().describe('Whether its Claude may start sub-agents (the Agent tool); applies at its next start.'),
+    }),
     async handler(ctx, args) {
       need(args.id);
-      if (!args.model && !args.effort && !args.mode) throw new AppError('VALIDATION_FAILED', 'Give a model, an effort or a mode.');
+      const limits = args.max_workers !== undefined || args.subagents !== undefined;
+      if (!args.model && !args.effort && !args.mode && !limits) throw new AppError('VALIDATION_FAILED', 'Give a model, an effort, a mode, max_workers or subagents.');
+      // T-294: the limits first (a refusal leaves the rest untouched); the controller refuses a session's own actor.
+      const changed = limits
+        ? chat.setLimits(args.id, { ...(args.max_workers !== undefined ? { maxWorkers: args.max_workers } : {}), ...(args.subagents !== undefined ? { subagents: args.subagents } : {}) }, { actor: ctx.actor })
+        : null;
       if (args.model) await chat.control(args.id, 'model', { model: args.model });
       if (args.effort) await chat.control(args.id, 'effort', { effort: args.effort });
       if (args.mode) await chat.control(args.id, 'mode', { mode: args.mode });
       ctx.affected(`session:${args.id}`);
-      return { summary: `Updated ${args.id}.`, session: sessionBrief(need(args.id), ctx) };
+      const restartNeeded = changed?.restartNeeded === true;
+      return {
+        summary: `Updated ${args.id}.${restartNeeded ? ' Sub-agents change at its next start: restart it (the app’s Restart) to apply now.' : ''}`,
+        session: sessionBrief(need(args.id), ctx),
+        ...(limits ? { restart_needed: restartNeeded } : {}),
+      };
     },
   });
 }

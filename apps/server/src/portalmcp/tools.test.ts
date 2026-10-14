@@ -116,6 +116,7 @@ const fakes = {
     send: async (id: string, _uuid: string, text: string, o: Row) => void (calls.push(`chat.send:${id}:${o.actor}:${text}`), sentLabels.push(o.actorLabel)),
     respond: async (id: string, req: string, decision: string, o: Row) => void calls.push(`chat.respond:${id}:${req}:${decision}:${o.actor}`),
     control: async (id: string, kind: string, v: Row) => void calls.push(`chat.control:${id}:${kind}:${JSON.stringify(v)}`),
+    setLimits: (id: string, req: Row, o: Row) => (calls.push(`chat.limits:${id}:${JSON.stringify(req)}:${o.actor}`), { session: session(id, req), restartNeeded: req.subagents !== undefined }),
   },
   accounts: {
     overview: () => ({ locked: false, accounts: world.accounts, endpoints: [{ id: 'anthropic', name: 'Anthropic', kind: 'anthropic', accounts: 1 }] }),
@@ -506,6 +507,39 @@ test('session_start and session_configure: the actor is the token, and a session
     assert.equal(err(await h.call(admin.secret, 'session_configure', { id: 's1' })), 'VALIDATION_FAILED');
     await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'plan', effort: 'high' });
     assert.deepEqual(calls, ['chat.control:s1:effort:{"effort":"high"}', 'chat.control:s1:mode:{"mode":"plan"}']);
+  } finally {
+    h.module.settings.update({ sessionControl: false });
+  }
+});
+
+test('session_configure (T-294): max_workers and subagents go to the session’s limits as the token; restart_needed for sub-agents; never for a session’s own token', async () => {
+  reset();
+  h.module.settings.update({ sessionControl: true });
+  try {
+    const admin = h.token('admin');
+    const raw = await h.call(admin.secret, 'session_configure', { id: 's1', max_workers: 0, subagents: false });
+    const both = where(raw);
+    assert.deepEqual(calls, [`chat.limits:s1:{"maxWorkers":0,"subagents":false}:portal-mcp:${admin.id}`]);
+    assert.equal(both.restart_needed, true);
+    assert.match(raw.result!.content![0]!.text, /next start/);
+    assert.ok('max_workers' in both.session && 'subagents' in both.session, 'the session brief shows its limits');
+    reset();
+    const workers = where(await h.call(admin.secret, 'session_configure', { id: 's1', max_workers: null }));
+    assert.deepEqual(calls, [`chat.limits:s1:{"maxWorkers":null}:portal-mcp:${admin.id}`], 'null: back to the global setting');
+    assert.equal(workers.restart_needed, false, 'workers apply at once');
+    reset();
+    where(await h.call(admin.secret, 'session_configure', { id: 's1', mode: 'plan' }));
+    assert.deepEqual(calls, ['chat.control:s1:mode:{"mode":"plan"}'], 'no limits asked: none changed');
+    reset();
+    for (const bad of [{ max_workers: -1 }, { max_workers: 21 }, { max_workers: 1.5 }, { subagents: 'off' }]) {
+      const r = await h.call(admin.secret, 'session_configure', { id: 's1', ...bad });
+      assert.ok(r.error || r.result?.isError, JSON.stringify(bad));
+    }
+    assert.equal(err(await h.call(h.token('operate').secret, 'session_configure', { id: 's1', subagents: true })), 'SCOPE_REQUIRED');
+    const own = await h.agentToken('docker/api', 's1');
+    const self = await h.call(own.secret, 'session_configure', { id: 's1', max_workers: 5, subagents: true });
+    assert.ok(self.error || self.result?.isError, 'a session never changes its own limits');
+    assert.deepEqual(calls, [], 'nothing reached the sessions');
   } finally {
     h.module.settings.update({ sessionControl: false });
   }

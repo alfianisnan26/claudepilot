@@ -109,6 +109,18 @@ export interface ChatSession {
    * a Move. Claude Code ignores a name it finds no definition for. Null (or absent) when it runs as Claude Code's default.
    */
   agent?: string | null;
+  /**
+   * T-294: how many workers (sessions it starts with `session_spawn`) may run at once under THIS session. Null: the global
+   * `sessions.maxChildren`. 0: it may not start workers. A value above the global cap counts as the cap (the global settings are the ceiling).
+   * Checked at each spawn, so a change applies at once. Absent on rows from before (null).
+   */
+  maxWorkers?: number | null;
+  /**
+   * T-294: whether its Claude may start Claude Code sub-agents (the Agent tool, older name Task). False: every start of its process is
+   * launched with `--disallowedTools Agent Task`, so a change applies at the next start (a Restart). On or off only: Claude Code has no count.
+   * Absent on rows from before (true).
+   */
+  subagents?: boolean;
   /** The session was started with, or restarted for, Bypass permissions: only then can the person turn it on (FR20). */
   bypassCapable: boolean;
   /** The Claude Code session of the run going now. A chat that moved to another Claude has had several; this id is the portal's own, for every one of them. */
@@ -638,6 +650,24 @@ export interface UpdateRestartHintRequest {
   autoApply?: boolean | null;
 }
 
+/** T-294: the highest `ChatSession.maxWorkers` a caller may set (the `sessions.maxChildren` setting's own maximum). */
+export const CHAT_MAX_WORKERS_MAX = 20;
+
+/**
+ * T-294: `PATCH CHAT_API.limits(id)`, a person's (or an admin token's, over `session_configure`) change of a session's limits. Each field is
+ * optional; absent leaves it as it is. `maxWorkers`: an integer from 0 to {@link CHAT_MAX_WORKERS_MAX}, or null for the global setting.
+ */
+export interface UpdateChatLimitsRequest {
+  maxWorkers?: number | null;
+  subagents?: boolean;
+}
+
+/** T-294: what a limits change answers: the session, and whether its live process needs a Restart for it (a `subagents` change). */
+export interface ChatLimitsResult {
+  session: ChatSession;
+  restartNeeded: boolean;
+}
+
 /** The error code (409) of a queued or automatic restart refused because Bypass could not be kept (T-102). */
 export const BYPASS_NOT_KEPT = 'BYPASS_NOT_KEPT';
 
@@ -762,6 +792,8 @@ export const CHAT_API = {
   pin: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/pin`,
   /** PATCH `UpdateRestartHintRequest`: hide the "Tools changed" hint until the next change, or the automatic restart setting (T-102). */
   restartHint: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/restart-hint`,
+  /** PATCH `UpdateChatLimitsRequest`: its workers at once and its sub-agents on or off (T-294), `ChatLimitsResult`. Never by the session itself. */
+  limits: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/limits`,
   /** GET: the chat's Keep going (`ChatKeepGoing`). PUT `UpdateKeepGoingRequest`: set it (a person; T-259). */
   keepGoing: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/keep-going`,
   /** GET `?after=<seq>`: stored transcript events after a sequence number (history and resume). */

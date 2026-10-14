@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
-import { CHAT_AGENT_NAME, CHAT_SESSION_TITLE_MAX, sessionRef, workspaceRef, type ChatControl, type ChatPermissionMode, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
+import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, CHAT_SESSION_TITLE_MAX, sessionRef, workspaceRef, type ChatControl, type ChatPermissionMode, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
 import { actorOfPrincipal, requireCan } from '../authz/seam.js';
 import { fullInput } from '../portalmcp/compact.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
@@ -15,7 +15,13 @@ export interface ChatToolHost {
   get(id: string): ChatSession | null;
   create(
     req: Partial<CreateChatSessionRequest>,
-    opts: { actor: string; parentId: string; spawn?: { claude: string; why: string; role?: string | null; model?: string | null; effort?: string | null; mode?: string | null } },
+    opts: {
+      actor: string;
+      parentId: string;
+      spawn?: { claude: string; why: string; role?: string | null; model?: string | null; effort?: string | null; mode?: string | null };
+      /** T-294: the worker's limits; absent fields take the parent's, and none may be wider (the controller refuses). */
+      limits?: { maxWorkers?: number; subagents?: boolean };
+    },
   ): Promise<ChatSession>;
   send(id: string, uuid: string, text: string, opts: { actor: string }): Promise<void>;
   messageFamily(fromId: string, toId: string, text: string, opts?: { priority?: 'next' | 'later' }): Promise<void>;
@@ -103,7 +109,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     name: 'session_spawn',
     title: 'Start a worker session',
     description:
-      'Starts another chat session in this workspace to do part of the work, and gives it a first instruction. It runs on your Claude unless claude says otherwise (auto: the Claude of this workspace with the most room, so the work spreads over the accounts), never in bypass mode, and reports to you: you can message it, see how it is doing and stop it; the workers you start can message each other (your crew). The folder must already be trusted. With worktree it works on a branch of its own, apart from your files; with role it runs as the agent .claude/agents/<role>.md; model, effort and mode apply before its first instruction. How many may run, how deep and how often are limited in the portal.',
+      'Starts another chat session in this workspace to do part of the work, and gives it a first instruction. It runs on your Claude unless claude says otherwise (auto: the Claude of this workspace with the most room, so the work spreads over the accounts), never in bypass mode, and reports to you: you can message it, see how it is doing and stop it; the workers you start can message each other (your crew). The folder must already be trusted. With worktree it works on a branch of its own, apart from your files; with role it runs as the agent .claude/agents/<role>.md; model, effort and mode apply before its first instruction. How many may run, how deep and how often are limited in the portal; max_workers and subagents limit the worker further, never wider than your own.',
     scope: 'agent',
     hints: { openWorld: true },
     rate: { perMinute: 10, perHour: 60 },
@@ -118,6 +124,9 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       model: z.string().min(1).max(80).optional().describe('Its model (sonnet, opus, haiku or a full id), set before its first instruction.'),
       effort: z.string().min(1).max(20).optional().describe('Its effort level (low, medium, high), set before its first instruction.'),
       mode: z.enum(WORKER_MODES).optional().describe('Its permission mode: dontAsk runs only what the folder allows and refuses the rest without waiting; plan changes no file; default (as before) asks a person.'),
+      // T-294: the worker's own limits, never wider than yours (absent: yours).
+      max_workers: z.number().int().min(0).max(CHAT_MAX_WORKERS_MAX).optional().describe('How many workers it may run at once (0: none), at most your own limit. Default: your limit.'),
+      subagents: z.boolean().optional().describe('Whether it may start Claude Code sub-agents (the Agent tool). Default: as you; on only if yours are on.'),
     }),
     async handler(ctx, args) {
       const parentId = self(ctx);
@@ -140,6 +149,9 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
           actor: ctx.actor,
           parentId,
           spawn: { claude: on.claudeId, why: on.why, role: args.role ?? null, model: args.model ?? null, effort: args.effort ?? null, mode: args.mode ?? null },
+          ...(args.max_workers !== undefined || args.subagents !== undefined
+            ? { limits: { ...(args.max_workers !== undefined ? { maxWorkers: args.max_workers } : {}), ...(args.subagents !== undefined ? { subagents: args.subagents } : {}) } }
+            : {}),
         },
       );
       // Mode first (it narrows what the worker may do), then model and effort, all before the first instruction. A narrowing mode that is
@@ -181,6 +193,8 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
           branch: child.worktree?.branch ?? null,
           claude: { id: on.claudeId, name: on.name, why: on.why },
           role: args.role ?? null,
+          max_workers: child.maxWorkers ?? null,
+          subagents: child.subagents !== false,
           applied,
           unconfirmed,
         },

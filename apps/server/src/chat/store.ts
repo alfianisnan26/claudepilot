@@ -91,6 +91,10 @@ export type ChatSessionRow = {
   started_by?: string | null;
   /** T-294 (migration 773): the agent it runs as (`--agent`); null: Claude Code's default. */
   agent?: string | null;
+  /** T-294 (migration 774): how many workers it may run at once; null: the global setting. */
+  max_workers?: number | null;
+  /** T-294 (migration 774): 1 (default) lets its Claude start sub-agents; 0 launches it with `--disallowedTools Agent Task`. */
+  subagents?: number | null;
   worktree_path?: string | null;
   worktree_branch?: string | null;
   worktree_repo?: string | null;
@@ -192,6 +196,9 @@ export interface ChatSessionPatch {
   /** T-102: the restart hint's memory. */
   configHiddenAt?: string | null;
   autoApply?: boolean | null;
+  /** T-294: its limits (migration 774); null workers: the global setting. */
+  maxWorkers?: number | null;
+  subagents?: boolean;
   title?: string;
   ticketId?: string | null;
   /** Sets or clears the session's worktree (its three columns together). */
@@ -382,14 +389,18 @@ export class ChatStore {
     continuedFrom?: string | null;
     /** T-294: the agent it runs as, already checked against `CHAT_AGENT_NAME`. */
     agent?: string | null;
+    /** T-294: its limits, already checked (a worker's no wider than its parent's). Absent: null (the global setting) and on. */
+    maxWorkers?: number | null;
+    subagents?: boolean;
   }): ChatSession {
     const now = this.#stamp();
     const db = this.#writable();
     db
       .prepare(
         `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
-           ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from, agent)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from, agent,
+           max_workers, subagents)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         opts.id,
@@ -412,6 +423,8 @@ export class ChatStore {
         opts.bypassCapable ? 1 : 0,
         opts.continuedFrom ?? null,
         opts.agent ?? null,
+        opts.maxWorkers ?? null,
+        opts.subagents === false ? 0 : 1,
       );
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(opts.id, opts.claudeId ?? '', opts.id, opts.cwd, now);
@@ -521,6 +534,8 @@ export class ChatStore {
       worktree: row.worktree_path ? { path: row.worktree_path, branch: row.worktree_branch ?? '', repo: row.worktree_repo ?? '' } : null,
       startedBy: row.started_by ?? null,
       agent: row.agent ?? null,
+      maxWorkers: row.max_workers ?? null,
+      subagents: row.subagents !== 0,
     };
   }
 
@@ -796,6 +811,8 @@ export class ChatStore {
     if (patch.pinnedAt !== undefined) set('pinned_at', patch.pinnedAt);
     if (patch.configHiddenAt !== undefined) set('config_hidden_at', patch.configHiddenAt);
     if (patch.autoApply !== undefined) set('auto_apply', patch.autoApply === null ? null : patch.autoApply ? 1 : 0);
+    if (patch.maxWorkers !== undefined) set('max_workers', patch.maxWorkers);
+    if (patch.subagents !== undefined) set('subagents', patch.subagents ? 1 : 0);
     if (patch.title !== undefined) set('title', patch.title);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
     if (patch.endedFor !== undefined) set('ended_for', patch.endedFor);

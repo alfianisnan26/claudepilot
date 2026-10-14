@@ -199,6 +199,27 @@ test('migration 773 (T-294): a session gets the agent it runs as; every session 
   }
 });
 
+test('migration 774 (T-294): a session gets its own limits; every session from before keeps the global workers cap and its sub-agents', async () => {
+  const dir = tempDir();
+  const key = newKey();
+  const first = await Store.open({ dataDir: dir, secretKey: key, migrations: MIGRATIONS.filter((m) => m.version !== 774) });
+  const at = new Date().toISOString();
+  first.db!.prepare("INSERT INTO chat_sessions (id, workspace_id, state_since, created_at, last_activity_at) VALUES ('old', 'docker/api', ?, ?, ?)").run(at, at, at);
+  first.close();
+  const store = await Store.open({ dataDir: dir, secretKey: key, migrations: MIGRATIONS });
+  try {
+    assert.equal(store.trust.state, 'ok');
+    assert.deepEqual(store.db!.prepare('SELECT id, max_workers, subagents FROM chat_sessions').all().map((r) => ({ ...r })), [{ id: 'old', max_workers: null, subagents: 1 }]);
+    store.db!.prepare("UPDATE chat_sessions SET max_workers = 0, subagents = 0 WHERE id = 'old'").run();
+    assert.deepEqual({ ...(store.db!.prepare("SELECT max_workers, subagents FROM chat_sessions WHERE id = 'old'").get() as object) }, { max_workers: 0, subagents: 0 });
+    // The checks hold: no negative count, sub-agents only 0 or 1.
+    assert.throws(() => store.db!.prepare("UPDATE chat_sessions SET max_workers = -1 WHERE id = 'old'").run(), /CHECK/);
+    assert.throws(() => store.db!.prepare("UPDATE chat_sessions SET subagents = 2 WHERE id = 'old'").run(), /CHECK/);
+  } finally {
+    store.close();
+  }
+});
+
 test('a failing migration rolls back and freezes the portal', async () => {
   const dir = tempDir();
   (await Store.open({ dataDir: dir, secretKey: newKey() })).close();
