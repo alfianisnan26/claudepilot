@@ -1,5 +1,7 @@
 # Orchestrator status (2026-10-14, session 619018ca, started 00:22 UTC after 5c9fcb5f ended 17:58 for integrity: the T-265 case; down 6 h, T-257)
 
+> HAND-OVER: the current state, branches and next steps are in `orchestrator-fadlilah.md` (chat 5802dfa4, 2026-10-14 20:4x UTC). Read that first; this file is the older log.
+
 Knowledge: vault "ClaudePilot dev" (6cd11f710cc3), folder Dev loop/. The queue lives in NEXT; tickets are claimed only when work starts.
 Owner-approved rules (evaluation 2026-10-14, coordinator 02:3x):
 1. A standing VERIFIER sub-agent (sonnet) every few hours takes the live tickets in in_review, checks each on the live portal or with the harness, writes the evidence on the ticket and closes or reopens it (D-34: the owner never verifies).
