@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Hono } from 'hono';
-import { KEEPGOING_BOUNDS, type Actor, type ChatKeepGoing } from '@portal/contracts';
+import { KEEPGOING_API, KEEPGOING_BOUNDS, type Actor, type ChatKeepGoing, type KeepGoingList } from '@portal/contracts';
 import { createApp } from '../app.js';
 import { createPlatform } from '../platform/index.js';
 import { Portal } from '../portal.js';
@@ -100,5 +100,29 @@ test('the fields are checked: bounds, types, unknown fields, the status file ins
   const back = await put({ prompt: null, statusFile: '' });
   assert.equal(back.data!.prompt, null);
   assert.equal(back.data!.statusFile, null);
+  b.platform.stop();
+});
+
+test('GET /api/keepgoing (the Home card) lists the chats with Keep going on that the caller may view; an agent sees its own chat at most', async () => {
+  const b = await build();
+  assert.equal((await b.call('u_a', 'PUT', '/api/chat/sessions/s_a/keep-going', { enabled: true })).status, 200);
+  // u_b's chat, turned on by u_b.
+  assert.equal((await b.call('u_b', 'PUT', '/api/chat/sessions/s_b/keep-going', { enabled: true })).status, 200);
+  const mine = (await b.call('u_a', 'GET', KEEPGOING_API.list)).data as unknown as KeepGoingList;
+  assert.deepEqual(
+    mine.chats.map((c) => c.sessionId),
+    ['s_a'],
+    'another user’s chat is not listed',
+  );
+  assert.equal(mine.paused, false);
+  assert.equal(mine.chats[0]!.state, 'idle');
+  assert.equal(mine.chats[0]!.keepGoing.enabled, true);
+  assert.deepEqual(mine.chats[0]!.keepGoing.standing, []);
+  const own = { kind: 'agent', userId: 'u_a', tokenId: 't1', sessionId: 's_x', workspaceId: 'docker/api-dev' } as Actor;
+  const agent = (await b.call('u_a', 'GET', KEEPGOING_API.list, undefined, own)).data as unknown as KeepGoingList;
+  assert.deepEqual(agent.chats, [], 'an agent sees no other chat');
+  // Off: no longer listed.
+  await b.call('u_a', 'PUT', '/api/chat/sessions/s_a/keep-going', { enabled: false });
+  assert.deepEqual(((await b.call('u_a', 'GET', KEEPGOING_API.list)).data as unknown as KeepGoingList).chats, []);
   b.platform.stop();
 });

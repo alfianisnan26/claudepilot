@@ -30,7 +30,20 @@ export const KEEPGOING_CONSTANTS = {
   downAfterMin: 15,
   /** After a failed action the chat is left alone this long. */
   backoffMin: 15,
+  /** Two starts of a chat's lineage are at least this far apart (the supervisor's RESTART_GAP_MIN). */
+  restartGapMin: 5,
 } as const;
+
+/**
+ * Why an ended chat is started again, for the cap per root cause (T-257 item 2; the supervisor's numbers): an integrity ending T-136 calls
+ * harmless (the harness's, not the chat's) counts only against its own ceiling; any other ending counts against the chat's cap, which is
+ * lower after an integrity ending the portal calls suspicious.
+ */
+export const KEEPGOING_RESTART_CLASSES = ['harmless', 'integrity', 'other'] as const;
+export type KeepGoingRestartClass = (typeof KEEPGOING_RESTART_CLASSES)[number];
+
+/** Starts of a new chat per 24 hours over a lineage (`continuedFrom` back), by the class of the ending; harmless ones count only for themselves. */
+export const KEEPGOING_RESTART_CAPS: Record<KeepGoingRestartClass, number> = { harmless: 12, integrity: 3, other: 6 };
 
 /** The default status file `{status}` names, relative to the chat's folder (the dev-sessions convention). */
 export const KEEPGOING_DEFAULT_STATUS_FILE = 'docs/dev-sessions/status/orchestrator.md';
@@ -56,11 +69,19 @@ export interface ChatKeepGoingPolicy {
   maxWakesPerDay: number;
 }
 
-/** What the sweep did. `reported` is a notification and a ticket; `stood_down` the policy turned itself off (a person closed the chat). */
-export const KEEPGOING_ACTIONS = ['nudged', 'woke', 'answered', 'reported', 'failed', 'capped', 'stood_down', 'set'] as const;
+/**
+ * What the sweep did. `reported` is a notification and a ticket; `stood_down` the policy turned itself off (a person closed the chat, its
+ * ticket closed). Slice 2: `recovered` an integrity ending brought back in place (T-136), `recover_refused` the portal would not (a new chat
+ * follows), `restarted` a new chat continues an ended one (written on the ended one, with the class of its ending as the cause).
+ */
+export const KEEPGOING_ACTIONS = ['nudged', 'woke', 'answered', 'reported', 'failed', 'capped', 'stood_down', 'set', 'recovered', 'recover_refused', 'restarted'] as const;
 export type KeepGoingActionKind = (typeof KEEPGOING_ACTIONS)[number];
 
-/** What a report is about: one ticket per chat and cause, not repeated while the cause stands. */
+/**
+ * What a report is about: one ticket per chat and cause, not repeated while the cause stands. Since slice 2 `ended` is a quiet mark (when the
+ * sweep first saw the ending: no ticket, no notification; the chat is recovered or started again) and `down` is the one loud report: left
+ * down by the cap, a refusal or a failed start (at once), or still ended 15 minutes after the mark.
+ */
 export const KEEPGOING_CAUSES = ['approval', 'bypass', 'ended', 'down', 'cap', 'wake_failed'] as const;
 export type KeepGoingCause = (typeof KEEPGOING_CAUSES)[number];
 
@@ -69,7 +90,7 @@ export const KEEPGOING_CAUSE_TEXT: Record<KeepGoingCause, string> = {
   approval: 'a tool approval waits',
   bypass: 'out of Bypass',
   ended: 'ended',
-  down: 'down',
+  down: 'left down',
   cap: 'cap reached',
   wake_failed: 'could not wake',
 };
@@ -90,7 +111,32 @@ export interface ChatKeepGoing extends ChatKeepGoingPolicy {
   last: KeepGoingAction | null;
   /** The kill switch `keepgoing.enabled` is off: nothing runs anywhere. */
   paused: boolean;
+  /** The causes reported and still standing (slice 2; the quiet `ended` mark is not one). */
+  standing?: KeepGoingCause[];
 }
+
+/** One chat Keep going watches, for the Home card (`GET KEEPGOING_API.list`). */
+export interface KeepGoingChat {
+  sessionId: string;
+  /** Written by agents: shown as text, never as markup. */
+  title: string;
+  workspaceId: string;
+  /** The chat's state as the list shows it (`asleep` for an idle chat whose process sleeps). */
+  state: 'starting' | 'working' | 'idle' | 'asleep' | 'waiting' | 'interrupted' | 'ended';
+  mode: string;
+  keepGoing: ChatKeepGoing;
+}
+
+/** `GET KEEPGOING_API.list`: the caller's chats with Keep going on; the ones with a cause standing first, then by their last action, newest first. */
+export interface KeepGoingList {
+  /** The kill switch is off. */
+  paused: boolean;
+  chats: KeepGoingChat[];
+}
+
+export const KEEPGOING_API = {
+  list: '/api/keepgoing',
+} as const;
 
 /** `PUT CHAT_API.keepGoing(id)`: each field optional; absent leaves it. `prompt: null` / `statusFile: null` go back to the default. */
 export type UpdateKeepGoingRequest = Partial<ChatKeepGoingPolicy>;

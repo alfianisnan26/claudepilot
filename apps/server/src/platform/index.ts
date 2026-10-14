@@ -25,7 +25,7 @@ export type { PlatformOwner, PlatformActor } from './owner.js';
 export type { PlatformAudit } from './audit.js';
 export type { NotifyBus } from '../notify/index.js';
 
-export type PlatformTopic = 'notify' | 'triggers' | 'autotransfer';
+export type PlatformTopic = 'notify' | 'triggers' | 'autotransfer' | 'keepgoing';
 
 /** A module of the platform: its routes go behind the session guard under `/api`, its receivers under `platform.hooks`. */
 export interface PlatformModule {

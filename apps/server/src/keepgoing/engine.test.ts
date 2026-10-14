@@ -183,14 +183,15 @@ test('a portal restart in the middle resumes from the stored state: the nudged p
   first.chat.put('s1');
   first.chat.sendStartsTurn = false;
   first.chat.put('s2', { state: 'interrupted', process: 'gone' });
-  first.chat.put('s3', { state: 'ended', endedReason: 'integrity: a second control response' });
+  first.chat.put('s3', { state: 'ended', endedReason: 'the process exited (code 1)' });
+  first.chat.failCreate = 'CHAT_INELIGIBLE'; // s3 cannot be started again: left down
   first.on('s1');
   first.on('s2');
   first.on('s3');
   await first.after(4);
   assert.equal(first.chat.sent.length, 1, 's1 nudged');
   assert.deepEqual(first.chat.resumed, ['s2'], 's2 woken');
-  assert.equal(first.tickets.made.length, 1, 's3 reported');
+  assert.equal(first.tickets.made.length, 1, 's3 reported left down');
   first.engine.stop();
   // A new engine over the same database (the portal restarted), the same chats, tickets and clock.
   const again = await rig({ store: first.store, clock: first.clock, chat: first.chat, tickets: first.tickets });
@@ -199,25 +200,25 @@ test('a portal restart in the middle resumes from the stored state: the nudged p
   for (let i = 0; i < 10; i++) await again.after(1);
   assert.equal(first.chat.sent.filter((x) => x.id === 's1').length, 1, 's1: the same idle period is not nudged again');
   assert.equal(first.tickets.made.length, 1, 's3: not reported again');
+  assert.equal(first.chat.started.length, 0, 's3: the back-off after the failed start holds across the restart');
 });
 
-test('an ended chat is reported once with one ticket; down after 15 minutes is a comment on it; a person’s close turns the policy off', async () => {
+test('an ended chat that cannot be started again is reported once as left down (one ticket, one push), at once; a person’s close turns the policy off', async () => {
+  // Slice 2: an ending is first marked quietly (no ticket, no push) and the chat is brought back; only a chat left down is reported.
   const r = await rig();
-  r.chat.put('s1', { state: 'ended', process: 'gone', endedReason: 'integrity: origin peer after a sub-agent message' });
+  r.chat.put('s1', { state: 'ended', process: 'gone', endedReason: 'the process exited (code 1)' });
+  r.chat.failCreate = 'FOLDER_UNTRUSTED';
   r.on('s1');
   await r.engine.round();
-  for (let i = 0; i < 14; i++) await r.after(1);
   assert.equal(r.tickets.made.length, 1);
-  assert.match(r.tickets.made[0]!.summary, /: ended since/);
-  assert.ok(r.tickets.made[0]!.description.includes('- Ended: integrity: origin peer'));
+  assert.match(r.tickets.made[0]!.summary, /: left down since/);
+  assert.ok(r.tickets.made[0]!.description.includes('- Ended: the process exited (code 1)'));
+  assert.ok(r.tickets.made[0]!.description.includes('- Left down because: a new chat could not be started (FOLDER_UNTRUSTED)'));
   assert.equal(r.emitted.length, 1);
-  await r.after(1); // 15 minutes
-  assert.equal(r.tickets.made.length, 1, 'down is not a second ticket');
-  assert.equal(r.tickets.comments.length, 1);
-  assert.match(r.tickets.comments[0]!.text, /^Still not running: down since/);
-  assert.equal(r.emitted.length, 2);
+  assert.equal(render(r.emitted[0]! as never).body, 'api-dev · left down · T-1');
   for (let i = 0; i < 30; i++) await r.after(1);
-  assert.equal(r.emitted.length, 2, 'not repeated while it stands');
+  assert.equal(r.tickets.made.length, 1, 'not repeated while it stands');
+  assert.equal(r.emitted.length, 1);
 
   const p = await rig();
   p.chat.put('s2', { state: 'ended', process: 'gone', endedReason: 'closed by operator' });
@@ -225,6 +226,7 @@ test('an ended chat is reported once with one ticket; down after 15 minutes is a
   await p.engine.round();
   assert.equal(p.tickets.made.length, 0);
   assert.equal(p.emitted.length, 0);
+  assert.equal(p.chat.started.length, 0, 'a person’s close is never started again');
   assert.equal(p.engine.view('s2')!.enabled, false);
   assert.equal(p.engine.view('s2')!.last?.kind, 'stood_down');
 });

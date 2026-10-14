@@ -5,10 +5,12 @@ import {
   KEEPGOING_ACTIONS,
   KEEPGOING_BOUNDS as B,
   KEEPGOING_CAUSES,
+  KEEPGOING_RESTART_CLASSES,
   type ChatKeepGoingPolicy,
   type KeepGoingAction,
   type KeepGoingActionKind,
   type KeepGoingCause,
+  type KeepGoingRestartClass,
 } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 
@@ -152,6 +154,38 @@ export class KeepGoingStore {
     return (rows ?? []).map(policyOf);
   }
 
+  /** Every policy that is on (the Home card), at most `limit`. */
+  enabled(limit = 200): PolicyRow[] {
+    const rows = this.#db?.prepare('SELECT * FROM keepgoing_policies WHERE enabled = 1 ORDER BY updated_at DESC LIMIT ?').all(limit) as Raw[] | undefined;
+    return (rows ?? []).map(policyOf);
+  }
+
+  /**
+   * A chat was started again as `to` (slice 2): its policy goes with it, as the person set it (who set it first stays `created_by`), on and
+   * due at once; the ended chat's policy is turned off, so the sweep looks only at the new one. One transaction.
+   */
+  carryPolicy(from: string, to: string): PolicyRow | null {
+    const db = this.#w;
+    const was = this.policy(from);
+    if (!db || !was) return null;
+    const at = this.#at();
+    db.exec('BEGIN');
+    try {
+      db.prepare(
+        `INSERT INTO keepgoing_policies (session_id, owner_id, created_by, enabled, nudge_after_min, prompt, status_file, max_nudges, max_wakes, next_due_at, created_at, updated_at)
+         SELECT ?, owner_id, created_by, 1, nudge_after_min, prompt, status_file, max_nudges, max_wakes, NULL, ?, ? FROM keepgoing_policies WHERE session_id = ?
+         ON CONFLICT (session_id) DO UPDATE SET enabled = 1, nudge_after_min = excluded.nudge_after_min, prompt = excluded.prompt, status_file = excluded.status_file,
+           max_nudges = excluded.max_nudges, max_wakes = excluded.max_wakes, next_due_at = NULL, backoff_until = NULL, updated_at = excluded.updated_at`,
+      ).run(to, at, at, from);
+      db.prepare('UPDATE keepgoing_policies SET enabled = 0, updated_at = ? WHERE session_id = ?').run(at, from);
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+    return this.policy(to);
+  }
+
   /** Removes a chat's policy (the chat was deleted). */
   forget(sessionId: string): void {
     const db = this.#w;
@@ -161,10 +195,19 @@ export class KeepGoingStore {
 
   /* ---------- the trail ---------- */
 
-  addEvent(e: { sessionId: string; ownerId: string; kind: KeepGoingActionKind; cause?: KeepGoingCause | null; reason: string; actor: string }): KeepGoingAction {
+  /** `cause`: a report's cause, or for `restarted` the class of the ending (read back by `restarts`, shown as no cause). */
+  addEvent(e: { sessionId: string; ownerId: string; kind: KeepGoingActionKind; cause?: KeepGoingCause | KeepGoingRestartClass | null; reason: string; actor: string }): KeepGoingAction {
     const at = this.#at();
     this.#w?.prepare('INSERT INTO keepgoing_events (session_id, owner_id, at, kind, cause, reason, actor) VALUES (?, ?, ?, ?, ?, ?, ?)').run(e.sessionId, e.ownerId, at, e.kind, e.cause ?? null, e.reason.slice(0, 300), e.actor);
-    return { at, kind: e.kind, cause: e.cause ?? null, reason: e.reason.slice(0, 300) };
+    return { at, kind: e.kind, cause: asCause(e.cause), reason: e.reason.slice(0, 300) };
+  }
+
+  /** The starts again over these chats (a lineage) since then, with the class of each ending, oldest first. */
+  restarts(sessionIds: readonly string[], sinceIso: string): { at: string; cls: KeepGoingRestartClass }[] {
+    if (!sessionIds.length) return [];
+    const marks = sessionIds.map(() => '?').join(', ');
+    const rows = this.#db?.prepare(`SELECT at, cause FROM keepgoing_events WHERE kind = 'restarted' AND at > ? AND session_id IN (${marks}) ORDER BY at`).all(sinceIso, ...sessionIds) as Raw[] | undefined;
+    return (rows ?? []).map((r) => ({ at: String(r.at), cls: (KEEPGOING_RESTART_CLASSES as readonly unknown[]).includes(r.cause) ? (r.cause as KeepGoingRestartClass) : 'other' }));
   }
 
   count(sessionId: string, kind: KeepGoingActionKind, sinceIso: string): number {

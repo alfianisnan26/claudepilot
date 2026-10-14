@@ -1,14 +1,16 @@
-// Keep going as a platform module (T-259 slice 1; docs/prd/chat-sessions.md "Keep going (the watchdog)"): the sweep on a 60-second timer,
-// the routes `GET`/`PUT /api/chat/sessions/:id/keep-going`, the kill switch `keepgoing.enabled`, and the session payload's `keepGoing`
-// (a hook on the chat controller). platform/index.ts registers it with ONE line. Nothing happens until a person turns it on for a chat.
+// Keep going as a platform module (T-259 slices 1 and 2; docs/prd/chat-sessions.md "Keep going (the watchdog)"): the sweep on a 60-second
+// timer, the routes `GET`/`PUT /api/chat/sessions/:id/keep-going` and `GET /api/keepgoing` (the Home card), the Portal MCP tool
+// `session_keepgoing_set`, the kill switch `keepgoing.enabled`, the live topic `keepgoing`, and the session payload's `keepGoing` (a hook on
+// the chat controller). platform/index.ts registers it with ONE line. Nothing happens until a person turns it on for a chat.
 
-import type { ChatKeepGoing, ChatRequest, ChatSession } from '@portal/contracts';
-import { isTicketClosed } from '@portal/contracts';
+import type { ChatKeepGoing, ChatRequest, ChatSession, CreateChatSessionRequest } from '@portal/contracts';
+import { isTicketClosed, KEEPGOING_ACTOR } from '@portal/contracts';
 import { realClock, type ClockPort } from '../autotransfer/ports.js';
 import type { Platform, PlatformModule } from '../platform/index.js';
 import { declareKeepGoingPolicies } from './authz.js';
 import { KeepGoingEngine, type KeepGoingChatPort, type KeepGoingTicketPort } from './engine.js';
-import { createKeepGoingRoutes } from './routes.js';
+import { registerKeepGoingTools } from './portalTools.js';
+import { createKeepGoingListRoutes, createKeepGoingRoutes } from './routes.js';
 import './settings.js';
 import { KeepGoingStore } from './store.js';
 
@@ -21,6 +23,10 @@ interface ControllerLike {
   send(id: string, uuid: string, text: string, opts: { priority?: 'next' | 'later'; actor?: string; actorLabel?: string }): Promise<void>;
   respond(id: string, requestId: string, decision: 'deny', opts: { note?: string; actor?: string }): Promise<void>;
   control(id: string, op: 'resume'): Promise<void>;
+  /** T-136 recover in place (slice 2). */
+  recover(id: string, opts: { by: 'agent'; actor: string }): Promise<unknown>;
+  /** A new chat (slice 2: one that continues an ended one). */
+  create(req: Partial<CreateChatSessionRequest>, opts: { actor: string }): Promise<ChatSession>;
   keepGoingOf?: (sessionId: string) => ChatKeepGoing | null;
   keepGoingChanged?: (sessionId: string) => void;
 }
@@ -32,9 +38,9 @@ interface TicketsLike {
 }
 
 /** The chat controller as the sweep needs it; null when what was handed over lacks it (some tests). */
-function chatPort(raw: unknown): (KeepGoingChatPort & { controller: ControllerLike }) | null {
+export function keepGoingChatPort(raw: unknown): (KeepGoingChatPort & { controller: ControllerLike }) | null {
   const c = raw as Partial<ControllerLike> | null;
-  if (!c || typeof c.get !== 'function' || typeof c.openRequests !== 'function' || typeof c.send !== 'function' || typeof c.respond !== 'function' || typeof c.control !== 'function') return null;
+  if (!c || typeof c.get !== 'function' || typeof c.openRequests !== 'function' || typeof c.send !== 'function' || typeof c.respond !== 'function' || typeof c.control !== 'function' || typeof c.recover !== 'function' || typeof c.create !== 'function') return null;
   const ctl = c as ControllerLike;
   return {
     controller: ctl,
@@ -43,6 +49,13 @@ function chatPort(raw: unknown): (KeepGoingChatPort & { controller: ControllerLi
     send: (id, uuid, text, o) => ctl.send(id, uuid, text, o),
     respond: (id, requestId, decision, o) => ctl.respond(id, requestId, decision, o),
     resume: (id) => ctl.control(id, 'resume'),
+    recover: async (id) => void (await ctl.recover(id, { by: 'agent', actor: KEEPGOING_ACTOR })),
+    // The same workspace, folder, Claude, title and ticket; no `allowBypass` (and a portal actor could not set it: FR20).
+    continueChat: (s) =>
+      ctl.create(
+        { workspaceId: s.workspaceId, cwd: s.cwd, title: s.title, ...(s.claudeId ? { claudeId: s.claudeId } : {}), ...(s.ticketId ? { ticketId: s.ticketId } : {}), continuedFrom: s.id },
+        { actor: KEEPGOING_ACTOR },
+      ),
   };
 }
 
@@ -58,12 +71,16 @@ function ticketPort(raw: unknown): KeepGoingTicketPort | null {
       const b = tickets.brief(id);
       return !!b && !isTicketClosed(b.status as never);
     },
+    isClosed: (id) => {
+      const b = tickets.brief(id);
+      return !!b && isTicketClosed(b.status as never);
+    },
   };
 }
 
 export function createKeepGoingModule(platform: Platform, opts: { clock?: ClockPort; random?: () => number } = {}): PlatformModule & { engine: KeepGoingEngine | null } {
   declareKeepGoingPolicies();
-  const chat = chatPort(platform.deps.chat);
+  const chat = keepGoingChatPort(platform.deps.chat);
   if (!chat) return { name: 'keepgoing', engine: null };
   const clock = opts.clock ?? realClock;
   const store = new KeepGoingStore(platform.deps.store, () => new Date(clock.now()));
@@ -78,11 +95,16 @@ export function createKeepGoingModule(platform: Platform, opts: { clock?: ClockP
     tickets: ticketPort(platform.deps.tickets),
     random: opts.random,
     changed: (id) => chat.controller.keepGoingChanged?.(id),
+    publish: () => platform.publish('keepgoing'),
   });
+  if (platform.deps.tools !== false) registerKeepGoingTools({ engine, chat, owner: platform.owner });
   return {
     name: 'keepgoing',
     engine,
-    routes: [{ path: '/api/chat/sessions', app: createKeepGoingRoutes({ owner: platform.owner, engine, chat }) }],
+    routes: [
+      { path: '/api/chat/sessions', app: createKeepGoingRoutes({ owner: platform.owner, engine, chat }) },
+      { path: '/api/keepgoing', app: createKeepGoingListRoutes({ owner: platform.owner, engine }) },
+    ],
     start: () => {
       chat.controller.keepGoingOf = (id) => engine.view(id);
       engine.start();
