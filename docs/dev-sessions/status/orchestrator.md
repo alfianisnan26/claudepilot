@@ -1,3 +1,10 @@
+# ORCHESTRATOR CHAT a8393f6b (continues 75f044fb), 2026-10-14 ~22:50 UTC
+
+- Tickets of 75f044fb already assigned to this chat (ticket_adopt: nothing to move). Workers 77671a92 and c378d9e7 are gone, no reports posted; their commits are pushed: dev/t293-7 b460fcc (T-342 N1), dev/t-330-1 143e863 (cpbview flakes T-330/T-331/T-272).
+- In flight: gate-job on origin/wip/batch-4 ce7014a (background); reviewer sub-agent (opus, medium) blind re-read of N1 on b460fcc; qa-verifier sub-agent (sonnet, medium) for 143e863 with before/after counts under hogs; worker d9a3cdd8 (qa-verifier, sonnet, dontAsk, on sekar) verifies T-334 by following the text; explorers (haiku, low) plan steps for T-312 slice A (spikes + lab by root) and T-321 (empty crew list). No E2 experiment running (lab_arm_draw: no draw).
+
+---
+
 # HAND-OVER FROM CHAT 75f044fb (continued 5802dfa4), 2026-10-14 ~22:50 UTC. READ THIS FIRST. Details of tonight below; older log under "OLDER LOG".
 
 ## State
