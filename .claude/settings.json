@@ -70,7 +70,9 @@
       "Bash(wc:*)",
       "Bash(echo:*)",
       "Bash(pwd)",
-      "Bash(nproc)"
+      "Bash(nproc)",
+      "Bash(chmod +x:*)",
+      "Bash(git update-index --chmod=+x:*)"
     ],
     "ask": [],
     "deny": [
