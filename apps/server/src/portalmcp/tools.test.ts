@@ -103,7 +103,8 @@ const fakes = {
     },
   },
   chat: {
-    list: (f: Row = {}) => world.sessions.filter((s) => (!f.workspaceId || s.workspaceId === f.workspaceId) && (!f.ticketId || s.ticketId === f.ticketId)),
+    list: (f: Row = {}) =>
+      world.sessions.filter((s) => (!f.workspaceId || s.workspaceId === f.workspaceId) && (!f.ticketId || s.ticketId === f.ticketId) && (!f.parentId || s.parentId === f.parentId)),
     get: (id: string) => world.sessions.find((s) => s.id === id) ?? null,
     history: (id: string) => world.events[id] ?? [],
     listClaudes: () => [{ id: 'c1', name: 'Default', removedAt: null }],
@@ -620,6 +621,54 @@ test('session_get and session_list: transcripts are untrusted text, capped; ende
     assert.equal(err(await h.call(t.secret, 'session_get', { id: 'nope' })), 'NOT_FOUND');
   } finally {
     delete world.events.s1;
+  }
+});
+
+test('T-294: session_list takes parent_id and names each session’s parent, agent and Claude; session_get lists its workers, compact; an agent’s token reaches neither', async () => {
+  reset();
+  const tree = [
+    session('lead', { claudeName: 'Default' }),
+    session('w1', { parentId: 'lead', claudeName: 'Sekar', agent: 'implementer', title: INJECTION }),
+    session('w2', { parentId: 'lead', claudeName: 'Default', state: 'waiting', waiting: 1 }),
+    session('w3', { parentId: 'lead', state: 'ended', endedReason: 'user' }),
+  ];
+  world.sessions.push(...tree);
+  try {
+    const t = h.token('read');
+    const listed = where(await h.call(t.secret, 'session_list', { parent_id: 'lead' }));
+    assert.deepEqual(listed.sessions.map((s: Row) => s.id), ['w1', 'w2'], 'its live workers, nobody else');
+    assert.deepEqual(where(await h.call(t.secret, 'session_list', { parent_id: 'lead', include_ended: true })).sessions.map((s: Row) => s.id), ['w1', 'w2', 'w3']);
+    const w1 = listed.sessions[0];
+    assert.deepEqual([w1.parent_id, w1.agent, w1.claude], ['lead', 'implementer', 'Sekar']);
+    assert.deepEqual(w1.title, { untrusted_text: INJECTION, source: 'agent' }, 'a title is text an agent wrote');
+    assert.deepEqual(where(await h.call(t.secret, 'session_list', { parent_id: 'nobody' })).sessions, [], 'an unknown parent lists nothing');
+    assert.equal(where(await h.call(t.secret, 'session_list')).sessions.find((s: Row) => s.id === 's1').parent_id, null);
+
+    const lead = await h.call(t.secret, 'session_get', { id: 'lead' });
+    const got = where(lead);
+    assert.equal(got.session.parent_id, null);
+    assert.equal(got.workers_total, 3);
+    assert.deepEqual(
+      got.workers.map((w: Row) => [w.id, w.state, w.claude, w.waiting]),
+      [['w1', 'idle', 'Sekar', 0], ['w2', 'waiting', 'Default', 1], ['w3', 'ended', null, 0]],
+      'live ones first, compact',
+    );
+    assert.deepEqual(Object.keys(got.workers[0]).sort(), ['claude', 'id', 'state', 'title', 'waiting']);
+    assert.equal(got.workers[0].title.source, 'agent');
+    assert.match(text(lead), /3 workers, 2 live\./);
+    const worker = where(await h.call(t.secret, 'session_get', { id: 'w1' }));
+    assert.deepEqual([worker.session.parent_id, worker.session.agent, worker.workers_total, worker.workers], ['lead', 'implementer', 0, []]);
+    assert.equal(err(await h.call(t.secret, 'session_get', { id: 'nobody' })), 'NOT_FOUND', 'an unknown id is still not found');
+
+    // Nothing reachable that was not before: a session's own token reaches neither admin tool, with or without the tree's inputs.
+    const a = await h.agentToken('docker/api', 'w1');
+    for (const [tool, args] of [['session_list', { parent_id: 'lead' }], ['session_get', { id: 'lead' }]] as const) {
+      const r = await h.call(a.secret, tool, args);
+      assert.ok(r.error || r.result?.isError, `${tool} refused`);
+      assert.ok(!JSON.stringify(r.raw).includes('w2'), `${tool} says nothing of the tree`);
+    }
+  } finally {
+    world.sessions.splice(world.sessions.length - tree.length, tree.length);
   }
 });
 

@@ -156,14 +156,17 @@ export function workerLimits(
 export class MessageRate {
   readonly #sent = new Map<string, number[]>();
 
-  /** Records a message from `from` and returns whether it is within `limit` an hour. */
-  allow(from: string, limit: number, now = Date.now()): boolean {
+  /**
+   * Records `count` messages from `from` (a broadcast is one per recipient, T-294) and returns whether they all fit within `limit` an
+   * hour. All or nothing: when they do not all fit, none is recorded.
+   */
+  allow(from: string, limit: number, now = Date.now(), count = 1): boolean {
     const recent = (this.#sent.get(from) ?? []).filter((t) => t > now - HOUR_MS);
-    if (recent.length >= limit) {
+    if (recent.length + count > limit) {
       this.#sent.set(from, recent);
       return false;
     }
-    recent.push(now);
+    for (let i = 0; i < count; i++) recent.push(now);
     this.#sent.set(from, recent);
     return true;
   }
@@ -172,6 +175,13 @@ export class MessageRate {
     this.#sent.delete(from);
   }
 }
+
+/**
+ * T-294: what a worker tells its lead without being asked (`session_spawn` `report`, migration 775): `idle` (the default) when its turn
+ * ends, when it waits on a person and when it ends; `end` only when it ends; `none` nothing.
+ */
+export const WORKER_REPORTS = ['idle', 'end', 'none'] as const;
+export type WorkerReport = (typeof WORKER_REPORTS)[number];
 
 /** Why a worker runs on the Claude it got (T-294): its parent's, the one it was told, one with room, or its parent's for want of one. */
 export type SpawnClaudeWhy = 'parent' | 'named' | 'room' | 'no_room' | 'usage_unknown';

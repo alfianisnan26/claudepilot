@@ -537,10 +537,16 @@ caps models, effort and modes; over MCP, `mode` is limited to `plan`, `default`,
 session control over MCP" is on (off by default); otherwise only `session_list`, `session_get`,
 `session_interrupt` and `session_end` exist.
 
+A session's own tools for a crew (agent scope, [Chat sessions](chat-sessions.md) FR51, "Crew over MCP"):
+`session_spawn` takes `report` (`idle`, the default: the portal tells the lead in one line when the worker's turn
+ends, when it waits on a person and when it ends; `end`: only the end; `none`), `session_message` takes `to`
+(`workers` or `crew`) instead of `session_id`, every recipient counted against the hourly limit, and
+`session_family` items carry `agent` and `mode`, with how many wait on a person in its summary.
+
 | Tool | Scope | Hints | Inputs | Output |
 | --- | --- | --- | --- | --- |
-| `session_list` | read | R I | `workspace_id`, `state`, `cursor`, `limit` | State (Starting, Working, Needs input, Failed, Idle, Interrupted, Ended), waiting for, model, effort, mode, last activity, estimated cost |
-| `session_get` | read | R I | `id`, `after_seq`, `max_events` (up to 100), `wait_seconds` (0–25) | State, pending requests, events, `next_seq` |
+| `session_list` | read | R I | `workspace_id`, `state`, `ticket_id`, `parent_id` (T-294: the workers of one session), `include_ended`, `cursor`, `limit` | State (Starting, Working, Needs input, Failed, Idle, Interrupted, Ended), waiting for, model, effort, mode, last activity, estimated cost; T-294: `parent_id`, `agent` and the Claude's name |
+| `session_get` | read | R I | `id`, `after_seq`, `max_events` (up to 100), `wait_seconds` (0–25) | State, pending requests, events, `next_seq`; T-294: `parent_id`, `agent`, and its workers, compact (id, title, state, Claude, waiting; at most 20, live ones first) with `workers_total` |
 | `session_interrupt` | operate | I | `id` | State; the turn stops and work already done is kept |
 | `session_end` | operate | D I | `id` | Final state |
 | `session_respond` | operate; `allow` needs admin | D U; C for `allow` | `id`, `request_id`, `answer` or `decision` (`allow`, `deny`), plan `mode`, `message`, `confirm_token` | Accepted; the first answer per `request_id` wins. `allow` covers a tool, a plan, a workflow or an MCP elicitation, and its preview shows the exact request, sanitized. |
@@ -671,7 +677,7 @@ Every result is read again on each later request of the agent's session, so list
 default and return the rest on request: `ticket_get` (tickets PRD §12.1), `ticket_list`, `ci_runs_list` (id,
 number, pipeline, branch, a 12 character sha, status, reason, ticket, created, duration; `ci_run_get` or
 `full: true` for the rest), `session_family` (the latest reply's first 200 characters, no folder; `full: true` for
-600 and the folder) and `usage_attribution` (dollars and requests per row; `full: true` adds the tokens and the
+600 and the folder; T-294: a lead hears of its workers' turn ends in one line each instead of polling it) and `usage_attribution` (dollars and requests per row; `full: true` adds the tokens and the
 times). `usage_spikes` keeps its evidence: it is the point of the call. A shortened field carries a `cut` line; a
 whole result over 20,000 characters is refused (`RESULT_TOO_LARGE`) with a hint to narrow it, never cut silently.
 The server's instructions tell agents which calls are cheap. Untrusted text keeps its `untrusted_text` label in

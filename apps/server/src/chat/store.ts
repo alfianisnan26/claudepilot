@@ -95,6 +95,8 @@ export type ChatSessionRow = {
   max_workers?: number | null;
   /** T-294 (migration 774): 1 (default) lets its Claude start sub-agents; 0 launches it with `--disallowedTools Agent Task`. */
   subagents?: number | null;
+  /** T-294 (migration 775): what a worker reports to its lead unasked (`idle`, `end`, `none`); null: `idle`. */
+  report?: string | null;
   worktree_path?: string | null;
   worktree_branch?: string | null;
   worktree_repo?: string | null;
@@ -465,6 +467,11 @@ export class ChatStore {
       .prepare(`SELECT * FROM chat_sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY last_activity_at DESC, created_at DESC`)
       .all(...vals) as ChatSessionRow[];
     return rows.map((r) => this.toSession(this.#keyed(r)));
+  }
+
+  /** T-294: what a worker reports to its lead unasked (`session_spawn` `report`), set once when it is started. */
+  setReport(sessionId: string, report: 'idle' | 'end' | 'none'): void {
+    this.#writable().prepare('UPDATE chat_sessions SET report = ? WHERE id = ?').run(report, sessionId);
   }
 
   /** Sessions that report to `from` report to `to` instead (a transfer: the successor carries on as the parent). */
