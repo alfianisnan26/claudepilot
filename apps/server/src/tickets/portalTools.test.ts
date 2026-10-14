@@ -87,7 +87,7 @@ test('an agent asks a person for something: a ticket assigned to them, then read
     assert.equal(created.ticket.source, 'agent');
     r.tickets.comment(UI, 'T-1', 'Yes. Go ahead.');
     const got = r.out(await r.h.call(a.secret, 'ticket_get', { id: 'T-1' }));
-    const answer = got.events.find((e: { kind: string }) => e.kind === 'comment');
+    const answer = got.comments.find((e: { kind: string }) => e.kind === 'comment');
     assert.deepEqual(answer.text, { untrusted_text: 'Yes. Go ahead.', source: 'ticket:human' });
     assert.equal(r.out(await r.h.call(a.secret, 'ticket_close', { id: 'T-1', summary: 'Deleted it.' })).ticket.status, 'done');
     // "me" in a list is its own session.
@@ -217,6 +217,95 @@ test('ticket_adopt over MCP (T-270): a confirmation with the tickets first, then
     }
     const audited = r.h.module.audit.list({ limit: 100 }).filter((x) => x.tool === 'ticket_adopt');
     assert.ok(audited.length >= 1 && audited.every((x) => x.actor === 'session:me'), JSON.stringify(audited.map((x) => [x.tool, x.actor, x.outcome])));
+  } finally {
+    r.done();
+  }
+});
+
+test('T-282: ticket_get is short by default, with a cut line; section, comment_id and full return the rest', async () => {
+  const r = await rig();
+  try {
+    const a = await r.agent('docker/api', 'sa');
+    // A 20 k description and 40 comments of 1,000 characters each. (A secret never gets in: the service refuses one.)
+    const description = 'Start '.padEnd(20_000, 'lorem ipsum ');
+    r.tickets.create(UI, { summary: 'A long ticket', description, priority: 'high', workspaceId: 'docker/api' });
+    for (let i = 1; i <= 40; i++) r.tickets.comment(UI, 'T-1', `Comment ${i}: `.padEnd(1_000, 'word '));
+    r.tickets.create(UI, { summary: 'Elsewhere', workspaceId: 'docker/web' });
+
+    const raw = async (args: Record<string, unknown>) => (await r.h.call(a.secret, 'ticket_get', args)) as { result?: { structuredContent?: any; content?: { text: string }[]; isError?: boolean } };
+    const short = await raw({ id: 'T-1' });
+    const text = short.result!.content![0]!.text;
+    assert.ok(text.length < 4_000, `the default result is ${text.length} characters`);
+    const s = short.result!.structuredContent;
+    assert.equal(s.ticket.description.untrusted_text.length, 1_500);
+    assert.equal(s.ticket.description.source, 'ticket:human');
+    assert.equal(s.comments.length, 3);
+    assert.deepEqual(s.comments.map((c: { text: { untrusted_text: string } }) => c.text.untrusted_text.slice(0, 11)), ['Comment 38:', 'Comment 39:', 'Comment 40:']);
+    assert.ok(s.comments.every((c: { text: { untrusted_text: string } }) => c.text.untrusted_text.length === 500));
+    assert.deepEqual(s.counts, { comments: 40, events: 41, sessions: 0, checks: 0 });
+    assert.equal(s.events, undefined);
+    assert.ok(s.cut.some((l: string) => /^description cut at 1500 of 20000 characters: ask ticket_get T-1 with section description\.$/.test(l)), JSON.stringify(s.cut));
+    assert.ok(s.cut.includes(`entries ${s.comments.map((c: { id: number }) => c.id).join(', ')} cut at 500 characters: ask comment_id for one whole.`), JSON.stringify(s.cut));
+
+    // The whole description, a page of 8,000 at a time, each with the line that says where to go on.
+    let whole = '';
+    for (let from = 0, i = 0; from !== -1 && i < 5; i++) {
+      const p = r.out(await r.h.call(a.secret, 'ticket_get', { id: 'T-1', section: 'description', from }));
+      whole += p.description.untrusted_text;
+      const more = /with section description and from (\d+)\.$/.exec(p.cut[0]);
+      from = more ? Number(more[1]) : -1;
+    }
+    assert.equal(whole, description);
+
+    const one = r.out(await r.h.call(a.secret, 'ticket_get', { id: 'T-1', comment_id: s.comments[0].id }));
+    assert.equal(one.comment.text.untrusted_text, `Comment 38: `.padEnd(1_000, 'word ').trimEnd());
+
+    const comments = r.out(await r.h.call(a.secret, 'ticket_get', { id: 'T-1', section: 'comments', events: 5 }));
+    assert.equal(comments.comments.length, 5);
+    assert.equal(comments.total, 40);
+
+    const timeline = r.out(await r.h.call(a.secret, 'ticket_get', { id: 'T-1', events: 4 }));
+    assert.equal(timeline.events.length, 4);
+    assert.equal(timeline.comments, undefined);
+
+    const full = r.out(await r.h.call(a.secret, 'ticket_get', { id: 'T-1', full: true, events: 5 }));
+    assert.equal(full.events.length, 5);
+    assert.equal(full.ticket.description.untrusted_text.length, 8_000);
+    assert.ok(full.ticket.reporter && full.ui);
+
+    // A ticket of another workspace and one that does not exist answer the same, for a comment too.
+    const hidden = await raw({ id: 'T-2', comment_id: 1 });
+    const missing = await raw({ id: 'T-9', comment_id: 1 });
+    assert.equal(hidden.result!.isError, true);
+    assert.equal(hidden.result!.content![0]!.text.replace('T-2', 'T-9'), missing.result!.content![0]!.text);
+    const noEntry = await raw({ id: 'T-1', comment_id: 999_999 });
+    assert.match(noEntry.result!.content![0]!.text, /NOT_FOUND/);
+  } finally {
+    r.done();
+  }
+});
+
+test('T-282: ticket_list rows are short, 20 a page; ticket_comment and ticket_update answer in a line', async () => {
+  const r = await rig();
+  try {
+    const a = await r.agent('docker/api', 'sa');
+    for (let i = 1; i <= 25; i++) r.tickets.create(UI, { summary: `Ticket ${i}`, description: 'x'.repeat(2_000), workspaceId: 'docker/api' });
+    const list = r.out(await r.h.call(a.secret, 'ticket_list', {}));
+    assert.equal(list.tickets.length, 20);
+    assert.equal(list.total, 25);
+    assert.ok(list.next_cursor);
+    assert.deepEqual(Object.keys(list.tickets[0]).sort(), ['assignee', 'id', 'priority', 'status', 'summary', 'tags', 'type']);
+    const full = r.out(await r.h.call(a.secret, 'ticket_list', { full: true, limit: 2 }));
+    assert.equal(full.tickets.length, 2);
+    assert.ok(full.tickets[0].reporter && full.tickets[0].created_at);
+
+    const claimed = r.out(await r.h.call(a.secret, 'ticket_claim_next', { id: 'T-1' }));
+    assert.equal(claimed.ticket.description.untrusted_text.length, 1_500);
+    assert.match(claimed.cut[0], /^description cut at 1500 of 2000 characters/);
+    const commented = r.out(await r.h.call(a.secret, 'ticket_comment', { id: 'T-1', text: 'Working on it.' }));
+    assert.deepEqual(Object.keys(commented.comment).sort(), ['at', 'id', 'ticket_id']);
+    const updated = r.out(await r.h.call(a.secret, 'ticket_update', { id: 'T-1', status: 'blocked' }));
+    assert.deepEqual(updated.ticket, { id: 'T-1', status: 'blocked', priority: 'normal', assignee: { kind: 'session', session_id: 'sa', session_state: 'idle' } });
   } finally {
     r.done();
   }

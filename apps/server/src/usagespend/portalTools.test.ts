@@ -68,6 +68,11 @@ test('an admin’s token reads the whole portal: the summary, the attribution ro
     ]);
     assert.deepEqual(Object.keys(tree.rows[0].label).sort(), ['source', 'untrusted_text'], 'a session’s title is labelled as text from elsewhere');
     assert.equal(tree.rows[1].session.ticket_id, 'T-1');
+    // T-282: the short row carries dollars and requests; full adds the tokens and the times.
+    assert.deepEqual(Object.keys(tree.rows[0].own).sort(), ['cost_usd', 'requests']);
+    assert.equal(tree.rows[0].first_at, undefined);
+    const fullTree = where(await r.mcp.call(t.secret, 'usage_attribution', { by: 'session', range: '1d', full: true }));
+    assert.equal(fullTree.rows[0].own.input_tokens !== undefined && 'first_at' in fullTree.rows[0], true);
     assert.equal(tree.coverage_pct.value, 100);
     assert.deepEqual(where(await r.mcp.call(t.secret, 'usage_attribution', { by: 'workspace', range: '1d' })).rows.map((x: any) => [x.label, x.total.cost_usd]), [['web', 4], ['api', 3]]);
     // Nobody recorded a persona: one unknown row with its reason, and nothing attributed.

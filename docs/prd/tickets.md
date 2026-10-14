@@ -201,15 +201,36 @@ All register through the Portal MCP registry with scope `agent` (FR19), except t
 | Tool | Scope | Agents | Inputs | Output |
 | --- | --- | --- | --- | --- |
 | `ticket_list` | agent (read) | yes | `status[]`, `priority[]`, `type[]`, `tag`, `assignee` (`me`, `unassigned`, `user`, `session:<id>`, `any`), `workspace_id`, `query`, `include_closed`, `cursor`, `limit` | Tickets, most urgent first: id, type, priority, status, summary, tags, assignee, workspace, updated. Text labelled. |
-| `ticket_get` | agent (read) | yes | `id`, `events` (how many entries) | The ticket, its sessions, its checks, the latest timeline entries (comments labelled). |
+| `ticket_get` | agent (read) | yes | `id`, `events`, `section` (`description`, `comments`), `from`, `comment_id`, `full` | Short by default (§12.1): the ticket's fields, the description's first 1,500 characters, the last 3 comments cut at 500, counts and `cut` lines. `section description` pages the whole description (8,000 a page, `from`); `section comments` the latest comments whole; `comment_id` one entry whole; `events` the latest N entries, short; `full` the whole view (its sessions, checks and the latest timeline entries). |
 | `ticket_create` | agent | yes | `summary`, `description`, `type`, `priority`, `tags[]`, `assignee` (`me`, `user`, `session:<id>`, none), `workspace_id` | The new ticket. Rate limited (FR20). |
 | `ticket_update` | agent | yes | `id`, any of `summary`, `description`, `type`, `priority`, `status`, `tags`, `assignee`, plus `session_id` | The ticket. FR9 applies. |
-| `ticket_comment` | agent | yes | `id`, `text`, `session_id` | The entry. |
-| `ticket_claim_next` | agent | yes | `tags[]` (all of them), `types[]`, `session_id` | The ticket claimed, or none. |
-| `ticket_close` | agent | yes | `id`, `summary`, `outcome` (`done`, `wont_do`), `session_id` | The closed ticket. |
+| `ticket_comment` | agent | yes | `id`, `text`, `session_id` | The entry's id and time. |
+| `ticket_claim_next` | agent | yes | `tags[]` (all of them), `types[]`, `session_id` | The ticket claimed in the short form of `ticket_get` (no comments), or none. |
+| `ticket_close` | agent | yes | `id`, `summary`, `outcome` (`done`, `wont_do`), `session_id` | The id, the status and the closing summary. |
 | `ticket_adopt` | agent | yes | `from_session`, `session_id`, `confirm_token` | First `confirmation_required` with the tickets that would move and why; then the ids moved (FR18a). Refused: a live session (`CONFLICT`), one a live session continues (`FORBIDDEN`), another workspace's or none (`NOT_FOUND`). Declared `agent` reach `workspace`, confirmed, audited `ticket.adopted`. |
 | `ticket_start_session` | admin | no | `id`, `workspace_id`, `claude_id`, `worktree` | The session. Listed only while session control is on. |
 | `ticket_bump` | operate | no | `id`, `session_id` (left out: the sessions that can take it), `mode` (`prioritise`, `ask`), `note`, `confirm_token` | First `confirmation_required` with a preview (the session, its state, the mode, the queue priority, what changes, the note), then the bump (FR28 to FR30). Listed only while session control is on. |
+
+### 12.1 Short results (T-282)
+
+A tool result is written into the agent's context once and read again on every later request of that session, so a
+long one is paid for many times. Measured on 2026-10-14 from the session tapes: `ticket_get` was 5.5 percent of all
+tool result characters; 92 `ticket_get` calls in one orchestrator's tapes averaged 6,680 characters (p90 14,669),
+and T-277 read with `events: 40` was 16,401 characters.
+
+- `ticket_get` answers short unless asked: the description's first 1,500 characters, the last 3 comments cut at 500
+  (not 600: 1,500 + 3 x 600 of text left too little room under the 4,000 character bound), counts, and a `cut` line
+  for every shortened field that says how much was shown and which call returns the rest. Never a silent cut.
+- `ticket_list` rows are id, type, priority, status, summary (140), tags and the assignee without its title; 20 a
+  page with `next_cursor`; `full: true` for the whole row.
+- `ticket_update` answers id, status, priority and assignee; `ticket_comment` the entry's id and time;
+  `ticket_create` the ticket's fields without its text; `ticket_close` id, status and closing summary.
+- The `pilot://tickets/{id}` resource stays the whole view (`full`).
+
+As observed (the T-277 result taken from the tape, replayed into a test portal; the method and the numbers are on
+T-282): before 16,401 characters, after 4,052 by default (75 percent less). A ticket with a 20,000
+character description and 40 comments of 1,000 characters: 3,958 characters by default (the test in
+`tickets/portalTools.test.ts`).
 
 ## 13. User experience
 
