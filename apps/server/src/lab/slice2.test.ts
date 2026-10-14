@@ -33,7 +33,7 @@ async function harness(opts: { now?: () => number; tickets?: (t: string) => Tick
   const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
   const lab = new Lab({ store, now: opts.now ?? (() => T0 + 3_600_000), ...(opts.tickets ? { tickets: opts.tickets } : {}) });
   for (const l of buildTape(MARKER)) lab.line(TAPE_SESSION, l);
-  return { store, lab, db: store.db!, done: () => (lab.stop(), store.close(), rmSync(dataDir, { recursive: true, force: true })) };
+  return { store, lab, db: store.db!, done: () => (lab.close(), store.close(), rmSync(dataDir, { recursive: true, force: true })) };
 }
 
 afterEach(() => clearResolvers());

@@ -163,7 +163,8 @@ export function sliceMetrics(db: DatabaseSync, filter: SliceFilter = {}): LabSli
     let m: LabSliceMetrics;
     if (meta.frozen) {
       // Retention (§28.9) froze the numbers before the request rows went: the slice keeps them as they were.
-      m = { bashByClass: {}, ...(JSON.parse(meta.frozen) as LabSliceMetrics) };
+      const f = JSON.parse(meta.frozen) as LabSliceMetrics;
+      m = { ...f, bashByClass: f.bashByClass ?? {} };
     } else {
       const reqs = reqQ.all(meta.session_id, meta.slice_id) as unknown as RequestRow[];
       if (!reqs.length) continue;

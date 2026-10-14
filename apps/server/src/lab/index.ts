@@ -172,7 +172,8 @@ export class Lab {
     this.#timers = [first, daily];
   }
 
-  stop(): void {
+  /** Ends the retention timers (shutdown, tests). */
+  close(): void {
     for (const t of this.#timers) clearTimeout(t);
     this.#timers = [];
   }
