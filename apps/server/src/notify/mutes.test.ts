@@ -102,10 +102,13 @@ test('matching and the history mark: a muted event is stored and marked, left ou
 
 test('the never-mute guard: approvals and deploy waits are not muted from a notification, only by a confirmed Settings rule', async () => {
   const svc = await standIn();
-  const h = await harness();
+  const c = clock();
+  const h = await harness({ now: c.now });
   try {
     h.notify.destinations.createChannel('u_a', { type: 'webhook', name: 'Ops', url: `http://hooks.example.test:${svc.port}/in` });
-    const waits = (run: string) => h.bus.emit({ ...ciFailed(run, { job: 'release', environment: 'prod' }), kind: 'ci_waiting' })!;
+    // one millisecond apart on the test's clock, so `items[0]` below is the latest event, never a tie broken by a random id (T-324)
+    let seq = 0;
+    const waits = (run: string) => h.bus.emit({ ...ciFailed(run, { job: 'release', environment: 'prod' }), kind: 'ci_waiting', at: new Date(c.now().getTime() + ++seq).toISOString() })!;
     const e = waits('run_1');
     await h.notify.pipeline.handle(e);
     assert.equal(h.notify.mutes.offer('u_a', e.id).guarded, true);
