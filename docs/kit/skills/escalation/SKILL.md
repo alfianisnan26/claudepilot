@@ -22,6 +22,8 @@ Required, and only these:
 
 Also never an agent's to do, whatever the class: approving a deploy or a merge that a person must approve, changing the charter's walls (safety rules, deny rules, authz, gates, scoring). Those are written down for a person, never worked around.
 
+A reassignment, a restart, a continuation, a mode change or a move is not required: the platform step is yours (`ticket_adopt` for the tickets of an ended session) and goes as one line on the status ticket. A ticket whose session ended is never a reason to ask the owner.
+
 Everything else is **avoidable**: product choices, naming, UI text, test strategy, ordering, a stg question with a documented default, a library choice, a refactor's shape.
 
 ## 2. Avoidable: decide by the default and write it

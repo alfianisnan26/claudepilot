@@ -26,7 +26,7 @@ In Claude Code the tools appear with the server's name as a prefix (the server i
 | Family | Tools | Use for |
 | --- | --- | --- |
 | Orientation | `portal_status`, `persona_get_self`, `mcp_builtin_list`, `mcp_catalog_list` | Who and where you are; what MCP servers exist |
-| Tickets | `ticket_list`, `ticket_get`, `ticket_create`, `ticket_update`, `ticket_comment`, `ticket_claim_next`, `ticket_close` | The unit of work and its record (see the ticket-flow skill) |
+| Tickets | `ticket_list`, `ticket_get`, `ticket_create`, `ticket_update`, `ticket_comment`, `ticket_claim_next` (open tickets only), `ticket_adopt` (tickets of an ended session in your workspace), `ticket_close` | The unit of work and its record (see the ticket-flow skill) |
 | Knowledge | `vault_list`, `note_search`, `note_read`, `note_backlinks`, `tag_list`, `graph_neighbours`, `graph_query`, `note_write`, `note_edit`, `note_append`, `daily_append` | Durable notes: decisions, lessons, runbooks (see the knowledge skill) |
 | CI | `ci_runs_list`, `ci_run_get`, `ci_run_logs`, `ci_validate`, `ci_run_trigger`, `ci_run_cancel` | Pipelines and deploys (see the ci-cd skill) |
 | Repositories | `repos_list`, `repo_get`, `repo_events`, `repos_attention`, `worktree_create` | Repository state; a hardened worktree (see the git-flow skill) |
