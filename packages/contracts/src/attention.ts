@@ -61,6 +61,8 @@ export interface AttentionItem {
   /** The exact item's page (the version preselected), never a list. */
   link: string;
   action: AttentionAction;
+  /** Put off by the asking person until then (ISO): still waiting and counted, out of the deck until that time. Absent: not snoozed. */
+  snoozedUntil?: string;
 }
 
 /** `GET /api/attention`. `counts` is every item per kind, whatever the page; null: that source could not be read ("unavailable", never 0). */
@@ -74,6 +76,21 @@ export interface AttentionList {
   /** When the list was read (ISO). */
   at: string;
 }
+
+/** `POST /api/attention/snooze`: put one item off for the person (the deck's swipe left). `minutes` 0 brings it back now. */
+export interface AttentionSnoozeRequest {
+  kind: AttentionKind;
+  id: string;
+  minutes?: number;
+}
+
+/** Later: an hour unless the person says otherwise; never longer than a day (an item never vanishes). */
+export const ATTENTION_SNOOZE_DEFAULT_MIN = 60;
+export const ATTENTION_SNOOZE_MAX_MIN = 24 * 60;
+
+/** The deck (or a push) opens at one item: `?item=<kind>:<id>`. */
+export const attentionItemKey = (i: { kind: AttentionKind; id: string }): string => `${i.kind}:${i.id}`;
+export const attentionDeckPath = (i: { kind: AttentionKind; id: string }): string => `/admin/attention?item=${encodeURIComponent(attentionItemKey(i))}`;
 
 export const ATTENTION_PAGE_MAX = 200;
 export const ATTENTION_PAGE_DEFAULT = 100;
