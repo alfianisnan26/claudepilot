@@ -787,7 +787,7 @@ In a real browser at 390, 844 x 390, 768, 1024, 1280 and 1920 px, light and dark
 | UU8 | A name cut to an ellipsis shows its full text in a native `title` (not on touch or for a keyboard) and in the accessible name; the shared clamp-with-popover component of QA standard A9 is not used yet (it was not there to use). |
 | UU9 | The Usage page is its own chunk, loaded on first use (App.tsx: `lazy` and a skeleton). |
 
-## 28. Efficiency lab (T-287, slice 1 built: the data layer)
+## 28. Efficiency lab (T-287, slices 1 and 2 built: the data layer, then outcomes, the read API, the MCP tools and the Lab tab)
 
 Why: the first evaluation of the agents' economy (docs/dev-sessions/overhaul/token-economy-design.md) was computed by hand from the session
 tapes with `docs/dev-sessions/overhaul/evidence/slice_metrics.py`. The lab keeps the same numbers inside the portal as the stream is read,
@@ -859,8 +859,54 @@ is writable.
 
 ### 28.6 Not built yet (later slices of T-287)
 
-Outcomes per slice and ticket (accepted first time, rework, gate first try, defects within 7 days, human touches, ESTIMATE against ACTUAL);
-derived measures (cost per accepted slice, first-pass yield, delivered units per hour and per dollar); idle gaps; effort per slice; the
-stratum's ESTIMATE size; bootstrap intervals and per-protocol analysis; routes behind an authz seam, the Portal MCP read tools
-(`efficiency_me`, `experiment_get`), the Efficiency tab, the Experiments page, the Home widget, the weekly digest and the regression alerts;
-retention of the request rows.
+Gate first try, human touches and ESTIMATE against ACTUAL hours per slice; delivered units per hour and per dollar; idle gaps; effort
+per slice; the ESTIMATE size as a stratum key (shown per slice, not yet used for assignment; the stratum stays role and requested model);
+per-protocol analysis; telling a sub-agent its arm in the brief; `efficiency_me` and `experiment_get` as their own tools (`lab_summary`
+covers the coordinator's pass); the Home widget, the weekly digest and the regression alerts.
+
+### 28.7 Outcomes (slice 2, as built)
+
+A slice's outcome comes from its ticket's timeline (status, close and reopen events, read from the portal's own ticket tables), never a
+guess: after the slice's last request the ticket's next decision is **done** (`accepted`) or **in review back to open, in progress or
+blocked** (`rework`); an accepted ticket reopened within 7 days of done makes it a `defect`. No ticket, no decision yet, a ticket the lab
+can not read: `unknown`. A rule of thumb, said so in the source line. The ticket's last comment that starts with ESTIMATE gives its size
+(S, M, L, XL), nothing else of a comment is read. Source: `lab/outcomes.ts`; checked on a scratch portal's real ticket tables
+(2026-10-14: 27 implementer slices, 24 accepted, 3 rework, first-pass yield 0.889).
+
+### 28.8 Derived measures and the summary
+
+Per period (UTC day, or the week from Monday) and per role (`main` for a main-thread turn) and model: n; median and p90 (index
+floor(0.9 n)) of requests, context p50, result characters (result tokens are not measured, so not shown), minutes and cost; the share of
+Bash calls by class; re-written cache tokens and their share of all cache writes; outcomes; **first-pass yield** = accepted over accepted +
+rework + defect; **cost per accepted slice** = the median LOADED cost of an accepted slice (its own cost plus the cost of the rework and
+defect slices on the same ticket that ended before it: rejected work counts against it; a slice without a price makes it unavailable), with
+a **bootstrap 90 percent interval** (2,000 resamples, a seed fixed per group, 5th and 95th percentile) from 20 accepted slices up, else
+"n too small". **Cost** now uses the model's own cache-read weight (Opus 5.5 0.05, Fable 5.1 0.025 of input, from the price list of §28.3;
+others the design's 0.1); `units.read` stays at 0.1 so the lab still equals the reference script. Experiments show, per arm, n, accepted
+slices and the primary with its interval. Proof on the tape (`lab/slice2.test.ts`): the implementer slice costs (13 + 135,800 x 0.05 +
+80,250 + 4,150) x 4e-6 = 0.364812 dollars; Bash shares inspect 1/6, git read 2/6, test 2/6, wait 1/6; re-write share 28,500 / 63,300.
+
+### 28.9 Retention (migration 852)
+
+Request and tool rows are kept 14 days. Once a day (and a minute after start) a slice whose last request is older is **frozen**: its
+numbers (counts only) are written as JSON on its `lab_slices` row (`frozen`, `frozen_ms`), then its request and tool rows go. Slices,
+summaries and experiments are kept; a frozen slice reads the same as before (test). Source: `lab/retention.ts`, `Lab.start`.
+
+### 28.10 Read API and Portal MCP (authz: `lab/authz.ts`)
+
+`GET /api/lab/slices` (filters session, ticket, role, model, experiment, arm, since, limit; newest first), `GET /api/lab/experiments`,
+`GET /api/lab/summary?period=day|week&since=`. Each needs `view` on the platform area `usage` (the owner, an admin); an agent actor reads
+its own session only and no experiments; every denial is the same 404 as a route that is not there. Portal MCP: `lab_summary` (agent
+reach `session`: an agent's token reads its own session; an admin's token the portal) answers short rows by default (period, role, model,
+n, median requests, context, minutes, cost, inspection share, re-write share, first-pass yield, cost per accepted) and everything with
+`full: true` (p90s, outcomes, Bash classes, the experiments with intervals, the source of each figure); `lab_experiment_set` (admin
+tokens, confirmation round trip) starts a randomized or before-and-after experiment or stops one. Counts and ids only.
+
+### 28.11 Usage → Lab
+
+A tab of Usage. Day or Week; the summary as one card per row on a phone (the figures in a three-column grid, median / p90) and as a
+table from 1,024 px (p90 under the median); "unavailable" is shown as a muted state, never 0; one InfoTip holds the source of every
+figure. Experiments below: each arm's n, accepted slices, cost per accepted slice and its interval. Checked at 390 px (touch, light and
+dark) and 1,280 px (light and dark) on a seeded scratch portal: no horizontal scroll, 9 rows, 2 experiments; the Day and Week control is
+the shared `Segmented` at 40 px high (as on the Spikes tab).
+

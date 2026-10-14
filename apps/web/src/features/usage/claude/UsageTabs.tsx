@@ -2,6 +2,7 @@ import { HubContext, InTabsContext, PageTabs } from '@isnanme/ui';
 import { useEffect, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
+import { LabTab } from '@/features/lab/LabTab';
 import { AttributionTab } from '../spend/AttributionTab';
 import { BudgetsTab } from '../spend/BudgetsTab';
 import { SpikesTab } from '../spend/SpikesTab';
@@ -22,7 +23,7 @@ export function UsageTabs({ requests, top }: { requests: ReactNode; top?: ReactN
   const budgets = spend ? spend.budgets.near + spend.budgets.high + spend.budgets.exhausted : 0;
   const spikes = spend?.spikes24h ?? 0;
   const tab = params.get('tab');
-  // Five tabs do not fit a phone's bar, which scrolls sideways: bring the open one into view (a link to `?tab=spikes` must not hide it off the edge).
+  // Six tabs do not fit a phone's bar, which scrolls sideways: bring the open one into view (a link to `?tab=spikes` must not hide it off the edge).
   // Again once the fonts are in and when a badge changes a tab's width, since the first measure is of narrower tabs.
   useEffect(() => {
     const show = () => document.getElementById(`tab-${tab ?? 'requests'}`)?.scrollIntoView({ inline: 'center', block: 'nearest' });
@@ -51,6 +52,7 @@ export function UsageTabs({ requests, top }: { requests: ReactNode; top?: ReactN
           { id: 'attribution', label: 'Attribution', content: hub(<AttributionTab />) },
           { id: 'budgets', label: 'Budgets', badge: budgets || undefined, content: hub(<BudgetsTab />) },
           { id: 'spikes', label: 'Spikes', badge: spikes || undefined, badgeTone: 'info', content: hub(<SpikesTab />) },
+          { id: 'lab', label: 'Lab', content: hub(<LabTab />) },
         ]}
       />
     </>
