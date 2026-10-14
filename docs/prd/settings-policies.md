@@ -877,8 +877,10 @@ observed in a running Claude Code: see Open below.
 
 Five global settings in the Agents section reach every Claude process (and its sub-agents) as managed `env`
 in the policy owner's drop-in `10-claudepilot-policy.json` (`settings/agentEnv.ts`, fragment owner `policy`).
-Each is always written, its default included: a value is overwritten, never removed (§10.1). Claude Code reads
-managed `env` when a process starts, so a running Claude gets a change at its next start; each ⓘ says so.
+Each is always written, its default included: a value is overwritten, never removed (§10.1). When a change takes
+effect differs (T-302, T-309), and each ⓘ and the Configuration sheet's line say which is which (`applies` on
+each value): the three sub-agent values apply at once to new sub-agents (ones already running keep theirs); the
+two output caps are read when the Claude process starts, so a running Claude takes them in a new chat or a Restart.
 
 | Setting | Variable | Default | Source of the default |
 | --- | --- | --- | --- |
