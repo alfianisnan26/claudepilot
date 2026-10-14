@@ -5,7 +5,7 @@
 import { objectRef, type AttentionItem, type SkillRisk } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, present, whoOf, type AttentionSource } from '../attention/registry.js';
+import { clip, present, whoOf, verbFor, type AttentionSource } from '../attention/registry.js';
 
 interface Row {
   id: string;
@@ -49,7 +49,7 @@ export function skillRisk(r: Pick<Row, 'risk' | 'scripted' | 'findings' | 'detai
 export function skillAttentionSource(db: () => DatabaseSync | null): AttentionSource {
   return {
     kind: 'skill_version',
-    list(actor) {
+    list(actor, _now, scope) {
       const d = db();
       if (!d) throw new Error('the database is not available');
       // One query: versions whose content has no decision (any decision ends the wait), their source, the proposal and its session.
@@ -66,7 +66,7 @@ export function skillAttentionSource(db: () => DatabaseSync | null): AttentionSo
         )
         .all() as unknown as Row[];
       return rows
-        .filter((r) => can(actor, 'manage', objectRef('skill_version', r.id)).allow)
+        .filter((r) => can(actor, verbFor(scope, 'manage'), objectRef('skill_version', r.id)).allow)
         .map(
           (r): AttentionItem => ({
             kind: 'skill_version',

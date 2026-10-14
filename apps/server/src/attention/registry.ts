@@ -22,6 +22,8 @@ import {
   type AttentionItem,
   type AttentionKind,
   type AttentionList,
+  type AttentionScope,
+  type Verb,
 } from '@portal/contracts';
 import { AppError } from '@isnanme/core';
 import { systemActor } from '../authz/seam.js';
@@ -29,8 +31,11 @@ import type { AttentionSnoozes } from './snooze.js';
 
 export interface AttentionSource {
   kind: AttentionKind;
-  /** Everything of this kind that waits for a person and that `actor` may decide (the module's own `can()`). One read of the module's state, no N+1. */
-  list(actor: Actor, now: number): AttentionItem[];
+  /**
+   * Everything of this kind that waits for a person and that `actor` may decide (the module's own `can()`), or with scope `see` may view
+   * (`verbFor`, `readsPersonOnly`); absent is `decide`. One read of the module's state, no N+1.
+   */
+  list(actor: Actor, now: number, scope?: AttentionScope): AttentionItem[];
 }
 
 /** One item, as an event names it: never its text. */
@@ -98,14 +103,14 @@ export class AttentionRegistry {
   }
 
   /** Every source read once for `actor`: the items, and the kinds that could not be read. */
-  #read(actor: Actor): { items: AttentionItem[]; counts: AttentionList['counts']; unavailable: AttentionKind[] } {
+  #read(actor: Actor, scope: AttentionScope = 'decide'): { items: AttentionItem[]; counts: AttentionList['counts']; unavailable: AttentionKind[] } {
     const now = this.#now();
     const items: AttentionItem[] = [];
     const counts = Object.fromEntries(ATTENTION_KINDS.map((k) => [k, this.#sources.has(k) ? 0 : null])) as AttentionList['counts'];
     const unavailable: AttentionKind[] = [];
     for (const source of this.#sources.values()) {
       try {
-        const found = source.list(actor, now).filter((i) => i.kind === source.kind);
+        const found = source.list(actor, now, scope).filter((i) => i.kind === source.kind);
         counts[source.kind] = found.length;
         items.push(...found);
       } catch (e) {
@@ -118,8 +123,8 @@ export class AttentionRegistry {
   }
 
   /** `GET /api/attention`: the counts of every kind and one page of the items, grouped by why and then by age. */
-  list(actor: Actor, q: { kind?: AttentionKind | null; limit?: number; offset?: number } = {}): AttentionList {
-    const { items, counts, unavailable } = this.#read(actor);
+  list(actor: Actor, q: { kind?: AttentionKind | null; limit?: number; offset?: number; scope?: AttentionScope } = {}): AttentionList {
+    const { items, counts, unavailable } = this.#read(actor, q.scope);
     const limit = Math.min(Math.max(Math.trunc(Number.isFinite(q.limit) ? q.limit! : ATTENTION_PAGE_DEFAULT), 0), ATTENTION_PAGE_MAX);
     const offset = Math.max(Math.trunc(Number.isFinite(q.offset) ? q.offset! : 0), 0);
     const chosen = (q.kind ? items.filter((i) => i.kind === q.kind) : items).sort(attentionOrder);
@@ -250,4 +255,8 @@ export const sessionWho = (id: string | null | undefined, title?: string | null)
 export const ticketWho = (id: string | null | undefined): AttentionWhoLike | null => (id ? { label: id, link: `/admin/tickets/${encodeURIComponent(id)}` } : null);
 /** Approving is a person's act (the approve routes refuse tokens and agents): a source of such items lists them for a person, or the system's read. */
 export const isPerson = (actor: Actor): boolean => actor.kind === 'user' || actor.kind === 'system';
+/** The verb a source checks: what its module's decide route needs, or `view` for the `see` scope (what the module's read tools show anyway). */
+export const verbFor = (scope: AttentionScope | undefined, decide: Verb): Verb => (scope === 'see' ? 'view' : decide);
+/** A person-only item (a deploy, an approval ticket): listed to decide for a person only; to see, for anyone with view on it. */
+export const readsPersonOnly = (actor: Actor, scope: AttentionScope | undefined): boolean => scope === 'see' || isPerson(actor);
 export const present = <T>(xs: (T | null | undefined)[]): T[] => xs.filter((x): x is T => x !== null && x !== undefined);

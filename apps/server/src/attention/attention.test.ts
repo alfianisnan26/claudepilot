@@ -29,6 +29,8 @@ afterEach(() => {
   clearResolvers();
   for (const t of ['keepgoing_reports', 'keepgoing_policies', 'chat_requests', 'chat_sessions', 'mcp_catalog_versions', 'mcp_catalog', 'skill_reviews', 'skill_proposals', 'skill_versions', 'skill_sources', 'ci_deployments', 'ci_runs', 'tickets'])
     db.exec(`DELETE FROM ${t}`);
+  db.exec('DELETE FROM persona_proposals');
+  db.exec("DELETE FROM pools WHERE id LIKE 'pp-%'");
 });
 
 /* ---------- Fixtures: rows as each module writes them ---------- */
@@ -86,6 +88,16 @@ function skillVersion(id: string, hash: string, opts: { proposedBy?: string } = 
     ago(20 * MIN),
   );
   if (opts.proposedBy) db.prepare('INSERT INTO skill_proposals (version_id, actor, reason, proposed_at) VALUES (?, ?, ?, ?)').run(id, opts.proposedBy, 'needed', ago(15 * MIN));
+}
+function personaProposal(pool: string, id: string, opts: { kind?: 'instructions' | 'name' | 'avatar'; status?: string; session?: string } = {}) {
+  if (!db.prepare('SELECT 1 FROM pools WHERE id = ?').get(pool))
+    db.prepare("INSERT INTO pools (id, type, name, current_revision, created_at, updated_at) VALUES (?, 'persona', ?, 3, ?, ?)").run(pool, `Persona ${pool}`, ago(MIN), ago(MIN));
+  const kind = opts.kind ?? 'instructions';
+  const payload = kind === 'instructions' ? { edits: { append: 'x'.repeat(40), replace: [{ find: 'a', with: 'b' }] }, after: '' } : kind === 'name' ? { name: 'New' } : { avatar: 'abc' };
+  db.prepare(
+    `INSERT INTO persona_proposals (id, pool_id, kind, status, actor, workspace_id, session_id, reason, payload, fingerprint, base_revision, created_at)
+     VALUES (?, ?, ?, ?, ?, 'docker/dev', ?, 'clearer', ?, ?, 3, ?)`,
+  ).run(id, pool, kind, opts.status ?? 'pending', `session:${opts.session ?? 's1'}`, opts.session ?? 's1', JSON.stringify(payload), `fp-${id}`, ago(12 * MIN));
 }
 function review(hash: string, decision = 'approved') {
   db.prepare('INSERT INTO skill_reviews (tree_hash, decision, at) VALUES (?, ?, ?)').run(hash, decision, ago(0));
@@ -309,6 +321,71 @@ test('tool approvals: listed only after ten minutes of a session whose live proc
 
 /* ---------- The aggregate ---------- */
 
+test('persona proposals: a pending one waits for a person (what changes, never the text); a decision resolves it; tokens and agents do not decide it', () => {
+  chatSession('s1', 'idle', 'Persona tuner');
+  personaProposal('pp-1', 'p-a');
+  personaProposal('pp-1', 'p-b', { kind: 'name' });
+  personaProposal('pp-2', 'p-c', { status: 'approved' });
+  personaProposal('pp-2', 'p-d', { status: 'rejected' });
+  const r = registry();
+  const all = r.list(ownerActor());
+  assert.deepEqual(ids(all, 'persona_proposal').sort(), ['p-a', 'p-b']);
+  assert.equal(all.counts.persona_proposal, 2);
+  const item = all.items.find((i) => i.id === 'p-a')!;
+  assert.equal(item.why, 'gate');
+  assert.equal(item.title, 'Persona pp-1: new instructions');
+  assert.equal(item.risk, 'instructions · adds 40 chars, 1 replacement · against revision 3 · docker/dev');
+  assert.ok(!JSON.stringify(all).includes('x'.repeat(40)), 'the proposed text itself never reaches an item');
+  assert.deepEqual(item.who, [{ label: 'Persona tuner', link: '/admin/sessions/s1' }]);
+  assert.equal(item.link, '/admin/pools?tab=personas&proposal=p-a');
+  assert.equal(item.action.path, '/api/personas/proposals/p-a/approve');
+  assert.equal(all.items.find((i) => i.id === 'p-b')!.title, 'Persona pp-1: a new name');
+
+  assert.equal(r.list({ kind: 'token', userId: 'u_owner', tokenId: 't', scope: 'admin' }).counts.persona_proposal, 0);
+  assert.equal(r.list({ kind: 'agent', userId: 'u_owner', tokenId: 't', sessionId: 's1', workspaceId: 'docker/dev' }).counts.persona_proposal, 0);
+
+  const events: AttentionChanged[] = [];
+  r.onChange((e) => events.push(e));
+  r.check();
+  db.prepare("UPDATE persona_proposals SET status = 'approved' WHERE id = 'p-a'").run();
+  r.check();
+  r.check();
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0]!.resolved, [{ kind: 'persona_proposal', id: 'p-a' }]);
+});
+
+test('scope see: a token or an agent lists what it may VIEW (a held deploy, an approval ticket), still not another session; decide is unchanged', () => {
+  chatSession('s1', 'waiting');
+  chatSession('s2', 'waiting');
+  deploy('R1');
+  const t = ticket();
+  toolRequest('s1', 'q1', 20);
+  toolRequest('s2', 'q2', 20);
+  personaProposal('pp-1', 'p-a');
+  const r = registry();
+  const agent: Actor = { kind: 'agent', userId: 'u_owner', tokenId: 't', sessionId: 's1', workspaceId: 'docker/dev' };
+  const token: Actor = { kind: 'token', userId: 'u_owner', tokenId: 't', scope: 'read' };
+
+  const decide = r.list(agent);
+  assert.deepEqual(decide.items.map((i) => `${i.kind}:${i.id}`), ['tool_approval:s1/q1'], 'decide: only its own stuck approval');
+
+  const see = r.list(agent, { scope: 'see' });
+  assert.deepEqual(see.items.map((i) => `${i.kind}:${i.id}`).sort(), ['ci_deploy:dep-R1', 'persona_proposal:p-a', `ticket_approval:${t}`, 'tool_approval:s1/q1']);
+  assert.equal(see.counts.tool_approval, 1, 'another session stays out of sight, and out of the count');
+  assert.equal(see.total, see.items.length);
+
+  const readToken = r.list(token, { scope: 'see' });
+  assert.equal(readToken.counts.ci_deploy, 1, 'a read token may view the run');
+  assert.equal(readToken.counts.tool_approval, 2);
+  assert.equal(r.list(token).total, 0, 'a read token decides nothing');
+
+  ownedByA('ci_run', []);
+  ownedByA('ticket', []);
+  assert.equal(r.list({ kind: 'token', userId: 'u_a', tokenId: 't', scope: 'admin' }, { scope: 'see' }).counts.ci_deploy, 0, 'no view on the run: absent');
+  assert.equal(r.list({ kind: 'token', userId: 'u_a', tokenId: 't', scope: 'admin' }, { scope: 'see' }).counts.ticket_approval, 0);
+  assert.equal(r.list({ kind: 'anonymous' } as Actor, { scope: 'see' }).total, 0, 'nobody signed in sees nothing');
+});
+
 test('the aggregate reads each source with exactly one query, however many items there are', () => {
   chatSession('s1', 'waiting');
   for (let i = 0; i < 5; i++) {
@@ -318,6 +395,7 @@ test('the aggregate reads each source with exactly one query, however many items
     ticket();
     toolRequest('s1', `q${i}`, 20 + i);
     keepGoingDown(`kd${i}`);
+    personaProposal('pp-1', `p${i}`);
   }
   let prepared = 0;
   const counting = new Proxy(db, {
@@ -333,8 +411,8 @@ test('the aggregate reads each source with exactly one query, however many items
   });
   const r = createAttention({ db: counting }, { now: () => now, tickMs: 0 });
   const list = r.list(ownerActor());
-  assert.equal(list.total, 30);
-  assert.equal(prepared, 7, 'one query per source, and one for the person\'s own Later (snoozes)');
+  assert.equal(list.total, 35);
+  assert.equal(prepared, 8, 'one query per source, and one for the person\'s own Later (snoozes)');
 });
 
 test('the aggregate groups by why then age, pages, filters by kind, and says when a source could not be read', () => {
@@ -365,7 +443,7 @@ test('the aggregate groups by why then age, pages, filters by kind, and says whe
   const broken = createAttention({ db: null }, { now: () => now, tickMs: 0, log: () => undefined });
   const none = broken.list(ownerActor());
   assert.equal(none.counts.mcp_version, null, 'unavailable is a state, never 0');
-  assert.equal(none.unavailable.length, 6);
+  assert.equal(none.unavailable.length, 7);
 });
 
 test('an item appearing emits one event naming it; nothing changing emits nothing; the first read is the baseline', () => {
@@ -511,6 +589,10 @@ test('attention_list: compact rows by default, full on request; an agent sees on
     const missing = await mcp.call(agent.secret, 'attention_list', { item: 'tool_approval:nope/q1' });
     assert.equal(theirs.result?.isError, true);
     assert.equal(theirs.result?.content?.[0]?.text, missing.result?.content?.[0]?.text, 'not visible and not there are one answer');
+    const seeing = (await mcp.call(agent.secret, 'attention_list', { scope: 'see' })).result!.structuredContent;
+    assert.equal(seeing.scope, 'see');
+    assert.deepEqual(seeing.items.map((i: { item: string }) => i.item), ['tool_approval:s1/q1'], 'see keeps an agent in its own session');
+    assert.equal(mine.scope, 'decide');
     const one = (await mcp.call(agent.secret, 'attention_list', { item: 'tool_approval:s1/q1' })).result!.structuredContent;
     assert.equal(one.item.link, `/admin/attention?item=${encodeURIComponent('tool_approval:s1/q1')}`);
   } finally {

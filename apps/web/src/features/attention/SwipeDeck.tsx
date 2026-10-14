@@ -24,7 +24,7 @@ const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia
  * own page (where its module approves, answers or opens the chat: the deck never approves by itself), left is Later for an hour. Buttons
  * and the arrow keys do the same as the gestures. A card that leaves (resolved elsewhere, put off) hands its place to the next one.
  */
-export function Deck({ items, now, openKey }: { items: readonly AttentionItem[]; now: number; openKey: string | null }) {
+export function SwipeDeck({ items, now, openKey }: { items: readonly AttentionItem[]; now: number; openKey: string | null }) {
   const navigate = useNavigate();
   const toast = useToast();
   const deck = useMemo(() => deckOf(items, now), [items, now]);

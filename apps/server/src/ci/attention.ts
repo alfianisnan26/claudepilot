@@ -1,12 +1,13 @@
 // CI deployments waiting for a person's approval (Needs you, docs/prd/attention.md; CI PRD FR41): a held job of a running run whose
 // deployment is `waiting`. Class: production or uat (a protected environment). Risk: the environment, the jobs before it and how they
 // ended (the gate's verdict), the run and its commit, and the auto-approve rule's dry verdict when it looked. Who decides: a PERSON with
-// manage on the run, as the approve route (tokens and agents never approve, so they never see it here either).
+// manage on the run, as the approve route (tokens and agents never approve, so they never see it to decide; the `see` scope
+// shows it to whoever may view the run, read only).
 
 import { objectRef, type AttentionItem } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, isPerson, present, sessionWho, ticketWho, whoOf, type AttentionSource } from '../attention/registry.js';
+import { clip, present, readsPersonOnly, sessionWho, ticketWho, verbFor, whoOf, type AttentionSource } from '../attention/registry.js';
 
 interface Row {
   id: string;
@@ -44,10 +45,10 @@ export function gateVerdict(state: string | null, held: string): string {
 export function ciAttentionSource(db: () => DatabaseSync | null): AttentionSource {
   return {
     kind: 'ci_deploy',
-    list(actor) {
+    list(actor, _now, scope) {
       const d = db();
       if (!d) throw new Error('the database is not available');
-      if (!isPerson(actor)) return [];
+      if (!readsPersonOnly(actor, scope)) return [];
       // One query: the waiting deployments of running runs, with the run's facts and its session's title.
       const rows = d
         .prepare(
@@ -60,7 +61,7 @@ export function ciAttentionSource(db: () => DatabaseSync | null): AttentionSourc
         )
         .all() as unknown as Row[];
       return rows
-        .filter((r) => can(actor, 'manage', objectRef('ci_run', r.run_id)).allow)
+        .filter((r) => can(actor, verbFor(scope, 'manage'), objectRef('ci_run', r.run_id)).allow)
         .map((r): AttentionItem => {
           const ref = r.tag ?? r.branch ?? '';
           return {

@@ -6,7 +6,7 @@
 import { objectRef, type AttentionItem, type McpEntryKind, type McpSlot, type McpVersionSpec } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, present, whoOf, type AttentionSource } from '../attention/registry.js';
+import { clip, present, whoOf, verbFor, type AttentionSource } from '../attention/registry.js';
 
 interface Row {
   id: string;
@@ -59,7 +59,7 @@ export function mcpRisk(kind: McpEntryKind, spec: McpVersionSpec, slots: McpSlot
 export function mcpAttentionSource(db: () => DatabaseSync | null): AttentionSource {
   return {
     kind: 'mcp_version',
-    list(actor) {
+    list(actor, _now, scope) {
       const d = db();
       if (!d) throw new Error('the database is not available');
       // One query: the waiting versions, their entry and (for an agent's proposal) its session's title.
@@ -73,7 +73,7 @@ export function mcpAttentionSource(db: () => DatabaseSync | null): AttentionSour
         )
         .all() as unknown as Row[];
       return rows
-        .filter((r) => can(actor, 'manage', objectRef('mcp_entry', r.entry_id)).allow)
+        .filter((r) => can(actor, verbFor(scope, 'manage'), objectRef('mcp_entry', r.entry_id)).allow)
         .map(
           (r): AttentionItem => ({
             kind: 'mcp_version',
