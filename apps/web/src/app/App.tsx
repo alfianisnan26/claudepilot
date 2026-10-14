@@ -32,8 +32,6 @@ import { uiStrings } from './strings';
 // The full-screen views load on first use, in chunks of their own: the chat (markdown and all) and
 // the terminal (xterm) stay out of the bundle every other page waits for.
 const SessionPage = lazy(() => import('@/features/chat/SessionPage').then((m) => ({ default: m.SessionPage })));
-// A ticket's page renders Markdown, so it loads on first use like the chat does.
-const TicketPage = lazy(() => import('@/features/tickets/TicketPage').then((m) => ({ default: m.TicketPage })));
 const ShellPage = lazy(() => import('@/features/workspaces/ShellPage').then((m) => ({ default: m.ShellPage })));
 // The browser's live view (browser PRD §15): noVNC loads only here.
 const BrowserPage = lazy(() => import('@/features/browser/BrowserPage').then((m) => ({ default: m.BrowserPage })));
@@ -107,8 +105,8 @@ function Pages() {
         <Route path="attention" element={<NeedsYouPage />} />
         <Route path="workspaces" element={<WorkspacesPage />} />
         <Route path="sessions" element={<SessionsPage />} />
-        <Route path="tickets" element={<TicketsPage />} />
-        <Route path="tickets/:id" element={<TicketPage />} />
+        {/* One page for the queue and an open ticket (a Workbench, T-158): beside the board on a desktop, in its place on a phone. */}
+        <Route path="tickets/:id?" element={<TicketsPage />} />
         <Route path="ci" element={<CiPage />} />
         <Route path="ci/runs/:id" element={<RunPage />} />
         <Route path="knowledge" element={<KnowledgePage />} />

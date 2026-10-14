@@ -9,6 +9,7 @@ import { NavBadge } from '@/features/notify/NavBadge';
 import { AttentionBadge, AttentionRoot } from '@/features/attention/Root';
 import { GlanceStrip, useHasStrip } from '@/features/glance/Strip';
 import { api } from '@/lib/api';
+import { workbenchPage } from '@/lib/panels';
 import { useAuth } from '@/lib/auth';
 import { AccountMenu } from './AccountMenu';
 import { BRAND_NAME, Logo, LogoMark } from './Logo';
@@ -24,13 +25,16 @@ const showTabBar = NAV.length > 1;
 export function AppShell() {
   const { logout } = useAuth();
   const { pathname } = useLocation();
+  // A Workbench page (T-158) gets the whole width (no centred column), less padding under it (it ends at the window's bottom), and
+  // stays mounted across its own sub-paths: opening a ticket beside the board must not remount (and refetch) the board.
+  const workbench = workbenchPage(pathname);
   // The glance strip takes the phone bar's room, so the logo keeps to its mark while it shows.
   const glance = useHasStrip('header');
   // The labels of renamed workspaces (T-42), once: every place that only holds a workspace id names it by its label.
   useEffect(() => void api.workspaces.labels().catch(() => undefined), []);
 
   return (
-    <div className={cn('min-h-dvh pb-10 sm:pb-16 sm:pl-20 lg:pl-64 xl:pr-[var(--glance-dock-w,0px)]', showTabBar && 'pb-[calc(var(--tabbar-h)+1.5rem)]')}>
+    <div className={cn('min-h-dvh pb-10 sm:pl-20 lg:pl-64 xl:pr-[var(--glance-dock-w,0px)]', workbench ? 'sm:pb-6' : 'sm:pb-16', showTabBar && 'pb-[calc(var(--tabbar-h)+1.5rem)]')}>
       {/* The first Tab stop: past the sidebar and the account menu, to the page. */}
       <a
         href="#main"
@@ -50,10 +54,10 @@ export function AppShell() {
         </div>
       </header>
 
-      <main id="main" tabIndex={-1} className="mx-auto max-w-4xl px-4 pt-6 outline-none sm:px-6 sm:pt-10">
+      <main id="main" tabIndex={-1} className={cn('mx-auto px-4 pt-6 outline-none sm:px-6 sm:pt-10', !workbench && 'max-w-4xl')}>
         {/* Enter-only page transition: navigation never waits for an exit animation. */}
         <motion.div
-          key={pathname}
+          key={workbench ?? pathname}
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, ease }}
