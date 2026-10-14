@@ -56,6 +56,8 @@ export type ChatSessionRow = {
   byte_offset: number;
   last_seq: number;
   model: string | null;
+  /** T-109 (migration 761): the model before a move changed it; absent on rows read before the migration in old tests. */
+  original_model?: string | null;
   mode: string;
   effort: string | null;
   ultracode: number;
@@ -153,6 +155,8 @@ type RequestRow = {
 /** Fields `patchSession` can change. `cost` is absolute; `turnsDelta` is added to the current count. */
 export interface ChatSessionPatch {
   model?: string | null;
+  /** The model before a move changed it (T-109); null when what applies is the chat's own. */
+  originalModel?: string | null;
   mode?: string;
   effort?: string | null;
   ultracode?: boolean;
@@ -469,6 +473,7 @@ export class ChatStore {
       state: row.state as ChatSessionState,
       origin: row.origin as ChatOrigin,
       model: row.model ?? null,
+      originalModel: row.original_model ?? null,
       mode: row.mode as ChatPermissionMode,
       effort: row.effort ?? null,
       ultracode: row.ultracode === 1,
@@ -739,6 +744,7 @@ export class ChatStore {
       vals.push(v);
     };
     if (patch.model !== undefined) set('model', patch.model);
+    if (patch.originalModel !== undefined) set('original_model', patch.originalModel);
     if (patch.mode !== undefined) set('mode', patch.mode);
     if (patch.effort !== undefined) set('effort', patch.effort);
     if (patch.ultracode !== undefined) set('ultracode', patch.ultracode ? 1 : 0);

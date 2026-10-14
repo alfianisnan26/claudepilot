@@ -32,6 +32,13 @@
     // A harness may give running tasks (session-states.mjs: the header's count badge): `__FAKE_SESSION.__tasks`.
     if (p === `${base}/tasks`) return json((window.__FAKE_SESSION || {}).__tasks || []);
     if (p === `${base}/files`) return json({ path: '/work', parent: null, entries: [] });
+    // Keep going (keepgoing.mjs): a PUT changes the session's policy and the socket says so, as the server does.
+    if (p === `${base}/keep-going` && init && init.method === 'PUT') {
+      const b = JSON.parse(init.body || '{}');
+      session.keepGoing = { enabled: false, nudgeAfterMin: 4, prompt: null, statusFile: null, maxNudgesPerDay: 60, maxWakesPerDay: 20, nudgesToday: 0, wakesToday: 0, last: null, paused: false, ...(session.keepGoing || {}), ...b };
+      setTimeout(() => emit({ type: 'session', session: { ...session } }), 30);
+      return json(session.keepGoing);
+    }
     if (p.startsWith(base)) return json(null);
     return realFetch(input, init);
   };

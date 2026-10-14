@@ -997,3 +997,30 @@ wording, and light again after it through the detail view (opened from the panel
 no agent text in the reply slot; the activity line naming the running agent ("QA agent 2 (fable) · Read qa-notes.txt"); "Working · 3
 agents" (phone: "Working") with Send, not Stop; models sonnet, fable, and opus for the agent with no model argument (it inherited the
 session's); Stop ending one agent ("Stopped"). Not re-run after T-41: the 1280 px Sessions row and 1280 px dark (paused for a deploy gate).
+
+## 23. Keep going (the watchdog) (2026-10-14, T-259 slice 1; T-104, T-108 item 1, T-257)
+
+The supervisor (`docs/dev-sessions/supervisor.mjs`) ran on the owner's machine and stopped for hours when its private network dropped
+(2026-10-14 00:15 UTC: nothing nudged, woke, answered or reported any chat for about 3.5 hours). Keep going is that watchdog INSIDE the
+portal: a per-chat policy and a deterministic sweep in the server (`apps/server/src/keepgoing/`), with no person, no owner code and no
+process outside the portal. Slice 1 is thin on purpose: it keeps a chat going and says what it may not repair; it never repairs Bypass.
+
+### 23.1 Requirements and how they are built
+
+| ID | Requirement | Status |
+| --- | --- | --- |
+| FR60 | **A per-chat policy** `keepGoing`: on/off (off by default), nudge after N idle minutes (4), the continuation prompt (the supervisor's CONTINUE text; `{status}` is the policy's status file, default `docs/dev-sessions/status/orchestrator.md`; `{ticket}` the chat's ticket), caps per 24 h (60 nudges, 20 wakes). Stored in SQLite (migration 790). `GET`/`PUT /api/chat/sessions/:id/keep-going` (view / operate on the chat through the seam, declared in `keepgoing/authz.ts`; a person or an admin token; an agent, its own chat or another, and a token below admin are refused; audited `keepgoing.set`). The session payload carries it (`ChatSession.keepGoing`: the policy, today's nudges and wakes, the last action, `paused`). | ✅ Built; server tests (`keepgoing/routes.test.ts`, `keepgoing/controller.test.ts`, `keepgoing/store.test.ts`). |
+| FR61 | **The kill switch** `keepgoing.enabled` (Settings, group "Keep going", on by default: nothing runs until a chat's policy is on). Off: no round does anything; the policies stay. | ✅ Built; test. |
+| FR62 | **The sweep**: every 60 s, the chats whose policy is on and that are due (next look stored, +0-15 s jitter), at most 100, one decision each (`keepgoing/decide.ts`, pure): ended → reported (a person's close turns the policy off instead); a move, restart or launch under way → nothing; a QUESTION (`question`, `elicitation`) → denied with "decide yourself by the written defaults"; a TOOL, plan or workflow APPROVAL → never answered, reported once after 10 minutes; out of Bypass on a bypass-capable chat → reported once, never re-entered; interrupted, or asleep with a nudge due → woken (`control resume`), and the next round nudges at once; idle (T-41: no turn, no task, nothing waiting) for N minutes → the prompt at priority `later`, as `portal:keepgoing`, once per idle period, at least 10 minutes apart. A failed action backs off 15 minutes; a failed wake is reported once. Restart-safe: the next look, the idle period nudged, a continue owed after a wake, the back-off and the reports are rows. It acts for the chat's owner and re-checks each time that the owner is enabled and may operate the chat. | ✅ Built; server tests on a fake clock (`keepgoing/engine.test.ts`: not before N minutes, once per idle period, an approval never answered and reported once, a question answered, wake then nudge, asleep, caps, a failed wake, the kill switch, a portal restart in the middle, ended once and down as a comment, a person's close, out of Bypass, an owner who may no longer operate, a busy chat). |
+| FR63 | **Reports**: one notification `keepgoing_attention` ("Keep going", body "<workspace> · <what> · T-n", urgency high, Web Push, on by default; migration 791 adds it to every destination that hears `session_failed`) and ONE ticket per chat and cause (type bug, priority high, tag `watchdog`, title "<chat title>: <what> since HH:MM UTC", the evidence: state, process, mode, what waits by tool name and the portal's own title, the ended reason redacted, the last trail entry; never transcript text, never a command). Not repeated while the cause stands; when it comes back its open ticket gets a comment. Down (15 minutes after the sweep first saw the ending) is a comment on the ending's ticket and a second notification. The chat's title is never in the notification text (agents write titles): it travels as the untrusted detail, shown only where a destination turned on Include detail. | ✅ Built; tests. |
+| FR64 | **The trail**: every action (nudge, wake, answer, report, failure, cap, stand-down, a person's change) is one `keepgoing_events` row and one platform audit row (`keepgoing.*`) with a fixed sentence; nothing is written into the transcript except the nudge itself (a portal message). | ✅ Built. |
+| FR65 | **The chat shows it**: Session info has a "Keep going" switch (the explanation in its InfoTip), today's nudges and wakes and the last action; the session header shows a 44 px icon-only chip while it is on, which opens Session info. | ✅ Built; browser check below. |
+
+### 23.2 What slice 2 holds (not built)
+
+The restart of an ENDED chat (today it is only reported, and down is a comment); the Bypass LEASE (T-104 item 3: re-entering Bypass after a
+wake or a restart under a time-boxed grant the owner gives once with the server code; whether a wake keeps Bypass is the owner's call on
+T-256); the Home widget ("Autonomy", "Pause all"); the admin MCP tool `session_keepgoing_set`; the done condition (a status file marker, a
+ticket closing); the move by D-12/D-39 from the sweep; editing the prompt, the caps and N in the UI (the API takes them); the portal's own
+external heartbeat. Until then `supervisor.mjs` stays, and since T-257 it opens one watchdog ticket when it leaves a track down and counts
+starts after a harmless integrity ending (T-136) apart from its cap.

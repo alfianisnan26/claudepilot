@@ -134,6 +134,8 @@ export class ClaudeUsageMonitor {
   readonly #settings: UsageSettings;
   readonly #now: () => number;
   readonly #sinks = new Set<(alert: ClaudeUsageAlert) => void>();
+  /** Told after every new reading (a probe that read, a live reading): auto move re-evaluates on it (T-105). */
+  readonly #readings = new Set<() => void>();
   /** Workspaces with a probe running: one at a time each. */
   readonly #busy = new Set<string>();
   readonly #manual = new Map<string, number>();
@@ -332,6 +334,17 @@ export class ClaudeUsageMonitor {
     };
     this.#store.addSamples(c.id, c.workspaceId, now, r.windows, 'probe');
     this.#store.saveLatest(this.#alerts(c, row, now));
+    this.#reading();
+  }
+
+  #reading(): void {
+    for (const fn of this.#readings) {
+      try {
+        fn();
+      } catch (e) {
+        this.#warn('a reading listener', e);
+      }
+    }
   }
 
   #blank(c: SourceClaude): LatestRow {
@@ -387,6 +400,7 @@ export class ClaudeUsageMonitor {
       const who: SourceClaude = { id: target.claudeId, name: target.name, directory: '', workspaceId: target.workspaceId, workspaceName: target.workspaceName, target: '', running: true };
       this.#store.saveLatest(this.#alerts(who, row, now));
       this.o.notify?.();
+      this.#reading();
     } catch (e) {
       this.#warn('a live reading', e);
     }
@@ -482,6 +496,21 @@ export class ClaudeUsageMonitor {
       resetsAt: mark.resetsAtMs === null ? null : new Date(mark.resetsAtMs).toISOString(),
       at: new Date(mark.atMs).toISOString(),
     };
+  }
+
+  /** The usage window keys of a Claude's last reading (T-109: whether it shows a model's own limit, like Fable's week); [] when none. */
+  windowKeys(claudeId: string): string[] {
+    try {
+      return (this.#store.latest(claudeId)?.windows ?? []).map((w) => w.key);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Calls `fn` after every new reading of any Claude (a probe or a live `rate_limit_info`); returns the way to stop. Never with data. */
+  onReading(fn: () => void): () => void {
+    this.#readings.add(fn);
+    return () => this.#readings.delete(fn);
   }
 
   /** Calls `fn` for each new crossing: the seam where push notifications plug in later (§12). Returns the way to stop. */

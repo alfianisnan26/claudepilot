@@ -25,7 +25,7 @@ The managed CLAUDE.md for the main chat and every chat in the workspace (about 1
 - Precedence: charter, standing decisions, program overlay, role brief, ticket.
 - The charter: the zero-tolerance list, the duties, the walls.
 - Before a unit: status file, decisions, rank order, task type and size.
-- The working loop: WIP three, claim when work starts, the structured estimate, a worktree per slice, small commits with the trailers, tests with the change, quick gate then full gate, heavy jobs one at a time, the status file, never idle, three failures means change the approach, close with evidence and a reflection line.
+- The working loop: WIP five, claim when work starts, the structured estimate, a worktree per slice, small commits with the trailers, tests with the change, quick gate then full gate, heavy jobs one at a time, the status file, never idle, three failures means change the approach, close with evidence and a reflection line.
 - Sub-agents: never `session_spawn`, at most three at once, self-contained briefs, the model per slice, reading risky diffs, probation, and a table of which role to use.
 - Escalation: the required list only. Everything else is decided by the written default.
 - Never: credentials and the environment, deny rules, force push, approving in a person's name, SendMessage from a sub-agent, the hosting workspace and the portal.

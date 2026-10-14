@@ -13,6 +13,9 @@
 //      3 after integrity endings, RESTART_GAP_MIN apart). A status file that starts with TRACK COMPLETE, or a session a person closed, is left alone.
 //   5. Keeps each track chat in Bypass (T-256): one found out of it (a wake or a Resume starts on the start mode) gets the server code again and
 //      the acknowledgement, at most every BYPASS_GAP_MIN minutes, and a tool approval it asked meanwhile is denied with "run it again".
+//   6. T-257: a track left down for any reason (the start cap, a refusal, a missing Claude, the portal unreachable) opens ONE ticket (tag
+//      watchdog) through the API and logs it; starts after a harmless integrity ending (T-136: a second control response, a peer message)
+//      count apart from the cap (MAX_HARMLESS_STARTS of their own). The portal's own watchdog (Keep going, T-259) replaces this script.
 // Stop it: touch ~/.claudepilot/dev-sessions/STOP (checked every round), or kill the process by PID. State: ~/.claudepilot/dev-sessions/state.json.
 // Never logs the code, a cookie or a token.
 
@@ -58,8 +61,8 @@ const TRACKS = [
     folder: EVENT,
     claudes: ['rossi', 'sekar', 'regitha', 'satria', 'one.claude', 'two.claude'],
     kickoff: (again, reason) =>
-      `You are the Event orchestrator, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; your role-subagents are gone)` : ''}. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner is asked only for REQUIRED escalations (production, uat, secrets and permissions, billing, legal, destructive data), as lines on the checklist ticket T-156. Read first, in this order: docs/dev-sessions/CHARTER.md and DECISIONS.md of the ClaudePilot repo (~/work/claudepilot; D-35, D-36, D-37 are yours; the charter binds you and every sub-agent), your pilot tickets (ticket_list, tag event-program: T-150 bootstrap first, then T-155 issue import, T-151 stg deploy, T-157 Builder as a full MCP, T-152 E2E QA, T-153 AI re-scope, T-154 autonomy), docs/kit/README.md and docs/kit/scaffold/bootstrap.md in ~/work/claudepilot (the operating kit; its first real use is you), and in ~/work/event: docs/kb/*.md, docs/deploy.md, docs/product/core-services.md. The repo is isnanme/event on GitHub, cloned in ~/work/event; integration line is the branch stg, main and master are the production line and move only by a person; you work in git worktrees under ~/work/event.worktrees, never in the main folder. Rules: run every role as a SUB-AGENT of this chat (Agent tool, a worktree each, they inherit Bypass; implementer, qa-verifier, reviewer, scribe, release-coordinator, mcp-author, ux-checker, perf-tester); never session_spawn; at most three sub-agents at once; heavy jobs (npm ci, typecheck, tests, builds, Playwright, Lighthouse) through scripts/job-run.sh of the ClaudePilot repo or flock /tmp/heavy.lock nice -n 10, one at a time; stg only; secrets arrive through the Secrets pool event-stg by name (the owner pastes values; you never print or read them); every commit has Ticket, Pilot-Session and Pilot-Agent trailers, unsigned (git -c commit.gpgsign=false); status on a pilot status ticket every ~2 h and docs/dev-sessions/status/orchestrator.md in the repo; shared context in the knowledge folder Event. The product focus: the Event app as a vessel of functionality, deployment and release, with the AI Builder replaced by a FULL MCP (T-157). Keep every role busy.`,
-    nudge: 'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag event-program) and your sub-agents, start or restart the roles that have work (three at most, heavy jobs one at a time). If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
+      `You are the Event orchestrator, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; your role-subagents are gone)` : ''}. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner is asked only for REQUIRED escalations (production, uat, secrets and permissions, billing, legal, destructive data), as lines on the checklist ticket T-156. Read first, in this order: docs/dev-sessions/CHARTER.md and DECISIONS.md of the ClaudePilot repo (~/work/claudepilot; D-35, D-36, D-37 are yours; the charter binds you and every sub-agent), your pilot tickets (ticket_list, tag event-program: T-150 bootstrap first, then T-155 issue import, T-151 stg deploy, T-157 Builder as a full MCP, T-152 E2E QA, T-153 AI re-scope, T-154 autonomy), docs/kit/README.md and docs/kit/scaffold/bootstrap.md in ~/work/claudepilot (the operating kit; its first real use is you), and in ~/work/event: docs/kb/*.md, docs/deploy.md, docs/product/core-services.md. The repo is isnanme/event on GitHub, cloned in ~/work/event; integration line is the branch stg, main and master are the production line and move only by a person; you work in git worktrees under ~/work/event.worktrees, never in the main folder. Rules: run every role as a SUB-AGENT of this chat (Agent tool, a worktree each, they inherit Bypass; implementer, qa-verifier, reviewer, scribe, release-coordinator, mcp-author, ux-checker, perf-tester); never session_spawn; at most five sub-agents at once; heavy jobs (npm ci, typecheck, tests, builds, Playwright, Lighthouse) through scripts/job-run.sh of the ClaudePilot repo or flock /tmp/heavy.lock nice -n 10, one at a time; stg only; secrets arrive through the Secrets pool event-stg by name (the owner pastes values; you never print or read them); every commit has Ticket, Pilot-Session and Pilot-Agent trailers, unsigned (git -c commit.gpgsign=false); status on a pilot status ticket every ~2 h and docs/dev-sessions/status/orchestrator.md in the repo; shared context in the knowledge folder Event. The product focus: the Event app as a vessel of functionality, deployment and release, with the AI Builder replaced by a FULL MCP (T-157). Keep every role busy.`,
+    nudge: 'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag event-program) and your sub-agents, start or restart the roles that have work (five at most, heavy jobs one at a time). If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
     wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your pilot tickets (tag event-program), git worktree list and git status in ~/work/event, restart the roles that had work in flight, and carry on. Nobody is here to answer questions.`,
   },
 ];
@@ -233,39 +236,45 @@ async function moveIfLow(t, ts, cur) {
   const used = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, Math.max(0, ...(c.windows ?? []).map((w) => (typeof w.usedPct === 'number' ? w.usedPct : 0)))]));
   const mine = used.get(cur.claudeId);
   if (mine === undefined || mine < LOW_USED_PCT) return false;
-  // A chat on a model only some Claudes have (Fable shows as its own window on those) must land on one that has it: otherwise the restore of its
-  // model fails quietly and it runs on whatever the other Claude defaults to (T-109 makes the portal pick the best available model instead).
+  // A chat on a model only some Claudes have (Fable shows as its own window on those) goes to one that has it first; with none, to another
+  // Claude with the model it should run there in the switch request (T-109: the portal applies it, verifies it and falls down the chain).
   const gated = /fable/i.exec(cur.model ?? '')?.[0]?.toLowerCase() ?? null;
   const has = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, (c.windows ?? []).some((w) => `${w.key ?? ''} ${w.label ?? ''}`.toLowerCase().includes(gated ?? '\u0000'))]));
   let best = null;
+  let other = null;
   for (const name of t.claudes) {
     const id = await claudeIdOf(name);
     if (!id || id === cur.claudeId) continue;
-    if (gated && !has.get(id)) continue;
     const u = used.get(id) ?? 0;
     if (u >= LOW_USED_PCT) continue;
+    if (gated && !has.get(id)) {
+      if (!other || u < other.used) other = { name, id, used: u, model: 'opus' };
+      continue;
+    }
     if (!best || u < best.used) best = { name, id, used: u };
   }
+  best = best ?? other;
   if (!best) {
     if (ts.lowLoggedAt === undefined || Date.now() - ts.lowLoggedAt > 30 * 60_000) log(`${t.key}: its Claude is at ${mine}% used and no delegated Claude has more than ${100 - LOW_USED_PCT}% left: waiting, looking again every round`), (ts.lowLoggedAt = Date.now());
     return false;
   }
-  if (DRY) return log(`[dry] ${t.key}: would move ${cur.id.slice(0, 8)} from ${mine}% used to ${best.name} (${best.used}% used)`), false;
-  const res = await api('POST', `/api/chat/sessions/${cur.id}/switch`, { claudeId: best.id, handoff: mine >= 100 ? 'skip' : 'ask' });
+  const on = best.model ? ` on ${best.model}` : '';
+  if (DRY) return log(`[dry] ${t.key}: would move ${cur.id.slice(0, 8)} from ${mine}% used to ${best.name}${on} (${best.used}% used)`), false;
+  const res = await api('POST', `/api/chat/sessions/${cur.id}/switch`, { claudeId: best.id, handoff: mine >= 100 ? 'skip' : 'ask', ...(best.model ? { model: best.model } : {}) });
   if (res.error) {
     log(`${t.key}: could not move to ${best.name}: ${res.error.message}`);
     ts.backoffUntil = Date.now() + 5 * 60_000;
     return false;
   }
   ts.lowLoggedAt = undefined;
-  log(`${t.key}: its Claude was at ${mine}% used: moved to ${best.name} (${best.used}% used)`);
+  log(`${t.key}: its Claude was at ${mine}% used: moved to ${best.name}${on} (${best.used}% used)`);
   return true;
 }
 
 const kickoff = (t, again, reason) =>
   again
     ? `You are the continuation of the ${t.title} session, which ended (${reason}). Nobody answers questions: decide, write it down, go on. First read docs/dev-sessions/README.md, docs/dev-sessions/orchestrator.md and your status file docs/dev-sessions/status/${t.key}.md. Sub-agents of the earlier session are gone: look at git worktree list, git status -sb and git log --oneline origin/integration..HEAD in each worktree under ~/work/claudepilot.worktrees/ for what is unmerged, keep what is good, then continue from NEXT. When the whole backlog is done, make TRACK COMPLETE the first line of the status file, commit and push, and end with the final report.`
-    : `You are the ${t.title} session: the one autonomous development session of ClaudePilot, working with sub-agents (the Agent tool) in git worktrees. Nobody answers questions: decide, write it down, go on. First read docs/dev-sessions/README.md (the rules that bind you and every sub-agent) and docs/dev-sessions/orchestrator.md (your brief), then start: look at the three prepared worktrees, create your status file docs/dev-sessions/status/${t.key}.md, and dispatch up to three sub-agents in parallel, one per work package. A supervisor watches you: if you go idle it tells you to continue. Do not rename the chat.`;
+    : `You are the ${t.title} session: the one autonomous development session of ClaudePilot, working with sub-agents (the Agent tool) in git worktrees. Nobody answers questions: decide, write it down, go on. First read docs/dev-sessions/README.md (the rules that bind you and every sub-agent) and docs/dev-sessions/orchestrator.md (your brief), then start: look at the three prepared worktrees, create your status file docs/dev-sessions/status/${t.key}.md, and dispatch up to five sub-agents in parallel, one per work package. A supervisor watches you: if you go idle it tells you to continue. Do not rename the chat.`;
 
 /**
  * The create request. A start again names the ended session it continues (T-270): the portal links the lineage and moves that chat's tickets
@@ -322,7 +331,7 @@ const statusSaysDone = (tstate) => {
   }
 };
 
-const NUDGE = 'Nobody is here to answer. Continue now: integrate what finished sub-agents brought, dispatch the next slices to up to three sub-agents in parallel, keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
+const NUDGE = 'Nobody is here to answer. Continue now: integrate what finished sub-agents brought, dispatch the next slices to up to five sub-agents in parallel, keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
 const WAKE = (why) => `This session was interrupted (${why}). Continue where you left off: read your status file docs/dev-sessions/status/orchestrator.md, look at git worktree list and git status in each worktree, and carry on. Nobody is here to answer questions.`;
 const MOVED = (to) => `This chat was moved to another Claude (${to}) and its process restarted: the sub-agents of the old process stopped. Continue now where you stopped: look at your tickets or status file, git worktree list and git status, restart the work that was in flight, commit and push WIP early. Nobody is here to answer questions.`;
 const NUDGE_AFTER_MIN = Number(process.env.NUDGE_AFTER_MIN ?? 3);
@@ -425,15 +434,76 @@ const trustLogged = new Set();
 
 const within24h = (list) => (list ?? []).filter((x) => Date.now() - x < 24 * 3_600_000);
 
+/**
+ * T-257 item 2: an integrity ending T-136 classifies as harmless (a duplicate control response, a peer message after a sub-agent's) is the
+ * harness's, not the chat's: a start after one does not count against MAX_STARTS or the 3-after-integrity cap. It has its own ceiling,
+ * MAX_HARMLESS_STARTS per 24 h, so a loop of them still stops (and is reported).
+ */
+const MAX_HARMLESS_STARTS = Number(process.env.MAX_HARMLESS_STARTS ?? 12);
+const harmlessEnding = (reason) => /^integrity/i.test(reason ?? '') && /a second control response|origin peer/i.test(reason ?? '');
+
+/**
+ * T-257 item 1: a track left down for any reason (the start cap, a refusal, a missing Claude, a network error) opens ONE ticket through the
+ * API (`POST /api/tickets`, type bug, priority high, tag watchdog) and logs it; the same cause is not reported again until the track runs
+ * again. DRY_RUN only says what it would open. The ticket holds the reason the portal gave (never the code, a cookie or a token).
+ */
+async function reportDown(t, ts, cause, detail) {
+  ts.downReported ??= {};
+  if (ts.downReported[cause]) return;
+  const at = new Date().toISOString();
+  const summary = `${t.title}: left down (${cause}) since ${at.slice(11, 16)} UTC`.slice(0, 140);
+  const description = [
+    `The supervisor (docs/dev-sessions/supervisor.mjs) left the track \`${t.key}\` down and cannot start it again by itself.`,
+    '',
+    `- Cause: ${cause}`,
+    `- Since: ${at}`,
+    `- Last session: ${ts.sessionId ?? 'none'}`,
+    `- Detail: ${String(detail ?? '').replace(/\s+/g, ' ').slice(0, 300)}`,
+    `- Starts in 24 h: ${within24h(ts.starts).length} (after harmless endings: ${within24h(ts.harmless).length})`,
+    '',
+    'A person (or the portal watchdog, T-259) starts it again. This ticket is not repeated while the cause stands.',
+  ].join('\n');
+  if (DRY) {
+    ts.downReported[cause] = { at, id: null };
+    return log(`[dry] ${t.key}: would open a watchdog ticket: ${summary}`);
+  }
+  try {
+    const r = await api('POST', '/api/tickets', { type: 'bug', priority: 'high', tags: ['watchdog'], summary, description, workspaceId: WORKSPACE });
+    if (r.error || !r.data?.id) throw new Error(r.error?.message ?? `status ${r.status}`);
+    ts.downReported[cause] = { at, id: r.data.id };
+    log(`${t.key}: left down (${cause}): opened ${r.data.id}`);
+  } catch (e) {
+    log(`${t.key}: left down (${cause}) and the ticket could not be opened: ${e.message}`);
+  }
+}
+/** What a failed start says about why the track is left down. */
+const downCause = (msg) =>
+  /is a Claude on/.test(msg) ? 'missing_claude' : /fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|network/i.test(msg) ? 'network' : /refused|did not turn on|not trusting/i.test(msg) ? 'refused' : 'start_failed';
+
 async function watch() {
   const until = Date.now() + LIFETIME_H * 3_600_000;
   const idleSince = new Map();
   let stagger = false;
+  let netDownSince = null;
   while (Date.now() < until) {
     if (existsSync(join(STATE_DIR, 'STOP'))) return log('STOP file found: leaving the sessions as they are');
     await ensureTrust().catch((e) => log(`folder trust: could not check: ${e.message}`));
     const state = readState();
-    const list = (await api('GET', '/api/chat/sessions')).data ?? [];
+    let list;
+    try {
+      list = (await api('GET', '/api/chat/sessions')).data ?? [];
+    } catch (e) {
+      // The portal cannot be reached (T-259: the private network dropped): every track counts as down; reported once the portal answers again.
+      netDownSince ??= Date.now();
+      log(`portal unreachable (${e.message}): looking again in ${ROUND_S} s`);
+      await sleep(ROUND_S);
+      continue;
+    }
+    if (netDownSince) {
+      const mins = Math.round((Date.now() - netDownSince) / 60_000);
+      netDownSince = null;
+      if (mins >= 15) for (const t of TRACKS) await reportDown(t, (state.tracks[t.key] ??= { key: t.key, starts: [], nudges: [], wakes: [] }), 'network', `the portal was unreachable from the supervisor for about ${mins} minutes`);
+    }
     const sessions = Array.isArray(list) ? list : (list.items ?? []);
     for (const t of TRACKS) {
       const ts = (state.tracks[t.key] ??= { key: t.key, starts: [], nudges: [], wakes: [] });
@@ -453,6 +523,7 @@ async function watch() {
 
       if (cur && cur.state !== 'ended' && !cur.archivedAt) {
         ts.sessionId = cur.id;
+        ts.downReported = {}; // it runs: a later stop is reported again
         // A move to another Claude restarts the process and starts no turn: the chat sits idle until somebody speaks. Speak at once (not after the
         // idle wait), when it is idle, or as soon as it is.
         if (ts.claudeId && ts.claudeId !== cur.claudeId) {
@@ -545,20 +616,29 @@ async function watch() {
         }
       }
       const recent = within24h(ts.starts);
-      const integrityEnds = recent.length && /^integrity/.test(cur?.endedReason ?? '');
-      if (recent.length >= MAX_STARTS || (integrityEnds && recent.length >= 3)) {
-        if (!ts.capLogged) log(`${t.key}: too many starts in 24 h (${recent.length}): leaving it for a person (${String(cur?.endedReason ?? '').slice(0, 120)})`), (ts.capLogged = true);
+      ts.harmless = within24h(ts.harmless);
+      // The cap counts per root cause (T-257 item 2): starts after a harmless integrity ending are not the chat's and count apart.
+      const harmless = harmlessEnding(cur?.endedReason);
+      const counted = recent.filter((x) => !ts.harmless.includes(x));
+      const integrityEnds = counted.length && /^integrity/.test(cur?.endedReason ?? '');
+      const capped = harmless ? ts.harmless.length >= MAX_HARMLESS_STARTS : counted.length >= MAX_STARTS || (integrityEnds && counted.length >= 3);
+      if (capped) {
+        if (!ts.capLogged) log(`${t.key}: too many starts in 24 h (${counted.length}, ${ts.harmless.length} after harmless endings): leaving it for a person (${String(cur?.endedReason ?? '').slice(0, 120)})`), (ts.capLogged = true);
+        await reportDown(t, ts, 'start_cap', `${counted.length} starts in 24 h (${ts.harmless.length} after harmless endings); the last ending: ${cur?.endedReason ?? 'none'}`);
+        saveState(state);
         continue;
       }
       if (recent.length && Date.now() - recent[recent.length - 1] < RESTART_GAP_MIN * 60_000) continue;
       if (stagger && !DRY) await sleep(STAGGER_S);
       try {
         await startSession(t, ts, !!cur, cur?.endedReason ?? 'it was not running', cur?.state === 'ended' ? cur.id : null);
+        if (harmless && !DRY) ts.harmless.push(ts.starts[ts.starts.length - 1]);
         ts.capLogged = false;
         stagger = true;
       } catch (e) {
         log(`${t.key}: could not start: ${e.message}`);
         ts.backoffUntil = Date.now() + 10 * 60_000;
+        await reportDown(t, ts, downCause(e.message), e.message);
       }
       saveState(state);
     }

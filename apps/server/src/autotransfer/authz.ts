@@ -15,6 +15,7 @@ export function declareAutoTransferPolicies(): void {
     'POST /api/autotransfer/suggestions/:id/later': { kind: 'self', audit: 'autotransfer.declined' },
     'POST /api/autotransfer/suggestions/:id/always': { kind: 'self', audit: 'autotransfer.mode_set' },
     'GET /api/autotransfer/events': { kind: 'self' },
+    'GET /api/autotransfer/state': { kind: 'self' },
   });
   // The one Portal MCP tool: a chat's state and recent events, read only. Nothing changes a mode or moves a chat over MCP.
   declareToolPolicies('autotransfer', { autotransfer_status: { kind: 'objects', checks: [{ type: 'session', verb: 'view', arg: 'session_id' }] } });

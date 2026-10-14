@@ -2715,6 +2715,56 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 760,
+    name: 'auto move: the wait for quota and the steer, per chat (T-105)',
+    up(db) {
+      // T-105 (docs/prd/auto-transfer.md FR10a, FR4a): a chat at or under the threshold with nowhere to go keeps a waiting state the engine
+      // re-evaluates by itself (restart-safe: `pending()` wakes it); a chat told mid-turn to finish and stop remembers the period, so it is told once.
+      db.exec(`
+        ALTER TABLE autotransfer_sessions ADD COLUMN waiting_since TEXT;
+        ALTER TABLE autotransfer_sessions ADD COLUMN waiting_code TEXT;
+        ALTER TABLE autotransfer_sessions ADD COLUMN steered_period TEXT;
+      `);
+      // The trail takes the new kinds (waiting, resumed, steered, continued, dry_run): SQLite can't change a CHECK, so the table is rebuilt
+      // with every row and id kept (the migration runs in the store's transaction).
+      db.exec(`
+        CREATE TABLE autotransfer_events_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at TEXT NOT NULL,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          session_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('suggested', 'moved', 'declined', 'deferred', 'warned', 'refused', 'failed', 'undone', 'mode_set', 'waiting', 'resumed', 'steered', 'continued', 'dry_run')),
+          mode TEXT NOT NULL,
+          reason TEXT,
+          from_claude TEXT,
+          to_claude TEXT,
+          facts TEXT,
+          handoff TEXT,
+          handoff_id TEXT,
+          code TEXT,
+          actor TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO autotransfer_events_new (id, at, owner_id, created_by, session_id, workspace_id, kind, mode, reason, from_claude, to_claude, facts, handoff, handoff_id, code, actor)
+          SELECT id, at, owner_id, created_by, session_id, workspace_id, kind, mode, reason, from_claude, to_claude, facts, handoff, handoff_id, code, actor FROM autotransfer_events;
+        DROP TABLE autotransfer_events;
+        ALTER TABLE autotransfer_events_new RENAME TO autotransfer_events;
+        CREATE INDEX autotransfer_events_session ON autotransfer_events (session_id, at);
+        CREATE INDEX autotransfer_events_owner ON autotransfer_events (owner_id, at);
+      `);
+    },
+  },
+  {
+    version: 761,
+    name: 'chat sessions: the model a chat had before a move changed it (T-109)',
+    up(db) {
+      // T-109: a move to a Claude without the chat's model applies the best model it has; the row keeps what APPLIES (`model`) and what the
+      // chat had before (`original_model`, null when they are the same family), so a later move can go back to it.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN original_model TEXT;`);
+    },
+  },
+  {
     version: 770,
     name: 'chat sessions: the session a row continues',
     up(db) {
@@ -2761,6 +2811,80 @@ export const MIGRATIONS: Migration[] = [
         ALTER TABLE ci_deployments ADD COLUMN auto_line TEXT;
         ALTER TABLE ci_deployments ADD COLUMN auto_at TEXT;
       `);
+    },
+  },
+  {
+    version: 790,
+    name: 'keep going: a policy per chat, its trail and its reports',
+    up(db) {
+      // T-259 slice 1 (T-104, T-108 item 1): the watchdog inside the portal. `keepgoing_policies` is a person's choice for one chat (off by
+      // default) and the sweep's own state (when the chat is next due, the idle period already nudged, a continue owed after a wake, a
+      // back-off), so a portal restart resumes where it was. `keepgoing_events` is the trail (one row per action, fixed sentences, never message
+      // text): the counts per 24 h are read from it. `keepgoing_reports` holds one row per chat and cause (`cleared_at` null while the cause
+      // stands), so a cause is reported once (a notification and a ticket) and not again until it has cleared; when it comes back, its ticket
+      // gets a comment while it is open.
+      db.exec(`
+        CREATE TABLE keepgoing_policies (
+          session_id TEXT PRIMARY KEY,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          enabled INTEGER NOT NULL DEFAULT 0,
+          nudge_after_min INTEGER NOT NULL DEFAULT 4,
+          prompt TEXT,
+          status_file TEXT,
+          max_nudges INTEGER NOT NULL DEFAULT 60,
+          max_wakes INTEGER NOT NULL DEFAULT 20,
+          next_due_at TEXT,
+          nudged_period TEXT,
+          continue_owed INTEGER NOT NULL DEFAULT 0,
+          backoff_until TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX keepgoing_policies_due ON keepgoing_policies (next_due_at) WHERE enabled = 1;
+        CREATE TABLE keepgoing_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          at TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          cause TEXT,
+          reason TEXT NOT NULL,
+          actor TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX keepgoing_events_session ON keepgoing_events (session_id, at);
+        CREATE TABLE keepgoing_reports (
+          session_id TEXT NOT NULL,
+          cause TEXT NOT NULL,
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          since TEXT NOT NULL,
+          reported_at TEXT NOT NULL,
+          cleared_at TEXT,
+          ticket_id TEXT,
+          PRIMARY KEY (session_id, cause)
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 791,
+    name: 'notify: keepgoing_attention (Keep going) for every destination that hears failed sessions',
+    up(db) {
+      // As migration 720 did for ci_waiting: a destination keeps an explicit list of kinds, so one made before `keepgoing_attention` existed
+      // would never hear it. Whoever hears `session_failed` (a chat in trouble) hears Keep going's reports too; a destination that opted out
+      // of failed sessions stays out. Only the list changes; a list that has it already is left alone (twice is once).
+      const rows = db.prepare('SELECT id, kinds FROM notify_destinations').all() as { id: string; kinds: string }[];
+      const write = db.prepare('UPDATE notify_destinations SET kinds = ? WHERE id = ?');
+      for (const r of rows) {
+        let kinds: unknown;
+        try {
+          kinds = JSON.parse(r.kinds);
+        } catch {
+          continue; // a list that cannot be read is not guessed at
+        }
+        if (!Array.isArray(kinds) || !kinds.includes('session_failed') || kinds.includes('keepgoing_attention')) continue;
+        write.run(JSON.stringify([...kinds, 'keepgoing_attention']), r.id);
+      }
     },
   },
 ];

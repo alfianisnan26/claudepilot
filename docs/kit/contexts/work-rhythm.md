@@ -33,7 +33,7 @@ One file per role, at `docs/dev-sessions/status/<role>.md` unless `project-stand
 
 ## WIP limit
 
-- At most three slices in flight, so at most three sub-agents at once.
+- At most five slices in flight, so at most five sub-agents at once (the number is a standing decision of the owner, D-43 in ClaudePilot; heavy jobs stay one at a time or through job-run).
 - A slice is about one hour of work: one to three items. The orchestrator integrates between slices.
 - Claim a ticket only when work on it starts. The queue lives in NEXT, not in claimed tickets.
 - A new item does not preempt a running slice: it takes the next free slot in rank order.

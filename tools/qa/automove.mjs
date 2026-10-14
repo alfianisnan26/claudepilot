@@ -5,6 +5,10 @@
 // no horizontal scroll (long names too), the divider's "auto" mark and Undo (opens the Move dialog with the Claude the chat left chosen; disabled
 // with the reason in the ⓘ when it can't), the session ⋯ item and its choices (Automatic only when the platform allows it; no item when it is off),
 // Later and Move call their routes and the card goes. Optionally (AM_WORKSPACE=<name of a running workspace>) the Claudes list's "Auto move…" dialog of a real workspace.
+// T-105: the line shown while the engine holds a chat ("Waiting for quota: next Claude free at <time>", "Waiting for quota" when no reset is known,
+// "Moving at the end of this turn"; cases waiting, waitnotime, pending), and against the scratch portal's REAL server: the new defaults, the dry run
+// switch, `GET /api/autotransfer/state` and the Auto move ⓘ that explains R1 to R3. The engine's moves themselves are proven on the fake clock
+// (apps/server/src/autotransfer/t105.test.ts): a stand-in Claude has no plan reading, so a scratch portal's engine never has a reason to move.
 // usage: AM_PORT=3411 AM_CODE=24681372 AM_CDP=9611 node tools/qa/automove.mjs [--only name] [--shots dir]
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -37,6 +41,9 @@ const CASES = [
   { id: 'long', platform: 'auto', long: true, undoBlocked: true, exhausted: true },
   { id: 'ask', platform: 'ask' },
   { id: 'off', platform: 'off' },
+  { id: 'waiting', platform: 'auto', hold: 'waiting' },
+  { id: 'waitnotime', platform: 'auto', hold: 'waiting', noTime: true, long: true },
+  { id: 'pending', platform: 'auto', hold: 'pending', long: true },
 ];
 const MATRIX = SIZES.flatMap((s) => [false, true].flatMap((dark) => CASES.map((c) => ({ ...s, ...c, dark, name: `${s.name}-${dark ? 'dark' : 'light'}-${c.id}` }))));
 
@@ -60,13 +67,17 @@ const post = `(() => {
     facts: { leftPct: fig(c.exhausted ? 0 : 8), thresholdPct: 10, resetsAt: fig(new Date(Date.now() + 7200e3).toISOString()), destLeftPct: fig(40) },
     handoff: c.exhausted ? 'skip' : 'ask', dropped: { approvals: 0, queued: 0, agents: 1 }, state: 'open' };
   const effective = (m) => (c.platform === 'off' ? 'off' : (m ?? c.platform) === 'auto' && c.platform !== 'auto' ? 'ask' : (m ?? c.platform));
+  const resetAt = new Date(Date.now() + 3 * 3600e3);
+  window.__amReset = resetAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const waiting = c.hold ? { since: ago, code: 'no_destination', nextFreeAt: c.noTime ? null : resetAt.toISOString() } : null;
+  const pendingMove = c.hold === 'pending' ? { to: { id: 'c-spare', name: spare }, reason: 'low', steeredAt: ago } : null;
   const state = { sessionId: SID, mode: null, effectiveMode: effective(null), applicable: c.platform !== 'off', why: c.platform === 'off' ? 'mode_off' : null,
-    pending: c.platform === 'off' ? null : pending, pausedUntil: null, movesToday: 1,
+    pending: c.platform === 'off' || c.hold ? null : pending, pausedUntil: null, movesToday: 1, waiting, pendingMove,
     lastMove: { event: moved, undo: c.undoBlocked ? { ok: false, reason: 'Out of quota until it resets.' } : { ok: true, reason: null } } };
   const settings = { mode: c.platform, thresholdPct: 10, useProjection: true, minPauseMin: 30, maxPerSessionPerDay: 2, maxPerDay: 6, maxPerDestination: 2, sameModelOnly: false, allowApiKey: false };
   const claude = (id, name) => ({ id, workspaceId: 'bv-ws', name, directory: id, removedAt: null, createdAt: ago });
   const options = { sessionId: SID, via: 'own', folder: '/work', worktree: null, handoff: { ok: true, reason: null }, working: false, dropped: { approvals: 0, queued: 0, agents: 0 },
-    options: [ { claude: claude('c-spare', spare), ok: true, reason: null, fix: null }, { claude: claude('c-work', work), ok: !c.undoBlocked, reason: c.undoBlocked ? 'Out of quota.' : null, fix: null } ] };
+    options: [ { claude: claude('c-spare', spare), ok: true, reason: null, fix: null, model: { from: 'fable', to: 'opus', known: false } }, { claude: claude('c-work', work), ok: !c.undoBlocked, reason: c.undoBlocked ? 'Out of quota.' : null, fix: null } ] };
   const calls = (window.__am = { calls: [] }).calls;
   const json = (d) => Promise.resolve(new Response(JSON.stringify({ data: d }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
   const inner = window.fetch;
@@ -151,6 +162,7 @@ const Q = {
   log: `document.querySelector('[role=log]')`,
   card: `document.querySelector('[role=group][aria-label="Move suggested"]')`,
   mark: `document.querySelector('[data-automove-mark]')`,
+  hold: `[...document.querySelectorAll('[role=status]')].find((e) => /Waiting for quota|Moving at the end of this turn/.test(e.textContent))`,
   undo: `document.querySelector('[data-automove-mark] button[aria-label^="Undo"]')`,
   button: (text, within = 'document') => `[...${within}.querySelectorAll('button,[role=button]')].find((b) => b.textContent.trim() === ${JSON.stringify(text)})`,
   dialog: (title) => `[...document.querySelectorAll('[role=dialog]')].find((d) => d.textContent.includes(${JSON.stringify(title)}))`,
@@ -193,6 +205,31 @@ async function scenario(cfg) {
   const ready = `!!${Q.composer} && ${Q.log}.scrollHeight > 0`;
   if (!(await waitFor(ready, 20000))) { await send('Page.reload'); if (!(await waitFor(ready, 30000))) return check('page loads', false, 'composer not found'); }
   await sleep(1200);
+
+  // 0. The line of a held chat (T-105), read only, instead of the card.
+  if (cfg.hold) {
+    check('hold line shows', await waitFor(`!!${Q.hold}`, 4000));
+    const text = (await ev(`${Q.hold}?.innerText ?? ''`)).trim();
+    const want = cfg.hold === 'pending' ? 'Moving at the end of this turn' : cfg.noTime ? 'Waiting for quota' : `Waiting for quota: next Claude free at ${await ev('window.__amReset')}`;
+    check(`hold line says "${want}"`, text === want, text);
+    check('no card while held', !(await ev(`!!${Q.card}`)));
+    // The house InfoTip: 44 px on touch, 24 px with a pointer (as everywhere else).
+    const tip0 = await ev(rect(`${Q.hold}.querySelector('button[aria-label="About this wait"]')`));
+    check(`hold ⓘ: ${touch ? 44 : 24} px or more`, tip0 && tip0.h >= (touch ? 44 : 24) - 0.5 && tip0.w >= (touch ? 44 : 24) - 0.5, JSON.stringify(tip0));
+    const l = await ev(rect(Q.hold)), b = await ev(rect(Q.box));
+    check('hold line clear of the composer', l && b && l.b <= b.y + 1, JSON.stringify({ line: l?.b, composer: b?.y }));
+    await noOverflow('hold line');
+    const spilt = await ev(spill(Q.hold));
+    check('hold line: no text spills out of its box', spilt.length === 0, JSON.stringify(spilt));
+    await press(`${Q.hold}.querySelector('button[aria-label="About this wait"]')`, touch);
+    const tip = cfg.hold === 'pending' ? /finish its step and stop/ : /looks again every 2 minutes/;
+    check('hold ⓘ says what happens next', await waitFor(`[...document.querySelectorAll('body *')].some((e) => e.childElementCount === 0 && ${tip}.test(e.textContent) && e.getBoundingClientRect().height > 0)`, 2000));
+    await shot(`${cfg.name}-0-hold`);
+    await key('Escape', 'Escape', 27);
+    check('no page errors', errors.length === 0, errors.join(' | '));
+    errors.length = 0;
+    return;
+  }
 
   // 1. The card (ask mode), or none when auto move is off.
   if (cfg.platform === 'off') {
@@ -249,10 +286,16 @@ async function scenario(cfg) {
     await key('Escape', 'Escape', 27);
     await sleep(200);
   } else {
-    // Undo opens the normal Move dialog with the Claude the chat left chosen (FR19).
+    // Undo opens the normal Move dialog with the Claude the chat left chosen (FR19). The card's ⓘ scrolled the transcript to its end: the
+    // divider back into the free part first (`press` scrolls only to the nearest edge, where the floating header covers it at 390 px).
+    await ev(`(() => { const l = ${Q.log}, m = ${Q.mark}; l.scrollTop += m.getBoundingClientRect().top - innerHeight * 0.3; })()`);
+    await sleep(300);
     await press(Q.undo, touch);
     check('Undo opens the Move dialog', await waitFor(`!!${Q.dialog('Move chat')}`, 3000));
     check('… with the Claude the chat left chosen', await waitFor(`(() => { const d = ${Q.dialog('Move chat')}; const r = d && [...d.querySelectorAll('input[type=radio]')].find((i) => i.checked); return !!r && r.closest('div').textContent.includes('Work'); })()`, 3000));
+    // T-109: a Claude without the chat's model says, before the move, the model it would run on.
+    check('… a Claude without the chat’s model says "On Opus, was Fable"', await waitFor(`(() => { const d = ${Q.dialog('Move chat')}; return !!d && [...d.querySelectorAll('span')].some((e) => e.textContent === 'On Opus, was Fable'); })()`, 3000));
+    check('… and its line stays inside the dialog', await ev(`(() => { const d = ${Q.dialog('Move chat')}; const e = d && [...d.querySelectorAll('span')].find((x) => x.textContent === 'On Opus, was Fable'); if (!e) return false; const a = e.getBoundingClientRect(), b = d.getBoundingClientRect(); return a.left >= b.left - 0.5 && a.right <= b.right + 0.5 && document.documentElement.scrollWidth <= innerWidth; })()`));
     await shot(`${cfg.name}-3-undo-dialog`);
     await key('Escape', 'Escape', 27);
     await waitFor(`!${Q.dialog('Move chat')}`, 2000);
@@ -274,7 +317,10 @@ async function scenario(cfg) {
     for (const o of opts) await tall(`dialog ${o}`, `[...${Q.dialog('Auto move')}.querySelectorAll('[role=radio],button')].find((b) => b.textContent.trim() === ${JSON.stringify(o)})`, touch);
     await noOverflow('auto move dialog');
     await shot(`${cfg.name}-4-menu-dialog`);
-    await press(`[...${Q.dialog('Auto move')}.querySelectorAll('[role=radio],button')].find((b) => b.textContent.trim() === 'Off')`, touch);
+    // A sheet still sliding in moves the row between the measure and the tap: wait until it holds still.
+    const offRow = `[...${Q.dialog('Auto move')}.querySelectorAll('[role=radio],button')].find((b) => b.textContent.trim() === 'Off')`;
+    for (let i = 0, prev = ''; i < 40; i++) { const now = JSON.stringify(await ev(rect(offRow))); if (now === prev) break; prev = now; await sleep(100); }
+    await press(offRow, touch);
     check('choosing Off sets this chat’s mode', await waitFor(`__am.calls.some((c) => c.startsWith('PUT /api/autotransfer/sessions/bv-fake') && c.includes('"off"'))`, 2000), JSON.stringify(await ev('__am.calls')));
     await key('Escape', 'Escape', 27);
     await waitFor(`!${Q.dialog('Auto move')}`, 2000);
@@ -304,7 +350,12 @@ async function settingsPage(cfg) {
   await ev(`[...document.querySelectorAll('body *')].find((e) => e.childElementCount === 0 && e.textContent.trim() === 'Without asking')?.scrollIntoView({ block: 'center' })`);
   await sleep(400);
   await noOverflow('settings');
+  // The Auto move ⓘ explains R1 to R3 in one place (T-105).
+  check('settings: a Dry run row', body.includes('Dry run'));
+  await press(`document.querySelector('button[aria-label="About Auto move"]')`, touch);
+  check('Auto move ⓘ: at the threshold, at once when out, the wait and the resume', await waitFor(`[...document.querySelectorAll('body *')].some((e) => e.childElementCount === 0 && /moves at once/.test(e.textContent) && /every 2 minutes/.test(e.textContent) && /goes on by itself/.test(e.textContent) && e.getBoundingClientRect().height > 0)`, 2000));
   await shot(`${cfgName}`);
+  await key('Escape', 'Escape', 27);
   check('no page errors', errors.length === 0, errors.join(' | '));
   errors.length = 0;
   void touch;
@@ -338,8 +389,31 @@ async function claudeDialog(cfg) {
   errors.length = 0;
 }
 
+// The scratch portal's real server (T-105): the new defaults, `GET /api/autotransfer/state`, the dry run switch on and off again.
+async function engineApi(cookie) {
+  cfgName = 'server';
+  const call = async (method, path, body) => {
+    const r = await fetch(`http://localhost:${PORT}${path}`, { method, headers: { Cookie: `portal_session=${cookie}`, Origin: `http://localhost:${PORT}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: r.status, json: await r.json().catch(() => null) };
+  };
+  const o = await call('GET', '/api/autotransfer');
+  const p = o.json?.data?.platform ?? {};
+  check('defaults: pause 5, per chat 8, per day 30, per Claude 3, dry run off', p.minPauseMin === 5 && p.maxPerSessionPerDay === 8 && p.maxPerDay === 30 && p.maxPerDestination === 3 && p.dryRun === false, JSON.stringify(p));
+  let st = await call('GET', '/api/autotransfer/state');
+  check('state route answers (dry run off, a list of chats)', st.status === 200 && st.json?.data?.dryRun === false && Array.isArray(st.json?.data?.sessions), JSON.stringify(st));
+  const on = await call('PUT', '/api/settings/automove.dryRun', { value: true });
+  st = await call('GET', '/api/autotransfer/state');
+  check('dry run on: the state says so', on.status === 200 && st.json?.data?.dryRun === true, JSON.stringify({ on: on.status, st: st.json?.data?.dryRun }));
+  await call('PUT', '/api/settings/automove.dryRun', { value: false });
+  st = await call('GET', '/api/autotransfer/state');
+  check('dry run off again', st.json?.data?.dryRun === false);
+  const anon = await fetch(`http://localhost:${PORT}/api/autotransfer/state`);
+  check('state route needs a session', anon.status === 401 || anon.status === 404, String(anon.status));
+}
+
 try {
   const cookie = await login();
+  if (!only || only === 'server') await engineApi(cookie);
   await send('Network.enable');
   await send('Network.setCookie', { name: 'portal_session', value: cookie, domain: 'localhost', path: '/' });
   await send('Page.enable');
