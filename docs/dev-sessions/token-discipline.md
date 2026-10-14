@@ -1,0 +1,16 @@
+# Token discipline (measured 2026-10-14, coordinator)
+
+Why: in the first 22 hours 79 percent of the spend was sub-agents and 21 percent the orchestrator chats; 89 percent of sub-agent requests were Bash round trips at a context of about 105 k tokens (p50, p90 254 k), the orchestrators ran at 156 k (p90 430 k). Cost is cache reads (about 55 percent) and cache writes (about 32 percent): every token of a tool result is written once and then READ AGAIN on every later request in that session. So the cost of work is (number of requests) x (context size), and a long tool output is paid for many times. Of the sub-agents' Bash calls: test, build and run 26 percent, inspect (cat, ls, grep, head) 23 percent, other 17 percent, edit by script 10 percent, git read 6, api and cluster 6, waiting 6, git write 6. About 2,000 calls were plain inspection. Tool results: p50 786 characters, p90 6.5 k, p99 22 k; 63 percent of all result characters sit in results over 5 k.
+
+Put this block into EVERY sub-agent brief and follow it yourself:
+
+1. One command, one round trip. Chain related commands (`a && b && c`), read several files in one call (`head -n 60 a b c`), ask `git status -sb && git log --oneline -5` once. Never probe step by step.
+2. Output on a budget. Long output goes to a file and you print the tail or a summary: `scripts/quiet.sh -n 25 -- <command>` (full log in /tmp, one line on success, the last lines on failure). Never print more than about 60 lines; use `--stat`, `--short`, `-q`, `| tail -n 20`, `grep -c`. A failing test run shows the failing test names and their messages, not the whole run.
+3. Do not read what you know. Keep notes in your head and the status file; do not re-run a status check without a reason; do not `ticket_get` the same ticket again (descriptions are long): comment small and specific.
+4. Waiting costs a request per look. Block in ONE call: `scripts/job-run.sh` streams and returns, `until <check>; do sleep 20; done` inside one Bash call with a timeout; never poll with separate calls. CI reports to the session that started it (T-32).
+5. Edit with the Edit and Write tools. A script is for a bulk change across many files, written once and run once.
+6. Small contexts. A sub-agent reads only the files and line ranges named in its brief. Exploration is the explorer role (haiku) and returns at most 30 lines; the implementer starts from that brief.
+7. The orchestrator chat dispatches, integrates (merge, gate, deploy), keeps the status and the tickets. It does not implement, poll, or read long files itself (49 percent of its cost was hands-on Bash at a 156 k to 430 k context). At about 200 k context it writes the status file and continues fresh.
+8. No sub-agent for less than ten minutes of work: batch small items into one slice. Do not start the fifth agent when the projection says three (orchestrator.md).
+
+Targets, measured every pass by the coordinator from the tapes and the usage report: requests per slice, p50 context per request, share of inspection calls, cost per resolved ticket (ESTIMATE and ACTUAL comments).

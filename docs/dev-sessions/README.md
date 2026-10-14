@@ -42,6 +42,7 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
 7. **No SendMessage** (coordinator, T-136, until the portal accepts the case): a sub-agent NEVER calls SendMessage to the main conversation
    (a sub-agent's queued message ended the orchestrator fdb140be for integrity, origin peer); it reports in its final message, files, commits
    and tickets only, and every brief says so. Chat to chat goes through the Portal MCP `session_message`, never SendMessage to another session.
+9. **Token discipline** (measured; `docs/dev-sessions/token-discipline.md`): one command per round trip, outputs on a budget (`scripts/quiet.sh`), no polling loops, small contexts. Paste its numbered block into every sub-agent brief.
 8. **Do not start other Bypass sessions** (`session_spawn` workers are never Bypass anyway): sub-agents of the Agent tool are the way.
 
 ## Who integrates
