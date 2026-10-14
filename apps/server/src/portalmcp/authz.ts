@@ -27,13 +27,16 @@ export const PORTAL_MCP_POLICIES: RoutePolicies = {
  * T-336: `session_start` operates the workspace it starts in, the Claude it names and, with `parent`, the parent session (the handler asks the seam, and a refused
  * parent is the same not found as a missing one: tools/sessions.ts `leadFor`).
  */
+/** T-336, T-348: session_start's one answer for a parent that is missing, ended, archived, elsewhere or refused (the dispatch's check and `leadFor`). */
+export const NO_PARENT = 'No such live session in that workspace to be the parent. List them with session_list.';
+
 export const PORTAL_MCP_TOOL_POLICIES = {
   session_start: {
     kind: 'objects',
     checks: [
       { type: 'workspace', verb: 'operate', arg: 'workspace_id' },
       { type: 'claude', verb: 'operate', arg: 'claude_id', optional: true },
-      { type: 'session', verb: 'operate', arg: 'parent', optional: true },
+      { type: 'session', verb: 'operate', arg: 'parent', optional: true, notFound: NO_PARENT },
     ],
   },
 } satisfies ToolPolicies;

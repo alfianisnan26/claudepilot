@@ -29,6 +29,7 @@ import {
   levelAtLeast,
   maxLevel,
   minLevel,
+  objectRef,
   statusForDeny,
   type Actor,
   type CanFn,
@@ -112,6 +113,40 @@ export function declareToolPolicies(module: string, table: ToolPolicies): void {
 }
 export const toolPolicyFor = (name: string): ToolPolicy | undefined => toolPolicies.get(name);
 export const declaredToolPolicies = (): ReadonlyMap<string, ToolPolicy> => toolPolicies;
+
+/**
+ * T-348: what a tool declared, enforced at dispatch through the one `can()` before its handler runs (portalmcp/server.ts). `objects`: every
+ * check whose argument is given (an optional one left out or empty is skipped; a required one missing is refused); `platform`: the area.
+ * Every refusal is NOT_FOUND with the check's `notFound` text, the tool's own answer for a missing object, so a call can't tell an object
+ * it may not reach from one that does not exist. It only ever refuses: the handler's own checks stay. `signed-in`, `self` and `agent`
+ * (reach from the token) are the handler's. A tool with no declaration is left to its handler.
+ */
+export function requireToolPolicy(actor: Actor, name: string, args: Record<string, unknown>): void {
+  const policy = toolPolicies.get(name);
+  if (!policy) return;
+  const notFound = (text?: string) => new AppError('NOT_FOUND', text ?? 'Not found.');
+  if (actor.kind === 'anonymous') throw notFound();
+  if (policy.kind === 'platform') {
+    if (!current.can(actor, policy.verb, objectRef('platform', policy.area)).allow) throw notFound();
+    return;
+  }
+  if (policy.kind !== 'objects') return;
+  for (const check of policy.checks) {
+    const raw = args[check.arg];
+    const absent = raw === undefined || raw === null || raw === '' || (Array.isArray(raw) && raw.length === 0);
+    if (absent) {
+      if (check.optional) continue;
+      throw notFound(check.notFound);
+    }
+    const ids = check.many && Array.isArray(raw) ? raw : [raw];
+    const poolType = check.poolTypeArg ? args[check.poolTypeArg] : undefined;
+    for (const id of ids) {
+      if (typeof id !== 'string' || !id) throw notFound(check.notFound);
+      const ref = objectRef(check.type, id, typeof poolType === 'string' && poolType ? (poolType as ObjectRef['poolType']) : undefined);
+      if (!current.can(actor, check.verb, ref).allow) throw notFound(check.notFound);
+    }
+  }
+}
 
 /* ---------- Access changes ---------- */
 

@@ -9,7 +9,7 @@ import type { ToolPolicies } from '@portal/contracts';
 import { declarePolicies, declareToolPolicies } from '../authz/seam.js';
 
 export const KEEPGOING_TOOL_POLICIES = {
-  session_keepgoing_set: { kind: 'objects', checks: [{ type: 'session', verb: 'operate', arg: 'session_id' }], confirm: true, audit: 'keepgoing.set' },
+  session_keepgoing_set: { kind: 'objects', checks: [{ type: 'session', verb: 'operate', arg: 'session_id', notFound: 'No such session.' }], confirm: true, audit: 'keepgoing.set' },
   keepgoing_pause_set: { kind: 'platform', area: 'settings', verb: 'manage', confirm: true, audit: 'keepgoing.pause' },
 } satisfies ToolPolicies;
 
