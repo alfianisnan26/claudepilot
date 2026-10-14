@@ -935,6 +935,7 @@ test('budget stop mid-turn (T-342 B3): a worker in its one turn (working, cost_u
 test('budget watch (T-342 N1): a session_get that fails for one ticket does not switch the stop off for the others; a deleted session ends its dispatch once, held; a transient error is one line (negative: the round never throws)', async () => {
   const gone = () => Object.assign(new Error('session_get: NOT_FOUND No such session.'), { code: 'NOT_FOUND' });
   const flaky = () => new Error('session_get: no answer (502)');
+  const NO_GIT = { taken: () => null, addWorktree: () => { throw new Error('no worktree may be made'); } }; // local: the shared one is declared later in the file
   for (const [failure, order] of [[gone, 'bad first'], [gone, 'bad last'], [flaky, 'bad first'], [flaky, 'bad last']] as const) {
     const bad = started('s-8');
     const good = started('s-9');
