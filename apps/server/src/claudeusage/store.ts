@@ -44,6 +44,17 @@ export interface LatestRow {
   /** Projection alerts told, per window (§20.4), and the snooze that silences only those. */
   projAlerted: Record<string, ProjectionMark>;
   projSnoozedUntilMs: number | null;
+  /** T-255: a chat answered with Claude Code's limit message; the window counts as used up until `untilMs` (kept across probes). */
+  limitReport?: LimitReportMark | null;
+}
+
+/** A limit a chat reported (T-255): which window, when, until when (`guessed`: no time in the message), and the chat. */
+export interface LimitReportMark {
+  window: string;
+  atMs: number;
+  untilMs: number;
+  guessed: boolean;
+  sessionId: string | null;
 }
 
 export interface SampleRow {
@@ -75,6 +86,7 @@ interface LatestSql {
   alerted: string;
   proj_alerted: string;
   proj_snoozed_until_ms: number | null;
+  limit_report?: string | null;
 }
 
 const RUNS_ON: readonly string[] = ['plan', 'key', 'pool', 'none', 'unknown'];
@@ -87,6 +99,12 @@ function json<T>(text: string | null, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function limitReportOf(v: unknown): LimitReportMark | null {
+  const o = v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  if (!o || typeof o.window !== 'string' || typeof o.atMs !== 'number' || typeof o.untilMs !== 'number') return null;
+  return { window: o.window, atMs: o.atMs, untilMs: o.untilMs, guessed: o.guessed === true, sessionId: typeof o.sessionId === 'string' ? o.sessionId : null };
 }
 
 function toRow(r: LatestSql): LatestRow {
@@ -109,6 +127,7 @@ function toRow(r: LatestSql): LatestRow {
     alerted: alerted && typeof alerted === 'object' && !Array.isArray(alerted) ? (alerted as Record<string, AlertMark>) : {},
     projAlerted: proj && typeof proj === 'object' && !Array.isArray(proj) ? (proj as Record<string, ProjectionMark>) : {},
     projSnoozedUntilMs: r.proj_snoozed_until_ms ?? null,
+    limitReport: limitReportOf(json<unknown>(r.limit_report ?? null, null)),
   };
 }
 
@@ -145,12 +164,12 @@ export class UsageStore {
     const db = this.store.db;
     if (!db || !this.store.writable) return;
     db.prepare(
-      `INSERT INTO claude_usage_latest (claude_id, workspace_id, checked_at_ms, last_probe_at_ms, runs_on, plan, windows, extra, source, problem, fails, snoozed_until_ms, alerted, proj_alerted, proj_snoozed_until_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO claude_usage_latest (claude_id, workspace_id, checked_at_ms, last_probe_at_ms, runs_on, plan, windows, extra, source, problem, fails, snoozed_until_ms, alerted, proj_alerted, proj_snoozed_until_ms, limit_report)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (claude_id) DO UPDATE SET workspace_id = excluded.workspace_id, checked_at_ms = excluded.checked_at_ms, last_probe_at_ms = excluded.last_probe_at_ms,
          runs_on = excluded.runs_on, plan = excluded.plan, windows = excluded.windows, extra = excluded.extra, source = excluded.source, problem = excluded.problem,
          fails = excluded.fails, snoozed_until_ms = excluded.snoozed_until_ms, alerted = excluded.alerted, proj_alerted = excluded.proj_alerted,
-         proj_snoozed_until_ms = excluded.proj_snoozed_until_ms`,
+         proj_snoozed_until_ms = excluded.proj_snoozed_until_ms, limit_report = excluded.limit_report`,
     ).run(
       row.claudeId,
       row.workspaceId,
@@ -167,6 +186,7 @@ export class UsageStore {
       JSON.stringify(row.alerted),
       JSON.stringify(row.projAlerted),
       row.projSnoozedUntilMs,
+      row.limitReport ? JSON.stringify(row.limitReport) : null,
     );
   }
 

@@ -25,6 +25,8 @@ function claude(over: Partial<ClaudeUsage> & { claudeId: string }): ClaudeUsage 
     stale: false,
     workspaceRunning: true,
     problem: null,
+    unavailable: null,
+    limitReport: null,
     snoozedUntil: null,
     projectionSnoozedUntil: null,
     slot: 0,
@@ -92,6 +94,15 @@ test('unavailable data is "-" or nothing, never a number: signed out, unreadable
   const failed = quotaCompact(input({ claudes: null, failed: true }));
   assert.equal(failed.value, '-');
   assert.match(failed.title, /could not load/);
+});
+
+test('T-255: a Claude whose usage is unavailable (0 % with no reset time) is "-", never 100 % left, and its windows have no number', () => {
+  const blind = claude({ claudeId: 'z', state: 'unknown', unavailable: 'no_reset_time', windows: [win('session', 'Session', 0, null), win('week', 'Week', 0, null)] });
+  const r = quotaCompact(input({ claudes: [blind, A], focusClaudeId: 'z' }));
+  assert.equal(r.value, '-');
+  assert.equal(r.level, 'unknown');
+  assert.match(r.title, /usage unavailable \(no reset time to project to\)/);
+  assert.deepEqual(windowViews(blind, NOW, TH).map((w) => w.usedPct), [null, null]);
 });
 
 test('a window whose reset time has passed is old: it no longer counts (A’s session reset an hour ago, so the week leads: 82 % left)', () => {

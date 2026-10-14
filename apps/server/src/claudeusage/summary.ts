@@ -55,6 +55,8 @@ export function buildSummary(input: SummaryInput): UsageSummary {
       speed: spendSpeed(rowsOf(c.claudeId), nowMs, ds),
       limit: c.outlook,
       nextReset: nextResetOf({ runsOn: c.runsOn, windows: c.windows, checkedAt: c.checkedAt }, nowMs),
+      // T-255: why its plan usage is unknown (the snapshot's own answer), so nothing reads it as 0 % used.
+      unavailable: c.unavailable ?? null,
     }))
     .sort((a, b) => (b.today.costUsd.value ?? 0) - (a.today.costUsd.value ?? 0) || a.name.localeCompare(b.name));
 

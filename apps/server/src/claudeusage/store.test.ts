@@ -25,6 +25,7 @@ const row = (over: Partial<LatestRow> = {}): LatestRow => ({
   projAlerted: {},
   projSnoozedUntilMs: null,
   alerted: { session: { level: 'near', resetsAtMs: reset, atMs: NOW } },
+  limitReport: null,
   ...over,
 });
 
@@ -37,6 +38,10 @@ test('the latest row round-trips, is replaced in place, and a damaged one reads 
     assert.deepEqual(s.latest('c1'), row());
     s.saveLatest(row({ plan: 'pro', windows: [], extra: null, problem: 'timeout', fails: 3, snoozedUntilMs: NOW + HOUR }));
     assert.equal(s.allLatest().length, 1, 'one row per Claude');
+    // T-255: a limit a chat reported round-trips too.
+    const report = { window: 'session', atMs: NOW, untilMs: reset, guessed: true, sessionId: 's1' };
+    s.saveLatest(row({ plan: 'pro', windows: [], extra: null, problem: 'timeout', fails: 3, snoozedUntilMs: NOW + HOUR, limitReport: report }));
+    assert.deepEqual(s.latest('c1')!.limitReport, report);
     assert.deepEqual([s.latest('c1')!.plan, s.latest('c1')!.windows, s.latest('c1')!.extra, s.latest('c1')!.problem, s.latest('c1')!.fails], ['pro', [], null, 'timeout', 3]);
     h.store.db!.prepare(`UPDATE claude_usage_latest SET windows = 'not json', alerted = '[1]', extra = '{', runs_on = 'weird', problem = 'weird', source = 'weird'`).run();
     const bad = s.latest('c1')!;

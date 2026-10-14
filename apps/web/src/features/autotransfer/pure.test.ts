@@ -89,6 +89,15 @@ test('a chat may choose Automatic only when the platform allows it', () => {
   assert.deepEqual(modeChoices('ask'), ['default', 'off', 'ask']);
 });
 
+test('T-255: a destination with unknown usage says so on the card and in the why', () => {
+  const s = { from: { id: 'w', name: 'Work' }, to: { id: 'o', name: 'One' }, reason: 'exhausted' as const, facts: { leftPct: m(0), thresholdPct: 10, resetsAt: { value: '2026-10-12T15:00:00Z', basis: 'measured' as const }, destLeftPct: { value: null, basis: 'unavailable' as const, reason: 'no_reset_time' as const } } };
+  assert.equal(offer(s), 'Move to One (unknown usage)');
+  assert.equal(
+    reasonText({ ...s, handoff: 'skip' }),
+    'Its session or week limit is used up (measured). One has unknown usage (no reset time to project to): no Claude with a measured reading could take the chat. If it answers with its limit message, the chat moves on at once. The stored conversation carries over; it can\u2019t write a handoff now.',
+  );
+});
+
 test('T-29: the card names the limit that is low and offers a model change in words', () => {
   const facts = { leftPct: m(5), thresholdPct: 10, resetsAt: { value: '2026-10-12T15:00:00Z', basis: 'measured' as const }, destLeftPct: m(50), limit: { key: 'week_opus', label: 'Opus', kind: 'model' as const } };
   const here = { from: { id: 'w', name: 'Work' }, to: { id: 'w', name: 'Work', model: 'sonnet' }, reason: 'low' as const, facts, handoff: 'skip' as const };

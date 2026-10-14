@@ -33,6 +33,8 @@ export function usage(id: string, name: string, windows: ClaudeUsageWindow[], ov
     stale: false,
     workspaceRunning: true,
     problem: null,
+    unavailable: null,
+    limitReport: null,
     snoozedUntil: null,
     projectionSnoozedUntil: null,
     slot: null,

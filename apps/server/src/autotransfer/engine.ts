@@ -75,6 +75,9 @@ export function decisionLine(e: Pick<AutoTransferEvent, 'kind' | 'sessionId' | '
     if (f.pace) parts.push(`pace=${f.pace.verdict}(min ${f.pace.minPct}%)`);
   }
   parts.push(`to=${e.to ? `${e.to.name}${e.to.model ? ` on ${e.to.model}` : ''}` : '-'}`, `reason=${e.reason ?? '-'}`, `code=${e.code ?? '-'}`);
+  // T-255: a destination whose usage is unknown says so (it was the last resort; a limit answer there moves the chat on at once).
+  const d = f?.destLeftPct;
+  if (e.to && d && d.basis === 'unavailable') parts.push(`dest=unknown usage (${d.reason})`);
   return parts.join(' ');
 }
 
@@ -573,6 +576,7 @@ export class AutoTransferEngine {
         leftBasis: e.facts?.leftPct.basis ?? null,
         thresholdPct: e.facts?.thresholdPct ?? null,
         destLeftPct: e.facts?.destLeftPct?.value ?? null,
+        destUsage: e.facts?.destLeftPct ? (e.facts.destLeftPct.basis === 'unavailable' ? `unknown usage (${e.facts.destLeftPct.reason})` : e.facts.destLeftPct.basis) : null,
         etaAt: e.facts?.etaAt?.value ?? null,
         handoff: e.handoff,
         handoffId: e.handoffId,

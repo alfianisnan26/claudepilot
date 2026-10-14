@@ -1,4 +1,4 @@
-import { headroomFrom, type ChatSession, type ClaudeUsage, type ClaudeUsageWindow, type Headroom, type WindowPace } from '@portal/contracts';
+import { headroomFrom, reasonText, type ChatSession, type ClaudeUsage, type ClaudeUsageWindow, type Headroom, type WindowPace } from '@portal/contracts';
 import { leftText, localTime } from '../../../usage/claude/format';
 import type { GlanceCompact, GlanceLevel } from '../../types';
 import { LEVEL_WORD } from '../../ui';
@@ -19,6 +19,9 @@ export function windowAt(w: ClaudeUsageWindow, nowMs: number): ClaudeUsageWindow
 
 /** What a Claude has left at `nowMs`: the portal's own `headroomFrom`, so the chip, the Claude rows and the switch dialog agree. */
 export function headroomAt(c: ClaudeUsage, nowMs: number): Headroom {
+  // T-255: a plan Claude whose usage the portal says is unknown (0 % with no reset time, no usage endpoint) has no reading: never "100 % left".
+  if (c.unavailable && c.runsOn !== 'none' && c.runsOn !== 'pool' && c.runsOn !== 'key')
+    return { claudeId: c.claudeId, kind: 'unknown', limiting: null, exhausted: false, availableAt: null, blockedModels: [], checkedAt: c.checkedAt, stale: c.stale };
   return headroomFrom({ claudeId: c.claudeId, runsOn: c.runsOn, windows: c.windows.map((w) => windowAt(w, nowMs)), checkedAt: c.checkedAt, stale: c.stale });
 }
 
@@ -99,7 +102,7 @@ export function titleOf(r: QuotaReading, nowMs: number, scope: string | null = n
   const h = r.headroom;
   if (h.kind === 'no_limits') return `${who}: no plan limits`;
   if (h.kind === 'signed_out') return `${who}: not signed in`;
-  if (h.kind !== 'plan' || !h.limiting) return `${who}: not read yet`;
+  if (h.kind !== 'plan' || !h.limiting) return r.claude.unavailable && r.claude.unavailable !== 'no_reading' ? `${who}: usage unavailable (${reasonText(r.claude.unavailable).replace(/\.$/, '').toLowerCase()})` : `${who}: not read yet`;
   if (h.exhausted) return `${who}: used up${h.availableAt ? `, back ${localTime(h.availableAt, nowMs)}` : ''}`;
   const reset = h.limiting.resetsAt ? `, resets ${localTime(h.limiting.resetsAt, nowMs)} (in ${leftText(h.limiting.resetsAt, nowMs)})` : '';
   const old = h.stale ? ', old reading' : '';
@@ -162,7 +165,8 @@ export function windowViews(c: ClaudeUsage, nowMs: number, th: Thresholds): Wind
   return c.windows.map((raw) => {
     const w = windowAt(raw, nowMs);
     const reset = w.level === 'reset';
-    const usedPct = reset ? null : w.usedPct;
+    // T-255: 0 % with no reset time is no reading.
+    const usedPct = reset || (w.resetsAt === null && (w.usedPct ?? 0) === 0) ? null : w.usedPct;
     return { key: w.key, label: w.label, usedPct, reset, resetsAt: w.resetsAt, pace: reset ? undefined : w.pace, level: reset || usedPct === null ? 'unknown' : levelOfUsed(usedPct, th) };
   });
 }

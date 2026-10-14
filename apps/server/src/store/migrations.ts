@@ -2919,6 +2919,16 @@ export const MIGRATIONS: Migration[] = [
       db.exec('ALTER TABLE chat_sessions ADD COLUMN ended_for TEXT');
     },
   },
+  {
+    version: 810,
+    name: 'claude usage: a limit reported by a chat',
+    up(db) {
+      // T-255: a chat answered with Claude Code's limit message ("You've hit your session limit · resets 11pm (UTC)"). JSON: the window, when,
+      // until when (the stated reset, or the next 5-hour boundary when none could be read: guessed) and the chat. The Claude counts as used up
+      // for that window until then, whatever a probe reads meanwhile.
+      db.exec('ALTER TABLE claude_usage_latest ADD COLUMN limit_report TEXT');
+    },
+  },
 ];
 
 /**

@@ -60,6 +60,8 @@ function claude(id: string, name: string, windows: ClaudeUsageWindow[], over: Pa
     stale: false,
     workspaceRunning: true,
     problem: null,
+    unavailable: null,
+    limitReport: null,
     snoozedUntil: null,
     projectionSnoozedUntil: null,
     slot: null,
