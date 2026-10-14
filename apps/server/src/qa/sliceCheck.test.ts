@@ -22,7 +22,16 @@ test('documents, web code and type declarations derive no server test; the list 
   assert.deepEqual(sliceTests(['apps/server/src/b/x.ts', 'apps/server/src/a/y.test.ts', 'apps/server/src/b/x.test.ts'], all), ['src/a/y.test.ts', 'src/b/x.test.ts']);
 });
 
+const SCRIPT = fileURLToPath(new URL('../../../../scripts/slice-check.sh', import.meta.url));
+
 test('scripts/slice-check.sh parses', () => {
-  const r = spawnSync('bash', ['-n', fileURLToPath(new URL('../../../../scripts/slice-check.sh', import.meta.url))], { encoding: 'utf8' });
+  const r = spawnSync('bash', ['-n', SCRIPT], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
+});
+
+test('a named test file that does not exist is a usage error before any check runs (node --test would pass over it silently)', () => {
+  const r = spawnSync('bash', [SCRIPT, '--base', 'HEAD', 'src/qa/sliceCheck.test.ts', 'apps/server/src/qa/no-such-file.test.ts'], { encoding: 'utf8', cwd: fileURLToPath(new URL('.', import.meta.url)) });
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.match(r.stdout, /no such test file: src\/qa\/no-such-file\.test\.ts $/m);
+  assert.doesNotMatch(r.stdout, /typecheck/);
 });

@@ -21,6 +21,9 @@ else
 fi
 derived=$(printf '%s\n' "$changed" | node --import tsx --disable-warning=ExperimentalWarning apps/server/src/qa/sliceCheck.ts) || { echo "slice-check: could not derive the tests" >&2; exit 2; }
 tests=$( { printf '%s\n' "$derived"; for f in "$@"; do printf '%s\n' "${f#apps/server/}"; done; } | grep . | sort -u)
+# node --test passes silently over a missing file when another one exists: a named file that is not there is a usage error, before any work.
+missing=$(printf '%s\n' "$tests" | while read -r f; do [ -z "$f" ] || [ -f "apps/server/$f" ] || printf '%s ' "$f"; done)
+[ -z "$missing" ] || { cat "$out"; echo "slice-check: no such test file: $missing"; exit 2; }
 say "slice-check: $(printf '%s\n' "$changed" | grep -c .) changed since $base; $(printf '%s\n' "$tests" | grep -c .) test file(s)"
 rc=0
 step() {
