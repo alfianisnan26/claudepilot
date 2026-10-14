@@ -2887,6 +2887,28 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 732,
+    name: 'CI: the flaky tests a gate saw, and the ticket of each',
+    up(db) {
+      // T-95 item 4: a gate that passed only because a failing test passed when its file ran again alone writes `flaky, passed on rerun:
+      // <file>;<test name>` in its log. One row per run and test (a run read twice counts once); the ticket of a test is the one its latest
+      // sighting names, so a second sighting comments there instead of opening another. Not pruned with the runs: the count outlives them.
+      db.exec(`
+        CREATE TABLE ci_flaky (
+          run_id TEXT NOT NULL,
+          repo TEXT NOT NULL,
+          job TEXT NOT NULL,
+          file TEXT NOT NULL,
+          test TEXT NOT NULL,
+          ticket_id TEXT,
+          at TEXT NOT NULL,
+          PRIMARY KEY (run_id, repo, file, test)
+        ) STRICT;
+        CREATE INDEX ci_flaky_test ON ci_flaky (repo, file, test, at);
+      `);
+    },
+  },
 ];
 
 /**
