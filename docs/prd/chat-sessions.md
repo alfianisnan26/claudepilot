@@ -436,7 +436,8 @@ never re-enters it (the lease is its slice 2). The negative twins still end the 
 text: a report more permissive than expected (also back up after a downgrade), Bypass the portal did not enter, an unknown mode string
 (`dontAsk` included, ranked above Bypass; an expected mode outside the table is never downgraded from), and a sub-agent thread's mode,
 which is never a mode report (the expected mode stays and the next main-thread report is judged against it). Observed in
-`integrity.test.ts` and `restart.test.ts` (a portal restart under a Bypass chat on the controller testkit); not yet seen on the cluster.
+`integrity.test.ts` and `restart.test.ts` (a portal restart under a Bypass chat on the controller testkit), and in a scratch portal
+restarted under the real Claude Code CLI (`tools/qa/restart-survive.mjs`, the proof below); not yet seen on the cluster.
 
 **The control state, persisted (T-277 layer 2, 2026-10-14).** After a portal restart the portal no longer infers what the stream must
 report from the row. What the integrity checks decide by is stored on the session (`chat_sessions.control_state`, migration 820, JSON
@@ -461,8 +462,8 @@ any other id, the same late reply in the same portal life, and a Bypass report w
 mode during a re-assert** (review note c): when a status line saying a lower mode is read after the switch's reply and before `#keepBypass`
 resumes, the portal never writes "Bypass kept" over it: the process is taken out of Bypass the same way and the transcript says "Bypass
 not kept after the <restart|move|recovery>: Claude Code reported another mode during the switch." (`bypass.left`, why `downgrade`).
-`MODE_RANK` is frozen. Observed in `integrity.test.ts` and `restart.test.ts` (a portal restart on the controller testkit); not yet seen
-on the cluster.
+`MODE_RANK` is frozen. Observed in `integrity.test.ts` and `restart.test.ts` (a portal restart on the controller testkit) and in
+`tools/qa/restart-survive.mjs` (the reload and the resync line of a real restart, the proof below); not yet seen on the cluster.
 
 **Why a line is read twice (T-265, observed 2026-10-13).** The orchestrator 5c9fcb5f ended at 17:58:46 on the FIRST line of its stream
 (the `set_permission_mode` reply of 15:46, which appears once in the 12 MB file), 20 minutes after the portal restarted at 17:38:44 for a
@@ -539,6 +540,23 @@ NEW session continuing it (`continuedFrom`) when refused (absent, the cap, a sus
 cap counts new sessions only. `DRY_RUN=1` makes no call. Observed in `chat/recover.test.ts` (fake workspaces: the row kept, the fresh
 segment, the caps and the pause, Bypass kept and not, the refusals, the route, the MCP tool, the supervisor's shapes); not yet seen on the
 cluster, and the tokens a recovery costs against a new session's start were not measured (they need a real Claude).
+
+**The proof: a portal restart under live chats (T-136 slice 3, T-277's proof, observed 2026-10-14).** `tools/qa/restart-survive.mjs`
+starts a scratch portal (`scripts/scratch-portal.sh`, under the heavy lock while it starts) whose local workspace runs the REAL Claude Code
+CLI, answered by the stand-in Messages API (`tools/qa/mock-anthropic.mjs`). Chat A enters Bypass through the gated path (the policy with
+its confirmation, a session started to allow it, the server code again, the tick) and runs a sub-agent; chat B, its twin, stays in the
+start mode. The portal process is stopped; while it is down, Claude Code is switched through its own input FIFO (A to `default`, LESS
+permissive than expected; B to `acceptEdits`, MORE permissive), and `tools/qa/claude-shim.mjs` keeps the reply to that request away from
+the portal, so it learns the mode only from Claude Code's own next report. Then `scratch-portal.sh restart` brings the portal back on the
+same data and session files, under the same Claude Code processes. It asserts: A survives (no integrity ending, it answers), it is flagged
+("Bypass is off in this chat", `bypass.left` with why `downgrade`), the row and the stored control state both expect the reported mode, the
+log shows the control state reloaded (expected Bypass) and the resync comparison, and one follower (`tail`) per session file; Bypass comes
+back on A only through the gated path; B ends for integrity (`mode-changed`, suspicious) and an agent's recover is refused (403); A, then
+ended for a harmless cause (a peer line naming its own sub-agent with no SendMessage behind it, `replay-peer`), is recovered in place by
+`POST .../recover` as an agent: the same id, title, pin, creation time and Claude Code session, no new row, and it answers again. As
+observed in Job `claudepilot-job-4a4522b8` (commit f89c64d): 29 checks, 0 failed, 122 s. What it does not cover: a cluster deploy (the
+deploy's `chats` job, T-277 layer 4, is the live check), a Kubernetes or Docker workspace (the local runtime runs the same host script),
+and the follower count is sampled (three looks during one short turn), not watched continuously.
 
 ### 10.5 Browser protocol
 
