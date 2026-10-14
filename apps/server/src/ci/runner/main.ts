@@ -8,6 +8,7 @@ import { Fail, git, reply } from './common.js';
 import { hookPostReceive } from './events.js';
 import { repoBranches, repoConnect, repoCreate, repoDelete, repoInfo, repoList, repoMerge, repoRev, ensureHooks, needRepo } from './repo.js';
 import { approveRun, archiveLogs, cancelRun, gc, poll, readLog, startRun } from './runs.js';
+import { changes } from './changes.js';
 import { snapshot } from './snapshot.js';
 import { supervise } from './supervise.js';
 
@@ -110,6 +111,10 @@ async function dispatch(cmd: string | undefined, args: string[], self: string): 
     case 'snapshot': {
       const { pos } = parse(args, {});
       return snapshot(pos[0], pos[1]);
+    }
+    case 'changes': {
+      const { pos, flags } = parse(args, { show: 'value' });
+      return changes(pos[0], pos[1], pos[2], str(flags.show));
     }
     case 'start': {
       const { pos, flags } = parse(args, { bytes: 'value' });
