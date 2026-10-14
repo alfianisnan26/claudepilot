@@ -21,6 +21,9 @@ async function clocked() {
 }
 type Clocked = Awaited<ReturnType<typeof clocked>>;
 
+/** A promise's outcome, with its rejection handled at once (a portal stopped meanwhile rejects it): 'ok' or the error's message. */
+const settle = (p: Promise<unknown>): Promise<string> => p.then(() => 'ok', (e: unknown) => (e instanceof Error ? e.message : String(e)));
+
 async function expectIntegrityEnd(s: Live, bad: string, why: RegExp) {
   s.tail.push(bad);
   await until(() => s.state() === 'ended');
@@ -448,11 +451,11 @@ const FIXTURES: Record<string, Fixture> = {
   'control-bypass-unfinished': {
     accept: async (s) => {
       bypassReady(s.controller, s.store, s.id);
-      const entering = s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' });
+      const entering = settle(s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' }));
       const ask = await s.take('set_permission_mode');
       assert.equal(ask.request.mode, 'bypassPermissions');
       await restartPortal(s, { clock: s.clock }, (c) => bypassReady(c, s.store, s.id));
-      await assert.rejects(entering, 'the portal that asked is gone');
+      assert.match(await entering, /shutting down/, 'the portal that asked is gone');
       s.tail.push(ok(ask.id, { mode: 'bypassPermissions' }));
       // Not an ending: the process is taken out of Bypass at once, never shown or audited as entered.
       const out = await s.take('set_permission_mode');
@@ -482,9 +485,9 @@ const FIXTURES: Record<string, Fixture> = {
         run: async (s) => {
           bypassReady(s.controller, s.store, s.id);
           s.controller.controlTimeoutMs = 40;
-          const entering = s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' });
+          const entering = settle(s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' }));
           const ask = await s.take('set_permission_mode');
-          await assert.rejects(entering, /answer in time/);
+          assert.match(await entering, /answer in time/);
           await expectIntegrityEnd(s, ok(ask.id, { mode: 'bypassPermissions' }), /Claude Code switched to Bypass permissions, which chat sessions never allow$/);
         },
       },
@@ -718,10 +721,10 @@ test('control state (T-277 layer 2): written with every change, ids and digests 
     assert.ok(!JSON.stringify(stored(s)).includes(secret), 'never the text');
     bypassReady(s.controller, s.store, s.id);
     s.controller.controlTimeoutMs = 40;
-    const entering = s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' });
+    const entering = settle(s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' }));
     const ask = await s.take('set_permission_mode');
     assert.equal(stored(s)!.mode.bypassPending, ask.id, 'the gated request, stored before it is written');
-    await assert.rejects(entering);
+    assert.notEqual(await entering, 'ok');
     await s.controller.end(s.id);
     assert.equal(stored(s), null, 'the process is over: its state with it');
   } finally {
@@ -853,10 +856,10 @@ test('control state (T-277 layer 2): Claude Code refusing to leave an unfinished
   const s = await clocked();
   try {
     bypassReady(s.controller, s.store, s.id);
-    const entering = s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' });
+    const entering = settle(s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' }));
     const ask = await s.take('set_permission_mode');
     await restartPortal(s, { clock: s.clock }, (c) => bypassReady(c, s.store, s.id));
-    await assert.rejects(entering);
+    assert.notEqual(await entering, 'ok');
     const stops = s.ws.stops;
     s.tail.push(ok(ask.id, { mode: 'bypassPermissions' }));
     const out = await s.take('set_permission_mode');
