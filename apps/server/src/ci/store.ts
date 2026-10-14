@@ -137,6 +137,8 @@ export interface DeploymentRow {
   auto_verdict?: 'would' | 'would_not' | null;
   auto_line?: string | null;
   auto_at?: string | null;
+  /** Migration 781 (T-110 slice 2): the mode the verdict was made in; null for a verdict of slice 1 (dry) or none. */
+  auto_mode?: 'dry' | 'on' | null;
 }
 
 /** A message CI sent to a session about a run, or decided not to (migrations 81 and 730). */
@@ -484,31 +486,38 @@ export class CiStore {
 
   /* ---------- The auto-approve rule (T-110, PRD FR41a) ---------- */
 
-  /** Whether the columns of migration 780 are there. */
+  /** Whether the columns of migrations 780 and 781 are there. */
   get autoApproveReady(): boolean {
     try {
       this.#db.prepare('SELECT auto_approve FROM ci_environments LIMIT 1').get();
-      this.#db.prepare('SELECT auto_verdict FROM ci_deployments LIMIT 1').get();
+      this.#db.prepare('SELECT auto_verdict, auto_mode FROM ci_deployments LIMIT 1').get();
       return true;
     } catch {
       return false;
     }
   }
 
-  setAutoApprove(id: string, patch: { mode: 'off' | 'dry'; window: string | null; paths: string | null }, by: string): void {
+  setAutoApprove(id: string, patch: { mode: 'off' | 'dry' | 'on'; window: string | null; paths: string | null }, by: string): void {
     this.#writableDb
       .prepare('UPDATE ci_environments SET auto_approve = ?, auto_window = ?, auto_paths = ?, updated_at = ?, updated_by = ? WHERE id = ?')
       .run(patch.mode, patch.window, patch.paths, new Date().toISOString(), by, id);
   }
 
   /** Records the rule's verdict on a deployment, once: a second look at the same deployment writes nothing. */
-  setAutoVerdict(id: string, verdict: 'would' | 'would_not', line: string, at: string): boolean {
-    return Number(this.#writableDb.prepare('UPDATE ci_deployments SET auto_verdict = ?, auto_line = ?, auto_at = ? WHERE id = ? AND auto_verdict IS NULL').run(verdict, line, at, id).changes) > 0;
+  setAutoVerdict(id: string, verdict: 'would' | 'would_not', line: string, at: string, mode: 'dry' | 'on'): boolean {
+    return (
+      Number(this.#writableDb.prepare('UPDATE ci_deployments SET auto_verdict = ?, auto_line = ?, auto_at = ?, auto_mode = ? WHERE id = ? AND auto_verdict IS NULL').run(verdict, line, at, mode, id).changes) > 0
+    );
+  }
+
+  /** Mode `on`: how the rule's claimed approval ended (approved, or not after all); only a verdict already claimed in mode `on` changes. */
+  settleAutoVerdict(id: string, verdict: 'would' | 'would_not', line: string): boolean {
+    return Number(this.#writableDb.prepare("UPDATE ci_deployments SET auto_verdict = ?, auto_line = ? WHERE id = ? AND auto_mode = 'on'").run(verdict, line, id).changes) > 0;
   }
 
   /**
    * The deployments of an environment the rule approved, or (dry) would have approved, newest first. `rule:<environment>` is the actor of a
-   * real rule approval (slice 2); today only the dry verdicts exist.
+   * real rule approval (mode `on`, slice 2); both count for the daily cap, one at a time and the previous deploy.
    */
   ruleDeployments(repoId: string, environment: string, limit = 50): (DeploymentRow & { run_status: string | null })[] {
     return this.#db

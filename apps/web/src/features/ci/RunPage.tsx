@@ -1,6 +1,6 @@
 import { Button, cn, LoadError, useToast } from '@isnanme/ui';
 import { isCiActive, type CiDeployment, type CiDiagnostic, type CiJob, type CiRun, type CiRunFlaky } from '@portal/contracts';
-import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Hand, RotateCw, Square } from 'lucide-react';
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Hand, RotateCw, Square, UserCheck } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
@@ -200,7 +200,7 @@ export function RunPage() {
         ))}
 
       {run.deployments
-        .filter((d) => d.autoApprove)
+        .filter((d) => d.autoApprove || (DECIDED_BY[d.approval] && d.decidedBy))
         .map((d) => (
           <RuleLine key={`rule-${d.id}`} deployment={d} />
         ))}
@@ -331,16 +331,26 @@ function Approval({ run, deployment, onDecided }: { run: CiRun; deployment: CiDe
   );
 }
 
-/** The auto-approve rule's one line on a deployment (T-110 FR41a; slice 1 is a dry run: it approved nothing). */
-function RuleLine({ deployment }: { deployment: CiDeployment }) {
-  const v = deployment.autoApprove!;
+const DECIDED_BY: Partial<Record<CiDeployment['approval'], string>> = { approved: 'Approved', rejected: 'Rejected' };
+
+/**
+ * Who decided a held deployment and why (T-110 FR41a): a person, or the environment's rule (`rule:<environment>`) with its one line. A
+ * dry line says what the rule WOULD have done; a `not approved` line says why the rule left it to a person.
+ */
+function RuleLine({ deployment: d }: { deployment: CiDeployment }) {
+  const v = d.autoApprove;
+  const verb = DECIDED_BY[d.approval];
+  const byRule = !!d.decidedBy?.startsWith('rule:');
+  const who = verb && d.decidedBy ? `${verb} by ${byRule ? 'the rule' : d.decidedBy.replace(/^user:/, '')}${d.decidedAt ? `, ${timeAgo(d.decidedAt)}` : ''}` : null;
+  const Icon = who && !byRule ? UserCheck : Bot;
   return (
-    <p className="mb-4 flex items-start gap-2 rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-[13px] leading-snug [overflow-wrap:anywhere]" aria-label={`Auto-approve rule for ${deployment.environment}`}>
-      <Bot className={cn('mt-0.5 size-4 shrink-0', v.verdict === 'would' ? 'text-accent' : 'text-gold')} aria-hidden="true" />
-      <span className="min-w-0 flex-1" title={timeAgo(v.at)}>
-        {v.line}
+    <div className="mb-4 flex items-start gap-2 rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-[13px] leading-snug [overflow-wrap:anywhere]" aria-label={`Approval of ${d.environment}`}>
+      <Icon className={cn('mt-0.5 size-4 shrink-0', !v || v.verdict === 'would' ? 'text-accent' : 'text-gold')} aria-hidden="true" />
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        {who && <span className="font-semibold text-ink">{who}</span>}
+        {v && <span title={timeAgo(v.at)}>{v.line}</span>}
       </span>
-    </p>
+    </div>
   );
 }
 

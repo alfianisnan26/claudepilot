@@ -227,8 +227,9 @@ export interface CiRunReport {
 }
 
 /**
- * Where a deployment's approval stands. `pending`: its job has not been reached; `waiting`: held for a person; `approved` / `rejected` by a
- * person; `auto`: the environment is not protected; `expired`: the run ended before anyone decided; `skipped`: its job did not run.
+ * Where a deployment's approval stands. `pending`: its job has not been reached; `waiting`: held for a person (or the environment's rule);
+ * `approved` / `rejected` by a person, or `approved` by the environment's rule (`decidedBy` is then `rule:<environment>`, FR41a); `auto`: the
+ * environment is not protected; `expired`: the run ended before anyone decided; `skipped`: its job did not run.
  */
 export const CI_APPROVAL_STATES = ['pending', 'waiting', 'approved', 'rejected', 'auto', 'expired', 'skipped'] as const;
 export type CiApprovalState = (typeof CI_APPROVAL_STATES)[number];
@@ -246,7 +247,7 @@ export interface CiDeployment {
   /** Who started the run: `ui`, `push`, `portal-mcp:<id>`, `session:<id>`. */
   actor: string;
   approval: CiApprovalState;
-  /** The person who approved or rejected it (an actor string). */
+  /** Who approved or rejected it: a person (`user:<id>`) or the environment's rule (`rule:<environment>`, FR41a). */
   decidedBy: string | null;
   decidedAt: string | null;
   /** How the job ended, once it did. */
@@ -259,14 +260,19 @@ export interface CiDeployment {
 /**
  * An environment's auto-approve mode (T-110, PRD FR41a), set only by a person with manage on the remote. `off`: a person approves, as
  * always. `dry`: when a deploy waits, the portal says on the run and in the audit whether the rule WOULD approve it, and approves nothing.
- * A real `on` comes with slice 2; until then the API refuses it.
+ * `on`: when a deploy of a PROTECTED environment waits and every condition holds, the portal approves it as `rule:<environment>`; when one
+ * fails it approves nothing, says which, and a person decides as before.
  */
-export const CI_AUTO_APPROVE_MODES = ['off', 'dry'] as const;
+export const CI_AUTO_APPROVE_MODES = ['off', 'dry', 'on'] as const;
 export type CiAutoApproveMode = (typeof CI_AUTO_APPROVE_MODES)[number];
 
-/** What the rule said about one waiting deployment: one line, starting `auto-approve (dry): WOULD approve` or `... WOULD NOT`. */
+/**
+ * What the rule said about one waiting deployment: one line. `dry`: `auto-approve (dry): WOULD approve: ...` or `... WOULD NOT: ...`. `on`:
+ * `auto-approve: approved: ...` (verdict `would`, the deployment `approved` by `rule:<environment>`) or `auto-approve: not approved: ...`
+ * (verdict `would_not`; a person decides).
+ */
 export interface CiAutoApproveVerdict {
-  mode: 'dry';
+  mode: 'dry' | 'on';
   verdict: 'would' | 'would_not';
   line: string;
   at: string;

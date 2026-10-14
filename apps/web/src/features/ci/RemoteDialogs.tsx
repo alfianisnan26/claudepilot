@@ -1,5 +1,5 @@
-import { Dialog, FormDialog, Segmented, Select, Switch, TextField } from '@isnanme/ui';
-import { type CiBranch, type CiInput, type CiPipelineInfo, type CiRepo, type CiRun, type Workspace } from '@portal/contracts';
+import { Dialog, FormDialog, Segmented, Select, Switch, TextArea, TextField } from '@isnanme/ui';
+import { type CiAutoApproveMode, type CiBranch, type CiEnvironment, type CiInput, type CiPipelineInfo, type CiRepo, type CiRun, type Workspace } from '@portal/contracts';
 import { useEffect, useMemo, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { api, errorText } from '@/lib/api';
@@ -139,6 +139,101 @@ export function ProtectedDialog({ repo, onClose, onSaved }: { repo: CiRepo | nul
         onChange={(e) => setText(e.target.value)}
         hint={<InfoTip label="About protected branches">A push or merge into one of these starts the pipelines that run on merge. * stays within one folder, ** goes through folders.</InfoTip>}
       />
+    </FormDialog>
+  );
+}
+
+const RULE_MODES: { value: CiAutoApproveMode; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'dry', label: 'Dry' },
+  { value: 'on', label: 'Auto' },
+];
+const HOURS = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/;
+
+/**
+ * An environment's auto-approve rule (T-110, local-git-ci PRD FR41a): the mode, the hours (UTC) and the paths that need a person. Only a
+ * person reaches it (the route refuses tokens and agents). `Auto` lets the portal approve a waiting deploy whose every condition holds.
+ */
+export function AutoApproveDialog({ repoId, env, onClose, onSaved }: { repoId: string; env: CiEnvironment | null; onClose: () => void; onSaved: (e: CiEnvironment) => void }) {
+  const [mode, setMode] = useState<CiAutoApproveMode>('off');
+  const [hours, setHours] = useState('');
+  const [paths, setPaths] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState<{ fields: Partial<Record<'mode' | 'window' | 'needsPerson', string>>; message: string | null }>({ fields: {}, message: null });
+  useEffect(() => {
+    if (!env) return;
+    setMode(env.autoApprove);
+    setHours(env.autoApproveWindow ?? '');
+    setPaths(env.needsPerson.join('\n'));
+    setErrors({ fields: {}, message: null });
+  }, [env]);
+  const list = paths.split(/[\n,]+/).map((p) => p.trim()).filter(Boolean);
+  const pathsChanged = !!env && list.join('\n') !== env.needsPerson.join('\n');
+  const dirty = !!env && (mode !== env.autoApprove || hours.trim() !== (env.autoApproveWindow ?? '') || pathsChanged);
+  const hoursBad = !!hours.trim() && !HOURS.test(hours.trim());
+  const submit = async () => {
+    if (!env) return;
+    setSaving(true);
+    setErrors({ fields: {}, message: null });
+    try {
+      onSaved(await ciApi.setAutoApprove(repoId, env.name, { mode, window: hours.trim() || null, ...(pathsChanged ? { needsPerson: list.length ? list : null } : {}) }));
+    } catch (e) {
+      setErrors(fieldErrors(e, ['mode', 'window', 'needsPerson'] as const));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <FormDialog
+      open={!!env}
+      onClose={onClose}
+      title="Auto-approve"
+      onSubmit={submit}
+      submitLabel={mode === 'on' && env?.autoApprove !== 'on' ? 'Turn on' : 'Save'}
+      saving={saving}
+      error={errors.message ?? errors.fields.mode ?? null}
+      dirty={dirty}
+      submitDisabled={!dirty || hoursBad}
+    >
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
+          <span className="flex items-center gap-1 text-[13px] font-semibold text-ink-soft" id="rule-mode">
+            {env?.name}
+            <InfoTip label="About auto-approve">
+              Off: a person approves each deploy. Dry: the portal writes on the run whether it WOULD approve, and approves nothing. Auto: the
+              portal approves a waiting deploy itself, as rule:{env?.name ?? 'environment'}, when every condition holds: the gate green on the
+              commit, the build ok, verify and rollback in the pipeline, the same branch as the last release, nothing below in the diff, at most
+              6 a day and one at a time, inside the hours, the last deploy it approved not failed or rolled back. Otherwise a person decides, as now.
+              Agents can never approve.
+            </InfoTip>
+          </span>
+          <Segmented<CiAutoApproveMode> label="Mode" labelledBy="rule-mode" value={mode} onChange={setMode} options={RULE_MODES} />
+        </div>
+        <TextField
+          label="Hours (UTC)"
+          placeholder="always"
+          inputMode="numeric"
+          autoComplete="off"
+          spellCheck={false}
+          value={hours}
+          onChange={(e) => setHours(e.target.value)}
+          error={hoursBad ? 'HH:MM-HH:MM' : errors.fields.window}
+          hint={<InfoTip label="About the hours">When the rule may approve, HH:MM-HH:MM in UTC (it may cross midnight). Empty: always.</InfoTip>}
+        />
+        <TextArea
+          label="Needs a person"
+          rows={5}
+          autoComplete="off"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          className="font-mono text-[12.5px]"
+          value={paths}
+          onChange={(e) => setPaths(e.target.value)}
+          error={errors.fields.needsPerson}
+          hint={<InfoTip label="About the paths">A deploy whose diff since the last release touches one of these waits for a person. One per line; ** goes through folders. Empty: the defaults.</InfoTip>}
+        />
+      </div>
     </FormDialog>
   );
 }

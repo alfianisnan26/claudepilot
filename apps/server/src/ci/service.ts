@@ -44,7 +44,7 @@ import {
   type UpdateCiAutoApproveRequest,
 } from '@portal/contracts';
 import { NO_VALUES, SessionStream } from '../chat/valueRedact.js';
-import { evaluateRule, needsPersonOf, WINDOW } from './autoApprove.js';
+import { evaluateRule, needsPersonOf, ruleLine, WINDOW } from './autoApprove.js';
 import type { Store } from '../store/store.js';
 import { globMatches } from './glob.js';
 import { CiUnreachable, type CiHost, type CiReply } from './host.js';
@@ -107,7 +107,7 @@ const deploymentView = (d: DeploymentRow): CiDeployment => ({
   decidedAt: d.decided_at,
   outcome: (d.outcome as CiDeployment['outcome']) ?? null,
   createdAt: d.created_at,
-  autoApprove: d.auto_verdict && d.auto_line && d.auto_at ? { mode: 'dry', verdict: d.auto_verdict, line: d.auto_line, at: d.auto_at } : null,
+  autoApprove: d.auto_verdict && d.auto_line && d.auto_at ? { mode: d.auto_mode === 'on' ? 'on' : 'dry', verdict: d.auto_verdict, line: d.auto_line, at: d.auto_at } : null,
 });
 
 const invalid = (field: string, message: string) => new AppError('VALIDATION_FAILED', message, { details: { [field]: message } });
@@ -615,9 +615,14 @@ export class CiService {
   }
 
   /**
-   * The auto-approve rule (FR41a), slice 1: when the environment's mode is `dry` (or `on`, which is `dry` until slice 2), says once on the
-   * deployment and in the audit what the rule WOULD do. It reads facts and writes that line, nothing else: no key, no `cp-ci approve`, no
-   * `decide`. Mode `off` writes nothing. Never breaks the poll.
+   * The auto-approve rule (FR41a). When a held deployment starts waiting and its environment's mode is `dry` or `on`, the rule is evaluated
+   * once (it only reads). Then, the environment read again AFTER the evaluation:
+   *  - mode `on` and protection on (both still, now): the verdict is claimed once on the deployment, and when every condition held the job is
+   *    approved through the same path a person's approval takes (`#settle`: the key to the runner, one decision per run, the deployment still
+   *    `waiting`), as `rule:<environment>` with no user. If that approval does not go through, the line says so and a person decides.
+   *  - otherwise (`dry`, or `on` switched off or protection switched off meanwhile): the dry WOULD line only; nothing is approved.
+   * Every decision is one audit row `ci.deploy_auto_approve` (mode, verdict: would / would_not / approved / refused / failed, and the fixed
+   * condition code; ids only, no free text). Mode `off` writes nothing. Never breaks the poll.
    */
   #rule(runId: string, deploymentId: string): void {
     if (!this.#cs.autoApproveReady) return;
@@ -629,17 +634,39 @@ export class CiService {
       if (!env || (env.auto_approve ?? 'off') === 'off') return;
       const deps = { cs: this.#cs, now: this.#opts.now, cp: (ws: string, args: string[]) => this.host.cp(ws, args, { timeoutMs: 30_000 }) };
       const v = await evaluateRule(deps, run, dep, env);
+      // The facts took time to read: the mode and the protection that count are the ones in force now.
+      const now = this.#cs.environment(dep.repo_id, dep.environment);
+      const real = env.auto_approve === 'on' && now?.auto_approve === 'on' && now.protected === 1;
+      const mode = real ? 'on' : 'dry';
       const at = this.#opts.now().toISOString();
-      if (!this.#cs.setAutoVerdict(dep.id, v.verdict, v.line, at)) return;
-      this.#opts.audit?.({
-        kind: 'ci.deploy_auto_approve',
-        severity: 'info',
-        actor: `rule:${dep.environment}`,
-        userId: null,
-        subject: `ci_run:${run.id}`,
-        detail: { workspace: run.workspace_id, repo: run.repo, pipeline: run.pipeline, run: run.number, job: dep.job, environment: dep.environment, sha: shortSha(run.sha), mode: 'dry', verdict: v.verdict, line: v.line },
-      });
-      console.log(`[ci] ${run.id} ${dep.job}: ${v.line}`);
+      // Claimed once: a second look at this deployment (another poll, another portal process) writes and approves nothing.
+      if (!this.#cs.setAutoVerdict(dep.id, v.verdict, ruleLine(mode, v), at, mode)) return;
+      const actor = `rule:${dep.environment}`;
+      const audit = (outcome: 'would' | 'would_not' | 'approved' | 'refused' | 'failed', code: string) =>
+        this.#opts.audit?.({
+          kind: 'ci.deploy_auto_approve',
+          severity: outcome === 'approved' ? 'medium' : 'info',
+          actor,
+          userId: null,
+          subject: `ci_run:${run.id}`,
+          detail: { workspace: run.workspace_id, repo: run.repo, pipeline: run.pipeline, run: run.number, job: dep.job, environment: dep.environment, sha: shortSha(run.sha), mode, verdict: outcome, condition: code },
+        });
+      if (mode === 'dry' || v.verdict === 'would_not') {
+        audit(mode === 'dry' ? v.verdict : 'refused', v.code);
+        console.log(`[ci] ${run.id} ${dep.job}: ${ruleLine(mode, v)}`);
+        this.#changed();
+        return;
+      }
+      try {
+        await this.#settle(run, dep, 'approve', { actor, userId: null }, { startedBy: run.actor, by: 'rule', condition: v.code });
+        audit('approved', v.code);
+      } catch (e) {
+        // Not approved after all (a person decided first, the run ended, the runner refused): say so; the job waits for a person as before.
+        const why = e instanceof AppError && e.code === 'CONFLICT' ? 'it was decided or ended meanwhile' : 'the runner did not take the approval';
+        this.#cs.settleAutoVerdict(dep.id, 'would_not', ruleLine('on', { verdict: 'would_not', why: `every condition held, but the approval did not go through (${why})`, line: '' }));
+        audit('failed', 'approve');
+        console.error(`[ci] ${run.id} ${dep.job}: the rule's approval did not go through: ${(e as Error).message}`);
+      }
       this.#changed();
     })()
       .catch((e: unknown) => console.error(`[ci] ${runId}: the auto-approve rule failed: ${(e as Error).message}`))
@@ -836,20 +863,37 @@ export class CiService {
 
   /**
    * A person lets a held job run, or refuses it. The caller has made sure it is a person (never a token or an agent: the routes, and no tool,
-   * reach this). Approving hands the runner the job's key through `cp-ci approve`; the decision is recorded only after the runner took it,
-   * and one decision per run is made at a time, so two people can not approve and reject the same job into a split state.
+   * reach this). The one other caller of `#settle` is the environment's own rule (`#rule`), which never comes through here: an actor that
+   * says `rule:` is refused, so no route can pass a person's click off as the rule's.
    */
   async decide(id: string, job: unknown, decision: 'approve' | 'reject', by: CiDecider): Promise<CiRun> {
     const row = this.#need(id);
     if (typeof job !== 'string' || !JOB_ID.test(job)) throw invalid('job', 'Pick the job that waits.');
+    if (by.actor.startsWith('rule:') || !by.userId) throw new AppError('FORBIDDEN', 'Only a person signed in to the portal can do this.');
     const dep = this.#cs.deploymentsReady ? this.#cs.deployment(row.id, job) : undefined;
     if (!dep) throw notFound('deployment');
+    await this.#settle(row, dep, decision, by, { startedBy: row.actor });
+    this.#changed();
+    this.kick(row.workspace_id);
+    return this.get(row.id);
+  }
+
+  /**
+   * Decides a held job (FR41): approving hands the runner the job's key through `cp-ci approve`; the decision is recorded only after the runner
+   * took it, and one decision per run is made at a time, so two deciders (two people, or a person and the rule) can not approve and reject the
+   * same job into a split state, nor approve it twice. Audited as `ci.deploy_approved` / `ci.deploy_rejected` with the decider as the actor.
+   */
+  async #settle(row: RunRow, dep: DeploymentRow, decision: 'approve' | 'reject', by: CiDecider, extra: Record<string, unknown>): Promise<void> {
+    const job = dep.job;
     if (row.status !== 'running' || dep.approval !== 'waiting' || !dep.gate_key) throw new AppError('CONFLICT', dep.approval === 'pending' ? 'That job is not waiting yet.' : 'That job is not waiting for an approval.');
     if (this.#deciding.has(row.id)) throw new AppError('CONFLICT', 'Someone is deciding this right now.');
     this.#deciding.add(row.id);
     try {
       await this.#running(row.workspace_id);
-      const key = dep.gate_key;
+      // Read again inside the lock: what the caller saw may have been decided meanwhile.
+      const live = this.#cs.deployment(row.id, job);
+      if (!live || live.approval !== 'waiting' || !live.gate_key) throw new AppError('CONFLICT', 'That job is not waiting for an approval.');
+      const key = live.gate_key;
       const reply = decision === 'approve' ? await this.#cp(row.workspace_id, ['approve', row.id, job, '--bytes', String(Buffer.byteLength(key))], { stdin: key }) : await this.#cp(row.workspace_id, ['approve', row.id, job, '--reject']);
       if (!reply.ok) {
         if (reply.error === 'over' || reply.error === 'not_waiting') throw new AppError('CONFLICT', 'That job is not waiting any more.');
@@ -857,27 +901,23 @@ export class CiService {
       }
       const at = new Date().toISOString();
       const state = decision === 'approve' ? 'approved' : 'rejected';
-      if (!this.#cs.updateDeployment(dep.id, { approval: state, decided_by: by.actor, decided_at: at, gate_key: null }, ['waiting'])) throw new AppError('CONFLICT', 'That was decided already.');
+      if (!this.#cs.updateDeployment(live.id, { approval: state, decided_by: by.actor, decided_at: at, gate_key: null }, ['waiting'])) throw new AppError('CONFLICT', 'That was decided already.');
       this.#opts.audit?.({
         kind: decision === 'approve' ? 'ci.deploy_approved' : 'ci.deploy_rejected',
         severity: 'medium',
         actor: by.actor,
         userId: by.userId,
         subject: `ci_run:${row.id}`,
-        detail: { workspace: row.workspace_id, repo: row.repo, pipeline: row.pipeline, run: row.number, job, environment: dep.environment, sha: shortSha(row.sha), startedBy: row.actor },
+        detail: { workspace: row.workspace_id, repo: row.repo, pipeline: row.pipeline, run: row.number, job, environment: live.environment, sha: shortSha(row.sha), ...extra },
       });
-      console.log(`[ci] ${row.id} ${job}: deployment to ${dep.environment} ${state}`);
+      console.log(`[ci] ${row.id} ${job}: deployment to ${live.environment} ${state} by ${by.actor}`);
     } finally {
       this.#deciding.delete(row.id);
     }
-    this.#changed();
-    this.kick(row.workspace_id);
-    return this.get(row.id);
   }
 
   #envView(e: EnvironmentRow): CiEnvironment {
-    // `on` is reserved for slice 2 (T-110) and behaves as `dry` until then, so it shows as `dry`.
-    const mode: CiAutoApproveMode = (e.auto_approve ?? 'off') === 'off' ? 'off' : 'dry';
+    const mode: CiAutoApproveMode = e.auto_approve === 'on' ? 'on' : e.auto_approve === 'dry' ? 'dry' : 'off';
     return {
       id: e.id,
       repoId: e.repo_id,
@@ -918,19 +958,20 @@ export class CiService {
 
   /**
    * Sets an environment's auto-approve rule (FR41a): a person with manage (the route refuses tokens and agents; no Portal MCP tool reaches
-   * this), audited as `ci.environment_auto_approve`. Slice 1 knows `off` and `dry`; `on` is refused until the real approval exists.
+   * this), audited as `ci.environment_auto_approve`. `on` only for a protected environment (an unprotected one holds nothing to approve);
+   * turning protection off later leaves the mode as it is, and the rule then approves nothing (nothing waits, and `#rule` checks again).
    */
   setAutoApprove(repoId: string, name: unknown, req: Partial<UpdateCiAutoApproveRequest>, by: CiDecider): CiEnvironment {
     const repo = this.#needRepo(repoId);
     if (typeof name !== 'string' || !CI_ENVIRONMENT_NAME.test(name)) throw invalid('name', 'Lowercase letters, digits, . _ and -.');
-    if ((req.mode as string) === 'on') throw invalid('mode', 'The real auto-approval comes later (T-110 slice 2): use dry to see what it would do.');
-    if (req.mode !== 'off' && req.mode !== 'dry') throw invalid('mode', 'off or dry.');
+    if (req.mode !== 'off' && req.mode !== 'dry' && req.mode !== 'on') throw invalid('mode', 'off, dry or on.');
     if (req.window !== undefined && req.window !== null && (typeof req.window !== 'string' || !WINDOW.test(req.window))) throw invalid('window', 'HH:MM-HH:MM in UTC, or null for always.');
     if (req.needsPerson !== undefined && req.needsPerson !== null && (!Array.isArray(req.needsPerson) || req.needsPerson.length > 50 || req.needsPerson.some((g) => typeof g !== 'string' || !GLOB.test(g))))
       throw invalid('needsPerson', 'Up to 50 path patterns, or null for the defaults.');
     if (!this.#cs.deploymentsReady || !this.#cs.autoApproveReady) throw new AppError('SERVICE_UNAVAILABLE', 'This portal’s database is not up to date.', { expose: true });
     const env = this.#cs.environment(repo.id, name);
     if (!env) throw notFound('environment');
+    if (req.mode === 'on' && env.protected !== 1) throw invalid('mode', 'Turn the approval on first: the rule approves only what waits for one.');
     const next = {
       mode: req.mode,
       window: req.window === undefined ? (env.auto_window ?? null) : req.window,
@@ -941,7 +982,7 @@ export class CiService {
       this.#cs.setAutoApprove(env.id, next, by.actor);
       this.#opts.audit?.({
         kind: 'ci.environment_auto_approve',
-        severity: next.mode === 'off' ? 'info' : 'medium',
+        severity: next.mode === 'on' ? 'high' : next.mode === 'off' ? 'info' : 'medium',
         actor: by.actor,
         userId: by.userId,
         subject: `ci_repo:${repo.id}`,

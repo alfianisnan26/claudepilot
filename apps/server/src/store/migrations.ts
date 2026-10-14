@@ -3076,6 +3076,16 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 781,
+    name: 'CI: the mode the auto-approve rule judged in, on each deployment',
+    up(db) {
+      // T-110 slice 2 (local-git-ci PRD FR41a): the rule now approves for real in mode 'on'. Each deployment keeps the mode its verdict was
+      // made in, so the run page and the audit never mistake a dry WOULD for a real approval. Null: the verdict was made before this column
+      // (slice 1 knew only 'dry') or the rule did not look.
+      db.exec(`ALTER TABLE ci_deployments ADD COLUMN auto_mode TEXT CHECK (auto_mode IN ('dry', 'on'));`);
+    },
+  },
 ];
 
 /**
