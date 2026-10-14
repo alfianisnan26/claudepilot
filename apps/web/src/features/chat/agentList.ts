@@ -104,10 +104,11 @@ export function taskLine(t: ChatTask, label: string, command: string | null, lat
   const exit = exitCode(t.summary);
   if (t.status === 'running') return { lead: shown ? null : 'Running', tone: 'live', code: shown };
   if (t.status === 'killed') return { lead: 'Stopped', tone: 'warn', code: shown };
-  if (t.status === 'failed') return { lead: exit !== null ? `exit ${exit}` : 'Failed', tone: 'danger', code: shown };
+  // `exit 3` that ended with exit code 3 says Failed, not its label again.
+  if (t.status === 'failed') return { lead: (exit !== null && same(`exit ${exit}`)) || 'Failed', tone: 'danger', code: shown };
   // Done is Claude Code's call: an exit code it does not count as a failure (grep that found nothing) reads with its reason, not in red.
   const note = exitNote(t.summary);
-  return { lead: exit !== null ? `exit ${exit}${note ? `: ${note}` : ''}` : 'Done', tone: 'muted', code: shown };
+  return { lead: (exit !== null && same(`exit ${exit}${note ? `: ${note}` : ''}`)) || 'Done', tone: 'muted', code: shown };
 }
 
 export interface Counts {

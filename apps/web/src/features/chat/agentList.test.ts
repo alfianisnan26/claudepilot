@@ -83,6 +83,9 @@ describe('taskLine: one line, nothing printed twice', () => {
   it('the result that equals the label is not printed again', () => {
     assert.equal(taskLine(agent('completed', { summary: 'QA agent 1' }), 'QA agent 1', null, null).lead, 'Done');
     assert.equal(taskLine(command('running', 'sleep 30'), 'sleep 30', 'sleep 30', null).code, null);
+    // The command `exit 3`, which ended with exit code 3: its label already reads "exit 3".
+    const exit3 = command('failed', 'exit 3', { summary: 'Background command "exit 3" failed with exit code 3' });
+    assert.deepEqual(taskLine(exit3, 'exit 3', 'exit 3', null), { lead: 'Failed', tone: 'danger', code: null });
   });
 
   it('a command: its exit code, then its command line on one line', () => {
