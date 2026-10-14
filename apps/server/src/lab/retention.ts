@@ -1,6 +1,8 @@
 // Efficiency lab (T-287 slice 2, docs/prd/claude-usage.md §28.9): retention. The per-request and per-tool rows are kept 14 days; a slice
 // whose last request is older than that has its numbers frozen on its own row (migration 852, counts only) and then its request and tool
 // rows go. Slices, and so the summaries and the experiments over them, are kept. Runs once a day (Lab.start) and is safe to run again.
+// T-292 slice 3: a draw no slice bound within the same 14 days expires (it can no longer bind); its row and its held arms stay, so every
+// draw stays counted (a deleted draw would hide a redraw).
 
 import type { DatabaseSync } from 'node:sqlite';
 import { sliceMetrics } from './metrics.js';
@@ -12,6 +14,8 @@ export interface PruneResult {
   frozen: number;
   requests: number;
   tools: number;
+  /** Unbound draws expired (older than the horizon; kept as evidence, no longer bindable). */
+  draws: number;
 }
 
 export function pruneLab(db: DatabaseSync, nowMs: number): PruneResult {
@@ -33,8 +37,9 @@ export function pruneLab(db: DatabaseSync, nowMs: number): PruneResult {
     const frozenSlices = 'SELECT 1 FROM lab_slices s WHERE s.session_id = t.session_id AND s.slice_id = t.slice_id AND s.frozen IS NOT NULL';
     const requests = Number(db.prepare(`DELETE FROM lab_requests AS t WHERE EXISTS (${frozenSlices}) OR (t.at_ms < ? AND NOT EXISTS (SELECT 1 FROM lab_slices s WHERE s.session_id = t.session_id AND s.slice_id = t.slice_id))`).run(cutoff).changes);
     const tools = Number(db.prepare(`DELETE FROM lab_tools AS t WHERE EXISTS (${frozenSlices}) OR (t.at_ms < ? AND t.slice_id IS NULL)`).run(cutoff).changes);
+    const draws = Number(db.prepare("UPDATE lab_draws SET status = 'expired', status_ms = ? WHERE status IN ('open', 'refused') AND drawn_ms < ?").run(nowMs, cutoff).changes);
     db.exec('COMMIT');
-    return { frozen, requests, tools };
+    return { frozen, requests, tools, draws };
   } catch (e) {
     db.exec('ROLLBACK');
     throw e;
