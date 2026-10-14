@@ -15,6 +15,8 @@ const MCP_MODES = ['plan', 'default', 'acceptEdits', 'dontAsk'] as const satisfi
 const SLASH_ALLOWED = new Set(['/compact', '/context', '/reload-plugins']);
 /** What `session_get` returns of the transcript stays under this, so one call fits a result block. */
 const EVENT_CHARS_MAX = 12_000;
+/** T-294: `session_get` lists at most this many of a session's workers (live ones first); the count is always whole. */
+const WORKERS_MAX = 20;
 
 const sessionBrief = (s: ChatSession, ctx: PortalToolContext) => ({
   id: s.id,
@@ -25,7 +27,10 @@ const sessionBrief = (s: ChatSession, ctx: PortalToolContext) => ({
   origin: s.origin,
   started_by: s.startedBy ?? null,
   ticket_id: s.ticketId ?? null,
+  // T-294: the tree (the session that started it) and who runs it (its role, its Claude).
+  parent_id: s.parentId ?? null,
   agent: s.agent ?? null,
+  claude: s.claudeName ?? null,
   model: s.model,
   effort: s.effort,
   mode: s.mode,
@@ -60,20 +65,22 @@ export function registerSessionTools(deps: PortalToolDeps): void {
   registerPortalTool({
     name: 'session_list',
     title: 'List chat sessions',
-    description: 'Chat sessions across workspaces, newest activity first: state, what they wait for, model, mode, cost and the ticket they work on. Session titles are text an agent wrote.',
+    description:
+      'Chat sessions across workspaces, newest activity first: state, what they wait for, model, mode, cost, the ticket they work on, the session that started them (parent_id), their agent and Claude. Session titles are text an agent wrote. For a crew, parent_id lists the workers one session started.',
     scope: 'read',
     input: z.object({
       workspace_id: z.string().max(100).optional(),
       state: z.enum(STATES).optional(),
       ticket_id: z.string().max(64).optional().describe('Only sessions working on this ticket.'),
+      parent_id: z.string().max(80).optional().describe('Only the workers this session started.'),
       include_ended: z.boolean().optional().describe('Ended sessions are left out unless this is true (or state is ended).'),
       ...pageInput,
     }),
     handler(ctx, args) {
       const all = chat
-        .list({ workspaceId: args.workspace_id, ticketId: args.ticket_id })
+        .list({ workspaceId: args.workspace_id, ticketId: args.ticket_id, ...(args.parent_id ? { parentId: args.parent_id } : {}) })
         .filter((s) => !s.archivedAt && (args.state ? s.state === args.state : args.include_ended || s.state !== 'ended'));
-      const page = paginate(all, args, { w: args.workspace_id, s: args.state, t: args.ticket_id, e: args.include_ended });
+      const page = paginate(all, args, { w: args.workspace_id, s: args.state, t: args.ticket_id, p: args.parent_id, e: args.include_ended });
       return { summary: `${page.total} sessions.`, sessions: page.items.map((s) => sessionBrief(s, ctx)), total: page.total, next_cursor: page.next_cursor };
     },
   });
@@ -82,7 +89,7 @@ export function registerSessionTools(deps: PortalToolDeps): void {
     name: 'session_get',
     title: 'Get a chat session',
     description:
-      'One session: its state, what it waits for, and, only when asked with max_events, the latest transcript events (text an agent wrote, labelled untrusted). With wait_seconds it returns early on any change.',
+      'One session: its state, what it waits for, the session that started it, its workers (id, title, state, Claude, waiting; at most 20, with their count) and, only when asked with max_events, the latest transcript events (text an agent wrote, labelled untrusted). With wait_seconds it returns early on any change. For a crew, get the lead to see its workers at a glance.',
     scope: 'read',
     input: z.object({
       id: z.string().max(80),
@@ -101,7 +108,17 @@ export function registerSessionTools(deps: PortalToolDeps): void {
           if (`${s.state}|${s.lastSeq}|${s.waiting}` !== since) break;
         }
       }
-      const out: Record<string, unknown> = { summary: `${s.id} is ${s.state}${s.waiting ? ` (${s.waiting} waiting)` : ''}.`, session: sessionBrief(s, ctx), ui: uiLink(`/admin/sessions/${s.id}`) };
+      // T-294: its workers, compact: the live ones first, then the ended, newest activity first within each.
+      const kids = chat.list({ parentId: s.id });
+      const ordered = [...kids.filter((w) => w.state !== 'ended'), ...kids.filter((w) => w.state === 'ended')];
+      const live = kids.length - kids.filter((w) => w.state === 'ended').length;
+      const out: Record<string, unknown> = {
+        summary: `${s.id} is ${s.state}${s.waiting ? ` (${s.waiting} waiting)` : ''}.${kids.length ? ` ${kids.length} ${kids.length === 1 ? 'worker' : 'workers'}, ${live} live.` : ''}`,
+        session: sessionBrief(s, ctx),
+        ui: uiLink(`/admin/sessions/${s.id}`),
+        workers_total: kids.length,
+        workers: ordered.slice(0, WORKERS_MAX).map((w) => ({ id: w.id, title: ctx.untrusted(w.title, 'agent', 120), state: w.state, claude: w.claudeName ?? null, waiting: w.waiting })),
+      };
       const all = chat.history(s.id, 0);
       out.pending_requests = pendingRequests(all).map((r) => ({
         request_id: r.requestId,
