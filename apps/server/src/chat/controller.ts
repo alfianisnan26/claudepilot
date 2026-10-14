@@ -128,9 +128,12 @@ import {
   readEnding,
   RESYNC_MS,
   sameAnswer,
+  TASK_STOP_MS,
+  TASK_STOPS_MAX,
   type ControlExpectation,
   type EndingCase,
   type PeerCause,
+  type TaskStop,
 } from './integrity.js';
 import { DAY_MS, readRecoverConfig, recoverContinuation, recoverRefusal, type RecoverBy } from './recover.js';
 
@@ -719,6 +722,8 @@ export class ChatController {
   readonly #clock: () => number;
   /** Per session, the sub-agent SendMessage calls of its current process that a peer line may follow (T-136); digests only, never text. */
   readonly #peerCauses = new Map<string, PeerCause[]>();
+  /** Per session, the stop_task requests this portal sent to its current process whose report has not arrived (T-318); ids only. */
+  readonly #taskStops = new Map<string, TaskStop[]>();
   /** Per session, the control state last written and the process it is for (T-277 layer 2): an unchanged one is not written again. */
   readonly #controlSaved = new Map<string, { proc: string; json: string }>();
 
@@ -3523,7 +3528,37 @@ export class ChatController {
     await this.#busy.get(sessionId);
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended' || row.process !== 'live') return;
-    await this.#request(sessionId, 'stop_task', { task_id: id });
+    // Claude Code reports the stop as a line of its own (INTEGRITY_CASES `replay-task-stopped`): it is believed only for a stop sent here.
+    const stop: TaskStop = { taskId: id, at: this.#clock() };
+    this.#taskStops.set(sessionId, [...(this.#taskStops.get(sessionId) ?? []), stop].slice(-TASK_STOPS_MAX));
+    this.#saveControl(sessionId);
+    try {
+      await this.#request(sessionId, 'stop_task', { task_id: id });
+    } catch (e) {
+      // Refused or unanswered: no report is owed, so none is believed.
+      this.#dropStop(sessionId, stop);
+      throw e;
+    }
+  }
+
+  /** Forgets one recorded stop (refused, or its report arrived). */
+  #dropStop(sessionId: string, stop: TaskStop): void {
+    const left = (this.#taskStops.get(sessionId) ?? []).filter((x) => x !== stop);
+    if (left.length) this.#taskStops.set(sessionId, left);
+    else this.#taskStops.delete(sessionId);
+    this.#saveControl(sessionId);
+  }
+
+  /**
+   * INTEGRITY_CASES `replay-task-stopped` (T-318): the report of a task this portal stopped is believed only for a stop_task it sent for
+   * that very task id to this session's current process, within TASK_STOP_MS; the stop is used up by it.
+   */
+  #stoppedByPortal(sessionId: string, taskId: string): boolean {
+    const now = this.#clock();
+    const stop = (this.#taskStops.get(sessionId) ?? []).find((x) => x.taskId === taskId && now - x.at >= 0 && now - x.at <= TASK_STOP_MS);
+    if (!stop) return false;
+    this.#dropStop(sessionId, stop);
+    return true;
   }
 
   /* ---------- Host process ---------- */
@@ -4443,6 +4478,11 @@ export class ChatController {
   #acceptReplay(sessionId: string, replay: NonNullable<ParsedLine['replay']>): boolean {
     if (replay.uuid && this.#chat.isMessage(sessionId, replay.uuid)) return true;
     if (replay.origin && HARNESS_ORIGINS.has(`${replay.origin.kind}/${replay.origin.producer ?? ''}`)) return true;
+    // The report of a task the portal stopped (T-318): Claude Code sets no producer on it; only for a stop sent here, used once.
+    if (replay.origin?.kind === 'task-notification' && replay.origin.producer === null && replay.taskStopped && this.#stoppedByPortal(sessionId, replay.taskStopped)) {
+      console.log(`[chat] ${shortId(sessionId)}: the report of task ${replay.taskStopped} that this portal stopped`);
+      return true;
+    }
     // A sub-agent's SendMessage to the main conversation, delivered: only with its cause in this process's stream (T-136).
     if (replay.origin?.kind === 'peer' && replay.peer && this.#peerCaused(sessionId, replay.peer)) {
       // Should Claude Code report that line's command later (not seen yet), its lifecycle is the harness's, like a T-99 turn.
@@ -4570,7 +4610,7 @@ export class ChatController {
 
   /**
    * The portal holds no state for this session's process (it restarted, or attaches to a process it did not launch): the state stored for
-   * THAT process comes back exactly (the expected mode and its flags, a pending Bypass request, the peer causes), and the resync window
+   * THAT process comes back exactly (the expected mode and its flags, a pending Bypass request, the peer causes, the stops sent), and the resync window
    * opens. A state stored for another process, or none (a row from before migration 820), is never applied: then the row's mode is the
    * expected one, as before. Bypass is expected after a reload only when the row recorded the entry too; otherwise it is unfinished.
    */
@@ -4582,6 +4622,7 @@ export class ChatController {
       : { expected: row?.mode ?? START_MODE, prePlan: null, enterPlan: false, exitPlan: false, reloaded: true, resyncUntil: this.#clock() + RESYNC_MS };
     this.#modes.set(sessionId, m);
     if (stored?.peers.length) this.#peerCauses.set(sessionId, stored.peers);
+    if (stored?.stops?.length) this.#taskStops.set(sessionId, stored.stops);
     if (stored) this.#controlSaved.set(sessionId, { proc: stored.proc, json: row!.control_state! });
     if (row && row.state !== 'ended' && row.process === 'live') {
       console.log(`[chat] ${shortId(sessionId)}: control state ${stored ? 'reloaded' : 'not stored for this process: the row\'s mode'} (expected ${m.expected}${stored?.mode.bypassPending ? ', a Bypass request pending' : ''})`);
@@ -4602,7 +4643,7 @@ export class ChatController {
       if (!row || row.state === 'ended') return;
       proc = controlProc(row);
     }
-    const json = controlJson(proc, { ...m, bypassPending: m.bypassPending ?? null }, this.#peerCauses.get(sessionId) ?? []);
+    const json = controlJson(proc, { ...m, bypassPending: m.bypassPending ?? null }, this.#peerCauses.get(sessionId) ?? [], this.#taskStops.get(sessionId) ?? []);
     if (saved?.json === json) return;
     this.#chat.patchSession(sessionId, { controlState: json });
     this.#controlSaved.set(sessionId, { proc, json });
@@ -5064,6 +5105,7 @@ export class ChatController {
     this.#thinkingSince.delete(sessionId);
     this.#modes.delete(sessionId);
     this.#peerCauses.delete(sessionId);
+    this.#taskStops.delete(sessionId);
     // The process is over: its control state with it (T-277 layer 2); the next process starts its own.
     this.#controlSaved.delete(sessionId);
     try {

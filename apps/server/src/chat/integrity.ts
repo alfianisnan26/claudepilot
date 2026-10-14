@@ -30,6 +30,27 @@ export const INTEGRITY_CASES: readonly IntegrityCase[] = [
     negative: 'any other producer (mcp, none), any other kind (channel), or no origin at all',
   },
   {
+    id: 'replay-task-stopped',
+    line:
+      'a replayed user line with origin {kind: "task-notification"} and NO producer whose text is exactly Claude Code\'s report of a task ' +
+      'the host stopped: <task-notification> <task-id>, optional <tool-use-id>, <status>killed</status>, <summary>Task "<description>" ' +
+      'was stopped by the user</summary> (TASK_STOPPED_LINE)',
+    rule:
+      'only when THIS portal sent stop_task for that very task id in this session, for the current process (a stop is dropped with ' +
+      'its process: #forget; stored with the control state of that process only), within TASK_STOP_MS before it; each stop is used ' +
+      'once; T-318',
+    evidence:
+      'Claude Code 2.1.296 against the stand-in API (T-318, 2026-10-14): a background Bash (task_type local_bash), then the host\'s ' +
+      'stop_task -> task_updated {status: killed} -> task_notification {status: stopped} -> the success reply; the report is queued ' +
+      'passive (it starts no turn) and arrives with the NEXT turn, after its system/init, as a user line {isReplay, origin: {kind: ' +
+      '"task-notification", runId}} with no command_lifecycle of its own. The CLI enqueues it without turnAttribution "inherit", so ' +
+      'producer "session-task" is never set (the T-149 harness ended a session on it: "origin task-notification")',
+    negative:
+      'the same line with no stop sent, a stop for another task id, a stop sent in another session, a stale stop (after the window, ' +
+      'from an earlier process, or used once already), a producer of any kind, and a task-notification of other content (another ' +
+      'status, extra text) even after the right stop',
+  },
+  {
     id: 'replay-peer',
     line: 'a replayed user line with origin {kind: "peer", senderTaskId, body}',
     rule:
@@ -205,6 +226,29 @@ export function sameAnswer(reply: ControlResponse, expect: ControlExpectation): 
   return REPLY_KEYS.some((shape) => keys.every((k) => shape.includes(k)));
 }
 
+/**
+ * How long after the portal's stop_task the report of that stopped task may arrive (INTEGRITY_CASES `replay-task-stopped`). Claude Code
+ * queues it passive: it waits for the next turn, which may come only when someone sends the next message, so the window is long; the
+ * stop is also bound to its process and used once.
+ */
+export const TASK_STOP_MS = 12 * 3_600_000;
+
+/** At most this many stops are remembered per session (the oldest go first). */
+export const TASK_STOPS_MAX = 16;
+
+/**
+ * The text of a stopped task's report, exactly as Claude Code 2.1.296 builds it for a stop the host asked for (a task with no owning
+ * sub-agent): the description is XML-escaped by Claude Code, so it holds no `<`. Anything more, less or else does not match.
+ */
+export const TASK_STOPPED_LINE =
+  /^<task-notification>\n<task-id>([A-Za-z0-9._:-]{1,128})<\/task-id>\n(?:<tool-use-id>[A-Za-z0-9_-]{1,128}<\/tool-use-id>\n)?<status>killed<\/status>\n<summary>Task "[^<\n]{0,500}" was stopped by the user<\/summary>\n<\/task-notification>$/;
+
+/** One stop_task the portal sent: the task and when (the integrity clock). */
+export interface TaskStop {
+  taskId: string;
+  at: number;
+}
+
 /** How long after a sub-agent's SendMessage was queued its peer line may arrive (observed: the same second). */
 export const PEER_CAUSE_MS = 120_000;
 
@@ -241,6 +285,8 @@ export interface StoredControl {
   proc: string;
   mode: StoredMode;
   peers: PeerCause[];
+  /** The stop_task requests this process was sent whose report has not arrived (T-318); absent when none. */
+  stops?: TaskStop[];
 }
 
 /** The process a stored state belongs to. */
@@ -249,10 +295,11 @@ export function controlProc(row: { claude_session_id?: string | null; id: string
 }
 
 /** The stored form; the peer causes are kept as the controller holds them (at most 32, digests). */
-export function controlJson(proc: string, mode: StoredMode, peers: readonly PeerCause[]): string {
+export function controlJson(proc: string, mode: StoredMode, peers: readonly PeerCause[], stops: readonly TaskStop[] = []): string {
   const m: StoredMode = { expected: mode.expected, prePlan: mode.prePlan, enterPlan: mode.enterPlan, exitPlan: mode.exitPlan, bypassPending: mode.bypassPending };
   const p = peers.slice(-32).map((c) => ({ toolUseId: c.toolUseId, taskId: c.taskId, digest: c.digest, at: c.at, queued: c.queued }));
-  return JSON.stringify({ v: 1, proc, mode: m, peers: p } satisfies StoredControl);
+  const t = stops.slice(-TASK_STOPS_MAX).map((x) => ({ taskId: x.taskId, at: x.at }));
+  return JSON.stringify({ v: 1, proc, mode: m, peers: p, ...(t.length ? { stops: t } : {}) } satisfies StoredControl);
 }
 
 const str = (v: unknown, max = 200): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
@@ -285,7 +332,18 @@ export function readControl(stored: string | null | undefined, proc: string): St
     if (!str(c.toolUseId) || !str(c.taskId) || typeof c.digest !== 'string' || !/^[0-9a-f]{64}$/.test(c.digest) || typeof c.at !== 'number' || !Number.isFinite(c.at) || typeof c.queued !== 'boolean') return null;
     peers.push({ toolUseId: c.toolUseId, taskId: c.taskId, digest: c.digest, at: c.at, queued: c.queued });
   }
-  return { v: 1, proc, mode: { expected: m.expected, prePlan: (m.prePlan as string | null) ?? null, enterPlan: m.enterPlan, exitPlan: m.exitPlan, bypassPending: (m.bypassPending as string | null) ?? null }, peers };
+  const stops: TaskStop[] = [];
+  if (o.stops !== undefined) {
+    if (!Array.isArray(o.stops) || o.stops.length > TASK_STOPS_MAX) return null;
+    for (const x of o.stops as unknown[]) {
+      if (!x || typeof x !== 'object') return null;
+      const t = x as Record<string, unknown>;
+      if (!str(t.taskId, 128) || !/^[A-Za-z0-9._:-]+$/.test(t.taskId) || typeof t.at !== 'number' || !Number.isFinite(t.at)) return null;
+      stops.push({ taskId: t.taskId, at: t.at });
+    }
+  }
+  const mode: StoredMode = { expected: m.expected, prePlan: (m.prePlan as string | null) ?? null, enterPlan: m.enterPlan, exitPlan: m.exitPlan, bypassPending: (m.bypassPending as string | null) ?? null };
+  return { v: 1, proc, mode, peers, ...(stops.length ? { stops } : {}) };
 }
 
 /** A digest of a control response as parsed (its id, outcome and body), so a second copy can be compared with the first. */
