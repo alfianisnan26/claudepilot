@@ -31,12 +31,14 @@ launch() {
   fi
   cd "$(dirname "$0")/../apps/server"
   # Its own session and no stdin or stdout of ours: the script (and a tool that waits for its output) must be able to end while it runs on.
+  # No other fd of ours either (3-9 closed): run under `flock /tmp/heavy.lock`, the server would keep the lock's fd and hold the pod's heavy
+  # lock for as long as it runs (T-159).
   # shellcheck disable=SC2086 # one VAR=value word per line of $passthru
   # shellcheck disable=SC2086 # $k8s: one VAR=value word each
   env -i "PATH=$PATH" "HOME=$dir/home" LANG=C.UTF-8 $k8s PORTAL_PORT="$port" \
     PORTAL_DATA_DIR="$dir/data" PORTAL_SERVER_CODE="$code" PORTAL_SECRET_KEY="$key" NODE_OPTIONS=--disable-warning=ExperimentalWarning \
     ${PORTAL_LOCAL_ENABLED:+"PORTAL_LOCAL_ENABLED=$PORTAL_LOCAL_ENABLED"} $passthru \
-    setsid nohup npx tsx src/index.ts >> "$dir/log" 2>&1 < /dev/null &
+    setsid nohup npx tsx src/index.ts >> "$dir/log" 2>&1 < /dev/null 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
   disown
   cd - >/dev/null
 }
