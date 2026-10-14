@@ -1013,7 +1013,10 @@ test('control state (T-277 layer 2 review note): a Bypass request that timed out
       s.controller.controlTimeoutMs = 40;
       if (how === 'write') s.ws.sendCode = 1;
       const entering = settle(s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' }));
-      if (how === 'timeout') assert.equal(stored(s)!.mode.bypassPending, (await s.take('set_permission_mode')).id, 'pending while it waits');
+      if (how === 'timeout') {
+        const ask = await s.take('set_permission_mode');
+        assert.equal(stored(s)!.mode.bypassPending, ask.id, 'pending while it waits');
+      }
       assert.notEqual(await entering, 'ok', how);
       assert.equal(stored(s)?.mode.bypassPending ?? null, null, `${how}: not pending any more`);
       assert.equal(s.controller.audit({ kind: 'bypass.entered' }).length, 0, how);
