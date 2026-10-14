@@ -102,11 +102,11 @@ ending that hit the Konfersi chat on 2026-10-13 is fixed (T-99), so that should 
 When the coordinator's machine cannot reach the portal (the tunnel is down or the name does not resolve), see the relay in
 `docs/dev-session.md` ("When the coordinator cannot reach the portal").
 
-## The factory engine (T-293, no sessions yet)
+## The factory engine (T-293; sessions only with --start)
 
 `docs/dev-sessions/factory.mjs` is engine v0 of design v2 layer 3 (`overhaul/token-economy-design.md` sections 3 and 4): orchestration as code.
-It PLANS, and with `--apply` it prepares, but it starts no session and calls no model (the Bypass lease is the owner's open decision; until
-then the orchestrator runs the slice through its Agent tool with the printed brief).
+It PLANS, and with `--apply` it prepares; it calls no model, and it starts a session only with `--start` (below; off by default, never
+Bypass). Without it the orchestrator runs the slice with the printed brief.
 `node docs/dev-sessions/factory.mjs (--tickets tickets.json | --portal [--apply]) [--wip 5] [--budget <requests>] [--stale-min 360] [--briefs] [--json]`
 reads ticket data passed in (a TicketList, TicketItems or TicketDetails) or, with `--portal`, from the portal (open and in-progress tickets,
 the ranked open ones whole) with the supervisor's auth path (`PORTAL_URL`, `PORTAL_SERVER_CODE`; the cookie stays in memory and is never
@@ -137,5 +137,24 @@ One round, for a supervisor hook or by hand: `node docs/dev-sessions/factory-rou
 RESUME, and prints one line each: `DISPATCH`, `RESUME`, `NEXT <ticket> <id> <step> <role>/<model>: <why>`, `LEARN <id>: would comment` with
 the ACTUAL text, and `EXCEPTION <ticket> <id>: <why>` for the coordinator. Dry by default; `--apply` writes only the DISPATCH comments
 (with their worktrees) and the RESUME markers, never an ACTUAL. Exit 0 after a round, 1 when the portal could not be read (one EXCEPTION
-line), 2 for usage. It is a separate script: `supervisor.mjs` does not call it yet.
-Not yet: starting the sessions (the Bypass decision), the supervisor wiring, writing the ACTUAL, audit rows of their own.
+line), 2 for usage. It is a separate script: `supervisor.mjs` does not call it, on purpose (an independent reviewer reads the engine before it
+runs unattended).
+
+**Starting the slice (`--start`, off by default; slice 4, D-49).** With `--apply --start --workspace <id> [--report-to <session>]` (both
+scripts) the engine starts each slice it dispatched as a worker session, never in Bypass, through the admin Portal MCP tools a person's
+automation already uses (`session_start`, `session_configure`, `session_send`: the same controller calls `session_spawn` makes; no new
+authz or approval path), with an admin token leased for the run (one hour, revoked at the end, never printed). In order, failing closed:
+the ticket is read again (the dispatch must be the latest, open, not started and not stale); `session_start` in the worktree folder with
+`agent` = the role and the ticket, without a prompt; `session_configure` mode `dontAsk` and the role's explicit model (an unconfirmed mode
+ends the session before it gets any instruction); the comment `FACTORY START <id> session=<sessionId> mode=dontAsk model=<model>` (the audit
+trail next to the DISPATCH); `session_send` with the rendered brief; one line to the `--report-to` session. A start that fails ends its
+session and writes `FACTORY END <id> failed: start (...)`. A dispatch is started once: a START marker, an ended or superseded dispatch, a
+branch or folder that exists (refused at `--apply`) or a dispatch past `--stale-min` is never started; a live session on the ticket titled
+with the dispatch id (the engine stopped between the start and its marker) is adopted, with an EXCEPTION line. Each round with `--start`
+also resumes the start of an open, fresh dispatch that has none, and watches the budget: a started slice's requests are its session's turns;
+at 150 percent of the size budget the session is interrupted, told to commit WIP and report, the dispatch ends with
+`FACTORY END <id> stopped: budget ...`, and the coordinator gets an EXCEPTION line (and `--report-to` one message). The worker is not a
+child of the orchestrator (the admin tools set no parent): it is not in its crew and cannot `session_message` it; its report is its final
+message, read with `session_get`.
+Not yet: the supervisor wiring (after the independent review), writing the ACTUAL, audit rows of their own (the portal's own audit rows
+of the session start and the comments are the trail today).

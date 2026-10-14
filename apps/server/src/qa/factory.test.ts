@@ -551,6 +551,257 @@ test('round CLI: without the sign-in code a usage error naming the variable; unk
   assert.ok(!down.stdout.includes(code) && !down.stderr.includes(code), 'the code is never printed');
 });
 
+/* ---------- slice 4: --start, the slice as a non-Bypass worker session ---------- */
+
+type Args = Record<string, unknown>;
+type Call = [string, Args];
+/** The admin Portal MCP tools the engine calls, in memory: session_start gives s-1, s-2...; configure takes the mode it is given. */
+function fakeMcp(over: Record<string, (a: Args) => unknown> = {}) {
+  const calls: Call[] = [];
+  let k = 0;
+  const modes = new Map<string, string>();
+  const base: Record<string, (a: Args) => unknown> = {
+    session_list: () => ({ sessions: [] }),
+    session_start: () => { const id = `s-${++k}`; modes.set(id, 'default'); return { session: { id, mode: 'default' } }; },
+    session_configure: (a) => { if (a.mode) modes.set(String(a.id), String(a.mode)); return { session: { id: a.id, mode: modes.get(String(a.id)) } }; },
+    session_send: () => ({ summary: 'sent' }),
+    session_end: () => ({}),
+    session_interrupt: () => ({}),
+    session_get: (a) => ({ session: { id: a.id, state: 'working', turns: 0 } }),
+  };
+  return {
+    calls,
+    names: () => calls.map(([n]) => n),
+    call: async (name: string, args: Args) => {
+      calls.push([name, args]);
+      const h = over[name] ?? base[name];
+      if (!h) throw new Error(`${name}: unknown`);
+      return h(args);
+    },
+  };
+}
+const WS = 'kubernetes/w';
+const ORCH = 'orch-1';
+const startWith = (portal: unknown, mcp: unknown, repo: string, o: Args = {}) =>
+  f.starter({ portal, mcp, workspace: WS, repo, template: TEMPLATE, tokenDiscipline: '1. one', session: ORCH, reportTo: ORCH, now: NOW, ...o });
+/** A ticket in progress whose dispatch F1 has a START marker for `sid`. */
+function started(sid = 's-7', min = 100) {
+  const s = slice();
+  s.t.comments = [say(min, s.t.comments[0]!.text), say(min - 1, `FACTORY START ${s.id} session=${sid} mode=dontAsk model=opus`)];
+  return s;
+}
+
+test('--start: after the worktree a non-Bypass worker session: started without a prompt, mode dontAsk and the role model first, the START marker, then the brief and one line to the orchestrator', async () => {
+  const { dir, repo, worktrees } = gitRepo();
+  try {
+    const t = ticket({ tags: ['rank-01'] }) as T;
+    const portal = fakePortal([t]);
+    const mcp = fakeMcp();
+    const plan = f.intake(await f.fetchTickets(portal), { worktrees, models: { implementer: 'opus' }, now: NOW });
+    const d = plan.dispatch[0];
+    const out = await f.applyPlan(plan, { portal, git: f.gitOps(repo), base: 'main', start: startWith(portal, mcp, repo) });
+    assert.deepEqual(out.results[0].start, { action: 'started', sessionId: 's-1' });
+    assert.deepEqual(out.exceptions, []);
+    assert.deepEqual(mcp.names(), ['session_list', 'session_start', 'session_configure', 'session_send', 'session_send']);
+    assert.deepEqual(mcp.calls[1]![1], { workspace_id: WS, folder: d.worktree, title: `${d.dispatchId} implementer`, agent: 'implementer', ticket_id: t.id }, 'no prompt at the start');
+    assert.deepEqual(mcp.calls[2]![1], { id: 's-1', mode: 'dontAsk', model: 'opus' });
+    assert.equal(mcp.calls[3]![1].id, 's-1');
+    assert.match(String(mcp.calls[3]![1].text), new RegExp(`^Ticket ${t.id}: .*\\nRole implementer, model opus\\.`));
+    assert.equal(mcp.calls[4]![1].id, ORCH);
+    assert.match(String(mcp.calls[4]![1].text), new RegExp(`^FACTORY: started ${d.dispatchId} \\(${t.id}\\) as session s-1: implementer/opus, mode dontAsk`));
+    // the audit trail: the DISPATCH comment and the START comment with the session id
+    assert.deepEqual(portal.writes.map(([, x]) => x), [f.dispatchMarker(d), `FACTORY START ${d.dispatchId} session=s-1 mode=dontAsk model=opus`]);
+    assert.ok(!/bypass/i.test(JSON.stringify(mcp.calls)), 'never Bypass');
+    // without --start nothing is started (the default)
+    const other = fakePortal([ticket({ tags: ['rank-01'] }) as T]);
+    const plain = await f.applyPlan(f.intake(await f.fetchTickets(other), { worktrees, models: { implementer: 'opus' } }), { portal: other, git: f.gitOps(repo), base: 'main' });
+    assert.equal(plain.results[0].action, 'dispatched');
+    assert.equal(plain.results[0].start, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--start double dispatch: a started dispatch, a ticket dispatched since the plan or a branch that exists is never started twice (negative twins)', async () => {
+  const { dir, repo, g, worktrees } = gitRepo();
+  try {
+    const t = ticket({ tags: ['rank-01'] }) as T;
+    const portal = fakePortal([t]);
+    const mcp = fakeMcp();
+    const start = startWith(portal, mcp, repo);
+    const plan = f.intake(await f.fetchTickets(portal), { worktrees, models: { implementer: 'opus' }, now: NOW });
+    await f.applyPlan(plan, { portal, git: f.gitOps(repo), base: 'main', start });
+    const count = () => mcp.names().filter((n) => n === 'session_start').length;
+    assert.equal(count(), 1);
+    // the same plan again (a second engine): skipped at apply, no session
+    const race = await f.applyPlan(plan, { portal, git: f.gitOps(repo), base: 'main', start });
+    assert.equal(race.results[0].action, 'skipped');
+    // the start called again for the same dispatch: its START marker says it runs
+    const again = await start(plan.dispatch[0]);
+    assert.deepEqual([again.action, again.reason], ['skipped', 'started already (session s-1)']);
+    // a round finds the started dispatch: no start, the budget is watched instead
+    const round = await r.runRound({ portal, now: NOW, models: MODELS, changed: () => [], apply: true, git: f.gitOps(repo), worktrees, start, watch: (raw: unknown) => f.watchBudget(raw, { portal, mcp }) });
+    assert.ok(!round.lines.some((l: string) => l.startsWith('START')));
+    assert.equal(count(), 1, 'one session in all');
+    // a branch that exists: refused before any comment or session
+    const b = ticket({ tags: ['rank-02'] }) as T;
+    const p2 = fakePortal([b]);
+    const m2 = fakeMcp();
+    const plan2 = f.intake(await f.fetchTickets(p2), { worktrees, models: { implementer: 'opus' } });
+    g('branch', plan2.dispatch[0].branch);
+    const refused = await f.applyPlan(plan2, { portal: p2, git: f.gitOps(repo), base: 'main', start: startWith(p2, m2, repo) });
+    assert.equal(refused.results[0].action, 'refused');
+    assert.deepEqual(m2.calls, []);
+    assert.deepEqual(p2.writes, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--start fails closed: an unconfirmed mode, a refused start or no model ends it with FACTORY END ... failed and an exception, and the brief is never sent', async () => {
+  const brief = 'Ticket x: brief';
+  for (const [name, over, why] of [
+    ['mode not confirmed', { session_configure: (a: Args) => ({ session: { id: a.id, mode: 'default' } }) }, /mode dontAsk not confirmed \(default\)/],
+    ['configure refused', { session_configure: () => { throw new Error('session_configure: CONFLICT refused'); } }, /session_configure: CONFLICT/],
+    ['send refused', { session_send: () => { throw new Error('session_send: CONFLICT busy'); } }, /brief not sent/],
+  ] as const) {
+    const s = slice();
+    const portal = fakePortal([s.t]);
+    const mcp = fakeMcp(over as Record<string, (a: Args) => unknown>);
+    const d = f.dispatchFrom(f.normalizeTicket(s.t), f.dispatchesOf(f.normalizeTicket(s.t))[0]);
+    const out = await f.startSlice(d, { portal, mcp, workspace: WS, folder: '/w', brief, reportTo: ORCH, now: NOW });
+    assert.equal(out.action, 'failed', name);
+    assert.match(out.reason, why, name);
+    assert.ok(mcp.calls.some(([n, a]) => n === 'session_end' && a.id === 's-1'), `${name}: the session is ended`);
+    assert.ok(!mcp.calls.some(([n, a]) => n === 'session_send' && a.id === ORCH), `${name}: no report of a start`);
+    if (name !== 'send refused') assert.ok(!mcp.calls.some(([n]) => n === 'session_send'), `${name}: no brief`);
+    assert.match(portal.writes.at(-1)![1], new RegExp(`^FACTORY END ${s.id} failed: start \\(`));
+    assert.equal(out.exceptions.length, 1);
+    assert.equal(f.dispatchesOf(f.normalizeTicket(portal.byId.get(s.t.id))).at(-1).ended.startsWith('failed'), true, `${name}: the dispatch is ended`);
+  }
+  // no model for the role: nothing is started at all
+  const s = slice();
+  const portal = fakePortal([s.t]);
+  const mcp = fakeMcp();
+  const d = { ...f.dispatchFrom(f.normalizeTicket(s.t), f.dispatchesOf(f.normalizeTicket(s.t))[0]), model: 'unset' };
+  const out = await f.startSlice(d, { portal, mcp, workspace: WS, folder: '/w', brief, now: NOW });
+  assert.deepEqual([out.action, out.reason], ['failed', 'no model for role implementer']);
+  assert.deepEqual(mcp.calls, []);
+});
+
+test('--start stale resume: an open dispatch without a session past --stale-min is never started (negative twin: a fresh one is started on the next round, once)', async () => {
+  const mk = (min: number) => {
+    const s = slice();
+    s.t.comments = [say(min, s.t.comments[0]!.text)];
+    return s;
+  };
+  const old = mk(400);
+  const fresh = mk(30);
+  const portal = fakePortal([old.t, fresh.t]);
+  const mcp = fakeMcp();
+  const start = startWith(portal, mcp, '/repo');
+  const d = f.dispatchFrom(f.normalizeTicket(old.t), f.dispatchesOf(f.normalizeTicket(old.t))[0]);
+  const direct = await start(d);
+  assert.equal(direct.action, 'refused');
+  assert.match(direct.exceptions[0].reason, /^stale dispatch .*: 400 min old \(limit 360\), not started$/);
+  assert.deepEqual(mcp.calls, []);
+  assert.deepEqual(portal.writes, []);
+  const git = { taken: () => 'unused', addWorktree: () => { throw new Error('unused'); } };
+  const one = await r.runRound({ portal, now: NOW, models: MODELS, changed: () => [], apply: true, git, start });
+  assert.ok(one.lines.includes(`START ${fresh.id} started session s-1`));
+  assert.ok(!one.lines.some((l: string) => l.startsWith(`START ${old.id}`)));
+  assert.equal(one.lines.filter((l: string) => l.startsWith(`EXCEPTION ${old.t.id}`)).length, 1, 'stale: one EXCEPTION line, from intake');
+  assert.deepEqual(portal.writes.map(([id]) => id), [fresh.t.id]);
+  await r.runRound({ portal, now: NOW, models: MODELS, changed: () => [], apply: true, git, start });
+  assert.equal(mcp.names().filter((n) => n === 'session_start').length, 1, 'the next round starts nothing again');
+  // a session started before its marker (the engine stopped in between) is adopted, not started twice
+  const lost = mk(20);
+  const p3 = fakePortal([lost.t]);
+  const m3 = fakeMcp({ session_list: () => ({ sessions: [{ id: 's-9', title: { untrusted_text: `${lost.id} implementer` }, state: 'idle' }] }) });
+  const adopted = await startWith(p3, m3, '/repo')(f.dispatchFrom(f.normalizeTicket(lost.t), f.dispatchesOf(f.normalizeTicket(lost.t))[0]));
+  assert.deepEqual([adopted.action, adopted.sessionId], ['adopted', 's-9']);
+  assert.deepEqual(m3.names(), ['session_list']);
+  assert.deepEqual(p3.writes, [[lost.t.id, `FACTORY START ${lost.id} session=s-9 mode=dontAsk model=opus`]]);
+});
+
+test('budget stop: at 150 percent of the size budget the session is interrupted, told to commit WIP and report, the dispatch ends and the coordinator is told (negative twins: over and within go on)', async () => {
+  const at = (turns: number, state = 'working') => fakeMcp({ session_get: (a) => ({ session: { id: a.id, state, turns } }) });
+  // within and over: only read
+  for (const [turns, action] of [[30, 'ok'], [61, 'over'], [89, 'over']] as const) {
+    const s = started();
+    const portal = fakePortal([s.t]);
+    const mcp = at(turns);
+    const w = await f.watchBudget(s.t, { portal, mcp, reportTo: ORCH });
+    assert.deepEqual([w.action, w.used], [action, turns]);
+    assert.deepEqual(mcp.names(), ['session_get']);
+    assert.deepEqual(portal.writes, []);
+  }
+  // an ended session is not stopped again
+  const e = started();
+  const ended = await f.watchBudget(e.t, { portal: fakePortal([e.t]), mcp: at(200, 'ended') });
+  assert.equal(ended.action, 'ended');
+  // at the stop (M: 60, stop at 90)
+  const s = started();
+  const portal = fakePortal([s.t]);
+  const mcp = at(90);
+  const w = await f.watchBudget(s.t, { portal, mcp, reportTo: ORCH });
+  assert.equal(w.action, 'stopped');
+  assert.deepEqual(mcp.names(), ['session_get', 'session_interrupt', 'session_send', 'session_send']);
+  assert.deepEqual(mcp.calls[2]![1], { id: 's-7', text: f.stopText(f.dispatchFrom(f.normalizeTicket(s.t), f.dispatchesOf(f.normalizeTicket(s.t))[0]), 90), priority: 'next' });
+  assert.match(String(mcp.calls[2]![1].text), /^FACTORY STOP .*commit and push what is done as WIP, then report/);
+  assert.equal(mcp.calls[3]![1].id, ORCH);
+  assert.deepEqual(portal.writes, [[s.t.id, `FACTORY END ${s.id} stopped: budget 90 of 60 requests (stop at 90)`]]);
+  assert.match(w.exceptions[0].reason, /^budget stop: .* at 90 of 60 requests \(stop at 90\)/);
+  // stopped means ended: no next step, and the next watch does nothing
+  const after = portal.byId.get(s.t.id);
+  assert.equal(f.nextStep(after).step, 'none');
+  assert.equal((await f.watchBudget(after, { portal, mcp: at(95) })).action, 'none');
+  assert.equal(portal.writes.length, 1);
+  // a round prints BUDGET over and the EXCEPTION at the stop
+  const over = started('s-8');
+  const stop = started('s-9');
+  const p2 = fakePortal([over.t, stop.t]);
+  const m2 = fakeMcp({ session_get: (a) => ({ session: { id: a.id, state: 'working', turns: a.id === 's-8' ? 70 : 120 } }) });
+  const round = await r.runRound({ portal: p2, now: NOW, models: MODELS, changed: () => [], apply: true, git: { taken: () => 'unused', addWorktree: () => { throw new Error('unused'); } }, watch: (raw: unknown) => f.watchBudget(raw, { portal: p2, mcp: m2 }) });
+  assert.ok(round.lines.includes(`BUDGET ${over.id} over: 70 of 60 requests`));
+  assert.ok(round.lines.some((l: string) => l.startsWith(`EXCEPTION ${stop.t.id} ${stop.id}: budget stop: `)));
+  // dry: no session is touched
+  const m3 = fakeMcp();
+  await r.runRound({ portal: fakePortal([started().t]), now: NOW, models: MODELS, changed: () => [], watch: (raw: unknown) => f.watchBudget(raw, { portal: p2, mcp: m3 }) });
+  assert.deepEqual(m3.calls, []);
+});
+
+test('mcpClient: the structuredContent, or an error with the code and message; the token is never in an error', async () => {
+  const secret = ['lease', String(NOW).slice(-6), 'x'].join('-');
+  const seen: string[] = [];
+  const answer = (body: unknown) => ({ headers: { get: () => 'sid-1' }, text: async () => `event: message\ndata: ${JSON.stringify(body)}\n`, status: 200 });
+  let reply: unknown = { jsonrpc: '2.0', id: 2, result: { structuredContent: { session: { id: 's-1' } } } };
+  const fetch = async (_url: string, init: { headers: Record<string, string> }) => {
+    seen.push(init.headers.authorization ?? '');
+    return answer(reply);
+  };
+  const mcp = f.mcpClient({ url: 'http://portal.invalid/', token: async () => secret, fetch });
+  assert.deepEqual(await mcp.call('session_start', {}), { session: { id: 's-1' } });
+  assert.ok(seen.every((h) => h === `Bearer ${secret}`));
+  reply = { jsonrpc: '2.0', id: 2, result: { isError: true, structuredContent: { error: { code: 'NOT_FOUND', message: 'No such session.' } } } };
+  await assert.rejects(mcp.call('session_get', { id: 'x' }), (e: Error) => e.message === 'session_get: NOT_FOUND No such session.' && !e.message.includes(secret));
+});
+
+test('--start is off by default and needs --apply and --workspace; supervisor.mjs does not run the engine', () => {
+  const env = { ...process.env, PORTAL_URL: 'http://127.0.0.1:9' };
+  delete env.PORTAL_SERVER_CODE;
+  for (const script of [FACTORY, ROUND]) {
+    const noApply = spawnSync(process.execPath, [script, ...(script === FACTORY ? ['--portal'] : []), '--start', '--workspace', WS], { encoding: 'utf8', env });
+    assert.equal(noApply.status, 2);
+    assert.match(noApply.stderr, /--start needs --apply/);
+    const noWs = spawnSync(process.execPath, [script, ...(script === FACTORY ? ['--portal'] : []), '--apply', '--start'], { encoding: 'utf8', env });
+    assert.equal(noWs.status, 2);
+    assert.match(noWs.stderr, /--start needs --workspace/);
+  }
+  const supervisor = readFileSync(new URL('../../../../docs/dev-sessions/supervisor.mjs', import.meta.url), 'utf8');
+  assert.ok(!/factory/i.test(supervisor), 'factory-round stays unwired until the independent review');
+});
+
 function pick(s: { step: string; dispatchId?: string; role?: string; model?: string }) {
   return { step: s.step, dispatchId: s.dispatchId, role: s.role, model: s.model };
 }

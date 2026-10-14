@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // The factory engine v0 (T-293, design v2 layer 3: docs/dev-sessions/overhaul/token-economy-design.md sections 3 and 4): orchestration as
-// code, judgment as agents. A sibling of supervisor.mjs. It STARTS NO SESSION and calls no model (the Bypass lease is the owner's open decision).
-//   node docs/dev-sessions/factory.mjs (--tickets <file.json|-> | --portal [--apply]) [--wip 5] [--budget <requests>] [--role implementer]
-//        [--session <id>] [--worktrees <dir>] [--workspace <id>] [--repo <dir>] [--base origin/integration] [--stale-min 360] [--json] [--briefs]
+// code, judgment as agents. A sibling of supervisor.mjs. It calls no model itself. Without --start it starts no session; with --start (OFF by
+// default, slice 4, D-49) it starts each slice it dispatched as a NON-Bypass worker session in mode dontAsk (startSlice below; never Bypass).
+//   node docs/dev-sessions/factory.mjs (--tickets <file.json|-> | --portal [--apply [--start --workspace <id> [--report-to <session>]]])
+//        [--wip 5] [--budget <requests>] [--role implementer] [--session <id>] [--worktrees <dir>] [--repo <dir>] [--base origin/integration]
+//        [--stale-min 360] [--json] [--briefs]
 // Without --apply it prints what it WOULD dispatch and writes nothing. --portal reads the open and in-progress tickets from the portal (the
 // ranked open ones whole) with the supervisor's auth path: PORTAL_URL and PORTAL_SERVER_CODE, a sign-in cookie in memory, never printed.
 // --apply (needs --portal) per planned dispatch reads the ticket again, refuses a branch or folder that exists, writes the FACTORY DISPATCH
@@ -28,10 +30,17 @@
 //   nextStep(t, opts)           what comes next for the open dispatch from its markers alone: wait, fix, review (sonnet on the diff; opus for
 //                               sensitive or unknown paths, reviewModel), verify, integrate, learn (with learnText: the ACTUAL comment and one
 //                               LESSON line), or an exception (out of order, conflict, rework limit, budget stop). stepMarker writes the markers.
-// One round for a supervisor hook: docs/dev-sessions/factory-round.mjs (prints NEXT and EXCEPTION lines; not wired into supervisor.mjs yet).
+//   startSlice(d, deps)         --start: the dispatched slice as a worker session through the admin Portal MCP tools (session_start, then
+//                               session_configure mode dontAsk + the role's model, then session_send with the brief): fail closed, once per
+//                               dispatch (FACTORY START marker; a live session titled with the dispatch id is adopted), never when stale.
+//   watchBudget(t, deps)        the started slice's requests (its session's turns): at 150 percent of the size budget it is interrupted,
+//                               told to commit WIP and report, and the dispatch ends (FACTORY END ... stopped: budget).
+// One round for a supervisor hook: docs/dev-sessions/factory-round.mjs (prints NEXT and EXCEPTION lines; NOT wired into supervisor.mjs: an
+// independent reviewer reads the engine before it runs unattended).
 //
 // State lives in the portal's tickets only, as comments whose first line is a marker the engine writes and reads back:
 //   FACTORY DISPATCH <dispatchId> role=<role> model=<model> size=<S|M|L> budget=<n> branch=<branch>
+//   FACTORY START <dispatchId> session=<sessionId> mode=dontAsk model=<model>      (--start: the session that runs the slice)
 //   FACTORY END <dispatchId> <outcome>
 //   FACTORY RESUME <dispatchId> run=<runId> state=<state> next=<review|fix>
 //   FACTORY REVIEW <dispatchId> verdict=<pass|changes>   FACTORY VERIFY <dispatchId> verdict=<pass|sendback>
@@ -42,6 +51,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tokenLease } from '../../tools/coordinator/tokenLease.mjs';
 
 export const SIZE_BUDGET = Object.freeze({ S: 25, M: 60, L: 120 });
 export const STOP_FACTOR = 1.5;
@@ -269,22 +279,30 @@ export function portalClient({ url = 'https://pilot.ai.isnan.me', code, fetch: f
     cookie = (res.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).join('; ');
     if (!cookie) throw new Error('sign-in gave no session');
   }
-  async function api(method, path, body) {
+  /** One call: { status, ok, data, error, json }; signs in again once on a 401. */
+  async function request(method, path, body) {
     for (let attempt = 1; ; attempt++) {
       if (!cookie) await login();
       const res = await f(`${base}${path}`, { method, headers: { 'content-type': 'application/json', origin: base, cookie }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       if (res.status === 401 && attempt < 2) { cookie = ''; continue; }
       let json = null;
       try { json = JSON.parse(await res.text()); } catch { /* a proxy page */ }
-      if (!res.ok || !json || json.error) throw new Error(`${method} ${path.split('?')[0]}: ${json?.error?.code ?? res.status}`);
-      return json.data;
+      return { status: res.status, ok: res.ok, data: json?.data, error: json?.error, json };
     }
+  }
+  async function api(method, path, body) {
+    const r = await request(method, path, body);
+    if (!r.ok || !r.json || r.json.error) throw new Error(`${method} ${path.split('?')[0]}: ${r.json?.error?.code ?? r.status}`);
+    return r.data;
   }
   const one = (id) => `/api/tickets/${encodeURIComponent(id)}`;
   return {
+    url: base,
     list: (query) => api('GET', `/api/tickets?${query}`),
     get: (id) => api('GET', one(id)),
     comment: (id, text) => api('POST', `${one(id)}/comments`, { text }),
+    /** `{ status, data, error }` without throwing: the shape tools/coordinator/tokenLease.mjs reads (the MCP admin token for --start). */
+    raw: async (method, path, body) => { const r = await request(method, path, body); return { status: r.status, data: r.data, error: r.error }; },
   };
 }
 
@@ -301,7 +319,7 @@ export async function fetchTickets(portal, { workspace } = {}) {
   return out;
 }
 
-/* ---------- Apply: the dispatch comment and the worktree (no session is started) ---------- */
+/* ---------- Apply: the dispatch comment and the worktree (a session only with --start) ---------- */
 
 /** Git in the main folder: whether the branch or the folder is taken, and `worktree add -b` (which refuses an existing branch itself). */
 export function gitOps(repo, run = (args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })) {
@@ -320,10 +338,11 @@ export function gitOps(repo, run = (args) => execFileSync('git', ['-C', repo, ..
 /**
  * Carry out a plan: per planned dispatch, read the ticket again (another run may have taken it), refuse a branch or folder that exists,
  * write the FACTORY DISPATCH comment (the state, in the portal only), then create the worktree and branch from `base`. A worktree that fails
- * after the comment gets a FACTORY END ... failed comment, so the ticket is free again and nothing is left half done. Starts no session.
+ * after the comment gets a FACTORY END ... failed comment, so the ticket is free again and nothing is left half done. Starts a session
+ * only when `start` is given (--start: startSlice for each dispatch whose worktree was made; its outcome is the result's `start`).
  * Returns { results: [{ ticket, dispatchId, action: dispatched|skipped|refused|failed, reason? }], exceptions } (the plan's and its own).
  */
-export async function applyPlan(plan, { portal, git, base = 'origin/integration' }) {
+export async function applyPlan(plan, { portal, git, base = 'origin/integration', start = null }) {
   const results = [];
   const exceptions = [...(plan.exceptions ?? [])];
   for (const d of plan.dispatch) {
@@ -344,15 +363,198 @@ export async function applyPlan(plan, { portal, git, base = 'origin/integration'
     await portal.comment(d.ticket, dispatchMarker(d));
     try {
       git.addWorktree(d.branch, d.worktree, base);
-      results.push({ ...r, action: 'dispatched', branch: d.branch, worktree: d.worktree });
     } catch (e) {
       const why = String(e?.stderr || e?.message || e).split('\n').find(Boolean)?.slice(0, 160) ?? 'error';
       await portal.comment(d.ticket, `FACTORY END ${d.dispatchId} failed: worktree (${why})`);
       results.push({ ...r, action: 'failed', reason: why });
       exceptions.push({ ticket: d.ticket, dispatchId: d.dispatchId, reason: `worktree failed: ${why}` });
+      continue;
     }
+    const done = { ...r, action: 'dispatched', branch: d.branch, worktree: d.worktree };
+    if (start) {
+      // --start: the slice as a worker session, right after its worktree (startSlice reads the ticket again and writes its own markers).
+      const s = await start(d);
+      done.start = { action: s.action, ...(s.sessionId ? { sessionId: s.sessionId } : {}), ...(s.reason ? { reason: s.reason } : {}) };
+      exceptions.push(...(s.exceptions ?? []));
+    }
+    results.push(done);
   }
   return { results, exceptions };
+}
+
+/* ---------- Start: the dispatched slice as a worker session (--start; off by default) ---------- */
+
+/** The mode every factory session runs in (D-49): only what the folder's allow list allows, the rest refused without waiting. Never Bypass. */
+export const START_MODE = 'dontAsk';
+/** session_send takes at most this many characters. */
+const SEND_MAX = 8000;
+
+/** The audit line of a start, next to its DISPATCH: which session runs the slice, in which mode and on which model. */
+export function startMarker(d, sessionId) {
+  return `FACTORY START ${d.dispatchId} session=${sessionId} mode=${START_MODE} model=${d.model}`;
+}
+
+/** dispatchId -> session id of every FACTORY START comment. */
+export function startsOf(t) {
+  const out = new Map();
+  for (const c of t.comments) {
+    const m = /^FACTORY START (\S+) session=(\S+)/.exec(c.text.split('\n', 1)[0].trim());
+    if (m) out.set(m[1], m[2]);
+  }
+  return out;
+}
+
+/** A planned dispatch rebuilt from its DISPATCH marker (to start or watch one a restarted engine finds open). */
+export function dispatchFrom(t, d, { worktrees = '../claudepilot.worktrees' } = {}) {
+  const size = d.size;
+  const b = SIZE_BUDGET[size] ? sliceBudget(size) : { budget: Number(d.budget) || 0, stopAt: 0 };
+  return { ticket: t.id, summary: t.summary, size, budget: Number(d.budget) || b.budget, stopAt: b.stopAt, role: d.role, model: d.model, branch: d.branch, worktree: `${worktrees}/${String(d.branch).replace(/\//g, '-')}`, dispatchId: d.id };
+}
+
+/**
+ * Portal MCP over HTTP, the admin tools a person's automation uses (the supervisor's path, T-258): `token()` gives the leased admin token
+ * (tools/coordinator/tokenLease.mjs). call(name, args) returns the tool's structuredContent, or throws `<name>: <code> <message>`; the token
+ * never appears in an error.
+ */
+export function mcpClient({ url, token, fetch: f = globalThis.fetch, label = 'factory-engine' }) {
+  const base = String(url).replace(/\/$/, '');
+  return {
+    async call(name, args) {
+      const headers = { authorization: `Bearer ${await token()}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
+      const init = await f(`${base}/mcp`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: label, version: '1' } } }) });
+      const sid = init.headers.get('mcp-session-id');
+      await init.text();
+      const res = await f(`${base}/mcp`, { method: 'POST', headers: { ...headers, ...(sid ? { 'mcp-session-id': sid } : {}) }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }) });
+      const raw = await res.text();
+      let out;
+      try {
+        const line = raw.split('\n').find((l) => l.startsWith('data: '));
+        out = JSON.parse(line ? line.slice(6) : raw);
+      } catch {
+        throw new Error(`${name}: no answer (${res.status})`);
+      }
+      if (out.error || out.result?.isError) {
+        const sc = out.result?.structuredContent;
+        const code = sc?.error?.code ?? out.error?.code ?? 'refused';
+        const msg = String(sc?.error?.message ?? out.error?.message ?? out.result?.content?.[0]?.text ?? '').split('\n')[0].slice(0, 160);
+        const e = new Error(`${name}: ${code}${msg ? ` ${msg}` : ''}`);
+        e.code = code;
+        throw e;
+      }
+      return out.result?.structuredContent ?? {};
+    },
+  };
+}
+
+/** What the worker is told when the engine stops it at 150 percent of its size budget. */
+export const stopText = (d, used) =>
+  `FACTORY STOP ${d.dispatchId}: the request budget is spent (${used} of ${d.budget}, stop at ${d.stopAt}). Stop now: commit and push what is done as WIP, then report in at most 25 lines what is done and what is left. Start nothing new.`;
+
+/**
+ * Start a dispatched slice as a non-Bypass worker session, through the admin Portal MCP tools a person's automation already uses
+ * (session_start, session_configure, session_send: the same controller calls as session_spawn's create, mode and first instruction; no new
+ * authz or approval path). In order, fail closed:
+ *   1. read the ticket again: the dispatch must be the ticket's latest, open, not started (no FACTORY START), and not stale (a dispatch past
+ *      staleMin is the coordinator's: never started late). A live session on the ticket titled with the dispatch id (a crash between the
+ *      start and its marker) is adopted, not started twice.
+ *   2. session_start: the worktree folder, agent = the role, ticket = the ticket, NO first prompt (the mode comes first).
+ *   3. session_configure: mode dontAsk and the role's explicit model; a mode the answer does not confirm ends the session (fail closed).
+ *   4. the FACTORY START comment (the audit trail: the session id next to the DISPATCH), then session_send with the rendered brief.
+ *   5. one line to the orchestrator session (reportTo), when one is given.
+ * A start that fails ends its session and writes FACTORY END <id> failed: start (...), so the dispatch is not left half done.
+ * deps: { portal, mcp, workspace, folder (absolute worktree), brief, reportTo?, now?, staleMin? }.
+ * Returns { action: started|adopted|skipped|refused|failed, sessionId?, reason?, exceptions }.
+ */
+export async function startSlice(d, { portal, mcp, workspace, folder, brief, reportTo = null, now, staleMin = DEFAULT_RESUME_MAX_AGE_MIN }) {
+  const exceptions = [];
+  const except = (reason) => exceptions.push({ ticket: d.ticket, dispatchId: d.dispatchId, reason });
+  const fresh = normalizeTicket(await portal.get(d.ticket));
+  const all = dispatchesOf(fresh);
+  const last = all[all.length - 1];
+  if (CLOSED.has(fresh.status)) return { action: 'skipped', reason: `ticket is ${fresh.status}`, exceptions };
+  if (!last || last.id !== d.dispatchId) return { action: 'skipped', reason: last ? `not the latest dispatch (${last.id})` : 'no dispatch', exceptions };
+  if (last.ended) return { action: 'skipped', reason: `dispatch ended (${last.ended})`, exceptions };
+  const started = startsOf(fresh).get(d.dispatchId);
+  if (started) return { action: 'skipped', reason: `started already (session ${started})`, sessionId: started, exceptions };
+  const age = ageMin(last.at, now);
+  if (age !== null && age > staleMin) {
+    except(`stale dispatch ${d.dispatchId}: ${age} min old (limit ${staleMin}), not started`);
+    return { action: 'refused', reason: 'stale', exceptions };
+  }
+  const fail = async (sessionId, why) => {
+    if (sessionId) await mcp.call('session_end', { id: sessionId }).catch(() => undefined);
+    await portal.comment(d.ticket, `FACTORY END ${d.dispatchId} failed: start (${why})`);
+    except(`start failed: ${why}`);
+    return { action: 'failed', reason: why, ...(sessionId ? { sessionId } : {}), exceptions };
+  };
+  if (!workspace) return fail(null, 'no workspace');
+  if (!d.model || d.model === 'unset') return fail(null, `no model for role ${d.role}`);
+  if (String(brief).length > SEND_MAX) return fail(null, `brief over ${SEND_MAX} characters`);
+  const title = `${d.dispatchId} ${d.role}`;
+  // A start whose marker was never written (the engine stopped between the two): the portal's own list says so.
+  let list = null;
+  try {
+    list = await mcp.call('session_list', { workspace_id: workspace, ticket_id: d.ticket });
+  } catch (e) {
+    return fail(null, String(e.message));
+  }
+  const prior = (list?.sessions ?? []).find((s) => String(typeof s.title === 'object' ? s.title?.untrusted_text : s.title).startsWith(`${d.dispatchId} `) && s.state !== 'ended');
+  if (prior) {
+    await portal.comment(d.ticket, startMarker(d, prior.id));
+    except(`adopted session ${prior.id}: started before its marker; check it got its brief`);
+    return { action: 'adopted', sessionId: prior.id, exceptions };
+  }
+  let sessionId = null;
+  try {
+    const s = await mcp.call('session_start', { workspace_id: workspace, folder, title, agent: d.role, ticket_id: d.ticket });
+    sessionId = s?.session?.id ?? null;
+    if (!sessionId) return fail(null, 'session_start gave no session');
+    const c = await mcp.call('session_configure', { id: sessionId, mode: START_MODE, model: d.model });
+    if (c?.session?.mode !== START_MODE) return fail(sessionId, `mode ${START_MODE} not confirmed (${c?.session?.mode ?? 'no answer'})`);
+  } catch (e) {
+    return fail(sessionId, String(e.message));
+  }
+  await portal.comment(d.ticket, startMarker(d, sessionId));
+  try {
+    await mcp.call('session_send', { id: sessionId, text: brief });
+  } catch (e) {
+    return fail(sessionId, `brief not sent: ${e.message}`);
+  }
+  if (reportTo) {
+    const line = `FACTORY: started ${d.dispatchId} (${d.ticket}) as session ${sessionId}: ${d.role}/${d.model}, mode ${START_MODE}, branch ${d.branch}, budget ${d.budget} requests (stop at ${d.stopAt}).`;
+    await mcp.call('session_send', { id: reportTo, text: line, priority: 'later' }).catch((e) => except(`report to ${reportTo} failed: ${e.message}`));
+  }
+  return { action: 'started', sessionId, exceptions };
+}
+
+/**
+ * The budget watch of a started slice (each round): its requests are the session's turns (the portal's own count). Under 150 percent of the
+ * size budget nothing is done ('ok', or 'over' past 100 percent: a line); AT 150 percent the engine stops it and reports: session_interrupt,
+ * the FACTORY STOP message (commit WIP, report), FACTORY END <id> stopped: budget, and one line to reportTo. Never continues silently.
+ * Returns { action: none|ok|over|stopped|ended, used?, exceptions }.
+ */
+export async function watchBudget(rawTicket, { portal, mcp, reportTo = null, worktrees }) {
+  const t = normalizeTicket(rawTicket);
+  const exceptions = [];
+  if (CLOSED.has(t.status)) return { action: 'none', exceptions };
+  const open = openDispatches(t);
+  const last = open[open.length - 1];
+  const sid = last ? startsOf(t).get(last.id) : null;
+  if (!sid || !(last.size in SIZE_BUDGET)) return { action: 'none', exceptions };
+  const d = dispatchFrom(t, last, { worktrees });
+  const got = await mcp.call('session_get', { id: sid });
+  if (got?.session?.state === 'ended') return { action: 'ended', exceptions };
+  const used = Number(got?.session?.turns);
+  if (!Number.isFinite(used)) return { action: 'none', exceptions };
+  const b = sliceBudget(d.size, used);
+  if (b.state !== 'stop') return { action: b.state, used, exceptions };
+  await mcp.call('session_interrupt', { id: sid }).catch(() => undefined);
+  await mcp.call('session_send', { id: sid, text: stopText(d, used), priority: 'next' }).catch(() => undefined);
+  await portal.comment(t.id, `FACTORY END ${d.dispatchId} stopped: budget ${used} of ${d.budget} requests (stop at ${b.stopAt})`);
+  const reason = `budget stop: ${d.dispatchId} at ${used} of ${d.budget} requests (stop at ${b.stopAt}); session ${sid} told to commit WIP and report`;
+  exceptions.push({ ticket: t.id, dispatchId: d.dispatchId, reason });
+  if (reportTo) await mcp.call('session_send', { id: reportTo, text: `FACTORY: ${reason}.`, priority: 'later' }).catch(() => undefined);
+  return { action: 'stopped', used, exceptions };
 }
 
 /* ---------- Resume on a CI event (pure) ---------- */
@@ -536,11 +738,21 @@ function parseArgs(argv) {
     else if (a === '--repo') o.repo = val();
     else if (a === '--base') o.base = val();
     else if (a === '--stale-min') o.staleMin = num(val(), a);
+    else if (a === '--start') o.start = true;
+    else if (a === '--report-to') o.reportTo = val();
     else throw new Error(`unknown argument ${a}`);
   }
   if (!o.tickets === !o.portal) throw new Error('name one source: --tickets <file.json|-> or --portal');
   if (o.apply && !o.portal) throw new Error('--apply needs --portal (the state is read from the portal right before it is written)');
+  if (o.start && !o.apply) throw new Error('--start needs --apply (a session is started only for a dispatch written in the same run)');
+  if (o.start && !o.workspace) throw new Error('--start needs --workspace (the workspace the worker session runs in)');
   return o;
+}
+
+/** The start step for applyPlan / a round: the brief rendered per dispatch, the folder absolute, the MCP client given. */
+export function starter({ portal, mcp, workspace, repo, template, tokenDiscipline, session, reportTo = null, now, staleMin }) {
+  return (d) =>
+    startSlice(d, { portal, mcp, workspace, folder: resolve(repo, d.worktree), brief: renderBrief(template, briefVars(d, { session, tokenDiscipline })), reportTo, now, staleMin });
 }
 
 async function main() {
@@ -548,7 +760,7 @@ async function main() {
   try {
     o = parseArgs(process.argv.slice(2));
   } catch (e) {
-    process.stderr.write(`factory: ${e.message}\nusage: factory.mjs (--tickets <file.json|-> | --portal [--apply]) [--wip N] [--budget N] [--role R] [--session ID] [--worktrees DIR] [--workspace W] [--repo DIR] [--base REF] [--stale-min N] [--json] [--briefs]\n`);
+    process.stderr.write(`factory: ${e.message}\nusage: factory.mjs (--tickets <file.json|-> | --portal [--apply [--start --workspace W [--report-to SESSION]]]) [--wip N] [--budget N] [--role R] [--session ID] [--worktrees DIR] [--workspace W] [--repo DIR] [--base REF] [--stale-min N] [--json] [--briefs]\n`);
     process.exit(2);
   }
   const here = dirname(fileURLToPath(import.meta.url));
@@ -574,11 +786,24 @@ async function main() {
   const tokenDiscipline = tokenRules(readFileSync(join(here, 'token-discipline.md'), 'utf8'));
   const session = o.session ?? process.env.PILOT_SESSION ?? 'unset';
   const briefs = o.briefs ? plan.dispatch.map((d) => ({ dispatchId: d.dispatchId, marker: dispatchMarker(d), brief: renderBrief(template, briefVars(d, { session, tokenDiscipline })) })) : [];
-  const applied = o.apply ? await applyPlan(plan, { portal, git: gitOps(o.repo ?? repo), base: o.base }) : null;
+  // --start: an admin Portal MCP token leased for this run only (1 hour, revoked at the end), held in memory and never printed.
+  const lease = o.start ? tokenLease({ api: portal.raw, label: 'factory-engine' }) : null;
+  const start = lease
+    ? starter({ portal, mcp: mcpClient({ url: portal.url, token: lease.get }), workspace: o.workspace, repo: o.repo ?? repo, template, tokenDiscipline, session, reportTo: o.reportTo ?? null, now: Date.now(), staleMin: o.staleMin })
+    : null;
+  let applied = null;
+  try {
+    applied = o.apply ? await applyPlan(plan, { portal, git: gitOps(o.repo ?? repo), base: o.base, start }) : null;
+  } finally {
+    await lease?.revoke();
+  }
   if (o.json) process.stdout.write(`${JSON.stringify({ ...plan, briefs, ...(applied ? { applied } : {}) }, null, 2)}\n`);
   else if (applied) {
-    process.stdout.write(`${formatPlan({ ...plan, exceptions: applied.exceptions }, 'apply')}\n`);
-    for (const r of applied.results) process.stdout.write(`  ${r.action} ${r.dispatchId}${r.reason ? `: ${r.reason}` : ` ${r.branch} ${r.worktree}`}\n`);
+    process.stdout.write(`${formatPlan({ ...plan, exceptions: applied.exceptions }, o.start ? 'apply, start' : 'apply')}\n`);
+    for (const r of applied.results) {
+      process.stdout.write(`  ${r.action} ${r.dispatchId}${r.reason ? `: ${r.reason}` : ` ${r.branch} ${r.worktree}`}\n`);
+      if (r.start) process.stdout.write(`    start ${r.start.action}${r.start.sessionId ? ` session ${r.start.sessionId}` : ''}${r.start.reason ? `: ${r.start.reason}` : ''}\n`);
+    }
     for (const b of briefs) if (applied.results.some((r) => r.dispatchId === b.dispatchId && r.action === 'dispatched')) process.stdout.write(`\n--- ${b.dispatchId}: brief\n${b.brief}`);
   } else {
     process.stdout.write(`${formatPlan(plan)}\n`);
