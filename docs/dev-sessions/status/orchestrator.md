@@ -1,3 +1,14 @@
+# ORCHESTRATOR CHAT 75f044fb (continues 5802dfa4), 2026-10-14 ~21:40 UTC
+
+- Run 29 PASSED: main 26c4630 "deploy: portal 2026.10.14-9"; Argo CD Synced/Healthy on 26c4630; the portal pod runs image portal:2026.10.14-9 (scripts/k3s-status.sh). integration d89d370 has the release merge. (ci_run_get from this chat says NOT_FOUND: an agent sees only the runs of its own branch or ticket; the evidence is git and the cluster.)
+- Verifier 2005bc7f belonged to chat 5802dfa4: not in this chat's family, its reply can't be read (NOT_FOUND). Replaced by verifier 0f4f96a6 (sonnet, auto, dontAsk) for T-321 and T-312.
+- Verdicts NOT posted on tickets: they are unassigned and ticket_comment refuses them (known gap T-214; ticket_update assignee me says "claim with ticket_claim_next"). Verdicts of record, until T-214 lands: T-324, T-297 PASS WITH GAPS (stable 20/20, fix not shown to matter); T-302, T-309, T-322, T-317, T-320 PASS WITH GAPS; T-315 PASS (design only, owner questions).
+- T-328 fixed by me (83b2458, supervisor.mjs line 3 says outside the pod per D-14; nothing else in the file repeats the claim; node --check ok).
+- In flight: implementer 154185a0 (T-329, opus, worktree dev/t-329-1); verifier 0f4f96a6 (T-321, T-312).
+- Next: their reports; integrate dev/t-329-1 in a batch with ONE background gate-job; queue item 2 onward (T-313, T-314, T-293 slice, T-306, T-149 leftovers).
+
+---
+
 # HAND-OVER FROM CHAT 5802dfa4 (fadlilah), 2026-10-14 ~21:25 UTC. READ THIS FIRST. The older log of the day follows below the line "OLDER LOG".
 
 
