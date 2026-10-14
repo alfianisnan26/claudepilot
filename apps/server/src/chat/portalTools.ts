@@ -3,6 +3,7 @@ import { AppError } from '@isnanme/core';
 import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, CHAT_SESSION_TITLE_MAX, sessionRef, workspaceRef, type ChatControl, type ChatPermissionMode, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
 import { actorOfPrincipal, requireCan } from '../authz/seam.js';
 import { fullInput } from '../portalmcp/compact.js';
+import { costFields } from '../portalmcp/tools/common.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { SPAWN_CLAUDE_HELP, WORKER_REPORTS, type SpawnClaudeWhy, type WorkerReport } from './agents.js';
 
@@ -294,7 +295,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         asleep: s.process === 'asleep',
         waiting_for_a_person: s.waiting > 0,
         turns: s.turns,
-        cost_usd: Math.round(s.costUsd * 10_000) / 10_000,
+        ...costFields(s),
         branch: s.worktree?.branch ?? null,
         // The short form (T-282) leaves out the folder and keeps the head of the reply.
         ...(args.full ? { folder: s.cwd } : {}),

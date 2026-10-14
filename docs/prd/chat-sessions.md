@@ -328,6 +328,15 @@ In the portal database ([Pools foundation](foundation-pools.md) §4); redacted (
   per-model tokens and cost against `usage_baseline` (after a resume, against the restored totals; a
   decrease counts as a reset) and hands only deltas to Monitoring's `usage_minutes` (source `chat`)
   and Settings' session total.
+- A running turn's cost (T-343): `total_cost_usd` arrives only with the turn's `result`, and a crew
+  worker may do its whole brief in one turn. Until then the controller adds up the turn's API calls
+  from the stream (each `assistant` line's `message.usage`, a sub-agent's too, the main call's final
+  output from `message_delta`; one call counted once, at its largest counts) times the model's list
+  price from the lab's one price table (`lab/prices.ts`). It lives in memory only and is shown as
+  `turnCostEstimateUsd` on the session (on top of `costUsd`; null when a call's model has no known
+  price: "unavailable", never a guess), `cost_usd` plus `cost_basis: estimate | unavailable` in
+  `session_get`, `session_list` and `session_family`, and "≈ $x" on the session row. The `result`
+  replaces it; a turn cut off without one keeps the stored total.
 - The persona revision in effect is the first launch's until a `compact_boundary`, because a resume
   keeps the recorded system prompt ([Persona](persona-pool.md) §10.3).
 - Files live in `<dataDir>/chat-blobs/<sha256>` (0700, files 0600), served only to a chat that links them. A chat may keep 500 MB and the portal 10 GB (`PORTAL_CHAT_SESSION_QUOTA_MB`, `PORTAL_CHAT_BLOB_QUOTA_MB`); they are kept 90 days after the chat's last activity (FR42), unlinked ones are swept after a day, and a deleted chat takes its files and its staged folder in the workspace with it. Backups carry the database (which files a chat had, their names and sizes), not the blob store's bytes.

@@ -25,6 +25,27 @@ export interface ModelTotals {
   costUsd: number;
 }
 
+/** T-343: one API call's tokens by kind, as a stream line reports them (see {@link ParsedLine.spend}). */
+export interface CallSpend {
+  messageId: string | null;
+  model: string | null;
+  /** True for a sub-agent's call (its line has a parent_tool_use_id). */
+  agent: boolean;
+  input: number;
+  cacheRead: number;
+  cacheWrite5m: number;
+  cacheWrite1h: number;
+  output: number;
+}
+
+/** The tokens of an API `usage` object by kind, or null when it counts none. Cache writes split by lifetime when the line says so. */
+function callSpend(usage: Record<string, unknown>, base: Pick<CallSpend, 'messageId' | 'model' | 'agent'>): CallSpend | null {
+  const write = tokens(usage.cache_creation_input_tokens);
+  const oneHour = Math.min(write, tokens(asObj(usage.cache_creation)?.ephemeral_1h_input_tokens));
+  const s: CallSpend = { ...base, input: tokens(usage.input_tokens), cacheRead: tokens(usage.cache_read_input_tokens), cacheWrite5m: write - oneHour, cacheWrite1h: oneHour, output: tokens(usage.output_tokens) };
+  return s.input + s.cacheRead + write + s.output > 0 ? s : null;
+}
+
 export type StoredEvent = Omit<ChatEvent, 'seq' | 'at' | 'parentToolUseId'> & {
   /** For `result`: each model's running totals, so the controller can tell what this turn used. */
   modelTotals?: ModelTotals[];
@@ -111,6 +132,12 @@ export interface ParsedLine {
    * turn is the last call's, not the turn's sum, which adds up every call.
    */
   mainUsage?: { messageId: string | null; input?: number; output?: number };
+  /**
+   * T-343: one API call's tokens by kind, main thread or sub-agent, for the running turn's cost estimate (turnCost.ts). Claude Code
+   * repeats a call's usage on each of its lines (output growing; the main thread's final count on `message_delta`), so the controller
+   * keeps the largest per message id. `model` is what answered (null when the line does not say: the main thread's then).
+   */
+  spend?: CallSpend;
 
   /* What the integrity checks (PRD §10.4) look at. */
 
@@ -407,9 +434,14 @@ function parseStreamEvent(obj: Record<string, unknown>): ParsedLine {
     case 'message_stop':
       return { stored: [], blockEdge: { agentLabel } };
     case 'message_delta': {
-      const output = asNum(asObj(event?.usage)?.output_tokens);
+      const usage = asObj(event?.usage);
+      const output = asNum(usage?.output_tokens);
       if (agentLabel || output === null) return { stored: [] };
-      return { stored: [], mainUsage: { messageId: asStr(obj.api_message_id), output: tokens(output) } };
+      const messageId = asStr(obj.api_message_id);
+      const out: ParsedLine = { stored: [], mainUsage: { messageId, output: tokens(output) } };
+      const spend = usage ? callSpend(usage, { messageId, model: null, agent: false }) : null;
+      if (spend) out.spend = spend;
+      return out;
     }
     default:
       return { stored: [] };
@@ -493,6 +525,9 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
     const input = tokens(usage.input_tokens) + tokens(usage.cache_read_input_tokens) + tokens(usage.cache_creation_input_tokens);
     if (input > 0) out.mainUsage = { messageId: asStr(asObj(obj.message)?.id), input, output: tokens(usage.output_tokens) };
   }
+  // T-343: every call costs, a sub-agent's too (the result's total counts them); a `<synthetic>` line has no model and no tokens.
+  const spend = usage ? callSpend(usage, { messageId: asStr(asObj(obj.message)?.id), model: modelId(asObj(obj.message)?.model), agent: agentLabel !== null }) : null;
+  if (spend) out.spend = spend;
   return out;
 }
 

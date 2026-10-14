@@ -1,5 +1,5 @@
 import { Badge, cn, Menu, Spinner, type MenuItem } from '@isnanme/ui';
-import { workspaceLabel, type ChatSession, type ListGroupBy, type ListRow, type PersonaIdentity } from '@portal/contracts';
+import { sessionCost, workspaceLabel, type ChatSession, type ListGroupBy, type ListRow, type PersonaIdentity } from '@portal/contracts';
 import {
   Archive,
   ArchiveRestore,
@@ -144,7 +144,9 @@ export function SessionRow({
         </span>
       ),
     });
-  if (s.costUsd > 0) who.push({ key: 'cost', node: <span className="shrink-0">{formatUsd(s.costUsd)}</span> });
+  // T-343: a running turn's cost is an estimate (≈) until its result; a model without a price adds nothing (unavailable, never a guess).
+  const cost = sessionCost(s);
+  if (cost.usd > 0) who.push({ key: 'cost', node: <span className="shrink-0">{cost.basis === 'estimate' ? `≈ ${formatUsd(cost.usd)}` : formatUsd(cost.usd)}</span> });
   who.push({
     key: 'time',
     node: (
