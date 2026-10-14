@@ -2,7 +2,7 @@
 // in memory. Nothing here runs a workspace or contacts anyone.
 
 import { AppError } from '@isnanme/core';
-import type { ChatRequest, ChatSession, NotifyEvent } from '@portal/contracts';
+import type { ChatRequest, ChatSession, CreateChatSessionRequest, NotifyEvent } from '@portal/contracts';
 import { fakeClock } from '../autotransfer/testkit.js';
 import { FakeChat, fakeOwner, freshStore, session } from '../notify/testkit.js';
 import { PlatformAudit } from '../platform/audit.js';
@@ -46,6 +46,29 @@ export class KgChat extends FakeChat implements KeepGoingChatPort {
     if (this.failResume) throw new AppError('SERVICE_UNAVAILABLE', this.failResume);
     this.patch(id, { state: 'idle', process: 'live', endedReason: null });
   }
+  /** Slice 2: recover in place. `recoverError` makes it refuse (or fail) instead. */
+  readonly recovered: string[] = [];
+  recoverError: Error | null = null;
+  async recover(id: string, _opts?: unknown): Promise<void> {
+    this.recovered.push(id);
+    if (this.recoverError) throw this.recoverError;
+    this.patch(id, { state: 'interrupted', process: 'gone', endedReason: null, endedFor: null });
+  }
+  /** Slice 2: the chats started to continue an ended one, and what each was made from. `failCreate`: the start is refused with that code. */
+  readonly started: { id: string; from: string }[] = [];
+  failCreate: string | null = null;
+  async continueChat(old: ChatSession): Promise<ChatSession> {
+    if (this.failCreate) throw new AppError(this.failCreate as never, 'refused');
+    const id = `${old.id}-n${this.started.length + 1}`;
+    this.started.push({ id, from: old.id });
+    return this.put(id, { state: 'idle', process: 'live', continuedFrom: old.id, workspaceId: old.workspaceId, cwd: old.cwd, title: old.title, ticketId: old.ticketId, claudeId: old.claudeId, bypassCapable: false, mode: 'default', endedReason: null, endedFor: null });
+  }
+  /** The controller's create, as the module wires it (only to continue an ended chat). */
+  readonly created: { req: Partial<CreateChatSessionRequest>; actor: string }[] = [];
+  async create(req: Partial<CreateChatSessionRequest>, opts: { actor: string }): Promise<ChatSession> {
+    this.created.push({ req, actor: opts.actor });
+    return this.continueChat(this.get(req.continuedFrom!)!);
+  }
   /** The controller's control, as the module wires it (`resume` only). */
   async control(id: string, op: 'resume'): Promise<void> {
     if (op === 'resume') return this.resume(id);
@@ -73,7 +96,7 @@ export class KgChat extends FakeChat implements KeepGoingChatPort {
 }
 
 /** Tickets in memory: what was made and commented, and which are open. */
-export function fakeTickets(): KeepGoingTicketPort & { made: { id: string; summary: string; description: string; tags: string[]; priority: string; type: string }[]; comments: { id: string; text: string }[]; close(id: string): void } {
+export function fakeTickets(): KeepGoingTicketPort & { made: { id: string; summary: string; description: string; tags: string[]; priority: string; type: string }[]; comments: { id: string; text: string }[]; close(id: string): void; isClosed(id: string): boolean } {
   const made: { id: string; summary: string; description: string; tags: string[]; priority: string; type: string }[] = [];
   const comments: { id: string; text: string }[] = [];
   const closed = new Set<string>();
@@ -87,6 +110,7 @@ export function fakeTickets(): KeepGoingTicketPort & { made: { id: string; summa
     },
     comment: (id, text) => void comments.push({ id, text }),
     isOpen: (id) => made.some((t) => t.id === id) && !closed.has(id),
+    isClosed: (id) => closed.has(id),
     close: (id) => void closed.add(id),
   };
 }
@@ -109,12 +133,13 @@ export async function rig(opts: { store?: Store; clock?: Clock; chat?: KgChat; s
   const settings = opts.settings ?? settingsMap();
   const tickets = opts.tickets ?? fakeTickets();
   const changed: string[] = [];
-  const engine = new KeepGoingEngine({ chat, owner, clock, store: kg, settings, bus, audit, tickets, random: () => 0, changed: (id) => void changed.push(id) });
+  const published: number[] = [];
+  const engine = new KeepGoingEngine({ chat, owner, clock, store: kg, settings, bus, audit, tickets, random: () => 0, changed: (id) => void changed.push(id), publish: () => void published.push(clock.now()) });
   /** Moves the clock on by `min` minutes and runs one round. */
   const after = async (min: number) => {
     clock.set(clock.now() + min * 60_000);
     return engine.round();
   };
   const on = (id: string, patch: Record<string, unknown> = {}) => engine.set(id, 'u_a', 'user:u_a', { enabled: true, ...patch });
-  return { store, clock, chat, owner, kg, audit, auditRows: (kind?: string) => audit.list({ kind }, null), emitted, settings, tickets, engine, after, on, changed };
+  return { store, clock, chat, owner, kg, audit, auditRows: (kind?: string) => audit.list({ kind }, null), emitted, settings, tickets, engine, after, on, changed, published };
 }

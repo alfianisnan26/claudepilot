@@ -1,16 +1,20 @@
-// The Keep going sweep (T-259 slice 1; T-104 item 2, T-108 item 1): the watchdog INSIDE the portal, so it does not stop when somebody's
-// machine or network does. A deterministic loop, every 60 seconds: the chats whose policy is on and that are due (their next look is stored
-// in SQLite, jittered), at most 100 per round, ONE decision each (`decide`), acted on here: a nudge (the continuation prompt, priority
-// `later`, as the portal), a wake (the existing resume path), a question answered "decide yourself", or a report (one notification
+// The Keep going sweep (T-259 slices 1 and 2; T-104 item 2, T-108 item 1, T-257): the watchdog INSIDE the portal, so it does not stop when
+// somebody's machine or network does. A deterministic loop, every 60 seconds: the chats whose policy is on and that are due (their next look
+// is stored in SQLite, jittered), at most 100 per round, ONE decision each (`decide`), acted on here: a nudge (the continuation prompt,
+// priority `later`, as the portal), a wake (the existing resume path), a question answered "decide yourself", an ended chat recovered in
+// place (T-136, as an agent) or continued by a new chat (`continuedFrom`; the policy goes with it), or a report (one notification
 // `keepgoing_attention` and one ticket per chat and cause, not repeated while the cause stands). A tool approval is NEVER answered and Bypass
-// is NEVER entered. Every action is one trail row (`keepgoing_events`) and one platform audit row, with the reason; never message text.
+// is NEVER entered: a chat started again is not bypass-capable (only a person's opt-in makes one) and the trail says so. Every action is one
+// trail row (`keepgoing_events`) and one platform audit row, with the reason; never message text.
 //
 // It acts for the chat's OWNER and re-checks, every time, that the owner is an enabled user who may operate the chat. The kill switch
 // `keepgoing.enabled` stops every round at once. A portal restart resumes from the stored state: the next due times, the idle period already
 // nudged, a continue owed after a wake, the back-off and the reports that stand.
 
 import { randomUUID } from 'node:crypto';
+import { isAppError } from '@isnanme/core';
 import {
+  CHAT_RECOVER_PAUSED,
   KEEPGOING_ACTOR,
   KEEPGOING_CAUSE_TEXT,
   KEEPGOING_CONSTANTS as C,
@@ -26,12 +30,15 @@ import {
   type KeepGoingAction,
   type KeepGoingActionKind,
   type KeepGoingCause,
+  type KeepGoingChat,
+  type KeepGoingList,
+  type KeepGoingRestartClass,
 } from '@portal/contracts';
 import { redact } from '../chat/redact.js';
 import type { ClockPort, OwnerPort } from '../autotransfer/ports.js';
 import { cleanDetail, type NotifyBus } from '../notify/bus.js';
 import type { AuditInput } from '../platform/audit.js';
-import { decide, type Decision } from './decide.js';
+import { closedByPerson, decide, restartClass, type Decision } from './decide.js';
 import { keepGoingOn, type KeepGoingSettingsReader } from './settings.js';
 import type { KeepGoingStore, PolicyRow } from './store.js';
 
@@ -48,6 +55,13 @@ export interface KeepGoingChatPort {
   respond(id: string, requestId: string, decision: 'deny', opts: { note: string; actor: string }): Promise<void>;
   /** The existing wake path: `control(id, 'resume')` relaunches an interrupted or sleeping chat on its conversation. */
   resume(id: string): Promise<void>;
+  /** Slice 2: recover an integrity ending in place (`recover(id, { by: 'agent' })`: the portal's refusals, cap and pause apply). */
+  recover(id: string): Promise<void>;
+  /**
+   * Slice 2: a new chat that continues an ended one (`create` with `continuedFrom`, as `portal:keepgoing`): the same workspace, folder,
+   * Claude, title and ticket. Never bypass-capable (FR20: only a person's own opt-in). Its process starts in the background.
+   */
+  continueChat(ended: ChatSession): Promise<ChatSession>;
 }
 
 /** Opening and commenting tickets as the portal itself (tickets' `system` caller). */
@@ -55,6 +69,8 @@ export interface KeepGoingTicketPort {
   create(req: { type: 'bug'; priority: 'high'; tags: string[]; summary: string; description: string; workspaceId: string | null }): { id: string };
   comment(id: string, text: string): void;
   isOpen(id: string): boolean;
+  /** A ticket that exists and is closed (an unknown one is not). */
+  isClosed?(id: string): boolean;
 }
 
 export interface KeepGoingDeps {
@@ -70,6 +86,8 @@ export interface KeepGoingDeps {
   random?: () => number;
   /** A chat's payload changed (its counts, its last action): the controller tells its tabs. */
   changed?: (sessionId: string) => void;
+  /** The Home card's live topic `keepgoing`: an action, or a watched chat's state changed. */
+  publish?: () => void;
 }
 
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -78,6 +96,9 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…`
 /** A title or a reason as it may appear in a ticket: one line, redacted, clipped. */
 const line = (s: string | null | undefined, n: number) => clip(redact(String(s ?? '')).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim(), n);
 const hhmm = (at: string) => `${at.slice(11, 16)} UTC`;
+const short = (id: string) => id.slice(0, 8);
+/** The newest first, ids at most this far back over `continuedFrom` (cycle safe). */
+const LINEAGE_MAX = 50;
 const VALID_WORKSPACE = /^[a-z0-9-]+\/[A-Za-z0-9._-]+$/;
 
 /** The continuation prompt with its placeholders filled. */
@@ -85,12 +106,31 @@ export function renderPrompt(p: Pick<ChatKeepGoingPolicy, 'prompt' | 'statusFile
   return (p.prompt ?? KEEPGOING_DEFAULT_PROMPT).replaceAll('{status}', p.statusFile ?? KEEPGOING_DEFAULT_STATUS_FILE).replaceAll('{ticket}', s.ticketId ?? 'your ticket');
 }
 
+/**
+ * The first message of a chat started again (slice 2): which chat it continues and why that one ended (redacted, one line), what is gone,
+ * then the policy's own prompt (the brief the person set, its status file, its ticket). The supervisor's continuation kickoff, generalised.
+ */
+export function continuationBrief(p: Pick<ChatKeepGoingPolicy, 'prompt' | 'statusFile'>, ended: Pick<ChatSession, 'id' | 'endedReason' | 'ticketId'>): string {
+  return [
+    `This chat continues the chat ${ended.id}, which ended (${line(ended.endedReason ?? 'no reason recorded', 160)}); the portal's Keep going started it again in the same folder.`,
+    'The sub-agents and background tasks of the old chat are gone: look at git worktree list and git status in each worktree for work that is not merged, keep what is good, and go on.',
+    '',
+    renderPrompt(p, ended),
+  ].join('\n');
+}
+
+/** The state as a list shows it. */
+const listState = (s: ChatSession): KeepGoingChat['state'] => (s.waiting > 0 ? 'waiting' : s.state === 'idle' && s.process === 'asleep' ? 'asleep' : s.state);
+
 export class KeepGoingEngine {
   readonly #d: KeepGoingDeps;
   #timer: (() => void) | null = null;
   #running: Promise<number> | null = null;
   /** The last decision per chat (tests and debugging). */
   readonly last = new Map<string, Decision>();
+  /** What each watched chat looked like at its last look: a change tells the Home card (`publish`). */
+  readonly #seen = new Map<string, string>();
+  #dirty = false;
 
   constructor(deps: KeepGoingDeps) {
     this.#d = deps;
@@ -132,7 +172,30 @@ export class KeepGoingEngine {
         console.error(`[keepgoing] a look at a chat failed: ${(e as Error).message}`);
       }
     }
+    if (this.#dirty) {
+      this.#dirty = false;
+      this.#publish();
+    }
     return rows.length;
+  }
+
+  #publish(): void {
+    try {
+      this.#d.publish?.();
+    } catch {
+      // a page that is told nothing reads it at its next load
+    }
+  }
+
+  /** The chat and its ended predecessors' ids, newest first (`continuedFrom` back, bounded, cycle safe). */
+  #lineage(s: ChatSession): string[] {
+    const ids = [s.id];
+    let cur: ChatSession | null = s;
+    while (cur?.continuedFrom && ids.length < LINEAGE_MAX && !ids.includes(cur.continuedFrom)) {
+      ids.push(cur.continuedFrom);
+      cur = this.#d.chat.get(cur.continuedFrom);
+    }
+    return ids;
   }
 
   #ownerOk(s: ChatSession): string | null {
@@ -153,22 +216,44 @@ export class KeepGoingEngine {
     }
     const ownerId = this.#ownerOk(s);
     if (!ownerId) return null; // its owner may no longer operate it: nothing is done in their name
+    const sig = `${s.state}|${s.process}|${s.mode}|${s.waiting}`;
+    if (this.#seen.get(s.id) !== sig) (this.#seen.set(s.id, sig), (this.#dirty = true));
     const since24 = iso(now - DAY);
+    const ended = s.state === 'ended';
+    // An ending is marked quietly the first time the sweep sees it (no ticket, no notification): `down` counts from there.
+    if (ended && !closedByPerson(s) && !this.#d.store.standing(s.id).some((r) => r.cause === 'ended')) this.#d.store.putReport(s.id, ownerId, 'ended', iso(now), null);
     const standing = this.#d.store.standing(s.id);
+    const endedMark = standing.find((r) => r.cause === 'ended')?.since ?? null;
+    const lastRefusal = ended ? this.#d.store.lastAt(s.id, 'recover_refused') : null;
     const { decision, causes } = decide({
       nowMs: now,
       session: s,
       policy: p,
-      requests: s.state === 'ended' ? [] : this.#d.chat.openRequests(s.id),
+      requests: ended ? [] : this.#d.chat.openRequests(s.id),
       nudges24h: this.#d.store.count(s.id, 'nudged', since24),
       wakes24h: this.#d.store.count(s.id, 'woke', since24),
       lastNudgeAt: this.#d.store.lastAt(s.id, 'nudged'),
       standing,
+      ...(ended
+        ? {
+            restarts24h: this.#d.store.restarts(this.#lineage(s), since24),
+            recoverRefused: !!lastRefusal && !!endedMark && lastRefusal >= endedMark,
+            ticketClosed: !!s.ticketId && this.#ticketClosed(s.ticketId),
+          }
+        : {}),
     });
     this.last.set(s.id, decision);
     for (const r of standing) if (!causes.has(r.cause)) this.#d.store.clearReport(s.id, r.cause);
     await this.#act(s, ownerId, p, decision);
     return decision;
+  }
+
+  #ticketClosed(id: string): boolean {
+    try {
+      return this.#d.tickets?.isClosed?.(id) === true;
+    } catch {
+      return false;
+    }
   }
 
   async #act(s: ChatSession, ownerId: string, p: PolicyRow, d: Decision): Promise<void> {
@@ -181,7 +266,11 @@ export class KeepGoingEngine {
         this.#trail(s.id, ownerId, 'stood_down', null, d.reason);
         return this.#changed(s.id);
       case 'report':
-        return this.#report(s, ownerId, d.cause, d.since);
+        return this.#report(s, ownerId, d.cause, d.since, d.why);
+      case 'recover':
+        return this.#recover(s, ownerId);
+      case 'restart':
+        return this.#restart(s, ownerId, p, d.cls);
       case 'capped': {
         const what = d.what === 'nudges' ? `${p.maxNudgesPerDay} nudges` : `${p.maxWakesPerDay} wakes`;
         this.#trail(s.id, ownerId, 'capped', 'cap', `${what} in 24 hours: left for a person.`);
@@ -229,14 +318,78 @@ export class KeepGoingEngine {
     } catch {
       // a tab that is told nothing reads it at its next load
     }
+    this.#publish();
+  }
+
+  /**
+   * An integrity ending, recovered in place (T-136) as an agent: the portal's own rules decide (a suspicious line, the day's cap, a person's
+   * close are refused; the pause and a recovery under way mean "next round"). A refusal is one `recover_refused` row: the next round starts
+   * a new chat instead. Anything else (the launch failed) backs off and is tried again.
+   */
+  async #recover(s: ChatSession, ownerId: string): Promise<void> {
+    try {
+      await this.#d.chat.recover(s.id);
+      this.#trail(s.id, ownerId, 'recovered', null, `Ended for integrity (${s.endedFor?.classified ?? 'unclassified'}): recovered in place.`);
+    } catch (e) {
+      const code = isAppError(e) ? e.code : null;
+      const why = (isAppError(e) ? (e.details as { recover?: unknown } | null)?.recover : null) ?? null;
+      if (code === CHAT_RECOVER_PAUSED || (code === 'CONFLICT' && why === null)) return; // the pause, or a recovery under way: next round
+      if (code && (code.startsWith('RECOVER_') || code === 'CONFLICT' || code === 'NOT_FOUND')) {
+        this.#trail(s.id, ownerId, 'recover_refused', null, `Recover in place refused (${code}${typeof why === 'string' ? `, ${why}` : ''}): a new chat continues it.`);
+      } else this.#failed(s, ownerId, 'Recover in place failed', e);
+    }
+    this.#changed(s.id);
+  }
+
+  /**
+   * A new chat continues the ended one (T-270 `continuedFrom`: its unfinished tickets move with it): the policy is carried to it and turned
+   * off on the ended one, the ended one's reports are cleared (its open ticket says where it went on), and the first message is the
+   * continuation brief. A refused or failed start backs off and reports the chat left down at once (T-257 item 1).
+   */
+  async #restart(s: ChatSession, ownerId: string, p: PolicyRow, cls: KeepGoingRestartClass): Promise<void> {
+    let fresh: ChatSession;
+    try {
+      fresh = await this.#d.chat.continueChat(s);
+    } catch (e) {
+      this.#failed(s, ownerId, 'A new chat could not be started', e);
+      const code = (e as { code?: unknown })?.code;
+      if (!this.#d.store.standing(s.id).some((r) => r.cause === 'down')) {
+        await this.#report(s, ownerId, 'down', this.#d.store.report(s.id, 'ended')?.since ?? iso(this.#d.clock.now()), `a new chat could not be started (${typeof code === 'string' ? code : 'error'})`);
+      }
+      return this.#changed(s.id);
+    }
+    this.#d.store.carryPolicy(s.id, fresh.id);
+    const mode = s.bypassCapable ? ' It starts in the default mode: Bypass is a person’s choice and is not carried.' : '';
+    this.#trail(s.id, ownerId, 'restarted', cls, `Ended (${cls}): started again as ${short(fresh.id)}.${mode}`, { to: fresh.id, cls });
+    this.#d.store.addEvent({ sessionId: fresh.id, ownerId, kind: 'set', cause: null, reason: `Carried over from ${short(s.id)}, which ended: started again by Keep going.`, actor: KEEPGOING_ACTOR });
+    for (const r of this.#d.store.standing(s.id)) {
+      if (r.ticketId && r.cause !== 'ended') {
+        try {
+          if (this.#d.tickets?.isOpen(r.ticketId)) this.#d.tickets.comment(r.ticketId, `Started again: the chat ${fresh.id} continues it (${notifyPath.session(fresh.id)}).`);
+        } catch {
+          // the ticket says less; the trail has it
+        }
+      }
+      this.#d.store.clearReport(s.id, r.cause);
+    }
+    try {
+      await this.#d.chat.send(fresh.id, randomUUID(), continuationBrief(p, s), { priority: 'later', actor: KEEPGOING_ACTOR, actorLabel: 'Keep going' });
+    } catch (e) {
+      // The new chat waits idle: the next look tells it to continue at once.
+      this.#d.store.patchState(fresh.id, { continueOwed: true });
+      const code = (e as { code?: unknown })?.code;
+      this.#trail(fresh.id, ownerId, 'failed', null, `The new chat did not get its brief (${typeof code === 'string' ? code : 'error'}): told to continue at the next look.`);
+    }
+    this.#changed(s.id);
+    this.#changed(fresh.id);
   }
 
   /** One trail row and one platform audit row: fixed sentences, ids and codes, never message text. */
-  #trail(sessionId: string, ownerId: string, kind: KeepGoingActionKind, cause: KeepGoingCause | null, reason: string, extra: Record<string, unknown> = {}): KeepGoingAction {
+  #trail(sessionId: string, ownerId: string, kind: KeepGoingActionKind, cause: KeepGoingCause | KeepGoingRestartClass | null, reason: string, extra: Record<string, unknown> = {}): KeepGoingAction {
     const row = this.#d.store.addEvent({ sessionId, ownerId, kind, cause, reason, actor: KEEPGOING_ACTOR });
     this.#d.audit?.record({
       kind: `keepgoing.${kind}`,
-      severity: kind === 'reported' || kind === 'failed' || kind === 'capped' ? 'medium' : 'info',
+      severity: kind === 'reported' || kind === 'failed' || kind === 'capped' || kind === 'restarted' || kind === 'recover_refused' ? 'medium' : 'info',
       actor: KEEPGOING_ACTOR,
       userId: ownerId,
       subject: `session:${sessionId}`,
@@ -252,12 +405,12 @@ export class KeepGoingEngine {
   }
 
   /** The report: one ticket per chat and cause (a comment while its ticket is open), one notification, one trail row. Never throws. */
-  async #report(s: ChatSession, ownerId: string, cause: KeepGoingCause, since: string): Promise<void> {
+  async #report(s: ChatSession, ownerId: string, cause: KeepGoingCause, since: string, why?: string): Promise<void> {
     const what = KEEPGOING_CAUSE_TEXT[cause];
     // Down follows ended: it is written on the ending's ticket while that is open, not a second ticket for the same stop.
     const known = this.#d.store.report(s.id, cause)?.ticketId ?? (cause === 'down' ? this.#d.store.report(s.id, 'ended')?.ticketId : null) ?? null;
     let ticketId: string | null = null;
-    const evidence = this.#evidence(s, cause, since);
+    const evidence = this.#evidence(s, cause, since, why);
     try {
       const t = this.#d.tickets;
       if (t && known && t.isOpen(known)) {
@@ -292,7 +445,7 @@ export class KeepGoingEngine {
   }
 
   /** What a ticket says: the state, the mode, what waits and since when, the last trail entry. Never transcript text, never a secret. */
-  #evidence(s: ChatSession, cause: KeepGoingCause, since: string): string {
+  #evidence(s: ChatSession, cause: KeepGoingCause, since: string, why?: string): string {
     const requests = s.state === 'ended' ? [] : this.#d.chat.openRequests(s.id);
     const oldest = [...requests].sort((a, b) => ms(a.createdAt) - ms(b.createdAt))[0];
     const [last] = this.#d.store.events(s.id, 1);
@@ -304,11 +457,12 @@ export class KeepGoingEngine {
       `- State: ${s.state}, process ${s.process}, mode ${s.mode}${s.bypassCapable ? ' (bypass-capable)' : ''}`,
       `- Waiting: ${requests.length ? `${requests.length} (${line(oldest!.toolName ?? oldest!.kind, 40)}: ${line(oldest!.title, 60)}, since ${oldest!.createdAt})` : 'nothing'}`,
       ...(s.state === 'ended' ? [`- Ended: ${line(s.endedReason ?? 'no reason recorded', 200)}`] : []),
+      ...(why ? [`- Left down because: ${line(why, 240)}`] : []),
       `- Last Keep going action: ${last ? `${last.at} ${last.kind}: ${last.reason}` : 'none'}`,
       '',
       `Open the chat: ${notifyPath.session(s.id)}`,
       '',
-      'Keep going never answers a tool approval and never turns Bypass on (slice 1): a person decides. This ticket is not repeated while the cause stands.',
+      'Keep going never answers a tool approval and never turns Bypass on: a person decides. This ticket is not repeated while the cause stands.',
     ];
     return lines.join('\n');
   }
@@ -331,7 +485,28 @@ export class KeepGoingEngine {
       wakesToday: this.#d.store.count(sessionId, 'woke', since24),
       last: this.#d.store.events(sessionId, 1)[0] ?? null,
       paused: !keepGoingOn(this.#d.settings),
+      standing: this.#d.store
+        .standing(sessionId)
+        .map((r) => r.cause)
+        .filter((c) => c !== 'ended'),
     };
+  }
+
+  /**
+   * The Home card: the chats with Keep going on that `visible` lets the caller see (the route asks the seam), the ones with a cause standing
+   * first, then by their last action, newest first. A policy whose chat is gone is left out (the sweep turns it off).
+   */
+  list(visible: (s: ChatSession) => boolean): KeepGoingList {
+    const chats: KeepGoingChat[] = [];
+    for (const p of this.#d.store.enabled()) {
+      const s = this.#d.chat.get(p.sessionId);
+      if (!s || !visible(s)) continue;
+      const kg = this.view(s.id);
+      if (kg) chats.push({ sessionId: s.id, title: s.title || 'Untitled chat', workspaceId: s.workspaceId, state: listState(s), mode: s.mode, keepGoing: kg });
+    }
+    const rank = (c: KeepGoingChat) => (c.keepGoing.standing?.length ? 0 : 1);
+    chats.sort((a, b) => rank(a) - rank(b) || (b.keepGoing.last?.at ?? '').localeCompare(a.keepGoing.last?.at ?? ''));
+    return { paused: !keepGoingOn(this.#d.settings), chats };
   }
 
   /** A person's (or an admin token's) change; the route checked who may. One trail row and one audit row. */

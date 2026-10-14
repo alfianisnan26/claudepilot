@@ -48,7 +48,8 @@ export function KeepGoingSection({ session }: { session: ChatSession }) {
             Keep going
             <InfoTip label="About Keep going">
               The portal looks at this chat every minute. Idle for {kg?.nudgeAfterMin ?? 4} minutes: it is told to continue. Interrupted or asleep: it is woken. A question: it is told to decide by
-              the written defaults. A tool approval is never answered and Bypass is never turned on: those, and an ending, come to you as one notification and one ticket.
+              the written defaults. Ended: it is brought back, in place or as a new chat (in the default mode). A tool approval is never answered and Bypass is never turned on: those, and a chat
+              left down, come to you as one notification and one ticket.
             </InfoTip>
           </span>
         }

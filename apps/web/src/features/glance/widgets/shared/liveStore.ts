@@ -85,6 +85,7 @@ export function createLiveStore<T>(opts: LiveStoreOptions<T>): { use: () => Live
     useLive('ci', onPush, opts.topics.includes('ci'));
     useLive('claudeusage', onPush, opts.topics.includes('claudeusage'));
     useLive('autotransfer', onPush, opts.topics.includes('autotransfer'));
+    useLive('keepgoing', onPush, opts.topics.includes('keepgoing'));
     useEffect(() => {
       if (!snap.data || Date.now() - snap.loadedAt > FRESH_MS) void reload();
     }, []);
