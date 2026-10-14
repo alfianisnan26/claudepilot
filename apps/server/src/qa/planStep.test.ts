@@ -30,6 +30,15 @@ function fixture() {
   writeFileSync(join(root, 'src/.envrc'), 'export A=b\n');
   symlinkSync(join(root, '.env'), join(root, 'src/lab/settings.ts'));
   writeFileSync(join(root, 'src/lab/bin.dat'), Buffer.from([1, 0, 2]));
+  // Third review: credential files under other names, each also behind an innocent-looking link; a dangling link where a new file goes.
+  mkdirSync(join(root, '.ssh'));
+  mkdirSync(join(root, '.aws'));
+  mkdirSync(join(root, '.docker'));
+  for (const f of ['.env-prod', 'prod.env', '.envrc.local', '.yarnrc.yml', '.aws/credentials', '.ssh/config', '.pypirc', '.docker/config.json']) {
+    writeFileSync(join(root, f), 'x\n');
+    symlinkSync(join(root, f), join(root, 'src/lab', `l-${f.replace(/[/.]/g, '_')}.ts`));
+  }
+  symlinkSync(join(tempDirectory('cp-plan-gone-'), 'nothing.ts'), join(root, 'src/lab/dangling.ts'));
   const outside = tempDirectory('cp-plan-out-');
   writeFileSync(join(outside, 'x.ts'), 'outside\n');
   symlinkSync(join(outside, 'x.ts'), join(root, 'src/lab/link.ts'));
@@ -131,9 +140,14 @@ test('negative twins: each rule refuses a manifest that breaks it', () => {
     assert.match(errs(w(tx, `run: ${bad}`)), /is not an allowed command/, bad);
   }
   // Deny-list twins: more credential names, in any case.
-  for (const f of ['.dev.vars', 'infra/prod.tfvars', 'x.auto.tfvars.json', 'credentials.json', 'config/Credentials.JSON', '.ENV', '.Env.local', '.NPMRC', 'KEY.PEM', '.GIT/config']) {
+  for (const f of ['.env-prod', 'prod.env', '.envrc.local', '.yarnrc', '.yarnrc.yml', '.aws/credentials', '.ssh/config', '.ssh/id_x', '.pypirc', '.docker/config.json', '.dev.vars', 'infra/prod.tfvars', 'x.auto.tfvars.json', 'credentials.json', 'config/Credentials.JSON', '.ENV', '.Env.local', '.NPMRC', 'KEY.PEM', '.GIT/config']) {
     assert.match(errs(w(`file: ${f} -- x`)), /credential or git file/, f);
   }
+  for (const f of ['.env-prod', 'prod.env', '.envrc.local', '.yarnrc.yml', '.aws/credentials', '.ssh/config', '.pypirc', '.docker/config.json']) {
+    const link = `src/lab/l-${f.replace(/[/.]/g, '_')}.ts`;
+    assert.match(errs(w(`file: ${link} -- x`)), /credential or git file/, `${link}: the real path is checked`);
+  }
+  assert.match(errs(w('new: src/lab/dangling.ts -- x')), /exists already/, 'a dangling link is not a new file');
   const bad = join(root, '..', 'bad.manifest');
   writeFileSync(bad, w('file: src/lab/none.ts -- x'));
   const r = spawnSync(process.execPath, [SCRIPT, 'check', bad, '--root', root], { encoding: 'utf8' });

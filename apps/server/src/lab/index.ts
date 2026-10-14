@@ -7,7 +7,7 @@
 
 import type { LabExperiment, LabExperimentReport, LabExperimentView, LabPeriod, LabSliceMetrics, LabSliceView, LabSummary } from '@portal/contracts';
 import type { Store } from '../store/store.js';
-import { armMembers, assignSlice, bindDraw, createExperiment, decideExperiment, drawArms, excludeSlice, experimentReport, listExperiments, drawStats, newDrawKey, stopExperiment, type DrawStat, type NewExperiment } from './experiments.js';
+import { armMembers, assignSlice, bindDraw, createExperiment, decideExperiment, drawArms, excludeSlice, experimentReport, listExperiments, drawStats, newDrawKey, normTicket, stopExperiment, type DrawStat, type NewExperiment } from './experiments.js';
 import { LabIngest } from './ingest.js';
 import { sliceMetrics, type SliceFilter } from './metrics.js';
 import { DAY_MS, dbTicketReader, outcomeOf, type TicketFacts, type TicketReader } from './outcomes.js';
@@ -29,7 +29,7 @@ export class Lab {
       const db = this.#db();
       if (!db) return;
       // The ticket's ESTIMATE size as it stands when the slice starts (a stratum key, slice 3); read only when a ticket is named.
-      const size = s.ticket ? ((opts.tickets ?? dbTicketReader(db))(s.ticket)?.estimateSize ?? null) : null;
+      const size = s.ticket ? ((opts.tickets ?? dbTicketReader(db))(normTicket(s.ticket)!)?.estimateSize ?? null) : null;
       // A brief that names a draw (T-292 slice 3) keeps the arms drawn before it was written; experiments the draw did not cover assign now.
       // A draw that does not bind (another session, used already, expired, drawn for another ticket, role, model, effort or ESTIMATE size)
       // leaves the draw unbound and counted, and keeps this slice out of every running experiment: its brief was written for an arm the lab
@@ -77,9 +77,10 @@ export class Lab {
   drawArms(info: { sessionId: string; ticket: string; role: string | null; model: string | null; effort: string | null }): { draw: string; arms: { experiment: string; name: string; arm: string }[] } {
     const db = this.#db();
     if (!db) throw new Error('the store is not writable');
-    const size = (this.opts.tickets ?? dbTicketReader(db))(info.ticket)?.estimateSize ?? null;
+    const ticket = normTicket(info.ticket)!;
+    const size = (this.opts.tickets ?? dbTicketReader(db))(ticket)?.estimateSize ?? null;
     const draw = newDrawKey();
-    const got = drawArms(db, { sessionId: info.sessionId, draw, for: { ticket: info.ticket, role: info.role, model: info.model, effort: info.effort }, size, atMs: this.#now() });
+    const got = drawArms(db, { sessionId: info.sessionId, draw, for: { ticket, role: info.role, model: info.model, effort: info.effort }, size, atMs: this.#now() });
     const names = new Map(listExperiments(db).map((e) => [e.id, e.name]));
     return { draw, arms: [...got].map(([id, arm]) => ({ experiment: id, name: names.get(id) ?? id, arm })) };
   }

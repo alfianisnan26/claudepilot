@@ -17,6 +17,7 @@ import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import { LAB_TOOL_POLICIES } from './authz.js';
 import { assignSlice, blockOrder, bindDraw, drawArms, drawnArm, DRAW_SLICE } from './experiments.js';
+import { MIGRATIONS } from '../store/migrations.js';
 import { Lab } from './index.js';
 import { registerLabTools } from './portalTools.js';
 import { KEEP_REQUESTS_MS } from './retention.js';
@@ -24,13 +25,13 @@ import { KEEP_REQUESTS_MS } from './retention.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const plan: any = await import(fileURLToPath(new URL('../../../../scripts/plan-step.mjs', import.meta.url)));
 const T0 = Date.UTC(2030, 0, 2, 9, 0, 0);
-async function harness(nowMs = T0 + 60_000) {
+async function harness(nowMs = T0 + 60_000, drawsOnly: boolean = plan.E2.draws_only) {
   const SIZES: Record<string, string> = { 'T-1': 'M', 'T-2': 'M', 'T-3': 'L' };
   const dataDir = mkdtempSync(join(tmpdir(), 'labdraw-'));
   const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
   let now = nowMs;
   const lab = new Lab({ store, now: () => now, tickets: (t) => (SIZES[t] ? { changes: [], estimateSize: SIZES[t]! } : null) });
-  const e2 = lab.createExperiment({ name: plan.E2.name, hypothesis: plan.E2.hypothesis, design: plan.E2.design, arms: [...plan.E2.arms], strata: [...plan.E2.strata], primaryMetric: plan.E2.primary_metric, minN: plan.E2.min_n, thresholds: { ...plan.E2.thresholds }, startMs: T0 });
+  const e2 = lab.createExperiment({ name: plan.E2.name, hypothesis: plan.E2.hypothesis, design: plan.E2.design, arms: [...plan.E2.arms], strata: [...plan.E2.strata], primaryMetric: plan.E2.primary_metric, minN: plan.E2.min_n, thresholds: { ...plan.E2.thresholds }, drawsOnly, startMs: T0 });
   const seedOf = () => (store.db!.prepare('SELECT seed FROM lab_experiments WHERE id = ?').get(e2.id) as { seed: string }).seed;
   return { store, lab, db: store.db!, e2, sizes: SIZES, seedOf, setNow: (ms: number) => (now = ms), done: () => (lab.close(), store.close(), rmSync(dataDir, { recursive: true, force: true })) };
 }
@@ -51,7 +52,7 @@ const row = (h: H, session: string, slice: string) => {
 };
 const statusOf = (h: H, draw: string) => (h.db.prepare('SELECT status FROM lab_draws WHERE draw = ?').get(draw) as { status: string } | undefined)?.status;
 const forT1 = { sessionId: 'orch', ticket: 'T-1', role: 'implementer', model: 'opus', effort: null };
-const stat = (draws: number, bound: number, redraw: number, session = 'orch') => ({ session, draws, bound, unbound: draws - bound, redraw });
+const stat = (draws: number, bound: number, redraw: number, session = 'orch', optedOut = 0) => ({ session, draws, bound, unbound: draws - bound, redraw, opted_out: optedOut });
 
 test('a draw made before the brief is the arm the slice keeps; the stratum is the ticket’s ESTIMATE size', async () => {
   const h = await harness();
@@ -63,7 +64,7 @@ test('a draw made before the brief is the arm the slice keeps; the stratum is th
     assert.deepEqual([drawn.experiment, drawn.name], [h.e2.id, 'E2-context-compiler']);
     assert.equal(row(h, 'orch', DRAW_SLICE + d.draw)?.stratum, 'size=M|role=implementer|model=opus');
     assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(1, 0, 0)]);
-    assert.equal(drawn.arm, drawnArm(h.seedOf(), 'T-1', 'implementer', plan.ARMS), 'the arm of the ticket and role, from the secret seed');
+    assert.equal(drawn.arm, drawnArm(h.seedOf(), 'T-1', plan.ARMS), 'the arm of the ticket, from the secret seed');
 
     const head = plan.briefHead({ ticket: 'T-1', size: 'M', arm: drawn.arm, draw: d.draw, manifestBlock: drawn.arm === 'treatment' ? 'manifest' : null });
     // Without the bind this slice would be excluded (its brief names a draw it did not get): checked by removing bindDraw.
@@ -92,7 +93,7 @@ test('probe A: a draw made for one role cannot be taken by a call of another rol
     assert.equal(statusOf(h, d.draw), 'refused');
     assert.ok(row(h, 'orch', DRAW_SLICE + d.draw)?.arm, 'still held under the draw');
     assert.deepEqual(row(h, 'orch', 'toolu_a'), { arm: null, stratum: '', excluded: 'draw not bound' });
-    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(1, 0, 0)]);
+    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(1, 0, 0, 'orch', 1)], 'the excluded call went without its ticket’s draw');
     // Ticket, effort and the ESTIMATE size are checked too.
     const t = h.lab.drawArms(forT1);
     const f1 = { ticket: 'T-1', role: 'implementer', model: 'opus', effort: null };
@@ -129,12 +130,12 @@ test('probe B: a redraw bound to a throwaway call of another role does not hide 
     h.lab.line('orch', agentCall('toolu_real', `Ticket T-1, size M. Lab-Draw: ${second.draw}`));
     h.lab.line('orch', agentCall('toolu_throwaway', `Ticket T-1, size M. Lab-Draw: ${first.draw}`, { role: 'explorer', model: 'haiku' }));
     assert.equal(statusOf(h, first.draw), 'refused');
-    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(2, 1, 1)]);
+    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(2, 1, 1, 'orch', 1)]);
     assert.equal(row(h, 'orch', 'toolu_throwaway')?.excluded, 'draw not bound');
     assert.equal(row(h, 'orch', 'toolu_real')?.arm, second.arms[0]!.arm, 'the bound slice keeps its drawn arm');
     // Two draws for different tickets (two slices dispatched together) are no redraw.
     h.lab.drawArms({ ...forT1, ticket: 'T-2' });
-    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(3, 1, 1)]);
+    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(3, 1, 1, 'orch', 1)]);
   } finally {
     h.done();
   }
@@ -163,7 +164,7 @@ test('second review, defect 1: a peek draw for another ticket of the same size s
     const h = await harness();
     try {
       for (let i = 0; i < peeks; i++) h.lab.drawArms({ ...forT1, ticket: `T-${200 + i}` });
-      return { arm: h.lab.drawArms({ ...forT1, ticket: 'T-2' }).arms[0]!.arm, want: drawnArm(h.seedOf(), 'T-2', 'implementer', plan.ARMS) };
+      return { arm: h.lab.drawArms({ ...forT1, ticket: 'T-2' }).arms[0]!.arm, want: drawnArm(h.seedOf(), 'T-2', plan.ARMS) };
     } finally {
       h.done();
     }
@@ -182,14 +183,14 @@ test('a draw binds only in its session, from a top-level call, on the prompt’s
     h.lab.line('someone-else', agentCall('toolu_other', `Ticket T-3, size L. Lab-Draw: ${d.draw}`));
     assert.equal(row(h, 'someone-else', 'toolu_other')?.excluded, 'draw not bound', 'another session’s call carrying the key is kept out');
     assert.equal(statusOf(h, d.draw), 'open', 'the draw is untouched');
-    // A call made inside a sub-agent (nested) is never read for a draw: it is assigned as any slice, the draw stays open.
+    // A call made inside a sub-agent (nested) is never read for a draw: E2 is draws-only, so it is a slice without a draw (out); the draw stays open.
     h.lab.line('orch', agentCall('toolu_nested', `Ticket T-3, size L. Lab-Draw: ${d.draw}`, { parent: 'toolu_parent' }));
     assert.equal(statusOf(h, d.draw), 'open');
-    assert.ok(row(h, 'orch', 'toolu_nested')?.arm, 'assigned as usual');
+    assert.equal(row(h, 'orch', 'toolu_nested')?.excluded, 'no draw');
     // The key on a later line of the prompt is not read.
     h.lab.line('orch', agentCall('toolu_line2', `Ticket T-3, size L.\nLab-Draw: ${d.draw}`));
     assert.equal(statusOf(h, d.draw), 'open');
-    assert.equal(row(h, 'orch', 'toolu_line2')?.excluded, null);
+    assert.equal(row(h, 'orch', 'toolu_line2')?.excluded, 'no draw');
     // No running experiment: a draw has no arm and the brief is the ordinary one.
     h.lab.stop(h.e2.id);
     assert.deepEqual(h.lab.drawArms({ ...forT1, ticket: 'T-2' }).arms, []);
@@ -200,7 +201,7 @@ test('a draw binds only in its session, from a top-level call, on the prompt’s
 
 test('draws are not block places: ordinary slices keep balanced blocks around them; the drawn arm comes from the secret seed, not the id', async () => {
   const run = async (withDraws: boolean) => {
-    const h = await harness();
+    const h = await harness(T0 + 60_000, false);
     try {
       const seed = h.seedOf();
       assert.match(seed, /^[0-9a-f]{32}$/);
@@ -224,7 +225,7 @@ test('draws are not block places: ordinary slices keep balanced blocks around th
   const stratum = 'size=M|role=implementer|model=opus';
   assert.deepEqual(a.plain, a.plain.map((_, k) => blockOrder('seed-fixed', stratum, Math.floor(k / 2), plan.ARMS)[k % 2]), 'the seed, not the id, orders the block');
   for (let b = 0; b < 3; b++) assert.deepEqual([a.plain[2 * b], a.plain[2 * b + 1]].sort(), ['control', 'treatment'], `block ${b}`);
-  assert.deepEqual(a.drawn, a.drawn.map((_, i) => drawnArm('seed-fixed', `T-${100 + i}`, 'implementer', plan.ARMS)));
+  assert.deepEqual(a.drawn, a.drawn.map((_, i) => drawnArm('seed-fixed', `T-${100 + i}`, plan.ARMS)));
 });
 
 test('a draw is for a ticket', async () => {
@@ -278,6 +279,100 @@ test('second review, defect 3: retention expires unbound draws and keeps them as
   }
 });
 
+test('third review, defect 2: the ticket’s spelling and the role do not steer the arm; redraws count by ticket', async () => {
+  const h = await harness();
+  try {
+    const a = h.lab.drawArms({ ...forT1, ticket: 'T-12' });
+    const b = h.lab.drawArms({ ...forT1, ticket: 'T-012' });
+    const c = h.lab.drawArms({ ...forT1, ticket: 'T-0012', role: 'general-purpose' });
+    assert.deepEqual([b.arms[0]!.arm, c.arms[0]!.arm], [a.arms[0]!.arm, a.arms[0]!.arm], 'one ticket, one arm, whatever the spelling or the role');
+    // Over many tickets and roles, so a hash that read the spelling or the role could not pass by chance (two arms: 1 in 2 per draw).
+    for (let n = 30; n < 38; n++) {
+      const want = drawArms(h.db, { sessionId: 'many', draw: `d-${String(n).padStart(12, '0')}`, for: { ...forT1, ticket: `T-${n}` }, size: 'M', atMs: T0 }).get(h.e2.id);
+      for (const [i, role] of ['implementer', 'general-purpose', 'claude', 'explorer', 'reviewer'].entries()) {
+        const got = drawArms(h.db, { sessionId: 'many', draw: `d-${String(n).padStart(6, '0')}${String(i).padStart(6, '0')}`, for: { ...forT1, ticket: `T-${'0'.repeat(i)}${n}`, role }, size: 'M', atMs: T0 });
+        assert.equal(got.get(h.e2.id), want, `T-${'0'.repeat(i)}${n} as ${role}`);
+      }
+    }
+    assert.equal(a.arms[0]!.arm, drawnArm(h.seedOf(), 'T-12', plan.ARMS));
+    assert.equal((h.db.prepare('SELECT ticket FROM lab_draws WHERE draw = ?').get(b.draw) as { ticket: string }).ticket, 'T-12', 'stored as one spelling');
+    assert.deepEqual(h.lab.drawStats(h.e2.id).filter((x) => x.session === 'orch'), [stat(3, 0, 2)], 'the second and third are redraws');
+    // A call that writes the ticket another way binds the draw (the same ticket).
+    h.lab.line('orch', agentCall('toolu_spelled', `Ticket T-0012. Lab-Draw: ${b.draw}`));
+    assert.equal(statusOf(h, b.draw), 'bound');
+    // Roles do not share a draw: the bind still checks the role.
+    h.lab.line('orch', agentCall('toolu_role', `Ticket T-12. Lab-Draw: ${c.draw}`));
+    assert.equal(statusOf(h, c.draw), 'refused');
+  } finally {
+    h.done();
+  }
+});
+
+test('third review, defect 3: a draws-only experiment gives no block arm; a peek, then a slice without the draw or with a made-up key, is out and counted', async () => {
+  const h = await harness();
+  try {
+    assert.equal(h.e2.drawsOnly, true, 'E2 is draws-only (plan-step.mjs e2)');
+    const peek = h.lab.drawArms(forT1);
+    h.lab.line('orch', agentCall('toolu_nodraw', 'Ticket T-1, size M.'));
+    assert.deepEqual(row(h, 'orch', 'toolu_nodraw'), { arm: null, stratum: '', excluded: 'no draw' }, 'no block arm');
+    h.lab.line('orch', agentCall('toolu_madeup', 'Ticket T-1, size M. Lab-Draw: d-0123456789ab'));
+    assert.equal(row(h, 'orch', 'toolu_madeup')?.excluded, 'draw not bound');
+    // A slice of a ticket never drawn for is out too, but it is no opt-out.
+    h.lab.line('orch', agentCall('toolu_other', 'Ticket T-2, size M.'));
+    assert.equal(row(h, 'orch', 'toolu_other')?.excluded, 'no draw');
+    assert.deepEqual(h.lab.drawStats(h.e2.id), [stat(1, 0, 0, 'orch', 2)], 'the abandoned draw and the two slices that went without it');
+    assert.equal(statusOf(h, peek.draw), 'open');
+    // The draw used: the slice has its arm; an experiment that is not draws-only still block-assigns a slice without a draw.
+    h.lab.line('orch', agentCall('toolu_drawn', `Ticket T-1, size M. Lab-Draw: ${peek.draw}`));
+    assert.equal(row(h, 'orch', 'toolu_drawn')?.arm, peek.arms[0]!.arm);
+    const plain = h.lab.createExperiment({ name: 'plain', design: 'randomized', arms: ['a', 'b'], primaryMetric: 'm', startMs: T0 });
+    assert.equal(plain.drawsOnly, false);
+    assert.ok(assignSlice(h.db, { sessionId: 'orch', sliceId: 'later', attrs: { size: 'M', role: 'implementer', model: 'opus', effort: null }, atMs: T0 + 1 }).get(plain.id));
+    assert.throws(() => h.lab.createExperiment({ name: 'ba', design: 'before_after', primaryMetric: 'm', startMs: T0, switchMs: T0 + 1, drawsOnly: true }), /draws only/);
+  } finally {
+    h.done();
+  }
+});
+
+test('third review, defect 1: a database at migration 854 upgrades (855): the draw column backfilled, a seed for every experiment, draws work', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'labdraw-mig-'));
+  const secretKey = parseSecretKey(generateSecretKey());
+  try {
+    const old = await Store.open({ dataDir, secretKey, migrations: MIGRATIONS.filter((m) => m.version !== 855) });
+    const cols = (t: string, db = old.db!) => (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((c) => c.name);
+    assert.ok(cols('lab_experiments').includes('seed') && !cols('lab_assignments').includes('draw'), 'the 854 schema');
+    old.db!.prepare("INSERT INTO lab_experiments (id, name, hypothesis, design, arms, primary_metric, guardrails, thresholds, min_n, status, start_ms, created_ms) VALUES ('exp-old', 'old', '', 'randomized', '[\"a\",\"b\"]', 'm', '[]', '{}', 0, 'running', ?, ?)").run(T0, T0);
+    old.db!.prepare("INSERT INTO lab_draws (draw, session_id, ticket, role, model, effort, size, drawn_ms) VALUES ('d-00000000000a', 'orch', 'T-1', 'implementer', 'opus', NULL, NULL, ?)").run(T0);
+    old.db!.prepare("INSERT INTO lab_assignments (experiment_id, session_id, slice_id, arm, stratum, assigned_ms) VALUES ('exp-old', 'orch', 'draw:d-00000000000a', 'a', 'implementer|opus', ?), ('exp-old', 'orch', 'plain-1', 'b', 'implementer|opus', ?)").run(T0, T0);
+    old.close();
+    const store = await Store.open({ dataDir, secretKey });
+    try {
+      const db = store.db!;
+      assert.ok(cols('lab_assignments', db).includes('draw') && cols('lab_experiments', db).includes('draws_only'));
+      assert.deepEqual(db.prepare('SELECT slice_id, draw FROM lab_assignments ORDER BY slice_id').all().map((r) => ({ ...r })), [
+        { slice_id: 'draw:d-00000000000a', draw: 'd-00000000000a' },
+        { slice_id: 'plain-1', draw: null },
+      ]);
+      const seed = (db.prepare("SELECT seed, draws_only FROM lab_experiments WHERE id = 'exp-old'").get() as { seed: string; draws_only: number });
+      assert.match(seed.seed, /^[0-9a-f]{32}$/, 'a fresh secret seed, not the id');
+      assert.equal(seed.draws_only, 0);
+      const lab = new Lab({ store, now: () => T0 + 60_000, tickets: () => ({ changes: [], estimateSize: 'M' }) });
+      try {
+        const d = lab.drawArms(forT1);
+        assert.equal(d.arms[0]!.arm, drawnArm(seed.seed, 'T-1', ['a', 'b']));
+        assert.ok(assignSlice(db, { sessionId: 'orch', sliceId: 'plain-2', attrs: { size: 'M', role: 'implementer', model: 'opus', effort: null }, atMs: T0 + 2 }).get('exp-old'));
+        assert.deepEqual(lab.drawStats('exp-old'), [stat(2, 0, 1)]);
+      } finally {
+        lab.close();
+      }
+    } finally {
+      store.close();
+    }
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 type Row = { result?: { isError?: boolean; structuredContent?: any }; error?: unknown };
 const where = (m: Row) => m.result?.structuredContent as any;
 const refused = (m: Row) => !!(m.error || m.result?.isError);
@@ -306,6 +401,7 @@ test('MCP: lab_arm_draw is an agent tool for its own session; the coordinator se
     assert.ok(refused(await mcp.call(mcp.token('admin').secret, 'lab_arm_draw', { ticket: 'T-1' })), 'an admin token has no session to draw for');
     const full = where(await mcp.call(mcp.token('admin').secret, 'lab_summary', { full: true }));
     assert.deepEqual(full.experiments.find((e: { id: string }) => e.id === h.e2.id).draws, [stat(2, 0, 1, 'orch-session')]);
+    assert.equal(full.experiments.find((e: { id: string }) => e.id === h.e2.id).draws_only, true);
     assert.ok(!JSON.stringify(full).includes('"seed"'), 'no seed in the answer');
   } finally {
     mcp.done();

@@ -101,6 +101,8 @@ export interface LabExperiment {
   createdMs: number;
   /** randomized: the stratum keys in order; null keeps slice 1's stratum (role and requested model, `role|model`). */
   strata: LabStratumKey[] | null;
+  /** randomized: only a bound draw (`lab_arm_draw`, T-292) gives an arm; a slice without one is excluded. */
+  drawsOnly: boolean;
 }
 
 export interface LabArmSummary {

@@ -48,6 +48,7 @@ const experimentRow = (v: LabExperimentView, ctx: PortalToolContext, lab: Lab) =
   status: v.experiment.status,
   design: v.experiment.design,
   strata: v.experiment.strata,
+  draws_only: v.experiment.drawsOnly,
   excluded: v.excluded,
   draws: lab.drawStats(v.experiment.id),
   arms: v.arms.map((a) => ({ arm: a.arm, n: a.n, accepted: a.accepted, cost_per_accepted: r2(a.costPerAccepted), ci90: ci(a.costPerAcceptedInterval) })),
@@ -134,6 +135,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       design: z.enum(['randomized', 'before_after']).optional(),
       arms: z.array(z.string().max(40)).max(6).optional(),
       strata: z.array(z.enum(LAB_STRATUM_KEYS)).min(1).max(4).optional().describe('randomized: the stratum keys; default role and requested model.'),
+      draws_only: z.boolean().optional().describe('randomized: only a bound draw (lab_arm_draw) gives an arm; a slice without one is excluded (E2).'),
       primary_metric: z.string().max(80).optional().describe('Default: median cost per accepted slice.'),
       min_n: z.number().int().min(0).max(100000).optional(),
       thresholds: z.record(z.string().max(40), z.union([z.number(), z.string().max(80)])).optional(),
@@ -160,7 +162,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       } catch {
         throw new PortalToolError('VALIDATION_FAILED', 'start and switch_at: ms since the epoch or an ISO time.', { start: 'ms or ISO time' });
       }
-      const preview = { start: args.name, design: args.design, arms: args.design === 'before_after' ? ['before', 'after'] : (args.arms ?? []), strata: args.strata ?? ['role', 'model'], primary_metric: args.primary_metric ?? 'median cost per accepted slice', min_n: args.min_n ?? 0, effect: args.design === 'randomized' ? 'Every new sub-agent slice gets an arm.' : 'Slices in the window are split at the moment of the change.' };
+      const preview = { start: args.name, design: args.design, arms: args.design === 'before_after' ? ['before', 'after'] : (args.arms ?? []), strata: args.strata ?? ['role', 'model'], draws_only: args.draws_only ?? false, primary_metric: args.primary_metric ?? 'median cost per accepted slice', min_n: args.min_n ?? 0, effect: args.design === 'randomized' ? (args.draws_only ? 'Only a slice whose brief names a bound draw gets an arm; every other slice is excluded.' : 'Every new sub-agent slice gets an arm.') : 'Slices in the window are split at the moment of the change.' };
       const gate = ctx.confirm(args, preview, `new:${args.name}`);
       if (gate) return gate;
       try {
@@ -170,6 +172,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
           design: args.design,
           ...(args.arms ? { arms: args.arms } : {}),
           ...(args.strata ? { strata: args.strata } : {}),
+          ...(args.draws_only ? { drawsOnly: true } : {}),
           primaryMetric: args.primary_metric ?? 'median cost per accepted slice',
           ...(args.thresholds ? { thresholds: args.thresholds } : {}),
           ...(args.min_n !== undefined ? { minN: args.min_n } : {}),

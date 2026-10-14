@@ -27,8 +27,10 @@ interface ExperimentRow {
   verdict: string | null;
   created_ms: number;
   strata: string | null;
-  /** Migration 854: the block order's secret seed (never shown); NULL for older experiments, which keep their id as the seed. */
+  /** Migration 854: the block order's secret seed (never shown); migration 855 gave every older experiment one. */
   seed: string | null;
+  /** Migration 855: 1 when only a bound draw gives an arm (a slice without one is excluded). */
+  draws_only: number;
 }
 
 const toExperiment = (r: ExperimentRow): LabExperiment => ({
@@ -49,6 +51,7 @@ const toExperiment = (r: ExperimentRow): LabExperiment => ({
   verdict: r.verdict,
   createdMs: r.created_ms,
   strata: r.strata ? (JSON.parse(r.strata) as LabStratumKey[]) : null,
+  drawsOnly: r.draws_only === 1,
 });
 
 export interface NewExperiment {
@@ -66,6 +69,8 @@ export interface NewExperiment {
   switchMs?: number;
   /** randomized: the stratum keys (slice 3); absent keeps role and requested model. */
   strata?: LabStratumKey[];
+  /** randomized: only a bound draw gives an arm; a slice that starts without one is excluded (`no draw`), never block-assigned (E2). */
+  drawsOnly?: boolean;
 }
 
 /** What a starting slice is stratified by; null is a missing value. */
@@ -93,12 +98,13 @@ export function createExperiment(db: DatabaseSync, e: NewExperiment, nowMs: numb
   if (e.design === 'before_after' && (e.switchMs === undefined || e.switchMs < e.startMs)) throw new Error('a before-and-after experiment needs the moment of the change, after its start');
   const strata = e.strata === undefined ? null : [...new Set(e.strata)];
   if (strata && e.design !== 'randomized') throw new Error('stratum keys are for a randomized experiment');
+  if (e.drawsOnly && e.design !== 'randomized') throw new Error('draws only is for a randomized experiment');
   if (strata && (!strata.length || strata.some((k) => !(LAB_STRATUM_KEYS as readonly string[]).includes(k)))) throw new Error(`stratum keys: one or more of ${LAB_STRATUM_KEYS.join(', ')}`);
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO lab_experiments (id, name, hypothesis, design, arms, primary_metric, guardrails, thresholds, min_n, status, start_ms, switch_ms, created_ms, strata, seed)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`,
-  ).run(id, e.name, e.hypothesis ?? '', e.design, JSON.stringify(arms), e.primaryMetric, JSON.stringify(e.guardrails ?? []), JSON.stringify(e.thresholds ?? {}), e.minN ?? 0, e.startMs, e.switchMs ?? null, nowMs, strata ? JSON.stringify(strata) : null, randomBytes(16).toString('hex'));
+    `INSERT INTO lab_experiments (id, name, hypothesis, design, arms, primary_metric, guardrails, thresholds, min_n, status, start_ms, switch_ms, created_ms, strata, seed, draws_only)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)`,
+  ).run(id, e.name, e.hypothesis ?? '', e.design, JSON.stringify(arms), e.primaryMetric, JSON.stringify(e.guardrails ?? []), JSON.stringify(e.thresholds ?? {}), e.minN ?? 0, e.startMs, e.switchMs ?? null, nowMs, strata ? JSON.stringify(strata) : null, randomBytes(16).toString('hex'), e.drawsOnly ? 1 : 0);
   return getExperiment(db, id)!;
 }
 
@@ -120,7 +126,7 @@ export function decideExperiment(db: DatabaseSync, id: string, decision: LabDeci
   db.prepare("UPDATE lab_experiments SET status = 'decided', decision = ?, verdict = ? WHERE id = ?").run(decision, verdict, id);
 }
 
-/** A seeded order of the arms for one block (Fisher-Yates over a sha256 stream). The seed: the experiment's secret seed, else its id. */
+/** A seeded order of the arms for one block (Fisher-Yates over a sha256 stream). The seed: the experiment's secret seed (its id only if it has none). */
 export function blockOrder(seed: string, stratum: string, block: number, arms: readonly string[]): string[] {
   const out = [...arms];
   const h = createHash('sha256').update(`${seed}\u0000${stratum}\u0000${block}`).digest();
@@ -147,6 +153,11 @@ export function assignSlice(db: DatabaseSync, info: { sessionId: string; sliceId
       if (had.arm) out.set(r.id, had.arm);
       continue;
     }
+    if (r.draws_only) {
+      // A draws-only experiment (E2) gives no block arm: a slice without a bound draw is out (and counted per session in drawStats).
+      db.prepare("INSERT INTO lab_assignments (experiment_id, session_id, slice_id, arm, stratum, assigned_ms, excluded) VALUES (?, ?, ?, NULL, '', ?, 'no draw')").run(r.id, info.sessionId, info.sliceId, info.atMs);
+      continue;
+    }
     const arms = JSON.parse(r.arms) as string[];
     const stratum = r.strata ? stratumOf(JSON.parse(r.strata) as LabStratumKey[], attrs) : (info.stratum ?? defaultStratum(attrs));
     // Drawn arms (`draw` set, T-292 slice 3) are not block places: the blocks are the slices that got their arm at the start.
@@ -170,31 +181,41 @@ export interface DrawFor {
   effort: string | null;
 }
 
+/** `T-12`, `T-012` and `T-0012` are ticket 12 (outcomes.ts reads the number): one spelling, so the spelling cannot steer an arm. */
+export function normTicket(t: string | null): string | null {
+  const m = t === null ? null : /^T-(\d{1,9})$/.exec(t);
+  return m ? `T-${Number(m[1])}` : t;
+}
+
 /**
- * A drawn arm: fixed per experiment, ticket and role, from the experiment's secret seed (never shown). So drawing again (a redraw, a
- * throwaway call that binds the first draw, a second slice of the ticket) gives the same arm, and a draw for another ticket (a peek) says
- * nothing about this one: there is nothing to draw until an arm suits. Not a block place, so a draw nobody uses moves no other slice's arm.
+ * A drawn arm: fixed per experiment and ticket (normalised), from the experiment's secret seed (never shown). So drawing again (a redraw,
+ * after a throwaway call bound the first draw, with another role, model or effort) gives the same arm. What a draw does reveal is that
+ * ticket's own arm, also when it is drawn only to look (a peek); the caller could then not dispatch the ticket, or dispatch it without the
+ * draw. A draws-only experiment excludes such a slice and drawStats counts it (`opted_out`), so a peek gains no arm and shows.
+ * Not a block place, so a draw nobody uses moves no other slice's arm.
  */
-export function drawnArm(seed: string, ticket: string, role: string | null, arms: readonly string[]): string {
-  const h = createHash('sha256').update(`${seed}\u0000draw\u0000${ticket}\u0000${role ?? '-'}`).digest();
+export function drawnArm(seed: string, ticket: string, arms: readonly string[]): string {
+  const h = createHash('sha256').update(`${seed}\u0000draw\u0000${normTicket(ticket)}`).digest();
   return arms[h.readUInt32BE(0) % arms.length]!;
 }
 
 /**
- * Draws the arms for a slice that has not started yet (an arm the brief depends on, E2): per running randomized experiment the drawn arm
- * for its ticket and role (`drawnArm`), held under `draw:<key>` in the caller's session (`lab_assignments.draw` names the draw), with what
- * it was drawn for (`lab_draws`). The orchestrator writes `Lab-Draw: <key>` in the brief's first line; `bindDraw` moves the rows to the
- * slice when that Agent call starts. Every draw is kept and counted (`drawStats`), used or not. A draw needs a ticket.
+ * Draws the arms for a slice that has not started yet (an arm the brief depends on, E2): per running randomized experiment with a secret
+ * seed the drawn arm of its ticket (`drawnArm`), held under `draw:<key>` in the caller's session (`lab_assignments.draw` names the draw),
+ * with what it was drawn for (`lab_draws`, the ticket normalised). The orchestrator writes `Lab-Draw: <key>` in the brief's first line;
+ * `bindDraw` moves the rows to the slice when that Agent call starts. Every draw is kept and counted (`drawStats`), used or not. A draw
+ * needs a ticket.
  */
 export function drawArms(db: DatabaseSync, info: { sessionId: string; draw: string; for: DrawFor; size: string | null; atMs: number }): Map<string, string> {
-  const f = info.for;
+  const f = { ...info.for, ticket: normTicket(info.for.ticket) };
   if (!f.ticket) throw new Error('a draw is for a ticket');
   db.prepare('INSERT INTO lab_draws (draw, session_id, ticket, role, model, effort, size, drawn_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(info.draw, info.sessionId, f.ticket, f.role, f.model, f.effort, info.size, info.atMs);
   const attrs: SliceAttrs = { size: info.size, role: f.role, model: f.model, effort: f.effort };
   const out = new Map<string, string>();
   const running = db.prepare("SELECT * FROM lab_experiments WHERE status = 'running' AND design = 'randomized' AND start_ms <= ?").all(info.atMs) as unknown as ExperimentRow[];
   for (const r of running) {
-    const arm = drawnArm(r.seed ?? r.id, f.ticket, f.role, JSON.parse(r.arms) as string[]);
+    if (!r.seed) continue; // never a draw from a seed that is shown (an id); migration 855 seeded every older experiment
+    const arm = drawnArm(r.seed, f.ticket, JSON.parse(r.arms) as string[]);
     const stratum = r.strata ? stratumOf(JSON.parse(r.strata) as LabStratumKey[], attrs) : defaultStratum(attrs);
     db.prepare('INSERT INTO lab_assignments (experiment_id, session_id, slice_id, arm, stratum, assigned_ms, draw) VALUES (?, ?, ?, ?, ?, ?, ?)').run(r.id, info.sessionId, DRAW_SLICE + info.draw, arm, stratum, info.atMs, info.draw);
     out.set(r.id, arm);
@@ -216,7 +237,7 @@ export function bindDraw(db: DatabaseSync, info: { sessionId: string; draw: stri
   if (!d) return 'none';
   if (d.status === 'bound') return d.slice_id === info.sliceId ? 'bound' : 'none';
   if (d.status === 'expired') return 'refused';
-  const f = info.for;
+  const f = { ...info.for, ticket: normTicket(info.for.ticket) };
   if (d.ticket !== f.ticket || d.role !== f.role || d.model !== f.model || d.effort !== f.effort || d.size !== info.size) {
     db.prepare("UPDATE lab_draws SET status = 'refused', status_ms = ? WHERE draw = ?").run(info.atMs, info.draw);
     return 'refused';
@@ -231,23 +252,52 @@ export interface DrawStat {
   /** Every draw of the session that holds an arm in the experiment, bound or not; retention never drops one. */
   draws: number;
   bound: number;
-  /** Open, refused or expired. */
+  /** Abandoned: open, refused or expired. */
   unbound: number;
-  /** Draws for a ticket and role this session had drawn for before (a redraw, or a later slice of the ticket): the same arm either way. */
+  /** Draws for a ticket this session had drawn for before, whatever the role (a redraw, or a later slice of the ticket): the same arm. */
   redraw: number;
+  /** Slices of the session kept out (no draw, or a draw that did not bind) whose ticket has an unbound draw here: a peek, then the slice
+   * dispatched without its draw. */
+  opted_out: number;
 }
 
-/** Per session, an experiment's draws: all of them, bound, unbound, and the redraws. */
+/** Per session, an experiment's draws: all of them, bound, unbound, the redraws, and the slices that went without their ticket's draw. */
 export function drawStats(db: DatabaseSync, experimentId: string): DrawStat[] {
-  return db
+  const draws = db
     .prepare(
-      `SELECT d.session_id AS session, COUNT(*) AS draws, SUM(d.status = 'bound') AS bound,
-         SUM(EXISTS (SELECT 1 FROM lab_draws e WHERE e.session_id = d.session_id AND e.rowid < d.rowid AND e.ticket IS d.ticket AND e.role IS d.role)) AS redraw
-       FROM lab_assignments a JOIN lab_draws d ON d.draw = a.draw
-       WHERE a.experiment_id = ? GROUP BY d.session_id ORDER BY d.session_id`,
+      `SELECT d.session_id AS session, d.ticket AS ticket, d.status AS status,
+         EXISTS (SELECT 1 FROM lab_draws e WHERE e.session_id = d.session_id AND e.rowid < d.rowid AND e.ticket IS d.ticket) AS redraw
+       FROM lab_assignments a JOIN lab_draws d ON d.draw = a.draw WHERE a.experiment_id = ?`,
     )
-    .all(experimentId)
-    .map((r) => ({ session: String(r.session), draws: Number(r.draws), bound: Number(r.bound ?? 0), unbound: Number(r.draws) - Number(r.bound ?? 0), redraw: Number(r.redraw ?? 0) }));
+    .all(experimentId) as { session: string; ticket: string | null; status: string; redraw: number }[];
+  const out = new Map<string, DrawStat & { open: Set<string> }>();
+  const of = (session: string) => {
+    let st = out.get(session);
+    if (!st) out.set(session, (st = { session, draws: 0, bound: 0, unbound: 0, redraw: 0, opted_out: 0, open: new Set() }));
+    return st;
+  };
+  for (const d of draws) {
+    const st = of(d.session);
+    st.draws++;
+    if (d.status === 'bound') st.bound++;
+    else {
+      st.unbound++;
+      if (d.ticket) st.open.add(d.ticket);
+    }
+    if (d.redraw) st.redraw++;
+  }
+  const kept = db
+    .prepare(
+      `SELECT a.session_id AS session, s.ticket AS ticket FROM lab_assignments a JOIN lab_slices s ON s.session_id = a.session_id AND s.slice_id = a.slice_id
+       WHERE a.experiment_id = ? AND a.excluded IN ('no draw', 'draw not bound')`,
+    )
+    .all(experimentId) as { session: string; ticket: string | null }[];
+  for (const k of kept) {
+    const st = out.get(k.session);
+    const t = normTicket(k.ticket);
+    if (st && t && st.open.has(t)) st.opted_out++;
+  }
+  return [...out.values()].sort((a, b) => (a.session < b.session ? -1 : a.session > b.session ? 1 : 0)).map(({ open: _open, ...st }) => st);
 }
 
 /** Takes a slice out of an experiment's analysis, with the reason (`outage`). Its arm, if any, is kept for the record. */

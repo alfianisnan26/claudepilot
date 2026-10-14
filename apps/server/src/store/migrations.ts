@@ -3090,10 +3090,8 @@ export const MIGRATIONS: Migration[] = [
     name: 'efficiency lab: draws before the brief and a secret block seed',
     up(db) {
       // T-292 slice 3 (docs/prd/claude-usage.md §28.13): a draw made before a brief is written keeps the attributes it was drawn for (ticket,
-      // role, requested model, effort, the ESTIMATE size then) so a slice that starts with a different role, model, ticket, effort or size
-      // cannot take it; `status` open, bound (to `slice_id`), refused (the last bind attempt did not match) or expired (unbound past the
-      // 14 day horizon; the row stays as evidence). `lab_assignments.draw` names the draw an arm came from (NULL: a block place, assigned at
-      // the slice start), so drawn arms are kept out of the block count and counted per session. A randomized experiment's block order
+      // role, requested model, effort, the ESTIMATE size then) so a slice that starts with a different role, model, ticket or effort cannot
+      // take it; `status` open, bound (to `slice_id`) or refused (the last bind attempt did not match). A randomized experiment's block order
       // is seeded with a random value kept here, never shown, so an arm cannot be worked out from the experiment's id; NULL (experiments made
       // before this migration) keeps the id as the seed, so their blocks do not move. Ids and plain names only.
       db.exec(`
@@ -3112,8 +3110,25 @@ export const MIGRATIONS: Migration[] = [
           status_ms INTEGER
         ) STRICT;
         CREATE INDEX lab_draws_session ON lab_draws (session_id, status);
+      `);
+    },
+  },
+  {
+    version: 855,
+    name: 'efficiency lab: drawn arms out of the blocks, draws-only experiments, a seed for every experiment',
+    up(db) {
+      // T-292 slice 3, third review (docs/prd/claude-usage.md §28.13). 854 is on integration as it was, so this is a new step:
+      // - `lab_assignments.draw` names the draw an arm came from (NULL: a block place, given at the slice start), so drawn arms are kept
+      //   out of the block count; held draws from 854 are backfilled from their `draw:<key>` slice id.
+      // - `lab_experiments.draws_only` (1: a slice without a bound draw is excluded, never given a block arm; E2 sets it).
+      // - An experiment without a seed (made before 854, seeded by its id, which is shown) gets a random one. Its next blocks reorder, still
+      //   balanced per block; the arms already given stay. A draw is never made for a seed anyone has seen.
+      // `lab_draws.status` may also be 'expired' (unbound past the 14 day horizon; kept as evidence). Ids and plain names only.
+      db.exec(`
         ALTER TABLE lab_assignments ADD COLUMN draw TEXT;
         UPDATE lab_assignments SET draw = substr(slice_id, 6) WHERE substr(slice_id, 1, 5) = 'draw:';
+        ALTER TABLE lab_experiments ADD COLUMN draws_only INTEGER NOT NULL DEFAULT 0;
+        UPDATE lab_experiments SET seed = lower(hex(randomblob(16))) WHERE seed IS NULL;
       `);
     },
   },

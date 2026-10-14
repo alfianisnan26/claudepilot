@@ -28,7 +28,7 @@
 // Honest limit: a manifest can miss a file. The implementer then says which file and why before reading it, and a missed test shows as a
 // failing check (scripts/slice-check.sh), never silently.
 
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -49,13 +49,19 @@ export const E2 = Object.freeze({
   design: 'randomized',
   arms: [...ARMS],
   strata: ['size', 'role', 'model'],
+  // Only a slice whose brief names a bound draw gets an arm: a slice dispatched without its draw (after a peek) is out, never block-assigned.
+  draws_only: true,
   primary_metric: 'median cost per accepted slice',
   min_n: 30,
   thresholds: { adopt_cost_change: -0.15, interval: 'above zero', guardrail_yield: 'not down', guardrail_defects: 'not up' },
 });
 
 // Case-insensitive: a case-insensitive file system (a Mac) opens `.ENV` as `.env`.
-const DENY = [/(^|\/)\.env(\.|rc$|$)/i, /(^|\/)\.dev\.vars$/i, /\.tfvars(\.json)?$/i, /(^|\/)credentials\.json$/i, /(^|\/)\.npmrc$/i, /(^|\/)\.netrc$/i, /(^|\/)\.git(\/|$)/i, /(^|\/)node_modules\//i, /\.(pem|key|p12|pfx|keystore)$/i, /(^|\/)id_(rsa|ed25519|ecdsa)/i, /git-credentials/i, /(^|\/)\.kube\//i, /(^|\/)\.config\/gh\//i];
+const DENY = [
+  /(^|\/)\.env[^/]*$/i, /\.env$/i, /(^|\/)\.dev\.vars$/i, /\.tfvars(\.json)?$/i, /(^|\/)credentials\.json$/i, /(^|\/)\.npmrc$/i, /(^|\/)\.yarnrc[^/]*$/i,
+  /(^|\/)\.netrc$/i, /(^|\/)\.pypirc$/i, /(^|\/)\.git(\/|$)/i, /(^|\/)node_modules\//i, /\.(pem|key|p12|pfx|keystore)$/i, /(^|\/)id_(rsa|ed25519|ecdsa)/i,
+  /git-credentials/i, /(^|\/)\.kube\//i, /(^|\/)\.config\/gh\//i, /(^|\/)\.aws\//i, /(^|\/)\.ssh\//i, /(^|\/)\.docker\/config\.json$/i,
+];
 
 /** Parses the explorer's answer. Never throws: every problem is an error line with its line number. */
 export function parseManifest(text) {
@@ -131,6 +137,15 @@ export function runAllowed(line, tests = new Set()) {
   return false;
 }
 
+const lexists = (abs) => {
+  try {
+    lstatSync(abs);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const textLines = (abs) => {
   const s = readFileSync(abs, 'utf8');
   const lines = s.split('\n');
@@ -183,7 +198,8 @@ export function checkManifest(m, { root, ticket } = {}) {
     const at = `line ${n.line} (${n.path})`;
     const w = inside(root, n.path);
     if (w.error) { errors.push(`${at}: ${w.error}`); continue; }
-    if (existsSync(w.abs)) errors.push(`${at}: exists already (preload it with file:)`);
+    // lstat: a dangling link is something there too (writing the new file would follow it).
+    if (lexists(w.abs)) errors.push(`${at}: exists already (preload it with file:)`);
     else if (!existsSync(dirname(w.abs))) errors.push(`${at}: its folder does not exist`);
     created.add(n.path);
   }
