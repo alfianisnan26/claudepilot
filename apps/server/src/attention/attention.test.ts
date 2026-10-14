@@ -399,3 +399,115 @@ test('the route: signed in only, declared, filters by kind and refuses an unknow
   assert.equal((await app(false).request('/api/attention')).status, 401);
   assert.equal((await app(true).request('/api/attention?kind=nope')).status, 400);
 });
+
+/* ---------- Slice 2: Later, notifications, the Portal MCP ---------- */
+
+test('Later: a person snoozes an item they see; it stays listed and counted, marked until when; 0 brings it back; another person and a token get 404', async () => {
+  mcpProposal('e1', 'v1');
+  mcpProposal('e2', 'v2');
+  ownedByA('mcp_entry', ['e1']);
+  let clock = now;
+  const r = createAttention(store, { now: () => clock, tickMs: 0, debounceMs: 1 });
+  const a = user('u_a');
+  const item = r.snooze(a, 'mcp_version', 'v1');
+  assert.equal(item.snoozedUntil, new Date(now + 60 * MIN).toISOString(), 'an hour by default');
+  const l = r.list(a);
+  assert.equal(l.total, 1, 'a snoozed item still waits and is counted');
+  assert.equal(l.items[0]!.snoozedUntil, item.snoozedUntil);
+  assert.equal(r.list(ownerActor()).items.find((i) => i.id === 'v1')?.snoozedUntil, undefined, 'a snooze is the person\'s own');
+  assert.throws(() => r.snooze(a, 'mcp_version', 'v2'), { code: 'NOT_FOUND' }, 'an item the person does not see');
+  assert.throws(() => r.snooze(a, 'mcp_version', 'nope'), { code: 'NOT_FOUND' }, 'the same answer as a missing one');
+  assert.throws(() => r.snooze({ kind: 'token', userId: 'u_a', tokenId: 't1', scope: 'admin' } as Actor, 'mcp_version', 'v1'), { code: 'NOT_FOUND' }, 'tokens do not snooze');
+  clock = now + 61 * MIN;
+  assert.equal(r.list(a).items[0]!.snoozedUntil, undefined, 'back in the deck once the time is up');
+  r.snooze(a, 'mcp_version', 'v1', 24 * 60 * 10);
+  assert.equal(r.list(a).items[0]!.snoozedUntil, new Date(clock + 24 * 60 * MIN).toISOString(), 'never longer than a day');
+  r.snooze(a, 'mcp_version', 'v1', 0);
+  assert.equal(r.list(a).items[0]!.snoozedUntil, undefined, '0 brings it back now');
+  db.exec('DELETE FROM attention_snoozes');
+
+  // The route: declared, the person's own, validated.
+  assert.deepEqual(policyFor('POST /api/attention/snooze'), { kind: 'signed-in' });
+  const app = new Hono();
+  app.onError((e, c) => c.json({ error: (e as { code?: string }).code }, (e as { code?: string }).code === 'NOT_FOUND' ? 404 : (e as { code?: string }).code === 'UNAUTHORIZED' ? 401 : 400));
+  app.route('/api/attention', createAttentionRoutes(r));
+  const post = (body: unknown) => app.request('/api/attention/snooze', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal((await post({ kind: 'mcp_version', id: 'v1' })).status, 401, 'signed out');
+});
+
+test('notifications: a new item tells each person who may decide it once; kinds announced elsewhere stay quiet; the push opens the deck at the card', async () => {
+  const { bridgeAttentionNotify, ATTENTION_NOTIFIED_ELSEWHERE } = await import('./index.js');
+  const { render } = await import('../notify/templates.js');
+  const { createBus } = await import('../notify/bus.js');
+  const bus = createBus();
+  const sent: { kind: string; subject: { id: string }; audience?: string[]; detail?: { text: string }; facts: Record<string, unknown> }[] = [];
+  bus.on('*', (e) => void sent.push(e as never));
+  ownedByA('mcp_entry', ['e1', 'e3']);
+  const r = registry();
+  const stop = bridgeAttentionNotify(r, bus, () => ['u_a', 'u_b']);
+  r.check(); // the baseline: nothing is announced for what already waited
+  mcpProposal('e1', 'v1');
+  mcpProposal('e2', 'v2');
+  chatSession('w1', 'waiting');
+  toolRequest('w1', 'q1', 11); // a tool approval has its own notification
+  r.check();
+  assert.deepEqual(
+    sent.map((e) => `${e.audience?.join(',')}|${e.subject.id}`).sort(),
+    ['u_a|attention:mcp_version:v1', 'u_b|attention:mcp_version:v2'],
+    'each to the person whose own read lists it, and never the tool approval',
+  );
+  assert.ok(ATTENTION_NOTIFIED_ELSEWHERE.has('tool_approval') && ATTENTION_NOTIFIED_ELSEWHERE.has('ci_deploy') && ATTENTION_NOTIFIED_ELSEWHERE.has('ticket_approval'));
+  const e = sent.find((x) => x.subject.id.endsWith(':v1'))!;
+  assert.deepEqual(e.facts, { what: 'MCP', why: 'Outside code' });
+  assert.ok(e.detail?.text && e.detail.text.length > 0, 'the title travels only as the untrusted detail');
+  const shown = render(e as never);
+  assert.equal(shown.title, 'Needs you');
+  assert.equal(shown.path, `/admin/attention?item=${encodeURIComponent('mcp_version:v1')}`);
+  assert.ok(!shown.body.includes('Entry e1'), 'no agent text in the body');
+
+  // Once: resolved and back, read again, or a later change: never a second time.
+  r.check();
+  db.prepare("UPDATE mcp_catalog_versions SET review_state = 'approved' WHERE id = 'v1'").run();
+  r.check();
+  db.prepare("UPDATE mcp_catalog_versions SET review_state = 'draft' WHERE id = 'v1'").run();
+  r.check();
+  mcpProposal('e3', 'v3');
+  r.check();
+  assert.deepEqual(sent.map((x) => x.subject.id).sort(), ['attention:mcp_version:v1', 'attention:mcp_version:v2', 'attention:mcp_version:v3']);
+  stop();
+});
+
+test('attention_list: compact rows by default, full on request; an agent sees only its own session; another item is the same NOT_FOUND as a missing one', async () => {
+  const { portalMcpHarness } = await import('../portalmcp/testkit.js');
+  const { registerAttentionTools } = await import('./index.js');
+  const mcp = await portalMcpHarness();
+  try {
+    const d = mcp.store.db!;
+    for (const id of ['s1', 's2'])
+      d.prepare("INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at) VALUES (?, 'docker/dev', ?, 'waiting', ?, ?, ?)").run(id, `Session ${id}`, ago(MIN), ago(MIN), ago(MIN));
+    for (const s of ['s1', 's2'])
+      d.prepare("INSERT INTO chat_requests (session_id, request_id, kind, tool_name, title, detail, created_at) VALUES (?, 'q1', 'tool', 'Bash', 'Run a command', 'ls', ?)").run(s, ago(20 * MIN));
+    const r = createAttention(mcp.store, { now: () => now, tickMs: 0 });
+    registerAttentionTools(r, mcp.registry);
+    const admin = mcp.token('admin');
+    const agent = await mcp.agentToken('docker/dev', 's1');
+
+    const short = (await mcp.call(admin.secret, 'attention_list', {})).result!.structuredContent;
+    assert.deepEqual(short.items.map((i: { item: string }) => i.item).sort(), ['tool_approval:s1/q1', 'tool_approval:s2/q1']);
+    assert.deepEqual(Object.keys(short.items[0]).sort(), ['item', 'kind', 'link', 'since', 'title', 'why'], 'the short row');
+    assert.equal(short.items[0].title.source, 'attention', 'the title is labelled untrusted');
+    const full = (await mcp.call(admin.secret, 'attention_list', { full: true })).result!.structuredContent;
+    assert.ok('risk' in full.items[0] && 'who' in full.items[0] && 'page' in full.items[0]);
+
+    const mine = (await mcp.call(agent.secret, 'attention_list', {})).result!.structuredContent;
+    assert.deepEqual(mine.items.map((i: { item: string }) => i.item), ['tool_approval:s1/q1'], 'an agent sees its own session only');
+    const theirs = await mcp.call(agent.secret, 'attention_list', { item: 'tool_approval:s2/q1' });
+    const missing = await mcp.call(agent.secret, 'attention_list', { item: 'tool_approval:nope/q1' });
+    assert.equal(theirs.result?.isError, true);
+    assert.equal(theirs.result?.content?.[0]?.text, missing.result?.content?.[0]?.text, 'not visible and not there are one answer');
+    const one = (await mcp.call(agent.secret, 'attention_list', { item: 'tool_approval:s1/q1' })).result!.structuredContent;
+    assert.equal(one.item.link, `/admin/attention?item=${encodeURIComponent('tool_approval:s1/q1')}`);
+  } finally {
+    mcp.done();
+  }
+});

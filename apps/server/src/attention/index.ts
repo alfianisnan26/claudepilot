@@ -9,14 +9,17 @@ import { skillAttentionSource } from '../skills/attention.js';
 import { ticketAttentionSource } from '../tickets/attention.js';
 import { declareAttentionPolicies } from './authz.js';
 import { AttentionRegistry, type AttentionOptions } from './registry.js';
+import { attentionSnoozes } from './snooze.js';
 
 export { AttentionRegistry, type AttentionChanged, type AttentionSource } from './registry.js';
 export { createAttentionRoutes } from './routes.js';
+export { bridgeAttentionNotify, ATTENTION_NOTIFIED_ELSEWHERE } from './notify.js';
+export { registerAttentionTools } from './portalTools.js';
 
 export function createAttention(store: Pick<Store, 'db'>, opts: AttentionOptions = {}): AttentionRegistry {
   declareAttentionPolicies();
   const db = () => store.db;
-  const registry = new AttentionRegistry({ log: (what, e) => console.error(`[attention] reading ${what} failed: ${(e as Error).message}`), ...opts });
+  const registry = new AttentionRegistry({ log: (what, e) => console.error(`[attention] reading ${what} failed: ${(e as Error).message}`), snoozes: attentionSnoozes(db), ...opts });
   registry.register(mcpAttentionSource(db));
   registry.register(skillAttentionSource(db));
   registry.register(ciAttentionSource(db));

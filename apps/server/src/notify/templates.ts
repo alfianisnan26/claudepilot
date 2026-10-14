@@ -3,7 +3,7 @@
 // A number says what it is (an estimate carries "est."). A destination with "Include detail" adds the event's redacted detail, clipped
 // and labelled untrusted. Pure.
 
-import { KEEPGOING_CAUSE_TEXT, NOTIFY_KIND_INFO, notifyPath, type NotifyEvent, type NotifyKind, type NotifySeverity } from '@portal/contracts';
+import { isPortalPath, KEEPGOING_CAUSE_TEXT, NOTIFY_KIND_INFO, notifyPath, type NotifyEvent, type NotifyKind, type NotifySeverity } from '@portal/contracts';
 import { clock } from './quiet.js';
 
 export interface Rendered {
@@ -95,8 +95,14 @@ function pathOf(e: NotifyEvent): string {
       return notifyPath.trigger(s.id, typeof f.runId === 'string' ? f.runId : null);
     case 'trigger_run':
       return notifyPath.trigger(typeof f.triggerId === 'string' ? f.triggerId : s.id, s.id);
-    case 'workspace':
     case 'portal':
+      // A Needs you item (T-146, subject `attention:<kind>:<id>`): the deck opens at that card; the path is checked like any other.
+      if (e.kind === 'attention' && s.id.startsWith('attention:')) {
+        const p = `/admin/attention?item=${encodeURIComponent(s.id.slice('attention:'.length))}`;
+        if (isPortalPath(p)) return p;
+      }
+      return notifyPath.notifications;
+    case 'workspace':
     default:
       return notifyPath.notifications;
   }
@@ -127,6 +133,8 @@ export function tagOf(e: NotifyEvent): string {
       return `cost:${s.id}`;
     case 'keepgoing_attention':
       return `keepgoing:${s.id}:${name(e.facts.what, 'what')}`;
+    case 'attention':
+      return s.id;
     case 'test':
       return `test:${e.id}`;
     default:
@@ -183,6 +191,9 @@ function text(e: NotifyEvent, tz: string): { title: string; body: string } {
       const what = typeof f.what === 'string' && Object.hasOwn(KEEPGOING_CAUSE_TEXT, f.what) ? KEEPGOING_CAUSE_TEXT[f.what as keyof typeof KEEPGOING_CAUSE_TEXT] : 'needs you';
       return { title: 'Keep going', body: join(ws, what, typeof f.ticket === 'string' && name(f.ticket, '')) };
     }
+    case 'attention':
+      // What kind of thing and why a person (fixed words); the item's own title is untrusted and goes only in the detail.
+      return { title: 'Needs you', body: join(name(f.what, 'item'), name(f.why, '')) };
     case 'test':
       return { title: 'Test', body: 'Notifications work' };
     default:

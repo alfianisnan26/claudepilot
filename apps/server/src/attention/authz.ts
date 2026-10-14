@@ -9,6 +9,8 @@ import { declarePolicies } from '../authz/seam.js';
 export const ATTENTION_POLICIES = {
   // Counts by kind and one page of items: each source filters by the actor's rights, so a denial is the same absence as a missing item.
   'GET /api/attention': { kind: 'signed-in' },
+  // Later (the deck's swipe left): a person's own snooze of an item they see now; anything else is the same 404 as a missing item.
+  'POST /api/attention/snooze': { kind: 'signed-in' },
 } satisfies RoutePolicies;
 
 export function declareAttentionPolicies(): void {

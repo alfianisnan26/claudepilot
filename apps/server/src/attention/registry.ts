@@ -13,13 +13,19 @@ import {
   ATTENTION_KINDS,
   ATTENTION_PAGE_DEFAULT,
   ATTENTION_PAGE_MAX,
+  ATTENTION_SNOOZE_DEFAULT_MIN,
+  ATTENTION_SNOOZE_MAX_MIN,
   ATTENTION_WHY,
+  actorUserId,
+  attentionItemKey,
   type Actor,
   type AttentionItem,
   type AttentionKind,
   type AttentionList,
 } from '@portal/contracts';
+import { AppError } from '@isnanme/core';
 import { systemActor } from '../authz/seam.js';
+import type { AttentionSnoozes } from './snooze.js';
 
 export interface AttentionSource {
   kind: AttentionKind;
@@ -52,6 +58,8 @@ export interface AttentionOptions {
   /** The clock's tick, for what turns waiting with time. 0: none (tests). */
   tickMs?: number;
   log?: (what: string, e: unknown) => void;
+  /** A person's Later (migration 860); without it nothing is ever snoozed. */
+  snoozes?: AttentionSnoozes;
 }
 
 const WHY_RANK = new Map(ATTENTION_WHY.map((w, i) => [w, i]));
@@ -115,8 +123,39 @@ export class AttentionRegistry {
     const limit = Math.min(Math.max(Math.trunc(Number.isFinite(q.limit) ? q.limit! : ATTENTION_PAGE_DEFAULT), 0), ATTENTION_PAGE_MAX);
     const offset = Math.max(Math.trunc(Number.isFinite(q.offset) ? q.offset! : 0), 0);
     const chosen = (q.kind ? items.filter((i) => i.kind === q.kind) : items).sort(attentionOrder);
+    // Later is the person's own: their snoozes mark their items (still listed, still counted); a token's or the system's read has none.
+    const userId = actor.kind === 'user' ? actorUserId(actor) : null;
+    const later = userId && limit > 0 ? this.#snoozes(userId) : null;
+    if (later?.size) for (const [n, i] of chosen.entries()) if (later.has(attentionItemKey(i))) chosen[n] = { ...i, snoozedUntil: later.get(attentionItemKey(i))! };
     const total = Object.values(counts).reduce<number>((n, c) => n + (c ?? 0), 0);
     return { total, counts, unavailable, items: chosen.slice(offset, offset + limit), offset, limit, at: new Date(this.#now()).toISOString() };
+  }
+
+  #snoozes(userId: string): Map<string, string> | null {
+    try {
+      return this.#opts.snoozes?.active(userId, this.#now()) ?? null;
+    } catch (e) {
+      this.#opts.log?.('the snoozes', e);
+      return null;
+    }
+  }
+
+  /**
+   * Later: the person puts one item off for `minutes` (default an hour, at most a day; 0 brings it back now). Only an item the person
+   * sees now can be snoozed: anything else is the same NOT_FOUND as an item that does not exist. Returns the item as the list shows it.
+   */
+  snooze(actor: Actor, kind: AttentionKind, id: string, minutes = ATTENTION_SNOOZE_DEFAULT_MIN): AttentionItem {
+    const userId = actor.kind === 'user' ? actorUserId(actor) : null;
+    if (!userId || !this.#opts.snoozes) throw new AppError('NOT_FOUND', 'Nothing like that waits for you.');
+    const item = this.list(actor, { kind, limit: ATTENTION_PAGE_MAX }).items.find((i) => i.id === id);
+    if (!item) throw new AppError('NOT_FOUND', 'Nothing like that waits for you.');
+    const m = Math.min(Math.max(Math.trunc(Number.isFinite(minutes) ? minutes : ATTENTION_SNOOZE_DEFAULT_MIN), 0), ATTENTION_SNOOZE_MAX_MIN);
+    const now = this.#now();
+    const until = m > 0 ? new Date(now + m * 60_000).toISOString() : null;
+    this.#opts.snoozes.set(userId, kind, id, until, now);
+    this.#opts.publish?.();
+    const { snoozedUntil: _was, ...rest } = item;
+    return until ? { ...rest, snoozedUntil: until } : rest;
   }
 
   /** The badge: how many things wait on `actor`. */
