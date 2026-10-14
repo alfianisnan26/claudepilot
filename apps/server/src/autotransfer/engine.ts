@@ -51,7 +51,7 @@ const WAIT_CODES: ReadonlySet<string> = new Set(['no_destination', 'destination_
  * this turn (in about N minutes at the latest when a run-out is projected), then restart the roles the move stops.
  */
 const STEER_TEXT = (claude: string, leftPct: number, to: string, inMin: number | null) =>
-  `Your Claude (${claude}) is at ${leftPct}% left: finish the current step, commit and push your work and every sub-agent's work in progress, then stop. The portal moves this chat to ${to} ${inMin === null ? 'at the end of this turn' : `in about ${inMin} minute${inMin === 1 ? '' : 's'} at the latest (at the end of this turn)`}; after the move, start again the sub-agents and roles it interrupted.`;
+  `Your Claude (${claude}) is at ${leftPct}% left: finish the current step, commit and push your work and every sub-agent's work in progress, put one line per role on your status ticket if you keep one, then stop. The portal moves this chat to ${to} ${inMin === null ? 'at the end of this turn' : `in about ${inMin} minute${inMin === 1 ? '' : 's'} at the latest (at the end of this turn)`}; after the move, start again the sub-agents and roles it interrupted.`;
 const CONTINUE_TEXT = (to: string, why: 'exhausted' | 'steered') =>
   `Moved to ${to} by the portal (${why === 'exhausted' ? 'the Claude you were on ran out of quota' : 'as announced'}). Continue where you stopped, and start again the sub-agents and roles the move interrupted.`;
 
@@ -491,9 +491,13 @@ export class AutoTransferEngine {
         this.#wake(id, RECHECK_MS);
         break;
       }
-      case 'move':
-        await this.#move(s, ownerId, { to: d.to, handoff: d.handoff, reason: d.reason, facts: d.facts, mode, settings, actor: ENGINE_ACTOR, auto: true, steered: row.steeredPeriod !== null });
+      case 'move': {
+        // A chat that was steered (T-105, the coordinator's acceptance item 2) already committed, pushed and noted its roles: no handoff
+        // turn on a Claude that is nearly out; the stored conversation carries, then the continuation.
+        const steered = row.steeredPeriod !== null;
+        await this.#move(s, ownerId, { to: d.to, handoff: steered ? 'skip' : d.handoff, reason: d.reason, facts: d.facts, mode, settings, actor: ENGINE_ACTOR, auto: true, steered });
         break;
+      }
     }
     this.#d.publish();
     return d;

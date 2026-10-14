@@ -144,7 +144,7 @@ test('R4: a long turn with a sub-agent running crosses the threshold: told once 
   await r.tick();
   assert.equal(r.chat.moves.length, 0, 'never mid-turn');
   assert.equal(r.chat.sent.length, 1, 'the steer, once per window period');
-  assert.match(r.chat.sent[0]!.text, /^Your Claude \(Work\) is at 8% left: finish the current step, commit and push your work and every sub-agent's work in progress, then stop\. The portal moves this chat to Home at the end of this turn; after the move, start again the sub-agents and roles it interrupted\.$/);
+  assert.match(r.chat.sent[0]!.text, /^Your Claude \(Work\) is at 8% left: finish the current step, commit and push your work and every sub-agent's work in progress, put one line per role on your status ticket if you keep one, then stop\. The portal moves this chat to Home at the end of this turn; after the move, start again the sub-agents and roles it interrupted\.$/);
   const st = await r.engine.state('s1', 'u_a');
   assert.equal(st.pendingMove?.to.id, 'home');
   // 45 minutes later the turn is still running: no card for an unattended chat, just the wait.
@@ -153,7 +153,7 @@ test('R4: a long turn with a sub-agent running crosses the threshold: told once 
   r.chat.dropped = { approvals: 0, queued: 0, agents: 0 };
   r.chat.turnEnds('s1');
   await r.engine.settled();
-  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'ask' }]);
+  assert.deepEqual(r.chat.moves, [{ id: 's1', to: 'home', handoff: 'skip' }], 'steered: no handoff turn on the nearly-out Claude');
   assert.equal(r.chat.get('s1')!.mode, 'bypassPermissions');
   assert.equal(r.chat.sent.length, 2);
   assert.match(r.chat.sent[1]!.text, /^Moved to Home by the portal \(as announced\)\. Continue where you stopped, and start again the sub-agents and roles the move interrupted\.$/);
