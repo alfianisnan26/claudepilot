@@ -786,3 +786,81 @@ In a real browser at 390, 844 x 390, 768, 1024, 1280 and 1920 px, light and dark
 | UU7 | Keyboard focus inside the chart is the column's tooltip and the dimming of the others, not a ring. |
 | UU8 | A name cut to an ellipsis shows its full text in a native `title` (not on touch or for a keyboard) and in the accessible name; the shared clamp-with-popover component of QA standard A9 is not used yet (it was not there to use). |
 | UU9 | The Usage page is its own chunk, loaded on first use (App.tsx: `lazy` and a skeleton). |
+
+## 28. Efficiency lab (T-287, slice 1 built: the data layer)
+
+Why: the first evaluation of the agents' economy (docs/dev-sessions/overhaul/token-economy-design.md) was computed by hand from the session
+tapes with `docs/dev-sessions/overhaul/evidence/slice_metrics.py`. The lab keeps the same numbers inside the portal as the stream is read,
+so the coordinator's measurement every pass is a query, and a change (RTK, the 1 hour cache, a model per role) is judged by an experiment
+with arms, not by an impression. Slice 1 is the data layer only: no route, no Portal MCP tool and no page yet (§28.6).
+
+### 28.1 What a slice is
+
+- **Sub-agent slice** (`kind = agent`): one sub-agent thread, keyed by the `tool_use` id of the Agent (or Task) call that started it (the
+  stream's `parent_tool_use_id`). Its **ticket** is the first `T-<n>` in that call's prompt (first 2,500 characters) or description, its
+  **role** the call's `subagent_type`, its **model** the model its requests reported last. This is the script's definition.
+- **Turn slice** (`kind = turn`, `turn:<n>`): the main thread's requests between two `result` lines. After a portal restart the count goes
+  on from the highest stored turn (a turn cut by the restart continues in the same row).
+
+### 28.2 What is stored (migration 850), and what never is
+
+Per request (one assistant message, deduplicated by its message id; when a message is reported on several lines the last report wins):
+time, model, input, cache read, cache write 5 minute and 1 hour (the legacy shape without the split counts as 5 minute), the total cache
+write, output. Per tool call (keyed by its `tool_use` id): the tool name, its class, whether a Bash command ran through RTK, the number of
+results and their size in characters. Per slice: kind, ticket, role, model, start. A line of Claude Code's own (`<synthetic>` model) or
+without a model is not a request. A replayed line changes nothing.
+
+Never stored: prompts, commands, results, file paths, assistant text. A command is classified and dropped; a result is measured and
+dropped; a value is kept only when it looks like an id or a plain name (`lab/classify.ts`), otherwise the call or the line is not kept.
+The test `lab.test.ts` puts a marker into every text field of a tape and proves no lab row holds it.
+
+Tool classes: `inspect` is exactly the script's regex (cat, ls, head, tail, grep, rg, find, wc, sed -n, awk, stat, du, diff, echo, pwd at the
+start of the command) so the lab and the baseline agree; the other Bash classes go by the first word after `cd <dir> &&`, `NAME=value` and
+`rtk`: `wait`, `git_read`, `git_write`, `test` (test, build and run), `api` (curl, kubectl, gh, docker, and similar), `edit`, `other`. Other
+tools: Read, Grep, Glob are `inspect`; Edit, Write are `edit`; MCP and web tools `api`; Agent `agent`.
+
+### 28.3 The numbers per slice
+
+Requests; context per request = cache read + cache write (plain input is not in it, as in the script) as the truncated median and the
+value at index floor(0.9 n) of the sorted list; token totals; units in input-price terms (cache read 0.1, write 1.25 for 5 minutes or 2.0 for
+1 hour, output 5, plain input 1: the design's weights); **cost** = units x the model's input price (`lab/prices.ts`, Anthropic's list as of
+2026-10-06; a model not in the list has no cost, shown as unavailable); **re-written tokens** after a cache miss (the previous context was over
+20,000 tokens, this request read less than half of it, and the context did not shrink below 70 percent: the smaller of the lost read and
+this request's write); results and their characters; Bash, RTK and inspection calls; calls per class; start, end and minutes (one
+decimal, half to even). The read weight 0.1 over-estimates a model whose cache read is cheaper (Opus 5.5: 0.05 of input).
+
+Proof that the lab equals the script (source: `lab/lab.test.ts`): on the synthetic tape of `lab/testkit.ts` the script printed, with
+Python 3.11.2 on 2026-10-14, for the implementer slice 6 requests, context p50 33,750 and p90 34,800, units read 13,580, write 80,250,
+output 4,150, 8 results of 4,132 characters, 28,500 re-written tokens, 6 Bash calls of which 2 RTK and 1 inspection, 33.1 minutes; for the
+qa slice 3 requests, 12,900 and 13,000, 2,490, 26,000, 2,950, 2 results of 323 characters, no re-write, 2 Bash calls of which 1 inspection,
+0.2 minutes. The lab gives the same values exactly (the test also runs the script live when python3 is present).
+
+### 28.4 Experiments (migration 851)
+
+An experiment has a name, a hypothesis, a design, its arms, a primary metric, guardrails, thresholds and a minimum n written before the
+start, a status (running, stopped, decided), a start and a stop, and at the end a decision (adopt, reject, iterate) with its verdict.
+
+- **Randomized**: when a sub-agent slice starts (its Agent call is read), every running randomized experiment gives it an arm. The stratum
+  is the role and the requested model; within a stratum the arms come in blocks of one each, in an order drawn from a hash of the
+  experiment, the stratum and the block, so the arms stay balanced within one slice per stratum and the draw can be recomputed. A slice
+  asked again keeps its arm. Telling the sub-agent its arm in its brief needs the read tool of a later slice.
+- **Before and after** (a change that cannot be randomized, such as the 1 hour cache): the sub-agent slices that start in the window are
+  split at the moment of the change.
+- **Excluded**: a slice taken out with a reason (an outage) is in no arm and counted apart.
+- **Report**: per arm n, the medians of requests, context p50, cost (unavailable when any slice has no price), result characters and
+  minutes, and the shares that are sums over sums: re-written tokens over cache writes, inspection over Bash calls, RTK over Bash calls (the
+  compliance of an RTK arm). Intention to treat: the assigned arm counts.
+
+### 28.5 Seam
+
+`ChatController.onStreamLine(sessionId, raw)` is called at the very end of the controller's line handling, after every integrity check, so a
+line the chat refused is never measured (`lab/hook.test.ts`); a throw is caught and never touches the chat. The lab writes only when the store
+is writable.
+
+### 28.6 Not built yet (later slices of T-287)
+
+Outcomes per slice and ticket (accepted first time, rework, gate first try, defects within 7 days, human touches, ESTIMATE against ACTUAL);
+derived measures (cost per accepted slice, first-pass yield, delivered units per hour and per dollar); idle gaps; effort per slice; the
+stratum's ESTIMATE size; bootstrap intervals and per-protocol analysis; routes behind an authz seam, the Portal MCP read tools
+(`efficiency_me`, `experiment_get`), the Efficiency tab, the Experiments page, the Home widget, the weekly digest and the regression alerts;
+retention of the request rows.
