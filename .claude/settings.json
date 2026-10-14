@@ -57,7 +57,11 @@
       "Bash(scripts/k3s-build.sh:*)",
       "Bash(scripts/dev-rig.sh:*)",
       "Bash(scripts/gate-job-stop.sh:*)",
-      "Bash(scripts/job-run.sh:*)"
+      "Bash(scripts/job-run.sh:*)",
+      "Edit(~/work/claudepilot/**)",
+      "Edit(~/work/claudepilot.worktrees/**)",
+      "Write(~/work/claudepilot/**)",
+      "Write(~/work/claudepilot.worktrees/**)"
     ],
     "ask": [],
     "deny": [

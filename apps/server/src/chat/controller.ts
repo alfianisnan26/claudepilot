@@ -154,6 +154,8 @@ const HARNESS_ORIGINS: ReadonlySet<string> = new Set(['task-notification/session
 /** The control-line key under which a turn Claude Code started by itself (T-99) is remembered; keys carry a `/`, message ids never do. */
 const HARNESS_COMMAND = (uuid: string) => `harness/${uuid}`;
 /** The claude flags cp-session runs after `--`; `--resume` or `--session-id` plus the id are spliced in. */
+/** The project settings file a trusted, rules-only folder passes to Claude Code (T-323). */
+const PROJECT_SETTINGS_FILE = '.claude/settings.json';
 const BASE_FLAGS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--replay-user-messages', '--permission-prompt-tool', 'stdio', '--permission-mode', START_MODE];
 /** The tools of the portal's own MCP connector (named `pilot`), pre-allowed for a session that holds an agent token. */
 const PILOT_TOOLS = 'mcp__pilot__*';
@@ -3740,6 +3742,8 @@ export class ChatController {
       o.csid,
       ...(this.#viaPool(workspaceId) ? ['--max-budget-usd', String(this.#budgetUsd())] : []),
       ...(o.bypass ? ['--allow-dangerously-skip-permissions'] : []),
+      // T-323: the project's permission rules the portal trusts, as flag settings (Claude Code ignores them in a folder it doesn't trust).
+      ...(this.#projectSettings.has(`${workspaceId}\u0000${sessionCwd(o.cwd)}`) ? ['--settings', this.#projectSettings.get(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)!] : []),
     ];
     const args = ['start', o.csid, String(o.seg), o.cwd, ...(lines.length ? ['--env', String(lines.length)] : []), '--', ...flags];
     return this.#runOnce(workspaceId, args, lines.length ? `${lines.join('\n')}\n` : undefined, this.#chat.configDir(o.claudeId));
@@ -5129,6 +5133,7 @@ export class ChatController {
    */
   async #scan(workspaceId: string, folder: string): Promise<ChatFolderScan> {
     const scan = await scanFolder(this.#workspaces, this.#store, workspaceId, folder, { timeoutMs: this.execTimeoutMs });
+    this.#noteProjectSettings(workspaceId, folder, scan);
     const before = scan.trusted ? null : this.#chat.folderTrust(scan.workspaceId, scan.folder);
     if (!before || !autoTrustable(scan, before)) return scan;
     let allowed = false;
@@ -5138,6 +5143,7 @@ export class ChatController {
       // the policy couldn't be read: no
     }
     if (!allowed) return scan;
+    this.#noteProjectSettings(workspaceId, folder, { ...scan, trusted: true });
     saveTrust(this.#store, scan, 'portal:rules-only');
     this.#chat.addAudit({
       severity: 'medium',
@@ -5147,6 +5153,23 @@ export class ChatController {
       detail: { folder: scan.folder, hash: scan.hash, before: before.hash, files: scan.files, allowRules: scan.allowRules },
     });
     return { ...scan, trusted: true };
+  }
+
+  /**
+   * T-323: Claude Code applies a project's ALLOW rules only in a folder it trusts itself (its own `hasTrustDialogAccepted`), which the
+   * portal's folder trust never sets, so a dontAsk session was refused what the repository allows (deny rules hold either way). When the
+   * portal trusts the folder at its current hash and its project settings hold permission rules only, the launch passes the project's
+   * `.claude/settings.json` with `--settings`: the rules a person trusted apply, nothing else can load. Remembered per scan: every launch
+   * scans first (a start, a resume or wake, a Move), so the launch that follows reads what was just checked.
+   */
+  readonly #projectSettings = new Map<string, string>();
+
+  #noteProjectSettings(workspaceId: string, folder: string, scan: ChatFolderScan & { files?: string[]; rulesOnly?: boolean }): void {
+    const key = `${workspaceId}\u0000${sessionCwd(folder)}`;
+    const file = PROJECT_SETTINGS_FILE;
+    const ok = scan.trusted && !scan.empty && scan.rulesOnly === true && (scan.files ?? []).includes(file) && typeof scan.folder === 'string' && /^\/[^\0\n\r]*$/.test(scan.folder);
+    if (ok) this.#projectSettings.set(key, `${scan.folder.replace(/\/+$/, '')}/${file}`);
+    else this.#projectSettings.delete(key);
   }
 
   /** A new session's folder: an absolute path, tidied; the home folder when none is given. */
