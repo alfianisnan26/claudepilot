@@ -3076,6 +3076,46 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 860,
+    name: 'Needs you: a person\'s snoozes (later) of waiting items',
+    up(db) {
+      // T-146 slice 2: a swipe left on the deck puts an item off for a while. The registry is read only and keeps no item rows, so the
+      // snooze is the person's own: one row per person and item, until a time. An item never vanishes: past `until` it is in the deck again,
+      // and an item that is resolved leaves its row behind harmlessly (it is cleared when the person snoozes anything next).
+      db.exec(`
+        CREATE TABLE attention_snoozes (
+          user_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          item_id TEXT NOT NULL,
+          until TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, kind, item_id)
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 861,
+    name: 'notify: attention (Needs you) for every destination that hears person requests',
+    up(db) {
+      // As migration 791 did for keepgoing_attention: a destination keeps an explicit list of kinds, so one made before `attention` existed
+      // would never hear it. Whoever hears `human_request` (a ticket for a person) hears a new Needs you item too; a destination that opted
+      // out of requests stays out. Only the list changes; a list that has it already is left alone.
+      const rows = db.prepare('SELECT id, kinds FROM notify_destinations').all() as { id: string; kinds: string }[];
+      const write = db.prepare('UPDATE notify_destinations SET kinds = ? WHERE id = ?');
+      for (const r of rows) {
+        let kinds: unknown;
+        try {
+          kinds = JSON.parse(r.kinds);
+        } catch {
+          continue;
+        }
+        if (!Array.isArray(kinds) || !kinds.includes('human_request') || kinds.includes('attention')) continue;
+        write.run(JSON.stringify([...kinds, 'attention']), r.id);
+      }
+    },
+  },
 ];
 
 /**

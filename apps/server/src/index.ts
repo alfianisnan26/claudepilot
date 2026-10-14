@@ -26,7 +26,7 @@ import { createUsageSpend, registerUsageSpendTools } from './usagespend/index.js
 import { Lab } from './lab/index.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
 import { changesGlance, createGlance } from './glance/index.js';
-import { createAttention } from './attention/index.js';
+import { bridgeAttentionNotify, createAttention, registerAttentionTools } from './attention/index.js';
 import { createPlatform } from './platform/index.js';
 import { createCodespaces } from './codespaces/index.js';
 import { registerPersonas } from './personas/index.js';
@@ -508,6 +508,7 @@ for (const source of [tickets, ci]) {
 // A tool request asked or answered, a session's state: Needs you looks again (its tool approvals past ten minutes come with the tick).
 chatController.onEvent((_id, msg) => changesGlance(msg) && attention.changed());
 attention.start();
+registerAttentionTools(attention);
 // GitHub Codespaces POC: GitHub connections (token or device flow with a client ID only; the token is a sealed secret) and the codespace
 // lifecycle through GitHub's REST API (docs/prd/codespaces-poc.md).
 const codespaces = createCodespaces({ store, pools: poolService, values: secretsKind.values, dataDir: config.paths.data });
@@ -532,6 +533,8 @@ const platform = createPlatform({
   socketAuthorized: (req) => !!portal.session(cookie(req, config.session.cookie)),
 });
 live.onPresence = (connection, presence, req) => platform.presence(connection, presence, req);
+// A new Needs you item tells each person who may decide it, once, through the notification pipeline (its quiet hours and matrix).
+bridgeAttentionNotify(attention, platform.bus, () => platform.owner.ownersOf({ type: 'portal', id: 'attention' }));
 platform.start();
 const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage, usageSpend, repos, glance, attention, codespaces, platform, claudeVersions, connect });
 const handleApi = getRequestListener(app.fetch);

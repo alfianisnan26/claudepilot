@@ -8,6 +8,7 @@ import { ticketsWidget } from './widgets/tickets/widget';
 import { ciWidget } from './widgets/ci/widget';
 import { spendWidget } from './widgets/spend/widget';
 import { autonomyWidget } from './widgets/autonomy/widget';
+import { reviewWidget } from './widgets/needsyou/widget';
 import type { GlanceWidget } from './types';
 
 /**
@@ -26,6 +27,7 @@ export const GLANCE_WIDGETS: readonly GlanceWidget[] = [
   ciWidget,
   spendWidget,
   autonomyWidget,
+  reviewWidget,
 ];
 
 export const widgetById = (id: string): GlanceWidget | undefined => GLANCE_WIDGETS.find((w) => w.id === id);
