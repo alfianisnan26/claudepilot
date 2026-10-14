@@ -118,6 +118,7 @@ const errors = [];
 ws.on('message', (d) => {
   const m = JSON.parse(d);
   if (m.id && pending.has(m.id)) pending.get(m.id)(m);
+  if (m.method === 'Network.requestWillBeSent') fetched.push(m.params.request.url);
   if (m.method === 'Runtime.exceptionThrown') errors.push((m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text).slice(0, 300));
 });
 const send = (method, params = {}) => new Promise((r) => { const id = ++n; pending.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
@@ -137,7 +138,9 @@ const WRAP = `${DIALOG}?.querySelector('button[aria-label="Wrap lines"]')`;
 const CARD = `[...document.querySelectorAll('button[aria-haspopup=dialog]')].find((b) => b.innerText.includes(${JSON.stringify(NAME)}))`;
 const hscroll = `(() => { const scrollsX = (e) => { for (let p = e.parentElement; p && p !== document.body; p = p.parentElement) { const o = getComputedStyle(p).overflowX; if (o === 'auto' || o === 'scroll') return true; } return false; }; const d = document.scrollingElement; const bad = []; for (const e of document.querySelectorAll('body *')) { const r = e.getBoundingClientRect(); if (r.width && (r.right > innerWidth + 1 || r.left < -1) && !e.closest('[aria-hidden=true],.sr-only,[inert]')) { const s = getComputedStyle(e); if (s.position !== 'fixed' && s.visibility !== 'hidden' && !scrollsX(e)) bad.push(e.tagName + '.' + String(e.className).slice(0, 40)); } } return { doc: d.scrollWidth - innerWidth, bad: bad.slice(0, 3) }; })()`;
 const small = (root) => `(() => [...(${root})?.querySelectorAll('button') ?? []].filter((b) => { const r = b.getBoundingClientRect(); return r.width && (r.height < 43.5 || r.width < 43.5) && !b.closest('[aria-hidden=true]'); }).map((b) => (b.getAttribute('aria-label') ?? b.innerText).slice(0, 30) + ' ' + Math.round(b.getBoundingClientRect().width) + 'x' + Math.round(b.getBoundingClientRect().height)))()`;
-const cmLoaded = `performance.getEntriesByType('resource').some((r) => /CodeMirrorView|codemirror/i.test(r.name))`;
+// What the page fetched (from the network events: the page's resource timing buffer fills up on a long session).
+const fetched = [];
+const cmLoaded = () => fetched.some((u) => /CodeMirrorView|codemirror/i.test(u));
 
 const results = [];
 let cfgName = '';
@@ -150,14 +153,17 @@ async function run(cfg) {
   await send('Emulation.setTouchEmulationEnabled', { enabled: !!cfg.mobile });
   await send('Emulation.setSafeAreaInsetsOverride', { insets: cfg.insets ?? { top: 0, bottom: 0, left: 0, right: 0 } });
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: cfg.dark ? 'dark' : 'light' }] });
+  await send('Network.setCacheDisabled', { cacheDisabled: true });
+  await send('Network.setBypassServiceWorker', { bypass: true });
+  fetched.length = 0;
   await send('Page.navigate', { url: `${BASE}/admin/sessions/${SID}` });
   if (!(await waitFor(`!!document.querySelector('textarea[aria-label="Message"]')`, 20000))) return check('page loads', false);
   check('the file card is in the chat', await waitFor(`!!${CARD}`, 8000));
-  check('no CodeMirror code fetched before a file opens', (await ev(cmLoaded)) === false);
+  check('no CodeMirror code fetched before a file opens', cmLoaded() === false);
   await ev(`${CARD}.scrollIntoView({ block: 'center' })`);
   await ev(`${CARD}.click()`);
   check('the file opens in CodeMirror', await waitFor(`!!${CONTENT}`, 8000));
-  check('its chunk was fetched on open', await ev(cmLoaded));
+  check('its chunk was fetched on open', cmLoaded());
   await waitFor(`${CONTENT}?.querySelector('span[class]') !== null`, 4000); // the grammar loads on its own
   await sleep(200);
 

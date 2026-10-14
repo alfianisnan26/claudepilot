@@ -144,7 +144,7 @@ function TextBody({ sessionId, file }: { sessionId: string; file: ChatFile }) {
             <Code2 className="size-4" />
           </button>
         )}
-        <QuietCopyButton text={preview.text} label="Copy text" />
+        <QuietCopyButton text={preview.text} label="Copy text" className="size-10 justify-center rounded-full p-0 tap:size-11" />
       </div>
       {md && !source ? (
         <Markdown text={preview.text} className="text-[14.5px] leading-relaxed" />
