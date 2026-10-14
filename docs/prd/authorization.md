@@ -754,6 +754,7 @@ Generated from the registered tool list (18 files) and checked for coverage. Sco
 | `session_message` | agent | agent: own session tree only |  |
 | `session_family` | agent R | agent: own session tree only |  |
 | `session_stop_worker` | agent | agent: own session tree only |  |
+| `session_request_clear` | agent | agent: a chat of its own workspace; admin: session operate session_id | never a request of the live process (409); T-284 |
 | `ci_runs_list` | agent R | list(ci_run) |  |
 | `ci_run_get` | agent R | ci_run view id |  |
 | `ci_run_logs` | agent R | ci_run view id |  |
