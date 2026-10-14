@@ -164,7 +164,9 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
           unconfirmed.push(`${label}: ${why}`);
         }
       }
-      await chat.send(child.id, randomUUID(), args.prompt, { actor: ctx.actor, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
+      // Claude Code runs an agent name it has no definition for as the default, silently: one line lets the worker say so (T-294 slice 2).
+      const first = args.role ? `[Your role: ${args.role}. If .claude/agents/${args.role}.md is not in your folder, tell your parent with session_message before you start.]\n\n${args.prompt}` : args.prompt;
+      await chat.send(child.id, randomUUID(), first, { actor: ctx.actor, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
       ctx.affected(`session:${child.id}`);
       const where = on.claudeId === parent.claudeId ? WHY_TEXT[on.why] : `${on.name}, ${WHY_TEXT[on.why]}`;
       return {
