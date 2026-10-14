@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   AUTO_BOUNDS,
+  downgradeChain,
   estimatedFigure,
+  nearestEffort,
   measuredFigure,
   parseModelFallback,
   unavailableFigure,
@@ -58,6 +60,8 @@ function claude(id: string, name: string, windows: ClaudeUsageWindow[], over: Pa
     stale: false,
     workspaceRunning: true,
     problem: null,
+    unavailable: null,
+    limitReport: null,
     snoozedUntil: null,
     projectionSnoozedUntil: null,
     slot: null,
@@ -80,6 +84,9 @@ const SETTINGS: AutoTransferSettings = {
   allowBypass: false,
   modelFallback: [],
   keepModelFirst: true,
+  dryRun: false,
+  respectPace: true,
+  paceMinPct: 90,
 };
 
 function options(claudes: ClaudeUsage[], over: Partial<ChatSwitchOptions> = {}): ChatSwitchOptions {
@@ -435,11 +442,15 @@ test('T-29: keep the model first (the default) moves; "change model first" switc
   assert.deepEqual(here.alternatives.map((a) => a.id), ['home'], 'the move stays on offer');
 });
 
-test('T-29: no other Claude has room on Opus: the model changes here (fallback list set); with no list, a warning and nothing moves', () => {
+test('T-29: no other Claude has room on Opus: the model changes here (fallback list set); with no list, the catalogue moves it on the next model down (T-109)', () => {
   const settings = { ...SETTINGS, modelFallback: ['sonnet'] };
   const d = decide(input([WORK_OPUS_LOW(), SPARE_OPUS_OUT()], { ...OPUS, settings }));
   assert.equal(d.act === 'move' && JSON.stringify(d.to), JSON.stringify({ id: 'work', name: 'Work', model: 'sonnet' }));
-  const none = decide(input([WORK_OPUS_LOW(), SPARE_OPUS_OUT()], OPUS));
+  // No list: never a model change in place (T-29), but a move with the best model below Opus that has room (T-109's downgrade chain).
+  const chain = decide(input([WORK_OPUS_LOW(), SPARE_OPUS_OUT()], OPUS));
+  assert.equal(chain.act === 'move' && JSON.stringify(chain.to), JSON.stringify({ id: 'spare', name: 'Spare', model: 'sonnet' }));
+  // "Same model" on and no list: nothing changes model by itself, so a warning.
+  const none = decide(input([WORK_OPUS_LOW(), SPARE_OPUS_OUT()], { ...OPUS, settings: { ...SETTINGS, sameModelOnly: true } }));
   assert.equal(none.act, 'warn');
 });
 
@@ -467,4 +478,63 @@ test('T-29: the fallback list is read from the setting: known families only, in 
   assert.deepEqual(parseModelFallback('Sonnet, haiku sonnet gpt'), ['sonnet', 'haiku']);
   assert.deepEqual(parseModelFallback(''), []);
   assert.deepEqual(parseModelFallback(42), []);
+});
+
+/* ---------- T-109: a destination without the chat's model ---------- */
+
+const FABLE = { session: { id: 's1', workspaceId: 'docker/api-dev', claudeId: 'work', model: 'claude-fable-5-1', state: 'idle' as const, mode: 'default' as const, switching: null } };
+// Work: a Fable chat at 5 % left on the shared session window. Sekar: room, no Fable window (no Fable on its plan). Hasyim: room and a Fable window.
+const WORK_FABLE_LOW = () => claude('work', 'Work', [win('session', 95), win('week', 50), win('model:fable', 40)]);
+const SEKAR = () => claude('sekar', 'Sekar', [win('session', 10), win('week', 20), win('week_opus', 10)]);
+const HASYIM = () => claude('hasyim', 'Hasyim', [win('session', 40), win('week', 40), win('model:fable', 30)]);
+const fableOptions = (claudes: ClaudeUsage[]) => input(claudes, FABLE);
+
+test('T-109: the downgrade chain and the nearest effort', () => {
+  assert.deepEqual(downgradeChain('fable'), ['fable', 'opus', 'sonnet', 'haiku']);
+  assert.deepEqual(downgradeChain('sonnet'), ['sonnet', 'haiku']);
+  assert.deepEqual(downgradeChain('opus', ['haiku', 'fable', 'sonnet', 'nonsense']), ['opus', 'haiku', 'sonnet'], 'the owner\u2019s order, never up, unknown names dropped');
+  assert.deepEqual(downgradeChain(null, ['sonnet']), ['sonnet']);
+  assert.equal(nearestEffort('xhigh', ['low', 'medium', 'high']), 'high');
+  assert.equal(nearestEffort('medium', ['low', 'high']), 'low', 'a tie goes lower');
+  assert.equal(nearestEffort('high', []), 'high', 'levels unknown: as asked');
+  assert.equal(nearestEffort(null, ['low']), null);
+});
+
+test('T-109: the catalogue knows Fable', () => {
+  assert.equal(modelFamily('claude-fable-5-1'), 'fable');
+  assert.equal(modelFamily('fable'), 'fable');
+  assert.equal(modelFamily('claude-opus-4-1'), 'opus');
+  assert.equal(modelFamily('something-new'), null);
+});
+
+test('T-109: a Fable chat prefers a Claude that has Fable, even with less room; it keeps its model', () => {
+  const d = decide(fableOptions([WORK_FABLE_LOW(), SEKAR(), HASYIM()]));
+  assert.equal(d.act, 'move');
+  assert.deepEqual(d.act === 'move' && d.to, { id: 'hasyim', name: 'Hasyim' });
+});
+
+test('T-109: only a Claude without Fable: it moves there on Opus, the best model below Fable, never kept on Fable', () => {
+  const d = decide(fableOptions([WORK_FABLE_LOW(), SEKAR()]));
+  assert.equal(d.act, 'move');
+  assert.deepEqual(d.act === 'move' && d.to, { id: 'sekar', name: 'Sekar', model: 'opus' });
+});
+
+test('T-109: what list_models said wins over the windows: Sekar lists no Opus, so the chat goes there on Sonnet; a listed Fable makes it a same-model move', () => {
+  const noOpus = decide({ ...fableOptions([WORK_FABLE_LOW(), SEKAR()]), listed: (id, f) => (id === 'sekar' ? f === 'sonnet' || f === 'haiku' : null) });
+  assert.deepEqual(noOpus.act === 'move' && noOpus.to, { id: 'sekar', name: 'Sekar', model: 'sonnet' });
+  const hasFable = decide({ ...fableOptions([WORK_FABLE_LOW(), SEKAR()]), listed: (id) => (id === 'sekar' ? true : null) });
+  assert.deepEqual(hasFable.act === 'move' && hasFable.to, { id: 'sekar', name: 'Sekar' });
+});
+
+test('T-109: an Opus chat to a Claude that only has Sonnet; never up to a model the chat was not on', () => {
+  const work = claude('work', 'Work', [win('session', 95), win('week', 50)]);
+  const d = decide({ ...input([work, SEKAR()], OPUS), listed: (id, f) => (id === 'sekar' ? f === 'sonnet' : null) });
+  assert.deepEqual(d.act === 'move' && d.to, { id: 'sekar', name: 'Sekar', model: 'sonnet' });
+  const sonnetChat = decide({ ...input([work, SEKAR()]), listed: (id, f) => (id === 'sekar' ? f === 'fable' || f === 'opus' : null) });
+  assert.equal(sonnetChat.act, 'warn', 'a Sonnet chat is never moved up to Opus or Fable by itself');
+});
+
+test('T-109: the owner’s order overrides the catalogue (modelFallback "haiku"): Fable to Haiku on Sekar', () => {
+  const d = decide({ ...fableOptions([WORK_FABLE_LOW(), SEKAR()]), settings: { ...SETTINGS, modelFallback: ['haiku'] } });
+  assert.deepEqual(d.act === 'move' && d.to, { id: 'sekar', name: 'Sekar', model: 'haiku' });
 });

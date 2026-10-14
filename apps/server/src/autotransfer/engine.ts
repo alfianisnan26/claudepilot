@@ -10,6 +10,7 @@
 import {
   AUTO_CONSTANTS,
   type AutoClaudeRef,
+  type AutoEngineState,
   type AutoFacts,
   type AutoMode,
   type AutoReason,
@@ -25,7 +26,7 @@ import {
 import { AppError } from '@isnanme/core';
 import type { AuditInput } from '../platform/audit.js';
 import type { NotifyBus } from '../notify/bus.js';
-import { decide, effectiveMode, type DecideCounters, type Decision, modelFamily } from './decide.js';
+import { decide, effectiveMode, leftFor, modelFamily, sourceReading, type DecideCounters, type Decision } from './decide.js';
 import type { ChatPort, ClockPort, OwnerPort, UsagePort } from './ports.js';
 import { effectiveSettings, platformSettings, type AutoSettingsReader } from './settings.js';
 import type { AutoStore, SessionRow, StoredSuggestion } from './store.js';
@@ -36,6 +37,49 @@ const DAY = 24 * 60 * MIN;
 export const ENGINE_ACTOR = 'portal:autotransfer';
 /** A deferred move is looked at again this often. */
 const RECHECK_MS = 60_000;
+/** Every chat at or under the threshold, waiting or working, is looked at again this often (T-105): the tick, jittered up to 20 s. */
+const TICK_MS = AUTO_CONSTANTS.waitRecheckMin * MIN;
+const JITTER_MS = 20_000;
+/** A new usage reading asks for a tick too (T-105 item 2): a burst of readings is one tick, and never sooner than this after the last one. */
+const REFRESH_DEBOUNCE_MS = 5_000;
+const REFRESH_MIN_GAP_MS = 30_000;
+/** The refusals that make a chat at or under the threshold wait for quota rather than give up (T-105 R3). */
+const WAIT_CODES: ReadonlySet<string> = new Set(['no_destination', 'destination_busy', 'session_cap', 'day_cap', 'paused']);
+/** What the engine says to a chat (fixed text over names and numbers; never anyone else's words). */
+/**
+ * The steer (T-105, the coordinator's way of moving a working chat): commit and push every sub-agent's work, the move comes at the end of
+ * this turn (in about N minutes at the latest when a run-out is projected), then restart the roles the move stops.
+ */
+const STEER_TEXT = (claude: string, leftPct: number, to: string, inMin: number | null) =>
+  `Your Claude (${claude}) is at ${leftPct}% left: finish the current step, commit and push your work and every sub-agent's work in progress, put one line per role on your status ticket if you keep one, then stop. The portal moves this chat to ${to} ${inMin === null ? 'at the end of this turn' : `in about ${inMin} minute${inMin === 1 ? '' : 's'} at the latest (at the end of this turn)`}; after the move, start again the sub-agents and roles it interrupted.`;
+const CONTINUE_TEXT = (to: string, why: 'exhausted' | 'steered') =>
+  `Moved to ${to} by the portal (${why === 'exhausted' ? 'the Claude you were on ran out of quota' : 'as announced'}). Continue where you stopped, and start again the sub-agents and roles the move interrupted.`;
+
+/**
+ * Minutes until the steer's move at the latest: the projected run-out (the limit ends the turn then, and an exhausted source moves at once);
+ * null when no run-out is projected (the move comes at the end of the turn, whenever that is).
+ */
+function minutesUntil(facts: AutoFacts, nowMs: number): number | null {
+  const t = facts.etaAt?.value ? Date.parse(facts.etaAt.value) : NaN;
+  return Number.isFinite(t) && t > nowMs ? Math.max(1, Math.round((t - nowMs) / 60_000)) : null;
+}
+
+const fig = (f: { value: number | string | null } | undefined, unit = '') => (f && f.value !== null ? `${f.value}${unit}` : 'unavailable');
+
+/** One line per trail row for the log (D-39): what, the chat, left, reset, projected at the reset, the threshold, the pace rule, where to, why. */
+export function decisionLine(e: Pick<AutoTransferEvent, 'kind' | 'sessionId' | 'reason' | 'from' | 'to' | 'facts' | 'code'>): string {
+  const f = e.facts;
+  const parts = [`${e.kind} session=${e.sessionId.slice(0, 8)}`, `from=${e.from?.name ?? '-'}`];
+  if (f) {
+    parts.push(`left=${fig(f.leftPct, '%')}`, `resets=${fig(f.resetsAt)}`, `projected=${fig(f.projectedPct, '%')}`, `threshold=${f.thresholdPct}%`);
+    if (f.pace) parts.push(`pace=${f.pace.verdict}(min ${f.pace.minPct}%)`);
+  }
+  parts.push(`to=${e.to ? `${e.to.name}${e.to.model ? ` on ${e.to.model}` : ''}` : '-'}`, `reason=${e.reason ?? '-'}`, `code=${e.code ?? '-'}`);
+  // T-255: a destination whose usage is unknown says so (it was the last resort; a limit answer there moves the chat on at once).
+  const d = f?.destLeftPct;
+  if (e.to && d && d.basis === 'unavailable') parts.push(`dest=unknown usage (${d.reason})`);
+  return parts.join(' ');
+}
 
 export interface EngineDeps {
   chat: ChatPort;
@@ -78,6 +122,11 @@ export class AutoTransferEngine {
   /** The last evaluation of each chat, for tests and the state route. */
   readonly last = new Map<string, Decision>();
   #sweep: (() => void) | null = null;
+  #tick: (() => void) | null = null;
+  #offUsage: (() => void) | null = null;
+  #refresh: (() => void) | null = null;
+  #lastTickMs = Number.NEGATIVE_INFINITY;
+  #ticking = false;
   #idle: Promise<void> = Promise.resolve();
 
   constructor(deps: EngineDeps) {
@@ -95,12 +144,24 @@ export class AutoTransferEngine {
       this.#sweep = this.#d.clock.timer(6 * 60 * MIN, sweep);
     };
     sweep();
+    const tick = () => {
+      this.#tick = this.#d.clock.timer(TICK_MS + Math.random() * JITTER_MS, tick);
+      void this.tick().catch((e: unknown) => console.error(`[autotransfer] tick failed: ${(e as Error).message}`));
+    };
+    this.#tick = this.#d.clock.timer(TICK_MS + Math.random() * JITTER_MS, tick);
+    this.#offUsage = this.#d.usage.onReading?.(() => this.usageRefreshed()) ?? null;
   }
 
   stop(): void {
     this.#off?.();
     this.#off = null;
     this.#sweep?.();
+    this.#tick?.();
+    this.#tick = null;
+    this.#offUsage?.();
+    this.#offUsage = null;
+    this.#refresh?.();
+    this.#refresh = null;
     for (const cancel of this.#timers.values()) cancel();
     this.#timers.clear();
   }
@@ -188,6 +249,8 @@ export class AutoTransferEngine {
     if (this.#inflight.has(s.id) || s.switching) return;
     if (s.state === 'ended') {
       if (this.#cards.has(s.id)) this.#closeCard(s.id, 'expired');
+      const row = this.#d.store.session(s.id);
+      if (row?.waitingSince || row?.steeredPeriod) this.#d.store.patchSession(s.id, row.ownerId, { waitingSince: null, waitingCode: null, steeredPeriod: null });
       this.#forget(s.id);
       return;
     }
@@ -214,6 +277,69 @@ export class AutoTransferEngine {
     this.#d.publish();
   }
 
+  /* ---------- the tick (T-105): not only at a turn boundary ---------- */
+
+  /**
+   * Every chat whose source is at or under the threshold (working or idle), and every chat waiting for quota, is evaluated again: a long
+   * turn crosses the threshold without a boundary, and a chat with nowhere to go has no next boundary at all. One usage report per owner
+   * (the monitor's snapshot, never a probe). Off when the platform's mode is off.
+   */
+  async tick(): Promise<void> {
+    if (this.#ticking) return;
+    this.#ticking = true;
+    try {
+      await this.#tickOnce();
+    } finally {
+      this.#ticking = false;
+    }
+  }
+
+  /**
+   * The usage monitor has a new reading (a probe, a chat's live `rate_limit_info`): a tick soon, so a chat crossing the threshold mid-turn
+   * is steered within seconds rather than at the next 2-minute tick. Cheap: a burst is one tick, at most one every 30 s, none while one runs.
+   */
+  usageRefreshed(): void {
+    if (this.#refresh || !this.#off) return;
+    const delay = Math.max(REFRESH_DEBOUNCE_MS, this.#lastTickMs + REFRESH_MIN_GAP_MS - this.#d.clock.now());
+    this.#refresh = this.#d.clock.timer(delay, () => {
+      this.#refresh = null;
+      void this.tick().catch((e: unknown) => console.error(`[autotransfer] tick failed: ${(e as Error).message}`));
+    });
+  }
+
+  async #tickOnce(): Promise<void> {
+    const platform = platformSettings(this.#d.settings);
+    if (platform.mode === 'off') return;
+    const now = this.#d.clock.now();
+    this.#lastTickMs = now;
+    const reports = new Map<string, Promise<ClaudeUsage[]>>();
+    for (const s of this.#d.chat.list()) {
+      if (s.state === 'ended' || s.process === 'gone' || this.#inflight.has(s.id) || s.switching) continue;
+      const ownerId = this.#ownerOf(s.id);
+      if (!ownerId) continue;
+      const prefs = this.#d.store.prefs(ownerId);
+      const row = this.#d.store.session(s.id);
+      if (effectiveMode(platform.mode, prefs.mode, row?.mode ?? null) === 'off') continue;
+      if (row?.waitingSince) {
+        this.enqueue(s.id);
+        continue;
+      }
+      let report = reports.get(ownerId);
+      if (!report) {
+        report = this.#d.usage.report({ actorId: ownerId }).then((r) => r.claudes);
+        reports.set(ownerId, report);
+      }
+      const claudes = await report.catch(() => [] as ClaudeUsage[]);
+      const src = claudes.find((c) => c.claudeId === s.claudeId);
+      if (!src || src.runsOn !== 'plan' || !src.checkedAt) continue;
+      const settings = effectiveSettings(platform, prefs);
+      const threshold = this.#d.store.claude(ownerId, s.claudeId).thresholdPct ?? settings.thresholdPct;
+      const reading = sourceReading(src, s.model, threshold, settings.useProjection, now, { respect: settings.respectPace, minPct: settings.paceMinPct });
+      // A chat the pace rule holds (D-39) is looked at too: the hold is recorded once, and it moves when the projection climbs.
+      if (reading?.reason || reading?.paceHold) this.enqueue(s.id);
+    }
+  }
+
   /* ---------- the evaluation ---------- */
 
   #ownerOf(sessionId: string): string | null {
@@ -224,11 +350,13 @@ export class AutoTransferEngine {
     const now = this.#d.clock.now();
     const ev = this.#d.store.sessionEvents(s.id, now - DAY, ['moved', 'failed']);
     const moved = ev.filter((e) => e.kind === 'moved');
+    // The caps count only moves that were not forced by an exhausted source (T-105 item 4); the pause and the ping-pong guard see them all.
+    const counted = moved.filter((e) => e.reason !== 'exhausted');
     return {
       pausedUntilMs: row?.pausedUntil ? ms(row.pausedUntil) : null,
       lastMoveMs: moved.length ? Math.max(...moved.map((e) => ms(e.at))) : null,
-      movesSession24h: moved.length,
-      movesOwner24h: this.#d.store.countOwner(ownerId, 'moved', now - DAY),
+      movesSession24h: counted.length,
+      movesOwner24h: this.#d.store.countOwner(ownerId, 'moved', now - DAY, 'exhausted'),
       failures24h: ev.filter((e) => e.kind === 'failed' && e.actor === ENGINE_ACTOR).length,
       deferSinceMs: row?.deferSince ? ms(row.deferSince) : null,
       left: moved
@@ -281,6 +409,11 @@ export class AutoTransferEngine {
       load: this.#load(s.workspaceId, s.id),
       counters: this.#counters(s, ownerId, row),
       recommend: this.#d.usage.recommend,
+      // What each Claude's list_models said (T-109), when the chat controller knows it: it overrides the catalogue's guess from the windows.
+      listed: (claudeId: string, family: string) => {
+        const fams = this.#d.chat.modelFamilies?.(claudeId) ?? null;
+        return fams ? fams.includes(family) : null;
+      },
     };
     let d = decide(base);
     // The Move flow's check runs commands in the workspace: asked only once the cheap steps (1 to 6) have passed.
@@ -298,26 +431,41 @@ export class AutoTransferEngine {
     const { s, ownerId, settings, mode } = x;
     if (mode === 'off') {
       if (this.#cards.has(id) || this.#d.store.openSuggestion(id)) this.#closeCard(id, 'expired');
+      if (this.#d.store.session(id)?.waitingSince) this.#d.store.patchSession(id, ownerId, { waitingSince: null, waitingCode: null });
       return null;
     }
     if (this.#inflight.has(id)) return null;
-    const { d } = await this.#decide(x, true);
+    const { d, claudes } = await this.#decide(x, true);
     this.last.set(id, d);
     const now = this.#d.clock.now();
     const row = this.#d.store.patchSession(id, ownerId, { lastEvalAt: iso(now), lastClaudeId: s.claudeId });
     const ctx = { s, ownerId, mode };
+    // Waiting for quota (T-105 R3): nothing can take the chat while its source is at or under the threshold. Said once (the `waiting` row,
+    // alongside the warning or refusal below), then looked at again by the tick until a destination passes, the source recovers, the
+    // chat ends or the mode goes off; the state shows on the chat. `resumed` closes it.
+    const low = d.reading?.reason != null;
+    const holds = low && (d.act === 'warn' || (d.act === 'none' && WAIT_CODES.has(d.code)));
+    if (holds && !row.waitingSince) {
+      const code = d.act === 'warn' ? d.code : (d as { code: AutoRefusal }).code;
+      this.#d.store.patchSession(id, ownerId, { waitingSince: iso(now), waitingCode: code });
+      this.#record({ ...this.#base(s, ownerId, mode), kind: 'waiting', reason: d.reading!.reason, facts: { ...d.reading!.facts, ...this.#nextFreeFacts(s, claudes, settings.thresholdPct, now) }, code }, 'medium');
+    } else if (!holds && row.waitingSince && (d.act === 'move' || d.act === 'suggest' || d.act === 'wait' || (d.act === 'none' && (d.code === 'above_threshold' || d.code === 'pace_under')))) {
+      this.#d.store.patchSession(id, ownerId, { waitingSince: null, waitingCode: null });
+      this.#record({ ...this.#base(s, ownerId, mode), kind: 'resumed', reason: d.reading?.reason ?? null, facts: d.reading?.facts ?? null, to: d.act === 'move' || d.act === 'wait' || d.act === 'suggest' ? d.to : null, code: d.act === 'none' ? d.code : null }, 'info');
+    }
     switch (d.act) {
       case 'none': {
-        if (d.code === 'above_threshold' || d.code === 'stale_reading' || d.code === 'pooled' || d.code === 'no_plan_reading' || d.code === 'owner_denied') {
+        if (d.code === 'above_threshold' || d.code === 'pace_under' || d.code === 'stale_reading' || d.code === 'pooled' || d.code === 'no_plan_reading' || d.code === 'owner_denied') {
           // The source recovered (or can no longer be judged): an open card closes, a waiting move stops waiting.
           if (this.#d.store.openSuggestion(id)) this.#closeCard(id, 'expired');
           if (row.deferSince) this.#d.store.patchSession(id, ownerId, { deferSince: null });
         }
-        if (d.code === 'session_cap' || d.code === 'day_cap' || d.code === 'owner_denied') {
+        // The pace rule's hold (D-39) is said once per source window period, with its numbers (left, reset, projected, threshold).
+        if (d.code === 'session_cap' || d.code === 'day_cap' || d.code === 'owner_denied' || d.code === 'pace_under') {
           const key = `${d.code}|${s.claudeId}|${d.reading?.window.resetsAt ?? ''}`;
           if (row.refusedKey !== key) {
             this.#d.store.patchSession(id, ownerId, { refusedKey: key });
-            this.#record({ ...this.#base(s, ownerId, mode), kind: 'refused', reason: d.reading?.reason ?? null, facts: d.reading?.facts ?? null, code: d.code }, 'medium');
+            this.#record({ ...this.#base(s, ownerId, mode), kind: 'refused', reason: d.reading?.reason ?? (d.code === 'pace_under' ? 'low' : null), facts: d.reading?.facts ?? null, code: d.code }, d.code === 'pace_under' ? 'info' : 'medium');
           }
         }
         if (d.code === 'paused' && row.pausedUntil && ms(row.pausedUntil) > now) this.#wake(id, ms(row.pausedUntil) - now);
@@ -341,15 +489,60 @@ export class AutoTransferEngine {
           this.#d.store.patchSession(id, ownerId, { deferSince: iso(now) });
           this.#record({ ...this.#base(s, ownerId, mode), kind: 'deferred', reason: d.reason, from: this.#from(s), to: d.to, facts: d.facts, code: 'busy' }, 'info');
         }
+        // A turn runs (T-105 item 2): the chat is told once per source window period to finish its step and stop; the move comes at the boundary.
+        if (s.state === 'working' && row.steeredPeriod !== d.period) await this.#steer(s, ownerId, mode, d, settings.dryRun);
         this.#wake(id, RECHECK_MS);
         break;
       }
-      case 'move':
-        await this.#move(s, ownerId, { to: d.to, handoff: d.handoff, reason: d.reason, facts: d.facts, mode, settings, actor: ENGINE_ACTOR, auto: true });
+      case 'move': {
+        // A chat that was steered (T-105, the coordinator's acceptance item 2) already committed, pushed and noted its roles: no handoff
+        // turn on a Claude that is nearly out; the stored conversation carries, then the continuation.
+        const steered = row.steeredPeriod !== null;
+        await this.#move(s, ownerId, { to: d.to, handoff: steered ? 'skip' : d.handoff, reason: d.reason, facts: d.facts, mode, settings, actor: ENGINE_ACTOR, auto: true, steered });
         break;
+      }
     }
     this.#d.publish();
     return d;
+  }
+
+  /** The steer (T-105 item 2): one message, priority next, as the portal; recorded as `steered`, remembered per period. Dry run: recorded only. */
+  async #steer(s: ChatSession, ownerId: string, mode: AutoMode, d: Extract<Decision, { act: 'wait' }>, dryRun: boolean): Promise<void> {
+    const base = { ...this.#base(s, ownerId, mode), reason: d.reason, to: d.to, facts: d.facts, code: 'busy' as const };
+    this.#d.store.patchSession(s.id, ownerId, { steeredPeriod: d.period });
+    if (dryRun) {
+      this.#record({ ...base, kind: 'dry_run', actor: `${ENGINE_ACTOR}:steer` }, 'info');
+      return;
+    }
+    try {
+      await this.#d.chat.send(s.id, STEER_TEXT(s.claudeName ?? 'Claude', d.reading.leftPct, d.to.name, minutesUntil(d.facts, this.#d.clock.now())), { priority: 'next', actor: ENGINE_ACTOR, actorLabel: 'Auto move' });
+      this.#record({ ...base, kind: 'steered' }, 'info');
+    } catch (e) {
+      this.#d.store.patchSession(s.id, ownerId, { steeredPeriod: null });
+      console.error(`[autotransfer] could not tell a chat to stop: ${(e as Error).message}`);
+    }
+  }
+
+  /** The soonest moment a delegated Claude or the source frees up for this chat: the earliest reset among their binding windows at or under the threshold. */
+  #nextFreeAt(s: ChatSession, claudes: ClaudeUsage[], thresholdPct: number, now: number): string | null {
+    const family = modelFamily(s.model);
+    let best: number | null = null;
+    for (const c of claudes) {
+      if (c.runsOn !== 'plan' || c.workspaceId !== s.workspaceId) continue;
+      const left = leftFor(c, family, now);
+      if (left === null || left > thresholdPct) continue;
+      for (const w of c.windows) {
+        if (!w.resetsAt || w.usedPct === null) continue;
+        const at = ms(w.resetsAt);
+        if (Number.isFinite(at) && at > now && (best === null || at < best)) best = at;
+      }
+    }
+    return best === null ? null : iso(best);
+  }
+
+  #nextFreeFacts(s: ChatSession, claudes: ClaudeUsage[], thresholdPct: number, now: number): Partial<AutoFacts> {
+    const at = this.#nextFreeAt(s, claudes, thresholdPct, now);
+    return at ? { etaAt: { value: at, basis: 'measured' } as AutoFacts['etaAt'] } : {};
   }
 
   #from(s: ChatSession): AutoClaudeRef {
@@ -363,6 +556,8 @@ export class AutoTransferEngine {
   /** One trail row and one platform audit row (names, ids, numbers, codes: never message text). */
   #record(e: Omit<AutoTransferEvent, 'id' | 'at'>, severity: AuditInput['severity']): AutoTransferEvent {
     const row = this.#d.store.addEvent(e);
+    // The log line says the decision's numbers (D-39): names, ids and numbers only, never message text.
+    console.info(`[autotransfer] ${decisionLine(e)}`);
     this.#d.audit?.record({
       kind: `autotransfer.${e.kind}`,
       severity,
@@ -381,6 +576,7 @@ export class AutoTransferEngine {
         leftBasis: e.facts?.leftPct.basis ?? null,
         thresholdPct: e.facts?.thresholdPct ?? null,
         destLeftPct: e.facts?.destLeftPct?.value ?? null,
+        destUsage: e.facts?.destLeftPct ? (e.facts.destLeftPct.basis === 'unavailable' ? `unknown usage (${e.facts.destLeftPct.reason})` : e.facts.destLeftPct.basis) : null,
         etaAt: e.facts?.etaAt?.value ?? null,
         handoff: e.handoff,
         handoffId: e.handoffId,
@@ -416,7 +612,9 @@ export class AutoTransferEngine {
       return;
     }
     if (open) this.#d.store.closeSuggestion(open.id, 'superseded');
-    this.#d.store.addSuggestion({ ownerId, sessionId: s.id, reason: d.reason, from: this.#from(s), to: d.to, alternatives: d.alternatives, facts: d.facts, handoff: d.handoff, dropped: d.dropped, why: d.why });
+    // The card says a model change before it happens (T-109): the model the chat leaves goes with `from`.
+    const from = d.to.model ? { ...this.#from(s), model: modelFamily(s.model) } : this.#from(s);
+    this.#d.store.addSuggestion({ ownerId, sessionId: s.id, reason: d.reason, from, to: d.to, alternatives: d.alternatives, facts: d.facts, handoff: d.handoff, dropped: d.dropped, why: d.why });
     this.#cards.add(s.id);
     this.#record({ ...this.#base(s, ownerId, mode), kind: 'suggested', reason: d.reason, to: d.to, facts: d.facts, handoff: d.handoff, code: d.why === 'deferred' ? 'busy' : null }, 'info');
     this.#notify(s, ownerId, { to: d.to.name, suggested: true, leftPct: d.reading.leftPct });
@@ -426,26 +624,44 @@ export class AutoTransferEngine {
   async #move(
     s: ChatSession,
     ownerId: string,
-    m: { to: AutoClaudeRef; handoff: 'ask' | 'skip'; reason: AutoReason; facts: AutoFacts; mode: AutoMode; settings: { minPauseMin: number }; actor: string; auto: boolean },
+    m: { to: AutoClaudeRef; handoff: 'ask' | 'skip'; reason: AutoReason; facts: AutoFacts; mode: AutoMode; settings: { minPauseMin: number; dryRun?: boolean }; actor: string; auto: boolean; steered?: boolean },
   ): Promise<boolean> {
     // A move that changes the model says which model it left, so Undo can switch back (T-29).
     const from = m.to.model ? { ...this.#from(s), model: modelFamily(s.model) } : this.#from(s);
     const inPlace = m.to.id === s.claudeId;
-    this.#inflight.set(s.id, m.to.id);
     const base = { ...this.#base(s, ownerId, m.mode), reason: m.reason, from, to: m.to, facts: m.facts, handoff: m.handoff, actor: m.actor };
+    if (m.auto && m.settings.dryRun) {
+      // The live check (T-105 item 5): what would happen, in the trail; nothing moves, nothing is said, no pause.
+      this.#record({ ...base, kind: 'dry_run', actor: `${ENGINE_ACTOR}:move` }, 'info');
+      this.#d.publish();
+      return false;
+    }
+    this.#inflight.set(s.id, m.to.id);
+    // After an automatic move the chat goes on by itself (T-105 item 3) when its last turn ended on the limit or it was told to stop for the move.
+    const why: 'exhausted' | 'steered' | null = m.auto ? (m.reason === 'exhausted' ? 'exhausted' : m.steered ? 'steered' : null) : null;
     try {
-      if (!inPlace) await this.#d.chat.switchClaude(s.id, m.to.id, { handoff: m.handoff });
-      if (m.to.model) await this.#d.chat.setModel(s.id, m.to.model);
+      // A move to another Claude takes the model with it (T-109): the Move flow applies it, verifies it and falls down the chain; in place,
+      // the model control as before (T-29).
+      let moved: ChatSession | null = null;
+      if (!inPlace) moved = await this.#d.chat.switchClaude(s.id, m.to.id, { handoff: m.handoff, ...(m.to.model ? { model: m.to.model } : {}) });
+      else if (m.to.model) await this.#d.chat.setModel(s.id, m.to.model);
+      // The trail says the model that APPLIES there, never only what was asked: the Move flow may have gone further down the chain.
+      const applied = moved ? modelFamily(moved.model) : null;
+      if (moved && applied && applied !== modelFamily(s.model)) {
+        base.from = { ...this.#from(s), model: modelFamily(s.model) };
+        base.to = { ...m.to, model: applied };
+      } else if (moved && m.to.model && applied === modelFamily(s.model)) base.to = { id: m.to.id, name: m.to.name };
       const now = this.#d.clock.now();
       // The move's id, from the "Moved to" row the Move flow wrote: the page finds the divider by it.
       const after = Math.max(0, (s.lastSeq ?? 0) - 1);
       const marker = this.#d.chat.history(s.id, after).findLast((e) => e.kind === 'system' && e.transfer?.handoffId && e.transfer.toClaude === m.to.name);
-      this.#d.store.patchSession(s.id, ownerId, { pausedUntil: iso(now + m.settings.minPauseMin * MIN), lastClaudeId: m.to.id, deferSince: null, warnedPeriod: null, refusedKey: null });
+      this.#d.store.patchSession(s.id, ownerId, { pausedUntil: iso(now + m.settings.minPauseMin * MIN), lastClaudeId: m.to.id, deferSince: null, warnedPeriod: null, refusedKey: null, steeredPeriod: null, waitingSince: null, waitingCode: null });
       this.#closeCard(s.id, 'moved');
       this.#record({ ...base, kind: 'moved', handoffId: marker?.transfer?.handoffId ?? null }, m.auto ? 'medium' : 'info');
       if (m.auto) this.#notify(s, ownerId, { to: m.to.name, leftPct: m.facts.leftPct.value ?? 0 });
       this.#moved.add(s.id);
       this.#wake(s.id, m.settings.minPauseMin * MIN);
+      if (why) await this.#continue(s, ownerId, m.mode, m.to, why);
       return true;
     } catch (e) {
       const now = this.#d.clock.now();
@@ -462,6 +678,38 @@ export class AutoTransferEngine {
       this.#inflight.delete(s.id);
       this.#d.publish();
     }
+  }
+
+  /** The continuation after an automatic move (T-105 item 3): one short message on the new Claude, priority next; recorded as `continued`. */
+  async #continue(s: ChatSession, ownerId: string, mode: AutoMode, to: AutoClaudeRef, why: 'exhausted' | 'steered'): Promise<void> {
+    try {
+      await this.#d.chat.send(s.id, CONTINUE_TEXT(to.name, why), { priority: 'next', actor: ENGINE_ACTOR, actorLabel: 'Auto move' });
+      this.#record({ ...this.#base(s, ownerId, mode), kind: 'continued', reason: why === 'exhausted' ? 'exhausted' : 'low', to, code: null }, 'info');
+    } catch (e) {
+      console.error(`[autotransfer] could not continue a moved chat: ${(e as Error).message}`);
+    }
+  }
+
+  /** What the engine waits for, per live chat the caller may view (`GET /api/autotransfer/state`, T-105 item 5). */
+  async engineState(userId: string): Promise<AutoEngineState> {
+    const platform = platformSettings(this.#d.settings);
+    const sessions: AutoEngineState['sessions'] = [];
+    for (const s of this.#d.chat.list()) {
+      if (s.state === 'ended' || !this.#d.owner.can(userId, 'view', { type: 'session', id: s.id, workspaceId: s.workspaceId })) continue;
+      const last = this.last.get(s.id) ?? null;
+      const st = await this.state(s.id, userId);
+      sessions.push({
+        sessionId: s.id,
+        workspaceId: s.workspaceId,
+        claudeId: s.claudeId,
+        state: s.state,
+        leftPct: last?.reading?.leftPct ?? null,
+        last: last ? { act: last.act, code: 'code' in last ? (last.code ?? null) : null } : null,
+        waiting: st.waiting,
+        pendingMove: st.pendingMove,
+      });
+    }
+    return { dryRun: platform.dryRun, sessions };
   }
 
   /* ---------- the card's buttons and the chat's own mode (routes call these for the signed-in user) ---------- */
@@ -557,11 +805,19 @@ export class AutoTransferEngine {
     let lastMove: AutoSessionState['lastMove'] = null;
     const latest = events[0];
     if (latest?.kind === 'moved' && latest.actor === ENGINE_ACTOR && latest.from && ownerId === userId) {
-      lastMove = { event: latest, undo: latest.from.model && latest.to?.model ? this.#undoableModel(s, latest.from.model) : this.#undoable(s, latest.from.id, claudes, now) };
+      lastMove = { event: latest, undo: latest.from.model && latest.to?.model && latest.to.id === latest.from.id ? this.#undoableModel(s, latest.from.model) : this.#undoable(s, latest.from.id, claudes, now) };
     }
     const pausedUntil = row?.pausedUntil && ms(row.pausedUntil) > now ? row.pausedUntil : null;
     const pending = open && open.ownerId === userId ? (({ ownerId: _o, why: _w, ...rest }) => rest)(open) : null;
-    return { sessionId, mode: row?.mode ?? null, effectiveMode: mode, applicable, why, pending, pausedUntil, movesToday, lastMove };
+    const waiting: AutoSessionState['waiting'] =
+      s && row?.waitingSince ? { since: row.waitingSince, code: (row.waitingCode ?? 'no_destination') as AutoRefusal, nextFreeAt: this.#nextFreeAt(s, claudes, x?.settings.thresholdPct ?? 10, now) } : null;
+    const last = this.last.get(sessionId);
+    let pendingMove: AutoSessionState['pendingMove'] = null;
+    if (s && row?.steeredPeriod && last?.act === 'wait' && last.period === row.steeredPeriod) {
+      const steered = this.#d.store.sessionEvents(sessionId, now - DAY, ['steered', 'dry_run'])[0];
+      pendingMove = { to: last.to, reason: last.reason, steeredAt: steered?.at ?? null };
+    }
+    return { sessionId, mode: row?.mode ?? null, effectiveMode: mode, applicable, why, pending, pausedUntil, movesToday, lastMove, waiting, pendingMove };
   }
 
   /** Whether a model change can be undone: the chat is open and runs on another model than the one it left (T-29). */

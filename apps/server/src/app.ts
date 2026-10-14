@@ -89,6 +89,7 @@ import { isWorkspaceId, PLAIN_NAME } from './names.js';
 import { createClaudeUsageRoutes, type ClaudeUsageMonitor } from './claudeusage/index.js';
 import { createUsageSpendRoutes, type UsageSpend } from './usagespend/index.js';
 import { createGlanceRoutes, type Glance } from './glance/index.js';
+import { createAttentionRoutes, type AttentionRegistry } from './attention/index.js';
 import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
@@ -155,6 +156,7 @@ export function createApp(
     usageSpend,
     repos,
     glance,
+    attention,
     codespaces,
     platform,
     claudeVersions,
@@ -192,6 +194,8 @@ export function createApp(
     repos?: ReposService;
     /** Glance widgets: sessions, agents and what needs attention in one snapshot (`/api/glance`). */
     glance?: Glance;
+    /** Needs you: what waits for a person, from every module, read only (`/api/attention`). */
+    attention?: AttentionRegistry;
     /** GitHub Codespaces POC: GitHub connections and the codespace lifecycle (`/api/codespaces`, docs/prd/codespaces-poc.md). */
     codespaces?: Codespaces;
     /** The platform track: notifications, the platform audit, and the modules that register with it (`/api/notify`, `/api/platform`, `/hooks`). */
@@ -495,7 +499,10 @@ export function createApp(
   });
   ws.post('/:target/:name/claude-login/code', async (c) => {
     const { code } = await body<{ code: string }>(c);
-    await logins.submit(...ownSignIn(c), code, claudeDir(c));
+    const [target, name] = ownSignIn(c);
+    const dir = claudeDir(c);
+    await logins.submit(target, name, code, dir);
+    chatController.forgetClaudeModelsAt(`${target}/${name}`, dir); // T-109: another account may offer other models
     return c.json(success({ ok: true }));
   });
   ws.delete('/:target/:name/claude-login', async (c) => {
@@ -503,7 +510,10 @@ export function createApp(
     return c.json(success({ ok: true }));
   });
   ws.post('/:target/:name/claude-logout', async (c) => {
-    await logins.logout(...ownSignIn(c), claudeDir(c));
+    const [target, name] = ownSignIn(c);
+    const dir = claudeDir(c);
+    await logins.logout(target, name, dir);
+    chatController.forgetClaudeModelsAt(`${target}/${name}`, dir);
     return c.json(success({ ok: true }));
   });
 
@@ -784,6 +794,14 @@ export function createApp(
     gl.use(requireSession);
     gl.route('/', createGlanceRoutes(glance));
     app.route('/api/glance', gl);
+  }
+
+  // Needs you: one list of what waits for a person (docs/prd/attention.md); read only, deciding stays on each module's own route.
+  if (attention) {
+    const at = new Hono<Env>();
+    at.use(requireSession);
+    at.route('/', createAttentionRoutes(attention));
+    app.route('/api/attention', at);
   }
 
   // Claude Code version pinning: the registry, the compatibility canary and its schedule, images and the default pin (docs/prd/claude-version-pinning.md).

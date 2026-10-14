@@ -191,6 +191,19 @@ Claude Code emits `{type: "rate_limit_event", rate_limit_info: {...}}` before a 
 - A refused turn (a 429 with `anthropic-ratelimit-unified-status: rejected`) streams the event with `status: "rejected"`, then an `assistant` line (`model: "<synthetic>"`, `api_error: "usage_limit_reached"`, the same info under `api_error_params.rate_limit_info`), then a `result` with `is_error: true`, `api_error_status: 429`. No `api_retry` event ✅. A plain 429 without those headers streams `api_retry` instead ([Chat sessions](chat-sessions.md) §10.3), which carries no limit numbers.
 - The hook gets the `rate_limit_info` object exactly as emitted, as unknown data. The parser takes only numbers, a status and a window type from it. It is not stored as received.
 
+### 10.3 The limit message (T-255)
+
+When the plan is out of quota Claude Code answers the turn itself: an `assistant` line with `message.model: "<synthetic>"`, `error: "rate_limit"`, `is_api_error_message: true` and one text block ✅ (seen on this pod's streams, Claude Code 2.x):
+
+- "You've hit your session limit · resets 11pm (UTC)", "You've hit your session limit, resets 10:20pm (UTC)" ✅; a weekly or model limit and a date ("resets Oct 20, 5am (Asia/Jakarta)") and the older "Claude usage limit reached. Your limit will reset at 5pm (America/New_York)." 📄 are parsed the same way.
+- Often there is no `rate_limit_event` before it (at a session's first turn there is none) ✅, and the probe may still read 0 % with no reset time for that account (2026-10-13).
+
+The chat reader turns it into a refusal of that window with the stated reset (`claudeusage/limitMessage.ts`; the reset is the next such time after the line's own timestamp, in the zone it names, UTC without one; nothing readable: the next 5-hour boundary, `guessed`). The usage module keeps it as the Claude's **limit report** (`claude_usage_latest.limit_report`, migration 810: window, when, until, guessed, the chat) and lays it over every reading until the reset: the window is 100 % used, the Claude `exhausted`, `headroom` exhausted. A guessed reset adds no sample. A line read again after its reset records nothing. The snapshot carries it as `limitReport`; the Claudes tab shows "Limit hit · until 23:00" with an ⓘ: "Limit reported by a chat at 18:36, until 23:00 …" and its source.
+
+### 10.4 Unavailable is a state, never 0 % (T-255)
+
+`ClaudeUsage.unavailable` (and `UsageSummaryClaude.unavailable`) says why a plan Claude's usage is not known (`usageUnavailable` in contracts): `signed_out`, `no_usage_endpoint` (Claude Code's usage call failed or the sign-in has no scope for it), `no_reading`, `no_window`, `no_number`, `no_reset_time` (the session window has no reset time: 0 % so is not a reading), `period_reset`. Such a Claude is `unknown`, not `ok`; its row says "Unavailable: no reset time" with the detail in an ⓘ, and a window at 0 % with no reset time shows a dash. Auto move never prefers it to a measured Claude ([auto transfer](auto-transfer.md) FR10d).
+
 ## 11. Probe mechanics and limits
 
 **Command**, run in the workspace by the runtime's exec as the workspace user:

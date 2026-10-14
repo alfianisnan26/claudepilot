@@ -1,5 +1,5 @@
 // Auto move: the words and numbers the page shows, as pure functions (tested under Node).
-import { AUTO_BOUNDS, type AutoMode, type AutoRefusal, type AutoSessionState, type AutoSuggestion, type AutoTransferEvent, type Figure } from '@portal/contracts';
+import { AUTO_BOUNDS, modelDisplayName, reasonText as usageReasonText, type AutoMode, type AutoRefusal, type AutoSessionState, type AutoSuggestion, type AutoTransferEvent, type ChatSwitchOption, type Figure } from '@portal/contracts';
 
 export const MODE_LABEL: Record<AutoMode, string> = { off: 'Off', ask: 'Ask', auto: 'Automatic' };
 
@@ -11,7 +11,7 @@ export function pctText(f: Figure | undefined | null): string {
 }
 
 /** A model family as people say it: "Sonnet". */
-export const modelName = (family: string): string => family.charAt(0).toUpperCase() + family.slice(1);
+export const modelName = (family: string): string => (modelDisplayName(family) || family).replace(/^./, (c) => c.toUpperCase());
 
 /** Whether the suggestion changes the model on the Claude the chat is on (no move). */
 export const inPlace = (s: Pick<AutoSuggestion, 'from' | 'to'>): boolean => s.from.id === s.to.id && !!s.to.model;
@@ -27,9 +27,12 @@ export function headline(s: Pick<AutoSuggestion, 'from' | 'reason' | 'facts'>): 
 /** The card's second line: "Move to Home (40 % left)", "Use Sonnet here (55 % left)", "Move to Home on Sonnet (40 % left)", or for a
  * Claude without plan limits "Move to Console". */
 export function offer(s: Pick<AutoSuggestion, 'from' | 'to' | 'facts'>): string {
-  const left = s.facts.destLeftPct && s.facts.destLeftPct.value !== null ? ` (${pctText(s.facts.destLeftPct)} left)` : '';
+  // T-255: a destination whose usage is unknown says so (it is only ever the last resort).
+  const left = s.facts.destLeftPct && s.facts.destLeftPct.value !== null ? ` (${pctText(s.facts.destLeftPct)} left)` : s.facts.destLeftPct?.basis === 'unavailable' ? ' (unknown usage)' : '';
   if (inPlace(s)) return `Use ${modelName(s.to.model!)} here${left}`;
-  if (s.to.model) return `Move to ${s.to.name} on ${modelName(s.to.model)}${left}`;
+  // A move that changes the model says it before it happens (T-109): "Move to Sekar on Opus, was Fable".
+  const was = s.from.model && s.from.model !== s.to.model ? `, was ${modelName(s.from.model)}` : '';
+  if (s.to.model) return `Move to ${s.to.name} on ${modelName(s.to.model)}${was}${left}`;
   return `Move to ${s.to.name}${left}`;
 }
 
@@ -64,7 +67,12 @@ export function reasonText(s: Pick<AutoSuggestion, 'reason' | 'facts' | 'handoff
       : ' It writes a handoff first.';
   const d = f.destLeftPct;
   const where = here ? `${modelName(s.to!.model!)} here` : s.to?.model ? `${s.to.name} on ${modelName(s.to.model)}` : s.to?.name;
-  const dest = s.to && d && d.value !== null ? ` ${where} has ${pctText(d)} left (${d.basis === 'estimate' ? 'an estimate' : 'measured'}).` : '';
+  const dest =
+    s.to && d && d.value !== null
+      ? ` ${where} has ${pctText(d)} left (${d.basis === 'estimate' ? 'an estimate' : 'measured'}).`
+      : s.to && d?.basis === 'unavailable'
+        ? ` ${where} has unknown usage (${usageReasonText(d.reason).replace(/\.$/, '').toLowerCase()}): no Claude with a measured reading could take the chat. If it answers with its limit message, the chat moves on at once.`
+        : '';
   // A move keeps Bypass while the policy allows it (chat-sessions §21, FR20a).
   return base + dest + handoff + (bypass && !here ? ' Bypass stays on after the move while the policy allows it.' : '');
 }
@@ -130,6 +138,8 @@ export function whyText(why: AutoRefusal | null): string | null {
       return 'Not allowed for this chat';
     case 'folder_untrusted':
       return 'The folder needs trusting again';
+    case 'pace_under':
+      return 'On pace to last until the reset';
     default:
       return null;
   }
@@ -138,4 +148,47 @@ export function whyText(why: AutoRefusal | null): string | null {
 /** The session menu's choices: Automatic only when the platform allows it (otherwise it would act as Ask). */
 export function modeChoices(platform: AutoMode): Array<AutoMode | 'default'> {
   return platform === 'auto' ? ['default', 'off', 'ask', 'auto'] : ['default', 'off', 'ask'];
+}
+
+/** A clock time as the page shows it: "15:00", with the weekday when it is not today ("Tue 09:30"). */
+export function clockText(iso: string, nowMs: number): string {
+  const d = new Date(iso);
+  const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date(nowMs).toDateString() ? t : `${d.toLocaleDateString([], { weekday: 'short' })} ${t}`;
+}
+
+/**
+ * The status line of a chat the engine holds (T-105): "Moving at the end of this turn" (told to finish its step), "Waiting for quota: next
+ * Claude free at 15:00" (no destination; the soonest reset among the delegated Claudes), or "Waiting for quota" when no reset is known
+ * (never a guessed time). Null when there is nothing to say.
+ */
+export function holdLine(s: Pick<AutoSessionState, 'waiting' | 'pendingMove'> | null, nowMs: number): { title: string; tip: string } | null {
+  if (!s) return null;
+  if (s.pendingMove) {
+    return {
+      title: 'Moving at the end of this turn',
+      tip: `This Claude is at or under the threshold. The chat was told to finish its step and stop; when the turn ends it moves to ${s.pendingMove.to.name} and continues there by itself. Running agents stop with the old process.`,
+    };
+  }
+  const w = s.waiting;
+  if (!w) return null;
+  const why =
+    w.code === 'session_cap' || w.code === 'day_cap'
+      ? 'The limit of automatic moves is reached.'
+      : w.code === 'paused'
+        ? 'Auto move is paused for this chat.'
+        : w.code === 'destination_busy'
+          ? 'Every other Claude already carries its most chats.'
+          : 'No other Claude has more than the threshold left.';
+  return {
+    title: w.nextFreeAt ? `Waiting for quota: next Claude free at ${clockText(w.nextFreeAt, nowMs)}` : 'Waiting for quota',
+    tip: `${why} The portal looks again every 2 minutes; as soon as a Claude has room, or this one resets, the chat moves or goes on by itself.`,
+  };
+}
+
+/** The model a Claude would run the chat on when it is not the chat's own (T-109): its best one at or below it; null when the same. */
+export function modelChange(o: Pick<ChatSwitchOption, 'model'>): { to: string | null; text: string } | null {
+  const m = o.model;
+  if (!m || m.to === m.from) return null;
+  return m.to ? { to: m.to, text: `On ${modelDisplayName(m.to)}, was ${modelDisplayName(m.from)}` } : { to: null, text: `No model at or below ${modelDisplayName(m.from)}` };
 }

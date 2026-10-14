@@ -20,8 +20,9 @@ import {
 import { Link } from 'react-router';
 import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
 import { formatDateTime } from '@/lib/format';
+import { RecoverButton } from './Recover';
 import { endedForSafety, formatUsd, StateBadge, timeShort } from './shared';
-import { useRowSwipe } from './swipe';
+import { SWIPE_SETTLE_MS, useRowSwipe } from './swipe';
 
 /** What a row's ⋯ can do; the page owns the dialogs. */
 export interface RowActions {
@@ -176,7 +177,9 @@ export function SessionRow({
   };
 
   // Swipe on a touch screen: right pins (or unpins), left archives (or unarchives). The panes behind the row say so; past the threshold they
-  // fill in. The row moves by transform inside an overflow-hidden box, so the page never scrolls sideways.
+  // fill in. The row moves by transform inside a box that clips while it moves, so the page never scrolls sideways; at rest nothing clips
+  // (the ⋯ menu opens past the row). The box and the row take the corners the card gives the li (RowList, T-100), so neither paints a
+  // square past the card's curve.
   const swipe = useRowSwipe({
     enabled: !selecting,
     onRight: () => actions.pin(s),
@@ -187,9 +190,9 @@ export function SessionRow({
 
   return (
     <li>
-      <div className="relative overflow-hidden" style={{ touchAction: 'pan-y' }} {...swipe.handlers}>
+      <div className={cn('relative rounded-[inherit]', swipe.clipped && 'overflow-hidden')} style={{ touchAction: 'pan-y' }} {...swipe.handlers}>
         {swipe.dx !== 0 && (
-          <div aria-hidden="true" className="absolute inset-0 flex items-stretch justify-between text-[12.5px] font-semibold">
+          <div aria-hidden="true" className="absolute inset-0 flex items-stretch justify-between rounded-[inherit] text-[12.5px] font-semibold">
             <span className={cn('flex w-[104px] items-center gap-1.5 pl-4 transition-colors', swipe.armed === 'right' ? 'bg-primary text-primary-ink' : 'bg-primary/15 text-primary')}>
               {s.pinnedAt ? <PinOff className="size-4" /> : <Pin className="size-4" />}
               {rightLabel}
@@ -202,8 +205,8 @@ export function SessionRow({
         )}
       <div
         data-swipe={swipe.dx !== 0 ? 'moving' : undefined}
-        style={{ transform: swipe.dx ? `translateX(${swipe.dx}px)` : undefined, transition: swipe.dragging ? 'none' : 'transform 160ms ease-out' }}
-        className={cn('relative flex items-start gap-2.5 bg-surface py-3 pr-2.5 pl-3 sm:pr-4 sm:pl-5', depth === 0 && 'pl-4', picked && 'bg-accent-soft/50')}
+        style={{ transform: swipe.dx ? `translateX(${swipe.dx}px)` : undefined, transition: swipe.dragging ? 'none' : `transform ${SWIPE_SETTLE_MS}ms ease-out` }}
+        className={cn('relative flex items-start gap-2.5 rounded-[inherit] bg-surface py-3 pr-2.5 pl-3 sm:pr-4 sm:pl-5', depth === 0 && 'pl-4', picked && 'bg-accent-soft/50')}
       >
         {selecting && (
           <button
@@ -281,6 +284,7 @@ export function SessionRow({
             <ChevronDown className={cn('size-[18px] transition-transform', !open && '-rotate-90')} />
           </button>
         )}
+        {!selecting && s.endedFor && !s.archivedAt && <RecoverButton session={s} tip={false} />}
         {!selecting && <Menu label={`Actions for ${title}`} items={rowActions(row, actions)} />}
       </div>
       </div>

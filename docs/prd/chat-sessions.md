@@ -156,7 +156,7 @@ adds a way to kill the session).
 | ID | Requirement |
 | --- | --- |
 | FR1 | **New session** (`/admin/sessions/new`) is the session screen, empty, in the last-used workspace and folder, the only eligible one, or the one a workspace's **Chat** button passes. A chip above the composer ("api-dev · ~/work/api ▾") opens a two-step sheet: workspace, then folder (`~/work` and git repositories two levels below). Ineligible workspaces stay tappable, with the reason and the way out: "Stopped · Start", "No account pool · Assign", "Pool change in progress", "4 of 4 running · Settings", "Update Claude Code". Mode and Model · Effort picks become launch flags. The first Send runs the trust step if needed (FR43), then starts the session with persona defaults and policy. |
-| FR2 | The **session list** spans workspaces in attention order: Needs input; Failed and Interrupted; Working (with Starting); Idle; Ended. Ended folds ("… 12 ended"), as does any group past 10 rows. Chips filter by state, one search field matches title, workspace and folder, and MCP-started sessions carry "via MCP". Titles come from the first message, renamable. Persona test sessions never appear (FR42). **Pinned** (2026-10-13, owner): a session can be pinned from its row's ⋯, the session's ⋯, or a swipe to the right on a touch screen (a swipe to the left archives, or unarchives in Archived; past the threshold the pane fills in and the release acts; the row moves inside its own box, the page never scrolls sideways). The chips run Pinned · Idle · Needs you · Working · Ended · Archived · All: Pinned shows once anything is pinned and is the chip the list opens on, else Idle; All is last. A pinned session leads its group whatever the grouping; archiving unpins. `pinned_at` (migration 381), `POST`/`DELETE …/pin`. |
+| FR2 | The **session list** spans workspaces in attention order: Needs input; Failed and Interrupted; Working (with Starting); Idle; Ended. Ended folds ("… 12 ended"), as does any group past 10 rows. Chips filter by state, one search field matches title, workspace and folder, and MCP-started sessions carry "via MCP". Titles come from the first message, renamable. Persona test sessions never appear (FR42). **Pinned** (2026-10-13, owner): a session can be pinned from its row's ⋯, the session's ⋯, or a swipe to the right on a touch screen (a swipe to the left archives, or unarchives in Archived; past the threshold the pane fills in and the release acts; the row moves inside its own box, the page never scrolls sideways). A pinned session leads its group whatever the grouping; archiving unpins. `pinned_at` (migration 381), `POST`/`DELETE …/pin`. **Order by attention** (T-100, 2026-10-13, owner; replaces T-1's "Pinned first, Idle the default"): the chips run Needs you · In progress (was Working; Starting counts) · Idle · Pinned · Ended · Archived · All. A state chip shows only when it has sessions (or while you are on it); Pinned and All always show; Archived once anything is archived. The list opens on the first chip with sessions in that order (All when there are none). Pinned overlaps on the chips (a pinned session counts there and on its state's chip). In **All** (no other grouping) the rows sit under headings in the same order, each with its count: a session goes under one heading, Needs you, then In progress, then Pinned (a pin that is idle or ended), then Idle, then Ended; a pinned row that needs you or works leads that heading with its pin marker. Every heading folds except Needs you; in All the separate Needs-you queue card is left out (its heading is it). Phones: chips are icon and count (the chip you are on also says its name), 44 px each, and only the chip row scrolls sideways. Rules in `apps/web/src/features/chat/listOrder.ts` (tested). **The card's corners** (T-100, the owner's iPhone): each row painted a square background over the card's 24 px curve, and the swipe box clipped all the time, which cut a row's ⋯ menu to its first item; now the top and bottom rows take the card's inner corners, the box clips only while a row moves or settles, and the menu opens whole past the card. Observed in Chromium (touch, safe areas) by `tools/qa/session-list.mjs` at 360, 390, 430 and 1280 px, light and dark, with a long title, a long branch, Bypass and Ended chips: 290 checks passed, 0 failing, at a159208 (2026-10-13; before the fix the same harness failed 76 checks: square row corners at rest and mid-swipe, corner pixels in the row colour, and the ⋯ menu with only its first item reachable). `tools/qa/scroll-lock.mjs` 26/26 and `tools/qa/mobile-drag.mjs` 11/11 passed on the same build. After the merge of `integration` (2026-10-14, 29d20ce plus the harness fix): `session-list.mjs` 290 passed, 0 failing, `scroll-lock.mjs` 26/26, `mobile-drag.mjs` 11/11, `session-swipe.mjs` 11/11 (the harness now waits for the chips and swipes a row that needs no scrolling), typecheck clean and the web tests 440/440. |
 | FR3 | One state vocabulary, shared with Monitoring, Portal MCP and StatusDot: Starting; Working; Needs input; Failed (until the next message); Idle (asleep included); Interrupted (the process vanished; resumable; its own glyph); Ended. A user's Stop isn't a failure. |
 | FR4 | Rename (tap the title), archive, end, resume, delete. End confirms only while Working or Needs input. Archive ends a session that hasn't ended (confirming in the same states) and moves it out of the list to Archived, where its transcript stays; Unarchive brings it back, ended. Delete also purges the session's files in the workspace and says "Claude Code's own transcript stays until its cleanup in N days" (Settings recommends 7 days where secrets are delivered). Two live sessions in one folder both say "Shares ~/work/api with 1 other session" (Q12). |
 | FR43 | **Folder trust.** Print mode skips Claude Code's trust dialog and starts a project's `.mcp.json` servers unasked (Secrets & env T3). Before the first session in a folder, and whenever the scanned files' hash changes, the person sees by name its `.mcp.json` servers, the hooks, allow rules and plugins in `.claude/settings*.json`, and `env` names, and confirms "Trust this folder", stored per workspace and folder. Untrusted folders run only where Settings' `allowManagedHooksOnly` and `allowManagedMcpServersOnly` locks are on. MCP clients can't grant trust. **Rule changes (T-38, 2026-10-13):** with `chat.trust.autoPermissionOnly` on (off by default, a confirmation to turn on), a folder trusted before whose changed files hold nothing but `$schema` and `permissions` with `allow`, `deny` and `ask` lists of strings (no `.mcp.json`, every file read; no hook, server, plugin, env, helper command, `defaultMode` or `additionalDirectories`) is trusted again by itself at the launch that finds it (start, resume, wake, restart, Move, auto move), with a `trust.auto` audit row (medium: folder, old and new hash, files, allow count). The host's `trustscan` says `rulesOnly`; the portal also checks the names. Anything else still waits for a person; an auto move refused for trust is recorded as `folder_untrusted` and notified ("Move blocked"), a wake refused for it notifies `session_failed` with "trust the folder again". |
@@ -378,8 +378,8 @@ The controller records every UUID and `request_id` it sends and ends the session
   after the portal's own Stop or `stop_task`;
 - a turn with nothing behind it: no input from the controller, no finished background task and no
   scheduled task Settings allowed;
-- a permission mode, in a `set_permission_mode` reply or `system/init`, other than the expected one,
-  or a `session_id` that changes.
+- a permission mode, in a `set_permission_mode` reply or `system/init`, other than the expected one, unless it is less permissive
+  (case `mode-downgrade` below, T-277), or a `session_id` that changes.
 
 Contract tests inject each kind of line through the FIFO and from a stdio MCP server and expect the
 session to end.
@@ -418,6 +418,19 @@ three integrity endings in one day:
   an answer the portal gave, the `behavior` it recorded (allow, deny). A different mode, an error, another shape, another behavior or an
   id never asked still ends the session.
 
+**A mode less permissive than expected (T-277, observed 2026-10-14).** The Konfersi chat 3907db7f ended at 02:50:24 UTC, during deploy
+#20 (02:43 to 02:53), with "the permission mode changed to default without this portal (expected bypassPermissions)": after the portal
+restarted, the expected mode was rebuilt from the stored row (Bypass), and a main-thread `system/init` or `system/status` reported
+`default`. The rule (case `mode-downgrade`): the modes are ordered `plan < default < acceptEdits < auto < bypassPermissions`
+(`MODE_RANK`), and a main-thread report strictly lower than the expected one, both in that table, is taken: the portal expects that mode
+from then on, the row shows it, the transcript says "Bypass is off in this chat" (audited `bypass.left`, why `downgrade`) or "Mode is
+<mode> in this chat", and the session event goes out; the portal does not re-enter Bypass there, only the gated path does (`enterBypass`
+with acknowledgement and fresh server code, or the restart and move re-assert). The negative twins still end the session with the same
+text: a report more permissive than expected (also back up after a downgrade), Bypass the portal did not enter, an unknown mode string
+(`dontAsk` included, ranked above Bypass; an expected mode outside the table is never downgraded from), and a sub-agent thread's mode,
+which is never a mode report (the expected mode stays and the next main-thread report is judged against it). Observed in
+`integrity.test.ts` and `restart.test.ts` (a portal restart under a Bypass chat on the controller testkit); not yet seen on the cluster.
+
 **Why a line is read twice (T-265, observed 2026-10-13).** The orchestrator 5c9fcb5f ended at 17:58:46 on the FIRST line of its stream
 (the `set_permission_mode` reply of 15:46, which appears once in the 12 MB file), 20 minutes after the portal restarted at 17:38:44 for a
 deploy. The reader follows a segment with `tail -c +<offset> -f` under `timeout 600`, renewed every 10 minutes from the stored byte
@@ -444,7 +457,7 @@ Migration 772 repaired the chains split on 2026-10-13 (fe3df8bc → fdb140be →
 Konfersi): matched by id prefix only when exactly one row matches, all in one workspace, never overwriting another link, otherwise a
 no-op; a pin moves to the head, the head takes an earlier row's ticket link when it has none, and tickets held by an ended row of the
 chain are assigned to the head with an `assigned` entry (actor `system`) on each timeline. Sessions carry no tags today, so none move.
-Not yet: recovery in place (part B), grouping usage and scores by lineage root (slice 3).
+Recovery in place (part B) is below; not yet: grouping usage and scores by lineage root (slice 3).
 
 **Continuation (T-270, 2026-10-14).** `POST /api/chat/sessions` takes `continuedFrom: <session id>`. The session named must exist (404),
 be in the same workspace and have ended (409 otherwise: a live or interrupted session keeps its work); this is checked before anything is
@@ -453,6 +466,46 @@ and by its ended predecessors down the chain is assigned to the new session ([Ti
 row. A `session.continued` audit row names the predecessor and the tickets moved. The supervisor's start-again path sends it
 (`createBody` in `docs/dev-sessions/supervisor.mjs`). Observed in `chat/continuation.test.ts` (real controller and tickets service, fake
 workspaces); not yet seen on the cluster.
+
+**Recovery in place (T-136 slice 2, D-30, 2026-10-14).** A session ended for integrity comes back as the SAME row: `POST
+/api/chat/sessions/:id/recover` (operate on the session; `RecoverChatRequest {confirm?, by?}`), the Portal MCP tool `session_recover`, and
+Resume on the ended row and on the session page. What it does, in order: the row goes from ended to Interrupted (no process); the trail
+gets one marker, "Recovered in place after an integrity ending: <reason>" (`recovered: true`, shown like a Restart's divider), and a note
+that the line that ended it was dropped; the process starts with `--resume <claude session id>` on a NEW log segment, the path a wake
+and a Restart use, on the Claude it ran on (when that Claude is out of quota the auto move takes the live chat on from there, as for any
+chat); model, effort and mode come back as after any resume; Bypass comes back only through `#keepBypass(id, 'recover')`, the grant a
+Restart and a Move use (the policy and the session's capability; otherwise the start mode, and the transcript says "Bypass not kept after
+the recovery: <why>"), and no sign-in code is involved; then the portal sends one short continuation (`portal:recover`, the supervisor's
+MOVED shape: same conversation, new process, the old sub-agents stopped, carry on). The id, title, pin, ticket link, parent and children,
+the URL and the cost (one series: the row's own, the recovery an event in its transcript) are the row's and stay. "Dropped" means the
+portal never reads that line again (the old segment is not followed and nothing of it is resent); the line was already part of Claude
+Code's own conversation when the portal saw it, and it stays there: that is why a suspicious cause needs a person (below).
+
+What it is refused for (`chat/recover.ts`): a session that hasn't ended (409, a message or Resume picks it up), one a person closed
+("closed by operator", 409), any other ending (a credential ending is for safety: a new session); past `chat.recover.maxPerDay` recoveries
+in 24 hours (default 4; 409 `RECOVER_CAPPED`: it stays ended, and ONE incident ticket tagged `watchdog` is opened per session per 24 h);
+within `chat.recover.pauseMin` of the last one (default 2; 409 `RECOVER_PAUSED` with `retryAfterS`). Both settings are in the registry,
+explained in their InfoTip. Every refusal and every recovery is audited (`session.recover.{done,failed,refused,capped}`).
+
+**A suspicious cause.** An integrity ending now records what it was for (`chat_sessions.ended_for`, migration 805): its case
+(`ENDING_CASES` in `chat/integrity.ts`), the classification, the line's origin in words (never its text) and whether the session was in
+Bypass; the payload carries `endedFor: {reason, classified, case, origin}`. **Harmless** are only the near misses of an accepted case
+whose line came from the process's own machinery: a peer line from a sub-agent that ran in this process whose SendMessage cause was not
+matched (`replay-peer`), and, for rows ended before this, the pre-T-265 "a second control response for request …" (the same line read
+twice, `control-duplicate`). Everything else is **suspicious**: an unknown origin or none, a peer line from no task of the process, a
+command the portal never sent, a different or unknown control answer, a tool request id seen twice, another session id, a mode or Bypass
+the portal did not set, and any older reason. (The ending text for a different second control response is now "a second, different
+control response for request …", so the two never read alike.) An agent (the MCP tool, or a person's sign-in that says `by: "agent"`,
+as the supervisor does) is refused a suspicious cause (403 `RECOVER_SUSPICIOUS`, with the classification); a person gets 409
+`RECOVER_CONFIRM` until they confirm a sheet that shows the reason, the origin and the classification. `session_recover` asks for a
+confirmation every time (preview: the session, its ending and what happens); a person's Resume never needs one for a harmless cause.
+
+**The supervisor** (`docs/dev-sessions/supervisor.mjs`) calls recover first for a track chat ended for integrity, as an agent
+(`recoverBody`), and reads the answer with `recoverVerdict`: back in place; wait for the next round (the pause, a portal restarting); or a
+NEW session continuing it (`continuedFrom`) when refused (absent, the cap, a suspicious cause, a person's close). Its "too many starts"
+cap counts new sessions only. `DRY_RUN=1` makes no call. Observed in `chat/recover.test.ts` (fake workspaces: the row kept, the fresh
+segment, the caps and the pause, Bypass kept and not, the refusals, the route, the MCP tool, the supervisor's shapes); not yet seen on the
+cluster, and the tokens a recovery costs against a new session's start were not measured (they need a real Claude).
 
 ### 10.5 Browser protocol
 
@@ -541,8 +594,8 @@ middle-click) on a row opens the session in its own tab, the v1 split view.
 
 | Part | Design |
 | --- | --- |
-| Header | "Sessions" with **New session**; chips "Needs input 2 · Working · All"; one search field (desktop adds a workspace Select). Empty: "No sessions yet" or "Start a workspace first". Loading: RowsSkeleton. |
-| Rows | Phone: "● Fix login tests … 2m" over "api-dev · Allow: Run npm test?" (the waiting request, the activity or the last reply's first line). Desktop rows (64 px) add "+42 −18", "3 agents", "via MCP" and "Bypass". Interrupted rows carry **Resume**; a ⋯ Menu holds Rename, Open shell, Archive and End. No swipe actions; a row's summary updates at most once a second. |
+| Header | "Sessions" with **New session**; chips in the order of attention, "Needs you 2 · In progress 1 · Idle · Pinned · Ended · All", each only when it has sessions (Pinned and All always; FR2); one search field (desktop adds a workspace Select). Empty: "No sessions yet" or "Start a workspace first". Loading: RowsSkeleton. |
+| Rows | Phone: "● Fix login tests … 2m" over "api-dev · Allow: Run npm test?" (the waiting request, the activity or the last reply's first line). Desktop rows (64 px) add "+42 −18", "3 agents", "via MCP" and "Bypass". Interrupted rows carry **Resume**; a ⋯ Menu holds Rename, Open shell, Archive and End. Touch screens swipe a row (right pins, left archives; FR2). Rows sit in rounded cards and keep to the card's corners (FR2, T-100). A row's summary updates at most once a second. |
 | Share (`…/share`) | The shared thumbnails on top, then New session and the Needs input and Working sessions; picking one opens it with the images in the composer. |
 
 ### 12.3 Session screen and approvals dock (`/admin/sessions/:id`)
@@ -1024,3 +1077,5 @@ T-256); the Home widget ("Autonomy", "Pause all"); the admin MCP tool `session_k
 ticket closing); the move by D-12/D-39 from the sweep; editing the prompt, the caps and N in the UI (the API takes them); the portal's own
 external heartbeat. Until then `supervisor.mjs` stays, and since T-257 it opens one watchdog ticket when it leaves a track down and counts
 starts after a harmless integrity ending (T-136) apart from its cap.
+
+**Needs you (T-146):** a tool request a waiting session has held for ten minutes or more is listed on Needs you ([attention.md](attention.md) §2, `chat/attention.ts`); answering stays on the session page.

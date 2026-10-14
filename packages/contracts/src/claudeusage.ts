@@ -1,7 +1,23 @@
 // Claude usage (docs/prd/claude-usage.md): the plan limits of each Claude, read from Claude Code itself.
 // Nothing here names an account: no email, organization or id. A Claude is the portal's own record of one.
 
-import type { LimitOutlook, PaletteSlot, WindowPace } from './usage.js';
+import type { LimitOutlook, PaletteSlot, UnavailableReason, WindowPace } from './usage.js';
+
+/**
+ * A limit a chat reported (T-255): Claude Code answered a turn with "You've hit your session limit · resets 11pm (UTC)". `until` is the
+ * stated reset (`guessed`: the message had no time the portal could read, so the next 5-hour boundary). Measured: the source is the chat.
+ */
+export interface ClaudeLimitReport {
+  /** The window it names: `session`, `week`, `week_opus`, `week_sonnet`. */
+  window: string;
+  label: string;
+  /** When the chat said it. */
+  at: string;
+  until: string;
+  guessed: boolean;
+  /** The chat that said it. */
+  sessionId: string | null;
+}
 
 /** Where a window stands. `reset`: its reset time has passed, so the number is old. */
 export type UsageLevel = 'ok' | 'near' | 'high' | 'exhausted' | 'reset' | 'unknown';
@@ -63,6 +79,13 @@ export interface ClaudeUsage {
   workspaceRunning: boolean;
   /** Why the last probe gave no numbers. */
   problem: UsageProblem | null;
+  /**
+   * Why this plan Claude's usage is not known (T-255), from {@link usageUnavailable}: not signed in, no usage endpoint, not read yet, no
+   * reset time on its session window. Null when it is measured, or it has no plan limits. A Claude with this set is never shown as 0 % used.
+   */
+  unavailable: UnavailableReason | null;
+  /** A chat on this Claude answered with Claude Code's limit message (T-255): the Claude counts as used up until `until`. */
+  limitReport: ClaudeLimitReport | null;
   /** Alerts are silenced until this ISO time. */
   snoozedUntil: string | null;
   /** Only the "will run out before reset" alerts are silenced until this ISO time (§20.4); the threshold alerts are not. */
@@ -172,6 +195,26 @@ export const ALL_MODEL_WINDOWS: readonly string[] = ['session', 'week'];
  * What a Claude has left, from its windows as {@link ClaudeUsageWindow} says them (each `level` worked out at the time the
  * caller cares about). One function for the server's `headroom(claudeId)` and for the page, so both answer the same.
  */
+/**
+ * Why a Claude's plan usage is not known (T-255), or null when it is measured (or it has no plan limits: a pool, a key). Unknown: not
+ * signed in, Claude Code can't fetch the usage here (`no_usage_endpoint`), never read, or its session window (the 5-hour limit every plan
+ * has) has no number, no reset time (Claude Code says 0 % with no reset both for an unused window and when it can't tell), or a reset that
+ * passed. A limit reported by a chat is measured: the Claude is used up.
+ */
+export function usageUnavailable(c: Pick<ClaudeUsage, 'runsOn' | 'windows' | 'checkedAt' | 'problem'> & { limitReport?: ClaudeLimitReport | null }, nowMs: number): UnavailableReason | null {
+  if (c.runsOn === 'pool' || c.runsOn === 'key') return null;
+  if (c.runsOn === 'none') return 'signed_out';
+  const noEndpoint = c.problem === 'unavailable' || c.problem === 'no_scope';
+  if (c.limitReport && Date.parse(c.limitReport.until) > nowMs) return null;
+  if (c.runsOn !== 'plan' || !c.checkedAt) return noEndpoint ? 'no_usage_endpoint' : 'no_reading';
+  const session = c.windows.find((w) => w.key === 'session');
+  if (!session) return noEndpoint ? 'no_usage_endpoint' : 'no_window';
+  if (session.usedPct === null) return 'no_number';
+  if (!session.resetsAt) return 'no_reset_time';
+  if (Date.parse(session.resetsAt) <= nowMs) return 'period_reset';
+  return null;
+}
+
 export function headroomFrom(input: { claudeId: string; runsOn: ClaudeRunsOn; windows: ClaudeUsageWindow[]; checkedAt: string | null; stale: boolean }): Headroom {
   const base = { claudeId: input.claudeId, limiting: null, exhausted: false, availableAt: null, blockedModels: [] as string[], checkedAt: input.checkedAt, stale: input.stale };
   if (input.runsOn === 'pool') return { ...base, kind: 'no_limits', checkedAt: null, stale: false };

@@ -24,12 +24,18 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { AppError, isAppError } from '@isnanme/core';
 import {
   autoModeAllowed,
+  downgradeChain,
+  modelDisplayName,
+  modelFamilyOf,
+  modelInfo,
+  nearestEffort,
   BYPASS_BLOCKED,
   BYPASS_NOT_CAPABLE,
   BYPASS_NOT_KEPT,
   CHAT_ACTOR_UI,
   CHAT_ENDED_CREDENTIAL,
   CHAT_ENDED_INTEGRITY,
+  CHAT_RECOVER_CAPPED,
   CHAT_SESSION_TITLE_MAX,
   isChatActor,
   isPortalActor,
@@ -106,7 +112,8 @@ import { BtwStore } from './btwStore.js';
 import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
 import { autoTrustable, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError } from './trust.js';
 import { usageReport } from './usage.js';
-import { controlDigest, PEER_CAUSE_MS, sameAnswer, type ControlExpectation, type PeerCause } from './integrity.js';
+import { controlDigest, endingRecord, lessPermissive, PEER_CAUSE_MS, readEnding, sameAnswer, type ControlExpectation, type EndingCase, type PeerCause } from './integrity.js';
+import { DAY_MS, readRecoverConfig, recoverContinuation, recoverRefusal, type RecoverBy } from './recover.js';
 
 /** T-102: the areas a hint may name (anything else a reader returns is left out). */
 const CONFIG_CHANGES: ReadonlySet<string> = new Set<ChatConfigChange>(['mcpset', 'settings', 'policy', 'secrets', 'account', 'persona', 'context', 'skillset', 'browser', 'foundation', 'portal_tools', 'other']);
@@ -245,7 +252,15 @@ interface Restore {
   effort: string | null;
   ultracode: boolean;
   mode: string;
+  /**
+   * A move (T-109): the model is applied and VERIFIED, falling down the catalogue's chain when the destination refuses it or runs another
+   * one; `from` is the model the chat had before the move.
+   */
+  move?: { claudeId: string; name: string; from: string | null; prev: string | null; back?: string };
 }
+
+/** How long what a Claude's `list_models` said is trusted (T-109); older, it is read again at the next start on that Claude. */
+const CLAUDE_MODELS_TTL_MS = 60 * 60_000;
 
 interface LaunchOptions {
   /** Relaunch with `--resume` (Interrupted, or asleep). */
@@ -392,6 +407,8 @@ export class ChatController {
   readonly #costBase = new Map<string, number>();
   /** Per session: when the portal last asked Claude Code to change the model (its note may follow). */
   readonly #modelAsked = new Map<string, number>();
+  /** Per Claude: what its `list_models` offered and when (T-109), from any chat on it. */
+  readonly #claudeModels = new Map<string, { atMs: number; options: ChatModelOption[] }>();
   /** Per session: each model's running totals its process last reported, for each turn's usage metrics. */
   readonly #modelBase = new Map<string, Map<string, ModelTotals>>();
   /**
@@ -407,6 +424,8 @@ export class ChatController {
   readonly #tasksRunning = new Map<string, number>();
   /** Chats whose process a Restart is replacing (`restart`): a move or a second restart is refused meanwhile; messages wait for the new process. */
   readonly #restarting = new Map<string, Promise<void>>();
+  /** Sessions a recover in place (T-136) is bringing back: a second recover is refused meanwhile. */
+  readonly #recovering = new Set<string>();
   /** Per session: messages a caller handed to `send` that haven't been written yet (a Restart waits for none to be on its way). */
   readonly #sending = new Map<string, number>();
   /** When the portal saw each session's current process start (its own clock), for the "delivered since" hint; the stored start time after a portal restart. */
@@ -501,6 +520,13 @@ export class ChatController {
   mcpServersSeen?: (workspaceId: string, directory: string, servers: { name: string; status: string }[]) => string[];
   /** Installed by the owner: whether the policy allows Bypass in chat (the interim switch `sessions.allowBypass`). Unset: no. */
   bypassAllowed?: () => boolean;
+  /**
+   * Installed by the owner (T-109): whether a Claude shows a usage window of a model family (the Fable week), from the usage monitor's last
+   * reading; what decides whether it has a family only some plans include until its `list_models` is known. Unset: no window known.
+   */
+  modelWindow?: (claudeId: string, family: string) => boolean;
+  /** Installed by the owner (T-109, `automove.returnToOriginalModel`): a move to a Claude that has the chat's original model goes back to it. Unset: no. */
+  returnToOriginalModel?: () => boolean;
   /** Installed by the owner (T-38): whether a trusted folder whose changed settings hold permission rules only is trusted again by itself (`chat.trust.autoPermissionOnly`). Unset: no. */
   autoTrustRules?: () => boolean;
   /**
@@ -560,6 +586,13 @@ export class ChatController {
   continueTickets?: (to: string, from: readonly string[]) => string[];
   /** Installed by the Keep going module (T-259): the chat's policy, today's counts and its last action, for the session payload. */
   keepGoingOf?: (sessionId: string) => ChatKeepGoing | null;
+  /** Installed at start-up (T-136): reads a setting (the recover cap and pause, `recover.ts`); unset, the defaults. */
+  recoverSettings?: (key: string) => unknown;
+  /**
+   * Installed by the tickets module (T-136): a session reached its recover cap for the day and stays ended; open ONE ticket (tag watchdog)
+   * for it. Called at most once per session per 24 hours. Facts only: the id, the workspace, the reason (fixed text), the counts.
+   */
+  onRecoverCapped?: (info: { sessionId: string; workspaceId: string; reason: string; count: number; max: number; case: string; classified: string }) => void;
   /** How long the handoff may take (Workspace Claudes Q3), how long the new Claude gets to acknowledge, and how long a running turn gets to finish before a move. */
   noteWaitMs = NOTE_WAIT_MS;
   ackWaitMs = ACK_WAIT_MS;
@@ -864,7 +897,71 @@ export class ChatController {
     const id = this.#require(rawId).id;
     this.#notMoving(id);
     await this.#live(id);
-    return pickModels(await this.#request(id, 'list_models'));
+    const options = pickModels(await this.#request(id, 'list_models'));
+    this.#learnModels(this.#chat.get(id)?.claudeId ?? null, options);
+    return options;
+  }
+
+  #learnModels(claudeId: string | null, options: ChatModelOption[]): void {
+    if (claudeId && options.length) this.#claudeModels.set(claudeId, { atMs: Date.now(), options });
+  }
+
+  /** What a Claude's `list_models` offered, while fresh (T-109), else null. */
+  #listedOptions(claudeId: string): ChatModelOption[] | null {
+    const known = this.#claudeModels.get(claudeId);
+    return known && Date.now() - known.atMs < CLAUDE_MODELS_TTL_MS ? known.options : null;
+  }
+
+  /**
+   * The model families a Claude's `list_models` offered (T-109), while fresh; null when not known. Auto move asks it before choosing a
+   * destination; a Claude's login change makes it read again ({@link forgetClaudeModels}).
+   */
+  modelFamilies(claudeId: string): string[] | null {
+    const options = this.#listedOptions(claudeId);
+    if (!options) return null;
+    return [...new Set(options.flatMap((o) => [modelFamilyOf(o.value), modelFamilyOf(o.resolvedModel)]).filter((f): f is string => !!f))];
+  }
+
+  /** A Claude signed in again or out: what its `list_models` said no longer holds. */
+  forgetClaudeModels(claudeId: string): void {
+    this.#claudeModels.delete(claudeId);
+  }
+
+  /** The same, by where the Claude signs in (a workspace and its Claude's directory, '' for Default): what the sign-in routes know. */
+  forgetClaudeModelsAt(workspaceId: string, directory: string): void {
+    if (!this.#chat.hasClaudes(workspaceId)) return;
+    for (const c of this.#chat.listClaudes(workspaceId)) if (c.directory === directory) this.#claudeModels.delete(c.id);
+  }
+
+  /**
+   * Whether a Claude can run a model family (T-109): its `list_models` when known, else the catalogue (a family every plan has: yes; one
+   * only some plans have, like Fable: only with its usage window). Unknown families: yes.
+   */
+  #claudeHas(claudeId: string, family: string): { has: boolean; known: boolean } {
+    const listed = this.modelFamilies(claudeId);
+    if (listed) return { has: listed.includes(family), known: true };
+    const info = modelInfo(family);
+    if (!info || info.assumed) return { has: true, known: false };
+    let window = false;
+    try {
+      window = !!this.modelWindow?.(claudeId, family);
+    } catch {
+      window = false;
+    }
+    return { has: window, known: false };
+  }
+
+  /** The best family at or below the chat's that a Claude has (T-109), with whether its list was read. */
+  #bestModelOn(claudeId: string, model: string | null): ChatSwitchOption['model'] {
+    const from = modelFamilyOf(model);
+    if (!from) return undefined;
+    let known = false;
+    for (const f of downgradeChain(from)) {
+      const h = this.#claudeHas(claudeId, f);
+      known ||= h.known;
+      if (h.has) return { from, to: f, known };
+    }
+    return { from, to: null, known };
   }
 
   /** A session as tabs see it: while its chat moves to another Claude, where to and how far along. */
@@ -1290,7 +1387,8 @@ export class ChatController {
     const options = await Promise.all(
       others.map(async (claude): Promise<ChatSwitchOption> => {
         const v = shared ?? (await check(claude));
-        return { claude, ok: v.ok, reason: v.ok ? null : v.reason, fix: v.ok ? null : v.fix };
+        const model = this.#bestModelOn(claude.id, source.model);
+        return { claude, ok: v.ok, reason: v.ok ? null : v.reason, fix: v.ok ? null : v.fix, ...(model ? { model } : {}) };
       }),
     );
     // The handoff is asked of the Claude the chat runs on now, on its own credential.
@@ -1330,7 +1428,7 @@ export class ChatController {
    * has acknowledged it, the old process is stopped and its segment closed. While it runs the chat takes no
    * messages (`switching`): nothing is queued. Does not copy a login.
    */
-  async switchClaude(rawId: string, destClaudeId: string, opts: { handoff?: 'ask' | 'skip' } = {}): Promise<ChatSession> {
+  async switchClaude(rawId: string, destClaudeId: string, opts: { handoff?: 'ask' | 'skip'; model?: string } = {}): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
     const source = this.#require(sessionId);
     if (source.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
@@ -1340,12 +1438,13 @@ export class ChatController {
     }
     if (dest.id === source.claudeId) throw new AppError('VALIDATION_FAILED', 'That session is already on this Claude.');
     if (opts.handoff !== undefined && opts.handoff !== 'ask' && opts.handoff !== 'skip') throw new AppError('VALIDATION_FAILED', 'Unknown handoff choice.', { details: { handoff: 'Expected ask or skip.' } });
+    if (opts.model !== undefined && (typeof opts.model !== 'string' || !MODEL_VALUE.test(opts.model.trim()))) throw new AppError('VALIDATION_FAILED', 'Pick a model.', { details: { model: 'Unknown model.' } });
     if (this.#moving.has(sessionId)) throw new AppError('CONFLICT', 'This chat is already moving.');
     if (this.#restarting.has(sessionId)) throw new AppError('CONFLICT', 'This chat is restarting. Try again in a moment.');
     this.#moving.set(sessionId, { toClaude: dest.name, step: 'handoff' });
     this.#emitSession(sessionId);
     try {
-      return await this.#switch(source, dest, opts.handoff !== 'skip');
+      return await this.#switch(source, dest, opts.handoff !== 'skip', opts.model?.trim());
     } finally {
       this.#moving.delete(sessionId);
       this.#tags.delete(sessionId);
@@ -1361,7 +1460,7 @@ export class ChatController {
     this.#emitSession(sessionId);
   }
 
-  async #switch(source: ChatSession, dest: WorkspaceClaude, ask: boolean): Promise<ChatSession> {
+  async #switch(source: ChatSession, dest: WorkspaceClaude, ask: boolean, model?: string): Promise<ChatSession> {
     const sessionId = source.id;
     const workspaceId = source.workspaceId;
     const from = source.claudeName ?? 'Claude';
@@ -1409,7 +1508,17 @@ export class ChatController {
       if (r.code !== 0) throw new AppError('SERVICE_UNAVAILABLE', `The session host couldn’t start ${dest.name} (exit ${r.code ?? 'unknown'}).`, { expose: true });
 
       // 4. The chat follows the new run: its reader, row and segment, and then the opening goes in.
-      const restore: Restore = { model: row.model, effort: row.effort, ultracode: row.ultracode === 1, mode: row.mode === 'bypassPermissions' ? START_MODE : row.mode };
+      // The model (T-109): the one asked for, else the chat's own, else (with `automove.returnToOriginalModel`) the one it had before an
+      // earlier move changed it, when this Claude has it. Applied and verified after the start, down the chain when refused.
+      const original = row.original_model ?? null;
+      const back = !model && original && this.returnToOriginalModel?.() ? original : null;
+      const restore: Restore = {
+        model: model ?? row.model ?? back,
+        effort: row.effort,
+        ultracode: row.ultracode === 1,
+        mode: row.mode === 'bypassPermissions' ? START_MODE : row.mode,
+        move: { claudeId: dest.id, name: dest.name, from: original ?? row.model, prev: row.model, ...(back ? { back } : {}) },
+      };
       // What the old run still has running ends with it in step 5 (the new run may start its own meanwhile).
       const oldTasks = this.#chat.runningTaskIds(sessionId);
       this.#stopReader(sessionId);
@@ -2312,6 +2421,96 @@ export class ChatController {
     return this.#chat.get(sessionId)!;
   }
 
+  /* ---------- Recover in place (T-136 slice 2, D-30) ---------- */
+
+  /**
+   * Brings a session ended for integrity back IN PLACE (chat-sessions PRD §10.4): the same row (id, title, pin, tags, tickets, parent and
+   * children, cost series), its conversation resumed with `--resume` on a fresh log segment, the path a wake and a Restart use, on the
+   * Claude it ran on (when that one is out of quota, the auto move takes it on from there, as for any live chat). The line that ended it
+   * is never read again (the old segment is not followed) and the transcript says so. Bypass comes back only through `#keepBypass`
+   * (`recover`): the policy and the session's capability, as a Restart; otherwise the start mode, and the transcript says why. One trail
+   * entry, then the short continuation message. Refused (`recover.ts`): a session a person closed, any other ending, a suspicious cause
+   * for an agent (403) or for a person who did not confirm (409), the day's cap (one watchdog ticket) and the pause. Audited.
+   */
+  async recover(rawId: string, opts: { by?: RecoverBy; confirm?: boolean; actor?: string } = {}): Promise<ChatSession> {
+    const sessionId = this.#chat.resolveId(rawId);
+    this.#require(sessionId);
+    const row = this.#chat.row(sessionId)!;
+    const by: RecoverBy = opts.by === 'agent' ? 'agent' : 'person';
+    const actor = opts.actor ?? (by === 'agent' ? 'agent' : CHAT_ACTOR_UI);
+    if (this.#recovering.has(sessionId)) throw new AppError('CONFLICT', 'This session is already being recovered.');
+    const ending = readEnding(row.ended_reason, row.ended_for);
+    const now = this.#clock();
+    const trail = this.#chat.audit({ kind: 'session.recover', sessionId, limit: 100 });
+    const recent = trail
+      .filter((a) => a.kind === 'session.recover.done' || a.kind === 'session.recover.failed')
+      .map((a) => Date.parse(a.at))
+      .filter((t) => Number.isFinite(t) && now - t < DAY_MS)
+      .sort((a, b) => a - b);
+    const config = readRecoverConfig(this.recoverSettings);
+    try {
+      recoverRefusal(row, ending, { by, confirm: opts.confirm === true, recent, now, config });
+    } catch (e) {
+      const code = isAppError(e) ? e.code : 'ERROR';
+      this.#chat.addAudit({ severity: 'medium', kind: 'session.recover.refused', sessionId, workspaceId: row.workspace_id, actor, detail: { by, code, case: ending?.case ?? null, classified: ending?.classified ?? null } });
+      if (code === CHAT_RECOVER_CAPPED && ending) {
+        const told = trail.some((a) => a.kind === 'session.recover.capped' && now - Date.parse(a.at) < DAY_MS);
+        if (!told) {
+          this.#chat.addAudit({ severity: 'high', kind: 'session.recover.capped', sessionId, workspaceId: row.workspace_id, actor: 'portal', detail: { count: recent.length, max: config.maxPerDay } });
+          try {
+            this.onRecoverCapped?.({ sessionId, workspaceId: row.workspace_id, reason: (row.ended_reason ?? '').slice(CHAT_ENDED_INTEGRITY.length), count: recent.length, max: config.maxPerDay, case: ending.case, classified: ending.classified });
+          } catch (err) {
+            console.warn(`[chat] ${shortId(sessionId)}: the recover cap's ticket could not be opened: ${this.#message(err)}`);
+          }
+        }
+      }
+      throw e;
+    }
+    const why = (row.ended_reason ?? '').slice(CHAT_ENDED_INTEGRITY.length);
+    // Was it in Bypass when it ended? Stored with the ending since T-136; an older row: its last Bypass record is "left, ended".
+    const wasBypass = ending!.bypass || (row.ended_for == null && this.#chat.audit({ kind: 'bypass', sessionId, limit: 1 }).some((a) => a.kind === 'bypass.left' && a.detail.why === 'ended'));
+    this.#recovering.add(sessionId);
+    this.#emitSession(sessionId);
+    try {
+      // No process, not ended: the next launch resumes the conversation (`--resume`) on a NEW segment, so the old log (and the line that
+      // ended it) is never followed again.
+      this.#chat.patchSession(sessionId, { state: 'interrupted', process: 'gone', endedFor: null });
+      this.#append(sessionId, { kind: 'system', text: `Recovered in place after an integrity ending: ${why}`, recovered: true });
+      this.#note(sessionId, `The line that ended it was dropped: it isn’t read again (${ending!.classified}, ${ending!.origin}).`);
+      try {
+        await this.#live(sessionId);
+      } catch (e) {
+        // It stays ended, as it was, with its reason and its classification: a later recover (or a new session) is still possible.
+        this.#stopReader(sessionId);
+        const now2 = this.#chat.row(sessionId);
+        if (now2?.process === 'live') await this.#runOnce(row.workspace_id, ['stop', claudeSessionOf(now2)]).catch(() => undefined);
+        this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason: row.ended_reason, endedFor: row.ended_for ?? null });
+        this.#note(sessionId, `Couldn’t recover it: ${isAppError(e) ? e.message : this.#message(e)}`);
+        this.#chat.addAudit({ severity: 'medium', kind: 'session.recover.failed', sessionId, workspaceId: row.workspace_id, actor, detail: { by, case: ending!.case } });
+        throw e;
+      }
+      if (wasBypass) await this.#keepBypass(sessionId, 'recover');
+      const after = this.#chat.row(sessionId);
+      this.#chat.addAudit({
+        severity: 'info',
+        kind: 'session.recover.done',
+        sessionId,
+        workspaceId: row.workspace_id,
+        actor,
+        detail: { by, case: ending!.case, classified: ending!.classified, confirmed: opts.confirm === true, bypass: wasBypass ? (after?.mode === 'bypassPermissions' ? 'kept' : 'dropped') : 'none', claude: this.#chat.get(sessionId)?.claudeName ?? null },
+      });
+      try {
+        await this.#send(sessionId, randomUUID(), recoverContinuation(why), { actor: 'portal:recover', actorLabel: 'Recovered' });
+      } catch (e) {
+        this.#note(sessionId, `Couldn’t send the continuation: ${isAppError(e) ? e.message : this.#message(e)}`);
+      }
+      return this.#decorate(this.#chat.get(sessionId)!);
+    } finally {
+      this.#recovering.delete(sessionId);
+      this.#emitSession(sessionId);
+    }
+  }
+
   /**
    * Stops a running process for a deliberate restart (the session is left asleep; the next `#live` resumes it). The reader goes first, so the
    * process's end isn't read as a crash. `quiet`: the session was in Bypass and keeps it, so it reads the start mode now (what the new process
@@ -2740,7 +2939,7 @@ export class ChatController {
       this.#chat.addAudit({ severity: 'info', kind: 'bypass.left', sessionId, workspaceId: row?.workspace_id, actor: 'ui', detail: { to: applied } });
     }
     if (applied === 'bypassPermissions') {
-      this.#endIntegrity(sessionId, 'Claude Code switched to Bypass permissions, which chat sessions never allow');
+      this.#endIntegrity(sessionId, 'Claude Code switched to Bypass permissions, which chat sessions never allow', 'mode-bypass');
       throw new AppError('CONFLICT', 'The session ended: Claude Code switched to Bypass permissions.');
     }
     this.#chat.patchSession(sessionId, { mode: applied });
@@ -3049,12 +3248,18 @@ export class ChatController {
     }
     const now = await this.#request(sessionId, 'get_settings').then(pickApplied, () => null);
     const failed: string[] = [];
-    if (r.model && now?.model !== r.model) {
+    let effort = r.effort;
+    if (r.model && r.move) {
+      const got = await this.#applyModel(sessionId, r.model, r.move, now?.model ?? null);
+      if (!this.#isLive(sessionId)) return;
+      // Effort only where the model has it: the nearest level otherwise (T-109).
+      if (got && effort) effort = nearestEffort(effort, this.#effortLevels(r.move.claudeId, got));
+    } else if (r.model && now?.model !== r.model) {
       this.#modelAsked.set(sessionId, Date.now());
       await this.#request(sessionId, 'set_model', { model: r.model }).catch(() => failed.push('model'));
     }
     const settings: { effort?: string; ultracode?: boolean } = {};
-    if (r.effort && now?.effort !== r.effort) settings.effort = r.effort;
+    if (effort && now?.effort !== effort) settings.effort = effort;
     if (r.ultracode && now?.ultracode !== true) settings.ultracode = true;
     if (settings.effort !== undefined || settings.ultracode !== undefined)
       await this.#request(sessionId, 'apply_flag_settings', { settings: flagSettings(settings) }).catch(() => failed.push(settings.ultracode ? 'effort and ultracode' : 'effort'));
@@ -3072,6 +3277,87 @@ export class ChatController {
     await this.#refreshApplied(sessionId).catch(() => undefined);
     // A process stopped meanwhile (ended, a pool change) failed them all: nothing worth a note.
     if (failed.length && this.#isLive(sessionId)) this.#note(sessionId, `Couldn’t restore the ${failed.join(', ')} after resuming.`);
+  }
+
+  /**
+   * A move's model (T-109): asks the destination for `wanted`, then reads what APPLIES; when it refuses or runs another model, the next
+   * family down the catalogue's chain (skipping families its `list_models` lacks). Stores what applies on the row (never what was asked)
+   * and the chat's model before the move as `originalModel` when they differ; a note says the change ("Model: Fable to Opus (Sekar has no
+   * Fable).") or that none could be set. Returns the model that applies, or null.
+   */
+  async #applyModel(sessionId: string, asked: string, move: NonNullable<Restore['move']>, current: string | null): Promise<string | null> {
+    // What the destination offers, read once per hour per Claude: it lets the chain skip what it lacks.
+    if (!this.#listedOptions(move.claudeId)) {
+      const options = await this.#request(sessionId, 'list_models').then(pickModels, () => [] as ChatModelOption[]);
+      if (!this.#isLive(sessionId)) return null;
+      this.#learnModels(move.claudeId, options);
+    }
+    const listed = this.modelFamilies(move.claudeId);
+    // `automove.returnToOriginalModel`: the chat's original model when this Claude has it (known only now, from its list).
+    const backFam = modelFamilyOf(move.back);
+    const wanted = move.back && backFam && (listed ? listed.includes(backFam) : this.#claudeHas(move.claudeId, backFam).has) ? move.back : asked;
+    const fam = modelFamilyOf(wanted);
+    const tries = fam ? [wanted, ...downgradeChain(fam).slice(1)].filter((m, i) => !listed || listed.includes(i === 0 ? fam : m)) : [wanted];
+    const same = (a: string | null, b: string) => !!a && (modelFamilyOf(a) && modelFamilyOf(b) ? modelFamilyOf(a) === modelFamilyOf(b) : a === b);
+    let got: string | null = null;
+    for (const m of tries) {
+      if (same(current, m)) {
+        got = current;
+        break;
+      }
+      this.#modelAsked.set(sessionId, Date.now());
+      const asked = await this.#request(sessionId, 'set_model', { model: m }).then(
+        () => true,
+        () => false,
+      );
+      if (!this.#isLive(sessionId)) return null;
+      if (!asked) continue;
+      const applied = await this.#request(sessionId, 'get_settings').then(pickApplied, () => null);
+      if (!this.#isLive(sessionId)) return null;
+      if (applied?.model) current = applied.model;
+      if (same(applied?.model ?? null, m)) {
+        got = applied!.model!;
+        break;
+      }
+    }
+    const original = move.from;
+    const origFam = modelFamilyOf(original);
+    if (got) {
+      const back = origFam ? modelFamilyOf(got) === origFam : got === original;
+      const wasChanged = !!this.#chat.row(sessionId)?.original_model;
+      this.#chat.patchSession(sessionId, { model: got, originalModel: back ? null : original });
+      // A note and one audit row only when the model that runs changed with this move (what ran before it, `prev`).
+      if (!same(move.prev, got)) {
+        this.#chat.addAudit({
+          severity: 'info',
+          kind: 'model.changed',
+          sessionId,
+          workspaceId: this.#chat.row(sessionId)?.workspace_id ?? null,
+          actor: 'portal',
+          detail: { at: 'move', claude: move.claudeId, from: modelFamilyOf(move.prev) ?? move.prev, to: modelFamilyOf(got) ?? got, asked: modelFamilyOf(wanted) ?? wanted, original: back ? null : (origFam ?? original) },
+        });
+        if (back && wasChanged) this.#note(sessionId, `Model: back to ${modelDisplayName(got)}.`);
+        else {
+          // Why: the destination refused or lacks what was asked, or (a person asked for a lower model) it lacks the chat's own.
+          const why = !same(got, wanted) ? wanted : origFam && !back && !this.#claudeHas(move.claudeId, origFam).has ? original : null;
+          const lacks = why ? ` (${move.name} has no ${modelDisplayName(why)})` : '';
+          this.#note(sessionId, `Model: ${modelDisplayName(move.prev ?? original ?? wanted)} to ${modelDisplayName(got)}${lacks}.`);
+        }
+      }
+    } else {
+      // Nothing could be set: say what runs, and remember what the chat had.
+      if (current) this.#chat.patchSession(sessionId, { model: current, originalModel: original && !same(current, original) ? original : null });
+      this.#note(sessionId, `Couldn’t set ${modelDisplayName(wanted)} or a model below it on ${move.name}; it runs on ${current ? modelDisplayName(current) : 'its default model'}.`);
+    }
+    this.#emitSession(sessionId);
+    return got;
+  }
+
+  /** The effort levels a Claude's `list_models` gives for a model (T-109), [] when not known. */
+  #effortLevels(claudeId: string, model: string): string[] {
+    const fam = modelFamilyOf(model);
+    const o = (this.#listedOptions(claudeId) ?? []).find((x) => x.value === model || x.resolvedModel === model || (!!fam && (modelFamilyOf(x.value) === fam || modelFamilyOf(x.resolvedModel) === fam)));
+    return o?.effortLevels ?? [];
   }
 
   /** Makes sure there is a running process to talk to: waits out work in flight, resumes or wakes one that isn't running. */
@@ -3273,7 +3559,7 @@ export class ChatController {
     // Integrity (PRD §10.4): the stream may show only what this portal started.
     // The stream reports Claude Code's own session id, which changes only when the portal moves the chat to
     // another Claude (the row is repointed first, and this reader reads that run's log).
-    if (parsed.sessionIdSeen && parsed.sessionIdSeen !== this.#csid(sessionId)) return void this.#endIntegrity(sessionId, `the agent reported a different session id (${shortId(parsed.sessionIdSeen)})`);
+    if (parsed.sessionIdSeen && parsed.sessionIdSeen !== this.#csid(sessionId)) return void this.#endIntegrity(sessionId, `the agent reported a different session id (${shortId(parsed.sessionIdSeen)})`, 'session-id');
     // Credentials (§6 rules 1 and 3), on a pool: every turn on its helper, and never plan limits. The source
     // Claude Code reported is only compared, never kept. On a Claude's own sign-in both are its own.
     if ((parsed.apiKeySource !== undefined || parsed.rateLimitEvent) && this.#viaPool(this.#chat.row(sessionId)?.workspace_id ?? '')) {
@@ -3388,7 +3674,7 @@ export class ChatController {
       try {
         canonical = this.#chat.addRequest(sessionId, { ...parsed.request, agentLabel: parent ? this.#label(sessionId, parent) : null });
       } catch {
-        return void this.#endIntegrity(sessionId, `a tool request id arrived twice (${shortId(parsed.request.requestId)})`);
+        return void this.#endIntegrity(sessionId, `a tool request id arrived twice (${shortId(parsed.request.requestId)})`, 'request-duplicate');
       }
       this.#append(sessionId, { kind: 'request', requestId: canonical.requestId, request: canonical, agentLabel: canonical.agentLabel, parentToolUseId: parent });
       // A file the portal itself staged for this chat's attachment: Claude Code asks to read it only because it lies outside
@@ -3487,7 +3773,7 @@ export class ChatController {
       if (typeof mode === 'string' && mode) {
         // Bypass is accepted only as the answer to an entry the portal made after every check (a grant held for that one request).
         if (mode === 'bypassPermissions' && !this.#bypassGrant.has(sessionId)) {
-          this.#endIntegrity(sessionId, 'Claude Code switched to Bypass permissions, which chat sessions never allow');
+          this.#endIntegrity(sessionId, 'Claude Code switched to Bypass permissions, which chat sessions never allow', 'mode-bypass');
           return false;
         }
         this.#confirmMode(sessionId, mode);
@@ -3500,7 +3786,7 @@ export class ChatController {
       return true;
     }
     if (answered === 'completed') return this.#secondControlResponse(sessionId, ANSWERED(id), reply, digest);
-    this.#endIntegrity(sessionId, `a control response for request ${shortId(id)} that this portal never asked for or answered`);
+    this.#endIntegrity(sessionId, `a control response for request ${shortId(id)} that this portal never asked for or answered`, 'control-unknown');
     return false;
   }
 
@@ -3521,7 +3807,7 @@ export class ChatController {
       console.log(`[chat] ${shortId(sessionId)}: ignored a second control response for ${shortId(id)} (the same answer by shape; its first copy kept no digest)`);
       return false;
     }
-    this.#endIntegrity(sessionId, `a second control response for request ${shortId(id)}`);
+    this.#endIntegrity(sessionId, `a second, different control response for request ${shortId(id)}`, 'control-different');
     return false;
   }
 
@@ -3562,7 +3848,7 @@ export class ChatController {
       console.log(`[chat] ${shortId(sessionId)}: Claude Code started a turn of its own (${shortId(uuid)}) after a sub-agent or background task`);
       return true;
     }
-    this.#endIntegrity(sessionId, `Claude Code queued a message this portal didn't send (${shortId(uuid)})`);
+    this.#endIntegrity(sessionId, `Claude Code queued a message this portal didn't send (${shortId(uuid)})`, 'command-unknown', `a command this portal never sent (${state ?? 'no state'})`);
     return false;
   }
 
@@ -3582,8 +3868,22 @@ export class ChatController {
     if (replay.localCommand && this.#chat.slashCommandRunning(sessionId)) return true;
     // A model change the portal asked for: Claude Code echoes "Set model to …" as a replayed line.
     if (replay.modelNote && Date.now() - (this.#modelAsked.get(sessionId) ?? 0) < MODEL_NOTE_MS) return true;
-    this.#endIntegrity(sessionId, `a message this portal didn't send reached Claude Code (${shortId(replay.uuid ?? 'no id')}${replay.origin ? `, origin ${replay.origin.kind}` : ''})`);
+    this.#endIntegrity(sessionId, `a message this portal didn't send reached Claude Code (${shortId(replay.uuid ?? 'no id')}${replay.origin ? `, origin ${replay.origin.kind}` : ''})`, ...this.#replayCase(sessionId, replay));
     return false;
+  }
+
+  /**
+   * How a refused replayed line is classified (T-136 slice 2): a peer line from a sub-agent that ran in THIS process is `replay-peer`'s near
+   * miss (harmless: an agent may recover it); a peer line from anything else, another origin or none is suspicious. The origin's kind is
+   * Claude Code's own word, clipped; never the line's text.
+   */
+  #replayCase(sessionId: string, replay: NonNullable<ParsedLine['replay']>): [EndingCase, string] {
+    const kind = replay.origin?.kind ? String(replay.origin.kind).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) : '';
+    if (kind === 'peer') {
+      const own = !!replay.peer?.taskId && this.#chat.taskRanSince(sessionId, replay.peer.taskId, this.#chat.row(sessionId)?.process_started_at ?? null);
+      return own ? ['replay-peer', 'a sub-agent of this process'] : ['replay-peer-unknown', 'peer: not a task of this process'];
+    }
+    return ['replay-unknown', kind ? `unknown origin: ${kind}` : 'no origin'];
   }
 
   /** Remembers a sub-agent's SendMessage calls, and marks one queued when its own result says so (INTEGRITY_CASES `replay-peer`). */
@@ -3618,13 +3918,13 @@ export class ChatController {
   /**
    * The mode a main-thread `system/init` or `system/status` reports must be the one the portal set or
    * confirmed. Claude Code changes it by itself only into plan mode after EnterPlanMode, and out of it
-   * after the portal approved ExitPlanMode. Bypass always ends the session.
+   * after the portal approved ExitPlanMode. Bypass always ends the session. A less permissive mode than expected is taken (T-277).
    */
   #acceptMode(sessionId: string, mode: string): boolean {
     const m = this.#mode(sessionId);
     // Bypass reads as expected only after the portal entered it itself (enterBypass); any other report of it ends the session.
     if (mode === 'bypassPermissions' && m.expected !== 'bypassPermissions') {
-      this.#endIntegrity(sessionId, 'the agent reported Bypass permissions, which chat sessions never allow');
+      this.#endIntegrity(sessionId, 'the agent reported Bypass permissions, which chat sessions never allow', 'mode-bypass');
       return false;
     }
     if (mode === m.expected) return true;
@@ -3640,8 +3940,32 @@ export class ChatController {
       m.prePlan = null;
       return true;
     }
-    this.#endIntegrity(sessionId, `the permission mode changed to ${shortId(mode)} without this portal (expected ${m.expected})`);
+    // Less permissive than expected (MODE_RANK, T-277): the agent can do less than the portal allowed, so it is taken, never an end.
+    if (lessPermissive(mode, m.expected)) {
+      this.#modeDowngraded(sessionId, m, mode);
+      return true;
+    }
+    this.#endIntegrity(sessionId, `the permission mode changed to ${shortId(mode)} without this portal (expected ${m.expected})`, 'mode-changed');
     return false;
+  }
+
+  /**
+   * INTEGRITY_CASES `mode-downgrade` (T-277): the process runs in a mode that lets the agent do LESS than the portal expected (seen after
+   * a portal restart, when the expected mode came from the stored row). Not an attack: the portal now expects that mode and shows it, and
+   * never re-enters Bypass here; only the gated path (enterBypass, #keepBypass) puts it back.
+   */
+  #modeDowngraded(sessionId: string, m: ModeTrack, mode: string): void {
+    const from = m.expected;
+    m.expected = mode;
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state === 'ended') return;
+    console.warn(`[chat] ${shortId(sessionId)}: the permission mode is ${mode}, less than expected (${from}): expected from now on`);
+    this.#chat.patchSession(sessionId, { mode });
+    if (from === 'bypassPermissions') {
+      this.#note(sessionId, 'Bypass is off in this chat');
+      this.#chat.addAudit({ severity: 'medium', kind: 'bypass.left', sessionId, workspaceId: row.workspace_id, actor: 'portal', detail: { why: 'downgrade', mode } });
+    } else this.#note(sessionId, `Mode is ${MODE_LABELS[mode] ?? mode} in this chat`);
+    this.#emitSession(sessionId);
   }
 
   #mode(sessionId: string): ModeTrack {
@@ -3674,12 +3998,18 @@ export class ChatController {
     });
   }
 
-  /** Integrity failure (§10.4): end the session at once and SIGTERM the process. */
-  #endIntegrity(sessionId: string, why: string): void {
+  /**
+   * Integrity failure (§10.4): end the session at once and SIGTERM the process. `kind` is the ending's case (integrity.ts ENDING_CASES:
+   * harmless or suspicious, default suspicious), stored with the origin in words and whether it was in Bypass, so a recover in place
+   * (T-136) knows what it brings back. Never the line's text.
+   */
+  #endIntegrity(sessionId: string, why: string, kind: EndingCase = 'unknown', origin?: string): void {
     // The log says where it happened (the line's kind and byte position), never what the line held (T-265).
     const at = this.#readers.get(sessionId)?.at;
     console.warn(`[chat] ${shortId(sessionId)}: ended for integrity: ${why}${at ? ` (line ${at.kind ?? 'unparsed'} at byte ${at.start} of segment ${at.segment})` : ''}`);
-    this.#endForSafety(sessionId, 'The session ended for integrity.', `Integrity check failed: ${why}`, `${CHAT_ENDED_INTEGRITY}${why}`);
+    const row = this.#chat.row(sessionId);
+    const record = endingRecord(kind, { origin, bypass: row?.mode === 'bypassPermissions' });
+    this.#endForSafety(sessionId, 'The session ended for integrity.', `Integrity check failed: ${why}`, `${CHAT_ENDED_INTEGRITY}${why}`, JSON.stringify(record));
   }
 
   /**
@@ -3692,14 +4022,14 @@ export class ChatController {
   }
 
   /** Ends the session at once, with an error event and its reason, and SIGTERMs the process. */
-  #endForSafety(sessionId: string, forget: string, text: string, endedReason: string): void {
+  #endForSafety(sessionId: string, forget: string, text: string, endedReason: string, endedFor: string | null = null): void {
     this.#stopReader(sessionId);
     this.#forget(sessionId, forget);
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended') return; // already ended (by the operator, or an earlier check)
     this.#append(sessionId, { kind: 'error', text });
     this.#closeOut(sessionId, 'ended');
-    this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason });
+    this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason, endedFor });
     this.#emitSession(sessionId);
     void this.#runOnce(row.workspace_id, ['stop', claudeSessionOf(row)]).catch(() => undefined);
   }

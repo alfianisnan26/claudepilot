@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { getRequestListener } from '@hono/node-server';
-import { formatCode, PORTAL_TOKEN_CAP_SETTING, SETTING_KEYS, type LiveTopic } from '@portal/contracts';
+import { AUTO_SETTING_KEYS, formatCode, isWindowOfFamily, PORTAL_TOKEN_CAP_SETTING, SETTING_KEYS, TICKET_SETTING_KEYS, type LiveTopic } from '@portal/contracts';
 import { AccountHealthService } from './accounts/health.js';
 import { AccountPools } from './accounts/pools.js';
 import { AccountsService } from './accounts/service.js';
@@ -24,7 +24,8 @@ import { registerClaudeUsageTools } from './claudeusage/portalTools.js';
 import { ClaudeVersions, registerClaudeVersionTools } from './claudeversion/index.js';
 import { createUsageSpend, registerUsageSpendTools } from './usagespend/index.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
-import { createGlance } from './glance/index.js';
+import { changesGlance, createGlance } from './glance/index.js';
+import { createAttention } from './attention/index.js';
 import { createPlatform } from './platform/index.js';
 import { createCodespaces } from './codespaces/index.js';
 import { registerPersonas } from './personas/index.js';
@@ -36,6 +37,7 @@ import { BrowserModule } from './browser/index.js';
 import { PortalMcpModule } from './portalmcp/module.js';
 import { registerBuiltInPortalTools } from './portalmcp/tools/index.js';
 import { internalUrlResolver } from './portalmcp/internalUrl.js';
+import { OrphanSweep } from './tickets/orphans.js';
 import { Tickets } from './tickets/service.js';
 import { CiService } from './ci/service.js';
 import { WorkspacesCiHost } from './ci/host.js';
@@ -308,7 +310,15 @@ const live = new LiveHub(
   { workspaces: async () => (await workspaces.list()).map(view), usage: () => workspaces.usage() },
   (req) => !!portal.session(cookie(req, config.session.cookie)),
 );
-const notify = (...topics: LiveTopic[]) => topics.forEach((t) => live.publish(t));
+// Needs you (docs/prd/attention.md): what waits for a person, read from each module's own state. The topics of the modules it reads
+// (pools: MCP catalog and skills; tickets; CI) make it look again; the chat's events and a minute's tick are chained further down.
+const attention = createAttention(store, { publish: () => live.publish('attention') });
+const ATTENTION_TOPICS = new Set<LiveTopic>(['pools', 'tickets', 'ci']);
+const notify = (...topics: LiveTopic[]) =>
+  topics.forEach((t) => {
+    live.publish(t);
+    if (ATTENTION_TOPICS.has(t)) attention.changed();
+  });
 connectChanged = () => notify('connect');
 workspaces.hooks.changed = () => notify('workspaces');
 reconciler.onChange(() => notify('workspaces'));
@@ -374,14 +384,33 @@ chatController.mcpServersSeen = (id, directory, servers) => mcpSets.oauth.seen(i
 const tickets = new Tickets(store, new ChatTicketSessions(chatController), {
   link: (id) => `${(config.portalMcp.uiUrl ?? `http://localhost:${config.port}`).replace(/\/+$/, '')}/admin/tickets/${id}`,
   workspaceRefs: workspaces.identities,
+  orphanAfterMin: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.orphanAfterMin),
 });
 tickets.onChange = () => notify('tickets');
 // A bump reaches into a session: the platform audit (created further down) records who, which ticket, which session and how (FR30).
 tickets.onAudit = (e) => platform.audit.record(e);
 tickets.start();
+// T-270: tickets of a dead session move by themselves (to the track's live successor, else back to the queue), once a minute.
+const orphanSweep = new OrphanSweep(tickets);
+orphanSweep.start();
 chatController.ticketExists = (id) => tickets.exists(id);
 // T-270: a continuation takes its predecessors' tickets in the transaction that creates it.
 chatController.continueTickets = (to, from) => tickets.continueFrom(to, from);
+// T-136: recover in place reads its cap and pause from the settings; past the cap, ONE watchdog ticket says so (facts, no transcript).
+chatController.recoverSettings = (key) => settingsModule.settings.get(key);
+chatController.onRecoverCapped = (i) => {
+  tickets.create(
+    { kind: 'system' },
+    {
+      summary: `Session ${i.sessionId.slice(0, 8)} ended for integrity again: recover cap reached`,
+      description: `The session \`${i.sessionId}\` (workspace \`${i.workspaceId}\`) was recovered in place ${i.count} times in 24 hours (the cap is ${i.max}, setting chat.recover.maxPerDay) and ended for integrity again: ${i.reason}. The portal's classification: ${i.classified} (${i.case}). It stays ended. Look at why it keeps ending before starting it again (T-136).`,
+      type: 'incident',
+      priority: 'high',
+      tags: ['watchdog', 'chat'],
+      workspaceId: i.workspaceId,
+    },
+  );
+};
 registerTicketTools(tickets);
 // The chat's own tools for its Claude (rename itself); bound to the session its token was minted for.
 registerChatTools(chatController);
@@ -424,6 +453,9 @@ claudeUsage.start();
 registerClaudeUsageTools(claudeUsage);
 // The chat reader's hook: each rate_limit_info of a session on its Claude's own sign-in (the raw object, never stored as it came).
 chatController.onRateLimit = (sessionId, claudeId, info) => claudeUsage.onRateLimit(sessionId, claudeId, info);
+// T-109: whether a Claude shows a model's own usage window (a Fable week): how the Move flow knows it has Fable before its list_models is read.
+chatController.modelWindow = (claudeId, family) => claudeUsage.windowKeys(claudeId).some((k) => isWindowOfFamily(k, family));
+chatController.returnToOriginalModel = () => settingsModule.settings.get<boolean>(AUTO_SETTING_KEYS.returnToOriginalModel) === true;
 // Usage spend: who spent what (per session, workspace, ticket, persona), budgets with alerts and spike detection, over the recorded requests
 // (claude-usage PRD §21 to §26). The chat controller tells it of each recorded turn and each process start, and asks it before a message
 // whether a budget a person set to pause is used up. Its pages hear of changes on the `claudeusage` topic; `usageSpend.onAlert` is where
@@ -465,6 +497,9 @@ for (const source of [tickets, ci]) {
   const was = source.onChange;
   source.onChange = () => (was?.(), glance.changed());
 }
+// A tool request asked or answered, a session's state: Needs you looks again (its tool approvals past ten minutes come with the tick).
+chatController.onEvent((_id, msg) => changesGlance(msg) && attention.changed());
+attention.start();
 // GitHub Codespaces POC: GitHub connections (token or device flow with a client ID only; the token is a sealed secret) and the codespace
 // lifecycle through GitHub's REST API (docs/prd/codespaces-poc.md).
 const codespaces = createCodespaces({ store, pools: poolService, values: secretsKind.values, dataDir: config.paths.data });
@@ -490,7 +525,7 @@ const platform = createPlatform({
 });
 live.onPresence = (connection, presence, req) => platform.presence(connection, presence, req);
 platform.start();
-const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage, usageSpend, repos, glance, codespaces, platform, claudeVersions, connect });
+const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage, usageSpend, repos, glance, attention, codespaces, platform, claudeVersions, connect });
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
 // Before the socket modules: ties their connections to the sign-in that opened them (QA-001) and drops unanswered upgrades.
@@ -552,11 +587,13 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
     sockets.close();
     chatController.stop();
     portalMcp.stop();
+    orphanSweep.stop();
     tickets.stop();
     ci.stop();
     claudeUsage.stop();
     repos.stop();
     glance.stop();
+    attention.stop();
     platform.stop();
     codespaces.stop();
     connect.stop();

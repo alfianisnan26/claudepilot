@@ -89,7 +89,42 @@ export const INTEGRITY_CASES: readonly IntegrityCase[] = [
       'a different mode, an error reply, a body of another shape, an echo whose behavior is not the recorded outcome, or an id the ' +
       'portal never asked or answered',
   },
+  {
+    id: 'mode-downgrade',
+    line: 'a main-thread system/init or system/status whose permissionMode is LESS permissive (MODE_RANK) than the mode the portal expects',
+    rule:
+      'accepted as a downgrade: the expected mode becomes the reported one, the row shows it, the transcript says "Bypass is off in this ' +
+      'chat" (from Bypass) or "Mode is <mode> in this chat", the session event goes out, and only the gated path (enterBypass, the ' +
+      'restart and move re-assert) puts Bypass back; the agent can then do less than the portal allowed, never more',
+    evidence:
+      'Konfersi chat 3907db7f, 2026-10-14 02:50:24 UTC, during deploy #20 (02:43 to 02:53): after the portal restarted, the expected mode ' +
+      'was rebuilt from the stored row (bypassPermissions) and a main-thread system/init or system/status reported permissionMode ' +
+      '"default"; the portal ended the session "the permission mode changed to default without this portal (expected bypassPermissions)"',
+    negative:
+      'a more permissive report than expected (default -> acceptEdits), Bypass reported when the portal did not enter it, an unknown ' +
+      'mode string (dontAsk, anything new), and a downgrade on a sub-agent thread (parent_tool_use_id set: never a mode report, so the ' +
+      'expected mode stays and a later main-thread report is judged against it)',
+  },
 ];
+
+/**
+ * The permission modes by how much they let the agent do without asking (T-277): plan < default < acceptEdits < auto < bypassPermissions.
+ * Any other string (dontAsk included, and anything Claude Code may add) ranks above Bypass, so it is never "less permissive".
+ */
+export const MODE_RANK: Readonly<Record<string, number>> = { plan: 0, default: 1, acceptEdits: 2, auto: 3, bypassPermissions: 4 };
+
+/** The rank of a mode string; an unknown one ranks above Bypass. */
+export function modeRank(mode: string): number {
+  return Object.hasOwn(MODE_RANK, mode) ? MODE_RANK[mode]! : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Whether a reported mode lets the agent do strictly LESS than the expected one (INTEGRITY_CASES `mode-downgrade`). Both must be in
+ * MODE_RANK: an unknown report, or an expected mode outside the table, is never a downgrade.
+ */
+export function lessPermissive(reported: string, expected: string): boolean {
+  return Object.hasOwn(MODE_RANK, reported) && Object.hasOwn(MODE_RANK, expected) && MODE_RANK[reported]! < MODE_RANK[expected]!;
+}
 
 /** What the portal knows of a completed control line whose first response kept no digest (asked before migration 771). */
 export type ControlExpectation = { kind: 'asked'; modes: readonly string[] } | { kind: 'answered'; outcome: string | null };
@@ -140,4 +175,66 @@ export function controlDigest(reply: unknown): string {
 /** A digest of a message's text (a sub-agent's SendMessage, a peer line's body): compared, never kept as text. */
 export function textDigest(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/* ---------- What an integrity ending was for (T-136 slice 2, recover in place) ---------- */
+
+/**
+ * The cases an integrity ending is recorded under (`chat_sessions.ended_for`), and whether each is HARMLESS: a near miss of an accepted
+ * case above, where the line still came from this process's own machinery. Only a harmless ending may be recovered by an agent (the MCP
+ * tool, the supervisor); a suspicious one needs a person, after a sheet that shows the origin and this classification. Default suspicious.
+ */
+export const ENDING_CASES = {
+  /** A peer line from a sub-agent that ran in THIS process, whose SendMessage cause was not matched (the window, the body): `replay-peer`'s near miss. */
+  'replay-peer': { classified: 'harmless', origin: 'a sub-agent of this process' },
+  /** The same control response read twice by the portal before T-265 healed the follower (5c9fcb5f, fe3df8bc): `control-duplicate`. Legacy rows only. */
+  'control-duplicate': { classified: 'harmless', origin: 'the portal read the same line twice' },
+  'replay-peer-unknown': { classified: 'suspicious', origin: 'peer: not a task of this process' },
+  'replay-unknown': { classified: 'suspicious', origin: 'unknown origin' },
+  'command-unknown': { classified: 'suspicious', origin: 'a command this portal never sent' },
+  'control-different': { classified: 'suspicious', origin: 'a different control answer' },
+  'control-unknown': { classified: 'suspicious', origin: 'a control answer for an id never asked' },
+  'request-duplicate': { classified: 'suspicious', origin: 'a tool request id seen twice' },
+  'session-id': { classified: 'suspicious', origin: 'another Claude Code session' },
+  'mode-bypass': { classified: 'suspicious', origin: 'Bypass the portal did not enter' },
+  'mode-changed': { classified: 'suspicious', origin: 'a mode the portal did not set' },
+  unknown: { classified: 'suspicious', origin: 'unclassified' },
+} as const satisfies Record<string, { classified: 'harmless' | 'suspicious'; origin: string }>;
+
+export type EndingCase = keyof typeof ENDING_CASES;
+
+/** What is stored with an integrity ending: the case, the classification, the origin in words, and whether the session was in Bypass. */
+export interface EndingRecord {
+  case: EndingCase;
+  classified: 'harmless' | 'suspicious';
+  origin: string;
+  bypass: boolean;
+}
+
+export function endingRecord(c: EndingCase, o: { origin?: string; bypass: boolean }): EndingRecord {
+  const d = ENDING_CASES[c] ?? ENDING_CASES.unknown;
+  return { case: c, classified: d.classified, origin: o.origin ?? d.origin, bypass: o.bypass };
+}
+
+/**
+ * The record of an ending as stored, or, for a row that ended before slice 2 (none stored), read from its reason: only the pre-T-265
+ * "a second control response" (the same line read twice; evidence on T-136 and T-265) is harmless; every other legacy reason is
+ * suspicious. Null when the row did not end for integrity.
+ */
+export function readEnding(endedReason: string | null | undefined, stored: string | null | undefined): EndingRecord | null {
+  if (!endedReason?.startsWith('integrity: ')) return null;
+  if (stored) {
+    try {
+      const v = JSON.parse(stored) as Partial<EndingRecord>;
+      if (v && typeof v.case === 'string' && v.case in ENDING_CASES) return endingRecord(v.case as EndingCase, { origin: typeof v.origin === 'string' ? v.origin.slice(0, 80) : undefined, bypass: v.bypass === true });
+    } catch {
+      // unreadable: classified from the reason below
+    }
+  }
+  const why = endedReason.slice('integrity: '.length);
+  if (/^a second control response for request \S+$/.test(why)) return endingRecord('control-duplicate', { bypass: false });
+  if (/^a message this portal didn't send reached Claude Code/.test(why)) return endingRecord('replay-unknown', { bypass: false });
+  if (/^Claude Code queued a message this portal didn't send/.test(why)) return endingRecord('command-unknown', { bypass: false });
+  if (/^a tool request id arrived twice/.test(why)) return endingRecord('request-duplicate', { bypass: false });
+  return endingRecord('unknown', { bypass: false });
 }

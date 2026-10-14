@@ -34,6 +34,8 @@ function plan(id: string, usedPct: number, resetInH: number, pace: PaceStatus | 
     stale: false,
     workspaceRunning: true,
     problem: null,
+    unavailable: null,
+    limitReport: null,
     snoozedUntil: null,
     projectionSnoozedUntil: null,
     slot: 0,

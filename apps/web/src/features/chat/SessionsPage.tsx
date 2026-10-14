@@ -1,16 +1,14 @@
-import { Badge, Button, ConfirmDialog, EmptyState, LoadError, RowsSkeleton, useToast } from '@isnanme/ui';
+import { Badge, Button, cn, ConfirmDialog, EmptyState, LoadError, RowsSkeleton, useToast } from '@isnanme/ui';
 import {
   buildListView,
-  defaultListFilter,
   LIST_GROUP_BYS,
   workspaceLabel,
   type ChatSession,
-  type ListFilter,
   type ListGroup,
   type ListGroupBy,
   type ListRow,
 } from '@portal/contracts';
-import { CircleAlert, Plus, MessagesSquare } from 'lucide-react';
+import { ChevronDown, CircleAlert, Plus, MessagesSquare } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Card } from '@/components/Card';
@@ -20,6 +18,7 @@ import { usePersonaIdentities } from '@/features/personas/identities';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { BulkBar, runBulk, type BulkAction } from './BulkBar';
+import { canFold, chipCounts, defaultChip, statusGroup } from './listOrder';
 import { NewSessionDialog } from './NewSessionDialog';
 import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
 import { SessionRow, type RowActions } from './SessionRow';
@@ -64,14 +63,17 @@ export function SessionsPage() {
     next.delete('new');
     setParams(next, { replace: true });
   }, [params, setParams]);
-  // The chip opens on Pinned when anything is pinned, else Idle (FR2); once the sessions are known, and only until the person picks one.
-  const [view, setView] = useState<ViewState>(() => ({ ...savedView(), filter: 'idle', query: '', archived: false }));
+  // Counts for the filter chips, over what's open (never changed by the search).
+  const counts = useMemo(() => chipCounts(sessions ?? []), [sessions]);
+  // The chip opens on the first one with sessions in the order of attention (T-100: Needs you, In progress, Idle, Pinned, Ended, else All); once
+  // the sessions are known, and only until the person picks one.
+  const [view, setView] = useState<ViewState>(() => ({ ...savedView(), filter: 'attention', query: '', archived: false }));
   const [chosenFilter, setChosenFilter] = useState(false);
   useEffect(() => {
     if (chosenFilter || !sessions) return;
-    const filter = defaultListFilter(sessions);
+    const filter = defaultChip(counts);
     setView((v) => (v.filter === filter ? v : { ...v, filter }));
-  }, [sessions, chosenFilter]);
+  }, [sessions, counts, chosenFilter]);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
@@ -97,24 +99,22 @@ export function SessionsPage() {
     });
   };
 
+  // All without another grouping is grouped under the status headings, in the chips' order (T-100).
+  const byStatus = !view.archived && view.filter === 'all' && view.groupBy === 'none';
   const list = useMemo(
-    () => (sessions ? buildListView(sessions, { groupBy: view.groupBy, filter: view.filter, query: view.query, archived: view.archived, workspaces: workspacesLoaded ? factOf : undefined }) : null),
-    [sessions, view, factOf, workspacesLoaded],
+    () =>
+      sessions
+        ? buildListView(sessions, {
+            groupBy: view.groupBy,
+            filter: view.filter,
+            query: view.query,
+            archived: view.archived,
+            workspaces: workspacesLoaded ? factOf : undefined,
+            groupOf: byStatus ? statusGroup : undefined,
+          })
+        : null,
+    [sessions, view, factOf, workspacesLoaded, byStatus],
   );
-
-  // Counts for the filter chips, over what's open (never changed by the search).
-  const counts = useMemo(() => {
-    const open = (sessions ?? []).filter((s) => !s.archivedAt);
-    const c: Record<ListFilter | 'archived', number> = { pinned: 0, all: open.length, attention: 0, working: 0, idle: 0, ended: 0, archived: (sessions ?? []).length - open.length };
-    for (const s of open) {
-      if (s.pinnedAt) c.pinned++;
-      if (s.waiting > 0 || s.state === 'waiting' || s.state === 'interrupted' || (s.state === 'ended' && /^(credential|integrity): /.test(s.endedReason ?? ''))) c.attention++;
-      if (s.state === 'working' || s.state === 'starting') c.working++;
-      else if (s.state === 'idle') c.idle++;
-      else if (s.state === 'ended') c.ended++;
-    }
-    return c;
-  }, [sessions]);
 
   const toggle = useCallback((id: string) => setSelected((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set(s).add(id))), []);
   const stopSelecting = () => {
@@ -215,7 +215,8 @@ export function SessionsPage() {
         <SessionsToolbar view={view} counts={counts} onChange={change} selecting={selecting} onSelect={() => setSelecting(true)} />
       )}
 
-      {list && sessions && sessions.length > 0 && !view.archived && view.filter !== 'attention' && list.attention.length > 0 && (
+      {/* What waits on you, on top of the other chips' lists (All has it as its first heading, Needs you is it). */}
+      {list && sessions && sessions.length > 0 && !view.archived && view.filter !== 'attention' && !byStatus && list.attention.length > 0 && (
         <Queue rows={list.attention} />
       )}
 
@@ -248,9 +249,10 @@ export function SessionsPage() {
               <Group
                 key={g.key || 'all'}
                 group={g}
-                grouped={view.groupBy !== 'none'}
-                folded={folded.has(g.key)}
-                onFold={() => setFolded((f) => flip(f, g.key))}
+                grouped={view.groupBy !== 'none' || byStatus}
+                status={byStatus}
+                folded={folded.has(g.key) && (!byStatus || canFold(g.key))}
+                onFold={!byStatus || canFold(g.key) ? () => setFolded((f) => flip(f, g.key)) : undefined}
               >
                 {g.rows.map((r) => (
                   <SessionRow
@@ -334,35 +336,78 @@ function Queue({ rows }: { rows: ListRow[] }) {
   );
 }
 
-function Group({ group, grouped, folded, onFold, children }: { group: ListGroup; grouped: boolean; folded: boolean; onFold: () => void; children: React.ReactNode }) {
-  if (!grouped)
-    return (
-      <Card>
-        <ul className="divide-y divide-line">{children}</ul>
-      </Card>
-    );
-  return (
-    <section aria-label={group.title}>
-      <button
-        type="button"
-        aria-expanded={!folded}
-        onClick={onFold}
-        className="press mb-1.5 flex w-full items-center gap-2 rounded-xl px-1 py-1 text-left"
-      >
-        <span className="min-w-0 truncate text-[15px] font-bold">{group.title}</span>
-        {group.subtitle && <span className="min-w-0 truncate text-[13px] text-muted">{group.subtitle}</span>}
-        <span className="ml-auto flex shrink-0 items-center gap-1.5">
-          {group.rows.length > 0 && group.rows.every((r) => r.workspaceGone) && <Badge tone="danger">Removed</Badge>}
-          {group.waiting > 0 && <Badge tone="warning">{group.waiting} need you</Badge>}
-          <span className="text-[12.5px] font-semibold text-muted tabular-nums">{group.count}</span>
+/**
+ * A group of rows in one card. Grouped (by workspace, Claude, … or, in All, by status), it has a heading with its count that folds the group;
+ * a heading without `onFold` (Needs you) never folds. The card's rows keep to its corners by their own radius (RowList), not by an overflow
+ * clip, so a row's ⋯ menu can still open past the card (T-100).
+ */
+function Group({
+  group,
+  grouped,
+  status,
+  folded,
+  onFold,
+  children,
+}: {
+  group: ListGroup;
+  grouped: boolean;
+  status: boolean;
+  folded: boolean;
+  onFold?: () => void;
+  children: React.ReactNode;
+}) {
+  const rows = (
+    <Card>
+      <RowList>{children}</RowList>
+    </Card>
+  );
+  if (!grouped) return rows;
+  const head = (
+    <>
+      <span data-group-title className="min-w-0 truncate text-[15px] font-bold">
+        {group.title}
+      </span>
+      {group.subtitle && <span className="min-w-0 truncate text-[13px] text-muted">{group.subtitle}</span>}
+      <span className="ml-auto flex shrink-0 items-center gap-1.5">
+        {group.rows.length > 0 && group.rows.every((r) => r.workspaceGone) && <Badge tone="danger">Removed</Badge>}
+        {!status && group.waiting > 0 && <Badge tone="warning">{group.waiting} need you</Badge>}
+        <span data-group-count className="text-[12.5px] font-semibold text-muted tabular-nums">
+          {group.count}
         </span>
-      </button>
-      {!folded && (
-        <Card>
-          <ul className="divide-y divide-line">{children}</ul>
-        </Card>
+        {onFold && <ChevronDown className={cn('size-4 text-muted transition-transform', folded && '-rotate-90')} aria-hidden="true" />}
+      </span>
+    </>
+  );
+  const headClass = 'mb-1.5 flex min-h-11 w-full items-center gap-2 rounded-xl px-1 text-left sm:min-h-9';
+  return (
+    <section aria-label={group.title} data-status-group={status ? group.key : undefined}>
+      {onFold ? (
+        <button type="button" data-group-head aria-expanded={!folded} onClick={onFold} className={cn('press', headClass)}>
+          {head}
+        </button>
+      ) : (
+        <h2 data-group-head className={headClass}>
+          {head}
+        </h2>
       )}
+      {!folded && rows}
     </section>
+  );
+}
+
+/**
+ * The rows of a card. The row at the top and the row at the bottom (a nested one too: its right corner is the card's) take the card's inner
+ * corners (its 24 px radius less the 1 px border) on their swipe box, and the row's background and the swipe panes inherit them, so nothing
+ * square paints past the curve (T-100: each row's square background did, at rest and mid-swipe). The card itself does not clip, so a
+ * row's ⋯ menu opens past it.
+ */
+const ROW_CORNERS =
+  '[&>li:first-child>div:first-child]:rounded-t-[23px] [&>li:last-child>div:last-child]:rounded-b-[23px] [&>li:last-child_li:last-child>div:last-child]:rounded-br-[23px]';
+function RowList({ children }: { children: React.ReactNode }) {
+  return (
+    <ul data-session-rows className={cn('divide-y divide-line', ROW_CORNERS)}>
+      {children}
+    </ul>
   );
 }
 

@@ -38,6 +38,7 @@ export const UNAVAILABLE_REASONS = [
   'not_recorded', // the portal did not record this (the previous period predates its history)
   'session_deleted', // the session was deleted before its links were kept
   'no_cost', // requests exist but Claude Code reported no dollars for them (a share of the dollars means nothing)
+  'no_usage_endpoint', // Claude Code on this workspace can't fetch the account's usage (its usage call failed or the sign-in has no scope for it)
 ] as const;
 export type UnavailableReason = (typeof UNAVAILABLE_REASONS)[number];
 
@@ -64,6 +65,7 @@ export const UNAVAILABLE_TEXT: Record<UnavailableReason, string> = {
   not_recorded: 'Not recorded then.',
   session_deleted: 'The session was deleted.',
   no_cost: 'Claude Code reported no cost.',
+  no_usage_endpoint: 'Claude Code can’t read this account’s usage on this workspace.',
 };
 
 export const reasonText = (reason: string | null | undefined): string => (reason && (UNAVAILABLE_TEXT as Record<string, string>)[reason]) || 'Not available.';
@@ -204,6 +206,8 @@ export interface UsageSummaryClaude {
   speed: SpendSpeed;
   limit: LimitOutlook;
   nextReset: NextReset;
+  /** Why this Claude's plan usage is not known (T-255: never shown as 0 %), null when it is measured or it has no plan limits. */
+  unavailable: UnavailableReason | null;
 }
 
 /**

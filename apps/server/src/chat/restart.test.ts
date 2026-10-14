@@ -8,6 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { isAppError } from '@isnanme/core';
 import type { ChatServerMessage } from '@portal/contracts';
+import type { Workspaces } from '../workspaces/manager.js';
+import { ChatController } from './controller.js';
 import { parseLine } from './protocol.js';
 import { APPLIED, fail, firstTurn, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, vanish, type Live } from './testkit.js';
 
@@ -246,6 +248,86 @@ test('restart keeps Bypass: relaunched with the flag and switched back through t
     s.ws.tails.at(-1)!.push(init(csidOf(s, id), 'bypassPermissions'));
     await sleep(60);
     assert.notEqual(s.controller.get(id)!.state, 'ended');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-277: after a portal restart, a process that reports default while the row says Bypass is a downgrade: alive, flagged, and the gated path brings Bypass back', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.controlTimeoutMs = 150;
+    policy(s, true);
+    await s.controller.end(s.id); // only the Bypass chat is attached after the restart
+    const id = await inBypass(s);
+    const csid = csidOf(s, id);
+
+    // The portal restarts (a deploy): the expected mode comes back from the stored row, Bypass.
+    s.controller.stop();
+    const tails = s.ws.tails.length;
+    const restarted = new ChatController(s.store, s.ws as unknown as Workspaces);
+    const events: ChatServerMessage[] = [];
+    restarted.onEvent((_id, msg) => events.push(msg));
+    restarted.controlTimeoutMs = 150;
+    restarted.bypassAllowed = () => true;
+    restarted.reauth = { fresh: (token) => token === 'tok' };
+    restarted.start();
+    try {
+      await until(() => s.ws.tails.length === tails + 1);
+      await sleep(20);
+      assert.equal(restarted.get(id)!.mode, 'bypassPermissions');
+      // The process re-attached in default (observed: 3907db7f, 02:50:24 UTC, deploy #20).
+      const tail = s.ws.tails.at(-1)!;
+      tail.push(init(csid, 'default'));
+      tail.push(line({ type: 'system', subtype: 'status', status: null, permissionMode: 'default', session_id: csid }));
+      tail.push(assistantText('still here'));
+      await until(() => restarted.history(id).some((e) => e.text === 'still here') || restarted.get(id)!.state === 'ended');
+      const now = restarted.get(id)!;
+      assert.notEqual(now.state, 'ended', now.endedReason ?? '');
+      assert.equal(now.mode, 'default', 'the row shows the truth');
+      assert.equal(restarted.history(id).filter((e) => e.kind === 'system' && e.text === 'Bypass is off in this chat').length, 1, 'one marker');
+      assert.ok(events.some((m) => m.type === 'session' && m.session.id === id && m.session.mode === 'default'), 'the session event went out');
+      assert.deepEqual(restarted.audit({ kind: 'bypass.left' }).map((a) => a.detail), [{ why: 'downgrade', mode: 'default' }]);
+      assert.equal(bypassAsks(s), 1, 'the portal did not re-enter Bypass by itself');
+
+      // Default is now expected: a more permissive report than that still ends the session (checked below on its own twin);
+      // the gated path (acknowledgement, fresh server code) puts Bypass back.
+      const entered = await modesAnswered(s, restarted.enterBypass(id, { acknowledged: true, sessionToken: 'tok' }));
+      assert.equal(entered.mode, 'bypassPermissions');
+      assert.equal(bypassAsks(s), 2);
+      tail.push(init(csid, 'bypassPermissions'));
+      await sleep(60);
+      assert.notEqual(restarted.get(id)!.state, 'ended', restarted.get(id)!.endedReason ?? '');
+    } finally {
+      await restarted.end(id).catch(() => undefined);
+      restarted.stop();
+    }
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-277: after a portal restart with Bypass expected, an unknown mode string still ends the session with the same text', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.controlTimeoutMs = 150;
+    policy(s, true);
+    await s.controller.end(s.id);
+    const id = await inBypass(s);
+    const csid = csidOf(s, id);
+    s.controller.stop();
+    const tails = s.ws.tails.length;
+    const restarted = new ChatController(s.store, s.ws as unknown as Workspaces);
+    restarted.start();
+    try {
+      await until(() => s.ws.tails.length === tails + 1);
+      await sleep(20);
+      s.ws.tails.at(-1)!.push(init(csid, 'dontAsk'));
+      await until(() => restarted.get(id)!.state === 'ended');
+      assert.equal(restarted.get(id)!.endedReason, 'integrity: the permission mode changed to dontAsk without this portal (expected bypassPermissions)');
+    } finally {
+      restarted.stop();
+    }
   } finally {
     await s.done();
   }

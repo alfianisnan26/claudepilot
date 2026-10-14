@@ -151,7 +151,7 @@ test('list and filters: status, priority, type, tag, assignee, workspace, text (
     const list = h.tickets.list(UI, { limit: 2 });
     assert.equal(list.items.length, 2);
     assert.equal(list.total, 4);
-    assert.deepEqual(list.counts, { byStatus: { open: 4, in_progress: 0, blocked: 0, in_review: 0, done: 1, wont_do: 0 }, needsYou: 1, unassigned: 2, total: 5 });
+    assert.deepEqual(list.counts, { byStatus: { open: 4, in_progress: 0, blocked: 0, in_review: 0, done: 1, wont_do: 0 }, needsYou: 1, unassigned: 2, orphans: 0, total: 5 });
     assert.deepEqual(h.tickets.tags(UI), [{ tag: 'frontend', count: 1 }, { tag: 'login', count: 1 }, { tag: 'ops', count: 1 }]);
   } finally {
     h.done();

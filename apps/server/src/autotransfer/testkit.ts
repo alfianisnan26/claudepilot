@@ -33,6 +33,8 @@ export function usage(id: string, name: string, windows: ClaudeUsageWindow[], ov
     stale: false,
     workspaceRunning: true,
     problem: null,
+    unavailable: null,
+    limitReport: null,
     snoozedUntil: null,
     projectionSnoozedUntil: null,
     slot: null,
@@ -69,9 +71,16 @@ export function fakeClock(start = T0): ClockPort & { advance(min: number): void;
 /** The Move flow's observable effects, recorded. */
 export class MoveChat extends FakeChat {
   readonly events = new Map<string, ChatEvent[]>();
-  readonly moves: { id: string; to: string; handoff: string | undefined }[] = [];
+  readonly moves: { id: string; to: string; handoff: string | undefined; model?: string }[] = [];
   /** Model changes in place, in order. */
   readonly models: { id: string; model: string }[] = [];
+  /** What the engine said to a chat (the steer, the continuation), in order. */
+  readonly sent: { id: string; text: string; priority: string; actor: string }[] = [];
+  async send(id: string, text: string, opts: { priority: 'next' | 'later'; actor: string; actorLabel?: string }): Promise<void> {
+    const s = this.get(id);
+    if (!s || s.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
+    this.sent.push({ id, text, priority: opts.priority, actor: opts.actor });
+  }
   readonly names = new Map<string, string>([
     ['work', 'Work'],
     ['home', 'Home'],
@@ -103,8 +112,15 @@ export class MoveChat extends FakeChat {
       dropped: this.dropped,
     };
   }
-  async switchClaude(id: string, to: string, opts: { handoff?: 'ask' | 'skip' }): Promise<ChatSession> {
-    this.moves.push({ id, to, handoff: opts.handoff });
+  /** What each Claude's list_models said (T-109); absent: not known. */
+  readonly families = new Map<string, string[]>();
+  modelFamilies(claudeId: string): string[] | null {
+    return this.families.get(claudeId) ?? null;
+  }
+  /** The model that applies after a move asked for one (T-109): the Move flow may go further down the chain. Unset: what was asked. */
+  appliedModel: string | null = null;
+  async switchClaude(id: string, to: string, opts: { handoff?: 'ask' | 'skip'; model?: string }): Promise<ChatSession> {
+    this.moves.push({ id, to, handoff: opts.handoff, ...(opts.model ? { model: opts.model } : {}) });
     if (this.fail) throw new AppError((this.failCode ?? 'SERVICE_UNAVAILABLE') as 'SERVICE_UNAVAILABLE', this.fail);
     const s = this.get(id)!;
     const name = this.names.get(to)!;
@@ -112,7 +128,8 @@ export class MoveChat extends FakeChat {
     const seq = s.lastSeq + 1;
     const ev: ChatEvent = { seq, at: new Date().toISOString(), kind: 'system', text: `Moved to ${name}`, transfer: { fromClaude: s.claudeName ?? 'Claude', toClaude: name, sourceSessionId: id, path: '/tmp/x', messages: 1, truncated: false, handoffId } };
     this.events.set(id, [...(this.events.get(id) ?? []), ev]);
-    const moved = { ...s, claudeId: to, claudeName: name, lastSeq: seq };
+    const model = opts.model ? (this.appliedModel ?? opts.model) : s.model;
+    const moved = { ...s, claudeId: to, claudeName: name, lastSeq: seq, model };
     this.sessions.set(id, moved);
     this.dispatch(id, { type: 'session', session: moved });
     return moved;
@@ -148,7 +165,8 @@ export function chatSession(id: string, over: Partial<ChatSession> = {}): ChatSe
 }
 
 /** The usage monitor over fixtures (read as given; `calls` counts reads). */
-export function fakeUsage(claudes: () => ClaudeUsage[]): UsagePort & { calls: number } {
+export function fakeUsage(claudes: () => ClaudeUsage[]): UsagePort & { calls: number; reading(): void } {
+  const listeners = new Set<() => void>();
   const u = {
     calls: 0,
     async report() {
@@ -156,6 +174,14 @@ export function fakeUsage(claudes: () => ClaudeUsage[]): UsagePort & { calls: nu
       return { claudes: claudes() };
     },
     recommend: recommendMove,
+    onReading(fn: () => void) {
+      listeners.add(fn);
+      return () => void listeners.delete(fn);
+    },
+    /** The monitor took a new reading. */
+    reading() {
+      for (const fn of listeners) fn();
+    },
   };
   return u;
 }

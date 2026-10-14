@@ -1,13 +1,25 @@
 // Claude usage: what a stored reading says at a given moment (docs/prd/claude-usage.md FR7, FR15). Pure.
 
 import { ALL_MODEL_WINDOWS, headroomFrom, type ClaudeRunsOn, type ClaudeUsageState, type ClaudeUsageWindow, type Headroom, type UsageAlertLevel } from '@portal/contracts';
-import { windowLevel, type WindowReading } from './parse.js';
+import { labelOf, sortWindows, windowLevel, type WindowReading } from './parse.js';
+import type { LimitReportMark } from './store.js';
 
 const iso = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toISOString());
 
 /** A reading's windows as the page shows them, with each level worked out at `nowMs`. */
 export function viewWindows(windows: WindowReading[], nowMs: number): ClaudeUsageWindow[] {
   return windows.map((w) => ({ key: w.key, label: w.label, usedPct: w.usedPct, resetsAt: iso(w.resetsAtMs), level: windowLevel(w.usedPct, w.resetsAtMs, nowMs) }));
+}
+
+/**
+ * The windows with a limit a chat reported laid over them (T-255): until its reset, the window it names is used up, whatever a probe read
+ * meanwhile (Claude Code's probe can say 0 % with no reset time for an account at its limit). Past the reset the report is ignored.
+ */
+export function withLimitReport(windows: WindowReading[], report: LimitReportMark | null | undefined, nowMs: number): WindowReading[] {
+  if (!report || report.untilMs <= nowMs) return windows;
+  const old = windows.find((w) => w.key === report.window);
+  const w: WindowReading = { key: report.window, label: old?.label || labelOf(report.window), usedPct: Math.max(old?.usedPct ?? 0, 100), resetsAtMs: report.untilMs };
+  return old ? windows.map((x) => (x.key === report.window ? w : x)) : sortWindows([...windows, w]);
 }
 
 /** A Claude's state: the worst of its windows that are not old (`reset`) or empty (`unknown`). */

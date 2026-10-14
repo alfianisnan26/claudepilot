@@ -1,7 +1,8 @@
 // The one place CI touches tickets (interface I10 with the tickets module). Everything else in CI talks to `CiTicketsPort`, so a
-// fake stands in for it in tests and nothing imports the ticket service. CI only ever attaches a check and adds a timeline note:
-// it never changes a ticket's status or assignee (PRD §5).
-import type { TicketCheckState } from '@portal/contracts';
+// fake stands in for it in tests and nothing imports the ticket service. CI attaches a check and adds a timeline note: it never changes
+// the status or assignee of a ticket somebody made (PRD §5). One exception, its own: the ticket of a flaky test (T-95 item 4), which CI
+// opens as the portal and reopens when the test is seen again.
+import { isTicketClosed, type TicketCheckState } from '@portal/contracts';
 import type { Tickets } from '../tickets/service.js';
 
 export interface CiCheck {
@@ -22,7 +23,23 @@ export interface CiTicketsPort {
   attachCheck(ticketId: string, check: CiCheck, by: { actor: string; label?: string }): boolean;
   /** A note on the ticket's timeline, from CI. False when there is no such ticket. */
   note(ticketId: string, text: string, by: { actor: string; label?: string }): boolean;
+  /** Opens a ticket as the portal (a flaky test's, T-95 item 4). Returns its id. */
+  open(req: FlakyTicketRequest): string;
+  /** Whether the ticket is closed; null when there is no such ticket. */
+  closed(ticketId: string): boolean | null;
+  /** Reopens a closed ticket as the portal. */
+  reopen(ticketId: string): void;
 }
+
+/** A ticket CI opens by itself: always a bug of normal priority. */
+export interface FlakyTicketRequest {
+  summary: string;
+  description: string;
+  tags: string[];
+  workspaceId: string | null;
+}
+
+const SYSTEM = { kind: 'system' as const };
 
 /** The real thing, over the ticket service. */
 export class TicketsAdapter implements CiTicketsPort {
@@ -42,6 +59,19 @@ export class TicketsAdapter implements CiTicketsPort {
 
   note(ticketId: string, text: string, by: { actor: string; label?: string }): boolean {
     return this.tickets.note(ticketId, text, by);
+  }
+
+  open(req: FlakyTicketRequest): string {
+    return this.tickets.create(SYSTEM, { type: 'bug', priority: 'normal', ...req }).id;
+  }
+
+  closed(ticketId: string): boolean | null {
+    const b = this.tickets.brief(ticketId);
+    return b ? isTicketClosed(b.status) : null;
+  }
+
+  reopen(ticketId: string): void {
+    this.tickets.update(SYSTEM, ticketId, { status: 'open' });
   }
 }
 
@@ -83,5 +113,25 @@ export class FakeTickets implements CiTicketsPort {
     if (!this.known.has(ticketId)) return false;
     this.notes.push({ ticketId, text, actor: by.actor });
     return true;
+  }
+
+  readonly opened: (FlakyTicketRequest & { id: string })[] = [];
+  readonly closedIds = new Set<string>();
+  readonly reopened: string[] = [];
+
+  open(req: FlakyTicketRequest): string {
+    const id = `T-${900 + this.opened.length}`;
+    this.known.add(id);
+    this.opened.push({ ...req, id });
+    return id;
+  }
+
+  closed(ticketId: string): boolean | null {
+    return this.known.has(ticketId) ? this.closedIds.has(ticketId) : null;
+  }
+
+  reopen(ticketId: string): void {
+    this.closedIds.delete(ticketId);
+    this.reopened.push(ticketId);
   }
 }

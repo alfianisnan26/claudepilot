@@ -181,6 +181,15 @@ export interface CiRun extends CiRunSummary {
   reports: CiRunReport[];
   /** The times a person (or a script) bumped the run into a session (FR37a), oldest first. */
   bumps: CiRunBump[];
+  /** Per job, the tests its log named as flaky (passed on rerun) and their tickets (T-95 item 4); empty until the run's logs are kept. */
+  flaky: CiRunFlaky[];
+}
+
+/** A job's flaky tests: how many, and the ticket of each (one ticket per test across runs). */
+export interface CiRunFlaky {
+  job: string;
+  tests: number;
+  tickets: string[];
 }
 
 /**

@@ -2,9 +2,9 @@ import type { LivePresence } from './notify.js';
 import type { Workspace, WorkspaceUsage } from './workspace.js';
 
 /** What the live socket carries. One socket per tab; pages subscribe to the topics they show. */
-export type LiveTopic = 'workspaces' | 'usage' | 'accounts' | 'system' | 'pools' | 'tickets' | 'ci' | 'claudeusage' | 'repos' | 'glance' | 'claudeversion' | 'notify' | 'triggers' | 'autotransfer' | 'connect';
+export type LiveTopic = 'workspaces' | 'usage' | 'accounts' | 'system' | 'pools' | 'tickets' | 'ci' | 'claudeusage' | 'repos' | 'glance' | 'claudeversion' | 'notify' | 'triggers' | 'autotransfer' | 'connect' | 'attention';
 
-export const LIVE_TOPICS: readonly LiveTopic[] = ['workspaces', 'usage', 'accounts', 'system', 'pools', 'tickets', 'ci', 'claudeusage', 'repos', 'glance', 'claudeversion', 'notify', 'triggers', 'autotransfer', 'connect'];
+export const LIVE_TOPICS: readonly LiveTopic[] = ['workspaces', 'usage', 'accounts', 'system', 'pools', 'tickets', 'ci', 'claudeusage', 'repos', 'glance', 'claudeversion', 'notify', 'triggers', 'autotransfer', 'connect', 'attention'];
 
 /** `GET /api/live` upgrades to the live WebSocket (same session cookie as the API). */
 export const LIVE_PATH = '/api/live';
@@ -44,7 +44,9 @@ export type LiveMessage =
   /** An automatic move happened, was suggested or undone, or its settings changed (auto-transfer PRD): load them again. */
   | { type: 'autotransfer' }
   /** A target, node or enrollment changed, or a node connected or dropped (Connect PRD FR58): load the registry again. */
-  | { type: 'connect' };
+  | { type: 'connect' }
+  /** Something that waits for a person appeared or was resolved (Needs you, attention PRD): load the list again. */
+  | { type: 'attention' };
 
 /** Browser → portal on the live socket: a subscription, or this tab's presence (`LivePresence`, PWA PRD §11.2). */
 export type LiveClientMessage = LiveSubscribe | LivePresence;

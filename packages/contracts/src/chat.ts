@@ -39,6 +39,11 @@ export interface ChatSession {
   origin: ChatOrigin;
   /** The model in effect (Claude Code's `applied.model`), or null before the first report. */
   model: string | null;
+  /**
+   * The model the chat had before a move to a Claude without it changed the model (T-109): `model` is what applies there. Null (or absent)
+   * when the chat runs on its own model.
+   */
+  originalModel?: string | null;
   mode: ChatPermissionMode;
   /** Effort in effect (`low` … `max`), or null when the model has none. */
   effort: string | null;
@@ -68,6 +73,11 @@ export interface ChatSession {
   createdAt: string;
   lastActivityAt: string;
   endedReason: string | null;
+  /**
+   * T-136 slice 2: for a session ended for integrity, how the portal classified the line that ended it (`ChatEndedFor`), so a Resume
+   * (`CHAT_API.recover`) can say what it brings back. Absent or null for any other session.
+   */
+  endedFor?: ChatEndedFor | null;
   /** The Claude directory this session runs in. Empty until a Claude is recorded. */
   claudeId: string;
   /** Display name of that Claude, when known. */
@@ -349,6 +359,8 @@ export interface ChatEvent {
   transfer?: ChatTransferContext;
   /** `system`: the divider a Restart leaves ("Restarted: MCP reconnected"), shown as a marker like a move's. */
   restart?: boolean;
+  /** `system`: the divider a recover in place leaves (T-136: "Recovered in place after an integrity ending: <reason>"), a marker like a Restart's. */
+  recovered?: boolean;
   /**
    * For `user`: who sent it, when it didn't come from the person at the keyboard (`ticket:<id>`,
    * `session:<id>`, `portal-mcp:<token id>`). Such a message shows as coming from that actor, never as
@@ -621,9 +633,43 @@ export interface UpdateRestartHintRequest {
 /** The error code (409) of a queued or automatic restart refused because Bypass could not be kept (T-102). */
 export const BYPASS_NOT_KEPT = 'BYPASS_NOT_KEPT';
 
+/**
+ * T-136 slice 2: how the portal classified the line an integrity ending was for. `harmless`: a near miss of a case INTEGRITY_CASES
+ * accepts (a sub-agent of the process sent it, or a stream re-read): an agent may recover it. `suspicious`: anything else (an unknown
+ * origin, an invented uuid, a different control body): only a person recovers it, after a confirmation that shows `origin`.
+ */
+export interface ChatEndedFor {
+  /** The reason as shown (`endedReason` without its prefix). */
+  reason: string;
+  classified: 'harmless' | 'suspicious';
+  /** The case's id (`replay-peer`, `control-duplicate`, `replay-unknown`, …). */
+  case: string;
+  /** Where the line came from, in words ("a sub-agent of this process", "unknown origin: channel"). Never the line's text. */
+  origin: string;
+}
+
+/** `POST CHAT_API.recover(id)`: bring a session ended for integrity back in place (the same row, its conversation resumed). */
+export interface RecoverChatRequest {
+  /** A person confirmed the sheet that showed the line's origin and classification (needed for a `suspicious` cause). */
+  confirm?: boolean;
+  /** `agent`: the caller is an agent acting with a person's sign-in (the dev supervisor): treated as an agent (no suspicious cause). */
+  by?: 'agent' | 'person';
+}
+
+/** Recover refusals (T-136): 403 an agent asked for a suspicious cause; 409 a person must confirm it first; 409 the day's cap; 409 the pause. */
+export const CHAT_RECOVER_SUSPICIOUS = 'RECOVER_SUSPICIOUS';
+export const CHAT_RECOVER_CONFIRM = 'RECOVER_CONFIRM';
+export const CHAT_RECOVER_CAPPED = 'RECOVER_CAPPED';
+export const CHAT_RECOVER_PAUSED = 'RECOVER_PAUSED';
+
 export interface SwitchChatRequest {
   /** The Claude to move the chat to, on the same workspace. */
   claudeId: string;
+  /**
+   * The model to run there (T-109), e.g. `opus` when the destination has no Fable: applied after the start and verified; when refused, the
+   * next one down the catalogue's chain. Absent: the chat's own model (verified the same way).
+   */
+  model?: string;
   /**
    * `ask` (the default) first asks the Claude the chat runs on, with a message the portal sends, to compact what it
    * knows into a handoff document. `skip` moves with the conversation as the portal stored it. When the Claude
@@ -640,6 +686,12 @@ export interface ChatSwitchOption {
   reason: string | null;
   /** What would fix it: sign that Claude in, deal with the workspace's account pool, or start the workspace. */
   fix: 'sign_in' | 'pool' | 'start_workspace' | null;
+  /**
+   * The chat's model there (T-109): `from` the family the chat runs on, `to` the best family this Claude has at or below it (the catalogue's
+   * downgrade chain; null when it has none of them or the chat's model is unknown), `known` whether its `list_models` was read (else the
+   * catalogue and its usage windows decided). Absent when the chat's model isn't known.
+   */
+  model?: { from: string; to: string | null; known: boolean };
 }
 
 /** `GET CHAT_API.switchOptions(id)`: where a chat can move, before the person confirms (Workspace Claudes FR9, §11). */
@@ -718,6 +770,12 @@ export const CHAT_API = {
    * for the next boundary (T-102). DELETE: cancel a queued restart.
    */
   restart: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/restart`,
+  /**
+   * POST `RecoverChatRequest` (T-136): a session ended for integrity comes back IN PLACE: the same id and row, its conversation resumed
+   * (`--resume`) on a fresh log segment, the offending line not read again, Bypass kept only as a Restart keeps it. Never for a session
+   * a person closed. Capped per day, with a pause between recoveries.
+   */
+  recover: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/recover`,
   /** POST `ReauthRequest`: check the server code again. */
   reauth: '/api/chat/reauth',
   /** GET: the chat policy (`{ bypass: { allowed } }`). */

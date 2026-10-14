@@ -1,5 +1,5 @@
 import type { BadgeTone } from '@isnanme/ui';
-import type { TicketPriority, TicketSessionState, TicketStatus, TicketType } from '@portal/contracts';
+import { TICKET_PRIORITIES, TICKET_TYPES, type TicketFilter, type TicketOrphanWhy, type TicketPriority, type TicketSessionState, type TicketStatus, type TicketType } from '@portal/contracts';
 
 /** Status words and tones (tickets PRD §13). Done is quiet green, blocked is warm, the rest are neutral. */
 export const STATUS_TONE: Record<TicketStatus, BadgeTone> = {
@@ -59,4 +59,40 @@ export function ageShort(iso: string, now = Date.now()): string {
   if (h < 48) return `${h}h`;
   const d = Math.floor(h / 24);
   return d < 60 ? `${d}d` : `${Math.floor(d / 30)}mo`;
+}
+
+/** T-270: an orphan (its session is dead) on the ticket and its row. */
+export const ORPHAN_TITLE: Record<TicketOrphanWhy, string> = { ended: 'Its session ended', archived: 'Its session was archived', missing: 'Its session is gone' };
+export const ORPHAN_BADGE: Record<TicketOrphanWhy, string> = { ended: 'Session ended', archived: 'Session archived', missing: 'Session gone' };
+
+/** The timeline sentence of a move the orphan sweep made (an `assigned` entry with `fallback: true`); its comment says why. */
+export function fallbackSentence(who: string, d: { to?: unknown; reason?: unknown }): string {
+  if (!d.to) return `${who} put it back in the queue`;
+  return d.reason === 'title' ? `${who} moved it to the live session of its track` : `${who} moved it to the session that continues it`;
+}
+
+/** The list's filter from the page's choices (the address): one place, so the chips cannot drift from the request. */
+export function pageFilter(p: {
+  view: 'list' | 'board';
+  scope: string;
+  needs: boolean;
+  queue: boolean;
+  orphans: boolean;
+  priority: string | null;
+  type: string | null;
+  tag: string | null;
+  q: string;
+}): TicketFilter {
+  const f: TicketFilter = { limit: 300 };
+  if (p.view === 'board') f.includeClosed = true;
+  else if (p.scope === 'closed') f.status = ['done', 'wont_do'];
+  else if (p.scope !== 'active') f.status = [p.scope as TicketStatus];
+  if (p.needs) f.assignee = 'user';
+  if (p.queue) f.assignee = 'unassigned';
+  if (p.orphans) f.orphan = true;
+  if (p.priority && (TICKET_PRIORITIES as readonly string[]).includes(p.priority)) f.priority = [p.priority as TicketPriority];
+  if (p.type && (TICKET_TYPES as readonly string[]).includes(p.type)) f.type = [p.type as TicketType];
+  if (p.tag) f.tag = p.tag;
+  if (p.q) f.query = p.q;
+  return f;
 }

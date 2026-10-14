@@ -10,17 +10,27 @@ export interface ChatPort {
   get(id: string): ChatSession | null;
   list(filter?: { workspaceId?: string }): ChatSession[];
   switchOptions(id: string): Promise<ChatSwitchOptions>;
-  switchClaude(id: string, destClaudeId: string, opts: { handoff?: 'ask' | 'skip' }): Promise<ChatSession>;
+  /** The Move flow; `model` (T-109) is the model to run there, applied and verified, down the catalogue's chain when refused. */
+  switchClaude(id: string, destClaudeId: string, opts: { handoff?: 'ask' | 'skip'; model?: string }): Promise<ChatSession>;
+  /** The model families a Claude's `list_models` offered, while fresh (T-109); null when not known. Absent in some tests. */
+  modelFamilies?(claudeId: string): string[] | null;
   /** Changes the chat's model on the Claude it runs on (`sonnet`): the chat control `model`, as a person's model picker does. */
   setModel(id: string, model: string): Promise<void>;
   onEvent(cb: (sessionId: string, msg: ChatServerMessage) => void): () => void;
   history(id: string, after?: number): ChatEvent[];
+  /**
+   * A message from the engine to the chat (T-105): the steer ("finish your step and stop") while a turn runs, the continuation after a
+   * move. Sent as the portal actor `portal:autotransfer`, framed for Claude, `priority` `next`. Never message text from anyone else.
+   */
+  send(id: string, text: string, opts: { priority: 'next' | 'later'; actor: string; actorLabel?: string }): Promise<void>;
 }
 
 export interface UsagePort {
   /** The snapshot, filtered to the Claudes `actorId` may use. Never probes. */
   report(opts: { actorId?: string }): Promise<{ claudes: ClaudeUsage[] }>;
   recommend: RecommendFn;
+  /** Calls `fn` after every new reading (the monitor's `onReading`); absent in some tests. Returns the way to stop. */
+  onReading?(fn: () => void): () => void;
 }
 
 export interface OwnerPort {

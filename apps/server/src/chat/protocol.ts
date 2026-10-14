@@ -5,6 +5,7 @@
 import { REQUEST_FULL_MAX, type ChatEvent, type ChatToolInputValue, type ChatInputState, type ChatModelOption, type ChatRequest, type ChatSessionState, type ChatTask } from '@portal/contracts';
 import { PEER_QUEUED_MESSAGE, textDigest } from './integrity.js';
 import { redact } from './redact.js';
+import { limitInfoOf, parseLimitMessage } from '../claudeusage/limitMessage.js';
 
 /** A base64 image as Claude Code carries it; the controller turns it into a blob and never stores this. */
 export interface RawImage {
@@ -474,12 +475,28 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
     const info = asObj(obj.api_error_params)?.rate_limit_info;
     if (info !== undefined) out.rateLimitInfo = info;
   }
+  // T-255: Claude Code's own answer when the plan is out of quota ("You've hit your session limit · resets 11pm (UTC)"), a `<synthetic>`
+  // line with `error: "rate_limit"`, often with no rate_limit_event before it. Only Claude Code's own line counts, never a model's text.
+  if (out.rateLimitInfo === undefined && isClaudeCodeLimitLine(obj)) {
+    const text = (Array.isArray(content) ? content : []).map((b) => (asStr(asObj(b)?.type) === 'text' ? (asStr(asObj(b)?.text) ?? '') : '')).join(' ');
+    const at = Date.parse(asStr(obj.timestamp) ?? '');
+    const atMs = Number.isFinite(at) ? at : Date.now();
+    const msg = parseLimitMessage(text, atMs);
+    if (msg) out.rateLimitInfo = limitInfoOf(msg, atMs);
+  }
   const usage = asObj(asObj(obj.message)?.usage);
   if (usage && !agentLabel) {
     const input = tokens(usage.input_tokens) + tokens(usage.cache_read_input_tokens) + tokens(usage.cache_creation_input_tokens);
     if (input > 0) out.mainUsage = { messageId: asStr(asObj(obj.message)?.id), input, output: tokens(usage.output_tokens) };
   }
   return out;
+}
+
+/** A line Claude Code wrote itself for a refused turn: `error: "rate_limit"` (or an API error line) from the `<synthetic>` model. */
+function isClaudeCodeLimitLine(obj: Record<string, unknown>): boolean {
+  const model = asStr(asObj(obj.message)?.model);
+  const err = asStr(obj.error);
+  return model === '<synthetic>' && (err === 'rate_limit' || obj.is_api_error_message === true || obj.isApiErrorMessage === true);
 }
 
 /** Local command output (`/compact`'s "Compacted", …) as Claude Code wraps it. */

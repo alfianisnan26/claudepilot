@@ -1,8 +1,8 @@
 import { Badge, Button, ConfirmDialog, Dialog, LoadError, Menu, RowsSkeleton, Select, SwitchRow, TextArea, TextField, useToast, type MenuItem } from '@isnanme/ui';
 import type { McpCatalogEntry, McpCatalogVersion } from '@portal/contracts';
 import { Ban, Bot, ChevronLeft, CircleCheck, FlaskConical, Pencil, Plus, ShieldAlert, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
 import { errorText } from '@/lib/api';
@@ -26,6 +26,10 @@ const usersOf = (entry: McpCatalogEntry, v: McpCatalogVersion) => entry.sets.fil
  */
 export function EntryPage() {
   const { entryId = '' } = useParams();
+  // `?version=<id>` (Needs you's deep link): that version opens, is marked and scrolled to, once.
+  const [params] = useSearchParams();
+  const preselect = params.get('version');
+  const scrolled = useRef(false);
   const navigate = useNavigate();
   const toast = useToast();
   const [entry, setEntry] = useState<McpCatalogEntry | null>(null);
@@ -48,6 +52,11 @@ export function EntryPage() {
   }, [entryId]);
   useEffect(() => void load(), [load]);
   useLive('pools', () => void load());
+  useEffect(() => {
+    if (!entry || !preselect || scrolled.current) return;
+    scrolled.current = true;
+    document.getElementById(`version-${preselect}`)?.scrollIntoView({ block: 'center' });
+  }, [entry, preselect]);
 
   const act = async (run: () => Promise<unknown>, done: string) => {
     setBusy(true);
@@ -107,6 +116,7 @@ export function EntryPage() {
                 key={v.id}
                 entry={entry}
                 version={v}
+                selected={v.id === preselect}
                 busy={busy}
                 onEdit={() => setDialog({ kind: 'draft', entry, version: v })}
                 onDelete={() => void act(() => mcpApi.removeVersion(entry.id, v.id), `${v.version} deleted`)}
@@ -179,6 +189,7 @@ export function EntryPage() {
 function VersionRow({
   entry,
   version: v,
+  selected = false,
   busy,
   onEdit,
   onDelete,
@@ -189,6 +200,8 @@ function VersionRow({
 }: {
   entry: McpCatalogEntry;
   version: McpCatalogVersion;
+  /** Opened and marked: the version a deep link named. */
+  selected?: boolean;
   busy: boolean;
   onEdit: () => void;
   onDelete: () => void;
@@ -203,8 +216,9 @@ function VersionRow({
   const auth = authLabel(v);
   const risky = v.flags.filter((f) => f.code !== 'not_pinned');
   return (
+    <div id={`version-${v.id}`} data-selected={selected || undefined} className={selected ? 'scroll-mt-24 rounded-2xl ring-2 ring-accent' : undefined}>
     <Disclosure
-      defaultOpen={v.reviewState === 'draft'}
+      defaultOpen={selected || v.reviewState === 'draft'}
       tone={v.reviewState === 'revoked' ? 'danger' : undefined}
       summary={
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -316,6 +330,7 @@ function VersionRow({
         )}
       </div>
     </Disclosure>
+    </div>
   );
 }
 

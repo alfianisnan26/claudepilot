@@ -9,8 +9,9 @@
 //   2. Brings the main folder's `integration` up to date (git pull --ff-only).
 //   3. Starts the orchestrator (a Bypass session in the main folder, on the Claude with the most room) unless one already lives.
 //   4. Keeps watching, every ROUND_S seconds: a session idle for a few minutes gets a nudge to carry on (nobody else will); an interrupted one (its
-//      process is gone) is woken by a message; one that ended is started again, told to continue from its status file (at most MAX_STARTS per 24 h,
-//      3 after integrity endings, RESTART_GAP_MIN apart). A status file that starts with TRACK COMPLETE, or a session a person closed, is left alone.
+//      process is gone) is woken by a message; one that ended for integrity is first recovered IN PLACE (T-136: POST .../recover as an agent; the
+//      portal caps and pauses it); one that ended otherwise, or whose recover was refused, is started again as a NEW session that continues it,
+//      told to continue from its status file (at most MAX_STARTS new sessions per 24 h, 3 after integrity endings, RESTART_GAP_MIN apart). A status file that starts with TRACK COMPLETE, or a session a person closed, is left alone.
 //   5. Keeps each track chat in Bypass (T-256): one found out of it (a wake or a Resume starts on the start mode) gets the server code again and
 //      the acknowledgement, at most every BYPASS_GAP_MIN minutes, and a tool approval it asked meanwhile is denied with "run it again".
 //   6. T-257: a track left down for any reason (the start cap, a refusal, a missing Claude, the portal unreachable) opens ONE ticket (tag
@@ -236,32 +237,38 @@ async function moveIfLow(t, ts, cur) {
   const used = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, Math.max(0, ...(c.windows ?? []).map((w) => (typeof w.usedPct === 'number' ? w.usedPct : 0)))]));
   const mine = used.get(cur.claudeId);
   if (mine === undefined || mine < LOW_USED_PCT) return false;
-  // A chat on a model only some Claudes have (Fable shows as its own window on those) must land on one that has it: otherwise the restore of its
-  // model fails quietly and it runs on whatever the other Claude defaults to (T-109 makes the portal pick the best available model instead).
+  // A chat on a model only some Claudes have (Fable shows as its own window on those) goes to one that has it first; with none, to another
+  // Claude with the model it should run there in the switch request (T-109: the portal applies it, verifies it and falls down the chain).
   const gated = /fable/i.exec(cur.model ?? '')?.[0]?.toLowerCase() ?? null;
   const has = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, (c.windows ?? []).some((w) => `${w.key ?? ''} ${w.label ?? ''}`.toLowerCase().includes(gated ?? '\u0000'))]));
   let best = null;
+  let other = null;
   for (const name of t.claudes) {
     const id = await claudeIdOf(name);
     if (!id || id === cur.claudeId) continue;
-    if (gated && !has.get(id)) continue;
     const u = used.get(id) ?? 0;
     if (u >= LOW_USED_PCT) continue;
+    if (gated && !has.get(id)) {
+      if (!other || u < other.used) other = { name, id, used: u, model: 'opus' };
+      continue;
+    }
     if (!best || u < best.used) best = { name, id, used: u };
   }
+  best = best ?? other;
   if (!best) {
     if (ts.lowLoggedAt === undefined || Date.now() - ts.lowLoggedAt > 30 * 60_000) log(`${t.key}: its Claude is at ${mine}% used and no delegated Claude has more than ${100 - LOW_USED_PCT}% left: waiting, looking again every round`), (ts.lowLoggedAt = Date.now());
     return false;
   }
-  if (DRY) return log(`[dry] ${t.key}: would move ${cur.id.slice(0, 8)} from ${mine}% used to ${best.name} (${best.used}% used)`), false;
-  const res = await api('POST', `/api/chat/sessions/${cur.id}/switch`, { claudeId: best.id, handoff: mine >= 100 ? 'skip' : 'ask' });
+  const on = best.model ? ` on ${best.model}` : '';
+  if (DRY) return log(`[dry] ${t.key}: would move ${cur.id.slice(0, 8)} from ${mine}% used to ${best.name}${on} (${best.used}% used)`), false;
+  const res = await api('POST', `/api/chat/sessions/${cur.id}/switch`, { claudeId: best.id, handoff: mine >= 100 ? 'skip' : 'ask', ...(best.model ? { model: best.model } : {}) });
   if (res.error) {
     log(`${t.key}: could not move to ${best.name}: ${res.error.message}`);
     ts.backoffUntil = Date.now() + 5 * 60_000;
     return false;
   }
   ts.lowLoggedAt = undefined;
-  log(`${t.key}: its Claude was at ${mine}% used: moved to ${best.name} (${best.used}% used)`);
+  log(`${t.key}: its Claude was at ${mine}% used: moved to ${best.name}${on} (${best.used}% used)`);
   return true;
 }
 
@@ -274,6 +281,10 @@ const kickoff = (t, again, reason) =>
  * The create request. A start again names the ended session it continues (T-270): the portal links the lineage and moves that chat's tickets
  * (and its ended predecessors') to the new one in the same step, so nobody has to reassign them by hand.
  */
+/** What the supervisor sends to recover a chat in place: it is an agent to the portal (T-136), so only a person brings back a suspicious cause. */
+const recoverBody = () => ({ by: 'agent' });
+/** What a recover answer means: back in place; wait (the pause between recoveries, or the portal restarting); or a new session (absent, the cap, a suspicious cause, a person's close). */
+const recoverVerdict = (r) => (!r.error && r.status < 300 ? 'recovered' : r.error?.code === 'RECOVER_PAUSED' || r.status >= 500 ? 'wait' : 'new');
 const createBody = (t, claudeId, continuedFrom) => ({ workspaceId: WORKSPACE, title: t.title, claudeId, allowBypass: true, cwd: t.folder ?? MAIN, ...(continuedFrom ? { continuedFrom } : {}) });
 
 async function startSession(t, tstate, again, reason, continuedFrom = null) {
@@ -595,18 +606,27 @@ async function watch() {
         continue;
       }
       // An integrity ending is recovered IN PLACE when the portal can (T-136: same session, tags, pins and numbers, no new row); a new session is the
-      // fallback when the endpoint is absent or refuses (a cap, a person's close).
+      // fallback when the endpoint is absent or refuses (the day's cap, a suspicious cause, a person's close). The pause or a portal restarting:
+      // wait for the next round. Recoveries never count as starts (the "too many starts" cap below counts new sessions only).
       if (cur && /^integrity/i.test(cur.endedReason ?? '')) {
         ts.recovered ??= {};
-        if (!ts.recovered[cur.id]) {
-          ts.recovered[cur.id] = Date.now();
-          const rec = await api('POST', `/api/chat/sessions/${cur.id}/recover`, {});
-          if (!rec.error && rec.status < 300) {
+        const seen = ts.recovered[cur.id];
+        const refusedThisEnding = seen && typeof seen === 'object' && seen.ending === cur.lastActivityAt && seen.verdict === 'new';
+        if (!refusedThisEnding) {
+          if (DRY) { log(`${t.key}: would recover ${cur.id.slice(0, 8)} in place (dry run): ${String(cur.endedReason).slice(0, 80)}`); continue; }
+          const rec = await api('POST', `/api/chat/sessions/${cur.id}/recover`, recoverBody());
+          const verdict = recoverVerdict(rec);
+          ts.recovered[cur.id] = { at: Date.now(), ending: cur.lastActivityAt, verdict };
+          saveState(state);
+          if (verdict === 'recovered') {
             log(`${t.key}: recovered ${cur.id.slice(0, 8)} in place after: ${String(cur.endedReason).slice(0, 80)}`);
-            saveState(state);
             continue;
           }
-          log(`${t.key}: recover in place refused (${rec.error?.code ?? rec.status}): ${rec.error?.code === 'NOT_FOUND' ? 'not available yet' : String(rec.error?.message ?? '').slice(0, 80)}; a new session instead`);
+          if (verdict === 'wait') {
+            log(`${t.key}: recover in place not now (${rec.error?.code ?? rec.status}): trying again next round`);
+            continue;
+          }
+          log(`${t.key}: recover in place refused (${rec.error?.code ?? rec.status}): ${rec.status === 404 ? 'not available (or no such session)' : String(rec.error?.message ?? '').slice(0, 80)}; a new session instead`);
         }
       }
       const recent = within24h(ts.starts);
