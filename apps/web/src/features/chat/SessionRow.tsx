@@ -1,5 +1,5 @@
 import { Badge, cn, Menu, Spinner, type MenuItem } from '@isnanme/ui';
-import { rollupLine, workspaceLabel, type ChatSession, type ListGroupBy, type ListRow, type PersonaIdentity } from '@portal/contracts';
+import { workspaceLabel, type ChatSession, type ListGroupBy, type ListRow, type PersonaIdentity } from '@portal/contracts';
 import {
   Archive,
   ArchiveRestore,
@@ -8,18 +8,22 @@ import {
   ChevronDown,
   CircleStop,
   CloudOff,
+  CornerLeftUp,
   GitBranch,
   MessageSquare,
   Moon,
+  Network,
   Pencil,
   Pin,
   PinOff,
   Ticket,
   Trash2,
 } from 'lucide-react';
+import { useState } from 'react';
 import { Link } from 'react-router';
 import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
 import { formatDateTime } from '@/lib/format';
+import { crewCount, crewOfRows, fromLead, otherClaude } from './crew';
 import { RecoverButton } from './Recover';
 import { endedForSafety, formatUsd, StateBadge, timeShort } from './shared';
 import { SWIPE_SETTLE_MS, useRowSwipe } from './swipe';
@@ -68,10 +72,15 @@ const folderName = (s: ChatSession) => s.cwd.replace(/\/+$/, '').slice(s.cwd.rep
  * grouping doesn't already say), what it waits on, what it started, and ⋯. Selecting turns the row into
  * a checkbox. Grouped by Claude, a chat that moved is also listed, lighter, under the Claudes it ran on
  * earlier: the same chat. A removed workspace is stated plainly.
+ *
+ * Crew (T-294, crew.ts): a lead's row counts what it started (an icon and a number; the words in the tip); its workers sit under it on a
+ * rail, the live ones in spawn order, the done ones behind one "N done" row; a worker names its Claude only when it differs from its
+ * lead's. A worker shown away from its lead links to it ("from …").
  */
 export function SessionRow({
   row,
   depth = 0,
+  lead = null,
   groupBy,
   selecting,
   selected,
@@ -83,6 +92,8 @@ export function SessionRow({
 }: {
   row: ListRow;
   depth?: number;
+  /** The session it is nested under (a worker's lead), to name its Claude only when it differs. */
+  lead?: ChatSession | null;
   groupBy: ListGroupBy;
   selecting: boolean;
   selected: ReadonlySet<string>;
@@ -95,6 +106,7 @@ export function SessionRow({
 }) {
   const s = row.session;
   const title = s.title || 'Untitled';
+  const [doneOpen, setDoneOpen] = useState(false);
   if (row.earlier)
     return (
       <li>
@@ -111,13 +123,17 @@ export function SessionRow({
   const safety = s.state === 'ended' ? endedForSafety(s.endedReason) : null;
   const picked = selected.has(s.id);
   const open = !collapsed.has(s.id);
-  const rollup = rollupLine(row.rollup);
+  const crew = crewCount(row.rollup);
+  const workers = crewOfRows(row.children);
+  const from = fromLead(row);
+  // A worker under its lead: its Claude is the lead's unless it says otherwise (a badge), so the line does not repeat it.
+  const ownClaude = depth > 0 ? otherClaude(s, lead) : null;
   const asks = s.waiting > 0 || s.state === 'waiting';
   const persona = row.workspaceGone ? null : (personas?.[s.workspaceId] ?? null);
 
   // Line one: who runs it and when. Line two, when there is one: where its work is (branch, folder, ticket).
   const who: { key: string; node: React.ReactNode }[] = [];
-  if (groupBy !== 'claude' && s.claudeName) who.push({ key: 'claude', node: <span className="shrink-0">{s.claudeName}</span> });
+  if (groupBy !== 'claude' && s.claudeName && depth === 0) who.push({ key: 'claude', node: <span className="shrink-0">{s.claudeName}</span> });
   if (groupBy !== 'workspace')
     who.push({
       key: 'ws',
@@ -188,6 +204,23 @@ export function SessionRow({
   const rightLabel = s.pinnedAt ? 'Unpin' : 'Pin';
   const leftLabel = s.archivedAt ? 'Unarchive' : 'Archive';
 
+  const nested = (c: ListRow) => (
+    <SessionRow
+      key={c.session.id}
+      row={c}
+      depth={depth + 1}
+      lead={s}
+      groupBy={groupBy}
+      selecting={selecting}
+      selected={selected}
+      collapsed={collapsed}
+      onToggle={onToggle}
+      onCollapse={onCollapse}
+      actions={actions}
+      personas={personas}
+    />
+  );
+
   return (
     <li>
       <div className={cn('relative rounded-[inherit]', swipe.clipped && 'overflow-hidden')} style={{ touchAction: 'pan-y' }} {...swipe.handlers}>
@@ -206,7 +239,7 @@ export function SessionRow({
       <div
         data-swipe={swipe.dx !== 0 ? 'moving' : undefined}
         style={{ transform: swipe.dx ? `translateX(${swipe.dx}px)` : undefined, transition: swipe.dragging ? 'none' : `transform ${SWIPE_SETTLE_MS}ms ease-out` }}
-        className={cn('relative flex items-start gap-2.5 rounded-[inherit] bg-surface py-3 pr-2.5 pl-3 sm:pr-4 sm:pl-5', depth === 0 && 'pl-4', picked && 'bg-accent-soft/50')}
+        className={cn('relative flex flex-wrap items-start gap-x-2.5 rounded-[inherit] bg-surface py-3 pr-2.5 pl-3 sm:pr-4 sm:pl-5', depth === 0 && 'pl-4', picked && 'bg-accent-soft/50')}
       >
         {selecting && (
           <button
@@ -256,6 +289,22 @@ export function SessionRow({
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <p className="min-w-0 truncate font-semibold">{title}</p>
               {s.pinnedAt && <Pin className="size-3.5 shrink-0 text-muted" aria-label="Pinned" />}
+              {ownClaude && (
+                <Badge className="max-w-full min-w-0">
+                  <span className="min-w-0 truncate">{ownClaude}</span>
+                </Badge>
+              )}
+              {crew && (
+                <span title={crew.label} data-crew-count="" className="inline-flex shrink-0">
+                  <Badge tone={crew.tone}>
+                    <Network className="size-3" aria-hidden="true" />
+                    <span aria-hidden="true" className="tabular-nums">
+                      {crew.total}
+                    </span>
+                    <span className="sr-only">{crew.label}</span>
+                  </Badge>
+                </span>
+              )}
               {safety ? <Badge tone="danger">{safety.label}</Badge> : s.state !== 'waiting' ? <StateBadge state={s.state} agents={s.agentsRunning ?? 0} /> : null}
               {asks && !s.waitingFor && <Badge tone="warning">{s.waiting > 1 ? `${s.waiting} waiting` : 'Needs you'}</Badge>}
               {s.switching && (
@@ -269,8 +318,6 @@ export function SessionRow({
             {line(who)}
             {where.length > 0 && line(where)}
             {asks && s.waitingFor && <p className="mt-0.5 truncate text-[13px] font-medium text-amber-700 dark:text-amber-400">{s.waitingFor}</p>}
-            {row.parentTitle && <p className="mt-0.5 truncate text-[12.5px] text-muted">Started by {row.parentTitle}</p>}
-            {rollup && <p className="mt-0.5 text-[12.5px] text-muted">{rollup}</p>}
           </div>
         </Link>
         {row.children.length > 0 && (
@@ -279,32 +326,44 @@ export function SessionRow({
             aria-expanded={open}
             aria-label={`${open ? 'Hide' : 'Show'} the ${row.children.length} ${row.children.length === 1 ? 'session' : 'sessions'} ${title} started`}
             onClick={() => onCollapse(s.id)}
-            className="press flex size-9 shrink-0 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink"
+            className="press -my-1 flex size-11 shrink-0 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink sm:my-0 sm:size-9"
           >
             <ChevronDown className={cn('size-[18px] transition-transform', !open && '-rotate-90')} />
           </button>
         )}
         {!selecting && s.endedFor && !s.archivedAt && <RecoverButton session={s} tip={false} />}
         {!selecting && <Menu label={`Actions for ${title}`} items={rowActions(row, actions)} />}
+        {from && !selecting && (
+          <Link
+            to={`/admin/sessions/${from.id}`}
+            data-crew-from=""
+            className="press -mt-2 -mb-2 flex min-h-11 min-w-0 basis-full items-center gap-1 pl-[52px] text-[12.5px] text-muted hover:text-ink sm:-mt-1 sm:-mb-1 sm:min-h-8"
+          >
+            <CornerLeftUp className="size-3.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 truncate">from {from.title}</span>
+          </Link>
+        )}
       </div>
       </div>
       {row.children.length > 0 && open && (
-        <ul className="ml-4 border-l-2 border-line sm:ml-7">
-          {row.children.map((c) => (
-            <SessionRow
-              key={c.session.id}
-              row={c}
-              depth={depth + 1}
-              groupBy={groupBy}
-              selecting={selecting}
-              selected={selected}
-              collapsed={collapsed}
-              onToggle={onToggle}
-              onCollapse={onCollapse}
-              actions={actions}
-              personas={personas}
-            />
-          ))}
+        <ul data-crew="" className="ml-4 border-l-2 border-line sm:ml-7">
+          {workers.live.map(nested)}
+          {workers.done.length > 0 && (
+            // One row for the done ones; it stays put after the live workers, and opening it lists them below it.
+            <li>
+              <button
+                type="button"
+                data-crew-done=""
+                aria-expanded={doneOpen}
+                onClick={() => setDoneOpen((o) => !o)}
+                className="press flex min-h-11 w-full items-center gap-2 py-1.5 pr-4 pl-3 text-left text-[13px] font-semibold text-muted hover:text-ink sm:min-h-9 sm:pl-5"
+              >
+                <ChevronDown className={cn('size-4 shrink-0 transition-transform', !doneOpen && '-rotate-90')} aria-hidden="true" />
+                <span className="tabular-nums">{workers.done.length} done</span>
+              </button>
+            </li>
+          )}
+          {doneOpen && workers.done.map(nested)}
         </ul>
       )}
     </li>
