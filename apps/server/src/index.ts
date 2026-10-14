@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { getRequestListener } from '@hono/node-server';
-import { formatCode, SETTING_KEYS, type LiveTopic } from '@portal/contracts';
+import { formatCode, PORTAL_TOKEN_CAP_SETTING, SETTING_KEYS, type LiveTopic } from '@portal/contracts';
 import { AccountHealthService } from './accounts/health.js';
 import { AccountPools } from './accounts/pools.js';
 import { AccountsService } from './accounts/service.js';
@@ -325,6 +325,8 @@ claudeVersions.start();
 const agentUrls = internalUrlResolver({ workspaces, port: config.port, configured: config.portalMcp.internalUrl ?? null });
 const portalMcp = new PortalMcpModule(store, {
   internalUrl: config.portalMcp.internalUrl,
+  // T-258: live admin tokens per label, from the shared settings (Settings → MCP).
+  maxActivePerLabel: () => settingsModule.settings.get<number>(PORTAL_TOKEN_CAP_SETTING),
   extraOrigins: config.portalMcp.origins,
   // Agents' per-session tokens (interface I8): alive while the chat session is, aimed at the portal as a workspace reaches it.
   agentHost: {
