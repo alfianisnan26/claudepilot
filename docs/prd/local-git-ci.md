@@ -339,7 +339,7 @@ Every command prints exactly one line to stdout, `@cpci ` followed by a JSON obj
 | `repo create/list/info/ensure/connect/delete/branches/rev` | FR1 to FR3, FR8; `branches` lists heads with their tip's subject and time; `rev` resolves a validated ref to a commit. |
 | `hook post-receive` | FR5 (stdin: `<old> <new> <ref>` lines). |
 | `poll [--ack ids] [--runs ids]` | Pending events (at most 100, oldest first), the state and liveness of the named runs, the repositories and their hook state, free disk. |
-| `snapshot <repo> <sha>` | The commit's subject, author and parents and the text of `.pilot/*.yml`, `.pilot/*.yaml` and (M2) `.pilot/steps/*`, `.pilot/templates/*` (limits of §9.7), through `git cat-file`, with no repository code running. |
+| `snapshot <repo> <sha>` | The commit's subject, author and parents and the text of `.pilot/*.yml`, `.pilot/*.yaml` and (M2) `.pilot/steps/*`, `.pilot/templates/*` (limits of §9.7), through `git cat-file`, with no repository code running. Also `contextPack`: `docs/context-pack.md` when the commit has it (at most 20 KB, else `too_large`; a link or binary set aside), which the portal keeps as the repository's context pack on a push to the default branch (persona-pool §12.4, T-292). |
 | `changes <repo> <base> <head> [--show <path>]` | The paths that differ between two commits (at most 5,000, else `truncated`), whether `base` is an ancestor of `head`, and optionally one file's text at both (at most 1 MiB a side): what the auto-approve rule reads (FR41a). Plumbing only, no repository code runs. |
 | `start <run>` | FR18 (plan on stdin). |
 | `exec <run>` | The supervisor. Internal. |

@@ -30,6 +30,7 @@ import { changesGlance, createGlance } from './glance/index.js';
 import { bridgeAttentionNotify, createAttention, registerAttentionTools } from './attention/index.js';
 import { createPlatform } from './platform/index.js';
 import { createCodespaces } from './codespaces/index.js';
+import { contextPackHook } from './personas/contextPack.js';
 import { registerPersonas } from './personas/index.js';
 import { registerPersonaTools } from './personas/portalTools.js';
 import { readSessionBlob } from './personas/sessionBlobs.js';
@@ -448,6 +449,10 @@ const ci = new CiService(store, new WorkspacesCiHost(workspaces), {
   audit: (e) => platform.audit.record(e),
 });
 registerCiTools(ci, ciSessions);
+// T-292: a push to a CI remote's default branch carrying docs/context-pack.md keeps the Context pool `<repo>-context-pack` in step
+// (created and assigned to that workspace once; capped, secret-shaped text refused), with a row in the platform audit.
+const syncPack = contextPackHook(poolService, (e) => platform.audit.record(e));
+ci.hooks.contextPack = (e) => void syncPack(e);
 // A resources change that restarts a workspace's pod (T-98) waits for the CI runs running in it.
 workspaces.hooks.runningCi = (id) => ci.list({ workspace: id, status: ['running'], limit: 1 }).total;
 ci.onChange = () => notify('ci');

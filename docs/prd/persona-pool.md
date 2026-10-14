@@ -423,6 +423,14 @@ persona can **hold** some (up to 10), which are delivered wherever it is.
 - **Rules.** Same as a persona's (FR8): nothing credential-shaped, no control or invisible characters. Deleting
   a context is refused while a persona's current or newest revision holds it; older revisions that name a
   deleted context are skipped at delivery. Like a persona it saves as a draft and publishes.
+- **A repository's context pack** (T-292). A push to a CI remote's default branch (local-git-ci §11.1, `snapshot`)
+  whose commit has `docs/context-pack.md` keeps the context `<repo>-context-pack` in step with that file
+  (`personas/contextPack.ts`): created on the first push and assigned to the workspace that hosts the remote, a new
+  revision (noting the commit) when the text changed, nothing when it is equal. Refused, keeping what the pool had:
+  over 20 KB, anything credential-shaped, a pool of that name assigned only to other workspaces. It is never
+  deleted, and never assigned again once a person took it off the workspace. Each change or refusal is one
+  platform audit row `pools.context_pack` (fixed codes, never the text). No route or tool: the portal acts on a
+  push the CI remote already accepted.
 - **Editor and preview.** The persona editor lists the contexts it can hold; "What Claude is told" shows each
   held context as its own managed layer, after the persona's text.
 

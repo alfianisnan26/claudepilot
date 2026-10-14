@@ -15,6 +15,25 @@ export interface SnapshotFile {
 /** The files the portal reads: pipelines directly in `.pilot/`, and (later) steps and templates one folder down. */
 const WANTED = /^\.pilot\/(?:[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.ya?ml|(?:steps|templates)\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.ya?ml)$/;
 
+/** The repository's context pack (T-292): the portal keeps an instruction context in step with it on the default branch. */
+export const CONTEXT_PACK_PATH = 'docs/context-pack.md';
+
+/**
+ * The commit's `docs/context-pack.md`, read the same bounded way as a pipeline file: null when there is none, `too_large`
+ * past CI_LIMITS.contextPackBytes (never read), a link or a binary set aside.
+ */
+async function contextPack(dir: string, sha: string): Promise<SnapshotFile | null> {
+  const ls = await git(['ls-tree', '-l', '-z', sha, '--', CONTEXT_PACK_PATH], { gitDir: dir });
+  const m = /^(\d{6}) (\w+) ([0-9a-f]{40}) +(\d+|-)\t/.exec(ls.stdout.toString('utf8'));
+  if (ls.code !== 0 || !m || m[2] !== 'blob') return null;
+  const path = CONTEXT_PACK_PATH;
+  if (m[1] === '120000') return { path, text: null, skipped: 'symlink' };
+  if (Number(m[4]) > CI_LIMITS.contextPackBytes) return { path, text: null, skipped: 'too_large' };
+  const blob = await git(['cat-file', 'blob', m[3]!], { gitDir: dir });
+  if (blob.code !== 0) return null;
+  return blob.stdout.includes(0) ? { path, text: null, skipped: 'binary' } : { path, text: blob.stdout.toString('utf8') };
+}
+
 export async function snapshot(repo: unknown, sha: unknown): Promise<Record<string, unknown>> {
   const dir = needRepo(repo);
   if (!validSha(sha)) throw new Fail('bad_sha', 'That is not a commit id.');
@@ -69,6 +88,7 @@ export async function snapshot(repo: unknown, sha: unknown): Promise<Record<stri
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
   return {
+    contextPack: await contextPack(dir, sha),
     ok: true,
     sha: full,
     parents: (parents ?? '').split(' ').filter(Boolean),

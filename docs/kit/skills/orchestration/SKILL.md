@@ -25,6 +25,7 @@ One orchestrator chat per program runs the work as sub-agents of the Agent tool,
 - **At most five sub-agents at once** (WIP limit five). Send the Agent calls in one message so they run in parallel.
 - Each sub-agent works in its own worktree on its own branch (`ticket/T-n-slug`), never in the main folder or another agent's worktree. Use a prepared worktree, or the Agent tool's worktree isolation for a short task.
 - The brief is **self-contained**: the sub-agent has not seen this chat. Use `references/brief-template.md`: goal, ticket, worktree and branch, files to read, the exact items, done criteria, the rules, what to report.
+- **The context pack comes first**: when the repository has `docs/context-pack.md` (a generated map, commands, conventions and lessons), the brief's first line points at it ("read it first; read a file only when it does not answer"); the portal also delivers it as the `<repo>-context-pack` instruction context.
 - **Pick the model per slice**, by what the slice needs, and write the choice in the status file next to it:
   - `sonnet`: narrow, well-specified, mechanical work (a sweep, a screenshot run, a PRD update, one test).
   - `opus`: ordinary implementation (a feature, a fix with its test, UI work).

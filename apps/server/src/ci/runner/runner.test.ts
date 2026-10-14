@@ -163,6 +163,23 @@ test('snapshot: the commit and its pipeline files, with links, big and odd files
   assert.equal((await h.ci(['snapshot', 'plain', h.git(['rev-parse', 'HEAD'], bare)])).hasPilot, false);
 });
 
+test('snapshot: the context pack (T-292) is read when present, set aside past its cap, null without one', async () => {
+  const h = new Home();
+  const src = h.repo('app', { 'docs/context-pack.md': '# Context pack\n', 'README.md': 'hi' });
+  const sha = h.git(['rev-parse', 'HEAD'], src);
+  const big = h.commit(src, { 'docs/context-pack.md': 'x'.repeat(20 * 1024 + 1) }, 'too big');
+  const gone = h.commit(src, { 'docs/other.md': 'o' }, 'other');
+  h.git(['rm', '-q', 'docs/context-pack.md'], src);
+  const none = h.commit(src, {}, 'no pack');
+  await h.ci(['repo', 'create', 'app', '--from', src]);
+  const r = await h.ci(['snapshot', 'app', sha]);
+  assert.deepEqual(r.contextPack, { path: 'docs/context-pack.md', text: '# Context pack\n' });
+  assert.equal(r.hasPilot, false, 'a pack is no pipeline');
+  assert.deepEqual((await h.ci(['snapshot', 'app', big])).contextPack, { path: 'docs/context-pack.md', text: null, skipped: 'too_large' });
+  assert.equal(((await h.ci(['snapshot', 'app', gone])).contextPack as { skipped?: string }).skipped, 'too_large');
+  assert.equal((await h.ci(['snapshot', 'app', none])).contextPack, null);
+});
+
 test('branches and rev read the remote', async () => {
   const h = new Home();
   const src = h.repo('app');

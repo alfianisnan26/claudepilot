@@ -466,3 +466,35 @@ test('secrets: a job that names one the workspace cannot give fails before it st
     h.done();
   }
 });
+
+test('T-292: a push to the default branch hands its docs/context-pack.md to the contextPack hook, [skip ci] included; other branches do not', async () => {
+  const h = await harness();
+  try {
+    const packs: { workspaceId: string; repo: string; branch: string; sha: string; text: string | null }[] = [];
+    h.svc.hooks.contextPack = (e) => void packs.push({ workspaceId: e.workspaceId, repo: e.repo, branch: e.branch, sha: e.sha, text: e.file.text });
+    const events = () => (h.store.db!.prepare('SELECT outcome FROM ci_events').all() as { outcome: string }[]).length;
+    await remote(h, { 'docs/context-pack.md': '# Pack v1\n' });
+    assert.deepEqual(packs, [], 'creating the remote is no event');
+
+    h.home.git(['checkout', '-q', '-b', 'feat'], h.src);
+    h.home.commit(h.src, { 'docs/context-pack.md': '# Pack on a branch\n' }, 'feat');
+    h.home.git(['push', '-q', 'pilot', 'feat'], h.src);
+    await h.until('the branch event', () => events() === 1);
+    assert.deepEqual(packs, [], 'a branch other than the default one is ignored');
+
+    h.home.git(['checkout', '-q', 'main'], h.src);
+    const sha = h.home.commit(h.src, { 'docs/context-pack.md': '# Pack v2\n' }, 'regenerate the pack [skip ci]');
+    h.home.git(['push', '-q', 'pilot', 'main'], h.src);
+    await h.until('the main event', () => events() === 2);
+    assert.deepEqual(packs, [{ workspaceId: WS, repo: 'app', branch: 'main', sha, text: '# Pack v2\n' }]);
+
+    // A commit on main without a pack says nothing.
+    h.home.git(['rm', '-q', 'docs/context-pack.md'], h.src);
+    h.home.commit(h.src, {}, 'drop the pack');
+    h.home.git(['push', '-q', 'pilot', 'main'], h.src);
+    await h.until('the third event', () => events() === 3);
+    assert.equal(packs.length, 1);
+  } finally {
+    h.done();
+  }
+});
