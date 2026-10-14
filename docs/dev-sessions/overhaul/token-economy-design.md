@@ -1,6 +1,6 @@
 # Token economy and the pilot factory: design v2 (reviewed)
 
-> **Status:** design v2, DRAFT for the owner. **Author:** coordinator. **Last verified:** 2026-10-14 05:40 UTC. **Published copy:** https://docs.isnan.me/doc/token-economy-and-the-pilot-factory-design-for-review-mtvlexI3hs. **Sources:** the portal's usage report and tickets, the raw session tapes in the pod, git, and the scripts in `evidence/` that produced every number. Every claim carries a label: **MEASURED** (from our own tapes or the portal), **MECHANISM** (the behaviour is documented or tested; its effect on us is not yet measured), **HYPOTHESIS** (an experiment decides). v1 of this document (same path, git history) was the first draft; this version is the full review.
+> **Status:** design v2, DRAFT for the owner. **Author:** coordinator. **Last verified:** 2026-10-14 06:55 UTC. **Published copy:** https://docs.isnan.me/doc/token-economy-and-the-pilot-factory-design-for-review-mtvlexI3hs. **Sources:** the portal's usage report and tickets, the raw session tapes in the pod, git, and the scripts in `evidence/` that produced every number. Every claim carries a label: **MEASURED** (from our own tapes or the portal), **MECHANISM** (the behaviour is documented or tested; its effect on us is not yet measured), **HYPOTHESIS** (an experiment decides). v1 of this document (same path, git history) was the first draft; this version is the full review.
 
 ## 0. Verdict in short
 
@@ -121,7 +121,7 @@ Design rules of the engine: a slice is a short portal session with a brief, a re
 | 6 | Quota-aware concurrency, deploy batching, gate reuse by sha | MECHANISM | pipeline minutes −30 percent (estimate), fewer endings | rules sent; gate reuse to build | deploys per day, endings per deploy, gate minutes |
 | 7 | Context compiler + plan step + preloaded files | HYPOTHESIS (strongest structural lever) | requests per slice −40 percent, cost per accepted slice −25 percent (targets) | to build (E2) | stratified random by slice; adopt at −15 percent cost per accepted slice with yield not down |
 | 8 | Factory engine, no-wait, chat as exception handler | HYPOTHESIS | orchestrator share 21 → under 8 percent; idle < 5 percent | to build (E3) | before and after on ClaudePilot; endings that cost work → zero |
-| 9 | RTK on Bash output | MEASURED by replay (6 to 9 points on top of caps) | about 6 to 9 percent | T-286 | pre-registered in T-286; fidelity audit can veto |
+| 9 | RTK on Bash output | MEASURED by replay (6 to 9 points on top of caps) | about 6 to 9 percent | T-286 | STEP 1 FAILED 2026-10-14 06:34 UTC (rtk v1.0.0, offline, pinned and checksum-verified): fidelity 0 percent on `node --test` failures (every failing test name and file:line dropped), `rtk err` 40 to 45 percent, `tsc` 100 percent; deny-rule parity: 28 of 70 Bash deny rules bypassed by the rewritten form (all git push rules, kubectl secret reads, /proc environ). REJECTED by the pre-registered stop rules; no hook, no brief rule. A narrow retry (git status, git log, ls only) is a separate, low-ceiling hypothesis for later |
 | 10 | Quota spread across accounts and model windows | HYPOTHESIS, capacity-bound | ×1.3 to 1.5 throughput | scheduler in T-259 | quota windows used per hour, Job queue wait |
 | 11 | Headroom (proxy compression) | MEASURED by replay (3 to 4 points over RTK) | small | not now | only after 9 and only on a scratch account with a security review |
 
@@ -177,7 +177,7 @@ Success metrics, weekly, same sources as the baseline: cost per accepted slice (
 | --- | --- | --- |
 | Sub-agents re-write 65 percent of cache-write tokens after misses; their cache is 5 minutes, main chats 1 hour | `evidence/tape_cache_breaks.py`, TTL split (2026-10-14) | tapes after the restart showing the same re-write share with 1 h writes |
 | An 8,000 character cap saves about 5.7 percent of input-side cost | `evidence/tape_counterfactual.py` | a new baseline with a different result mix |
-| RTK-like compression saves 7 to 15 percent depending on the shrink factor | `evidence/tape_compression_replay.py` | the live A/B (T-286) |
+| RTK-like compression saves 7 to 15 percent depending on the shrink factor | `evidence/tape_compression_replay.py` | the offline step 1 of T-286 (2026-10-14): the saving is real on git status and ls (0.46 and 0.3 of plain bytes) but the tool failed fidelity and deny parity, so no A/B; rejected |
 | Model by role is not in effect | usage report 05:36 UTC: agent runs opus 60, fable 29, sonnet 0 in 12 h | a pass showing sonnet agent runs |
 | Idle time was 25 percent of wall time | hourly spend buckets 2026-10-13 | n/a (historical) |
 | Median slice: 47 requests, 77 k context, $1.7 | `evidence/slice_metrics.py` (160 slices) | the lab's ingest on the same corpus |
