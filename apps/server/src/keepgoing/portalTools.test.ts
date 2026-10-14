@@ -25,6 +25,8 @@ async function build() {
 
 type Called = Awaited<ReturnType<Awaited<ReturnType<typeof portalMcpHarness>>['call']>>;
 const code = (c: Called) => c.result?.structuredContent?.error?.code ?? c.error?.message ?? null;
+/** A tool error (with or without a structured code: an input the schema refuses has only text) or a JSON-RPC error. */
+const refused = (c: Called) => c.result?.isError === true || !!c.error;
 
 test('an admin token turns Keep going on after a confirmation, off without one; audited with the token as the actor', async () => {
   const { r, h } = await build();
@@ -58,15 +60,15 @@ test('a token below admin and an agent never reach it; another user’s chat and
   try {
     const operate = h.token('operate');
     const narrow = await h.call(operate.secret, 'session_keepgoing_set', { session_id: 's_a', enabled: true });
-    assert.notEqual(code(narrow), null, 'refused');
+    assert.ok(refused(narrow), 'a token below admin is refused');
     const agent = await h.agentToken('docker/api-dev', 's_a');
     const self = await h.call(agent.secret, 'session_keepgoing_set', { session_id: 's_a', enabled: true });
-    assert.notEqual(code(self), null, 'a chat never keeps itself going');
+    assert.ok(refused(self), 'a chat never keeps itself going');
     const admin = h.token('admin');
     assert.equal(code(await h.call(admin.secret, 'session_keepgoing_set', { session_id: 's_b', enabled: true })), 'NOT_FOUND');
     assert.equal(code(await h.call(admin.secret, 'session_keepgoing_set', { session_id: 'nope', enabled: true })), 'NOT_FOUND');
-    assert.notEqual(code(await h.call(admin.secret, 'session_keepgoing_set', { session_id: 's_a', status_file: '../etc/passwd' })), null);
-    assert.notEqual(code(await h.call(admin.secret, 'session_keepgoing_set', { session_id: 's_a', nudge_after_min: 0 })), null);
+    assert.ok(refused(await h.call(admin.secret, 'session_keepgoing_set', { session_id: 's_a', status_file: '../etc/passwd' })));
+    assert.ok(refused(await h.call(admin.secret, 'session_keepgoing_set', { session_id: 's_a', nudge_after_min: 0 })));
     assert.equal(code(await h.call(admin.secret, 'session_keepgoing_set', { session_id: 's_a' })), 'VALIDATION_FAILED');
     assert.equal(r.engine.view('s_a'), null, 'nothing was set');
     assert.equal(r.engine.view('s_b'), null);
