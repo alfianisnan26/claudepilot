@@ -23,7 +23,7 @@ test('the Orphans chip asks for orphans only, on top of the other filters', () =
 });
 
 test('a move by the orphan sweep reads as a sentence', () => {
-  assert.equal(fallbackSentence({ to: null, reason: 'queue' }), 'Its session ended: back in the queue');
-  assert.equal(fallbackSentence({ to: { kind: 'session', sessionId: 's' }, reason: 'lineage' }), 'Its session ended: moved to the session that continues it');
-  assert.equal(fallbackSentence({ to: { kind: 'session', sessionId: 's' }, reason: 'title' }), 'Its session ended: moved to the live session of its track');
+  assert.equal(fallbackSentence('Portal', { to: null, reason: 'queue' }), 'Portal put it back in the queue');
+  assert.equal(fallbackSentence('Portal', { to: { kind: 'session', sessionId: 's' }, reason: 'lineage' }), 'Portal moved it to the session that continues it');
+  assert.equal(fallbackSentence('Portal', { to: { kind: 'session', sessionId: 's' }, reason: 'title' }), 'Portal moved it to the live session of its track');
 });

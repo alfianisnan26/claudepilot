@@ -67,6 +67,7 @@ for (const cfg of MATRIX) {
 
     await b.goto('/admin/tickets?view=list', 2500);
     check(cfg.name, 'the Orphans chip with its count', await seen(`[...document.querySelectorAll('button')].some((e) => /^Orphans\\s*3$/.test(e.innerText.trim()))`));
+    check(cfg.name, 'the chip is in view without scrolling the row', await b.eval(`(() => { const e = [...document.querySelectorAll('button')].find((x) => x.innerText.trim().startsWith('Orphans')); const r = e.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; })()`));
     check(cfg.name, 'list: no horizontal scroll', await b.eval(`document.scrollingElement.scrollWidth <= innerWidth + 1`));
     await b.shot(`${cfg.name}-3-list`, { full: true });
     await b.clickText('Orphans', { selector: 'button' });
@@ -103,7 +104,7 @@ const b = await Browser.launch({ width: 390, height: 844, mobile: true });
 try {
   await b.cookie(cookie);
   await b.goto(`/admin/tickets/${t3.id}`, 2500);
-  check('sweep', 'the timeline reads the move as a sentence', await b.waitFor(`document.body.innerText.includes('Its session ended: back in the queue')`, 15000).then(() => true, () => false));
+  check('sweep', 'the timeline reads the move as a sentence', await b.waitFor(`document.body.innerText.includes('Portal put it back in the queue')`, 15000).then(() => true, () => false));
   check('sweep', 'no orphan line after the move', await b.eval(`!document.querySelector('[role=status]')?.innerText.includes('Its session ended')`));
   await b.shot('phone-390-light-5-after-sweep', { full: true });
 } finally {

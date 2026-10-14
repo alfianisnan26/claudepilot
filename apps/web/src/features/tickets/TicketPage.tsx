@@ -335,7 +335,7 @@ function sentence(e: TicketEvent): string {
     case 'workspace':
       return `${who} put it in ${typeof d.to === 'string' ? d.to : 'the shared queue'}`;
     case 'assigned':
-      if (d.fallback) return fallbackSentence(d);
+      if (d.fallback) return fallbackSentence(who, d);
       return d.claimed ? `${who} claimed it` : `${who} assigned it to ${assignee(d.to)}`;
     case 'session_started':
       return `${who} started a session for it`;

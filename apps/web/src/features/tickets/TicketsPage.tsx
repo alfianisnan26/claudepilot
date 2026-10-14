@@ -193,12 +193,18 @@ export function TicketsPage() {
         </div>
 
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 [&::-webkit-scrollbar]:hidden">
+          {/* First while there are any: on a phone the row scrolls sideways, and an orphan must be seen without that. */}
+          {(orphans || !!counts?.orphans) && (
+            <Chip on={orphans} tone="danger" title="Their session ended: the portal moves them in a few minutes" onClick={() => set({ orphan: orphans ? null : '1', assignee: null, s: null })} count={counts?.orphans ?? null}>
+              Orphans
+            </Chip>
+          )}
           {view === 'list' &&
             SCOPES.map((s) => {
-              const on = scope === s.id && !needs && !queue;
+              const on = scope === s.id && !needs && !queue && !orphans;
               const n = chipCount(s.id);
               return (
-                <Chip key={s.id} on={on} onClick={() => set({ s: s.id === 'active' ? null : s.id, assignee: null })} count={n}>
+                <Chip key={s.id} on={on} onClick={() => set({ s: s.id === 'active' ? null : s.id, assignee: null, orphan: null })} count={n}>
                   {s.label}
                 </Chip>
               );
@@ -209,11 +215,6 @@ export function TicketsPage() {
           <Chip on={queue} title="Nobody has these: agents can take them" onClick={() => set({ assignee: queue ? null : 'unassigned', s: null, orphan: null })} count={counts?.unassigned ?? null}>
             Unassigned
           </Chip>
-          {(orphans || !!counts?.orphans) && (
-            <Chip on={orphans} tone="danger" title="Their session ended: the portal moves them in a few minutes" onClick={() => set({ orphan: orphans ? null : '1', assignee: null })} count={counts?.orphans ?? null}>
-              Orphans
-            </Chip>
-          )}
         </div>
 
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 [&::-webkit-scrollbar]:hidden">

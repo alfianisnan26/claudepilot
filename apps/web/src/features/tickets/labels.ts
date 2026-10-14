@@ -65,10 +65,10 @@ export function ageShort(iso: string, now = Date.now()): string {
 export const ORPHAN_TITLE: Record<TicketOrphanWhy, string> = { ended: 'Its session ended', archived: 'Its session was archived', missing: 'Its session is gone' };
 export const ORPHAN_BADGE: Record<TicketOrphanWhy, string> = { ended: 'Session ended', archived: 'Session archived', missing: 'Session gone' };
 
-/** The timeline sentence of a move the orphan sweep made (an `assigned` entry with `fallback: true`). */
-export function fallbackSentence(d: { to?: unknown; reason?: unknown }): string {
-  if (!d.to) return 'Its session ended: back in the queue';
-  return d.reason === 'title' ? 'Its session ended: moved to the live session of its track' : 'Its session ended: moved to the session that continues it';
+/** The timeline sentence of a move the orphan sweep made (an `assigned` entry with `fallback: true`); its comment says why. */
+export function fallbackSentence(who: string, d: { to?: unknown; reason?: unknown }): string {
+  if (!d.to) return `${who} put it back in the queue`;
+  return d.reason === 'title' ? `${who} moved it to the live session of its track` : `${who} moved it to the session that continues it`;
 }
 
 /** The list's filter from the page's choices (the address): one place, so the chips cannot drift from the request. */
