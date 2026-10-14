@@ -125,6 +125,8 @@ async function api(method, path, body) {
 const mcp = { token: '', id: '' };
 async function mcpToken() {
   if (mcp.token) return mcp.token;
+  // The portal caps live tokens per label (T-258): revoke this label's leftovers before minting (a crash leaves them behind).
+  { const st = (await api('GET', '/api/portal-mcp')).data; for (const t of st?.tokens ?? []) if (!t.revokedAt && t.label === 'dev-sessions-supervisor') await api('DELETE', `/api/portal-mcp/tokens/${t.id}`); } // replaced stale
   const r = await api('POST', '/api/portal-mcp/tokens', { label: 'dev-sessions-supervisor', scope: 'admin', expiresInDays: 7 });
   if (!r.data?.secret) throw new Error(`no MCP token: ${r.error?.message ?? r.status}`);
   mcp.token = r.data.secret;
