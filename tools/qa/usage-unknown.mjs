@@ -84,6 +84,7 @@ try {
       check(/Unavailable: no reset time/.test(r.one), `${tag}: one.claude says "Unavailable: no reset time"`);
       check(!/\b0 %/.test(r.one), `${tag}: one.claude shows no 0 % (${JSON.stringify(r.one.replace(/\s+/g, ' ').slice(0, 120))})`);
       check(/Limit hit · until \d{2}:\d{2}/.test(r.two), `${tag}: two.claude says "Limit hit · until <time>"`);
+      check(!/Room on one\.claude/.test(r.two) && /Room on regitha · 59 % left/.test(r.two), `${tag}: "Room on" names the measured Claude, never the unknown one`);
       check(/41 %/.test(r.three) && !/Unavailable/.test(r.three), `${tag}: a measured Claude shows its percent, no "Unavailable"`);
       check(/Unavailable: no usage endpoint/.test(r.four), `${tag}: a Claude with no usage endpoint says so`);
       check(!r.scroll, `${tag}: no horizontal scroll`);

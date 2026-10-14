@@ -108,7 +108,8 @@ function UnknownLines({ c, nowMs }: { c: ClaudeUsage; nowMs: number }) {
 function roomElsewhere(c: ClaudeUsage, peers: ClaudeUsage[], nowMs: number): string | null {
   if (c.state !== 'exhausted') return null;
   const options = peers
-    .filter((p) => p.claudeId !== c.claudeId && p.workspaceId === c.workspaceId)
+    // T-255: a Claude whose usage is unknown (0 % with no reset time) has no room to speak of.
+    .filter((p) => p.claudeId !== c.claudeId && p.workspaceId === c.workspaceId && !p.unavailable)
     .map((p) => ({ p, h: headroomOfClaude(p, nowMs) }))
     .filter(({ h }) => (h.kind === 'plan' && !h.exhausted && h.limiting) || h.kind === 'no_limits');
   const plan = options.filter(({ h }) => h.kind === 'plan').sort((a, b) => b.h.limiting!.leftPct - a.h.limiting!.leftPct)[0];
