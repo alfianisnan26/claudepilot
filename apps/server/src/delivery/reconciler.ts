@@ -1,6 +1,7 @@
 import { isWorkspaceId } from '../names.js';
 import type { Store } from '../store/store.js';
 import { foreignPortal, isTargetUnreachable, type Runtime } from '../workspaces/runtime.js';
+import { changedAreas } from './changes.js';
 import { compile, CompileError } from './compile.js';
 import { dueFolders, folderPlugin, manifestPlugins, pluginDir } from './marketplace.js';
 import { OUTBOX_PULL } from './outbox.js';
@@ -220,6 +221,33 @@ export class Reconciler {
     for (const fn of this.#listeners) fn(workspaceId);
   }
 
+  /**
+   * T-102: the areas the deliveries written into a workspace after `sinceMs` changed, newest delivery first, each once (owner names, or
+   * `other` for a delivery recorded before areas were). Empty when none landed since, or the events can't be read.
+   */
+  changesSince(workspaceId: string, sinceMs: number): string[] {
+    if (!this.store.db || !Number.isFinite(sinceMs)) return [];
+    try {
+      const rows = this.store.db
+        .prepare(`SELECT details FROM delivery_events WHERE workspace_id = ? AND kind = 'delivered' AND at > ? ORDER BY at DESC, id DESC LIMIT 50`)
+        .all(workspaceId, new Date(sinceMs).toISOString()) as { details: string }[];
+      const out = new Set<string>();
+      for (const r of rows) {
+        let areas: unknown;
+        try {
+          areas = (JSON.parse(r.details) as { areas?: unknown }).areas;
+        } catch {
+          areas = undefined;
+        }
+        if (Array.isArray(areas)) for (const a of areas) if (typeof a === 'string') out.add(a);
+        if (!Array.isArray(areas)) out.add('other');
+      }
+      return [...out];
+    } catch {
+      return [];
+    }
+  }
+
   #event(workspaceId: string, kind: string, details: Record<string, unknown> = {}) {
     if (!this.store.writable) return;
     this.store.db!.prepare('INSERT INTO delivery_events (at, workspace_id, kind, details) VALUES (?, ?, ?, ?)').run(new Date().toISOString(), workspaceId, kind, JSON.stringify(details));
@@ -364,6 +392,8 @@ export class Reconciler {
         if (handEdited.length || changed.length) this.#event(workspaceId, 'drift_repaired', { files: handEdited, ...(changed.length ? { plugins: changed.map((p) => p.dir) } : {}) });
         this.#event(workspaceId, 'delivered', {
           why,
+          // T-102: the areas a session started before this write has not read (owner names only), for the chat's "Tools changed" sheet.
+          areas: changedAreas(applied.manifest, bundle.manifest),
           generation: row.generation + 1,
           running: state.running,
           files: bundle.files.length,

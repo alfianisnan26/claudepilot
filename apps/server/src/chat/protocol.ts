@@ -3,6 +3,7 @@
 // do; the builders turn an action into one JSON line to write into the session's stdin FIFO.
 
 import { REQUEST_FULL_MAX, type ChatEvent, type ChatToolInputValue, type ChatInputState, type ChatModelOption, type ChatRequest, type ChatSessionState, type ChatTask } from '@portal/contracts';
+import { PEER_QUEUED_MESSAGE, textDigest } from './integrity.js';
 import { redact } from './redact.js';
 
 /** A base64 image as Claude Code carries it; the controller turns it into a blob and never stores this. */
@@ -85,6 +86,8 @@ export interface ParsedLine {
   mcpServers?: { name: string; status: string }[];
   /** A reply to one of the portal's own control requests. */
   controlResponse?: ControlResponse;
+  /** The line's `type` (and `subtype`, as `type/subtype`), for logs only: never its content. */
+  kind?: string;
   /** Lines the portal sent moving through Claude Code's queue, by their client uuid. */
   inputs?: { uuid: string; state: ChatInputState }[];
   /** Sub-agent and background task changes. */
@@ -116,7 +119,18 @@ export interface ParsedLine {
    * A replayed user line (`isReplay`): the uuid Claude Code read it under, and whether it's local command
    * output (`<local-command-stdout>`), which Claude Code echoes under an id of its own.
    */
-  replay?: { uuid: string | null; localCommand: boolean; modelNote?: boolean; origin?: { kind: string; producer: string | null } };
+  replay?: {
+    uuid: string | null;
+    localCommand: boolean;
+    modelNote?: boolean;
+    origin?: { kind: string; producer: string | null };
+    /** For origin `peer` (a sub-agent's SendMessage delivered to the main conversation): the sending task and a digest of the body. */
+    peer?: { taskId: string | null; digest: string | null };
+  };
+  /** A sub-agent's `SendMessage` tool use (T-136): its call, the sending task (`agent_id`) and a digest of its text, never the text. */
+  peerSends?: { toolUseId: string; taskId: string; digest: string }[];
+  /** Sub-agent tool results that say exactly "Message queued for the main conversation's next turn." (T-136): their call ids. */
+  peerQueued?: string[];
   /** A `command_lifecycle` line's command uuid, whatever its state. */
   commandUuid?: string;
   /** The main thread called EnterPlanMode, which needs no approval: `plan` mode may follow. */
@@ -170,6 +184,14 @@ export function parseLine(raw: string): ParsedLine {
     return { stored: [] };
   }
   if (!obj) return { stored: [] };
+  const parsed = parseKnown(obj);
+  const type = asStr(obj.type);
+  const subtype = asStr(obj.subtype);
+  if (type) parsed.kind = subtype ? `${type}/${subtype}` : type;
+  return parsed;
+}
+
+function parseKnown(obj: Record<string, unknown>): ParsedLine {
   switch (asStr(obj.type)) {
     case 'system':
       return parseSystem(obj);
@@ -406,6 +428,7 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
   const uuid = asStr(obj.uuid) ?? undefined;
   const stored: StoredEvent[] = [];
   const agents: NonNullable<ParsedLine['agents']> = [];
+  const peerSends: NonNullable<ParsedLine['peerSends']> = [];
   let enterPlan = false;
   if (Array.isArray(content))
     for (const raw of content) {
@@ -433,11 +456,16 @@ function parseAssistant(obj: Record<string, unknown>): ParsedLine {
         const description = asStr(asObj(block.input)?.description);
         if (name && AGENT_TOOLS.has(name) && id && description) agents.push({ toolUseId: id, description: clean(description, MAX_LABEL) });
         if (name === 'EnterPlanMode' && !agentLabel) enterPlan = true;
+        // A sub-agent's SendMessage (T-136): what a later peer line must match, as a digest.
+        const message = asStr(asObj(block.input)?.message);
+        const taskId = taskToken(obj.agent_id);
+        if (name === 'SendMessage' && agentLabel && id && taskId && message !== null) peerSends.push({ toolUseId: id, taskId, digest: textDigest(message) });
       }
     }
   const out: ParsedLine = { stored };
   if (agents.length) out.agents = agents;
   if (enterPlan) out.enterPlan = true;
+  if (peerSends.length) out.peerSends = peerSends;
   // A sub-agent's line says which model answered it.
   const model = agentLabel ? modelId(asObj(obj.message)?.model) : null;
   if (agentLabel && model) out.agentModels = [{ toolUseId: agentLabel, model, source: 'observed' }];
@@ -486,7 +514,13 @@ function parseUser(obj: Record<string, unknown>): ParsedLine {
   if (obj.isReplay === true) {
     const text = typeof content === 'string' ? content : (asStr(asObj(Array.isArray(content) ? content[0] : null)?.text) ?? '');
     const origin = replayOrigin(obj.origin);
-    return { stored: [], replay: { uuid: asStr(obj.uuid), localCommand: isLocalOutput(content), modelNote: MODEL_NOTE.test(text), ...(origin ? { origin } : {}) } };
+    const replay: NonNullable<ParsedLine['replay']> = { uuid: asStr(obj.uuid), localCommand: isLocalOutput(content), modelNote: MODEL_NOTE.test(text), ...(origin ? { origin } : {}) };
+    if (origin?.kind === 'peer') {
+      const o = asObj(obj.origin);
+      const body = asStr(o?.body);
+      replay.peer = { taskId: taskToken(o?.senderTaskId), digest: body === null ? null : textDigest(body) };
+    }
+    return { stored: [], replay };
   }
   if (typeof content === 'string') return { stored: [] }; // a replay: the user event was stored when we sent it
   const agentLabel = asStr(obj.parent_tool_use_id);
@@ -494,6 +528,7 @@ function parseUser(obj: Record<string, unknown>): ParsedLine {
   if (!Array.isArray(content)) return { stored };
   let last: StoredEvent | undefined;
   const beside: RawImage[] = [];
+  const peerQueued: string[] = [];
   for (const raw of content) {
     const block = asObj(raw);
     if (!block) continue;
@@ -504,6 +539,7 @@ function parseUser(obj: Record<string, unknown>): ParsedLine {
       if (block.is_error === true) last.isError = true;
       const toolUseId = asStr(block.tool_use_id);
       if (toolUseId) last.toolUseId = toolUseId; // the controller names the result from its call
+      if (toolUseId && agentLabel && block.is_error !== true && saysQueued(block.content)) peerQueued.push(toolUseId);
       if (images.length) last.rawImages = images;
       stored.push(last);
     } else if (type === 'image') {
@@ -513,10 +549,39 @@ function parseUser(obj: Record<string, unknown>): ParsedLine {
   }
   // Image blocks next to a tool result are what that tool returned; without one, the line isn't a tool's.
   if (last && beside.length) last.rawImages = [...(last.rawImages ?? []), ...beside];
+  const out: ParsedLine = { stored };
+  if (peerQueued.length) out.peerQueued = peerQueued;
   // The result of a call that launched a sub-agent names the model Claude Code started it on.
   const launched = modelId(asObj(obj.tool_use_result)?.resolvedModel);
-  if (launched && stored.length === 1 && last?.toolUseId) return { stored, agentModels: [{ toolUseId: last.toolUseId, model: launched, source: 'launched' }] };
-  return { stored };
+  if (launched && stored.length === 1 && last?.toolUseId) out.agentModels = [{ toolUseId: last.toolUseId, model: launched, source: 'launched' }];
+  return out;
+}
+
+/** A task id as Claude Code writes it (`a8b5…`, `b1ezh2fdm`): a short plain token, else null. */
+function taskToken(v: unknown): string | null {
+  const s = asStr(v);
+  return s && /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : null;
+}
+
+/**
+ * Whether a tool result is exactly SendMessage's "queued for the main conversation" answer: one text block holding the JSON
+ * `{"success": true, "message": "Message queued for the main conversation's next turn."}` (observed, Claude Code 2.1.296). The phrase
+ * inside any other text (a ticket that quotes it, say) is not that answer.
+ */
+function saysQueued(content: unknown): boolean {
+  const blocks = Array.isArray(content) ? content : [content];
+  if (blocks.length !== 1) return false;
+  const block = asObj(blocks[0]);
+  const text = typeof blocks[0] === 'string' ? blocks[0] : asStr(block?.type) === 'text' ? asStr(block?.text) : null;
+  if (!text) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  const o = asObj(parsed);
+  return !!o && o.success === true && o.message === PEER_QUEUED_MESSAGE;
 }
 
 /** A tool_result's content as short text plus its images (base64, for the blob store — never the text). */

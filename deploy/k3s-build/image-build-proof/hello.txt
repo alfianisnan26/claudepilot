@@ -1,0 +1,1 @@
+built in the cluster by scripts/image-build.sh (T-141)

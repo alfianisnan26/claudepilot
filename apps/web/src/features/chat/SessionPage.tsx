@@ -15,6 +15,7 @@ import { undoFor } from '@/features/autotransfer/pure';
 import { useAutoMoveMenu } from '@/features/autotransfer/SessionMenuItem';
 import { SuggestionCard } from '@/features/autotransfer/SuggestionCard';
 import { useAutoMove } from '@/features/autotransfer/useAutoMove';
+import { HoldLine } from '@/features/autotransfer/HoldLine';
 import { useGlanceFocus } from '@/features/glance/focus';
 import { GlanceStrip } from '@/features/glance/Strip';
 import { ApprovalBar, ApprovalCard } from './ApprovalCard';
@@ -25,13 +26,14 @@ import { useBtwLayout } from './btw/layout';
 import { Composer, type ComposerHandle } from './Composer';
 import { Controls, type ControlsHandle } from './Controls';
 import { FilesPanel, FilesSheet, INITIAL_FILES_VIEW, type FilesView } from './FilesPanel';
+import { KeepGoingChip } from './KeepGoing';
 import { SessionInfoDialog } from './SessionInfo';
 import { endedForSafety, StateBadge } from './shared';
 import { Transcript } from './Transcript';
 import { ResumeBanner } from './ResumeBanner';
 import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
 import { useMoveChat } from './SwitchDialog';
-import { canRestart, RestartChip, useRestart } from './Restart';
+import { RestartChip, useRestart } from './Restart';
 import { TrustSheet, useFolderTrust, type TrustTarget } from './TrustSheet';
 import { UsageDialog } from './Usage';
 import { useChatSession, type ChatControlArgs, type ChatControlOp, type ChatSendOptions } from './useChatSocket';
@@ -386,7 +388,8 @@ export function SessionPage() {
       label: 'Restart',
       icon: <RotateCw className="size-4" />,
       onSelect: fromMenu(() => restart.start('manual')),
-      disabled: gone || !canRestart(session) || restart.busy,
+      // T-102: never disabled for a running turn: the sheet offers Restart after this turn, or now behind a confirmation.
+      disabled: gone || ended || !!session?.switching || restart.busy,
     },
     {
       label: 'Move to another Claude…',
@@ -427,10 +430,14 @@ export function SessionPage() {
             Session info), the state, ⋯; Bypass adds its red shield. Everything else is in ⋯.
           */}
           <div hidden={cramped} className="pointer-events-none absolute inset-x-0 top-0 z-30 pt-[var(--bar-top)] pr-[var(--bar-right)] pl-[var(--bar-left)]">
+            {/* What scrolls under the header blurs and fades out below it (T-102): no hard edge, no darker band under the pill. */}
+            <div aria-hidden="true" data-header-fade="" className="session-fade pointer-events-none absolute inset-x-0 top-0 -z-10 h-[calc(var(--session-header-bottom)+2.75rem)]" />
             <header
               data-session-header=""
+              data-popover-ceiling=""
               className={cn(
-                'glass-card pointer-events-auto relative isolate mx-auto flex h-[52px] max-w-[760px] items-center gap-1 rounded-full p-1',
+                // No drop shadow (T-102): over the fade it read as a darker band under the pill; the border draws its edge.
+                'glass-card pointer-events-auto relative isolate mx-auto flex h-[52px] max-w-[760px] items-center gap-1 rounded-full p-1 shadow-none!',
                 bypass && 'border-danger/50',
               )}
             >
@@ -474,6 +481,7 @@ export function SessionPage() {
                   endedForSafety(session.endedReason) && ended ? <Badge tone="danger">Ended</Badge> : <StateBadge state={state} agents={running} />
                 ) : null}
               </span>
+              <KeepGoingChip session={session} onOpen={() => setInfoOpen(true)} />
               {bypass && (
                 <button
                   type="button"
@@ -521,7 +529,7 @@ export function SessionPage() {
                     )}
                   >
                     <Bot className="size-[18px]" />
-                    {running > 0 && <RunningCount count={running} small />}
+                    {running > 0 && <RunningCount count={running} />}
                     {/* Agents still at work: a small spinner on the icon, also once the main agent is idle. */}
                     {running > 0 && (
                       <span aria-hidden="true" className="absolute bottom-1.5 left-1.5 flex rounded-full bg-bg text-accent">
@@ -536,9 +544,10 @@ export function SessionPage() {
                 <Menu
                   label={!roomy && running ? `Session actions, ${running} ${running === 1 ? 'agent' : 'agents'} running` : 'Session actions'}
                   trigger={
-                    <span className="relative flex">
-                      <MoreHorizontal className="size-[18px]" />
-                      {!roomy && running > 0 && <RunningCount count={running} small />}
+                    // The count sits at the corner of the 44 px button, clear of the dots (T-102: '14' used to cover them).
+                    <span className="relative flex size-11 items-center justify-center">
+                      <MoreHorizontal className="size-[18px]" data-menu-glyph="" />
+                      {!roomy && running > 0 && <RunningCount count={running} />}
                     </span>
                   }
                   items={menuItems}
@@ -608,6 +617,7 @@ export function SessionPage() {
               {auto.state?.pending && !gone && !ended && !session?.switching && (
                 <SuggestionCard state={auto.state} allowAuto={auto.allowAuto} bypass={bypass} disabled={!connected} onChange={auto.setState} />
               )}
+              {!auto.state?.pending && !gone && !ended && !session?.switching && <HoldLine state={auto.state} />}
               {btw && btwLayout.mode === 'card' &&
                 btwCard(
                   'card',
@@ -634,7 +644,9 @@ export function SessionPage() {
                 ) : (
                   <>
                     {session && <ResumeBanner session={session} connected={connected} onResume={() => trustedControl('resume')} />}
-                    {session && !gone && <RestartChip session={session} busy={restart.busy} onRestart={() => restart.start('mcp')} />}
+                    {session && !gone && (
+                      <RestartChip hint={restart.hint} anchor={restart.anchor} onOpen={() => restart.start('mcp')} onCancel={() => void restart.actions.cancel()} onNow={restart.actions.now} />
+                    )}
                     <Composer
                       ref={composer}
                       sessionId={id}
@@ -802,15 +814,16 @@ function EndedNote({ reason }: { reason: string | null | undefined }) {
   );
 }
 
-/** How many agents are running: a green pill by Agents, or a smaller one on the ⋯ button on phones. */
-function RunningCount({ count, small }: { count: number; small?: boolean }) {
+/**
+ * How many agents are running: on the corner of its own 44 px button (Agents, or ⋯ on phones), inside the button's width and clear of its
+ * glyph, so it covers neither the glyph nor the neighbouring button (T-102: '14' used to sit on ⋯).
+ */
+function RunningCount({ count }: { count: number }) {
   return (
     <span
       aria-hidden="true"
-      className={cn(
-        'flex items-center justify-center rounded-full bg-accent font-bold text-white tabular-nums dark:text-bg',
-        small ? 'absolute -top-2 -right-2 h-4 min-w-4 px-1 text-[10px] ring-2 ring-bg' : 'h-5 min-w-5 px-1.5 text-[11px]',
-      )}
+      data-running-count=""
+      className="absolute -top-1 right-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white tabular-nums ring-2 ring-bg dark:text-bg"
     >
       {count}
     </span>

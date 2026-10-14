@@ -1,0 +1,23 @@
+{
+  "key": "outline-konfersi",
+  "displayName": "Outline Konfersi",
+  "description": "Outline's own MCP endpoint on outline.int.konfersi.com (part of Outline, not a third-party package): search, read, create and edit documents. Token mode: an Outline API key for this instance only, from a Secrets & env file. Outline registers each tool only if the key's scopes allow it. Internal host: resolves to a private address, so the entry allows the private network.",
+  "kind": "remote",
+  "spec": {
+    "url": "https://outline.int.konfersi.com/mcp",
+    "transport": "http",
+    "auth": "headers",
+    "allowPrivateNetwork": true
+  },
+  "slots": [
+    {
+      "name": "Authorization",
+      "target": "header",
+      "secret": true,
+      "required": true,
+      "template": "Bearer {value}",
+      "description": "An API key of a Konfersi Outline user that sees only the project's collections; read scope unless the project writes documents.",
+      "docUrl": "https://docs.getoutline.com/s/guide/doc/mcp-6j9jtENNKL"
+    }
+  ]
+}

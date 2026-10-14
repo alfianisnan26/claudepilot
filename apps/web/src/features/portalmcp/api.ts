@@ -9,6 +9,8 @@ import {
   type PortalLockdownResult,
   type PortalMcpSettings,
   type PortalMcpState,
+  type RevokePortalTokenLabelRequest,
+  type RevokePortalTokenLabelResult,
   type UpdatePortalMcpSettingsRequest,
 } from '@portal/contracts';
 import { api, ApiError } from '@/lib/api';
@@ -40,6 +42,7 @@ export const portalMcpApi = {
   updateSettings: (body: UpdatePortalMcpSettingsRequest) => request<PortalMcpSettings>('PUT', PORTAL_MCP_API.settings, body),
   createToken: (body: CreatePortalTokenRequest) => request<CreatedPortalToken>('POST', PORTAL_MCP_API.tokens, body),
   revokeToken: (id: string) => request<{ ok: true }>('DELETE', PORTAL_MCP_API.token(id)),
+  revokeLabel: (body: RevokePortalTokenLabelRequest) => request<RevokePortalTokenLabelResult>('POST', PORTAL_MCP_API.revokeLabel, body),
   revokeAll: () => request<PortalLockdownResult>('POST', PORTAL_MCP_API.revokeAll),
   audit: (query: { tool?: string; outcome?: string; before?: number; limit?: number } = {}) => {
     const q = new URLSearchParams();

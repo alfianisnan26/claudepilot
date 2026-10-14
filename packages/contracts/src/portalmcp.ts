@@ -13,6 +13,41 @@ export type PortalCallerScope = PortalScope | 'agent';
 export const PORTAL_TOKEN_DAYS = [7, 30, 90, 365] as const;
 export type PortalTokenDays = (typeof PORTAL_TOKEN_DAYS)[number];
 
+/**
+ * Every lifetime a token may have (T-258): the short ones for automation (a script that mints a token for one run takes `1h`) and the
+ * day counts of `PORTAL_TOKEN_DAYS`. `expiresIn` takes one of these; `expiresInDays` stays for the day counts.
+ */
+export const PORTAL_TOKEN_LIFETIMES = ['15m', '1h', '1d', '7d', '30d', '90d', '365d'] as const;
+export type PortalTokenLifetime = (typeof PORTAL_TOKEN_LIFETIMES)[number];
+const MINUTE_MS = 60_000;
+export const PORTAL_TOKEN_LIFETIME_MS: Record<PortalTokenLifetime, number> = {
+  '15m': 15 * MINUTE_MS,
+  '1h': 60 * MINUTE_MS,
+  '1d': 1440 * MINUTE_MS,
+  '7d': 7 * 1440 * MINUTE_MS,
+  '30d': 30 * 1440 * MINUTE_MS,
+  '90d': 90 * 1440 * MINUTE_MS,
+  '365d': 365 * 1440 * MINUTE_MS,
+};
+
+/** The shared setting (Settings → MCP): how many live admin-scope tokens one label may have at once (T-258). */
+export const PORTAL_TOKEN_CAP_SETTING = 'mcp.tokens.maxActivePerLabel';
+export const PORTAL_TOKEN_CAP_DEFAULT = 3;
+/** `409`: live tokens with this label exist; the details say how many and the newest one's id and expiry (never a secret). */
+export const PORTAL_TOKEN_LABEL_IN_USE = 'TOKEN_LABEL_IN_USE';
+/** `409`: the label already has as many live admin tokens as `mcp.tokens.maxActivePerLabel` allows. */
+export const PORTAL_TOKEN_CAP = 'TOKEN_CAP';
+
+/** The details of a `TOKEN_LABEL_IN_USE` or `TOKEN_CAP` refusal. */
+export interface PortalTokenLabelConflict {
+  label: string;
+  /** Live tokens with this label (for `TOKEN_CAP`: live admin tokens). */
+  live: number;
+  newest: { id: string; expiresAt: string };
+  /** `TOKEN_CAP` only: the setting's value. */
+  max?: number;
+}
+
 /** An admin's token: `cpat_` plus 43 base64url characters (256 random bits), stored only as a SHA-256 hash. */
 export const PORTAL_TOKEN_PREFIX = 'cpat_';
 /**
@@ -41,7 +76,26 @@ export interface PortalToken {
 export interface CreatePortalTokenRequest {
   label: string;
   scope: PortalScope;
+  /** How long it lives (default 90 days). Give this or `expiresInDays`, not both. */
+  expiresIn?: PortalTokenLifetime;
   expiresInDays?: PortalTokenDays;
+  /**
+   * A label names one client, so a label with live tokens is refused (`TOKEN_LABEL_IN_USE`) unless the request says what to do:
+   * `replace` revokes the live tokens with this label and mints the new one; `addAnother` keeps them (admin scope: up to the cap).
+   */
+  replace?: boolean;
+  addAnother?: boolean;
+}
+
+/** `POST /api/portal-mcp/tokens/revoke-label`: revoke a label's live tokens, all of them or all but the newest. */
+export interface RevokePortalTokenLabelRequest {
+  label: string;
+  /** Keep the newest live one ("Revoke older"). */
+  keepNewest?: boolean;
+}
+
+export interface RevokePortalTokenLabelResult {
+  revoked: number;
 }
 
 /** What creating a token returns: the secret (once) and ready-to-paste connections. */
@@ -159,6 +213,8 @@ export const PORTAL_MCP_API = {
   tokens: '/api/portal-mcp/tokens',
   /** DELETE: revoke one token. */
   token: (id: string) => `/api/portal-mcp/tokens/${encodeURIComponent(id)}`,
+  /** POST `RevokePortalTokenLabelRequest`: `RevokePortalTokenLabelResult`. */
+  revokeLabel: '/api/portal-mcp/tokens/revoke-label',
   /** POST: revoke every token (agents' included) and, as `mcp_lockdown` does not, leave MCP on. */
   revokeAll: '/api/portal-mcp/revoke-all',
   /** GET `?tool=&outcome=&tokenId=&before=&limit=`: audit rows, newest first. */

@@ -35,6 +35,8 @@ export interface PortalMcpModuleOptions {
   limits?: PortalLimits;
   version?: string;
   now?: () => Date;
+  /** Live admin-scope tokens one label may have (the setting `mcp.tokens.maxActivePerLabel`, read on every mint). Default 3. */
+  maxActivePerLabel?: () => number;
 }
 
 /**
@@ -53,6 +55,7 @@ export class PortalMcpModule {
   #timer: NodeJS.Timeout | undefined;
   readonly #agentHost: PortalMcpModuleOptions['agentHost'];
   readonly #warming = new Set<string>();
+  readonly #maxActivePerLabel: () => number | undefined;
   /** Called after anything Access → MCP shows changed. */
   onChange?: () => void;
   /** Called when what a lockdown allowlist must admit for a workspace changed: its agent access, or the address its agents use. */
@@ -66,6 +69,7 @@ export class PortalMcpModule {
     this.registry = opts.registry ?? portalTools;
     this.internalUrl = opts.internalUrl ?? null;
     this.#agentHost = opts.agentHost;
+    this.#maxActivePerLabel = opts.maxActivePerLabel ?? (() => undefined);
     this.settings = new PortalMcpSettingsStore(store, now);
     this.tokens = new PortalTokens(store, now);
     this.audit = new PortalAudit(store, now);
@@ -163,19 +167,38 @@ export class PortalMcpModule {
     };
   }
 
-  createToken(req: Partial<CreatePortalTokenRequest>, url: string): CreatedPortalToken {
-    const { token, secret } = this.tokens.create(req);
-    this.audit.event('token_created', token.id, { label: token.label, scope: token.scope });
+  /**
+   * Mints an admin's token. `by` is who asked (`actorString`), written in every audit row: the mint, and one `token_revoked` row per token a
+   * `replace` revoked. The label rules and the cap are the admin tokens' only (T-258); agents' per-session tokens are minted by `agents.mint`.
+   */
+  createToken(req: Partial<CreatePortalTokenRequest>, url: string, by = 'ui'): CreatedPortalToken {
+    const { token, secret, replaced } = this.tokens.create(req, { maxAdminPerLabel: this.#maxActivePerLabel() });
+    for (const id of replaced) {
+      this.mcp.confirmations.forget(id);
+      this.audit.event('token_revoked', id, { reason: 'replaced by a new token with this label', by, replacedBy: token.id });
+    }
+    this.audit.event('token_created', token.id, { label: token.label, scope: token.scope, expiresAt: token.expiresAt, by, ...(replaced.length ? { replaced: replaced.length } : {}) });
     return { token, secret, connect: connectFor(url, secret) };
   }
 
-  revokeToken(id: string, reason?: string): boolean {
+  revokeToken(id: string, reason?: string, by = 'ui'): boolean {
     const done = this.tokens.revoke(id, reason);
     if (done) {
       this.mcp.confirmations.forget(id);
-      this.audit.event('token_revoked', id, { reason: reason ?? 'revoked in the portal' });
+      this.audit.event('token_revoked', id, { reason: reason ?? 'revoked in the portal', by });
     }
     return done;
+  }
+
+  /** Revokes a label's live tokens (all, or all but the newest), one audit row each that says who. */
+  revokeLabel(label: string, keepNewest: boolean, by = 'ui'): number {
+    const reason = keepNewest ? 'older token with this label, revoked in the portal' : 'every token with this label, revoked in the portal';
+    const ids = this.tokens.revokeLabel(label, keepNewest, reason);
+    for (const id of ids) {
+      this.mcp.confirmations.forget(id);
+      this.audit.event('token_revoked', id, { reason, by });
+    }
+    return ids.length;
   }
 
   /** Revokes every live token, agents' included; with `turnOff`, MCP answers 404 until an admin turns it back on (`mcp_lockdown`). */

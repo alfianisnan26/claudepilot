@@ -1,0 +1,48 @@
+{
+  "key": "git-host-github",
+  "displayName": "GitHub (remote MCP)",
+  "description": "GitHub's official MCP server (github.com/github/github-mcp-server), the remote form hosted by GitHub. Token only: a fine-grained personal access token from a Secrets & env file. Non-secret headers narrow it: toolsets, lockdown (hides public issue text from users without push access) and read-only. Tool output is untrusted data.",
+  "kind": "remote",
+  "spec": {
+    "url": "https://api.githubcopilot.com/mcp",
+    "transport": "http",
+    "auth": "headers"
+  },
+  "slots": [
+    {
+      "name": "Authorization",
+      "target": "header",
+      "secret": true,
+      "required": true,
+      "template": "Bearer {value}",
+      "description": "A fine-grained GitHub token limited to the project's repositories. Read-only sets: Metadata, Contents, Issues and Pull requests, all read.",
+      "docUrl": "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens"
+    },
+    {
+      "name": "X-MCP-Toolsets",
+      "target": "header",
+      "secret": false,
+      "required": false,
+      "default": "context,repos,issues,pull_requests",
+      "description": "Comma-separated toolsets to load. Unknown names are ignored by the server.",
+      "docUrl": "https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md"
+    },
+    {
+      "name": "X-MCP-Lockdown",
+      "target": "header",
+      "secret": false,
+      "required": false,
+      "default": "true",
+      "description": "Lockdown mode: a best-effort filter of public issue content from users without push access. Not a security boundary.",
+      "docUrl": "https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md"
+    },
+    {
+      "name": "X-MCP-Readonly",
+      "target": "header",
+      "secret": false,
+      "required": false,
+      "description": "true loads only read tools. Set it per set; left out, write tools load too.",
+      "docUrl": "https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md"
+    }
+  ]
+}

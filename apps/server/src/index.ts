@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { getRequestListener } from '@hono/node-server';
-import { formatCode, SETTING_KEYS, type LiveTopic } from '@portal/contracts';
+import { AUTO_SETTING_KEYS, formatCode, isWindowOfFamily, PORTAL_TOKEN_CAP_SETTING, SETTING_KEYS, type LiveTopic } from '@portal/contracts';
 import { AccountHealthService } from './accounts/health.js';
 import { AccountPools } from './accounts/pools.js';
 import { AccountsService } from './accounts/service.js';
@@ -228,6 +228,7 @@ chatController.agentCaps = () => ({
 settingsModule.settings.onChange((key) => key === BYPASS_SETTING && void chatController.bypassPolicyChanged());
 // The Restart hint (chat PRD, Restart): when the latest delivery into a workspace landed; a session whose process is older offers a Restart.
 chatController.deliveredAt = (id) => reconciler.row(id)?.applied_at ?? null;
+chatController.configChanges = (id, sinceMs) => reconciler.changesSince(id, sinceMs);
 reconciler.onChange((id) => chatController.deliveryChanged(id));
 chatController.bypassFacts = (id) => ({
   internet: true,
@@ -324,6 +325,8 @@ claudeVersions.start();
 const agentUrls = internalUrlResolver({ workspaces, port: config.port, configured: config.portalMcp.internalUrl ?? null });
 const portalMcp = new PortalMcpModule(store, {
   internalUrl: config.portalMcp.internalUrl,
+  // T-258: live admin tokens per label, from the shared settings (Settings → MCP).
+  maxActivePerLabel: () => settingsModule.settings.get<number>(PORTAL_TOKEN_CAP_SETTING),
   extraOrigins: config.portalMcp.origins,
   // Agents' per-session tokens (interface I8): alive while the chat session is, aimed at the portal as a workspace reaches it.
   agentHost: {
@@ -351,6 +354,14 @@ portalMcp.start();
 // Agent access stores its workspace as the stable id and reads it as the key (T-42 slice 3).
 portalMcp.agents.workspaceRefs = workspaces.identities;
 chatController.agentAccess = portalMcp.agents;
+{
+  // T-102: agent access turned on or off changes the portal tools a session's NEXT process gets: its "Tools changed" hint says so.
+  const accessChanged = portalMcp.agents.onAccessChange;
+  portalMcp.agents.onAccessChange = (workspaceId) => {
+    accessChanged?.(workspaceId);
+    chatController.portalToolsChanged(workspaceId);
+  };
+}
 chatController.launchEnv = () => (settingsModule.settings.get<boolean>(SETTING_KEYS.mcpAccountOff) ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {});
 chatController.secretValues = (id) => exposedSecretValues(poolService, id);
 // MCP OAuth (MCP set PRD §13.3): the guided sign-in runs Claude Code's login in a workspace terminal, for one of its Claudes, and a chat
@@ -369,6 +380,8 @@ tickets.onChange = () => notify('tickets');
 tickets.onAudit = (e) => platform.audit.record(e);
 tickets.start();
 chatController.ticketExists = (id) => tickets.exists(id);
+// T-270: a continuation takes its predecessors' tickets in the transaction that creates it.
+chatController.continueTickets = (to, from) => tickets.continueFrom(to, from);
 registerTicketTools(tickets);
 // The chat's own tools for its Claude (rename itself); bound to the session its token was minted for.
 registerChatTools(chatController);
@@ -411,6 +424,9 @@ claudeUsage.start();
 registerClaudeUsageTools(claudeUsage);
 // The chat reader's hook: each rate_limit_info of a session on its Claude's own sign-in (the raw object, never stored as it came).
 chatController.onRateLimit = (sessionId, claudeId, info) => claudeUsage.onRateLimit(sessionId, claudeId, info);
+// T-109: whether a Claude shows a model's own usage window (a Fable week): how the Move flow knows it has Fable before its list_models is read.
+chatController.modelWindow = (claudeId, family) => claudeUsage.windowKeys(claudeId).some((k) => isWindowOfFamily(k, family));
+chatController.returnToOriginalModel = () => settingsModule.settings.get<boolean>(AUTO_SETTING_KEYS.returnToOriginalModel) === true;
 // Usage spend: who spent what (per session, workspace, ticket, persona), budgets with alerts and spike detection, over the recorded requests
 // (claude-usage PRD §21 to §26). The chat controller tells it of each recorded turn and each process start, and asks it before a message
 // whether a budget a person set to pause is used up. Its pages hear of changes on the `claudeusage` topic; `usageSpend.onAlert` is where

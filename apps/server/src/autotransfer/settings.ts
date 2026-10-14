@@ -21,7 +21,7 @@ defineSetting({
   protective: false,
   confirmText: 'Chats can move to another Claude when a quota is low.',
   label: 'Auto move',
-  help: 'Off: nothing watches a quota and nothing moves. On: when the Claude a chat runs on is nearly out, a card offers to move the chat to another Claude of the same workspace.',
+  help: 'Off: nothing watches a quota and nothing moves. On: when the Claude a chat runs on is nearly out, a card offers to move the chat to another Claude of the same workspace. With "Without asking" on: at the threshold the chat moves by itself to a Claude with more left (a working chat is told to finish its step first and moves when the turn ends); a Claude already out of quota moves at once, pause and caps or not; with no Claude to move to the chat waits and is looked at again every 2 minutes until one frees up or its own limit resets, then it goes on by itself.',
 });
 defineSetting({
   key: K.automatic,
@@ -33,7 +33,7 @@ defineSetting({
   protective: false,
   confirmText: 'Chats move to another Claude by themselves when a quota is low.',
   label: 'Without asking',
-  help: 'On: chats move by themselves at the end of a turn, within the pause and the caps below; each move leaves an audit row, a notification and an Undo. Off: a card asks every time.',
+  help: 'On: chats move by themselves at the end of a turn, within the pause and the caps below (a Claude already out of quota moves at once, and such a move is not counted); each move leaves an audit row, a notification and an Undo. Off: a card asks every time.',
 });
 defineSetting({
   key: K.thresholdPct,
@@ -56,6 +56,28 @@ defineSetting({
   order: 40,
   label: 'Projection',
   help: 'Also move when, at its current pace, a limit runs out within 2 hours, with 30 % or less left (an estimate, used only with enough readings).',
+});
+defineSetting({
+  key: K.respectPace,
+  type: 'boolean',
+  default: true,
+  scope: 'global',
+  group: 'automove',
+  order: 42,
+  label: 'Respect pace',
+  help: 'On: a chat at the threshold moves only when its Claude, at its current pace, is projected to use at least the "Pace" percent by its next reset; under that it stays (a move stops running agents and costs a new cache). A used-up Claude always moves at once. With no confident projection yet (one reading, a short span) the threshold alone decides, and the trail says so. Owner decision D-39.',
+});
+defineSetting({
+  key: K.paceMinPct,
+  type: 'number',
+  default: AUTO_BOUNDS.paceMinPct.default,
+  min: AUTO_BOUNDS.paceMinPct.min,
+  max: AUTO_BOUNDS.paceMinPct.max,
+  scope: 'global',
+  group: 'automove',
+  order: 44,
+  label: 'Pace',
+  help: 'With "Respect pace" on: the projected use at the reset, in percent, from which a chat at the threshold moves. 90 by default: projected 85 % stays, 92 % moves.',
 });
 defineSetting({
   key: K.minPauseMin,
@@ -150,7 +172,7 @@ defineSetting({
   group: 'automove',
   order: 120,
   label: 'Other models',
-  help: 'When only the chat’s own model is nearly out (its weekly limit) and the shared limits have room, the chat may change to one of these models on the same Claude instead of moving: no handoff, the conversation stays. Best first, e.g. "sonnet" or "sonnet, haiku". Empty: a chat never changes model by itself.',
+  help: 'Model families, best first, separated by commas, e.g. "sonnet" or "opus, sonnet, haiku" (known: fable, opus, sonnet, haiku). Two uses. When only the chat’s own model is nearly out and the shared limits have room, the chat may change to the first of these with room on the same Claude (no handoff, the conversation stays); empty: never. And when a chat moves to a Claude without its model, this order replaces the built-in one (Fable, then Opus, Sonnet, Haiku), never above the chat’s model; empty: the built-in order.',
 });
 defineSetting({
   key: K.keepModelFirst,
@@ -161,6 +183,28 @@ defineSetting({
   order: 130,
   label: 'Keep the model',
   help: 'When a chat can either move to another Claude with room on its model or change model here: on, it moves and keeps its model; off, it stays here and changes model. When no Claude has room on its model, it moves with one of the other models.',
+});
+
+defineSetting({
+  key: K.returnToOriginalModel,
+  type: 'boolean',
+  default: false,
+  scope: 'global',
+  group: 'automove',
+  order: 135,
+  label: 'Back to model',
+  help: 'A chat moved to a Claude without its model runs on the best model that Claude has (Fable to Opus, say). On: when it later moves to a Claude that has its original model, by itself or by a person, it goes back to that model. Off: it keeps the model it runs on.',
+});
+
+defineSetting({
+  key: K.dryRun,
+  type: 'boolean',
+  default: false,
+  scope: 'global',
+  group: 'automove',
+  order: 140,
+  label: 'Dry run',
+  help: 'On: the engine records in the trail what it would do (move a chat, tell it to finish and stop) and does none of it. For checking a portal before trusting it to move chats by itself (T-105).',
 });
 
 const clamp = (n: unknown, b: { min: number; max: number; default: number }) => {
@@ -191,6 +235,9 @@ export function platformSettings(r: AutoSettingsReader | null): AutoTransferSett
     allowBypass: b(K.allowBypass, false),
     modelFallback: parseModelFallback(get(K.modelFallback)),
     keepModelFirst: b(K.keepModelFirst, true),
+    dryRun: b(K.dryRun, false),
+    respectPace: b(K.respectPace, true),
+    paceMinPct: clamp(get(K.paceMinPct), AUTO_BOUNDS.paceMinPct),
   };
 }
 

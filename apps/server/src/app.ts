@@ -100,6 +100,20 @@ type Env = { Bindings: HttpBindings; Variables: { token: string } };
 /** Letters, digits, dot, underscore and dash, starting with a letter or digit: what a target or a workspace is ever called. */
 export { PLAIN_NAME };
 
+/**
+ * The page that sent this request is this portal: its Origin, exactly as a browser writes it, is http or https and names the
+ * request's own Host. The scheme is not compared, since TLS ends at a proxy and the server sees http (T-143); x-forwarded-*
+ * is not trusted. Both Origin checks on /api use this one rule.
+ */
+export function sameHostOrigin(origin: string, host: string | undefined): boolean {
+  try {
+    const o = new URL(origin);
+    return (o.protocol === 'http:' || o.protocol === 'https:') && o.origin === origin && host !== undefined && o.host === host;
+  } catch {
+    return false;
+  }
+}
+
 const clientKey = (c: Context<Env>) => {
   const forwarded = config.trustProxy ? c.req.header('x-forwarded-for')?.split(',').at(-1)?.trim() : undefined;
   return forwarded || (c.env.incoming?.socket.remoteAddress ?? 'unknown');
@@ -201,20 +215,14 @@ export function createApp(
     await next();
     if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
   });
-  app.use('/api/*', csrf());
+  app.use('/api/*', csrf({ origin: (origin, c) => sameHostOrigin(origin, c.req.header('host')) }));
   // csrf() only looks at form-like content types. Browsers name the origin on every request that is not a plain
   // GET, so a JSON request from another origin (or marked cross-site) is refused here too (same host rule as the sockets).
   app.use('/api/*', async (c, next) => {
     if (!/^(GET|HEAD|OPTIONS)$/.test(c.req.method)) {
       const origin = c.req.header('origin');
       let foreign = c.req.header('sec-fetch-site') === 'cross-site';
-      if (origin !== undefined) {
-        try {
-          foreign = new URL(origin).host !== c.req.header('host');
-        } catch {
-          foreign = true;
-        }
-      }
+      if (origin !== undefined) foreign = !sameHostOrigin(origin, c.req.header('host'));
       if (foreign) throw new AppError('FORBIDDEN', 'Forbidden');
     }
     await next();
@@ -487,7 +495,10 @@ export function createApp(
   });
   ws.post('/:target/:name/claude-login/code', async (c) => {
     const { code } = await body<{ code: string }>(c);
-    await logins.submit(...ownSignIn(c), code, claudeDir(c));
+    const [target, name] = ownSignIn(c);
+    const dir = claudeDir(c);
+    await logins.submit(target, name, code, dir);
+    chatController.forgetClaudeModelsAt(`${target}/${name}`, dir); // T-109: another account may offer other models
     return c.json(success({ ok: true }));
   });
   ws.delete('/:target/:name/claude-login', async (c) => {
@@ -495,7 +506,10 @@ export function createApp(
     return c.json(success({ ok: true }));
   });
   ws.post('/:target/:name/claude-logout', async (c) => {
-    await logins.logout(...ownSignIn(c), claudeDir(c));
+    const [target, name] = ownSignIn(c);
+    const dir = claudeDir(c);
+    await logins.logout(target, name, dir);
+    chatController.forgetClaudeModelsAt(`${target}/${name}`, dir);
     return c.json(success({ ok: true }));
   });
 

@@ -1465,7 +1465,7 @@ test('integrity: a command_lifecycle update for a message this portal never sent
   }
 });
 
-test('integrity: an echoed control response the portal never gave ends the session (and so does a second echo)', async () => {
+test('integrity: an echoed control response the portal never gave ends the session (and so does a second echo that differs; T-136)', async () => {
   const forged = await liveSession();
   try {
     forged.tail.push(line({ type: 'control_request', request_id: 'R-x', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'rm -rf ~' }, tool_use_id: 'toolu_x' } }));
@@ -1484,7 +1484,10 @@ test('integrity: an echoed control response the portal never gave ends the sessi
     twice.tail.push(allowResponse('R-y')); // the echo of the portal's own answer: expected
     await sleep(20);
     assert.equal(twice.state(), 'working');
-    await expectIntegrityEnd(twice, allowResponse('R-y'), /a second control response for request R-y/);
+    twice.tail.push(allowResponse('R-y')); // the same line read again: ignored (T-136)
+    await sleep(20);
+    assert.equal(twice.state(), 'working');
+    await expectIntegrityEnd(twice, denyResponse('R-y', 'changed'), /a second control response for request R-y/);
   } finally {
     await twice.done();
   }
@@ -2088,7 +2091,7 @@ test('parseLine: a main-thread system/init carries its credential source (null w
   // What Claude Code emits "when rate limit info changes": flagged, nothing stored; the object itself goes to Claude usage's hook as emitted.
   const info = { status: 'allowed_warning', resetsAt: 1_791_700_000, rateLimitType: 'five_hour', isUsingOverage: false };
   const event = parseLine(line({ type: 'rate_limit_event', rate_limit_info: info, uuid: 'u', session_id: 'S' }));
-  assert.deepEqual(event, { stored: [], rateLimitEvent: true, rateLimitInfo: info });
+  assert.deepEqual(event, { stored: [], rateLimitEvent: true, rateLimitInfo: info, kind: 'rate_limit_event' });
   assert.equal(parseLine(line({ type: 'result', subtype: 'success', session_id: 'S' })).result, true);
   assert.equal(parseLine(init('S')).result, undefined);
 });

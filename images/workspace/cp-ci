@@ -857,6 +857,36 @@ function gc(days) {
   return { ok: true, runs, work, events };
 }
 
+// src/ci/runner/changes.ts
+var CHANGES_MAX_PATHS = 5e3;
+var CHANGES_SHOW_BYTES = 1024 * 1024;
+var SHOW_PATH = /^[A-Za-z0-9._-][A-Za-z0-9._/-]{0,199}$/;
+async function fileAt(dir, sha, path) {
+  const r = await git(["cat-file", "blob", `${sha}:${path}`], { gitDir: dir, maxBytes: CHANGES_SHOW_BYTES + 1 });
+  if (r.code !== 0) return { text: null, tooLarge: false };
+  if (r.stdout.length > CHANGES_SHOW_BYTES) return { text: null, tooLarge: true };
+  return { text: r.stdout.toString("utf8"), tooLarge: false };
+}
+async function changes(repo, base, head, show) {
+  const dir = needRepo(repo);
+  if (!validSha(base) || !validSha(head)) throw new Fail("bad_sha", "That is not a commit id.");
+  if (show !== void 0 && (!SHOW_PATH.test(show) || show.includes("..") || show.includes("//") || show.endsWith("/"))) throw new Fail("bad_path", "That is not a file path in the repository.");
+  for (const sha of [base, head]) {
+    const r = await git(["cat-file", "-e", `${sha}^{commit}`], { gitDir: dir });
+    if (r.code !== 0) throw new Fail("no_commit", `There is no commit ${sha.slice(0, 7)} in ${repo}.`);
+  }
+  const d = await git(["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", base, head], { gitDir: dir, maxBytes: 4 * 1024 * 1024 });
+  if (d.code !== 0) throw new Fail("git_failed", d.stderr.trim().split("\n")[0]?.slice(0, 300) || "git diff failed");
+  const all = d.stdout.toString("utf8").split("\0").filter(Boolean);
+  const ancestor = (await git(["merge-base", "--is-ancestor", base, head], { gitDir: dir })).code === 0;
+  const out = { ok: true, paths: all.slice(0, CHANGES_MAX_PATHS), truncated: all.length > CHANGES_MAX_PATHS, ancestor };
+  if (show !== void 0) {
+    const [b, h] = await Promise.all([fileAt(dir, base, show), fileAt(dir, head, show)]);
+    out.show = { path: show, base: b.text, head: h.text, tooLarge: b.tooLarge || h.tooLarge };
+  }
+  return out;
+}
+
 // src/ci/runner/snapshot.ts
 var WANTED = /^\.pilot\/(?:[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.ya?ml|(?:steps|templates)\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.ya?ml)$/;
 async function snapshot(repo, sha) {
@@ -1595,6 +1625,10 @@ async function dispatch(cmd, args, self) {
     case "snapshot": {
       const { pos } = parse(args, {});
       return snapshot(pos[0], pos[1]);
+    }
+    case "changes": {
+      const { pos, flags } = parse(args, { show: "value" });
+      return changes(pos[0], pos[1], pos[2], str(flags.show));
     }
     case "start": {
       const { pos, flags } = parse(args, { bytes: "value" });

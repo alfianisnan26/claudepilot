@@ -76,6 +76,7 @@ test('two users: B can not see or touch A’s runs, remotes or environments; ids
       ['POST', `/api/ci/repos/${repo.id}/merge`, { source: 'a', target: 'main' }],
       ['GET', `/api/ci/repos/${repo.id}/environments`],
       ['PUT', `/api/ci/repos/${repo.id}/environments/production`, { protected: false }],
+      ['PUT', `/api/ci/repos/${repo.id}/environments/production/auto-approve`, { mode: 'dry' }],
     ];
     for (const [method, path, body] of probes) {
       const b = await call('b', method, path, body);
@@ -94,7 +95,9 @@ test('two users: B can not see or touch A’s runs, remotes or environments; ids
     for (const who of ['token', 'agent']) {
       for (const d of ['approve', 'reject']) assert.equal((await call(who, 'POST', `/api/ci/runs/${runId}/${d}`, { job: 'release' })).status, 403, `${who} ${d}`);
       assert.equal((await call(who, 'PUT', `/api/ci/repos/${repo.id}/environments/production`, { protected: false })).status, 403, `${who} protection`);
+      assert.equal((await call(who, 'PUT', `/api/ci/repos/${repo.id}/environments/production/auto-approve`, { mode: 'dry' })).status, 403, `${who} auto-approve`);
     }
+    assert.equal(h.svc.environments(repo.id)[0]!.autoApprove, 'off', 'nobody but a person with manage set the rule');
     assert.equal(h.svc.get(runId).deployments[0]!.approval, 'waiting');
 
     // A, a person who manages it: sees the environment, approves.
@@ -108,6 +111,10 @@ test('two users: B can not see or touch A’s runs, remotes or environments; ids
     await h.until('the run to pass', () => h.svc.get(runId).status === 'passed');
     const prot = await call('a', 'PUT', `/api/ci/repos/${repo.id}/environments/production`, { protected: false });
     assert.deepEqual([prot.status, prot.data.protected, prot.data.updatedBy], [200, false, 'user:u_a']);
+    // The auto-approve rule (T-110): A sets dry; `on` does not exist yet.
+    assert.equal((await call('a', 'PUT', `/api/ci/repos/${repo.id}/environments/production/auto-approve`, { mode: 'on' })).status, 422);
+    const dry = await call('a', 'PUT', `/api/ci/repos/${repo.id}/environments/production/auto-approve`, { mode: 'dry' });
+    assert.deepEqual([dry.status, dry.data.autoApprove, dry.data.updatedBy], [200, 'dry', 'user:u_a']);
   } finally {
     h.done();
   }

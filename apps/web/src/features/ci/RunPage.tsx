@@ -1,6 +1,6 @@
 import { Button, cn, LoadError, useToast } from '@isnanme/ui';
 import { isCiActive, type CiDeployment, type CiDiagnostic, type CiJob, type CiRun } from '@portal/contracts';
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Hand, RotateCw, Square } from 'lucide-react';
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Hand, RotateCw, Square } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
@@ -199,6 +199,12 @@ export function RunPage() {
           <Approval key={d.id} run={run} deployment={d} onDecided={() => void load()} />
         ))}
 
+      {run.deployments
+        .filter((d) => d.autoApprove)
+        .map((d) => (
+          <RuleLine key={`rule-${d.id}`} deployment={d} />
+        ))}
+
       {run.diagnostics.length > 0 && <Diagnostics items={run.diagnostics} />}
 
       {run.detail.length === 0 && run.diagnostics.length === 0 && <p className="text-[14px] text-muted">No jobs</p>}
@@ -321,6 +327,19 @@ function Approval({ run, deployment, onDecided }: { run: CiRun; deployment: CiDe
         </Button>
       </span>
     </section>
+  );
+}
+
+/** The auto-approve rule's one line on a deployment (T-110 FR41a; slice 1 is a dry run: it approved nothing). */
+function RuleLine({ deployment }: { deployment: CiDeployment }) {
+  const v = deployment.autoApprove!;
+  return (
+    <p className="mb-4 flex items-start gap-2 rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-[13px] leading-snug [overflow-wrap:anywhere]" aria-label={`Auto-approve rule for ${deployment.environment}`}>
+      <Bot className={cn('mt-0.5 size-4 shrink-0', v.verdict === 'would' ? 'text-accent' : 'text-gold')} aria-hidden="true" />
+      <span className="min-w-0 flex-1" title={timeAgo(v.at)}>
+        {v.line}
+      </span>
+    </p>
   );
 }
 

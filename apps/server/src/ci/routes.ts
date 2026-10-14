@@ -14,6 +14,7 @@ import {
   type BumpRequest,
   type CiApprovalRequest,
   type UpdateCiEnvironmentRequest,
+  type UpdateCiAutoApproveRequest,
   type ConnectCiRepoRequest,
   type CreateCiRepoRequest,
   type MergeCiRequest,
@@ -127,6 +128,11 @@ export function createCiRoutes(ci: CiService): Hono {
   app.put('/repos/:id/environments/:name', async (c) => {
     const by = person(may(c, 'manage', repoRef));
     return c.json(success(ci.setEnvironment(id(c), c.req.param('name'), await body<UpdateCiEnvironmentRequest>(c), by)));
+  });
+  // The auto-approve rule (FR41a): a person with manage, never a token or an agent (403 as for protection); audited by the service.
+  app.put('/repos/:id/environments/:name/auto-approve', async (c) => {
+    const by = person(may(c, 'manage', repoRef));
+    return c.json(success(ci.setAutoApprove(id(c), c.req.param('name'), await body<UpdateCiAutoApproveRequest>(c), by)));
   });
 
   app.post('/validate', async (c) => c.json(success(ci.validate(await body<ValidateCiRequest>(c)))));

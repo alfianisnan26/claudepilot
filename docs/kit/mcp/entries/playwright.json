@@ -1,0 +1,12 @@
+{
+  "key": "playwright",
+  "displayName": "Playwright MCP (standalone)",
+  "description": "Microsoft's Playwright MCP, standalone: launches its own headless browser with an in-memory profile. NOT for the kit: the Browser pool already delivers this exact version through its gate (control lease, handoff, header redaction). The workspace image has no Chrome, so this form fails to start there.",
+  "kind": "npm",
+  "version": "0.0.83",
+  "spec": {
+    "package": "@playwright/mcp",
+    "args": ["--headless", "--isolated"]
+  },
+  "slots": []
+}

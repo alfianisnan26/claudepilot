@@ -165,6 +165,19 @@ test('a session starts detached in its cwd, takes a send, is tailable by offset,
   assert.equal(fromMid, expected, 'the offset tail returns only bytes after the offset');
   assert.ok(!fromMid.startsWith('{"type"'), 'the offset skipped the start of the line');
 
+  // T-265: an offset past the segment's end is refused with its size (GNU tail would replay the file from byte 0 at the next write).
+  const size = Buffer.byteLength(outContent);
+  const past = await run(['tail', 's1', '1', String(size + 100)], { env });
+  assert.deepEqual([past.code, past.stdout], [6, String(size)]);
+  // From exactly the end, only what is written next comes: never the first line again.
+  const second = '{"type":"user","message":{"content":"again"}}\n';
+  const fromEnd = tailUntil(['tail', 's1', '1', String(size)], env, (s) => s.includes('got it'));
+  await sleep(100);
+  assert.equal((await run(['send', 's1', 'u2', String(Buffer.byteLength(second))], { input: second, env })).code, 0);
+  const next = await fromEnd;
+  assert.equal(next.trim().split('\n').length, 1, 'one new line, the first one not again');
+  assert.ok(!existsSync(join(dir, 'tail.err')) || readFileSync(join(dir, 'tail.err'), 'utf8') === '', 'tail reported nothing');
+
   // stop ends the process group; status then reports gone.
   assert.equal((await run(['stop', 's1'], { env })).code, 0);
   await runUntil(['status', 's1'], env, (s) => s === 'gone');

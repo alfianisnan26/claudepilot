@@ -27,6 +27,7 @@ import type { Store } from '../store/store.js';
 import { HOME } from '../workspaces/runtime.js';
 import { mapInputStrings, type ModelTotals, type StoredEvent, type TaskPatch } from './protocol.js';
 import { fileRefs } from './artifacts/records.js';
+import { lineageOf, type Lineage } from './lineage.js';
 import { redact, redactMaybe } from './redact.js';
 
 /**
@@ -55,6 +56,8 @@ export type ChatSessionRow = {
   byte_offset: number;
   last_seq: number;
   model: string | null;
+  /** T-109 (migration 761): the model before a move changed it; absent on rows read before the migration in old tests. */
+  original_model?: string | null;
   mode: string;
   effort: string | null;
   ultracode: number;
@@ -69,9 +72,14 @@ export type ChatSessionRow = {
   ended_reason: string | null;
   archived_at: string | null;
   pinned_at?: string | null;
+  /** T-102: the hint hidden until a change newer than this; null: shown. */
+  config_hidden_at?: string | null;
+  /** T-102: "Apply tool changes at the next turn end" as the person set it (1 on, 0 off); null: the default. */
+  auto_apply?: number | null;
   claude_id?: string | null;
   predecessor_id?: string | null;
   successor_id?: string | null;
+  continued_from?: string | null;
   ticket_id?: string | null;
   parent_id?: string | null;
   started_by?: string | null;
@@ -147,6 +155,8 @@ type RequestRow = {
 /** Fields `patchSession` can change. `cost` is absolute; `turnsDelta` is added to the current count. */
 export interface ChatSessionPatch {
   model?: string | null;
+  /** The model before a move changed it (T-109); null when what applies is the chat's own. */
+  originalModel?: string | null;
   mode?: string;
   effort?: string | null;
   ultracode?: boolean;
@@ -167,6 +177,9 @@ export interface ChatSessionPatch {
   predecessorId?: string | null;
   archivedAt?: string | null;
   pinnedAt?: string | null;
+  /** T-102: the restart hint's memory. */
+  configHiddenAt?: string | null;
+  autoApply?: boolean | null;
   title?: string;
   ticketId?: string | null;
   /** Sets or clears the session's worktree (its three columns together). */
@@ -353,14 +366,16 @@ export class ChatStore {
     startedBy?: string | null;
     worktree?: ChatWorktree | null;
     bypassCapable?: boolean;
+    /** The ended session it continues (T-270). */
+    continuedFrom?: string | null;
   }): ChatSession {
     const now = this.#stamp();
     const db = this.#writable();
     db
       .prepare(
         `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
-           ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         opts.id,
@@ -381,6 +396,7 @@ export class ChatStore {
         opts.worktree?.repo ?? null,
         opts.id,
         opts.bypassCapable ? 1 : 0,
+        opts.continuedFrom ?? null,
       );
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(opts.id, opts.claudeId ?? '', opts.id, opts.cwd, now);
@@ -457,6 +473,7 @@ export class ChatStore {
       state: row.state as ChatSessionState,
       origin: row.origin as ChatOrigin,
       model: row.model ?? null,
+      originalModel: row.original_model ?? null,
       mode: row.mode as ChatPermissionMode,
       effort: row.effort ?? null,
       ultracode: row.ultracode === 1,
@@ -476,6 +493,7 @@ export class ChatStore {
       claudeName: this.claudeName(row.workspace_id, row.claude_id ?? ''),
       predecessorId: row.predecessor_id ?? null,
       successorId: row.successor_id ?? null,
+      continuedFrom: row.continued_from ?? null,
       archivedAt: row.archived_at ?? null,
       pinnedAt: row.pinned_at ?? null,
       bypassCapable: row.bypass_capable === 1,
@@ -487,6 +505,11 @@ export class ChatStore {
       worktree: row.worktree_path ? { path: row.worktree_path, branch: row.worktree_branch ?? '', repo: row.worktree_repo ?? '' } : null,
       startedBy: row.started_by ?? null,
     };
+  }
+
+  /** The chain this session belongs to (T-136): every row from the root to the head, each one's cost, and their sum. Null when unknown. */
+  lineage(sessionId: string): Lineage | null {
+    return lineageOf(this.#db(), sessionId);
   }
 
   /** The other Claudes this chat ran on before its current one, oldest first, each once. */
@@ -721,6 +744,7 @@ export class ChatStore {
       vals.push(v);
     };
     if (patch.model !== undefined) set('model', patch.model);
+    if (patch.originalModel !== undefined) set('original_model', patch.originalModel);
     if (patch.mode !== undefined) set('mode', patch.mode);
     if (patch.effort !== undefined) set('effort', patch.effort);
     if (patch.ultracode !== undefined) set('ultracode', patch.ultracode ? 1 : 0);
@@ -753,6 +777,8 @@ export class ChatStore {
     if (patch.process !== undefined) set('process', patch.process);
     if (patch.archivedAt !== undefined) set('archived_at', patch.archivedAt);
     if (patch.pinnedAt !== undefined) set('pinned_at', patch.pinnedAt);
+    if (patch.configHiddenAt !== undefined) set('config_hidden_at', patch.configHiddenAt);
+    if (patch.autoApply !== undefined) set('auto_apply', patch.autoApply === null ? null : patch.autoApply ? 1 : 0);
     if (patch.title !== undefined) set('title', patch.title);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
     if (patch.successorId !== undefined) set('successor_id', patch.successorId);
@@ -862,8 +888,16 @@ export class ChatStore {
     return row ? (row.state as ControlLineState) : null;
   }
 
-  setControlState(sessionId: string, key: string, state: ControlLineState): void {
-    this.#writable().prepare(`UPDATE chat_inputs SET state = ? WHERE session_id = ? AND uuid = ? AND kind = 'control'`).run(state, sessionId, key);
+  /** Sets a control line's state; `digest` (T-136) records the first response read for it, so a second copy can be told apart. */
+  setControlState(sessionId: string, key: string, state: ControlLineState, digest?: string): void {
+    if (digest === undefined) this.#writable().prepare(`UPDATE chat_inputs SET state = ? WHERE session_id = ? AND uuid = ? AND kind = 'control'`).run(state, sessionId, key);
+    else this.#writable().prepare(`UPDATE chat_inputs SET state = ?, digest = ? WHERE session_id = ? AND uuid = ? AND kind = 'control'`).run(state, digest, sessionId, key);
+  }
+
+  /** The digest of the first response read for a control line, or null (none read, or read before T-136). */
+  controlDigest(sessionId: string, key: string): string | null {
+    const row = this.#db().prepare(`SELECT digest FROM chat_inputs WHERE session_id = ? AND uuid = ? AND kind = 'control'`).get(sessionId, key) as { digest: string | null } | undefined;
+    return row?.digest ?? null;
   }
 
   /* ---------- Sub-agents and background tasks ---------- */
@@ -982,6 +1016,14 @@ export class ChatStore {
       .get(sessionId, since, since);
   }
 
+  /** Whether this one task ran in the session's current process (as {@link hasTaskActivitySince}, for one task id). T-136. */
+  taskRanSince(sessionId: string, taskId: string, since: string | null): boolean {
+    if (since === null) return !!this.#db().prepare('SELECT 1 FROM chat_tasks WHERE session_id = ? AND task_id = ? LIMIT 1').get(sessionId, taskId);
+    return !!this.#db()
+      .prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND task_id = ? AND (status IS NULL OR status = 'running' OR started_at >= ? OR ended_at >= ?) LIMIT 1`)
+      .get(sessionId, taskId, since, since);
+  }
+
   hasRunningTasks(sessionId: string): boolean {
     return !!this.#db().prepare(`SELECT 1 FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running') LIMIT 1`).get(sessionId);
   }
@@ -1060,6 +1102,12 @@ export class ChatStore {
     this.#writable()
       .prepare('UPDATE chat_requests SET answered_at = NULL, outcome = NULL, actor = NULL WHERE session_id = ? AND request_id = ?')
       .run(sessionId, requestId);
+  }
+
+  /** How the portal answered a request Claude Code raised (allowed_once, allowed_session, denied, …), or null while open or unknown. */
+  requestOutcome(sessionId: string, requestId: string): string | null {
+    const row = this.#db().prepare('SELECT outcome FROM chat_requests WHERE session_id = ? AND request_id = ?').get(sessionId, requestId) as { outcome: string | null } | undefined;
+    return row?.outcome ?? null;
   }
 
   openRequests(sessionId: string): ChatRequest[] {
@@ -1235,6 +1283,8 @@ export class ChatStore {
       db.prepare('UPDATE chat_sessions SET successor_id = NULL WHERE successor_id = ?').run(id);
       db.prepare('UPDATE chat_sessions SET predecessor_id = NULL WHERE predecessor_id = ?').run(id);
       db.prepare('UPDATE chat_sessions SET parent_id = NULL WHERE parent_id = ?').run(id);
+      // The row that continued it now starts its chain (T-136): what it cost is gone with it.
+      db.prepare('UPDATE chat_sessions SET continued_from = NULL WHERE continued_from = ?').run(id);
       db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id);
     });
     return blobs;

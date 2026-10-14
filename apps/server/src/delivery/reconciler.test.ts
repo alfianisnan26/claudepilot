@@ -340,3 +340,22 @@ test('outage (targets-connect PRD §12.5): an unreachable target leaves the work
     h.done();
   }
 });
+
+test('T-102: each delivery records the areas it changed, and changesSince names them for a session that started before', async () => {
+  const h = await harness();
+  try {
+    const started = Date.now() - 1;
+    h.provider.list = [skillset('v1')];
+    await h.run();
+    const areas = () => (JSON.parse((h.store.db!.prepare("SELECT details FROM delivery_events WHERE kind = 'delivered' ORDER BY id DESC").get() as { details: string }).details) as { areas: string[] }).areas;
+    assert.deepEqual(areas(), ['skillset'], 'the first delivery: the skillset (the catalog it brings is not named on its own)');
+    assert.deepEqual(h.reconciler.changesSince(WS, started), ['skillset']);
+    assert.deepEqual(h.reconciler.changesSince(WS, Date.now() + 1000), [], 'nothing landed after a later start');
+    // An old event without areas reads `other`; a broken reader reads nothing.
+    h.store.db!.prepare("INSERT INTO delivery_events (at, workspace_id, kind, details) VALUES (?, ?, 'delivered', '{}')").run(new Date(Date.now() + 5).toISOString(), WS);
+    assert.deepEqual(new Set(h.reconciler.changesSince(WS, started)), new Set(['skillset', 'other']));
+    assert.deepEqual(h.reconciler.changesSince(WS, Number.NaN), []);
+  } finally {
+    h.done();
+  }
+});
