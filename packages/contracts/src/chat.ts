@@ -3,6 +3,7 @@
 
 import type { ChatFile, ChatUploadRef } from './artifacts.js';
 import type { BtwClientMessage, BtwServerMessage, ChatPinnedBtw } from './chatBtw.js';
+import type { ChatKeepGoing } from './keepgoing.js';
 
 /** `starting` launching; `idle` waiting for you; `working` a turn is running; `waiting` needs an answer; `interrupted` the process is gone but resumable; `ended` closed. */
 export type ChatSessionState = 'starting' | 'idle' | 'working' | 'waiting' | 'interrupted' | 'ended';
@@ -132,6 +133,8 @@ export interface ChatSession {
   autoApply?: boolean;
   /** T-102: while it reads working or waiting, since when (the main turn's start, or the oldest running task's): the hint offers Restart now after 30 minutes. */
   busySince?: string | null;
+  /** T-259: Keep going (the watchdog's policy for this chat, today's counts and its last action); absent or null when no policy was ever set. */
+  keepGoing?: ChatKeepGoing | null;
 }
 
 /**
@@ -680,6 +683,8 @@ export const CHAT_API = {
   pin: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/pin`,
   /** PATCH `UpdateRestartHintRequest`: hide the "Tools changed" hint until the next change, or the automatic restart setting (T-102). */
   restartHint: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/restart-hint`,
+  /** GET: the chat's Keep going (`ChatKeepGoing`). PUT `UpdateKeepGoingRequest`: set it (a person; T-259). */
+  keepGoing: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/keep-going`,
   /** GET `?after=<seq>`: stored transcript events after a sequence number (history and resume). */
   events: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/events`,
   /** GET: models this session can switch to. */
