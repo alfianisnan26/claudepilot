@@ -41,7 +41,8 @@ test('the watch says it when a deploying job is first seen running, again only w
   const w = new DeployChatsWatch(() => now, (l) => lines.push(l));
   const deps = [{ job: 'release' }];
   w.observe('r1', deps, [{ id: 'verify', status: 'running' }, { id: 'release', status: 'waiting' }]);
-  assert.deepEqual(lines, [], 'a held release says nothing; a running job that deploys nowhere neither');
+  // (length, not deepEqual: an asserted `[]` would narrow `lines` to never[] for the rest of the test)
+  assert.equal(lines.length, 0, 'a held release says nothing; a running job that deploys nowhere neither');
   w.observe('r1', deps, [{ id: 'release', status: 'running' }]);
   w.observe('r1', deps, [{ id: 'release', status: 'running' }]);
   assert.equal(lines.length, 1);
