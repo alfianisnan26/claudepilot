@@ -11,6 +11,7 @@ const row = (o: Partial<LabSummaryRow> = {}): LabSummaryRow => ({
   requests: { median: 47, p90: 120 },
   ctxP50: { median: 77000, p90: 77000 },
   resultChars: { median: 1, p90: 1 },
+  resultTokens: { median: 1, p90: 1 },
   minutes: { median: 28, p90: 60 },
   costUsd: null,
   bashShare: {},

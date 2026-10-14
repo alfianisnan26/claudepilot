@@ -135,7 +135,7 @@ test('the summary on the slice 1 tape: per role and model, with the numbers the 
     assert.deepEqual(h.lab.views({ role: 'qa' }).map((x) => x.model), ['claude-sonnet-5-5']);
     assert.equal(h.lab.views({ fromMs: T0 + DAY_MS }).length, 0);
     // The compact row of the MCP tool is short and rounded.
-    assert.deepEqual(Object.keys(compactRow(impl)), ['period', 'role', 'model', 'n', 'req_p50', 'ctx_p50', 'min_p50', 'cost_p50', 'inspect_share', 'rewrite_share', 'fpy', 'cost_per_accepted']);
+    assert.deepEqual(Object.keys(compactRow(impl)), ['period', 'role', 'model', 'n', 'req_p50', 'ctx_p50', 'result_tok_p50', 'min_p50', 'cost_p50', 'inspect_share', 'rewrite_share', 'fpy', 'cost_per_accepted']);
     assert.deepEqual([compactRow(impl).cost_p50, compactRow(impl).inspect_share, compactRow(impl).rewrite_share], [0.36, 0.167, 0.45]);
   } finally {
     h.done();
@@ -252,7 +252,7 @@ test('MCP: lab_summary is short by default and full on ask; an agent reads its o
     const short = where(await mcp.call(admin.secret, 'lab_summary', { since: String(T0 - 1) }));
     assert.equal(short.scope, 'portal');
     assert.ok(short.rows.length >= 3);
-    for (const r of short.rows) assert.deepEqual(Object.keys(r), ['period', 'role', 'model', 'n', 'req_p50', 'ctx_p50', 'min_p50', 'cost_p50', 'inspect_share', 'rewrite_share', 'fpy', 'cost_per_accepted']);
+    for (const r of short.rows) assert.deepEqual(Object.keys(r), ['period', 'role', 'model', 'n', 'req_p50', 'ctx_p50', 'result_tok_p50', 'min_p50', 'cost_p50', 'inspect_share', 'rewrite_share', 'fpy', 'cost_per_accepted']);
     assert.equal(short.basis, undefined, 'the sources are in the full form');
     const full = where(await mcp.call(admin.secret, 'lab_summary', { since: String(T0 - 1), full: true }));
     assert.ok(full.basis.costUsd && Array.isArray(full.experiments));
