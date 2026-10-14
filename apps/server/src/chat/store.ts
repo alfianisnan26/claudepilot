@@ -1086,6 +1086,12 @@ export class ChatStore {
       .run(sessionId, requestId);
   }
 
+  /** How the portal answered a request Claude Code raised (allowed_once, allowed_session, denied, …), or null while open or unknown. */
+  requestOutcome(sessionId: string, requestId: string): string | null {
+    const row = this.#db().prepare('SELECT outcome FROM chat_requests WHERE session_id = ? AND request_id = ?').get(sessionId, requestId) as { outcome: string | null } | undefined;
+    return row?.outcome ?? null;
+  }
+
   openRequests(sessionId: string): ChatRequest[] {
     const rows = this.#db()
       .prepare('SELECT request_id, tool_use_id, kind, tool_name, agent_label, title, detail, full, full_cut, created_at FROM chat_requests WHERE session_id = ? AND answered_at IS NULL ORDER BY created_at, rowid')

@@ -103,7 +103,7 @@ import { BtwStore } from './btwStore.js';
 import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
 import { autoTrustable, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError } from './trust.js';
 import { usageReport } from './usage.js';
-import { controlDigest, PEER_CAUSE_MS, type PeerCause } from './integrity.js';
+import { controlDigest, PEER_CAUSE_MS, sameAnswer, type ControlExpectation, type PeerCause } from './integrity.js';
 
 /** The permission mode every process starts in (`--permission-mode`); others are applied after. */
 const START_MODE = 'default';
@@ -3177,7 +3177,7 @@ export class ChatController {
     const digest = controlDigest(reply);
     const asked = this.#chat.controlState(sessionId, ASKED(id));
     if (asked !== null) {
-      if (asked === 'completed') return this.#secondControlResponse(sessionId, ASKED(id), digest);
+      if (asked === 'completed') return this.#secondControlResponse(sessionId, ASKED(id), reply, digest);
       this.#chat.setControlState(sessionId, ASKED(id), 'completed', digest);
       this.#settleControl(sessionId, reply);
       // `set_permission_mode`'s reply confirms the mode, before the status line that reports it.
@@ -3197,24 +3197,44 @@ export class ChatController {
       this.#chat.setControlState(sessionId, ANSWERED(id), 'completed', digest);
       return true;
     }
-    if (answered === 'completed') return this.#secondControlResponse(sessionId, ANSWERED(id), digest);
+    if (answered === 'completed') return this.#secondControlResponse(sessionId, ANSWERED(id), reply, digest);
     this.#endIntegrity(sessionId, `a control response for request ${shortId(id)} that this portal never asked for or answered`);
     return false;
   }
 
   /**
    * A second control response for a request the portal asked or answered (INTEGRITY_CASES `control-duplicate`): the same line read again
-   * is ignored (nothing in it is new: the first copy was already acted on) and logged; anything else in it ends the session, and so does
-   * one whose first copy left no digest (read before T-136). Returns false either way: the copy is never processed.
+   * is ignored (nothing in it is new: the first copy was already acted on) and logged; anything else in it ends the session. One whose
+   * first copy left no digest (completed before migration 771) is ignored only when it is the same answer by shape (`sameAnswer`,
+   * INTEGRITY_CASES `control-replay-undigested`; T-265). Returns false either way: the copy is never processed.
    */
-  #secondControlResponse(sessionId: string, key: string, digest: string): boolean {
+  #secondControlResponse(sessionId: string, key: string, reply: ControlResponse, digest: string): boolean {
+    const id = key.slice(key.indexOf('/') + 1);
     const first = this.#chat.controlDigest(sessionId, key);
     if (first !== null && first === digest) {
-      console.log(`[chat] ${shortId(sessionId)}: ignored a second, identical control response for ${shortId(key.slice(key.indexOf('/') + 1))}`);
+      console.log(`[chat] ${shortId(sessionId)}: ignored a second, identical control response for ${shortId(id)}`);
       return false;
     }
-    this.#endIntegrity(sessionId, `a second control response for request ${shortId(key.slice(key.indexOf('/') + 1))}`);
+    if (first === null && sameAnswer(reply, this.#controlExpectation(sessionId, key))) {
+      console.log(`[chat] ${shortId(sessionId)}: ignored a second control response for ${shortId(id)} (the same answer by shape; its first copy kept no digest)`);
+      return false;
+    }
+    this.#endIntegrity(sessionId, `a second control response for request ${shortId(id)}`);
     return false;
+  }
+
+  /** What a completed control line's answer must look like when its first copy kept no digest: the modes the portal set or expects, or the outcome it recorded. */
+  #controlExpectation(sessionId: string, key: string): ControlExpectation {
+    if (key.startsWith('ans/')) return { kind: 'answered', outcome: this.#chat.requestOutcome(sessionId, key.slice(4)) };
+    const track = this.#modes.get(sessionId);
+    const modes = new Set<string>([START_MODE]);
+    const row = this.#chat.row(sessionId);
+    if (row?.mode) modes.add(row.mode);
+    if (track) {
+      modes.add(track.expected);
+      if (track.prePlan) modes.add(track.prePlan);
+    }
+    return { kind: 'asked', modes: [...modes] };
   }
 
   /**
