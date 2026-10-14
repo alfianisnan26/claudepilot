@@ -292,18 +292,24 @@ async function handle(m) {
     case 'closeTab':
       if (tabs.has(m.id)) await cdp.send('Target.closeTarget', { targetId: m.id });
       return;
-    case 'viewport':
+    case 'viewport': {
       if (!cur) return;
-      if (m.reset) {
-        emulating = false;
-        return void (await cdp.send('Emulation.clearDeviceMetricsOverride', {}, cur.sessionId));
-      }
-      emulating = true;
-      return void (await cdp.send(
-        'Emulation.setDeviceMetricsOverride',
-        { width: clamp(Math.round(num(m.w, 1280)), 100, 4096), height: clamp(Math.round(num(m.h, 800)), 100, 4096), deviceScaleFactor: clamp(num(m.dpr, 1), 1, 4), mobile: m.mobile === true },
-        cur.sessionId,
-      ));
+      const at = cur;
+      if (m.reset) await cdp.send('Emulation.clearDeviceMetricsOverride', {}, at.sessionId);
+      else
+        await cdp.send(
+          'Emulation.setDeviceMetricsOverride',
+          { width: clamp(Math.round(num(m.w, 1280)), 100, 4096), height: clamp(Math.round(num(m.h, 800)), 100, 4096), deviceScaleFactor: clamp(num(m.dpr, 1), 1, 4), mobile: m.mobile === true },
+          at.sessionId,
+        );
+      if (cur !== at) return; // switched tabs meanwhile: attach() reset the flag for the new one
+      // The flag changes once Chrome has taken the change, not before: a frame still in flight is of the old size.
+      emulating = !m.reset;
+      // Chrome sends a frame only when the page paints, and the frame of the resize itself can carry the old size: on a
+      // still page the new size then never showed (T-331). A restarted screencast always sends a frame of what is there now.
+      await cdp.send('Page.stopScreencast', {}, at.sessionId).catch(() => undefined);
+      return startScreencast();
+    }
     case 'quality': {
       const next = { quality: clamp(num(m.q, 60), 10, 95), maxW: clamp(num(m.maxW, settings.maxW), 200, 3840), fps: clamp(num(m.fps, settings.fps), 1, 30) };
       if (next.quality === settings.quality && next.maxW === settings.maxW && next.fps === settings.fps) return;
