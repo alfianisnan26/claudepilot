@@ -310,7 +310,9 @@ test('a stopped workspace has no sessions to restart: it is Locked as soon as th
 test('routes: list, one change with the confirmation the server enforces, the audit trail and a workspace’s status', async () => {
   const h = await setup();
   try {
-    const app = new Hono();
+    const app = new Hono<{ Variables: { token: string } }>();
+    // A stand-in for the sign-in guard (app.ts sets the session token): the routes ask the seam, which answers the owner (T-329).
+    app.use(async (c, next) => (c.set('token', 'signed-in'), next()));
     app.onError((err, c) => (isAppError(err) ? c.json({ success: false, error: { code: err.code, message: err.message } }, err.status as ContentfulStatusCode) : c.json({}, 500)));
     app.route('/api/settings', createSettingsRoutes(h.mod));
     const call = async <T>(method: string, path: string, body?: unknown) => {
