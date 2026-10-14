@@ -15,7 +15,7 @@ Models (coordinator 02:2x, evaluation 2026-10-14): ALWAYS passed explicitly; son
   - T-143: `POST /api/skills/import` multipart with Origin https://pilot.ai.isnan.me -> 401 (csrf passed, the session guard stopped it); Origin https://evil.example -> 403; DELETE without a content type from the own origin -> 401. Not verified: a real Skills folder import from a signed-in browser (no credential for agents).
   - T-141: `scripts/image-build.sh --check --destination registry.int.isnan.me/claudepilot/image-build-proof:a4c2891` -> exists, rc 0, digest 36dd581b…20fba (the proof build of comment 809).
   - T-136 slice 1: NOT enough. The orchestrator still ended at 17:58 for a second control response: the stream reader re-read line 1 of out.1.jsonl (the id appears once in the file) and the first copy had no digest (read before 771). Filed T-265 (urgent, rank-02a, D-40).
-- Still in_review from 2026.10.13-6: T-42, T-95, T-99 (the post-deploy check, item 3c, not yet run).
+- Verified and closed by the verifier 03:0x: T-42, T-99, T-107, T-98, T-24, T-32, T-97. Reopened: T-95 (item 4).
 
 ## DONE this session (on integration, 2901ca5, pushed to origin and pilot 01:1x)
 - T-102 (merge 9e15498, full gate green 51/28/309 s), T-110 slice 1 dry mode (a4f18be, 41/32/331 s; 14/14 in the pod), T-256 (4abe211, 60/33/321 s), T-159 (2901ca5; test on a private lock), T-265 (74e1f22, 43/26/318 s), T-258 (e263796, 54/35/340 s), T-270 slice 1 (76566fd, 40/26/304 s). Integration 76566fd on origin and pilot. Not yet deployed.
@@ -25,7 +25,8 @@ Models (coordinator 02:2x, evaluation 2026-10-14): ALWAYS passed explicitly; son
 - DONE t258 (opus): tokens lifetimes, label rule, cap, revoke by label, declared authz; merged locally, gate Job running. BREAKS the coordinator's helper (409 on a duplicate label: send expiresIn 1h and replace true): on T-258 and under NEEDS A HUMAN.
 - t255 (opus, 02:5x): dev-automove-model, dev/t255-unknown-usage (from the t105 branch). Unknown usage ranks below every measured Claude and never wins; the limit message in a chat's output marks the Claude exhausted and moves the chat; no 0 percent for unavailable.
 - t146 (opus, 02:5x): dev-t107-job-run, dev/t146-attention. T-146 slice 1: the attention registry, four sources, GET /api/attention, the Needs-you page and badge; the deck is slice 2.
-- verifier (sonnet, 02:4x, standing rule 1): first pass over T-42, T-95, T-99, T-107, T-98, T-24, T-32, T-97 (live in -6/-7): evidence on the ticket, close or reopen.
+- t95 (opus, 03:0x): dev-gate-job, dev/t95-flaky-ticket. T-95 item 4: the portal opens one ticket per flaky test seen in a gate (dedup across runs), the run page shows it; item 3's numbers on the ticket.
+- DONE verifier pass 1 (sonnet, 02:4x-03:0x): closed T-42, T-99, T-107, T-98, T-24, T-32, T-97 with evidence (cluster Jobs on main, harnesses 154/154 and 42/42, 122 server tests); reopened T-95 (item 4 half done). Limits on each ticket (no sign-in: no live UI checks). Tooling notes: job-run --ref needs a branch name (a bare sha fails: add to T-211); --artifacts must be inside the repo.
 - DONE t105 (opus): T-105 + T-109 + D-39 merged locally (60df266; conflicts in server index, contracts index and migrations kept both; migrations 755, 760, 761, 770-772, 780, 790, 791, no duplicate), gate Job running. Then: push, DEPLOY, T-255 next in dev-automove-model.
 - t136-2 (opus, 02:1x): dev-track-c-ui, dev/t136-recover. T-136 slice 2: recover in place (POST recover, session_recover, Resume button, caps, suspicious cause needs a person), the supervisor tries recover first.
 - t270b (opus, 01:5x): dev-track-b-notify-triggers, dev/t270-orphans. T-270 layers 2-3: the orphan sweep, the fallback to the successor or the queue, the orphan state on the Tickets page.
