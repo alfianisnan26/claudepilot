@@ -4,7 +4,8 @@
 - Verifier 2005bc7f belonged to chat 5802dfa4: not in this chat's family, its reply can't be read (NOT_FOUND). Replaced by verifier 0f4f96a6 (sonnet, auto, dontAsk) for T-321 and T-312.
 - Verdicts NOT posted on tickets: they are unassigned and ticket_comment refuses them (known gap T-214; ticket_update assignee me says "claim with ticket_claim_next"). Verdicts of record, until T-214 lands: T-324, T-297 PASS WITH GAPS (stable 20/20, fix not shown to matter); T-302, T-309, T-322, T-317, T-320 PASS WITH GAPS; T-315 PASS (design only, owner questions).
 - T-328 fixed by me (83b2458, supervisor.mjs line 3 says outside the pod per D-14; nothing else in the file repeats the claim; node --check ok).
-- In flight: implementer 154185a0 (T-329, opus, worktree dev/t-329-1); verifier 0f4f96a6 (T-321, T-312).
+- In flight (4 of 5): implementer 154185a0 (T-329, dev/t-329-1); verifier 0f4f96a6 (T-321, T-312); implementer d0448e00 (T-306 items 1-2: fidelity per class + deny-safe hook, NOT installed, dev/t-306-1); implementer 2ffc9db7 (T-293 slice 4: the engine starts the slice as a dontAsk worker session per D-49, behind --start, off by default, unwired; a blind reviewer reads the engine before any unattended run, dev/t293-4).
+- T-313 (needs real-Claude measurements) and T-314 (needs a live integrity ending) wait: low, situational.
 - Next: their reports; integrate dev/t-329-1 in a batch with ONE background gate-job; queue item 2 onward (T-313, T-314, T-293 slice, T-306, T-149 leftovers).
 
 ---
