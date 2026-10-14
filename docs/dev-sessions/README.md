@@ -108,17 +108,23 @@ When the coordinator's machine cannot reach the portal (the tunnel is down or th
 It PLANS, and with `--apply` it prepares; it calls no model, and it starts a session only with `--start` (below; off by default, never
 Bypass). Without it the orchestrator runs the slice with the printed brief.
 `node docs/dev-sessions/factory.mjs (--tickets tickets.json | --portal [--apply]) [--wip 5] [--budget <requests>] [--stale-min 360] [--briefs] [--json]`
-reads ticket data passed in (a TicketList, TicketItems or TicketDetails) or, with `--portal`, from the portal (open and in-progress tickets,
-the ranked open ones whole) with the supervisor's auth path (`PORTAL_URL`, `PORTAL_SERVER_CODE`; the cookie stays in memory and is never
-printed). Intake takes the next tickets by `rank-NN` tag that are open, carry an ESTIMATE comment with a size S, M or L (XL is split
-first), within WIP (in-progress tickets and open dispatches, five by default) and within the run's request budget (the first ticket over it
-stops the plan). Each slice gets a request budget by size (S 25, M 60, L 120; the agent's own count: the engine measures cost, below) and stops at 150 percent. The brief comes from
+reads ticket data passed in (a TicketList, TicketItems or TicketDetails) or, with `--portal`, from the portal (open, in-progress, in-review
+and blocked tickets, the ranked open ones whole) with the supervisor's auth path (`PORTAL_URL`, `PORTAL_SERVER_CODE`; the cookie stays in
+memory and is never printed). Intake takes the next tickets by `rank-NN` tag that are open, carry an ESTIMATE comment with a size S, M or L
+(XL is split first), are not held (below), within WIP (in-progress, in-review and blocked tickets and open dispatches, five by default) and
+within the run's request budget (the first ticket over it stops the plan). Each slice gets a request budget by size (S 25, M 60, L 120; the agent's own count: the engine measures wall time, transcript events and cost, below) and stops at 150 percent. The brief comes from
 `factory-brief.md` (context pack, role and model from `.claude/agents/`, budget, trailers, token discipline). State lives only in ticket
 comments: `FACTORY DISPATCH <ticket>-F<n> ...`, `FACTORY END <ticket>-F<n> <outcome>` and `FACTORY RESUME <ticket>-F<n> run=<id> ...`; an
 ACTUAL comment ends the dispatches before it. An open dispatch is never dispatched again; one open past `--stale-min` is printed as an
 `EXCEPTION` line for the coordinator and left alone. `--apply` (needs `--portal`) reads each planned ticket again, refuses a branch
 `ticket/T-n-slug` or a worktree folder that exists, writes the DISPATCH comment, then creates the worktree from `--base` (default
-`origin/integration`); a worktree that fails gets a `FACTORY END ... failed` comment so the ticket is free again. On a CI event,
+`origin/integration`); a worktree that fails gets a `FACTORY END ... failed` comment so no dispatch is left half done. **No automatic
+re-dispatch (T-342):** a ticket whose last dispatch ended `stopped: ...` (a budget stop) or `failed: ...` (worktree or start) is HELD: the
+engine never dispatches it again, writes no further comment (the END is the one comment of that change) and prints one `EXCEPTION ... held`
+line a round, until a person writes the comment `FACTORY RETRY <dispatchId>` on the ticket (signed in; an agent's comment does not count),
+which allows one more dispatch. **Two hosts:** every DISPATCH carries its run (`run=<pid>-<time>`) and every END the run it ends; after
+writing its DISPATCH a run reads the ticket again and, if another run wrote the same id first, ends its own (`lost: race`) and does nothing
+else; an END with `run=` never closes another run's dispatch. On a CI event,
 `resumeDecision` says what to do with the ticket's latest dispatch (passed: review; failed: fix; cancelled or stale: exception; a run still
 going, another branch, an ended dispatch or an event already handled: nothing), and `pendingResumes` does the same from a ticket's checks after
 a restart. The check step is `scripts/slice-check.sh` (typecheck plus the server test files the diff touched, at most 20 lines, no model).
@@ -133,29 +139,31 @@ and never from ticket text. A marker out of order, an unknown verdict, `result=c
 150 percent of its requests is an EXCEPTION instead. `stepMarker` writes the markers the steps' roles (or the coordinator) post.
 
 One round, for a supervisor hook or by hand: `node docs/dev-sessions/factory-round.mjs [--apply] [--wip 5] [--budget N] [--stale-min 360]`
-(same `PORTAL_URL` and `PORTAL_SERVER_CODE`). It reads the open and in-progress tickets, plans intake, turns each finished CI check into a
-RESUME, and prints one line each: `DISPATCH`, `RESUME`, `NEXT <ticket> <id> <step> <role>/<model>: <why>`, `LEARN <id>: would comment` with
-the ACTUAL text, and `EXCEPTION <ticket> <id>: <why>` for the coordinator. Dry by default; `--apply` writes only the DISPATCH comments
-(with their worktrees) and the RESUME markers, never an ACTUAL. Exit 0 after a round, 1 when the portal could not be read (one EXCEPTION
+(same `PORTAL_URL` and `PORTAL_SERVER_CODE`). It reads the open and busy tickets, plans intake, turns each finished CI check into a
+RESUME, and prints one line each: `DISPATCH`, `RESUME`, `NEXT <ticket> <id> <step> <role>/<model>: <why>`, `LEARN <id>: wrote` (or
+`would comment` when dry) with the ACTUAL text, and `EXCEPTION <ticket> <id>: <why>` for the coordinator. Dry by default; `--apply` writes the
+DISPATCH comments (with their worktrees), the RESUME markers and the ACTUAL of a merged dispatch (the round is who writes LEARN; the ACTUAL
+ends the dispatch, so it is written once). Exit 0 after a round, 1 when the portal could not be read (one EXCEPTION
 line), 2 for usage. It is a separate script: `supervisor.mjs` does not call it, on purpose (an independent reviewer reads the engine before it
 runs unattended).
 
 **Whose markers count (T-338).** A marker (DISPATCH, STARTING, START, END, RESUME, REVIEW, VERIFY, INTEGRATE) and an ACTUAL count only
-when the engine's own actor wrote them: the portal's `ui` actor (the signed-in REST path the engine uses, the owner's) with `fromAgent`
-false. A comment an agent, a session or a token wrote is never read as a marker, so the step markers are posted by the engine (or the owner),
-not by the step's agent. A dispatch's role (the role table `ROLES`, today `implementer`), model (the role file), branch (`branchOf`) and
+when the portal's `ui` actor wrote them with `fromAgent` false. `ui` is the signed-in REST path, and ANYONE WITH THE SIGN-IN CODE writes as
+`ui`: the owner in the browser, the supervisor, `ph.sh` and the engine alike (the portal does not tell them apart: the trust is in who holds
+the code). A comment an agent, a session or a token wrote is never read as a marker, so the step markers are posted by the engine or a
+person, not by the step's agent. A dispatch's role (the role table `ROLES`, today `implementer`), model (the role file), branch (`branchOf`) and
 budgets (the size) are re-derived, never taken from the marker text; a worktree must lie inside the worktrees folder.
 
 **Starting the slice (`--start`, off by default; slice 4, D-49; the admin credential path is T-339).** With
 `--apply --start --workspace <id> --repo-id <id> [--report-to <session>]` (both scripts) the engine starts each slice it dispatched as a
 worker session, never in Bypass, through the admin Portal MCP tools a person's automation already uses (`session_start`,
 `session_configure`, `session_send`: the same controller calls `session_spawn` makes; no new authz or approval path), with an admin token
-leased for the run under the run's own label (one hour, revoked at the end and on SIGINT or SIGTERM, never printed; a run never replaces
-another run's token). `--apply` takes one lock per host (a lock file with the pid, `--lock`; a lock whose pid is gone is stale). With
+leased for the run under the run's own label (15 minutes, the portal's shortest lifetime, renewed while the run lasts, revoked at the end
+and on SIGINT or SIGTERM, never printed; a run killed hard leaves it alive at most 15 minutes; a run never replaces another run's token). `--apply` takes one lock per host (a lock file with the pid, `--lock`; a lock whose pid is gone is stale). With
 `--start` the worktree is made IN THE WORKSPACE through the portal (`worktree_create` on `--repo-id`, in `<repository>.worktrees/`), never
 with git on the engine's host (T-337), and the session runs in the folder the portal answered. In order, failing closed: the ticket is read
 again (the dispatch must be the latest, open, not started, not stale and written by this engine version, `v=`); the portal must report its
-worktree; `FACTORY STARTING <id> by=portal-mcp:<token id>`; `session_start` in that folder with `agent` = the role and the ticket, without a
+worktree (a path the portal answers with a control or format character is refused, never cleaned); `FACTORY STARTING <id> by=portal-mcp:<token id>`; `session_start` in that folder with `agent` = the role and the ticket, without a
 prompt; `session_configure` mode `dontAsk` and the role's explicit model (a mode or model the answer does not confirm ends the session
 before it gets any instruction); the comment `FACTORY START <id> session=<sessionId> mode=dontAsk model=<model>` (the audit trail next to
 the DISPATCH); `session_send` with the rendered brief (the ticket summary in it is one line, at most 120 characters, quoted as ticket
@@ -163,12 +171,17 @@ text); one line to the `--report-to` session. A start that fails ends its sessio
 dispatch is started once: a START marker, an ended or superseded dispatch, a branch checked out in the workspace (refused at `--apply`) or a
 dispatch past `--stale-min` is never started; a live session titled exactly `<id> <role>` that the engine's token started (a STARTING
 marker's `by=`) is adopted, with an EXCEPTION line; the same title from anyone else is refused. Each round with `--start` also resumes the
-start of an open, fresh dispatch that has none, and watches the budget. **What the budget measures:** the session's `cost_usd` from
-`session_get` (the portal's sum of the session's cost, US dollars) against a cost budget by size (`SIZE_COST_USD`: S 4, M 10, L 20 USD,
-PROVISIONAL, not yet measured); at 150 percent the session is interrupted, told to commit WIP and report, the dispatch ends with
-`FACTORY END <id> stopped: budget ...`, and the coordinator gets an EXCEPTION line (and `--report-to` one message). The request budget by
+start of an open, fresh dispatch that has none, and watches the budget. **What the budget measures (T-342):** one `session_get`
+(`max_events` 1) of the slice's session a round, three measures against budgets by size, ALL PROVISIONAL (not yet measured; to be replaced
+by the medians of the first ten `--start` slices per size): **wall**, minutes from the session's `created_at` to the engine's clock (S 60,
+M 180, L 360: the hours of the ESTIMATE sizes; the floor); **events**, the transcript's sequence number `next_seq`, which the portal bumps
+for every text, thinking and tool_use block it stores while the turn runs (S 200, M 480, L 960: the request budget times 8, a guess); and
+**cost**, `cost_usd` (S 4, M 10, L 20 USD), which the portal sets only when a turn ends (`chat/protocol.ts` parseResult), so for a dontAsk
+worker that does its brief in one turn it is only the after-the-turn check (a live estimate is T-343). At 150 percent of ANY measure the
+session is interrupted (mid-turn too), told to commit WIP and report, the dispatch ends with `FACTORY END <id> stopped: budget <measure>`
+(which holds the ticket), and the coordinator gets an EXCEPTION line (and `--report-to` one message). The request budget by
 size (S 25, M 60, L 120) is not measured by the engine: it plans a run (`--budget`) and is the agent's own count in its brief. The worker is
 not a child of the orchestrator (the admin tools set no parent): it is not in its crew and cannot `session_message` it; its report is its
 final message, read with `session_get`.
-Not yet: the supervisor wiring (after the independent review), writing the ACTUAL, audit rows of their own (the portal's own audit rows
-of the session start and the comments are the trail today).
+Not yet: the supervisor wiring (after the independent review; owner decision T-339), audit rows of their own (the portal's own audit
+rows of the session start and the comments are the trail today), a live cost while a turn runs (T-343).
