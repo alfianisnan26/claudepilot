@@ -113,6 +113,12 @@ test('--check: fresh after a commit of the pack; stale when an input changes or 
   const fresh = f.run(['--check', '--no-path-check']);
   assert.equal(fresh.code, 0, fresh.err);
   assert.match(fresh.out, /^context-pack: fresh at /);
+  // The gate Job's clone has depth 1: the anchor's history is not there, the history sections are taken as committed.
+  const shallow = join(dirname(f.repo), 'shallow');
+  assert.equal(spawnSync('git', ['clone', '-q', '--depth', '1', `file://${f.repo}`, shallow], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: dirname(f.repo), GIT_CONFIG_NOSYSTEM: '1' } }).status, 0);
+  const sh = spawnSync('bash', [SCRIPT, '--repo', shallow, '--check', '--no-path-check'], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } });
+  assert.equal(sh.status, 0, sh.stderr);
+  assert.match(sh.stdout, /history not checked: shallow/);
 
   f.commit(BASE + 46 * DAY, { 'CLAUDE.md': f.map(['| `apps/server/src/tickets` | tickets |']) });
   const stale = f.run(['--check', '--no-path-check']);
