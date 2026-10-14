@@ -21,6 +21,18 @@ async function clocked() {
 }
 type Clocked = Awaited<ReturnType<typeof clocked>>;
 
+/** The controller's `resync:` log lines while it is held (INTEGRITY_CASES `mode-resync`): the window's comparison is logged, once. */
+function resyncLog() {
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (...a: unknown[]) => {
+    const text = a.map(String).join(' ');
+    if (/: resync: /.test(text)) lines.push(text);
+    else log(...a);
+  };
+  return { lines, restore: () => void (console.log = log) };
+}
+
 /** A promise's outcome, with its rejection handled at once (a portal stopped meanwhile rejects it): 'ok' or the error's message. */
 const settle = (p: Promise<unknown>): Promise<string> => p.then(() => 'ok', (e: unknown) => (e instanceof Error ? e.message : String(e)));
 
@@ -431,19 +443,51 @@ const FIXTURES: Record<string, Fixture> = {
       {
         name: 'a second differing report after the first one closed the window',
         run: async (s) => {
-          await planLeaveApproved(s);
-          await restartPortal(s, { clock: s.clock });
-          await expectAccepted(s, [statusMode('acceptEdits')]);
-          await expectIntegrityEnd(s, statusMode('auto'), /the permission mode changed to auto without this portal \(expected acceptEdits\)$/);
+          const resync = resyncLog();
+          try {
+            await planLeaveApproved(s);
+            await restartPortal(s, { clock: s.clock });
+            await expectAccepted(s, [statusMode('acceptEdits')]);
+            assert.equal(resync.lines.length, 1, 'the first report is the resync comparison');
+            await expectIntegrityEnd(s, statusMode('auto'), /the permission mode changed to auto without this portal \(expected acceptEdits\)$/);
+            assert.equal(resync.lines.length, 1, 'compared once: the second report is judged as any other');
+          } finally {
+            resync.restore();
+          }
+        },
+      },
+      {
+        name: 'the first report within the window is the comparison; a second differing one after the window ends the session',
+        run: async (s) => {
+          const resync = resyncLog();
+          try {
+            await planLeaveApproved(s);
+            await restartPortal(s, { clock: s.clock });
+            s.advance(RESYNC_MS - 1);
+            await expectAccepted(s, [statusMode('acceptEdits')]);
+            assert.deepEqual(resync.lines.length, 1, 'still within the window: compared (and logged) once');
+            assert.match(resync.lines[0]!, /resync: expected plan \(leaving plan approved, before it acceptEdits\), reported acceptEdits$/);
+            s.advance(2);
+            await expectIntegrityEnd(s, statusMode('auto'), /the permission mode changed to auto without this portal \(expected acceptEdits\)$/);
+            assert.equal(resync.lines.length, 1, 'the window does not reopen');
+          } finally {
+            resync.restore();
+          }
         },
       },
       {
         name: 'a more permissive first report after the window ran out',
         run: async (s) => {
-          await askMode(s, 'acceptEdits');
-          await restartPortal(s, { clock: s.clock });
-          s.advance(RESYNC_MS + 1);
-          await expectIntegrityEnd(s, init(s.id, 'auto'), /the permission mode changed to auto without this portal \(expected acceptEdits\)$/);
+          const resync = resyncLog();
+          try {
+            await askMode(s, 'acceptEdits');
+            await restartPortal(s, { clock: s.clock });
+            s.advance(RESYNC_MS + 1);
+            await expectIntegrityEnd(s, init(s.id, 'auto'), /the permission mode changed to auto without this portal \(expected acceptEdits\)$/);
+            assert.equal(resync.lines.length, 0, 'after the window the first report is no resync comparison');
+          } finally {
+            resync.restore();
+          }
         },
       },
     ],
@@ -501,7 +545,43 @@ const FIXTURES: Record<string, Fixture> = {
       },
     ],
   },
+  'control-stale': {
+    accept: async (s) => {
+      // A tool request an earlier process raised (another proc), resolved stale by the explicit clear; its late answer is ignored.
+      await firstTurn(s);
+      staleRequest(s, s.id, 'R-s');
+      assert.equal((await s.controller.clearRequest(s.id, 'R-s')).outcome, 'stale');
+      await expectAccepted(s, [allowResponse('R-s')]);
+      assert.equal(new ChatStore(s.store).requestOutcome(s.id, 'R-s'), 'stale', 'nothing was allowed by it');
+    },
+    reject: [
+      { name: 'an id never asked', run: (s) => expectIntegrityEnd(s, allowResponse('R-never'), /a control response for request R-never that this portal never asked for or answered/) },
+      {
+        name: 'the same answer for a request still open (of the live process)',
+        run: async (s) => {
+          s.tail.push(line({ type: 'control_request', request_id: 'R-o', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_o' } }));
+          await until(() => s.state() === 'waiting');
+          await expectIntegrityEnd(s, allowResponse('R-o'), /a control response for request R-o that this portal never asked for or answered/);
+        },
+      },
+      {
+        name: 'a stale id of another session',
+        run: async (s) => {
+          const other = await s.controller.create({ workspaceId: 'docker/ws1', title: 'Other' });
+          await until(() => s.ws.tails.length === 2); // its process is up: a launch would resolve what it finds open
+          staleRequest(s, other.id, 'R-x');
+          assert.equal((await s.controller.clearRequest(other.id, 'R-x')).outcome, 'stale');
+          await expectIntegrityEnd(s, allowResponse('R-x'), /a control response for request R-x that this portal never asked for or answered/);
+        },
+      },
+    ],
+  },
 };
+
+/** T-284: an open tool request recorded for a process that is not the session's live one (an earlier process's). */
+function staleRequest(s: Live, sessionId: string, requestId: string) {
+  new ChatStore(s.store).addRequest(sessionId, { requestId, kind: 'tool', toolName: 'Bash', agentLabel: null, title: 'Run a command', detail: 'ls', createdAt: '' }, 'an-earlier-process/0/');
+}
 
 const statusMode = (mode: string) => line({ type: 'system', subtype: 'status', status: null, permissionMode: mode });
 
@@ -884,6 +964,8 @@ test('readControl (T-277 layer 2): only a well-formed state for this very proces
     ['another version', { ...good, v: 2 }],
     ['a mode that is not a string', { ...good, mode: { ...good.mode, expected: 4 } }],
     ['an empty mode', { ...good, mode: { ...good.mode, expected: '' } }],
+    ['a mode outside MODE_RANK', { ...good, mode: { ...good.mode, expected: 'everything' } }],
+    ['a mode before plan outside MODE_RANK', { ...good, mode: { ...good.mode, expected: 'plan', prePlan: 'everything' } }],
     ['a flag that is not a boolean', { ...good, mode: { ...good.mode, exitPlan: 'yes' } }],
     ['a pending id that is not a string', { ...good, mode: { ...good.mode, bypassPending: 7 } }],
     ['a digest that is not sha256 hex', { ...good, peers: [{ ...peer, digest: 'body text' }] }],
@@ -905,4 +987,41 @@ test('MODE_RANK (T-277 review note e): frozen, so no code can add a mode or move
     (MODE_RANK as Record<string, number>).bypassPermissions = 0;
   }, TypeError);
   assert.equal(lessPermissive('bypassPermissions', 'default'), false);
+});
+
+test('control state (T-277 layer 2 review note): a stored expected mode outside MODE_RANK is not applied; the row\'s mode is, as before migration 820', async () => {
+  const s = await clocked();
+  try {
+    await askMode(s, 'acceptEdits');
+    // A crafted row: the state is this very process's, but its expected mode is no mode the portal knows.
+    s.store.db!.prepare(`UPDATE chat_sessions SET control_state = replace(control_state, '"expected":"acceptEdits"', '"expected":"everything"') WHERE id = ?`).run(s.id);
+    assert.equal(stored(s)!.mode.expected, 'everything');
+    await restartPortal(s, { clock: s.clock });
+    await expectAccepted(s, [statusMode('acceptEdits')]);
+    assert.ok(!s.controller.history(s.id).some((e) => /^Mode is /.test(e.text ?? '')), 'the row\'s mode, nothing downgraded');
+    await expectIntegrityEnd(s, statusMode('auto'), /the permission mode changed to auto without this portal \(expected acceptEdits\)$/);
+  } finally {
+    await s.done();
+  }
+});
+
+test('control state (T-277 layer 2 review note): a Bypass request that timed out, or whose line was never written, is no longer stored as pending', async () => {
+  for (const how of ['timeout', 'write'] as const) {
+    const s = await clocked();
+    try {
+      bypassReady(s.controller, s.store, s.id);
+      s.controller.controlTimeoutMs = 40;
+      if (how === 'write') s.ws.sendCode = 1;
+      const entering = settle(s.controller.enterBypass(s.id, { acknowledged: true, sessionToken: 'tok' }));
+      if (how === 'timeout') {
+        const ask = await s.take('set_permission_mode');
+        assert.equal(stored(s)!.mode.bypassPending, ask.id, 'pending while it waits');
+      }
+      assert.notEqual(await entering, 'ok', how);
+      assert.equal(stored(s)?.mode.bypassPending ?? null, null, `${how}: not pending any more`);
+      assert.equal(s.controller.audit({ kind: 'bypass.entered' }).length, 0, how);
+    } finally {
+      await s.done();
+    }
+  }
 });

@@ -42,3 +42,14 @@ test('nothing watched is idle, the pause is a warning, and loading and failed ar
   assert.equal(autonomyCompact(null, false).loading, true);
   assert.deepEqual(autonomyCompact(null, true), { value: '-', level: 'unknown', title: 'Autonomy: not available', stale: true });
 });
+
+test('the pauses (slice 3): listed with the held chats, and the chip says which programs are paused', () => {
+  const pause = { program: 'konfersi', reason: 'Focus on ClaudePilot', since: '2026-10-14T05:00:00.000Z', by: 'user:u_owner' };
+  const v = autonomyView({ paused: false, pauses: [pause], chats: [chat('a', {}, { paused: true, pause }), chat('b')] });
+  assert.deepEqual(v.pauses, [pause]);
+  assert.equal(v.held, 1);
+  const c = autonomyCompact(v, false);
+  assert.equal(c.level, 'warn');
+  assert.match(c.title, /paused: konfersi/);
+  assert.deepEqual(autonomyView(list([])).pauses, [], 'an older server without pauses reads as none');
+});

@@ -23,6 +23,7 @@ import { createClaudeUsage } from './claudeusage/index.js';
 import { registerClaudeUsageTools } from './claudeusage/portalTools.js';
 import { ClaudeVersions, registerClaudeVersionTools } from './claudeversion/index.js';
 import { createUsageSpend, registerUsageSpendTools } from './usagespend/index.js';
+import { Lab } from './lab/index.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
 import { changesGlance, createGlance } from './glance/index.js';
 import { createAttention } from './attention/index.js';
@@ -181,6 +182,8 @@ const mcpSets = registerMcpSets({ store, pools: poolService, references, access:
 // as the `settings` owner's drop-in. The MCP pool reports what it delivers, so "pool only" allows exactly that.
 const settingsModule = registerSettings({ store, providers });
 settingsModule.lockdown.addMatcherSource((ws) => mcpSets.matchers(ws));
+// The agent policy wins over a Secrets & env entry with one of its names (T-285): the sheet names the entries it overrides.
+settingsModule.agentEnv.addOverrideSource((ws) => secretsKind.policyOverrides(ws));
 // Skillsets: the reviewed skill library, delivered as one plugin per set; verified in running workspaces.
 const skills = new SkillsModule(store, poolService, { runtimes: (t) => workspaces.runtimeFor(t) });
 skills.start();
@@ -487,6 +490,9 @@ chatController.onSideUsage = (turn, rows) => usageSpend.onTurn(turn, rows);
 chatController.onLaunch = (info) => usageSpend.onLaunch(info);
 chatController.sendGate = (info) => usageSpend.gate(info);
 registerUsageSpendTools(usageSpend);
+// The efficiency lab (T-287, claude-usage PRD §28): per-slice counts from every accepted stream line, and experiments. Data layer only so far.
+const lab = new Lab({ store });
+chatController.onStreamLine = (sessionId, raw) => lab.line(sessionId, raw);
 // Workspace git: the repositories inside each running workspace, found by scanning and tracked each on its own, with worktrees, an audit
 // and a summary (workspace-git PRD). It reads through the chat's hardened session host; a scan never fetches.
 const repos = createRepos({ store, workspaces, installHost: (id) => chatController.installHost?.(id) ?? Promise.resolve(), sessions: chatController, scrub: (id, text) => chatController.scrub(id, text), notify: () => notify('repos') });

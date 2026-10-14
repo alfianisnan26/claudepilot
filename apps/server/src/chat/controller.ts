@@ -137,6 +137,10 @@ const INTERRUPT_WAIT_MS = 5_000;
 
 /** The permission mode every process starts in (`--permission-mode`); others are applied after. */
 const START_MODE = 'default';
+/** T-284 note D: how much later than the portal's read of a pre-830 request (no proc) the live process must have started to call it stale. */
+const LEGACY_STALE_MARGIN_MS = 60_000;
+/** Request ids in an audit row are cut to this length (they come from the stream; T-284). */
+const AUDIT_ID_MAX = 80;
 /** Origins (`kind/producer`) Claude Code puts on user lines it makes itself: seen from the real CLI (2.1.296) for a finished background command. Every accepted case is in INTEGRITY_CASES (integrity.ts). */
 const HARNESS_ORIGINS: ReadonlySet<string> = new Set(['task-notification/session-task']);
 /** The control-line key under which a turn Claude Code started by itself (T-99) is remembered; keys carry a `/`, message ids never do. */
@@ -533,6 +537,12 @@ export class ChatController {
    */
   onSideUsage?: (turn: { sessionId: string; workspaceId: string; claudeId: string | null; atMs: number }, rows: readonly { costUsd: number }[]) => void;
   /**
+   * Installed by the efficiency lab (T-287, claude-usage PRD §28): every stream line this controller accepted, raw, once its own handling is
+   * done (after every integrity check, so a line the chat refused is never measured). Read only: the lab keeps counts and ids, never text.
+   * A throw never affects the chat.
+   */
+  onStreamLine?: (sessionId: string, raw: string) => void;
+  /**
    * Installed by the MCP module (MCP set PRD §13.3): a main-thread `system/init`'s portal MCP servers with the status
    * Claude Code gave each, for the session's Claude (`directory`, '' for Default). Answers with the names of the OAuth
    * servers that need a sign-in, each of which gets one row in the transcript per process. A throw never affects the session.
@@ -711,6 +721,8 @@ export class ChatController {
     this.#ticking = true;
     try {
       await Promise.allSettled(this.#chat.liveRows().map((row) => this.#check(row)));
+      // T-284: a request of a process that is no longer the live one (a move, a restart, a crash, a resume) is resolved `stale`.
+      if (!this.#closed) for (const id of this.#chat.sessionsWithOpenRequests()) this.#dropStale(id, 'sweep');
     } catch {
       // the store is unavailable: try again next round
     } finally {
@@ -759,6 +771,79 @@ export class ChatController {
     for (const requestId of this.#chat.expireOpenRequests(sessionId)) this.#append(sessionId, { kind: 'resolved', requestId, outcome: 'expired' });
     if (this.#chat.endRunningTasks(sessionId)) this.#emitTasks(sessionId);
     this.#bypassOver(sessionId, how);
+  }
+
+  /**
+   * T-284: the open requests no process can answer any more. With no live process, every one; with a live one, those another process
+   * raised (`chat_requests.proc` is not this process's controlProc). A row from before migration 830 has no proc: it is stale when the
+   * portal read it at least LEGACY_STALE_MARGIN_MS before the live process started (a clock-skew margin; it also covers the rounding of
+   * process_started_at to whole seconds). Nothing while a launch, a sleep, a move or a restart is deciding, nor for an ended session.
+   */
+  #staleIds(sessionId: string): string[] {
+    if (this.#busy.has(sessionId) || this.#moving.has(sessionId) || this.#restarting.has(sessionId)) return [];
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state === 'ended') return [];
+    const open = this.#chat.openRequestOrigins(sessionId);
+    if (!open.length || row.process !== 'live') return open.map((r) => r.requestId);
+    const proc = controlProc(row);
+    const started = Date.parse(row.process_started_at ?? '');
+    // A legacy row is stale only when the live process started at least LEGACY_STALE_MARGIN_MS after the portal read it: the start is the
+    // host's clock, the read the portal's, and a host clock ahead must not make a request of the live process stale (T-284 note D).
+    return open
+      .filter((r) => (r.proc !== null ? r.proc !== proc : Number.isFinite(started) && started - Date.parse(r.createdAt) >= LEGACY_STALE_MARGIN_MS))
+      .map((r) => r.requestId);
+  }
+
+  /**
+   * T-284: resolves requests nobody can answer any more as `stale` (the transcript shows each resolved, the chat leaves `waiting`, one
+   * audit row with the ids and why, never a request's text). `all`: every open request, whoever raised it (a new process was just
+   * launched and has raised none yet; or the host said the process is gone). Returns the ids it resolved.
+   */
+  #dropStale(sessionId: string, why: 'launch' | 'sweep' | 'restart' | 'clear' | 'gone', actor: string | null = null, all = false): string[] {
+    const ids = all ? this.#chat.openRequests(sessionId).map((r) => r.requestId) : this.#staleIds(sessionId);
+    const dropped = ids.filter((id) => this.#chat.staleRequest(sessionId, id, actor));
+    if (!dropped.length) return [];
+    for (const requestId of dropped) this.#append(sessionId, { kind: 'resolved', requestId, outcome: 'stale' });
+    const row = this.#chat.row(sessionId);
+    if (row?.state === 'waiting' && this.#chat.openRequests(sessionId).length === 0) this.#chat.patchSession(sessionId, { state: row.process === 'live' ? 'idle' : 'interrupted' });
+    this.#chat.addAudit({ severity: 'info', kind: 'session.request_stale', sessionId, workspaceId: row?.workspace_id ?? null, actor: actor ?? 'portal', detail: { why, requestIds: dropped.map((id) => id.slice(0, AUDIT_ID_MAX)) } });
+    this.#emitSession(sessionId);
+    return dropped;
+  }
+
+  /**
+   * T-284: before a Restart or an explicit clear. The stale requests go; when requests are still open for the process the row calls live,
+   * the host is asked: a process it says is gone is marked gone (its requests resolved `stale` first), so nothing waits on a dead process.
+   * A process the host says is running, or cannot say (unreachable), keeps its requests: they are answered, never dropped.
+   */
+  async #settleStale(sessionId: string, why: 'restart' | 'clear', actor: string | null): Promise<void> {
+    await this.#busy.get(sessionId); // a launch or a sleep in flight settles first
+    this.#dropStale(sessionId, why, actor);
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state === 'ended' || row.process !== 'live' || !this.#chat.openRequests(sessionId).length) return;
+    const status = await this.#status(row.workspace_id, claudeSessionOf(row));
+    const now = this.#chat.row(sessionId);
+    if (status !== 'gone' || !now || now.state === 'ended' || now.process !== 'live' || controlProc(now) !== controlProc(row) || this.#busy.has(sessionId)) return;
+    this.#dropStale(sessionId, 'gone', actor, true);
+    this.#markGone(sessionId);
+  }
+
+  /**
+   * T-284: clears an open request that no process can answer any more (POST CHAT_API.clearRequest, the Portal MCP `session_request_clear`).
+   * Every stale request of the session goes with it (audited, `session.request_stale`). Refused for a request of the live process: that
+   * one is answered (allow or deny), never cleared. NOT_FOUND for an id the session never had; CONFLICT when it is no longer open.
+   */
+  async clearRequest(rawId: string, requestId: string, opts: { actor?: string } = {}): Promise<{ requestId: string; outcome: string; session: ChatSession }> {
+    const sessionId = this.#chat.resolveId(rawId);
+    this.#require(sessionId);
+    if (!this.#chat.openRequests(sessionId).some((r) => r.requestId === requestId)) {
+      if (this.#chat.requestOutcome(sessionId, requestId) === null) throw new AppError('NOT_FOUND', 'No such request.');
+      throw new AppError('CONFLICT', 'That request is no longer open.');
+    }
+    await this.#settleStale(sessionId, 'clear', opts.actor ?? 'ui');
+    const outcome = this.#chat.requestOutcome(sessionId, requestId);
+    if (outcome === null) throw new AppError('CONFLICT', 'That request is from the running Claude Code process: answer it (allow or deny); it is not stale.');
+    return { requestId, outcome, session: this.#decorate(this.#chat.get(sessionId)!) };
   }
 
   /**
@@ -2267,7 +2352,7 @@ export class ChatController {
    */
   async restart(rawId: string, opts: { why?: unknown; when?: unknown; interrupt?: unknown; actor?: 'ui' | 'portal'; from?: 'queue' | 'auto' } = {}): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
-    const session = this.#require(sessionId);
+    let session = this.#require(sessionId);
     this.#notMoving(sessionId);
     const why = opts.why === undefined || opts.why === 'manual' ? 'manual' : opts.why === 'mcp' ? 'mcp' : null;
     if (!why) throw new AppError('VALIDATION_FAILED', 'Unknown reason.', { details: { why: 'Expected mcp or manual.' } });
@@ -2275,6 +2360,12 @@ export class ChatController {
     if (!when) throw new AppError('VALIDATION_FAILED', 'Unknown time.', { details: { when: 'Expected now or turn_end.' } });
     const interrupt = when === 'now' && opts.interrupt === true;
     if (this.#restarting.has(sessionId)) throw new AppError('CONFLICT', 'This chat is already restarting.');
+    // T-284: requests no process can answer any more never block a restart (they are dropped, audited); only one of the live process does.
+    if (this.#chat.openRequests(sessionId).length) {
+      await this.#settleStale(sessionId, 'restart', opts.actor ?? 'ui');
+      if (this.#restarting.has(sessionId)) throw new AppError('CONFLICT', 'This chat is already restarting.');
+      session = this.#require(sessionId);
+    }
     if (when === 'turn_end') {
       if (session.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
       const row = this.#chat.row(sessionId)!;
@@ -3132,6 +3223,8 @@ export class ChatController {
         byteOffset: 0,
         endedReason: null,
       });
+      // T-284: what an earlier process asked can never be answered now (this one has asked nothing yet): resolved `stale`.
+      this.#dropStale(sessionId, 'launch', null, true);
       this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
       this.#saveControl(sessionId);
       this.#launchedAt.set(sessionId, Date.now());
@@ -3714,7 +3807,9 @@ export class ChatController {
       }
       let canonical;
       try {
-        canonical = this.#chat.addRequest(sessionId, { ...parsed.request, agentLabel: parent ? this.#label(sessionId, parent) : null });
+        // T-284: the process that raised it, so a request of a process that is no longer the live one is known to be stale.
+        const row = this.#chat.row(sessionId);
+        canonical = this.#chat.addRequest(sessionId, { ...parsed.request, agentLabel: parent ? this.#label(sessionId, parent) : null }, row ? controlProc(row) : null);
       } catch {
         return void this.#endIntegrity(sessionId, `a tool request id arrived twice (${shortId(parsed.request.requestId)})`, 'request-duplicate');
       }
@@ -3774,6 +3869,15 @@ export class ChatController {
     if (parsed.result) {
       this.#thinkingSince.delete(sessionId); // a block cut short (stopped mid-thought) is never stored
       setImmediate(() => void this.#checkUsage(sessionId).catch(() => undefined));
+    }
+
+    // The efficiency lab measures what was accepted (§28); it never changes what the chat does.
+    if (this.onStreamLine) {
+      try {
+        this.onStreamLine(sessionId, raw);
+      } catch {
+        // a line the lab cannot measure never touches the session
+      }
     }
   }
 
@@ -3837,6 +3941,12 @@ export class ChatController {
       return true;
     }
     if (answered === 'completed') return this.#secondControlResponse(sessionId, ANSWERED(id), reply, digest);
+    // T-284 (INTEGRITY_CASES `control-stale`): Claude Code raised this request and the portal resolved it `stale` (its process was not the
+    // live one); a late answer for it is not one "this portal never asked for": ignored and logged (id only), the session goes on.
+    if (answered === null && this.#chat.requestOutcome(sessionId, id) === 'stale') {
+      console.log(`[chat] ${shortId(sessionId)}: ignored a control response for stale request ${shortId(id)} (T-284)`);
+      return false;
+    }
     this.#endIntegrity(sessionId, `a control response for request ${shortId(id)} that this portal never asked for or answered`, 'control-unknown');
     return false;
   }
@@ -4348,7 +4458,9 @@ export class ChatController {
         return reject(e instanceof Error ? e : new Error(String(e)));
       }
       const timer = setTimeout(() => {
-        if (this.#pending.delete(requestId)) reject(new ControlTimeout());
+        if (!this.#pending.delete(requestId)) return;
+        this.#bypassRequestOver(sessionId, requestId);
+        reject(new ControlTimeout());
       }, this.controlTimeoutMs);
       this.#pending.set(requestId, { sessionId, resolve, reject, timer });
       // The one request that enters Bypass, sent under the grant (every gate passed): its id is stored, so a portal that restarts before
@@ -4361,9 +4473,21 @@ export class ChatController {
       this.#writeLine(sessionId, controlRequest(requestId, subtype, fields)).catch((e: unknown) => {
         if (!this.#pending.delete(requestId)) return;
         clearTimeout(timer);
+        this.#bypassRequestOver(sessionId, requestId);
         reject(e instanceof Error ? e : new Error(String(e)));
       });
     });
+  }
+
+  /**
+   * The Bypass request stored as pending got no reply (it timed out, or its line was never written): it is not pending any more, so a
+   * portal that restarts later never takes a late reply to it as its own unfinished entry (T-277 layer 2 review note).
+   */
+  #bypassRequestOver(sessionId: string, requestId: string): void {
+    const m = this.#modes.get(sessionId);
+    if (m?.bypassPending !== requestId) return;
+    m.bypassPending = null;
+    this.#saveControl(sessionId);
   }
 
   /** Hands a reply to the request waiting for it (one that already timed out has nobody waiting). */

@@ -46,13 +46,24 @@ export function registerChatAuthz(facts: (id: string) => SessionFacts | null): v
     'PATCH /api/chat/sessions/:id/restart-hint': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }] },
     // T-136: recover in place (an ended-for-integrity session comes back as the same row): operates the session; audited by the controller.
     'POST /api/chat/sessions/:id/recover': { kind: 'objects', checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }], audit: 'session.recover' },
+    // T-284: clearing a request no process can answer any more operates the session; the controller audits what it resolved (session.request_stale).
+    'POST /api/chat/sessions/:id/requests/:requestId/clear': {
+      kind: 'objects',
+      checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }],
+      audit: 'session.request_clear',
+    },
   });
   declareToolPolicies('chat', CHAT_RECOVER_TOOL_POLICIES);
 }
 
-/** T-136: `session_recover` reaches an ended session of the agent's own workspace (another workspace's: not found); always confirmed; audited. */
+/**
+ * T-136: `session_recover` reaches an ended session of the agent's own workspace (another workspace's: not found); always confirmed; audited.
+ * T-284: `session_request_clear` reaches a chat of the agent's own workspace the same way (another workspace's: not found); no confirmation
+ * (it never touches a request of the live process, which is answered instead); audited.
+ */
 export const CHAT_RECOVER_TOOL_POLICIES = {
   session_recover: { kind: 'agent', reach: 'workspace', confirm: true, audit: 'session.recover' },
+  session_request_clear: { kind: 'agent', reach: 'workspace', audit: 'session.request_clear' },
 } satisfies ToolPolicies;
 
 /** The key the socket is declared under: the contract's path, so a test can pin them together. */

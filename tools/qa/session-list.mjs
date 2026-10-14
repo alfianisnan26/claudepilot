@@ -213,7 +213,8 @@ for (const size of SIZES)
     check(`${tag} All: each heading has its count`, heads.every((h) => /^\d+$/.test(h.count ?? '')), JSON.stringify(heads.map((h) => h.count)));
     check(`${tag} All: Needs you has no fold, the others do`, heads.length > 0 && !heads[0].fold && heads.slice(1).every((h) => h.fold));
     if (size.mobile) check(`${tag} All: headings are 44 px targets`, heads.every((h) => h.h >= 44), JSON.stringify(heads.map((h) => Math.round(h.h))));
-    check(`${tag}: no sideways scroll`, (await b.eval('document.scrollingElement.scrollWidth <= innerWidth')) === true);
+    // innerWidth too: a phone in emulation widens its layout to fit an overflow, so scrollWidth alone never sees it (T-288).
+    check(`${tag}: no sideways scroll`, (await b.eval(`document.scrollingElement.scrollWidth <= innerWidth && innerWidth <= ${size.w}`)) === true, await b.eval('`${document.scrollingElement.scrollWidth}/${innerWidth}`'));
     await geometry('All');
 
     // A row's ⋯ menu opens past its row and its card: every item can be tapped (T-100: the swipe box's clip cut it to the first item).

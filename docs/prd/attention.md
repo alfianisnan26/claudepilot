@@ -44,7 +44,7 @@ module's own route that decides it: a POST path, or `SOCKET` for the chat).
 | `skill_version` | `skills/attention.ts` | a version whose tree hash has no decision (`needs_review`), uploads and agent proposals alike | third-party code | scan risk · scripts or text only · network · hooks · pre-allowed tools · findings | manage on the `skill_version` |
 | `ci_deploy` | `ci/attention.ts` | a deployment `waiting` for approval in a running run (CI FR41) | production or uat | environment · the jobs before it and how they ended (the gate) · pipeline, ref and commit · the auto-approve rule's dry verdict | a person with manage on the run (tokens and agents never see it, as they never approve) |
 | `ticket_approval` | `tickets/attention.ts` | an open ticket of type `approval` assigned to a person | question | priority · workspace | a person with operate on the ticket |
-| `tool_approval` | `chat/attention.ts` | a tool request a `waiting` session has held for 10 minutes or more (T-256 item 4); a fresh one stays the session's own card | gate | the tool · the workspace | operate on the session |
+| `tool_approval` | `chat/attention.ts` | a request a session's live process has held for 10 minutes or more while its turn runs (`waiting`, or `working` with a second request still open; T-256 item 4, T-284 item 4); a fresh one stays the session's own card; a request of a process that is gone is not listed (it is resolved `stale`, chat-sessions FR25b) | gate | the tool · the workspace | operate on the session |
 
 Not a source in slice 1: pool revisions in `waiting_review` (they follow from unapproved versions), settings an agent proposed (T-138),
 stg PRs (T-116), the login queue (T-140), Bypass acknowledgements. Each is one file and one line in `attention/index.ts`.

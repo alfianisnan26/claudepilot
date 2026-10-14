@@ -633,6 +633,7 @@ export function createApp(
     pools.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     poolService.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     settings?.lockdown.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
+    settings?.agentEnv.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     repos?.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     return c.json(success({ ok: true }));
   });
@@ -732,6 +733,7 @@ export function createApp(
     const st = new Hono<Env>();
     st.use(requireSession);
     plainNamesOn(st, '/lockdown/:target/:name');
+    plainNamesOn(st, '/agent-env/:target/:name');
     st.route('/', createSettingsRoutes(settings));
     app.route('/api/settings', st);
   }

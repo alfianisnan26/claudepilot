@@ -108,6 +108,13 @@ export function createChatRoutes(controller: ChatController): Hono {
     const by = req.by === 'agent' || actor.kind !== 'user' ? 'agent' : 'person';
     return c.json(success(await controller.recover(c.req.param('id'), { by, confirm: by === 'person' && req.confirm === true, actor: actor.kind === 'user' ? 'ui' : actorString(actor) })));
   });
+  // POST /api/chat/sessions/:id/requests/:requestId/clear — clear a request no process can answer any more (T-284): resolved `stale` with
+  // every other stale request of the chat, audited; refused (409) for a request of the live process, which is answered instead.
+  chat.post('/:id/requests/:requestId/clear', async (c) => {
+    const actor = actorOf(c);
+    requireCan(actor, 'operate', sessionRef(c.req.param('id')));
+    return c.json(success(await controller.clearRequest(c.req.param('id'), c.req.param('requestId'), { actor: actor.kind === 'user' ? 'ui' : actorString(actor) })));
+  });
   // DELETE /api/chat/sessions/:id/restart — cancel a restart that waits for the turn's end (T-102).
   chat.delete('/:id/restart', (c) => {
     requireCan(actorOf(c), 'operate', sessionRef(c.req.param('id')));

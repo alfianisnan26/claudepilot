@@ -2941,6 +2941,141 @@ export const MIGRATIONS: Migration[] = [
       db.exec('ALTER TABLE chat_sessions ADD COLUMN control_state TEXT');
     },
   },
+  {
+    version: 830,
+    name: 'chat requests: the process that raised each one',
+    up(db) {
+      // T-284: a request raised by a process that is no longer the live one (a move, a restart, a crash, a resume) can never be answered;
+      // it is resolved `stale` instead of keeping the chat waiting. The process it belongs to, as integrity.ts controlProc (Claude Code
+      // session id, segment, process start: ids only, never text). Null for every row so far: those are judged by their time against the
+      // live process's start.
+      db.exec('ALTER TABLE chat_requests ADD COLUMN proc TEXT');
+    },
+  },
+  {
+    version: 840,
+    name: 'settings: the agent policy each workspace last received',
+    up(db) {
+      // T-285: the agent policy's env (sub-agent cache and caps, output caps; names and values, none secret) as it last
+      // landed in each workspace's policy drop-in, so the page shows the value in effect, or "unavailable" when none landed.
+      db.exec(`
+        CREATE TABLE policy_env_state (
+          workspace_id TEXT PRIMARY KEY,
+          env TEXT NOT NULL,
+          changed_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 850,
+    name: 'efficiency lab: slices, requests and tool calls',
+    up(db) {
+      // T-287 slice 1 (docs/prd/claude-usage.md §28): what the session stream says about each SLICE (a sub-agent thread, or one main-thread
+      // turn), in counts and ids only, never text. A request is one assistant message (deduplicated by its id, the last report wins, as in
+      // docs/dev-sessions/overhaul/evidence/slice_metrics.py); a tool row is one tool call with its class and the size of its result.
+      db.exec(`
+        CREATE TABLE lab_slices (
+          session_id TEXT NOT NULL,
+          slice_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('agent', 'turn')),
+          ticket TEXT,
+          role TEXT,
+          model TEXT,
+          started_ms INTEGER,
+          PRIMARY KEY (session_id, slice_id)
+        ) STRICT;
+        CREATE TABLE lab_requests (
+          session_id TEXT NOT NULL,
+          message_id TEXT NOT NULL,
+          slice_id TEXT NOT NULL,
+          at_ms INTEGER,
+          model TEXT,
+          input INTEGER NOT NULL DEFAULT 0,
+          cache_read INTEGER NOT NULL DEFAULT 0,
+          cache_write_5m INTEGER NOT NULL DEFAULT 0,
+          cache_write_1h INTEGER NOT NULL DEFAULT 0,
+          cache_write INTEGER NOT NULL DEFAULT 0,
+          output INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (session_id, message_id)
+        ) STRICT;
+        CREATE INDEX lab_requests_slice ON lab_requests (session_id, slice_id);
+        CREATE INDEX lab_requests_at ON lab_requests (at_ms);
+        CREATE TABLE lab_tools (
+          session_id TEXT NOT NULL,
+          tool_use_id TEXT NOT NULL,
+          slice_id TEXT,
+          tool TEXT,
+          class TEXT,
+          rtk INTEGER NOT NULL DEFAULT 0,
+          at_ms INTEGER,
+          results INTEGER NOT NULL DEFAULT 0,
+          result_chars INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (session_id, tool_use_id)
+        ) STRICT;
+        CREATE INDEX lab_tools_slice ON lab_tools (session_id, slice_id);
+      `);
+    },
+  },
+  {
+    version: 851,
+    name: 'efficiency lab: experiments and arm assignments',
+    up(db) {
+      // T-287 slice 1: an experiment is a named change with its arms, a start, a stop and its rules written before the start; a randomized one
+      // assigns each slice an arm when the slice starts (balanced per stratum), a before-and-after one splits its window at `switch_ms`.
+      // `excluded` takes a slice out of the analysis with a reason (an outage). Thresholds and guardrails are JSON the person wrote.
+      db.exec(`
+        CREATE TABLE lab_experiments (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          hypothesis TEXT NOT NULL DEFAULT '',
+          design TEXT NOT NULL CHECK (design IN ('randomized', 'before_after')),
+          arms TEXT NOT NULL,
+          primary_metric TEXT NOT NULL,
+          guardrails TEXT NOT NULL DEFAULT '[]',
+          thresholds TEXT NOT NULL DEFAULT '{}',
+          min_n INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL CHECK (status IN ('running', 'stopped', 'decided')),
+          start_ms INTEGER NOT NULL,
+          stop_ms INTEGER,
+          switch_ms INTEGER,
+          decision TEXT CHECK (decision IN ('adopt', 'reject', 'iterate')),
+          verdict TEXT,
+          created_ms INTEGER NOT NULL
+        ) STRICT;
+        CREATE TABLE lab_assignments (
+          experiment_id TEXT NOT NULL REFERENCES lab_experiments(id) ON DELETE CASCADE,
+          session_id TEXT NOT NULL,
+          slice_id TEXT NOT NULL,
+          arm TEXT,
+          stratum TEXT NOT NULL DEFAULT '',
+          assigned_ms INTEGER NOT NULL,
+          excluded TEXT,
+          PRIMARY KEY (experiment_id, session_id, slice_id)
+        ) STRICT;
+        CREATE INDEX lab_assignments_stratum ON lab_assignments (experiment_id, stratum);
+      `);
+    },
+  },
+  {
+    version: 792,
+    name: 'keep going: a program per policy and the pause switch',
+    up(db) {
+      // T-259 slice 3 (the program pause switch): a policy may name its program (a slug like the supervisor's track keys), and
+      // `keepgoing_pauses` holds the pauses that stand, one row per program (`*` for all) with a person's one-line reason, since when and
+      // who. A paused chat is looked at but nothing is done for it; deleting the row resumes it.
+      db.exec(`
+        ALTER TABLE keepgoing_policies ADD COLUMN program TEXT;
+        CREATE TABLE keepgoing_pauses (
+          scope TEXT PRIMARY KEY,
+          reason TEXT NOT NULL,
+          since TEXT NOT NULL,
+          by TEXT NOT NULL
+        ) STRICT;
+      `);
+    },
+  },
 ];
 
 /**

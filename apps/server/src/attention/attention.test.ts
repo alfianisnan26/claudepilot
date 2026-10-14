@@ -268,7 +268,7 @@ test('tickets: an open approval assigned to a person waits; other types, agents\
   assert.deepEqual(events[0]!.resolved, [{ kind: 'ticket_approval', id: t1 }]);
 });
 
-test('tool approvals: listed only after ten minutes of a waiting session; answering resolves it', () => {
+test('tool approvals: listed only after ten minutes of a session whose live process waits on it; answering resolves it', () => {
   chatSession('w1', 'waiting', 'Stuck one');
   chatSession('w2', 'waiting');
   chatSession('i1', 'idle');
@@ -276,9 +276,15 @@ test('tool approvals: listed only after ten minutes of a waiting session; answer
   toolRequest('w2', 'q2', ATTENTION_TOOL_WAIT_MS / MIN - 1); // not yet
   toolRequest('i1', 'q3', 30); // the session does not wait (stale row)
   toolRequest('w1', 'q4', 30, true); // answered
+  // T-284: a working session with a request still open (answering one of two puts it back to working) is listed; a gone process's is not.
+  chatSession('k1', 'working');
+  toolRequest('k1', 'q5', 10.5); // newer than q1: q1 leads
+  chatSession('g1', 'waiting');
+  db.prepare("UPDATE chat_sessions SET process = 'gone' WHERE id = 'g1'").run();
+  toolRequest('g1', 'q6', 30);
   const r = registry();
   const all = r.list(ownerActor());
-  assert.deepEqual(ids(all, 'tool_approval'), ['w1/q1']);
+  assert.deepEqual(ids(all, 'tool_approval').sort(), ['k1/q5', 'w1/q1']);
   assert.equal(all.items[0]!.why, 'gate');
   assert.equal(all.items[0]!.risk, 'Bash · docker/dev');
   assert.deepEqual(all.items[0]!.who, [{ label: 'Stuck one', link: '/admin/sessions/w1' }]);

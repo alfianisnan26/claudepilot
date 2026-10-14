@@ -136,6 +136,21 @@ export const INTEGRITY_CASES: readonly IntegrityCase[] = [
       'a Bypass reply to any other request id (one never sent under the grant), the same late reply in the SAME portal life (the grant ' +
       'is gone: it still ends), and a Bypass status report while nothing is pending',
   },
+  {
+    id: 'control-stale',
+    line: 'a control_response for a request Claude Code raised that the portal resolved `stale` (its process was no longer the live one; T-284)',
+    rule:
+      'ignored and logged (the ids only), never processed: only for an id THIS session recorded as a request (chat_requests) whose outcome ' +
+      'is stale, and only when the portal holds no answer of its own for it; nothing is allowed or denied by it',
+    evidence:
+      'T-284 (Konfersi chat 93b468c8, 2026-10-14 04:02 to 05:00 UTC): a tool request of a process that was gone stayed open, could not ' +
+      'be answered and blocked Restart; T-284 resolves such requests stale. PRE-EMPTIVE: a late answer for a stale request has never been ' +
+      'seen in a real stream; this case keeps one from ever reading as "this portal never asked for" (the twins below show nothing else ' +
+      'moved). Revisit it if no real stream ever shows one (T-284 review note A)',
+    negative:
+      'an id the portal never asked or answered, the same answer for a request still open (of the live process), and a stale id of ANOTHER ' +
+      'session: each still ends the session "a control response for request … that this portal never asked for or answered"',
+  },
 ];
 
 /**
@@ -259,6 +274,9 @@ export function readControl(stored: string | null | undefined, proc: string): St
   if (o.v !== 1 || o.proc !== proc || !o.mode || typeof o.mode !== 'object' || !Array.isArray(o.peers) || o.peers.length > 32) return null;
   const m = o.mode as Record<string, unknown>;
   if (!str(m.expected, 40) || !(m.prePlan === null || str(m.prePlan, 40)) || typeof m.enterPlan !== 'boolean' || typeof m.exitPlan !== 'boolean') return null;
+  // A mode outside MODE_RANK (a stored row tampered with, or written by a build that knew another mode) is never applied: the row's mode is
+  // used instead, as for a row from before migration 820 (T-277 layer 2 review note).
+  if (!Object.hasOwn(MODE_RANK, m.expected) || (m.prePlan !== null && !Object.hasOwn(MODE_RANK, m.prePlan as string))) return null;
   if (!(m.bypassPending === null || str(m.bypassPending))) return null;
   const peers: PeerCause[] = [];
   for (const p of o.peers as unknown[]) {

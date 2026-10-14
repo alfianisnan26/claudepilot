@@ -112,7 +112,10 @@ The compiler merges sets, checks names (FR4), resolves references and reads the 
   variables that would outrank its file: `GH_TOKEN`, `GITHUB_TOKEN` and their `_ENTERPRISE_` forms;
   `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, `AWS_ROLE_ARN`,
   `AWS_WEB_IDENTITY_TOKEN_FILE`; `CLOUDSDK_AUTH_ACCESS_TOKEN_FILE`. A name another owner claims
-  later fails only this workspace's secrets fragment, whose applied files stay.
+  later fails only this workspace's secrets fragment, whose applied files stay. Exception: a name the agent
+  policy sets (`BASH_MAX_OUTPUT_LENGTH`, `MAX_MCP_OUTPUT_TOKENS` and the sub-agent variables, settings
+  §22.5): the policy wins, that entry is skipped at delivery with one warning line per workspace, and
+  delivery goes on (T-285).
 - **FR5** Every value, file body and tool-login field is scanned raw and decoded (base64 and
   base64url to two levels, URL-encoded, JSON-escaped) for `sk-ant-` (covering `-oat`, `-ort`,
   `-admin` and `-api`) and the `claudeAiOauth` key. A match is refused: "This looks like a Claude

@@ -16,6 +16,8 @@ export const KEEPGOING_BOUNDS = {
   maxWakesPerDay: { min: 0, max: 200, default: 20 },
   promptMax: 4000,
   statusFileMax: 200,
+  /** A pause's reason (one line). */
+  pauseReasonMax: 200,
 } as const;
 
 /** Fixed numbers of the sweep (design choices). */
@@ -67,6 +69,38 @@ export interface ChatKeepGoingPolicy {
   /** Caps per 24 hours. */
   maxNudgesPerDay: number;
   maxWakesPerDay: number;
+  /**
+   * The program the chat belongs to (the pause switch): a short slug like the supervisor's track keys (`orchestrator`, `konfersi`, `event`);
+   * null for none. A pause of that program, or of all, holds the chat. Optional on the wire: absent leaves it.
+   */
+  program?: string | null;
+}
+
+/** A program's name: lowercase letters, digits and hyphens, 1 to 40, starting with a letter or digit. */
+export const KEEPGOING_PROGRAM_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+/** The scope of a pause that holds every chat (the program `null`). */
+export const KEEPGOING_PAUSE_ALL = '*';
+
+/**
+ * A pause (the program pause switch, T-259 slice 3): while it stands, Keep going starts no continuation, sends no nudge, wake or answer and
+ * raises no report (ticket or push) for the chats it holds; it keeps looking (state, reports that clear, the Home card). Resume looks again at
+ * once. Set by a platform admin (Home, Autonomy) or an admin token (`keepgoing_pause_set`), audited `keepgoing.pause`.
+ */
+export interface KeepGoingPause {
+  /** The program, or null for every chat. */
+  program: string | null;
+  /** One line, a person's words (shown as text). */
+  reason: string;
+  since: string;
+  /** Who paused it (an actor label: `user:<id>`, `portal-mcp:<token id>`). */
+  by: string;
+}
+
+/** `PUT KEEPGOING_API.pauses`: pause or resume one program (`program: null` is all). `reason` is required to pause. */
+export interface SetKeepGoingPauseRequest {
+  program: string | null;
+  paused: boolean;
+  reason?: string;
 }
 
 /**
@@ -109,8 +143,10 @@ export interface ChatKeepGoing extends ChatKeepGoingPolicy {
   nudgesToday: number;
   wakesToday: number;
   last: KeepGoingAction | null;
-  /** The kill switch `keepgoing.enabled` is off: nothing runs anywhere. */
+  /** Nothing is done for this chat: the kill switch `keepgoing.enabled` is off, or a pause holds it (`pause`). */
   paused: boolean;
+  /** The pause that holds it (all first, then its program); null when none does. */
+  pause?: KeepGoingPause | null;
   /** The causes reported and still standing (slice 2; the quiet `ended` mark is not one). */
   standing?: KeepGoingCause[];
 }
@@ -131,11 +167,14 @@ export interface KeepGoingChat {
 export interface KeepGoingList {
   /** The kill switch is off. */
   paused: boolean;
+  /** The pauses that stand (all first, then by program); every caller sees them (a program name and a person's one-line reason). */
+  pauses?: KeepGoingPause[];
   chats: KeepGoingChat[];
 }
 
 export const KEEPGOING_API = {
   list: '/api/keepgoing',
+  pauses: '/api/keepgoing/pauses',
 } as const;
 
 /** `PUT CHAT_API.keepGoing(id)`: each field optional; absent leaves it. `prompt: null` / `statusFile: null` go back to the default. */

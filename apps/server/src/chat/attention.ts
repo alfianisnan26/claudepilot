@@ -1,5 +1,5 @@
-// Sessions stuck on a tool approval (Needs you, docs/prd/attention.md; T-256 item 4): a session in the `waiting` state whose tool request
-// has had no answer for ATTENTION_TOOL_WAIT_MS (ten minutes). A fresh request is the session's own card and the glance's; one that has
+// Sessions stuck on a tool approval (Needs you, docs/prd/attention.md; T-256 item 4, T-284 item 4): a session whose live process runs a
+// turn (`waiting`, or `working` with a second request still open) and whose request has had no answer for ATTENTION_TOOL_WAIT_MS (ten minutes). A fresh request is the session's own card and the glance's; one that has
 // waited this long blocks an agent and goes on the list. Class: a gate. Risk: the tool and what it asks, in the controller's own redacted
 // summary (never the full text approved on). Who decides: operate on the session (the chat socket's own check when it is answered).
 
@@ -27,12 +27,14 @@ export function toolApprovalAttentionSource(db: () => DatabaseSync | null): Atte
       const d = db();
       if (!d) throw new Error('the database is not available');
       const before = new Date(now - ATTENTION_TOOL_WAIT_MS).toISOString();
-      // One query: the open tool requests older than the wait, of sessions that wait.
+      // One query: the open requests older than the wait, of sessions whose process runs a turn. T-284: every request kind, and a
+      // session that reads `working` too (answering one of two requests puts it back to working while the other still waits); an idle,
+      // sleeping or gone process's request is not listed: no process can answer it, and the liveness round resolves it `stale`.
       const rows = d
         .prepare(
           `SELECT r.session_id, r.request_id, r.tool_name, r.agent_label, r.title, r.created_at, s.title AS session_title, s.workspace_id
            FROM chat_requests r JOIN chat_sessions s ON s.id = r.session_id
-           WHERE r.answered_at IS NULL AND r.kind = 'tool' AND s.state = 'waiting' AND r.created_at <= ?
+           WHERE r.answered_at IS NULL AND s.state IN ('waiting', 'working') AND s.process = 'live' AND r.created_at <= ?
            ORDER BY r.created_at, r.rowid LIMIT 500`,
         )
         .all(before) as unknown as Row[];

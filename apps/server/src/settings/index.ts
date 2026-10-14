@@ -3,12 +3,14 @@ import { SETTING_KEYS, type SettingUpdate } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import type { FragmentProvider, Reconciler } from '../delivery/reconciler.js';
 import type { Store } from '../store/store.js';
+import { AGENT_ENV_KEYS, AgentEnvPolicy } from './agentEnv.js';
 import { McpLockdown } from './lockdown.js';
 import { defineSetting, defineSettingGroup } from './registry.js';
 import { Settings } from './store.js';
 
 export { defineSetting, defineSettingGroup, settingDef, settingDefs } from './registry.js';
 export type { SettingDef } from './registry.js';
+export { AGENT_ENV, AgentEnvPolicy } from './agentEnv.js';
 export { McpLockdown } from './lockdown.js';
 export { Settings } from './store.js';
 
@@ -43,6 +45,8 @@ const RECHECK_MS = 3_000;
 export class SettingsModule {
   readonly settings: Settings;
   readonly lockdown: McpLockdown;
+  /** The agent policy (T-285): sub-agent cache and caps, output caps, as `env` in the policy drop-in. */
+  readonly agentEnv: AgentEnvPolicy;
   /** Set once the reconciler exists. */
   reconciler: Pick<Reconciler, 'request' | 'knownWorkspaces'> | null = null;
   /** Settings changed, for live pages. */
@@ -57,8 +61,11 @@ export class SettingsModule {
       timer.unref();
     };
     providers.push(this.lockdown);
+    this.agentEnv = new AgentEnvPolicy(store, this.settings);
+    providers.push(this.agentEnv);
     this.settings.onChange((key) => {
       if (key === SETTING_KEYS.mcpAccountOff || key === SETTING_KEYS.mcpPoolOnly) this.deliverAll(`${key} changed`);
+      else if (AGENT_ENV_KEYS.has(key)) this.deliverAll(`${key} changed`);
       this.onChange();
     });
   }
@@ -87,10 +94,11 @@ async function body<T>(c: Context): Promise<Partial<T>> {
 /** `/api/settings`: the list, one change (audited), the audit trail and a workspace's lockdown status. Mounted behind the sign-in guard. */
 export function createSettingsRoutes(module: SettingsModule): Hono {
   const app = new Hono();
-  const { settings, lockdown } = module;
+  const { settings, lockdown, agentEnv } = module;
   app.get('/', (c) => c.json(success(settings.view())));
   app.get('/audit', (c) => c.json(success(settings.audit(Number(c.req.query('limit')) || 100))));
   app.get('/lockdown/:target/:name', (c) => c.json(success(lockdown.status(`${c.req.param('target')}/${c.req.param('name')}`))));
+  app.get('/agent-env/:target/:name', (c) => c.json(success(agentEnv.status(`${c.req.param('target')}/${c.req.param('name')}`))));
   app.put('/:key', async (c) => {
     const req = await body<SettingUpdate>(c);
     return c.json(success(settings.set(c.req.param('key') ?? '', req.value, { actor: 'Admin', confirm: req.confirm === true })));

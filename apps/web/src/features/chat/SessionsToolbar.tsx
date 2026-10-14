@@ -101,7 +101,9 @@ export function SessionsToolbar({
           </select>
         </label>
       </div>
-      <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden">
+      {/* relative: the chips' and Select's sr-only labels (position absolute) take this scroller as their containing block, so a chip
+          past the edge scrolls with the row instead of widening the page (a 434 px layout on a 390 px phone, T-288). */}
+      <div className="relative -mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden">
         {visibleChips(counts, view.archived ? 'archived' : view.filter).map((id) => {
           const c = CHIP[id];
           const on = active(id);
