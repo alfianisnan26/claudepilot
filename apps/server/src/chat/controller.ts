@@ -111,7 +111,7 @@ import { BtwStore } from './btwStore.js';
 import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
 import { autoTrustable, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError } from './trust.js';
 import { usageReport } from './usage.js';
-import { controlDigest, PEER_CAUSE_MS, sameAnswer, type ControlExpectation, type PeerCause } from './integrity.js';
+import { controlDigest, lessPermissive, PEER_CAUSE_MS, sameAnswer, type ControlExpectation, type PeerCause } from './integrity.js';
 
 /** T-102: the areas a hint may name (anything else a reader returns is left out). */
 const CONFIG_CHANGES: ReadonlySet<string> = new Set<ChatConfigChange>(['mcpset', 'settings', 'policy', 'secrets', 'account', 'persona', 'context', 'skillset', 'browser', 'foundation', 'portal_tools', 'other']);
@@ -3803,7 +3803,7 @@ export class ChatController {
   /**
    * The mode a main-thread `system/init` or `system/status` reports must be the one the portal set or
    * confirmed. Claude Code changes it by itself only into plan mode after EnterPlanMode, and out of it
-   * after the portal approved ExitPlanMode. Bypass always ends the session.
+   * after the portal approved ExitPlanMode. Bypass always ends the session. A less permissive mode than expected is taken (T-277).
    */
   #acceptMode(sessionId: string, mode: string): boolean {
     const m = this.#mode(sessionId);
@@ -3825,8 +3825,32 @@ export class ChatController {
       m.prePlan = null;
       return true;
     }
+    // Less permissive than expected (MODE_RANK, T-277): the agent can do less than the portal allowed, so it is taken, never an end.
+    if (lessPermissive(mode, m.expected)) {
+      this.#modeDowngraded(sessionId, m, mode);
+      return true;
+    }
     this.#endIntegrity(sessionId, `the permission mode changed to ${shortId(mode)} without this portal (expected ${m.expected})`);
     return false;
+  }
+
+  /**
+   * INTEGRITY_CASES `mode-downgrade` (T-277): the process runs in a mode that lets the agent do LESS than the portal expected (seen after
+   * a portal restart, when the expected mode came from the stored row). Not an attack: the portal now expects that mode and shows it, and
+   * never re-enters Bypass here; only the gated path (enterBypass, #keepBypass) puts it back.
+   */
+  #modeDowngraded(sessionId: string, m: ModeTrack, mode: string): void {
+    const from = m.expected;
+    m.expected = mode;
+    const row = this.#chat.row(sessionId);
+    if (!row || row.state === 'ended') return;
+    console.warn(`[chat] ${shortId(sessionId)}: the permission mode is ${mode}, less than expected (${from}): expected from now on`);
+    this.#chat.patchSession(sessionId, { mode });
+    if (from === 'bypassPermissions') {
+      this.#note(sessionId, 'Bypass is off in this chat');
+      this.#chat.addAudit({ severity: 'medium', kind: 'bypass.left', sessionId, workspaceId: row.workspace_id, actor: 'portal', detail: { why: 'downgrade', mode } });
+    } else this.#note(sessionId, `Mode is ${MODE_LABELS[mode] ?? mode} in this chat`);
+    this.#emitSession(sessionId);
   }
 
   #mode(sessionId: string): ModeTrack {

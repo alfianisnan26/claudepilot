@@ -89,7 +89,42 @@ export const INTEGRITY_CASES: readonly IntegrityCase[] = [
       'a different mode, an error reply, a body of another shape, an echo whose behavior is not the recorded outcome, or an id the ' +
       'portal never asked or answered',
   },
+  {
+    id: 'mode-downgrade',
+    line: 'a main-thread system/init or system/status whose permissionMode is LESS permissive (MODE_RANK) than the mode the portal expects',
+    rule:
+      'accepted as a downgrade: the expected mode becomes the reported one, the row shows it, the transcript says "Bypass is off in this ' +
+      'chat" (from Bypass) or "Mode is <mode> in this chat", the session event goes out, and only the gated path (enterBypass, the ' +
+      'restart and move re-assert) puts Bypass back; the agent can then do less than the portal allowed, never more',
+    evidence:
+      'Konfersi chat 3907db7f, 2026-10-14 02:50:24 UTC, during deploy #20 (02:43 to 02:53): after the portal restarted, the expected mode ' +
+      'was rebuilt from the stored row (bypassPermissions) and a main-thread system/init or system/status reported permissionMode ' +
+      '"default"; the portal ended the session "the permission mode changed to default without this portal (expected bypassPermissions)"',
+    negative:
+      'a more permissive report than expected (default -> acceptEdits), Bypass reported when the portal did not enter it, an unknown ' +
+      'mode string (dontAsk, anything new), and a downgrade on a sub-agent thread (parent_tool_use_id set: never a mode report, so the ' +
+      'expected mode stays and a later main-thread report is judged against it)',
+  },
 ];
+
+/**
+ * The permission modes by how much they let the agent do without asking (T-277): plan < default < acceptEdits < auto < bypassPermissions.
+ * Any other string (dontAsk included, and anything Claude Code may add) ranks above Bypass, so it is never "less permissive".
+ */
+export const MODE_RANK: Readonly<Record<string, number>> = { plan: 0, default: 1, acceptEdits: 2, auto: 3, bypassPermissions: 4 };
+
+/** The rank of a mode string; an unknown one ranks above Bypass. */
+export function modeRank(mode: string): number {
+  return Object.hasOwn(MODE_RANK, mode) ? MODE_RANK[mode]! : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Whether a reported mode lets the agent do strictly LESS than the expected one (INTEGRITY_CASES `mode-downgrade`). Both must be in
+ * MODE_RANK: an unknown report, or an expected mode outside the table, is never a downgrade.
+ */
+export function lessPermissive(reported: string, expected: string): boolean {
+  return Object.hasOwn(MODE_RANK, reported) && Object.hasOwn(MODE_RANK, expected) && MODE_RANK[reported]! < MODE_RANK[expected]!;
+}
 
 /** What the portal knows of a completed control line whose first response kept no digest (asked before migration 771). */
 export type ControlExpectation = { kind: 'asked'; modes: readonly string[] } | { kind: 'answered'; outcome: string | null };
