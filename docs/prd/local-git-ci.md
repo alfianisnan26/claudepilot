@@ -556,3 +556,5 @@ Under the UI text diet (PLAN rule 12): one-or-two-word labels, no paragraphs und
 | Q8 | The numbers: 2 runs, 2 jobs, 3 messages an hour, 14 and 30 days. Tune from use. | Operator |
 | Q9 | Run starts on `[skip ci]` are recorded as skipped. Should an agent be able to skip with a push option instead? | Engineering |
 | Q10 | Should a green run on a ticket's branch be able to move the ticket to review? (v0.1: never; a person or the agent does.) | Product |
+
+**Needs you (T-146):** a deployment waiting for a person's approval (FR41) is listed on Needs you ([attention.md](attention.md) §2, `ci/attention.ts`) with the environment, the gate's verdict and the commit, for a person only.

@@ -825,3 +825,5 @@ isolation) to gain live `list_changed` and a one-line allowlist. Revisit when se
 start slowly, when allowlist churn causes delivery trouble, or when "applies without a restart" becomes a
 requirement. If built: M2's tool snapshots first (the gateway needs them), remote servers without OAuth
 first, OAuth servers stay separate connections.
+
+**Needs you (T-146):** a proposed catalog version waiting for review is listed on Needs you ([attention.md](attention.md) §2, `mcp/attention.ts`), with its kind, host, private network and secret slot names; the link opens the entry with that version preselected.
