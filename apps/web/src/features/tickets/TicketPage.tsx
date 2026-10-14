@@ -25,7 +25,7 @@ import { errorText } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
-import { SESSION_STATE_LABEL, actorName } from './labels';
+import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, fallbackSentence } from './labels';
 import { AssigneeChip, CheckChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge } from './parts';
 import { AssignDialog, CloseDialog, EditTicketDialog, StartSessionDialog, TagsDialog, TicketBumpDialog } from './TicketDialogs';
 
@@ -111,6 +111,22 @@ export function TicketPage() {
           <TypeBadge type={t.type} />
           <TicketFlags ticket={t} />
         </div>
+        {t.orphan && (
+          <div role="status" className="mt-3 flex items-start gap-2 rounded-2xl bg-danger-soft px-3.5 py-2.5 text-[14px]">
+            <span className="min-w-0 flex-1 break-words">
+              <span className="font-semibold text-danger">{ORPHAN_TITLE[t.orphan.why]}</span>
+              {t.orphan.since && (
+                <span className="text-ink-soft" title={formatDateTime(t.orphan.since)}>
+                  {' '}
+                  · {timeAgo(t.orphan.since)}
+                </span>
+              )}
+            </span>
+            <InfoTip label="About an ended session">
+              Nobody works this ticket now. A few minutes after the session ended, the portal moves it by itself: to the session that continues the track, else back to the agents’ queue. A session that comes back keeps it.
+            </InfoTip>
+          </div>
+        )}
         {detail.checks.length > 0 && (
           <div className="mt-2">
             <CheckChips checks={detail.checks} />
@@ -319,6 +335,7 @@ function sentence(e: TicketEvent): string {
     case 'workspace':
       return `${who} put it in ${typeof d.to === 'string' ? d.to : 'the shared queue'}`;
     case 'assigned':
+      if (d.fallback) return fallbackSentence(who, d);
       return d.claimed ? `${who} claimed it` : `${who} assigned it to ${assignee(d.to)}`;
     case 'session_started':
       return `${who} started a session for it`;

@@ -97,6 +97,7 @@ export function ticket(over: Partial<TicketItem> & { id: string }): TicketItem {
     closedAt: null,
     assigneeSession: null,
     sessionEnded: false,
+    orphan: null,
     ...over,
   };
 }
