@@ -6,7 +6,7 @@
 - Workers can't be read by a new chat: every worker was told to post its final report as a comment on its ticket (all tickets claimed by 75f044fb; adopt them with ticket_adopt from 75f044fb-168c-458a-a646-e5742109b072 once this chat ends).
 
 ## In flight (workers of 75f044fb; their reports land on the tickets)
-- T-321 + T-312: verifier 0f4f96a6 (T-312 chips and 2026-10-13 fixture NOT built: close only per criteria, follow-up for the rest).
+- T-321: verifier 0f4f96a6 FAIL on the proof (comment 1919); back in progress, next slice scoped in comment 1923 (missing crew list at 390-light). T-312: PASS WITH GAPS (comment 1920); back in progress, remaining scope in comment 1925 (spikes, lab scoring, chips + screenshots). Verifier ended.
 - T-342 (factory: a stop that acts mid-turn, no unbounded re-dispatch, minors): implementer b41b0cca, branch dev/t293-6 from dev/t293-5. Then a BLIND re-review (opus) must say SAFE TO RUN UNATTENDED.
 - T-343 (live cost estimate mid-turn): implementer 8d08616a, dev/t-343-1 (may touch UI: send a ux-checker).
 - T-336 (session_start takes a parent): implementer 692c90b5, dev/t-336-1.
