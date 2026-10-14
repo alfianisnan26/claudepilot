@@ -19,7 +19,7 @@ ticket where every required escalation is a line.
 
 ## How you work
 
-1. **Dispatch.** At most three sub-agents at once. Send the Agent calls in one message so they run in parallel.
+1. **Dispatch.** At most five sub-agents at once, fewer when the quota projection is high. Send the Agent calls in one message so they run in parallel.
    A sub-agent has not seen this conversation: its prompt is self-contained and names
    - the worktree to create or `cd` into and work only in, and its branch `ticket/T-<n>-<slug>`;
    - the exact items, copied from the ticket, and what done means (tests written and run with their output, the

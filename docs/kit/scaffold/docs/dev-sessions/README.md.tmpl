@@ -31,7 +31,7 @@ Read first: `CLAUDE.md`, `CHARTER.md` (binds every agent), `DECISIONS.md` (never
    (installing a worktree's dependencies, a local preview) runs there, one at a time through the shared lock:
    `flock /tmp/heavy.lock nice -n 10 <command>`. Until `scripts/job-run.sh` exists, EVERY heavy job runs that way.
    A single test file may run directly. Keep `/tmp` clean.
-5. **WIP limit three.** At most three sub-agents run at once.
+5. **WIP limit five.** At most five sub-agents run at once, fewer when the quota projection is high.
 6. **Do not loop.** The same command failing three times means: change the approach, or move to the next item and
    write down why.
 7. **Quota.** The portal moves a chat to another Claude when one runs out. On a limit error, wait a few minutes and

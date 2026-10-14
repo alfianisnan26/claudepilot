@@ -12,7 +12,7 @@ with "Retired by D-n" at the end of its text. Rows D-1 to D-4 are inherited from
 
 | Id | Decision | Date | Where |
 | --- | --- | --- | --- |
-| D-1 | One orchestrator chat runs the project's work as sub-agents (the Agent tool) in git worktrees, at most three at once. No separate track sessions. | {{DATE}} | `dev-sessions/README.md`, operating kit |
+| D-1 | One orchestrator chat runs the project's work as sub-agents (the Agent tool) in git worktrees, at most five at once (fewer when the quota projection is high). No separate track sessions. | {{DATE}} | `dev-sessions/README.md`, operating kit |
 | D-2 | The autonomy charter (`CHARTER.md`) binds every agent. The loop that improves agents may never touch safety rules, deny rules, authorization, the Bypass gates, the gates, the standards check's thresholds, the scoring or the charter's zero-tolerance list: a person changes those. | {{DATE}} | `CHARTER.md`, operating kit |
 | D-3 | Heavy work (full suites, typechecks, production builds, browsers, timing runs) runs as cluster Jobs (`scripts/job-run.sh`, `scripts/gate-job.sh`), not in the workspace. Until those exist, one heavy job at a time in the workspace through the shared lock (`flock /tmp/heavy.lock nice -n 10 <command>`). | {{DATE}} | `dev-sessions/README.md`, operating kit |
 | D-4 | Required escalations: production, uat, secrets and permissions, billing, legal, destructive data. Everything else is decided by the written default, recorded on its ticket, and closed. Production-only questions are one line on the owner's checklist, never a stream of questions. | {{DATE}} | `CHARTER.md`, operating kit |

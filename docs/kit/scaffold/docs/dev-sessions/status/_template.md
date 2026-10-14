@@ -6,7 +6,7 @@
 ## DONE
 - T-<n> <what, in a few words>: <commit>, gate <quick|full> <green|red> (<evidence link or log path>).
 
-## IN FLIGHT (at most three)
+## IN FLIGHT (at most five)
 - <label> (<model>): T-<n>, branch `ticket/T-<n>-<slug>`, worktree `<path>`. Left: <what>.
 
 ## DECISIONS
