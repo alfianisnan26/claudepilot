@@ -58,14 +58,17 @@ const isFlag = (w) => w.startsWith("-");
 /** Every word after the head is a measured flag or an operand (a path, a ref, a pattern) that is not a flag. */
 const only = (words, ok) => words.every((w) => !isFlag(w) || w === "--" || ok(w));
 
-/** The allowlist (T-306, evidence: docs/dev-sessions/overhaul/evidence/rtk-subset-2026-10-14.md). Each entry: class -> test on the words. */
+/** The allowlist (T-306, evidence: docs/dev-sessions/overhaul/evidence/rtk-subset-2026-10-14.md): the classes that kept 100 percent of
+ *  their facts AND got smaller, in the forms that got smaller. Kept but not here because rtk passes them through byte for byte (a rewrite
+ *  would only add rtk's start-up): git status -s/-sb, git log --oneline/--stat, git diff --stat/--name-only/--name-status, grep -c/rg --count.
+ *  Dropped on fidelity: ls (rtk shows 50 entries and hides the rest behind `rtk recall`, and drops node_modules), find (hides most paths),
+ *  grep -n/rg -n (cuts long lines and leaves out matches). Not scored: tree (not installed), npm ls (rtk does not rewrite it). */
 export const ALLOW = {
-  "git-status": (w) => w[0] === "git" && w[1] === "status" && only(w.slice(2), (f) => ["-s", "--short", "-b", "--branch", "-sb", "-bs"].includes(f)),
-  "git-log": (w) => w[0] === "git" && w[1] === "log" && only(w.slice(2), (f) => f === "--oneline" || f === "--stat" || /^-\d+$/.test(f) || /^--max-count=\d+$/.test(f)),
-  ls: (w) => w[0] === "ls" && only(w.slice(1), (f) => /^-[lah1AF]+$/.test(f)),
+  "git-status": (w) => w[0] === "git" && w[1] === "status" && only(w.slice(2), () => false),
+  "git-log": (w) => w[0] === "git" && w[1] === "log" && only(w.slice(2), (f) => /^-\d+$/.test(f) || /^--max-count=\d+$/.test(f)),
   "grep-list": (w) =>
-    (w[0] === "grep" && only(w.slice(1), (f) => /^-[rRiwFEsI]*l[rRiwFEsI]*$/.test(f) || /^--(include|exclude|exclude-dir)=[^\s]+$/.test(f)) && w.slice(1).some((f) => /^-[a-zA-Z]*l/.test(f))) ||
-    (w[0] === "rg" && only(w.slice(1), (f) => /^-[iFws]*l[iFws]*$/.test(f) || f === "--files-with-matches") && w.slice(1).some((f) => /^-[a-zA-Z]*l/.test(f) || f === "--files-with-matches")),
+    (w[0] === "grep" && only(w.slice(1), (f) => /^-[rRi]*l[rRi]*$/.test(f)) && w.slice(1).some((f) => /^-[rRi]*l/.test(f))) ||
+    (w[0] === "rg" && only(w.slice(1), (f) => /^-i?li?$/.test(f) || f === "--files-with-matches") && w.slice(1).some((f) => /^-i?l/.test(f) || f === "--files-with-matches")),
 };
 
 /** The decision for one command. { action: "rewrite", class, command } or { action: "skip", reason }. */

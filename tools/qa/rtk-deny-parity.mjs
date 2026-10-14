@@ -53,7 +53,7 @@ if (hookPath) {
   };
   // A probe that the stand-in works: an allowlisted command that no rule names must be rewritten, or the run proves nothing.
   const probe = runHook("git status");
-  const FRONT = ["git status", "git log --oneline -20", "ls -la", "grep -rl x", "rg -l x", "git diff --stat", "find .", "tree", "npm ls"];
+  const FRONT = ["git status", "git log -5", "git log --oneline -20", "ls -la", "grep -rl x", "rg -l x", "git diff --stat", "find .", "tree", "npm ls"];
   for (const p of bash) {
     const base = sample(p);
     const cmds = [base];

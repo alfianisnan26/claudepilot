@@ -83,8 +83,9 @@ git reset -q --soft HEAD~10 2>/dev/null; git reset -q; git checkout -q -- . ; rm
 
 # --- fidelity per case, then per class (a class passes when EVERY scored case of it is >= 95 percent) ---
 printf 'case\tclass\titems\tmissing\tparity\n' > "$out/fidelity.tsv"
-tail -n +2 "$out/cases.tsv" | while IFS=$'\t' read -r name class _ _ rc _ er _ _; do
+tail -n +2 "$out/cases.tsv" | while IFS=$'\t' read -r name class _ _ rc ep er _ _; do
   [ "$rc" = - ] && { printf '%s\t%s\t-\t-\tnot rewritten\n' "$name" "$class" >> "$out/fidelity.tsv"; continue; }
+  [ "$ep" = 127 ] && { printf '%s\t%s\t-\t-\tnot installed\n' "$name" "$class" >> "$out/fidelity.tsv"; continue; }
   j=$(node tools/qa/rtk-fidelity.mjs "$out/$name.plain.txt" "$out/$name.rtk.txt" --class "$class" --json 2>"$out/$name.fid.err")
   printf '%s\n' "$j" > "$out/$name.fid.json"
   node -e 'const j=JSON.parse(process.argv[1]);process.stdout.write([process.argv[2],process.argv[3],j.items,j.missing_items,j.parity_percent].join("\t")+"\n")' "$j" "$name" "$class" >> "$out/fidelity.tsv" 2>>"$out/$name.fid.err" || printf '%s\t%s\t-\t-\terror\n' "$name" "$class" >> "$out/fidelity.tsv"

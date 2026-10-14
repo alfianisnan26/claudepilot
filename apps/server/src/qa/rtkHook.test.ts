@@ -21,10 +21,10 @@ const decide = (cmd: string, deny: string[] = repoDeny, rtkOnPath = true): Decis
 
 test('allowlisted read-only commands are rewritten to their rtk form', () => {
   for (const [cmd, cls] of <[string, string][]>[
-    ['git status', 'git-status'], ['git status -sb', 'git-status'], ['git status --short --branch', 'git-status'],
-    ['git log --oneline -20', 'git-log'], ['git log -5', 'git-log'], ['git log --stat -3 main', 'git-log'],
-    ['ls', 'ls'], ['ls -la', 'ls'], ['ls -la apps/server/src/chat', 'ls'], ['ls -lh docs/prd', 'ls'],
+    ['git status', 'git-status'], ['git status apps/server', 'git-status'],
+    ['git log -5', 'git-log'], ['git log -20 main', 'git-log'], ['git log --max-count=3', 'git-log'],
     ['grep -rl actorOf apps/server/src', 'grep-list'], ["grep -rli 'sameHost' apps", 'grep-list'], ['rg -l actorOf apps/server/src', 'grep-list'],
+    ['rg --files-with-matches actorOf docs', 'grep-list'],
   ]) {
     const d = decide(cmd);
     assert.equal(d.action, 'rewrite', `${cmd}: ${d.reason}`);
@@ -40,6 +40,9 @@ test('test runners, builds, typecheck, kubectl, cat/sed, writes and unmeasured f
     'git diff', 'git diff HEAD~1', 'git log -p', 'git log --format=%H', 'git status --porcelain', 'git -C x status', 'ls -R', 'ls -la --color=always',
     'grep -rn actorOf apps', 'grep actorOf x', 'rg -n actorOf apps', 'find . -name x', 'find . -delete', 'tree -L 2', 'npm ls', 'rtk git status',
     'FOO=1 git status', '/usr/bin/ls -la',
+    // Dropped on fidelity (ls, find, grep -n) or passed through byte for byte by rtk (no saving): never rewritten.
+    'ls', 'ls -la', 'ls -la apps/server/src/chat', 'git status -sb', 'git status -s', 'git log --oneline -20', 'git log --stat -3', 'git diff --stat',
+    'git diff --name-only HEAD~1', 'grep -rc actorOf apps', 'rg --count actorOf apps', 'grep -rlw x apps', 'grep -rl --include=*.ts x apps',
   ]) assert.equal(decide(cmd).action, 'skip', cmd);
 });
 
@@ -53,15 +56,16 @@ test('compound commands, pipes, subshells, redirects and expansions stay untouch
 test('a command a deny rule names is untouched, read from the rules given (no mirrored copy)', () => {
   assert.equal(decide('git status', ['git status:*']).action, 'skip');
   assert.equal(decide('git status', ['git status:*']).reason, 'matches a deny rule');
-  assert.equal(decide('ls -la', ['ls -la']).action, 'skip');
-  assert.equal(decide('ls -la docs', ['ls * docs']).action, 'skip');
-  assert.equal(decide('ls -la', ['*']).action, 'skip');
-  assert.equal(decide('ls  -la', ['ls -la']).action, 'skip', 'collapsed spaces still match');
-  assert.equal(decide('ls -la', ['rtk ls:*']).reason, 'the rewritten form matches a deny rule');
+  assert.equal(decide('git log -5', ['git log -5']).reason, 'matches a deny rule');
+  assert.equal(decide('git log -5 main', ['git log * main']).reason, 'matches a deny rule');
+  assert.equal(decide('git status', ['*']).reason, 'matches a deny rule');
+  assert.equal(decide('git  log  -5', ['git log -5']).reason, 'matches a deny rule', 'collapsed spaces still match');
+  assert.equal(decide('git status', ['rtk git:*']).reason, 'the rewritten form matches a deny rule');
   // The repository's own wildcard rule: an allowlisted command aimed at another process's environment.
-  assert.equal(decide('ls -la /proc/1/environ').action, 'skip');
+  assert.equal(decide('git status /proc/1/environ').reason, 'matches a deny rule');
   assert.equal(decide('grep -rl x /proc/1/environ').reason, 'matches a deny rule');
-  assert.equal(decide('ls -la', []).action, 'rewrite');
+  assert.equal(decide('git log -5', []).action, 'rewrite');
+  assert.equal(decide('git status /proc/1/status').action, 'rewrite', 'the wildcard rule only catches what it names');
 });
 
 test('no rtk on PATH, no rewrite', () => {
