@@ -12,15 +12,20 @@ import { MoveChat, at, chatSession, fakeClock, fakeUsage, settingsMap, usage, wi
 
 const AUTO = { [K.enabled]: true, [K.automatic]: true };
 
-async function rig(opts: { settings?: Record<string, unknown>; used: Record<string, number>; session?: Parameters<typeof chatSession>[1] }) {
+async function rig(opts: { settings?: Record<string, unknown>; used: Record<string, number>; session?: Parameters<typeof chatSession>[1]; resetJitterMs?: number[] }) {
   const { store } = await freshStore();
   const clock = fakeClock();
   const chat = new MoveChat();
   chat.sessions.set('s1', chatSession('s1', opts.session));
   const used = { ...opts.used };
   const names: Record<string, string> = { work: 'Work', home: 'Home', spare: 'Spare' };
+  // `resetJitterMs`: each tick (3 minutes on the clock) reads the reset time moved by the next offset, as the live probe does (T-280).
+  const reset = () => {
+    const j = opts.resetJitterMs;
+    return j?.length ? new Date(Date.parse(at(180)) + j[Math.floor((clock.now() - Date.parse(at(0))) / 180_000) % j.length]!).toISOString() : at(180);
+  };
   const claudes = (): ClaudeUsage[] =>
-    Object.entries(used).map(([id, pct]) => ({ ...usage(id, names[id]!, [win('session', pct)]), checkedAt: new Date(clock.now() - 60_000).toISOString() }));
+    Object.entries(used).map(([id, pct]) => ({ ...usage(id, names[id]!, [win('session', pct, reset())]), checkedAt: new Date(clock.now() - 60_000).toISOString() }));
   const u = fakeUsage(claudes);
   const owner = fakeOwner({}, { fallback: 'u_a' });
   const auto = new AutoStore(store, () => new Date(clock.now()));
@@ -158,6 +163,15 @@ test('R4: a long turn with a sub-agent running crosses the threshold: told once 
   assert.equal(r.chat.sent.length, 2);
   assert.match(r.chat.sent[1]!.text, /^Moved to Home by the portal \(as announced\)\. Continue where you stopped, and start again the sub-agents and roles the move interrupted\.$/);
   assert.ok(r.kinds().includes('steered') && r.kinds().at(-1) === 'continued');
+  r.engine.stop();
+});
+
+test('T-280: the reset time the probe reports jitters by milliseconds between readings (.000, .119, .267): the working chat is steered once, not on every reading', async () => {
+  const r = await rig({ used: { work: 92, home: 50 }, session: { state: 'working' }, resetJitterMs: [0, 119, 0, 267, 0, 472] });
+  for (let i = 0; i < 6; i++) await r.tick();
+  assert.equal(r.chat.moves.length, 0, 'never mid-turn');
+  assert.equal(r.chat.sent.length, 1, 'one steer per window period');
+  assert.equal(r.kinds().filter((k) => k === 'steered').length, 1);
   r.engine.stop();
 });
 

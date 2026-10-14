@@ -17,7 +17,7 @@ import {
   type WindowPace,
 } from '@portal/contracts';
 import { recommendMove } from '../claudeusage/recommend.js';
-import { decide, effectiveMode, leftFor, modelFamily, sourceReading, type DecideInput } from './decide.js';
+import { decide, effectiveMode, leftFor, modelFamily, sourceReading, windowPeriod, type DecideInput } from './decide.js';
 
 const NOW = Date.parse('2026-10-12T12:00:00.000Z');
 const min = (n: number) => new Date(NOW + n * 60_000).toISOString();
@@ -215,6 +215,33 @@ test('S9: Home read 20 minutes ago is excluded; with no other candidate: a no_de
   const d = decide(input([WORK_92(), claude('home', 'Home', [win('session', 60)], { checkedAt: min(-20) })]));
   assert.deepEqual([d.act, d.act === 'warn' && d.code], ['warn', 'no_destination']);
   if (d.act === 'warn') assert.equal(d.period, `work|session|${RESET}`);
+});
+
+test('T-280: one window is one period: reset times that jitter by milliseconds between probes (.119, .267, 0.3 s early) give one steer period', () => {
+  // The live probe read 06:00:00.000Z, .119Z and .267Z for one window: each was a new period, and the chat was steered five times.
+  const jitter = (ms: number) => new Date(Date.parse(RESET) + ms).toISOString();
+  const working = { session: { ...input([]).session, state: 'working' as const } };
+  const periods = [0, 119, 267, 999, -300].map((ms) => {
+    const d = decide(input([claude('work', 'Work', [win('session', 92, { resetsAt: jitter(ms) }), win('week', 30)]), HOME_60()], working));
+    assert.equal(d.act, 'wait', `a running turn waits (and is steered) at ${ms} ms`);
+    return d.act === 'wait' ? d.period : null;
+  });
+  assert.deepEqual(new Set(periods), new Set([`work|session|${RESET}`]), 'one period for the window, so one steer');
+  // The next window (5 hours on) is a new period; another Claude or another window is too.
+  assert.notEqual(windowPeriod('work', { key: 'session', resetsAt: min(180 + 300) }), periods[0]);
+  assert.notEqual(windowPeriod('home', { key: 'session', resetsAt: RESET }), periods[0]);
+  assert.notEqual(windowPeriod('work', { key: 'week', resetsAt: RESET }), periods[0]);
+  // No reset time: the window alone, as before.
+  assert.equal(windowPeriod('work', { key: 'session', resetsAt: null }), 'work|session|');
+});
+
+test('T-280: a change of reason alone (projection, then low) in one window keeps the period: no second steer', () => {
+  const working = { session: { ...input([]).session, state: 'working' as const } };
+  const projection = decide(input([claude('work', 'Work', [win('session', 85, { pace: pace(), resetsAt: new Date(Date.parse(RESET) + 119).toISOString() })]), HOME_60()], working));
+  const low = decide(input([claude('work', 'Work', [win('session', 92, { resetsAt: new Date(Date.parse(RESET) + 267).toISOString() })]), HOME_60()], working));
+  assert.equal(projection.act === 'wait' && projection.reason, 'projection');
+  assert.equal(low.act === 'wait' && low.reason, 'low');
+  assert.equal(projection.act === 'wait' && projection.period, low.act === 'wait' && low.period);
 });
 
 test('S10: Home already carries 2 sessions (max 2): Spare (30 % left... 70 % used) is chosen; both full: destination_busy', () => {

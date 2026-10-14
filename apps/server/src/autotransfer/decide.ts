@@ -349,6 +349,18 @@ export function candidates(
   return { eligible, alternatives, full: full && !eligible.length };
 }
 
+/**
+ * The source window period (§9, FR10, FR10a, FR6b): the Claude, the window and its reset ROUNDED TO THE MINUTE. The probe's reset time
+ * jitters by milliseconds between readings of one window (06:00:00.000Z, .119Z, .267Z live, T-280), and with the raw value every probe
+ * was a new period: the chat was steered (and warned) again. A minute matches the usage module's own "same period" tolerance
+ * (`SAME_PERIOD_MS`). The reason (`low`, `projection`) is not part of it: one steer per window, whatever the reason.
+ */
+export function windowPeriod(claudeId: string, window: Pick<ClaudeUsageWindow, 'key' | 'resetsAt'>): string {
+  const t = window.resetsAt ? Date.parse(window.resetsAt) : NaN;
+  const reset = Number.isFinite(t) ? new Date(Math.round(t / MIN) * MIN).toISOString() : (window.resetsAt ?? '');
+  return `${claudeId}|${window.key}|${reset}`;
+}
+
 /** The decision, in the order of §9: each step stops the evaluation with its code. */
 export function decide(input: DecideInput): Decision {
   const { session, settings, nowMs, counters } = input;
@@ -377,7 +389,7 @@ export function decide(input: DecideInput): Decision {
     if (counters.movesOwner24h >= settings.maxPerDay) return { act: 'none', code: 'day_cap', reading };
   }
   // 7. A destination.
-  const period = `${session.claudeId}|${reading.window.key}|${reading.window.resetsAt ?? ''}`;
+  const period = windowPeriod(session.claudeId, reading.window);
   // A chat in Bypass (unless the platform allows moving those: `allowBypass`, the owner's ask of 2026-10-13; the move keeps Bypass),
   // or one whose automatic moves failed twice today, only ever gets a card: rank it as `ask` would.
   const bypass = session.mode === 'bypassPermissions' && !settings.allowBypass;
