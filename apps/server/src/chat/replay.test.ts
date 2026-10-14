@@ -77,3 +77,22 @@ test('T-265: an integrity ending is logged with its reason, the session, the lin
     await s.done();
   }
 });
+
+test('T-265: a replaced follower exiting late never restarts the current one', async () => {
+  const s = await liveSession();
+  try {
+    const stale = s.tail;
+    stale.exit(0);
+    await until(() => s.ws.tails.length === 2);
+    // The fake never exits on close(); a real exec does, after the replacement opened: that exit is the stale one's.
+    stale.exited = false;
+    stale.exit(0);
+    await sleep(1_300);
+    assert.equal(s.ws.tails.length, 2, 'the current follower stays');
+    const l1 = said('still', 'u-still');
+    s.ws.tails[1]!.push(l1);
+    await until(() => s.controller.history(s.id).some((e) => e.text === 'still'));
+  } finally {
+    await s.done();
+  }
+});

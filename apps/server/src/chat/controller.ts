@@ -2877,7 +2877,8 @@ export class ChatController {
   }
 
   #onTailExit(reader: Reader, exec: ExecSession, code: number | null): void {
-    if (reader.exec && reader.exec !== exec) return; // a follower this reader already replaced: the current one decides
+    // A follower this reader already replaced (or is replacing: one is opening): the current one decides.
+    if (reader.connecting || (reader.exec && reader.exec !== exec)) return;
     reader.exec = undefined;
     if (reader.stopped) return;
     if (code === TAIL_PAST_END) this.#healCursor(reader);
