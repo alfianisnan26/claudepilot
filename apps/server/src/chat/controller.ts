@@ -126,6 +126,8 @@ const RETAIL_MS = 1_000;
 const MAX_IMMEDIATE_RETRIES = 5;
 /** A `tail` that ran at least this long counts as healthy (it hit its 600 s limit), so retries reset. */
 const HEALTHY_TAIL_MS = 5_000;
+/** `cp-session tail`'s exit when the cursor is past the segment's end (it prints the size; T-265): the cursor heals to the size. */
+const TAIL_PAST_END = 6;
 
 /** How long a control request waits for Claude Code's `control_response`. */
 const CONTROL_TIMEOUT_MS = 15_000;
@@ -194,6 +196,8 @@ interface Reader {
   parked?: boolean;
   /** A `tail` exec is being opened (so a second one never is). */
   connecting?: boolean;
+  /** A dropped `tail` is being checked (its process's status) before it is re-followed: no other follower opens meanwhile (T-265). */
+  checking?: boolean;
 }
 
 /** A control request waiting for its `control_response` (Claude Code's success or error reply). */
@@ -2791,7 +2795,7 @@ export class ChatController {
   #ensureReader(sessionId: string): void {
     let reader = this.#readers.get(sessionId);
     if (reader) {
-      if (reader.exec || reader.connecting || reader.timer || reader.stopped) return; // already following, opening, scheduled, or stopped
+      if (reader.exec || reader.connecting || reader.checking || reader.timer || reader.stopped) return; // already following, opening, checking, scheduled, or stopped
     } else {
       reader = { sessionId, partial: [], offset: 0, ready: this.#chat.hasReady(sessionId), stopped: false, retries: 0, tailStart: 0 };
       this.#readers.set(sessionId, reader);
@@ -2806,6 +2810,13 @@ export class ChatController {
     reader.offset = row.byte_offset;
     reader.partial = [];
     reader.tailStart = Date.now();
+    // One follower per reader (T-265): two counted every byte twice, pushed the cursor past the segment's end, and GNU tail then replayed
+    // the file from byte 0 at the next write (the session ended on its first line, read again).
+    const replaced = reader.exec;
+    if (replaced) {
+      reader.exec = undefined;
+      replaced.close();
+    }
     let exec: ExecSession;
     reader.connecting = true;
     try {
@@ -2820,7 +2831,7 @@ export class ChatController {
     if (reader.stopped) return void exec.close();
     reader.exec = exec;
     exec.onData((b) => this.#onBytes(reader, b));
-    exec.onExit(() => this.#onTailExit(reader));
+    exec.onExit((code) => this.#onTailExit(reader, exec, code));
   }
 
   #onBytes(reader: Reader, chunk: Buffer): void {
@@ -2857,18 +2868,41 @@ export class ChatController {
     if (unsaved) this.#chat.patchSession(reader.sessionId, { byteOffset: reader.offset });
   }
 
-  #onTailExit(reader: Reader): void {
+  #onTailExit(reader: Reader, exec: ExecSession, code: number | null): void {
+    if (reader.exec && reader.exec !== exec) return; // a follower this reader already replaced: the current one decides
     reader.exec = undefined;
     if (reader.stopped) return;
+    if (code === TAIL_PAST_END) this.#healCursor(reader);
     if (Date.now() - reader.tailStart >= HEALTHY_TAIL_MS) reader.retries = 0; // hit its 600 s limit: normal renewal
     void this.#checkAndRetail(reader);
   }
 
-  /** On a dropped `tail`: if the process is gone, mark the session interrupted; otherwise re-follow. */
+  /**
+   * The host refused to follow from a cursor past the segment's end and printed the size (T-265). Everything up to the size was read
+   * (the cursor only runs ahead when bytes were counted twice), so the cursor becomes the size; the log keeps both numbers, since a
+   * cursor past the end is the symptom of a reader that counted something not in the file.
+   */
+  #healCursor(reader: Reader): void {
+    const size = Number.parseInt(Buffer.concat(reader.partial).toString('utf8').trim(), 10);
+    reader.partial = [];
+    if (!Number.isInteger(size) || size < 0) return;
+    const row = this.#chat.row(reader.sessionId);
+    if (!row || row.state === 'ended') return;
+    console.warn(`[chat] ${shortId(reader.sessionId)}: cursor ${row.byte_offset} past the end of segment ${row.segment} (${size} bytes); following from ${size}`);
+    this.#chat.patchSession(reader.sessionId, { byteOffset: size });
+  }
+
+  /** On a dropped `tail`: if the process is gone, mark the session interrupted; otherwise re-follow. Nobody else opens a follower meanwhile. */
   async #checkAndRetail(reader: Reader): Promise<void> {
     const row = this.#chat.row(reader.sessionId);
     if (!row || row.state === 'ended' || reader.stopped) return;
-    const status = await this.#status(row.workspace_id, claudeSessionOf(row));
+    reader.checking = true;
+    let status: 'live' | 'gone' | 'unknown';
+    try {
+      status = await this.#status(row.workspace_id, claudeSessionOf(row));
+    } finally {
+      reader.checking = false;
+    }
     if (reader.stopped || this.#readers.get(reader.sessionId) !== reader) return; // replaced meanwhile
     if (status === 'gone') return this.#markGone(reader.sessionId);
     this.#scheduleRetail(reader); // live, or unreachable (which runs out of retries if it stays so)
