@@ -6,6 +6,7 @@ import { Link, Outlet, useLocation } from 'react-router';
 import { BAR_ITEMS, HOME, MORE_ITEMS, NAV, NAV_GROUPS, type NavItem } from '@/app/nav';
 import { GlanceDock } from '@/features/glance/Dock';
 import { NavBadge } from '@/features/notify/NavBadge';
+import { AttentionBadge, AttentionRoot } from '@/features/attention/Root';
 import { GlanceStrip, useHasStrip } from '@/features/glance/Strip';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -65,6 +66,7 @@ export function AppShell() {
 
       {showTabBar && <TabBar pathname={pathname} />}
       <GlanceDock />
+      <AttentionRoot />
     </div>
   );
 }
@@ -104,6 +106,7 @@ function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => voi
                       <Icon className="size-5 shrink-0" strokeWidth={active ? 2.4 : 2} />
                       <span className="hidden max-w-full truncate lg:inline">{label}</span>
                       {id === 'notifications' && <NavBadge />}
+                      {id === 'attention' && <AttentionBadge />}
                     </Link>
                   </li>
                 );
@@ -162,7 +165,11 @@ function TabBar({ pathname }: { pathname: string }) {
                 onClick={() => setMore(true)}
                 className={cn('press flex h-[58px] w-full items-center justify-center', inMore || more ? 'text-ink' : 'text-muted')}
               >
-                <TabIcon active={inMore || more} icon={Ellipsis} />
+                <span className="relative">
+                  <TabIcon active={inMore || more} icon={Ellipsis} />
+                  {/* Needs you sits in More on a phone: its number shows on the More button too. */}
+                  {MORE_ITEMS.some((i) => i.id === 'attention') && <AttentionBadge className="!top-0 !left-auto right-1" />}
+                </span>
               </button>
             </li>
           )}
@@ -225,6 +232,7 @@ function MoreList({ pathname, onPick }: { pathname: string; onPick: () => void }
                   <Icon className="size-5 shrink-0" strokeWidth={active ? 2.4 : 2} />
                   {label}
                   {id === 'notifications' && <NavBadge inline />}
+                  {id === 'attention' && <AttentionBadge inline />}
                 </Link>
               </li>
             );

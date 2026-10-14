@@ -77,7 +77,7 @@ export class LiveHub {
       setTimeout(() => {
         this.#coalesce.delete(topic);
         if (topic === 'workspaces') void this.#refreshWorkspaces();
-        else if (topic === 'accounts' || topic === 'system' || topic === 'pools' || topic === 'tickets' || topic === 'ci' || topic === 'claudeusage' || topic === 'repos' || topic === 'glance' || topic === 'claudeversion' || topic === 'notify' || topic === 'triggers' || topic === 'autotransfer' || topic === 'connect') this.#send(topic, JSON.stringify({ type: topic } satisfies LiveMessage));
+        else if (topic === 'accounts' || topic === 'system' || topic === 'pools' || topic === 'tickets' || topic === 'ci' || topic === 'claudeusage' || topic === 'repos' || topic === 'glance' || topic === 'claudeversion' || topic === 'notify' || topic === 'triggers' || topic === 'autotransfer' || topic === 'connect' || topic === 'attention') this.#send(topic, JSON.stringify({ type: topic } satisfies LiveMessage));
       }, COALESCE_MS).unref(),
     );
   }

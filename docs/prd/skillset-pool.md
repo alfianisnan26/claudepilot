@@ -543,3 +543,5 @@ adopted in its §13.
 | Q13 | 🔬 Under the Strict preset: do skill-frontmatter hooks of a force-enabled plugin run under `allowManagedHooksOnly`, and are marketplace plugin skills' `allowed-tools` ignored under `allowManagedPermissionRulesOnly`? FR18 strips them either way. | Sandbox test |
 | Q14 | 🔬 Fallback: is the managed skills folder watched live, and does a plugin folder in it load as `<prefix>@skills-dir`? | Sandbox test |
 | Q15 | 🔬 For a typed `/<prefix>:<name>`, what is `command_name` in `UserPromptExpansion`, does `PostToolUse` (matcher `Skill`) also fire, and which Skill tool input field holds the skill name apart from its arguments? | Sandbox test |
+
+**Needs you (T-146):** every skill version with no decision yet (uploads and agent proposals) is listed on Needs you ([attention.md](attention.md) §2, `skills/attention.ts`) with its scan result; the link opens its review page.

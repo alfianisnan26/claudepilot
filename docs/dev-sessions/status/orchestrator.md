@@ -8,6 +8,7 @@ Owner-approved rules (evaluation 2026-10-14, coordinator 02:3x):
 Models (coordinator 02:2x, evaluation 2026-10-14): ALWAYS passed explicitly; sonnet for verification, harness, sweep and scribe slices; opus for implementers and security or migration reviews; fable only for a diagnosis nobody cracked. WIP limit FIVE sub-agents at once (D-43, owner 2026-10-14; was three); still one scratch portal and one Chromium per sub-agent, 3 Jobs cluster-wide and 2 per chat; five agents burn quota about 65 percent faster, D-39 moves by pace. Heavy work through scripts/job-run.sh and gate-job.sh. The orchestrator hands off at about 200k context (status file, fresh continuation).
 
 ## LIVE
+- DEPLOY RUN 21 (rmv7jl4pgf85f61, 04:5x UTC, fa77c6e, gate=true): the T-277 layer 1 hotfix + T-270 layers 2-3, T-95 item 4, T-146 slice 1. Protection off: releases by itself. After it: verify (image tag, /healthz, chats survive the restart with bypass.left markers instead of endings), then merge T-136 slice 2 and T-100 (own gates), then T-255, verifier pass 2 (sonnet).
 - Portal 2026.10.14-1 LIVE (run 20 rmv7i90f2ed3287, 36d127d + tags 0bf00ba; gate 481 s green, build 116 s, release 8 s with approval `auto` (protection off); Argo Synced/Healthy at 0bf00ba; /healthz ok 03:2x; the pod's chats survived the restart).
   Contains: T-102, T-110 slice 1 (dry mode), T-256, T-159, T-265, T-258 (BREAKS the coordinator's token helper: see NEEDS A HUMAN), T-270 slice 1 (ticket_adopt is on the MCP), T-259 slice 1 (keep-going policy; off for every chat until a person sets it), T-105/T-109 (auto move proven, D-39), migrations 755, 760, 761, 780, 790, 791.
   To verify (verifier pass 2, the next free slot): the tickets above in in_review.
@@ -23,13 +24,10 @@ Models (coordinator 02:2x, evaluation 2026-10-14): ALWAYS passed explicitly; son
 
 ## HANDOFF NOTE (03:3x): this session's context is 412k, above the 200k guideline. The state is in this file; a fresh continuation picks up at NEXT 0. Local integration (e6a383d = origin/integration + the T-270 layers 2-3 merge 1d893f5 under gate Job + status commits) is NOT pushed until that gate is green; if the gate is lost, re-run `scripts/gate-job.sh 1d893f5`, then push origin and pilot.
 
-## MOVE (03:5x): the portal moves this chat hasyim -> fadlilah at the end of this turn (30 % left). Every sub-agent below is INTERRUPTED by the move: each pushed its branch at every step; restart each one after the move with "continue from your branch <branch> in your worktree; read your own last commits and the ticket's last comment first", same model.
-- t277 (opus) T-277 layer 1: dev-track-a-connect, dev/t277-mode-downgrade. FIRST after the move; then the opus security reviewer; gate; merge; /deploy gate=true.
-- t255 (opus) T-255: dev-automove-model, dev/t255-unknown-usage.
-- t146 (opus) T-146 slice 1: dev-t107-job-run, dev/t146-attention.
-- t136-2 (opus) T-136 slice 2: dev-track-c-ui, dev/t136-recover.
-- t100 (sonnet) T-100 finish: dev-automove-web, dev/t100-sessions-list.
-- Orchestrator: local HEAD = e6a383d (on integration) + the T-95 merge (gate Job running on it, log /tmp/gate-job-<sha>.out; pushed as wip/orch-<sha>); when green push origin and pilot. T-270 layers 2-3 are on integration (e6a383d).
+## MOVE (04:5x): the portal moves this chat hasyim -> fadlilah at the end of this turn (15 % left). State per role:
+- t255 (opus) T-255: dev-automove-model, dev/t255-unknown-usage: INTERRUPTED by the move; restart it with "continue from your branch in your worktree; read your last commits and T-255's last comment first" (same brief, same model).
+- t277, reviewer, t146, t136-2, t100, t95, t270b: DONE (see IN FLIGHT).
+- Orchestrator: local HEAD d3ebccc = integration 04ff998 (pushed) + the T-277 hotfix merge a2900d4 + status. The gate Job on a2900d4 was running (claudepilot-gate-a2900d4-*, log /tmp/gate-job-a2900d4.out; pushed as wip/orch-a2900d4). FIRST after the move: if the verdict line is missing, `kubectl -n isnan-claudepilot get jobs | grep a2900d4` and read the pod's log, or re-run `scripts/gate-job.sh a2900d4`; when green: `git push origin HEAD:integration && git push pilot HEAD:integration`, then ci_run_trigger (repo claudepilot, pipeline deploy, ref integration, images=portal, gate=true, deploy=true, dry_run=false) and a comment on T-277 with the run link. Then merge T-136 slice 2 (dev/t136-recover 641bf05) and T-100 (dev/t100-sessions-list 1d6b060), gate, push; T-255 when it returns; verifier pass 2 (sonnet).
 
 ## IN FLIGHT (03:3x: six slices: five plus the owner's urgent hotfix, on the record)
 - DONE t265 (fable): root cause proven (GNU tail past the end replays the file; a doubled follower pushed the cursor past the end), fixed and merged (74e1f22, gate green 43/26/318 s, pushed). T-265 in_review; T-268 filed (orphaned tails).
