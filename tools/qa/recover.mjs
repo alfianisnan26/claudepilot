@@ -97,7 +97,9 @@ await send('Network.enable');
 await send('Network.setCookie', { name: 'portal_session', value: cookie, domain: 'localhost', path: '/' });
 
 const BUTTONS = `[...document.querySelectorAll('button[aria-label="Resume"]')].map((b) => { const r = b.getBoundingClientRect(); const s = getComputedStyle(b); return { w: r.width, h: r.height, x: r.x, r: r.right, text: b.innerText.trim(), visible: r.width > 0 && s.visibility !== 'hidden', row: b.closest('li')?.innerText.split('\\n')[0] ?? null }; })`;
-const SIDEWAYS = `document.scrollingElement.scrollWidth > innerWidth + 1`;
+// A phone in device emulation widens its layout viewport to fit what overflows (innerWidth grows with it): so the layout width is
+// checked against the screen too, not only scrollWidth against innerWidth (T-288: a chip row's sr-only labels made it 434 on 390).
+const SIDEWAYS = (w) => `document.scrollingElement.scrollWidth > innerWidth + 1 || innerWidth > ${w} + 1`;
 let script = null;
 const results = [];
 const fail = (cfg, what) => results.push(`${cfg.name}: ${what}`);
@@ -125,7 +127,7 @@ for (const cfg of SIZES) {
     if (cfg.mobile ? x.text !== '' : x.text !== 'Resume') fail(cfg, `list: Resume label "${x.text}"`);
     if (x.r > cfg.w + 1) fail(cfg, 'list: Resume past the edge');
   }
-  if (await ev(SIDEWAYS)) fail(cfg, 'list scrolls sideways');
+  if (await ev(SIDEWAYS(cfg.w))) fail(cfg, 'list scrolls sideways');
   await shot(`${cfg.name}-list`);
   // A suspicious one asks first.
   await ev(`[...document.querySelectorAll('li')].find((l) => l.innerText.includes('Konfersi: migration'))?.querySelector('button[aria-label="Resume"]')?.click()`);
@@ -158,7 +160,7 @@ for (const cfg of SIZES) {
     if (x.r > cfg.w + 1 || x.x < 0) fail(cfg, 'page: Resume outside the screen');
   }
   if (!(await ev(`document.body.innerText.includes('Ended for integrity')`))) fail(cfg, 'page: no "Ended for integrity"');
-  if (await ev(SIDEWAYS)) fail(cfg, 'page scrolls sideways');
+  if (await ev(SIDEWAYS(cfg.w))) fail(cfg, 'page scrolls sideways');
   await shot(`${cfg.name}-page`);
 }
 
