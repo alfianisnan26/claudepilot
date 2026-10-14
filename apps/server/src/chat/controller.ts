@@ -198,6 +198,10 @@ interface Reader {
   connecting?: boolean;
   /** A dropped `tail` is being checked (its process's status) before it is re-followed: no other follower opens meanwhile (T-265). */
   checking?: boolean;
+  /** The segment being followed. */
+  segment?: number;
+  /** The line being handled right now (where it starts and what kind it is), for the log of an ending; never its content. */
+  at?: { start: number; segment: number; kind?: string };
 }
 
 /** A control request waiting for its `control_response` (Claude Code's success or error reply). */
@@ -2808,6 +2812,7 @@ export class ChatController {
     const row = this.#chat.row(reader.sessionId);
     if (!row || row.state === 'ended') return;
     reader.offset = row.byte_offset;
+    reader.segment = row.segment;
     reader.partial = [];
     reader.tailStart = Date.now();
     // One follower per reader (T-265): two counted every byte twice, pushed the cursor past the segment's end, and GNU tail then replayed
@@ -2848,6 +2853,7 @@ export class ChatController {
       reader.retries = 0; // progress: the follow is healthy
       const offset = reader.offset;
       unsaved = true;
+      reader.at = { start: offset - lineBuf.length, segment: reader.segment ?? 0 };
       try {
         // The line's effects and its byte offset commit together, so a restart never applies it twice.
         this.#chat.transaction(
@@ -2860,6 +2866,8 @@ export class ChatController {
       } catch (e) {
         // One line the store couldn't take: skip it rather than stall the session.
         console.error(`[chat] skipped a line of session ${reader.sessionId}: ${this.#message(e)}`);
+      } finally {
+        reader.at = undefined;
       }
     }
     if (reader.stopped) return;
@@ -2967,6 +2975,7 @@ export class ChatController {
     if (!raw.trim()) return;
     const sessionId = reader.sessionId;
     const parsed = parseLine(raw);
+    if (reader.at) reader.at.kind = parsed.kind;
 
     // Integrity (PRD §10.4): the stream may show only what this portal started.
     // The stream reports Claude Code's own session id, which changes only when the portal moves the chat to
@@ -3374,6 +3383,9 @@ export class ChatController {
 
   /** Integrity failure (§10.4): end the session at once and SIGTERM the process. */
   #endIntegrity(sessionId: string, why: string): void {
+    // The log says where it happened (the line's kind and byte position), never what the line held (T-265).
+    const at = this.#readers.get(sessionId)?.at;
+    console.warn(`[chat] ${shortId(sessionId)}: ended for integrity: ${why}${at ? ` (line ${at.kind ?? 'unparsed'} at byte ${at.start} of segment ${at.segment})` : ''}`);
     this.#endForSafety(sessionId, 'The session ended for integrity.', `Integrity check failed: ${why}`, `${CHAT_ENDED_INTEGRITY}${why}`);
   }
 
