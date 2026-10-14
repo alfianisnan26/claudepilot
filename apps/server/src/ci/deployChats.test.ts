@@ -55,12 +55,10 @@ test('the watch says it when a deploying job is first seen running, again only w
   assert.equal(lines.length, 3, 'a job seen running again (a new portal after the restart) is said once more');
   w.forget('r1');
 
-  const broken = new DeployChatsWatch(
-    () => {
-      throw new Error('no database');
-    },
-    (l) => lines.push(l),
-  );
+  const fails = (): CiAttachedChat[] => {
+    throw new Error('no database');
+  };
+  const broken = new DeployChatsWatch(fails, (l: string) => void lines.push(l));
   broken.observe('r2', deps, [{ id: 'release', status: 'running' }]);
   broken.observe('r2', deps, [{ id: 'release', status: 'running' }]);
   assert.deepEqual(lines.slice(3), ['[deploy-chats] run=r2 job=release unavailable: no_database'], 'a failure is one line, never a throw');
