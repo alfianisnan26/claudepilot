@@ -1,5 +1,5 @@
 import { Button, cn, LoadError, useToast } from '@isnanme/ui';
-import { isCiActive, type CiDeployment, type CiDiagnostic, type CiJob, type CiRun } from '@portal/contracts';
+import { isCiActive, type CiDeployment, type CiDiagnostic, type CiJob, type CiRun, type CiRunFlaky } from '@portal/contracts';
 import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Hand, RotateCw, Square } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
@@ -231,6 +231,7 @@ export function RunPage() {
                 <span className="text-[12.5px] text-muted tabular-nums">{formatDuration(j.durationMs ?? (j.status === 'running' ? elapsed(j.startedAt, now) : null))}</span>
                 {isOpen ? <ChevronDown className="size-4 shrink-0 text-muted" aria-hidden="true" /> : <ChevronRight className="size-4 shrink-0 text-muted" aria-hidden="true" />}
               </button>
+              <FlakyLine flaky={(run.flaky ?? []).find((f) => f.job === j.id)} />
               {isOpen && (
                 <ul className="border-t border-line px-2 py-1.5">
                   {j.steps.map((s) => {
@@ -358,5 +359,22 @@ export function Diagnostics({ items }: { items: CiDiagnostic[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/** A job whose log named flaky tests (passed on rerun, T-95 item 4): how many, and the ticket the portal keeps for each. */
+function FlakyLine({ flaky }: { flaky: CiRunFlaky | undefined }) {
+  if (!flaky || flaky.tests === 0) return null;
+  return (
+    <p className="-mt-2 flex min-w-0 flex-wrap items-center gap-x-1.5 px-3.5 text-[12.5px] break-words text-muted">
+      <span>flaky: {flaky.tests}</span>
+      {flaky.tickets.length > 0 && <span>, tickets</span>}
+      {flaky.tickets.map((t, i) => (
+        <Link key={t} to={`/admin/tickets/${t}`} className="inline-flex min-h-11 items-center text-accent hover:underline">
+          {t}
+          {i < flaky.tickets.length - 1 ? ',' : ''}
+        </Link>
+      ))}
+    </p>
   );
 }

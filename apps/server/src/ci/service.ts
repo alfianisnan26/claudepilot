@@ -6,6 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { AppError } from '@isnanme/core';
 import {
   CI_REPO_NAME,
+  type CiRunFlaky,
   isCiActive,
   parseTicketBranch,
   shortSha,
@@ -51,11 +52,24 @@ import { CI_LIMITS } from './limits.js';
 import { replan, compile, matches, resolveInputs, branchOf, tagOf, type EventContext } from './spec/compile.js';
 import { validateFiles, type SnapshotFile, type Validated } from './spec/validate.js';
 import { CiStore, type DeploymentRow, type EnvironmentRow, type RepoRow, type RunRow } from './store.js';
-import { CiLinks, type CiBumper } from './links.js';
+import { CiLinks, runLink, type CiBumper } from './links.js';
 import type { CiSessionsPort } from './sessions.js';
 import type { CiTicketsPort } from './tickets.js';
 import { cleanLog, oneLine, redactSecrets } from './text.js';
+import { flakyComment, flakyDescription, flakyExcerpt, flakyTitle, parseFlaky, repoTag, type FlakySighting } from './flaky.js';
 import type { CiEventFile, Plan } from './plan.js';
+
+/** The flaky rows of a run, per job: the count and the distinct tickets, in order. */
+function flakyOfJobs(rows: { job: string; ticket_id: string | null }[]): CiRunFlaky[] {
+  const out: CiRunFlaky[] = [];
+  for (const r of rows) {
+    let j = out.find((x) => x.job === r.job);
+    if (!j) out.push((j = { job: r.job, tests: 0, tickets: [] }));
+    j.tests++;
+    if (r.ticket_id && !j.tickets.includes(r.ticket_id)) j.tickets.push(r.ticket_id);
+  }
+  return out;
+}
 
 const json = <T>(text: string | null | undefined, fallback: T): T => {
   if (!text) return fallback;
@@ -179,6 +193,7 @@ export class CiService {
   /** Runs with an approval being decided right now: one decision at a time per run. */
   readonly #deciding = new Set<string>();
   readonly #links: CiLinks;
+  readonly #tickets: CiTicketsPort | undefined;
   readonly #polling = new Map<string, Promise<void>>();
   readonly #acks = new Map<string, string[]>();
   readonly #lastPoll = new Map<string, number>();
@@ -196,6 +211,7 @@ export class CiService {
   ) {
     this.#cs = new CiStore(store);
     this.#links = new CiLinks(this.#cs, opts.tickets, opts.sessions);
+    this.#tickets = opts.tickets;
     this.#opts = {
       maxRunsPerWorkspace: opts.maxRunsPerWorkspace ?? 2,
       maxJobsParallel: opts.maxJobsParallel ?? 2,
@@ -693,6 +709,47 @@ export class CiService {
         text: redact(cleanLog(s.tail === null ? s.head : `${s.head}${s.head.endsWith('\n') ? '' : '\n'}[… ${s.omitted} bytes omitted …]\n${s.tail}`)),
       })),
     );
+    this.#flaky(runId);
+  }
+
+  /**
+   * T-95 item 4: the tests a passed step's log names as `flaky, passed on rerun: <file>;<test>` (the gate's verdict), one ticket per test
+   * across runs. Read from the kept logs (cleaned and redacted already), once per run and test. Never breaks the archive.
+   */
+  #flaky(runId: string): void {
+    const tickets = this.#tickets;
+    const row = this.#cs.run(runId);
+    if (!tickets || !row || !this.#cs.flakyReady) return;
+    const state = json<CiRunStateFile | null>(row.state, null);
+    const redact = this.#redactor(row.workspace_id);
+    const sighting = (job: string): FlakySighting => ({ runNumber: row.number, link: runLink(row.id), sha: row.sha, repo: row.repo, job });
+    for (const j of state?.jobs ?? []) {
+      for (const st of j.steps) {
+        if (st.status !== 'passed') continue;
+        const log = this.#cs.log(runId, j.id, st.idx)?.text ?? '';
+        for (const f of parseFlaky(log)) {
+          try {
+            const at = new Date().toISOString();
+            const before = this.#cs.flakyOf(row.repo, f.file, f.test);
+            if (!this.#cs.insertFlaky({ run_id: row.id, repo: row.repo, job: j.id, file: f.file, test: f.test, ticket_id: null, at })) continue;
+            const s = sighting(j.id);
+            let ticketId = before.ticketId;
+            const closed = ticketId ? tickets.closed(ticketId) : null;
+            if (ticketId && closed !== null) {
+              if (closed) tickets.reopen(ticketId);
+              tickets.note(ticketId, flakyComment(s, before.runs + 1, closed), { actor: `ci:${row.id}`, label: 'CI' });
+            } else {
+              const tags = ['flaky', 'area-qa', ...[repoTag(row.repo)].filter((t): t is string => !!t && t !== 'flaky' && t !== 'area-qa')];
+              ticketId = tickets.open({ summary: flakyTitle(f), description: flakyDescription(f, s, flakyExcerpt(log, f.test, redact)), tags, workspaceId: row.workspace_id });
+            }
+            this.#cs.setFlakyTicket(row.id, row.repo, f.file, f.test, ticketId);
+            console.log(`[ci] ${row.id} ${j.id}: flaky ${f.file} (${ticketId})`);
+          } catch (e) {
+            console.error(`[ci] ${row.id}: the ticket of a flaky test could not be written: ${(e as Error).message}`);
+          }
+        }
+      }
+    }
   }
 
   #redactor(workspaceId: string): (text: string) => string {
@@ -1031,6 +1088,7 @@ export class CiService {
       archived: row.archived === 1,
       deployments: this.#cs.deploymentsOfRun(row.id).map(deploymentView),
       ...this.#messages(row.id),
+      flaky: flakyOfJobs(this.#cs.flakyOfRun(row.id)),
     };
   }
 
