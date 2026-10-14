@@ -1,4 +1,4 @@
-import type { AttentionList } from '@portal/contracts';
+import type { AttentionItem, AttentionList } from '@portal/contracts';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { fetchAttention } from './api';
 
@@ -45,6 +45,13 @@ export function useAttention(): State & { reload: () => Promise<void> } {
   }, []);
   const reload = useCallback(() => loadAttention(), []);
   return { ...s, reload };
+}
+
+/** One item as the server now shows it (a snooze set or cleared), in place, until the next load brings the same. */
+export function patchAttentionItem(next: AttentionItem): void {
+  if (!state.list) return;
+  const items = state.list.items.map((i) => (i.kind === next.kind && i.id === next.id ? next : i));
+  set({ ...state, list: { ...state.list, items } });
 }
 
 /** Signed out: forget everything. */

@@ -1,38 +1,23 @@
-import { Badge, buttonClass, chipClass, cn, EmptyState, LoadError, RowsSkeleton, type BadgeTone } from '@isnanme/ui';
-import { ATTENTION_KIND_LABEL, ATTENTION_WHY_LABEL, type AttentionItem, type AttentionKind, type AttentionWhy } from '@portal/contracts';
-import { ArrowRight, CheckCheck, PlugZap, Puzzle, Rocket, ShieldQuestion, Ticket, type LucideIcon } from 'lucide-react';
+import { Badge, buttonClass, chipClass, cn, EmptyState, LoadError, RowsSkeleton, Segmented } from '@isnanme/ui';
+import { ATTENTION_KIND_LABEL, ATTENTION_WHY_LABEL, type AttentionItem, type AttentionKind } from '@portal/contracts';
+import { ArrowRight, CheckCheck, Clock } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
 import { InfoTip } from '@/components/InfoTip';
 import { useEngaged, useSteadyRows } from '@/features/glance/widgets/shared/steady';
 import { useNow } from '@/features/glance/widgets/shared/useNow';
+import { Deck } from './Deck';
+import { isLater, untilText } from './deck';
+import { KIND_ICON, WHY_ABOUT, WHY_TONE } from './look';
 import { groupByWhy, kindChoices, waited } from './model';
 import { useAttention } from './store';
 
-const KIND_ICON: Record<AttentionKind, LucideIcon> = {
-  mcp_version: PlugZap,
-  skill_version: Puzzle,
-  ci_deploy: Rocket,
-  ticket_approval: Ticket,
-  tool_approval: ShieldQuestion,
-};
-
-const WHY_TONE: Record<AttentionWhy, BadgeTone> = {
-  production_uat: 'danger',
-  secrets_permissions: 'danger',
-  third_party_code: 'warning',
-  gate: 'warning',
-  question: 'neutral',
-};
-
-const WHY_ABOUT: Record<AttentionWhy, string> = {
-  production_uat: 'A deploy to a protected environment waits for a person’s approval.',
-  secrets_permissions: 'It grants a secret or a permission.',
-  third_party_code: 'Code from outside the portal (an MCP server, a skill) runs only once a person has read it.',
-  gate: 'An agent has waited ten minutes or more for a tool approval.',
-  question: 'An agent asked a person to decide.',
-};
+type View = 'deck' | 'list';
+const VIEWS: { value: View; label: string }[] = [
+  { value: 'deck', label: 'Deck' },
+  { value: 'list', label: 'List' },
+];
 
 const itemKey = (i: AttentionItem) => `${i.kind}:${i.id}`;
 
@@ -43,6 +28,19 @@ const itemKey = (i: AttentionItem) => `${i.kind}:${i.id}`;
  */
 export function NeedsYouPage() {
   const { list, failed, reload } = useAttention();
+  // The deck is the way in (`?item=kind:id` opens it at that card: a push, the Home widget); the list is the overview (`?view=list`).
+  const [params, setParams] = useSearchParams();
+  const view: View = params.get('view') === 'list' ? 'list' : 'deck';
+  const setView = (v: View) =>
+    setParams(
+      (p) => {
+        const n = new URLSearchParams(p);
+        if (v === 'list') n.set('view', 'list');
+        else n.delete('view');
+        return n;
+      },
+      { replace: true },
+    );
   const [kind, setKind] = useState<AttentionKind | 'all'>('all');
   const now = useNow();
   const { engaged, bind } = useEngaged();
@@ -56,11 +54,15 @@ export function NeedsYouPage() {
     <div>
       <PageHeader
         title="Needs you"
-        description="Only what a person must decide: deploys to production, code from outside (MCP servers, skills), agents stuck on an approval, questions an agent asked you. Each row opens the exact item; you decide it there."
+        description="Only what a person must decide: deploys to production, code from outside (MCP servers, skills), agents stuck on an approval, questions an agent asked you. Each card or row opens the exact item; you decide it there."
       />
+      <div className="mb-4 max-w-xs [&_button]:min-h-11" data-attention-view="">
+        <Segmented<View> label="View" value={view} options={VIEWS} onChange={setView} />
+      </div>
       {!list && failed && <LoadError onRetry={reload} message="Could not read what needs you." />}
       {!list && !failed && <RowsSkeleton rows={3} lines={2} card label="Loading what needs you" />}
-      {list && (
+      {list && view === 'deck' && <Deck items={list.items} now={now} openKey={params.get('item')} />}
+      {list && view === 'list' && (
         <>
           {choices.length > 2 && (
             <div role="group" aria-label="Kind" className="mb-4 flex flex-wrap gap-2">
@@ -145,6 +147,12 @@ function Row({ item: i, now, gone }: { item: AttentionItem; now: number; gone: b
           <time dateTime={i.since} title={i.since} className="tabular-nums">
             {waited(i.since, now)}
           </time>
+          {isLater(i, now) && (
+            <span data-attention-snoozed="" className="inline-flex items-center gap-1 text-ink-soft">
+              <Clock className="size-3.5" aria-hidden="true" />
+              Later, until {untilText(i.snoozedUntil!, now)}
+            </span>
+          )}
         </div>
         {i.risk && <p className="mt-1 text-[12.5px] text-ink-soft [overflow-wrap:anywhere]">{i.risk}</p>}
       </div>
