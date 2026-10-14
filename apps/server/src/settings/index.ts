@@ -1,9 +1,11 @@
 import { AppError, success } from '@isnanme/core';
-import { SETTING_KEYS, type SettingUpdate } from '@portal/contracts';
+import { SETTING_KEYS, workspaceRef, type SettingUpdate } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
+import { actorOf, requireCan } from '../authz/seam.js';
 import type { FragmentProvider, Reconciler } from '../delivery/reconciler.js';
 import type { Store } from '../store/store.js';
 import { AGENT_ENV_KEYS, AgentEnvPolicy } from './agentEnv.js';
+import { declareSettingsPolicies } from './authz.js';
 import { McpLockdown } from './lockdown.js';
 import { defineSetting, defineSettingGroup } from './registry.js';
 import { Settings } from './store.js';
@@ -13,6 +15,9 @@ export type { SettingDef } from './registry.js';
 export { AGENT_ENV, AgentEnvPolicy } from './agentEnv.js';
 export { McpLockdown } from './lockdown.js';
 export { Settings } from './store.js';
+export { SETTINGS_POLICIES } from './authz.js';
+
+declareSettingsPolicies();
 
 // The sections of the Settings page, in order. `sessions` is A2's: its settings appear when it defines them.
 defineSettingGroup('mcp', 'MCP', 10);
@@ -98,7 +103,12 @@ export function createSettingsRoutes(module: SettingsModule): Hono {
   app.get('/', (c) => c.json(success(settings.view())));
   app.get('/audit', (c) => c.json(success(settings.audit(Number(c.req.query('limit')) || 100))));
   app.get('/lockdown/:target/:name', (c) => c.json(success(lockdown.status(`${c.req.param('target')}/${c.req.param('name')}`))));
-  app.get('/agent-env/:target/:name', (c) => c.json(success(agentEnv.status(`${c.req.param('target')}/${c.req.param('name')}`))));
+  app.get('/agent-env/:target/:name', (c) => {
+    const id = `${c.req.param('target')}/${c.req.param('name')}`;
+    // T-309: a workspace the asker may not view answers as one that does not exist (the seam's 404).
+    requireCan(actorOf(c), 'view', workspaceRef(id));
+    return c.json(success(agentEnv.status(id)));
+  });
   app.put('/:key', async (c) => {
     const req = await body<SettingUpdate>(c);
     return c.json(success(settings.set(c.req.param('key') ?? '', req.value, { actor: 'Admin', confirm: req.confirm === true })));
