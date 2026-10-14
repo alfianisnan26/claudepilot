@@ -24,7 +24,7 @@ Models (coordinator 02:2x, evaluation 2026-10-14): ALWAYS passed explicitly; son
 ## HANDOFF NOTE (03:3x): this session's context is 412k, above the 200k guideline. The state is in this file; a fresh continuation picks up at NEXT 0. Local integration (e6a383d = origin/integration + the T-270 layers 2-3 merge 1d893f5 under gate Job + status commits) is NOT pushed until that gate is green; if the gate is lost, re-run `scripts/gate-job.sh 1d893f5`, then push origin and pilot.
 
 ## MOVE (03:5x): the portal moves this chat hasyim -> fadlilah at the end of this turn (30 % left). Every sub-agent below is INTERRUPTED by the move: each pushed its branch at every step; restart each one after the move with "continue from your branch <branch> in your worktree; read your own last commits and the ticket's last comment first", same model.
-- t277 (opus) T-277 layer 1: dev-track-a-connect, dev/t277-mode-downgrade. FIRST after the move; then the opus security reviewer; gate; merge; /deploy gate=true.
+- DONE t277 (opus): T-277 layer 1 built on dev/t277-mode-downgrade at 30c849c (Job 78e5c910: typecheck clean, chat tests 492 run, 489 pass, 0 fail). The independent security reviewer (opus) is reading it now (04:1x); on APPROVE: merge, gate, push, /deploy gate=true, tell the coordinator on T-277.
 - t255 (opus) T-255: dev-automove-model, dev/t255-unknown-usage.
 - DONE t146 (opus): T-146 slice 1 merged locally (gate Job running; push when green). T-146 in_review.
 - t136-2 (opus) T-136 slice 2: dev-track-c-ui, dev/t136-recover.
