@@ -91,12 +91,41 @@ unknown kind.
 Browser (`tools/qa/attention.mjs`, a scratch portal in a cluster Job, Chromium with touch at 390 px and 1280 px, light and dark): see §8.
 Not observed in a browser: the CI deploy and tool approval rows (they need a runner and a live Claude; the tests cover them), a real iPhone.
 
-## 7. Slice 2 (not built)
+## 7. Slice 2 (built): the deck, Later, Home's Review card, notifications, `attention_list`
 
-The swipe deck (the owner's main way in; `blocking` per item, the second step for high-risk classes, undo, reasons, batch), the Home widget,
-notifications (bridge `attention.changed` to the notify bus once, with T-126's shape), the Portal MCP `attention_list` (read only), a bar
-place on the phone, "explain what disappeared" (approved by X, revoked, expired), the corner banners (Pools, Skills, CI), filter by program
-(T-137), and the sources listed in §2 as not yet built.
+- **The deck** is the page's way in (`/admin/attention`; the list is `?view=list`, a Deck/List switch at the top). One card per item that is
+  not put off, in the registry's order (why, then the oldest); the card shows what, the kind, why (a chip with its InfoTip), how long it has
+  waited, the risk line and who asked. **Right** (a swipe, the right arrow on the focused card, or the action button named by the item:
+  Review, Approve, Answer) opens the item's own page, where its module decides it with its own checks: the deck never approves by itself, so
+  no swipe is ever the only guard of a high-risk approval. **Left** (a swipe, the left arrow, or Later) puts it off for an hour. Previous and
+  Next move without deciding; "1 of N" says where you are. `?item=<kind>:<id>` opens the deck at that card (a push, the Home card).
+- **Gestures:** the card follows the finger sideways only (`touch-action: pan-y`; a mostly vertical drag is a scroll and decides nothing), a
+  drag shorter than a third of the card's width (72 to 140 px) snaps back, and a hint at the card's foot says what letting go would do.
+  Motion is transform and opacity only, about 180 ms, none with reduced motion. The deck is not in a sheet (no drag handle question) and the
+  page keeps its no-rubber-band rule. Targets are 44 px or more (Later and the action 48 px).
+- **Later** is the person's own (migration 860, `attention_snoozes`: the registry keeps no item rows): `POST /api/attention/snooze`
+  `{ kind, id, minutes? }` (60 by default, 0 brings it back, at most a day), only for an item the person sees now (anything else is the same
+  404 as a missing one; tokens and agents never snooze). A put-off item still waits and is still counted; the list marks it ("Later, until
+  07:54"), the deck lists it under Later with the time it returns and a Back now button, and it is back in the deck by itself at that time.
+  The person's list reads their snoozes with one query (the aggregate is the sources' queries plus that one).
+- **Home's Review card** (glance widget `review`, on Home only until switched on for the strips): a figure per source the server has (`-` for
+  one that could not be read, never a guessed zero) and the newest item, whose tap opens the deck at its card; Open deck opens the page.
+  It adds nothing to the app icon (that count is the glance's plus MCP and skill versions, as in §5).
+- **Notifications:** a NEW item tells each person whose own read lists it, once (the registry's first read is the baseline, so a restart
+  announces nothing again; the bridge remembers what it sent, so an item that is resolved and comes back is not sent twice). Kind `attention`
+  ("Needs you", a row in the notification matrix; migration 861 adds it to destinations that hear `human_request`). It goes out only for the
+  kinds nothing else announces (MCP and skill versions): a stuck tool approval, a deploy that waits and a ticket for a person already have
+  `approval`, `ci_waiting` and `human_request`. The body is fixed words (kind and why); the item's title is agent text and travels only as
+  the untrusted detail. The tap opens `/admin/attention?item=<kind>:<id>`. Quiet hours, mutes, collapse and the cap are the pipeline's.
+- **`attention_list` (Portal MCP, read only):** short rows by default (item, kind, why, title labelled untrusted, since, the deck link),
+  `full: true` adds who asked, the risk and the item's page; `item: "<kind>:<id>"` returns one. It reads the registry with the token's own
+  actor, so it sees what that actor may decide: an agent sees its own session's stuck approvals (not another session's, not a deploy or an
+  approval ticket, which are a person's); one it does not see is the same NOT_FOUND as one that does not exist. It approves nothing.
+
+Not built (slice 3): `blocking` per item and ordering by it, the second step and undo for high-risk approvals done in the deck itself, reject
+reasons, batch review, "Ask the agent", a bar place on the phone, "explain what disappeared", the corner banners (Pools, Skills, CI), the
+program filter (T-137), and the sources of §2 not yet built. The tool's view for an admin token or the coordinator ("what may I see", not
+"what may I decide") is a separate decision.
 
 ## 8. QA record
 
@@ -107,3 +136,14 @@ Question; no sideways scroll, every control named, 44 px targets and an icon-onl
 (1280) carry the count; the kind filter keeps one kind; the MCP row lands on its entry with that version marked, the ticket and skill rows on
 their pages; closing the ticket takes its item off. Tests, Job `claudepilot-job-de08acdd`: typecheck (server, web, contracts) clean, web 434
 of 434, server areas (attention, mcp, skills, ci, tickets, glance, live, portal) 255 passed, 0 failed, 1 skipped (Docker-only).
+
+2026-10-14, slice 2, Job `claudepilot-job-f7023021` on commit e50463d: `tools/qa/attention.mjs` 101 of 101 checks passed (slice 1's
+journey on `?view=list`, plus the deck at 390 px with touch and 1280 px, light and dark): the deck opens at the first item and says "1 of 3";
+the card shows what, why with its InfoTip and the age, `touch-action: pan-y`; no sideways scroll, every control named, the page does not
+rubber-band, 44 px targets at 390 px; a 60 px swipe snaps back and a vertical drag decides nothing; mid-swipe the card follows the finger; a
+swipe left puts the item off for 59 to 60 minutes, it is still counted, the next card takes its place, Later lists it with its time and the
+list marks it; Back now returns it; `?item=` opens at that card and a swipe right opens the ticket's page; at 1280 px the left arrow puts a
+card off and the right arrow opens its page; Home's Review card counts MCP 1, Skills 1, Tickets 1 and its newest item opens the deck at that
+card. Screenshots looked at: deck, mid-swipe, Later, list with Later, Review (390 and 1280, light and dark). Tests, Job
+`claudepilot-job-16da5cc4` on b81b497: typecheck (server, web, contracts) clean; server attention, notify, store, portalmcp tools 124 of 124;
+web 458 of 458.
