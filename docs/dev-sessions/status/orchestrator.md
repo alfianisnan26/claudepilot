@@ -8,6 +8,7 @@ Owner-approved rules (evaluation 2026-10-14, coordinator 02:3x):
 Models (coordinator 02:2x, evaluation 2026-10-14): ALWAYS passed explicitly; sonnet for verification, harness, sweep and scribe slices; opus for implementers and security or migration reviews; fable only for a diagnosis nobody cracked. WIP limit FIVE sub-agents at once (D-43, owner 2026-10-14; was three); still one scratch portal and one Chromium per sub-agent, 3 Jobs cluster-wide and 2 per chat; five agents burn quota about 65 percent faster, D-39 moves by pace. Heavy work through scripts/job-run.sh and gate-job.sh. The orchestrator hands off at about 200k context (status file, fresh continuation).
 
 ## LIVE
+- DEPLOY RUN 20 (rmv7i90f2ed3287, 02:43 UTC, 36d127d, gate=true, images=portal): T-102, T-110 slice 1, T-256, T-159, T-265, T-258, T-270 slice 1, T-259 slice 1, T-105/T-109. Production protection is OFF: it releases without an approval. Verify after: /healthz, the image tag, the integrity log line, the live sessions survive a renewal, then the verifier pass over the new tickets.
 - Portal 2026.10.13-7 (run 19, 5234892 + tags f94dca4; Argo Synced/Healthy at f94dca4; pod up since 17:38, 0 restarts; /healthz ok at 00:2x).
   Contains: T-143 (csrf same-host Origin), T-141 (image-build door), T-136 slice 1 (integrity table, continued_from, migration 772 repair), D-33..D-38, the kit docs.
 - Verified by the orchestrator 00:2x (D-34), evidence in this file because the tickets are held by the ended session (see NEEDS A HUMAN):
