@@ -152,6 +152,9 @@ test('over MCP a session starts a worker in its own workspace, on its own Claude
     assert.equal(family.workers.length, 1);
     assert.equal(family.workers[0].id, worker.id);
     assert.deepEqual(family.workers[0].title, { untrusted_text: 'Router split', source: 'agent' });
+    // T-282: the short form leaves out the folder; full brings it back.
+    assert.equal(family.workers[0].folder, undefined);
+    assert.ok('folder' in (await r.h.call(a.secret, 'session_family', { full: true })).result!.structuredContent.workers[0]);
     assert.match(seen.content![0]!.text, /^1 worker: 1 (starting|idle|working)/);
 
     assert.equal((await r.h.call(a.secret, 'session_message', { session_id: worker.id, text: 'Also add a test.' })).result?.isError, undefined);

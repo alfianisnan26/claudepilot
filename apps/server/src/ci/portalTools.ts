@@ -9,6 +9,7 @@ import { AppError } from '@isnanme/core';
 import { BUMP_NOTE_MAX, BUMP_PRIORITY, BUMP_REFUSAL_LABEL, CI_BUMP_MODE_LABEL, CI_STATUSES, objectRef, sessionRef, type BumpMode, type CiRun, type CiRunSummary, type CiStatus } from '@portal/contracts';
 import { actorOfPrincipal, requireCan } from '../authz/seam.js';
 import { bumpNote } from '../chat/bump.js';
+import { fullInput } from '../portalmcp/compact.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { declareCiPolicies } from './authz.js';
 import type { CiService } from './service.js';
@@ -58,10 +59,24 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     duration_ms: r.durationMs,
   });
 
+  /** A run as a list row (T-282): enough to pick one; ci_run_get has the rest. */
+  const runRow = (r: CiRunSummary) => ({
+    id: r.id,
+    number: r.number,
+    pipeline: r.pipeline,
+    branch: r.branch,
+    sha: r.sha ? r.sha.slice(0, 12) : r.sha,
+    status: r.status,
+    ...(r.reason ? { reason: r.reason } : {}),
+    ...(r.ticketId ? { ticket_id: r.ticketId } : {}),
+    created_at: r.createdAt,
+    duration_ms: r.durationMs,
+  });
+
   registry.register({
     name: 'ci_runs_list',
     title: 'List CI runs',
-    description: 'Recent runs of the pipelines in workspace remotes, newest first, with their status. An agent sees the runs of its own branch and ticket.',
+    description: 'Recent runs of the pipelines in workspace remotes, newest first, as short rows (id, pipeline, branch, short sha, status, ticket, when); full true for every field, ci_run_get for one run. An agent sees the runs of its own branch and ticket.',
     scope: 'agent',
     hints: { readOnly: true },
     input: z.object({
@@ -70,6 +85,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
       ticket: z.string().max(20).optional().describe('A ticket id such as T-12.'),
       status: z.enum(CI_STATUSES).optional(),
       limit: z.number().int().min(1).max(50).optional(),
+      ...fullInput,
     }),
     async handler(ctx, args) {
       const limit = args.limit ?? 20;
@@ -89,7 +105,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
       } else {
         items = ci.list({ workspace: args.workspace_id, branch: args.branch, ticket: args.ticket, status, limit }).items;
       }
-      return { summary: `${items.length} run${items.length === 1 ? '' : 's'}`, runs: items.map((r) => runView(ctx, r)) };
+      return { summary: `${items.length} run${items.length === 1 ? '' : 's'}`, runs: items.map((r) => (args.full ? runView(ctx, r) : runRow(r))) };
     },
   });
 

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { writeFileSync } from 'node:fs';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { registerTicketTools } from './portalTools.js';
@@ -236,7 +235,6 @@ test('T-282: ticket_get is short by default, with a cut line; section, comment_i
     const raw = async (args: Record<string, unknown>) => (await r.h.call(a.secret, 'ticket_get', args)) as { result?: { structuredContent?: any; content?: { text: string }[]; isError?: boolean } };
     const short = await raw({ id: 'T-1' });
     const text = short.result!.content![0]!.text;
-    writeFileSync('/tmp/t282/short.json', text);
     assert.ok(text.length < 4_000, `the default result is ${text.length} characters`);
     const s = short.result!.structuredContent;
     assert.equal(s.ticket.description.untrusted_text.length, 1_500);

@@ -665,6 +665,18 @@ characters (U+E0000–E007F), redacts secret patterns, and caps text at 2,000 ch
 16 KB per result. `workspace_get` returns files from the compiled desired state, never read back from
 the workspace. The UI recommends "Needs approval" for admin tools in claude.ai's per-tool settings.
 
+### 14.4.1 Short results (T-282)
+
+Every result is read again on each later request of the agent's session, so list and detail tools answer short by
+default and return the rest on request: `ticket_get` (tickets PRD §12.1), `ticket_list`, `ci_runs_list` (id,
+number, pipeline, branch, a 12 character sha, status, reason, ticket, created, duration; `ci_run_get` or
+`full: true` for the rest), `session_family` (the latest reply's first 200 characters, no folder; `full: true` for
+600 and the folder) and `usage_attribution` (dollars and requests per row; `full: true` adds the tokens and the
+times). `usage_spikes` keeps its evidence: it is the point of the call. A shortened field carries a `cut` line; a
+whole result over 20,000 characters is refused (`RESULT_TOO_LARGE`) with a hint to narrow it, never cut silently.
+The server's instructions tell agents which calls are cheap. Untrusted text keeps its `untrusted_text` label in
+every form.
+
 ### 14.5 Rate limits
 
 | Limit | Default | When exceeded |
