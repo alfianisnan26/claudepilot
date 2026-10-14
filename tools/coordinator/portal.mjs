@@ -1,4 +1,4 @@
-// node portal.mjs tell <session id prefix> <text> | respond <prefix> <request id> <deny|allow> <message> | interrupt <prefix> | end <prefix> [reason]
+// node portal.mjs tell <session id prefix> <text> | respond <prefix> <request id> <deny|allow> <message> | interrupt <prefix> | end <prefix> [reason] | configure <prefix> <model> [effort]
 // Messages a chat, answers or interrupts through the Portal MCP as the owner's delegate. Needs PORTAL_SERVER_CODE; with the tunnel up run it as
 //   NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:3128 node portal.mjs ...
 // One admin token per run, 1 hour, replacing this label's leftovers, revoked at the end even when the call fails (tokenLease.mjs, T-258).
@@ -19,6 +19,7 @@ if(cmd==='tell') res=await call('session_send',{id:s.id,text:rest.join(' ')});
 else if(cmd==='respond') res=await call('session_respond',{id:s.id,request_id:rest[0],decision:rest[1],message:rest.slice(2).join(' ')});
 else if(cmd==='interrupt') res=await call('session_interrupt',{id:s.id});
 else if(cmd==='end') res=await call('session_end',{id:s.id,reason:rest.join(' ')||'ended by the coordinator'});
+else if(cmd==='configure') res=await call('session_configure',{id:s.id,...(rest[0]?{model:rest[0]}:{}),...(rest[1]?{effort:rest[1]}:{})});
 else {console.log('unknown command');process.exitCode=2;}
 if(res){const text=await res.text();
 console.log(`${res.status} ${cmd} -> ${s.id.slice(0,8)} "${s.title}" ${/Denied|Allowed|Interrupted|confirmation|error/i.exec(text)?.[0]??''}`);}
