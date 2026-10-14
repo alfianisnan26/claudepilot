@@ -15,11 +15,12 @@ import {
   type TicketStatus,
   type TicketType,
 } from '@portal/contracts';
-import { Bot, ChevronLeft, ChevronsUp, Circle, GitBranch, MessageSquare, Play, RotateCcw, Trash2, User } from 'lucide-react';
+import { Bot, ChevronLeft, ChevronsUp, Circle, GitBranch, MessageSquare, Play, RotateCcw, Trash2, User, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
+import { usePanel } from '@/components/Workbench';
 import { Markdown } from '@/features/chat/Markdown';
 import { errorText } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/format';
@@ -33,7 +34,9 @@ type Dialog = 'edit' | 'tags' | 'assign' | 'close' | 'start' | 'bump' | 'delete'
 
 /**
  * One ticket (tickets PRD §13): its fields, description, the sessions that worked it and its timeline,
- * with a comment box. Text an agent wrote is marked as such. It follows the live socket.
+ * with a comment box. Text an agent wrote is marked as such. It follows the live socket. It is the Tickets
+ * Workbench's second panel (T-158): in the queue's place on a phone (Back returns), beside it where both fit
+ * (Close). Its layout answers to the panel's width, not the window's.
  */
 export function TicketPage() {
   const { id = '' } = useParams();
@@ -43,6 +46,8 @@ export function TicketPage() {
   const [failed, setFailed] = useState<'missing' | 'error' | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [busy, setBusy] = useState(false);
+  // Beside the queue, Close floats at the panel's top right: the header keeps clear of it.
+  const { split } = usePanel();
 
   const load = useCallback(async () => {
     try {
@@ -98,7 +103,7 @@ export function TicketPage() {
   return (
     <>
       <Back />
-      <header className="mb-5">
+      <header className={split ? 'mb-5 pr-12' : 'mb-5'}>
         <p className="flex items-center gap-2 text-[13px] font-semibold text-muted">
           <PriorityMark priority={t.priority} />
           <span className="tabular-nums">{t.id}</span>
@@ -132,7 +137,7 @@ export function TicketPage() {
             <CheckChips checks={detail.checks} />
           </div>
         )}
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2 tap:[&_[aria-haspopup=menu]]:size-11">
           {!closed && (
             <Button icon={<Play className="size-4" />} onClick={() => setDialog('start')}>
               Start session
@@ -166,7 +171,7 @@ export function TicketPage() {
 
       <div className="flex flex-col gap-4">
         <Card className="p-4 sm:p-5">
-          <dl className="grid grid-cols-2 gap-x-3 gap-y-4 sm:gap-x-6">
+          <dl className="grid grid-cols-2 gap-x-3 gap-y-4 @lg:gap-x-6">
             <Select label="Status" value={t.status} disabled={busy} onChange={(v) => void change({ status: v as TicketStatus })} options={TICKET_STATUSES.map((s) => ({ value: s, label: TICKET_STATUS_LABEL[s] }))} />
             <Select label="Priority" value={t.priority} disabled={busy} onChange={(v) => void change({ priority: v as TicketPriority })} options={TICKET_PRIORITIES.map((p) => ({ value: p, label: TICKET_PRIORITY_LABEL[p] }))} />
             <Select label="Type" value={t.type} disabled={busy} onChange={(v) => void change({ type: v as TicketType })} options={TICKET_TYPES.map((x) => ({ value: x, label: TICKET_TYPE_LABEL[x] }))} />
@@ -180,7 +185,7 @@ export function TicketPage() {
                 )}
               </p>
             </Field>
-            <Field label="Assigned to" className="col-span-2 sm:col-span-1">
+            <Field label="Assigned to" className="col-span-2 @lg:col-span-1">
               <div className="flex h-11 items-center justify-between gap-2">
                 <AssigneeChip ticket={t} />
                 <Button size="sm" variant="secondary" onClick={() => setDialog('assign')}>
@@ -188,7 +193,7 @@ export function TicketPage() {
                 </Button>
               </div>
             </Field>
-            <Field label="Tags" className="col-span-2 sm:col-span-1">
+            <Field label="Tags" className="col-span-2 @lg:col-span-1">
               <div className="flex min-h-11 items-center justify-between gap-2">
                 {t.tags.length ? <TagList tags={t.tags} /> : <span className="text-[13px] text-muted">None</span>}
                 <Button size="sm" variant="secondary" onClick={() => setDialog('tags')}>
@@ -208,11 +213,11 @@ export function TicketPage() {
           <h2 className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-muted">
             Description {t.source === 'agent' && <Badge>Written by an agent</Badge>}
           </h2>
-          {t.description ? <Markdown text={t.description} className="text-[14.5px] leading-relaxed" /> : <p className="text-sm text-muted">No description.</p>}
+          {t.description ? <Markdown text={t.description} className="max-w-measure text-[14.5px] leading-relaxed" /> : <p className="text-sm text-muted">No description.</p>}
           {closed && t.closingSummary && (
             <div className="mt-4 border-t border-line pt-3">
               <h3 className="mb-1 text-[13px] font-semibold text-muted">Outcome</h3>
-              <Markdown text={t.closingSummary} className="text-[14.5px] leading-relaxed" />
+              <Markdown text={t.closingSummary} className="max-w-measure text-[14.5px] leading-relaxed" />
             </div>
           )}
         </Card>
@@ -288,12 +293,29 @@ export function TicketPage() {
   );
 }
 
-const Back = () => (
-  <Link to="/admin/tickets" className="mb-3 inline-flex items-center gap-1 text-sm font-semibold text-muted hover:text-ink">
-    <ChevronLeft className="size-4" />
-    Tickets
-  </Link>
-);
+/**
+ * Back to the queue (the address keeps its view and filters). Beside the queue it is a Close at the panel's top right instead, and
+ * the panel's top is the ticket's own header.
+ */
+function Back() {
+  const { split } = usePanel();
+  const { search } = useLocation();
+  const to = { pathname: '/admin/tickets', search };
+  if (split)
+    return (
+      <div className="sticky top-0 z-10 -mb-11 flex justify-end">
+        <Link to={to} aria-label="Close panel" title="Close panel" className="press flex size-11 items-center justify-center rounded-full bg-bg text-muted hover:bg-surface-2 hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none">
+          <X className="size-5" />
+        </Link>
+      </div>
+    );
+  return (
+    <Link to={to} className="mb-3 inline-flex items-center gap-1 text-sm font-semibold text-muted hover:text-ink tap:-mt-3 tap:mb-0 tap:min-h-11">
+      <ChevronLeft className="size-4" />
+      Tickets
+    </Link>
+  );
+}
 
 function Field({ label, className, children }: { label: string; className?: string; children: React.ReactNode }) {
   return (
@@ -385,7 +407,7 @@ function Timeline({ events, ticketId, onChanged }: { events: TicketEvent[]; tick
                   {e.fromAgent && <Badge>Agent</Badge>}
                   <span title={formatDateTime(e.at)}>{timeAgo(e.at)}</span>
                 </p>
-                <Markdown text={e.body ?? ''} className="text-[14px] leading-relaxed" />
+                <Markdown text={e.body ?? ''} className="max-w-measure text-[14px] leading-relaxed" />
               </div>
             </li>
           ) : (

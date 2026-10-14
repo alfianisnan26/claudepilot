@@ -149,6 +149,16 @@ secrets. Install and push need HTTPS: a Cloudflare Tunnel publishes a new app li
 | `immersive` | No app bar, tab bar, rail or sidebar. The session screen (2026-10-13): a floating frosted header (52 px: back, title, state, ⋯) under the status bar and a floating composer, both inset by `--bar-gap`, the transcript scrolling under both and under the status bar (§10.5; Chat §12.3). The terminal and the browser keep a 48 px header below the top inset | The terminal and the browser live view at every width; the session screen under 640 px and in short touch |
 | `task` | No tab bar on phones; actions pinned in a bottom bar; DiscardDialog guards leaving | On phones, every editor holding a list or more than one section: persona, policy, skillset, MCP set, Secrets set and browser pool editors, skill review. Never `/admin/sessions/new`, which keeps the session screen's flags (Chat A2) |
 
+### 9.2a Workbench pages and size classes (T-158, slice 1 built 2026-10-14)
+
+Large screens get a panel layout instead of the centred column (the owner's screenshot: the Tickets board clipped inside a ~1,120 px column on a ~2,380 px desktop).
+
+- **Size classes**, defined once: compact (a phone, under 600 px), medium (a tablet, 600 to 1023), expanded (an HD desktop, 1024 to 1599), large (FHD and QHD, 1600 to 2559), xlarge (4K and ultrawide, 2560 and up). `lib/size.ts` (`sizeClassOf`, `useSize()`) and the CSS tokens `--breakpoint-medium` to `--breakpoint-xlarge` (variants `medium:` to `xlarge:`) hold the same numbers; a unit test keeps them equal. `max-w-measure` (70ch) is prose's readable line inside a panel. The shell's own switches (tab bar under 640, rail, sidebar from 1024) are unchanged until the shell slice.
+- **Workbench** (`components/Workbench.tsx`, placement in `lib/panels.ts` as a pure function of the panels and the room): a page declares its panels (name, min, preferred and max width, grow, priority, a rail for when it has no room) and the one the person is on. A phone shows that one panel (push navigation, as before); where two or more fit at their minimum they stand side by side (at most 1, 2, 3, 4, 5 per class), the focused one always shown and the others in priority order; the room goes first toward the preferred widths, then to the panels that grow, up to their max. Side by side (or a lone panel on expanded and wider when the page asks) the workbench is **pinned**: it ends at the window's bottom and each panel scrolls inside, so the page never scrolls, sideways or down. Each panel is a CSS container (`@container`), so its content can answer to the panel's width. Opening an item beside the list moves the keyboard to it.
+- **The frame** (`AppShell`) gives a Workbench page (`WORKBENCH_PAGES`, so far `/admin/tickets`) its whole width (no 896 px column, 24 px gutters kept), less padding under it, and keeps the page mounted across its sub-paths, so opening a ticket beside the board does not remount (and refetch) the board.
+- **Converted:** Tickets (Tickets PRD §13). Every other page in the frame still uses the centred 896 px column until its slice.
+- **Checked by** `tools/qa/workbench.mjs` at 390, 768, 1280, 1920, 2560, 3440 x 1440 and 3840, light and dark (a real 4K monitor is not available: Chromium at those CSS sizes, device pixel ratio 1).
+
 ### 9.3 Terminal on touch screens
 
 | Piece | Behavior |
