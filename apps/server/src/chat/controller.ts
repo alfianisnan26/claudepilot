@@ -533,6 +533,12 @@ export class ChatController {
    */
   onSideUsage?: (turn: { sessionId: string; workspaceId: string; claudeId: string | null; atMs: number }, rows: readonly { costUsd: number }[]) => void;
   /**
+   * Installed by the efficiency lab (T-287, claude-usage PRD §28): every stream line this controller accepted, raw, once its own handling is
+   * done (after every integrity check, so a line the chat refused is never measured). Read only: the lab keeps counts and ids, never text.
+   * A throw never affects the chat.
+   */
+  onStreamLine?: (sessionId: string, raw: string) => void;
+  /**
    * Installed by the MCP module (MCP set PRD §13.3): a main-thread `system/init`'s portal MCP servers with the status
    * Claude Code gave each, for the session's Claude (`directory`, '' for Default). Answers with the names of the OAuth
    * servers that need a sign-in, each of which gets one row in the transcript per process. A throw never affects the session.
@@ -3774,6 +3780,15 @@ export class ChatController {
     if (parsed.result) {
       this.#thinkingSince.delete(sessionId); // a block cut short (stopped mid-thought) is never stored
       setImmediate(() => void this.#checkUsage(sessionId).catch(() => undefined));
+    }
+
+    // The efficiency lab measures what was accepted (§28); it never changes what the chat does.
+    if (this.onStreamLine) {
+      try {
+        this.onStreamLine(sessionId, raw);
+      } catch {
+        // a line the lab cannot measure never touches the session
+      }
     }
   }
 

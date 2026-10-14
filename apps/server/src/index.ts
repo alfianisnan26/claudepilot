@@ -23,6 +23,7 @@ import { createClaudeUsage } from './claudeusage/index.js';
 import { registerClaudeUsageTools } from './claudeusage/portalTools.js';
 import { ClaudeVersions, registerClaudeVersionTools } from './claudeversion/index.js';
 import { createUsageSpend, registerUsageSpendTools } from './usagespend/index.js';
+import { Lab } from './lab/index.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
 import { changesGlance, createGlance } from './glance/index.js';
 import { createAttention } from './attention/index.js';
@@ -487,6 +488,9 @@ chatController.onSideUsage = (turn, rows) => usageSpend.onTurn(turn, rows);
 chatController.onLaunch = (info) => usageSpend.onLaunch(info);
 chatController.sendGate = (info) => usageSpend.gate(info);
 registerUsageSpendTools(usageSpend);
+// The efficiency lab (T-287, claude-usage PRD §28): per-slice counts from every accepted stream line, and experiments. Data layer only so far.
+const lab = new Lab({ store });
+chatController.onStreamLine = (sessionId, raw) => lab.line(sessionId, raw);
 // Workspace git: the repositories inside each running workspace, found by scanning and tracked each on its own, with worktrees, an audit
 // and a summary (workspace-git PRD). It reads through the chat's hardened session host; a scan never fetches.
 const repos = createRepos({ store, workspaces, installHost: (id) => chatController.installHost?.(id) ?? Promise.resolve(), sessions: chatController, scrub: (id, text) => chatController.scrub(id, text), notify: () => notify('repos') });

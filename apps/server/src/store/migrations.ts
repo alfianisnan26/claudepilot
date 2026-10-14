@@ -2941,6 +2941,96 @@ export const MIGRATIONS: Migration[] = [
       db.exec('ALTER TABLE chat_sessions ADD COLUMN control_state TEXT');
     },
   },
+  {
+    version: 850,
+    name: 'efficiency lab: slices, requests and tool calls',
+    up(db) {
+      // T-287 slice 1 (docs/prd/claude-usage.md §28): what the session stream says about each SLICE (a sub-agent thread, or one main-thread
+      // turn), in counts and ids only, never text. A request is one assistant message (deduplicated by its id, the last report wins, as in
+      // docs/dev-sessions/overhaul/evidence/slice_metrics.py); a tool row is one tool call with its class and the size of its result.
+      db.exec(`
+        CREATE TABLE lab_slices (
+          session_id TEXT NOT NULL,
+          slice_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('agent', 'turn')),
+          ticket TEXT,
+          role TEXT,
+          model TEXT,
+          started_ms INTEGER,
+          PRIMARY KEY (session_id, slice_id)
+        ) STRICT;
+        CREATE TABLE lab_requests (
+          session_id TEXT NOT NULL,
+          message_id TEXT NOT NULL,
+          slice_id TEXT NOT NULL,
+          at_ms INTEGER,
+          model TEXT,
+          input INTEGER NOT NULL DEFAULT 0,
+          cache_read INTEGER NOT NULL DEFAULT 0,
+          cache_write_5m INTEGER NOT NULL DEFAULT 0,
+          cache_write_1h INTEGER NOT NULL DEFAULT 0,
+          cache_write INTEGER NOT NULL DEFAULT 0,
+          output INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (session_id, message_id)
+        ) STRICT;
+        CREATE INDEX lab_requests_slice ON lab_requests (session_id, slice_id);
+        CREATE INDEX lab_requests_at ON lab_requests (at_ms);
+        CREATE TABLE lab_tools (
+          session_id TEXT NOT NULL,
+          tool_use_id TEXT NOT NULL,
+          slice_id TEXT,
+          tool TEXT,
+          class TEXT,
+          rtk INTEGER NOT NULL DEFAULT 0,
+          at_ms INTEGER,
+          results INTEGER NOT NULL DEFAULT 0,
+          result_chars INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (session_id, tool_use_id)
+        ) STRICT;
+        CREATE INDEX lab_tools_slice ON lab_tools (session_id, slice_id);
+      `);
+    },
+  },
+  {
+    version: 851,
+    name: 'efficiency lab: experiments and arm assignments',
+    up(db) {
+      // T-287 slice 1: an experiment is a named change with its arms, a start, a stop and its rules written before the start; a randomized one
+      // assigns each slice an arm when the slice starts (balanced per stratum), a before-and-after one splits its window at `switch_ms`.
+      // `excluded` takes a slice out of the analysis with a reason (an outage). Thresholds and guardrails are JSON the person wrote.
+      db.exec(`
+        CREATE TABLE lab_experiments (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          hypothesis TEXT NOT NULL DEFAULT '',
+          design TEXT NOT NULL CHECK (design IN ('randomized', 'before_after')),
+          arms TEXT NOT NULL,
+          primary_metric TEXT NOT NULL,
+          guardrails TEXT NOT NULL DEFAULT '[]',
+          thresholds TEXT NOT NULL DEFAULT '{}',
+          min_n INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL CHECK (status IN ('running', 'stopped', 'decided')),
+          start_ms INTEGER NOT NULL,
+          stop_ms INTEGER,
+          switch_ms INTEGER,
+          decision TEXT CHECK (decision IN ('adopt', 'reject', 'iterate')),
+          verdict TEXT,
+          created_ms INTEGER NOT NULL
+        ) STRICT;
+        CREATE TABLE lab_assignments (
+          experiment_id TEXT NOT NULL REFERENCES lab_experiments(id) ON DELETE CASCADE,
+          session_id TEXT NOT NULL,
+          slice_id TEXT NOT NULL,
+          arm TEXT,
+          stratum TEXT NOT NULL DEFAULT '',
+          assigned_ms INTEGER NOT NULL,
+          excluded TEXT,
+          PRIMARY KEY (experiment_id, session_id, slice_id)
+        ) STRICT;
+        CREATE INDEX lab_assignments_stratum ON lab_assignments (experiment_id, stratum);
+      `);
+    },
+  },
 ];
 
 /**
