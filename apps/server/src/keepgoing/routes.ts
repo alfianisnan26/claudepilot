@@ -1,4 +1,5 @@
-// `GET` and `PUT /api/chat/sessions/:id/keep-going` (T-259, `CHAT_API.keepGoing`), mounted behind the session guard and the Origin check.
+// `GET` and `PUT /api/chat/sessions/:id/keep-going` (T-259, `CHAT_API.keepGoing`), mounted behind the session guard and the Origin check, and
+// `GET /api/keepgoing` (slice 2, `KEEPGOING_API.list`): the Home card's chats, each one the caller may view.
 // Who is asking is read ONCE (`owner.actorOf(c)`). Reading needs `view` on the chat; setting needs `operate`, and only a person or an admin
 // token sets it: an agent (a chat keeping itself, or another chat, going) and a token below admin are refused, whatever the seam would allow.
 // A chat of another user answers like an unknown one. Bodies at most 8 KB.
@@ -9,6 +10,19 @@ import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { PlatformOwner } from '../platform/owner.js';
 import type { KeepGoingChatPort, KeepGoingEngine } from './engine.js';
+
+/** `GET /api/keepgoing`: the chats with Keep going on that the caller may view (an agent: its own chat at most). */
+export function createKeepGoingListRoutes(d: { owner: PlatformOwner; engine: Pick<KeepGoingEngine, 'list'> }): Hono {
+  const app = new Hono();
+  app.get('/', (c) => {
+    const who = d.owner.actorOf(c);
+    const userId = who.userId;
+    if (!userId) throw new AppError('NOT_FOUND', 'Not found.');
+    const own = who.actor.kind === 'agent' ? who.actor.sessionId : null;
+    return c.json(success(d.engine.list((s) => (own === null || own === s.id) && d.owner.can(userId, 'view', { type: 'session', id: s.id, workspaceId: s.workspaceId }))));
+  });
+  return app;
+}
 
 export interface KeepGoingRouteDeps {
   owner: PlatformOwner;

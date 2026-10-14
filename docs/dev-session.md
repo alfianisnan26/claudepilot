@@ -67,10 +67,18 @@ It is started by hand only: in the portal, or by a session over the Portal MCP (
 | build | `scripts/k3s-build.sh` per image of input `images` (`portal`, `workspace`, `workspace-dev`, or `none`) with the next date tag (`2026.10.13-2`, `2.1.296-2026.10.13-1`, `2.1.296-dev-2026.10.13-1`); the commit must be on GitHub's `integration` |
 | release | **waits for a person's approval** (environment `production`); then bumps the two tags in `deploy/k3s/portal.yaml` on top of the commit and pushes it to `main` (fast-forward only: that push is the deploy) and then brings `integration` up to date as its own step (a merge of `main` into the current `integration`, never a force; a conflict only warns). Input `deploy: false` leaves it out (build only) (when `integration` moved on while the release waited for its approval, the release is merged into its new tip; `main` still gets exactly the approved commit plus the tags; run #4 of 2026-10-13 was refused before this) |
 | verify | Argo CD Synced and Healthy at the pushed commit, rollout status, the new image, `/healthz` and `/login` through the in-cluster service, no fatal line and no restart in the portal's log |
+| chats | (T-277 layer 4) the chats the release step recorded as attached to a live process (its log: `chats: N attached ...`, one line per chat with short id, Claude, mode, open control requests, workspace; `.pilot/out/chats.env`) are watched in the new portal's log until 10 minutes after the new pod started (`DEPLOY_CHATS_WINDOW_S`). One that **ended for integrity** fails the run: `ENDED: <id8> ended for integrity at <time>: <why>` and the error line name it (recover it in place: Resume). Survivors are listed with their `cp-session tail` follower count (counted for the chats of this workspace; 1 is right, 2 is the double read behind "a second control response"). Its own job, not part of verify, so it never starts a rollback (a second restart) of a healthy release. Before its push the release step also waits, at most 2 minutes (`DEPLOY_CHATS_WAIT_S`), while an attached chat has a control request the portal asked and Claude Code has not answered. A portal that does not say (one from before this change) leaves the record `unavailable`, and chats passes with a warning |
 | rollback | only when release or verify failed: the previous tags on top of `main` (a new commit, never a force), pushed, then Argo CD, rollout and `/healthz` again |
 
 Input `dry_run: true` prints every action and changes nothing (no push, no cluster change; it still reads the cluster and waits for the
-approval). Logs pass the portal's redactor, and the build step masks the GitHub token by value.
+approval).
+
+**How the steps learn about chats.** Steps hold no portal credential (local-git-ci PRD FR20), so the portal says it in its own log, which verify
+already reads with `kubectl logs`: while a job that deploys to an environment runs, the CI service writes `[deploy-chats] run=<id> job=<job>
+attached=<n> pending=<n|?> chats=<id8>:<claude>:<mode>:<tail8>:<open>:<workspace>,...` (again when the open count changes; ids and facts only,
+every field cut to `[A-Za-z0-9._/-]`), and the controller writes `[chat] <id>: ended for integrity: <why>` when it ends one. The scripts only
+take lines that START with those tags, so a chat's own words echoed in a log line can not forge one. By hand: `kubectl -n isnan-claudepilot logs
+deploy/claudepilot-portal | grep -E '^\[(deploy-chats|chat)\]'`. Logs pass the portal's redactor, and the build step masks the GitHub token by value.
 
 **The approval.** The portal holds the release job (`waiting`, a raised hand on the run) until a person presses **Approve** on the run page; **Reject**
 ends the run as cancelled. The runner gets the key to start that job only from the portal, when a person approves; every approval and rejection is

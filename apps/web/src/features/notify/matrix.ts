@@ -13,7 +13,7 @@ export const KIND_WHEN: Record<NotifyKind, string> = {
   trigger_approval: 'A trigger run waits for your approval.',
   trigger_failed: 'A trigger run failed, or a limit stopped it.',
   auto_move: 'A chat was moved to another Claude because a quota is low, or a move is suggested.',
-  keepgoing_attention: 'Keep going found something in a chat it may not fix: an approval waits, Bypass is off, or the chat ended.',
+  keepgoing_attention: 'Keep going found something in a chat it may not fix: an approval waits, Bypass is off, or a chat is left down.',
   test: 'The Send test button.',
   workspace: 'A workspace needs attention.',
   account: 'An account needs attention.',

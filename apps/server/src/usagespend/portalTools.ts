@@ -19,6 +19,7 @@ import {
   type SpendFigure,
   type SpikeEvent,
 } from '@portal/contracts';
+import { fullInput } from '../portalmcp/compact.js';
 import { portalTools, PortalToolError, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { OWNER_ACTOR, type Who } from './actor.js';
 import type { UsageSpend } from './service.js';
@@ -74,6 +75,22 @@ function rowView(ctx: PortalToolContext, r: AttributionRow) {
           },
         }
       : {}),
+  };
+}
+
+/** An attribution row in short (T-282): dollars and requests, the tree's shape; full true adds the tokens and the times. */
+function rowShort(ctx: PortalToolContext, r: AttributionRow) {
+  const s = r.session;
+  const money = (t: ChatUsageTotals) => ({ cost_usd: t.costUsd, requests: t.requests });
+  return {
+    key: r.key,
+    label: r.by === 'session' || r.by === 'persona' ? ctx.untrusted(r.label, 'usage', 80) : r.label,
+    state: r.state,
+    ...(r.reason ? { reason: r.reason } : {}),
+    own: money(r.own),
+    total: money(r.total),
+    share_pct: figure(r.share),
+    ...(s ? { session: { session_id: s.sessionId, ticket_id: s.ticketId, parent_id: s.parentId, depth: s.depth, state: s.state } } : {}),
   };
 }
 
@@ -191,7 +208,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
     name: 'usage_attribution',
     title: 'Spend by',
     description:
-      'The window’s requests grouped by session (a tree: a session’s total includes the sessions it started), workspace, ticket, persona or Claude, with each row’s own and total dollars (estimates), tokens and requests and its share. A persona is recorded when a session’s process starts, so older requests read as unknown (not_recorded), never guessed; a child session with no ticket counts under its parent’s. An agent’s token reads its own session and the ones it started only; an admin’s token reads everything, or a tree with session_id.',
+      'The window’s requests grouped by session (a tree: a session’s total includes the sessions it started), workspace, ticket, persona or Claude, with each row’s own and total dollars (estimates) and requests and its share; full true adds the tokens and the times. A persona is recorded when a session’s process starts, so older requests read as unknown (not_recorded), never guessed; a child session with no ticket counts under its parent’s. An agent’s token reads its own session and the ones it started only; an admin’s token reads everything, or a tree with session_id.',
     scope: 'agent',
     hints: { readOnly: true, idempotent: true },
     input: z.object({
@@ -201,6 +218,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
       claude_id: z.string().max(100).optional(),
       workspace_id: z.string().max(200).optional(),
       limit: z.number().int().min(1).max(200).optional().describe('Rows shown (root sessions for by session); the rest sum into others. Default 25.'),
+      ...fullInput,
     }),
     handler(ctx, args) {
       if (args.workspace_id) ctx.assertWorkspace(args.workspace_id);
@@ -217,7 +235,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
         from: r.from,
         to: r.to,
         totals: totals(r.totals),
-        rows: r.rows.map((x) => rowView(ctx, x)),
+        rows: r.rows.map((x) => (args.full ? rowView(ctx, x) : rowShort(ctx, x))),
         coverage_pct: figure(r.coverage),
         more: r.more,
         basis: BASIS,

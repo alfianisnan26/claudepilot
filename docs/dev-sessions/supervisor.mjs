@@ -17,6 +17,9 @@
 //   6. T-257: a track left down for any reason (the start cap, a refusal, a missing Claude, the portal unreachable) opens ONE ticket (tag
 //      watchdog) through the API and logs it; starts after a harmless integrity ending (T-136: a second control response, a peer message)
 //      count apart from the cap (MAX_HARMLESS_STARTS of their own). The portal's own watchdog (Keep going, T-259) replaces this script.
+//   7. T-259 slice 2: a track whose newest chat has Keep going ON is the portal's (it nudges, wakes, recovers and starts it again itself,
+//      inside the cluster): this script leaves that track alone, so the two never both start a chat. It still keeps Bypass on such a chat
+//      (the portal does not: the lease is the owner's open decision on T-256) and still answers for the tracks without Keep going.
 // Stop it: touch ~/.claudepilot/dev-sessions/STOP (checked every round), or kill the process by PID. State: ~/.claudepilot/dev-sessions/state.json.
 // Never logs the code, a cookie or a token.
 
@@ -525,6 +528,13 @@ async function watch() {
       const mine = sessions.filter((x) => x.id === ts.sessionId || String(x.title ?? '').startsWith(t.title.split(':')[0])).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
       const cur = mine.find((x) => !x.archivedAt) ?? mine[0];
       if (cur?.cwd) ts.cwd = cur.cwd;
+      // Keep going is on for this track's chat: the portal watches and restarts it (T-259 slice 2). Only Bypass is still kept here.
+      if (cur?.keepGoing?.enabled && !cur.keepGoing.paused) {
+        if (ts.keepGoingLogged !== cur.id) log(`${t.key}: Keep going is on for ${cur.id.slice(0, 8)}: the portal keeps it going; only Bypass is kept here`), (ts.keepGoingLogged = cur.id);
+        ts.sessionId = cur.id;
+        if (cur.state !== 'ended' && !cur.archivedAt) await ensureBypass(t, ts, cur).catch((e) => log(`${t.key}: could not check Bypass: ${e.message}`));
+        continue;
+      }
       if (statusSaysDone(ts)) {
         ts.done = true;
         log(`${t.key}: TRACK COMPLETE: left alone`);

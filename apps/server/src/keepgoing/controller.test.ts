@@ -7,6 +7,7 @@ import { liveSession, until } from '../chat/testkit.js';
 import { fakeOwner } from '../notify/testkit.js';
 import { fakeClock } from '../autotransfer/testkit.js';
 import { KeepGoingEngine } from './engine.js';
+import { keepGoingChatPort } from './index.js';
 import { KeepGoingStore } from './store.js';
 
 test('the real controller: keepGoing on the payload, a change heard by the tabs, a nudge sent as the portal at priority later', async () => {
@@ -17,13 +18,7 @@ test('the real controller: keepGoing on the payload, a change heard by the tabs,
     const store = new KeepGoingStore(s.store, () => new Date(clock.now()));
     const c = s.controller;
     const engine = new KeepGoingEngine({
-      chat: {
-        get: (id) => c.get(id),
-        openRequests: (id) => c.openRequests(id),
-        send: (id, uuid, text, o) => c.send(id, uuid, text, o),
-        respond: (id, r, d, o) => c.respond(id, r, d, o),
-        resume: (id) => c.control(id, 'resume'),
-      },
+      chat: keepGoingChatPort(c)!,
       owner: fakeOwner({}, { fallback: 'u_owner' }),
       clock,
       store,
@@ -48,6 +43,32 @@ test('the real controller: keepGoing on the payload, a change heard by the tabs,
     assert.match(written, /"priority":"later"/);
     assert.match(written, /Portal message \(portal:keepgoing\)/);
     assert.equal(c.get(s.id)!.keepGoing?.nudgesToday, 1);
+  } finally {
+    await s.done();
+  }
+});
+
+test('the real controller: an ended chat is continued by a new session (continuedFrom, as the portal, not bypass-capable) that gets the brief', async () => {
+  const s = await liveSession();
+  try {
+    const clock = fakeClock(Date.now());
+    const store = new KeepGoingStore(s.store, () => new Date(clock.now()));
+    const c = s.controller;
+    const port = keepGoingChatPort(c);
+    assert.ok(port, 'the module wires the real controller (create and recover included)');
+    const engine = new KeepGoingEngine({ chat: port, owner: fakeOwner({}, { fallback: 'u_owner' }), clock, store, settings: null, bus: null, audit: null, tickets: null, random: () => 0 });
+    engine.set(s.id, 'u_owner', 'ui', { enabled: true, prompt: 'Go on with {ticket}.' });
+    // The process died (not a person's close): the row reads ended.
+    s.store.db!.prepare("UPDATE chat_sessions SET state = 'ended', process = 'gone', ended_reason = 'the process exited (code 1)' WHERE id = ?").run(s.id);
+    assert.equal(c.get(s.id)!.state, 'ended');
+    await engine.round();
+    const next = c.list().find((x) => x.continuedFrom === s.id);
+    assert.ok(next, 'a new session continues it');
+    assert.equal(next.workspaceId, 'docker/ws1');
+    assert.equal(next.bypassCapable, false);
+    assert.equal(store.policy(next.id)?.enabled, true, 'the policy went with it');
+    assert.equal(store.policy(s.id)?.enabled, false);
+    await until(() => s.messages.some((m) => m.type === 'events' && m.session === next.id && m.items.some((e) => e.kind === 'user' && e.actor === KEEPGOING_ACTOR)));
   } finally {
     await s.done();
   }

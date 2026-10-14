@@ -2,6 +2,8 @@ import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
 import { track } from '@isnanme/ui';
 import {
   CHAT_API,
+  KEEPGOING_API,
+  type KeepGoingList,
   type ChatBypassState,
   type ChatDiff,
   type ChatEvent,
@@ -138,6 +140,8 @@ export const chatApi = {
   restartHint: (id: string, body: UpdateRestartHintRequest) => request<ChatSession>('PATCH', CHAT_API.restartHint(id), body),
   /** Keep going (T-259): the chat's policy, today's counts and its last action; null when it never had one. */
   keepGoing: (id: string) => request<ChatKeepGoing | null>('GET', CHAT_API.keepGoing(id)),
+  /** The chats with Keep going on (the Home card "Autonomy", T-259 slice 2). */
+  keepGoingList: () => request<KeepGoingList>('GET', KEEPGOING_API.list),
   /** Sets Keep going (a person only). */
   setKeepGoing: (id: string, body: UpdateKeepGoingRequest) => request<ChatKeepGoing>('PUT', CHAT_API.keepGoing(id), body),
   /** Checks the server code again (what Bypass guards). */

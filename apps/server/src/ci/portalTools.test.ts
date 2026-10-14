@@ -36,6 +36,14 @@ test('tools: an admin reads and starts runs; an agent sees and acts on its own b
     // An admin's token: both runs, the full picture, the log labelled as untrusted and redacted.
     const list = await mcp.call(admin.secret, 'ci_runs_list', {});
     assert.deepEqual(list.result!.structuredContent.runs.map((r: { branch: string }) => r.branch).sort(), ['other/branch', 'ticket/12-mine']);
+    // T-282: short rows by default, every field with full.
+    const row = list.result!.structuredContent.runs[0];
+    assert.equal(row.subject, undefined);
+    assert.equal(row.actor_label, undefined);
+    assert.ok(row.id && row.pipeline && row.status && row.created_at);
+    assert.ok(row.sha.length <= 12);
+    const fullRow = (await mcp.call(admin.secret, 'ci_runs_list', { full: true })).result!.structuredContent.runs[0];
+    assert.ok('subject' in fullRow && 'actor_label' in fullRow && 'workspace_id' in fullRow);
     assert.equal((await mcp.call(admin.secret, 'ci_runs_list', { branch: 'other/branch', status: 'failed' })).result!.structuredContent.runs.length, 1);
     const get = await mcp.call(admin.secret, 'ci_run_get', { id: mine.id });
     const got = get.result!.structuredContent;

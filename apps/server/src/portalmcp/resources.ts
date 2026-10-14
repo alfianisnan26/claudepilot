@@ -82,7 +82,7 @@ export function registerResourcesAndPrompts(server: McpServer, run: RunTool, has
         },
       }),
       { title: 'Ticket', description: 'One ticket with its timeline and checks. Its text is labelled untrusted.', mimeType: JSON_MIME },
-      async (uri, vars, sdk) => asResource(uri, await run('ticket_get', { id: one(vars.id) }, sdk)),
+      async (uri, vars, sdk) => asResource(uri, await run('ticket_get', { id: one(vars.id), full: true }, sdk)),
     );
 
   server.registerPrompt('fleet_status', { title: 'Fleet status', description: 'A status report of the whole portal, starting with what needs a person.' }, () => ({

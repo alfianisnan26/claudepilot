@@ -36,6 +36,21 @@ export interface CiSessionsPort {
   list(filter: { workspaceId?: string; ticketId?: string }): CiSession[];
   /** Sends the text to the session as a portal message from the run (by default it queues behind the turn in progress). Throws when the session refuses. */
   send(sessionId: string, runId: string, text: string, opts?: CiSendOptions): Promise<void>;
+  /** T-277 layer 4: the chats attached to a live process right now, in every workspace (read only; the deploy pipeline's record). */
+  attached?(): CiAttachedChat[];
+}
+
+/** A chat attached to a live Claude Code process, as a deploy records it: ids and facts only, never its title or text. */
+export interface CiAttachedChat {
+  id: string;
+  workspaceId: string;
+  claudeId: string;
+  /** The permission mode the portal holds for it. */
+  mode: string;
+  /** The key its `cp-session tail` follower runs with (Claude Code's session id), to count followers in the workspace. */
+  tail: string;
+  /** The portal's control requests it has not answered yet; null when the portal can not tell. */
+  pending: number | null;
 }
 
 /** `ci:<run id>` once the chat area allows that actor; until then `portal:ci-<run id>`, which its pattern already does. */
@@ -43,7 +58,17 @@ export const ciActor = (runId: string): string => (isChatActor(`ci:${runId}`) ? 
 
 /** The real thing, over the chat controller. */
 export class ChatSessionsAdapter implements CiSessionsPort {
-  constructor(private readonly chat: ChatController) {}
+  /** `pending` counts the open control requests per session (chat/liveControls.ts); without it the count is unknown. */
+  constructor(
+    private readonly chat: ChatController,
+    private readonly pending?: (sessionIds: string[]) => Map<string, number> | null,
+  ) {}
+
+  attached(): CiAttachedChat[] {
+    const live = this.chat.list({}).filter((s) => s.state !== 'ended' && s.process === 'live');
+    const open = this.pending ? this.pending(live.map((s) => s.id)) : null;
+    return live.map((s) => ({ id: s.id, workspaceId: s.workspaceId, claudeId: s.claudeId, mode: s.mode, tail: s.claudeSessionId, pending: open ? (open.get(s.id) ?? 0) : null }));
+  }
 
   #view(s: ReturnType<ChatController['get']>): CiSession | null {
     return s

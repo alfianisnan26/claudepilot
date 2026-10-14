@@ -4,7 +4,8 @@
 # push IS the deploy, and it goes to main alone (fast-forward, never forced). The run's branch then catches up as a separate step: the
 # release commit, or, when the branch moved on while the release waited for its approval, the release merged into its new tip, fetched
 # again if it moves during the push (T-95: run #4 was refused because one atomic push to both branches failed on a status commit). A branch
-# that no longer has the run's commit stops the release before anything is pushed; a conflict on the branch only warns (the deploy is done). Leaves .pilot/out/release.env (what was pushed, the tags before) for verify and rollback, whatever happens.
+# that no longer has the run's commit stops the release before anything is pushed; a conflict on the branch only warns (the deploy is done). Leaves .pilot/out/release.env (what was pushed, the tags before) for verify and rollback, whatever happens,
+# and .pilot/out/chats.env (the chats attached at release, T-277 layer 4) for the chats job.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=.pilot/scripts/lib.sh
@@ -52,6 +53,9 @@ bump=$(git rev-parse HEAD)
   echo "BASE_SHA=$sha"
   echo "PUSHED=0"
 } >"$rel"
+# 0. The chats this restarts (T-277 layer 4): which are attached to a live process, into chats.env and this log, and a bounded wait while one is
+#    answering a control request the portal asked (any change to the manifest restarts the portal: the workspace tag is its env too).
+record_chats
 # 1. The deploy: the release commit to main alone (it fast-forwards main: main is an ancestor of the run's commit). Nothing else can make it
 #    fail: a push to the run's branch during the approval no longer matters here (T-95).
 if [ -n "${PILOT_BRANCH:-}" ] && [ "$PILOT_BRANCH" != "$DEPLOY_MAIN" ]; then

@@ -6,6 +6,9 @@
 //   - a tap on the chip opens Session info with the Keep going row: the switch on, today's counts and the last action, the text wrapping
 //     inside the dialog, its InfoTip opening inside the screen; nothing scrolls sideways;
 //   - turning the switch off sends the PUT and the chip goes; a chat that never had a policy shows no chip and the switch off;
+//   - slice 2, the Home card "Autonomy" (GET /api/keepgoing answered by the harness): the card is there, the chat left down first, the
+//     figures (watched, down, reported, today) from the answer, every row a 44 px link to its chat, a long title cut inside the card, nothing
+//     wider than the card, no sideways scroll, the card's InfoTip inside the screen, the pause and the empty list as words;
 //   - no page errors.
 // usage: KG_PORT=3471 KG_CDP=9671 node tools/qa/keepgoing.mjs [--shots dir]
 import { spawn } from 'node:child_process';
@@ -227,6 +230,86 @@ for (const cfg of MATRIX) {
   check('switch off without a policy', d.on === 'false', d.on);
   check('no counts without a policy', !/Today:/.test(d.text), d.text);
   await shot(`${cfg.name}-info-none`);
+}
+
+// ---------- Slice 2: the Home card "Autonomy" ----------
+const kgOf = (over) => ({ ...KG, standing: [], ...over });
+const LIST = {
+  paused: false,
+  chats: [
+    { sessionId: 'kg-down', title: LONG_TITLE, workspaceId: 'kubernetes/kohi-event', state: 'ended', mode: 'default', keepGoing: kgOf({ standing: ['down'], nudgesToday: 0, wakesToday: 0, last: { at: new Date().toISOString(), kind: 'reported', cause: 'down', reason: 'Reported: left down (T-12).' } }) },
+    { sessionId: 'kg-wait', title: 'Konfersi: migration', workspaceId: 'kubernetes/kohi-event', state: 'waiting', mode: 'default', keepGoing: kgOf({ standing: ['approval'], nudgesToday: 2, wakesToday: 0 }) },
+    { sessionId: 'kg-work', title: 'Event: program', workspaceId: 'kubernetes/kohi-event', state: 'working', mode: 'bypassPermissions', keepGoing: kgOf({ nudgesToday: 5, wakesToday: 2 }) },
+  ],
+};
+const homeHarness = (list) => `(() => {
+  const real = window.fetch;
+  window.fetch = (input, init) => {
+    const p = new URL(typeof input === 'string' ? input : input.url, location.origin).pathname;
+    if (p === '/api/keepgoing') return Promise.resolve(new Response(JSON.stringify({ data: ${JSON.stringify(list)} }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    return real(input, init);
+  };
+})();`;
+async function openHome(list) {
+  if (openSession.script) await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: openSession.script });
+  openSession.script = (await send('Page.addScriptToEvaluateOnNewDocument', { source: homeHarness(list) })).result.identifier;
+  await send('Page.navigate', { url: `http://localhost:${PORT}/admin/home` });
+  const ready = `!!document.querySelector('[data-home-card="autonomy"] [data-autonomy]')`;
+  if (!(await waitFor(ready, 20000))) {
+    await send('Page.reload');
+    if (!(await waitFor(ready, 30000))) return false;
+  }
+  // The card is the last on Home: brought into view as a person would scroll to it.
+  await ev(`document.querySelector('[data-home-card="autonomy"]').scrollIntoView({ block: 'start' })`);
+  await sleep(500);
+  return true;
+}
+const CARD = `(() => {
+  const R = ${R};
+  const card = document.querySelector('[data-home-card="autonomy"]');
+  const rows = card ? [...card.querySelectorAll('ul[aria-label="Chats kept going"] a')] : [];
+  const cr = card?.getBoundingClientRect();
+  const wide = card ? [...card.querySelectorAll('*')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && (r.right > cr.right + 1 || r.left < cr.left - 1); }).length : -1;
+  const first = rows[0]?.querySelector('span.block.truncate');
+  const stats = card ? [...card.querySelectorAll('[role=group]')].map((e) => e.getAttribute('aria-label')) : [];
+  const tip = card?.querySelector('header button[aria-label="About Autonomy"]');
+  return { card: R(card), rows: rows.map((a) => ({ href: a.getAttribute('href'), ...R(a) })), firstCut: first ? first.scrollWidth > first.clientWidth + 1 : null, wide, stats, text: card?.innerText ?? '', tip: R(tip), sw: document.scrollingElement.scrollWidth, w: innerWidth };
+})()`;
+
+for (const cfg of MATRIX) {
+  cfgName = `home-${cfg.name}`;
+  await setup(cfg);
+  const touch = !!cfg.mobile;
+  if (!(await openHome(LIST))) {
+    check('the Home card shows', false);
+    continue;
+  }
+  const c = await ev(CARD);
+  check('three rows, the chat left down first', c.rows.length === 3 && c.rows[0].href === '/admin/sessions/kg-down', JSON.stringify(c.rows.map((r) => r.href)));
+  check('every row is a 44 px link', c.rows.every((r) => Math.round(r.h) >= 44), JSON.stringify(c.rows.map((r) => r.h)));
+  check('rows inside the card', c.rows.every((r) => r.x >= c.card.x - 1 && r.r <= c.card.r + 1));
+  check('figures from the answer', ['Watched: 3', 'Down: 1', 'Reported: 1', 'Today: 9'].every((x) => c.stats.includes(x)), JSON.stringify(c.stats));
+  check('state and what stands in words', /Ended · left down/.test(c.text) && /Waiting · a tool approval waits/.test(c.text) && /Working · Idle for 4 min/.test(c.text), c.text);
+  if (touch) check('a long title is cut inside the card', c.firstCut === true);
+  check('nothing wider than the card', c.wide === 0, String(c.wide));
+  check('no sideways scroll (Home)', c.sw <= c.w + 1, `${c.sw} > ${c.w}`);
+  check('the card has its InfoTip', !!c.tip);
+  await shot(`home-${cfg.name}-autonomy`);
+  if (c.tip) {
+    await ev(`(() => { const b = document.querySelector('[data-home-card="autonomy"] header button[aria-label="About Autonomy"]'); b.scrollIntoView({ block: 'center' }); b.click(); })()`);
+    await sleep(400);
+    const tip = await ev(`(() => { const t = [...document.querySelectorAll('[role=tooltip], [role=note], [data-infotip]')].find((e) => /never turns Bypass on/.test(e.innerText)); if (!t) return null; const r = t.getBoundingClientRect(); return { x: r.x, r: r.right, y: r.y, b: r.bottom, w: innerWidth, h: innerHeight }; })()`);
+    check('the InfoTip opens inside the screen', !!tip && tip.x >= 0 && tip.r <= tip.w + 1 && tip.y >= 0 && tip.b <= tip.h + 1, JSON.stringify(tip));
+    await shot(`home-${cfg.name}-autonomy-tip`);
+    await ev(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
+  }
+  // Paused, and nothing watched: words, not a guessed figure.
+  await openHome({ paused: true, chats: [] });
+  const e = await ev(CARD);
+  check('the pause is said', /Paused/.test(e.text), e.text);
+  check('the empty list is said', /No chat has Keep going on\./.test(e.text), e.text);
+  check('no sideways scroll (empty)', e.sw <= e.w + 1);
+  await shot(`home-${cfg.name}-autonomy-empty`);
 }
 
 check('no page errors', errors.length === 0, errors.join(' | '));
