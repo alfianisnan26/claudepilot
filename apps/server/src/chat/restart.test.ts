@@ -314,7 +314,7 @@ test('restart keeps Bypass: a switch that fails is retried once with a fresh pro
     assert.equal(s.ws.startArgs.length, starts + 2, 'the restart, then the retry');
     assert.ok(lastStart(s).includes(FLAG));
     assert.equal(restarted.mode, 'default');
-    assert.ok(s.controller.history(id).some((e) => e.kind === 'system' && /^Bypass is off: it couldn’t be kept after the restart/.test(e.text ?? '')));
+    assert.ok(s.controller.history(id).some((e) => e.kind === 'system' && /^Bypass not kept after the restart: Claude Code refused the switch/.test(e.text ?? '')));
     assert.deepEqual(s.controller.audit({ kind: 'bypass.left' }).map((a) => a.detail.why), ['restart_failed']);
     assert.equal(s.controller.audit({ kind: 'bypass.entered' }).length, 1, 'only the person’s own entry');
     // After that, a report of Bypass is a forgery again.
@@ -409,7 +409,7 @@ test('move with the policy off: the destination has no flag, Bypass is off after
     assert.ok(!s.ws.startArgs.find((a) => a.includes(nid))!.includes(FLAG));
     assert.equal(moved.mode, 'default');
     assert.equal(bypassAsks(s), asked);
-    assert.ok(s.controller.history(id).some((e) => e.text === 'Bypass turned off after the move: the policy no longer allows it.'));
+    assert.ok(s.controller.history(id).some((e) => e.text === 'Bypass not kept after the move: the policy no longer allows it.'));
     assert.deepEqual(s.controller.audit({ kind: 'bypass.left' }).map((a) => [a.detail.why, a.detail.how]), [['policy', 'move']]);
   } finally {
     await s.done();
@@ -439,7 +439,7 @@ test('move keeps Bypass: a refused switch restarts the new run once with the fla
       } else {
         assert.equal(moved.mode, 'default');
         assert.deepEqual(s.controller.audit({ kind: 'bypass.left' }).map((a) => a.detail.why), ['move_failed']);
-        assert.ok(s.controller.history(id).some((e) => /^Bypass is off: it couldn’t be kept after the move/.test(e.text ?? '')));
+        assert.ok(s.controller.history(id).some((e) => /^Bypass not kept after the move: Claude Code refused the switch/.test(e.text ?? '')));
       }
     } finally {
       await s.done();
@@ -469,6 +469,110 @@ test('move rollback: a move that doesn’t finish leaves the old run in Bypass, 
     s.ws.tails.at(-1)!.push(init(old, 'bypassPermissions'));
     await sleep(60);
     assert.notEqual(s.controller.get(id)!.state, 'ended');
+  } finally {
+    await s.done();
+  }
+});
+
+/* ---------- T-256: the supervisor's move, and what happened to the Event chat ---------- */
+
+/** The Claude the chat runs on answers the portal's handoff request (the supervisor asks for one unless the source is spent). */
+async function writeHandoff(s: Live, sessionId: string, tail: Live['tail']) {
+  await until(() => s.ws.sends.some((x) => x.line.includes('context-transfer document')));
+  tail.push(assistantText('GOAL: the Event program. NEXT: the open tickets.'));
+  tail.push(result(sessionId));
+  tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+}
+
+test('T-256: the supervisor’s move (POST /switch with the handoff asked for) keeps Bypass: the handoff on the old run, the ack on the start mode, then “Bypass kept after the move.”', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.controlTimeoutMs = 150;
+    const state = policy(s, true);
+    const id = await inBypass(s);
+    state.fresh = false; // nobody re-entered the server code for the move: the person's earlier confirmation carries it
+    const sekar = await s.controller.createClaude('docker/ws1', 'sekar');
+    const old = csidOf(s, id);
+    const oldTail = s.ws.tails.at(-1)!;
+    const moving = modesAnswered(s, s.controller.switchClaude(id, sekar.id, { handoff: 'ask' }));
+    await writeHandoff(s, id, oldTail);
+    const nid = await acknowledge(s, id, old);
+    const moved = await moving;
+    assert.equal(moved.claudeName, 'sekar');
+    assert.ok(s.ws.startArgs.find((a) => a.includes(nid))!.includes(FLAG));
+    assert.equal(moved.mode, 'bypassPermissions');
+    assert.ok(s.controller.history(id).some((e) => e.kind === 'system' && e.text === 'Bypass kept after the move.'));
+    assert.deepEqual(
+      s.controller.audit({ kind: 'bypass.entered' }).map((a) => [a.actor, a.detail.how ?? 'person']).reverse(),
+      [
+        ['ui', 'person'],
+        ['portal', 'move'],
+      ],
+    );
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-256: the supervisor’s move with the policy off: the chat comes back on the start mode and the transcript says “Bypass not kept after the move: …” (never pretended)', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.controlTimeoutMs = 150;
+    const state = policy(s, true);
+    const id = await inBypass(s);
+    state.allowed = false;
+    const sekar = await s.controller.createClaude('docker/ws1', 'sekar');
+    const old = csidOf(s, id);
+    const oldTail = s.ws.tails.at(-1)!;
+    const asked = bypassAsks(s);
+    const moving = modesAnswered(s, s.controller.switchClaude(id, sekar.id, { handoff: 'ask' }));
+    await writeHandoff(s, id, oldTail);
+    const nid = await acknowledge(s, id, old);
+    const moved = await moving;
+    assert.ok(!s.ws.startArgs.find((a) => a.includes(nid))!.includes(FLAG), 'no flag without the policy');
+    assert.equal(moved.mode, 'default');
+    assert.equal(bypassAsks(s), asked, 'Bypass is never asked for');
+    assert.ok(s.controller.history(id).some((e) => e.kind === 'system' && e.text === 'Bypass not kept after the move: the policy no longer allows it.'));
+    assert.ok(!s.controller.history(id).some((e) => e.kind === 'system' && /^Bypass kept/.test(e.text ?? '')));
+    assert.deepEqual(s.controller.audit({ kind: 'bypass.left' }).map((a) => [a.detail.why, a.detail.how]), [['policy', 'move']]);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-256 replay: the move keeps Bypass, the idle chat sleeps out of it, and a portal message wakes it on the start mode (FR20, FR38); the person’s re-entry then works without a restart', async () => {
+  const s = await liveSession({ idleSleepMs: 1500 }, true);
+  try {
+    s.controller.controlTimeoutMs = 150;
+    policy(s, true);
+    const id = await inBypass(s);
+    const sekar = await s.controller.createClaude('docker/ws1', 'sekar');
+    const old = csidOf(s, id);
+    const moving = modesAnswered(s, s.controller.switchClaude(id, sekar.id, { handoff: 'skip' }));
+    const nid = await acknowledge(s, id, old);
+    assert.equal((await moving).mode, 'bypassPermissions', 'the move kept it (the Event chat: out.0 of the new run, 18:31)');
+    // Nobody speaks after the move: the chat sits idle and sleeps, and Bypass ends with its process, said so.
+    // Claude Code reports the opening done (as it does after every turn), so nothing holds the sleep off.
+    const opening = s.controller.history(id).findLast((e) => e.kind === 'user' && e.transfer)!;
+    s.ws.tails.at(-1)!.push(line({ type: 'command_lifecycle', command_uuid: opening.uuid, state: 'completed', uuid: randomUUID(), session_id: nid }));
+    await until(() => s.controller.get(id)!.process === 'asleep', 8000);
+    assert.equal(s.controller.get(id)!.mode, 'default');
+    assert.ok(s.controller.history(id).some((e) => e.kind === 'system' && e.text === 'Bypass turned off after sleep.'));
+    // The supervisor's "continue" (19:33) wakes it: a resume of the same run on a new segment, on the start mode, Bypass not asked for.
+    const asked = bypassAsks(s);
+    const starts = s.ws.startArgs.length;
+    await s.answering(s.controller.send(id, randomUUID(), 'Continue now.'));
+    await until(() => s.controller.get(id)!.process === 'live');
+    assert.equal(s.ws.startArgs.length, starts + 1);
+    const wake = lastStart(s);
+    assert.ok(wake.includes('--resume') && wake.includes(nid), 'the same run, resumed');
+    assert.ok(wake.includes(FLAG), 'still launched so that Bypass can be entered again');
+    assert.equal(s.controller.get(id)!.mode, 'default', 'a wake never restores Bypass: the first tool asks (the Event chat waited 19:33 to 00:22)');
+    assert.equal(bypassAsks(s), asked);
+    // What the supervisor does now on its round (T-256 item 3): the server code again, the acknowledgement, the one request.
+    const entered = await modesAnswered(s, s.controller.enterBypass(id, { acknowledged: true, sessionToken: 'tok' }));
+    assert.equal(entered.mode, 'bypassPermissions');
+    assert.equal(s.ws.startArgs.length, starts + 1, 'no restart needed');
   } finally {
     await s.done();
   }

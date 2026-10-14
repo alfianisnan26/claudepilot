@@ -2062,9 +2062,13 @@ export class ChatController {
    * `bypass.entered` (`how`). The new process was launched with the flag when the policy allowed it; if the switch still fails, the process
    * is restarted once more (with the flag) and asked again; if that fails too, the session stays on the start mode, says so and the audit
    * trail records `bypass.left` (`<how>_failed`). The policy turning Bypass off wins at any point. Never throws.
+   * The one place a deliberate relaunch puts Bypass back (T-256): the manual Move, the auto move engine and the supervisor's
+   * `/switch` (all through `switchClaude`), a Restart, and T-136's recover in place. The transcript says which way it went, in one form:
+   * "Bypass kept after the move." or "Bypass not kept after the move: <why>." (never pretended). A wake from sleep is not one of
+   * them: FR20 and FR38 keep it off there ("Bypass turned off after sleep."), and nothing here changes that.
    */
-  async #keepBypass(sessionId: string, how: 'move' | 'restart'): Promise<void> {
-    const after = how === 'move' ? 'after the move' : 'after the restart';
+  async #keepBypass(sessionId: string, how: 'move' | 'restart' | 'recover'): Promise<void> {
+    const after = how === 'move' ? 'after the move' : how === 'restart' ? 'after the restart' : 'after the recovery';
     const drop = (why: string, text: string) => {
       const row = this.#chat.row(sessionId);
       if (!row || row.state === 'ended') return;
@@ -2078,18 +2082,18 @@ export class ChatController {
       if (!row || row.state === 'ended') return;
       // The new process runs on the start mode until the switch: the session says so meanwhile.
       if (row.mode === 'bypassPermissions') this.#chat.patchSession(sessionId, { mode: START_MODE });
-      if (!this.#bypassAllowed()) return drop('policy', `Bypass turned off ${after}: the policy no longer allows it.`);
-      if (row.bypass_capable !== 1) return drop('not_capable', `Bypass turned off ${after}.`);
+      if (!this.#bypassAllowed()) return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
+      if (row.bypass_capable !== 1) return drop('not_capable', `Bypass not kept ${after}: this session wasn’t started to allow Bypass.`);
       try {
         await this.#setBypass(sessionId);
       } catch {
         // Not launched with the flag, or the switch failed: the restart approach, once.
-        if (!this.#bypassAllowed()) return drop('policy', `Bypass turned off ${after}: the policy no longer allows it.`);
+        if (!this.#bypassAllowed()) return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
         try {
           await this.#stopForRestart(sessionId, 'Restarting to keep Bypass.');
           await this.#setBypass(sessionId);
         } catch (e) {
-          return drop(`${how}_failed`, `Bypass is off: it couldn’t be kept ${after} (${cliMessage(this.#message(e))}).`);
+          return drop(`${how}_failed`, `Bypass not kept ${after}: Claude Code refused the switch (${cliMessage(this.#message(e))}).`);
         }
       }
       const now = this.#chat.row(sessionId);
@@ -2099,7 +2103,7 @@ export class ChatController {
         this.#chat.patchSession(sessionId, { mode: 'bypassPermissions' });
         // Out of it, or no process left running in it.
         await this.#setMode(sessionId, START_MODE).catch(() => this.#stopForRestart(sessionId, 'Bypass is no longer allowed.').catch(() => undefined));
-        return drop('policy', `Bypass turned off ${after}: the policy no longer allows it.`);
+        return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
       }
       this.#chat.patchSession(sessionId, { mode: 'bypassPermissions' });
       this.#note(sessionId, `Bypass kept ${after}.`);
@@ -2113,7 +2117,7 @@ export class ChatController {
       });
       this.#emitSession(sessionId);
     } catch (e) {
-      drop(`${how}_failed`, `Bypass is off: it couldn’t be kept ${after} (${cliMessage(this.#message(e))}).`);
+      drop(`${how}_failed`, `Bypass not kept ${after}: ${cliMessage(this.#message(e))}.`);
     }
   }
 
