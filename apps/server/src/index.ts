@@ -24,6 +24,7 @@ import { registerClaudeUsageTools } from './claudeusage/portalTools.js';
 import { ClaudeVersions, registerClaudeVersionTools } from './claudeversion/index.js';
 import { createUsageSpend, registerUsageSpendTools } from './usagespend/index.js';
 import { Lab } from './lab/index.js';
+import { registerLabTools } from './lab/portalTools.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
 import { changesGlance, createGlance } from './glance/index.js';
 import { createAttention } from './attention/index.js';
@@ -490,9 +491,12 @@ chatController.onSideUsage = (turn, rows) => usageSpend.onTurn(turn, rows);
 chatController.onLaunch = (info) => usageSpend.onLaunch(info);
 chatController.sendGate = (info) => usageSpend.gate(info);
 registerUsageSpendTools(usageSpend);
-// The efficiency lab (T-287, claude-usage PRD §28): per-slice counts from every accepted stream line, and experiments. Data layer only so far.
-const lab = new Lab({ store });
+// The efficiency lab (T-287, claude-usage PRD §28): per-slice counts from every accepted stream line, experiments, outcomes from the
+// tickets' timelines, the read routes and Portal MCP tools (lab/authz.ts), and retention of the request rows (14 days, once a day).
+const lab = new Lab({ store, log: (m) => console.warn(m) });
 chatController.onStreamLine = (sessionId, raw) => lab.line(sessionId, raw);
+registerLabTools(lab);
+lab.start();
 // Workspace git: the repositories inside each running workspace, found by scanning and tracked each on its own, with worktrees, an audit
 // and a summary (workspace-git PRD). It reads through the chat's hardened session host; a scan never fetches.
 const repos = createRepos({ store, workspaces, installHost: (id) => chatController.installHost?.(id) ?? Promise.resolve(), sessions: chatController, scrub: (id, text) => chatController.scrub(id, text), notify: () => notify('repos') });
@@ -533,7 +537,7 @@ const platform = createPlatform({
 });
 live.onPresence = (connection, presence, req) => platform.presence(connection, presence, req);
 platform.start();
-const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage, usageSpend, repos, glance, attention, codespaces, platform, claudeVersions, connect });
+const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, { serveWeb: !config.dev, notify, poolService, mcp: mcpSets, skills, personas, settings: settingsModule, secrets: secretRotations, portalMcp, knowledge, tickets, ci, browser, claudeUsage, usageSpend, lab, repos, glance, attention, codespaces, platform, claudeVersions, connect });
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
 // Before the socket modules: ties their connections to the sign-in that opened them (QA-001) and drops unanswered upgrades.

@@ -163,10 +163,9 @@ export function summarizeArm(arm: string, slices: readonly LabSliceMetrics[]): L
   };
 }
 
-/** The experiment's arms over the sub-agent slices that fall into it (excluded ones out). Intention to treat: the assigned arm counts. */
-export function experimentReport(db: DatabaseSync, id: string): LabExperimentReport | null {
-  const e = getExperiment(db, id);
-  if (!e) return null;
+/** The experiment's sub-agent slices per arm (excluded ones out), and how many were excluded. Intention to treat: the assigned arm counts. */
+export function armMembers(db: DatabaseSync, e: LabExperiment): { byArm: Map<string, LabSliceMetrics[]>; excluded: number } {
+  const id = e.id;
   const rows = db.prepare('SELECT session_id, slice_id, arm, excluded FROM lab_assignments WHERE experiment_id = ?').all(id) as { session_id: string; slice_id: string; arm: string | null; excluded: string | null }[];
   const excluded = new Set(rows.filter((r) => r.excluded).map((r) => `${r.session_id}\u0000${r.slice_id}`));
   const key = (m: LabSliceMetrics) => `${m.sessionId}\u0000${m.sliceId}`;
@@ -181,5 +180,13 @@ export function experimentReport(db: DatabaseSync, id: string): LabExperimentRep
       byArm.get(m.startMs! < e.switchMs! ? 'before' : 'after')!.push(m);
     }
   }
-  return { experiment: e, arms: e.arms.map((a) => summarizeArm(a, byArm.get(a) ?? [])), excluded: excluded.size };
+  return { byArm, excluded: excluded.size };
+}
+
+/** The experiment's arms over the sub-agent slices that fall into it (excluded ones out). Intention to treat: the assigned arm counts. */
+export function experimentReport(db: DatabaseSync, id: string): LabExperimentReport | null {
+  const e = getExperiment(db, id);
+  if (!e) return null;
+  const { byArm, excluded } = armMembers(db, e);
+  return { experiment: e, arms: e.arms.map((a) => summarizeArm(a, byArm.get(a) ?? [])), excluded };
 }

@@ -3059,6 +3059,18 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 852,
+    name: 'efficiency lab: frozen slice numbers for retention',
+    up(db) {
+      // T-287 slice 2 (docs/prd/claude-usage.md §28.9): the request and tool rows are kept 14 days; before a finished slice's rows go, its
+      // numbers (counts only, the LabSliceMetrics shape as JSON) are frozen on its row, so slices and summaries are kept.
+      db.exec(`
+        ALTER TABLE lab_slices ADD COLUMN frozen TEXT;
+        ALTER TABLE lab_slices ADD COLUMN frozen_ms INTEGER;
+      `);
+    },
+  },
+  {
     version: 792,
     name: 'keep going: a program per policy and the pause switch',
     up(db) {

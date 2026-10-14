@@ -5,7 +5,7 @@
 
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { LabSliceKind, LabSliceMetrics, LabToolClass } from '@portal/contracts';
-import { inputPricePerToken } from './prices.js';
+import { cacheReadWeight, inputPricePerToken } from './prices.js';
 
 export interface RequestRow {
   at_ms: number | null;
@@ -83,6 +83,7 @@ export function computeSlice(meta: SliceRow, requests: readonly RequestRow[], to
   const startMs = times.length ? Math.min(...times) : null;
   const endMs = times.length ? Math.max(...times) : null;
   const toolCalls: Partial<Record<LabToolClass, number>> = {};
+  const bashByClass: Partial<Record<LabToolClass, number>> = {};
   let bash = 0, rtk = 0, inspect = 0, results = 0, chars = 0;
   for (const t of tools) {
     results += t.results;
@@ -92,6 +93,7 @@ export function computeSlice(meta: SliceRow, requests: readonly RequestRow[], to
     toolCalls[c] = (toolCalls[c] ?? 0) + 1;
     if (t.tool === 'Bash') {
       bash++;
+      bashByClass[c] = (bashByClass[c] ?? 0) + 1;
       if (t.rtk) rtk++;
       if (c === 'inspect') inspect++;
     }
@@ -113,7 +115,7 @@ export function computeSlice(meta: SliceRow, requests: readonly RequestRow[], to
     cacheWrite1h: cw1,
     output,
     units: { input, read, write, out },
-    costUsd: price === null ? null : (input + read + write + out) * price,
+    costUsd: price === null ? null : (input + cacheReadWeight(meta.model) * cacheRead + write + out) * price,
     rewriteTokens: rewrite,
     results,
     resultChars: chars,
@@ -121,6 +123,7 @@ export function computeSlice(meta: SliceRow, requests: readonly RequestRow[], to
     rtkCalls: rtk,
     inspectCalls: inspect,
     toolCalls,
+    bashByClass,
     startMs,
     endMs,
     minutes: times.length > 1 ? round1((endMs! - startMs!) / 60000) : 0,
@@ -130,6 +133,9 @@ export function computeSlice(meta: SliceRow, requests: readonly RequestRow[], to
 export interface SliceFilter {
   sessionId?: string;
   kind?: LabSliceKind;
+  ticket?: string;
+  role?: string;
+  model?: string;
   /** Slices whose first request is at or after this. */
   fromMs?: number;
   /** Slices whose first request is before this. */
@@ -144,16 +150,25 @@ export function sliceMetrics(db: DatabaseSync, filter: SliceFilter = {}): LabSli
   const args: SQLInputValue[] = [];
   if (filter.sessionId) (where.push('session_id = ?'), args.push(filter.sessionId));
   if (filter.kind) (where.push('kind = ?'), args.push(filter.kind));
-  const metas = db.prepare(`SELECT session_id, slice_id, kind, ticket, role, model, started_ms FROM lab_slices${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY session_id, slice_id`).all(...args) as unknown as SliceRow[];
+  if (filter.ticket) (where.push('ticket = ?'), args.push(filter.ticket));
+  if (filter.role) (where.push('role = ?'), args.push(filter.role));
+  if (filter.model) (where.push('model = ?'), args.push(filter.model));
+  const metas = db.prepare(`SELECT session_id, slice_id, kind, ticket, role, model, started_ms, frozen FROM lab_slices${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY session_id, slice_id`).all(...args) as unknown as (SliceRow & { frozen: string | null })[];
   const wanted = filter.keys ? new Set(filter.keys.map((k) => `${k.sessionId}\u0000${k.sliceId}`)) : null;
   const reqQ = db.prepare('SELECT at_ms, model, input, cache_read, cache_write_5m, cache_write_1h, cache_write, output FROM lab_requests WHERE session_id = ? AND slice_id = ? ORDER BY rowid');
   const toolQ = db.prepare('SELECT tool, class, rtk, results, result_chars FROM lab_tools WHERE session_id = ? AND slice_id = ?');
   const out: LabSliceMetrics[] = [];
   for (const meta of metas) {
     if (wanted && !wanted.has(`${meta.session_id}\u0000${meta.slice_id}`)) continue;
-    const reqs = reqQ.all(meta.session_id, meta.slice_id) as unknown as RequestRow[];
-    if (!reqs.length) continue;
-    const m = computeSlice(meta, reqs, toolQ.all(meta.session_id, meta.slice_id) as unknown as ToolRow[]);
+    let m: LabSliceMetrics;
+    if (meta.frozen) {
+      // Retention (§28.9) froze the numbers before the request rows went: the slice keeps them as they were.
+      m = { bashByClass: {}, ...(JSON.parse(meta.frozen) as LabSliceMetrics) };
+    } else {
+      const reqs = reqQ.all(meta.session_id, meta.slice_id) as unknown as RequestRow[];
+      if (!reqs.length) continue;
+      m = computeSlice(meta, reqs, toolQ.all(meta.session_id, meta.slice_id) as unknown as ToolRow[]);
+    }
     if (filter.fromMs !== undefined && (m.startMs === null || m.startMs < filter.fromMs)) continue;
     if (filter.toMs !== undefined && (m.startMs === null || m.startMs >= filter.toMs)) continue;
     out.push(m);

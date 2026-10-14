@@ -30,3 +30,19 @@ export function inputPricePerToken(model: string | null | undefined): number | n
   }
   return best ? best[1] / 1e6 : null;
 }
+
+/**
+ * The cache-read weight per model (slice 2), as a fraction of the input price. Source: the same price list as above (cache read Opus 5.5 0.05,
+ * Fable 5.1 0.025 of input); every other model at the design's 0.1 (token-economy-design.md, the standard ratio). `units.read` keeps 0.1 so
+ * the lab equals the reference script; the cost uses this weight.
+ */
+const READ_WEIGHT: [prefix: string, weight: number][] = [
+  ['claude-opus-5-5', 0.05],
+  ['claude-fable-5-1', 0.025],
+];
+
+export function cacheReadWeight(model: string | null | undefined): number {
+  const id = (model ?? '').replace(/\[[^\]]*\]$/, '');
+  const hit = READ_WEIGHT.find(([p]) => id === p || id.startsWith(p + '-'));
+  return hit ? hit[1] : 0.1;
+}
