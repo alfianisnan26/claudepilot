@@ -178,7 +178,10 @@ for (const cfg of MATRIX) {
   check('no sideways scroll (Settings)', s.sw <= s.w + 1, `${s.sw} > ${s.w}`);
   await shot(`settings-${cfg.name}`);
   // The InfoTip names the variable, the source and the restart, inside the screen.
-  await ev(`(() => { const b = document.getElementById('setting-agents.bashOutputMax').closest('li').querySelector('button[aria-label^="About "]'); b.scrollIntoView({ block: 'center' }); b.click(); })()`);
+  // Scroll first and let it settle: an InfoTip closes on scroll.
+  await ev(`document.getElementById('setting-agents.bashOutputMax').closest('li').scrollIntoView({ block: 'center' })`);
+  await sleep(400);
+  await ev(`document.getElementById('setting-agents.bashOutputMax').closest('li').querySelector('button[aria-label^="About "]').click()`);
   await sleep(300);
   const tip = await ev(tipBox('BASH_MAX_OUTPUT_LENGTH'));
   check('the InfoTip names the variable, the source and the restart', !!tip && /Source:/.test(tip.text) && /next start/.test(tip.text), tip && tip.text);
