@@ -48,19 +48,25 @@ const swipe = async (from, dx) => {
 };
 
 await b.goto('/admin/sessions', 2500);
+await b.waitFor("document.querySelectorAll('[data-chip]').length > 0", 30000, 'the chips');
 const order = await chips();
 check('the list opens on the first chip with sessions', (await pressed()) === firstFull(order), JSON.stringify({ on: await pressed(), order }));
 check('the chips: Pinned there while nothing is pinned, All last', order.some(([id, n]) => id === 'pinned' && n === 0) && order.at(-1)?.[0] === 'all', JSON.stringify(order));
 check('no sideways scroll', (await b.eval('document.scrollingElement.scrollWidth <= innerWidth')) === true);
 await shot('list-first');
 
-// Swipe the second session to the right: it is pinned and the Pinned chip counts it.
-await chip('all'); // All: every row is on screen
-await sleep(500);
+// Swipe a calm session to the right: it is pinned and the Pinned chip counts it. The Idle chip lists only a few rows, all on screen: the
+// swipe needs no scrolling (a scrolled page shifted the touch point and swiped the wrong row).
 // A calm one: archiving a busy session or one with a worktree asks first (a dialog), which is not what this checks.
-const target = sessions.find((x) => (x.state === 'idle' || x.state === 'ended') && !x.worktree && !x.waiting) ?? sessions[1];
+const calm = (x) => x.state === 'idle' && !x.worktree && !x.waiting;
+await chip('idle');
+await b.waitFor(`document.querySelector('ul a[href^="/admin/sessions/"]')`, 30000, 'the rows');
+await sleep(500);
+const calmIds = sessions.filter(calm).map((x) => x.id);
+const rows = await b.eval(`[...document.querySelectorAll('ul a[href^="/admin/sessions/"]')].map((a) => a.getAttribute('href').split('/').pop())`);
+const target = sessions.find((x) => x.id === rows.find((id) => calmIds.includes(id))) ?? sessions[1];
 const box = await rowBox(target.id);
-check('the row is on screen', !!box);
+check('the row is on screen', !!box && box.y < 800, JSON.stringify(box));
 await swipe(box, 120);
 await sleep(1200);
 const after = (await call('GET', `/api/chat/sessions/${target.id}`)).data;
@@ -74,6 +80,7 @@ await shot('list-pinned');
 
 // A fresh load still opens on the first chip with sessions; Pinned lists the pinned session.
 await b.goto('/admin/sessions', 2500);
+await b.waitFor("document.querySelectorAll('[data-chip]').length > 0", 30000, 'the chips');
 check('a fresh load opens on the first chip with sessions', (await pressed()) === firstFull(await chips()), String(await pressed()));
 await chip('pinned');
 await sleep(500);
