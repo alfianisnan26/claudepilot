@@ -28,7 +28,7 @@ Models (coordinator 02:2x, evaluation 2026-10-14): ALWAYS passed explicitly; son
 - t255 (opus) T-255: dev-automove-model, dev/t255-unknown-usage.
 - DONE t146 (opus): T-146 slice 1 merged locally (gate Job running; push when green). T-146 in_review.
 - DONE t136-2 (opus): T-136 slice 2 built on dev/t136-recover at 641bf05 (628 tests, 0 fail; recover.mjs green). Merges AFTER T-277 (same controller), own gate, the NEXT deploy (decision: the hotfix deploy stays small). Slice 3 remains.
-- t100 (sonnet) T-100 finish: dev-automove-web, dev/t100-sessions-list.
+- DONE t100 (sonnet): T-100 finished on dev/t100-sessions-list at 1d6b060 (web 440/440; harnesses 290/0, 26/26, 11/11, 11/11). Merges after the hotfix deploy with T-136 slice 2 (own gate, next deploy). T-100 in_review.
 - Orchestrator: integration 270e752 on origin and pilot (T-270 layers 2-3 and T-95 item 4, both gated green). Local HEAD = 270e752 + the T-146 merge (gate Job running; pushed as wip/orch-<sha>); when green push origin and pilot.
 
 ## IN FLIGHT (03:3x: six slices: five plus the owner's urgent hotfix, on the record)
