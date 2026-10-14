@@ -43,7 +43,7 @@
           "Skill"
         ],
         "disallowedTools": [],
-        "model": "opus",
+        "model": "sonnet",
         "effort": "high",
         "maxTurns": 80
       },
@@ -91,7 +91,7 @@
           "NotebookEdit",
           "SendMessage"
         ],
-        "model": "opus",
+        "model": "sonnet",
         "effort": "high",
         "maxTurns": 60
       },
