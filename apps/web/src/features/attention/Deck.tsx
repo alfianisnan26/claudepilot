@@ -259,7 +259,7 @@ function Card({ item: i, now, leaving, onDecide }: { item: AttentionItem; now: n
       }}
       style={style}
       className={cn(
-        'relative flex min-h-[52svh] min-w-0 touch-pan-y select-none flex-col gap-3 rounded-3xl border border-line bg-surface p-5 shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-accent lg:min-h-80',
+        'relative flex min-h-[44svh] min-w-0 touch-pan-y select-none flex-col gap-3 rounded-3xl border border-line bg-surface p-5 shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-accent lg:min-h-80',
         dx === 0 && 'transition-[transform,opacity] duration-200 ease-out motion-reduce:transition-none',
       )}
     >
@@ -293,8 +293,8 @@ function Card({ item: i, now, leaving, onDecide }: { item: AttentionItem; now: n
         <span
           aria-hidden="true"
           className={cn(
-            'pointer-events-none absolute top-4 rounded-full px-3 py-1 text-[13px] font-semibold',
-            hint === 'act' ? 'left-4 bg-accent/15 text-accent' : 'right-4 bg-ink/10 text-ink-soft',
+            'pointer-events-none absolute bottom-5 rounded-full px-3 py-1 text-[13px] font-semibold',
+            hint === 'act' ? 'left-5 bg-accent/15 text-accent' : 'right-5 bg-ink/10 text-ink-soft',
           )}
         >
           {hint === 'act' ? i.action.label : 'Later'}

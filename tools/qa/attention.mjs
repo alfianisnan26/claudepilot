@@ -12,7 +12,9 @@ import { api, BASE, login, sleep } from './lib.mjs';
 const cookie = await login();
 const call = api(cookie);
 const fails = [];
+let checks = 0;
 const check = (ok, what) => {
+  checks++;
   if (!ok) fails.push(what);
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`);
 };
@@ -315,5 +317,5 @@ await must(call('POST', `/api/tickets/${ticket.id}/close`, { outcome: 'done', su
 const after = (await must(call('GET', '/api/attention'), 'list')).data;
 check(after.counts.ticket_approval === 0 && after.total === seeded.total - 1, `closing the ticket resolves its item (${after.total})`);
 
-console.log(fails.length ? `\n${fails.length} failed; screenshots in ${SHOTS}` : `\nall passed; screenshots in ${SHOTS}`);
+console.log(fails.length ? `\n${fails.length} of ${checks} failed; screenshots in ${SHOTS}` : `\nall ${checks} passed; screenshots in ${SHOTS}`);
 process.exit(fails.length ? 1 : 0);
