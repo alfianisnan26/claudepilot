@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import type { ChatPermissionMode } from '@portal/contracts';
 import { allowResponse, denyResponse, parseLine } from './protocol.js';
-import { INTEGRITY_CASES, PEER_CAUSE_MS, PEER_QUEUED_MESSAGE, sameAnswer } from './integrity.js';
+import { INTEGRITY_CASES, lessPermissive, MODE_RANK, modeRank, PEER_CAUSE_MS, PEER_QUEUED_MESSAGE, sameAnswer } from './integrity.js';
 import { ChatStore } from './store.js';
 import { APPLIED, fail, firstTurn, init, line, liveSession, ok, sleep, until, type Live } from './testkit.js';
 
@@ -345,7 +345,53 @@ const FIXTURES: Record<string, Fixture> = {
       { name: 'an id never asked', run: (s) => expectIntegrityEnd(s, ok('R-never', { mode: 'default' }), /a control response for request R-never that this portal never asked for or answered/) },
     ],
   },
+  'mode-downgrade': {
+    accept: async (s) => {
+      await askMode(s, 'acceptEdits');
+      await expectAccepted(s, [init(s.id, 'default')]);
+      assert.equal(s.controller.get(s.id)!.mode, 'default');
+      assert.ok(s.controller.history(s.id).some((e) => e.kind === 'system' && e.text === 'Mode is Manual in this chat'));
+      // Default is expected from now on: reported again, it is simply the mode.
+      await expectAccepted(s, [statusMode('default'), init(s.id, 'default')]);
+      assert.equal(s.controller.history(s.id).filter((e) => e.text === 'Mode is Manual in this chat').length, 1);
+    },
+    reject: [
+      {
+        name: 'a more permissive report than expected',
+        run: (s) => expectIntegrityEnd(s, init(s.id, 'acceptEdits'), /the permission mode changed to acceptEdits without this portal \(expected default\)$/),
+      },
+      {
+        name: 'a more permissive report after a downgrade (back up without the portal)',
+        run: async (s) => {
+          await askMode(s, 'acceptEdits');
+          await expectAccepted(s, [statusMode('plan')]);
+          await expectIntegrityEnd(s, statusMode('acceptEdits'), /the permission mode changed to acceptEdits without this portal \(expected plan\)$/);
+        },
+      },
+      { name: 'an unexpected Bypass', run: (s) => expectIntegrityEnd(s, init(s.id, 'bypassPermissions'), /the agent reported Bypass permissions, which chat sessions never allow$/) },
+      {
+        name: 'an unknown mode string (below expected by name, ranked above Bypass)',
+        run: async (s) => {
+          await askMode(s, 'acceptEdits');
+          await expectIntegrityEnd(s, statusMode('dontAsk'), /the permission mode changed to dontAsk without this portal \(expected acceptEdits\)$/);
+        },
+      },
+      { name: 'a mode string never seen', run: (s) => expectIntegrityEnd(s, statusMode('someNewMode'), /the permission mode changed to someNewMode without this portal \(expected default\)$/) },
+      {
+        name: 'a downgrade on a sub-agent thread (no mode report; expected stays, judged on the main thread)',
+        run: async (s) => {
+          await askMode(s, 'acceptEdits');
+          await expectAccepted(s, [line({ type: 'system', subtype: 'init', session_id: s.id, model: 'claude-opus-5-5', permissionMode: 'default', parent_tool_use_id: 'toolu_sub_1', apiKeySource: 'apiKeyHelper' })]);
+          assert.equal(s.controller.get(s.id)!.mode, 'acceptEdits', 'a sub-agent line never speaks for the mode');
+          assert.ok(!s.controller.history(s.id).some((e) => e.text === 'Mode is Manual in this chat'));
+          await expectIntegrityEnd(s, statusMode('auto'), /the permission mode changed to auto without this portal \(expected acceptEdits\)$/);
+        },
+      },
+    ],
+  },
 };
+
+const statusMode = (mode: string) => line({ type: 'system', subtype: 'status', status: null, permissionMode: mode });
 
 /** The portal asks for a mode and Claude Code confirms it; returns the request id. */
 async function askMode(s: Live, mode: ChatPermissionMode): Promise<string> {
@@ -399,6 +445,40 @@ test('sameAnswer (T-265): the shapes the portal\'s own requests produce, the mod
   assert.ok(!sameAnswer(okWith({ behavior: 'deny' }), { kind: 'answered', outcome: 'allowed_once' }));
   assert.ok(!sameAnswer(okWith({ behavior: 'allow' }), { kind: 'answered', outcome: null }), 'no outcome recorded: not the same');
   assert.ok(!sameAnswer(okWith({}), { kind: 'answered', outcome: 'allowed_once' }), 'an echo without a behavior');
+});
+
+test('MODE_RANK (T-277): plan < default < acceptEdits < auto < bypassPermissions; any other string ranks above Bypass and is never a downgrade', () => {
+  const order = ['plan', 'default', 'acceptEdits', 'auto', 'bypassPermissions'];
+  assert.deepEqual(Object.keys(MODE_RANK).sort((a, b) => MODE_RANK[a]! - MODE_RANK[b]!), order);
+  for (let i = 1; i < order.length; i++) assert.ok(modeRank(order[i - 1]!) < modeRank(order[i]!));
+  for (const unknown of ['dontAsk', 'someNewMode', '', 'constructor', 'toString', '__proto__']) {
+    assert.ok(modeRank(unknown) > modeRank('bypassPermissions'), unknown);
+    for (const known of order) {
+      assert.equal(lessPermissive(unknown, known), false, `${unknown} under ${known}`);
+      assert.equal(lessPermissive(known, unknown), false, `${known} under ${unknown}: an expected mode outside the table never downgrades`);
+    }
+  }
+  assert.ok(lessPermissive('default', 'bypassPermissions'));
+  assert.ok(lessPermissive('plan', 'auto'));
+  assert.ok(!lessPermissive('default', 'default'), 'the same mode is not a downgrade');
+  assert.ok(!lessPermissive('bypassPermissions', 'default'));
+  assert.ok(!lessPermissive('acceptEdits', 'default'));
+});
+
+test('integrity (T-277): a downgrade from auto to plan is taken the same way (no ExitPlanMode or EnterPlanMode involved)', async () => {
+  const s = await liveSession();
+  try {
+    const turning = s.controller.control(s.id, 'mode', { mode: 'auto' }, { actor: 'ui' });
+    s.tail.push(ok((await s.take('set_permission_mode')).id, { mode: 'auto' }));
+    await turning;
+    await expectAccepted(s, [statusMode('plan')]);
+    assert.equal(s.controller.get(s.id)!.mode, 'plan');
+    assert.ok(s.controller.history(s.id).some((e) => e.kind === 'system' && e.text === 'Mode is Plan in this chat'));
+    assert.equal(s.controller.audit({ kind: 'bypass.left' }).length, 0, 'not a Bypass leave');
+    await expectIntegrityEnd(s, statusMode('auto'), /the permission mode changed to auto without this portal \(expected plan\)$/);
+  } finally {
+    await s.done();
+  }
 });
 
 test('integrity table: every accepted case says what it rests on and has its fixtures, and nothing else is listed', () => {
