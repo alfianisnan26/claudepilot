@@ -18,7 +18,7 @@ import { usePersonaIdentities } from '@/features/personas/identities';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { BulkBar, runBulk, type BulkAction } from './BulkBar';
-import { canFold, chipCounts, defaultChip, statusGroup } from './listOrder';
+import { canFold, chipCounts, defaultChip, ofProgram, programCounts, statusGroup } from './listOrder';
 import { NewSessionDialog } from './NewSessionDialog';
 import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
 import { SessionRow, type RowActions } from './SessionRow';
@@ -63,11 +63,16 @@ export function SessionsPage() {
     next.delete('new');
     setParams(next, { replace: true });
   }, [params, setParams]);
+  // The program filter (T-259 slice 3) narrows everything below it: the chips' counts and the list.
+  const [program, setProgram] = useState<string | null>(null);
+  const programs = useMemo(() => programCounts(sessions ?? []), [sessions]);
+  const shown = useMemo(() => (sessions ? ofProgram(sessions, program) : null), [sessions, program]);
   // Counts for the filter chips, over what's open (never changed by the search).
-  const counts = useMemo(() => chipCounts(sessions ?? []), [sessions]);
+  const counts = useMemo(() => chipCounts(shown ?? []), [shown]);
   // The chip opens on the first one with sessions in the order of attention (T-100: Needs you, In progress, Idle, Pinned, Ended, else All); once
   // the sessions are known, and only until the person picks one.
-  const [view, setView] = useState<ViewState>(() => ({ ...savedView(), filter: 'attention', query: '', archived: false }));
+  const [baseView, setView] = useState<Omit<ViewState, 'program'>>(() => ({ ...savedView(), filter: 'attention', query: '', archived: false }));
+  const view: ViewState = useMemo(() => ({ ...baseView, program }), [baseView, program]);
   const [chosenFilter, setChosenFilter] = useState(false);
   useEffect(() => {
     if (chosenFilter || !sessions) return;
@@ -86,7 +91,8 @@ export function SessionsPage() {
   const [bulk, setBulk] = useState<BulkAction | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const change = (next: Partial<ViewState>) => {
+  const change = ({ program: nextProgram, ...next }: Partial<ViewState>) => {
+    if (nextProgram !== undefined) setProgram(nextProgram);
     if (next.filter !== undefined || next.archived !== undefined) setChosenFilter(true);
     setView((v) => {
       const merged = { ...v, ...next };
@@ -103,8 +109,8 @@ export function SessionsPage() {
   const byStatus = !view.archived && view.filter === 'all' && view.groupBy === 'none';
   const list = useMemo(
     () =>
-      sessions
-        ? buildListView(sessions, {
+      shown
+        ? buildListView(shown, {
             groupBy: view.groupBy,
             filter: view.filter,
             query: view.query,
@@ -113,7 +119,7 @@ export function SessionsPage() {
             groupOf: byStatus ? statusGroup : undefined,
           })
         : null,
-    [sessions, view, factOf, workspacesLoaded, byStatus],
+    [shown, view, factOf, workspacesLoaded, byStatus],
   );
 
   const toggle = useCallback((id: string) => setSelected((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set(s).add(id))), []);
@@ -212,7 +218,7 @@ export function SessionsPage() {
       {!sessions && !failed && <RowsSkeleton rows={3} lines={1} trailing icon="rounded-2xl" />}
 
       {sessions && sessions.length > 0 && (
-        <SessionsToolbar view={view} counts={counts} onChange={change} selecting={selecting} onSelect={() => setSelecting(true)} />
+        <SessionsToolbar view={view} counts={counts} programs={programs} onChange={change} selecting={selecting} onSelect={() => setSelecting(true)} />
       )}
 
       {/* What waits on you, on top of the other chips' lists (All has it as its first heading, Needs you is it). */}
@@ -237,8 +243,8 @@ export function SessionsPage() {
         ) : list.shown === 0 ? (
           <EmptyState icon={<MessagesSquare className="size-6" />} title={view.archived ? 'Nothing archived' : 'No sessions match'}>
             {view.archived ? 'Archived sessions end and wait here, with their transcripts.' : 'Nothing fits this search and filter.'}{' '}
-            {(view.query || view.filter !== 'all' || view.archived) && (
-              <button type="button" className="font-semibold text-ink underline underline-offset-2" onClick={() => change({ query: '', filter: 'all', archived: false })}>
+            {(view.query || view.filter !== 'all' || view.archived || view.program) && (
+              <button type="button" className="font-semibold text-ink underline underline-offset-2" onClick={() => change({ query: '', filter: 'all', archived: false, program: null })}>
                 Show everything
               </button>
             )}

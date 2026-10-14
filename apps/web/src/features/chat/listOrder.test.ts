@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildListView, type ChatSession } from '@portal/contracts';
-import { canFold, chipCounts, defaultChip, statusGroup, statusOf, STATUS_ORDER, visibleChips } from './listOrder';
+import { canFold, chipCounts, defaultChip, ofProgram, programCounts, programInput, statusGroup, statusOf, STATUS_ORDER, visibleChips } from './listOrder';
 
 const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 let n = 0;
@@ -127,4 +127,26 @@ test('an empty heading is not shown; Needs you never folds', () => {
   assert.deepEqual(view.groups.map((g) => g.key), ['idle', 'ended']);
   assert.equal(canFold('attention'), false);
   assert.ok(STATUS_ORDER.filter((k) => k !== 'attention').every(canFold));
+});
+
+test('the program filter (T-259 slice 3): the programs by name with their counts; a program keeps only its chats, null keeps all', () => {
+  const kg = (program: string | null) => ({ keepGoing: { program } as ChatSession['keepGoing'] });
+  const list = [s(kg('event')), s(kg('konfersi')), s(kg('event')), s(), s(kg(null))];
+  assert.deepEqual(programCounts(list), [
+    { program: 'event', count: 2 },
+    { program: 'konfersi', count: 1 },
+  ]);
+  assert.deepEqual(ofProgram(list, 'event').map((x) => x.id), [list[0]!.id, list[2]!.id]);
+  assert.equal(ofProgram(list, null).length, 5);
+  assert.deepEqual(ofProgram(list, 'gone'), []);
+  assert.deepEqual(programCounts([s()]), []);
+});
+
+test('a program as typed in Session info: trimmed and lowercased; empty is none; anything else is refused', () => {
+  assert.equal(programInput('  Event '), 'event');
+  assert.equal(programInput(''), null);
+  assert.equal(programInput('   '), null);
+  assert.equal(programInput('two words'), undefined);
+  assert.equal(programInput('-lead'), undefined);
+  assert.equal(programInput('a'.repeat(41)), undefined);
 });
