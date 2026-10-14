@@ -400,7 +400,7 @@ const CREW_TRIES = 3;
 type CrewState = 'idle' | 'waiting' | 'ended' | 'stopped' | 'working' | 'other';
 
 // T-294: what a quoted text could close the report's quotes or open a frame of its own with: quotes become ', brackets ( and ).
-const CREW_QUOTES = /["\u201c\u201d\u201e\u201f\u00ab\u00bb\u2039\u203a\uff02\u2018\u2019\u201a\u201b]/g;
+const CREW_QUOTES = /["\u201c\u201d\u201e\u201f\u00ab\u00bb\uff02\u2018\u2019\u201a\u201b]/g; // not ‹ ›: they close no “ ” quote, and a menu path (Settings › Sessions) stays readable
 const CREW_OPENS = /[[<\uff3b\uff1c\u3010\u3014\u3008\u300a]/g;
 const CREW_CLOSES = /[\]>\uff3d\uff1e\u3011\u3015\u3009\u300b]/g;
 

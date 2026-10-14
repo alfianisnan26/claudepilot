@@ -501,6 +501,7 @@ test('crewQuote (T-294 review F4): one line, cleaned and redacted, no quote or b
   const long = crewQuote(`${'x'.repeat(400)}”`, 300);
   assert.deepEqual([long.length, long.endsWith('…')], [300, true]);
   assert.equal(crewQuote(null, 300), '');
+  assert.equal(crewQuote('the limit (Settings › Sessions)', 300), 'the limit (Settings › Sessions)', 'a menu path keeps its arrow (QA re-run)');
 });
 
 test('T-294 (review F4): a worker’s reply, title and request cannot close the report’s quotes or forge a frame inside it', async () => {
