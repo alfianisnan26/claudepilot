@@ -900,6 +900,12 @@ managed `env` when a process starts, so a running Claude gets a change at its ne
 - The Configuration sheet shows one line: Applied, Pending (a change on its way), or Unavailable (nothing
   landed yet: never the setting's value as a guess); the values in effect are behind its ⓘ.
 
+**Browser check (2026-10-14):** `tools/qa/agent-policy.mjs` against a scratch portal with This machine in a Job
+(`claudepilot-job-54126d8a`, commit c03c461): 101/101 checks at 390 px (touch, safe areas) and 1280 px, light and dark: the
+five rows, labels of one or two words, every control 44 px tall and each 5m/1h segment 44 x 44, the InfoTips inside the screen,
+the choice saved on the server, no sideways scroll; the sheet's line Unavailable on the real server and, with a fixture answer,
+"1 overridden by policy" with the variable and the set behind its ⓘ.
+
 Open: 🔬 a real Claude Code reading each variable from the drop-in (the Docker integration suite can show it);
 a per-workspace override waits for scopes (§12).
 
