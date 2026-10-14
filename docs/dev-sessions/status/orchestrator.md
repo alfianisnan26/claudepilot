@@ -10,7 +10,7 @@
 - T-342 (factory: a stop that acts mid-turn, no unbounded re-dispatch, minors): implementer b41b0cca, branch dev/t293-6 from dev/t293-5. Then a BLIND re-review (opus) must say SAFE TO RUN UNATTENDED.
 - T-343 (live cost estimate mid-turn): implementer 8d08616a, dev/t-343-1 (may touch UI: send a ux-checker).
 - T-336 (session_start takes a parent): implementer 692c90b5, dev/t-336-1.
-- T-333 (job-run --against/--keep-tests proof, DONE d65eb5f, in review): verifier fdd39fed. After PASS: merge dev/t-333-1 and add to .claude/agents/implementer.md: for a fix use `scripts/job-run.sh --ref <branch> --against <full hash of fix~1> --keep-tests <test files> -- '<cmd>'` and paste the PROOF line.
+- T-333 (job-run --against/--keep-tests proof, DONE d65eb5f): verifier fdd39fed PASS WITH GAPS (comment 1921; it ran from the main checkout, which lacks --against, so the real proof rests on the implementer's job ff684d30). READY TO MERGE in batch 4: merge dev/t-333-1, close T-333 (gap: show the new tests fail on the old script, once merged run it with --against origin/integration~), and and add to .claude/agents/implementer.md: for a fix use `scripts/job-run.sh --ref <branch> --against <full hash of fix~1> --keep-tests <test files> -- '<cmd>'` and paste the PROOF line.
 
 ## Ticket flow (coordinator rule, 22:15)
 Claim before dispatch (ticket_claim_next WITH id works), in_review at merge, close on the verifier verdict, a follow-up ticket for each gap. In review now: T-321, T-312, T-317 (live Keep going run not done), T-334 (needs a verifier), T-338 (rest in T-342), T-333. Blocked on the owner: T-315, T-319, T-339 (factory admin path; recommendation C = after T-336). T-306 in progress (item 3 lab A/B, item 4 owner approval; gaps T-341, T-340).
