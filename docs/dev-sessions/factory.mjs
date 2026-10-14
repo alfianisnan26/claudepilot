@@ -25,11 +25,17 @@
 //                               FACTORY RESUME marker that makes the same event a no-op next time), exception (stale, cancelled) or ignore.
 //   pendingResumes(detail, o)   the same for a TicketDetail's CI checks: what a restarted engine still has to do.
 //   applyPlan(plan, deps)       the --apply step with the portal and git injected (portalClient, gitOps).
+//   nextStep(t, opts)           what comes next for the open dispatch from its markers alone: wait, fix, review (sonnet on the diff; opus for
+//                               sensitive or unknown paths, reviewModel), verify, integrate, learn (with learnText: the ACTUAL comment and one
+//                               LESSON line), or an exception (out of order, conflict, rework limit, budget stop). stepMarker writes the markers.
+// One round for a supervisor hook: docs/dev-sessions/factory-round.mjs (prints NEXT and EXCEPTION lines; not wired into supervisor.mjs yet).
 //
 // State lives in the portal's tickets only, as comments whose first line is a marker the engine writes and reads back:
 //   FACTORY DISPATCH <dispatchId> role=<role> model=<model> size=<S|M|L> budget=<n> branch=<branch>
 //   FACTORY END <dispatchId> <outcome>
 //   FACTORY RESUME <dispatchId> run=<runId> state=<state> next=<review|fix>
+//   FACTORY REVIEW <dispatchId> verdict=<pass|changes>   FACTORY VERIFY <dispatchId> verdict=<pass|sendback>
+//   FACTORY INTEGRATE <dispatchId> result=<merged|conflict> [commit=<sha>]
 // An ACTUAL comment ends every dispatch before it. A ticket with a DISPATCH and no END or ACTUAL has an open dispatch: it counts as in flight and is never dispatched again (the double-dispatch guard).
 // Dispatch ids are `<ticket>-F<n>` (n = the ticket's earlier dispatches + 1), so a restart computes the same ids from the same tickets.
 import { execFileSync } from 'node:child_process';
@@ -140,15 +146,18 @@ export function intake(rawTickets, opts = {}) {
   const exceptions = [];
   let planned = 0;
   let stopped = null;
+  // A dispatch open past the limit is the coordinator's to look at (one line); it is never dispatched again by the engine. Its own pass: the
+  // plan below stops at the WIP or budget limit, and a stale dispatch ranked after the stop must still be reported.
+  for (const { t } of ranked) {
+    for (const d of openDispatches(t)) {
+      const age = ageMin(d.at, opts.now);
+      if (age !== null && age > staleMin) exceptions.push({ ticket: t.id, dispatchId: d.id, reason: `stale dispatch ${d.id}: open ${age} min (limit ${staleMin}), no END and no ACTUAL` });
+    }
+  }
   for (const { t, rank } of ranked) {
     const open = openDispatches(t);
     if (open.length) {
       skipped.push({ ticket: t.id, reason: `dispatched (${open.map((d) => d.id).join(', ')})` });
-      // A dispatch open past the limit is the coordinator's to look at (one line); it is never dispatched again by the engine.
-      for (const d of open) {
-        const age = ageMin(d.at, opts.now);
-        if (age !== null && age > staleMin) exceptions.push({ ticket: t.id, dispatchId: d.id, reason: `stale dispatch ${d.id}: open ${age} min (limit ${staleMin}), no END and no ACTUAL` });
-      }
       continue;
     }
     if (t.status !== 'open') continue; // in progress, blocked or in review: someone has it; counted as in flight when in progress
@@ -392,6 +401,119 @@ export function pendingResumes(detail, opts) {
   return (detail?.checks ?? [])
     .map((c) => ({ check: c.name, decision: resumeDecision(detail, { runId: c.runId, state: c.state, check: c.name, at: c.updatedAt }, opts) }))
     .filter((x) => x.decision.action !== 'ignore');
+}
+
+/* ---------- The steps after the implementer: REVIEW, VERIFY, INTEGRATE, LEARN (pure) ---------- */
+
+/** Paths whose review needs opus (authz, secrets, migrations, Bypass code, the project settings): the `needsPerson` areas of D-44. */
+const SENSITIVE = /(^|\/)(authz|secrets)(\/|\.|$)|(^|\/)migrations[^/]*$|bypass|(^|\/)\.claude\/settings/i;
+export const MAX_RED_RUNS = 3;
+export const MAX_SEND_BACKS = 2;
+const VERDICTS = Object.freeze({ REVIEW: ['pass', 'changes'], VERIFY: ['pass', 'sendback'], INTEGRATE: ['merged', 'conflict'] });
+
+/** The model a review of these changed paths gets: opus when one is sensitive OR the paths are unknown (the safe side), else the role's model. */
+export function reviewModel(paths, roleModel = 'sonnet') {
+  if (!Array.isArray(paths)) return 'opus';
+  return paths.some((p) => SENSITIVE.test(String(p))) ? 'opus' : roleModel;
+}
+
+/**
+ * The marker a step writes when it ends: `FACTORY REVIEW <id> verdict=pass|changes`, `FACTORY VERIFY <id> verdict=pass|sendback`,
+ * `FACTORY INTEGRATE <id> result=merged commit=<sha>|result=conflict`. An unknown kind or verdict throws (writer and reader stay in step).
+ */
+export function stepMarker(kind, dispatchId, verdict, extra = {}) {
+  const allowed = VERDICTS[kind];
+  if (!allowed) throw new Error(`unknown step ${kind}`);
+  if (!allowed.includes(verdict)) throw new Error(`${kind} takes ${allowed.join(' or ')}, not ${verdict}`);
+  const key = kind === 'INTEGRATE' ? 'result' : 'verdict';
+  const more = Object.entries(extra).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => ` ${k}=${String(v).replace(/\s+/g, '-')}`).join('');
+  return `FACTORY ${kind} ${dispatchId} ${key}=${verdict}${more}`;
+}
+
+/** The step markers (RESUME, REVIEW, VERIFY, INTEGRATE) of one dispatch, oldest first: { kind, at, fields }. */
+function stepsOf(t, dispatchId) {
+  const out = [];
+  for (const c of t.comments) {
+    const m = /^FACTORY (RESUME|REVIEW|VERIFY|INTEGRATE) (\S+)(.*)$/.exec(c.text.split('\n', 1)[0].trim());
+    if (m && m[2] === dispatchId) out.push({ kind: m[1], at: c.at, fields: Object.fromEntries([...m[3].matchAll(/(\w+)=(\S+)/g)].map((x) => [x[1], x[2]])) });
+  }
+  return out;
+}
+
+/**
+ * What the engine does next for a ticket's open dispatch, from its comments alone (a restart computes the same):
+ *   { step, ticket, dispatchId?, role?, model?, reason, counts, actual?, lesson? }
+ * step: none (no open dispatch or a closed ticket) | wait (no CI result yet) | fix (a red run, review changes or a send-back: back to the
+ * implementer) | review (a green run) | verify (review passed) | integrate (verify passed) | learn (merged: `actual` and `lesson` are the text
+ * the engine writes, which ends the dispatch) | exception (the coordinator's: a marker out of order, a merge conflict, the rework limit, the
+ * request budget at its stop). opts: models ({ role: model }), changedPaths (for the review model), used (requests so far), maxRedRuns,
+ * maxSendBacks. A green run after a red one goes back to review; a marker of another dispatch is not read.
+ */
+export function nextStep(rawTicket, opts = {}) {
+  const t = normalizeTicket(rawTicket);
+  const models = opts.models ?? {};
+  const counts = { runs: 0, red: 0, reviews: 0, changes: 0, sendBacks: 0 };
+  const base = { ticket: t.id, counts };
+  if (CLOSED.has(t.status)) return { ...base, step: 'none', reason: `ticket is ${t.status}` };
+  const open = openDispatches(t);
+  const d = open[open.length - 1];
+  if (!d) return { ...base, step: 'none', reason: 'no open dispatch' };
+  const at = { ...base, dispatchId: d.id };
+  const exception = (reason) => ({ ...at, step: 'exception', reason });
+  let stage = 'ci';
+  let merged = null;
+  for (const s of stepsOf(t, d.id)) {
+    if (s.kind === 'RESUME') {
+      if (s.fields.state === 'failed') { counts.runs++; counts.red++; stage = 'fix'; }
+      else if (s.fields.state === 'passed') { counts.runs++; if (stage === 'ci' || stage === 'fix') stage = 'review'; }
+      continue;
+    }
+    const want = { REVIEW: 'review', VERIFY: 'verify', INTEGRATE: 'integrate' }[s.kind];
+    const verdict = s.kind === 'INTEGRATE' ? s.fields.result : s.fields.verdict;
+    if (stage !== want) return exception(`out of order: ${s.kind} ${verdict ?? '?'} while the dispatch is at ${stage}`);
+    if (!VERDICTS[s.kind].includes(verdict)) return exception(`${s.kind} with an unknown verdict ${verdict ?? '(none)'}`);
+    if (s.kind === 'REVIEW') { counts.reviews++; if (verdict === 'pass') stage = 'verify'; else { counts.changes++; stage = 'fix'; } }
+    else if (s.kind === 'VERIFY') { if (verdict === 'pass') stage = 'integrate'; else { counts.sendBacks++; stage = 'fix'; } }
+    else if (verdict === 'merged') { stage = 'learn'; merged = { at: s.at, commit: s.fields.commit ?? null }; }
+    else return exception(`merge conflict on ${d.branch ?? d.id}: the coordinator resolves it`);
+  }
+  if (stage === 'learn') return { ...at, step: 'learn', role: 'engine', reason: `merged${merged.commit ? ` ${merged.commit}` : ''}`, ...learnText(t, d, counts, { mergedAt: merged.at, commit: merged.commit, used: opts.used }) };
+  if (Number.isFinite(opts.used) && d.size in SIZE_BUDGET && sliceBudget(d.size, opts.used).state === 'stop') {
+    return exception(`request budget: ${opts.used} of ${d.budget} (stop at ${sliceBudget(d.size).stopAt}): stopped, not continued`);
+  }
+  const maxRed = opts.maxRedRuns ?? MAX_RED_RUNS;
+  const maxBack = opts.maxSendBacks ?? MAX_SEND_BACKS;
+  if (stage === 'fix' && counts.red > maxRed) return exception(`rework limit: ${counts.red} red CI runs (limit ${maxRed})`);
+  if (stage === 'fix' && counts.changes + counts.sendBacks > maxBack) return exception(`rework limit: ${counts.changes + counts.sendBacks} send-backs from review and verify (limit ${maxBack})`);
+  if (stage === 'ci') return { ...at, step: 'wait', reason: `no CI result yet on ${d.branch ?? d.id}` };
+  if (stage === 'fix') return { ...at, step: 'fix', role: d.role ?? 'implementer', model: d.model ?? models.implementer ?? 'unset', reason: counts.sendBacks || counts.changes ? `sent back (${counts.changes} review, ${counts.sendBacks} verify)` : `red CI run (${counts.red})` };
+  if (stage === 'review') return { ...at, step: 'review', role: 'reviewer', model: reviewModel(opts.changedPaths, models.reviewer ?? 'sonnet'), reason: `green CI run; diff only${Array.isArray(opts.changedPaths) ? '' : ' (changed paths unknown: opus)'}` };
+  if (stage === 'verify') return { ...at, step: 'verify', role: 'qa-verifier', model: models['qa-verifier'] ?? 'sonnet', reason: 'review passed; evidence as files' };
+  return { ...at, step: 'integrate', role: 'orchestrator', reason: 'verified: merge, quick gate, push integration, batch the deploy' };
+}
+
+/**
+ * The LEARN text: the ACTUAL comment (first line ACTUAL, so it ends the dispatch) with ONE lesson line, built from the engine's own counts only
+ * (no ticket text is copied). Elapsed is dispatch to merge (no clock). used: requests, when known; otherwise the comment says unknown.
+ */
+export function learnText(t, d, counts, { mergedAt, commit, used } = {}) {
+  const ms = Date.parse(mergedAt) - Date.parse(d.at);
+  const elapsed = Number.isFinite(ms) ? `${(ms / 3600000).toFixed(1)} h` : 'unknown';
+  const firstPass = counts.red === 0 && counts.changes === 0 && counts.sendBacks === 0;
+  const req = Number.isFinite(used) ? `${used} of ${d.budget} requests` : `requests unknown (budget ${d.budget})`;
+  let lesson;
+  if (counts.sendBacks) lesson = `${counts.sendBacks} send-back(s) at verify on a size ${d.size} slice: the brief's done criteria must name the evidence the verifier reads`;
+  else if (counts.changes) lesson = `review asked for changes ${counts.changes} time(s): the implementer runs its own diff review before the push`;
+  else if (counts.red) lesson = `${counts.red} red CI run(s) before green: scripts/slice-check.sh before the push`;
+  else if (Number.isFinite(used) && used > d.budget) lesson = `first pass but over the size ${d.size} budget (${used} of ${d.budget}): the estimate was low`;
+  else lesson = `first pass within the size ${d.size} budget: the estimate held`;
+  lesson = `LESSON ${t.id}: ${lesson}`;
+  const actual = [
+    `ACTUAL (${d.id}, factory engine): size ${d.size}, ${req}; ${elapsed} from dispatch to merge${commit ? ` (${commit})` : ''}.`,
+    `CI runs ${counts.runs} (${counts.red} red); review rounds ${counts.reviews} (${counts.changes} with changes); send-backs ${counts.sendBacks}; first pass ${firstPass ? 'yes' : 'no'}.`,
+    lesson,
+  ].join('\n');
+  return { actual, lesson };
 }
 
 function parseArgs(argv) {
