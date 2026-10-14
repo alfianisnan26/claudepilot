@@ -273,7 +273,7 @@ export const SUMMARY_MAX = 120;
  */
 export function briefSummary(s) {
   const one = String(s ?? '')
-    .replace(/[\p{Cc}\p{Cf}  ]+/gu, ' ')
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, ' ')
     .replace(/"/g, "'")
     .replace(/\s+/g, ' ')
     .trim();
