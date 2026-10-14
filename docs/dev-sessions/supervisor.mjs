@@ -236,32 +236,38 @@ async function moveIfLow(t, ts, cur) {
   const used = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, Math.max(0, ...(c.windows ?? []).map((w) => (typeof w.usedPct === 'number' ? w.usedPct : 0)))]));
   const mine = used.get(cur.claudeId);
   if (mine === undefined || mine < LOW_USED_PCT) return false;
-  // A chat on a model only some Claudes have (Fable shows as its own window on those) must land on one that has it: otherwise the restore of its
-  // model fails quietly and it runs on whatever the other Claude defaults to (T-109 makes the portal pick the best available model instead).
+  // A chat on a model only some Claudes have (Fable shows as its own window on those) goes to one that has it first; with none, to another
+  // Claude with the model it should run there in the switch request (T-109: the portal applies it, verifies it and falls down the chain).
   const gated = /fable/i.exec(cur.model ?? '')?.[0]?.toLowerCase() ?? null;
   const has = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, (c.windows ?? []).some((w) => `${w.key ?? ''} ${w.label ?? ''}`.toLowerCase().includes(gated ?? '\u0000'))]));
   let best = null;
+  let other = null;
   for (const name of t.claudes) {
     const id = await claudeIdOf(name);
     if (!id || id === cur.claudeId) continue;
-    if (gated && !has.get(id)) continue;
     const u = used.get(id) ?? 0;
     if (u >= LOW_USED_PCT) continue;
+    if (gated && !has.get(id)) {
+      if (!other || u < other.used) other = { name, id, used: u, model: 'opus' };
+      continue;
+    }
     if (!best || u < best.used) best = { name, id, used: u };
   }
+  best = best ?? other;
   if (!best) {
     if (ts.lowLoggedAt === undefined || Date.now() - ts.lowLoggedAt > 30 * 60_000) log(`${t.key}: its Claude is at ${mine}% used and no delegated Claude has more than ${100 - LOW_USED_PCT}% left: waiting, looking again every round`), (ts.lowLoggedAt = Date.now());
     return false;
   }
-  if (DRY) return log(`[dry] ${t.key}: would move ${cur.id.slice(0, 8)} from ${mine}% used to ${best.name} (${best.used}% used)`), false;
-  const res = await api('POST', `/api/chat/sessions/${cur.id}/switch`, { claudeId: best.id, handoff: mine >= 100 ? 'skip' : 'ask' });
+  const on = best.model ? ` on ${best.model}` : '';
+  if (DRY) return log(`[dry] ${t.key}: would move ${cur.id.slice(0, 8)} from ${mine}% used to ${best.name}${on} (${best.used}% used)`), false;
+  const res = await api('POST', `/api/chat/sessions/${cur.id}/switch`, { claudeId: best.id, handoff: mine >= 100 ? 'skip' : 'ask', ...(best.model ? { model: best.model } : {}) });
   if (res.error) {
     log(`${t.key}: could not move to ${best.name}: ${res.error.message}`);
     ts.backoffUntil = Date.now() + 5 * 60_000;
     return false;
   }
   ts.lowLoggedAt = undefined;
-  log(`${t.key}: its Claude was at ${mine}% used: moved to ${best.name} (${best.used}% used)`);
+  log(`${t.key}: its Claude was at ${mine}% used: moved to ${best.name}${on} (${best.used}% used)`);
   return true;
 }
 

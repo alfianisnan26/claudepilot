@@ -53,6 +53,7 @@ function ticketView(ctx: PortalToolContext, t: TicketItem, full = false) {
     workspace_id: t.workspaceId,
     worktree: t.worktree,
     session_ended: t.sessionEnded,
+    orphan: t.orphan ? { since: t.orphan.since, session_id: t.orphan.sessionId, why: t.orphan.why } : null,
     created_at: t.createdAt,
     updated_at: t.updatedAt,
     closed_at: t.closedAt,

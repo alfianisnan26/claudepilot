@@ -15,6 +15,7 @@ import { undoFor } from '@/features/autotransfer/pure';
 import { useAutoMoveMenu } from '@/features/autotransfer/SessionMenuItem';
 import { SuggestionCard } from '@/features/autotransfer/SuggestionCard';
 import { useAutoMove } from '@/features/autotransfer/useAutoMove';
+import { HoldLine } from '@/features/autotransfer/HoldLine';
 import { useGlanceFocus } from '@/features/glance/focus';
 import { GlanceStrip } from '@/features/glance/Strip';
 import { ApprovalBar, ApprovalCard } from './ApprovalCard';
@@ -616,6 +617,7 @@ export function SessionPage() {
               {auto.state?.pending && !gone && !ended && !session?.switching && (
                 <SuggestionCard state={auto.state} allowAuto={auto.allowAuto} bypass={bypass} disabled={!connected} onChange={auto.setState} />
               )}
+              {!auto.state?.pending && !gone && !ended && !session?.switching && <HoldLine state={auto.state} />}
               {btw && btwLayout.mode === 'card' &&
                 btwCard(
                   'card',

@@ -499,7 +499,10 @@ export function createApp(
   });
   ws.post('/:target/:name/claude-login/code', async (c) => {
     const { code } = await body<{ code: string }>(c);
-    await logins.submit(...ownSignIn(c), code, claudeDir(c));
+    const [target, name] = ownSignIn(c);
+    const dir = claudeDir(c);
+    await logins.submit(target, name, code, dir);
+    chatController.forgetClaudeModelsAt(`${target}/${name}`, dir); // T-109: another account may offer other models
     return c.json(success({ ok: true }));
   });
   ws.delete('/:target/:name/claude-login', async (c) => {
@@ -507,7 +510,10 @@ export function createApp(
     return c.json(success({ ok: true }));
   });
   ws.post('/:target/:name/claude-logout', async (c) => {
-    await logins.logout(...ownSignIn(c), claudeDir(c));
+    const [target, name] = ownSignIn(c);
+    const dir = claudeDir(c);
+    await logins.logout(target, name, dir);
+    chatController.forgetClaudeModelsAt(`${target}/${name}`, dir);
     return c.json(success({ ok: true }));
   });
 

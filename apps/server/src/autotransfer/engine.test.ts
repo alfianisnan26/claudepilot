@@ -34,7 +34,7 @@ async function rig(settings: Record<string, unknown> = AUTO, claudes = () => [us
   return { store, clock, chat, usage: u, owner, auto, audit, auditRows, emitted, settings: s, engine, published: () => published };
 }
 
-test('S1 end to end on fakes: a turn ends, the chat moves to Home with a handoff; one moved row with the move id, one audit row, one notification, paused 30 minutes', async () => {
+test('S1 end to end on fakes: a turn ends, the chat moves to Home with a handoff; one moved row with the move id, one audit row, one notification, paused 5 minutes (the T-105 default)', async () => {
   const r = await rig();
   r.chat.turnEnds('s1');
   await r.engine.settled();
@@ -56,7 +56,7 @@ test('S1 end to end on fakes: a turn ends, the chat moves to Home with a handoff
   // No message text or title anywhere in the trail.
   assert.ok(!JSON.stringify([rows, r.emitted, moved]).includes('CANARY'));
   const state = await r.engine.state('s1', 'u_a');
-  assert.equal(state.pausedUntil, at(30));
+  assert.equal(state.pausedUntil, at(5));
   assert.equal(state.movesToday, 1);
   assert.equal(state.lastMove?.event.handoffId, 'h-1');
   assert.deepEqual(state.lastMove?.undo, { ok: true, reason: null }); // Work 92 % used: not out, so it can take the chat back
@@ -238,11 +238,11 @@ test('FR14: a failed move leaves the chat where it was, records failed, pauses; 
   assert.equal(r.chat.get('s1')!.claudeId, 'work');
   assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 1);
   assert.equal(r.auto.events('u_a', { kinds: ['failed'] })[0]!.code, 'move_failed');
-  assert.equal((await r.engine.state('s1', 'u_a')).pausedUntil, at(30));
-  r.clock.advance(31); // the pause ends: the engine looks again and fails again
+  assert.equal((await r.engine.state('s1', 'u_a')).pausedUntil, at(5));
+  r.clock.advance(6); // the pause ends: the engine looks again and fails again
   await r.engine.settled();
   assert.equal(r.auto.events('u_a', { kinds: ['failed'] }).length, 2);
-  r.clock.advance(31);
+  r.clock.advance(6);
   await r.engine.settled();
   assert.equal(r.chat.moves.length, 2); // no third attempt by itself
   const st = await r.engine.state('s1', 'u_a');
@@ -275,7 +275,7 @@ test('T-38: a move refused because the folder needs trusting again is recorded a
 });
 
 test('S12 on the engine: after two moves in a day the chat is refused (session_cap), recorded once', async () => {
-  const r = await rig();
+  const r = await rig({ ...AUTO, [K.maxPerSessionPerDay]: 2 });
   for (const [from, to] of [
     ['work', 'home'],
     ['home', 'work'],
