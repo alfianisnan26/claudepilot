@@ -2705,6 +2705,16 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 755,
+    name: 'chat sessions: the restart hint, hidden until the next change, and applying tool changes by itself',
+    up(db) {
+      // T-102: "Hide until the next change" remembers the change it hid (null: shown); "Apply tool changes at the next turn end" is the
+      // person's choice for this session (null: the default, on for an autonomous session). Null for every session so far.
+      db.exec('ALTER TABLE chat_sessions ADD COLUMN config_hidden_at TEXT');
+      db.exec('ALTER TABLE chat_sessions ADD COLUMN auto_apply INTEGER');
+    },
+  },
+  {
     version: 770,
     name: 'chat sessions: the session a row continues',
     up(db) {

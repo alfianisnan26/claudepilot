@@ -7,19 +7,22 @@
 // route sets it. Wakes, resumes and moves never restore Bypass. Entering and leaving it is audited.
 
 import { defineErrorCodes } from '@isnanme/core';
-import { BYPASS_BLOCKED, BYPASS_NOT_CAPABLE, REAUTH_REQUIRED } from '@portal/contracts';
+import { BYPASS_BLOCKED, BYPASS_NOT_CAPABLE, BYPASS_NOT_KEPT, REAUTH_REQUIRED } from '@portal/contracts';
 import { defineSetting } from '../settings/registry.js';
 
 declare module '@isnanme/core' {
   interface ErrorCodeRegistry {
     BYPASS_BLOCKED: true;
     BYPASS_NOT_CAPABLE: true;
+    BYPASS_NOT_KEPT: true;
     REAUTH_REQUIRED: true;
   }
 }
 defineErrorCodes({
   [BYPASS_BLOCKED]: { status: 403, message: 'Bypass is blocked by policy.' },
   [BYPASS_NOT_CAPABLE]: { status: 409, message: 'This session wasn’t started to allow Bypass.' },
+  // T-102: a queued or automatic restart that could not keep Bypass is refused; a person restarts it by hand.
+  [BYPASS_NOT_KEPT]: { status: 409, message: 'A restart can’t keep Bypass here: restart it yourself.' },
   [REAUTH_REQUIRED]: { status: 403, message: 'Enter the server code again.' },
 });
 
