@@ -27,7 +27,7 @@ before(async () => {
 after(() => store.close());
 afterEach(() => {
   clearResolvers();
-  for (const t of ['chat_requests', 'chat_sessions', 'mcp_catalog_versions', 'mcp_catalog', 'skill_reviews', 'skill_proposals', 'skill_versions', 'skill_sources', 'ci_deployments', 'ci_runs', 'tickets'])
+  for (const t of ['keepgoing_reports', 'keepgoing_policies', 'chat_requests', 'chat_sessions', 'mcp_catalog_versions', 'mcp_catalog', 'skill_reviews', 'skill_proposals', 'skill_versions', 'skill_sources', 'ci_deployments', 'ci_runs', 'tickets'])
     db.exec(`DELETE FROM ${t}`);
 });
 
@@ -47,6 +47,11 @@ function toolRequest(session: string, id: string, minutesAgo: number, answered =
     ago(minutesAgo * MIN),
     answered ? ago(0) : null,
   );
+}
+/** A chat Keep going left down (T-257): its policy on, a standing `down` report. */
+function keepGoingDown(session: string) {
+  db.prepare('INSERT INTO keepgoing_policies (session_id, enabled, created_at, updated_at) VALUES (?, 1, ?, ?)').run(session, ago(30 * MIN), ago(30 * MIN));
+  db.prepare("INSERT INTO keepgoing_reports (session_id, cause, since, reported_at) VALUES (?, 'down', ?, ?)").run(session, ago(20 * MIN), ago(5 * MIN));
 }
 function mcpProposal(entry: string, version: string, opts: { by?: string | null; state?: string; url?: string; slots?: unknown[] } = {}) {
   if (!db.prepare('SELECT 1 FROM mcp_catalog WHERE id = ?').get(entry))
@@ -312,6 +317,7 @@ test('the aggregate reads each source with exactly one query, however many items
     deploy(`R${i}`);
     ticket();
     toolRequest('s1', `q${i}`, 20 + i);
+    keepGoingDown(`kd${i}`);
   }
   let prepared = 0;
   const counting = new Proxy(db, {
@@ -327,8 +333,8 @@ test('the aggregate reads each source with exactly one query, however many items
   });
   const r = createAttention({ db: counting }, { now: () => now, tickMs: 0 });
   const list = r.list(ownerActor());
-  assert.equal(list.total, 25);
-  assert.equal(prepared, 6, 'one query per source, and one for the person\'s own Later (snoozes)');
+  assert.equal(list.total, 30);
+  assert.equal(prepared, 7, 'one query per source, and one for the person\'s own Later (snoozes)');
 });
 
 test('the aggregate groups by why then age, pages, filters by kind, and says when a source could not be read', () => {
@@ -359,7 +365,7 @@ test('the aggregate groups by why then age, pages, filters by kind, and says whe
   const broken = createAttention({ db: null }, { now: () => now, tickMs: 0, log: () => undefined });
   const none = broken.list(ownerActor());
   assert.equal(none.counts.mcp_version, null, 'unavailable is a state, never 0');
-  assert.equal(none.unavailable.length, 5);
+  assert.equal(none.unavailable.length, 6);
 });
 
 test('an item appearing emits one event naming it; nothing changing emits nothing; the first read is the baseline', () => {

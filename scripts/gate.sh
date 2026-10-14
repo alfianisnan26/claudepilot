@@ -8,14 +8,17 @@
 # Every failing test's own report (its error, expected and actual, the stack) goes to <logs>/failures.txt; a file that passes when rerun
 # alone is written to the summary as flaky, one line per test that failed in the full run (`<file>;<test name>`: the portal opens a ticket per test).
 # GATE_STEPS (default typecheck,web-build,server-suite): which steps run after npm ci (scripts/gate-job.sh runs only typecheck,web-build, say).
-# The verdict: scripts/gate-verdict.sh logs <logs dir>.
+# Whatever GATE_STEPS: docs/context-pack.md must be fresh for the commit (scripts/context-pack.sh --check, T-292; needs the repository, so it
+# runs before the clean copy is used). The verdict: scripts/gate-verdict.sh logs <logs dir>.
 set -u
+repo=$(git rev-parse --show-toplevel)
 sha=$(git rev-parse --short "${1:-HEAD}")
 dir=${GATE_DIR:-/tmp/gate-$sha}; logs=$dir.logs
 rm -rf "$dir" "$logs"; mkdir -p "$dir" "$logs" "$dir/.home"
 git archive "$sha" | tar -x -C "$dir"
 cd "$dir" || exit 1
 step() { local name=$1; shift; local t0; t0=$(date +%s); "$@" > "$logs/$name.log" 2>&1; local rc=$?; echo "$name rc=$rc $(( $(date +%s) - t0 ))s" | tee -a "$logs/SUMMARY.txt"; return $rc; }
+if [ -f scripts/context-pack.sh ]; then step context-pack bash scripts/context-pack.sh --repo "$repo" --check "$sha" || echo "context-pack stale: see $logs/context-pack.log"; fi
 export NODE_AUTH_TOKEN=${NODE_AUTH_TOKEN:-$(gh auth token 2>/dev/null || true)}
 step npm-ci npm ci --no-audit --no-fund || { echo "npm ci failed: see $logs/npm-ci.log"; exit 1; }
 # Timing tests wait CP_TEST_TIME_SCALE times longer when the machine is busier than it has CPUs (load average above the CPU count): 1 to 6, rounded up.

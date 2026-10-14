@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
+import { programInput } from './listOrder';
 
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -63,10 +64,10 @@ export function KeepGoingSection({ session }: { session: ChatSession }) {
         onChange={(v) => void change(v)}
         disabled={busy || (ended && !on)}
       />
+      {kg && on && <ProgramField sessionId={session.id} program={kg.program ?? null} />}
       {kg && (on || kg.nudgesToday > 0 || kg.wakesToday > 0) && (
         <p className="text-[12.5px] [overflow-wrap:anywhere] text-muted">
           {kg.paused ? <span className="text-amber-700 dark:text-amber-400">{pausedWord(kg)} · </span> : null}
-          {kg.program ? <span className="text-ink-soft">{kg.program} · </span> : null}
           Today: {keepGoingCounts(kg)}
           {kg.last && kg.last.kind !== 'set' && (
             <>
@@ -79,6 +80,61 @@ export function KeepGoingSection({ session }: { session: ChatSession }) {
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * The chat's program (T-259 slice 3): what the pause switch and the chat list's Program filter go by. Saved on Enter or when the field is
+ * left; empty is none. 44 px tall, 16 px text (no zoom on an iPhone), the explanation in its InfoTip.
+ */
+function ProgramField({ sessionId, program }: { sessionId: string; program: string | null }) {
+  const toast = useToast();
+  const [text, setText] = useState(program ?? '');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setText(program ?? ''), [program]);
+  const save = async () => {
+    const next = programInput(text);
+    if (next === undefined) {
+      toast('A program is lowercase letters, digits and hyphens, at most 40.', 'error');
+      return setText(program ?? '');
+    }
+    if (next === program) return setText(program ?? '');
+    setBusy(true);
+    try {
+      await chatApi.setKeepGoing(sessionId, { program: next });
+    } catch (e) {
+      setText(program ?? '');
+      toast(errorText(e, 'Couldn’t change the program.'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <label className="flex min-w-0 items-center gap-2 text-[13.5px] text-ink-soft" data-keep-going-program="">
+      <span className="inline-flex shrink-0 items-center gap-1">
+        Program
+        <InfoTip label="About the program">
+          The program this chat belongs to, such as event or konfersi. Pausing a program on the Autonomy card holds its chats; the chat list can show one program. Empty: none.
+        </InfoTip>
+      </span>
+      <input
+        type="text"
+        value={text}
+        disabled={busy}
+        maxLength={40}
+        placeholder="none"
+        autoComplete="off"
+        autoCapitalize="none"
+        spellCheck={false}
+        enterKeyHint="done"
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => void save()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
+        }}
+        className="h-11 min-w-0 flex-1 rounded-xl border border-line bg-surface px-3 text-[16px] text-ink placeholder:text-muted focus:border-primary focus:outline-none sm:text-[14px]"
+      />
+    </label>
   );
 }
 

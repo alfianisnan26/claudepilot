@@ -1,6 +1,6 @@
 import { cn } from '@isnanme/ui';
 import { LIST_GROUP_BYS, type ListFilter, type ListGroupBy } from '@portal/contracts';
-import { Archive, CircleAlert, CircleStop, Layers, ListChecks, LoaderCircle, Moon, Pin, Rows3, Search, X } from 'lucide-react';
+import { Archive, Boxes, CircleAlert, CircleStop, Layers, ListChecks, LoaderCircle, Moon, Pin, Rows3, Search, X } from 'lucide-react';
 import { STATUS_TITLE, visibleChips, type ChipCounts } from './listOrder';
 
 export interface ViewState {
@@ -9,6 +9,8 @@ export interface ViewState {
   query: string;
   /** Show the archived sessions instead of the open ones. */
   archived: boolean;
+  /** Only the chats of this program (Keep going's program, T-259); null: every chat. */
+  program: string | null;
 }
 
 const GROUP_LABEL: Record<ListGroupBy, string> = {
@@ -43,9 +45,12 @@ export function SessionsToolbar({
   onChange,
   selecting,
   onSelect,
+  programs = [],
 }: {
   view: ViewState;
   counts: ChipCounts;
+  /** The programs the chats belong to; the Program picker shows only when there is one (or one is chosen). */
+  programs?: { program: string; count: number }[];
   onChange: (next: Partial<ViewState>) => void;
   selecting: boolean;
   onSelect: () => void;
@@ -100,6 +105,33 @@ export function SessionsToolbar({
             ))}
           </select>
         </label>
+        {(programs.length > 0 || view.program) && (
+          // The program filter (T-259 slice 3): icon only like Group by, the native picker, lit while a program is chosen.
+          <label
+            title={`Program: ${view.program ?? 'All'}`}
+            data-program-filter=""
+            className={cn(
+              'press relative flex size-11 shrink-0 items-center justify-center rounded-full border focus-within:ring-2 focus-within:ring-primary/40',
+              view.program ? 'border-primary bg-primary text-primary-ink' : 'border-line bg-surface text-muted hover:text-ink',
+            )}
+          >
+            <Boxes className="size-[18px]" aria-hidden="true" />
+            <select
+              aria-label="Program"
+              value={view.program ?? ''}
+              onChange={(e) => onChange({ program: e.target.value || null })}
+              className="absolute inset-0 size-full cursor-pointer appearance-none rounded-full opacity-0"
+            >
+              <option value="">All programs</option>
+              {view.program && !programs.some((p) => p.program === view.program) && <option value={view.program}>{view.program} (0)</option>}
+              {programs.map((p) => (
+                <option key={p.program} value={p.program}>
+                  {p.program} ({p.count})
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
       {/* relative: the chips' and Select's sr-only labels (position absolute) take this scroller as their containing block, so a chip
           past the edge scrolls with the row instead of widening the page (a 434 px layout on a 390 px phone, T-288). */}

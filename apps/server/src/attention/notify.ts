@@ -13,7 +13,7 @@ import { cleanDetail, type NotifyBus } from '../notify/bus.js';
 import type { AttentionRegistry } from './registry.js';
 
 /** The kinds another notification already announces (the bridge stays quiet for them). */
-export const ATTENTION_NOTIFIED_ELSEWHERE: ReadonlySet<AttentionKind> = new Set<AttentionKind>(['tool_approval', 'ci_deploy', 'ticket_approval']);
+export const ATTENTION_NOTIFIED_ELSEWHERE: ReadonlySet<AttentionKind> = new Set<AttentionKind>(['tool_approval', 'ci_deploy', 'ticket_approval', 'keepgoing_down']);
 
 /** How many sent items are remembered (oldest forgotten first); far more than ever wait at once. */
 const REMEMBER = 5_000;

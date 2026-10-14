@@ -3,6 +3,7 @@
 #   scripts/gate-verdict.sh logs <logs dir> [steps]   the logs of scripts/gate.sh: every step ran with rc=0, and the server suite's LAST summary
 #                                                     (the rerun of the failing files alone, when there was one) has 0 failing and 0 timed-out
 #                                                     tests (node counts a timed-out file as "cancelled", not "fail"). steps: as GATE_STEPS.
+#                                                     A `context-pack` line (any steps) must be rc=0 too.
 #   scripts/gate-verdict.sh joblog <file>             the log of a gate Job: its last `GATE-VERDICT:` line.
 #   scripts/gate-verdict.sh failures <suite log>      every failing test with its own report (TAP's YAML block: error, expected, actual,
 #                                                     location, stack), at most 80 lines each and 600 in all; prints, no verdict.
@@ -20,6 +21,10 @@ case ${1:-} in
     for step in npm-ci ${steps//,/ }; do
       grep -q "^$step rc=0 " "$logs/SUMMARY.txt" || red "$step failed"
     done
+    # The context pack check (T-292) runs whatever the steps; a gate from before it left no line.
+    if grep -q '^context-pack rc=' "$logs/SUMMARY.txt" && ! grep -q '^context-pack rc=0 ' "$logs/SUMMARY.txt"; then
+      red "docs/context-pack.md is stale (run scripts/context-pack.sh and commit it)"
+    fi
     case ",$steps," in
       *,server-suite,*)
         fails=$(grep -E '^# fail [0-9]+' "$logs/server-suite.log" 2>/dev/null | tail -n 1 | awk '{print $3}')
