@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
+import type { ChatPermissionMode } from '@portal/contracts';
 import { allowResponse, denyResponse, parseLine } from './protocol.js';
 import { INTEGRITY_CASES, PEER_CAUSE_MS, PEER_QUEUED_MESSAGE, sameAnswer } from './integrity.js';
 import { ChatStore } from './store.js';
@@ -347,7 +348,7 @@ const FIXTURES: Record<string, Fixture> = {
 };
 
 /** The portal asks for a mode and Claude Code confirms it; returns the request id. */
-async function askMode(s: Live, mode: string): Promise<string> {
+async function askMode(s: Live, mode: ChatPermissionMode): Promise<string> {
   const pending = s.controller.control(s.id, 'mode', { mode });
   const ask = await s.take('set_permission_mode');
   s.tail.push(ok(ask.id, { mode }));
