@@ -2,6 +2,10 @@
 
 - Tickets of 75f044fb already assigned to this chat (ticket_adopt: nothing to move). Workers 77671a92 and c378d9e7 are gone, no reports posted; their commits are pushed: dev/t293-7 b460fcc (T-342 N1), dev/t-330-1 143e863 (cpbview flakes T-330/T-331/T-272).
 - In flight: gate-job on origin/wip/batch-4 ce7014a (background); reviewer sub-agent (opus, medium) blind re-read of N1 on b460fcc; qa-verifier sub-agent (sonnet, medium) for 143e863 with before/after counts under hogs; worker d9a3cdd8 (qa-verifier, sonnet, dontAsk, on sekar) verifies T-334 by following the text; explorers (haiku, low) plan steps for T-312 slice A (spikes + lab by root) and T-321 (empty crew list). No E2 experiment running (lab_arm_draw: no draw).
+- 22:56 gate-job ce7014a GREEN (suite 405 s) -> wip/batch-4 merged into integration (2f3de50, status conflict kept ours), pack 3da7eb7, pushed origin + pilot. CLOSED T-333 (gap T-347), T-336 (gaps T-348 high authz, T-349), T-343 (gaps T-350, T-351).
+- 23:05 N1 re-read SAFE (comment 1979; 54/54 job bd0161da, fails with engine reverted job f37aed1c). dev/t293-7 (incl. t293-6) merged (factory-brief conflict: new budget line + dontAsk check line), 58/58 factory+tokenLease+contextPack, pack, pushed 1ea2dbf. CLOSED T-342 (minors -> T-352). T-338 not claimable ("no ticket to claim"): its verdict is in T-342's closing summary.
+- DEPLOY DECISION: today (UTC) already had 3 portal deploys (runs 28-30) = the D-cap; batches 3+4 (+T-342, docs/qa only) deploy after 00:00 UTC with /deploy. T-336 touches portalmcp tools: the release may wait for a person.
+- In flight (5): verifier T-330 (sonnet), worker d9a3cdd8 T-334, implementers T-312 slice A (dev/t-312-2), T-321 (dev/t-321-2), T-348 (dev/t-348-1, opus, high; claimed). Briefs' heads in ~/work/briefs/.
 
 ---
 
