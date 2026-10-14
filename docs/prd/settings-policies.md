@@ -330,6 +330,7 @@ in the foundation bundle.
 | `modelPricing` | Price multiplier | Not 1.0, Anthropic endpoint only (2.1.242+; multiplier markup 2.1.271+) |
 | `cleanupPeriodDays` | Transcripts kept | Not the default 30 |
 | `env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, `env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` | Subagent caps | Always: an `env` value is overwritten, never removed, because a removed variable only takes effect at the next launch |
+| `env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`, `env.BASH_MAX_OUTPUT_LENGTH`, `env.MAX_MCP_OUTPUT_TOKENS` | Sub-agent cache, output caps (§22.5, built) | Always, as the subagent caps |
 | `env.CLAUDE_CODE_MCP_ALLOWLIST_ENV` | Clean environment for stdio MCP servers | Always: `1`, or `0` when turned off |
 | `env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` | Require the env scrub | `1` where required and the probe passed in full mode; never written elsewhere, not even empty |
 
@@ -807,12 +808,12 @@ pool type, everything in §11.1 and §11.3–11.5.
 
 | | |
 | --- | --- |
-| Registry | `defineSetting({ key, type, default, scope: 'global', group, label, help, confirmText, protective, order, min, max })` at import time. Areas define their own (A2's Bypass setting appeared in the list the day the store did). Keys look like `mcp.poolOnly`; a type is `boolean`, `number` or `string`. |
+| Registry | `defineSetting({ key, type, default, scope: 'global', group, label, help, confirmText, protective, order, min, max, integer, choices })` at import time. Areas define their own (A2's Bypass setting appeared in the list the day the store did). Keys look like `mcp.poolOnly`; a type is `boolean`, `number` or `string`. |
 | Values | `portal_meta` under `setting:<key>` (JSON with who and when); a setting never set reads as its default, and reads never fail (a Frozen portal answers with defaults). |
-| API | `GET /api/settings` (groups and settings), `PUT /api/settings/:key` (`{ value, confirm? }`), `GET /api/settings/audit`, `GET /api/settings/lockdown/:target/:name`. Behind the session guard and the Origin check. |
+| API | `GET /api/settings` (groups and settings), `PUT /api/settings/:key` (`{ value, confirm? }`), `GET /api/settings/audit`, `GET /api/settings/lockdown/:target/:name`, `GET /api/settings/agent-env/:target/:name` (§22.5). Behind the session guard and the Origin check. |
 | Audit | Every change: key, old and new value, actor, time (`setting_changes`). The page's History button lists them. A repeat of the current value is not a change. |
 | Confirmation | A setting with `protective: <value>` is a security switch. Moving away from that value (switching a protection off, or an agent permission on) is refused with `409 CONFIRMATION_REQUIRED` unless the request says `confirm: true`; the page asks first, in one line (`confirmText`). Turning a protection on never asks. |
-| Page | Settings, in the admin group of the navigation (phones: the More sheet). Sections by group (MCP, Agents, Sessions); a row is a label, an ⓘ with what it does, and a switch. Nothing else is on the page. |
+| Page | Settings, in the admin group of the navigation (phones: the More sheet). Sections by group (MCP, Agents, Sessions); a row is a label, an ⓘ with what it does, and a switch, a number field, or a segmented choice for a setting with `choices`. Nothing else is on the page. |
 
 ### 22.2 The two MCP switches
 
@@ -868,3 +869,43 @@ subscription-account run for Account MCP off with the connector appearing and di
 - Answered ✅: a running session does not apply the lockdown (above), so Pending until restarted is right.
   🔬 Left: whether an interactive session re-reads it on `/reload-plugins`.
 - The single "pool MCP" gateway reading is designed, not built: [MCP set](mcpset-pool.md) §23.
+
+### 22.5 The agent policy (T-285)
+
+**Status: Built** (server, delivery, page, workspace status line; tests in `settings/agentEnv.test.ts`). Not yet
+observed in a running Claude Code: see Open below.
+
+Five global settings in the Agents section reach every Claude process (and its sub-agents) as managed `env`
+in the policy owner's drop-in `10-claudepilot-policy.json` (`settings/agentEnv.ts`, fragment owner `policy`).
+Each is always written, its default included: a value is overwritten, never removed (§10.1). Claude Code reads
+managed `env` when a process starts, so a running Claude gets a change at its next start; each ⓘ says so.
+
+| Setting | Variable | Default | Source of the default |
+| --- | --- | --- | --- |
+| Sub-agent cache (`agents.subagentCacheTtl`, `5m` or `1h`) | `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` | `1h` | T-285: sub-agents re-wrote 47 M tokens of context after waits on the 5 minute cache. The variable and its `5m`/`1h` values are in Claude Code 2.1.296, which ignores `1h` while a subscription is in overage |
+| Sub-agents (`agents.maxSubagents`, 1 to 50) | `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` | 5 | D-43 |
+| Spawn depth (`agents.spawnDepth`, 1 to 10) | `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` | 3 | The Standard preset (§10.1) |
+| Bash output (`agents.bashOutputMax`, 1000 to 200000) | `BASH_MAX_OUTPUT_LENGTH` | 8000 | The token-economy design, lever 4 |
+| MCP output (`agents.mcpOutputMax`, 1000 to 200000) | `MAX_MCP_OUTPUT_TOKENS` | 25000 | Claude Code's own default |
+
+- The names are the policy owner's by exact name (`delivery/ownership.ts`), so no pool can override one
+  (`mayUseEnv`): a new Secrets & env entry with one is refused when the set is saved (422). An entry saved
+  before is tolerated: the policy wins, the entry is skipped at delivery (never a failed delivery), the
+  reconciler logs one warning line per workspace, and the Configuration sheet says "N overridden by policy"
+  with the variable and the set behind its ⓘ. `ENABLE_PROMPT_CACHING_1H` stays a pool name.
+- A change asks every known workspace to deliver again. What landed is recorded per workspace
+  (`policy_env_state`, migration 840: names and values, none secret).
+- Secrets & env FR4 (a name another owner claimed after the set was saved fails delivery) has this one
+  exception: names the agent policy sets.
+- The Configuration sheet shows one line: Applied, Pending (a change on its way), or Unavailable (nothing
+  landed yet: never the setting's value as a guess); the values in effect are behind its ⓘ.
+
+**Browser check (2026-10-14):** `tools/qa/agent-policy.mjs` against a scratch portal with This machine in a Job
+(`claudepilot-job-54126d8a`, commit c03c461): 101/101 checks at 390 px (touch, safe areas) and 1280 px, light and dark: the
+five rows, labels of one or two words, every control 44 px tall and each 5m/1h segment 44 x 44, the InfoTips inside the screen,
+the choice saved on the server, no sideways scroll; the sheet's line Unavailable on the real server and, with a fixture answer,
+"1 overridden by policy" with the variable and the set behind its ⓘ.
+
+Open: 🔬 a real Claude Code reading each variable from the drop-in (the Docker integration suite can show it);
+a per-workspace override waits for scopes (§12).
+

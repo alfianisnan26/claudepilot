@@ -78,6 +78,16 @@ function reserved(name: string): string | null {
 }
 
 /**
+ * A name the policy owner sets (the agent policy, T-285 decision 8): a NEW entry is refused (`reserved`), but one
+ * saved before the policy claimed it is skipped at delivery, never a failure: the policy wins, the workspace keeps
+ * getting everything else.
+ */
+const policyWins = (name: string) => !secretVariableReserved(name) && !mayUseEnv('secrets', name) && mayUseEnv('policy', name);
+
+/** The env names an entry puts into Claude's environment. */
+const envNames = (e: StoredEntry): string[] => [...(e.kind === 'variable' || e.options?.expose ? [e.name] : []), ...(e.kind === 'secret' && e.options?.pathVariable ? [e.options.pathVariable] : [])];
+
+/**
  * The names an entry takes in a workspace (FR9, FR21): its own name, and its path variable. One namespace
  * for everything, so `{{secret-file:NAME}}` and `${NAME}` never mean two different entries.
  */
@@ -315,6 +325,28 @@ export class SecretsKind implements PoolKind<SecretsContent>, SecretNameSource {
   }
 
   /** Whether this revision's content names a value that isn't delivered as it is (replaced or revoked). */
+  /** What each workspace last skipped for the policy, so the warning is one line per workspace, when it changes. */
+  readonly #skippedWarned = new Map<string, string>();
+
+  #warnSkipped(workspaceId: string, names: string[]): void {
+    if (!workspaceId) return;
+    const key = names.join(',');
+    if ((this.#skippedWarned.get(workspaceId) ?? '') === key) return;
+    this.#skippedWarned.set(workspaceId, key);
+    if (names.length) console.warn(`[secrets] ${workspaceId}: the agent policy sets ${names.join(', ')}; the Secrets & env entries with these names are skipped`);
+  }
+
+  /**
+   * The entries of the sets assigned to a workspace that the agent policy overrides (names, never values):
+   * the Configuration sheet says "overridden by policy" for them.
+   */
+  policyOverrides(workspaceId: string): { env: string; pool: string }[] {
+    const out: { env: string; pool: string }[] = [];
+    for (const a of this.service.assignedPools<SecretsContent>(workspaceId, 'secrets'))
+      for (const e of a.content.entries) for (const n of envNames(e)) if (policyWins(n)) out.push({ env: n, pool: a.pool.name });
+    return out;
+  }
+
   #valueOf(poolId: string, e: StoredEntry): string | null {
     return this.effectiveValueId(poolId, e.id, e.values?.[VALUE_FIELD] ?? null);
   }
@@ -429,6 +461,7 @@ export class SecretsKind implements PoolKind<SecretsContent>, SecretNameSource {
     const perPool: Fragment[] = [];
     let exposed = false;
     let size = 0;
+    const skipped = new Set<string>();
 
     for (const a of assigned) {
       const files: DeliveredFile[] = [];
@@ -440,11 +473,16 @@ export class SecretsKind implements PoolKind<SecretsContent>, SecretNameSource {
         }
         // A name another owner claimed after the set was saved fails this workspace's delivery, and only
         // here (FR4); what it has keeps working meanwhile.
-        for (const n of [...(e.kind === 'variable' || e.options?.expose ? [e.name] : []), ...(e.options?.pathVariable ? [e.options.pathVariable] : [])]) {
+        for (const n of envNames(e)) {
+          if (policyWins(n)) {
+            skipped.add(n);
+            continue;
+          }
           const why = reserved(n);
           if (why) throw new CompileError('secrets', `${n} in “${a.pool.name}” is reserved now. ${why}`);
         }
         if (e.kind === 'variable') {
+          if (policyWins(e.name)) continue;
           env[e.name] = e.value ?? '';
           shell.push({ name: e.name, value: e.value ?? '' });
           continue;
@@ -468,11 +506,11 @@ export class SecretsKind implements PoolKind<SecretsContent>, SecretNameSource {
         const ownerOnly = !!e.options?.ownerOnly;
         files.push({ path, content, mode: ownerOnly ? 0o400 : 0o440, uid: ownerOnly ? NODE : ROOT, gid: NODE, secretRef: exposureRef(valueId) });
         size += bytes(content);
-        if (e.options?.pathVariable) {
+        if (e.options?.pathVariable && !policyWins(e.options.pathVariable)) {
           env[e.options.pathVariable] = path;
           shell.push({ name: e.options.pathVariable, value: path });
         }
-        if (e.options?.expose) {
+        if (e.options?.expose && !policyWins(e.name)) {
           exposed = true;
           env[e.name] = content;
           if (e.options.terminals) shell.push({ name: e.name, file: path });
@@ -481,6 +519,7 @@ export class SecretsKind implements PoolKind<SecretsContent>, SecretNameSource {
       // Each set is named in the manifest, so a set the database forgot freezes the workspace (§6.5).
       perPool.push({ owner: 'secrets', pool: { id: a.pool.id, revision: a.pool.revision }, files, checkReadable: true });
     }
+    this.#warnSkipped(ctx.workspaceId, [...skipped].sort());
     if (Object.keys(env).length === 0 && perPool.every((f) => !f.files?.length)) return perPool;
 
     const envSh = renderEnvSh(shell);

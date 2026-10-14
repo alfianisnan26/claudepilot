@@ -2952,6 +2952,22 @@ export const MIGRATIONS: Migration[] = [
       db.exec('ALTER TABLE chat_requests ADD COLUMN proc TEXT');
     },
   },
+  {
+    version: 840,
+    name: 'settings: the agent policy each workspace last received',
+    up(db) {
+      // T-285: the agent policy's env (sub-agent cache and caps, output caps; names and values, none secret) as it last
+      // landed in each workspace's policy drop-in, so the page shows the value in effect, or "unavailable" when none landed.
+      db.exec(`
+        CREATE TABLE policy_env_state (
+          workspace_id TEXT PRIMARY KEY,
+          env TEXT NOT NULL,
+          changed_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+      `);
+    },
+  },
 ];
 
 /**

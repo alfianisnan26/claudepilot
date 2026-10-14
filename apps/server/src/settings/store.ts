@@ -60,6 +60,7 @@ export class Settings {
       value: s?.value ?? def.default,
       default: def.default,
       ...(def.protective !== undefined ? { protective: def.protective } : {}),
+      ...(def.choices ? { choices: [...def.choices] } : {}),
       order: def.order ?? 100,
       updatedAt: s?.at ?? null,
       updatedBy: s?.by ?? null,
@@ -82,6 +83,8 @@ export class Settings {
     if (def.type === 'number' && ((def.min !== undefined && (value as number) < def.min) || (def.max !== undefined && (value as number) > def.max)))
       throw invalid('value', `Use a number from ${def.min ?? '−∞'} to ${def.max ?? '∞'}.`);
     if (def.type === 'string' && (value as string).length > (def.max ?? 500)) throw invalid('value', `Use at most ${def.max ?? 500} characters.`);
+    if (def.integer && !Number.isInteger(value)) throw invalid('value', 'Send a whole number.');
+    if (def.choices && !def.choices.includes(value as string)) throw invalid('value', `Use one of ${def.choices.join(', ')}.`);
     const db = this.store.db;
     if (!db || !this.store.writable) throw new AppError('SERVICE_UNAVAILABLE', 'The database is not writable.');
     const old = this.get(key);
