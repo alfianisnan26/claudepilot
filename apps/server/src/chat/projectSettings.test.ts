@@ -51,3 +51,18 @@ test('T-323: a trusted, rules-only folder launches with its project settings as 
     await s.done();
   }
 });
+
+test('T-323: a worker in its own worktree gets the project rules too (the worktree is trusted from its repository at the same hash)', async () => {
+  const s = await liveSession();
+  try {
+    s.ws.scanFor = () => scanOf();
+    new ChatStore(s.store).saveFolderTrust('docker/ws1', '/home/node/work/repo', HASH, { files: ['.claude/settings.json'], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 57, envNames: [] }, 'ui');
+    const before = s.ws.startArgs.length;
+    const made = await s.controller.create({ workspaceId: 'docker/ws1', cwd: '/home/node/work/repo', title: 'Impl T-1', worktree: { branch: 'dev/t-1-1' } });
+    await until(() => s.ws.startArgs.length === before + 1);
+    assert.ok(made.worktree, 'it runs in a worktree');
+    assert.equal(settingsOf(s.ws.startArgs.at(-1)!), `${made.worktree!.path}/.claude/settings.json`, 'its own folder’s settings, not the repository’s');
+  } finally {
+    await s.done();
+  }
+});

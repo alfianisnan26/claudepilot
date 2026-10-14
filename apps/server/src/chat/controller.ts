@@ -3330,6 +3330,8 @@ export class ChatController {
       if (trusted?.hash && trusted.hash === scan.hash) {
         const { files, invalid, mcpServers, hooks, plugins, allowRules, envNames } = scan;
         this.#chat.saveFolderTrust(workspaceId, scan.folder, scan.hash, { files, invalid, mcpServers, hooks, plugins, allowRules, envNames }, 'portal:worktree');
+        // T-323: trusted now, so its launch gets the project rules too (the scan above was noted before this trust existed).
+        this.#noteProjectSettings(workspaceId, cwd, { ...scan, trusted: true });
       } else {
         throw untrustedError({ ...scan, worktree: { repo: repoFolder, branch: made.branch, ...(wt.base ? { base: wt.base } : {}) } }, false);
       }

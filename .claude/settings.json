@@ -61,7 +61,16 @@
       "Edit(~/work/claudepilot/**)",
       "Edit(~/work/claudepilot.worktrees/**)",
       "Write(~/work/claudepilot/**)",
-      "Write(~/work/claudepilot.worktrees/**)"
+      "Write(~/work/claudepilot.worktrees/**)",
+      "Bash(git grep:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git ls-remote:*)",
+      "Bash(git worktree list:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(echo:*)",
+      "Bash(pwd)",
+      "Bash(nproc)"
     ],
     "ask": [],
     "deny": [
