@@ -7,6 +7,11 @@
 // (sonnet, fable, and the inherited one), open on a tap; the detail view shows type, model, status, tokens, tool uses, time, its own transcript
 // (live while it runs, newest at the bottom), Stop, and back returns to the list; an agent row in the transcript opens the same view; Stop stops one;
 // 44 px targets on touch, no horizontal scroll, no page errors; at 390 px (touch, the iPhone's safe areas) and 1280 px, light and dark.
+// The panel's list (T-149): three background commands first ([[bg …]]: one Claude described, one named by its long command line, one that
+// fails) and then the agents give it every group; checked: rows of one height that hold still while lines change (bounding boxes before and
+// after a live update), short labels (never the command line), the sticky groups with counts (Agents, Failed open, Done folded), the chips
+// as filters, search (a field on 1280, behind an icon on a phone), a command's detail (the whole command in the code block, exit code, copy)
+// and back to the same filter; Stop on a running command's row, once, on a session of its own (it can end the session: see commandStop).
 //
 // Set-up (scripts/scratch-portal.sh; the recipe of btw-real.mjs on port 3421):
 //   node tools/qa/mock-anthropic.mjs 4621 /tmp/cp-sa-mock.jsonl &
@@ -40,6 +45,8 @@ const MATRIX = [
 ];
 
 const BASE = `http://localhost:${PORT}`;
+// Its own title each run: the Sessions row check finds the row by its title, and an earlier run's session (ended, say) must not answer.
+const TITLE = `Sub-agents QA ${Date.now().toString(36)}`;
 // The file the agents read, in the scratch portal's private home (the local workspace's folder).
 const NOTES = `/tmp/scratch-portal-${PORT}/home/qa-notes.txt`;
 if (existsSync(dirname(NOTES))) writeFileSync(NOTES, 'QA notes for the sub-agent harness.\n');
@@ -62,8 +69,11 @@ const openChat = async () => {
   const ws = new WebSocket(`ws://localhost:${PORT}/api/chat/live`, { headers: { Cookie: `portal_session=${cookie}`, Origin: BASE } });
   await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
   const chat = { ws, state: null, tasks: [], acks: new Map() };
+  const allowed = new Set();
   ws.on('message', (raw) => {
     const m = JSON.parse(String(raw));
+    // [[bg …]] asks to run its commands (Manual mode): allowed here, each once.
+    if (m.type === 'events') for (const e of m.items ?? []) if (e.kind === 'request' && e.request?.requestId && !allowed.has(e.request.requestId)) (allowed.add(e.request.requestId), ws.send(JSON.stringify({ type: 'respond', session: SID, requestId: e.request.requestId, decision: 'allow' })));
     if (m.type === 'session') (chat.state = m.session.state), (chat.tasksOnly = !!m.session.tasksOnly);
     if (m.type === 'tasks') chat.tasks = m.tasks;
     if (m.type === 'ack') chat.acks.set(m.uuid, m);
@@ -120,7 +130,17 @@ const stepsPlaced = `(() => { const out = []; const w = document.createTreeWalke
 /** Tap targets in the panel under 44 px on touch. */
 const small = (root) => `(() => [...(${root})?.querySelectorAll('button') ?? []].filter((b) => { const r = b.getBoundingClientRect(); return r.width && (r.height < 43.5 || r.width < 43.5) && !b.closest('[aria-hidden=true]'); }).map((b) => (b.getAttribute('aria-label') ?? b.innerText).slice(0, 30) + ' ' + Math.round(b.getBoundingClientRect().width) + 'x' + Math.round(b.getBoundingClientRect().height)))()`;
 
+/** The panel's rows: task id, the text of each line, the group it sits in, and its box. */
+const panelRows = `[...document.querySelectorAll('#agents-panel li[data-task]')].map((li) => { const r = li.getBoundingClientRect(); const b = li.querySelector('button'); const spans = b.querySelectorAll(':scope > span:nth-of-type(2) > span'); return { id: li.dataset.task, label: spans[0]?.querySelector('span')?.innerText ?? '', l1: spans[0]?.innerText ?? '', line: spans[1]?.innerText ?? '', group: li.closest('section')?.querySelector('h3, button[aria-expanded]')?.innerText.replace(/\\s+/g, ' ') ?? '', top: Math.round(r.top), h: Math.round(r.height) }; })`;
+/** The group headers: their text ("AGENTS 3"), and whether a folded one is open. */
+const groupHeads = `[...document.querySelectorAll('#agents-panel section')].map((s) => { const h = s.querySelector('h3, button[aria-expanded]'); return { text: [...h.querySelectorAll('span')].map((x) => x.innerText.trim()).join(' '), folded: h.getAttribute('aria-expanded') === 'false', rows: s.querySelectorAll('li').length }; })`;
+const chip = (id) => `document.querySelector('#agents-panel [data-chip=${id}]')`;
+/** Types into the panel's search field the way a person does (React reads the input event). */
+const typeSearch = (text) => `(() => { const i = document.querySelector('#agents-search'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, ${JSON.stringify(text)}); i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`;
+
 const results = [];
+/** The chat tab (its tasks: what the counts must equal). */
+let chat0 = null;
 let cfgName = '';
 const check = (name, ok, detail = '') => { results.push({ cfg: cfgName, name, ok: !!ok, detail }); if (!ok) console.log(`  FAIL ${cfgName} / ${name} ${detail}`); };
 const noOverflow = async (label) => { const h = await ev(hscroll); check(`${label}: no horizontal scroll`, h.doc <= 1 && h.bad.length === 0, JSON.stringify(h)); };
@@ -152,12 +172,19 @@ async function scenario(cfg, chat) {
   await sleep(800);
   await chat.settled(60000);
 
+  // 0. Three background commands (T-149): one Claude described, one named by its long command line, one that fails; done before the agents.
+  const bg = await chat.send(`[[bg QA described::sleep 1 && echo ok;;cd /tmp && timeout 30 node --import tsx --test /tmp/qa-none.test.mjs 2>&1 | tail -3;;ls /tmp/qa-missing-dir]]`);
+  check('background commands accepted', bg?.ok === true, JSON.stringify(bg));
+  check('the background commands end', await chat.settled(40000), `${chat.state} ${chat.running()}`);
+
   // 1. Three background agents (sonnet, fable, and one without a model argument: it inherits), working after the main turn ends.
-  const ack = await chat.send(`[[agent sonnet,fable,- steps 6 2 ${NOTES}]]`);
+  const ack = await chat.send(`[[agent sonnet,fable,- steps 8 2 ${NOTES}]]`);
   check('turn accepted', ack?.ok === true, JSON.stringify(ack));
   const idleWhileRunning = async () => { const t = Date.now(); while (Date.now() - t < 30000) { if (chat.state === 'working' && chat.tasksOnly && chat.running() >= 3) return true; await sleep(150); } return false; };
   check('the main turn is over, and the session works on while its three agents run (tasksOnly)', await idleWhileRunning(), `${chat.state} ${chat.tasksOnly} ${chat.running()}`);
-  check('the agents’ lines show on the page', await waitFor(`/Step \\d/.test(${Q.log}.innerText)`, 15000));
+  // The commands' turns above make the transcript longer than a phone: keep its end in view while the lines come. An agent's "Step k."
+  // shows for a moment only (its Read follows at once), so its latest line in the activity row counts too ("QA agent 2 (fable) · Read …").
+  check('the agents’ lines show on the page', await waitFor(`(${Q.log}.scrollTop = ${Q.log}.scrollHeight, /Step \\d|QA agent \\d[^\\n·]*· Read/.test(${Q.log}.innerText))`, 15000));
   await ev(`${Q.log}.scrollTop = ${Q.log}.scrollHeight`);
   await sleep(1200);
   const placed = await ev(stepsPlaced);
@@ -183,6 +210,7 @@ async function scenario(cfg, chat) {
   if (cfg.mobile) check('panel targets are 44 px on touch', (await ev(small(Q.panel))).length === 0, JSON.stringify(await ev(small(Q.panel))));
   await noOverflow('panel');
   await shot(`${cfg.name}-2-panel`);
+  await listChecks(cfg);
 
   // 3. The detail view of the fable agent, while it runs: facts, live transcript, Stop; back returns to the list.
   await click(byText(`#agents-panel li > button`, /\(fable\)/));
@@ -197,12 +225,13 @@ async function scenario(cfg, chat) {
   await noOverflow('detail running');
   await shot(`${cfg.name}-3-detail-running`);
   check('the agents finish', await chat.settled(40000), `${chat.state} ${chat.running()}`);
-  check('detail: Done, with the result and its stored text, newest at the bottom', await waitFor(`/Done/.test(${Q.panel}.innerText) && /Result/i.test(${Q.panel}.innerText) && /All 6 steps done/.test(${Q.panel}.querySelector('section').innerText)`, 8000), (await ev(`${Q.panel}.innerText`)).replace(/\s+/g, ' ').slice(0, 300));
+  check('detail: Done, with the result and its stored text, newest at the bottom', await waitFor(`/Done/.test(${Q.panel}.innerText) && /Result/i.test(${Q.panel}.innerText) && /All 8 steps done/.test(${Q.panel}.querySelector('section').innerText)`, 8000), (await ev(`${Q.panel}.innerText`)).replace(/\s+/g, ' ').slice(0, 300));
   check('detail: no Stop once done', !(await ev(`!!${Q.panel}.querySelector('button[aria-label^="Stop QA agent"]')`)));
   await noOverflow('detail done');
   await shot(`${cfg.name}-4-detail-done`);
   await click(`${Q.panel}.querySelector('button[aria-label="Back to agents"]')`);
   check('back returns to the list', await waitFor(`/^Agents$/.test(${Q.panel}.querySelector('h2')?.innerText ?? '')`, 2000));
+  await listAfter(cfg);
   await click(`document.querySelector('button[aria-label="Close agents"], button[aria-label="Hide agents"]')`);
   await waitFor(`!${Q.panel}`, 2000);
 
@@ -236,8 +265,113 @@ async function scenario(cfg, chat) {
     check('Stop stops it', await waitFor(`/Stopped/.test(${Q.panel}.innerText)`, 20000), (await ev(`${Q.panel}.innerText`)).replace(/\s+/g, ' ').slice(0, 200));
     await shot(`${cfg.name}-7-stopped`);
     await click(`document.querySelector('button[aria-label="Close agents"], button[aria-label="Hide agents"]')`);
+    // Gone, not still sliding out: openAgents takes a panel it finds for an open one.
+    await waitFor(`!${Q.panel}`, 2000);
     await chat.settled(30000);
   }
+  check('no page errors', errors.length === 0, errors.join(' | '));
+  errors.length = 0;
+}
+
+/** The panel's list while the three agents run (T-149): rows of one height that hold still, short labels, the groups. The panel is open. */
+async function listChecks(cfg) {
+  const rows = await ev(panelRows);
+  const heights = [...new Set(rows.map((r) => r.h))];
+  check('every row is the same height (two lines)', heights.length === 1 && heights[0] >= 44 && heights[0] <= 64, JSON.stringify(heights));
+  check('no label is a command line (no &&, |, 2>&1)', rows.every((r) => !/&&|\||2>&1/.test(r.label)), JSON.stringify(rows.map((r) => r.label)));
+  const heads = await ev(groupHeads);
+  check('groups: Agents first, with its count', /^AGENTS ?3$/i.test(heads[0]?.text ?? ''), JSON.stringify(heads));
+  check('groups: Failed is open (never folded away)', heads.some((h) => /^FAILED ?\d+$/i.test(h.text) && !h.folded && h.rows >= 1), JSON.stringify(heads));
+  check('groups: Done is folded, its count shown', heads.some((h) => /^DONE ?\d+$/i.test(h.text) && h.folded && h.rows === 0), JSON.stringify(heads));
+  const failed = rows.find((r) => r.label === 'ls /tmp/qa-missing-dir');
+  check('the failing command sits in Failed with its exit code', !!failed && /FAILED/i.test(failed.group) && /^exit 2/.test(failed.line), JSON.stringify(failed));
+  check('the first screen shows every running agent', await ev(`(() => { const s = ${Q.panel}.querySelector('section').parentElement.getBoundingClientRect(); return [...${Q.panel}.querySelectorAll('section:first-of-type li')].every((li) => li.getBoundingClientRect().bottom <= s.bottom + 1); })()`));
+
+  // Rows hold still: the boxes of every row before and after a live update (an agent's next line, the clock) are the same.
+  const before = await ev(panelRows);
+  const changed = await waitFor(`(() => { const now = ${panelRows}; const was = ${JSON.stringify(before.map((r) => [r.id, r.l1 + r.line]))}; return now.some((r) => { const w = was.find(([id]) => id === r.id); return w && w[1] !== r.l1 + r.line; }); })()`, 4000);
+  const after = await ev(panelRows);
+  const moved = after.filter((r) => { const b = before.find((x) => x.id === r.id); return b && (b.top !== r.top || b.h !== r.h); });
+  check('rows hold still while a line changes (same boxes before and after)', changed && moved.length === 0, JSON.stringify({ changed, moved }));
+}
+
+/** The panel's chips, a command's detail and search, once the agents are done (T-149). The panel is open on the list. */
+async function listAfter(cfg) {
+  // Chips filter: Agents keeps the agents, counted in full; Done opens the done group (and only it); a second tap clears.
+  await click(chip('agents'));
+  await sleep(250);
+  const agentHeads = await ev(groupHeads);
+  const agentRows = await ev(panelRows);
+  const agents = new Set(chat0.tasks.filter((t) => t.subagentType || t.model).map((t) => t.taskId)).size;
+  const counted = agentHeads.reduce((n, h) => n + Number(/(\d+)$/.exec(h.text)?.[1] ?? 0), 0);
+  check('the Agents chip keeps sub-agents only, every one counted', counted === agents && agentRows.every((r) => /QA agent/.test(r.label)) && (await ev(`${chip('agents')}.getAttribute('aria-label')`)) === `Agents ${agents}`, JSON.stringify({ agents, agentHeads }));
+  await click(chip('agents'));
+  await click(chip('done'));
+  await sleep(250);
+  const doneOnly = await ev(groupHeads);
+  check('the Done chip shows the done group open, and nothing else', doneOnly.length === 1 && /^DONE/i.test(doneOnly[0].text) && doneOnly[0].rows >= 2, JSON.stringify(doneOnly));
+  const labels = (await ev(panelRows)).map((r) => r.label);
+  check('a described command is labelled by its description; one named by its command line by a short label', labels.includes('QA described') && labels.includes('node test: qa-none.test.mjs'), JSON.stringify(labels));
+  await noOverflow('done filter');
+  await shot(`${cfg.name}-2b-done-filter`);
+
+  // A command's detail: the whole command in the code block, exit code, copy; back returns to the same filter.
+  await click(byText(`#agents-panel li > button`, /node test: qa-none/));
+  check('a command opens its detail', await waitFor(`/^Command$/m.test(${Q.panel}.querySelector('h2')?.innerText ?? '')`, 3000));
+  const code = await ev(`${Q.panel}.querySelector('section[aria-label=Input] pre')?.innerText ?? ''`);
+  check('detail: the whole command, in the code block', /timeout 30 node --import tsx --test \/tmp\/qa-none\.test\.mjs 2>&1 \| tail -3/.test(code), code);
+  check('detail: exit code and a copy button', /Exit code\s+0/.test(await ev(`${Q.panel}.innerText`)) && (await ev(`!!${Q.panel}.querySelector('section[aria-label=Input] button[aria-label=Copy]')`)), (await ev(`${Q.panel}.innerText`)).replace(/\s+/g, ' ').slice(0, 300));
+  if (cfg.mobile) check('command detail targets are 44 px on touch', (await ev(small(Q.panel))).length === 0, JSON.stringify(await ev(small(Q.panel))));
+  await noOverflow('command detail');
+  await shot(`${cfg.name}-2c-command-detail`);
+  await click(`${Q.panel}.querySelector('button[aria-label="Back to agents"]')`);
+  check('back keeps the filter', await waitFor(`${chip('done')}?.getAttribute('aria-pressed') === 'true'`, 2000));
+  await click(chip('done'));
+
+  // Search: a field on a laptop; behind the search button on a phone.
+  if (cfg.mobile) {
+    check('phone: the search field hides behind its button', !(await ev(`!!document.querySelector('#agents-search')?.offsetParent`)));
+    await click(`${Q.panel}.querySelector('button[aria-label=Search]')`);
+  }
+  check('the search field shows', await waitFor(`!!document.querySelector('#agents-search')?.offsetParent`, 2000));
+  await ev(typeSearch('qa-none'));
+  await sleep(250);
+  const found = await ev(panelRows);
+  check('search finds by the command, folded work included', found.length >= 1 && found.every((r) => r.label === 'node test: qa-none.test.mjs'), JSON.stringify(found.map((r) => r.label)));
+  await shot(`${cfg.name}-2d-search`);
+  await ev(typeSearch(''));
+  if (cfg.mobile) await click(`${Q.panel}.querySelector('button[aria-label=Search]')`);
+  await sleep(250);
+}
+
+/**
+ * Stop on a running command's row (T-149), on a session of its own: stopped, the command moves to Failed (never folded away) as Stopped.
+ * The session must live on. Found 2026-10-14: Claude Code reports the stopped command with a replayed user line whose origin is
+ * `task-notification` without the `session-task` producer, and the portal ends the session for integrity (a server matter, not the panel's).
+ */
+async function commandStop(cfg, chat) {
+  cfgName = `${cfg.name}-command-stop`;
+  if (!(await open(cfg))) return check('page loads', false);
+  await sleep(800);
+  await chat.send('[[bg QA wait::sleep 40]]');
+  const t0 = Date.now();
+  while (Date.now() - t0 < 20000 && !chat.tasks.some((t) => t.description === 'QA wait' && t.status === 'running')) await sleep(150);
+  check('the Agents panel opens on a running command', await openAgents(cfg));
+  await sleep(400); // the sheet has slid in
+  const stopCmd = `${Q.panel}?.querySelector('button[aria-label="Stop QA wait"]')`;
+  check('a running command has Stop on its row, in the Commands group', await waitFor(`!!${stopCmd} && /Commands/i.test(${stopCmd}.closest('section').innerText)`, 5000), JSON.stringify(await ev(groupHeads)));
+  if (cfg.mobile) {
+    const box = await ev(`(() => { const r = ${stopCmd}?.getBoundingClientRect(); return r ? [r.width, r.height] : [0, 0]; })()`);
+    check('the row’s Stop is 44 px on touch', box[0] >= 43.5 && box[1] >= 43.5, JSON.stringify(box));
+  }
+  await noOverflow('command running');
+  await shot(`${cfg.name}-9-command-running`);
+  await click(stopCmd);
+  check('Stop on the row stops the command: Stopped, in the Failed group', await waitFor(`(${panelRows}).some((r) => r.label === 'QA wait' && /Stopped/.test(r.line) && /FAILED/i.test(r.group))`, 20000), JSON.stringify(await ev(panelRows)).slice(0, 400));
+  await shot(`${cfg.name}-9b-command-stopped`);
+  await sleep(3000);
+  const s = await api('GET', `/api/chat/sessions/${SID}`);
+  check('the session lives on after a stopped command', s.state !== 'ended', `${s.state}: ${s.endedReason ?? ''}`);
   check('no page errors', errors.length === 0, errors.join(' | '));
   errors.length = 0;
 }
@@ -255,7 +389,7 @@ async function sessionsRow(cfg, chat) {
   await click(byText('main button', /^Working/));
   const want = cfg.w < 640 ? /Working/ : /Working · 2 agents/;
   // The row's own line (its title and state), not the filter chips (one of them says Working too).
-  const rowText = `([...document.querySelectorAll('main p')].find((p) => p.innerText.trim() === 'Sub-agents QA')?.parentElement?.innerText ?? '')`;
+  const rowText = `([...document.querySelectorAll('main p')].find((p) => p.innerText.trim() === ${JSON.stringify(TITLE)})?.parentElement?.innerText ?? '')`;
   check('the Sessions row says agents still run', await waitFor(`${want}.test(${rowText})`, 8000), (await ev(rowText)).replace(/\s+/g, ' ').slice(0, 200));
   await noOverflow('sessions');
   await shot(`${cfg.name}-8-sessions-row`);
@@ -268,10 +402,11 @@ try {
   cookie = await login();
   if (!SID) {
     await api('POST', '/api/workspaces/local/local/start').catch(() => undefined);
-    SID = (await api('POST', '/api/chat/sessions', { workspaceId: 'local/local', title: 'Sub-agents QA' })).id;
+    SID = (await api('POST', '/api/chat/sessions', { workspaceId: 'local/local', title: TITLE })).id;
     console.log(`session ${SID}`);
   }
   const chat = await openChat();
+  chat0 = chat;
   await send('Network.enable');
   await send('Network.setCookie', { name: 'portal_session', value: cookie, domain: 'localhost', path: '/' });
   await send('Page.enable');
@@ -283,6 +418,14 @@ try {
     if (!cfg.dark) try { await sessionsRow(cfg, chat); } catch (e) { check('sessions row ran', false, String(e.message ?? e).slice(0, 300)); }
   }
   chat.ws.close();
+  // Stopping a command once, on a session of its own (it can end the session: see commandStop).
+  const light = MATRIX.find((c) => !c.dark && (!only || c.name.includes(only)));
+  if (light) {
+    SID = (await api('POST', '/api/chat/sessions', { workspaceId: 'local/local', title: `${TITLE}: Stop a command` })).id;
+    const chat2 = await openChat();
+    try { await commandStop(light, chat2); } catch (e) { await shot(`${light.name}-x-command-stop`); check('command stop ran', false, String(e.message ?? e).slice(0, 300)); }
+    chat2.ws.close();
+  }
 } finally {
   cleanup();
 }
