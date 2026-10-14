@@ -2,7 +2,7 @@
 // The chips run Needs you, In progress, Idle, Pinned, Ended, All; a chip shows only when it has sessions (Pinned and All always do, so
 // both stay reachable; the chip you are on stays while you are on it); the page opens on the first chip that has sessions. In All the rows
 // sit under the same headings in the same order. Pure, so the rules are tested (listOrder.test.ts).
-import { needsYou, type ChatSession, type ListFilter } from '@portal/contracts';
+import { KEEPGOING_PROGRAM_RE, needsYou, type ChatSession, type ListFilter } from '@portal/contracts';
 
 export type StatusChip = Exclude<ListFilter, 'all'>;
 /** The headings and chips, in the order of attention. */
@@ -64,3 +64,30 @@ export const statusGroup = (s: ChatSession) => {
 
 /** Needs you never folds: what waits on you is always in sight. */
 export const canFold = (groupKey: string) => groupKey !== 'attention';
+
+/* ---------- The program filter (T-259 slice 3) ---------- */
+
+type Programmed = Pick<ChatSession, 'keepGoing'>;
+const programOf = (s: Programmed): string | null => s.keepGoing?.program ?? null;
+
+/** The programs the chats belong to (Keep going's program, the pause switch's unit), by name, with how many chats each. */
+export function programCounts(sessions: readonly Programmed[]): { program: string; count: number }[] {
+  const m = new Map<string, number>();
+  for (const s of sessions) {
+    const p = programOf(s);
+    if (p) m.set(p, (m.get(p) ?? 0) + 1);
+  }
+  return [...m].sort(([a], [b]) => a.localeCompare(b)).map(([program, count]) => ({ program, count }));
+}
+
+/** Only the chats of one program; null: every chat. */
+export function ofProgram<T extends Programmed>(sessions: readonly T[], program: string | null): readonly T[] {
+  return program ? sessions.filter((s) => programOf(s) === program) : sessions;
+}
+
+/** A program's name as typed: trimmed and lowercased; '' is none (null); undefined when it is not a valid name. */
+export function programInput(raw: string): string | null | undefined {
+  const v = raw.trim().toLowerCase();
+  if (!v) return null;
+  return KEEPGOING_PROGRAM_RE.test(v) ? v : undefined;
+}

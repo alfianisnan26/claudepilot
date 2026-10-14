@@ -21,6 +21,28 @@ defineSetting({
   help: 'On: chats with Keep going turned on are watched every minute: an idle one is told to continue, an interrupted one is woken, a question is told to decide by the written defaults. A tool approval is never answered and Bypass is never turned on: those are reported. Off: nothing is watched anywhere.',
 });
 
+defineSetting({
+  key: K.coordinator,
+  type: 'string',
+  default: '',
+  scope: 'global',
+  group: 'keepgoing',
+  order: 20,
+  max: 80,
+  label: 'Coordinator',
+  help: 'The chat (its session id) that is told when a watched chat is left down (the cap, a start refused, still ended 15 minutes on), next to the notification, the Needs you item and the ticket. Empty: the chat that started it, if any.',
+});
+
+/** The coordinator's chat a chat left down is told to (T-257 item 4); null when none is set or the store cannot be read. */
+export function keepGoingCoordinator(r: KeepGoingSettingsReader | null): string | null {
+  try {
+    const v = r?.get(K.coordinator);
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The kill switch (an unreadable store reads as on, the default: the per-chat policy is what turns anything on). */
 export function keepGoingOn(r: KeepGoingSettingsReader | null): boolean {
   try {

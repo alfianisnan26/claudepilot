@@ -7,7 +7,10 @@
 //   - the chips run Needs you, In progress, Idle, Pinned, Ended (each only when not empty), All last; the page opens on the first chip with rows;
 //   - in All the rows sit under headings in that order, each with its count; Needs you has no fold;
 //   - a row's ⋯ menu opens past its row and card with every item reachable (nothing clips it at rest);
-//   - nothing scrolls sideways (only the chip row does); 44 px targets for the chips and the group headings on touch screens.
+//   - nothing scrolls sideways (only the chip row does); 44 px targets for the chips and the group headings on touch screens;
+//   - T-259 slice 3, the Program filter: three seeded chats carry a Keep going program (event x2, konfersi x1, the policy off); the picker is
+//     there, 44 x 44 px on touch screens, beside the search with nothing pushed off the screen; it lists the programs with their counts;
+//     choosing event leaves only its two chats (and the chips count those), All programs brings every chat back.
 // usage: scripts/scratch-portal.sh start 3461 && QA_PORT=3461 QA_CODE=24681372 node tools/qa/session-list.mjs [--shots dir] [--seed-only]
 //   It seeds /tmp/scratch-portal-$QA_PORT/data/portal.db (SL_DB overrides) with rows titled "QA list …" and removes them again at the end.
 import { randomUUID } from 'node:crypto';
@@ -29,7 +32,8 @@ const check = (name, ok, extra = '') => {
 
 // --- seed -------------------------------------------------------------------------------------------------------------------------------
 const db = new DatabaseSync(dbPath, { timeout: 10000 });
-const purge = () => db.exec("DELETE FROM chat_requests WHERE session_id LIKE 'qalist-%'; DELETE FROM chat_sessions WHERE id LIKE 'qalist-%'");
+const purge = () =>
+  db.exec("DELETE FROM keepgoing_policies WHERE session_id LIKE 'qalist-%'; DELETE FROM chat_requests WHERE session_id LIKE 'qalist-%'; DELETE FROM chat_sessions WHERE id LIKE 'qalist-%'");
 purge();
 const now = Date.now();
 const iso = (ms) => new Date(ms).toISOString();
@@ -38,11 +42,11 @@ const ins = db.prepare(`INSERT INTO chat_sessions (id, workspace_id, cwd, title,
 const LONG_BRANCH = 'dev/t100-a-very-long-branch-name-that-does-not-fit-on-a-phone-at-all';
 const seed = [
   { title: 'QA list approval waits on an answer for the release of the portal', state: 'waiting', ask: true },
-  { title: 'QA list working with Bypass on', state: 'working', mode: 'bypassPermissions', cost: 1.24 },
+  { title: 'QA list working with Bypass on', state: 'working', mode: 'bypassPermissions', cost: 1.24, program: 'event' },
   { title: 'QA list pinned and idle with a very long title that has to wrap or truncate on a narrow phone screen', state: 'idle', pinned: true, branch: LONG_BRANCH },
   { title: 'QA list pinned, ended', state: 'ended', pinned: true },
-  { title: 'QA list idle', state: 'idle' },
-  { title: 'QA list idle, a worktree', state: 'idle', branch: 'dev/short' },
+  { title: 'QA list idle', state: 'idle', program: 'event' },
+  { title: 'QA list idle, a worktree', state: 'idle', branch: 'dev/short', program: 'konfersi' },
   { title: 'QA list ended for safety', state: 'ended', ended: 'credential: a key showed up in a tool result' },
   { title: 'QA list ended', state: 'ended', ended: 'ended by you' },
 ];
@@ -51,6 +55,9 @@ seed.forEach((s, i) => {
   const at = iso(now - i * 60_000);
   ins.run(id, s.branch ? `/home/node/work/x.worktrees/${s.branch.replaceAll('/', '-')}` : '/home/node', s.title, s.state, at, s.mode ?? 'default', s.cost ?? 0, at, at, s.ended ?? null,
     s.pinned ? at : null, s.branch ? `/home/node/work/x.worktrees/${s.branch.replaceAll('/', '-')}` : null, s.branch ?? null, s.branch ? '/home/node/work/x' : null);
+  // A Keep going policy that is off (the sweep never looks at it) carrying the program the list's filter goes by.
+  if (s.program)
+    db.prepare('INSERT INTO keepgoing_policies (session_id, enabled, program, created_at, updated_at) VALUES (?, 0, ?, ?, ?)').run(id, s.program, at, at);
   if (s.ask)
     db.prepare(`INSERT INTO chat_requests (session_id, request_id, kind, tool_name, title, detail, created_at) VALUES (?, 'r1', 'tool', 'Bash', 'Run a command', 'npm run deploy', ?)`).run(id, at);
 });
@@ -241,6 +248,32 @@ for (const size of SIZES)
     check(`${tag} All: Idle folds`, (await b.eval(`!document.querySelector('[data-status-group=idle] ul[data-session-rows]')`)) === true);
     await b.eval(`document.querySelector('[data-status-group=idle] button[data-group-head]')?.click()`);
     await sleep(200);
+
+    // The Program filter (T-259 slice 3).
+    const pf = await b.eval(`(() => { const l = document.querySelector('[data-program-filter]'); if (!l) return null; const r = l.getBoundingClientRect();
+      return { w: r.width, h: r.height, right: r.right, options: [...l.querySelectorAll('option')].map((o) => o.textContent.trim()) }; })()`);
+    check(`${tag}: the Program picker is there`, !!pf, JSON.stringify(pf));
+    if (pf) {
+      if (size.mobile) check(`${tag}: the Program picker is a 44 px target`, pf.w >= 44 && pf.h >= 44, `${Math.round(pf.w)}x${Math.round(pf.h)}`);
+      check(`${tag}: the Program picker stays on the screen`, pf.right <= size.w, String(Math.round(pf.right)));
+      check(`${tag}: it lists the programs with their counts`, JSON.stringify(pf.options) === JSON.stringify(['All programs', 'event (2)', 'konfersi (1)']), JSON.stringify(pf.options));
+      const pick = (v) =>
+        b.eval(`(() => { const s = document.querySelector('[data-program-filter] select'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, ${JSON.stringify(v)});
+          s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+      const rows = () => b.eval(`[...document.querySelectorAll('ul[data-session-rows] > li a[href^="/admin/sessions/qalist-"]')].map((a) => a.textContent)`);
+      const before = (await rows()).length;
+      await pick('event');
+      await sleep(400);
+      const only = await rows();
+      check(`${tag}: event keeps only its two chats`, only.length === 2 && only.every((t) => /working with Bypass|QA list idle(?!,)/.test(t)), JSON.stringify(only.map((t) => t.slice(0, 40))));
+      const all = (await chips()).find((x) => x.id === 'all');
+      check(`${tag}: the chips count the program's chats`, /\b2$/.test(all?.label ?? ''), String(all?.label));
+      check(`${tag}: no sideways scroll with a program chosen`, (await b.eval(`document.scrollingElement.scrollWidth <= innerWidth`)) === true);
+      if (shots) writeFileSync(join(shots, `${tag}-program.png`), Buffer.from((await b.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+      await pick('');
+      await sleep(400);
+      check(`${tag}: All programs brings every chat back`, (await rows()).length === before, `${(await rows()).length}/${before}`);
+    }
   }
 
 await b.close();

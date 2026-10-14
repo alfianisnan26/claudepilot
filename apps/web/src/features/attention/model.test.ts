@@ -53,7 +53,7 @@ test('the badge: nothing at zero or unknown, 99+ when large', () => {
 test('the filter offers All and each kind with something, or that could not be read', () => {
   const list: AttentionList = {
     total: 3,
-    counts: { mcp_version: 2, skill_version: 0, ci_deploy: 1, ticket_approval: null, tool_approval: 0 },
+    counts: { mcp_version: 2, skill_version: 0, ci_deploy: 1, ticket_approval: null, tool_approval: 0, keepgoing_down: 0 },
     unavailable: ['ticket_approval'],
     items: [],
     offset: 0,
