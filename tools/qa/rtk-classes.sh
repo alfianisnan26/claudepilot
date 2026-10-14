@@ -27,9 +27,9 @@ cd "$here"
 g() { git -c user.name=rtk-scratch -c user.email=rtk-scratch@example.invalid -c commit.gpgsign=false "$@"; }
 i=0
 for f in $(git ls-files 'apps/server/src/*/routes.ts' | head -n 10); do
-  i=$((i + 1)); printf '\n// rtk-classes scratch %s\n' "$i" >> "$f"; g commit -q -am "scratch $i: touch $(dirname "$f")" || exit 4
+  i=$((i + 1)); printf '\n// rtk-classes scratch %s\n' "$i" >> "$f"; g commit -q -am "scratch $i: touch $(dirname "$f")" -m "Why: body line $i of a scratch commit, kept by the fidelity check." -m "Ticket: T-$((900 + i))" || exit 4
 done
-for f in $(git ls-files 'apps/server/src/chat/*.ts' | head -n 4); do echo "// rtk-classes" >> "$f"; done
+for f in $(git ls-files 'apps/server/src/chat/*.ts' | head -n 30); do echo "// rtk-classes" >> "$f"; done
 git rm -q --cached "$(git ls-files 'docs/prd/*.md' | tail -n 1)" >/dev/null
 mkdir -p rtkc-new && echo x > rtkc-new/a.txt && echo y > rtkc-untracked.txt && g add rtkc-new/a.txt
 
@@ -59,19 +59,22 @@ c ls.la ls "ls -la"
 c ls.la-deep ls "ls -la apps/server/src/chat"
 c ls.one ls "ls -1 apps/server/src"
 c ls.lh ls "ls -lh docs/prd"
+c ls.la-many ls "ls -la docs/coord"
 c find.name find "find apps/server/src/chat -name '*.test.ts'"
 c find.type-f find "find docs -type f"
 c find.dirs find "find apps/web/src -maxdepth 2 -type d"
 c tree.l2 tree "tree -L 2 apps/server/src"
 c tree.dirs tree "tree -d apps/web/src"
-c grep.rn grep "grep -rn actorOf apps/server/src"
-c grep.rn-small grep "grep -rn sameHostOrigin apps/server/src"
-c grep.rl grep "grep -rl actorOf apps/server/src"
-c grep.rc grep "grep -rc actorOf apps/server/src/chat"
-c grep.n-file grep "grep -n export apps/server/src/app.ts"
-c rg.n rg "rg -n actorOf apps/server/src"
-c rg.l rg "rg -l actorOf apps/server/src"
-c rg.count rg "rg --count actorOf apps/server/src"
+c grep.rn grep-lines "grep -rn actorOf apps/server/src"
+c grep.rn-small grep-lines "grep -rn sameHostOrigin apps/server/src"
+c grep.n-file grep-lines "grep -n export apps/server/src/app.ts"
+c rg.n grep-lines "rg -n actorOf apps/server/src"
+c grep.rl grep-list "grep -rl actorOf apps/server/src"
+c grep.rl-docs grep-list "grep -rl ticket docs"
+c rg.l grep-list "rg -l actorOf apps/server/src"
+c rg.l-docs grep-list "rg -l ticket docs"
+c grep.rc grep-count "grep -rc actorOf apps/server/src/chat"
+c rg.count grep-count "rg --count actorOf apps/server/src"
 c npm-ls.depth0 npm-ls "npm ls --depth=0"
 c npm-ls.pkg npm-ls "npm ls tsx"
 c npm-ls.ws npm-ls "npm ls -w @portal/server --depth=0"
