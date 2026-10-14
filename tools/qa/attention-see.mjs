@@ -51,7 +51,10 @@ const ticket = (await must(call('POST', '/api/tickets', { summary: 'May the agen
   };
   const tool = async (args) => {
     const res = await rpc('tools/call', { name: 'attention_list', arguments: args });
-    return res.structuredContent ?? JSON.parse(res.content?.[0]?.text ?? '{}');
+    // The summary is the text's first line; structuredContent carries the rest (portalmcp/server.ts).
+    const text = res.content?.[0]?.text ?? '';
+    const nl = text.indexOf('\n');
+    return { ...(res.structuredContent ?? JSON.parse(nl < 0 ? '{}' : text.slice(nl + 1))), summary: nl < 0 ? text : text.slice(0, nl) };
   };
   await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'qa-attention-see', version: '1' } });
   const key = `ticket_approval:${ticket.id}`;
