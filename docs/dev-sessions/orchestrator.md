@@ -35,7 +35,7 @@ Two things come before anything else because the loop depends on them:
    **Pick the model per slice** (the Agent tool's `model`), by what the slice needs, never Fable for everything: `sonnet` for narrow, well-specified
    work (a scratch-portal run, a screenshot sweep, a PRD update, a single test); `opus` for ordinary implementation (a feature, a fix with its test, UI
    work); `fable` only for diagnosis nobody else cracked (a hang's root cause, a security finding) or a slice that failed twice on a smaller model.
-   Write the choice in the status file next to the slice.
+   Default by ROLE (2026-10-14, from the first evaluation: sonnet was 8 percent of agent runs and 1.4 percent of spend while 82 percent of spend was opus): `sonnet` for the qa-verifier, ux-checker, perf-tester, scribe, release-coordinator and any harness, sweep, formatting or verification slice; `opus` for implementer and reviewer of security or migrations; `fable` as above. Always pass `model` explicitly: a sub-agent without it inherits the parent's (opus). Write the choice in the status file next to the slice; the coordinator audits the share of sonnet runs and the cost per request each pass (docs/dev-sessions/evaluations/).
 2. **Integrate** each finished slice as the README says (merge, gate, push `integration`); look at the diff first, read the risky parts (auth, secrets,
    migrations, anything touching Bypass or the integrity checks), and run the touched areas' tests yourself. A slice that fails the gate goes back to its
    sub-agent with the failing output.
