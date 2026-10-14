@@ -34,7 +34,8 @@ NEEDS A HUMAN (D-10, D-34):
 
 LESSONS of this session (for the continuation's own conduct): never `pkill -f` a pattern that is in your own command line; after a conflict resolution check the markers are 0 before any commit; a chained `&&` after a script that may fail must not include a commit; wait loops must not pgrep their own pattern; tickets closed take no comment (ACTUAL goes in the closing comment); the Agent tool loads project roles at process start.
 
-STATUS WRITTEN 07:1x UTC.
+PAUSED FOR MAINTENANCE 07:3x UTC (owner order: the k3s cluster goes into maintenance). No sub-agent was running; every branch is pushed. Local HEAD = a11ebf2 (T-110 s2 + T-287 s2) + status + the D-44 merge; its gate verdict is in the line below; pushed to integration if green, else as wip/orch-<sha> (re-run `scripts/gate-job.sh a11ebf2` after the maintenance, then push). Resume: read this section from the top; first step unchanged. D-44 (origin b1c1c36): production protection is off by the owner's decision: drop that NEEDS A HUMAN line; T-110's live proof waits for the owner to turn it on.
+STATUS WRITTEN 07:1x UTC; PAUSED 07:3x UTC.
 
 ## WIND-DOWN (06:5x UTC, coordinator: context 327k; the supervisor is not running, so this session writes the status and stops by itself; the coordinator starts the continuation from this file)
 - Run 23 LIVE 07:0x (portal 2026.10.14-4, main merged back): pod healthy, schema 851 (820-861, 792); the log shows layer 2 reload + resync for this chat, the T-285 policy override line, no integrity ending; one follower per live session here. Comments on T-277 and T-285. The verifier of the continuation does the rest (T-284 stale clear, T-282 sizes, T-288 harnesses, T-280 steers, T-259, T-287) with the ACTUAL data per ticket.
