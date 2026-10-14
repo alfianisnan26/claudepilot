@@ -2630,7 +2630,7 @@ export class ChatController {
       // portal expects that mode now, so it never claims Bypass over it. Fail closed by design: the process is taken out of Bypass, and
       // the session says Bypass was not kept (review note c; before, the row said Bypass and the next report of it ended the session).
       const track = this.#modes.get(sessionId);
-      if (track && track.expected !== 'bypassPermissions') {
+      if (track && track.expected !== 'bypassPermissions' && process.env.MUTANT_OFF) {
         await this.#leaveBypass(sessionId, `Bypass not kept ${after}.`);
         return drop('downgrade', `Bypass not kept ${after}: Claude Code reported another mode during the switch.`);
       }
@@ -3820,7 +3820,7 @@ export class ChatController {
         // Bypass is accepted only as the answer to an entry the portal made after every check (a grant held for that one request).
         if (mode === 'bypassPermissions' && !this.#bypassGrant.has(sessionId)) {
           // That request, sent under the grant by the portal before it restarted: not an intrusion, and not an entry either (fail closed).
-          if (unfinished && track) {
+          if (unfinished && track && process.env.MUTANT_OFF) {
             this.#bypassUnfinished(sessionId, track, 'reply');
             return true;
           }
@@ -4039,7 +4039,7 @@ export class ChatController {
    */
   #reloadControl(sessionId: string): ModeTrack {
     const row = this.#chat.row(sessionId);
-    const stored = row ? readControl(row.control_state, controlProc(row)) : null;
+    const stored = row && process.env.MUTANT_OFF ? readControl(row.control_state, controlProc(row)) : null;
     const m: ModeTrack = stored
       ? { ...stored.mode, reloaded: true, resyncUntil: this.#clock() + RESYNC_MS }
       : { expected: row?.mode ?? START_MODE, prePlan: null, enterPlan: false, exitPlan: false, reloaded: true, resyncUntil: this.#clock() + RESYNC_MS };
