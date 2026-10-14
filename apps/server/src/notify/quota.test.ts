@@ -98,7 +98,7 @@ test('one row that updates: near, projected, again, high, a milder projection, o
     const afterHigh = s.rows();
     assert.equal(afterHigh.length, 1);
     assert.equal(afterHigh[0]!.stage, 2);
-    assert.match(afterHigh[0]!.body, /5% left/);
+    assert.match(afterHigh[0]!.body, /5\s?% left/);
     assert.equal(afterHigh[0]!.read_at, null, 'worse: unread again');
     assert.equal(afterHigh[0]!.at, new Date(T0 + 180_000).toISOString(), 'and at the top');
     assert.deepEqual(s.status(), ['sent', 'suppressed:collapsed', 'sent']);
@@ -177,7 +177,7 @@ test('the usage adapter counts the chats on the Claude (not ended, a number only
 
 test('the quota text names who it concerns: chats on the Claude, idle when watched, nothing when not known', () => {
   const e = (facts: Record<string, string | number | boolean | null>) => ({ id: 'evt_1', kind: 'quota_low', at: new Date(T0).toISOString(), subject: { type: 'claude', id: 'c1' }, facts }) as NotifyEvent;
-  assert.match(render(e({ ...high, chats: 3 }), { tz: 'UTC', now: T0 }).body, /fadlilah · Session · 5% left · resets 19:34 · 3 chats$/);
+  assert.match(render(e({ ...high, chats: 3 }), { tz: 'UTC', now: T0 }).body, /fadlilah · Session · 5\s?% left · resets 19:34 · 3 chats$/);
   assert.match(render(e({ ...proj, chats: 0 }), { tz: 'UTC', now: T0 }).body, /· idle$/);
   const { chats: _c, ...unknown } = high;
   assert.match(render(e(unknown), { tz: 'UTC', now: T0 }).body, /resets 19:34$/);

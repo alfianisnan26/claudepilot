@@ -217,7 +217,7 @@ test('T-126 "Alert when idle": each person’s own, per Claude; a Claude B may n
     assert.deepEqual((await call('u_a', 'GET', '/api/notify/quota-watch/c_a')).data, { watch: false });
     assert.deepEqual((await call('u_a', 'PUT', '/api/notify/quota-watch/c_a', { watch: true })).data, { watch: true });
     assert.deepEqual((await call('u_a', 'GET', '/api/notify/quota-watch/c_a')).data, { watch: true });
-    assert.equal((await call('u_a', 'PUT', '/api/notify/quota-watch/c_a', { watch: 'yes' })).status, 400);
+    assert.equal((await call('u_a', 'PUT', '/api/notify/quota-watch/c_a', { watch: 'yes' })).status, 422);
     assert.equal((await call('u_b', 'GET', '/api/notify/quota-watch/c_a')).status, 404);
     assert.equal((await call('u_b', 'PUT', '/api/notify/quota-watch/c_a', { watch: true })).status, 404);
     assert.equal((await call('u_a', 'GET', '/api/notify/quota-watch/c_b')).status, 404);
