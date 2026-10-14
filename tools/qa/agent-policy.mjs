@@ -8,6 +8,9 @@
 //     Applied with "1 overridden by policy", its InfoTip naming BASH_MAX_OUTPUT_LENGTH and the set; nothing wider than the screen;
 //   - no page errors.
 // usage: QA_PORT=3481 QA_CDP=9681 node tools/qa/agent-policy.mjs [--shots dir]
+//   in a Job: scripts/job-run.sh -- 'PORTAL_LOCAL_ENABLED=true tools/qa/with-portal.sh 3481 node tools/qa/agent-policy.mjs'
+// Without PORTAL_LOCAL_ENABLED=true the portal has no workspace and the sheet cannot be reached: the harness stops at once and says so
+// (a run at 0b79576 counted that as 8 product failures, 53/61).
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -36,6 +39,16 @@ const login = async () => {
   return m[1];
 };
 const cookie = await login();
+// The precondition: a workspace to open the Configuration sheet on ("This machine").
+{
+  const r = await fetch(`http://localhost:${PORT}/api/workspaces`, { headers: { Cookie: `portal_session=${cookie}` } });
+  const body = await r.json().catch(() => ({}));
+  const list = Array.isArray(body.data) ? body.data : (body.data?.workspaces ?? []);
+  if (!r.ok || list.length === 0) {
+    console.log(`agent-policy: SETUP the portal on ${PORT} lists no workspace (HTTP ${r.status}); start it with PORTAL_LOCAL_ENABLED=true`);
+    process.exit(2);
+  }
+}
 const profile = mkdtempSync(join(tmpdir(), 'cp-ap-profile-'));
 const chrome = spawn('chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars', `--remote-debugging-port=${CDP}`, `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' });
 const cleanup = () => {
