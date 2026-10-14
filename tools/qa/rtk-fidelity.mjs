@@ -6,7 +6,7 @@ const [plainP, rtkP, flag] = process.argv.slice(2);
 if (!plainP || !rtkP) { console.error("usage: rtk-fidelity.mjs plain.txt rtk.txt [--json]"); process.exit(2); }
 const strip = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\r/g, "");
 const norm = (s) => s.replace(/\s+/g, " ").replace(/\s*\(?\d+(\.\d+)?\s*ms\)?$/, "").trim();
-const FILE = /((?:[A-Za-z0-9_.@~-]+\/)*[A-Za-z0-9_.@-]+\.(?:ts|tsx|mts|js|mjs|cjs|json)):(\d+)(?::(\d+))?|((?:[A-Za-z0-9_.@~-]+\/)*[A-Za-z0-9_.@-]+\.(?:ts|tsx|mts|js|mjs|cjs))\((\d+),(\d+)\)/g;
+const FILE = /((?:[A-Za-z0-9_.@~-]+\/)*[A-Za-z0-9_.@-]+\.(?:ts|tsx|mts|js|mjs|cjs|json|sh|md|yml|yaml)):(\d+)(?::(\d+))?|((?:[A-Za-z0-9_.@~-]+\/)*[A-Za-z0-9_.@-]+\.(?:ts|tsx|mts|js|mjs|cjs|sh))\((\d+),(\d+)\)/g;
 export function extract(text) {
   const lines = strip(text).split("\n");
   const names = new Set(), messages = new Set(), locs = new Set();
@@ -16,7 +16,6 @@ export function extract(text) {
     if ((m = /^(?:✖|✗|×|not ok \d+ -)\s+(.+)$/.exec(l))) { const n = norm(m[1]); if (!/^(failing tests?:?|\d+)/i.test(n)) names.add(n); continue; }
     if ((m = /error (TS\d+): (.+)$/.exec(l))) messages.add(`${m[1]}: ${norm(m[2])}`);
     if ((m = /^(?:error|message|AssertionError(?: \[[A-Z_]+\])?|Error|TypeError|ReferenceError):\s*'?(.+?)'?,?$/.exec(l)) && m[1].length > 3) messages.add(norm(m[1]));
-    if (/^(?:\+|-) /.test(l) && !/^(?:\+|-) (?:'|\d|\[|\{|")/.test(l) === false) messages.add("diff: " + l);
     FILE.lastIndex = 0;
     while ((m = FILE.exec(l))) {
       const file = (m[1] || m[4]).replace(/^\.\//, "").replace(/^.*?(apps\/|src\/)/, "$1"), line = m[2] || m[5];

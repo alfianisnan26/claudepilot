@@ -61,7 +61,10 @@ test("rtk-fail delta: passes", () => { assert.ok(true); });
 EOT
   cp apps/server/src/chat/actors.test.ts apps/server/src/chat/zzRtkCopy.test.ts
   printf '\nimport { test as rtkT } from "node:test";\nimport rtkA from "node:assert/strict";\nrtkT("rtk-copy broken assertion", () => { rtkA.equal("left", "right"); });\n' >> apps/server/src/chat/zzRtkCopy.test.ts
-  m node-test fail "$here/apps/server" "$nt chat/zzRtkFail.test.ts chat/zzRtkCopy.test.ts chat/agents.test.ts" "$R test $nt chat/zzRtkFail.test.ts chat/zzRtkCopy.test.ts chat/agents.test.ts"
+  sf="src/chat/zzRtkFail.test.ts src/chat/zzRtkCopy.test.ts src/chat/agents.test.ts"
+  m node-test fail "$here/apps/server" "$nt $sf" "$R test $nt $sf"
+  m node-test fail-err "$here/apps/server" "$nt $sf" "$R err $nt $sf"
+  m node-test fail-spec "$here/apps/server" "$nt --test-reporter=spec $sf" "$R test $nt --test-reporter=spec $sf"
   cat > apps/web/src/lib/zzRtkWebFail.test.ts <<'EOT'
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -69,6 +72,8 @@ test("rtk-web-fail one", () => { assert.strictEqual("a".length, 2); });
 test("rtk-web-fail two", () => { assert.deepStrictEqual([1, 2], [2, 1]); });
 EOT
   m web-node-test fail "$here/apps/web" "$nt src/lib/zzRtkWebFail.test.ts src/lib/popover.test.ts" "$R test $nt src/lib/zzRtkWebFail.test.ts src/lib/popover.test.ts"
+  m web-node-test fail-err "$here/apps/web" "$nt src/lib/zzRtkWebFail.test.ts src/lib/popover.test.ts" "$R err $nt src/lib/zzRtkWebFail.test.ts src/lib/popover.test.ts"
+  m web-node-test fail-spec "$here/apps/web" "$nt --test-reporter=spec src/lib/zzRtkWebFail.test.ts src/lib/popover.test.ts" "$R test $nt --test-reporter=spec src/lib/zzRtkWebFail.test.ts src/lib/popover.test.ts"
   cat > apps/server/src/zzRtkFail.ts <<'EOT'
 export const a: number = "not a number";
 export function f(x: string): number { return x; }
