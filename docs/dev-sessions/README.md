@@ -99,6 +99,8 @@ ending that hit the Konfersi chat on 2026-10-13 is fixed (T-99), so that should 
 **Stop it:** `touch ~/.claudepilot/dev-sessions/STOP` (checked every two minutes) or kill the process by PID. **Start it again** (needs `PORTAL_SERVER_CODE`):
 `cd ~/work/claudepilot && PORTAL_SERVER_CODE=... setsid nohup node docs/dev-sessions/supervisor.mjs >> ~/.claudepilot/dev-sessions/supervisor.log 2>&1 < /dev/null &`.
 `DRY_RUN=1` reads the portal and says what it would do. It approves nothing unless `DEPLOY_RUN=<run id>` is given, and then only that run.
+When the coordinator's machine cannot reach the portal (the tunnel is down or the name does not resolve), see the relay in
+`docs/dev-session.md` ("When the coordinator cannot reach the portal").
 
 ## The factory engine (T-293, no sessions yet)
 

@@ -170,6 +170,41 @@ scripts/image-build.sh --list ; scripts/image-build.sh --stop [--chat <session i
   2 a usage error, 124 past the deadline. The whole log: `IMAGE_BUILD_LOG` (default `/tmp/image-build-<job>.log`; remove it when done).
 - **The door:** the dev account `claudepilot-dev-admin` through this script, as job-run and gate-job; no Role was added or widened.
 
+## When the coordinator cannot reach the portal (the relay)
+
+The supervisor (`docs/dev-sessions/supervisor.mjs`) and the coordinator's helpers (`tools/coordinator/`) run on the coordinator's machine,
+outside this pod (D-14: the owner's sign-in code must never be where agents can read it). They call `https://pilot.ai.isnan.me`, a name that
+only resolves on the cluster's private network. From outside they get there through two local helpers. `tools/coordinator/up.sh` starts them:
+an SSH jump SOCKS tunnel on `127.0.0.1:1080` (`jump-tunnel.sh`, needs a valid Cloudflare Access login) and, for Node, an HTTP proxy shim on
+`127.0.0.1:3128` (`socks-http-proxy.mjs`). `ph.sh METHOD PATH [json]` makes one owner call: `POST /api/login` with `PORTAL_SERVER_CODE`, then
+the call with the cookie and an `Origin` header. `sess.py` (the chat list) and `reassign.py` (moves tickets off ended chats) read its JSON. On
+2026-10-14 (T-259) the name did not resolve from the owner's dev container and the k3s API timed out. For about 3.5 hours nothing nudged,
+answered or restarted a chat. The coordinator got through only by running the API calls from the **Coder workstation** (agent-desktop, the
+owner's remote Linux computer, reached through the coder-desktop MCP), which sits inside the cluster network.
+
+Until the portal has an external heartbeat, that is the relay:
+
+1. Check the usual path first: `tools/coordinator/up.sh` prints `tunnel 1080 up` / `DOWN`. Use the relay only when it stays down, or the
+   name does not resolve from the coordinator's machine.
+2. On the workstation, work in a new scratch directory. Make the same calls `ph.sh` makes (log in, then one API call). You may copy in a
+   helper script for this, such as `sess.py` or `reassign.py`.
+3. **Leave nothing of the owner's there.** Runner jobs on that workstation run as the same user (D-14), so they can read what you leave. Do
+   not write the sign-in code to a file, a shell history or a lasting environment, and do not leave a cookie jar, a copy of the repository or
+   a helper script. Delete the scratch directory when you are done.
+4. Write on the ticket what you ran there (calls and chat ids, never the code or a cookie). Use T-259 or the ticket of the outage.
+
+What the relay is not:
+
+- **Not needed for chats with Keep going on.** The portal runs that watchdog itself, inside the cluster: `apps/server/src/keepgoing`, a
+  60-second sweep, the kill switch `keepgoing.enabled`, the per-chat policy on `PUT /api/chat/sessions/:id/keep-going` or the Portal MCP tool
+  `session_keepgoing_set`. Such a chat is nudged, woken, recovered and continued while the coordinator is cut off. The supervisor leaves that
+  track alone.
+- **Still the only way** to keep a chat in Bypass and to move one on low quota (D-12, D-39). Keep going reports a chat that lost Bypass and
+  never re-enters it, and it does not move chats (T-316). The supervisor does both, and it is cut off with the coordinator. The same goes
+  for tracks that do not have Keep going on.
+- **Not built:** an external heartbeat that notices the portal itself is down (T-315; only Connect's hub heartbeats exist), and a relay
+  script: the steps above are by hand. T-104's lease will replace the sign-in code the helpers use.
+
 ## Rules that hold
 
 - Never print, log or commit a token. No token-shaped literal anywhere in the repository (GitHub push protection): build fixtures at runtime.
