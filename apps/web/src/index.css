@@ -168,6 +168,34 @@ body::before {
 }
 
 /*
+ * Code token colours (the code viewer, T-148, docs/design/code-viewer.md): the same steps as a tool row's CodeBlock (Tailwind 700 in
+ * light, 300 or 400 in dark), as variables so the viewer's theme follows the app's theme live.
+ */
+:root {
+  --code-keyword: #6d28d9;
+  --code-string: #047857;
+  --code-number: #0e7490;
+  --code-flag: #1d4ed8;
+  --code-type: #b45309;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --code-keyword: #c4b5fd;
+    --code-string: #34d399;
+    --code-number: #67e8f9;
+    --code-flag: #93c5fd;
+    --code-type: #fbbf24;
+  }
+}
+:root[data-theme='dark'] {
+  --code-keyword: #c4b5fd;
+  --code-string: #34d399;
+  --code-number: #67e8f9;
+  --code-flag: #93c5fd;
+  --code-type: #fbbf24;
+}
+
+/*
  * The page never rubber-bands or pulls to refresh at its ends: on a phone the header, the tab bar and the session screen stay
  * where they are and only the content inside scrolls (a drag on the header used to move the whole page).
  */

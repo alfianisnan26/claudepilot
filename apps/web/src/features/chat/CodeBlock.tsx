@@ -1,6 +1,7 @@
 import { cn, useToast } from '@isnanme/ui';
 import { Check, Copy, WrapText } from 'lucide-react';
 import { forwardRef, useEffect, useMemo, useState, type ReactNode, type UIEventHandler } from 'react';
+import { MONO } from '../code/font';
 import { splitEscapes, tokenizeShell, visibly, type ShellKind } from './shellTokens';
 import { clipOutput, linesLabel, lineCount, type CodeLang, type DiffLine, type InputView } from './toolFormat';
 
@@ -8,8 +9,8 @@ import { clipOutput, linesLabel, lineCount, type CodeLang, type DiffLine, type I
 // review. Monospace, real line breaks, light shell colouring; the text is drawn whole and in order (the tokens joined are the text), and a
 // disguising character the portal escaped (`⟦U+202E⟧`) is marked.
 
-/** A real code font: the kit's `font-mono` is the UI font with tabular figures. */
-export const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';
+/** The code font (shared with the code viewer). */
+export { MONO };
 
 const KIND_CLASS: Record<ShellKind, string> = {
   text: '',
