@@ -44,6 +44,12 @@ export function Deck({ items, now, openKey }: { items: readonly AttentionItem[];
     if (cardKey !== current) setCurrent(cardKey);
   }, [cardKey, current]);
 
+  // A link that names another card while the deck is open (a push tapped on this page) moves to it.
+  useEffect(() => {
+    if (openKey && deck.some((i) => attentionItemKey(i) === openKey)) setCurrent(openKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the link changes, not on every live update
+  }, [openKey]);
+
   const [leaving, setLeaving] = useState<SwipeOutcome>(null);
   const [busy, setBusy] = useState(false);
 

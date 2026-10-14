@@ -2,6 +2,9 @@
 // API (an MCP proposal over the Portal MCP, a skill upload, an approval ticket for a person), one row anatomy (title, why chip, who, age,
 // risk, the primary action), the nav badge (and on a phone the More button's), and the deep links landing on the exact item (the MCP
 // version preselected). At 390 px with touch and 1280 px, light and dark: no sideways scroll, 44 px targets on the phone, every control named.
+// Slice 2: the swipe deck (one card per item; a touch swipe left puts it off for an hour and lists it under Later, Back now returns it; a
+// short or vertical drag decides nothing; the arrow keys do the same; a swipe right opens the item's own page; `?item=` opens at that card),
+// the list marking what is put off, and Home's Review card (count by source, the newest item opening its card in the deck).
 // usage: QA_PORT=3531 QA_CODE=24681372 QA_SHOTS=<dir> node tools/qa/attention.mjs   (a scratch portal; it mints a token there, never prints it)
 import { AUDIT, Browser, SHOTS } from './browser.mjs';
 import { api, BASE, login, sleep } from './lib.mjs';
@@ -38,7 +41,7 @@ check(first.total === 0, `a clean portal has nothing waiting (${first.total})`);
 /* ---------- Seed what waits, while a page watches: the rows arrive live ---------- */
 
 const watcher = await Browser.launch({ width: 1280, height: 800, cookie });
-await watcher.goto('/admin/attention', 2500);
+await watcher.goto('/admin/attention?view=list', 2500);
 await watcher.waitFor(`document.body.innerText.includes('Nothing needs you')`, 10_000, 'the empty state (watcher)');
 
 // An approval ticket for a person.
@@ -111,7 +114,7 @@ for (const [width, height] of [[390, 844], [1280, 800]]) {
     const tag = `${width}-${dark ? 'dark' : 'light'}`;
     const b = await Browser.launch({ width, height, dark, mobile: width < 600, cookie });
     try {
-      await b.goto('/admin/attention', 2500);
+      await b.goto('/admin/attention?view=list', 2500);
       await b.waitFor(`document.querySelectorAll('[data-attention-item]').length >= 3`, 10_000, 'the rows');
       await sleep(500);
       const rows = await b.eval(`[...document.querySelectorAll('[data-attention-item]')].map((e) => ({ id: e.dataset.attentionItem, text: e.innerText.replace(/\\s+/g, ' ').slice(0, 160), links: e.querySelectorAll('a[href]').length }))`);
@@ -151,16 +154,153 @@ for (const [width, height] of [[390, 844], [1280, 800]]) {
         check(at.path === `/admin/pools/mcp/catalog/${proposedEntry}` && at.selected === `version-${proposedVersion}`, `${tag}: the MCP deep link lands on the entry with that version marked (${at.path} ${at.selected})`);
         await sleep(500);
         await b.shot(`attention-deeplink-mcp-${tag}`);
-        await b.goto('/admin/attention', 2000);
+        await b.goto('/admin/attention?view=list', 2000);
         await b.waitFor(`document.querySelectorAll('[data-attention-item]').length >= 3`, 10_000, 'the rows again');
         await b.clickSel(`[data-attention-item="ticket_approval:${ticket.id}"] > a:last-child`);
         await b.waitFor(`location.pathname === '/admin/tickets/${ticket.id}'`, 8000, 'the ticket page');
         check(true, `${tag}: the ticket deep link lands on ${ticket.id}`);
-        await b.goto('/admin/attention', 2000);
+        await b.goto('/admin/attention?view=list', 2000);
         await b.waitFor(`document.querySelectorAll('[data-attention-item]').length >= 3`, 10_000, 'the rows again');
         await b.clickSel(`[data-attention-item^="skill_version:"] > a:last-child`);
         await b.waitFor(`location.pathname.startsWith('/admin/pools/skills/review/')`, 8000, 'the skill review page');
         check(true, `${tag}: the skill deep link lands on its review page`);
+      }
+      if (b.errors.length) check(false, `${tag}: page errors ${b.errors.slice(0, 3).join(' | ')}`);
+    } finally {
+      await b.close();
+    }
+  }
+}
+
+/* ---------- Slice 2: the deck, Later, and Home's Review card ---------- */
+
+const cardKey = `document.querySelector('[data-attention-card]')?.dataset.attentionCard ?? null`;
+const position = `document.querySelector('[data-deck-position]')?.innerText.trim() ?? ''`;
+const centre = `(() => { const r = document.querySelector('[data-attention-card]').getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), w: Math.round(r.width) }; })()`;
+const touch = (b, type, x, y) => b.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }] });
+/** A one-finger drag from the card's centre by (dx, dy), in steps, as a thumb does it. */
+const swipe = async (b, dx, dy = 0) => {
+  const c = await b.eval(centre);
+  await touch(b, 'touchStart', c.x, c.y);
+  for (let i = 1; i <= 10; i++) {
+    await touch(b, 'touchMove', c.x + (dx * i) / 10, c.y + (dy * i) / 10);
+    await sleep(25);
+  }
+  await touch(b, 'touchEnd', 0, 0);
+  await sleep(500);
+};
+const waiting = async () => (await must(call('GET', '/api/attention'), 'list')).data;
+
+for (const [width, height] of [[390, 844], [1280, 800]]) {
+  for (const dark of [false, true]) {
+    const tag = `${width}-${dark ? 'dark' : 'light'}`;
+    const b = await Browser.launch({ width, height, dark, mobile: width < 600, cookie });
+    try {
+      await b.goto('/admin/attention', 2500);
+      await b.waitFor(`!!document.querySelector('[data-attention-card]')`, 10_000, 'the deck');
+      await sleep(400);
+      const first = await b.eval(cardKey);
+      check(first === `${seeded.items[0].kind}:${seeded.items[0].id}`, `${tag}: the deck is the way in and opens at the first item (${first})`);
+      check((await b.eval(position)).startsWith(`1 of ${seeded.total}`), `${tag}: the deck says where you are (${await b.eval(position)})`);
+      const anatomy = await b.eval(`(() => { const c = document.querySelector('[data-attention-card]'); return { title: !!c.querySelector('h2')?.innerText.trim(), time: !!c.querySelector('time'), tip: !!c.querySelector('button[aria-label^="About"]'), touch: getComputedStyle(c).touchAction }; })()`);
+      check(anatomy.title && anatomy.time && anatomy.tip, `${tag}: the card shows what, why (with its InfoTip) and how long (${JSON.stringify(anatomy)})`);
+      check(anatomy.touch === 'pan-y', `${tag}: the card follows the finger sideways only (touch-action ${anatomy.touch})`);
+      const a = await b.eval(AUDIT);
+      check(!a.hscroll && a.overflowing.length === 0, `${tag}: deck, no sideways scroll ${a.hscroll ? JSON.stringify(a.hscroll) : ''} ${a.overflowing.join('; ')}`);
+      check(a.unnamed.length === 0, `${tag}: deck, every control named ${a.unnamed.join('; ')}`);
+      const rubber = await b.eval(`[getComputedStyle(document.documentElement).overscrollBehaviorY, getComputedStyle(document.body).overscrollBehaviorY]`);
+      check(rubber.some((v) => v === 'none' || v === 'contain'), `${tag}: the page never rubber-bands (overscroll ${rubber.join('/')})`);
+      if (width === 390) {
+        const small = await b.eval(`[...document.querySelectorAll('[data-deck-later], [data-deck-act], [data-attention-deck] button[aria-label$="card"], [data-attention-view] button')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && (r.height < 44 || r.width < 44); }).map((e) => (e.getAttribute('aria-label') || e.innerText).slice(0, 40) + ' ' + Math.round(e.getBoundingClientRect().width) + 'x' + Math.round(e.getBoundingClientRect().height))`);
+        check(small.length === 0, `${tag}: 44 px targets for Later, the action, previous, next and the view switch ${small.join('; ')}`);
+      }
+      await b.shot(`deck-${tag}`);
+
+      if (!dark && width === 390) {
+        // A short drag snaps back, a vertical one is a scroll: neither decides.
+        await swipe(b, 60);
+        check((await b.eval(cardKey)) === first, `${tag}: a short swipe snaps back (${await b.eval(cardKey)})`);
+        await swipe(b, 30, -220);
+        check((await b.eval(cardKey)) === first && (await b.eval(`location.pathname`)) === '/admin/attention', `${tag}: a vertical drag decides nothing`);
+        // Mid-swipe: the card follows the finger and shows what letting go would do.
+        const c = await b.eval(centre);
+        await touch(b, 'touchStart', c.x, c.y);
+        for (let i = 1; i <= 5; i++) {
+          await touch(b, 'touchMove', c.x - 16 * i, c.y);
+          await sleep(25);
+        }
+        const mid = await b.eval(`document.querySelector('[data-attention-card]').style.transform`);
+        check(/translateX\(-/.test(mid), `${tag}: the card follows the finger (${mid})`);
+        await b.shot(`deck-midswipe-${tag}`);
+        // Swipe left: Later, for an hour.
+        for (let i = 6; i <= 12; i++) {
+          await touch(b, 'touchMove', c.x - 16 * i, c.y);
+          await sleep(25);
+        }
+        await touch(b, 'touchEnd', 0, 0);
+        await b.waitFor(`!!document.querySelector('[data-attention-later]')`, 8000, 'the Later list');
+        await sleep(400);
+        const now1 = await waiting();
+        const snoozed = now1.items.filter((i) => i.snoozedUntil);
+        const mins = snoozed.length ? Math.round((Date.parse(snoozed[0].snoozedUntil) - Date.now()) / 60_000) : null;
+        check(snoozed.length === 1 && `${snoozed[0].kind}:${snoozed[0].id}` === first && mins >= 58 && mins <= 60, `${tag}: a swipe left puts that item off for an hour (${snoozed.length}, ${mins} min)`);
+        check(now1.total === seeded.total, `${tag}: put off, it still waits and is counted (${now1.total})`);
+        check((await b.eval(cardKey)) !== first && (await b.eval(position)).startsWith(`1 of ${seeded.total - 1}`), `${tag}: the next card takes its place (${await b.eval(position)})`);
+        check(/Until/.test(await b.eval(`document.querySelector('[data-attention-later="${first}"]')?.innerText ?? ''`)), `${tag}: Later lists it with the time it comes back`);
+        await b.shot(`deck-later-${tag}`, { full: true });
+        // The list marks it.
+        await b.goto('/admin/attention?view=list', 2000);
+        await b.waitFor(`document.querySelectorAll('[data-attention-item]').length >= 3`, 10_000, 'the rows');
+        check(await b.eval(`!!document.querySelector('[data-attention-item="${first}"] [data-attention-snoozed]')`), `${tag}: the list marks the item put off`);
+        await b.shot(`deck-list-later-${tag}`);
+        // Back now.
+        await b.goto('/admin/attention', 2000);
+        await b.waitFor(`!!document.querySelector('[data-deck-unsnooze]')`, 8000, 'Back now');
+        await b.clickSel('[data-deck-unsnooze]');
+        await b.waitFor(`!document.querySelector('[data-attention-later]')`, 8000, 'the Later list emptied');
+        check((await waiting()).items.every((i) => !i.snoozedUntil), `${tag}: Back now returns it to the deck`);
+        // ?item= opens at that card (a push or the Home card); a swipe right opens the item's own page.
+        const target = `ticket_approval:${ticket.id}`;
+        await b.goto(`/admin/attention?item=${encodeURIComponent(target)}`, 2000);
+        await b.waitFor(`!!document.querySelector('[data-attention-card]')`, 8000, 'the deck');
+        check((await b.eval(cardKey)) === target, `${tag}: ?item= opens the deck at that card (${await b.eval(cardKey)})`);
+        await swipe(b, 260);
+        await b.waitFor(`location.pathname === '/admin/tickets/${ticket.id}'`, 8000, 'the ticket page');
+        check(true, `${tag}: a swipe right opens the item's own page (/admin/tickets/${ticket.id})`);
+      }
+      if (!dark && width === 1280) {
+        // The keyboard: the arrow keys do what the swipes do; the buttons are always there.
+        const k = await b.eval(cardKey);
+        await b.focusSel('[data-attention-card]');
+        await b.key('ArrowLeft', { code: 'ArrowLeft' });
+        await b.waitFor(`!!document.querySelector('[data-attention-later]')`, 8000, 'the Later list');
+        check((await waiting()).items.some((i) => `${i.kind}:${i.id}` === k && i.snoozedUntil), `${tag}: the left arrow puts the card off`);
+        await b.shot(`deck-later-${tag}`, { full: true });
+        await b.clickSel('[data-deck-unsnooze]');
+        await b.waitFor(`!document.querySelector('[data-attention-later]')`, 8000, 'the Later list emptied');
+        await b.focusSel('[data-attention-card]');
+        await b.key('ArrowRight', { code: 'ArrowRight' });
+        await b.waitFor(`location.pathname !== '/admin/attention'`, 8000, 'the item page');
+        check(true, `${tag}: the right arrow opens the item's own page (${await b.eval('location.pathname')})`);
+      }
+
+      // Home's Review card: the count by source, the newest item opening its card in the deck.
+      await b.goto('/admin/home', 2500);
+      await b.waitFor(`!!document.querySelector('[data-review]')`, 10_000, 'the Review card');
+      await sleep(400);
+      const review = await b.eval(`(() => { const r = document.querySelector('[data-review]'); return { stats: [...r.querySelectorAll('[aria-label*=":"]')].map((e) => e.getAttribute('aria-label')).filter((l) => !l.startsWith('Newest')), newest: r.querySelector('a[aria-label^="Newest"]')?.getAttribute('href') ?? null }; })()`);
+      check(review.stats.includes('MCP: 1') && review.stats.includes('Skills: 1') && review.stats.includes('Tickets: 1'), `${tag}: Review counts by source (${review.stats.join(', ')})`);
+      check(!!review.newest && review.newest.startsWith('/admin/attention?item='), `${tag}: the newest item links to its card (${review.newest})`);
+      const ra = await b.eval(AUDIT);
+      check(!ra.hscroll && ra.unnamed.length === 0, `${tag}: Home, no sideways scroll, every control named ${ra.unnamed.join('; ')}`);
+      await b.eval(`document.querySelector('[data-review]').scrollIntoView({ block: 'center' })`);
+      await sleep(300);
+      await b.shot(`review-${tag}`);
+      if (!dark) {
+        await b.clickSel('[data-review] a[aria-label^="Newest"]');
+        await b.waitFor(`location.pathname === '/admin/attention' && !!document.querySelector('[data-attention-card]')`, 8000, 'the deck from Home');
+        const want = decodeURIComponent(review.newest.split('item=')[1]);
+        check((await b.eval(cardKey)) === want, `${tag}: a tap on the newest opens the deck at its card (${want})`);
       }
       if (b.errors.length) check(false, `${tag}: page errors ${b.errors.slice(0, 3).join(' | ')}`);
     } finally {

@@ -328,7 +328,7 @@ test('the aggregate reads each source with exactly one query, however many items
   const r = createAttention({ db: counting }, { now: () => now, tickMs: 0 });
   const list = r.list(ownerActor());
   assert.equal(list.total, 25);
-  assert.equal(prepared, 5, 'one query per source');
+  assert.equal(prepared, 6, 'one query per source, and one for the person\'s own Later (snoozes)');
 });
 
 test('the aggregate groups by why then age, pages, filters by kind, and says when a source could not be read', () => {
