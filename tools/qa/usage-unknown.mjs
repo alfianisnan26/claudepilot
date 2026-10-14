@@ -61,7 +61,7 @@ try {
       const tag = `${size.name}-${dark ? 'dark' : 'light'}`;
       await b.setViewport(size.w, size.h);
       await b.media({ dark });
-      await b.goto('/usage?tab=claudes', 2500);
+      await b.goto('/admin/usage?tab=claudes', 2500);
       try {
         await b.waitFor(`document.getElementById('one')`, 15000, 'the Claudes tab');
       } catch (e) {
@@ -97,6 +97,12 @@ try {
       await b.shot(`usage-unknown-${tag}`);
     }
   }
+  // The Home page's Quota widget: one.claude has no number there either (it showed "100 %" before T-255's fix).
+  await b.setViewport(1280, 800);
+  await b.goto('/admin/home', 3000);
+  const home = await b.eval(`document.body.innerText`);
+  const line = (home.replace(/\s+/g, ' ').match(/one\.claude.{0,40}/) ?? [''])[0];
+  check(/one\.claude/.test(home) && !/one\.claude\s+Max\s+100 %/.test(home), `home quota: one.claude shows no 100 % (${JSON.stringify(line)})`);
   check(b.errors.length === 0, `no page errors (${b.errors.slice(0, 2).join(' | ')})`);
 } finally {
   await b.close();
