@@ -11,20 +11,19 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   0 OOM) + web 629/629 (claudepilot-job-a19b47c9).
 - Earlier: 4ba5d37, 73bb581 merged; deploys #35/#36 (closed T-483, T-397, T-491, T-435, T-476, T-449).
 
-## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-401 DONE 060aca4 -> now T-426 on it (reuse), cffb12b1 T-486 S2b WAITING 27b95c7,
-  47710391 qa-sweep (sonnet) T-531 S2 QA (GO 11:50, has the slot; sweep done: 4656), 0df3dd19 impl-t379 (sonnet) T-379 --image on fe62fa6)
+## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-426 WAITING ab93b54 (on T-401 060aca4), cffb12b1 T-486 S2b WAITING 27b95c7,
+  47710391 qa (sonnet) T-531 done -> now T-401 QA (code reading, then GO), 0df3dd19 impl-t379 (sonnet) T-379 --image on fe62fa6)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster slot order: T-531 QA -> T-379 (612911f) -> T-486 S2b -> T-426. Next free worker: T-401 blind review (opus, 4745). T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
+  Cluster: T-379 (GO 11:55) -> T-486 S2b -> T-401 QA -> T-426. Next free workers: T-401 blind review (opus), T-531 S2c fix. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
 - T-401 (high, security): S1 DONE 060aca4 (4 Jobs green per author; fetch does npm ci --ignore-scripts with creds). Touches
   gate-job.yaml: review must confirm the gate's checks unchanged (4745). Next: blind review (opus) + QA, lead gate, merge.
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
   ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
 - T-426 (claimed 4642): starts on T-401's merged head (same Secret block of job-run.sh); opus + blind review. T-379 (4687) running.
-- T-531 (high, authz): S1 df65563 (4515: typecheck a3cf20b8; 1105/1111 0 fail ed930af1; proof 535ee3fc 6/6); 74a6ee0e ended.
-  Blind review 21731f30 PASS WITH CONDITIONS (4520: preflight at view runs a shell, adopt at operate; ended). Decision 4524: fix
-  round S2 eef38632 DONE 9cd240f (4573: typecheck e68ac93a; 1001/1015 0 fail 2bc6a50e; proof 55c7eff0 8/8 vs 4 fail); ended.
-  Agents are now refused PATCH/DELETE claudes and DELETE terminal (no resolver). Next: QA (sonnet) -> lead gate -> merge. Open points ticketed: T-538 (pool ids in PUT), T-539 (other prefixes), T-540 (remove re-check).
+- T-531 (high, authz): S1 df65563; blind review PASS WITH CONDITIONS (4520); S2 9cd240f. QA 47710391 PASS WITH GAPS (4761/4762:
+  1428/1433 0 fail job-a8a40ad8; mutation holds job-620ab38d; no agent path uses the refused routes). Decision 4763: S2c (sonnet)
+  tests legacy refs get the same 404 (workspaceRefGuard checks ws_ ids only) -> lead gate -> merge. T-538..T-540 ticketed.
 - T-486 (high): S1 live. S2 DONE 75fd6a4 (4671, Jobs green; webhook, attention, allow-list, migration 783); 45148907 ended.
   Blind review 10382d36 PASS WITH CONDITIONS (4693, 6 minors); decision 4703: S2b cffb12b1 fixes m1/m4/m5 + PRD risks m2/m3;
   web hookSecret field -> T-556. Then QA -> lead gate -> merge -> deploy -> real Event branch check.
