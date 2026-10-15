@@ -412,7 +412,7 @@ test('the aggregate reads each source with exactly one query, however many items
   const r = createAttention({ db: counting }, { now: () => now, tickMs: 0 });
   const list = r.list(ownerActor());
   assert.equal(list.total, 35);
-  assert.equal(prepared, 8, 'one query per source, and one for the person\'s own Later (snoozes)');
+  assert.equal(prepared, 9, 'one query per source, and one for the person\'s own Later (snoozes)');
 });
 
 test('the aggregate groups by why then age, pages, filters by kind, and says when a source could not be read', () => {
@@ -443,7 +443,7 @@ test('the aggregate groups by why then age, pages, filters by kind, and says whe
   const broken = createAttention({ db: null }, { now: () => now, tickMs: 0, log: () => undefined });
   const none = broken.list(ownerActor());
   assert.equal(none.counts.mcp_version, null, 'unavailable is a state, never 0');
-  assert.equal(none.unavailable.length, 7);
+  assert.equal(none.unavailable.length, 8);
 });
 
 test('an item appearing emits one event naming it; nothing changing emits nothing; the first read is the baseline', () => {
