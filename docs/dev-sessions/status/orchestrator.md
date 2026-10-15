@@ -10,16 +10,16 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff b37628e (T-515 e021cb6 + T-527 ea81071 + packs): gate GREEN claudepilot-gate-b37628e-0953 (memory peak 2189Mi/8192Mi,
   0 OOM) + web 629/629 (claudepilot-job-a19b47c9).
 
-## IN FLIGHT (4 of 4 workers, D-65: 8dc6a739 impl-t557 (sonnet) T-557 S0+S1 (c10daf0e ended; T-426 ab93b54 waits for QA, 4899), 03b631f0 impl-t531-s2c (sonnet) T-531 S2c (cffb12b1 ended: T-486 S2b DONE 6eb6fbf 4880),
+## IN FLIGHT (4 of 4 workers, D-65: 8dc6a739 impl-t557 (sonnet) T-557 S0 PRD + S1a seam (c10daf0e ended, 4899), 03b631f0 impl-t531-s2c (sonnet) T-531 S2c (cffb12b1 ended: T-486 S2b DONE 6eb6fbf 4880),
   47710391 qa (sonnet) T-401 QA WAITING GO, 0df3dd19 impl-t379 (sonnet) T-379 090fbbf (minors 8dadddb + lead merge of 060aca4, 4852): GO 12:20 src/ci re-run)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-379 re-run (GO 12:20) -> T-401 QA -> T-531 S2c / T-557 -> T-486 QA (6eb6fbf) -> T-426 QA (ab93b54). T-379 live proof PASS (4845, job-2d70c331). Next free workers: T-401 blind review (opus), T-531 S2c fix. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
+  Cluster: T-379 re-run (GO 12:20) -> T-401 QA -> T-531 S2c / T-557 -> T-486 QA (6eb6fbf). T-531 S2c WAITING 7afbd0d (test unrun). T-379 live proof PASS (4845, job-2d70c331). Next free workers: T-401 blind review (opus), T-486 QA, T-416 S1b QA, then T-557 S1b lease (opus) after T-401 merges.
 - T-401 (high, security): S1 DONE 060aca4 (4 Jobs green per author; fetch does npm ci --ignore-scripts with creds). Touches
   gate-job.yaml: review must confirm the gate's checks unchanged (4745). Next: blind review (opus) + QA, lead gate, merge.
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
   ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
-- T-426 (claimed 4642): starts on T-401's merged head (same Secret block of job-run.sh); opus + blind review. T-379 (4687) running.
+- T-426 (claimed): folded into T-557 S1b lease (4904); ab93b54 is input, not merged alone.
 - T-531 (high, authz): S1 df65563; blind review PASS WITH CONDITIONS (4520); S2 9cd240f. QA 47710391 PASS WITH GAPS (4761/4762:
   1428/1433 0 fail job-a8a40ad8; mutation holds job-620ab38d; no agent path uses the refused routes). Decision 4763: S2c (sonnet)
   tests legacy refs get the same 404 (workspaceRefGuard checks ws_ ids only) -> lead gate -> merge. T-538..T-540 ticketed.
@@ -35,7 +35,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-378 S1 dev/t-378-1 9834ff7 ready: needs a verifier.
 
 ## DECISIONS (binding)
-- 12:35 Coordinator: T-557 S0+S1 now (owner priority; burst runners, no 24/7 codespace); S2 waits for the owner's GitHub account + limit.
+- 12:45 Owner via coordinator (T-557 4901): only CI jobs go remote (cluster | connect:<host> | codespace); ONE per-job secret
+  lease for all, T-426 folded in (4904). Order T-379, T-401, then S1a seam (sonnet, now) + S1b lease (opus, after T-401), S2 connect, S3 codespace.
 - 12:09 Workers cannot git merge: the lead merges base heads into slice branches (T-379 090fbbf, 4852).
 - 11:30 Coordinator (owner priority, metocean): T-379 NOW in its own worker; built on T-401's fe62fa6 (fetch stage holds creds).
 - 12:00 Coordinator tool review: lead edits of code (dev-t-376 commits 01:57-02:03, no trailers, before D-63 03:36; 4820).
@@ -68,7 +69,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## NEXT (in order, as slots free)
 1. T-531 S2 Jobs -> QA (sonnet) -> lead gate -> merge. 2. T-416 QA Jobs -> blind review (opus) -> lead gate -> merge -> deploy; then S2.
-3. NEXT FREE SLOTS: T-426 (opus, why: secret door) once T-401 merges; T-558 (lead starts own stg-deploy, authz: opus +
+3. NEXT FREE SLOTS: T-557 S1b lease (opus, why: secret transport) once T-401 merges; T-558 (lead starts own stg-deploy, authz: opus +
    blind review, D-62; coordinator 11:45); then in parallel T-557 S0 PRD (sonnet implementer),
    T-557 S1 runner seam (sonnet, fake runner), T-546 + T-548 (one sonnet worker); then T-547 + T-549; T-557 S2 (opus, transport). Sweep results (47710391): the lead closes on PASS or reopens with the gap. 4. T-524 measurement with T-513.
 4. T-486 S2 -> QA -> deploy. 5. T-537. 6. T-513 (cluster GitOps MR).
