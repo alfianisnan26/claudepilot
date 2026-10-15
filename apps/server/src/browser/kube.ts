@@ -20,6 +20,7 @@ import { seedHomeScript, type KubeBrowserAccess } from '../workspaces/kubernetes
 import type { Store } from '../store/store.js';
 import { LABEL } from '../workspaces/runtime.js';
 import type { ExecResult, ExecStream } from './companion.js';
+import { HEADERS_DIR, HEADERS_FILE, headersFile, type ResolvedHeader } from './headers.js';
 import { chromePolicy, containerConfig } from './policy.js';
 import { DOWNLOADS_DIR, HOME, PROFILE_REL, sha256 } from './spec.js';
 
@@ -76,8 +77,17 @@ export interface KubePlan {
   /** Hosts the browser's policy refuses: the portal as a workspace reaches it. */
   portalHosts: string[];
   image: string;
+  /** The pool's request headers with their values (PRD §24): delivered by exec into the container's memory, never in the ConfigMap, the template or the spec hash. */
+  headers?: ResolvedHeader[];
 }
 
+/**
+ * The two scripts `deliverHeaders` runs as root in the browser container (no value in either: the content is stdin, `$1` its byte count).
+ * umask 277 makes every file 0400; the folder is a memory-backed emptyDir. Write: only when the content differs, via a temp file and a rename.
+ */
+const HEADERS_PATHS = `d=${HEADERS_DIR}; f=$d/${HEADERS_FILE}; t=$d/.new`;
+export const WRITE_HEADERS_SCRIPT = `set -e; ${HEADERS_PATHS}; mkdir -p "$d"; chmod 0700 "$d"; umask 277; rm -f "$t"; head -c "$1" > "$t"; if [ -f "$f" ] && cmp -s "$t" "$f"; then rm -f "$t"; echo same; else mv -f "$t" "$f"; echo changed; fi`;
+export const REMOVE_HEADERS_SCRIPT = `set -e; ${HEADERS_PATHS}; rm -f "$t"; if [ -e "$f" ]; then rm -f "$f"; echo changed; else echo same; fi`;
 export const configMapName = (runtimeName: string) => `${runtimeName}-browser`;
 export const egressPolicyName = (runtimeName: string) => `${runtimeName}-egress`;
 
@@ -128,6 +138,8 @@ export function browserContainer(plan: KubePlan): V1Container {
       { name: 'cpb-shm', mountPath: '/dev/shm' },
       { name: 'cpb-config', mountPath: '/etc/cpb', readOnly: true },
       { name: 'cpb-policy', mountPath: '/etc/chromium/policies/managed', readOnly: true },
+      // Always there, so a header added, rotated or removed needs no pod restart: the portal writes the file into it by exec (PRD §24).
+      { name: 'cpb-secrets', mountPath: HEADERS_DIR },
     ],
   };
 }
@@ -135,6 +147,8 @@ export function browserContainer(plan: KubePlan): V1Container {
 export function browserVolumes(runtimeName: string, content: BrowserPoolContent): V1Volume[] {
   const cm = configMapName(runtimeName);
   return [
+    // Memory-backed, only the browser container mounts it, and never on a disk (PRD §24); the portal's exec makes it 0700 with a 0400 file.
+    { name: 'cpb-secrets', emptyDir: { medium: 'Memory', sizeLimit: '1Mi' } },
     { name: 'cpb-home', emptyDir: { sizeLimit: '512Mi' } },
     { name: 'cpb-tmp', emptyDir: { sizeLimit: '1Gi' } },
     { name: 'cpb-run', emptyDir: { medium: 'Memory', sizeLimit: '16Mi' } },
@@ -147,6 +161,8 @@ export function browserVolumes(runtimeName: string, content: BrowserPoolContent)
 
 /** The hash a template carries for its browser: the container, its volumes and its config, so any of them changing means a new pod. */
 export function specOf(plan: KubePlan, runtimeName: string): string {
+  // The headers are not in it (PRD §24): they are delivered into the running container, so a changed, rotated or removed secret
+  // never restarts the pod.
   return sha256(JSON.stringify({ c: browserContainer(plan), v: browserVolumes(runtimeName, plan.content), d: configMapData(plan) })).slice(0, 16);
 }
 
@@ -433,6 +449,29 @@ export class KubeBrowsers {
       if (codeOf(e) !== 404) throw e;
       await this.#core.createNamespacedConfigMap({ namespace: this.#ns, body });
     }
+  }
+
+  /**
+   * Puts `headers.json` (PRD §24) into the browser container's memory-backed folder through the `pods/exec` the portal already has: no
+   * Secret object, so nothing in etcd and no RBAC on Secrets. The value goes on stdin (cut at its byte count, since an exec's stdin never
+   * ends); the script, the argv and the logs carry no value. The folder is 0700 and the file 0400, root's. With no headers the file is
+   * removed. Returns whether the file changed (it did not when the same content was already there), or null when the container isn't running
+   * (the next pass tries again; Chrome starts without headers until then).
+   */
+  async deliverHeaders(workspace: string, headers: ResolvedHeader[]): Promise<'changed' | 'same' | null> {
+    const body = headers.length ? headersFile(headers) : null;
+    const script = body === null ? REMOVE_HEADERS_SCRIPT : WRITE_HEADERS_SCRIPT;
+    const argv = ['sh', '-c', script, 'cpb-headers', ...(body === null ? [] : [String(Buffer.byteLength(body))])];
+    let r: ExecResult;
+    try {
+      r = await this.exec(workspace, argv, { user: '0', ...(body === null ? {} : { stdin: body }) });
+    } catch (e) {
+      if (e instanceof Error && /container isn’t running|workspace isn’t running/.test(e.message)) return null;
+      throw e;
+    }
+    // Only the script's own words are repeated: stderr could echo input, so it is never put in the message.
+    if (r.code !== 0 || !/^(changed|same)\n?$/.test(r.stdout)) throw new Error(`Delivering the headers to the browser failed (exit ${r.code}).`);
+    return r.stdout.trim() as 'changed' | 'same';
   }
 
   /** The per-pod egress policy, created or updated; with the opt-out, removed. */

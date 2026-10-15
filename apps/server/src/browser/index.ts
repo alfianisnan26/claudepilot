@@ -8,6 +8,7 @@ import type { Runtime, RuntimeNames } from '../workspaces/runtime.js';
 import { Companions } from './companion.js';
 import { KubernetesRuntime } from '../workspaces/kubernetes.js';
 import { kubeCapRefusal, KubeBrowsers, parseEgressAllow } from './kube.js';
+import type { SecretLookup } from './headers.js';
 import { BrowserKind } from './kind.js';
 import { createBrowserRoutes } from './routes.js';
 import { attachBrowserSockets } from './socket.js';
@@ -26,7 +27,7 @@ export class BrowserModule {
   readonly kube = new Map<string, KubeBrowsers>();
 
   /** `names`: the workspaces' stored runtime names (T-42), which the browser containers follow. */
-  constructor(deps: { store: Store; pools: PoolService; steps: WorkspaceSteps; runtimes: Runtime[]; notify: () => void; names?: RuntimeNames }) {
+  constructor(deps: { store: Store; pools: PoolService; steps: WorkspaceSteps; runtimes: Runtime[]; notify: () => void; names?: RuntimeNames; secretByName?: SecretLookup }) {
     const egressAllow = parseEgressAllow(config.browser.kubeEgressAllow);
     if (egressAllow.bad.length) console.error(`[browser] PORTAL_K8S_BROWSER_EGRESS_ALLOW: not a CIDR or an address, left out: ${egressAllow.bad.join(', ').slice(0, 300)}`);
     for (const r of deps.runtimes) {
@@ -49,6 +50,7 @@ export class BrowserModule {
       internalUrl: config.portalMcp.internalUrl,
       portalPort: config.port,
       notify: deps.notify,
+      secretByName: deps.secretByName,
     });
   }
 

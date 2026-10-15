@@ -1,4 +1,5 @@
 import type { BrowserPoolContent } from '@portal/contracts';
+import { extensionId } from './headers.js';
 import { DOWNLOADS_DIR } from './spec.js';
 
 /**
@@ -35,6 +36,11 @@ export function chromePolicy(content: BrowserPoolContent, ctx: { portalHosts: st
     // agent session that picks one of them drives a tab that isn't in front (PRD Q7 stays open).
     URLBlocklist: content.allowlistMode ? ['*', ...blocked] : blocked,
   };
+  // The headers extension (PRD §24): only its id may load, and no page may open its files (`chrome-extension://` carries the rules).
+  if ((content.headers ?? []).length > 0) {
+    policy.ExtensionInstallAllowlist = [extensionId()];
+    policy.URLBlocklist = [...(policy.URLBlocklist as string[]), 'chrome-extension://*'];
+  }
   if (content.allowlistMode) policy.URLAllowlist = ['about:blank', ...content.allowedSites];
   return policy;
 }

@@ -40,7 +40,20 @@ export const LOCK_HASH = sha256(json(pinnedLock)).slice(0, 16);
 /** The servers a pool starts, as `.mcp.json` entries. Pure, so the review and the tests see exactly what runs. */
 export function mcpServers(content: BrowserPoolContent): Record<string, unknown> {
   const root = '${CLAUDE_PLUGIN_ROOT}';
-  const common = (name: 'playwright' | 'devtools') => ['--tools', `${root}/tools/${name}.json`, '--npm-files', `${root}/npm`];
+  // Header names the gate also redacts from tool results (PRD §24): names only, and only when the pool has headers.
+  const redactNames = [...new Set((content.headers ?? []).map((h) => h.name))].sort();
+  // The secrets' values are masked by value too: the gate reads them from variables of the same name that Claude Code passes through
+  // (`${NAME:-}`, empty when the workspace doesn't have it). Only names are in the file; a name that isn't an environment variable is skipped.
+  const secretVars = [...new Set((content.headers ?? []).map((h) => h.secret).filter((n) => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(n)))].sort();
+  const valueEnv = Object.fromEntries(secretVars.map((n) => [n, `\${${n}:-}`]));
+  const common = (name: 'playwright' | 'devtools') => [
+    '--tools',
+    `${root}/tools/${name}.json`,
+    '--npm-files',
+    `${root}/npm`,
+    ...(redactNames.length ? ['--redact', redactNames.join(',')] : []),
+    ...(secretVars.length ? ['--redact-env', secretVars.join(',')] : []),
+  ];
   const servers: Record<string, unknown> = {
     browser: {
       command: GATE_PATH,
@@ -56,13 +69,14 @@ export function mcpServers(content: BrowserPoolContent): Record<string, unknown>
         ...(content.vision ? ['--caps', 'vision'] : []),
         ...(content.sessions === 'isolated' ? ['--isolated'] : []),
       ],
+      ...(secretVars.length ? { env: valueEnv } : {}),
     },
   };
   if (content.devtools) {
     servers.devtools = {
       command: GATE_PATH,
       args: ['devtools', ...common('devtools'), '--', '--browser-url', CDP_ENDPOINT, '--no-usage-statistics', '--no-performance-crux'],
-      env: { CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1', CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: '1' },
+      env: { CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1', CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: '1', ...valueEnv },
     };
   }
   return servers;

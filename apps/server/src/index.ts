@@ -205,7 +205,7 @@ const personas = registerPersonas({ store, pools: poolService });
 personas.agentSelfEdit = () => settingsModule.settings.get<boolean>(SETTING_KEYS.agentsSelfEdit);
 // Browser & desktop: a browser container beside each workspace, driven over MCP and watched in the portal. Its
 // container shares the workspace's namespace and volume, so the runtimes take it away before they stop or remove one.
-const browser = new BrowserModule({ store, pools: poolService, steps: mcpSets.steps, runtimes, notify: () => poolService.onChange(), names: workspaces.identities });
+const browser = new BrowserModule({ store, pools: poolService, steps: mcpSets.steps, runtimes, notify: () => poolService.onChange(), names: workspaces.identities, secretByName: (name) => secretsKind.secretByName(name) });
 for (const r of runtimes) browser.guard(r);
 // With "pool MCP only" on, the browser's servers are admitted by their command lines (the folder of the plugin spelled out).
 settingsModule.lockdown.addMatcherSource((ws) => browser.service.matchers(ws));
