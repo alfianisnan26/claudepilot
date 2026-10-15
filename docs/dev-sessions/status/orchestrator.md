@@ -14,7 +14,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-631 review CHANGES 5850 -> lead 5853: absolute-path entry (a) for the coordinator; F2 small slice; F1 also on job-run.sh -> T-635 (high).
 - T-558 S1b DONE 728b58d0 (5900; 191bd6f1 ended) -> QA Perf queue.
 - NEXT FREE SLOTS: 1) BE Infra on T-638 flakes (+ layout.test from gate 2c53982). BATCH 4: QA-passed of T-591/T-597/T-600/T-623/T-416.
-- T-416 S1c DONE 7af4b269 (0e5bcf50 ended; prior QA FAIL 5792 -> 5808) -> QA ec59993c -> blind review (opus) -> gate -> merge.
+- T-416 S1c 7af4b269: QA PASS WITH GAPS 6141 (ec59993c ended; queued-start release untested) -> BLIND REVIEW 4005c6bd (opus, why: incident)
+  -> gate -> merge.
 - T-623 S1b DONE 784926f (5855; 6d431441 ended; lead read diff: stdin not argv, Memory emptyDir 0400, no values in audit/hash, no RBAC) -> QA Perf queue.
 - T-578 S1 DONE 51f6c153 (6010): a GATE change -> BLIND REVIEW f08f9c2f (opus, why: gate; review/T-578-s1) -> merge only on a person's ack.
 - T-426 S1e DONE 2174eee1 (6124; 88f36411 ended; mutant killed, docs already fixed) + T-631 F2 DONE 8815a6e1 (6077)
