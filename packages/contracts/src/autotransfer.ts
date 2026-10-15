@@ -325,4 +325,11 @@ export const AUTOTRANSFER_API = {
   always: (suggestionId: string) => `/api/autotransfer/suggestions/${encodeURIComponent(suggestionId)}/always`,
   /** GET `?session=&kind=moved,undone&limit=&before=`: `AutoTransferEvent[]` (the caller's), newest first; `kind` keeps only those kinds. */
   events: '/api/autotransfer/events',
+  /** GET `?model=`: `AutoLeaving`, the Claudes of the caller that auto move would leave now, by the one projection rule (T-460). */
+  leaving: '/api/autotransfer/leaving',
 } as const;
+
+/** `GET AUTOTRANSFER_API.leaving` (T-460): per Claude, whether auto move would leave it now for a chat on `model`; a caller never starts work where this is true. */
+export interface AutoLeaving {
+  claudes: { claudeId: string; claudeName: string; workspaceId: string; leaves: boolean; thresholdPct: number }[];
+}

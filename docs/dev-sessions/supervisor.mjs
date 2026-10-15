@@ -221,17 +221,40 @@ async function claudeIdOf(name) {
   return claudeIds.get(name) ?? null;
 }
 /** The Claude of `names` with the most room (the lowest used share of its fullest plan window); a Claude whose usage is unknown counts as empty. */
+/**
+ * T-460: the ids of the Claudes auto move would leave now (below the move threshold, or projected to run out), asked of the portal
+ * (`GET /api/autotransfer/leaving`: the server's one projection rule, never a copy here). An answer that fails is an empty set (the old
+ * behaviour), said in the log.
+ */
+async function leavingIds(model) {
+  const r = await api('GET', `/api/autotransfer/leaving${model ? `?model=${encodeURIComponent(model)}` : ''}`);
+  if (r.error || !Array.isArray(r.data?.claudes)) return log(`could not read which Claudes auto move would leave (${r.error?.message ?? 'no answer'}): not filtering`), new Set();
+  return new Set(r.data.claudes.filter((c) => c.leaves).map((c) => c.claudeId));
+}
+/**
+ * The Claude of `names` with the most room (the lowest used share of its fullest plan window); a Claude whose usage is unknown counts as empty.
+ * Never one auto move would leave (T-460: a lead started on a Claude at 22% left, projected 143%, was moved off it five minutes later); with
+ * every one of them leaving, the least used of them, and the log says so.
+ */
 async function bestClaude(names) {
   const r = await api('GET', '/api/claude-usage');
   const used = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, Math.max(0, ...(c.windows ?? []).map((w) => (typeof w.usedPct === 'number' ? w.usedPct : 0)))]));
+  const leaving = await leavingIds(null);
   let best = null;
+  let leaver = null;
   for (const name of names) {
     const id = await claudeIdOf(name);
     if (!id) continue;
     const u = used.get(id) ?? 0;
-    if (!best || u < best.used) best = { name, id, used: u };
+    const cand = { name, id, used: u };
+    if (leaving.has(id)) {
+      if (!leaver || u < leaver.used) leaver = cand;
+      continue;
+    }
+    if (!best || u < best.used) best = cand;
   }
-  return best;
+  if (!best && leaver) log(`every delegated Claude is one auto move would leave: starting on ${leaver.name} anyway (${leaver.used}% used)`);
+  return best ?? leaver;
 }
 
 
@@ -253,11 +276,12 @@ async function moveIfLow(t, ts, cur) {
   const has = new Map((r.data?.claudes ?? []).map((c) => [c.claudeId ?? c.id, (c.windows ?? []).some((w) => `${w.key ?? ''} ${w.label ?? ''}`.toLowerCase().includes(gated ?? '\u0000'))]));
   let best = null;
   let other = null;
+  const leaving = await leavingIds(cur.model ?? null);
   for (const name of t.claudes) {
     const id = await claudeIdOf(name);
     if (!id || id === cur.claudeId) continue;
     const u = used.get(id) ?? 0;
-    if (u >= LOW_USED_PCT) continue;
+    if (u >= LOW_USED_PCT || leaving.has(id)) continue;
     if (gated && !has.get(id)) {
       if (!other || u < other.used) other = { name, id, used: u, model: 'opus' };
       continue;
@@ -801,7 +825,7 @@ async function watch({ rounds = Infinity } = {}) {
 
 /* ---------- Go ---------- */
 
-export { harmlessEnding, watch, STATE_FILE };
+export { harmlessEnding, watch, STATE_FILE, bestClaude };
 if (IS_MAIN) {
   process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
   process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));
