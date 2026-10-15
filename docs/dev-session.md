@@ -156,9 +156,15 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   workspace's Secrets pool, today Konfersi's stg e2e and Lighthouse behind Cloudflare Access:
   `scripts/job-run.sh --pool-env E2E_CF_ACCESS_CLIENT_ID --pool-env E2E_CF_ACCESS_CLIENT_SECRET -- 'scripts/e2e-stg.sh'`. Only
   `E2E_CF_ACCESS_*` names are accepted, and the variable must be set in the workspace; anything else is refused (exit 2) before a Job is made.
-  The refusal names the variable, never a value. The value goes on stdin into the Job's Secret, deleted with the Job. The `run` container
-  gets it as env by `secretKeyRef` and the `fetch` container does not; this is the reverse of the git and npm tokens, on purpose. It is never
-  on a command line or in the manifest, and the streamed log is masked for it.
+  A refusal never shows the argument (it may be a pasted value), and a value under 8 characters is refused (the log mask skips those). The value
+  goes on stdin into the Job's Secret, deleted with the Job. The `run` container gets it as env by `secretKeyRef` and the `fetch` container does
+  not; this is the reverse of the git and npm tokens, on purpose. It is never on a command line or in the manifest, and the streamed log is masked
+  for it. Limits: (1) the `run` container's `npm rebuild`, every dependency's install script and the package's lifecycle scripts can read the
+  value (so only scoped `E2E_CF_ACCESS_*` test credentials may be passed; `--steps none` when the dependencies are already installed); (2) the
+  raw Job log in the cluster is unmasked until the Job is cleaned up (TTL), only the streamed copy is masked; (3) after unpacking `--out`, the
+  script scans the files for each value, deletes a file that holds one, names it (never the value) and exits 3 when the command had passed; the
+  scan finds plain text only, not a value inside a compressed or encoded trace; `job-out/` is git-ignored; (4) the script refuses to run under
+  `bash -x` / xtrace, which would print the values.
 - **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.

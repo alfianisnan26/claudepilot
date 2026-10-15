@@ -29,7 +29,8 @@
 #     --pool-env <NAME>                                 (repeatable, T-426) a scoped test credential from this workspace's Secrets pool for the
 #                                                       command (Konfersi's stg e2e: Cloudflare Access). Only E2E_CF_ACCESS_* names, set here; the
 #                                                       value goes on stdin into the Job's Secret (deleted with the Job), the command's container
-#                                                       gets it as env by secretKeyRef (fetch does not), and the log is masked for it
+#                                                       gets it as env by secretKeyRef (fetch does not), and the log is masked for it. Values under 8
+#                                                       characters are refused (the mask skips them); an --out file that holds a value is deleted (rc 3)
 #   scripts/job-run.sh --list                           the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
@@ -39,9 +40,13 @@
 # Credentials (the npm token for GitHub Packages, Gitea's from git's credential helper) go to kubectl on stdin into a Secret that belongs to
 # the Job and is deleted on exit; they are never on a command line, and the streamed log is masked for them. Only the Job's init container
 # `fetch` reads that Secret (T-401): it clones and runs `npm ci --ignore-scripts`, and no code of the repository or a dependency runs there;
-# the install scripts and the command run in the `run` container, which has no credential in its environment, git config or files. The whole log: JOB_RUN_LOG
+# the install scripts and the command run in the `run` container, which has no git or npm credential in its environment, git config or files, and gets
+# only the --pool-env values (T-426) as env: install and lifecycle scripts can read those, so only E2E_CF_ACCESS_* test credentials may go there. The raw
+# log in the cluster is unmasked until the Job is cleaned up (TTL); only the streamed copy is masked. The whole log: JOB_RUN_LOG
 # (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish, 2 for a usage error, 124 past the deadline.
 set -eu
+# Under xtrace (bash -x, SHELLOPTS) the trace would print the credentials this script handles: refuse (T-426).
+case $- in *x*) echo "job-run: refuses to run under xtrace (set -x / bash -x would print the credentials)" >&2; exit 2 ;; esac
 here=$(cd "$(dirname "$0")/.." && pwd)
 ns=${JOB_RUN_NAMESPACE:-isnan-claudepilot}; registry=${DEPLOY_REGISTRY:-registry.int.isnan.me}
 max=${JOB_RUN_MAX:-3}; per=${JOB_RUN_MAX_PER_CHAT:-2}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-2}; poll=${JOB_RUN_POLL_S:-5}
@@ -108,15 +113,14 @@ for a in $artifacts; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./*-]*$ && ! $a =~ (^|
 [ -z "$keep" ] || [ -n "$against" ] || die "--keep-tests needs --against"
 for a in $keep; do [[ $a =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ && ! $a =~ (^|/)\.\.(/|$) ]] || die "--keep-tests: file paths inside the repository (got $a)"; done
 # --pool-env (T-426): the scoped test credentials of the Secrets pool, by NAME, for the command. Checked here, before any kubectl call.
-# Only E2E_CF_ACCESS_* names; a refused argument is echoed only when it looks like a variable name (a value pasted by mistake is never shown).
+# Only E2E_CF_ACCESS_* names. A refused argument is NEVER echoed, in any form (it may be a secret value pasted by mistake, and a value can look
+# like a name): the message says only that it was refused and why. Values under 8 characters are refused: the log mask skips them.
 pool_names=
 for n in ${pool[@]+"${pool[@]}"}; do
-  if [[ ! $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ ]]; then
-    [[ $n =~ ^[A-Za-z_][A-Za-z0-9_]{0,63}$ ]] && die "--pool-env: only E2E_CF_ACCESS_* names (got $n)"
-    die "--pool-env: only E2E_CF_ACCESS_* names (the argument is not a variable name; not shown)"
-  fi
+  [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*); the argument is not shown"
   [ -n "${!n:-}" ] || die "--pool-env: $n is not set in this workspace (the Secrets pool delivers it)"
   [[ ${!n} != *[$'\n\r']* ]] || die "--pool-env: $n holds a line break; refused"
+  v=${!n}; [ "${#v}" -ge 8 ] || die "--pool-env: $n is shorter than 8 characters: the log mask would not hide it; refused"; unset v
   [[ " $pool_names " == *" $n "* ]] || pool_names="$pool_names $n"
 done
 pool_names=${pool_names# }
@@ -362,6 +366,16 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
   mkdir -p "$out"
   if base64 -d "$work/art.b64" 2>/dev/null | tar -xzf - -C "$out" --no-same-owner --no-same-permissions 2>/dev/null; then echo "job-run: artifacts in $out"
   else echo "job-run: the artifacts did not unpack" >&2; fi
+  # --pool-env (T-426): the artifacts block is base64, so the log mask never sees it. A trace, a HAR or a report can hold a request header:
+  # scan what was unpacked for each value (the values on stdin, never in argv), delete a file that has one, and fail.
+  if [ -n "$pool_names" ]; then
+    vals=; for n in $pool_names; do vals="$vals${!n}"$'\n'; done
+    hits=$(printf '%s' "$vals" | grep -rlaF -f - -- "$out" 2>/dev/null || true); unset vals
+    if [ -n "$hits" ]; then
+      while IFS= read -r f; do rm -f -- "$f"; echo "job-run: ERROR: a --pool-env credential was in the artifact $f: deleted" >&2; done <<<"$hits"
+      [ "$rc" != 0 ] || rc=3
+    fi
+  fi
 fi
 node=$(pod_get '.items[0].spec.nodeName' "$pj")
 t2=$(date +%s)

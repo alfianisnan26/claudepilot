@@ -810,10 +810,11 @@ test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_
   const w = world();
   const val = `cs${hex(20)}`;
   const cases: [string[], Record<string, string>, RegExp][] = [
-    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: only E2E_CF_ACCESS_\* names \(got GITHUB_TOKEN\)/],
-    [['--pool-env', 'E2E_CF_ACCESS_'], {}, /only E2E_CF_ACCESS_\* names \(got E2E_CF_ACCESS_\)/],
-    [['--pool-env', 'E2E_CF_ACCESS_id'], { E2E_CF_ACCESS_id: val }, /only E2E_CF_ACCESS_\* names/],
-    [['--pool-env', `E2E_CF_ACCESS_X=${val}`], {}, /the argument is not a variable name; not shown/],
+    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*\)/],
+    [['--pool-env', 'E2E_CF_ACCESS_'], {}, /not an allowed name/],
+    [['--pool-env', 'E2E_CF_ACCESS_id'], { E2E_CF_ACCESS_id: val }, /not an allowed name/],
+    [['--pool-env', `E2E_CF_ACCESS_X=${val}`], {}, /not an allowed name/],
+    [['--pool-env', POOL_ID], { [POOL_ID]: 'short7!' }, /shorter than 8 characters/],
     [['--pool-env', 'E2E_CF_ACCESS_NOT_SET'], {}, /--pool-env: E2E_CF_ACCESS_NOT_SET is not set in this workspace/],
     [['--pool-env', POOL_ID], { [POOL_ID]: '' }, /--pool-env: E2E_CF_ACCESS_CLIENT_ID is not set in this workspace/],
     [['--pool-env', POOL_ID], { [POOL_ID]: `${val}\nX=y` }, /--pool-env: E2E_CF_ACCESS_CLIENT_ID holds a line break; refused/],
@@ -826,4 +827,47 @@ test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_
   }
   assert.equal(w.calls(), '', 'refused before any kubectl call');
   assert.deepEqual(w.applied(), []);
+});
+
+test('T-426 --pool-env: a pasted value that looks like a variable name (lowercase hex starting with a letter) is refused and shown nowhere', () => {
+  const w = world();
+  const pasted = `a${hex(31)}`; // 64 hex characters, built at runtime; it matches ^[A-Za-z_][A-Za-z0-9_]{0,63}$
+  assert.match(pasted, /^[a-f][0-9a-f]{63}$/);
+  for (const arg of [pasted, pasted.toUpperCase(), `E2E_CF_ACCESS_${pasted}`]) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', arg, '--', 'true'], { [arg]: 'x'.repeat(12) });
+    assert.equal(r.code, 2, r.out);
+    assert.match(r.out, /refused/);
+    assert.ok(!r.out.toLowerCase().includes(pasted), 'the argument is not echoed, in any case');
+  }
+  assert.equal(w.calls(), '');
+});
+
+test('T-426 --pool-env: refuses to run under xtrace, which would print the values', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const r = spawnSync('bash', ['-x', SCRIPT, '--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--', 'true'],
+    { env: { PATH: process.env.PATH ?? '', HOME: w.root, [POOL_SECRET]: secret }, cwd: w.root, encoding: 'utf8', timeout: 30_000 });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /refuses to run under xtrace/);
+  assert.ok(!(r.stdout + r.stderr).includes(secret));
+  assert.equal(w.calls(), '');
+});
+
+test('T-426 --pool-env: an artifact that holds a value is deleted after unpacking, named without the value, and the run fails (rc 3)', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const art = join(w.root, 'art-leak');
+  mkdirSync(join(art, 'reports'), { recursive: true });
+  writeFileSync(join(art, 'reports/trace.txt'), `GET / cf-access-client-secret: ${secret}\n`);
+  writeFileSync(join(art, 'reports/clean.xml'), '<testsuites tests="1"/>');
+  const tgz = spawnSync('tar', ['-czf', '-', '-C', art, 'reports']).stdout.toString('base64');
+  const log = `=== JOB-RUN ARTIFACTS BEGIN\n${tgz}\n\n=== JOB-RUN ARTIFACTS END\n=== JOB-RUN EXIT 0\n`;
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log }));
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 3, r.out);
+  assert.match(r.out, /a --pool-env credential was in the artifact .*trace\.txt: deleted/);
+  assert.ok(!r.out.includes(secret), 'the value is not shown');
+  assert.ok(!existsSync(join(out, 'reports/trace.txt')), 'the file is deleted');
+  assert.ok(existsSync(join(out, 'reports/clean.xml')), 'a clean file stays');
 });
