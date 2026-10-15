@@ -3,7 +3,9 @@
 // Every number names its basis (measured, estimate) and its source; a source the portal does not have is `unavailable` with a reason,
 // never a guess and never 0. The targets carry the rule of the standing decision they check (D-61, D-62, D-63) and a state.
 
-export const CREW_WINDOWS = ['1h', '6h', 'day', 'week'] as const;
+import type { Figure } from './usage.js';
+
+export const CREW_WINDOWS =['1h', '6h', 'day', 'week'] as const;
 export type CrewWindow = (typeof CREW_WINDOWS)[number];
 export const CREW_WINDOW_MS: Record<CrewWindow, number> = { '1h': 3_600_000, '6h': 6 * 3_600_000, day: 24 * 3_600_000, week: 7 * 24 * 3_600_000 };
 
@@ -240,10 +242,25 @@ export interface CrewProgramScore {
   targets: CrewTarget[];
 }
 
+/** T-547 (D-65): how much of a Claude's plan window went unused at its reset, from the last reading just before it. */
+export interface QuotaUnusedRow {
+  claudeId: string;
+  /** The window key (`session`, `week`, ...). */
+  window: string;
+  /** When the period ended (ISO). */
+  resetAt: string;
+  /** Percent of the window left at the last reading before the reset; unavailable when no reading came within 30 minutes of it. */
+  unusedPct: Figure<number>;
+  /** When that reading was taken (ISO), null when there was none. */
+  readingAt: string | null;
+}
+
 export interface CrewScorecard {
   window: CrewWindow;
   nowMs: number;
   programs: CrewProgramScore[];
+  /** T-547: "quota left unused at reset", per Claude per window, for the resets inside the scorecard window. Whole-portal read only (an agent's own-program read omits it). */
+  quotaUnused?: QuotaUnusedRow[];
   /** One line per figure: where it comes from (the InfoTip). */
   basis: Record<string, string>;
 }

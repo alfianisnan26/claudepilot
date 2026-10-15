@@ -8,6 +8,7 @@
 import { CREW_WINDOW_MS, type CrewScorecard, type CrewWindow, type LabExperiment, type LabExperimentReport, type LabExperimentView, type LabPeriod, type LabSliceMetrics, type LabSliceView, type LabSummary, type LabTicketCost } from '@portal/contracts';
 import { programIdOf, programScore, programsOf, SCORECARD_BASIS } from './scorecard.js';
 import { loadCrewFacts } from './scorecardData.js';
+import { loadQuotaUnused } from './quotaUnused.js';
 import type { Store } from '../store/store.js';
 import { chainOf } from '../usagespend/attribution.js';
 import { SpendStore } from '../usagespend/store.js';
@@ -215,7 +216,9 @@ export class Lab {
     if (opts.program && (!programs.has(opts.program) || (own !== undefined && own !== opts.program))) return null;
     const keep = [...programs.values()].filter((p) => (opts.program ? p.id === opts.program : own === undefined || p.id === own));
     const scores = keep.map((p) => programScore(p, facts, windowMs, compare)).sort((a, b) => (b.current.cost.total.value ?? 0) - (a.current.cost.total.value ?? 0) || a.program.localeCompare(b.program));
-    return { ...empty, programs: scores };
+    // T-547: whole-portal figure (Claudes cross programs): not in an agent's own-program read or a single-program read.
+    const quotaUnused = opts.sessionId || opts.program ? undefined : loadQuotaUnused(this.opts.store.db, nowMs, nowMs - windowMs);
+    return { ...empty, programs: scores, ...(quotaUnused ? { quotaUnused } : {}) };
   }
 
   /** Each experiment with its arms' n, accepted count and the primary (median loaded cost per accepted slice) with its interval. */

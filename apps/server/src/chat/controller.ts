@@ -3295,7 +3295,7 @@ export class ChatController {
    * T-294: the Claude a worker of `parentId` starts on (agents.ts `pickSpawnClaude`), for a worker running `model` (else the parent's):
    * its id and name, and why that one. The usage report is read only when it matters (auto, or a Claude named other than the parent's).
    */
-  async spawnClaude(parentId: string, want?: string, model?: string | null): Promise<{ claudeId: string; name: string; why: SpawnClaudeWhy }> {
+  async spawnClaude(parentId: string, want?: string, model?: string | null): Promise<{ claudeId: string; name: string; why: SpawnClaudeWhy; detail?: string }> {
     const parent = this.#require(this.#chat.resolveId(parentId));
     const w = (want ?? '').trim().toLowerCase();
     const usage = w && w !== 'same' && this.spawnUsage ? await this.spawnUsage().catch(() => null) : null;
