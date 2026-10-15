@@ -9,9 +9,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
-## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf) on T-548 QA read.
-  T-561 S1b 7227bb3: QA PASS WITH GAPS (5440: 743/749 0 fail, mutation caught; symlink holes A, B). Decision 5442/5444: S1c fix = 77c04fc0
-  impl-t561-s1c (sonnet, ticket/T-561-s1c-fix) -> QA Perf re-probe -> lead gate + merge. T-576 DONE 2427d98 (Jobs green; no
+## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf): queue T-548 -> T-586 -> T-561 S1c -> T-486 S2d.
+  T-561: S1b QA PASS WITH GAPS (5440, symlink holes A, B) -> S1c DONE 0beae29 (5498/5501; 77c04fc0 ended) -> QA Perf re-probe -> lead
+  gate + merge. LANE bbbe2b38 "ClaudePilot QA UI" (lane-qa-ui, sonnet, qa/T-600-ui, deps linked by lead) on T-600 FE ux. T-576 DONE 2427d98 (Jobs green; no
   prettier/eslint in the Job): ux BLOCKED (a `folder` spawn gets no Bash; 5368) until T-586 merges. T-586 DONE 1d27635 (Job 6be903ec rc 0, mutation
   caught, 5419; 2ae78a99 ended): review PASS W/ COND (5456) -> S2 fc9ce1d DONE (5464; 813992cf ended) -> premerge
   wip/main-5b66aa0, gate GREEN gate-5b66aa0-44ef (suite 559 s, peak 2172Mi) -> QA Perf after T-548 -> ff integration (no deploy). T-558 e652c44: QA runs its Jobs (5052).
@@ -20,7 +20,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   LANE 5f8f392b "ClaudePilot Backend" (lane-backend, sonnet) on T-546 Jobs (ticket/T-546-digest; 8822ba59 ended). Backend queue (coordinator,
   efficiency order): T-546 -> T-600 BE -> T-597 -> T-325 -> T-591 S2. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
   ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); T-556 PLANNED 5497 (one "Upstream" dialog, 4 fields: no upstream UI exists);
-  builds after T-486 merges + T-595. Next slot: QA UI lane (T-600 FE, then T-576 ux); then blind review T-548 (opus). QA Perf queue: T-561, T-548, T-486, T-546.
+  builds after T-486 merges + T-595. Next slot: blind review T-548 (opus, authz); QA UI then T-576 ux. 5th slot: eaec4cc5 T-591 S1.
   Jobs (all GO 15:29, job-run queues): T-586 S2 fc9ce1d, T-600 FE 7d19c94 (Job 1 FAIL typecheck -> `headline`, 5459), T-546, T-548 QA, T-591 S1. Then T-561 S1c, T-558 QA. quick-check: its checks in ONE Job (T-586); no prettier/eslint in Jobs (T-612).
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
