@@ -53,7 +53,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 10:25 dontAsk workers cannot wait: the lead hands out the cluster slot with "GO T-n"; workers end with WAITING <hash>.
 - 10:02 The free-slot check counts only OUR program's Jobs (app=claudepilot-gate or job-run/program=claudepilot); Konfersi Jobs are
   capped per program by job-run.sh.
-- 09:12 Workers cannot run scripts/gate-job.sh (refused in dontAsk): the lead runs gates for slices.
 - 09:00 Coordinator: persona, role-tool and permission questions go to the coordinator (ticket assigned to me), NEVER the owner;
   `owner-checklist` is production only.
 - 08:10 A running slice keeps its slot. 06:00 The lead holds T-n claim to close. 05:50 UX checks are cluster Jobs; fresh worktrees.
@@ -70,7 +69,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## NEXT (in order, as slots free)
 1. T-531 S2 Jobs -> QA (sonnet) -> lead gate -> merge. 2. T-416 QA Jobs -> blind review (opus) -> lead gate -> merge -> deploy; then S2.
-3. NEXT FREE SLOTS: T-426 (opus, why: secret door) once T-401 merges; then in parallel T-557 S0 PRD (sonnet implementer),
+3. NEXT FREE SLOTS: T-426 (opus, why: secret door) once T-401 merges; T-558 (lead starts own stg-deploy, authz: opus +
+   blind review, D-62; coordinator 11:45); then in parallel T-557 S0 PRD (sonnet implementer),
    T-557 S1 runner seam (sonnet, fake runner), T-546 + T-548 (one sonnet worker); then T-547 + T-549; T-557 S2 (opus, transport). Sweep results (47710391): the lead closes on PASS or reopens with the gap. 4. T-524 measurement with T-513.
 4. T-486 S2 -> QA -> deploy. 5. T-537. 6. T-513 (cluster GitOps MR).
 7. T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
