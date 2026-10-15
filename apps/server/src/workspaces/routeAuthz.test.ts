@@ -8,9 +8,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { afterEach, test } from 'node:test';
+import { AppError } from '@isnanme/core';
 import { OBJECT_TYPES, isObjectType, workspaceRef, type Actor, type ObjectCheck, type ObjectRef, type RoutePolicy, type Verb } from '@portal/contracts';
 import { createApp } from '../app.js';
-import { clearResolvers, declaredPolicies, registerResolver, singleOwner, useAuthz, type Authz } from '../authz/seam.js';
+import { clearResolvers, declaredPolicies, registerResolver, requireCan, singleOwner, useAuthz, type Authz } from '../authz/seam.js';
 import { createBrowserRoutes } from '../browser/routes.js';
 import { Portal } from '../portal.js';
 import { WORKSPACE_POLICIES } from './authz.js';
@@ -38,6 +39,13 @@ const workspaces = new Proxy(base, {
     if (p === 'hooks') return { audit: (e: (typeof audits)[number]) => void audits.push(e) };
     if (p === 'start' || p === 'stop' || p === 'remove') return async (target: string, name: string) => void runtimeCalls.push(`${String(p)} ${target}/${name}`);
     if (p === 'resolve') return (ref: string) => (ref === ID || ref === STABLE ? { id: STABLE, legacyId: ID, target: 'docker', name: NAME } : null);
+    // The one-workspace reads and writes answer as the real manager's `#authorized` does: unknown is 404, then the seam, whose "not found" stays 404.
+    if (p === 'get' || p === 'resourcesOf' || p === 'setResources' || p === 'rename')
+      return async (ref: string, ...rest: unknown[]) => {
+        if (ref !== ID && ref !== STABLE) throw new AppError('NOT_FOUND', 'Not found.');
+        requireCan(rest[rest.length - 1] as Actor, p === 'get' || p === 'resourcesOf' ? 'view' : 'operate', workspaceRef(ID));
+        return { reachedHandler: String(p) };
+      };
     if (p === 'runtimeFor') return () => (runtimeCalls.push('runtimeFor'), undefined);
     if (p === 'list') return async () => [ID, 'docker/mine'].map((id) => ({ id, name: id.split('/')[1], target: 'docker', image: 'img', status: 'running', createdAt: '2026-10-01T00:00:00.000Z' }));
     if (p === 'usage') return async () => [ID, 'docker/mine'].map((id) => ({ id, cpuPercent: 1, memoryBytes: 1 }));
@@ -352,4 +360,28 @@ test('the workspace lists keep what the actor may view', async () => {
   assert.deepEqual([list.status, (list.body.data as { id: string }[]).map((w) => w.id)], [200, ['docker/mine']]);
   const usage = await send('GET', '/api/workspaces/usage');
   assert.deepEqual([usage.status, (usage.body.data as { id: string }[]).map((w) => w.id)], [200, ['docker/mine']]);
+});
+
+test('a legacy <target>/<name> ref gets the same 404 as a ws_ id: for a workspace the actor may not see, and for one that does not exist (T-531)', async () => {
+  const GONE = `ws_${'b'.repeat(12)}`;
+  const shapes = [
+    ['GET', (r: string) => `/api/workspaces/${r}`],
+    ['GET', (r: string) => `/api/workspaces/${r}/resources`],
+    ['PATCH', (r: string) => `/api/workspaces/${r}/resources`],
+    ['PATCH', (r: string) => `/api/workspaces/${r}`],
+  ] as const;
+  // (a) ID is someone else's: the stable id and the legacy ref. (b) a workspace that does not exist, in both forms.
+  registerResolver({ type: 'workspace', resolve: (id) => (id === ID ? { ref: workspaceRef(id), owner: { kind: 'user', id: 'u_b' } } : null) });
+  for (const [method, url] of shapes) {
+    const answers: [string, number, unknown][] = [];
+    for (const ref of [STABLE, ID, GONE, 'docker/nope']) {
+      const res = await send(method, url(ref));
+      answers.push([ref, res.status, res.body]);
+      assert.deepEqual([res.status, res.body.error?.code, res.body.error?.message], [404, 'NOT_FOUND', 'Not found.'], `${method} ${url(ref)}`);
+      assert.equal(res.body.data, undefined, `${method} ${url(ref)}: no data`);
+    }
+    for (const a of answers) assert.deepEqual([a[1], a[2]], [answers[0]![1], answers[0]![2]], `${method} ${url('…')}: ${a[0]} answers as ${STABLE}`);
+  }
+  assert.deepEqual(runtimeCalls, []);
+  assert.deepEqual(audits, []);
 });
