@@ -137,7 +137,8 @@ test('T-401 --against with another lockfile: fetched and cached by fetch; the ru
   const withCred = lines.filter((l) => / tok=set /.test(l));
   assert.deepEqual(withCred.map((l) => l.split(' tok=')[0]), ['npm ci --ignore-scripts --no-audit --no-fund --loglevel=error', 'npm ci --ignore-scripts --no-audit --no-fund --loglevel=error'],
     'fetch: the ref and the other lockfile (into the cache), both without scripts');
-  const last = lines.slice(lines.indexOf(withCred[1] as string) + 1);
+  // The two fetch lines are the same text: what follows the LAST one is the run container's.
+  const last = lines.slice(lines.lastIndexOf(withCred[1] as string) + 1);
   assert.ok(last.length > 0 && last.every((l) => l.endsWith('tok= gtok= guser= helper=0 npmrc=no')), last.join('\n'));
   assert.ok(last.includes('npm ci --ignore-scripts --prefer-offline --no-audit --no-fund --loglevel=error tok= gtok= guser= helper=0 npmrc=no'));
   noValue(r.stdout + r.stderr, w.creds);
