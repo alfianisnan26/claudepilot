@@ -68,7 +68,7 @@ for k,s in S.items(): print(k[:8], s["p"].ljust(8), (s["b"] or "-").ljust(16), s
   echo "== other agents' sessions (files per person; contents never read)"; docker exec -u root $CTR sh -c 'for h in /home/people/*; do p=$(basename $h); for d in .gemini/tmp .codex/sessions .cursor/chats .cursor/projects; do [ -d $h/$d ] && echo "$p $d $(find $h/$d -type f | wc -l) files"; done; done; true'
   echo "== signed in? (state only)"; for p in $PEOPLE; do u=p-$p; h=/home/people/$p
     c=$(docker exec -u $u -e HOME=$h $CTR timeout 20 claude auth status 2>&1 | tr -d '\n' | grep -oE '"loggedIn": *[a-z]+' || true)
-    g=$(docker exec -u root $CTR sh -c "[ -e $h/.gemini/oauth_creds.json ] && echo signed-in || echo no" || true); k=$(docker exec -u $u -e HOME=$h $CTR timeout 20 cursor-agent status 2>&1 | grep -iE 'logged|not' | head -1 || true)
+    g=$(docker exec -u root $CTR sh -c "t=\$(jq -r '.security.auth.selectedType // .selectedAuthType // \"none\"' $h/.gemini/settings.json 2>/dev/null || echo none); if [ -e $h/.gemini/oauth_creds.json ]; then echo \"google login (\$t)\"; else echo \"no google login (auth type \$t)\"; fi" || true); k=$(docker exec -u $u -e HOME=$h $CTR timeout 20 cursor-agent status 2>&1 | grep -iE 'logged|not' | head -1 || true)
     echo "$p | claude: ${c:0:60} | gemini: $g | cursor: ${k:0:50}"; done ;;
 down)
   [ -f "$POC_STATE/state/bridge.pid" ] && kill "$(cat "$POC_STATE/state/bridge.pid")" 2>/dev/null || true
