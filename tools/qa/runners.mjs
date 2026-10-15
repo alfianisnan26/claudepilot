@@ -23,7 +23,9 @@ const METRICS = `(() => {
 
 const cookie = await login();
 const call = api(cookie);
-await call('POST', '/api/workspaces/local/local/start');
+const started = await call('POST', '/api/workspaces/local/local/start');
+const wsl = await call('GET', '/api/workspaces');
+console.log(`  info start local: ${started.status} ${started.text.slice(0, 200)}; GET /api/workspaces: ${wsl.status} ${wsl.text.slice(0, 400)}`);
 const b = await Browser.launch({ width: 390, height: 844, mobile: true, cookie });
 await b.cookie(cookie);
 try {
