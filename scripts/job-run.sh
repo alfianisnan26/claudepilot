@@ -30,7 +30,10 @@
 #                                                       command (Konfersi's stg e2e: Cloudflare Access). Only E2E_CF_ACCESS_* names, set here; the
 #                                                       value goes on stdin into the Job's Secret (deleted with the Job), the command's container
 #                                                       gets it as env by secretKeyRef (fetch does not), and the log is masked for it. Values under 8
-#                                                       characters are refused (the mask skips them); an --out file that holds a value is deleted (rc 3)
+#                                                       characters are refused (the mask skips them); an --out file that holds a value, and any
+#                                                       compressed file (*.zip, *.gz, a trace.zip: it cannot be checked), is deleted (rc 3). A command
+#                                                       that holds a value is refused: single-quote the variable ('$E2E_CF_ACCESS_CLIENT_SECRET'),
+#                                                       so the Job expands it, not your shell
 #   scripts/job-run.sh --list                           the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
@@ -101,7 +104,9 @@ while [ $# -gt 0 ]; do
     --timeout) timeout=$2; shift 2 ;;
     --role) role=$2; shift 2 ;;
     --) shift; break ;;
-    *) die "unknown option $1 (see the top of scripts/job-run.sh)" ;;
+    # T-426: an argument is echoed only when it is a plain option name; anything else (--pool-env=<value>, a stray value after --pool-env NAME)
+    # may be a pasted secret.
+    *) if [[ $1 =~ ^--[a-z-]+$ ]]; then die "unknown option $1 (see the top of scripts/job-run.sh)"; else die "unknown option (the argument is not shown; see the top of scripts/job-run.sh)"; fi ;;
   esac
 done
 [ $# -gt 0 ] || die "usage: scripts/job-run.sh [--repo ...] [--ref ...] -- <command>"
@@ -113,8 +118,9 @@ for a in $artifacts; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./*-]*$ && ! $a =~ (^|
 [ -z "$keep" ] || [ -n "$against" ] || die "--keep-tests needs --against"
 for a in $keep; do [[ $a =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ && ! $a =~ (^|/)\.\.(/|$) ]] || die "--keep-tests: file paths inside the repository (got $a)"; done
 # --pool-env (T-426): the scoped test credentials of the Secrets pool, by NAME, for the command. Checked here, before any kubectl call.
-# Only E2E_CF_ACCESS_* names. A refused argument is NEVER echoed, in any form (it may be a secret value pasted by mistake, and a value can look
-# like a name): the message says only that it was refused and why. Values under 8 characters are refused: the log mask skips them.
+# Only E2E_CF_ACCESS_* names. The --pool-env name check and the unknown-option branch never echo what they refuse (it may be a secret value
+# pasted by mistake, and a value can look like a name): the message says only that it was refused and why. Other options' messages still show
+# their own value (--ref, --repo ... "got X"): never paste a value into any option. Values under 8 characters are refused: the log mask skips them.
 pool_names=
 for n in ${pool[@]+"${pool[@]}"}; do
   [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*); the argument is not shown"
@@ -124,6 +130,13 @@ for n in ${pool[@]+"${pool[@]}"}; do
   [[ " $pool_names " == *" $n "* ]] || pool_names="$pool_names $n"
 done
 pool_names=${pool_names# }
+# A command that holds a value was expanded in THIS shell (a double-quoted "$E2E_CF_ACCESS_CLIENT_SECRET"): it would go into the Job's spec
+# and sed's argv. Refused (the name is shown, never the value). Single-quote the variable so it expands in the Job.
+for n in $pool_names; do
+  for w in "$cmd" "$@"; do
+    [[ $w != *"${!n}"* ]] || die "--pool-env: the command holds the value of $n (your shell expanded it); single-quote the variable, '\$$n', so it expands in the Job; refused"
+  done
+done
 
 # The repository: named, or the current folder's origin (its user and password part never kept or shown).
 origin=$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://)[^@/]*@#\1#' || true)
@@ -230,18 +243,22 @@ for n in $pool_names; do
 done
 pool_refs=${pool_refs#\\n}
 [ -n "$pool_refs" ] || pool_refs='            # no --pool-env'
-printf '%s\n' "$secret" | kubectl -n "$ns" create secret generic "$job" --from-env-file=/dev/stdin >/dev/null
-unset secret
 sed -e "s|^ *# __POOL_ENV__.*\$|$pool_refs|" -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" \
     -e "s#__MEMORY__#$memory#g" -e "s#__TMP_SIZE__#$tmp_size#" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
     -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" \
     -e "s#__AGAINST__#$against#" -e "s#__KEEP__#$keep#" -e "s#__STEPS__#$steps#" -e "s#__ARTIFACTS__#$artifacts#" -e "s#__ARTMAX__#$art_max#" -e "s#__CMD__#$(printf '%s' "$cmd" | base64 -w0)#" \
     "$here/deploy/k3s-build/job-run.yaml" | kubectl apply -f - >/dev/null
-# The Secret belongs to the Job: whoever deletes the Job (its TTL, --stop, a person) deletes the token with it.
+# The Secret belongs to the Job from its first moment (T-426): the Job was applied suspended (no pod needs the Secret yet), and the Secret is
+# made in ONE call that already carries the label and the ownerReference, so there is no window with an unowned Secret: whoever deletes the Job
+# (its TTL, --stop, reap, a person) deletes it. The manifest passes on stdin (a client-side dry run, then jq, then apply): never in an argument.
 uid=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
-if [ -n "$uid" ]; then
-  kubectl -n "$ns" patch secret "$job" --type merge -p "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"name\":\"$job\",\"uid\":\"$uid\"}],\"labels\":{\"app\":\"claudepilot-job-run\",\"job-run/chat\":\"$chat\"}}}" >/dev/null || true
-fi
+[ -n "$uid" ] || die "could not read the uid of $job: no credentials were sent"
+sjson=$(printf '%s\n' "$secret" | kubectl -n "$ns" create secret generic "$job" --from-env-file=/dev/stdin --dry-run=client -o json)
+unset secret
+printf '%s' "$sjson" | jq --arg job "$job" --arg uid "$uid" --arg chat "$chat" \
+  '.metadata.labels = {"app": "claudepilot-job-run", "job-run/chat": $chat} | .metadata.ownerReferences = [{"apiVersion": "batch/v1", "kind": "Job", "name": $job, "uid": $uid}]' |
+  kubectl -n "$ns" apply -f - >/dev/null
+unset sjson
 # The chat ends: the Claude process this script runs under exits. Then the Job goes, and so does this script.
 watch=${JOB_RUN_WATCH_PID:-${CLAUDE_PID:-}}
 if [ -n "$watch" ] && [ "$watch" != none ] && kill -0 "$watch" 2>/dev/null; then
@@ -366,6 +383,7 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
   mkdir -p "$out"
   if base64 -d "$work/art.b64" 2>/dev/null | tar -xzf - -C "$out" --no-same-owner --no-same-permissions 2>/dev/null; then echo "job-run: artifacts in $out"
   else echo "job-run: the artifacts did not unpack" >&2; fi
+  rm -f "$work/art.b64" # the packed copy is not needed again (a SIGKILL must not leave it in /tmp)
   # --pool-env (T-426): the artifacts block is base64, so the log mask never sees it. A trace, a HAR or a report can hold a request header:
   # scan what was unpacked for each value (the values on stdin, never in argv), delete a file that has one, and fail.
   if [ -n "$pool_names" ]; then
@@ -375,6 +393,16 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
       while IFS= read -r f; do rm -f -- "$f"; echo "job-run: ERROR: a --pool-env credential was in the artifact $f: deleted" >&2; done <<<"$hits"
       [ "$rc" != 0 ] || rc=3
     fi
+    # A compressed file (a Playwright trace.zip, the report's data/*.zip, a .gz) cannot be scanned as plain bytes, and a value inside it would
+    # survive. Chosen: delete it, fail closed (every format, no unzip or zcat needed, nothing about the value in an argument). Found by
+    # extension and by magic bytes (a renamed file too). To keep traces, run without --pool-env artifacts, or switch the trace off.
+    while IFS= read -r -d '' f; do
+      case "${f,,}" in
+        *.zip|*.gz|*.tgz|*.bz2|*.xz|*.zst|*.br|*.7z|*.jar) z=1 ;;
+        *) case "$(head -c 6 -- "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')" in 504b0304*|504b0506*|1f8b*|425a68*|fd377a585a00|28b52ffd*) z=1 ;; *) z=0 ;; esac ;;
+      esac
+      if [ "$z" = 1 ]; then rm -f -- "$f"; echo "job-run: ERROR: with --pool-env a compressed artifact cannot be checked for the credentials: $f: deleted" >&2; [ "$rc" != 0 ] || rc=3; fi
+    done < <(find "$out" -type f -print0 2>/dev/null)
   fi
 fi
 node=$(pod_get '.items[0].spec.nodeName' "$pj")

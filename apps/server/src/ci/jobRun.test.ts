@@ -62,8 +62,14 @@ const [verb, kind, name] = a;
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
-else if (verb === 'create' && kind === 'secret') { const t = stdin(); fs.writeFileSync(path.join(F, 'secret-' + a[3] + '.env'), t); lock((s) => { s.secrets[a[3]] = t; }); }
-else if (verb === 'apply') { const m = stdin(); const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
+// The Secret is made by a client-side dry run (JSON on stdout, as kubectl prints it) and then applied with its ownerReference and label.
+else if (verb === 'create' && kind === 'secret') { const t = stdin(); const data = {}; for (const l of t.split('\n')) { const i = l.indexOf('='); if (i > 0) data[l.slice(0, i)] = Buffer.from(l.slice(i + 1)).toString('base64'); }
+  if (!a.includes('--dry-run=client')) { fs.writeFileSync(path.join(F, 'secret-' + a[3] + '.env'), t); lock((s) => { s.secrets[a[3]] = t; }); }
+  else process.stdout.write(JSON.stringify({ apiVersion: 'v1', kind: 'Secret', metadata: { name: a[3] }, data })); }
+else if (verb === 'apply') { const m = stdin();
+  if (m.trimStart().startsWith('{')) { const o = JSON.parse(m); const n = o.metadata.name; const env = Object.entries(o.data).map(([k, v]) => k + '=' + Buffer.from(v, 'base64').toString()).join('\n') + '\n';
+    fs.writeFileSync(path.join(F, 'secret-' + n + '.env'), env); fs.writeFileSync(path.join(F, 'secret-' + n + '.meta.json'), JSON.stringify(o.metadata)); lock((s) => { s.secrets[n] = env; }); process.exit(0); }
+  const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
   const lab = (k) => m.match(new RegExp(k + ': ([^,}]+)'))[1].trim();
   lock((s) => { s.seq += 1; s.jobs.push({ name: n, chat: lab('job-run/chat'), role: lab('job-run/role'), program: lab('job-run/program'), owner: m.match(/job-run\/owner: "([^"]*)"/)[1], suspend: true, seq: s.seq }); }); }
 else if (verb === 'patch' && kind === 'job') { lock((s) => { const j = s.jobs.find((x) => x.name === name); if (j) j.suspend = false; }); }
@@ -184,8 +190,13 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   assert.ok(!text.includes(w.npmToken), 'the token is not in the manifest');
 
   const calls = w.calls();
-  assert.match(calls, new RegExp(`create secret generic ${m.metadata.name} --from-env-file=/dev/stdin`));
-  assert.match(calls, /patch secret claudepilot-job-[0-9a-f]{8} --type merge -p .*"ownerReferences":\[\{"apiVersion":"batch\/v1","kind":"Job"/);
+  assert.match(calls, new RegExp(`create secret generic ${m.metadata.name} --from-env-file=/dev/stdin --dry-run=client -o json`));
+  assert.doesNotMatch(calls, /patch secret/, 'T-426: no patch step: the Secret is born owned');
+  // T-426: the Job exists (suspended) first; the Secret is applied in one call that already has the label and the ownerReference: no window.
+  assert.ok(calls.indexOf('apply -f -') < calls.indexOf('create secret') && calls.indexOf('create secret') < calls.lastIndexOf('apply -f -'), 'Job, then the Secret');
+  assert.deepEqual(JSON.parse(readFileSync(join(w.root, `secret-${m.metadata.name}.meta.json`), 'utf8')), {
+    name: m.metadata.name, labels: { app: 'claudepilot-job-run', 'job-run/chat': 'chat-a' },
+    ownerReferences: [{ apiVersion: 'batch/v1', kind: 'Job', name: m.metadata.name, uid: `uid-${m.metadata.name}` }] });
   assert.match(calls, /patch job claudepilot-job-[0-9a-f]{8} --type merge -p \{"spec":\{"suspend":false\}\}/);
   assert.match(calls, /delete secret claudepilot-job-/);
   assert.doesNotMatch(calls, /delete job /, 'a finished Job stays for its TTL');
@@ -535,7 +546,7 @@ test('usage errors: nothing is created', () => {
     [['--repo', 'event isnanme/event', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
     [['--repo', 'isnanme/event', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
     [['--repo', 'https://github.com/isnanme/event.git', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
-    [['--repo=event', '--ref', 'main', '--', 'x'], /unknown option --repo=event/], // the script defines no --repo=value form: refused as an unknown option
+    [['--repo=event', '--ref', 'main', '--', 'x'], /unknown option \(the argument is not shown/], // no --repo=value form: refused as an unknown option, and not echoed (T-426: it may be a pasted value)
     // T-491: the Event token is for that one repository; no second one rides along.
     [['--repo', 'event', '--also', 'x/y', '--ref', 'main', '--', 'x'], /--also cannot be used with --repo event/],
     [['--also', 'x/y', '--repo', 'event', '--ref', 'main', '--', 'x'], /--also cannot be used with --repo event/],
@@ -870,4 +881,91 @@ test('T-426 --pool-env: an artifact that holds a value is deleted after unpackin
   assert.ok(!r.out.includes(secret), 'the value is not shown');
   assert.ok(!existsSync(join(out, 'reports/trace.txt')), 'the file is deleted');
   assert.ok(existsSync(join(out, 'reports/clean.xml')), 'a clean file stays');
+});
+
+// T-426 S1c (2nd blind review 5674/5675): the option parser, the command, compressed artifacts, the early delete.
+const artifactLog = (src: string, extra = '') => {
+  const tgz = spawnSync('tar', ['-czf', '-', '-C', src, 'reports']).stdout.toString('base64');
+  return `${extra}=== JOB-RUN ARTIFACTS BEGIN\n${tgz}\n\n=== JOB-RUN ARTIFACTS END\n=== JOB-RUN EXIT 0\n`;
+};
+
+test('T-426 the option parser echoes only a plain option name: --pool-env=<value> and a stray value after --pool-env NAME are shown nowhere', () => {
+  const w = world();
+  const v = hex(32); // 64 hex characters, built at runtime
+  assert.equal(v.length, 64);
+  const cases = [[`--pool-env=${v}`, '--', 'true'], ['--pool-env', POOL_SECRET, v, '--', 'true'], [`--${v}`, '--', 'true'], [v, '--', 'true']];
+  for (const rest of cases) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', ...rest], { [POOL_SECRET]: v });
+    assert.equal(r.code, 2, r.out);
+    assert.match(r.out, /unknown option \(the argument is not shown/);
+    assert.ok(!r.out.includes(v), 'not in stdout or stderr');
+    assert.ok(!existsSync(join(w.root, 'job.log')) || !w.log().includes(v), 'not in the log');
+  }
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+  // A plain option name is still named, so a typo is easy to see.
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--bogus', '--', 'true']);
+  assert.equal(r.code, 2);
+  assert.match(r.out, /unknown option --bogus /);
+});
+
+test('T-426 --pool-env: a command that holds a value (expanded in the caller\'s shell) is refused, naming the variable only; a single-quoted variable passes', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const over = { [POOL_SECRET]: secret };
+  const base = ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--'];
+  for (const rest of [[`curl -H 'X: ${secret}' https://x.test`], ['curl', '-H', `X: ${secret}`, 'https://x.test'], [`echo ${secret}`]]) {
+    const r = w.run([...base, ...rest], over);
+    assert.equal(r.code, 2, r.out);
+    assert.match(r.out, /--pool-env: the command holds the value of E2E_CF_ACCESS_CLIENT_SECRET .*single-quote the variable/);
+    assert.ok(!r.out.includes(secret), 'the value is not shown');
+  }
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+  const ok = w.run([...base, "curl -H 'X: $E2E_CF_ACCESS_CLIENT_SECRET' https://x.test"], over);
+  assert.equal(ok.code, 0, ok.out);
+  const e = envOf(yamlLoad(w.applied1()) as Manifest);
+  assert.equal(Buffer.from(String(e.JR_CMD), 'base64').toString(), "curl -H 'X: $E2E_CF_ACCESS_CLIENT_SECRET' https://x.test");
+  assert.ok(!w.applied1().includes(secret) && !w.calls().includes(secret));
+});
+
+test('T-426 --pool-env: compressed artifacts cannot be scanned, so they are deleted (rc 3), by name or by magic bytes, and a clean plain file stays', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const art = join(w.root, 'art-z');
+  mkdirSync(join(art, 'reports/data'), { recursive: true });
+  const gz = spawnSync('gzip', ['-c'], { input: `cf-access-client-secret: ${secret}\n` }).stdout;
+  assert.ok(!gz.includes(secret), 'the gzip bytes do not hold the value in plain text: a plain scan is blind to it');
+  writeFileSync(join(art, 'reports/trace.gz'), gz);
+  writeFileSync(join(art, 'reports/data/trace.zip'), Buffer.concat([Buffer.from([0x50, 0x4b, 3, 4]), randomBytes(40)]));
+  writeFileSync(join(art, 'reports/renamed.bin'), gz); // gzip magic under another name
+  writeFileSync(join(art, 'reports/clean.xml'), '<testsuites tests="1"/>');
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: artifactLog(art) }));
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 3, r.out);
+  for (const f of ['trace.gz', 'data/trace.zip', 'renamed.bin']) {
+    assert.match(r.out, new RegExp(`a compressed artifact cannot be checked for the credentials: .*reports/${f.replace('.', '\\.')}: deleted`));
+    assert.ok(!existsSync(join(out, 'reports', f)), `${f} is deleted`);
+  }
+  assert.ok(existsSync(join(out, 'reports/clean.xml')), 'a clean plain file stays');
+  assert.ok(!r.out.includes(secret));
+  // Without --pool-env nothing is deleted.
+  const out2 = join(w.root, 'out2');
+  const plain = w.run(['--repo', 'claudepilot', '--ref', 'main', '--artifacts', 'reports', '--out', out2, '--', 'true']);
+  assert.equal(plain.code, 0, plain.out);
+  assert.ok(existsSync(join(out2, 'reports/trace.gz')), 'without --pool-env a compressed artifact is kept');
+});
+
+test('T-426 --pool-env: a clean artifact set keeps rc 0, and the packed copy (art.b64) is gone before the scan', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  // A grep shim that records, when the scan runs, whether the packed copy still exists in the script's work folder.
+  const shim = join(w.root, 'bin/grep');
+  writeFileSync(shim, '#!/bin/bash\nif [ "$1" = -rlaF ]; then echo ran >> "$FAKE/scan-ran"; ls "$TMPDIR"/cp-job-run-*/art.b64 >> "$FAKE/art-seen" 2>/dev/null; fi\nexec /bin/grep "$@"\n');
+  chmodSync(shim, 0o755);
+  const out = join(w.root, 'out');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--artifacts', 'reports', '--out', out, '--', 'true'], { [POOL_SECRET]: secret });
+  assert.equal(r.code, 0, r.out);
+  assert.ok(existsSync(join(out, 'reports/junit.xml')), 'the clean artifact is kept');
+  assert.ok(existsSync(join(w.root, 'scan-ran')), 'the scan ran (the shim saw it)');
+  assert.ok(!existsSync(join(w.root, 'art-seen')), 'art.b64 was already deleted when the scan ran');
 });
