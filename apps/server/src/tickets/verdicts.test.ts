@@ -201,6 +201,40 @@ test('QA F1: when the orchestrator holds the ticket and leads its implementer, i
   }
 });
 
+test('QA N3 (T-325 S1c): a holder that was itself started on the ticket is an author, even with a worker: its QA child is refused', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    s.add({ id: 'orch', workspaceId: WS, agent: null });
+    const t = h.tickets.create(UI, { summary: 'held by a session started on it', workspaceId: WS });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'orch' }, status: 'in_progress' });
+    s.sessions.get('orch')!.ticketId = t.id;
+    s.add({ id: 'impl', workspaceId: WS, agent: 'implementer', parentId: 'orch', ticketId: t.id });
+    s.add({ id: 'qaW', workspaceId: WS, agent: 'qa-verifier', parentId: 'orch' });
+    assert.throws(() => h.tickets.recordVerdict(agent(WS, 'qaW'), t.id, { role: 'qa', verdict: 'pass', commit: A }), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message));
+    assert.equal(h.tickets.verdicts(UI, t.id).length, 0);
+  } finally {
+    h.done();
+  }
+});
+
+test('QA N5 (T-325 S1c): a lineage ancestor of a lead holder (the session it continues) may be the parent of a QA worker', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    s.add({ id: 'orchOld', workspaceId: WS, agent: null, state: 'ended' });
+    s.add({ id: 'orch', workspaceId: WS, agent: null, continuedFrom: 'orchOld' });
+    const t = h.tickets.create(UI, { summary: 'held by a continued lead', workspaceId: WS });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'orch' }, status: 'in_progress' });
+    s.add({ id: 'impl', workspaceId: WS, agent: 'implementer', parentId: 'orch', ticketId: t.id });
+    s.add({ id: 'qaOldKid', workspaceId: WS, agent: 'qa-verifier', parentId: 'orchOld' });
+    const v = h.tickets.recordVerdict(agent(WS, 'qaOldKid'), t.id, { role: 'qa', verdict: 'pass', commit: A });
+    assert.equal(v.actor, 'session:qaOldKid');
+  } finally {
+    h.done();
+  }
+});
+
 test('QA M7 (T-325 S1b): a QA-named session started with this ticket_id is an author', async () => {
   const r = await rig();
   try {
