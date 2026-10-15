@@ -61,7 +61,10 @@ const podOf = (j) => {
 const [verb, kind, name] = a;
 // Failure injection: the file "fail" lists the calls that fail (uid, dry-run, create). A failing call prints its stdin to stderr, as kubectl may.
 const failing = (w) => { const f = path.join(F, 'fail'); return fs.existsSync(f) && JSON.parse(fs.readFileSync(f, 'utf8')).includes(w); };
-const refuse = () => { process.stderr.write('error: ' + stdin() + '\n'); process.exit(1); };
+// T-426 S1e: the Secret's JSON holds each value as base64, so a failing create prints the DECODED values too: the value itself, as a
+// kubectl error that quotes the object might. Without this the 2>&1 on the real create could be dropped and no test would notice.
+const refuse = () => { const t = stdin(); let plain = ''; try { plain = Object.values(JSON.parse(t).data || {}).map((v) => Buffer.from(v, 'base64').toString()).join(' '); } catch {}
+  process.stderr.write('error: ' + t + ' ' + plain + '\n'); process.exit(1); };
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
@@ -1030,7 +1033,7 @@ test('S1d the uid unreadable: the run dies before any Secret is made, and the Jo
   assertNoTrace(w, r, secret);
 });
 
-test('S1d the create failing: a fixed message, no value, no orphan Job or Secret', () => {
+test('S1d the create failing (its stderr quotes the decoded value): a fixed message, no value in stdout or stderr, no orphan Job or Secret', () => {
   const w = world();
   writeFileSync(join(w.root, 'fail'), JSON.stringify(['create']));
   const secret = `cs${hex(20)}`;
