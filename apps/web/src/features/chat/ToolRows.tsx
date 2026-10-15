@@ -16,8 +16,9 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { InputBlock, OutputBlock } from './CodeBlock';
+import { isCut } from './history';
 import { ImageThumbs, type ViewerImage } from './ImageViewer';
 import { visibly } from './shellTokens';
 import { exitStatus, inputView } from './toolFormat';
@@ -34,6 +35,9 @@ export type TranscriptRow =
   | ({ type: 'tool' } & ToolPair)
   | { type: 'group'; tools: ToolPair[] }
   | { type: 'thinking'; event: ChatEvent };
+
+/** Reads one cut tool result whole (T-376): the transcript's, null where results are always whole (a sub-agent's own transcript). */
+export const LoadWholeContext = createContext<((seq: number) => Promise<void>) | null>(null);
 
 /** Tools that only look: a run of two or more of them reads as one row (chat PRD FR5). */
 const READ_ONLY = new Set(['Read', 'NotebookRead', 'Glob', 'LS', 'Grep', 'WebFetch', 'WebSearch', 'TodoRead']);
@@ -265,6 +269,9 @@ export function ToolCall({
   const input = useMemo(() => inputView(call.toolName, call.toolInput, call.text, call.toolInputCut), [call.toolName, call.toolInput, call.text, call.toolInputCut]);
   const hasInput = !!(input.code || input.diff || input.path || input.facts.length);
   const expandable = !!(hasInput || output || images.length);
+  // A page cut a long result to its preview (T-376): Output shows it with the whole size, and reads the whole when a person asks.
+  const loadWhole = useContext(LoadWholeContext);
+  const cut = result && loadWhole && isCut(result) ? { length: result.textLength!, load: () => loadWhole(result.seq) } : undefined;
   return (
     <div className="flex max-w-full flex-col items-start">
       <RowButton open={open} onToggle={toggle} controls={id} expandable={expandable} danger={error}>
@@ -280,7 +287,13 @@ export function ToolCall({
         <div id={id} className="mt-1 ml-5 flex w-[calc(100%-1.25rem)] min-w-0 flex-col gap-2">
           {hasInput && <InputBlock view={input} />}
           {(output || hasInput) && (
-            <OutputBlock text={output} error={error} exit={error ? exitStatus(output) : null} empty={result ? 'No output.' : running ? 'Running…' : 'No result.'} />
+            <OutputBlock
+              text={output}
+              error={error}
+              exit={error ? exitStatus(output) : null}
+              empty={result ? 'No output.' : running ? 'Running…' : 'No result.'}
+              cut={cut}
+            />
           )}
           {images.length > 0 && <ImageThumbs images={images} actions />}
         </div>

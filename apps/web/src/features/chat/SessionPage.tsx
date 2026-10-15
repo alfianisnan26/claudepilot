@@ -56,6 +56,9 @@ function savedPanel(): Side | null {
   }
 }
 
+/** How many older pages the page reads by itself to find an open request the newest pages do not hold (T-376). */
+const LOOK_BACK_PAGES = 5;
+
 /** Show all details, remembered in this browser for every session. */
 const DETAILS_KEY = 'claudepilot.chat-details';
 function savedDetails(): boolean {
@@ -78,7 +81,8 @@ export function SessionPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
-  const { connected, events, delta, agentLive, session, removed, inputs, outbox, tasks, btw, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end } = useChatSession(id);
+  const { connected, events, paging, loadOlder, loadWhole, delta, agentLive, session, removed, inputs, outbox, tasks, btw, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end } =
+    useChatSession(id);
   // The glance widgets follow this session: Quota shows its Claude.
   useGlanceFocus({ sessionId: id, claudeId: session?.claudeId, workspaceId: session?.workspaceId });
   const [ending, setEnding] = useState(false);
@@ -324,6 +328,17 @@ export function SessionPage() {
     return open;
   }, [events]);
   const current = openRequests[0] ?? null;
+  // The transcript holds its newest pages only (T-376): a request still open from before them would be missing from the dock. The
+  // session counts its open requests; while that is more than the pages show, read older pages (a few at most) to find them.
+  const lookBack = useRef({ session: id, pages: 0 });
+  if (lookBack.current.session !== id) lookBack.current = { session: id, pages: 0 };
+  const waitingCount = session?.id === id ? session.waiting : 0;
+  useEffect(() => {
+    if (!paging.seeded || !paging.more || paging.older !== 'idle' || waitingCount <= openRequests.length) return;
+    if (lookBack.current.pages >= LOOK_BACK_PAGES) return;
+    lookBack.current.pages++;
+    loadOlder();
+  }, [paging, waitingCount, openRequests.length, loadOlder]);
   // The approval as a bar (the keyboard up, or a short screen) until Review: that puts the keyboard away and opens the card. The next
   // request, or the keyboard coming back, starts as a bar again.
   const [reviewing, setReviewing] = useState<string | null>(null);
@@ -583,6 +598,9 @@ export function SessionPage() {
             tasks={tasks}
             agentLive={agentLive}
             onOpenAgent={openAgent}
+            paging={paging}
+            onLoadOlder={loadOlder}
+            onLoadWhole={loadWhole}
             className="h-full"
           />
 
@@ -778,7 +796,7 @@ export function SessionPage() {
           restart.start('manual');
         }}
       />
-      <UsageDialog open={usageOpen} onClose={() => setUsageOpen(false)} events={events} session={session} />
+      <UsageDialog open={usageOpen} onClose={() => setUsageOpen(false)} events={events} partial={paging.more} session={session} />
       <ArchiveSessionDialog
         session={archiving ? session : null}
         onClose={() => setArchiving(false)}

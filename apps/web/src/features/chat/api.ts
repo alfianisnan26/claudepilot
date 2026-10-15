@@ -2,7 +2,9 @@ import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
 import { track } from '@isnanme/ui';
 import {
   CHAT_API,
+  EVENT_PAGE_LIMIT,
   KEEPGOING_API,
+  type ChatEventPage,
   type KeepGoingList,
   type ChatBypassState,
   type ChatDiff,
@@ -39,6 +41,7 @@ import {
   type WorkspaceClaude,
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
+import { asPage } from './history';
 
 /**
  * The chat endpoints, fetched exactly like `lib/api.ts`: same-origin credentials (Hono's `csrf`
@@ -98,8 +101,11 @@ export const chatApi = {
   unarchive: (id: string) => request<ChatSession>('DELETE', CHAT_API.archive(id)),
   pin: (id: string) => request<ChatSession>('POST', CHAT_API.pin(id)),
   unpin: (id: string) => request<ChatSession>('DELETE', CHAT_API.pin(id)),
-  history: (id: string, after?: number) =>
-    request<ChatEvent[]>('GET', CHAT_API.events(id) + (after !== undefined ? `?after=${after}` : '')),
+  /** One page of the transcript counted back from `before` (the newest without it; T-376). A portal from before T-376 answers the whole list. */
+  page: (id: string, before?: number | null) =>
+    request<ChatEvent[] | ChatEventPage>('GET', CHAT_API.events(id) + query({ before: before ? String(before) : undefined, limit: String(EVENT_PAGE_LIMIT) })).then(asPage),
+  /** One stored event whole: a `tool_result` a page cut to its preview. */
+  event: (id: string, seq: number) => request<ChatEvent>('GET', CHAT_API.event(id, seq)),
   /** Models this session can switch to (Claude Code's own list). */
   models: (id: string) => request<ChatModelOption[]>('GET', CHAT_API.models(id)),
   /** Sub-agents and background tasks, the full current list. */

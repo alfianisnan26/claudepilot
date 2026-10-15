@@ -1,4 +1,4 @@
-import { cn, useToast } from '@isnanme/ui';
+import { cn, Spinner, useToast } from '@isnanme/ui';
 import { Check, Copy, WrapText } from 'lucide-react';
 import { forwardRef, useEffect, useMemo, useState, type ReactNode, type UIEventHandler } from 'react';
 import { MONO } from '../code/font';
@@ -183,13 +183,35 @@ export function InputBlock({ view, wrapDefault = true }: { view: InputView; wrap
 
 /**
  * A tool call's Output block: what the portal stored of the result, monospace; a long one shows its first and last lines and "Show all"
- * between; a failure in the danger tone with its exit status when known.
+ * between; a failure in the danger tone with its exit status when known. With `cut` (T-376) the text is a preview of a longer whole the
+ * transcript's page left out: it shows whole, says how long the whole is, and "Show all" reads the whole (Copy waits for it).
  */
-export function OutputBlock({ text, error, exit, empty }: { text: string; error: boolean; exit: number | null; empty: string }) {
+export function OutputBlock({
+  text,
+  error,
+  exit,
+  empty,
+  cut,
+}: {
+  text: string;
+  error: boolean;
+  exit: number | null;
+  empty: string;
+  cut?: { length: number; load: () => Promise<void> };
+}) {
   const [wrap, setWrap] = useState(true);
   const [all, setAll] = useState(false);
+  const [whole, setWhole] = useState<'idle' | 'loading' | 'failed'>('idle');
   const clip = useMemo(() => clipOutput(text), [text]);
-  const shown = all || clip.tail === null;
+  const shown = !!cut || all || clip.tail === null;
+  const loadWhole = () => {
+    if (!cut || whole === 'loading') return;
+    setWhole('loading');
+    cut.load().then(
+      () => setWhole('idle'),
+      () => setWhole('failed'),
+    );
+  };
   return (
     <section aria-label="Output" className={cn('overflow-hidden rounded-lg border', error ? 'border-danger/30 bg-danger-soft' : 'border-line bg-surface-2/50')}>
       <BlockHead
@@ -200,12 +222,12 @@ export function OutputBlock({ text, error, exit, empty }: { text: string; error:
               <HeadButton label={wrap ? 'Don’t wrap lines' : 'Wrap lines'} pressed={wrap} onClick={() => setWrap(!wrap)}>
                 <WrapText className="size-4" aria-hidden="true" />
               </HeadButton>
-              <CopyButton text={text} />
+              {!cut && <CopyButton text={text} />}
             </>
           ) : null
         }
       >
-        {clip.total > 1 && <span>{linesLabel(clip.total)}</span>}
+        {cut ? <span>preview</span> : clip.total > 1 && <span>{linesLabel(clip.total)}</span>}
         {exit !== null && <span className={cn('font-semibold', exit === 0 ? 'text-ink-soft' : 'text-danger')}>exit {exit}</span>}
         {error && exit === null && <span className="font-semibold text-danger">failed</span>}
       </BlockHead>
@@ -229,6 +251,20 @@ export function OutputBlock({ text, error, exit, empty }: { text: string; error:
               <span className="sr-only">{clip.hidden.toLocaleString('en-US')} lines not shown</span>
               {'\n'}
               <Marked text={clip.tail ?? ''} />
+            </>
+          )}
+          {cut && (
+            <>
+              {'…\n'}
+              <button
+                type="button"
+                onClick={loadWhole}
+                disabled={whole === 'loading'}
+                className="press my-1 inline-flex min-h-11 items-center gap-1.5 rounded-md border border-line bg-surface px-3 font-sans text-[12.5px] font-medium text-ink hover:bg-surface-2 sm:min-h-8"
+              >
+                {whole === 'loading' && <Spinner className="size-3" />}
+                {whole === 'failed' ? 'Couldn’t load. Retry' : `Show all (${cut.length.toLocaleString('en-US')} chars)`}
+              </button>
             </>
           )}
         </pre>
