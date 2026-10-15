@@ -40,14 +40,15 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## DECISIONS (binding)
 - 14:30 Coordinator (D-65 idle slots): workers waiting on the one-at-a-time cluster hold slots; over 120k they end after their
   ticket. 7d33708d ended, T-576 started in its slot. The cluster queue (D-61), not the workers, is the bottleneck.
-- 14:45 Coordinator started deploy #38 (c957f50: T-557 S1 + T-575) itself; I start NO deploy. Then the kohi-event pod restarts.
-  All worker branches pushed and clean (T-561 a649874, T-576 7b26e14, T-546 bb7cdb0). After the restart: resume the cluster queue.
+- 15:50 Workspace restarted 13:46 UTC; 03c496b6 (T-546, mid-Jobs) and cee43422 (T-486 port, WAITING 3cb0883) are gone, all branches
+  pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster ~30 min, then ONE more restart: nothing long till then.
+  After it: fresh workers re-run T-546's Jobs on bb7cdb0 and T-486's on 3cb0883.
+- 14:45 Coordinator ran deploy #38 (T-557 S1 + T-575) and runs the deploys now; I start none until it says so.
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
 - 13:20 D-66 (pulled, 619b4b5): workers run scripts/quick-check.sh (one Job: format, lint, named tests) before a branch goes
   to the gate; every brief from now on says so. Workers cannot git merge: the lead merges base heads into slice branches (4852).
-- 12:00 Coordinator tool review: lead edits of code (dev-t-376 commits 01:57-02:03, no trailers, before D-63 03:36; 4820).
-  The lead edits ONLY the status file and notes. Order: T-379, T-426, T-558, T-546, T-548, T-561 (opus, deny rules), T-557.
+- 12:00 Coordinator tool review (4820): the lead edits ONLY the status file and notes.
 - 11:15 D-65 (coordinator): 4 ClaudePilot workers; implementers sonnet by default (opus only with a written why); small QA/review
   findings fixed in the same slice; a worker takes 2-3 related tickets (reuse under 150k); full report on the ticket, the lead
   reads line 1 and opens it only on FAIL; ready features over chores. Targets under 8 USD per ticket, lead share under 30 %.
