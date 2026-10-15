@@ -27,7 +27,9 @@ Older log: `orchestrator-log-2026-10-14.md` (same folder).
 - T-306 item 4 / T-340: installing the rtk hook is a permission change.
 
 ## NEXT (ranked)
+0. T-369 (urgent, owner's phone bug: crew tree under a lead header in every chip): implementer worker (opus) from origin/dev/t-321-2 (same files: session-crew.mjs, SessionsPage chips; T-321 merges first) + a ux-checker worker; the SAME implementer then does T-375 (high: two-line rows with model and quota bar, same component); takes the next free slot (D-43 cap held at five, coordinator asked "in parallel").
 1. T-366 review + merge + real-job QA; deploy batch 6+7 with T-366 (second deploy of the day).
+1b. T-370 (high, D-56 workspace SSH S0 spike, PRD docs/prd/workspace-ssh.md v0.2 at 3cc2dfe: one Unix user per person, never another's agent sign-in; brief from the v0.2 checks on T-370) as one worker; then T-371..T-374 in order (T-362 epic).
 2. T-365 (high): keep job-run Jobs off the portal's node (fsync stall after run 31).
 3. Merge returns: T-330, T-349, T-352, T-321 (verifier worker each, typecheck before every push).
 4. T-293 per D-50: wire --start through session_start with parent (after T-352).
