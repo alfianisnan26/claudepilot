@@ -20,7 +20,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-574 back to the Backend lane after T-633 S2 (shape fix + cap/cut tests + whole src/chat in a Job).
 - T-341 QA BE PASS WITH GAPS (reply only; lead can't comment, unassigned): 4 doc errors -> BE INFRA lane 17a36fce (sonnet, respawned;
   b6df312e ended) on ticket/T-341-docfix from e4284315. D not verified.
-- T-549 70b081f8 DONE (6378) -> QA BE 2 (backend) + QA UI (page 390/1280). T-416 S1e ff3f5d0c DONE (6372) -> QA Perf delta (6385).
+- T-549 70b081f8 DONE (6378) -> QA BE 2 (backend, running); QA UI PASS WITH GAPS (job f7730a9b, reply only: refused on T-549;
+  long offender id wrap + D-65 harness assertions not run). T-416 S1e ff3f5d0c DONE (6372) -> QA Perf delta (6385).
   T-675 findings 4/5 written on T-416 6385 (T-675 unassigned: lead refused).
 - T-416 S1d 89e270cc: review 6310 CHANGES (sev-2 restart skips budget) + QA 6326 PASS WITH GAPS (M2/M3/M9/M10 survive) -> IMPL S1e
   3d92ab62 (opus, why: incident; idle, kept for QA fixes) DONE ff3f5d0c; QA Perf delta, then gate, merge.
