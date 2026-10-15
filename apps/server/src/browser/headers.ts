@@ -31,7 +31,7 @@ function parseHost(pattern: string): { wildcard: boolean; host: string; port: st
   const port = m[6] ?? null;
   if (m[1] && port) return null;
   if (port && (Number(port) < 1 || Number(port) > 65535)) return null;
-  return { wildcard: !!m[1], host: m[2], port };
+  return { wildcard: !!m[1], host: m[2] ?? '', port };
 }
 
 export const validHeaderHost = (pattern: string): boolean => parseHost(pattern) !== null;

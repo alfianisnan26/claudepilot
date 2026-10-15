@@ -256,7 +256,7 @@ test('Docker: headers.json is a private file in a private folder, and the config
     const x = extract();
     x.on('entry', (header, stream, next) => {
       const chunks: Buffer[] = [];
-      stream.on('data', (d: Buffer) => chunks.push(d));
+      stream.on('data', (d) => chunks.push(d as Buffer));
       stream.on('end', () => {
         seen.set(header.name, { mode: (header.mode ?? 0) & 0o777, uid: header.uid ?? -1, gid: header.gid ?? -1, body: Buffer.concat(chunks).toString('utf8') });
         next();

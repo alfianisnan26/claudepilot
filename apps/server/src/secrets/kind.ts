@@ -596,7 +596,7 @@ export class SecretsKind implements PoolKind<SecretsContent>, SecretNameSource {
     }
     if (found.length === 0) return { ok: false, why: 'not found' };
     if (found.length > 1) return { ok: false, why: 'ambiguous' };
-    const [{ poolId, entry }] = found;
+    const { poolId, entry } = found[0]!;
     const version = this.#valueOf(poolId, entry);
     if (!version) return { ok: false, why: 'has no value' };
     try {
