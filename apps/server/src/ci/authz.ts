@@ -56,8 +56,8 @@ export type AgentStart = { rule: 'own_branch' | 'program_branch'; ref: string } 
 export function agentStart(me: CiSession | null, repo: Pick<CiRepo, 'name' | 'workspaceId' | 'sourcePath' | 'connected'>, ref: string): AgentStart {
   const branch = ref.replace(/^refs\/heads\//, '');
   if (me?.branch && branch === me.branch) {
-    if (!me.branchFromFolder) return { rule: 'own_branch', ref };
-    // A branch that came from the worker's folder (possibly the lead's): only on that folder's own remote, and only dev/* or ticket/*.
+    if (me.branchFromWorktree) return { rule: 'own_branch', ref };
+    // Fail closed: unless the adapter marked the branch as its own worktree's, it is a worker's folder branch (possibly the lead's): only on that folder's own remote, and only dev/* or ticket/*.
     if (!me.cwd || !isProgramRemote(repo, me.cwd)) return { rule: 'deployment', ref, refusal: noRemote(repo.name, repo.workspaceId) };
     if (isProgramBranch(branch)) return { rule: 'own_branch', ref };
   }

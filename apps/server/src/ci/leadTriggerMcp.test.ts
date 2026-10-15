@@ -91,6 +91,8 @@ test('a worker whose folder was on dev/y at its start: gate on dev/y, refused on
   // The real adapter over the chat: the folder branch is the session's branch for CI, and a session that started workers is a lead.
   const rows = new Map<string, Partial<ChatSession> & Record<string, unknown>>([
     ['w', { id: 'w', workspaceId: WS, cwd: '/w/crew-api', state: 'idle', parentId: 'l', worktree: null, folderBranch: 'dev/y' }],
+    ['m', { id: 'm', workspaceId: WS, cwd: '/w/crew-api', state: 'idle', parentId: 'l', worktree: null, folderBranch: 'main' }],
+    ['t', { id: 't', workspaceId: WS, cwd: '/w/app', state: 'idle', parentId: null, worktree: { branch: 'dev/wt' }, folderBranch: 'main' }],
     ['l', { id: 'l', workspaceId: WS, cwd: '/w/app', state: 'idle', parentId: null, worktree: null }],
     ['solo', { id: 'solo', workspaceId: WS, cwd: '/w/app', state: 'idle', parentId: null, worktree: null }],
   ]);
@@ -100,8 +102,12 @@ test('a worker whose folder was on dev/y at its start: gate on dev/y, refused on
     list: (f: { parentId?: string }) => [...rows.values()].filter((s) => !f.parentId || s.parentId === f.parentId),
   } as unknown as ChatController;
   const adapter = new ChatSessionsAdapter(chat);
-  const view = (id: string) => adapter.get(id) as (ReturnType<typeof adapter.get> & { cwd?: string; lead?: boolean }) | null;
+  const view = (id: string) => adapter.get(id);
   assert.deepEqual([view('w')?.branch, view('w')?.lead], ['dev/y', false]);
+  // The adapter marks the trusted case: true for a session with a worktree, not for a worker on its folder's branch (fail closed).
+  assert.deepEqual([view('t')?.branch, view('t')?.branchFromWorktree], ['dev/wt', true]);
+  assert.deepEqual([view('w')?.branchFromWorktree, view('m')?.branchFromWorktree], [false, false]);
+  assert.equal(adapter.list({}).find((s) => s.id === 't')?.branchFromWorktree, true);
   assert.deepEqual([view('l')?.branch, view('l')?.lead, view('l')?.cwd], [null, true, '/w/app']);
   assert.equal(view('solo')?.lead, false);
 
@@ -115,13 +121,21 @@ test('a worker whose folder was on dev/y at its start: gate on dev/y, refused on
       h.home.git(['checkout', '-q', '-B', b, 'main'], h.src);
       h.home.git(['push', '-q', 'pilot', b], h.src);
     }
-    sessions.add({ id: 'w', workspaceId: WS, branch: view('w')?.branch ?? null, cwd: '/w/crew-api', lead: false });
+    // The fake holds exactly what the real adapter produced, not a hand-built session.
+    for (const id of ['w', 'm']) rows.get(id)!.cwd = h.src; // the folder the program's remote was made from
+    sessions.add(view('w')!);
+    sessions.add(view('m')!);
     const w = await mcp.agentToken(WS, 'w');
+    const m = await mcp.agentToken(WS, 'm');
     const ok = await mcp.call(w.secret, 'ci_run_trigger', { repo: 'app', pipeline: 'gate', ref: 'dev/y' });
     assert.equal(ok.result!.isError, undefined, JSON.stringify(ok.result));
     const no = await mcp.call(w.secret, 'ci_run_trigger', { repo: 'app', pipeline: 'gate', ref: 'dev/z' });
     assert.equal(no.result!.isError, true);
     assert.match(no.result!.content![0]!.text, /only on the branch its own session works on \(dev\/y\)/);
+    // A worker whose folder is on main: no gate run on main (the fail-closed rule, through the tool).
+    const onMain = await mcp.call(m.secret, 'ci_run_trigger', { repo: 'app', pipeline: 'gate', ref: 'main' });
+    assert.equal(onMain.result!.isError, true, JSON.stringify(onMain.result));
+    assert.match(onMain.result!.content![0]!.text, /deploys to an environment/);
   } finally {
     mcp.done();
     h.done();

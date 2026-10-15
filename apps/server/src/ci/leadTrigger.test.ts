@@ -27,7 +27,7 @@ test('the rule, decided in authz.ts: own branch, a lead on its program remote, e
 test('a branch from the worker\'s folder: only on that folder\'s remote, only dev/* or ticket/* (T-476 review)', () => {
   const app = { name: 'app', workspaceId: WS, sourcePath: '/w/app', connected: ['/w/app'] };
   const other = { name: 'other', workspaceId: WS, sourcePath: '/w/other', connected: [] };
-  const worker = { id: 'w', title: '', ticketId: null, branch: 'dev/y', branchFromFolder: true, live: true, state: 'idle' as const, workspaceId: WS, lastActivityAt: '', cwd: '/w/app', lead: false };
+  const worker = { id: 'w', title: '', ticketId: null, branch: 'dev/y', live: true, state: 'idle' as const, workspaceId: WS, lastActivityAt: '', cwd: '/w/app', lead: false };
   // (c) the allowed case
   assert.equal(agentStart(worker, app, 'dev/y').rule, 'own_branch');
   assert.equal(agentStart({ ...worker, branch: 'ticket/T-1' }, app, 'refs/heads/ticket/T-1').rule, 'own_branch');
@@ -38,6 +38,9 @@ test('a branch from the worker\'s folder: only on that folder\'s remote, only de
   assert.equal(elsewhere.rule === 'deployment' && elsewhere.refusal.code, 'NOT_FOUND');
   const mainElsewhere = agentStart({ ...worker, branch: 'main' }, other, 'main');
   assert.equal(mainElsewhere.rule === 'deployment' && mainElsewhere.refusal.code, 'NOT_FOUND');
-  // a worktree's own branch is not limited (today's rule)
-  assert.equal(agentStart({ ...worker, branchFromFolder: false, branch: 'main' }, other, 'main').rule, 'own_branch');
+  // a worktree's own branch (the flag only the session adapter sets) is not limited
+  assert.equal(agentStart({ ...worker, branchFromWorktree: true, branch: 'main' }, other, 'main').rule, 'own_branch');
+  // fail closed: a false or missing flag is the narrow rule
+  assert.equal(agentStart({ ...worker, branchFromWorktree: false, branch: 'main' }, other, 'main').rule, 'deployment');
+  assert.equal(agentStart({ ...worker, branch: 'main' }, app, 'main').rule, 'deployment');
 });
