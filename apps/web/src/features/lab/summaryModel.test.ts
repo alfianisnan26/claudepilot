@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { CrewFigure, CrewSummary, CrewSummaryWindow } from '@portal/contracts';
-import { fmtRatio, paceCompact, paceSub, summaryLists, summaryTiles, trendOf } from './summaryModel';
+import { fmtRatio, paceCompact, paceSub, SUMMARY_GRID_CLASS, summaryLists, summaryTiles, trendOf } from './summaryModel';
 
 const fig = (value: number | null, basis: CrewFigure['basis'] = 'measured', reason?: CrewFigure['reason']): CrewFigure => ({ value, basis, source: 'a source', reason });
 const gone = (reason: CrewFigure['reason'] = 'no_samples'): CrewFigure => fig(null, 'unavailable', reason);
+
+test('the summary grid follows the card width, never the viewport', () => {
+  assert.ok(!/(^|\s)(sm|md|lg|xl|2xl):/.test(SUMMARY_GRID_CLASS));
+  assert.match(SUMMARY_GRID_CLASS, /@sm:grid-cols-3/);
+  assert.match(SUMMARY_GRID_CLASS, /@xl:grid-cols-5/);
+});
 
 function win(o: Partial<CrewSummaryWindow> = {}): CrewSummaryWindow {
   return {
