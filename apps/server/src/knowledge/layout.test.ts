@@ -67,12 +67,17 @@ test('layout: a graph at the display cap (1,500 nodes, 6,000 edges) settles with
   const n = 1500;
   const edges: LayoutEdge[] = Array.from({ length: 6000 }, () => ({ s: Math.floor(rnd() * n), t: Math.floor(n * rnd() ** 3) })).filter((e) => e.s !== e.t);
   const l = new ForceLayout(n, edges);
+  // CPU time of this process, not the wall clock: a loaded machine (the gate runs files in parallel) stretches the wall clock but not
+  // the CPU time spent in the loop (T-638: the wall-clock budget flaked under load).
+  const c0 = process.cpuUsage();
   const t0 = performance.now();
   const ticks = l.run(400);
   const ms = performance.now() - t0;
-  console.log(`layout: ${n} nodes, ${edges.length} edges: ${ticks} ticks in ${ms.toFixed(0)} ms (${(ms / ticks).toFixed(2)} ms a tick)`);
+  const c = process.cpuUsage(c0);
+  const cpuMs = (c.user + c.system) / 1000;
+  console.log(`layout: ${n} nodes, ${edges.length} edges: ${ticks} ticks in ${ms.toFixed(0)} ms wall, ${cpuMs.toFixed(0)} ms cpu (${(cpuMs / ticks).toFixed(2)} ms cpu a tick)`);
   assert.ok([...l.x, ...l.y].every(Number.isFinite));
-  assert.ok(ms / ticks < 25, `${(ms / ticks).toFixed(1)} ms a tick`);
+  assert.ok(cpuMs / ticks < 25, `${(cpuMs / ticks).toFixed(1)} ms cpu a tick`);
   const [x0, y0, x1, y1] = l.bounds();
   assert.ok(x1 - x0 < 20_000 && y1 - y0 < 20_000, 'the graph stays in a sane area');
 });
