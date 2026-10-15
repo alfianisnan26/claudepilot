@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { settingDef } from '../settings/registry.js';
@@ -138,7 +138,8 @@ test('hook input that carries agent_id (a sub-agent: a dispatch) is allowed; the
 });
 
 test('a symlink inside an allowed folder cannot lead out of it, and a symlink to an allowed one is followed', () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'lead-rules-')));
+  // Not under /tmp: /tmp is itself an allowed folder, so a fixture there would be allowed whatever the links do.
+  const root = realpathSync(mkdtempSync(join(homedir(), 'lead-rules-')));
   try {
     const repo = join(root, 'repo');
     mkdirSync(join(repo, 'docs', 'dev-sessions', 'status'), { recursive: true });
