@@ -41,12 +41,13 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## DECISIONS (binding)
 - 14:30 Coordinator (D-65 idle slots): workers waiting on the one-at-a-time cluster hold slots; over 120k they end after their
   ticket. 7d33708d ended, T-576 started in its slot. The cluster queue (D-61), not the workers, is the bottleneck.
-- 14:15 Coordinator: T-575 + T-557 S1 ride the next deploy; then it makes kohi-event's Browser pool and names the restart time.
+- 14:45 Coordinator started deploy #38 (c957f50: T-557 S1 + T-575) itself; I start NO deploy. Then the kohi-event pod restarts.
+  All worker branches pushed and clean (T-561 a649874, T-576 7b26e14, T-546 bb7cdb0, lead pre-merge 55d5fad). After the restart: if the
+  gate on 55d5fad has no verdict in /tmp/gate-55d5fad.out, re-run scripts/gate-job.sh 55d5fad1... then resume the cluster queue.
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
 - 13:20 D-66 (pulled, 619b4b5): workers run scripts/quick-check.sh (one Job: format, lint, named tests) before a branch goes
   to the gate; every brief from now on says so. Workers cannot git merge: the lead merges base heads into slice branches (4852).
-- 11:30 Coordinator (owner priority, metocean): T-379 NOW in its own worker; built on T-401's fe62fa6 (fetch stage holds creds).
 - 12:00 Coordinator tool review: lead edits of code (dev-t-376 commits 01:57-02:03, no trailers, before D-63 03:36; 4820).
   The lead edits ONLY the status file and notes. Order: T-379, T-426, T-558, T-546, T-548, T-561 (opus, deny rules), T-557.
 - 11:15 D-65 (coordinator): 4 ClaudePilot workers; implementers sonnet by default (opus only with a written why); small QA/review
@@ -55,7 +56,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 10:25 Workers end with WAITING <hash>; the lead hands out the cluster slot with "GO T-n" (free-slot check: OUR Jobs only).
 - 09:00 Coordinator: persona, role-tool and permission questions go to the coordinator (ticket assigned to me), NEVER the owner;
   `owner-checklist` is production only.
-- 08:10 A running slice keeps its slot. 06:00 The lead holds T-n claim to close. 05:50 UX checks are cluster Jobs; fresh worktrees.
 - D-63: QA/ux/reviewer on SONNET (opus needs a `why`: security, gate, rule or large slice); the lead never implements or commits code.
 - D-61: (worker count now 4 by D-65), NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh, one at a time.
 - Hand over before 250k context (coordinator).
