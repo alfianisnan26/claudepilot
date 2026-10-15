@@ -88,6 +88,25 @@ const mcpAllowlist: SettingsCheck = (v) => {
   return null;
 };
 
+/**
+ * The policy owner's hooks (D-60, T-404): `PreToolUse` entries whose commands run only its own root-owned scripts
+ * (`/etc/claudepilot/bin/policy-*`), so this drop-in can never run something a pool or a workspace supplies.
+ */
+const policyHooks: SettingsCheck = (v) => {
+  const shape = onlyKeys(v, 'hooks', ['PreToolUse']);
+  if (shape) return shape;
+  const list = (v as Record<string, unknown>).PreToolUse;
+  if (!Array.isArray(list)) return 'hooks.PreToolUse must be a list';
+  for (const m of list) {
+    if (!isObject(m) || typeof m.matcher !== 'string' || !Array.isArray(m.hooks)) return 'each hooks.PreToolUse entry must be { matcher, hooks }';
+    for (const h of m.hooks as unknown[]) {
+      if (!isObject(h) || h.type !== 'command' || typeof h.command !== 'string' || !/^\/etc\/claudepilot\/bin\/policy-[a-z0-9-]+( \|\| exit 2)?$/.test(h.command))
+        return 'hooks.PreToolUse may only run the policy owner’s own scripts (/etc/claudepilot/bin/policy-*)';
+    }
+  }
+  return null;
+};
+
 /** A boolean that can only be switched on: a protection is delivered as `true` or not at all. */
 const onlyTrue =
   (key: string): SettingsCheck =>
@@ -101,8 +120,9 @@ const onlyTrue =
 export const OWNERSHIP: Record<Owner, Declaration> = {
   policy: {
     dropIn: '10-claudepilot-policy.json',
-    paths: [],
-    settings: ['permissions', 'sandbox', 'availableModels', 'maxEffortLevel', 'deniedMcpServers', 'env'],
+    // Its own scripts: the rule-file guard (D-60, T-404, `settings/ruleGuard.ts`).
+    paths: ['/etc/claudepilot/bin/policy-'],
+    settings: ['permissions', 'sandbox', 'availableModels', 'maxEffortLevel', 'deniedMcpServers', 'env', 'hooks'],
     // The agent policy (settings/agentEnv.ts, T-285): exact names, so no pool's catch-all can set them (`mayUseEnv`).
     env: [
       'CLAUDEPILOT_POLICY',
@@ -115,7 +135,7 @@ export const OWNERSHIP: Record<Owner, Declaration> = {
       'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
     ],
     // `sandbox` merges key by key across drop-ins; its credentials belong to Secrets & env.
-    validate: { sandbox: (v) => (isObject(v) && 'credentials' in v ? 'sandbox.credentials belongs to Secrets & env' : null) },
+    validate: { sandbox: (v) => (isObject(v) && 'credentials' in v ? 'sandbox.credentials belongs to Secrets & env' : null), hooks: policyHooks },
   },
   // The portal-wide switches (settings store): the MCP lockdown. `allowedMcpServers` and `allowManagedMcpServersOnly`
   // moved here from the policy owner, which delivers nothing yet; the pools' matchers fill the allowlist (MCP set FR19).

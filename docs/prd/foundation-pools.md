@@ -305,7 +305,7 @@ Each pool type declares what it may write. The compiler rejects fragments outsid
 
 | Owner | Files | Managed settings keys (in its own drop-in) |
 | --- | --- | --- |
-| Settings & policies | `managed-settings.d/10-claudepilot-policy.json` | `permissions.*` (deny, ask, allow, defaultMode, disableBypassPermissionsMode), `sandbox.*`, `availableModels`, `maxEffortLevel`, limits; `env` for the agent policy (T-285: `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`, `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, `BASH_MAX_OUTPUT_LENGTH`, `MAX_MCP_OUTPUT_TOKENS`, declared by exact name, so a Secrets & env pool can't set them: a new entry is refused when the set is saved; one saved before is skipped at delivery and the policy wins, delivery never fails on that conflict (one warning line per workspace; the Configuration sheet says "overridden by policy") |
+| Settings & policies | `managed-settings.d/10-claudepilot-policy.json`, `/etc/claudepilot/bin/policy-*` (the rule-file guard, [Settings & policies](settings-policies.md) §22.6) | `hooks.PreToolUse` running only its own `policy-*` scripts (the rule-file guard, D-60); `permissions.*` (deny, ask, allow, defaultMode, disableBypassPermissionsMode), `sandbox.*`, `availableModels`, `maxEffortLevel`, limits; `env` for the agent policy (T-285: `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`, `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, `BASH_MAX_OUTPUT_LENGTH`, `MAX_MCP_OUTPUT_TOKENS`, declared by exact name, so a Secrets & env pool can't set them: a new entry is refused when the set is saved; one saved before is skipped at delivery and the policy wins, delivery never fails on that conflict (one warning line per workspace; the Configuration sheet says "overridden by policy") |
 | Secrets & env | `managed-settings.d/20-claudepilot-env.json`, `/etc/claudepilot/secrets/**` | `env` (its declared variable names only), `sandbox.credentials` |
 | MCP set | `managed-settings.d/30-claudepilot-mcp.json`, plugin(s) in the portal marketplace | `managedMcpServers` (remote servers), `enabledPlugins` entries for its plugins, `allowedMcpServers` / `deniedMcpServers` |
 | Account Pool | `managed-settings.d/40-claudepilot-account.json`, `/etc/claudepilot/account/**`, `/etc/claudepilot/bin/account-*` | `apiKeyHelper`, `env` (`ANTHROPIC_*`, `CLAUDE_CODE_API_KEY_HELPER_TTL_MS`, `CLAUDEPILOT_ACCOUNT`, …), `hooks.StopFailure` |
@@ -366,6 +366,8 @@ directory marketplace loads without prompts in interactive and `-p` sessions in 
 | Docker | One `exec` of `/etc/claudepilot/bin/outbox-pull` runs steps 1–3. | The archive API reads the files. The portal stores the events, then replaces the files with empty ones; nothing appends while stopped 🔬 (Q7). |
 | Kubernetes | The same `exec`. | Unreadable. Files wait on the PVC until the next start. |
 
+- **Channels built:** `account` (Account Pool), `mcp` (MCP sets) and `guard` (the rule-file guard's refusals,
+  [Settings & policies](settings-policies.md) §22.6; every known workspace has the guard, so every running one is pulled).
 - **Before it stops any workspace,** the portal pulls once.
 - **Cadence and cost:** every 10 s for running workspaces with a subscriber (Account Pool failure
   events, an open Monitor view), otherwise in the same `exec` as the 60 s reconcile. Each pull is one

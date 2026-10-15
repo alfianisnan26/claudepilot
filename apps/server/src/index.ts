@@ -36,6 +36,7 @@ import { registerPersonaTools } from './personas/portalTools.js';
 import { readSessionBlob } from './personas/sessionBlobs.js';
 import { readWorkspaceFile } from './personas/workspaceFiles.js';
 import { registerSettings } from './settings/index.js';
+import { GUARD_CHANNEL, recordGuardRefusals } from './settings/ruleGuardAudit.js';
 import { BrowserModule } from './browser/index.js';
 import { PortalMcpModule } from './portalmcp/module.js';
 import { registerBuiltInPortalTools } from './portalmcp/tools/index.js';
@@ -254,6 +255,13 @@ const outbox = new Outbox(store, (t) => workspaces.runtimeFor(t));
 outbox.subscribe('account', (workspaceId, events) => health.onSignals(workspaceId, events), () => pools.assignedWorkspaces());
 // MCP launcher and helper events: starts and failures, never values (MCP set §13.2).
 outbox.subscribe('mcp', (workspaceId, events) => mcpSets.onOutbox(workspaceId, events), () => mcpSets.assignedWorkspaces());
+// The rule-file guard's refusals (D-60, T-404): the workspaces the policy (and the guard) landed in that are not removed;
+// the pull itself skips a stopped one, and the outbox caps how many pull at once.
+outbox.subscribe(
+  GUARD_CHANNEL,
+  (workspaceId, events) => void recordGuardRefusals(store, workspaceId, events),
+  () => settingsModule.agentEnv.guardedWorkspaces((id) => workspaces.resolve(id) !== null),
+);
 // A workspace that stops (or is removed) takes its chat sessions with it: they stop cleanly now and read Interrupted, resumable once it is back.
 workspaces.hooks.beforeStop = async (id) => {
   await chatController.endWorkspaceSessions(id, 'The workspace was stopped').catch(() => undefined);

@@ -52,7 +52,8 @@ test('the policy drop-in carries exactly the declared names, with the defaults a
     assert.ok(file, 'the policy drop-in is compiled');
     assert.deepEqual([file.mode, file.uid, file.gid], [0o644, 0, 0]);
     const parsed = JSON.parse(file.content) as Record<string, unknown>;
-    assert.deepEqual(Object.keys(parsed), ['env']);
+    // The agent policy's env, and the rule-file guard every workspace gets with it (D-60, T-404; ruleGuard.test.ts).
+    assert.deepEqual(Object.keys(parsed), ['env', 'hooks']);
     assert.deepEqual(Object.keys(parsed.env as object).sort(), NAMES);
     assert.deepEqual(parsed.env, {
       CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '1h',
@@ -174,6 +175,23 @@ test('status per workspace: unavailable until the drop-in lands, applied after, 
     assert.equal(h.agentEnv.status(WS).state, 'applied');
     h.agentEnv.forgetWorkspace(WS);
     assert.equal(h.agentEnv.status(WS).state, 'unavailable');
+  } finally {
+    h.done();
+  }
+});
+
+test('T-404 review 7: the guard pull covers only workspaces the policy landed in, and not removed ones', async () => {
+  const h = await setup();
+  try {
+    // Known to the portal (a delivery row) but nothing landed yet: not pulled.
+    h.store.db!.prepare('INSERT INTO workspace_delivery (workspace_id) VALUES (?)').run('docker/other');
+    assert.deepEqual(h.agentEnv.guardedWorkspaces(), []);
+    await h.reconciler.request(WS, 'test');
+    assert.deepEqual(h.agentEnv.guardedWorkspaces(), [WS]);
+    // A removed workspace whose row was not forgotten (the caller says it is gone) is dropped.
+    assert.deepEqual(h.agentEnv.guardedWorkspaces((id) => id !== WS), []);
+    h.agentEnv.forgetWorkspace(WS);
+    assert.deepEqual(h.agentEnv.guardedWorkspaces(), []);
   } finally {
     h.done();
   }
