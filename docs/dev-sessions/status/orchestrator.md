@@ -29,11 +29,12 @@ Older log: `orchestrator-log-2026-10-14.md` (same folder).
 ## NEXT (ranked)
 0. T-369 (urgent, owner's phone bug: crew tree under a lead header in every chip): implementer worker (opus) from origin/dev/t-321-2 (same files: session-crew.mjs, SessionsPage chips; T-321 merges first) + a ux-checker worker; the SAME implementer then does T-375 (high: two-line rows with model and quota bar, same component); takes the next free slot (D-43 cap held at five, coordinator asked "in parallel").
 1. T-366 review + merge + real-job QA; deploy batch 6+7 with T-366 (second deploy of the day).
-1b. T-370 (high, D-56 workspace SSH S0 spike, PRD docs/prd/workspace-ssh.md v0.2 at 3cc2dfe: one Unix user per person, never another's agent sign-in; brief from the v0.2 checks on T-370) as one worker; then T-371..T-374 in order (T-362 epic).
+0b. Lists epic (owner, coordinator 01:10): T-378 (high: scale fixture + density/crew-tree/transcript-perf checks in the gate, FAIL first then PASS) is ONE QA worker that owns the shared fixture and gate for T-382 too; T-382 S1 (high: cursor list standard {items,nextCursor} + JSON compression) implementer next; T-376 (high: transcript paging from newest + compression) is T-382's transcript slice; then T-375 (with T-369's implementer), T-377 (nested lists fold).
+1b. HOLD (coordinator 01:00): T-370 runs locally in session claudepilot-b7; no worker until docs/prd/evidence/t370-*.md lands. Was: T-370 (high, D-56 workspace SSH S0 spike, PRD docs/prd/workspace-ssh.md v0.2 at 3cc2dfe: one Unix user per person, never another's agent sign-in; brief from the v0.2 checks on T-370) as one worker; then T-371..T-374 in order (T-362 epic).
 2. T-365 (high): keep job-run Jobs off the portal's node (fsync stall after run 31).
 3. Merge returns: T-330, T-349, T-352, T-321 (verifier worker each, typecheck before every push).
 4. T-293 per D-50: wire --start through session_start with parent (after T-352).
 5. T-354 (chips UI + ux-checker), T-347, T-350, T-351, T-355, T-356, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149.
 CUT LINE: Konfersi and Event stay paused (D-45).
 
-LESSONS: typecheck before EVERY integration push (tsx does not check types); report=end hides a worker's finished turn: use idle; scripts/job-run.sh --help exits 2: point briefs at the header; worker ticket tools may be missing: copy its verdict to the ticket.
+LESSONS: a 20x test-repeat Job on k3s-node2 stalled the portal (T-365; anti-affinity on integration 96f47b8: Jobs now avoid the portal's node and may queue longer); typecheck before EVERY integration push (tsx does not check types); report=end hides a worker's finished turn: use idle; scripts/job-run.sh --help exits 2: point briefs at the header; worker ticket tools may be missing: copy its verdict to the ticket.
