@@ -21,7 +21,7 @@ Object.assign(process.env, {
   DRY_RUN: '0',
 });
 // Only the orchestrator track is looked at: the other two are paused by their files.
-for (const k of ['konfersi', 'event']) writeFileSync(join(dir, `PAUSE-${k}`), '');
+for (const k of ['konfersi', 'event', 'tradingbot']) writeFileSync(join(dir, `PAUSE-${k}`), '');
 
 const logs: string[] = [];
 mock.method(console, 'log', (...a: unknown[]) => void logs.push(a.join(' ')));

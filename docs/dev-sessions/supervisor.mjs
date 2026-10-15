@@ -53,6 +53,7 @@ const DRY = process.env.DRY_RUN === '1';
 
 /** What is kept alive: one orchestrator in the main folder (no worktree of its own: its sub-agents make theirs). The Claudes are tried by name, best room first. */
 const KONFERSI = process.env.KONFERSI_FOLDER ?? join(homedir(), 'work/konfersi-universe');
+const TRADINGBOT = process.env.TRADINGBOT_FOLDER ?? join(homedir(), 'work/tradingbot');
 /**
  * D-70 (owner, 2026-10-15): each program's crew is long-lived LANES: a Backend and a Frontend build lane and at most two QA lanes (UI; performance
  * and security), spawned once and fed ticket after ticket, plus one free slot. Shared by the kickoffs and nudges below.
@@ -79,10 +80,21 @@ const TRACKS = [
     wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your pilot tickets (tag konfersi-migration), your crew (session_family), git worktree list in ~/work/agentic-worktrees, and carry on. Nobody is here to answer questions.`,
   },
   // The Event program left pilot on 2026-10-15 (owner, D-67): no track; its work goes on outside pilot.
+  // Tradingbot (owner, 2026-10-15, D-74): a paper-trading lab, one lead and two lanes, no human in the loop.
+  {
+    key: 'tradingbot',
+    title: 'Tradingbot: program',
+    folder: TRADINGBOT,
+    claudes: ['satria', 'sekar', 'two.claude', 'hasyim', 'fadlilah', 'one.claude'],
+    kickoff: (again, reason) =>
+      `You are the Tradingbot lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live lanes are now yours: session_family)` : ''}: the orchestrator of a paper-trading lab (D-74). You plan, decide, route and merge; you never implement or analyse yourself. No human is in the loop: nobody answers questions, so decide by the rules, write the decision on the ticket and go on; never assign a ticket to the owner or ask him anything (D-62). Read first: ~/work/tradingbot/README.md (the goals) and CLAUDE.md (the rules: PAPER ONLY, never a real order or a key that can trade or withdraw, public data within rate limits, never scrape TradingView's data, the pod limits for installs, tests and long-running processes), and ~/work/claudepilot/docs/dev-sessions/CHARTER.md. Your crew is two long-lived lanes you spawn once each (session_spawn, claude auto, mode dontAsk, report idle, model sonnet, folder ~/work/tradingbot) and keep, giving each its next ticket with session_message: 'Tradingbot Fullstack' (role lane-fullstack: the collectors' code, the paper-trading engine with fees, slippage and latency, the store, the API, the dashboard with TradingView Lightweight Charts, tests, and pilot-browser screenshots at 390 and 1280 px) and 'Tradingbot Analyst' (role lane-analyst: data on intervals from public exchange REST and WebSocket APIs and public sentiment, history, the live market, strategies, backtests out of sample, paper sessions, tooling, and knowledge notes in the vault folder Tradingbot/). At most 2 live workers; never end a lane for lack of work. Tickets: tag tradingbot; your status every ~2 h on T-641. First, in order: (1) write the plan as tickets (collector, paper engine, strategy framework and the first strategies, backtest harness, dashboard v1, sentiment, self-healing run scripts); (2) spawn both lanes with their first tickets at once; (3) reach a working vertical slice soon: live prices into a paper session into a dashboard chart, with screenshots; then (4) improve by measured results only (return, Sharpe or Sortino, drawdown, win rate, fees, exposure, out of sample), and keep the dashboard simple. Self-healing: a dead process is restarted by its script and its cause ticketed. Merge to main only with the evidence of a check by the other lane or you (tests, screenshots, numbers). Commits with Ticket, Pilot-Session and Pilot-Agent trailers.`,
+    nudge: 'Nobody is here to answer. Continue now: look at your tradingbot tickets and your two lanes (session_family): give each lane its next ticket, merge what is checked, restart what died, and post your status on T-641 when it is due. If you asked a question, answer it yourself by the rules in ~/work/tradingbot/CLAUDE.md and go on.',
+    wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your tradingbot tickets, your lanes (session_family), git status in ~/work/tradingbot, and the run scripts (scripts/*.sh status). Nobody is here to answer questions.`,
+  },
 ];
 
 /** D-61: live workers per lead (the memory budget of the shared pod). */
-const LEAD_WORKERS = { orchestrator: 6, konfersi: 7 };
+const LEAD_WORKERS = { orchestrator: 6, konfersi: 7, tradingbot: 2 };
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
