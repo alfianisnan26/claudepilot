@@ -82,7 +82,8 @@ function seed(db) {
     put('result', { text: 'done', costUsd: turn * 0.004, turnCostUsd: 0.004, durationMs: 4000, tokens: { input: 1200, output: 300, cacheRead: 5000, cacheWrite: 100 } });
   }
   // The newest big result: the last tool_result, 400 KB, ending in the marker.
-  const last = rows[results[results.length - 1]];
+  // (the cut-off at EVENTS can drop the last put, so keep only indexes that exist)
+  const last = rows[results.filter((i) => i < rows.length).pop()];
   const lastPayload = JSON.parse(last[3]);
   lastPayload.text = `${bigText(400 * 1024, 'N')}\n${MARKER}`;
   last[3] = JSON.stringify(lastPayload);
