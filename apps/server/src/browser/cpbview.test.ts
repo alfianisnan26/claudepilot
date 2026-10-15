@@ -18,6 +18,8 @@ const CPB = fileURLToPath(new URL('../../../../images/browser/cpb/', import.meta
 const CHROMIUM = process.env.CPB_CHROME_BIN ?? '/usr/bin/chromium';
 const opts = { skip: existsSync(CHROMIUM) ? false : 'Chromium is not installed here' };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** How much longer the waits are on a busy machine: CP_TEST_TIME_SCALE, which scripts/gate.sh sets (1 to 10). */
+const TIME_SCALE = Math.min(10, Math.max(1, Number(process.env.CP_TEST_TIME_SCALE ?? 1) || 1));
 
 const freePort = () =>
   new Promise<number>((resolve) => {
@@ -64,12 +66,16 @@ class View {
   send(m: unknown) {
     this.child.stdin!.write(`${JSON.stringify(m)}\n`);
   }
-  async until<T>(what: string, find: () => T | undefined, ms = 8000): Promise<T> {
+  /** Polls `find` until it answers; the timeout (times CP_TEST_TIME_SCALE) says what was seen: the last events and frames. */
+  async until<T>(what: string | (() => string), find: () => T | undefined, ms = 8000): Promise<T> {
     const t0 = Date.now();
     for (;;) {
       const v = find();
       if (v !== undefined) return v;
-      if (Date.now() - t0 > ms) throw new Error(`timed out waiting for ${what}; events ${JSON.stringify(this.events.slice(-6))}; stderr ${this.stderr.join('').slice(-300)}`);
+      if (Date.now() - t0 > ms * TIME_SCALE) {
+        const frames = this.frames.slice(-4).map((f) => f.header);
+        throw new Error(`timed out waiting for ${typeof what === 'string' ? what : what()}; events ${JSON.stringify(this.events.slice(-6))}; ${this.frames.length} frames, last ${JSON.stringify(frames)}; stderr ${this.stderr.join('').slice(-300)}`);
+      }
       await sleep(40);
     }
   }
@@ -201,8 +207,14 @@ describe('cpb-view', opts, () => {
   test('tabs: a new tab is watched at once, tabs can be switched and closed', async () => {
     await fresh(async (view) => {
     const before = view.frames.length;
+    const first = view.frames.at(-1)!.header.tab;
+    const seen = view.events.length;
     view.send({ t: 'newTab', url: pages.url('/second') });
-    const tabs = await view.until('two tabs', () => view.events.slice(-12).reverse().find((e) => e.e === 'tabs' && (e.tabs as unknown[]).length === 2));
+    // The list can go out while the view is still moving to the new tab (current is the first tab, or null between the
+    // two): only the one that names the new tab as current says which tab the frames will be of (T-272).
+    const tabs = await view.until('two tabs, the new one current', () =>
+      view.events.slice(seen).reverse().find((e) => e.e === 'tabs' && (e.tabs as unknown[]).length === 2 && typeof e.current === 'string' && e.current !== first),
+    );
     const current = tabs.current as string;
     await view.until('frames of the new tab', () => view.frames.slice(before).find((f) => f.header.tab === current));
     const other = (tabs.tabs as { id: string }[]).find((t) => t.id !== current)!;
@@ -248,6 +260,32 @@ describe('cpb-view', opts, () => {
     mark = view.frames.length;
     view.send({ t: 'viewport', reset: true });
     await view.until('reset', () => view.frames.slice(mark).find((f) => !f.header.emu));
+    });
+  });
+
+  test('viewport: every change shows on a still page, and no frame is labelled with a size it does not have', async () => {
+    await fresh(async (view) => {
+      // What was sent when, between the frames: the failure message carries it (T-330), e.g. `W1000x700 >w390 E390x700 >reset W1000x700`.
+      const sent = new Map<number, string[]>();
+      const send = (m: { w?: number; reset?: boolean }) => {
+        sent.set(view.frames.length, [...(sent.get(view.frames.length) ?? []), m.reset ? '>reset' : `>w${m.w}`]);
+        view.send({ t: 'viewport', ...m, ...(m.reset ? {} : { h: 700, dpr: 2, mobile: true }) });
+      };
+      const trace = () =>
+        `trace=${view.frames.map((f, i) => [...(sent.get(i) ?? []), `${f.header.emu ? 'E' : 'W'}${f.header.dw}x${f.header.dh}`].join(',')).join(',')}${(sent.get(view.frames.length) ?? []).map((s) => `,${s}`).join('')}`;
+      // A still page paints nothing by itself: the frame of the new size must come from the view, every time (T-331).
+      for (let i = 0; i < 4; i++) {
+        let mark = view.frames.length;
+        send({ w: 390 + i * 10 });
+        await view.until(() => `phone frame ${i} (${trace()})`, () => view.frames.slice(mark).find((f) => f.header.emu && f.header.dw === 390 + i * 10));
+        mark = view.frames.length;
+        send({ reset: true });
+        await view.until(() => `window frame ${i} (${trace()})`, () => view.frames.slice(mark).find((f) => !f.header.emu && f.header.dw === 1000));
+      }
+      // A frame painted before the change has the old size (seen: `>w400,E1000x613,E400x700`): it is not called emulated (T-330).
+      const asked = [390, 400, 410, 420];
+      assert.equal(view.frames.filter((f) => f.header.emu && !asked.includes(f.header.dw)).length, 0, `no frame called emulated at a size not asked for: ${trace()}`);
+      assert.deepEqual(view.events.filter((e) => e.e === 'error'), [], `no error: ${trace()}`);
     });
   });
 
