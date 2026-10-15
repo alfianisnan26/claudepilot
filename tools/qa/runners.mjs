@@ -36,6 +36,8 @@ try {
       await b.setViewport(w, h, mobile);
       await b.media({ dark });
       await b.goto('/admin/ci?tab=runners', 2500);
+      await b.waitFor(`/Runs on labels/.test(document.body.innerText)`, 15_000, 'runners tab').catch(() => {});
+      console.log(`  info url ${await b.eval('location.href')} body: ${String(await b.eval('document.body.innerText')).replace(/\s+/g, ' ').slice(0, 300)}`);
       let m = await b.eval(METRICS);
       check(`${tag}: empty state reads "No runners" with how to add`, /No runners/.test(m.text) && /runs-on/.test(m.text), m.text.replace(/\s+/g, ' '));
       check(`${tag}: no sideways scroll (empty)`, m.scroll[0] <= m.scroll[1] + 1 && m.over === 0, JSON.stringify([m.scroll, m.over]));
