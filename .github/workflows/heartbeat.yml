@@ -1,6 +1,6 @@
 # External heartbeat (T-315, docs/prd/chat-sessions.md §23.3). The scheduled run starts only once this file is on the
 # default branch (main). GitHub's runners are outside the cluster; if they cannot resolve or reach the portal (private DNS,
-# access rules) every run reports a miss: the next slice moves the probe.
+# access rules) the script calls the probe blind: one heartbeat-blind issue, never a false portal-down; the next slice moves the probe.
 name: heartbeat
 on:
   schedule:
