@@ -1,18 +1,20 @@
-# orchestrator status (2026-10-15 18:11 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-15 18:40 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
 - MERGED ff 275cea5b: T-586, T-486 (S2d+S2e), T-547, T-611, T-548 (gate GREEN 4071aa5, claudepilot-gate-4071aa5-b4a2; 5795-5800).
+- T-610 fixed by the coordinator (f6f76367, 5831): off my queue.
 ## IN FLIGHT (6 of 6, D-71): all sonnet
-- NEXT FREE SLOTS: 1) T-631 blind review (sonnet) of allow entry worktree-deps.sh (coordinator 5790; plan 5804). 2) T-591 S1d.
-  3) FE S1c T-600. 4) T-610.
+- BATCH 2 premerge e48066f (T-561 S1c 0beae29 + T-546 10b22e0; conflicts: migrations 778/779 kept both, PRD FR51 = T-546's + FR79)
+  pushed wip/main-e48066f, GATE RUNNING (job-out/gate-e48066f.log) -> ff integration on green.
+- NEXT FREE SLOTS: 1) T-591 S1d (renumber 783 + M5a test, 5746). 2) T-558 S1b (QA FAIL 5846 -> 5847, from e652c44). 3) FE S1c T-600. 4) T-633 (T-546 mutants).
 - IMPL T-416 S1c 0e5bcf50 (ticket/T-416-s1c): QA 41381bf2 FAIL 5792 (push-bridge test red, race test NO PROOF; S1b claims false) -> 5808.
 - BE INFRA 6d431441 (ticket/T-623-s1b): review 6b97efb4 PASS WITH CONDITIONS 5794 -> rework 5809 (exec into tmpfs, no RBAC; CDP accepted 5803).
 - T-619 browser proof PASS 5793 (screenshots t619-390/1280.png in qa-t-600-ui-r3) -> 5810; #41 release is the coordinator's.
 - T-591 S1c QA PASS WITH GAPS 5741; merge CONFLICT: migration 783 also T-486's -> S1d (renumber + M5a test) 5746, next free slot.
 - T-597 QA FAIL 5727 (sev 2: text after /compact goes unframed) -> decision 5742 -> S1b queued to Backend after T-600 BE.
-- QA PERF 7e4879c7 (lane/cp-qa-perf): T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-558 e652c44; T-426 S1c+S1d, T-623 S1b to the front when DONE.
+- QA PERF 7e4879c7 (lane/cp-qa-perf): on T-631 blind review (read-only, not author; 5790). Next: T-426 S1c+S1d, T-623 S1b when DONE.
 - QA UI b3f769c5 (qa/T-600-ui-r3 32f67b8f): on T-576 ux (2427d98) now; then T-600 re-run after FE S1c (FE S1b FAIL 5721, Pace 2 cols at 1280).
 - BACKEND 4b4edaf8 (ticket/T-600-be from T-600-fe-s1b 32985e2) on T-600 BE (plan 5540); then T-597 S1b; then T-325 S1+S2 (5549).
 - T-619 egress review 2590789a PASS WITH CONDITIONS 5627 (ended) -> coordinator 5629: owner ack on D-60 relax before #41 release; T-624 follow-up.
