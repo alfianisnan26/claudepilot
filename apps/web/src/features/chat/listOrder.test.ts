@@ -109,7 +109,7 @@ test('each session sits under one heading in All: what matters most wins, a calm
   assert.equal(statusOf(s({ state: 'ended', endedReason: 'integrity: the transcript does not match' })), 'attention');
 });
 
-test('All grouped: the headings in the order of attention with their counts, a pinned row leads its heading, a child of another heading says where it came from', () => {
+test('All grouped: the headings in the order of attention with their counts, a pinned row leads its heading, a child of another heading sits under a header for its parent', () => {
   const pin = at(0);
   const parent = s({ id: 'parent', state: 'idle', min: 1 });
   const list = [
@@ -135,9 +135,11 @@ test('All grouped: the headings in the order of attention with their counts, a p
   const rows = (key: string) => view.groups.find((g) => g.key === key)!.rows.map((r) => r.session.id);
   assert.deepEqual(rows('working'), ['working-pinned', 'working'], 'the pinned row leads, though older');
   assert.deepEqual(rows('idle'), ['idle-new', 'parent']);
-  const child = view.groups[0]!.rows[0]!;
-  assert.equal(child.session.id, 'child-waiting');
-  assert.equal(child.parentTitle, parent.title, 'its parent is under another heading');
+  // Its parent is under another heading: it sits under a header for it (T-369), which the heading does not count.
+  const header = view.groups[0]!.rows[0]!;
+  assert.deepEqual([header.session.id, header.context], ['parent', true]);
+  assert.equal(header.children[0]!.session.id, 'child-waiting');
+  assert.equal(header.children[0]!.parentTitle, null);
   assert.equal(view.groups.find((g) => g.key === 'idle')!.rows[1]!.rollup?.waiting, 1, 'the parent still counts what it started');
 });
 

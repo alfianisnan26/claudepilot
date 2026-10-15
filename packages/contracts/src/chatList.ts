@@ -42,8 +42,14 @@ export interface ListRow {
   earlier: boolean;
   /** Its workspace was removed: nothing can resume it, and what it needs from the workspace is off. */
   workspaceGone: boolean;
-  /** Its parent is shown elsewhere (another group, or filtered out): the title to show as "from …". */
+  /** Its parent is shown elsewhere and archived, so it has no lead header here: the title to show as "from …". */
   parentTitle: string | null;
+  /**
+   * A lead header (T-369): the lead of sessions in this group, brought in because it is not among the group's rows (it does not match the
+   * chip or the search, or sits under another heading) and is not archived. Context, not a match: it is not in the group's count, Select all
+   * does not take it, it has no swipe, checkbox or ⋯. Its `children` are its workers in the group.
+   */
+  context: boolean;
 }
 
 export interface ListGroup {
@@ -96,9 +102,32 @@ export function attentionTier(s: ChatSession): number {
   return 4;
 }
 
+/** By need, then the latest activity. */
+const byNeed = (a: ChatSession, b: ChatSession) => attentionTier(a) - attentionTier(b) || Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt);
+
 /** Pinned first, then by need, then the latest activity. */
-const byUrgency = (a: ChatSession, b: ChatSession) =>
-  Number(!!b.pinnedAt) - Number(!!a.pinnedAt) || attentionTier(a) - attentionTier(b) || Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt);
+const byUrgency = (a: ChatSession, b: ChatSession) => Number(!!b.pinnedAt) - Number(!!a.pinnedAt) || byNeed(a, b);
+
+/** Done: ended, and not for a safety stop (that one needs you). */
+const done = (s: ChatSession) => s.state === 'ended' && !needsYou(s);
+
+/** The sessions nested under a row that are rows of the group (a lead header is not), however deep. */
+const membersUnder = (r: ListRow): ChatSession[] => r.children.flatMap((c) => [...(c.context ? [] : [c.session]), ...membersUnder(c)]);
+
+/**
+ * The session a row is ordered by (T-369). A lead with live workers under it goes by the most urgent of them, and by itself only when it
+ * needs you, so a lead that flips between Idle and Working does not move its tree, and a lead header (`context`) sits where its first
+ * worker would sit. Any other row goes by itself; a header whose workers are all done, by the most urgent of them.
+ */
+function orderedBy(r: ListRow): ChatSession {
+  const below = membersUnder(r);
+  const live = below.filter((s) => !done(s));
+  const pool = r.context ? (live.length ? live : below) : live.length ? (needsYou(r.session) ? [r.session, ...live] : live) : [r.session];
+  return [...pool].sort(byNeed)[0] ?? r.session;
+}
+
+/** Rows (a lead header too) in a group's order: a pinned lead first, then by need and the latest activity of what each is ordered by. */
+const byRow = (a: ListRow, b: ListRow) => Number(!!b.session.pinnedAt) - Number(!!a.session.pinnedAt) || byNeed(orderedBy(a), orderedBy(b));
 
 const knownLabels = new Map<string, string>();
 
@@ -174,8 +203,9 @@ function rollupOf(root: ChatSession, kids: ReadonlyMap<string, ChatSession[]>): 
 
 /**
  * The list the page shows. Order inside a group is by need (FR2), nested under parents that are in the
- * same group; a session whose parent is shown elsewhere stays at the top of its group and says where it
- * came from. Groups are ordered by their most urgent session; "no ticket" and "no worktree" come last.
+ * same group; a session whose parent is not in the group sits under a lead header for that parent (T-369,
+ * `context`), or, when the parent is archived, at the top of its group saying where it came from. Groups
+ * are ordered by their most urgent session; "no ticket" and "no worktree" come last.
  */
 export function buildListView(all: readonly ChatSession[], opts: ListOptions = {}): ListView {
   const { groupBy = 'none', filter = 'all', query = '', archived = false, workspaces, groupOf } = opts;
@@ -215,6 +245,7 @@ export function buildListView(all: readonly ChatSession[], opts: ListOptions = {
     earlier: false,
     workspaceGone: !!workspaces?.(s.workspaceId)?.gone,
     parentTitle: null,
+    context: false,
   });
 
   // Rows per group, then nest.
@@ -231,10 +262,19 @@ export function buildListView(all: readonly ChatSession[], opts: ListOptions = {
     const ordered = [...g.sessions].sort(byUrgency);
     const inGroup = new Set(ordered.map((s) => s.id));
     const rows = new Map<string, ListRow>();
+    for (const s of ordered) rows.set(s.id, makeRow(s));
+    // T-369: a session whose lead the list has but this group does not shows under a lead header (the tree always shows); one whose lead
+    // is archived names it as "from …" instead. One header per lead, never a header for a header: a header nests under its own lead only when
+    // that lead is here already (a row, or the header of another of its workers).
+    const headers: ChatSession[] = [];
     for (const s of ordered) {
-      const row = makeRow(s);
-      row.parentTitle = s.parentId && byId.has(s.parentId) && !inGroup.has(s.parentId) ? byId.get(s.parentId)!.title || 'another session' : null;
-      rows.set(s.id, row);
+      const lead = s.parentId && s.parentId !== s.id ? byId.get(s.parentId) : undefined;
+      if (!lead || inGroup.has(lead.id)) continue;
+      if (lead.archivedAt) rows.get(s.id)!.parentTitle = lead.title || 'another session';
+      else if (!rows.has(lead.id)) {
+        rows.set(lead.id, { ...makeRow(lead), context: true });
+        headers.push(lead);
+      }
     }
     const top: ListRow[] = [];
     // Nesting under a parent that is itself nested under this session would hide both: that one stays on top.
@@ -246,17 +286,21 @@ export function buildListView(all: readonly ChatSession[], opts: ListOptions = {
       }
       return false;
     };
-    for (const s of ordered) {
+    for (const s of [...ordered, ...headers]) {
       const row = rows.get(s.id)!;
       const parentRow = s.parentId ? rows.get(s.parentId) : undefined;
       if (parentRow && parentRow !== row && !underItself(s)) parentRow.children.push(row);
       else top.push(row);
     }
+    const sortTree = (list: ListRow[]): ListRow[] => {
+      for (const r of list) sortTree(r.children);
+      return list.sort(byRow);
+    };
     groups.push({
       key,
       title: g.meta.title,
       subtitle: g.meta.subtitle,
-      rows: top,
+      rows: sortTree(top),
       count: ordered.length,
       waiting: ordered.filter((s) => s.waiting > 0 || s.state === 'waiting').length,
     });
@@ -277,10 +321,9 @@ export function buildListView(all: readonly ChatSession[], opts: ListOptions = {
       }
     }
   }
-  // Groups ordered by their most urgent session; the "none of" groups last.
-  const real = (g: ListGroup) => g.rows.filter((r) => !r.earlier);
-  const rank = (g: ListGroup) => Math.min(5, ...real(g).map((r) => attentionTier(r.session)), ...real(g).flatMap((r) => r.children.map((c) => attentionTier(c.session))));
-  const newest = (g: ListGroup) => Math.max(...g.rows.map((r) => Date.parse(r.session.lastActivityAt)));
+  // Groups ordered by their most urgent session; the "none of" groups last. A lead header is not a session of its group.
+  const rank = (g: ListGroup) => Math.min(5, ...members.get(g.key)!.sessions.map(attentionTier));
+  const newest = (g: ListGroup) => Math.max(...g.rows.flatMap((r) => (r.context ? r.children : [r])).map((r) => Date.parse(r.session.lastActivityAt)));
   const order = (g: ListGroup) => members.get(g.key)!.meta.order ?? 0;
   groups.sort((a, b) => order(a) - order(b) || Number(members.get(a.key)!.meta.last) - Number(members.get(b.key)!.meta.last) || rank(a) - rank(b) || newest(b) - newest(a) || a.title.localeCompare(b.title));
 

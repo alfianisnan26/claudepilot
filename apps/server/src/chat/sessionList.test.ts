@@ -150,15 +150,24 @@ test('tree: a session started by another is nested under it, a parent shows a ro
   assert.equal(rollupLine(boss.rollup), '4 started · 1 needs you · 1 working · 1 idle · 1 ended');
   assert.equal(rollupLine(null), null);
 
-  // Grouped by workspace, the far worker sits in its own workspace and names the coordinator.
+  // Grouped by workspace, the far worker sits in its own workspace under a header for the coordinator (T-369), which is not counted.
   const grouped = buildListView(list, { groupBy: 'workspace' });
   const web = grouped.groups.find((g) => g.title === 'web')!;
-  assert.deepEqual(ids(web.rows), ['far']);
-  assert.equal(web.rows[0]!.parentTitle, 'Coordinator');
-  // A filter that hides the parent leaves the child at the top, still naming it.
+  assert.deepEqual(ids(web.rows), ['boss']);
+  assert.equal(web.rows[0]!.context, true);
+  assert.deepEqual(ids(web.rows[0]!.children), ['far']);
+  assert.equal(web.rows[0]!.children[0]!.parentTitle, null, 'a header, not “from”');
+  assert.equal(web.count, 1);
+  // A filter that hides the parent: the child under a header for it.
   const waitingOnly = buildListView(list, { filter: 'attention' });
-  assert.deepEqual(ids(waitingOnly.groups[0]!.rows), ['w1']);
-  assert.equal(waitingOnly.groups[0]!.rows[0]!.parentTitle, 'Coordinator');
+  assert.deepEqual(ids(waitingOnly.groups[0]!.rows), ['boss']);
+  assert.deepEqual(ids(waitingOnly.groups[0]!.rows[0]!.children), ['w1']);
+  assert.equal(waitingOnly.groups[0]!.count, 1);
+  // Its parent archived: no header, the child names it.
+  const archivedBoss = list.map((x) => (x.id === 'boss' ? { ...x, archivedAt: new Date().toISOString() } : x));
+  const orphan = buildListView(archivedBoss, { filter: 'attention' }).groups[0]!.rows;
+  assert.deepEqual(ids(orphan), ['w1']);
+  assert.equal(orphan[0]!.parentTitle, 'Coordinator');
 });
 
 test('a chat that moved shows once under its current Claude and as "ran here earlier" under the others, and sessions of removed workspaces are marked', () => {
