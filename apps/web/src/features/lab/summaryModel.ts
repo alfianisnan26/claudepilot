@@ -9,6 +9,12 @@ import { basisLabel, fmtFigure, fmtPerHour, reasonText, UNAVAILABLE, type BasisL
 export const PACE_LOW = 0.9;
 export const PACE_HIGH = 1.1;
 
+/**
+ * Columns of the five figures follow the width of the card they sit in (container query), not the viewport:
+ * the Home Pace card is about 415 px wide at 1280 px. 2 columns below 384 px, 3 up to 576 px, 5 from there.
+ */
+export const SUMMARY_GRID_CLASS = 'grid grid-cols-2 gap-x-3 gap-y-3 pb-3 @sm:grid-cols-3 @xl:grid-cols-5';
+
 export type SummaryKey = 'pace' | 'usage' | 'resolved' | 'perCost' | 'createdPerClosed';
 export type Trend = 'up' | 'down' | 'same';
 

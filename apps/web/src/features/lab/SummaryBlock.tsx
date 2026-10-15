@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { UNAVAILABLE, type TileState } from './scorecardModel';
-import { summaryLists, summaryTiles, TREND_WORD, type SummaryTile, type Trend } from './summaryModel';
+import { SUMMARY_GRID_CLASS, summaryLists, summaryTiles, TREND_WORD, type SummaryTile, type Trend } from './summaryModel';
 
 const STATE_CLASS: Record<TileState, string> = {
   ok: 'text-ink',
@@ -46,8 +46,8 @@ export function SummaryTileView({ t }: { t: SummaryTile }) {
 export function SummaryView({ summary, expandable = true }: { summary: CrewSummary; expandable?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
-    <div data-crew-summary="">
-      <dl className={`grid grid-cols-2 gap-x-3 gap-y-3 pb-3 sm:grid-cols-3 lg:grid-cols-5 ${expandable ? 'px-4 pt-3' : 'pt-1'}`}>
+    <div data-crew-summary="" className="@container">
+      <dl className={`${SUMMARY_GRID_CLASS} ${expandable ? 'px-4 pt-3' : 'pt-1'}`}>
         {summaryTiles(summary).map((t) => (
           <SummaryTileView key={t.key} t={t} />
         ))}
