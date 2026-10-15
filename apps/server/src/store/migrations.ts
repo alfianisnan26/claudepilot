@@ -3201,6 +3201,21 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 782,
+    name: 'CI: the upstream a remote follows, and its last sync (T-486)',
+    up(db) {
+      // T-486 (local-git-ci PRD FR8a): a pilot remote may follow an https upstream (GitHub or Gitea). `upstream_secret` is a Secrets & env
+      // NAME, never a value. `upstream_state` is the last sync's JSON (when, error, diverged and ahead branches, branches gone upstream).
+      // Null on every row so far: no remote follows anything, as before.
+      db.exec(`
+        ALTER TABLE ci_repos ADD COLUMN upstream_url TEXT;
+        ALTER TABLE ci_repos ADD COLUMN upstream_secret TEXT;
+        ALTER TABLE ci_repos ADD COLUMN upstream_every_s INTEGER;
+        ALTER TABLE ci_repos ADD COLUMN upstream_state TEXT;
+      `);
+    },
+  },
+  {
     version: 773,
     name: 'chat sessions: the agent a session runs as (T-294)',
     up(db) {

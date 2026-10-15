@@ -4,6 +4,7 @@
 import type { Store } from '../store/store.js';
 import { toolApprovalAttentionSource } from '../chat/attention.js';
 import { ciAttentionSource } from '../ci/attention.js';
+import { upstreamAttentionSource } from '../ci/upstreamAttention.js';
 import { keepGoingAttentionSource } from '../keepgoing/attention.js';
 import { mcpAttentionSource } from '../mcp/attention.js';
 import { personaAttentionSource } from '../personas/attention.js';
@@ -29,5 +30,6 @@ export function createAttention(store: Pick<Store, 'db'>, opts: AttentionOptions
   registry.register(toolApprovalAttentionSource(db));
   registry.register(keepGoingAttentionSource(db));
   registry.register(personaAttentionSource(db));
+  registry.register(upstreamAttentionSource(db));
   return registry;
 }

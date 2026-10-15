@@ -42,6 +42,7 @@ import {
   type BumpTarget,
   type CiAutoApproveMode,
   type UpdateCiAutoApproveRequest,
+  type CiUpstreamSyncResult,
 } from '@portal/contracts';
 import { NO_VALUES, SessionStream } from '../chat/valueRedact.js';
 import { evaluateRule, needsPersonOf, ruleLine, WINDOW } from './autoApprove.js';
@@ -59,6 +60,7 @@ import type { CiTicketsPort } from './tickets.js';
 import { cleanLog, oneLine, redactSecrets } from './text.js';
 import { flakyComment, flakyDescription, flakyExcerpt, flakyTitle, parseFlaky, repoTag, type FlakySighting } from './flaky.js';
 import type { CiEventFile, Plan } from './plan.js';
+import { checkUpstream, defaultLookup, nextState, readState, upstreamPin, upstreamView, type Lookup, type SyncReply } from './upstream.js';
 
 /** The flaky rows of a run, per job: the count and the distinct tickets, in order. */
 function flakyOfJobs(rows: { job: string; ticket_id: string | null }[]): CiRunFlaky[] {
@@ -162,6 +164,10 @@ export interface CiServiceOptions {
   audit?: (e: { kind: string; actor: string; userId: string | null; severity?: 'info' | 'medium' | 'high'; subject?: string; detail?: Record<string, unknown> }) => void;
   /** The clock of the auto-approve rule (its daily cap and window, FR41a); tests pass a fake one. */
   now?: () => Date;
+  /** Upstream sync (FR8a): how a host name resolves for the SSRF guard (default: the system's resolver); tests pass a fake one. */
+  lookup?: Lookup;
+  /** Upstream sync: the only hosts an upstream may be on. Unset: any host whose every address is public. */
+  upstreamHosts?: readonly string[];
 }
 
 /** Who decided something a person must decide (an approval, a protection change): the actor string for records and the user for the audit. */
@@ -193,7 +199,10 @@ export class CiService {
   onChange?: () => void;
   hooks: CiHooks = {};
   readonly #cs: CiStore;
-  readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'audit'>> & Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'audit'>;
+  readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'audit' | 'upstreamHosts'>> & Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'audit' | 'upstreamHosts'>;
+  /** Upstream sync: when each remote last tried (ms), and the sync in flight per remote (one at a time). */
+  readonly #upstreamAt = new Map<string, number>();
+  readonly #syncing = new Map<string, Promise<SyncReply>>();
   /** The auto-approve rule's evaluations in flight (dry mode), so a test or a shutdown can wait for them. */
   readonly #ruling = new Set<Promise<void>>();
   /** Runs with an approval being decided right now: one decision at a time per run. */
@@ -232,6 +241,8 @@ export class CiService {
       secrets: opts.secrets,
       audit: opts.audit,
       now: opts.now ?? (() => new Date()),
+      lookup: opts.lookup ?? defaultLookup,
+      upstreamHosts: opts.upstreamHosts,
     };
   }
 
@@ -315,6 +326,8 @@ export class CiService {
     // Stopped: events wait on the volume and are read after the next start. Gone: its runs stay as history.
     if (state !== 'running') return;
     await this.host.install(workspaceId);
+    // Upstream sync (FR8a) first: the events it writes are read by this same poll.
+    await this.#upstreams(workspaceId);
     const following = this.#cs.runningRuns(workspaceId);
     const acks = this.#acks.get(workspaceId) ?? [];
     const args = ['poll'];
@@ -353,6 +366,96 @@ export class CiService {
         this.#changed();
       }
     }
+  }
+
+  /* ---------- Upstream sync (FR8a, T-486) ---------- */
+
+  /** Each remote of the workspace that follows an upstream and is due: one sync. A failure is kept on the remote, never fails the poll. */
+  async #upstreams(workspaceId: string): Promise<void> {
+    const now = Date.now();
+    for (const repo of this.#cs.repos(workspaceId)) {
+      if (!repo.upstream_url) continue;
+      const every = (repo.upstream_every_s ?? 30) * 1000;
+      if ((this.#upstreamAt.get(repo.id) ?? 0) + every > now) continue;
+      await this.#sync(repo, null).catch(() => undefined);
+    }
+  }
+
+  /** One sync of a remote, shared with a call that comes while it runs. */
+  #sync(repo: RepoRow, by: CiDecider | null): Promise<SyncReply> {
+    const running = this.#syncing.get(repo.id);
+    if (running) return running;
+    this.#upstreamAt.set(repo.id, Date.now());
+    const p = this.#syncOnce(repo, by).finally(() => this.#syncing.delete(repo.id));
+    this.#syncing.set(repo.id, p);
+    return p;
+  }
+
+  async #syncOnce(repo: RepoRow, by: CiDecider | null): Promise<SyncReply> {
+    const url = repo.upstream_url!;
+    const prev = readState(repo.upstream_state);
+    const at = new Date().toISOString();
+    const fail = (message: string): never => {
+      const error = oneLine(this.#redact(repo.workspace_id, message))?.slice(0, 300) ?? 'The sync failed.';
+      if (prev.error !== error) {
+        this.#cs.updateRepo(repo.id, { upstream_state: JSON.stringify({ ...prev, at, error }) });
+        this.#changed();
+      }
+      throw new AppError('SERVICE_UNAVAILABLE', error, { expose: true });
+    };
+    // The SSRF guard, before every sync: the host may resolve elsewhere now. git is pinned to the address checked here.
+    let pin: string;
+    try {
+      pin = await upstreamPin(url, this.#opts.lookup, this.#opts.upstreamHosts);
+    } catch (e) {
+      return fail((e as Error).message);
+    }
+    const args = ['repo', 'sync', repo.name, '--url', url, '--pin', pin];
+    if (repo.upstream_secret) args.push('--secret', repo.upstream_secret);
+    let r: CiReply;
+    try {
+      r = await this.host.cp(repo.workspace_id, args, { timeoutMs: 660_000 });
+    } catch (e) {
+      return fail((e as Error).message);
+    }
+    if (!r.ok) return fail(String(r.message ?? r.error ?? 'The sync failed.'));
+    const reply: SyncReply = {
+      moved: Array.isArray(r.moved) ? (r.moved as SyncReply['moved']) : [],
+      diverged: Array.isArray(r.diverged) ? (r.diverged as SyncReply['diverged']) : [],
+      ahead: Array.isArray(r.ahead) ? (r.ahead as string[]) : [],
+      deleted: Array.isArray(r.deleted) ? (r.deleted as string[]) : [],
+      onlyHere: Array.isArray(r.onlyHere) ? (r.onlyHere as string[]) : [],
+    };
+    const next = nextState(prev, reply, at);
+    const shown = (s: typeof prev) => JSON.stringify({ ...s, at: null });
+    this.#cs.updateRepo(repo.id, { upstream_state: JSON.stringify(next) });
+    if (reply.moved.length) {
+      // Names, counts and shas only: the URL is the person's setting, the secret only its name; never a value.
+      this.#opts.audit?.({
+        kind: 'ci.upstream_synced',
+        actor: by?.actor ?? 'upstream',
+        userId: by?.userId ?? null,
+        subject: `ci_repo:${repo.id}`,
+        detail: { workspace: repo.workspace_id, repo: repo.name, moved: reply.moved.length, branches: reply.moved.slice(0, 20).map((m) => ({ branch: m.branch, old: m.old, new: m.new })) },
+      });
+      this.kick(repo.workspace_id);
+    }
+    if (reply.moved.length || shown(prev) !== shown(next)) this.#changed();
+    return reply;
+  }
+
+  #redact(workspaceId: string, text: string): string {
+    const r = this.#opts.redactFor?.(workspaceId);
+    return redactSecrets(r ? r(text) : text);
+  }
+
+  /** `POST /api/ci/repos/:id/sync`: sync now (the Needs you item's action). */
+  async syncUpstream(id: string, by: CiDecider | null): Promise<CiUpstreamSyncResult> {
+    const repo = this.#needRepo(id);
+    if (!repo.upstream_url) throw new AppError('CONFLICT', 'This remote follows no upstream.');
+    await this.#running(repo.workspace_id);
+    const reply = await this.#sync(repo, by);
+    return { moved: reply.moved, repo: await this.repo(repo.id) };
   }
 
   /* ---------- Events become runs ---------- */
@@ -1267,6 +1370,7 @@ export class CiService {
       hooks: (['ok', 'outdated', 'missing'] as const).find((h) => h === row.hook_state) ?? 'unknown',
       workspaceState: map.get(row.workspace_id) ?? 'gone',
       createdAt: row.created_at,
+      upstream: upstreamView(row),
     };
   }
 
@@ -1315,9 +1419,30 @@ export class CiService {
     return this.repo(row.id);
   }
 
-  async updateRepo(id: string, req: Partial<UpdateCiRepoRequest>): Promise<CiRepo> {
+  /** `by`: the person changing it; the upstream (FR8a) is a person's setting only, and is audited. */
+  async updateRepo(id: string, req: Partial<UpdateCiRepoRequest>, by?: CiDecider): Promise<CiRepo> {
     const repo = this.#needRepo(id);
     const patch: Parameters<CiStore['updateRepo']>[1] = {};
+    let audit: { kind: string; detail: Record<string, unknown> } | null = null;
+    if (req.upstream !== undefined) {
+      if (!by) throw new AppError('FORBIDDEN', 'Only a person signed in to the portal can do this.');
+      if (req.upstream === null) {
+        Object.assign(patch, { upstream_url: null, upstream_secret: null, upstream_every_s: null, upstream_state: null });
+        if (repo.upstream_url) audit = { kind: 'ci.upstream_cleared', detail: { repo: repo.name, url: repo.upstream_url } };
+      } else {
+        const u = checkUpstream(req.upstream);
+        // The SSRF guard on set too, so a refused host is said at once, not by the first sync.
+        await upstreamPin(u.url, this.#opts.lookup, this.#opts.upstreamHosts);
+        if (u.secret && this.#opts.secrets) {
+          const info = this.#opts.secrets(repo.workspace_id, u.secret);
+          if (!info?.asFile) throw invalid('upstream.secret', `${u.secret} does not reach this workspace as a file. Assign it in Secrets & env as a secret or a tool login.`);
+        }
+        const changed = u.url !== repo.upstream_url;
+        Object.assign(patch, { upstream_url: u.url, upstream_secret: u.secret, upstream_every_s: u.everyS, ...(changed ? { upstream_state: null } : {}) });
+        audit = { kind: 'ci.upstream_set', detail: { repo: repo.name, url: u.url, secret: u.secret, everyS: u.everyS } };
+      }
+      this.#upstreamAt.delete(repo.id);
+    }
     if (req.defaultBranch !== undefined) {
       if (typeof req.defaultBranch !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$/.test(req.defaultBranch)) throw invalid('defaultBranch', 'A branch name.');
       patch.default_branch = req.defaultBranch;
@@ -1327,7 +1452,9 @@ export class CiService {
       patch.protected = JSON.stringify([...new Set(req.protected)]);
     }
     this.#cs.updateRepo(repo.id, patch);
+    if (audit && by) this.#opts.audit?.({ kind: audit.kind, actor: by.actor, userId: by.userId, severity: 'medium', subject: `ci_repo:${repo.id}`, detail: { workspace: repo.workspace_id, ...audit.detail } });
     this.#changed();
+    if (req.upstream) this.kick(repo.workspace_id);
     return this.repo(repo.id);
   }
 
