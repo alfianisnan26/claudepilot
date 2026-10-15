@@ -14,12 +14,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   caught, 5419; 2ae78a99 ended): review PASS W/ COND (5456) -> S2 fc9ce1d DONE (5464; 813992cf ended) -> premerge
   wip/main-5b66aa0, gate GREEN gate-5b66aa0-44ef (suite 559 s, peak 2172Mi) -> QA Perf after T-548 -> ff integration (no deploy).
   T-486 S2d 2979f99: QA Perf PASS WITH GAPS 5548 (junk drains the global 120/min bucket -> signed hook 429). Decision 5551: S2e fix
-  -> BACKEND LANE now (lead merged 2979f99 into its branch = 0004ac5; merge order T-546 first) -> QA Perf re-probe -> gate + merge. QA Perf T-426: lead merged ab93b54 into
-  lane/cp-qa-perf = 7fbbe4c (lane cannot merge/archive); if its ff pull is refused too -> one-off QA worker on T-426.
+  -> BACKEND LANE 74a8d857 (respawned, sonnet, ticket/T-486-s2e-bucket from 2979f99) -> QA Perf re-probe -> gate + merge. QA Perf on T-426 at 7fbbe4c (lead merge, its ff worked).
   T-548 S1 9b822ba + T-591 S1 bf932c3: blind review 9651c9fa (ended) PASS W/ COND both (5512/5513; sev 2 vault authz on T-591). Decisions
   5514/5515: S1b fixes. IMPL 4ba6c5db (impl-t591-s1b, sonnet, ticket/T-591-s1b-review). T-548 S1b = one-off sonnet at next free slot.
-  LANE 5f8f392b "ClaudePilot Backend" (lane-backend, sonnet, ticket/T-546-crew-digest): T-546 DONE 10b22e0 (5535; mutation caught) -> QA Perf.
-  PLANNED T-600 BE 5540, T-597 5546, T-325 5547 (S1+S2 only, 5549). Builds after the lead merges FE 7d19c94 into its branch (T-595 workaround). LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
+  Backend 5f8f392b ENDED (ff refused): T-546 DONE 10b22e0 (5535) -> QA Perf; merge 10b22e0, not the branch head 0004ac5 (has S2d).
+  PLANNED T-600 BE 5540, T-597 5546, T-325 5547 (S1+S2 only, 5549). T-600 BE: respawn Backend on a branch from FE 7d19c94 after QA UI. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
   ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); T-556 PLANNED 5497 (one "Upstream" dialog, 4 fields: no upstream UI exists);
   builds after T-486 merges + T-595. QA UI then T-576 ux. 5 of 5: QA Perf, Backend, Frontend, QA UI, impl-t591-s1b.
   Jobs: each agent starts its own (15:29). Still to place: T-558 QA (e652c44, 5052). No prettier/eslint in Jobs (T-612).
@@ -41,7 +40,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   by session_message, never ended for lack of work: CP Backend -> CP QA Perf -> CP Frontend -> CP QA UI -> 5th = blind reviewer.
   Every delivery goes to its side's QA lane before merge. T-591 S1 stays with eaec4cc5, then Backend. T-595 5389: the LEAD makes each ticket's
   worktree+branch and gives the lane the path. 15:19 CONFIRMED refused (5443): no lane can take a 2nd ticket; coordinator asked (a/b/c);
-  16:20 PATH FOUND (T-595 5552): lead merges the base into the lane's spawn branch + plain push; lane `git merge --ff-only` WORKS.
+  16:25 (T-595 5552/5553): QA Perf may `git merge --ff-only` a base the lead pushed; lane-backend may NOT. An implementing lane
+  needing a new base is ended and respawned as the same lane on a fresh branch from that base.
 - 15:50 Workspace restarted 13:46 UTC; 03c496b6 (T-546, mid-Jobs) and cee43422 (T-486 port, WAITING 3cb0883) are gone, all branches
   pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster, finishes by itself. 14:05 Coordinator AWAY (owner offline): restart POSTPONED, long work OK, Mac runner off.
   BINDING: the coordinator runs deploys (#38-#40); I start NO deploy. (Old T-546/T-486 workers replaced.)
