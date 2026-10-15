@@ -548,7 +548,7 @@ A session's own tools for a crew (agent scope, [Chat sessions](chat-sessions.md)
 busy first; with none, T-427, another Claude, the least used now of those with more than 10 % left (the auto move's default
 threshold), none above ceil((sessions + 1) / Claudes) + 1 sessions not ended (asleep ones count: a message wakes them), why
 `no_room_lowest`; its own only when no other qualifies), `role` (the worker runs as `.claude/agents/<role>.md`), `model` (default: the
-role's model in the workspace persona, T-490), `why` (T-490, D-63: required for opus or fable on a role whose model is below opus, else
+role's model in the workspace persona, T-490), `why` (T-490, D-63: required on a role whose model is below opus for any model but a sonnet or haiku alias or id (`sonnet`, `claude-haiku-*`, `[1m]` suffix allowed; so opus, fable, `default`, `opusplan`, `best` and an unknown id need it), else
 `VALIDATION_FAILED` naming D-63; kept as the worker's `spawnWhy`; the result says `model` and `why`), `effort`, `mode` (`default`, `plan`,
 `dontAsk`), `ticket` (`T-<n>`: the worker's ticket, the field usage attribution reads, so its cost counts under that ticket;
 none means "No ticket"; a malformed id or a ticket that does not exist is refused as `NOT_FOUND` and starts nothing, T-449;

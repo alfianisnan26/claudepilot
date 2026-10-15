@@ -199,18 +199,21 @@ export const SPAWN_FLOOR_PCT = 10;
 /** What a worker may be told to run on: `same` (its parent's Claude, the default), `auto`, or a Claude's name or id. */
 export const SPAWN_CLAUDE_HELP = 'same (your Claude, the default), auto (a Claude of this workspace with room by a fresh, measured reading, the least busy first; with none, the least used now), or a Claude’s name';
 
+/** T-490 (D-63): a sonnet or haiku alias or id, with an optional `[1m]`-style suffix: what a role below opus may start on without a why. */
+const BELOW_OPUS_MODEL = /^(?:sonnet|haiku|claude-(?:sonnet|haiku)-[a-z0-9._-]+)(?:\[[a-z0-9]+\])?$/i;
+
 /**
  * T-490 (D-63): the model a worker starts on, from what its lead asked and its role's model (the workspace persona's agent definition).
  * - No model asked: the role's model (`fromRole`), or none when the role has none known (Claude Code's own default, as before).
- * - A model asked: kept, except that a role on a model below opus (QA and review roles run on sonnet) started on opus or fable needs a
- *   reason (`why`): without one it is refused, naming D-63, before anything starts. A model of no known family is kept as asked.
+ * - A model asked: for a role on a model below opus (QA and review roles run on sonnet) an allow list: only a sonnet or haiku alias or id
+ *   (`sonnet`, `haiku[1m]`, `claude-sonnet-*`) starts without a reason. Anything else (opus, fable, `default` and `opusplan` and `best`,
+ *   which can resolve to opus, an unknown id) needs `why`, else it is refused, naming D-63, before anything starts. Other roles: kept.
  */
 export function spawnModel(role: string | null, roleModel: string | null, asked: string | null, why: string | null): { model: string | null; fromRole: boolean } {
   if (!asked) return { model: roleModel, fromRole: !!roleModel };
   const opus = modelInfo('opus')!.rank;
   const roleRank = modelInfo(modelFamilyOf(roleModel))?.rank ?? null;
-  const askedRank = modelInfo(modelFamilyOf(asked))?.rank ?? null;
-  if (role && roleRank !== null && roleRank < opus && askedRank !== null && askedRank >= opus && !why?.trim()) {
+  if (role && roleRank !== null && roleRank < opus && !BELOW_OPUS_MODEL.test(asked.trim()) && !why?.trim()) {
     throw new AppError(
       'VALIDATION_FAILED',
       `D-63: the ${role} role runs on ${roleModel}. Give why (a gate, release or security check, or a slice too large for ${roleModel}) to start it on ${asked}, or leave model out to use ${roleModel}.`,

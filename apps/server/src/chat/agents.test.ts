@@ -427,7 +427,7 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
   }
 });
 
-test('spawnModel (T-490, D-63): the role’s model by default; opus or fable above a role on sonnet only with a why; other asks kept', () => {
+test('spawnModel (T-490, D-63): the role’s model by default; on a role below opus only a sonnet or haiku id needs no why (opus, fable, default, opusplan, an unknown id do)', () => {
   const refused = (f: () => unknown) => {
     try {
       f();
@@ -446,7 +446,17 @@ test('spawnModel (T-490, D-63): the role’s model by default; opus or fable abo
   assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'haiku', null), { model: 'haiku', fromRole: false }, 'below is never refused');
   assert.deepEqual(spawnModel('implementer', 'opus', 'fable', null), { model: 'fable', fromRole: false }, 'a role on opus is not D-63’s');
   assert.deepEqual(spawnModel('implementer', null, 'opus', null), { model: 'opus', fromRole: false }, 'a role with no model: the model asked, unchanged');
-  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'some-other-model', null), { model: 'some-other-model', fromRole: false }, 'a family nobody knows is kept');
+  assert.match(refused(() => spawnModel('qa-verifier', 'sonnet', 'some-other-model', null)), /^D-63: /, 'an unknown id needs a why');
+  assert.match(refused(() => spawnModel('qa-verifier', 'sonnet', 'default', null)), /^D-63: .*start it on default/, 'default can resolve to opus');
+  assert.match(refused(() => spawnModel('reviewer', 'sonnet', 'opusplan', null)), /^D-63: /);
+  assert.match(refused(() => spawnModel('reviewer', 'sonnet', 'best', null)), /^D-63: /);
+  assert.match(refused(() => spawnModel('reviewer', 'sonnet', 'sonnet-or-opus', null)), /^D-63: /, 'not a bare alias');
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'claude-sonnet-4-6', null), { model: 'claude-sonnet-4-6', fromRole: false });
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'sonnet[1m]', null), { model: 'sonnet[1m]', fromRole: false });
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'claude-haiku-4-5', null), { model: 'claude-haiku-4-5', fromRole: false });
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'default', 'release gate'), { model: 'default', fromRole: false }, 'default with a why');
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'some-other-model', 'a check'), { model: 'some-other-model', fromRole: false });
+  assert.deepEqual(spawnModel('implementer', 'opus', 'default', null), { model: 'default', fromRole: false }, 'a role on opus is not D-63’s');
 });
 
 test('T-490 (D-63) over MCP: a QA role starts on its role’s model; opus with no why is refused before anything starts; with a why it starts and keeps it; a role with no model keeps the one asked', async () => {
