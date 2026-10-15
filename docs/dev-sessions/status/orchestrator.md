@@ -13,7 +13,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   prettier/eslint in the Job): ux BLOCKED (a `folder` spawn gets no Bash; 5368) until T-586 merges. T-586 DONE 1d27635 (Job 6be903ec rc 0, mutation
   caught, 5419; 2ae78a99 ended): review PASS W/ COND (5456) -> S2 fc9ce1d DONE (5464; 813992cf ended) -> premerge
   wip/main-5b66aa0, gate GREEN gate-5b66aa0-44ef (suite 559 s, peak 2172Mi) -> QA Perf after T-548 -> ff integration (no deploy).
-  T-486 S2d DONE 2979f99 (5454/5455: tests 16/16, typecheck, ci+secrets 258/259, mutation caught; 5feb4875 ended) -> QA Perf -> lead merge + gate.
+  T-486 S2d 2979f99: QA Perf PASS WITH GAPS 5548 (junk drains the global 120/min bucket -> signed hook 429). Decision 5551: S2e fix
+  (one-off sonnet, next free slot) -> QA Perf bucket re-probe -> lead gate + merge. QA Perf T-426: lead merged ab93b54 into
+  lane/cp-qa-perf = 7fbbe4c (lane cannot merge/archive); if its ff pull is refused too -> one-off QA worker on T-426.
   T-548 S1 9b822ba + T-591 S1 bf932c3: blind review 9651c9fa (ended) PASS W/ COND both (5512/5513; sev 2 vault authz on T-591). Decisions
   5514/5515: S1b fixes. IMPL 4ba6c5db (impl-t591-s1b, sonnet, ticket/T-591-s1b-review). T-548 S1b = one-off sonnet at next free slot.
   LANE 5f8f392b "ClaudePilot Backend" (lane-backend, sonnet, ticket/T-546-crew-digest): T-546 DONE 10b22e0 (5535; mutation caught) -> QA Perf.
@@ -46,7 +48,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
 - 13:20 D-66: quick-check (format, lint, named tests) before the gate. Workers cannot git merge: the lead merges base heads in (4852).
-- 12:00 Coordinator tool review (4820): the lead edits ONLY the status file and notes.
 - 11:15 D-65 (coordinator): 4 ClaudePilot workers; implementers sonnet by default (opus only with a written why); small QA/review
   findings fixed in the same slice; a worker takes 2-3 related tickets (reuse under 150k); full report on the ticket, the lead
   reads line 1 and opens it only on FAIL; ready features over chores. Targets under 8 USD per ticket, lead share under 30 %.
