@@ -4,7 +4,7 @@ Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: c
 
 ## DONE
 - LIVE portal 2026.10.15-1 (run 31 PASSED on 0831ba7; Argo c685eea): T-338, T-342, T-333, T-336, T-343, T-312, crew hand-over.
-- integration ab99b45 (origin + pilot), NOT deployed: T-348, T-315 s1, T-330/T-331/T-272, job anti-affinity 96f47b8, D-55/D-56 docs. Last full gate: gate-job 781cb3d GREEN.
+- integration ab99b45 (origin + pilot), NOT deployed: T-348, T-315 s1, T-330/T-331/T-272, job anti-affinity 96f47b8, D-55/D-56 docs. Full gate: gate-job 3278277 GREEN 02:1x (typecheck 48s, web build 27s, server suite 369s; /tmp/gate-job-3278277.log), includes the coordinator's T-365 WAL fix 3438d9b.
 - 01:24 adopted T-366, T-369, T-321, T-349, T-352 (claimed by id; the ended lead's tickets had gone back to the queue).
 - Ended workers: 7be4aeac (T-366 reviewer, verdict copied below), 2005bc7f (old T-321/T-312 verifier; T-312 already closed, UI part is T-354).
 
@@ -27,7 +27,7 @@ Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: c
 
 ## NEXT (in order)
 1. T-366 fix + re-review, merge, real-job QA; T-369 ux-check, merge after T-321.
-2. Full gate-job on the integration head, then deploy (images=portal,workspace).
+2. Deploy (images=portal,workspace) once T-366 is merged and gated; needs the portal MCP (ci_run_trigger).
 3. T-378, T-376 in parallel; T-375 (same worker as T-369); T-382 (lists epic S1); T-377, T-386.
 4. T-370 HOLD (claudepilot-b7 runs the spike), then T-371..T-374.
 5. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356, T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149. Konfersi and Event stay paused for this track (D-45).
