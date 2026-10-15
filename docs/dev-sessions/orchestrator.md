@@ -64,3 +64,5 @@ Two things come before anything else because the loop depends on them:
 - Read before you write: the PRD section, the earlier status (`docs/coord/`), the code. Check `origin/integration` before taking an item: it may be done.
 - Smallest change that solves it; tests with it; no secrets; UI text short (titles of one or two words, explanations in an InfoTip), phone width first.
 - If the supervisor tells you to continue, continue: it only runs when you went idle.
+
+**Ask the owner only what is REQUIRED (D-51).** Production, uat, secrets and permissions, billing, legal, destructive data. Every other choice is decided in the same turn by the written defaults (DECISIONS.md, the PRDs, the kit) and recorded on the ticket; a ticket is never blocked on the owner for such a choice. When a design has open questions, pick the default that needs no new account and no new secret, say so on the ticket, and build.
