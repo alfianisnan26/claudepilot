@@ -224,6 +224,21 @@ body {
   overflow-x: clip;
 }
 
+/*
+ * Touch targets on a phone (T-449, QA-STANDARDS A5): the kit's Segmented choice is 40 px tall and its Menu button and items are 36 px
+ * (the kit in node_modules is read-only, so the floor is set here, once, for every page that uses them). Below the `medium` breakpoint
+ * (compact, 600 px) each is at least 44 px (spacing step 11) tall and wide; from `medium` up the kit's own sizes stay.
+ * targetFloor.test.ts keeps the breakpoint equal to --breakpoint-medium.
+ */
+@media (width < 37.5rem) {
+  [role='radiogroup'] > [role='radio'],
+  button[aria-haspopup='menu'],
+  [role='menu'] > [role='menuitem'] {
+    min-height: calc(var(--spacing) * 11);
+    min-width: calc(var(--spacing) * 11);
+  }
+}
+
 /* A slider (effort): a thin track filled up to the thumb (`--fill`), and a round thumb that lifts off it. */
 @utility range {
   -webkit-appearance: none;

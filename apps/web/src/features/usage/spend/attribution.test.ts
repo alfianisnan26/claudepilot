@@ -57,3 +57,8 @@ test('a ticket row shows type, status and via lead only when there is one', () =
   assert.deepEqual(ticketLine(t(0)), { type: 'feature', status: 'in review', viaLead: null });
   assert.equal(ticketLine(row({})), null);
 });
+
+test('a ticket the portal does not know says "unknown" in words, not a dash', () => {
+  const line = ticketLine(row({ by: 'ticket', key: 'T-9199', ticket: { type: null, status: null, doneAt: null, viaLeadUsd: 0, viaLeadWorkers: 0 } }));
+  assert.deepEqual(line, { type: 'unknown', status: 'unknown', viaLead: null });
+});
