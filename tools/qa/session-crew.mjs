@@ -3,9 +3,13 @@
 // a lead and its workers (one on another Claude, two ended, one waiting on you, one with a very long title) and a worker of an archived lead,
 // it asserts:
 //   - in All, the lead's row carries its crew count; its live workers sit under it on a rail, the ended ones behind one "2 done" row that is
-//     shut until it is opened (by touch or the keyboard) and holds its place; the worker waiting on you is under Needs you with "from <lead>";
-//     the worker of an archived lead is a row of its own with "from <lead>"; a worker names its Claude only when it differs from its lead's;
-//   - the Needs you chip lists the waiting worker alone (not its lead), with "from";
+//     shut until it is opened (by touch or the keyboard) and holds its place; the worker waiting on you is under Needs you, under a lead
+//     header for its lead (T-369), not "from"; the worker of an archived lead is a row of its own with "from <lead>"; a worker names its
+//     Claude only when it differs from its lead's;
+//   - the Needs you chip lists the waiting worker under a lead header (not the lead as a row), with no "from";
+//   - T-369: the In progress chip with the lead idle lists the working worker under a lead header (title, Idle, crew count 6, a link to the
+//     lead, a 44 px target, no ⋯ of its own), not as a flat row with "from"; when the lead flips to Working (a match) and back to Idle the
+//     header stays a header with its state updated and the worker under it does not move (QA A9, 1 px);
 //   - a worker's page links up to its lead (title and Claude); the lead's page counts its workers and lists them on a tap (sheet or popover);
 //   - nothing scrolls sideways; on touch every crew control is a 44 px target.
 // usage: scripts/scratch-portal.sh start 3417 && QA_PORT=3417 QA_CODE=24681372 node tools/qa/session-crew.mjs [--shots dir] [--keep]
@@ -33,10 +37,7 @@ const WS = 'docker/qa-crew';
 const purge = () =>
   db.exec(`DELETE FROM chat_requests WHERE session_id LIKE 'qacrew-%'; DELETE FROM chat_sessions WHERE id LIKE 'qacrew-%';
     DELETE FROM workspace_claudes WHERE id LIKE 'qacrew-%'`);
-purge();
-const now = Date.now();
 const iso = (ms) => new Date(ms).toISOString();
-db.prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES ('qacrew-work', ?, 'Work', '', ?)`).run(WS, iso(now));
 const ins = db.prepare(`INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, process, model, mode, cost_est_usd, launch, created_at,
   last_activity_at, ended_reason, parent_id, claude_id, archived_at, started_by) VALUES (?, ?, '/home/node', ?, 'ui', ?, ?, ?, 'claude-opus-5-5', 'default', 0, '{}', ?, ?, ?, ?, ?, ?, ?)`);
 const LONG = 'QA crew worker with a very long title that has to truncate on a narrow phone screen without pushing anything sideways at all';
@@ -55,11 +56,23 @@ const rows = [
 // T-321: the waiting worker's process is 'live'. A request with no live process behind it is one nobody can answer: the portal's liveness
 // tick (every 60 s) resolves it `stale` and the session reads Interrupted (T-284), so with 'gone' the check failed whenever a tick fell
 // inside the run. The scratch portal cannot reach docker/qa-crew, so its status check answers "unknown" and leaves the live row alone.
-for (const [id, title, state, parent, claude, born, archived] of rows) {
-  const at = iso(now - born * 60_000);
-  ins.run(id, WS, title, state, at, state === 'waiting' ? 'live' : 'gone', at, at, state === 'ended' ? 'ended by you' : null, parent, claude, archived ? at : null, parent ? `session:${parent}` : 'ui');
-}
-db.prepare(`INSERT INTO chat_requests (session_id, request_id, kind, tool_name, title, detail, created_at) VALUES ('qacrew-e', 'r1', 'tool', 'Bash', 'Run a command', 'npm test', ?)`).run(iso(now));
+// T-369: the working worker is 'live' too, so the In progress chip keeps it. What the tick does not do, a READER does: opening a live
+// session's page attaches one (controller.ts attach -> #ensureReader), it cannot reach docker/qa-crew, and after MAX_IMMEDIATE_RETRIES (5,
+// 1 s apart) it marks the session gone, Interrupted. Worker A's page was opened in every combo, so from the next combo on A read Interrupted
+// (11 checks failed from 390-dark, job claudepilot-job-06f4999a; E, live too and never opened, stayed Waiting all run). So the run opens
+// only pages of sessions with no live process (the worker page is worker B's), and seeds afresh at the start of every size and theme.
+const seed = () => {
+  purge();
+  const now = Date.now();
+  db.prepare(`INSERT INTO workspace_claudes (id, workspace_id, name, directory, created_at) VALUES ('qacrew-work', ?, 'Work', '', ?)`).run(WS, iso(now));
+  for (const [id, title, state, parent, claude, born, archived] of rows) {
+    const at = iso(now - born * 60_000);
+    ins.run(id, WS, title, state, at, state === 'waiting' || state === 'working' ? 'live' : 'gone', at, at, state === 'ended' ? 'ended by you' : null, parent, claude, archived ? at : null, parent ? `session:${parent}` : 'ui');
+  }
+  db.prepare(`INSERT INTO chat_requests (session_id, request_id, kind, tool_name, title, detail, created_at) VALUES ('qacrew-e', 'r1', 'tool', 'Bash', 'Run a command', 'npm test', ?)`).run(iso(now));
+};
+// T-369: the lead flips state the way a report does (it works, its latest activity is now); its process stays 'gone', so nothing attaches.
+const leadState = (state) => db.prepare(`UPDATE chat_sessions SET state = ?, state_since = ?, last_activity_at = ? WHERE id = 'qacrew-lead'`).run(state, iso(Date.now()), iso(Date.now()));
 
 // --- the browser --------------------------------------------------------------------------------------------------------------------------
 const IPHONE = { top: 59, bottom: 34, left: 0, right: 0 };
@@ -93,9 +106,28 @@ const HELPERS = `(() => {
       chevron: own.querySelector('button[aria-expanded][aria-label*="started"]')?.getBoundingClientRect().height ?? null,
     };
   };
+  // T-369: the lead header for title t inside the status heading g (any when null): where it is, what it says, what sits under it.
+  window.__header = (t, g = null) => {
+    const a = [...document.querySelectorAll('a[data-crew-header]')].find((x) => x.querySelector('[data-header-title]')?.textContent === t && (!g || x.closest('[data-status-group]')?.dataset.statusGroup === g));
+    if (!a) return null;
+    const li = a.closest('li[data-lead-header]');
+    const crew = li.querySelector(':scope > ul[data-crew]');
+    return {
+      group: li.closest('[data-status-group]')?.dataset.statusGroup ?? null,
+      top: li.parentElement.matches('ul[data-session-rows]'),
+      href: a.getAttribute('href'),
+      text: a.textContent,
+      h: a.getBoundingClientRect().height,
+      count: a.querySelector('[data-crew-count] .tabular-nums')?.textContent.trim() ?? null,
+      menu: !!li.querySelector(':scope > div button[aria-label^="Actions for"]'),
+      checkbox: !!li.querySelector(':scope > div [role=checkbox]'),
+      kids: crew ? [...crew.querySelectorAll(':scope > li')].map((c) => c.querySelector(':scope > div > div > a p.font-semibold')?.textContent ?? null).filter(Boolean) : [],
+    };
+  };
   return true;
 })()`;
 const fact = async (t) => b.eval(`(${HELPERS}) && __fact(${JSON.stringify(t)})`);
+const header = async (t, g = null) => b.eval(`(${HELPERS}) && __header(${JSON.stringify(t)}, ${JSON.stringify(g)})`);
 const sideways = () => b.eval(`document.scrollingElement.scrollWidth <= innerWidth`);
 const shot = async (name) => {
   if (!shots) return;
@@ -141,6 +173,7 @@ for (const size of SIZES) {
   for (const dark of [false, true]) {
     const tag = `${size.name}-${dark ? 'dark' : 'light'}`;
     console.log(tag);
+    seed();
     await b.setViewport(size.w, size.h, size.mobile);
     await b.send('Emulation.setSafeAreaInsetsOverride', { insets: size.insets }).catch(() => {});
     await b.media({ dark });
@@ -163,12 +196,13 @@ for (const size of SIZES) {
     check(`${tag} All: a worker on its lead's Claude does not repeat it`, !!a && !/Default/.test(a.text), a?.text);
     check(`${tag} All: a worker on another Claude names it`, !!wb && /Work/.test(wb.text.replace('worker', '')), wb?.text);
     const e = await fact('QA crew worker E');
-    check(`${tag} All: the waiting worker is under Needs you with "from" its lead`, e?.group === 'attention' && e.top && e.from?.text === 'from QA crew lead' && e.from.href === '/admin/sessions/qacrew-lead', JSON.stringify(e));
+    const eHead = await header('QA crew lead', 'attention');
+    check(`${tag} All: the waiting worker is under Needs you, under a header for its lead, no "from"`, e?.group === 'attention' && !e.top && !e.from && eHead?.top && JSON.stringify(eHead.kids) === JSON.stringify(['QA crew worker E']) && eHead.href === '/admin/sessions/qacrew-lead', JSON.stringify({ e, eHead }));
     const f = await fact('QA crew worker F');
     check(`${tag} All: the worker of an archived lead is a row of its own with "from"`, !!f?.top && f.from?.text === 'from QA crew old lead', JSON.stringify(f));
     check(`${tag}: no sideways scroll`, (await sideways()) === true);
     if (size.mobile) {
-      check(`${tag}: 44 px targets (done row, from link, the lead's fold)`, lead?.done?.h >= 44 && e?.from?.h >= 44 && lead?.chevron >= 44, JSON.stringify({ done: lead?.done?.h, from: e?.from?.h, fold: lead?.chevron }));
+      check(`${tag}: 44 px targets (done row, from link, lead header, the lead's fold)`, lead?.done?.h >= 44 && f?.from?.h >= 44 && eHead?.h >= 44 && lead?.chevron >= 44, JSON.stringify({ done: lead?.done?.h, from: f?.from?.h, header: eHead?.h, fold: lead?.chevron }));
     }
     // Scroll the lead into view for the picture, then open "2 done" by touch (a click) and shut it with the keyboard.
     await b.eval(`(${HELPERS}) && __row('QA crew lead')?.scrollIntoView({ block: 'center' })`);
@@ -188,15 +222,47 @@ for (const size of SIZES) {
     await sleep(300);
     check(`${tag} All: the keyboard shuts it again`, (await fact('QA crew lead'))?.done?.open === 'false');
 
-    // The Needs you chip: the waiting worker alone, with "from".
+    // The Needs you chip: the waiting worker under a header for its lead (T-369), the lead not a row of its own.
+    const topRows = `[...document.querySelectorAll('ul[data-session-rows] > li')].map((li) => li.querySelector(':scope > div > div > a p.font-semibold')?.textContent).filter((t) => t?.startsWith('QA crew'))`;
     await b.eval(`document.querySelector('[data-chip=attention]')?.click()`);
-    await sleep(400);
-    const inChip = await b.eval(`[...document.querySelectorAll('ul[data-session-rows] > li')].map((li) => li.querySelector(':scope > div > div > a p.font-semibold')?.textContent).filter((t) => t?.startsWith('QA crew'))`);
-    check(`${tag} Needs you: the waiting worker alone, not its lead`, JSON.stringify(inChip) === JSON.stringify(['QA crew worker E']), JSON.stringify(inChip));
-    check(`${tag} Needs you: with "from" its lead`, (await fact('QA crew worker E'))?.from?.text === 'from QA crew lead');
+    await b.waitFor(`(${HELPERS}) && !!__header('QA crew lead')`, LOAD_MS, 'Needs you header').catch(() => {});
+    const inChip = await b.eval(topRows);
+    const needsHead = await header('QA crew lead');
+    check(`${tag} Needs you: the waiting worker under a header for its lead, the lead not a row`, inChip.length === 0 && needsHead?.top && JSON.stringify(needsHead.kids) === JSON.stringify(['QA crew worker E']), JSON.stringify({ inChip, needsHead }));
+    check(`${tag} Needs you: no "from" under a header`, !(await fact('QA crew worker E'))?.from);
 
-    // A worker's page: up to its lead.
-    await b.goto('/admin/sessions/qacrew-a', 2500);
+    // T-369, the owner's case: In progress while the lead is idle. The working worker sits under a header for its lead, not flat with "from".
+    await b.eval(`document.querySelector('[data-chip=working]')?.click()`);
+    await b.waitFor(`document.querySelector('[data-chip=working]')?.getAttribute('aria-pressed') === 'true' && (${HELPERS}) && !!__header('QA crew lead')`, LOAD_MS, 'In progress header').catch(() => {});
+    const busyHead = await header('QA crew lead');
+    const busyTop = await b.eval(topRows);
+    const wa = await fact('QA crew worker A');
+    check(`${tag} In progress (lead idle): a lead header on top with worker A under it`, busyHead?.top && JSON.stringify(busyHead.kids) === JSON.stringify(['QA crew worker A']) && busyTop.length === 0, JSON.stringify({ busyHead, busyTop }));
+    check(`${tag} In progress: the header says the lead's state (Idle), its crew (6) and links to it`, /Idle/.test(busyHead?.text ?? '') && busyHead?.count === '6' && busyHead.href === '/admin/sessions/qacrew-lead', JSON.stringify(busyHead));
+    check(`${tag} In progress: the header has no ⋯ or checkbox; the worker has no "from"`, busyHead && !busyHead.menu && !busyHead.checkbox && !!wa && !wa.from, JSON.stringify({ busyHead, from: wa?.from }));
+    if (size.mobile) check(`${tag} In progress: the header is a 44 px target`, busyHead?.h >= 44, String(busyHead?.h));
+    check(`${tag} In progress: no sideways scroll`, (await sideways()) === true);
+    await b.eval(`document.querySelector('a[data-crew-header]')?.scrollIntoView({ block: 'center' })`);
+    await sleep(200);
+    await shot(`t369-in-progress-${tag}`);
+    // T-369, QA A9: the lead flips Idle -> Working (now a match of the chip) and back. It keeps the header line with its state updated, and
+    // worker A under it does not move. The list polls every 5 s; the wait ends when the header says the new state.
+    const aTop = () => b.eval(`(${HELPERS}) && __row('QA crew worker A')?.getBoundingClientRect().top`);
+    const topIdle = await aTop();
+    leadState('working');
+    await b.waitFor(`(${HELPERS}) && /Working/.test(__header('QA crew lead')?.text ?? '')`, LOAD_MS, 'lead working').catch(() => {});
+    await sleep(300);
+    const workHead = await header('QA crew lead');
+    const topWorking = await aTop();
+    leadState('idle');
+    await b.waitFor(`(${HELPERS}) && /Idle/.test(__header('QA crew lead')?.text ?? '')`, LOAD_MS, 'lead idle').catch(() => {});
+    await sleep(300);
+    const topBack = await aTop();
+    check(`${tag} In progress, lead Working: still the header, its state updated, worker A under it`, workHead?.top && /Working/.test(workHead.text) && JSON.stringify(workHead.kids) === JSON.stringify(['QA crew worker A']), JSON.stringify(workHead));
+    check(`${tag} In progress: worker A holds still when the lead flips Idle -> Working -> Idle (1 px)`, [topIdle, topWorking, topBack].every((t) => typeof t === 'number') && Math.abs(topWorking - topIdle) <= 1 && Math.abs(topBack - topIdle) <= 1, `${topIdle} -> ${topWorking} -> ${topBack}`);
+
+    // A worker's page: up to its lead. Worker B's (idle, no process): opening a live one's page would start a reader that fails (see seed).
+    await b.goto('/admin/sessions/qacrew-b', 2500);
     await b.waitFor(`!!document.querySelector('[data-crew-lead]')`, LOAD_MS, 'lead link').catch(() => {});
     const up = await b.eval(`(() => { const a = document.querySelector('[data-crew-lead]'); if (!a) return null; const r = a.getBoundingClientRect(); return { href: a.getAttribute('href'), text: a.textContent.trim(), h: r.height, right: r.right }; })()`);
     check(`${tag} worker page: a link up to its lead, with its Claude`, up?.href === '/admin/sessions/qacrew-lead' && /QA crew lead/.test(up.text) && /Default/.test(up.text), JSON.stringify(up));

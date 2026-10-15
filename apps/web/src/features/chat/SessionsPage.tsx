@@ -15,14 +15,16 @@ import { Card } from '@/components/Card';
 import { PageHeader } from '@/components/PageHeader';
 import { GlanceStrip } from '@/features/glance/Strip';
 import { usePersonaIdentities } from '@/features/personas/identities';
+import { useClaudeUsage, useNow } from '@/features/usage/claude/useClaudeUsage';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { BulkBar, runBulk, type BulkAction } from './BulkBar';
-import { crewStatusGroup } from './crew';
+import { crewStatusGroup, selectable } from './crew';
 import { canFold, chipCounts, ofProgram, programCounts, withChange, withDefaultChip, type ChipChoice } from './listOrder';
 import { NewSessionDialog } from './NewSessionDialog';
 import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
-import { SessionRow, type RowActions } from './SessionRow';
+import { avatarsShown, listFacts, workspaceShown } from './rowMeta';
+import { SessionRow, type RowActions, type RowFacts } from './SessionRow';
 import { SessionsToolbar, type ViewState } from './SessionsToolbar';
 import { useMoveChat } from './SwitchDialog';
 import { useChatList } from './useChatSocket';
@@ -109,8 +111,8 @@ export function SessionsPage() {
   };
 
   // All without another grouping is grouped under the status headings, in the chips' order (T-100); a worker that does not need you sits
-  // under its lead's heading, nested under it (T-294, crew.ts). A chip lists only what matches it: a worker whose lead does not match is a
-  // row of its own with "from" its lead (crew.ts says why).
+  // under its lead's heading, nested under it (T-294, crew.ts). A chip lists what matches it; a worker whose lead does not match sits
+  // under a lead header, which is context, not a match (T-369, crew.ts).
   const byStatus = !view.archived && view.filter === 'all' && view.groupBy === 'none';
   const list = useMemo(
     () =>
@@ -182,9 +184,23 @@ export function SessionsPage() {
     },
   };
 
+  // T-375: what the rows on screen have in common (one workspace, one persona: then no row says it) and the Claudes' quota (the shared
+  // claude-usage snapshot the top bar reads; no request of its own), read at a minute's clock so a passed reset turns a bar grey.
+  const { report: usage } = useClaudeUsage();
+  const nowMs = useNow(60_000);
+  const usageById = useMemo(() => (usage ? new Map(usage.claudes.map((c) => [c.claudeId, c])) : null), [usage]);
+  // The workspace goes by each card's own rows (one workspace on every row of a card tells nothing apart, T-378's density check); the
+  // avatars by the rows on screen.
+  const factsByGroup: ReadonlyMap<string, RowFacts> = useMemo(() => {
+    const groups = list ? list.groups : [];
+    const showAvatars = avatarsShown(listFacts(groups.flatMap((g) => g.rows), personas));
+    return new Map(groups.map((g) => [g.key, { showWorkspace: workspaceShown(listFacts(g.rows, personas), view.groupBy), showAvatars, usage: usageById, nowMs }]));
+  }, [list, personas, view.groupBy, usageById, nowMs]);
+
   const byId = useMemo(() => new Map((sessions ?? []).map((s) => [s.id, s])), [sessions]);
   const chosen = [...selected].map((id) => byId.get(id)).filter((s): s is ChatSession => !!s);
-  const allShown = list ? list.groups.flatMap((g) => flatten(g.rows)) : [];
+  // Select all takes the sessions shown, never a lead header (T-369).
+  const allShown = list ? list.groups.flatMap((g) => selectable(g.rows)) : [];
 
   const runSelected = async () => {
     if (!bulk) return;
@@ -277,6 +293,7 @@ export function SessionsPage() {
                     onCollapse={(id) => setCollapsed((c) => flip(c, id))}
                     actions={actions}
                     personas={personas}
+                    facts={factsByGroup.get(g.key)}
                   />
                 ))}
               </Group>
@@ -312,11 +329,6 @@ export function SessionsPage() {
       {move.element}
     </>
   );
-}
-
-/** Rows and everything nested under them, in reading order. */
-function flatten(rows: ListRow[]): ChatSession[] {
-  return rows.flatMap((r) => [r.session, ...flatten(r.children)]);
 }
 
 /** What waits on you: one tap to the session, wherever the list is grouped. */

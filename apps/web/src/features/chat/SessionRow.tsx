@@ -1,5 +1,5 @@
-import { Badge, cn, Menu, Spinner, type MenuItem } from '@isnanme/ui';
-import { sessionCost, workspaceLabel, type ChatSession, type ListGroupBy, type ListRow, type PersonaIdentity } from '@portal/contracts';
+import { Badge, cn, Menu, type MenuItem } from '@isnanme/ui';
+import type { ChatSession, ClaudeUsage, ListGroupBy, ListRow, PersonaIdentity } from '@portal/contracts';
 import {
   Archive,
   ArchiveRestore,
@@ -10,24 +10,41 @@ import {
   CloudOff,
   CornerLeftUp,
   GitBranch,
+  IdCard,
   MessageSquare,
   Moon,
   Network,
   Pencil,
   Pin,
   PinOff,
+  ShieldAlert,
   Ticket,
   Trash2,
 } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
+import { InfoTip } from '@/components/InfoTip';
 import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
 import { formatDateTime } from '@/lib/format';
-import { crewCount, crewOfRows, fromLead, otherClaude } from './crew';
+import { crewCount, crewOfRows, fromLead } from './crew';
 import { RecoverButton } from './Recover';
 import { RoleBadge } from './RoleBadge';
+import { barWidth, lineTwo, roleShown, rowMeta, rowState, thirdLine, type LineTwoItem, type QuotaMeter, type RowState } from './rowMeta';
 import { endedForSafety, formatUsd, StateBadge, timeShort } from './shared';
 import { SWIPE_SETTLE_MS, useRowSwipe } from './swipe';
+
+/**
+ * What every row needs to know about the rows on screen and the Claudes (T-375, rowMeta.ts): whether the workspace label and the persona
+ * avatars tell rows apart, and the claude-usage snapshot (by Claude id; null while it loads) for the quota bars, read at `nowMs`.
+ */
+export interface RowFacts {
+  showWorkspace: boolean;
+  showAvatars: boolean;
+  usage: ReadonlyMap<string, ClaudeUsage> | null;
+  nowMs: number;
+}
+
+const NO_FACTS: RowFacts = { showWorkspace: true, showAvatars: false, usage: null, nowMs: 0 };
 
 /** What a row's ⋯ can do; the page owns the dialogs. */
 export interface RowActions {
@@ -65,23 +82,96 @@ export function rowActions(row: ListRow, on: RowActions): MenuItem[] {
   ];
 }
 
-/** The folder a session works in as people read it: the branch for a worktree, else the last folder name. */
-const folderName = (s: ChatSession) => s.cwd.replace(/\/+$/, '').slice(s.cwd.replace(/\/+$/, '').lastIndexOf('/') + 1) || '~';
+const DOT: Record<RowState['tone'], string> = {
+  busy: 'bg-accent animate-pulse motion-reduce:animate-none',
+  ask: 'bg-amber-500',
+  danger: 'bg-danger',
+  quiet: 'bg-muted/60',
+};
+const WORD: Record<RowState['tone'], string> = {
+  busy: 'text-ink-soft',
+  ask: 'font-medium text-amber-700 dark:text-amber-400',
+  danger: 'font-medium text-danger',
+  quiet: '',
+};
+
+/** Line two's state: a dot and a word; from 640 px a working session also says how many agents run (T-41). */
+function StateWord({ state }: { state: RowState }) {
+  return (
+    <span data-row-state="" className={cn('inline-flex items-center gap-1', WORD[state.tone])}>
+      <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', DOT[state.tone])} />
+      {state.word}
+      {state.agents > 0 && (
+        <span className="hidden sm:inline">
+          {' '}
+          · {state.agents} {state.agents === 1 ? 'agent' : 'agents'}
+        </span>
+      )}
+    </span>
+  );
+}
+
+const BAR: Record<'neutral' | 'warn' | 'critical', string> = { neutral: 'bg-ink-soft', warn: 'bg-amber-500', critical: 'bg-danger' };
+const PCT: Record<'neutral' | 'warn' | 'critical', string> = { neutral: '', warn: 'text-amber-700 dark:text-amber-400', critical: 'text-danger' };
 
 /**
- * One session in the list: its state, where it runs (Claude, workspace, branch, ticket: whatever the
- * grouping doesn't already say), what it waits on, what it started, and ⋯. Selecting turns the row into
- * a checkbox. Grouped by Claude, a chat that moved is also listed, lighter, under the Claudes it ran on
- * earlier: the same chat. A removed workspace is stated plainly.
+ * The mini quota bar (28 x 4 px) of the Claude a session runs on and its percent: the 5-hour window's percent used, neutral, amber from 70,
+ * red from 90; grey with no number when the reading is unavailable; nothing for a pool or a key. The Claude's name is an item of its own,
+ * lower on line two's priority (rowMeta.LINE_TWO_ORDER). The words (5-hour and week, resets, the reading's age) are the tip and the screen
+ * reader's text: the row is one link, and a button inside a link is not allowed (nor would a tap stay on it).
+ */
+function ClaudeQuota({ meter: m }: { meter: QuotaMeter }) {
+  return (
+    <span data-row-claude="" title={m.title} className="inline-flex items-center gap-1">
+      {m.kind !== 'no_limits' && (
+        <span
+          aria-hidden="true"
+          data-quota-bar={m.kind === 'plan' ? m.tone : 'unavailable'}
+          className="relative h-1 w-7 shrink-0 overflow-hidden rounded-full bg-line"
+        >
+          {m.kind === 'plan' && <span className={cn('absolute inset-y-0 left-0 rounded-full', BAR[m.tone])} style={{ width: `${barWidth(m.usedPct)}%` }} />}
+        </span>
+      )}
+      {m.kind === 'plan' && (
+        <span aria-hidden="true" className={cn('shrink-0 tabular-nums', PCT[m.tone])}>
+          {Math.round(m.usedPct)}%
+        </span>
+      )}
+      <span className="sr-only">{m.title}</span>
+    </span>
+  );
+}
+
+/** Bypass as a red shield dot on the icon's corner. */
+const BYPASS_DOT = (
+  <span className="flex size-4 items-center justify-center rounded-full bg-danger text-white ring-2 ring-surface">
+    <ShieldAlert className="size-2.5" aria-hidden="true" />
+  </span>
+);
+
+/**
+ * One session in the list (T-375): two lines at 390 px, a third only when it carries something.
+ *   (o) Konfersi: migration              [crew 3]   2m  ⋯
+ *       ● Working · ▬▬── 62% · ≈ $10.39 · Opus 5.5 · satria
+ * The icon is the state's ring (amber needs you, accent working, a line otherwise) around the session's kind (a role, asleep, removed, a
+ * chat), or the persona's avatar when the rows on screen have more than one persona; Bypass is a red shield dot on its corner (a tip says
+ * it; the word too from 640 px). Line one: the title, the pin, the role (an icon on a phone, hidden when the title already starts with it),
+ * the crew count, the time. Line two (muted, one line, rowMeta.LINE_TWO_ORDER): the state, the quota bar and percent, the cost, the model
+ * (its id and effort in the tip), the workspace only when the card's rows span several, the Claude's name, the branch and ticket; what does
+ * not fit is dropped whole, never cut mid-value. Line three: only what it waits on
+ * (amber). The folder lives on the session page. Selecting turns the row into a checkbox. Grouped by
+ * Claude, a chat that moved is also listed, lighter, under the Claudes it ran on earlier: the same chat. A removed workspace is stated
+ * plainly.
  *
  * Crew (T-294, crew.ts): a lead's row counts what it started (an icon and a number; the words in the tip); its workers sit under it on a
- * rail, the live ones in spawn order, the done ones behind one "N done" row; a worker names its Claude only when it differs from its
- * lead's. A worker shown away from its lead links to it ("from …"). A session that runs as an agent shows its role (a badge), only when set.
+ * rail, the live ones in spawn order, the done ones behind one "N done" row; a worker shows its Claude and bar only when it differs from its
+ * lead's (`lead`). A worker whose lead is not among the rows sits under a lead
+ * header (T-369, `row.context`: the lead as muted context, a tap opens it); in a chip, a lead that matches with workers under it shows as
+ * the same header (`row.header`), so its flip in and out of the chip moves nothing; one whose lead is archived links to it ("from …").
  */
 export function SessionRow({
   row,
   depth = 0,
-  lead = null,
   groupBy,
   selecting,
   selected,
@@ -90,10 +180,12 @@ export function SessionRow({
   onCollapse,
   actions,
   personas,
+  facts = NO_FACTS,
+  lead = null,
 }: {
   row: ListRow;
   depth?: number;
-  /** The session it is nested under (a worker's lead), to name its Claude only when it differs. */
+  /** The lead this row sits under (its row or header is right above): a worker on the same Claude does not repeat it. */
   lead?: ChatSession | null;
   groupBy: ListGroupBy;
   selecting: boolean;
@@ -102,8 +194,9 @@ export function SessionRow({
   onToggle: (id: string) => void;
   onCollapse: (id: string) => void;
   actions: RowActions;
-  /** Each workspace's persona (I11), by workspace id: its avatar stands in for the chat icon. */
+  /** Each workspace's persona (I11), by workspace id: its avatar stands in for the chat icon when `facts.showAvatars`. */
   personas?: Readonly<Record<string, PersonaIdentity>> | null;
+  facts?: RowFacts;
 }) {
   const s = row.session;
   const title = s.title || 'Untitled';
@@ -127,67 +220,72 @@ export function SessionRow({
   const crew = crewCount(row.rollup);
   const workers = crewOfRows(row.children);
   const from = fromLead(row);
-  // A worker under its lead: its Claude is the lead's unless it says otherwise (a badge), so the line does not repeat it.
-  const ownClaude = depth > 0 ? otherClaude(s, lead) : null;
   const asks = s.waiting > 0 || s.state === 'waiting';
-  const persona = row.workspaceGone ? null : (personas?.[s.workspaceId] ?? null);
+  const persona = facts.showAvatars && !row.workspaceGone ? (personas?.[s.workspaceId] ?? null) : null;
+  const bypass = s.mode === 'bypassPermissions' && s.state !== 'ended';
+  const role = roleShown(s);
+  const state = rowState(s, row.workspaceGone, safety?.label ?? null);
+  const meta = rowMeta({ session: s, groupBy, showWorkspace: facts.showWorkspace, usage: facts.usage?.get(s.claudeId) ?? null, nowMs: facts.nowMs, lead });
+  const third = thirdLine(meta);
 
-  // Line one: who runs it and when. Line two, when there is one: where its work is (branch, folder, ticket).
-  const who: { key: string; node: React.ReactNode }[] = [];
-  if (groupBy !== 'claude' && s.claudeName && depth === 0) who.push({ key: 'claude', node: <span className="shrink-0">{s.claudeName}</span> });
-  if (groupBy !== 'workspace')
-    who.push({
-      key: 'ws',
-      node: (
-        <span title={s.workspaceId} className={cn('min-w-0 truncate font-mono', row.workspaceGone && 'line-through')}>
-          {workspaceLabel(s.workspaceId)}
-        </span>
-      ),
-    });
-  // T-343: a running turn's cost is an estimate (≈) until its result; a model without a price adds nothing (unavailable, never a guess).
-  const cost = sessionCost(s);
-  if (cost.usd > 0) who.push({ key: 'cost', node: <span className="shrink-0">{cost.basis === 'estimate' ? `≈ ${formatUsd(cost.usd)}` : formatUsd(cost.usd)}</span> });
-  who.push({
-    key: 'time',
-    node: (
-      <span className="shrink-0" title={formatDateTime(s.lastActivityAt)}>
-        {timeShort(s.lastActivityAt)}
-      </span>
-    ),
-  });
-  const where: { key: string; node: React.ReactNode }[] = [];
-  if (s.worktree && groupBy !== 'worktree')
-    where.push({
-      key: 'wt',
-      node: (
-        <span title={s.worktree.path} className="inline-flex min-w-0 items-center gap-1 font-mono">
-          <GitBranch className="size-3 shrink-0" aria-hidden="true" />
-          <span className="truncate">{s.worktree.branch}</span>
-        </span>
-      ),
-    });
-  else if (!s.worktree && groupBy === 'none' && s.cwd !== '/home/node')
-    where.push({ key: 'dir', node: <span title={s.cwd} className="min-w-0 truncate font-mono">{folderName(s)}</span> });
-  if (s.ticketId && groupBy !== 'ticket')
-    where.push({
-      key: 'ticket',
-      node: (
-        <span className="inline-flex shrink-0 items-center gap-1">
-          <Ticket className="size-3" aria-hidden="true" />
-          {s.ticketId}
-        </span>
-      ),
-    });
-  const line = (items: { key: string; node: React.ReactNode }[]) => (
-    <p className="mt-0.5 flex min-w-0 items-baseline gap-1 text-[13px] text-muted">
-      {items.map((m, i) => (
-        <span key={m.key} className="flex min-w-0 items-baseline gap-1">
-          {m.node}
-          {i < items.length - 1 && <span aria-hidden="true">·</span>}
-        </span>
-      ))}
-    </p>
-  );
+  // Line two (rowMeta.lineTwo): the items in priority order, each whole or not at all; a capped name ends in an ellipsis (its tip says it all).
+  const item = (k: LineTwoItem): React.ReactNode => {
+    switch (k) {
+      case 'state':
+        return <StateWord state={state} />;
+      case 'quota':
+        return meta.claude && <ClaudeQuota meter={meta.claude.meter} />;
+      case 'cost':
+        // T-343: a running turn's cost is an estimate (≈) until its result; a model without a price adds nothing (unavailable, never a guess).
+        return meta.cost && <span data-row-cost="" className="tabular-nums">{meta.cost.estimate ? `≈ ${formatUsd(meta.cost.usd)}` : formatUsd(meta.cost.usd)}</span>;
+      case 'model':
+        return (
+          meta.model && (
+            <span data-row-model="" title={meta.model.title}>
+              {meta.model.label}
+            </span>
+          )
+        );
+      case 'workspace':
+        return (
+          meta.workspace && (
+            <span data-row-workspace="" title={meta.workspace.title} className={cn('max-w-32 truncate font-mono', row.workspaceGone && 'line-through')}>
+              {meta.workspace.label}
+            </span>
+          )
+        );
+      case 'claude':
+        return (
+          meta.claude?.name && (
+            <span data-row-claude-name="" title={meta.claude.meter.kind === 'no_limits' ? meta.claude.meter.title : meta.claude.name} className="max-w-24 truncate">
+              {meta.claude.name}
+            </span>
+          )
+        );
+      case 'branch':
+        return (
+          meta.branch && (
+            <span data-row-branch="" title={meta.branch.title} className="inline-flex items-center gap-1 font-mono">
+              <GitBranch className="size-3 shrink-0" aria-hidden="true" />
+              <span className="max-w-40 truncate">{meta.branch.label}</span>
+            </span>
+          )
+        );
+      case 'ticket':
+        return (
+          meta.ticket && (
+            <span data-row-ticket="" className="inline-flex items-center gap-1">
+              <Ticket className="size-3 shrink-0" aria-hidden="true" />
+              {meta.ticket}
+            </span>
+          )
+        );
+    }
+  };
+  const facts2 = lineTwo(meta);
+
+  const icon = depth > 0 ? 'size-8' : 'size-10';
+  const glyph = depth > 0 ? 'size-4' : 'size-[18px]';
 
   const click = (e: React.MouseEvent) => {
     if (!selecting) return;
@@ -200,7 +298,7 @@ export function SessionRow({
   // (the ⋯ menu opens past the row). The box and the row take the corners the card gives the li (RowList, T-100), so neither paints a
   // square past the card's curve.
   const swipe = useRowSwipe({
-    enabled: !selecting,
+    enabled: !selecting && !row.header,
     onRight: () => actions.pin(s),
     onLeft: () => (s.archivedAt ? actions.unarchive(s) : actions.archive(s)),
   });
@@ -212,7 +310,6 @@ export function SessionRow({
       key={c.session.id}
       row={c}
       depth={depth + 1}
-      lead={s}
       groupBy={groupBy}
       selecting={selecting}
       selected={selected}
@@ -221,8 +318,87 @@ export function SessionRow({
       onCollapse={onCollapse}
       actions={actions}
       personas={personas}
+      facts={facts}
+      lead={s}
     />
   );
+
+  // A lead header shows its workers always (it has no fold of its own); a lead's row, until it is folded.
+  const crewShown = row.children.length > 0 && (row.header || open);
+  const crewList = crewShown && (
+    <ul data-crew="" className="ml-4 border-l-2 border-line sm:ml-7">
+      {workers.live.map(nested)}
+      {workers.done.length > 0 && (
+        // One row for the done ones; it stays put after the live workers, and opening it lists them below it.
+        <li>
+          <button
+            type="button"
+            data-crew-done=""
+            aria-expanded={doneOpen}
+            onClick={() => setDoneOpen((o) => !o)}
+            className="press flex min-h-11 w-full items-center gap-2 py-1.5 pr-4 pl-3 text-left text-[13px] font-semibold text-muted hover:text-ink sm:min-h-9 sm:pl-5"
+          >
+            <ChevronDown className={cn('size-4 shrink-0 transition-transform', !doneOpen && '-rotate-90')} aria-hidden="true" />
+            <span className="tabular-nums">{workers.done.length} done</span>
+          </button>
+        </li>
+      )}
+      {doneOpen && workers.done.map(nested)}
+    </ul>
+  );
+
+  // T-369: a lead header. The lead of workers shown here while it is not (it does not match the chip or the search, or sits under another
+  // heading): one muted line, its title, state, crew count and Claude, a tap opens it. Context, not a match: no checkbox, swipe or ⋯. In a
+  // chip, a lead that matches with workers under it keeps this same line (its state badge says Working), so the flip moves nothing (QA A9);
+  // being a match, it takes a checkbox while selecting (no taller: the line is 44 px at every width, a touch target, QA A5).
+  if (row.header)
+    return (
+      <li data-lead-header="">
+        <div className="flex items-center rounded-[inherit] bg-surface-2/60">
+          {selecting && !row.context && (
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={picked}
+              aria-label={`Select ${title}`}
+              onClick={() => onToggle(s.id)}
+              className={cn(
+                'press ml-4 flex size-6 shrink-0 items-center justify-center rounded-md border-2 transition-colors sm:ml-5',
+                picked ? 'border-primary bg-primary text-primary-ink' : 'border-line-strong bg-surface',
+              )}
+            >
+              {picked && <Check className="size-4" strokeWidth={3} />}
+            </button>
+          )}
+          <Link
+            to={`/admin/sessions/${s.id}`}
+            data-crew-header={s.id}
+            title={title}
+            onClick={(e) => (row.context ? selecting && e.preventDefault() : click(e))}
+            className="press flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[inherit] py-1.5 pr-4 pl-4 text-[13px] text-muted hover:text-ink sm:pl-5"
+          >
+            <span className="sr-only">Lead: </span>
+            <span data-header-title="" className="min-w-0 flex-1 truncate font-semibold text-ink-soft">
+              {title}
+            </span>
+            {safety ? <Badge tone="danger">{safety.label}</Badge> : asks ? <Badge tone="warning">Needs you</Badge> : <StateBadge state={s.state} agents={s.agentsRunning ?? 0} />}
+            {crew && (
+              <span title={crew.label} data-crew-count="" className="inline-flex shrink-0">
+                <Badge tone={crew.tone}>
+                  <Network className="size-3" aria-hidden="true" />
+                  <span aria-hidden="true" className="tabular-nums">
+                    {crew.total}
+                  </span>
+                  <span className="sr-only">{crew.label}</span>
+                </Badge>
+              </span>
+            )}
+            {s.claudeName && groupBy !== 'claude' && <span className="max-w-[30%] min-w-0 shrink truncate">{s.claudeName}</span>}
+          </Link>
+        </div>
+        {crewList}
+      </li>
+    );
 
   return (
     <li>
@@ -259,45 +435,60 @@ export function SessionRow({
             {picked && <Check className="size-4" strokeWidth={3} />}
           </button>
         )}
-        <Link
-          to={`/admin/sessions/${s.id}`}
-          onClick={click}
-          aria-label={selecting ? undefined : undefined}
-          className="flex min-w-0 flex-1 items-start gap-3"
-        >
-          {persona ? (
-            // The persona's avatar, ringed when the chat needs you or is working: the state the icon's colour tells.
-            <span
-              className={cn(
-                'flex shrink-0 items-center justify-center rounded-full p-1',
-                depth > 0 ? 'size-8 sm:size-10' : 'size-10',
-                asks ? 'ring-2 ring-amber-500/60' : active ? 'ring-2 ring-accent/60' : 'ring-1 ring-line',
+        {bypass && (
+          // The Bypass dot sits on the icon's corner, outside the row's link (a button inside a link is not allowed): a zero-width anchor at
+          // the link's start (its negative margin takes back the gap), the tip placed from it. Selecting, the dot is only a mark.
+          <span data-row-bypass="" className="relative -mr-2.5 w-0 shrink-0 self-start">
+            <span className={cn('absolute -top-[7px] z-10', depth > 0 ? 'left-[15px]' : 'left-[23px]')}>
+              {selecting ? (
+                <span className="flex size-6 items-center justify-center" role="img" aria-label="Bypass">
+                  {BYPASS_DOT}
+                </span>
+              ) : (
+                <InfoTip label="Bypass" icon={BYPASS_DOT}>
+                  Bypass: this session runs every tool without asking you first.
+                </InfoTip>
               )}
-            >
+            </span>
+          </span>
+        )}
+        <Link to={`/admin/sessions/${s.id}`} onClick={click} className="flex min-w-0 flex-1 items-start gap-3">
+          <span
+            data-row-icon=""
+            className={cn(
+              'flex shrink-0 items-center justify-center rounded-full',
+              icon,
+              asks ? 'ring-2 ring-amber-500/60' : active ? 'ring-2 ring-accent/60' : 'ring-1 ring-line',
+              row.workspaceGone && 'opacity-60',
+            )}
+          >
+            {persona ? (
+              // The persona's avatar, only when the rows on screen have several personas (rowMeta.avatarsShown).
               <PersonaAvatar name={persona.name} avatar={persona.avatar} size={depth > 0 ? 'sm' : 'md'} />
-            </span>
-          ) : (
-            <span
-              className={cn(
-                'flex shrink-0 items-center justify-center',
-                depth > 0 ? 'size-8 rounded-lg sm:size-10 sm:rounded-xl' : 'size-10 rounded-xl',
-                asks ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400' : active ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-ink-soft',
-                row.workspaceGone && 'opacity-60',
-              )}
-            >
-              {row.workspaceGone ? <CloudOff className="size-[18px] sm:size-5" /> : s.process === 'asleep' && s.state === 'idle' ? <Moon className="size-[18px] sm:size-5" /> : <MessageSquare className="size-[18px] sm:size-5" />}
-            </span>
-          )}
+            ) : (
+              <span
+                className={cn(
+                  'flex size-full items-center justify-center rounded-full',
+                  asks ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400' : active ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-ink-soft',
+                )}
+              >
+                {row.workspaceGone ? (
+                  <CloudOff className={glyph} aria-hidden="true" />
+                ) : s.process === 'asleep' && s.state === 'idle' ? (
+                  <Moon className={glyph} aria-hidden="true" />
+                ) : s.agent ? (
+                  <IdCard className={glyph} aria-hidden="true" />
+                ) : (
+                  <MessageSquare className={glyph} aria-hidden="true" />
+                )}
+              </span>
+            )}
+          </span>
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <div className="flex min-w-0 items-center gap-1.5">
               <p className="min-w-0 truncate font-semibold">{title}</p>
               {s.pinnedAt && <Pin className="size-3.5 shrink-0 text-muted" aria-label="Pinned" />}
-              <RoleBadge session={s} />
-              {ownClaude && (
-                <Badge className="max-w-full min-w-0">
-                  <span className="min-w-0 truncate">{ownClaude}</span>
-                </Badge>
-              )}
+              {role && <RoleBadge session={s} iconOnPhone />}
               {crew && (
                 <span title={crew.label} data-crew-count="" className="inline-flex shrink-0">
                   <Badge tone={crew.tone}>
@@ -309,19 +500,29 @@ export function SessionRow({
                   </Badge>
                 </span>
               )}
-              {safety ? <Badge tone="danger">{safety.label}</Badge> : s.state !== 'waiting' ? <StateBadge state={s.state} agents={s.agentsRunning ?? 0} /> : null}
-              {asks && !s.waitingFor && <Badge tone="warning">{s.waiting > 1 ? `${s.waiting} waiting` : 'Needs you'}</Badge>}
-              {s.switching && (
-                <Badge>
-                  <Spinner className="size-3" /> Moving
-                </Badge>
+              {bypass && (
+                <span aria-hidden="true" className="hidden shrink-0 sm:inline-flex">
+                  <Badge tone="danger">Bypass</Badge>
+                </span>
               )}
-              {row.workspaceGone && <Badge tone="danger">Removed</Badge>}
-              {s.mode === 'bypassPermissions' && s.state !== 'ended' && <Badge tone="danger">Bypass</Badge>}
+              <span data-row-time="" className="ml-auto shrink-0 pl-1 text-[12.5px] text-muted tabular-nums" title={formatDateTime(s.lastActivityAt)}>
+                {timeShort(s.lastActivityAt)}
+              </span>
             </div>
-            {line(who)}
-            {where.length > 0 && line(where)}
-            {asks && s.waitingFor && <p className="mt-0.5 truncate text-[13px] font-medium text-amber-700 dark:text-amber-400">{s.waitingFor}</p>}
+            {/* One line high (h-5) and wrapping: an item that does not fit whole goes to the second, hidden line with all after it. */}
+            <p data-row-meta="" className="mt-0.5 flex h-5 min-w-0 flex-wrap content-start items-center gap-x-1 overflow-hidden text-[12.5px] leading-5 whitespace-nowrap text-muted">
+              {facts2.map((k, i) => (
+                <span key={k} data-line-two={k} className="flex h-5 shrink-0 items-center gap-1">
+                  {i > 0 && <span aria-hidden="true">·</span>}
+                  {item(k)}
+                </span>
+              ))}
+            </p>
+            {third === 'waiting' && (
+              <p data-row-third="waiting" className="mt-0.5 truncate text-[12.5px] font-medium text-amber-700 dark:text-amber-400">
+                {meta.waitingFor}
+              </p>
+            )}
           </div>
         </Link>
         {row.children.length > 0 && (
@@ -341,7 +542,10 @@ export function SessionRow({
           <Link
             to={`/admin/sessions/${from.id}`}
             data-crew-from=""
-            className="press -mt-2 -mb-2 flex min-h-11 min-w-0 basis-full items-center gap-1 pl-[52px] text-[12.5px] text-muted hover:text-ink sm:-mt-1 sm:-mb-1 sm:min-h-8"
+            className={cn(
+              'press -mt-2 -mb-2 flex min-h-11 min-w-0 basis-full items-center gap-1 text-[12.5px] text-muted hover:text-ink sm:-mt-1 sm:-mb-1 sm:min-h-8',
+              depth > 0 ? 'pl-11' : 'pl-[52px]',
+            )}
           >
             <CornerLeftUp className="size-3.5 shrink-0" aria-hidden="true" />
             <span className="min-w-0 truncate">from {from.title}</span>
@@ -349,27 +553,7 @@ export function SessionRow({
         )}
       </div>
       </div>
-      {row.children.length > 0 && open && (
-        <ul data-crew="" className="ml-4 border-l-2 border-line sm:ml-7">
-          {workers.live.map(nested)}
-          {workers.done.length > 0 && (
-            // One row for the done ones; it stays put after the live workers, and opening it lists them below it.
-            <li>
-              <button
-                type="button"
-                data-crew-done=""
-                aria-expanded={doneOpen}
-                onClick={() => setDoneOpen((o) => !o)}
-                className="press flex min-h-11 w-full items-center gap-2 py-1.5 pr-4 pl-3 text-left text-[13px] font-semibold text-muted hover:text-ink sm:min-h-9 sm:pl-5"
-              >
-                <ChevronDown className={cn('size-4 shrink-0 transition-transform', !doneOpen && '-rotate-90')} aria-hidden="true" />
-                <span className="tabular-nums">{workers.done.length} done</span>
-              </button>
-            </li>
-          )}
-          {doneOpen && workers.done.map(nested)}
-        </ul>
-      )}
+      {crewList}
     </li>
   );
 }
