@@ -33,7 +33,8 @@ const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 
 const lock = (fn) => { const l = path.join(F, 'lock'); for (;;) { try { fs.mkdirSync(l); break; } catch { sleep(5); } } try { const s = JSON.parse(fs.readFileSync(S, 'utf8')); const r = fn(s); fs.writeFileSync(S + '.tmp', JSON.stringify(s)); fs.renameSync(S + '.tmp', S); return r; } finally { fs.rmdirSync(l); } };
 const read = () => JSON.parse(fs.readFileSync(S, 'utf8'));
 const k8s = (j) => ({ metadata: { name: j.name, uid: 'uid-' + j.name, creationTimestamp: '2026-01-01T00:' + String(Math.floor(j.seq / 60)).padStart(2, '0') + ':' + String(j.seq % 60).padStart(2, '0') + 'Z',
-  labels: { app: 'claudepilot-job-run', 'job-run/chat': j.chat, 'job-run/role': j.role || 'agent' }, annotations: { 'job-run/owner': j.owner || '' } },
+  labels: { app: 'claudepilot-job-run', 'job-run/chat': j.chat, 'job-run/role': j.role || 'agent', ...(j.program ? { 'job-run/program': j.program } : {}), ...(j.repo ? { 'job-run/repo': j.repo } : {}) },
+  annotations: { 'job-run/owner': j.owner || '' } },
   spec: { suspend: j.suspend }, status: j.done ? { [j.rc === 0 ? 'succeeded' : 'failed']: 1, conditions: [{ type: j.rc === 0 ? 'Complete' : 'Failed', status: 'True', reason: j.reason }] } : {} });
 const stdin = () => fs.readFileSync(0, 'utf8');
 const job = (n) => read().jobs.find((j) => j.name === n);
@@ -43,16 +44,27 @@ const play = (n, follow) => {
   const sec = read().secrets[n] || '';
   const tok = (sec.match(/^(?:node-auth-token|git-token)=(.*)$/m) || [])[1] || '';
   process.stdout.write(sc.log.replaceAll('{TOKEN}', tok));
-  lock((s) => { const j = s.jobs.find((x) => x.name === n); if (j) { j.done = true; j.rc = sc.rc; } });
+  lock((s) => { const j = s.jobs.find((x) => x.name === n); if (j) { j.done = true; j.rc = sc.rc; j.reason = sc.reason; } });
+};
+// The Job's pod: Pending with the scheduler's message while the file "pending" holds one; at the end OOMKilled or Evicted as the scenario says.
+const podOf = (j) => {
+  if (!j || j.suspend) return { items: [] };
+  const pf = path.join(F, 'pending');
+  if (fs.existsSync(pf)) return { items: [{ spec: {}, status: { phase: 'Pending', conditions: [{ type: 'PodScheduled', status: 'False', reason: 'Unschedulable', message: fs.readFileSync(pf, 'utf8') }] } }] };
+  const sc = JSON.parse(fs.readFileSync(path.join(F, 'scenario.json'), 'utf8'));
+  const status = { phase: j.done ? (j.rc === 0 ? 'Succeeded' : 'Failed') : 'Running' };
+  if (j.done && sc.oom) status.containerStatuses = [{ name: 'run', state: { terminated: { reason: 'OOMKilled', exitCode: 137 } } }];
+  if (j.done && sc.evicted) Object.assign(status, { reason: 'Evicted', message: sc.evicted });
+  return { items: [{ spec: { nodeName: 'k3s-master' }, status }] };
 };
 const [verb, kind, name] = a;
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
-else if (verb === 'get' && kind === 'pods') { const j = job(a[3].replace('job-name=', '')); const out = a.join(' ').includes('nodeName') ? 'k3s-master' : 'Running'; if (j && !j.suspend) process.stdout.write(out); }
+else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
 else if (verb === 'create' && kind === 'secret') { const t = stdin(); lock((s) => { s.secrets[a[3]] = t; }); }
 else if (verb === 'apply') { const m = stdin(); const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
   const lab = (k) => m.match(new RegExp(k + ': ([^,}]+)'))[1].trim();
-  lock((s) => { s.seq += 1; s.jobs.push({ name: n, chat: lab('job-run/chat'), role: lab('job-run/role'), owner: m.match(/job-run\/owner: "([^"]*)"/)[1], suspend: true, seq: s.seq }); }); }
+  lock((s) => { s.seq += 1; s.jobs.push({ name: n, chat: lab('job-run/chat'), role: lab('job-run/role'), program: lab('job-run/program'), owner: m.match(/job-run\/owner: "([^"]*)"/)[1], suspend: true, seq: s.seq }); }); }
 else if (verb === 'patch' && kind === 'job') { lock((s) => { const j = s.jobs.find((x) => x.name === name); if (j) j.suspend = false; }); }
 else if (verb === 'patch' && kind === 'secret') { /* recorded in calls.log */ }
 else if (verb === 'delete' && kind === 'job') { lock((s) => { s.jobs = s.jobs.filter((j) => j.name !== name); }); }
@@ -61,8 +73,8 @@ else if (verb === 'logs') { play(a.includes('-f') ? a[2].replace('job/', '') : a
 else { process.stderr.write('unexpected kubectl ' + args.join(' ') + '\n'); process.exit(9); }
 `;
 
-interface Seed { name: string; chat: string; suspend?: boolean; done?: boolean; rc?: number; owner?: string }
-interface Scenario { log?: string; rc?: number; hang?: boolean }
+interface Seed { name: string; chat: string; suspend?: boolean; done?: boolean; rc?: number; owner?: string; program?: string; repo?: string }
+interface Scenario { log?: string; rc?: number; hang?: boolean; oom?: boolean; evicted?: string; reason?: string }
 
 const hex = (n: number) => randomBytes(n).toString('hex');
 
@@ -84,7 +96,7 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
   writeFileSync(join(bin, 'gh'), '#!/bin/sh\nexit 1\n'); chmodSync(join(bin, 'gh'), 0o755);
   writeFileSync(join(root, 'state.json'), JSON.stringify({ seq: seeds.length, secrets: {}, jobs: seeds.map((s, i) => ({ suspend: false, ...s, seq: i })) }));
   const rc = scenario.rc ?? 0;
-  writeFileSync(join(root, 'scenario.json'), JSON.stringify({ rc, hang: scenario.hang ?? false, log: scenario.log ?? jobLog(root, rc) }));
+  writeFileSync(join(root, 'scenario.json'), JSON.stringify({ ...scenario, rc, hang: scenario.hang ?? false, log: scenario.log ?? jobLog(root, rc) }));
   // Runtime-made credentials (never literals): the npm token, and Gitea's through git's credential helper as the real script reads it.
   const npmToken = `fx${hex(18)}`, giteaToken = `gt${hex(18)}`;
   const gitconfig = join(root, 'gitconfig');
@@ -132,7 +144,8 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   assert.equal(r.code, 3, r.out);
   assert.match(r.out, /hello from the job/);
   assert.match(r.out, /=== JOB-RUN SUMMARY claudepilot@abc1234 .* rc=3/);
-  assert.match(r.out, /job-run: claudepilot-job-[0-9a-f]{8} rc=3 in \d+s \(queued \d+s\) on k3s-master; log: /);
+  assert.match(r.out, /job-run: claudepilot-job-[0-9a-f]{8} rc=3 in \d+s \(queued \d+s\) on k3s-master with 4Gi; log: /);
+  assert.doesNotMatch(r.out, /OOM|Pending|evicted/, 'a plain failure is not reported as memory');
   assert.doesNotMatch(r.out, /ARTIFACTS BEGIN/, 'the artifacts block is not shown');
   assert.equal(readFileSync(join(w.root, 'got/reports/junit.xml'), 'utf8'), '<testsuites tests="1"/>');
   assert.match(w.log(), /hello from the job/);
@@ -140,7 +153,7 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   const text = w.applied1();
   const m = yamlLoad(text) as Manifest;
   assert.match(m.metadata.name, /^claudepilot-job-[0-9a-f]{8}$/);
-  assert.deepEqual(m.metadata.labels, { app: 'claudepilot-job-run', 'job-run/chat': 'chat-a', 'job-run/role': 't107-runner', 'job-run/repo': 'claudepilot' });
+  assert.deepEqual(m.metadata.labels, { app: 'claudepilot-job-run', 'job-run/chat': 'chat-a', 'job-run/role': 't107-runner', 'job-run/repo': 'claudepilot', 'job-run/program': 'claudepilot' });
   assert.match(m.metadata.annotations['job-run/owner'] ?? '', new RegExp(`^${hostname()}/\\d+/\\d+$`));
   assert.equal(m.spec.suspend, true, 'created suspended: the queue lets it out');
   assert.equal(m.spec.backoffLimit, 0);
@@ -149,8 +162,10 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   const pod = m.spec.template.spec, c = container(m);
   assert.equal(pod.automountServiceAccountToken, false);
   assert.match(JSON.stringify(pod.affinity), /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces"\].*"claudepilot.managed":"true"/);
-  assert.deepEqual(c.resources, { requests: { cpu: '1000m', memory: '2Gi' }, limits: { cpu: '4', memory: '8Gi' } });
-  assert.deepEqual(pod.volumes, [{ name: 'tmp', emptyDir: { medium: 'Memory', sizeLimit: '3Gi' } }, { name: 'shm', emptyDir: { medium: 'Memory', sizeLimit: '1Gi' } }]);
+  // T-524: memory requested = limited, so the scheduler only places the Job where all of it fits; /tmp (in memory) inside that limit.
+  assert.deepEqual(c.resources, { requests: { cpu: '1000m', memory: '4Gi' }, limits: { cpu: '4', memory: '4Gi' } });
+  assert.deepEqual(pod.volumes, [{ name: 'tmp', emptyDir: { medium: 'Memory', sizeLimit: '2Gi' } }, { name: 'shm', emptyDir: { medium: 'Memory', sizeLimit: '1Gi' } }]);
+  assert.ok(!/__[A-Z_]+__/.test(text), 'every placeholder is filled');
   assert.equal(c.image, 'registry.test/claudepilot/workspace:1-dev-1');
   const e = envOf(m);
   assert.equal(e.JR_REPO_URL, 'https://github.com/alfianisnan26/claudepilot.git');
@@ -255,7 +270,7 @@ test('T-491 Event: without a GitHub token the run is refused before anything is 
 test('the cluster-wide cap: three running Jobs, the fourth says "queued behind 3" and starts when one ends', async () => {
   const w = world([{ name: 'claudepilot-job-00000001', chat: 'chat-x' }, { name: 'claudepilot-job-00000002', chat: 'chat-y' }, { name: 'claudepilot-job-00000003', chat: 'chat-z' }]);
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
-  await waitFor('the queue line', () => /queued behind 3 \(at most 3 at once, 2 per chat\)/.test(s.out()));
+  await waitFor('the queue line', () => /queued behind 3 \(at most 3 at once, 2 per chat, 2 per program\)/.test(s.out()));
   await new Promise((r) => setTimeout(r, 400));
   assert.ok(w.state().jobs.find((j) => j.name.startsWith('claudepilot-job-') && !/0000000\d$/.test(j.name))?.suspend, 'still suspended');
   w.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
@@ -275,6 +290,80 @@ test('the per-chat cap: a chat with two running waits, another chat goes past it
   w.edit((st) => { Object.assign(st.jobs[1] ?? {}, { done: true, rc: 0 }); });
   const r = await a.done;
   assert.equal(r.code, 0, r.out);
+});
+
+test('T-524 the per-program cap: two Konfersi Jobs running (one from before the label, known by its repo), a third waits; ClaudePilot goes past it', async () => {
+  const w = world([{ name: 'claudepilot-job-0000000a', chat: 'chat-x', program: 'konfersi' }, { name: 'claudepilot-job-0000000b', chat: 'chat-y', repo: 'konfersi-backend' }]);
+  const k = w.start(['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'main', '--', 'true'], { PILOT_SESSION_ID: 'chat-a' });
+  await waitFor('konfersi queued', () => /queued behind 2 \(at most 3 at once, 2 per chat, 2 per program\)/.test(k.out()));
+  const c = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { PILOT_SESSION_ID: 'chat-b' }).done;
+  assert.equal(c.code, 0, c.out);
+  assert.doesNotMatch(c.out, /queued behind/, 'another program is not held up');
+  assert.doesNotMatch(k.out(), /rc=/, 'konfersi still waits');
+  w.edit((st) => { Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 }); });
+  const r = await k.done;
+  assert.equal(r.code, 0, r.out);
+  assert.match(w.applied().find((m) => m.includes('konfersi-backend')) ?? '', /job-run\/program: konfersi\}/);
+  // An event Job is its own program.
+  const e = w.run(['--repo', 'event', '--ref', 'main', '--', 'true'], { PILOT_SESSION_ID: 'chat-c' });
+  assert.equal(e.code, 0, e.out);
+  assert.ok(w.applied().some((m) => /job-run\/program: event\}/.test(m)));
+  assert.equal(w.run(['--list'], { JOB_RUN_MAX_PER_PROGRAM: 'x' }).code, 2, 'the cap is a number');
+});
+
+test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 4Gi with /tmp 2Gi; both prefer a node other than the control plane', () => {
+  for (const [argv, mem, tmp] of [[[], '4Gi', '2Gi'], [['--big'], '8Gi', '4Gi']] as const) {
+    const w = world();
+    const r = w.run([...argv, '--repo', 'claudepilot', '--ref', 'main', '--', 'true']); // --big first: it takes no value
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, new RegExp(`on k3s-master with ${mem}; log: `));
+    const m = yamlLoad(w.applied1()) as Manifest;
+    assert.deepEqual(container(m).resources, { requests: { cpu: '1000m', memory: mem }, limits: { cpu: '4', memory: mem } });
+    assert.deepEqual((m.spec.template.spec.volumes as { name: string; emptyDir: unknown }[])[0], { name: 'tmp', emptyDir: { medium: 'Memory', sizeLimit: tmp } });
+    assert.deepEqual((m.spec.template.spec.affinity as { nodeAffinity: unknown }).nodeAffinity, { preferredDuringSchedulingIgnoredDuringExecution: [
+      { weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } }] });
+  }
+});
+
+test('T-524 OOMKilled: the container killed at its limit says so with the limit and the hint --big (exit 137); with --big, split it', () => {
+  const killed = '=== JOB-RUN checked out claudepilot at abc1234 in 1s\nrunning the suite\n'; // no exit line: bash itself was killed
+  for (const [argv, re] of [[[], /was OOMKilled: it reached its memory limit of 4Gi \(the in-memory \/tmp counts too\); rerun with --big \(8Gi, prefers k3s-node2\)/],
+    [['--big'], /was OOMKilled: it reached its memory limit of 8Gi .*; 8Gi is the most a Job gets: split the command/]] as const) {
+    const w = world([], { oom: true, rc: 1, reason: 'BackoffLimitExceeded', log: killed });
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', ...argv, '--', 'npm test']);
+    assert.equal(r.code, 137, r.out);
+    assert.match(r.out, re);
+    assert.doesNotMatch(r.out, /ended without an exit code/, 'the reason is named, not a generic failure');
+  }
+  // One process killed inside the container (the shell lives on): the memory line counts it, and the run says so.
+  const w = world([], { rc: 1, log: '=== JOB-RUN SUMMARY claudepilot@abc1234 checkout=1s steps=1s run=1s rc=1 node=k3s-node2\n=== JOB-RUN MEMORY peak=4095Mi limit=4096Mi oom_kills=2\n=== JOB-RUN EXIT 1\n' });
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'npm test']);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /2 process\(es\) were OOM-killed at the memory limit of 4Gi; rerun with --big/);
+  // Evicted for /tmp over its sizeLimit.
+  const ev = world([], { rc: 1, reason: 'BackoffLimitExceeded', evicted: 'Usage of EmptyDir volume "tmp" exceeds the limit "2Gi".', log: killed });
+  const e = ev.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'npm test']);
+  assert.match(e.out, /was evicted: Usage of EmptyDir volume "tmp" exceeds the limit "2Gi"\. \(\/tmp holds at most 2Gi in memory; --big gives 4Gi\)/);
+});
+
+test('T-524 Pending for memory: one clear line (not a silent wait), then the Job starts when room frees', async () => {
+  const w = world();
+  writeFileSync(join(w.root, 'pending'), '0/2 nodes are available: 2 Insufficient memory. preemption: 0/2 nodes are available: 2 No preemption victims found for incoming pod.');
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
+  await waitFor('the Pending line', () => /is Pending: no node has 4Gi of memory free to request \(0\/2 nodes are available: 2 Insufficient memory\./.test(s.out()));
+  assert.match(s.out(), /it starts when a Job ends and frees memory \(waits up to 900s\)/);
+  await new Promise((r) => setTimeout(r, 400));
+  rmSync(join(w.root, 'pending'));
+  const r = await s.done;
+  assert.equal(r.code, 0, r.out);
+  assert.equal((r.out.match(/is Pending/g) ?? []).length, 1, 'said once, not every poll');
+  // Another reason is passed on as the scheduler gives it; past the start wait, the reason is in the last line.
+  const w2 = world();
+  writeFileSync(join(w2.root, 'pending'), '0/2 nodes are available: 2 node(s) had untolerated taint.');
+  const r2 = w2.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' });
+  assert.equal(r2.code, 1, r2.out);
+  assert.match(r2.out, /is Pending: 0\/2 nodes are available: 2 node\(s\) had untolerated taint\. \(waits up to 1s\)/);
+  assert.match(r2.out, /did not start in 1s \(pod: Pending: 0\/2 nodes are available/);
 });
 
 test('cleanup: interrupted while queued, the Job and its Secret are deleted', async () => {
@@ -538,4 +627,22 @@ test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred
   }
   // The label the rule names is the portal Deployment's own pod label.
   assert.match(readFileSync(join(REPO, 'deploy/k3s/portal.yaml'), 'utf8'), /app: claudepilot-portal/);
+});
+
+test('T-524: the heavy Jobs prefer a node other than the control plane (preferred only) and request all the memory they may use', () => {
+  type Pod = { affinity?: { nodeAffinity?: { requiredDuringSchedulingIgnoredDuringExecution?: unknown; preferredDuringSchedulingIgnoredDuringExecution?: unknown } };
+    containers: { resources: { requests: { memory: string }; limits: { memory: string } } }[]; volumes?: { name: string; emptyDir?: { sizeLimit?: string } }[] };
+  const gi = (v: string) => { const m = /^(\d+)(Gi|Mi)$/.exec(v); assert.ok(m, v); return Number(m[1]) / (m[2] === 'Mi' ? 1024 : 1); };
+  for (const name of ['job-run.yaml', 'gate-job.yaml', 'browser-job.yaml']) {
+    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MEMORY__/g, '4Gi').replace(/__TMP_SIZE__/g, '2Gi').replace(/__[A-Z_]+__/g, 'x');
+    const pod = (yamlLoad(text) as { spec: { template: { spec: Pod } } }).spec.template.spec;
+    const na = pod.affinity?.nodeAffinity;
+    assert.equal(na?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: never required (a required rule left every Job Pending)`);
+    assert.deepEqual(na?.preferredDuringSchedulingIgnoredDuringExecution, [{ weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } }], name);
+    for (const c of pod.containers) assert.equal(c.resources.requests.memory, c.resources.limits.memory, `${name}: memory request = limit`);
+    const tmp = pod.volumes?.find((v) => v.name === 'tmp')?.emptyDir?.sizeLimit;
+    const lim = pod.containers[0]?.resources.limits.memory ?? '';
+    if (tmp) assert.ok(gi(tmp) < gi(lim), `${name}: the in-memory /tmp (${tmp}) fits inside the limit (${lim}) with room for the processes`);
+  }
+  // The label the rule names is on k3s-master (kubectl get nodes --show-labels, 2026-10-15): node-role.kubernetes.io/control-plane=true.
 });
