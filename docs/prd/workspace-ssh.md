@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Draft v0.2, POC.** Nothing built. Slices: T-370 (S0 spike), T-371 (S1), T-372 (S2), T-373 (S3), T-374 (S4). v0.2: one Unix user per person (owner, 2026-10-15). |
+| Status | **Draft v0.3, POC.** S0 done locally on Docker: [evidence](evidence/t370-poc-byoa-ssh.md) (works; 14 findings folded in here). Nothing built in the portal. Slices: T-370 (S0 spike), T-371 (S1), T-372 (S2), T-373 (S3), T-374 (S4). v0.2: one Unix user per person (owner, 2026-10-15). |
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-15 |
 | Decisions | D-53 (bring your own agent, consent twice, internal only), D-54 (other agent CLIs later), D-56 (this design) |
@@ -70,11 +70,14 @@ desktop: ssh ws-isnan-pod                      (~/.ssh/config: ProxyCommand pilo
   `AllowTcpForwarding local` (VS Code Remote-SSH needs a local forward), `AllowAgentForwarding no` (a desktop's keys never reach a shared
   workspace), `X11Forwarding no`, `PermitTunnel no`, `GatewayPorts no`, `PermitUserEnvironment no`, `ClientAliveInterval 30`,
   `ForceCommand /etc/claudepilot/bin/ssh-enter`.
-- **No secret in an argument.** The per-connection files (authorized keys, the Portal MCP token) are written by the portal through the
-  runtime's put into the person's `~/.claudepilot/ssh/conn/<connId>/` (their uid, mode 600) before `sshd -i` starts, and removed when the connection ends. The
-  command line carries only paths and ids.
-- **Revocation** closes the WebSocket: the exec ends, `sshd` ends, the shell gets SIGHUP. A process that detached (the VS Code server
-  does, to survive reconnects) is ended by the portal by its `PILOT_CONN_ID` (S1 proves it).
+- **No secret in an argument.** Before `sshd -i` starts, the portal writes, through the runtime's put: the person's public keys to
+  `/etc/claudepilot/ssh/conn/<connId>/authorized_keys` (**root**, 644: in the person's home they could add keys of their own; S0 5.3), and the
+  Portal MCP token to the person's `~/.claudepilot/ssh/conn/<connId>/` (their uid, 600). `-o AllowUsers=p-<label>` goes with every connection,
+  or the person's key would log in as anyone (S0 5.2). The command line carries only paths and ids; the files go when the connection ends.
+- **Unix users** are created with the password `*` (no password, not locked): `useradd`'s default `!` makes `sshd` refuse keys (S0 5.1).
+- **Revocation** closes the person's WebSockets and ends every process of their Unix user (`pkill -u p-<label>`), also when they have no
+  live connection: a detached process (the VS Code server) outlives its connection on purpose. A normal disconnect leaves it running so
+  VS Code can reconnect. Measured in S0: disconnect in about 90 ms, processes 4 to 0 (S0 4.4).
 - **`pilot-ssh`** is one Node file (Node 22's built-in WebSocket) downloaded from the access sheet; it reads the token from
   `~/.config/pilot/token` (mode 600), never from an argument. A single binary is a later step.
 
@@ -173,7 +176,7 @@ Migrations go in the next free block (`docs/coord/PLAN.md`); append only.
 
 | Slice | What | Done when |
 | --- | --- | --- |
-| S0 spike | On the real workspace image and the pinned Claude Code: `sshd -i` as `node` over `docker exec -i` and kube exec (binary, no TTY); `SetEnv`; `AllowTcpForwarding local` with VS Code Remote-SSH through a ProxyCommand; hook input fields; a headers helper for an MCP server; `sudo sshd -i` in the pod (privilege escalation allowed?); `useradd` with a fixed uid at runtime and the home mount; what the pinned Claude Code does for a person with an unreadable managed drop-in and with the account `apiKeyHelper`; whether anything in the workspace uses the service account token. Evidence file under `docs/prd/evidence/`. | each item ✅ or ❌ with the output |
+| S0 spike (**done on Docker**, [evidence](evidence/t370-poc-byoa-ssh.md); Kubernetes items open) | On the real workspace image and the pinned Claude Code: `sshd -i` as `node` over `docker exec -i` and kube exec (binary, no TTY); `SetEnv`; `AllowTcpForwarding local` with VS Code Remote-SSH through a ProxyCommand; hook input fields; a headers helper for an MCP server; `sudo sshd -i` in the pod (privilege escalation allowed?); `useradd` with a fixed uid at runtime and the home mount; what the pinned Claude Code does for a person with an unreadable managed drop-in and with the account `apiKeyHelper`; whether anything in the workspace uses the service account token. Evidence file under `docs/prd/evidence/`. | each item ✅ or ❌ with the output |
 | S1 transport | `openssh-server` in the image (no daemon); `sshd_config`, `ssh-enter`; the route `/api/ssh/<workspaceId>` (bearer, `operate`, audit, connection row, close on revoke); people, Unix users, tokens, keys; `pilot-ssh`; the G6 list as tests. | `ssh` and VS Code Remote-SSH from a second container as the desktop, on Docker and on a Kubernetes rig; a revoked token ends a live connection in < 2 s |
 | S2 access UI | Workspace → SSH sheet: person, token (shown once), public key, config block with `HostKeyAlias` and the known-hosts line, download `pilot-ssh`; Connected now; revoke. 390 px first. | ux-checker PASS |
 | S3 observe | Hooks drop-in, `desktop-event`, outbox ingest, desktop sessions, read-only transcript, welcome screen, consent. | a `claude` started over SSH shows in pilot in ≤ 15 s with person, branch and transcript |
@@ -194,6 +197,7 @@ workspace at the same time, each signed in to their own Claude, each claiming an
 | Secrets in process lists or logs | tokens only in mode-600 files; `pilot-ssh` never logs the token; audit rows carry ids, never values |
 | A person using another's agent sign-in, the portal's Claudes, pool keys or secrets | a Unix user per person (section 5): 700 homes, no `sudo`, `node`-only paths, no service account token; desktop MCP tokens without session tools; never picked by `claude: auto` without an accepted invitation |
 | Root in the workspace | only `sshd`, through `node`'s `sudo`, to switch user; people get none |
+| A managed drop-in a person cannot read | Claude Code skips it with a warning ("policies from the failed source are NOT in effect"), it does not fail (S0 4.5). So a rule that must hold for people (a deny rule) never sits in a `node`-only drop-in: it goes in a root 0644 drop-in without secrets; pool drop-ins (`apiKeyHelper`, Secrets env) apply to `node`'s sessions only |
 | Skipping the monitoring | hooks are cooperative (owner acknowledged); the connection record is not |
 | The bypass gates | untouched: a desktop session is the person's own Claude Code under the repository's own settings; pilot does not drive it |
 
