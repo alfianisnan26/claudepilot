@@ -8,9 +8,8 @@
 #                                                       default: from the current folder's origin (konfersi alone: the folder's Gitea repo).
 #                                                       event (T-491) is exactly GitHub isnanme/event, nothing else: no event:<org>/<repo>;
 #                                                       it gets the same GitHub token as claudepilot (npm for @isnanme, and the clone). Git offers it
-#                                                       for that one URL only, but the token is also in the command's environment as
-#                                                       NODE_AUTH_TOKEN (the command and npm install scripts can read it), as in every claudepilot
-#                                                       Job; --also is refused with it
+#                                                       for that one URL only; --also is refused with it. As in every Job (T-401), the token is
+#                                                       in the fetch container alone, never in the command's environment or files
 #     --ref <branch or commit>                          default: HEAD of the current folder, which must be on the remote (push it first:
 #                                                       git push origin HEAD:wip/<name>); uncommitted changes are NOT in the Job
 #     --against <ref>                                   PROOF (T-333): run the command on --ref, then on <ref> in the same Job (a full commit hash or
@@ -34,7 +33,9 @@
 # script is gone), and when the chat ends (the Claude process, CLAUDE_PID or JOB_RUN_WATCH_PID, exits).
 # A failed `npm ci` in the Job is tried once more (it says so in the log). Exit 0 of a proof means the proof held, not only the command.
 # Credentials (the npm token for GitHub Packages, Gitea's from git's credential helper) go to kubectl on stdin into a Secret that belongs to
-# the Job and is deleted on exit; they are never on a command line, and the streamed log is masked for them. The whole log: JOB_RUN_LOG
+# the Job and is deleted on exit; they are never on a command line, and the streamed log is masked for them. Only the Job's init container
+# `fetch` reads that Secret (T-401): it clones and runs `npm ci --ignore-scripts`, and no code of the repository or a dependency runs there;
+# the install scripts and the command run in the `run` container, which has no credential in its environment, git config or files. The whole log: JOB_RUN_LOG
 # (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish, 2 for a usage error, 124 past the deadline.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -254,7 +255,7 @@ while :; do
   sleep "$poll"
 done
 kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"suspend":false}}' >/dev/null
-t1=$(date +%s); phase=running
+t1=$(date +%s); tw=$t1; phase=running
 job_state() { # Complete, Failed:<reason>, gone, or nothing while it runs
   kubectl -n "$ns" get job "$job" -o json 2>/dev/null | jq -r '[(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True") | if .type == "Failed" then "Failed:\(.reason // "")" else .type end] | first // ""' 2>/dev/null || echo gone
 }
@@ -265,6 +266,9 @@ while :; do
   pj=$(pod_json); ph=$(pod_get '.items[0].status.phase' "$pj")
   case "$ph" in Running|Succeeded|Failed) break ;; esac
   [ -z "$(job_state)" ] || break
+  # The fetch container (T-401: the clone and npm ci, with the credentials) is running: started, so the start wait does not apply (the
+  # Job's deadline does); its log comes out of the run container.
+  if [ -n "$(pod_get '.items[0].status.initContainerStatuses[0].state.running.startedAt' "$pj")" ]; then tw=$(date +%s); sleep "$poll"; continue; fi
   # Pending because no node can hold it (T-524): say so once, instead of a silent wait.
   why=$(pod_get '[.items[0].status.conditions[]? | select(.type == "PodScheduled" and .status == "False" and .reason == "Unschedulable") | .message] | first' "$pj")
   case "$why" in
@@ -275,7 +279,7 @@ while :; do
         echo "job-run: $job is Pending: no node has $memory of memory free to request ($why); $hint (waits up to ${start_wait}s)" >&2; } ;;
     *) [ "$said" = other ] || { said=other; echo "job-run: $job is Pending: $why (waits up to ${start_wait}s)" >&2; } ;;
   esac
-  [ $(( $(date +%s) - t1 )) -lt "$start_wait" ] || { echo "job-run: the Job did not start in ${start_wait}s (pod: ${ph:-none}${why:+: $why})" >&2; exit 1; }
+  [ $(( $(date +%s) - tw )) -lt "$start_wait" ] || { echo "job-run: the Job did not start in ${start_wait}s (pod: ${ph:-none}${why:+: $why})" >&2; exit 1; }
   sleep "$poll"
 done
 
@@ -304,7 +308,7 @@ rc=$(sed -n 's/^=== JOB-RUN EXIT \([0-9]\{1,3\}\)$/\1/p' "$log" | tail -n 1)
 # Out of memory (T-524): the container killed at its limit (no exit line), or one process in it (the memory line counts the kills).
 pj=$(pod_json)
 if [ -n "$big" ]; then more="$mem_big is the most a Job gets: split the command"; else more="rerun with --big ($mem_big, prefers k3s-node2)"; fi
-if [ "$(pod_get '.items[0].status.containerStatuses[0].state.terminated.reason' "$pj")" = OOMKilled ]; then
+if [ "$(pod_get '[.items[0].status | (.initContainerStatuses // [])[], (.containerStatuses // [])[] | .state.terminated.reason] | index("OOMKilled") != null' "$pj")" = true ]; then
   echo "job-run: $job was OOMKilled: it reached its memory limit of $memory (the in-memory /tmp counts too); $more" >&2
   [ -n "$rc" ] || rc=137
 elif ooms=$(sed -n 's/^=== JOB-RUN MEMORY .* oom_kills=\([0-9]\{1,9\}\)$/\1/p' "$log" | tail -n 1) && [ "${ooms:-0}" -gt 0 ]; then
