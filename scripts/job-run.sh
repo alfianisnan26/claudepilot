@@ -7,8 +7,10 @@
 #     --repo claudepilot | event | konfersi[:<org>/<repo>]
 #                                                       default: from the current folder's origin (konfersi alone: the folder's Gitea repo).
 #                                                       event (T-491) is exactly GitHub isnanme/event, nothing else: no event:<org>/<repo>;
-#                                                       it gets the same GitHub token as claudepilot (npm for @isnanme, and the clone), offered to
-#                                                       that one URL only; --also is refused with it
+#                                                       it gets the same GitHub token as claudepilot (npm for @isnanme, and the clone). Git offers it
+#                                                       for that one URL only, but the token is also in the command's environment as
+#                                                       NODE_AUTH_TOKEN (the command and npm install scripts can read it), as in every claudepilot
+#                                                       Job; --also is refused with it
 #     --ref <branch or commit>                          default: HEAD of the current folder, which must be on the remote (push it first:
 #                                                       git push origin HEAD:wip/<name>); uncommitted changes are NOT in the Job
 #     --against <ref>                                   PROOF (T-333): run the command on --ref, then on <ref> in the same Job (a full commit hash or
@@ -17,7 +19,7 @@
 #                                                       (exit 1; 2 when <ref> or a kept path is missing). Without it nothing changes.
 #     --keep-tests <paths>                              with --against: these files (comma separated) are taken from --ref onto the other ref
 #     --also <org>/<repo>[@<ref>]                     one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg
-#     --steps npm-ci|none                               before the command (default npm-ci, in each repository with a package-lock.json)
+#     --steps npm-ci|none                               before the command (default npm-ci, at the root of the repository and of each --also clone that has a package-lock.json)
 #     --artifacts <paths>  --out <dir>                  files in the repository (comma separated) copied back into <dir> (default
 #                                                       ./job-run-artifacts/<job>); at most JOB_RUN_ARTIFACT_MAX bytes compressed (4 MiB)
 #     --timeout <s>                                     the Job's deadline once it runs (default 3600, at most 5400)

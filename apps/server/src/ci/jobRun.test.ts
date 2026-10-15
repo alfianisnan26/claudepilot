@@ -388,8 +388,8 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   const token = `fx${hex(18)}`;
   const eventUrl = 'https://github.com/isnanme/event.git';
   const asksFor = (url: string) => { // does `git credential fill` give a password for this URL?
-    const u = new URL(url);
-    return `printf 'protocol=https\\nhost=${u.host}\\npath=${u.pathname.slice(1)}\\n\\n' | GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null | grep -c '^password=' || true`;
+    const m = /^https:\/\/([^/]+)\/(.*)$/.exec(url); // split by hand: new URL() would fold a "/../" away before git sees it
+    return `printf 'protocol=https\\nhost=${m?.[1]}\\npath=${m?.[2]}\\n\\n' | GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null | grep -c '^password=' || true`;
   };
   const podEvent = (url: string, cmd: string, tok: string | undefined) => spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
     PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: url, JR_REF: 'main', JR_ALSO: '', JR_STEPS: 'none', JR_ARTIFACTS: '',
@@ -397,7 +397,8 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
     GIT_CONFIG_VALUE_0: url, ...(tok ? { NODE_AUTH_TOKEN: tok, GIT_TOKEN: tok, GIT_USER: 'x-access-token' } : {}) } });
   const ev = podEvent(eventUrl, ['cat "$HOME/.npmrc"', 'echo ---', 'cat "$HOME/.gitconfig"', 'echo ---',
     asksFor(eventUrl), asksFor('https://github.com/isnanme/other.git'), asksFor('https://github.com/isnanme/event.git.evil/x'),
-    asksFor('https://example.com/isnanme/event.git')].join('\n'), token);
+    asksFor('https://example.com/isnanme/event.git'), asksFor('https://github.com/isnanme/event'), asksFor('https://github.com/isnanme/event-x.git'),
+    asksFor('https://github.com/isnanme/event.git/../other.git')].join('\n'), token);
   assert.equal(ev.status, 0, ev.stdout + ev.stderr);
   assert.match(ev.stdout, /^@isnanme:registry=https:\/\/npm\.pkg\.github\.com\n\/\/npm\.pkg\.github\.com\/:_authToken=\$\{NODE_AUTH_TOKEN\}\n/m);
   assert.ok(!ev.stdout.includes(token), 'the files hold references, not the value');
@@ -406,7 +407,7 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   assert.match(cfg, /useHttpPath = true/);
   assert.equal((cfg.match(/\[credential/g) ?? []).length, 1, 'one credential section, no global helper');
   assert.doesNotMatch(cfg, /^\[credential\]/m, 'no unscoped credential section');
-  assert.match(ev.stdout, /---\n1\n0\n0\n0\n=== JOB-RUN SUMMARY/, 'a password for the Event URL only: not another path, a look-alike path, or another host');
+  assert.match(ev.stdout, /---\n1\n0\n0\n0\n0\n0\n0\n=== JOB-RUN SUMMARY/, 'a password for the Event URL only: not another path, a look-alike path, another host, the URL without .git, event-x.git or a /../ path');
   // claudepilot (its own URL, here the local bare repository): no npmrc, the global helper as before.
   const cp = pod('main', 'test ! -e "$HOME/.npmrc" && echo no npmrc; git config --global --get credential.helper >/dev/null && echo global helper');
   assert.match(cp.stdout, /no npmrc\nglobal helper\n/, 'not Event: no npmrc, the global helper');

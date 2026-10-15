@@ -23,7 +23,7 @@ jobs:
   quick:
     name: Quick gate
     if: ci.event == 'push' || inputs.full == false
-    timeout: 30m # job-run's own --timeout (1200 s = 20 min) plus 10 min in the Job queue (3 at once cluster-wide)
+    timeout: 30m # job-run's own --timeout (1200 s = 20 min) plus 10 min in the Job queue (3 at once cluster-wide); job-run itself waits up to 60 min queued plus 15 min to start, so a longer queue ends as a red timeout (safe)
     steps:
       - name: Install and checks, in a cluster Job
         run: |
@@ -31,7 +31,7 @@ jobs:
   full:
     name: Full gate
     if: ci.event == 'manual' && inputs.full == true
-    timeout: 100m # job-run's own --timeout (5400 s = 90 min) plus 10 min in the Job queue; under the 2h of the pipeline
+    timeout: 100m # job-run's own --timeout (5400 s = 90 min) plus 10 min in the Job queue; under the 2h of the pipeline; a queue longer than that ends as a red timeout (safe)
     steps:
       - name: Install, full gate and build, in a cluster Job
         run: |

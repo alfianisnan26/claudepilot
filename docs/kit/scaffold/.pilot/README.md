@@ -51,13 +51,16 @@ environment: `deploy-stg.yml` naming `stg`, `deploy.yml` naming `production`, ea
   the deploy); write what the next job needs to `.pilot/out/*.env`; and have tests against fakes (a fake remote,
   a fake cluster) before the first real run.
 - **Both gates run as cluster Jobs** (T-491). Each lane is one `{{JOB_RUN}} --ref "$PILOT_SHA" -- '<command>'`:
-  the Job clones the commit, runs `npm ci` (job-run's default step, in each folder with a `package-lock.json`),
+  the Job clones the commit, runs `npm ci` (job-run's default step: at the repository root, and in each `--also` clone, when it has a `package-lock.json`; not in other folders),
   then the command; the quick lane runs `{{TEST_QUICK}}`, the full lane `{{TEST_FULL}} && {{BUILD_CHECK}}`. The
   workspace only streams the log, so the pipeline needs no `flock /tmp/heavy.lock`: do not add one. The commit
   must be on the repository job-run clones from (GitHub or Gitea), not only on `pilot`: push it to both. A red
   install, check or build is the step's exit code. Without a cluster, replace the line with the bare command.
   Each step's `timeout` is job-run's own `--timeout` plus 10 minutes for the Job queue (3 Jobs at once cluster-wide):
-  keep that margin when you change either. `--repo event` takes no `--also`, and its token goes to that one URL only.
+  keep that margin when you change either. job-run itself waits up to 60 minutes in the queue and 15 minutes for the Job
+  to start, so a longer queue ends as a red timeout of the step (safe, not a pass); raise the timeouts if that happens often.
+  `--repo event` takes no `--also`. Git offers the GitHub token only for the Event URL, but the token is also in the Job
+  command's environment as `NODE_AUTH_TOKEN` (the command and npm install scripts can read it), as in every claudepilot Job.
 - **The quick gate's base.** In CI the commit the branch moved from is `$PILOT_BASE_SHA` (empty for a new branch or
   a manual run). The Job does not see `PILOT_*` variables and its clone is one commit deep: pass the base as an
   argument (`{{JOB_RUN}} --ref "$PILOT_SHA" -- {{TEST_QUICK}} "$PILOT_BASE_SHA"`, the several-words form) and
