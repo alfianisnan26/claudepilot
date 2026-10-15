@@ -10,16 +10,13 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
 - T-404 merged a690f49 (QA PASS WITH GAPS 3325; hook = second layer, decision 3314; primary layer = T-451); gate GREEN (gate-job a690f49-5383).
 
 ## IN FLIGHT
-- Integration 7f86942 pushed: T-378 S1 + coordinator cc4be7a (gate GREEN 7f86942-e17c).
-- Integration 2c500bd pushed: T-376 S2 merge + pack (gate GREEN 2c500bd-daec; proof structural only, gaps -> S3, comment 3464).
-- T-460 e9834bc QA round 2 PASS (3535, Jobs 82567c2a + 4db696d8 proof): merge with T-450 S1a after gate 2c500bd; f646e77b ended; fee31b8a (qa, sonnet) kept for S1b QA.
-- T-449 UX: FAIL (3584, harness 51857b4): 390 px targets 40 px (All/Done new; window, group-by, export shared). cf7d2801 re-runs with --artifacts for a visual verdict. Fix slice (shared option control 44 px at touch widths) when a slot frees (decision 3594).
-- T-450 S1a 858c4c5 QA PASS WITH GAPS (3513): merge after gate 2c500bd is green (decision 3514). Verifier af18baca and implementer a8412b0f ended.
-- Integration 2a1c192 PUSHED (gate GREEN 2a1c192-e71a): T-450 S1a, T-460, coordinator docs. Deploy run #34 rmv94b4qe1454cc started 05:48.
-- Integration 9a8dc81 PUSHED (gate GREEN 9a8dc81): T-450 S1b + T-472 S1 + release merge-back a843010 + D-64.
-- T-449 fix DONE 1a4961a (3649: global CSS floor 44 px <600 px for Segmented/Menu; "unknown"; harness Job 54368b40 exit 0). 4f1aab58 ended. UX verify 6120b874 (sonnet, satria) incl. other pages.
-- T-476 (held by the lead) DONE c2b9c8f (report 3664; migration 776 free; proof f7cb1d60). 22d8020c ended. Blind review ed50fc3c PASS WITH CONDITIONS (3674): major = folder branch not tied to the folder's remote (ci/authz.ts:58); fix on dev/t-476-1, ed50fc3c re-reviews, then sonnet QA, merge.
-- T-472 (held by the lead): S1 QA PASS WITH GAPS 3641, merged. S2 DONE 577d98d (fake clock seam settleClock; hourly pack, deferred; proof a23bac3a); e5a22612 ended; QA b6a3aea3 (sonnet, satria). After deploy: live paths check, restarts/h, pool re-assign.
+- Integration 98da1d8 PUSHED (gate GREEN 98da1d8): T-449 fix 1a4961a + touch-floor harness (UX PASS WITH GAPS 3683; 3694). Earlier: 9a8dc81 (T-450 S1b, T-472 S1, release merge-back, D-64).
+- Integration 9bbce90 PUSHED (gate GREEN 9bbce90): T-472 S2 577d98d merge (QA PASS WITH GAPS 3697; decision 3698) + pack.
+- T-476 reviewer ed50fc3c also FAIL on d234fee (3753): same 5 tests; authz logic holds; diagnosis relayed to e3501198 (fixture flag; filter audit asserts by kind).
+- T-476 (held by the lead) DONE c2b9c8f (report 3664; migration 776 free; proof f7cb1d60). 22d8020c ended. Blind review ed50fc3c PASS WITH CONDITIONS (3674): major = folder branch not tied to the folder's remote (ci/authz.ts:58); fix DONE ba42f78 on dev/t-476-2 (3720; proof Job 93756360; aeb7bee1 ended). Re-review 3721 PASS WITH CONDITIONS (test only). Decision 3722: fail-closed flag (branchFromWorktree) + session-path test by e87888e8 (implementer, sonnet, satria) on dev/t-476-3 (base ba42f78); then ed50fc3c (idle) quick re-review, QA edef5c98 (sonnet) on the final head; merge dev/t-476-3. Scope added (3729): lead reads every run of its program remotes (coordinator 3691) + read side tied like start side (QA 3727).
+- T-472 (held by the lead): S1 + S2 merged (QA 3641, 3697). After deploy: live paths check, restarts/h, pool re-assign; then close.
+- T-476 final head d234fee on dev/t-476-3 (3749: flag -> branchFromWorktree, lead read rule get/list/logs, read side tied; proof Job 3cb2b5a3). e87888e8 ended. QA edef5c98 FAIL (3750): whole src/ci suite 115/120, 5 existing tests broken (autoApprove 1, deploy 3, portalTools 1); edef5c98 ended. Fixer e3501198 (sonnet, satria) on dev/t-476-4 (base d234fee); ed50fc3c finishes authz review, then checks the delta; fresh sonnet QA on the final head.
+- T-450 S2 (page, phone first, + attribution CSV ignores the done filter): 9675d606 (implementer, sonnet, satria), branch dev/t-450-s2 from integration 98da1d8. Spawned 06:32 into e87888e8's slot.
 
 ## STATE PER TICKET
 - T-404: third blind review gave NO verdict (declined probes, design point -> T-451); fixes verified 3325; open until deployed.
@@ -35,6 +32,8 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
 - Next batch (2026-10-16): T-427, T-404, T-376 S2 if they pass.
 
 ## DECISIONS (binding)
+- 06:26 Supervisor again says five workers; D-61 (3) stands. Slip: the 98da1d8 gate-done notice was first answered "no response"; acted on the supervisor's nudge (pushed). LESSON holds.
+- 06:18 Quota rule: fadlilah 76 % used, resets 06:40. T-450 S2 waits for that reset; the free slot is held for the T-476 re-review and QA (critical path, Event blocked).
 - 06:05 Quota (coordinator): until 06:10-07:40 resets, only critical-path spawns, satria first, sonnet unless a gate review needs opus; finished workers end at once. D-64: auto move acts at 10 % left only, no early warning. Kept: T-476 (opus; Event blocked), T-449 fix, T-472 S2 (sonnet), all on fadlilah.
 - 06:00 An ended implementer's ticket returns to the queue, so the verifier cannot comment: the lead claims it (ticket_claim_next id) and posts the QA. Keep T-n held by the lead from claim to close.
 - 05:55 Supervisor says up to five workers; D-61 (at most 3 live) is the standing row and wins: keep 3. Ended idle ux cf7d2801 to start T-476.
@@ -72,4 +71,4 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
    T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149.
 
 LESSONS: a gate-done notification always needs action (read the verdict, push or fix), never "no response"; never chain a commit after a merge that may conflict; dontAsk workers cannot Read /tmp (job-out/ inside the worktree) and cannot
-git merge; end job-run commands with the test's own rc; FULL hashes with job-run; gate before every integration push.
+git merge; end job-run commands with the test's own rc; implementer briefs run the module's WHOLE test folder (T-476: 5 breaks unseen); FULL hashes with job-run; gate before every integration push.
