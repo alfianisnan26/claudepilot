@@ -104,6 +104,23 @@ export const AGENT_ENV = [
     env: 'MAX_MCP_OUTPUT_TOKENS',
     applies: 'restart',
   },
+  {
+    def: defineSetting({
+      key: SETTING_KEYS.agentsAutoCompactWindow,
+      type: 'number',
+      default: 200000,
+      min: 50000,
+      max: 1000000,
+      integer: true,
+      scope: 'global',
+      group: 'agents',
+      order: 70,
+      label: 'Auto-compact window',
+      help: `The context size, in tokens, Claude Code compacts a conversation against (CLAUDE_CODE_AUTO_COMPACT_WINDOW); with a 1M-token model it otherwise grows toward 1M before it compacts, and every request re-reads it. Source: the 2026-10-15 cost audit: cache reads were 65 to 85 percent of the crews' cost, and one QA session ran 499 requests with a median context of 397k tokens (max 967k). ${RESTART}`,
+    }),
+    env: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+    applies: 'restart',
+  },
 ] as const;
 
 /** The setting keys of the agent policy: a change to one delivers to every workspace again. */

@@ -112,6 +112,7 @@ export const OWNERSHIP: Record<Owner, Declaration> = {
       'CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH',
       'BASH_MAX_OUTPUT_LENGTH',
       'MAX_MCP_OUTPUT_TOKENS',
+      'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
     ],
     // `sandbox` merges key by key across drop-ins; its credentials belong to Secrets & env.
     validate: { sandbox: (v) => (isObject(v) && 'credentials' in v ? 'sandbox.credentials belongs to Secrets & env' : null) },

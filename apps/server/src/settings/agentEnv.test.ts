@@ -18,7 +18,7 @@ import { AGENT_ENV, createSettingsRoutes, SettingsModule } from './index.js';
 
 const WS = 'docker/ws1';
 const POLICY = '/etc/claude-code/managed-settings.d/10-claudepilot-policy.json';
-const NAMES = ['BASH_MAX_OUTPUT_LENGTH', 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS', 'CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH', 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', 'MAX_MCP_OUTPUT_TOKENS'];
+const NAMES = ['BASH_MAX_OUTPUT_LENGTH', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW', 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS', 'CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH', 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', 'MAX_MCP_OUTPUT_TOKENS'];
 const code = (c: string) => (e: unknown) => isAppError(e) && e.code === c;
 
 async function setup() {
@@ -60,6 +60,7 @@ test('the policy drop-in carries exactly the declared names, with the defaults a
       CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: '3',
       BASH_MAX_OUTPUT_LENGTH: '8000',
       MAX_MCP_OUTPUT_TOKENS: '25000',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000',
     });
     // Every setting names its source and, behind its ⓘ, when a change takes effect (T-302, T-309): the
     // sub-agent values at once for new sub-agents, the output caps at Claude's next start.
@@ -70,6 +71,7 @@ test('the policy drop-in carries exactly the declared names, with the defaults a
       CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: 'new-subagents',
       BASH_MAX_OUTPUT_LENGTH: 'restart',
       MAX_MCP_OUTPUT_TOKENS: 'restart',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: 'restart',
     });
     for (const a of AGENT_ENV) {
       const help = a.def.help ?? '';
