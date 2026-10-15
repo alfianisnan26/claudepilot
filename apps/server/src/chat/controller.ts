@@ -46,6 +46,8 @@ import {
   WORKTREE_DIRTY,
   type ChatConfigChange,
   type ChatControl,
+  type ChatEvent,
+  type ChatEventPage,
   type ChatFile,
   type ChatFolderScan,
   type ChatImage,
@@ -79,6 +81,7 @@ import { HOME, type ExecSession } from '../workspaces/runtime.js';
 import { ChatContent, blobFileFor, type BlobFile } from './artifacts/index.js';
 import { decodeToolImage, pruneBlobs, readBlob, saveBlob } from './blobs.js';
 import { ineligibleError, NOT_SET_UP, NOT_SIGNED_IN, UNKNOWN, type Eligibility } from './eligibility.js';
+import { eventPage } from './eventPage.js';
 import { workspacePath } from './files.js';
 import { CP_SESSION_PATH, HOST_ENV_NAMES, parseStartOutput } from './host.js';
 import {
@@ -1080,6 +1083,18 @@ export class ChatController {
 
   history(id: string, after = 0) {
     return this.#chat.history(this.#chat.resolveId(id), after);
+  }
+
+  /** A page of the transcript counted back from `before` (the newest when null), oldest first, tool_result bodies cut (T-376, `eventPage.ts`). */
+  historyPage(id: string, before: number | null, limit: number): ChatEventPage {
+    return eventPage(this.#chat.historyBefore(this.#chat.resolveId(id), before, limit + 1), limit);
+  }
+
+  /** One stored event whole (what a page cut to a preview); 404 when the session has no such event. */
+  event(id: string, seq: number): ChatEvent {
+    const ev = Number.isSafeInteger(seq) && seq > 0 ? this.#chat.event(this.#chat.resolveId(id), seq) : null;
+    if (!ev) throw new AppError('NOT_FOUND', 'No such event.');
+    return ev;
   }
 
   /** The session's sub-agents and background tasks. */
