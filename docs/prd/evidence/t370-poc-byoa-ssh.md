@@ -120,9 +120,16 @@ ssh poc-ws                               cek token -> orang (alice)             
 | CLI | Versi | Mode headless | Model ke stand-in? | Lewat tunnel | ACP | Login |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | 0.162.1 | `codex exec --json` (event JSONL) | ✅ provider custom (`base_url`, Responses API) | ✅ jawaban + usage (10 in / 9 out) | — (ada `codex app-server` JSON-RPC: `initialize` ✅ lewat tunnel) | ChatGPT atau API key |
-| Gemini | 0.64.0 | `gemini -p -o stream-json` | ✅ `GOOGLE_GEMINI_BASE_URL` | ✅ jawaban + stats | ✅ `--acp`: initialize → session → prompt → jawaban | Google, API key, Vertex, gateway |
+| Gemini | 0.64.0 | `gemini -p -o stream-json` | ✅ `GOOGLE_GEMINI_BASE_URL` | ✅ jawaban + stats | ✅ `--acp`: initialize → session → prompt → jawaban | API key (AI Studio / Gemini API berbayar), Vertex, atau Code Assist Standard/Enterprise. **Login Google pribadi sudah tidak bisa** (lihat catatan di bawah) |
 | Copilot | 1.0.98 | `copilot -p` | ❌ tidak ada override | sampai login: pesan "set COPILOT_GITHUB_TOKEN / gh auth login" | ✅ `--acp`: initialize ok, `session/new` → "Authentication required" | `copilot-login` (GitHub) |
 | Cursor | 2026.10.14-941492e | `cursor-agent -p --output-format stream-json` | ❌ tidak ada override | sampai login: "run 'agent login' or set CURSOR_API_KEY" | ✅ `cursor-agent acp`: initialize ok, `session/new` → "Authentication required" | `cursor_login` atau `CURSOR_API_KEY` |
+
+**Catatan Gemini (simulasi dengan login asli, 2026-10-15):** setelah owner login Google di Gemini CLI 0.64.0, CLI langsung mengganti
+tipe auth di `~/.gemini/settings.json` ke `gemini-api-key` (jam 01:41:08 `google_accounts.json`, `settings.json` dan `state.json` berubah
+bersamaan; `oauth_creds.json` tidak pernah dibuat) dan meminta API key. Sebabnya bukan paket akun: menurut beberapa sumber, Google
+menghentikan login Google pribadi untuk Gemini CLI sejak 2026-06-18 untuk akun gratis, AI Pro maupun AI Ultra; yang masih jalan adalah
+API key dan lisensi organisasi Code Assist Standard/Enterprise (pengumuman Google sendiri belum kami buka langsung). Jadi untuk BYOA,
+"login Gemini" berarti API key milik orang itu atau lisensi organisasi.
 
 Tempat tiap agent menyimpan sesinya (di home orang itu, jadi portal bisa membacanya untuk pengamatan): Claude
 `~/.claude/projects/<folder>/<id>.jsonl`, Codex `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, Gemini `~/.gemini/tmp/<proj>/chats/session-*.jsonl`,
