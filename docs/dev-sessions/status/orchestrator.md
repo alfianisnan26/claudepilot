@@ -20,7 +20,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
   ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
-- T-426 (claimed): folded into T-557 S1b lease (4904); ab93b54 is input, not merged alone.
 - T-531 (high, authz): S1 df65563; blind review PASS WITH CONDITIONS (4520); S2 9cd240f. QA 47710391 PASS WITH GAPS (4761/4762:
   1428/1433 0 fail job-a8a40ad8; mutation holds job-620ab38d; no agent path uses the refused routes). Decision 4763: S2c (sonnet)
   tests legacy refs get the same 404 (workspaceRefGuard checks ws_ ids only) -> lead gate -> merge. T-538..T-540 ticketed.
@@ -37,7 +36,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## DECISIONS (binding)
 - 12:45 Owner via coordinator (T-557 4901): only CI jobs go remote (cluster | connect:<host> | codespace); ONE per-job secret
-  lease for all, T-426 folded in (4904). Order T-379, T-401, then S1a seam (sonnet, now) + S1b lease (opus, after T-401), S2 connect, S3 codespace.
+  lease for all, T-426 folded in (4904; ab93b54 is input, not merged alone). Order T-379, T-401, then S1a seam (sonnet, now) + S1b lease (opus, after T-401), S2 connect, S3 codespace.
 - 12:09 Workers cannot git merge: the lead merges base heads into slice branches (T-379 090fbbf, 4852).
 - 11:30 Coordinator (owner priority, metocean): T-379 NOW in its own worker; built on T-401's fe62fa6 (fetch stage holds creds).
 - 12:00 Coordinator tool review: lead edits of code (dev-t-376 commits 01:57-02:03, no trailers, before D-63 03:36; 4820).
