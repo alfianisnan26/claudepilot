@@ -7,7 +7,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## IN FLIGHT (6 of 6, D-71): all sonnet
 - QA PERF 7e4879c7 (lane/cp-qa-perf): T-591 (S1 bf932c3 + S1b 09ade72, 5563) -> T-486 S2e ea1c006 (5585) -> T-611 4ac5982 (5580)
   -> T-586 (premerge wip/main-5b66aa0, gate GREEN) -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-548 -> T-558 e652c44. T-426 S1b jumps in.
-- QA UI bbbe2b38 (qa/T-600-ui): home.mjs harness fix; then FE S1b re-run; then T-576 ux (2427d98, after T-586 merges). Headless only (5503).
+- QA UI bbbe2b38 (qa/T-600-ui): home.mjs fix 924f1bfb PASS WITH GAPS (27/27 on its branch, not on integration; rides with T-600); waits for FE S1b re-run; then T-576 ux (2427d98, after T-586 merges). Headless only (5503).
 - BACKEND 6d72b5c6 (ticket/T-597-portal-slash, plan 5546) on T-597; then T-600 BE (plan 5540, respawn on FE S1b), T-325 S1+S2 (5549).
 - BE INFRA 5825f112 (ticket/T-547-quota-placement) on T-547; then T-610.
 - FRONTEND 6a1a061e (ticket/T-600-fe-s1b from 7d19c94) on T-600 FE S1b (QA UI FAIL 5565, decision 5573); then T-556 (5497/5525) after T-486.
