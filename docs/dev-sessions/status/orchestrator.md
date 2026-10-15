@@ -44,7 +44,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   worktree+branch (git worktree add -b ticket/T-n-slug origin/integration) and gives the lane the path; risk (5390): Bash outside the spawn worktree.
 - 15:50 Workspace restarted 13:46 UTC; 03c496b6 (T-546, mid-Jobs) and cee43422 (T-486 port, WAITING 3cb0883) are gone, all branches
   pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster, finishes by itself. 14:05 Coordinator AWAY (owner offline): restart POSTPONED, long work OK, Mac runner off.
-  The coordinator ran #38/#39. After it: fresh workers re-run T-546's Jobs on bb7cdb0 and T-486's on 3cb0883.
+  BINDING: the coordinator runs deploys (#38-#40); I start NO deploy. (Old T-546/T-486 workers replaced.)
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
 - 13:20 D-66 (pulled, 619b4b5): workers run scripts/quick-check.sh (one Job: format, lint, named tests) before a branch goes
