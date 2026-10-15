@@ -40,7 +40,7 @@ export interface ChatToolHost {
   /** T-294: the other workers of a session's parent. */
   crew(id: string): ChatSession[];
   /** T-294: the Claude a worker of `parentId` starts on, and why. */
-  spawnClaude(parentId: string, want?: string, model?: string | null): Promise<{ claudeId: string; name: string; why: SpawnClaudeWhy }>;
+  spawnClaude(parentId: string, want?: string, model?: string | null): Promise<{ claudeId: string; name: string; why: SpawnClaudeWhy; detail?: string }>;
   /** T-490 (D-63): the model a role runs on by the workspace persona's agent definition, or null. Unset: none known. */
   roleModel?: (workspaceId: string, role: string) => string | null;
   /** A model, effort or mode change (the controller's rules: never Bypass or Auto from here). */
@@ -233,7 +233,9 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       chat.holdInput(child.id, delivery);
       if (!waits) await delivery;
       ctx.affected(`session:${child.id}`);
-      const where = on.claudeId === parent.claudeId ? WHY_TEXT[on.why] : `${on.name}, ${WHY_TEXT[on.why]}`;
+      // T-547: with the figures that decided an auto pick (percent left, minutes to its reset).
+      const whyText = on.detail ? `${WHY_TEXT[on.why]} (${on.detail})` : WHY_TEXT[on.why];
+      const where = on.claudeId === parent.claudeId ? whyText : `${on.name}, ${whyText}`;
       return {
         summary: waits
           ? `Worker ${child.id} on ${where}${child.worktree ? `, branch ${child.worktree.branch}` : ''} waits to start: ${waits}. It gets its settings and your instruction when it starts, and reports to you; message it with session_message.`

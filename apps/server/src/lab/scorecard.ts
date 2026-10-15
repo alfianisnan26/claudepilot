@@ -651,7 +651,8 @@ export function programScore(p: Program, facts: CrewFacts, windowMs: number, com
 
 export const SCORECARD_BASIS: Record<string, string> = {
   program: 'The top of a session’s lineage (continuations, then parents) with at least one worker; the lead chain is that row and its continuations.',
-  tickets: 'A program’s tickets: held by one of its sessions (ticket_id), assigned to one, or with an event written by one. MEASURED.',
+  quotaUnused: 'Quota left unused at reset (T-547): per Claude and plan window, 100 minus the percent used in the last usage reading taken within 30 minutes before the reset. No such reading: unavailable. MEASURED.',
+  tickets: 'A program’s tickets:held by one of its sessions (ticket_id), assigned to one, or with an event written by one. MEASURED.',
   done: 'Tickets whose status is done and closed_at is in the window. MEASURED.',
   reopened: 'Tickets with a reopen (or a change from done or wont_do back to work) in the window. MEASURED.',
   leadTime: 'From the first change to in_progress to closed_at, per done ticket; p50 and p90 by nearest rank. MEASURED.',

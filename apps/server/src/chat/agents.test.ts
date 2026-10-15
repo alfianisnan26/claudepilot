@@ -82,14 +82,15 @@ test('pickSpawnClaude (T-294): the parent’s by default; on auto a plan Claude 
   assert.deepEqual(pick(undefined, rows), { claudeId: 'p', why: 'parent' });
   assert.deepEqual(pick(' same ', null), { claudeId: 'p', why: 'parent' }, 'same never needs the report');
 
-  assert.deepEqual(pick('auto', rows), { claudeId: 'b', why: 'room' }, 'the most room among the fresh, measured plan Claudes');
-  assert.deepEqual(pick('AUTO', rows, { b: 1 }), { claudeId: 'a', why: 'room' }, 'a burst spreads: the least busy with room first');
-  assert.deepEqual(pick('auto', rows, { p: 2, a: 2, b: 2 }), { claudeId: 'b', why: 'room' }, 'equal load: the ranking decides');
-  assert.deepEqual(pick('auto', rows, { a: 2, b: 2 }), { claudeId: 'p', why: 'parent' }, 'its own Claude when it is the least busy with room');
+  const core = (r: ReturnType<typeof pickSpawnClaude>) => ({ claudeId: r.claudeId, why: r.why });
+  assert.deepEqual(core(pick('auto', rows)), { claudeId: 'b', why: 'room' }, 'the most room among the fresh, measured plan Claudes (same reset: room decides)');
+  assert.deepEqual(core(pick('AUTO', rows, { b: 1 })), { claudeId: 'a', why: 'room' }, 'a burst spreads: load divides the score');
+  assert.deepEqual(core(pick('auto', rows, { p: 2, a: 2, b: 2 })), { claudeId: 'b', why: 'room' }, 'equal load: the ranking decides');
+  assert.deepEqual(core(pick('auto', rows, { a: 3, b: 3 })), { claudeId: 'p', why: 'parent' }, 'its own Claude when the others are busier (T-547: score = room per minute, divided by 1 + load)');
   assert.deepEqual(pick('auto', null), { claudeId: 'p', why: 'usage_unknown' }, 'no report: stays');
   const onlyBad = [usageRow('p', 95, NOW), rows[3]!, rows[4]!, rows[5]!, rows[6]!, usageRow('a', 95, NOW), usageRow('b', 50, NOW, { stale: true })];
   assert.deepEqual(pick('auto', onlyBad), { claudeId: 'p', why: 'no_room' }, 'never a key, an unknown, an old, a removed, a tight or a stale Claude');
-  assert.deepEqual(pick('auto', [usageRow('p', 5, NOW), usageRow('a', 40, NOW)]), { claudeId: 'p', why: 'parent' }, 'its own when that has the most room');
+  assert.deepEqual(core(pick('auto', [usageRow('p', 5, NOW), usageRow('a', 40, NOW)])), { claudeId: 'p', why: 'parent' }, 'its own when that has the most room');
 
   assert.deepEqual(pick('hasyim', rows), { claudeId: 'b', why: 'named' }, 'by name, any case');
   assert.deepEqual(pick('a', rows), { claudeId: 'a', why: 'named' }, 'by id');
@@ -130,6 +131,27 @@ test('pickSpawnClaude (T-427): with no Claude with room, the least used now (nev
   for (const id of ['p', 'a', 'b']) assert.ok((load[id] ?? 0) <= share, `${id} holds ${load[id]} of 7 live sessions: at most ${share}`);
   assert.equal(got[0], 'b', 'the first goes to the least used');
   assert.ok(got.includes('a'), `a burst spreads past the least used one (${got.join(',')})`);
+});
+
+test('pickSpawnClaude (T-547, D-65): use it or lose it: less room but a sooner reset wins; past the auto-move line it is skipped; an unknown reset is never picked', () => {
+  const at = (m: number) => new Date(NOW + m * 60_000).toISOString();
+  const withReset = (id: string, usedPct: number, resetsInMin: number | null) => {
+    const r = usageRow(id, usedPct, NOW);
+    r.windows = [{ ...r.windows[0]!, resetsAt: resetsInMin === null ? null : at(resetsInMin) }];
+    return r;
+  };
+  // b: 60 % left but resets in 30 min (2 per minute); a: 90 % left but resets in 300 min (0.3 per minute).
+  const near = pick('auto', [withReset('p', 80, 200), withReset('a', 10, 300), withReset('b', 40, 30)]);
+  assert.equal(near.claudeId, 'b', 'the sooner reset wins although it has less room');
+  assert.equal(near.why, 'room');
+  assert.equal(near.detail, 'Hasyim: 60 % left, resets in 30 min (use it or lose it)', 'the choice is explained with its figures');
+  // Past the line (D-64: 10 % left or less): never, however soon it resets.
+  assert.equal(pick('auto', [withReset('p', 80, 200), withReset('a', 10, 300), withReset('b', 95, 1)]).claudeId, 'a', 'b is past the line: skipped');
+  // Unknown readings: no reset time (monitor marks it unknown) is not picked; no usage report keeps the parent.
+  assert.equal(pick('auto', [withReset('p', 80, 200), withReset('a', 10, 300), withReset('b', 40, null)]).claudeId, 'a', 'unknown reset time: skipped');
+  assert.deepEqual(pick('auto', null), { claudeId: 'p', why: 'usage_unknown' });
+  // Equal figures: the least busy first (a burst spreads).
+  assert.equal(pick('auto', [withReset('p', 80, 100), withReset('a', 40, 100), withReset('b', 40, 100)], { b: 1 }).claudeId, 'a');
 });
 
 test('portalFrame (T-294): a session sender is named by its relation; a peer is told it carries no authority', () => {
@@ -265,7 +287,9 @@ test('T-294: a worker’s Claude is its parent’s, a named plan Claude, or on a
     assert.equal((await s.controller.spawnClaude(s.id, 'auto')).why, 'usage_unknown', 'no report installed');
     await assert.rejects(s.controller.spawnClaude(s.id, 'work'), /plan can’t be read now/, 'named, no report: refused');
     s.controller.spawnUsage = async () => [usageRow(mine, 60, now), usageRow(work.id, 10, now)];
-    assert.deepEqual(await s.controller.spawnClaude(s.id, 'auto'), { claudeId: work.id, name: 'Work', why: 'room' });
+    const auto = await s.controller.spawnClaude(s.id, 'auto');
+    assert.deepEqual({ claudeId: auto.claudeId, name: auto.name, why: auto.why }, { claudeId: work.id, name: 'Work', why: 'room' });
+    assert.match(auto.detail ?? '', /^Work: 90 % left, resets in 180 min \(use it or lose it\)$/, 'T-547: the figures that decided it');
     assert.deepEqual(await s.controller.spawnClaude(s.id, 'work'), { claudeId: work.id, name: 'Work', why: 'named' });
     s.controller.spawnUsage = async () => [usageRow(mine, 95, now), usageRow(work.id, null, now, { runsOn: 'key', windows: [] })];
     await assert.rejects(s.controller.spawnClaude(s.id, 'Work'), /billed per use/);
@@ -368,7 +392,7 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
     const out = started.result!.structuredContent.session as { id: string; claude: { id: string; name: string; why: string }; role: string; applied: string[]; unconfirmed: string[] };
     assert.deepEqual(out.claude, { id: work.id, name: 'Work', why: 'room' });
     assert.deepEqual([out.role, out.applied, out.unconfirmed], ['qa-verifier', ['mode dontAsk'], []]);
-    assert.match(started.result!.content![0]!.text, /^Started worker \S+ on Work, a Claude with room by a fresh, measured reading, mode dontAsk\./);
+    assert.match(started.result!.content![0]!.text, /^Started worker \S+ on Work, a Claude with room by a fresh, measured reading \(Work: \d+ % left, resets in \d+ min \(use it or lose it\)\), mode dontAsk\./);
     const worker = r.s.controller.get(out.id)!;
     assert.deepEqual([worker.claudeId, worker.parentId, worker.bypassCapable, worker.mode, worker.agent], [work.id, r.s.id, false, 'dontAsk', 'qa-verifier']);
     // The role is its agent: its process starts as `claude --agent qa-verifier`, so the first instruction is the parent's, as written.
@@ -536,5 +560,6 @@ test('pickSpawnClaude (T-460): never a Claude auto move would leave by projectio
     usageRow(id, usedPct, NOW, { outlook: { status: { value: 'over', basis: 'estimate' }, window: null, etaAt: { value: null, basis: 'unavailable' }, projectedPct: { value: null, basis: 'unavailable' } } } as Partial<ClaudeUsage>);
   assert.deepEqual(pick('auto', [usageRow('p', 95, NOW), leaving('a')]), { claudeId: 'p', why: 'no_room' }, 'the one projected to run out is not picked');
   assert.deepEqual(pick('auto', [usageRow('p', 95, NOW), leaving('a'), over('b', 82)]), { claudeId: 'b', why: 'no_room_lowest' }, 'another with no confident projection still is');
-  assert.deepEqual(pick('auto', [usageRow('p', 70, NOW), leaving('a'), usageRow('b', 40, NOW)]), { claudeId: 'b', why: 'room' }, 'and room beats it as before');
+  const b = pick('auto', [usageRow('p', 70, NOW), leaving('a'), usageRow('b', 40, NOW)]);
+  assert.deepEqual({ claudeId: b.claudeId, why: b.why }, { claudeId: 'b', why: 'room' }, 'and room beats it as before');
 });
