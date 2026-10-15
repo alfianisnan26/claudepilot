@@ -784,10 +784,44 @@ test('T-633 (G3): after an urgent flush the urgent mark is gone: a later DONE wa
     await until(() => reports(s).length === 1);
     assert.deepEqual(timers.waiting(), []);
     await turn(s, a, 'DONE sha 2222222');
+    // The report is in the transcript a moment before the controller's send settles (`sending`); the kick for a's news waits for that,
+    // so wait for the timer itself instead of reading it at once (no sleep: `until` polls the hand-stepped timers).
+    await until(() => timers.waiting().length > 0);
     assert.deepEqual(timers.waiting(), [300_000], 'a DONE after the flush is not urgent');
   } finally {
     await s.done();
   }
+});
+
+// T-633 (H1, H2): the two mutants QA found alive after G1-G4.
+
+test('T-633 (H1): a worker that sent FAIL and then plain news (its end) is no longer urgent: the lead is not made to hear it at once', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.agentCaps = () => CAPS;
+    const timers = handTimers();
+    s.controller.crewTimers = timers;
+    const b = await worker(s, s.id, 'B');
+    await s.controller.messageFamily(s.id, b.id, 'Go.');
+    const lead = s.controller.get(s.id)!.claudeSessionId;
+    s.ws.status.set(lead, false);
+    s.tail.exit(0);
+    await until(() => s.controller.get(s.id)!.state === 'interrupted');
+    await turn(s, b, 'FAIL: T-9 does not build');
+    assert.deepEqual(timers.waiting(), [1_000], 'a FAIL settles only');
+    timers.advance(1_000); // the lead is gone: nothing is sent, the urgent mark stays
+    assert.deepEqual([reports(s), timers.waiting()], [[], []]);
+    await s.controller.end(b.id); // plain news (an operator close is not urgent), straight from idle: the worker was not "no longer news"
+    await until(() => timers.waiting().length > 0);
+    assert.deepEqual(timers.waiting(), [299_000], 'the rest of the window that opened with the FAIL, not the settle');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-633 (H2): only a reply that STARTS with FAIL, BLOCKED or REFUSED is urgent: the word later in the first line is not', () => {
+  for (const t of ['no tests FAIL', 'tests: BLOCKED', 'All FAILED', 'we were REFUSED', '1 FAIL']) assert.equal(crewReplyUrgent(t), false, t);
+  for (const t of ['  FAIL x', '**BLOCKED**: x', '- REFUSED']) assert.equal(crewReplyUrgent(t), true, t);
 });
 
 test('T-633 (G1): the window opens with the first news and does not slide: news that comes while the first is still held is not made to wait again', async () => {
