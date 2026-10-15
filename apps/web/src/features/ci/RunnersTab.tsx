@@ -268,7 +268,7 @@ function RunnerSheet({ open, runner, existing, onClose, onSaved }: { open: boole
             onKeyDown={(e) => {
               if (e.key === 'Enter' && labelText.trim()) (e.preventDefault(), addLabel());
             }}
-            onBlur={addLabel}
+            onBlur={() => addLabel()}
             error={typed ?? err('labels')}
             hint={<InfoTip label="About labels">{`${RUNS_ON_TIP} ${RUNNER_RISK_TIP}`}</InfoTip>}
           />
