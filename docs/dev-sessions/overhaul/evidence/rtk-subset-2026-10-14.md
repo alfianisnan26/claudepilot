@@ -84,9 +84,13 @@ is depth 1 and has no `origin` (`fatal: 'origin' does not appear to be a git rep
 body with trailers); merges, many authors and long histories are not sampled (a bundle would have to be shipped into the Job). It did not
 change the answer: see git log below.
 
-**B. Dates and e-mail.** Scored now (classes `git-log-meta`, `ls-meta`). git log: e-mail and `Date:` line 0 percent in 15 of 15 cases
-(rtk prints `(20 minutes ago)` and `<name>`, no e-mail, no absolute date). ls (`-la`, `-lh`, folders): owner+group, exact size and date
-28.6, 0 and 0 percent (rtk prints mode, name, a rounded size). Verdict: **not dropped silently, dropped on purpose and stated**: an agent
+**B. Dates and e-mail.** Scored now (classes `git-log-meta`, `ls-meta`). git log (15 cases of class `git-log-meta`): e-mail and `Date:` line 0 percent in
+8 cases (2 facts each, both missing), 100 percent in 1 (`--stat`, 2 facts found), and **no facts to score in 6** (`--oneline`, `--max-count=N --oneline`,
+refs, `--merges`: the plain output has no date or e-mail). Class totals: 18 facts, 16 missing. Where rtk prints the commit it gives `(20 minutes ago)` and
+`<name>`, no e-mail, no absolute date. ls (`-la`, `-lh`, folders; class `ls-meta`, 3 cases, 136 facts, 130 missing): owner+group, exact size and
+date 25.0, 0 and 0 percent per case (rtk prints mode, name, a rounded size). The 25.0 is the root listing (24 facts, 18 missing) and depends on
+what the clone holds; an earlier rerun (QA, claudepilot-job-4d747bcd) gave 26.1. Source of these figures: Job **claudepilot-job-640d3a6f**
+(commit e428431, rc 0, `classes.tsv`, `fidelity.tsv`). Verdict: **not dropped silently, dropped on purpose and stated**: an agent
 that needs who wrote a commit or when (blame, "what changed since Tuesday", release notes) needs them; rtk loses them. The git log
 class is therefore removed from the allowlist (next paragraph). ls is already off the allowlist, so its meta loss costs nothing.
 
@@ -119,8 +123,9 @@ Tests: `apps/server/src/qa/rtkHook.test.ts` (13 tests) in a Job; result in the t
    `Bash(rtk <rule>)`, or extend the hook to deny a typed `rtk <cmd>` whose `<cmd>` a deny rule names (a permission decision: needs approval).
 2. (T-341 D, probe steps above, not verified) Confirm in a scratch session that Claude Code applies `updatedInput` without a permission decision and still checks the rewritten command
    against allow and deny rules.
-3. Item 3: the lab A/B (arm rtk-subset against control). On these outputs the saving is small: only `git status`, `git log -N` and grep
-   listings shrink (bytes 30 percent for `git status`, 42 for `git log -5`, 17 to 42 for the grep listings); the honest outcome may be "not worth it".
+3. Item 3: the lab A/B (arm rtk-subset against control). On these outputs the saving is small: only `git status` and `grep -rl` / `rg -l` listings shrink
+   (bytes: 19 percent for `git status` on the busy tree, 17 to 42 for the grep listings; `git log` is refused by the hook and no longer counts); the honest
+   outcome may be "not worth it".
 
 ## Proposed settings diff (NOT applied)
 
@@ -131,7 +136,6 @@ Tests: `apps/server/src/qa/rtkHook.test.ts` (13 tests) in a Job; result in the t
        "Bash(git log:*)",
 +      "Bash(rtk git status)",
 +      "Bash(rtk git status:*)",
-+      "Bash(rtk git log:*)",
 @@ (top level, after "permissions")
 +  "hooks": {
 +    "PreToolUse": [
