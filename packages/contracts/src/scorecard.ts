@@ -316,8 +316,11 @@ export interface CrewScorecard {
   window: CrewWindow;
   nowMs: number;
   programs: CrewProgramScore[];
-  /** T-600. Optional until the server fills it: the page shows nothing for the block when it is absent. */
-  summary?: CrewSummary;
+  /**
+   * T-600. Optional until the server fills it: the page says "unavailable" for the block when it is absent. Named `headline`, not `summary`:
+   * the `crew_scorecard` portal tool already puts a text `summary` beside the scorecard it spreads.
+   */
+  headline?: CrewSummary;
   /** One line per figure: where it comes from (the InfoTip). */
   basis: Record<string, string>;
 }

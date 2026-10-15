@@ -9,7 +9,7 @@ const PaceCard = lazy(() => import('./Card').then((m) => ({ default: m.PaceCard 
 function usePaceCompact(): GlanceCompact {
   const { data, failed } = paceStore.use();
   return useMemo(() => {
-    const c = paceCompact(data?.summary ?? null, failed);
+    const c = paceCompact(data?.headline ?? null, failed);
     return { value: c.value, level: c.level, title: c.title, loading: !data && !failed };
   }, [data, failed]);
 }

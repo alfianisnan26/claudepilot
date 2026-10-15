@@ -122,7 +122,7 @@ function ProgramCard({ p }: { p: CrewProgramScore }) {
 function Programs({ data, loading }: { data: CrewScorecard; loading: boolean }) {
   return (
     <div className={`space-y-3 ${loading ? 'opacity-70 transition-opacity' : 'transition-opacity'}`}>
-      <SummaryBlock summary={data.summary} />
+      <SummaryBlock summary={data.headline} />
       {data.programs.length === 0 ? (
         <p className="py-3 text-[13px] text-muted">No program active in this window.</p>
       ) : (

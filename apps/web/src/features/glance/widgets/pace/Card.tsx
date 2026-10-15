@@ -10,8 +10,8 @@ export function PaceCard() {
   return (
     <>
       {stale && <StaleNote reload={reload} />}
-      {data.summary ? (
-        <SummaryView summary={data.summary} expandable={false} />
+      {data.headline ? (
+        <SummaryView summary={data.headline} expandable={false} />
       ) : (
         <p className="py-2 text-center text-xs text-muted">unavailable: this portal does not report it yet.</p>
       )}
