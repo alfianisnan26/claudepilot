@@ -15,13 +15,13 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## IN FLIGHT (6 of 6, D-71)
 - GATE batch 7 premerge 7d87d90a (wip/main-7d87d90; job-out/gate-7d87d90.log): T-633 399e7b5d (QA 6283) + T-638 6fdb5b29 (QA 6284).
   QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts. T-633 H1/H2 mutant tests -> Backend lane after T-574.
-- T-325 S1b DONE 92bd7e23 (impl 7eb43876 ended; 6271; lead read verdicts.ts rule: ok) -> QA PERF 7e4879c7 verifying (6291).
-- T-416 S1d DONE 89e270cc (impl 41675b08 ended; 6289; 5/8/10 -> T-675) -> REVIEWER 6a216d7b (sonnet, delta a63e181e..89e270cc);
-  then QA Perf, gate, merge.
+- T-325 S1b 92bd7e23 QA PASS WITH GAPS 6297 (N3, N5 survive) -> decision (b) 6301: BACKEND lane 7979da21 (sonnet, respawned;
+  d762b5fc ended) adds N3/N5 tests on ticket/T-325-s1c; then QA delta, gate, merge S1+S1b+S1c.
+- T-416 S1d DONE 89e270cc (impl 41675b08 ended; 6289; 5/8/10 -> T-675) -> REVIEWER 6a216d7b (sonnet, delta a63e181e..89e270cc)
+  and QA PERF 7e4879c7 in parallel; then gate, merge.
 - QA BE 2 42e5408f (sonnet): T-574 124ca45f (Backend 6280) then T-341 e4284315 (BE Infra 6292; A partial, D not verified).
-- BACKEND lane d762b5fc (sonnet, idle): next T-633 H1/H2 mutant tests on a fresh branch after batch 7 lands (respawn).
 - BE INFRA lane b6df312e (sonnet, respawned; aa8dc58b ended) on T-549 D-65 scorecard rows (ticket/T-549-d65-rows from integration).
-- QA UI 8b13bb5a: repro of T-576 gap 4 (run page blank at 2.5 s, 2 of ~12 loads); kit 44 px -> T-639.
+- QA UI 8b13bb5a: T-376 S2 behavioural check on integration (10k events, open time, bytes, scroll-up paging). T-576 gap 4 = SLOW ONLY.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
@@ -63,7 +63,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## NEXT (in order, as slots free)
 1. Merges: T-401 060aca4 (ack 4941) -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
-2. QA Perf: T-325 S1b -> T-416 S1d (then a delta blind review for T-416, gate, merge; then S2 = Bypass restore).
+2. Backend lane after T-325 S1c: T-633 H1/H2 tests (fresh branch). Implementer for T-681 (40 px). QA: T-325 S1c delta -> T-416 S1d (then a delta blind review for T-416, gate, merge; then S2 = Bypass restore).
 3. RTK (coordinator 14:55): T-340 (a hook change is landed by a person/coordinator) -> T-341 -> T-306 delivery (dev/t-306-1 has items 1-2);
    T-549 (+ wasted-calls row, 4802); T-574 (session_family summary, 4801). 4. T-524 measurement with T-513. 5. T-537. 6. T-513.
 7. T-472 live re-check (4294), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
