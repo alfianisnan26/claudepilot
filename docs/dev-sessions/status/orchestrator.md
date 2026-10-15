@@ -24,7 +24,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   long offender id wrap + D-65 harness assertions not run). T-416 S1e ff3f5d0c DONE (6372) -> QA Perf delta (6385).
   T-675 findings 4/5 written on T-416 6385 (T-675 unassigned: lead refused).
 - T-416 S1d 89e270cc: review 6310 CHANGES (sev-2 restart skips budget) + QA 6326 PASS WITH GAPS (M2/M3/M9/M10 survive) -> IMPL S1e
-  3d92ab62 (opus, why: incident; idle, kept for QA fixes) DONE ff3f5d0c; QA Perf delta, then gate, merge.
+  3d92ab62 (opus, ended after DONE ff3f5d0c) -> QA Perf delta, then gate, merge; fixes go to a fresh impl.
+- IMPL ff009a65 (sonnet) on ticket/T-376-chat-open-harness: tools/qa/chat-open.mjs to design 6305; then T-681 by message.
 - BACKEND lane 8962fc38 (sonnet, respawned) on T-633 S2: G3 deflake + H1/H2 tests (ticket/T-633-s2 from 1a4a7933).
 - QA UI 8b13bb5a: BLOCKED on T-376 (no Write; dontAsk refuses heredocs): posts harness design on T-376, idle. An implementer
   (next free slot, with T-681) writes tools/qa/chat-open.mjs; QA UI then runs it. T-576 gap 4 = SLOW ONLY.
