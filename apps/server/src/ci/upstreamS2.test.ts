@@ -145,7 +145,8 @@ test('the hook secret is a person’s setting, a SECRET by name; a plain variabl
 test('the webhook: signed by GitHub or Gitea it kicks the detached sync (202, nothing fetched inline); every refusal is the same 404', async () => {
   const { h, repo, key } = await hooked();
   try {
-    const app = createCiHookRoutes(h.svc, { clientAddress: () => '198.51.100.7' });
+    let addr = '198.51.100.7';
+    const app = createCiHookRoutes(h.svc, { clientAddress: () => addr });
     const body = JSON.stringify({ ref: 'refs/heads/main', after: rnd(20) });
     const post = (id: string, headers: Record<string, string>, b = body) => app.request(`/${encodeURIComponent(id)}`, { method: 'POST', body: b, headers: { 'content-type': 'application/json', ...headers } });
     const github = { 'x-hub-signature-256': `sha256=${sign(key, body)}` };
@@ -178,6 +179,9 @@ test('the webhook: signed by GitHub or Gitea it kicks the detached sync (202, no
       assert.ok(!text.includes(key));
     }
 
+    // Five refusals from that address: it is blocked for this remote now (the limits test covers that); the rest come from another.
+    assert.equal((await post(repo.id, github)).status, 429);
+    addr = '198.51.100.70';
     // The seam refuses (the owner may not operate it): the same 404, and no kick.
     const was = useAuthz({ ...singleOwner, can: (a, v, o) => (o.type === 'ci_repo' && a.kind === 'job' ? { allow: false, reason: 'not_found', level: 'none' } : singleOwner.can(a, v, o)) });
     try {
