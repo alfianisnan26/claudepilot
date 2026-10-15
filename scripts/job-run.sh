@@ -126,6 +126,8 @@ for n in ${pool[@]+"${pool[@]}"}; do
   [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*); the argument is not shown"
   [ -n "${!n:-}" ] || die "--pool-env: $n is not set in this workspace (the Secrets pool delivers it)"
   [[ ${!n} != *[$'\n\r']* ]] || die "--pool-env: $n holds a line break; refused"
+  # Printable ASCII only (kubectl's env-file parser fails on other bytes and may then print the line).
+  ! printf '%s' "${!n}" | LC_ALL=C grep -q '[^ -~]' || die "--pool-env: $n holds a character that is not printable ASCII; refused"
   v=${!n}; [ "${#v}" -ge 8 ] || die "--pool-env: $n is shorter than 8 characters: the log mask would not hide it; refused"; unset v
   [[ " $pool_names " == *" $n "* ]] || pool_names="$pool_names $n"
 done
@@ -253,11 +255,14 @@ sed -e "s|^ *# __POOL_ENV__.*\$|$pool_refs|" -e "s#__NAME__#$job#g" -e "s#__CHAT
 # (its TTL, --stop, reap, a person) deletes it. The manifest passes on stdin (a client-side dry run, then jq, then apply): never in an argument.
 uid=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
 [ -n "$uid" ] || die "could not read the uid of $job: no credentials were sent"
-sjson=$(printf '%s\n' "$secret" | kubectl -n "$ns" create secret generic "$job" --from-env-file=/dev/stdin --dry-run=client -o json)
+# kubectl's env-file parser can put a bad line (a value) into its error text: its stderr goes nowhere and the message here is fixed.
+# The final call is `create`, not `apply`: apply would store the whole object, data included, in a last-applied annotation (review 5777).
+sjson=$(printf '%s\n' "$secret" | kubectl -n "$ns" create secret generic "$job" --from-env-file=/dev/stdin --dry-run=client -o json 2>/dev/null) ||
+  die "could not build the Secret for $job (kubectl refused the credentials; the reason is not shown): no credentials were sent"
 unset secret
 printf '%s' "$sjson" | jq --arg job "$job" --arg uid "$uid" --arg chat "$chat" \
   '.metadata.labels = {"app": "claudepilot-job-run", "job-run/chat": $chat} | .metadata.ownerReferences = [{"apiVersion": "batch/v1", "kind": "Job", "name": $job, "uid": $uid}]' |
-  kubectl -n "$ns" apply -f - >/dev/null
+  kubectl -n "$ns" create -f - >/dev/null 2>&1 || die "could not create the Secret for $job (the reason is not shown)"
 unset sjson
 # The chat ends: the Claude process this script runs under exits. Then the Job goes, and so does this script.
 watch=${JOB_RUN_WATCH_PID:-${CLAUDE_PID:-}}
@@ -394,7 +399,7 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
       [ "$rc" != 0 ] || rc=3
     fi
     # A compressed file (a Playwright trace.zip, the report's data/*.zip, a .gz) cannot be scanned as plain bytes, and a value inside it would
-    # survive. Chosen: delete it, fail closed (every format, no unzip or zcat needed, nothing about the value in an argument). Found by
+    # survive. Chosen: delete it, fail closed (the known formats, no unzip or zcat needed, nothing about the value in an argument). Found by
     # extension and by magic bytes (a renamed file too). To keep traces, run without --pool-env artifacts, or switch the trace off.
     while IFS= read -r -d '' f; do
       case "${f,,}" in

@@ -160,17 +160,24 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   when it is a plain `--option`), but other options' messages still show their own value (`--ref ... (got X)`): never paste a value into any
   option. A value under 8 characters is refused (the log mask skips those), and so is a command that holds a value: write the variable in single
   quotes (`'$E2E_CF_ACCESS_CLIENT_SECRET'`) so the Job expands it, not your shell. The value goes on stdin into the Job's Secret. The Job is applied
-  (suspended) first, then the Secret is applied in one call that already carries the label and the ownerReference to the Job, so there is no
-  moment with an unowned Secret; it goes when the Job goes (its TTL, `--stop`, the reap, a person). Not guaranteed: a script killed before
-  the Job's TTL leaves the Job, and so the Secret, until the next `job-run.sh` run reaps the Job (or its TTL ends). The `run` container gets it as env by `secretKeyRef` and the `fetch` container does
+  (suspended) first, then the Secret is created (`kubectl create -f -`, not `apply`, so no last-applied annotation holds the data a second time) in one call that
+  already carries the label and the ownerReference to the Job, so there is no moment with an unowned Secret; it goes when the Job goes (its
+  TTL, `--stop`, the reap, a person). Not guaranteed: when the script is killed outright (SIGKILL) while its Job is still queued, the Job is
+  suspended, so it never finishes: its TTL (`ttlSecondsAfterFinished`) and its `activeDeadlineSeconds` never run. Only the reap removes it,
+  and the reap only removes Jobs whose owner is the same host, on the next `job-run.sh` run there. If none runs (the workspace pod was
+  replaced), the Job and its Secret stay until a person runs `--stop` or deletes them. A Job that was released and is running does end by its
+  deadline and TTL. (Widening the reap to suspended Jobs of any host is a separate ticket.) A value that is not printable ASCII is refused
+  (kubectl's env-file parser may print such a line), and kubectl's error text for the Secret is never shown. The `run` container gets it as env by `secretKeyRef` and the `fetch` container does
   not; this is the reverse of the git and npm tokens, on purpose. It is never on a command line or in the manifest, and the streamed log is masked
   for it. Limits: (1) the `run` container's `npm rebuild`, every dependency's install script and the package's lifecycle scripts can read the
   value (so only scoped `E2E_CF_ACCESS_*` test credentials may be passed; `--steps none` when the dependencies are already installed); (2) the
   raw Job log in the cluster is unmasked until the Job is cleaned up (TTL), only the streamed copy is masked; (3) after unpacking `--out`, the
   script scans the files for each value, deletes a file that holds one, names it (never the value) and exits 3 when the command had passed; the
-  scan finds plain text only, so with `--pool-env` every compressed file (`*.zip`, `*.gz`, a Playwright `trace.zip` or the report's `data/*.zip`,
-  found by extension or magic bytes) is deleted the same way, rc 3, never read: switch the trace off or leave zips out of `--artifacts`; an
-  encoded (not compressed) value, such as base64 in a HAR, is not found; `job-out/` is git-ignored (an `--out` elsewhere is not); (4) the script refuses to run under
+  scan finds plain text only, so with `--pool-env` every compressed file of a known format is deleted the same way, rc 3, never read: by extension (`.zip .gz .tgz .bz2
+  .xz .zst .br .7z .jar`) or by magic bytes (zip, gzip, bzip2, xz, zstd; a renamed file too), such as a Playwright `trace.zip` or the report's
+  `data/*.zip`. Not seen: other formats (a renamed 7z or lz4, a `.Z`, deflate streams inside a PDF or PNG), and an encoded value, such as base64
+  in a HAR or inside the Playwright HTML report's `index.html` (it can embed the report as a base64 zip). Switch the trace off or leave zips and
+  the HTML report out of `--artifacts`; `job-out/` is git-ignored (an `--out` elsewhere is not); (4) the script refuses to run under
   `bash -x` / xtrace, which would print the values.
 - **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").

@@ -59,16 +59,23 @@ const podOf = (j) => {
   return { items: [{ spec: { nodeName: 'k3s-master' }, status }] };
 };
 const [verb, kind, name] = a;
+// Failure injection: the file "fail" lists the calls that fail (uid, dry-run, create). A failing call prints its stdin to stderr, as kubectl may.
+const failing = (w) => { const f = path.join(F, 'fail'); return fs.existsSync(f) && JSON.parse(fs.readFileSync(f, 'utf8')).includes(w); };
+const refuse = () => { process.stderr.write('error: ' + stdin() + '\n'); process.exit(1); };
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
-else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
+else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
-// The Secret is made by a client-side dry run (JSON on stdout, as kubectl prints it) and then applied with its ownerReference and label.
+// The Secret is made by a client-side dry run (JSON on stdout, as kubectl prints it) and then created (never applied) with its ownerReference and label.
+else if (verb === 'create' && kind === 'secret' && a.includes('--dry-run=client') && failing('dry-run')) refuse();
+else if (verb === 'create' && kind === '-f' && failing('create')) refuse();
+else if (verb === 'create' && kind === '-f') { const o = JSON.parse(stdin()); const n = o.metadata.name; const env = Object.entries(o.data).map(([k, v]) => k + '=' + Buffer.from(v, 'base64').toString()).join('\n') + '\n';
+  if (o.metadata.annotations) process.exit(7);
+  fs.writeFileSync(path.join(F, 'secret-' + n + '.env'), env); fs.writeFileSync(path.join(F, 'secret-' + n + '.meta.json'), JSON.stringify(o.metadata)); lock((s) => { s.secrets[n] = env; }); }
 else if (verb === 'create' && kind === 'secret') { const t = stdin(); const data = {}; for (const l of t.split('\n')) { const i = l.indexOf('='); if (i > 0) data[l.slice(0, i)] = Buffer.from(l.slice(i + 1)).toString('base64'); }
   if (!a.includes('--dry-run=client')) { fs.writeFileSync(path.join(F, 'secret-' + a[3] + '.env'), t); lock((s) => { s.secrets[a[3]] = t; }); }
   else process.stdout.write(JSON.stringify({ apiVersion: 'v1', kind: 'Secret', metadata: { name: a[3] }, data })); }
 else if (verb === 'apply') { const m = stdin();
-  if (m.trimStart().startsWith('{')) { const o = JSON.parse(m); const n = o.metadata.name; const env = Object.entries(o.data).map(([k, v]) => k + '=' + Buffer.from(v, 'base64').toString()).join('\n') + '\n';
-    fs.writeFileSync(path.join(F, 'secret-' + n + '.env'), env); fs.writeFileSync(path.join(F, 'secret-' + n + '.meta.json'), JSON.stringify(o.metadata)); lock((s) => { s.secrets[n] = env; }); process.exit(0); }
+  if (m.trimStart().startsWith('{')) process.exit(8); // a Secret is never applied (last-applied annotation): only the Job is
   const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
   const lab = (k) => m.match(new RegExp(k + ': ([^,}]+)'))[1].trim();
   lock((s) => { s.seq += 1; s.jobs.push({ name: n, chat: lab('job-run/chat'), role: lab('job-run/role'), program: lab('job-run/program'), owner: m.match(/job-run\/owner: "([^"]*)"/)[1], suspend: true, seq: s.seq }); }); }
@@ -193,7 +200,9 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   assert.match(calls, new RegExp(`create secret generic ${m.metadata.name} --from-env-file=/dev/stdin --dry-run=client -o json`));
   assert.doesNotMatch(calls, /patch secret/, 'T-426: no patch step: the Secret is born owned');
   // T-426: the Job exists (suspended) first; the Secret is applied in one call that already has the label and the ownerReference: no window.
-  assert.ok(calls.indexOf('apply -f -') < calls.indexOf('create secret') && calls.indexOf('create secret') < calls.lastIndexOf('apply -f -'), 'Job, then the Secret');
+  // S1d: the Secret is CREATED (`create -f -`), never applied: apply would keep the data a second time in a last-applied annotation.
+  assert.equal(calls.split('\n').filter((l) => /apply -f -$/.test(l)).length, 1, 'apply is for the Job alone');
+  assert.ok(calls.indexOf('apply -f -') < calls.indexOf('create secret') && calls.indexOf('create secret') < calls.indexOf('create -f -'), 'Job (apply), then the Secret (create -f -)');
   assert.deepEqual(JSON.parse(readFileSync(join(w.root, `secret-${m.metadata.name}.meta.json`), 'utf8')), {
     name: m.metadata.name, labels: { app: 'claudepilot-job-run', 'job-run/chat': 'chat-a' },
     ownerReferences: [{ apiVersion: 'batch/v1', kind: 'Job', name: m.metadata.name, uid: `uid-${m.metadata.name}` }] });
@@ -968,4 +977,65 @@ test('T-426 --pool-env: a clean artifact set keeps rc 0, and the packed copy (ar
   assert.ok(existsSync(join(out, 'reports/junit.xml')), 'the clean artifact is kept');
   assert.ok(existsSync(join(w.root, 'scan-ran')), 'the scan ran (the shim saw it)');
   assert.equal(readFileSync(join(w.root, 'art-seen'), 'utf8'), '', 'art.b64 was already deleted when the scan ran (the file is made empty by the redirect either way)');
+});
+
+// S1d (review 5777): the failure paths of the Secret. Each exits non-zero, shows no value, and leaves no Job or Secret behind.
+const poolRun = (w: ReturnType<typeof world>, secret: string) =>
+  w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--', 'true'], { [POOL_SECRET]: secret });
+const assertNoTrace = (w: ReturnType<typeof world>, r: { out: string }, secret: string) => {
+  const log = existsSync(join(w.root, 'job.log')) ? readFileSync(join(w.root, 'job.log'), 'utf8') : '';
+  for (const where of [r.out, w.calls(), log]) assert.ok(!where.includes(secret), 'the value is nowhere');
+  assert.deepEqual(w.state().jobs, [], 'no orphan Job');
+  assert.deepEqual(w.state().secrets, {}, 'no orphan Secret');
+};
+
+test('S1d the Secret is created with `create -f -`, never `apply`: no last-applied annotation can carry the data twice', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`;
+  const r = poolRun(w, secret);
+  assert.equal(r.code, 0, r.out); // the fake exits 8 on an applied Secret and 7 on a created one that has an annotation
+  assert.match(w.calls(), /^kubectl -n \S+ create -f -$/m);
+  assert.equal(w.calls().split('\n').filter((l) => / apply /.test(l)).length, 1, 'only the Job is applied');
+});
+
+test('S1d --pool-env: a value that is not printable ASCII is refused before any kubectl call, and shown nowhere', () => {
+  const w = world();
+  for (const bad of [`cs${hex(20)}é`, `cs${hex(20)}\u0001x`, `cs${hex(20)}\tx`]) {
+    const r = poolRun(w, bad);
+    assert.equal(r.code, 2, r.out);
+    assert.match(r.out, /not printable ASCII; refused/);
+    assert.ok(!r.out.includes(bad) && !r.out.includes(bad.slice(0, 42)), 'the value is not shown');
+  }
+  assert.equal(w.calls(), '');
+});
+
+test('S1d kubectl\'s env-file error can hold the value: the dry run failing shows nothing, says a fixed message, and leaves no orphan', () => {
+  const w = world();
+  writeFileSync(join(w.root, 'fail'), JSON.stringify(['dry-run']));
+  const secret = `cs${hex(20)}`;
+  const r = poolRun(w, secret);
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /could not build the Secret/);
+  assertNoTrace(w, r, secret);
+});
+
+test('S1d the uid unreadable: the run dies before any Secret is made, and the Job is deleted', () => {
+  const w = world();
+  writeFileSync(join(w.root, 'fail'), JSON.stringify(['uid']));
+  const secret = `cs${hex(20)}`;
+  const r = poolRun(w, secret);
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /could not read the uid of claudepilot-job-[0-9a-f]{8}: no credentials were sent/);
+  assert.doesNotMatch(w.calls(), /create /);
+  assertNoTrace(w, r, secret);
+});
+
+test('S1d the create failing: a fixed message, no value, no orphan Job or Secret', () => {
+  const w = world();
+  writeFileSync(join(w.root, 'fail'), JSON.stringify(['create']));
+  const secret = `cs${hex(20)}`;
+  const r = poolRun(w, secret);
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /could not create the Secret/);
+  assertNoTrace(w, r, secret);
 });
