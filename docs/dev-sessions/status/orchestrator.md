@@ -9,10 +9,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 - MERGED ff b37628e (T-515 e021cb6 + T-527 ea81071 + packs): gate GREEN claudepilot-gate-b37628e-0953 (memory peak 2189Mi/8192Mi,
   0 OOM) + web 629/629 (claudepilot-job-a19b47c9).
-- Earlier: 4ba5d37, 73bb581 merged; deploys #35/#36 (closed T-483, T-397, T-491, T-435, T-476, T-449).
 
 ## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-426 WAITING ab93b54 (on T-401 060aca4), cffb12b1 T-486 S2b WAITING 27b95c7,
-  47710391 qa (sonnet) T-531 done -> now T-401 QA (code reading, then GO), 0df3dd19 impl-t379 (sonnet) T-379 f2135be: 140/142, 2 fails = T-401's (4841); merging 060aca4 + 3 minors)
+  47710391 qa (sonnet) T-531 done -> now T-401 QA (code reading, then GO), 0df3dd19 impl-t379 (sonnet) T-379 090fbbf (minors 8dadddb + lead merge of 060aca4, 4852): WAITING src/ci re-run)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
   Cluster: T-486 S2b (GO 12:07) -> T-401 QA / T-379 re-run (whichever is ready) -> T-426. T-379 live proof PASS (4845, job-2d70c331). Next free workers: T-401 blind review (opus), T-531 S2c fix. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
 - T-401 (high, security): S1 DONE 060aca4 (4 Jobs green per author; fetch does npm ci --ignore-scripts with creds). Touches
@@ -36,6 +35,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-378 S1 dev/t-378-1 9834ff7 ready: needs a verifier.
 
 ## DECISIONS (binding)
+- 12:09 Workers cannot git merge: the lead merges base heads into slice branches (T-379 090fbbf, 4852).
 - 11:30 Coordinator (owner priority, metocean): T-379 NOW in its own worker; built on T-401's fe62fa6 (fetch stage holds creds).
 - 12:00 Coordinator tool review: lead edits of code (dev-t-376 commits 01:57-02:03, no trailers, before D-63 03:36; 4820).
   The lead edits ONLY the status file and notes. Order: T-379, T-426, T-558, T-546, T-548, T-561 (opus, deny rules), T-557.
