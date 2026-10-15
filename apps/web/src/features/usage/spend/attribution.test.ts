@@ -53,7 +53,7 @@ test('coverage: said below 100 %, quiet at 100 % and when it cannot be told', ()
 // T-449: a ticket row says its type and status and, when leads' dollars were apportioned to it, "via lead $x".
 test('a ticket row shows type, status and via lead only when there is one', () => {
   const t = (viaLeadUsd: number) => row({ by: 'ticket', key: 'T-1', ticket: { type: 'feature', status: 'in_review', doneAt: null, viaLeadUsd, viaLeadWorkers: viaLeadUsd > 0 ? 2 : 0 } });
-  assert.deepEqual(ticketLine(t(6.5)), { type: 'feature', status: 'in review', viaLead: 'via lead $6.50' });
+  assert.deepEqual(ticketLine(t(6.5)), { type: 'feature', status: 'in review', viaLead: 'via lead $6.5' });
   assert.deepEqual(ticketLine(t(0)), { type: 'feature', status: 'in review', viaLead: null });
   assert.equal(ticketLine(row({})), null);
 });
