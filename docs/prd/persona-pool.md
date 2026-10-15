@@ -436,7 +436,11 @@ persona can **hold** some (up to 10), which are delivered wherever it is.
   the pack only in a session that works on files of this repository (a worktree included), not in the sessions of
   other repositories that share the workspace. A pack that brings its own frontmatter, or whose Map names nothing
   usable, is kept as it is. A context with frontmatter keeps it at the top of its rule file, with the portal's
-  comment after it. A pack delivery restarts no session (chat-sessions FR53b, T-472).
+  comment after it. A pack delivery restarts no session (chat-sessions FR53b, T-472). **At most one revision an hour
+  (T-472):** while the pool's newest revision is under an hour old, a push whose pack differs is held back (outcome
+  `deferred`: no revision, no audit row); the pack in the repository is still fresh for the gate, and the first push
+  after the hour publishes the newest text. A held-back pack is not queued: with no push after the hour, the pool keeps
+  the older text until the next one.
 - **Editor and preview.** The persona editor lists the contexts it can hold; "What Claude is told" shows each
   held context as its own managed layer, after the persona's text.
 

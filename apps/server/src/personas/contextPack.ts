@@ -20,7 +20,7 @@ import { secretProblem } from './kind.js';
 /** What a sync did. `refused` and `failed` carry a fixed code (never text from the file). */
 export type ContextPackOutcome =
   | { outcome: 'created' | 'updated'; poolId: string; revision: number; assigned: boolean }
-  | { outcome: 'unchanged'; poolId: string; revision: number }
+  | { outcome: 'unchanged' | 'deferred'; poolId: string; revision: number }
   | { outcome: 'refused'; code: 'too_large' | 'secret' | 'unreadable' | 'invalid' | 'other_workspace'; poolId?: string }
   | { outcome: 'failed'; code: string };
 
@@ -35,6 +35,15 @@ export interface ContextPackInput {
   file: { text: string | null; skipped?: string };
 }
 
+/** T-472: the pool gets a new revision at most this often (the hook); `deferred` means the text changed but the last revision is younger. */
+export const PACK_MIN_INTERVAL_MS = 3_600_000;
+
+export interface SyncOptions {
+  /** Hold back a changed pack while the pool's newest revision is younger than this. Off when unset. */
+  minIntervalMs?: number;
+  now?: () => number;
+}
+
 export const contextPackName = (repo: string) => `${repo.slice(0, 60 - '-context-pack'.length)}-context-pack`;
 
 const bytes = (s: string) => Buffer.byteLength(s, 'utf8');
@@ -47,10 +56,10 @@ type Audit = (e: { kind: string; actor: string; userId: string | null; severity?
  * CI's `contextPack` hook: syncs, then one platform audit row `pools.context_pack` for every change or refusal (an unchanged pack
  * leaves none). Names, ids and fixed codes only: never the file's text.
  */
-export function contextPackHook(pools: PoolService, audit: Audit) {
+export function contextPackHook(pools: PoolService, audit: Audit, now: () => number = Date.now) {
   return (input: ContextPackInput): ContextPackOutcome => {
-    const r = syncContextPack(pools, input);
-    if (r.outcome === 'unchanged') return r;
+    const r = syncContextPack(pools, input, { minIntervalMs: PACK_MIN_INTERVAL_MS, now });
+    if (r.outcome === 'unchanged' || r.outcome === 'deferred') return r;
     const refused = r.outcome === 'refused' || r.outcome === 'failed';
     if (refused) console.error(`[context-pack] ${input.repo}@${input.branch} ${input.sha.slice(0, 7)}: ${r.outcome} (${r.code})`);
     audit({
@@ -100,7 +109,7 @@ export function scopedPack(body: string): string {
 }
 
 /** Creates, updates or leaves the repository's context pack pool; never throws. */
-export function syncContextPack(pools: PoolService, input: ContextPackInput): ContextPackOutcome {
+export function syncContextPack(pools: PoolService, input: ContextPackInput, opts: SyncOptions = {}): ContextPackOutcome {
   const { file } = input;
   if (file.skipped === 'too_large') return { outcome: 'refused', code: 'too_large' };
   if (file.text === null) return { outcome: 'refused', code: 'unreadable' };
@@ -124,6 +133,14 @@ export function syncContextPack(pools: PoolService, input: ContextPackInput): Co
     const where = pools.get(found.id).assignedTo.map((a) => a.workspaceId);
     if (where.length && !where.includes(input.workspaceId)) return { outcome: 'refused', code: 'other_workspace', poolId: found.id };
     if ((found.content as ContextContent | null)?.body === body) return { outcome: 'unchanged', poolId: found.id, revision: found.latestRevision };
+    // T-472: a new revision is a delivery to every session of the workspace; at most one per interval. The pack in the repository stays
+    // fresh for the gate, and the next push after the interval publishes the newest text.
+    if (opts.minIntervalMs) {
+      const last = Date.parse(pools.get(found.id).revisions[0]?.createdAt ?? '');
+      if (Number.isFinite(last) && (opts.now?.() ?? Date.now()) - last < opts.minIntervalMs) {
+        return { outcome: 'deferred', poolId: found.id, revision: found.latestRevision };
+      }
+    }
     const next = pools.update(found.id, { content: { body } satisfies ContextContent, note, baseRevision: found.latestRevision });
     return { outcome: 'updated', poolId: found.id, revision: next.latestRevision, assigned: where.includes(input.workspaceId) };
   } catch (e) {
