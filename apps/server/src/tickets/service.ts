@@ -89,6 +89,16 @@ interface EndedGrant {
   why: EndedGrantReason;
 }
 
+/** What the audit row for an allowed assignment to a person (`ticket.agent_assigned_person`) says; the ticket id is added once it exists. */
+interface AssignedPersonAudit {
+  action: 'create' | 'update';
+  actor: string;
+  actorKind: 'agent' | 'token';
+  sessionId: string | null;
+  leadId: string | null;
+  allowedTag: string | null;
+}
+
 /** The identity a change is recorded under. */
 interface Writer {
   actor: string;
@@ -762,8 +772,10 @@ export class Tickets {
    * FR9c (D-62, T-483): an agent may not put a ticket on a person without an allowed tag (authz.ts `canAgentAssignUser`). A refusal is
    * FORBIDDEN with the D-62 path (not a 404: the agent may see the ticket) and one `ticket.agent_assign_refused` audit row (ids and tags only).
    */
-  #assertAgentAssign(caller: Caller, w: Writer, facts: { ticketId: string | null; action: 'create' | 'update'; assigneeAfter: 'session' | 'user' | null; assignsUser: boolean; tagsBefore: readonly string[]; tagsAfter: readonly string[] }) {
-    if (caller.kind !== 'agent') return;
+  #assertAgentAssign(caller: Caller, w: Writer, facts: { ticketId: string | null; action: 'create' | 'update'; assigneeAfter: 'session' | 'user' | null; assignsUser: boolean; tagsBefore: readonly string[]; tagsAfter: readonly string[] }): AssignedPersonAudit | null {
+    // An admin's token acting for a session is never refused, but the assignment it makes to a person is audited (T-483).
+    const forSession = caller.kind === 'token' && w.session !== null;
+    if (caller.kind !== 'agent' && !forSession) return null;
     let raw: unknown = AGENT_ASSIGN_USER_TAGS_DEFAULT;
     try {
       raw = this.#agentAssignUserTags();
@@ -772,7 +784,11 @@ export class Tickets {
     }
     const allowedTags = allowedAssignTags(raw);
     const d = canAgentAssignUser({ callerKind: caller.kind, assigneeAfter: facts.assigneeAfter, assignsUser: facts.assignsUser, tagsBefore: facts.tagsBefore, tagsAfter: facts.tagsAfter, allowedTags });
-    if (d.allow) return;
+    if (d.allow) {
+      if (!facts.assignsUser) return null;
+      const allowedTag = facts.tagsAfter.find((t) => allowedTags.includes(t)) ?? null;
+      return { action: facts.action, actor: w.actor, actorKind: caller.kind === 'agent' ? 'agent' : 'token', sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, allowedTag };
+    }
     this.onAudit?.({
       kind: 'ticket.agent_assign_refused',
       actor: w.actor,
@@ -782,6 +798,19 @@ export class Tickets {
       detail: { ticketId: facts.ticketId, action: facts.action, sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, tags: [...facts.tagsAfter], allowedTags, why: d.why },
     });
     throw new AppError('FORBIDDEN', D62_ASSIGN_REFUSAL);
+  }
+
+  /** The audit row for an allowed assignment to a person (ids, actor kind and the allowing tag; no ticket text). Called after the write. */
+  #auditAssignedPerson(a: AssignedPersonAudit | null, ticketId: string) {
+    if (!a) return;
+    this.onAudit?.({
+      kind: 'ticket.agent_assigned_person',
+      actor: a.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: `ticket:${ticketId}`,
+      detail: { ticketId, action: a.action, actorKind: a.actorKind, sessionId: a.sessionId, leadId: a.leadId, allowedTag: a.allowedTag },
+    });
   }
 
   /** FR20: the queue is protected from a looping agent. */
@@ -813,7 +842,7 @@ export class Tickets {
     const priority = req.priority === undefined ? 'normal' : oneOf(req.priority, TICKET_PRIORITIES, 'priority');
     const tags = cleanTags(req.tags);
     const assignee = this.#assignee(caller, req.assignee);
-    this.#assertAgentAssign(caller, w, { ticketId: null, action: 'create', assigneeAfter: assignee?.kind ?? null, assignsUser: assignee?.kind === 'user', tagsBefore: [], tagsAfter: tags });
+    const assignedAudit = this.#assertAgentAssign(caller, w, { ticketId: null, action: 'create', assigneeAfter: assignee?.kind ?? null, assignsUser: assignee?.kind === 'user', tagsBefore: [], tagsAfter: tags });
     // An agent's ticket concerns its own workspace; a session assignee's workspace is where the work is.
     let workspaceId = caller.kind === 'agent' ? caller.workspaceId : workspaceIdOf(req.workspaceId);
     if (assignee?.kind === 'session') workspaceId = assignee.session.workspaceId;
@@ -844,6 +873,7 @@ export class Tickets {
       if (assignee) this.#addEvent(n, 'assigned', w, null, { from: null, to: assignee.kind === 'session' ? { kind: 'session', sessionId: assignee.session.id } : { kind: 'user', name: assignee.name } });
       return n;
     });
+    this.#auditAssignedPerson(assignedAudit, ticketIdOf(number));
     this.onChange?.();
     return this.#items([this.#row(number)!])[0]!;
   }
@@ -904,7 +934,7 @@ export class Tickets {
         if (!a && status === 'in_progress') status = 'open';
       }
     }
-    this.#assertAgentAssign(caller, w, { ticketId: ticketIdOf(row.number), action: 'update', assigneeAfter, assignsUser, tagsBefore: tags, tagsAfter: newTags ?? tags });
+    const assignedAudit = this.#assertAgentAssign(caller, w, { ticketId: ticketIdOf(row.number), action: 'update', assigneeAfter, assignsUser, tagsBefore: tags, tagsAfter: newTags ?? tags });
     if (req.workspaceId !== undefined && !('workspace_id' in sets)) {
       if (agent) throw new AppError('FORBIDDEN', 'An agent’s tickets stay in its own workspace.');
       const v = workspaceIdOf(req.workspaceId);
@@ -940,6 +970,7 @@ export class Tickets {
       for (const e of entries) this.#addEvent(row.number, e.kind, w, e.body ?? null, e.data);
     });
     this.#auditForEnded(grant, w, row, 'update');
+    this.#auditAssignedPerson(assignedAudit, ticketIdOf(row.number));
     this.onChange?.();
     return this.#items([this.#row(row.number)!])[0]!;
   }

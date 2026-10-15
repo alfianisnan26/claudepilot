@@ -90,7 +90,20 @@ test('with the production tag an agent may put a ticket on a person; unassigned 
     assert.deepEqual(t.assignee, PERSON);
     assert.equal(r.tickets.create(r.lead, { summary: 'queue work' }).assignee, null);
     assert.equal(r.tickets.create(r.lead, { summary: 'mine', assignee: { kind: 'session', sessionId: 'lead' } }).assignee?.kind, 'session');
-    assert.equal(r.audits.length, 0);
+    assert.equal(r.audits.length, 1, 'only the person assignment leaves a row');
+    assert.deepEqual(r.audits[0]!, {
+      kind: 'ticket.agent_assigned_person',
+      actor: 'session:lead',
+      actorLabel: null,
+      userId: r.audits[0]!.userId,
+      subject: `ticket:${t.id}`,
+      detail: { ticketId: t.id, action: 'create', actorKind: 'agent', sessionId: 'lead', leadId: null, allowedTag: 'production' },
+    });
+    const m = r.tickets.create(r.lead, { summary: 'mine too', assignee: { kind: 'session', sessionId: 'lead' } });
+    const up = r.tickets.update(r.lead, m.id, { assignee: PERSON, tags: ['production'] });
+    assert.deepEqual(up.assignee, PERSON);
+    assert.equal(r.audits.length, 2);
+    assert.deepEqual(r.audits[1]!.detail, { ticketId: m.id, action: 'update', actorKind: 'agent', sessionId: 'lead', leadId: null, allowedTag: 'production' });
   } finally {
     r.done();
   }
@@ -165,8 +178,19 @@ test('the owner, the page, an admin token and a trigger are never refused', asyn
       assert.deepEqual(r.tickets.update(c, u.id, { assignee: { kind: 'user', name: 'bob' } }).assignee, { kind: 'user', name: 'bob' }, c.kind);
     }
     // An admin token acting for a session (session_id) is still the token.
-    assert.deepEqual(r.tickets.create(token('tk3', 'operate'), { summary: 'for the lead', assignee: PERSON }, { sessionId: 'lead' }).assignee, PERSON);
-    assert.equal(r.audits.length, 0);
+    const forLead = r.tickets.create(token('tk3', 'operate'), { summary: 'for the lead', assignee: PERSON }, { sessionId: 'lead' });
+    assert.deepEqual(forLead.assignee, PERSON);
+    // ...and its assignment to a person is audited (ids and actor kind only; no tag was needed).
+    assert.equal(r.audits.length, 1);
+    const a = r.audits[0]!;
+    assert.equal(a.kind, 'ticket.agent_assigned_person');
+    assert.equal(a.actor, 'portal-mcp:tk3');
+    assert.equal(a.subject, `ticket:${forLead.id}`);
+    assert.deepEqual(a.detail, { ticketId: forLead.id, action: 'create', actorKind: 'token', sessionId: 'lead', leadId: null, allowedTag: null });
+    const mv = r.tickets.create(token('tk4', 'operate'), { summary: 'to move', assignee: { kind: 'session', sessionId: 'lead' } }, { sessionId: 'lead' });
+    r.tickets.update(token('tk4', 'operate'), mv.id, { assignee: PERSON }, { sessionId: 'lead' });
+    assert.equal(r.audits.length, 2);
+    assert.deepEqual(r.audits[1]!.detail, { ticketId: mv.id, action: 'update', actorKind: 'token', sessionId: 'lead', leadId: null, allowedTag: null });
   } finally {
     r.done();
   }
