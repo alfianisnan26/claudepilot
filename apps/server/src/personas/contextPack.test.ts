@@ -10,6 +10,7 @@ import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import { contextPackHook, contextPackName, syncContextPack, type ContextPackInput } from './contextPack.js';
 import { Personas } from './index.js';
+import { contextFile } from './render.js';
 
 const WS = 'kubernetes/dev';
 const NAME = 'claudepilot-context-pack';
@@ -141,6 +142,24 @@ test('the committed docs/context-pack.md fits and passes the checks', async () =
   try {
     const text = readFileSync(join(REPO_ROOT, 'docs/context-pack.md'), 'utf8');
     assert.equal(syncContextPack(h.pools, push(text)).outcome, 'created');
+  } finally {
+    h.done();
+  }
+});
+
+test('T-472: the pack is a path-scoped rule: its Map folders as paths, so another repository’s sessions do not load it', async () => {
+  const h = await setup();
+  try {
+    const text = readFileSync(join(REPO_ROOT, 'docs/context-pack.md'), 'utf8');
+    assert.equal(syncContextPack(h.pools, push(text)).outcome, 'created');
+    const body = h.body()!;
+    assert.match(body, /^---\npaths:\n/, 'frontmatter first');
+    const scope = body.slice(0, body.indexOf('\n---\n')).split('\n').flatMap((l) => /^ {2}- "([^"]+)"$/.exec(l)?.[1] ?? []);
+    for (const g of ['apps/server/src/chat/**', 'apps/web/src/features/**', 'packages/contracts/src/**']) assert.ok(scope.includes(g), g);
+    for (const g of ['scripts/**', 'deploy/**']) assert.ok(!scope.includes(g), `${g}: a one-level folder other repositories have too`);
+    // As delivered: the frontmatter stays at the top of the rule file (Claude Code reads it only there), the portal's comment after it.
+    const file = contextFile('claudepilot-context-pack', NAME, 1, body);
+    assert.match(file.content, /^---\npaths:\n( {2}- "[^"\n]+"\n)+---\n<!-- Instruction context “claudepilot-context-pack” r1, delivered by the portal\. -->\n<!-- context-pack anchor /);
   } finally {
     h.done();
   }

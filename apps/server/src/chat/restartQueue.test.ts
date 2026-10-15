@@ -180,6 +180,7 @@ test('T-102: Apply tool changes at the next turn end: the portal queues the rest
   const s = await liveSession();
   try {
     s.controller.controlTimeoutMs = 150;
+    s.controller.autoRestartSettleMs = 0; // T-472's quiet time has its own test
     const m = await (async () => {
       await changed(s);
       return working(s);
@@ -217,6 +218,90 @@ test('T-102: a session a portal actor started is autonomous: the setting is on b
     assert.equal(shown.autonomous, true);
     assert.equal(shown.autoApply, true);
     await s.controller.end(other.id).catch(() => undefined);
+  } finally {
+    await s.done();
+  }
+});
+
+/* ---------- T-472: context deliveries restart nothing; the rest settle into one restart ---------- */
+
+/**
+ * The reconciler as production wires it: one log of deliveries (newest first), and the older readers over the same log (the latest
+ * delivery's time, every area since), so the code before T-472 sees the same deliveries.
+ */
+function deliveries(s: Live) {
+  const log: { at: string; areas: string[] }[] = [];
+  s.controller.configChangeLog = (_ws, since) => log.filter((e) => Date.parse(e.at) > since);
+  s.controller.deliveredAt = () => log[0]?.at ?? null;
+  s.controller.configChanges = (_ws, since) => [...new Set(log.filter((e) => Date.parse(e.at) > since).flatMap((e) => e.areas))];
+  return (areas: string[]) => {
+    log.unshift({ at: new Date().toISOString(), areas });
+    s.controller.deliveryChanged('docker/ws1');
+  };
+}
+
+/** A first turn read, the session set to apply changes by itself; idle, so the boundary is now. */
+async function autoApplying(s: Live) {
+  s.tail.push(init(s.id));
+  s.tail.push(ok((await s.take('get_settings')).id, APPLIED));
+  await until(() => s.controller.get(s.id)!.effort === 'medium');
+  s.controller.setRestartHint(s.id, { autoApply: true });
+  await sleep(20); // a delivery lands after the process started
+}
+
+test('T-472: a context-only delivery shows no hint and restarts nothing; an MCP delivery after it still restarts, once', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.controlTimeoutMs = 150;
+    s.controller.autoRestartSettleMs = 0;
+    const deliver = deliveries(s);
+    await autoApplying(s);
+    const stops = s.ws.stops;
+    deliver(['context']);
+    deliver(['context']);
+    await sleep(700);
+    const shown = s.controller.get(s.id)!;
+    assert.equal(shown.configChanged, undefined, 'the running process re-read the rules (drop-in stamp): nothing to restart for');
+    assert.equal(shown.restartQueued, undefined);
+    assert.equal(s.ws.stops, stops, 'no restart');
+    assert.equal(restarts(s).length, 0);
+
+    deliver(['mcpset']);
+    assert.deepEqual(s.controller.get(s.id)!.configChanged?.reasons, ['mcpset'], 'the hint names only what the process has not read');
+    await s.answering(until(() => restarts(s).length === 1, 5000));
+    assert.deepEqual([restarts(s)[0]!.actor, restarts(s)[0]!.detail.how], ['portal', 'auto']);
+    await until(() => !s.controller.get(s.id)!.restarting);
+    deliver(['context']);
+    await sleep(700);
+    assert.equal(restarts(s).length, 1, 'a context delivery after the restart restarts nothing either');
+    assert.equal(s.controller.get(s.id)!.configChanged, undefined);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-472: three MCP and settings deliveries in a burst give one automatic restart, after the newest has been quiet', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.controlTimeoutMs = 150;
+    s.controller.autoRestartSettleMs = 600;
+    const deliver = deliveries(s);
+    await autoApplying(s);
+    deliver(['mcpset']);
+    await sleep(250);
+    deliver(['settings']);
+    await sleep(250);
+    deliver(['mcpset']);
+    const last = Date.now();
+    assert.equal(s.controller.get(s.id)!.restartQueued, 'auto', 'queued, waiting for the burst to settle');
+    await sleep(300);
+    assert.equal(restarts(s).length, 0, 'still settling: no restart inside the burst');
+    await s.answering(until(() => restarts(s).length === 1, 5000));
+    assert.ok(Date.now() - last >= 600, 'it waited for the newest delivery to be quiet');
+    await until(() => !s.controller.get(s.id)!.restarting);
+    await sleep(900);
+    assert.equal(restarts(s).length, 1, 'one restart for the burst');
+    assert.equal(s.controller.get(s.id)!.configChanged, undefined, 'the new process read all three');
   } finally {
     await s.done();
   }
@@ -284,6 +369,7 @@ test('T-102 Bypass rule: an autonomous Bypass session restarts by itself at the 
   const s = await liveSession();
   try {
     s.controller.controlTimeoutMs = 150;
+    s.controller.autoRestartSettleMs = 0; // T-472's quiet time has its own test
     policy(s, true);
     const { id, tail } = await inBypassChanged(s);
     const shown = s.controller.get(id)!;

@@ -359,3 +359,25 @@ test('T-102: each delivery records the areas it changed, and changesSince names 
     h.done();
   }
 });
+
+test('T-472: changeLogSince gives each delivery since a start, newest first, with when it landed and its areas (null when unknown)', async () => {
+  const h = await harness();
+  try {
+    const started = Date.now() - 1;
+    h.provider.list = [skillset('v1')];
+    await h.run();
+    const later = new Date(Date.now() + 5).toISOString();
+    h.store.db!.prepare("INSERT INTO delivery_events (at, workspace_id, kind, details) VALUES (?, ?, 'delivered', '{}')").run(later, WS);
+    const log = h.reconciler.changeLogSince(WS, started);
+    assert.deepEqual(
+      log.map((e) => e.areas),
+      [null, ['skillset']],
+    );
+    assert.equal(log[0]!.at, later);
+    assert.ok(Date.parse(log[1]!.at) > started);
+    assert.deepEqual(h.reconciler.changeLogSince(WS, Date.parse(later)), [], 'nothing after the newest');
+    assert.deepEqual(h.reconciler.changeLogSince(WS, Number.NaN), []);
+  } finally {
+    h.done();
+  }
+});

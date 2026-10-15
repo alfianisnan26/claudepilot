@@ -248,6 +248,30 @@ export class Reconciler {
     }
   }
 
+  /**
+   * T-472: the deliveries written into a workspace after `sinceMs`, newest first (at most 50): when each landed and the areas it changed
+   * (null for one recorded before areas were). Empty when none landed since, or the events can't be read.
+   */
+  changeLogSince(workspaceId: string, sinceMs: number): { at: string; areas: string[] | null }[] {
+    if (!this.store.db || !Number.isFinite(sinceMs)) return [];
+    try {
+      const rows = this.store.db
+        .prepare(`SELECT at, details FROM delivery_events WHERE workspace_id = ? AND kind = 'delivered' AND at > ? ORDER BY at DESC, id DESC LIMIT 50`)
+        .all(workspaceId, new Date(sinceMs).toISOString()) as { at: string; details: string }[];
+      return rows.map((r) => {
+        let areas: unknown;
+        try {
+          areas = (JSON.parse(r.details) as { areas?: unknown }).areas;
+        } catch {
+          areas = undefined;
+        }
+        return { at: r.at, areas: Array.isArray(areas) ? areas.filter((a): a is string => typeof a === 'string') : null };
+      });
+    } catch {
+      return [];
+    }
+  }
+
   #event(workspaceId: string, kind: string, details: Record<string, unknown> = {}) {
     if (!this.store.writable) return;
     this.store.db!.prepare('INSERT INTO delivery_events (at, workspace_id, kind, details) VALUES (?, ?, ?, ?)').run(new Date().toISOString(), workspaceId, kind, JSON.stringify(details));
