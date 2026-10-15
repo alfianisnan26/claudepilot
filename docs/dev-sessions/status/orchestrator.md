@@ -19,8 +19,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-578 S1 DONE 51f6c153 (6010; e92c5ba3 ended): a GATE change -> blind review (opus, why: gate) at next free slot -> merge only on a person's ack.
 - BE INFRA respawned 88f36411 (ticket/T-426-s1e from T-426-s1d) on T-426 S1e (5995).
 - QA PERF 7e4879c7 (lane/cp-qa-perf) queue (19:59): T-623 S1b -> T-636 -> T-591 S1d -> T-600 BE/T-597 (if not done) -> T-325 S1 -> T-558 S1b.
-- BATCH 4 premerge 2c539829 (T-597 S1b 75656845, QA 5882, lead read slash.ts; coordinator asks it now for its deploy with T-546)
-  GATE RUNNING (job-out/gate-2c53982.log) -> ff integration on green. Then T-325 S1 (after its QA).
+- MERGED ff ce819bd0: T-597 S1b (gate GREEN 2c53982, flake layout.test -> T-638) -> coordinator deploys with T-546. Next merge T-325 S1 (after QA).
 - T-576 phone check (390/1280 on the real build) still open; kit 44 px -> T-639. Closes on that evidence (5991).
 - T-600 FE S1c DONE d1b31305 (5954; fa9d3d56 ended) -> QA UI respawned de862414 on qa/T-600-ui-r4 81684f78 (r3 + FE head, lead merge)
   re-runs crew-grid.mjs at 390/1280. Frontend lane is free: next FE item when the QA UI verdict is in.
