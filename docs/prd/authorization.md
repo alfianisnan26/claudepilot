@@ -816,6 +816,21 @@ The table above is the target. What is true today: 26 tools carry a declaration 
 | `lab_summary`, `lab_arm_draw` | agent, reach session | nothing | its own session only (`lab/portalTools.ts:81-82`, `:114`) |
 | `crew_scorecard` (T-450) | agent, reach session | nothing | its own program only (the top of its session's lineage; another program is `NOT_FOUND`) in `Lab.scorecard` (`lab/index.ts`) |
 
+### B.2 The workspaces router, declared and enforced (T-531)
+
+Every route under `/api/workspaces` is declared: `workspaces/authz.ts` for app.ts's own routes, and `pools/authz.ts`, `secrets/authz.ts`, `browser/authz.ts`, `repos/authz.ts` and `claudeversion/authz.ts` for the routes those modules mount on the router. Each `…/:target/:name…` route runs `workspaceGuard(verb)` (`workspaces/authz.ts`) with its declared verb **before** its handler (claudeversion asks `requireCan` first thing in each handler): a workspace the actor may not see is `404 Not found.`, the same as a missing one; one it sees without the verb is the seam's 403; no sign-in is 401. Routes that follow a label alias (T-42: `GET`/`PATCH …/:target/:name` and `…/resources`) ask about the workspace the alias resolves to. The lists (`GET /api/workspaces`, `/usage`, `/labels`, `/targets`) keep the rows the actor may view (`visible`).
+
+| Route (`/api/workspaces/:target/:name…`) | Verb | Audit row on success |
+| --- | --- | --- |
+| `GET` (one), `/resources`, `/preflight`, `/claude-login`, `/terminals`, `/claudes`, `/pools`, `/secrets`, `/browser`, `/browser/configuration`, `/repos`, `/repos/settings`, `/claude-version`, `/history`, `/plan` | view | none |
+| `POST /start`, `/stop`, `/adopt` | operate | `workspace.start`, `workspace.stop`, `workspace.adopt` (subject: the stable id) |
+| `PATCH` (rename), `PATCH /resources` | operate | the manager's own rows |
+| `POST /terminals`, `DELETE /terminals/:term`, `PATCH /claudes/:claude`, `POST /secrets/check`, browser control, handoffs, install retry and actions, `POST /repos/scan`, `PUT /repos/settings` | operate | none |
+| `DELETE` (remove: the workspace and its home volume) | manage | `workspace.remove` (subject: the stable id, read before the remove) |
+| `PUT /account`, `PUT /pools/:type`, claude-login (sign in, code, cancel, sign out), `DELETE /claudes/:claude`, claude-version apply and rollback | manage | claude-version's own rows |
+
+`workspaces/routeAuthz.test.ts` reads the app's route table: it fails on a route under `/api/workspaces` with no declaration (and a declaration with no route), on a guard that asks another verb than the declared one, and on a refused request that reached a dependency. Open (T-531's report): remove is `manage` without `reauth`; the pool and account-pool ids in `PUT /account` and `PUT /pools/:type` are not checked for use rights on the pool; the `/api/pools…`, `/api/repos…`, `/api/accounts…` and `/api/endpoints…` routes are not declared yet.
+
 ## Appendix C. Sockets and other doors outside the route table
 
 Declared in the same table under `ALL <path>` (the chat socket already is: `chat/authz.ts` declares `ALL /api/chat/live`), because an upgrade request is not in `app.routes`. The enumeration test also checks that every upgrade handler path found by `server.on('upgrade')` has a declaration.
