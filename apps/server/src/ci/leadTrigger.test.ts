@@ -23,3 +23,21 @@ test('the rule, decided in authz.ts: own branch, a lead on its program remote, e
   assert.equal(agentStart({ ...lead, cwd: '/w/app/sub' }, app, 'dev/x').rule, 'deployment', 'the folder must be the remote\'s exactly');
   assert.equal(agentStart({ ...lead, lead: false, branch: 'dev/y' }, app, 'dev/y').rule, 'own_branch');
 });
+
+test('a branch from the worker\'s folder: only on that folder\'s remote, only dev/* or ticket/* (T-476 review)', () => {
+  const app = { name: 'app', workspaceId: WS, sourcePath: '/w/app', connected: ['/w/app'] };
+  const other = { name: 'other', workspaceId: WS, sourcePath: '/w/other', connected: [] };
+  const worker = { id: 'w', title: '', ticketId: null, branch: 'dev/y', branchFromFolder: true, live: true, state: 'idle' as const, workspaceId: WS, lastActivityAt: '', cwd: '/w/app', lead: false };
+  // (c) the allowed case
+  assert.equal(agentStart(worker, app, 'dev/y').rule, 'own_branch');
+  assert.equal(agentStart({ ...worker, branch: 'ticket/T-1' }, app, 'refs/heads/ticket/T-1').rule, 'own_branch');
+  // (a) the lead's folder is on main or integration: refused, a deployment pipeline only
+  for (const b of ['main', 'integration', 'release/x']) assert.equal(agentStart({ ...worker, branch: b }, app, b).rule, 'deployment', b);
+  // (b) the folder's branch on another remote: the same NOT_FOUND as a remote that does not exist
+  const elsewhere = agentStart(worker, other, 'dev/y');
+  assert.equal(elsewhere.rule === 'deployment' && elsewhere.refusal.code, 'NOT_FOUND');
+  const mainElsewhere = agentStart({ ...worker, branch: 'main' }, other, 'main');
+  assert.equal(mainElsewhere.rule === 'deployment' && mainElsewhere.refusal.code, 'NOT_FOUND');
+  // a worktree's own branch is not limited (today's rule)
+  assert.equal(agentStart({ ...worker, branchFromFolder: false, branch: 'main' }, other, 'main').rule, 'own_branch');
+});

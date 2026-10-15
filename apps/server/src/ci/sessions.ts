@@ -10,6 +10,8 @@ export interface CiSession {
   ticketId: string | null;
   /** The branch of its git worktree, when it has one; else, for a worker, its folder's branch when it started (T-476). */
   branch: string | null;
+  /** T-476: `branch` is the folder's branch at the worker's start, not a git worktree of its own (CI limits such a branch, ci/authz.ts). */
+  branchFromFolder?: boolean;
   /** T-476: the folder it runs in, and whether it leads a crew (no parent, and it started at least one worker). Set by `get`. */
   cwd?: string;
   lead?: boolean;
@@ -75,7 +77,7 @@ export class ChatSessionsAdapter implements CiSessionsPort {
 
   #view(s: ReturnType<ChatController['get']>): CiSession | null {
     return s
-      ? { id: s.id, title: s.title, ticketId: s.ticketId ?? null, branch: s.worktree?.branch ?? s.folderBranch ?? null, live: s.state !== 'ended', state: s.state, workspaceId: s.workspaceId, lastActivityAt: s.lastActivityAt }
+      ? { id: s.id, title: s.title, ticketId: s.ticketId ?? null, branch: s.worktree?.branch ?? s.folderBranch ?? null, branchFromFolder: !s.worktree?.branch && !!s.folderBranch, live: s.state !== 'ended', state: s.state, workspaceId: s.workspaceId, lastActivityAt: s.lastActivityAt }
       : null;
   }
 
