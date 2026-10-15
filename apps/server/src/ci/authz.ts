@@ -53,6 +53,20 @@ export const isProgramRemote = (repo: Pick<CiRepo, 'sourcePath' | 'connected'>, 
  */
 export type AgentStart = { rule: 'own_branch' | 'program_branch'; ref: string } | { rule: 'deployment'; ref: string; refusal: AppError };
 
+/**
+ * T-476: is `branch` the session's own, on this remote? A worktree branch (flag set by the session adapter) is its own anywhere; a folder
+ * branch only on the folder's own remote and only as dev/* or ticket/*. A missing flag or a missing remote counts as no (fail closed).
+ */
+export function ownsBranchOn(me: CiSession | null | undefined, repo: Pick<CiRepo, 'sourcePath' | 'connected'> | undefined, branch: string | null): boolean {
+  if (!me?.branch || !branch || branch !== me.branch) return false;
+  if (me.branchFromWorktree) return true;
+  return !!repo && !!me.cwd && isProgramRemote(repo, me.cwd) && isProgramBranch(branch);
+}
+
+/** T-476: a lead (no parent, holds a crew) on a remote of its own program: it may READ every run there, whoever started it (never cancel or start). */
+export const leadReadsRemote = (me: CiSession | null | undefined, repo: Pick<CiRepo, 'sourcePath' | 'connected'> | undefined): boolean =>
+  !!me?.lead && !!me.cwd && !!repo && isProgramRemote(repo, me.cwd);
+
 export function agentStart(me: CiSession | null, repo: Pick<CiRepo, 'name' | 'workspaceId' | 'sourcePath' | 'connected'>, ref: string): AgentStart {
   const branch = ref.replace(/^refs\/heads\//, '');
   if (me?.branch && branch === me.branch) {

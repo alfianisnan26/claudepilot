@@ -562,7 +562,10 @@ folder is exactly the lead's folder), matched exactly (no `refs/`, `..`, tag or 
 On another program's remote that refusal is the same `NOT_FOUND` as a remote that does not exist. A worker started in a folder that
 is a git work tree on a branch owns that branch (recorded once at its start). Deploy pipelines keep the earlier rule and still wait
 for a person's approval. Every start writes one `ci.run_started` audit row: actor, session, remote, pipeline, ref and the rule that
-allowed it (`own_branch`, `program_branch`, `deployment`, `token`). The rule lives in `ci/authz.ts` (`agentStart`).
+allowed it (`own_branch`, `program_branch`, `deployment`, `token`). The rule lives in `ci/authz.ts` (`agentStart`). Reading:
+`ci_run_get`, `ci_runs_list` and `ci_run_logs` show a lead every run on its program's remotes, whoever started it (read only; cancel
+and bump stay own-only), and a worker's folder branch counts as its own only on that folder's remote as `dev/*` or `ticket/*`; any
+other run reads as `No such run.`
 
 | Tool | Scope | Hints | Inputs | Output |
 | --- | --- | --- | --- | --- |

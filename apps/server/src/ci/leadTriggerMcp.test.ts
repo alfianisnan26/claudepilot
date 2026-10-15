@@ -141,3 +141,59 @@ test('a worker whose folder was on dev/y at its start: gate on dev/y, refused on
     h.done();
   }
 });
+
+test('reading runs: a lead reads every run on its program remote (get and list), another remote reads as a missing run; a folder branch on main reads nothing elsewhere', async () => {
+  const sessions = new FakeSessions();
+  const h = await harness({ sessions });
+  const mcp = await portalMcpHarness();
+  try {
+    registerCiTools(h.svc, sessions, mcp.registry);
+    await remote(h, FILES);
+    const otherSrc = h.home.repo('other');
+    h.home.commit(otherSrc, FILES, 'add pipelines');
+    await h.svc.createRepo({ workspaceId: WS, name: 'other', source: otherSrc, connect: true });
+    h.home.git(['push', '-q', 'pilot', 'main'], otherSrc);
+    const repos = await h.svc.repos(WS);
+    const app = repos.find((r) => r.name === 'app')!;
+    const other = repos.find((r) => r.name === 'other')!;
+    // Runs another session started, on the lead's remote and on another program's remote (both on main).
+    const onApp = await h.svc.startRun({ repoId: app.id, pipeline: 'gate', ref: 'main' }, 'session:crew', { sessionId: 'crew' });
+    const onOther = await h.svc.startRun({ repoId: other.id, pipeline: 'gate', ref: 'main' }, 'session:crew', { sessionId: 'crew' });
+    sessions.add({ id: 'lead', workspaceId: WS, branch: null, cwd: h.src, lead: true });
+    // A worker whose folder branch is main: its own branch only by the folder rule, which refuses main.
+    sessions.add({ id: 'w', workspaceId: WS, branch: 'main', cwd: h.src, lead: false });
+    const lead = await mcp.agentToken(WS, 'lead');
+    const w = await mcp.agentToken(WS, 'w');
+    const call = (who: { secret: string }, tool: string, args: Record<string, unknown>) => mcp.call(who.secret, tool, args).then((r) => r.result!);
+
+    // The lead reads the run on its program remote, whoever started it: get and list.
+    const got = await call(lead, 'ci_run_get', { id: onApp.id });
+    assert.equal(got.isError, undefined, JSON.stringify(got));
+    assert.equal(got.structuredContent.run.id, onApp.id);
+    const listed = await call(lead, 'ci_runs_list', {});
+    assert.deepEqual(listed.structuredContent.runs.map((r: { id: string }) => r.id), [onApp.id]);
+
+    // Read only: no cancel for a run it did not start.
+    const cancel = await call(lead, 'ci_run_cancel', { id: onApp.id });
+    assert.equal(cancel.isError, true);
+    assert.match(cancel.content![0]!.text, /No such run/);
+
+    // Another program's remote: the same NOT_FOUND as a run that does not exist.
+    const far = await call(lead, 'ci_run_get', { id: onOther.id });
+    const none = await call(lead, 'ci_run_get', { id: 'nosuchrun' });
+    assert.equal(far.isError, true);
+    assert.deepEqual(far.content, none.content);
+    assert.match(far.content![0]!.text, /No such run/);
+
+    // The worker on main reads neither main run (not dev/* or ticket/*, and the other one is not its folder's remote).
+    for (const id of [onApp.id, onOther.id]) {
+      const r = await call(w, 'ci_run_get', { id });
+      assert.equal(r.isError, true, id);
+      assert.match(r.content![0]!.text, /No such run/);
+    }
+    assert.deepEqual((await call(w, 'ci_runs_list', {})).structuredContent.runs, []);
+  } finally {
+    mcp.done();
+    h.done();
+  }
+});
