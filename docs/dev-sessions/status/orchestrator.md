@@ -13,8 +13,9 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
 - Integration 98da1d8 PUSHED (gate GREEN 98da1d8): T-449 fix 1a4961a + touch-floor harness (UX PASS WITH GAPS 3683; 3694). Earlier: 9a8dc81 (T-450 S1b, T-472 S1, release merge-back, D-64).
 - Integration 9bbce90 PUSHED (gate GREEN 9bbce90): T-472 S2 577d98d merge (QA PASS WITH GAPS 3697; decision 3698) + pack.
 - T-476 MERGED c36f3b2 (f8f96e0 + dev/t-476-4 6aa2ce5 + pack), gate GREEN c36f3b2 (Job claudepilot-gate-c36f3b2-77be), pushed origin+pilot. Blind review ed50fc3c PASS (D-62; 3780), QA 1ef8aa9b PASS WITH GAPS (3805), deploy rule 3813. Close after deploy + live #folderBranch check.
-- T-491 (claimed; 3810: M, sev 2, 2 h; scope b = job-run --repo event + kit template, Event crew edits its own gate.yml): 39268e5f (implementer, opus, fadlilah) on dev/t-491-1; then blind review (opus) + QA with a real Job.
-- T-435 (claimed by the lead; estimate 3777: M, sev 2, 1.5 h): 7e77eb6f (implementer, opus, fadlilah) on dev/t-435-1 from integration; then blind review (opus) + QA (sonnet).- T-472 (held by the lead): S1 + S2 merged (QA 3641, 3697). After deploy: live paths check, restarts/h, pool re-assign; then close.
+- T-491 (claimed; 3810): DONE 34adf83 on dev/t-491-1 (3920; tests 18/18 Job 9a51dc18; proof 6b00d4df; Event stg Job d6214120 rc 0; Event's own Prettier red on main/stg). 39268e5f ended. Blind review af898add PASS WITH CONDITIONS (3959: token helper global, --also reaches other repos); ended. Decision 3965: scope helper to the event URL + refuse --also with event; token scope -> owner checklist. Fixer 5677e4e4 (implementer, sonnet, sekar) on dev/t-491-2; then fresh blind re-review + QA (sonnet).
+- T-435 (claimed; 3777): DONE a69a554 on dev/t-435-1 (3927; chat folder 679/682 0 fail Job 1ba2a374; typecheck 668a578c; proof f860e98c). 7e77eb6f ended. Blind review a103bbd6 PASS (3974; D-62 met; minors: extras check never decides, 2 refusal paths untested); ended. QA 0b107146 (sonnet, alfian.isnan) on qa/t-435-1; then merge.
+- Integration 1de96d7 PUSHED (gate GREEN 1de96d7, Job claudepilot-gate-1de96d7-4331): T-450 S2 edf7667 + pack. Deploy (portal image) next: T-449, T-450 S1b+S2, T-472 S1+S2, T-476; release waits for the owner's approval.- T-472 (held by the lead): S1 + S2 merged (QA 3641, 3697). After deploy: live paths check, restarts/h, pool re-assign; then close.
 - T-450 S2 DONE edf7667 on dev/t-450-s2 (3853: Crew tab ScorecardTab, CSV doneOnly, harness crew-scorecard.mjs green 390/1280; icon-only not done). 9675d606 ended. QA + UX e94e1670 PASS WITH GAPS (3902; gaps -> S3, decision 3908); ended. Merging now (pre-merge worktree), then gate, push, deploy.
 - T-397 (held by the lead; 3909: M, sev 2; authz wall named, coordinator's order 3797 = the person; D-62 path): ea193e80 (implementer, opus, fadlilah) on dev/t-397-1; then blind review (opus) + QA (sonnet).
 
@@ -59,7 +60,8 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
 ## NEEDS A HUMAN (D-62)
 - T-93 Konfersi production only. Coordinator items: T-397, T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
   T-433's persona-wall question (comment 2984). Owner checklist (not blocking): confirm T-476's reading that a lead may START a deploy
-  pipeline whose release still waits for a person (3813).
+  pipeline whose release still waits for a person (3813); T-491: Event Jobs use the workspace token scoped to isnanme/event, OK until
+  T-426's read-only packages token lands? (3965).
 
 ## NEXT (in order, as slots free)
 0. After T-476 (coordinator 06:45), in order: T-491 (high: Event gate runs vitest/workerd in the pod, io pressure 19 %; job-run --repo event),
