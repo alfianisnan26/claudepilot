@@ -392,7 +392,7 @@ case " $* " in
   *" get job "*) if [ -f "$FAKE/done" ]; then printf '1/'; else printf '/'; fi ;;
   *" get pods "*) if [ -f "$FAKE/pending" ]; then jq -n --rawfile m "$FAKE/pending" '{items: [{status: {phase: "Pending", conditions: [{type: "PodScheduled", status: "False", reason: "Unschedulable", message: $m}]}}]}'
     else printf '{"items":[{"status":{"phase":"Running"}}]}'; fi ;;
-  *" logs job/"*) printf '=== SUMMARY\ntypecheck rc=0 1s\nGATE-VERDICT: green\n' ;;
+  *" logs job/"*) if [ -f "$FAKE/joblog" ]; then cat "$FAKE/joblog"; else printf '=== SUMMARY\ntypecheck rc=0 1s\nGATE-VERDICT: green\n'; fi ;;
   *) ;;
 esac
 `;
@@ -433,6 +433,7 @@ test('T-524 gate-job.sh: a gate Pending for room says so with the reason; never 
   // Pending, then room frees: it says so and the gate's own verdict stands (green, exit 0).
   const w2 = gateWorld();
   writeFileSync(join(w2.root, 'pending'), why);
+  writeFileSync(join(w2.root, 'joblog'), '=== SUMMARY\ntypecheck rc=0 1s\nmemory peak=5120Mi limit=8192Mi oom_kills=0\nGATE-VERDICT: green\n');
   const s = w2.start({ GATE_JOB_WAIT_S: '60' });
   await waitFor('the Pending line', () => /is Pending/.test(s.out()));
   rmSync(join(w2.root, 'pending'));
@@ -441,6 +442,15 @@ test('T-524 gate-job.sh: a gate Pending for room says so with the reason; never 
   const r2 = await s.done;
   assert.equal(r2.code, 0, r2.out);
   assert.match(r2.out, /GATE-VERDICT: green\n$/);
+  assert.match(r2.out, /\ntypecheck rc=0 1s\nmemory peak=5120Mi limit=8192Mi oom_kills=0\nlog: /, 'the Job\'s memory peak in the summary');
+  assert.equal((r2.out.match(/memory peak=/g) ?? []).length, 1, 'one memory line');
+
+  // A Job that printed no memory line (an older manifest): the summary says unavailable, never a guess; the verdict is unchanged.
+  const w4 = gateWorld();
+  writeFileSync(join(w4.root, 'done'), '');
+  const r4 = await w4.start({ GATE_JOB_WAIT_S: '10' }).done;
+  assert.equal(r4.code, 0, r4.out);
+  assert.match(r4.out, /\ntypecheck rc=0 1s\nmemory peak=unavailable \(the gate Job printed no memory line\)\nlog: [^\n]+\nGATE-VERDICT: green\n$/);
 
   // Scheduled but not finished in time: the old message, unchanged.
   const w3 = gateWorld();

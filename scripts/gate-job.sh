@@ -65,7 +65,11 @@ case "$state" in 1/*|*/1) ;; *) kubectl -n "$ns" delete job "$job" --ignore-not-
   if [ -n "$pend_t" ]; then echo "GATE-VERDICT: red: not scheduled in $(( $(date +%s) - t1 ))s: $why"
   else echo "GATE-VERDICT: red: the job did not finish in ${wait_s}s"; fi
   exit 1 ;; esac
-sed -n '/^=== SUMMARY$/,$p' "$out" | grep -v '^GATE-VERDICT: ' || true
+sed -n '/^=== SUMMARY$/,$p' "$out" | grep -v -e '^GATE-VERDICT: ' -e '^memory peak=' || true
+# The Job's own memory peak (T-524: the 8Gi request is sized from it), always one line: the Job's cgroup reading, or "unavailable" when
+# the Job printed none (a gate-job.yaml from before T-524).
+mem=$(grep -E '^memory peak=' "$out" | tail -n 1 || true)
+echo "${mem:-memory peak=unavailable (the gate Job printed no memory line)}"
 echo "log: $out"
 rc=0; bash scripts/gate-verdict.sh joblog "$out" || rc=$?
 exit "$rc"

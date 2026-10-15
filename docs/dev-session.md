@@ -114,7 +114,8 @@ twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a
 - **Steps:** `typecheck,web-build,server-suite` by default; fewer for a heavy check without the suite, e.g. `typecheck,web-build`.
 - **The verdict:** the Job ends with one `GATE-VERDICT: green` or `GATE-VERDICT: red: <why>` line from `scripts/gate-verdict.sh` (the same
   reading the local gate uses: every step at rc=0, the last suite summary at 0 failing and 0 timed out). The script prints the summary and
-  that line, keeps the whole log in `GATE_JOB_LOG` (default `/tmp/gate-job-<sha>.log`), exits 0 green, 1 red.
+  that line, keeps the whole log in `GATE_JOB_LOG` (default `/tmp/gate-job-<sha>.log`), exits 0 green, 1 red. The summary always ends with
+  one `memory peak=… limit=… oom_kills=…` line (the Job's own cgroup), or `memory peak=unavailable` when the Job printed none.
 - **Pending (T-524):** 8Gi requested fits only k3s-node2, and the gate is not counted in job-run's caps, so it can wait for room. Its pod
   Pending for that says so once, `gate job <name> is Pending: <the scheduler's reason>; it waits for a node with room (a Job that ends frees
   memory), up to <GATE_JOB_WAIT_S>s`, and `gate job <name>: scheduled after Ns Pending` when it gets a node. A gate never scheduled in
