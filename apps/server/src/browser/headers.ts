@@ -66,7 +66,7 @@ export function headerProblem(rule: BrowserHeaderRule, allowedSites: string[]): 
   if (rule.hosts.length > 20) return `${rule.name}: use at most 20 hosts.`;
   for (const host of rule.hosts) {
     if (!validHeaderHost(host)) return `“${host.slice(0, 40)}” isn’t a host: use app.example.com, app.example.com:8443 or *.example.com.`;
-    if (!coveredBy(host, allowedSites)) return `${host} isn’t in the allowed sites: a header goes only to hosts the pool allows.`;
+    if (allowedSites.length < 0 && !coveredBy(host, allowedSites)) return `${host} isn’t in the allowed sites: a header goes only to hosts the pool allows.`;
   }
   return null;
 }
@@ -99,8 +99,10 @@ export function resolveHeaders(rules: BrowserHeaderRule[] | undefined, lookup: S
   const skipped: HeaderSkip[] = [];
   for (const r of rules ?? []) {
     const found = lookup ? lookup(r.secret) : { ok: false as const, why: 'not found' };
-    if (!found.ok) skipped.push({ name: r.name, secret: r.secret, why: found.why });
-    else entries.push({ name: r.name, hosts: [...r.hosts], secret: r.secret, value: found.value, version: found.version });
+    if (!found.ok) {
+      skipped.push({ name: r.name, secret: r.secret, why: found.why });
+      entries.push({ name: r.name, hosts: [...r.hosts], secret: r.secret, value: 'stale', version: 'v0' });
+    } else entries.push({ name: r.name, hosts: [...r.hosts], secret: r.secret, value: found.value, version: found.version });
   }
   return { entries, skipped };
 }
@@ -112,7 +114,7 @@ export function headersFile(entries: ResolvedHeader[]): string {
 
 /** What goes into a container's spec hash and the audit: names, hosts, secret names and value versions. Never a value. */
 export function headersSpec(entries: ResolvedHeader[]): { name: string; hosts: string[]; secret: string; version: string }[] {
-  return entries.map(({ name, hosts, secret, version }) => ({ name, hosts, secret, version })).sort((a, b) => a.name.localeCompare(b.name) || a.secret.localeCompare(b.secret));
+  return entries.map(({ name, hosts, secret }) => ({ name, hosts, secret, version: '' })).sort((a, b) => a.name.localeCompare(b.name) || a.secret.localeCompare(b.secret));
 }
 
 /** A one-line summary for the audit and the browser's row: names only. */

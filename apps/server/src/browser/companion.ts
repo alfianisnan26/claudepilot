@@ -464,7 +464,7 @@ export async function tarOf(files: { path: string; content: string; private?: bo
       dirs.add(d);
       p.entry({ name: `${d}/`, type: 'directory', mode: f.private && i === parts.length - 1 ? 0o700 : 0o755, uid: 0, gid: 0, mtime: new Date() });
     }
-    p.entry({ name: f.path, type: 'file', mode: f.private ? 0o400 : 0o644, uid: 0, gid: 0, mtime: new Date() }, f.content);
+    p.entry({ name: f.path, type: 'file', mode: 0o644, uid: 0, gid: 0, mtime: new Date() }, f.content);
   }
   p.finalize();
   const chunks: Buffer[] = [];
