@@ -1551,6 +1551,7 @@ var import_node_fs6 = require("node:fs");
 var import_node_net = require("node:net");
 var import_node_path6 = require("node:path");
 var SECRET_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+var NO_PROXY_VARS = ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"];
 function upstreamUrl(raw) {
   if (typeof raw !== "string" || raw.length > 500 || /[\s\0]/.test(raw)) throw new Fail("bad_url", "The upstream is an https URL.");
   let u;
@@ -1598,7 +1599,8 @@ async function heads(dir, prefix) {
 async function repoSync(repo, opts) {
   const dir = needRepo(repo);
   const url = upstreamUrl(opts.url);
-  const env = {};
+  const env = { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+  for (const name of NO_PROXY_VARS) env[name] = "";
   const hide = [];
   if (opts.secret !== void 0) {
     const value = secretValue(opts.secret);
@@ -1626,6 +1628,8 @@ async function repoSync(repo, opts) {
       "http.followRedirects=false",
       "-c",
       "credential.helper=",
+      "-c",
+      "http.proxy=",
       ...pin,
       "fetch",
       "--quiet",
@@ -1672,9 +1676,11 @@ async function repoSync(repo, opts) {
   }
   const deleted = [...before.keys()].filter((b) => !upstream.has(b) && validRefName(b)).sort();
   const onlyHere = [...local.keys()].filter((b) => !upstream.has(b) && validRefName(b)).sort();
-  const events = emitEvents(repo, moved, "push", "upstream");
+  const baseline = before.size === 0;
+  const events = baseline ? { written: [], dropped: 0 } : emitEvents(repo, moved, "push", "upstream");
   return {
     ok: true,
+    baseline,
     moved: moved.map((m) => ({ branch: m.ref.slice(11), old: m.old, new: m.new })),
     created,
     diverged,
