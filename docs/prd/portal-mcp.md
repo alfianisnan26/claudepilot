@@ -705,8 +705,11 @@ the workspace. The UI recommends "Needs approval" for admin tools in claude.ai's
 Every result is read again on each later request of the agent's session, so list and detail tools answer short by
 default and return the rest on request: `ticket_get` (tickets PRD §12.1), `ticket_list`, `ci_runs_list` (id,
 number, pipeline, branch, a 12 character sha, status, reason, ticket, created, duration; `ci_run_get` or
-`full: true` for the rest), `session_family` (the latest reply's first 200 characters, no folder; `full: true` for
-600 and the folder; T-294: a lead hears of its workers' turn ends in one line each instead of polling it) and `usage_attribution` (dollars and requests per row; `full: true` adds the tokens and the
+`full: true` for the rest), `session_family` (T-574: a session with workers gets one line per worker by default, `id8 title state model ticket
+first line of its latest report`, in one `untrusted_text` block of at most 1,300 characters, with a `cut` line saying how many workers
+it left out; `view: detail` gives the rows (the latest reply's first 200 characters, no folder; `full: true` for
+600 and the folder), `worker_id` one member's row by id or its first 8 characters, `reply_of` the whole reply; a session outside the
+family is the same NOT_FOUND as none; T-294: a lead hears of its workers' turn ends in one line each instead of polling it) and `usage_attribution` (dollars and requests per row; `full: true` adds the tokens and the
 times). `usage_spikes` keeps its evidence: it is the point of the call. A shortened field carries a `cut` line; a
 whole result over 20,000 characters is refused (`RESULT_TOO_LARGE`) with a hint to narrow it, never cut silently.
 The server's instructions tell agents which calls are cheap. Untrusted text keeps its `untrusted_text` label in

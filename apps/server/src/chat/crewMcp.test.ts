@@ -357,7 +357,7 @@ test('T-294 over MCP: session_message to workers or crew (exactly one of to and 
     // session_family: each worker's role and mode, and how many wait on a person; still the short form.
     w2tail.push(askBash('R2'));
     await until(() => r.s.controller.get(w2.id)!.waiting === 1);
-    const fam = (await r.h.call(a.secret, 'session_family', {})).result!;
+    const fam = (await r.h.call(a.secret, 'session_family', { view: 'detail' })).result!;
     const byId = new Map((fam.structuredContent.workers as { id: string; [k: string]: unknown }[]).map((w) => [w.id, w]));
     const [f1, f2] = [byId.get(w1.id)!, byId.get(w2.id)!];
     assert.deepEqual([f2.agent, f2.mode, f2.claude, f2.waiting_for_a_person], ['implementer', 'default', 'Default', true]);
