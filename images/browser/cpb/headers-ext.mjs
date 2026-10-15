@@ -58,17 +58,22 @@ export function buildExtension(entries) {
     }
     for (const h of hosts) {
       const key = hostRegex(h);
-      const list = byHost.get(key) ?? new Map();
-      list.set(name.toLowerCase(), { header: name, operation: 'set', value });
-      byHost.set(key, list);
+      const entry = byHost.get(key) ?? { headers: new Map(), domain: h.trim().toLowerCase().replace(/^\*\./, '').replace(/:\d+$/, '') };
+      entry.headers.set(name.toLowerCase(), { header: name, operation: 'set', value });
+      byHost.set(key, entry);
     }
   }
-  const rules = [...byHost].map(([regexFilter, headers], i) => ({
-    id: i + 1,
-    priority: 1,
-    action: { type: 'modifyHeaders', requestHeaders: [...headers.values()] },
-    condition: { regexFilter, isUrlFilterCaseSensitive: false, resourceTypes: TYPES },
-  }));
+  // Two rules per host (m2): top-level navigations (no initiator when the agent or a person opens the address) and, for everything else,
+  // only requests started by that host's own pages (`initiatorDomains`: the host and its subdomains), so a page on another site can't make
+  // the browser send the header to the stg hosts. A navigation started by a link on another site still carries it: it is the same request
+  // a person would make, and the page can't read the answer.
+  const rules = [...byHost].flatMap(([regexFilter, { headers, domain }], i) => {
+    const action = { type: 'modifyHeaders', requestHeaders: [...headers.values()] };
+    return [
+      { id: 2 * i + 1, priority: 1, action, condition: { regexFilter, isUrlFilterCaseSensitive: false, resourceTypes: ['main_frame'] } },
+      { id: 2 * i + 2, priority: 1, action, condition: { regexFilter, isUrlFilterCaseSensitive: false, resourceTypes: TYPES.filter((t) => t !== 'main_frame'), initiatorDomains: [domain] } },
+    ];
+  });
   const manifest = {
     manifest_version: 3,
     name: 'cpb headers',
@@ -78,7 +83,7 @@ export function buildExtension(entries) {
     host_permissions: ['<all_urls>'],
     declarative_net_request: { rule_resources: [{ id: 'headers', enabled: true, path: 'rules.json' }] },
   };
-  return { manifest, rules, dropped, count: rules.length };
+  return { manifest, rules, dropped, count: byHost.size };
 }
 
 /** Writes the extension into `dir` (made fresh, 0700, files 0400): run as the user Chromium runs as. */

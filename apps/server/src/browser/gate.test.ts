@@ -29,13 +29,15 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     ? '### Result\n- 0: [Other](http://localhost:3000/)\n- 1: (current) [My app [dev]](http://localhost:5173/login)'
     : name === 'browser_headers'
     ? 'cookie: sid=abc123\nAuthorization: Bearer tok_secret\n- Set-Cookie: s=1; Path=/\n{"x-api-key": "k_secret", "accept": "*/*"}\nCF-Access-Client-Secret: cfsecretval\n{"X-Edge-Token": "edgeval"}\nplain: visible'
+    : name === 'browser_dump'
+    ? 'GET /x?t=plainvalue-in-test-0001&z=1\n| CF-Access-Client-Id | tableidval1 |\n| X-Edge-Token | tableval123 |\n{"name":"X-Edge-Token","value":"pairval123"}\n{"value":"revval123","name":"X-Edge-Token"}\nthe body said plainvalue-in-test-0001 twice: plainvalue-in-test-0001\nshort abc stays'
     : 'ran ' + name + ' ' + JSON.stringify(args);
   console.log(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text }] } }));
 });
 `;
 
 const tool = (name: string) => ({ name, description: name, inputSchema: { type: 'object' } });
-const TOOLS = { server: { name: 'Fake', version: '1' }, tools: ['browser_navigate', 'browser_tabs', 'browser_headers', 'browser_boom'].map(tool) };
+const TOOLS = { server: { name: 'Fake', version: '1' }, tools: ['browser_navigate', 'browser_tabs', 'browser_headers', 'browser_dump', 'browser_boom'].map(tool) };
 
 interface Fake {
   state: {
@@ -119,9 +121,9 @@ const serverLog = () =>
     .filter(Boolean)
     .map((l) => JSON.parse(l) as { started?: string[]; call?: string; args?: Record<string, unknown> });
 
-function gate(extra: string[] = []) {
+function gate(extra: string[] = [], env: Record<string, string> = {}) {
   return new McpClient(process.execPath, [join(dir, 'gate.js'), 'playwright', '--tools', join(dir, 'tools.json'), ...extra, '--', '--cdp-endpoint', 'http://127.0.0.1:9222'], {
-    env: { CLAUDEPILOT_BROWSER_SUPERVISOR: supUrl, CLAUDEPILOT_BROWSER_NPM: join(dir, 'npm'), FAKE_LOG: join(dir, 'fake.log') },
+    env: { CLAUDEPILOT_BROWSER_SUPERVISOR: supUrl, CLAUDEPILOT_BROWSER_NPM: join(dir, 'npm'), FAKE_LOG: join(dir, 'fake.log'), ...env },
   });
 }
 
@@ -256,6 +258,31 @@ describe('the gate', () => {
       assert.match(r.text, /"accept": "\*\/\*"/);
     } finally {
       named.close();
+    }
+  });
+
+  test('a header value is masked wherever it appears, and table rows and name/value pairs by the header’s name (m3)', async () => {
+    fake.state.chrome = { state: 'up', bootId: 'boot-1' };
+    const flags = ['--redact', 'X-Edge-Token', '--redact-env', 'EDGE_TOKEN,SHORT,NOT_SET,bad name!'];
+    const g = gate(flags, { EDGE_TOKEN: 'plainvalue-in-test-0001', SHORT: 'abc' });
+    try {
+      await g.init();
+      const r = await g.call('browser_dump');
+      for (const leaked of ['plainvalue-in-test-0001', 'tableval123', 'tableidval1', 'pairval123', 'revval123']) assert.ok(!r.text.includes(leaked), `${leaked} leaked: ${r.text}`);
+      assert.match(r.text, /short abc stays/, 'a value under 8 characters is not masked: it would hit ordinary words');
+      assert.match(r.text, /z=1/);
+    } finally {
+      g.close();
+    }
+    // Without the secret's variable in the gate's environment only the structure masks it: the value in a URL or a sentence stays (the residual).
+    const bare = gate(flags);
+    try {
+      await bare.init();
+      const r = await bare.call('browser_dump');
+      assert.ok(!r.text.includes('tableval123'));
+      assert.ok(r.text.includes('plainvalue-in-test-0001'));
+    } finally {
+      bare.close();
     }
   });
 

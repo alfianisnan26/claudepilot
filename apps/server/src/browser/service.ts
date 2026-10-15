@@ -19,13 +19,13 @@ import type { AssignedPool } from '../pools/kinds.js';
 import type { PoolService } from '../pools/service.js';
 import type { Store } from '../store/store.js';
 import { type Companions, type CompanionPlan, type ExecResult, type ExecStream } from './companion.js';
-import { browserContainerState, hasBrowser, workspaceRunning, PENDING_ROLLBACK_MS, specIn, specOf, type KubeBrowsers, type KubePlan } from './kube.js';
+import { browserContainerState, hasBrowser, workspaceRunning, PENDING_ROLLBACK_MS, specIn, specOf, type KubeBrowsers, type KubePlan, type KubeWorkspace } from './kube.js';
 import { browserMatchers, compileBrowser, LOCK_HASH } from './compile.js';
 import { DEVICE_ID, deviceLabel, LEASE_TTL_S, Leases, refuse, type Lease } from './control.js';
-import { headersSpec, headersSummary, resolveHeaders, type ResolvedHeader, type SecretLookup } from './headers.js';
+import { headersFile, headersSpec, headersSummary, resolveHeaders, type ResolvedHeader, type SecretLookup } from './headers.js';
 import type { BrowserKind } from './kind.js';
 import { INSTALL_PATH } from './scripts.js';
-import { companionName, splitWorkspaceId } from './spec.js';
+import { companionName, sha256, splitWorkspaceId } from './spec.js';
 
 /**
  * The browser pool at run time (browser & desktop PRD §10, §14.2): keeps each workspace's browser container
@@ -433,8 +433,7 @@ export class BrowserService {
     const spec = specOf(plan, ws.deployment.metadata!.name!);
     const base = { pool_id: assigned.pool.id, revision: assigned.pool.revision };
     await kb.ensureConfigMap(ws, plan);
-    // The Secret is updated while there are headers; it is deleted only when no pod can need it (the template stops mounting it then).
-    if (plan.headers?.length || quiet) await kb.ensureHeadersSecret(ws, plan);
+    await this.#deliverKubeHeaders(workspaceId, name, kb, ws, plan);
     await kb.ensureEgress(ws, name);
     // Refused for room at the last start: tried again at the next one (or when the pool changes, which is a new spec).
     if (row?.spec === `unfit:${spec}` && why !== 'workspace starting') return;
@@ -476,6 +475,39 @@ export class BrowserService {
     }
     if (st.restarts > (row?.restarts ?? 0) && row?.container === 'running') this.event(workspaceId, 'restarted', { why: 'container restarted', restarts: st.restarts });
     this.#save(workspaceId, { ...base, container: st.state, spec: applied, restarts: st.restarts, last_error: st.state === 'error' ? st.detail : null });
+  }
+
+  /** Per workspace, which pod and which content (a hash, never a value) the headers file in the browser container was last delivered for. */
+  readonly #headersDelivered = new Map<string, string>();
+  /** Workspaces whose headers file changed while Chrome may be running with the old one: Chrome is stopped once it is idle, and the next wake reads the file. */
+  readonly #chromeStale = new Set<string>();
+
+  /**
+   * Headers on Kubernetes (PRD §24): written into the running browser container by exec whenever the pod or the content changed, with
+   * the file removed when there are none, so a removed or rotated secret takes effect without a workspace restart. When the file changed,
+   * Chrome is stopped as soon as nothing is using it; it starts again on the next call and rebuilds its extension from the new file. A
+   * delivery that fails is audited by its message (never a value) and tried again on the next pass; it never fails the convergence.
+   */
+  async #deliverKubeHeaders(workspaceId: string, name: string, kb: KubeBrowsers, ws: KubeWorkspace, plan: KubePlan) {
+    if (!hasBrowser(ws.deployment.spec?.template) || !ws.pod) return;
+    const headers = plan.headers ?? [];
+    const key = `${ws.pod.metadata?.uid ?? ws.pod.metadata?.name ?? ''}:${sha256(headers.length ? headersFile(headers) : '')}`;
+    try {
+      if (this.#headersDelivered.get(workspaceId) !== key) {
+        const r = await kb.deliverHeaders(name, headers);
+        if (r) {
+          this.#headersDelivered.set(workspaceId, key);
+          if (r === 'changed') this.#chromeStale.add(workspaceId);
+        }
+      }
+      if (this.#chromeStale.has(workspaceId) && (await this.#idle(workspaceId))) {
+        await kb.exec(name, ['cpb-ctl', 'chrome', '--action', 'stop']);
+        this.#chromeStale.delete(workspaceId);
+        this.event(workspaceId, 'headers_applied', { count: headers.length });
+      }
+    } catch (e) {
+      this.event(workspaceId, 'headers_failed', { error: redact((e as Error).message).slice(0, 200) });
+    }
   }
 
   /** Kubernetes workspaces whose running browser differs from its pool: applied at the next start (in memory; the next pass refills it). */

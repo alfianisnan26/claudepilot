@@ -207,11 +207,16 @@ test('the value is in the headers file and nowhere else the portal or the agent 
   assert.ok(!JSON.stringify(mcpServers(c)).includes(value));
   assert.ok((mcpServers(c) as { browser: { args: string[] } }).browser.args.includes('CF-Access-Client-Secret'), 'the gate redacts the header by name');
   assert.ok(!JSON.stringify(mcpServers(content({ headers: [] }))).includes('--redact'), 'no headers, no flag: existing pools compile as before');
+  // The gate masks the value too: it gets the secret's name (--redact-env) and Claude Code passes the variable through by reference.
+  const servers = mcpServers(c) as { browser: { args: string[]; env?: Record<string, string> } };
+  assert.ok(servers.browser.args.join(' ').includes('--redact-env CF_ACCESS_SECRET'));
+  assert.deepEqual(servers.browser.env, { CF_ACCESS_SECRET: '${CF_ACCESS_SECRET:-}' });
+  assert.equal(mcpServers(content({ headers: [] })).browser && (mcpServers(content({ headers: [] })).browser as { env?: unknown }).env, undefined);
   // The browser container's config files and the Kubernetes objects other than the Secret.
   assert.ok(!JSON.stringify(chromePolicy(c, { portalHosts: [] })).includes(value));
   assert.ok(!JSON.stringify(configMapData(plan)).includes(value));
   assert.ok(!JSON.stringify(browserContainer(plan)).includes(value));
-  assert.ok(!JSON.stringify(browserVolumes('ws-dev', c, true)).includes(value));
+  assert.ok(!JSON.stringify(browserVolumes('ws-dev', c)).includes(value));
   assert.ok(!specOf(plan, 'ws-dev').includes(value));
   const template = withBrowser({ metadata: { annotations: {} }, spec: { containers: [{ name: 'workspace', image: 'ws:1' }] } }, 'ws-dev', plan);
   assert.ok(!JSON.stringify(template).includes(value));
@@ -219,30 +224,39 @@ test('the value is in the headers file and nowhere else the portal or the agent 
   assert.ok(!JSON.stringify(headersSpec(entries)).includes(value));
 });
 
-test('Kubernetes: the Secret is mounted into the browser container only, read-only, mode 0400; no headers, no volume and the same spec as before', () => {
+test('Kubernetes: the headers folder is a memory-backed emptyDir mounted into the browser container only, with or without headers; no Secret object', () => {
   const value = fresh();
   const { c, plan } = world(value);
-  const template = withBrowser({ metadata: {}, spec: { containers: [{ name: 'workspace', image: 'ws:1' }] } }, 'ws-dev', plan);
-  const browser = template.spec!.containers.find((x) => x.name === 'browser')!;
-  assert.deepEqual(browser.volumeMounts!.filter((m) => m.name === 'cpb-secrets'), [{ name: 'cpb-secrets', mountPath: '/etc/cpb-secrets', readOnly: true }]);
-  assert.equal(template.spec!.containers.find((x) => x.name === 'workspace')!.volumeMounts, undefined, 'the workspace container never mounts it');
-  const vol = template.spec!.volumes!.find((v) => v.name === 'cpb-secrets')!;
-  assert.deepEqual(vol.secret, { secretName: 'ws-dev-browser-headers', items: [{ key: 'headers.json', path: 'headers.json' }], defaultMode: 0o400 });
-
   const bare: KubePlan = { ...plan, content: { ...c, headers: [] }, headers: [] };
-  const without = withBrowser({ metadata: {}, spec: { containers: [{ name: 'workspace', image: 'ws:1' }] } }, 'ws-dev', bare);
-  assert.ok(!without.spec!.volumes!.some((v) => v.name === 'cpb-secrets'));
-  assert.ok(!without.spec!.containers.find((x) => x.name === 'browser')!.volumeMounts!.some((m) => m.name === 'cpb-secrets'));
+  for (const p of [plan, bare]) {
+    const template = withBrowser({ metadata: {}, spec: { containers: [{ name: 'workspace', image: 'ws:1' }] } }, 'ws-dev', p);
+    const browser = template.spec!.containers.find((x) => x.name === 'browser')!;
+    assert.deepEqual(browser.volumeMounts!.filter((m) => m.name === 'cpb-secrets'), [{ name: 'cpb-secrets', mountPath: '/etc/cpb-secrets' }]);
+    assert.equal(template.spec!.containers.find((x) => x.name === 'workspace')!.volumeMounts, undefined, 'the workspace container never mounts it');
+    const vol = template.spec!.volumes!.find((v) => v.name === 'cpb-secrets')!;
+    assert.deepEqual(vol, { name: 'cpb-secrets', emptyDir: { medium: 'Memory', sizeLimit: '1Mi' } });
+    assert.ok(!template.spec!.volumes!.some((v) => v.secret), 'no Secret volume');
+  }
 });
 
-test('the spec follows the secret’s version, not its value: a rotated or removed secret changes it, the same one does not', () => {
+test('the spec does not follow the headers: a rotated, removed or added secret never restarts the pod', () => {
   const { entries, plan } = world(fresh());
   const base = specOf(plan, 'ws-dev');
-  assert.equal(specOf({ ...plan, headers: entries.map((e) => ({ ...e })) }, 'ws-dev'), base);
-  assert.notEqual(specOf({ ...plan, headers: entries.map((e) => ({ ...e, version: 'value-id-2' })) }, 'ws-dev'), base, 'rotated');
-  assert.notEqual(specOf({ ...plan, headers: [] }, 'ws-dev'), base, 'removed');
-  // The value itself is not part of the hash: a different value with the same version gives the same spec.
-  assert.equal(specOf({ ...plan, headers: entries.map((e) => ({ ...e, value: fresh() })) }, 'ws-dev'), base);
+  assert.equal(specOf({ ...plan, headers: entries.map((e) => ({ ...e, version: 'value-id-2', value: fresh() })) }, 'ws-dev'), base, 'rotated');
+  assert.equal(specOf({ ...plan, headers: [] }, 'ws-dev'), base, 'removed');
+});
+
+test('the extension adds a header to a host’s own pages and to navigations only: other sites’ requests to it get none (m2)', () => {
+  const built = ext.buildExtension([{ hosts: ['app.example.com', '*.stg.example.com', 'dev.example.com:8443'], name: 'X-Edge', value: fresh() }]);
+  assert.equal(built.count, 3);
+  const rules = built.rules as unknown as { condition: { regexFilter: string; resourceTypes: string[]; initiatorDomains?: string[] } }[];
+  const navs = rules.filter((r) => r.condition.resourceTypes.join() === 'main_frame');
+  const subs = rules.filter((r) => r.condition.resourceTypes.includes('xmlhttprequest'));
+  assert.equal(navs.length + subs.length, rules.length);
+  assert.ok(navs.every((r) => r.condition.initiatorDomains === undefined), 'a typed address has no initiator: it must match');
+  assert.ok(subs.every((r) => !r.condition.resourceTypes.includes('main_frame') && r.condition.initiatorDomains?.length === 1), 'everything else needs an initiator');
+  assert.deepEqual(subs.map((r) => r.condition.initiatorDomains![0]).sort(), ['app.example.com', 'dev.example.com', 'stg.example.com']);
+  for (const type of ['sub_frame', 'xmlhttprequest', 'script', 'image', 'websocket', 'ping', 'other']) assert.ok(subs.every((r) => r.condition.resourceTypes.includes(type)), type);
 });
 
 test('Docker: headers.json is a private file in a private folder, and the config and policy stay world-readable', async () => {

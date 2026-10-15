@@ -41,12 +41,6 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "create", "update", "delete"]
-  # Request headers from named secrets (browser-desktop-pool PRD §24, T-623): one `ws-<name>-browser-headers` Secret per workspace that has
-  # them, mounted only into its browser container. Create, replace and delete; no list or watch, so the portal can't read other Secrets in
-  # this namespace without knowing a name (it reads only its own).
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "create", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

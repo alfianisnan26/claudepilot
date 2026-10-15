@@ -102,10 +102,26 @@ const clock = (ms) => new Date(ms).toISOString().slice(11, 16) + ' UTC';
 // Access ones always are. A name is only letters, digits and hyphens: anything else is dropped here, so it can't change the pattern.
 const EXTRA_CRED = ['cf-access-client-id', 'cf-access-client-secret'].concat(String(flag('--redact') || '').split(',').filter((n) => /^[A-Za-z][A-Za-z0-9-]{0,63}$/.test(n)));
 const CRED = '(cookie|set-cookie|authorization|proxy-authorization|x-api-key|' + EXTRA_CRED.join('|') + ')';
+// The values of the secrets behind those headers (--redact-env a,b: the names of environment variables the plugin's .mcp.json passes through
+// from Claude Code's own, so no value is in a file or on a command line). A value is masked wherever it appears: as it is, JSON-escaped or
+// URL-encoded. Values under 8 characters are not masked: they would hit ordinary words.
+const SECRET_VALUES = String(flag('--redact-env') || '')
+  .split(',')
+  .filter((n) => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(n))
+  .map((n) => process.env[n])
+  .filter((v) => typeof v === 'string' && v.length >= 8)
+  .flatMap((v) => [v, JSON.stringify(v).slice(1, -1), encodeURIComponent(v)])
+  .filter((v, i, all) => v.length >= 8 && all.indexOf(v) === i)
+  .sort((a, b) => b.length - a.length);
 function redact(s) {
-  return s
+  let out = s
     .replace(new RegExp('("' + CRED + '"\\s*:\\s*)"(?:[^"\\\\]|\\\\.)*"', 'gi'), '$1"[redacted]"')
+    .replace(new RegExp('("name"\\s*:\\s*"' + CRED + '"\\s*,\\s*"value"\\s*:\\s*)"(?:[^"\\\\]|\\\\.)*"', 'gi'), '$1"[redacted]"')
+    .replace(new RegExp('("value"\\s*:\\s*)"(?:[^"\\\\]|\\\\.)*"(\\s*,\\s*"name"\\s*:\\s*"' + CRED + '")', 'gi'), '$1"[redacted]"$2')
+    .replace(new RegExp('(\\|\\s*' + CRED + '\\s*\\|\\s*)[^|\\n]*', 'gi'), '$1[redacted] ')
     .replace(new RegExp('(^[ \\t>-]*\\[?' + CRED + '\\]?\\s*[:=]\\s*)(.+)$', 'gim'), '$1[redacted]');
+  for (const v of SECRET_VALUES) out = out.split(v).join('[redacted]');
+  return out;
 }
 function redactResult(result) {
   if (!result || !Array.isArray(result.content)) return result;
