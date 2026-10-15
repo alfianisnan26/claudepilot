@@ -565,7 +565,7 @@ export class ChatController {
   readonly #queuedFiring = new Set<string>();
   readonly #boundaryRecheck = new Map<string, ReturnType<typeof setTimeout>>();
   /** T-472: per session, the look again once its newest change has been quiet for `autoRestartSettleMs`. */
-  readonly #settleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  readonly #settleTimers = new Map<string, () => void>();
   /** The move whose events are being written: they carry its id, so the transcript folds them into one card. */
   readonly #tags = new Map<string, string>();
   /** Git worktrees: made and removed through the session host's hardened git. */
@@ -772,6 +772,15 @@ export class ChatController {
       return () => clearTimeout(timer);
     },
   };
+  /** T-472: the clock and timer of the settle wait before an automatic restart (`set` returns its cancel); tests step them by hand. */
+  settleClock: { now(): number; set(fn: () => void, ms: number): () => void } = {
+    now: () => Date.now(),
+    set: (fn, ms) => {
+      const timer = setTimeout(fn, ms);
+      timer.unref?.();
+      return () => clearTimeout(timer);
+    },
+  };
   /** How long a control request waits for Claude Code's answer. */
   controlTimeoutMs = CONTROL_TIMEOUT_MS;
   /** T-417: how long a start or a wake waits for a slot under the live cap before it is refused naming the cap. */
@@ -881,7 +890,7 @@ export class ChatController {
     // T-102: a boundary re-check must not run on a closed store (it did after a test's teardown).
     for (const timer of this.#boundaryRecheck.values()) clearTimeout(timer);
     this.#boundaryRecheck.clear();
-    for (const timer of this.#settleTimers.values()) clearTimeout(timer);
+    for (const cancel of this.#settleTimers.values()) cancel();
     this.#settleTimers.clear();
     for (const out of this.#crewOut.values()) out.timer?.();
     this.#crewOut.clear();
@@ -2820,17 +2829,16 @@ export class ChatController {
     // T-472: an automatic restart waits until its change has been quiet for the settle time, so a burst of deliveries gives one restart.
     // A newer change moves `at`, and the look again then waits once more.
     if (want === 'auto' && s.configChanged) {
-      const wait = Date.parse(s.configChanged.at) + this.autoRestartSettleMs - Date.now();
+      const wait = Date.parse(s.configChanged.at) + this.autoRestartSettleMs - this.settleClock.now();
       if (wait > 0) {
-        clearTimeout(this.#settleTimers.get(id));
-        const timer = setTimeout(() => {
+        this.#settleTimers.get(id)?.();
+        const cancel = this.settleClock.set(() => {
           this.#settleTimers.delete(id);
           if (this.#closed) return;
           const now = this.#chat.get(id);
           if (now) this.#fireQueued(this.#decorate(now));
         }, wait + 50);
-        timer.unref?.();
-        this.#settleTimers.set(id, timer);
+        this.#settleTimers.set(id, cancel);
         return;
       }
     }
