@@ -12,7 +12,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - Earlier: 4ba5d37, 73bb581 merged; deploys #35/#36 (closed T-483, T-397, T-491, T-435, T-476, T-449).
 
 ## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-401 S1, 45148907 T-486 S2 (GO 11:15, has the slot; last ticket, ~145k),
-  47710391 qa-sweep (sonnet) T-531 S2 QA then the 10-ticket in_review sweep, dc1ba33c impl-t416b (sonnet) T-416 S1b)
+  47710391 qa-sweep (sonnet) T-531 S2 QA WAITING GO (sweep done: 4656), dc1ba33c impl-t416b (sonnet) T-416 S1b)
+  Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
   Cluster slot order: T-486 S2 -> T-401 -> T-531 QA -> T-416 S1b. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
 - T-401 (high, security; claimed, 4576: M, sev 2, ~2.5 h): S1 c10daf0e (opus, impl-t401) on ticket/T-401-job-env from 58ce041:
   credentials only for clone/fetch (init container preferred), gone before npm scripts and the command; live FOUND/ABSENT check.
@@ -20,7 +21,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   ended. Decision 4637 (D-65 lever 3): S1b dc1ba33c fixes the parallel-create race + push-bridge test on ticket/T-416-budget-s1b.
   Then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
 - T-426 (claimed 4642): starts on T-401's merged head (same Secret block of job-run.sh); opus + blind review; T-379 after it.
-- T-524: S1 + S2 merged (4551). Open ONLY: k3s-master under 85% in a busy hour, measured (with T-513). Minors -> T-543.
 - T-531 (high, authz): S1 df65563 (4515: typecheck a3cf20b8; 1105/1111 0 fail ed930af1; proof 535ee3fc 6/6); 74a6ee0e ended.
   Blind review 21731f30 PASS WITH CONDITIONS (4520: preflight at view runs a shell, adopt at operate; ended). Decision 4524: fix
   round S2 eef38632 DONE 9cd240f (4573: typecheck e68ac93a; 1001/1015 0 fail 2bc6a50e; proof 55c7eff0 8/8 vs 4 fail); ended.
