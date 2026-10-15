@@ -29,6 +29,8 @@ export interface CiTicketsPort {
   closed(ticketId: string): boolean | null;
   /** Reopens a closed ticket as the portal. */
   reopen(ticketId: string): void;
+  /** A ticket's summary, type and status now, for the release report (T-591); null when there is no such ticket. */
+  info(ticketId: string): { summary: string; type: string; status: string } | null;
 }
 
 /** A ticket CI opens by itself: always a bug of normal priority. */
@@ -72,6 +74,11 @@ export class TicketsAdapter implements CiTicketsPort {
 
   reopen(ticketId: string): void {
     this.tickets.update(SYSTEM, ticketId, { status: 'open' });
+  }
+
+  info(ticketId: string): { summary: string; type: string; status: string } | null {
+    const b = this.tickets.brief(ticketId);
+    return b ? { summary: b.summary, type: b.type, status: b.status } : null;
   }
 }
 
@@ -133,5 +140,11 @@ export class FakeTickets implements CiTicketsPort {
   reopen(ticketId: string): void {
     this.closedIds.delete(ticketId);
     this.reopened.push(ticketId);
+  }
+
+  /** Summaries, types and statuses a test sets for the release report. */
+  readonly infos = new Map<string, { summary: string; type: string; status: string }>();
+  info(ticketId: string): { summary: string; type: string; status: string } | null {
+    return this.infos.get(ticketId) ?? (this.known.has(ticketId) ? { summary: ticketId, type: 'task', status: 'open' } : null);
   }
 }

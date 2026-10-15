@@ -13,6 +13,7 @@ import {
   type Actor,
   type BumpRequest,
   type CiApprovalRequest,
+  type CiReleaseReportSetting,
   type UpdateCiEnvironmentRequest,
   type UpdateCiAutoApproveRequest,
   type ConnectCiRepoRequest,
@@ -162,6 +163,20 @@ export function createCiRoutes(ci: CiService): Hono {
   app.put('/repos/:id/environments/:name/auto-approve', async (c) => {
     const by = person(may(c, 'manage', repoRef));
     return c.json(success(ci.setAutoApprove(id(c), c.req.param('name'), await body<UpdateCiAutoApproveRequest>(c), by)));
+  });
+
+  // Release reports (T-591): where a remote's passed releases are written (a vault and a folder). The setting is a person's only (403 for
+  // tokens and agents); audited. The backfill takes a run id and nothing else: the vault and folder are always the remote's own setting.
+  app.get('/repos/:id/release-report', (c) => (may(c, 'view', repoRef), c.json(success(ci.releaseReportSetting(id(c))))));
+  app.put('/repos/:id/release-report', async (c) => {
+    const by = person(may(c, 'manage', repoRef));
+    const req = await body<{ setting: CiReleaseReportSetting | null }>(c);
+    if (req.setting !== null && (typeof req.setting !== 'object' || req.setting === undefined)) throw new AppError('VALIDATION_FAILED', 'Send { "setting": { pipeline, vaultId, folder } } or { "setting": null }.');
+    return c.json(success(ci.setReleaseReport(id(c), req.setting, by)));
+  });
+  app.post('/runs/:id/release-report', async (c) => {
+    person(may(c, 'manage', runRef));
+    return c.json(success(await ci.reportRelease(id(c))));
   });
 
   app.post('/validate', async (c) => c.json(success(ci.validate(await body<ValidateCiRequest>(c)))));

@@ -11,6 +11,8 @@ import {
   parseTicketBranch,
   shortSha,
   CI_ENVIRONMENT_NAME,
+  type CiReleaseReportResult,
+  type CiReleaseReportSetting,
   type CiBranch,
   type CiDeployment,
   type CiDiagnostic,
@@ -58,6 +60,8 @@ import { CiStore, type DeploymentRow, type EnvironmentRow, type RepoRow, type Ru
 import { CiLinks, runLink, type CiBumper } from './links.js';
 import type { CiSessionsPort } from './sessions.js';
 import { DeployChatsWatch } from './deployChats.js';
+import { parseSetting, ReleaseReporter, ReportRefused, type ReleaseNoteSink } from './releaseReporter.js';
+import { validFolder } from './releaseReport.js';
 import type { CiTicketsPort } from './tickets.js';
 import { cleanLog, oneLine, redactSecrets } from './text.js';
 import { flakyComment, flakyDescription, flakyExcerpt, flakyTitle, parseFlaky, repoTag, type FlakySighting } from './flaky.js';
@@ -225,6 +229,9 @@ export class CiService {
   /** Called after anything changes, for the live socket. */
   onChange?: () => void;
   hooks: CiHooks = {};
+  /** Where release reports are written (T-591): the knowledge vault, as the portal. Set after both services exist; unset: no report is written. */
+  releaseNotes?: ReleaseNoteSink;
+  readonly #reporter: ReleaseReporter;
   readonly #cs: CiStore;
   readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>> &
     Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>;
@@ -261,6 +268,16 @@ export class CiService {
     this.#cs = new CiStore(store);
     this.#links = new CiLinks(this.#cs, opts.tickets, opts.sessions);
     this.#tickets = opts.tickets;
+    const sinkNow = (): ReleaseNoteSink | undefined => this.releaseNotes;
+    this.#reporter = new ReleaseReporter({
+      cs: this.#cs,
+      cp: (ws, args) => this.host.cp(ws, args, { timeoutMs: 30_000 }),
+      tickets: opts.tickets,
+      get sink() {
+        return sinkNow();
+      },
+      audit: opts.audit,
+    });
     const sessions = opts.sessions;
     this.#deployChats = sessions?.attached ? new DeployChatsWatch(() => sessions.attached!()) : null;
     this.#opts = {
@@ -1796,6 +1813,48 @@ export class CiService {
     if (!row) return;
     this.#hook(() => this.hooks.changed?.(row, previous));
     void this.#links.changed(row, previous).catch((e: unknown) => console.error(`[ci] ${id}: linking failed: ${(e as Error).message}`));
+    // T-591: a release pipeline that ended writes its report (only when the remote has the setting and its release job passed).
+    if (row.status === 'passed' || row.status === 'failed' || row.status === 'cancelled') void this.#reporter.report(id).catch((e: unknown) => console.error(`[ci] ${id}: release report failed: ${(e as Error).message}`));
+  }
+
+  /* ---------- Release reports (T-591) ---------- */
+
+  /** The remote's release report setting; null: off. */
+  releaseReportSetting(repoId: string): CiReleaseReportSetting | null {
+    const repo = this.#cs.repo(repoId);
+    if (!repo || repo.removed_at) throw notFound('remote');
+    return parseSetting(repo.release_report);
+  }
+
+  /** Sets or clears it. A person only (the route refuses tokens and agents); audited. The vault must exist: it is checked when a note is written, so a wrong id fails loudly then. */
+  setReleaseReport(repoId: string, setting: CiReleaseReportSetting | null, by: CiDecider): CiReleaseReportSetting | null {
+    const repo = this.#cs.repo(repoId);
+    if (!repo || repo.removed_at) throw notFound('remote');
+    if (setting !== null) {
+      const pipeline = typeof setting.pipeline === 'string' ? setting.pipeline.trim() : '';
+      const vaultId = typeof setting.vaultId === 'string' ? setting.vaultId.trim() : '';
+      const folder = typeof setting.folder === 'string' ? setting.folder.trim().replace(/^\/+|\/+$/g, '') : '';
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(pipeline)) throw new AppError('VALIDATION_FAILED', 'Check the pipeline.', { details: { pipeline: 'A pipeline file name without .yml, e.g. deploy.' } });
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(vaultId)) throw new AppError('VALIDATION_FAILED', 'Check the vault.', { details: { vaultId: 'A vault id.' } });
+      if (!validFolder(folder)) throw new AppError('VALIDATION_FAILED', 'Check the folder.', { details: { folder: 'A folder in the vault, e.g. Releases (no .., at most four levels).' } });
+      setting = { pipeline, vaultId, folder };
+    }
+    this.#cs.updateRepo(repoId, { release_report: setting ? JSON.stringify(setting) : null });
+    this.#opts.audit?.({ kind: 'ci.release_report_setting', actor: by.actor, userId: by.userId, severity: 'medium', subject: `ci_repo:${repoId}`, detail: { repo: repo.name, vault: setting?.vaultId ?? null, folder: setting?.folder ?? null, pipeline: setting?.pipeline ?? null } });
+    this.#changed();
+    return setting;
+  }
+
+  /** The backfill: the report of a past run, into the vault the remote's own setting names. Refuses a run that does not qualify (409 with why). */
+  async reportRelease(runId: string): Promise<CiReleaseReportResult> {
+    try {
+      const r = await this.#reporter.report(runId, true);
+      if (!r) throw new AppError('CONFLICT', 'This run has no release report.');
+      return r;
+    } catch (e) {
+      if (e instanceof ReportRefused) throw new AppError('CONFLICT', e.message);
+      throw e;
+    }
   }
 
   #hook(fn: () => void): void {

@@ -115,6 +115,11 @@ export const CI_POLICIES = {
   'PUT /api/ci/repos/:id/environments/:name': { ...repo('manage'), audit: 'ci.environment_protection' },
   // The auto-approve rule (T-110, FR41a): a person with manage only (the handler refuses tokens and agents); no tool reaches it.
   'PUT /api/ci/repos/:id/environments/:name/auto-approve': { ...repo('manage'), audit: 'ci.environment_auto_approve' },
+  // Release reports (T-591): the setting and the backfill are a person's with manage only (the handlers refuse tokens and agents); no tool reaches
+  // them. The backfill takes a run id and nothing else: it writes only into the vault and folder the remote's own setting names.
+  'GET /api/ci/repos/:id/release-report': repo('view'),
+  'PUT /api/ci/repos/:id/release-report': { ...repo('manage'), audit: 'ci.release_report_setting' },
+  'POST /api/ci/runs/:id/release-report': { ...run('manage'), audit: 'ci.release_report' },
   'POST /api/ci/validate': { kind: 'signed-in' },
   // Runners (T-557): the list shows the workspaces the person may see (the handler filters). Making a workspace a runner sends other
   // workspaces' commits and secrets to it: manage on that workspace, a person only (the handler refuses tokens and agents), audited.

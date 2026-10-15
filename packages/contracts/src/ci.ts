@@ -575,7 +575,29 @@ export const CI_API = {
   environment: (repoId: string, name: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}`,
   /** PUT `UpdateCiAutoApproveRequest`: `CiEnvironment` (FR41a; a person with manage only). */
   environmentAutoApprove: (repoId: string, name: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/environments/${encodeURIComponent(name)}/auto-approve`,
+  /** GET: the `CiReleaseReportSetting` of a remote or null. PUT `{ setting: CiReleaseReportSetting | null }`: set or clear it (a person with manage only; T-591). */
+  releaseReport: (repoId: string) => `/api/ci/repos/${encodeURIComponent(repoId)}/release-report`,
+  /** POST: write the release report of a past run (backfill) into the vault its remote's setting names; `CiReleaseReportResult` (a person with manage only; T-591). */
+  runReleaseReport: (runId: string) => `/api/ci/runs/${encodeURIComponent(runId)}/release-report`,
 } as const;
+
+/** T-591 (D-69): where a remote's release reports go. Null on a remote: no reports. The vault and folder are never taken from a run or a tool call. */
+export interface CiReleaseReportSetting {
+  /** The pipeline whose passed `release` job writes a note (for claudepilot: `Deploy`'s file name stem, e.g. `deploy`). */
+  pipeline: string;
+  /** A knowledge vault id. */
+  vaultId: string;
+  /** A folder in it, without leading or trailing slash (e.g. `Releases`). */
+  folder: string;
+}
+
+export interface CiReleaseReportResult {
+  /** The note in the vault. */
+  path: string;
+  /** False when the note was already there and is now replaced, or unchanged. */
+  created: boolean;
+  unchanged: boolean;
+}
 
 /** The first 7 characters of a commit. */
 export const shortSha = (sha: string): string => sha.slice(0, 7);
