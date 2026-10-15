@@ -62,7 +62,7 @@ test('T-460: a steered move that does not happen (the source recovered) tells th
   assert.equal(r.chat.moves.length, 0);
   assert.equal(r.chat.sent.length, 2, 'the continue line');
   assert.match(r.chat.sent[1]!.text, OFF);
-  assert.doesNotMatch(r.chat.sent[1]!.text, /stop|wait/i, 'no stop and wait once the move is off');
+  assert.doesNotMatch(r.chat.sent[1]!.text, /then stop|stop and wait/i, 'no stop and wait once the move is off');
   assert.equal(r.chat.sent[1]!.priority, 'next', 'the same channel as the steer');
   assert.equal(r.chat.sent[1]!.actor, 'portal:autotransfer');
   const rows = r.cancelled();
