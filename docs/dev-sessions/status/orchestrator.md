@@ -22,7 +22,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 
 ## READY, NOT MERGED
 - T-369 (urgent): dev/t-369-1 ff0088d (comment 2568: web 576/576, flip proof f9d87e3b, session-crew 5/5 a9166dc2). In dev/t-375-1; see T-375 above.
-- T-376 (high): S2 web dev/t-376-2 1fa258c (comment 2580: web 589/589). Needs a ux-checker (390/1280, light/dark, scroll-up hold) and S3 perf-tester (10k/25k fixture from T-378's seed-scale.mjs).
+- T-376 (high): S2 ux FAIL (report on T-376: newest page read twice on open). Fixer ca172194 (sonnet, fadlilah) in dev-t-349-1 on new dev/t-376-3 (= t-376-2 + integration); then the ux re-check (incl. checks that did not run) and S3 perf-tester.
 - T-378 (high): S1 dev/t-378-1 9834ff7 (comment 2631: FAIL proof on the owner's cases). Merge with the next batch (qa tools only); S2 transcript-perf + long-lists next; S4 the PASS runs.
 
 ## DECISIONS (binding)
@@ -42,7 +42,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 ## NEXT (in order, as slots free)
 1. On f20d8008's PASS: merge T-417 + T-427, gate Job, push. Deploy batch 2026-10-16: T-366 (portal+workspace), T-417, T-427.
 2. T-427 second verifier (sonnet).
-3. ux-checker + S3 perf-tester for T-376 S2.
+3. T-376 ux re-check + S3 perf-tester after ca172194.
 4. T-435 (high), T-416 (portal memory budget, high), T-422 build (sudo), T-147 (narrow ClusterRole in a rig, after T-416/T-417).
 5. T-438, T-425, T-436, T-437, T-432, T-378 S2-S4, T-382, T-377, T-386, T-409, T-402, T-398, T-399.
 6. T-370 HOLD (claudepilot-b7), then T-371..T-374, T-363 (read D-59 / PRD 8b criteria first).
