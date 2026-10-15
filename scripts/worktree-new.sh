@@ -27,5 +27,5 @@ case $path in "$root"/*) ;; *) refuse "$path is outside $root" ;; esac
 git -C "$main" show-ref --verify --quiet "refs/heads/$branch" && refuse "branch $branch already exists"
 git -C "$main" fetch -q origin integration
 git -C "$main" worktree add -q -b "$branch" "$path" origin/integration
-"$(dirname "$0")/worktree-deps.sh" --main "$main" "$path" || { echo "worktree $path exists, but its dependencies are not linked (see above)" >&2; exit 2; }
+bash "$(dirname "$0")/worktree-deps.sh" --main "$main" "$path" || { echo "worktree $path exists, but its dependencies are not linked (see above)" >&2; exit 2; }
 echo "worktree-new: $path on $branch"
