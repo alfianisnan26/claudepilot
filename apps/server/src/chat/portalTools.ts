@@ -73,6 +73,7 @@ const WHY_TEXT: Record<SpawnClaudeWhy, string> = {
   named: 'the Claude you named',
   room: 'a Claude with room by a fresh, measured reading',
   no_room: 'your Claude: no other has room by a measured reading',
+  no_room_lowest: 'the least used Claude now: none has room by a measured reading',
   usage_unknown: 'your Claude: usage is not readable now',
 };
 
