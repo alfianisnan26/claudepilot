@@ -14,7 +14,7 @@ import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { CP_SESSION, CP_SESSION_PATH, TRUST_EMPTY_HASH } from './host.js';
 import { ChatStore } from './store.js';
-import { autoTrustable, autoTrustRefusal, FOLDER_CHANGED, FOLDER_NOT_TRUSTED, parseTrustScan, scanFolder, trustFolder, untrustedError, type FolderScan, type HostScan } from './trust.js';
+import { autoTrustable, autoTrustRefusal, FOLDER_CHANGED, sameRepoRefusal, FOLDER_NOT_TRUSTED, parseTrustScan, scanFolder, trustFolder, untrustedError, type FolderScan, type HostScan } from './trust.js';
 import { createChatTrustRoutes } from './trustRoutes.js';
 
 const HASH_A = 'a'.repeat(64);
@@ -148,6 +148,20 @@ test('autoTrustRefusal: says why by name, never a rule or a value (T-366)', () =
   const e = untrustedError({ ...rules, autoRefusal: 'it loads hooks' }, false);
   assert.equal(e.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: it loads hooks.`);
   assert.equal(untrustedError(rules, true).message, FOLDER_CHANGED, 'no reason when the policy did not look');
+});
+
+test('sameRepoRefusal (T-366, third review): everything autoTrustRefusal names but a broad allow rule, which the hash pins', () => {
+  const rules: FolderScan = { workspaceId: 'docker/ws1', folder: '/home/node/proj', ...EMPTY, hash: HASH_B, files: ['.claude/settings.json'], allowRules: 3, empty: false, trusted: false };
+  assert.equal(sameRepoRefusal(rules), null);
+  assert.equal(sameRepoRefusal({ ...rules, broadAllow: true }), null, 'a broad rule a person trusted in that repository');
+  assert.equal(sameRepoRefusal({ ...rules, hooks: ['Stop'], broadAllow: true }), 'it loads hooks');
+  assert.equal(sameRepoRefusal({ ...rules, files: ['.mcp.json'], rulesOnly: false }), 'it starts MCP servers');
+  assert.equal(sameRepoRefusal({ ...rules, plugins: ['p@m'] }), 'it enables plugins');
+  assert.equal(sameRepoRefusal({ ...rules, envNames: ['X'], rulesOnly: false }), 'it sets environment variables');
+  assert.equal(sameRepoRefusal({ ...rules, invalid: ['.claude/settings.json'] }), 'a settings file can’t be read');
+  assert.equal(sameRepoRefusal({ ...rules, rulesOnly: false }), 'it holds more than permission rules', 'a helper or another key');
+  assert.equal(sameRepoRefusal({ ...rules, extras: ['unreadable'], rulesOnly: false }), 'a skill, command or agent file can’t be checked or has a frontmatter key beyond plain text');
+  assert.equal(sameRepoRefusal({ ...rules, extras: undefined }), 'the workspace’s chat host doesn’t check skills, commands and agents');
 });
 
 test('parseTrustScan: anything off is a 503, never a scan that reads as empty', () => {

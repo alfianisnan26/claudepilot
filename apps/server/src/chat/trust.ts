@@ -29,9 +29,10 @@ export const FOLDER_CHANGED = "This folder's project settings changed since you 
  * to its files stops the next start, resume, wake or Move until a person trusts it again. On:
  * - the FIRST trust is by repository identity only (D-62): a folder never trusted before is trusted by itself only when it is the top
  *   of a git clone or worktree whose normalised origin ({@link repoIdentity}) is the one of a folder trusted in the same workspace, and
- *   its scanned files (settings, skills, commands, agents: the hash) are byte for byte that folder's, which is scanned again and must
- *   still be at the hash it was trusted at. Never by what the files say: in-folder edits plus any exact build or test rule are any
- *   command, which no reading of the rules can catch. A stranger's repository always waits for a person;
+ *   its scanned files (the settings files and the skill, command and agent .md files read: the hash) are byte for byte that folder's,
+ *   which is scanned again and must still be at the hash it was trusted at, and neither holds what the hash doesn't pin
+ *   ({@link sameRepoRefusal}). Never by what the files say: in-folder edits plus any exact build or test rule are any command, which
+ *   no reading of the rules can catch. A repository with no trusted folder of its origin waits for a person;
  * - a trusted folder whose hash changes is trusted again by itself only when the classifier finds permission rules only and no
  *   blanket or command-runner allow rule ({@link autoTrustRefusal}).
  * Each is audited (`trust.auto`, `same-repo` or `changed`). Rules can widen what runs without asking, so it asks to confirm.
@@ -46,7 +47,7 @@ defineSetting({
   group: 'sessions',
   order: 20,
   label: 'Trust folders by repository',
-  help: 'A folder never trusted before is trusted by itself only when it is a git clone or worktree of a repository that already has a trusted folder in this workspace: the same origin remote, and Claude Code settings, skills, commands and agents byte for byte the ones of that folder, which must still be as it was trusted. A stranger’s repository always waits for you, whatever its settings say. A trusted folder whose settings change is trusted again by itself only when they hold permission rules only (allow, deny, ask) and no broad rule. Broad, so it waits for you: a hook, MCP server, plugin or env; a skill, command or agent that loads hooks, sets a permission mode, has a frontmatter key other than name, description, model, tools, color, argument-hint and allowed-tools, or cannot be checked; an allow rule (or a skill’s allowed-tools) that is a blanket (Bash, Edit, Read), a path outside the folder, an edit rule that may reach the folder’s .git or .claude unless the same file denies Edit(.git), Edit(.git/**) and Edit(.claude/**), a Bash rule with < or > or a path argument outside the folder, a wildcard command other than ls, pwd or echo, or an exact command that runs another (sudo, env, bash, flock, timeout, xargs, node -e and the like). Not caught in a change: an exact rule that runs code the folder controls (npm test, make, a script) plus editing inside the folder is the same as any command, so keep such rules out yourself. Rules can let tools run without asking.',
+  help: 'A folder never trusted before is trusted by itself only when it is a git clone or worktree of a repository that already has a trusted folder in this workspace: the same origin remote, and the same settings files (.mcp.json, .claude/settings*.json) and skill, command and agent .md files byte for byte as that folder, which must still be as it was trusted. What that check can’t pin waits for you: a hook, MCP server, plugin or env, or a skill folder it can’t read to the end (a link, too many or too big files). A repository without a trusted folder of the same origin waits for you, whatever its settings say; a forged origin only matches files you already trusted. A trusted folder whose settings change is trusted again by itself only when they hold permission rules only (allow, deny, ask) and no broad rule. Broad, so it waits for you: a hook, MCP server, plugin or env; a skill, command or agent that loads hooks, sets a permission mode, has a frontmatter key other than name, description, model, tools, color, argument-hint and allowed-tools, or cannot be checked; an allow rule (or a skill’s allowed-tools) that is a blanket (Bash, Edit, Read), a path outside the folder, an edit rule that may reach the folder’s .git or .claude unless the same file denies Edit(.git), Edit(.git/**) and Edit(.claude/**), a Bash rule with < or > or a path argument outside the folder, a wildcard command other than ls, pwd or echo, or an exact command that runs another (sudo, env, bash, flock, timeout, xargs, node -e and the like). Not caught in a change: an exact rule that runs code the folder controls (npm test, make, a script) plus editing inside the folder is the same as any command, so keep such rules out yourself. Rules can let tools run without asking.',
   protective: false,
 });
 
@@ -366,13 +367,26 @@ export async function scanFolder(workspaces: Workspaces, store: Store, workspace
   };
 }
 
+/** What {@link autoTrustRefusal} reads of a scan: a {@link FolderScan} or a {@link HostScan}. */
+type Classified = Pick<FolderScan, 'files' | 'invalid' | 'mcpServers' | 'hooks' | 'plugins' | 'envNames' | 'rulesOnly' | 'broadAllow' | 'extras'>;
+
+/**
+ * Why a folder may not take a same-repository folder's trust (T-366, third review): whatever {@link autoTrustRefusal} names except
+ * a broad allow rule. The hash pins only the settings files and the skill, command and agent .md files it read: a hook script, an
+ * MCP server's code, a plugin and a skill folder the scan stopped at (`unreadable`: a link, too many or too big files) are outside
+ * it, so a match proves nothing about them. A broad rule is pinned byte for byte and was trusted by a person in that repository.
+ */
+export function sameRepoRefusal(scan: Classified): string | null {
+  return autoTrustRefusal({ ...scan, broadAllow: false });
+}
+
 /**
  * Why a scan can't be trusted without a person (T-38, T-366, D-55), by name only, never a rule or a value; null when it can:
  * every file read, no `.mcp.json`, no server, hook, plugin or env name, no skill, command or agent that loads hooks, sets a
  * permission mode or can't be checked, nothing but permission rules (the host's word), and no allow rule that is a blanket or a
  * command runner. The names are checked too, not only the host's word.
  */
-export function autoTrustRefusal(scan: FolderScan): string | null {
+export function autoTrustRefusal(scan: Classified): string | null {
   const why: string[] = [];
   if (scan.invalid.length) why.push('a settings file can’t be read');
   if (scan.mcpServers.length || scan.files.includes('.mcp.json')) why.push('it starts MCP servers');
@@ -398,9 +412,11 @@ export function autoTrustable(scan: FolderScan, before: { hash: string | null } 
 
 /**
  * The trusted folder of the same repository a folder never trusted may take its trust from (T-366, D-62): in the same workspace,
- * trusted at the folder's very hash (its settings, skills, commands and agents byte for byte), scanned again now and still at that
- * hash, with the same {@link repoIdentity} of its origin. `{ refusal }` names why not, for the 409 ({@link NOT_A_REPO},
- * {@link NO_SAME_REPO}); a candidate that can't be scanned (gone, refused, slow) is skipped.
+ * trusted at the folder's very hash (its settings files and skill, command and agent .md files byte for byte), scanned again now and
+ * still at that hash, with the same {@link repoIdentity} of its origin. Neither folder may hold anything outside the hash
+ * ({@link sameRepoRefusal}: hooks, MCP servers, plugins, env, a skill folder the scan couldn't finish), and both say the same
+ * `extras`. `{ refusal }` names why not, for the 409 ({@link NOT_A_REPO}, {@link sameRepoRefusal}, {@link NO_SAME_REPO}); a
+ * candidate that can't be scanned (gone, refused, slow) is skipped.
  */
 export async function findSameRepo(
   workspaces: Workspaces,
@@ -409,10 +425,21 @@ export async function findSameRepo(
   opts: TrustOptions = {},
 ): Promise<{ matched: string } | { refusal: string }> {
   if (scan.empty || !scan.origin) return { refusal: NOT_A_REPO };
+  const refusal = sameRepoRefusal(scan);
+  if (refusal) return { refusal };
+  const extras = JSON.stringify(scan.extras);
   const candidates = new ChatStore(store).foldersTrustedAt(scan.workspaceId, scan.hash, SAME_REPO_CANDIDATES + 1).filter((f) => f !== scan.folder);
   for (const folder of candidates.slice(0, SAME_REPO_CANDIDATES)) {
     const other = await readTrustScan(workspaces, scan.workspaceId, folder, { timeoutMs: opts.timeoutMs }).catch(() => null);
-    if (other && other.hash === scan.hash && other.files.length > 0 && other.origin === scan.origin) return { matched: folder };
+    if (
+      other &&
+      other.hash === scan.hash &&
+      other.files.length > 0 &&
+      other.origin === scan.origin &&
+      sameRepoRefusal(other) === null &&
+      JSON.stringify(other.extras) === extras
+    )
+      return { matched: folder };
   }
   return { refusal: NO_SAME_REPO };
 }

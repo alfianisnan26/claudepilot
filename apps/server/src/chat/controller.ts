@@ -5189,8 +5189,9 @@ export class ChatController {
   /**
    * Under `chat.trust.autoPermissionOnly`, a folder is trusted without a person, so a start, resume, wake or Move (auto move's
    * included) doesn't stop:
-   * - never trusted (T-366, D-62): only a clone or worktree of a repository that already has a trusted folder here, its files byte
-   *   for byte that folder's ({@link findSameRepo}); never by what its files say, so a stranger's repository always waits. Audited
+   * - never trusted (T-366, D-62): only a clone or worktree of a repository that already has a trusted folder here, its hashed files
+   *   byte for byte that folder's and nothing outside the hash (hooks, MCP servers, an unfinished skills scan) in either
+   *   ({@link findSameRepo}); never by what its files say, so a repository with no trusted folder of its origin waits. Audited
    *   `trust.auto` reason `same-repo` with the matched folder;
    * - trusted at another hash (T-38): only when the classifier finds permission rules only and no blanket or command-runner allow
    *   rule ({@link autoTrustRefusal}). Audited reason `changed` with the old hash.

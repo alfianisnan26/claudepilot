@@ -124,6 +124,62 @@ test('stranger: a clone of an untrusted repository with harmless settings waits,
   }
 });
 
+// trust.ts EXTRAS.unreadable and autoTrustRefusal's words, spelled out.
+const UNREADABLE = 'a skill, command or agent file can’t be checked or has a frontmatter key beyond plain text';
+const HOOKS = 'it loads hooks';
+const MCP = 'it starts MCP servers';
+
+test('same repo (third review, 1): a linked skill or a symlinked .claude/skills stops the scan before the hash, so the same hash proves nothing: it waits', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.autoTrustRules = () => true;
+    new ChatStore(s.store).saveFolderTrust('docker/ws1', REPO, H1, {}, 'ui');
+    // What trustscan prints for a worktree with .claude/skills/x/SKILL.md a link, or .claude/skills itself a link (host.test.ts
+    // "a link, too many or too big files"): the hashing stopped at the link, so its hash can equal the clean repository's.
+    const linked = rules(H1, { origin: ORIGIN_SCP, extras: ['unreadable'], rulesOnly: false });
+    for (const why of ['a linked SKILL.md', 'a symlinked .claude/skills']) {
+      scans(s, { [REPO]: rules(H1, { origin: ORIGIN_SCP }), [WT]: linked });
+      const e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: WT }));
+      assert.equal(codeOf(e), CHAT_FOLDER_UNTRUSTED, why);
+      assert.equal(e!.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: ${UNREADABLE}.`, why);
+    }
+    // A host that doesn't check skills at all (no extras): waits too.
+    scans(s, { [REPO]: rules(H1, { origin: ORIGIN_SCP }), [WT]: rules(H1, { origin: ORIGIN_SCP, extras: undefined }) });
+    let e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: WT }));
+    assert.equal(refusalOf(e), 'the workspace’s chat host doesn’t check skills, commands and agents');
+    // The other way round: the trusted folder's own scan stopped at a link, so it can't vouch for the worktree's skills.
+    scans(s, { [REPO]: linked, [WT]: rules(H1, { origin: ORIGIN_SCP }) });
+    e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: WT }));
+    assert.equal(refusalOf(e), NO_SAME_REPO);
+    assert.equal(trustRow(s, WT), undefined);
+    assert.equal(s.controller.audit({ kind: 'trust.auto' }).length, 0);
+  } finally {
+    await s.done();
+  }
+});
+
+test('same repo (third review, 2): a hook script or an MCP server’s code is outside the hash: the same settings with a hook or an MCP server wait', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.autoTrustRules = () => true;
+    new ChatStore(s.store).saveFolderTrust('docker/ws1', REPO, H1, {}, 'ui');
+    const hook = (o: string) => rules(H1, { origin: o, hooks: ['SessionStart'], rulesOnly: false });
+    scans(s, { [REPO]: hook(ORIGIN_SCP), [WT]: hook(ORIGIN_SCP) });
+    let e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: WT }));
+    assert.equal(codeOf(e), CHAT_FOLDER_UNTRUSTED);
+    assert.equal(e!.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: ${HOOKS}.`);
+
+    const mcp = (o: string) => rules(H1, { origin: o, files: ['.mcp.json', '.claude/settings.json'], mcpServers: ['tools'], rulesOnly: false });
+    scans(s, { [REPO]: mcp(ORIGIN_SCP), [WT]: mcp(ORIGIN_SCP) });
+    e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: WT }));
+    assert.equal(e!.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: ${MCP}.`);
+    assert.equal(trustRow(s, WT), undefined);
+    assert.equal(s.controller.audit({ kind: 'trust.auto' }).length, 0);
+  } finally {
+    await s.done();
+  }
+});
+
 test('same repo: a trusted folder that is no longer at the hash it was trusted at, or is gone, matches nothing', async () => {
   const s = await liveSession();
   try {
