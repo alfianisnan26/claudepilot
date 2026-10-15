@@ -6,12 +6,13 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff cc26c96: T-531 S2c (gate GREEN 55d5fad). CLOSED T-531.
 ## IN FLIGHT (6 of 6, D-71): all sonnet
 - NEXT FREE SLOT: T-591 S1c (one-off sonnet from 09ade72; G1+G2 kill M4/M5, decision 5639) -> QA Perf M4/M5 only -> gate -> merge.
-- QA PERF 7e4879c7 (lane/cp-qa-perf): T-591 PASS WITH GAPS 5587 (done) -> now T-486 S2e ea1c006 (5585) -> T-611 4ac5982 (5580)
-  -> T-586 (premerge wip/main-5b66aa0, gate GREEN) -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-548 -> T-558 e652c44. T-426 S1b jumps in.
-- QA UI 80df7bb9 (qa/T-600-ui-r2 from 390be2fe): 1) browser proof for T-619 (scratch portal 390/1280 shots; example.com + 10.43.0.1 blocked; note QA/Browser.md);
-  2) T-600 FE S1b re-run. Old bbbe2b38: home.mjs fix 924f1bfb PASS WITH GAPS (27/27 on its branch, not on integration; rides with T-600); now re-running FE S1b 32985e2 (crew-summary, Home/Crew grids); then T-576 ux (2427d98, after T-586 merges). Headless only (5503).
+- QA PERF 7e4879c7 (lane/cp-qa-perf): T-426 S1b 350dd399 re-probe FIRST -> T-486 S2e ea1c006 (5585) -> T-547 2bea754 (+typecheck, authz) -> T-611 4ac5982
+  -> T-586 (premerge wip/main-5b66aa0, gate GREEN) -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-548 -> T-558 e652c44. T-591 PASS WITH GAPS 5587.
+- QA UI b3f769c5 (qa/T-600-ui-r3 from d688e0fa = r2 + integration with allow-list 208bdaa2): 1) T-619 browser proof (5679; r2 folder refused
+  FOLDER_UNTRUSTED, not re-trusted by me); 2) T-600 FE S1b re-run (5565 items); then T-576 ux (2427d98, after T-586). home.mjs 924f1bfb rides with T-600.
 - BACKEND 6d72b5c6 (ticket/T-597-portal-slash, plan 5546) on T-597; then T-600 BE (plan 5540, respawn on FE S1b), T-325 S1+S2 (5549).
-- BE INFRA 5825f112 (ticket/T-547-quota-placement) on T-547; then T-623 (high, coordinator; respawn fresh branch, plan 5622; opus blind review), then T-610.
+- BE INFRA feaba810 (ticket/T-623-browser-access-headers from integration) on T-623 (plan 5622; opus blind review before merge); then T-610.
+  T-547 DONE 2bea754 (89/89, mutation caught; typecheck on fa67900 only) -> QA Perf.
 - IMPL a6a0ea9d (impl-t548-s1b, ticket/T-548-s1b from 9b822ba) on T-548 S1b (5515); then QA Perf (S1+S1b together).
 - T-619 egress review 2590789a PASS WITH CONDITIONS 5627 (ended) -> coordinator 5629: owner ack on D-60 relax before #41 release; T-624 follow-up.
 - FRONTEND: 6a1a061e DONE FE S1b 32985e2 (5621) -> QA UI; ended (slot for T-619). Respawn for T-556 (5497/5525) after T-486, or FE S1c on QA UI FAIL.
