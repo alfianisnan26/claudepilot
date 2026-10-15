@@ -1,4 +1,4 @@
-# orchestrator status (2026-10-15 02:55 UTC, session 83842ba6, HAND-OVER to the continuation)
+# orchestrator status (2026-10-15 03:10 UTC, session de232389, continuation of 83842ba6)
 
 Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393f6b), this one.
 
@@ -19,6 +19,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-404 (high): dev/t-404-1 2dd0f9e (comment 2750); blind review SAFE AFTER FIXES (comment 2770): guard must protect /etc/claude-code and /etc/claudepilot, own ~20 s deadline, readers/git writers 3-4, MCP verbs 5, eval of file 6, pull scope 7, /usr/bin/env 8, audit label 9. Persona/skill text to propose after the fix, corrected for D-62.
 
 ## DECISIONS (binding)
+- 03:10 de232389 resumed: the 3 workers (033e1b23 T-366, 07cef3b0 T-375, d8dfb37f T-417) are alive and now report to this session; budget full, no new spawn until one returns. Run 32: build-portal pod running, main still d4a0adc. This session sits in kubernetes/kohi-event and ci_runs_list shows it no runs: read run 32 via main/argocd (k3s-status.sh).
 - D-60/D-61/D-62: no rule-file writes by agents; at most 3 live workers, NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job (never npm ci/tests/builds in the pod: OOM 02:11, T-413); the owner's only action is Konfersi production: proposals go on a ticket assigned to this session + one line to the coordinator (tightening landed by the coordinator, loosening after a blind PASS).
 - New worktrees are FOLDER_UNTRUSTED until T-366 ships: spawn workers only in already-trusted spare worktrees (switch a clean one to the new branch first: dev-t-349-1, dev-t-352-1 (T-404's), dev-t-336-1 (T-417's), dev-t-333-1 (T-375's)). Update a spare to a current base before a verifier uses its scripts.
 - Worker ticket tools: implementers get FORBIDDEN on the lead's tickets, verifiers/reviewers have none (T-397): the lead copies every report to the ticket.
