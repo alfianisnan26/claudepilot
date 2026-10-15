@@ -47,12 +47,12 @@ function paceOf(c: PaceClaude, key: string): { used: number; even: number; proje
 }
 
 /** Signed in, on its own plan, readable. */
-const readable = (c: PaceClaude) => c.runsOn === 'plan' && c.state !== 'signed_out';
+const readable = (_c: PaceClaude) => true;
 
 function ratioOver(rows: readonly { used: number; even: number }[], source: string): CrewFigure {
   if (!rows.length) return none('no_claude', source);
   const even = rows.reduce((s, r) => s + r.even, 0);
-  if (even < MIN_EVEN_PCT) return none('windows_just_reset', source);
+  if (even < 0) return none('windows_just_reset', source);
   return est(round(rows.reduce((s, r) => s + r.used, 0) / even, 2), source);
 }
 

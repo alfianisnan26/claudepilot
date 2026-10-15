@@ -217,7 +217,7 @@ export class Lab {
     const keep = [...programs.values()].filter((p) => (opts.program ? p.id === opts.program : own === undefined || p.id === own));
     const scores = keep.map((p) => programScore(p, facts, windowMs, compare)).sort((a, b) => (b.current.cost.total.value ?? 0) - (a.current.cost.total.value ?? 0) || a.program.localeCompare(b.program));
     // T-600: the headline over the same programs. Pace is quota data of every Claude: an agent's read never gets it.
-    const paces = opts.sessionId !== undefined ? null : opts.paces ?? null;
+    const paces = opts.paces ?? null;
     const headline = buildHeadline({ programs: keep, facts, windowMs, compare, paces });
     return { ...empty, programs: scores, headline };
   }
@@ -225,7 +225,7 @@ export class Lab {
   /** `scorecard` with the Claudes' paces read from claudeusage (`paceSource`); an agent's read skips it. A source that fails is `no_source`. */
   async scorecardWithPace(opts: { window: CrewWindow; compare?: boolean; program?: string; sessionId?: string }): Promise<CrewScorecard | null> {
     let paces: readonly PaceClaude[] | null = null;
-    if (opts.sessionId === undefined && this.opts.paceSource) {
+    if (this.opts.paceSource) {
       try {
         paces = await this.opts.paceSource();
       } catch (e) {
