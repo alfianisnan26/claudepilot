@@ -17,7 +17,7 @@ import { registerMcpSets } from './mcp/index.js';
 import { SkillsModule } from './skills/module.js';
 import { registerSkillTools } from './skills/portalTools.js';
 import { SecretRotations } from './secrets/rotation.js';
-import { isKnowledgeError } from './knowledge/errors.js';
+import { vaultReleaseNotes } from './ci/releaseNotesVault.js';
 import { parseActor } from './knowledge/journal.js';
 import { createKnowledge } from './knowledge/module.js';
 import { registerKnowledgeTools } from './knowledge/portalTools.js';
@@ -485,32 +485,8 @@ ci.onChange = () => notify('ci');
 // T-591 (D-69): a passed release's report is written into the vault the remote's own setting names, as the portal (actor `system`; the vault
 // journal records it). An existing note is replaced with its own version as `baseVersion`; a missing one is created.
 const portalActor = parseActor('system');
-// Only "no such note" is an empty answer: any other error (a transient vault failure) is thrown, so a report is never rebuilt from nothing.
-const noteOrNull = (vaultId: string, path: string): { content: string; version: string } | null => {
-  try {
-    return knowledge.getNote(vaultId, path, portalActor);
-  } catch (e) {
-    if (isKnowledgeError(e) && e.reason === 'NOT_FOUND') return null;
-    throw e;
-  }
-};
-ci.releaseNotes = {
-  exists: (vaultId) => {
-    try {
-      knowledge.summary(vaultId);
-      return true;
-    } catch (e) {
-      if (isKnowledgeError(e) && e.reason === 'NOT_FOUND') return false;
-      throw e;
-    }
-  },
-  read: (vaultId, path) => noteOrNull(vaultId, path)?.content ?? null,
-  put: (vaultId, path, content) => {
-    const version = noteOrNull(vaultId, path)?.version ?? null;
-    const r = version ? knowledge.putNote(vaultId, path, { content, baseVersion: version }, portalActor) : knowledge.putNote(vaultId, path, { content, create: true }, portalActor);
-    return { created: r.created, unchanged: r.unchanged };
-  },
-};
+// Only "no such note" is an empty answer: any other error is thrown (ci/releaseNotesVault.ts, tested).
+ci.releaseNotes = vaultReleaseNotes(knowledge, portalActor);
 if (config.ci.enabled) ci.start();
 // Claude usage: the plan limits of each Claude, read from Claude Code itself (claude-usage PRD). Its probes run only for running
 // workspaces whose store the portal trusts; live sessions' rate-limit events arrive through `onRateLimit` (interface I12).

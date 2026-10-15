@@ -498,3 +498,40 @@ test('T-292: a push to the default branch hands its docs/context-pack.md to the 
     h.done();
   }
 });
+
+// T-591 (QA gap G1): a failed release report is logged, and what is logged is redacted and on one line (a vault error may carry anything).
+test('a release report that fails is logged redacted and on one line', async () => {
+  const h = await harness();
+  try {
+    const secret = `ghp_${'A1b2'.repeat(6)}`; // built at runtime: no token-shaped literal in the source
+    const puts: string[] = [];
+    h.svc.releaseNotes = {
+      read: () => null,
+      put: (_vault, path) => {
+        puts.push(path);
+        throw new Error(`vault write failed for ${secret}\nsecond line\r\nthird line`);
+      },
+    };
+    const deploy = 'on: manual\njobs:\n  release:\n    steps: [{ run: \'echo "release: abc1234 (portal v1, workspace v2) to main"\' }]\n';
+    const repo = await remote(h, { '.pilot/deploy.yml': deploy });
+    h.svc.setReleaseReport(repo.id, { pipeline: 'deploy', vaultId: 'v1', folder: 'Releases' }, { actor: 'user:u_owner', userId: 'u_owner' });
+    const logged: string[] = [];
+    const orig = console.error;
+    console.error = (m: unknown) => void logged.push(String(m));
+    try {
+      const run = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'main' });
+      await h.until('the run to pass', () => h.svc.get(run.id).status === 'passed');
+      await h.until('the failure to be logged', () => logged.some((l) => l.includes('release report failed')));
+    } finally {
+      console.error = orig;
+    }
+    assert.equal(puts.length, 1, 'the report reached the sink');
+    const line = logged.find((l) => l.includes('release report failed'))!;
+    assert.ok(!line.includes(secret), 'the credential-shaped text is redacted');
+    assert.ok(line.includes('[redacted]'), line);
+    assert.ok(!/[\r\n]/.test(line), 'one line');
+    assert.ok(line.includes('second line') && line.includes('third line'), 'the rest of the message is kept');
+  } finally {
+    h.done();
+  }
+});
