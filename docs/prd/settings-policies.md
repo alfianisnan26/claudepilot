@@ -738,7 +738,7 @@ navigation, targets are at least 44 px, and Defaults loads in one request (regis
 | # | Section | Proposed change |
 | --- | --- | --- |
 | 1 | §3, §5, §6.1, §6.5 | Add the pool type `policy`: one per workspace, none meaning Global. Global is a built-in `policy` row, never assigned or deleted. After the first Apply (FR5) the compiler builds it into every workspace's policy fragment as a system fragment (as [Monitoring](monitoring-dashboard.md) A2 proposes) and records it in the manifest as `global@<revision>`; the "Assignments missing" check treats it as assigned. An assigned policy and workspace overrides layer on top in the same fragment. Unassigning a policy writes a removal record and falls back to Global. |
-| 2 | §7 ownership row | Settings & policies: files `managed-settings.d/10-claudepilot-policy.json` and `/etc/claudepilot/bin/policy-*`. Keys `permissions.defaultMode`, `disableBypassPermissionsMode`, `disableAutoMode` and `allow`; `deny` and `ask` entries; `allowManagedPermissionRulesOnly`, `allowManagedHooksOnly`, `allowManagedMcpServersOnly`; `sandbox.*` except `sandbox.credentials`; `allowedMcpServers` and `deniedMcpServers` entries; `strictKnownMarketplaces`, `disableSkillShellExecution`, `availableModels`, `maxEffortLevel`, `disableWorkflows`, `modelPricing`, `cleanupPeriodDays`; four `env` names (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, `CLAUDE_CODE_MCP_ALLOWLIST_ENV`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`), plus the TLS variables in Secrets & env FR4, reserved for TLS inspection. `allowedMcpServers` and `allowManagedMcpServersOnly` leave the MCP set row ([MCP set](mcpset-pool.md) A2). **Built differently (§22): they are written by a separate delivery owner, `settings` (drop-in `05-claudepilot-settings.json`), together with `disableClaudeAiConnectors`, so the global MCP switches work before the policy pool type exists; the `policy` owner keeps `deniedMcpServers`.** No hooks; budgets, caps and thresholds are portal-side. `CLAUDE_CODE_MAX_RETRIES` joins the Account Pool row. |
+| 2 | §7 ownership row | Settings & policies: files `managed-settings.d/10-claudepilot-policy.json` and `/etc/claudepilot/bin/policy-*`. Keys `permissions.defaultMode`, `disableBypassPermissionsMode`, `disableAutoMode` and `allow`; `deny` and `ask` entries; `allowManagedPermissionRulesOnly`, `allowManagedHooksOnly`, `allowManagedMcpServersOnly`; `sandbox.*` except `sandbox.credentials`; `allowedMcpServers` and `deniedMcpServers` entries; `strictKnownMarketplaces`, `disableSkillShellExecution`, `availableModels`, `maxEffortLevel`, `disableWorkflows`, `modelPricing`, `cleanupPeriodDays`; four `env` names (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, `CLAUDE_CODE_MCP_ALLOWLIST_ENV`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`), plus the TLS variables in Secrets & env FR4, reserved for TLS inspection. `allowedMcpServers` and `allowManagedMcpServersOnly` leave the MCP set row ([MCP set](mcpset-pool.md) A2). **Built differently (§22): they are written by a separate delivery owner, `settings` (drop-in `05-claudepilot-settings.json`), together with `disableClaudeAiConnectors`, so the global MCP switches work before the policy pool type exists; the `policy` owner keeps `deniedMcpServers`.** No hooks (built since: one, the rule-file guard of D-60, §22.6); budgets, caps and thresholds are portal-side. `CLAUDE_CODE_MAX_RETRIES` joins the Account Pool row. |
 | 3 | §7 merge rules | `permissions.deny` and `ask` are list keys: other owners add entries for their own tools or delivered paths (Skillset revocations, MCP set tool rules, Secrets & env path rules). `deniedMcpServers` is a list key (Settings, and the foundation per [Portal MCP](portal-mcp.md) A1). Settings alone owns `permissions.allow` and `permissions.defaultMode`, which Claude Code reads from the highest-ranked managed source only. Hook arrays from two drop-ins both ran in the cross-pool lab ✅, which supports Monitoring A3. |
 | 4 | §6.1 compile | The policy fragment reads the workspace's account pool (price multiplier, endpoint price, the custom-host Auto confirmation) and what other fragments report (MCP matchers, pool requirements), and recompiles when they change (compile inputs, as Secrets & env A10 proposes). A pool requirement never turns a control on or fails a delivery; an unmet one is reported on both pools (FR8). No fragment may write `forceLoginMethod`, `forceLoginOrgUUID` or `/etc/claude-code/managed-mcp.json`. |
 | 5 | §9 image and capabilities | Install `bubblewrap` and `socat`; publish `:hardened` without the `sudoers` entry; label each workspace's variant (`claudepilot.io/image-variant`). `policy-probe` runs at each start and when a policy needs the sandbox (FR21); its result is a workspace capability that Secrets & env reads for masking. Each policy key declares the Claude Code version that added it, for per-feature gating. |
@@ -910,4 +910,97 @@ the choice saved on the server, no sideways scroll; the sheet's line Unavailable
 
 Open: 🔬 a real Claude Code reading each variable from the drop-in (the Docker integration suite can show it);
 a per-workspace override waits for scopes (§12).
+
+### 22.6 The rule-file guard (T-404, D-60)
+
+**Status: Built** (server, delivery, audit; tests in `settings/ruleGuard.test.ts`, which run the delivered script against
+scratch folders). Not yet observed in a running Claude Code in a pod: see Open below.
+
+**The rule (D-60).** No agent session in a workspace writes a rule file. Rule files change only from outside the pod: a
+lead proposes the change as text on a ticket; the coordinator (outside the pod) lands it when it only tightens (adds a
+deny, removes or narrows an allow, removes a runner); anything that loosens, or adds a hook, an MCP server, `env` or a
+plugin, is the owner's. Why: a lead denied itself Edit and Write of `.claude/**` and changed the file with a node script
+anyway (T-391); a pattern deny cannot stop a Bash write.
+
+**Rule files**, in any folder: `.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, a repository's
+allow-list checker (`check-allowlist.*`), and Claude Code's own `.claude.json`; `settings.json` and `settings.local.json`
+also count in `~/.claude` and in each Claude's config folder (`CLAUDE_CONFIG_DIR`, `~/.claudepilot/claudes/<id>`).
+
+**How it is delivered.** The policy owner's fragment (`settings/agentEnv.ts`), which every workspace gets, carries two
+root-owned files outside every workspace folder and one hook in `10-claudepilot-policy.json`:
+
+- `/etc/claudepilot/bin/policy-rule-guard` (root, 0755): a POSIX sh wrapper that runs the Node half with a fixed node
+  (`/usr/local/bin/node`, else `/usr/bin/node`) and without `NODE_OPTIONS` or `NODE_PATH`, so nothing a session sets
+  loads first; with no node it refuses.
+- `/etc/claudepilot/bin/policy-rule-guard.cjs` (root, 0644): the Node half, no dependencies (`settings/ruleGuard.ts`).
+- `hooks.PreToolUse`: matcher `Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__.*`, command
+  `/etc/claudepilot/bin/policy-rule-guard || exit 2`, so a guard that is missing, crashes or times out refuses instead of
+  letting the call through. The policy owner may set only `PreToolUse` hooks that run its own `policy-*` scripts
+  (`delivery/ownership.ts`); no pool can write `policy-*` files.
+
+Managed settings rank above every project, local and user file, and Claude Code runs hooks in every permission mode, so
+the guard binds every Claude Code session in the workspace: the portal's chats, crew workers, sub-agents (their tool calls
+fire the hook too) and **Bypass sessions** (`bypassPermissions` skips prompts, not hooks; exit 2 stops the tool call). The
+coordinator runs outside the pod and is not affected. The portal's folder trust only reads project settings through the
+runtime's exec, and Claude Code's own writes (an "always allow" answer to a prompt) are not tool calls, so both keep
+working. A session takes the hook when it starts: one started before the guard landed needs a Restart (the chat's
+"Tools changed" hint names Policy).
+
+**What it refuses** (exit 2, message `rule files change only through the coordinator (D-60)` with the form and path):
+
+- Edit, Write, MultiEdit and NotebookEdit of a rule file, resolved against the session's folder, through symlinked
+  folders and files, and a hard link to a rule file made earlier.
+- An MCP tool whose name is not a read (`read`, `get`, `list`, `search`, ...) with a path-like argument (`path`, `file`,
+  `destination`, `source`, ...) that is a rule file. Free text (a ticket comment naming a file) is not a path.
+- A Bash command with a write form that names or could name a rule file: a redirect (`>`, `>>`, `>|`, `<>`, `&>`,
+  `exec 3>`), `tee`, `sponge`, `sed -i`, `perl -i`, `cp`, `mv`, `install`, `rsync`, `dd of=`, `truncate`, `touch`,
+  `chmod`, `ln`, `rm`, editors, `curl -o`, `tar -C .claude`, `patch` and `git apply` of a patch touching one,
+  `git checkout`/`restore`/`rm`/`mv`/`reset` of one, a `git checkout <commit> -- .` (a folder from another commit),
+  `find ... -delete`/`-exec` that could reach one, `xargs` with a write command fed from a pipe, and any command that is
+  not a known reader (`cat`, `grep`, `jq`, `git diff`, ...) with a rule file among its words (`npx prettier --write`).
+  Interpreters (`node`, `python`, `perl`, `ruby`, `awk`, `claude`, ...) are refused when their words name a rule file,
+  when the command names one anywhere (data on stdin), when they read code from stdin while one is named, and when inline
+  code writes a file and carries a piece of a rule file's name (`'.cla' + 'ude'`), a decoding call (base64, char codes,
+  hex escapes) or the words claude, settings, mcp or allowlist. Running the allow-list checker itself is a read.
+- The forms that hide a name, where the text shows them: quotes and escapes (`.cl""aude`, `$'\x2eclaude'`), `./` and `..`
+  in the path, globs and braces that could match (`.claude/set*`, `.c*/settings.json`, `{settings,x}.json`, and `*.json`
+  after `shopt -s dotglob`), a variable or command substitution as the target when the command carries a piece of a rule
+  file's name or decodes anything, `cd .claude && ... > settings.json` (and `cd` to a folder it cannot know), subshells,
+  `bash -c`, `sh` reading a heredoc, `eval`, `env`, `sudo`, `timeout`, decoded text piped into a shell or `eval`, a copy or
+  move of a folder that would land a file on a rule file (`cp -r x/. .claude/`, `mv x .claude`), and a script file run
+  directly (`bash fix.sh`, `./fix.sh`, `node fix.mjs`) whose code (comments left out) names a rule file and writes.
+
+Reads go through (`cat`, `jq`, `git diff`, `git show HEAD:.claude/settings.json > /tmp/x`), and so does every write of
+another file, `.claude/agents/*` and a `.vscode/settings.json` included.
+
+**What a hook cannot see** (stated plainly; these are covered by D-60's rule and review, not by the guard):
+
+- A program that builds the path at run time from pieces the command does not show: a script file whose code does not
+  name the file (reads it from a file, an environment variable set elsewhere, the network), a compiled binary, a
+  package script (`npm run x`, `make`), a test runner, a git hook, or a long-lived process started earlier.
+- Inline code that builds the path without any of the pieces, decoding calls or words above.
+- Data that names the path from a file instead of the command (`node fix.js < paths.txt`).
+- What an archive holds (`tar -x`, `unzip` into the repository), what a branch switch, merge, pull, rebase, `reset --hard`,
+  `stash pop` or `git clean -x` changes, and the delete of a whole folder above the rule files (`rm -rf repo`,
+  `find . -delete`).
+- Anything that does not go through a Claude Code tool call: a person's shell, the portal's own exec, a desktop session
+  over SSH that runs another agent, and Claude Code's own writes.
+- Its own audit line: the outbox is the workspace user's folder, so an agent can remove the line after the refusal (the
+  refusal itself does not depend on it).
+
+It errs on the side of refusing: some reads in an interpreter (`python -c` that only reads `.claude/settings.json`) and
+some unrelated commands that also name a rule file are refused. A test file that writes rule files into a temp folder is
+refused when run directly in a workspace; run it through `scripts/job-run.sh`. Copying a whole repository with `cp -r`
+is refused when it would land rule files; use `git clone` or `git worktree add`.
+
+**Audit.** Each refusal appends one line to `~/.claudepilot/outbox/guard.jsonl` (foundation PRD §8): the Claude Code
+session id, the tool, the form, the path, the agent type and the permission mode; never the command's or the file's
+content. The portal pulls the `guard` channel of every known workspace (every 10 s while running, and before a stop) and
+writes one audit row `guard.refused` (severity high) with the workspace and, when the portal ran the session, the chat it
+belongs to (`settings/ruleGuardAudit.ts`).
+
+Open: 🔬 the QA real job: a `dontAsk` worker and a Bypass lead in `~/work/konfersi-universe` both refused writing
+`.claude/settings.json` by Edit and by `node -e`, while editing a source file still works; 🔬 that `disableAllHooks` set
+by a session (`claude --settings` in a nested call) cannot switch off a managed hook in the pinned Claude Code (the guard
+already refuses a nested `claude` naming a rule file, not one that names none).
 
