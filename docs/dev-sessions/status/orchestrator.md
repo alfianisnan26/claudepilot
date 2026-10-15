@@ -12,11 +12,11 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
 ## IN FLIGHT
 - Integration 98da1d8 PUSHED (gate GREEN 98da1d8): T-449 fix 1a4961a + touch-floor harness (UX PASS WITH GAPS 3683; 3694). Earlier: 9a8dc81 (T-450 S1b, T-472 S1, release merge-back, D-64).
 - Integration 9bbce90 PUSHED (gate GREEN 9bbce90): T-472 S2 577d98d merge (QA PASS WITH GAPS 3697; decision 3698) + pack.
-- T-476 reviewer ed50fc3c also FAIL on d234fee (3753): same 5 tests; authz logic holds; diagnosis relayed to e3501198 (fixture flag; filter audit asserts by kind).
-- T-476 (held by the lead) DONE c2b9c8f (report 3664; migration 776 free; proof f7cb1d60). 22d8020c ended. Blind review ed50fc3c PASS WITH CONDITIONS (3674): major = folder branch not tied to the folder's remote (ci/authz.ts:58); fix DONE ba42f78 on dev/t-476-2 (3720; proof Job 93756360; aeb7bee1 ended). Re-review 3721 PASS WITH CONDITIONS (test only). Decision 3722: fail-closed flag (branchFromWorktree) + session-path test by e87888e8 (implementer, sonnet, satria) on dev/t-476-3 (base ba42f78); then ed50fc3c (idle) quick re-review, QA edef5c98 (sonnet) on the final head; merge dev/t-476-3. Scope added (3729): lead reads every run of its program remotes (coordinator 3691) + read side tied like start side (QA 3727).
-- T-472 (held by the lead): S1 + S2 merged (QA 3641, 3697). After deploy: live paths check, restarts/h, pool re-assign; then close.
-- T-476 final head d234fee on dev/t-476-3 (3749: flag -> branchFromWorktree, lead read rule get/list/logs, read side tied; proof Job 3cb2b5a3). e87888e8 ended. QA edef5c98 FAIL (3750): whole src/ci suite 115/120, 5 existing tests broken (autoApprove 1, deploy 3, portalTools 1); edef5c98 ended. Fixer e3501198 (sonnet, satria) on dev/t-476-4 (base d234fee); ed50fc3c finishes authz review, then checks the delta; fresh sonnet QA on the final head.
-- T-450 S2 (page, phone first, + attribution CSV ignores the done filter): 9675d606 (implementer, sonnet, satria), branch dev/t-450-s2 from integration 98da1d8. Spawned 06:32 into e87888e8's slot.
+- T-476 MERGED c36f3b2 (f8f96e0 + dev/t-476-4 6aa2ce5 + pack), gate GREEN c36f3b2 (Job claudepilot-gate-c36f3b2-77be), pushed origin+pilot. Blind review ed50fc3c PASS (D-62; 3780), QA 1ef8aa9b PASS WITH GAPS (3805), deploy rule 3813. Close after deploy + live #folderBranch check.
+- T-491 (claimed; 3810: M, sev 2, 2 h; scope b = job-run --repo event + kit template, Event crew edits its own gate.yml): 39268e5f (implementer, opus, fadlilah) on dev/t-491-1; then blind review (opus) + QA with a real Job.
+- T-435 (claimed by the lead; estimate 3777: M, sev 2, 1.5 h): 7e77eb6f (implementer, opus, fadlilah) on dev/t-435-1 from integration; then blind review (opus) + QA (sonnet).- T-472 (held by the lead): S1 + S2 merged (QA 3641, 3697). After deploy: live paths check, restarts/h, pool re-assign; then close.
+- T-450 S2 DONE edf7667 on dev/t-450-s2 (3853: Crew tab ScorecardTab, CSV doneOnly, harness crew-scorecard.mjs green 390/1280; icon-only not done). 9675d606 ended. QA + UX e94e1670 PASS WITH GAPS (3902; gaps -> S3, decision 3908); ended. Merging now (pre-merge worktree), then gate, push, deploy.
+- T-397 (held by the lead; 3909: M, sev 2; authz wall named, coordinator's order 3797 = the person; D-62 path): ea193e80 (implementer, opus, fadlilah) on dev/t-397-1; then blind review (opus) + QA (sonnet).
 
 ## STATE PER TICKET
 - T-404: third blind review gave NO verdict (declined probes, design point -> T-451); fixes verified 3325; open until deployed.
@@ -32,6 +32,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
 - Next batch (2026-10-16): T-427, T-404, T-376 S2 if they pass.
 
 ## DECISIONS (binding)
+- 06:46 Coordinator: supervisor nudge fixed (T-492); limit 3, no sub-agents. New queue after T-476: T-491, T-397, T-486, T-483, T-490. T-435 (started 06:44) keeps running (no preemption); next free slot -> T-491.
 - 06:26 Supervisor again says five workers; D-61 (3) stands. Slip: the 98da1d8 gate-done notice was first answered "no response"; acted on the supervisor's nudge (pushed). LESSON holds.
 - 06:18 Quota rule: fadlilah 76 % used, resets 06:40. T-450 S2 waits for that reset; the free slot is held for the T-476 re-review and QA (critical path, Event blocked).
 - 06:05 Quota (coordinator): until 06:10-07:40 resets, only critical-path spawns, satria first, sonnet unless a gate review needs opus; finished workers end at once. D-64: auto move acts at 10 % left only, no early warning. Kept: T-476 (opus; Event blocked), T-449 fix, T-472 S2 (sonnet), all on fadlilah.
@@ -57,11 +58,13 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
 
 ## NEEDS A HUMAN (D-62)
 - T-93 Konfersi production only. Coordinator items: T-397, T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
-  T-433's persona-wall question (comment 2984).
+  T-433's persona-wall question (comment 2984). Owner checklist (not blocking): confirm T-476's reading that a lead may START a deploy
+  pipeline whose release still waits for a person (3813).
 
 ## NEXT (in order, as slots free)
-0. T-449 target fix slice (sonnet implementer) at the next free slot; T-472 started (05:40) (high, cost: context-only deliveries never restart
-   sessions; debounce; path-scope the pack) right after T-449/T-450 S1, before new features (coordinator 05:3x; pool off since 05:29).
+0. After T-476 (coordinator 06:45), in order: T-491 (high: Event gate runs vitest/workerd in the pod, io pressure 19 %; job-run --repo event),
+   T-397 (high: workers can't comment on their spawn ticket; ties to T-449 ticketId), T-486 (pilot repo copy syncs from upstream),
+   T-483 (agents may not assign tickets to the owner), T-490 (default model per role). Then T-450 S3, T-416, T-422, T-147 ...
 1. Deploy watch; then merge T-427 (QA 3126) + T-413 (dev/t-413-2 28f1a00, QA 3138; gaps -> T-448), pack, gate.
 2. Coordinator order (04:16): T-449 (spawn takes ticket; small) -> T-450 S1 (crew scorecard server + MCP tool, opus implementer,
    sonnet QA) -> T-450 S2 (page, phone first). Worker titles start with "T-n" until T-449 ships.
