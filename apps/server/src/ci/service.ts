@@ -735,17 +735,23 @@ export class CiService {
    * the commit (a bundle into its mirror of this remote, only what it lacks), the run's secrets (a lease on stdin, from the repository
    * workspace's Secrets & env), and the plan. No runner carries the labels at all: the run fails at once as `no_runner`. Runners exist but
    * none is free or online: it waits, up to `runnerWaitMs` from when it was queued. A failure on the way is retried like a start (3 tries).
+   * With `fallback: workspace` (owner, 2026-10-15) none of that waits or fails: no runner, none ready, or a hand-off that fails starts the run
+   * in the repository's workspace at once, and the run says why.
    */
   async #toRunner(run: RunRow, labels: string[]): Promise<void> {
     // Read again: the run may have been cancelled or started since the poll listed it.
     const live = this.#cs.run(run.id);
     if (!live || live.status !== 'queued') return;
     run = live;
+    const fallback = (JSON.parse(run.plan!) as Plan).runsOnFallback === 'workspace';
     const fits = this.#cs.runners().filter((r) => {
       const has = new Set(JSON.parse(r.labels) as string[]);
       return r.enabled && labels.every((l) => has.has(l));
     });
-    if (!fits.length) return this.#finishFailed(run, 'no_runner', `No runner has the labels ${labels.join(', ')}. Add one in CI > Runners, or change runs-on.`);
+    if (!fits.length) {
+      if (fallback) return this.#startHere(run, `no runner has the labels ${labels.join(', ')}`);
+      return this.#finishFailed(run, 'no_runner', `No runner has the labels ${labels.join(', ')}. Add one in CI > Runners, or change runs-on.`);
+    }
     const ready: { id: string; load: number }[] = [];
     for (const r of fits) {
       if (r.drained) continue;
@@ -755,6 +761,7 @@ export class CiService {
       if (load < r.max_runs) ready.push({ id: r.workspace_id, load });
     }
     if (!ready.length) {
+      if (fallback) return this.#startHere(run, `no runner with the labels ${labels.join(', ')} is online and free`);
       if (Date.now() - Date.parse(run.created_at) > CI_LIMITS.runnerWaitMs)
         this.#finishFailed(run, 'no_runner', `No runner with the labels ${labels.join(', ')} was online and free for ${Math.round(CI_LIMITS.runnerWaitMs / 60_000)} minutes.`);
       return;
@@ -769,6 +776,8 @@ export class CiService {
       if (!local) {
         await this.host.install(runner);
         plan.mirror = mirrorOf(run.workspace_id, run.repo);
+        // A step can tell where it runs: on a runner (its workspace id), or, without this, in the repository's own workspace.
+        plan.env = { ...plan.env, PILOT_RUNNER: runner };
         await this.#sendCommit(run, runner, plan.mirror);
         if (names.length) {
           const values: Record<string, string> = {};
@@ -799,7 +808,8 @@ export class CiService {
       console.log(`[ci] ${run.id} started ${run.pipeline} on ${run.repo}@${shortSha(run.sha)} on the runner ${runner}`);
       this.#opts.audit?.({ kind: 'ci.run_on_runner', actor: run.actor, userId: null, subject: `ci_run:${run.id}`, detail: { workspace: run.workspace_id, runner, labels, secrets: names, repo: run.repo, run: run.number, sha: shortSha(run.sha) } });
     } catch (e) {
-      this.#retry(run, `runner ${runner}: ${(e as Error).message}`);
+      if (fallback) await this.#startHere(run, `the hand-off to the runner ${runner} failed: ${(e as Error).message}`);
+      else this.#retry(run, `runner ${runner}: ${(e as Error).message}`);
     } finally {
       // A lease handed over for a start that did not happen goes again (the runner's gc removes it after a day otherwise).
       if (leased) await this.host.cp(runner, ['lease', run.id, '--drop']).catch(() => undefined);
@@ -807,6 +817,36 @@ export class CiService {
       if (n > 0) this.#handing.set(runner, n);
       else this.#handing.delete(runner);
     }
+  }
+
+  /**
+   * `fallback: workspace`: the run starts in the repository's workspace like a run without `runs-on` (its plan as compiled: no mirror, no
+   * lease, no PILOT_RUNNER), within the workspace's own run slots (full: it stays queued and the next look tries the runners again), and
+   * says why as a warning on the run.
+   */
+  async #startHere(run: RunRow, why: string): Promise<void> {
+    const live = this.#cs.run(run.id);
+    if (!live || live.status !== 'queued') return;
+    if (this.#cs.runningRuns(live.workspace_id).length >= this.#opts.maxRunsPerWorkspace) return;
+    const text = live.plan!;
+    let reply: CiReply;
+    try {
+      reply = await this.host.cp(live.workspace_id, ['start', live.id, '--bytes', String(Buffer.byteLength(text))], { stdin: text, timeoutMs: 30_000 });
+    } catch (e) {
+      return this.#retry(live, (e as Error).message);
+    }
+    if (!reply.ok) {
+      if (reply.error === 'no_space') return this.#finishFailed(live, 'no_space', 'The workspace is almost out of disk space.');
+      if (reply.error === 'bad_plan') return this.#finishFailed(live, 'runner_error', reply.message ?? 'The runner refused the plan.');
+      return this.#retry(live, reply.message ?? reply.error ?? 'start failed');
+    }
+    const note: CiDiagnostic = { file: '', line: 0, column: 0, path: 'runs-on', severity: 'warning', code: 'runner-fallback', message: `Ran in the repository's workspace: ${why}.` };
+    this.#cs.updateRun(live.id, { status: 'running', started_at: new Date().toISOString(), attempts: 0, runner_workspace_id: null, diagnostics: JSON.stringify([note]) });
+    this.#changed();
+    this.#moved(live.id, 'queued');
+    this.kick(live.workspace_id);
+    console.log(`[ci] ${live.id} started ${live.pipeline} on ${live.repo}@${shortSha(live.sha)} in its workspace (fallback: ${why})`);
+    this.#opts.audit?.({ kind: 'ci.run_fallback', actor: live.actor, userId: null, subject: `ci_run:${live.id}`, detail: { workspace: live.workspace_id, why, repo: live.repo, run: live.number } });
   }
 
   /** The commit into the runner's mirror (T-557): what the mirror already has is left out; nothing travels when it has the commit. */
