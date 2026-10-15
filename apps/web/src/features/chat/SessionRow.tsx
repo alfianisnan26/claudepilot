@@ -169,7 +169,8 @@ const BYPASS_DOT = (
  *
  * Crew (T-294, crew.ts): a lead's row counts what it started (an icon and a number; the words in the tip); its workers sit under it on a
  * rail, the live ones in spawn order, the done ones behind one "N done" row. A worker whose lead is not among the rows sits under a lead
- * header (T-369, `row.context`: the lead as muted context, a tap opens it); one whose lead is archived links to it ("from …").
+ * header (T-369, `row.context`: the lead as muted context, a tap opens it); in a chip, a lead that matches with workers under it shows as
+ * the same header (`row.header`), so its flip in and out of the chip moves nothing; one whose lead is archived links to it ("from …").
  */
 export function SessionRow({
   row,
@@ -282,7 +283,7 @@ export function SessionRow({
   // (the ⋯ menu opens past the row). The box and the row take the corners the card gives the li (RowList, T-100), so neither paints a
   // square past the card's curve.
   const swipe = useRowSwipe({
-    enabled: !selecting && !row.context,
+    enabled: !selecting && !row.header,
     onRight: () => actions.pin(s),
     onLeft: () => (s.archivedAt ? actions.unarchive(s) : actions.archive(s)),
   });
@@ -307,7 +308,7 @@ export function SessionRow({
   );
 
   // A lead header shows its workers always (it has no fold of its own); a lead's row, until it is folded.
-  const crewShown = row.children.length > 0 && (row.context || open);
+  const crewShown = row.children.length > 0 && (row.header || open);
   const crewList = crewShown && (
     <ul data-crew="" className="ml-4 border-l-2 border-line sm:ml-7">
       {workers.live.map(nested)}
@@ -331,17 +332,34 @@ export function SessionRow({
   );
 
   // T-369: a lead header. The lead of workers shown here while it is not (it does not match the chip or the search, or sits under another
-  // heading): one muted line, its title, state, crew count and Claude, a tap opens it. Context, not a match: no checkbox, swipe or ⋯.
-  if (row.context)
+  // heading): one muted line, its title, state, crew count and Claude, a tap opens it. Context, not a match: no checkbox, swipe or ⋯. In a
+  // chip, a lead that matches with workers under it keeps this same line (its state badge says Working), so the flip moves nothing (QA A9);
+  // being a match, it takes a checkbox while selecting (no taller: the line is 44 px on a phone, 36 px from 640 px).
+  if (row.header)
     return (
       <li data-lead-header="">
-        <div className="rounded-[inherit] bg-surface-2/60">
+        <div className="flex items-center rounded-[inherit] bg-surface-2/60">
+          {selecting && !row.context && (
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={picked}
+              aria-label={`Select ${title}`}
+              onClick={() => onToggle(s.id)}
+              className={cn(
+                'press ml-4 flex size-6 shrink-0 items-center justify-center rounded-md border-2 transition-colors sm:ml-5',
+                picked ? 'border-primary bg-primary text-primary-ink' : 'border-line-strong bg-surface',
+              )}
+            >
+              {picked && <Check className="size-4" strokeWidth={3} />}
+            </button>
+          )}
           <Link
             to={`/admin/sessions/${s.id}`}
             data-crew-header={s.id}
             title={title}
-            onClick={(e) => selecting && e.preventDefault()}
-            className="press flex min-h-11 min-w-0 items-center gap-2 rounded-[inherit] py-1.5 pr-4 pl-4 text-[13px] text-muted hover:text-ink sm:min-h-9 sm:pl-5"
+            onClick={(e) => (row.context ? selecting && e.preventDefault() : click(e))}
+            className="press flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[inherit] py-1.5 pr-4 pl-4 text-[13px] text-muted hover:text-ink sm:min-h-9 sm:pl-5"
           >
             <span className="sr-only">Lead: </span>
             <span data-header-title="" className="min-w-0 flex-1 truncate font-semibold text-ink-soft">
