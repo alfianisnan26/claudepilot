@@ -19,6 +19,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-578 S1 DONE 51f6c153 (6010; e92c5ba3 ended): a GATE change -> blind review (opus, why: gate) at next free slot -> merge only on a person's ack.
 - BE INFRA respawned 88f36411 (ticket/T-426-s1e from T-426-s1d) on T-426 S1e (5995).
 - QA PERF 7e4879c7 (lane/cp-qa-perf) queue (19:59): T-623 S1b -> T-636 -> T-591 S1d -> T-600 BE/T-597 (if not done) -> T-325 S1 -> T-558 S1b.
+- BATCH 4 premerge 2c539829 (T-597 S1b 75656845, QA 5882, lead read slash.ts; coordinator asks it now for its deploy with T-546)
+  GATE RUNNING (job-out/gate-2c53982.log) -> ff integration on green. Then T-325 S1 (after its QA).
 - T-576 phone check (390/1280 on the real build) still open; kit 44 px -> T-639. Closes on that evidence (5991).
 - T-600 FE S1c DONE d1b31305 (5954; fa9d3d56 ended) -> QA UI respawned de862414 on qa/T-600-ui-r4 81684f78 (r3 + FE head, lead merge)
   re-runs crew-grid.mjs at 390/1280. Frontend lane is free: next FE item when the QA UI verdict is in.
@@ -32,11 +34,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-416 (high incident): S1 d37c5f0 QA PASS WITH GAPS 4623; S1b a769b00 QA FAIL 5792 -> S1c 0e5bcf50. S2 = Bypass restore.
 
 ## DECISIONS (binding)
-- 18:45 in_review sweep (coordinator): all 9 unassigned, close/update/comment FORBIDDEN to me -> T-634. Coordinator closes. READY done (QA PASS
-  WITH GAPS, code on integration+main, merge-base checked): T-109 1771, T-280 1767, T-282 1768, T-285 1769, T-287 1770 (rest T-450, 3161),
-  T-136 1772 (gaps T-312/T-313). CORRECTION: T-338 has NO QA pass, only blind re-review 1846 SAFE AFTER FIXES (e4efeca merged; B3 rest T-342):
-  needs a qa-verifier before done. WAITS: T-259 QA FAIL 1773 (full text; rest T-315/T-316) -> waits-t315-t316;
-  T-317 part 2 = live Keep going run on the real portal -> waits-live-run (production: a person's step).
+- 20:14 Coordinator closed all 9 sweep tickets done. 6 match evidence (T-109/280/282/285/287/136). PUSHBACK T-657: T-259 (QA FAIL 1773),
+  T-317 (live run not done), T-338 (no QA pass, only review 1846) closed against the evidence -> reopen proposed; lead can't (T-634).
 - 16:57 Workspace restarted by coordinator (pilot browser, T-619, D-73); release portal 2026.10.15-12 merged (c29d75c7). All 6 workers' processes stopped;
   every worktree clean and pushed. Woke QA Perf, impl-t426, BE Infra, Backend, impl-t548 by message (re-run cut Jobs). QA UI respawned 80df7bb9 on qa/T-600-ui-r2.
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
