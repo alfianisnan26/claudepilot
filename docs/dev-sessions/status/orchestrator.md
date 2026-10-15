@@ -21,7 +21,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   and QA PERF 7e4879c7 in parallel; then gate, merge.
 - QA BE 2 42e5408f (sonnet): T-574 124ca45f (Backend 6280) then T-341 e4284315 (BE Infra 6292; A partial, D not verified).
 - BE INFRA lane b6df312e (sonnet, respawned; aa8dc58b ended) on T-549 D-65 scorecard rows (ticket/T-549-d65-rows from integration).
-- QA UI 8b13bb5a: T-376 S2 behavioural check on integration (10k events, open time, bytes, scroll-up paging). T-576 gap 4 = SLOW ONLY.
+- QA UI 8b13bb5a: BLOCKED on T-376 (no Write; dontAsk refuses heredocs): posts harness design on T-376, idle. An implementer
+  (next free slot, with T-681) writes tools/qa/chat-open.mjs; QA UI then runs it. T-576 gap 4 = SLOW ONLY.
 - HELD: T-426 S1e 2174eee1 QA PASS 6169 -> merge on the T-401 ack (4941). T-578 51f6c153 review CHANGES 6168 -> owner decision.
   T-631 review CHANGES 5850: absolute-path entry (a) for the coordinator; F1 on job-run.sh -> T-635 (high).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST. T-401 gate GREEN gate-54ba328-6502; ff only on the person's ack.
