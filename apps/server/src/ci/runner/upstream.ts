@@ -18,6 +18,9 @@ import { needRepo } from './repo.js';
 /** A Secrets & env name as the runner accepts it: a file name under the secrets folder, nothing that walks out of it. */
 export const SECRET_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 
+/** The proxy variables curl reads; emptied for the upstream fetch so the pinned address is where it connects. */
+const NO_PROXY_VARS = ['http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY'];
+
 /** The upstream URL, or a Fail: https, a host, a plain path; no user, password, query or fragment (a token never rides in a URL). */
 export function upstreamUrl(raw: unknown): URL {
   if (typeof raw !== 'string' || raw.length > 500 || /[\s\0]/.test(raw)) throw new Fail('bad_url', 'The upstream is an https URL.');
@@ -82,7 +85,11 @@ export interface SyncDiverged {
 export async function repoSync(repo: unknown, opts: { url: unknown; secret?: string; pin?: string }): Promise<Record<string, unknown>> {
   const dir = needRepo(repo);
   const url = upstreamUrl(opts.url);
-  const env: Record<string, string> = {};
+  // The pin must decide where git connects: no proxy and no URL rewrite from outside. The workspace's global and system git
+  // configuration are not read for this one call (an `insteadOf` or `http.proxy` there), and the proxy variables are emptied (curl
+  // ignores an empty one); `-c http.proxy=` below turns git's own proxy off. The remote's own configuration (the portal's) still counts.
+  const env: Record<string, string> = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
+  for (const name of NO_PROXY_VARS) env[name] = '';
   const hide: string[] = [];
   if (opts.secret !== undefined) {
     const value = secretValue(opts.secret);
@@ -105,6 +112,7 @@ export async function repoSync(repo: unknown, opts: { url: unknown; secret?: str
     [
       // Only https leaves, no redirect is followed, no helper is asked, nothing prompts.
       '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'http.followRedirects=false', '-c', 'credential.helper=',
+      '-c', 'http.proxy=',
       ...pin,
       'fetch', '--quiet', '--no-tags', '--prune', '--no-write-fetch-head', '--', url.href, '+refs/heads/*:refs/upstream/heads/*',
     ],
@@ -148,9 +156,13 @@ export async function repoSync(repo: unknown, opts: { url: unknown; secret?: str
   // Gone upstream: the staging copy was pruned. The branch here is kept (the default) and reported.
   const deleted = [...before.keys()].filter((b) => !upstream.has(b) && validRefName(b)).sort();
   const onlyHere = [...local.keys()].filter((b) => !upstream.has(b) && validRefName(b)).sort();
-  const events = emitEvents(repo as string, moved, 'push', 'upstream');
+  // The first sync (nothing staged yet) records the upstream's branches as the baseline: they move here, but no pipeline starts for
+  // branches that were already there. Only a later move triggers. (An upstream with no branch at all stays "first" until it has one.)
+  const baseline = before.size === 0;
+  const events = baseline ? { written: [], dropped: 0 } : emitEvents(repo as string, moved, 'push', 'upstream');
   return {
     ok: true,
+    baseline,
     moved: moved.map((m) => ({ branch: m.ref.slice(11), old: m.old, new: m.new })),
     created,
     diverged,

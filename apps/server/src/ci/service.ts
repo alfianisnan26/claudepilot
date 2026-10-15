@@ -92,6 +92,8 @@ const WORKSPACE_ID = /^[a-z0-9-]+\/[A-Za-z0-9._-]+$/;
 const SKIP = /\[(?:skip ci|ci skip)\]/i;
 const GLOB = /^[A-Za-z0-9._/*?-]{1,200}$/;
 const JOB_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+/** One upstream sync's own bound (the runner's fetch gives up at 600 s): it runs beside the poll, never in it. */
+const UPSTREAM_SYNC_TIMEOUT_MS = 660_000;
 
 /** A deployment as the API shows it: never its key. */
 const deploymentView = (d: DeploymentRow): CiDeployment => ({
@@ -326,8 +328,9 @@ export class CiService {
     // Stopped: events wait on the volume and are read after the next start. Gone: its runs stay as history.
     if (state !== 'running') return;
     await this.host.install(workspaceId);
-    // Upstream sync (FR8a) first: the events it writes are read by this same poll.
-    await this.#upstreams(workspaceId);
+    // Upstream sync (FR8a), detached: a slow or stalled upstream never holds this poll (following runs, starting queued ones, approvals).
+    // A sync that moved a branch kicks the next poll, which reads the events it wrote.
+    this.#upstreams(workspaceId);
     const following = this.#cs.runningRuns(workspaceId);
     const acks = this.#acks.get(workspaceId) ?? [];
     const args = ['poll'];
@@ -370,18 +373,21 @@ export class CiService {
 
   /* ---------- Upstream sync (FR8a, T-486) ---------- */
 
-  /** Each remote of the workspace that follows an upstream and is due: one sync. A failure is kept on the remote, never fails the poll. */
-  async #upstreams(workspaceId: string): Promise<void> {
+  /**
+   * Each remote of the workspace that follows an upstream and is due: one sync, started and not waited for (the poll goes on at once).
+   * One at a time per remote (`#sync`); a remote still syncing is skipped. A failure is kept on the remote, never fails the poll.
+   */
+  #upstreams(workspaceId: string): void {
     const now = Date.now();
     for (const repo of this.#cs.repos(workspaceId)) {
-      if (!repo.upstream_url) continue;
+      if (!repo.upstream_url || this.#syncing.has(repo.id)) continue;
       const every = (repo.upstream_every_s ?? 30) * 1000;
       if ((this.#upstreamAt.get(repo.id) ?? 0) + every > now) continue;
-      await this.#sync(repo, null).catch(() => undefined);
+      void this.#sync(repo, null).catch(() => undefined);
     }
   }
 
-  /** One sync of a remote, shared with a call that comes while it runs. */
+  /** One sync of a remote, shared with a call that comes while it runs. Bounded by its own timeout (`UPSTREAM_SYNC_TIMEOUT_MS`). */
   #sync(repo: RepoRow, by: CiDecider | null): Promise<SyncReply> {
     const running = this.#syncing.get(repo.id);
     if (running) return running;
@@ -414,7 +420,7 @@ export class CiService {
     if (repo.upstream_secret) args.push('--secret', repo.upstream_secret);
     let r: CiReply;
     try {
-      r = await this.host.cp(repo.workspace_id, args, { timeoutMs: 660_000 });
+      r = await this.host.cp(repo.workspace_id, args, { timeoutMs: UPSTREAM_SYNC_TIMEOUT_MS });
     } catch (e) {
       return fail((e as Error).message);
     }
@@ -788,6 +794,11 @@ export class CiService {
   /** Waits for the auto-approve evaluations in flight (tests). */
   async settled(): Promise<void> {
     while (this.#ruling.size) await Promise.all([...this.#ruling]);
+  }
+
+  /** Waits for the upstream syncs in flight (tests). A failed sync counts as settled. */
+  async syncsSettled(): Promise<void> {
+    while (this.#syncing.size) await Promise.all([...this.#syncing.values()].map((p) => p.catch(() => undefined)));
   }
 
   /** The run is over: each deployment gets how its job ended, an undecided approval expires, and every key is dropped. */

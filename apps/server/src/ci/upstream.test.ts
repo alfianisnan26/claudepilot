@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import type { Actor } from '@portal/contracts';
 import { Home } from './runner/testkit.js';
 import { scrub } from './runner/upstream.js';
-import { harness, remote, WS, codeOf } from './testkit.js';
+import { harness, remote, sleep, WS, codeOf } from './testkit.js';
 import { checkUpstream, nextState, upstreamPin, EMPTY_STATE } from './upstream.js';
 import { upstreamAttentionSource } from './upstreamAttention.js';
 import { registerCiAuthz } from './authz.js';
@@ -21,12 +21,17 @@ const publicLookup = async () => [PUBLIC];
 const owner: Actor = { kind: 'user', userId: 'u_owner', loginSessionId: 'l1', via: 'ui' };
 const BY = { actor: 'user:u_owner', userId: 'u_owner' };
 
-/** A bare upstream cloned from `from`, its https URL rewritten to it in the home's git configuration, and a working clone to push from. */
+/**
+ * A bare upstream cloned from `from`, its https URL rewritten to it in the pilot remote's own git configuration, and a working clone to
+ * push from. The home's global configuration rewrites the same URL to a decoy that does not exist: the sync must not read it (T-486,
+ * the pin holds only when no `insteadOf` from outside the remote applies), so a sync that did would fail to fetch.
+ */
 function upstream(home: Home, from: string) {
   const bare = join(home.home, 'up', 'x.git');
   mkdirSync(join(home.home, 'up'), { recursive: true });
   home.git(['clone', '--bare', '--quiet', from, bare]);
-  appendFileSync(join(home.home, '.gitconfig'), `[url "${bare}"]\n\tinsteadOf = ${URL_}\n`);
+  appendFileSync(join(pilotDir(home), 'config'), `[url "${bare}"]\n\tinsteadOf = ${URL_}\n[protocol "file"]\n\tallow = always\n`);
+  appendFileSync(join(home.home, '.gitconfig'), `[url "${join(home.home, 'decoy-not-here.git')}"]\n\tinsteadOf = ${URL_}\n`);
   const work = join(home.home, 'upwork');
   home.git(['clone', '--quiet', bare, work], home.home);
   return { bare, work };
@@ -62,9 +67,20 @@ test('the runner: fast-forward, a new branch, divergence left alone, a branch go
   assert.equal(rev(home, pilotDir(home), 'refs/heads/main'), c1, 'main fast-forwarded');
   assert.equal(rev(home, pilotDir(home), 'refs/heads/feat'), f1, 'feat created');
   assert.equal(rev(home, pilotDir(home), 'refs/upstream/heads/main'), c1, 'staged under refs/upstream');
-  // The same event a push writes, once per moved branch, on its new sha.
-  const ev = events(home).map((e) => [e.ref, e.new, e.via, e.by]).sort();
-  assert.deepEqual(ev, [['refs/heads/feat', f1, 'push', 'upstream'], ['refs/heads/main', c1, 'push', 'upstream']]);
+  // The first sync is the baseline: the branches upstream already had start no pipeline.
+  assert.deepEqual([r1.baseline, r1.events], [true, 0]);
+  assert.deepEqual(events(home), [], 'no event for the baseline');
+
+  // A later move: the same event a push writes, once per moved branch, on its new sha.
+  const c2 = home.commit(up.work, { 'b.txt': 'b\n' }, 'upstream two on feat');
+  home.git(['push', '--quiet', 'origin', 'feat'], up.work);
+  home.git(['checkout', '--quiet', 'main'], up.work);
+  const c3 = home.commit(up.work, { 'c.txt': 'c\n' }, 'upstream three on main');
+  home.git(['push', '--quiet', 'origin', 'main'], up.work);
+  const r1b = await home.ci(['repo', 'sync', 'app', '--url', URL_]);
+  assert.deepEqual([r1b.ok, r1b.baseline, r1b.events], [true, false, 2], JSON.stringify(r1b));
+  const ev = events(home).map((e) => [e.ref, e.old, e.new, e.via, e.by]).sort();
+  assert.deepEqual(ev, [['refs/heads/feat', f1, c2, 'push', 'upstream'], ['refs/heads/main', c1, c3, 'push', 'upstream']]);
 
   // Nothing new: nothing moves, no event.
   const r2 = await home.ci(['repo', 'sync', 'app', '--url', URL_]);
@@ -89,7 +105,7 @@ test('the runner: fast-forward, a new branch, divergence left alone, a branch go
   assert.deepEqual(r3.diverged, [{ branch: 'main', local: mine, upstream: theirs }]);
   assert.equal(rev(home, pilotDir(home), 'refs/heads/main'), mine, 'pilot main kept');
   assert.deepEqual(r3.deleted, ['feat']);
-  assert.equal(rev(home, pilotDir(home), 'refs/heads/feat'), f1, 'a branch gone upstream is kept');
+  assert.equal(rev(home, pilotDir(home), 'refs/heads/feat'), c2, 'a branch gone upstream is kept');
   assert.deepEqual(r3.onlyHere, ['feat', 'local-only']);
   // The pushes above wrote their own events (the hook); the sync wrote none.
   assert.equal(events(home).length - before, 0);
@@ -125,12 +141,19 @@ test('the runner: the credential reaches only the fetch, in its environment; nev
   const bin = join(home.home, 'fakebin');
   mkdirSync(bin);
   const log = join(home.home, 'argv.log');
+  // It also records whether the global and system git configuration were off and every proxy variable empty (ENV-CLEAN), for each
+  // call that set them (only the fetch should).
   writeFileSync(
     join(bin, 'git'),
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$CPTEST_LOG"\nif [ -n "$GIT_CONFIG_VALUE_0" ]; then if [ "$GIT_CONFIG_VALUE_0" = "$CPTEST_EXPECT" ] && [ "$GIT_CONFIG_KEY_0" = "http.https://upstream.test/.extraHeader" ]; then echo HEADER-OK >> "$CPTEST_LOG"; else echo HEADER-WRONG >> "$CPTEST_LOG"; fi; fi\nexec '${realGit}' "$@"\n`,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$CPTEST_LOG"\nif [ -n "$GIT_CONFIG_VALUE_0" ]; then if [ "$GIT_CONFIG_VALUE_0" = "$CPTEST_EXPECT" ] && [ "$GIT_CONFIG_KEY_0" = "http.https://upstream.test/.extraHeader" ]; then echo HEADER-OK >> "$CPTEST_LOG"; else echo HEADER-WRONG >> "$CPTEST_LOG"; fi; fi\n` +
+      `if [ "$GIT_CONFIG_GLOBAL" = /dev/null ] && [ "$GIT_CONFIG_NOSYSTEM" = 1 ] && [ -z "$HTTPS_PROXY$https_proxy$HTTP_PROXY$http_proxy$ALL_PROXY$all_proxy" ]; then echo ENV-CLEAN >> "$CPTEST_LOG"; fi\n` +
+      `exec '${realGit}' "$@"\n`,
   );
   chmodSync(join(bin, 'git'), 0o755);
-  home.extraEnv = { PATH: `${bin}${delimiter}${process.env.PATH ?? ''}`, CPTEST_LOG: log, CPTEST_EXPECT: header };
+  // The workspace has a proxy in its environment (a dead one) and a proxy in its global git configuration: the fetch must use neither.
+  const deadProxy = 'http://127.0.0.1:9';
+  appendFileSync(join(home.home, '.gitconfig'), `[http]\n\tproxy = ${deadProxy}\n`);
+  home.extraEnv = { PATH: `${bin}${delimiter}${process.env.PATH ?? ''}`, CPTEST_LOG: log, CPTEST_EXPECT: header, HTTPS_PROXY: deadProxy, https_proxy: deadProxy, ALL_PROXY: deadProxy, http_proxy: deadProxy };
 
   const r = await home.ci(['repo', 'sync', 'app', '--url', URL_, '--secret', 'UPSTREAM_READ']);
   assert.equal(r.ok, true, JSON.stringify(r));
@@ -139,6 +162,8 @@ test('the runner: the credential reaches only the fetch, in its environment; nev
   const lines = argv.split('\n');
   const fetchAt = lines.findIndex((l) => / fetch /.test(l));
   assert.equal(lines[fetchAt + 1], 'HEADER-OK', 'the fetch carried the header, scoped to the upstream origin');
+  assert.equal(lines[fetchAt + 2], 'ENV-CLEAN', 'the fetch ran with no proxy variable and no global or system git configuration');
+  assert.match(lines[fetchAt]!, /(^| )-c http\.proxy= /, 'git\'s own proxy is off for the fetch');
   for (const [i, l] of lines.entries()) if (/ (for-each-ref|update-ref|merge-base) /.test(l)) assert.notEqual(lines[i + 1], 'HEADER-OK', `no header for: ${l}`);
   assert.ok(!argv.includes('HEADER-WRONG'));
   const b64 = Buffer.from(`x-access-token:${value}`).toString('base64');
@@ -211,12 +236,26 @@ test('the service: set by a person, synced by the poll; each moved branch starts
     assert.deepEqual([set.upstream?.url, set.upstream?.secret, set.upstream?.everyS], [URL_, 'GH_READ', 30]);
     assert.deepEqual(audits.filter((a) => a.kind === 'ci.upstream_set').map((a) => [a.actor, a.detail?.secret]), [['user:u_owner', 'GH_READ']]);
 
+    // A branch the upstream already has: the first sync (the poll's, detached) creates it as the baseline and starts nothing.
+    h.home.git(['checkout', '--quiet', '-b', 'old'], up.work);
+    const o1 = h.home.commit(up.work, { 'o.txt': 'o\n' }, 'an old upstream branch');
+    h.home.git(['push', '--quiet', 'origin', 'old'], up.work);
+    h.home.git(['checkout', '--quiet', 'main'], up.work);
+    const runsAtStart = h.created.length;
+    await h.svc.poll(WS);
+    await h.svc.syncsSettled();
+    for (let i = 0; i < 3; i++) await h.svc.poll(WS);
+    assert.equal(rev(h.home, pilotDir(h.home), 'refs/heads/old'), o1, 'the baseline created the branch');
+    assert.equal(h.created.length, runsAtStart, 'no pipeline for a branch the upstream already had');
+
     const c1 = h.home.commit(up.work, { 'a.txt': 'a\n' }, 'upstream main');
     h.home.git(['checkout', '--quiet', '-b', 'feat2'], up.work);
     const f1 = h.home.commit(up.work, { 'f.txt': 'f\n' }, 'upstream feature');
     h.home.git(['push', '--quiet', 'origin', 'main', 'feat2'], up.work);
 
     const runsBefore = h.created.length;
+    // The next sync (now, instead of waiting out `everyS`): the moves kick the poll, which starts one run per moved branch.
+    assert.equal((await h.svc.syncUpstream(repo.id, BY)).moved.length, 2);
     await h.until('the sync to start two runs', () => h.created.length - runsBefore >= 2);
     // A few more polls and a sync now: nothing moves again, so nothing fires again.
     const again = await h.svc.syncUpstream(repo.id, BY);
@@ -226,8 +265,8 @@ test('the service: set by a person, synced by the poll; each moved branch starts
     assert.deepEqual(runs.map((r) => [r.branch, r.sha, r.trigger]).sort(), [['feat2', f1, 'push'], ['main', c1, 'merge']]);
 
     const synced = audits.filter((a) => a.kind === 'ci.upstream_synced');
-    assert.equal(synced.length, 1);
-    assert.equal(synced[0]!.detail?.moved, 2);
+    // The baseline moved one branch (created `old`), the next sync two.
+    assert.deepEqual(synced.map((a) => [a.actor, a.detail?.moved]), [['upstream', 1], ['user:u_owner', 2]]);
     const sync = h.host.calls.find((c) => c[0] === 'repo' && c[1] === 'sync')!;
     assert.deepEqual(sync.slice(sync.indexOf('--secret')), ['--secret', 'GH_READ'], 'the name goes to the workspace, never a value');
     assert.ok(sync.includes('--pin') && sync[sync.indexOf('--pin') + 1] === PUBLIC);
@@ -275,6 +314,42 @@ test('the service: a diverged branch is not overwritten and is one Needs you ite
     assert.equal((await h.svc.updateRepo(repo.id, { upstream: null }, BY)).upstream, null);
     assert.deepEqual(upstreamAttentionSource(() => h.store.db).list(owner, Date.now(), 'decide'), []);
   } finally {
+    h.done();
+  }
+});
+
+test('the service: a stalled upstream fetch never holds the poll; a queued run still starts in the normal poll', async () => {
+  const h = await harness({ lookup: publicLookup });
+  let release: () => void = () => undefined;
+  try {
+    const repo = await remote(h);
+    upstream(h.home, h.src);
+    await h.svc.updateRepo(repo.id, { upstream: { url: URL_ } }, BY);
+    // The workspace's `repo sync` hangs (a stalled GitHub) until the test lets it go; every other call goes through.
+    const stalled = new Promise<void>((r) => (release = r));
+    const cp = h.host.cp.bind(h.host);
+    let syncs = 0;
+    h.host.cp = async (id, args, opts) => {
+      if (args[0] === 'repo' && args[1] === 'sync') {
+        syncs++;
+        await stalled;
+      }
+      return cp(id, args, opts);
+    };
+    const within = (p: Promise<void>, ms: number) => Promise.race([p.then(() => 'done'), sleep(ms).then(() => 'stalled')]);
+
+    // A push to pilot: an event, a run queued and started, by the polls, while the sync stays stuck.
+    h.home.commit(h.src, { 'b.txt': 'b\n' }, 'a push while upstream stalls');
+    h.home.git(['push', '--quiet', 'pilot', 'main'], h.src);
+    assert.equal(await within(h.svc.poll(WS), 10_000), 'done', 'the poll does not wait for the sync');
+    assert.equal(syncs, 1, 'the sync was started');
+    const started = () => h.svc.list().items.some((r) => r.branch === 'main' && r.status !== 'queued');
+    for (let i = 0; i < 5 && !started(); i++) assert.equal(await within(h.svc.poll(WS), 10_000), 'done');
+    assert.ok(started(), 'the queued run started while the upstream fetch stalls');
+    assert.equal(syncs, 1, 'one sync at a time per remote: none started beside the stalled one');
+  } finally {
+    release();
+    await h.svc.syncsSettled?.();
     h.done();
   }
 });
