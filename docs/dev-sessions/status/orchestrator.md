@@ -8,11 +8,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
-## IN FLIGHT (4 of 4 workers, D-65: 7d33708d impl-t558 (opus, why D-62 authz) T-558 (claimed, plan 4930), 03b631f0 impl-t531-s2c (sonnet) T-531 S2c,
-  fb538d7d qa-t486 (sonnet) T-486 QA WAITING GO, 03c496b6 impl-t546 (sonnet) T-546 crew digest WAITING bb7cdb0, 03b631f0 T-531 S2c Jobs, 7d33708d T-558 WAITING.)
+## IN FLIGHT (3 of 4 workers, D-65: 7d33708d impl-t558 (opus, why D-62 authz) T-558 WAITING e652c44 (plan 4930),
+  fb538d7d qa-t486 (sonnet) T-486 QA WAITING GO, 03c496b6 impl-t546 (sonnet) T-546 crew digest WAITING bb7cdb0. 03b631f0 ended.)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-531 S2c 7afbd0d (GO 13:25) -> T-486 QA -> T-558 (WAITING e652c44). 47710391 ended. Next free workers: T-426 QA +
-  blind review (after T-401 merges), T-416 S1b QA, T-546 + T-548.
+  Cluster: lead gate T-531 pre-merge 950c17d (wip/main-950c17d, running) -> T-486 QA -> T-558 -> T-546. Free slot: T-561 (opus).
+  Later: T-426 QA + blind review (after T-401 merges), T-416 S1b QA, T-548.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
 - T-379 3ddbcbc: src/ci 144/144 job-5b4609a6 (4905); lead live proof PASS job-c71c5bfe (4906); blind review 30dc0f13 PASS WITH
@@ -24,7 +24,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
 - T-531 (high, authz): S1 df65563; blind review PASS WITH CONDITIONS (4520); S2 9cd240f. QA 47710391 PASS WITH GAPS (4761/4762:
   1428/1433 0 fail job-a8a40ad8; mutation holds job-620ab38d; no agent path uses the refused routes). Decision 4763: S2c (sonnet)
-  tests legacy refs get the same 404 (workspaceRefGuard checks ws_ ids only) -> lead gate -> merge. T-538..T-540 ticketed.
+  tests legacy refs get the same 404 -> S2c 7afbd0d QA PASS no gap (5008) -> lead gate 950c17d -> merge. T-538..T-540 ticketed.
 - T-486 (high): S1 live. S2 DONE 75fd6a4 (4671, Jobs green; webhook, attention, allow-list, migration 783); 45148907 ended.
   Blind review 10382d36 PASS WITH CONDITIONS (4693, 6 minors); decision 4703: S2b cffb12b1 fixes m1/m4/m5 + PRD risks m2/m3;
   web hookSecret field -> T-556. Then QA -> lead gate -> merge -> deploy -> real Event branch check.
