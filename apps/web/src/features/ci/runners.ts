@@ -4,7 +4,7 @@ import { type CiRunner, type CiRunSummary } from '@portal/contracts';
 export const RUNNER_LABEL = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 export const MAX_LABELS = 16;
 export const MIN_RUNS = 1;
-export const MAX_RUNS = 8;
+export const MAX_RUNS = 9;
 /** Labels that mean "no runner": the server refuses them. */
 const RESERVED = new Set(['self-hosted', 'workspace']);
 
