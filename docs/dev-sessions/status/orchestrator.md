@@ -1,21 +1,25 @@
-# orchestrator status (2026-10-15 18:11 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-15 18:40 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
 - MERGED ff 275cea5b: T-586, T-486 (S2d+S2e), T-547, T-611, T-548 (gate GREEN 4071aa5, claudepilot-gate-4071aa5-b4a2; 5795-5800).
+- T-610 fixed by the coordinator (f6f76367, 5831): off my queue.
 ## IN FLIGHT (6 of 6, D-71): all sonnet
-- NEXT FREE SLOTS: 1) T-631 blind review (sonnet) of allow entry worktree-deps.sh (coordinator 5790; plan 5804). 2) T-591 S1d.
-  3) FE S1c T-600. 4) T-610.
+- BATCH 2 premerge e48066f (T-561 S1c 0beae29 + T-546 10b22e0; conflicts: migrations 778/779 kept both, PRD FR51 = T-546's + FR79)
+  pushed wip/main-e48066f, GATE RUNNING (job-out/gate-e48066f.log) -> ff integration on green.
+- T-591 S1d DONE 394abdd5 (5867; 783->784, lead checked no dup) -> QA Perf delta. Backend respawned 4083876c (ticket/T-325-s1) on T-325 S1 (5549 (b); S3 held).
+  Old Backend 4b4edaf8 ended: T-600 BE 1a95fb03 (5756) + T-597 S1b 75656845 (5849) DONE -> QA Perf.
+- T-631 review CHANGES 5850 -> lead 5853: absolute-path entry (a) for the coordinator; F2 small slice; F1 also on job-run.sh -> T-635 (high).
+- IMPL T-558 S1b 191bd6f1 (ticket/T-558-s1b from e652c44; QA FAIL 5846 -> 5847).
+- NEXT FREE SLOTS: 1) FE S1c T-600. 2) T-633 (T-546 mutants). 3) T-631 F2 slice.
 - IMPL T-416 S1c 0e5bcf50 (ticket/T-416-s1c): QA 41381bf2 FAIL 5792 (push-bridge test red, race test NO PROOF; S1b claims false) -> 5808.
-- BE INFRA 6d431441 (ticket/T-623-s1b): review 6b97efb4 PASS WITH CONDITIONS 5794 -> rework 5809 (exec into tmpfs, no RBAC; CDP accepted 5803).
+- T-623 S1b DONE 784926f (5855; 6d431441 ended; lead read diff: stdin not argv, Memory emptyDir 0400, no values in audit/hash, no RBAC) -> QA Perf queue.
+- BE INFRA respawned e92c5ba3 (ticket/T-578-gate-reuse) on T-578 S1 (reuse green gate of same tree + per-file progress): a GATE change,
+  merge only on a person's ack + blind review. T-578 claim refused by id (T-634): worker on it by spawn.
 - T-619 browser proof PASS 5793 (screenshots t619-390/1280.png in qa-t-600-ui-r3) -> 5810; #41 release is the coordinator's.
-- T-591 S1c QA PASS WITH GAPS 5741; merge CONFLICT: migration 783 also T-486's -> S1d (renumber + M5a test) 5746, next free slot.
-- T-597 QA FAIL 5727 (sev 2: text after /compact goes unframed) -> decision 5742 -> S1b queued to Backend after T-600 BE.
-- QA PERF 7e4879c7 (lane/cp-qa-perf): T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-558 e652c44; T-426 S1c+S1d, T-623 S1b to the front when DONE.
+- QA PERF 7e4879c7 (lane/cp-qa-perf): current item, then T-426 S1c+S1d 80f5bb72 (FRONT, owner), then rest of T-600 BE 1a95fb03 / T-597 S1b 75656845, then T-623 S1b 784926f, then T-591 S1d delta 394abdd5. QA is the bottleneck (5 queued).
 - QA UI b3f769c5 (qa/T-600-ui-r3 32f67b8f): on T-576 ux (2427d98) now; then T-600 re-run after FE S1c (FE S1b FAIL 5721, Pace 2 cols at 1280).
-- BACKEND 4b4edaf8 (ticket/T-600-be from T-600-fe-s1b 32985e2) on T-600 BE (plan 5540); then T-597 S1b; then T-325 S1+S2 (5549).
-- T-619 egress review 2590789a PASS WITH CONDITIONS 5627 (ended) -> coordinator 5629: owner ack on D-60 relax before #41 release; T-624 follow-up.
 - FRONTEND: 6a1a061e DONE FE S1b 32985e2 (5621) -> QA UI; ended. FE S1c T-600 Pace grid (5721); then T-556 (T-486 now merged).
 - Merge notes: T-546 merges 10b22e0, not branch head 0004ac5. T-486 = S2d 2979f99 + S2e ea1c006. Ended: 5f8f392b, 74a8d857, 83921ca7,
   f13a9442, 4ba6c5db, d4c49b5c, 219d5558. T-619: review CHANGES 5575 -> coordinator lands the named list (5584). No prettier/eslint in Jobs (T-612).
@@ -23,12 +27,16 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-426 ab93b54: QA Perf PASS 33/33 (5564) but blind review d4c49b5c FAIL 5571 (sev 2: refused arg echoed, pasted hex secret printed).
   S1b 350dd399 (5661): 2nd blind review 14385e7d CHANGES 5674 (sev 2: parser :104 echoes $1, lead confirmed) -> decision 5682 ->
   S1c DONE 5d9bee7e (5743) -> delta review 3a7d9ffc PASS WITH CONDITIONS 5777 (apply annotation, non-UTF-8 error echo, 2 doc
-  over-claims, no failure-path tests) -> decision 5778 -> IMPL ba717049 S1d (ticket/T-426-s1d) -> QA Perf S1c+S1d -> gate -> merge on T-401 ack.
+  over-claims, no failure-path tests) -> decision 5778 -> S1d DONE 80f5bb72 (5852; ba717049 ended) -> QA Perf S1c+S1d -> gate -> merge on T-401 ack.
   T-401 re-merged wip/main-54ba328: gate GREEN gate-54ba328-6502 (suite 570 s, peak 2228Mi; 5560/5562); ff only on the person's ack (4941).
 - T-379 S2 3f11b28 PASS (4948; review 4938) -> merge after T-401. T-401 060aca4: review 4936, QA 4943; HELD on the ack (4941).
 - T-416 (high incident): S1 d37c5f0 QA PASS WITH GAPS 4623; S1b a769b00 QA FAIL 5792 -> S1c 0e5bcf50. S2 = Bypass restore.
 
 ## DECISIONS (binding)
+- 18:45 in_review sweep (coordinator): all 9 unassigned, close/update/comment FORBIDDEN to me -> T-634. Coordinator closes. READY done (QA PASS
+  WITH GAPS, code on integration+main, merge-base checked): T-109 1771, T-280 1767, T-282 1768, T-285 1769, T-287 1770 (rest T-450, 3161),
+  T-136 1772 (gaps T-312/T-313), T-338 1846 (e4efeca; rest T-342). WAITS: T-259 QA FAIL 1773 (full text; rest T-315/T-316) -> waits-t315-t316;
+  T-317 part 2 = live Keep going run on the real portal -> waits-live-run (production: a person's step).
 - 16:57 Workspace restarted by coordinator (pilot browser, T-619, D-73); release portal 2026.10.15-12 merged (c29d75c7). All 6 workers' processes stopped;
   every worktree clean and pushed. Woke QA Perf, impl-t426, BE Infra, Backend, impl-t548 by message (re-run cut Jobs). QA UI respawned 80df7bb9 on qa/T-600-ui-r2.
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
@@ -39,9 +47,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   worktree+branch and gives the lane the path. 15:19 CONFIRMED refused (5443): no lane can take a 2nd ticket; coordinator asked (a/b/c);
   16:25 (T-595 5552/5553): QA Perf may `git merge --ff-only` a base the lead pushed; lane-backend may NOT. An implementing lane
   needing a new base is ended and respawned as the same lane on a fresh branch from that base.
-- 15:50 Workspace restarted 13:46 UTC; 03c496b6 (T-546, mid-Jobs) and cee43422 (T-486 port, WAITING 3cb0883) are gone, all branches
-  pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster, finishes by itself. 14:05 Coordinator AWAY (owner offline): restart POSTPONED, long work OK, Mac runner off.
-  BINDING: the coordinator runs deploys (#38-#40); I start NO deploy. (Old T-546/T-486 workers replaced.)
+- BINDING: the coordinator runs deploys; I start NO deploy.
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
 - 13:20 D-66: quick-check (format, lint, named tests) before the gate. Workers cannot git merge: the lead merges base heads in (4852).
@@ -64,10 +70,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-591 #40 backfill after deploy (5511); T-325 S3 push door vs charter "only the main chat merges integration" + its token (5549); T-527 finding 4 (owner triggers tagging owner-checklist).
 
 ## NEXT (in order, as slots free)
-1. Merges: T-401 (ack) -> T-426 -> T-379 -> T-486; deploys are the coordinator's. 2. T-416 S1b QA -> blind review (opus) -> merge; then S2.
-3. NEXT FREE SLOTS: T-558 QA (sonnet) + review (opus); T-426 QA + blind review; T-548 (sonnet); T-578 (high: deploy reuses a green gate for the same
-   tree + per-file gate progress; a gate change: built + blind review, merged only on a person's ack like T-401); then RTK (coordinator 14:55):
-   T-340 (hook refuses typed rtk hiding a denied command; a hook change is landed by a person/coordinator) -> T-341 -> T-306
+1. Merges: T-401 (ack) -> T-426 -> T-379; deploys are the coordinator's. 2. T-416 S1c QA -> blind review (opus) -> merge; then S2.
+3. After the slots above: T-558 QA + review; T-426 blind review; then RTK (coordinator 14:55): T-340 (hook refuses typed rtk hiding a denied command; a hook change is landed by a person/coordinator) -> T-341 -> T-306
    delivery (dev/t-306-1 has items 1-2); T-547 + T-549 (+ wasted-calls row, 4802); T-574 (session_family summary, from T-282 4801). Sweep results: the lead closes on PASS or reopens with the gap. 4. T-524 measurement with T-513. 5. T-537. 6. T-513.
 7. T-472 live re-check (4294), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
    T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2 0b0faf7 (merge integration in, ux, S3 perf); T-404 open till deployed.

@@ -28,6 +28,7 @@ const sup = (await import(pathToFileURL(resolve(import.meta.dirname, '../../../.
   COMPACT: string;
   COMPACT_LANE: string;
   LANES: (prog: string) => string;
+  worktreeTrustable: (scan: Record<string, unknown> | null, known: Set<string>) => boolean;
 };
 
 const MIN = 60_000;
@@ -83,4 +84,16 @@ test('D-70: idle lanes past 120k are compacted, each at most once per gap; other
   // The owner's Konfersi split: four build lanes by area; ClaudePilot keeps one Backend and one Frontend.
   for (const lane of ['Konfersi FE Business', 'Konfersi FE Lab', 'Konfersi BE Business', 'Konfersi BE Lab & AI']) assert.ok(brief.includes(lane), lane);
   assert.ok(sup.LANES('ClaudePilot').includes("'ClaudePilot Backend'") && sup.LANES('ClaudePilot').includes("'ClaudePilot BE Infra'") && !sup.LANES('ClaudePilot').includes('FE Lab'));
+});
+
+test('worktree trust: only rules, and only settings the portal already trusted here (a worker cannot widen its own rules on its branch)', () => {
+  const known = new Set(['h-reviewed']);
+  const scan = (o: Record<string, unknown>) => ({ trusted: false, empty: false, hash: 'h-reviewed', hooks: [], mcpServers: [], plugins: [], envNames: [], ...o });
+  assert.equal(sup.worktreeTrustable(scan({}), known), true, 'the same content a main folder had trusted');
+  assert.equal(sup.worktreeTrustable(scan({ hash: 'h-new' }), known), false, 'content never trusted here waits for the coordinator');
+  assert.equal(sup.worktreeTrustable(scan({ hooks: ['PreToolUse'] }), known), false, 'hooks: never by itself');
+  assert.equal(sup.worktreeTrustable(scan({ mcpServers: ['x'] }), known), false);
+  assert.equal(sup.worktreeTrustable(scan({ envNames: ['X'] }), known), false);
+  assert.equal(sup.worktreeTrustable(scan({ trusted: true }), known), false, 'already trusted: nothing to do');
+  assert.equal(sup.worktreeTrustable(null, known), false);
 });
