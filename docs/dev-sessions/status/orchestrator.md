@@ -9,14 +9,16 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 
 ## IN FLIGHT (3 live workers = the D-61 budget; no Agent-tool sub-agents)
 - T-366 (urgent): fourth review SAFE (comment 2989). Merged LOCALLY 423cb65 (+context pack), full gate Job running on it (wip/main-423cb65); push integration only on green. Minors = T-437. Deploy portal+workspace 2026-10-16.
-- T-417 (high): fixes on dev/t-417-1 c606ef6 (proof 7/7 vs 9622deb, chat 704/0 fail, typecheck 0; fixer a1bf3da8 ended). qa-verifier f20d8008 (opus, fadlilah) in dev-t-336-1 verifies T-417 AND T-427 (3198f5d). PASS on both -> merge both, gate.
+- T-417 (high): verifier PASS WITH GAPS (comment 2995); merged LOCALLY 311f366 + pack 7c1d29c on top of T-366; gate on the new head after 423cb65's gate. Race = T-438.
 - T-375 (high) + T-369: ux FAIL on c84657f (comment 2978). Fixer ee1a1b05 (opus, hasyim) in dev-t-333-1: no clipped values at 390, header 44 px, new checks. Then a new ux-checker.
 
-- T-427 (high, in_review): dev/t-427-1 3198f5d; proof green (job dea8cc76, comment 2932); in f20d8008's verification.
+- T-427 (high): verifier FAIL (comment 2996: parent kept when it leads; no floor). Lead fixed 47a5aea (parent only when no other; > 10 % left); proof Job running; then a DIFFERENT verifier.
 
 - T-433 (high, in_review): blind review PASS conditional (comment 2984): A ok; B/C hit the persona wall (named for the coordinator); A may be redundant (tools likely missing via --agent lists, not refused). T-436 (vault binding) filed. Coordinator lands.
 
 - T-404 (high): fixer e5806f91 (opus, hasyim) in dev-t-352-1 on dev/t-404-1: B1, B2, 3-10 (merges integration first). Then a NEW blind reviewer.
+
+- T-413 (incident): incident-analyst 2bd7d46e (sonnet, fadlilah) writing the post-mortem.
 
 ## READY, NOT MERGED
 - T-369 (urgent): dev/t-369-1 ff0088d (comment 2568: web 576/576, flip proof f9d87e3b, session-crew 5/5 a9166dc2). In dev/t-375-1; see T-375 above.
@@ -38,10 +40,10 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 
 ## NEXT (in order, as slots free)
 1. On f20d8008's PASS: merge T-417 + T-427, gate Job, push. Deploy batch 2026-10-16: T-366 (portal+workspace), T-417, T-427.
-2. T-413 post-mortem (incident-analyst worker, sonnet).
+2. T-427 second verifier (sonnet).
 3. ux-checker + S3 perf-tester for T-376 S2.
 4. T-435 (high), T-416 (portal memory budget, high), T-422 build (sudo), T-147 (narrow ClusterRole in a rig, after T-416/T-417).
-5. T-425, T-436, T-437, T-432, T-378 S2-S4, T-382, T-377, T-386, T-409, T-402, T-398, T-399.
+5. T-438, T-425, T-436, T-437, T-432, T-378 S2-S4, T-382, T-377, T-386, T-409, T-402, T-398, T-399.
 6. T-370 HOLD (claudepilot-b7), then T-371..T-374, T-363 (read D-59 / PRD 8b criteria first).
 7. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356, T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149.
 
