@@ -3329,6 +3329,28 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 785,
+    name: 'tickets: structured QA and review verdicts, each bound to one commit (T-325)',
+    up(db) {
+      // T-325 S1 (tickets PRD FR36): a verdict is a row, never a comment's words. `commit_sha` is the FULL sha that was verified: a branch that
+      // moved afterwards is a different commit, so the verdict no longer counts (the reader compares, nothing here expires). Rows are never
+      // edited; a later verdict of the same role on the same commit supersedes an earlier one. `actor` is `session:<id>` or `ui`.
+      db.exec(`
+        CREATE TABLE ticket_verdicts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          role TEXT NOT NULL CHECK (role IN ('qa', 'review')),
+          verdict TEXT NOT NULL CHECK (verdict IN ('pass', 'fail')),
+          commit_sha TEXT NOT NULL CHECK (length(commit_sha) = 40),
+          actor TEXT NOT NULL,
+          actor_label TEXT NOT NULL,
+          at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX ticket_verdicts_ticket ON ticket_verdicts (ticket_number, id);
+      `);
+    },
+  },
 ];
 
 /**
