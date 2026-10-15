@@ -11,7 +11,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   5499/5651/5687/5685/5702; lead read webhook authz + hand-off (no route). GATE running -> job-out/gate-4071aa5.log -> ff integration.
 - T-591 S1c QA PASS WITH GAPS 5741; merge CONFLICT: migration 783 also T-486's -> S1d (renumber + M5a test) 5746, next free slot.
 - T-597 QA FAIL 5727 (sev 2: text after /compact goes unframed) -> decision 5742 -> S1b queued to Backend after T-600 BE.
-- QA PERF 7e4879c7 (lane/cp-qa-perf): T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-558 e652c44; T-426 S1c to the front when DONE.
+- QA PERF 7e4879c7 (lane/cp-qa-perf): T-426 S1c -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-558 e652c44; T-426 S1c to the front when DONE.
 - QA UI b3f769c5 (qa/T-600-ui-r3 32f67b8f): T-619 PARTIAL 5720 (both targets blocked; scratch portal not started, no node_modules,
   deps script refused) -> asked coordinator to link deps 5726; then steps a,b,d. T-600 FE S1b FAIL 5721 (Pace 2 cols at 1280) -> FE S1c. Then T-576.
 - BACKEND 4b4edaf8 (ticket/T-600-be from T-600-fe-s1b 32985e2) on T-600 BE (plan 5540); then T-597 S1b; then T-325 S1+S2 (5549).
@@ -24,7 +24,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
   T-426 ab93b54: QA Perf PASS 33/33 (5564) but blind review d4c49b5c FAIL 5571 (sev 2: refused arg echoed, pasted hex secret printed).
   S1b 350dd399 (5661): 2nd blind review 14385e7d CHANGES 5674 (sev 2: parser :104 echoes $1, lead confirmed) -> decision 5682 ->
-  IMPL b7e209d5 (impl-t426-s1c, ticket/T-426-s1c) -> QA Perf full re-probe -> delta re-review (opus) -> gate -> merge on T-401 ack.
+  S1c DONE 5d9bee7e (5743; 40/40; b7e209d5 ended) -> QA Perf full re-probe (front) + delta REVIEW 3a7d9ffc (opus, why security);
+  lead finding: Secret via `kubectl apply` keeps data in last-applied annotation -> both probe it. Then gate -> merge on T-401 ack.
   T-401 re-merged wip/main-54ba328: gate GREEN gate-54ba328-6502 (suite 570 s, peak 2228Mi; 5560/5562); ff only on the person's ack (4941).
 - T-379 S2 3f11b28 PASS (4948; review 4938) -> merge after T-401. T-401 060aca4: review 4936, QA 4943; HELD on the ack (4941).
 - T-416 (high incident): S1 d37c5f0 QA PASS WITH GAPS 4623; S1b a769b00 (4637/4688) now in QA 41381bf2. S2 = Bypass restore.
