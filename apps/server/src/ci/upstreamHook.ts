@@ -2,7 +2,8 @@
 // upstream sync becomes due now. Mounted outside /api, the session guard and the Origin check: its door is the host's signature over the raw
 // body, keyed with the remote's hook secret (a Secrets & env NAME, its value read in memory from the remote's workspace; never a literal).
 //
-// Order: the global rate (429) and a (remote, address) pair that failed 5 times in 10 minutes (429); the body, at most 1 MiB within 10 s
+// Order: the source address's refusal bucket (30 refused requests a minute: junk spends only its own address's bucket, never a hook's) and a
+// (remote, address) pair that failed 5 times in 10 minutes (429); the body, at most 1 MiB within 10 s
 // (413, 408); then the remote, its hook key, the signature (GitHub `X-Hub-Signature-256: sha256=<hex>`, or Gitea `X-Gitea-Signature: <hex>`)
 // and the seam acting as the remote's owner (can operate the ci_repo). ANY of those refused answers the same 404 as a remote that does not
 // exist, and counts against the pair. Accepted: 202 `{"ok":true}`. It never fetches here: `kickUpstream` makes the detached, one-at-a-time
@@ -18,7 +19,7 @@ import { verifyBareHmac, verifyPrefixedHmac } from '../triggers/providers/signat
 import { readBody } from '../triggers/receiver.js';
 import type { CiService } from './service.js';
 
-export const CI_HOOK_LIMITS = { globalMinute: 120, failures: 5, failureWindowMs: 10 * 60_000, blockMs: 10 * 60_000 };
+export const CI_HOOK_LIMITS = { hookMinute: 120, addressMinute: 30, failures: 5, failureWindowMs: 10 * 60_000, blockMs: 10 * 60_000 };
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const MAP_MAX = 10_000;
 
@@ -59,16 +60,19 @@ export function createCiHookRoutes(ci: Pick<CiService, 'upstreamHookKey' | 'kick
   const now = d.now ?? Date.now;
   const address = d.clientAddress ?? portalAddress;
   const dummyCheck = d.dummyCheck ?? burnHmac;
-  let global = { at: 0, n: 0 };
+  // Unverified traffic is charged to its source address (refusals only); verified traffic to its hook. They never share a bucket.
+  const addressBuckets = new Map<string, { at: number; n: number }>();
+  const hookBuckets = new Map<string, { at: number; n: number }>();
   const failures = new Map<string, { at: number; n: number }>();
   const blocked = new Map<string, number>();
 
   hooks.post('/:id', async (c) => {
     const id = c.req.param('id') ?? '';
     const at = now();
-    if (at - global.at >= 60_000) global = { at, n: 0 };
-    if (++global.n > CI_HOOK_LIMITS.globalMinute) return tooMany(c, (global.at + 60_000 - at) / 1000);
-    const pair = `${id.slice(0, 64)}|${address(c).slice(0, 64)}`;
+    const addr = address(c).slice(0, 64);
+    const ab = addressBuckets.get(addr);
+    if (ab && at - ab.at < 60_000 && ab.n >= CI_HOOK_LIMITS.addressMinute) return tooMany(c, (ab.at + 60_000 - at) / 1000);
+    const pair = `${id.slice(0, 64)}|${addr}`;
     const until = blocked.get(pair);
     if (until && until > at) return tooMany(c, (until - at) / 1000);
 
@@ -77,6 +81,11 @@ export function createCiHookRoutes(ci: Pick<CiService, 'upstreamHookKey' | 'kick
     if (raw === 'timeout') return json(c, 408, { ok: false, error: { code: 'TIMEOUT', message: 'The body took too long.' } }, { Connection: 'close' });
 
     const refuse = () => {
+      const cur = addressBuckets.get(addr);
+      const b = cur && at - cur.at < 60_000 ? cur : { at, n: 0 };
+      b.n++;
+      if (addressBuckets.size > MAP_MAX) addressBuckets.clear();
+      addressBuckets.set(addr, b);
       const f = failures.get(pair);
       const w = f && at - f.at < CI_HOOK_LIMITS.failureWindowMs ? f : { at, n: 0 };
       w.n++;
@@ -100,6 +109,12 @@ export function createCiHookRoutes(ci: Pick<CiService, 'upstreamHookKey' | 'kick
     const ref = objectRef('ci_repo', id);
     const owner = ownersOf(ref)[0];
     if (!owner || !can(asUser(owner, 'ci-upstream-hook'), 'operate', ref).allow) return refuse();
+    // Verified: counted against this hook only.
+    const hb = hookBuckets.get(id);
+    const hw = hb && at - hb.at < 60_000 ? hb : { at, n: 0 };
+    if (++hw.n > CI_HOOK_LIMITS.hookMinute) return tooMany(c, (hw.at + 60_000 - at) / 1000);
+    if (hookBuckets.size > MAP_MAX) hookBuckets.clear();
+    hookBuckets.set(id, hw);
     ci.kickUpstream(id);
     return json(c, 202, { ok: true });
   });

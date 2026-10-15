@@ -344,7 +344,7 @@ test('the webhook: kicks during a sync coalesce into ONE more sync, one gap afte
   }
 });
 
-test('the webhook: 5 bad signatures from one address block that address for that remote (429); the global rate is capped', async () => {
+test('the webhook: 5 bad signatures from one address block that address for that remote (429); a hook\'s own rate is capped', async () => {
   const { h, repo, key } = await hooked();
   try {
     await h.svc.updateRepo(repo.id, { upstream: { url: URL_, hookSecret: 'HOOK_KEY' } }, BY);
@@ -367,17 +367,43 @@ test('the webhook: 5 bad signatures from one address block that address for that
     clock += CI_HOOK_LIMITS.blockMs + 1;
     assert.equal((await post(good)).status, 202);
 
-    // The global cap: past it, 429 for everyone until the minute turns.
+    // The hook's own cap: past it, 429 for that hook until the minute turns.
     clock += 60_000;
     const statuses: number[] = [];
-    for (let i = 0; i <= CI_HOOK_LIMITS.globalMinute; i++) {
+    for (let i = 0; i <= CI_HOOK_LIMITS.hookMinute; i++) {
       addr = `198.18.${Math.floor(i / 250)}.${i % 250}`;
       statuses.push((await post(good)).status);
     }
-    assert.equal(statuses.filter((s) => s === 202).length, CI_HOOK_LIMITS.globalMinute);
+    assert.equal(statuses.filter((s) => s === 202).length, CI_HOOK_LIMITS.hookMinute);
     assert.equal(statuses.at(-1), 429);
     clock += 60_000;
     assert.equal((await post(good)).status, 202);
+  } finally {
+    await h.svc.syncsSettled();
+    h.done();
+  }
+});
+
+test('the webhook: junk from one address fills its own bucket and a signed hook (another address) still gets 202', async () => {
+  const { h, repo, key } = await hooked();
+  try {
+    await h.svc.updateRepo(repo.id, { upstream: { url: URL_, hookSecret: 'HOOK_KEY' } }, BY);
+    let addr = '203.0.113.50';
+    const clock = Date.now();
+    const app = createCiHookRoutes(h.svc, { clientAddress: () => addr, now: () => clock });
+    const body = '{}';
+    const good = { 'x-hub-signature-256': `sha256=${sign(key, body)}` };
+    const bad = { 'x-hub-signature-256': `sha256=${'0'.repeat(64)}` };
+    const post = (id: string, headers: Record<string, string>) => app.request(`/${id}`, { method: 'POST', body, headers });
+    // Junk at many ids (so the per-pair block never trips) until the address bucket answers 429.
+    const junk: number[] = [];
+    for (let i = 0; i < CI_HOOK_LIMITS.addressMinute + 20; i++) junk.push((await post(`junk${i}`, bad)).status);
+    assert.equal(junk.filter((s) => s === 404).length, CI_HOOK_LIMITS.addressMinute);
+    assert.equal(junk.at(-1), 429, 'the junk address is throttled');
+    // More junk than the old shared 120/min would hold: the hook is not starved.
+    for (let i = 0; i < CI_HOOK_LIMITS.hookMinute + 50; i++) await post(`junk${i}`, bad);
+    addr = '192.0.2.77';
+    assert.equal((await post(repo.id, good)).status, 202, 'a signed hook from another address still gets 2xx');
   } finally {
     await h.svc.syncsSettled();
     h.done();
