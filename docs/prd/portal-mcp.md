@@ -549,7 +549,9 @@ busy first; with none, T-427, another Claude, the least used now of those with m
 threshold), none above ceil((sessions + 1) / Claudes) + 1 sessions not ended (asleep ones count: a message wakes them), why
 `no_room_lowest`; its own only when no other qualifies), `role` (the worker runs as `.claude/agents/<role>.md`), `model`, `effort`, `mode` (`default`, `plan`,
 `dontAsk`), `ticket` (`T-<n>`: the worker's ticket, the field usage attribution reads, so its cost counts under that ticket;
-none means "No ticket"; a malformed id or a ticket that does not exist is refused as `NOT_FOUND` and starts nothing, T-449),
+none means "No ticket"; a malformed id or a ticket that does not exist is refused as `NOT_FOUND` and starts nothing, T-449;
+T-397: while nobody holds that ticket the worker may `ticket_comment` on it, and on its lead's tickets, comment only, audited as the worker:
+[Tickets](tickets.md) FR9b),
 `max_workers` and `subagents` (the worker's own limits, never wider than the caller's) and `report`
 (`idle`, the default: the portal tells the lead in one line when the worker's turn
 ends, when it waits on a person and when it ends; `end`: only the end; `none`), `session_message` takes `to`
