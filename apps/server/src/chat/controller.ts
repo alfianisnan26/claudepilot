@@ -4172,8 +4172,16 @@ export class ChatController {
       this.#modes.set(sessionId, { expected: START_MODE, prePlan: null, enterPlan: false, exitPlan: false });
       this.#saveControl(sessionId);
       this.#launchedAt.set(sessionId, Date.now());
-      this.#costBase.set(sessionId, 0); // a new process counts its cost from zero
-      this.#modelBase.set(sessionId, new Map());
+      // T-610: a process resumed with `--resume` (the same Claude session) carries Claude Code's running total over from the one before, so
+      // its first turn costs the change since the last stored total; zero here booked the whole total as one turn on every restart ($81 for
+      // one lead, 2026-10-15). A first launch counts from zero. A total lower than the base is still read as a new count (the result).
+      if (resume) {
+        this.#costBase.delete(sessionId);
+        this.#modelBase.delete(sessionId);
+      } else {
+        this.#costBase.set(sessionId, 0);
+        this.#modelBase.set(sessionId, new Map());
+      }
       this.#launched(sessionId, workspaceId);
       if (wasBypass) {
         this.#chat.patchSession(sessionId, { mode: START_MODE });
