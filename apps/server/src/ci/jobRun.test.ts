@@ -207,6 +207,51 @@ test('Konfersi: from Gitea with the credential helper\'s token in the Secret (ne
   assert.match(r.out, /git said \[redacted\]/);
 });
 
+test('T-491 Event: exactly GitHub isnanme/event, the GitHub token as npm token and git credential in the Secret (never on a command line)', () => {
+  const w = world();
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, 'npm said {TOKEN}\n') }));
+  const r = w.run(['--repo', 'event', '--ref', 'main', '--', 'npm run check']);
+  assert.equal(r.code, 0, r.out);
+  const text = w.applied1();
+  const m = yamlLoad(text) as Manifest;
+  const e = envOf(m);
+  assert.equal(e.JR_REPO_URL, 'https://github.com/isnanme/event.git');
+  assert.equal(m.metadata.labels['job-run/repo'], 'event');
+  assert.deepEqual(e.NODE_AUTH_TOKEN, { secretKeyRef: { name: m.metadata.name, key: 'node-auth-token', optional: true } });
+  assert.deepEqual(e.GIT_TOKEN, { secretKeyRef: { name: m.metadata.name, key: 'git-token', optional: true } });
+  const sent = w.calls(); // the Secret went in on stdin; its content is checked in the next test, while the Job waits in the queue
+  assert.match(sent, new RegExp(`create secret generic ${m.metadata.name} --from-env-file=/dev/stdin`));
+  for (const where of [r.out, w.log(), sent, text]) assert.ok(!where.includes(w.npmToken), 'the token is nowhere but the Secret');
+  assert.match(r.out, /npm said \[redacted\]/);
+  assert.deepEqual(w.state().secrets, {}, 'the Secret is deleted at the end');
+});
+
+test('T-491 Event: the Secret holds the token for npm and for the clone; claudepilot keeps only the npm token', async () => {
+  // Hold the Job in the queue so the Secret can be read before the script deletes it.
+  const seeds = [1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' }));
+  for (const [repo, git] of [['event', true], ['claudepilot', false]] as const) {
+    const w = world(seeds);
+    const s = w.start(['--repo', repo, '--ref', 'main', '--', 'true']);
+    await waitFor('queued', () => /queued behind 3/.test(s.out()));
+    const secrets = Object.values(w.state().secrets);
+    assert.equal(secrets.length, 1);
+    const lines = (secrets[0] ?? '').split('\n');
+    assert.ok(lines.includes(`node-auth-token=${w.npmToken}`), `${repo}: the npm token`);
+    assert.equal(lines.includes(`git-token=${w.npmToken}`), git, `${repo}: the git credential only for event`);
+    assert.equal(lines.includes('git-user=x-access-token'), git);
+    s.p.kill('SIGTERM');
+    await s.done;
+  }
+});
+
+test('T-491 Event: without a GitHub token the run is refused before anything is created (the repository is private)', () => {
+  const w = world();
+  const r = w.run(['--repo', 'event', '--ref', 'main', '--', 'true'], { NODE_AUTH_TOKEN: '' });
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /--repo event: no GitHub token/);
+  assert.doesNotMatch(w.calls(), /create secret|apply/);
+});
+
 test('the cluster-wide cap: three running Jobs, the fourth says "queued behind 3" and starts when one ends', async () => {
   const w = world([{ name: 'claudepilot-job-00000001', chat: 'chat-x' }, { name: 'claudepilot-job-00000002', chat: 'chat-y' }, { name: 'claudepilot-job-00000003', chat: 'chat-z' }]);
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
@@ -287,7 +332,20 @@ test('usage errors: nothing is created', () => {
     [['--repo', 'claudepilot', '--ref', 'main', '--timeout', '99999', '--', 'x'], /--timeout/],
     [['--repo', 'konfersi:x', '--ref', 'main', '--', 'x'], /--repo konfersi:<org>\/<repo>/],
     [['--repo', 'claudepilot', '--', 'x'], /--ref: the current folder is not a checkout/],
-    [['--repo', 'gitlab', '--ref', 'main', '--', 'x'], /--repo: claudepilot or konfersi/],
+    [['--repo', 'gitlab', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    // T-491: the event door is exactly one repository; no free-form org/repo, no look-alikes.
+    [['--repo', 'event:foo/bar', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo', 'event:isnanme/event', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo', 'Event', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo', 'events', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo', 'event ', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo', 'event isnanme/event', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo', 'isnanme/event', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo', 'https://github.com/isnanme/event.git', '--ref', 'main', '--', 'x'], /--repo: claudepilot, event or konfersi/],
+    [['--repo=event', '--ref', 'main', '--', 'x'], /unknown option --repo=event/], // the script defines no --repo=value form: refused as an unknown option
+    // T-491: the Event token is for that one repository; no second one rides along.
+    [['--repo', 'event', '--also', 'x/y', '--ref', 'main', '--', 'x'], /--also cannot be used with --repo event/],
+    [['--also', 'x/y', '--repo', 'event', '--ref', 'main', '--', 'x'], /--also cannot be used with --repo event/],
   ];
   for (const [argv, re] of cases) {
     const r = w.run(argv);
@@ -323,6 +381,38 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   const missing = pod('no-such-branch', 'true');
   assert.equal(missing.status, 2);
   assert.match(missing.stdout, /=== JOB-RUN EXIT 2\njob-run: no-such-branch of .* is not on the remote \(push it first\)/);
+
+  // T-491: for Event only, with a token, the user npmrc maps @isnanme to GitHub Packages through a reference npm expands (the value is
+  // never written) and the git credential helper is scoped to that one URL and path. The https URL is served from the local bare
+  // repository through an environment-level insteadOf (the credential lookup still sees the https URL).
+  const token = `fx${hex(18)}`;
+  const eventUrl = 'https://github.com/isnanme/event.git';
+  const asksFor = (url: string) => { // does `git credential fill` give a password for this URL?
+    const m = /^https:\/\/([^/]+)\/(.*)$/.exec(url); // split by hand: new URL() would fold a "/../" away before git sees it
+    return `printf 'protocol=https\\nhost=${m?.[1]}\\npath=${m?.[2]}\\n\\n' | GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null | grep -c '^password=' || true`;
+  };
+  const podEvent = (url: string, cmd: string, tok: string | undefined) => spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
+    PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: url, JR_REF: 'main', JR_ALSO: '', JR_STEPS: 'none', JR_ARTIFACTS: '',
+    JR_ARTIFACT_MAX: '100000', JR_CMD: Buffer.from(cmd).toString('base64'), GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.file://${join(root, 'claudepilot.git')}.insteadOf`,
+    GIT_CONFIG_VALUE_0: url, ...(tok ? { NODE_AUTH_TOKEN: tok, GIT_TOKEN: tok, GIT_USER: 'x-access-token' } : {}) } });
+  const ev = podEvent(eventUrl, ['cat "$HOME/.npmrc"', 'echo ---', 'cat "$HOME/.gitconfig"', 'echo ---',
+    asksFor(eventUrl), asksFor('https://github.com/isnanme/other.git'), asksFor('https://github.com/isnanme/event.git.evil/x'),
+    asksFor('https://example.com/isnanme/event.git'), asksFor('https://github.com/isnanme/event'), asksFor('https://github.com/isnanme/event-x.git'),
+    asksFor('https://github.com/isnanme/event.git/../other.git')].join('\n'), token);
+  assert.equal(ev.status, 0, ev.stdout + ev.stderr);
+  assert.match(ev.stdout, /^@isnanme:registry=https:\/\/npm\.pkg\.github\.com\n\/\/npm\.pkg\.github\.com\/:_authToken=\$\{NODE_AUTH_TOKEN\}\n/m);
+  assert.ok(!ev.stdout.includes(token), 'the files hold references, not the value');
+  const cfg = ev.stdout.split('---\n')[1] ?? '';
+  assert.match(cfg, /\[credential "https:\/\/github\.com\/isnanme\/event\.git"\]/);
+  assert.match(cfg, /useHttpPath = true/);
+  assert.equal((cfg.match(/\[credential/g) ?? []).length, 1, 'one credential section, no global helper');
+  assert.doesNotMatch(cfg, /^\[credential\]/m, 'no unscoped credential section');
+  assert.match(ev.stdout, /---\n1\n0\n0\n0\n0\n0\n0\n=== JOB-RUN SUMMARY/, 'a password for the Event URL only: not another path, a look-alike path, another host, the URL without .git, event-x.git or a /../ path');
+  // claudepilot (its own URL, here the local bare repository): no npmrc, the global helper as before.
+  const cp = pod('main', 'test ! -e "$HOME/.npmrc" && echo no npmrc; git config --global --get credential.helper >/dev/null && echo global helper');
+  assert.match(cp.stdout, /no npmrc\nglobal helper\n/, 'not Event: no npmrc, the global helper');
+  const noToken = podEvent(eventUrl, 'test ! -e "$HOME/.npmrc" && echo no npmrc', undefined);
+  assert.match(noToken.stdout, /no npmrc\n/, 'no token, no npmrc');
 });
 
 test('--against and --keep-tests: parsed into the manifest, validated; absent, the manifest carries nothing', () => {
