@@ -22,7 +22,7 @@ The operating kit's persona (T-132 item 1). `pilot-way.json` is the exact body o
 
 "All but" roles keep the inherited tools, Portal MCP tools included, because they need the CI, ticket, knowledge or browser tools. Every prompt has the same parts: inputs, steps, done criteria, never, report format, skills to load, and the charter walls in one line. The roles with a fixed tools list get `Skill` so they can load the skills their prompt names.
 
-Retired 2026-10-15: the `event-*` roles (Event left pilot, D-67) and `konfersi-web`, `konfersi-core`, `konfersi-qa`, `konfersi-qa-ui` (replaced by the lanes, D-70). `konfersi-ai` and `konfersi-metocean` stay as specialists for the free slot.
+Retired 2026-10-15: the `event-*` roles (Event left pilot, D-67) and `konfersi-web`, `konfersi-core`, `konfersi-qa`, `konfersi-qa-ui`, `konfersi-ai` and `konfersi-metocean` (replaced by the lanes, D-70; Konfersi splits its build lanes by area).
 
 ## What the instructions cover
 
