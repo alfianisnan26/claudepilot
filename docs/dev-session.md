@@ -42,6 +42,8 @@ npm run build -w @portal/web
 scripts/gate.sh                                   # the same on a clean copy of HEAD: the release gate
 scripts/gate-job.sh <commit> [steps]              # the release gate as a Job in the cluster (other CPUs); the commit must be on GitHub
 scripts/scratch-portal.sh start 3403              # a clean-environment portal; tools/qa/*.mjs drive a real browser against it
+scripts/worktree-deps.sh <worktree>               # links a worktree's node_modules to this checkout's install (no npm ci); refuses, exit 2, when a package file differs (cluster npm ci needed) or the worktree is outside ~/work/claudepilot.worktrees; --main/--root are test-only (WORKTREE_TEST_MODE=1)
+scripts/worktree-new.sh T-<n> <slug>              # branch ticket/T-<n>-<slug> from origin/integration under ~/work/claudepilot.worktrees, deps linked; refuses an existing branch or folder, a bad slug (leading dash, glob characters); no path flags outside tests
 scripts/k3s-status.sh                             # Argo CD, pods, node load, warnings, the portal log
 kubectl -n isnan-claudepilot logs deploy/claudepilot-portal --tail=50
 ```
