@@ -557,7 +557,7 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
 test('T-578: the gate step reuses a green verdict a gate Job recorded for the same TREE (under 24 h) and gates in every other case; a green run keeps its record', () => {
   const w = world();
   Object.assign(w.env, { DEPLOY_GATE_IN_CLUSTER: 'true', GATE_IMAGE: 'registry.test/claudepilot/workspace:dev-1', GATE_JOB_POLL_S: '1', GATE_JOB_WAIT_S: '5' });
-  const tree = w.git(['rev-parse', `${w.sha}^{tree}`]);
+  const tree = w.git(['rev-parse', `${w.sha}^{tree}`], w.work);
   const record = (over: Record<string, unknown> = {}) => JSON.stringify({ source: 'gate-job', job: 'claudepilot-gate-1234567-abcd', verdict: 'green', commit: 'c'.repeat(40), tree, steps: 'typecheck,web-build,server-suite', files: '', finished: Math.floor(Date.now() / 1000) - 600, ...over });
   const record_ = join(w.root, 'gate-record');
   const ranGate = () => /kubectl .* create secret generic claudepilot-gate-/.test(w.calls());
