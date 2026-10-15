@@ -62,4 +62,12 @@ export const CI_LIMITS = {
   pauseWindowMs: 30 * MINUTE,
   /** A step is killed this long after the polite signal. */
   killGraceMs: 5_000,
+  /** Runners (T-557): labels a job may name, labels a runner may carry, runs one runner may take at once (the most a person may set). */
+  runnerLabels: 8,
+  runnerLabelsPerRunner: 16,
+  runnerMaxRuns: 8,
+  /** A run waits this long for a runner with its labels to come online or free up before it fails as `no_runner`. */
+  runnerWaitMs: 30 * MINUTE,
+  /** A repository bundle sent to a runner (the whole history the first time, only what is new after that). */
+  runnerBundleBytes: 512 * MiB,
 } as const;

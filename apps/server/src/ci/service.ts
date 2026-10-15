@@ -84,6 +84,23 @@ const json = <T>(text: string | null | undefined, fallback: T): T => {
 };
 
 /** The facts of a run a deployment row copies. */
+/** Where a run executes (T-557): the runner that took it, or the repository's workspace. */
+export const execOf = (r: Pick<RunRow, 'workspace_id' | 'runner_workspace_id'>): string => r.runner_workspace_id ?? r.workspace_id;
+/** The `runs-on` labels a run asked for (T-557), or null for the repository's workspace. */
+export function runsOnOf(r: Pick<RunRow, 'runs_on'>): string[] | null {
+  if (!r.runs_on) return null;
+  try {
+    const v = JSON.parse(r.runs_on) as unknown;
+    return Array.isArray(v) && v.length && v.every((x) => typeof x === 'string') ? (v as string[]) : null;
+  } catch {
+    return null;
+  }
+}
+/** The mirror a runner keeps of a workspace's remote (T-557): never the runner's own remote of the same name. */
+export const mirrorOf = (workspaceId: string, repo: string) => `m-${createHash('sha256').update(workspaceId).digest('hex').slice(0, 8)}-${repo}`;
+/** Base64 characters per chunk of a bundle on its way to a runner: under cp-ci's 4 MiB stdin and reply caps. */
+const BUNDLE_CHUNK = 1_048_576;
+
 const row0 = (r: RunRow) => ({ id: r.id, number: r.number, pipeline: r.pipeline, sha: r.sha, ref: r.ref, actor: r.actor, created_at: r.created_at });
 
 const newRunId = () => `r${Date.now().toString(36)}${randomBytes(3).toString('hex')}`;
@@ -162,6 +179,12 @@ export interface CiServiceOptions {
   sessions?: CiSessionsPort;
   /** Whether a Secrets & env name reaches a workspace (names only, never a value). Without it secret names are not checked before a run. */
   secrets?: (workspaceId: string, name: string) => { kind: string; asFile: boolean; asVariable: boolean } | null;
+  /**
+   * The VALUE of a secret as the workspace's Secrets & env sets deliver it as a file (T-557), for the lease a runner gets when it takes that
+   * workspace's run. In memory only: handed to the runner on stdin, never logged, stored or returned. Without it a run that names a secret
+   * can not go to a runner.
+   */
+  secretValue?: (workspaceId: string, name: string) => string | null;
   /** The platform audit (approvals, protection changes). Names, ids and fixed codes only. */
   audit?: (e: { kind: string; actor: string; userId: string | null; severity?: 'info' | 'medium' | 'high'; subject?: string; detail?: Record<string, unknown> }) => void;
   /** The clock of the auto-approve rule (its daily cap and window, FR41a); tests pass a fake one. */
@@ -201,7 +224,10 @@ export class CiService {
   onChange?: () => void;
   hooks: CiHooks = {};
   readonly #cs: CiStore;
-  readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'audit' | 'upstreamHosts'>> & Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'audit' | 'upstreamHosts'>;
+  readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>> &
+    Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>;
+  /** Runs a runner is being handed right now (T-557), so two workspaces' dispatches can not both fill its last slot. */
+  readonly #handing = new Map<string, number>();
   /** Upstream sync: when each remote last tried (ms), and the sync in flight per remote (one at a time). */
   readonly #upstreamAt = new Map<string, number>();
   readonly #syncing = new Map<string, Promise<SyncReply>>();
@@ -241,6 +267,7 @@ export class CiService {
       redactFor: opts.redactFor,
       streamFor: opts.streamFor,
       secrets: opts.secrets,
+      secretValue: opts.secretValue,
       audit: opts.audit,
       now: opts.now ?? (() => new Date()),
       lookup: opts.lookup ?? defaultLookup,
@@ -570,7 +597,7 @@ export class CiService {
           ? { ...base, status: 'failed', reason: 'invalid_pipeline', diagnostics: JSON.stringify(missing), finished_at: now, duration_ms: 0, archived: 1 }
           : gates && 'problem' in gates
             ? { ...base, status: 'failed', reason: 'invalid_pipeline', diagnostics: JSON.stringify([gates.problem]), finished_at: now, duration_ms: 0, archived: 1 }
-            : { ...base, plan: JSON.stringify(c.plan), concurrency_group: c.group, cancel_in_progress: c.cancelInProgress ? 1 : 0 };
+            : { ...base, plan: JSON.stringify(c.plan), concurrency_group: c.group, cancel_in_progress: c.cancelInProgress ? 1 : 0, ...(c.plan.runsOn && this.#cs.runnersReady ? { runs_on: JSON.stringify(c.plan.runsOn) } : {}) };
       this.#cs.insertRun(row);
       if (gates && 'deployments' in gates && row.status === 'queued') for (const d of gates.deployments) this.#cs.insertDeployment(d);
       return row;
@@ -664,6 +691,12 @@ export class CiService {
           continue;
         }
       }
+      // `runs-on` (T-557): a runner takes it, not this workspace's own slots.
+      const labels = runsOnOf(run);
+      if (labels) {
+        await this.#toRunner(run, labels);
+        continue;
+      }
       const text = run.plan;
       let reply: CiReply;
       try {
@@ -683,6 +716,106 @@ export class CiService {
       } else if (reply.error === 'bad_plan') {
         this.#finishFailed(run, 'runner_error', reply.message ?? 'The runner refused the plan.');
       } else this.#retry(run, reply.message ?? reply.error ?? 'start failed');
+    }
+  }
+
+  /**
+   * A run with `runs-on` (T-557): the least busy enabled runner whose labels include all of the run's, running and with a free slot, gets
+   * the commit (a bundle into its mirror of this remote, only what it lacks), the run's secrets (a lease on stdin, from the repository
+   * workspace's Secrets & env), and the plan. No runner carries the labels at all: the run fails at once as `no_runner`. Runners exist but
+   * none is free or online: it waits, up to `runnerWaitMs` from when it was queued. A failure on the way is retried like a start (3 tries).
+   */
+  async #toRunner(run: RunRow, labels: string[]): Promise<void> {
+    const fits = this.#cs.runners().filter((r) => {
+      const has = new Set(JSON.parse(r.labels) as string[]);
+      return r.enabled && labels.every((l) => has.has(l));
+    });
+    if (!fits.length) return this.#finishFailed(run, 'no_runner', `No runner has the labels ${labels.join(', ')}. Add one in CI > Runners, or change runs-on.`);
+    const ready: { id: string; load: number }[] = [];
+    for (const r of fits) {
+      if (r.drained) continue;
+      const state = await this.host.state(r.workspace_id).catch(() => 'gone' as const);
+      if (state !== 'running') continue;
+      const load = this.#cs.runningRuns(r.workspace_id).length + (this.#handing.get(r.workspace_id) ?? 0);
+      if (load < r.max_runs) ready.push({ id: r.workspace_id, load });
+    }
+    if (!ready.length) {
+      if (Date.now() - Date.parse(run.created_at) > CI_LIMITS.runnerWaitMs)
+        this.#finishFailed(run, 'no_runner', `No runner with the labels ${labels.join(', ')} was online and free for ${Math.round(CI_LIMITS.runnerWaitMs / 60_000)} minutes.`);
+      return;
+    }
+    const runner = ready.sort((a, b) => a.load - b.load || a.id.localeCompare(b.id))[0]!.id;
+    this.#handing.set(runner, (this.#handing.get(runner) ?? 0) + 1);
+    const local = runner === run.workspace_id;
+    let leased = false;
+    try {
+      const plan = JSON.parse(run.plan!) as Plan;
+      const names = [...new Set(plan.jobs.filter((j) => !j.skip).flatMap((j) => j.secrets))];
+      if (!local) {
+        await this.host.install(runner);
+        plan.mirror = mirrorOf(run.workspace_id, run.repo);
+        await this.#sendCommit(run, runner, plan.mirror);
+        if (names.length) {
+          const values: Record<string, string> = {};
+          for (const name of names) {
+            const v = this.#opts.secretValue?.(run.workspace_id, name) ?? null;
+            if (v === null) return this.#finishFailed(run, 'invalid_pipeline', `The secret ${name} is not available in the repository's workspace, so it can not be handed to a runner.`);
+            values[name] = v;
+          }
+          const text = JSON.stringify(values);
+          const lease = await this.host.cp(runner, ['lease', run.id, '--bytes', String(Buffer.byteLength(text))], { stdin: text, timeoutMs: 30_000 });
+          if (!lease.ok) throw new Error(lease.message ?? lease.error ?? 'the lease was refused');
+          plan.leased = true;
+          leased = true;
+        }
+      }
+      const text = JSON.stringify(plan);
+      const reply = await this.host.cp(runner, ['start', run.id, '--bytes', String(Buffer.byteLength(text))], { stdin: text, timeoutMs: 30_000 });
+      if (!reply.ok) {
+        if (reply.error === 'no_space') return this.#finishFailed(run, 'no_space', 'The runner is almost out of disk space.');
+        if (reply.error === 'bad_plan') return this.#finishFailed(run, 'runner_error', reply.message ?? 'The runner refused the plan.');
+        throw new Error(reply.message ?? reply.error ?? 'start failed');
+      }
+      leased = false;
+      this.#cs.updateRun(run.id, { status: 'running', started_at: new Date().toISOString(), attempts: 0, runner_workspace_id: local ? null : runner });
+      this.#changed();
+      this.#moved(run.id, 'queued');
+      this.kick(runner);
+      console.log(`[ci] ${run.id} started ${run.pipeline} on ${run.repo}@${shortSha(run.sha)} on the runner ${runner}`);
+      this.#opts.audit?.({ kind: 'ci.run_on_runner', actor: run.actor, userId: null, subject: `ci_run:${run.id}`, detail: { workspace: run.workspace_id, runner, labels, secrets: names, repo: run.repo, run: run.number, sha: shortSha(run.sha) } });
+    } catch (e) {
+      this.#retry(run, `runner ${runner}: ${(e as Error).message}`);
+    } finally {
+      // A lease handed over for a start that did not happen goes again (the runner's gc removes it after a day otherwise).
+      if (leased) await this.host.cp(runner, ['lease', run.id, '--drop']).catch(() => undefined);
+      const n = (this.#handing.get(runner) ?? 1) - 1;
+      if (n > 0) this.#handing.set(runner, n);
+      else this.#handing.delete(runner);
+    }
+  }
+
+  /** The commit into the runner's mirror (T-557): what the mirror already has is left out; nothing travels when it has the commit. */
+  async #sendCommit(run: RunRow, runner: string, mirror: string): Promise<void> {
+    const heads = await this.host.cp(runner, ['mirror', 'heads', mirror, '--sha', run.sha], { timeoutMs: 30_000 });
+    if (!heads.ok) throw new Error(heads.message ?? heads.error ?? 'the runner did not say what it has');
+    if (heads.has === true) return;
+    const haves = ((heads.heads as string[] | undefined) ?? []).slice(0, 50);
+    const made = await this.host.cp(run.workspace_id, ['repo', 'bundle', run.repo, run.sha, '--id', run.id, ...(haves.length ? ['--haves', haves.join(',')] : [])], { timeoutMs: 600_000 });
+    if (!made.ok) throw new Error(made.message ?? made.error ?? 'the bundle failed');
+    if (made.empty === true) return;
+    try {
+      let offset = 0;
+      for (let part = 0; ; part++) {
+        const chunk = await this.host.cp(run.workspace_id, ['repo', 'outbox', run.id, '--offset', String(offset), '--max', String(BUNDLE_CHUNK)], { timeoutMs: 60_000 });
+        if (!chunk.ok || typeof chunk.data !== 'string') throw new Error(chunk.message ?? chunk.error ?? 'the bundle could not be read');
+        const last = chunk.done === true;
+        const put = await this.host.cp(runner, ['mirror', 'put', mirror, run.id, run.sha, '--part', String(part), ...(last ? ['--last'] : []), '--bytes', String(Buffer.byteLength(chunk.data))], { stdin: chunk.data, timeoutMs: last ? 600_000 : 120_000 });
+        if (!put.ok) throw new Error(put.message ?? put.error ?? 'the runner refused the bundle');
+        if (last) return;
+        offset = Number(chunk.next);
+      }
+    } finally {
+      await this.host.cp(run.workspace_id, ['repo', 'outbox', run.id, '--drop']).catch(() => undefined);
     }
   }
 
@@ -857,7 +990,7 @@ export class CiService {
   async #archive(runId: string): Promise<void> {
     const row = this.#cs.run(runId);
     if (!row || row.archived) return;
-    const reply = await this.host.cp(row.workspace_id, ['archive', runId, '--head', String(CI_LIMITS.archiveHeadBytes), '--tail', String(CI_LIMITS.archiveTailBytes), '--total', String(CI_LIMITS.archiveRunBytes)], { timeoutMs: 30_000 });
+    const reply = await this.host.cp(execOf(row), ['archive', runId, '--head', String(CI_LIMITS.archiveHeadBytes), '--tail', String(CI_LIMITS.archiveTailBytes), '--total', String(CI_LIMITS.archiveRunBytes)], { timeoutMs: 30_000 });
     if (!reply.ok) throw new Error(reply.message ?? reply.error ?? 'archive failed');
     const redact = this.#redactor(row.workspace_id);
     const steps = (reply.steps as { job: string; step: number; size: number; head: string; tail: string | null; omitted: number }[] | undefined) ?? [];
@@ -921,7 +1054,7 @@ export class CiService {
 
   /** Housekeeping on a quiet poll: logs that could not be kept earlier, old runs, and the workspace's own cleanup. */
   async #maintenance(workspaceId: string): Promise<void> {
-    for (const row of this.#cs.unarchived(5).filter((r) => r.workspace_id === workspaceId)) await this.#archive(row.id).catch(() => undefined);
+    for (const row of this.#cs.unarchived(5).filter((r) => execOf(r) === workspaceId)) await this.#archive(row.id).catch(() => undefined);
     const now = Date.now();
     if (now - this.#lastPrune >= 60 * 60_000) {
       this.#lastPrune = now;
@@ -953,12 +1086,12 @@ export class CiService {
       return;
     }
     if (row.status !== 'running') throw new AppError('CONFLICT', 'That run is already over.');
-    const reply = await this.host.cp(row.workspace_id, ['cancel', row.id]).catch((e: unknown) => {
+    const reply = await this.host.cp(execOf(row), ['cancel', row.id]).catch((e: unknown) => {
       throw new AppError('SERVICE_UNAVAILABLE', (e as Error).message, { expose: true });
     });
     if (!reply.ok) throw fromReply(reply);
     this.#cs.updateRun(row.id, { ...who, ...(reason === 'superseded' ? { reason: 'superseded' as const } : {}) });
-    this.kick(row.workspace_id);
+    this.kick(execOf(row));
   }
 
   async rerun(id: string, actor = 'ui'): Promise<CiRun> {
@@ -1016,12 +1149,12 @@ export class CiService {
     if (this.#deciding.has(row.id)) throw new AppError('CONFLICT', 'Someone is deciding this right now.');
     this.#deciding.add(row.id);
     try {
-      await this.#running(row.workspace_id);
+      await this.#running(execOf(row));
       // Read again inside the lock: what the caller saw may have been decided meanwhile.
       const live = this.#cs.deployment(row.id, job);
       if (!live || live.approval !== 'waiting' || !live.gate_key) throw new AppError('CONFLICT', 'That job is not waiting for an approval.');
       const key = live.gate_key;
-      const reply = decision === 'approve' ? await this.#cp(row.workspace_id, ['approve', row.id, job, '--bytes', String(Buffer.byteLength(key))], { stdin: key }) : await this.#cp(row.workspace_id, ['approve', row.id, job, '--reject']);
+      const reply = decision === 'approve' ? await this.#cp(execOf(row), ['approve', row.id, job, '--bytes', String(Buffer.byteLength(key))], { stdin: key }) : await this.#cp(execOf(row), ['approve', row.id, job, '--reject']);
       if (!reply.ok) {
         if (reply.error === 'over' || reply.error === 'not_waiting') throw new AppError('CONFLICT', 'That job is not waiting any more.');
         throw fromReply(reply);
@@ -1229,6 +1362,8 @@ export class CiService {
       finishedAt: row.finished_at,
       durationMs: row.duration_ms,
       jobs,
+      runsOn: runsOnOf(row),
+      runnerWorkspaceId: row.runner_workspace_id ?? null,
     };
   }
 
@@ -1335,7 +1470,7 @@ export class CiService {
     const stream = live && live.offset === from ? live : { stream: this.#opts.streamFor?.(row.workspace_id) ?? new SessionStream(NO_VALUES), offset: from };
     let reply: CiReply;
     try {
-      reply = await this.host.cp(row.workspace_id, ['log', id, job, String(n), String(from)], { timeoutMs: 15_000 });
+      reply = await this.host.cp(execOf(row), ['log', id, job, String(n), String(from)], { timeoutMs: 15_000 });
     } catch {
       return { text: '', next: from, done: false, truncated: false, source: 'workspace' };
     }
@@ -1384,7 +1519,7 @@ export class CiService {
       sourcePath: row.source_path,
       connected: json<string[]>(row.connected, []),
       hooks: (['ok', 'outdated', 'missing'] as const).find((h) => h === row.hook_state) ?? 'unknown',
-      workspaceState: map.get(row.workspace_id) ?? 'gone',
+      workspaceState: map.get(execOf(row)) ?? 'gone',
       createdAt: row.created_at,
       upstream: upstreamView(row),
     };

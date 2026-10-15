@@ -62,6 +62,15 @@ export interface Plan {
   jobs: PlanJob[];
   /** The pipeline's `on.notify` (FR36): states a run reports to its session besides what it always does. The portal reads it; the runner does not. */
   notify?: string[];
+  /** `runs-on` labels (T-557): the portal picks the runner; the runner itself ignores this. */
+  runsOn?: string[];
+  /**
+   * Set by the portal when a runner executes the run for another workspace (T-557): the mirror (`m-<8 hex>-<remote>`) the commit was
+   * bundled into, cloned instead of `repo`; and `leased`: the run's secrets were handed over with `cp-ci lease`, so the supervisor reads
+   * them from the run's lease (removed when the run ends) instead of this workspace's Secrets & env files.
+   */
+  mirror?: string;
+  leased?: boolean;
 }
 
 /** One ref update a hook saw, as an event file (PRD FR5). */

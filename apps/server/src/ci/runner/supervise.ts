@@ -14,6 +14,7 @@ import { CI_LIMITS } from '../limits.js';
 import type { Plan, PlanJob, PlanStep } from '../plan.js';
 import { bareDir, ensureDir, git, inside, nowIso, runDir, sleep, writeAtomic } from './common.js';
 import { approvalPath, readJson, startTicks } from './runs.js';
+import { leaseDir, leaseRead, mirrorDir } from './remote.js';
 
 /** The masked value in a log (the portal's own redactor uses the same word). */
 const MASK = Buffer.from('[redacted]');
@@ -413,7 +414,9 @@ class Supervisor {
   /** A clean checkout of the commit from the bare repository, with hooks off. */
   async #checkout(work: string): Promise<void> {
     ensureDir(dirname(work));
-    const clone = await git(['clone', '--local', '--no-checkout', '--quiet', bareDir(this.plan.repo), work], { timeoutMs: 600_000 });
+    // A runner taking another workspace's run clones the mirror the portal filled (T-557).
+    const source = this.plan.mirror ? mirrorDir(this.plan.mirror) : bareDir(this.plan.repo);
+    const clone = await git(['clone', '--local', '--no-checkout', '--quiet', source, work], { timeoutMs: 600_000 });
     if (clone.code !== 0) throw new Error(`Checkout failed: ${clone.stderr.trim().split('\n')[0] ?? 'git clone failed'}`);
     const out = await git(['checkout', '--quiet', '--detach', this.plan.sha], { cwd: work, timeoutMs: 600_000 });
     if (out.code !== 0) throw new Error(`Checkout failed: ${out.stderr.trim().split('\n')[0] ?? 'git checkout failed'}`);
@@ -425,6 +428,8 @@ class Supervisor {
    * this process and the steps' environments, and are masked in their logs.
    */
   #secrets(job: PlanJob): Record<string, string> {
+    // On a runner the run's secrets are its lease (T-557), not this workspace's Secrets & env.
+    if (this.plan.leased) return Object.fromEntries(Object.entries(leaseRead(this.plan.runId, job.secrets)).map(([k, v]) => [k, v.endsWith('\n') ? v.slice(0, -1) : v]));
     const out: Record<string, string> = {};
     const etc = dirname(dirname(realpathSync(process.argv[1]!)));
     for (const name of job.secrets) {
@@ -633,5 +638,8 @@ export async function supervise(runId: string): Promise<void> {
     }
     sv.flush();
     writeFileSync(join(dir, 'supervisor.error'), `${(e as Error).stack ?? String(e)}\n`, { mode: 0o600 });
+  } finally {
+    // The lease lives as long as the run (T-557): its values are in this process's memory now, or no longer needed.
+    if (plan.leased) rmSync(leaseDir(runId), { recursive: true, force: true });
   }
 }
