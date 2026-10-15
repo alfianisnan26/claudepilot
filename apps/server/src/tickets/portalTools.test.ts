@@ -385,7 +385,7 @@ test('T-397: a worker comments on the ticket its spawn named and on its lead’s
     const before = r.tickets.get(UI, 'T-2').ticket;
     assert.equal((await err(w, 'ticket_update', { id: 'T-2', priority: 'urgent' }))?.code, 'FORBIDDEN', 'not an update');
     assert.equal((await err(w, 'ticket_close', { id: 'T-2', summary: 'done' }))?.code, 'FORBIDDEN', 'not a close');
-    assert.ok(await err(w, 'ticket_claim_next', { id: 'T-2' }), 'not a claim');
+    assert.equal(r.out(await r.h.call(w.secret, 'ticket_claim_next', { id: 'T-2' })).ticket, null, 'not a claim: nothing to claim');
     const after = r.tickets.get(UI, 'T-2').ticket;
     assert.deepEqual([after.status, after.priority, after.assignee], [before.status, before.priority, { kind: 'session', sessionId: 'lead' }], 'the lead’s ticket is unchanged');
 
