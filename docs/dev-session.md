@@ -140,7 +140,16 @@ scripts/job-run.sh -- 'cd apps/server && node --import tsx --test src/ci/jobRun.
 scripts/job-run.sh --repo konfersi:platform/konfersi-backend --ref <branch> --also platform/konfersi-shared -- 'npx vitest run'   # platform/, not the manifest's stale shared/
 scripts/job-run.sh --artifacts test-results --out /tmp/cp-shots -- 'npx playwright test'   # files back, at most 4 MiB compressed
 scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
+# A test stage the workspace image lacks (Python, pytest): build it once, then run the command in it (T-379)
+scripts/image-build.sh --repo konfersi:<org>/<repo> --ref <branch> --dockerfile containers/compute/Dockerfile --destination registry.int.isnan.me/konfersi/<name>:<tag>
+scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.int.isnan.me/konfersi/<name>:<tag> -- 'python -m pytest -q tests/'
 ```
+
+- **`--image <ref>` (T-379):** the image of the command container only. Allowed: `registry.int.isnan.me/claudepilot/<path>` or
+  `registry.int.isnan.me/konfersi/<path>` (the paths `scripts/image-build.sh` pushes to), pinned by `:<tag>` or `@sha256:<digest>`; any other
+  registry, path or odd character is refused (rc 2) before any kubectl call. The `fetch` container, the only one with the credentials, keeps the
+  workspace image, and the checkout reaches the command container on the shared `/tmp`, as without the option. The image may have no node, npm
+  or git: the npm steps are skipped with a note (`--steps npm-ci` is refused) and `--against` is refused. Without `--image` nothing changes.
 
 - **The code:** `--repo` and `--ref` default to the current folder's origin and HEAD (it must be on the remote). ClaudePilot comes from GitHub
   (the npm token for `@isnanme` in the Job's Secret), Konfersi from Gitea (git's credential helper gives the token; in the Job a credential helper

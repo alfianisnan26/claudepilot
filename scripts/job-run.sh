@@ -19,6 +19,11 @@
 #     --keep-tests <paths>                              with --against: these files (comma separated) are taken from --ref onto the other ref
 #     --also <org>/<repo>[@<ref>]                     one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg
 #     --steps npm-ci|none                               before the command (default npm-ci, at the root of the repository and of each --also clone that has a package-lock.json)
+#     --image <ref>                                     (T-379) the COMMAND container's image, for a test stage the workspace image lacks (Python, pytest):
+#                                                       registry.int.isnan.me/claudepilot/<path> or /konfersi/<path>, as built by scripts/image-build.sh,
+#                                                       pinned by :<tag> or @sha256:<digest>; anything else is refused before any kubectl call. The fetch
+#                                                       container (the only one with credentials) keeps the workspace image. The image may have no
+#                                                       node, npm or git: the npm steps are skipped (--steps npm-ci is refused) and --against is refused
 #     --artifacts <paths>  --out <dir>                  files in the repository (comma separated) copied back into <dir> (default
 #                                                       ./job-run-artifacts/<job>); at most JOB_RUN_ARTIFACT_MAX bytes compressed (4 MiB)
 #     --timeout <s>                                     the Job's deadline once it runs (default 3600, at most 5400)
@@ -75,17 +80,18 @@ case "${1:-}" in
     echo "$n job(s) stopped"; exit 0 ;;
 esac
 
-repo=; ref=; against=; keep=; steps=npm-ci; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=
+repo=; ref=; against=; keep=; steps=npm-ci; steps_given=; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; run_image=; image_given=
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role) [ $# -ge 2 ] || die "$1 needs a value" ;;&
+    --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role|--image) [ $# -ge 2 ] || die "$1 needs a value" ;;&
+    --image) run_image=$2; image_given=1; shift 2 ;;
     --big) big=1; shift ;;
     --repo) repo=$2; shift 2 ;;
     --ref) ref=$2; shift 2 ;;
     --against) against=$2; shift 2 ;;
     --keep-tests) keep=${2//,/ }; shift 2 ;;
     --also) also+=("$2"); shift 2 ;;
-    --steps) steps=$2; shift 2 ;;
+    --steps) steps=$2; steps_given=1; shift 2 ;;
     --artifacts) artifacts=${2//,/ }; shift 2 ;;
     --out) out=$2; shift 2 ;;
     --timeout) timeout=$2; shift 2 ;;
@@ -97,6 +103,17 @@ done
 [ $# -gt 0 ] || die "usage: scripts/job-run.sh [--repo ...] [--ref ...] -- <command>"
 if [ $# -eq 1 ]; then cmd=$1; else cmd=$(printf '%q ' "$@"); fi
 [[ $steps =~ ^(npm-ci|none)$ ]] || die "--steps: npm-ci or none"
+# --image (T-379): the command container's image, from the internal registry only, under the paths scripts/image-build.sh pushes to
+# (claudepilot/ and konfersi/), pinned by a tag or a sha256 digest. Checked here, before any kubectl call. The fetch container (the only one
+# with the credentials) keeps the workspace image; the command's image never sees them.
+if [ -n "$image_given" ]; then
+  img_re="^${registry//./\\.}/(claudepilot|konfersi)/[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[0-9a-f]{64})\$"
+  [[ $run_image =~ $img_re ]] || die "--image: an image on $registry under claudepilot/ or konfersi/ (as built by scripts/image-build.sh), pinned by a :tag or @sha256:<digest> (got $run_image)"
+  # No node, npm or git is assumed in a foreign image: the npm steps are skipped, and the proof (it needs git in the command container) is refused.
+  [ -z "$steps_given" ] || [ "$steps" = none ] || die "--image: the image may have no node or npm; use --steps none (or leave --steps out)"
+  [ -z "$against" ] || die "--image cannot be used with --against (the proof needs git in the command container)"
+  steps=none; echo "job-run: note: --image given: the npm steps are skipped (the image may have no node)" >&2
+fi
 { [[ $timeout =~ ^[0-9]+$ ]] && [ "$timeout" -ge 60 ] && [ "$timeout" -le 5400 ]; } || die "--timeout: 60 to 5400 seconds"
 for a in $artifacts; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./*-]*$ && ! $a =~ (^|/)\.\.(/|$) ]] || die "--artifacts: paths inside the repository (got $a)"; done
 [[ -z $against || ( $against =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ && ! $against =~ \.\. ) ]] || die "--against: a branch or commit name (got $against)"
@@ -203,7 +220,7 @@ printf '%s\n' "$secret" | kubectl -n "$ns" create secret generic "$job" --from-e
 unset secret
 sed -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" \
     -e "s#__MEMORY__#$memory#g" -e "s#__TMP_SIZE__#$tmp_size#" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
-    -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" \
+    -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__RUN_IMAGE__#${run_image:-$image}#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" \
     -e "s#__AGAINST__#$against#" -e "s#__KEEP__#$keep#" -e "s#__STEPS__#$steps#" -e "s#__ARTIFACTS__#$artifacts#" -e "s#__ARTMAX__#$art_max#" -e "s#__CMD__#$(printf '%s' "$cmd" | base64 -w0)#" \
     "$here/deploy/k3s-build/job-run.yaml" | kubectl apply -f - >/dev/null
 # The Secret belongs to the Job: whoever deletes the Job (its TTL, --stop, a person) deletes the token with it.

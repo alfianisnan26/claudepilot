@@ -11,6 +11,8 @@
 # its log and exit code there. The `run` container has NO secret: it prints that log, runs the install scripts npm ci left out
 # (`npm rebuild` and the package's own lifecycle scripts), then the command. --against is fetched by `fetch` too (and, when its lockfile
 # differs, its packages go into npm's cache, so `run` installs them offline).
+# --image (T-379): __RUN_IMAGE__ is the command container's image, the workspace image (= __IMAGE__) unless job-run.sh was given an allow-listed
+# internal-registry image. `fetch` always keeps __IMAGE__, so the credentials never meet another image; the checkout reaches `run` on /tmp.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -151,7 +153,7 @@ spec:
       containers:
         # T-401: no Secret, no secretKeyRef, no envFrom here.
         - name: run
-          image: __IMAGE__
+          image: __RUN_IMAGE__
           env:
             - {name: JR_REPO_URL, value: "__REPO_URL__"}
             - {name: JR_REF, value: "__REF__"}

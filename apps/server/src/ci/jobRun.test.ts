@@ -546,6 +546,63 @@ test('usage errors: nothing is created', () => {
   assert.equal(w.calls(), '');
 });
 
+test('T-379 --image: an allowed ref is the command container\'s image only; fetch keeps the workspace image; npm steps skipped; no --image changes nothing', () => {
+  const ws = 'registry.test/claudepilot/workspace:1-dev-1';
+  const digest = `sha256:${hex(32)}`;
+  const base = ['--repo', 'claudepilot', '--ref', 'main'];
+  const imagesOf = (text: string) => { const m = yamlLoad(text) as Manifest; return { fetch: m.spec.template.spec.initContainers?.[0]?.image, run: container(m).image, m }; };
+  const norm = (text: string) => text.replace(/claudepilot-job-[0-9a-f]{8}/g, 'JOB').replace(/job-run\/owner: ".*"/, 'OWNER');
+  // No --image: both containers on the workspace image, the manifest exactly as before (the only change in the template is the placeholder's name).
+  const w0 = world();
+  assert.equal(w0.run([...base, '--steps', 'none', '--', 'true']).code, 0);
+  const none = w0.applied1();
+  assert.deepEqual([imagesOf(none).fetch, imagesOf(none).run], [ws, ws]);
+  assert.ok(!/__[A-Z_]+__/.test(none.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')));
+  for (const ref of ['registry.int.isnan.me/claudepilot/py-test:abc123', 'registry.int.isnan.me/konfersi/metocean/test-stage:req-9f2', `registry.int.isnan.me/claudepilot/py-test@${digest}`]) {
+    const w = world();
+    const r = w.run([...base, '--image', ref, '--', 'python -m pytest -q']);
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /the npm steps are skipped/);
+    const text = w.applied1();
+    const { fetch, run, m } = imagesOf(text);
+    assert.equal(run, ref, 'the command container runs the image');
+    assert.equal(fetch, ws, 'the fetch container (the credentials) keeps the workspace image');
+    assert.equal(envOf(m).JR_STEPS, 'none');
+    assert.equal(envOf(m).NODE_AUTH_TOKEN, undefined);
+    assert.ok(!JSON.stringify(container(m)).includes('secretKeyRef'), 'no Secret in the command container');
+    // Against the same run without --image, only the run container's image line differs.
+    const a = norm(none).split('\n'), b = norm(text).split('\n');
+    assert.equal(a.length, b.length);
+    const diff = a.map((l, i) => [l, b[i]]).filter(([x, y]) => x !== y);
+    assert.deepEqual(diff, [[`          image: ${ws}`, `          image: ${ref}`]]);
+  }
+  // The default step is skipped too; an explicit npm-ci is refused.
+  const w1 = world();
+  assert.equal(w1.run([...base, '--image', 'registry.int.isnan.me/claudepilot/py:1', '--steps', 'npm-ci', '--', 'true']).code, 2);
+  assert.equal(w1.calls(), '');
+});
+
+test('T-379 --image: another registry, a path outside the prefix, an untagged or odd reference, --against: refused before any kubectl call', () => {
+  const w = world();
+  const bad = [
+    'docker.io/library/python:3.11', 'registry.evil.example/claudepilot/x:1', 'registry.int.isnan.me.evil.example/claudepilot/x:1',
+    'registry.int.isnan.me/other/x:1', 'registry.int.isnan.me/claudepilot', 'registry.int.isnan.me/claudepilot/x', 'registry.int.isnan.me/claudepilot/x:latest;id',
+    'registry.int.isnan.me/claudepilot/x:1 --privileged', 'registry.int.isnan.me/claudepilot/x:$(id)', 'registry.int.isnan.me/claudepilot/../other/x:1',
+    'registry.int.isnan.me/claudepilot/X:1', 'registry.int.isnan.me/claudepilot/x@sha256:abc', 'registry.int.isnan.me/claudepilot/x:1\nimage: y', 'registry.int.isnan.me/claudepilot/x:1#y',
+    'http://registry.int.isnan.me/claudepilot/x:1', 'registry.int.isnan.me/konfersi//x:1', '',
+  ];
+  for (const ref of bad) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', ref, '--', 'true']);
+    assert.equal(r.code, 2, `${JSON.stringify(ref)}: ${r.out}`);
+    assert.match(r.out, /--image: an image on registry\.int\.isnan\.me under claudepilot\/ or konfersi\//);
+  }
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', 'registry.int.isnan.me/claudepilot/x:1', '--against', 'abc1234', '--', 'true']);
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /--image cannot be used with --against/);
+  assert.equal(w.calls(), '', 'kubectl was never called');
+  assert.deepEqual(w.applied(), []);
+});
+
 test('the Job\'s own script: checkout, the command\'s exit code, the artifacts block; a ref not on the remote says push it first', () => {
   const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-pod-'));
   roots.push(root);
