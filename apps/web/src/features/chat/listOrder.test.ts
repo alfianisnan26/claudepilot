@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildListView, type ChatSession } from '@portal/contracts';
-import { canFold, chipCounts, defaultChip, ofProgram, programCounts, programInput, statusGroup, statusOf, STATUS_ORDER, visibleChips } from './listOrder';
+import { canFold, chipCounts, defaultChip, ofProgram, programCounts, programInput, statusGroup, statusOf, STATUS_ORDER, visibleChips, withChange, withDefaultChip, type ChipChoice } from './listOrder';
 
 const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 let n = 0;
@@ -62,6 +62,25 @@ test('the page opens on the first chip with sessions, All when there is none', (
   assert.equal(defaultChip(chipCounts([])), 'all');
   assert.equal(defaultChip(chipCounts([s({ state: 'waiting', waiting: 1, archivedAt: pin })])), 'all', 'archived sessions do not count');
   assert.equal(defaultChip(chipCounts([s({ state: 'ended', endedReason: 'credential: a key in a tool result' })])), 'attention', 'ended for safety needs you');
+});
+
+test('T-321: the default chip follows the counts until the person picks one, and a pending default never undoes the pick', () => {
+  const waiting = s({ state: 'waiting', waiting: 1 });
+  const idle = s();
+  const start: ChipChoice = { filter: 'attention', archived: false, picked: false };
+  // Before a pick the default applies, and moves with the counts.
+  assert.equal(withDefaultChip(start, chipCounts([idle])).filter, 'idle');
+  assert.equal(withDefaultChip(withDefaultChip(start, chipCounts([idle])), chipCounts([idle, waiting])).filter, 'attention');
+  // The updates in the order React runs them when All is tapped right after the list first shows: the tap's, then the default of the
+  // effect still pending from the render before the tap (its "not picked" is stale). The tap stands.
+  const counts = chipCounts([idle, waiting]);
+  const queue = [(v: ChipChoice) => withChange(v, { archived: false, filter: 'all' }), (v: ChipChoice) => withDefaultChip(v, counts)];
+  const after = queue.reduce((v, update) => update(v), withDefaultChip(start, counts));
+  assert.deepEqual(after, { filter: 'all', archived: false, picked: true });
+  // Archived is a pick too; a search is not.
+  assert.equal(withChange(start, { archived: true, filter: 'all' }).picked, true);
+  assert.equal(withChange({ ...start, query: 'x' }, { query: 'y' }).picked, false);
+  assert.equal(withDefaultChip(withChange(start, { archived: true }), chipCounts([idle])).filter, 'attention', 'kept as it was, not re-defaulted');
 });
 
 test('a chip shows only when it has sessions; Pinned and All always, the chip you are on stays, Archived before All', () => {
