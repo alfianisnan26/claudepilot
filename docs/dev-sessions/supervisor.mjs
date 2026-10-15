@@ -523,8 +523,49 @@ async function denyStaleToolApprovals(cur) {
 async function ensureTrust() {
   for (const folder of new Set(TRACKS.map((t) => t.folder ?? MAIN))) await ensureTrustOf(folder);
 }
+async function ensureWorktreeTrust(sessions) {
+  // A crew worker's worktree (2026-10-15: a lane stood still on FOLDER_UNTRUSTED after its branch merged integration): its rules come from
+  // its own branch, which a worker can change, so it is trusted again ONLY when its settings hash is one the portal already trusted for this
+  // workspace (seen trusted on a scan: reviewed content) and it loads nothing but permission rules.
+  const leads = new Set(sessions.filter((s) => TRACKS.some((t) => (s.title ?? '').startsWith(t.title))).map((s) => s.id));
+  const folders = new Set(sessions.filter((s) => s.state !== 'ended' && leads.has(s.parentId) && s.cwd).map((s) => s.cwd));
+  for (const folder of folders) await ensureTrustOfWorktree(folder);
+}
+/** Settings hashes seen trusted on this workspace, in a file of their own (the round's state is written back whole), so a restart remembers them. */
+const TRUSTED_FILE = join(STATE_DIR, 'trusted-hashes.json');
+const knownTrusted = new Set((() => {
+  try {
+    return existsSync(TRUSTED_FILE) ? JSON.parse(readFileSync(TRUSTED_FILE, 'utf8')) : [];
+  } catch {
+    return [];
+  }
+})());
+function rememberTrusted(hash) {
+  if (!hash || knownTrusted.has(hash)) return;
+  knownTrusted.add(hash);
+  writeFileSync(TRUSTED_FILE, JSON.stringify([...knownTrusted].slice(-200)));
+}
+/** Whether a worktree's scan may be trusted without a person: rules only, and content the portal trusted before. */
+function worktreeTrustable(scan, known) {
+  if (!scan || scan.trusted || scan.empty) return false;
+  if (scan.hooks?.length || scan.mcpServers?.length || scan.plugins?.length || scan.envNames?.length) return false;
+  return known.has(scan.hash);
+}
+async function ensureTrustOfWorktree(folder) {
+  const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`)).data;
+  if (!scan) return;
+  if (scan.trusted) return rememberTrusted(scan.hash);
+  if (!worktreeTrustable(scan, knownTrusted)) {
+    if (!scan.empty && !trustLogged.has(scan.hash)) log(`folder trust: ${folder} has settings never trusted here (or loads more than rules): left for the coordinator`), trustLogged.add(scan.hash);
+    return;
+  }
+  if (DRY) return log(`[dry] would trust the worktree ${folder} (settings already trusted elsewhere)`);
+  const tr = await api('POST', '/api/chat/trust', { workspaceId: WORKSPACE, folder: scan.folder ?? folder, hash: scan.hash });
+  log(tr.error ? `folder trust: refused: ${tr.error.message}` : `folder trust: the worktree ${folder} has settings already trusted here (${scan.allowRules} rules): trusted`);
+}
 async function ensureTrustOf(folder) {
   const scan = (await api('GET', `/api/chat/trust/scan?workspaceId=${encodeURIComponent(WORKSPACE)}&folder=${encodeURIComponent(folder)}`)).data;
+  if (scan?.trusted) rememberTrusted(scan.hash);
   if (!scan || scan.trusted || scan.empty) return;
   if (scan.hooks?.length || scan.mcpServers?.length || scan.plugins?.length || scan.envNames?.length) {
     if (!trustLogged.has(scan.hash)) log(`folder trust: the project settings now load hooks, MCP servers, plugins or env: a person must look (${folder})`), trustLogged.add(scan.hash);
@@ -533,6 +574,7 @@ async function ensureTrustOf(folder) {
   if (DRY) return log(`[dry] would trust ${folder} (${scan.allowRules} permission rules, nothing else)`);
   const tr = await api('POST', '/api/chat/trust', { workspaceId: WORKSPACE, folder: scan.folder ?? folder, hash: scan.hash });
   log(tr.error ? `folder trust: refused: ${tr.error.message}` : `folder trust: the permission rules of ${folder} changed (${scan.allowRules} rules, no hooks, servers, plugins or env): trusted again`);
+  if (!tr.error) rememberTrusted(scan.hash);
 }
 const trustLogged = new Set();
 
@@ -660,6 +702,7 @@ async function watch({ rounds = Infinity } = {}) {
       continue;
     }
     goodRounds++;
+    await ensureWorktreeTrust(list).catch((e) => log(`folder trust: could not check the worktrees: ${e.message}`));
     const steady = badAt === null || (goodRounds >= STEADY_ROUNDS && Date.now() - badAt >= HEALTH_QUIET_MIN * 60_000);
     if (netDownSince) {
       const mins = Math.round((Date.now() - netDownSince) / 60_000);
@@ -886,7 +929,7 @@ async function watch({ rounds = Infinity } = {}) {
 
 /* ---------- Go ---------- */
 
-export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, COMPACT, COMPACT_LANE, LANES };
+export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, compactLanes, worktreeTrustable, COMPACT, COMPACT_LANE, LANES };
 if (IS_MAIN) {
   process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
   process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));
