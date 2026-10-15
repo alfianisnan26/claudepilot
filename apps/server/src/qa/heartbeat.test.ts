@@ -31,7 +31,8 @@ async function rig() {
       const path = req.url ?? '';
       res.setHeader('content-type', 'application/json');
       if (req.method === 'GET' && path.startsWith('/repos/o/r/issues?')) {
-        res.end(JSON.stringify(state.issues.filter((i) => i.state === 'open').map((i) => ({ number: i.number }))));
+        const label = new URL(path, 'http://x').searchParams.get('labels') ?? '';
+        res.end(JSON.stringify(state.issues.filter((i) => i.state === 'open' && i.labels.includes(label)).map((i) => ({ number: i.number }))));
       } else if (req.method === 'POST' && path === '/repos/o/r/issues') {
         state.writes++;
         const n = state.issues.length + 1;
@@ -88,6 +89,36 @@ test('two misses open exactly one issue, a third opens no second, recovery close
     assert.equal(r.state.issues[0]!.state, 'closed');
     assert.equal(r.state.issues[0]!.comments.length, 1);
     assert.match(await r.run(), /result: up\b/);
+  } finally { r.stop(); }
+});
+
+test('a name that does not resolve is blind: one heartbeat-blind issue, no portal-down, no second, closed when the portal is seen', async () => {
+  const r = await rig();
+  const blindUrl = ['--url', 'http://heartbeat-nohost.invalid/healthz'];
+  try {
+    const out = await r.run(blindUrl);
+    assert.match(out, /result: blind-opened/);
+    assert.match(out, /blind: no answer \((ENOTFOUND|EAI_AGAIN)\)/);
+    assert.equal(r.state.issues.length, 1);
+    assert.deepEqual(r.state.issues[0]!.labels, ['heartbeat-blind']);
+    assert.match(await r.run(blindUrl), /result: blind-already-open/);
+    assert.equal(r.state.issues.length, 1);
+    r.state.healthy = true;
+    assert.match(await r.run(), /result: up/);
+    assert.equal(r.state.issues[0]!.state, 'closed');
+    assert.equal(r.state.issues[0]!.comments.length, 1);
+    assert.equal(r.state.issues.length, 1);
+  } finally { r.stop(); }
+});
+
+test('a resolved host that answers 503 twice is down, not blind, and it closes an open blind issue', async () => {
+  const r = await rig();
+  try {
+    assert.match(await r.run(['--url', 'http://heartbeat-nohost.invalid/healthz']), /result: blind-opened/);
+    assert.match(await r.run(), /result: down-opened/);
+    assert.equal(r.state.issues.length, 2);
+    assert.equal(r.state.issues[0]!.state, 'closed');
+    assert.deepEqual(r.state.issues[1]!.labels, ['portal-down']);
   } finally { r.stop(); }
 });
 
