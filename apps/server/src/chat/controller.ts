@@ -113,7 +113,7 @@ import { TurnCost } from './turnCost.js';
 import { redactSecrets, stripUnsafe } from '../portalmcp/sanitize.js';
 import { NO_VALUES, SessionStream, ValueRedactor } from './valueRedact.js';
 import { MessageRate, pickSpawnClaude, spawnProblem, SUBAGENT_TOOLS, WORKER_REPORTS, workerLimits, type AgentCaps, type SpawnClaudeWhy, type WorkerLimitsAsk, type WorkerReport } from './agents.js';
-import { capError, makeRoom, SESSION_CAP, weightOf, type LiveCaps } from './caps.js';
+import { capError, makeRoom, SESSION_CAP, slotWaitText, weightOf, type LiveCaps } from './caps.js';
 import { defaultBranch, Worktrees, type MadeWorktree } from './worktrees.js';
 import { ChatStore, claudeSessionOf, EVENT_TEXT_MAX, sessionCwd, type ChatSessionPatch, type ChatSessionRow, type InputState } from './store.js';
 import { BtwEngine, readBtwConfig, type BtwHost } from './btw.js';
@@ -183,6 +183,9 @@ const CONTROL_TIMEOUT_MS = 15_000;
 const EXEC_TIMEOUT_MS = 30_000;
 /** Idle this long, with nothing open or running, and a session's process sleeps (PRD FR38). */
 const IDLE_SLEEP_MS = 30 * 60_000;
+/** T-417: a start or wake at a full live cap waits this long for a slot, looking again every SLOT_POLL_MS. */
+const SLOT_WAIT_MS = 15 * 60_000;
+const SLOT_POLL_MS = 1000;
 /** How often live sessions' processes are checked. */
 const LIVENESS_MS = 60_000;
 /** How long a workspace's secret values are kept in memory before they are read again. */
@@ -493,6 +496,12 @@ export class ChatController {
   /** Per session: the permission mode the stream must report. */
   readonly #modes = new Map<string, ModeTrack>();
   readonly #idleTimers = new Map<string, NodeJS.Timeout>();
+  /** T-417: the starts and wakes waiting for a slot under the live cap, first come first served. */
+  readonly #slotQueue: { workspaceId: string }[] = [];
+  /** T-417: per session waiting for a slot, why (what `slotWait` shows). */
+  readonly #slotWaits = new Map<string, string>();
+  /** T-417: the sessions whose Bypass is being put back after a wake (a retry inside it wakes it again: never twice). */
+  readonly #wakeBypass = new Set<string>();
   /** Per session: the running cost its process last reported, so each `result` can say what its turn cost. */
   readonly #costBase = new Map<string, number>();
   /** T-343: per session, the running turn's calls for the cost estimate until its result (turnCost.ts), and the estimate last shown. */
@@ -664,7 +673,8 @@ export class ChatController {
   launchEnv?: (workspaceId: string) => Record<string, string | undefined>;
   /**
    * Installed by the owner: how many sessions may be awake in a workspace and in total (FR39), read each time a session starts or
-   * wakes. Unset, no cap (tests). Over a cap, the longest-idle session sleeps to make room; with none that can, the start is refused.
+   * wakes. Unset, no cap (tests). Over a cap, an idle worker sleeps to make room, else an idle chat without workers, never a lead (T-417);
+   * with none that can, the start waits for a slot (`slotWaitMs`) and is refused naming the cap only when that runs out.
    */
   liveCaps?: () => LiveCaps;
   /** Installed by the owner: what a session on a pool's keys may spend before Claude Code stops it (`--max-budget-usd`), in dollars. Unset: $10. */
@@ -729,6 +739,10 @@ export class ChatController {
   };
   /** How long a control request waits for Claude Code's answer. */
   controlTimeoutMs = CONTROL_TIMEOUT_MS;
+  /** T-417: how long a start or a wake waits for a slot under the live cap before it is refused naming the cap. */
+  slotWaitMs = SLOT_WAIT_MS;
+  /** T-417: how often a start that waits for a slot looks again. */
+  slotPollMs = SLOT_POLL_MS;
   /** How long one short `cp-session` command may run. */
   execTimeoutMs: number;
 
@@ -986,12 +1000,14 @@ export class ChatController {
    * Bypass ended with its process: a wake, a resume or a restart starts on the start mode, never Bypass (FR20, FR38), so the
    * session stops showing it at once, says so (except when it ended) and the audit trail records it.
    */
-  #bypassOver(sessionId: string, how: 'sleep' | 'stopped' | 'ended'): void {
+  #bypassOver(sessionId: string, how: 'sleep' | 'stopped' | 'ended', kept = false): void {
     const row = this.#chat.row(sessionId);
     if (!row || row.mode !== 'bypassPermissions') return;
     this.#chat.patchSession(sessionId, { mode: START_MODE });
-    if (how !== 'ended') this.#note(sessionId, how === 'sleep' ? 'Bypass turned off after sleep.' : 'Bypass turned off: Claude Code stopped.');
-    this.#chat.addAudit({ severity: 'info', kind: 'bypass.left', sessionId, workspaceId: row.workspace_id, actor: 'portal', detail: { why: how } });
+    // T-417: a lead's sleep keeps it (`kept`, the wake puts it back through `#keepBypass` and every gate it checks).
+    const said = how === 'sleep' ? (kept ? 'Bypass paused for sleep: it comes back at the wake if the policy still allows it.' : 'Bypass turned off after sleep.') : 'Bypass turned off: Claude Code stopped.';
+    if (how !== 'ended') this.#note(sessionId, said);
+    this.#chat.addAudit({ severity: 'info', kind: 'bypass.left', sessionId, workspaceId: row.workspace_id, actor: 'portal', detail: { why: how, ...(kept ? { kept: true } : {}) } });
   }
 
   /** (Re)schedules the idle check of a live, idle session; any other state cancels it. */
@@ -1051,7 +1067,7 @@ export class ChatController {
     this.#forget(sessionId, 'The session went to sleep.');
     this.#chat.patchSession(sessionId, { process: 'asleep' });
     if (this.#chat.endRunningTasks(sessionId)) this.#emitTasks(sessionId); // none should be (it sleeps only when none run); never left running
-    this.#bypassOver(sessionId, 'sleep');
+    this.#bypassOver(sessionId, 'sleep', this.#keptLead(now));
     this.#emitSession(sessionId);
   }
 
@@ -1224,6 +1240,8 @@ export class ChatController {
     const moving = this.#moving.get(session.id);
     let out = moving ? { ...session, switching: { ...moving } } : session;
     if (this.#restarting.has(session.id)) out = { ...out, restarting: true };
+    const slotWait = this.#slotWaits.get(session.id);
+    if (slotWait) out = { ...out, slotWait };
     const change = this.#configChange(session);
     if (change) out = { ...out, configChangedAt: change.at, configChanged: change };
     // One definition of working (T-41): the main turn runs, or a task of its live process does. The stored state stays the turn's (what
@@ -1450,7 +1468,8 @@ export class ChatController {
     }
     // Asked again: the pool may have changed while the host was checked. The launch asks once more.
     this.#requireEligible(workspaceId);
-    await this.#slot(workspaceId, null);
+    // T-417: the cap full with nothing that may sleep: the session is made and its start waits for a slot (below), never refused at once.
+    const full = await this.#tryRoom(workspaceId, null);
     const id = randomUUID();
     // Bypass capability (FR20): only a person's own opt-in, only where the policy allows it, never inherited or granted to another caller.
     let bypassCapable = false;
@@ -1506,8 +1525,40 @@ export class ChatController {
       this.#chat.addAudit({ severity: 'info', kind: 'agent.spawned', sessionId: id, workspaceId, actor, detail: { parent: parentId, ...(opts.spawn ? { spawn: opts.spawn } : {}), ...(limits ? { limits } : {}) } });
     }
     if (bypassCapable) this.#chat.addAudit({ severity: 'medium', kind: 'bypass.capable', sessionId: id, workspaceId, actor, detail: { how: 'start' } });
+    if (full) return this.#queueStart(id, installed, full);
     void this.#startProcess(id, { checked: installed }).catch(() => undefined);
     return session;
+  }
+
+  /**
+   * T-417: a new session at a full cap with nothing that may sleep: it doesn't count as running (asleep, no process yet) and its start
+   * waits for a slot (`#slot`), showing why at once, in what this returns too. A message sent meanwhile waits for that start (it is the
+   * session's lifecycle work). When the wait runs out it reads Interrupted with the cap's reason, and a later message starts it.
+   */
+  #queueStart(id: string, checked: boolean, full: { scope: 'workspace' | 'total'; limit: number; running: number }): ChatSession {
+    const row = this.#chat.row(id)!;
+    this.#chat.patchSession(id, { process: 'asleep' });
+    this.#showSlotWait(id, slotWaitText(full.scope, full.limit, full.running, row.workspace_id));
+    const op = (async () => {
+      try {
+        await this.#slot(row.workspace_id, this.#chat.row(id) ?? row);
+      } catch (e) {
+        const now = this.#chat.row(id);
+        if (now && now.state !== 'ended' && now.process !== 'live') {
+          this.#chat.patchSession(id, { state: 'interrupted', process: 'gone', endedReason: this.#message(e) });
+          this.#emitSession(id);
+        }
+        return;
+      }
+      if (this.#busy.get(id) === held) this.#busy.delete(id);
+      await this.#startProcess(id, { checked }).catch(() => undefined);
+    })();
+    const held = op.catch(() => undefined);
+    this.#busy.set(id, held);
+    void held.finally(() => {
+      if (this.#busy.get(id) === held) this.#busy.delete(id);
+    });
+    return this.#decorate(this.#chat.get(id)!);
   }
 
   /**
@@ -2885,11 +2936,12 @@ export class ChatController {
    * trail records `bypass.left` (`<how>_failed`). The policy turning Bypass off wins at any point. Never throws.
    * The one place a deliberate relaunch puts Bypass back (T-256): the manual Move, the auto move engine and the supervisor's
    * `/switch` (all through `switchClaude`), a Restart, and T-136's recover in place. The transcript says which way it went, in one form:
-   * "Bypass kept after the move." or "Bypass not kept after the move: <why>." (never pretended). A wake from sleep is not one of
-   * them: FR20 and FR38 keep it off there ("Bypass turned off after sleep."), and nothing here changes that.
+   * "Bypass kept after the move." or "Bypass not kept after the move: <why>." (never pretended). A wake from sleep is one of them only for
+   * a lead whose sleep kept it (T-417, `wake`: the owner's order, chat-sessions FR20): there, besides every check below, the person's own
+   * entry for this chat must be on record with its acknowledgement and a fresh server code. Any other wake keeps FR20/FR38: off after sleep.
    */
-  async #keepBypass(sessionId: string, how: 'move' | 'restart' | 'recover'): Promise<void> {
-    const after = how === 'move' ? 'after the move' : how === 'restart' ? 'after the restart' : 'after the recovery';
+  async #keepBypass(sessionId: string, how: 'move' | 'restart' | 'recover' | 'wake'): Promise<void> {
+    const after = how === 'move' ? 'after the move' : how === 'restart' ? 'after the restart' : how === 'wake' ? 'after the wake' : 'after the recovery';
     const drop = (why: string, text: string) => {
       const row = this.#chat.row(sessionId);
       if (!row || row.state === 'ended') return;
@@ -2905,6 +2957,7 @@ export class ChatController {
       if (row.mode === 'bypassPermissions') this.#chat.patchSession(sessionId, { mode: START_MODE });
       if (!this.#bypassAllowed()) return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
       if (row.bypass_capable !== 1) return drop('not_capable', `Bypass not kept ${after}: this session wasn’t started to allow Bypass.`);
+      if (how === 'wake' && !this.#personEntered(sessionId)) return drop('not_confirmed', `Bypass not kept ${after}: no entry by a person with the confirmation and the server code is on record for this chat.`);
       try {
         await this.#setBypass(sessionId);
       } catch {
@@ -2948,6 +3001,21 @@ export class ChatController {
     } catch (e) {
       drop(`${how}_failed`, `Bypass not kept ${after}: ${cliMessage(this.#message(e))}.`);
     }
+  }
+
+  /**
+   * T-417: a person entered Bypass in this chat through `enterBypass`, and its record says the acknowledgement was ticked and the server
+   * code was fresh (the newest entry by a person counts; the portal's own keeps after it are not one).
+   */
+  #personEntered(sessionId: string): boolean {
+    const entry = this.#chat.audit({ kind: 'bypass.entered', sessionId, limit: 500 }).find((a) => a.actor === CHAT_ACTOR_UI);
+    return entry?.detail.acknowledged === true && entry.detail.reauth === 'fresh';
+  }
+
+  /** T-417: the newest Bypass record of this chat is its sleep that kept it (a lead's), so its wake puts it back through `#keepBypass`. */
+  #sleptInBypass(sessionId: string): boolean {
+    const last = this.#chat.audit({ kind: 'bypass', sessionId, limit: 1 })[0];
+    return last?.kind === 'bypass.left' && last.detail.why === 'sleep' && last.detail.kept === true;
   }
 
   /** The one request that enters Bypass, under the grant (the policy and the capability checked by the caller, and again here). */
@@ -3325,23 +3393,93 @@ export class ChatController {
   /* ---------- Caps on running sessions (FR39) ---------- */
 
   /**
-   * Room for one more awake session in `workspaceId` (`waking` is the session being woken, which doesn't count against itself): the
-   * longest-idle sessions that may sleep are put to sleep until it fits, or the start is refused naming the cap. A session that
-   * is working, waiting on a person, or has background work never sleeps for this.
+   * T-417: a lead the cap never puts to sleep: it has workers that haven't ended (it routes them and reads their reports), Keep going is
+   * on for it or it is a program's track (Keep going names the program), or it is a chat of its own with a workers limit set. A lead is
+   * idle most of the time (it waits for its workers), so the longest-idle choice alone picked leads (2026-10-15 02:23 and 02:28 UTC).
    */
-  async #slot(workspaceId: string, waking: ChatSessionRow | null): Promise<void> {
+  #keptLead(row: ChatSessionRow): boolean {
+    if (!row.parent_id && row.max_workers != null) return true;
+    if (this.#chat.list({ parentId: row.id }).some((c) => c.state !== 'ended')) return true;
+    try {
+      const kg = this.keepGoingOf?.(row.id);
+      if (kg && (kg.enabled || !!kg.program)) return true;
+    } catch {
+      // Keep going can't tell: the other signs decide
+    }
+    return false;
+  }
+
+  /**
+   * One try at room for one more awake session in `workspaceId` (`waking` is the session being woken or started, which doesn't count
+   * against itself): idle workers sleep first, then idle chats without workers, longest-idle first in each, until it fits. A lead
+   * ({@link keptLead}) never sleeps for this, nor a session that is working, waiting on a person, or has background work. Null when
+   * it fits (or no caps), else the cap that is full.
+   */
+  async #tryRoom(workspaceId: string, waking: ChatSessionRow | null): Promise<{ scope: 'workspace' | 'total'; limit: number; running: number } | null> {
     const caps = this.liveCaps?.();
-    if (!caps) return;
+    if (!caps) return null;
     const rows = this.#chat.liveRows().filter((r) => r.id !== waking?.id);
     const live = rows.map((r) => ({ id: r.id, workspaceId: r.workspace_id, weight: weightOf(r) }));
-    const sleepable = rows.filter((r) => r.state === 'idle' && !this.#busy.has(r.id) && !this.#moving.has(r.id) && this.#canSleep(r.id)).map((r) => ({ id: r.id, since: this.#idleSince(r) }));
+    const sleepable = rows
+      .filter((r) => r.state === 'idle' && !this.#busy.has(r.id) && !this.#moving.has(r.id) && this.#canSleep(r.id) && !this.#keptLead(r))
+      .map((r) => ({ id: r.id, since: this.#idleSince(r), rank: r.parent_id ? 0 : 1 }));
     const plan = makeRoom(live, sleepable, workspaceId, waking ? weightOf(waking) : 1, caps);
-    if ('refuse' in plan) throw capError(plan.refuse.scope, plan.refuse.limit, plan.refuse.running, workspaceId);
+    if ('refuse' in plan) return plan.refuse;
     for (const id of plan.sleep) {
       const row = this.#chat.row(id);
       if (!row || row.state !== 'idle' || row.process !== 'live') continue;
       await this.#sleep(id, row).catch(() => undefined);
-      this.#chat.addAudit({ severity: 'info', kind: 'cap.slept', sessionId: id, workspaceId: row.workspace_id, actor: 'portal', detail: { for: waking?.id ?? 'a new session' } });
+      this.#chat.addAudit({ severity: 'info', kind: 'cap.slept', sessionId: id, workspaceId: row.workspace_id, actor: 'portal', detail: { for: waking?.id ?? 'a new session', worker: !!row.parent_id } });
+    }
+    return null;
+  }
+
+  /**
+   * Room for one more awake session in `workspaceId` ({@link tryRoom}). When nothing may sleep, the start or wake waits in line (first come,
+   * first served within the workspace) and the session shows why (`slotWait`, "Waiting for a slot · 4 of 4 running"), looking again every `slotPollMs`; it is
+   * refused naming the cap only after `slotWaitMs`, or when the portal stops. A session that became live meanwhile needs no slot.
+   */
+  async #slot(workspaceId: string, waking: ChatSessionRow | null): Promise<void> {
+    let full = await this.#tryRoom(workspaceId, waking);
+    if (!full) return;
+    const turn = { workspaceId };
+    this.#slotQueue.push(turn);
+    const deadline = Date.now() + this.slotWaitMs;
+    const id = waking?.id ?? null;
+    try {
+      for (;;) {
+        if (id) this.#showSlotWait(id, slotWaitText(full.scope, full.limit, full.running, workspaceId));
+        if (Date.now() >= deadline || this.#closed) throw capError(full.scope, full.limit, full.running, workspaceId);
+        await new Promise<void>((r) => setTimeout(r, Math.max(1, Math.min(this.slotPollMs, deadline - Date.now()))));
+        if (this.#closed) throw capError(full.scope, full.limit, full.running, workspaceId);
+        const mine = id ? this.#chat.row(id) : null;
+        if (id && (!mine || mine.state === 'ended')) throw new AppError('CONFLICT', 'This session has ended.');
+        if (mine?.process === 'live') return;
+        // First come, first served within a workspace: one waiting longer there goes first.
+        if (this.#slotQueue.find((t) => t.workspaceId === workspaceId) !== turn) continue;
+        const now = await this.#tryRoom(workspaceId, mine ?? waking);
+        if (!now) return;
+        full = now;
+      }
+    } finally {
+      const at = this.#slotQueue.indexOf(turn);
+      if (at >= 0) this.#slotQueue.splice(at, 1);
+      if (id) this.#showSlotWait(id, null);
+    }
+  }
+
+  /** T-417: shows (or clears, `null`) why a session waits for a slot; tells its watchers only when that changed. */
+  #showSlotWait(sessionId: string, why: string | null): void {
+    const was = this.#slotWaits.get(sessionId) ?? null;
+    if (was === why) return;
+    if (why) {
+      this.#slotWaits.set(sessionId, why);
+      if (!was) this.#note(sessionId, `${why}.`);
+    } else this.#slotWaits.delete(sessionId);
+    try {
+      this.#emitSession(sessionId);
+    } catch {
+      // the store went away (shutdown)
     }
   }
 
@@ -3659,7 +3797,8 @@ export class ChatController {
     // Ended meanwhile, or the workspace's credentials began to change (which settled the session): stop here.
     const epoch = this.#epoch(workspaceId);
     const cancelled = () => this.#epoch(workspaceId) !== epoch || this.#chat.row(sessionId)?.state === 'ended';
-    // A relaunch starts on defaults: these go back once it runs, but never Bypass: a wake or a resume doesn't restore it (FR20, FR38).
+    // A relaunch starts on defaults: these go back once it runs, but never Bypass: a wake or a resume doesn't restore it (FR20, FR38);
+    // only a lead's wake after a sleep that kept it gets it back, after this, through `#keepBypass` (`#live`, T-417).
     const wasBypass = row.mode === 'bypassPermissions';
     const restore: Restore | null = opts.resume ? { model: row.model, effort: row.effort, ultracode: row.ultracode === 1, mode: wasBypass ? START_MODE : row.mode } : null;
     // The folder it's scanned in is the folder it runs in (and the one the session reports).
@@ -4026,9 +4165,20 @@ export class ChatController {
     if (row && row.state !== 'ended' && row.process !== 'live') {
       // T-294: a crew report wakes a sleeping lead; one whose process is gone stays as it is.
       if (!relaunchGone && row.process === 'gone') throw new AppError('CONFLICT', 'This session is not running.');
+      const slept = row.process === 'asleep';
       await this.#slot(row.workspace_id, row);
       await this.#startProcess(sessionId, { resume: true });
       row = this.#chat.row(sessionId);
+      // T-417: a lead's sleep kept its Bypass: the wake puts it back the way a Restart does, every gate checked again (never twice at once).
+      if (slept && row?.process === 'live' && row.state !== 'ended' && !this.#wakeBypass.has(sessionId) && this.#sleptInBypass(sessionId)) {
+        this.#wakeBypass.add(sessionId);
+        try {
+          await this.#keepBypass(sessionId, 'wake');
+        } finally {
+          this.#wakeBypass.delete(sessionId);
+        }
+        row = this.#chat.row(sessionId);
+      }
     }
     if (!row || row.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
     if (row.process !== 'live')
