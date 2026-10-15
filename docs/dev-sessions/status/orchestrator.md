@@ -28,7 +28,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   Blind review 10382d36 PASS WITH CONDITIONS (4693, 6 minors); decision 4703: S2b cffb12b1 fixes m1/m4/m5 + PRD risks m2/m3;
   web hookSecret field -> T-556. Then QA -> lead gate -> merge -> deploy -> real Event branch check.
 - T-450: S3 deployed; 5 % real-data check + harness assertions (4354) still open.
-- T-472: live paths/restarts/pool re-assign NOT VERIFIED (4294). Retry with the new read tools.
 - T-525 (mine): QA/reviewer lack session_get (4362); scribe role has no Bash or ticket tools (4471). Coordinator decides.
 
 ## STATE PER TICKET
@@ -38,6 +37,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## DECISIONS (binding)
 - 11:30 Coordinator (owner priority, metocean): T-379 NOW in its own worker; built on T-401's fe62fa6 (fetch stage holds creds).
+- 12:00 Coordinator tool review: lead edits of code (dev-t-376 commits 01:57-02:03, no trailers, before D-63 03:36; 4820).
+  The lead edits ONLY the status file and notes. Order: T-379, T-426, T-558, T-546, T-548, T-561 (opus, deny rules), T-557.
 - 11:40 Coordinator: epic T-557 (external runners, Codespaces first) after T-379/T-426; S0 + S1 in parallel with T-546/T-548.
 - 11:15 D-65 (coordinator): 4 ClaudePilot workers; implementers sonnet by default (opus only with a written why); small QA/review
   findings fixed in the same slice; a worker takes 2-3 related tickets (reuse under 150k); full report on the ticket, the lead
@@ -72,7 +73,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
    blind review, D-62; coordinator 11:45); then in parallel T-557 S0 PRD (sonnet implementer),
    T-557 S1 runner seam (sonnet, fake runner), T-546 + T-548 (one sonnet worker); then T-547 + T-549; T-557 S2 (opus, transport). Sweep results (47710391): the lead closes on PASS or reopens with the gap. 4. T-524 measurement with T-513.
 4. T-486 S2 -> QA -> deploy. 5. T-537. 6. T-513 (cluster GitOps MR).
-7. T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
+7. T-472 live re-check (4294), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
    T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2.
 
 LESSONS: node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait; whole
