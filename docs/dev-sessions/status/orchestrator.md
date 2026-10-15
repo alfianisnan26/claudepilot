@@ -9,8 +9,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
-## IN FLIGHT (5 of 5 workers, D-68): T-561 a649874 blind review PASS W/ CONDITIONS (5227); decision 5230:
-  7f11145e impl-t561-s1b (sonnet) on ticket/T-561-s1b fixes the 6 findings: WAITING fc35ded. T-576 DONE 2427d98 (Jobs green; no
+## IN FLIGHT (5 of 5 workers, D-68): T-561 a649874 blind review PASS W/ CONDITIONS (5227); decision 5230: S1b fc35ded
+  (7f11145e ended: its Claude alfian.isnan is signed out, T-594): 1dcbbe0d jobs-t561b (sonnet) HAS THE CLUSTER. T-576 DONE 2427d98 (Jobs green; no
   prettier/eslint in the Job): ux BLOCKED again (build OK; a `folder` spawn gets no Bash; 5368): waits on T-586 worktree-deps.sh (2ae78a99 impl-t586, sonnet). T-558 e652c44: QA runs its Jobs (5052).
   T-486 ab61f5c: blind review PASS W/ CONDITIONS (5349); decision 5352: 5feb4875 impl-t486-s2d (sonnet) adds the tests; then lead merge + gate.
   T-548 S1 DONE 9b822ba (Jobs green, 5364; d23cb713 ended): QA (sonnet) + blind review (opus, authz) next. eaec4cc5 impl-t591 (sonnet) S1 (plan 5366).
@@ -65,7 +65,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-433's persona-wall question (2984).
 - For the coordinator, NOT the owner (not tagged owner-checklist): T-476 lead may START a deploy whose release waits for a person
   (3813); T-491 Event token scope until T-426 (3965); deploys #35/#36/#37 production approval showed "auto", not changed by an agent;
-  T-509 kit republish; T-525 session_get + scribe tools; T-527 finding 4 (owner triggers tagging owner-checklist).
+  T-509 kit republish; T-594 alfian.isnan signed out; T-525 session_get + scribe tools; T-527 finding 4 (owner triggers tagging owner-checklist).
 
 ## NEXT (in order, as slots free)
 1. Merges: T-401 -> T-379 -> T-486 -> T-426; then deploy. 2. T-416 S1b QA -> blind review (opus) -> merge; then S2.
