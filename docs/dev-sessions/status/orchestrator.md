@@ -15,8 +15,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## IN FLIGHT (6 of 6, D-71)
   QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts.
-- BATCH 8 wip/main-d116939 (T-325 S1+S1b+S1c QA Perf PASS 6357, lead read migration 785 + authz; T-574 PASS W/ GAPS 6358,
-  decision 6359: merge, cap/cut tests -> Backend lane next): GATE RUNNING (job-out/gate-d116939.log).
+- BATCH 8 d116939 (T-325 + T-574) gate RED: T-574 broke sessionStartParent.test.ts:71 (family workers not an array) -> 6396.
+  BATCH 8b wip/main-e5d2de3 = T-325 S1+S1b+S1c only (QA Perf PASS 6357, lead read migration 785 + authz): GATE RUNNING.
+  T-574 back to the Backend lane after T-633 S2 (shape fix + cap/cut tests + whole src/chat in a Job).
 - T-341 QA BE PASS WITH GAPS (reply only; lead can't comment, unassigned): 4 doc errors -> BE INFRA lane 17a36fce (sonnet, respawned;
   b6df312e ended) on ticket/T-341-docfix from e4284315. D not verified.
 - T-549 70b081f8 DONE (6378) -> QA BE 2 (backend) + QA UI (page 390/1280). T-416 S1e ff3f5d0c DONE (6372) -> QA Perf delta (6385).
