@@ -6,7 +6,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff cc26c96: T-531 S2c (gate GREEN 55d5fad, suite 587 s, peak 1971Mi). CLOSED T-531. Rides the deploy after #38.
 - MERGED ff 3f81869: T-524 S2 (gate GREEN gate-3f81869-1ecd). DEPLOYED #37 (0316fae); CLOSED T-527, T-515. Details: git history.
 
-## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf): queue T-586 -> T-561 S1c -> T-486 S2d -> T-546 -> T-591 S1+S1b -> T-548 S1+S1b.
+## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf): queue T-426 -> T-591 -> T-586 -> T-561 S1c -> T-546 -> T-548 (+ T-486 S2e).
   T-561: S1b QA PASS WITH GAPS (5440, symlink holes A, B) -> S1c DONE 0beae29 (5498/5501; 77c04fc0 ended) -> QA Perf re-probe -> lead
   gate + merge. LANE bbbe2b38 "ClaudePilot QA UI" (lane-qa-ui, sonnet, qa/T-600-ui, deps linked by lead) on T-600 FE ux: browser tools refused (5503 PASS
   WITH GAPS; T-525 5505 to coordinator); default: headless tools/qa/*.mjs. T-576 DONE 2427d98 (Jobs green; no
@@ -16,12 +16,13 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-486 S2d 2979f99: QA Perf PASS WITH GAPS 5548 (junk drains the global 120/min bucket -> signed hook 429). Decision 5551: S2e fix
   -> BACKEND LANE 74a8d857 (respawned, sonnet, ticket/T-486-s2e-bucket from 2979f99) -> QA Perf re-probe -> gate + merge. QA Perf on T-426 at 7fbbe4c (lead merge, its ff worked).
   T-548 S1 9b822ba + T-591 S1 bf932c3: blind review 9651c9fa (ended) PASS W/ COND both (5512/5513; sev 2 vault authz on T-591). Decisions
-  5514/5515: S1b fixes. IMPL 4ba6c5db (impl-t591-s1b, sonnet, ticket/T-591-s1b-review). T-548 S1b = one-off sonnet at next free slot.
+  5514/5515: S1b fixes. T-591 S1b DONE 09ade72 (5563; 192/192 ci+authz, mutation caught; lead read authz: sound; 4ba6c5db ended)
+  -> QA Perf. T-548 S1b = one-off sonnet at next free slot. REVIEWER d4c49b5c (opus, why: secret door) on T-426.
   Backend 5f8f392b ENDED (ff refused): T-546 DONE 10b22e0 (5535) -> QA Perf; merge 10b22e0, not the branch head 0004ac5 (has S2d).
   PLANNED T-600 BE 5540, T-597 5546, T-325 5547 (S1+S2 only, 5549). T-600 BE: respawn Backend on a branch from FE 7d19c94 after QA UI. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
   ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); T-556 PLANNED 5497 (one "Upstream" dialog, 4 fields: no upstream UI exists);
   builds after T-486 merges + T-595. QA UI then T-576 ux. LANE 83921ca7 "ClaudePilot BE Infra" (lane-backend, sonnet,
-  ticket/T-611-job-placement) on T-611; queue T-547, T-610 (T-401/T-426 fixes, if any). 6 of 6: QA Perf, Backend, BE Infra, Frontend, QA UI, impl-t591.
+  ticket/T-611-job-placement) on T-611; queue T-547, T-610 (T-401/T-426 fixes, if any). 6 of 6: QA Perf, Backend, BE Infra, Frontend, QA UI, reviewer.
   Jobs: each agent starts its own (15:29). Still to place: T-558 QA (e652c44, 5052). No prettier/eslint in Jobs (T-612).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
   T-426 ab93b54 (on T-401 060aca4): QA Perf FIRST (5541), blind review opus at next free slot (impl-t591 ends -> reviewer), gate, merge.
@@ -30,7 +31,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
   ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
-- T-486 (high): S1 live; S2..S2d (migration 783; web hookSecret -> T-556); after merge: deploy (coordinator) -> real Event branch check.
 - STATE: T-404 open until deployed (design point -> T-451). T-376 (high): S2 dev/t-376-3 0b0faf7 needs integration merged in, ux re-check, S3 perf.
 
 ## DECISIONS (binding)
