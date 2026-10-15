@@ -263,6 +263,31 @@ async function rig() {
   return { h, s, stranger, done: async () => (h.done(), s.done()) };
 }
 
+test('T-449 over MCP: session_spawn’s ticket sets the worker’s ticketId (what usage attribution reads); an unknown or malformed one is refused; none stays none', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.ticketExists = (id) => id === 'T-7';
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    const withTicket = await r.h.call(a.secret, 'session_spawn', { prompt: 'Do T-7.', title: 'T7', ticket: 'T-7' });
+    assert.equal(withTicket.result?.isError, undefined, JSON.stringify(withTicket.raw));
+    const id = withTicket.result!.structuredContent.session.id as string;
+    assert.equal(r.s.controller.get(id)?.ticketId, 'T-7');
+    assert.deepEqual(r.s.controller.list({ ticketId: 'T-7' }).map((x) => x.id), [id], 'the same field the ticket filter and the attribution read');
+
+    const before = r.s.controller.list({ parentId: r.s.id }).length;
+    const unknown = await r.h.call(a.secret, 'session_spawn', { prompt: 'Do T-99.', ticket: 'T-99' });
+    assert.equal(unknown.result?.isError, true);
+    assert.equal(unknown.result?.structuredContent.error.code, 'NOT_FOUND');
+    assert.equal((await r.h.call(a.secret, 'session_spawn', { prompt: 'x', ticket: 'nope' })).result?.isError, true, 'T-<n> only');
+    assert.equal(r.s.controller.list({ parentId: r.s.id }).length, before, 'a refused spawn starts nothing');
+
+    const none = await r.h.call(a.secret, 'session_spawn', { prompt: 'No ticket.', title: 'None' });
+    assert.equal(r.s.controller.get(none.result!.structuredContent.session.id as string)?.ticketId, null);
+  } finally {
+    await r.done();
+  }
+});
+
 test('T-294 over MCP: session_message to workers or crew (exactly one of to and session_id), session_spawn’s report, and session_family with role, mode and who waits on a person', async () => {
   const r = await rig();
   try {
