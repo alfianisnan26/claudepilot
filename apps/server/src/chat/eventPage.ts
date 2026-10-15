@@ -1,4 +1,4 @@
-// Transcript pages (T-376, chat-sessions PRD §9 "History pages"): the pure rules of a page of `GET /api/chat/sessions/:id/events?before=&limit=`.
+// Transcript pages (T-376, chat-sessions PRD §10.5 "History pages"): the pure rules of a page of `GET /api/chat/sessions/:id/events?before=&limit=`.
 // The store reads the newest events before a seq (keyset, never an offset: D-58); this cuts large tool_result bodies to a preview that keeps
 // the whole length, and stops the page at the limit or the byte cap, whichever comes first. No I/O.
 
