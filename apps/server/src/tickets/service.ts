@@ -171,6 +171,8 @@ export interface TicketsOptions {
   workspaceRefs?: WorkspaceRefs;
   /** T-270: minutes a ticket's session must be dead before the orphan sweep moves the ticket (`tickets.orphanAfterMin`). Default 3. */
   orphanAfterMin?: () => number;
+  /** FR20: open agent-made tickets a workspace may hold (`tickets.agentOpenPerWorkspace`). Default {@link OPEN_PER_WORKSPACE}. */
+  agentOpenPerWorkspace?: () => number;
 }
 
 /** One move the orphan sweep made (T-270 layer 3): where the ticket went and why. `to` null: back in the agents' queue. */
@@ -232,6 +234,7 @@ export class Tickets {
 
   readonly #refs: TicketsOptions['workspaceRefs'];
   readonly #orphanAfterMin: () => number;
+  readonly #agentOpenPerWorkspace: () => number;
   #orphans: { lastRunAt: string | null; dead: Record<string, string> } | null = null;
 
   constructor(
@@ -243,6 +246,7 @@ export class Tickets {
     this.#link = opts.link ?? ((id) => `/admin/tickets/${id}`);
     this.#refs = opts.workspaceRefs;
     this.#orphanAfterMin = opts.orphanAfterMin ?? (() => ORPHAN_DEFAULT_MIN);
+    this.#agentOpenPerWorkspace = opts.agentOpenPerWorkspace ?? (() => OPEN_PER_WORKSPACE);
   }
 
   /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
@@ -726,7 +730,13 @@ export class Tickets {
     if (caller.kind === 'agent') {
       const mine = this.#inWorkspace('workspace_id', caller.workspaceId);
       const open = (this.#db.prepare(`SELECT count(*) AS n FROM tickets WHERE source = 'agent' AND ${mine.sql} AND status IN (${OPEN_SQL})`).get(...mine.args) as { n: number }).n;
-      if (open >= OPEN_PER_WORKSPACE) throw new AppError('RATE_LIMITED', `${caller.workspaceId} already has ${OPEN_PER_WORKSPACE} open tickets made by agents. Close some first.`);
+      let cap = OPEN_PER_WORKSPACE;
+      try {
+        cap = this.#agentOpenPerWorkspace();
+      } catch {
+        // the setting could not be read: the built-in cap holds
+      }
+      if (open >= cap) throw new AppError('RATE_LIMITED', `${caller.workspaceId} already has ${cap} open tickets made by agents. Close some first.`);
     }
   }
 
