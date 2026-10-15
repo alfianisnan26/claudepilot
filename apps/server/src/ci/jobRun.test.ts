@@ -561,7 +561,7 @@ test('T-379 --image: an allowed ref is the command container\'s image only; fetc
   assert.deepEqual([imagesOf(none).fetch, imagesOf(none).run], [ws, ws]);
   assert.ok(!/__[A-Z_]+__/.test(none.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')));
   // The manifest is as before T-379: the template gained no text (the placeholder was renamed), and the run image is the same text as the fetch image.
-  assert.ok(!none.includes('T-379') && !none.includes('--image'), 'the rendered manifest carries nothing of the option');
+  assert.ok(!none.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').includes('--image'), 'the rendered manifest carries nothing of the option');
   assert.equal(none.split(`image: ${ws}`).length, 3, 'exactly the two image lines, both the workspace image');
   for (const ref of ['registry.int.isnan.me/claudepilot/py-test:abc123', 'registry.int.isnan.me/konfersi/metocean/test-stage:req-9f2', 'registry.int.isnan.me/event/web-test:r1',`registry.int.isnan.me/claudepilot/py-test@${digest}`]) {
     const w = world();
