@@ -79,6 +79,15 @@ export function withoutSources<T>(x: T): T {
   return Object.fromEntries(Object.entries(o).filter(([k]) => !(figure && k === 'source')).map(([k, v]) => [k, withoutSources(v)])) as T;
 }
 
+/**
+ * A program in the full form: no figure sources and no target `rule` (the rules are fixed text: `basis.targets` and `basis.d65` name them once,
+ * the route keeps them on each target; the MCP result limit is 20,000 characters and ten targets a program carry it over).
+ */
+export function fullProgram(p: CrewProgramScore): CrewProgramScore {
+  const q = withoutSources(p);
+  return { ...q, targets: q.targets.map(({ rule: _rule, ...t }) => t as CrewProgramScore['targets'][number]) };
+}
+
 /** One short row: the figures the coordinator compares every pass. */
 export function compactRow(r: LabSummaryRow) {
   return {
@@ -176,7 +185,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       const summary = `${s.programs.length} program${s.programs.length === 1 ? '' : 's'} over the last ${s.window}${own ? ' (your own program only)' : ''}. Dollars are estimates.`;
       // Full: every figure without its own `source` (the `basis` map names each source once), so a portal of a few programs and two windows
       // stays under the result limit (MAX_RESULT_CHARS); the route keeps the sources on each figure.
-      if (args.full) return { summary, scope, ...s, ...(s.headline ? { headline: withoutSources(s.headline) } : {}), programs: s.programs.map(withoutSources) };
+      if (args.full) return { summary, scope, ...s, ...(s.headline ? { headline: withoutSources(s.headline) } : {}), programs: s.programs.map(fullProgram) };
       return { summary, scope, window: s.window, ...(s.headline ? { headline: s.headline } : {}), programs: s.programs.map(scoreShort), more: 'full: true for every figure with its basis, types, CI, deploys, efficiency, health and the review list; basis names the sources.' };
     },
   });
