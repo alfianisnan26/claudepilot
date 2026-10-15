@@ -3,13 +3,13 @@
 Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb58413 (83842ba6), 639202e (de232389).
 
 ## DONE
-- T-375 + T-369 merged (17e0392), gate GREEN ea2d59c; deploy run 33 (rmv914lde880bdb) on ffa7703: gate passed, build running.
+- DEPLOYED run 33 (rmv914lde880bdb, ffa7703, portal 2026.10.15-4): all jobs passed. Live: d354977 cost fix, T-366, T-417, T-375, T-369.
+- T-375, T-369 CLOSED (deploy evidence run 33).
 - T-427 CLOSED (QA 3126), T-413 CLOSED (QA 3123/3138; gaps -> T-448): merged, gate GREEN ed18de4, integration pushed 6629fb9
   (with the coordinator's T-416 supervisor commits merged in; pack regenerated).
 - T-404 merged a690f49 (QA PASS WITH GAPS 3325; hook = second layer, decision 3314; primary layer = T-451); gate GREEN (gate-job a690f49-5383).
 
 ## IN FLIGHT
-- Deploy run 33: gate, build, release, verify passed; Chats step running.
 - Worker 55c2f12f (qa-verifier, sonnet, fadlilah): T-449 S2 verify of dev/t-449-2 f490c45 (report 3357), read-only in the main folder
   (dev-t-333-1 and dev-t-366-1 answered FOLDER_UNTRUSTED after run 33 deployed T-366).
 - Worker 5e3ae624 (implementer, satria): T-376 S2 harness tools/qa/chat-paging.mjs on dev/t-376-3 in dev-t-349-1.
@@ -22,8 +22,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
 - T-378 S1 dev/t-378-1 9834ff7 ready (qa tools only): needs a verifier.
 
 ## DEPLOY
-- Now: integration ea2d59c = d354977 (auto-compact 200k, cost fix) + T-366 (images portal,workspace) + T-417 + T-375 + T-369.
-  This is today's 4th portal deploy: the coordinator ordered it; taken under orchestrator.md's "urgent fix at once" exception (comment 3120).
+- Done: run 33 (4th today, comment 3120 on T-375). Integration now 028f7a1 (T-427, T-413, T-404, release merge-back).
 - Next batch (2026-10-16): T-427, T-404, T-376 S2 if they pass.
 
 ## DECISIONS (binding)
