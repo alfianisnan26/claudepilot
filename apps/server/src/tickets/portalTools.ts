@@ -307,7 +307,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
   registerPortalTool({
     name: 'ticket_comment',
     title: 'Comment on a ticket',
-    description: 'Adds a comment to a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds). Use it to report progress, ask for what you need, or record what you found.',
+    description: 'Adds a comment to a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds; a worker also on its lead’s tickets and on the ticket its spawn named while nobody holds it). Use it to report progress, ask for what you need, or record what you found.',
     scope: 'agent',
     input: z.object({ id: z.string().max(20), text: z.string().min(1).max(8_000).describe('Markdown.'), session_id: sessionIdArg }),
     handler(ctx, args) {
