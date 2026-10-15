@@ -38,7 +38,8 @@ export function sessionLine(row: AttributionRow): SessionLine | null {
 export function ticketLine(row: AttributionRow): { type: string; status: string; viaLead: string | null } | null {
   const t = row.ticket;
   if (!t) return null;
-  return { type: t.type ?? '-', status: (t.status ?? '-').replace(/_/g, ' '), viaLead: t.viaLeadUsd > 0 ? `via lead ${formatCost(t.viaLeadUsd)}` : null };
+  // A ticket the portal has no record of has neither: say "unknown" in words, never a bare dash.
+  return { type: t.type ?? 'unknown', status: (t.status ?? 'unknown').replace(/_/g, ' '), viaLead: t.viaLeadUsd > 0 ? `via lead ${formatCost(t.viaLeadUsd)}` : null };
 }
 
 /** The line under a workspace, ticket or persona row: how many sessions and requests are behind it. */
