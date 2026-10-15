@@ -8,7 +8,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - NEXT FREE SLOT: T-591 S1c (one-off sonnet from 09ade72; G1+G2 kill M4/M5, decision 5639) -> QA Perf M4/M5 only -> gate -> merge.
 - QA PERF 7e4879c7 (lane/cp-qa-perf): T-591 PASS WITH GAPS 5587 (done) -> now T-486 S2e ea1c006 (5585) -> T-611 4ac5982 (5580)
   -> T-586 (premerge wip/main-5b66aa0, gate GREEN) -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-548 -> T-558 e652c44. T-426 S1b jumps in.
-- QA UI bbbe2b38 (qa/T-600-ui): home.mjs fix 924f1bfb PASS WITH GAPS (27/27 on its branch, not on integration; rides with T-600); now re-running FE S1b 32985e2 (crew-summary, Home/Crew grids); then T-576 ux (2427d98, after T-586 merges). Headless only (5503).
+- QA UI 80df7bb9 (qa/T-600-ui-r2 from 390be2fe): 1) browser proof for T-619 (scratch portal 390/1280 shots; example.com + 10.43.0.1 blocked; note QA/Browser.md);
+  2) T-600 FE S1b re-run. Old bbbe2b38: home.mjs fix 924f1bfb PASS WITH GAPS (27/27 on its branch, not on integration; rides with T-600); now re-running FE S1b 32985e2 (crew-summary, Home/Crew grids); then T-576 ux (2427d98, after T-586 merges). Headless only (5503).
 - BACKEND 6d72b5c6 (ticket/T-597-portal-slash, plan 5546) on T-597; then T-600 BE (plan 5540, respawn on FE S1b), T-325 S1+S2 (5549).
 - BE INFRA 5825f112 (ticket/T-547-quota-placement) on T-547; then T-623 (high, coordinator; respawn fresh branch, plan 5622; opus blind review), then T-610.
 - IMPL a6a0ea9d (impl-t548-s1b, ticket/T-548-s1b from 9b822ba) on T-548 S1b (5515); then QA Perf (S1+S1b together).
@@ -28,6 +29,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
 
 ## DECISIONS (binding)
+- 16:57 Workspace restarted by coordinator (pilot browser, T-619, D-73); release portal 2026.10.15-12 merged (c29d75c7). All 6 workers' processes stopped;
+  every worktree clean and pushed. Woke QA Perf, impl-t426, BE Infra, Backend, impl-t548 by message (re-run cut Jobs). QA UI respawned 80df7bb9 on qa/T-600-ui-r2.
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
   T-401, T-426, T-611, T-547, T-610. Backend: T-546, T-597, T-600 route, T-325. Spawn lanes with claude auto.
 - 14:56 D-70 LANES (DECISIONS.md; my decision T-595 5380): current 5 workers finish; freed slots become lanes, spawned ONCE on sonnet and fed
