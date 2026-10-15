@@ -16,7 +16,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## IN FLIGHT (6 of 6, D-71)
   QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts.
-- BATCH 9 wip/main-1803cf2 = T-416 S1-S1e (QA Perf PASS WITH GAPS 6420; R2 throw-path test -> T-675; no migration/authz files): GATE RUNNING.
+- BATCH 9 wip/main-1803cf2 = T-416 S1-S1e (QA Perf PASS WITH GAPS 6420; R2 throw-path test -> T-675; no migration/authz files): gate GREEN 1803cf2; integration gained up.sh -> merged in, RE-GATE 15aece0 running.
 - T-574: batch 8 gate RED (sessionStartParent.test.ts:71, family workers not an array; 6396) -> BACKEND lane 06e9ff5c (sonnet,
   respawned; 8962fc38 ended) on ticket/T-574-s2 from 124ca45f: keep the array, cap/cut tests, whole src/chat + portalmcp in a Job.
 - T-633 S2 0a5b686a DONE (6400; G3 waits on the timer, H1/H2 tests; x20 under load 0 fails) -> QA Perf delta (+ whole src/chat).
