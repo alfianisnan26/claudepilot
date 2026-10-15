@@ -238,6 +238,8 @@ settingsModule.settings.onChange((key) => key === BYPASS_SETTING && void chatCon
 // The Restart hint (chat PRD, Restart): when the latest delivery into a workspace landed; a session whose process is older offers a Restart.
 chatController.deliveredAt = (id) => reconciler.row(id)?.applied_at ?? null;
 chatController.configChanges = (id, sinceMs) => reconciler.changesSince(id, sinceMs);
+// T-472: per delivery, so a context-only delivery (hot-reloaded) neither shows the hint nor moves the time an automatic restart waits on.
+chatController.configChangeLog = (id, sinceMs) => reconciler.changeLogSince(id, sinceMs);
 reconciler.onChange((id) => chatController.deliveryChanged(id));
 chatController.bypassFacts = (id) => ({
   internet: true,

@@ -430,7 +430,13 @@ persona can **hold** some (up to 10), which are delivered wherever it is.
   over 20 KB, anything credential-shaped, a pool of that name assigned only to other workspaces. It is never
   deleted, and never assigned again once a person took it off the workspace. Each change or refusal is one
   platform audit row `pools.context_pack` (fixed codes, never the text). No route or tool: the portal acts on a
-  push the CI remote already accepted.
+  push the CI remote already accepted. **Path-scoped (T-472):** the pool holds the pack as a path-scoped rule. Its
+  frontmatter `paths` lists the folders the pack's own `## Map` names (`apps/server/src/chat/**` and so on). A
+  one-level folder such as `scripts/` is left out, because other repositories have one too. Claude Code then loads
+  the pack only in a session that works on files of this repository (a worktree included), not in the sessions of
+  other repositories that share the workspace. A pack that brings its own frontmatter, or whose Map names nothing
+  usable, is kept as it is. A context with frontmatter keeps it at the top of its rule file, with the portal's
+  comment after it. A pack delivery restarts no session (chat-sessions FR53b, T-472).
 - **Editor and preview.** The persona editor lists the contexts it can hold; "What Claude is told" shows each
   held context as its own managed layer, after the persona's text.
 

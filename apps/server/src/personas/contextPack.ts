@@ -4,6 +4,10 @@
 // from each push to the remote's default branch (`snapshot`); this module only decides what the pool gets. No new delivery: the pool
 // service stores the revision and asks the reconciler, like any edit.
 //
+// T-472: the pool holds the pack as a path-scoped rule (`paths` frontmatter from its own Map), so in a workspace shared with other
+// repositories only sessions working on this one load it. A delivery of it restarts no session: instruction contexts are hot-reloaded
+// (chat/controller.ts HOT_AREAS).
+//
 // What it refuses, keeping what the pool had: a pack over an instruction context's cap (20 KB), anything secret-shaped (the context
 // kind's own check, chat/redact.ts), and a pool of that name that belongs to another workspace. It never deletes the pool and never
 // assigns it again once a person took it off the workspace.
@@ -61,12 +65,46 @@ export function contextPackHook(pools: PoolService, audit: Audit) {
   };
 }
 
+/** A glob a rule's `paths` may hold: relative, plain characters and globs, no `..`. */
+const SAFE_GLOB = /^[A-Za-z0-9._{},*-]+(\/[A-Za-z0-9._{},*-]+)*$/;
+const MAX_SCOPE = 40;
+
+/**
+ * T-472: the folders the pack's own `## Map` names (each entry's first `code` path), as `paths` globs, so the rule loads only in a session
+ * that works on this repository's files (Claude Code matches them from the session's project folder, so a worktree matches too). A
+ * one-level folder (`scripts/`, `deploy/`) is left out: other repositories have those as well. Empty when the Map names nothing usable.
+ */
+export function packScope(text: string): string[] {
+  const map = /^## Map\n([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(text.replace(/\r\n/g, '\n'))?.[1] ?? '';
+  const out: string[] = [];
+  for (const m of map.matchAll(/^- `([^`\s]+)`/gm)) {
+    const p = m[1]!.replace(/\/\*?$/, ''); // `features/*` and `deploy/` name the folder
+    if (!SAFE_GLOB.test(p) || p.split('/').includes('..') || p.split('/').length < 2) continue;
+    const last = p.split('/').at(-1)!;
+    const glob = /\.[A-Za-z0-9]+$/.test(last) ? p : `${p}/**`;
+    if (!out.includes(glob)) out.push(glob);
+    if (out.length >= MAX_SCOPE) break;
+  }
+  return out;
+}
+
+/**
+ * T-472: the pack as a path-scoped rule: frontmatter with `paths` from its Map before the text, so sessions of other repositories in the
+ * same workspace do not load it. A pack that brings its own frontmatter, or whose Map names nothing usable, is left as it is.
+ */
+export function scopedPack(body: string): string {
+  if (body.startsWith('---\n')) return body;
+  const scope = packScope(body);
+  if (!scope.length) return body;
+  return `---\npaths:\n${scope.map((g) => `  - "${g}"`).join('\n')}\n---\n${body}`;
+}
+
 /** Creates, updates or leaves the repository's context pack pool; never throws. */
 export function syncContextPack(pools: PoolService, input: ContextPackInput): ContextPackOutcome {
   const { file } = input;
   if (file.skipped === 'too_large') return { outcome: 'refused', code: 'too_large' };
   if (file.text === null) return { outcome: 'refused', code: 'unreadable' };
-  const body = normal(file.text);
+  const body = scopedPack(normal(file.text));
   if (bytes(body) > PERSONA_LIMITS.contextBytes) return { outcome: 'refused', code: 'too_large' };
   if (secretProblem(body)) return { outcome: 'refused', code: 'secret' };
   const name = contextPackName(input.repo);
