@@ -39,7 +39,16 @@ if [ -n "$uid" ]; then
   kubectl -n "$ns" patch secret "$job" --type merge -p "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"name\":\"$job\",\"uid\":\"$uid\"}],\"labels\":{\"app\":\"claudepilot-gate\",\"claudepilot-gate/by\":\"${GATE_JOB_BY:-manual}\"}}}" >/dev/null || true
 fi
 echo "gate job $job: $steps at $sha on $image ..."
-state=; why=; t1=$(date +%s); pend_t=
+state=; why=; t1=$(date +%s); pend_t=; seen_n=0
+# T-578: the Job's own progress lines (per test file) while it runs, each once; the pod has no log yet while Pending.
+progress() {
+  local plog n
+  plog=$(kubectl -n "$ns" logs "job/$job" 2>/dev/null | grep '^progress: ' || true)
+  [ -n "$plog" ] || return 0
+  n=$(printf '%s\n' "$plog" | wc -l)
+  [ "$n" -le "$seen_n" ] || printf '%s\n' "$plog" | tail -n +$(( seen_n + 1 )) | sed 's/^/gate job: /'
+  seen_n=$n
+}
 for _ in $(seq 1 $(( wait_s / poll_s ))); do
   state=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.succeeded}/{.status.failed}' 2>/dev/null || true)
   case "$state" in 1/*|*/1) break ;; esac
@@ -51,8 +60,10 @@ for _ in $(seq 1 $(( wait_s / poll_s ))); do
   elif [ -z "$why" ] && [ -n "$pend_t" ]; then
     echo "gate job $job: scheduled after $(( $(date +%s) - pend_t ))s Pending"; pend_t=
   fi
+  progress
   sleep "$poll_s"
 done
+progress
 kubectl -n "$ns" logs "job/$job" > "$out" 2>&1 || true
 t=$(gh auth token 2>/dev/null || true)
 if [ -n "$t" ] && grep -q -F -- "$t" "$out"; then
@@ -65,11 +76,24 @@ case "$state" in 1/*|*/1) ;; *) kubectl -n "$ns" delete job "$job" --ignore-not-
   if [ -n "$pend_t" ]; then echo "GATE-VERDICT: red: not scheduled in $(( $(date +%s) - t1 ))s: $why"
   else echo "GATE-VERDICT: red: the job did not finish in ${wait_s}s"; fi
   exit 1 ;; esac
-sed -n '/^=== SUMMARY$/,$p' "$out" | grep -v -e '^GATE-VERDICT: ' -e '^memory peak=' || true
+sed -n '/^=== SUMMARY$/,$p' "$out" | grep -v -e '^GATE-VERDICT: ' -e '^GATE-RESULT ' -e '^memory peak=' || true
 # The Job's own memory peak (T-524: the 8Gi request is sized from it), always one line: the Job's cgroup reading, or "unavailable" when
 # the Job printed none (a gate-job.yaml from before T-524).
 mem=$(grep -E '^memory peak=' "$out" | tail -n 1 || true)
 echo "${mem:-memory peak=unavailable (the gate Job printed no memory line)}"
 echo "log: $out"
 rc=0; bash scripts/gate-verdict.sh joblog "$out" || rc=$?
+# T-578: a green run of the WHOLE gate leaves its verdict record (the Job's own GATE-RESULT line, checked against this commit and its tree)
+# in a ConfigMap named by the tree, for 24 h of reuse by the deploy pipeline (scripts/gate-reuse.mjs decide). Failing to keep it never fails the gate.
+if [ "$rc" = 0 ] && [ -z "$files" ] && [ "$steps" = typecheck,web-build,server-suite ]; then
+  tree=$(git rev-parse "$commit^{tree}")
+  if rec=$(node scripts/gate-reuse.mjs record --commit "$commit" --tree "$tree" < "$out"); then
+    cm=claudepilot-gate-green-$tree
+    kubectl -n "$ns" delete configmap "$cm" --ignore-not-found >/dev/null 2>&1 || true
+    if kubectl -n "$ns" create configmap "$cm" --from-literal=record="$rec" >/dev/null 2>&1; then
+      kubectl -n "$ns" label configmap "$cm" app=claudepilot-gate-verdict >/dev/null 2>&1 || true
+      echo "gate verdict kept for reuse (tree ${tree:0:12}, 24 h)"
+    else echo "gate verdict not kept for reuse (kubectl create configmap failed)"; fi
+  else echo "gate verdict not kept for reuse: $rec"; fi
+fi
 exit "$rc"

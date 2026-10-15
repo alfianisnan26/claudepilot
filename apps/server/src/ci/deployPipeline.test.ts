@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +46,7 @@ function templateFiles(): Record<string, string> {
   add('scripts/k3s-build.sh');
   add('scripts/gate-job.sh');
   add('scripts/gate-verdict.sh');
+  add('scripts/gate-reuse.mjs');
   add('scripts/gate-job-stop.sh');
   add('images/workspace/Dockerfile');
   // The release gate itself (npm ci, the suite) is far too heavy here: a stand-in leaves the summary it would, green or red.
@@ -67,12 +68,15 @@ args=" $* "
 manifest() { git --git-dir="$FAKE/github.git" show main:deploy/k3s/portal.yaml; }
 case $args in
   # The in-cluster gate (scripts/gate-job.sh): its Job succeeds or fails with the fake gate's mode, and its log ends with the verdict.
+  # T-578: the stored verdict record of a tree (a file the test writes), and the creation of one.
+  *" get configmap claudepilot-gate-green-"*) cat "$FAKE/gate-record" 2>/dev/null || true ;;
+  *" create configmap claudepilot-gate-green-"*) printf '%s\\n' "$*" >> "$FAKE/configmaps.log" ;;
   *" get job claudepilot-gate-"*"metadata.uid"*) printf 'uid-1234' ;;
   *" get jobs,secrets -l app=claudepilot-gate,claudepilot-gate/by=pipeline "*) [ -f "$FAKE/leftover" ] && { printf 'job.batch/claudepilot-gate-aaaaaaa-0000\nsecret/claudepilot-gate-aaaaaaa-0000\n'; rm -f "$FAKE/leftover"; }; true ;;
   *" get job claudepilot-gate-"*) if [ "$(cat "$FAKE/gate-mode" 2>/dev/null)" = red ]; then printf '/1'; else printf '1/'; fi ;;
   *" logs job/claudepilot-gate-"*)
-    printf '=== SUMMARY\nnpm-ci rc=0 1s\n'; [ -f "$FAKE/leak" ] && echo "npm: $(cat "$FAKE/token")"
-    if [ "$(cat "$FAKE/gate-mode" 2>/dev/null)" = red ]; then echo 'GATE-VERDICT: red: typecheck failed'; else echo 'GATE-VERDICT: green'; fi ;;
+    printf 'progress: start src/a.test.ts\\n=== SUMMARY\nnpm-ci rc=0 1s\n'; [ -f "$FAKE/leak" ] && echo "npm: $(cat "$FAKE/token")"
+    if [ "$(cat "$FAKE/gate-mode" 2>/dev/null)" = red ]; then echo 'GATE-VERDICT: red: typecheck failed'; else echo 'GATE-VERDICT: green'; cat "$FAKE/gate-result" 2>/dev/null || true; fi ;;
   *" get application "*)
     health=Healthy
     if [ -f "$FAKE/bad-tag" ] && manifest | grep -qF "portal:$(cat "$FAKE/bad-tag")"; then health=Degraded; fi
@@ -548,6 +552,49 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
   assert.match(red.out, /GATE-VERDICT: red: typecheck failed/);
   assert.match(red.out, /gate: red at [0-9a-f]{7}/);
   assert.ok(!red.out.includes(w.token), 'a token in the job log never reaches the run log');
+});
+
+test('T-578: the gate step reuses a green verdict a gate Job recorded for the same TREE (under 24 h) and gates in every other case; a green run keeps its record', () => {
+  const w = world();
+  Object.assign(w.env, { DEPLOY_GATE_IN_CLUSTER: 'true', GATE_IMAGE: 'registry.test/claudepilot/workspace:dev-1', GATE_JOB_POLL_S: '1', GATE_JOB_WAIT_S: '5' });
+  const tree = w.git(['rev-parse', `${w.sha}^{tree}`]);
+  const record = (over: Record<string, unknown> = {}) => JSON.stringify({ source: 'gate-job', job: 'claudepilot-gate-1234567-abcd', verdict: 'green', commit: 'c'.repeat(40), tree, steps: 'typecheck,web-build,server-suite', files: '', finished: Math.floor(Date.now() / 1000) - 600, ...over });
+  const record_ = join(w.root, 'gate-record');
+  const ranGate = () => /kubectl .* create secret generic claudepilot-gate-/.test(w.calls());
+
+  // Same tree, green, recent: no Job at all, and the log names the reused run.
+  writeFileSync(record_, record());
+  const reused = w.run('gate');
+  assert.equal(reused.code, 0, reused.out);
+  assert.match(reused.out, new RegExp(`gate: reused the green verdict of gate Job claudepilot-gate-1234567-abcd \\(commit ${'c'.repeat(7)}, tree ${tree}, finished \\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z\\) for ${w.sha.slice(0, 7)}`));
+  assert.ok(!ranGate(), 'no gate Job was made');
+  assert.ok(!existsSync(join(w.root, 'applied.yaml')));
+
+  // Every doubt gates: another tree, red, too old, unreadable, a forged source, nothing stored.
+  for (const [what, text] of [['another tree', record({ tree: 'd'.repeat(40) })], ['red', record({ verdict: 'red' })], ['older than 24 h', record({ finished: Math.floor(Date.now() / 1000) - 90000 })], ['unreadable', '{nope'], ['not from a gate Job', record({ source: 'branch' })], ['nothing', '']] as const) {
+    writeFileSync(record_, text);
+    const g = w.run('gate');
+    assert.equal(g.code, 0, `${what}: ${g.out}`);
+    assert.match(g.out, /gate: no verdict to reuse \(run: /, what);
+    assert.ok(ranGate(), `${what}: the gate Job ran`);
+    writeFileSync(join(w.root, 'calls.log'), '');
+  }
+  // The off switch.
+  writeFileSync(record_, record());
+  w.env.DEPLOY_GATE_REUSE = 'false';
+  assert.ok(!/reused/.test(w.run('gate').out) && ranGate());
+  delete w.env.DEPLOY_GATE_REUSE;
+  writeFileSync(join(w.root, 'calls.log'), '');
+
+  // A green full run keeps the Job's own GATE-RESULT for this commit and tree as a ConfigMap named by the tree.
+  rmSync(record_);
+  writeFileSync(join(w.root, 'gate-result'), `GATE-RESULT ${record({ commit: w.sha, job: 'claudepilot-gate-1234567-abcd' })}\n`);
+  const kept = w.run('gate');
+  assert.equal(kept.code, 0, kept.out);
+  assert.match(kept.out, /gate job: progress: start src\/a\.test\.ts/, 'the Job’s progress lines reach the run log');
+  assert.match(kept.out, /gate verdict kept for reuse \(tree [0-9a-f]{12}, 24 h\)/);
+  assert.match(readFileSync(join(w.root, 'configmaps.log'), 'utf8'), new RegExp(`create configmap claudepilot-gate-green-${tree} --from-literal=record=\\{"source":"gate-job"`));
+  assert.doesNotMatch(kept.out, /GATE-RESULT/, 'the record line is not echoed');
 });
 
 test('refusals: a red gate, a branch that moved, a main with other commits, an unknown image; a refused release changes nothing', () => {

@@ -65,7 +65,7 @@ It is started by hand only: in the portal, or by a session over the Portal MCP (
 
 | Job | Does |
 | --- | --- |
-| gate | `scripts/gate-job.sh` on the commit: the release gate as a Job in the cluster (next section); fails on any red step or failing test (input `gate: false` skips it; `DEPLOY_GATE_IN_CLUSTER=false` in the workspace's `~/.profile` runs `scripts/gate.sh` here instead) |
+| gate | `scripts/gate-job.sh` on the commit: the release gate as a Job in the cluster (next section); fails on any red step or failing test (input `gate: false` skips it; `DEPLOY_GATE_IN_CLUSTER=false` in the workspace's `~/.profile` runs `scripts/gate.sh` here instead); a green gate Job verdict of the same git tree from the last 24 h is reused instead of running it again, and the log names it (T-578, next section) |
 | build | `scripts/k3s-build.sh` per image of input `images` (`portal`, `workspace`, `workspace-dev`, or `none`) with the next date tag (`2026.10.13-2`, `2.1.296-2026.10.13-1`, `2.1.296-dev-2026.10.13-1`); the commit must be on GitHub's `integration` |
 | release | **waits for a person's approval** (environment `production`); then bumps the two tags in `deploy/k3s/portal.yaml` on top of the commit and pushes it to `main` (fast-forward only: that push is the deploy) and then brings `integration` up to date as its own step (a merge of `main` into the current `integration`, never a force; a conflict only warns). Input `deploy: false` leaves it out (build only) (when `integration` moved on while the release waited for its approval, the release is merged into its new tip; `main` still gets exactly the approved commit plus the tags; run #4 of 2026-10-13 was refused before this) |
 | verify | Argo CD Synced and Healthy at the pushed commit, rollout status, the new image, `/healthz` and `/login` through the in-cluster service, no fatal line and no restart in the portal's log |
@@ -125,6 +125,22 @@ twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a
   reading the local gate uses: every step at rc=0, the last suite summary at 0 failing and 0 timed out). The script prints the summary and
   that line, keeps the whole log in `GATE_JOB_LOG` (default `/tmp/gate-job-<sha>.log`), exits 0 green, 1 red. The summary always ends with
   one `memory peak=… limit=… oom_kills=…` line (the Job's own cgroup), or `memory peak=unavailable` when the Job printed none.
+- **Progress per test file (T-578):** while the suite runs, `scripts/gate.sh` prints `progress:` lines to the Job's log (`scripts/gate-progress-reporter.mjs`,
+  a second node:test reporter next to the TAP one the verdict reads): `start <file>` when a file first reports, `FAIL <file> <test> <s>s` per failing
+  test, `slow <file> <test> <s>s` per test of 5 s or more, a `running, N test files started` heartbeat every 60 s, and at the end one
+  `file <file> pass=<n> fail=<n> <s>s` per file. `scripts/gate-job.sh` copies them to its output as they appear (`gate job: progress: …`), so a slow or
+  hung file shows while the Job runs. No check changed.
+- **Reuse of a green verdict (T-578):** after its own green verdict on the WHOLE gate (all three steps, no file subset) the Job prints one last line,
+  `GATE-RESULT {source, job, verdict, commit, tree, steps, files, finished}` (the commit and tree it checked out itself). `scripts/gate-job.sh`
+  checks that line against the commit it asked for and its tree (`scripts/gate-reuse.mjs record`) and keeps it in the ConfigMap
+  `claudepilot-gate-green-<tree>` in the gate namespace. The pipeline's gate step (`.pilot/scripts/gate.sh`) reads the ConfigMap of the run
+  commit's tree (`git rev-parse <commit>^{tree}`) and `scripts/gate-reuse.mjs decide` reuses it only when the record is from a gate Job (job name,
+  source), green, of the whole gate, of exactly that tree, finished less than 24 h ago and not in the future: the log then says
+  `gate: reused the green verdict of gate Job <name> (commit …, tree …, finished …)` and no Job runs. Anything else (nothing stored, unreadable,
+  red, older, another tree, a subset, a forged source) logs `gate: no verdict to reuse (run: <why>)` and runs the gate as before. `DEPLOY_GATE_REUSE=false`
+  always gates. Trust: the record lives in the cluster, never in a branch or file of the repository; whoever can write ConfigMaps in the gate
+  namespace could forge one, as they could run anything there. The commit-independent checks that read the repository, not the tree, (the context-pack
+  freshness is of the commit) are not repeated for a reused verdict. Old records are not pruned yet (one small ConfigMap per gated tree).
 - **Pending (T-524):** 8Gi requested fits only k3s-node2, and the gate is not counted in job-run's caps, so it can wait for room. Its pod
   Pending for that says so once, `gate job <name> is Pending: <the scheduler's reason>; it waits for a node with room (a Job that ends frees
   memory), up to <GATE_JOB_WAIT_S>s`, and `gate job <name>: scheduled after Ns Pending` when it gets a node. A gate never scheduled in

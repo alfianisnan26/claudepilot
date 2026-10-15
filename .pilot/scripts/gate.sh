@@ -18,6 +18,18 @@ if [ "${DEPLOY_GATE_IN_CLUSTER:-true}" = true ]; then
     log "[dry-run] would run: scripts/gate-job.sh $(short "$sha")"
     exit 0
   fi
+  # T-578: a green verdict the gate Job itself recorded for this exact git TREE in the last 24 h is reused (scripts/gate-reuse.mjs decide, which
+  # fails closed: unreadable, missing, red, older, another tree or not from a gate Job all run the gate). DEPLOY_GATE_REUSE=false always gates.
+  if [ "${DEPLOY_GATE_REUSE:-true}" = true ]; then
+    tree=$(git rev-parse "$sha^{tree}" 2>/dev/null || true)
+    rec=$(kubectl -n "${GATE_NAMESPACE:-isnan-claudepilot}" get configmap "claudepilot-gate-green-$tree" -o jsonpath='{.data.record}' 2>/dev/null || true)
+    if [ -n "$tree" ] && why=$(printf '%s' "$rec" | node scripts/gate-reuse.mjs decide --tree "$tree" 2>&1); then
+      read -r _ rjob rcommit rtree rtime <<< "$why"
+      log "gate: reused the green verdict of gate Job $rjob (commit $(short "$rcommit"), tree $rtree, finished $rtime) for $(short "$sha"): same tree, under 24 h"
+      exit 0
+    fi
+    log "gate: no verdict to reuse (${why:-no tree}): running the gate"
+  fi
   export GATE_JOB_LOG="${TMPDIR:-/tmp}/pilot-gate-${PILOT_RUN_ID:-local}.log" GATE_JOB_BY=pipeline
   # A cancelled run's runner kills gate-job.sh before its trap: its Job (and the token Secret it owns) would run on. Deploy runs never overlap
   # (concurrency group), so at the start every pipeline gate Job is a leftover; at the end, ours goes too.

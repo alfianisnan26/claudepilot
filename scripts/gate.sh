@@ -17,6 +17,7 @@ dir=${GATE_DIR:-/tmp/gate-$sha}; logs=$dir.logs
 rm -rf "$dir" "$logs"; mkdir -p "$dir" "$logs" "$dir/.home"
 git archive "$sha" | tar -x -C "$dir"
 cd "$dir" || exit 1
+exec 4>&1 # the console, kept for the suite's progress lines (T-578): step() sends everything else to the step's log
 step() { local name=$1; shift; local t0; t0=$(date +%s); "$@" > "$logs/$name.log" 2>&1; local rc=$?; echo "$name rc=$rc $(( $(date +%s) - t0 ))s" | tee -a "$logs/SUMMARY.txt"; return $rc; }
 if [ -f scripts/context-pack.sh ]; then step context-pack bash scripts/context-pack.sh --repo "$repo" --check "$sha" || echo "context-pack stale: see $logs/context-pack.log"; fi
 export NODE_AUTH_TOKEN=${NODE_AUTH_TOKEN:-$(gh auth token 2>/dev/null || true)}
@@ -36,8 +37,15 @@ run_suite() {
   local timeout=${GATE_TEST_TIMEOUT_MS:-600000} first="$logs/server-suite.first" files rc tests=('src/**/*.test.ts')
   # node expands the glob itself (bash would not descend with **); GATE_FILES are plain paths.
   [ -z "${GATE_FILES:-}" ] || read -ra tests <<< "$GATE_FILES"
-  ( cd apps/server && "${clean[@]}" nice -n 10 node --import tsx --test --test-force-exit --test-timeout="$timeout" --test-concurrency="${GATE_CONCURRENCY:-2}" "${tests[@]}" ) > "$first" 2>&1
+  # T-578: progress per test file goes to the gate's own console (fd 4, saved at the top) while the suite runs; the TAP report on stdout, which
+  # the verdict reads, is unchanged. A heartbeat every 60 s says how many files have started.
+  local progress="$logs/progress.log" tp hb
+  : > "$progress"
+  tail -n +1 -f "$progress" >&4 2>/dev/null & tp=$!
+  ( while sleep 60; do echo "progress: running, $(grep -c '^progress: start ' "$progress" 2>/dev/null) test files started, $(grep -c '^progress: FAIL ' "$progress" 2>/dev/null) failing tests so far"; done ) >&4 2>/dev/null & hb=$!
+  ( cd apps/server && "${clean[@]}" nice -n 10 node --import tsx --test --test-force-exit --test-timeout="$timeout" --test-concurrency="${GATE_CONCURRENCY:-2}" --test-reporter=tap --test-reporter-destination=stdout --test-reporter="$dir/scripts/gate-progress-reporter.mjs" --test-reporter-destination="$progress" "${tests[@]}" ) > "$first" 2>&1
   rc=$?
+  kill "$hb" 2>/dev/null; sleep 1; kill "$tp" 2>/dev/null; wait "$hb" "$tp" 2>/dev/null
   cat "$first"
   [ "$rc" = 0 ] && return 0
   files=$( { awk '/^not ok /{f=1; next} f && /location:/{print; f=0} /^ok /{f=0}' "$first" | sed -E "s#.*location: '(/[^']*/apps/server/)?([^:']+\.ts):.*#\2#"; sed -nE 's/^not ok [0-9]+ - (src\/.*\.test\.ts)$/\1/p' "$first"; } | grep -E '^src/.*\.test\.ts$' | sort -u )
