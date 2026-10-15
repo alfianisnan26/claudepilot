@@ -8,22 +8,23 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-561 open, waits-t640 (5898): its done-when is a live crew check -> T-640 (scratch portal, real Claude Code).
 - MERGED ff 1772d2d0: T-576 cb6bd216 (gate GREEN f63c5f9, claudepilot-gate-f63c5f9-a7da; 5991).
 ## IN FLIGHT (6 of 6, D-71): all sonnet
-- T-591 S1d DONE 394abdd5 (5867; 783->784, lead checked no dup) -> QA Perf delta. T-325 S1 DONE 39a9faa8 (5896; 4083876c ended) -> QA Perf queue (S3 held).
 - BACKEND respawned 4b025fae (ticket/T-633-digest-mutants from integration) on T-633. QA T-416 S1c ec59993c (qa/T-416-s1c-r2, sonnet) on 7af4b269.
   Old Backend 4b4edaf8 ended: T-600 BE 1a95fb03 (5756) + T-597 S1b 75656845 (5849) DONE -> QA Perf.
 - T-631 review CHANGES 5850 -> lead 5853: absolute-path entry (a) for the coordinator; F2 small slice; F1 also on job-run.sh -> T-635 (high).
-- T-558 S1b DONE 728b58d0 (5900; 191bd6f1 ended) -> QA Perf queue.
-- NEXT FREE SLOTS: 1) BE Infra on T-638 flakes (+ layout.test from gate 2c53982). BATCH 4: QA-passed of T-591/T-597/T-600/T-623/T-416.
-- T-416 S1c DONE 7af4b269 (0e5bcf50 ended; prior QA FAIL 5792 -> 5808) -> QA ec59993c -> blind review (opus) -> gate -> merge.
+- QA PERF round done (7e4879c7 idle, queue empty): PASS WITH GAPS T-623 S1b 6069, T-636 5962, T-591 S1d 6107, T-558 S1b 6182.
+  T-325 S1 FAIL 6133 (F1: author's child named qa-verifier records a verdict; M4/M7 survive) -> S1b on Backend after T-633 (respawn
+  on ticket/T-325-s1). BATCH 6 after batch 5 lands: T-623 S1b, T-591 S1d, T-558 S1b, T-636 (+T-631 F2 on PASS). Then QA Perf: T-633.
+- T-416 S1c 7af4b269: QA PASS WITH GAPS 6141 (ec59993c ended; queued-start release untested) -> BLIND REVIEW 4005c6bd (opus, why: incident)
+  -> gate -> merge.
 - T-623 S1b DONE 784926f (5855; 6d431441 ended; lead read diff: stdin not argv, Memory emptyDir 0400, no values in audit/hash, no RBAC) -> QA Perf queue.
-- T-578 S1 DONE 51f6c153 (6010): a GATE change -> BLIND REVIEW f08f9c2f (opus, why: gate; review/T-578-s1) -> merge only on a person's ack.
+- T-578 S1 51f6c153: blind review CHANGES 6168 (sev1: ConfigMap record forgeable, can-i=yes; manual runs judged by out-of-tree scripts;
+  conflicts "full gate on exact commit") -> HOLD for owner decision (NEEDS A HUMAN). BE INFRA ae4e3f72 (sonnet) on T-638 flakes.
 - T-426 S1e DONE 2174eee1 (6124; 88f36411 ended; mutant killed, docs already fixed) + T-631 F2 DONE 8815a6e1 (6077)
   -> QA DELTAS f5b1026b (sonnet, qa/T-426-s1e) both -> T-426 merge on T-401 ack; T-631 F2 merge on PASS. BE Infra lane: respawn on T-638.
-- QA PERF 7e4879c7 (lane/cp-qa-perf) queue (19:59): T-623 S1b -> T-636 -> T-591 S1d -> T-600 BE/T-597 (if not done) -> T-325 S1 -> T-558 S1b.
 - MERGED ff ce819bd0: T-597 S1b (gate GREEN 2c53982, flake layout.test -> T-638) -> coordinator deploys with T-546. Next merge T-325 S1 (after QA).
-- T-576 phone check (390/1280 on the real build) still open; kit 44 px -> T-639. Closes on that evidence (5991).
-- T-600 FE S1c DONE d1b31305 (5954; fa9d3d56 ended) -> QA UI respawned de862414 on qa/T-600-ui-r4 81684f78 (r3 + FE head, lead merge)
-  re-runs crew-grid.mjs at 390/1280. Frontend lane is free: next FE item when the QA UI verdict is in.
+- T-576 phone check (390/1280 on the real build) with QA UI 8b13bb5a; kit 44 px -> T-639. Closes on that evidence (5991).
+- BATCH 5 premerge 6bb628cf: T-600 (BE QA 5864 + FE QA UI 6128 PASS WITH GAPS; conflicts with T-547 quotaUnused in lab/index.ts and
+  contracts/scorecard.ts: kept both) GATE RUNNING (job-out/gate-6bb628c.log) -> ff on green. QA UI respawned 8b13bb5a on T-576 phone check.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
   T-426 ab93b54: QA Perf PASS 33/33 (5564) but blind review d4c49b5c FAIL 5571 (sev 2: refused arg echoed, pasted hex secret printed).
   S1b 350dd399 (5661): 2nd blind review 14385e7d CHANGES 5674 (sev 2: parser :104 echoes $1, lead confirmed) -> decision 5682 ->
@@ -31,13 +32,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   over-claims, no failure-path tests) -> decision 5778 -> S1d DONE 80f5bb72 (5852) -> QA Perf PASS WITH GAPS 5992 (create-stderr mutant
   survived; docs not re-read) -> decision 5995: S1e test + doc re-read on BE INFRA after T-578 -> delta QA -> gate -> merge on T-401 ack.
   T-401 re-merged wip/main-54ba328: gate GREEN gate-54ba328-6502 (suite 570 s, peak 2228Mi; 5560/5562); ff only on the person's ack (4941).
-- T-416 (high incident): S1 d37c5f0 QA PASS WITH GAPS 4623; S1b a769b00 QA FAIL 5792 -> S1c 0e5bcf50. S2 = Bypass restore.
 
 ## DECISIONS (binding)
 - 20:14 Coordinator closed all 9 sweep tickets done. 6 match evidence (T-109/280/282/285/287/136). PUSHBACK T-657: T-259 (QA FAIL 1773),
   T-317 (live run not done), T-338 (no QA pass, only review 1846) closed against the evidence -> reopen proposed; lead can't (T-634).
-- 16:57 Workspace restarted by coordinator (pilot browser, T-619, D-73); release portal 2026.10.15-12 merged (c29d75c7). All 6 workers' processes stopped;
-  every worktree clean and pushed. Woke QA Perf, impl-t426, BE Infra, Backend, impl-t548 by message (re-run cut Jobs). QA UI respawned 80df7bb9 on qa/T-600-ui-r2.
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
   T-401, T-426, T-611, T-547, T-610. Backend: T-546, T-597, T-600 route, T-325. Spawn lanes with claude auto.
 - 14:56 D-70 LANES (DECISIONS.md; my decision T-595 5380): current 5 workers finish; freed slots become lanes, spawned ONCE on sonnet and fed
@@ -60,6 +58,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - D-61: (worker count now 5 by D-68, coordinator 2026-10-15), NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh, one at a time. Hand over before 250k.
 
 ## NEEDS A HUMAN (D-62)
+- T-578 (gate wall, via coordinator): owner picks same-tree gate reuse (a) portal CI store [lead default], (b) pipeline-only RBAC
+  ConfigMap, (c) accept risk, (d) drop reuse; reuse also conflicts with "full gate on the exact commit" (charter). Lead can't comment (T-634). RBAC: T-666 (cross-program configmap write).
 - T-401 gate wall (via the coordinator): the owner acks on T-401 that gate-job.yaml's change is credential plumbing plus one
   stricter red (exit 3 on a credential value in the gate's files); gate.sh's checks unchanged. Question text in 4941.
 - T-93 Konfersi production only. Coordinator items: T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
