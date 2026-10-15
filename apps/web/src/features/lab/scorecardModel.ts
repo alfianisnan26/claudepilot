@@ -121,7 +121,7 @@ const pct1 = (n: number): string => `${n.toFixed(1)} %`;
 const D65_FORMAT: Record<CrewD65TargetId, { label: string; fmt: (n: number) => string }> = {
   cost_per_done: { label: 'Cost / done', fmt: formatCost },
   lead_share: { label: 'Lead share', fmt: pct1 },
-  qa_opus_share: { label: 'QA on opus', fmt: pct1 },
+  qa_opus_share: { label: 'QA opus', fmt: pct1 },
   done_rate: { label: 'Done / day', fmt: fmtPerHour },
   quota_unused: { label: 'Quota unused', fmt: pct1 },
   wasted_tool_calls: { label: 'Wasted calls', fmt: pct1 },
