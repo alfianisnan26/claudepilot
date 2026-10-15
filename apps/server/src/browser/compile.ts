@@ -40,7 +40,9 @@ export const LOCK_HASH = sha256(json(pinnedLock)).slice(0, 16);
 /** The servers a pool starts, as `.mcp.json` entries. Pure, so the review and the tests see exactly what runs. */
 export function mcpServers(content: BrowserPoolContent): Record<string, unknown> {
   const root = '${CLAUDE_PLUGIN_ROOT}';
-  const common = (name: 'playwright' | 'devtools') => ['--tools', `${root}/tools/${name}.json`, '--npm-files', `${root}/npm`];
+  // Header names the gate also redacts from tool results (PRD §24): names only, and only when the pool has headers.
+  const redactNames = [...new Set((content.headers ?? []).map((h) => h.name))].sort();
+  const common = (name: 'playwright' | 'devtools') => ['--tools', `${root}/tools/${name}.json`, '--npm-files', `${root}/npm`, ...(redactNames.length ? ['--redact', redactNames.join(',')] : [])];
   const servers: Record<string, unknown> = {
     browser: {
       command: GATE_PATH,

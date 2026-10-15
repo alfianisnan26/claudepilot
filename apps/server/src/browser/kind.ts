@@ -3,12 +3,14 @@ import {
   BROWSER_DISPLAYS,
   BROWSER_POOL_DEFAULTS,
   BROWSER_TIERS,
+  type BrowserHeaderRule,
   type BrowserPoolContent,
   type BrowserToolRule,
 } from '@portal/contracts';
 import type { Fragment } from '../delivery/types.js';
 import type { AssignedPool, KindContext, ParseContext, PoolKind } from '../pools/kinds.js';
 import { compileBrowser } from './compile.js';
+import { headerProblem, MAX_HEADERS } from './headers.js';
 import { SITE_PATTERN } from './policy.js';
 import { splitWorkspaceId } from './spec.js';
 
@@ -45,6 +47,24 @@ function sites(v: unknown, field: string, fallback: string[]): string[] {
     out.add(site);
   }
   return [...out];
+}
+
+/** The header rules (PRD §24): names only, each host one the pool allows. A rule is `{ hosts, name, secret }`; a value is never accepted. */
+function headerRules(v: unknown, allowedSites: string[], fallback: BrowserHeaderRule[]): BrowserHeaderRule[] {
+  if (v === undefined || v === null) return fallback;
+  if (!Array.isArray(v)) throw invalid('headers', 'A list of headers.');
+  if (v.length > MAX_HEADERS) throw invalid('headers', `Use at most ${MAX_HEADERS} headers.`);
+  const out: BrowserHeaderRule[] = [];
+  for (const raw of v) {
+    if (!isObject(raw)) throw invalid('headers', 'Each header needs hosts, a name and a secret.');
+    if (typeof raw.name !== 'string' || typeof raw.secret !== 'string' || !Array.isArray(raw.hosts) || raw.hosts.some((h) => typeof h !== 'string'))
+      throw invalid('headers', 'Each header needs hosts, a name and the name of a secret.');
+    const rule: BrowserHeaderRule = { hosts: [...new Set((raw.hosts as string[]).map((h) => h.trim().toLowerCase()).filter(Boolean))], name: raw.name.trim(), secret: raw.secret.trim() };
+    const problem = headerProblem(rule, allowedSites);
+    if (problem) throw invalid('headers', problem);
+    out.push(rule);
+  }
+  return out;
 }
 
 const RULES: readonly BrowserToolRule[] = ['default', 'ask', 'block'];
@@ -111,6 +131,7 @@ export class BrowserKind implements PoolKind<BrowserPoolContent> {
       blockedSites: sites(input.blockedSites, 'blockedSites', base.blockedSites),
       allowlistMode: bool(input.allowlistMode, 'allowlistMode', base.allowlistMode),
       allowedSites: sites(input.allowedSites, 'allowedSites', base.allowedSites),
+      headers: [],
       devtools: bool(input.devtools, 'devtools', base.devtools),
       vision: bool(input.vision, 'vision', base.vision),
       toolRules: toolRules(input.toolRules, base.toolRules),
@@ -120,6 +141,12 @@ export class BrowserKind implements PoolKind<BrowserPoolContent> {
       privateTakeOvers: bool(input.privateTakeOvers, 'privateTakeOvers', base.privateTakeOvers),
       requireSandbox: bool(input.requireSandbox, 'requireSandbox', base.requireSandbox),
     };
+    // After the sites: each header's hosts must be allowed ones, also when only the sites changed (a site removed under a header).
+    content.headers = headerRules(input.headers, content.allowedSites, base.headers ?? []);
+    for (const r of content.headers) {
+      const problem = headerProblem(r, content.allowedSites);
+      if (problem) throw invalid('allowedSites', problem);
+    }
     if (content.allowlistMode && content.allowedSites.length === 0) throw invalid('allowedSites', 'List the sites the browser may open, or turn allowlist mode off.');
     // No display, no VNC: the headless tier is watched through the proxy view only.
     if (content.tier === 'headless') content.liveView = false;

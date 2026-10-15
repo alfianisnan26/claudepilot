@@ -12,6 +12,7 @@ import {
   type V1Node,
   type V1Pod,
   type V1PodTemplateSpec,
+  type V1Secret,
   type V1Status,
   type V1Volume,
 } from '@kubernetes/client-node';
@@ -20,6 +21,7 @@ import { seedHomeScript, type KubeBrowserAccess } from '../workspaces/kubernetes
 import type { Store } from '../store/store.js';
 import { LABEL } from '../workspaces/runtime.js';
 import type { ExecResult, ExecStream } from './companion.js';
+import { HEADERS_DIR, HEADERS_FILE, headersFile, headersSpec, type ResolvedHeader } from './headers.js';
 import { chromePolicy, containerConfig } from './policy.js';
 import { DOWNLOADS_DIR, HOME, PROFILE_REL, sha256 } from './spec.js';
 
@@ -76,8 +78,11 @@ export interface KubePlan {
   /** Hosts the browser's policy refuses: the portal as a workspace reaches it. */
   portalHosts: string[];
   image: string;
+  /** The pool's request headers with their values (PRD §24): in a Secret, never in the ConfigMap, the template or the spec hash. */
+  headers?: ResolvedHeader[];
 }
 
+export const headersSecretName = (runtimeName: string) => `${runtimeName}-browser-headers`;
 export const configMapName = (runtimeName: string) => `${runtimeName}-browser`;
 export const egressPolicyName = (runtimeName: string) => `${runtimeName}-egress`;
 
@@ -128,13 +133,16 @@ export function browserContainer(plan: KubePlan): V1Container {
       { name: 'cpb-shm', mountPath: '/dev/shm' },
       { name: 'cpb-config', mountPath: '/etc/cpb', readOnly: true },
       { name: 'cpb-policy', mountPath: '/etc/chromium/policies/managed', readOnly: true },
+      ...(plan.headers?.length ? [{ name: 'cpb-secrets', mountPath: HEADERS_DIR, readOnly: true }] : []),
     ],
   };
 }
 
-export function browserVolumes(runtimeName: string, content: BrowserPoolContent): V1Volume[] {
+export function browserVolumes(runtimeName: string, content: BrowserPoolContent, withHeaders = false): V1Volume[] {
   const cm = configMapName(runtimeName);
   return [
+    // Only the browser container mounts it (PRD §24); the files are root's, mode 0400.
+    ...(withHeaders ? [{ name: 'cpb-secrets', secret: { secretName: headersSecretName(runtimeName), items: [{ key: HEADERS_FILE, path: HEADERS_FILE }], defaultMode: 0o400 } }] : []),
     { name: 'cpb-home', emptyDir: { sizeLimit: '512Mi' } },
     { name: 'cpb-tmp', emptyDir: { sizeLimit: '1Gi' } },
     { name: 'cpb-run', emptyDir: { medium: 'Memory', sizeLimit: '16Mi' } },
@@ -147,7 +155,9 @@ export function browserVolumes(runtimeName: string, content: BrowserPoolContent)
 
 /** The hash a template carries for its browser: the container, its volumes and its config, so any of them changing means a new pod. */
 export function specOf(plan: KubePlan, runtimeName: string): string {
-  return sha256(JSON.stringify({ c: browserContainer(plan), v: browserVolumes(runtimeName, plan.content), d: configMapData(plan) })).slice(0, 16);
+  // Headers by name and value version (PRD §24): a changed or removed secret changes the template, and no value is hashed.
+  const headers = headersSpec(plan.headers ?? []);
+  return sha256(JSON.stringify({ c: browserContainer(plan), v: browserVolumes(runtimeName, plan.content, headers.length > 0), d: configMapData(plan), ...(headers.length ? { h: headers } : {}) })).slice(0, 16);
 }
 
 const OWN_VOLUME = /^cpb-/;
@@ -169,7 +179,7 @@ export function withBrowser(template: V1PodTemplateSpec, runtimeName: string, pl
   const seed = spec.initContainers?.find((c) => c.name === 'seed-home');
   if (plan) {
     spec.containers.push(browserContainer(plan));
-    spec.volumes.push(...browserVolumes(runtimeName, plan.content));
+    spec.volumes.push(...browserVolumes(runtimeName, plan.content, !!plan.headers?.length));
     spec.automountServiceAccountToken = false;
     annotations[SPEC_ANNOTATION] = specOf(plan, runtimeName);
     if (seed) seed.command = ['sh', '-c', seedHomeScript(['.claudepilot', '.claudepilot/browser', PROFILE_REL, 'Downloads'])];
@@ -435,6 +445,33 @@ export class KubeBrowsers {
     }
   }
 
+  /**
+   * The Secret that holds `headers.json` (PRD §24), owned by the Deployment: created or updated while there are headers, deleted when
+   * there are none (a removed secret leaves no old value behind). It is the only place a value is stored on the cluster.
+   */
+  async ensureHeadersSecret(ws: KubeWorkspace, plan: KubePlan): Promise<void> {
+    const runtimeName = ws.deployment.metadata!.name!;
+    const name = headersSecretName(runtimeName);
+    if (!plan.headers?.length) {
+      await this.#core.deleteNamespacedSecret({ name, namespace: this.#ns }).catch((e) => (codeOf(e) === 404 ? undefined : Promise.reject(e)));
+      return;
+    }
+    const body: V1Secret = {
+      metadata: { name, labels: { [LABEL.managed]: 'true', 'claudepilot.io/browser': '1' }, ownerReferences: ownerOf(ws.deployment) },
+      type: 'Opaque',
+      stringData: { [HEADERS_FILE]: headersFile(plan.headers) },
+    };
+    try {
+      const cur = await this.#core.readNamespacedSecret({ name, namespace: this.#ns });
+      const same = Buffer.from(cur.data?.[HEADERS_FILE] ?? '', 'base64').toString('utf8') === body.stringData![HEADERS_FILE];
+      if (same) return;
+      await this.#core.replaceNamespacedSecret({ name, namespace: this.#ns, body: { ...body, metadata: { ...body.metadata, resourceVersion: cur.metadata?.resourceVersion } } });
+    } catch (e) {
+      if (codeOf(e) !== 404) throw e;
+      await this.#core.createNamespacedSecret({ namespace: this.#ns, body });
+    }
+  }
+
   /** The per-pod egress policy, created or updated; with the opt-out, removed. */
   async ensureEgress(ws: KubeWorkspace, name: string): Promise<void> {
     const runtimeName = ws.deployment.metadata!.name!;
@@ -458,6 +495,7 @@ export class KubeBrowsers {
   async removeExtras(ws: KubeWorkspace): Promise<void> {
     const runtimeName = ws.deployment.metadata!.name!;
     await this.#core.deleteNamespacedConfigMap({ name: configMapName(runtimeName), namespace: this.#ns }).catch((e) => (codeOf(e) === 404 ? undefined : Promise.reject(e)));
+    await this.#core.deleteNamespacedSecret({ name: headersSecretName(runtimeName), namespace: this.#ns }).catch((e) => (codeOf(e) === 404 ? undefined : Promise.reject(e)));
     await this.#net.deleteNamespacedNetworkPolicy({ name: egressPolicyName(runtimeName), namespace: this.#ns }).catch((e) => (codeOf(e) === 404 ? undefined : Promise.reject(e)));
   }
 

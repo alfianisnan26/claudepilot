@@ -28,7 +28,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const text = name === 'browser_tabs' && args.action === 'list'
     ? '### Result\n- 0: [Other](http://localhost:3000/)\n- 1: (current) [My app [dev]](http://localhost:5173/login)'
     : name === 'browser_headers'
-    ? 'cookie: sid=abc123\nAuthorization: Bearer tok_secret\n- Set-Cookie: s=1; Path=/\n{"x-api-key": "k_secret", "accept": "*/*"}\nplain: visible'
+    ? 'cookie: sid=abc123\nAuthorization: Bearer tok_secret\n- Set-Cookie: s=1; Path=/\n{"x-api-key": "k_secret", "accept": "*/*"}\nCF-Access-Client-Secret: cfsecretval\n{"X-Edge-Token": "edgeval"}\nplain: visible'
     : 'ran ' + name + ' ' + JSON.stringify(args);
   console.log(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text }] } }));
 });
@@ -233,6 +233,29 @@ describe('the gate', () => {
       assert.match(r.text, /\[redacted\]/);
     } finally {
       g.close();
+    }
+  });
+
+  test('the headers a pool adds from secrets are redacted too: the Cloudflare Access ones always, the pool’s own by name (--redact)', async () => {
+    fake.state.chrome = { state: 'up', bootId: 'boot-1' };
+    const plain = gate();
+    try {
+      await plain.init();
+      const r = await plain.call('browser_headers');
+      assert.ok(!r.text.includes('cfsecretval'), `the Cloudflare Access header leaked: ${r.text}`);
+      assert.ok(r.text.includes('edgeval'), 'a header the pool did not name is not guessed');
+    } finally {
+      plain.close();
+    }
+    const named = gate(['--redact', 'X-Edge-Token,bad name!,a|b']);
+    try {
+      await named.init();
+      const r = await named.call('browser_headers');
+      for (const leaked of ['cfsecretval', 'edgeval', 'sid=abc123']) assert.ok(!r.text.includes(leaked), `${leaked} leaked: ${r.text}`);
+      assert.match(r.text, /plain: visible/);
+      assert.match(r.text, /"accept": "\*\/\*"/);
+    } finally {
+      named.close();
     }
   });
 

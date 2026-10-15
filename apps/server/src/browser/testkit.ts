@@ -12,6 +12,7 @@ import { PoolService } from '../pools/service.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import type { Companions, CompanionInfo, CompanionPlan, ExecStream } from './companion.js';
+import { headersSpec, type ResolvedHeader, type SecretLookup } from './headers.js';
 import { BrowserKind } from './kind.js';
 import { kubeCapRefusal, type KubeBrowsers } from './kube.js';
 import { BrowserService, type SupervisorStatus } from './service.js';
@@ -87,6 +88,8 @@ export function fakeTarget(targetId = 'docker', portal = 'portal-1') {
     supervisor: supervisorStatus(),
     ctl: [] as { cmd: string; args: string[] }[],
     failCreate: null as string | null,
+    /** The plans containers were created from, with the headers (and their values) each carried. */
+    created: [] as { workspace: string; headers: ResolvedHeader[] }[],
     wiped: [] as string[],
     imageId: 'sha256:image-1',
     /** Processes started with `stream`, in order. */
@@ -105,11 +108,13 @@ export function fakeTarget(targetId = 'docker', portal = 'portal-1') {
     gateway: async () => '172.17.0.1',
     sandboxWorks: async () => state.sandboxWorks,
     imageId: async () => state.imageId,
-    specHash: async (plan: CompanionPlan) => `spec:${plan.content.tier}:${plan.content.display}:${plan.content.idleMinutes}:${plan.sandbox}:${state.imageId}`,
+    // With headers the real hash follows their names and value versions (PRD §24); never a value.
+    specHash: async (plan: CompanionPlan) => `spec:${plan.content.tier}:${plan.content.display}:${plan.content.idleMinutes}:${plan.sandbox}:${state.imageId}${plan.headers?.length ? `:${JSON.stringify(headersSpec(plan.headers))}` : ''}`,
     prepareMounts: async (name: string) => void calls.push(`mounts ${name}`),
     create: async (plan: CompanionPlan, netns: string, spec: string) => {
       if (state.failCreate) throw new Error(state.failCreate);
       calls.push(`create ${plan.workspace}`);
+      state.created.push({ workspace: plan.workspace, headers: structuredClone(plan.headers ?? []) });
       containers.set(plan.workspace, { id: `b${++seq}`, running: false, startedAt: '', netns, spec, pool: plan.poolId, portal });
     },
     start: async (name: string) => {
@@ -179,7 +184,7 @@ export function fakeSteps() {
 }
 
 /** `kube`: Kubernetes targets (KubeBrowsers on a fake API server), beside the fake Docker ones. */
-export async function browserHarness(opts: { targets?: string[]; kube?: Map<string, KubeBrowsers> } = {}) {
+export async function browserHarness(opts: { targets?: string[]; kube?: Map<string, KubeBrowsers>; secretByName?: SecretLookup } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'cp-browser-'));
   const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
   const providers: FragmentProvider[] = [];
@@ -206,6 +211,7 @@ export async function browserHarness(opts: { targets?: string[]; kube?: Map<stri
     internalUrl: 'http://claudepilot-portal.portal-ns.svc.cluster.local:3000',
     portalPort: 3104,
     notify: () => notified.push(Date.now()),
+    secretByName: opts.secretByName,
   });
   const create = (name = 'dev', content: Partial<BrowserPoolContent> = {}) => pools.create('browser', { name, content: { ...BROWSER_POOL_DEFAULTS, ...content } });
   /** What the reconciler does after a write: asks the kind's provider for fragments, then reports the delivery. */

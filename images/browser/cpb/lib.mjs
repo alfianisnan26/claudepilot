@@ -87,7 +87,12 @@ export function chromeArgs(cfg, { headless, profileDir, cdpPort = CDP_PORT, exte
   else args.push('--start-maximized');
   if (!cfg.sandbox) args.push('--no-sandbox', '--disable-setuid-sandbox');
   // The headers extension (PRD §24), built by the init for this start; the policy allows only its id.
-  if (extensionDir) args.push(`--load-extension=${extensionDir}`, `--disable-extensions-except=${extensionDir}`);
+  // Newer Chrome builds ignore --load-extension unless this feature is switched off; a second --disable-features would replace the first.
+  if (extensionDir) {
+    const i = args.findIndex((a) => a.startsWith('--disable-features='));
+    args[i] = `${args[i]},DisableLoadExtensionCommandLineSwitch`;
+    args.push(`--load-extension=${extensionDir}`, `--disable-extensions-except=${extensionDir}`);
+  }
   args.push(...cfg.chromeFlags.filter((f) => /^--[a-z0-9-]+(=[^\s]*)?$/i.test(f) && !/remote-debugging|remote-allow-origins|user-data-dir|no-sandbox|disable-web-security/.test(f)));
   // Last, so nothing above can turn it into a different first page.
   args.push('about:blank');

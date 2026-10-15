@@ -98,7 +98,10 @@ async function status(fresh) {
 const clock = (ms) => new Date(ms).toISOString().slice(11, 16) + ' UTC';
 
 // ---- credentials never reach a transcript (§11.3) ----
-const CRED = '(cookie|set-cookie|authorization|proxy-authorization|x-api-key)';
+// The names of the headers the pool adds from secrets (`--redact a,b`, names only, PRD §24) are credentials too, and the two Cloudflare
+// Access ones always are. A name is only letters, digits and hyphens: anything else is dropped here, so it can't change the pattern.
+const EXTRA_CRED = ['cf-access-client-id', 'cf-access-client-secret'].concat(String(flag('--redact') || '').split(',').filter((n) => /^[A-Za-z][A-Za-z0-9-]{0,63}$/.test(n)));
+const CRED = '(cookie|set-cookie|authorization|proxy-authorization|x-api-key|' + EXTRA_CRED.join('|') + ')';
 function redact(s) {
   return s
     .replace(new RegExp('("' + CRED + '"\\s*:\\s*)"(?:[^"\\\\]|\\\\.)*"', 'gi'), '$1"[redacted]"')

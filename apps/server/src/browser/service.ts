@@ -22,6 +22,7 @@ import { type Companions, type CompanionPlan, type ExecResult, type ExecStream }
 import { browserContainerState, hasBrowser, workspaceRunning, PENDING_ROLLBACK_MS, specIn, specOf, type KubeBrowsers, type KubePlan } from './kube.js';
 import { browserMatchers, compileBrowser, LOCK_HASH } from './compile.js';
 import { DEVICE_ID, deviceLabel, LEASE_TTL_S, Leases, refuse, type Lease } from './control.js';
+import { headersSpec, headersSummary, resolveHeaders, type ResolvedHeader, type SecretLookup } from './headers.js';
 import type { BrowserKind } from './kind.js';
 import { INSTALL_PATH } from './scripts.js';
 import { companionName, splitWorkspaceId } from './spec.js';
@@ -58,6 +59,8 @@ export interface BrowserServiceDeps {
   portalPort: number;
   /** Something about a browser changed: pages that show it load it again. */
   notify: () => void;
+  /** Reads a Secrets & env secret by name, for the pool's request headers (PRD §24); without it every header is skipped. */
+  secretByName?: SecretLookup;
 }
 
 /** What the supervisor answers to `cpb-ctl status` (images/browser/cpb/supervisor.mjs). */
@@ -262,7 +265,26 @@ export class BrowserService {
     const { name } = splitWorkspaceId(workspaceId);
     const works = await comps.sandboxWorks();
     if (!works && a.content.requireSandbox) return { error: 'Chromium’s sandbox can’t start on this Docker target, and the pool requires it.' };
-    return { workspace: name, poolId: a.pool.id, content: a.content, sandbox: works, portalHosts: await this.#portalHostsFor(comps) };
+    return { workspace: name, poolId: a.pool.id, content: a.content, sandbox: works, portalHosts: await this.#portalHostsFor(comps), headers: this.#headers(workspaceId, a.content) };
+  }
+
+  /** What each workspace's headers last were (names, secret names, value versions, skips: never a value), so the audit has one row per change. */
+  readonly #headersSeen = new Map<string, string>();
+
+  /**
+   * The pool's request headers with their values, read now (PRD §24): a secret that was removed or has no value is left out, so its header
+   * stops at the next delivery. The audit names the headers, their secrets and hosts, and why one was skipped; never a value.
+   */
+  #headers(workspaceId: string, content: BrowserPoolContent): ResolvedHeader[] {
+    const { entries, skipped } = resolveHeaders(content.headers, this.deps.secretByName);
+    const summary = headersSummary(entries, skipped);
+    const key = JSON.stringify([headersSpec(entries), skipped]);
+    const seen = this.#headersSeen.get(workspaceId) ?? JSON.stringify([[], []]);
+    if (key !== seen) {
+      this.#headersSeen.set(workspaceId, key);
+      this.event(workspaceId, 'headers', summary);
+    }
+    return entries;
   }
 
   /** Where the portal answers from a workspace's network, so the browser can refuse it (PRD §13 Network): the bridge gateway and the portal's port. */
@@ -407,10 +429,12 @@ export class BrowserService {
       return;
     }
 
-    const plan: KubePlan = { workspace: name, poolId: assigned.pool.id, content: assigned.content, portalHosts: this.#kubePortalHosts(), image: kb.image };
+    const plan: KubePlan = { workspace: name, poolId: assigned.pool.id, content: assigned.content, portalHosts: this.#kubePortalHosts(), image: kb.image, headers: this.#headers(workspaceId, assigned.content) };
     const spec = specOf(plan, ws.deployment.metadata!.name!);
     const base = { pool_id: assigned.pool.id, revision: assigned.pool.revision };
     await kb.ensureConfigMap(ws, plan);
+    // The Secret is updated while there are headers; it is deleted only when no pod can need it (the template stops mounting it then).
+    if (plan.headers?.length || quiet) await kb.ensureHeadersSecret(ws, plan);
     await kb.ensureEgress(ws, name);
     // Refused for room at the last start: tried again at the next one (or when the pool changes, which is a new spec).
     if (row?.spec === `unfit:${spec}` && why !== 'workspace starting') return;
