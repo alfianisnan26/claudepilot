@@ -60,7 +60,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-401 gate wall (via the coordinator): the owner acks on T-401 that gate-job.yaml's change is credential plumbing plus one
   stricter red (exit 3 on a credential value in the gate's files); gate.sh's checks unchanged. Question text in 4941.
 - T-93 Konfersi production only. Coordinator items: T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
-  T-433's persona-wall question (2984).
+  T-433's persona-wall question (2984). T-631 (allow list): let lane-qa-ui run worktree-deps.sh in its own worktree; r3 link (5726).
 - For the coordinator, NOT the owner (not tagged owner-checklist): T-476 lead may START a deploy whose release waits for a person
   (3813); T-491 Event token scope until T-426 (3965); deploys #35/#36/#37 production approval showed "auto", not changed by an agent;
   T-509 kit republish; T-594 alfian.isnan signed out; T-525 session_get + scribe tools + QA UI browser tools (5505); T-595 lane Bash (5443);
