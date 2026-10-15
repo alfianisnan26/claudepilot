@@ -236,7 +236,7 @@ if [ -n "$watch" ] && [ "$watch" != none ] && kill -0 "$watch" 2>/dev/null; then
   wd=$!
 fi
 t0=$(date +%s)
-echo "job-run: $job: $repo@${ref:0:12} ($steps) on $image"
+echo "job-run: $job: $repo@${ref:0:12} ($steps) on $image${run_image:+; the command runs in $run_image}"
 
 # The queue: unfinished Jobs in creation order; the running ones count, then each suspended one is let in while the caps allow.
 # shellcheck disable=SC2016 # jq's own variables

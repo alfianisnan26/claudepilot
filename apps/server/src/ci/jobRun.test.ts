@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -604,6 +604,43 @@ test('T-379 --image: another registry, a path outside the prefix, an untagged or
   assert.match(r.out, /--image cannot be used with --against/);
   assert.equal(w.calls(), '', 'kubectl was never called');
   assert.deepEqual(w.applied(), []);
+});
+
+test('T-379 --image: the header names the command\'s image next to the fetch image; none is named without --image', () => {
+  const w = world();
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', 'registry.int.isnan.me/claudepilot/py-test:abc123', '--', 'true']);
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /job-run: claudepilot-job-[0-9a-f]{8}: claudepilot@main \(none\) on registry\.test\/claudepilot\/workspace:1-dev-1; the command runs in registry\.int\.isnan\.me\/claudepilot\/py-test:abc123\n/);
+  const w0 = world();
+  const r0 = w0.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
+  assert.match(r0.out, /\(npm-ci\) on registry\.test\/claudepilot\/workspace:1-dev-1\n/);
+  assert.doesNotMatch(r0.out, /the command runs in/);
+});
+
+test('T-379 the command container needs no git: the short sha comes from fetch (no "git: command not found", none empty in SUMMARY)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-nogit-'));
+  roots.push(root);
+  const git = (args: string[], cwd: string) => spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+  mkdirSync(join(root, 'src'));
+  git(['init', '-q', '-b', 'main'], join(root, 'src'));
+  writeFileSync(join(root, 'src/README'), 'x');
+  git(['add', '.'], join(root, 'src'));
+  git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'one'], join(root, 'src'));
+  git(['clone', '-q', '--bare', join(root, 'src'), join(root, 'claudepilot.git')], root);
+  const sha = git(['rev-parse', '--short', 'HEAD'], join(root, 'src')).stdout.trim();
+  // A PATH of the tools a slim image has, without git.
+  const bin = join(root, 'nogit-bin'); mkdirSync(bin);
+  for (const t of ['bash', 'cat', 'mkdir', 'basename', 'date', 'base64', 'sed', 'grep', 'stat', 'tar', 'tr', 'cut', 'rm', 'dirname', 'head', 'wc']) {
+    const src = ['/usr/bin', '/bin'].map((d) => join(d, t)).find((p) => existsSync(p));
+    if (src) symlinkSync(src, join(bin, t));
+  }
+  assert.ok(!existsSync(join(bin, 'git')));
+  const r = runPod(TEMPLATE, {
+    PATH: process.env.PATH, JR_ROOT: join(root, 'run'), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
+    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('echo hi').toString('base64'), NODE_NAME: 'n' }, {}, { PATH: bin });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout + r.stderr, /command not found/);
+  assert.match(r.stdout, new RegExp(`=== JOB-RUN SUMMARY claudepilot@${sha} checkout=`));
 });
 
 test('the Job\'s own script: checkout, the command\'s exit code, the artifacts block; a ref not on the remote says push it first', () => {

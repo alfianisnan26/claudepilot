@@ -150,7 +150,8 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   `:<tag>` (never `:latest`) or `@sha256:<digest>`; any other
   registry, path or odd character is refused (rc 2) before any kubectl call. The `fetch` container, the only one with the credentials, keeps the
   workspace image, and the checkout reaches the command container on the shared `/tmp`, as without the option. The image may have no node, npm
-  or git: the npm steps are skipped with a note (`--steps npm-ci` is refused) and `--against` is refused. Without `--image` nothing changes.
+  or git, and needs none: the checkout and its short sha come from `fetch` (the workspace image), so a plain `python:3.11-slim` plus pytest runs
+  as is (T-379 live proof: `python -m pytest -q` rc 0). The npm steps are skipped with a note (`--steps npm-ci` is refused) and `--against` is refused. Without `--image` nothing changes.
 
 - **The code:** `--repo` and `--ref` default to the current folder's origin and HEAD (it must be on the remote). ClaudePilot comes from GitHub
   (the npm token for `@isnanme` in the Job's Secret), Konfersi from Gitea (git's credential helper gives the token; in the Job a credential helper

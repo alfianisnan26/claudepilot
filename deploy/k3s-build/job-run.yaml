@@ -128,7 +128,7 @@ spec:
                   rm -rf "$root/warm"
                 fi
               fi
-              echo "$t0 $t1" > "$root/fetch.times"
+              echo "$t0 $t1" > "$root/fetch.times"; echo "$sha" > "$root/fetch.sha"
               # The check (T-401): no credential VALUE in what the run container gets (the pattern goes to grep on a pipe, never as an argument;
               # only file names are printed).
               for v in NODE_AUTH_TOKEN GIT_TOKEN; do
@@ -176,7 +176,8 @@ spec:
               frc=$(cat "$root/fetch.rc" 2>/dev/null || true)
               if [ "$frc" != 0 ]; then [ -n "$frc" ] || echo "job-run: the fetch left no exit code"; say "EXIT ${frc:-1}"; exit "${frc:-1}"; fi
               read -r t0 t1 < "$root/fetch.times"
-              main=$(basename "$JR_REPO_URL" .git); sha=$(git -C "$root/w/$main" rev-parse --short HEAD)
+              # The short sha is read by fetch (git is there): the command's image (--image) may have no git.
+              main=$(basename "$JR_REPO_URL" .git); sha=$(cat "$root/fetch.sha" 2>/dev/null || true)
               # What npm ci --ignore-scripts left out, now without a credential: the dependencies' install scripts (npm rebuild) and the
               # package's own lifecycle scripts, in npm ci's order.
               lifecycle() { [ -f package.json ] || return 0; node -e 'const s = require("./package.json").scripts || {}; for (const n of ["preinstall", "install", "postinstall", "prepublish", "preprepare", "prepare", "postprepare"]) if (s[n]) console.log(n)'; }
