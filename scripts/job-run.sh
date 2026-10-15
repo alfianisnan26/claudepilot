@@ -262,7 +262,7 @@ sjson=$(printf '%s\n' "$secret" | kubectl -n "$ns" create secret generic "$job" 
 unset secret
 printf '%s' "$sjson" | jq --arg job "$job" --arg uid "$uid" --arg chat "$chat" \
   '.metadata.labels = {"app": "claudepilot-job-run", "job-run/chat": $chat} | .metadata.ownerReferences = [{"apiVersion": "batch/v1", "kind": "Job", "name": $job, "uid": $uid}]' |
-  kubectl -n "$ns" apply -f - >/dev/null 2>&1 || die "could not create the Secret for $job (the reason is not shown)"
+  kubectl -n "$ns" create -f - >/dev/null 2>&1 || die "could not create the Secret for $job (the reason is not shown)"
 unset sjson
 # The chat ends: the Claude process this script runs under exits. Then the Job goes, and so does this script.
 watch=${JOB_RUN_WATCH_PID:-${CLAUDE_PID:-}}
