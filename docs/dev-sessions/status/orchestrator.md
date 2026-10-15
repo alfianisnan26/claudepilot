@@ -10,15 +10,15 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-591 S1c DONE b17a4e84 (5704; G1+G2 kill M4/M5, M5a survives, already redacted; no typecheck by author) -> QA Perf M4/M5 + typecheck. 2d679b18 ended.
 - QA PERF 7e4879c7 (lane/cp-qa-perf): (T-426 waits for S1c) T-486 S2e ea1c006 (5585) -> T-547 2bea754 (+typecheck, authz) -> T-597 1aeae88 -> T-611 4ac5982
   -> T-586 (premerge wip/main-5b66aa0, gate GREEN) -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-548 -> T-558 e652c44. T-591 PASS WITH GAPS 5587.
-- QA UI b3f769c5 (qa/T-600-ui-r3 from d688e0fa = r2 + integration with allow-list 208bdaa2): 1) T-619 browser proof (5679; r2 folder refused
-  FOLDER_UNTRUSTED, not re-trusted by me); 2) T-600 FE S1b re-run (5565 items); then T-576 ux (2427d98, after T-586). home.mjs 924f1bfb rides with T-600.
+- QA UI b3f769c5 (qa/T-600-ui-r3 32f67b8f): T-619 PARTIAL 5720 (both targets blocked; scratch portal not started, no node_modules,
+  deps script refused) -> asked coordinator to link deps 5726; then steps a,b,d. T-600 FE S1b FAIL 5721 (Pace 2 cols at 1280) -> FE S1c. Then T-576.
 - BACKEND 4b4edaf8 (ticket/T-600-be from T-600-fe-s1b 32985e2) on T-600 BE (plan 5540); then T-325 S1+S2 (5549, fresh branch).
   T-597 DONE 1aeae88 (fix 4afc6efd, 39/39, mutation caught; 5691) -> QA Perf (whole chat folder + framing/authz probes). 6d72b5c6 ended.
 - BE INFRA feaba810 (ticket/T-623-browser-access-headers from integration) on T-623 (plan 5622; opus blind review before merge); then T-610.
   T-547 DONE 2bea754 (89/89, mutation caught; typecheck on fa67900 only) -> QA Perf.
 - T-548 S1b DONE 3b8f5cb5 (5684; 32/32, mutation caught, typecheck clean; quick check refused) -> QA Perf S1+S1b. a6a0ea9d ended.
 - T-619 egress review 2590789a PASS WITH CONDITIONS 5627 (ended) -> coordinator 5629: owner ack on D-60 relax before #41 release; T-624 follow-up.
-- FRONTEND: 6a1a061e DONE FE S1b 32985e2 (5621) -> QA UI; ended (slot for T-619). Respawn for T-556 (5497/5525) after T-486, or FE S1c on QA UI FAIL.
+- FRONTEND: 6a1a061e DONE FE S1b 32985e2 (5621) -> QA UI; ended (slot for T-619). NEXT FREE SLOT: FE S1c T-600 Pace grid (5721); then T-556 after T-486.
 - Lane respawn = new base (lane-backend has no ff, T-595 5553).
 - Merge notes: T-546 merges 10b22e0, not branch head 0004ac5. T-486 = S2d 2979f99 + S2e ea1c006. Ended: 5f8f392b, 74a8d857, 83921ca7,
   f13a9442, 4ba6c5db, d4c49b5c, 219d5558. T-619: review CHANGES 5575 -> coordinator lands the named list (5584). No prettier/eslint in Jobs (T-612).
