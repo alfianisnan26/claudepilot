@@ -96,5 +96,16 @@ rc=0; err=$(WORKTREE_TEST_MODE=0 bash "$script" --main "$main" "$wt" 2>&1 >/dev/
 rc=0; err=$(env -u WORKTREE_TEST_MODE bash "$script" "$wt" 2>&1 >/dev/null) || rc=$?
 [ "$rc" = 2 ] && ok "defaults apply without flags (refused)" || bad "defaults apply without flags (exit $rc: $err)"
 
+# a symlinked workspace folder (or its parent) in the worktree is refused, and nothing is created through it
+n=0
+for d in apps/web apps/server packages/contracts apps packages; do
+  n=$((n + 1)); w=$base/trees/s$n; out=$base/outside$n
+  g -C "$main" worktree add -q -b "ticket/s$n" "$w"
+  mkdir -p "$out"; cp -R "$w/$d/." "$out/"; rm -rf "${w:?}/$d"; ln -s "$out" "$w/$d"
+  root=$base/trees expect "symlinked $d refused" 2 "is a symbolic link" -- "$w"
+  [ -z "$(find "$out" -name node_modules)" ] && ok "nothing created through $d" || bad "nothing created through $d"
+  [ ! -e "$w/node_modules" ] && ok "no node_modules made for $d" || bad "no node_modules made for $d"
+done
+
 [ "$fails" = 0 ] && { echo "all passed"; exit 0; }
 echo "$fails failed"; exit 1
