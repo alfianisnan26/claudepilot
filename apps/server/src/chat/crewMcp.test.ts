@@ -762,3 +762,86 @@ test('T-546: crewWindowMs and crewReplyUrgent', () => {
   for (const t of ['FAIL: x', 'BLOCKED on review', 'REFUSED: no', '\n\nFAILED sha']) assert.equal(crewReplyUrgent(t), true, t);
   for (const t of ['DONE abc1234', 'PASS sha', 'no tests failed', 'All good\nFAIL later', null, '']) assert.equal(crewReplyUrgent(t), false, String(t));
 });
+
+// T-633: the digest mutants QA Perf found alive on T-546 (comment 5842), each pinned by a test that fails under it.
+
+test('T-633 (G2): a reply is urgent in upper case only: a lower- or mixed-case "fail" or "blocked" waits out the window', () => {
+  for (const t of ['fail: x', 'failed sha', 'blocked on review', 'refused: no', 'Failed to find it', 'Blocked']) assert.equal(crewReplyUrgent(t), false, t);
+  assert.equal(crewReplyUrgent('FAIL: x'), true);
+});
+
+test('T-633 (G3): after an urgent flush the urgent mark is gone: a later DONE waits out the whole window', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.agentCaps = () => CAPS;
+    const timers = handTimers();
+    s.controller.crewTimers = timers;
+    const [a, b] = [await worker(s, s.id, 'A'), await worker(s, s.id, 'B')];
+    for (const w of [a, b]) await s.controller.messageFamily(s.id, w.id, 'Go.');
+    await turn(s, b, 'FAIL: T-9 does not build');
+    assert.deepEqual(timers.waiting(), [1_000]);
+    timers.advance(1_000);
+    await until(() => reports(s).length === 1);
+    assert.deepEqual(timers.waiting(), []);
+    await turn(s, a, 'DONE sha 2222222');
+    assert.deepEqual(timers.waiting(), [300_000], 'a DONE after the flush is not urgent');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-633 (G1): the window opens with the first news and does not slide: news that comes while the first is still held is not made to wait again', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.agentCaps = () => CAPS;
+    const timers = handTimers();
+    s.controller.crewTimers = timers;
+    const [a, b] = [await worker(s, s.id, 'A'), await worker(s, s.id, 'B')];
+    for (const w of [a, b]) await s.controller.messageFamily(s.id, w.id, 'Go.');
+    const lead = s.controller.get(s.id)!.claudeSessionId;
+    s.ws.status.set(lead, false);
+    s.tail.exit(0);
+    await until(() => s.controller.get(s.id)!.state === 'interrupted');
+    await turn(s, a, 'DONE sha 3333333');
+    assert.deepEqual(timers.waiting(), [300_000], 'the window opens with the first news');
+    timers.advance(300_000); // the window is waited, but the lead is gone: the news stays due
+    assert.deepEqual([reports(s), timers.waiting()], [[], []]);
+    timers.advance(100_000);
+    await turn(s, b, 'DONE sha 4444444');
+    assert.deepEqual(timers.waiting(), [1_000], 'the window of the first news was already waited: only the settle');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-633 (G4): a worker that is no longer news loses its urgent mark: when the lead is back, a DONE waits out the whole window', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.agentCaps = () => CAPS;
+    const timers = handTimers();
+    s.controller.crewTimers = timers;
+    const [a, b] = [await worker(s, s.id, 'A'), await worker(s, s.id, 'B')];
+    for (const w of [a, b]) await s.controller.messageFamily(s.id, w.id, 'Go.');
+    const lead = s.controller.get(s.id)!.claudeSessionId;
+    s.ws.status.set(lead, false);
+    s.tail.exit(0);
+    await until(() => s.controller.get(s.id)!.state === 'interrupted');
+    await turn(s, b, 'FAIL: T-9 does not build');
+    assert.deepEqual(timers.waiting(), [1_000]);
+    timers.advance(1_000); // the lead is gone: nothing is sent, the urgent mark stays
+    assert.deepEqual([reports(s), timers.waiting()], [[], []]);
+    // B takes a new turn: it is not news any more.
+    await s.controller.messageFamily(s.id, b.id, 'Again.');
+    const csid = s.controller.get(b.id)!.claudeSessionId;
+    const msg = s.controller.history(b.id).findLast((e) => e.kind === 'user')!;
+    b.tail.push(line({ type: 'command_lifecycle', command_uuid: msg.uuid, state: 'started', uuid: randomUUID(), session_id: csid }));
+    await until(() => s.controller.get(b.id)!.state === 'working');
+    s.ws.status.delete(lead);
+    await s.answering(s.controller.control(s.id, 'resume'));
+    await until(() => s.controller.get(s.id)!.state !== 'interrupted');
+    await turn(s, a, 'DONE sha 5555555');
+    assert.deepEqual(timers.waiting(), [300_000], 'only A is due, and a DONE is not urgent');
+  } finally {
+    await s.done();
+  }
+});
