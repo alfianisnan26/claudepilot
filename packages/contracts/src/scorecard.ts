@@ -14,7 +14,11 @@ export type CrewUnavailable =
   /** Nothing to divide by: no done ticket, no cost, no lead time. */
   | 'no_samples'
   /** The fact was never recorded (a worker's role, what a review waits for). */
-  | 'not_recorded';
+  | 'not_recorded'
+  /** T-600: the quota windows reset a moment ago (the sum of evenPct is under 10), so a pace would be noise. */
+  | 'windows_just_reset'
+  /** T-600: no Claude is signed in and readable (all signed out, pooled or unavailable). */
+  | 'no_claude';
 
 /** One number with its basis and source. `value` is null exactly when `basis` is `unavailable`, and then `reason` is set. */
 export interface CrewFigure {
@@ -240,10 +244,80 @@ export interface CrewProgramScore {
   targets: CrewTarget[];
 }
 
+/** T-600: one Claude's own pace in its 5-hour `session` window (contracts/usage.ts WindowPace: usedPct, evenPct, projectedPct). */
+export interface CrewPaceClaude {
+  claude: string;
+  label: string;
+  usedPct: number;
+  evenPct: number;
+  /** `usedPct / evenPct`; unavailable when evenPct is 0. */
+  ratio: CrewFigure;
+  /** Where the window ends if the rate holds, percent of the quota; null when the Claude does not say. */
+  projectedPct: number | null;
+}
+
+/**
+ * T-600 effectiveness (quota), global: sum of usedPct / sum of evenPct over the 5-hour `session` window of every Claude that is signed in and
+ * readable. A snapshot of now, so it does not depend on the scorecard's window. `ratio.value` 1 means the quota is spent exactly by its reset.
+ */
+export interface CrewPace {
+  ratio: CrewFigure;
+  /** Under 0.9: percent of the quota left unused at reset (from projectedPct); null otherwise or when no Claude says. */
+  unusedAtResetPct: number | null;
+  /** The weekly window the same way, when a Claude reports one. */
+  weekly: CrewFigure;
+  claudes: CrewPaceClaude[];
+}
+
+export interface CrewProgramCount {
+  program: string;
+  title: string;
+  /** `done` for resolved; created or closed for created-per-closed (see the field that holds it). */
+  count: number;
+}
+
+export interface CrewCreatedClosedRow {
+  program: string;
+  title: string;
+  created: number;
+  /** done + won't-do. */
+  closed: number;
+  /** `created / closed`; unavailable with none closed (no_samples), never a division by zero. */
+  ratio: CrewFigure;
+}
+
+/** T-600 one window's efficiency figures. */
+export interface CrewSummaryWindow {
+  fromMs: number;
+  toMs: number;
+  /** Requests per hour and estimated dollars per hour, all crews (chat_usage). */
+  requestsPerHour: CrewFigure;
+  usdPerHour: CrewFigure;
+  /** Tickets closed `done` in the window, global; won't-do apart. */
+  resolved: CrewFigure;
+  wontDo: CrewFigure;
+  resolvedByProgram: CrewProgramCount[];
+  /** Estimated dollars of the window / resolved. Unavailable with none resolved. */
+  perResolvedUsd: CrewFigure;
+  /** Tickets created / tickets closed (done + won't-do), global and per program. Under 1 the backlog shrinks. */
+  createdPerClosed: CrewFigure;
+  createdPerClosedByProgram: CrewCreatedClosedRow[];
+}
+
+/** T-600: the summary block at the top of the Crew page and the Glance widget. The same programs and attribution as `programs`. */
+export interface CrewSummary {
+  pace: CrewPace;
+  current: CrewSummaryWindow;
+  /** The window before, the same length; null unless compare=1. */
+  previous: CrewSummaryWindow | null;
+}
+
 export interface CrewScorecard {
   window: CrewWindow;
   nowMs: number;
   programs: CrewProgramScore[];
+  /** T-600. Optional until the server fills it: the page shows nothing for the block when it is absent. */
+  summary?: CrewSummary;
   /** One line per figure: where it comes from (the InfoTip). */
   basis: Record<string, string>;
 }

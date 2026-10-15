@@ -9,6 +9,7 @@ import { formatCost } from '@/lib/usage/format';
 import { NotAvailable } from '../usage/spend/shared';
 import { useLoad } from '../usage/spend/useLoad';
 import { labApi } from './api';
+import { SummaryBlock } from './SummaryBlock';
 import { fmtAge, fmtFigure, fmtPerHour, qaOpusLine, tiles, UNAVAILABLE, WINDOW_OPTIONS, type Tile, type TileState } from './scorecardModel';
 
 const STATE_CLASS: Record<TileState, string> = {
@@ -119,15 +120,21 @@ function ProgramCard({ p }: { p: CrewProgramScore }) {
 }
 
 function Programs({ data, loading }: { data: CrewScorecard; loading: boolean }) {
-  if (data.programs.length === 0) return <p className="py-3 text-[13px] text-muted">No program active in this window.</p>;
   return (
-    <ul className={`space-y-3 ${loading ? 'opacity-70 transition-opacity' : 'transition-opacity'}`}>
-      {data.programs.map((p) => (
-        <li key={p.program}>
-          <ProgramCard p={p} />
-        </li>
-      ))}
-    </ul>
+    <div className={`space-y-3 ${loading ? 'opacity-70 transition-opacity' : 'transition-opacity'}`}>
+      <SummaryBlock summary={data.summary} />
+      {data.programs.length === 0 ? (
+        <p className="py-3 text-[13px] text-muted">No program active in this window.</p>
+      ) : (
+        <ul className="space-y-3">
+          {data.programs.map((p) => (
+            <li key={p.program}>
+              <ProgramCard p={p} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
