@@ -8,9 +8,9 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - Filed: T-397 (proposal, mine), T-398, T-399, T-402, T-403 (settled by D-62), T-409, T-413 (incident: OOM 02:11, my share stated), T-422 (sudo, proposal, mine).
 
 ## IN FLIGHT (3 live workers = the D-61 budget; no Agent-tool sub-agents)
-- T-366 (urgent): fourth review SAFE (comment 2989). Merged LOCALLY 423cb65 (+context pack), full gate Job running on it (wip/main-423cb65); push integration only on green. Minors = T-437. Deploy portal+workspace 2026-10-16.
+- T-366 (urgent): gate GREEN on 423cb65 (/tmp/gate-job-423cb65.log). Batch head dd7abce (T-366 + T-417 + docs + D-63) gate Job running; push integration on green, then close T-366/T-417 (D-63). Deploy portal+workspace 2026-10-16.
 - T-417 (high): verifier PASS WITH GAPS (comment 2995); merged LOCALLY 311f366 + pack 7c1d29c on top of T-366; gate on the new head after 423cb65's gate. Race = T-438.
-- T-375 (high) + T-369: ux FAIL on c84657f (comment 2978). Fixer ee1a1b05 (opus, hasyim) in dev-t-333-1: no clipped values at 390, header 44 px, new checks. Then a new ux-checker.
+- T-375 (high) + T-369: fix 013b974 (proof 10 fail on c84657f -> 0; web 590/590). ux re-check b22b5fae (sonnet, alfian.isnan) in dev-t-333-1. PASS -> merge, close both.
 
 - T-427 (high): lead's fix 47a5aea PROOF green (passes on 47a5aea, fails on 3198f5d; typecheck 0). Needs a DIFFERENT verifier (sonnet) at the next slot.
 
