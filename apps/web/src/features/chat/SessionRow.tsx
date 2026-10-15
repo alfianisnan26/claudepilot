@@ -76,7 +76,8 @@ const folderName = (s: ChatSession) => s.cwd.replace(/\/+$/, '').slice(s.cwd.rep
  *
  * Crew (T-294, crew.ts): a lead's row counts what it started (an icon and a number; the words in the tip); its workers sit under it on a
  * rail, the live ones in spawn order, the done ones behind one "N done" row; a worker names its Claude only when it differs from its
- * lead's. A worker shown away from its lead links to it ("from …"). A session that runs as an agent shows its role (a badge), only when set.
+ * lead's. A worker whose lead is not among the rows sits under a lead header (T-369, `row.context`: the lead as muted context, a tap
+ * opens it); one whose lead is archived links to it ("from …"). A session that runs as an agent shows its role (a badge), only when set.
  */
 export function SessionRow({
   row,
@@ -200,7 +201,7 @@ export function SessionRow({
   // (the ⋯ menu opens past the row). The box and the row take the corners the card gives the li (RowList, T-100), so neither paints a
   // square past the card's curve.
   const swipe = useRowSwipe({
-    enabled: !selecting,
+    enabled: !selecting && !row.context,
     onRight: () => actions.pin(s),
     onLeft: () => (s.archivedAt ? actions.unarchive(s) : actions.archive(s)),
   });
@@ -223,6 +224,66 @@ export function SessionRow({
       personas={personas}
     />
   );
+
+  // A lead header shows its workers always (it has no fold of its own); a lead's row, until it is folded.
+  const crewShown = row.children.length > 0 && (row.context || open);
+  const crewList = crewShown && (
+    <ul data-crew="" className="ml-4 border-l-2 border-line sm:ml-7">
+      {workers.live.map(nested)}
+      {workers.done.length > 0 && (
+        // One row for the done ones; it stays put after the live workers, and opening it lists them below it.
+        <li>
+          <button
+            type="button"
+            data-crew-done=""
+            aria-expanded={doneOpen}
+            onClick={() => setDoneOpen((o) => !o)}
+            className="press flex min-h-11 w-full items-center gap-2 py-1.5 pr-4 pl-3 text-left text-[13px] font-semibold text-muted hover:text-ink sm:min-h-9 sm:pl-5"
+          >
+            <ChevronDown className={cn('size-4 shrink-0 transition-transform', !doneOpen && '-rotate-90')} aria-hidden="true" />
+            <span className="tabular-nums">{workers.done.length} done</span>
+          </button>
+        </li>
+      )}
+      {doneOpen && workers.done.map(nested)}
+    </ul>
+  );
+
+  // T-369: a lead header. The lead of workers shown here while it is not (it does not match the chip or the search, or sits under another
+  // heading): one muted line, its title, state, crew count and Claude, a tap opens it. Context, not a match: no checkbox, swipe or ⋯.
+  if (row.context)
+    return (
+      <li data-lead-header="">
+        <div className="rounded-[inherit] bg-surface-2/60">
+          <Link
+            to={`/admin/sessions/${s.id}`}
+            data-crew-header={s.id}
+            title={title}
+            onClick={(e) => selecting && e.preventDefault()}
+            className="press flex min-h-11 min-w-0 items-center gap-2 rounded-[inherit] py-1.5 pr-4 pl-4 text-[13px] text-muted hover:text-ink sm:min-h-9 sm:pl-5"
+          >
+            <span className="sr-only">Lead: </span>
+            <span data-header-title="" className="min-w-0 flex-1 truncate font-semibold text-ink-soft">
+              {title}
+            </span>
+            {safety ? <Badge tone="danger">{safety.label}</Badge> : asks ? <Badge tone="warning">Needs you</Badge> : <StateBadge state={s.state} agents={s.agentsRunning ?? 0} />}
+            {crew && (
+              <span title={crew.label} data-crew-count="" className="inline-flex shrink-0">
+                <Badge tone={crew.tone}>
+                  <Network className="size-3" aria-hidden="true" />
+                  <span aria-hidden="true" className="tabular-nums">
+                    {crew.total}
+                  </span>
+                  <span className="sr-only">{crew.label}</span>
+                </Badge>
+              </span>
+            )}
+            {s.claudeName && groupBy !== 'claude' && <span className="max-w-[30%] min-w-0 shrink truncate">{s.claudeName}</span>}
+          </Link>
+        </div>
+        {crewList}
+      </li>
+    );
 
   return (
     <li>
@@ -349,27 +410,7 @@ export function SessionRow({
         )}
       </div>
       </div>
-      {row.children.length > 0 && open && (
-        <ul data-crew="" className="ml-4 border-l-2 border-line sm:ml-7">
-          {workers.live.map(nested)}
-          {workers.done.length > 0 && (
-            // One row for the done ones; it stays put after the live workers, and opening it lists them below it.
-            <li>
-              <button
-                type="button"
-                data-crew-done=""
-                aria-expanded={doneOpen}
-                onClick={() => setDoneOpen((o) => !o)}
-                className="press flex min-h-11 w-full items-center gap-2 py-1.5 pr-4 pl-3 text-left text-[13px] font-semibold text-muted hover:text-ink sm:min-h-9 sm:pl-5"
-              >
-                <ChevronDown className={cn('size-4 shrink-0 transition-transform', !doneOpen && '-rotate-90')} aria-hidden="true" />
-                <span className="tabular-nums">{workers.done.length} done</span>
-              </button>
-            </li>
-          )}
-          {doneOpen && workers.done.map(nested)}
-        </ul>
-      )}
+      {crewList}
     </li>
   );
 }

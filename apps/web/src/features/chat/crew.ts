@@ -1,14 +1,19 @@
 // T-294 "Crew" (the owner, 2026-10-14: "terlihat hierarchy-nya, dan menginduk ke claude session yang mana, agar tidak bloated"): the
 // sessions a session started (its workers: `parentId` set, FR51) sit under their lead in the Sessions list, and the session page links up to
-// its lead and down to its workers. `buildListView` (contracts) nests a worker under a lead in the same group and marks one whose lead is
-// elsewhere (`parentTitle`); this module is the web's rules on top of it: which heading a worker sits under in All, which workers stay in
-// sight, their order, what a lead counts and which Claude a worker names. Pure, so the rules are tested (crew.test.ts).
+// its lead and down to its workers. `buildListView` (contracts) nests a worker under a lead in the same group, and under a lead header
+// when its lead is not in the group; this module is the web's rules on top of it: which heading a worker sits under in All, which workers
+// stay in sight, their order, what a lead counts, which Claude a worker names and what Select all takes. Pure, so the rules are tested
+// (crew.test.ts).
 //
-// Chips and nesting. A chip lists the sessions that match it and nothing else, so a worker that matches while its lead does not (one waiting
-// on you under an idle lead) shows at the top of the chip's list with "from <lead>", never under its lead brought in as context. Why: the
-// chip's count is the rows it shows (Needs you 1 is one row), Select all takes only what matches, and the "from" link is the context, one
-// tap away. A worker whose lead matches too sits under it, as everywhere else. In All (the status headings) a worker that does not need you
-// sits under its lead's heading, nested under it; one that needs you keeps the Needs you heading (it never folds), with "from <lead>".
+// The tree always shows (T-369, the owner, 2026-10-15: "minimal ada bentukan leadernya sih, jadi keliatan ini nesting siapa dan masuk ke
+// tree mana"). A chip, a search or a heading lists the sessions that match it; a worker that matches while its lead does not (In progress
+// while its lead waits idle for reports, Needs you, a search the lead does not match) sits under a LEAD HEADER: the lead as a muted context
+// row (title, state, crew count, Claude; a tap opens it), all its workers in the view under one header, deeper levels kept. The header is
+// not a match: the chip's count and a heading's count are the matching sessions only, Select all does not take it (`selectable`), and it
+// has no swipe, checkbox or ⋯. It sits where its first worker would sit, and a lead with live workers under it is ordered by them, so the
+// tree holds still when the lead flips between Idle and Working (QA A9). Only a worker whose lead is archived (no header) says "from
+// <lead>". In All (the status headings) a worker that does not need you sits under its lead's heading, nested under it; one that needs you
+// keeps the Needs you heading (it never folds), under a header for its lead.
 import { matchesQuery, needsYou, rollupLine, type ChatSession, type ListRow, type Rollup } from '@portal/contracts';
 import { statusGroup } from './listOrder';
 
@@ -65,15 +70,21 @@ export function crewCount(r: Rollup | null): CrewCount | null {
   return { total: r.total, tone: r.waiting > 0 || r.interrupted > 0 ? 'warning' : 'neutral', label };
 }
 
-/** A worker shown away from its lead (another heading, a chip its lead does not match, its lead archived): the lead to link to as "from …". */
+/** A worker shown away from its archived lead (so with no lead header): the lead to link to as "from …". */
 export function fromLead(row: Pick<ListRow, 'session' | 'parentTitle'>): { id: string; title: string } | null {
   return row.parentTitle && row.session.parentId ? { id: row.session.parentId, title: row.parentTitle } : null;
+}
+
+/** The sessions shown, nested ones too, in reading order, without the lead headers: what Select all takes (T-369). */
+export function selectable(rows: readonly ListRow[]): ChatSession[] {
+  return rows.flatMap((r) => [...(r.context ? [] : [r.session]), ...selectable(r.children)]);
 }
 
 /**
  * All's status headings with the crew kept together: a worker that does not need you sits under the heading of its lead (the top of a calm
  * chain), so it nests under it; a worker that needs you, and one whose lead is not in the list (archived, or not matching the search), keeps
- * its own heading. The chips' counts (`chipCounts`) are by each session's own state and do not change; a heading counts what sits under it.
+ * its own heading (under a lead header unless the lead is archived). The chips' counts (`chipCounts`) are by each session's own state and do
+ * not change; a heading counts the sessions that sit under it, never a lead header.
  */
 export function crewStatusGroup(all: readonly ChatSession[], query = ''): (s: ChatSession) => ReturnType<typeof statusGroup> {
   const byId = new Map(all.map((s) => [s.id, s]));
