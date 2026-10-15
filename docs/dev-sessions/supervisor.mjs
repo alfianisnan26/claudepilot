@@ -81,7 +81,7 @@ const TRACKS = [
 ];
 
 /** D-61: live workers per lead (the memory budget of the shared pod). */
-const LEAD_WORKERS = { orchestrator: 3, konfersi: 3, event: 2 };
+const LEAD_WORKERS = { orchestrator: 4, konfersi: 4, event: 3 };
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
@@ -700,6 +700,13 @@ async function watch({ rounds = Infinity } = {}) {
         }
         if (cur.state === 'idle') {
           if (await moveIfLow(t, ts, cur).catch((e) => (log(`${t.key}: low-quota check failed: ${e.message}`), false))) {
+            idleSince.delete(t.key);
+            continue;
+          }
+          // D-65: a lead whose workers are still busy (working, active in the last 15 min) is waiting for their reports, which wake it
+          // anyway; a nudge then only costs a turn that re-reads its whole context.
+          const busyWorkers = sessions.filter((x) => x.parentId === cur.id && x.state === 'working' && Date.now() - Date.parse(x.lastActivityAt ?? 0) < 15 * 60_000).length;
+          if (busyWorkers > 0) {
             idleSince.delete(t.key);
             continue;
           }

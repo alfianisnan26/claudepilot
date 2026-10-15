@@ -27,7 +27,7 @@
         "disallowedTools": [
           "SendMessage"
         ],
-        "model": "opus",
+        "model": "sonnet",
         "effort": "high",
         "maxTurns": 150
       },
@@ -208,7 +208,7 @@
         "disallowedTools": [
           "SendMessage"
         ],
-        "model": "opus",
+        "model": "sonnet",
         "effort": "high",
         "maxTurns": 150
       },
@@ -220,7 +220,7 @@
         "disallowedTools": [
           "SendMessage"
         ],
-        "model": "opus",
+        "model": "sonnet",
         "effort": "high",
         "maxTurns": 150
       },
@@ -232,7 +232,7 @@
         "disallowedTools": [
           "SendMessage"
         ],
-        "model": "opus",
+        "model": "sonnet",
         "effort": "high",
         "maxTurns": 150
       },
@@ -244,7 +244,7 @@
         "disallowedTools": [
           "SendMessage"
         ],
-        "model": "opus",
+        "model": "sonnet",
         "effort": "high",
         "maxTurns": 150
       },
@@ -270,7 +270,7 @@
         "disallowedTools": [
           "SendMessage"
         ],
-        "model": "opus",
+        "model": "sonnet",
         "effort": "high",
         "maxTurns": 150
       },
@@ -282,7 +282,7 @@
         "disallowedTools": [
           "SendMessage"
         ],
-        "model": "opus",
+        "model": "sonnet",
         "effort": "high",
         "maxTurns": 150
       },
@@ -294,7 +294,7 @@
         "disallowedTools": [
           "SendMessage"
         ],
-        "model": "opus",
+        "model": "sonnet",
         "effort": "high",
         "maxTurns": 150
       },
@@ -306,7 +306,7 @@
         "disallowedTools": [
           "SendMessage"
         ],
-        "model": "opus",
+        "model": "sonnet",
         "effort": "medium",
         "maxTurns": 150
       }
