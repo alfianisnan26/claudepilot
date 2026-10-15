@@ -94,8 +94,8 @@ async function dispatch(cmd: string | undefined, args: string[], self: string): 
           return repoRev(pos[0], pos[1]);
         }
         case 'sync': {
-          const { pos, flags } = parse(rest, { url: 'value', secret: 'value', pin: 'value' });
-          return repoSync(pos[0], { url: str(flags.url), secret: str(flags.secret), pin: str(flags.pin) });
+          const { pos, flags } = parse(rest, { url: 'value', secret: 'value', pin: 'value', reset: 'bool' });
+          return repoSync(pos[0], { url: str(flags.url), secret: str(flags.secret), pin: str(flags.pin), reset: flags.reset === true });
         }
         default:
           throw new Fail('bad_command', 'Unknown repo command.');

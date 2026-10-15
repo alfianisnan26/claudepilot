@@ -60,7 +60,7 @@ import type { CiTicketsPort } from './tickets.js';
 import { cleanLog, oneLine, redactSecrets } from './text.js';
 import { flakyComment, flakyDescription, flakyExcerpt, flakyTitle, parseFlaky, repoTag, type FlakySighting } from './flaky.js';
 import type { CiEventFile, Plan } from './plan.js';
-import { checkUpstream, defaultLookup, nextState, readState, upstreamPin, upstreamView, type Lookup, type SyncReply } from './upstream.js';
+import { checkUpstream, defaultLookup, EMPTY_STATE, nextState, readState, upstreamPin, upstreamView, type Lookup, type SyncReply } from './upstream.js';
 
 /** The flaky rows of a run, per job: the count and the distinct tickets, in order. */
 function flakyOfJobs(rows: { job: string; ticket_id: string | null }[]): CiRunFlaky[] {
@@ -418,6 +418,8 @@ export class CiService {
     }
     const args = ['repo', 'sync', repo.name, '--url', url, '--pin', pin];
     if (repo.upstream_secret) args.push('--secret', repo.upstream_secret);
+    // The upstream was changed or removed since the last sync: the runner clears the old one's staging refs first (a baseline again).
+    if (prev.reset) args.push('--reset');
     let r: CiReply;
     try {
       r = await this.host.cp(repo.workspace_id, args, { timeoutMs: UPSTREAM_SYNC_TIMEOUT_MS });
@@ -432,6 +434,9 @@ export class CiService {
       deleted: Array.isArray(r.deleted) ? (r.deleted as string[]) : [],
       onlyHere: Array.isArray(r.onlyHere) ? (r.onlyHere as string[]) : [],
     };
+    // The upstream may have been changed or removed while this sync ran: its result belongs to the old one, and the reset mark stays.
+    const now = this.#cs.repo(repo.id);
+    if (!now || now.removed_at || now.upstream_url !== url) return reply;
     const next = nextState(prev, reply, at);
     const shown = (s: typeof prev) => JSON.stringify({ ...s, at: null });
     this.#cs.updateRepo(repo.id, { upstream_state: JSON.stringify(next) });
@@ -1438,7 +1443,9 @@ export class CiService {
     if (req.upstream !== undefined) {
       if (!by) throw new AppError('FORBIDDEN', 'Only a person signed in to the portal can do this.');
       if (req.upstream === null) {
-        Object.assign(patch, { upstream_url: null, upstream_secret: null, upstream_every_s: null, upstream_state: null });
+        // The old upstream's staging refs stay in the remote until the next sync clears them: remember that, even after the removal.
+        const stale = repo.upstream_url || readState(repo.upstream_state).reset;
+        Object.assign(patch, { upstream_url: null, upstream_secret: null, upstream_every_s: null, upstream_state: stale ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null });
         if (repo.upstream_url) audit = { kind: 'ci.upstream_cleared', detail: { repo: repo.name, url: repo.upstream_url } };
       } else {
         const u = checkUpstream(req.upstream);
@@ -1448,8 +1455,10 @@ export class CiService {
           const info = this.#opts.secrets(repo.workspace_id, u.secret);
           if (!info?.asFile) throw invalid('upstream.secret', `${u.secret} does not reach this workspace as a file. Assign it in Secrets & env as a secret or a tool login.`);
         }
+        // A new URL is a new upstream (the same URL again is not): its sync starts from a clean staging area, so it is a baseline.
         const changed = u.url !== repo.upstream_url;
-        Object.assign(patch, { upstream_url: u.url, upstream_secret: u.secret, upstream_every_s: u.everyS, ...(changed ? { upstream_state: null } : {}) });
+        const staged = changed && (repo.upstream_url || readState(repo.upstream_state).reset);
+        Object.assign(patch, { upstream_url: u.url, upstream_secret: u.secret, upstream_every_s: u.everyS, ...(changed ? { upstream_state: staged ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null } : {}) });
         audit = { kind: 'ci.upstream_set', detail: { repo: repo.name, url: u.url, secret: u.secret, everyS: u.everyS } };
       }
       this.#upstreamAt.delete(repo.id);

@@ -276,6 +276,101 @@ test('the service: set by a person, synced by the poll; each moved branch starts
   }
 });
 
+test('the service: a changed or removed upstream is a baseline again; the same URL set again is not a change (T-486)', async () => {
+  const URL_B = 'https://other.test/y.git';
+  const h = await harness({ lookup: publicLookup });
+  try {
+    registerCiAuthz(h.svc, () => 'u_owner');
+    const repo = await remote(h);
+    const a = upstream(h.home, h.src);
+    // A second upstream with other branches, reached the same way.
+    const bareB = join(h.home.home, 'up', 'y.git');
+    h.home.git(['clone', '--bare', '--quiet', h.src, bareB]);
+    appendFileSync(join(pilotDir(h.home), 'config'), `[url "${bareB}"]\n\tinsteadOf = ${URL_B}\n`);
+    const workB = join(h.home.home, 'upworkB');
+    h.home.git(['clone', '--quiet', bareB, workB], h.home.home);
+    const settle = async () => {
+      for (let i = 0; i < 3; i++) await h.svc.poll(WS);
+    };
+    const created = () => h.created.length;
+
+    // A: the baseline, then a moved branch starts a pipeline.
+    await h.svc.updateRepo(repo.id, { upstream: { url: URL_ } }, BY);
+    await h.svc.syncUpstream(repo.id, BY);
+    await settle();
+    const start = created();
+    h.home.commit(a.work, { 'a1.txt': 'a\n' }, 'A moves main');
+    h.home.git(['push', '--quiet', 'origin', 'main'], a.work);
+    assert.equal((await h.svc.syncUpstream(repo.id, BY)).moved.length, 1);
+    await h.until('the moved branch to start a run', () => created() > start);
+
+    // Switch to B, which has other branches: its first sync is a baseline, no pipeline.
+    h.home.git(['checkout', '--quiet', '-b', 'other-b'], workB);
+    h.home.commit(workB, { 'b1.txt': 'b\n' }, 'B branch');
+    h.home.git(['push', '--quiet', 'origin', 'other-b'], workB);
+    const syncs = () => h.host.calls.filter((c) => c[0] === 'repo' && c[1] === 'sync');
+    const afterSwitch = created();
+    const m0 = syncs().length;
+    await h.svc.updateRepo(repo.id, { upstream: { url: URL_B } }, BY);
+    await settle();
+    await h.svc.syncsSettled();
+    await h.svc.syncUpstream(repo.id, BY);
+    await settle();
+    assert.equal(rev(h.home, pilotDir(h.home), 'refs/heads/other-b') !== '', true, 'the new upstream\'s branch came in');
+    assert.equal(syncs().slice(m0).filter((c) => c.includes('--reset')).length, 1, 'only the first sync after the switch clears the old staging');
+    assert.equal(created(), afterSwitch, 'a new upstream\'s branches start no pipeline on its first sync');
+
+    // Later syncs of B are normal: a move fires. Setting the same URL again is no change (no reset).
+    h.home.commit(workB, { 'b2.txt': 'b\n' }, 'B moves');
+    h.home.git(['push', '--quiet', 'origin', 'other-b'], workB);
+    const before = created();
+    const m1 = syncs().length;
+    await h.svc.updateRepo(repo.id, { upstream: { url: URL_B } }, BY);
+    await settle();
+    await h.svc.syncsSettled();
+    await h.svc.syncUpstream(repo.id, BY);
+    await h.until('B\'s move to start a run', () => created() > before);
+    assert.ok(syncs().length > m1);
+    assert.equal(syncs().slice(m1).some((c) => c.includes('--reset')), false, 'the same URL again is not a change');
+
+    // Removed, then set again: a baseline again, even for the same URL.
+    await h.svc.updateRepo(repo.id, { upstream: null }, BY);
+    h.home.git(['checkout', '--quiet', '-b', 'late'], workB);
+    h.home.commit(workB, { 'l.txt': 'l\n' }, 'B late branch');
+    h.home.git(['push', '--quiet', 'origin', 'late'], workB);
+    const afterSet = created();
+    const m2 = syncs().length;
+    await h.svc.updateRepo(repo.id, { upstream: { url: URL_B } }, BY);
+    await settle();
+    await h.svc.syncsSettled();
+    await h.svc.syncUpstream(repo.id, BY);
+    await settle();
+    assert.equal(rev(h.home, pilotDir(h.home), 'refs/heads/late') !== '', true);
+    assert.equal(syncs().slice(m2).filter((c) => c.includes('--reset')).length, 1);
+    assert.equal(created(), afterSet, 'removed and set again: the first sync is a baseline');
+  } finally {
+    h.done();
+  }
+});
+
+test('the runner: --reset clears the staged branches, so the sync is a baseline again (T-486)', async () => {
+  const home = new Home();
+  const src = home.repo('src');
+  assert.equal((await home.ci(['repo', 'create', 'app', '--from', src])).ok, true);
+  const up = upstream(home, src);
+  home.commit(up.work, { 'a.txt': 'a\n' }, 'one');
+  home.git(['push', '--quiet', 'origin', 'main'], up.work);
+  assert.equal((await home.ci(['repo', 'sync', 'app', '--url', URL_, '--pin', PUBLIC])).baseline, true);
+  home.commit(up.work, { 'b.txt': 'b\n' }, 'two');
+  home.git(['push', '--quiet', 'origin', 'main'], up.work);
+  const plain = await home.ci(['repo', 'sync', 'app', '--url', URL_]);
+  assert.deepEqual([plain.baseline, plain.events], [false, 1]);
+  home.commit(up.work, { 'c.txt': 'c\n' }, 'three');
+  home.git(['push', '--quiet', 'origin', 'main'], up.work);
+  const reset = await home.ci(['repo', 'sync', 'app', '--url', URL_, '--reset']);
+  assert.deepEqual([reset.ok, reset.baseline, reset.events], [true, true, 0], JSON.stringify(reset));
+});
+
 test('the service: a diverged branch is not overwritten and is one Needs you item; a refused host never reaches the workspace', async () => {
   let addresses = [PUBLIC];
   const h = await harness({ lookup: async () => addresses });

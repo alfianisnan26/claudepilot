@@ -82,9 +82,16 @@ export interface SyncDiverged {
  * `repo sync <name> --url <https> [--secret <NAME>] [--pin <ip>]`. `--pin` is the address the portal resolved and checked (the SSRF
  * guard): git connects to it and to nothing else for that host, so a name that resolves elsewhere a moment later is never reached.
  */
-export async function repoSync(repo: unknown, opts: { url: unknown; secret?: string; pin?: string }): Promise<Record<string, unknown>> {
+export async function repoSync(repo: unknown, opts: { url: unknown; secret?: string; pin?: string; reset?: boolean }): Promise<Record<string, unknown>> {
   const dir = needRepo(repo);
   const url = upstreamUrl(opts.url);
+  // `--reset`: the upstream was changed or removed, so the old one's staging refs go and this sync is a baseline again.
+  if (opts.reset) {
+    for (const name of (await heads(dir, 'refs/upstream/heads/')).keys()) {
+      const r = await git(['update-ref', '-d', `refs/upstream/heads/${name}`], { gitDir: dir });
+      if (r.code !== 0) throw new Fail('reset_failed', 'The old upstream\'s staged branches could not be cleared.');
+    }
+  }
   // The pin must decide where git connects: no proxy and no URL rewrite from outside. The workspace's global and system git
   // configuration are not read for this one call (an `insteadOf` or `http.proxy` there), and the proxy variables are emptied (curl
   // ignores an empty one); `-c http.proxy=` below turns git's own proxy off. The remote's own configuration (the portal's) still counts.

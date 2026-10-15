@@ -76,6 +76,12 @@ export interface UpstreamState {
   diverged: CiUpstreamDiverged[];
   ahead: string[];
   gone: string[];
+  /**
+   * Set when the upstream was changed or removed: the staging refs of the old one are still in the remote, so the next sync must clear
+   * them (`--reset`) and is a baseline again. Kept through a removal (the state is hidden while no upstream is set) and dropped by the
+   * first sync that succeeds.
+   */
+  reset?: true;
 }
 
 export const EMPTY_STATE: UpstreamState = { at: null, error: null, diverged: [], ahead: [], gone: [] };
@@ -90,6 +96,7 @@ export function readState(text: string | null | undefined): UpstreamState {
       diverged: Array.isArray(s.diverged) ? s.diverged.filter((d) => d && typeof d.branch === 'string' && typeof d.local === 'string' && typeof d.upstream === 'string' && typeof d.since === 'string') : [],
       ahead: Array.isArray(s.ahead) ? s.ahead.filter((b) => typeof b === 'string') : [],
       gone: Array.isArray(s.gone) ? s.gone.filter((b) => typeof b === 'string') : [],
+      ...(s.reset === true ? { reset: true as const } : {}),
     };
   } catch {
     return EMPTY_STATE;
