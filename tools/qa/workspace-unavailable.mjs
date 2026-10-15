@@ -2,7 +2,8 @@
 // the reason and "last seen", and its sheet still lists its Claudes. A scratch portal has no Kubernetes, so the list is the portal's own with
 // two stand-in workspaces added, one unavailable and one running (`fetch` of `/api/workspaces` answered in the page, as the server serves it during an outage); everything
 // else is the portal's own. At 390 px (touch) and 1280 px, light and dark: no horizontal scroll, the ⓘ is a 44 px target on touch.
-// usage: tools/qa/with-portal.sh 3523 node tools/qa/workspace-unavailable.mjs [--shots dir]
+// usage: tools/qa/with-portal.sh 3523 env QA_SHOTS=dir node tools/qa/workspace-unavailable.mjs
+// (`--shots dir` is set after browser.mjs was imported, so the folder must come from QA_SHOTS in the environment; in a Job, add --artifacts dir.)
 import { Browser } from './browser.mjs';
 import { sleep } from './lib.mjs';
 
