@@ -1382,7 +1382,7 @@ the supervisor, its URL from a local file). Slice 3, if wanted: a "Heartbeat" ro
 
 ## 24. Auto hand-off: an implementer's DONE starts QA (2026-10-15, T-548 slice 1)
 
-Opt-in per lead (`auto_handoff`, migration 778, off by default; `ChatController.setAutoHandoff`; no UI toggle yet). Engine: `apps/server/src/chat/handoff.ts`, called from `#crewWatch` when a worker turns idle.
+Opt-in per lead (`auto_handoff`, migration 779, off by default; `ChatController.setAutoHandoff`; no UI toggle yet). Engine: `apps/server/src/chat/handoff.ts`, called from `#crewWatch` when a worker turns idle.
 
 - **Trigger.** A worker with role `implementer` whose latest reply has `DONE <40 lower-case hex>` alone on line 1. Anything looser (case, prefix, trailing text, a quote, a later line) starts nothing. The ticket is the worker's own (set by its spawn), never read from the text. One QA per (lead, ticket, sha).
 - **QA spawn.** The lead's worker through the same `create` as `session_spawn`, so depth, the lead's max workers (and the global cap) and the hourly rate hold. Role `qa-verifier`, sonnet, `dontAsk`, same workspace, folder and ticket; another Claude than the author's when the workspace has one. A full cap or no free slot spawns nothing (no queue in S1): `handoff.skipped` is audited and the lead is told in one line.

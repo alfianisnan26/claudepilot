@@ -97,7 +97,7 @@ export type ChatSessionRow = {
   subagents?: number | null;
   /** T-294 (migration 775): what a worker reports to its lead unasked (`idle`, `end`, `none`); null: `idle`. */
   report?: string | null;
-  /** T-548 (migration 778): 1 starts QA when a worker of this session ends with `DONE <sha>`; 0 (default) never. */
+  /** T-548 (migration 779): 1 starts QA when a worker of this session ends with `DONE <sha>`; 0 (default) never. */
   auto_handoff?: number | null;
   worktree_path?: string | null;
   worktree_branch?: string | null;
@@ -207,7 +207,7 @@ export interface ChatSessionPatch {
   /** T-294: its limits (migration 774); null workers: the global setting. */
   maxWorkers?: number | null;
   subagents?: boolean;
-  /** T-548: auto hand-off (migration 778). */
+  /** T-548: auto hand-off (migration 779). */
   autoHandoff?: boolean;
   title?: string;
   ticketId?: string | null;

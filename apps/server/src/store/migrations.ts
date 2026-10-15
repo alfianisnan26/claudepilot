@@ -3292,7 +3292,7 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
-    version: 778,
+    version: 779,
     name: 'chat sessions: auto hand-off, an implementer\'s DONE starts QA (T-548)',
     up(db) {
       // T-548 (chat-sessions PRD, "Auto hand-off"): 1 on a lead starts a qa-verifier worker when one of its implementer workers ends with
