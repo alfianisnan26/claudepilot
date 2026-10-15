@@ -3319,6 +3319,15 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 784,
+    name: 'CI: where a remote\'s release reports go (T-591)',
+    up(db) {
+      // T-591 (D-69, local-git-ci PRD "Release reports"): `release_report` is the remote's setting as JSON {pipeline, vaultId, folder}; null is
+      // off, as for every remote so far. Set by a person only (PUT /api/ci/repos/:id/release-report).
+      db.exec(`ALTER TABLE ci_repos ADD COLUMN release_report TEXT;`);
+    },
+  },
+  {
     version: 870,
     name: 'notify: quota alerts as one row that updates, and the Claudes a person hears of when idle (T-126)',
     up(db) {

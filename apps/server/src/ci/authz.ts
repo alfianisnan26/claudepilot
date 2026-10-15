@@ -4,8 +4,8 @@
 // person's acts: the routes also refuse any actor that is not a signed-in user, and no Portal MCP tool reaches them, so an agent never approves.
 
 import { AppError } from '@isnanme/core';
-import { FOUNDING_USER_ID, objectRef, workspaceRef, type CiRepo, type RoutePolicies, type UserId } from '@portal/contracts';
-import { declarePolicies, declareToolPolicies, registerResolver } from '../authz/seam.js';
+import { FOUNDING_USER_ID, objectRef, vaultRef, workspaceRef, type Actor, type CiRepo, type RoutePolicies, type UserId } from '@portal/contracts';
+import { can, declarePolicies, declareToolPolicies, registerResolver } from '../authz/seam.js';
 import { branchProblem } from '../chat/worktrees.js';
 import type { CiSession } from './sessions.js';
 
@@ -83,6 +83,15 @@ export function agentStart(me: CiSession | null, repo: Pick<CiRepo, 'name' | 'wo
   return { rule: 'deployment', ref, refusal: new AppError('FORBIDDEN', `An agent can start a run only on the branch its own session works on${own}, or a pipeline that deploys to an environment.`) };
 }
 
+/**
+ * T-591: the release report is written as the portal (`system`), so the person who sets its vault must be able to WRITE there themselves
+ * (`operate` on the vault: OBJECT_TYPES `vault`). A vault that does not exist or that they may not write answers the same 404 as one they
+ * cannot see. The vault's own agent policy does not apply: the writer is never an agent.
+ */
+export function requireVaultWrite(actor: Actor, vaultId: string, exists: (vaultId: string) => boolean): void {
+  if (!exists(vaultId) || !can(actor, 'operate', vaultRef(vaultId)).allow) throw new AppError('NOT_FOUND', 'Not found.');
+}
+
 const run = (verb:'view' | 'operate' | 'manage') => ({ kind: 'objects' as const, checks: [{ type: 'ci_run' as const, verb, from: 'path' as const, param: 'id' }] });
 const repo = (verb: 'view' | 'operate' | 'manage') => ({ kind: 'objects' as const, checks: [{ type: 'ci_repo' as const, verb, from: 'path' as const, param: 'id' }] });
 
@@ -115,6 +124,11 @@ export const CI_POLICIES = {
   'PUT /api/ci/repos/:id/environments/:name': { ...repo('manage'), audit: 'ci.environment_protection' },
   // The auto-approve rule (T-110, FR41a): a person with manage only (the handler refuses tokens and agents); no tool reaches it.
   'PUT /api/ci/repos/:id/environments/:name/auto-approve': { ...repo('manage'), audit: 'ci.environment_auto_approve' },
+  // Release reports (T-591): the setting and the backfill are a person's with manage only (the handlers refuse tokens and agents); no tool reaches
+  // them. The backfill takes a run id and nothing else: it writes only into the vault and folder the remote's own setting names.
+  'GET /api/ci/repos/:id/release-report': repo('view'),
+  'PUT /api/ci/repos/:id/release-report': { ...repo('manage'), audit: 'ci.release_report_setting' },
+  'POST /api/ci/runs/:id/release-report': { ...run('manage'), audit: 'ci.release_report' },
   'POST /api/ci/validate': { kind: 'signed-in' },
   // Runners (T-557): the list shows the workspaces the person may see (the handler filters). Making a workspace a runner sends other
   // workspaces' commits and secrets to it: manage on that workspace, a person only (the handler refuses tokens and agents), audited.

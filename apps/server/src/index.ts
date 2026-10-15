@@ -17,6 +17,8 @@ import { registerMcpSets } from './mcp/index.js';
 import { SkillsModule } from './skills/module.js';
 import { registerSkillTools } from './skills/portalTools.js';
 import { SecretRotations } from './secrets/rotation.js';
+import { vaultReleaseNotes } from './ci/releaseNotesVault.js';
+import { parseActor } from './knowledge/journal.js';
 import { createKnowledge } from './knowledge/module.js';
 import { registerKnowledgeTools } from './knowledge/portalTools.js';
 import { createClaudeUsage } from './claudeusage/index.js';
@@ -491,6 +493,11 @@ ci.hooks.contextPack = (e) => void syncPack(e);
 // A resources change that restarts a workspace's pod (T-98) waits for the CI runs running in it.
 workspaces.hooks.runningCi = (id) => ci.list({ workspace: id, status: ['running'], limit: 1 }).total;
 ci.onChange = () => notify('ci');
+// T-591 (D-69): a passed release's report is written into the vault the remote's own setting names, as the portal (actor `system`; the vault
+// journal records it). An existing note is replaced with its own version as `baseVersion`; a missing one is created.
+const portalActor = parseActor('system');
+// Only "no such note" is an empty answer: any other error is thrown (ci/releaseNotesVault.ts, tested).
+ci.releaseNotes = vaultReleaseNotes(knowledge, portalActor);
 if (config.ci.enabled) ci.start();
 // Claude usage: the plan limits of each Claude, read from Claude Code itself (claude-usage PRD). Its probes run only for running
 // workspaces whose store the portal trusts; live sessions' rate-limit events arrive through `onRateLimit` (interface I12).

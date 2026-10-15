@@ -716,10 +716,10 @@ export class Tickets {
   }
 
   /** A ticket's id and summary, for a link to it. */
-  brief(id: string): { id: string; summary: string; status: TicketStatus } | null {
+  brief(id: string): { id: string; summary: string; status: TicketStatus; type: TicketType } | null {
     const n = parseTicketId(id);
     const row = n === null ? undefined : this.#row(n);
-    return row ? { id: ticketIdOf(row.number), summary: row.summary, status: row.status } : null;
+    return row ? { id: ticketIdOf(row.number), summary: row.summary, status: row.status, type: row.type } : null;
   }
 
   /** The message a session started for this ticket would open with, for the dialog's preview (its session id is not known yet). */
