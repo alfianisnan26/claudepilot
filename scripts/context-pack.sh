@@ -90,7 +90,7 @@ section_map() {
 section_commands() {
   echo; echo "## Commands"; echo
   cat <<'EOF'
-Heavy jobs (typecheck, the suite, a build) one at a time: through `scripts/job-run.sh` (a Job in the cluster on a pushed ref) or `flock /tmp/heavy.lock`. Wrap long output in `scripts/quiet.sh` so only one line enters the context.
+Heavy jobs (typecheck, the suite, a build) one at a time: ONLY through `scripts/job-run.sh` (a Job in the cluster on a pushed ref) or `scripts/gate-job.sh`, never in the pod (D-61, T-413: the pod was OOMKilled). Wrap long output in `scripts/quiet.sh` so only one line enters the context.
 - Typecheck: `npm run typecheck` (server, web, contracts). Web build: `npm run build -w @portal/web`.
 - One server test file: `(cd apps/server && node --import tsx --test src/<area>/<file>.test.ts)`; the suite: `(cd apps/server && npm test)` (Docker tests skip without CLAUDEPILOT_DOCKER_TESTS=1).
 - Gate: `scripts/gate-quick.sh` before pushing integration (touched areas only); `scripts/gate.sh [commit]` the release gate on a clean copy; `scripts/gate-job.sh <commit>` the same as a Job.
