@@ -285,6 +285,33 @@ test('tickets: an open approval assigned to a person waits; other types, agents\
   assert.deepEqual(events[0]!.resolved, [{ kind: 'ticket_approval', id: t1 }]);
 });
 
+test('tickets: an open ticket tagged owner-checklist waits whatever its assignee; once, with the approval rows unchanged; closed, untagged and invisible ones do not', () => {
+  const tag = (id: string, t: string) => db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)').run(Number(id.slice(2)), t);
+  const approval = ticket();
+  const list = ticket({ type: 'task', assignee: null });
+  const both = ticket({ type: 'approval' });
+  const held = ticket({ type: 'chore', assignee: 'session' });
+  const done = ticket({ type: 'task', assignee: null, status: 'done' });
+  const other = ticket({ type: 'task', assignee: null });
+  tag(list, 'owner-checklist');
+  tag(both, 'owner-checklist');
+  tag(held, 'owner-checklist');
+  tag(done, 'owner-checklist');
+  tag(other, 'production');
+  const r = registry();
+  const all = r.list(ownerActor());
+  assert.deepEqual(ids(all, 'ticket_approval'), [approval, list, both, held], 'each once, oldest first; the closed, other-tagged ones are out');
+  const label = (id: string) => all.items.find((i) => i.id === id)!.action.label;
+  assert.equal(label(approval), 'Decide');
+  assert.equal(label(list), 'Reply');
+  assert.equal(label(both), 'Decide');
+  assert.equal(all.counts.ticket_approval, 4);
+
+  registerResolver({ type: 'ticket', resolve: (id) => ({ ref: ticketRef(id), owner: { kind: 'user', id: 'u_b' } }) });
+  assert.equal(r.list(user('u_a')).counts.ticket_approval, 0, 'only where the ticket is visible (the same can() as the approval rows)');
+  clearResolvers();
+});
+
 test('tool approvals: listed only after ten minutes of a session whose live process waits on it; answering resolves it', () => {
   chatSession('w1', 'waiting', 'Stuck one');
   chatSession('w2', 'waiting');

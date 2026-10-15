@@ -114,7 +114,12 @@ export interface TicketOrphan {
 }
 
 /** The tickets module's settings (the shared settings registry). */
-export const TICKET_SETTING_KEYS = { orphanAfterMin: 'tickets.orphanAfterMin', agentOpenPerWorkspace: 'tickets.agentOpenPerWorkspace' } as const;
+export const TICKET_SETTING_KEYS = {
+  orphanAfterMin: 'tickets.orphanAfterMin',
+  agentOpenPerWorkspace: 'tickets.agentOpenPerWorkspace',
+  /** D-62 (T-483): the tags that let an agent put a ticket on a person; comma separated. */
+  agentAssignUserTags: 'tickets.agentAssignUserTags',
+} as const;
 
 export type TicketEventKind =
   | 'created'

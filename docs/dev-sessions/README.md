@@ -34,7 +34,7 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
    - `.claude/settings.json` denies pushing `main` and changing the portal, workspace and Argo CD namespaces with `kubectl`, even in Bypass. That is
      deliberate: do not look for another way to do those things (a script, `sh -c`, another tool); write it under NEEDS A HUMAN instead.
 4. **Heavy jobs leave the pod** (T-107; the pod has 4 CPUs and 8 GiB): typecheck, the server suite, vitest, playwright, lighthouse, production
-   builds and wrangler dry runs go through `scripts/job-run.sh [--repo claudepilot|konfersi[:<org>/<repo>]] [--ref <pushed branch or commit>] -- <command>`,
+   builds and wrangler dry runs go through `scripts/job-run.sh [--repo claudepilot|event|konfersi[:<org>/<repo>]] [--ref <pushed branch or commit>] -- <command>`,
    a Job on another node (push the WIP branch first: `git push origin HEAD:wip/<name>`; at most 3 Jobs at once and 2 per chat, the rest wait
    "queued behind K"; `--list`, `--stop --chat <id>`). An image (no Docker here, D-5) is built by `scripts/image-build.sh --repo .. --ref .. --dockerfile ..
    --destination <registry/path:tag>` (T-141: kaniko, one at a time, the registry credential as one JSON line on stdin with `--credential-stdin`;

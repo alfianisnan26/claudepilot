@@ -896,6 +896,12 @@ test('trustscan extras (T-366 M2): a link, too many or too big files make it unr
   mkdirSync(join(proj, '.claude', 'skills', 'x'), { recursive: true });
   symlinkSync(join(outside, 'SKILL.md'), join(proj, '.claude', 'skills', 'x', 'SKILL.md'));
   await unreadable('a linked SKILL.md');
+  // A relative link (T-435): committed, it resolves against wherever the folder is checked out, a worktree included.
+  rmSync(join(proj, '.claude', 'skills', 'x', 'SKILL.md'));
+  writeFileSync(join(proj, 'NOTES.md'), '---\nhooks: {}\n---\n');
+  symlinkSync(join('..', '..', '..', 'NOTES.md'), join(proj, '.claude', 'skills', 'x', 'SKILL.md'));
+  await unreadable('a relatively linked SKILL.md');
+  rmSync(join(proj, 'NOTES.md'));
   rmSync(join(proj, '.claude', 'skills'), { recursive: true });
   symlinkSync(outside, join(proj, '.claude', 'skills'));
   await unreadable('a linked skills folder');

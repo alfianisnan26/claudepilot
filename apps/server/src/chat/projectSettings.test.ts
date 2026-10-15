@@ -10,7 +10,8 @@ import { EMPTY_SCAN, liveSession, until } from './testkit.js';
 
 const HASH = 'a'.repeat(64);
 const scanOf = (over: Record<string, unknown> = {}) =>
-  JSON.stringify({ hash: HASH, files: ['.claude/settings.json'], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 57, envNames: [], rulesOnly: true, ...over });
+  // `extras: []`: a host that checked the skills (without it the scan is `unscanned`, and a worktree no longer copies trust, T-435).
+  JSON.stringify({ hash: HASH, files: ['.claude/settings.json'], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 57, envNames: [], rulesOnly: true, extras: [], ...over });
 const settingsOf = (args: string[]) => {
   const i = args.indexOf('--settings');
   return i === -1 ? null : args[i + 1]!;

@@ -74,3 +74,76 @@ export function canActForEnded(facts: {
   if (!facts.holderHasLiveSuccessor) return { allow: true, why: 'orphan' };
   return { allow: false, why: 'live_successor' };
 }
+
+/* ---------- An agent puts a ticket on a person (D-62, T-483) ---------- */
+
+/** The refusal an agent reads: the D-62 path instead of a person. */
+export const D62_ASSIGN_REFUSAL =
+  'D-62: agents do not assign tickets to a person. Decide by the written default and note it on the ticket; a production step goes on the owner checklist (tag production); a rule change goes through a blind reviewer and the coordinator.';
+
+/** The tags that let an agent's ticket wait for a person when the setting is absent or unreadable. */
+export const AGENT_ASSIGN_USER_TAGS_DEFAULT = 'production';
+
+/** `tickets.agentAssignUserTags` as a list: comma or space separated, lowercase. Not a string: the default. Empty: no tag allows it. */
+export function allowedAssignTags(raw: unknown): string[] {
+  const s = typeof raw === 'string' ? raw : AGENT_ASSIGN_USER_TAGS_DEFAULT;
+  return [...new Set(s.split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean))];
+}
+
+export type AgentAssignDecision = { allow: true } | { allow: false; why: 'no_allowed_tag' };
+
+/**
+ * THE rule for an agent putting a ticket on a person (FR9c, D-62, T-483), the tickets module's `can()` for it. Only an agent's own token
+ * (a chat session or a crew worker) is judged: a person, the portal, an admin's token and a trigger a person made are never refused. The
+ * agent is refused when, after its change, the ticket is on a person (`user`, `user:<name>`) without a tag the owner allows
+ * (`allowedTags`), and its change is what puts it there: it creates it so, moves it to a person (or another person), or removes the
+ * last allowed tag from a ticket a person holds. A ticket already on a person that the change leaves so is not judged again.
+ * Pure: the service gathers the facts, refuses with {@link D62_ASSIGN_REFUSAL} and writes the audit row.
+ */
+export function canAgentAssignUser(facts: {
+  callerKind: 'ui' | 'system' | 'token' | 'agent' | 'trigger';
+  /** The holder after the change. */
+  assigneeAfter: 'session' | 'user' | null;
+  /** The change sets the assignee to a person (a new ticket, or a different holder than before). */
+  assignsUser: boolean;
+  tagsBefore: readonly string[];
+  tagsAfter: readonly string[];
+  allowedTags: readonly string[];
+}): AgentAssignDecision {
+  if (facts.callerKind !== 'agent' || facts.assigneeAfter !== 'user') return { allow: true };
+  const allowed = (tags: readonly string[]) => tags.some((t) => facts.allowedTags.includes(t));
+  if (allowed(facts.tagsAfter)) return { allow: true };
+  if (facts.assignsUser || allowed(facts.tagsBefore)) return { allow: false, why: 'no_allowed_tag' };
+  return { allow: true };
+}
+
+/* ---------- A crew worker reports on its work (T-294, T-397) ---------- */
+
+/** Why a worker may comment: the ticket its spawn named (`spawn_ticket`), or a ticket its lead holds (`lead_ticket`). */
+export type WorkerCommentReason = 'spawn_ticket' | 'lead_ticket';
+export type WorkerCommentDecision = { allow: true; why: WorkerCommentReason } | { allow: false };
+
+/**
+ * THE rule for a crew worker's COMMENT on a ticket it does not hold (FR9b, T-294 and T-397), the tickets module's `can()` for it. It grants a
+ * comment only: never a change, a close, a claim or an adoption. The worker must be LIVE and have a lead (`parentId`). Then it may comment on:
+ * - `lead_ticket`: a ticket a session holds that is its lead, or a session continuing its lead (`continued_from` back from the holder reaches
+ *   the lead: a restarted lead's tickets move to its successor, FR18a). Its lead's own lead is not followed.
+ * - `spawn_ticket`: the ticket its spawn named (the session's `ticketId`, set only by `session_spawn`) while NOBODY holds it (the lead started
+ *   the worker before claiming). Held by a person or by another session, it is refused: a lead cannot open someone else's ticket by naming it.
+ * Pure: the service gathers the facts, keeps today's refusal on a deny, and writes the audit row with `why`.
+ */
+export function canWorkerComment(facts: {
+  worker: RuleSession & { parentId?: string | null; ticketId?: string | null };
+  /** The ticket, `T-<n>`. */
+  ticketId: string;
+  holderKind: 'session' | 'user' | null;
+  holderId: string | null;
+  /** The holder session's predecessors, nearest first (`continued_from` back); empty when it is not a session. */
+  holderAncestors: readonly string[];
+}): WorkerCommentDecision {
+  const lead = facts.worker.parentId;
+  if (!lead || facts.worker.state === 'ended') return { allow: false };
+  if (facts.holderKind === 'session' && facts.holderId && (facts.holderId === lead || facts.holderAncestors.includes(lead))) return { allow: true, why: 'lead_ticket' };
+  if (facts.holderKind === null && facts.worker.ticketId === facts.ticketId) return { allow: true, why: 'spawn_ticket' };
+  return { allow: false };
+}

@@ -146,7 +146,7 @@ function assigneeOf(tickets: Tickets, ctx: PortalToolContext, raw: string, sessi
   throw new AppError('VALIDATION_FAILED', 'Assignee is me, user, user:<name>, session:<id> or none.', { details: { assignee: 'Use me, user, session:<id> or none.' } });
 }
 
-const assigneeArg = z.string().max(100).optional().describe('me (your session), user (a person: for an approval or a question), user:<name>, session:<id>, or none (the agents’ queue).');
+const assigneeArg = z.string().max(100).optional().describe('me (your session), user or user:<name> (a person: agents only with an allowed tag, default production, D-62), session:<id>, or none (the agents’ queue).');
 
 export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = portalTools): void {
   declareTicketPolicies();
@@ -257,7 +257,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     name: 'ticket_create',
     title: 'Create a ticket',
     description:
-      'Adds a ticket to the queue. Use assignee user for something only a person can give you (an approval, an answer, a decision): it then waits for them. Leave it unassigned for work any agent can take. Never put a secret in a ticket: describe where it lives.',
+      'Adds a ticket to the queue. Leave it unassigned for work any agent can take. An agent assigns a person (assignee user) only with an allowed tag (default production, D-62): otherwise it is refused; decide by the written default instead. Never put a secret in a ticket: describe where it lives.',
     scope: 'agent',
     input: z.object({
       summary: z.string().min(1).max(140).describe('One line.'),
@@ -307,7 +307,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
   registerPortalTool({
     name: 'ticket_comment',
     title: 'Comment on a ticket',
-    description: 'Adds a comment to a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds). Use it to report progress, ask for what you need, or record what you found.',
+    description: 'Adds a comment to a ticket assigned to you (or one you made that nobody holds, or one an ended session of your track holds; a worker also on its lead’s tickets and on the ticket its spawn named while nobody holds it). Use it to report progress, ask for what you need, or record what you found.',
     scope: 'agent',
     input: z.object({ id: z.string().max(20), text: z.string().min(1).max(8_000).describe('Markdown.'), session_id: sessionIdArg }),
     handler(ctx, args) {
