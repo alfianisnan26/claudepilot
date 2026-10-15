@@ -7,10 +7,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## IN FLIGHT (6 of 6, D-71): all sonnet
 - QA PERF 7e4879c7 (lane/cp-qa-perf): T-591 (S1 bf932c3 + S1b 09ade72, 5563) -> T-486 S2e ea1c006 (5585) -> T-611 4ac5982 (5580)
   -> T-586 (premerge wip/main-5b66aa0, gate GREEN) -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-548 -> T-558 e652c44. T-426 S1b jumps in.
-- QA UI bbbe2b38 (qa/T-600-ui): home.mjs fix 924f1bfb PASS WITH GAPS (27/27 on its branch, not on integration; rides with T-600); waits for FE S1b re-run; then T-576 ux (2427d98, after T-586 merges). Headless only (5503).
+- QA UI bbbe2b38 (qa/T-600-ui): home.mjs fix 924f1bfb PASS WITH GAPS (27/27 on its branch, not on integration; rides with T-600); now re-running FE S1b 32985e2 (crew-summary, Home/Crew grids); then T-576 ux (2427d98, after T-586 merges). Headless only (5503).
 - BACKEND 6d72b5c6 (ticket/T-597-portal-slash, plan 5546) on T-597; then T-600 BE (plan 5540, respawn on FE S1b), T-325 S1+S2 (5549).
 - BE INFRA 5825f112 (ticket/T-547-quota-placement) on T-547; then T-623 (high, coordinator; respawn fresh branch, plan 5622; opus blind review), then T-610.
-- FRONTEND 6a1a061e (ticket/T-600-fe-s1b from 7d19c94) on T-600 FE S1b (QA UI FAIL 5565, decision 5573); then T-556 (5497/5525) after T-486.
+- REVIEWER 2590789a (sonnet, read-only): T-619 egress decision 5605 (deploy #41 waits); 5625.
+- FRONTEND: 6a1a061e DONE FE S1b 32985e2 (5621) -> QA UI; ended (slot for T-619). Respawn for T-556 (5497/5525) after T-486, or FE S1c on QA UI FAIL.
 - IMPL 7ec2dc72 (ticket/T-426-s1b-review) on T-426 S1b.
 - Waiting for a slot: T-548 S1b (5515, one-off sonnet from 9b822ba). Lane respawn = new base (lane-backend has no ff, T-595 5553).
 - Merge notes: T-546 merges 10b22e0, not branch head 0004ac5. T-486 = S2d 2979f99 + S2e ea1c006. Ended: 5f8f392b, 74a8d857, 83921ca7,
@@ -59,7 +60,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-591 #40 backfill after deploy (5511); T-325 S3 push door vs charter "only the main chat merges integration" + its token (5549); T-527 finding 4 (owner triggers tagging owner-checklist).
 
 ## NEXT (in order, as slots free)
-0. FIRST FREE SLOT: fresh blind reviewer (sonnet, read-only) on T-619 egress decision 5605 (deploy #41 waits); 6/6 busy, asked coordinator for a 7th (5616).
 1. Merges: T-401 (ack) -> T-426 -> T-379 -> T-486; deploys are the coordinator's. 2. T-416 S1b QA -> blind review (opus) -> merge; then S2.
 3. NEXT FREE SLOTS: T-558 QA (sonnet) + review (opus); T-426 QA + blind review; T-548 (sonnet); T-578 (high: deploy reuses a green gate for the same
    tree + per-file gate progress; a gate change: built + blind review, merged only on a person's ack like T-401); then RTK (coordinator 14:55):
