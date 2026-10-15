@@ -80,6 +80,9 @@ const TRACKS = [
   },
 ];
 
+/** D-61: live workers per lead (the memory budget of the shared pod). */
+const LEAD_WORKERS = { orchestrator: 3, konfersi: 3, event: 2 };
+
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
 /** Run as a script (not imported by its test, apps/server/src/keepgoing/supervisor.test.ts). */
@@ -333,6 +336,21 @@ async function startSession(t, tstate, again, reason, continuedFrom = null) {
     if (out?.error || out?.result?.isError) throw new Error(out.error?.message ?? out.result?.content?.[0]?.text ?? 'refused');
     log(`${t.key}: model ${model}, effort ${effort}`);
   } catch (e) { log(`${t.key}: could not set model ${model}: ${e.message}; it runs on the portal default`); }
+  // D-61: a lead runs no Agent-tool sub-agents (they ran inside its process and on its Claude, and caused the 02:11 OOM) and at most a few
+  // live workers. `subagents` applies at the process's next start: a fresh lead is restarted at once, before its kickoff (no context yet),
+  // and must come back in Bypass. A refusal is logged, not fatal.
+  try {
+    const out = await mcpCall('session_configure', { id: s.id, subagents: false, max_workers: LEAD_WORKERS[t.key] ?? 3 });
+    if (out?.error || out?.result?.isError) throw new Error(out.error?.message ?? out.result?.content?.[0]?.text ?? 'refused');
+    const needed = out?.result?.structuredContent?.restart_needed ?? out?.result?.structuredContent?.restartNeeded;
+    if (needed !== false) {
+      const rs = await api('POST', `/api/chat/sessions/${s.id}/restart`, { why: 'manual' });
+      if (rs.error) throw new Error(`restart refused: ${rs.error.code} ${rs.error.message}`);
+      const after = (await api('GET', `/api/chat/sessions/${s.id}`)).data?.mode;
+      if (after !== 'bypassPermissions') throw new Error(`not in Bypass after the restart (mode ${after})`);
+    }
+    log(`${t.key}: sub-agents off, at most ${LEAD_WORKERS[t.key] ?? 3} workers`);
+  } catch (e) { log(`${t.key}: could not turn sub-agents off: ${e.message}`); }
   await sessionSend(s.id, t.kickoff ? t.kickoff(again, reason) : kickoff(t, again, reason));
   tstate.sessionId = s.id;
   tstate.cwd = s.cwd;
