@@ -6,11 +6,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff cc26c96: T-531 S2c (gate GREEN 55d5fad). CLOSED T-531.
 ## IN FLIGHT (6 of 6, D-71): all sonnet
 - IMPL 2d679b18 (impl-t591-s1c, ticket/T-591-s1c from 09ade72): G1+G2 kill M4/M5 (5639) -> QA Perf M4/M5 only -> gate -> merge.
-- QA PERF 7e4879c7 (lane/cp-qa-perf): (T-426 waits for S1c) T-486 S2e ea1c006 (5585) -> T-547 2bea754 (+typecheck, authz) -> T-611 4ac5982
+- QA PERF 7e4879c7 (lane/cp-qa-perf): (T-426 waits for S1c) T-486 S2e ea1c006 (5585) -> T-547 2bea754 (+typecheck, authz) -> T-597 1aeae88 -> T-611 4ac5982
   -> T-586 (premerge wip/main-5b66aa0, gate GREEN) -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-548 -> T-558 e652c44. T-591 PASS WITH GAPS 5587.
 - QA UI b3f769c5 (qa/T-600-ui-r3 from d688e0fa = r2 + integration with allow-list 208bdaa2): 1) T-619 browser proof (5679; r2 folder refused
   FOLDER_UNTRUSTED, not re-trusted by me); 2) T-600 FE S1b re-run (5565 items); then T-576 ux (2427d98, after T-586). home.mjs 924f1bfb rides with T-600.
-- BACKEND 6d72b5c6 (ticket/T-597-portal-slash, plan 5546) on T-597; then T-600 BE (plan 5540, respawn on FE S1b), T-325 S1+S2 (5549).
+- BACKEND 4b4edaf8 (ticket/T-600-be from T-600-fe-s1b 32985e2) on T-600 BE (plan 5540); then T-325 S1+S2 (5549, fresh branch).
+  T-597 DONE 1aeae88 (fix 4afc6efd, 39/39, mutation caught; 5691) -> QA Perf (whole chat folder + framing/authz probes). 6d72b5c6 ended.
 - BE INFRA feaba810 (ticket/T-623-browser-access-headers from integration) on T-623 (plan 5622; opus blind review before merge); then T-610.
   T-547 DONE 2bea754 (89/89, mutation caught; typecheck on fa67900 only) -> QA Perf.
 - T-548 S1b DONE 3b8f5cb5 (5684; 32/32, mutation caught, typecheck clean; quick check refused) -> QA Perf S1+S1b. a6a0ea9d ended.
