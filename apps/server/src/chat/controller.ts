@@ -39,6 +39,7 @@ import {
   CHAT_ENDED_INTEGRITY,
   CHAT_RECOVER_CAPPED,
   CHAT_SESSION_TITLE_MAX,
+  CHAT_SPAWN_WHY_MAX,
   isChatActor,
   isPortalActor,
   REAUTH_REQUIRED,
@@ -338,7 +339,16 @@ export interface ChatCreateOptions {
    */
   bypassOptIn?: boolean;
   /** T-294: how a worker's Claude and settings were chosen, for the `agent.spawned` audit row. */
-  spawn?: { claude: string; why: string; role?: string | null; model?: string | null; effort?: string | null; mode?: string | null };
+  spawn?: {
+    claude: string;
+    why: string;
+    role?: string | null;
+    model?: string | null;
+    effort?: string | null;
+    mode?: string | null;
+    /** T-490 (D-63): the lead's reason for a model above the role's (`session_spawn` `why`); kept on the worker as `spawnWhy`. */
+    modelWhy?: string | null;
+  };
   /** T-294: a worker's limits as its parent asked (`session_spawn`); absent fields take the parent's, and none may be wider. Only with `parentId`. */
   limits?: WorkerLimitsAsk;
   /** T-294 (Crew over MCP): what a worker (only with `parentId`) tells its lead unasked; unset is `idle`. */
@@ -724,6 +734,11 @@ export class ChatController {
    * `pickSpawnClaude`). Unset or failing, an `auto` worker stays on its parent's Claude and a named one is refused.
    */
   spawnUsage?: () => Promise<ClaudeUsage[]>;
+  /**
+   * Installed by the owner (T-490, D-63): the model a role runs on by its definition in the workspace's persona (`Personas.roleModel`),
+   * or null. Unset: no role has a known model, so `session_spawn` keeps the model it is given (or none).
+   */
+  roleModel?: (workspaceId: string, role: string) => string | null;
   /** Installed by the owner: what is true of a workspace, for the Bypass confirmation (what it can reach, what was delivered into it). */
   bypassFacts?: (workspaceId: string) => { internet: boolean; credentials: string[] };
   /** Installed by the owner: the re-check of the server code. Entering Bypass needs it fresh for the signed-in session; unset, Bypass can't be entered. */
@@ -1583,6 +1598,10 @@ export class ChatController {
     }
     // T-349: asked again after the last await, so nothing runs between this answer and the insert below.
     if (parentId && opts.liveParent !== undefined) this.#requireLiveParent(parentId, workspaceId, opts.liveParent);
+    // T-490 (D-63): a worker's reason for running above its role's model, redacted and capped once, for its row and its audit row alike.
+    const askedWhy = parentId && typeof opts.spawn?.modelWhy === 'string' ? opts.spawn.modelWhy.trim() : '';
+    const spawnWhy = askedWhy ? redact(askedWhy).slice(0, CHAT_SPAWN_WHY_MAX) : null;
+    const spawn = opts.spawn ? { ...opts.spawn, modelWhy: spawnWhy } : null;
     const row = {
       id,
       workspaceId,
@@ -1597,6 +1616,7 @@ export class ChatController {
       worktree,
       folderBranch,
       agent,
+      spawnWhy,
       ...(limits ? { maxWorkers: limits.maxWorkers, subagents: limits.subagents } : {}),
     };
     let session!: ChatSession;
@@ -1623,7 +1643,7 @@ export class ChatController {
       if (opts.report) this.#chat.setReport(id, opts.report);
       // Both transcripts say it: the worker's opens with the message that started it, framed as from the parent; the parent notes it here.
       this.#note(parentId, `Started “${title}”.`);
-      this.#chat.addAudit({ severity: 'info', kind: 'agent.spawned', sessionId: id, workspaceId, actor, detail: { parent: parentId, ...(opts.spawn ? { spawn: opts.spawn } : {}), ...(limits ? { limits } : {}) } });
+      this.#chat.addAudit({ severity: 'info', kind: 'agent.spawned', sessionId: id, workspaceId, actor, detail: { parent: parentId, ...(spawn ? { spawn } : {}), ...(limits ? { limits } : {}) } });
     }
     if (bypassCapable) this.#chat.addAudit({ severity: 'medium', kind: 'bypass.capable', sessionId: id, workspaceId, actor, detail: { how: 'start' } });
     if (full) return this.#queueStart(id, installed, full);

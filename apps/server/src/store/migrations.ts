@@ -3257,6 +3257,15 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 777,
+    name: 'chat sessions: why a worker runs above its role\'s model (T-490, D-63)',
+    up(db) {
+      // T-490 (D-63): a worker whose role defaults to sonnet (QA, review) and that its lead started on opus or fable carries the lead's
+      // reason (`session_spawn` `why`), redacted and capped. Null for every row so far and for every spawn without one.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN spawn_why TEXT;`);
+    },
+  },
+  {
     version: 870,
     name: 'notify: quota alerts as one row that updates, and the Claudes a person hears of when idle (T-126)',
     up(db) {

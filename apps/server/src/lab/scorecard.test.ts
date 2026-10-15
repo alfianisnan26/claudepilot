@@ -20,7 +20,7 @@ import { burstEvidence, rateEvidence } from '../usagespend/spikes.js';
 import { SpendStore } from '../usagespend/store.js';
 import { LAB_POLICIES } from './authz.js';
 import { Lab } from './index.js';
-import { registerLabTools } from './portalTools.js';
+import { registerLabTools, scoreShort } from './portalTools.js';
 import { createLabRoutes } from './routes.js';
 import { percentile } from './scorecard.js';
 
@@ -246,6 +246,36 @@ test('targets: D-61 live workers and lead sub-agents, D-62 owner queue, D-63 QA 
     // Sub-agents allowed but none run: a warn, not a breach.
     h.db.prepare('DELETE FROM chat_usage WHERE session_id = ?').run('M1');
     assert.deepEqual(target(prog(h.lab.scorecard({ window: 'day' })!, 'M1'), 'lead_subagents').state, 'warn');
+  } finally {
+    h.done();
+  }
+});
+
+test('T-490 (D-63): the opus share of QA and review workers per program, with its workspace; a worker started with a why is no offender', async () => {
+  const h = await seeded();
+  try {
+    const s = h.lab.scorecard({ window: 'day', compare: true })!;
+    const a = prog(s, 'L1');
+    const b = prog(s, 'M1');
+    assert.deepEqual([a.workspaceId, b.workspaceId], ['docker/api', 'docker/api']);
+    // A's QA and review workers with a request in the day: W2 (qa-verifier, opus) and W4 (reviewer, sonnet): 1 of 2 = 50 %.
+    const q = a.current.efficiency.qaReviewOpus;
+    assert.deepEqual([q.sessions, q.opus, q.opusWithWhy, q.share.value, q.share.basis], [2, 1, 0, 50, 'measured']);
+    // The day before: none (W1 is an implementer); B: X1's role was never recorded. Nothing to divide by: unavailable, never 0.
+    assert.deepEqual([a.previous!.efficiency.qaReviewOpus.sessions, a.previous!.efficiency.qaReviewOpus.share.value, a.previous!.efficiency.qaReviewOpus.share.reason], [0, null, 'no_samples']);
+    assert.deepEqual([b.current.efficiency.qaReviewOpus.sessions, b.current.efficiency.qaReviewOpus.share.reason], [0, 'no_samples']);
+    assert.ok(s.basis.qaReviewOpus, 'the figure has a written source');
+    // The short tool result carries the share and the workspace.
+    const short = scoreShort(a);
+    assert.deepEqual([short.workspace, short.now!.qa_review_opus_pct, short.now!.qa_review_sessions, short.now!.qa_review_opus_with_why], ['docker/api', 50, 2, 0]);
+    assert.equal(short.before!.qa_review_opus_pct, 'unavailable:no_samples');
+
+    // W2's lead gave a reason (session_spawn why): still counted on opus, now with a why, and no longer a D-63 offender.
+    h.db.prepare('UPDATE chat_sessions SET spawn_why = ? WHERE id = ?').run('Release gate on the exact commit.', 'W2');
+    const again = prog(h.lab.scorecard({ window: 'day' })!, 'L1');
+    const q2 = again.current.efficiency.qaReviewOpus;
+    assert.deepEqual([q2.opus, q2.opusWithWhy, q2.share.value], [1, 1, 50]);
+    assert.deepEqual([target(again, 'qa_review_model').state, target(again, 'qa_review_model').offenders], ['ok', []]);
   } finally {
     h.done();
   }

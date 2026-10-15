@@ -48,6 +48,10 @@ const windowShort = (w: CrewWindowScore | null) =>
     requests: v(w.efficiency.requests),
     handovers: v(w.efficiency.handovers),
     spikes: v(w.efficiency.spikesCount),
+    // T-490 (D-63): the opus share of QA and review workers, how many of them, and how many of the opus ones gave a why.
+    qa_review_opus_pct: v(w.efficiency.qaReviewOpus.share),
+    qa_review_sessions: w.efficiency.qaReviewOpus.sessions,
+    qa_review_opus_with_why: w.efficiency.qaReviewOpus.opusWithWhy,
     refusals: v(w.health.refusals),
     bad_endings: v(w.health.badEndings),
   };
@@ -56,6 +60,7 @@ const windowShort = (w: CrewWindowScore | null) =>
 export function scoreShort(p: CrewProgramScore) {
   return {
     program: p.program,
+    workspace: p.workspaceId,
     leads: p.leads.length,
     workers: p.workers,
     now: windowShort(p.current),
@@ -153,7 +158,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
     name: 'crew_scorecard',
     title: 'Crew scorecard',
     description:
-      'Per program (a lead chain, its continuations and workers) over the last 1h, 6h, day or week, and the window before: tickets done (by type, per hour, lead time p50/p90), reopened, wont_do, review backlog (age, waits for), CI, deploys; cost (estimated): total, lead vs workers, per done ticket, token-class shares; context p50/p90 per role and lead, requests, top sessions, model mix, sessions per role, live per Claude, hand-overs, spikes; refusals and bad endings; D-61, D-62, D-63 targets (ok, warn, breach, unavailable). Each figure: measured, estimate or unavailable, with its source. Short by default; full true for all. An agent’s token reads its own program; an admin’s all.',
+      'Per program (a lead chain, its continuations and workers; with its workspace) over the last 1h, 6h, day or week, and the window before: tickets done (by type, per hour, lead time p50/p90), reopened, wont_do, review backlog (age, waits for), CI, deploys; cost (estimated): total, lead vs workers, per done ticket, token-class shares; context p50/p90 per role and lead, requests, top sessions, model mix, sessions per role, live per Claude, hand-overs, spikes, the opus share of QA and review workers (D-63, with how many gave a why); refusals and bad endings; D-61, D-62, D-63 targets (ok, warn, breach, unavailable). Each figure: measured, estimate or unavailable, with its source. Short by default; full true for all. An agent’s token reads its own program; an admin’s all.',
     scope: 'agent',
     hints: { readOnly: true, idempotent: true },
     input: z.object({

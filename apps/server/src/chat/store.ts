@@ -21,7 +21,7 @@ import type {
   ChatTask,
   ChatWorktree,
 } from '@portal/contracts';
-import { TASK_EVENTS_MAX } from '@portal/contracts';
+import { CHAT_SPAWN_WHY_MAX, TASK_EVENTS_MAX } from '@portal/contracts';
 import { createHash, randomBytes } from 'node:crypto';
 import { posix } from 'node:path';
 import type { Store } from '../store/store.js';
@@ -102,6 +102,8 @@ export type ChatSessionRow = {
   worktree_repo?: string | null;
   /** T-476 (migration 776): a worker's folder branch at its start; null otherwise. */
   folder_branch?: string | null;
+  /** T-490 (migration 777): why its lead started it above its role's model (D-63); null: none given. */
+  spawn_why?: string | null;
   bypass_capable?: number | null;
   claude_session_id?: string | null;
   cost_base_usd?: number | null;
@@ -398,15 +400,18 @@ export class ChatStore {
     /** T-294: its limits, already checked (a worker's no wider than its parent's). Absent: null (the global setting) and on. */
     maxWorkers?: number | null;
     subagents?: boolean;
+    /** T-490 (D-63): why its lead started it above its role's model; redacted and capped here. */
+    spawnWhy?: string | null;
   }): ChatSession {
     const now = this.#stamp();
     const db = this.#writable();
+    const why = opts.spawnWhy?.trim() ? redact(opts.spawnWhy.trim()).slice(0, CHAT_SPAWN_WHY_MAX) : null;
     db
       .prepare(
         `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
            ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from, agent,
-           max_workers, subagents, folder_branch)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           max_workers, subagents, folder_branch, spawn_why)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         opts.id,
@@ -432,6 +437,7 @@ export class ChatStore {
         opts.maxWorkers ?? null,
         opts.subagents === false ? 0 : 1,
         opts.worktree ? null : (opts.folderBranch ?? null),
+        why,
       );
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(opts.id, opts.claudeId ?? '', opts.id, opts.cwd, now);
@@ -565,6 +571,7 @@ export class ChatStore {
       agent: row.agent ?? null,
       maxWorkers: row.max_workers ?? null,
       subagents: row.subagents !== 0,
+      ...(row.spawn_why ? { spawnWhy: row.spawn_why } : {}),
     };
   }
 

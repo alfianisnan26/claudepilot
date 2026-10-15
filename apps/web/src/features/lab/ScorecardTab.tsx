@@ -8,7 +8,7 @@ import { formatCost } from '@/lib/usage/format';
 import { NotAvailable } from '../usage/spend/shared';
 import { useLoad } from '../usage/spend/useLoad';
 import { labApi } from './api';
-import { fmtAge, fmtFigure, fmtPerHour, tiles, UNAVAILABLE, WINDOW_OPTIONS, type Tile, type TileState } from './scorecardModel';
+import { fmtAge, fmtFigure, fmtPerHour, qaOpusLine, tiles, UNAVAILABLE, WINDOW_OPTIONS, type Tile, type TileState } from './scorecardModel';
 
 const STATE_CLASS: Record<TileState, string> = {
   ok: 'text-ink',
@@ -76,6 +76,10 @@ function Detail({ p }: { p: CrewProgramScore }) {
       />
       <p className="mt-2 text-[12px] text-muted">
         Cost {fmtFigure(p.current.cost.total, formatCost)} · lead {fmtFigure(p.current.cost.lead, formatCost)} · workers {fmtFigure(p.current.cost.workers, formatCost)}
+      </p>
+      <p className="mt-1 break-words text-[12px] text-muted [overflow-wrap:anywhere]" data-qa-opus="">
+        {qaOpusLine(p)}
+        {p.workspaceId ? ` · ${p.workspaceId}` : ''}
       </p>
     </div>
   );

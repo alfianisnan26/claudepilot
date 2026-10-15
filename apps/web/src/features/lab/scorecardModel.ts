@@ -100,6 +100,16 @@ export function tiles(p: CrewProgramScore): Tile[] {
   ];
 }
 
+/**
+ * T-490 (D-63): the opus share of a program's QA and review workers in the window, as one line: "QA/review on opus: 50 % (1 of 2, 1 with a
+ * why)". With none in the window, the word unavailable and its reason, never 0 %.
+ */
+export function qaOpusLine(p: CrewProgramScore): string {
+  const q = p.current.efficiency.qaReviewOpus;
+  if (!q || q.share.basis === 'unavailable' || q.share.value === null) return `QA/review on opus: ${UNAVAILABLE} (${reasonText(q?.share.reason)})`;
+  return `QA/review on opus: ${fmtPercent(q.share.value)} (${q.opus} of ${q.sessions}${q.opus ? `, ${q.opusWithWhy} with a why` : ''})`;
+}
+
 /** A review item's wait as text: "3 h", "2 d". */
 export function fmtAge(ms: number): string {
   const h = ms / 3_600_000;
