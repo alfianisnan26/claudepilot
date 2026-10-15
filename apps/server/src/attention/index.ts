@@ -19,14 +19,20 @@ export { createAttentionRoutes } from './routes.js';
 export { bridgeAttentionNotify, ATTENTION_NOTIFIED_ELSEWHERE } from './notify.js';
 export { registerAttentionTools } from './portalTools.js';
 
-export function createAttention(store: Pick<Store, 'db'>, opts: AttentionOptions = {}): AttentionRegistry {
+export interface CreateAttentionOptions extends AttentionOptions {
+  /** `tickets.agentAssignUserTags` (T-527): the tags that make an agent's owner-checklist ticket count. Absent: the default `production`. */
+  agentAssignUserTags?: () => unknown;
+}
+
+export function createAttention(store: Pick<Store, 'db'>, opts: CreateAttentionOptions = {}): AttentionRegistry {
   declareAttentionPolicies();
   const db = () => store.db;
-  const registry = new AttentionRegistry({ log: (what, e) => console.error(`[attention] reading ${what} failed: ${(e as Error).message}`), snoozes: attentionSnoozes(db), ...opts });
+  const { agentAssignUserTags, ...registryOpts } = opts;
+  const registry = new AttentionRegistry({ log: (what, e) => console.error(`[attention] reading ${what} failed: ${(e as Error).message}`), snoozes: attentionSnoozes(db), ...registryOpts });
   registry.register(mcpAttentionSource(db));
   registry.register(skillAttentionSource(db));
   registry.register(ciAttentionSource(db));
-  registry.register(ticketAttentionSource(db));
+  registry.register(ticketAttentionSource(db, agentAssignUserTags));
   registry.register(toolApprovalAttentionSource(db));
   registry.register(keepGoingAttentionSource(db));
   registry.register(personaAttentionSource(db));
