@@ -8,7 +8,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
-## IN FLIGHT (4 of 4 workers, D-65: 445c3e1b impl-t561 (opus, why deny rules/authz) T-561 S1 (plan 5016, setting off by default), 7d33708d impl-t558 (opus, why D-62 authz) T-558 WAITING e652c44 (plan 4930),
+## IN FLIGHT (4 of 4 workers, D-65: 445c3e1b impl-t561 (opus, why deny rules/authz) T-561 S1 WAITING a649874 (migration 778, no clash), 7d33708d impl-t558 (opus, why D-62 authz) T-558 WAITING e652c44 (plan 4930),
   fb538d7d qa-t486 (sonnet) T-486 QA WAITING GO, 03c496b6 impl-t546 (sonnet) T-546 crew digest WAITING bb7cdb0. 03b631f0 ended.)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
   Cluster: lead gate T-531 pre-merge 950c17d (wip/main-950c17d, running) -> T-486 QA -> T-558 -> T-546 -> T-561.
