@@ -615,6 +615,17 @@ export class CiStore {
       .get(repoId, environment, exceptRun) as unknown as DeploymentRow | undefined;
   }
 
+  /** T-558: when the last run that deployed to an environment ended, counting only a run that passed whose deploying job passed; null if none. */
+  lastDeployFinished(repoId: string, environment: string): string | null {
+    const row = this.#db
+      .prepare(
+        `SELECT MAX(r.finished_at) AS at FROM ci_deployments d JOIN ci_runs r ON r.id = d.run_id
+         WHERE d.repo_id = ? AND d.environment = ? AND d.outcome = 'passed' AND r.status = 'passed'`,
+      )
+      .get(repoId, environment) as { at: string | null } | undefined;
+    return row?.at ?? null;
+  }
+
   insertDeployment(d: DeploymentRow): void {
     const keys = Object.keys(d) as (keyof DeploymentRow)[];
     this.#writableDb.prepare(`INSERT INTO ci_deployments (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...keys.map((k) => d[k] ?? null));
