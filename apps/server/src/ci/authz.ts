@@ -123,8 +123,24 @@ export const CI_POLICIES = {
   'DELETE /api/ci/runners/:id': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'id' }], audit: 'ci.runner_changed' },
 } satisfies RoutePolicies;
 
+/**
+ * The public upstream webhook (FR8a, T-486 S2), outside /api and the session guard: its door is the Git host's signature, then the seam
+ * acts as the remote's owner. Every refusal before the kick is the same 404. Kept apart from CI_POLICIES, which lists the /api/ci routes.
+ */
+export const CI_HOOK_POLICIES = {
+  'POST /hooks/ci/:id': {
+    kind: 'handler',
+    checks: [
+      'the remote follows an upstream and names a hook secret that its workspace delivers',
+      'the Git host’s HMAC-SHA256 over the raw body (X-Hub-Signature-256 or X-Gitea-Signature)',
+      'the remote’s owner is the actor: can(owner, operate, ci_repo)',
+    ],
+  },
+} satisfies RoutePolicies;
+
 export function declareCiPolicies(): void {
   declarePolicies('ci', CI_POLICIES);
+  declarePolicies('ci', CI_HOOK_POLICIES);
   // The tools filter to the caller's own runs themselves (an agent: its branch, its ticket, its session's runs). None approves.
   declareToolPolicies('ci', {
     ci_runs_list: { kind: 'signed-in', filter: 'ci_run' },
