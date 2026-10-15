@@ -8,10 +8,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
-## IN FLIGHT (4 of 4 workers, D-65: 445c3e1b impl-t561 (opus, why deny rules/authz) T-561 S1 WAITING a649874 (migration 778, no clash), 7d33708d impl-t558 (opus, why D-62 authz) T-558 WAITING e652c44 (plan 4930),
-  fb538d7d qa-t486 (sonnet) T-486 QA WAITING GO, 03c496b6 impl-t546 (sonnet) T-546 crew digest WAITING bb7cdb0. 03b631f0 ended.)
+## IN FLIGHT (4 of 4 workers, D-65: 445c3e1b impl-t561 (opus, why deny rules/authz) T-561 S1 WAITING a649874 (migration 778, no clash),
+  d2e7b532 impl-t576 (sonnet) T-576 Runners UI WAITING 7b26e14 (web only). T-558 e652c44: 7d33708d ended (125k, coordinator); QA runs its Jobs (5052).
+  fb538d7d qa-t486 (sonnet) T-486 QA WAITING GO, 03c496b6 impl-t546 (sonnet) T-546 crew digest WAITING bb7cdb0 (118k: ends after T-546).)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: lead gate T-531 pre-merge 950c17d (wip/main-950c17d, running) -> T-486 QA -> T-558 -> T-546 -> T-561.
+  Cluster: lead gate T-531 pre-merge 55d5fad (re-merged on T-557 S1 59eca49) -> T-486 QA -> T-546 -> T-561 -> T-576 -> T-558 QA.
+  Then DEPLOY integration (carries T-557 S1 + T-575, coordinator asked). Next free slot: T-558 QA (sonnet), then T-576 ux-checker.
   Later: T-426 QA + blind review (after T-401 merges), T-416 S1b QA, T-548.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
@@ -37,25 +39,23 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-378 S1 dev/t-378-1 9834ff7 ready: needs a verifier.
 
 ## DECISIONS (binding)
-- 14:15 Coordinator: 58b7039 (T-575, portal.yaml PORTAL_K8S_BROWSER_IMAGE) rides the next deploy; the coordinator then makes the
-  Browser pool for kohi-event and names the restart time. 950c17d lacks it: the merge onto integration is redone after the gate.
+- 14:30 Coordinator (D-65 idle slots): workers waiting on the one-at-a-time cluster hold slots; over 120k they end after their
+  ticket. 7d33708d ended, T-576 started in its slot. The cluster queue (D-61), not the workers, is the bottleneck.
+- 14:45 Coordinator started deploy #38 (c957f50: T-557 S1 + T-575) itself; I start NO deploy. Then the kohi-event pod restarts.
+  All worker branches pushed and clean (T-561 a649874, T-576 7b26e14, T-546 bb7cdb0, lead pre-merge 55d5fad). After the restart: if the
+  gate on 55d5fad has no verdict in /tmp/gate-55d5fad.out, re-run scripts/gate-job.sh 55d5fad1... then resume the cluster queue.
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
 - 13:20 D-66 (pulled, 619b4b5): workers run scripts/quick-check.sh (one Job: format, lint, named tests) before a branch goes
   to the gate; every brief from now on says so. Workers cannot git merge: the lead merges base heads into slice branches (4852).
-- 11:30 Coordinator (owner priority, metocean): T-379 NOW in its own worker; built on T-401's fe62fa6 (fetch stage holds creds).
 - 12:00 Coordinator tool review: lead edits of code (dev-t-376 commits 01:57-02:03, no trailers, before D-63 03:36; 4820).
   The lead edits ONLY the status file and notes. Order: T-379, T-426, T-558, T-546, T-548, T-561 (opus, deny rules), T-557.
 - 11:15 D-65 (coordinator): 4 ClaudePilot workers; implementers sonnet by default (opus only with a written why); small QA/review
   findings fixed in the same slice; a worker takes 2-3 related tickets (reuse under 150k); full report on the ticket, the lead
   reads line 1 and opens it only on FAIL; ready features over chores. Targets under 8 USD per ticket, lead share under 30 %.
-- 11:00 Coordinator: the next implementer slot goes to T-401 (security: job-run env carries GIT_TOKEN/NODE_AUTH_TOKEN), then T-426
-  (--pool-env door for Konfersi stg e2e), then T-379 (Python in job-run). They unblock 6 Konfersi tickets. Opus + blind review
-  (gate/security). They come before T-416 S2, T-537 and T-538..T-540.
 - 10:25 Workers end with WAITING <hash>; the lead hands out the cluster slot with "GO T-n" (free-slot check: OUR Jobs only).
 - 09:00 Coordinator: persona, role-tool and permission questions go to the coordinator (ticket assigned to me), NEVER the owner;
   `owner-checklist` is production only.
-- 08:10 A running slice keeps its slot. 06:00 The lead holds T-n claim to close. 05:50 UX checks are cluster Jobs; fresh worktrees.
 - D-63: QA/ux/reviewer on SONNET (opus needs a `why`: security, gate, rule or large slice); the lead never implements or commits code.
 - D-61: (worker count now 4 by D-65), NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh, one at a time.
 - Hand over before 250k context (coordinator).
