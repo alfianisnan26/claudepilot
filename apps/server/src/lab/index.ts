@@ -5,10 +5,11 @@
 // their declarations with the authz seam (authz.ts). Slice 3 adds result tokens, effort and idle gaps per slice, and stratum keys for
 // randomized experiments (ESTIMATE size, role, model, effort). T-292 slice 3 adds draws: the arms of a slice drawn before its brief (E2).
 
-import type { LabExperiment, LabExperimentReport, LabExperimentView, LabPeriod, LabSliceMetrics, LabSliceView, LabSummary } from '@portal/contracts';
+import type { LabExperiment, LabExperimentReport, LabExperimentView, LabPeriod, LabSliceMetrics, LabSliceView, LabSummary, LabTicketCost } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import { chainOf } from '../usagespend/attribution.js';
 import { SpendStore } from '../usagespend/store.js';
+import { ticketReport } from '../usagespend/ticketReport.js';
 import { armMembers, assignSlice, bindDraw, createExperiment, decideExperiment, drawArms, excludeSlice, experimentReport, listExperiments, drawStats, newDrawKey, ticketExistsIn, normTicket, stopExperiment, type DrawStat, type NewExperiment } from './experiments.js';
 import { LabIngest } from './ingest.js';
 import { sliceMetrics, type SliceFilter } from './metrics.js';
@@ -171,7 +172,28 @@ export class Lab {
     const period = opts.period ?? 'day';
     const sinceMs = opts.sinceMs ?? nowMs - 14 * DAY_MS;
     const slices = this.views({ fromMs: sinceMs, ...(opts.sessionId ? { sessionId: opts.sessionId } : {}) });
-    return { period, sinceMs, rows: summarize(slices, period), basis: SUMMARY_BASIS, nowMs };
+    return { period, sinceMs, rows: summarize(slices, period), tickets: this.ticketCosts(sinceMs, nowMs, opts.sessionId), basis: SUMMARY_BASIS, nowMs };
+  }
+
+  /**
+   * What tickets cost in [fromMs, toMs): the figures of Usage -> Attribution by ticket, from the same function (usagespend/ticketReport.ts, T-449),
+   * not a copy. With a session: only its own tree.
+   */
+  ticketCosts(fromMs: number, toMs: number, sessionId?: string, limit = 25): LabTicketCost[] {
+    const spend = new SpendStore(this.opts.store);
+    const tree = sessionId ? new Set([sessionId, ...spend.descendants(sessionId)]) : undefined;
+    const rows = spend.usageRows(fromMs, toMs + 1, tree ? { sessionIds: tree } : {});
+    const sessions = spend.sessions(new Set(rows.map((r) => r.sessionId)));
+    if (tree) {
+      for (const [id, s] of sessions) {
+        if (id === sessionId) sessions.set(id, { ...s, parentId: null, continuedFrom: null });
+        else if (s.continuedFrom && !tree.has(s.continuedFrom)) sessions.set(id, { ...s, continuedFrom: null });
+      }
+    }
+    const a = ticketReport(spend, { rows, sessions, fromMs, toMs: toMs + 1, limit });
+    return a.rows
+      .filter((r) => r.state === 'known')
+      .map((r) => ({ ticket: r.key, type: r.ticket?.type ?? null, status: r.ticket?.status ?? null, doneAt: r.ticket?.doneAt ?? null, ownUsd: r.own.costUsd, viaLeadUsd: r.ticket?.viaLeadUsd ?? 0, totalUsd: r.total.costUsd }));
   }
 
   /** Each experiment with its arms' n, accepted count and the primary (median loaded cost per accepted slice) with its interval. */

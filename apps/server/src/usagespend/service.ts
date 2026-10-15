@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto';
 import { AppError, defineErrorCodes } from '@isnanme/core';
 import {
   ATTRIBUTION_BY,
+  ATTRIBUTION_LEAD_BASIS,
   CHAT_USAGE_RANGES,
   USAGE_THRESHOLDS,
   estimatedFigure,
@@ -36,6 +37,7 @@ import {
 import type { Store } from '../store/store.js';
 import { OWNER_ACTOR, UI_OWNER, type SpendObject, type Visibility, type Who } from './actor.js';
 import { attribute, chainOf, chainRootOf, workspaceNameOf } from './attribution.js';
+import { ticketReport } from './ticketReport.js';
 import { alertKey, levelOf, MAX_BUDGETS, measure, parseBudget, type BudgetFields } from './budgets.js';
 import { addRow, roundUsd, zeroTotals, type UsageRow } from './model.js';
 import { DAY, HOUR, periodBounds } from './periods.js';
@@ -117,6 +119,8 @@ export interface AttributionQuery {
   limit?: unknown;
   /** Only this session and the ones below it (an agent's view of its own tree). */
   sessionId?: string;
+  /** By ticket: only tickets closed as done inside the window (T-449). */
+  done?: boolean;
 }
 
 export class UsageSpend {
@@ -728,22 +732,37 @@ export class UsageSpend {
       }
     }
     const personas = by === 'persona' ? this.#store.personaRecords(ids) : new Map();
-    const a = attribute({
+    const a =
+      by === 'ticket'
+        ? ticketReport(this.#store, { rows, sessions, fromMs: from, toMs: now + 1, limit, doneOnly: q.done === true })
+        : attribute({
+            by,
+            rows,
+            sessions,
+            personas,
+            limit,
+            claudeName: (claudeId) => this.#claudeName(claudeId),
+            personaName: (poolId, recorded) => {
+              try {
+                return this.o.personaName?.(poolId) ?? recorded ?? 'Persona';
+              } catch {
+                return recorded ?? 'Persona';
+              }
+            },
+          });
+    return {
       by,
-      rows,
-      sessions,
-      personas,
-      limit,
-      claudeName: (claudeId) => this.#claudeName(claudeId),
-      personaName: (poolId, recorded) => {
-        try {
-          return this.o.personaName?.(poolId) ?? recorded ?? 'Persona';
-        } catch {
-          return recorded ?? 'Persona';
-        }
-      },
-    });
-    return { by, range, from: iso(from), to: iso(now), totals: a.totals, side: a.side, rows: a.rows, coverage: a.coverage, more: a.more, now: iso(now) };
+      range,
+      from: iso(from),
+      to: iso(now),
+      totals: a.totals,
+      side: a.side,
+      rows: a.rows,
+      coverage: a.coverage,
+      more: a.more,
+      now: iso(now),
+      ...(by === 'ticket' ? { leadBasis: ATTRIBUTION_LEAD_BASIS, ...(q.done === true ? { doneOnly: true } : {}), ...(a.doneByType ? { doneByType: a.doneByType } : {}) } : {}),
+    };
   }
 
   /** The audit trail of what people changed here, newest first (`limit` 1 to 200, default 50). */

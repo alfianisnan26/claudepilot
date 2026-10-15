@@ -34,6 +34,13 @@ export function sessionLine(row: AttributionRow): SessionLine | null {
   return { claude: s.claudeName, claudeId: s.claudeId, ticket: s.ticketId, own: s.children > 0 ? `own ${formatCost(row.own.costUsd)}` : null, deleted: !s.exists };
 }
 
+/** A ticket row's facts under its title (T-449): "feature · done · via lead $1.20"; the via-lead part only when leads' dollars were apportioned to it. Null for other rows. */
+export function ticketLine(row: AttributionRow): { type: string; status: string; viaLead: string | null } | null {
+  const t = row.ticket;
+  if (!t) return null;
+  return { type: t.type ?? '-', status: (t.status ?? '-').replace(/_/g, ' '), viaLead: t.viaLeadUsd > 0 ? `via lead ${formatCost(t.viaLeadUsd)}` : null };
+}
+
 /** The line under a workspace, ticket or persona row: how many sessions and requests are behind it. */
 export function countsLine(row: AttributionRow): string {
   const sessions = `${row.sessions} ${row.sessions === 1 ? 'session' : 'sessions'}`;

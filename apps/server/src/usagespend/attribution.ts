@@ -25,7 +25,9 @@ import {
   type SessionFacts,
   type SpendFigure,
   type SpendReason,
+  type TicketTypeCost,
 } from '@portal/contracts';
+import { apportionLeads } from './ticketCost.js';
 import { addRow, addTotals, byCostDesc, roundUsd, zeroTotals, type PersonaRecord, type SessionInfo, type UsageRow } from './model.js';
 
 export interface AttributionInput {
@@ -42,6 +44,12 @@ export interface AttributionInput {
   limit: number;
   /** A dimension this report knows beyond `GROUPERS` (or instead of one): where `by=user` plugs in. Not used by the portal today. */
   groupers?: Readonly<Record<string, GrouperFactory>>;
+  /** By ticket (T-449): a ticket's type, status and when it was closed as done (ms), or null when it is not known. */
+  ticketFacts?(ticketId: string): { type: string; status: string; doneAtMs: number | null } | null;
+  /** By ticket: the window, for "done in the window". */
+  window?: { fromMs: number; toMs: number };
+  /** By ticket: only tickets closed as done inside `window`. */
+  doneOnly?: boolean;
 }
 
 export interface Attribution {
@@ -51,6 +59,8 @@ export interface Attribution {
   rows: AttributionRow[];
   coverage: SpendFigure;
   more: number;
+  /** By ticket: the done-in-window tickets' dollars by type (needs `ticketFacts` and `window`). */
+  doneByType?: TicketTypeCost[];
 }
 
 /** The part of a workspace id (`<target>/<name>`) a person calls it by. */
@@ -74,11 +84,14 @@ interface Acc {
   sessions: Set<string>;
   first: number;
   last: number;
+  /** The dollars as the sum of each request in millionths: what a lead's apportioned part is taken from exactly. */
+  micro: number;
 }
 
-const acc = (): Acc => ({ totals: zeroTotals(), sessions: new Set(), first: Infinity, last: -Infinity });
+const acc = (): Acc => ({ totals: zeroTotals(), sessions: new Set(), first: Infinity, last: -Infinity, micro: 0 });
 
 function take(a: Acc, r: UsageRow): void {
+  a.micro += Math.round(r.costUsd * 1e6);
   addRow(a.totals, r);
   a.sessions.add(r.sessionId);
   if (r.atMs < a.first) a.first = r.atMs;
@@ -201,60 +214,117 @@ const GROUPERS = {
   },
 } satisfies Record<Exclude<AttributionBy, 'session'>, GrouperFactory>;
 
-function groups(input: AttributionInput, grand: ChatUsageTotals): { rows: AttributionRow[]; coverage: SpendFigure; more: number } {
+function groups(input: AttributionInput, grand: ChatUsageTotals): { rows: AttributionRow[]; coverage: SpendFigure; more: number; doneByType?: TicketTypeCost[] } {
   const make = input.groupers?.[input.by] ?? (GROUPERS as Record<string, GrouperFactory>)[input.by];
   if (!make) throw new Error(`no way to group by ${input.by}`);
   const cellOf = make(input);
   const map = new Map<string, { cell: Cell; acc: Acc }>();
-  for (const r of input.rows) {
-    const cell = cellOf(r);
+  const entry = (cell: Cell) => {
     const id = `${cell.state}\u0000${cell.key}`;
     let g = map.get(id);
     if (!g) map.set(id, (g = { cell, acc: acc() }));
-    take(g.acc, r);
+    return g;
+  };
+  for (const r of input.rows) take(entry(cellOf(r)).acc, r);
+
+  // By ticket (T-449): leads' dollars move from "No ticket" to the tickets their workers are on (ticketCost.ts), in millionths so they add up exactly.
+  const byTicket = input.by === 'ticket' && !input.groupers?.ticket;
+  const via = new Map<string, { micro: number; workers: number }>();
+  if (byTicket) {
+    const memo = new Map<string, Cell>();
+    const ticketCell = (id: string): Cell => memo.get(id) ?? (memo.set(id, ticketOf(id, input.sessions)), memo.get(id)!);
+    const lead = apportionLeads({
+      rows: input.rows,
+      sessions: input.sessions,
+      ticketOf: ticketCell,
+      chainRootOf: (id) => chainRootOf(id, input.sessions),
+      lineage: (id) => lineage(id, input.sessions).sessions,
+    });
+    for (const p of lead.parts.values()) {
+      via.set(p.ticket, { micro: p.micro, workers: p.workers });
+      entry({ state: 'known', key: p.ticket, label: p.ticket });
+    }
+    const none = map.get('none\u0000');
+    if (none && lead.micro > 0) {
+      none.acc.micro -= lead.micro;
+      none.acc.totals.costUsd = none.acc.micro / 1e6;
+    }
   }
+  const doneIn = (id: string): boolean => {
+    const f = input.ticketFacts?.(id);
+    const w = input.window;
+    return !!f && f.status === 'done' && f.doneAtMs !== null && !!w && f.doneAtMs >= w.fromMs && f.doneAtMs < w.toMs;
+  };
   const row = (cell: Cell, a: Acc): AttributionRow => {
-    const total = clean(a.totals);
+    const own = clean(a.totals);
+    const v = byTicket && cell.state === 'known' ? via.get(cell.key) : undefined;
+    const total = v ? clean({ ...a.totals, costUsd: (a.micro + v.micro) / 1e6 }) : own;
+    const f = byTicket && cell.state === 'known' ? input.ticketFacts?.(cell.key) : undefined;
     return {
       by: input.by,
       key: cell.key,
       label: cell.label,
       state: cell.state,
       ...(cell.reason ? { reason: cell.reason } : {}),
-      own: total,
+      own,
       total,
       share: shareOf(total, grand),
       sessions: a.sessions.size,
       firstAt: iso(a.first),
       lastAt: iso(a.last),
+      ...(byTicket && cell.state === 'known'
+        ? { ticket: { type: f?.type ?? null, status: f?.status ?? null, doneAt: f && f.status === 'done' && f.doneAtMs !== null ? new Date(f.doneAtMs).toISOString() : null, viaLeadUsd: (v?.micro ?? 0) / 1e6, viaLeadWorkers: v?.workers ?? 0 } }
+        : {}),
     };
   };
-  const known = [...map.values()].filter((g) => g.cell.state === 'known').map((g) => row(g.cell, g.acc));
-  known.sort(byCostDesc);
+  const all = [...map.values()].filter((g) => g.cell.state === 'known').map((g) => row(g.cell, g.acc));
+  all.sort(byCostDesc);
+  let doneByType: TicketTypeCost[] | undefined;
+  if (byTicket && input.ticketFacts && input.window) {
+    const types = new Map<string, { tickets: number; micro: number }>();
+    for (const r of all) {
+      if (!doneIn(r.key)) continue;
+      const t = r.ticket?.type ?? 'unknown';
+      const e = types.get(t) ?? { tickets: 0, micro: 0 };
+      e.tickets++;
+      e.micro += Math.round(r.total.costUsd * 1e6);
+      types.set(t, e);
+    }
+    doneByType = [...types]
+      .map(([type, e]) => ({ type, tickets: e.tickets, costUsd: e.micro / 1e6, perTicketUsd: roundUsd(e.micro / 1e6 / e.tickets) }))
+      .sort((a, b) => b.costUsd - a.costUsd || a.type.localeCompare(b.type));
+  }
+  const done = byTicket && !!input.doneOnly;
+  const known = done ? all.filter((r) => doneIn(r.key)) : all;
   const shown = known.slice(0, input.limit);
   const rows = [...shown];
   const rest = known.slice(input.limit);
   if (rest.length) {
     const sum = zeroTotals();
     const sessions = new Set<string>();
+    const keys = new Set(rest.map((x) => x.key));
     for (const g of map.values()) {
-      if (g.cell.state !== 'known' || !rest.some((x) => x.key === g.cell.key)) continue;
+      if (g.cell.state !== 'known' || !keys.has(g.cell.key)) continue;
       addTotals(sum, g.acc.totals);
+      sum.costUsd += (via.get(g.cell.key)?.micro ?? 0) / 1e6;
       for (const s of g.acc.sessions) sessions.add(s);
     }
     const total = clean(sum);
     rows.push({ by: input.by, key: 'others', label: 'Others', state: 'others', own: total, total, share: shareOf(total, grand), sessions: sessions.size, firstAt: null, lastAt: null });
   }
-  for (const state of ['none', 'unknown'] as const) {
-    const g = [...map.values()].find((x) => x.cell.state === state);
-    if (g) rows.push(row(g.cell, g.acc));
+  if (!done) {
+    for (const state of ['none', 'unknown'] as const) {
+      const g = [...map.values()].find((x) => x.cell.state === state);
+      if (g) rows.push(row(g.cell, g.acc));
+    }
   }
-  // Dollars whose row is known or recorded as none, over all dollars.
+  // Dollars whose row is known or recorded as none, over all dollars (with `doneOnly`: the dollars of the rows shown).
   let attributed = 0;
-  for (const g of map.values()) if (g.cell.state !== 'unknown') attributed += g.acc.totals.costUsd;
+  if (done) for (const r of known) attributed += r.total.costUsd;
+  else for (const g of map.values()) if (g.cell.state !== 'unknown') attributed += g.acc.totals.costUsd + (g.cell.state === 'known' ? (via.get(g.cell.key)?.micro ?? 0) / 1e6 : 0);
   const coverage: SpendFigure =
     grand.requests === 0 ? unavailableFigure('no_samples') : !(grand.costUsd > 0) ? { value: null, basis: 'unavailable', reason: 'no_cost' } : estimatedFigure(pct((attributed / grand.costUsd) * 100));
-  return { rows, coverage, more: rest.length };
+  return { rows, coverage, more: rest.length, ...(doneByType ? { doneByType } : {}) };
 }
 
 /** The session tree: one row per session with requests and per known ancestor of one, a session's `total` holding the ones it started. */
@@ -408,6 +478,6 @@ export function attribute(input: AttributionInput): Attribution {
     const coverage: SpendFigure = grand.requests === 0 ? unavailableFigure('no_samples') : !(grand.costUsd > 0) ? { value: null, basis: 'unavailable', reason: 'no_cost' } : estimatedFigure(100);
     return { totals, side, rows, coverage, more };
   }
-  const { rows, coverage, more } = groups(input, grand);
-  return { totals, side, rows, coverage, more };
+  const { rows, coverage, more, doneByType } = groups(input, grand);
+  return { totals, side, rows, coverage, more, ...(doneByType ? { doneByType } : {}) };
 }

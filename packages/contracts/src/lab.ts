@@ -190,10 +190,23 @@ export interface LabSummaryRow {
 
 export type LabPeriod = 'day' | 'week';
 
+/** A ticket's dollars in the window as usage spend reads them (T-449; the same function as Usage -> Attribution by ticket): own, via leads, total. */
+export interface LabTicketCost {
+  ticket: string;
+  type: string | null;
+  status: string | null;
+  doneAt: string | null;
+  ownUsd: number;
+  viaLeadUsd: number;
+  totalUsd: number;
+}
+
 export interface LabSummary {
   period: LabPeriod;
   sinceMs: number;
   rows: LabSummaryRow[];
+  /** Tickets with their cost since `sinceMs`, most dollars first (at most 25); the basis of `viaLeadUsd` is `ATTRIBUTION_LEAD_BASIS`. */
+  tickets?: LabTicketCost[];
   /** One line per figure: where it comes from (the source an InfoTip shows). */
   basis: Record<string, string>;
   nowMs: number;
