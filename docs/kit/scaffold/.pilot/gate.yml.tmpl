@@ -1,6 +1,9 @@
 # The gate of {{PROJECT}} (.pilot/README.md). Two lanes:
 #   quick: on every push of {{INTEGRATION_BRANCH}} and of a ticket branch, the checks for what changed (minutes);
 #   full:  by hand (input full=true), the full gate on a clean copy of the commit: before a deploy and every two hours.
+# Both run as a cluster Job through job-run (T-491): the Job clones the commit, installs (`npm ci`, its default step) and
+# runs the command; this pipeline only streams the log and passes on the exit code. Nothing heavy runs in the workspace,
+# so no heavy lock here. The commit must be on the repository job-run clones from (push it there as well as to `pilot`).
 # The commands are the project's own; their results reach the session that owns the branch.
 name: Gate
 on:
@@ -22,14 +25,14 @@ jobs:
     if: ci.event == 'push' || inputs.full == false
     timeout: 20m
     steps:
-      - name: Checks for what changed
+      - name: Install and checks, in a cluster Job
         run: |
-          {{TEST_QUICK}}
+          {{JOB_RUN}} --ref "$PILOT_SHA" --role gate-quick --timeout 1200 -- '{{TEST_QUICK}}'
   full:
     name: Full gate
     if: ci.event == 'manual' && inputs.full == true
     timeout: 90m
     steps:
-      - name: Full gate on a clean copy
+      - name: Install, full gate and build, in a cluster Job
         run: |
-          {{TEST_FULL}}
+          {{JOB_RUN}} --ref "$PILOT_SHA" --role gate-full --timeout 5400 -- '{{TEST_FULL}} && {{BUILD_CHECK}}'

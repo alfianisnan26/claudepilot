@@ -12,7 +12,7 @@ the portal, never in these files.
 
 | File | What it does |
 | --- | --- |
-| `gate.yml` | **Quick gate** on every push of `{{INTEGRATION_BRANCH}}` and of `ticket/**` branches: `{{TEST_QUICK}}`. **Full gate** by hand with input `full: true`: `{{TEST_FULL}}`. A new push to the same branch cancels the older push run; a manual run has its own group, so pushes never cancel a full gate. |
+| `gate.yml` | **Quick gate** on every push of `{{INTEGRATION_BRANCH}}` and of `ticket/**` branches: install and `{{TEST_QUICK}}`. **Full gate** by hand with input `full: true`: install, `{{TEST_FULL}}` and `{{BUILD_CHECK}}`. Both as a cluster Job through `{{JOB_RUN}}` (below). A new push to the same branch cancels the older push run; a manual run has its own group, so pushes never cancel a full gate. |
 | `deploy.yml` | **Deploy**, by hand only: `gate` (the full gate on the commit; input `gate: false` skips it, used only on the owner's explicit word for that run), `build` (leaves what it made in `.pilot/out/build.env`), `release` (waits for a person when its environment is protected, then deploys; leaves `.pilot/out/release.env`, even on failure), `verify` (the release is live and well), `rollback` (only when `release` or `verify` failed: back to what was approved before). Inputs: `images`, `gate`, `deploy`, `dry_run`. |
 | `scripts/` | What the jobs run, when a command grows past one line. Not read by the portal. |
 
@@ -50,10 +50,16 @@ environment: `deploy-stg.yml` naming `stg`, `deploy.yml` naming `production`, ea
   working branch catch up as a separate step (a working branch that moved while the release waited must not fail
   the deploy); write what the next job needs to `.pilot/out/*.env`; and have tests against fakes (a fake remote,
   a fake cluster) before the first real run.
-- **The full gate in CI.** It runs in the workspace unless the command sends it elsewhere. On a cluster, make the
-  step run the gate as a Job (`scripts/gate-job.sh "$PILOT_SHA"`) so the workspace's CPUs stay with the agents.
+- **Both gates run as cluster Jobs** (T-491). Each lane is one `{{JOB_RUN}} --ref "$PILOT_SHA" -- '<command>'`:
+  the Job clones the commit, runs `npm ci` (job-run's default step, in each folder with a `package-lock.json`),
+  then the command; the quick lane runs `{{TEST_QUICK}}`, the full lane `{{TEST_FULL}} && {{BUILD_CHECK}}`. The
+  workspace only streams the log, so the pipeline needs no `flock /tmp/heavy.lock`: do not add one. The commit
+  must be on the repository job-run clones from (GitHub or Gitea), not only on `pilot`: push it to both. A red
+  install, check or build is the step's exit code. Without a cluster, replace the line with the bare command.
 - **The quick gate's base.** In CI the commit the branch moved from is `$PILOT_BASE_SHA` (empty for a new branch or
-  a manual run); pass it if `{{TEST_QUICK}}` compares against a base.
+  a manual run). The Job does not see `PILOT_*` variables and its clone is one commit deep: pass the base as an
+  argument (`{{JOB_RUN}} --ref "$PILOT_SHA" -- {{TEST_QUICK}} "$PILOT_BASE_SHA"`, the several-words form) and
+  fetch it in the command.
 - **Secrets.** A job that needs one lists it by Secrets pool name (`secrets: [NAME]`); the value never appears in a
   file, a plan or a log. The run fails with `secret-missing` when the workspace does not have it.
 - **The every-two-hours full gate.** Schedules are not in the format yet; the orchestrator starts it by hand.
