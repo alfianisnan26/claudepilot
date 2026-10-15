@@ -3,7 +3,7 @@
 Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393f6b), this one.
 
 ## DONE
-- DEPLOY run #32 rmv8xqej06e545e RUNNING (gate step at 02:51) on integration 721420f, images=portal, gate=true, approval auto (D-44). It CONTAINS the coordinator's 8ae4fb2 (open agent ticket cap a setting, default 600) and T-348, T-315 s1, T-330/T-331/T-272, T-349, T-352, T-321, T-376 S1, T-400. Third portal deploy of 2026-10-15 (cap reached). Read it with ci_run_get; after it: the coordinator checks ticket_create for a worker.
+- DEPLOY run #32 RELEASED: portal 2026.10.15-3 (11ed6e8, merged back 8048128), Argo CD Synced/Healthy on 11ed6e8, pod running image 2026.10.15-3 (k3s-status.sh 03:20). Contains 721420f: coordinator 8ae4fb2, T-348, T-315 s1, T-330/T-331/T-272, T-349, T-352, T-321, T-376 S1, T-400. Cap of 3 deploys for 2026-10-15 reached.
 - integration pushes this session: c1aa862 (T-349, T-352), 6166d2e (T-321, T-376 S1), cb48b49 (T-400), 721420f (+ coordinator 8ae4fb2, D-61, D-62); every one after a full gate Job GREEN (06e7564, 6166d2e, 575a48a). CLOSED: T-349, T-352, T-321, T-400.
 - Filed: T-397 (proposal, mine), T-398, T-399, T-402, T-403 (settled by D-62), T-409, T-413 (incident: OOM 02:11, my share stated), T-422 (sudo, proposal, mine).
 
