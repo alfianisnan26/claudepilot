@@ -12,7 +12,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-417 (high): verifier PASS WITH GAPS (comment 2995); merged LOCALLY 311f366 + pack 7c1d29c on top of T-366; gate on the new head after 423cb65's gate. Race = T-438.
 - T-375 (high) + T-369: ux FAIL on c84657f (comment 2978). Fixer ee1a1b05 (opus, hasyim) in dev-t-333-1: no clipped values at 390, header 44 px, new checks. Then a new ux-checker.
 
-- T-427 (high): verifier FAIL (comment 2996: parent kept when it leads; no floor). Lead fixed 47a5aea (parent only when no other; > 10 % left); proof Job running; then a DIFFERENT verifier.
+- T-427 (high): lead's fix 47a5aea PROOF green (passes on 47a5aea, fails on 3198f5d; typecheck 0). Needs a DIFFERENT verifier (sonnet) at the next slot.
 
 - T-433 (high, in_review): blind review PASS conditional (comment 2984): A ok; B/C hit the persona wall (named for the coordinator); A may be redundant (tools likely missing via --agent lists, not refused). T-436 (vault binding) filed. Coordinator lands.
 
@@ -47,4 +47,4 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 6. T-370 HOLD (claudepilot-b7), then T-371..T-374, T-363 (read D-59 / PRD 8b criteria first).
 7. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356, T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149.
 
-LESSONS: dontAsk workers can't Read /tmp: --out inside the worktree; scroll-lock/mobile-drag read SL_PORT not QA_PORT; no Agent-tool sub-agents and no in-pod heavy work (OOM); an idle worker is not woken by a finished Job (tell it to wait in its turn); use FULL commit hashes with job-run; merge a branch only via a worker when it conflicts; check the full D-row before quoting a decision; typecheck/gate before every integration push.
+LESSONS: never chain a commit after a merge that may conflict (03:37 a merge was committed with markers in context-pack.md; caught before push, amended); dontAsk workers can't Read /tmp: --out inside the worktree; scroll-lock/mobile-drag read SL_PORT not QA_PORT; no Agent-tool sub-agents and no in-pod heavy work (OOM); an idle worker is not woken by a finished Job (tell it to wait in its turn); use FULL commit hashes with job-run; merge a branch only via a worker when it conflicts; check the full D-row before quoting a decision; typecheck/gate before every integration push.
