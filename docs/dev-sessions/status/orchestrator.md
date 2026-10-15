@@ -12,17 +12,17 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   Old Backend 4b4edaf8 ended: T-600 BE 1a95fb03 (5756) + T-597 S1b 75656845 (5849) DONE -> QA Perf.
 - T-631 review CHANGES 5850 -> lead 5853: absolute-path entry (a) for the coordinator; F2 small slice; F1 also on job-run.sh -> T-635 (high).
 - IMPL T-558 S1b 191bd6f1 (ticket/T-558-s1b from e652c44; QA FAIL 5846 -> 5847).
-- NEXT FREE SLOTS: 1) FE S1c T-600. 2) T-633 (T-546 mutants). 3) T-631 F2 slice.
+- NEXT FREE SLOTS: 1) T-633 (T-546 mutants). 2) T-631 F2 slice. 3) T-638 flakes. BATCH 3: T-576, then QA-passed of T-591/T-597/T-600/T-623.
 - IMPL T-416 S1c 0e5bcf50 (ticket/T-416-s1c): QA 41381bf2 FAIL 5792 (push-bridge test red, race test NO PROOF; S1b claims false) -> 5808.
 - T-623 S1b DONE 784926f (5855; 6d431441 ended; lead read diff: stdin not argv, Memory emptyDir 0400, no values in audit/hash, no RBAC) -> QA Perf queue.
 - BE INFRA respawned e92c5ba3 (ticket/T-578-gate-reuse) on T-578 S1 (reuse green gate of same tree + per-file progress): a GATE change,
   merge only on a person's ack + blind review. T-578 claim refused by id (T-634): worker on it by spawn.
 - T-619 browser proof PASS 5793 (screenshots t619-390/1280.png in qa-t-600-ui-r3) -> 5810; #41 release is the coordinator's.
 - QA PERF 7e4879c7 (lane/cp-qa-perf): current item, then T-426 S1c+S1d 80f5bb72 (FRONT, owner), then rest of T-600 BE 1a95fb03 / T-597 S1b 75656845, then T-623 S1b 784926f, then T-591 S1d delta 394abdd5. QA is the bottleneck (5 queued).
-- QA UI b3f769c5 (qa/T-600-ui-r3 32f67b8f): on T-576 ux (2427d98) now; then T-600 re-run after FE S1c (FE S1b FAIL 5721, Pace 2 cols at 1280).
-- FRONTEND: 6a1a061e DONE FE S1b 32985e2 (5621) -> QA UI; ended. FE S1c T-600 Pace grid (5721); then T-556 (T-486 now merged).
-- Merge notes: T-546 merges 10b22e0, not branch head 0004ac5. T-486 = S2d 2979f99 + S2e ea1c006. Ended: 5f8f392b, 74a8d857, 83921ca7,
-  f13a9442, 4ba6c5db, d4c49b5c, 219d5558. T-619: review CHANGES 5575 -> coordinator lands the named list (5584). No prettier/eslint in Jobs (T-612).
+- T-576 QA UI PASS WITH GAPS 5883 -> lead 5884: merge cb6bd216 (2427d98 + runners.mjs) in batch 3; kit 44 px gap -> T-639; phone check stays.
+- QA UI b3f769c5 ENDED (idle until FE S1c; slot swap, 19:19) -> FRONTEND fa9d3d56 (ticket/T-600-fe-s1c from 1a95fb03) on FE S1c
+  (Pace 3 cols at 1280, 5721). On its DONE: end FE, respawn QA UI (lane-qa-ui) to re-run T-600 (qa/T-600-ui-r3 32f67b8f, crew-grid.mjs).
+- T-619: review CHANGES 5575 -> coordinator lands the named list (5584). No prettier/eslint in Jobs (T-612).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
   T-426 ab93b54: QA Perf PASS 33/33 (5564) but blind review d4c49b5c FAIL 5571 (sev 2: refused arg echoed, pasted hex secret printed).
   S1b 350dd399 (5661): 2nd blind review 14385e7d CHANGES 5674 (sev 2: parser :104 echoes $1, lead confirmed) -> decision 5682 ->
