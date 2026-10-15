@@ -10,7 +10,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
    commits ec1d8c4 persona T-433, 9854c0c pack; context-pack.md WILL conflict: `git checkout origin/integration -- docs/context-pack.md`,
    run scripts/context-pack.sh, check 0 markers, THEN commit), push integration, close T-366 and T-417 (D-63: QA PASS + merge in).
 2. Workers live (3 = D-61 budget), each posts its own report on its ticket (T-433 landed); read the verdict line only:
-   - 458defa3 reviewer, opus, alfian.isnan, dev-t-352-1: T-404 second blind review of dev/t-404-1 b80f77f.
+   - (ended) 458defa3: T-404 second blind review = SAFE AFTER FIXES (full report on T-404): 10 items closed, 30/30 tests (f40365e5); MAJOR bypasses still allowed by the real guard: a fixer (opus) on dev/t-404-1 in dev-t-352-1, then a third reviewer. One slot is FREE.
    - b22b5fae ux-checker, sonnet, alfian.isnan, dev-t-333-1: T-375 + T-369 re-check of dev/t-375-1 013b974.
    - ca172194 implementer, sonnet, fadlilah, dev-t-349-1: T-376 S2 double page read on open, new branch dev/t-376-3.
 
@@ -19,7 +19,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-417 (high): verifier PASS WITH GAPS (comment 2995); in the local batch. Gap = T-438.
 - T-427 (high): verifier FAIL on 3198f5d (comment 2996); fix 47a5aea on dev/t-427-1 (written by the lead before D-63), PROOF green
   (comment 3007). NEEDS a different verifier (sonnet) -> merge.
-- T-404 (high): fixes b80f77f; second blind review running (above). SAFE -> merge.
+- T-404 (high): second review SAFE AFTER FIXES (report on T-404): next = fixer (opus) for its major findings, then a third reviewer.
 - T-375 + T-369: fix 013b974 (proof 10 fail -> 0, web 590/590, comment 3030); ux re-check running. PASS -> merge, close both.
 - T-376 (high): S1 deployed; S2 ux FAIL (newest page read twice on open); fixer running; then ux re-check + S3 perf-tester.
 - T-413 (incident): post-mortem comment 2998; docs fixed b27bc48 (local batch); comment 3003: ready for an independent check and close.
