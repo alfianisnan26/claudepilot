@@ -7,7 +7,8 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
    regenerated, 0 markers); integration pushed 7b1a05a (origin and pilot); T-366 and T-417 CLOSED. wip/handover-de232389 is obsolete.
 2. Workers live (3 = D-61 budget), each posts its own report on its ticket (T-433 landed); read the verdict line only:
    - (ended) 458defa3: T-404 second blind review = SAFE AFTER FIXES (full report on T-404): 10 items closed, 30/30 tests (f40365e5); MAJOR bypasses still allowed by the real guard: a fixer (opus) on dev/t-404-1 in dev-t-352-1, then a third reviewer. One slot is FREE.
-   - b22b5fae ux-checker, sonnet, alfian.isnan, dev-t-333-1: T-375 + T-369 re-check of dev/t-375-1 013b974.
+   - (ended) b22b5fae: T-375 UX PASS (one minor), T-369 UX PASS on dev/t-375-1 013b974 (report on T-375; 6 harnesses 0 failures).
+     NEXT: merge dev/t-375-1 into integration, gate-job, push, close T-375 and T-369 (D-63). No worker is live now: 3 slots FREE.
    - (ended) ca172194 T-376 S2 fix: NOT DONE (report on T-376): dev/t-376-3 0b0faf7 = t-376-2 + 1 commit; the dontAsk sandbox refused
      `git merge origin/integration` 3 times; it found one caller and one mount (cause in a production build not shown). dev-t-349-1 may be left on
      dev/t-376-3: check `git -C ~/work/claudepilot.worktrees/dev-t-349-1 status -sb` first. Next: the lead merges integration into dev/t-376-3
@@ -19,7 +20,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-427 (high): verifier FAIL on 3198f5d (comment 2996); fix 47a5aea on dev/t-427-1 (written by the lead before D-63), PROOF green
   (comment 3007). NEEDS a different verifier (sonnet) -> merge.
 - T-404 (high): second review SAFE AFTER FIXES (report on T-404): next = fixer (opus) for its major findings, then a third reviewer.
-- T-375 + T-369: fix 013b974 (proof 10 fail -> 0, web 590/590, comment 3030); ux re-check running. PASS -> merge, close both.
+- T-375 + T-369: ux PASS on 013b974: merge + gate + close both.
 - T-376 (high): S1 deployed; S2 ux FAIL (newest page read twice on open); fixer running; then ux re-check + S3 perf-tester.
 - T-413 (incident): post-mortem comment 2998; docs fixed b27bc48 (local batch); comment 3003: ready for an independent check and close.
 - T-433: CLOSED (coordinator landed A+B). T-378 S1 dev/t-378-1 9834ff7 ready (qa tools only).
