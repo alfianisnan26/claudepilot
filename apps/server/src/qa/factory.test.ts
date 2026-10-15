@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { costFields } from '../portalmcp/tools/common.js';
 
 const FACTORY = fileURLToPath(new URL('../../../../docs/dev-sessions/factory.mjs', import.meta.url));
 const TEMPLATE = readFileSync(new URL('../../../../docs/dev-sessions/factory-brief.md', import.meta.url), 'utf8');
@@ -852,19 +853,20 @@ test('m2: a session started before its marker is adopted only when the engine to
   assert.deepEqual([fresh.action, fresh.sessionId], ['started', 's-1']);
 });
 
-type Live = { state?: string; turns?: number; cost?: number | null; createdMin?: number | null; seq?: number | null };
+type Live = { state?: string; turns?: number; cost?: number | null; basis?: 'estimate' | 'unavailable'; createdMin?: number | null; seq?: number | null };
 /**
  * session_get (max_events 1) as the portal answers it for a worker (T-342: fixtures of states the portal really produces):
  *  - session: sessionBrief, apps/server/src/portalmcp/tools/sessions.ts:21-45; created_at = the session's start (:42).
- *  - cost_usd: what the last ENDED turn left (:41). The portal sets it only from a turn's result (chat/protocol.ts:640-676, stored by
- *    store.ts:797-799), so while a dontAsk worker runs its first and only turn it is `working` with cost_usd 0 and turns 0.
+ *  - cost_usd: what the last ENDED turn left (chat/protocol.ts:640-676, stored by store.ts:797-799), so while a dontAsk worker runs its
+ *    first and only turn it is `working` with turns 0; T-343: sessionBrief spreads costFields (portalmcp/tools/common.ts), which adds the
+ *    running turn's estimate to cost_usd and then sets cost_basis 'estimate' ('unavailable': the turn is unpriced); reported: no cost_basis.
  *  - next_seq: the seq of the latest transcript event (sessions.ts:136-151); the portal stores each text, thinking and tool_use block of an
  *    assistant line as it arrives (protocol.ts:430-449) and bumps the gap-free seq per stored event (store.ts:668-683): it grows mid-turn.
  */
-function sessionGet(id: string, { state = 'working', turns = 0, cost = 0, createdMin = 10, seq = 40 }: Live = {}) {
+function sessionGet(id: string, { state = 'working', turns = 0, cost = 0, basis, createdMin = 10, seq = 40 }: Live = {}) {
   return {
     summary: `${id} is ${state}.`,
-    session: { id, state, waiting_for_input: null, mode: 'dontAsk', model: 'opus', turns, cost_usd: cost, created_at: createdMin === null ? null : ago(createdMin), last_activity_at: ago(0) },
+    session: { id, state, waiting_for_input: null, mode: 'dontAsk', model: 'opus', turns, cost_usd: cost, ...(basis ? { cost_basis: basis } : {}), created_at: createdMin === null ? null : ago(createdMin), last_activity_at: ago(0) },
     workers_total: 0,
     workers: [],
     pending_requests: [],
@@ -872,7 +874,7 @@ function sessionGet(id: string, { state = 'working', turns = 0, cost = 0, create
   };
 }
 
-test('budget stop mid-turn (T-342 B3): a worker in its one turn (working, cost_usd 0, as the portal reports it) is interrupted at 150 percent of its wall time or transcript events; cost_usd stays the after-the-turn check (negative twins: within and over go on; unknown is none)', async () => {
+test('budget stop mid-turn (T-342 B3): a worker in its one turn (working, cost_usd 0, as the portal reports it) is interrupted at 150 percent of its wall time or transcript events; a reported cost_usd after a turn stops it too (negative twins: within and over go on; unknown is none)', async () => {
   const watch = async (o: Live, extra: Args = {}) => {
     const s = started();
     const portal = fakePortal([s.t]);
@@ -916,7 +918,9 @@ test('budget stop mid-turn (T-342 B3): a worker in its one turn (working, cost_u
   // stopped means ended: no next step, and the next watch does nothing
   const after = wall.portal.byId.get(wall.s.t.id);
   assert.equal(f.nextStep(after).step, 'none');
-  assert.equal((await f.watchBudget(after, { portal: wall.portal, mcp: fakeMcp(), now: NOW })).action, 'none');
+  const quiet = fakeMcp();
+  assert.equal((await f.watchBudget(after, { portal: wall.portal, mcp: quiet, now: NOW })).action, 'grace', 'within the grace after the stop: nothing');
+  assert.deepEqual(quiet.calls, []);
   assert.equal(wall.portal.writes.length, 1);
   // a round prints BUDGET over and the EXCEPTION at the stop
   const o = started('s-8');
@@ -974,6 +978,99 @@ test('budget watch (T-342 N1): a session_get that fails for one ticket does not 
   } });
   assert.ok(round.lines.includes(`EXCEPTION ${bad.t.id} ${bad.id}: budget not watched this round: portal: GET /api/x 500`));
   assert.ok(portal.writes.some(([id, text]: [string, string]) => id === good.t.id && text.startsWith(`FACTORY END ${good.id} stopped:`)));
+});
+
+test('T-352 m1: a budget-stopped session still working after the grace is ended exactly once, one EXCEPTION line and no comment (negative twins: within the grace, idle, ended and no clock do nothing)', async () => {
+  const NO_GIT = { taken: () => null, addWorktree: () => { throw new Error('no worktree may be made'); } };
+  const s = started();
+  const portal = fakePortal([s.t]);
+  let state = 'working';
+  const mcp = fakeMcp({ session_get: (a) => sessionGet(String(a.id), { state, createdMin: 300 }), session_end: () => { state = 'ended'; return {}; } });
+  const round = (at: number) => r.runRound({ portal, now: at, models: MODELS, changed: () => [], apply: true, git: NO_GIT, watch: (raw: unknown) => f.watchBudget(raw, { portal, mcp, now: at }) });
+  const ends = () => mcp.calls.filter(([n]) => n === 'session_end').length;
+  const endLine = (min: number) => `EXCEPTION ${s.t.id} ${s.id}: stopped session s-7 was still working ${min} min after its budget stop (grace ${f.STOP_GRACE_MIN} min): ended`;
+  assert.equal(f.STOP_GRACE_MIN, 10);
+  // the stop (the END is written at NOW - 1 min by the fake portal), then the stop message starts the "commit WIP and report" turn
+  const r1 = await round(NOW);
+  assert.ok(r1.lines.some((l: string) => l.startsWith(`EXCEPTION ${s.t.id} ${s.id}: budget stop: `)));
+  assert.deepEqual(f.stoppedSession(portal.byId.get(s.t.id)), { dispatchId: s.id, sessionId: 's-7', endedAt: ago(1) });
+  // within the grace: not even a session_get
+  const before = mcp.calls.length;
+  const r2 = await round(NOW + 5 * 60000);
+  assert.equal(mcp.calls.length, before);
+  assert.ok(!r2.lines.some((l: string) => l.includes('stopped session')));
+  // past the grace and still working: ended, one line
+  const r3 = await round(NOW + 20 * 60000);
+  assert.equal(ends(), 1);
+  assert.ok(r3.lines.includes(endLine(21)), r3.lines.join('\n'));
+  // the next round reads it ended: not ended twice, no line, and no comment was ever added after the END
+  const r4 = await round(NOW + 30 * 60000);
+  assert.equal(ends(), 1);
+  assert.ok(!r4.lines.some((l: string) => l.includes('stopped session')));
+  assert.equal(portal.writes.length, 1);
+  // negative twins on the watch alone: an idle session (it reported) and no clock are left alone; the grace scales (graceMin)
+  const stoppedTicket = portal.byId.get(s.t.id);
+  for (const [o, want] of [[{ state: 'idle' }, 'none'], [{ state: 'ended' }, 'ended']] as const) {
+    const m = fakeMcp({ session_get: (a) => sessionGet(String(a.id), o) });
+    assert.equal((await f.watchBudget(stoppedTicket, { portal, mcp: m, now: NOW + 20 * 60000 })).action, want);
+    assert.ok(!m.names().includes('session_end'));
+  }
+  const noClock = fakeMcp();
+  assert.equal((await f.watchBudget(stoppedTicket, { portal, mcp: noClock })).action, 'none');
+  assert.deepEqual(noClock.calls, []);
+  const scaled = fakeMcp({ session_get: (a) => sessionGet(String(a.id), { state: 'waiting' }) });
+  assert.equal((await f.watchBudget(stoppedTicket, { portal, mcp: scaled, now: NOW, graceMin: 0.5 })).action, 'ended-after-stop');
+  assert.deepEqual(scaled.names(), ['session_get', 'session_end']);
+  // a dispatch that ended another way (failed, done) is not watched after its end
+  const failed = started('s-8');
+  failed.t.comments.push(say(1, `FACTORY END ${failed.id} failed: session gone`));
+  const mf = fakeMcp();
+  assert.equal((await f.watchBudget(failed.t, { portal, mcp: mf, now: NOW + 60 * 60000 })).action, 'none');
+  assert.deepEqual(mf.calls, []);
+});
+
+test('T-352: the cost stop acts mid-turn on session_get\'s live estimate (T-343 cost_basis estimate, built with the portal\'s own costFields) and names its basis; unavailable is the reported total only', async () => {
+  // the session_get cost fields exactly as sessionBrief makes them (portalmcp/tools/sessions.ts: ...costFields(s))
+  const live = (costUsd: number, turnCostEstimateUsd?: number | null) => costFields({ costUsd, turnCostEstimateUsd } as never);
+  assert.deepEqual(live(1, 14.5), { cost_usd: 15.5, cost_basis: 'estimate' });
+  assert.deepEqual(live(3, null), { cost_usd: 3, cost_basis: 'unavailable' });
+  assert.deepEqual(live(3), { cost_usd: 3 });
+  const run = async (cost: Record<string, unknown>) => {
+    const s = started();
+    const portal = fakePortal([s.t]);
+    const base = sessionGet('s-7', { createdMin: 20, seq: 50 }); // young, few events: only cost can act
+    const mcp = fakeMcp({ session_get: () => ({ ...base, session: { ...base.session, ...cost } }) });
+    return { s, portal, mcp, w: await f.watchBudget(s.t, { portal, mcp, now: NOW }) };
+  };
+  // mid-turn (working, turns 0) the estimate passes the stop: interrupted, and the END says it was an estimate
+  const est = await run(live(1, 14.5));
+  assert.equal(est.w.action, 'stopped');
+  assert.deepEqual(est.mcp.names(), ['session_get', 'session_interrupt', 'session_send']);
+  assert.deepEqual(est.portal.writes, [[est.s.t.id, `FACTORY END ${est.s.id} stopped: budget cost 15.50 of 10.00 USD (stop at 15.00; estimate, the running turn included)`]]);
+  // over (not stop) on the estimate: a line that names the basis
+  const over = await run(live(0, 12));
+  assert.deepEqual([over.w.action, over.w.over], ['over', ['cost 12.00 of 10.00 USD (stop at 15.00; estimate, the running turn included)']]);
+  // unpriced turn: the reported total only, said so; reported (no basis): the plain line as before
+  const un = await run(live(11, null));
+  assert.deepEqual(un.w.over, ['cost 11.00 of 10.00 USD (stop at 15.00; reported only, the running turn unpriced)']);
+  const rep = await run(live(11));
+  assert.deepEqual(rep.w.over, ['cost 11.00 of 10.00 USD (stop at 15.00)']);
+});
+
+test('T-352 m3: the brief asks for ONE trailer block (Ticket, Pilot-Session, Pilot-Agent, Co-Authored-By, no blank line), the form git reads as trailers', () => {
+  const line = TEMPLATE.split('\n').find((l) => l.startsWith('Commits end with'));
+  assert.ok(line, 'the brief has its commit line');
+  assert.match(line!, /ONE trailer block/);
+  assert.match(line!, /no blank line/);
+  const order = ['Ticket:', 'Pilot-Session:', 'Pilot-Agent:', 'Co-Authored-By'].map((w) => line!.indexOf(w));
+  assert.ok(order.every((i, k) => i >= 0 && (k === 0 || i > order[k - 1]!)), `order ${order.join(',')}`);
+  // what the brief describes is what git parses: one block gives all four trailers, a Ticket paragraph apart from it gives only the last
+  const parse = (msg: string) => execFileSync('git', ['interpret-trailers', '--parse'], { input: msg, encoding: 'utf8' }).trim().split('\n');
+  const coAuthor = ['Co-Authored-By: Claude', '<noreply@anthropic.com>'].join(' ');
+  const one = parse(`subject\n\nbody\n\nTicket: T-1\nPilot-Session: s-1\nPilot-Agent: implementer\n${coAuthor}\n`);
+  assert.equal(one.length, 4);
+  const apart = parse(`subject\n\nbody\n\nTicket: T-1\nPilot-Session: s-1\nPilot-Agent: implementer\n\n${coAuthor}\n`);
+  assert.deepEqual(apart, [coAuthor]);
 });
 
 test('mcpClient: the structuredContent, or an error with the code and message; the token is never in an error', async () => {
@@ -1210,7 +1307,7 @@ test('T-342 no unbounded re-dispatch: after END stopped: budget or END failed th
     assert.deepEqual(portal.writes, [], 'no comment in any round');
     // an agent's (or a token's) RETRY does not release it
     for (const who of FORGERS) assert.deepEqual(f.intake([{ ...t, comments: [...t.comments, forge(30, `FACTORY RETRY ${t.id}-F1`, who)] }]).dispatch, [], JSON.stringify(who));
-    // a person's RETRY releases ONE more dispatch, which holds the ticket again when it ends the same way
+    // a `ui` writer's RETRY releases ONE more dispatch, which holds the ticket again when it ends the same way
     const retried = { ...t, comments: [...t.comments, say(30, `FACTORY RETRY ${t.id}-F1`)] };
     assert.deepEqual(f.intake([retried]).dispatch.map((x: { dispatchId: string }) => x.dispatchId), [`${t.id}-F2`]);
     const twice = { ...retried, comments: [...retried.comments, say(20, dispatchLine(t, 2, 'run-b')), say(10, `FACTORY END ${t.id}-F2 run=run-b ${outcome}`)] };

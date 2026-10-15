@@ -56,8 +56,9 @@ Sub-agents commit on their own branch (unsigned: `git -c commit.gpgsign=false`; 
 `Co-Authored-By: Claude <noreply@anthropic.com>`) and push that branch (`git push -u origin <branch>`). **Trailers (owner, 2026-10-13, T-27):**
 until the prepare-commit-msg hook of T-27 writes them, every commit by the orchestrator or a sub-agent also ends with two hand-typed
 trailer lines, `Pilot-Session: <the orchestrator's chat session id>` and `Pilot-Agent: main` (the orchestrator) or `Pilot-Agent: <the slice's
-label, e.g. track-a-t6>` (a sub-agent); with `git commit -m "<subject and body>" -m "Co-Authored-By: … \nPilot-Session: …\nPilot-Agent: …"`
-the trailers are their own paragraph at the end. Once the hook exists, a sub-agent exports `PILOT_AGENT="<label>"` instead. **Only the orchestrator pushes `integration`**:
+label, e.g. track-a-t6>` (a sub-agent); with `git commit -m "<subject and body>" -m "Ticket: T-<n>\nPilot-Session: …\nPilot-Agent: …\nCo-Authored-By: …"`
+the trailers are ONE block, the last paragraph, with no blank line inside (git reads only the last paragraph as trailers: a `Ticket:` line
+in a paragraph of its own before `Co-Authored-By` is not a trailer; T-352). The factory brief says the same. Once the hook exists, a sub-agent exports `PILOT_AGENT="<label>"` instead. **Only the orchestrator pushes `integration`**:
 
 ```sh
 cd ~/work/claudepilot && git fetch origin && git merge --no-ff origin/<branch>     # or rebase the branch first; never discard somebody's lines
@@ -153,8 +154,8 @@ runs unattended).
 **Whose markers count (T-338).** A marker (DISPATCH, STARTING, START, END, RESUME, REVIEW, VERIFY, INTEGRATE) and an ACTUAL count only
 when the portal's `ui` actor wrote them with `fromAgent` false. `ui` is the signed-in REST path, and ANYONE WITH THE SIGN-IN CODE writes as
 `ui`: the owner in the browser, the supervisor, `ph.sh` and the engine alike (the portal does not tell them apart: the trust is in who holds
-the code). A comment an agent, a session or a token wrote is never read as a marker, so the step markers are posted by the engine or a
-person, not by the step's agent. A dispatch's role (the role table `ROLES`, today `implementer`), model (the role file), branch (`branchOf`) and
+the code). A comment an agent, a session or a token wrote is never read as a marker, so the step markers are posted by the engine or
+another `ui` writer (the owner, the supervisor), not by the step's agent. A dispatch's role (the role table `ROLES`, today `implementer`), model (the role file), branch (`branchOf`) and
 budgets (the size) are re-derived, never taken from the marker text; a worktree must lie inside the worktrees folder.
 
 **Starting the slice (`--start`, off by default; slice 4, D-49; the admin credential path is T-339).** With
@@ -179,10 +180,13 @@ start of an open, fresh dispatch that has none, and watches the budget. **What t
 by the medians of the first ten `--start` slices per size): **wall**, minutes from the session's `created_at` to the engine's clock (S 60,
 M 180, L 360: the hours of the ESTIMATE sizes; the floor); **events**, the transcript's sequence number `next_seq`, which the portal bumps
 for every text, thinking and tool_use block it stores while the turn runs (S 200, M 480, L 960: the request budget times 8, a guess); and
-**cost**, `cost_usd` (S 4, M 10, L 20 USD), which the portal sets only when a turn ends (`chat/protocol.ts` parseResult), so for a dontAsk
-worker that does its brief in one turn it is only the after-the-turn check (a live estimate is T-343). At 150 percent of ANY measure the
+**cost**, `cost_usd` (S 4, M 10, L 20 USD): the portal stores it when a turn ends (`chat/protocol.ts` parseResult), and while a turn runs
+`session_get` adds the turn's live estimate and says so with `cost_basis: estimate` (T-343), so cost acts mid-turn too; `cost_basis:
+unavailable` (a model without a price) is the reported total only. The END line names the basis. At 150 percent of ANY measure the
 session is interrupted (mid-turn too), told to commit WIP and report, the dispatch ends with `FACTORY END <id> stopped: budget <measure>`
-(which holds the ticket), and the coordinator gets an EXCEPTION line (and `--report-to` one message). The request budget by
+(which holds the ticket), and the coordinator gets an EXCEPTION line (and `--report-to` one message). The stopped session stays in the
+watch: after `STOP_GRACE_MIN` (10 minutes) for its "commit WIP and report" turn, a session still not idle is ended (`session_end`, one
+EXCEPTION line, no comment; it then reads ended, so it is ended once; T-352). The request budget by
 size (S 25, M 60, L 120) is not measured by the engine: it plans a run (`--budget`) and is the agent's own count in its brief. The worker is
 not a child of the orchestrator (the admin tools set no parent): it is not in its crew and cannot `session_message` it; its report is its
 final message, read with `session_get`.
