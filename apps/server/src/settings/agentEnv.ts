@@ -4,6 +4,7 @@ import type { FragmentProvider } from '../delivery/reconciler.js';
 import { dropInPath } from '../delivery/ownership.js';
 import type { Store } from '../store/store.js';
 import { defineSetting } from './registry.js';
+import { RULE_GUARD_FILES, RULE_GUARD_HOOKS } from './ruleGuard.js';
 import type { Settings } from './store.js';
 
 /**
@@ -104,6 +105,23 @@ export const AGENT_ENV = [
     env: 'MAX_MCP_OUTPUT_TOKENS',
     applies: 'restart',
   },
+  {
+    def: defineSetting({
+      key: SETTING_KEYS.agentsAutoCompactWindow,
+      type: 'number',
+      default: 200000,
+      min: 50000,
+      max: 1000000,
+      integer: true,
+      scope: 'global',
+      group: 'agents',
+      order: 70,
+      label: 'Auto-compact window',
+      help: `The context size, in tokens, Claude Code compacts a conversation against (CLAUDE_CODE_AUTO_COMPACT_WINDOW); with a 1M-token model it otherwise grows toward 1M before it compacts, and every request re-reads it. Source: the 2026-10-15 cost audit: cache reads were 65 to 85 percent of the crews' cost, and one QA session ran 499 requests with a median context of 397k tokens (max 967k). ${RESTART}`,
+    }),
+    env: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+    applies: 'restart',
+  },
 ] as const;
 
 /** The setting keys of the agent policy: a change to one delivers to every workspace again. */
@@ -146,8 +164,9 @@ export class AgentEnvPolicy implements FragmentProvider {
     return [];
   }
 
+  /** The agent policy's `env`, and the rule-file guard (D-60, T-404), which every workspace gets with it. */
   fragments(): Fragment[] {
-    return [{ owner: 'policy', settings: { env: this.desired() } }];
+    return [{ owner: 'policy', files: RULE_GUARD_FILES, settings: { env: this.desired(), hooks: RULE_GUARD_HOOKS } }];
   }
 
   /** After a delivery that wrote the policy drop-in: remember what landed (names and values, none of them secret). */
@@ -186,6 +205,19 @@ export class AgentEnvPolicy implements FragmentProvider {
     const values = AGENT_ENV.map((a) => ({ key: a.def.key, env: a.env, applies: a.applies, desired: desired[a.env]!, applied: applied?.[a.env] ?? null, overriddenPool: overridden.get(a.env) ?? null }));
     const state = !applied ? 'unavailable' : values.every((v) => v.applied === v.desired) ? 'applied' : 'pending';
     return { workspaceId, state, values, appliedAt };
+  }
+
+  /**
+   * The workspaces the policy drop-in (and with it the rule-file guard) landed in, for the guard's outbox pull (T-404):
+   * not every known workspace; `isLive` drops the removed ones (a workspace removed by a path that did not forget it).
+   */
+  guardedWorkspaces(isLive: (workspaceId: string) => boolean = () => true): string[] {
+    try {
+      const rows = (this.store.db?.prepare('SELECT workspace_id FROM policy_env_state').all() ?? []) as { workspace_id: string }[];
+      return rows.map((r) => r.workspace_id).filter((id) => isLive(id));
+    } catch {
+      return [];
+    }
   }
 
   /** A workspace was removed: nothing to remember about it. */

@@ -10,7 +10,8 @@ Every `{{NAME}}` the scaffold uses, with its meaning and an example. Fill all of
 - Values are inserted as they are. In `.claude/settings.json` and `first-tickets.json` a value must not contain
   `"` or `\`. In a settings rule, a command placeholder must be a plain command prefix (no `&&`, `|` or `;`), or the
   rule never matches.
-- In `.pilot/*.yml` the commands sit inside `run: |` blocks, so any shell line works there.
+- In `.pilot/*.yml` the commands sit inside `run: |` blocks, so any shell line works there. In `.pilot/gate.yml`
+  `{{TEST_QUICK}}`, `{{TEST_FULL}}` and `{{BUILD_CHECK}}` are the Job's command, inside single quotes: no `'` in them.
 - After substituting: `grep -rnE '\{\{[A-Z_]+\}\}' .` prints nothing.
 - `<angle brackets>` in `docs/prd/_template.md` and `docs/dev-sessions/status/_template.md` are filled each time
   those templates are used, not now.
@@ -31,6 +32,8 @@ Every `{{NAME}}` the scaffold uses, with its meaning and an example. Fill all of
 | `{{INSTALL}}` | The command that installs dependencies. | `npm ci` | CLAUDE.md, settings.json |
 | `{{TEST_QUICK}}` | The quick gate: the checks for what changed, in minutes, before every push of the integration branch. | `scripts/gate-quick.sh` | CLAUDE.md, dev-sessions README, orchestrator, settings.json, .pilot/gate, .pilot/README, first-tickets |
 | `{{TEST_FULL}}` | The full gate on a clean copy of a commit, before every deploy. | `scripts/gate.sh` | CLAUDE.md, dev-sessions README, settings.json, .pilot/gate, .pilot/deploy, .pilot/README, first-tickets |
+| `{{JOB_RUN}}` | The job-run command with its repository: the gate's lanes run as cluster Jobs through it (T-491). The repository name is one job-run accepts (`claudepilot`, `event`, `konfersi:<org>/<repo>`); a new one is a change to `scripts/job-run.sh` by a ticket. | `~/work/claudepilot/scripts/job-run.sh --repo event` | .pilot/gate |
+| `{{BUILD_CHECK}}` | The production build the full gate runs after `{{TEST_FULL}}`, inside the same Job (`true` when `{{TEST_FULL}}` builds already). | `npm run build` | .pilot/gate |
 | `{{APP_NAMESPACE}}` | The cluster namespace that runs the product. No cluster: a name that exists nowhere. | `acme-shop` (or `none-app`) | settings.json |
 | `{{WORKSPACE_NAMESPACE}}` | The namespace of the agents' own workspaces. | `pilot-workspaces` (or `none-ws`) | settings.json |
 | `{{GITOPS_NAMESPACE}}` | The namespace of the GitOps controller that deploys. | `argocd` (or `none-gitops`) | settings.json |

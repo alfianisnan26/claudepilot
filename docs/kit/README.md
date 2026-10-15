@@ -47,6 +47,19 @@ Secrets pool entries by name, create the CI remote, create the tickets of `scaff
 orchestrator chat (Bypass acknowledged by the owner, Keep going when available) with the first prompt. Record the
 measurements it lists: minutes to the first green gate, tokens, human touches, what the agent still asked.
 
+## The gate runs off the workspace
+
+`scaffold/.pilot/gate.yml.tmpl` runs both lanes as cluster Jobs through `scripts/job-run.sh` (T-491; D-61: nothing
+heavy in the workspace pod). The quick lane is install (`npm ci`, job-run's default step) and `{{TEST_QUICK}}`; the
+full lane is install, `{{TEST_FULL}}` and `{{BUILD_CHECK}}`. The workspace only streams the log and passes on the
+exit code, so the template has no `flock /tmp/heavy.lock` line, and a project's `gate.yml` should not add one. The
+job-run command and its repository are `{{JOB_RUN}}` (`scaffold/PLACEHOLDERS.md`); job-run accepts only the
+repositories it names (`claudepilot`, `event`, `konfersi:<org>/<repo>`), so a new project on another host gets its
+own `--repo` value by a ticket to the ClaudePilot crew. Its tokens reach the Job the existing way: the workspace's
+GitHub token (`NODE_AUTH_TOKEN`, else the `gh` sign-in) or Gitea's from git's credential helper, on stdin into the
+Job's own Secret, deleted with the Job; never on a command line or in the log. Details:
+`scaffold/.pilot/README.md`, "What to adapt".
+
 ## Versions and updates
 
 - `VERSION` is the kit's version. Each publish writes it into every revision note (`operating kit <version>`), so

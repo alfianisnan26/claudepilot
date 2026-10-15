@@ -1,7 +1,7 @@
 // What an attribution row says (docs/prd/claude-usage.md §21): who spent what, by session (a tree: a session's children are rolled up into it),
 // workspace, ticket or persona. Pure, so the wording is tested without a browser. Dollars are estimates; the page's header carries the "est.".
 
-import type { AttributionBy, AttributionReport, AttributionRow, SpendFigure } from '@portal/contracts';
+import type { AttributionBy, ChatUsageRange, AttributionReport, AttributionRow, SpendFigure } from '@portal/contracts';
 import { formatCost } from '@/lib/usage/format';
 
 /** The dimensions the tab offers. (By Claude and by model are the Requests tab's.) */
@@ -11,6 +11,14 @@ export const BY_OPTIONS: { value: AttributionBy; label: string }[] = [
   { value: 'ticket', label: 'Ticket' },
   { value: 'persona', label: 'Persona' },
 ];
+
+/**
+ * The attribution request's URL, for the page's rows and for the CSV download alike, so Export follows the filter the page shows: `done`
+ * (only tickets closed as done in the window) applies to the ticket view only.
+ */
+export function attributionUrl(base: string, by: AttributionBy, range: ChatUsageRange, opts: { done?: boolean; csv?: boolean } = {}): string {
+  return `${base}?by=${by}&range=${range}${opts.done && by === 'ticket' ? '&done=1' : ''}${opts.csv ? '&format=csv' : ''}`;
+}
 
 /** A share of the window's dollars, a percent from 0 to 100: "24 %", or "-" where it cannot be told. */
 export const shareText = (share: SpendFigure): string => (share.basis === 'unavailable' ? '-' : `${Math.round(share.value)} %`);
@@ -32,6 +40,14 @@ export function sessionLine(row: AttributionRow): SessionLine | null {
   const s = row.session;
   if (!s) return null;
   return { claude: s.claudeName, claudeId: s.claudeId, ticket: s.ticketId, own: s.children > 0 ? `own ${formatCost(row.own.costUsd)}` : null, deleted: !s.exists };
+}
+
+/** A ticket row's facts under its title (T-449): "feature · done · via lead $1.20"; the via-lead part only when leads' dollars were apportioned to it. Null for other rows. */
+export function ticketLine(row: AttributionRow): { type: string; status: string; viaLead: string | null } | null {
+  const t = row.ticket;
+  if (!t) return null;
+  // A ticket the portal has no record of has neither: say "unknown" in words, never a bare dash.
+  return { type: t.type ?? 'unknown', status: (t.status ?? 'unknown').replace(/_/g, ' '), viaLead: t.viaLeadUsd > 0 ? `via lead ${formatCost(t.viaLeadUsd)}` : null };
 }
 
 /** The line under a workspace, ticket or persona row: how many sessions and requests are behind it. */

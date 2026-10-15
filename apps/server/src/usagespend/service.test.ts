@@ -312,6 +312,7 @@ test('burst: 20 finished requests by one session in 10 minutes is one event, the
       spikeId: first!.id,
       spikeKind: 'burst',
       sessionId: 'S',
+      rootSessionId: 'S',
       claudeId: 'c1',
       workspaceId: 'docker/api',
       heuristic: true,
@@ -377,6 +378,66 @@ test('a request far above the median, and a quarter hour far above the usual, ar
     h.clock.t = NOW + MIN;
     h.seed.turn({ atMs: NOW + MIN, session: 'S', costUsd: 11 });
     assert.equal(h.spend.spikes('1d').events.length, 2);
+  } finally {
+    h.done();
+  }
+});
+
+// T-312: the orchestrator's chain split on 2026-10-13 (attribution.test.ts has the same ids): O1 fe3df8bc -> O2 fdb140be -> O3 5c9fcb5f.
+const chainId = (prefix: string) => `${prefix}-0000-4000-8000-${prefix}0000`;
+const [O1, O2, O3, K1] = [chainId('fe3df8bc'), chainId('fdb140be'), chainId('5c9fcb5f'), chainId('541948a5')];
+
+test('a chat continued as new rows is one spike subject under its first row: a loop across the rows, one snooze for all of them (T-312)', async () => {
+  const h = await spendHarness();
+  try {
+    h.seed.session(O1, { claudeId: 'c1', title: 'Orchestrator' });
+    h.seed.session(O2, { claudeId: 'c1', title: 'Orchestrator', continuedFrom: O1 });
+    h.seed.session(O3, { claudeId: 'c1', title: 'Orchestrator', continuedFrom: O2 });
+    const turn = (session: string, atMs: number) => {
+      h.clock.t = atMs;
+      h.seed.turn({ atMs, session, costUsd: 0.02 });
+    };
+    // A loop of 20 requests 30 seconds apart, 10 in O2, then the chat is continued and 10 more in O3: 20 in 9.5 minutes, the limit being 20.
+    // Per row it is 10 and 10, under the limit: without the chain nothing is said.
+    const t0 = at(10, 0);
+    for (let i = 0; i < 20; i++) turn(i < 10 ? O2 : O3, t0 + i * 30_000);
+    const events = h.spend.spikes('1d').events;
+    assert.deepEqual(
+      events.map((e) => [e.kind, e.subject, e.sessionId, e.evidence.kind === 'burst' ? e.evidence.requests : null]),
+      [['burst', O1, O3, 20]],
+      'one event, under the first row; it names the row it happened in',
+    );
+    assert.deepEqual(h.told.map((a) => (a.kind === 'spike' ? [a.sessionId, a.rootSessionId, a.scope.id] : null)), [[O3, O1, O3]]);
+    // Snoozed under the first row: an hour later a loop in O3 alone is recorded, under O1, without an alert.
+    h.clock.t = t0 + 70 * MIN;
+    h.spend.snoozeSpikes(O1, '1h');
+    for (let i = 0; i < 20; i++) turn(O3, t0 + 75 * MIN + i * 10_000);
+    assert.deepEqual(h.spend.spikes('1d').events.map((e) => [e.subject, e.alerted]), [[O1, false], [O1, true]]);
+    assert.equal(h.told.length, 1, 'the snooze of the chain mutes its later row');
+  } finally {
+    h.done();
+  }
+});
+
+test('a rate spike names the chat that spent most of it, its continued rows summed under the first one (T-312)', async () => {
+  // The request rule out of the way; the rate baseline as above: 20 hourly requests of $0.10 to $2.00, P90 $1.80, so the line is $5.40.
+  const h = await spendHarness({ settings: { 'usage.spikes.outlierFactor': 1000 } });
+  try {
+    for (let i = 1; i <= 20; i++) h.seed.usage({ atMs: NOW - 2 * DAY + i * HOUR, session: 'OLD', costUsd: i / 10 });
+    h.seed.session(O1, { claudeId: 'c1', title: 'Orchestrator' });
+    h.seed.session(O2, { claudeId: 'c1', title: 'Orchestrator', continuedFrom: O1 });
+    h.seed.session(O3, { claudeId: 'c1', title: 'Orchestrator', continuedFrom: O2 });
+    h.seed.session(K1, { claudeId: 'c1', title: 'Konfersi' });
+    // In the last 15 minutes: O2 $3, Konfersi $4, O3 $3 = $10. No row has half of it (40 % at most); the orchestrator's chain has 60 %.
+    h.seed.usage({ atMs: NOW - 2 * MIN, session: O2, costUsd: 3 });
+    h.seed.usage({ atMs: NOW - 90_000, session: K1, costUsd: 4 });
+    h.clock.t = NOW;
+    h.seed.turn({ atMs: NOW, session: O3, costUsd: 3 });
+    const [e] = h.spend.spikes('1d').events;
+    assert.equal(e!.kind, 'rate');
+    assert.deepEqual(e!.evidence.kind === 'rate' ? e!.evidence.topSession : 'not rate', { sessionId: O1, share: 60 });
+    assert.deepEqual([e!.subject, e!.sessionId, e!.sessionTitle], ['c1', O1, 'Orchestrator']);
+    assert.deepEqual(h.told.map((a) => (a.kind === 'spike' ? [a.scope.kind, a.sessionId, a.rootSessionId] : null)), [['claude', O1, O1]]);
   } finally {
     h.done();
   }

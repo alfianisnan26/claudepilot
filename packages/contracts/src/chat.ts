@@ -54,7 +54,14 @@ export interface ChatSession {
   process: 'live' | 'asleep' | 'gone';
   /** How full the context window was after the last turn, from Claude Code's own usage report. */
   context: { usedTokens: number; windowTokens: number | null } | null;
+  /** What the session cost, as Claude Code reported it at the end of its last turn (list price: for a plan not a bill). */
   costUsd: number;
+  /**
+   * T-343: the running turn's cost so far, an ESTIMATE on top of `costUsd`: its API calls' tokens times each model's list price. Absent
+   * when no turn is running (or none of its calls reported yet); null when a call's model has no known price ("unavailable"). The turn's
+   * result replaces it. {@link sessionCost} adds the two.
+   */
+  turnCostEstimateUsd?: number | null;
   turns: number;
   /** The last stored event's sequence number; a reconnecting tab resumes after it. */
   lastSeq: number;
@@ -101,6 +108,11 @@ export interface ChatSession {
   parentId: string | null;
   /** The git worktree it runs in, which is also its `cwd`, or null when it runs in a plain folder. */
   worktree: ChatWorktree | null;
+  /**
+   * T-476: for a worker started in a plain folder (no worktree of the portal's) that is a git work tree on a branch, that branch as it was
+   * when the worker started (recorded once, never re-read): CI counts it as the session's own branch. Absent or null otherwise.
+   */
+  folderBranch?: string | null;
   /** Who started it: `ui` (a person), `ticket:<id>`, `session:<id>` or `portal-mcp:<token id>`; null for sessions from before this field. */
   startedBy: string | null;
   /**
@@ -110,11 +122,24 @@ export interface ChatSession {
    */
   agent?: string | null;
   /**
+   * T-490 (D-63): why its lead started it on a model above its role's default (`session_spawn` `why`, e.g. a QA role on opus), as the lead
+   * wrote it (redacted, at most CHAT_SPAWN_WHY_MAX characters). Absent or null when none was given. Text an agent wrote.
+   */
+  spawnWhy?: string | null;
+  /**
    * T-294: how many workers (sessions it starts with `session_spawn`) may run at once under THIS session. Null: the global
    * `sessions.maxChildren`. 0: it may not start workers. A value above the global cap counts as the cap (the global settings are the ceiling).
    * Checked at each spawn, so a change applies at once. Absent on rows from before (null).
    */
   maxWorkers?: number | null;
+  /** T-561: its starter marked it a crew lead (`CreateChatSessionRequest.lead`, kept by a continuation). Absent: not marked. */
+  lead?: boolean;
+  /**
+   * T-561: its current process was launched with the portal's lead rules (policy `sessions.leadRules` on, and it is a crew lead: marked, or
+   * it has started workers): Edit, Write and NotebookEdit are refused outside its status files, its notes folder and the scratch folder,
+   * Bypass included; Bash stays. Absent: launched without them, or not known since a portal restart.
+   */
+  leadRules?: boolean;
   /**
    * T-294: whether its Claude may start Claude Code sub-agents (the Agent tool, older name Task). False: every start of its process is
    * launched with `--disallowedTools Agent Task Workflow RemoteTrigger`, so a change applies at the next start (a Restart). On or off only: Claude Code has no count.
@@ -163,6 +188,11 @@ export interface ChatSession {
   busySince?: string | null;
   /** T-259: Keep going (the watchdog's policy for this chat, today's counts and its last action); absent or null when no policy was ever set. */
   keepGoing?: ChatKeepGoing | null;
+  /**
+   * T-417: its start or wake waits for a slot under the live cap (FR39): why, in words ("Waiting for a slot · 12 of 12 running in
+   * kubernetes/x (Settings › Sessions)"). Absent or null when it doesn't wait.
+   */
+  slotWait?: string | null;
 }
 
 /**
@@ -183,6 +213,18 @@ export type ChatConfigChange =
   | 'foundation'
   | 'portal_tools'
   | 'other';
+
+/**
+ * T-343: what a session cost so far: the reported total plus the running turn's estimate. `basis` says how it is known: `reported` (no
+ * turn running), `estimate` (it includes the running turn's estimate) or `unavailable` (a turn runs whose model has no known price: `usd`
+ * is the reported total only, the turn's part is not guessed).
+ */
+export function sessionCost(s: Pick<ChatSession, 'costUsd' | 'turnCostEstimateUsd'>): { usd: number; basis: 'reported' | 'estimate' | 'unavailable' } {
+  const turn = s.turnCostEstimateUsd;
+  if (turn === undefined) return { usd: s.costUsd, basis: 'reported' };
+  if (turn === null) return { usd: s.costUsd, basis: 'unavailable' };
+  return { usd: s.costUsd + turn, basis: 'estimate' };
+}
 
 /** T-102: how long a turn may run before the hint offers "Restart now" prominently (an autonomous session's turn can last hours). */
 export const RESTART_LONG_TURN_MS = 30 * 60_000;
@@ -360,6 +402,11 @@ export interface ChatEvent {
   toolInputCut?: boolean;
   /** For `tool_result`: the tool failed. */
   isError?: boolean;
+  /**
+   * For a `tool_result` in a `ChatEventPage`: `text` is a preview (its first `EVENT_PREVIEW_CHARS` characters) of a text this many
+   * characters long (`String.length`); `CHAT_API.event` returns it whole. Absent when `text` is whole.
+   */
+  textLength?: number;
   /** For `thinking`: how long the block took, when the portal saw it start. For `result`: how long the turn took. */
   durationMs?: number;
   /** Images on this event (sent by you, or returned by a tool), served from `CHAT_API.blob`. */
@@ -518,6 +565,28 @@ export interface ChatTaskTranscript {
   truncated: boolean;
 }
 
+/** Events in one page of `CHAT_API.events` asked with `?limit=` or `?before=` (T-376), when `limit` is not given. */
+export const EVENT_PAGE_LIMIT = 200;
+/** The most `?limit=` may ask for; a larger number is read as this. */
+export const EVENT_PAGE_LIMIT_MAX = 1000;
+/** A page stops before its events (as JSON, after the cut below) pass this many bytes; it always holds at least one event. */
+export const EVENT_PAGE_BYTES = 512 * 1024;
+/** A `tool_result` in a page keeps at most this many characters of `text`; `textLength` then says how long the whole is. */
+export const EVENT_PREVIEW_CHARS = 2000;
+
+/**
+ * One page of the stored transcript (`CHAT_API.events` with `?before=` or `?limit=`; T-376), counted back from the newest: keyset on `seq`,
+ * never an offset (D-58). Large `tool_result` bodies are cut to a preview (`ChatEvent.textLength`); `CHAT_API.event` returns one whole.
+ */
+export interface ChatEventPage {
+  /** Oldest first; at most the limit, fewer when `EVENT_PAGE_BYTES` was reached. */
+  events: ChatEvent[];
+  /** Older events exist than the first one here. */
+  more: boolean;
+  /** What to pass as `?before=` for the older page (the first event's `seq`), or null when `more` is false. */
+  before: number | null;
+}
+
 /** A model the session can switch to (Claude Code's `list_models`). */
 export interface ChatModelOption {
   /** Pass to the `model` control op, e.g. `default`, `sonnet`, a full model id. */
@@ -559,6 +628,11 @@ export interface CreateChatSessionRequest {
    * created when the folder is untrusted or the start is refused.
    */
   worktree?: ChatWorktreeRequest;
+  /**
+   * T-561: marks it a crew lead (the dev supervisor's leads). It only ever makes a session stricter: with the policy `sessions.leadRules`
+   * on, a lead launches with the lead rules (`ChatSession.leadRules`). A session that starts workers is a lead without it.
+   */
+  lead?: boolean;
 }
 
 /** The parts of a worktree a caller may choose; the portal picks the folder. */
@@ -778,6 +852,9 @@ export const CHAT_SESSION_TITLE_MAX = 80;
  */
 export const CHAT_AGENT_NAME = /^[a-z][a-z0-9-]{1,40}$/;
 
+/** T-490 (D-63): the longest `session_spawn` `why` (`ChatSession.spawnWhy`) the portal keeps. */
+export const CHAT_SPAWN_WHY_MAX = 200;
+
 export const CHAT_API = {
   /** GET: sessions, newest activity first. POST: create one. */
   list: '/api/chat/sessions',
@@ -796,8 +873,14 @@ export const CHAT_API = {
   limits: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/limits`,
   /** GET: the chat's Keep going (`ChatKeepGoing`). PUT `UpdateKeepGoingRequest`: set it (a person; T-259). */
   keepGoing: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/keep-going`,
-  /** GET `?after=<seq>`: stored transcript events after a sequence number (history and resume). */
+  /**
+   * GET `?after=<seq>`: stored transcript events after a sequence number (history and resume), whole, as `ChatEvent[]`; neither `after`
+   * nor the page parameters: the whole transcript, the same way. GET `?before=<seq>&limit=<n>` (either one is enough): a `ChatEventPage`
+   * counted back from `before` (from the newest without it). `after` with `before` or `limit` is refused (422).
+   */
   events: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/events`,
+  /** GET: one stored event whole (a `tool_result` a page cut to its preview); 404 when the session has no such event. */
+  event: (id: string, seq: number) => `/api/chat/sessions/${encodeURIComponent(id)}/events/${seq}`,
   /** GET: models this session can switch to. */
   models: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/models`,
   /** GET: sub-agents and background tasks. */

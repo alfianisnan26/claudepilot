@@ -45,6 +45,14 @@ test('a new database gets a portal ID, the latest schema and a key check, and is
   store.close();
 });
 
+test('T-365: WAL with synchronous NORMAL, so a commit does not wait for an fsync on a busy shared disk', async () => {
+  const store = await Store.open({ dataDir: tempDir(), secretKey: newKey() });
+  assert.equal((store.db!.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode, 'wal');
+  // 1 = NORMAL (2 = FULL waited on the node's journal for every commit).
+  assert.equal((store.db!.prepare('PRAGMA synchronous').get() as { synchronous: number }).synchronous, 1);
+  store.close();
+});
+
 test('the same key reopens it; the portal ID stays', async () => {
   const dir = tempDir();
   const key = newKey();

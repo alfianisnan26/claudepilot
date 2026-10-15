@@ -3,13 +3,15 @@
 // - `lab_summary`: the coordinator's pass in one call. Short rows by default (T-282's compact rule: a result is read again on every later
 //   request), `full: true` for every field, the experiments and the sources. An admin's token reads the portal; an agent's token reads only
 //   its own session's slices (no experiments).
+// - `crew_scorecard` (T-450): per program and window, effectiveness, cost and the D-61/D-62/D-63 targets (lab/scorecard.ts). Read only;
+//   an agent's token reads its own program (the top of its session's lineage), another program is not found; an admin's reads all.
 // - `lab_arm_draw` (T-292 slice 3): the arms of a slice drawn BEFORE its brief is written, for an experiment whose treatment is the brief
 //   itself (E2: pack on or off). The caller's own session only; the lab draws, the caller never picks; the brief carries the draw key.
 // - `lab_experiment_set`: admin tokens only, with the confirmation round trip: start a randomized or before-and-after experiment, or stop one.
 //
 // Counts and ids only; an experiment's name and hypothesis are a person's text and come back labelled untrusted.
 
-import { LAB_STRATUM_KEYS, type LabExperimentView, type LabInterval, type LabStat, type LabSummaryRow } from '@portal/contracts';
+import { ATTRIBUTION_LEAD_BASIS, CREW_WINDOWS, LAB_STRATUM_KEYS, type CrewFigure, type CrewProgramScore, type CrewWindowScore, type LabTicketCost, type LabExperimentView, type LabInterval, type LabStat, type LabSummaryRow } from '@portal/contracts';
 import { fullInput } from '../portalmcp/compact.js';
 import { PortalToolError, portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { declareLabPolicies } from './authz.js';
@@ -22,6 +24,60 @@ const r2 = (x: number | null | undefined): number | null => (x === null || x ===
 const r3 = (x: number | null | undefined): number | null => (x === null || x === undefined ? null : Math.round(x * 1000) / 1000);
 const med = (s: LabStat | null) => (s ? s.median : null);
 const ci = (i: LabInterval) => (i === 'n too small' ? i : [r2(i.low), r2(i.high)]);
+
+/** The tickets' dollars (usage spend's per-ticket figures, T-449): ticket, type, status, own, via lead, total. Top `n` (default 10). */
+const ticketsShort = (t: LabTicketCost[] | undefined, n = 10) =>
+  (t ?? []).slice(0, n).map((x) => ({ ticket: x.ticket, type: x.type, status: x.status, done_at: x.doneAt, own_usd: x.ownUsd, via_lead_usd: x.viaLeadUsd, total_usd: x.totalUsd }));
+
+/** A figure in a short row: its value, or `unavailable:<reason>`. */
+const v = (f: CrewFigure) => (f.basis === 'unavailable' ? `unavailable:${f.reason ?? 'no_source'}` : f.value);
+const windowShort = (w: CrewWindowScore | null) =>
+  w && {
+    done: v(w.effectiveness.done),
+    done_per_hour: v(w.effectiveness.donePerHour),
+    reopened: v(w.effectiveness.reopened),
+    wont_do: v(w.effectiveness.wontDo),
+    review_backlog: v(w.effectiveness.reviewBacklog),
+    ci_runs: v(w.effectiveness.ciRuns),
+    deploys: v(w.effectiveness.deploysCount),
+    cost_usd: v(w.cost.total),
+    lead_share_pct: v(w.cost.leadShare),
+    per_done_usd: v(w.cost.perDoneAllIn),
+    per_done_workers_usd: v(w.cost.perDoneWorkers),
+    cache_read_pct: v(w.efficiency.costParts.cacheRead),
+    requests: v(w.efficiency.requests),
+    handovers: v(w.efficiency.handovers),
+    spikes: v(w.efficiency.spikesCount),
+    // T-490 (D-63): the opus share of QA and review workers, how many of them, and how many of the opus ones gave a why.
+    qa_review_opus_pct: v(w.efficiency.qaReviewOpus.share),
+    qa_review_sessions: w.efficiency.qaReviewOpus.sessions,
+    qa_review_opus_with_why: w.efficiency.qaReviewOpus.opusWithWhy,
+    refusals: v(w.health.refusals),
+    bad_endings: v(w.health.badEndings),
+  };
+
+/** One program in a short result: the window's headline figures, the one before, and the targets not ok. */
+export function scoreShort(p: CrewProgramScore) {
+  return {
+    program: p.program,
+    workspace: p.workspaceId,
+    leads: p.leads.length,
+    workers: p.workers,
+    now: windowShort(p.current),
+    before: windowShort(p.previous),
+    targets: Object.fromEntries(p.targets.map((t) => [t.id, t.state])),
+    flags: p.targets.filter((t) => t.state !== 'ok').map((t) => ({ id: t.id, decision: t.decision, state: t.state, offenders: t.offenders.slice(0, 5) })),
+  };
+}
+
+/** A copy with every figure's `source` left out (a figure: an object with `value`, `basis` and `source`). */
+export function withoutSources<T>(x: T): T {
+  if (Array.isArray(x)) return x.map(withoutSources) as T;
+  if (!x || typeof x !== 'object') return x;
+  const o = x as Record<string, unknown>;
+  const figure = 'value' in o && 'basis' in o && 'source' in o;
+  return Object.fromEntries(Object.entries(o).filter(([k]) => !(figure && k === 'source')).map(([k, v]) => [k, withoutSources(v)])) as T;
+}
 
 /** One short row: the figures the coordinator compares every pass. */
 export function compactRow(r: LabSummaryRow) {
@@ -83,16 +139,45 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       const s = lab.summary({ ...(args.period ? { period: args.period } : {}), ...(sinceMs !== undefined ? { sinceMs } : {}), ...(own ? { sessionId: own } : {}) });
       const n = s.rows.reduce((t, r) => t + r.n, 0);
       const summary = `${n} slice${n === 1 ? '' : 's'} in ${s.rows.length} row${s.rows.length === 1 ? '' : 's'} since ${new Date(s.sinceMs).toISOString().slice(0, 10)}${own ? ' (this session only)' : ''}. Dollars are estimates.`;
-      if (!args.full) return { summary, scope: own ? 'session' : 'portal', period: s.period, rows: s.rows.map(compactRow), more: 'full: true for p90s, outcomes, Bash classes, experiments and sources.' };
+      if (!args.full) return { summary, scope: own ? 'session' : 'portal', period: s.period, rows: s.rows.map(compactRow), tickets: ticketsShort(s.tickets), more: 'full: true for p90s, outcomes, Bash classes, experiments and sources.' };
       return {
         summary,
         scope: own ? 'session' : 'portal',
         period: s.period,
         since_ms: s.sinceMs,
         rows: s.rows,
+        tickets: ticketsShort(s.tickets, 25),
+        tickets_basis: ATTRIBUTION_LEAD_BASIS,
         ...(own ? {} : { experiments: lab.experimentViews().map((v) => experimentRow(v, ctx, lab)) }),
         basis: s.basis,
       };
+    },
+  });
+
+  registry.register({
+    name: 'crew_scorecard',
+    title: 'Crew scorecard',
+    description:
+      'Per program (a lead chain, its continuations and workers; with its workspace) over the last 1h, 6h, day or week, and the window before: tickets done (by type, per hour, lead time p50/p90), reopened, wont_do, review backlog (age, waits for), CI, deploys; cost (estimated): total, lead vs workers, per done ticket, token-class shares; context p50/p90 per role and lead, requests, top sessions, model mix, sessions per role, live per Claude, hand-overs, spikes, the opus share of QA and review workers (D-63, with how many gave a why); refusals and bad endings; D-61, D-62, D-63 targets (ok, warn, breach, unavailable). Each figure: measured, estimate or unavailable, with its source. Short by default; full true for all. An agent’s token reads its own program; an admin’s all.',
+    scope: 'agent',
+    hints: { readOnly: true, idempotent: true },
+    input: z.object({
+      program: z.string().regex(/^[A-Za-z0-9_.:=-]{1,120}$/).optional().describe('A program id (its first lead session). Default: every program you may read.'),
+      window: z.enum(CREW_WINDOWS).optional().describe('Default day.'),
+      compare: z.boolean().optional().describe('With the previous window too. Default true.'),
+      ...fullInput,
+    }),
+    async handler(ctx, args) {
+      const own = ctx.isAgent ? ctx.sessionId : null;
+      if (ctx.isAgent && !own) throw new PortalToolError('FORBIDDEN', 'This token is not bound to a session.');
+      const s = await lab.scorecardWithPace({ window: args.window ?? 'day', compare: args.compare ?? true, ...(args.program ? { program: args.program } : {}), ...(own ? { sessionId: own } : {}) });
+      if (!s) throw new PortalToolError('NOT_FOUND', 'No such program.');
+      const scope = own ? 'program' : 'portal';
+      const summary = `${s.programs.length} program${s.programs.length === 1 ? '' : 's'} over the last ${s.window}${own ? ' (your own program only)' : ''}. Dollars are estimates.`;
+      // Full: every figure without its own `source` (the `basis` map names each source once), so a portal of a few programs and two windows
+      // stays under the result limit (MAX_RESULT_CHARS); the route keeps the sources on each figure.
+      if (args.full) return { summary, scope, ...s, ...(s.headline ? { headline: withoutSources(s.headline) } : {}), programs: s.programs.map(withoutSources) };
+      return { summary, scope, window: s.window, ...(s.headline ? { headline: s.headline } : {}), programs: s.programs.map(scoreShort), more: 'full: true for every figure with its basis, types, CI, deploys, efficiency, health and the review list; basis names the sources.' };
     },
   });
 

@@ -8,6 +8,17 @@ import { SecretsKind } from './kind.js';
  *
  *   const values = exposedSecretValues(poolService, 'docker/ws1');
  */
+/** One secret's delivered value for a CI runner's lease (T-557); null when the workspace does not get it as a file. */
+export function deliveredSecretValue(pools: Pick<PoolService, 'kind'>, workspaceId: string, name: string): string | null {
+  let kind: unknown;
+  try {
+    kind = pools.kind('secrets');
+  } catch {
+    return null;
+  }
+  return kind instanceof SecretsKind ? kind.deliveredValue(workspaceId, name) : null;
+}
+
 export function exposedSecretValues(pools: Pick<PoolService, 'kind'>, workspaceId: string, opts?: { days?: number; minLength?: number; max?: number }): string[] {
   let kind: unknown;
   try {

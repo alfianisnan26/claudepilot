@@ -4,7 +4,7 @@
 
 import { AppError, success } from '@isnanme/core';
 import { Hono, type Context } from 'hono';
-import { platformRef, type Actor, type LabPeriod } from '@portal/contracts';
+import { CREW_WINDOWS, platformRef, type Actor, type CrewWindow, type LabPeriod } from '@portal/contracts';
 import { actorOf, can } from '../authz/seam.js';
 import { declareLabPolicies } from './authz.js';
 import type { Lab, ViewFilter } from './index.js';
@@ -75,6 +75,20 @@ export function createLabRoutes(lab: Lab): Hono {
     if (p !== 'day' && p !== 'week') throw new AppError('VALIDATION_FAILED', 'period: day or week.', { details: { period: 'day or week' } });
     const since = parseSince(c.req.query('since'));
     return c.json(success(lab.summary({ period: p as LabPeriod, ...(since !== undefined ? { sinceMs: since } : {}), ...(who.session ? { sessionId: who.session } : {}) })));
+  });
+
+  // GET /api/lab/scorecard?window=1h|6h|day|week&compare=0|1&program=: the crew scorecard (T-450). An agent: its own program only; another
+  // program is the same 404 as one that does not exist.
+  r.get('/scorecard', async (c) => {
+    const who = labReader(actorOf(c));
+    const w = c.req.query('window') ?? 'day';
+    if (!(CREW_WINDOWS as readonly string[]).includes(w)) throw new AppError('VALIDATION_FAILED', 'window: 1h, 6h, day or week.', { details: { window: '1h, 6h, day or week' } });
+    const cmp = c.req.query('compare');
+    if (cmp !== undefined && cmp !== '0' && cmp !== '1') throw new AppError('VALIDATION_FAILED', 'compare: 0 or 1.', { details: { compare: '0 or 1' } });
+    const program = param(c, 'program');
+    const s = await lab.scorecardWithPace({ window: w as CrewWindow, compare: cmp !== '0', ...(program ? { program } : {}), ...(who.session ? { sessionId: who.session } : {}) });
+    if (!s) throw NOT_FOUND();
+    return c.json(success(s));
   });
 
   return r;

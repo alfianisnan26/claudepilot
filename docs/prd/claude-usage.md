@@ -587,15 +587,27 @@ Three rules of thumb, each a comparison of one number with a baseline the portal
 
 | Rule | Fires when | Needs | Subject, cool-down |
 | --- | --- | --- | --- |
-| **rate** | a Claude's spend in the trailing 15 minutes is at least `rateFactor` (default 3) x P90, the 90th percentile (nearest rank: the value at rank ceil(0.9 x n)) of that Claude's **active** 15-minute periods (spend above 0) over the 7 days before, and at least `minUsd` | 8 active periods (else no baseline: `no_history`, and nothing is said) | the Claude, 30 min. The session is named when one spent at least half of the window. Looked at most once a minute per Claude. |
-| **burst** (loop) | one session finished at least `burstRequests` (default 20) requests inside 10 minutes, whatever they cost: a loop **between** turns (a ticket, CI or another session answering each other) | nothing | the session, 60 min |
-| **outlier** | one request cost at least `outlierFactor` (default 10) x the median request of its Claude over the 7 days before (the mean of the two middle values when even), and at least `minUsd` | 20 earlier requests that cost something (else `no_history`) | the session, 5 min |
+| **rate** | a Claude's spend in the trailing 15 minutes is at least `rateFactor` (default 3) x P90, the 90th percentile (nearest rank: the value at rank ceil(0.9 x n)) of that Claude's **active** 15-minute periods (spend above 0) over the 7 days before, and at least `minUsd` | 8 active periods (else no baseline: `no_history`, and nothing is said) | the Claude, 30 min. The chat is named when one spent at least half of the window (a continued chat's rows summed, named by its first row). Looked at most once a minute per Claude. |
+| **burst** (loop) | one session (with the rows of its continued chat before it) finished at least `burstRequests` (default 20) requests inside 10 minutes, whatever they cost: a loop **between** turns (a ticket, CI or another session answering each other) | nothing | the chat's first row, 60 min |
+| **outlier** | one request cost at least `outlierFactor` (default 10) x the median request of its Claude over the 7 days before (the mean of the two middle values when even), and at least `minUsd` | 20 earlier requests that cost something (else `no_history`) | the chat's first row, 5 min |
 
 Why P90 and not the mean or the median for `rate`: the spend of an active period is right-skewed, so "5 x the median" is exceeded by roughly one active period in twenty on an ordinary day; "3 x the 90th percentile" by roughly one in a hundred. By hand (the test): periods of $1 to $10 have P90 = $9, so the line is $27: $26.50 is quiet, $30 is a spike at 3.33 x; eight periods of $1 put the line at $3.
 
 ### 24.2 Events and alerts
 
 An event keeps its evidence, every number with its basis (dollars and ratios `estimate`, counts `measured`): `rate` has the spend, the P90 baseline, the factor, the number of periods and the top session; `burst` the requests, the window, the threshold and the spend; `outlier` the cost, the median, the factor and the number of requests it is the median of. `summary` is one terse line ("20 requests in 10 min (limit 20)", "$30 in 15 min, 3.3x the usual", "A $11 request, 10x the median"), and every event says `heuristic: true`. An alert carries a stable id `spike|<event id>`, level `near` (a heads-up, not a quota level), its scope (a Claude for `rate`, a session for the other two) and no session text. A **snooze** (`PUT /spikes/snooze`, subject = the session or the Claude, 1 h, 4 h or a day) records further events without alerting and hides the earlier alerts of that subject while it lasts. Events are kept 90 days.
+
+**A continued chat is one subject (T-312).** A chat continued as a new row (`continued_from`) is one unit, as in attribution (§22): the
+subject of a burst or an outlier, and so its cool-down and its snooze, is the **first** row of the chain (`chainRootOf` in
+`usagespend/attribution.ts`, the one grouping); the burst counts the requests of the session and of the rows it continues
+(`chainOf`); a rate spike sums each chat's rows in the window and names the first row. The event still names the row it happened in
+(`sessionId`), so every segment stays visible; the alert carries `rootSessionId`, and its notification (`cost_spike`) keeps the row it
+happened in as its subject (the link, the "already looking at it" check) with `root` in its facts and the tag `cost:<root>`, so a
+chain's notifications replace each other instead of piling up. Events recorded before this keep the row as their subject. As tested
+(`usagespend/service.test.ts`, the 2026-10-13 orchestrator chain fe3df8bc → fdb140be → 5c9fcb5f): 10 requests in the second row and 10 in
+the third inside 9.5 minutes is one burst under the first row (each row alone is under the limit of 20, and without the chain nothing is
+said); a snooze of the first row mutes a later loop in the third; $3 + $3 of the chain against $4 of another chat is a rate spike that
+names the chain at 60 % (no row alone has half). Events of a parent and the sessions it started are not merged: a child is its own chat.
 
 ### 24.3 Settings
 
@@ -902,6 +914,16 @@ n, median requests, context, minutes, cost, inspection share, re-write share, fi
 tokens, confirmation round trip) starts a randomized or before-and-after experiment or stops one; `lab_arm_draw` (agent reach
 `session`, §28.13) draws a slice's arms before its brief. Counts and ids only.
 
+**A session is its chat (T-312).** Where the lab reads one session (an agent's own read on a route or through `lab_summary`, and
+`?session=` on `GET /api/lab/slices`), it reads the session and the rows of its `continued_from` chain before it (`chainOf` over usage
+spend's session loader: the same grouping as §22 and §24), so a chat continued as a new row (a Move, an auto-move on quota) still scores
+its earlier turns and sub-agents as its own. A chain's first row reads only itself (nothing came before it); another chat, a parent or
+a child is never in it. The scoring over every session (the summary rows, the experiments) had no session dimension to split: its
+units are slices (a main-thread turn, a sub-agent thread) keyed by session and slice, grouped by period, role, model and ticket, so a
+chain is not one slice and nothing there changed. A draw still binds only in the session that drew it (§28.13): a draw made before a
+continuation and named after it is unbound, as before; changing that is a decision on the draw rule, not part of this. As tested
+(`lab/lab.test.ts`, the same 2026-10-13 ids): the third row reads three turns, the first row one, Konfersi its own one.
+
 ### 28.11 Usage → Lab
 
 A tab of Usage. Day or Week; the summary as one card per row on a phone (the figures in a three-column grid, median / p90) and as a
@@ -997,3 +1019,99 @@ preloaded files, against today's brief) needs the arm before the brief is writte
   ticket spelling and role, draws only and the opt-out count, the upgrade from 854; another session, a nested call, the second line;
   draws outside the blocks and the seed; the fifth review's opt-outs only for drawing roles, only after the draw, only the experiment's
   own draws, a made-up ticket as no ticket on the real tickets table; the tool) and `qa/planStep.test.ts`.
+
+### 28.14 Crew scorecard (T-450 slices S1a, S1b and S2: the read API, `crew_scorecard` and the Usage → Crew tab; no migration)
+
+How well a crew works and what it costs, per PROGRAM and per WINDOW, with the standing decisions it is held to. Read only, over the
+tables the portal already keeps; nothing new is stored.
+
+- **Program.** The top of a session's lineage (usage spend's `rootOf`: the session it continues, else its parent, up to the first row
+  of the top chat) names it; the **lead chain** is that row and its continuations (`chainRootOf` is the program), oldest first; every
+  other session under it, at any depth, live or kept after a delete, is a **worker**. A top with no worker is a chat, not a program. A
+  program is listed when one of its sessions made a request since the start of the previous window, or is still live. The lead chain is
+  ordered by its links (each row continues the one before). A delete clears the successor's `continued_from` and the children's
+  `parent_id` (chat/store.ts); the loader puts them back from what outlives it: the `session.continued` audit row (the successor and the
+  row it continued; its time is a deleted continuation's creation) and the parent `usage_sessions` kept from the child's requests. So a
+  deleted continuation stays in the lead chain and its workers stay in the program.
+- **Windows.** `1h`, `6h`, `day` (default) or `week`, ending now; with `compare` (default on) the window before it, the same length.
+- **The program's tickets**: held by one of its sessions (`ticket_id`), assigned to one, or with a timeline event written by one
+  (`session:<id>`). A ticket two programs touched counts in both.
+- **Headline** (T-600; `CrewScorecard.headline`, filled by `lab/headline.ts`; no new route, the authz seam unchanged; named `headline`
+  because the `crew_scorecard` tool already puts a text `summary` beside the scorecard). Over the programs the response keeps (an
+  agent: its own only), each figure with its basis and source, unavailable with a reason, never a division by zero:
+  - **Pace** (ESTIMATE, global, a snapshot of now): sum of `usedPct` over sum of `evenPct` of the 5-hour `session` window of every Claude
+    on its own plan that is signed in and has a pace (claudeusage `WindowPace`, read through `Lab`'s optional `paceSource`, which is
+    `claudeUsage.report()`). Left out: signed out (`runsOn` none or state `signed_out`), pooled, key, a Claude without a pace. Under 10
+    points of even pace in all: `windows_just_reset`; none left: `no_claude`; no source (none wired, it failed, or an agent's read, since
+    the quota is not one program's): `no_source`. Per Claude `usedPct / evenPct` (`no_samples` when `evenPct` is 0). Under 0.9 the
+    unused part at reset: 100 minus the mean `projectedPct` of those Claudes (null when none says). Weekly: the same on the `week` window.
+  - **Per window** (current, and the window before with `compare`): requests and estimated dollars per hour; tickets resolved (done,
+    `closed_at` in the window) and won't-do, global and per program; dollars over resolved (`no_samples` with none); tickets created over
+    tickets closed (done plus won't-do), global and per program (`no_samples` with none closed). A ticket two programs touched counts
+    once globally and once in each program row, so the rows equal the program rows of the same response.
+  - **Server**: `Lab.scorecard` fills it (paces passed in, none by default); `Lab.scorecardWithPace` awaits the source first and is what the
+    route and the tool call. The full tool form drops each figure's `source` here too (`basis` names it once).
+- **Effectiveness** (all MEASURED): done (status done, `closed_at` in the window) by type and per hour; reopened (a `reopened` event, or a
+  change from done or wont_do back to work, in the window); wont_do (closed as wont_do in the window); lead time from the first change to
+  in_progress to `closed_at`, p50 and p90 by nearest rank per type (a done ticket with no start recorded is counted as `noStart`, not
+  timed); the review backlog: tickets in review at the window's end (the status timeline replayed), age since they entered review, and
+  what each waits for: a `waits-<what>` tag first (`waitsBasis: tag`); else, for the window that ends now only (`derived`), a deploy of
+  one of its runs waiting for approval (`deploy`), a live QA, verifier, reviewer or ux-check session holding it (`qa`), or a person it
+  is assigned to (`owner`); else null. An earlier window shows the tag only: the portal keeps no history of those states. CI runs of the program's sessions or tickets that finished
+  in the window, passed, failed and cancelled per pipeline; the deploys (`ci_deployments`) of those runs, with approval and outcome.
+- **Cost** (ESTIMATE, Claude Code's price): the dollars of the program's requests in the window; lead = the lead chain's own requests,
+  workers = the rest; the lead's share in percent; per done ticket all-in (total over done) and workers only (workers over done). Per
+  type: usage spend's per-ticket dollars of the done tickets (`ticketReport`, T-449, the same function as Usage → Attribution by
+  ticket: own plus the lead's part split over its workers' tickets), over the tickets' LIFE: the program's requests from the oldest such
+  ticket's creation (at most 30 days back) to the window's end, so a ticket worked in an earlier window shows its whole cost; all-in is
+  the ticket's total, workers only its own. The window's per done ticket figure stays the window's dollars over done (a throughput rate).
+- **Efficiency** (over the program's requests in the window): the dollars' split by token class, input, output, cache read and cache
+  write in percent at list price (`lab/prices.ts`: output x5, cache write x1.25, cache read x0.1 or the model's own weight; ESTIMATE;
+  unavailable `no_samples` without a priced token); requests and requests per session; context (`chat_sessions.context_used`, the last
+  turn's) p50 and p90 per role (the worker's agent, `lead`, `unrecorded`) and per lead session (its direct workers, with the lead's own
+  as `leadTokens`), over sessions with a request in the window; the five sessions that cost most; the model mix per role; sessions per
+  role with how many started in the window (churn); live sessions per Claude now (T-427 spread; the window that ends now only); lead
+  hand-overs (continuations created in the window, T-423) and per hour; the usage spikes (`usage_spikes`, T-418) of its sessions, or a
+  rate spike whose top session is one of them. **T-490 (D-63):** `qaReviewOpus`: of the QA, verifier, ux-check and review workers (their
+  role) with a request in the window, how many had a request on opus or fable, the share in percent (MEASURED; unavailable `no_samples`
+  with none), and how many of those were started with a reason (`session_spawn` `why`, `chat_sessions.spawn_why`). Each program also
+  names its workspace (`workspaceId`, the lead's); `crew_scorecard`'s short result has `workspace`, `qa_review_opus_pct`,
+  `qa_review_sessions` and `qa_review_opus_with_why`, and the page's Details show the share as one line.
+- **Health**: `agent.refused` audit rows of its sessions in the window, by scope; sessions ended by an integrity or credential check
+  (`ended_reason` prefixes) or interrupted by an error, in the window. Pod memory and OOM restarts are unavailable (`no_source`): the
+  portal does not record them.
+- **Targets** (now for live workers, over the window for the rest), each `ok`, `warn`, `breach` or `unavailable`, with the offenders:
+  D-61 `live_workers` (live workers at most the live lead's `max_workers`, else 3); D-61 `lead_subagents` (Agent-tool sub-agents in the
+  lead chain's requests, `chat_usage.agents`: any is a breach; none while a live lead may still start them, `subagents` on, is a
+  warn); D-62 `owner_queue` (the program's tickets assigned to a person and not closed, other than T-93: any is a breach); D-63
+  `qa_review_model` (a worker whose role, `chat_sessions.agent`, is QA, verifier, ux-checker or reviewer with a request on a model that
+  is not sonnet is a breach, unless its lead started it with a reason, `spawn_why`, T-490; workers with requests but no role recorded at
+  all: unavailable, `not_recorded`).
+- **Unavailable is a state.** Every figure carries `value`, `basis` (`measured`, `estimate`, `unavailable`) and `source`; unavailable
+  is `null` with a reason: `no_source` (the table cannot be read), `no_samples` (nothing to divide by), `not_recorded`. A measured
+  nothing is 0.
+- **Read.** `GET /api/lab/scorecard?window=&compare=0|1&program=` (`view` on the platform area `usage`; an agent actor reads only its
+  own program, the top of its session's lineage; another program, or one that does not exist, is the same 404) and the Portal MCP tool
+  `crew_scorecard` (agent, reach session, read only; the same scoping, `NOT_FOUND`; an admin's token reads every program; short by
+  default; `full: true` for every figure with its basis, the sources named once in `basis` so the result stays under the MCP size limit;
+  the route keeps a source on each figure). Wire types: `packages/contracts/src/scorecard.ts`.
+- **The page (S2): Usage → Crew** (`?tab=crew`; `features/lab/ScorecardTab.tsx`, pure wording in `scorecardModel.ts`). A window picker (1h, 6h,
+  Day, Week) and Alone / Compare (Compare asks `compare=1` and shows each number's earlier value as "was"); the sources of every figure
+  in one InfoTip. One card per program with five numbers: done per hour, dollars per done ticket (all-in), the lead's share, tickets in
+  review, and breaches (the count of D-61, D-62 and D-63 targets in breach). Each number shows its state (`ok`, `warn`, `breach`, or
+  `unavailable`) and MEASURED, ESTIMATE or UNAVAILABLE, with its source (and the reason when unavailable) in an InfoTip: unavailable reads
+  as the word, never 0. Only breaches take their state from the targets (breach when any is, warn when any warns, unavailable when none could
+  be checked); the review backlog warns when a ticket has waited more than 24 hours (a default of this page, not a decision); the other three
+  have no target, so their state is `ok` when measured. "Details" opens the tables the API returns as lists (done by type, in review with
+  what each waits for, CI by pipeline, deploys, the targets with their offenders), so nothing scrolls sideways. Layout: two numbers a row on a
+  phone, 44 px controls, light and dark. S3: on a phone the Details button is a chevron only (labelled "Show details" / "Hide details"); the
+  Sources InfoTip sits beside the window picker it explains; when targets warn and none breaches, the Breaches tile reads "2 warn" (the
+  warn count) instead of "0" beside WARN. Check: `tools/qa/crew-scorecard.mjs`; tests `scorecardModel.test.ts`.
+- **Attribution export (T-450 S2 fix).** Usage → Attribution's CSV followed `by` and `range` but not the Done filter, so a done-only view
+  exported every ticket; the download now carries `done=1` like the rows (`attributionUrl`, test `attributionUrl.test.ts`).
+- **Known limits.** A done ticket's life cost looks back at most 30 days; waits-for is derived for the current window only; context per
+  hour (T-423) is not computed, only hand-overs; the session list is bounded at 5,000 per load.
+- Source: `lab/scorecard.ts` (pure), `lab/scorecardData.ts` (the loader), `Lab.scorecard` (`lab/index.ts`), `lab/routes.ts`,
+  `lab/portalTools.ts`; tests `lab/scorecard.test.ts` (a seeded crew: two programs, a continuation, workers on two Claudes, tickets of
+  each kind, CI runs and deploys, usage rows; the numbers in each window, the targets, the previous window, unavailable, life cost,
+  derived waits, a deleted continuation, efficiency, health, the route and the tool's scoping).

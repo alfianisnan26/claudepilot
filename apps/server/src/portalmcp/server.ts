@@ -16,6 +16,7 @@ import {
   type PortalToolResult,
   type ToolRegistry,
 } from './registry.js';
+import { actorOfPrincipal, requireToolPolicy } from '../authz/seam.js';
 import type { AgentAccess } from './agents.js';
 import { registerResourcesAndPrompts } from './resources.js';
 import { auditArgs, cleanText, deepClean, findSecret, untrusted } from './sanitize.js';
@@ -395,6 +396,9 @@ export class PortalMcp {
     const ctx = this.#context(tool, extra, args, sdk);
     let result: PortalToolResult;
     try {
+      // 4. What the tool declared (T-348): its objects and platform checks through the one can(), before the handler reads anything. A
+      // refusal is thrown like the handler's own NOT_FOUND, so it reads byte for byte like a missing object.
+      requireToolPolicy(actorOfPrincipal(principal), tool.name, args);
       result = await tool.handler(ctx, args as never);
     } catch (e) {
       const d = describeError(e, record.requestId);

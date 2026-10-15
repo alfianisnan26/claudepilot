@@ -3201,6 +3201,56 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 782,
+    name: 'CI: the upstream a remote follows, and its last sync (T-486)',
+    up(db) {
+      // T-486 (local-git-ci PRD FR8a): a pilot remote may follow an https upstream (GitHub or Gitea). `upstream_secret` is a Secrets & env
+      // NAME, never a value. `upstream_state` is the last sync's JSON (when, error, diverged and ahead branches, branches gone upstream).
+      // Null on every row so far: no remote follows anything, as before.
+      db.exec(`
+        ALTER TABLE ci_repos ADD COLUMN upstream_url TEXT;
+        ALTER TABLE ci_repos ADD COLUMN upstream_secret TEXT;
+        ALTER TABLE ci_repos ADD COLUMN upstream_every_s INTEGER;
+        ALTER TABLE ci_repos ADD COLUMN upstream_state TEXT;
+      `);
+    },
+  },
+  {
+    version: 783,
+    name: 'CI: the secret name that signs a remote’s upstream webhook (T-486 S2)',
+    up(db) {
+      // T-486 S2 (local-git-ci PRD FR8a): an upstream may call `POST /hooks/ci/<remote id>` on a push, signed with the value of this
+      // Secrets & env NAME (never a value here). Null on every row so far: no webhook, the timer only, as before.
+      db.exec(`ALTER TABLE ci_repos ADD COLUMN upstream_hook_secret TEXT;`);
+    },
+  },
+  {
+    version: 789,
+    name: 'CI: runners with labels, and the runner a run executes on (T-557)',
+    up(db) {
+      // T-557 (local-git-ci PRD §23, runners): a runner is a workspace (in the cluster or a machine enrolled through Connect) that takes
+      // runs whose pipeline says `runs-on: [labels]`. `labels` is a sorted JSON array; `max_runs` caps the runs it executes at once;
+      // `drained` lets its running runs finish and gives it no new one. On a run: `runs_on` is the labels it asked for (JSON, null: the
+      // repository's workspace, as before) and `runner_workspace_id` the workspace it executes on (null: `workspace_id`, as before).
+      db.exec(`
+        CREATE TABLE ci_runners (
+          workspace_id TEXT PRIMARY KEY,
+          labels TEXT NOT NULL,
+          max_runs INTEGER NOT NULL DEFAULT 1,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          drained INTEGER NOT NULL DEFAULT 0,
+          note TEXT,
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        ALTER TABLE ci_runs ADD COLUMN runs_on TEXT;
+        ALTER TABLE ci_runs ADD COLUMN runner_workspace_id TEXT;
+        CREATE INDEX ci_runs_runner ON ci_runs (runner_workspace_id, status) WHERE runner_workspace_id IS NOT NULL;
+      `);
+    },
+  },
+  {
     version: 773,
     name: 'chat sessions: the agent a session runs as (T-294)',
     up(db) {
@@ -3230,6 +3280,42 @@ export const MIGRATIONS: Migration[] = [
       // waits on a person and when it ends (`idle`), only when it ends (`end`), or nothing (`none`). Null for every row so far: a worker
       // reports as `idle`, the default; a session with no parent reports nothing. (774, just before, is the per-session limits migration.)
       db.exec(`ALTER TABLE chat_sessions ADD COLUMN report TEXT CHECK (report IN ('idle', 'end', 'none'));`);
+    },
+  },
+  {
+    version: 776,
+    name: 'chat sessions: the branch of a worker\'s folder when it started (T-476)',
+    up(db) {
+      // T-476: a worker started in a plain folder that is a git work tree records the folder's branch once, at its start, so CI counts it as
+      // the worker's own branch (ci_run_trigger). Null for every row so far, and for sessions with a worktree of their own.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN folder_branch TEXT;`);
+    },
+  },
+  {
+    version: 777,
+    name: 'chat sessions: why a worker runs above its role\'s model (T-490, D-63)',
+    up(db) {
+      // T-490 (D-63): a worker whose role defaults to sonnet (QA, review) and that its lead started on opus or fable carries the lead's
+      // reason (`session_spawn` `why`), redacted and capped. Null for every row so far and for every spawn without one.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN spawn_why TEXT;`);
+    },
+  },
+  {
+    version: 778,
+    name: 'chat sessions: marked a crew lead at its start (T-561)',
+    up(db) {
+      // T-561: a session its starter marked a crew lead (the supervisor's leads, `lead: true` on create; a continuation keeps it). With the
+      // policy `sessions.leadRules` on, a lead launches with the portal's lead rules. 1 marked; null for every row so far and every other start.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN lead INTEGER;`);
+    },
+  },
+  {
+    version: 779,
+    name: 'chat sessions: auto hand-off, an implementer\'s DONE starts QA (T-548)',
+    up(db) {
+      // T-548 (chat-sessions PRD, "Auto hand-off"): 1 on a lead starts a qa-verifier worker when one of its implementer workers ends with
+      // `DONE <sha>`. Opt-in: every row keeps 0.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN auto_handoff INTEGER NOT NULL DEFAULT 0 CHECK (auto_handoff IN (0, 1));`);
     },
   },
   {

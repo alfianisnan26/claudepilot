@@ -7,6 +7,7 @@
 
 import {
   ALL_MODEL_WINDOWS,
+  AUTO_BOUNDS,
   AUTO_CONSTANTS,
   downgradeChain,
   estimatedFigure,
@@ -191,6 +192,32 @@ export function sourceReading(
   const shared = windows.filter((w) => sharedWindow(w.key));
   const sharedLeftPct = shared.length ? Math.max(0, round1(Math.min(...shared.map((w) => (w.level === 'exhausted' ? 0 : 100 - w.usedPct!))))) : null;
   return { window, leftPct, reason, facts, limit, sharedLeftPct, paceHold };
+}
+
+/** What the one projection rule reads (T-460): the effective auto move settings that decide whether a Claude is one to leave. */
+export interface LeavingRule {
+  thresholdPct: number;
+  useProjection: boolean;
+  respectPace: boolean;
+  paceMinPct: number;
+}
+
+/** The rule's defaults (the settings' defaults, D-12 and D-39) for a caller that has no settings in hand. */
+export const DEFAULT_LEAVING_RULE: LeavingRule = {
+  thresholdPct: AUTO_BOUNDS.thresholdPct.default,
+  useProjection: true,
+  respectPace: true,
+  paceMinPct: AUTO_BOUNDS.paceMinPct.default,
+};
+
+/**
+ * T-460: THE projection rule, one pure function. Would auto move leave this Claude for a chat on `model`? True when `sourceReading` finds a
+ * reason on it (exhausted, at or under the threshold with the pace rule not holding it back, or projected to run out within the horizon).
+ * A Claude with no live reading is not one auto move leaves. The spawn picker (T-427) and the supervisor (`GET /api/autotransfer/leaving`)
+ * never start work on a Claude this says true for: it would be moved off again minutes later.
+ */
+export function autoMoveLeaves(c: ClaudeUsage, model: string | null, nowMs: number, rule: LeavingRule = DEFAULT_LEAVING_RULE): boolean {
+  return sourceReading(c, model, rule.thresholdPct, rule.useProjection, nowMs, { respect: rule.respectPace, minPct: rule.paceMinPct })?.reason != null;
 }
 
 /** What the engine knows about a chat's history of moves (from its own rows), for the safeguards and the guards on the choice. */

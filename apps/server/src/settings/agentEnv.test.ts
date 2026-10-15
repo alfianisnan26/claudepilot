@@ -18,7 +18,7 @@ import { AGENT_ENV, createSettingsRoutes, SettingsModule } from './index.js';
 
 const WS = 'docker/ws1';
 const POLICY = '/etc/claude-code/managed-settings.d/10-claudepilot-policy.json';
-const NAMES = ['BASH_MAX_OUTPUT_LENGTH', 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS', 'CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH', 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', 'MAX_MCP_OUTPUT_TOKENS'];
+const NAMES = ['BASH_MAX_OUTPUT_LENGTH', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW', 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS', 'CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH', 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', 'MAX_MCP_OUTPUT_TOKENS'];
 const code = (c: string) => (e: unknown) => isAppError(e) && e.code === c;
 
 async function setup() {
@@ -52,7 +52,8 @@ test('the policy drop-in carries exactly the declared names, with the defaults a
     assert.ok(file, 'the policy drop-in is compiled');
     assert.deepEqual([file.mode, file.uid, file.gid], [0o644, 0, 0]);
     const parsed = JSON.parse(file.content) as Record<string, unknown>;
-    assert.deepEqual(Object.keys(parsed), ['env']);
+    // The agent policy's env, and the rule-file guard every workspace gets with it (D-60, T-404; ruleGuard.test.ts).
+    assert.deepEqual(Object.keys(parsed), ['env', 'hooks']);
     assert.deepEqual(Object.keys(parsed.env as object).sort(), NAMES);
     assert.deepEqual(parsed.env, {
       CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '1h',
@@ -60,6 +61,7 @@ test('the policy drop-in carries exactly the declared names, with the defaults a
       CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: '3',
       BASH_MAX_OUTPUT_LENGTH: '8000',
       MAX_MCP_OUTPUT_TOKENS: '25000',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000',
     });
     // Every setting names its source and, behind its ⓘ, when a change takes effect (T-302, T-309): the
     // sub-agent values at once for new sub-agents, the output caps at Claude's next start.
@@ -70,6 +72,7 @@ test('the policy drop-in carries exactly the declared names, with the defaults a
       CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: 'new-subagents',
       BASH_MAX_OUTPUT_LENGTH: 'restart',
       MAX_MCP_OUTPUT_TOKENS: 'restart',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: 'restart',
     });
     for (const a of AGENT_ENV) {
       const help = a.def.help ?? '';
@@ -177,6 +180,23 @@ test('status per workspace: unavailable until the drop-in lands, applied after, 
   }
 });
 
+test('T-404 review 7: the guard pull covers only workspaces the policy landed in, and not removed ones', async () => {
+  const h = await setup();
+  try {
+    // Known to the portal (a delivery row) but nothing landed yet: not pulled.
+    h.store.db!.prepare('INSERT INTO workspace_delivery (workspace_id) VALUES (?)').run('docker/other');
+    assert.deepEqual(h.agentEnv.guardedWorkspaces(), []);
+    await h.reconciler.request(WS, 'test');
+    assert.deepEqual(h.agentEnv.guardedWorkspaces(), [WS]);
+    // A removed workspace whose row was not forgotten (the caller says it is gone) is dropped.
+    assert.deepEqual(h.agentEnv.guardedWorkspaces((id) => id !== WS), []);
+    h.agentEnv.forgetWorkspace(WS);
+    assert.deepEqual(h.agentEnv.guardedWorkspaces(), []);
+  } finally {
+    h.done();
+  }
+});
+
 /** The settings routes behind a stand-in for the sign-in guard: the owner (a session token) by default, `actor` when given, nobody for null. */
 function routes(h: Awaited<ReturnType<typeof setup>>, actor?: Actor | null) {
   const app = new Hono<{ Variables: { token: string; actor: Actor } }>();
@@ -229,6 +249,66 @@ test('routes: a workspace’s agent policy asks the seam; one that is not yours 
     assert.equal((await routes(h, null).request('/api/settings/agent-env/docker/ws1')).status, 401);
     // The route is declared with the seam, as `view` on the workspace.
     assert.deepEqual(declaredPolicies().get('GET /api/settings/agent-env/:target/:name'), { kind: 'objects', checks: [{ type: 'workspace', verb: 'view', from: 'path', param: 'target+name' }] });
+  } finally {
+    clearResolvers();
+    h.done();
+  }
+});
+
+test('routes: every settings route asks the seam; what the asker may not see answers as what does not exist (T-329)', async () => {
+  const h = await setup();
+  const owners: Record<string, string> = { [WS]: 'u_b', 'docker/theirs': 'u_a' };
+  registerResolver({ type: 'workspace', resolve: (id) => (owners[id] ? { ref: workspaceRef(id), owner: { kind: 'user', id: owners[id] as UserId } } : null) });
+  const put = (app: ReturnType<typeof routes>, value: unknown) =>
+    app.request(`/api/settings/${SETTING_KEYS.mcpPoolOnly}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, confirm: true }) });
+  try {
+    const bob = routes(h, { kind: 'user', userId: 'u_b', loginSessionId: 'x', via: 'ui' } as Actor);
+    const nobody = routes(h, null);
+    const notFound = await (await bob.request('/api/settings/lockdown/docker/nope')).text();
+    assert.equal((JSON.parse(notFound) as { error: { code: string } }).error.code, 'NOT_FOUND');
+
+    // The list: every signed-in person, the same answer as the owner's; nobody signed in gets nothing.
+    const list = await bob.request('/api/settings');
+    assert.equal(list.status, 200);
+    assert.deepEqual(((await list.json()) as { data: SettingsView }).data, JSON.parse(JSON.stringify(h.settings.view())));
+    assert.equal((await nobody.request('/api/settings')).status, 401);
+
+    // A workspace's lockdown: yours answers; one that is not yours is the same 404, byte for byte, as one that does not exist.
+    const mine = await bob.request('/api/settings/lockdown/docker/ws1');
+    assert.equal(mine.status, 200);
+    assert.deepEqual(((await mine.json()) as { data: unknown }).data, JSON.parse(JSON.stringify(h.mod.lockdown.status(WS))));
+    const theirs = await bob.request('/api/settings/lockdown/docker/theirs');
+    assert.equal(theirs.status, 404);
+    assert.equal(await theirs.text(), notFound);
+    assert.equal((await nobody.request('/api/settings/lockdown/docker/ws1')).status, 401);
+
+    // The audit trail and a change are the platform's: a person who is not its admin gets the same 404, and nothing is written.
+    const before = h.settings.view();
+    const audit = await bob.request('/api/settings/audit');
+    assert.equal(audit.status, 404);
+    assert.equal(await audit.text(), notFound);
+    const change = await put(bob, true);
+    assert.equal(change.status, 404);
+    assert.equal(await change.text(), notFound);
+    assert.deepEqual(h.settings.view(), before);
+    assert.deepEqual(h.settings.audit(100), []);
+    assert.equal((await nobody.request('/api/settings/audit')).status, 401);
+    assert.equal((await put(nobody, true)).status, 401);
+
+    // The owner's answers are unchanged: the change lands and is in the trail.
+    const owner = routes(h);
+    assert.equal((await put(owner, true)).status, 200);
+    const trail = await owner.request('/api/settings/audit');
+    assert.equal(trail.status, 200);
+    assert.equal(((await trail.json()) as { data: unknown[] }).data.length, 1);
+
+    // Each route is declared with the seam.
+    const declared = declaredPolicies();
+    const ws = { kind: 'objects', checks: [{ type: 'workspace', verb: 'view', from: 'path', param: 'target+name' }] };
+    assert.deepEqual(declared.get('GET /api/settings'), { kind: 'signed-in' });
+    assert.deepEqual(declared.get('GET /api/settings/audit'), { kind: 'platform', area: 'settings', verb: 'view' });
+    assert.deepEqual(declared.get('GET /api/settings/lockdown/:target/:name'), ws);
+    assert.deepEqual(declared.get('PUT /api/settings/:key'), { kind: 'platform', area: 'settings', verb: 'manage' });
   } finally {
     clearResolvers();
     h.done();

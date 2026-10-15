@@ -545,12 +545,31 @@ session control over MCP" is on (off by default); otherwise only `session_list`,
 
 A session's own tools for a crew (agent scope, [Chat sessions](chat-sessions.md) FR51, "Crew over MCP"):
 `session_spawn` takes `claude` (`same`, a plan Claude's name, or `auto`: room by a fresh, measured reading, the least
-busy first), `role` (the worker runs as `.claude/agents/<role>.md`), `model`, `effort`, `mode` (`default`, `plan`,
-`dontAsk`), `max_workers` and `subagents` (the worker's own limits, never wider than the caller's) and `report`
+busy first; with none, T-427, another Claude, the least used now of those with more than 10 % left (the auto move's default
+threshold), none above ceil((sessions + 1) / Claudes) + 1 sessions not ended (asleep ones count: a message wakes them), why
+`no_room_lowest`; its own only when no other qualifies), `role` (the worker runs as `.claude/agents/<role>.md`), `model` (default: the
+role's model in the workspace persona, T-490), `why` (T-490, D-63: required on a role whose model is below opus for any model but a sonnet or haiku alias or id (`sonnet`, `claude-haiku-*`, `[1m]` suffix allowed; so opus, fable, `default`, `opusplan`, `best` and an unknown id need it), else
+`VALIDATION_FAILED` naming D-63; kept as the worker's `spawnWhy`; the result says `model` and `why`), `effort`, `mode` (`default`, `plan`,
+`dontAsk`), `ticket` (`T-<n>`: the worker's ticket, the field usage attribution reads, so its cost counts under that ticket;
+none means "No ticket"; a malformed id or a ticket that does not exist is refused as `NOT_FOUND` and starts nothing, T-449;
+T-397: while nobody holds that ticket the worker may `ticket_comment` on it, and on its lead's tickets, comment only, audited as the worker:
+[Tickets](tickets.md) FR9b),
+`max_workers` and `subagents` (the worker's own limits, never wider than the caller's) and `report`
 (`idle`, the default: the portal tells the lead in one line when the worker's turn
 ends, when it waits on a person and when it ends; `end`: only the end; `none`), `session_message` takes `to`
 (`workers` or `crew`) instead of `session_id`, every recipient counted against the hourly limit, and
 `session_family` items carry `agent` and `mode`, with how many wait on a person in its summary.
+
+CI for a crew (T-476, [Local git & CI](local-git-ci.md) FR39): `ci_run_trigger` from an agent token lets a lead (a session with no
+parent that has started workers) start any pipeline on a `dev/*` or `ticket/*` branch of its program's remote (the remote whose
+folder is exactly the lead's folder), matched exactly (no `refs/`, `..`, tag or lookalike prefix; resolved as `refs/heads/<branch>`).
+On another program's remote that refusal is the same `NOT_FOUND` as a remote that does not exist. A worker started in a folder that
+is a git work tree on a branch owns that branch (recorded once at its start). Deploy pipelines keep the earlier rule and still wait
+for a person's approval. Every start writes one `ci.run_started` audit row: actor, session, remote, pipeline, ref and the rule that
+allowed it (`own_branch`, `program_branch`, `deployment`, `token`). The rule lives in `ci/authz.ts` (`agentStart`). Reading:
+`ci_run_get`, `ci_runs_list` and `ci_run_logs` show a lead every run on its program's remotes, whoever started it (read only; cancel
+and bump stay own-only), and a worker's folder branch counts as its own only on that folder's remote as `dev/*` or `ticket/*`; any
+other run reads as `No such run.`
 
 | Tool | Scope | Hints | Inputs | Output |
 | --- | --- | --- | --- | --- |
@@ -559,9 +578,10 @@ ends, when it waits on a person and when it ends; `end`: only the end; `none`), 
 | `session_interrupt` | operate | I | `id` | State; the turn stops and work already done is kept |
 | `session_end` | operate | D I | `id` | Final state |
 | `session_respond` | operate; `allow` needs admin | D U; C for `allow` | `id`, `request_id`, `answer` or `decision` (`allow`, `deny`), plan `mode`, `message`, `confirm_token` | Accepted; the first answer per `request_id` wins. `allow` covers a tool, a plan, a workflow or an MCP elicitation, and its preview shows the exact request, sanitized. |
-| `session_start` | admin | D O U | `workspace_id`, `folder` (default `~/work`), `prompt`, `model`, `effort`, `mode`, `agent` (T-294: the agent it runs as, `claude --agent <name>`) | Session id and state |
+| `session_start` | admin | D O U | `workspace_id`, `folder` (default `~/work`), `prompt`, `model`, `effort`, `mode`, `agent` (T-294: the agent it runs as, `claude --agent <name>`), `parent` and `report` (T-336: it starts as the worker of a live session of the same workspace, through the same create as `session_spawn`, so the parent's limits hold (depth, workers at once, an hour's starts) and it shows in the parent's `session_family` and crew; `report` as for `session_spawn`, only with `parent`; a parent that is missing, ended, in another workspace or one the token may not operate is the same not found; T-349: the parent is asked again inside the controller's create, after its last await and right before the row is written, so a parent that ends meanwhile gets no worker and the same not found; a worker's first `prompt` is framed as from its parent session, as `session_spawn` frames it, while `started_by` stays the token). T-349: `workspace_id` takes any form `workspace_get` takes (the `ws_` id, `<target>/<name>`, `<target>/<label>`, a name or label only one workspace has), through the shared resolver, and the resolved workspace is asked of the seam again | Session id and state, `parent_id` |
 | `session_send` | admin | D O U | `id`, `text`, `priority` (`next` steers this turn, `later` waits for it to end) | Accepted, message state |
 | `session_configure` | admin | D U; C when raising the mode | `id`, `model`, `effort`, `mode`, `max_workers`, `subagents` | Values after policy caps. Modes rank `plan`, then `default` or `dontAsk`, then `acceptEdits` ([Monitoring](monitoring-dashboard.md) §12). T-294, the session's limits ([Chat sessions](chat-sessions.md) FR51, "Limits per session"): `max_workers` (0 to 20, or null for the global `sessions.maxChildren`; above the global cap counts as the cap) applies at once; `subagents` (on or off: off launches its process with `--disallowedTools Agent Task Workflow RemoteTrigger` (a forked skill can still run a sub-agent: the known gap)) applies at its next start, and the result's `restart_needed` says when a Restart is due. Audited `session.limits`. An agent's token never reaches it (admin scope), so a session never changes its own limits. |
+| `crew_scorecard` | agent (reach session: its own program); an admin's token reads every program | R I | `program` (a program id: its first lead session), `window` (`1h`, `6h`, `day` default, `week`), `compare` (default true: the window before too), `full` | T-450, [Claude usage](claude-usage.md) §28.14: per program (a lead chain with its continuations and every worker under it) tickets done by type and per hour, lead time p50 and p90, reopened, wont_do, the review backlog (age, what it waits for), CI runs by pipeline, deploys; cost (estimated dollars) total, lead versus workers, per done ticket all-in and workers only (per type from usage spend's `ticketReport`, T-449, over the tickets' life); efficiency: token-class shares, requests, context p50 and p90 per role and per lead, top sessions, model mix, sessions per role, live per Claude, hand-overs, spikes; health: refusals by scope, bad endings (pod memory unavailable); the D-61, D-62 and D-63 targets as `ok`, `warn`, `breach` or `unavailable` with offenders. Short by default (headline figures now and before, target states, flags); `full` gives every figure with its basis (`measured`, `estimate`, `unavailable` with a reason), the sources named once in `basis`. Another program, or one that does not exist, is `NOT_FOUND`. Declared in `lab/authz.ts`; the same as `GET /api/lab/scorecard`. |
 
 Resources (read scope, no subscriptions): `pilot://status`,
 `pilot://workspaces/{target}/{name}` and `pilot://pools/{id}`, attached with `@` in

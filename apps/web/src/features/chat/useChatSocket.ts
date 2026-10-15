@@ -17,10 +17,15 @@ import {
   type ChatSubscribe,
   type ChatTask,
 } from '@portal/contracts';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { chatApi } from './api';
 import { foldBtw, refusedBtw, type BtwState } from './btw/state';
+import { appendLive, EMPTY_HISTORY, expand, olderDone, olderFailed, olderStart, seed, seedAll, type History } from './history';
 import { createDeltaBatcher, foldLive, NO_LIVE, settleLive, type AgentLive, type LiveState } from './motion/deltas';
+import { sharedRead } from './sharedRead';
+
+/** The newest page, one read in flight per session: a remounted effect (StrictMode in dev) joins it instead of reading again. */
+const newestPage = sharedRead((id: string) => chatApi.page(id));
 
 /** The live partial assistant text for the open block, before it's stored as an event. */
 export interface ChatDelta {
@@ -62,10 +67,24 @@ export class ChatAckError extends Error {
   }
 }
 
+/** Where the transcript's pages stand (T-376, history.ts). */
+export interface ChatPaging {
+  /** The newest page is in. */
+  seeded: boolean;
+  /** Older events exist than the first one held (false: the start of the chat is held). */
+  more: boolean;
+  older: History['older'];
+}
+
 export interface ChatSessionApi {
   connected: boolean;
-  /** Stored transcript, ordered and deduped by `seq`. */
+  /** Stored transcript held, ordered and deduped by `seq`: the newest page, the older pages read since, and what came live. */
   events: ChatEvent[];
+  paging: ChatPaging;
+  /** Reads the page before the first event held; a no-op while one is read or at the start. */
+  loadOlder: () => void;
+  /** Reads one event whole (a `tool_result` a page cut to its preview) and puts it in its preview's place. */
+  loadWhole: (seq: number) => Promise<void>;
   /** The main agent's live reply (a sub-agent's never shows here). */
   delta: ChatDelta | null;
   /** What each sub-agent is writing right now, by its Task call (`ChatTask.toolUseId`). */
@@ -116,25 +135,23 @@ interface Waiter {
   timer?: number;
 }
 
-/** Merge a batch into the transcript, deduped by `seq` and kept in order. */
-function mergeEvents(prev: ChatEvent[], incoming: ChatEvent[]): ChatEvent[] {
-  if (incoming.length === 0) return prev;
-  const bySeq = new Map(prev.map((e) => [e.seq, e]));
-  for (const e of incoming) bySeq.set(e.seq, e);
-  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
-}
-
 /**
  * One dedicated WebSocket for the open session, mirroring `lib/live.tsx`: it opens on mount, closes
  * on unmount, and reconnects with exponential backoff (1 s doubling to 30 s). On every connect it
  * resubscribes from the highest `seq` it has seen, so a dropped connection resumes without gaps.
- * History and the task list are seeded over HTTP; after that the socket is the source of truth.
+ * The transcript is seeded over HTTP with its newest page only (T-376, history.ts), and the socket subscribes after that page's newest
+ * event (a subscribe without one sends the whole backlog); older pages are read as the reader scrolls up (`loadOlder`). The task list
+ * is seeded over HTTP too; after that the socket is the source of truth.
  * Sends and controls carry a client uuid and settle on the matching `ack`.
  */
 export function useChatSession(sessionId: string): ChatSessionApi {
   const toast = useToast();
   const [connected, setConnected] = useState(false);
-  const [events, setEvents] = useState<ChatEvent[]>([]);
+  const [hist, setHist] = useState<History>(EMPTY_HISTORY);
+  const histRef = useRef(hist);
+  histRef.current = hist;
+  /** Bumped per session: a page or an event read for the session before is dropped. */
+  const generation = useRef(0);
   const [live, setLive] = useState<LiveState>(NO_LIVE);
   const [session, setSession] = useState<ChatSession | null>(null);
   const [removed, setRemoved] = useState(false);
@@ -160,7 +177,9 @@ export function useChatSession(sessionId: string): ChatSessionApi {
 
   useEffect(() => {
     seqRef.current = 0;
-    setEvents([]);
+    generation.current++;
+    histRef.current = EMPTY_HISTORY;
+    setHist(EMPTY_HISTORY);
     setLive(NO_LIVE);
     setSession(null);
     setRemoved(false);
@@ -186,7 +205,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
       if (items.length === 0) return;
       deltas.flush(); // the deltas first, then whatever supersedes them
       for (const e of items) if (e.seq > seqRef.current) seqRef.current = e.seq;
-      setEvents((prev) => mergeEvents(prev, items));
+      setHist((h) => appendLive(h, items));
       // A finished block or a turn result supersedes what was live, each agent's its own (settleLive).
       setLive((l) => settleLive(l, items));
       // Stored now: the transcript shows the real event instead of the optimistic copy.
@@ -199,8 +218,25 @@ export function useChatSession(sessionId: string): ChatSessionApi {
       chatApi.tasks(sessionId).then((list) => !closed && version === tasksVersion && setTasks(list), () => undefined);
     };
 
-    // Seed the backlog, current state and tasks once; the socket keeps them fresh after that.
-    void chatApi.history(sessionId).then((items) => !closed && applyEvents(items), () => undefined);
+    // Seed the newest page, the current state and tasks once; the socket keeps them fresh after that. The socket subscribes only once the
+    // page is in, after its newest event: a subscribe without `afterSeq` sends the whole backlog. A page that cannot be read falls back
+    // to exactly that (as before T-376), so the chat still shows.
+    let seeded = false;
+    void newestPage(sessionId).then(
+      (page) => {
+        if (closed) return;
+        seeded = true;
+        for (const e of page.events) if (e.seq > seqRef.current) seqRef.current = e.seq;
+        setHist((h) => seed(h, page));
+        subscribe();
+      },
+      () => {
+        if (closed) return;
+        seeded = true;
+        setHist(seedAll);
+        subscribe();
+      },
+    );
     void chatApi.get(sessionId).then((s) => !closed && setSession(s), () => undefined);
     loadTasks();
 
@@ -243,7 +279,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
     };
 
     const subscribe = () => {
-      if (ws?.readyState !== WebSocket.OPEN) return;
+      if (!seeded || ws?.readyState !== WebSocket.OPEN) return;
       const msg: ChatSubscribe = { type: 'subscribe', session: sessionId };
       if (seqRef.current > 0) msg.afterSeq = seqRef.current;
       ws.send(JSON.stringify(msg));
@@ -462,11 +498,35 @@ export function useChatSession(sessionId: string): ChatSessionApi {
       }),
     [sessionId],
   );
+  // The page before the first event held (T-376): one at a time, dropped when the session changed meanwhile.
+  const loadOlder = useCallback(() => {
+    const h = histRef.current;
+    const next = olderStart(h);
+    if (!next || h.before === null) return;
+    const before = h.before;
+    const gen = generation.current;
+    histRef.current = next; // a second call before the render sees it loading
+    setHist((cur) => olderStart(cur) ?? cur);
+    chatApi.page(sessionId, before).then(
+      (page) => gen === generation.current && setHist((cur) => olderDone(cur, before, page)),
+      () => gen === generation.current && setHist(olderFailed),
+    );
+  }, [sessionId]);
+  // A preview opened: the whole event takes its place. Rejects with the portal's error for the caller to show.
+  const loadWhole = useCallback(
+    async (seq: number) => {
+      const gen = generation.current;
+      const whole = await chatApi.event(sessionId, seq);
+      if (gen === generation.current) setHist((h) => expand(h, whole));
+    },
+    [sessionId],
+  );
   const fail = useCallback((e: unknown) => toastRef.current(e instanceof Error ? e.message : 'That didn’t go through.', 'error'), []);
   const stop = useCallback(() => void control('stop').catch(fail), [control, fail]);
   const end = useCallback(() => void control('end').catch(fail), [control, fail]);
 
-  return { connected, events, delta: live.main, agentLive: live.agents, session, removed, inputs, outbox, tasks, btw: btwState?.item ?? null, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end };
+  const paging = useMemo<ChatPaging>(() => ({ seeded: hist.seeded, more: hist.more, older: hist.older }), [hist.seeded, hist.more, hist.older]);
+  return { connected, events: hist.events, paging, loadOlder, loadWhole, delta: live.main, agentLive: live.agents, session, removed, inputs, outbox, tasks, btw: btwState?.item ?? null, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end };
 }
 
 export interface ChatListApi {

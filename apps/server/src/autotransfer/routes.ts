@@ -20,6 +20,7 @@ import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { PlatformAudit } from '../platform/audit.js';
 import type { PlatformOwner } from '../platform/owner.js';
+import { autoMoveLeaves } from './decide.js';
 import type { AutoTransferEngine } from './engine.js';
 import type { ChatPort, UsagePort } from './ports.js';
 import { effectiveSettings, platformSettings, type AutoSettingsReader } from './settings.js';
@@ -175,6 +176,21 @@ export function createAutoTransferRoutes(d: AutoRouteDeps): Hono {
   r.post('/suggestions/:id/always', async (c) => {
     const a = who(c);
     return c.json(success(await d.engine.answerMove(c.req.param('id'), a.userId, a.label, undefined, { always: true })));
+  });
+
+  // T-460: which Claudes auto move would leave now (the one projection rule, `autoMoveLeaves`), for callers that start work (the supervisor).
+  r.get('/leaving', async (c) => {
+    const a = who(c);
+    const model = c.req.query('model') ?? null;
+    if (model !== null && !/^[A-Za-z0-9_.\-[\]]{1,80}$/.test(model)) throw bad('model', 'Unknown model.');
+    const eff = effectiveSettings(platformSettings(d.settings), d.store.prefs(a.userId));
+    const now = Date.now();
+    const claudes = (await claudesOf(a.userId)).filter((x) => x.runsOn === 'plan').map((x) => {
+      const thresholdPct = d.store.claude(a.userId, x.claudeId).thresholdPct ?? eff.thresholdPct;
+      const leaves = autoMoveLeaves(x, model, now, { thresholdPct, useProjection: eff.useProjection, respectPace: eff.respectPace, paceMinPct: eff.paceMinPct });
+      return { claudeId: x.claudeId, claudeName: x.claudeName, workspaceId: x.workspaceId, leaves, thresholdPct };
+    });
+    return c.json(success({ claudes }));
   });
 
   r.get('/events', (c) => {

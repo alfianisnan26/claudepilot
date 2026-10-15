@@ -209,7 +209,7 @@ test('routes: declared with the seam; the owner reads; another user and an agent
     for (const k of Object.keys(LAB_POLICIES)) assert.equal(declaredPolicies().get(k)?.kind, 'platform', k);
     assert.equal(declaredToolPolicies().get('lab_summary')?.kind, 'agent');
     assert.equal(declaredToolPolicies().get('lab_experiment_set')?.kind, 'platform');
-    assert.deepEqual(Object.keys(LAB_TOOL_POLICIES).sort(), ['lab_arm_draw', 'lab_experiment_set', 'lab_summary']);
+    assert.deepEqual(Object.keys(LAB_TOOL_POLICIES).sort(), ['crew_scorecard', 'lab_arm_draw', 'lab_experiment_set', 'lab_summary']);
 
     const sl = (await (await owner.request('/api/lab/slices?role=implementer')).json()) as { data: { slices: LabSliceView[]; total: number } };
     assert.deepEqual([sl.data.total, sl.data.slices[0]!.ticket], [1, 'T-287']);

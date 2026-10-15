@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildListView, type ChatSession } from '@portal/contracts';
-import { canFold, chipCounts, defaultChip, ofProgram, programCounts, programInput, statusGroup, statusOf, STATUS_ORDER, visibleChips } from './listOrder';
+import { canFold, chipCounts, defaultChip, ofProgram, programCounts, programInput, statusGroup, statusOf, STATUS_ORDER, visibleChips, withChange, withDefaultChip, type ChipChoice } from './listOrder';
 
 const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 let n = 0;
@@ -64,6 +64,25 @@ test('the page opens on the first chip with sessions, All when there is none', (
   assert.equal(defaultChip(chipCounts([s({ state: 'ended', endedReason: 'credential: a key in a tool result' })])), 'attention', 'ended for safety needs you');
 });
 
+test('T-321: the default chip follows the counts until the person picks one, and a pending default never undoes the pick', () => {
+  const waiting = s({ state: 'waiting', waiting: 1 });
+  const idle = s();
+  const start: ChipChoice = { filter: 'attention', archived: false, picked: false };
+  // Before a pick the default applies, and moves with the counts.
+  assert.equal(withDefaultChip(start, chipCounts([idle])).filter, 'idle');
+  assert.equal(withDefaultChip(withDefaultChip(start, chipCounts([idle])), chipCounts([idle, waiting])).filter, 'attention');
+  // The updates in the order React runs them when All is tapped right after the list first shows: the tap's, then the default of the
+  // effect still pending from the render before the tap (its "not picked" is stale). The tap stands.
+  const counts = chipCounts([idle, waiting]);
+  const queue = [(v: ChipChoice) => withChange(v, { archived: false, filter: 'all' }), (v: ChipChoice) => withDefaultChip(v, counts)];
+  const after = queue.reduce((v, update) => update(v), withDefaultChip(start, counts));
+  assert.deepEqual(after, { filter: 'all', archived: false, picked: true });
+  // Archived is a pick too; a search is not.
+  assert.equal(withChange(start, { archived: true, filter: 'all' }).picked, true);
+  assert.equal(withChange({ ...start, query: 'x' }, { query: 'y' }).picked, false);
+  assert.equal(withDefaultChip(withChange(start, { archived: true }), chipCounts([idle])).filter, 'attention', 'kept as it was, not re-defaulted');
+});
+
 test('a chip shows only when it has sessions; Pinned and All always, the chip you are on stays, Archived before All', () => {
   const counts = chipCounts([s(), s({ state: 'ended' })]);
   assert.deepEqual(visibleChips(counts, 'idle'), ['idle', 'pinned', 'ended', 'all']);
@@ -90,7 +109,7 @@ test('each session sits under one heading in All: what matters most wins, a calm
   assert.equal(statusOf(s({ state: 'ended', endedReason: 'integrity: the transcript does not match' })), 'attention');
 });
 
-test('All grouped: the headings in the order of attention with their counts, a pinned row leads its heading, a child of another heading says where it came from', () => {
+test('All grouped: the headings in the order of attention with their counts, a pinned row leads its heading, a child of another heading sits under a header for its parent', () => {
   const pin = at(0);
   const parent = s({ id: 'parent', state: 'idle', min: 1 });
   const list = [
@@ -116,9 +135,11 @@ test('All grouped: the headings in the order of attention with their counts, a p
   const rows = (key: string) => view.groups.find((g) => g.key === key)!.rows.map((r) => r.session.id);
   assert.deepEqual(rows('working'), ['working-pinned', 'working'], 'the pinned row leads, though older');
   assert.deepEqual(rows('idle'), ['idle-new', 'parent']);
-  const child = view.groups[0]!.rows[0]!;
-  assert.equal(child.session.id, 'child-waiting');
-  assert.equal(child.parentTitle, parent.title, 'its parent is under another heading');
+  // Its parent is under another heading: it sits under a header for it (T-369), which the heading does not count.
+  const header = view.groups[0]!.rows[0]!;
+  assert.deepEqual([header.session.id, header.context], ['parent', true]);
+  assert.equal(header.children[0]!.session.id, 'child-waiting');
+  assert.equal(header.children[0]!.parentTitle, null);
   assert.equal(view.groups.find((g) => g.key === 'idle')!.rows[1]!.rollup?.waiting, 1, 'the parent still counts what it started');
 });
 

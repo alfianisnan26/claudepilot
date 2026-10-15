@@ -1,11 +1,21 @@
 import { AppError } from '@isnanme/core';
-import type { Workspace } from '@portal/contracts';
+import { sessionCost, type ChatSession, type Workspace } from '@portal/contracts';
 import { config } from '../../config.js';
 import { findWorkspace } from '../../workspaces/identity.js';
 import { PortalToolError, type PortalToolContext } from '../registry.js';
 import { cleanText, type UntrustedText } from '../sanitize.js';
 
 // Helpers the built-in tool files share.
+
+/**
+ * T-343: a session's cost for a tool result: `cost_usd` with the running turn's estimate in it, and `cost_basis` only while a turn runs
+ * (`estimate`, or `unavailable` when its model has no known price: then `cost_usd` is the last reported total, the turn's part not guessed).
+ */
+export function costFields(s: Pick<ChatSession, 'costUsd' | 'turnCostEstimateUsd'>): { cost_usd: number; cost_basis?: 'estimate' | 'unavailable' } {
+  const c = sessionCost(s);
+  const cost_usd = Math.round(c.usd * 10_000) / 10_000;
+  return c.basis === 'reported' ? { cost_usd } : { cost_usd, cost_basis: c.basis };
+}
 
 /** Where a person opens something in the admin UI: `PORTAL_UI_URL`, else this portal on its own port. */
 export function uiLink(path: string): string {

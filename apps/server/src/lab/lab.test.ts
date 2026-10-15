@@ -238,3 +238,27 @@ test('before and after: slices split at the change; an excluded (outage) slice i
     h.done();
   }
 });
+
+test('a session’s slices are its chat’s: the rows it continues are read and scored with it, another chat’s never (T-312)', async () => {
+  // The orchestrator's chain split on 2026-10-13 (usagespend/attribution.test.ts has the same ids): O1 -> O2 -> O3; Konfersi K1 on its own.
+  const id = (prefix: string) => `${prefix}-0000-4000-8000-${prefix}0000`;
+  const [O1, O2, O3, K1] = [id('fe3df8bc'), id('fdb140be'), id('5c9fcb5f'), id('541948a5')];
+  const h = await harness();
+  try {
+    const at = new Date(T0).toISOString();
+    const row = h.db.prepare('INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, continued_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    for (const [s, from] of [[O1, null], [O2, O1], [O3, O2], [K1, null]] as const) row.run(s, 'kubernetes/kohi-event', 'Chat', 'idle', at, at, at, '', from);
+    const ask = (s: string, n: number) => h.lab.line(s, JSON.stringify({ type: 'assistant', message: { id: `msg_chain_${n}`, model: 'claude-opus-5-5', content: [], usage: { input_tokens: 1 } }, parent_tool_use_id: null }));
+    [O1, O2, O3, K1].forEach((s, n) => ask(s, n));
+    const of = (s: string) => h.lab.slices({ sessionId: s }).map((m) => m.sessionId).sort();
+    assert.deepEqual(of(O3), [O1, O2, O3].sort(), 'the last row reads the rows it continues');
+    assert.deepEqual(of(O1), [O1], 'the first row has nothing before it');
+    assert.deepEqual(of(K1), [K1], 'another chat is not part of it');
+    // The agent's own summary (lab_summary, reach session) scores the chain as one: three main-thread turns, one row.
+    const n = (s: { rows: { n: number }[] }) => s.rows.reduce((t, r) => t + r.n, 0);
+    assert.deepEqual([n(h.lab.summary({ sessionId: O3 })), n(h.lab.summary({ sessionId: K1 })), n(h.lab.summary())], [3, 1, 4]);
+    assert.equal(h.lab.views({ sessionId: O2 }).length, 2, 'the views (GET /api/lab/slices?session=) read the same chain');
+  } finally {
+    h.done();
+  }
+});

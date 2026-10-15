@@ -4,6 +4,8 @@
 import { AppError, success } from '@isnanme/core';
 import type { CreateRepoWorktreeRequest, RepoEventQuery, ScanReposRequest, SetRepoSyncRequest, UpdateRepoSettingsRequest } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
+import { workspaceGuard } from '../workspaces/authz.js';
+import { declareWorkspaceReposPolicies } from './authz.js';
 import type { ReposService } from './service.js';
 import { REPO_ID } from './text.js';
 
@@ -80,19 +82,24 @@ export function createReposRoutes(repos: ReposService): Hono {
 
 /** `/api/workspaces/:target/:name/repos…`: a workspace's tree, a scan, and its settings. Mounted in the workspaces group (its name guard applies). */
 export function createWorkspaceReposRoutes(repos: ReposService): Hono {
+  declareWorkspaceReposPolicies();
   const r = new Hono();
   const wid = (c: Context) => `${c.req.param('target')}/${c.req.param('name')}`;
+  // T-531: the seam first, with the verb declared in ./authz.ts; a workspace the caller may not see is the same 404 as a missing one.
+  const toView = workspaceGuard('view');
+  const toOperate = workspaceGuard('operate');
+  const toManage = workspaceGuard('manage');
 
-  r.get('/:target/:name/repos', async (c) => c.json(success(await repos.workspace(wid(c)))));
+  r.get('/:target/:name/repos', toView, async (c) => c.json(success(await repos.workspace(wid(c)))));
 
-  r.post('/:target/:name/repos/scan', async (c) => {
+  r.post('/:target/:name/repos/scan', toOperate, async (c) => {
     const b = await body<ScanReposRequest>(c, true);
     if (b.repoId !== undefined && (typeof b.repoId !== 'string' || !REPO_ID.test(b.repoId))) throw new AppError('VALIDATION_FAILED', 'Check the repository.', { details: { repoId: 'Not a repository id.' } });
     return c.json(success(await repos.requestScan(wid(c), ACTOR, b.repoId)));
   });
 
-  r.get('/:target/:name/repos/settings', (c) => c.json(success(repos.settings(wid(c)))));
-  r.put('/:target/:name/repos/settings', async (c) => c.json(success(repos.updateSettings(wid(c), await body<UpdateRepoSettingsRequest>(c), ACTOR))));
+  r.get('/:target/:name/repos/settings', toView, (c) => c.json(success(repos.settings(wid(c)))));
+  r.put('/:target/:name/repos/settings', toManage, async (c) => c.json(success(repos.updateSettings(wid(c), await body<UpdateRepoSettingsRequest>(c), ACTOR))));
 
   return r;
 }

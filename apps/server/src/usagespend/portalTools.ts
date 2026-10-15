@@ -59,6 +59,7 @@ function rowView(ctx: PortalToolContext, r: AttributionRow) {
     sessions: r.sessions,
     first_at: r.firstAt,
     last_at: r.lastAt,
+    ...ticketView(r),
     ...(s
       ? {
           session: {
@@ -91,7 +92,14 @@ function rowShort(ctx: PortalToolContext, r: AttributionRow) {
     total: money(r.total),
     share_pct: figure(r.share),
     ...(s ? { session: { session_id: s.sessionId, ticket_id: s.ticketId, parent_id: s.parentId, depth: s.depth, state: s.state } } : {}),
+    ...ticketView(r),
   };
+}
+
+/** By ticket (T-449): type, status, done time and the dollars apportioned from leads (the row's `total` holds them; `own` does not). */
+function ticketView(r: AttributionRow) {
+  const t = r.ticket;
+  return t ? { ticket: { type: t.type, status: t.status, done_at: t.doneAt, via_lead_usd: t.viaLeadUsd, via_lead_workers: t.viaLeadWorkers } } : {};
 }
 
 function budgetView(s: BudgetState) {
@@ -208,7 +216,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
     name: 'usage_attribution',
     title: 'Spend by',
     description:
-      'The window’s requests grouped by session (a tree: a session’s total includes the sessions it started), workspace, ticket, persona or Claude, with each row’s own and total dollars (estimates) and requests and its share; full true adds the tokens and the times. A persona is recorded when a session’s process starts, so older requests read as unknown (not_recorded), never guessed; a child session with no ticket counts under its parent’s. An agent’s token reads its own session and the ones it started only; an admin’s token reads everything, or a tree with session_id.',
+      'The window’s requests grouped by session (a tree: a session’s total includes the sessions it started), workspace, ticket, persona or Claude, with each row’s own and total dollars (estimates) and requests and its share; full true adds the tokens and the times. A persona is recorded when a session’s process starts, so older requests read as unknown (not_recorded), never guessed; a child session with no ticket counts under its parent’s. By ticket, a lead’s own dollars (a session with no ticket that started workers on tickets) are split over those tickets by its workers per ticket and shown as via_lead_usd (part of the row’s total, not of own), with the type and status of each ticket; done true keeps only tickets closed as done in the window. An agent’s token reads its own session and the ones it started only; an admin’s token reads everything, or a tree with session_id.',
     scope: 'agent',
     hints: { readOnly: true, idempotent: true },
     input: z.object({
@@ -218,6 +226,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
       claude_id: z.string().max(100).optional(),
       workspace_id: z.string().max(200).optional(),
       limit: z.number().int().min(1).max(200).optional().describe('Rows shown (root sessions for by session); the rest sum into others. Default 25.'),
+      done: z.boolean().optional().describe('By ticket only: only tickets closed as done inside the window (cost per done ticket by type is in done_by_type).'),
       ...fullInput,
     }),
     handler(ctx, args) {
@@ -227,7 +236,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
         const link = spend.sessionScope(ctx.sessionId!);
         if (link && link.claudeId !== args.claude_id) throw new AppError('FORBIDDEN', 'An agent can read only its own Claude’s requests.');
       }
-      const r = spend.attribution({ by: args.by, range: args.range, claudeId: args.claude_id, workspaceId: args.workspace_id, limit: args.limit, ...(root ? { sessionId: root } : {}) });
+      const r = spend.attribution({ by: args.by, range: args.range, claudeId: args.claude_id, workspaceId: args.workspace_id, limit: args.limit, ...(args.done ? { done: true } : {}), ...(root ? { sessionId: root } : {}) });
       return {
         summary: `${r.rows.length} rows by ${r.by} over ${r.range}: ${money(r.totals.costUsd)} (estimated) in ${r.totals.requests} requests${r.coverage.basis === 'unavailable' ? '' : `, ${r.coverage.value}% of the dollars attributed`}.`,
         by: r.by,
@@ -238,6 +247,8 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
         rows: r.rows.map((x) => (args.full ? rowView(ctx, x) : rowShort(ctx, x))),
         coverage_pct: figure(r.coverage),
         more: r.more,
+        ...(r.leadBasis ? { via_lead_basis: r.leadBasis } : {}),
+        ...(r.doneByType ? { done_by_type: r.doneByType.map((t) => ({ type: t.type, tickets: t.tickets, cost_usd: t.costUsd, per_ticket_usd: t.perTicketUsd })) } : {}),
         basis: BASIS,
         now: r.now,
       };

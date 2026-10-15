@@ -11,7 +11,7 @@ import { SocketGuard } from './sockets.js';
 import { workspaceView } from './workspaces/view.js';
 import { Reconciler, type FragmentProvider } from './delivery/reconciler.js';
 import { References } from './pools/references.js';
-import { exposedSecretValues } from './secrets/exposed.js';
+import { deliveredSecretValue, exposedSecretValues } from './secrets/exposed.js';
 import { SecretsKind } from './secrets/kind.js';
 import { registerMcpSets } from './mcp/index.js';
 import { SkillsModule } from './skills/module.js';
@@ -36,6 +36,7 @@ import { registerPersonaTools } from './personas/portalTools.js';
 import { readSessionBlob } from './personas/sessionBlobs.js';
 import { readWorkspaceFile } from './personas/workspaceFiles.js';
 import { registerSettings } from './settings/index.js';
+import { GUARD_CHANNEL, recordGuardRefusals } from './settings/ruleGuardAudit.js';
 import { BrowserModule } from './browser/index.js';
 import { PortalMcpModule } from './portalmcp/module.js';
 import { registerBuiltInPortalTools } from './portalmcp/tools/index.js';
@@ -43,6 +44,7 @@ import { internalUrlResolver } from './portalmcp/internalUrl.js';
 import { OrphanSweep } from './tickets/orphans.js';
 import { Tickets } from './tickets/service.js';
 import { CiService } from './ci/service.js';
+import { upstreamHostsFrom } from './ci/settings.js';
 import { WorkspacesCiHost } from './ci/host.js';
 import { registerCiTools } from './ci/portalTools.js';
 import { valueRedactors } from './ci/values.js';
@@ -67,6 +69,7 @@ import { DockerRuntime } from './workspaces/docker.js';
 import { attachShell, cookie } from './workspaces/shell.js';
 import { ChatController } from './chat/controller.js';
 import { BYPASS_SETTING } from './chat/bypass.js';
+import { LEAD_RULES_SETTING } from './chat/leadRules.js';
 import { AUTO_TRUST_SETTING } from './chat/trust.js';
 import { AGENT_CHILDREN_SETTING, AGENT_DEPTH_SETTING, AGENT_MESSAGES_SETTING, AGENT_SPAWNS_SETTING } from './chat/agents.js';
 import { BUDGET_SETTING, CAP_TOTAL_SETTING, CAP_WORKSPACE_SETTING } from './chat/caps.js';
@@ -149,8 +152,15 @@ if (ws.local.enabled && !PLAIN_NAME.test(ws.local.name)) {
   ws.local.name = 'local';
 }
 if (ws.local.enabled) runtimes.push(new LocalRuntime({ name: ws.local.name, state: new JsonFile(`${config.paths.data}/local-workspace.json`, {}) }));
-// Every workspace's stable id, its `<target>/<name>` alias and its stored runtime name (T-42), kept in the store.
-const workspaces = new Workspaces(runtimes, new JsonFile(`${config.paths.data}/pending-creates.json`, []), {}, new WorkspaceIdentities(store));
+// Every workspace's stable id, its `<target>/<name>` alias and its stored runtime name (T-42), kept in the store. Each target's last good
+// list (T-515) is kept beside the pending creates, so a portal restarted while a target's API is down still lists its workspaces.
+const workspaces = new Workspaces(
+  runtimes,
+  new JsonFile(`${config.paths.data}/pending-creates.json`, []),
+  {},
+  new WorkspaceIdentities(store),
+  new JsonFile(`${config.paths.data}/last-known-workspaces.json`, {}),
+);
 
 // Chat sessions: one controller shared by the REST routes and the chat socket.
 const chatController = new ChatController(store, workspaces);
@@ -219,6 +229,8 @@ poolService.reconciler = reconciler;
 settingsModule.reconciler = reconciler;
 // Bypass in chat (chat PRD FR20): the interim policy switch, and what is true of a workspace for the confirmation.
 chatController.bypassAllowed = () => settingsModule.settings.get<boolean>(BYPASS_SETTING);
+// T-561: crew leads launch with the lead rules (a hook in their --settings) while the policy is on; it applies at each lead's next start.
+chatController.leadRulesOn = () => settingsModule.settings.get<boolean>(LEAD_RULES_SETTING);
 chatController.autoTrustRules = () => settingsModule.settings.get<boolean>(AUTO_TRUST_SETTING);
 // How many sessions may be awake (chat PRD FR39): per workspace and in total, from the shared settings.
 chatController.liveCaps = () => ({ perWorkspace: settingsModule.settings.get<number>(CAP_WORKSPACE_SETTING), total: settingsModule.settings.get<number>(CAP_TOTAL_SETTING) });
@@ -237,6 +249,8 @@ settingsModule.settings.onChange((key) => key === BYPASS_SETTING && void chatCon
 // The Restart hint (chat PRD, Restart): when the latest delivery into a workspace landed; a session whose process is older offers a Restart.
 chatController.deliveredAt = (id) => reconciler.row(id)?.applied_at ?? null;
 chatController.configChanges = (id, sinceMs) => reconciler.changesSince(id, sinceMs);
+// T-472: per delivery, so a context-only delivery (hot-reloaded) neither shows the hint nor moves the time an automatic restart waits on.
+chatController.configChangeLog = (id, sinceMs) => reconciler.changeLogSince(id, sinceMs);
 reconciler.onChange((id) => chatController.deliveryChanged(id));
 chatController.bypassFacts = (id) => ({
   internet: true,
@@ -254,6 +268,13 @@ const outbox = new Outbox(store, (t) => workspaces.runtimeFor(t));
 outbox.subscribe('account', (workspaceId, events) => health.onSignals(workspaceId, events), () => pools.assignedWorkspaces());
 // MCP launcher and helper events: starts and failures, never values (MCP set §13.2).
 outbox.subscribe('mcp', (workspaceId, events) => mcpSets.onOutbox(workspaceId, events), () => mcpSets.assignedWorkspaces());
+// The rule-file guard's refusals (D-60, T-404): the workspaces the policy (and the guard) landed in that are not removed;
+// the pull itself skips a stopped one, and the outbox caps how many pull at once.
+outbox.subscribe(
+  GUARD_CHANNEL,
+  (workspaceId, events) => void recordGuardRefusals(store, workspaceId, events),
+  () => settingsModule.agentEnv.guardedWorkspaces((id) => workspaces.resolve(id) !== null),
+);
 // A workspace that stops (or is removed) takes its chat sessions with it: they stop cleanly now and read Interrupted, resumable once it is back.
 workspaces.hooks.beforeStop = async (id) => {
   await chatController.endWorkspaceSessions(id, 'The workspace was stopped').catch(() => undefined);
@@ -318,7 +339,10 @@ const live = new LiveHub(
 );
 // Needs you (docs/prd/attention.md): what waits for a person, read from each module's own state. The topics of the modules it reads
 // (pools: MCP catalog and skills; tickets; CI) make it look again; the chat's events and a minute's tick are chained further down.
-const attention = createAttention(store, { publish: () => live.publish('attention') });
+const attention = createAttention(store, {
+  publish: () => live.publish('attention'),
+  agentAssignUserTags: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.agentAssignUserTags),
+});
 const ATTENTION_TOPICS = new Set<LiveTopic>(['pools', 'tickets', 'ci']);
 const notify = (...topics: LiveTopic[]) =>
   topics.forEach((t) => {
@@ -391,6 +415,8 @@ const tickets = new Tickets(store, new ChatTicketSessions(chatController), {
   link: (id) => `${(config.portalMcp.uiUrl ?? `http://localhost:${config.port}`).replace(/\/+$/, '')}/admin/tickets/${id}`,
   workspaceRefs: workspaces.identities,
   orphanAfterMin: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.orphanAfterMin),
+  agentOpenPerWorkspace: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.agentOpenPerWorkspace),
+  agentAssignUserTags: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.agentAssignUserTags),
 });
 tickets.onChange = () => notify('tickets');
 // A bump reaches into a session: the platform audit (created further down) records who, which ticket, which session and how (FR30).
@@ -400,6 +426,9 @@ tickets.start();
 const orphanSweep = new OrphanSweep(tickets);
 orphanSweep.start();
 chatController.ticketExists = (id) => tickets.exists(id);
+// T-546: the crew digest's window is a setting, and each worker's line points to its latest ticket comment.
+chatController.crewSettings = (key) => settingsModule.settings.get(key);
+chatController.crewTicketOf = (sessionId) => tickets.latestCommentOf(sessionId);
 // T-270: a continuation takes its predecessors' tickets in the transaction that creates it.
 chatController.continueTickets = (to, from) => tickets.continueFrom(to, from);
 // T-136: recover in place reads its cap and pause from the settings; past the cap, ONE watchdog ticket says so (facts, no transcript).
@@ -445,6 +474,12 @@ const ci = new CiService(store, new WorkspacesCiHost(workspaces), {
   redactFor: ciValues.redactFor,
   streamFor: ciValues.streamFor,
   secrets: (id, name) => secretName(references, id, name),
+  // T-557: a runner taking this workspace's run gets the secrets it names as a lease, in memory and on stdin only.
+  // T-486 S2: the same value checks the upstream webhook's signature (the remote's hook secret), in memory only. One rule, one helper:
+  // both read a SECRET (never a variable) the workspace's sets deliver, and names are unique across a workspace's sets (decision on T-486).
+  secretValue: (id, name) => deliveredSecretValue(poolService, id, name),
+  // T-486 S2: the upstream host allow-list setting, read at each use.
+  upstreamHosts: upstreamHostsFrom(settingsModule.settings),
   // Deployment approvals and environment protection changes (FR41) go to the platform audit, created further down.
   audit: (e) => platform.audit.record(e),
 });
@@ -469,6 +504,8 @@ chatController.modelWindow = (claudeId, family) => claudeUsage.windowKeys(claude
 // T-294: a worker started on `auto` goes to a Claude of its workspace with room by a fresh, measured reading (the Move ranking and the
 // auto-transfer's freshness test, chat/agents.ts); a named Claude must run on a plan. Both read the usage report's rows.
 chatController.spawnUsage = async () => (await claudeUsage.report()).claudes;
+// T-490 (D-63): the model a worker's role runs on by the workspace persona's agent definition: session_spawn's default and its opus check.
+chatController.roleModel = (workspaceId, role) => personas.roleModel(workspaceId, role);
 chatController.returnToOriginalModel = () => settingsModule.settings.get<boolean>(AUTO_SETTING_KEYS.returnToOriginalModel) === true;
 // Usage spend: who spent what (per session, workspace, ticket, persona), budgets with alerts and spike detection, over the recorded requests
 // (claude-usage PRD §21 to §26). The chat controller tells it of each recorded turn and each process start, and asks it before a message
@@ -501,7 +538,7 @@ chatController.sendGate = (info) => usageSpend.gate(info);
 registerUsageSpendTools(usageSpend);
 // The efficiency lab (T-287, claude-usage PRD §28): per-slice counts from every accepted stream line, experiments, outcomes from the
 // tickets' timelines, the read routes and Portal MCP tools (lab/authz.ts), and retention of the request rows (14 days, once a day).
-const lab = new Lab({ store, log: (m) => console.warn(m) });
+const lab = new Lab({ store, log: (m) => console.warn(m), paceSource: async () => (await claudeUsage.report()).claudes });
 chatController.onStreamLine = (sessionId, raw) => lab.line(sessionId, raw);
 registerLabTools(lab);
 lab.start();

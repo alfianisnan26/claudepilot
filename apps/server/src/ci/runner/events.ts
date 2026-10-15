@@ -26,7 +26,7 @@ export interface RefUpdate {
 }
 
 /** Writes an event file for each update that is a branch or tag with a sane name; returns how many were written and how many were dropped. */
-export function emitEvents(repo: string, updates: RefUpdate[], via: 'push' | 'portal'): { written: string[]; dropped: number } {
+export function emitEvents(repo: string, updates: RefUpdate[], via: 'push' | 'portal', by?: string): { written: string[]; dropped: number } {
   ensureDir(eventsDir());
   const written: string[] = [];
   let dropped = 0;
@@ -40,7 +40,7 @@ export function emitEvents(repo: string, updates: RefUpdate[], via: 'push' | 'po
       continue;
     }
     const id = `${Date.now()}-${randomBytes(4).toString('hex')}`;
-    const ev: CiEventFile = { v: 1, id, at: nowIso(), repo, kind: u.new === NULL_SHA ? 'delete' : 'push', ref: u.ref, old: u.old, new: u.new, by: username(), via };
+    const ev: CiEventFile = { v: 1, id, at: nowIso(), repo, kind: u.new === NULL_SHA ? 'delete' : 'push', ref: u.ref, old: u.old, new: u.new, by: by ?? username(), via };
     writeAtomic(join(eventsDir(), `${id}.json`), JSON.stringify(ev));
     written.push(id);
   }

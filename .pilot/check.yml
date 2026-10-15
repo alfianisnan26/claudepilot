@@ -1,0 +1,21 @@
+# Check (owner, 2026-10-15: "yang claudepilot bisa juga dibikin main kesana [the Mac runner], fallback ke workspace"): the release gate
+# (typecheck, web build, server suite) on every push to integration that changes code. It runs on the Mac runner when one with the label
+# `mac` is online and free; otherwise, or when the hand-off fails, the run starts in this workspace and the step sends the same gate to the
+# cluster as one Job (D-61: nothing heavy in the pod). The deploy pipeline keeps its own gate: this is the early signal, not the release.
+# The logic lives in .pilot/scripts/check.sh.
+name: Check
+on:
+  push:
+    branches: [integration]
+  manual: {}
+timeout: 2h
+concurrency:
+  group: check-claudepilot
+jobs:
+  gate:
+    name: Gate
+    runs-on: { labels: [mac], fallback: workspace }
+    timeout: 110m
+    steps:
+      - name: Typecheck, web build, server suite
+        run: bash .pilot/scripts/check.sh

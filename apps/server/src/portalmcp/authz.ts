@@ -3,8 +3,8 @@
 // below it and an agent's per-session token (`cpst_`) is refused outright (agent_box). Today the seam answers the one owner through the
 // cookie; the declarations are what the multi-user layer enforces.
 
-import type { ObjectRef, RoutePolicies } from '@portal/contracts';
-import { declarePolicies } from '../authz/seam.js';
+import type { ObjectRef, RoutePolicies, ToolPolicies } from '@portal/contracts';
+import { declarePolicies, declareToolPolicies } from '../authz/seam.js';
 
 /** The personal object a token route acts on: one token, or the person's tokens as a whole (minting, a label). */
 export const tokenRef = (id = '*'): ObjectRef => ({ type: 'personal', id: `pmcp_token:${id}` });
@@ -23,10 +23,29 @@ export const PORTAL_MCP_POLICIES: RoutePolicies = {
   [`GET ${API}/audit`]: { kind: 'signed-in' },
 };
 
+/**
+ * T-336: `session_start` operates the workspace it starts in, the Claude it names and, with `parent`, the parent session (the handler asks the seam, and a refused
+ * parent is the same not found as a missing one: tools/sessions.ts `leadFor`).
+ */
+/** T-336, T-348: session_start's one answer for a parent that is missing, ended, archived, elsewhere or refused (the dispatch's check and `leadFor`). */
+export const NO_PARENT = 'No such live session in that workspace to be the parent. List them with session_list.';
+
+export const PORTAL_MCP_TOOL_POLICIES = {
+  session_start: {
+    kind: 'objects',
+    checks: [
+      { type: 'workspace', verb: 'operate', arg: 'workspace_id' },
+      { type: 'claude', verb: 'operate', arg: 'claude_id', optional: true },
+      { type: 'session', verb: 'operate', arg: 'parent', optional: true, notFound: NO_PARENT },
+    ],
+  },
+} satisfies ToolPolicies;
+
 let declared = false;
 /** Declares the routes once (idempotent: modules load more than once in tests). */
 export function declarePortalMcpPolicies(): void {
   if (declared) return;
   declared = true;
   declarePolicies('portalmcp', PORTAL_MCP_POLICIES);
+  declareToolPolicies('portalmcp', PORTAL_MCP_TOOL_POLICIES);
 }

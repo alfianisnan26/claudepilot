@@ -1,16 +1,16 @@
 # Heavy agent work (a test file, the suite, tsc, a build, a browser check) as a Job in the cluster, on CPUs other than the development pod's
 # (T-107). Started only by scripts/job-run.sh, which fills in the __PLACEHOLDERS__ (the command
 # base64, everything else validated by the script), makes the Secret of the same name (npm or Gitea credentials) for the Job's life, and lets the Job out
-# of suspend when the caps allow (3 at once cluster-wide, 2 per chat; the queue is the creation order of the suspended Jobs).
-# Like gate-job.yaml: it prefers a node WITHOUT a development workspace pod, requests 1 CPU (limit 4), and /tmp (the clone, node_modules, the
-# tests' databases) is an emptyDir in memory. npm's cache is in /tmp too: a cold `npm ci` is about 20 s in a Job (gate logs), a shared cache
+# of suspend when the caps allow (3 at once cluster-wide, 2 per chat, 2 per program; the queue is the creation order of the suspended Jobs).
+# Like gate-job.yaml: it prefers a node WITHOUT a development workspace pod, requests 1 CPU (limit 4), requests memory equal to its limit, and
+# /tmp (the clone, node_modules, the tests' databases) is an emptyDir in memory that counts against that limit. npm's cache is in /tmp too: a cold `npm ci` is about 20 s in a Job (gate logs), a shared cache
 # volume would have to be a node-bound local-path PVC (the only storage class) for a few seconds' gain.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: __NAME__
   namespace: isnan-claudepilot
-  labels: {app: claudepilot-job-run, job-run/chat: __CHAT__, job-run/role: __ROLE__, job-run/repo: __REPO__}
+  labels: {app: claudepilot-job-run, job-run/chat: __CHAT__, job-run/role: __ROLE__, job-run/repo: __REPO__, job-run/program: __PROGRAM__}
   annotations: {job-run/owner: "__OWNER__"}
 spec:
   suspend: true
@@ -24,8 +24,33 @@ spec:
       restartPolicy: Never
       automountServiceAccountToken: false
       affinity:
+        # Placement (T-365, T-524, T-611). The rules are PREFERRED (a required rule left every Job Pending, 2026-10-15); the one required rule is added only while the master's real memory is over the line (see the marker).
+        # - nodeAffinity: away from the control-plane node (k3s-master, 15 GB, also the API server; label node-role.kubernetes.io/control-plane).
+        # - podAntiAffinity: away from the portal's node (a heavy Job there starved the portal's SQLite fsync, T-365; IO there is T-513) and
+        #   from development workspace pods.
+        # How the weights add up: kube-scheduler scales each plugin's score to 0..100 before its plugin weight (NodeAffinity 2,
+        # InterPodAffinity 2), so a term weight only ranks terms inside its own rule. Weight 100 on the node rule cannot outrank the portal rule
+        # by number. With two nodes, and the portal on k3s-node2, the two rules cancel, and the free-resource score (LeastAllocated: the node
+        # with the most memory and CPU left after this Job's request) decides. That is what keeps k3s-master safe, since the memory request is
+        # the real limit (resources below): the master takes a Job only when its requests leave room for the whole of it, and node2 (30 GB) wins
+        # while it has more free. The Jobs do not all pile onto the portal's node: the portal rule still pulls the other way.
+        # The gap (T-611): the scheduler counts memory REQUESTS, but the master's own pods (API server, Argo CD, Gitea, Hermes, LiteLLM)
+        # use about 10 GiB of real memory with small or no requests, so a 4 GiB Job "fits" while the master's real use goes to 83%.
+        # scripts/job-run.sh reads the master's real use (kubectl top) and, over JOB_RUN_MASTER_MAX_PCT (75), replaces the marker below with
+        # a REQUIRED rule away from the control plane (the Job then waits for k3s-node2 or for the master to have room). Under the line, or
+        # when the metrics fail, the marker is empty and only the preferred rules apply (a metrics failure never blocks every Job).
+        nodeAffinity:
+          __MASTER_REQUIRED__
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference: {matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                namespaces: [isnan-claudepilot]
+                labelSelector: {matchLabels: {app: claudepilot-portal}}
             - weight: 100
               podAffinityTerm:
                 topologyKey: kubernetes.io/hostname
@@ -42,6 +67,8 @@ spec:
             - {name: JR_ARTIFACTS, value: "__ARTIFACTS__"}
             - {name: JR_ARTIFACT_MAX, value: "__ARTMAX__"}
             - {name: JR_CMD, value: "__CMD__"}
+            - {name: JR_AGAINST, value: "__AGAINST__"}
+            - {name: JR_KEEP, value: "__KEEP__"}
             - {name: NODE_NAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}
             - {name: NODE_AUTH_TOKEN, valueFrom: {secretKeyRef: {name: __NAME__, key: node-auth-token, optional: true}}}
             - {name: GIT_USER, valueFrom: {secretKeyRef: {name: __NAME__, key: git-user, optional: true}}}
@@ -55,7 +82,19 @@ spec:
               export HOME=$root/home npm_config_cache=$root/npm-cache npm_config_update_notifier=false CI=1
               mkdir -p "$HOME" "$root/w"
               # Credentials only through a helper that reads the environment: the token is never on a command line or in a URL.
-              git config --global credential.helper '!f() { [ -n "${GIT_TOKEN:-}" ] || exit 0; echo "username=${GIT_USER:-git}"; echo "password=$GIT_TOKEN"; }; f'
+              helper='!f() { [ -n "${GIT_TOKEN:-}" ] || exit 0; echo "username=${GIT_USER:-git}"; echo "password=$GIT_TOKEN"; }; f'
+              if [ "$JR_REPO_URL" = https://github.com/isnanme/event.git ]; then
+                # Event (T-491): the token is offered to that one URL and path only (useHttpPath), never to another host, an --also
+                # repository, an npm git dependency or any other https fetch. The .npmrc is written for Event alone, too.
+                git config --global credential."$JR_REPO_URL".helper "$helper"
+                git config --global credential."$JR_REPO_URL".useHttpPath true
+                # GitHub Packages for @isnanme: a repository without its own auth line (Event's) still installs. The file holds a
+                # reference that npm expands, never the token; a repository's own .npmrc still wins.
+                # shellcheck disable=SC2016 # the reference stays literal
+                [ -z "${NODE_AUTH_TOKEN:-}" ] || printf '%s\n' '@isnanme:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$HOME/.npmrc"
+              else
+                git config --global credential.helper "$helper"
+              fi
               t0=$(date +%s)
               fetch() { # <dir> <url> <ref>
                 git init -q "$root/w/$1" && git -C "$root/w/$1" fetch -q --depth 1 "$2" "$3" && git -C "$root/w/$1" checkout -q FETCH_HEAD \
@@ -66,11 +105,15 @@ spec:
               fetch "$main" "$JR_REPO_URL" "$JR_REF"
               sha=$(git -C "$root/w/$main" rev-parse --short HEAD); t1=$(date +%s)
               say "checked out $main at $sha in $((t1 - t0))s"
+              npmci() { # <dir>: npm ci, once more when it fails (a flake), and it says so
+                [ -f "$root/w/$1/package-lock.json" ] || return 0
+                (cd "$root/w/$1" && npm ci --no-audit --no-fund --loglevel=error) && return 0
+                rc=$?; say "npm ci failed in $1 (rc=$rc); retrying once"
+                (cd "$root/w/$1" && npm ci --no-audit --no-fund --loglevel=error) && { say "npm ci passed on the retry in $1"; return 0; }
+                rc=$?; say "npm ci failed in $1 (rc=$rc)"; say "EXIT $rc"; exit "$rc"
+              }
               if [ "$JR_STEPS" = npm-ci ]; then
-                for d in $(for a in $JR_ALSO; do echo "${a%%=*}"; done) "$main"; do
-                  [ -f "$root/w/$d/package-lock.json" ] || continue
-                  (cd "$root/w/$d" && npm ci --no-audit --no-fund --loglevel=error) || { rc=$?; say "npm ci failed in $d (rc=$rc)"; say "EXIT $rc"; exit "$rc"; }
-                done
+                for d in $(for a in $JR_ALSO; do echo "${a%%=*}"; done) "$main"; do npmci "$d"; done
               fi
               t2=$(date +%s); say "steps ($JR_STEPS) in $((t2 - t1))s; running the command"
               cd "$root/w/$main" && printf '%s' "$JR_CMD" | base64 -d > "$root/cmd.sh"
@@ -85,6 +128,28 @@ spec:
                 else say "artifacts: nothing at $JR_ARTIFACTS"; fi
               fi
               say "SUMMARY $main@$sha checkout=$((t1 - t0))s steps=$((t2 - t1))s run=$((t3 - t2))s rc=$rc node=${NODE_NAME:-?}"
+              if [ -n "${JR_AGAINST:-}" ]; then
+                # The proof (T-333): the same command on the other ref, in this checkout (node_modules stays; npm ci again only when the
+                # lockfile differs), with the test files named in JR_KEEP taken from the first ref. Passes on the ref and fails on the
+                # other = PROOF. Exit 0 for a proof, 1 for none, 2 when the other ref or a kept path is missing.
+                rc1=$rc; refsha=$(git rev-parse HEAD)
+                noproof() { say "SUMMARY-AGAINST $JR_AGAINST rc=${1:-?}"; say "PROOF: NO PROOF: $2"; say "EXIT ${3:-1}"; exit "${3:-1}"; }
+                git fetch -q --depth 1 "$JR_REPO_URL" "$JR_AGAINST" 2>/dev/null || noproof "-" "$JR_AGAINST is not on the remote (use a full commit hash or a branch)" 2
+                afull=$(git rev-parse FETCH_HEAD); asha=$(git rev-parse --short FETCH_HEAD)
+                git checkout -q -f "$afull" || noproof "-" "cannot check out $JR_AGAINST" 2
+                # shellcheck disable=SC2086 # a list of paths
+                if [ -n "${JR_KEEP:-}" ]; then git checkout -q "$refsha" -- $JR_KEEP || noproof "-" "kept test path not at $JR_REF: $JR_KEEP" 2; fi
+                if [ "$JR_STEPS" = npm-ci ] && ! git diff --quiet "$refsha" "$afull" -- package-lock.json; then say "lockfile differs on $JR_AGAINST: npm ci again"; npmci "$main"; fi
+                tA=$(date +%s)
+                bash -o pipefail "$root/cmd.sh"; rc2=$?
+                say "SUMMARY-AGAINST $main@$asha tests-from=$sha kept=${JR_KEEP:-none} run=$(( $(date +%s) - tA ))s rc=$rc2"
+                if [ "$rc1" -ne 0 ]; then say "PROOF: NO PROOF: it fails on $JR_REF ($sha) already (rc=$rc1)"; rc=1
+                elif [ "$rc2" -eq 0 ]; then say "PROOF: NO PROOF: it passes on both $JR_REF ($sha) and $JR_AGAINST ($asha)"; rc=1
+                else say "PROOF: passes on $JR_REF ($sha), fails on $JR_AGAINST ($asha) (rc=$rc2)"; rc=0; fi
+              fi
+              # The Job's own memory (T-524): the cgroup's peak (in-memory /tmp included) against its limit, the number the limit is sized from.
+              cg=${JR_CGROUP:-/sys/fs/cgroup}; mib() { v=$(cat "$cg/$1" 2>/dev/null) && [[ $v =~ ^[0-9]+$ ]] && echo "$((v / 1048576))Mi" || echo "${v:-?}"; }
+              say "MEMORY peak=$(mib memory.peak) limit=$(mib memory.max) oom_kills=$(sed -n 's/^oom_kill //p' "$cg/memory.events" 2>/dev/null | grep . || echo '?')"
               say "EXIT $rc"
               exit "$rc"
               # JOB-RUN-SCRIPT END
@@ -92,10 +157,12 @@ spec:
             - {name: tmp, mountPath: /tmp}
             - {name: shm, mountPath: /dev/shm}
           resources:
-            requests: {cpu: 1000m, memory: 2Gi}
-            limits: {cpu: "4", memory: 8Gi}
+            # Memory request = limit (T-524): with 2Gi requested and 8Gi allowed a 4.1 GB Job fitted k3s-master "on paper" and took it to
+            # 92% (portal 503s). job-run.sh fills in 4Gi, or 8Gi with --big, and says when a Job is OOMKilled or Pending for memory.
+            requests: {cpu: 1000m, memory: __MEMORY__}
+            limits: {cpu: "4", memory: __MEMORY__}
       volumes:
         - name: tmp
-          emptyDir: {medium: Memory, sizeLimit: 3Gi}
+          emptyDir: {medium: Memory, sizeLimit: __TMP_SIZE__}
         - name: shm
           emptyDir: {medium: Memory, sizeLimit: 1Gi}

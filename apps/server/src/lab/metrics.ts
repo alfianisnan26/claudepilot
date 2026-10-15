@@ -188,7 +188,10 @@ export function computeSlice(meta: SliceRow, requests: readonly RequestRow[], to
 }
 
 export interface SliceFilter {
+  /** One session: through `Lab`, the session with the rows of its `continued_from` chain (T-312). */
   sessionId?: string;
+  /** These sessions only (what `Lab` turns `sessionId` into). */
+  sessionIds?: readonly string[];
   kind?: LabSliceKind;
   ticket?: string;
   role?: string;
@@ -206,6 +209,7 @@ export function sliceMetrics(db: DatabaseSync, filter: SliceFilter = {}): LabSli
   const where: string[] = [];
   const args: SQLInputValue[] = [];
   if (filter.sessionId) (where.push('session_id = ?'), args.push(filter.sessionId));
+  if (filter.sessionIds) (where.push(`session_id IN (${filter.sessionIds.map(() => '?').join(', ') || 'NULL'})`), args.push(...filter.sessionIds));
   if (filter.kind) (where.push('kind = ?'), args.push(filter.kind));
   if (filter.ticket) (where.push('ticket = ?'), args.push(filter.ticket));
   if (filter.role) (where.push('role = ?'), args.push(filter.role));

@@ -15,6 +15,7 @@ import {
   type SpikeSnoozeUntil,
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
+import { attributionUrl } from './attribution';
 
 /** Same shape as the other features' `request`: same-origin credentials, the `{ data }` / `{ error }` envelope unwrapped. */
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -42,9 +43,10 @@ export const usageSpendApi = {
   summary: () => request<SpendSummary>('GET', USAGE_SPEND_API.summary),
   /** The last day's budget and spike alerts that are not snoozed, newest first. */
   alerts: () => request<SpendAlert[]>('GET', USAGE_SPEND_API.alerts),
-  attribution: (by: AttributionBy, range: ChatUsageRange) => request<AttributionReport>('GET', `${USAGE_SPEND_API.attribution}?by=${by}&range=${range}`),
-  /** A download link for the same rows (the browser sends the session cookie). */
-  attributionCsv: (by: AttributionBy, range: ChatUsageRange) => `${USAGE_SPEND_API.attribution}?by=${by}&range=${range}&format=csv`,
+  /** `done`: by ticket, only tickets closed as done in the window. */
+  attribution: (by: AttributionBy, range: ChatUsageRange, done = false) => request<AttributionReport>('GET', attributionUrl(USAGE_SPEND_API.attribution, by, range, { done })),
+  /** A download link for the same rows, the same filter (the browser sends the session cookie). */
+  attributionCsv: (by: AttributionBy, range: ChatUsageRange, done = false) => attributionUrl(USAGE_SPEND_API.attribution, by, range, { done, csv: true }),
   budgets: () => request<BudgetsReport>('GET', USAGE_SPEND_API.budgets),
   createBudget: (input: BudgetInput) => request<BudgetState>('POST', USAGE_SPEND_API.budgets, input),
   updateBudget: (id: string, input: Partial<BudgetInput>) => request<BudgetState>('PUT', USAGE_SPEND_API.budget(id), input),

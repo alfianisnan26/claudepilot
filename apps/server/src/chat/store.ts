@@ -21,7 +21,7 @@ import type {
   ChatTask,
   ChatWorktree,
 } from '@portal/contracts';
-import { TASK_EVENTS_MAX } from '@portal/contracts';
+import { CHAT_SPAWN_WHY_MAX, TASK_EVENTS_MAX } from '@portal/contracts';
 import { createHash, randomBytes } from 'node:crypto';
 import { posix } from 'node:path';
 import type { Store } from '../store/store.js';
@@ -97,9 +97,17 @@ export type ChatSessionRow = {
   subagents?: number | null;
   /** T-294 (migration 775): what a worker reports to its lead unasked (`idle`, `end`, `none`); null: `idle`. */
   report?: string | null;
+  /** T-548 (migration 779): 1 starts QA when a worker of this session ends with `DONE <sha>`; 0 (default) never. */
+  auto_handoff?: number | null;
   worktree_path?: string | null;
   worktree_branch?: string | null;
   worktree_repo?: string | null;
+  /** T-476 (migration 776): a worker's folder branch at its start; null otherwise. */
+  folder_branch?: string | null;
+  /** T-490 (migration 777): why its lead started it above its role's model (D-63); null: none given. */
+  spawn_why?: string | null;
+  /** T-561 (migration 778): 1 when its starter marked it a crew lead; null otherwise. */
+  lead?: number | null;
   bypass_capable?: number | null;
   claude_session_id?: string | null;
   cost_base_usd?: number | null;
@@ -201,6 +209,8 @@ export interface ChatSessionPatch {
   /** T-294: its limits (migration 774); null workers: the global setting. */
   maxWorkers?: number | null;
   subagents?: boolean;
+  /** T-548: auto hand-off (migration 779). */
+  autoHandoff?: boolean;
   title?: string;
   ticketId?: string | null;
   /** Sets or clears the session's worktree (its three columns together). */
@@ -386,6 +396,8 @@ export class ChatStore {
     parentId?: string | null;
     startedBy?: string | null;
     worktree?: ChatWorktree | null;
+    /** T-476: a worker's folder branch at its start (no worktree of its own). */
+    folderBranch?: string | null;
     bypassCapable?: boolean;
     /** The ended session it continues (T-270). */
     continuedFrom?: string | null;
@@ -394,15 +406,20 @@ export class ChatStore {
     /** T-294: its limits, already checked (a worker's no wider than its parent's). Absent: null (the global setting) and on. */
     maxWorkers?: number | null;
     subagents?: boolean;
+    /** T-490 (D-63): why its lead started it above its role's model; redacted and capped here. */
+    spawnWhy?: string | null;
+    /** T-561: its starter marked it a crew lead (stored 1; otherwise null). */
+    lead?: boolean;
   }): ChatSession {
     const now = this.#stamp();
     const db = this.#writable();
+    const why = opts.spawnWhy?.trim() ? redact(opts.spawnWhy.trim()).slice(0, CHAT_SPAWN_WHY_MAX) : null;
     db
       .prepare(
         `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
            ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from, agent,
-           max_workers, subagents)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           max_workers, subagents, folder_branch, spawn_why, lead)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         opts.id,
@@ -427,6 +444,9 @@ export class ChatStore {
         opts.agent ?? null,
         opts.maxWorkers ?? null,
         opts.subagents === false ? 0 : 1,
+        opts.worktree ? null : (opts.folderBranch ?? null),
+        why,
+        opts.lead === true ? 1 : null,
       );
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(opts.id, opts.claudeId ?? '', opts.id, opts.cwd, now);
@@ -469,9 +489,30 @@ export class ChatStore {
     return rows.map((r) => this.toSession(this.#keyed(r)));
   }
 
+  /** T-561: whether any session (live or ended) was started as a worker of `id`: one that ever had workers is a crew lead. */
+  hasWorkers(id: string): boolean {
+    return this.#db().prepare('SELECT 1 FROM chat_sessions WHERE parent_id = ? LIMIT 1').get(id) !== undefined;
+  }
+
   /** T-294: what a worker reports to its lead unasked (`session_spawn` `report`), set once when it is started. */
   setReport(sessionId: string, report: 'idle' | 'end' | 'none'): void {
     this.#writable().prepare('UPDATE chat_sessions SET report = ? WHERE id = ?').run(report, sessionId);
+  }
+
+  /**
+   * T-294: the workers of `from` that have not ended report to `to` from now on (a continuation takes over its predecessor's live crew);
+   * ended ones stay where they were (history). Returns the ids moved.
+   */
+  adoptLiveChildren(from: string, to: string): string[] {
+    const ids = (this.#db().prepare(`SELECT id FROM chat_sessions WHERE parent_id = ? AND state != 'ended'`).all(from) as { id: string }[]).map((r) => r.id);
+    if (ids.length) this.#writable().prepare(`UPDATE chat_sessions SET parent_id = ? WHERE parent_id = ? AND state != 'ended'`).run(to, from);
+    return ids;
+  }
+
+  /** The newest session that continues `id` (its `continued_from`), or null. */
+  continuationOf(id: string): string | null {
+    const row = this.#db().prepare('SELECT id FROM chat_sessions WHERE continued_from = ? ORDER BY created_at DESC LIMIT 1').get(id) as { id: string } | undefined;
+    return row?.id ?? null;
   }
 
   /** Sessions that report to `from` report to `to` instead (a transfer: the successor carries on as the parent). */
@@ -539,10 +580,13 @@ export class ChatStore {
       ticketId: row.ticket_id ?? null,
       parentId: row.parent_id ?? null,
       worktree: row.worktree_path ? { path: row.worktree_path, branch: row.worktree_branch ?? '', repo: row.worktree_repo ?? '' } : null,
+      ...(row.folder_branch ? { folderBranch: row.folder_branch } : {}),
       startedBy: row.started_by ?? null,
       agent: row.agent ?? null,
       maxWorkers: row.max_workers ?? null,
       subagents: row.subagents !== 0,
+      ...(row.spawn_why ? { spawnWhy: row.spawn_why } : {}),
+      ...(row.lead === 1 ? { lead: true } : {}),
     };
   }
 
@@ -689,6 +733,25 @@ export class ChatStore {
     return rows.map((r) => this.#toEvent(r));
   }
 
+  /**
+   * At most `count` events before `before` (from the newest when null), NEWEST FIRST: a page of the transcript (T-376, `eventPage.ts`).
+   * Keyset on the primary key's `seq`, never an offset (D-58).
+   */
+  historyBefore(sessionId: string, before: number | null, count: number): ChatEvent[] {
+    const rows = this.#db()
+      .prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?')
+      .all(sessionId, before ?? Number.MAX_SAFE_INTEGER, count) as EventRow[];
+    return rows.map((r) => this.#toEvent(r));
+  }
+
+  /** One stored event by its seq, whole, or null. */
+  event(sessionId: string, seq: number): ChatEvent | null {
+    const row = this.#db().prepare('SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq = ?').get(sessionId, seq) as
+      | EventRow
+      | undefined;
+    return row ? this.#toEvent(row) : null;
+  }
+
   /** The running cost the session's newest `result` reported, or null before the first. */
   lastResultCost(sessionId: string): number | null {
     const row = this.#db()
@@ -820,6 +883,7 @@ export class ChatStore {
     if (patch.autoApply !== undefined) set('auto_apply', patch.autoApply === null ? null : patch.autoApply ? 1 : 0);
     if (patch.maxWorkers !== undefined) set('max_workers', patch.maxWorkers);
     if (patch.subagents !== undefined) set('subagents', patch.subagents ? 1 : 0);
+    if (patch.autoHandoff !== undefined) set('auto_handoff', patch.autoHandoff ? 1 : 0);
     if (patch.title !== undefined) set('title', patch.title);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
     if (patch.endedFor !== undefined) set('ended_for', patch.endedFor);
@@ -1206,6 +1270,14 @@ export class ChatStore {
       | { scan_hash: string | null; trusted_at: string }
       | undefined;
     return row ? { hash: row.scan_hash, trustedAt: row.trusted_at } : null;
+  }
+
+  /** The folders of a workspace trusted at this hash, the latest first, at most `limit` (T-366, D-62: a clone or worktree of the same repository). */
+  foldersTrustedAt(workspaceId: string, hash: string, limit: number): string[] {
+    const rows = this.#db()
+      .prepare('SELECT folder FROM chat_folder_trust WHERE workspace_id = ? AND scan_hash = ? ORDER BY trusted_at DESC, folder LIMIT ?')
+      .all(workspaceId, hash, limit) as { folder: string }[];
+    return rows.map((r) => r.folder);
   }
 
   /** Trusts a folder as scanned: its hash, what the scan named (names only, never values), when and by whom. */

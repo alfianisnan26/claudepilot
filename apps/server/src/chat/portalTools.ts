@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
-import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, CHAT_SESSION_TITLE_MAX, sessionRef, workspaceRef, type ChatControl, type ChatPermissionMode, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
+import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, CHAT_SESSION_TITLE_MAX, CHAT_SPAWN_WHY_MAX, sessionRef, workspaceRef, type ChatControl, type ChatPermissionMode, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
 import { actorOfPrincipal, requireCan } from '../authz/seam.js';
 import { fullInput } from '../portalmcp/compact.js';
+import { costFields } from '../portalmcp/tools/common.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
-import { SPAWN_CLAUDE_HELP, WORKER_REPORTS, type SpawnClaudeWhy, type WorkerReport } from './agents.js';
+import { SPAWN_CLAUDE_HELP, WORKER_REPORTS, spawnModel, type SpawnClaudeWhy, type WorkerReport } from './agents.js';
 
 // The chat's own tools for the Portal MCP (interface I2): the ones a session's Claude may call about itself. They are
 // bound to the session its per-session token (I8) was minted for; nothing here lets one session act on another.
@@ -18,14 +19,20 @@ export interface ChatToolHost {
     opts: {
       actor: string;
       parentId: string;
-      spawn?: { claude: string; why: string; role?: string | null; model?: string | null; effort?: string | null; mode?: string | null };
+      spawn?: { claude: string; why: string; role?: string | null; model?: string | null; effort?: string | null; mode?: string | null; modelWhy?: string | null };
       /** T-294: the worker's limits; absent fields take the parent's, and none may be wider (the controller refuses). */
       limits?: { maxWorkers?: number; subagents?: boolean };
       /** T-294 (Crew over MCP): what the worker tells its lead unasked. */
       report?: WorkerReport;
     },
   ): Promise<ChatSession>;
-  send(id: string, uuid: string, text: string, opts: { actor: string; actorLabel?: string; relation?: 'parent' | 'worker' | 'crew' }): Promise<void>;
+  send(id: string, uuid: string, text: string, opts: { actor: string; actorLabel?: string; relation?: 'parent' | 'worker' | 'crew'; opening?: boolean }): Promise<void>;
+  /** T-417 review: every other message to a worker waits until its spawn delivery (`until`) settles. */
+  holdInput(id: string, until: Promise<unknown>): void;
+  /** T-417 review: waits for a session's start (a queued one included) to settle; true when it runs. */
+  startSettled(id: string): Promise<boolean>;
+  /** T-417 review: one portal line to a worker's lead about its spawn. */
+  tellLead(workerId: string, text: string): Promise<void>;
   messageFamily(fromId: string, toId: string, text: string, opts?: { priority?: 'next' | 'later' }): Promise<void>;
   /** T-294: one message to every live worker, or every live crew member, of the sender; refused whole over the hourly limit. */
   messageGroup(fromId: string, to: 'workers' | 'crew', text: string, opts?: { priority?: 'next' | 'later' }): Promise<{ sent: string[]; failed: string[] }>;
@@ -33,7 +40,9 @@ export interface ChatToolHost {
   /** T-294: the other workers of a session's parent. */
   crew(id: string): ChatSession[];
   /** T-294: the Claude a worker of `parentId` starts on, and why. */
-  spawnClaude(parentId: string, want?: string, model?: string | null): Promise<{ claudeId: string; name: string; why: SpawnClaudeWhy }>;
+  spawnClaude(parentId: string, want?: string, model?: string | null): Promise<{ claudeId: string; name: string; why: SpawnClaudeWhy; detail?: string }>;
+  /** T-490 (D-63): the model a role runs on by the workspace persona's agent definition, or null. Unset: none known. */
+  roleModel?: (workspaceId: string, role: string) => string | null;
   /** A model, effort or mode change (the controller's rules: never Bypass or Auto from here). */
   control(id: string, op: ChatControl['op'], args?: ChatControl['args']): Promise<void>;
   interrupt(id: string): Promise<void>;
@@ -72,6 +81,7 @@ const WHY_TEXT: Record<SpawnClaudeWhy, string> = {
   named: 'the Claude you named',
   room: 'a Claude with room by a fresh, measured reading',
   no_room: 'your Claude: no other has room by a measured reading',
+  no_room_lowest: 'the least used Claude now: none has room by a measured reading',
   usage_unknown: 'your Claude: usage is not readable now',
 };
 
@@ -116,7 +126,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     name: 'session_spawn',
     title: 'Start a worker session',
     description:
-      'Starts another chat session in this workspace to do part of the work, and gives it a first instruction. It runs on your Claude unless claude says otherwise (auto: a Claude of this workspace with room by a fresh, measured reading, the least busy first, so the work spreads over the accounts), never in bypass mode; you can message it, see it and stop it, and the workers you start can message each other (your crew). The folder must already be trusted. With worktree it works on a branch of its own; with role it runs as the agent .claude/agents/<role>.md; model, effort and mode apply before its first instruction. For a crew: the portal tells you in one line when a worker’s turn ends, when it waits on a person and when it ends (report), so wait for those messages instead of calling session_family in a loop. How many may run, how deep and how often are limited in the portal; max_workers and subagents limit the worker further, never wider than your own.',
+      'Starts another chat session in this workspace to do part of the work, and gives it a first instruction. It runs on your Claude unless claude says otherwise (auto: one of this workspace with room, the least busy first), never in bypass mode; you can message it, see it and stop it, and the workers you start can message each other (your crew). The folder must already be trusted. With worktree it works on a branch of its own; with role it runs as the agent .claude/agents/<role>.md, on the role’s model unless model is given (opus above a role on sonnet needs why, D-63); model, effort and mode apply before its first instruction. For a crew: the portal tells you in one line when a worker’s turn ends, waits on a person or ends (report), so wait for those instead of calling session_family in a loop. How many, how deep and how often are limited in the portal; max_workers and subagents narrow the worker, never wider than yours.',
     scope: 'agent',
     hints: { openWorld: true },
     rate: { perMinute: 10, perHour: 60 },
@@ -127,8 +137,9 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       folder: z.string().max(300).optional().describe('Where it works, inside the home folder. Default: your folder.'),
       worktree: z.union([z.boolean(), z.object({ branch: z.string().max(100).optional(), base: z.string().max(100).optional() })]).optional().describe('Run it in a git worktree of its own: true, or the branch and the base to start from.'),
       claude: z.string().min(1).max(80).optional().describe(`Which Claude it runs on: ${SPAWN_CLAUDE_HELP}.`),
-      role: z.string().regex(CHAT_AGENT_NAME).optional().describe('An agent definition in its folder (.claude/agents/<role>.md, e.g. implementer, qa-verifier): it runs as that agent, with its prompt, its tools and, unless model is given, its model. A name with no definition there is ignored by Claude Code.'),
-      model: z.string().min(1).max(80).optional().describe('Its model (sonnet, opus, haiku or a full id), set before its first instruction.'),
+      role: z.string().regex(CHAT_AGENT_NAME).optional().describe('An agent definition in its folder (.claude/agents/<role>.md, e.g. implementer, qa-verifier): it runs as that agent, with its prompt, its tools and, unless model is given, its model (the workspace persona’s, set before its first instruction). A name with no definition there is ignored by Claude Code.'),
+      model: z.string().min(1).max(80).optional().describe('Its model (sonnet, opus, haiku or a full id), set before its first instruction. Default: its role’s model, if the persona gives one. Opus or fable for a role on sonnet needs why (D-63).'),
+      why: z.string().min(1).max(CHAT_SPAWN_WHY_MAX).optional().describe('D-63: why this worker needs a model above its role’s (e.g. opus for a QA or review role): a gate, release or security check, or a slice too large for sonnet. Kept on the worker; the crew scorecard counts it.'),
       effort: z.string().min(1).max(20).optional().describe('Its effort level (low, medium, high), set before its first instruction.'),
       mode: z.enum(WORKER_MODES).optional().describe('Its permission mode: dontAsk runs only what the folder allows and refuses the rest without waiting; plan changes no file; default (as before) asks a person.'),
       // T-294: the worker's own limits, never wider than yours (absent: yours).
@@ -136,14 +147,19 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       subagents: z.boolean().optional().describe('Whether it may start Claude Code sub-agents (the Agent tool). Default: as you; on only if yours are on.'),
       // T-294 (Crew over MCP): what the worker tells you unasked.
       report: z.enum(WORKER_REPORTS).optional().describe('What the portal tells you about it unasked, one line each: idle (the default) when its turn ends, when it waits on a person and when it ends; end only when it ends; none nothing.'),
+      // T-449: the ticket the worker works on (usage attribution reads the session's ticket).
+      ticket: z.string().regex(/^T-\d{1,9}$/).optional().describe('The ticket it works on (T-n): its cost counts under that ticket in usage_attribution. An unknown ticket is refused as not found. Default: none (No ticket).'),
     }),
     async handler(ctx, args) {
       const parentId = self(ctx);
       const parent = chat.get(parentId);
       if (!parent) throw new AppError('NOT_FOUND', 'This session is gone.');
       plainText(args.prompt);
+      // T-490 (D-63): its model: the one asked, else its role's (the persona's agent); opus for a role on sonnet with no why is refused here.
+      const roleModel = args.role ? (chat.roleModel?.(parent.workspaceId, args.role) ?? null) : null;
+      const pick = spawnModel(args.role ?? null, roleModel, args.model ?? null, args.why ?? null);
       // T-294: the Claude first (an unknown name, or a Claude billed per use, is refused before anything starts).
-      const on = await chat.spawnClaude(parentId, args.claude, args.model ?? null);
+      const on = await chat.spawnClaude(parentId, args.claude, pick.model);
       const child = await chat.create(
         {
           workspaceId: parent.workspaceId,
@@ -152,12 +168,13 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
           claudeId: on.claudeId,
           // The role is its agent: every start of its process is `claude --agent <role>` (the controller's launch), so it needs no telling.
           ...(args.role ? { agent: args.role } : {}),
+          ...(args.ticket ? { ticketId: args.ticket } : {}),
           ...(args.worktree ? { worktree: args.worktree === true ? {} : args.worktree } : {}),
         },
         {
           actor: ctx.actor,
           parentId,
-          spawn: { claude: on.claudeId, why: on.why, role: args.role ?? null, model: args.model ?? null, effort: args.effort ?? null, mode: args.mode ?? null },
+          spawn: { claude: on.claudeId, why: on.why, role: args.role ?? null, model: pick.model, effort: args.effort ?? null, mode: args.mode ?? null, modelWhy: args.why ?? null },
           ...(args.max_workers !== undefined || args.subagents !== undefined
             ? { limits: { ...(args.max_workers !== undefined ? { maxWorkers: args.max_workers } : {}), ...(args.subagents !== undefined ? { subagents: args.subagents } : {}) } }
             : {}),
@@ -171,39 +188,70 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       const unconfirmed: string[] = [];
       const asks: [ChatControl['op'], ChatControl['args'], string][] = [];
       if (args.mode) asks.push(['mode', { mode: args.mode }, `mode ${args.mode}`]);
-      if (args.model) asks.push(['model', { model: args.model }, `model ${args.model}`]);
+      if (pick.model) asks.push(['model', { model: pick.model }, `model ${pick.model}${pick.fromRole ? ' (the role’s)' : ''}`]);
       if (args.effort) asks.push(['effort', { effort: args.effort }, `effort ${args.effort}`]);
-      for (const [op, value, label] of asks) {
-        try {
-          await chat.control(child.id, op, value);
-          applied.push(label);
-        } catch (e) {
-          const why = e instanceof Error ? e.message.slice(0, 120) : 'refused';
-          if (op === 'mode' && NARROWING.has(args.mode ?? '')) {
-            await chat.end(child.id).catch(() => undefined);
-            throw new AppError('CONFLICT', `The worker could not be confirmed in ${args.mode} mode (${why}), so it was ended before it got any instruction. Try again.`);
+      const deliver = async () => {
+        for (const [op, value, label] of asks) {
+          try {
+            await chat.control(child.id, op, value);
+            applied.push(label);
+          } catch (e) {
+            const why = e instanceof Error ? e.message.slice(0, 120) : 'refused';
+            if (op === 'mode' && NARROWING.has(args.mode ?? '')) {
+              await chat.end(child.id).catch(() => undefined);
+              throw new AppError('CONFLICT', `The worker could not be confirmed in ${args.mode} mode (${why}), so it was ended before it got any instruction. Try again.`);
+            }
+            unconfirmed.push(`${label}: ${why}`);
           }
-          unconfirmed.push(`${label}: ${why}`);
         }
-      }
-      // Claude Code runs an agent name it has no definition for as the default, silently: one line lets the worker say so (T-294 slice 2).
-      const first = args.role ? `[Your role: ${args.role}. If .claude/agents/${args.role}.md is not in your folder, tell your parent with session_message before you start.]\n\n${args.prompt}` : args.prompt;
-      // From its parent, said so in the frame its Claude reads (T-294 QA: the first instruction said "another session").
-      await chat.send(child.id, randomUUID(), first, { actor: ctx.actor, relation: 'parent', ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
+        // Claude Code runs an agent name it has no definition for as the default, silently: one line lets the worker say so (T-294 slice 2).
+        const first = args.role ? `[Your role: ${args.role}. If your instructions do not describe this role (its agent file, in the folder's .claude/agents or the workspace persona's), tell your parent with session_message before you start.]\n\n${args.prompt}` : args.prompt;
+        // From its parent, said so in the frame its Claude reads (T-294 QA: the first instruction said "another session").
+        await chat.send(child.id, randomUUID(), first, { actor: ctx.actor, relation: 'parent', opening: true, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
+      };
+      // T-417: the live cap is full and nothing may sleep: the worker waits for a slot. The caller learns it at once (not after the wait);
+      // its settings and its first instruction follow when it starts. A queued start that fails ends the worker at once (no control call
+      // relaunches it to wait again), and the lead is told why; settings not confirmed are told it in a line too (nobody reads `unconfirmed`).
+      const waits = child.slotWait ?? null;
+      const tell = (text: string) => chat.tellLead(child.id, text).catch(() => undefined);
+      const queued = async () => {
+        if (!(await chat.startSettled(child.id))) {
+          const why = chat.get(child.id)?.endedReason;
+          await chat.end(child.id).catch(() => undefined);
+          return void (await tell(`Worker ${child.id} could not start${why ? ` (${why.slice(0, 200)})` : ''}, so it was ended before it got any instruction.`));
+        }
+        try {
+          await deliver();
+        } catch (e) {
+          await chat.end(child.id).catch(() => undefined);
+          return void (await tell(`Worker ${child.id} was ended before it got your instruction: ${e instanceof Error ? e.message.slice(0, 200) : 'its settings failed'}.`));
+        }
+        if (unconfirmed.length) await tell(`Worker ${child.id} started with your instruction. Not confirmed: ${unconfirmed.join('; ')}.`);
+      };
+      const delivery = waits ? queued() : deliver();
+      // T-417 review: nothing else (its parent's session_message, its crew) reaches the worker before its mode applies and its first instruction is in.
+      chat.holdInput(child.id, delivery);
+      if (!waits) await delivery;
       ctx.affected(`session:${child.id}`);
-      const where = on.claudeId === parent.claudeId ? WHY_TEXT[on.why] : `${on.name}, ${WHY_TEXT[on.why]}`;
+      // T-547: with the figures that decided an auto pick (percent left, minutes to its reset).
+      const whyText = on.detail ? `${WHY_TEXT[on.why]} (${on.detail})` : WHY_TEXT[on.why];
+      const where = on.claudeId === parent.claudeId ? whyText : `${on.name}, ${whyText}`;
       return {
-        summary:
-          `Started worker ${child.id} on ${where}${child.worktree ? `, branch ${child.worktree.branch}` : ''}${applied.length ? `, ${applied.join(', ')}` : ''}.` +
-          `${unconfirmed.length ? ` Not confirmed: ${unconfirmed.join('; ')}.` : ''} It reports to you; message it with session_message.`,
+        summary: waits
+          ? `Worker ${child.id} on ${where}${child.worktree ? `, branch ${child.worktree.branch}` : ''} waits to start: ${waits}. It gets its settings and your instruction when it starts, and reports to you; message it with session_message.`
+          : `Started worker ${child.id} on ${where}${child.worktree ? `, branch ${child.worktree.branch}` : ''}${applied.length ? `, ${applied.join(', ')}` : ''}.` +
+            `${unconfirmed.length ? ` Not confirmed: ${unconfirmed.join('; ')}.` : ''} It reports to you; message it with session_message.`,
         session: {
           id: child.id,
           title: ctx.untrusted(child.title, 'agent'),
           state: child.state,
+          slot_wait: waits,
           folder: child.cwd,
           branch: child.worktree?.branch ?? null,
           claude: { id: on.claudeId, name: on.name, why: on.why },
           role: args.role ?? null,
+          model: pick.model,
+          why: child.spawnWhy ? ctx.untrusted(child.spawnWhy, 'agent') : null,
           max_workers: child.maxWorkers ?? null,
           subagents: child.subagents !== false,
           report: args.report ?? 'idle',
@@ -294,7 +342,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         asleep: s.process === 'asleep',
         waiting_for_a_person: s.waiting > 0,
         turns: s.turns,
-        cost_usd: Math.round(s.costUsd * 10_000) / 10_000,
+        ...costFields(s),
         branch: s.worktree?.branch ?? null,
         // The short form (T-282) leaves out the folder and keeps the head of the reply.
         ...(args.full ? { folder: s.cwd } : {}),

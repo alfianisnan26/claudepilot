@@ -5,8 +5,15 @@
 // their declarations with the authz seam (authz.ts). Slice 3 adds result tokens, effort and idle gaps per slice, and stratum keys for
 // randomized experiments (ESTIMATE size, role, model, effort). T-292 slice 3 adds draws: the arms of a slice drawn before its brief (E2).
 
-import type { LabExperiment, LabExperimentReport, LabExperimentView, LabPeriod, LabSliceMetrics, LabSliceView, LabSummary } from '@portal/contracts';
+import { CREW_WINDOW_MS, type CrewScorecard, type CrewWindow, type LabExperiment, type LabExperimentReport, type LabExperimentView, type LabPeriod, type LabSliceMetrics, type LabSliceView, type LabSummary, type LabTicketCost } from '@portal/contracts';
+import { programIdOf, programScore, programsOf, SCORECARD_BASIS } from './scorecard.js';
+import { loadCrewFacts } from './scorecardData.js';
+import { loadQuotaUnused } from './quotaUnused.js';
+import { buildHeadline, type PaceClaude, type PaceSource } from './headline.js';
 import type { Store } from '../store/store.js';
+import { chainOf } from '../usagespend/attribution.js';
+import { SpendStore } from '../usagespend/store.js';
+import { ticketReport } from '../usagespend/ticketReport.js';
 import { armMembers, assignSlice, bindDraw, createExperiment, decideExperiment, drawArms, excludeSlice, experimentReport, listExperiments, drawStats, newDrawKey, ticketExistsIn, normTicket, stopExperiment, type DrawStat, type NewExperiment } from './experiments.js';
 import { LabIngest } from './ingest.js';
 import { sliceMetrics, type SliceFilter } from './metrics.js';
@@ -23,7 +30,7 @@ export class Lab {
   readonly #ingest: LabIngest;
   #timers: NodeJS.Timeout[] = [];
 
-  constructor(private readonly opts: { store: Store; now?: () => number; log?: (msg: string) => void; tickets?: TicketReader }) {
+  constructor(private readonly opts: { store: Store; now?: () => number; log?: (msg: string) => void; tickets?: TicketReader; paceSource?: PaceSource }) {
     const now = opts.now ?? Date.now;
     this.#ingest = new LabIngest(() => (opts.store.writable ? opts.store.db : null), now, (s) => {
       const db = this.#db();
@@ -54,9 +61,15 @@ export class Lab {
     }
   }
 
+  /**
+   * The slices that match. A session (an agent's own read, `?session=`) is the session with the rows of its `continued_from` chain before it
+   * (T-312): a chat continued as new rows is one unit, so its earlier rows' slices are still its own. The chain is usage spend's (attribution.ts).
+   */
   slices(filter: SliceFilter = {}): LabSliceMetrics[] {
     const db = this.opts.store.db;
-    return db ? sliceMetrics(db, filter) : [];
+    if (!db) return [];
+    const { sessionId, ...rest } = filter;
+    return sliceMetrics(db, sessionId ? { ...rest, sessionIds: chainOf(sessionId, new SpendStore(this.opts.store).sessions([sessionId])) } : rest);
   }
 
   createExperiment(e: NewExperiment): LabExperiment {
@@ -163,7 +176,66 @@ export class Lab {
     const period = opts.period ?? 'day';
     const sinceMs = opts.sinceMs ?? nowMs - 14 * DAY_MS;
     const slices = this.views({ fromMs: sinceMs, ...(opts.sessionId ? { sessionId: opts.sessionId } : {}) });
-    return { period, sinceMs, rows: summarize(slices, period), basis: SUMMARY_BASIS, nowMs };
+    return { period, sinceMs, rows: summarize(slices, period), tickets: this.ticketCosts(sinceMs, nowMs, opts.sessionId), basis: SUMMARY_BASIS, nowMs };
+  }
+
+  /**
+   * What tickets cost in [fromMs, toMs): the figures of Usage -> Attribution by ticket, from the same function (usagespend/ticketReport.ts, T-449),
+   * not a copy. With a session: only its own tree.
+   */
+  ticketCosts(fromMs: number, toMs: number, sessionId?: string, limit = 25): LabTicketCost[] {
+    const spend = new SpendStore(this.opts.store);
+    const tree = sessionId ? new Set([sessionId, ...spend.descendants(sessionId)]) : undefined;
+    const rows = spend.usageRows(fromMs, toMs + 1, tree ? { sessionIds: tree } : {});
+    const sessions = spend.sessions(new Set(rows.map((r) => r.sessionId)));
+    if (tree) {
+      for (const [id, s] of sessions) {
+        if (id === sessionId) sessions.set(id, { ...s, parentId: null, continuedFrom: null });
+        else if (s.continuedFrom && !tree.has(s.continuedFrom)) sessions.set(id, { ...s, continuedFrom: null });
+      }
+    }
+    const a = ticketReport(spend, { rows, sessions, fromMs, toMs: toMs + 1, limit });
+    return a.rows
+      .filter((r) => r.state === 'known')
+      .map((r) => ({ ticket: r.key, type: r.ticket?.type ?? null, status: r.ticket?.status ?? null, doneAt: r.ticket?.doneAt ?? null, ownUsd: r.own.costUsd, viaLeadUsd: r.ticket?.viaLeadUsd ?? 0, totalUsd: r.total.costUsd }));
+  }
+
+  /**
+   * The crew scorecard (T-450, §28.14): per program, effectiveness, cost and the standing decisions' targets over the window (and the one
+   * before it with `compare`). `program` keeps one; `sessionId` (an agent's own read) keeps only the program that session is in, none when it
+   * is in none. A program asked for that is not there (or not the session's) is null: the caller answers not found.
+   */
+  scorecard(opts: { window: CrewWindow; compare?: boolean; program?: string; sessionId?: string; paces?: readonly PaceClaude[] | null }): CrewScorecard | null {
+    const nowMs = this.#now();
+    const windowMs = CREW_WINDOW_MS[opts.window];
+    const compare = opts.compare ?? true;
+    const empty: CrewScorecard = { window: opts.window, nowMs, programs: [], basis: SCORECARD_BASIS };
+    const facts = loadCrewFacts(this.opts.store, nowMs, nowMs - (compare ? 2 : 1) * windowMs);
+    if (!facts) return opts.program ? null : empty;
+    const programs = programsOf(facts.sessions, facts.extra);
+    const own = opts.sessionId ? (facts.sessions.has(opts.sessionId) ? programIdOf(opts.sessionId, facts.sessions) : null) : undefined;
+    if (opts.program && (!programs.has(opts.program) || (own !== undefined && own !== opts.program))) return null;
+    const keep = [...programs.values()].filter((p) => (opts.program ? p.id === opts.program : own === undefined || p.id === own));
+    const scores = keep.map((p) => programScore(p, facts, windowMs, compare)).sort((a, b) => (b.current.cost.total.value ?? 0) - (a.current.cost.total.value ?? 0) || a.program.localeCompare(b.program));
+    // T-547: whole-portal figure (Claudes cross programs): not in an agent's own-program read or a single-program read.
+    const quotaUnused = opts.sessionId || opts.program ? undefined : loadQuotaUnused(this.opts.store.db, nowMs, nowMs - windowMs);
+    // T-600: the headline over the same programs. Pace is quota data of every Claude: an agent's read never gets it.
+    const paces = opts.sessionId !== undefined ? null : opts.paces ?? null;
+    const headline = buildHeadline({ programs: keep, facts, windowMs, compare, paces });
+    return { ...empty, programs: scores, headline, ...(quotaUnused ? { quotaUnused } : {}) };
+  }
+
+  /** `scorecard` with the Claudes' paces read from claudeusage (`paceSource`); an agent's read skips it. A source that fails is `no_source`. */
+  async scorecardWithPace(opts: { window: CrewWindow; compare?: boolean; program?: string; sessionId?: string }): Promise<CrewScorecard | null> {
+    let paces: readonly PaceClaude[] | null = null;
+    if (opts.sessionId === undefined && this.opts.paceSource) {
+      try {
+        paces = await this.opts.paceSource();
+      } catch (e) {
+        this.opts.log?.(`lab: pace source failed (${e instanceof Error ? e.name : 'error'})`);
+      }
+    }
+    return this.scorecard({ ...opts, paces });
   }
 
   /** Each experiment with its arms' n, accepted count and the primary (median loaded cost per accepted slice) with its interval. */

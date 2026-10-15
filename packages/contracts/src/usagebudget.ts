@@ -85,6 +85,38 @@ export interface AttributionRow {
   lastAt: string | null;
   /** By `session` only. */
   session?: SessionFacts;
+  /** By `ticket` only, a `known` row (T-449): the ticket's type and status, and the part of leads' cost apportioned to it. */
+  ticket?: AttributionTicket;
+}
+
+/**
+ * What a ticket row of the attribution says beyond its own requests (T-449). `own` of the row is what sessions working on the ticket spent;
+ * `viaLead` is the part of a lead's cost (a session with no ticket that started workers on tickets) apportioned to it, by the number of its
+ * workers with requests in the window, per ticket (`ATTRIBUTION_LEAD_BASIS`). The row's `total` is `own` plus `viaLead`.
+ */
+export interface AttributionTicket {
+  /** Ticket type (feature, bug, task, ...), or null when the ticket is not known (deleted). */
+  type: string | null;
+  status: string | null;
+  /** When it was closed as done (ISO), else null. */
+  doneAt: string | null;
+  /** Dollars (estimates) of leads' own requests apportioned to this ticket; 0 when none. */
+  viaLeadUsd: number;
+  /** Workers of leads on this ticket in the window: the weights behind `viaLeadUsd`. */
+  viaLeadWorkers: number;
+}
+
+/** How a lead's cost is split over tickets: said in the response, never guessed. */
+export const ATTRIBUTION_LEAD_BASIS =
+  'A session with no ticket of its own that started workers on tickets (session_spawn with a ticket): its dollars in the window are split over those tickets in proportion to the number of its workers with requests in the window, per ticket. The parts add up to its dollars exactly (the remainder goes one millionth of a dollar at a time to the largest fractions, then the lower ticket number). A session with no worker on a ticket stays No ticket.';
+
+/** Cost per done ticket by type (`by=ticket`): the tickets shown that were closed as done, grouped by type. */
+export interface TicketTypeCost {
+  type: string;
+  tickets: number;
+  costUsd: number;
+  /** `costUsd` over `tickets`. */
+  perTicketUsd: number;
 }
 
 /**
@@ -112,6 +144,12 @@ export interface AttributionReport {
   /** Rows summed into `others`. */
   more: number;
   now: string;
+  /** By `ticket` (T-449): the basis of every row's `viaLeadUsd` (`ATTRIBUTION_LEAD_BASIS`). */
+  leadBasis?: string;
+  /** By `ticket` with `done=1`: only tickets closed as done inside the window are rows (`totals` stays the window's). */
+  doneOnly?: boolean;
+  /** By `ticket`: the done-in-window tickets' cost (own plus via lead) grouped by type, most dollars first. */
+  doneByType?: TicketTypeCost[];
 }
 
 /* ---------- Budgets ---------- */
@@ -252,7 +290,7 @@ export interface SpikeEvent {
   at: string;
   /** Always true: a rule of thumb, not proof that anything is wrong. */
   heuristic: true;
-  /** The session it names (burst, outlier; rate when one session dominates); null otherwise. */
+  /** The session it names (burst, outlier; rate when one chat dominates, by the first row of its continued chain); null otherwise. */
   sessionId: string | null;
   sessionTitle: string | null;
   claudeId: string;
@@ -266,7 +304,10 @@ export interface SpikeEvent {
   alerted: boolean;
   /** Who it is for (a user id; `u_owner` today): the manager of what it is about once the portal has several users. */
   owner: string;
-  /** What a snooze of this event covers: the session (burst, outlier) or the Claude (rate). */
+  /**
+   * What a snooze of this event covers: the session (burst, outlier) or the Claude (rate). For a session it is the first row of its
+   * `continued_from` chain (T-312): the rows of a continued chat share one cooldown and one snooze.
+   */
   subject: string;
   /** Until when its subject is snoozed, if it is. */
   snoozedUntil: string | null;
@@ -336,7 +377,13 @@ export type SpendAlert =
       summary: string;
       spikeId: string;
       spikeKind: SpikeKind;
+      /** The session the spike happened in (a rate spike: the chat that spent most of it, by the first row of its chain). */
       sessionId: string | null;
+      /**
+       * The first row of that session's `continued_from` chain (T-312): a chat continued as new rows is one subject, so the alerts of its rows
+       * group under this id. The session itself when it continues nothing; null when the spike names no session.
+       */
+      rootSessionId: string | null;
       claudeId: string;
       workspaceId: string;
       heuristic: true;
@@ -379,7 +426,7 @@ export interface SpendAuditEntry {
 export const USAGE_SPEND_API = {
   /** GET: `SpendSummary`. */
   summary: '/api/usage-spend',
-  /** GET `?by=session|workspace|ticket|persona|claude&range=30m|1h|12h|1d|7d|30d&claudeId=&workspaceId=&limit=&format=json|csv`: `AttributionReport`. */
+  /** GET `?by=session|workspace|ticket|persona|claude&range=30m|1h|12h|1d|7d|30d&claudeId=&workspaceId=&limit=&done=1&format=json|csv`: `AttributionReport` (`done=1`, by ticket only: tickets closed as done in the window). */
   attribution: '/api/usage-spend/attribution',
   /** GET: `BudgetsReport`. POST `BudgetInput`: the new `BudgetState` (201). */
   budgets: '/api/usage-spend/budgets',

@@ -4,22 +4,13 @@ import { Check } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { InfoTip } from '@/components/InfoTip';
+import { cap, familyOf, parseModelId as parseId } from './modelName';
 
-const FAMILY = /\b(fable|opus|sonnet|haiku)\b/i;
-const MODEL_ID = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(?:\[1m\])?$/i;
 /** What the server accepts as a model value. */
 const MODEL_VALUE = /^[\x21-\x7e]{1,200}$/;
 
 /** "Opus 5.5" → "5.5"; null when the name carries no version. */
 const versionOf = (m: ChatModelOption): string | null => /(\d+(?:\.\d+)?)\s*$/.exec(m.displayName)?.[1] ?? null;
-
-/** "claude-opus-4-6" → opus, 4.6; null for an alias or anything else. */
-const parseId = (id: string | null | undefined): { family: string; version: string } | null => {
-  const m = id ? MODEL_ID.exec(id) : null;
-  return m ? { family: m[1]!.toLowerCase(), version: m[3] ? `${m[2]}.${m[3]}` : m[2]! } : null;
-};
-
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
  * Older versions to offer beside what Claude Code lists (it lists each family's newest). A pick goes
@@ -46,7 +37,7 @@ interface Family {
 export function groupModels(models: ChatModelOption[]): Family[] {
   const families = new Map<string, Family>();
   for (const m of models) {
-    const key = m.value === 'default' ? 'default' : (FAMILY.exec(`${m.value} ${m.resolvedModel ?? ''} ${m.displayName}`)?.[1]?.toLowerCase() ?? m.value);
+    const key = m.value === 'default' ? 'default' : (familyOf(`${m.value} ${m.resolvedModel ?? ''} ${m.displayName}`) ?? m.value);
     let f = families.get(key);
     if (!f) {
       f = { key, label: key === 'default' ? 'Default' : cap(key), hint: m.description ?? null, versions: [] };

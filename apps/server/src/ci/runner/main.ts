@@ -7,10 +7,12 @@ import { CI_LIMITS } from '../limits.js';
 import { Fail, git, reply } from './common.js';
 import { hookPostReceive } from './events.js';
 import { repoBranches, repoConnect, repoCreate, repoDelete, repoInfo, repoList, repoMerge, repoRev, ensureHooks, needRepo } from './repo.js';
-import { approveRun, archiveLogs, cancelRun, gc, poll, readLog, startRun } from './runs.js';
+import { approveRun, archiveLogs, cancelRun, gc, poll, readExactly, readLog, startRun } from './runs.js';
 import { changes } from './changes.js';
 import { snapshot } from './snapshot.js';
 import { supervise } from './supervise.js';
+import { leaseDrop, leaseWrite, mirrorHeads, mirrorPut, outbox, repoBundle } from './remote.js';
+import { repoSync } from './upstream.js';
 
 type Flags = Record<string, string | true>;
 
@@ -92,9 +94,42 @@ async function dispatch(cmd: string | undefined, args: string[], self: string): 
           const { pos } = parse(rest, {});
           return repoRev(pos[0], pos[1]);
         }
+        case 'bundle': {
+          // T-557: the commit (minus what the runner has) as base64 in the outbox, for the portal to carry to a runner.
+          const { pos, flags } = parse(rest, { id: 'value', haves: 'value' });
+          return repoBundle(pos[0], pos[1], str(flags.id), list(flags.haves));
+        }
+        case 'outbox': {
+          const { pos, flags } = parse(rest, { offset: 'value', max: 'value', drop: 'bool' });
+          return outbox(pos[0], num(flags.offset, 0, 0, Number.MAX_SAFE_INTEGER), num(flags.max, 1_048_576, 1024, 4_194_304), flags.drop === true);
+        }
+        case 'sync': {
+          const { pos, flags } = parse(rest, { url: 'value', secret: 'value', pin: 'value', reset: 'bool' });
+          return repoSync(pos[0], { url: str(flags.url), secret: str(flags.secret), pin: str(flags.pin), reset: flags.reset === true });
+        }
         default:
           throw new Fail('bad_command', 'Unknown repo command.');
       }
+    }
+    case 'mirror': {
+      // T-557, on a runner: what a mirror has, and a bundle's chunks into it.
+      const [sub, ...rest] = args;
+      if (sub === 'heads') {
+        const { pos, flags } = parse(rest, { sha: 'value' });
+        return mirrorHeads(pos[0], str(flags.sha));
+      }
+      if (sub === 'put') {
+        const { pos, flags } = parse(rest, { part: 'value', last: 'bool', bytes: 'value' });
+        const bytes = num(flags.bytes, 0, 1, 4_194_304);
+        return mirrorPut(pos[0], pos[1], pos[2], num(flags.part, 0, 0, 100_000), flags.last === true, await readExactly(bytes, 120_000));
+      }
+      throw new Fail('bad_command', 'Unknown mirror command.');
+    }
+    case 'lease': {
+      // T-557, on a runner: a run's secrets on stdin, never in a command line.
+      const { pos, flags } = parse(args, { bytes: 'value', drop: 'bool' });
+      if (flags.drop === true) return leaseDrop(pos[0]);
+      return leaseWrite(pos[0], await readExactly(num(flags.bytes, 0, 2, 2_000_000)));
     }
     case 'merge': {
       const { pos, flags } = parse(args, { strategy: 'value', expect: 'value', message: 'value', author: 'value' });

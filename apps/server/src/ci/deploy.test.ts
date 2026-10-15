@@ -69,7 +69,9 @@ test('a protected environment holds its job until a person approves; the key is 
     assert.deepEqual(done.detail.map((j) => j.status), ['passed', 'passed', 'passed']);
     assert.deepEqual(done.deployments.map((d) => [d.approval, d.outcome]), [['approved', 'passed']]);
     assert.equal((h.store.db!.prepare('SELECT gate_key FROM ci_deployments WHERE run_id = ?').get(started.id) as { gate_key: string | null }).gate_key, null, 'the key is dropped once used');
-    assert.deepEqual(audit.map((a) => [a.kind, a.actor, a.userId, a.subject, a.detail?.environment, a.detail?.job]), [['ci.deploy_approved', 'user:u_owner', 'u_owner', `ci_run:${started.id}`, 'production', 'release']]);
+    // FR39 (T-476): the start by hand is one more row, `ci.run_started`, ahead of the person's decision.
+    assert.deepEqual(audit.map((a) => a.kind), ['ci.run_started', 'ci.deploy_approved']);
+    assert.deepEqual(audit.filter((a) => a.kind !== 'ci.run_started').map((a) => [a.kind, a.actor, a.userId, a.subject, a.detail?.environment, a.detail?.job]), [['ci.deploy_approved', 'user:u_owner', 'u_owner', `ci_run:${started.id}`, 'production', 'release']]);
     assert.ok(!JSON.stringify(audit).includes(key));
     assert.deepEqual(h.svc.environments(repo.id)[0]!.deployments.map((d) => [d.runId, d.approval, d.outcome]), [[started.id, 'approved', 'passed']], 'the environment keeps its history');
     assert.equal(await codeOf(() => h.svc.decide(started.id, 'release', 'approve', OWNER)), 'CONFLICT', 'a finished run decides nothing');
@@ -90,7 +92,7 @@ test('a rejection ends the run as cancelled (rejected) and never starts what wai
     assert.deepEqual([done.status, done.reason], ['cancelled', 'rejected']);
     assert.deepEqual(done.detail.map((j) => [j.status, j.reason]), [['passed', null], ['cancelled', 'rejected'], ['cancelled', 'rejected']]);
     assert.deepEqual(done.deployments.map((d) => [d.approval, d.outcome]), [['rejected', 'cancelled']]);
-    assert.deepEqual(audit.map((a) => a.kind), ['ci.deploy_rejected']);
+    assert.deepEqual(audit.map((a) => a.kind), ['ci.run_started', 'ci.deploy_rejected'], 'FR39 (T-476): the start, then the rejection');
     assert.ok(!h.finished.some((f) => f.id === run.id && f.status === 'failed'), 'a rejection is not a failure (no failure message, no ci_failed)');
   } finally {
     h.done();
@@ -109,9 +111,10 @@ test('protection off: the next deployment runs without asking (auto); one alread
     assert.equal(await codeOf(() => Promise.resolve(h.svc.setEnvironment(repo.id, 'production', {}, OWNER))), 'VALIDATION_FAILED');
     const off = h.svc.setEnvironment(repo.id, 'production', { protected: false }, OWNER);
     assert.equal(off.protected, false);
-    assert.deepEqual(audit.map((a) => [a.kind, a.detail?.protected]), [['ci.environment_protection', false]]);
+    // FR39 (T-476): the first start (above) is one `ci.run_started` row; the protection change is one more.
+    assert.deepEqual(audit.map((a) => [a.kind, a.detail?.protected]), [['ci.run_started', undefined], ['ci.environment_protection', false]]);
     h.svc.setEnvironment(repo.id, 'production', { protected: false }, OWNER);
-    assert.equal(audit.length, 1, 'no change, no row');
+    assert.equal(audit.length, 2, 'no change, no row');
     await new Promise((r) => setTimeout(r, 500));
     await h.svc.poll(WS);
     assert.equal(h.svc.get(first.id).detail[1]!.status, 'waiting', 'switching protection off never lets a held job go by itself');

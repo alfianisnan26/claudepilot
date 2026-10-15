@@ -1,5 +1,5 @@
 import { Badge, Button, buttonClass, cn, Dialog, FormDialog, Segmented, Spinner, TextField, useToast, type BadgeTone, type MenuItem } from '@isnanme/ui';
-import { WORKSPACE_LABEL_MAX, workspaceDisplayName, workspaceLabelProblem, type Workspace, type WorkspaceUsage } from '@portal/contracts';
+import { isLastKnownStatus, WORKSPACE_LABEL_MAX, workspaceDisplayName, workspaceLabelProblem, type Workspace, type WorkspaceUsage } from '@portal/contracts';
 import { Copy, Pencil, Play, Square, SquareTerminal } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -190,7 +190,8 @@ export function WorkspaceSheet({
           </div>
         )}
 
-        {running && <ClaudesSection workspace={w} onLeave={onClose} />}
+        {/* Its Claudes stay listed while its target does not answer (T-515): they live in the portal's store. */}
+        {(running || isLastKnownStatus(w.status)) && <ClaudesSection workspace={w} onLeave={onClose} />}
 
         <dl className="divide-y divide-line rounded-2xl border border-line text-sm">
           <Row
@@ -235,7 +236,8 @@ export function WorkspaceSheet({
           {resources && <ResourcesRow w={w} open={open} />}
           <Row label="Runs on">{targetLabel}</Row>
           {w.node && <Row label="Node">{w.node}</Row>}
-          {w.status === 'unreachable' && w.lastSeenAt && (
+          {isLastKnownStatus(w.status) && w.lastSeenAt && (
+            // The reason is in the banner above (once); this row says only when.
             <Row label="Last seen">
               <span title={formatDateTime(w.lastSeenAt)}>{timeAgo(w.lastSeenAt)}</span>
             </Row>

@@ -1,18 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import { AppError, isAppError } from '@isnanme/core';
-import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, type ChatEvent, type ChatPermissionMode, type ChatRequest, type ChatSession } from '@portal/contracts';
+import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, sessionRef, workspaceRef, type ChatEvent, type ChatPermissionMode, type ChatRequest, type ChatSession } from '@portal/contracts';
 import { z } from 'zod';
+import { actorOfPrincipal, requireCan } from '../../authz/seam.js';
+import { WORKER_REPORTS } from '../../chat/agents.js';
 import { paginate, pageInput } from '../paging.js';
-import { PortalToolError, registerPortalTool, type PortalToolContext } from '../registry.js';
+import { PortalToolError, portalTools, type PortalToolContext, type ToolRegistry } from '../registry.js';
 import { cleanText } from '../sanitize.js';
-import { assertCanChange, uiLink } from './common.js';
+import { NO_PARENT } from '../authz.js';
+import { assertCanChange, costFields, resolveWorkspace, uiLink } from './common.js';
 import type { PortalToolDeps } from './deps.js';
 
 const STATES = ['starting', 'idle', 'working', 'waiting', 'interrupted', 'ended'] as const;
 /** Over MCP a session's mode is limited to the ones that can't run commands unasked (PRD §13.3): never Auto (the controller refuses it too) or Bypass. */
 const MCP_MODES = ['plan', 'default', 'acceptEdits', 'dontAsk'] as const satisfies readonly ChatPermissionMode[];
 /** Slash commands MCP text may use (chat-sessions FR13): anything else is for the terminal. */
-const SLASH_ALLOWED = new Set(['/compact', '/context', '/reload-plugins']);
+import { SLASH_ALLOWED, slashWord } from '../../chat/slash.js';
 /** What `session_get` returns of the transcript stays under this, so one call fits a result block. */
 const EVENT_CHARS_MAX = 12_000;
 /** T-294: `session_get` lists at most this many of a session's workers (live ones first); the count is always whole. */
@@ -38,7 +41,7 @@ const sessionBrief = (s: ChatSession, ctx: PortalToolContext) => ({
   mode: s.mode,
   folder: s.cwd,
   turns: s.turns,
-  cost_usd: Math.round(s.costUsd * 10_000) / 10_000,
+  ...costFields(s),
   created_at: s.createdAt,
   last_activity_at: s.lastActivityAt,
   ended_reason: ctx.untrusted(s.endedReason, 'runtime'),
@@ -55,13 +58,52 @@ function pendingRequests(events: ChatEvent[]): ChatRequest[] {
 }
 
 /** Chat sessions over MCP (portal-mcp PRD §13.3). The write tools are listed only while session control is on. */
-export function registerSessionTools(deps: PortalToolDeps): void {
-  const { store, chat } = deps;
+export function registerSessionTools(
+  deps: Pick<PortalToolDeps, 'store' | 'chat'> & { workspaces?: Pick<PortalToolDeps['workspaces'], 'list' | 'resolve'> },
+  registry: ToolRegistry = portalTools,
+): void {
+  const { store, chat, workspaces } = deps;
+  const registerPortalTool: ToolRegistry['register'] = (tool) => registry.register(tool);
 
   const need = (id: string): ChatSession => {
     const s = chat.get(id);
     if (!s) throw new AppError('NOT_FOUND', 'No such session. List them with session_list.');
     return s;
+  };
+
+  /**
+   * T-336: the lead a session_start names: a live session of the same workspace the caller may operate (the authz seam). Missing, ended,
+   * elsewhere or refused are ONE answer, so the call tells nothing of a session the caller may not see. The limits on its workers (depth,
+   * how many at once, how many an hour, a worker's own limits) are the controller's, checked at create as for session_spawn.
+   */
+  const leadFor = (raw: string, workspaceId: string, ctx: PortalToolContext): string => {
+    const p = chat.get(raw);
+    let ok = !!p && p.state !== 'ended' && !p.archivedAt && p.workspaceId === workspaceId.trim();
+    if (ok) {
+      try {
+        requireCan(actorOfPrincipal(ctx.principal), 'operate', sessionRef(p!.id));
+      } catch {
+        ok = false;
+      }
+    }
+    if (!ok) throw new AppError('NOT_FOUND', NO_PARENT);
+    return p!.id;
+  };
+
+  /**
+   * T-349: the workspace a session_start names, in any form the workspace tools take (the stable `ws_…` id, `<target>/<name>`,
+   * `<target>/<label>`, a former label, or a name or label only one workspace has), through the shared resolver. The resolved workspace
+   * is asked of the seam again (the dispatch asked about the form given), and a refusal is the resolver's own not found: never wider.
+   */
+  const workspaceFor = async (raw: string, ctx: PortalToolContext): Promise<string> => {
+    if (!workspaces) return raw.trim();
+    const w = resolveWorkspace(await workspaces.list(), raw, (ref) => workspaces.resolve?.(ref) ?? null);
+    try {
+      requireCan(actorOfPrincipal(ctx.principal), 'operate', workspaceRef(w.id));
+    } catch {
+      throw new AppError('NOT_FOUND', `No workspace “${raw.trim()}”. List them with workspace_list.`);
+    }
+    return w.id;
   };
 
   registerPortalTool({
@@ -191,36 +233,52 @@ export function registerSessionTools(deps: PortalToolDeps): void {
     name: 'session_start',
     title: 'Start a chat session',
     description:
-      'Starts a Claude Code session in a workspace, optionally with a first prompt. The folder must already be trusted in the portal; this cannot trust it. Sessions started here never run in bypass mode.',
+      'Starts a Claude Code session in a workspace, optionally with a first prompt. The folder must already be trusted in the portal; this cannot trust it. Sessions started here never run in bypass mode. With parent (a live session of the same workspace) it starts as that session’s worker, as session_spawn does: in its family and crew, under its limits (depth, workers at once, an hour’s starts), and the parent hears of it in one line as report says; its first prompt reaches it as from that parent.',
     scope: 'admin',
     requires: 'session_control',
     hints: { destructive: true, openWorld: true },
     input: z.object({
-      workspace_id: z.string().max(100),
+      workspace_id: z.string().max(100).describe('Any form workspace_get takes: the ws_ id, <target>/<name>, <target>/<label>, or a name only one workspace has.'),
       folder: z.string().max(300).optional().describe('Default ~/work.'),
       prompt: z.string().max(8000).optional().describe('The first message.'),
       title: z.string().max(80).optional(),
       claude_id: z.string().max(80).optional(),
       ticket_id: z.string().max(64).optional(),
       agent: z.string().regex(CHAT_AGENT_NAME).optional().describe('The agent it runs as, .claude/agents/<agent>.md in its folder (e.g. implementer): its prompt, its tools and its model, at every start of its process.'),
+      parent: z.string().max(80).optional().describe('A live session of this workspace it starts as a worker of (session_family, crew reports).'),
+      report: z.enum(WORKER_REPORTS).optional().describe('With parent: what the parent hears of it unasked, one line each: idle (the default) when its turn ends, when it waits on a person and when it ends; end only when it ends; none nothing.'),
     }),
     async handler(ctx, args) {
       assertCanChange(store, 'workspace');
+      if (args.report && !args.parent) throw new AppError('VALIDATION_FAILED', 'report needs a parent.', { details: { report: 'Only with parent.' } });
+      const workspaceId = await workspaceFor(args.workspace_id, ctx);
+      const parentId = args.parent ? leadFor(args.parent, workspaceId, ctx) : null;
       const s = await chat.create(
-        { workspaceId: args.workspace_id, cwd: args.folder, title: args.title, claudeId: args.claude_id, ticketId: args.ticket_id, ...(args.agent ? { agent: args.agent } : {}) },
-        { actor: ctx.actor },
+        { workspaceId, cwd: args.folder, title: args.title, claudeId: args.claude_id, ticketId: args.ticket_id, ...(args.agent ? { agent: args.agent } : {}) },
+        // T-336: the same create a session_spawn makes (its parent's limits held in one step), never a new approval path or a wider mode.
+        // T-349: the parent must still be live when the row is written (liveParent), with the same not found as leadFor's.
+        { actor: ctx.actor, ...(parentId ? { parentId, liveParent: NO_PARENT, ...(args.report ? { report: args.report } : {}) } : {}) },
       );
-      if (args.prompt) await sendChecked(s.id, args.prompt, undefined, ctx);
+      // T-349: a worker's first instruction is from its lead, framed as session_spawn frames it (your parent session); who started it stays
+      // on the session (started_by) and in the agent.spawned audit row.
+      if (args.prompt) await sendChecked(s.id, args.prompt, undefined, ctx, parentId ? { actor: `session:${parentId}`, relation: 'parent' } : undefined);
       ctx.affected(`session:${s.id}`, `workspace:${s.workspaceId}`);
-      return { summary: `Started session ${s.id} in ${s.workspaceId}.`, session: sessionBrief(s, ctx), ui: uiLink(`/admin/sessions/${s.id}`) };
+      return { summary: `Started session ${s.id} in ${s.workspaceId}${parentId ? `, a worker of ${parentId}` : ''}.`, session: sessionBrief(s, ctx), ui: uiLink(`/admin/sessions/${s.id}`) };
     },
   });
 
   /** A message from this caller: no human origin, and only the slash commands MCP text may use. */
-  async function sendChecked(id: string, text: string, priority: 'next' | 'later' | undefined, ctx: PortalToolContext) {
-    const first = text.trimStart().split(/\s/)[0] ?? '';
-    if (first.startsWith('/') && !SLASH_ALLOWED.has(first)) throw new PortalToolError('FORBIDDEN', `${cleanText(first, 40)} is for the terminal. Over MCP only ${[...SLASH_ALLOWED].join(', ')} are allowed.`);
-    await chat.send(id, randomUUID(), text, { actor: ctx.actor, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}), ...(priority ? { priority } : {}) });
+  async function sendChecked(
+    id: string,
+    text: string,
+    priority: 'next' | 'later' | undefined,
+    ctx: PortalToolContext,
+    as?: { actor: `session:${string}`; relation: 'parent' },
+  ) {
+    const first = slashWord(text);
+    if (first && !SLASH_ALLOWED.has(first)) throw new PortalToolError('FORBIDDEN', `${cleanText(first, 40)} is for the terminal. Over MCP only ${[...SLASH_ALLOWED].join(', ')} are allowed.`);
+    const from = as ? { actor: as.actor, relation: as.relation } : { actor: ctx.actor, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) };
+    await chat.send(id, randomUUID(), text, { ...from, ...(priority ? { priority } : {}) });
   }
 
   registerPortalTool({

@@ -248,7 +248,11 @@ export class Store {
         db.close();
         return this.#freeze('db-corrupt', `The database failed its integrity check (${String(result ?? 'no result')}).`);
       }
-      db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL');
+      // WAL with synchronous NORMAL (T-365): a commit no longer waits for an fsync, only a checkpoint does. The database shares its ext4
+      // journal with the workspace pods on the same node (one local-path disk), and with FULL every commit waited on their writes: the
+      // portal stopped answering for minutes (2026-10-15). NORMAL keeps the database consistent and loses nothing when the process or
+      // the container dies (chat PRD G6); only the last moments before an OS crash or power loss can be lost.
+      db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL');
     } catch (e) {
       try {
         db?.close();

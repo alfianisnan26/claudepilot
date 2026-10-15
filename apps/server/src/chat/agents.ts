@@ -7,7 +7,9 @@
 
 import { AppError } from '@isnanme/core';
 import type { ClaudeUsage, WorkspaceClaude } from '@portal/contracts';
-import { unknownUsage } from '../autotransfer/decide.js';
+import { modelFamilyOf, modelInfo } from '@portal/contracts';
+import { autoMoveLeaves, unknownUsage } from '../autotransfer/decide.js';
+import { useItScore, useItWhy } from '../claudeusage/placement.js';
 import { recommendMove } from '../claudeusage/recommend.js';
 import { defineSetting } from '../settings/registry.js';
 import { SESSION_CAP } from './caps.js';
@@ -183,11 +185,44 @@ export class MessageRate {
 export const WORKER_REPORTS = ['idle', 'end', 'none'] as const;
 export type WorkerReport = (typeof WORKER_REPORTS)[number];
 
-/** Why a worker runs on the Claude it got (T-294): its parent's, the one it was told, one with room, or its parent's for want of one. */
-export type SpawnClaudeWhy = 'parent' | 'named' | 'room' | 'no_room' | 'usage_unknown';
+/**
+ * Why a worker runs on the Claude it got (T-294): its parent's, the one it was told, one with room, its parent's for want of one, or (T-427)
+ * with none that has room the least used now.
+ */
+export type SpawnClaudeWhy = 'parent' | 'named' | 'room' | 'no_room' | 'no_room_lowest' | 'usage_unknown';
+
+/**
+ * T-427: with no Claude with room, auto never picks one with this much left or less: the auto move's default threshold (D-12), so a worker
+ * is not started on a Claude it would be moved off at once.
+ */
+export const SPAWN_FLOOR_PCT = 10;
 
 /** What a worker may be told to run on: `same` (its parent's Claude, the default), `auto`, or a Claude's name or id. */
-export const SPAWN_CLAUDE_HELP = 'same (your Claude, the default), auto (a Claude of this workspace with room by a fresh, measured reading, the least busy first), or a Claude’s name';
+export const SPAWN_CLAUDE_HELP = 'same (your Claude, the default), auto (a Claude of this workspace with room by a fresh, measured reading, the most unused room per minute to its reset first (use it or lose it); with none, the least used now), or a Claude’s name';
+
+/** T-490 (D-63): a sonnet or haiku alias or id, with an optional `[1m]`-style suffix: what a role below opus may start on without a why. */
+const BELOW_OPUS_MODEL = /^(?:sonnet|haiku|claude-(?:sonnet|haiku)-[a-z0-9._-]+)(?:\[[a-z0-9]+\])?$/i;
+
+/**
+ * T-490 (D-63): the model a worker starts on, from what its lead asked and its role's model (the workspace persona's agent definition).
+ * - No model asked: the role's model (`fromRole`), or none when the role has none known (Claude Code's own default, as before).
+ * - A model asked: for a role on a model below opus (QA and review roles run on sonnet) an allow list: only a sonnet or haiku alias or id
+ *   (`sonnet`, `haiku[1m]`, `claude-sonnet-*`) starts without a reason. Anything else (opus, fable, `default` and `opusplan` and `best`,
+ *   which can resolve to opus, an unknown id) needs `why`, else it is refused, naming D-63, before anything starts. Other roles: kept.
+ */
+export function spawnModel(role: string | null, roleModel: string | null, asked: string | null, why: string | null): { model: string | null; fromRole: boolean } {
+  if (!asked) return { model: roleModel, fromRole: !!roleModel };
+  const opus = modelInfo('opus')!.rank;
+  const roleRank = modelInfo(modelFamilyOf(roleModel))?.rank ?? null;
+  if (role && roleRank !== null && roleRank < opus && !BELOW_OPUS_MODEL.test(asked.trim()) && !why?.trim()) {
+    throw new AppError(
+      'VALIDATION_FAILED',
+      `D-63: the ${role} role runs on ${roleModel}. Give why (a gate, release or security check, or a slice too large for ${roleModel}) to start it on ${asked}, or leave model out to use ${roleModel}.`,
+      { details: { why: `Required for ${asked} on the ${role} role (D-63).` } },
+    );
+  }
+  return { model: asked, fromRole: false };
+}
 
 /** What the worker's Claude is chosen from (T-294). */
 export interface SpawnPick {
@@ -212,7 +247,7 @@ export interface SpawnPick {
  * equals. With none, or with no usage report, the parent's, and why. A name (any case) or an id must be a Claude of the workspace on a
  * plan: one billed per use, or one whose plan can't be read now, is refused. The refusals never list the Claudes.
  */
-export function pickSpawnClaude(p: SpawnPick): { claudeId: string; why: SpawnClaudeWhy } {
+export function pickSpawnClaude(p: SpawnPick): { claudeId: string; why: SpawnClaudeWhy; detail?: string } {
   const w = (p.want ?? '').trim();
   if (!w || w.toLowerCase() === 'same') return { claudeId: p.parentClaudeId, why: 'parent' };
   const live = p.claudes.filter((c) => !c.removedAt);
@@ -221,13 +256,28 @@ export function pickSpawnClaude(p: SpawnPick): { claudeId: string; why: SpawnCla
     if (!p.usage) return { claudeId: p.parentClaudeId, why: 'usage_unknown' };
     const ids = new Set(live.map((c) => c.id));
     const ranking = recommendMove([...p.usage], { workspaceId: p.workspaceId, from: null, nowMs: p.nowMs });
-    const fit = ranking.candidates.filter((c) => {
+    const usable = (c: (typeof ranking.candidates)[number]) => {
       const u = usageOf(c.claudeId);
-      return c.rank !== null && c.reason === 'room' && c.basis === 'measured' && !c.stale && ids.has(c.claudeId) && u?.runsOn === 'plan' && unknownUsage(u, p.family, p.nowMs) === null;
-    });
-    if (!fit.length) return { claudeId: p.parentClaudeId, why: 'no_room' };
-    const best = fit.reduce((a, b) => (p.load(b.claudeId) < p.load(a.claudeId) ? b : a));
-    return { claudeId: best.claudeId, why: best.claudeId === p.parentClaudeId ? 'parent' : 'room' };
+      // T-460: never a Claude auto move would leave (the one projection rule), so a worker is not started where it would be moved off again.
+      return c.rank !== null && !c.stale && ids.has(c.claudeId) && u?.runsOn === 'plan' && unknownUsage(u, p.family, p.nowMs) === null && !autoMoveLeaves(u, p.family, p.nowMs);
+    };
+    const fit = ranking.candidates.filter((c) => usable(c) && c.reason === 'room' && c.basis === 'measured');
+    if (!fit.length) {
+      // T-427: none with room (most projected past 100 %): another Claude, the least used NOW of those with more than SPAWN_FLOOR_PCT
+      // left, spread so that none takes more than its share of the sessions (ceil((sessions + 1) / Claudes) + 1). Its parent's only
+      // when no other qualifies (the owner's ticket text).
+      const near = ranking.candidates.filter((c) => usable(c) && (c.reason === 'over_pace' || c.reason === 'tight') && (c.leftPct.value ?? 0) > SPAWN_FLOOR_PCT);
+      const others = near.filter((c) => c.claudeId !== p.parentClaudeId);
+      if (!others.length) return { claudeId: p.parentClaudeId, why: 'no_room' };
+      const share = Math.ceil((near.reduce((n, c) => n + p.load(c.claudeId), 0) + 1) / near.length) + 1;
+      const under = others.filter((c) => p.load(c.claudeId) < share);
+      const best = [...(under.length ? under : others)].sort((a, b) => (b.leftPct.value ?? 0) - (a.leftPct.value ?? 0) || p.load(a.claudeId) - p.load(b.claudeId))[0]!;
+      return { claudeId: best.claudeId, why: 'no_room_lowest' };
+    }
+    // T-547 (D-65): use it or lose it. The most unused room per minute to its reset first (load spreads a burst); the ranking's order between equals.
+    const score = (c: (typeof fit)[number]) => useItScore(c.leftPct.value, c.resetsAt.value, p.nowMs, p.load(c.claudeId));
+    const best = fit.reduce((a, b) => (score(b) > score(a) ? b : a));
+    return { claudeId: best.claudeId, why: best.claudeId === p.parentClaudeId ? 'parent' : 'room', detail: useItWhy(live.find((c) => c.id === best.claudeId)?.name ?? best.name,best.leftPct.value, best.resetsAt.value, p.nowMs) };
   }
   const hit = live.find((c) => c.id === w || c.name.toLowerCase() === w.toLowerCase());
   if (!hit) throw new AppError('VALIDATION_FAILED', 'No such Claude on this workspace. Use same, auto or the name of one of its Claudes.', { details: { claude: 'Unknown Claude.' } });

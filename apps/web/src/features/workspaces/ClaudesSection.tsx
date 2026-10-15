@@ -1,10 +1,11 @@
 import { Badge, Button, ConfirmDialog, FormDialog, Menu, TextField, useToast, type MenuItem } from '@isnanme/ui';
-import { CLAUDE_NAME_MAX, type Workspace, type WorkspaceClaude, type WorkspaceClaudeState, type WorkspaceTerminal } from '@portal/contracts';
+import { CLAUDE_NAME_MAX, isLastKnownStatus, type Workspace, type WorkspaceClaude, type WorkspaceClaudeState, type WorkspaceTerminal } from '@portal/contracts';
 import { ArrowRightLeft, Bot, LogIn, LogOut, Pencil, Plus, SquareTerminal, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { ClaudeAutoMoveDialog } from '@/features/autotransfer/ClaudeAutoMoveDialog';
 import { chatApi } from '@/features/chat/api';
+import { InfoTip } from '@/components/InfoTip';
 import { ClaudeMeter } from '@/features/usage/claude';
 import { api, errorText } from '@/lib/api';
 import { ClaudeLoginDialog } from './ClaudeLoginDialog';
@@ -101,11 +102,16 @@ export function ClaudesSection({ workspace: w, onLeave }: { workspace: Workspace
   };
 
   const pooled = !!w.account;
+  // Shown from last-known data (T-515): the server refuses a terminal at once, so the button waits instead.
+  const down = isLastKnownStatus(w.status);
 
   return (
     <section aria-label="Claudes" className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
-        <p className="text-[13px] font-semibold text-muted">Claudes{states ? ` · ${states.length}` : ''}</p>
+        <p className="inline-flex items-center gap-1 text-[13px] font-semibold text-muted">
+          Claudes{states ? ` · ${states.length}` : ''}
+          {down && <InfoTip label="Why terminals wait">Its target isn’t answering, so a terminal can’t open yet. Your Claudes and chats are kept.</InfoTip>}
+        </p>
         <Button
           size="sm"
           variant="ghost"
@@ -164,6 +170,7 @@ export function ClaudesSection({ workspace: w, onLeave }: { workspace: Workspace
                   icon={<SquareTerminal className="size-4" />}
                   aria-label={`Open a terminal as ${c.name}`}
                   loading={busy === c.id}
+                  disabled={down}
                   onClick={() => void openTerminal(c)}
                 />
                 <Menu label={`Actions for ${c.name}`} items={items} />

@@ -52,9 +52,19 @@ export const instructionsFile = (instructions: string): DeliveredFile => file(MA
 
 export const chatPromptFile = (prompt: string): DeliveredFile => file(CHAT_PROMPT, `${prompt.replace(/\r\n/g, '\n').replace(/\s+$/, '')}\n`);
 
-/** An instruction context as a managed rule file. The comment says where it came from and is stripped before Claude reads the file. */
-export const contextFile = (slug: string, name: string, revision: number, body: string): DeliveredFile =>
-  file(`${RULES_DIR}/${CONTEXT_PREFIX}${slug}.md`, `<!-- Instruction context “${name.replace(/-->/g, '')}” r${revision}, delivered by the portal. -->\n${body.replace(/\r\n/g, '\n').replace(/\s+$/, '')}\n`);
+/** A rule's YAML frontmatter at the very top (`---` lines), which Claude Code reads only there (its `paths`, T-472). */
+const FRONTMATTER = /^---\n[\s\S]*?\n---\n/;
+
+/**
+ * An instruction context as a managed rule file. The comment says where it came from and is stripped before Claude reads the file. A body
+ * that opens with frontmatter (a path-scoped rule, T-472) keeps it first, with the comment after it.
+ */
+export const contextFile = (slug: string, name: string, revision: number, body: string): DeliveredFile => {
+  const text = body.replace(/\r\n/g, '\n').replace(/\s+$/, '');
+  const head = FRONTMATTER.exec(text)?.[0] ?? '';
+  const comment = `<!-- Instruction context “${name.replace(/-->/g, '')}” r${revision}, delivered by the portal. -->\n`;
+  return file(`${RULES_DIR}/${CONTEXT_PREFIX}${slug}.md`, `${head}${comment}${text.slice(head.length)}\n`);
+};
 
 /** The managed-settings keys a persona sets, only the ones it uses (§10.1): an empty persona writes no drop-in. */
 export function personaSettings(c: PersonaContent): Record<string, unknown> {

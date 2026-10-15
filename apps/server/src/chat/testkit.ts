@@ -28,7 +28,7 @@ export const ok = (requestId: string, response?: unknown) =>
 export const fail = (requestId: string, error: string) => line({ type: 'control_response', response: { subtype: 'error', request_id: requestId, error, error_code: 'invalid' } });
 
 /** `trustscan` for a folder with none of the project settings files. */
-export const EMPTY_SCAN = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [] };
+export const EMPTY_SCAN = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [], extras: [] };
 
 /** A controllable stand-in for one `workspaces.exec` call. */
 export class FakeExec implements ExecSession {
@@ -95,6 +95,8 @@ export class FakeWorkspaces {
   scanFor: ((folder: string) => string) | null = null;
   /** The folders `trustscan` was asked about, in order. */
   readonly scans: string[] = [];
+  /** What `psettings` prints (null: the host cannot read the project's rules). */
+  psettingsOut: string | null = null;
   /** What `authcheck` prints (the account drop-in names the pool's helper unless a test says otherwise), and its exit code (null: never exits). */
   authOut = 'pass';
   authCode: number | null = 0;
@@ -146,6 +148,14 @@ export class FakeWorkspaces {
       setTimeout(() => {
         exec.push(`${out}\n`);
         exec.exit(code);
+      }, 0);
+    } else if (cmd === 'psettings') {
+      // T-561: the project's permission rules as one JSON line (what the host prints), or a failure when a test leaves it null.
+      this.ops.push('psettings');
+      const out = this.psettingsOut;
+      setTimeout(() => {
+        if (out !== null) exec.push(`${out}\n`);
+        exec.exit(out === null ? 2 : 0);
       }, 0);
     } else if (cmd === 'start') {
       this.starts++;

@@ -32,6 +32,30 @@ export function defaultChip(counts: ChipCounts): ListFilter {
   return STATUS_ORDER.find((id) => counts[id] > 0) ?? 'all';
 }
 
+/** The part of the list's view the chips set; `picked`: the person chose a chip (or Archived), so the default chip no longer applies. */
+export interface ChipChoice {
+  filter: ListFilter;
+  archived: boolean;
+  picked: boolean;
+}
+
+/**
+ * The default chip as a state update: nothing once the person picked one. T-321: the check is here, in the update, not in the effect that
+ * queues it. The effect of the render that first shows the chips can still be pending when the first tap lands; React runs it before it
+ * renders the tap, with that render's (stale) "not picked", and its update, queued after the tap's, put the chip back (All snapped back to
+ * Needs you, so a crew in All was not there).
+ */
+export function withDefaultChip<V extends ChipChoice>(v: V, counts: ChipCounts): V {
+  if (v.picked) return v;
+  const filter = defaultChip(counts);
+  return v.filter === filter ? v : { ...v, filter };
+}
+
+/** A change from the toolbar; one that sets the chip or Archived is the person's pick. */
+export function withChange<V extends ChipChoice>(v: V, next: Partial<V>): V {
+  return { ...v, ...next, picked: v.picked || next.filter !== undefined || next.archived !== undefined };
+}
+
 /**
  * The chips to show, in order: a status chip only when it has sessions (or is the one you are on), Pinned and All always, Archived (a list of
  * its own) before All once anything is archived or while you are in it.

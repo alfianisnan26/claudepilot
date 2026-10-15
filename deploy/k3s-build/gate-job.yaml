@@ -8,7 +8,9 @@
 # /tmp (the clean copy, node_modules, the build, the tests' temp databases) is an emptyDir in MEMORY (T-95 item 3): on the container
 # overlay the suite was IO-bound (about 60% IO pressure at 33m of CPU on k3s-master, 31+ min: hundreds of node:sqlite databases with
 # fsync, plus npm ci), in memory fsync costs nothing. It counts against the container's memory: sizeLimit 3Gi (node_modules is about
-# 400 MiB, the copy and the logs well under that), so the request is 2Gi and the limit 8Gi.
+# 400 MiB, the copy and the logs well under that). Memory requested = limited (T-524): 2Gi requested with 8Gi allowed overcommitted the
+# node. 8Gi is the old limit, kept: the server suite alone peaked at 1480Mi (job-run claudepilot-job-4c34ebf9), but the gate's typecheck and
+# web build at GATE_CONCURRENCY 3 were not measured yet. Lower it from the "memory peak=" line this Job prints, never below peak + 50%.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -26,8 +28,20 @@ spec:
       restartPolicy: Never
       automountServiceAccountToken: false
       affinity:
+        # Placement as in job-run.yaml (T-365, T-524; how the weights add up is explained there). All PREFERRED, never required: a required
+        # rule left every Job Pending (2026-10-15). Away from the control-plane node (k3s-master, also the API server), away from the
+        # portal's node and from workspace pods; with memory requested = limited the node with the most room left wins the tie.
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference: {matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                namespaces: [isnan-claudepilot]
+                labelSelector: {matchLabels: {app: claudepilot-portal}}
             - weight: 100
               podAffinityTerm:
                 topologyKey: kubernetes.io/hostname
@@ -55,13 +69,16 @@ spec:
               [ -n "$GATE_FILES" ] || unset GATE_FILES
               GATE_DIR=/tmp/gate bash scripts/gate.sh HEAD
               echo "=== SUMMARY"; cat /tmp/gate.logs/SUMMARY.txt 2>/dev/null
+              # The Job's own memory (T-524): the cgroup's peak (in-memory /tmp included) against its limit, the number the limit is sized from.
+              mib() { v=$(cat "/sys/fs/cgroup/$1" 2>/dev/null) && [[ $v =~ ^[0-9]+$ ]] && echo "$((v / 1048576))Mi" || echo "${v:-?}"; }
+              echo "memory peak=$(mib memory.peak) limit=$(mib memory.max) oom_kills=$(sed -n 's/^oom_kill //p' /sys/fs/cgroup/memory.events 2>/dev/null | grep . || echo '?')"
               [ -s /tmp/gate.logs/failures.txt ] && { echo "=== FAILURES (each failing test's own report)"; cat /tmp/gate.logs/failures.txt; }
               for s in npm-ci typecheck web-build; do grep -q "^$s rc=0 " /tmp/gate.logs/SUMMARY.txt 2>/dev/null || { [ -f "/tmp/gate.logs/$s.log" ] && { echo "=== the end of $s's log"; tail -n 40 "/tmp/gate.logs/$s.log"; }; }; done
               printf '%s' "$GATE_VERDICT_SH" | base64 -d > /tmp/gate-verdict.sh && bash /tmp/gate-verdict.sh logs /tmp/gate.logs "$GATE_STEPS"
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
           resources:
-            requests: {cpu: 1000m, memory: 2Gi}
+            requests: {cpu: 1000m, memory: 8Gi}
             limits: {cpu: "4", memory: 8Gi}
       volumes:
         - name: tmp

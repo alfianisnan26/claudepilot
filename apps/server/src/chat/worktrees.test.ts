@@ -14,7 +14,8 @@ const HOME = '/home/node';
 const REPO = `${HOME}/proj`;
 
 /** A scan that names one MCP server, under a hash a test chooses. */
-const scanOf = (hash: string) => JSON.stringify({ ...EMPTY_SCAN, hash, files: ['.mcp.json'], mcpServers: ['db'] });
+// Permission rules only: an MCP server, a hook or a linked skill is outside the hash and never copied (T-435, trustAuto.test.ts).
+const scanOf = (hash: string) => JSON.stringify({ ...EMPTY_SCAN, hash, files: ['.claude/settings.json'], allowRules: 1, rulesOnly: true, broadAllow: false });
 
 async function make(s: Live, req: Record<string, unknown> = {}, opts: Parameters<Live['controller']['create']>[1] = {}) {
   const before = s.ws.tails.length;

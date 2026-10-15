@@ -16,7 +16,7 @@ The first day of a project started from scratch, for its first orchestrator. Do 
    - `rank-03` Definition of done and standards: fill every slot of `project-standards`.
    - `rank-04` Status file and cadence: the status file, the trailers, the monitor checks.
    - `rank-05` onward: the first product slices, thin, each about an hour, each shippable.
-   - Also one unranked ticket assigned to the owner (`ticket_create`, assignee user): the owner's checklist.
+   - Also one unranked ticket tagged `owner-checklist`, left unassigned: the owner's checklist. Only a production or uat item may be assigned to the owner, tagged `production` (the portal refuses any other agent assignment to a person, T-483).
 
 4. **Lay out the repository from the scaffold.** Use the project template (`project_create` when available, else the kit scaffold by hand): `CLAUDE.md` with the project's name and stack, `docs/prd/`, `docs/dev-sessions/` (charter, decisions, `status/`), the pipelines, the gate scripts, the commit hook. The template provides `.claude/settings.json` with its deny rules; do not write or loosen it yourself. If it is missing, put it on the owner's checklist. Commit with the trailers.
 

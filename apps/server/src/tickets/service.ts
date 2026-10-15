@@ -48,7 +48,19 @@ import {
 import { assertBumpable, bumpMode, bumpNote, bumpTargets as targetsFor } from '../chat/bump.js';
 import { cleanText } from '../portalmcp/sanitize.js';
 import type { Store } from '../store/store.js';
-import { canActForEnded, type EndedGrantReason } from './authz.js';
+import {
+  AGENT_ASSIGN_USER_TAGS_DEFAULT,
+  allowedAssignTags,
+  canActForEnded,
+  canAgentAssignUser,
+  canAgentTagChecklist,
+  OWNER_CHECKLIST_TAG,
+  canWorkerComment,
+  D62_ASSIGN_REFUSAL,
+  D62_CHECKLIST_REFUSAL,
+  type EndedGrantReason,
+  type WorkerCommentReason,
+} from './authz.js';
 import './errors.js';
 import { bumpTicketMessage, openingMessage } from './opening.js';
 import type { TicketSessionInfo, TicketSessions } from './sessions.js';
@@ -78,6 +90,25 @@ export type Caller =
 interface EndedGrant {
   forSession: string;
   why: EndedGrantReason;
+}
+
+/** What the audit row for an owner-checklist tag added by an admin's token for a session (`ticket.agent_checklist_tagged`) says. */
+interface ChecklistTaggedAudit {
+  action: 'create' | 'update';
+  actor: string;
+  sessionId: string | null;
+  leadId: string | null;
+  allowedTag: string | null;
+}
+
+/** What the audit row for an allowed assignment to a person (`ticket.agent_assigned_person`) says; the ticket id is added once it exists. */
+interface AssignedPersonAudit {
+  action: 'create' | 'update';
+  actor: string;
+  actorKind: 'agent' | 'token';
+  sessionId: string | null;
+  leadId: string | null;
+  allowedTag: string | null;
 }
 
 /** The identity a change is recorded under. */
@@ -171,6 +202,10 @@ export interface TicketsOptions {
   workspaceRefs?: WorkspaceRefs;
   /** T-270: minutes a ticket's session must be dead before the orphan sweep moves the ticket (`tickets.orphanAfterMin`). Default 3. */
   orphanAfterMin?: () => number;
+  /** FR20: open agent-made tickets a workspace may hold (`tickets.agentOpenPerWorkspace`). Default {@link OPEN_PER_WORKSPACE}. */
+  agentOpenPerWorkspace?: () => number;
+  /** FR9c (D-62, T-483): the tags that let an agent put a ticket on a person (`tickets.agentAssignUserTags`). Default `production`. */
+  agentAssignUserTags?: () => string;
 }
 
 /** One move the orphan sweep made (T-270 layer 3): where the ticket went and why. `to` null: back in the agents' queue. */
@@ -232,6 +267,8 @@ export class Tickets {
 
   readonly #refs: TicketsOptions['workspaceRefs'];
   readonly #orphanAfterMin: () => number;
+  readonly #agentOpenPerWorkspace: () => number;
+  readonly #agentAssignUserTags: () => string;
   #orphans: { lastRunAt: string | null; dead: Record<string, string> } | null = null;
 
   constructor(
@@ -243,6 +280,8 @@ export class Tickets {
     this.#link = opts.link ?? ((id) => `/admin/tickets/${id}`);
     this.#refs = opts.workspaceRefs;
     this.#orphanAfterMin = opts.orphanAfterMin ?? (() => ORPHAN_DEFAULT_MIN);
+    this.#agentOpenPerWorkspace = opts.agentOpenPerWorkspace ?? (() => OPEN_PER_WORKSPACE);
+    this.#agentAssignUserTags = opts.agentAssignUserTags ?? (() => AGENT_ASSIGN_USER_TAGS_DEFAULT);
   }
 
   /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
@@ -462,23 +501,48 @@ export class Tickets {
     });
   }
 
-  /** FR29: commenting is what FR9 allows, and also the answer of a session a person asked about the ticket (Ask) in the last day. */
-  #assertCanComment(caller: Caller, row: Row, w: Writer): EndedGrant | null {
+  /**
+   * FR29: commenting is what FR9 allows, and also the answer of a session a person asked about the ticket (Ask) in the last day. FR9b
+   * (T-294, T-397): a crew worker's comment on its spawn's ticket or its lead's (authz.ts `canWorkerComment`). A refusal keeps FR9's text.
+   */
+  #assertCanComment(caller: Caller, row: Row, w: Writer): { ended: EndedGrant | null; worker: WorkerCommentReason | null } {
     try {
-      return this.#assertCanModify(caller, row, w);
+      return { ended: this.#assertCanModify(caller, row, w), worker: null };
     } catch (e) {
-      if (caller.kind === 'agent' && !isTicketClosed(row.status) && this.#bumpedInto(row.number, caller.sessionId, ASK_ANSWER_MS)) return null;
-      // T-294: a crew worker reports on its lead's tickets (a comment only: the status, the assignee and the rest stay its lead's).
-      if (caller.kind === 'agent' && !isTicketClosed(row.status) && row.assignee_kind === 'session' && this.#workerOf(caller.sessionId, row.assignee_ref)) return null;
+      if (caller.kind === 'agent' && !isTicketClosed(row.status) && this.#bumpedInto(row.number, caller.sessionId, ASK_ANSWER_MS)) return { ended: null, worker: null };
+      if (caller.kind === 'agent' && !isTicketClosed(row.status)) {
+        const why = this.#workerComment(w.session!, row);
+        if (why) return { ended: null, worker: why };
+      }
       throw e;
     }
   }
 
-  /** Whether `sessionId` is a live worker that `leadId` started (T-294 crew). */
-  #workerOf(sessionId: string, leadId: string | null): boolean {
-    if (!leadId) return false;
-    const s = this.sessions.get(sessionId);
-    return !!s && s.parentId === leadId && s.state !== 'ended';
+  /** FR9b: why the worker `s` may comment on `row` (authz.ts `canWorkerComment`), or null. */
+  #workerComment(s: TicketSessionInfo, row: Row): WorkerCommentReason | null {
+    const holder = row.assignee_kind === 'session' && row.assignee_ref ? this.sessions.get(row.assignee_ref) : null;
+    const d = canWorkerComment({
+      worker: s,
+      ticketId: ticketIdOf(row.number),
+      holderKind: row.assignee_kind,
+      holderId: row.assignee_ref,
+      holderAncestors: holder ? this.#ancestors(holder) : [],
+    });
+    return d.allow ? d.why : null;
+  }
+
+  /** The audit row of a worker's comment under FR9b: the worker that wrote it, its lead and why. */
+  #auditWorkerComment(why: WorkerCommentReason | null, w: Writer, row: Row) {
+    if (!why) return;
+    const ticketId = ticketIdOf(row.number);
+    this.onAudit?.({
+      kind: 'ticket.worker_commented',
+      actor: w.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: `ticket:${ticketId}`,
+      detail: { ticketId, sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, holder: row.assignee_ref ?? null, why },
+    });
   }
 
   /** Whether the ticket was bumped into the session within `withinMs`. */
@@ -716,6 +780,95 @@ export class Tickets {
     return { kind: 'session', session: s };
   }
 
+  /**
+   * FR9c (D-62, T-483): an agent may not put a ticket on a person without an allowed tag (authz.ts `canAgentAssignUser`). A refusal is
+   * FORBIDDEN with the D-62 path (not a 404: the agent may see the ticket) and one `ticket.agent_assign_refused` audit row (ids and tags only).
+   */
+  #assertAgentAssign(caller: Caller, w: Writer, facts: { ticketId: string | null; action: 'create' | 'update'; assigneeAfter: 'session' | 'user' | null; assignsUser: boolean; tagsBefore: readonly string[]; tagsAfter: readonly string[] }): AssignedPersonAudit | null {
+    // An admin's token acting for a session is never refused, but the assignment it makes to a person is audited (T-483).
+    const forSession = caller.kind === 'token' && w.session !== null;
+    if (caller.kind !== 'agent' && !forSession) return null;
+    const allowedTags = this.#allowedAssignTags();
+    const d = canAgentAssignUser({ callerKind: caller.kind, assigneeAfter: facts.assigneeAfter, assignsUser: facts.assignsUser, tagsBefore: facts.tagsBefore, tagsAfter: facts.tagsAfter, allowedTags });
+    if (d.allow) {
+      if (!facts.assignsUser) return null;
+      const allowedTag = facts.tagsAfter.find((t) => allowedTags.includes(t)) ?? null;
+      return { action: facts.action, actor: w.actor, actorKind: caller.kind === 'agent' ? 'agent' : 'token', sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, allowedTag };
+    }
+    this.onAudit?.({
+      kind: 'ticket.agent_assign_refused',
+      actor: w.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: facts.ticketId ? `ticket:${facts.ticketId}` : null,
+      detail: { ticketId: facts.ticketId, action: facts.action, sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, tags: [...facts.tagsAfter], allowedTags, why: d.why },
+    });
+    throw new AppError('FORBIDDEN', D62_ASSIGN_REFUSAL);
+  }
+
+  /** `tickets.agentAssignUserTags` as a list; the built-in default when the setting cannot be read. */
+  #allowedAssignTags(): string[] {
+    let raw: unknown = AGENT_ASSIGN_USER_TAGS_DEFAULT;
+    try {
+      raw = this.#agentAssignUserTags();
+    } catch {
+      // the setting could not be read: the built-in default holds
+    }
+    return allowedAssignTags(raw);
+  }
+
+  /**
+   * FR9d (D-62, T-527): an agent may not add `owner-checklist` without an allowed tag (authz.ts `canAgentTagChecklist`): the tag puts a
+   * ticket on the owner's Needs you as surely as assigning a person. A refusal is FORBIDDEN with the D-62 path and one
+   * `ticket.agent_checklist_refused` audit row (ids and tags only), the same shape as `ticket.agent_assign_refused`.
+   */
+  #assertAgentChecklist(caller: Caller, w: Writer, facts: { ticketId: string | null; action: 'create' | 'update'; tagsBefore: readonly string[]; tagsAfter: readonly string[] }): ChecklistTaggedAudit | null {
+    // An admin's token acting for a session is never refused, but the tag it adds is audited (the T-483 shape).
+    const forSession = caller.kind === 'token' && w.session !== null;
+    if (caller.kind !== 'agent' && !forSession) return null;
+    const allowedTags = this.#allowedAssignTags();
+    const d = canAgentTagChecklist({ callerKind: caller.kind, tagsBefore: facts.tagsBefore, tagsAfter: facts.tagsAfter, allowedTags });
+    if (d.allow) {
+      if (!forSession || !facts.tagsAfter.includes(OWNER_CHECKLIST_TAG) || facts.tagsBefore.includes(OWNER_CHECKLIST_TAG)) return null;
+      return { action: facts.action, actor: w.actor, sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, allowedTag: facts.tagsAfter.find((t) => allowedTags.includes(t)) ?? null };
+    }
+    this.onAudit?.({
+      kind: 'ticket.agent_checklist_refused',
+      actor: w.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: facts.ticketId ? `ticket:${facts.ticketId}` : null,
+      detail: { ticketId: facts.ticketId, action: facts.action, sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, tags: [...facts.tagsAfter], allowedTags, why: d.why },
+    });
+    throw new AppError('FORBIDDEN', D62_CHECKLIST_REFUSAL);
+  }
+
+  /** The audit row for an owner-checklist tag an admin's token added for a session (ids and the allowing tag; no ticket text). Called after the write. */
+  #auditChecklistTagged(a: ChecklistTaggedAudit | null, ticketId: string) {
+    if (!a) return;
+    this.onAudit?.({
+      kind: 'ticket.agent_checklist_tagged',
+      actor: a.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: `ticket:${ticketId}`,
+      detail: { ticketId, action: a.action, actorKind: 'token', sessionId: a.sessionId, leadId: a.leadId, allowedTag: a.allowedTag },
+    });
+  }
+
+  /** The audit row for an allowed assignment to a person (ids, actor kind and the allowing tag; no ticket text). Called after the write. */
+  #auditAssignedPerson(a: AssignedPersonAudit | null, ticketId: string) {
+    if (!a) return;
+    this.onAudit?.({
+      kind: 'ticket.agent_assigned_person',
+      actor: a.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: `ticket:${ticketId}`,
+      detail: { ticketId, action: a.action, actorKind: a.actorKind, sessionId: a.sessionId, leadId: a.leadId, allowedTag: a.allowedTag },
+    });
+  }
+
   /** FR20: the queue is protected from a looping agent. */
   #createLimit(caller: Caller) {
     if (caller.kind === 'ui' || caller.kind === 'system' || caller.kind === 'trigger') return; // a trigger has its own limits
@@ -726,7 +879,13 @@ export class Tickets {
     if (caller.kind === 'agent') {
       const mine = this.#inWorkspace('workspace_id', caller.workspaceId);
       const open = (this.#db.prepare(`SELECT count(*) AS n FROM tickets WHERE source = 'agent' AND ${mine.sql} AND status IN (${OPEN_SQL})`).get(...mine.args) as { n: number }).n;
-      if (open >= OPEN_PER_WORKSPACE) throw new AppError('RATE_LIMITED', `${caller.workspaceId} already has ${OPEN_PER_WORKSPACE} open tickets made by agents. Close some first.`);
+      let cap = OPEN_PER_WORKSPACE;
+      try {
+        cap = this.#agentOpenPerWorkspace();
+      } catch {
+        // the setting could not be read: the built-in cap holds
+      }
+      if (open >= cap) throw new AppError('RATE_LIMITED', `${caller.workspaceId} already has ${cap} open tickets made by agents. Close some first.`);
     }
   }
 
@@ -739,6 +898,8 @@ export class Tickets {
     const priority = req.priority === undefined ? 'normal' : oneOf(req.priority, TICKET_PRIORITIES, 'priority');
     const tags = cleanTags(req.tags);
     const assignee = this.#assignee(caller, req.assignee);
+    const assignedAudit = this.#assertAgentAssign(caller, w, { ticketId: null, action: 'create', assigneeAfter: assignee?.kind ?? null, assignsUser: assignee?.kind === 'user', tagsBefore: [], tagsAfter: tags });
+    const checklistAudit = this.#assertAgentChecklist(caller, w, { ticketId: null, action: 'create', tagsBefore: [], tagsAfter: tags });
     // An agent's ticket concerns its own workspace; a session assignee's workspace is where the work is.
     let workspaceId = caller.kind === 'agent' ? caller.workspaceId : workspaceIdOf(req.workspaceId);
     if (assignee?.kind === 'session') workspaceId = assignee.session.workspaceId;
@@ -769,6 +930,8 @@ export class Tickets {
       if (assignee) this.#addEvent(n, 'assigned', w, null, { from: null, to: assignee.kind === 'session' ? { kind: 'session', sessionId: assignee.session.id } : { kind: 'user', name: assignee.name } });
       return n;
     });
+    this.#auditAssignedPerson(assignedAudit, ticketIdOf(number));
+    this.#auditChecklistTagged(checklistAudit, ticketIdOf(number));
     this.onChange?.();
     return this.#items([this.#row(number)!])[0]!;
   }
@@ -807,11 +970,15 @@ export class Tickets {
 
     // Assignee first: it can move the status (unassigning an in-progress ticket puts it back in the queue) and the workspace.
     let status = row.status;
+    let assigneeAfter = row.assignee_kind;
+    let assignsUser = false;
     if (req.assignee !== undefined) {
       const a = this.#assignee(caller, req.assignee);
       const before = row.assignee_kind ? `${row.assignee_kind}:${row.assignee_ref}` : null;
       const after = a ? (a.kind === 'session' ? `session:${a.session.id}` : `user:${a.name}`) : null;
       if (before !== after) {
+        assigneeAfter = a ? a.kind : null;
+        assignsUser = a?.kind === 'user';
         sets.assignee_kind = a ? a.kind : null;
         sets.assignee_ref = a ? (a.kind === 'session' ? a.session.id : a.name) : null;
         entries.push({
@@ -825,6 +992,8 @@ export class Tickets {
         if (!a && status === 'in_progress') status = 'open';
       }
     }
+    const assignedAudit = this.#assertAgentAssign(caller, w, { ticketId: ticketIdOf(row.number), action: 'update', assigneeAfter, assignsUser, tagsBefore: tags, tagsAfter: newTags ?? tags });
+    const checklistAudit = this.#assertAgentChecklist(caller, w, { ticketId: ticketIdOf(row.number), action: 'update', tagsBefore: tags, tagsAfter: newTags ?? tags });
     if (req.workspaceId !== undefined && !('workspace_id' in sets)) {
       if (agent) throw new AppError('FORBIDDEN', 'An agent’s tickets stay in its own workspace.');
       const v = workspaceIdOf(req.workspaceId);
@@ -860,6 +1029,8 @@ export class Tickets {
       for (const e of entries) this.#addEvent(row.number, e.kind, w, e.body ?? null, e.data);
     });
     this.#auditForEnded(grant, w, row, 'update');
+    this.#auditAssignedPerson(assignedAudit, ticketIdOf(row.number));
+    this.#auditChecklistTagged(checklistAudit, ticketIdOf(row.number));
     this.onChange?.();
     return this.#items([this.#row(row.number)!])[0]!;
   }
@@ -874,7 +1045,8 @@ export class Tickets {
       this.#addEvent(row.number, 'comment', w, body, w.session ? { session: w.session.id } : null);
       return Number((this.#db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id);
     });
-    this.#auditForEnded(grant, w, row, 'comment');
+    this.#auditForEnded(grant.ended, w, row, 'comment');
+    this.#auditWorkerComment(grant.worker, w, row);
     this.onChange?.();
     return this.#events(row.number).find((e) => e.id === eventId)!;
   }
@@ -1146,6 +1318,17 @@ export class Tickets {
       detail: { ticketId, sessionId: session.id, mode, note: note.length > 0 },
     });
     return { ticket: this.#items([this.#row(row.number)!])[0]!, session: this.#sessionView(this.sessions.get(session.id) ?? session), mode };
+  }
+
+  /**
+   * T-546: the latest comment a session wrote on any ticket: the ticket and the comment's id (what a lead's crew digest points to for the
+   * worker's full report), or null. A fact for the portal's own digest, not a read for a caller: it carries no text.
+   */
+  latestCommentOf(sessionId: string): { ticket: string; comment: number } | null {
+    const r = this.#db
+      .prepare("SELECT id, ticket_number AS number FROM ticket_events WHERE kind = 'comment' AND json_extract(data, '$.session') = ? ORDER BY id DESC LIMIT 1")
+      .get(sessionId) as { id: number; number: number } | undefined;
+    return r ? { ticket: ticketIdOf(r.number), comment: r.id } : null;
   }
 
   /** FR31: the tickets bumped into a session, the latest bump of each, newest first (the session page's chips). */

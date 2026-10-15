@@ -32,6 +32,15 @@ rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods"]
     verbs: ["get", "list"]
+  # Browser pool on Kubernetes (browser-desktop-pool PRD §10, T-575): each workspace's `ws-<name>-browser` ConfigMap (the browser's
+  # settings) and its egress NetworkPolicy (the browser reaches the internet, not the cluster). Only in this namespace; the same as
+  # the B3 rig had.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "create", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

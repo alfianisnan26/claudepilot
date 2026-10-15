@@ -8,7 +8,7 @@ import { isAppError } from '@isnanme/core';
 import type { ClaudeUsage, ClaudeUsageWindow } from '@portal/contracts';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
-import { MessageRate, pickSpawnClaude, spawnProblem, type AgentCaps, type SpawnPick } from './agents.js';
+import { MessageRate, pickSpawnClaude, spawnModel, spawnProblem, type AgentCaps, type SpawnPick } from './agents.js';
 import { SESSION_CAP } from './caps.js';
 import { portalFrame } from './controller.js';
 import { registerChatTools } from './portalTools.js';
@@ -82,14 +82,15 @@ test('pickSpawnClaude (T-294): the parent’s by default; on auto a plan Claude 
   assert.deepEqual(pick(undefined, rows), { claudeId: 'p', why: 'parent' });
   assert.deepEqual(pick(' same ', null), { claudeId: 'p', why: 'parent' }, 'same never needs the report');
 
-  assert.deepEqual(pick('auto', rows), { claudeId: 'b', why: 'room' }, 'the most room among the fresh, measured plan Claudes');
-  assert.deepEqual(pick('AUTO', rows, { b: 1 }), { claudeId: 'a', why: 'room' }, 'a burst spreads: the least busy with room first');
-  assert.deepEqual(pick('auto', rows, { p: 2, a: 2, b: 2 }), { claudeId: 'b', why: 'room' }, 'equal load: the ranking decides');
-  assert.deepEqual(pick('auto', rows, { a: 2, b: 2 }), { claudeId: 'p', why: 'parent' }, 'its own Claude when it is the least busy with room');
+  const core = (r: ReturnType<typeof pickSpawnClaude>) => ({ claudeId: r.claudeId, why: r.why });
+  assert.deepEqual(core(pick('auto', rows)), { claudeId: 'b', why: 'room' }, 'the most room among the fresh, measured plan Claudes (same reset: room decides)');
+  assert.deepEqual(core(pick('AUTO', rows, { b: 1 })), { claudeId: 'a', why: 'room' }, 'a burst spreads: load divides the score');
+  assert.deepEqual(core(pick('auto', rows, { p: 2, a: 2, b: 2 })), { claudeId: 'b', why: 'room' }, 'equal load: the ranking decides');
+  assert.deepEqual(core(pick('auto', rows, { a: 3, b: 3 })), { claudeId: 'p', why: 'parent' }, 'its own Claude when the others are busier (T-547: score = room per minute, divided by 1 + load)');
   assert.deepEqual(pick('auto', null), { claudeId: 'p', why: 'usage_unknown' }, 'no report: stays');
   const onlyBad = [usageRow('p', 95, NOW), rows[3]!, rows[4]!, rows[5]!, rows[6]!, usageRow('a', 95, NOW), usageRow('b', 50, NOW, { stale: true })];
   assert.deepEqual(pick('auto', onlyBad), { claudeId: 'p', why: 'no_room' }, 'never a key, an unknown, an old, a removed, a tight or a stale Claude');
-  assert.deepEqual(pick('auto', [usageRow('p', 5, NOW), usageRow('a', 40, NOW)]), { claudeId: 'p', why: 'parent' }, 'its own when that has the most room');
+  assert.deepEqual(core(pick('auto', [usageRow('p', 5, NOW), usageRow('a', 40, NOW)])), { claudeId: 'p', why: 'parent' }, 'its own when that has the most room');
 
   assert.deepEqual(pick('hasyim', rows), { claudeId: 'b', why: 'named' }, 'by name, any case');
   assert.deepEqual(pick('a', rows), { claudeId: 'a', why: 'named' }, 'by id');
@@ -103,6 +104,54 @@ test('pickSpawnClaude (T-294): the parent’s by default; on auto a plan Claude 
       `${name}: refused without listing the Claudes`,
     );
   }
+});
+
+test('pickSpawnClaude (T-427): with no Claude with room, the least used now (never one at its limit), spread over the Claudes', () => {
+  // Projected past 100 % of the session window: the Move ranking classes it over_pace, never room.
+  const over = (id: string, usedPct: number, extra: Partial<ClaudeUsage> & { ageMin?: number } = {}) =>
+    usageRow(id, usedPct, NOW, { outlook: { status: { value: 'over', basis: 'estimate' }, window: null, etaAt: { value: null, basis: 'unavailable' }, projectedPct: { value: null, basis: 'unavailable' } }, ...extra } as Partial<ClaudeUsage>);
+  const rows = [over('p', 70), over('a', 28), over('b', 18), usageRow('old', 5, NOW, { ageMin: 20 })];
+  assert.deepEqual(pick('auto', rows), { claudeId: 'b', why: 'no_room_lowest' }, 'the lowest current use, not the parent’s');
+  assert.deepEqual(pick('auto', [over('p', 70), over('a', 28), usageRow('b', 100, NOW)]), { claudeId: 'a', why: 'no_room_lowest' }, 'a Claude at its limit is never picked');
+  assert.deepEqual(pick('auto', [over('p', 70), over('a', 40, { stale: true }), over('b', 30, { ageMin: 20 })]), { claudeId: 'p', why: 'no_room' }, 'a stale or old reading is never picked');
+  assert.deepEqual(pick('auto', [over('p', 70), usageRow('a', 100, NOW), usageRow('b', 100, NOW)]), { claudeId: 'p', why: 'no_room' }, 'the parent’s only when every other is at its limit');
+  assert.deepEqual(pick('auto', [over('p', 10), over('a', 60)]), { claudeId: 'a', why: 'no_room_lowest' }, 'another Claude even when the parent’s is the least used');
+  assert.deepEqual(pick('auto', [over('p', 70), usageRow('a', 92, NOW), usageRow('b', 90, NOW)]), { claudeId: 'p', why: 'no_room' }, 'never one with 10 % left or less (it would be moved off at once)');
+  assert.deepEqual(pick('auto', [over('p', 70), usageRow('a', 89, NOW)]), { claudeId: 'a', why: 'no_room_lowest' }, 'a tight Claude above the floor qualifies');
+
+  // Spread: three spawns in a row, each counted as a live session on the Claude it got.
+  const load: Record<string, number> = { p: 1 };
+  const got: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    const r = pick('auto', rows.slice(0, 3), load);
+    got.push(r.claudeId);
+    load[r.claudeId] = (load[r.claudeId] ?? 0) + 1;
+  }
+  const share = Math.ceil(7 / 3) + 1;
+  for (const id of ['p', 'a', 'b']) assert.ok((load[id] ?? 0) <= share, `${id} holds ${load[id]} of 7 live sessions: at most ${share}`);
+  assert.equal(got[0], 'b', 'the first goes to the least used');
+  assert.ok(got.includes('a'), `a burst spreads past the least used one (${got.join(',')})`);
+});
+
+test('pickSpawnClaude (T-547, D-65): use it or lose it: less room but a sooner reset wins; past the auto-move line it is skipped; an unknown reset is never picked', () => {
+  const at = (m: number) => new Date(NOW + m * 60_000).toISOString();
+  const withReset = (id: string, usedPct: number, resetsInMin: number | null) => {
+    const r = usageRow(id, usedPct, NOW);
+    r.windows = [{ ...r.windows[0]!, resetsAt: resetsInMin === null ? null : at(resetsInMin) }];
+    return r;
+  };
+  // b: 60 % left but resets in 30 min (2 per minute); a: 90 % left but resets in 300 min (0.3 per minute).
+  const near = pick('auto', [withReset('p', 80, 200), withReset('a', 10, 300), withReset('b', 40, 30)]);
+  assert.equal(near.claudeId, 'b', 'the sooner reset wins although it has less room');
+  assert.equal(near.why, 'room');
+  assert.equal(near.detail, 'Hasyim: 60 % left, resets in 30 min (use it or lose it)', 'the choice is explained with its figures');
+  // Past the line (D-64: 10 % left or less): never, however soon it resets.
+  assert.equal(pick('auto', [withReset('p', 80, 200), withReset('a', 10, 300), withReset('b', 95, 1)]).claudeId, 'a', 'b is past the line: skipped');
+  // Unknown readings: no reset time (monitor marks it unknown) is not picked; no usage report keeps the parent.
+  assert.equal(pick('auto', [withReset('p', 80, 200), withReset('a', 10, 300), withReset('b', 40, null)]).claudeId, 'a', 'unknown reset time: skipped');
+  assert.deepEqual(pick('auto', null), { claudeId: 'p', why: 'usage_unknown' });
+  // Equal figures: the least busy first (a burst spreads).
+  assert.equal(pick('auto', [withReset('p', 80, 100), withReset('a', 40, 100), withReset('b', 40, 100)], { b: 1 }).claudeId, 'a');
 });
 
 test('portalFrame (T-294): a session sender is named by its relation; a peer is told it carries no authority', () => {
@@ -238,7 +287,9 @@ test('T-294: a worker’s Claude is its parent’s, a named plan Claude, or on a
     assert.equal((await s.controller.spawnClaude(s.id, 'auto')).why, 'usage_unknown', 'no report installed');
     await assert.rejects(s.controller.spawnClaude(s.id, 'work'), /plan can’t be read now/, 'named, no report: refused');
     s.controller.spawnUsage = async () => [usageRow(mine, 60, now), usageRow(work.id, 10, now)];
-    assert.deepEqual(await s.controller.spawnClaude(s.id, 'auto'), { claudeId: work.id, name: 'Work', why: 'room' });
+    const auto = await s.controller.spawnClaude(s.id, 'auto');
+    assert.deepEqual({ claudeId: auto.claudeId, name: auto.name, why: auto.why }, { claudeId: work.id, name: 'Work', why: 'room' });
+    assert.match(auto.detail ?? '', /^Work: 90 % left, resets in 180 min \(use it or lose it\)$/, 'T-547: the figures that decided it');
     assert.deepEqual(await s.controller.spawnClaude(s.id, 'work'), { claudeId: work.id, name: 'Work', why: 'named' });
     s.controller.spawnUsage = async () => [usageRow(mine, 95, now), usageRow(work.id, null, now, { runsOn: 'key', windows: [] })];
     await assert.rejects(s.controller.spawnClaude(s.id, 'Work'), /billed per use/);
@@ -341,19 +392,19 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
     const out = started.result!.structuredContent.session as { id: string; claude: { id: string; name: string; why: string }; role: string; applied: string[]; unconfirmed: string[] };
     assert.deepEqual(out.claude, { id: work.id, name: 'Work', why: 'room' });
     assert.deepEqual([out.role, out.applied, out.unconfirmed], ['qa-verifier', ['mode dontAsk'], []]);
-    assert.match(started.result!.content![0]!.text, /^Started worker \S+ on Work, a Claude with room by a fresh, measured reading, mode dontAsk\./);
+    assert.match(started.result!.content![0]!.text, /^Started worker \S+ on Work, a Claude with room by a fresh, measured reading \(Work: \d+ % left, resets in \d+ min \(use it or lose it\)\), mode dontAsk\./);
     const worker = r.s.controller.get(out.id)!;
     assert.deepEqual([worker.claudeId, worker.parentId, worker.bypassCapable, worker.mode, worker.agent], [work.id, r.s.id, false, 'dontAsk', 'qa-verifier']);
     // The role is its agent: its process starts as `claude --agent qa-verifier`, so the first instruction is the parent's, as written.
     const launch = r.s.ws.startArgs.find((x) => x.includes(worker.claudeSessionId))!;
     assert.equal(launch[launch.indexOf('--agent') + 1], 'qa-verifier');
     const opening = r.s.controller.history(worker.id).find((e) => e.kind === 'user')!;
-    assert.equal(opening.text, '[Your role: qa-verifier. If .claude/agents/qa-verifier.md is not in your folder, tell your parent with session_message before you start.]\n\nVerify T-7 against its done criteria.');
+    assert.equal(opening.text, '[Your role: qa-verifier. If your instructions do not describe this role (its agent file, in the folder\'s .claude/agents or the workspace persona\'s), tell your parent with session_message before you start.]\n\nVerify T-7 against its done criteria.');
     // What the worker's Claude reads: its first instruction framed as from its parent (T-294 QA: it said "another session").
     const firstLine = r.s.ws.sends.find((x) => x.args[1] === worker.claudeSessionId && x.line.includes('Verify T-7'))!.line;
     assert.match(firstLine, /Portal message from your parent session/);
     const spawned = r.s.controller.audit({ kind: 'agent.spawned' }).find((x) => x.sessionId === worker.id)!;
-    assert.deepEqual(spawned.detail.spawn, { claude: work.id, why: 'room', role: 'qa-verifier', model: null, effort: null, mode: 'dontAsk' }, 'the audit row says how');
+    assert.deepEqual(spawned.detail.spawn, { claude: work.id, why: 'room', role: 'qa-verifier', model: null, effort: null, mode: 'dontAsk', modelWhy: null }, 'the audit row says how');
 
     // plan never confirmed (the process does not answer): the worker is ended and gets no instruction.
     const ended = await r.h.call(a.secret, 'session_spawn', { prompt: 'Read the plan.', title: 'Planner', mode: 'plan' });
@@ -398,4 +449,117 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
   } finally {
     await r.done();
   }
+});
+
+test('spawnModel (T-490, D-63): the role’s model by default; on a role below opus only a sonnet or haiku id needs no why (opus, fable, default, opusplan, an unknown id do)', () => {
+  const refused = (f: () => unknown) => {
+    try {
+      f();
+    } catch (e) {
+      return isAppError(e) && e.code === 'VALIDATION_FAILED' ? e.message : `other: ${String(e)}`;
+    }
+    return 'not refused';
+  };
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', null, null), { model: 'sonnet', fromRole: true }, 'no model asked: the role’s');
+  assert.deepEqual(spawnModel('implementer', null, null, null), { model: null, fromRole: false }, 'a role with no model: none, as before');
+  assert.deepEqual(spawnModel(null, null, null, null), { model: null, fromRole: false });
+  assert.match(refused(() => spawnModel('reviewer', 'sonnet', 'opus', null)), /^D-63: the reviewer role runs on sonnet\. Give why .* or leave model out to use sonnet\.$/);
+  assert.match(refused(() => spawnModel('qa-verifier', 'claude-sonnet-5-5', 'fable', '  ')), /^D-63: /, 'fable too; a blank why is none');
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'claude-opus-5-5', 'release gate on the exact commit'), { model: 'claude-opus-5-5', fromRole: false });
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'sonnet', null), { model: 'sonnet', fromRole: false }, 'its own model asked');
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'haiku', null), { model: 'haiku', fromRole: false }, 'below is never refused');
+  assert.deepEqual(spawnModel('implementer', 'opus', 'fable', null), { model: 'fable', fromRole: false }, 'a role on opus is not D-63’s');
+  assert.deepEqual(spawnModel('implementer', null, 'opus', null), { model: 'opus', fromRole: false }, 'a role with no model: the model asked, unchanged');
+  assert.match(refused(() => spawnModel('qa-verifier', 'sonnet', 'some-other-model', null)), /^D-63: /, 'an unknown id needs a why');
+  assert.match(refused(() => spawnModel('qa-verifier', 'sonnet', 'default', null)), /^D-63: .*start it on default/, 'default can resolve to opus');
+  assert.match(refused(() => spawnModel('reviewer', 'sonnet', 'opusplan', null)), /^D-63: /);
+  assert.match(refused(() => spawnModel('reviewer', 'sonnet', 'best', null)), /^D-63: /);
+  assert.match(refused(() => spawnModel('reviewer', 'sonnet', 'sonnet-or-opus', null)), /^D-63: /, 'not a bare alias');
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'claude-sonnet-4-6', null), { model: 'claude-sonnet-4-6', fromRole: false });
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'sonnet[1m]', null), { model: 'sonnet[1m]', fromRole: false });
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'claude-haiku-4-5', null), { model: 'claude-haiku-4-5', fromRole: false });
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'default', 'release gate'), { model: 'default', fromRole: false }, 'default with a why');
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'some-other-model', 'a check'), { model: 'some-other-model', fromRole: false });
+  assert.deepEqual(spawnModel('implementer', 'opus', 'default', null), { model: 'default', fromRole: false }, 'a role on opus is not D-63’s');
+});
+
+test('T-490 (D-63) over MCP: a QA role starts on its role’s model; opus with no why is refused before anything starts; with a why it starts and keeps it; a role with no model keeps the one asked', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.controlTimeoutMs = 150;
+    r.s.controller.agentCaps = () => ({ ...CAPS, maxChildren: 5, spawnsPerHour: 20 });
+    const asked: string[] = [];
+    r.s.controller.roleModel = (ws, role) => (asked.push(`${ws} ${role}`), role === 'qa-verifier' || role === 'reviewer' ? 'sonnet' : null);
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    type Out = { id: string; model: string | null; why: unknown; applied: string[]; unconfirmed: string[] };
+    const spawnAs = async (args: Record<string, unknown>, model: string) => {
+      const spawning = r.h.call(a.secret, 'session_spawn', { prompt: 'Verify T-7 against its done criteria.', ...args });
+      const req = await r.s.take('set_model');
+      assert.equal(req.request.model, model, 'the model goes to the worker before its first instruction');
+      const started = await spawning;
+      assert.equal(started.result?.isError, undefined, JSON.stringify(started.raw));
+      return started.result!.structuredContent.session as Out;
+    };
+    const spawnAudit = (id: string) => r.s.controller.audit({ kind: 'agent.spawned' }).find((x) => x.sessionId === id)!.detail.spawn as Record<string, unknown>;
+
+    // A plain QA spawn (no model): sonnet, its role's, said as such.
+    const qa = await spawnAs({ title: 'Verify T-7', role: 'qa-verifier' }, 'sonnet');
+    assert.deepEqual(asked, ['docker/ws1 qa-verifier'], 'the role’s model is read for the parent’s workspace');
+    assert.equal(qa.model, 'sonnet');
+    assert.match(qa.unconfirmed.join(' '), /^model sonnet \(the role’s\): /);
+    assert.equal(qa.why, null);
+    assert.deepEqual([spawnAudit(qa.id).model, spawnAudit(qa.id).modelWhy], ['sonnet', null]);
+    assert.equal(r.s.controller.get(qa.id)!.spawnWhy, undefined);
+
+    // Opus for a role on sonnet with no why: refused naming D-63, and nothing starts.
+    const count = r.s.controller.children(r.s.id).length;
+    const refused = await r.h.call(a.secret, 'session_spawn', { prompt: 'Review the diff of T-7.', title: 'Review T-7', role: 'reviewer', model: 'opus' });
+    assert.equal(refused.result?.isError, true);
+    const error = refused.result!.structuredContent.error as { code: string; message: string };
+    assert.equal(error.code, 'VALIDATION_FAILED');
+    assert.match(error.message, /^D-63: the reviewer role runs on sonnet\. Give why /);
+    assert.equal(r.s.controller.children(r.s.id).length, count, 'nothing started');
+
+    // With a why: it starts on opus, and the why is kept on the worker, in its audit row and in the result (as the lead's text).
+    const reason = 'Release gate on the exact commit (T-490).';
+    const review = await spawnAs({ title: 'Review T-7', role: 'reviewer', model: 'opus', why: reason }, 'opus');
+    assert.equal(review.model, 'opus');
+    assert.deepEqual(review.why, { untrusted_text: reason, source: 'agent' });
+    assert.equal(r.s.controller.get(review.id)!.spawnWhy, reason);
+    assert.deepEqual([spawnAudit(review.id).model, spawnAudit(review.id).modelWhy], ['opus', reason]);
+
+    // A role with no model: the model asked, unchanged, and no why needed.
+    const impl = await spawnAs({ title: 'Build T-7', role: 'implementer', model: 'opus' }, 'opus');
+    assert.equal(impl.model, 'opus');
+    assert.match(impl.unconfirmed.join(' '), /^model opus: /);
+    assert.equal(r.s.controller.get(impl.id)!.spawnWhy, undefined);
+  } finally {
+    await r.done();
+  }
+});
+
+test('pickSpawnClaude (T-460): never a Claude auto move would leave by projection, even above the 10 % floor', () => {
+  const at = (m: number) => new Date(NOW + m * 60_000).toISOString();
+  const fig = (value: number | string, basis = 'estimate') => ({ value, basis });
+  // 22 % left, projected 143 % at the reset and out of quota within the hour: what the Event lead was started on (T-460).
+  const leaving = (id: string): ClaudeUsage =>
+    usageRow(id, 78, NOW, {
+      windows: [
+        {
+          key: 'session',
+          label: 'Session',
+          usedPct: 78,
+          resetsAt: at(180),
+          level: 'ok',
+          pace: { speed: fig(1), projectedPct: fig(143), etaAt: fig(at(60)), status: fig('over'), evenPct: fig(40), aheadPts: fig(30), readings: 6, spanMin: 60, method: 'least_squares', lowConfidence: false },
+        } as ClaudeUsageWindow,
+      ],
+      outlook: { status: { value: 'over', basis: 'estimate' }, window: null, etaAt: { value: null, basis: 'unavailable' }, projectedPct: { value: null, basis: 'unavailable' } },
+    } as Partial<ClaudeUsage>);
+  const over = (id: string, usedPct: number) =>
+    usageRow(id, usedPct, NOW, { outlook: { status: { value: 'over', basis: 'estimate' }, window: null, etaAt: { value: null, basis: 'unavailable' }, projectedPct: { value: null, basis: 'unavailable' } } } as Partial<ClaudeUsage>);
+  assert.deepEqual(pick('auto', [usageRow('p', 95, NOW), leaving('a')]), { claudeId: 'p', why: 'no_room' }, 'the one projected to run out is not picked');
+  assert.deepEqual(pick('auto', [usageRow('p', 95, NOW), leaving('a'), over('b', 82)]), { claudeId: 'b', why: 'no_room_lowest' }, 'another with no confident projection still is');
+  const b = pick('auto', [usageRow('p', 70, NOW), leaving('a'), usageRow('b', 40, NOW)]);
+  assert.deepEqual({ claudeId: b.claudeId, why: b.why }, { claudeId: 'b', why: 'room' }, 'and room beats it as before');
 });

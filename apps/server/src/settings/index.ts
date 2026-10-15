@@ -1,5 +1,5 @@
 import { AppError, success } from '@isnanme/core';
-import { SETTING_KEYS, workspaceRef, type SettingUpdate } from '@portal/contracts';
+import { platformRef, SETTING_KEYS, workspaceRef, type SettingUpdate } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { actorOf, requireCan } from '../authz/seam.js';
 import type { FragmentProvider, Reconciler } from '../delivery/reconciler.js';
@@ -100,9 +100,22 @@ async function body<T>(c: Context): Promise<Partial<T>> {
 export function createSettingsRoutes(module: SettingsModule): Hono {
   const app = new Hono();
   const { settings, lockdown, agentEnv } = module;
-  app.get('/', (c) => c.json(success(settings.view())));
-  app.get('/audit', (c) => c.json(success(settings.audit(Number(c.req.query('limit')) || 100))));
-  app.get('/lockdown/:target/:name', (c) => c.json(success(lockdown.status(`${c.req.param('target')}/${c.req.param('name')}`))));
+  app.get('/', (c) => {
+    // T-329: every signed-in person reads the effective values (why something is refused); nobody else.
+    if (actorOf(c).kind === 'anonymous') throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    return c.json(success(settings.view()));
+  });
+  app.get('/audit', (c) => {
+    // T-329: the trail of changes is the platform's (`view` on the `settings` area: admins).
+    requireCan(actorOf(c), 'view', platformRef('settings'));
+    return c.json(success(settings.audit(Number(c.req.query('limit')) || 100)));
+  });
+  app.get('/lockdown/:target/:name', (c) => {
+    const id = `${c.req.param('target')}/${c.req.param('name')}`;
+    // T-329: as agent-env, a workspace the asker may not view answers as one that does not exist.
+    requireCan(actorOf(c), 'view', workspaceRef(id));
+    return c.json(success(lockdown.status(id)));
+  });
   app.get('/agent-env/:target/:name', (c) => {
     const id = `${c.req.param('target')}/${c.req.param('name')}`;
     // T-309: a workspace the asker may not view answers as one that does not exist (the seam's 404).
@@ -110,6 +123,8 @@ export function createSettingsRoutes(module: SettingsModule): Hono {
     return c.json(success(agentEnv.status(id)));
   });
   app.put('/:key', async (c) => {
+    // T-329: a change is `manage` on the platform's `settings` area (admins), asked before the body is read.
+    requireCan(actorOf(c), 'manage', platformRef('settings'));
     const req = await body<SettingUpdate>(c);
     return c.json(success(settings.set(c.req.param('key') ?? '', req.value, { actor: 'Admin', confirm: req.confirm === true })));
   });

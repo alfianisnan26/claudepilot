@@ -46,3 +46,16 @@ export function cacheReadWeight(model: string | null | undefined): number {
   const hit = READ_WEIGHT.find(([p]) => id === p || id.startsWith(p + '-'));
   return hit ? hit[1] : 0.1;
 }
+
+/**
+ * T-343: what one API call cost at list price, an ESTIMATE with the same weights as the lab (cache read per model, cache write 1.25 for
+ * 5 minutes or 2.0 for 1 hour, output 5) times the model's input price. Null when the model has no price ("unavailable", never a guess).
+ */
+export function callCostUsd(
+  model: string | null | undefined,
+  t: { input: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number; output: number },
+): number | null {
+  const price = inputPricePerToken(model);
+  if (price === null) return null;
+  return (t.input + cacheReadWeight(model) * t.cacheRead + 1.25 * t.cacheWrite5m + 2 * t.cacheWrite1h + 5 * t.output) * price;
+}

@@ -132,6 +132,7 @@ const FIXTURE = {
     ['agents.spawnDepth', 'CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH', '3', null, 'new-subagents'],
     ['agents.bashOutputMax', 'BASH_MAX_OUTPUT_LENGTH', '8000', 'agent-limits', 'restart'],
     ['agents.mcpOutputMax', 'MAX_MCP_OUTPUT_TOKENS', '25000', null, 'restart'],
+    ['agents.autoCompactWindow', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW', '200000', null, 'restart'],
   ].map(([key, env, v, pool, applies]) => ({ key, env, applies, desired: v, applied: v, overriddenPool: pool })),
 };
 let fixtureScript = null;

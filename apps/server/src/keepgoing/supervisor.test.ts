@@ -21,13 +21,24 @@ Object.assign(process.env, {
   DRY_RUN: '0',
 });
 // Only the orchestrator track is looked at: the other two are paused by their files.
-for (const k of ['konfersi', 'event']) writeFileSync(join(dir, `PAUSE-${k}`), '');
+for (const k of ['konfersi', 'event', 'tradingbot']) writeFileSync(join(dir, `PAUSE-${k}`), '');
 
 const logs: string[] = [];
 mock.method(console, 'log', (...a: unknown[]) => void logs.push(a.join(' ')));
 
-/** The fake portal: the one chat of the track, how `/recover` answers, and every call it got. */
-const portal = { session: {} as Record<string, unknown>, recover: { status: 404, body: { error: { code: 'NOT_FOUND', message: 'no such route' } } } as { status: number; body: unknown }, calls: [] as { method: string; path: string; body: unknown }[] };
+/**
+ * The fake portal: the one chat of the track (or `sessions`, the list for each round in turn, the last one repeated), how `/recover` answers,
+ * how many calls to /healthz and to the session list answer 503 first (T-400), and every call it got.
+ */
+const portal = {
+  session: {} as Record<string, unknown>,
+  sessions: null as Record<string, unknown>[][] | null,
+  healthDown: 0,
+  listDown: 0,
+  recover: { status: 404, body: { error: { code: 'NOT_FOUND', message: 'no such route' } } } as { status: number; body: unknown },
+  calls: [] as { method: string; path: string; body: unknown }[],
+};
+const listFor = () => (portal.sessions ? (portal.sessions.length > 1 ? portal.sessions.shift()! : portal.sessions[0]!) : [portal.session]);
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(String(input));
@@ -44,7 +55,8 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (path === '/api/keepgoing') return json(200, { data: { pauses: [] } });
   if (path === '/api/chat/claudes') return json(200, { data: [{ name: 'hasyim', id: 'c-hasyim' }] });
   if (path === '/api/claude-usage') return json(200, { data: { claudes: [] } });
-  if (path === '/api/chat/sessions' && method === 'GET') return json(200, { data: [portal.session] });
+  if (path === '/healthz') return portal.healthDown-- > 0 ? json(503, { error: { code: 'UNAVAILABLE', message: 'fake portal: down' } }) : json(200, { ok: true, service: 'portal' });
+  if (path === '/api/chat/sessions' && method === 'GET') return portal.listDown-- > 0 ? json(503, { error: { code: 'UNAVAILABLE', message: 'fake portal: down' } }) : json(200, { data: listFor() });
   if (path === '/api/chat/sessions' && method === 'POST') return json(200, { data: { id: 'new-1', cwd: dir } });
   if (path === '/api/chat/sessions/new-1') return json(200, { data: { id: 'new-1', state: 'idle', mode: 'bypassPermissions' } });
   if (path === '/api/chat/reauth' || path.endsWith('/bypass')) return json(200, { data: {} });
@@ -90,6 +102,9 @@ beforeEach(() => {
   portal.calls.length = 0;
   logs.length = 0;
   portal.recover = { status: 404, body: { error: { code: 'NOT_FOUND', message: 'no such route' } } };
+  portal.sessions = null;
+  portal.healthDown = 0;
+  portal.listDown = 0;
 });
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -168,4 +183,101 @@ test('harmless starts do not count against the chat’s cap, but have a ceiling 
   await sup.watch({ rounds: 1 });
   assert.equal(created().length, 0, 'the harmless loop stops');
   assert.equal(tickets().length, 1, 'and is reported');
+});
+
+/* ---------- T-400: no second lead while the first one works ---------- */
+
+const M = 60_000;
+/** A live lead of the track: idle, its process up, in Bypass, active a minute ago. */
+const live = (id: string, extra: Record<string, unknown> = {}) => ({
+  id,
+  title: TITLE,
+  state: 'idle',
+  process: 'live',
+  mode: 'bypassPermissions',
+  bypassCapable: true,
+  createdAt: new Date(Date.now() - 3 * H).toISOString(),
+  lastActivityAt: new Date(Date.now() - M).toISOString(),
+  archivedAt: null,
+  parentId: null,
+  cwd: dir,
+  claudeId: 'c-hasyim',
+  ...extra,
+});
+/** The track's chat ended by a crash: on a steady portal with no live lead it is started again. */
+const crashed = (id = 'old-1', extra: Record<string, unknown> = {}) => ({ ...ended('x'), id, endedReason: 'process exited (code 1)', ...extra });
+const seedTrack = (extra: Record<string, unknown>) =>
+  writeFileSync(sup.STATE_FILE, JSON.stringify({ tracks: { orchestrator: { key: 'orchestrator', starts: [], nudges: [], wakes: [], ...extra } } }));
+const moved = () =>
+  portal.calls.filter((c) => {
+    const p = (c.body as { params?: { name?: string; arguments?: { text?: string } } } | undefined)?.params;
+    return c.path === '/mcp' && p?.name === 'session_send' && /was moved to another Claude/.test(p.arguments?.text ?? '');
+  });
+
+test('T-400 item 1: the portal down, then up: no new lead until it has answered steadily', async () => {
+  seedTrack({ sessionId: 'old-1' });
+  portal.session = crashed();
+  portal.listDown = 1; // round 1: the session list answers 503 (the outage); round 2: it answers, the lead not in it
+  await sup.watch({ rounds: 2 });
+  assert.equal(created().length, 0, 'a 503 is not "no sessions", and one good round after it is not enough');
+  assert.ok(logs.some((l) => /portal unreachable \(the session list answered 503/.test(l)));
+  assert.ok(logs.some((l) => /not deciding it is gone yet/.test(l)));
+
+  // Flapping: /healthz fails while the list answers.
+  portal.calls.length = 0;
+  portal.healthDown = 1;
+  await sup.watch({ rounds: 2 });
+  assert.equal(created().length, 0, 'a failed /healthz holds the start too');
+
+  // Negative twin: the same ended chat on a steady portal is started again.
+  portal.calls.length = 0;
+  await sup.watch({ rounds: 1 });
+  assert.equal(created().length, 1);
+});
+
+test('T-400 item 2: a live chat of the track is adopted instead of starting a new lead beside it', async () => {
+  seedTrack({ sessionId: 'new-9' });
+  // The supervisor's last chat (newer) crashed; the real lead (older) is live and working.
+  portal.sessions = [[crashed('new-9', { createdAt: new Date(Date.now() - H).toISOString() }), live('lead-1', { state: 'working' })]];
+  await sup.watch({ rounds: 1 });
+  assert.equal(created().length, 0);
+  assert.equal(track().sessionId, 'lead-1');
+
+  // Negative twin: a live worker the lead spawned (it has a parent) is not the lead: the track is started again.
+  portal.calls.length = 0;
+  seedTrack({ sessionId: 'new-9' });
+  portal.sessions = [[crashed('new-9', { createdAt: new Date(Date.now() - H).toISOString() }), live('w-1', { parentId: 'gone-1' })]];
+  await sup.watch({ rounds: 1 });
+  assert.equal(created().length, 1);
+});
+
+test('T-400 item 3: a person ending a newer duplicate keeps the older live lead watched', async () => {
+  seedTrack({ sessionId: 'lead-1' });
+  const dup = { ...crashed('dup-1'), endedReason: 'closed by operator', createdAt: new Date(Date.now() - 10 * M).toISOString() };
+  portal.sessions = [[dup, live('lead-1')]];
+  await sup.watch({ rounds: 2 });
+  assert.ok(!track().done, 'the track is not "closed by a person"');
+  assert.equal(track().sessionId, 'lead-1');
+  assert.equal(created().length, 0);
+  assert.ok(!logs.some((l) => /closed by a person/.test(l)));
+
+  // A track already marked done (before the fix) adopts its live lead, even when it is the stored chat.
+  logs.length = 0;
+  seedTrack({ sessionId: 'lead-1', done: true });
+  await sup.watch({ rounds: 1 });
+  assert.ok(!track().done);
+  assert.ok(logs.some((l) => /adopted the live chat lead-1/.test(l)));
+});
+
+test('T-400 item 4: no MOVED text on a stored-Claude mismatch at start; a move this process saw still gets it', async () => {
+  seedTrack({ sessionId: 'lead-1', claudeId: 'c-other', pendingContinue: true });
+  portal.sessions = [[live('lead-1')]];
+  await sup.watch({ rounds: 1 });
+  assert.equal(moved().length, 0, 'the stored Claude is not a move');
+
+  // Negative twin: the same chat on another Claude in the next round is a move: it is told so, once.
+  portal.calls.length = 0;
+  portal.sessions = [[live('lead-1')], [live('lead-1', { claudeId: 'c-two', claudeName: 'two' })]];
+  await sup.watch({ rounds: 2 });
+  assert.equal(moved().length, 1);
 });
