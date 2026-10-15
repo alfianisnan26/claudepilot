@@ -10,10 +10,11 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
 - T-404 merged a690f49 (QA PASS WITH GAPS 3325; hook = second layer, decision 3314; primary layer = T-451); gate GREEN (gate-job a690f49-5383).
 
 ## IN FLIGHT
-- Worker 55c2f12f (qa-verifier, sonnet, fadlilah): T-449 S2 verify of dev/t-449-2 f490c45 (report 3357), read-only in the main folder
-  (dev-t-333-1 and dev-t-366-1 answered FOLDER_UNTRUSTED after run 33 deployed T-366).
-- Worker 5e3ae624 (implementer, satria): T-376 S2 harness tools/qa/chat-paging.mjs on dev/t-376-3 in dev-t-349-1.
-- Worker ac71a2db (ux-checker, sonnet, satria): idle; runs chat-paging.mjs for the T-376 S2 verdict.
+- Integration 7f86942 pushed: T-378 S1 + coordinator cc4be7a (gate GREEN 7f86942-e17c).
+- Lead proof Job: T-376 S2 chat-paging on 6685059 --against 8a5cf70 (job-out/t376-proof.log). QA PASS WITH GAPS 3424.
+- Worker f646e77b (implementer, sonnet, satria): T-460 on dev/t-460-1 (11c1f00) in dev-t-460-1.
+- Worker a8412b0f (implementer, opus, alfian.isnan): T-450 S1a on dev/t-450-1 (11c1f00) in dev-t-450-1.
+- Worker af18baca (qa-verifier, sonnet, fadlilah, main folder, read-only): idle, kept for T-460 / T-450 QA.
 
 ## STATE PER TICKET
 - T-404: third blind review gave NO verdict (declined probes, design point -> T-451); fixes verified 3325; open until deployed.
@@ -26,6 +27,13 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
 - Next batch (2026-10-16): T-427, T-404, T-376 S2 if they pass.
 
 ## DECISIONS (binding)
+- 05:04 T-459 closed: the coordinator fixed the trust scan (cc4be7a; next deploy rebuilds the workspace image) and the 5 stale
+  spares were removed (job-out archived to job-out/archive/). New slices get FRESH worktrees from integration, never old spares.
+- 05:04 claude auto put an opus worker on fadlilah (projected 91 % at the 06:40 reset): ended it, respawned on alfian.isnan by
+  name (T-460 comment 3436). Name the Claude for opus slices until T-460 ships.
+- 04:44 T-449 merged (QA 3316, 3375) before its AttributionTab UX check: spares untrusted, T-450 S1a needs ticketCost; UX runs
+  from the main folder before the 2026-10-16 deploy (comment 3380). CSV ignores done -> T-450 S2; crew_metrics.py -> T-450.
+- 04:50 Spares answer FOLDER_UNTRUSTED (settings changed with the T-404 hook): T-459 to the coordinator; main folder for read-only only.
 - 04:12 Resumed: no unmerged good work beyond dev/t-375-1 (merged), dev/t-427-1 and dev/t-404-1 (in QA/fix); every other worktree is 0 ahead
   (dev-t118-login and dev-t293-7 1 ahead each: old, left). Deploy now per the coordinator (see DEPLOY).
 - Quota 04:10: fadlilah session 50 %, projected 105 % at 06:40 reset: workers go to claude auto (satria, alfian.isnan), no new opus slice on fadlilah.
@@ -33,7 +41,6 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
   role session via session_message; the lead never implements or commits code (merges and status only); close on QA PASS + merge.
 - D-61: at most 3 live workers, NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh.
 - Hand over before 250k context (coordinator).
-- Folder trust: trusted spares dev-t-349-1, dev-t-352-1, dev-t-336-1, dev-t-333-1, dev-t-366-1; dev-t-376-1 is untrusted.
 
 ## NEEDS A HUMAN (D-62)
 - T-93 Konfersi production only. Coordinator items: T-397, T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
