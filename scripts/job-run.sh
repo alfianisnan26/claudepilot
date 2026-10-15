@@ -27,7 +27,10 @@
 #     --big                                             8Gi of memory instead of 4Gi (T-524; /tmp 4Gi instead of 2Gi), for a run that was OOMKilled;
 #                                                       only k3s-node2 has room for it. Memory is requested = limited: the scheduler places a Job
 #                                                       only where it fits, says why it is Pending, and an OOMKilled Job says so with its limit.
-#   scripts/job-run.sh --list                           the Jobs, their chat, role and state
+# Placement (T-611): the scheduler counts memory REQUESTS, the master (control plane, Argo CD, Gitea...) uses far more for real. Before it creates a
+# Job this script reads the master's real memory (kubectl top nodes) and, over JOB_RUN_MASTER_MAX_PCT (default 75), makes the Job's rule away
+# from the control plane REQUIRED: it waits for k3s-node2 or for room. Under the line, or when the metrics fail, the preferred rules stay.
+#   scripts/job-run.sh --list                        the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
 # claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K". The Job stops when this script is interrupted or killed (the next run removes a Job whose
@@ -46,8 +49,9 @@ event_repo=isnanme/event # fixed on purpose (T-491): the door names one reposito
 # Memory per Job (T-524), request = limit, sized from measured cgroup peaks (docs/dev-session.md, "Heavy agent work in the cluster"); fixed here,
 # no environment override: the size is a cluster decision, not a caller's.
 mem_std=4Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
+master_max=${JOB_RUN_MASTER_MAX_PCT:-75}
 die() { echo "job-run: $*" >&2; exit 2; }
-for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
+for n in "$max" "$per" "$pprog" "$art_max" "$master_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
 label() { local v; v=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9.-' '-' | cut -c1-63 | sed -E 's/^[^a-z0-9]+//; s/[^a-z0-9]+$//'); printf '%s' "${v:-none}"; }
 jobs_json() { kubectl -n "$ns" get jobs -l app=claudepilot-job-run -o json 2>/dev/null; }
 stop_one() {
@@ -181,6 +185,16 @@ on_exit() {
 trap on_exit EXIT
 trap 'exit 130' INT TERM HUP
 
+# Placement (T-611): the control-plane node's real memory (working set against allocatable, from the metrics API). Over the line: a REQUIRED rule
+# away from it. A failed or odd reading keeps the preferred rules alone: the metrics must never block every Job.
+master_rule=; master_pct=$(kubectl top nodes -l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | awk 'NR == 1 { gsub(/%/, "", $5); print $5 }' || true)
+if [[ $master_pct =~ ^[0-9]{1,3}$ ]]; then
+  if [ "$master_pct" -gt "$master_max" ]; then
+    master_rule='requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}'
+    echo "job-run: placement: the control-plane node is at ${master_pct}% of its memory (over ${master_max}%): this Job may not run there; it waits for k3s-node2 or for the master to have room" >&2
+  else echo "job-run: placement: the control-plane node is at ${master_pct}% of its memory (limit ${master_max}%): preferred rules only"; fi
+else echo "job-run: placement: the control-plane node's memory is unknown (metrics unavailable): preferred rules only" >&2; fi
+
 # The credentials, into the Secret on stdin (printf is a builtin: no argument a process list would show).
 secret="job=$job"; mask=
 if [ "$kind" = github ]; then
@@ -201,7 +215,7 @@ unset t
 printf '%s\n' "$secret" | kubectl -n "$ns" create secret generic "$job" --from-env-file=/dev/stdin >/dev/null
 unset secret
 sed -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" \
-    -e "s#__MEMORY__#$memory#g" -e "s#__TMP_SIZE__#$tmp_size#" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
+    -e "s#__MASTER_REQUIRED__#$master_rule#" -e "s#__MEMORY__#$memory#g" -e "s#__TMP_SIZE__#$tmp_size#" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
     -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" \
     -e "s#__AGAINST__#$against#" -e "s#__KEEP__#$keep#" -e "s#__STEPS__#$steps#" -e "s#__ARTIFACTS__#$artifacts#" -e "s#__ARTMAX__#$art_max#" -e "s#__CMD__#$(printf '%s' "$cmd" | base64 -w0)#" \
     "$here/deploy/k3s-build/job-run.yaml" | kubectl apply -f - >/dev/null
@@ -267,9 +281,12 @@ while :; do
   [ -z "$(job_state)" ] || break
   # Pending because no node can hold it (T-524): say so once, instead of a silent wait.
   why=$(pod_get '[.items[0].status.conditions[]? | select(.type == "PodScheduled" and .status == "False" and .reason == "Unschedulable") | .message] | first' "$pj")
-  case "$why" in
-    '') ;;
-    *'Insufficient memory'*)
+  # With the required rule on (T-611) an affinity mismatch is the master being over its line, whatever else the message adds.
+  case "${master_rule:+rule}:$why" in
+    rule:*affinity*) [ "$said" = affinity ] || { said=affinity
+        echo "job-run: $job is Pending: the control-plane node is over ${master_max}% of its memory, so this Job waits for k3s-node2 to have room ($why; waits up to ${start_wait}s)" >&2; } ;;
+    *:'') ;;
+    *:*'Insufficient memory'*)
       [ "$said" = memory ] || { said=memory
         if [ -n "$big" ]; then hint="drop --big if the command fits in $mem_std"; else hint="it starts when a Job ends and frees memory"; fi
         echo "job-run: $job is Pending: no node has $memory of memory free to request ($why); $hint (waits up to ${start_wait}s)" >&2; } ;;
