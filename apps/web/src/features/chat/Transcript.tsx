@@ -2,12 +2,12 @@ import { cn, Spinner } from '@isnanme/ui';
 import { foldMoves, type ChatEvent, type ChatFile, type ChatImage, type ChatInputState, type ChatMove, type ChatTask } from '@portal/contracts';
 import { ArrowDown, ArrowRightLeft, Bot, ChevronDown, Clock3, ImageIcon, Plug, RotateCcw, RotateCw, Ticket, Users, Workflow, X, type LucideIcon } from 'lucide-react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { PersonaAvatar } from '@/features/personas/PersonaAvatar';
 import { PinnedBtw } from './btw/PinnedBtw';
 import { ActivityBlock } from './Activity';
-import { AGENT_TOOLS, buildItems, rowSeq } from './agentFold';
+import { AGENT_TOOLS, anchorSeq, buildItems, rowSeq } from './agentFold';
 import { AgentRow, AgentsContext, type AgentsView } from './AgentRow';
 import { chatApi } from './api';
 import { ArtifactBlock, FileChips } from './artifacts/ArtifactCards';
@@ -16,11 +16,12 @@ import { imageAlt, imageFileName, ImageThumbs, type ViewerImage } from './ImageV
 import { Markdown, QuietCopyButton } from './Markdown';
 import { MOTION, StreamingMarkdown, useFollow, useHandover } from './motion';
 import { portalSender } from './portalSender';
+import { nearTop, pickAnchor, restoreScroll, type Anchor, type MeasuredRow } from './scrollAnchor';
 import { publishTaskFeed, taskCalls } from './taskFeed';
-import { buildRows, LiveThinking, ThinkingRow, ToolCall, ToolGroup, toolLabel, type ToolPair, type TranscriptRow } from './ToolRows';
+import { buildRows, LiveThinking, LoadWholeContext, ThinkingRow, ToolCall, ToolGroup, toolLabel, type ToolPair, type TranscriptRow } from './ToolRows';
 import { TurnDone, turnUsage, type TurnUsage } from './Usage';
 import type { AgentLive } from './motion/deltas';
-import type { ChatDelta, ChatOutgoing } from './useChatSocket';
+import type { ChatDelta, ChatOutgoing, ChatPaging } from './useChatSocket';
 
 const NO_TASKS: ChatTask[] = [];
 const NO_LIVE_AGENTS: ReadonlyMap<string, AgentLive> = new Map();
@@ -88,10 +89,19 @@ export function Transcript({
   tasks = NO_TASKS,
   agentLive = NO_LIVE_AGENTS,
   onOpenAgent,
+  paging,
+  onLoadOlder,
+  onLoadWhole,
   className,
 }: {
   sessionId: string;
   events: ChatEvent[];
+  /** Where the pages stand (T-376): the row at the top says "Loading earlier" or "Start of the chat". Absent: the whole transcript is held. */
+  paging?: ChatPaging;
+  /** Reads the page before the first event held; called as the reader nears the top. */
+  onLoadOlder?: () => void;
+  /** Reads one cut tool result whole (its Output's "Show all"). */
+  onLoadWhole?: (seq: number) => Promise<void>;
   /** The main agent's live reply: the only thing the reply slot shows (a sub-agent's live text goes to its row). */
   delta: ChatDelta | null;
   outbox?: ChatOutgoing[];
@@ -144,7 +154,37 @@ export function Transcript({
     if (gap < 120) nearBottom.current = true;
     else if (byReader() && !follow.own(el.scrollTop)) nearBottom.current = false; // (the follower's own scrolling is not the reader's)
     setAwayFromBottom(gap > 320 && !nearBottom.current);
+    if (!nearBottom.current) olderIfNearTop();
   };
+
+  // Older pages (T-376): read as the reader nears the top. When one goes in above, the first row in view stays exactly where it was
+  // (scrollAnchor.ts): it is measured before the commit (here, in the render that has the older events) and put back before paint.
+  const pagingRef = useRef(paging);
+  pagingRef.current = paging;
+  const loadOlderRef = useRef(onLoadOlder);
+  loadOlderRef.current = onLoadOlder;
+  const olderIfNearTop = () => {
+    const el = ref.current;
+    const p = pagingRef.current;
+    if (el && p?.seeded && p.more && p.older === 'idle' && nearTop(el.scrollTop, el.clientHeight)) loadOlderRef.current?.();
+  };
+  const firstSeq = events.length ? events[0]!.seq : 0;
+  const shownFirst = useRef(firstSeq);
+  const anchor = useRef<Anchor | null>(null);
+  if (firstSeq !== shownFirst.current) {
+    const el = ref.current;
+    if (el && shownFirst.current > 0 && firstSeq < shownFirst.current && !nearBottom.current) anchor.current = measureAnchor(el);
+    shownFirst.current = firstSeq;
+  }
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const a = anchor.current;
+    if (!el || !a) return;
+    anchor.current = null;
+    const row = a.key === null ? null : el.querySelector<HTMLElement>(`[data-anchor="${a.key}"]`);
+    const rowTop = row ? row.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop : null;
+    el.scrollTop = restoreScroll(a, { rowTop, scrollHeight: el.scrollHeight });
+  }, [firstSeq]);
   // Following the end glides (motion/useFollow): an eased approach re-aimed every frame, so a reply growing line by
   // line never steps or jitters; the reader taking over (touch, wheel, key) stops it at once.
   const follow = useFollow(ref, nearBottom);
@@ -162,6 +202,10 @@ export function Transcript({
   useEffect(() => follow.pin(), [follow, events, delta, outbox, inputs]);
   // The dock growing is a change of the view itself: no glide.
   useEffect(() => follow.pin(true), [follow, padBottom]);
+  // After a page went in (or the first one is short of a screen): still near the top, read the next older one. Never on its own while
+  // following the end of a long chat (it is far from the top then).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => olderIfNearTop(), [events, paging]);
 
   // The keyboard opening (or the dock growing) shrinks the view, and rows grow as they animate open
   // (a Done pill, an activity row): stay at the bottom through both if that's where it was.
@@ -320,7 +364,7 @@ export function Transcript({
           !(it.kind === 'row' && it.row.type === 'event' && it.row.event.kind === 'user' && !it.row.event.transfer && !it.row.event.actor) &&
           !(it.kind === 'row' && it.row.type === 'event' && adopted.has(it.row.event.seq));
         return (
-          <motion.div key={it.key} {...RISE} initial={rise ? RISE.initial : false}>
+          <motion.div key={it.key} data-anchor={anchorSeq(it)} {...RISE} initial={rise ? RISE.initial : false}>
             {it.kind === 'activity' ? (
               <ActivityBlock
                 rows={it.rows}
@@ -343,6 +387,7 @@ export function Transcript({
   return (
     <MotionConfig reducedMotion="user">
       <AgentsContext.Provider value={agentsView}>
+        <LoadWholeContext.Provider value={onLoadWhole ?? null}>
         <div className={cn('relative', className)}>
           <div
             ref={ref}
@@ -359,6 +404,7 @@ export function Transcript({
             className="h-full overflow-y-auto overscroll-contain px-5 py-5 [overflow-anchor:none] sm:px-6"
           >
             <div ref={content} className="relative mx-auto flex w-full max-w-[720px] flex-col gap-5">
+              {paging?.seeded && events.length > 0 && <PagesHead paging={paging} onRetry={onLoadOlder} />}
               {storedRows}
               {outbox.map((o) => (
                 <motion.div
@@ -405,8 +451,47 @@ export function Transcript({
             <ArrowDown className="size-5" />
           </motion.button>
         </div>
+        </LoadWholeContext.Provider>
       </AgentsContext.Provider>
     </MotionConfig>
+  );
+}
+
+/** The first row in view and how far it is from the view's top, measured in the scroll area (scrollAnchor.ts). */
+function measureAnchor(el: HTMLElement): Anchor {
+  const top = el.getBoundingClientRect().top - el.scrollTop;
+  const rows: MeasuredRow[] = [];
+  // Rows are in order: measure until the first one that reaches into the view.
+  for (const child of el.querySelectorAll<HTMLElement>('[data-anchor]')) {
+    const r = child.getBoundingClientRect();
+    const row = { key: child.dataset.anchor ?? '', top: r.top - top, bottom: r.bottom - top };
+    rows.push(row);
+    if (row.bottom > el.scrollTop) break;
+  }
+  return pickAnchor(rows, el.scrollTop, el.scrollHeight);
+}
+
+/**
+ * The top of the transcript held (T-376): "Loading earlier" while the older page is read, Retry when it failed, "Start of the chat" once
+ * the first event is held. One fixed height whatever it says, so it never moves the rows under it.
+ */
+function PagesHead({ paging, onRetry }: { paging: ChatPaging; onRetry?: () => void }) {
+  return (
+    <div className="flex h-11 shrink-0 items-center justify-center text-[12px] text-muted">
+      {!paging.more ? (
+        <span>Start of the chat</span>
+      ) : paging.older === 'loading' ? (
+        <span role="status" className="inline-flex items-center gap-1.5">
+          <Spinner className="size-3.5" />
+          Loading earlier
+        </span>
+      ) : paging.older === 'failed' ? (
+        <button type="button" onClick={onRetry} className="press inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 font-semibold text-ink hover:bg-surface-2">
+          <RotateCw className="size-3.5" aria-hidden="true" />
+          Load earlier
+        </button>
+      ) : null}
+    </div>
   );
 }
 
