@@ -23,7 +23,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   builds after T-486 merges + T-595. QA UI then T-576 ux. LANE 83921ca7 "ClaudePilot BE Infra" (lane-backend, sonnet,
   ticket/T-611-job-placement) on T-611; queue T-547, T-610 (T-401/T-426 fixes, if any). 6 of 6: QA Perf, Backend, BE Infra, QA UI, 2 reviewers.
   16:35 Frontend f13a9442 ENDED (idle, T-556 parked) for REVIEWER 219d5558 (sonnet) on T-619 browser allow-list (owner priority).
-  Jobs: each agent starts its own (15:29). Still to place: T-558 QA (e652c44, 5052). No prettier/eslint in Jobs (T-612).
+  T-600 FE: QA UI FAIL 5565 (Home card grid follows viewport; labels cut at 1280) -> FE S1b (5573): respawn Frontend on a fresh
+  branch from 7d19c94 at next free slot; QA UI fixes home.mjs harness meanwhile. T-558 QA -> end of QA Perf queue. No prettier/eslint in Jobs (T-612).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
   T-426 ab93b54 (on T-401 060aca4): QA Perf FIRST (5541), blind review opus at next free slot (impl-t591 ends -> reviewer), gate, merge.
   T-401 re-merged wip/main-54ba328: gate GREEN gate-54ba328-6502 (suite 570 s, peak 2228Mi; 5560/5562); ff only on the person's ack (4941).
