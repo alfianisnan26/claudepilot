@@ -190,8 +190,8 @@ test('scrub takes the value, its header and any Authorization line out of what g
 });
 
 test('the setting: https only, no user or query, a secret name, 15 to 3600 s; the state keeps when a divergence was first seen', () => {
-  assert.deepEqual(checkUpstream({ url: URL_ }), { url: URL_, secret: null, everyS: 30 });
-  assert.deepEqual(checkUpstream({ url: URL_, secret: 'GH_READ', everyS: 60 }), { url: URL_, secret: 'GH_READ', everyS: 60 });
+  assert.deepEqual(checkUpstream({ url: URL_ }), { url: URL_, secret: null, everyS: 30, hookSecret: null });
+  assert.deepEqual(checkUpstream({ url: URL_, secret: 'GH_READ', everyS: 60 }), { url: URL_, secret: 'GH_READ', everyS: 60, hookSecret: null });
   for (const bad of [{ url: 'http://upstream.test/x.git' }, { url: 'https://u:p@upstream.test/x.git' }, { url: 'https://upstream.test/x.git#f' }, { url: 'ssh://upstream.test/x.git' }, { url: URL_, secret: '../etc' }, { url: URL_, everyS: 5 }, { url: URL_, everyS: 99999 }, {}]) {
     assert.throws(() => checkUpstream(bad), /./, JSON.stringify(bad));
   }
