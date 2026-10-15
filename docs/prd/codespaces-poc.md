@@ -253,9 +253,9 @@ F8 (user-to-server tokens), F10 (our OAuth App's device token creates codespaces
 
 ## 20. Runner targets: a Codespace as a burst runner (T-557)
 
-A second use of the same provider, separate from the workspace target of K2: a Codespace that runs one heavy job and goes away. The seam is `RunnerTarget` in `apps/server/src/ci/runnerTarget.ts` ([local-git-ci.md](local-git-ci.md) §23 has the contract and how a target is picked).
+A second use of the same provider, separate from the workspace target of K2: a Codespace that runs CI jobs and goes away. **Only CI jobs** (pilot CI pipeline jobs and `job-run` Jobs) go to a runner target; **moving a workspace onto a codespace is out of this epic.** The seam is `RunnerTarget` in `apps/server/src/ci/runnerTarget.ts` ([local-git-ci.md](local-git-ci.md) §23 has the contract, the secret lease, how a target is picked and the slice order).
 
-**What a runner target is.** Where a heavy job (a typecheck, a suite, a build) executes: `cluster` today (a Kubernetes Job made by `scripts/job-run.sh`), `codespace` next. The caller asks for "run this command on this pushed ref" and gets a log and an exit code, whatever the target.
+**What a runner target is.** Where a CI job (a typecheck, a suite, a build) executes: `cluster` (default; a Kubernetes Job made by `scripts/job-run.sh`), `connect:<host>` (any machine running the Connect agent) or `codespace` (a Connect agent in a devcontainer, started per burst). The caller asks for "run this on this pushed ref" and gets a log and an exit code, whatever the target.
 
 **Lifecycle for a burst job** (never a 24/7 codespace):
 
@@ -267,7 +267,7 @@ A second use of the same provider, separate from the workspace target of K2: a C
 
 **Limits per run.** The deadline (default 3600 s, at most 5400, the same as `job-run`) and a cost cap: `maxMinutes × machine core-hours` is computed before the run from the machine type and refused when over the owner's per-run cap. GitHub's API shows no cost (F17), so the cap is an estimate and is labelled so; GitHub's own spending limit is the hard stop.
 
-**Credentials.** The GitHub token is the sealed secret of a connection (§8), read by name through the Secrets pool by the server only. It never appears in a command line, a log, an audit row or an error text; the log passes the same mask as `job-run`'s. The repository token for the checkout is delivered the same way as for the cluster Job (a secret file, not an argument).
+**Credentials.** Two kinds, never mixed. (1) The GitHub connection token (§8) is read by the server only, to create, start, stop and delete the codespace; it never goes into the codespace. (2) The secrets a CI step needs go by the **per-job lease** of [local-git-ci.md](local-git-ci.md) §23.2: sealed for that job to the runner agent's enrollment key, injected as env into that step's process only, never on disk, masked in the log. **GitHub's Codespaces secrets API is not used** (it stores values at GitHub, beyond a job's life). Nothing appears in a command line, a log, an audit row or an error text.
 
 **Failure modes.**
 
@@ -280,7 +280,7 @@ A second use of the same provider, separate from the workspace target of K2: a C
 | Portal restarts mid-run | The sweep finds `pilot-runner-*` codespaces past their deadline and deletes them. |
 | Delete itself fails | Retried by the sweep; reported on Needs you after 3 tries (an unattended paid resource). |
 
-**What S2 adds** (real Codespaces; needs a GitHub account the owner chooses and a spending limit): the `codespace` target on top of `CodespacesProvider`, the in-codespace command runner (SSH or the codespaces exec endpoint, 🔬), the devcontainer for runner use, the sweep job, and the real-account checklist for this section (start time, idle timer behaviour, costs per minute). Until then only the fake target exists, and the portal never calls GitHub for this.
+**What S3 adds** (real Codespaces; needs a GitHub account the owner chooses and a spending limit; order: S1 seam and lease, S2 `connect:<host>`, S3 this, S4 UI): the `codespace` target on top of `CodespacesProvider` and the Connect agent, the devcontainer that starts the agent for runner use, the sweep job, and the real-account checklist for this section (start time, idle timer behaviour, cost per minute). Until then only the fake target exists, and the portal never calls GitHub for this.
 
 **Open questions for the owner** (each with the default that is built unless told otherwise):
 
@@ -291,7 +291,7 @@ A second use of the same provider, separate from the workspace target of K2: a C
 | R3 | Per-run cost cap? | 2 core-hours (4 cores, 30 minutes). |
 | R4 | Idle-delete period? | 30 minutes. |
 | R5 | Which jobs may go to a codespace (all `job-run` work, or only opt-in `--runner codespace`)? | Opt-in only; the cluster stays the default. |
-| R6 | May a runner codespace see the same repository tokens as the cluster Job? | Only the clone token, not the npm token, unless the owner says. |
+| R6 | May a runner see the same repository tokens as the cluster Job? | The clone goes by the agent's git helper (never an env var); the npm token only if a step declares it as `pool:name`. |
 
 ## Appendix A. GitHub Copilot CLI findings (superseded scope)
 

@@ -575,12 +575,18 @@ Under the UI text diet (PLAN rule 12): one-or-two-word labels, no paragraphs und
 
 ## 23. Runner targets (T-557)
 
-Heavy work does not run in the workspace pod (D-61). Where it runs is a **runner target**, one small seam in `apps/server/src/ci/runnerTarget.ts`:
+Heavy work does not run in the workspace pod (D-61). Where a **CI job** runs (a pilot CI pipeline job or a `job-run` Job) is a **runner target**. Owner scope (T-557, 2026-10-15): *only CI jobs move; a workspace on a codespace is out.* Targets: `cluster` (default), `connect:<host>` (any machine that dials in with the Connect agent: a VPS, a spare PC, the owner's Mac; remote Docker already exists in `apps/server/src/connect`), `codespace` (a Connect agent in a devcontainer, started per burst and stopped after: [codespaces-poc.md](codespaces-poc.md) §20).
+
+**Slices.** S1 the seam and the secret lease (a fake runner, a leak test), S2 `connect:<host>` (no billing, proves the path), S3 `codespace` (after the owner names the GitHub account and spending limit), S4 UI (runner and machine per run, a Runners list). S1a here is the seam with the lease as an interface; S1b is the lease itself (sealing, injection, masking, the leak test) and follows T-401.
+
+### 23.1 The seam
+
+One small interface in `apps/server/src/ci/runnerTarget.ts`:
 
 ```ts
 interface RunnerTarget {
-  readonly kind: 'cluster' | 'codespace' | 'fake';
-  start(spec: RunSpec, signal?: AbortSignal): Promise<RunnerHandle>;   // create or start; resolves when ready to run
+  readonly kind: 'cluster' | 'connect' | 'codespace' | 'fake';
+  start(spec: RunSpec, signal?: AbortSignal, lease?: SealedLease): Promise<RunnerHandle>;   // create or start; resolves when ready to run
   run(h: RunnerHandle, signal?: AbortSignal): Promise<RunResult>;      // { rc, reason }: rc is the command's
   logs(h: RunnerHandle): Promise<string>;                              // the masked log so far
   stop(h: RunnerHandle): Promise<void>;                                // idempotent
@@ -590,10 +596,25 @@ interface RunnerTarget {
 
 `runOnTarget(target, spec, opts)` is the one lifecycle: start, run under the deadline, collect the log, then `stop` and `remove` in a `finally`, so a failure or a timeout in any step still removes the runner. A failed `remove` is reported, never swallowed. `sweepIdle(target, now)` removes handles idle longer than the idle-delete period.
 
-**Targets.** `cluster` (default) wraps `scripts/job-run.sh` exactly as agents use it today: the same arguments, caps, log, exit codes (0 to the command's, 1 not finished, 2 usage, 124 deadline); the adapter takes an injected `exec` so no test needs a cluster. `fake` keeps state in memory for tests. `codespace` is S2 ([codespaces-poc.md](codespaces-poc.md) §20: lifecycle, limits, credentials, failure modes, open questions).
+**Targets.** `cluster` (default) wraps `scripts/job-run.sh` exactly as agents use it today: the same arguments, caps, log, exit codes (0 to the command's, 1 not finished, 2 usage, 124 deadline); the adapter takes an injected `exec` so no test needs a cluster. `fake` keeps state in memory for tests. `connect:<host>` is S2 and `codespace` is S3 ([codespaces-poc.md](codespaces-poc.md) §20: lifecycle, limits, failure modes, open questions).
 
-**How one is picked.** The spec names it (`runner: cluster | codespace`, or `--runner` on `job-run`); absent means `cluster`. An unknown or unavailable target is a usage error, never a silent fallback to another paid target. Credentials come from the Secrets pool by name; none is in a command, a log or an error.
+**How one is picked.** The spec names it (`runner: cluster | connect:<host> | codespace`, or `--runner` on `job-run`); absent means `cluster`. An unknown or unavailable target is a usage error, never a silent fallback to another (paid) target.
 
-Not built here: a pipeline `runs-on` key, and the `codespace` target.
+### 23.2 The secret lease
+
+One mechanism for cluster Jobs and remote runners; it absorbs `job-run --pool-env` (T-426, branch `ticket/T-426-pool-env`, which stays as it is until S1b replaces it) and applies T-401's lesson (a token the repository's code can read is a leak).
+
+- A step **declares the secret names** it needs, `pool:NAME`, nothing else (no value in the pipeline file or a command line).
+- The portal **resolves them only for refs of the program's own repository** (`stg`, `dev/*`, `ticket/*`); never for a fork or an outside pull request.
+- It **seals them for that job**, to the runner agent's enrollment key, short-lived: a `SealedLease` (`id`, `audience`, `names`, `sealed`, `expiresAt`). The runner receives only the lease; the portal revokes it when the job ends.
+- The agent **injects them as environment into that step's process only**: never on disk, **never in the clone step** (git auth goes through the agent's credential helper, not an environment variable the repository's code can read), wiped when the step ends.
+- **Every value is masked** in the streamed log (the `chat/redact` rules).
+- **One audit row per job and secret name**, never the value.
+- GitHub's Codespaces secrets API is **not** used: a lease per job only.
+- Leak test (S1b): a step that prints its environment shows only masks.
+
+In S1a the lease is an interface: `LeaseIssuer.issue(names, audience)` and `revoke(id)`; `runOnTarget` issues one when the spec declares names, hands it to `start`, and revokes it in the `finally`. The fake runner records the lease it got. The cluster target refuses a spec that declares names (until S1b), rather than run without them.
+
+Not built here: a pipeline `runs-on` key, the lease implementation, and the `connect` and `codespace` targets.
 
 **Needs you (T-146):** a deployment waiting for a person's approval (FR41) is listed on Needs you ([attention.md](attention.md) §2, `ci/attention.ts`) with the environment, the gate's verdict and the commit, for a person only.
