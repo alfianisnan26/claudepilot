@@ -195,11 +195,9 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     name: 'ci_run_trigger',
     title: 'Start a CI run',
     description:
-      'Starts a pipeline that has a manual trigger, on a branch or tag of a workspace remote. An agent can start one on the branch its own session works on ' +
-      '(its worktree\'s, or for a worker the branch its folder was on when it started); a lead (a session with workers) also on any dev/* or ticket/* branch ' +
-      'of its program\'s remote (the one whose folder it runs in); ' +
-      'or a DEPLOYMENT pipeline (one that names an environment, e.g. "deploy") on any branch of a remote in its own workspace: its deploying job then waits ' +
-      'for a person to approve it in the portal (unless they turned that environment\'s protection off). ' +
+      'Starts a pipeline that has a manual trigger, on a branch or tag of a workspace remote. An agent: on its own branch (worktree, or a worker\'s folder ' +
+      'branch at start); a lead (has workers) also on dev/* or ticket/* of its program\'s remote (its folder); or a DEPLOYMENT pipeline (names an ' +
+      'environment) on any branch of its workspace, whose deploying job waits for a person\'s approval. ' +
       'To deploy ClaudePilot from its development workspace: repo "claudepilot", pipeline "deploy", ref "integration"; inputs: images ("portal", "portal,workspace", ' +
       '"portal,workspace,workspace-dev" or "none"), gate (true: run the release gate first), deploy (false: build only), dry_run (true: print every action, change nothing). ' +
       'Then poll ci_run_get: say "waiting for approval" with the link when a job waits, and report the result.',
