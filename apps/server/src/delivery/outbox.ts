@@ -113,8 +113,11 @@ export class Outbox {
   }
 
   #tick() {
-    // Each tick replaces the queue: a workspace still waiting from the last tick is not pulled twice.
-    this.#queue = [...new Set([...this.#subs.values()].flatMap((s) => s.workspaces()))].filter((id) => !this.#inFlight.has(id));
+    // Each tick replaces the queue: a workspace still waiting from the last tick is not pulled twice, and it goes first,
+    // so slow pulls at the front never starve the end of the list (T-404 review 2, item 8).
+    const wanted = new Set([...this.#subs.values()].flatMap((s) => s.workspaces()));
+    const waited = this.#queue.filter((id) => wanted.has(id));
+    this.#queue = [...new Set([...waited, ...wanted])].filter((id) => !this.#inFlight.has(id));
     this.#drain();
   }
 

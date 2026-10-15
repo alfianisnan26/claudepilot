@@ -57,3 +57,47 @@ test('outbox: a tick pulls at most MAX_CONCURRENT_PULLS workspaces at once, and 
     rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+// T-404 review 2, item 8: pulls slower than a tick must not starve the end of the list; who waited goes first.
+test('outbox: a workspace left waiting by one tick is pulled before the list starts again', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'cp-outbox-fair-'));
+  const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
+  const asked: string[] = [];
+  const waiting: (() => void)[] = [];
+  const runtime = {
+    delivery: {
+      state: (name: string) =>
+        new Promise((resolve) => {
+          asked.push(name);
+          waiting.push(() => resolve({ exists: true, running: false }));
+        }),
+    },
+  } as unknown as Runtime;
+  const outbox = new Outbox(store, () => runtime);
+  const ids = Array.from({ length: 10 }, (_, i) => `docker/w${i}`);
+  outbox.subscribe('guard', () => undefined, () => ids);
+  mock.timers.enable({ apis: ['setInterval'] });
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  };
+  const release = async () => {
+    for (const r of waiting.splice(0)) r();
+    await settle();
+  };
+  try {
+    outbox.start();
+    mock.timers.tick(10_000);
+    await settle();
+    await release(); // w0-w3 done: w4-w7 start, w8 and w9 wait
+    assert.deepEqual(asked, ['w0', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7']);
+    mock.timers.tick(10_000); // the next tick while w4-w7 still run
+    await settle();
+    await release();
+    assert.deepEqual(asked.slice(8), ['w8', 'w9', 'w0', 'w1'], 'the two that waited go before the list starts again');
+  } finally {
+    outbox.stop();
+    mock.timers.reset();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
