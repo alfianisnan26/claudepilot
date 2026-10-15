@@ -104,8 +104,10 @@ The workspace pod has 4 CPUs shared with the agents, their scratch portals and C
 twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a Job in `isnan-claudepilot` instead, on whichever node has CPU:
 
 - **The Job** (`deploy/k3s-build/gate-job.yaml`): the newest development workspace image (or `GATE_IMAGE`), a shallow clone of the commit from
-  GitHub, `GATE_CONCURRENCY=3`; requests 1 CPU and 2 GiB, limits 4 CPUs and 8 GiB, `/tmp` an emptyDir in memory (3 GiB: the clean copy, `node_modules` and the tests' databases; on the overlay the suite was IO-bound, 31+ min), no node selector (k3s-node2's requests are nearly all
-  allocated: the master may take it), no service account token, gone an hour after it ends. A name per call
+  GitHub, `GATE_CONCURRENCY=3`; 1 CPU requested and 4 the limit, 8 GiB of memory requested = limited (T-524; not yet lowered: the gate's
+  own peak is unmeasured, the Job prints `memory peak=… limit=…` for that), `/tmp` an emptyDir in memory (3 GiB: the clean copy,
+  `node_modules` and the tests' databases; on the overlay the suite was IO-bound, 31+ min), placement as job-run's (preferred: not the
+  control-plane node, not the portal's node, no workspace pod), no service account token, gone an hour after it ends. A name per call
   (`claudepilot-gate-<sha>-<4 hex>`), so gates for different commits run side by side.
 - **The token** for `npm ci` (the private `@isnanme` packages) is a Secret named like the Job, made from `gh auth token` on stdin, deleted on
   exit; the log is searched for it and masked if it is there.
@@ -119,7 +121,8 @@ twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a
 ## Heavy agent work in the cluster
 
 `scripts/job-run.sh` (T-107) runs any heavy command of an agent as a Job like the gate's (`deploy/k3s-build/job-run.yaml`: the development
-image, a node without a workspace pod preferred, 1 CPU requested and 4 the limit, `/tmp` and `/dev/shm` in memory, a deadline, gone 30 minutes
+image, a node without a workspace pod preferred, 1 CPU requested and 4 the limit, memory requested = limited (4Gi, `--big` 8Gi), `/tmp` and
+`/dev/shm` in memory, a deadline, gone 30 minutes
 after it ends), so the pod's flock queue is only for what must run in the pod:
 
 ```sh
@@ -133,8 +136,19 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
 - **The code:** `--repo` and `--ref` default to the current folder's origin and HEAD (it must be on the remote). ClaudePilot comes from GitHub
   (the npm token for `@isnanme` in the Job's Secret), Konfersi from Gitea (git's credential helper gives the token; in the Job a credential helper
   reads it from the environment, never a URL). The Secret belongs to the Job and is deleted on exit; the streamed log is masked for the token.
-- **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide and `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`). A Job over a cap is created
-  suspended and waits in creation order ("queued behind K"). Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`.
+- **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
+  (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
+  Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
+- **Memory (T-524):** requested = limited, so the scheduler places a Job only where all of it fits (2Gi requested with 8Gi allowed let a
+  4.1 GB Event Job take k3s-master, the 15 GB control-plane node that also runs the API server, to 92%, and the portal answered 503).
+  4Gi by default with `/tmp` at most 2Gi; `--big` gives 8Gi with `/tmp` 4Gi (only k3s-node2 has that much free). The whole server suite peaked
+  at 1480Mi (claudepilot-job-4c34ebf9, 2026-10-15), a test folder at 1365Mi; the Event Job above reached 4.1 GB and needs `--big`.
+  Every Job ends with `=== JOB-RUN MEMORY peak=… limit=… oom_kills=…` (its own cgroup). An OOMKilled Job says so with its limit and the hint
+  `--big`; a Job Pending because no node has the memory free says so once, instead of a silent wait.
+- **Placement (T-365, T-524):** preferred, never required (a required rule left every Job Pending): away from the control-plane node, the
+  portal's node and workspace pods. The scheduler scales each rule to 0..100 before adding them, so with two nodes the control-plane and the
+  portal rules cancel and the node with the most free memory and CPU after the request wins; the honest request is what keeps the master
+  safe. The comment in `deploy/k3s-build/job-run.yaml` has the details.
 - **Cleanup:** Ctrl-C or a kill deletes the Job; so does the end of the chat (the Claude process, `CLAUDE_PID`, exits); a Job whose script was
   killed outright is removed by the next run on this host.
 - **npm cache:** none shared. A cold `npm ci` in a Job is 15 to 20 s (job-run and gate logs); a shared cache would be a node-bound `local-path`

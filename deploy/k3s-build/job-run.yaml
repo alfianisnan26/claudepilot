@@ -1,16 +1,16 @@
 # Heavy agent work (a test file, the suite, tsc, a build, a browser check) as a Job in the cluster, on CPUs other than the development pod's
 # (T-107). Started only by scripts/job-run.sh, which fills in the __PLACEHOLDERS__ (the command
 # base64, everything else validated by the script), makes the Secret of the same name (npm or Gitea credentials) for the Job's life, and lets the Job out
-# of suspend when the caps allow (3 at once cluster-wide, 2 per chat; the queue is the creation order of the suspended Jobs).
-# Like gate-job.yaml: it prefers a node WITHOUT a development workspace pod, requests 1 CPU (limit 4), and /tmp (the clone, node_modules, the
-# tests' databases) is an emptyDir in memory. npm's cache is in /tmp too: a cold `npm ci` is about 20 s in a Job (gate logs), a shared cache
+# of suspend when the caps allow (3 at once cluster-wide, 2 per chat, 2 per program; the queue is the creation order of the suspended Jobs).
+# Like gate-job.yaml: it prefers a node WITHOUT a development workspace pod, requests 1 CPU (limit 4), requests memory equal to its limit, and
+# /tmp (the clone, node_modules, the tests' databases) is an emptyDir in memory that counts against that limit. npm's cache is in /tmp too: a cold `npm ci` is about 20 s in a Job (gate logs), a shared cache
 # volume would have to be a node-bound local-path PVC (the only storage class) for a few seconds' gain.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: __NAME__
   namespace: isnan-claudepilot
-  labels: {app: claudepilot-job-run, job-run/chat: __CHAT__, job-run/role: __ROLE__, job-run/repo: __REPO__}
+  labels: {app: claudepilot-job-run, job-run/chat: __CHAT__, job-run/role: __ROLE__, job-run/repo: __REPO__, job-run/program: __PROGRAM__}
   annotations: {job-run/owner: "__OWNER__"}
 spec:
   suspend: true
@@ -24,8 +24,20 @@ spec:
       restartPolicy: Never
       automountServiceAccountToken: false
       affinity:
-        # Away from the portal's node when there is room (T-365): a heavy Job there starved the portal's SQLite fsync (2026-10-15).
-        # Preferred, not required: k3s-master's memory requests are at 96%, and a required rule left every Job Pending.
+        # Placement (T-365, T-524). Every rule is PREFERRED, never required: a required rule left every Job Pending (2026-10-15).
+        # - nodeAffinity: away from the control-plane node (k3s-master, 15 GB, also the API server; label node-role.kubernetes.io/control-plane).
+        # - podAntiAffinity: away from the portal's node (a heavy Job there starved the portal's SQLite fsync, T-365; IO there is T-513) and
+        #   from development workspace pods.
+        # How the weights add up: kube-scheduler scales each plugin's score to 0..100 before its plugin weight (NodeAffinity 2,
+        # InterPodAffinity 2), so a term weight only ranks terms inside its own rule. Weight 100 on the node rule cannot outrank the portal rule
+        # by number. With two nodes, and the portal on k3s-node2, the two rules cancel, and the free-resource score (LeastAllocated: the node
+        # with the most memory and CPU left after this Job's request) decides. That is what keeps k3s-master safe, since the memory request is
+        # the real limit (resources below): the master takes a Job only when its requests leave room for the whole of it, and node2 (30 GB) wins
+        # while it has more free. The Jobs do not all pile onto the portal's node: the portal rule still pulls the other way.
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference: {matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
@@ -129,6 +141,9 @@ spec:
                 elif [ "$rc2" -eq 0 ]; then say "PROOF: NO PROOF: it passes on both $JR_REF ($sha) and $JR_AGAINST ($asha)"; rc=1
                 else say "PROOF: passes on $JR_REF ($sha), fails on $JR_AGAINST ($asha) (rc=$rc2)"; rc=0; fi
               fi
+              # The Job's own memory (T-524): the cgroup's peak (in-memory /tmp included) against its limit, the number the limit is sized from.
+              cg=${JR_CGROUP:-/sys/fs/cgroup}; mib() { v=$(cat "$cg/$1" 2>/dev/null) && [[ $v =~ ^[0-9]+$ ]] && echo "$((v / 1048576))Mi" || echo "${v:-?}"; }
+              say "MEMORY peak=$(mib memory.peak) limit=$(mib memory.max) oom_kills=$(sed -n 's/^oom_kill //p' "$cg/memory.events" 2>/dev/null | grep . || echo '?')"
               say "EXIT $rc"
               exit "$rc"
               # JOB-RUN-SCRIPT END
@@ -136,10 +151,12 @@ spec:
             - {name: tmp, mountPath: /tmp}
             - {name: shm, mountPath: /dev/shm}
           resources:
-            requests: {cpu: 1000m, memory: 2Gi}
-            limits: {cpu: "4", memory: 8Gi}
+            # Memory request = limit (T-524): with 2Gi requested and 8Gi allowed a 4.1 GB Job fitted k3s-master "on paper" and took it to
+            # 92% (portal 503s). job-run.sh fills in 4Gi, or 8Gi with --big, and says when a Job is OOMKilled or Pending for memory.
+            requests: {cpu: 1000m, memory: __MEMORY__}
+            limits: {cpu: "4", memory: __MEMORY__}
       volumes:
         - name: tmp
-          emptyDir: {medium: Memory, sizeLimit: 3Gi}
+          emptyDir: {medium: Memory, sizeLimit: __TMP_SIZE__}
         - name: shm
           emptyDir: {medium: Memory, sizeLimit: 1Gi}
