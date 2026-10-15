@@ -37,7 +37,10 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
   T-433's persona-wall question (comment 2984).
 
 ## NEXT (in order, as slots free)
-1. Deploy watch. 2. T-404 fixer (opus). 3. T-376 S2: merge integration into dev/t-376-3, ux re-check (sonnet). 4. T-435 (portal:worktree
+1. Deploy watch; then merge T-427 (QA 3126) + T-413 (dev/t-413-2 28f1a00, QA 3138; gaps -> T-448), pack, gate.
+2. Coordinator order (04:16): T-449 (spawn takes ticket; small) -> T-450 S1 (crew scorecard server + MCP tool, opus implementer,
+   sonnet QA) -> T-450 S2 (page, phone first). Worker titles start with "T-n" until T-449 ships.
+3. T-404 fixer (running). T-376 S2: integration merged (4697ac8), ux re-check (sonnet). 4. T-435 (portal:worktree
    trust copy). 5. T-416 (memory budget), T-422 build, T-147. 6. T-438, T-425, T-436, T-437, T-432, T-378 S1 verify + S2-S4, T-382, T-377,
    T-386, T-409, T-402, T-398, T-399. 7. T-370 HOLD, then T-371..T-374, T-363. 8. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356,
    T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149.
