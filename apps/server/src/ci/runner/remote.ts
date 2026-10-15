@@ -1,4 +1,4 @@
-// Runners (T-557, local-git-ci PRD §17): what a workspace needs to run another workspace's run. The commit travels as a git bundle
+// Runners (T-557, local-git-ci PRD §23): what a workspace needs to run another workspace's run. The commit travels as a git bundle
 // (written here on the SOURCE side, read back by the portal in chunks, written into a MIRROR on the runner, never into the runner's own
 // remotes), and the run's secrets as a lease the supervisor reads and removes with the run. Everything goes through cp-ci's own stdin and
 // replies, so it works on every runtime the portal reaches (Kubernetes, Docker, a Connect host) without knowing the runner's home path.

@@ -168,7 +168,7 @@ export interface CiRunSummary {
 }
 
 /**
- * A runner (T-557, PRD §17): a workspace (in the cluster, or a machine enrolled through Connect) that takes the runs of other workspaces whose
+ * A runner (T-557, PRD §23): a workspace (in the cluster, or a machine enrolled through Connect) that takes the runs of other workspaces whose
  * pipeline says `runs-on: [labels]`. It gets each run's commit (into a mirror) and secrets (a lease removed with the run) from the portal.
  */
 export interface CiRunner {
