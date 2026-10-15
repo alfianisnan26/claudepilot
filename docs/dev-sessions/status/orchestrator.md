@@ -9,20 +9,20 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
-## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf): queue T-548 -> T-586 -> T-561 S1c -> T-486 S2d.
+## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf): queue T-548 -> T-586 -> T-561 S1c -> T-486 S2d -> T-591.
   T-561: S1b QA PASS WITH GAPS (5440, symlink holes A, B) -> S1c DONE 0beae29 (5498/5501; 77c04fc0 ended) -> QA Perf re-probe -> lead
   gate + merge. LANE bbbe2b38 "ClaudePilot QA UI" (lane-qa-ui, sonnet, qa/T-600-ui, deps linked by lead) on T-600 FE ux: browser tools refused (5503 PASS
   WITH GAPS; T-525 5505 to coordinator); default: headless tools/qa/*.mjs. T-576 DONE 2427d98 (Jobs green; no
   prettier/eslint in the Job): ux BLOCKED (a `folder` spawn gets no Bash; 5368) until T-586 merges. T-586 DONE 1d27635 (Job 6be903ec rc 0, mutation
   caught, 5419; 2ae78a99 ended): review PASS W/ COND (5456) -> S2 fc9ce1d DONE (5464; 813992cf ended) -> premerge
-  wip/main-5b66aa0, gate GREEN gate-5b66aa0-44ef (suite 559 s, peak 2172Mi) -> QA Perf after T-548 -> ff integration (no deploy). T-558 e652c44: QA runs its Jobs (5052).
+  wip/main-5b66aa0, gate GREEN gate-5b66aa0-44ef (suite 559 s, peak 2172Mi) -> QA Perf after T-548 -> ff integration (no deploy).
   T-486 S2d DONE 2979f99 (5454/5455: tests 16/16, typecheck, ci+secrets 258/259, mutation caught; 5feb4875 ended) -> QA Perf -> lead merge + gate.
-  T-548 S1 DONE 9b822ba (Jobs green, 5364; d23cb713 ended): QA (sonnet) + blind review (opus, authz) next. eaec4cc5 impl-t591 (sonnet) S1 (plan 5366).
+  T-548 S1 9b822ba + T-591 S1 DONE bf932c3 (5508/5511; eaec4cc5 ended): blind review 9651c9fa (opus, D-62) on both; QA Perf queue.
   LANE 5f8f392b "ClaudePilot Backend" (lane-backend, sonnet) on T-546 Jobs (ticket/T-546-digest; 8822ba59 ended). Backend queue (coordinator,
   efficiency order): T-546 -> T-600 BE -> T-597 -> T-325 -> T-591 S2. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
   ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); T-556 PLANNED 5497 (one "Upstream" dialog, 4 fields: no upstream UI exists);
-  builds after T-486 merges + T-595. Next slot: blind review T-548 (opus, authz); QA UI then T-576 ux. 5th slot: eaec4cc5 T-591 S1.
-  Jobs (all GO 15:29, job-run queues): T-586 S2 fc9ce1d, T-600 FE 7d19c94 (Job 1 FAIL typecheck -> `headline`, 5459), T-546, T-548 QA, T-591 S1. Then T-561 S1c, T-558 QA. quick-check: its checks in ONE Job (T-586); no prettier/eslint in Jobs (T-612).
+  builds after T-486 merges + T-595. QA UI then T-576 ux. 5 of 5: QA Perf, Backend, Frontend, QA UI, reviewer.
+  Jobs: each agent starts its own (15:29). Still to place: T-558 QA (e652c44, 5052). No prettier/eslint in Jobs (T-612).
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
 - T-379 3ddbcbc: src/ci 144/144 job-5b4609a6 (4905); lead live proof PASS job-c71c5bfe (4906); blind review 30dc0f13 PASS WITH
   CONDITIONS (4938) -> S2 3f11b28 PASS src/ci 144/144 job-83899ca9 (4948; d39c25c1 ended) -> merge after T-401.
@@ -32,9 +32,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
 - T-486 (high): S1 live; S2..S2d (migration 783; web hookSecret -> T-556); after merge: deploy (coordinator) -> real Event branch check.
-
-## STATE PER TICKET (T-404: open until deployed, design point -> T-451)
-- T-376 (high): S2 dev/t-376-3 0b0faf7 needs integration merged in by the lead, then ux re-check (production build), then S3 perf-tester.
+- STATE: T-404 open until deployed (design point -> T-451). T-376 (high): S2 dev/t-376-3 0b0faf7 needs integration merged in, ux re-check, S3 perf.
 
 ## DECISIONS (binding)
 - 14:56 D-70 LANES (DECISIONS.md; my decision T-595 5380): current 5 workers finish; freed slots become lanes, spawned ONCE on sonnet and fed
@@ -65,7 +63,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-433's persona-wall question (2984).
 - For the coordinator, NOT the owner (not tagged owner-checklist): T-476 lead may START a deploy whose release waits for a person
   (3813); T-491 Event token scope until T-426 (3965); deploys #35/#36/#37 production approval showed "auto", not changed by an agent;
-  T-509 kit republish; T-594 alfian.isnan signed out; T-525 session_get + scribe tools; T-527 finding 4 (owner triggers tagging owner-checklist).
+  T-509 kit republish; T-594 alfian.isnan signed out; T-525 session_get + scribe tools + QA UI browser tools (5505); T-595 lane Bash (5443);
+  T-591 #40 backfill after deploy (5511); T-527 finding 4 (owner triggers tagging owner-checklist).
 
 ## NEXT (in order, as slots free)
 1. Merges: T-401 -> T-379 -> T-486 -> T-426; then deploy. 2. T-416 S1b QA -> blind review (opus) -> merge; then S2.
