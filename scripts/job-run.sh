@@ -127,7 +127,7 @@ for n in ${pool[@]+"${pool[@]}"}; do
   [ -n "${!n:-}" ] || die "--pool-env: $n is not set in this workspace (the Secrets pool delivers it)"
   [[ ${!n} != *[$'\n\r']* ]] || die "--pool-env: $n holds a line break; refused"
   # Printable ASCII only (kubectl's env-file parser fails on other bytes and may then print the line).
-  ! printf '%s' "${!n}" | LC_ALL=C grep -q 'NEVERMATCHES' || die "--pool-env: $n holds a character that is not printable ASCII; refused"
+  ! printf '%s' "${!n}" | LC_ALL=C grep -q '[^ -~]' || die "--pool-env: $n holds a character that is not printable ASCII; refused"
   v=${!n}; [ "${#v}" -ge 8 ] || die "--pool-env: $n is shorter than 8 characters: the log mask would not hide it; refused"; unset v
   [[ " $pool_names " == *" $n "* ]] || pool_names="$pool_names $n"
 done
@@ -257,7 +257,7 @@ uid=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.metadata.uid}' 2>/dev/null 
 [ -n "$uid" ] || die "could not read the uid of $job: no credentials were sent"
 # kubectl's env-file parser can put a bad line (a value) into its error text: its stderr goes nowhere and the message here is fixed.
 # The final call is `create`, not `apply`: apply would store the whole object, data included, in a last-applied annotation (review 5777).
-sjson=$(printf '%s\n' "$secret" | kubectl -n "$ns" create secret generic "$job" --from-env-file=/dev/stdin --dry-run=client -o json) ||
+sjson=$(printf '%s\n' "$secret" | kubectl -n "$ns" create secret generic "$job" --from-env-file=/dev/stdin --dry-run=client -o json 2>/dev/null) ||
   die "could not build the Secret for $job (kubectl refused the credentials; the reason is not shown): no credentials were sent"
 unset secret
 printf '%s' "$sjson" | jq --arg job "$job" --arg uid "$uid" --arg chat "$chat" \
