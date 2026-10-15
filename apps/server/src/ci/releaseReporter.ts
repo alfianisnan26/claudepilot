@@ -191,11 +191,11 @@ export class ReleaseReporter {
     let at: string | null = run.sha;
     while (at && at !== base) {
       if (list.length >= REPORT_MAX_COMMITS) return { list, truncated: true };
-      const s = await this.#deps.cp(run.workspace_id, ['snapshot', run.repo, at]).catch((): CiReply => ({ ok: false }));
+      const s: CiReply = await this.#deps.cp(run.workspace_id, ['snapshot', run.repo, at]).catch((): CiReply => ({ ok: false }));
       const message = text(s, 'message');
       if (!message) return { unavailable: `commit ${at.slice(0, 7)} can not be read` };
       list.push({ sha: at, subject: (text(s, 'subject') ?? message.split('\n')[0] ?? '').slice(0, 200), tickets: parseTicketTrailers(message) });
-      const parents = Array.isArray(s.parents) ? (s.parents as unknown[]).filter((p): p is string => typeof p === 'string') : [];
+      const parents: string[] = Array.isArray(s.parents) ? (s.parents as unknown[]).filter((p): p is string => typeof p === 'string') : [];
       at = parents[0] ?? null;
     }
     if (at !== base) return { unavailable: 'the previous release is not on the first-parent line of this commit' };
