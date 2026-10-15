@@ -44,7 +44,7 @@ const seed = () => {
   const tk = db.prepare(`INSERT INTO tickets (number, type, priority, priority_rank, status, summary, source, reporter_kind, reporter_label, created_at, updated_at, closed_at)
     VALUES (?, ?, 'normal', 2, ?, ?, 'human', 'ui', 'owner', ?, ?, ?)`);
   tk.run(9301, 'feature', 'done', 'QA crew done feature', iso(now - 7_200_000), iso(now), iso(now - 1_800_000));
-  tk.run(9302, 'bug', 'review', 'QA crew bug in review', iso(now - 7_200_000), iso(now), null);
+  tk.run(9302, 'bug', 'in_review', 'QA crew bug in review', iso(now - 7_200_000), iso(now), null);
   const ses = db.prepare(`INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, ticket_id)
     VALUES (?, ?, ?, 'idle', ?, ?, ?, '', ?, ?)`);
   const at = iso(now);
