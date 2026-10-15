@@ -8,7 +8,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - Filed: T-397 (proposal, mine), T-398, T-399, T-402, T-403 (settled by D-62), T-409, T-413 (incident: OOM 02:11, my share stated), T-422 (sudo, proposal, mine).
 
 ## IN FLIGHT (3 live workers = the D-61 budget; no Agent-tool sub-agents)
-- T-366 (urgent): worker 033e1b23 (opus, on alfian.isnan: no other Claude had room) in dev-t-366-1, branch dev/t-366-1 from 688aee1: FIRST trust by repository identity (D-62 / T-403 option a; comment 2653); classifier stays the re-trust gate. Then a THIRD blind reviewer (not 7be4aeac / a72a5caa pairs), merge, deploy images=portal,workspace (after it every ClaudePilot folder re-trusts once: hash covers skills/agents/commands), real-job QA.
+- T-366 (urgent): built dev/t-366-1 086a9e1 (proof 57/57 vs 8 fail on base, chat 703/0 fail, typecheck 0; worker 033e1b23 ended). THIRD blind reviewer 5f83b665 (opus, hasyim) in dev-t-366-1. Then merge, deploy images=portal,workspace on 2026-10-16, real-job QA.
 - T-417 (high): review SAFE AFTER FIXES (comment 2875; reviewer 775a1756 ended). Fixer a1bf3da8 (opus, fadlilah) in dev-t-336-1 on dev/t-417-1 from 9622deb: findings 1,2,3,5,7,8,9. Then a DIFFERENT reviewer (not 775a1756), merge. Finding 6 = T-425 (new, normal). Bypass across sleep rests on the owner's T-417 text; D-row is the coordinator's.
 - T-375 (high): worker 07cef3b0 (opus, hasyim) in dev-t-333-1 (switched to dev/t-375-1, a5fc68a): merging origin/dev/t-369-1 (SessionRow.tsx conflict) + T-378's density check + the screenshot check. Then ONE ux-checker covering T-369 item 4 and T-375, then merge T-369 + T-375 together.
 
