@@ -171,6 +171,25 @@ anyone (offboarding). Every action is an audit row with ids only; the destructiv
 UI: the SSH sheet gets **People**: per person their connections (Revoke), agents (state, Sign out), sessions (Delete) and Remove. None of
 these are Portal MCP tools (people's data and sign-ins are `humanOnly`).
 
+## 8b. What the pools give a person
+
+Pools are delivered to system paths (`/etc/claude-code/managed-settings.d/`, `/etc/claude-code/CLAUDE.md` and `.claude/{agents,output-styles,
+rules,skills}/`, the plugin marketplace at `/etc/claudepilot/marketplace`; `delivery/ownership.ts`, `delivery/types.ts:185`), so a
+person's own Claude Code picks up whatever is world-readable there, with no extra step. Checked in the PoC as `p-bob` (2026-10-15): a
+managed `CLAUDE.md` and a managed skill both reached the model request, and the skill was listed at init.
+
+| Pool | A person's Claude Code over SSH | Other agent CLIs (D-54) |
+| --- | --- | --- |
+| Persona (CLAUDE.md, agents, output styles) | works (checked) | not yet: needs a translation (AGENTS.md, GEMINI.md, Cursor rules) |
+| Context (rules) | works (same managed tree; from the code) | not yet |
+| Skillset | works (checked for a managed skill; plugins from the marketplace: readable, not yet checked) | not yet (no shared format) |
+| Policy (deny rules, models, effort) | applies (root 0644 drop-in; from the code) | not yet |
+| MCP set | servers without a secret work; servers whose helper reads a secret fail (secrets are `node`-only) | not yet: translate to each CLI's MCP config |
+| Secrets & env | not given, by design (0440 `node`; skipped with a warning, S0 4.5) | not given |
+| Account pool | not given, by design: the person signs in themselves | n/a |
+| Portal MCP (tickets, knowledge) | through the per-connection token (S4) | the CLIs that speak MCP, through the same token |
+| Bypass | the portal's gates do not apply: a person can start their own Claude with `--dangerously-skip-permissions` (checked: `permissionMode: bypassPermissions`). Owner decision pending: allow with a visible badge, or forbid for people only | the same per CLI (`--yolo`, full-access modes) |
+
 ## 9. Data and storage
 
 | What | Where | Retention |
