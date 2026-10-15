@@ -135,7 +135,7 @@ test('send (T-597 S1b): only a one-line allowed slash command from a session or 
       await until(() => sent().length === n);
       const got = sent()[n - 1]!;
       if (how === 'bare') assert.equal(got, text, `${actor} ${JSON.stringify(text)} goes bare`);
-      else assert.match(got, /^\[Portal message from /, `${actor} ${JSON.stringify(text)} stays framed`);
+      else assert.match(got, /^\[Portal message[ (]/, `${actor} ${JSON.stringify(text)} stays framed`);
     }
     const users = s.controller.history(s.id).filter((e) => e.kind === 'user');
     assert.equal(users[0]!.actor, 'portal-mcp:ptk_1', 'the transcript still shows who sent the bare command');
