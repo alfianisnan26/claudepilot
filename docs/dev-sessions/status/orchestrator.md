@@ -19,7 +19,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-548 S1 DONE 9b822ba (Jobs green, 5364; d23cb713 ended): QA (sonnet) + blind review (opus, authz) next. eaec4cc5 impl-t591 (sonnet) S1 (plan 5366).
   LANE 5f8f392b "ClaudePilot Backend" (lane-backend, sonnet) on T-546 Jobs (ticket/T-546-digest; 8822ba59 ended). Backend queue (coordinator,
   efficiency order): T-546 -> T-600 BE -> T-597 -> T-325 -> T-591 S2. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
-  ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); now PLANS T-556 (read only, 5495). Next slot: QA UI lane (T-600 FE, then T-576 ux); then blind review T-548 (opus). QA Perf queue: T-561, T-548, T-486, T-546.
+  ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); T-556 PLANNED 5497 (one "Upstream" dialog, 4 fields: no upstream UI exists);
+  builds after T-486 merges + T-595. Next slot: QA UI lane (T-600 FE, then T-576 ux); then blind review T-548 (opus). QA Perf queue: T-561, T-548, T-486, T-546.
   Jobs (all GO 15:29, job-run queues): T-586 S2 fc9ce1d, T-600 FE 7d19c94 (Job 1 FAIL typecheck -> `headline`, 5459), T-546, T-548 QA, T-591 S1. Then T-561 S1c, T-558 QA. quick-check: its checks in ONE Job (T-586); no prettier/eslint in Jobs (T-612).
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
