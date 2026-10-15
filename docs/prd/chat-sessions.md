@@ -633,6 +633,20 @@ Sessions ride the Web app's live socket (`/api/live`), checked like the shell so
 against `PORTAL_APP_URL`, the session cookie), with pings every 25 s and 1 MB frames. HTTP serves
 older pages, uploads, downloads and blobs under the existing guards.
 
+**History pages (T-376, server slice, as built 2026-10-15).** `GET /api/chat/sessions/:id/events` answers in two forms. With `?after=<seq>`
+or no parameter it answers as it always did: every stored event after that seq (all of them without one) as a `ChatEvent[]`, whole; the
+web of this release still calls it this way. With `?before=<seq>` or `?limit=<n>` (either is enough) it answers a `ChatEventPage`: the
+newest events before `before` (before the newest event when it is absent or empty), read newest first on the `seq` key (never an offset,
+D-58) and returned oldest first, at most `limit` (200 when absent, 1,000 at most) and stopped earlier once the events would pass 512 KiB
+of JSON (a page always holds one); `more` says older events exist and `before` is what to ask with next (the first event's seq, null when
+there are no more). In a page, a `tool_result` longer than 2,000 characters keeps its first 2,000 (never half a surrogate pair) and
+`textLength` says how long the whole is; `GET /api/chat/sessions/:id/events/:seq` returns that one event whole (404 for a seq the session
+does not have). `after` together with `before` or `limit`, or a limit or before that is not a whole number from 1, is a 422 (validation failed). Both routes
+are declared `view` on the session: another user gets the same 404 as a session that does not exist. Every JSON answer under `/api/*`
+is gzip-compressed when the request accepts gzip and is at least 1 KiB (hono/compress, scoped to `application/json`); an event stream,
+a WebSocket upgrade, a blob, a download or a range answer never is. Not yet built: the web reading pages (it still loads the whole
+transcript), the opaque cursor (T-382).
+
 ## 11. Per-target notes
 
 | | DinD | Host Docker Desktop | Kubernetes (k3s) |

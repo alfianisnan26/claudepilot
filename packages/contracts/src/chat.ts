@@ -379,6 +379,11 @@ export interface ChatEvent {
   toolInputCut?: boolean;
   /** For `tool_result`: the tool failed. */
   isError?: boolean;
+  /**
+   * For a `tool_result` in a `ChatEventPage`: `text` is a preview (its first `EVENT_PREVIEW_CHARS` characters) of a text this many
+   * characters long (`String.length`); `CHAT_API.event` returns it whole. Absent when `text` is whole.
+   */
+  textLength?: number;
   /** For `thinking`: how long the block took, when the portal saw it start. For `result`: how long the turn took. */
   durationMs?: number;
   /** Images on this event (sent by you, or returned by a tool), served from `CHAT_API.blob`. */
@@ -535,6 +540,28 @@ export interface ChatTaskTranscript {
   events: ChatEvent[];
   /** More events (after `after`) than were returned: the oldest were left out. */
   truncated: boolean;
+}
+
+/** Events in one page of `CHAT_API.events` asked with `?limit=` or `?before=` (T-376), when `limit` is not given. */
+export const EVENT_PAGE_LIMIT = 200;
+/** The most `?limit=` may ask for; a larger number is read as this. */
+export const EVENT_PAGE_LIMIT_MAX = 1000;
+/** A page stops before its events (as JSON, after the cut below) pass this many bytes; it always holds at least one event. */
+export const EVENT_PAGE_BYTES = 512 * 1024;
+/** A `tool_result` in a page keeps at most this many characters of `text`; `textLength` then says how long the whole is. */
+export const EVENT_PREVIEW_CHARS = 2000;
+
+/**
+ * One page of the stored transcript (`CHAT_API.events` with `?before=` or `?limit=`; T-376), counted back from the newest: keyset on `seq`,
+ * never an offset (D-58). Large `tool_result` bodies are cut to a preview (`ChatEvent.textLength`); `CHAT_API.event` returns one whole.
+ */
+export interface ChatEventPage {
+  /** Oldest first; at most the limit, fewer when `EVENT_PAGE_BYTES` was reached. */
+  events: ChatEvent[];
+  /** Older events exist than the first one here. */
+  more: boolean;
+  /** What to pass as `?before=` for the older page (the first event's `seq`), or null when `more` is false. */
+  before: number | null;
 }
 
 /** A model the session can switch to (Claude Code's `list_models`). */
@@ -815,8 +842,14 @@ export const CHAT_API = {
   limits: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/limits`,
   /** GET: the chat's Keep going (`ChatKeepGoing`). PUT `UpdateKeepGoingRequest`: set it (a person; T-259). */
   keepGoing: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/keep-going`,
-  /** GET `?after=<seq>`: stored transcript events after a sequence number (history and resume). */
+  /**
+   * GET `?after=<seq>`: stored transcript events after a sequence number (history and resume), whole, as `ChatEvent[]`; neither `after`
+   * nor the page parameters: the whole transcript, the same way. GET `?before=<seq>&limit=<n>` (either one is enough): a `ChatEventPage`
+   * counted back from `before` (from the newest without it). `after` with `before` or `limit` is refused (422).
+   */
   events: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/events`,
+  /** GET: one stored event whole (a `tool_result` a page cut to its preview); 404 when the session has no such event. */
+  event: (id: string, seq: number) => `/api/chat/sessions/${encodeURIComponent(id)}/events/${seq}`,
   /** GET: models this session can switch to. */
   models: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/models`,
   /** GET: sub-agents and background tasks. */

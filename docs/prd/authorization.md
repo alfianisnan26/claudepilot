@@ -667,6 +667,7 @@ Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 r
 | `GET /api/chat/sessions/:id/worktree` | obj(session manage path id) |  |
 | `DELETE /api/chat/sessions/:id/archive` | obj(session manage path id) |  |
 | `GET /api/chat/sessions/:id/events` | obj(session view path id) | files: the session's folder only, by the existing deny rules |
+| `GET /api/chat/sessions/:id/events/:seq` | obj(session view path id) | one event whole (T-376) |
 | `GET /api/chat/sessions/:id/models` | obj(session operate path id) | asks Claude Code |
 | `GET /api/chat/sessions/:id/tasks` | obj(session view path id) | files: the session's folder only, by the existing deny rules |
 | `GET /api/chat/sessions/:id/blobs/:blobId` | obj(session view path id) | files: the session's folder only, by the existing deny rules |

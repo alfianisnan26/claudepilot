@@ -22,6 +22,7 @@ import { actorOf, actorString, requireCan } from '../authz/seam.js';
 import { RateLimiter } from '../rateLimit.js';
 import { serveBlob } from './artifacts/index.js';
 import type { ChatController } from './controller.js';
+import { eventsQuery } from './eventPage.js';
 import type { Reauth } from './reauth.js';
 
 /** The sign-in a request belongs to: `requireSession` (app.ts) put its token on the context. */
@@ -165,8 +166,19 @@ export function createChatRoutes(controller: ChatController): Hono {
   chat.post('/:id/pin', (c) => c.json(success(controller.pin(c.req.param('id')))));
   chat.delete('/:id/pin', (c) => c.json(success(controller.unpin(c.req.param('id')))));
 
-  // GET /api/chat/sessions/:id/events?after=<seq> — stored transcript events (history and resume).
-  chat.get('/:id/events', (c) => c.json(success(controller.history(c.req.param('id'), Number(c.req.query('after') ?? 0) || 0))));
+  // GET /api/chat/sessions/:id/events?after=<seq> — stored transcript events (history and resume), whole, as before T-376.
+  // GET …/events?before=<seq>&limit=<n> — a page counted back from the newest (T-376, eventPage.ts): oldest first, `more`, tool_result previews.
+  chat.get('/:id/events', (c) => {
+    requireCan(actorOf(c), 'view', sessionRef(c.req.param('id')));
+    const q = eventsQuery({ after: c.req.query('after'), before: c.req.query('before'), limit: c.req.query('limit') });
+    return c.json(success(q.kind === 'after' ? controller.history(c.req.param('id'), q.after) : controller.historyPage(c.req.param('id'), q.before, q.limit)));
+  });
+  // GET /api/chat/sessions/:id/events/:seq — one stored event whole (a tool_result a page cut to its preview).
+  chat.get('/:id/events/:seq', (c) => {
+    requireCan(actorOf(c), 'view', sessionRef(c.req.param('id')));
+    const raw = c.req.param('seq');
+    return c.json(success(controller.event(c.req.param('id'), /^\d+$/.test(raw) ? Number(raw) : 0)));
+  });
 
   // GET /api/chat/sessions/:id/models — what the session can switch to (asks Claude Code; resumes it if needed).
   chat.get('/:id/models', async (c) => c.json(success(await controller.models(c.req.param('id')))));
