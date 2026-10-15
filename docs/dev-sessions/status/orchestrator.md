@@ -6,17 +6,15 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff 275cea5b: T-586, T-486 (S2d+S2e), T-547, T-611, T-548 (gate GREEN 4071aa5, claudepilot-gate-4071aa5-b4a2; 5795-5800).
 ## IN FLIGHT (6 of 6, D-71): all sonnet
 - NEXT FREE SLOTS: 1) T-631 blind review (sonnet) of allow entry worktree-deps.sh (coordinator 5790; plan 5804). 2) T-591 S1d.
-  3) T-623 S1b rework: exec into tmpfs, no Secrets RBAC; CDP residual accepted (coordinator 18:09, 5803). 4) FE S1c T-600. 5) T-610.
-- QA T-416 41381bf2 (qa/T-416-s1b at a769b008): suite, race test red on d37c5f0/green on a769b00, reservation release, push-bridge mutation,
-  typecheck -> blind review (opus) -> gate -> merge.
+  3) FE S1c T-600. 4) T-610.
+- IMPL T-416 S1c 0e5bcf50 (ticket/T-416-s1c): QA 41381bf2 FAIL 5792 (push-bridge test red, race test NO PROOF; S1b claims false) -> 5808.
+- BE INFRA 6d431441 (ticket/T-623-s1b): review 6b97efb4 PASS WITH CONDITIONS 5794 -> rework 5809 (exec into tmpfs, no RBAC; CDP accepted 5803).
+- T-619 browser proof PASS 5793 (screenshots t619-390/1280.png in qa-t-600-ui-r3) -> 5810; #41 release is the coordinator's.
 - T-591 S1c QA PASS WITH GAPS 5741; merge CONFLICT: migration 783 also T-486's -> S1d (renumber + M5a test) 5746, next free slot.
 - T-597 QA FAIL 5727 (sev 2: text after /compact goes unframed) -> decision 5742 -> S1b queued to Backend after T-600 BE.
-- QA PERF 7e4879c7 (lane/cp-qa-perf): T-426 S1c -> T-623 -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-558 e652c44; T-426 S1c to the front when DONE.
-- QA UI b3f769c5 (qa/T-600-ui-r3 32f67b8f): T-619 PARTIAL 5720 (both targets blocked; scratch portal not started, no node_modules,
-  deps script refused) -> coordinator linked deps (18:06), QA UI rerunning steps a,b,d. T-600 FE S1b FAIL 5721 (Pace 2 cols at 1280) -> FE S1c. Then T-576.
+- QA PERF 7e4879c7 (lane/cp-qa-perf): T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-558 e652c44; T-426 S1c+S1d, T-623 S1b to the front when DONE.
+- QA UI b3f769c5 (qa/T-600-ui-r3 32f67b8f): on T-576 ux (2427d98) now; then T-600 re-run after FE S1c (FE S1b FAIL 5721, Pace 2 cols at 1280).
 - BACKEND 4b4edaf8 (ticket/T-600-be from T-600-fe-s1b 32985e2) on T-600 BE (plan 5540); then T-597 S1b; then T-325 S1+S2 (5549).
-- T-623 DONE 4d68e843 (5750; 174/174, typecheck; not real Chromium/k8s) -> REVIEW 6b97efb4 (opus, security) + QA Perf after T-426 (5754).
-  BE INFRA feaba810 ended; the lane respawns for the T-623 rework / T-591 S1d / T-610.
 - T-619 egress review 2590789a PASS WITH CONDITIONS 5627 (ended) -> coordinator 5629: owner ack on D-60 relax before #41 release; T-624 follow-up.
 - FRONTEND: 6a1a061e DONE FE S1b 32985e2 (5621) -> QA UI; ended. FE S1c T-600 Pace grid (5721); then T-556 (T-486 now merged).
 - Merge notes: T-546 merges 10b22e0, not branch head 0004ac5. T-486 = S2d 2979f99 + S2e ea1c006. Ended: 5f8f392b, 74a8d857, 83921ca7,
@@ -28,7 +26,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   over-claims, no failure-path tests) -> decision 5778 -> IMPL ba717049 S1d (ticket/T-426-s1d) -> QA Perf S1c+S1d -> gate -> merge on T-401 ack.
   T-401 re-merged wip/main-54ba328: gate GREEN gate-54ba328-6502 (suite 570 s, peak 2228Mi; 5560/5562); ff only on the person's ack (4941).
 - T-379 S2 3f11b28 PASS (4948; review 4938) -> merge after T-401. T-401 060aca4: review 4936, QA 4943; HELD on the ack (4941).
-- T-416 (high incident): S1 d37c5f0 QA PASS WITH GAPS 4623; S1b a769b00 (4637/4688) now in QA 41381bf2. S2 = Bypass restore.
+- T-416 (high incident): S1 d37c5f0 QA PASS WITH GAPS 4623; S1b a769b00 QA FAIL 5792 -> S1c 0e5bcf50. S2 = Bypass restore.
 
 ## DECISIONS (binding)
 - 16:57 Workspace restarted by coordinator (pilot browser, T-619, D-73); release portal 2026.10.15-12 merged (c29d75c7). All 6 workers' processes stopped;
