@@ -20,10 +20,11 @@ export const RULE_GUARD_MESSAGE = 'rule files change only through the coordinato
 
 export const RULE_GUARD_WRAPPER = `#!/bin/sh
 # claudepilot: the rule-file guard (D-60, T-404), a managed PreToolUse hook. Root-owned. Runs its Node half ("$0.cjs") with
-# a fixed node and without NODE_OPTIONS or NODE_PATH, so nothing the session can set loads first. Exit 0 allows; any other
+# a fixed node in an emptied environment (/usr/bin/env -i: only HOME, a fixed PATH and the Claude config folder pass), so
+# nothing the session can set loads first (NODE_OPTIONS, NODE_PATH, a PATH with its own env). Exit 0 allows; any other
 # exit refuses (the hook command adds "|| exit 2").
 for n in /usr/local/bin/node /usr/bin/node; do
-  if [ -x "$n" ]; then exec env -u NODE_OPTIONS -u NODE_PATH "$n" "$0.cjs"; fi
+  if [ -x "$n" ]; then exec /usr/bin/env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" "$n" "$0.cjs"; fi
 done
 echo "${RULE_GUARD_MESSAGE}: the guard cannot find node, so this tool call is refused" >&2
 exit 2
@@ -48,7 +49,7 @@ const SETTINGS_BASE = /^settings(\.local)?\.json$/;
 const CHECKER_BASE = /^check-allowlist(\.[A-Za-z0-9]+)?$/;
 const ANY_RULE_BASE = /^(settings(\.local)?\.json|\.mcp\.json|\.claude\.json|check-allowlist(\.[A-Za-z0-9]+)?)$/;
 // A rule file named in text: the literal paths, a config folder's settings, or the variable that names one.
-const MENTION = /\.mcp\.json|\.claude\.json|check-allowlist|\.claude\/+(\.\/+)*settings(\.local)?\.json|claudes\/[^\s\/'"]+\/+settings(\.local)?\.json|CLAUDE_CONFIG_DIR/;
+const MENTION = /\.mcp\.json|\.claude\.json|check-allowlist|\/etc\/+claude-code|\/etc\/+claudepilot|\.claude\/+(\.\/+)*settings(\.local)?\.json|claudes\/[^\s\/'"]+\/+settings(\.local)?\.json|CLAUDE_CONFIG_DIR/;
 // Words that could be part of a rule file's name, for values the hook cannot see (a variable, a pipe).
 const FRAGMENT_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
 const RULE_NAMES = ['.claude/settings.json', '.claude/settings.local.json', '.mcp.json', '.claude.json', 'check-allowlist.mjs'];
@@ -61,8 +62,13 @@ function isConfigDir(dir) {
   return /\/\.claudepilot\/claudes\/[^\/]+$/.test(dir);
 }
 
+// Folders whose every file is a rule file: managed settings and their drop-ins, and the guard's own files (B1).
+const PROTECTED_ROOTS = ['/etc/claude-code', '/etc/claudepilot'];
+const underProtected = (abs) => PROTECTED_ROOTS.some((r) => abs === r || abs.startsWith(r + '/'));
+
 /** The rule file an absolute path is, or null. */
 function ruleLabel(abs) {
+  if (underProtected(abs)) return abs;
   const base = path.basename(abs);
   if (base === '.mcp.json' || base === '.claude.json' || CHECKER_BASE.test(base)) return abs;
   if (SETTINGS_BASE.test(base) && isConfigDir(path.dirname(abs))) return abs;
@@ -210,11 +216,26 @@ function segRegex(seg, dotglob) {
   }
 }
 
+/** Whether a glob pattern reaches a protected folder or below it (/etc/claude-code/*, /e*c/claudepilot). */
+function globUnderProtected(p, baseDir) {
+  if (!path.isAbsolute(p) && baseDir === null) return false;
+  const segs = path.resolve(baseDir || '/', p).split('/').filter(Boolean);
+  for (const root of PROTECTED_ROOTS) {
+    const rs = root.split('/').filter(Boolean);
+    if (segs.length < rs.length) continue;
+    let ok = true;
+    for (let j = 0; j < rs.length && ok; j++) ok = segRegex(segs[j], true).test(rs[j]);
+    if (ok) return true;
+  }
+  return false;
+}
+
 /** Whether a glob pattern could match a rule file (or the .claude folder) below base (null: base unknown). */
 function couldMatch(pattern, baseDir, dotglob) {
   for (const p of braces(pattern)) {
     const segs = expandHome(p).split('/').filter((s) => s !== '' && s !== '.');
     if (segs.length === 0) continue;
+    if (globUnderProtected(expandHome(p), baseDir)) return true;
     for (const cand of CANDIDATES) {
       const k = Math.min(segs.length, cand.length);
       let ok = true;
@@ -443,6 +464,7 @@ function lex(src) {
         if (src[j] === '$' && src[j + 1] === '(') {
           const e = matchParen(src, j + 1);
           subs.push(src.slice(j + 2, e));
+          if (src[j + 2] !== '(') (w.subst || (w.subst = [])).push(src.slice(j + 2, e));
           w.dyn = true;
           w.text += '\u0000';
           j = e + 1;
@@ -452,6 +474,7 @@ function lex(src) {
           const e = src.indexOf('\x60', j + 1);
           const stop = e < 0 ? n : e;
           subs.push(src.slice(j + 1, stop));
+          (w.subst || (w.subst = [])).push(src.slice(j + 1, stop));
           w.dyn = true;
           w.text += '\u0000';
           j = stop + 1;
@@ -470,8 +493,11 @@ function lex(src) {
     }
     if (c === '$' && src[i + 1] === '(') {
       const e = matchParen(src, i + 1);
-      if (src[i + 2] !== '(') subs.push(src.slice(i + 2, e));
       const w = word();
+      if (src[i + 2] !== '(') {
+        subs.push(src.slice(i + 2, e));
+        (w.subst || (w.subst = [])).push(src.slice(i + 2, e));
+      }
       w.dyn = true;
       w.text += '\u0000';
       i = e + 1;
@@ -482,6 +508,7 @@ function lex(src) {
       const stop = e < 0 ? n : e;
       subs.push(src.slice(i + 1, stop));
       const w = word();
+      (w.subst || (w.subst = [])).push(src.slice(i + 1, stop));
       w.dyn = true;
       w.text += '\u0000';
       i = stop + 1;
@@ -498,6 +525,7 @@ function lex(src) {
       const e = matchParen(src, i + 1);
       subs.push(src.slice(i + 2, e));
       const w = word();
+      (w.subst || (w.subst = [])).push(src.slice(i + 2, e));
       w.dyn = true;
       w.text += '\u0000';
       i = e + 1;
@@ -964,8 +992,10 @@ function analyze(command, st, cwd, depth) {
       if (ci2 >= 0) {
         const code = sargs[ci2 + 1];
         if (!code) continue;
+        const text = codeOf(code, base);
+        if (text === null) return hit(name + ' -c of code the guard cannot see', '');
         if (code.dyn && (st.fragments || st.decoder)) return hit(name + ' -c with a value the guard cannot see', shown(code));
-        const r = analyze(code.text.replace(/\u0000/g, '$X'), st, base, depth + 1);
+        const r = analyze(text, st, base, depth + 1);
         if (r) return r;
         continue;
       }
@@ -990,19 +1020,28 @@ function analyze(command, st, cwd, depth) {
 
     if (name === 'eval' || name === 'source' || name === '.') {
       if (name === 'eval') {
+        const parts = args.map((w) => codeOf(w, base));
+        if (parts.some((p) => p === null)) return hit('eval of code the guard cannot see', '');
         if (args.some((w) => w.dyn) && (st.fragments || st.decoder)) return hit('eval of a value the guard cannot see', name);
-        const r = analyze(args.map((w) => w.text.replace(/\u0000/g, '$X')).join(' '), st, base, depth + 1);
+        const r = analyze(parts.join(' '), st, base, depth + 1);
         if (r) return r;
         continue;
       }
       const f = args[0];
       if (!f) continue;
       if (f.dyn) {
-        if (st.fragments || st.decoder) return hit(name + ' of a value the guard cannot see', shown(f));
+        // source <(...) and source "$(...)": code the guard cannot see.
+        if (f.subst || st.fragments || st.decoder) return hit(name + ' of a value the guard cannot see', shown(f));
         continue;
       }
       if (scriptSuspicious(f.text, base)) return hit(name + ' of a script that writes a rule file', f.text);
       continue;
+    }
+
+    // A nested Claude Code given settings that turn hooks off (or settings the guard cannot read): refused.
+    if (name === 'claude' || (/^(npx|bunx|pnpx|pnpm|yarn|npm|node|nodejs|deno|bun)$/.test(name) && ws.some((w) => /claude/i.test(w.text) && !w.text.startsWith('-')))) {
+      const r = claudeSettings(ws, st, base);
+      if (r) return r;
     }
 
     if (INTERPRETERS.test(name)) {
@@ -1127,6 +1166,12 @@ function analyze(command, st, cwd, depth) {
       }
       continue;
     }
+    // Readers with a write form: uniq IN OUT, tree -o FILE, yq -i.
+    if (name === 'uniq' || name === 'tree' || name === 'yq') {
+      const r = readerWrite(name, args, st, base);
+      if (r) return r;
+      continue;
+    }
     // Anything else that names a rule file and is not a known reader: refused (prettier --write, npx, an editor, ...).
     if (!READERS.has(name)) {
       const named = namesRule(args, st, base);
@@ -1135,6 +1180,97 @@ function analyze(command, st, cwd, depth) {
     }
   }
   return null;
+}
+
+/** The write target of a reader that can write: uniq's second operand, tree's -o, every operand of yq -i. */
+function readerWrite(name, args, st, base) {
+  const pos = [];
+  const outs = [];
+  let inPlace = false;
+  let dashdash = false;
+  for (let k = 0; k < args.length; k++) {
+    const w = args[k];
+    const t = w.text;
+    if (dashdash || w.dyn || !t.startsWith('-') || t === '-') {
+      pos.push(w);
+      continue;
+    }
+    if (t === '--') {
+      dashdash = true;
+      continue;
+    }
+    if (name === 'uniq' && /^-[fsw]$/.test(t)) k++;
+    if (name === 'tree') {
+      if (t === '-o') outs.push(args[++k]);
+      else if (/^-o./.test(t)) outs.push(Object.assign({}, w, { text: t.slice(2) }));
+      else if (/^-[LPIH]$|^--(filelimit|timefmt|charset)$/.test(t)) k++;
+    }
+    if (name === 'yq') {
+      if (t === '--inplace' || /^--inplace=/.test(t) || /^-[A-Za-z]*i[A-Za-z]*$/.test(t)) inPlace = true;
+      else if (/^-[A-Za-z]*[oIp]$|^--(output-format|input-format|indent|expression|from-file|front-matter)$/.test(t)) k++;
+    }
+  }
+  if (name === 'uniq' && pos[1]) outs.push(pos[1]);
+  if (name === 'yq' && inPlace) for (const w of pos) outs.push(w);
+  for (const w of outs) {
+    const r = checkTarget(w, st, base, name === 'yq' ? 'yq -i' : name === 'tree' ? 'tree -o' : 'uniq to a file');
+    if (r) return r;
+  }
+  return null;
+}
+
+// Settings text that switches hooks off or replaces them.
+const HOOKS_OFF = /disableAllHooks|allowManagedHooksOnly|["']?hooks["']?\s*:/;
+
+/** claude --settings <json|file>: refused when the settings turn hooks off or replace them, or cannot be read. */
+function claudeSettings(ws, st, base) {
+  for (let k = 0; k < ws.length; k++) {
+    const t = ws[k].text;
+    let v = null;
+    if (t === '--settings') v = ws[k + 1] || { text: '', dyn: true };
+    else if (t.startsWith('--settings=')) v = Object.assign({}, ws[k], { text: t.slice(11) });
+    if (!v) continue;
+    if (v.dyn) return hit('claude --settings the guard cannot see', '');
+    const s = v.text.trim();
+    let text = s;
+    if (!s.startsWith('{')) {
+      if (base === null && !path.isAbsolute(expandHome(s))) return hit('claude --settings the guard cannot read', '');
+      try {
+        const abs = path.resolve(base || '/', expandHome(s));
+        const fst = fs.statSync(abs);
+        if (!fst.isFile() || fst.size > 1048576) return hit('claude --settings the guard cannot read', '');
+        text = fs.readFileSync(abs, 'utf8');
+      } catch (e) {
+        return hit('claude --settings the guard cannot read', '');
+      }
+    }
+    if (HOOKS_OFF.test(text)) return hit('claude --settings that change hooks', '');
+  }
+  return null;
+}
+
+/**
+ * The code a word carries, for sh -c, eval and inline interpreter code (item 6 of the T-404 review): its text, or the
+ * file a lone $(cat FILE) or $(< FILE) reads; null when the guard cannot know it (any other command substitution, or a
+ * word made only of variables).
+ */
+function codeOf(w, base) {
+  if (!w) return '';
+  if (w.subst && w.subst.length) {
+    if (w.text !== '\u0000' || w.subst.length !== 1) return null;
+    const m = /^\s*(?:cat\s+(?:--\s+)?|<\s*)([^\s|;&<>$\x60'"*?\[{(]+)\s*$/.exec(w.subst[0]);
+    if (!m || base === null) return null;
+    try {
+      const abs = path.resolve(base, expandHome(m[1]));
+      const s = fs.statSync(abs);
+      if (!s.isFile() || s.size > 1048576) return null;
+      return fs.readFileSync(abs, 'utf8');
+    } catch (e) {
+      return null;
+    }
+  }
+  if (w.dyn && !w.text.replace(/\u0000/g, '').trim()) return null;
+  return w.text.replace(/\u0000/g, '$X');
 }
 
 function readSmall(file, base) {
@@ -1225,6 +1361,29 @@ function git(args, st, base, stdinText, stdinFile, piped) {
     }
     return null;
   }
+  // Subcommands on the read list that write a file they are given: config --file, archive --output, bundle create.
+  if (sub === 'config' || sub === 'archive') {
+    const opt = sub === 'config' ? /^(--file|-f)$/ : /^(--output|-o)$/;
+    const optEq = sub === 'config' ? /^(--file|-f)=(.+)$/ : /^(--output|-o)=?(.+)$/;
+    for (let j = 0; j < rest.length; j++) {
+      const t = rest[j].text;
+      let target = null;
+      if (opt.test(t)) target = rest[++j] || null;
+      else if (!rest[j].dyn && optEq.test(t)) target = Object.assign({}, rest[j], { text: optEq.exec(t)[2] });
+      if (!target) continue;
+      const r = checkTarget(target, st, b, 'git ' + sub + ' to a file');
+      if (r) return r;
+    }
+    return null;
+  }
+  if (sub === 'bundle') {
+    const ops = nonOptions(rest);
+    if (ops[0] && ops[0].text === 'create') {
+      const r = checkTarget(ops[1], st, b, 'git bundle create');
+      if (r) return r;
+    }
+    return null;
+  }
   if (GIT_READS.has(sub) || sub === '') return null;
   // switch, merge, pull, rebase, cherry-pick, revert, read-tree, filter-branch, ... naming a rule file.
   const named = namesRule(rest, st, b);
@@ -1245,7 +1404,9 @@ function interpreter(name, args, st, base, command, stdinText, stdinFile, piped)
       break;
     }
     if (!w.dyn && inlineFlags.test(t) && !(name === 'claude')) {
-      code = (code || '') + '\n' + (args[k + 1] ? args[k + 1].text : '');
+      const text = codeOf(args[k + 1], base);
+      if (text === null) return hit(name + ' code the guard cannot see', '');
+      code = (code || '') + '\n' + text;
       k++;
       continue;
     }
@@ -1301,8 +1462,10 @@ function interpreter(name, args, st, base, command, stdinText, stdinFile, piped)
 
 /* ---------- tools ---------- */
 
-const PATH_KEY = /path|file|dest|target|source|uri|dir|location|output/i;
+const PATH_KEY = /path|file|dest|target|source|uri|dir|location|output|name|^(to|from|src|dst|into|old|new)$/i;
 const READ_TOOL = /(^|_)(read|get|list|search|find|view|show|stat|info|query|describe|cat|head|tail|grep|glob|tree|fetch|download_to_memory|open_text)/i;
+// A tool name with a write verb is a write, whatever read verb it also has (search_and_replace, get_or_create_file).
+const WRITE_TOOL = /(^|_|-)(write|edit|create|update|upsert|delete|remove|rm|move|mv|rename|copy|cp|replace|patch|put|set|save|append|insert|upload|apply|modify|mkdir|touch|chmod|chown|truncate|overwrite|link|symlink|restore|checkout|reset|commit|exec|execute|run|install|import|extract|unzip|download)/i;
 
 function stringsUnder(v, key, out, depth) {
   if (depth > 4 || out.length > 200) return;
@@ -1335,7 +1498,7 @@ function check(tool, ti, cwd) {
   }
   if (tool.startsWith('mcp__')) {
     const action = tool.split('__').slice(2).join('__');
-    if (READ_TOOL.test(action)) return null;
+    if (READ_TOOL.test(action) && !WRITE_TOOL.test(action)) return null;
     const vals = [];
     stringsUnder(ti, '', vals, 0);
     for (const v of vals) {
@@ -1348,6 +1511,14 @@ function check(tool, ti, cwd) {
 }
 
 /* ---------- audit and verdict ---------- */
+
+/** What the audit keeps of a refusal's path: the resolved rule file (or .claude folder), else a fixed label; never a command word. */
+function auditPath(p) {
+  const s = String(p || '').replace(/ \((through a link|a hard link|a \.claude folder)\)$/, '');
+  if (!s) return '';
+  if (s.length <= 300 && path.isAbsolute(s) && !/[\s\u0000-\u001f]/.test(s) && (ruleLabel(s) || isClaudeDir(s))) return s;
+  return 'unresolved';
+}
 
 function audit(input, tool, form, p) {
   try {
@@ -1368,8 +1539,8 @@ function audit(input, tool, form, p) {
       type: 'refused',
       session: pick(input && input.session_id, /^[A-Za-z0-9-]{1,64}$/, 64),
       tool: pick(tool, /^[A-Za-z0-9_.-]{1,100}$/, 100),
-      form: String(form || '').slice(0, 80),
-      path: String(p || '').slice(0, 300),
+      form: String(form || '').replace(/[^A-Za-z0-9 ._+\/:-]/g, '?').slice(0, 80),
+      path: auditPath(p),
       agent: pick(input && input.agent_type, /^[A-Za-z0-9_:. -]{1,64}$/, 64),
       mode: pick(input && input.permission_mode, /^[A-Za-z]{1,32}$/, 32),
     });
@@ -1385,6 +1556,25 @@ function refuse(input, tool, form, p) {
   process.exit(2);
 }
 
+// The guard's own deadline, well inside the hook's 30 s timeout: a check still running then is refused by the guard
+// itself, so a slow check never depends on how Claude Code treats a hook it had to kill. A test may only lower it.
+const DEADLINE_MS = 20000;
+function deadline() {
+  const v = Number(process.env.CLAUDEPILOT_GUARD_DEADLINE_MS);
+  return Number.isFinite(v) && v > 0 && v < DEADLINE_MS ? v : DEADLINE_MS;
+}
+
+function verdictOf(input) {
+  const tool = typeof input.tool_name === 'string' ? input.tool_name : '';
+  const ti = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
+  const cwd = typeof input.cwd === 'string' && path.isAbsolute(input.cwd) ? input.cwd : process.cwd();
+  try {
+    return check(tool, ti, cwd);
+  } catch (e) {
+    return hit('a command the guard could not check', '');
+  }
+}
+
 function main() {
   let input = null;
   try {
@@ -1394,19 +1584,35 @@ function main() {
   }
   if (!input || typeof input !== 'object') return refuse(null, '', 'unreadable hook input', '');
   const tool = typeof input.tool_name === 'string' ? input.tool_name : '';
-  const ti = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
-  const cwd = typeof input.cwd === 'string' && path.isAbsolute(input.cwd) ? input.cwd : process.cwd();
-  let verdict;
+  // The check runs in a worker; this thread stays free to keep the deadline. No answer, a crash or the deadline: refused.
+  let done = false;
+  const finish = (verdict) => {
+    if (done) return;
+    done = true;
+    if (!verdict) process.exit(0);
+    refuse(input, tool, verdict.form, verdict.path);
+  };
+  let worker;
   try {
-    verdict = check(tool, ti, cwd);
+    worker = new threads.Worker(__filename, { workerData: input, env: threads.SHARE_ENV });
   } catch (e) {
-    verdict = hit('a command the guard could not check', '');
+    return finish(verdictOf(input));
   }
-  if (!verdict) process.exit(0);
-  refuse(input, tool, verdict.form, verdict.path);
+  const timer = setTimeout(() => finish(hit('a check that took too long', '')), deadline());
+  worker.on('message', (m) => {
+    clearTimeout(timer);
+    finish(m && typeof m === 'object' && m.verdict ? m.verdict : m && m.allow === true ? null : hit('a check that gave no answer', ''));
+  });
+  worker.on('error', () => finish(hit('a command the guard could not check', '')));
+  worker.on('exit', () => finish(hit('a check that gave no answer', '')));
 }
 
-main();
+const threads = require('worker_threads');
+if (threads.isMainThread) main();
+else {
+  const verdict = verdictOf(threads.workerData || {});
+  threads.parentPort.postMessage(verdict ? { verdict: verdict } : { allow: true });
+}
 `;
 
 /** The guard's two files: root-owned, outside every workspace folder (policy owner, `/etc/claudepilot/bin/policy-*`). */

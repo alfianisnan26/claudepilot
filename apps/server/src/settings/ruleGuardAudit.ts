@@ -29,8 +29,9 @@ export function recordGuardRefusals(store: Store, workspaceId: string, events: O
       detail: {
         claudeSession,
         tool: text(e.tool, 100),
-        form: text(e.form, 80),
-        path: text(e.path, 300),
+        form: text(e.form, 80, /^[A-Za-z0-9 ._+\/:?-]{1,80}$/),
+        // A resolved absolute path or the guard's fixed label; anything else (an older guard's command word) is not kept.
+        path: typeof e.path === 'string' && e.path ? (text(e.path, 300, /^(\/[^\s\u0000-\u001f]{0,299}|unresolved)$/) ?? 'unresolved') : null,
         agent: text(e.agent, 64),
         mode: text(e.mode, 32),
         at: text(e.t, 40),

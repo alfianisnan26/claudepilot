@@ -925,18 +925,25 @@ anyway (T-391); a pattern deny cannot stop a Bash write.
 **Rule files**, in any folder: `.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, a repository's
 allow-list checker (`check-allowlist.*`), and Claude Code's own `.claude.json`; `settings.json` and `settings.local.json`
 also count in `~/.claude` and in each Claude's config folder (`CLAUDE_CONFIG_DIR`, `~/.claudepilot/claudes/<id>`).
+Every file under `/etc/claude-code/` (managed settings and their drop-ins) and `/etc/claudepilot/` (the guard's own
+files and the other delivered scripts) is a rule file too, and so are those folders themselves. (`sudo` in the workspace is
+a separate tightening, T-422.)
 
 **How it is delivered.** The policy owner's fragment (`settings/agentEnv.ts`), which every workspace gets, carries two
 root-owned files outside every workspace folder and one hook in `10-claudepilot-policy.json`:
 
 - `/etc/claudepilot/bin/policy-rule-guard` (root, 0755): a POSIX sh wrapper that runs the Node half with a fixed node
-  (`/usr/local/bin/node`, else `/usr/bin/node`) and without `NODE_OPTIONS` or `NODE_PATH`, so nothing a session sets
-  loads first; with no node it refuses.
+  (`/usr/local/bin/node`, else `/usr/bin/node`) through `/usr/bin/env -i` (only `HOME`, a fixed `PATH` and
+  `CLAUDE_CONFIG_DIR` pass), so nothing a session sets loads first (`NODE_OPTIONS`, `NODE_PATH`, a `PATH` with its own
+  `env`); with no node it refuses.
 - `/etc/claudepilot/bin/policy-rule-guard.cjs` (root, 0644): the Node half, no dependencies (`settings/ruleGuard.ts`).
+  It checks in a worker thread and keeps its own deadline of 20 s: a check still running then is refused by the guard
+  itself (exit 2), as is a worker that crashes or gives no answer.
 - `hooks.PreToolUse`: matcher `Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__.*`, command
-  `/etc/claudepilot/bin/policy-rule-guard || exit 2`, so a guard that is missing, crashes or times out refuses instead of
-  letting the call through. The policy owner may set only `PreToolUse` hooks that run its own `policy-*` scripts
-  (`delivery/ownership.ts`); no pool can write `policy-*` files.
+  `/etc/claudepilot/bin/policy-rule-guard || exit 2` with a 30 s hook timeout, so a guard that is missing or crashes
+  refuses instead of letting the call through. A hook that Claude Code kills at its timeout is not a refusal (the call may
+  go through), which is why the guard's own deadline sits well inside it. The policy owner may set only `PreToolUse` hooks
+  that run its own `policy-*` scripts (`delivery/ownership.ts`); no pool can write `policy-*` files.
 
 Managed settings rank above every project, local and user file, and Claude Code runs hooks in every permission mode, so
 the guard binds every Claude Code session in the workspace: the portal's chats, crew workers, sub-agents (their tool calls
@@ -950,14 +957,22 @@ working. A session takes the hook when it starts: one started before the guard l
 
 - Edit, Write, MultiEdit and NotebookEdit of a rule file, resolved against the session's folder, through symlinked
   folders and files, and a hard link to a rule file made earlier.
-- An MCP tool whose name is not a read (`read`, `get`, `list`, `search`, ...) with a path-like argument (`path`, `file`,
-  `destination`, `source`, ...) that is a rule file. Free text (a ticket comment naming a file) is not a path.
+- An MCP tool whose name is not only a read with a path-like argument (`path`, `file`, `destination`, `source`, `to`,
+  `from`, `name`, ...) that is a rule file. A name with a write verb is a write, whatever read verb it also has
+  (`search_and_replace`, `get_or_create_file`). Free text (a ticket comment naming a file) is not a path.
 - A Bash command with a write form that names or could name a rule file: a redirect (`>`, `>>`, `>|`, `<>`, `&>`,
   `exec 3>`), `tee`, `sponge`, `sed -i`, `perl -i`, `cp`, `mv`, `install`, `rsync`, `dd of=`, `truncate`, `touch`,
   `chmod`, `ln`, `rm`, editors, `curl -o`, `tar -C .claude`, `patch` and `git apply` of a patch touching one,
   `git checkout`/`restore`/`rm`/`mv`/`reset` of one, a `git checkout <commit> -- .` (a folder from another commit),
-  `find ... -delete`/`-exec` that could reach one, `xargs` with a write command fed from a pipe, and any command that is
-  not a known reader (`cat`, `grep`, `jq`, `git diff`, ...) with a rule file among its words (`npx prettier --write`).
+  `find ... -delete`/`-exec` that could reach one, `xargs` with a write command fed from a pipe, the write forms of
+  readers and of git reads (`uniq IN OUT`, `tree -o`, `yq -i`, `git config --file`, `git archive -o`, `git bundle
+  create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git diff`, ...) with a rule file among its
+  words (`npx prettier --write`).
+- A nested Claude Code (`claude`, `npx @anthropic-ai/claude-code`) whose `--settings` switch hooks off or set hooks
+  (`disableAllHooks`, `allowManagedHooksOnly`, `hooks`), or that the guard cannot read (a variable, a missing file).
+- Code the guard cannot see: `sh -c`, `eval` or inline interpreter code (`node -e`) from a command substitution or made
+  only of variables (`sh -c "$(curl ...)"`, `eval "$CMD"`), and `source <(...)`. A lone `$(cat FILE)` or `$(< FILE)` is
+  read and checked like the code it holds. `eval "$(ssh-agent -s)"` is refused too.
   Interpreters (`node`, `python`, `perl`, `ruby`, `awk`, `claude`, ...) are refused when their words name a rule file,
   when the command names one anywhere (data on stdin), when they read code from stdin while one is named, and when inline
   code writes a file and carries a piece of a rule file's name (`'.cla' + 'ude'`), a decoding call (base64, char codes,
@@ -995,12 +1010,14 @@ is refused when it would land rule files; use `git clone` or `git worktree add`.
 
 **Audit.** Each refusal appends one line to `~/.claudepilot/outbox/guard.jsonl` (foundation PRD §8): the Claude Code
 session id, the tool, the form, the path, the agent type and the permission mode; never the command's or the file's
-content. The portal pulls the `guard` channel of every known workspace (every 10 s while running, and before a stop) and
-writes one audit row `guard.refused` (severity high) with the workspace and, when the portal ran the session, the chat it
-belongs to (`settings/ruleGuardAudit.ts`).
+content. The path is the resolved rule file (or `.claude` folder), else the fixed label `unresolved`: never a word of the
+command; the portal keeps only an absolute path or that label from a line. The portal pulls the `guard` channel of the
+workspaces the policy drop-in landed in and that are not removed (every 10 s while running, and before a stop; at most 4
+pulls at once) and writes one audit row `guard.refused` (severity high) with the workspace and, when the portal ran the
+session, the chat it belongs to (`settings/ruleGuardAudit.ts`).
 
 Open: 🔬 the QA real job: a `dontAsk` worker and a Bypass lead in `~/work/konfersi-universe` both refused writing
-`.claude/settings.json` by Edit and by `node -e`, while editing a source file still works; 🔬 that `disableAllHooks` set
-by a session (`claude --settings` in a nested call) cannot switch off a managed hook in the pinned Claude Code (the guard
-already refuses a nested `claude` naming a rule file, not one that names none).
+`.claude/settings.json` by Edit and by `node -e`, while editing a source file still works; 🔬 whether `disableAllHooks`
+set by a session can switch off a managed hook in the pinned Claude Code at all (the guard refuses a nested `claude`
+whose `--settings` change hooks either way).
 
