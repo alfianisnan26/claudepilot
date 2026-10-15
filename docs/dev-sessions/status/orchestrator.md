@@ -38,10 +38,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-378 S1 dev/t-378-1 9834ff7 ready: needs a verifier.
 
 ## DECISIONS (binding)
-- 16:10 Coordinator back: deploy #40 (pilot at 433da24) is its own; no deploy from me; one workspace restart after #40. The 4th slot
-  (T-546 Jobs on bb7cdb0, ticket/T-546-crew-digest) is spawned after that restart, since the cluster is busy until then.
-- 14:30 Coordinator (D-65 idle slots): workers waiting on the one-at-a-time cluster hold slots; over 120k they end after their
-  ticket. 7d33708d ended, T-576 started in its slot. The cluster queue (D-61), not the workers, is the bottleneck.
+- 14:56 D-70 LANES (DECISIONS.md; my decision T-595 5380): current 5 workers finish; freed slots become lanes, spawned ONCE on sonnet and fed
+  by session_message, never ended for lack of work: CP Backend -> CP QA Perf -> CP Frontend -> CP QA UI -> 5th = blind reviewer.
+  Every delivery goes to its side's QA lane before merge. T-591 S1 stays with eaec4cc5, then Backend. GAP: lanes cannot make branches (T-595).
+- 16:10 Coordinator back: deploy #40 is its own; no deploy from me; one workspace restart after #40.
 - 15:50 Workspace restarted 13:46 UTC; 03c496b6 (T-546, mid-Jobs) and cee43422 (T-486 port, WAITING 3cb0883) are gone, all branches
   pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster, finishes by itself. 14:05 Coordinator AWAY (owner offline): restart POSTPONED, long work OK, Mac runner off.
   The coordinator ran #38/#39. After it: fresh workers re-run T-546's Jobs on bb7cdb0 and T-486's on 3cb0883.
