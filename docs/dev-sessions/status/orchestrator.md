@@ -24,8 +24,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
   T-426 ab93b54: QA Perf PASS 33/33 (5564) but blind review d4c49b5c FAIL 5571 (sev 2: refused arg echoed, pasted hex secret printed).
   S1b 350dd399 (5661): 2nd blind review 14385e7d CHANGES 5674 (sev 2: parser :104 echoes $1, lead confirmed) -> decision 5682 ->
-  S1c DONE 5d9bee7e (5743; 40/40; b7e209d5 ended) -> QA Perf full re-probe (front) + delta REVIEW 3a7d9ffc (opus, why security);
-  lead finding: Secret via `kubectl apply` keeps data in last-applied annotation -> both probe it. Then gate -> merge on T-401 ack.
+  S1c DONE 5d9bee7e (5743) -> delta review 3a7d9ffc PASS WITH CONDITIONS 5777 (apply annotation, non-UTF-8 error echo, 2 doc
+  over-claims, no failure-path tests) -> decision 5778 -> IMPL ba717049 S1d (ticket/T-426-s1d) -> QA Perf S1c+S1d -> gate -> merge on T-401 ack.
   T-401 re-merged wip/main-54ba328: gate GREEN gate-54ba328-6502 (suite 570 s, peak 2228Mi; 5560/5562); ff only on the person's ack (4941).
 - T-379 S2 3f11b28 PASS (4948; review 4938) -> merge after T-401. T-401 060aca4: review 4936, QA 4943; HELD on the ack (4941).
 - T-416 (high incident): S1 d37c5f0 QA PASS WITH GAPS 4623; S1b a769b00 (4637/4688) now in QA 41381bf2. S2 = Bypass restore.
