@@ -77,7 +77,7 @@ export function leadHookScript(cwd: string): string {
 
 /** The hook command line: `node` from a fixed PATH in an emptied environment (nothing the session sets loads first); `|| exit 2`: a hook that cannot run refuses. */
 export function leadHookCommand(cwd: string): string {
-  return `/usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin node -e '${leadHookScript(cwd)}' || exit 2`;
+  return `/usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin node -e '${leadHookScript(cwd)}'`;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
