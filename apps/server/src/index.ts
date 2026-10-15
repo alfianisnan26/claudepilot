@@ -150,8 +150,15 @@ if (ws.local.enabled && !PLAIN_NAME.test(ws.local.name)) {
   ws.local.name = 'local';
 }
 if (ws.local.enabled) runtimes.push(new LocalRuntime({ name: ws.local.name, state: new JsonFile(`${config.paths.data}/local-workspace.json`, {}) }));
-// Every workspace's stable id, its `<target>/<name>` alias and its stored runtime name (T-42), kept in the store.
-const workspaces = new Workspaces(runtimes, new JsonFile(`${config.paths.data}/pending-creates.json`, []), {}, new WorkspaceIdentities(store));
+// Every workspace's stable id, its `<target>/<name>` alias and its stored runtime name (T-42), kept in the store. Each target's last good
+// list (T-515) is kept beside the pending creates, so a portal restarted while a target's API is down still lists its workspaces.
+const workspaces = new Workspaces(
+  runtimes,
+  new JsonFile(`${config.paths.data}/pending-creates.json`, []),
+  {},
+  new WorkspaceIdentities(store),
+  new JsonFile(`${config.paths.data}/last-known-workspaces.json`, {}),
+);
 
 // Chat sessions: one controller shared by the REST routes and the chat socket.
 const chatController = new ChatController(store, workspaces);

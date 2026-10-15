@@ -19,8 +19,15 @@ export interface WorkspaceTarget {
   nodes?: { id: string; name: string; connected: boolean; drained: boolean }[];
 }
 
-/** `unreachable`: on an enrolled target whose tunnel is down; the rest of the entry is the last known state (targets-connect PRD §12.5). */
-export type WorkspaceStatus = 'creating' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error' | 'unreachable';
+/**
+ * `unreachable`: on an enrolled target whose tunnel is down; the rest of the entry is the last known state (targets-connect PRD §12.5).
+ * `unavailable`: its target's list failed or timed out (a slow or down Kubernetes API, T-515); the rest is the last good answer, `detail`
+ * says why (short, redacted) and `lastSeenAt` when that answer was.
+ */
+export type WorkspaceStatus = 'creating' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error' | 'unreachable' | 'unavailable';
+
+/** A status that shows a last known entry, not a live answer: what needs the target waits. */
+export const isLastKnownStatus = (s: WorkspaceStatus): boolean => s === 'unreachable' || s === 'unavailable';
 
 export interface Workspace {
   /**
@@ -66,7 +73,7 @@ export interface Workspace {
   claude?: import('./claudeversion.js').WorkspaceClaudeBrief | null;
   /** The node of an enrolled cluster it runs on (targets-connect PRD §12.4). */
   node?: string;
-  /** ISO time the portal last reached it; set while it is `unreachable`. */
+  /** ISO time the portal last reached it (its target's last good answer); set while it is `unreachable` or `unavailable`. */
   lastSeenAt?: string;
 }
 
