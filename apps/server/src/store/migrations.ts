@@ -3201,6 +3201,21 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 782,
+    name: 'CI: the upstream a remote follows, and its last sync (T-486)',
+    up(db) {
+      // T-486 (local-git-ci PRD FR8a): a pilot remote may follow an https upstream (GitHub or Gitea). `upstream_secret` is a Secrets & env
+      // NAME, never a value. `upstream_state` is the last sync's JSON (when, error, diverged and ahead branches, branches gone upstream).
+      // Null on every row so far: no remote follows anything, as before.
+      db.exec(`
+        ALTER TABLE ci_repos ADD COLUMN upstream_url TEXT;
+        ALTER TABLE ci_repos ADD COLUMN upstream_secret TEXT;
+        ALTER TABLE ci_repos ADD COLUMN upstream_every_s INTEGER;
+        ALTER TABLE ci_repos ADD COLUMN upstream_state TEXT;
+      `);
+    },
+  },
+  {
     version: 773,
     name: 'chat sessions: the agent a session runs as (T-294)',
     up(db) {
@@ -3239,6 +3254,15 @@ export const MIGRATIONS: Migration[] = [
       // T-476: a worker started in a plain folder that is a git work tree records the folder's branch once, at its start, so CI counts it as
       // the worker's own branch (ci_run_trigger). Null for every row so far, and for sessions with a worktree of their own.
       db.exec(`ALTER TABLE chat_sessions ADD COLUMN folder_branch TEXT;`);
+    },
+  },
+  {
+    version: 777,
+    name: 'chat sessions: why a worker runs above its role\'s model (T-490, D-63)',
+    up(db) {
+      // T-490 (D-63): a worker whose role defaults to sonnet (QA, review) and that its lead started on opus or fable carries the lead's
+      // reason (`session_spawn` `why`), redacted and capped. Null for every row so far and for every spawn without one.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN spawn_why TEXT;`);
     },
   },
   {

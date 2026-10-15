@@ -1057,7 +1057,11 @@ tables the portal already keeps; nothing new is stored.
   as `leadTokens`), over sessions with a request in the window; the five sessions that cost most; the model mix per role; sessions per
   role with how many started in the window (churn); live sessions per Claude now (T-427 spread; the window that ends now only); lead
   hand-overs (continuations created in the window, T-423) and per hour; the usage spikes (`usage_spikes`, T-418) of its sessions, or a
-  rate spike whose top session is one of them.
+  rate spike whose top session is one of them. **T-490 (D-63):** `qaReviewOpus`: of the QA, verifier, ux-check and review workers (their
+  role) with a request in the window, how many had a request on opus or fable, the share in percent (MEASURED; unavailable `no_samples`
+  with none), and how many of those were started with a reason (`session_spawn` `why`, `chat_sessions.spawn_why`). Each program also
+  names its workspace (`workspaceId`, the lead's); `crew_scorecard`'s short result has `workspace`, `qa_review_opus_pct`,
+  `qa_review_sessions` and `qa_review_opus_with_why`, and the page's Details show the share as one line.
 - **Health**: `agent.refused` audit rows of its sessions in the window, by scope; sessions ended by an integrity or credential check
   (`ended_reason` prefixes) or interrupted by an error, in the window. Pod memory and OOM restarts are unavailable (`no_source`): the
   portal does not record them.
@@ -1066,7 +1070,8 @@ tables the portal already keeps; nothing new is stored.
   lead chain's requests, `chat_usage.agents`: any is a breach; none while a live lead may still start them, `subagents` on, is a
   warn); D-62 `owner_queue` (the program's tickets assigned to a person and not closed, other than T-93: any is a breach); D-63
   `qa_review_model` (a worker whose role, `chat_sessions.agent`, is QA, verifier, ux-checker or reviewer with a request on a model that
-  is not sonnet is a breach; workers with requests but no role recorded at all: unavailable, `not_recorded`).
+  is not sonnet is a breach, unless its lead started it with a reason, `spawn_why`, T-490; workers with requests but no role recorded at
+  all: unavailable, `not_recorded`).
 - **Unavailable is a state.** Every figure carries `value`, `basis` (`measured`, `estimate`, `unavailable`) and `source`; unavailable
   is `null` with a reason: `no_source` (the table cannot be read), `no_samples` (nothing to divide by), `not_recorded`. A measured
   nothing is 0.
@@ -1084,7 +1089,9 @@ tables the portal already keeps; nothing new is stored.
   be checked); the review backlog warns when a ticket has waited more than 24 hours (a default of this page, not a decision); the other three
   have no target, so their state is `ok` when measured. "Details" opens the tables the API returns as lists (done by type, in review with
   what each waits for, CI by pipeline, deploys, the targets with their offenders), so nothing scrolls sideways. Layout: two numbers a row on a
-  phone, 44 px controls, light and dark. Check: `tools/qa/crew-scorecard.mjs`; tests `scorecardModel.test.ts`.
+  phone, 44 px controls, light and dark. S3: on a phone the Details button is a chevron only (labelled "Show details" / "Hide details"); the
+  Sources InfoTip sits beside the window picker it explains; when targets warn and none breaches, the Breaches tile reads "2 warn" (the
+  warn count) instead of "0" beside WARN. Check: `tools/qa/crew-scorecard.mjs`; tests `scorecardModel.test.ts`.
 - **Attribution export (T-450 S2 fix).** Usage → Attribution's CSV followed `by` and `range` but not the Done filter, so a done-only view
   exported every ticket; the download now carries `done=1` like the rows (`attributionUrl`, test `attributionUrl.test.ts`).
 - **Known limits.** A done ticket's life cost looks back at most 30 days; waits-for is derived for the current window only; context per

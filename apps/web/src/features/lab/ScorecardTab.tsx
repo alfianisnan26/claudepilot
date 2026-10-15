@@ -1,5 +1,6 @@
 import { LoadError, RowsSkeleton, Segmented } from '@isnanme/ui';
 import type { CrewProgramScore, CrewScorecard, CrewWindow } from '@portal/contracts';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useState } from 'react';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
@@ -8,7 +9,7 @@ import { formatCost } from '@/lib/usage/format';
 import { NotAvailable } from '../usage/spend/shared';
 import { useLoad } from '../usage/spend/useLoad';
 import { labApi } from './api';
-import { fmtAge, fmtFigure, fmtPerHour, tiles, UNAVAILABLE, WINDOW_OPTIONS, type Tile, type TileState } from './scorecardModel';
+import { fmtAge, fmtFigure, fmtPerHour, qaOpusLine, tiles, UNAVAILABLE, WINDOW_OPTIONS, type Tile, type TileState } from './scorecardModel';
 
 const STATE_CLASS: Record<TileState, string> = {
   ok: 'text-ink',
@@ -77,6 +78,10 @@ function Detail({ p }: { p: CrewProgramScore }) {
       <p className="mt-2 text-[12px] text-muted">
         Cost {fmtFigure(p.current.cost.total, formatCost)} · lead {fmtFigure(p.current.cost.lead, formatCost)} · workers {fmtFigure(p.current.cost.workers, formatCost)}
       </p>
+      <p className="mt-1 break-words text-[12px] text-muted [overflow-wrap:anywhere]" data-qa-opus="">
+        {qaOpusLine(p)}
+        {p.workspaceId ? ` · ${p.workspaceId}` : ''}
+      </p>
     </div>
   );
 }
@@ -101,11 +106,12 @@ function ProgramCard({ p }: { p: CrewProgramScore }) {
       <button
         type="button"
         aria-expanded={open}
+        aria-label={open ? 'Hide details' : 'Show details'}
         onClick={() => setOpen((o) => !o)}
         className="press flex min-h-11 w-full items-center justify-between border-t border-line px-4 text-[13px] text-muted"
       >
-        <span>{open ? 'Hide' : 'Details'}</span>
-        <span aria-hidden="true">{open ? '−' : '+'}</span>
+        <span className="hidden sm:inline">{open ? 'Hide' : 'Details'}</span>
+        {open ? <ChevronUp size={18} aria-hidden="true" className="mx-auto sm:mx-0" /> : <ChevronDown size={18} aria-hidden="true" className="mx-auto sm:mx-0" />}
       </button>
       {open && <Detail p={p} />}
     </Card>
@@ -137,8 +143,19 @@ export function ScorecardTab() {
     <>
       <PageHeader title="Crew" />
       <div className="mb-4 flex flex-col gap-2.5 sm:flex-row sm:items-center">
-        <div className="sm:w-[300px]">
-          <Segmented label="Window" value={window} options={WINDOW_OPTIONS} onChange={setWindow} />
+        <div className="flex items-center sm:w-[340px]">
+          <div className="min-w-0 flex-1">
+            <Segmented label="Window" value={window} options={WINDOW_OPTIONS} onChange={setWindow} />
+          </div>
+          {data && (
+            <InfoTip label="Sources of the numbers">
+              {Object.entries(data.basis).map(([k, v]) => (
+                <span key={k} className="mb-1 block">
+                  <b>{k}</b>: {v}
+                </span>
+              ))}
+            </InfoTip>
+          )}
         </div>
         <div className="flex items-center sm:w-[220px]">
           <div className="min-w-0 flex-1">
@@ -154,15 +171,6 @@ export function ScorecardTab() {
           </div>
           <InfoTip label="About compare">Compare shows each number of the window before this one, the same length, as “was”.</InfoTip>
         </div>
-        {data && (
-          <InfoTip label="Sources">
-            {Object.entries(data.basis).map(([k, v]) => (
-              <span key={k} className="mb-1 block">
-                <b>{k}</b>: {v}
-              </span>
-            ))}
-          </InfoTip>
-        )}
       </div>
       {forbidden ? <NotAvailable /> : failed ? <LoadError onRetry={reload} /> : !data ? <RowsSkeleton rows={2} lines={3} label="Loading the scorecard" /> : <Programs data={data} loading={loading} />}
     </>

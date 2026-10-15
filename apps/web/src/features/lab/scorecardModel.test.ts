@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { CrewFigure, CrewProgramScore, CrewTarget, CrewWindowScore } from '@portal/contracts';
-import { fmtAge, fmtFigure, fmtPerHour, REVIEW_WARN_MS, tiles, UNAVAILABLE } from './scorecardModel';
+import { fmtAge, fmtFigure, fmtPerHour, qaOpusLine, REVIEW_WARN_MS, tiles, UNAVAILABLE } from './scorecardModel';
 
 const fig = (value: number | null, basis: CrewFigure['basis'] = 'measured', reason?: CrewFigure['reason']): CrewFigure => ({ value, basis, source: 'a source', reason });
 const gone = (reason: CrewFigure['reason'] = 'no_samples'): CrewFigure => fig(null, 'unavailable', reason);
@@ -30,7 +30,7 @@ function windowScore(o: { done?: CrewFigure; cost?: CrewFigure; share?: CrewFigu
 }
 
 const target = (state: CrewTarget['state'], id: CrewTarget['id'] = 'live_workers'): CrewTarget => ({ id, decision: 'D-61', rule: 'r', state, figure: fig(0), offenders: [] });
-const program = (o: Partial<CrewProgramScore> = {}): CrewProgramScore => ({ program: 'p', title: 'P', leads: ['p'], workers: 2, current: windowScore(), previous: null, targets: [target('ok')], ...o });
+const program = (o: Partial<CrewProgramScore> = {}): CrewProgramScore => ({ program: 'p', title: 'P', workspaceId: null, leads: ['p'], workers: 2, current: windowScore(), previous: null, targets: [target('ok')], ...o });
 const by = (p: CrewProgramScore, key: string) => tiles(p).find((t) => t.key === key)!;
 
 test('five numbers, in the order of the card', () => {
@@ -62,7 +62,9 @@ test('unavailable is a state with its reason, never 0 or a guess', () => {
 test('breaches: the count of breached targets, the state is the worst', () => {
   const b = (ts: CrewTarget[]) => by(program({ targets: ts }), 'breaches');
   assert.deepEqual([b([target('ok')]).state, b([target('ok')]).value], ['ok', '0']);
-  assert.equal(b([target('ok'), target('warn')]).state, 'warn');
+  const warned = b([target('ok'), target('warn'), target('warn', 'owner_queue')]);
+  assert.deepEqual([warned.state, warned.value], ['warn', '2 warn']);
+  assert.equal(b([target('breach'), target('warn', 'owner_queue')]).value, '1');
   const bad = b([target('breach'), target('breach', 'owner_queue'), target('ok', 'lead_subagents')]);
   assert.deepEqual([bad.state, bad.value], ['breach', '2']);
   const none = b([target('unavailable'), target('unavailable', 'owner_queue')]);
@@ -81,6 +83,16 @@ test('compare: "was" shows the previous window, and nothing when it is unavailab
   assert.equal(by(p, 'donePerHour').was, '1.25');
   assert.equal(by(p, 'costPerDone').was, null);
   assert.equal(by(program(), 'donePerHour').was, null);
+});
+
+test('T-490 (D-63): the opus share of QA and review workers as one line; none in the window is unavailable, never 0 %', () => {
+  const withQa = (q: CrewWindowScore['efficiency']['qaReviewOpus']) => {
+    const w = windowScore();
+    return program({ current: { ...w, efficiency: { ...w.efficiency, qaReviewOpus: q } } });
+  };
+  assert.equal(qaOpusLine(withQa({ sessions: 4, opus: 1, opusWithWhy: 1, share: fig(25) })), 'QA/review on opus: 25 % (1 of 4, 1 with a why)');
+  assert.equal(qaOpusLine(withQa({ sessions: 3, opus: 0, opusWithWhy: 0, share: fig(0) })), 'QA/review on opus: 0 % (0 of 3)');
+  assert.equal(qaOpusLine(withQa({ sessions: 0, opus: 0, opusWithWhy: 0, share: gone('no_samples') })), `QA/review on opus: ${UNAVAILABLE} (nothing to divide by in this window)`);
 });
 
 test('number formats', () => {

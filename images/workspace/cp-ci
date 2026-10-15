@@ -3,7 +3,7 @@
 
 // src/ci/runner/main.ts
 var import_node_crypto4 = require("node:crypto");
-var import_node_fs6 = require("node:fs");
+var import_node_fs7 = require("node:fs");
 
 // src/ci/limits.ts
 var KiB = 1024;
@@ -174,7 +174,7 @@ var username = () => {
     return "unknown";
   }
 };
-function emitEvents(repo, updates, via) {
+function emitEvents(repo, updates, via, by) {
   ensureDir(eventsDir());
   const written = [];
   let dropped = 0;
@@ -188,7 +188,7 @@ function emitEvents(repo, updates, via) {
       continue;
     }
     const id = `${Date.now()}-${(0, import_node_crypto2.randomBytes)(4).toString("hex")}`;
-    const ev = { v: 1, id, at: nowIso(), repo, kind: u.new === NULL_SHA ? "delete" : "push", ref: u.ref, old: u.old, new: u.new, by: username(), via };
+    const ev = { v: 1, id, at: nowIso(), repo, kind: u.new === NULL_SHA ? "delete" : "push", ref: u.ref, old: u.old, new: u.new, by: by ?? username(), via };
     writeAtomic((0, import_node_path2.join)(eventsDir(), `${id}.json`), JSON.stringify(ev));
     written.push(id);
   }
@@ -350,11 +350,11 @@ async function repoCreate(name, opts, self) {
     if (source) {
       const r = await git(["clone", "--bare", "--no-hardlinks", "--quiet", source, dir], { timeoutMs: 6e5 });
       if (r.code !== 0) throw new Fail("clone_failed", r.stderr.trim().split("\n")[0] ?? "The clone failed.");
-      const heads = (await gitText(["for-each-ref", "--format=%(refname:short)", "refs/heads"], { gitDir: dir })).split("\n").filter(Boolean);
+      const heads2 = (await gitText(["for-each-ref", "--format=%(refname:short)", "refs/heads"], { gitDir: dir })).split("\n").filter(Boolean);
       const head = await git(["symbolic-ref", "--short", "HEAD"], { gitDir: dir });
       const current = head.code === 0 ? head.stdout.toString("utf8").trim() : "";
-      if (!heads.includes(current)) {
-        const pick = heads.includes(branch) ? branch : heads.includes("main") ? "main" : heads.includes("master") ? "master" : heads[0];
+      if (!heads2.includes(current)) {
+        const pick = heads2.includes(branch) ? branch : heads2.includes("main") ? "main" : heads2.includes("master") ? "master" : heads2[0];
         if (pick) await gitText(["symbolic-ref", "HEAD", `refs/heads/${pick}`], { gitDir: dir });
       }
     } else {
@@ -1546,6 +1546,159 @@ async function supervise(runId) {
   }
 }
 
+// src/ci/runner/upstream.ts
+var import_node_fs6 = require("node:fs");
+var import_node_net = require("node:net");
+var import_node_path6 = require("node:path");
+var SECRET_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+var NO_PROXY_VARS = ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"];
+function upstreamUrl(raw) {
+  if (typeof raw !== "string" || raw.length > 500 || /[\s\0]/.test(raw)) throw new Fail("bad_url", "The upstream is an https URL.");
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new Fail("bad_url", "The upstream is an https URL.");
+  }
+  if (u.protocol !== "https:" || !u.hostname || u.username || u.password || u.search || u.hash) throw new Fail("bad_url", "The upstream is an https URL with no user, password, query or fragment.");
+  if (!/^\/[A-Za-z0-9._~/-]+$/.test(u.pathname) || u.pathname.includes("..")) throw new Fail("bad_url", "The upstream's path is letters, digits and . _ ~ / -.");
+  return u;
+}
+function secretValue(name) {
+  if (!SECRET_NAME.test(name) || name.includes("..")) throw new Fail("bad_secret", "That is not a secret's name.");
+  const etc = (0, import_node_path6.dirname)((0, import_node_path6.dirname)((0, import_node_fs6.realpathSync)(process.argv[1])));
+  const path = (0, import_node_path6.join)(etc, "secrets", "files", name);
+  let text;
+  try {
+    const st = (0, import_node_fs6.lstatSync)(path);
+    if (!st.isFile() || st.size > 65536) throw new Error("size");
+    text = (0, import_node_fs6.readFileSync)(path, "utf8");
+  } catch {
+    throw new Fail("no_secret", `The secret ${name} is not available in this workspace. Assign it in Secrets & env as a secret or a tool login.`);
+  }
+  const value = text.endsWith("\n") ? text.slice(0, -1) : text;
+  if (!value || /[\r\n\0]/.test(value)) throw new Fail("no_secret", `The secret ${name} is empty or has more than one line.`);
+  return value;
+}
+function scrub(text, values) {
+  let out = text;
+  for (const v of values) if (v) out = out.split(v).join("***");
+  return out.replace(/authorization:[^\n]*/gi, "Authorization: ***");
+}
+async function heads(dir, prefix) {
+  const r = await git(["for-each-ref", "--format=%(refname)%00%(objectname)", prefix], { gitDir: dir });
+  const out = /* @__PURE__ */ new Map();
+  if (r.code !== 0) return out;
+  for (const line of r.stdout.toString("utf8").split("\n")) {
+    const [ref, sha] = line.split("\0");
+    if (!ref || !validSha(sha) || !ref.startsWith(prefix)) continue;
+    out.set(ref.slice(prefix.length), sha);
+  }
+  return out;
+}
+async function repoSync(repo, opts) {
+  const dir = needRepo(repo);
+  const url = upstreamUrl(opts.url);
+  if (opts.reset) {
+    for (const name of (await heads(dir, "refs/upstream/heads/")).keys()) {
+      const r = await git(["update-ref", "-d", `refs/upstream/heads/${name}`], { gitDir: dir });
+      if (r.code !== 0) throw new Fail("reset_failed", "The old upstream's staged branches could not be cleared.");
+    }
+  }
+  const env = { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+  for (const name of NO_PROXY_VARS) env[name] = "";
+  const hide = [];
+  if (opts.secret !== void 0) {
+    const value = secretValue(opts.secret);
+    const basic = Buffer.from(`x-access-token:${value}`).toString("base64");
+    hide.push(value, basic);
+    env.GIT_CONFIG_COUNT = "1";
+    env.GIT_CONFIG_KEY_0 = `http.${url.origin}/.extraHeader`;
+    env.GIT_CONFIG_VALUE_0 = `Authorization: Basic ${basic}`;
+  }
+  const pin = [];
+  if (opts.pin !== void 0) {
+    const v = (0, import_node_net.isIP)(opts.pin);
+    if (!v) throw new Fail("bad_pin", "The pinned address is not an IP address.");
+    pin.push("-c", `http.curloptResolve=${url.hostname}:${url.port || "443"}:${v === 6 ? `[${opts.pin}]` : opts.pin}`);
+  }
+  const before = await heads(dir, "refs/upstream/heads/");
+  const fetch = await git(
+    [
+      // Only https leaves, no redirect is followed, no helper is asked, nothing prompts.
+      "-c",
+      "protocol.allow=never",
+      "-c",
+      "protocol.https.allow=always",
+      "-c",
+      "http.followRedirects=false",
+      "-c",
+      "credential.helper=",
+      "-c",
+      "http.proxy=",
+      ...pin,
+      "fetch",
+      "--quiet",
+      "--no-tags",
+      "--prune",
+      "--no-write-fetch-head",
+      "--",
+      url.href,
+      "+refs/heads/*:refs/upstream/heads/*"
+    ],
+    { gitDir: dir, env, timeoutMs: 6e5 }
+  );
+  if (fetch.code !== 0) {
+    const line = scrub(fetch.stderr, hide).trim().split("\n").filter(Boolean).pop() ?? "";
+    throw new Fail("fetch_failed", (line || "git could not fetch the upstream.").slice(0, 300));
+  }
+  const upstream = await heads(dir, "refs/upstream/heads/");
+  const local = await heads(dir, "refs/heads/");
+  const moved = [];
+  const created = [];
+  const diverged = [];
+  const ahead = [];
+  const failed = [];
+  const ancestor = async (a, b) => (await git(["merge-base", "--is-ancestor", a, b], { gitDir: dir })).code === 0;
+  for (const [branch, sha] of [...upstream].sort(([a], [b]) => a.localeCompare(b))) {
+    if (!validRefName(branch)) continue;
+    const mine = local.get(branch);
+    const ref = `refs/heads/${branch}`;
+    if (mine === sha) continue;
+    if (mine === void 0) {
+      const r = await git(["update-ref", "-m", "upstream sync: create", ref, sha, NULL_SHA], { gitDir: dir });
+      if (r.code === 0) {
+        moved.push({ ref, old: NULL_SHA, new: sha });
+        created.push(branch);
+      } else failed.push(branch);
+      continue;
+    }
+    if (await ancestor(mine, sha)) {
+      const r = await git(["update-ref", "-m", "upstream sync: fast-forward", ref, sha, mine], { gitDir: dir });
+      if (r.code === 0) moved.push({ ref, old: mine, new: sha });
+      else failed.push(branch);
+    } else if (await ancestor(sha, mine)) ahead.push(branch);
+    else diverged.push({ branch, local: mine, upstream: sha });
+  }
+  const deleted = [...before.keys()].filter((b) => !upstream.has(b) && validRefName(b)).sort();
+  const onlyHere = [...local.keys()].filter((b) => !upstream.has(b) && validRefName(b)).sort();
+  const baseline = before.size === 0;
+  const events = baseline ? { written: [], dropped: 0 } : emitEvents(repo, moved, "push", "upstream");
+  return {
+    ok: true,
+    baseline,
+    moved: moved.map((m) => ({ branch: m.ref.slice(11), old: m.old, new: m.new })),
+    created,
+    diverged,
+    ahead,
+    deleted,
+    onlyHere,
+    failed,
+    events: events.written.length,
+    dropped: events.dropped
+  };
+}
+
 // src/ci/runner/main.ts
 function parse(args, known) {
   const pos = [];
@@ -1589,7 +1742,7 @@ async function dispatch(cmd, args, self) {
   switch (cmd) {
     case "version": {
       const v = await git(["--version"]);
-      return { ok: true, version: (0, import_node_crypto4.createHash)("sha256").update((0, import_node_fs6.readFileSync)(self)).digest("hex").slice(0, 16), node: process.version, git: v.stdout.toString("utf8").trim().replace(/^git version /, "") };
+      return { ok: true, version: (0, import_node_crypto4.createHash)("sha256").update((0, import_node_fs7.readFileSync)(self)).digest("hex").slice(0, 16), node: process.version, git: v.stdout.toString("utf8").trim().replace(/^git version /, "") };
     }
     case "repo": {
       const [sub, ...rest] = args;
@@ -1620,6 +1773,10 @@ async function dispatch(cmd, args, self) {
         case "rev": {
           const { pos } = parse(rest, {});
           return repoRev(pos[0], pos[1]);
+        }
+        case "sync": {
+          const { pos, flags } = parse(rest, { url: "value", secret: "value", pin: "value", reset: "bool" });
+          return repoSync(pos[0], { url: str(flags.url), secret: str(flags.secret), pin: str(flags.pin), reset: flags.reset === true });
         }
         default:
           throw new Fail("bad_command", "Unknown repo command.");
@@ -1679,7 +1836,7 @@ async function dispatch(cmd, args, self) {
 }
 async function main(argv) {
   const [cmd, ...rest] = argv;
-  const self = (0, import_node_fs6.realpathSync)(process.argv[1]);
+  const self = (0, import_node_fs7.realpathSync)(process.argv[1]);
   try {
     const out = await dispatch(cmd, rest, self);
     if (out === null || cmd === "hook") return 0;

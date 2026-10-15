@@ -182,6 +182,20 @@ export interface CrewEfficiency {
   handoversPerHour: CrewFigure;
   spikesCount: CrewFigure;
   spikes: CrewSpike[];
+  /** T-490 (D-63): the QA and review workers (by role) with a request in the window, and how many of them ran on opus or fable. */
+  qaReviewOpus: CrewQaReviewOpus;
+}
+
+/** T-490 (D-63): the opus share of a program's QA and review workers in a window. */
+export interface CrewQaReviewOpus {
+  /** QA, verifier, ux-check and review workers (their role, `chat_sessions.agent`) with a request in the window. */
+  sessions: number;
+  /** Of them, with a request on an opus or fable model. */
+  opus: number;
+  /** Of `opus`, started with a reason (`session_spawn` `why`, `chat_sessions.spawn_why`). */
+  opusWithWhy: number;
+  /** `opus / sessions`, percent; unavailable with no such worker (no_samples). */
+  share: CrewFigure;
 }
 
 export interface CrewEnding {
@@ -215,6 +229,8 @@ export interface CrewProgramScore {
   /** The first row of the lead chain (its id names the program). */
   program: string;
   title: string;
+  /** T-490: the workspace the program's lead runs in (`kubernetes/<name>`), or null when its row is gone. */
+  workspaceId: string | null;
   /** The lead chain: the lead and its continuations, oldest first. */
   leads: string[];
   /** Worker sessions in the program (any depth), live or ended. */

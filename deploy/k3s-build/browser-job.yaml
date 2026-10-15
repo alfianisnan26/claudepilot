@@ -11,7 +11,13 @@ spec:
   template:
     spec:
       restartPolicy: Never
-      # No node: k3s-node2 had 0.19 CPU free by requests on 2026-10-13, so the scheduler picks the one with room.
+      # No node pinned: k3s-node2 had 0.19 CPU free by requests on 2026-10-13, so the scheduler picks the one with room. Preferred (never
+      # required, T-524): not the control-plane node (k3s-master, 15 GB, also the API server); see job-run.yaml for how the weights add up.
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference: {matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}
       containers:
         - name: kaniko
           image: gcr.io/kaniko-project/executor:v1.23.2
@@ -24,6 +30,8 @@ spec:
             - --cache=false
             - --snapshot-mode=redo
             - --push-retry=3
+          # Memory request = limit (T-524): 1Gi requested with 6Gi allowed let the scheduler put a big build on a node without room for it.
+          # 6Gi is the old limit, kept (this build was not measured; lowering it would risk an OOMKilled build): only k3s-node2 can hold it.
           resources:
-            requests: {cpu: 100m, memory: 1Gi}
+            requests: {cpu: 100m, memory: 6Gi}
             limits: {cpu: "4", memory: 6Gi}

@@ -14,6 +14,7 @@ const STATUS_WORD: Record<WorkspaceRow['status'], string> = {
   stopped: 'Stopped',
   error: 'Failed',
   unreachable: 'Unreachable',
+  unavailable: 'Unavailable',
 };
 
 /** How many rows a card lists; the rest are a tap away on the Workspaces page. */

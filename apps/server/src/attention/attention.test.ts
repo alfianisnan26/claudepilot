@@ -286,7 +286,11 @@ test('tickets: an open approval assigned to a person waits; other types, agents\
 });
 
 test('tickets: an open ticket tagged owner-checklist waits whatever its assignee; once, with the approval rows unchanged; closed, untagged and invisible ones do not', () => {
-  const tag = (id: string, t: string) => db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)').run(Number(id.slice(2)), t);
+  // As the service writes it: the tag and a `tags` event by a person (T-527: an agent's tag alone does not count, checklisttag.test.ts).
+  const tag = (id: string, t: string) => {
+    db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)').run(Number(id.slice(2)), t);
+    db.prepare("INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, data) VALUES (?, ?, 'tags', 'ui', 'Admin', ?)").run(Number(id.slice(2)), ago(MIN), JSON.stringify({ from: [], to: [t] }));
+  };
   const approval = ticket();
   const list = ticket({ type: 'task', assignee: null });
   const both = ticket({ type: 'approval' });
@@ -439,7 +443,7 @@ test('the aggregate reads each source with exactly one query, however many items
   const r = createAttention({ db: counting }, { now: () => now, tickMs: 0 });
   const list = r.list(ownerActor());
   assert.equal(list.total, 35);
-  assert.equal(prepared, 8, 'one query per source, and one for the person\'s own Later (snoozes)');
+  assert.equal(prepared, 9, 'one query per source, and one for the person\'s own Later (snoozes)');
 });
 
 test('the aggregate groups by why then age, pages, filters by kind, and says when a source could not be read', () => {
@@ -470,7 +474,7 @@ test('the aggregate groups by why then age, pages, filters by kind, and says whe
   const broken = createAttention({ db: null }, { now: () => now, tickMs: 0, log: () => undefined });
   const none = broken.list(ownerActor());
   assert.equal(none.counts.mcp_version, null, 'unavailable is a state, never 0');
-  assert.equal(none.unavailable.length, 7);
+  assert.equal(none.unavailable.length, 8);
 });
 
 test('an item appearing emits one event naming it; nothing changing emits nothing; the first read is the baseline', () => {

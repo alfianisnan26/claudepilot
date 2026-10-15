@@ -228,7 +228,7 @@ export interface Runtime {
   readonly portalUrl?: string;
   /**
    * An enrolled target's last good list (targets-connect PRD §12.5), served by the manager while `check()` fails: each workspace
-   * `unreachable` with `lastSeenAt`. Absent on scanned targets (they are skipped while down, as before).
+   * `unreachable` with `lastSeenAt`. Absent on scanned targets: the manager serves its own last good list of them, each `unavailable` (T-515).
    */
   listLastKnown?(): Workspace[];
   /** An enrolled target: whether the workspace's node is connected right now (sync, no call). Absent: always reachable. */

@@ -73,6 +73,16 @@ export class Personas {
     return prompt ? prompt : null;
   }
 
+  /**
+   * T-490 (D-63): the model a role (an agent of the workspace's persona) runs on by its definition, or null when the persona has no such
+   * agent or the agent sets none (`''`, `inherit`). What `session_spawn` starts a worker of that role on when its lead names no model.
+   */
+  roleModel(workspaceId: string, role: string): string | null {
+    const agent = this.pools.assignedPools<PersonaContent>(workspaceId, 'persona')[0]?.content.agents.find((x) => x.name === role);
+    const model = agent?.model?.trim() ?? '';
+    return model && model !== 'inherit' ? model : null;
+  }
+
   /** A persona's or context's revisions, newest first, without their content: the history. */
   revisions(poolId: string) {
     this.#historic(poolId);

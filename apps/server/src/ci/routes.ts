@@ -114,7 +114,17 @@ export function createCiRoutes(ci: CiService): Hono {
     if (typeof req.workspaceId === 'string') requireCan(actorOf(c), 'operate', workspaceRef(req.workspaceId));
     return c.json(success(await ci.createRepo(req)), 201);
   });
-  app.patch('/repos/:id', async (c) => (may(c, 'manage', repoRef), c.json(success(await ci.updateRepo(id(c), await body<UpdateCiRepoRequest>(c))))));
+  app.patch('/repos/:id', async (c) => {
+    const actor = may(c, 'manage', repoRef);
+    const req = await body<UpdateCiRepoRequest>(c);
+    // The upstream (FR8a) a remote follows, and the secret NAME that reads it: a person's setting only (403 for tokens and agents), audited.
+    return c.json(success(await ci.updateRepo(id(c), req, req.upstream !== undefined ? person(actor) : undefined)));
+  });
+  // Sync with the upstream now (FR8a; the Needs you item's action). Operate: it only does what the loop does every 30 s.
+  app.post('/repos/:id/sync', async (c) => {
+    const actor = may(c, 'operate', repoRef);
+    return c.json(success(await ci.syncUpstream(id(c), { actor: actorString(actor), userId: actorUserId(actor) })));
+  });
   app.delete('/repos/:id', async (c) => {
     may(c, 'manage', repoRef);
     await ci.deleteRepo(id(c));

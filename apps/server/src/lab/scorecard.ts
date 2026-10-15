@@ -13,6 +13,8 @@
 import {
   CHAT_ENDED_CREDENTIAL,
   CHAT_ENDED_INTEGRITY,
+  modelFamilyOf,
+  modelInfo,
   type CrewCiRow,
   type CrewContextRow,
   type CrewCost,
@@ -54,6 +56,8 @@ export interface CrewSessionExtra {
   endedReason: string | null;
   /** When the session entered its current state. */
   stateSinceMs: number | null;
+  /** T-490 (D-63): why its lead started it above its role's model (`chat_sessions.spawn_why`); absent or null: none given. */
+  spawnWhy?: string | null;
 }
 
 /** One `usage_spikes` row. */
@@ -206,7 +210,8 @@ export const SRC = {
   ticketCost: 'usage spend ticketReport (T-449) over the window’s requests',
   sessions: 'chat_sessions (state, agent, max_workers, subagents)',
   agents: 'chat_usage.agents (Agent-tool sub-agents per turn)',
-  model: 'chat_usage.model of QA and review workers (chat_sessions.agent)',
+  model: 'chat_usage.model of QA and review workers (chat_sessions.agent); a worker started with a why (chat_sessions.spawn_why) is not an offender',
+  qaReviewOpus: 'chat_usage.model (opus or fable) of QA and review workers (chat_sessions.agent) with a request in the window; why: chat_sessions.spawn_why',
   ticketLife: 'usage spend ticketReport (T-449) over the requests from the oldest done ticket’s creation (at most 30 days) to the window end',
   costParts: 'chat_usage tokens x the list price (lab/prices.ts; cache write at the 5-minute rate)',
   requests: 'chat_usage.requests of the program’s sessions',
@@ -222,6 +227,8 @@ const CLOSED = new Set(['done', 'wont_do']);
 const OPEN = new Set(['open', 'in_progress', 'blocked', 'in_review']);
 const LIVE = new Set(['starting', 'idle', 'working', 'waiting', 'interrupted']);
 const QA_ROLE = /qa|verif|review|ux-check/i;
+/** T-490 (D-63): a model of the opus family or above (fable), by the catalogue's rank. */
+const isOpusOrAbove = (model: string) => (modelInfo(modelFamilyOf(model))?.rank ?? 0) >= modelInfo('opus')!.rank;
 /** How far back a done ticket's life is read for its cost (gap 1 of S1a). */
 export const TICKET_LIFE_CAP_MS = 30 * 24 * 3_600_000;
 
@@ -490,6 +497,16 @@ function efficiency(p: Program, facts: CrewFacts, rows: UsageRow[], fromMs: numb
   }
   spikes.sort((a, b) => a.at.localeCompare(b.at));
 
+  // T-490 (D-63): the QA and review workers active in the window, and those on opus or fable (any request).
+  const qaWorkers = active.filter((id) => !p.leads.includes(id) && QA_ROLE.test(facts.extra.get(id)?.agent ?? '') && rows.some((r) => r.sessionId === id && r.model !== '<synthetic>'));
+  const onOpus = qaWorkers.filter((id) => rows.some((r) => r.sessionId === id && isOpusOrAbove(r.model)));
+  const qaReviewOpus = {
+    sessions: qaWorkers.length,
+    opus: onOpus.length,
+    opusWithWhy: onOpus.filter((id) => !!facts.extra.get(id)?.spawnWhy).length,
+    share: qaWorkers.length ? fig(r2((onOpus.length / qaWorkers.length) * 100), 'measured', SRC.qaReviewOpus) : none('no_samples', SRC.qaReviewOpus),
+  };
+
   return {
     costParts: { input: share(part.input), output: share(part.output), cacheRead: share(part.cacheRead), cacheWrite: share(part.cacheWrite) },
     requests: fig(requests, 'measured', SRC.requests),
@@ -507,6 +524,7 @@ function efficiency(p: Program, facts: CrewFacts, rows: UsageRow[], fromMs: numb
     handoversPerHour: fig(r2(handovers / hours), 'measured', SRC.handovers),
     spikesCount: facts.spikes ? fig(spikes.length, 'measured', SRC.spikes) : none('no_source', SRC.spikes),
     spikes,
+    qaReviewOpus,
   };
 }
 
@@ -604,10 +622,11 @@ export function targets(p: Program, facts: CrewFacts, rows: UsageRow[]): CrewTar
   const withRows = new Set(workerRows.map((r) => r.sessionId));
   const qa = [...withRows].filter((w) => QA_ROLE.test(facts.extra.get(w)?.agent ?? ''));
   const roleKnown = [...withRows].some((w) => !!facts.extra.get(w)?.agent);
-  const rule = 'QA, verifier, ux-checker and reviewer workers run on sonnet.';
+  const rule = 'QA, verifier, ux-checker and reviewer workers run on sonnet, unless started with a why (T-490).';
   if (withRows.size && !roleKnown) out.push({ id: 'qa_review_model', decision: 'D-63', rule, state: 'unavailable', figure: none('not_recorded', SRC.model), offenders: [] });
   else {
-    const off = qa.filter((w) => workerRows.some((r) => r.sessionId === w && !/sonnet/i.test(r.model))).sort();
+    // T-490: a worker its lead started above sonnet with a reason (`session_spawn` why) is D-63's allowed exception, not an offender.
+    const off = qa.filter((w) => !facts.extra.get(w)?.spawnWhy && workerRows.some((r) => r.sessionId === w && !/sonnet/i.test(r.model))).sort();
     out.push({ id: 'qa_review_model', decision: 'D-63', rule, state: off.length ? 'breach' : 'ok', figure: fig(off.length, 'measured', SRC.model), offenders: off.slice(0, 20) });
   }
   return out;
@@ -621,6 +640,7 @@ export function programScore(p: Program, facts: CrewFacts, windowMs: number, com
   return {
     program: p.id,
     title: p.title,
+    workspaceId: facts.sessions.get(p.id)?.workspaceId || null,
     leads: p.leads,
     workers: p.members.size - p.leads.length,
     current: cur.score,
@@ -648,5 +668,7 @@ export const SCORECARD_BASIS: Record<string, string> = {
   spikes: 'The spike detector’s events (usage_spikes, §24) of the program’s sessions; a rate spike when the program’s session is its top one. MEASURED.',
   health: 'agent.refused audit rows; sessions ended by an integrity or credential check or interrupted by an error, in the window. Pod memory and OOM restarts: unavailable (the portal does not record them). MEASURED.',
   perDone: 'All-in: the window’s dollars over its done tickets; workers only: the workers’ dollars over them. ESTIMATE.',
-  targets: 'D-61 live workers and no Agent-tool sub-agents in a lead; D-62 the owner’s queue; D-63 QA and review on sonnet. Live workers are measured now; the rest over the window.',
+  qaReviewOpus:
+    'D-63 (T-490): of the QA, verifier, ux-check and review workers (their role) with a request in the window, the share with a request on opus or fable; how many of those were started with a why (session_spawn). Unavailable with no such worker. MEASURED.',
+  targets: 'D-61 live workers and no Agent-tool sub-agents in a lead; D-62 the owner’s queue; D-63 QA and review on sonnet (a worker started with a why is not an offender). Live workers are measured now; the rest over the window.',
 };

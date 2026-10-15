@@ -150,8 +150,15 @@ if (ws.local.enabled && !PLAIN_NAME.test(ws.local.name)) {
   ws.local.name = 'local';
 }
 if (ws.local.enabled) runtimes.push(new LocalRuntime({ name: ws.local.name, state: new JsonFile(`${config.paths.data}/local-workspace.json`, {}) }));
-// Every workspace's stable id, its `<target>/<name>` alias and its stored runtime name (T-42), kept in the store.
-const workspaces = new Workspaces(runtimes, new JsonFile(`${config.paths.data}/pending-creates.json`, []), {}, new WorkspaceIdentities(store));
+// Every workspace's stable id, its `<target>/<name>` alias and its stored runtime name (T-42), kept in the store. Each target's last good
+// list (T-515) is kept beside the pending creates, so a portal restarted while a target's API is down still lists its workspaces.
+const workspaces = new Workspaces(
+  runtimes,
+  new JsonFile(`${config.paths.data}/pending-creates.json`, []),
+  {},
+  new WorkspaceIdentities(store),
+  new JsonFile(`${config.paths.data}/last-known-workspaces.json`, {}),
+);
 
 // Chat sessions: one controller shared by the REST routes and the chat socket.
 const chatController = new ChatController(store, workspaces);
@@ -328,7 +335,10 @@ const live = new LiveHub(
 );
 // Needs you (docs/prd/attention.md): what waits for a person, read from each module's own state. The topics of the modules it reads
 // (pools: MCP catalog and skills; tickets; CI) make it look again; the chat's events and a minute's tick are chained further down.
-const attention = createAttention(store, { publish: () => live.publish('attention') });
+const attention = createAttention(store, {
+  publish: () => live.publish('attention'),
+  agentAssignUserTags: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.agentAssignUserTags),
+});
 const ATTENTION_TOPICS = new Set<LiveTopic>(['pools', 'tickets', 'ci']);
 const notify = (...topics: LiveTopic[]) =>
   topics.forEach((t) => {
@@ -481,6 +491,8 @@ chatController.modelWindow = (claudeId, family) => claudeUsage.windowKeys(claude
 // T-294: a worker started on `auto` goes to a Claude of its workspace with room by a fresh, measured reading (the Move ranking and the
 // auto-transfer's freshness test, chat/agents.ts); a named Claude must run on a plan. Both read the usage report's rows.
 chatController.spawnUsage = async () => (await claudeUsage.report()).claudes;
+// T-490 (D-63): the model a worker's role runs on by the workspace persona's agent definition: session_spawn's default and its opus check.
+chatController.roleModel = (workspaceId, role) => personas.roleModel(workspaceId, role);
 chatController.returnToOriginalModel = () => settingsModule.settings.get<boolean>(AUTO_SETTING_KEYS.returnToOriginalModel) === true;
 // Usage spend: who spent what (per session, workspace, ticket, persona), budgets with alerts and spike detection, over the recorded requests
 // (claude-usage PRD §21 to §26). The chat controller tells it of each recorded turn and each process start, and asks it before a message

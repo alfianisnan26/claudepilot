@@ -17,6 +17,11 @@ export interface RepoRow {
   hook_state: string;
   created_at: string;
   removed_at: string | null;
+  /** Migration 782 (T-486): the https upstream it follows, the Secrets & env NAME that reads it, how often (s), the last sync (JSON). */
+  upstream_url?: string | null;
+  upstream_secret?: string | null;
+  upstream_every_s?: number | null;
+  upstream_state?: string | null;
 }
 
 /** A test a gate saw pass only on its rerun (T-95 item 4). */
@@ -171,7 +176,10 @@ const RUN_COLUMNS = [
   'ticket_id', 'ticket_source', 'session_id', 'concurrency_group', 'cancel_in_progress', 'cancelled_by', 'cancelled_by_label', 'cancel_note',
 ] as const;
 type RunPatch = Partial<Pick<RunRow, (typeof RUN_COLUMNS)[number]>>;
-const REPO_COLUMNS = ['default_branch', 'protected', 'required_checks', 'merge_only', 'connected', 'hook_state', 'removed_at', 'source_path'] as const;
+const REPO_COLUMNS = [
+  'default_branch', 'protected', 'required_checks', 'merge_only', 'connected', 'hook_state', 'removed_at', 'source_path',
+  'upstream_url', 'upstream_secret', 'upstream_every_s', 'upstream_state',
+] as const;
 type RepoPatch = Partial<Pick<RepoRow, (typeof REPO_COLUMNS)[number]>>;
 
 export class CiStore {

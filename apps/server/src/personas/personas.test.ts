@@ -478,3 +478,20 @@ test('I5: the read API says what a workspace gets, never anything secret', async
     h.done();
   }
 });
+
+test('T-490 (D-63): a role’s model is its agent’s in the workspace persona; none for no persona, no such agent, empty or inherit', async () => {
+  const h = await setup();
+  try {
+    assert.equal(h.personas.roleModel(WS, 'qa-verifier'), null, 'no persona');
+    const agent = (name: string, model: string) => ({ name, description: 'd', prompt: 'p', tools: [], disallowedTools: [], model, effort: null, maxTurns: null });
+    const p = h.pools.create('persona', { name: 'Crew', content: persona({ agents: [agent('qa-verifier', 'sonnet'), agent('implementer', ''), agent('scribe', 'inherit'), agent('reviewer', 'claude-sonnet-5-5')] }) });
+    h.pools.setAssignments(WS, 'persona', [{ poolId: p.id }]);
+    assert.deepEqual(
+      ['qa-verifier', 'implementer', 'scribe', 'reviewer', 'nobody'].map((r) => h.personas.roleModel(WS, r)),
+      ['sonnet', null, null, 'claude-sonnet-5-5', null],
+    );
+    assert.equal(h.personas.roleModel('docker/none', 'qa-verifier'), null, 'another workspace');
+  } finally {
+    h.done();
+  }
+});

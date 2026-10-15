@@ -69,6 +69,8 @@ test('two users: B can not see or touch A’s runs, remotes or environments; ids
       ['POST', `/api/ci/runs/${runId}/reject`, { job: 'release' }],
       ['POST', '/api/ci/runs', { repoId: repo.id, pipeline: 'deploy', ref: 'main' }],
       ['PATCH', `/api/ci/repos/${repo.id}`, { protected: [] }],
+      ['PATCH', `/api/ci/repos/${repo.id}`, { upstream: { url: 'https://upstream.test/x.git' } }],
+      ['POST', `/api/ci/repos/${repo.id}/sync`],
       ['DELETE', `/api/ci/repos/${repo.id}`],
       ['POST', `/api/ci/repos/${repo.id}/connect`, { path: '/tmp/x' }],
       ['GET', `/api/ci/repos/${repo.id}/branches`],
@@ -98,7 +100,11 @@ test('two users: B can not see or touch A’s runs, remotes or environments; ids
       assert.equal((await call(who, 'PUT', `/api/ci/repos/${repo.id}/environments/production`, { protected: false })).status, 403, `${who} protection`);
       assert.equal((await call(who, 'PUT', `/api/ci/repos/${repo.id}/environments/production/auto-approve`, { mode: 'dry' })).status, 403, `${who} auto-approve`);
       assert.equal((await call(who, 'PUT', `/api/ci/repos/${repo.id}/environments/production/auto-approve`, { mode: 'on' })).status, 403, `${who} auto-approve on`);
+      // T-486: the upstream a remote follows (and the secret name that reads it) is a person's setting.
+      assert.equal((await call(who, 'PATCH', `/api/ci/repos/${repo.id}`, { upstream: { url: 'https://upstream.test/x.git' } })).status, 403, `${who} upstream`);
+      assert.equal((await call(who, 'PATCH', `/api/ci/repos/${repo.id}`, { upstream: null })).status, 403, `${who} upstream cleared`);
     }
+    assert.equal((await h.svc.repo(repo.id)).upstream, null, 'no upstream was set by anyone but a person');
     assert.equal(h.svc.environments(repo.id)[0]!.autoApprove, 'off', 'nobody but a person with manage set the rule');
     assert.equal(h.svc.get(runId).deployments[0]!.approval, 'waiting');
 

@@ -12,11 +12,12 @@ import {
   type BadgeTone,
   type MenuItem,
 } from '@isnanme/ui';
-import { workspaceDisplayName, type AccountPool, type DeliveryStatus, type RepoWorkspaceSummary, type Workspace, type WorkspaceStatus, type WorkspaceTarget, type WorkspaceUsage } from '@portal/contracts';
+import { isLastKnownStatus, workspaceDisplayName, type AccountPool, type DeliveryStatus, type RepoWorkspaceSummary, type Workspace, type WorkspaceStatus, type WorkspaceTarget, type WorkspaceUsage } from '@portal/contracts';
 import { Box, Boxes, Check, ChevronRight, ListChecks, Play, Plus, ShieldCheck, SlidersHorizontal, Square, SquareTerminal, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/Card';
+import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
 import { ReposChip, REPOS_CHIP_ATTR, reposLabel, useReposOverview } from '@/features/repos';
 import { api, errorText } from '@/lib/api';
@@ -24,6 +25,7 @@ import { useLive, useLiveConnected } from '@/lib/live';
 import { formatBytes, formatDateTime, timeAgo } from '@/lib/format';
 import { BulkAssignDialog } from './BulkAssignDialog';
 import { ConfigurationSheet } from './ConfigurationSheet';
+import { unavailableNote } from './lastKnown';
 import { NewWorkspaceDialog } from './NewWorkspaceDialog';
 import { usageFractions } from './usage';
 import { WorkspaceSheet, type SheetTab } from './WorkspaceSheet';
@@ -47,6 +49,7 @@ const STATUS: Record<WorkspaceStatus, { label: string; tone: BadgeTone; busy?: b
   stopped: { label: 'Stopped', tone: 'neutral' },
   error: { label: 'Error', tone: 'danger' },
   unreachable: { label: 'Unreachable', tone: 'warning' },
+  unavailable: { label: 'Unavailable', tone: 'warning' },
 };
 
 /** Only while the live socket is down: faster while something is changing, so progress still shows. */
@@ -355,13 +358,14 @@ function WorkspaceRow({
   const status = STATUS[w.status];
   const running = w.status === 'running';
   const picking = selected !== null;
-  // Its target's tunnel is down: what needs the target waits (the row and its sheet say since when).
-  const unreachable = w.status === 'unreachable';
+  // Its target's tunnel is down, or its API did not answer (T-515): what needs the target waits (the row and its sheet say since when).
+  const unreachable = isLastKnownStatus(w.status);
+  const note = unavailableNote(w);
   const limits = [w.cpus && `${w.cpus} CPU`, w.memoryMb && formatBytes(w.memoryMb * 1024 * 1024)].filter(Boolean).join(' · ');
   const items: MenuItem[] = [
     running || w.status === 'starting'
-      ? { label: 'Stop', icon: <Square className="size-4" />, onSelect: onStop, disabled: busy }
-      : { label: 'Start', icon: <Play className="size-4" />, onSelect: onStart, disabled: busy || w.status !== 'stopped' },
+      ? { label: 'Stop', icon: <Square className="size-4" />, onSelect: onStop, disabled: busy || unreachable }
+      : { label: 'Start', icon: <Play className="size-4" />, onSelect: onStart, disabled: busy || unreachable || w.status !== 'stopped' },
     // Every pool type in one place, the account pool included (foundation PRD §10).
     { label: 'Configuration…', icon: <SlidersHorizontal className="size-4" />, onSelect: onConfigure, disabled: w.status === 'creating' || unreachable },
     ...(w.delivery?.status === 'frozen' ? [{ label: 'Adopt workspace', icon: <ShieldCheck className="size-4" />, onSelect: onAdopt }] : []),
@@ -369,8 +373,8 @@ function WorkspaceRow({
   ];
   const delivery = w.delivery ? DELIVERY[w.delivery.status] : undefined;
   const account = w.account;
-  // Progress while creating or starting, and errors; a running or stopped one needs no words.
-  const showDetail = w.status !== 'running' && w.status !== 'stopped' && w.detail;
+  // Progress while creating or starting, and errors; a running or stopped one needs no words; an unavailable one's reason is in its InfoTip.
+  const showDetail = w.status !== 'running' && w.status !== 'stopped' && !note && w.detail;
   // One short line: where and how old, the pool when one is assigned; how busy shows as bars beside it.
   const meta = [
     targetLabel,
@@ -445,6 +449,11 @@ function WorkspaceRow({
         </div>
       </button>
       <div className={`flex shrink-0 items-center gap-1 ${picking ? 'hidden' : ''}`}>
+        {note && (
+          <InfoTip label={`Why ${workspaceDisplayName(w)} is unavailable`} className="sm:mr-1">
+            {note}. Start, Stop, Remove and terminals wait until it answers.
+          </InfoTip>
+        )}
         {running ? (
           <Link
             to={`/admin/workspaces/${w.id}/shell`}
