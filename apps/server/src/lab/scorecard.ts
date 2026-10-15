@@ -10,9 +10,34 @@
 // - Every figure names its basis and source; a table the store does not have is `unavailable` (no_source); a division by nothing is
 //   `unavailable` (no_samples); a fact never recorded (a worker's role) is `unavailable` (not_recorded). Never 0 in their place.
 
-import type { CrewCiRow, CrewCost, CrewDeploy, CrewEffectiveness, CrewFigure, CrewProgramScore, CrewReviewItem, CrewTarget, CrewTypeRow, CrewUnavailable, CrewWindowScore } from '@portal/contracts';
+import {
+  CHAT_ENDED_CREDENTIAL,
+  CHAT_ENDED_INTEGRITY,
+  type CrewCiRow,
+  type CrewContextRow,
+  type CrewCost,
+  type CrewDeploy,
+  type CrewEffectiveness,
+  type CrewEfficiency,
+  type CrewEnding,
+  type CrewFigure,
+  type CrewHealth,
+  type CrewModelRow,
+  type CrewProgramScore,
+  type CrewReviewItem,
+  type CrewRoleRow,
+  type CrewSessionCost,
+  type CrewSpike,
+  type CrewTarget,
+  type CrewTypeRow,
+  type CrewUnavailable,
+  type CrewWindowScore,
+  type SpikeEvidence,
+} from '@portal/contracts';
 import { chainRootOf, rootOf } from '../usagespend/attribution.js';
 import type { SessionInfo, UsageRow } from '../usagespend/model.js';
+import { spikeSummary } from '../usagespend/spikes.js';
+import { cacheReadWeight, inputPricePerToken } from './prices.js';
 
 /* ---------- The facts the pure part reads ---------- */
 
@@ -24,6 +49,27 @@ export interface CrewSessionExtra {
   /** 1: the session may start Agent-tool sub-agents (chat_sessions.subagents). */
   subagents: boolean;
   createdAtMs: number;
+  /** Tokens of the session's last turn (`chat_sessions.context_used`), null when never recorded. */
+  contextUsed: number | null;
+  endedReason: string | null;
+  /** When the session entered its current state. */
+  stateSinceMs: number | null;
+}
+
+/** One `usage_spikes` row. */
+export interface CrewSpikeRow {
+  atMs: number;
+  kind: 'rate' | 'burst' | 'outlier';
+  sessionId: string | null;
+  claudeId: string;
+  evidence: SpikeEvidence;
+}
+
+/** One `agent.refused` audit row. */
+export interface CrewRefusal {
+  atMs: number;
+  sessionId: string;
+  scope: string;
 }
 
 export interface CrewTicket {
@@ -75,6 +121,12 @@ export interface CrewFacts {
   runs: CrewRun[] | null;
   /** null: ci_deployments could not be read. */
   deploys: CrewDeployRow[] | null;
+  /** Tickets with a deploy of one of their runs waiting for approval now (any age). null: not readable. */
+  pendingDeployTickets: ReadonlySet<string> | null;
+  /** null: usage_spikes could not be read. */
+  spikes: CrewSpikeRow[] | null;
+  /** null: chat_audit could not be read. */
+  refusals: CrewRefusal[] | null;
   /** The requests in [fromMs, toMs) of these sessions. */
   usage(fromMs: number, toMs: number, sessionIds: ReadonlySet<string>): UsageRow[];
   /** Done-in-window tickets' dollars (usage spend's `ticketReport`, doneOnly) over these rows. */
@@ -100,12 +152,29 @@ export function programsOf(sessions: ReadonlyMap<string, SessionInfo>, extra: Re
   }
   const out = new Map<string, Program>();
   for (const [top, members] of byTop) {
-    const leads = [...members].filter((m) => chainRootOf(m, sessions) === top).sort((a, b) => (extra.get(a)?.createdAtMs ?? 0) - (extra.get(b)?.createdAtMs ?? 0) || a.localeCompare(b));
+    const leads = chainOrder(top, [...members].filter((m) => chainRootOf(m, sessions) === top), sessions, extra);
     if (members.size === leads.length) continue; // no worker: a chat, not a crew
     const last = leads.at(-1) ?? top;
     out.set(top, { id: top, title: sessions.get(last)?.title || sessions.get(top)?.title || '', leads, members });
   }
   return out;
+}
+
+/**
+ * The lead chain oldest first, by its links: from the top, each next row is the one that continues the last (the older by creation when
+ * two do). A deleted row has no creation time of its own, so the links decide, not the clock; a row the walk misses goes last by creation.
+ */
+function chainOrder(top: string, chain: string[], sessions: ReadonlyMap<string, SessionInfo>, extra: ReadonlyMap<string, CrewSessionExtra>): string[] {
+  const byAge = (a: string, b: string) => (extra.get(a)?.createdAtMs ?? 0) - (extra.get(b)?.createdAtMs ?? 0) || a.localeCompare(b);
+  const left = new Set(chain);
+  const out: string[] = [];
+  for (let cur: string | undefined = left.has(top) ? top : undefined; cur; ) {
+    out.push(cur);
+    left.delete(cur);
+    const from = cur;
+    cur = [...left].filter((id) => sessions.get(id)?.continuedFrom === from).sort(byAge)[0];
+  }
+  return [...out, ...[...left].sort(byAge)];
 }
 
 /** The program a session belongs to (the top of its lineage), or null when the portal has no record of it. */
@@ -138,10 +207,23 @@ export const SRC = {
   sessions: 'chat_sessions (state, agent, max_workers, subagents)',
   agents: 'chat_usage.agents (Agent-tool sub-agents per turn)',
   model: 'chat_usage.model of QA and review workers (chat_sessions.agent)',
+  ticketLife: 'usage spend ticketReport (T-449) over the requests from the oldest done ticket’s creation (at most 30 days) to the window end',
+  costParts: 'chat_usage tokens x the list price (lab/prices.ts; cache write at the 5-minute rate)',
+  requests: 'chat_usage.requests of the program’s sessions',
+  context: 'chat_sessions.context_used (the last turn) of sessions with a request in the window',
+  handovers: 'chat_sessions.created_at of the lead chain’s continuations',
+  spikes: 'usage_spikes (the spike detector, §24) of the program’s sessions',
+  refusals: 'chat_audit agent.refused of the program’s sessions',
+  endings: 'chat_sessions.ended_reason and state_since (integrity:, credential:, or interrupted by an error)',
+  pod: 'not recorded by the portal (no pod memory or OOM source)',
 } as const;
 
 const CLOSED = new Set(['done', 'wont_do']);
 const OPEN = new Set(['open', 'in_progress', 'blocked', 'in_review']);
+const LIVE = new Set(['starting', 'idle', 'working', 'waiting', 'interrupted']);
+const QA_ROLE = /qa|verif|review|ux-check/i;
+/** How far back a done ticket's life is read for its cost (gap 1 of S1a). */
+export const TICKET_LIFE_CAP_MS = 30 * 24 * 3_600_000;
 
 /** A ticket's status at `atMs`, replaying its changes (none recorded before: open). */
 function statusAt(t: CrewTicket, atMs: number): { status: string; sinceMs: number } {
@@ -211,13 +293,27 @@ function effectiveness(p: Program, facts: CrewFacts, tickets: CrewTicket[] | nul
         };
       })
       .sort((a, b) => b.done - a.done || a.type.localeCompare(b.type));
+    // What a review waits for, read from the portal NOW: only for the window that ends now (an older window keeps the tag alone).
+    const isNow = toMs === facts.nowMs;
+    const qaHolds = new Set<string>();
+    if (isNow) {
+      for (const s of facts.sessions.values()) if (s.exists && s.ticketId && s.state && LIVE.has(s.state) && QA_ROLE.test(facts.extra.get(s.sessionId)?.agent ?? '')) qaHolds.add(s.ticketId);
+    }
+    const derived = (t: CrewTicket): string | null => {
+      if (!isNow) return null;
+      if (facts.pendingDeployTickets?.has(t.id)) return 'deploy';
+      if (qaHolds.has(t.id)) return 'qa';
+      if (t.assigneeKind === 'user') return 'owner';
+      return null;
+    };
     const review: CrewReviewItem[] = [];
     for (const t of tickets) {
       if (t.createdAtMs >= toMs) continue;
       const s = statusAt(t, toMs - 1);
       if (s.status !== 'in_review') continue;
       const tag = t.tags.find((x) => /^waits-[a-z0-9-]{1,30}$/.test(x));
-      review.push({ ticket: t.id, type: t.type, ageMs: toMs - s.sinceMs, waitsFor: tag ? tag.slice('waits-'.length) : null });
+      const d = tag ? null : derived(t);
+      review.push({ ticket: t.id, type: t.type, ageMs: toMs - s.sinceMs, waitsFor: tag ? tag.slice('waits-'.length) : d, waitsBasis: tag ? 'tag' : d ? 'derived' : null });
     }
     review.sort((a, b) => b.ageMs - a.ageMs || a.ticket.localeCompare(b.ticket));
     base = {
@@ -279,20 +375,184 @@ function cost(p: Program, rows: UsageRow[], sessions: ReadonlyMap<string, Sessio
   };
 }
 
+/**
+ * Where a done ticket's life starts for its cost: the oldest creation among the program's tickets done in the window, never later than the
+ * window's start and never more than `TICKET_LIFE_CAP_MS` before its end. A ticket's cost is what it took to get it done, not only the part
+ * that fell in the window (S1a counted the window's requests only).
+ */
+export function ticketLifeFrom(tickets: readonly CrewTicket[] | null, fromMs: number, toMs: number): number {
+  let oldest = fromMs;
+  for (const t of tickets ?? []) if (t.status === 'done' && t.closedAtMs !== null && t.closedAtMs >= fromMs && t.closedAtMs < toMs) oldest = Math.min(oldest, t.createdAtMs);
+  return Math.max(oldest, toMs - TICKET_LIFE_CAP_MS);
+}
+
 export function windowScore(p: Program, facts: CrewFacts, fromMs: number, toMs: number): { score: CrewWindowScore; rows: UsageRow[] } {
   const tickets = facts.tickets ? programTickets(p, facts.tickets, facts.sessions) : null;
   const rows = facts.usage(fromMs, toMs, p.members);
-  const costs = facts.ticketCosts(rows, fromMs, toMs);
+  const lifeFrom = Math.min(fromMs, ticketLifeFrom(tickets, fromMs, toMs));
+  const lifeRows = lifeFrom < fromMs ? facts.usage(lifeFrom, toMs, p.members) : rows;
+  const costs = facts.ticketCosts(lifeRows, fromMs, toMs);
   const eff = effectiveness(p, facts, tickets, fromMs, toMs, costs);
-  return { score: { fromMs, toMs, effectiveness: eff, cost: cost(p, rows, facts.sessions, eff.done.value) }, rows };
+  return {
+    score: { fromMs, toMs, effectiveness: eff, cost: cost(p, rows, facts.sessions, eff.done.value), efficiency: efficiency(p, facts, rows, fromMs, toMs), health: health(p, facts, fromMs, toMs) },
+    rows,
+  };
+}
+
+/* ---------- Efficiency and health ---------- */
+
+/** A session's role: `lead` for the lead chain, else its agent, else `unrecorded`. */
+export function roleOf(p: Program, id: string, extra: ReadonlyMap<string, CrewSessionExtra>): string {
+  return p.leads.includes(id) ? 'lead' : extra.get(id)?.agent || 'unrecorded';
+}
+
+function contextRow(key: string, tokens: number[]): CrewContextRow {
+  const s = [...tokens].sort((a, b) => a - b);
+  return { key, sessions: s.length, p50: percentile(s, 0.5), p90: percentile(s, 0.9) };
+}
+
+function efficiency(p: Program, facts: CrewFacts, rows: UsageRow[], fromMs: number, toMs: number): CrewEfficiency {
+  const hours = (toMs - fromMs) / 3_600_000;
+  const inWin = (ms: number | null | undefined) => ms !== null && ms !== undefined && ms >= fromMs && ms < toMs;
+  const role = (id: string) => roleOf(p, id, facts.extra);
+
+  // Cost by token class at list price (rows of a model with no price are left out).
+  const part = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  for (const r of rows) {
+    const price = inputPricePerToken(r.model);
+    if (price === null) continue;
+    part.input += r.input * price;
+    part.output += 5 * r.output * price;
+    part.cacheRead += cacheReadWeight(r.model) * r.cacheRead * price;
+    part.cacheWrite += 1.25 * r.cacheWrite * price;
+  }
+  const listed = part.input + part.output + part.cacheRead + part.cacheWrite;
+  const share = (x: number) => (listed > 0 ? fig(r2((x / listed) * 100), 'estimate', SRC.costParts) : none('no_samples', SRC.costParts));
+
+  const bySession = new Map<string, { cost: number; requests: number }>();
+  const mix = new Map<string, CrewModelRow>();
+  let requests = 0;
+  for (const r of rows) {
+    const s = bySession.get(r.sessionId) ?? { cost: 0, requests: 0 };
+    s.cost += r.costUsd;
+    s.requests += r.requests;
+    bySession.set(r.sessionId, s);
+    requests += r.requests;
+    if (r.model === '<synthetic>') continue;
+    const key = `${role(r.sessionId)}\u0000${r.model}`;
+    const m = mix.get(key) ?? { role: role(r.sessionId), model: r.model, requests: 0, costUsd: 0 };
+    m.requests += r.requests;
+    m.costUsd += r.costUsd;
+    mix.set(key, m);
+  }
+  const active = [...bySession.keys()].sort();
+
+  const ctxByRole = new Map<string, number[]>();
+  for (const id of active) {
+    const c = facts.extra.get(id)?.contextUsed;
+    if (c === null || c === undefined) continue;
+    (ctxByRole.get(role(id)) ?? ctxByRole.set(role(id), []).get(role(id))!).push(c);
+  }
+  const contextByLead = p.leads.map((lead) => {
+    const workers = active.filter((id) => facts.sessions.get(id)?.parentId === lead && !p.leads.includes(id));
+    const tokens = workers.map((id) => facts.extra.get(id)?.contextUsed).filter((c): c is number => c !== null && c !== undefined);
+    return { ...contextRow(lead, tokens), leadTokens: bySession.has(lead) ? (facts.extra.get(lead)?.contextUsed ?? null) : null };
+  });
+
+  const roles = new Map<string, CrewRoleRow>();
+  for (const id of active) {
+    const k = role(id);
+    const e = roles.get(k) ?? { role: k, sessions: 0, started: 0, requests: 0, requestsPerSession: 0 };
+    e.sessions++;
+    if (inWin(facts.extra.get(id)?.createdAtMs)) e.started++;
+    e.requests += bySession.get(id)!.requests;
+    roles.set(k, e);
+  }
+  for (const e of roles.values()) e.requestsPerSession = r2(e.requests / e.sessions);
+
+  const live = new Map<string, number>();
+  if (toMs === facts.nowMs) {
+    for (const id of p.members) {
+      const s = facts.sessions.get(id);
+      if (s?.exists && s.state && LIVE.has(s.state)) live.set(s.claudeId, (live.get(s.claudeId) ?? 0) + 1);
+    }
+  }
+
+  const handovers = p.leads.slice(1).filter((l) => inWin(facts.extra.get(l)?.createdAtMs)).length;
+
+  const spikes: CrewSpike[] = [];
+  for (const s of facts.spikes ?? []) {
+    if (!inWin(s.atMs)) continue;
+    const top = s.evidence.kind === 'rate' ? (s.evidence.topSession?.sessionId ?? null) : null;
+    const session = s.sessionId && p.members.has(s.sessionId) ? s.sessionId : top && p.members.has(top) ? top : null;
+    if (!session) continue;
+    spikes.push({ at: new Date(s.atMs).toISOString(), kind: s.kind, session, role: role(session), claude: s.claudeId, summary: spikeSummary(s.evidence) });
+  }
+  spikes.sort((a, b) => a.at.localeCompare(b.at));
+
+  return {
+    costParts: { input: share(part.input), output: share(part.output), cacheRead: share(part.cacheRead), cacheWrite: share(part.cacheWrite) },
+    requests: fig(requests, 'measured', SRC.requests),
+    requestsPerSession: active.length ? fig(r2(requests / active.length), 'measured', SRC.requests) : none('no_samples', SRC.requests),
+    contextByRole: [...ctxByRole].map(([k, v]) => contextRow(k, v)).sort((a, b) => a.key.localeCompare(b.key)),
+    contextByLead,
+    topSessions: active
+      .map((id): CrewSessionCost => ({ session: id, role: role(id), costUsd: r6(bySession.get(id)!.cost), requests: bySession.get(id)!.requests }))
+      .sort((a, b) => b.costUsd - a.costUsd || a.session.localeCompare(b.session))
+      .slice(0, 5),
+    modelMix: [...mix.values()].map((m) => ({ ...m, costUsd: r6(m.costUsd) })).sort((a, b) => b.costUsd - a.costUsd || a.role.localeCompare(b.role) || a.model.localeCompare(b.model)),
+    roles: [...roles.values()].sort((a, b) => b.sessions - a.sessions || a.role.localeCompare(b.role)),
+    liveByClaude: [...live].map(([claude, n]) => ({ claude, live: n })).sort((a, b) => b.live - a.live || a.claude.localeCompare(b.claude)),
+    handovers: fig(handovers, 'measured', SRC.handovers),
+    handoversPerHour: fig(r2(handovers / hours), 'measured', SRC.handovers),
+    spikesCount: facts.spikes ? fig(spikes.length, 'measured', SRC.spikes) : none('no_source', SRC.spikes),
+    spikes,
+  };
+}
+
+function health(p: Program, facts: CrewFacts, fromMs: number, toMs: number): CrewHealth {
+  const inWin = (ms: number | null | undefined) => ms !== null && ms !== undefined && ms >= fromMs && ms < toMs;
+  let refusals: CrewFigure;
+  const byScope = new Map<string, number>();
+  if (!facts.refusals) refusals = none('no_source', SRC.refusals);
+  else {
+    let n = 0;
+    for (const r of facts.refusals) {
+      if (!inWin(r.atMs) || !p.members.has(r.sessionId)) continue;
+      n++;
+      byScope.set(r.scope, (byScope.get(r.scope) ?? 0) + 1);
+    }
+    refusals = fig(n, 'measured', SRC.refusals);
+  }
+  const endings: CrewEnding[] = [];
+  for (const id of p.members) {
+    const s = facts.sessions.get(id);
+    const x = facts.extra.get(id);
+    if (!s?.exists || !x?.endedReason || !inWin(x.stateSinceMs)) continue;
+    const kind: CrewEnding['kind'] | null = x.endedReason.startsWith(CHAT_ENDED_INTEGRITY)
+      ? 'integrity'
+      : x.endedReason.startsWith(CHAT_ENDED_CREDENTIAL)
+        ? 'credential'
+        : s.state === 'interrupted'
+          ? 'error'
+          : null;
+    if (kind) endings.push({ session: id, kind, at: new Date(x.stateSinceMs!).toISOString() });
+  }
+  endings.sort((a, b) => a.at.localeCompare(b.at) || a.session.localeCompare(b.session));
+  return {
+    refusals,
+    refusalsByScope: [...byScope].map(([scope, count]) => ({ scope, count })).sort((a, b) => b.count - a.count || a.scope.localeCompare(b.scope)),
+    badEndings: fig(endings.length, 'measured', SRC.endings),
+    endings,
+    podMemory: none('no_source', SRC.pod),
+    oomRestarts: none('no_source', SRC.pod),
+  };
 }
 
 /* ---------- Targets ---------- */
 
 /** D-61's cap on a lead's live workers when its `max_workers` is not set (ClaudePilot and Konfersi; Event sets 2). */
 export const DEFAULT_WORKER_CAP = 3;
-const LIVE = new Set(['starting', 'idle', 'working', 'waiting', 'interrupted']);
-const QA_ROLE = /qa|verif|review|ux-check/i;
 /** The one ticket allowed in the owner's queue (D-62: Konfersi production). */
 export const OWNER_QUEUE_ALLOWED = ['T-93'];
 
@@ -375,10 +635,18 @@ export const SCORECARD_BASIS: Record<string, string> = {
   done: 'Tickets whose status is done and closed_at is in the window. MEASURED.',
   reopened: 'Tickets with a reopen (or a change from done or wont_do back to work) in the window. MEASURED.',
   leadTime: 'From the first change to in_progress to closed_at, per done ticket; p50 and p90 by nearest rank. MEASURED.',
-  review: 'Tickets in review at the window’s end (the status timeline replayed), age since they entered review; waits for: a waits-<what> tag, else not recorded. MEASURED.',
+  review:
+    'Tickets in review at the window’s end (the status timeline replayed), age since they entered review; waits for: a waits-<what> tag, else (the window that ends now) a deploy of its runs waiting for approval, a live QA or review session holding it, or a person it is assigned to; else not recorded. MEASURED.',
   ci: 'CI runs of the program’s sessions or tickets finished in the window, by pipeline; deploys: ci_deployments of those runs. MEASURED.',
   cost: 'Dollars of the program’s requests in the window (Claude Code’s price estimate): lead = the lead chain’s own requests, workers = the rest. ESTIMATE.',
-  costByType: 'Per type: usage spend’s per-ticket dollars (ticketReport, T-449: own plus the lead’s part split over its workers’ tickets) of the done tickets, over the window’s requests only. ESTIMATE.',
+  costByType:
+    'Per type: usage spend’s per-ticket dollars (ticketReport, T-449: own plus the lead’s part split over its workers’ tickets) of the done tickets over their life: the program’s requests from the oldest such ticket’s creation (at most 30 days back) to the window’s end. ESTIMATE.',
+  costParts: 'Shares of the window’s dollars at list price by token class: input, output (x5), cache read (x0.1, Opus 5.5 x0.05), cache write (x1.25, the 5-minute rate). Models with no price are left out. ESTIMATE.',
+  context: 'Tokens of each session’s last turn (chat_sessions.context_used) for the sessions with a request in the window, p50 and p90 by nearest rank, per role and per lead (its direct workers). MEASURED.',
+  roles: 'Per role (the worker’s agent; lead; unrecorded): sessions with a request in the window, of them started in the window (churn), requests per session; model mix: requests and dollars per role and model. MEASURED (dollars ESTIMATE).',
+  spread: 'Live sessions per Claude now (T-427); hand-overs: lead continuations started in the window (T-423). MEASURED.',
+  spikes: 'The spike detector’s events (usage_spikes, §24) of the program’s sessions; a rate spike when the program’s session is its top one. MEASURED.',
+  health: 'agent.refused audit rows; sessions ended by an integrity or credential check or interrupted by an error, in the window. Pod memory and OOM restarts: unavailable (the portal does not record them). MEASURED.',
   perDone: 'All-in: the window’s dollars over its done tickets; workers only: the workers’ dollars over them. ESTIMATE.',
   targets: 'D-61 live workers and no Agent-tool sub-agents in a lead; D-62 the owner’s queue; D-63 QA and review on sonnet. Live workers are measured now; the rest over the window.',
 };

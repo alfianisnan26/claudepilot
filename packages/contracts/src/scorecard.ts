@@ -49,7 +49,10 @@ export interface CrewTypeRow {
   leadTimeP90Ms: number | null;
   /** Done tickets of the type with no in_progress change recorded (not in the lead time). */
   noStart: number;
-  /** Usage spend's per-ticket dollars (T-449 `ticketReport`) of the type's done tickets, over the window's requests: own plus via lead. */
+  /**
+   * Usage spend's per-ticket dollars (T-449 `ticketReport`) of the type's done tickets over their LIFE: the program's requests from the
+   * oldest such ticket's creation (at most 30 days back) to the window's end, own plus via lead.
+   */
   costAllInUsd: number;
   /** The same, the tickets' own sessions only (no lead part). */
   costWorkersUsd: number;
@@ -63,8 +66,14 @@ export interface CrewReviewItem {
   type: string;
   /** How long it has been in review at the window's end. */
   ageMs: number;
-  /** What it waits for, from a `waits-<what>` tag (deploy, stg, qa, ...); null: not recorded. */
+  /**
+   * What it waits for (deploy, stg, qa, owner, ...): a `waits-<what>` tag first; else, for the window that ends now, read from the portal: a
+   * deploy of one of its runs waiting for approval (`deploy`), a live QA, verifier, reviewer or ux-check session holding it (`qa`), or a
+   * person it is assigned to (`owner`). null: neither.
+   */
   waitsFor: string | null;
+  /** `tag`: the ticket's own tag; `derived`: read from the deploys, sessions or assignee now; null with `waitsFor` null. */
+  waitsBasis: 'tag' | 'derived' | null;
 }
 
 export interface CrewCiRow {
@@ -110,11 +119,96 @@ export interface CrewCost {
   perDoneWorkers: CrewFigure;
 }
 
+/** Context size (tokens of the last turn, `chat_sessions.context_used`) of a group of sessions active in the window. */
+export interface CrewContextRow {
+  /** A role (the worker's agent, `lead`, or `unrecorded`), or a lead session id. */
+  key: string;
+  sessions: number;
+  p50: number | null;
+  p90: number | null;
+}
+
+export interface CrewModelRow {
+  /** The worker's role (its agent), `lead`, or `unrecorded`. */
+  role: string;
+  model: string;
+  requests: number;
+  costUsd: number;
+}
+
+export interface CrewRoleRow {
+  role: string;
+  /** Sessions of the role with a request in the window. */
+  sessions: number;
+  /** Of them, started in the window (churn); the rest were reused. */
+  started: number;
+  requests: number;
+  requestsPerSession: number;
+}
+
+export interface CrewSessionCost {
+  session: string;
+  role: string;
+  costUsd: number;
+  requests: number;
+}
+
+export interface CrewSpike {
+  at: string;
+  kind: 'rate' | 'burst' | 'outlier';
+  /** The session behind it (for rate: the Claude's top session, when it is the program's). */
+  session: string | null;
+  role: string;
+  claude: string;
+  summary: string;
+}
+
+export interface CrewEfficiency {
+  /** Percent of the window's dollars at list price by token class (lab/prices.ts weights). ESTIMATE; unavailable with no priced model. */
+  costParts: { input: CrewFigure; output: CrewFigure; cacheRead: CrewFigure; cacheWrite: CrewFigure };
+  requests: CrewFigure;
+  requestsPerSession: CrewFigure;
+  contextByRole: CrewContextRow[];
+  /** Per lead session: its workers' context (the lead's own is `leadTokens`). */
+  contextByLead: (CrewContextRow & { leadTokens: number | null })[];
+  /** The five sessions that cost the most in the window. */
+  topSessions: CrewSessionCost[];
+  modelMix: CrewModelRow[];
+  roles: CrewRoleRow[];
+  /** Live sessions per Claude now (T-427 spread). */
+  liveByClaude: { claude: string; live: number }[];
+  /** Lead continuations started in the window (T-423 hand-overs), and per hour. */
+  handovers: CrewFigure;
+  handoversPerHour: CrewFigure;
+  spikesCount: CrewFigure;
+  spikes: CrewSpike[];
+}
+
+export interface CrewEnding {
+  session: string;
+  kind: 'integrity' | 'credential' | 'error';
+  at: string;
+}
+
+export interface CrewHealth {
+  /** `agent.refused` audit rows of the program's sessions in the window, by scope. */
+  refusals: CrewFigure;
+  refusalsByScope: { scope: string; count: number }[];
+  /** Sessions ended by an integrity or credential check, or interrupted by an error, in the window. */
+  badEndings: CrewFigure;
+  endings: CrewEnding[];
+  /** The portal does not record a workspace pod's memory or its OOM restarts: unavailable (no_source). */
+  podMemory: CrewFigure;
+  oomRestarts: CrewFigure;
+}
+
 export interface CrewWindowScore {
   fromMs: number;
   toMs: number;
   effectiveness: CrewEffectiveness;
   cost: CrewCost;
+  efficiency: CrewEfficiency;
+  health: CrewHealth;
 }
 
 export interface CrewProgramScore {

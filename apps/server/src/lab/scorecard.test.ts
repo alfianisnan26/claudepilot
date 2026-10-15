@@ -13,8 +13,11 @@ import type { Actor, CrewProgramScore, CrewScorecard, CrewTarget } from '@portal
 import { clearResolvers, declaredPolicies, declaredToolPolicies } from '../authz/seam.js';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
+import { ChatStore } from '../chat/store.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
+import { burstEvidence, rateEvidence } from '../usagespend/spikes.js';
+import { SpendStore } from '../usagespend/store.js';
 import { LAB_POLICIES } from './authz.js';
 import { Lab } from './index.js';
 import { registerLabTools } from './portalTools.js';
@@ -185,7 +188,7 @@ test('effectiveness: done by type and per hour, lead time p50 and p90, reopened,
     assert.equal(byType.task!.perHour, 0.04); // 1 / 24
     // In review at the window's end: T-4 since 4 h ago, waiting for QA.
     assert.equal(e.reviewBacklog.value, 1);
-    assert.deepEqual(e.review, [{ ticket: 'T-4', type: 'task', ageMs: 4 * H, waitsFor: 'qa' }]);
+    assert.deepEqual(e.review, [{ ticket: 'T-4', type: 'task', ageMs: 4 * H, waitsFor: 'qa', waitsBasis: 'tag' }]);
     // CI: r1 (W3) passed, r2 (T-1) failed, r3 (L2) cancelled; r4 is the previous window's, r5 nobody's.
     assert.equal(e.ciRuns.value, 3);
     assert.deepEqual(e.ci, [
@@ -210,15 +213,15 @@ test('cost: total, lead versus workers, per done ticket all-in and workers only;
     assert.equal(c.perDoneAllIn.value, 1.366667); // 4.1 / 3
     assert.equal(c.perDoneWorkers.value, 0.366667); // 1.1 / 3
     const byType = Object.fromEntries(a.current.effectiveness.byType.map((t) => [t.type, t]));
-    // Workers only: the done tickets' own sessions in the window: T-1 is W1's 0.50, T-2 is W2's 0.30, T-7 has no session.
-    assert.deepEqual([byType.feature!.costWorkersUsd, byType.bug!.costWorkersUsd, byType.task!.costWorkersUsd], [0.5, 0.3, 0]);
-    // All-in adds the leads' dollars apportioned to the tickets (T-449): at least the own part, never more than the window's total.
-    assert.ok(byType.feature!.costAllInUsd > 0.5 && byType.bug!.costAllInUsd > 0.3);
-    const allIn = a.current.effectiveness.byType.reduce((t, r) => t + r.costAllInUsd, 0);
-    assert.ok(allIn <= 4.1 + 1e-9);
-    // The same figures as Usage -> Attribution by ticket (the lab's ticketCosts calls the same function).
-    const t1 = h.lab.ticketCosts(NOW - 24 * H, NOW - 1).find((t) => t.ticket === 'T-1')!;
-    assert.equal(t1.ownUsd, byType.feature!.costWorkersUsd);
+    // A done ticket's cost is its LIFE's (S1b, gap 1): the requests from the oldest done ticket's creation (45 h ago) to the window's end,
+    // not only the window's. Workers only: T-1 is W1's 0.50 (15 h ago) + 0.40 (35 h ago) = 0.90; T-2 is W2's 0.30; T-7 has no session.
+    assert.deepEqual([byType.feature!.costWorkersUsd, byType.bug!.costWorkersUsd, byType.task!.costWorkersUsd], [0.9, 0.3, 0]);
+    // All-in adds the lead chain's dollars over the life (L1 1.00 + 1.50, L2 2.00 = 4.50), split evenly over the four tickets its workers
+    // were on with requests (T-1, T-2, T-4, T-5: 1.125 each): T-1 = 0.90 + 1.125, T-2 = 0.30 + 1.125.
+    assert.deepEqual([byType.feature!.costAllInUsd, byType.bug!.costAllInUsd, byType.task!.costAllInUsd], [2.025, 1.425, 0]);
+    // The same figures as Usage -> Attribution by ticket over the same span (the lab's ticketCosts calls the same function).
+    const t1 = h.lab.ticketCosts(NOW - 45 * H, NOW).find((t) => t.ticket === 'T-1')!;
+    assert.deepEqual([t1.ownUsd, t1.totalUsd], [byType.feature!.costWorkersUsd, byType.feature!.costAllInUsd]);
   } finally {
     h.done();
   }
@@ -273,6 +276,260 @@ test('the previous window to compare; unavailable is null with a reason, never 0
     // The 1h window: T-2 closed 2 h ago is out; T-7 closed 1 h ago is in.
     const hour = prog(h.lab.scorecard({ window: '1h' })!, 'L1').current.effectiveness;
     assert.deepEqual([hour.done.value, hour.wontDo.value], [1, 1]);
+  } finally {
+    h.done();
+  }
+});
+
+test('the 6h window: done, per hour, reopened, cost, CI and review over the last 6 hours, and the 6 hours before', async () => {
+  const h = await seeded();
+  try {
+    const a = prog(h.lab.scorecard({ window: '6h' })!, 'L1');
+    const e = a.current.effectiveness;
+    assert.deepEqual([a.current.fromMs, a.current.toMs], [NOW - 6 * H, NOW]);
+    // Done in [NOW-6h, NOW): T-2 (2 h ago) and T-7 (1 h ago); T-1 (10 h ago) is out; T-3 reopened 3 h ago; T-5 wont_do 1 h ago.
+    assert.deepEqual([e.done.value, e.donePerHour.value, e.reopened.value, e.wontDo.value], [2, 0.33, 1, 1]);
+    assert.deepEqual(e.byType.map((t) => [t.type, t.done]), [['bug', 1], ['task', 1]]);
+    // L2 2.00 (5 h ago) + W2 0.30 + W4 0.20 + W5 0.10; lead 2.00 of 2.60.
+    assert.deepEqual([a.current.cost.total.value, a.current.cost.lead.value, a.current.cost.workers.value, a.current.cost.perDoneAllIn.value], [2.6, 2, 0.6, 1.3]);
+    // r1 (2 h ago) and r3 (1 h ago); r2 (8 h ago) is out.
+    assert.equal(e.ciRuns.value, 2);
+    assert.equal(e.reviewBacklog.value, 1); // T-4, in review since 4 h ago
+    // The 6 hours before: T-1 done 10 h ago; no request of A in [NOW-12h, NOW-6h).
+    assert.deepEqual([a.previous!.fromMs, a.previous!.effectiveness.done.value, a.previous!.cost.total.value, a.previous!.effectiveness.ciRuns.value], [NOW - 12 * H, 1, 0, 1]);
+  } finally {
+    h.done();
+  }
+});
+
+test('the week window: every done ticket of the week, lead time p50 and p90 over two, and the week’s dollars', async () => {
+  const h = await seeded();
+  try {
+    const a = prog(h.lab.scorecard({ window: 'week' })!, 'L1');
+    const e = a.current.effectiveness;
+    assert.deepEqual([a.current.fromMs, a.current.toMs], [NOW - 168 * H, NOW]);
+    // T-1, T-2, T-7 and T-6 (30 h ago); 4 / 168 = 0.024.
+    assert.deepEqual([e.done.value, e.donePerHour.value], [4, 0.02]);
+    const feature = e.byType.find((t) => t.type === 'feature')!;
+    // T-6 took 10 h and T-1 20 h: p50 at rank ceil(1) = 10 h, p90 at rank ceil(1.8) = 20 h.
+    assert.deepEqual([feature.done, feature.leadTimeP50Ms, feature.leadTimeP90Ms], [2, 10 * H, 20 * H]);
+    // Every request of A: lead 1.00 + 2.00 + 1.50 = 4.50, workers 0.50 + 0.30 + 0.20 + 0.10 + 0.40 = 1.50.
+    assert.deepEqual([a.current.cost.total.value, a.current.cost.lead.value, a.current.cost.workers.value, a.current.cost.perDoneAllIn.value], [6, 4.5, 1.5, 1.5]);
+    assert.equal(e.ciRuns.value, 4); // r1 to r4
+    assert.equal(a.previous!.fromMs, NOW - 336 * H);
+  } finally {
+    h.done();
+  }
+});
+
+test('review waits for: the tag first, else read now from a pending deploy, a live QA session or a person; an older window keeps the tag only', async () => {
+  const h = await seeded();
+  try {
+    const db = h.db;
+    // T-4 loses its tag: W4 (reviewer, waiting) holds it, so it waits for QA.
+    db.prepare(`DELETE FROM ticket_tags WHERE ticket_number = 4 AND tag = 'waits-qa'`).run();
+    // T-8: in review for 20 h; a deploy of its run waits for approval (made 30 h ago, still pending). A's by W3's comment.
+    db.prepare(
+      `INSERT INTO tickets (number, type, priority, priority_rank, status, summary, source, reporter_kind, reporter_label, created_at, updated_at)
+       VALUES (8, 'feature', 'normal', 2, 'in_review', 'Seed', 'human', 'ui', 'Admin', ?, ?), (9, 'bug', 'normal', 2, 'in_review', 'Seed', 'human', 'ui', 'Admin', ?, ?)`,
+    ).run(iso(at(45)), iso(at(1)), iso(at(45)), iso(at(1)));
+    db.prepare(`UPDATE tickets SET assignee_kind = 'user', assignee_ref = 'Owner' WHERE number = 9`).run();
+    const ev = db.prepare(`INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, data) VALUES (?, ?, ?, ?, 'x', ?)`);
+    ev.run(8, iso(at(22)), 'status', 'ui', JSON.stringify({ from: 'open', to: 'in_progress' }));
+    ev.run(8, iso(at(20)), 'status', 'ui', JSON.stringify({ from: 'in_progress', to: 'in_review' }));
+    ev.run(8, iso(at(19)), 'comment', 'session:W3', null);
+    // T-9: in review since 30 h ago, assigned to a person.
+    ev.run(9, iso(at(31)), 'status', 'ui', JSON.stringify({ from: 'open', to: 'in_progress' }));
+    ev.run(9, iso(at(30)), 'status', 'ui', JSON.stringify({ from: 'in_progress', to: 'in_review' }));
+    ev.run(9, iso(at(29)), 'comment', 'session:W3', null);
+    db.prepare(
+      `INSERT INTO ci_runs (id, number, workspace_id, repo_id, repo, pipeline, trigger, ref, sha, status, actor, session_id, ticket_id, created_at, finished_at)
+       VALUES ('r8', 8, 'docker/api', 'r', 'repo', 'deploy', 'manual', 'refs/heads/x', 'abc', 'running', 'agent', NULL, 'T-8', ?, NULL)`,
+    ).run(iso(at(30)));
+    db.prepare(
+      `INSERT INTO ci_deployments (id, run_id, run_number, job, repo_id, environment, pipeline, sha, ref, actor, approval, outcome, created_at)
+       VALUES ('d8', 'r8', 8, 'release', 'r', 'cluster', 'deploy', 'abc', 'refs/heads/x', 'agent', 'pending', NULL, ?)`,
+    ).run(iso(at(30)));
+
+    const s = h.lab.scorecard({ window: 'day', compare: true })!;
+    const a = prog(s, 'L1');
+    assert.deepEqual(a.current.effectiveness.review, [
+      { ticket: 'T-9', type: 'bug', ageMs: 30 * H, waitsFor: 'owner', waitsBasis: 'derived' },
+      { ticket: 'T-8', type: 'feature', ageMs: 20 * H, waitsFor: 'deploy', waitsBasis: 'derived' },
+      { ticket: 'T-4', type: 'task', ageMs: 4 * H, waitsFor: 'qa', waitsBasis: 'derived' },
+    ]);
+    // The day before: only T-9 was in review then (since 6 h before that window's end); what it waits for is not read back in time.
+    assert.deepEqual(a.previous!.effectiveness.review, [{ ticket: 'T-9', type: 'bug', ageMs: 6 * H, waitsFor: null, waitsBasis: null }]);
+    // A tag wins over what the portal shows.
+    db.prepare(`INSERT INTO ticket_tags (ticket_number, tag) VALUES (8, 'waits-stg')`).run();
+    const t8 = prog(h.lab.scorecard({ window: 'day' })!, 'L1').current.effectiveness.review.find((r) => r.ticket === 'T-8')!;
+    assert.deepEqual([t8.waitsFor, t8.waitsBasis], ['stg', 'tag']);
+  } finally {
+    h.done();
+  }
+});
+
+test('a deleted continuation keeps its lead chain and its workers in the program (links put back from the audit and the kept parent)', async () => {
+  const h = await seeded();
+  let clock = NOW;
+  const chat = new ChatStore(h.store, () => new Date(clock));
+  try {
+    const db = h.db;
+    const session = (id: string, hoursAgo: number, state: string, o: { parent?: string; continues?: string; agent?: string } = {}) =>
+      db
+        .prepare(
+          `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, created_at, last_activity_at, claude_id, parent_id, continued_from, agent)
+           VALUES (?, 'docker/api', ?, ?, ?, ?, ?, 'c1', ?, ?, ?)`,
+        )
+        .run(id, `title ${id}`, state, iso(at(hoursAgo)), iso(at(hoursAgo)), iso(at(hoursAgo)), o.parent ?? null, o.continues ?? null, o.agent ?? null);
+    // Program C: K1 continued as K2, K2 continued as K3; Y2 started by K2, Y3 by K3.
+    session('K1', 30, 'ended');
+    session('K2', 20, 'ended', { continues: 'K1' });
+    session('K3', 10, 'idle', { continues: 'K2' });
+    session('Y2', 15, 'working', { parent: 'K2', agent: 'implementer' });
+    session('Y3', 5, 'idle', { parent: 'K3', agent: 'qa-verifier' });
+    for (const [id, from, hoursAgo] of [['K2', 'K1', 20], ['K3', 'K2', 10]] as const) {
+      clock = at(hoursAgo);
+      chat.addAudit({ severity: 'info', kind: 'session.continued', sessionId: id, workspaceId: 'docker/api', actor: 'ui', detail: { from, chain: 1 } });
+    }
+    // Requests, and the links usage spend keeps from each (as its service does on every request).
+    const spend = new SpendStore(h.store);
+    const use = (id: string, parent: string | null, hoursAgo: number, usd: number) => {
+      db.prepare(`INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, cost_usd, requests) VALUES (?, ?, ?, 'docker/api', 'c1', 'claude-opus-5-5', ?, 1)`).run(
+        iso(at(hoursAgo)),
+        at(hoursAgo),
+        id,
+        usd,
+      );
+      spend.keepSession({ sessionId: id, workspaceId: 'docker/api', claudeId: 'c1', parentId: parent, ticketId: null, title: `title ${id}` }, at(hoursAgo));
+    };
+    use('K2', null, 12, 1);
+    use('Y2', 'K2', 11, 0.5);
+    use('K3', null, 4, 2);
+    use('Y3', 'K3', 3, 0.25);
+    // The delete: K3 no longer continues K2, and Y2 has no parent (chat/store.ts deleteSession).
+    chat.deleteSession('K2');
+    assert.equal((db.prepare(`SELECT continued_from AS c FROM chat_sessions WHERE id = 'K3'`).get() as { c: string | null }).c, null);
+    assert.equal((db.prepare(`SELECT parent_id AS p FROM chat_sessions WHERE id = 'Y2'`).get() as { p: string | null }).p, null);
+
+    const s = h.lab.scorecard({ window: 'day' })!;
+    assert.deepEqual(s.programs.map((p) => p.program).sort(), ['K1', 'L1', 'M1'], 'one program for C, named by its first row');
+    const c = prog(s, 'K1');
+    assert.deepEqual([c.leads, c.workers], [['K1', 'K2', 'K3'], 2]);
+    // K2 (deleted) and K3 are the lead; Y2 and Y3 the workers.
+    assert.deepEqual([c.current.cost.total.value, c.current.cost.lead.value, c.current.cost.workers.value], [3.75, 3, 0.75]);
+    assert.equal(c.current.efficiency.handovers.value, 2); // K2 (20 h ago) and K3 (10 h ago)
+    // A worker of C reads C.
+    assert.deepEqual(h.lab.scorecard({ window: 'day', sessionId: 'Y2' })!.programs.map((p) => p.program), ['K1']);
+  } finally {
+    h.done();
+  }
+});
+
+test('efficiency: cost by token class, requests, context per role and per lead, top sessions, model mix, roles, live per Claude, spikes', async () => {
+  const h = await seeded();
+  try {
+    const db = h.db;
+    // Only L2's request has tokens (Opus 5.5, input price p): input 1,000 p; output 5 x 1,000 p; cache read 0.05 x 100,000 p; cache write
+    // 1.25 x 10,000 p = 23,500 p in all.
+    db.prepare(`UPDATE chat_usage SET input_tokens = 1000, output_tokens = 1000, cache_read_tokens = 100000, cache_write_tokens = 10000 WHERE session_id = 'L2'`).run();
+    const ctx = db.prepare(`UPDATE chat_sessions SET context_used = ? WHERE id = ?`);
+    for (const [id, n] of [['L2', 150000], ['W1', 90000], ['W2', 40000], ['W4', 60000], ['W5', 20000], ['W3', 70000]] as const) ctx.run(n, id);
+    const spike = db.prepare(`INSERT INTO usage_spikes (at_ms, kind, subject, session_id, workspace_id, claude_id, evidence) VALUES (?, ?, ?, ?, 'docker/api', ?, ?)`);
+    spike.run(at(2), 'burst', 'W3', 'W3', 'c2', JSON.stringify(burstEvidence(30, 20, 1.5)));
+    spike.run(at(1), 'rate', 'c1', null, 'c1', JSON.stringify(rateEvidence(5, { baselineUsd: 1, factor: 5, periods: 10 }, { sessionId: 'L2', share: 0.8 })));
+    spike.run(at(1), 'burst', 'S1', 'S1', 'c1', JSON.stringify(burstEvidence(25, 20, 1))); // a solo chat's: not A's
+
+    const a = prog(h.lab.scorecard({ window: 'day', compare: true })!, 'L1');
+    const f = a.current.efficiency;
+    assert.deepEqual(
+      [f.costParts.input.value, f.costParts.output.value, f.costParts.cacheRead.value, f.costParts.cacheWrite.value, f.costParts.input.basis],
+      [4.26, 21.28, 21.28, 53.19, 'estimate'],
+    );
+    // L1, L2, W1, W2, W4, W5: one request each.
+    assert.deepEqual([f.requests.value, f.requestsPerSession.value], [6, 1]);
+    // W3 made no request in the window, so its context is not a sample; L1 never recorded one.
+    assert.deepEqual(f.contextByRole, [
+      { key: 'implementer', sessions: 2, p50: 20000, p90: 90000 },
+      { key: 'lead', sessions: 1, p50: 150000, p90: 150000 },
+      { key: 'qa-verifier', sessions: 1, p50: 40000, p90: 40000 },
+      { key: 'reviewer', sessions: 1, p50: 60000, p90: 60000 },
+    ]);
+    assert.deepEqual(f.contextByLead, [
+      { key: 'L1', sessions: 1, p50: 90000, p90: 90000, leadTokens: null },
+      { key: 'L2', sessions: 3, p50: 40000, p90: 60000, leadTokens: 150000 },
+    ]);
+    assert.deepEqual(
+      f.topSessions.map((t) => [t.session, t.role, t.costUsd]),
+      [['L2', 'lead', 2], ['L1', 'lead', 1], ['W1', 'implementer', 0.5], ['W2', 'qa-verifier', 0.3], ['W4', 'reviewer', 0.2]],
+    );
+    assert.deepEqual(
+      f.modelMix.map((m) => [m.role, m.model, m.requests, m.costUsd]),
+      [
+        ['lead', 'claude-opus-5-5', 2, 3],
+        ['implementer', 'claude-opus-5-5', 1, 0.5],
+        ['qa-verifier', 'claude-opus-5-5', 1, 0.3],
+        ['reviewer', 'claude-sonnet-5-5', 1, 0.2],
+        ['implementer', 'claude-sonnet-5-5', 1, 0.1],
+      ],
+    );
+    // Started in the window: L2 (24 h ago, the window's first moment), W5, W2, W4; L1 and W1 are older.
+    assert.deepEqual(
+      f.roles.map((r) => [r.role, r.sessions, r.started, r.requestsPerSession]),
+      [['implementer', 2, 1, 1], ['lead', 2, 1, 1], ['qa-verifier', 1, 1, 1], ['reviewer', 1, 1, 1]],
+    );
+    // Live now: W2, W3, W4 on c2; L2 and W5 on c1.
+    assert.deepEqual(f.liveByClaude, [{ claude: 'c2', live: 3 }, { claude: 'c1', live: 2 }]);
+    assert.deepEqual([f.handovers.value, f.handoversPerHour.value], [1, 0.04]); // L2
+    assert.equal(f.spikesCount.value, 2);
+    assert.deepEqual(
+      f.spikes.map((x) => [x.kind, x.session, x.role, x.claude, x.summary]),
+      [['burst', 'W3', 'implementer', 'c2', '30 requests in 10 min (limit 20)'], ['rate', 'L2', 'lead', 'c1', '$5.00 in 15 min, 5x the usual']],
+    );
+    // The day before: no live count (it is a "now" figure) and no token, so no share.
+    assert.deepEqual([a.previous!.efficiency.liveByClaude, a.previous!.efficiency.costParts.input.reason], [[], 'no_samples']);
+    // A table this store does not have: unavailable, not 0.
+    db.exec('DROP TABLE usage_spikes');
+    const gone = prog(h.lab.scorecard({ window: 'day' })!, 'L1').current.efficiency;
+    assert.deepEqual([gone.spikesCount.value, gone.spikesCount.reason, gone.spikes], [null, 'no_source', []]);
+  } finally {
+    h.done();
+  }
+});
+
+test('health: refusals by scope, integrity and error endings in the window; pod memory and OOM are unavailable', async () => {
+  const h = await seeded();
+  let clock = NOW;
+  const chat = new ChatStore(h.store, () => new Date(clock));
+  try {
+    const refuse = (sessionId: string, hoursAgo: number, scope: string) => {
+      clock = at(hoursAgo);
+      chat.addAudit({ severity: 'medium', kind: 'agent.refused', sessionId, workspaceId: 'docker/api', actor: `session:${sessionId}`, detail: { scope } });
+    };
+    refuse('L2', 2, 'cap');
+    refuse('L2', 3, 'cap');
+    refuse('W3', 1, 'messages');
+    refuse('L2', 30, 'cap'); // the day before
+    refuse('M1', 1, 'cap'); // program B's
+    const end = h.db.prepare(`UPDATE chat_sessions SET state = ?, ended_reason = ?, state_since = ? WHERE id = ?`);
+    end.run('ended', 'integrity: the host script changed', iso(at(5)), 'W1');
+    end.run('interrupted', 'the session host could not start (exit 1)', iso(at(1)), 'W3');
+    end.run('ended', 'closed by operator', iso(at(23)), 'L1'); // an ordinary end
+
+    const a = prog(h.lab.scorecard({ window: 'day', compare: true })!, 'L1');
+    const x = a.current.health;
+    assert.deepEqual([x.refusals.value, x.refusalsByScope], [3, [{ scope: 'cap', count: 2 }, { scope: 'messages', count: 1 }]]);
+    assert.deepEqual([x.badEndings.value, x.endings], [
+      2,
+      [
+        { session: 'W1', kind: 'integrity', at: iso(at(5)) },
+        { session: 'W3', kind: 'error', at: iso(at(1)) },
+      ],
+    ]);
+    assert.deepEqual([x.podMemory.basis, x.podMemory.reason, x.oomRestarts.value], ['unavailable', 'no_source', null]);
+    assert.deepEqual([a.previous!.health.refusals.value, a.previous!.health.badEndings.value], [1, 0]);
+    const short = prog(h.lab.scorecard({ window: 'day' })!, 'M1').current.health;
+    assert.equal(short.refusals.value, 1);
   } finally {
     h.done();
   }
@@ -341,9 +598,14 @@ test('MCP crew_scorecard: short by default, full on ask; an agent of program A g
     const b = short.programs.find((p: any) => p.program === 'M1');
     assert.equal(b.now.per_done_usd, 'unavailable:no_samples');
     assert.equal(short.basis, undefined, 'the sources are in the full form');
-    const full = where(await mcp.call(admin.secret, 'crew_scorecard', { full: true, window: '6h' }));
+    const fullCall = await mcp.call(admin.secret, 'crew_scorecard', { full: true, window: '6h' });
+    assert.ok(!refused(fullCall), `the full form fits the result limit: ${JSON.stringify(fullCall).slice(0, 300)}`);
+    const full = where(fullCall);
     assert.equal(full.window, '6h');
-    assert.ok(full.basis.cost && full.programs[0].current.effectiveness.done.source);
+    // Each figure has its basis; its source is named once in `basis`.
+    const done = full.programs[0].current.effectiveness.done;
+    assert.deepEqual([done.basis, done.source, typeof full.basis.done, typeof full.basis.health], ['measured', undefined, 'string', 'string']);
+    assert.ok(full.programs[0].current.efficiency.requests && full.programs[0].current.health.refusals);
     assert.ok(JSON.stringify(full).length > JSON.stringify(short).length);
 
     const w3 = await mcp.agentToken('docker/api', 'W3');
