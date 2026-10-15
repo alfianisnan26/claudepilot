@@ -21,6 +21,9 @@
 //   7. T-259 slice 2: a track whose newest chat has Keep going ON is the portal's (it nudges, wakes, recovers and starts it again itself,
 //      inside the cluster): this script leaves that track alone, so the two never both start a chat. It still keeps Bypass on such a chat
 //      (the portal does not: the lease is the owner's open decision on T-256) and still answers for the tracks without Keep going.
+//   8. T-400 (three duplicate leads during the T-365 outage): a round whose /healthz or session list fails decides nothing, and after one no
+//      lead is taken for gone until STEADY_ROUNDS good rounds and HEALTH_QUIET_MIN minutes; a live, recent chat of the track is its lead
+//      (adopted before a newer ended one, never started beside); the MOVED text follows only a move this process saw itself.
 // Stop it: touch ~/.claudepilot/dev-sessions/STOP (checked every round), or kill the process by PID. State: ~/.claudepilot/dev-sessions/state.json.
 // Never logs the code, a cookie or a token.
 
@@ -503,32 +506,82 @@ async function reportDown(t, ts, cause, detail) {
 const downCause = (msg) =>
   /is a Claude on/.test(msg) ? 'missing_claude' : /fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|network/i.test(msg) ? 'network' : /refused|did not turn on|not trusting/i.test(msg) ? 'refused' : 'start_failed';
 
+/**
+ * T-400 item 1: during the portal outage of 2026-10-15 (T-365) the session list answered 502/503, read as an empty list, and a NEW lead was
+ * started for every track while the real ones worked. A round fails when /healthz or the list does not answer; after a failed round nothing is
+ * decided about a lead being gone (no recover, no start, no "closed by a person") until STEADY_ROUNDS good rounds in a row (6 minutes at the
+ * default ROUND_S) AND HEALTH_QUIET_MIN minutes since the last failure.
+ */
+const STEADY_ROUNDS = Number(process.env.STEADY_ROUNDS ?? 3);
+const HEALTH_QUIET_MIN = Number(process.env.HEALTH_QUIET_MIN ?? 5);
+/**
+ * T-400 items 2 and 3: a live chat of a track (not ended, not archived, not a worker: no parent) with activity in the last ADOPT_RECENT_H hours
+ * is the track's lead: it is watched (adopted) instead of a newer ended one, and no new lead is started beside it. An idle lead is nudged every
+ * NUDGE_GAP_MIN minutes, so a real one is far more recent than this.
+ */
+const ADOPT_RECENT_H = Number(process.env.ADOPT_RECENT_H ?? 2);
+/** A chat of the track by its title; a worker a lead spawned (it has a parent) is never the track's chat. */
+const ofTrack = (t, x) => !x.parentId && String(x.title ?? '').startsWith(t.title.split(':')[0]);
+const liveChatOf = (t, sessions, sessionId = null) =>
+  sessions
+    .filter((x) => (x.id === sessionId || ofTrack(t, x)) && x.state !== 'ended' && !x.archivedAt)
+    .filter((x) => Date.now() - Date.parse(x.lastActivityAt ?? x.createdAt) < ADOPT_RECENT_H * 3_600_000)
+    .sort((a, b) => String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)))[0] ?? null;
+/** /healthz answers ok (one plain call, no retries: a failure is what this asks about). */
+async function healthy() {
+  try {
+    const res = await fetch(`${PORTAL}/healthz`, { signal: AbortSignal.timeout(15_000) });
+    await res.text();
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** `rounds`: how many rounds to watch before returning (the test runs one or two; the script runs until LIFETIME_H). */
 async function watch({ rounds = Infinity } = {}) {
   const until = Date.now() + LIFETIME_H * 3_600_000;
   const idleSince = new Map();
   let stagger = false;
   let netDownSince = null;
+  // T-400 item 1: when a round last failed (null: none since this process started) and the good rounds since.
+  let badAt = null;
+  let goodRounds = 0;
+  // T-400 item 4: chat id -> the Claude this process last saw it on; a move is only one it saw itself.
+  const seenClaude = new Map();
   while (Date.now() < until && rounds-- > 0) {
     if (existsSync(join(STATE_DIR, 'STOP'))) return log('STOP file found: leaving the sessions as they are');
     await ensureTrust().catch((e) => log(`folder trust: could not check: ${e.message}`));
     const state = readState();
     let list;
-    try {
-      list = (await api('GET', '/api/chat/sessions')).data ?? [];
-    } catch (e) {
-      // The portal cannot be reached (T-259: the private network dropped): every track counts as down; reported once the portal answers again.
+    let failed = (await healthy()) ? null : '/healthz did not answer ok';
+    if (!failed) {
+      try {
+        const r = await api('GET', '/api/chat/sessions');
+        list = Array.isArray(r.data) ? r.data : r.data?.items;
+        if (r.status >= 300 || !Array.isArray(list)) failed = `the session list answered ${r.status}${r.error?.code ? ` ${r.error.code}` : ''}`;
+      } catch (e) {
+        failed = e.message;
+      }
+    }
+    if (failed) {
+      // The portal cannot be reached or does not answer (T-259: the private network dropped; T-400: 502/503 while it restarts): every track
+      // counts as down; reported once the portal answers again. Never read as "no sessions".
       netDownSince ??= Date.now();
-      log(`portal unreachable (${e.message}): looking again in ${ROUND_S} s`);
+      badAt = Date.now();
+      goodRounds = 0;
+      log(`portal unreachable (${failed}): looking again in ${ROUND_S} s`);
       await sleep(ROUND_S);
       continue;
     }
+    goodRounds++;
+    const steady = badAt === null || (goodRounds >= STEADY_ROUNDS && Date.now() - badAt >= HEALTH_QUIET_MIN * 60_000);
     if (netDownSince) {
       const mins = Math.round((Date.now() - netDownSince) / 60_000);
       netDownSince = null;
       if (mins >= 15) for (const t of TRACKS) await reportDown(t, (state.tracks[t.key] ??= { key: t.key, starts: [], nudges: [], wakes: [] }), 'network', `the portal was unreachable from the supervisor for about ${mins} minutes`);
     }
-    const sessions = Array.isArray(list) ? list : (list.items ?? []);
+    const sessions = list;
     // The portal's pause switch (T-259 slice 3) is the source of truth: a pause of all, or of a track's key as the program, holds the track
     // here too. Read once a round; a portal that does not answer it (older) holds nothing, and the PAUSE files below still hold a track.
     const portalPauses = await api('GET', '/api/keepgoing')
@@ -539,12 +592,14 @@ async function watch({ rounds = Infinity } = {}) {
       ts.nudges ??= [];
       ts.wakes ??= [];
       if (ts.done) {
-        // A newer live chat of this track (a continuation someone started after a hand-over) is adopted: the track is watched again.
-        const newer = sessions.find((x) => x.state !== 'ended' && !x.archivedAt && x.id !== ts.sessionId && String(x.title ?? '').startsWith(t.title.split(':')[0]));
-        if (!newer) continue;
+        // A live chat of this track (a continuation someone started after a hand-over, or T-400 item 3: the older lead still working after a
+        // person ended a newer duplicate, which may be ts.sessionId itself) is adopted: the track is watched again. The chat that wrote TRACK
+        // COMPLETE stays left alone.
+        const live = liveChatOf(t, sessions, ts.sessionId);
+        if (!live || (live.id === ts.sessionId && statusSaysDone(ts))) continue;
         ts.done = false;
-        ts.sessionId = newer.id;
-        log(`${t.key}: adopted the newer live chat ${newer.id.slice(0, 8)}: watched again`);
+        ts.sessionId = live.id;
+        log(`${t.key}: adopted the live chat ${live.id.slice(0, 8)}: watched again`);
         saveState(state);
       }
       // A paused program (the owner's order, 2026-10-14): `touch ~/.claudepilot/dev-sessions/PAUSE-<track key>` (orchestrator, konfersi, event); nothing is nudged, woken, moved or restarted until the file is removed.
@@ -555,8 +610,10 @@ async function watch({ rounds = Infinity } = {}) {
       }
       ts.pausedLogged = false;
       // A track's sessions are found by their worktree folder (a session may rename itself), or by title.
-      const mine = sessions.filter((x) => x.id === ts.sessionId || String(x.title ?? '').startsWith(t.title.split(':')[0])).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-      const cur = mine.find((x) => !x.archivedAt) ?? mine[0];
+      const mine = sessions.filter((x) => x.id === ts.sessionId || ofTrack(t, x)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      // T-400 items 2 and 3: a live, recent chat of the track is its lead and is adopted, before the newest one: a new lead is never started
+      // beside it, and a person ending a newer duplicate does not mark the track "closed by a person".
+      const cur = liveChatOf(t, sessions, ts.sessionId) ?? mine.find((x) => !x.archivedAt) ?? mine[0];
       if (cur?.cwd) ts.cwd = cur.cwd;
       // Keep going is on for this track's chat: the portal watches and restarts it (T-259 slice 2). Only Bypass is still kept here.
       if (cur?.keepGoing?.enabled && !cur.keepGoing.paused) {
@@ -577,13 +634,16 @@ async function watch({ rounds = Infinity } = {}) {
         ts.downReported = {}; // it runs: a later stop is reported again
         // A move to another Claude restarts the process and starts no turn: the chat sits idle until somebody speaks. Speak at once (not after the
         // idle wait), when it is idle, or as soon as it is.
-        if (ts.claudeId && ts.claudeId !== cur.claudeId) {
+        // T-400 item 4: only a move this process saw itself (the same chat on another Claude than in an earlier round): a Claude stored by an
+        // earlier run, or another chat's, told two real leads they were moved when they were not.
+        const seen = seenClaude.get(cur.id);
+        if (seen && seen !== cur.claudeId) {
           log(`${t.key}: moved to another Claude (${cur.claudeName ?? cur.claudeId}): will continue it at once`);
-          ts.pendingContinue = true;
+          ts.pendingContinue = cur.id;
         }
-        ts.claudeId = cur.claudeId;
+        seenClaude.set(cur.id, cur.claudeId);
         await ensureBypass(t, ts, cur).catch((e) => log(`${t.key}: could not check Bypass: ${e.message}`));
-        if (ts.pendingContinue && cur.state === 'idle') {
+        if (ts.pendingContinue === cur.id && cur.state === 'idle') {
           try {
             await ensureBypass(t, ts, cur, true);
             await sessionSend(cur.id, (t.moved ?? MOVED)(cur.claudeName ?? 'another Claude'));
@@ -642,6 +702,12 @@ async function watch({ rounds = Infinity } = {}) {
             ts.backoffUntil = Date.now() + 15 * 60_000;
           }
         }
+        continue;
+      }
+
+      // T-400 item 1: no live lead seen, but the portal failed a round lately: what it shows is not trusted yet to say the lead is gone.
+      if (!steady) {
+        log(`${t.key}: no live lead seen, but the portal failed a round ${Math.round((Date.now() - badAt) / 60_000)} min ago (${goodRounds} good rounds since): not deciding it is gone yet`);
         continue;
       }
 
