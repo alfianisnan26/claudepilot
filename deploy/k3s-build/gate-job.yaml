@@ -8,7 +8,9 @@
 # /tmp (the clean copy, node_modules, the build, the tests' temp databases) is an emptyDir in MEMORY (T-95 item 3): on the container
 # overlay the suite was IO-bound (about 60% IO pressure at 33m of CPU on k3s-master, 31+ min: hundreds of node:sqlite databases with
 # fsync, plus npm ci), in memory fsync costs nothing. It counts against the container's memory: sizeLimit 3Gi (node_modules is about
-# 400 MiB, the copy and the logs well under that), so the request is 2Gi and the limit 8Gi.
+# 400 MiB, the copy and the logs well under that). Memory requested = limited (T-524): 2Gi requested with 8Gi allowed overcommitted the
+# node. 8Gi is the old limit, kept: the server suite alone peaked at 1480Mi (job-run claudepilot-job-4c34ebf9), but the gate's typecheck and
+# web build at GATE_CONCURRENCY 3 were not measured yet. Lower it from the "memory peak=" line this Job prints, never below peak + 50%.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -76,7 +78,7 @@ spec:
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
           resources:
-            requests: {cpu: 1000m, memory: 2Gi}
+            requests: {cpu: 1000m, memory: 8Gi}
             limits: {cpu: "4", memory: 8Gi}
       volumes:
         - name: tmp

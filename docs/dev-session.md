@@ -104,8 +104,10 @@ The workspace pod has 4 CPUs shared with the agents, their scratch portals and C
 twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a Job in `isnan-claudepilot` instead, on whichever node has CPU:
 
 - **The Job** (`deploy/k3s-build/gate-job.yaml`): the newest development workspace image (or `GATE_IMAGE`), a shallow clone of the commit from
-  GitHub, `GATE_CONCURRENCY=3`; requests 1 CPU and 2 GiB, limits 4 CPUs and 8 GiB, `/tmp` an emptyDir in memory (3 GiB: the clean copy, `node_modules` and the tests' databases; on the overlay the suite was IO-bound, 31+ min), no node selector (k3s-node2's requests are nearly all
-  allocated: the master may take it), no service account token, gone an hour after it ends. A name per call
+  GitHub, `GATE_CONCURRENCY=3`; 1 CPU requested and 4 the limit, 8 GiB of memory requested = limited (T-524; not yet lowered: the gate's
+  own peak is unmeasured, the Job prints `memory peak=… limit=…` for that), `/tmp` an emptyDir in memory (3 GiB: the clean copy,
+  `node_modules` and the tests' databases; on the overlay the suite was IO-bound, 31+ min), placement as job-run's (preferred: not the
+  control-plane node, not the portal's node, no workspace pod), no service account token, gone an hour after it ends. A name per call
   (`claudepilot-gate-<sha>-<4 hex>`), so gates for different commits run side by side.
 - **The token** for `npm ci` (the private `@isnanme` packages) is a Secret named like the Job, made from `gh auth token` on stdin, deleted on
   exit; the log is searched for it and masked if it is there.
@@ -139,7 +141,8 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
 - **Memory (T-524):** requested = limited, so the scheduler places a Job only where all of it fits (2Gi requested with 8Gi allowed let a
   4.1 GB Event Job take k3s-master, the 15 GB control-plane node that also runs the API server, to 92%, and the portal answered 503).
-  MEMORY_SIZES_LINE
+  4Gi by default with `/tmp` at most 2Gi; `--big` gives 8Gi with `/tmp` 4Gi (only k3s-node2 has that much free). The whole server suite peaked
+  at 1480Mi (claudepilot-job-4c34ebf9, 2026-10-15), a test folder at 1365Mi; the Event Job above reached 4.1 GB and needs `--big`.
   Every Job ends with `=== JOB-RUN MEMORY peak=… limit=… oom_kills=…` (its own cgroup). An OOMKilled Job says so with its limit and the hint
   `--big`; a Job Pending because no node has the memory free says so once, instead of a silent wait.
 - **Placement (T-365, T-524):** preferred, never required (a required rule left every Job Pending): away from the control-plane node, the
