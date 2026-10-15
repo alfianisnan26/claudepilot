@@ -44,6 +44,12 @@ const windowShort = (w: CrewWindowScore | null) =>
     lead_share_pct: v(w.cost.leadShare),
     per_done_usd: v(w.cost.perDoneAllIn),
     per_done_workers_usd: v(w.cost.perDoneWorkers),
+    cache_read_pct: v(w.efficiency.costParts.cacheRead),
+    requests: v(w.efficiency.requests),
+    handovers: v(w.efficiency.handovers),
+    spikes: v(w.efficiency.spikesCount),
+    refusals: v(w.health.refusals),
+    bad_endings: v(w.health.badEndings),
   };
 
 /** One program in a short result: the window's headline figures, the one before, and the targets not ok. */
@@ -138,7 +144,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
     name: 'crew_scorecard',
     title: 'Crew scorecard',
     description:
-      'Per program (a lead chain with its continuations and every worker under it) over the last 1h, 6h, day or week, with the window before it: tickets done (by type, per hour, lead time p50 and p90), reopened, wont_do, the review backlog (age, what it waits for), CI runs by pipeline, deploys; cost (estimated dollars): total, lead versus workers, per done ticket all-in and workers only; and the targets of D-61, D-62 and D-63 as ok, warn, breach or unavailable. Every figure says measured, estimate or unavailable (with the reason) and its source. Short by default; full true for every figure. An agent’s token reads only its own program; an admin’s reads all.',
+      'Per program (a lead chain, its continuations and workers) over the last 1h, 6h, day or week, and the window before: tickets done (by type, per hour, lead time p50/p90), reopened, wont_do, review backlog (age, waits for), CI, deploys; cost (estimated): total, lead vs workers, per done ticket, token-class shares; context p50/p90 per role and lead, requests, top sessions, model mix, sessions per role, live per Claude, hand-overs, spikes; refusals and bad endings; D-61, D-62, D-63 targets (ok, warn, breach, unavailable). Each figure: measured, estimate or unavailable, with its source. Short by default; full true for all. An agent’s token reads its own program; an admin’s all.',
     scope: 'agent',
     hints: { readOnly: true, idempotent: true },
     input: z.object({
