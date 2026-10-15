@@ -7,13 +7,14 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   (suite 575 s, peak 2325Mi/8192Mi, 0 OOM). No web files in the diff, so no web suite. Scripts only: no deploy needed.
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
-- MERGED ff b37628e (T-515 e021cb6 + T-527 ea81071 + packs): gate GREEN claudepilot-gate-b37628e-0953 (memory peak 2189Mi/8192Mi,
-  0 OOM) + web 629/629 (claudepilot-job-a19b47c9).
 
 ## IN FLIGHT (4 of 4 workers, D-65: 8dc6a739 impl-t557 (sonnet) T-557 S0 PRD + S1a seam (c10daf0e ended, 4899), 03b631f0 impl-t531-s2c (sonnet) T-531 S2c (cffb12b1 ended: T-486 S2b DONE 6eb6fbf 4880),
-  47710391 qa (sonnet) T-401 QA WAITING GO, 0df3dd19 impl-t379 (sonnet) T-379 090fbbf (minors 8dadddb + lead merge of 060aca4, 4852): GO 12:20 src/ci re-run)
+  47710391 qa (sonnet) T-401 QA (GO 12:24, has the cluster slot), 30dc0f13 rev-t401-t379 (opus, why D-62) blind review T-401 then T-379)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-379 re-run (GO 12:20) -> T-401 QA -> T-531 S2c / T-557 -> T-486 QA (6eb6fbf). T-531 S2c WAITING 7afbd0d (test unrun). T-379 live proof PASS (4845, job-2d70c331). Next free workers: T-401 blind review (opus), T-486 QA, T-416 S1b QA, then T-557 S1b lease (opus) after T-401 merges.
+  Cluster: T-401 QA -> T-531 S2c (WAITING 7afbd0d) -> T-557 (WAITING 02357fd) -> T-486 QA (6eb6fbf). Next free workers: T-486 QA,
+  T-416 S1b QA, then T-557 S1b lease (opus) after T-401 merges.
+- T-379 DONE 3ddbcbc (0df3dd19 ended): src/ci 144/144 job-5b4609a6 (4905); lead live proof on the final script PASS job-c71c5bfe (4906).
+  Next: blind review (30dc0f13), merge right after T-401.
 - T-401 (high, security): S1 DONE 060aca4 (4 Jobs green per author; fetch does npm ci --ignore-scripts with creds). Touches
   gate-job.yaml: review must confirm the gate's checks unchanged (4745). Next: blind review (opus) + QA, lead gate, merge.
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
