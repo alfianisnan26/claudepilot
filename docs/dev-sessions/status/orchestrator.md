@@ -8,10 +8,9 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - Filed: T-397 (proposal, mine), T-398, T-399, T-402, T-403 (settled by D-62), T-409, T-413 (incident: OOM 02:11, my share stated), T-422 (sudo, proposal, mine).
 
 ## IN FLIGHT (3 live workers = the D-61 budget; no Agent-tool sub-agents)
-- T-366 (urgent): fixes on dev/t-366-1 f541f64 (proof c07fe1a3 vs 086a9e1, chat 706/0 fail, typecheck+generator 0; fixer 05b23440 ended). NEEDS a FOURTH reviewer (new session) on 086a9e1..f541f64 = next free slot. T-435 (high, portal:worktree copy) and T-432 (low) filed.
+- T-366 (urgent): fixes dev/t-366-1 f541f64 (comment 2974). FOURTH reviewer 3596b2c3 (opus, hasyim) on 086a9e1..f541f64. T-435 (high), T-432 (low) filed.
 - T-417 (high): fixes on dev/t-417-1 c606ef6 (proof 7/7 vs 9622deb, chat 704/0 fail, typecheck 0; fixer a1bf3da8 ended). qa-verifier f20d8008 (opus, fadlilah) in dev-t-336-1 verifies T-417 AND T-427 (3198f5d). PASS on both -> merge both, gate.
-- T-375 (high) + T-369: ux-checker e44c2a1b was denied Read on /tmp shots and then Bash; told to use --out inside its folder (re-spawn if still blocked).
-   dev/t-375-1 c84657f merges T-369; typecheck, web 589/589, crew 108, density 0/492 over 80 px, session-rows 44 (comment on T-375); worker 07cef3b0 ended. ux-checker e44c2a1b (sonnet, hasyim) in dev-t-333-1. Then merge both, regenerate the context pack.
+- T-375 (high) + T-369: dev/t-375-1 c84657f; ux FAIL (comment on T-375): 390 line two clips cost/Claude name, lead cost missing; header 36 px at 1280; gaps (Select all, multi-workspace, branch+ticket). ux-checker e44c2a1b ended. NEEDS an implementer (dev-t-333-1) then a new ux-checker.
 
 - T-427 (high, in_review): dev/t-427-1 3198f5d; proof green (job dea8cc76, comment 2932); in f20d8008's verification.
 
@@ -37,7 +36,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-93 Konfersi production only. Coordinator items: T-397 (authz+persona loosening; charter-wall conflict named), T-422 (sudo removal, tightening), T-306 item 4 / T-340 (rtk hook).
 
 ## NEXT (in order, as slots free)
-0. T-366 fourth reviewer (opus).
+0. T-375/T-369 fix implementer (opus, dev-t-333-1).
 1. T-427 (high, owner's ticket, coordinator 03:45: same batch as T-417; agents.ts pickSpawnClaude + agents.test.ts; implementer, sonnet is enough). Next deploy batch = T-417 + T-427, on 2026-10-16 (today's cap of 3 is used).
 1b. T-404 fixes (worker in dev-t-352-1 on dev/t-404-1), then a new blind reviewer.
 2. T-413 post-mortem (incident-analyst worker, sonnet).
@@ -47,4 +46,4 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 6. T-370 HOLD (claudepilot-b7), then T-371..T-374, T-363 (read D-59 / PRD 8b criteria first).
 7. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356, T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149.
 
-LESSONS: no Agent-tool sub-agents and no in-pod heavy work (OOM); an idle worker is not woken by a finished Job (tell it to wait in its turn); use FULL commit hashes with job-run; merge a branch only via a worker when it conflicts; check the full D-row before quoting a decision; typecheck/gate before every integration push.
+LESSONS: dontAsk workers can't Read /tmp: --out inside the worktree; scroll-lock/mobile-drag read SL_PORT not QA_PORT; no Agent-tool sub-agents and no in-pod heavy work (OOM); an idle worker is not woken by a finished Job (tell it to wait in its turn); use FULL commit hashes with job-run; merge a branch only via a worker when it conflicts; check the full D-row before quoting a decision; typecheck/gate before every integration push.
