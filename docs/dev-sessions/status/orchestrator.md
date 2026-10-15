@@ -8,11 +8,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
-## IN FLIGHT (4 of 4 workers, D-65: 445c3e1b impl-t561 (opus, why deny rules/authz) T-561 S1 WAITING a649874 (migration 778, no clash), 7d33708d impl-t558 (opus, why D-62 authz) T-558 WAITING e652c44 (plan 4930),
-  fb538d7d qa-t486 (sonnet) T-486 QA WAITING GO, 03c496b6 impl-t546 (sonnet) T-546 crew digest WAITING bb7cdb0. 03b631f0 ended.)
+## IN FLIGHT (4 of 4 workers, D-65: 445c3e1b impl-t561 (opus, why deny rules/authz) T-561 S1 WAITING a649874 (migration 778, no clash),
+  d2e7b532 impl-t576 (sonnet) T-576 Runners UI (plan 5056). T-558 e652c44: 7d33708d ended (125k, coordinator); QA runs its Jobs (5052).
+  fb538d7d qa-t486 (sonnet) T-486 QA WAITING GO, 03c496b6 impl-t546 (sonnet) T-546 crew digest WAITING bb7cdb0 (118k: ends after T-546).)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: lead gate T-531 pre-merge 55d5fad (re-merged on T-557 S1 59eca49; 950c17d gate stopped) -> T-486 QA -> T-558 ->
-  T-546 -> T-561. Then DEPLOY integration (carries T-557 S1 + T-575, coordinator asked). Next free slot: T-576 (sonnet + ux-checker).
+  Cluster: lead gate T-531 pre-merge 55d5fad (re-merged on T-557 S1 59eca49) -> T-486 QA -> T-546 -> T-561 -> T-558 QA.
+  Then DEPLOY integration (carries T-557 S1 + T-575, coordinator asked). Next free slot: T-558 QA (sonnet), then T-576 ux-checker.
   Later: T-426 QA + blind review (after T-401 merges), T-416 S1b QA, T-548.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
@@ -38,6 +39,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-378 S1 dev/t-378-1 9834ff7 ready: needs a verifier.
 
 ## DECISIONS (binding)
+- 14:30 Coordinator (D-65 idle slots): workers waiting on the one-at-a-time cluster hold slots; over 120k they end after their
+  ticket. 7d33708d ended, T-576 started in its slot. The cluster queue (D-61), not the workers, is the bottleneck.
 - 14:15 Coordinator: T-575 + T-557 S1 ride the next deploy; then it makes kohi-event's Browser pool and names the restart time.
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
@@ -49,9 +52,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 11:15 D-65 (coordinator): 4 ClaudePilot workers; implementers sonnet by default (opus only with a written why); small QA/review
   findings fixed in the same slice; a worker takes 2-3 related tickets (reuse under 150k); full report on the ticket, the lead
   reads line 1 and opens it only on FAIL; ready features over chores. Targets under 8 USD per ticket, lead share under 30 %.
-- 11:00 Coordinator: the next implementer slot goes to T-401 (security: job-run env carries GIT_TOKEN/NODE_AUTH_TOKEN), then T-426
-  (--pool-env door for Konfersi stg e2e), then T-379 (Python in job-run). They unblock 6 Konfersi tickets. Opus + blind review
-  (gate/security). They come before T-416 S2, T-537 and T-538..T-540.
 - 10:25 Workers end with WAITING <hash>; the lead hands out the cluster slot with "GO T-n" (free-slot check: OUR Jobs only).
 - 09:00 Coordinator: persona, role-tool and permission questions go to the coordinator (ticket assigned to me), NEVER the owner;
   `owner-checklist` is production only.
