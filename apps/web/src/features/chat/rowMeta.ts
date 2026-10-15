@@ -87,7 +87,10 @@ export function listFacts(rows: readonly ListRow[], personas: Readonly<Record<st
   return { workspaces: workspaces.size, personas: people.size };
 }
 
-/** The workspace label on a row: only when the rows span more than one workspace, and not under a workspace's own heading. */
+/**
+ * The workspace label on a row: only when the rows span more than one workspace, and not under a workspace's own heading. The list asks it
+ * per card (a group's rows), so a card whose rows share one workspace does not repeat it on each.
+ */
 export const workspaceShown = (facts: ListFacts, groupBy: ListGroupBy): boolean => facts.workspaces > 1 && groupBy !== 'workspace';
 
 /** The persona's avatar as a row's icon: only when the rows have more than one persona (one avatar on every row tells nothing apart). */
@@ -173,10 +176,9 @@ export function rowMeta({ session: s, groupBy, showWorkspace, usage, nowMs, lead
 }
 
 /**
- * Line three, or null: the open request (amber) wins; else, on a phone, the branch and ticket (from 640 px they sit on line two). The
- * caller hides the `where` line from 640 px.
+ * Line three, or null: only the open request (amber). The branch and ticket close line two at every width (cut on the right when it is
+ * full), so a row that does not wait on you stays two lines (T-378's density check: at most 80 px at 390).
  */
-export function thirdLine(m: Pick<RowMeta, 'waitingFor' | 'branch' | 'ticket'>): 'waiting' | 'where' | null {
-  if (m.waitingFor) return 'waiting';
-  return m.branch || m.ticket ? 'where' : null;
+export function thirdLine(m: Pick<RowMeta, 'waitingFor'>): 'waiting' | null {
+  return m.waitingFor ? 'waiting' : null;
 }

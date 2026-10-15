@@ -122,9 +122,9 @@ const PCT: Record<'neutral' | 'warn' | 'critical', string> = { neutral: '', warn
 function ClaudeQuota({ claude }: { claude: NonNullable<RowMeta['claude']> }) {
   const m: QuotaMeter = claude.meter;
   return (
-    <span data-row-claude="" title={m.title} className="inline-flex min-w-0 items-center gap-1">
+    <span data-row-claude="" title={m.title} className="inline-flex items-center gap-1">
       {claude.name && (
-        <span aria-hidden="true" className="min-w-0 truncate">
+        <span aria-hidden="true" className="max-w-24 min-w-0 truncate">
           {claude.name}
         </span>
       )}
@@ -162,8 +162,8 @@ const BYPASS_DOT = (
  * chat), or the persona's avatar when the rows on screen have more than one persona; Bypass is a red shield dot on its corner (a tip says
  * it; the word too from 640 px). Line one: the title, the pin, the role (an icon on a phone, hidden when the title already starts with it),
  * the crew count, the time. Line two (muted, one line, cut on the right): the state, the model (its id and effort in the tip), the Claude and
- * its quota bar, the cost, the workspace only when the rows span several; from 640 px the branch and ticket. Line three: what it waits on
- * (amber), or on a phone the branch and ticket. The folder lives on the session page. Selecting turns the row into a checkbox. Grouped by
+ * its quota bar, the cost, the workspace only when the card's rows span several, the branch and ticket. Line three: only what it waits on
+ * (amber). The folder lives on the session page. Selecting turns the row into a checkbox. Grouped by
  * Claude, a chat that moved is also listed, lighter, under the Claudes it ran on earlier: the same chat. A removed workspace is stated
  * plainly.
  *
@@ -244,9 +244,9 @@ export function SessionRow({
       {meta.ticket}
     </span>
   );
-  // Line two: one line, the facts in this order; what does not fit is cut on the right. Only the Claude's name, the workspace and the
-  // branch give up room (they truncate); `wide` items show from 640 px (on a phone they are line three).
-  const facts2: { key: string; node: React.ReactNode; shrinks?: boolean; wide?: boolean }[] = [{ key: 'state', node: <StateWord state={state} /> }];
+  // Line two: one line, the facts in this order; what does not fit is cut on the right. Only the workspace and the branch give up room
+  // (they truncate); the Claude's name is capped and its bar never shrinks (a shrinking item let the bar paint over the cost).
+  const facts2: { key: string; node: React.ReactNode; shrinks?: boolean }[] = [{ key: 'state', node: <StateWord state={state} /> }];
   if (meta.model)
     facts2.push({
       key: 'model',
@@ -256,7 +256,7 @@ export function SessionRow({
         </span>
       ),
     });
-  if (meta.claude) facts2.push({ key: 'claude', shrinks: true, node: <ClaudeQuota claude={meta.claude} /> });
+  if (meta.claude) facts2.push({ key: 'claude', node: <ClaudeQuota claude={meta.claude} /> });
   // T-343: a running turn's cost is an estimate (≈) until its result; a model without a price adds nothing (unavailable, never a guess).
   if (meta.cost)
     facts2.push({ key: 'cost', node: <span className="tabular-nums">{meta.cost.estimate ? `≈ ${formatUsd(meta.cost.usd)}` : formatUsd(meta.cost.usd)}</span> });
@@ -270,8 +270,8 @@ export function SessionRow({
         </span>
       ),
     });
-  if (branch) facts2.push({ key: 'wt', shrinks: true, wide: true, node: branch });
-  if (ticket) facts2.push({ key: 'ticket', wide: true, node: ticket });
+  if (branch) facts2.push({ key: 'wt', shrinks: true, node: branch });
+  if (ticket) facts2.push({ key: 'ticket', node: ticket });
 
   const icon = depth > 0 ? 'size-8' : 'size-10';
   const glyph = depth > 0 ? 'size-4' : 'size-[18px]';
@@ -500,7 +500,7 @@ export function SessionRow({
             </div>
             <p data-row-meta="" className="mt-0.5 flex min-w-0 items-center gap-1 overflow-hidden text-[12.5px] whitespace-nowrap text-muted">
               {facts2.map((f, i) => (
-                <span key={f.key} className={cn('items-center gap-1', f.wide ? 'hidden sm:flex' : 'flex', f.shrinks ? 'min-w-0' : 'shrink-0')}>
+                <span key={f.key} className={cn('flex items-center gap-1', f.shrinks ? 'min-w-0' : 'shrink-0')}>
                   {i > 0 && <span aria-hidden="true">·</span>}
                   {f.node}
                 </span>
@@ -509,13 +509,6 @@ export function SessionRow({
             {third === 'waiting' && (
               <p data-row-third="waiting" className="mt-0.5 truncate text-[12.5px] font-medium text-amber-700 dark:text-amber-400">
                 {meta.waitingFor}
-              </p>
-            )}
-            {third === 'where' && (
-              <p data-row-third="where" className="mt-0.5 flex min-w-0 items-center gap-1 overflow-hidden text-[12.5px] whitespace-nowrap text-muted sm:hidden">
-                {branch}
-                {branch && ticket && <span aria-hidden="true">·</span>}
-                {ticket}
               </p>
             )}
           </div>

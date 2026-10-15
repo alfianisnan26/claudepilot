@@ -189,9 +189,12 @@ export function SessionsPage() {
   const { report: usage } = useClaudeUsage();
   const nowMs = useNow(60_000);
   const usageById = useMemo(() => (usage ? new Map(usage.claudes.map((c) => [c.claudeId, c])) : null), [usage]);
-  const facts: RowFacts = useMemo(() => {
-    const shownFacts = listFacts(list ? list.groups.flatMap((g) => g.rows) : [], personas);
-    return { showWorkspace: workspaceShown(shownFacts, view.groupBy), showAvatars: avatarsShown(shownFacts), usage: usageById, nowMs };
+  // The workspace goes by each card's own rows (one workspace on every row of a card tells nothing apart, T-378's density check); the
+  // avatars by the rows on screen.
+  const factsByGroup: ReadonlyMap<string, RowFacts> = useMemo(() => {
+    const groups = list ? list.groups : [];
+    const showAvatars = avatarsShown(listFacts(groups.flatMap((g) => g.rows), personas));
+    return new Map(groups.map((g) => [g.key, { showWorkspace: workspaceShown(listFacts(g.rows, personas), view.groupBy), showAvatars, usage: usageById, nowMs }]));
   }, [list, personas, view.groupBy, usageById, nowMs]);
 
   const byId = useMemo(() => new Map((sessions ?? []).map((s) => [s.id, s])), [sessions]);
@@ -290,7 +293,7 @@ export function SessionsPage() {
                     onCollapse={(id) => setCollapsed((c) => flip(c, id))}
                     actions={actions}
                     personas={personas}
-                    facts={facts}
+                    facts={factsByGroup.get(g.key)}
                   />
                 ))}
               </Group>

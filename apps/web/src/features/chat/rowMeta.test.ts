@@ -186,11 +186,13 @@ test('row meta: the cost (an estimate while a turn runs), nothing at 0; branch a
   assert.equal(rowMeta({ session: wt, groupBy: 'ticket', showWorkspace: false, usage: null, nowMs: NOW }).ticket, null);
 });
 
-test('line three: the open request wins, else branch and ticket, else none (two lines)', () => {
+test('line three: only the open request; a branch or ticket stays on line two (two lines)', () => {
   const ask = rowMeta({ session: s({ state: 'waiting', waiting: 1, waitingFor: 'Run a command: npm test', ticketId: 'T-1' }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW });
   assert.equal(ask.waitingFor, 'Run a command: npm test');
   assert.equal(thirdLine(ask), 'waiting');
-  assert.equal(thirdLine(rowMeta({ session: s({ ticketId: 'T-1' }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW })), 'where');
+  const where = rowMeta({ session: s({ ticketId: 'T-1', worktree: { path: '/w/x', branch: 'ticket/T-1-x' } as ChatSession['worktree'] }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW });
+  assert.equal(where.ticket, 'T-1');
+  assert.equal(thirdLine(where), null);
   assert.equal(thirdLine(rowMeta({ session: s(), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW })), null);
   // A stale waitingFor on a session that no longer waits says nothing.
   assert.equal(rowMeta({ session: s({ waitingFor: 'old' }), groupBy: 'none', showWorkspace: false, usage: null, nowMs: NOW }).waitingFor, null);
