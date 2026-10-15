@@ -573,4 +573,27 @@ Under the UI text diet (PLAN rule 12): one-or-two-word labels, no paragraphs und
 | Q9 | Run starts on `[skip ci]` are recorded as skipped. Should an agent be able to skip with a push option instead? | Engineering |
 | Q10 | Should a green run on a ticket's branch be able to move the ticket to review? (v0.1: never; a person or the agent does.) | Product |
 
+## 23. Runner targets (T-557)
+
+Heavy work does not run in the workspace pod (D-61). Where it runs is a **runner target**, one small seam in `apps/server/src/ci/runnerTarget.ts`:
+
+```ts
+interface RunnerTarget {
+  readonly kind: 'cluster' | 'codespace' | 'fake';
+  start(spec: RunSpec, signal?: AbortSignal): Promise<RunnerHandle>;   // create or start; resolves when ready to run
+  run(h: RunnerHandle, signal?: AbortSignal): Promise<RunResult>;      // { rc, reason }: rc is the command's
+  logs(h: RunnerHandle): Promise<string>;                              // the masked log so far
+  stop(h: RunnerHandle): Promise<void>;                                // idempotent
+  remove(h: RunnerHandle): Promise<void>;                              // idempotent; releases everything paid for or held
+}
+```
+
+`runOnTarget(target, spec, opts)` is the one lifecycle: start, run under the deadline, collect the log, then `stop` and `remove` in a `finally`, so a failure or a timeout in any step still removes the runner. A failed `remove` is reported, never swallowed. `sweepIdle(target, now)` removes handles idle longer than the idle-delete period.
+
+**Targets.** `cluster` (default) wraps `scripts/job-run.sh` exactly as agents use it today: the same arguments, caps, log, exit codes (0 to the command's, 1 not finished, 2 usage, 124 deadline); the adapter takes an injected `exec` so no test needs a cluster. `fake` keeps state in memory for tests. `codespace` is S2 ([codespaces-poc.md](codespaces-poc.md) §20: lifecycle, limits, credentials, failure modes, open questions).
+
+**How one is picked.** The spec names it (`runner: cluster | codespace`, or `--runner` on `job-run`); absent means `cluster`. An unknown or unavailable target is a usage error, never a silent fallback to another paid target. Credentials come from the Secrets pool by name; none is in a command, a log or an error.
+
+Not built here: a pipeline `runs-on` key, and the `codespace` target.
+
 **Needs you (T-146):** a deployment waiting for a person's approval (FR41) is listed on Needs you ([attention.md](attention.md) §2, `ci/attention.ts`) with the environment, the gate's verdict and the commit, for a person only.

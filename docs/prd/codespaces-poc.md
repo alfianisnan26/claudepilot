@@ -251,6 +251,48 @@ F8 (user-to-server tokens), F10 (our OAuth App's device token creates codespaces
 - N4 Portal MCP read tool (`codespaces_list`) once K2 maps codespaces to workspaces (not built: K2's mapping decides what it should return).
 - N5 Billing usage (F17) if the owner's account has the enhanced billing platform.
 
+## 20. Runner targets: a Codespace as a burst runner (T-557)
+
+A second use of the same provider, separate from the workspace target of K2: a Codespace that runs one heavy job and goes away. The seam is `RunnerTarget` in `apps/server/src/ci/runnerTarget.ts` ([local-git-ci.md](local-git-ci.md) §23 has the contract and how a target is picked).
+
+**What a runner target is.** Where a heavy job (a typecheck, a suite, a build) executes: `cluster` today (a Kubernetes Job made by `scripts/job-run.sh`), `codespace` next. The caller asks for "run this command on this pushed ref" and gets a log and an exit code, whatever the target.
+
+**Lifecycle for a burst job** (never a 24/7 codespace):
+
+1. **Create or start**: a stopped codespace the portal made for this purpose (name prefix `pilot-runner-`) is started; otherwise one is created (smallest machine that fits, `idle_timeout_minutes` set to the lowest GitHub allows, retention 1 day). The target waits for `Available` up to the start timeout.
+2. **Run**: the command runs inside, from a clean checkout of the pushed ref. Output streams back; the exit code is the command's.
+3. **Collect** log and rc (and artifacts the caller named), before anything is stopped.
+4. **Stop** when the run ends, in every case (pass, fail, timeout, cancel).
+5. **Delete when idle**: a runner codespace unused for the idle-delete period (default 30 minutes) is deleted by the target's sweep; a runner that is not in a settled state past its deadline is deleted at once. Stopped codespaces would otherwise cost storage until retention ends.
+
+**Limits per run.** The deadline (default 3600 s, at most 5400, the same as `job-run`) and a cost cap: `maxMinutes × machine core-hours` is computed before the run from the machine type and refused when over the owner's per-run cap. GitHub's API shows no cost (F17), so the cap is an estimate and is labelled so; GitHub's own spending limit is the hard stop.
+
+**Credentials.** The GitHub token is the sealed secret of a connection (§8), read by name through the Secrets pool by the server only. It never appears in a command line, a log, an audit row or an error text; the log passes the same mask as `job-run`'s. The repository token for the checkout is delivered the same way as for the cluster Job (a secret file, not an argument).
+
+**Failure modes.**
+
+| Failure | Behaviour |
+| --- | --- |
+| Start timeout (not `Available` in 10 minutes) | Run fails with `start_timeout`; the codespace is deleted. |
+| Quota or spending limit (402, 403, 409 on create/start) | Run fails with `quota`, GitHub's notice shown; nothing is retried; no codespace left. |
+| Stuck codespace (state `Unknown`, `Failed`, or no progress past the deadline) | Deleted, never left to retention; the run fails with `runner_error`. |
+| Command timeout | Process stopped, log and rc collected as far as they go, codespace stopped. |
+| Portal restarts mid-run | The sweep finds `pilot-runner-*` codespaces past their deadline and deletes them. |
+| Delete itself fails | Retried by the sweep; reported on Needs you after 3 tries (an unattended paid resource). |
+
+**What S2 adds** (real Codespaces; needs a GitHub account the owner chooses and a spending limit): the `codespace` target on top of `CodespacesProvider`, the in-codespace command runner (SSH or the codespaces exec endpoint, 🔬), the devcontainer for runner use, the sweep job, and the real-account checklist for this section (start time, idle timer behaviour, costs per minute). Until then only the fake target exists, and the portal never calls GitHub for this.
+
+**Open questions for the owner** (each with the default that is built unless told otherwise):
+
+| ID | Question | Default |
+| --- | --- | --- |
+| R1 | Which GitHub account pays (personal or an org), and what monthly spending limit? | None chosen: S2 is not started. |
+| R2 | Machine type for runners? | The smallest with 4 cores and 8 GB that the account offers. |
+| R3 | Per-run cost cap? | 2 core-hours (4 cores, 30 minutes). |
+| R4 | Idle-delete period? | 30 minutes. |
+| R5 | Which jobs may go to a codespace (all `job-run` work, or only opt-in `--runner codespace`)? | Opt-in only; the cluster stays the default. |
+| R6 | May a runner codespace see the same repository tokens as the cluster Job? | Only the clone token, not the npm token, unless the owner says. |
+
 ## Appendix A. GitHub Copilot CLI findings (superseded scope)
 
 `@github/copilot` 1.0.95 (npm loader + native package, 172 MB on linux-arm64), run in a clean environment with bogus tokens only ✅: token variables in order `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`; none set: "Error: No authentication information found." (exit 1).
