@@ -169,11 +169,16 @@ test('gzip: a JSON answer is compressed when the client accepts gzip, and not ot
   try {
     registerChatAuthz((id) => s.controller.sessionFacts(id));
     const a = app(s, 'owner', true);
-    a.get('/stream', (c) =>
+    a.get('/t/stream', (c) =>
       streamSSE(c, async (stream) => {
         for (let i = 0; i < 50; i++) await stream.writeSSE({ data: `tick ${i} ${'padding '.repeat(10)}` });
       }),
     );
+    // streamSSE also sets Transfer-Encoding, which compress skips by itself; a stream made by hand has only its content type, and the
+    // JSON-only filter is what keeps it plain. A large text answer is not JSON either.
+    const ticks = Array.from({ length: 50 }, (_, i) => `data: tick ${i} ${'padding '.repeat(10)}\n\n`).join('');
+    a.get('/t/raw-stream', () => new Response(new Blob([ticks]).stream(), { headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } }));
+    a.get('/t/text', (c) => c.text(ticks));
 
     const zipped = await a.request(`/${s.id}/events`, { headers: { 'Accept-Encoding': 'gzip, deflate, br' } });
     assert.equal(zipped.status, 200);
@@ -188,10 +193,16 @@ test('gzip: a JSON answer is compressed when the client accepts gzip, and not ot
     assert.equal(plain.headers.get('content-encoding'), null, 'no Accept-Encoding: as it was');
     assert.ok(Array.isArray(((await plain.json()) as { data: unknown }).data));
 
-    const sse = await a.request('/stream', { headers: { 'Accept-Encoding': 'gzip' } });
+    const sse = await a.request('/t/stream', { headers: { 'Accept-Encoding': 'gzip' } });
     assert.match(sse.headers.get('content-type') ?? '', /^text\/event-stream/);
     assert.equal(sse.headers.get('content-encoding'), null, 'an event stream is never compressed');
     assert.match(await sse.text(), /data: tick 49/);
+
+    for (const path of ['/t/raw-stream', '/t/text']) {
+      const res = await a.request(path, { headers: { 'Accept-Encoding': 'gzip' } });
+      assert.equal(res.headers.get('content-encoding'), null, path);
+      assert.equal(await res.text(), ticks, path);
+    }
   } finally {
     await s.done();
   }
