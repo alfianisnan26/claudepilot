@@ -257,11 +257,11 @@ test('the service: a diverged branch is not overwritten and is one Needs you ite
     assert.equal(rev(h.home, pilotDir(h.home), 'refs/heads/main'), mine, 'not overwritten');
     assert.deepEqual(r.repo.upstream?.diverged.map((d) => [d.branch, d.local, d.upstream]), [['main', mine, theirs]]);
 
-    const items = upstreamAttentionSource(() => h.store.db).list(owner, new Date(), 'decide');
+    const items = upstreamAttentionSource(() => h.store.db).list(owner, Date.now(), 'decide');
     assert.equal(items.length, 1);
     assert.deepEqual([items[0]!.kind, items[0]!.id, items[0]!.why, items[0]!.action.path], ['ci_upstream', `${repo.id}/main`, 'question', `/api/ci/repos/${repo.id}/sync`]);
     assert.match(items[0]!.risk, new RegExp(`pilot ${mine.slice(0, 7)} · upstream ${theirs.slice(0, 7)}`));
-    assert.deepEqual(upstreamAttentionSource(() => h.store.db).list({ kind: 'token', userId: 'u_owner', tokenId: 't', scope: 'admin' }, new Date(), 'decide'), [], 'a token never decides');
+    assert.deepEqual(upstreamAttentionSource(() => h.store.db).list({ kind: 'token', userId: 'u_owner', tokenId: 't', scope: 'admin' }, Date.now(), 'decide'), [], 'a token never decides');
 
     // The host now resolves to a private address: refused, kept as the remote's error, and the workspace is never asked to fetch.
     addresses = ['10.1.2.3'];
@@ -273,7 +273,7 @@ test('the service: a diverged branch is not overwritten and is one Needs you ite
     assert.equal(await codeOf(() => h.svc.updateRepo(repo.id, { upstream: { url: 'https://inside.test/x.git' } }, BY)), 'VALIDATION_FAILED');
     // Cleared: it follows nothing, and the item is gone.
     assert.equal((await h.svc.updateRepo(repo.id, { upstream: null }, BY)).upstream, null);
-    assert.deepEqual(upstreamAttentionSource(() => h.store.db).list(owner, new Date(), 'decide'), []);
+    assert.deepEqual(upstreamAttentionSource(() => h.store.db).list(owner, Date.now(), 'decide'), []);
   } finally {
     h.done();
   }
