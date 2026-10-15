@@ -124,7 +124,8 @@ try {
       check(`${tag}: 6h still lists the card, no sideways scroll`, s.tiles >= 5 && noScroll(s));
 
       check(`${tag}: Compare clicks`, await clickLabel(b, 'Compare'));
-      await sleep(1500);
+      await b.waitFor(`/\\bwas [0-9$]/.test(document.body.innerText)`, LOAD_MS, 'was').catch(() => {});
+      await sleep(300);
       s = await m(b);
       check(`${tag}: compare: layout holds, no sideways scroll`, s.tiles >= 5 && noScroll(s) && s.bad.length === 0);
       check(`${tag}: compare shows "was" under the numbers`, s.was > 0, `was=${s.was}`);
