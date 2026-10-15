@@ -14,10 +14,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   prettier/eslint in the Job): ux BLOCKED again (build OK; a `folder` spawn gets no Bash; 5368): waits on T-586 worktree-deps.sh (2ae78a99 impl-t586, sonnet). T-558 e652c44: QA runs its Jobs (5052).
   T-486 ab61f5c: blind review PASS W/ CONDITIONS (5349); decision 5352: 5feb4875 impl-t486-s2d (sonnet) adds the tests; then lead merge + gate.
   T-548 S1 DONE 9b822ba (Jobs green, 5364; d23cb713 ended): QA (sonnet) + blind review (opus, authz) next. eaec4cc5 impl-t591 (sonnet) S1 (plan 5366).
-  T-546 bb7cdb0: 8822ba59 jobs-t546 (sonnet, ticket/T-546-jobs) re-runs the Jobs the restart cut (5143): WAITING. Next lanes as slots free: Backend (T-597, then T-591), Frontend, QA UI (T-576 ux); QA Perf queue: T-561, T-548, T-486, T-546.
+  LANE 5f8f392b "ClaudePilot Backend" (lane-backend, sonnet) on T-546 Jobs (ticket/T-546-digest; 8822ba59 ended). Backend queue (coordinator,
+  efficiency order): T-546 -> T-597 -> T-325 -> T-591 S2. Next lanes: Frontend, QA UI (T-576 ux). QA Perf queue: T-561, T-548, T-486, T-546.
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-586 test 3fdc959 (now) -> T-561 QA -> T-486 S2d -> T-546 -> T-591 S1 6853486 -> T-558 QA. quick-check unusable by dontAsk workers: T-586 (mine,
-  coordinator decides); briefs say: its checks in ONE job-run Job. Next free slot: T-546 Jobs, T-558 QA, T-486 review.
+  Cluster: T-586 test 3fdc959 (now) -> T-561 QA -> T-486 S2d -> T-546 -> T-591 S1 6853486 -> T-558 QA. quick-check unusable by dontAsk workers (T-586): its checks in ONE Job.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
 - T-379 3ddbcbc: src/ci 144/144 job-5b4609a6 (4905); lead live proof PASS job-c71c5bfe (4906); blind review 30dc0f13 PASS WITH
