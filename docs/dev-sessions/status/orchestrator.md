@@ -11,7 +11,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf): queue T-548 -> T-586 -> T-561 S1c -> T-486 S2d.
   T-561: S1b QA PASS WITH GAPS (5440, symlink holes A, B) -> S1c DONE 0beae29 (5498/5501; 77c04fc0 ended) -> QA Perf re-probe -> lead
-  gate + merge. LANE bbbe2b38 "ClaudePilot QA UI" (lane-qa-ui, sonnet, qa/T-600-ui, deps linked by lead) on T-600 FE ux. T-576 DONE 2427d98 (Jobs green; no
+  gate + merge. LANE bbbe2b38 "ClaudePilot QA UI" (lane-qa-ui, sonnet, qa/T-600-ui, deps linked by lead) on T-600 FE ux: browser tools refused (5503 PASS
+  WITH GAPS; T-525 5505 to coordinator); default: headless tools/qa/*.mjs. T-576 DONE 2427d98 (Jobs green; no
   prettier/eslint in the Job): ux BLOCKED (a `folder` spawn gets no Bash; 5368) until T-586 merges. T-586 DONE 1d27635 (Job 6be903ec rc 0, mutation
   caught, 5419; 2ae78a99 ended): review PASS W/ COND (5456) -> S2 fc9ce1d DONE (5464; 813992cf ended) -> premerge
   wip/main-5b66aa0, gate GREEN gate-5b66aa0-44ef (suite 559 s, peak 2172Mi) -> QA Perf after T-548 -> ff integration (no deploy). T-558 e652c44: QA runs its Jobs (5052).
@@ -22,7 +23,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); T-556 PLANNED 5497 (one "Upstream" dialog, 4 fields: no upstream UI exists);
   builds after T-486 merges + T-595. Next slot: blind review T-548 (opus, authz); QA UI then T-576 ux. 5th slot: eaec4cc5 T-591 S1.
   Jobs (all GO 15:29, job-run queues): T-586 S2 fc9ce1d, T-600 FE 7d19c94 (Job 1 FAIL typecheck -> `headline`, 5459), T-546, T-548 QA, T-591 S1. Then T-561 S1c, T-558 QA. quick-check: its checks in ONE Job (T-586); no prettier/eslint in Jobs (T-612).
-- T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
 - T-379 3ddbcbc: src/ci 144/144 job-5b4609a6 (4905); lead live proof PASS job-c71c5bfe (4906); blind review 30dc0f13 PASS WITH
   CONDITIONS (4938) -> S2 3f11b28 PASS src/ci 144/144 job-83899ca9 (4948; d39c25c1 ended) -> merge after T-401.
