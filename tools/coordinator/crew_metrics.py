@@ -62,6 +62,7 @@ def main():
     snap['tickets'] = ((t.get('counts') or {}).get('byStatus'))
     if lead:
         ev = api(f"/api/chat/sessions/{lead['id']}/events?limit=400") or []
+        if isinstance(ev, dict): ev = ev.get('events') or []  # T-376: with ?limit the route answers a page {events, more, before}
         reports = [e for e in ev if e.get('actor') == 'portal:crew' and (not since or (e.get('at') or '') >= since)]
         snap['lead_reports'] = len(reports)
     try:

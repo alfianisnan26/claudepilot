@@ -82,6 +82,8 @@ export const SETTING_KEYS = {
   agentsBashOutputMax: 'agents.bashOutputMax',
   /** Agents (T-285): tokens of an MCP result Claude keeps (MAX_MCP_OUTPUT_TOKENS). */
   agentsMcpOutputMax: 'agents.mcpOutputMax',
+  /** Agents (2026-10-15 cost audit): the context size Claude Code compacts against (CLAUDE_CODE_AUTO_COMPACT_WINDOW). */
+  agentsAutoCompactWindow: 'agents.autoCompactWindow',
 } as const;
 
 /**

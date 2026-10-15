@@ -6,8 +6,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { afterEach, test } from 'node:test';
+import type { Workspace } from '@portal/contracts';
 import { clearResolvers, declaredToolPolicies } from '../authz/seam.js';
-import { declarePortalMcpPolicies } from '../portalmcp/authz.js';
+import { NO_PARENT, declarePortalMcpPolicies } from '../portalmcp/authz.js';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { registerSessionTools } from '../portalmcp/tools/sessions.js';
@@ -22,6 +23,13 @@ const CAPS: AgentCaps = { maxDepth: 1, maxChildren: 5, spawnsPerHour: 20, messag
 
 afterEach(() => clearResolvers());
 
+/** T-349: two workspaces as the manager lists them, with a stable id and a label each (the stable id built at runtime). */
+const WS1_STABLE = `ws_${'a1b2c3'.repeat(2)}`;
+const WORKSPACES = [
+  { id: 'docker/ws1', stableId: WS1_STABLE, target: 'docker', name: 'ws1', label: 'Team One' },
+  { id: 'docker/ws2', stableId: `ws_${'d4e5f6'.repeat(2)}`, target: 'docker', name: 'ws2', label: 'Team Two' },
+] as unknown as Workspace[];
+
 async function rig() {
   const registry = new ToolRegistry();
   const h = await portalMcpHarness({ registry });
@@ -30,7 +38,7 @@ async function rig() {
   s.controller.crewSettleMs = 20;
   s.controller.crewReportMs = 60;
   registerChatTools(s.controller, registry);
-  registerSessionTools({ store: s.store, chat: s.controller }, registry);
+  registerSessionTools({ store: s.store, chat: s.controller, workspaces: { list: async () => WORKSPACES, resolve: () => null } }, registry);
   h.module.settings.update({ sessionControl: true });
   h.alive.add(s.id);
   const admin = h.token('admin');
@@ -132,6 +140,76 @@ test('session_start with parent: the parent’s limits hold (its workers at once
     const deeper = await r.start({ parent: workerId });
     assert.equal(deeper.result?.structuredContent.error.code, SESSION_CAP, 'depth');
     assert.equal(r.s.controller.list({}).length, count, 'nothing more was started');
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-349: a parent that ends after the tool checked it and before the worker is written gets no worker, with the same not found', async () => {
+  const r = await rig();
+  try {
+    const lead = await r.s.controller.create({ workspaceId: 'docker/ws1', title: 'Lead' });
+    await until(() => r.s.controller.get(lead.id)?.state === 'idle');
+    const count = r.s.controller.list({}).length;
+    const unknown = (await r.start({ parent: randomUUID() })).result!.structuredContent.error as { code: string; message: string };
+    // The step inside create after the tool's live check (the host install) ends the lead, once.
+    let ended = false;
+    r.s.controller.installHost = async () => {
+      if (ended) return;
+      ended = true;
+      await r.s.controller.end(lead.id);
+    };
+    const res = await r.start({ parent: lead.id, prompt: 'Split the router.' });
+    assert.equal(ended, true, 'the parent ended in between');
+    assert.equal(res.result?.isError, true, JSON.stringify(res.raw));
+    assert.deepEqual(res.result!.structuredContent.error, unknown, 'the same not found as a missing parent');
+    assert.equal(r.s.controller.list({}).length, count, 'no worker was made');
+    assert.deepEqual(r.s.controller.list({ parentId: lead.id }), []);
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-349: the first prompt of a worker session_start makes is framed as from its parent session, as session_spawn frames it', async () => {
+  const r = await rig();
+  try {
+    const started = await r.start({ parent: r.s.id, title: 'Slice two', prompt: 'Write the tests for the router.' });
+    assert.equal(started.result?.isError, undefined, JSON.stringify(started.raw));
+    const id = started.result!.structuredContent.session.id as string;
+    const worker = r.s.controller.get(id)!;
+    const opening = r.s.controller.history(id).find((e) => e.kind === 'user')!;
+    assert.equal(opening.actor, `session:${r.s.id}`, 'sent as from the lead');
+    await until(() => r.s.ws.sends.some((x) => x.args[1] === worker.claudeSessionId && x.line.includes('Write the tests for the router.')));
+    const firstLine = r.s.ws.sends.find((x) => x.args[1] === worker.claudeSessionId && x.line.includes('Write the tests for the router.'))!.line;
+    assert.match(firstLine, /Portal message from your parent session/);
+    assert.doesNotMatch(firstLine, /an MCP client/);
+    // Who started it is still the token, on the session.
+    assert.equal(worker.startedBy, `portal-mcp:${r.admin.id}`);
+    // Without a parent the prompt stays the MCP client's.
+    const plain = await r.start({ title: 'Solo', prompt: 'Read the plan.' });
+    const soloId = plain.result!.structuredContent.session.id as string;
+    assert.equal(r.s.controller.history(soloId).find((e) => e.kind === 'user')!.actor, `portal-mcp:${r.admin.id}`);
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-349: session_start takes the workspace in the forms the workspace tools take (ws_ id, label), and an unknown one is not found', async () => {
+  const r = await rig();
+  try {
+    for (const form of [WS1_STABLE, 'docker/Team One', 'Team One', 'ws1']) {
+      const res = await r.start({ workspace_id: form, parent: r.s.id });
+      assert.equal(res.result?.isError, undefined, `${form}: ${JSON.stringify(res.raw)}`);
+      const id = res.result!.structuredContent.session.id as string;
+      assert.equal(r.s.controller.get(id)!.workspaceId, 'docker/ws1', form);
+      await until(() => r.s.controller.get(id)?.state === 'idle');
+      await r.s.controller.end(id);
+    }
+    const count = r.s.controller.list({}).length;
+    assert.equal((await r.start({ workspace_id: 'docker/nope' })).result?.structuredContent.error.code, 'NOT_FOUND');
+    // The parent is matched against the resolved workspace: the lead of ws1 is not a parent in ws2, whichever form names ws2.
+    assert.equal((await r.start({ workspace_id: 'Team Two', parent: r.s.id })).result?.structuredContent.error.message, NO_PARENT);
+    assert.equal(r.s.controller.list({}).length, count, 'nothing was started');
   } finally {
     await r.done();
   }

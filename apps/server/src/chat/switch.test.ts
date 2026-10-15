@@ -139,7 +139,7 @@ test('switch (T-38): a folder trusted before whose settings now hold permission 
     const work = await withDest(s);
     const chat = new ChatStore(s.store);
     const [h1, h2] = ['1'.repeat(64), '2'.repeat(64)];
-    const rules = (extra: Record<string, unknown> = {}) => JSON.stringify({ ...EMPTY_SCAN, hash: h2, files: ['.claude/settings.json'], allowRules: 3, rulesOnly: true, ...extra });
+    const rules = (extra: Record<string, unknown> = {}) => JSON.stringify({ ...EMPTY_SCAN, hash: h2, files: ['.claude/settings.json'], allowRules: 3, rulesOnly: true, broadAllow: false, ...extra });
     chat.saveFolderTrust('docker/ws1', '/home/node', h1, {}, 'ui');
     const skip = { handoff: 'skip' as const };
 
@@ -155,6 +155,11 @@ test('switch (T-38): a folder trusted before whose settings now hold permission 
     // A host older than T-38 says nothing about rules: refused.
     s.ws.scanOut = JSON.stringify({ ...JSON.parse(rules()), rulesOnly: undefined });
     assert.equal(await code(s.controller.switchClaude(s.id, work.id, skip)), CHAT_FOLDER_UNTRUSTED);
+    // An allow rule that runs any command (T-366), or a host older than T-366 that doesn't say: refused.
+    s.ws.scanOut = rules({ broadAllow: true });
+    assert.equal(await code(s.controller.switchClaude(s.id, work.id, skip)), CHAT_FOLDER_UNTRUSTED);
+    s.ws.scanOut = rules({ broadAllow: undefined });
+    assert.equal(await code(s.controller.switchClaude(s.id, work.id, skip)), CHAT_FOLDER_UNTRUSTED);
     assert.equal(chat.folderTrust('docker/ws1', '/home/node')!.hash, h1);
     assert.equal(s.controller.audit({ kind: 'trust.auto' }).length, 0);
     assert.equal(s.controller.get(s.id)!.claudeName, 'Default');
@@ -169,7 +174,7 @@ test('switch (T-38): a folder trusted before whose settings now hold permission 
     const rows = s.controller.audit({ kind: 'trust.auto' });
     assert.equal(rows.length, 1);
     assert.deepEqual([rows[0]!.severity, rows[0]!.actor, rows[0]!.workspaceId], ['medium', 'portal', 'docker/ws1']);
-    assert.deepEqual(rows[0]!.detail, { folder: '/home/node', hash: h2, before: h1, files: ['.claude/settings.json'], allowRules: 3 });
+    assert.deepEqual(rows[0]!.detail, { reason: 'changed', folder: '/home/node', hash: h2, before: h1, files: ['.claude/settings.json'], allowRules: 3 });
   } finally {
     await s.done();
   }

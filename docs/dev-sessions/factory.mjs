@@ -43,10 +43,12 @@
 //   watchBudget(t, deps)        the started slice, from ONE session_get each round (T-342), three measures against the size's budgets:
 //                               wall = minutes since the session's created_at (SIZE_WALL_MIN, the floor), events = the transcript's sequence
 //                               number next_seq (SIZE_EVENTS; it grows with every model and tool call WHILE the turn runs), cost = cost_usd
-//                               (SIZE_COST_USD; the portal sets it only when a turn ends, chat/protocol.ts:640-676, so it is the after-turn
-//                               check). All numbers PROVISIONAL (see there). At 150 percent of ANY one it is interrupted (mid-turn too), told
-//                               to commit WIP and report, and the dispatch ends (FACTORY END ... stopped: budget <measure>). The request
-//                               budget (SIZE_BUDGET) is not measured by the engine: it plans a run (--budget) and is the agent's own count.
+//                               (SIZE_COST_USD; while a turn runs session_get adds the turn's live estimate, cost_basis `estimate`, T-343, so
+//                               it moves mid-turn too; `unavailable` is the reported total only: the turn's model has no price). All numbers
+//                               PROVISIONAL (see there). At 150 percent of ANY one it is interrupted (mid-turn too), told to commit WIP and
+//                               report, and the dispatch ends (FACTORY END ... stopped: budget <measure>); a session still not idle
+//                               STOP_GRACE_MIN after that END is ended (session_end, one EXCEPTION line). The request budget (SIZE_BUDGET) is
+//                               not measured by the engine: it plans a run (--budget) and is the agent's own count.
 //   heldOn(t)                   no unbounded re-dispatch (T-342): a ticket whose last dispatch ended `stopped: ...` (a budget stop) or
 //                               `failed: ...` (worktree or start) is HELD: never dispatched again by the engine, one EXCEPTION line per round
 //                               and no comment (the END is the one comment of that state change), until a `ui` writer (the owner, or
@@ -96,8 +98,9 @@ export const SIZE_BUDGET = Object.freeze({ S: 25, M: 60, L: 120 });
  */
 export const SIZE_COST_USD = Object.freeze({ S: 4, M: 10, L: 20 });
 /**
- * The MID-TURN budgets (T-342 B3): the portal sets cost_usd only when a turn ends (chat/protocol.ts:640-676, store.ts:797-799), and a dontAsk
- * worker does its whole brief in ONE turn, so cost cannot stop it in time. Two measures that do move while a turn runs:
+ * The MID-TURN budgets (T-342 B3): the portal stores cost_usd only when a turn ends (chat/protocol.ts:640-676, store.ts:797-799), and a
+ * dontAsk worker does its whole brief in ONE turn; session_get now adds the running turn's estimate (T-343, cost_basis `estimate`), but a
+ * model without a price gives none (`unavailable`). Two measures that move while a turn runs whatever the price:
  *   SIZE_WALL_MIN  minutes since the session was created (session_get created_at, portalmcp/tools/sessions.ts:42) on the engine's clock:
  *                  the floor. PROVISIONAL: the hours of the ESTIMATE sizes (S about 1 h, M about 3 h, L about 6 h), not measured.
  *   SIZE_EVENTS    the transcript's sequence number (session_get max_events 1 -> next_seq, sessions.ts:136-151): the portal stores every
@@ -105,12 +108,18 @@ export const SIZE_COST_USD = Object.freeze({ S: 4, M: 10, L: 20 });
  *                  per stored event (store.ts:668-683), so it grows with each model call and tool call of the turn, sub-agents included.
  *                  PROVISIONAL: SIZE_BUDGET requests times EVENTS_PER_REQUEST (8, a guess: a call's text, thinking, tool_use and result
  *                  rows with headroom), not measured. Replace both with the medians of the first ten --start slices per size, named here.
- * Each stops at STOP_FACTOR of its budget, like the cost (which stays as the after-the-turn check).
+ * Each stops at STOP_FACTOR of its budget, like the cost.
  */
 export const SIZE_WALL_MIN = Object.freeze({ S: 60, M: 180, L: 360 });
 export const EVENTS_PER_REQUEST = 8;
 export const SIZE_EVENTS = Object.freeze({ S: 25 * EVENTS_PER_REQUEST, M: 60 * EVENTS_PER_REQUEST, L: 120 * EVENTS_PER_REQUEST });
 export const STOP_FACTOR = 1.5;
+/**
+ * T-352 m1: minutes a budget-stopped session gets for the "commit WIP and report" turn the FACTORY STOP message starts. After them a
+ * session still not idle (working, waiting, starting, interrupted) is ended with session_end (one EXCEPTION line, no comment). 10 minutes:
+ * a commit, a push and a 25-line report; PROVISIONAL like the budgets.
+ */
+export const STOP_GRACE_MIN = 10;
 export const DEFAULT_WIP = 5;
 export const DEFAULT_RESUME_MAX_AGE_MIN = 360;
 /** The version a DISPATCH marker carries (v=): --start starts only a dispatch this engine version wrote. */
@@ -252,26 +261,31 @@ export function costBudget(size, usd = 0) {
 
 /**
  * What watchBudget measures of a started slice, each against its size's budget and stopping at STOP_FACTOR of it: wall (minutes since the
- * session was created), events (the transcript's sequence number), cost (cost_usd, set only at a turn's end). A measure that is not a
- * number is unknown and left out (unknown is a state, never a guess). Returns [{ name, unit, used, budget, stopAt, state: ok|over|stop }].
+ * session was created), events (the transcript's sequence number), cost (cost_usd: with costBasis `estimate` it includes the running
+ * turn, T-343). A measure that is not a number is unknown and left out (unknown is a state, never a guess). Returns [{ name, unit, used,
+ * budget, stopAt, state: ok|over|stop, basis? (cost: estimate|unavailable) }].
  */
-export function sliceMeasures(size, { wallMin, events, costUsd } = {}) {
+export function sliceMeasures(size, { wallMin, events, costUsd, costBasis } = {}) {
   if (!(size in SIZE_BUDGET)) throw new Error(`no budget for size ${size} (XL is split first)`);
   const out = [];
-  const add = (name, unit, used, budget) => {
+  const add = (name, unit, used, budget, extra = {}) => {
     if (!Number.isFinite(used)) return;
     const stopAt = Math.round(budget * STOP_FACTOR * 100) / 100;
-    out.push({ name, unit, used, budget, stopAt, state: used >= stopAt ? 'stop' : used > budget ? 'over' : 'ok' });
+    out.push({ name, unit, used, budget, stopAt, state: used >= stopAt ? 'stop' : used > budget ? 'over' : 'ok', ...extra });
   };
   add('wall', 'min', wallMin, SIZE_WALL_MIN[size]);
   add('events', 'events', events, SIZE_EVENTS[size]);
-  add('cost', 'USD', costUsd, SIZE_COST_USD[size]);
+  // T-343: session_get's cost_basis says how cost_usd is known (portalmcp/tools/common.ts costFields): absent = reported (no turn runs),
+  // `estimate` = the reported total plus the running turn's estimate, `unavailable` = the reported total only (the turn's model has no price).
+  add('cost', 'USD', costUsd, SIZE_COST_USD[size], COST_BASES.has(costBasis) ? { basis: costBasis } : {});
   return out;
 }
-/** `wall 271 of 180 min (stop at 270)`, `cost 15.00 of 10.00 USD (stop at 15.00)`. */
+const COST_BASES = new Set(['estimate', 'unavailable']);
+const BASIS_WORDS = Object.freeze({ estimate: 'estimate, the running turn included', unavailable: 'reported only, the running turn unpriced' });
+/** `wall 271 of 180 min (stop at 270)`, `cost 15.00 of 10.00 USD (stop at 15.00)`, `cost 16.00 of 10.00 USD (stop at 15.00; estimate, ...)`. */
 export function formatMeasure(m) {
   const v = (x) => (m.unit === 'USD' ? Number(x).toFixed(2) : String(x));
-  return `${m.name} ${v(m.used)} of ${v(m.budget)} ${m.unit} (stop at ${v(m.stopAt)})`;
+  return `${m.name} ${v(m.used)} of ${v(m.budget)} ${m.unit} (stop at ${v(m.stopAt)}${m.basis ? `; ${BASIS_WORDS[m.basis]}` : ''})`;
 }
 
 /**
@@ -329,7 +343,7 @@ export function intake(rawTickets, opts = {}) {
       const age = ageMin(d.at, opts.now);
       if (age !== null && age > staleMin) exceptions.push({ ticket: t.id, dispatchId: d.id, reason: `stale dispatch ${d.id}: open ${age} min (limit ${staleMin}), no END and no ACTUAL` });
     }
-    // A ranked open ticket whose last dispatch was stopped or failed is held for a person (T-342): an EXCEPTION line each round (a line, not
+    // A ranked open ticket whose last dispatch was stopped or failed is held until a `ui` writer's FACTORY RETRY (T-342): an EXCEPTION line each round (a line, not
     // a comment: the END already is the one comment of that state change), never a new dispatch.
     const held = t.status === 'open' && rankOf(t) ? heldOn(t) : null;
     if (held) exceptions.push({ ticket: t.id, dispatchId: held.id, reason: holdReason(held) });
@@ -841,7 +855,11 @@ export async function startSlice(d, { portal, mcp, workspace, folder = null, loc
  * the budgets of the dispatch's size (sliceMeasures; provisional numbers, see SIZE_WALL_MIN):
  *   wall    minutes from the session's created_at to `now` (the engine's clock): moves mid-turn, the floor;
  *   events  next_seq, the transcript's sequence number: grows with every model and tool call while the turn runs;
- *   cost    cost_usd: the portal sets it only when a turn ends (protocol.ts:640-676), so it is the after-the-turn check only.
+ *   cost    cost_usd: the reported total, plus the running turn's live estimate when cost_basis is `estimate` (T-343: it moves
+ *           mid-turn); `unavailable` (a model without a price) is the reported total only. The basis is named in the measure's line.
+ * After a budget stop (the latest dispatch ended `stopped: budget ...` with a START): within STOP_GRACE_MIN (graceMin) of that END nothing
+ * ('grace'); after it one session_get, and a session still not idle or ended is ended with session_end and one EXCEPTION line, no comment
+ * ('ended-after-stop'); an ended session then reads 'ended', so it is ended once (T-352 m1).
  * Under 150 percent of every measure nothing is done ('ok', or 'over' past 100 percent of one: a line); when ANY measure is at 150 percent
  * the engine stops it, mid-turn too: session_interrupt (it stops the running turn), the FACTORY STOP message (commit WIP, report), FACTORY
  * END <id> stopped: budget <measure>, and one line to reportTo. Never continues silently. No measure in the answer is 'none' (unknown is a
@@ -849,13 +867,14 @@ export async function startSlice(d, { portal, mcp, workspace, folder = null, loc
  * another error is an exception line ('error'). Returns { action: none|ok|over|stopped|ended|gone|error, measures?, over? (lines), used?
  * (USD), exceptions }.
  */
-export async function watchBudget(rawTicket, { portal, mcp, reportTo = null, worktrees, models, now = null }) {
+export async function watchBudget(rawTicket, { portal, mcp, reportTo = null, worktrees, models, now = null, graceMin = STOP_GRACE_MIN }) {
   const t = normalizeTicket(rawTicket);
   const exceptions = [];
   if (CLOSED.has(t.status)) return { action: 'none', exceptions };
   const open = openDispatches(t);
   const last = open[open.length - 1];
-  const sid = last ? startsOf(t).get(last.id) : null;
+  if (!last) return endAfterStop(t, { mcp, now, graceMin, exceptions });
+  const sid = startsOf(t).get(last.id);
   if (!sid) return { action: 'none', exceptions };
   let d;
   try {
@@ -885,7 +904,7 @@ export async function watchBudget(rawTicket, { portal, mcp, reportTo = null, wor
   const created = Date.parse(String(s?.created_at ?? ''));
   const wallMin = Number.isFinite(now) && Number.isFinite(created) ? Math.floor((now - created) / 60000) : NaN;
   // wall and events move while the turn runs (the stop that acts mid-turn); cost only after it (T-342 B3)
-  const measures = sliceMeasures(d.size, { wallMin, events: num(got?.next_seq), costUsd: num(s?.cost_usd) });
+  const measures = sliceMeasures(d.size, { wallMin, events: num(got?.next_seq), costUsd: num(s?.cost_usd), costBasis: s?.cost_basis });
   const used = measures.find((m) => m.name === 'cost')?.used ?? null;
   if (!measures.length) return { action: 'none', exceptions };
   const hit = measures.find((m) => m.state === 'stop');
@@ -899,6 +918,55 @@ export async function watchBudget(rawTicket, { portal, mcp, reportTo = null, wor
   exceptions.push({ ticket: t.id, dispatchId: d.dispatchId, reason });
   if (reportTo) await mcp.call('session_send', { id: reportTo, text: `FACTORY: ${reason}.`, priority: 'later' }).catch(() => undefined);
   return { action: 'stopped', measures, used, exceptions };
+}
+
+const BUDGET_STOP = /^stopped: budget\b/;
+/**
+ * The session of a ticket's latest dispatch when that dispatch ended with a budget stop and had a START, with the time of its END:
+ * { dispatchId, sessionId, endedAt } or null. What the round keeps in the watch after the stop (T-352 m1).
+ */
+export function stoppedSession(rawTicket) {
+  const t = normalizeTicket(rawTicket);
+  const all = dispatchesOf(t);
+  const d = all[all.length - 1];
+  if (!d?.ended || !BUDGET_STOP.test(d.ended)) return null;
+  const sessionId = startsOf(t).get(d.id);
+  if (!sessionId) return null;
+  const end = engineLines(t).find((c) => {
+    const m = /^FACTORY END (\S+)(?: run=(\S+))?/.exec(c.first);
+    return m && m[1] === d.id && (!m[2] || m[2] === d.run);
+  });
+  return { dispatchId: d.id, sessionId, endedAt: end?.at ?? null };
+}
+
+/** watchBudget after a budget stop: end a session still busy STOP_GRACE_MIN after the stop, once (see watchBudget). */
+async function endAfterStop(t, { mcp, now, graceMin, exceptions }) {
+  const stopped = stoppedSession(t);
+  if (!stopped) return { action: 'none', exceptions };
+  const { dispatchId, sessionId: sid } = stopped;
+  const endAt = Date.parse(String(stopped.endedAt ?? ''));
+  if (!Number.isFinite(now) || !Number.isFinite(endAt)) return { action: 'none', exceptions }; // no clock: unknown, never guessed
+  const since = Math.floor((now - endAt) / 60000);
+  if (now - endAt < graceMin * 60000) return { action: 'grace', exceptions };
+  let got;
+  try {
+    got = await mcp.call('session_get', { id: sid, max_events: 1 });
+  } catch (e) {
+    if (e?.code === 'NOT_FOUND') return { action: 'none', exceptions }; // gone: nothing left to end
+    exceptions.push({ ticket: t.id, dispatchId, reason: `stopped session ${sid} not checked this round: ${String(e?.message ?? e).split('\n')[0].slice(0, 160)}` });
+    return { action: 'error', exceptions };
+  }
+  const state = got?.session?.state;
+  if (!state || state === 'ended' || state === 'idle') return { action: state === 'ended' ? 'ended' : 'none', exceptions };
+  // A session_end that fails never throws out of the watch (T-342 N1): one line, not marked ended, and next round tries again.
+  try {
+    await mcp.call('session_end', { id: sid });
+  } catch (e) {
+    exceptions.push({ ticket: t.id, dispatchId, reason: `stopped session ${sid} not ended this round: ${String(e?.message ?? e).split('\n')[0].slice(0, 160)}` });
+    return { action: 'error', exceptions };
+  }
+  exceptions.push({ ticket: t.id, dispatchId, reason: `stopped session ${sid} was still ${String(state).slice(0, 20)} ${since} min after its budget stop (grace ${graceMin} min): ended` });
+  return { action: 'ended-after-stop', exceptions };
 }
 
 /* ---------- Resume on a CI event (pure) ---------- */

@@ -21,6 +21,9 @@
 //   7. T-259 slice 2: a track whose newest chat has Keep going ON is the portal's (it nudges, wakes, recovers and starts it again itself,
 //      inside the cluster): this script leaves that track alone, so the two never both start a chat. It still keeps Bypass on such a chat
 //      (the portal does not: the lease is the owner's open decision on T-256) and still answers for the tracks without Keep going.
+//   8. T-400 (three duplicate leads during the T-365 outage): a round whose /healthz or session list fails decides nothing, and after one no
+//      lead is taken for gone until STEADY_ROUNDS good rounds and HEALTH_QUIET_MIN minutes; a live, recent chat of the track is its lead
+//      (adopted before a newer ended one, never started beside); the MOVED text follows only a move this process saw itself.
 // Stop it: touch ~/.claudepilot/dev-sessions/STOP (checked every round), or kill the process by PID. State: ~/.claudepilot/dev-sessions/state.json.
 // Never logs the code, a cookie or a token.
 
@@ -60,7 +63,7 @@ const TRACKS = [
     folder: KONFERSI,
     claudes: ['alfian.isnan', 'hasyim', 'satria', 'one.claude', 'two.claude', 'sekar'],
     kickoff: (again, reason) =>
-      `You are the Konfersi lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live function sessions are now yours: session_family)` : ''}, and the lead of its crew (D-52). You plan, route, merge and deploy to stg; you never implement or verify yourself. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner is asked only for REQUIRED items (production, uat, secrets and permissions, billing, legal, destructive data: D-51) as one line on T-93. Read first: ~/work/claudepilot/docs/dev-sessions/CHARTER.md and DECISIONS.md (D-47, D-49, D-51, D-52 bind you), ~/work/claudepilot/docs/kit/skills/orchestration/SKILL.md (the crew rules), your pilot tickets (ticket_list, tag konfersi-migration; status ticket T-84), docs/agentic/OPERATING-MODEL.md and RULES.md in ~/work/agentic-worktrees/orch-charter, git worktree list in ~/work/agentic-worktrees. The crew: one dedicated worker session per FUNCTION, spawned with session_spawn (claude auto, mode dontAsk, report idle, role = the function's persona): konfersi-web (owner:39), konfersi-core (owner:d2), konfersi-ai (owner:fb), konfersi-metocean (owner:metocean), and the QA sessions konfersi-qa (qp: data, performance, cost, security) and konfersi-qa-ui (b9: UI, UX, journeys). Strict: every ticket carries one owner label and goes only to that function's session; a function never edits another function's area; QA never authors and verifies every delivery before you merge; reuse a live function session for its next ticket (session_message), end it when its function has no work (live cap 12 in the workspace, 6 workers for you). First, in order: (1) give ~/work/konfersi-universe a .claude/settings.json allow list in D-49's shape (Edit and Write under ~/work/konfersi-universe/**, ~/work/konfersi-universe.worktrees/** and ~/work/agentic-worktrees/**; git status, diff, log, add, commit, fetch, grep, worktree, push of work branches; the modules' test and build commands; deny pushes to stg and main, force pushes and anything production or uat), commit it to a work branch through the normal flow, and check that the portal trusts the folder; (2) prove the job once: one konfersi-qa worker reads a ticket, runs one module's tests and comments its verdict; fix what it could not do before you dispatch more; (3) refresh docs/agentic/OPERATING-MODEL.md so its roles name these sessions; (4) then dispatch by owner label. Heavy jobs through ~/work/claudepilot/scripts/job-run.sh, one at a time in the pod; stg only; secrets by name only, never printed; commits with Ticket, Pilot-Session and Pilot-Agent trailers; status on T-84 every ~2 h.`,
+      `You are the Konfersi lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live function sessions are now yours: session_family)` : ''}, and the lead of its crew (D-52). You plan, route, merge and deploy to stg; you never implement or verify yourself. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner's ONLY standing action is Konfersi production (D-62): never assign a ticket to the owner or ask him anything else; permissions, secrets within the systems you already use, rule files (propose text; the coordinator lands it, D-60) and stg merges (gated by konfersi-qa's PASS) are the harness's. Production questions go as one line on T-93. Read first: ~/work/claudepilot/docs/dev-sessions/CHARTER.md and DECISIONS.md (D-47, D-49, D-51, D-52, D-60, D-61, D-62 bind you), ~/work/claudepilot/docs/kit/skills/orchestration/SKILL.md (the crew rules), your pilot tickets (ticket_list, tag konfersi-migration; status ticket T-84), docs/agentic/OPERATING-MODEL.md and RULES.md in ~/work/agentic-worktrees/orch-charter, git worktree list in ~/work/agentic-worktrees. The crew: one dedicated worker session per FUNCTION, spawned with session_spawn (claude auto, mode dontAsk, report idle, role = the function's persona): konfersi-web (owner:39), konfersi-core (owner:d2), konfersi-ai (owner:fb), konfersi-metocean (owner:metocean), and the QA sessions konfersi-qa (qp: data, performance, cost, security) and konfersi-qa-ui (b9: UI, UX, journeys). Strict: every ticket carries one owner label and goes only to that function's session; a function never edits another function's area; QA never authors and verifies every delivery before you merge; reuse a live function session for its next ticket (session_message), end it when its function has no work (live cap 12 in the workspace, 6 workers for you). First, in order: (1) give ~/work/konfersi-universe a .claude/settings.json allow list in D-49's shape (Edit and Write under ~/work/konfersi-universe/**, ~/work/konfersi-universe.worktrees/** and ~/work/agentic-worktrees/**; git status, diff, log, add, commit, fetch, grep, worktree, push of work branches; the modules' test and build commands; deny pushes to stg and main, force pushes and anything production or uat), commit it to a work branch through the normal flow, and check that the portal trusts the folder; (2) prove the job once: one konfersi-qa worker reads a ticket, runs one module's tests and comments its verdict; fix what it could not do before you dispatch more; (3) refresh docs/agentic/OPERATING-MODEL.md so its roles name these sessions; (4) then dispatch by owner label. Heavy jobs through ~/work/claudepilot/scripts/job-run.sh, one at a time in the pod; stg only; secrets by name only, never printed; commits with Ticket, Pilot-Session and Pilot-Agent trailers; status on T-84 every ~2 h.`,
     nudge: 'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag konfersi-migration) and your crew (session_family): give each function session with work its next ticket of its owner label, send every delivery to konfersi-qa or konfersi-qa-ui before you merge, end the function sessions with no work. If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
     wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your pilot tickets (tag konfersi-migration), your crew (session_family), git worktree list in ~/work/agentic-worktrees, and carry on. Nobody is here to answer questions.`,
   },
@@ -71,7 +74,7 @@ const TRACKS = [
     folder: EVENT,
     claudes: ['rossi', 'sekar', 'regitha', 'satria', 'one.claude', 'two.claude'],
     kickoff: (again, reason) =>
-      `You are the Event lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live function sessions are now yours: session_family)` : ''}, and the lead of its crew (D-52). You plan, route, merge and deploy to stg; you never implement or verify yourself. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner is asked only for REQUIRED items (production, uat, secrets and permissions, billing, legal, destructive data: D-51) as lines on the checklist ticket T-156. Read first: ~/work/claudepilot/docs/dev-sessions/CHARTER.md and DECISIONS.md (D-35, D-36, D-37, D-47, D-49, D-51, D-52 bind you), ~/work/claudepilot/docs/kit/skills/orchestration/SKILL.md (the crew rules), your pilot tickets (ticket_list, tag event-program; status ticket T-150; T-155 issue import, T-151 stg deploy, T-157 Builder as a full MCP, T-152 E2E QA, T-153 AI re-scope, T-154 autonomy), and in ~/work/event (isnanme/event; integration line stg, main and master move only by a person; work in worktrees under ~/work/event.worktrees): docs/product, docs/contracts, and docs/kb and docs/deploy.md where they exist on stg. The crew: one dedicated worker session per FUNCTION, spawned with session_spawn (claude auto, mode dontAsk, report idle, worktree for builders, role = the function's persona): event-builder (owner:builder), event-web (owner:web), event-api (owner:api), event-devops (owner:devops), and the QA session event-qa. Strict: every ticket carries one owner label and goes only to that function's session; a function never edits another function's area; event-qa never authors and verifies every delivery before you merge; reuse a live function session for its next ticket (session_message), end it when its function has no work (live cap 12 in the workspace, 5 workers for you). First, in order: (1) widen ~/work/event/.claude/settings.json to D-49's shape (Edit and Write under ~/work/event/** and ~/work/event.worktrees/**; git status, diff, log, add, commit, fetch, grep, worktree, push of work branches; the repo's test and build commands; deny pushes to stg, main and master, force pushes and anything production), through the normal flow, and check that the portal trusts the folder; (2) write docs/agentic/OPERATING-MODEL.md in the Event repo: the functions, their areas and labels, QA independence, the flow from ticket to stg; label the open tickets; (3) prove the job once: one event-qa worker reads a ticket, runs the repo's tests and comments its verdict; fix what it could not do before you dispatch more; (4) then dispatch by owner label. Heavy jobs (npm ci, typecheck, tests, builds, Playwright, Lighthouse) through ~/work/claudepilot/scripts/job-run.sh, one at a time in the pod; stg only; secrets arrive through the Secrets pool event-stg by name (never printed); commits with Ticket, Pilot-Session and Pilot-Agent trailers, unsigned; status on T-150 every ~2 h; shared context in the knowledge folder Event.`,
+      `You are the Event lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live function sessions are now yours: session_family)` : ''}, and the lead of its crew (D-52). You plan, route, merge and deploy to stg; you never implement or verify yourself. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner's only standing action is Konfersi production (D-62): never assign a ticket to the owner or ask him anything; permissions, secrets within the systems you already use, folder trust and rule files (propose text; the coordinator lands it, D-60) are the harness's: put them on a ticket for the coordinator. Event production (main, master) is the owner's only if it ever comes up. Read first: ~/work/claudepilot/docs/dev-sessions/CHARTER.md and DECISIONS.md (D-35, D-36, D-37, D-47, D-49, D-51, D-52, D-57, D-60, D-61, D-62 bind you), ~/work/claudepilot/docs/kit/skills/orchestration/SKILL.md (the crew rules), your pilot tickets (ticket_list, tag event-program; status ticket T-150; T-155 issue import, T-151 stg deploy, T-157 Builder as a full MCP, T-152 E2E QA, T-153 AI re-scope, T-154 autonomy), and in ~/work/event (isnanme/event; integration line stg, main and master move only by a person; work in worktrees under ~/work/event.worktrees): docs/product, docs/contracts, and docs/kb and docs/deploy.md where they exist on stg. The crew: one dedicated worker session per FUNCTION, spawned with session_spawn (claude auto, mode dontAsk, report idle, worktree for builders, role = the function's persona): event-builder (owner:builder), event-web (owner:web), event-api (owner:api), event-devops (owner:devops), and the QA session event-qa. Strict: every ticket carries one owner label and goes only to that function's session; a function never edits another function's area; event-qa never authors and verifies every delivery before you merge; reuse a live function session for its next ticket (session_message), end it when its function has no work (live cap 12 in the workspace, 5 workers for you). First, in order: (1) widen ~/work/event/.claude/settings.json to D-49's shape (Edit and Write under ~/work/event/** and ~/work/event.worktrees/**; git status, diff, log, add, commit, fetch, grep, worktree, push of work branches; the repo's test and build commands; deny pushes to stg, main and master, force pushes and anything production), through the normal flow, and check that the portal trusts the folder; (2) write docs/agentic/OPERATING-MODEL.md in the Event repo: the functions, their areas and labels, QA independence, the flow from ticket to stg; label the open tickets; (3) prove the job once: one event-qa worker reads a ticket, runs the repo's tests and comments its verdict; fix what it could not do before you dispatch more; (4) then dispatch by owner label. Heavy jobs (npm ci, typecheck, tests, builds, Playwright, Lighthouse) through ~/work/claudepilot/scripts/job-run.sh, one at a time in the pod; stg only; secrets arrive through the Secrets pool event-stg by name (never printed); commits with Ticket, Pilot-Session and Pilot-Agent trailers, unsigned; status on T-150 every ~2 h; shared context in the knowledge folder Event.`,
     nudge: 'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag event-program) and your crew (session_family): give each function session with work its next ticket of its owner label, send every delivery to event-qa before you merge, end the function sessions with no work. If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
     wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your pilot tickets (tag event-program), your crew (session_family), git worktree list and git status in ~/work/event, and carry on. Nobody is here to answer questions.`,
   },
@@ -503,32 +506,82 @@ async function reportDown(t, ts, cause, detail) {
 const downCause = (msg) =>
   /is a Claude on/.test(msg) ? 'missing_claude' : /fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|network/i.test(msg) ? 'network' : /refused|did not turn on|not trusting/i.test(msg) ? 'refused' : 'start_failed';
 
+/**
+ * T-400 item 1: during the portal outage of 2026-10-15 (T-365) the session list answered 502/503, read as an empty list, and a NEW lead was
+ * started for every track while the real ones worked. A round fails when /healthz or the list does not answer; after a failed round nothing is
+ * decided about a lead being gone (no recover, no start, no "closed by a person") until STEADY_ROUNDS good rounds in a row (6 minutes at the
+ * default ROUND_S) AND HEALTH_QUIET_MIN minutes since the last failure.
+ */
+const STEADY_ROUNDS = Number(process.env.STEADY_ROUNDS ?? 3);
+const HEALTH_QUIET_MIN = Number(process.env.HEALTH_QUIET_MIN ?? 5);
+/**
+ * T-400 items 2 and 3: a live chat of a track (not ended, not archived, not a worker: no parent) with activity in the last ADOPT_RECENT_H hours
+ * is the track's lead: it is watched (adopted) instead of a newer ended one, and no new lead is started beside it. An idle lead is nudged every
+ * NUDGE_GAP_MIN minutes, so a real one is far more recent than this.
+ */
+const ADOPT_RECENT_H = Number(process.env.ADOPT_RECENT_H ?? 2);
+/** A chat of the track by its title; a worker a lead spawned (it has a parent) is never the track's chat. */
+const ofTrack = (t, x) => !x.parentId && String(x.title ?? '').startsWith(t.title.split(':')[0]);
+const liveChatOf = (t, sessions, sessionId = null) =>
+  sessions
+    .filter((x) => (x.id === sessionId || ofTrack(t, x)) && x.state !== 'ended' && !x.archivedAt)
+    .filter((x) => Date.now() - Date.parse(x.lastActivityAt ?? x.createdAt) < ADOPT_RECENT_H * 3_600_000)
+    .sort((a, b) => String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)))[0] ?? null;
+/** /healthz answers ok (one plain call, no retries: a failure is what this asks about). */
+async function healthy() {
+  try {
+    const res = await fetch(`${PORTAL}/healthz`, { signal: AbortSignal.timeout(15_000) });
+    await res.text();
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** `rounds`: how many rounds to watch before returning (the test runs one or two; the script runs until LIFETIME_H). */
 async function watch({ rounds = Infinity } = {}) {
   const until = Date.now() + LIFETIME_H * 3_600_000;
   const idleSince = new Map();
   let stagger = false;
   let netDownSince = null;
+  // T-400 item 1: when a round last failed (null: none since this process started) and the good rounds since.
+  let badAt = null;
+  let goodRounds = 0;
+  // T-400 item 4: chat id -> the Claude this process last saw it on; a move is only one it saw itself.
+  const seenClaude = new Map();
   while (Date.now() < until && rounds-- > 0) {
     if (existsSync(join(STATE_DIR, 'STOP'))) return log('STOP file found: leaving the sessions as they are');
     await ensureTrust().catch((e) => log(`folder trust: could not check: ${e.message}`));
     const state = readState();
     let list;
-    try {
-      list = (await api('GET', '/api/chat/sessions')).data ?? [];
-    } catch (e) {
-      // The portal cannot be reached (T-259: the private network dropped): every track counts as down; reported once the portal answers again.
+    let failed = (await healthy()) ? null : '/healthz did not answer ok';
+    if (!failed) {
+      try {
+        const r = await api('GET', '/api/chat/sessions');
+        list = Array.isArray(r.data) ? r.data : r.data?.items;
+        if (r.status >= 300 || !Array.isArray(list)) failed = `the session list answered ${r.status}${r.error?.code ? ` ${r.error.code}` : ''}`;
+      } catch (e) {
+        failed = e.message;
+      }
+    }
+    if (failed) {
+      // The portal cannot be reached or does not answer (T-259: the private network dropped; T-400: 502/503 while it restarts): every track
+      // counts as down; reported once the portal answers again. Never read as "no sessions".
       netDownSince ??= Date.now();
-      log(`portal unreachable (${e.message}): looking again in ${ROUND_S} s`);
+      badAt = Date.now();
+      goodRounds = 0;
+      log(`portal unreachable (${failed}): looking again in ${ROUND_S} s`);
       await sleep(ROUND_S);
       continue;
     }
+    goodRounds++;
+    const steady = badAt === null || (goodRounds >= STEADY_ROUNDS && Date.now() - badAt >= HEALTH_QUIET_MIN * 60_000);
     if (netDownSince) {
       const mins = Math.round((Date.now() - netDownSince) / 60_000);
       netDownSince = null;
       if (mins >= 15) for (const t of TRACKS) await reportDown(t, (state.tracks[t.key] ??= { key: t.key, starts: [], nudges: [], wakes: [] }), 'network', `the portal was unreachable from the supervisor for about ${mins} minutes`);
     }
-    const sessions = Array.isArray(list) ? list : (list.items ?? []);
+    const sessions = list;
     // The portal's pause switch (T-259 slice 3) is the source of truth: a pause of all, or of a track's key as the program, holds the track
     // here too. Read once a round; a portal that does not answer it (older) holds nothing, and the PAUSE files below still hold a track.
     const portalPauses = await api('GET', '/api/keepgoing')
@@ -539,12 +592,14 @@ async function watch({ rounds = Infinity } = {}) {
       ts.nudges ??= [];
       ts.wakes ??= [];
       if (ts.done) {
-        // A newer live chat of this track (a continuation someone started after a hand-over) is adopted: the track is watched again.
-        const newer = sessions.find((x) => x.state !== 'ended' && !x.archivedAt && x.id !== ts.sessionId && String(x.title ?? '').startsWith(t.title.split(':')[0]));
-        if (!newer) continue;
+        // A live chat of this track (a continuation someone started after a hand-over, or T-400 item 3: the older lead still working after a
+        // person ended a newer duplicate, which may be ts.sessionId itself) is adopted: the track is watched again. The chat that wrote TRACK
+        // COMPLETE stays left alone.
+        const live = liveChatOf(t, sessions, ts.sessionId);
+        if (!live || (live.id === ts.sessionId && statusSaysDone(ts))) continue;
         ts.done = false;
-        ts.sessionId = newer.id;
-        log(`${t.key}: adopted the newer live chat ${newer.id.slice(0, 8)}: watched again`);
+        ts.sessionId = live.id;
+        log(`${t.key}: adopted the live chat ${live.id.slice(0, 8)}: watched again`);
         saveState(state);
       }
       // A paused program (the owner's order, 2026-10-14): `touch ~/.claudepilot/dev-sessions/PAUSE-<track key>` (orchestrator, konfersi, event); nothing is nudged, woken, moved or restarted until the file is removed.
@@ -555,8 +610,10 @@ async function watch({ rounds = Infinity } = {}) {
       }
       ts.pausedLogged = false;
       // A track's sessions are found by their worktree folder (a session may rename itself), or by title.
-      const mine = sessions.filter((x) => x.id === ts.sessionId || String(x.title ?? '').startsWith(t.title.split(':')[0])).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-      const cur = mine.find((x) => !x.archivedAt) ?? mine[0];
+      const mine = sessions.filter((x) => x.id === ts.sessionId || ofTrack(t, x)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      // T-400 items 2 and 3: a live, recent chat of the track is its lead and is adopted, before the newest one: a new lead is never started
+      // beside it, and a person ending a newer duplicate does not mark the track "closed by a person".
+      const cur = liveChatOf(t, sessions, ts.sessionId) ?? mine.find((x) => !x.archivedAt) ?? mine[0];
       if (cur?.cwd) ts.cwd = cur.cwd;
       // Keep going is on for this track's chat: the portal watches and restarts it (T-259 slice 2). Only Bypass is still kept here.
       if (cur?.keepGoing?.enabled && !cur.keepGoing.paused) {
@@ -577,13 +634,16 @@ async function watch({ rounds = Infinity } = {}) {
         ts.downReported = {}; // it runs: a later stop is reported again
         // A move to another Claude restarts the process and starts no turn: the chat sits idle until somebody speaks. Speak at once (not after the
         // idle wait), when it is idle, or as soon as it is.
-        if (ts.claudeId && ts.claudeId !== cur.claudeId) {
+        // T-400 item 4: only a move this process saw itself (the same chat on another Claude than in an earlier round): a Claude stored by an
+        // earlier run, or another chat's, told two real leads they were moved when they were not.
+        const seen = seenClaude.get(cur.id);
+        if (seen && seen !== cur.claudeId) {
           log(`${t.key}: moved to another Claude (${cur.claudeName ?? cur.claudeId}): will continue it at once`);
-          ts.pendingContinue = true;
+          ts.pendingContinue = cur.id;
         }
-        ts.claudeId = cur.claudeId;
+        seenClaude.set(cur.id, cur.claudeId);
         await ensureBypass(t, ts, cur).catch((e) => log(`${t.key}: could not check Bypass: ${e.message}`));
-        if (ts.pendingContinue && cur.state === 'idle') {
+        if (ts.pendingContinue === cur.id && cur.state === 'idle') {
           try {
             await ensureBypass(t, ts, cur, true);
             await sessionSend(cur.id, (t.moved ?? MOVED)(cur.claudeName ?? 'another Claude'));
@@ -642,6 +702,12 @@ async function watch({ rounds = Infinity } = {}) {
             ts.backoffUntil = Date.now() + 15 * 60_000;
           }
         }
+        continue;
+      }
+
+      // T-400 item 1: no live lead seen, but the portal failed a round lately: what it shows is not trusted yet to say the lead is gone.
+      if (!steady) {
+        log(`${t.key}: no live lead seen, but the portal failed a round ${Math.round((Date.now() - badAt) / 60_000)} min ago (${goodRounds} good rounds since): not deciding it is gone yet`);
         continue;
       }
 

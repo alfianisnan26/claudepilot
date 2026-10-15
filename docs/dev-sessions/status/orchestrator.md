@@ -1,38 +1,56 @@
-# orchestrator status (2026-10-15 01:40 UTC, session 83842ba6, continuation of a8393f6b)
+# orchestrator status (2026-10-15 03:55 UTC, session de232389, HAND-OVER to the continuation at 269k context)
 
-Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: commit ab99b45.
+Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393f6b), bb58413 (83842ba6), this one.
 
-## DONE
-- LIVE portal 2026.10.15-1 (run 31 PASSED on 0831ba7; Argo c685eea): T-338, T-342, T-333, T-336, T-343, T-312, crew hand-over.
-- integration ab99b45 (origin + pilot), NOT deployed: T-348, T-315 s1, T-330/T-331/T-272, job anti-affinity 96f47b8, D-55/D-56 docs. Full gate: gate-job 3278277 GREEN 02:1x (typecheck 48s, web build 27s, server suite 369s; /tmp/gate-job-3278277.log), includes the coordinator's T-365 WAL fix 3438d9b.
-- 01:24 adopted T-366, T-369, T-321, T-349, T-352 (claimed by id; the ended lead's tickets had gone back to the queue).
-- Ended workers: 7be4aeac (T-366 reviewer, verdict copied below), 2005bc7f (old T-321/T-312 verifier; T-312 already closed, UI part is T-354).
+## FIRST STEPS FOR THE CONTINUATION
+1. DONE by de232389 after the hand-over: batch gate GREEN on dd7abce (/tmp/gate-job-dd7abce.log); merged origin/integration (pack
+   regenerated, 0 markers); integration pushed 7b1a05a (origin and pilot); T-366 and T-417 CLOSED. wip/handover-de232389 is obsolete.
+2. Workers live (3 = D-61 budget), each posts its own report on its ticket (T-433 landed); read the verdict line only:
+   - (ended) 458defa3: T-404 second blind review = SAFE AFTER FIXES (full report on T-404): 10 items closed, 30/30 tests (f40365e5); MAJOR bypasses still allowed by the real guard: a fixer (opus) on dev/t-404-1 in dev-t-352-1, then a third reviewer. One slot is FREE.
+   - (ended) b22b5fae: T-375 UX PASS (one minor), T-369 UX PASS on dev/t-375-1 013b974 (report on T-375; 6 harnesses 0 failures).
+     NEXT: merge dev/t-375-1 into integration, gate-job, push, close T-375 and T-369 (D-63). No worker is live now: 3 slots FREE.
+   - (ended) ca172194 T-376 S2 fix: NOT DONE (report on T-376): dev/t-376-3 0b0faf7 = t-376-2 + 1 commit; the dontAsk sandbox refused
+     `git merge origin/integration` 3 times; it found one caller and one mount (cause in a production build not shown). dev-t-349-1 may be left on
+     dev/t-376-3: check `git -C ~/work/claudepilot.worktrees/dev-t-349-1 status -sb` first. Next: the lead merges integration into dev/t-376-3
+     (or an implementer in a folder where merge is allowed), then a ux re-check that counts page reads in a production build.
 
-## IN FLIGHT (5 of 5)
-- T-366 (urgent): Agent-tool SUB-AGENT implementer (opus) on dev/t-366-1 from d647d14: review fixes B1/M1/M2/m1 (T-366 comment 2322). Then a fresh reviewer worker (opus), merge, real-job QA.
-- T-369 (urgent): Agent-tool SUB-AGENT ux-checker (sonnet) on 731fa28. Merge after T-321.
-- T-375 (high): Agent-tool SUB-AGENT implementer (opus) in dev-t-369-1.worktrees/dev-t-375-1 (dev/t-375-1 from 731fa28). Worker 151ab26d could not switch worktrees in dontAsk; a new worker there got FOLDER_UNTRUSTED (T-366's gap). T-375 comment 2341.
-- T-349: qa-verifier worker 1d680467 (sonnet) on b58d4b7 (ACTUAL copied: comment 2325).
-- T-352: verifier e1bd7bce PASS WITH GAPS (job 301d13a2; comment 2345). Gap G1 session_end unguarded (factory.mjs:961): Agent-tool SUB-AGENT implementer (sonnet) fixing it on dev/t-352-1; then the lead re-runs the proof and merges.
-- WAITING FOR A SLOT: T-321 set B (base under the same load as set A 15/15, job 59b3c5d7), a qa-verifier worker; T-369 sits on dev/t-321-2.
+## STATE PER TICKET
+- T-366: CLOSED, on integration 7b1a05a. Needs deploy images=portal,workspace (every folder re-trusts once).
+- T-417: CLOSED, on integration 7b1a05a. Gap = T-438.
+- T-427 (high): verifier FAIL on 3198f5d (comment 2996); fix 47a5aea on dev/t-427-1 (written by the lead before D-63), PROOF green
+  (comment 3007). NEEDS a different verifier (sonnet) -> merge.
+- T-404 (high): second review SAFE AFTER FIXES (report on T-404): next = fixer (opus) for its major findings, then a third reviewer.
+- T-375 + T-369: ux PASS on 013b974: merge + gate + close both.
+- T-376 (high): S1 deployed; S2 ux FAIL (newest page read twice on open); fixer running; then ux re-check + S3 perf-tester.
+- T-413 (incident): post-mortem comment 2998; docs fixed b27bc48 (local batch); comment 3003: ready for an independent check and close.
+- T-433: CLOSED (coordinator landed A+B). T-378 S1 dev/t-378-1 9834ff7 ready (qa tools only).
 
-## DECISIONS
-- 01:44 coordinator: 2026.10.15-2 LIVE (main d4a0adc), hold lifted. Earlier HOLD (T-365): Checked: none of dev/t-366-1, t-369-1, t-349-1, t-352-1, t-321-2 contains 96f47b8 (cut before it), so no merge needed; main folder pulled to c88e593 (Jobs prefer, not require, a node away from the portal).
-- 01:50 Portal stalled 01:26-01:52 (readiness/liveness timeouts, T-365; coordinator pushed 3438d9b WAL fix to integration, not deployed). This chat's portal MCP did not reconnect: options (a) wait, (b) Agent-tool sub-agents (allowed by the org rules; D-49 does not forbid them). Took (b). Ticket comments and closes are queued here until the MCP is back; sub-agents report in their final message.
-- 01:25 T-366: fix the review's B1/M1/M2/m1 BEFORE merge (a gate change; merging would ship weaker than D-55). M2 only in the stricter direction, so no owner decision. Reason on T-366 (comment pending, portal down).
-- New slices only as session_spawn workers (D-49); at most five in flight (D-43). Quota 01:23: alfian.isnan session 1 %, projection 18 % (claude_usage).
-- Deploy cap three a day; run 31 was the first of 2026-10-15. Next deploy needs images=portal,workspace once T-366 is in.
+## NEXT DEPLOY BATCH (2026-10-16; today's cap of 3 used by run 32)
+FIRST: integration d354977 (agent policy: CLAUDE_CODE_AUTO_COMPACT_WINDOW 200000 for every Claude; coordinator 04:05: cache reads are
+65-85 % of crew cost, sessions grow to 400k-970k before compacting). Then: T-366 (images portal,workspace), T-417, T-427, T-404, T-375+T-369, T-376 S2 if they pass. Deploy with /deploy (gate input on).
 
-## NEEDS A HUMAN
-- T-397 (permissions): let crew workers comment on their lead's tickets (authz) and give the verifier, reviewer and ux-checker roles ticket_get/ticket_comment (persona). Steps: decide (a) and (b) on T-397; until then the lead copies every report.
-- T-93 production cutover (Konfersi, paused).
-- T-306 item 4 / T-340: installing the rtk hook is a permission change.
+## DECISIONS (binding)
+- 04:15 CONFLICT named: the supervisor's nudge (continue, 5 workers, claude auto) vs the coordinator's hand-over order at 250k context (de232389 is past 297k; every further turn re-reads it: the D-63 cost finding). Default: the hand-over wins; de232389 starts no new work. The supervisor should start the continuation; it resumes from FIRST STEPS.
+- D-63 (coordinator): verifier/ux/reviewer on SONNET; opus only for blind reviews of gate/rule/security changes and large implementer
+  slices; REUSE a live role session via session_message; the lead never implements or commits code; close on QA PASS + merge.
+- D-61: at most 3 live workers, NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh (never in the pod).
+- Placement: pass claude explicitly (least used now, at most 2 live per Claude; hasyim held 5 at 03:45) until T-427 is deployed.
+- Briefs: workers post their full report with ticket_comment; final reply starts with the verdict line.
+- Folder trust: switching a spare worktree to an older branch can make it FOLDER_UNTRUSTED (dev-t-376-1 is now untrusted); trusted spares:
+  dev-t-349-1, dev-t-352-1, dev-t-336-1, dev-t-333-1, dev-t-366-1.
+- Supervisor nudges (5 workers, claude auto, own sub-agent) conflict with D-61/D-63: the standing decisions win (named 03:50).
 
-## NEXT (in order)
-1. T-366 fix + re-review, merge, real-job QA; T-369 ux-check, merge after T-321.
-2. Deploy (images=portal,workspace) once T-366 is merged and gated (second portal deploy of the day after the coordinator's -2).
-3. T-378, T-376 in parallel; T-375 (same worker as T-369); T-382 (lists epic S1); T-377, T-386.
-4. T-370 HOLD (claudepilot-b7 runs the spike), then T-371..T-374.
-5. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356, T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149. Konfersi and Event stay paused for this track (D-45).
+## NEEDS A HUMAN (D-62)
+- T-93 Konfersi production only. Coordinator items: T-397, T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep
+  (authority: the owner's T-417 text); T-433's persona-wall question (comment 2984).
 
-LESSONS: a dontAsk worker cannot move to a new worktree, and a new worktree is untrusted until T-366 is live: spawn workers only in already-trusted folders (or sub-agents); typecheck before every integration push; report=end hides a worker's finished turn (use idle); ticket_claim_next takes an id now (claim by id); the portal can stall: copy verdicts to the ticket and re-dispatch after it is back.
+## NEXT (in order, as slots free)
+1. T-427 verifier (sonnet). 2. T-435 (high, portal:worktree trust copy; after the batch is pushed). 3. T-376 ux re-check + S3 perf.
+4. T-416 (memory budget, high; post-mortem 2998 lists its tests), T-422 build, T-147.
+5. T-438, T-425, T-436, T-437, T-432, T-378 S2-S4, T-382, T-377, T-386, T-409, T-402, T-398, T-399.
+6. T-370 HOLD, then T-371..T-374, T-363. 7. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356, T-388, T-341, T-344, T-345, T-332, T-335,
+   T-313, T-314, T-306 item 3, T-149.
+
+LESSONS: never chain a commit after a merge that may conflict (03:37: markers committed locally, amended before push); dontAsk workers
+cannot Read /tmp (artifacts --out inside the worktree); scroll-lock/mobile-drag read SL_PORT; end job-run commands with the test's own rc,
+not a pipe's; use FULL hashes with job-run; typecheck/gate before every integration push.

@@ -28,7 +28,7 @@ export const ok = (requestId: string, response?: unknown) =>
 export const fail = (requestId: string, error: string) => line({ type: 'control_response', response: { subtype: 'error', request_id: requestId, error, error_code: 'invalid' } });
 
 /** `trustscan` for a folder with none of the project settings files. */
-export const EMPTY_SCAN = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [] };
+export const EMPTY_SCAN = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [], extras: [] };
 
 /** A controllable stand-in for one `workspaces.exec` call. */
 export class FakeExec implements ExecSession {
