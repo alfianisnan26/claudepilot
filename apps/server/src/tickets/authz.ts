@@ -31,9 +31,17 @@ export const TICKET_ADOPT_TOOL_POLICIES = {
   ticket_adopt: { kind: 'agent', reach: 'workspace', confirm: true, audit: 'ticket.adopted' },
 } satisfies ToolPolicies;
 
+/**
+ * `ticket_verdict` (T-325, FR36): a QA or review session of the agent's own workspace records a verdict on one commit. The rule (`canRecordVerdict`
+ * in `verdicts.ts`) refuses the author, the lead, any session an author started (S1b) and any non-verifier; a ticket the caller cannot see is the same not found. Audited.
+ */
+export const TICKET_VERDICT_TOOL_POLICIES = {
+  ticket_verdict: { kind: 'agent', reach: 'workspace', audit: 'ticket.verdict' },
+} satisfies ToolPolicies;
+
 export function declareTicketPolicies(): void {
   declarePolicies('tickets', TICKET_BUMP_POLICIES);
-  declareToolPolicies('tickets', { ...TICKET_BUMP_TOOL_POLICIES, ...TICKET_ADOPT_TOOL_POLICIES });
+  declareToolPolicies('tickets', { ...TICKET_BUMP_TOOL_POLICIES, ...TICKET_ADOPT_TOOL_POLICIES, ...TICKET_VERDICT_TOOL_POLICIES });
 }
 
 /* ---------- Acting for an ended session (T-270) ---------- */
