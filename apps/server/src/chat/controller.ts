@@ -2265,7 +2265,7 @@ export class ChatController {
     // T-597: an allowed slash command (/compact, /context, /reload-plugins) from a portal actor is written bare, or Claude Code
     // would read framed prose and never run it. The set is checked here so no caller can send another one bare; with an
     // attachment the note would follow the command, so that text stays framed. The stored event keeps the actor.
-    const bare = portal !== null && !att.count && bareSlashCommand(text);
+    const bare = portal !== null && bareSlashCommand(text, portal, att.count > 0);
 
     // T-294: a crew report wakes a sleeping lead, but never relaunches one whose process is gone nor runs one a person stopped.
     const report = opts.actor === CREW_REPORT_ACTOR;
