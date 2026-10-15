@@ -70,6 +70,18 @@ const shot = async (name) => {
   return file;
 };
 
+// A chip tapped while the list first loads can be undone by the default chip (T-321, fixed on T-369's branch): wait for the rows, tap, and
+// tap again until it reads pressed, so a view is never read on the wrong chip.
+const pick = async (chip) => {
+  await b.waitFor(`document.querySelectorAll('ul[data-session-rows] li').length > 0 && !!document.querySelector('[data-chip=${chip}]')`, 15_000, 'rows').catch(() => {});
+  for (let i = 0; i < 5; i++) {
+    await b.eval(`document.querySelector('[data-chip=${chip}]')?.click()`);
+    await sleep(600);
+    if (await b.eval(`document.querySelector('[data-chip=${chip}]')?.getAttribute('aria-pressed') === 'true'`)) return true;
+  }
+  return false;
+};
+
 const VIEWS = [
   { name: 'All', chip: 'all' },
   { name: 'Needs you', chip: 'attention' },
@@ -86,13 +98,10 @@ for (const dark of [false, true]) {
     if (dark && !['In progress', 'All'].includes(v.name)) continue;
     const tag = `390-${dark ? 'dark' : 'light'} ${v.name}:`;
     await b.goto('/admin/sessions', 2500);
-    await b.waitFor(`!!document.querySelector('[data-chip=all]')`, 15_000, 'chips').catch(() => {});
-    const has = await b.eval(`!!document.querySelector('[data-chip=${v.chip}]')`);
-    if (!has) {
-      check(`${tag} the chip is there`, false);
+    if (!(await pick(v.chip))) {
+      check(`${tag} the chip is there and stays picked`, false);
       continue;
     }
-    await b.eval(`document.querySelector('[data-chip=${v.chip}]').click()`);
     if (v.query) {
       await b.focusSel('input[type=search]');
       await b.type(v.query);

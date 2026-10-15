@@ -92,10 +92,16 @@ for (const dark of [false, true]) {
   for (const chip of ['all', 'working']) {
     const tag = `390-${dark ? 'dark' : 'light'} ${chip === 'all' ? 'All' : 'In progress'}:`;
     await b.goto('/admin/sessions', 2500);
-    await b.waitFor(`!!document.querySelector('[data-chip=${chip}]')`, 15_000, 'chips').catch(() => {});
-    await b.eval(`document.querySelector('[data-chip=${chip}]')?.click()`);
-    await b.waitFor(`document.querySelectorAll('ul[data-session-rows] li').length > 5`, 15_000, 'rows').catch(() => {});
-    await sleep(800);
+    // A chip tapped while the list first loads can be undone by the default chip (T-321): wait for the rows, tap until it reads pressed.
+    await b.waitFor(`document.querySelectorAll('ul[data-session-rows] li').length > 0 && !!document.querySelector('[data-chip=${chip}]')`, 15_000, 'rows').catch(() => {});
+    let picked = false;
+    for (let i = 0; i < 5 && !picked; i++) {
+      await b.eval(`document.querySelector('[data-chip=${chip}]')?.click()`);
+      await sleep(600);
+      picked = await b.eval(`document.querySelector('[data-chip=${chip}]')?.getAttribute('aria-pressed') === 'true'`);
+    }
+    check(`${tag} the chip stays picked`, picked);
+    await sleep(500);
     const rows = await b.eval(ROWS);
     check(`${tag} seeded rows in sight`, rows.length >= 5, `${rows.length} rows`);
 
