@@ -11,7 +11,7 @@ Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: c
 ## IN FLIGHT (5 of 5)
 - T-366 (urgent): Agent-tool SUB-AGENT implementer (opus) on dev/t-366-1 from d647d14: review fixes B1/M1/M2/m1 (T-366 comment 2322). Then a fresh reviewer worker (opus), merge, real-job QA.
 - T-369 (urgent): Agent-tool SUB-AGENT ux-checker (sonnet) on 731fa28. Merge after T-321.
-- T-375 (high): worker 151ab26d (opus, implementer) on dev/t-375-1 from dev/t-369-1, messaged 01:45.
+- T-375 (high): Agent-tool SUB-AGENT implementer (opus) in dev-t-369-1.worktrees/dev-t-375-1 (dev/t-375-1 from 731fa28). Worker 151ab26d could not switch worktrees in dontAsk; a new worker there got FOLDER_UNTRUSTED (T-366's gap). T-375 comment 2341.
 - T-349: qa-verifier worker 1d680467 (sonnet) on b58d4b7 (ACTUAL copied: comment 2325).
 - T-352: qa-verifier worker e1bd7bce (sonnet) on aa8b815 (ACTUAL copied: comment 2329).
 - WAITING FOR A SLOT: T-321 set B (base under the same load as set A 15/15, job 59b3c5d7), a qa-verifier worker; T-369 sits on dev/t-321-2.
@@ -34,4 +34,4 @@ Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: c
 4. T-370 HOLD (claudepilot-b7 runs the spike), then T-371..T-374.
 5. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356, T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149. Konfersi and Event stay paused for this track (D-45).
 
-LESSONS: typecheck before every integration push; report=end hides a worker's finished turn (use idle); ticket_claim_next takes an id now (claim by id); the portal can stall: copy verdicts to the ticket and re-dispatch after it is back.
+LESSONS: a dontAsk worker cannot move to a new worktree, and a new worktree is untrusted until T-366 is live: spawn workers only in already-trusted folders (or sub-agents); typecheck before every integration push; report=end hides a worker's finished turn (use idle); ticket_claim_next takes an id now (claim by id); the portal can stall: copy verdicts to the ticket and re-dispatch after it is back.
