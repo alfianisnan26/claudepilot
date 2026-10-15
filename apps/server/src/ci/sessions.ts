@@ -8,8 +8,11 @@ export interface CiSession {
   id: string;
   title: string;
   ticketId: string | null;
-  /** The branch of its git worktree, when it has one. */
+  /** The branch of its git worktree, when it has one; else, for a worker, its folder's branch when it started (T-476). */
   branch: string | null;
+  /** T-476: the folder it runs in, and whether it leads a crew (no parent, and it started at least one worker). Set by `get`. */
+  cwd?: string;
+  lead?: boolean;
   /** Not ended: a message can reach it. */
   live: boolean;
   /** For the Bump picker (T-32): its state, workspace and last activity. */
@@ -72,7 +75,7 @@ export class ChatSessionsAdapter implements CiSessionsPort {
 
   #view(s: ReturnType<ChatController['get']>): CiSession | null {
     return s
-      ? { id: s.id, title: s.title, ticketId: s.ticketId ?? null, branch: s.worktree?.branch ?? null, live: s.state !== 'ended', state: s.state, workspaceId: s.workspaceId, lastActivityAt: s.lastActivityAt }
+      ? { id: s.id, title: s.title, ticketId: s.ticketId ?? null, branch: s.worktree?.branch ?? s.folderBranch ?? null, live: s.state !== 'ended', state: s.state, workspaceId: s.workspaceId, lastActivityAt: s.lastActivityAt }
       : null;
   }
 
@@ -96,7 +99,8 @@ export class ChatSessionsAdapter implements CiSessionsPort {
       if (!next) break;
       s = next;
     }
-    return this.#view(s);
+    const view = this.#view(s);
+    return view && s ? { ...view, cwd: s.cwd, lead: !s.parentId && this.chat.list({ parentId: s.id }).length > 0 } : view;
   }
 
   async send(sessionId: string, runId: string, text: string, opts: CiSendOptions = {}): Promise<void> {

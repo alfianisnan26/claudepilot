@@ -1015,9 +1015,11 @@ export class CiService {
 
   /**
    * Starts a pipeline by hand (FR13). `sessionId` links the run to the session that asked (an agent's own run: it may read and cancel it).
-   * `deploymentOnly` refuses a pipeline in which no job names an environment: what an agent may start on a branch that is not its own (PRD §14).
+   * `deploymentOnly` refuses a pipeline in which no job names an environment: what an agent may start on a branch that is not its own (PRD §14);
+   * a text is refused as FORBIDDEN, an error is thrown as it is (T-476: another program's remote reads as a missing one). `rule` names why an
+   * agent may start it (T-476); every start is one platform audit row `ci.run_started`: who, which pipeline, on which branch, by which rule.
    */
-  async startRun(req: Partial<StartCiRunRequest>, actor = 'ui', opts: { sessionId?: string | null; deploymentOnly?: string; actorLabel?: string | null } = {}): Promise<CiRun> {
+  async startRun(req: Partial<StartCiRunRequest>, actor = 'ui', opts: { sessionId?: string | null; deploymentOnly?: string | AppError; actorLabel?: string | null; rule?: string } = {}): Promise<CiRun> {
     if (typeof req.repoId !== 'string') throw invalid('repoId', 'Pick a remote.');
     const repo = this.#needRepo(req.repoId);
     if (typeof req.pipeline !== 'string' || !req.pipeline) throw invalid('pipeline', 'Pick a pipeline.');
@@ -1029,13 +1031,20 @@ export class CiService {
     if (!found) throw notFound('pipeline');
     if (!found.pipeline) throw new AppError('CONFLICT', 'That pipeline has errors. Fix them and push first.', { details: { diagnostics: found.info.diagnostics } });
     if (!found.pipeline.on.manual) throw new AppError('CONFLICT', 'That pipeline can not be started by hand: it has no manual trigger.');
-    if (opts.deploymentOnly && !found.pipeline.jobs.some((j) => !j.hidden && j.environment)) throw new AppError('FORBIDDEN', opts.deploymentOnly);
+    if (opts.deploymentOnly && !found.pipeline.jobs.some((j) => !j.hidden && j.environment)) throw typeof opts.deploymentOnly === 'string' ? new AppError('FORBIDDEN', opts.deploymentOnly) : opts.deploymentOnly;
     const { values, problems } = resolveInputs(found.pipeline.on.manual.inputs, req.inputs);
     if (Object.keys(problems).length) throw new AppError('VALIDATION_FAILED', 'Check the inputs.', { details: problems });
     const row = this.#cs.tx(() => this.#insertRun(repo, found, { event: 'manual', ref: ref.ref, sha: ref.sha, base: null, actor, inputs: values, eventId: null, subject: snap.subject ?? null, trigger: 'manual', sessionId: opts.sessionId ?? null, actorLabel: opts.actorLabel ?? null }));
     this.#born(row, snap.message ?? null);
     this.#changed();
     this.kick(repo.workspace_id);
+    this.#opts.audit?.({
+      kind: 'ci.run_started',
+      actor,
+      userId: null,
+      subject: `ci_run:${row.id}`,
+      detail: { workspace: repo.workspace_id, repo: repo.name, run: row.number, pipeline: req.pipeline, ref: ref.ref, sessionId: opts.sessionId ?? null, rule: opts.rule ?? null },
+    });
     return this.get(row.id);
   }
 

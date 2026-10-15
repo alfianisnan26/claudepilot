@@ -556,6 +556,14 @@ ends, when it waits on a person and when it ends; `end`: only the end; `none`), 
 (`workers` or `crew`) instead of `session_id`, every recipient counted against the hourly limit, and
 `session_family` items carry `agent` and `mode`, with how many wait on a person in its summary.
 
+CI for a crew (T-476, [Local git & CI](local-git-ci.md) FR39): `ci_run_trigger` from an agent token lets a lead (a session with no
+parent that has started workers) start any pipeline on a `dev/*` or `ticket/*` branch of its program's remote (the remote whose
+folder is exactly the lead's folder), matched exactly (no `refs/`, `..`, tag or lookalike prefix; resolved as `refs/heads/<branch>`).
+On another program's remote that refusal is the same `NOT_FOUND` as a remote that does not exist. A worker started in a folder that
+is a git work tree on a branch owns that branch (recorded once at its start). Deploy pipelines keep the earlier rule and still wait
+for a person's approval. Every start writes one `ci.run_started` audit row: actor, session, remote, pipeline, ref and the rule that
+allowed it (`own_branch`, `program_branch`, `deployment`, `token`). The rule lives in `ci/authz.ts` (`agentStart`).
+
 | Tool | Scope | Hints | Inputs | Output |
 | --- | --- | --- | --- | --- |
 | `session_list` | read | R I | `workspace_id`, `state`, `ticket_id`, `parent_id` (T-294: the workers of one session), `include_ended`, `cursor`, `limit` | State (Starting, Working, Needs input, Failed, Idle, Interrupted, Ended), waiting for, model, effort, mode, last activity, estimated cost; T-294: `parent_id`, `agent` and the Claude's name |
