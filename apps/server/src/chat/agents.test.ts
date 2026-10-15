@@ -465,10 +465,12 @@ test('T-574 over MCP: a lead with 10 workers gets one line per worker under 1.5k
     const res = (await r.h.call(a.secret, 'session_family', {})).result!;
     const whole = JSON.stringify(res.structuredContent) + res.content![0]!.text;
     assert.ok(whole.length < 1500, `default result is ${whole.length} characters`);
-    const block = res.structuredContent.workers as { untrusted_text: string; source: string };
+    const block = res.structuredContent.lines as { untrusted_text: string; source: string };
     assert.equal(block.source, 'agent', 'worker text stays labelled');
     const rows = block.untrusted_text.split('\n');
     assert.equal(rows.length, 10);
+    // workers stays an array of objects with an id (readers of the detail view), in the same order as the lines.
+    assert.deepEqual((res.structuredContent.workers as { id: string }[]).map((w) => w.id), ids);
     for (const id of ids) assert.ok(rows.some((x) => x.startsWith(id.slice(0, 8) + ' ')), id);
     assert.equal(res.structuredContent.cut, undefined);
     assert.equal(res.structuredContent.parent, undefined, 'no full rows in the lines view');
@@ -484,6 +486,25 @@ test('T-574 over MCP: a lead with 10 workers gets one line per worker under 1.5k
     const nobody = (await r.h.call(a.secret, 'session_family', { worker_id: 'no-such-session' })).result!;
     assert.deepEqual(stranger.structuredContent.error, nobody.structuredContent.error);
     assert.equal(stranger.isError, true);
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-574 over MCP: 25 workers: the lines stop at 1,100 characters, workers lists only the lines shown, and cut says how many were left out', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.agentCaps = () => ({ ...CAPS, maxChildren: 30, spawnsPerHour: 60 });
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    for (let i = 0; i < 25; i++) await child(r.s, r.s.id, `Worker number ${i} with a rather long title that goes on`);
+    const sc = (await r.h.call(a.secret, 'session_family', {})).result!.structuredContent;
+    const text = (sc.lines as { untrusted_text: string }).untrusted_text;
+    const rows = text.split('\n');
+    assert.ok(text.length <= 1_100, `lines are ${text.length} characters`);
+    assert.ok(rows.length > 0 && rows.length < 25, `${rows.length} rows listed`);
+    assert.equal((sc.workers as { id: string }[]).length, rows.length, 'workers lists the rows shown');
+    assert.deepEqual(sc.cut, [`${25 - rows.length} of 25 workers not listed (size cap): worker_id for one, view detail for all.`]);
+    assert.equal((await r.h.call(a.secret, 'session_family', { view: 'detail' })).result!.structuredContent.workers.length, 25, 'detail still has them all');
   } finally {
     await r.done();
   }

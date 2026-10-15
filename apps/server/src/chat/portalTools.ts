@@ -372,18 +372,22 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         (waiting ? ` ${waiting} ${waiting === 1 ? 'waits' : 'wait'} on a person.` : '');
       if (lines) {
         const rows: string[] = [];
+        const listed: { id: string }[] = [];
         let size = 0;
         for (const w of workers) {
           const row = `${w.id.slice(0, 8)} ${clipTo(w.title.replace(/\s+/g, ' '), 24)} ${stateOf(w)} ${w.model ?? '-'} ${w.ticketId ?? '-'} ${clipTo(firstLine(chat.lastReply(w.id)), 40) || '-'}`;
           if (size + row.length + 1 > FAMILY_LINES_MAX) break;
           rows.push(row);
+          listed.push({ id: w.id });
           size += row.length + 1;
         }
         const left = workers.length - rows.length;
         return {
           summary: head,
           columns: 'id8 title state model ticket report',
-          workers: ctx.untrusted(rows.join('\n'), 'agent', FAMILY_LINES_MAX),
+          // workers stays an array of objects with an id (as in the detail view); the text of the lines is one labelled block.
+          workers: listed,
+          lines: ctx.untrusted(rows.join('\n'), 'agent', FAMILY_LINES_MAX),
           ...(left > 0 ? { cut: [`${left} of ${workers.length} workers not listed (size cap): worker_id for one, view detail for all.`] } : {}),
           more: 'worker_id, reply_of, view detail',
         };
