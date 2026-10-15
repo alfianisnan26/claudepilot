@@ -152,6 +152,13 @@ scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
   your command, the tests and every install script see no token, no helper and no user `.npmrc`. A command that itself needs a credential
   (a push, a private fetch) does not work in a Job: do that in the workspace. `--against` with another lockfile installs offline from the
   cache the fetch filled. The log line `credentials: used for the fetch only` says the check passed.
+- **Test credentials for the command (`--pool-env NAME`, T-426):** repeatable, for a command that needs a scoped test credential from the
+  workspace's Secrets pool, today Konfersi's stg e2e and Lighthouse behind Cloudflare Access:
+  `scripts/job-run.sh --pool-env E2E_CF_ACCESS_CLIENT_ID --pool-env E2E_CF_ACCESS_CLIENT_SECRET -- 'scripts/e2e-stg.sh'`. Only
+  `E2E_CF_ACCESS_*` names are accepted, and the variable must be set in the workspace; anything else is refused (exit 2) before a Job is made.
+  The refusal names the variable, never a value. The value goes on stdin into the Job's Secret, deleted with the Job. The `run` container
+  gets it as env by `secretKeyRef` and the `fetch` container does not; this is the reverse of the git and npm tokens, on purpose. It is never
+  on a command line or in the manifest, and the streamed log is masked for it.
 - **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
