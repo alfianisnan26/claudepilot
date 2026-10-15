@@ -10,7 +10,8 @@
 # (git config, the user .npmrc) is a volume the `run` container does not mount; it checks that no credential value is in /tmp and writes
 # its log and exit code there. The `run` container has NO secret: it prints that log, runs the install scripts npm ci left out
 # (`npm rebuild` and the package's own lifecycle scripts), then the command. --against is fetched by `fetch` too (and, when its lockfile
-# differs, its packages go into npm's cache, so `run` installs them offline).apiVersion: batch/v1
+# differs, its packages go into npm's cache, so `run` installs them offline).
+apiVersion: batch/v1
 kind: Job
 metadata:
   name: __NAME__
