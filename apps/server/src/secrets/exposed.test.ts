@@ -69,7 +69,7 @@ test('exposedSecretValues: nothing while Locked, and nothing from a portal witho
 });
 
 // T-557 / T-486: the value a CI runner's lease and the upstream webhook's signature check read, by name, for one workspace.
-test('deliveredSecretValue: the file secret a workspace gets, never a variable, an unassigned name, another workspace or a Locked portal', async () => {
+test('deliveredSecretValue: the file secret a workspace gets, never a variable, an unassigned name, another workspace, or a portal with no Secrets & env kind (a real Locked store is not exercised here)', async () => {
   const { deliveredSecretValue } = await import('./exposed.js');
   const value = `fixture-${Math.random().toString(36).slice(2)}-hook-value`;
   const h = await secretsHarness();

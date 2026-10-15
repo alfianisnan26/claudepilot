@@ -8,7 +8,9 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { CI_UPSTREAM_HOSTS_SETTING, type Actor } from '@portal/contracts';
+import { createApp } from '../app.js';
 import { singleOwner, useAuthz } from '../authz/seam.js';
+import { Portal } from '../portal.js';
 import { settingDef } from '../settings/registry.js';
 import { CI_HOOK_POLICIES, registerCiAuthz } from './authz.js';
 import { UPSTREAM_HOOK_GAP_MS } from './service.js';
@@ -215,6 +217,72 @@ test('the webhook: signed by GitHub or Gitea it kicks the detached sync (202, no
     await h.svc.syncsSettled();
     assert.equal(syncCalls(h), before + 2);
   } finally {
+    h.done();
+  }
+});
+
+test('the webhook: a removed remote (it keeps its upstream and hook secret) is the same 404 as an unknown one, signed or not, and kicks nothing', async () => {
+  const { h, repo, key } = await hooked();
+  try {
+    await h.svc.updateRepo(repo.id, { upstream: { url: URL_, hookSecret: 'HOOK_KEY' } }, BY);
+    const kicked: string[] = [];
+    const app = createCiHookRoutes({ upstreamHookKey: (id) => h.svc.upstreamHookKey(id), kickUpstream: (id) => void kicked.push(id) }, { clientAddress: () => '198.51.100.31' });
+    const body = JSON.stringify({ after: rnd(10) });
+    const signed = { 'x-hub-signature-256': `sha256=${sign(key, body)}` };
+    const post = (id: string) => app.request(`/${id}`, { method: 'POST', body, headers: signed });
+
+    assert.equal((await post(repo.id)).status, 202, 'signed, it kicks while the remote exists');
+    assert.deepEqual(kicked, [repo.id]);
+    await h.svc.deleteRepo(repo.id);
+    assert.equal(h.svc.upstreamHookKey(repo.id), null, 'a removed remote has no hook key');
+    const unknown = await post(`cr_${rnd(6)}`);
+    const removed = await post(repo.id);
+    assert.equal(removed.status, 404);
+    assert.equal(await removed.text(), await unknown.text(), 'the same body as an unknown remote');
+    assert.deepEqual(kicked, [repo.id], 'a removed remote kicks nothing');
+  } finally {
+    await h.svc.syncsSettled();
+    h.done();
+  }
+});
+
+test('the webhook as mounted in createApp: /hooks/ci/:id answers 202 or the one 404 outside the session guard; GET gives no answer that tells remotes apart', async () => {
+  const stub: object = new Proxy(function () {}, {
+    get: (_t, p) => (p === Symbol.toPrimitive ? () => 'stub' : p === 'then' ? undefined : stub),
+    apply: () => stub,
+    construct: () => stub,
+    set: () => true,
+  });
+  const make = createApp as unknown as (...args: unknown[]) => import('hono').Hono;
+  const { h, repo, key } = await hooked();
+  try {
+    await h.svc.updateRepo(repo.id, { upstream: { url: URL_, hookSecret: 'HOOK_KEY' } }, BY);
+    const app = make(new Portal(rnd(4), 60_000), stub, stub, stub, stub, stub, stub, stub, { serveWeb: false, poolService: stub, mcp: stub, skills: stub, ci: h.svc });
+    const body = JSON.stringify({ after: rnd(10) });
+    const post = (id: string, headers: Record<string, string>) => app.request(`http://localhost:3000/hooks/ci/${id}`, { method: 'POST', body, headers });
+    const signed = { 'x-hub-signature-256': `sha256=${sign(key, body)}` };
+
+    // No cookie and no Origin: the signature is the door.
+    const ok = await post(repo.id, signed);
+    assert.deepEqual([ok.status, await ok.json()], [202, { ok: true }]);
+    const unsigned = await post(repo.id, {});
+    assert.equal(unsigned.status, 404);
+    const notFound = await unsigned.text();
+    assert.ok(notFound.includes('NOT_FOUND') && !notFound.includes(key));
+    const unknown = await post(`cr_${rnd(6)}`, signed);
+    assert.deepEqual([unknown.status, await unknown.text()], [404, notFound]);
+    await h.svc.syncsSettled();
+    await h.svc.deleteRepo(repo.id);
+    const removed = await post(repo.id, signed);
+    assert.deepEqual([removed.status, await removed.text()], [404, notFound], 'a removed remote, signed');
+
+    // GET is no route of the hook app; mounted, the parent answers every id the same, a remote that exists included.
+    const getKnown = await app.request(`http://localhost:3000/hooks/ci/${repo.id}`);
+    const getUnknown = await app.request(`http://localhost:3000/hooks/ci/cr_${rnd(6)}`);
+    assert.equal(getKnown.status, 404);
+    assert.deepEqual([getUnknown.status, await getUnknown.text()], [404, await getKnown.text()]);
+  } finally {
+    await h.svc.syncsSettled();
     h.done();
   }
 });
