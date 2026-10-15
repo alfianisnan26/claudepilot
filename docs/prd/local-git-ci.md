@@ -593,3 +593,13 @@ The owner (2026-10-15): *"not moving the workspace, only the CI jobs to a remote
 **Security notes.** A runner executes other workspaces' code with their secrets: making a workspace a runner is a person's act (manage on it; tokens and agents are refused) and is audited. The lease exists only for the run; a runner's own workspace secrets are not read for a leased run. The mirror is separate per source workspace, so two remotes of one name never mix. What a runner does with a job's environment while the job runs is the same trust as a run in the workspace itself: pick runners you control.
 
 **Not verified yet / next slices.** S2: a real Connect host as a runner (installing `cp-ci` under its user, exec through the hub). S3: a Codespaces pool that starts a codespace when runs wait and no runner matches, and stops it when idle, within a monthly spending cap the owner sets (codespaces-poc.md). S4: the UI (Runners in CI settings: labels, state, running, Drain, Remove; the runner on each run). Later: per-job runners, an estimate of transfer size before the first sync.
+
+### 23.1 Fallback to the repository's workspace (owner, 2026-10-15)
+
+The owner: *"yang claudepilot bisa juga dibikin main kesana [the Mac runner], fallback ke workspace"*. `runs-on` also takes a map:
+
+```yaml
+runs-on: { labels: [mac], fallback: workspace }
+```
+
+The labels pick a runner exactly as the list form does. With `fallback: workspace`, a run whose labels no runner carries, or whose runners are all offline, drained or full, or whose hand-off fails (a tunnel that resets the stream, an install that times out), **starts in the repository's own workspace at once** instead of waiting `runnerWaitMs` or failing as `no_runner`. It uses the workspace's own run slots (full: it stays queued and the next look tries the runners again), and the run carries a warning diagnostic `runner-fallback` saying why, audited as `ci.run_fallback`. A run handed to a runner gets `PILOT_RUNNER` (the runner workspace's id) in its steps' environment, so a step can choose what to do where: ClaudePilot's `.pilot/check.yml` runs the gate in place on a runner and sends it to the cluster as a Job from the workspace (D-61). `fallback` takes only `workspace`; every job of a pipeline shares it with the labels (`runs-on-mixed`). Tests: `runners.test.ts` (no runner, a stopped runner, a failed hand-off, a ready runner still preferred), `checkPipeline.test.ts`.

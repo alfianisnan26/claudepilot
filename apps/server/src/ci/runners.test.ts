@@ -27,6 +27,8 @@ class Homes implements CiHost {
   readonly down = new Set<string>();
   /** Workspaces whose cp-ci never answers (a stalled tunnel). */
   readonly hang = new Set<string>();
+  /** Workspaces whose cp-ci calls fail at once (a tunnel that resets the stream). */
+  readonly broken = new Set<string>();
   add(id: string): Home {
     const h = new Home(`cp-ci-${id.replace('/', '-')}-`);
     this.homes.set(id, h);
@@ -41,6 +43,7 @@ class Homes implements CiHost {
   async cp(id: string, args: string[], opts?: { stdin?: string }): Promise<CiReply> {
     this.calls.push({ ws: id, args });
     if (this.hang.has(id)) return new Promise<CiReply>(() => undefined);
+    if (this.broken.has(id)) throw new Error('The stream was reset by the other end.');
     const h = this.homes.get(id);
     if (!h) throw new Error(`no workspace ${id}`);
     return h.ci(args, { stdin: opts?.stdin });
@@ -62,7 +65,7 @@ jobs:
       - run: test -f README.md && echo "token=$DEPLOY_TOKEN" && echo "ran-in=$HOME"
 `;
 
-async function setup() {
+async function setup(pipeline = PIPELINE) {
   const store = await Store.open({ dataDir: tempDirectory('cp-ci-runners-'), secretKey: parseSecretKey(generateSecretKey()) });
   cleanups.push(() => store.close());
   const host = new Homes();
@@ -79,7 +82,7 @@ async function setup() {
     audit: (e) => void audits.push(e),
   });
   const dir = src.repo('app', { 'README.md': '# app\n' });
-  src.commit(dir, { '.pilot/ci.yml': PIPELINE }, 'add pipeline');
+  src.commit(dir, { '.pilot/ci.yml': pipeline }, 'add pipeline');
   const repo = await svc.createRepo({ workspaceId: SRC, name: 'app', source: dir, connect: true });
   await svc.poll(SRC);
   const settle = async (id: string, ms = 90_000) => {
@@ -197,5 +200,75 @@ test('runs-on in the spec: labels, the old hosted names, and one runner per pipe
   assert.deepEqual(read(job('[macos, arm64]')).pipeline?.runsOn, ['arm64', 'macos']);
   const mixed = read(`on: { push: {} }\njobs:\n  a:\n    runs-on: [python]\n    steps: [{ run: 'true' }]\n  b:\n    steps: [{ run: 'true' }]\n`);
   assert.equal(mixed.pipeline, null);
+  assert.ok(mixed.info.diagnostics.some((d) => d.code === 'runs-on-mixed'));
+});
+
+// Owner, 2026-10-15: "yang claudepilot bisa juga dibikin main kesana, fallback ke workspace". `runs-on: { labels, fallback: workspace }`.
+// No secret here: the temporary homes stand for workspaces without Secrets & env files (the lease is covered above).
+const FALLBACK = `on:
+  push: { branches: ['**'] }
+  manual: {}
+jobs:
+  test:
+    runs-on: { labels: [python, big], fallback: workspace }
+    steps:
+      - run: test -f README.md && echo "ran-in=$HOME" && echo "runner=\${PILOT_RUNNER:-none}"
+`;
+
+test('fallback: no runner with the labels, the run starts in the repository workspace at once and says why', async () => {
+  const s = await setup(FALLBACK);
+  const run = await s.svc.startRun({ repoId: s.repo.id, pipeline: 'ci', ref: 'main' });
+  const done = await s.settle(run.id);
+  assert.equal(done.status, 'passed', JSON.stringify(done.detail));
+  assert.equal(done.runnerWorkspaceId, null);
+  assert.ok(done.diagnostics.some((x) => x.code === 'runner-fallback' && /no runner has the labels big, python/.test(x.message)));
+  const log = (await s.svc.log(run.id, 'test', 0, 0)).text;
+  assert.match(log, new RegExp(`ran-in=${s.src.home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.match(log, /runner=none/);
+  assert.ok(s.audits.some((e) => e.kind === 'ci.run_fallback'));
+});
+
+test('fallback: a runner that is stopped is not waited for; a runner whose hand-off fails falls back too', async () => {
+  const s = await setup(FALLBACK);
+  await s.svc.upsertRunner(RUNNER, { labels: ['big', 'python'] }, PERSON);
+  s.host.down.add(RUNNER);
+  const first = await s.settle((await s.svc.startRun({ repoId: s.repo.id, pipeline: 'ci', ref: 'main' })).id);
+  assert.equal(first.status, 'passed');
+  assert.equal(first.runnerWorkspaceId, null);
+  assert.ok(first.diagnostics.some((x) => x.code === 'runner-fallback' && /online and free/.test(x.message)));
+
+  s.host.down.delete(RUNNER);
+  s.host.broken.add(RUNNER);
+  const second = await s.settle((await s.svc.startRun({ repoId: s.repo.id, pipeline: 'ci', ref: 'main' })).id);
+  assert.equal(second.status, 'passed');
+  assert.equal(second.runnerWorkspaceId, null);
+  assert.ok(second.diagnostics.some((x) => x.code === 'runner-fallback' && /hand-off to the runner connect\/box failed: The stream was reset/.test(x.message)));
+});
+
+test('fallback: with a runner ready the run still goes to the runner, and its steps see PILOT_RUNNER', async () => {
+  const s = await setup(FALLBACK);
+  await s.svc.upsertRunner(RUNNER, { labels: ['big', 'python'] }, PERSON);
+  const run = await s.svc.startRun({ repoId: s.repo.id, pipeline: 'ci', ref: 'main' });
+  const done = await s.settle(run.id);
+  assert.equal(done.status, 'passed', JSON.stringify(done.detail));
+  assert.equal(done.runnerWorkspaceId, RUNNER);
+  assert.ok(!done.diagnostics.some((x) => x.code === 'runner-fallback'));
+  assert.match((await s.svc.log(run.id, 'test', 0, 0)).text, /runner=connect\/box/);
+});
+
+test('runs-on as a map in the spec: labels and fallback, and what is refused', () => {
+  const read = (yml: string) => validateFiles([{ path: '.pilot/ci.yml', text: yml }]).pipelines[0]!;
+  const job = (on: string) => `on: { push: {} }\njobs:\n  a:\n    runs-on: ${on}\n    steps: [{ run: 'true' }]\n`;
+  const ok = read(job('{ labels: [Mac, docker], fallback: workspace }'));
+  assert.deepEqual(ok.pipeline?.runsOn, ['docker', 'mac']);
+  assert.equal(ok.pipeline?.runsOnFallback, 'workspace');
+  const none = read(job('{ labels: [mac] }'));
+  assert.deepEqual(none.pipeline?.runsOn, ['mac']);
+  assert.equal(none.pipeline?.runsOnFallback, null);
+  assert.equal(read(job('[mac]')).pipeline?.runsOnFallback, null);
+  assert.ok(read(job('{ labels: [mac], fallback: cloud }')).info.diagnostics.some((d) => d.code === 'bad-value'));
+  assert.ok(read(job('{ labels: [mac], group: x }')).info.diagnostics.some((d) => d.code === 'unknown-key'));
+  assert.ok(read(job('{ fallback: workspace }')).info.diagnostics.some((d) => d.code === 'bad-type'));
+  const mixed = read(`on: { push: {} }\njobs:\n  a:\n    runs-on: { labels: [mac], fallback: workspace }\n    steps: [{ run: 'true' }]\n  b:\n    runs-on: [mac]\n    steps: [{ run: 'true' }]\n`);
   assert.ok(mixed.info.diagnostics.some((d) => d.code === 'runs-on-mixed'));
 });

@@ -58,7 +58,8 @@ const KONFERSI = process.env.KONFERSI_FOLDER ?? join(homedir(), 'work/konfersi-u
  * and security), spawned once and fed ticket after ticket, plus one free slot. Shared by the kickoffs and nudges below.
  */
 const BUILD_LANES = {
-  ClaudePilot: `'ClaudePilot Backend' (role lane-backend: APIs, data, performance, security, algorithms, logic), 'ClaudePilot Frontend' (role lane-frontend: UI, UX, Lighthouse)`,
+  // D-71: a second backend lane, by area, so the backlog runs in parallel and the quota is used.
+  ClaudePilot: `'ClaudePilot Backend' (role lane-backend: chat and sessions, Portal MCP, tickets, knowledge, glance and the lab: APIs, data, performance, security, logic), 'ClaudePilot BE Infra' (role lane-backend: CI and runners, job-run and the cluster Jobs, k3s and deploy, secrets delivery, usage, spend and quota placement), 'ClaudePilot Frontend' (role lane-frontend: UI, UX, Lighthouse)`,
   // The owner's split for Konfersi (2026-10-15): four build lanes by area.
   Konfersi: `'Konfersi FE Business' (role lane-frontend: landing page, courses, console, accounts), 'Konfersi FE Lab' (role lane-frontend: the VS Code web lab at lab.konfersi.com and the standalone app, and all UI/UX responsiveness and UI performance work), 'Konfersi BE Business' (role lane-backend: the generic API, projects, everything in konfersi-backend that is not heavy), 'Konfersi BE Lab & AI' (role lane-backend: metocean compute, the AI reporting rewrites and the rest of lab and AI)`,
 };
@@ -81,7 +82,7 @@ const TRACKS = [
 ];
 
 /** D-61: live workers per lead (the memory budget of the shared pod). */
-const LEAD_WORKERS = { orchestrator: 5, konfersi: 7 };
+const LEAD_WORKERS = { orchestrator: 6, konfersi: 7 };
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
@@ -392,7 +393,7 @@ const statusSaysDone = (tstate) => {
   }
 };
 
-const NUDGE = 'Nobody is here to answer. Continue now: integrate what finished sub-agents and worker sessions brought, give each lane its next ticket (session_message) and keep the lanes alive (D-70), within your worker limit (5 live workers, D-68; sub-agents are off; QA and review on sonnet, D-63; you never implement yourself), keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
+const NUDGE = 'Nobody is here to answer. Continue now: integrate what finished sub-agents and worker sessions brought, give each lane its next ticket (session_message) and keep the lanes alive (D-70), within your worker limit (6 live workers, D-71; sub-agents are off; QA and review on sonnet, D-63; you never implement yourself), keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
 const WAKE = (why) => `This session was interrupted (${why}). Continue where you left off: read your status file docs/dev-sessions/status/orchestrator.md, look at git worktree list and git status in each worktree, and carry on. Nobody is here to answer questions.`;
 const MOVED = (to) => `This chat was moved to another Claude (${to}) and its process restarted: the sub-agents of the old process stopped. Continue now where you stopped: look at your tickets or status file, git worktree list and git status, restart the work that was in flight, commit and push WIP early. Nobody is here to answer questions.`;
 const NUDGE_AFTER_MIN = Number(process.env.NUDGE_AFTER_MIN ?? 3);

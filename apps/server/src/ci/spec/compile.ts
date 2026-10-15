@@ -234,7 +234,7 @@ export function compile(p: Pipeline, e: EventContext, opts: { maxParallel: numbe
       maxParallel: opts.maxParallel,
       jobs,
       ...(p.on.notify?.length ? { notify: p.on.notify } : {}),
-      ...(p.runsOn ? { runsOn: p.runsOn } : {}),
+      ...(p.runsOn ? { runsOn: p.runsOn, ...(p.runsOnFallback ? { runsOnFallback: p.runsOnFallback } : {}) } : {}),
     },
   };
 }

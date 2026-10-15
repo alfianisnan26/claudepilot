@@ -64,6 +64,8 @@ export interface Plan {
   notify?: string[];
   /** `runs-on` labels (T-557): the portal picks the runner; the runner itself ignores this. */
   runsOn?: string[];
+  /** `fallback: workspace` (owner, 2026-10-15): the portal starts the run in the repository's workspace when no runner is ready. */
+  runsOnFallback?: 'workspace';
   /**
    * Set by the portal when a runner executes the run for another workspace (T-557): the mirror (`m-<8 hex>-<remote>`) the commit was
    * bundled into, cloned instead of `repo`; and `leased`: the run's secrets were handed over with `cp-ci lease`, so the supervisor reads
