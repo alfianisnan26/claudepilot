@@ -114,7 +114,7 @@ import { redactSecrets, stripUnsafe } from '../portalmcp/sanitize.js';
 import { NO_VALUES, SessionStream, ValueRedactor } from './valueRedact.js';
 import { MessageRate, pickSpawnClaude, spawnProblem, SUBAGENT_TOOLS, WORKER_REPORTS, workerLimits, type AgentCaps, type SpawnClaudeWhy, type WorkerLimitsAsk, type WorkerReport } from './agents.js';
 import { capError, makeRoom, SESSION_CAP, slotWaitText, weightOf, type LiveCaps } from './caps.js';
-import { defaultBranch, Worktrees, type MadeWorktree } from './worktrees.js';
+import { branchProblem, defaultBranch, Worktrees, type MadeWorktree } from './worktrees.js';
 import { ChatStore, claudeSessionOf, EVENT_TEXT_MAX, sessionCwd, type ChatSessionPatch, type ChatSessionRow, type InputState } from './store.js';
 import { BtwEngine, readBtwConfig, type BtwHost } from './btw.js';
 import { BtwStore } from './btwStore.js';
@@ -1533,6 +1533,8 @@ export class ChatController {
       if (!installed) throw new AppError('SERVICE_UNAVAILABLE', 'The workspace’s chat host couldn’t be brought up to date, so a worktree can’t be made now.', { expose: true });
       ({ cwd, worktree } = await this.#makeWorktree(workspaceId, cwd, wtReq, { ticketId, title: typeof req.title === 'string' ? req.title.trim() : '' }));
     }
+    // T-476: a worker in a plain folder that is a git work tree: the folder's branch, read once now (CI counts it as the worker's own).
+    const folderBranch = parentId && !worktree && installed ? await this.#folderBranch(workspaceId, cwd) : null;
     // Asked again: the pool may have changed while the host was checked. The launch asks once more.
     this.#requireEligible(workspaceId);
     // T-417: the cap full with nothing that may sleep: the session is made and its start waits for a slot (below), never refused at once.
@@ -1540,7 +1542,7 @@ export class ChatController {
     const id = randomUUID();
     const full = this.#waitingAhead(workspaceId, null) ?? (await this.#tryRoom(workspaceId, null, id));
     try {
-      return this.#insert(id, full, { workspaceId, cwd, title, actor, claude, ticketId, parentId, worktree, agent, limits, continuedFrom, installed }, opts);
+      return this.#insert(id, full, { workspaceId, cwd, title, actor, claude, ticketId, parentId, worktree, folderBranch, agent, limits, continuedFrom, installed }, opts);
     } catch (e) {
       this.#granted.delete(id);
       throw e;
@@ -1560,6 +1562,7 @@ export class ChatController {
       ticketId: string | null;
       parentId: string | null;
       worktree: ChatWorktree | null;
+      folderBranch: string | null;
       agent: string | null;
       limits: { maxWorkers: number | null; subagents: boolean } | null;
       continuedFrom: { id: string; chain: string[] } | null;
@@ -1567,7 +1570,7 @@ export class ChatController {
     },
     opts: ChatCreateOptions,
   ): ChatSession {
-    const { workspaceId, cwd, title, actor, claude, ticketId, parentId, worktree, agent, limits, continuedFrom, installed } = m;
+    const { workspaceId, cwd, title, actor, claude, ticketId, parentId, worktree, folderBranch, agent, limits, continuedFrom, installed } = m;
     // Bypass capability (FR20): only a person's own opt-in, only where the policy allows it, never inherited or granted to another caller.
     let bypassCapable = false;
     if (opts.bypassOptIn === true) {
@@ -1592,6 +1595,7 @@ export class ChatController {
       startedBy: actor,
       bypassCapable,
       worktree,
+      folderBranch,
       agent,
       ...(limits ? { maxWorkers: limits.maxWorkers, subagents: limits.subagents } : {}),
     };
@@ -3747,6 +3751,16 @@ export class ChatController {
       }
     }
     return { cwd, worktree: { path: made.path, branch: made.branch, repo: made.repo } };
+  }
+
+  /**
+   * T-476: the branch checked out in `folder` when `folder` itself is one of its repository's work trees (git's own list, the exact path), or null:
+   * not a git work tree, a subfolder of one, a detached HEAD, a name the portal would not take for a branch, or the host could not tell.
+   */
+  async #folderBranch(workspaceId: string, folder: string): Promise<string | null> {
+    const trees = await this.#worktrees.list(workspaceId, folder).catch(() => []);
+    const here = trees.find((w) => w.path === folder);
+    return here && !here.detached && here.branch && branchProblem(here.branch) === null ? here.branch : null;
   }
 
   /** Worktrees reserved for a start that never came through are removed when nothing is in them, kept (and listed) when something is. */

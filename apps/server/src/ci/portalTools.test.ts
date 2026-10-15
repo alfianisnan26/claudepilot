@@ -16,7 +16,7 @@ test('tools: an admin reads and starts runs; an agent sees and acts on its own b
   const mcp = await portalMcpHarness();
   try {
     registerCiTools(h.svc, sessions, mcp.registry);
-    sessions.add({ id: 's1', workspaceId: WS, branch: 'ticket/12-mine', ticketId: 'T-12' });
+    sessions.add({ id: 's1', workspaceId: WS, branch: 'ticket/12-mine', ticketId: 'T-12', branchFromWorktree: true });
     sessions.add({ id: 's2', workspaceId: WS, branch: 'other/branch', ticketId: null });
     const repo = await remote(h, { '.pilot/ci.yml': PIPELINE });
     for (const b of ['ticket/12-mine', 'other/branch']) {

@@ -100,6 +100,8 @@ export type ChatSessionRow = {
   worktree_path?: string | null;
   worktree_branch?: string | null;
   worktree_repo?: string | null;
+  /** T-476 (migration 776): a worker's folder branch at its start; null otherwise. */
+  folder_branch?: string | null;
   bypass_capable?: number | null;
   claude_session_id?: string | null;
   cost_base_usd?: number | null;
@@ -386,6 +388,8 @@ export class ChatStore {
     parentId?: string | null;
     startedBy?: string | null;
     worktree?: ChatWorktree | null;
+    /** T-476: a worker's folder branch at its start (no worktree of its own). */
+    folderBranch?: string | null;
     bypassCapable?: boolean;
     /** The ended session it continues (T-270). */
     continuedFrom?: string | null;
@@ -401,8 +405,8 @@ export class ChatStore {
       .prepare(
         `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
            ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from, agent,
-           max_workers, subagents)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           max_workers, subagents, folder_branch)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         opts.id,
@@ -427,6 +431,7 @@ export class ChatStore {
         opts.agent ?? null,
         opts.maxWorkers ?? null,
         opts.subagents === false ? 0 : 1,
+        opts.worktree ? null : (opts.folderBranch ?? null),
       );
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(opts.id, opts.claudeId ?? '', opts.id, opts.cwd, now);
@@ -555,6 +560,7 @@ export class ChatStore {
       ticketId: row.ticket_id ?? null,
       parentId: row.parent_id ?? null,
       worktree: row.worktree_path ? { path: row.worktree_path, branch: row.worktree_branch ?? '', repo: row.worktree_repo ?? '' } : null,
+      ...(row.folder_branch ? { folderBranch: row.folder_branch } : {}),
       startedBy: row.started_by ?? null,
       agent: row.agent ?? null,
       maxWorkers: row.max_workers ?? null,
