@@ -5,8 +5,9 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { Store } from '../store/store.js';
 import { SpendStore } from '../usagespend/store.js';
 import { ticketReport } from '../usagespend/ticketReport.js';
+import type { SpikeEvidence } from '@portal/contracts';
 import type { SessionInfo, UsageRow } from '../usagespend/model.js';
-import { programIdOf, type CrewDeployRow, type CrewFacts, type CrewRun, type CrewSessionExtra, type CrewTicket, type TicketCostRow } from './scorecard.js';
+import { programIdOf, type CrewDeployRow, type CrewFacts, type CrewRefusal, type CrewRun, type CrewSessionExtra, type CrewSpikeRow, type CrewTicket, type TicketCostRow } from './scorecard.js';
 
 const CHUNK = 400;
 const inList = (n: number) => `(${Array(n).fill('?').join(', ')})`;
@@ -43,6 +44,7 @@ function loadSessions(db: DatabaseSync, spend: SpendStore, sinceMs: number): Map
   for (const r of db.prepare('SELECT DISTINCT session_id FROM chat_usage WHERE at_ms >= ?').all(sinceMs) as unknown as { session_id: string }[]) seed.add(r.session_id);
   for (const r of db.prepare(`SELECT id FROM chat_sessions WHERE state != 'ended'`).all() as unknown as { id: string }[]) seed.add(r.id);
   const up = spend.sessions(seed);
+  restoreLinks(db, spend, up);
   const tops = new Set<string>();
   for (const id of seed) {
     const top = up.has(id) ? programIdOf(id, up) : null;
@@ -57,22 +59,130 @@ function loadSessions(db: DatabaseSync, spend: SpendStore, sinceMs: number): Map
       ...chunked<{ id: string }>(db, level, (l) => `SELECT id FROM chat_sessions WHERE parent_id IN ${l}`),
       ...chunked<{ id: string }>(db, level, (l) => `SELECT id FROM chat_sessions WHERE continued_from IN ${l}`),
       ...chunked<{ id: string }>(db, level, (l) => `SELECT session_id AS id FROM usage_sessions WHERE parent_id IN ${l}`),
+      // A continuation whose link a delete cleared (restoreLinks).
+      ...chunked<{ id: string }>(db, level, (l) => `SELECT session_id AS id FROM chat_audit WHERE kind = 'session.continued' AND session_id IS NOT NULL AND json_extract(detail, '$.from') IN ${l}`),
     ];
     for (const r of rows) if (!all.has(r.id)) (all.add(r.id), next.push(r.id));
     level = next;
   }
-  return spend.sessions(all);
+  const out = spend.sessions(all);
+  restoreLinks(db, spend, out);
+  return out;
+}
+
+/**
+ * Gap 3 of S1a: deleting a session (chat/store.ts `deleteSession`) clears its successor's `continued_from` and its children's `parent_id`,
+ * and `usage_sessions` keeps no `continued_from`. So a deleted continuation split its lead chain and its workers fell out of the program.
+ * The links are put back from what outlives the delete: the `session.continued` audit row (the successor and the row it continued) and the
+ * parent `usage_sessions` kept from a live child's last request. Ancestors this brings in are loaded too. Bounded; mutates `map`.
+ */
+export function restoreLinks(db: DatabaseSync, spend: SpendStore, map: Map<string, SessionInfo>): void {
+  for (let round = 0; round < 16; round++) {
+    const noCont = [...map.values()].filter((s) => !s.continuedFrom).map((s) => s.sessionId);
+    const noParent = [...map.values()].filter((s) => s.exists && !s.parentId).map((s) => s.sessionId);
+    const missing = new Set<string>();
+    const audits = chunked<{ session_id: string; detail: string }>(db, noCont, (l) => `SELECT session_id, detail FROM chat_audit WHERE kind = 'session.continued' AND session_id IN ${l} ORDER BY id`);
+    for (const a of audits) {
+      let from: unknown;
+      try {
+        from = (JSON.parse(a.detail) as { from?: unknown }).from;
+      } catch {
+        continue;
+      }
+      const s = map.get(a.session_id);
+      if (!s || s.continuedFrom || typeof from !== 'string' || !from || from === s.sessionId) continue;
+      map.set(s.sessionId, { ...s, continuedFrom: from });
+      if (!map.has(from)) missing.add(from);
+    }
+    const kept = chunked<{ session_id: string; parent_id: string }>(db, noParent, (l) => `SELECT session_id, parent_id FROM usage_sessions WHERE parent_id IS NOT NULL AND session_id IN ${l}`);
+    for (const k of kept) {
+      const s = map.get(k.session_id);
+      if (!s || s.parentId || k.parent_id === s.sessionId) continue;
+      map.set(s.sessionId, { ...s, parentId: k.parent_id });
+      if (!map.has(k.parent_id)) missing.add(k.parent_id);
+    }
+    if (!missing.size) return;
+    for (const [id, s] of spend.sessions(missing)) if (!map.has(id)) map.set(id, s);
+  }
 }
 
 function loadExtra(db: DatabaseSync, ids: readonly string[]): Map<string, CrewSessionExtra> {
   const out = new Map<string, CrewSessionExtra>();
-  const rows = chunked<{ id: string; agent: string | null; model: string | null; max_workers: number | null; subagents: number; created_at: string }>(
-    db,
-    ids,
-    (l) => `SELECT id, agent, model, max_workers, subagents, created_at FROM chat_sessions WHERE id IN ${l}`,
-  );
-  for (const r of rows) out.set(r.id, { agent: r.agent, model: r.model, maxWorkers: r.max_workers, subagents: r.subagents === 1, createdAtMs: ms(r.created_at) ?? 0 });
+  const rows = chunked<{
+    id: string;
+    agent: string | null;
+    model: string | null;
+    max_workers: number | null;
+    subagents: number;
+    created_at: string;
+    context_used: number | null;
+    ended_reason: string | null;
+    state_since: string | null;
+  }>(db, ids, (l) => `SELECT id, agent, model, max_workers, subagents, created_at, context_used, ended_reason, state_since FROM chat_sessions WHERE id IN ${l}`);
+  for (const r of rows)
+    out.set(r.id, {
+      agent: r.agent,
+      model: r.model,
+      maxWorkers: r.max_workers,
+      subagents: r.subagents === 1,
+      createdAtMs: ms(r.created_at) ?? 0,
+      contextUsed: r.context_used,
+      endedReason: r.ended_reason,
+      stateSinceMs: ms(r.state_since),
+    });
+  // A deleted continuation: its creation is the moment of its `session.continued` audit row (a hand-over); nothing else is known.
+  const gone = ids.filter((id) => !out.has(id));
+  const audits = chunked<{ session_id: string; at: string }>(db, gone, (l) => `SELECT session_id, MIN(at) AS at FROM chat_audit WHERE kind = 'session.continued' AND session_id IN ${l} GROUP BY session_id`);
+  for (const a of audits) {
+    const atMs = ms(a.at);
+    if (atMs !== null) out.set(a.session_id, { agent: null, model: null, maxWorkers: null, subagents: false, createdAtMs: atMs, contextUsed: null, endedReason: null, stateSinceMs: null });
+  }
   return out;
+}
+
+/** Tickets with a deploy of one of their runs waiting for approval now (`pending` or `waiting`), whatever its age. */
+function loadPendingDeployTickets(db: DatabaseSync): Set<string> {
+  const rows = db
+    .prepare(`SELECT DISTINCT r.ticket_id AS t FROM ci_deployments d JOIN ci_runs r ON r.id = d.run_id WHERE d.approval IN ('pending', 'waiting') AND r.ticket_id IS NOT NULL`)
+    .all() as unknown as { t: string }[];
+  return new Set(rows.map((r) => r.t));
+}
+
+function loadSpikes(db: DatabaseSync, sinceMs: number): CrewSpikeRow[] {
+  const rows = db.prepare(`SELECT at_ms, kind, session_id, claude_id, evidence FROM usage_spikes WHERE at_ms >= ? ORDER BY at_ms`).all(sinceMs) as unknown as {
+    at_ms: number;
+    kind: CrewSpikeRow['kind'];
+    session_id: string | null;
+    claude_id: string;
+    evidence: string;
+  }[];
+  const out: CrewSpikeRow[] = [];
+  for (const r of rows) {
+    try {
+      out.push({ atMs: r.at_ms, kind: r.kind, sessionId: r.session_id, claudeId: r.claude_id, evidence: JSON.parse(r.evidence) as SpikeEvidence });
+    } catch {
+      // A row whose evidence does not parse is left out.
+    }
+  }
+  return out;
+}
+
+function loadRefusals(db: DatabaseSync, sinceMs: number): CrewRefusal[] {
+  const rows = db.prepare(`SELECT at, session_id, detail FROM chat_audit WHERE kind = 'agent.refused' AND session_id IS NOT NULL AND at >= ?`).all(new Date(sinceMs).toISOString()) as unknown as {
+    at: string;
+    session_id: string;
+    detail: string | null;
+  }[];
+  return rows.map((r) => {
+    let scope = 'unknown';
+    try {
+      const s = (JSON.parse(r.detail ?? '{}') as { scope?: unknown }).scope;
+      if (typeof s === 'string' && /^[a-z_]{1,40}$/.test(s)) scope = s;
+    } catch {
+      // keep unknown
+    }
+    return { atMs: ms(r.at) ?? 0, sessionId: r.session_id, scope };
+  });
 }
 
 /** Tickets that may matter since `sinceMs`: not closed, or changed or closed since then (a ticket closed before it stayed closed). */
@@ -156,6 +266,9 @@ export function loadCrewFacts(store: Store, nowMs: number, sinceMs: number): Cre
     tickets: tryRead(() => loadTickets(db, sinceMs)),
     runs: tryRead(() => loadRuns(db, sinceMs)),
     deploys: tryRead(() => loadDeploys(db, sinceMs)),
+    pendingDeployTickets: tryRead(() => loadPendingDeployTickets(db)),
+    spikes: tryRead(() => loadSpikes(db, sinceMs)),
+    refusals: tryRead(() => loadRefusals(db, sinceMs)),
     usage: (fromMs: number, toMs: number, ids: ReadonlySet<string>): UsageRow[] => spend.usageRows(fromMs, toMs, { sessionIds: ids }),
     // Usage spend's ONE per-ticket function (T-449), done tickets of the window only.
     ticketCosts: (rows: UsageRow[], fromMs: number, toMs: number): TicketCostRow[] =>

@@ -1020,7 +1020,7 @@ preloaded files, against today's brief) needs the arm before the brief is writte
   draws outside the blocks and the seed; the fifth review's opt-outs only for drawing roles, only after the draw, only the experiment's
   own draws, a made-up ticket as no ticket on the real tickets table; the tool) and `qa/planStep.test.ts`.
 
-### 28.14 Crew scorecard (T-450 slice S1a: the read API and `crew_scorecard`; no migration, no UI yet)
+### 28.14 Crew scorecard (T-450 slices S1a and S1b: the read API and `crew_scorecard`; no migration, no UI yet)
 
 How well a crew works and what it costs, per PROGRAM and per WINDOW, with the standing decisions it is held to. Read only, over the
 tables the portal already keeps; nothing new is stored.
@@ -1028,7 +1028,11 @@ tables the portal already keeps; nothing new is stored.
 - **Program.** The top of a session's lineage (usage spend's `rootOf`: the session it continues, else its parent, up to the first row
   of the top chat) names it; the **lead chain** is that row and its continuations (`chainRootOf` is the program), oldest first; every
   other session under it, at any depth, live or kept after a delete, is a **worker**. A top with no worker is a chat, not a program. A
-  program is listed when one of its sessions made a request since the start of the previous window, or is still live.
+  program is listed when one of its sessions made a request since the start of the previous window, or is still live. The lead chain is
+  ordered by its links (each row continues the one before). A delete clears the successor's `continued_from` and the children's
+  `parent_id` (chat/store.ts); the loader puts them back from what outlives it: the `session.continued` audit row (the successor and the
+  row it continued; its time is a deleted continuation's creation) and the parent `usage_sessions` kept from the child's requests. So a
+  deleted continuation stays in the lead chain and its workers stay in the program.
 - **Windows.** `1h`, `6h`, `day` (default) or `week`, ending now; with `compare` (default on) the window before it, the same length.
 - **The program's tickets**: held by one of its sessions (`ticket_id`), assigned to one, or with a timeline event written by one
   (`session:<id>`). A ticket two programs touched counts in both.
@@ -1036,13 +1040,27 @@ tables the portal already keeps; nothing new is stored.
   change from done or wont_do back to work, in the window); wont_do (closed as wont_do in the window); lead time from the first change to
   in_progress to `closed_at`, p50 and p90 by nearest rank per type (a done ticket with no start recorded is counted as `noStart`, not
   timed); the review backlog: tickets in review at the window's end (the status timeline replayed), age since they entered review, and
-  what each waits for from a `waits-<what>` tag (else null: not recorded); CI runs of the program's sessions or tickets that finished
+  what each waits for: a `waits-<what>` tag first (`waitsBasis: tag`); else, for the window that ends now only (`derived`), a deploy of
+  one of its runs waiting for approval (`deploy`), a live QA, verifier, reviewer or ux-check session holding it (`qa`), or a person it
+  is assigned to (`owner`); else null. An earlier window shows the tag only: the portal keeps no history of those states. CI runs of the program's sessions or tickets that finished
   in the window, passed, failed and cancelled per pipeline; the deploys (`ci_deployments`) of those runs, with approval and outcome.
 - **Cost** (ESTIMATE, Claude Code's price): the dollars of the program's requests in the window; lead = the lead chain's own requests,
   workers = the rest; the lead's share in percent; per done ticket all-in (total over done) and workers only (workers over done). Per
   type: usage spend's per-ticket dollars of the done tickets (`ticketReport`, T-449, the same function as Usage → Attribution by
-  ticket: own plus the lead's part split over its workers' tickets), over the window's requests; all-in is the ticket's total, workers
-  only its own.
+  ticket: own plus the lead's part split over its workers' tickets), over the tickets' LIFE: the program's requests from the oldest such
+  ticket's creation (at most 30 days back) to the window's end, so a ticket worked in an earlier window shows its whole cost; all-in is
+  the ticket's total, workers only its own. The window's per done ticket figure stays the window's dollars over done (a throughput rate).
+- **Efficiency** (over the program's requests in the window): the dollars' split by token class, input, output, cache read and cache
+  write in percent at list price (`lab/prices.ts`: output x5, cache write x1.25, cache read x0.1 or the model's own weight; ESTIMATE;
+  unavailable `no_samples` without a priced token); requests and requests per session; context (`chat_sessions.context_used`, the last
+  turn's) p50 and p90 per role (the worker's agent, `lead`, `unrecorded`) and per lead session (its direct workers, with the lead's own
+  as `leadTokens`), over sessions with a request in the window; the five sessions that cost most; the model mix per role; sessions per
+  role with how many started in the window (churn); live sessions per Claude now (T-427 spread; the window that ends now only); lead
+  hand-overs (continuations created in the window, T-423) and per hour; the usage spikes (`usage_spikes`, T-418) of its sessions, or a
+  rate spike whose top session is one of them.
+- **Health**: `agent.refused` audit rows of its sessions in the window, by scope; sessions ended by an integrity or credential check
+  (`ended_reason` prefixes) or interrupted by an error, in the window. Pod memory and OOM restarts are unavailable (`no_source`): the
+  portal does not record them.
 - **Targets** (now for live workers, over the window for the rest), each `ok`, `warn`, `breach` or `unavailable`, with the offenders:
   D-61 `live_workers` (live workers at most the live lead's `max_workers`, else 3); D-61 `lead_subagents` (Agent-tool sub-agents in the
   lead chain's requests, `chat_usage.agents`: any is a breach; none while a live lead may still start them, `subagents` on, is a
@@ -1055,10 +1073,11 @@ tables the portal already keeps; nothing new is stored.
 - **Read.** `GET /api/lab/scorecard?window=&compare=0|1&program=` (`view` on the platform area `usage`; an agent actor reads only its
   own program, the top of its session's lineage; another program, or one that does not exist, is the same 404) and the Portal MCP tool
   `crew_scorecard` (agent, reach session, read only; the same scoping, `NOT_FOUND`; an admin's token reads every program; short by
-  default, `full: true` for every figure with its basis and source). Wire types: `packages/contracts/src/scorecard.ts`.
-- **Known limits.** The lead's part of a done ticket's cost is the window's only (a ticket worked in an earlier window shows less);
-  waits-for needs the tag; a deleted session keeps no `continued_from`, so its continuation may count as a worker; the session list
-  is bounded at 5,000 per load.
+  default; `full: true` for every figure with its basis, the sources named once in `basis` so the result stays under the MCP size limit;
+  the route keeps a source on each figure). Wire types: `packages/contracts/src/scorecard.ts`.
+- **Known limits.** A done ticket's life cost looks back at most 30 days; waits-for is derived for the current window only; context per
+  hour (T-423) is not computed, only hand-overs; the session list is bounded at 5,000 per load.
 - Source: `lab/scorecard.ts` (pure), `lab/scorecardData.ts` (the loader), `Lab.scorecard` (`lab/index.ts`), `lab/routes.ts`,
   `lab/portalTools.ts`; tests `lab/scorecard.test.ts` (a seeded crew: two programs, a continuation, workers on two Claudes, tickets of
-  each kind, CI runs and deploys, usage rows; the numbers, the targets, the previous window, unavailable, the route and the tool's scoping).
+  each kind, CI runs and deploys, usage rows; the numbers in each window, the targets, the previous window, unavailable, life cost,
+  derived waits, a deleted continuation, efficiency, health, the route and the tool's scoping).

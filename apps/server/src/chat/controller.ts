@@ -144,6 +144,14 @@ import { DAY_MS, readRecoverConfig, recoverContinuation, recoverRefusal, type Re
 /** T-102: the areas a hint may name (anything else a reader returns is left out). */
 const CONFIG_CHANGES: ReadonlySet<string> = new Set<ChatConfigChange>(['mcpset', 'settings', 'policy', 'secrets', 'account', 'persona', 'context', 'skillset', 'browser', 'foundation', 'portal_tools', 'other']);
 const isConfigChange = (v: string): v is ChatConfigChange => CONFIG_CHANGES.has(v);
+/**
+ * T-472: areas a running Claude Code process takes by itself. Instruction contexts are managed rule files whose drop-in carries a stamp
+ * (personas/render.ts CONTEXT_STAMP), and a changed drop-in makes the process re-read them, so a delivery of only these needs no restart
+ * and shows no hint. A persona is not here: its delivery also sets the model, the output style, agents and hooks.
+ */
+const HOT_AREAS: ReadonlySet<string> = new Set<ChatConfigChange>(['context']);
+/** T-472: the default quiet time before an automatic restart (`autoRestartSettleMs`): deliveries within it give one restart. */
+export const AUTO_RESTART_SETTLE_MS = 10 * 60_000;
 /** T-102: how long a forced restart gives the interrupted turn to end before the process is stopped anyway. */
 const INTERRUPT_WAIT_MS = 5_000;
 
@@ -556,6 +564,8 @@ export class ChatController {
   /** T-102: sessions whose queued or automatic restart is being started now, and a pending re-check of a boundary. */
   readonly #queuedFiring = new Set<string>();
   readonly #boundaryRecheck = new Map<string, ReturnType<typeof setTimeout>>();
+  /** T-472: per session, the look again once its newest change has been quiet for `autoRestartSettleMs`. */
+  readonly #settleTimers = new Map<string, () => void>();
   /** The move whose events are being written: they carry its id, so the transcript folds them into one card. */
   readonly #tags = new Map<string, string>();
   /** Git worktrees: made and removed through the session host's hardened git. */
@@ -677,6 +687,17 @@ export class ChatController {
    */
   configChanges?: (workspaceId: string, sinceMs: number) => readonly string[];
   /**
+   * Installed by the owner (T-472): each delivery that landed in a workspace after `sinceMs`, newest first, with when it landed and the
+   * areas it changed (null: recorded before areas were). When set, the hint and the automatic restart go by it instead of `deliveredAt`
+   * and `configChanges`, so the time of a change is that of the newest delivery a running process cannot take by itself.
+   */
+  configChangeLog?: (workspaceId: string, sinceMs: number) => readonly { at: string; areas: readonly string[] | null }[];
+  /**
+   * T-472: how long the newest change must stay quiet before the portal restarts a session by itself, so a burst of deliveries gives one
+   * restart. A person's queued restart and Restart now do not wait for it.
+   */
+  autoRestartSettleMs = AUTO_RESTART_SETTLE_MS;
+  /**
    * Installed by Portal MCP (I8): a per-session token for the process, minted at every launch (a new session, a resume,
    * a wake, a move to another Claude), which replaces the one before. Unset, or null for a workspace that hasn't opted
    * in, and the session starts without portal tools. A move that fails after minting leaves the old process with a
@@ -744,6 +765,15 @@ export class ChatController {
   crewSettleMs = 1_000;
   /** T-294: the crew reports' clock and timers (`set` returns its cancel); tests step them by hand instead of waiting on the wall clock. */
   crewTimers: { now(): number; set(fn: () => void, ms: number): () => void } = {
+    now: () => Date.now(),
+    set: (fn, ms) => {
+      const timer = setTimeout(fn, ms);
+      timer.unref?.();
+      return () => clearTimeout(timer);
+    },
+  };
+  /** T-472: the clock and timer of the settle wait before an automatic restart (`set` returns its cancel); tests step them by hand. */
+  settleClock: { now(): number; set(fn: () => void, ms: number): () => void } = {
     now: () => Date.now(),
     set: (fn, ms) => {
       const timer = setTimeout(fn, ms);
@@ -860,6 +890,8 @@ export class ChatController {
     // T-102: a boundary re-check must not run on a closed store (it did after a test's teardown).
     for (const timer of this.#boundaryRecheck.values()) clearTimeout(timer);
     this.#boundaryRecheck.clear();
+    for (const cancel of this.#settleTimers.values()) cancel();
+    this.#settleTimers.clear();
     for (const out of this.#crewOut.values()) out.timer?.();
     this.#crewOut.clear();
     this.#crewSeen.clear();
@@ -1324,7 +1356,7 @@ export class ChatController {
    * What changed after this session's process started (Claude Code reads its MCP servers, settings and portal tools once, at start): the
    * workspace's latest delivery when it landed after the start (FR53), with the areas it and any other delivery since changed (T-102), and
    * the workspace's agent access turned on or off since (`portal_tools`). `at` is the newest. Null for a process that isn't running, or when
-   * nothing newer landed.
+   * nothing newer landed. T-472: a hot area (an instruction context) is left out, so a delivery of only those is no change at all.
    */
   #configChange(session: ChatSession): { at: string; reasons: ChatConfigChange[] } | null {
     if (session.process !== 'live' || session.state === 'ended') return null;
@@ -1332,7 +1364,24 @@ export class ChatController {
     if (!Number.isFinite(started)) return null;
     let at: string | null = null;
     const reasons: ChatConfigChange[] = [];
-    if (this.deliveredAt) {
+    if (this.configChangeLog) {
+      let log: readonly { at: string; areas: readonly string[] | null }[];
+      try {
+        log = this.configChangeLog(session.workspaceId, started);
+      } catch {
+        log = [];
+      }
+      for (const e of log) {
+        const landed = Date.parse(e.at);
+        if (!Number.isFinite(landed) || landed <= started) continue;
+        // Areas nobody can name (an old row, an empty or unknown list) read `other`, which restarts: only a known hot area is skipped.
+        const named = (e.areas ?? []).filter(isConfigChange);
+        const cold: ChatConfigChange[] = named.length ? named.filter((a) => !HOT_AREAS.has(a)) : ['other'];
+        if (!cold.length) continue;
+        for (const a of cold) if (!reasons.includes(a)) reasons.push(a);
+        if (!at || landed > Date.parse(at)) at = e.at;
+      }
+    } else if (this.deliveredAt) {
       let delivered: string | null;
       try {
         delivered = this.deliveredAt(session.workspaceId);
@@ -1341,15 +1390,19 @@ export class ChatController {
       }
       const landed = delivered ? Date.parse(delivered) : NaN;
       if (Number.isFinite(landed) && landed > started) {
-        at = delivered;
         let areas: readonly string[] = [];
         try {
           areas = this.configChanges?.(session.workspaceId, started) ?? [];
         } catch {
           areas = [];
         }
-        for (const a of areas) if (isConfigChange(a) && !reasons.includes(a)) reasons.push(a);
-        if (!reasons.length) reasons.push('other');
+        const named = areas.filter(isConfigChange);
+        // T-472: only hot areas since the start: the process has them already.
+        if (!named.length || named.some((a) => !HOT_AREAS.has(a))) {
+          at = delivered;
+          for (const a of named) if (!HOT_AREAS.has(a) && !reasons.includes(a)) reasons.push(a);
+          if (!reasons.length) reasons.push('other');
+        }
       }
     }
     const tools = this.#toolsChangedAt.get(session.workspaceId);
@@ -2773,6 +2826,22 @@ export class ChatController {
     }
     const want = s.restartQueued;
     if (!want || s.restartHeld || this.#queuedFiring.has(id) || this.#closed) return;
+    // T-472: an automatic restart waits until its change has been quiet for the settle time, so a burst of deliveries gives one restart.
+    // A newer change moves `at`, and the look again then waits once more.
+    if (want === 'auto' && s.configChanged) {
+      const wait = Date.parse(s.configChanged.at) + this.autoRestartSettleMs - this.settleClock.now();
+      if (wait > 0) {
+        this.#settleTimers.get(id)?.();
+        const cancel = this.settleClock.set(() => {
+          this.#settleTimers.delete(id);
+          if (this.#closed) return;
+          const now = this.#chat.get(id);
+          if (now) this.#fireQueued(this.#decorate(now));
+        }, wait + 50);
+        this.#settleTimers.set(id, cancel);
+        return;
+      }
+    }
     if (!this.#atBoundary(id)) {
       const row = this.#chat.row(id);
       if (row?.state === 'idle' && row.process === 'live' && !this.#boundaryRecheck.has(id)) {
