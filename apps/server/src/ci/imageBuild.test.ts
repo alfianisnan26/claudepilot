@@ -139,6 +139,11 @@ function world(seeds: Seed[] = [], scenario: { rc?: number; clone?: string; kani
     children.push(p);
     let out = '';
     p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d));
+    // A script that refuses its arguments exits without reading stdin: the write then meets a closed pipe (EPIPE). That is the script's
+    // right, not a failure; any other stream error still throws (and the exit code and output are asserted by each test).
+    p.stdin.on('error', (e: NodeJS.ErrnoException) => {
+      if (e.code !== 'EPIPE' && e.code !== 'ERR_STREAM_DESTROYED') throw e;
+    });
     p.stdin.end(input ?? '');
     const done = new Promise<{ code: number | null; out: string }>((res) => p.on('close', (code) => res({ code, out })));
     return { p, done, out: () => out };
