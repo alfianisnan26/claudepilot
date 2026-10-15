@@ -10,10 +10,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff b37628e (T-515 e021cb6 + T-527 ea81071 + packs): gate GREEN claudepilot-gate-b37628e-0953 (memory peak 2189Mi/8192Mi,
   0 OOM) + web 629/629 (claudepilot-job-a19b47c9).
 
-## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-426 WAITING ab93b54 (on T-401 060aca4), cffb12b1 T-486 S2b WAITING 27b95c7,
-  47710391 qa (sonnet) T-531 done -> now T-401 QA (code reading, then GO), 0df3dd19 impl-t379 (sonnet) T-379 090fbbf (minors 8dadddb + lead merge of 060aca4, 4852): WAITING src/ci re-run)
+## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-426 WAITING ab93b54 (on T-401 060aca4), cffb12b1 T-486 S2b DONE 6eb6fbf (4880) -> now T-531 S2c,
+  47710391 qa (sonnet) T-401 QA WAITING GO, 0df3dd19 impl-t379 (sonnet) T-379 090fbbf (minors 8dadddb + lead merge of 060aca4, 4852): GO 12:20 src/ci re-run)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-486 S2b (GO 12:07) -> T-401 QA / T-379 re-run (whichever is ready) -> T-426. T-379 live proof PASS (4845, job-2d70c331). Next free workers: T-401 blind review (opus), T-531 S2c fix. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
+  Cluster: T-379 re-run (GO 12:20) -> T-401 QA -> T-426 -> T-531 S2c -> T-486 QA (6eb6fbf). T-379 live proof PASS (4845, job-2d70c331). Next free workers: T-401 blind review (opus), T-531 S2c fix. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
 - T-401 (high, security): S1 DONE 060aca4 (4 Jobs green per author; fetch does npm ci --ignore-scripts with creds). Touches
   gate-job.yaml: review must confirm the gate's checks unchanged (4745). Next: blind review (opus) + QA, lead gate, merge.
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
