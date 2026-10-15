@@ -374,13 +374,29 @@ test('the Job\'s own script: checkout, the command\'s exit code, the artifacts b
   assert.equal(r.status, 3, r.stdout + r.stderr);
   assert.match(r.stdout, /ran in claudepilot\n/);
   assert.match(r.stdout, /=== JOB-RUN ARTIFACTS BEGIN\n[A-Za-z0-9+/=\n]+=== JOB-RUN ARTIFACTS END\n/);
-  assert.match(r.stdout, /=== JOB-RUN SUMMARY claudepilot@[0-9a-f]+ checkout=\d+s steps=\d+s run=\d+s rc=3 node=k3s-master\n=== JOB-RUN EXIT 3\n$/);
+  assert.match(r.stdout, /=== JOB-RUN SUMMARY claudepilot@[0-9a-f]+ checkout=\d+s steps=\d+s run=\d+s rc=3 node=k3s-master\n=== JOB-RUN MEMORY peak=\S+ limit=\S+ oom_kills=\S+\n=== JOB-RUN EXIT 3\n$/);
   const b64 = (r.stdout.split('=== JOB-RUN ARTIFACTS BEGIN\n')[1] ?? '').split('=== JOB-RUN ARTIFACTS END')[0]?.replace(/\s/g, '') ?? '';
   const list = spawnSync('tar', ['-tzf', '-'], { input: Buffer.from(b64, 'base64'), encoding: 'utf8' }).stdout;
   assert.match(list, /out\/r\.txt/);
   const missing = pod('no-such-branch', 'true');
   assert.equal(missing.status, 2);
   assert.match(missing.stdout, /=== JOB-RUN EXIT 2\njob-run: no-such-branch of .* is not on the remote \(push it first\)/);
+
+  // T-524: the memory line reads the Job's own cgroup (peak, limit, OOM kills), the numbers the limit is sized from.
+  const cg = join(root, 'cgroup'); mkdirSync(cg);
+  writeFileSync(join(cg, 'memory.peak'), `${3 * 1024 * 1048576 + 5}\n`);
+  writeFileSync(join(cg, 'memory.max'), `${4 * 1024 * 1048576}\n`);
+  writeFileSync(join(cg, 'memory.events'), 'low 0\nhigh 0\nmax 2\noom 1\noom_kill 1\n');
+  const mem = spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
+    PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
+    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('true').toString('base64'), JR_CGROUP: cg } });
+  assert.equal(mem.status, 0, mem.stdout + mem.stderr);
+  assert.match(mem.stdout, /=== JOB-RUN MEMORY peak=3072Mi limit=4096Mi oom_kills=1\n=== JOB-RUN EXIT 0\n$/);
+  writeFileSync(join(cg, 'memory.max'), 'max\n'); rmSync(join(cg, 'memory.peak')); rmSync(join(cg, 'memory.events'));
+  const unl = spawnSync('bash', ['-c', body], { encoding: 'utf8', env: {
+    PATH: process.env.PATH, JR_ROOT: join(root, `run-${hex(3)}`), JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`, JR_REF: 'main', JR_ALSO: '',
+    JR_STEPS: 'none', JR_ARTIFACTS: '', JR_ARTIFACT_MAX: '1', JR_CMD: Buffer.from('true').toString('base64'), JR_CGROUP: cg } });
+  assert.match(unl.stdout, /=== JOB-RUN MEMORY peak=\? limit=max oom_kills=\?\n/, 'a missing file is "?", never a guessed number');
 
   // T-491: for Event only, with a token, the user npmrc maps @isnanme to GitHub Packages through a reference npm expands (the value is
   // never written) and the git credential helper is scoped to that one URL and path. The https URL is served from the local bare
@@ -477,7 +493,7 @@ test('the Job\'s own script: the proof (passes on the ref, fails on the other, k
   assert.equal(ok.status, 0, text(ok));
   assert.match(ok.stdout, /SUMMARY claudepilot@[0-9a-f]+ .* rc=0/);
   assert.match(ok.stdout, /SUMMARY-AGAINST claudepilot@[0-9a-f]+ tests-from=[0-9a-f]+ kept=check.sh run=\d+s rc=1/);
-  assert.match(ok.stdout, /=== JOB-RUN PROOF: passes on main \([0-9a-f]+\), fails on [0-9a-f]{40} \([0-9a-f]+\) \(rc=1\)\n=== JOB-RUN EXIT 0\n$/);
+  assert.match(ok.stdout, /=== JOB-RUN PROOF: passes on main \([0-9a-f]+\), fails on [0-9a-f]{40} \([0-9a-f]+\) \(rc=1\)\n=== JOB-RUN MEMORY [^\n]+\n=== JOB-RUN EXIT 0\n$/);
 
   const same = pod({ JR_AGAINST: 'main', JR_KEEP: 'check.sh' });
   assert.equal(same.status, 1, text(same));

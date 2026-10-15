@@ -129,6 +129,9 @@ spec:
                 elif [ "$rc2" -eq 0 ]; then say "PROOF: NO PROOF: it passes on both $JR_REF ($sha) and $JR_AGAINST ($asha)"; rc=1
                 else say "PROOF: passes on $JR_REF ($sha), fails on $JR_AGAINST ($asha) (rc=$rc2)"; rc=0; fi
               fi
+              # The Job's own memory (T-524): the cgroup's peak (in-memory /tmp included) against its limit, the number the limit is sized from.
+              cg=${JR_CGROUP:-/sys/fs/cgroup}; mib() { v=$(cat "$cg/$1" 2>/dev/null) && [[ $v =~ ^[0-9]+$ ]] && echo "$((v / 1048576))Mi" || echo "${v:-?}"; }
+              say "MEMORY peak=$(mib memory.peak) limit=$(mib memory.max) oom_kills=$(sed -n 's/^oom_kill //p' "$cg/memory.events" 2>/dev/null | grep . || echo '?')"
               say "EXIT $rc"
               exit "$rc"
               # JOB-RUN-SCRIPT END
