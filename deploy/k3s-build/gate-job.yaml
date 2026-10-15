@@ -24,6 +24,7 @@ spec:
   template:
     metadata:
       labels: {app: claudepilot-gate}
+      annotations: {kubectl.kubernetes.io/default-container: gate}
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
@@ -47,6 +48,49 @@ spec:
                 topologyKey: kubernetes.io/hostname
                 namespaces: [isnan-claudepilot-workspaces]
                 labelSelector: {matchLabels: {claudepilot.managed: "true"}}
+      # T-401: the token is in the init container `fetch` alone, which runs no code of the commit or of a dependency: it clones, and fills
+      # npm's cache on /tmp with `npm ci --ignore-scripts` in a throwaway copy. The `gate` container has no secret; gate.sh's own npm ci
+      # (with the install scripts) installs from that cache (prefer-offline), so no install script, test or build ever sees the token.
+      initContainers:
+        - name: fetch
+          image: IMAGE
+          env:
+            - {name: COMMIT, value: "COMMIT"}
+            - name: NODE_AUTH_TOKEN
+              valueFrom: {secretKeyRef: {name: NAME, key: node-auth-token}}
+          command: [bash, -c]
+          args:
+            - |
+              # GATE-FETCH BEGIN
+              set -u
+              root=${GATE_ROOT:-/tmp}
+              (
+              export HOME=${GATE_FETCH_HOME:-/fetch-home} npm_config_cache=$root/npm-cache npm_config_update_notifier=false
+              mkdir -p "$HOME"
+              cd "$root" && git init -q src && cd src || exit 1
+              if ! git fetch -q --depth 1 "${GATE_REPO_URL:-https://github.com/alfianisnan26/claudepilot.git}" "$COMMIT" || ! git checkout -q FETCH_HEAD; then
+                echo "GATE-VERDICT: red: $COMMIT is not on GitHub (push it first)"; exit 1
+              fi
+              rm -rf "$root/warm"; mkdir -p "$root/warm"
+              if ! { git archive HEAD | tar -x -C "$root/warm" && (cd "$root/warm" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error); }; then
+                echo "npm cache: filling it failed; gate.sh's npm ci says why"
+              fi
+              rm -rf "$root/warm"
+              # No token VALUE in what the gate container gets (the pattern goes to grep on a pipe; only file names are printed).
+              tok=${NODE_AUTH_TOKEN:-}
+              if [ "${#tok}" -ge 8 ] && printf '%s\n' "$tok" | grep -rlF -f - "$root" 2>/dev/null | head -n 20 | grep .; then
+                echo "GATE-VERDICT: red: the token is in the files above, which the gate would see"; exit 3
+              fi
+              echo "credentials: used for npm's cache only; none is in the files the gate gets"
+              ) > "$root/fetch.log" 2>&1
+              echo $? > "$root/fetch.rc"
+              # GATE-FETCH END
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: fetch-home, mountPath: /fetch-home}
+          resources:
+            requests: {cpu: 1000m, memory: 8Gi}
+            limits: {cpu: "4", memory: 8Gi}
       containers:
         - name: gate
           image: IMAGE
@@ -56,16 +100,17 @@ spec:
             - {name: GATE_CONCURRENCY, value: "3"}
             - {name: GATE_FILES, value: "FILES"}
             - {name: GATE_VERDICT_SH, value: "VERDICT"}
-            - name: NODE_AUTH_TOKEN
-              valueFrom: {secretKeyRef: {name: NAME, key: node-auth-token}}
+            # The cache the fetch container filled (no token here: T-401).
+            - {name: npm_config_cache, value: /tmp/npm-cache}
+            - {name: npm_config_prefer_offline, value: "true"}
           command: [bash, -c]
           args:
             - |
               set -u
-              cd /tmp && git init -q src && cd src || exit 1
-              if ! git fetch -q --depth 1 https://github.com/alfianisnan26/claudepilot.git "$COMMIT" || ! git checkout -q FETCH_HEAD; then
-                echo "GATE-VERDICT: red: $COMMIT is not on GitHub (push it first)"; exit 1
-              fi
+              cat /tmp/fetch.log 2>/dev/null
+              frc=$(cat /tmp/fetch.rc 2>/dev/null || true)
+              if [ "$frc" != 0 ]; then grep -q '^GATE-VERDICT: ' /tmp/fetch.log 2>/dev/null || echo "GATE-VERDICT: red: the fetch failed (rc=${frc:-none})"; exit 1; fi
+              cd /tmp/src || exit 1
               [ -n "$GATE_FILES" ] || unset GATE_FILES
               GATE_DIR=/tmp/gate bash scripts/gate.sh HEAD
               echo "=== SUMMARY"; cat /tmp/gate.logs/SUMMARY.txt 2>/dev/null
@@ -83,3 +128,5 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {medium: Memory, sizeLimit: 3Gi}
+        - name: fetch-home
+          emptyDir: {medium: Memory, sizeLimit: 64Mi}
