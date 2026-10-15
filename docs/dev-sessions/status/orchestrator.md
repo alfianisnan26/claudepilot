@@ -22,6 +22,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-404 (high): dev/t-404-1 2dd0f9e (comment 2750); blind review SAFE AFTER FIXES (comment 2770): guard must protect /etc/claude-code and /etc/claudepilot, own ~20 s deadline, readers/git writers 3-4, MCP verbs 5, eval of file 6, pull scope 7, /usr/bin/env 8, audit label 9. Persona/skill text to propose after the fix, corrected for D-62.
 
 ## DECISIONS (binding)
+- 04:00 coordinator T-433: copy only a worker's verdict line + pointer, never the whole report (until A lands; then workers comment themselves). T-433 blind reviewer = FIRST free slot (D-61 cap 3 kept; conflict named on T-433).
 - 03:50 CONFLICT named: the supervisor's nudge (5 workers, claude auto, one own sub-agent, D-43/D-49) vs D-61 (3 live workers, NO Agent-tool sub-agents) and the coordinator's placement rule. D-61 is newer and binding: 3 workers, placed by claude_usage. The lead does T-427 itself (D-61 allows it).
 - 03:40 coordinator (quota): until T-427 ships, never claude:auto; read claude_usage first and pass the Claude with the lowest session % not at its limit; at most 2 live sessions per Claude (now: fadlilah = me + a1bf3da8, hasyim = 07cef3b0, alfian.isnan = 033e1b23).
 - 03:10 de232389 resumed: the 3 workers (033e1b23 T-366, 07cef3b0 T-375, d8dfb37f T-417) are alive and now report to this session; budget full, no new spawn until one returns. Run 32: build-portal pod running, main still d4a0adc. This session sits in kubernetes/kohi-event and ci_runs_list shows it no runs: read run 32 via main/argocd (k3s-status.sh).
@@ -34,6 +35,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-93 Konfersi production only. Coordinator items: T-397 (authz+persona loosening; charter-wall conflict named), T-422 (sudo removal, tightening), T-306 item 4 / T-340 (rtk hook).
 
 ## NEXT (in order, as slots free)
+0. T-433 blind reviewer (opus, least-used Claude, folder dev-t-349-1 read-only): review the proposal on T-433, verdict to the lead.
 1. T-427 (high, owner's ticket, coordinator 03:45: same batch as T-417; agents.ts pickSpawnClaude + agents.test.ts; implementer, sonnet is enough). Next deploy batch = T-417 + T-427, on 2026-10-16 (today's cap of 3 is used).
 1b. T-404 fixes (worker in dev-t-352-1 on dev/t-404-1), then a new blind reviewer.
 2. T-413 post-mortem (incident-analyst worker, sonnet).
