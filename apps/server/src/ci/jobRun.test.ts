@@ -595,12 +595,19 @@ test('T-379 --image: another registry, a path outside the prefix, an untagged or
     'registry.int.isnan.me/claudepilot/x:1 --privileged', 'registry.int.isnan.me/claudepilot/x:$(id)', 'registry.int.isnan.me/claudepilot/../other/x:1',
     'registry.int.isnan.me/claudepilot/X:1', 'registry.int.isnan.me/claudepilot/x@sha256:abc', 'registry.int.isnan.me/claudepilot/x:1\nimage: y', 'registry.int.isnan.me/claudepilot/x:1#y',
     'http://registry.int.isnan.me/claudepilot/x:1', 'registry.int.isnan.me/konfersi//x:1', '',
+    // A port, userinfo, a tag plus a digest (the digest built at runtime), an uppercase host.
+    'registry.int.isnan.me:5000/claudepilot/x:1', 'u@registry.int.isnan.me/claudepilot/x:1',
+    `registry.int.isnan.me/claudepilot/x:1@sha256:${hex(32)}`, 'Registry.Int.Isnan.Me/claudepilot/x:1',
   ];
   for (const ref of bad) {
     const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', ref, '--', 'true']);
     assert.equal(r.code, 2, `${JSON.stringify(ref)}: ${r.out}`);
     assert.match(r.out, /--image: an image on registry\.int\.isnan\.me under claudepilot\/, konfersi\/ or event\//);
   }
+  // DEPLOY_REGISTRY does not widen the allow-list: the host is the constant.
+  const widened = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', 'docker.io/claudepilot/x:1', '--', 'true'], { DEPLOY_REGISTRY: 'docker.io' });
+  assert.equal(widened.code, 2, widened.out);
+  assert.match(widened.out, /--image: an image on registry\.int\.isnan\.me under claudepilot\//);
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--image', 'registry.int.isnan.me/claudepilot/x:1', '--against', 'abc1234', '--', 'true']);
   assert.equal(r.code, 2, r.out);
   assert.match(r.out, /--image cannot be used with --against/);
