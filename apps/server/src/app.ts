@@ -97,6 +97,7 @@ import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type Cla
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
 import { actorOf, visible } from './authz/seam.js';
+import { jsonCompress } from './jsonCompress.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
 
@@ -224,6 +225,8 @@ export function createApp(
     await next();
     if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
   });
+  // JSON answers gzip-compressed when the client accepts it (T-376); never a stream, a blob or a download (jsonCompress.ts).
+  app.use('/api/*', jsonCompress());
   app.use('/api/*', csrf({ origin: (origin, c) => sameHostOrigin(origin, c.req.header('host')) }));
   // csrf() only looks at form-like content types. Browsers name the origin on every request that is not a plain
   // GET, so a JSON request from another origin (or marked cross-site) is refused here too (same host rule as the sockets).
