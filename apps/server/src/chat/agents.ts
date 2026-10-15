@@ -183,11 +183,20 @@ export class MessageRate {
 export const WORKER_REPORTS = ['idle', 'end', 'none'] as const;
 export type WorkerReport = (typeof WORKER_REPORTS)[number];
 
-/** Why a worker runs on the Claude it got (T-294): its parent's, the one it was told, one with room, or its parent's for want of one. */
-export type SpawnClaudeWhy = 'parent' | 'named' | 'room' | 'no_room' | 'usage_unknown';
+/**
+ * Why a worker runs on the Claude it got (T-294): its parent's, the one it was told, one with room, its parent's for want of one, or (T-427)
+ * with none that has room the least used now.
+ */
+export type SpawnClaudeWhy = 'parent' | 'named' | 'room' | 'no_room' | 'no_room_lowest' | 'usage_unknown';
+
+/**
+ * T-427: with no Claude with room, auto never picks one with this much left or less: the auto move's default threshold (D-12), so a worker
+ * is not started on a Claude it would be moved off at once.
+ */
+export const SPAWN_FLOOR_PCT = 10;
 
 /** What a worker may be told to run on: `same` (its parent's Claude, the default), `auto`, or a Claude's name or id. */
-export const SPAWN_CLAUDE_HELP = 'same (your Claude, the default), auto (a Claude of this workspace with room by a fresh, measured reading, the least busy first), or a Claude’s name';
+export const SPAWN_CLAUDE_HELP = 'same (your Claude, the default), auto (a Claude of this workspace with room by a fresh, measured reading, the least busy first; with none, the least used now), or a Claude’s name';
 
 /** What the worker's Claude is chosen from (T-294). */
 export interface SpawnPick {
@@ -221,11 +230,23 @@ export function pickSpawnClaude(p: SpawnPick): { claudeId: string; why: SpawnCla
     if (!p.usage) return { claudeId: p.parentClaudeId, why: 'usage_unknown' };
     const ids = new Set(live.map((c) => c.id));
     const ranking = recommendMove([...p.usage], { workspaceId: p.workspaceId, from: null, nowMs: p.nowMs });
-    const fit = ranking.candidates.filter((c) => {
+    const usable = (c: (typeof ranking.candidates)[number]) => {
       const u = usageOf(c.claudeId);
-      return c.rank !== null && c.reason === 'room' && c.basis === 'measured' && !c.stale && ids.has(c.claudeId) && u?.runsOn === 'plan' && unknownUsage(u, p.family, p.nowMs) === null;
-    });
-    if (!fit.length) return { claudeId: p.parentClaudeId, why: 'no_room' };
+      return c.rank !== null && !c.stale && ids.has(c.claudeId) && u?.runsOn === 'plan' && unknownUsage(u, p.family, p.nowMs) === null;
+    };
+    const fit = ranking.candidates.filter((c) => usable(c) && c.reason === 'room' && c.basis === 'measured');
+    if (!fit.length) {
+      // T-427: none with room (most projected past 100 %): another Claude, the least used NOW of those with more than SPAWN_FLOOR_PCT
+      // left, spread so that none takes more than its share of the sessions (ceil((sessions + 1) / Claudes) + 1). Its parent's only
+      // when no other qualifies (the owner's ticket text).
+      const near = ranking.candidates.filter((c) => usable(c) && (c.reason === 'over_pace' || c.reason === 'tight') && (c.leftPct.value ?? 0) > SPAWN_FLOOR_PCT);
+      const others = near.filter((c) => c.claudeId !== p.parentClaudeId);
+      if (!others.length) return { claudeId: p.parentClaudeId, why: 'no_room' };
+      const share = Math.ceil((near.reduce((n, c) => n + p.load(c.claudeId), 0) + 1) / near.length) + 1;
+      const under = others.filter((c) => p.load(c.claudeId) < share);
+      const best = [...(under.length ? under : others)].sort((a, b) => (b.leftPct.value ?? 0) - (a.leftPct.value ?? 0) || p.load(a.claudeId) - p.load(b.claudeId))[0]!;
+      return { claudeId: best.claudeId, why: 'no_room_lowest' };
+    }
     const best = fit.reduce((a, b) => (p.load(b.claudeId) < p.load(a.claudeId) ? b : a));
     return { claudeId: best.claudeId, why: best.claudeId === p.parentClaudeId ? 'parent' : 'room' };
   }

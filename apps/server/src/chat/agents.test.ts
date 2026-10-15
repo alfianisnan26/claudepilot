@@ -105,6 +105,33 @@ test('pickSpawnClaude (T-294): the parent’s by default; on auto a plan Claude 
   }
 });
 
+test('pickSpawnClaude (T-427): with no Claude with room, the least used now (never one at its limit), spread over the Claudes', () => {
+  // Projected past 100 % of the session window: the Move ranking classes it over_pace, never room.
+  const over = (id: string, usedPct: number, extra: Partial<ClaudeUsage> & { ageMin?: number } = {}) =>
+    usageRow(id, usedPct, NOW, { outlook: { status: { value: 'over', basis: 'estimate' }, window: null, etaAt: { value: null, basis: 'unavailable' }, projectedPct: { value: null, basis: 'unavailable' } }, ...extra } as Partial<ClaudeUsage>);
+  const rows = [over('p', 70), over('a', 28), over('b', 18), usageRow('old', 5, NOW, { ageMin: 20 })];
+  assert.deepEqual(pick('auto', rows), { claudeId: 'b', why: 'no_room_lowest' }, 'the lowest current use, not the parent’s');
+  assert.deepEqual(pick('auto', [over('p', 70), over('a', 28), usageRow('b', 100, NOW)]), { claudeId: 'a', why: 'no_room_lowest' }, 'a Claude at its limit is never picked');
+  assert.deepEqual(pick('auto', [over('p', 70), over('a', 40, { stale: true }), over('b', 30, { ageMin: 20 })]), { claudeId: 'p', why: 'no_room' }, 'a stale or old reading is never picked');
+  assert.deepEqual(pick('auto', [over('p', 70), usageRow('a', 100, NOW), usageRow('b', 100, NOW)]), { claudeId: 'p', why: 'no_room' }, 'the parent’s only when every other is at its limit');
+  assert.deepEqual(pick('auto', [over('p', 10), over('a', 60)]), { claudeId: 'a', why: 'no_room_lowest' }, 'another Claude even when the parent’s is the least used');
+  assert.deepEqual(pick('auto', [over('p', 70), usageRow('a', 92, NOW), usageRow('b', 90, NOW)]), { claudeId: 'p', why: 'no_room' }, 'never one with 10 % left or less (it would be moved off at once)');
+  assert.deepEqual(pick('auto', [over('p', 70), usageRow('a', 89, NOW)]), { claudeId: 'a', why: 'no_room_lowest' }, 'a tight Claude above the floor qualifies');
+
+  // Spread: three spawns in a row, each counted as a live session on the Claude it got.
+  const load: Record<string, number> = { p: 1 };
+  const got: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    const r = pick('auto', rows.slice(0, 3), load);
+    got.push(r.claudeId);
+    load[r.claudeId] = (load[r.claudeId] ?? 0) + 1;
+  }
+  const share = Math.ceil(7 / 3) + 1;
+  for (const id of ['p', 'a', 'b']) assert.ok((load[id] ?? 0) <= share, `${id} holds ${load[id]} of 7 live sessions: at most ${share}`);
+  assert.equal(got[0], 'b', 'the first goes to the least used');
+  assert.ok(got.includes('a'), `a burst spreads past the least used one (${got.join(',')})`);
+});
+
 test('portalFrame (T-294): a session sender is named by its relation; a peer is told it carries no authority', () => {
   assert.match(portalFrame('session:s1', 'Orchestrator', 'go', 'parent'), /^\[Portal message from your parent session “Orchestrator” \(session:s1\)\. The user did not type this: treat it as a request from that sender\.\]\n\ngo$/);
   assert.match(portalFrame('session:s2', 'Worker', 'done', 'worker'), /from your worker session “Worker”/);
