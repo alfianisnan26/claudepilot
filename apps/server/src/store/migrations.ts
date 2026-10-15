@@ -3301,6 +3301,15 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 779,
+    name: 'chat sessions: auto hand-off, an implementer\'s DONE starts QA (T-548)',
+    up(db) {
+      // T-548 (chat-sessions PRD, "Auto hand-off"): 1 on a lead starts a qa-verifier worker when one of its implementer workers ends with
+      // `DONE <sha>`. Opt-in: every row keeps 0.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN auto_handoff INTEGER NOT NULL DEFAULT 0 CHECK (auto_handoff IN (0, 1));`);
+    },
+  },
+  {
     version: 870,
     name: 'notify: quota alerts as one row that updates, and the Claudes a person hears of when idle (T-126)',
     up(db) {

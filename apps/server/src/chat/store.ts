@@ -97,6 +97,8 @@ export type ChatSessionRow = {
   subagents?: number | null;
   /** T-294 (migration 775): what a worker reports to its lead unasked (`idle`, `end`, `none`); null: `idle`. */
   report?: string | null;
+  /** T-548 (migration 779): 1 starts QA when a worker of this session ends with `DONE <sha>`; 0 (default) never. */
+  auto_handoff?: number | null;
   worktree_path?: string | null;
   worktree_branch?: string | null;
   worktree_repo?: string | null;
@@ -205,6 +207,8 @@ export interface ChatSessionPatch {
   /** T-294: its limits (migration 774); null workers: the global setting. */
   maxWorkers?: number | null;
   subagents?: boolean;
+  /** T-548: auto hand-off (migration 779). */
+  autoHandoff?: boolean;
   title?: string;
   ticketId?: string | null;
   /** Sets or clears the session's worktree (its three columns together). */
@@ -868,6 +872,7 @@ export class ChatStore {
     if (patch.autoApply !== undefined) set('auto_apply', patch.autoApply === null ? null : patch.autoApply ? 1 : 0);
     if (patch.maxWorkers !== undefined) set('max_workers', patch.maxWorkers);
     if (patch.subagents !== undefined) set('subagents', patch.subagents ? 1 : 0);
+    if (patch.autoHandoff !== undefined) set('auto_handoff', patch.autoHandoff ? 1 : 0);
     if (patch.title !== undefined) set('title', patch.title);
     if (patch.endedReason !== undefined) set('ended_reason', redactMaybe(patch.endedReason));
     if (patch.endedFor !== undefined) set('ended_for', patch.endedFor);
