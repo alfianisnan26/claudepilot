@@ -3,6 +3,7 @@
 Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: commit ab99b45.
 
 ## DONE
+- 02:37 integration cb48b49 PUSHED (origin + pilot): T-400 (gate claudepilot-gate-575a48a-b052 GREEN, server suite 487 s) CLOSED.
 - 02:3x integration 6166d2e PUSHED (origin + pilot): T-321 (CLOSED) and T-376 S1 (full gate claudepilot-gate-6166d2e GREEN, server suite 405 s).
 - 02:16 integration c1aa862 PUSHED (origin + pilot): T-349 and T-352 (full gate claudepilot-gate-06e7564-e0ed GREEN: typecheck 39 s, web build 24 s, server suite 379 s); both CLOSED with evidence. T-400 verified (PASS WITH GAPS, gaps T-409), merged locally 3f0ab24.
 - LIVE portal 2026.10.15-1 (run 31 PASSED on 0831ba7; Argo c685eea): T-338, T-342, T-333, T-336, T-343, T-312, crew hand-over.
@@ -11,17 +12,18 @@ Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: c
 - Ended workers: 7be4aeac (T-366 reviewer, verdict copied below), 2005bc7f (old T-321/T-312 verifier; T-312 already closed, UI part is T-354).
 
 ## IN FLIGHT (3 workers; BUDGET 3 (coordinator 02:3x): spawn none until under 3)
-- T-366 (urgent): review-2 fixes DONE 688aee1 (comment 2614: proof 10/10 vs 6/4, chat 699 pass 0 fail). Waits: owner T-403, then a third blind reviewer, merge, deploy (images=portal,workspace).
+- T-366 (urgent): review-2 fixes done 688aee1 (comment 2614). RE-SCOPED by D-62 to trust by repository identity (comment 2653): implementer worker from 688aee1 at the next free slot, then a third blind reviewer, merge, deploy images=portal,workspace.
 - T-369 (urgent): fix done and run (comment 2568: web 576/576, flip proof, session-crew 5/5 on ff0088d). Needs: the browser re-check of item 4 (one ux-checker run on T-375's branch covers both), then merge.
 - T-378 (high): S1 DONE 9834ff7 (comment 2631): FAIL proof on the owner's cases (density 16 failing, crew-tree 12 failing pre-fix; crew-tree 0 failing on T-369). Merge S1 with the next batch; S2 transcript-perf + long-lists next.
 - T-417 (high): worker d8dfb37f (opus, hasyim) in dev-t-336-1 on dev/t-417-1 (estimate + Bypass decision comment 2617); blind reviewer before merge.
 - T-404 (high, D-60 guard hook): worker 87a9f89b (opus, rossi) in dev-t-352-1 on dev/t-404-1 (estimate comment 2512).
 - T-376 (high): S1 on integration; S2 web done 1fa258c on dev/t-376-2 (comment 2580: web 589/589, typecheck): needs a ux-checker and the S3 perf-tester, then merge. dev-t-336-1 is a free trusted spare again.
 - T-375 (high): worker 07cef3b0 (opus, hasyim) in dev-t-333-1 (switched to dev/t-375-1; the untrusted dev-t-375-1 worktree was clean and pushed, removed by the lead) merges T-369's fix (SessionRow.tsx conflict) and runs T-378's density check. Then ONE ux-checker for T-369 item 4 + T-375.
-- MERGE QUEUE: 575a48a (T-400 merge + pack + status) full gate Job running (wip/orch-575a48a), push when green, then close T-400.
+- MERGE QUEUE: next batch = T-378 S1 (9834ff7, qa tools only) + T-369/T-375 after the ux-check; T-376 S2 after its ux-check and S3.
 - Spare trusted worktrees: none free now (dev-t-349-1 is free: its verifier ended). Update a spare to integration before spawning a verifier there (old job-run.sh lacked --against: T-400 verifier).
 
 ## DECISIONS
+- 02:4x D-62 (owner, a53f3e6): the owner's only standing action is Konfersi production. Never assign to or ask the owner anything else; proposals (permissions, folder trust, rule files) go on a ticket assigned to this session + one line to the coordinator; tightening landed by the coordinator, loosening after a blind reviewer's PASS.
 - 02:4x D-61 (integration c8ee3ea): live cap 12 in the workspace, this lead at most 3 live workers, no Agent-tool sub-agents.
 - 02:3x coordinator: the live cap slept this chat while it waited; budget now at most 3 live workers for this lead, no Agent-tool sub-agents, heavy jobs only through job-run. 5 running: let them finish, no spawn until under 3. Order when a slot frees: T-417, T-413 post-mortem, verifiers of returned slices, T-416, T-375 ux-check, T-377.
 - 02:24 OOM (coordinator): the workspace pod was OOMKilled at 02:11 (8 GiB); that was this chat's 'restart'. Rules from now: live cap 10 sessions in the workspace for ALL programs (~310 MB each); NO Agent-tool sub-agents of my own; heavy work only through scripts/job-run.sh (never npm ci, tests or builds in the pod, not even under flock). My briefs had allowed in-pod npm ci and local tests under the heavy lock: incident T-413 filed with my share; post-mortem by an incident-analyst worker at the next free slot.
@@ -33,17 +35,17 @@ Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: c
 - New slices only as session_spawn workers (D-49); at most five in flight (D-43). Quota 01:23: alfian.isnan session 1 %, projection 18 % (claude_usage).
 - Deploy cap three a day; run 31 was the first of 2026-10-15. Next deploy needs images=portal,workspace once T-366 is in.
 
-## NEEDS A HUMAN
-- T-403 (urgent, permissions): answer a, b or c on T-403. (a) trust a new folder only as a worktree/clone of a repository you already trusted (recommended), (b) keep the content scan and accept that in-folder Edit + a build/test rule = any command, (c) no first-time auto-trust. T-366 waits. After its deploy, every ClaudePilot folder needs your trust once (hash now includes skills/agents/commands; this repo's settings count as broad).
-- T-397 (permissions): let crew workers comment on their lead's tickets (authz) and give the verifier, reviewer and ux-checker roles ticket_get/ticket_comment (persona). Steps: decide (a) and (b) on T-397; until then the lead copies every report.
-- T-93 production cutover (Konfersi, paused).
-- T-306 item 4 / T-340: installing the rtk hook is a permission change.
+## NEEDS A HUMAN (D-62: only Konfersi production is the owner's)
+- T-93 Konfersi production cutover (paused).
+- Routed to the COORDINATOR, not the owner (D-62): T-397 (proposal on a ticket assigned to this session; worker ticket comments = authz + persona; loosens, so the coordinator lands it after a blind reviewer's PASS; charter-wall conflict named on T-397); T-306 item 4 / T-340 (installing the rtk hook). T-403 is settled by D-62 (option a): T-366 re-scoped (comment 2653).
 
 ## NEXT (in order; at most 3 live workers, D-61)
+0. T-366 re-scope (repository identity), first free slot.
 00. T-413 post-mortem (incident-analyst worker, sonnet); then T-416 (high: portal memory budget, refuse/queue starts near the limit, alert at 85 %, restore Bypass after a container restart).
 0. T-404 (high, coordinator 02:1x, D-60): managed PreToolUse guard hook refusing rule-file writes for every session in the pod (Bypass included); implementer worker, blind reviewer worker, QA real job. NEXT FREE SLOT (a trusted spare folder: dev-t-352-1).
 1. T-366 fix + re-review, merge, real-job QA; T-369 ux-check, merge after T-321.
 2. Deploy (images=portal,workspace) once T-366 is merged and gated (second portal deploy of the day after the coordinator's -2).
+2b. T-147 (assigned here by D-62, coordinator 'go'): narrow ClusterRole drafted and tested in a rig namespace, kubectl auth can-i matrix in the gate, blind reviewer, then the coordinator applies the binding. NOT before T-416/T-417 land.
 3. T-378, T-376 in parallel; T-375 (same worker as T-369); T-382 (lists epic S1); T-377, T-386.
 4. T-370 HOLD (claudepilot-b7 runs the spike), then T-371..T-374 and T-363 (coordinator added D-59 and PRD 8b criteria on T-363, T-371, T-372, T-373: read them before briefing).
 5. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356, T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149. Konfersi and Event stay paused for this track (D-45).
