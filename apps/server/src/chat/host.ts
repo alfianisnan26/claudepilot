@@ -43,7 +43,9 @@ export const TRUST_VETTED_COMMANDS = ['ls', 'pwd', 'echo'] as const;
  * `model`, `argument-hint`, `allowed-tools`), plus `tools` and `color` (an agent's tool list narrows it, a colour is a label).
  * `allowed-tools` is classified rule by rule. Any other key (`hooks`, `permissionMode`, `mcpServers`, anything new) makes the file odd.
  */
-export const TRUST_FRONTMATTER_KEYS = ['name', 'description', 'model', 'tools', 'color', 'argument-hint', 'allowed-tools'] as const;
+// `disallowedTools`, `effort` and `maxTurns` are standard agent keys (the persona renders them too) and cannot widen a session: missing them
+// made every repository with ordinary agents `unreadable`, so no such folder was ever trusted by itself (2026-10-15, the Event crew folders).
+export const TRUST_FRONTMATTER_KEYS = ['name', 'description', 'model', 'tools', 'color', 'argument-hint', 'allowed-tools', 'disallowedTools', 'effort', 'maxTurns'] as const;
 
 /**
  * The jq definitions behind `trustscan`'s `broadAllow` (T-366, D-55): `cpBroad` reads one `permissions.allow` entry (or one

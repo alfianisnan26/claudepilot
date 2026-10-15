@@ -794,7 +794,7 @@ def cpFront:
     | {odd: (($l[$i0] | test("^---\\s*$") | not) or ($first | test("^(\\s|-(\\s|$))"))
          or any($f[]; test("^\\s*[{?\\[]|<<|^\\s*[\"\\x27][^:]*\\\\") or test("^\\.\\.\\.\\s*$")
            or ((test("^($|\\s|#|-(\\s|$))") | not)
-             and ((capture("^(?<k>[A-Za-z0-9_-]+):(\\s|$)") // null) as $m | $m == null or ($m.k | cpIn("name", "description", "model", "tools", "color", "argument-hint", "allowed-tools") | not)))))}
+             and ((capture("^(?<k>[A-Za-z0-9_-]+):(\\s|$)") // null) as $m | $m == null or ($m.k | cpIn("name", "description", "model", "tools", "color", "argument-hint", "allowed-tools", "disallowedTools", "effort", "maxTurns") | not)))))}
     + {hooks: any($f[]; test("(^|[\\s{,\"\\x27?])hooks[\"\\x27]?\\s*:"; "i")),
        mode: any($f[]; test("(^|[\\s{,\"\\x27?])permission[-_]?mode[\"\\x27]?\\s*:"; "i")),
        broad: any(range(0; $f | length); . as $k | ($f[$k] | capture("^\\s*[\"\\x27]?allowed[-_]tools[\"\\x27]?\\s*:(?<v>.*)$"; "i") // null) as $m
