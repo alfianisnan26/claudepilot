@@ -226,16 +226,55 @@ test('T-102: a session a portal actor started is autonomous: the setting is on b
 /* ---------- T-472: context deliveries restart nothing; the rest settle into one restart ---------- */
 
 /**
+ * A clock the test steps by hand, installed as the controller's settle clock (`settleClock`): it starts at the real time (so the
+ * controller's other reads stay consistent) and moves only when `advance` says so. No test waits out the 10-minute settle time.
+ */
+interface FakeClock {
+  t: number;
+  /** Moves time on and runs the timers that come due, in order. */
+  advance(ms: number): Promise<void>;
+}
+function fakeClock(s: Live): FakeClock {
+  let timers: { at: number; fn: () => void }[] = [];
+  const c: FakeClock = {
+    t: Date.now(),
+    async advance(ms) {
+      const end = c.t + ms;
+      for (;;) {
+        const due = timers.filter((x) => x.at <= end).sort((a, b) => a.at - b.at)[0];
+        if (!due) break;
+        timers = timers.filter((x) => x !== due);
+        c.t = Math.max(c.t, due.at);
+        due.fn();
+      }
+      c.t = end;
+      await sleep(20); // let what a fired timer started settle (real time, but only to flush promises)
+    },
+  };
+  s.controller.settleClock = {
+    now: () => c.t,
+    set: (fn, wait) => {
+      const entry = { at: c.t + wait, fn };
+      timers.push(entry);
+      return () => void (timers = timers.filter((x) => x !== entry));
+    },
+  };
+  return c;
+}
+
+/**
  * The reconciler as production wires it: one log of deliveries (newest first), and the older readers over the same log (the latest
  * delivery's time, every area since), so the code before T-472 sees the same deliveries.
  */
-function deliveries(s: Live) {
-  const log: { at: string; areas: string[] }[] = [];
-  s.controller.configChangeLog = (_ws, since) => log.filter((e) => Date.parse(e.at) > since);
+function deliveries(s: Live, clock?: FakeClock) {
+  // `at` is the (fake) time the controller reads for the settle wait; `real` is the wall time, which a process start is compared with
+  // (a fake clock that ran ahead must not make a delivery look newer than the restart that read it).
+  const log: { at: string; real: number; areas: string[] }[] = [];
+  s.controller.configChangeLog = (_ws, since) => log.filter((e) => e.real > since);
   s.controller.deliveredAt = () => log[0]?.at ?? null;
-  s.controller.configChanges = (_ws, since) => [...new Set(log.filter((e) => Date.parse(e.at) > since).flatMap((e) => e.areas))];
+  s.controller.configChanges = (_ws, since) => [...new Set(log.filter((e) => e.real > since).flatMap((e) => e.areas))];
   return (areas: string[]) => {
-    log.unshift({ at: new Date().toISOString(), areas });
+    log.unshift({ at: new Date(clock ? clock.t : Date.now()).toISOString(), real: Date.now(), areas });
     s.controller.deliveryChanged('docker/ws1');
   };
 }
@@ -253,13 +292,14 @@ test('T-472: a context-only delivery shows no hint and restarts nothing; an MCP 
   const s = await liveSession();
   try {
     s.controller.controlTimeoutMs = 150;
-    s.controller.autoRestartSettleMs = 0;
-    const deliver = deliveries(s);
+    assert.equal(s.controller.autoRestartSettleMs, 600_000, 'the real 10-minute default is in force');
+    const clock = fakeClock(s);
+    const deliver = deliveries(s, clock);
     await autoApplying(s);
     const stops = s.ws.stops;
     deliver(['context']);
     deliver(['context']);
-    await sleep(700);
+    await clock.advance(11 * 60_000); // past the settle time: a context delivery still restarts nothing
     const shown = s.controller.get(s.id)!;
     assert.equal(shown.configChanged, undefined, 'the running process re-read the rules (drop-in stamp): nothing to restart for');
     assert.equal(shown.restartQueued, undefined);
@@ -268,11 +308,15 @@ test('T-472: a context-only delivery shows no hint and restarts nothing; an MCP 
 
     deliver(['mcpset']);
     assert.deepEqual(s.controller.get(s.id)!.configChanged?.reasons, ['mcpset'], 'the hint names only what the process has not read');
-    await s.answering(until(() => restarts(s).length === 1, 5000));
+    await clock.advance(9 * 60_000);
+    assert.equal(restarts(s).length, 0, 'an MCP delivery waits out the settle time');
+    const waiting = s.answering(until(() => restarts(s).length === 1, 5000));
+    await clock.advance(2 * 60_000);
+    await waiting;
     assert.deepEqual([restarts(s)[0]!.actor, restarts(s)[0]!.detail.how], ['portal', 'auto']);
     await until(() => !s.controller.get(s.id)!.restarting);
     deliver(['context']);
-    await sleep(700);
+    await clock.advance(11 * 60_000);
     assert.equal(restarts(s).length, 1, 'a context delivery after the restart restarts nothing either');
     assert.equal(s.controller.get(s.id)!.configChanged, undefined);
   } finally {
@@ -284,22 +328,25 @@ test('T-472: three MCP and settings deliveries in a burst give one automatic res
   const s = await liveSession();
   try {
     s.controller.controlTimeoutMs = 150;
-    s.controller.autoRestartSettleMs = 600;
-    const deliver = deliveries(s);
+    assert.equal(s.controller.autoRestartSettleMs, 600_000, 'the real 10-minute default is in force');
+    const clock = fakeClock(s);
+    const deliver = deliveries(s, clock);
     await autoApplying(s);
     deliver(['mcpset']);
-    await sleep(250);
+    await clock.advance(4 * 60_000);
     deliver(['settings']);
-    await sleep(250);
+    await clock.advance(4 * 60_000);
     deliver(['mcpset']);
-    const last = Date.now();
+    const last = clock.t;
     assert.equal(s.controller.get(s.id)!.restartQueued, 'auto', 'queued, waiting for the burst to settle');
-    await sleep(300);
+    await clock.advance(9 * 60_000); // 17 minutes after the first delivery, 9 after the newest
     assert.equal(restarts(s).length, 0, 'still settling: no restart inside the burst');
-    await s.answering(until(() => restarts(s).length === 1, 5000));
-    assert.ok(Date.now() - last >= 600, 'it waited for the newest delivery to be quiet');
+    const waiting = s.answering(until(() => restarts(s).length === 1, 5000));
+    await clock.advance(60_000 + 100); // the newest has now been quiet for 10 minutes
+    await waiting;
+    assert.ok(clock.t - last >= 600_000, 'it waited for the newest delivery to be quiet');
     await until(() => !s.controller.get(s.id)!.restarting);
-    await sleep(900);
+    await clock.advance(30 * 60_000);
     assert.equal(restarts(s).length, 1, 'one restart for the burst');
     assert.equal(s.controller.get(s.id)!.configChanged, undefined, 'the new process read all three');
   } finally {

@@ -137,6 +137,29 @@ test('the hook audits changes and refusals with fixed codes and never the text; 
   }
 });
 
+test('T-472: the hook publishes a changed pack at most once an hour; a push inside the hour leaves the pool and audits nothing', async () => {
+  const h = await setup();
+  try {
+    const rows: { detail?: Record<string, unknown> }[] = [];
+    let t = Date.now();
+    const hook = contextPackHook(h.pools, (e) => void rows.push(e), () => t);
+    assert.equal(hook(push('one')).outcome, 'created');
+    t += 5 * 60_000;
+    const early = hook(push('two', { sha: 'b'.repeat(40) }));
+    assert.deepEqual([early.outcome, h.body(), h.pool()!.latestRevision], ['deferred', 'one', 1]);
+    t += 54 * 60_000; // 59 minutes after the first revision
+    assert.equal(hook(push('three', { sha: 'c'.repeat(40) })).outcome, 'deferred');
+    t += 2 * 60_000; // past the hour: the newest text goes out, not the one that was held back
+    assert.equal(hook(push('three', { sha: 'c'.repeat(40) })).outcome, 'updated');
+    assert.deepEqual([h.body(), h.pool()!.latestRevision], ['three', 2]);
+    assert.deepEqual(rows.map((r) => r.detail?.outcome), ['created', 'updated'], 'a deferred push leaves no audit row');
+    // The pool service itself holds nothing back: only the hook's interval does.
+    assert.equal(syncContextPack(h.pools, push('four', { sha: 'd'.repeat(40) })).outcome, 'updated');
+  } finally {
+    h.done();
+  }
+});
+
 test('the committed docs/context-pack.md fits and passes the checks', async () => {
   const h = await setup();
   try {
