@@ -53,8 +53,10 @@ import {
   allowedAssignTags,
   canActForEnded,
   canAgentAssignUser,
+  canAgentTagChecklist,
   canWorkerComment,
   D62_ASSIGN_REFUSAL,
+  D62_CHECKLIST_REFUSAL,
   type EndedGrantReason,
   type WorkerCommentReason,
 } from './authz.js';
@@ -776,13 +778,7 @@ export class Tickets {
     // An admin's token acting for a session is never refused, but the assignment it makes to a person is audited (T-483).
     const forSession = caller.kind === 'token' && w.session !== null;
     if (caller.kind !== 'agent' && !forSession) return null;
-    let raw: unknown = AGENT_ASSIGN_USER_TAGS_DEFAULT;
-    try {
-      raw = this.#agentAssignUserTags();
-    } catch {
-      // the setting could not be read: the built-in default holds
-    }
-    const allowedTags = allowedAssignTags(raw);
+    const allowedTags = this.#allowedAssignTags();
     const d = canAgentAssignUser({ callerKind: caller.kind, assigneeAfter: facts.assigneeAfter, assignsUser: facts.assignsUser, tagsBefore: facts.tagsBefore, tagsAfter: facts.tagsAfter, allowedTags });
     if (d.allow) {
       if (!facts.assignsUser) return null;
@@ -798,6 +794,38 @@ export class Tickets {
       detail: { ticketId: facts.ticketId, action: facts.action, sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, tags: [...facts.tagsAfter], allowedTags, why: d.why },
     });
     throw new AppError('FORBIDDEN', D62_ASSIGN_REFUSAL);
+  }
+
+  /** `tickets.agentAssignUserTags` as a list; the built-in default when the setting cannot be read. */
+  #allowedAssignTags(): string[] {
+    let raw: unknown = AGENT_ASSIGN_USER_TAGS_DEFAULT;
+    try {
+      raw = this.#agentAssignUserTags();
+    } catch {
+      // the setting could not be read: the built-in default holds
+    }
+    return allowedAssignTags(raw);
+  }
+
+  /**
+   * FR9d (D-62, T-527): an agent may not add `owner-checklist` without an allowed tag (authz.ts `canAgentTagChecklist`): the tag puts a
+   * ticket on the owner's Needs you as surely as assigning a person. A refusal is FORBIDDEN with the D-62 path and one
+   * `ticket.agent_checklist_refused` audit row (ids and tags only), the same shape as `ticket.agent_assign_refused`.
+   */
+  #assertAgentChecklist(caller: Caller, w: Writer, facts: { ticketId: string | null; action: 'create' | 'update'; tagsBefore: readonly string[]; tagsAfter: readonly string[] }) {
+    if (caller.kind !== 'agent') return;
+    const allowedTags = this.#allowedAssignTags();
+    const d = canAgentTagChecklist({ callerKind: caller.kind, tagsBefore: facts.tagsBefore, tagsAfter: facts.tagsAfter, allowedTags });
+    if (d.allow) return;
+    this.onAudit?.({
+      kind: 'ticket.agent_checklist_refused',
+      actor: w.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: facts.ticketId ? `ticket:${facts.ticketId}` : null,
+      detail: { ticketId: facts.ticketId, action: facts.action, sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, tags: [...facts.tagsAfter], allowedTags, why: d.why },
+    });
+    throw new AppError('FORBIDDEN', D62_CHECKLIST_REFUSAL);
   }
 
   /** The audit row for an allowed assignment to a person (ids, actor kind and the allowing tag; no ticket text). Called after the write. */
@@ -843,6 +871,7 @@ export class Tickets {
     const tags = cleanTags(req.tags);
     const assignee = this.#assignee(caller, req.assignee);
     const assignedAudit = this.#assertAgentAssign(caller, w, { ticketId: null, action: 'create', assigneeAfter: assignee?.kind ?? null, assignsUser: assignee?.kind === 'user', tagsBefore: [], tagsAfter: tags });
+    this.#assertAgentChecklist(caller, w, { ticketId: null, action: 'create', tagsBefore: [], tagsAfter: tags });
     // An agent's ticket concerns its own workspace; a session assignee's workspace is where the work is.
     let workspaceId = caller.kind === 'agent' ? caller.workspaceId : workspaceIdOf(req.workspaceId);
     if (assignee?.kind === 'session') workspaceId = assignee.session.workspaceId;
@@ -935,6 +964,7 @@ export class Tickets {
       }
     }
     const assignedAudit = this.#assertAgentAssign(caller, w, { ticketId: ticketIdOf(row.number), action: 'update', assigneeAfter, assignsUser, tagsBefore: tags, tagsAfter: newTags ?? tags });
+    this.#assertAgentChecklist(caller, w, { ticketId: ticketIdOf(row.number), action: 'update', tagsBefore: tags, tagsAfter: newTags ?? tags });
     if (req.workspaceId !== undefined && !('workspace_id' in sets)) {
       if (agent) throw new AppError('FORBIDDEN', 'An agent’s tickets stay in its own workspace.');
       const v = workspaceIdOf(req.workspaceId);

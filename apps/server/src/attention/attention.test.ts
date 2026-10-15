@@ -286,7 +286,11 @@ test('tickets: an open approval assigned to a person waits; other types, agents\
 });
 
 test('tickets: an open ticket tagged owner-checklist waits whatever its assignee; once, with the approval rows unchanged; closed, untagged and invisible ones do not', () => {
-  const tag = (id: string, t: string) => db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)').run(Number(id.slice(2)), t);
+  // As the service writes it: the tag and a `tags` event by a person (T-527: an agent's tag alone does not count, checklisttag.test.ts).
+  const tag = (id: string, t: string) => {
+    db.prepare('INSERT INTO ticket_tags (ticket_number, tag) VALUES (?, ?)').run(Number(id.slice(2)), t);
+    db.prepare("INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, data) VALUES (?, ?, 'tags', 'ui', 'Admin', ?)").run(Number(id.slice(2)), ago(MIN), JSON.stringify({ from: [], to: [t] }));
+  };
   const approval = ticket();
   const list = ticket({ type: 'task', assignee: null });
   const both = ticket({ type: 'approval' });
