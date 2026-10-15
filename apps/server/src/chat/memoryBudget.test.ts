@@ -317,7 +317,7 @@ test('T-416 review 6310 #1: a restart of an asleep session is a wake: refused wh
     await assert.rejects(s.controller.restart(s.id), isBudget);
     assert.equal(s.controller.get(s.id)!.process, 'asleep', 'still asleep');
     assert.equal(s.ws.starts, starts, 'no process');
-    assert.deepEqual(isRestartRefusal(s), ['restart']);
+    assert.deepEqual(refusedAt(s), ['restart']);
     b.set(ONE_FITS);
     const restarted = await s.answering(s.controller.restart(s.id));
     assert.equal(restarted.process, 'live');
@@ -339,7 +339,7 @@ test('T-416 review 6310 #1: a restart of a gone (interrupted) session is a wake:
     await assert.rejects(s.controller.restart(s.id), isBudget);
     assert.deepEqual([s.controller.get(s.id)!.state, s.controller.get(s.id)!.process], ['interrupted', 'gone']);
     assert.equal(s.ws.starts, starts, 'no process');
-    assert.deepEqual(isRestartRefusal(s), ['restart']);
+    assert.deepEqual(refusedAt(s), ['restart']);
     b.set(ONE_FITS);
     const restarted = await s.answering(s.controller.restart(s.id));
     assert.equal(restarted.process, 'live');
@@ -392,6 +392,111 @@ test('T-416 review 6310 #3: a send while a queued start checks the memory waits 
     assert.equal(s.ws.starts, starts + 1, 'one launch');
   } finally {
     open();
+    await s.done();
+  }
+});
+
+/* ---------- T-416 QA 6326: the mutants that survived (M2, M3, M9, M10) ---------- */
+
+/** Makes every process start in `s` fail while `state.broken`; counts the tries. */
+function failingStarts(s: Awaited<ReturnType<typeof liveSession>>) {
+  const state = { broken: true, attempts: 0 };
+  const real = s.ws.exec.bind(s.ws);
+  s.ws.exec = async (target: string, name: string, command: string[]) => {
+    if (state.broken && command[2] === 'start') {
+      state.attempts++;
+      throw new Error('spawn failed');
+    }
+    return real(target, name, command);
+  };
+  return state;
+}
+
+/** The lead `s` (a workers limit, so it never sleeps for the cap) alone at a cap of 1 per workspace: a create waits for a slot. */
+function queueing(s: Awaited<ReturnType<typeof liveSession>>) {
+  s.controller.setLimits(s.id, { maxWorkers: 3 }, { actor: 'ui' });
+  s.controller.slotPollMs = 20;
+  const caps = { perWorkspace: 1, total: 10 };
+  s.controller.liveCaps = () => caps;
+  return caps;
+}
+
+test('T-416 QA M2: a wake whose launch fails lets its memory go: a create with room for exactly one runs after it', async () => {
+  const s = await liveSession({ idleSleepMs: 200 }, true);
+  try {
+    await until(() => s.controller.get(s.id)!.process === 'asleep', 4000);
+    s.controller.memory = budget(ONE_FITS).memory;
+    const fail = failingStarts(s);
+    await s.controller.send(s.id, 'wake-fail', 'go on').catch(() => undefined);
+    await until(() => fail.attempts >= 1, 4000);
+    await sleep(100); // the wake settles
+    fail.broken = false;
+    const made = await s.controller.create({ workspaceId: 'docker/ws1' });
+    await until(() => s.controller.get(made.id)?.process === 'live', 4000);
+    assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 0, 'no hold left behind by the failed wake');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416 QA M3: a queued start whose launch fails lets its memory go: a create with room for exactly one runs after it', async () => {
+  const s = await liveSession();
+  try {
+    const caps = queueing(s);
+    s.controller.memory = budget(ONE_FITS).memory;
+    const fail = failingStarts(s);
+    const q = await s.controller.create({ workspaceId: 'docker/ws1' });
+    assert.ok(q.slotWait, 'q waits for a slot');
+    caps.perWorkspace = 10; // the slot comes; the launch fails
+    await until(() => fail.attempts >= 1, 4000);
+    await sleep(100); // the queued start settles
+    fail.broken = false;
+    const made = await s.controller.create({ workspaceId: 'docker/ws1' });
+    await until(() => s.controller.get(made.id)?.process === 'live', 4000);
+    assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 0, 'no hold left behind by the failed queued start');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416 QA M9: a queued start with room for exactly one runs when its slot comes: its own granted slot is not counted again', async () => {
+  const s = await liveSession();
+  try {
+    const caps = queueing(s);
+    s.controller.memory = budget(ONE_FITS).memory;
+    const starts = s.ws.starts;
+    const q = await s.controller.create({ workspaceId: 'docker/ws1' });
+    assert.ok(q.slotWait, 'q waits for a slot');
+    caps.perWorkspace = 10;
+    await until(() => s.controller.get(q.id)!.process === 'live' || s.controller.get(q.id)!.state === 'interrupted', 4000);
+    assert.equal(s.controller.get(q.id)!.process, 'live', s.controller.get(q.id)!.endedReason ?? '');
+    assert.equal(s.ws.starts, starts + 1);
+    assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 0);
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416 QA M10: a queued start refused for memory gives its slot back: the next create starts at once when there is room', async () => {
+  const s = await liveSession();
+  try {
+    const caps = queueing(s);
+    const b = budget(ONE_FITS);
+    s.controller.memory = b.memory;
+    const q = await s.controller.create({ workspaceId: 'docker/ws1' });
+    assert.ok(q.slotWait, 'q waits for a slot');
+    b.set(ONE_FITS + 1);
+    caps.perWorkspace = 2; // room for the lead and one more
+    await until(() => s.controller.get(q.id)!.state === 'interrupted', 4000);
+    b.set(ONE_FITS);
+    const r = await s.controller.create({ workspaceId: 'docker/ws1' });
+    assert.equal(r.slotWait ?? null, null, 'r does not wait behind a slot q no longer uses');
+    await until(() => s.controller.get(r.id)?.process === 'live', 4000);
+    assert.deepEqual(
+      s.controller.audit({ kind: 'memory.refused' }).map((a) => a.detail.at),
+      ['queued'],
+    );
+  } finally {
     await s.done();
   }
 });
