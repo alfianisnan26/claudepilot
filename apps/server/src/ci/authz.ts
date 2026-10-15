@@ -116,6 +116,11 @@ export const CI_POLICIES = {
   // The auto-approve rule (T-110, FR41a): a person with manage only (the handler refuses tokens and agents); no tool reaches it.
   'PUT /api/ci/repos/:id/environments/:name/auto-approve': { ...repo('manage'), audit: 'ci.environment_auto_approve' },
   'POST /api/ci/validate': { kind: 'signed-in' },
+  // Runners (T-557): the list shows the workspaces the person may see (the handler filters). Making a workspace a runner sends other
+  // workspaces' commits and secrets to it: manage on that workspace, a person only (the handler refuses tokens and agents), audited.
+  'GET /api/ci/runners': { kind: 'signed-in' },
+  'PUT /api/ci/runners/:id': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'id' }], audit: 'ci.runner_changed' },
+  'DELETE /api/ci/runners/:id': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'id' }], audit: 'ci.runner_changed' },
 } satisfies RoutePolicies;
 
 export function declareCiPolicies(): void {

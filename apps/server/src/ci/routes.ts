@@ -21,6 +21,7 @@ import {
   type StartCiRunRequest,
   type UpdateCiRepoRequest,
   type ValidateCiRequest,
+  type UpsertCiRunnerRequest,
   type CiStatus,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
@@ -124,6 +125,24 @@ export function createCiRoutes(ci: CiService): Hono {
   app.post('/repos/:id/sync', async (c) => {
     const actor = may(c, 'operate', repoRef);
     return c.json(success(await ci.syncUpstream(id(c), { actor: actorString(actor), userId: actorUserId(actor) })));
+  });
+  // Runners (T-557). The id is the workspace's (`<target>/<name>`, encoded as one path segment).
+  app.get('/runners', async (c) => {
+    const actor = actorOf(c);
+    const all = await ci.runners();
+    return c.json(success(all.filter((r) => can(actor, 'view', workspaceRef(r.workspaceId)))));
+  });
+  app.put('/runners/:id', async (c) => {
+    const actor = actorOf(c);
+    requireCan(actor, 'manage', workspaceRef(id(c)));
+    const req = await body<UpsertCiRunnerRequest>(c);
+    return c.json(success(await ci.upsertRunner(id(c), req, person(actor))));
+  });
+  app.delete('/runners/:id', async (c) => {
+    const actor = actorOf(c);
+    requireCan(actor, 'manage', workspaceRef(id(c)));
+    await ci.removeRunner(id(c), person(actor));
+    return c.json(success({ ok: true }));
   });
   app.delete('/repos/:id', async (c) => {
     may(c, 'manage', repoRef);

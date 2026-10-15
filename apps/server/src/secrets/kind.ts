@@ -561,6 +561,27 @@ export class SecretsKind implements PoolKind<SecretsContent>, SecretNameSource {
     return out;
   }
 
+  /**
+   * The value a workspace's sets deliver as the file of secret `name` (T-557): what a CI runner gets as a lease when it takes one of this
+   * workspace's runs, so the runner sees exactly what a run in the workspace itself would. Null when no assigned set delivers it as a file
+   * (a variable, a secret with no value or only a revoked one) or the value can't be opened. In memory only; callers never log or store it.
+   */
+  deliveredValue(workspaceId: string, name: string): string | null {
+    for (const a of this.service.assignedPools<SecretsContent>(workspaceId, 'secrets')) {
+      for (const e of a.content.entries) {
+        if (e.kind === 'variable' || e.name !== name) continue;
+        const valueId = this.#valueOf(a.pool.id, e);
+        if (!valueId) return null;
+        try {
+          return this.values.open(valueId);
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
   /* ---------- Redaction (QA-006, Secrets PRD A9) ---------- */
 
   /**

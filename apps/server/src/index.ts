@@ -11,7 +11,7 @@ import { SocketGuard } from './sockets.js';
 import { workspaceView } from './workspaces/view.js';
 import { Reconciler, type FragmentProvider } from './delivery/reconciler.js';
 import { References } from './pools/references.js';
-import { exposedSecretValues } from './secrets/exposed.js';
+import { deliveredSecretValue, exposedSecretValues } from './secrets/exposed.js';
 import { SecretsKind } from './secrets/kind.js';
 import { registerMcpSets } from './mcp/index.js';
 import { SkillsModule } from './skills/module.js';
@@ -467,6 +467,8 @@ const ci = new CiService(store, new WorkspacesCiHost(workspaces), {
   redactFor: ciValues.redactFor,
   streamFor: ciValues.streamFor,
   secrets: (id, name) => secretName(references, id, name),
+  // T-557: a runner taking this workspace's run gets the secrets it names as a lease, in memory and on stdin only.
+  secretValue: (id, name) => deliveredSecretValue(poolService, id, name),
   // Deployment approvals and environment protection changes (FR41) go to the platform audit, created further down.
   audit: (e) => platform.audit.record(e),
 });

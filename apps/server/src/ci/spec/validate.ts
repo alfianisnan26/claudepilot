@@ -679,6 +679,12 @@ function runsOnOf(d: Diags, on: unknown, path: (string | number)[]): string[] | 
     if (!labels.includes('workspace')) d.add('warning', path, 'ignored-runs-on', 'runs-on has no effect: the job runs in the workspace.', 'Remove it, or name the labels of a runner.', 'key');
     return null;
   }
+  // GitHub's hosted macOS and Windows images (`macos-latest`, `windows-2022`) do not exist here; a runner of our own says `macos`.
+  const hostedOther = labels.find((l) => /^(macos|windows)-(latest|\d[a-z0-9.-]*)$/.test(l));
+  if (hostedOther) {
+    d.error(path, 'unsupported-runner', `${hostedOther} is one of GitHub's machines, not a runner here.`, 'Name the labels of a runner (CI > Runners), or remove runs-on to run in the workspace (Linux).');
+    return null;
+  }
   const bad = labels.find((l) => !RUNNER_LABEL.test(l));
   if (bad) {
     d.error(path, 'bad-name', `"${bad}" is not a runner label.`, 'Lowercase letters, digits, ".", "-" and "_", at most 40 characters.');

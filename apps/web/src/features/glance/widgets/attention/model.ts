@@ -70,6 +70,7 @@ const REASON_WORD: Record<CiReason, string> = {
   signal: 'stopped by signal',
   fail_fast: 'fail fast',
   rejected: 'rejected',
+  no_runner: 'no runner',
 };
 
 /** A failed run's title: where and what. */

@@ -43,6 +43,8 @@ import {
   type CiAutoApproveMode,
   type UpdateCiAutoApproveRequest,
   type CiUpstreamSyncResult,
+  type CiRunner,
+  type UpsertCiRunnerRequest,
 } from '@portal/contracts';
 import { NO_VALUES, SessionStream } from '../chat/valueRedact.js';
 import { evaluateRule, needsPersonOf, ruleLine, WINDOW } from './autoApprove.js';
@@ -51,8 +53,8 @@ import { globMatches } from './glob.js';
 import { CiUnreachable, type CiHost, type CiReply } from './host.js';
 import { CI_LIMITS } from './limits.js';
 import { replan, compile, matches, resolveInputs, branchOf, tagOf, type EventContext } from './spec/compile.js';
-import { validateFiles, type SnapshotFile, type Validated } from './spec/validate.js';
-import { CiStore, type DeploymentRow, type EnvironmentRow, type RepoRow, type RunRow } from './store.js';
+import { RUNNER_LABEL, validateFiles, type SnapshotFile, type Validated } from './spec/validate.js';
+import { CiStore, type DeploymentRow, type EnvironmentRow, type RepoRow, type RunnerRow, type RunRow } from './store.js';
 import { CiLinks, runLink, type CiBumper } from './links.js';
 import type { CiSessionsPort } from './sessions.js';
 import { DeployChatsWatch } from './deployChats.js';
@@ -817,6 +819,62 @@ export class CiService {
     } finally {
       await this.host.cp(run.workspace_id, ['repo', 'outbox', run.id, '--drop']).catch(() => undefined);
     }
+  }
+
+  /* ---------- Runners (T-557) ---------- */
+
+  /** Every runner with its workspace's state and the runs executing on it now. */
+  async runners(): Promise<CiRunner[]> {
+    const states = await this.host.states();
+    return this.#cs.runners().map((r) => this.#runnerView(r, states));
+  }
+
+  #runnerView(r: RunnerRow, states: Map<string, 'running' | 'stopped'>): CiRunner {
+    const s = states.get(r.workspace_id);
+    return {
+      workspaceId: r.workspace_id,
+      labels: json<string[]>(r.labels, []),
+      maxRuns: r.max_runs,
+      enabled: r.enabled === 1,
+      drained: r.drained === 1,
+      note: r.note,
+      state: s === 'running' ? 'online' : s === 'stopped' ? 'offline' : 'gone',
+      running: this.#cs.runningRuns(r.workspace_id).length,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
+  }
+
+  /** Makes a workspace a runner, or changes one (a person's act, audited). Labels: lowercase, at most `runnerLabelsPerRunner`. */
+  async upsertRunner(workspaceId: string, req: Partial<UpsertCiRunnerRequest>, by: CiDecider): Promise<CiRunner> {
+    if (!this.#cs.runnersReady) throw new AppError('SERVICE_UNAVAILABLE', 'This portal can not hold runners yet (its database is not up to date).');
+    if (!/^[^/]+\/[^/]+$/.test(workspaceId)) throw invalid('workspaceId', 'A workspace id is <target>/<name>.');
+    if ((await this.host.state(workspaceId)) === 'gone') throw notFound('workspace');
+    const was = this.#cs.runner(workspaceId);
+    if (!Array.isArray(req.labels) && !was) throw invalid('labels', 'Give the runner at least one label.');
+    const raw: unknown[] = Array.isArray(req.labels) ? req.labels : json<string[]>(was!.labels, []);
+    const labels = [...new Set(raw.map((l) => (typeof l === 'string' ? l.trim().toLowerCase() : '')))].sort();
+    if (!labels.length) throw invalid('labels', 'Give the runner at least one label.');
+    if (labels.length > CI_LIMITS.runnerLabelsPerRunner) throw invalid('labels', `A runner has at most ${CI_LIMITS.runnerLabelsPerRunner} labels.`);
+    const bad: string | undefined = labels.find((l) => !RUNNER_LABEL.test(l) || l === 'self-hosted' || l === 'workspace');
+    if (bad !== undefined) throw invalid('labels', `"${bad.slice(0, 40)}" is not a runner label: lowercase letters, digits, ".", "-" and "_" (self-hosted and workspace are reserved).`);
+    const maxRuns = req.maxRuns ?? was?.max_runs ?? 1;
+    if (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > CI_LIMITS.runnerMaxRuns) throw invalid('maxRuns', `A runner takes 1 to ${CI_LIMITS.runnerMaxRuns} runs at once.`);
+    const note = req.note === undefined ? (was?.note ?? null) : req.note === null ? null : String(req.note).slice(0, 200);
+    const row = this.#cs.upsertRunner(
+      { workspace_id: workspaceId, labels: JSON.stringify(labels), max_runs: maxRuns, enabled: (req.enabled ?? (was ? was.enabled === 1 : true)) ? 1 : 0, drained: (req.drained ?? (was ? was.drained === 1 : false)) ? 1 : 0, note },
+      by.actor,
+    );
+    this.#opts.audit?.({ kind: 'ci.runner_changed', actor: by.actor, userId: by.userId, severity: 'medium', subject: `workspace:${workspaceId}`, detail: { workspace: workspaceId, labels, maxRuns, enabled: row.enabled === 1, drained: row.drained === 1, created: !was } });
+    this.#changed();
+    return this.#runnerView(row, await this.host.states());
+  }
+
+  /** A runner no more. Its running runs finish; queued runs that need its labels wait for another, or fail as `no_runner` later. */
+  async removeRunner(workspaceId: string, by: CiDecider): Promise<void> {
+    if (!this.#cs.removeRunner(workspaceId)) throw notFound('runner');
+    this.#opts.audit?.({ kind: 'ci.runner_changed', actor: by.actor, userId: by.userId, severity: 'medium', subject: `workspace:${workspaceId}`, detail: { workspace: workspaceId, removed: true } });
+    this.#changed();
   }
 
   #retry(run: RunRow, why: string): void {
