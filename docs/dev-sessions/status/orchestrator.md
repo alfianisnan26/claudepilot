@@ -11,12 +11,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff 8d9eab44 (batch 6): T-623 S1b (6069), T-591 S1d (6107), T-558 S1b (6182), T-631 F2 (6195); gate GREEN 033f0e2
   (job-out/gate-033f0e2.log); comments 6244-6249. Deploy = coordinator's.
 - MERGED ff 1a4a7933 (batch 7): T-633 (6283) + T-638 (6284, CLOSED); gate GREEN 7d87d90 (claudepilot-gate-7d87d90-b744).
+- MERGED ff 38d6d3fb (batch 8b): T-325 S1+S1b+S1c (QA Perf 6357, migration 785 read); gate GREEN e5d2de3. Open for S3 (person).
 - T-636 CLOSED done on QA PASS WITH GAPS 5962 (built by the coordinator, ad9f7ad8). T-576 CLOSED on QA UI PASS WITH GAPS 6268; 40 px -> T-681.
 
 ## IN FLIGHT (6 of 6, D-71)
   QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts.
 - BATCH 8 d116939 (T-325 + T-574) gate RED: T-574 broke sessionStartParent.test.ts:71 (family workers not an array) -> 6396.
-  BATCH 8b wip/main-e5d2de3 = T-325 S1+S1b+S1c only (QA Perf PASS 6357, lead read migration 785 + authz): GATE RUNNING.
   T-574 back to the Backend lane after T-633 S2 (shape fix + cap/cut tests + whole src/chat in a Job).
 - T-341 QA BE PASS WITH GAPS (reply only; lead can't comment, unassigned): 4 doc errors -> BE INFRA lane 17a36fce (sonnet, respawned;
   b6df312e ended) on ticket/T-341-docfix from e4284315. D not verified.
