@@ -11,10 +11,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   0 OOM) + web 629/629 (claudepilot-job-a19b47c9).
 - Earlier: 4ba5d37, 73bb581 merged; deploys #35/#36 (closed T-483, T-397, T-491, T-435, T-476, T-449).
 
-## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-401 S1 (GO 11:28, has the slot), 10382d36 rev-t486-2 (opus, D-62) T-486 S2,
+## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-401 S1 (GO 11:28, has the slot), cffb12b1 impl-t486b (sonnet) T-486 S2b,
   47710391 qa-sweep (sonnet) T-531 S2 QA WAITING GO (sweep done: 4656), 0df3dd19 impl-t379 (sonnet) T-379 --image on fe62fa6)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster slot order: T-401 -> T-531 QA -> T-379. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
+  Cluster slot order: T-401 -> T-531 QA -> T-379 (97bea19) -> T-486 S2b. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
 - T-401 (high, security; claimed, 4576: M, sev 2, ~2.5 h): S1 c10daf0e (opus, impl-t401) on ticket/T-401-job-env from 58ce041:
   credentials only for clone/fetch (init container preferred), gone before npm scripts and the command; live FOUND/ABSENT check.
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
@@ -26,11 +26,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   round S2 eef38632 DONE 9cd240f (4573: typecheck e68ac93a; 1001/1015 0 fail 2bc6a50e; proof 55c7eff0 8/8 vs 4 fail); ended.
   Agents are now refused PATCH/DELETE claudes and DELETE terminal (no resolver). Next: QA (sonnet) -> lead gate -> merge. Open points ticketed: T-538 (pool ids in PUT), T-539 (other prefixes), T-540 (remove re-check).
 - T-486 (high): S1 live. S2 DONE 75fd6a4 (4671, Jobs green; webhook, attention, allow-list, migration 783); 45148907 ended.
-  Blind review 10382d36 (opus, D-62) -> QA -> lead gate -> merge -> deploy -> real Event branch check.
+  Blind review 10382d36 PASS WITH CONDITIONS (4693, 6 minors); decision 4703: S2b cffb12b1 fixes m1/m4/m5 + PRD risks m2/m3;
+  web hookSecret field -> T-556. Then QA -> lead gate -> merge -> deploy -> real Event branch check.
 - T-450: S3 deployed; 5 % real-data check + harness assertions (4354) still open.
 - T-472: live paths/restarts/pool re-assign NOT VERIFIED (4294). Retry with the new read tools.
 - T-525 (mine): QA/reviewer lack session_get (4362); scribe role has no Bash or ticket tools (4471). Coordinator decides.
-- T-537 (new, low): commit the T-527 doc edit (uncommitted in worktree ticket-t-527-docs) in an implementer slice.
 
 ## STATE PER TICKET
 - T-404: third blind review gave no verdict (design point -> T-451); fixes verified 3325; open until deployed.
