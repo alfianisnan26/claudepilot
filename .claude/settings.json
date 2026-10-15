@@ -177,7 +177,10 @@
       "Bash(cat /proc/*/environ*)",
       "mcp__plugin_cpb-browser_browser__browser_run_code_unsafe",
       "mcp__plugin_cpb-browser_browser__browser_file_upload",
-      "mcp__plugin_cpb-browser_browser__browser_drop"
+      "mcp__plugin_cpb-browser_browser__browser_drop",
+      "Bash(git commit *--amend*)",
+      "Bash(git commit --amend*)",
+      "Bash(git -C * commit *--amend*)"
     ]
   }
 }
