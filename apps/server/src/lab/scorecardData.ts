@@ -118,7 +118,8 @@ function loadExtra(db: DatabaseSync, ids: readonly string[]): Map<string, CrewSe
     context_used: number | null;
     ended_reason: string | null;
     state_since: string | null;
-  }>(db, ids, (l) => `SELECT id, agent, model, max_workers, subagents, created_at, context_used, ended_reason, state_since FROM chat_sessions WHERE id IN ${l}`);
+    spawn_why: string | null;
+  }>(db, ids, (l) => `SELECT id, agent, model, max_workers, subagents, created_at, context_used, ended_reason, state_since, spawn_why FROM chat_sessions WHERE id IN ${l}`);
   for (const r of rows)
     out.set(r.id, {
       agent: r.agent,
@@ -129,13 +130,14 @@ function loadExtra(db: DatabaseSync, ids: readonly string[]): Map<string, CrewSe
       contextUsed: r.context_used,
       endedReason: r.ended_reason,
       stateSinceMs: ms(r.state_since),
+      spawnWhy: r.spawn_why,
     });
   // A deleted continuation: its creation is the moment of its `session.continued` audit row (a hand-over); nothing else is known.
   const gone = ids.filter((id) => !out.has(id));
   const audits = chunked<{ session_id: string; at: string }>(db, gone, (l) => `SELECT session_id, MIN(at) AS at FROM chat_audit WHERE kind = 'session.continued' AND session_id IN ${l} GROUP BY session_id`);
   for (const a of audits) {
     const atMs = ms(a.at);
-    if (atMs !== null) out.set(a.session_id, { agent: null, model: null, maxWorkers: null, subagents: false, createdAtMs: atMs, contextUsed: null, endedReason: null, stateSinceMs: null });
+    if (atMs !== null) out.set(a.session_id, { agent: null, model: null, maxWorkers: null, subagents: false, createdAtMs: atMs, contextUsed: null, endedReason: null, stateSinceMs: null, spawnWhy: null });
   }
   return out;
 }

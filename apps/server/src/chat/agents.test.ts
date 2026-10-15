@@ -8,7 +8,7 @@ import { isAppError } from '@isnanme/core';
 import type { ClaudeUsage, ClaudeUsageWindow } from '@portal/contracts';
 import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
-import { MessageRate, pickSpawnClaude, spawnProblem, type AgentCaps, type SpawnPick } from './agents.js';
+import { MessageRate, pickSpawnClaude, spawnModel, spawnProblem, type AgentCaps, type SpawnPick } from './agents.js';
 import { SESSION_CAP } from './caps.js';
 import { portalFrame } from './controller.js';
 import { registerChatTools } from './portalTools.js';
@@ -380,7 +380,7 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
     const firstLine = r.s.ws.sends.find((x) => x.args[1] === worker.claudeSessionId && x.line.includes('Verify T-7'))!.line;
     assert.match(firstLine, /Portal message from your parent session/);
     const spawned = r.s.controller.audit({ kind: 'agent.spawned' }).find((x) => x.sessionId === worker.id)!;
-    assert.deepEqual(spawned.detail.spawn, { claude: work.id, why: 'room', role: 'qa-verifier', model: null, effort: null, mode: 'dontAsk' }, 'the audit row says how');
+    assert.deepEqual(spawned.detail.spawn, { claude: work.id, why: 'room', role: 'qa-verifier', model: null, effort: null, mode: 'dontAsk', modelWhy: null }, 'the audit row says how');
 
     // plan never confirmed (the process does not answer): the worker is ended and gets no instruction.
     const ended = await r.h.call(a.secret, 'session_spawn', { prompt: 'Read the plan.', title: 'Planner', mode: 'plan' });
@@ -422,6 +422,83 @@ test('T-294 over MCP: a worker on auto runs on a Claude with room, as its role (
     assert.equal((await r.h.call(w1.secret, 'session_stop_worker', { session_id: s2.id, action: 'end' })).result?.structuredContent.error.code, 'NOT_FOUND', 'a peer is not its worker');
     const parentView = (await r.h.call(a.secret, 'session_family', {})).result!.structuredContent;
     assert.deepEqual(new Set(parentView.workers.filter((w: { state: string }) => w.state !== 'ended').map((w: { claude: string }) => w.claude)), new Set(['Work', 'Default']));
+  } finally {
+    await r.done();
+  }
+});
+
+test('spawnModel (T-490, D-63): the role’s model by default; opus or fable above a role on sonnet only with a why; other asks kept', () => {
+  const refused = (f: () => unknown) => {
+    try {
+      f();
+    } catch (e) {
+      return isAppError(e) && e.code === 'VALIDATION_FAILED' ? e.message : `other: ${String(e)}`;
+    }
+    return 'not refused';
+  };
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', null, null), { model: 'sonnet', fromRole: true }, 'no model asked: the role’s');
+  assert.deepEqual(spawnModel('implementer', null, null, null), { model: null, fromRole: false }, 'a role with no model: none, as before');
+  assert.deepEqual(spawnModel(null, null, null, null), { model: null, fromRole: false });
+  assert.match(refused(() => spawnModel('reviewer', 'sonnet', 'opus', null)), /^D-63: the reviewer role runs on sonnet\. Give why .* or leave model out to use sonnet\.$/);
+  assert.match(refused(() => spawnModel('qa-verifier', 'claude-sonnet-5-5', 'fable', '  ')), /^D-63: /, 'fable too; a blank why is none');
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'claude-opus-5-5', 'release gate on the exact commit'), { model: 'claude-opus-5-5', fromRole: false });
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'sonnet', null), { model: 'sonnet', fromRole: false }, 'its own model asked');
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'haiku', null), { model: 'haiku', fromRole: false }, 'below is never refused');
+  assert.deepEqual(spawnModel('implementer', 'opus', 'fable', null), { model: 'fable', fromRole: false }, 'a role on opus is not D-63’s');
+  assert.deepEqual(spawnModel('implementer', null, 'opus', null), { model: 'opus', fromRole: false }, 'a role with no model: the model asked, unchanged');
+  assert.deepEqual(spawnModel('qa-verifier', 'sonnet', 'some-other-model', null), { model: 'some-other-model', fromRole: false }, 'a family nobody knows is kept');
+});
+
+test('T-490 (D-63) over MCP: a QA role starts on its role’s model; opus with no why is refused before anything starts; with a why it starts and keeps it; a role with no model keeps the one asked', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.controlTimeoutMs = 150;
+    r.s.controller.agentCaps = () => ({ ...CAPS, maxChildren: 5, spawnsPerHour: 20 });
+    const asked: string[] = [];
+    r.s.controller.roleModel = (ws, role) => (asked.push(`${ws} ${role}`), role === 'qa-verifier' || role === 'reviewer' ? 'sonnet' : null);
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    type Out = { id: string; model: string | null; why: unknown; applied: string[]; unconfirmed: string[] };
+    const spawnAs = async (args: Record<string, unknown>, model: string) => {
+      const spawning = r.h.call(a.secret, 'session_spawn', { prompt: 'Verify T-7 against its done criteria.', ...args });
+      const req = await r.s.take('set_model');
+      assert.equal(req.request.model, model, 'the model goes to the worker before its first instruction');
+      const started = await spawning;
+      assert.equal(started.result?.isError, undefined, JSON.stringify(started.raw));
+      return started.result!.structuredContent.session as Out;
+    };
+    const spawnAudit = (id: string) => r.s.controller.audit({ kind: 'agent.spawned' }).find((x) => x.sessionId === id)!.detail.spawn as Record<string, unknown>;
+
+    // A plain QA spawn (no model): sonnet, its role's, said as such.
+    const qa = await spawnAs({ title: 'Verify T-7', role: 'qa-verifier' }, 'sonnet');
+    assert.deepEqual(asked, ['docker/ws1 qa-verifier'], 'the role’s model is read for the parent’s workspace');
+    assert.equal(qa.model, 'sonnet');
+    assert.match(qa.unconfirmed.join(' '), /^model sonnet \(the role’s\): /);
+    assert.equal(qa.why, null);
+    assert.deepEqual([spawnAudit(qa.id).model, spawnAudit(qa.id).modelWhy], ['sonnet', null]);
+    assert.equal(r.s.controller.get(qa.id)!.spawnWhy, undefined);
+
+    // Opus for a role on sonnet with no why: refused naming D-63, and nothing starts.
+    const count = r.s.controller.children(r.s.id).length;
+    const refused = await r.h.call(a.secret, 'session_spawn', { prompt: 'Review the diff of T-7.', title: 'Review T-7', role: 'reviewer', model: 'opus' });
+    assert.equal(refused.result?.isError, true);
+    const error = refused.result!.structuredContent.error as { code: string; message: string };
+    assert.equal(error.code, 'VALIDATION_FAILED');
+    assert.match(error.message, /^D-63: the reviewer role runs on sonnet\. Give why /);
+    assert.equal(r.s.controller.children(r.s.id).length, count, 'nothing started');
+
+    // With a why: it starts on opus, and the why is kept on the worker, in its audit row and in the result (as the lead's text).
+    const reason = 'Release gate on the exact commit (T-490).';
+    const review = await spawnAs({ title: 'Review T-7', role: 'reviewer', model: 'opus', why: reason }, 'opus');
+    assert.equal(review.model, 'opus');
+    assert.deepEqual(review.why, { untrusted_text: reason, source: 'agent' });
+    assert.equal(r.s.controller.get(review.id)!.spawnWhy, reason);
+    assert.deepEqual([spawnAudit(review.id).model, spawnAudit(review.id).modelWhy], ['opus', reason]);
+
+    // A role with no model: the model asked, unchanged, and no why needed.
+    const impl = await spawnAs({ title: 'Build T-7', role: 'implementer', model: 'opus' }, 'opus');
+    assert.equal(impl.model, 'opus');
+    assert.match(impl.unconfirmed.join(' '), /^model opus: /);
+    assert.equal(r.s.controller.get(impl.id)!.spawnWhy, undefined);
   } finally {
     await r.done();
   }

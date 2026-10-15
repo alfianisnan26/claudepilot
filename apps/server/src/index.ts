@@ -480,6 +480,8 @@ chatController.modelWindow = (claudeId, family) => claudeUsage.windowKeys(claude
 // T-294: a worker started on `auto` goes to a Claude of its workspace with room by a fresh, measured reading (the Move ranking and the
 // auto-transfer's freshness test, chat/agents.ts); a named Claude must run on a plan. Both read the usage report's rows.
 chatController.spawnUsage = async () => (await claudeUsage.report()).claudes;
+// T-490 (D-63): the model a worker's role runs on by the workspace persona's agent definition: session_spawn's default and its opus check.
+chatController.roleModel = (workspaceId, role) => personas.roleModel(workspaceId, role);
 chatController.returnToOriginalModel = () => settingsModule.settings.get<boolean>(AUTO_SETTING_KEYS.returnToOriginalModel) === true;
 // Usage spend: who spent what (per session, workspace, ticket, persona), budgets with alerts and spike detection, over the recorded requests
 // (claude-usage PRD §21 to §26). The chat controller tells it of each recorded turn and each process start, and asks it before a message

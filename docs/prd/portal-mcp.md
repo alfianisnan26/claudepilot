@@ -547,7 +547,9 @@ A session's own tools for a crew (agent scope, [Chat sessions](chat-sessions.md)
 `session_spawn` takes `claude` (`same`, a plan Claude's name, or `auto`: room by a fresh, measured reading, the least
 busy first; with none, T-427, another Claude, the least used now of those with more than 10 % left (the auto move's default
 threshold), none above ceil((sessions + 1) / Claudes) + 1 sessions not ended (asleep ones count: a message wakes them), why
-`no_room_lowest`; its own only when no other qualifies), `role` (the worker runs as `.claude/agents/<role>.md`), `model`, `effort`, `mode` (`default`, `plan`,
+`no_room_lowest`; its own only when no other qualifies), `role` (the worker runs as `.claude/agents/<role>.md`), `model` (default: the
+role's model in the workspace persona, T-490), `why` (T-490, D-63: required for opus or fable on a role whose model is below opus, else
+`VALIDATION_FAILED` naming D-63; kept as the worker's `spawnWhy`; the result says `model` and `why`), `effort`, `mode` (`default`, `plan`,
 `dontAsk`), `ticket` (`T-<n>`: the worker's ticket, the field usage attribution reads, so its cost counts under that ticket;
 none means "No ticket"; a malformed id or a ticket that does not exist is refused as `NOT_FOUND` and starts nothing, T-449;
 T-397: while nobody holds that ticket the worker may `ticket_comment` on it, and on its lead's tickets, comment only, audited as the worker:

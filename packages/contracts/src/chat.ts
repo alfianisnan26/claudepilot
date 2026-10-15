@@ -122,6 +122,11 @@ export interface ChatSession {
    */
   agent?: string | null;
   /**
+   * T-490 (D-63): why its lead started it on a model above its role's default (`session_spawn` `why`, e.g. a QA role on opus), as the lead
+   * wrote it (redacted, at most CHAT_SPAWN_WHY_MAX characters). Absent or null when none was given. Text an agent wrote.
+   */
+  spawnWhy?: string | null;
+  /**
    * T-294: how many workers (sessions it starts with `session_spawn`) may run at once under THIS session. Null: the global
    * `sessions.maxChildren`. 0: it may not start workers. A value above the global cap counts as the cap (the global settings are the ceiling).
    * Checked at each spawn, so a change applies at once. Absent on rows from before (null).
@@ -833,6 +838,9 @@ export const CHAT_SESSION_TITLE_MAX = 80;
  * `.claude/agents/<name>.md`. A plain name, never a path, and never starting with `-` (it is passed to Claude Code as `--agent <name>`).
  */
 export const CHAT_AGENT_NAME = /^[a-z][a-z0-9-]{1,40}$/;
+
+/** T-490 (D-63): the longest `session_spawn` `why` (`ChatSession.spawnWhy`) the portal keeps. */
+export const CHAT_SPAWN_WHY_MAX = 200;
 
 export const CHAT_API = {
   /** GET: sessions, newest activity first. POST: create one. */
