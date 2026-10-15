@@ -9,7 +9,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   -> T-586 (premerge wip/main-5b66aa0, gate GREEN) -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-548 -> T-558 e652c44. T-426 S1b jumps in.
 - QA UI bbbe2b38 (qa/T-600-ui): home.mjs fix 924f1bfb PASS WITH GAPS (27/27 on its branch, not on integration; rides with T-600); waits for FE S1b re-run; then T-576 ux (2427d98, after T-586 merges). Headless only (5503).
 - BACKEND 6d72b5c6 (ticket/T-597-portal-slash, plan 5546) on T-597; then T-600 BE (plan 5540, respawn on FE S1b), T-325 S1+S2 (5549).
-- BE INFRA 5825f112 (ticket/T-547-quota-placement) on T-547; then T-610.
+- BE INFRA 5825f112 (ticket/T-547-quota-placement) on T-547; then T-623 (high, coordinator; respawn fresh branch, plan 5622; opus blind review), then T-610.
 - FRONTEND 6a1a061e (ticket/T-600-fe-s1b from 7d19c94) on T-600 FE S1b (QA UI FAIL 5565, decision 5573); then T-556 (5497/5525) after T-486.
 - IMPL 7ec2dc72 (ticket/T-426-s1b-review) on T-426 S1b.
 - Waiting for a slot: T-548 S1b (5515, one-off sonnet from 9b822ba). Lane respawn = new base (lane-backend has no ff, T-595 5553).
