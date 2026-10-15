@@ -10,7 +10,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff b37628e (T-515 e021cb6 + T-527 ea81071 + packs): gate GREEN claudepilot-gate-b37628e-0953 (memory peak 2189Mi/8192Mi,
   0 OOM) + web 629/629 (claudepilot-job-a19b47c9).
 
-## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-426 WAITING ab93b54 (on T-401 060aca4), cffb12b1 T-486 S2b DONE 6eb6fbf (4880) -> now T-531 S2c,
+## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-426 WAITING ab93b54 (on T-401 060aca4), 03b631f0 impl-t531-s2c (sonnet) T-531 S2c (cffb12b1 ended: T-486 S2b DONE 6eb6fbf 4880),
   47710391 qa (sonnet) T-401 QA WAITING GO, 0df3dd19 impl-t379 (sonnet) T-379 090fbbf (minors 8dadddb + lead merge of 060aca4, 4852): GO 12:20 src/ci re-run)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
   Cluster: T-379 re-run (GO 12:20) -> T-401 QA -> T-426 -> T-531 S2c -> T-486 QA (6eb6fbf). T-379 live proof PASS (4845, job-2d70c331). Next free workers: T-401 blind review (opus), T-531 S2c fix. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
@@ -76,5 +76,5 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 7. T-472 live re-check (4294), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
    T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2.
 
-LESSONS: node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, add worktrees (lead makes them), gate or wait; whole
+LESSONS: node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
 test folders; trailers in one block; FULL hashes; gate before every push; status via Edit/Write only; ancestor check before ff.
