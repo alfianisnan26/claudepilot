@@ -16,7 +16,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-623 S1b DONE 784926f (5855; 6d431441 ended; lead read diff: stdin not argv, Memory emptyDir 0400, no values in audit/hash, no RBAC) -> QA Perf queue.
 - BE INFRA respawned e92c5ba3 (ticket/T-578-gate-reuse) on T-578 S1 (reuse green gate of same tree + per-file progress): a GATE change,
   merge only on a person's ack + blind review. T-578 claim refused by id (T-634): worker on it by spawn.
-- QA PERF 7e4879c7 (lane/cp-qa-perf): current item, then T-426 S1c+S1d 80f5bb72 (FRONT, owner), then rest of T-600 BE 1a95fb03 / T-597 S1b 75656845, then T-623 S1b 784926f, then T-591 S1d delta 394abdd5. QA is the bottleneck (5 queued).
+- QA PERF 7e4879c7 (lane/cp-qa-perf): current item, then T-426 S1c+S1d 80f5bb72 (FRONT, owner), then rest of T-600 BE 1a95fb03 / T-597 S1b 75656845, then T-623 S1b 784926f, then T-591 S1d delta 394abdd5; T-636 trust check queued after T-426 (19:33). QA is the bottleneck (6 queued).
 - T-576 QA UI PASS WITH GAPS 5883 -> lead 5884: merge cb6bd216 (2427d98 + runners.mjs) in batch 3; kit 44 px gap -> T-639; phone check stays.
 - QA UI b3f769c5 ENDED (idle until FE S1c; slot swap, 19:19) -> FRONTEND fa9d3d56 (ticket/T-600-fe-s1c from 1a95fb03) on FE S1c
   (Pace 3 cols at 1280, 5721). On its DONE: end FE, respawn QA UI (lane-qa-ui) to re-run T-600 (qa/T-600-ui-r3 32f67b8f, crew-grid.mjs).
