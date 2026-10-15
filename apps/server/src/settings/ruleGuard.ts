@@ -657,6 +657,19 @@ const GIT_READS = new Set(['log', 'show', 'diff', 'status', 'blame', 'ls-files',
 const GIT_PATH_WRITES = new Set(['checkout', 'restore', 'rm', 'mv', 'reset', 'clean', 'checkout-index', 'update-index', 'merge-file', 'stash', 'sparse-checkout']);
 const DECODER = /\bbase(64|32)\b[^|;&\n]*\s(-d|--decode|-D)\b|\bxxd\b[^|;&\n]*\s-r|\bopenssl\b[^|;&\n]*\s(base64|enc)\b[^|;&\n]*\s-d\b|\buudecode\b|\\x[0-9a-fA-F]{2}|\\[0-7]{3}|\brev\b|\btr\b|\bgunzip\b|\bzcat\b|\bgzip\b[^|;&\n]*\s-d|\bperl\b[^|;&\n]*\bpack\b|\bfromCharCode\b|\batob\b/;
 
+// Review 2 (T-404): forms that run a command the text shows in an odd place (a variable, a git -c value, a sed script).
+const ASSIGN = /^([A-Za-z_][A-Za-z0-9_]*)\+?=/;
+// Variables a program runs as a command, loads code from, or that move where it writes: GIT_EDITOR, LESSOPEN, PAGER, ...
+const EXEC_ENV = /^(GIT_(?!AUTHOR_|COMMITTER_|TERMINAL_PROMPT$|TRACE|OPTIONAL_LOCKS$|PAGER_IN_USE$)[A-Z0-9_]+|LESSOPEN|LESSCLOSE|LESSKEY|LESSKEYIN|LESSEDIT|[A-Z0-9_]*(PAGER|EDITOR|VISUAL|ASKPASS|COMMAND|_CMD|_PROGRAM|_SHELL|_HOOK)|BROWSER|BASH_ENV|ENV|PROMPT_COMMAND|SHELLOPTS|BASHOPTS|PS[0-4]|IFS|LD_[A-Z_]+|DYLD_[A-Z_]+|NODE_OPTIONS|NODE_PATH|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PYTHONINSPECT|PERL5OPT|PERL5LIB|PERLLIB|PERL5DB|RUBYOPT|RUBYLIB|TAR_OPTIONS|RIPGREP_CONFIG_PATH|SED|AWKPATH|MANOPT|TERMINFO)$/;
+// A value of such a variable that runs nothing of its own.
+const BENIGN_VALUE = /^(|cat|less|less -R|more|true|false|:|0|1|never)$/;
+// git -c keys that run nothing and move no file.
+const GIT_SAFE_CONFIG = /^(color\.[\w.-]+|advice\.[\w.-]+|user\.(name|email)|log\.[\w.-]+|format\.pretty|diff\.(renames|algorithm|noprefix|relative|mnemonicprefix|colormoved|submodule|indentheuristic)|core\.(quotepath|autocrlf|safecrlf|filemode|abbrev|ignorecase|precomposeunicode)|init\.defaultbranch|safe\.directory|pull\.(rebase|ff)|push\.(default|autosetupremote)|commit\.gpgsign|tag\.gpgsign|protocol\.version|fetch\.[\w.-]+|merge\.conflictstyle|rebase\.(autosquash|autostash)|status\.[\w.-]+|column\.ui|pager\.[\w-]+=(true|false)$|maintenance\.auto|gc\.auto)(=|$)/i;
+// A sed script that runs a shell: the e command (1e CMD) or the e flag of s///e.
+const SED_EXEC = /(^|[;\n{}!0-9$\/,|#~+])\s*e(\s|;|}|$)|(^|[^\\])[\/|#,:@!]\s*[gpiImMw0-9]*e[gpiImMw0-9]*\s*([;}\n]|$)/;
+// Preprocessors rg --pre may run: they only print a file.
+const PRE_OK = /^(cat|zcat|gzcat|bzcat|xzcat|zstdcat|lz4cat|pdftotext|catdoc|antiword)$/;
+
 const nameOf = (w) => (w && !w.dyn ? path.basename(w.text) : '');
 const shown = (w) => (w ? w.text.replace(/\u0000/g, '$…').slice(0, 300) : '');
 
@@ -732,12 +745,22 @@ function namesRule(words, st, base) {
   return null;
 }
 
-/** Strips wrappers (sudo, env, timeout, nice, xargs, ...) and leading assignments; returns the real command's words. */
+/**
+ * Strips wrappers (sudo, env, timeout, nice, xargs, ...) and leading assignments; returns the real command's words, the
+ * assignments it stripped (each checked by the caller), a folder the wrapper changes to (env -C, sudo -D), and whether
+ * an env -S string was a value the guard cannot see.
+ */
 function unwrap(words) {
   let ws = words.slice();
   let xargs = false;
+  const assigns = [];
+  let chdir;
+  let unseen = false;
+  const takeAssigns = () => {
+    while (ws.length && ASSIGN.test(ws[0].text)) assigns.push(ws.shift());
+  };
   for (let guard = 0; guard < 12 && ws.length; guard++) {
-    while (ws.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(ws[0].text)) ws.shift();
+    takeAssigns();
     while (ws.length && !ws[0].dyn && KEYWORDS.has(ws[0].text)) ws.shift();
     if (!ws.length) break;
     const name = nameOf(ws[0]);
@@ -749,10 +772,38 @@ function unwrap(words) {
         if (withArg.test(o)) ws.shift();
       }
     };
-    if (name === 'sudo' || name === 'doas') skipOpts(/^-[ugCDhprtU]$/);
-    else if (name === 'env') {
-      skipOpts(/^-[uCS]$|^--(unset|chdir|split-string)$/);
-      while (ws.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(ws[0].text)) ws.shift();
+    if (name === 'sudo' || name === 'doas') {
+      ws.shift();
+      while (ws.length && ws[0].text.startsWith('-') && ws[0].text !== '-') {
+        const o = ws.shift();
+        if (o.text === '--') break;
+        if (o.text === '-D' || o.text === '--chdir') chdir = ws.shift() || { text: '', dyn: true };
+        else if (o.text.startsWith('--chdir=')) chdir = Object.assign({}, o, { text: o.text.slice(8) });
+        else if (/^-[ugChprtU]$/.test(o.text)) ws.shift();
+      }
+    } else if (name === 'env') {
+      // env -S 'cmd args' splits the string into the command (review 2, item 3); env -C runs it in another folder.
+      ws.shift();
+      while (ws.length && ws[0].text.startsWith('-') && ws[0].text !== '-') {
+        const o = ws.shift();
+        const t = o.text;
+        if (t === '--') break;
+        let split = null;
+        const s = /^-[0iv]*S(.*)$/.exec(t);
+        if (s) split = s[1] ? Object.assign({}, o, { text: s[1] }) : ws.shift() || null;
+        else if (t === '--split-string') split = ws.shift() || null;
+        else if (t.startsWith('--split-string=')) split = Object.assign({}, o, { text: t.slice(15) });
+        else if (t === '-C' || t === '--chdir') chdir = ws.shift() || { text: '', dyn: true };
+        else if (/^-C./.test(t)) chdir = Object.assign({}, o, { text: t.slice(2) });
+        else if (t.startsWith('--chdir=')) chdir = Object.assign({}, o, { text: t.slice(8) });
+        else if (/^-u$|^--unset$/.test(t)) ws.shift();
+        if (split) {
+          if (split.dyn) unseen = true;
+          else ws = lex(split.text).tokens.filter((x) => x.t === 'w').concat(ws);
+          break;
+        }
+      }
+      takeAssigns();
     } else if (name === 'command' || name === 'builtin' || name === 'nohup' || name === 'time' || name === 'chronic' || name === 'unbuffer' || name === 'exec') skipOpts(/^-a$/);
     else if (name === 'nice' || name === 'ionice' || name === 'stdbuf' || name === 'chrt' || name === 'taskset') skipOpts(/^-[ncpoei]$/);
     else if (name === 'timeout') {
@@ -767,7 +818,73 @@ function unwrap(words) {
       if (wasFlock && ws.length) ws.shift();
     } else break;
   }
-  return { words: ws, xargs: xargs };
+  return { words: ws, xargs: xargs, assigns: assigns, chdir: chdir, unseen: unseen };
+}
+
+/**
+ * One assignment word (review 2, item 2). Set for a command (FOO=x cmd, env FOO=x cmd): refused when its value names a
+ * rule file. A variable that runs a command or loads code (GIT_EDITOR, LESSOPEN, PAGER, NODE_OPTIONS, ...), wherever it
+ * is set: refused when its value runs something and the command shows a piece of a rule file's name or decodes.
+ */
+function assignHit(w, st, forCommand) {
+  const m = ASSIGN.exec(w.text);
+  if (!m) return null;
+  const value = w.text.slice(m[0].length);
+  if (forCommand && MENTION.test(value)) return hit('a variable naming a rule file, set for a command', '');
+  if (EXEC_ENV.test(m[1]) && !(BENIGN_VALUE.test(value) && !w.dyn) && (st.fragments || st.decoder)) return hit('a variable that runs code (' + m[1] + ') in a command that names a rule file', '');
+  return null;
+}
+
+/** A reader's option that runs a program or writes a file: rg --pre, less +!cmd and -o FILE, a --pager. */
+function readerExec(name, args, st, base) {
+  for (let k = 0; k < args.length; k++) {
+    const w = args[k];
+    const t = w.text;
+    if (name === 'rg') {
+      const m = /^--(pre|hostname-bin)(?:=(.*))?$/.exec(t);
+      if (m) {
+        const v = m[2] !== undefined ? Object.assign({}, w, { text: m[2] }) : args[k + 1];
+        if (!v || v.dyn || m[1] === 'hostname-bin' || !PRE_OK.test(path.basename(v.text))) return hit('rg running a program on what it searches', '');
+      }
+    }
+    if (name === 'less' || name === 'more') {
+      if (/^\+.*[!|]/.test(t) || (/^\+/.test(t) && w.dyn)) return hit(name + ' running a command', '');
+      const o = /^(-o|-O|--log-file|--LOG-FILE)(?:=?(.+))?$/.exec(t);
+      if (o && name === 'less') {
+        const target = o[2] !== undefined ? Object.assign({}, w, { text: o[2] }) : args[k + 1];
+        const r = checkTarget(target, st, base, 'less --log-file');
+        if (r) return r;
+      }
+    }
+    const pg = /^--pager(?:=(.*))?$/.exec(t);
+    if (pg) {
+      const v = pg[1] !== undefined ? Object.assign({}, w, { text: pg[1] }) : args[k + 1];
+      if (v && (v.dyn || !BENIGN_VALUE.test(v.text)) && (st.fragments || st.decoder)) return hit(name + ' --pager in a command that names a rule file', '');
+    }
+  }
+  return null;
+}
+
+/** Whether a sed command's scripts run a shell (the e command, s///e), scripts in -f files included. */
+function sedRunsShell(args, base) {
+  for (let k = 0; k < args.length; k++) {
+    const w = args[k];
+    const t = w.text;
+    if (t === '-f' || t === '--file') {
+      const f = args[++k];
+      if (!f || f.dyn) return true;
+      if (SED_EXEC.test(readSmall(f.text, base))) return true;
+      continue;
+    }
+    if (t.startsWith('--file=')) {
+      if (SED_EXEC.test(readSmall(t.slice(7), base))) return true;
+      continue;
+    }
+    if (/^-[A-Za-z]+$/.test(t) && !w.dyn) continue;
+    const s = t.startsWith('--expression=') ? t.slice(13) : t;
+    if (SED_EXEC.test(s)) return true;
+  }
+  return false;
 }
 
 function nonOptions(words) {
@@ -929,7 +1046,13 @@ function analyze(command, st, cwd, depth) {
   let base = cwd;
   const stack = [];
   const cmds = commands(l.tokens);
+  // A folder one command runs in (env -C, sudo -D): the shell's own folder comes back for the next command.
+  let restore = null;
   for (let ci = 0; ci < cmds.length; ci++) {
+    if (restore) {
+      base = restore.base;
+      restore = null;
+    }
     const c = cmds[ci];
     if (c.open) {
       stack.push(base);
@@ -948,6 +1071,16 @@ function analyze(command, st, cwd, depth) {
     }
     const u = unwrap(c.words);
     const ws = u.words;
+    for (const a of u.assigns) {
+      const r = assignHit(a, st, ws.length > 0);
+      if (r) return r;
+    }
+    if (u.unseen && (st.fragments || st.decoder)) return hit('env -S of a value the guard cannot see', '');
+    if (u.chdir !== undefined) {
+      restore = { base: base };
+      const d = u.chdir;
+      base = d.dyn || base === null ? (path.isAbsolute(expandHome(d.text)) && !d.dyn ? path.resolve(expandHome(d.text)) : null) : path.resolve(base, expandHome(d.text));
+    }
     const heredoc = c.redirs.filter((rd) => rd.v === '<<' || rd.v === '<<-' || rd.v === '<<<');
     const stdinText = heredoc.map((rd) => (rd.v === '<<<' ? (rd.target ? rd.target.text : '') : rd.body || '')).join('\n');
     const stdinFile = c.redirs.find((rd) => rd.v === '<' && rd.target);
@@ -961,6 +1094,13 @@ function analyze(command, st, cwd, depth) {
     const args = ws.slice(1);
     // A for list is read; what the loop does with it is checked in its own commands (a write to $f is a variable).
     if (name === 'for' || name === 'select' || name === 'case' || name === 'esac' || name === 'function') continue;
+    // export LESSOPEN='|rm %s': a variable that runs code, set for the commands after it.
+    if (name === 'export' || name === 'declare' || name === 'typeset' || name === 'local' || name === 'readonly') {
+      for (const a of args) {
+        const r = assignHit(a, st, false);
+        if (r) return r;
+      }
+    }
 
     if (name === 'cd' || name === 'pushd') {
       const a = nonOptions(args)[0];
@@ -1080,6 +1220,8 @@ function analyze(command, st, cwd, depth) {
       }
       const named = namesRule(args, st, base);
       if (named && args.some((w) => /(^|[;\s}])w\s|\/w\s|\bW\s/.test(w.text))) return hit('sed writing a file', named);
+      // sed '1e rm .mcp.json' and s///e run a shell (review 2, item 4).
+      if ((st.fragments || st.decoder) && sedRunsShell(args, base)) return hit('sed running a shell in a command that names a rule file', '');
       continue;
     }
     if (name === 'curl' || name === 'wget') {
@@ -1172,6 +1314,11 @@ function analyze(command, st, cwd, depth) {
       if (r) return r;
       continue;
     }
+    // A reader with an option that runs a program or writes (rg --pre, less +!cmd, --pager): review 2, item 5.
+    if (READERS.has(name)) {
+      const r = readerExec(name, args, st, base);
+      if (r) return r;
+    }
     // Anything else that names a rule file and is not a known reader: refused (prettier --write, npx, an editor, ...).
     if (!READERS.has(name)) {
       const named = namesRule(args, st, base);
@@ -1244,9 +1391,39 @@ function claudeSettings(ws, st, base) {
         return hit('claude --settings the guard cannot read', '');
       }
     }
-    if (HOOKS_OFF.test(text)) return hit('claude --settings that change hooks', '');
+    if (hooksOff(text)) return hit('claude --settings that change hooks', '');
+  }
+  // claude config set, claude mcp add, claude plugin install: Claude Code writes its own rule files for them.
+  const prog = ws.findIndex((w) => !w.text.startsWith('-') && /claude/i.test(w.text));
+  const ci = ws.findIndex((w, j) => j > prog && !w.dyn && /^(config|mcp|plugin|plugins)$/.test(w.text));
+  if (prog >= 0 && ci >= 0) {
+    const verb = ws.slice(ci + 1).find((w) => !w.text.startsWith('-'));
+    if (verb && (verb.dyn || !/^(get|list|ls|show|serve|help|validate)$/.test(verb.text))) return hit('claude ' + ws[ci].text + ' writing its settings', '');
   }
   return null;
+}
+
+/**
+ * Settings that switch hooks off or set hooks (review 2, item 6): the keys of the parsed JSON, so an escape
+ * ("disableAllHooks") does not hide one. Text that is not JSON is refused: the guard cannot read it.
+ */
+function hooksOff(text) {
+  if (HOOKS_OFF.test(text)) return true;
+  let o;
+  try {
+    o = JSON.parse(text);
+  } catch (e) {
+    return true;
+  }
+  const walk = (v, d) => {
+    if (d > 20 || !v || typeof v !== 'object') return false;
+    for (const k of Object.keys(v)) {
+      if (/^(disableAllHooks|allowManagedHooksOnly|hooks)$/i.test(k)) return true;
+      if (walk(v[k], d + 1)) return true;
+    }
+    return false;
+  };
+  return walk(o, 0);
 }
 
 /**
@@ -1284,6 +1461,14 @@ function readSmall(file, base) {
   }
 }
 
+/** A git config setting (key=value): refused when it names a rule file, or runs something while the command shows one. */
+function gitConfigHit(kv, unseen, st) {
+  if (MENTION.test(kv)) return hit('git config naming a rule file', '');
+  if (!unseen && GIT_SAFE_CONFIG.test(kv)) return null;
+  if (st.fragments || st.decoder) return hit('git config that could run a command, in a command that names a rule file', '');
+  return null;
+}
+
 function git(args, st, base, stdinText, stdinFile, piped) {
   let k = 0;
   let b = base;
@@ -1294,7 +1479,26 @@ function git(args, st, base, stdinText, stdinFile, piped) {
       b = !d || d.dyn ? null : b === null ? null : path.resolve(b, expandHome(d.text));
       continue;
     }
-    if (t === '-c' || t === '--git-dir' || t === '--work-tree' || t === '--namespace') {
+    // git -c alias.x='!cmd' x, git -c core.pager='tee FILE' log (review 2, item 1): a config value that names a rule file,
+    // or any key that is not known to run nothing while the command shows a piece of one.
+    if (t === '-c' || /^--config-env(=|$)/.test(t)) {
+      const v = t === '-c' || t === '--config-env' ? args[++k] : Object.assign({}, args[k], { text: t.slice(13) });
+      if (!v) continue;
+      const r = gitConfigHit(v.text, v.dyn || t !== '-c', st);
+      if (r) return r;
+      continue;
+    }
+    // Another work tree or git folder: paths are not where the command's folder says (git --work-tree=.claude checkout).
+    if (t === '--git-dir' || t === '--work-tree') {
+      k++;
+      b = null;
+      continue;
+    }
+    if (/^--(git-dir|work-tree)=/.test(t)) {
+      b = null;
+      continue;
+    }
+    if (t === '--namespace') {
       k++;
       continue;
     }
@@ -1303,6 +1507,15 @@ function git(args, st, base, stdinText, stdinFile, piped) {
   }
   const sub = args[k] ? args[k].text : '';
   const rest = args.slice(k + 1);
+  // git config alias.x '!rm .mcp.json' (then git x): a key that runs something, set while a rule file is named.
+  if (sub === 'config') {
+    const ops = nonOptions(rest);
+    const setting = ops.length >= 2 || rest.some((w) => /^--(add|replace-all)$/.test(w.text));
+    if (setting && ops[0] && !ops[0].dyn) {
+      const r = gitConfigHit(ops[0].text + '=' + (ops[1] ? ops[1].text : ''), !!(ops[1] && ops[1].dyn), st);
+      if (r) return r;
+    } else if (setting && (st.fragments || st.decoder)) return hit('git config of a key the guard cannot see', '');
+  }
   if (sub === 'apply' || sub === 'am') {
     const files = nonOptions(rest).filter((w) => !w.dyn && w.text !== '-');
     for (const f of files) {
@@ -1467,17 +1680,21 @@ const READ_TOOL = /(^|_)(read|get|list|search|find|view|show|stat|info|query|des
 // A tool name with a write verb is a write, whatever read verb it also has (search_and_replace, get_or_create_file).
 const WRITE_TOOL = /(^|_|-)(write|edit|create|update|upsert|delete|remove|rm|move|mv|rename|copy|cp|replace|patch|put|set|save|append|insert|upload|apply|modify|mkdir|touch|chmod|chown|truncate|overwrite|link|symlink|restore|checkout|reset|commit|exec|execute|run|install|import|extract|unzip|download)/i;
 
-function stringsUnder(v, key, out, depth) {
+// A tool that runs a command (run_command, execute, shell): its command-like argument is checked like a Bash command.
+const EXEC_TOOL = /(^|_|-)(exec|execute|run|shell|bash|sh|eval|spawn|command|terminal|script|process)(_|-|$)/i;
+const COMMAND_KEY = /^(command|cmd|commands|script|shell|bash|code|command_?line|args|argv|input)$/i;
+
+function stringsUnder(v, key, out, depth, every) {
   if (depth > 4 || out.length > 200) return;
   if (typeof v === 'string') {
-    if (PATH_KEY.test(key)) out.push(v);
+    if (PATH_KEY.test(key) || (every && COMMAND_KEY.test(key))) out.push({ key: key, v: v });
     return;
   }
   if (Array.isArray(v)) {
-    for (const x of v) stringsUnder(x, key, out, depth + 1);
+    for (const x of v) stringsUnder(x, key, out, depth + 1, every);
     return;
   }
-  if (v && typeof v === 'object') for (const k of Object.keys(v)) stringsUnder(v[k], k, out, depth + 1);
+  if (v && typeof v === 'object') for (const k of Object.keys(v)) stringsUnder(v[k], k, out, depth + 1, every);
 }
 
 function check(tool, ti, cwd) {
@@ -1497,13 +1714,31 @@ function check(tool, ti, cwd) {
     return analyzeBash(cmd, cwd);
   }
   if (tool.startsWith('mcp__')) {
-    const action = tool.split('__').slice(2).join('__');
+    // camelCase names are split first: searchAndReplace is search_and_Replace (review 2, item 7).
+    const action = tool
+      .split('__')
+      .slice(2)
+      .join('__')
+      .replace(/([a-z0-9])([A-Z])/g, '$1_$2');
     if (READ_TOOL.test(action) && !WRITE_TOOL.test(action)) return null;
+    const runs = EXEC_TOOL.test(action);
     const vals = [];
-    stringsUnder(ti, '', vals, 0);
-    for (const v of vals) {
-      if (v.length > 4096) continue;
-      const r = ruleTarget(v, cwd, true) || (MENTION.test(v) ? v : null);
+    stringsUnder(ti, '', vals, 0, runs);
+    for (const { key, v } of vals) {
+      if (runs && COMMAND_KEY.test(key)) {
+        // A command run by a tool: refused when it names a rule file at all (its arguments may be split over keys),
+        // else checked like Bash for the hidden forms.
+        if (v.length > 200000) return hit(tool + ' with a command too long to check', '');
+        if (MENTION.test(v)) return hit(tool + ' running a command that names a rule file', v);
+        const r = analyzeBash(v, cwd);
+        if (r) return hit(tool + ': ' + r.form, r.path);
+        continue;
+      }
+      if (v.length > 4096) {
+        if (runs) return hit(tool + ' with an argument too long to check', '');
+        continue;
+      }
+      const r = (PATH_KEY.test(key) ? ruleTarget(v, cwd, true) : null) || (MENTION.test(v) ? v : null);
       if (r) return hit(tool, r);
     }
   }

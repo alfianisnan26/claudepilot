@@ -523,6 +523,96 @@ test('review 8: the wrapper calls env by its full path and empties the environme
   assert.match(RULE_GUARD_WRAPPER, /exec \/usr\/bin\/env -i /);
 });
 
+/* ---------- the second blind review's findings (T-404, reviewer-t404-2, SAFE AFTER FIXES) ---------- */
+
+test('review 2, items 1-5: git -c, assignments, env -S/-C, sed e and reader exec options are refused when they could write', () => {
+  expectAll(
+    [
+      // 1. git -c values (alias, pager), git config of an alias, another work tree.
+      "git -c alias.x='!echo {} > .claude/settings.json' x",
+      "git -c core.pager='tee .mcp.json' log -1",
+      'git -c core.pager=./w.sh log -p -- .mcp.json',
+      'git --config-env=core.pager=P log -- .mcp.json',
+      "git config alias.x '!rm .mcp.json'",
+      'git --work-tree=.claude checkout HEAD -- settings.json',
+      // 2. Assignments that become commands, set for one command or exported.
+      "GIT_EDITOR='cp /tmp/a .claude/settings.json' git commit --amend",
+      "LESSOPEN='|rm %s' less .claude/settings.json",
+      "export LESSOPEN='|rm %s'; less .mcp.json",
+      "env GIT_EDITOR='tee .mcp.json' git commit",
+      'GIT_INDEX_FILE=.claude/settings.json git add src/app.ts',
+      // 3. env -S splits its string into the command; env -C and sudo -D change the folder.
+      "env -S 'rm .claude/settings.json'",
+      "env -S'tee .mcp.json'",
+      "env --split-string='rm .mcp.json'",
+      'env -S "$CMD" .claude',
+      'env -C .claude tee settings.json',
+      'sudo -D .claude rm settings.json',
+      // 4. sed's e command and s///e flag run a shell.
+      "echo | sed '1e rm .mcp.json'",
+      "sed 's/.*/rm .mcp.json/e' new.json",
+      // 5. Readers with an option that runs a program or writes.
+      'rg --pre rm . .claude',
+      'rg --pre=./w.sh --hidden x',
+      "less '+!rm .mcp.json' new.json",
+      'cat new.json | less -o .mcp.json',
+      "bat --pager 'tee .mcp.json' new.json",
+    ],
+    2,
+  );
+  expectAll(
+    [
+      'git -c color.ui=always diff .claude/settings.json',
+      'git -c core.quotepath=off log -- .mcp.json',
+      'git config user.email a@example.invalid',
+      'git --work-tree=. status',
+      'GIT_PAGER=cat git log -p -- .mcp.json',
+      'EDITOR=vim git commit -m x',
+      'CI=1 npm test',
+      'export PATH="$PATH:/opt/x"; cat .mcp.json',
+      "env -S 'cat .claude/settings.json'",
+      'env -C src cat app.ts',
+      "sed 's/deny/allow/' .claude/settings.json",
+      "sed -n '1p' .mcp.json",
+      'rg deny .claude/settings.json',
+      'rg --pre zcat deny .claude',
+      'less .claude/settings.json',
+      'bat .mcp.json',
+    ],
+    0,
+  );
+});
+
+test('review 2, item 6: nested claude settings are read as JSON (an escape does not hide a key); claude config and mcp writes', () => {
+  // "disableAllHooks" is disableAllHooks once parsed; the text never shows the word.
+  const escaped = `claude --settings '{"disableAll${'\\'}u0048ooks":true}' -p hi`;
+  assert.ok(!escaped.includes('disableAllHooks'));
+  expectAll(
+    [
+      escaped,
+      `claude --settings '{"permissions":{},"h${'\\'}u006foks":{}}' -p hi`,
+      "claude --settings '{not json' -p hi",
+      'claude mcp add x -- node x.js',
+      'claude config set -g theme dark',
+      'npx @anthropic-ai/claude-code plugin install x',
+    ],
+    2,
+  );
+  expectAll([`claude --settings '{"model":"x"}' -p hi`, 'claude mcp list', 'claude config get theme', 'claude -p "list the mcp servers"'], 0);
+});
+
+test('review 2, item 7: camelCase MCP write tools, and the command of an MCP tool that runs one', () => {
+  const settings = join(R.repo, '.claude/settings.json');
+  refused(run(R, 'mcp__fs__searchAndReplace', { path: settings, search: 'deny', replace: 'allow' }), 'searchAndReplace');
+  refused(run(R, 'mcp__fs__writeFile', { path: '.mcp.json', content: '{}' }), 'writeFile');
+  refused(run(R, 'mcp__sh__run_command', { command: 'rm .claude/settings.json' }), 'run_command rm');
+  refused(run(R, 'mcp__sh__execute', { cmd: 'D=.cla; echo x > "$D"ude/settings.json' }), 'execute with a hidden path');
+  refused(run(R, 'mcp__sh__runCommand', { command: 'tee', args: ['.mcp.json'] }), 'runCommand with split arguments');
+  allowed(run(R, 'mcp__sh__run_command', { command: 'npm test' }), 'run_command npm test');
+  allowed(run(R, 'mcp__fs__readFile', { path: settings }), 'readFile');
+  allowed(run(R, 'mcp__fs__searchFiles', { path: R.repo, pattern: 'settings' }), 'searchFiles');
+});
+
 test('review 9: the audit keeps a resolved path or a fixed label, never a command word', async () => {
   const r = rig();
   const marker = 'WORD-MARKER-4567';

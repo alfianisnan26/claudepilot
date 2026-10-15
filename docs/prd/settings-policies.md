@@ -959,7 +959,8 @@ working. A session takes the hook when it starts: one started before the guard l
   folders and files, and a hard link to a rule file made earlier.
 - An MCP tool whose name is not only a read with a path-like argument (`path`, `file`, `destination`, `source`, `to`,
   `from`, `name`, ...) that is a rule file. A name with a write verb is a write, whatever read verb it also has
-  (`search_and_replace`, `get_or_create_file`). Free text (a ticket comment naming a file) is not a path.
+  (`search_and_replace`, `searchAndReplace`, `get_or_create_file`). Free text (a ticket comment naming a file) is not a
+  path.
 - A Bash command with a write form that names or could name a rule file: a redirect (`>`, `>>`, `>|`, `<>`, `&>`,
   `exec 3>`), `tee`, `sponge`, `sed -i`, `perl -i`, `cp`, `mv`, `install`, `rsync`, `dd of=`, `truncate`, `touch`,
   `chmod`, `ln`, `rm`, editors, `curl -o`, `tar -C .claude`, `patch` and `git apply` of a patch touching one,
@@ -968,8 +969,23 @@ working. A session takes the hook when it starts: one started before the guard l
   readers and of git reads (`uniq IN OUT`, `tree -o`, `yq -i`, `git config --file`, `git archive -o`, `git bundle
   create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git diff`, ...) with a rule file among its
   words (`npx prettier --write`).
+- Commands hidden in another place (second review): a `git -c` or `--config-env` value, and `git config` of a key, that
+  names a rule file, or that is not a known harmless key (`color.*`, `user.*`, `core.quotepath`, ...) while the command
+  shows a piece of one (`git -c alias.x='!...' x`, `git -c core.pager='tee .mcp.json' log`); `git --work-tree`/`--git-dir`
+  (paths then count as from an unknown folder); an assignment set for a command whose value names a rule file
+  (`GIT_INDEX_FILE=.claude/settings.json git add`), and a variable that runs code or moves writes (`GIT_*`, `LESSOPEN`,
+  `PAGER`, `EDITOR`, `NODE_OPTIONS`, `BASH_ENV`, ...), set for a command, by `env` or by `export`, while the command
+  shows a piece of one (`LESSOPEN='|rm %s' less .claude/settings.json`); `env -S 'cmd ...'` (the string is checked as the
+  command), `env -C DIR` and `sudo -D DIR` (the command is checked in that folder); `sed`'s `e` command and `s///e` flag;
+  `rg --pre PROG` unless PROG only prints (`cat`, `zcat`, ...), `less +!cmd` and `less -o FILE`, and a `--pager` while a
+  piece of a rule file's name is shown.
 - A nested Claude Code (`claude`, `npx @anthropic-ai/claude-code`) whose `--settings` switch hooks off or set hooks
-  (`disableAllHooks`, `allowManagedHooksOnly`, `hooks`), or that the guard cannot read (a variable, a missing file).
+  (`disableAllHooks`, `allowManagedHooksOnly`, `hooks`; the JSON is parsed, so an escape does not hide a key), whose
+  settings are not JSON, or that the guard cannot read (a variable, a missing file); and `claude config`, `claude mcp`
+  and `claude plugin` with a verb that writes (`set`, `add`, `install`, ...).
+- An MCP tool that runs a command (`run_command`, `execute`, `shell`, camelCase names split first): its command-like
+  arguments (`command`, `cmd`, `args`, `script`, ...) are refused when they name a rule file and are checked like a Bash
+  command otherwise.
 - Code the guard cannot see: `sh -c`, `eval` or inline interpreter code (`node -e`) from a command substitution or made
   only of variables (`sh -c "$(curl ...)"`, `eval "$CMD"`), and `source <(...)`. A lone `$(cat FILE)` or `$(< FILE)` is
   read and checked like the code it holds. `eval "$(ssh-agent -s)"` is refused too.
@@ -1004,7 +1020,8 @@ another file, `.claude/agents/*` and a `.vscode/settings.json` included.
   refusal itself does not depend on it).
 
 It errs on the side of refusing: some reads in an interpreter (`python -c` that only reads `.claude/settings.json`) and
-some unrelated commands that also name a rule file are refused. A test file that writes rule files into a temp folder is
+some unrelated commands that also name a rule file are refused, and so is an MCP tool that runs a command naming one
+(`cat .mcp.json` through `run_command`) and `git -c` of a key outside the harmless list in a command that names one. A test file that writes rule files into a temp folder is
 refused when run directly in a workspace; run it through `scripts/job-run.sh`. Copying a whole repository with `cp -r`
 is refused when it would land rule files; use `git clone` or `git worktree add`.
 
@@ -1013,7 +1030,7 @@ session id, the tool, the form, the path, the agent type and the permission mode
 content. The path is the resolved rule file (or `.claude` folder), else the fixed label `unresolved`: never a word of the
 command; the portal keeps only an absolute path or that label from a line. The portal pulls the `guard` channel of the
 workspaces the policy drop-in landed in and that are not removed (every 10 s while running, and before a stop; at most 4
-pulls at once) and writes one audit row `guard.refused` (severity high) with the workspace and, when the portal ran the
+pulls at once, and a workspace left waiting by one tick goes first in the next) and writes one audit row `guard.refused` (severity high) with the workspace and, when the portal ran the
 session, the chat it belongs to (`settings/ruleGuardAudit.ts`).
 
 Open: 🔬 the QA real job: a `dontAsk` worker and a Bypass lead in `~/work/konfersi-universe` both refused writing
