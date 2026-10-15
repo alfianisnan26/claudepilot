@@ -9,8 +9,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
-## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf) on T-561 QA.
-  T-561 S1b DONE 7227bb3 (Jobs green + 3 test fixes, 5396; 1dcbbe0d ended) -> QA Perf -> lead gate + merge. T-576 DONE 2427d98 (Jobs green; no
+## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf) on T-548 QA read.
+  T-561 S1b 7227bb3: QA PASS WITH GAPS (5440: 743/749 0 fail, mutation caught; symlink holes A, B). Decision 5442: S1c fix by Backend lane in
+  lead-made worktree t561-s1c-symlinks (T-595 Bash test) -> QA Perf re-probe -> lead gate + merge. T-576 DONE 2427d98 (Jobs green; no
   prettier/eslint in the Job): ux BLOCKED (a `folder` spawn gets no Bash; 5368) until T-586 merges. T-586 DONE 1d27635 (Job 6be903ec rc 0, mutation
   caught, 5419; 2ae78a99 ended): blind review next free slot -> gate -> merge. T-558 e652c44: QA runs its Jobs (5052).
   T-486 ab61f5c: blind review PASS W/ CONDITIONS (5349); decision 5352: 5feb4875 impl-t486-s2d (sonnet) adds the tests; then lead merge + gate.
@@ -18,8 +19,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   LANE 5f8f392b "ClaudePilot Backend" (lane-backend, sonnet) on T-546 Jobs (ticket/T-546-digest; 8822ba59 ended). Backend queue (coordinator,
   efficiency order): T-546 -> T-600 BE -> T-597 -> T-325 -> T-591 S2. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
   spawn worktree ticket/T-600-crew-pace-ui) on T-600 FE (5413). Next slots: blind review (T-586, T-548), QA UI (T-576 ux, T-600). QA Perf queue: T-561, T-548, T-486, T-546.
-  Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-561 QA (GO now) -> T-486 S2d -> T-600 FE 8cf263a (5431, untested) -> T-546 -> T-591 S1 6853486 -> T-558 QA. quick-check unusable by dontAsk workers (T-586): its checks in ONE Job.
+  Cluster: T-486 S2d (GO now) -> T-600 FE 8cf263a (5431, untested) -> T-546 -> T-561 S1c -> T-548 QA -> T-591 S1 6853486 -> T-558 QA. quick-check unusable by dontAsk workers (T-586): its checks in ONE Job.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
 - T-379 3ddbcbc: src/ci 144/144 job-5b4609a6 (4905); lead live proof PASS job-c71c5bfe (4906); blind review 30dc0f13 PASS WITH
