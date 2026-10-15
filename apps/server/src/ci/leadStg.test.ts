@@ -152,13 +152,13 @@ test('stg age: "unavailable" before any stg deploy passed, then whole minutes si
     assert.deepEqual(await age(lead), [{ repo: 'app', minutes: 0 }], 'a clock behind the run never goes negative');
 
     // A stg deploy that FAILED, ended later, is not "the last deploy that passed": the age still counts from the passed one.
-    clock = new Date(finished + 20 * 60_000);
     const bad = await h.svc.startRun({ repoId: repo.id, pipeline: 'stg-broken', ref: 'stg' }, 'ui');
     await h.until('the failing stg run to end', () => h.svc.get(bad.id).status === 'failed');
     const badEnd = Date.parse(h.svc.get(bad.id).finishedAt!);
-    assert.ok(badEnd >= finished + 19 * 60_000, 'the failed run ended 20 minutes after the passed one (the service stamps on its clock)');
+    assert.ok(badEnd > finished, 'the failed run ended after the passed one (real clock)');
+    // Exactly 25 minutes after the passed run: counted from it the age is 25; counted from the later failed run it would floor to 24.
     clock = new Date(finished + 25 * 60_000);
-    assert.deepEqual(await age(lead), [{ repo: 'app', minutes: 25 }], 'counted from the deploy that passed (25), not the failed one (5)');
+    assert.deepEqual(await age(lead), [{ repo: 'app', minutes: 25 }], 'counted from the deploy that passed, not from the failed one');
   } finally {
     mcp.done();
     h.done();
