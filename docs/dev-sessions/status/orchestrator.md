@@ -12,10 +12,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## IN FLIGHT (4 of 4 workers, D-65: 445c3e1b impl-t561 (opus, why deny rules/authz) T-561 S1 WAITING a649874 (migration 778, no clash),
   d2e7b532 impl-t576 (sonnet) T-576 Runners UI WAITING 7b26e14 (web only). T-558 e652c44: 7d33708d ended (125k, coordinator); QA runs its Jobs (5052).
   cee43422 impl-t486-s2c (opus, why secret-path collision) WAITING 3cb0883 (one helper deliveredSecretValue; T-557 lines kept),
-  03c496b6 impl-t546 (sonnet) T-546 Jobs (GO 15:22; 118k: ends after T-546). T-486 QA PASS WITH GAPS 5125; fb538d7d ended.)
+  d23cb713 impl-t548 (sonnet) T-548 S1 auto hand-off (plan 5147; short pushed steps till the restart). T-486 QA PASS W/ GAPS 5125.)
+  T-546 bb7cdb0: 03c496b6 ended (118k, restart cut its Jobs; 5143): a fresh sonnet worker runs its Jobs after the restart.
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-546 (GO 15:22) -> T-561 -> T-576 -> T-486 s2c -> T-558 QA. Deploy #38 (coordinator) shipped T-557 S1 + T-575.
-  Next free slot: T-558 QA (sonnet), then T-576 ux-checker, T-486 s2c blind review (secret union).
+  Cluster (after deploy #39 + restart): T-561 -> T-576 -> T-486 s2c -> T-546 -> T-558 QA.
+  Next free slot: T-546 Jobs, T-558 QA (sonnet), then T-576 ux-checker, T-486 s2c blind review (secret union).
   Later: T-426 QA + blind review (after T-401 merges), T-416 S1b QA, T-548.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
@@ -42,8 +43,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   ticket. 7d33708d ended, T-576 started in its slot. The cluster queue (D-61), not the workers, is the bottleneck.
 - 15:50 Workspace restarted 13:46 UTC; 03c496b6 (T-546, mid-Jobs) and cee43422 (T-486 port, WAITING 3cb0883) are gone, all branches
   pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster ~30 min, then ONE more restart: nothing long till then.
+  The coordinator runs the deploys today (#38, #39); I start none until it says so.
   After it: fresh workers re-run T-546's Jobs on bb7cdb0 and T-486's on 3cb0883.
-- 14:45 Coordinator ran deploy #38 (T-557 S1 + T-575) and runs the deploys now; I start none until it says so.
 - 12:50 Coordinator: it builds T-557 itself (owner's ask); no T-557 slices from me; T-426 stays mine; a line on T-557 when I touch
   ci/ or connect/ in a big way. (Supersedes 12:45's fold of T-426 into the lease.)
 - 13:20 D-66 (pulled, 619b4b5): workers run scripts/quick-check.sh (one Job: format, lint, named tests) before a branch goes
@@ -55,8 +56,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 10:25 Workers end with WAITING <hash>; the lead hands out the cluster slot with "GO T-n" (free-slot check: OUR Jobs only).
 - 09:00 Persona/role-tool/permission questions go to the coordinator, NEVER the owner; `owner-checklist` = production only.
 - D-63: QA/ux/reviewer on SONNET (opus needs a `why`: security, gate, rule or large slice); the lead never implements or commits code.
-- D-61: (worker count now 4 by D-65), NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh, one at a time.
-- Hand over before 250k context (coordinator).
+- D-61: (worker count now 4 by D-65), NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh, one at a time. Hand over before 250k.
 
 ## NEEDS A HUMAN (D-62)
 - T-401 gate wall (via the coordinator): the owner acks on T-401 that gate-job.yaml's change is credential plumbing plus one
