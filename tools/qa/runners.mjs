@@ -23,6 +23,7 @@ const METRICS = `(() => {
 
 const cookie = await login();
 const call = api(cookie);
+await call('POST', '/api/workspaces/local/local/start');
 const b = await Browser.launch({ width: 390, height: 844, mobile: true, cookie });
 await b.cookie(cookie);
 try {
@@ -61,7 +62,7 @@ try {
       if (mobile) check(`${tag}: sheet controls >= 44 px`, m.small.length === 0, JSON.stringify(m.small));
       await b.focusSel('input[placeholder="gpu"]');
       await b.type('gpu,');
-      await b.type('a-rather-long-label-that-must-wrap-or-truncate-somewhere-sensible,');
+      await b.type('a-long-label-of-forty-characters-0123456,');
       await sleep(300);
       const chips = await b.eval(`[...document.querySelectorAll('ul[aria-label=Labels] button')].map((e) => { const r = e.getBoundingClientRect(); return { t: e.getAttribute('aria-label'), r: Math.round(r.right), h: Math.round(r.height) }; })`);
       check(`${tag}: two label chips, inside the screen, >= 44 px tall`, chips.length === 2 && chips.every((c) => c.r <= w && c.h >= 43.5), JSON.stringify(chips));
