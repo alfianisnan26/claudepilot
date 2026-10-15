@@ -22,6 +22,10 @@ import { chatApi } from './api';
 import { foldBtw, refusedBtw, type BtwState } from './btw/state';
 import { appendLive, EMPTY_HISTORY, expand, olderDone, olderFailed, olderStart, seed, seedAll, type History } from './history';
 import { createDeltaBatcher, foldLive, NO_LIVE, settleLive, type AgentLive, type LiveState } from './motion/deltas';
+import { sharedRead } from './sharedRead';
+
+/** The newest page, one read in flight per session: a remounted effect (StrictMode in dev) joins it instead of reading again. */
+const newestPage = sharedRead((id: string) => chatApi.page(id));
 
 /** The live partial assistant text for the open block, before it's stored as an event. */
 export interface ChatDelta {
@@ -218,7 +222,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
     // page is in, after its newest event: a subscribe without `afterSeq` sends the whole backlog. A page that cannot be read falls back
     // to exactly that (as before T-376), so the chat still shows.
     let seeded = false;
-    void chatApi.page(sessionId).then(
+    void newestPage(sessionId).then(
       (page) => {
         if (closed) return;
         seeded = true;
