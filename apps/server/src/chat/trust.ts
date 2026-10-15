@@ -41,7 +41,7 @@ defineSetting({
   group: 'sessions',
   order: 20,
   label: 'Trust rules-only folders',
-  help: 'A folder whose Claude Code settings hold only permission rules (allow, deny, ask) is trusted by itself, the first time and when the rules change, so a new worktree, a Move, a restart or an auto move does not stop. Still needs you: a hook, MCP server, plugin or env; a skill, command or agent that loads hooks or sets a permission mode, or one that cannot be checked; an allow rule (or a skill’s allowed-tools) that is a blanket (Bash, Edit, Read), a path outside the folder, a wildcard command other than ls, cat, head, tail, wc, grep, echo, pwd or git status, or an exact command that runs another (sudo, env, bash, flock, timeout, xargs, node -e and the like). Not checked: what a repository script does, so an exact rule for one that runs a command it is given is yours to keep out. Rules can let tools run without asking.',
+  help: 'A folder whose Claude Code settings hold only permission rules (allow, deny, ask) is trusted by itself, the first time and when the rules change, so a new worktree, a Move, a restart or an auto move does not stop. Still needs you: a hook, MCP server, plugin or env; a skill, command or agent that loads hooks, sets a permission mode, has a frontmatter key other than name, description, model, tools, color, argument-hint and allowed-tools, or cannot be checked; an allow rule (or a skill’s allowed-tools) that is a blanket (Bash, Edit, Read), a path outside the folder, an edit rule that may reach the folder’s .git or .claude unless the same file denies Edit(.git), Edit(.git/**) and Edit(.claude/**), a Bash rule with < or > or a path argument outside the folder, a wildcard command other than ls, pwd or echo, or an exact command that runs another (sudo, env, bash, flock, timeout, xargs, node -e and the like). Not caught: an exact rule that runs code the folder controls (npm test, make, a script) plus editing inside the folder is the same as any command; the scan cannot catch it, so keep such rules out yourself. Rules can let tools run without asking.',
   protective: false,
 });
 
@@ -93,7 +93,7 @@ const EXTRAS: Record<string, string> = {
   'skill:mode': 'a skill sets a permission mode',
   'command:mode': 'a command sets a permission mode',
   'agent:mode': 'an agent sets a permission mode',
-  unreadable: 'a skill, command or agent file can’t be checked',
+  unreadable: 'a skill, command or agent file can’t be checked or has a frontmatter key beyond plain text',
   unscanned: 'the workspace’s chat host doesn’t check skills, commands and agents',
 };
 

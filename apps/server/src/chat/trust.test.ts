@@ -115,7 +115,7 @@ test('autoTrustRefusal: says why by name, never a rule or a value (T-366)', () =
   // Skills, commands and agents (T-366 M2): by kind, never the file's name or its frontmatter.
   assert.equal(autoTrustRefusal({ ...rules, extras: ['skill:hooks'], rulesOnly: false }), 'a skill loads hooks');
   assert.equal(autoTrustRefusal({ ...rules, extras: ['command:hooks', 'agent:mode'], rulesOnly: false }), 'a command loads hooks; an agent sets a permission mode');
-  assert.equal(autoTrustRefusal({ ...rules, extras: ['unreadable'], rulesOnly: false }), 'a skill, command or agent file can’t be checked');
+  assert.equal(autoTrustRefusal({ ...rules, extras: ['unreadable'], rulesOnly: false }), 'a skill, command or agent file can’t be checked or has a frontmatter key beyond plain text');
   assert.equal(autoTrustRefusal({ ...rules, extras: undefined }), 'the workspace’s chat host doesn’t check skills, commands and agents');
   const e = untrustedError({ ...rules, autoRefusal: 'it loads hooks' }, false);
   assert.equal(e.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: it loads hooks.`);

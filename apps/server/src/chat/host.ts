@@ -30,8 +30,20 @@ export const TRUST_MAX_EXTRA_FILES = 200;
 export const TRUST_MAX_EXTRA_BYTES = 262_144;
 /** `trustscan` lists at most this many entries under `.claude/skills`, `commands` and `agents`; more makes the folder `unreadable`. */
 export const TRUST_MAX_EXTRA_ENTRIES = 5_000;
-/** The Bash commands a wildcard rule may name and stay narrow (T-366): what they do with any argument is read or print, never run another command or write. */
-export const TRUST_VETTED_COMMANDS = ['ls', 'cat', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'echo', 'pwd'] as const;
+/**
+ * The Bash commands a wildcard rule may name and stay narrow (T-366, second review of aed422b): with any argument they print a
+ * name or their arguments, never a file's bytes, never run another command. `echo` is here only because a `<` or `>` anywhere in a
+ * Bash rule makes it broad (a redirect writes or reads anywhere). `cat`, `head`, `tail`, `wc` and `grep` are not: with a wildcard
+ * they read any file on the disk, credentials included. `git status` is not: a repository's `core.fsmonitor` runs a program.
+ */
+export const TRUST_VETTED_COMMANDS = ['ls', 'pwd', 'echo'] as const;
+/**
+ * The frontmatter keys a skill, command or agent may hold and still be read as rules-only (T-366 M3): an allow list, plain text that
+ * loads nothing. Found in this repository's own `.claude/agents`, `.claude/commands` and `docs/kit/skills` (`name`, `description`,
+ * `model`, `argument-hint`, `allowed-tools`), plus `tools` and `color` (an agent's tool list narrows it, a colour is a label).
+ * `allowed-tools` is classified rule by rule. Any other key (`hooks`, `permissionMode`, `mcpServers`, anything new) makes the file odd.
+ */
+export const TRUST_FRONTMATTER_KEYS = ['name', 'description', 'model', 'tools', 'color', 'argument-hint', 'allowed-tools'] as const;
 
 /**
  * The jq definitions behind `trustscan`'s `broadAllow` (T-366, D-55): `cpBroad` reads one `permissions.allow` entry (or one
@@ -41,9 +53,17 @@ export const TRUST_VETTED_COMMANDS = ['ls', 'cat', 'head', 'tail', 'wc', 'grep',
  *   spec of wildcards only (`*`, `:*`, `**`, empty);
  * - a path rule (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Read`) that is absolute (`/x` and `//x` alike: `/x` is read as
  *   absolute, the stricter reading) or in home (`~/x`, `$HOME/x`) and not inside `$here`; a relative `**` or glob-only path; any `..`;
- * - a Bash rule with a wildcard (`*`, `:*`) whose command is not one of {@link TRUST_VETTED_COMMANDS} named bare, or `git status`:
- *   an allow list, so `make *`, `sed *`, `npm run *`, `node *`, `git push:*`, `kubectl get *` (a kubeconfig can run a program) and
- *   `git diff *` (`--output` writes anywhere) are broad;
+ * - an editing path rule (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`) inside the folder that may cover its `.git` or `.claude`
+ *   (`.git/hooks` and `.git/config` run programs, `.claude` holds the settings): the folder itself, a first segment `.git`, `.claude`
+ *   or a glob (`./**`, `*.md`), or one segment only (`README.md`: gitignore-style, it matches at any depth); unless the same settings
+ *   file denies `Edit(.git)`, `Edit(.git/**)` and `Edit(.claude/**)` (each also as `./x` or `**\/x`; `cpBroadIn($deny)`, while
+ *   `cpBroad` has no deny list, so a skill's `allowed-tools` never has one);
+ * - a Bash rule with a `<` or `>` anywhere (a redirect writes or reads any file), or a token that is a path (starts with `/`, `~` or
+ *   `$`, or follows an `=`) the same check calls outside the folder or on its `.git` or `.claude` (`cp a ~/.bashrc`, `rm -rf ~`), or
+ *   any other `$`;
+ * - a Bash rule with a wildcard (`*`, `:*`) whose command is not one of {@link TRUST_VETTED_COMMANDS} named bare: an allow list, so
+ *   `cat *`, `grep *` (they read any file), `git status *` (fsmonitor), `make *`, `sed *`, `npm run *`, `node *`, `git push:*`,
+ *   `kubectl get *` (a kubeconfig can run a program) and `git diff *` (`--output` writes anywhere) are broad;
  * - an exact Bash rule (no wildcard) whose command runs another command: sudo, env, the shells, eval, exec, xargs, flock, timeout,
  *   nice, nohup, stdbuf, time, watch, setsid, chroot, ssh, awk and the like (matched on the command's base name, unquoted, any case:
  *   `/usr/bin/env`, `"sudo"`); an interpreter with an eval flag (`node -e`, `python3 -c`, `perl -e`, `deno eval`); `find`/`fd` with
@@ -51,15 +71,17 @@ export const TRUST_VETTED_COMMANDS = ['ls', 'cat', 'head', 'tail', 'wc', 'grep',
  *   `kubectl`/`docker exec`, `run` or `debug`; a leading `NAME=value`; a command name with a glob or an expansion;
  * - anything it can't read (not a string, a control character, unbalanced parentheses, parentheses inside a Bash rule, a WebFetch
  *   spec other than `domain:`).
- * When in doubt it is broad. It cannot know what a repository's own script does with its arguments: an exact rule for one that runs
- * them is the lead's to keep out. `cpFront` reads a skill's, command's or agent's Markdown and says whether its frontmatter declares
- * `hooks` or a `permissionMode`, has an `allowed-tools` entry `cpBroad` calls broad (or one it can't read), or is YAML it doesn't
- * read line by line (`odd`: flow mappings, merge keys, complex keys, escaped quoted keys).
- * No single quote (the script holds it in one) and no template expression but the vetted list.
+ * When in doubt it is broad. It cannot know what code the folder controls does: an exact rule that runs it (`npm test`, `make`, a
+ * script) plus editing inside the folder is the same as any command, and this scan cannot catch it (T-403). `cpFront` reads a
+ * skill's, command's or agent's Markdown and says whether its frontmatter declares `hooks` or a `permissionMode`, has an
+ * `allowed-tools` entry `cpBroad` calls broad (or one it can't read), or is `odd`: a key not in {@link TRUST_FRONTMATTER_KEYS}, a
+ * `...` line before the closing `---` (only `---` ends it), an opening line other than `---`, an indented first key, or YAML it
+ * doesn't read line by line (flow mappings, merge keys, complex keys, quoted keys).
+ * No single quote (the script holds it in one) and no template expression but the two lists.
  */
 export const TRUST_BROAD_JQ = String.raw`def cpIn(xs): . as $x | any(xs; . == $x);
 def cpTrim: sub("^\\s+"; "") | sub("\\s+$"; "");
-def cpVetted: (.[0] | gsub("[\"\\x27\\\\]"; "")) as $c | ($c | cpIn(${TRUST_VETTED_COMMANDS.map((c) => `"${c}"`).join(', ')})) or ($c == "git" and (.[1] // "") == "status");
+def cpVetted: .[0] | gsub("[\"\\x27\\\\]"; "") | cpIn(${TRUST_VETTED_COMMANDS.map((c) => `"${c}"`).join(', ')});
 def cpOptVal($r; $i): $i > 0 and ($r[$i - 1] | startswith("-") and (contains("=") | not));
 def cpLeadWild: . as $r | ([range(0; length) | select(($r[.] | test("\\*")) or ((($r[.] | startswith("-")) | not) and (cpOptVal($r; .) | not)))] | first) as $i | if $i == null then false else ($r[$i] | test("\\*")) end;
 def cpScript: . as $r | any(range(0; length); . as $i | $r[$i] as $x | (if $i > 0 then $r[$i - 1] else "" end) as $p
@@ -85,21 +107,33 @@ def cpCmd:
     elif ($c | cpIn("kubectl", "docker", "podman", "nerdctl", "crictl", "ctr", "oc", "lxc")) then ($r | cpLeadWild) or any($r[]; cpIn("exec", "run", "debug"))
     elif $c == "git" then ($r | cpLeadWild) or any($r[]; cpIn("-c", "--config-env", "-x", "--exec", "--extcmd", "foreach", "filter-branch", "run") or startswith("--config-env=") or startswith("--exec=") or startswith("--extcmd=")) or ($wild and any($r[]; . == "config"))
     else false end;
-def cpBash: cpTrim as $s
-  | if ($s | test("[()]")) then true
-    elif ($s | test("[;|&\\x60]|\\$\\(|[<>]\\(") and test("\\*")) then true
-    else ($s | gsub(":\\*"; " *") | [splits("\\s+")] | map(select(. != ""))) as $t | if ($t | length) == 0 then true else $t | cpCmd end end;
 def cpInside: ($here | split("/") | map(select(. != ""))) as $h | (split("/") | map(select(. != ""))) as $s
   | ($here | startswith("/")) and ($h | length) > 0 and ($s | length) >= ($h | length) and all(range(0; $h | length); $s[.] == $h[.]);
-def cpPath: cpTrim as $p
+def cpSegs: split("/") | map(select(. != "" and . != "."));
+def cpCovers: length == 0 or (.[0] | ascii_downcase | cpIn(".git", ".claude") or test("[*?\\[\\]{}\\\\]"));
+def cpPath($w; $g): cpTrim as $p
   | if ($p | test("(^|/)\\.\\.(/|$)")) then true
     else ($p | sub("^\\$\\{?HOME\\}?"; "~")) as $q | ($home | sub("/+$"; "")) as $hm
-    | if ($q | startswith("~")) then (if ($q | test("^~(/|$)")) and ($hm | startswith("/")) then ($hm + ($q | ltrimstr("~"))) | cpInside | not else true end)
-      elif ($q | startswith("/")) then ($q | cpInside | not)
-      elif ($q | startswith("./")) or $q == "." then false
-      else ($q | split("/") | map(select(. != ""))) as $seg | ($seg | length) == 0 or all($seg[]; test("^[*?]+$")) end end;
+    | (if ($q | startswith("~")) then (if ($q | test("^~(/|$)")) and ($hm | startswith("/")) then $hm + ($q | ltrimstr("~")) else "~" end)
+       elif ($q | startswith("/")) then $q else null end) as $a
+    | if $a == "~" then true
+      elif $a != null then (if ($a | cpInside) then $w and ($g | not) and ($a | cpSegs | .[($here | cpSegs | length):] | cpCovers) else true end)
+      else ($q | cpSegs) as $seg
+      | (if ($q | startswith("./")) or $q == "." then false else ($seg | length) == 0 or all($seg[]; test("^[*?]+$")) end)
+        or ($w and ($g | not) and (($seg | length) <= 1 or ($seg | cpCovers))) end end;
+def cpGuard: [(if type == "array" then .[] else empty end) | strings | cpTrim | capture("^Edit\\((\\./|\\*\\*/)?(?<p>[^()]*)\\)$")? | .p] as $d
+  | all(".git", ".git/**", ".claude/**"; . as $x | any($d[]; . == $x));
+def cpArgOut: gsub("[\"\\x27]"; "") as $a | [$a] + (if ($a | contains("=")) then [$a | sub("^[^=]*="; "")] else [] end)
+  | any(.[]; (sub("^\\$\\{HOME\\}"; "~") | sub("^\\$HOME"; "~")) as $c
+    | ($c | contains("$")) or ((($c | startswith("/")) or ($c | startswith("~"))) and ($c | cpPath(true; false)))
+      or ($c | sub("^(\\./)+"; "") | split("/") | (.[0] // "") | ascii_downcase | cpIn(".git", ".claude")));
+def cpBash: cpTrim as $s
+  | if ($s | test("[()<>]")) then true
+    elif ($s | test("[;|&\\x60]|\\$\\(") and test("\\*")) then true
+    else ($s | gsub(":\\*"; " *") | [splits("\\s+")] | map(select(. != ""))) as $t
+    | if ($t | length) == 0 then true elif any($t[]; cpArgOut) then true else $t | cpCmd end end;
 def cpFetch: cpTrim | if startswith("domain:") then (ltrimstr("domain:") | cpTrim | test("^[*.]*$")) else true end;
-def cpBroad:
+def cpBroadIn($deny):
   if type != "string" then true
   elif test("[\\x00-\\x1f\\x7f]") then true
   else cpTrim as $r
@@ -110,9 +144,10 @@ def cpBroad:
       elif $m == null then $tool | cpIn("bash", "edit", "write", "multiedit", "notebookedit", "webfetch", "read")
       elif ($m.spec | test("^[\\s*:]*$")) then true
       elif $tool == "bash" then $m.spec | cpBash
-      elif ($tool | cpIn("edit", "write", "multiedit", "notebookedit", "read")) then $m.spec | cpPath
+      elif ($tool | cpIn("edit", "write", "multiedit", "notebookedit", "read")) then $m.spec | cpPath($tool != "read"; $deny | cpGuard)
       elif $tool == "webfetch" then $m.spec | cpFetch
       else false end end end;
+def cpBroad: cpBroadIn(null);
 def cpUnq: cpTrim | if test("^\"[^\"]*\"$") or test("^\\x27[^\\x27]*\\x27$") then .[1:-1] | cpTrim else . end;
 def cpTool: cpUnq | if . == "" then false elif (test("^[A-Za-z0-9_.*-]+(\\(.*\\))?$") | not) then true else cpBroad end;
 def cpVal: cpTrim | if test("^[|>&*!{%@\\x60]") or test("#") then true
@@ -127,13 +162,17 @@ def cpFront:
   | ([range(0; $l | length) | select($l[.] | test("\\S"))] | first) as $i0
   | if $i0 == null or ($l[$i0] | startswith("---") | not) then {hooks: false, mode: false, broad: false, odd: false}
     else $l[$i0 + 1:] as $r
-    | ([range(0; $r | length) | select($r[.] | test("^(---|\\.\\.\\.)\\s*$"))] | first // ($r | length)) as $e
+    | ([range(0; $r | length) | select($r[.] | test("^---\\s*$"))] | first // ($r | length)) as $e
     | $r[:$e] as $f
-    | {hooks: any($f[]; test("(^|[\\s{,\"\\x27?])hooks[\"\\x27]?\\s*:"; "i")),
+    | ([$f[] | select(test("^\\s*(#.*)?$") | not)] | first // "") as $first
+    | {odd: (($l[$i0] | test("^---\\s*$") | not) or ($first | test("^(\\s|-(\\s|$))"))
+         or any($f[]; test("^\\s*[{?\\[]|<<|^\\s*[\"\\x27][^:]*\\\\") or test("^\\.\\.\\.\\s*$")
+           or ((test("^($|\\s|#|-(\\s|$))") | not)
+             and ((capture("^(?<k>[A-Za-z0-9_-]+):(\\s|$)") // null) as $m | $m == null or ($m.k | cpIn(${TRUST_FRONTMATTER_KEYS.map((k) => `"${k}"`).join(', ')}) | not)))))}
+    + {hooks: any($f[]; test("(^|[\\s{,\"\\x27?])hooks[\"\\x27]?\\s*:"; "i")),
        mode: any($f[]; test("(^|[\\s{,\"\\x27?])permission[-_]?mode[\"\\x27]?\\s*:"; "i")),
        broad: any(range(0; $f | length); . as $k | ($f[$k] | capture("^\\s*[\"\\x27]?allowed[-_]tools[\"\\x27]?\\s*:(?<v>.*)$"; "i") // null) as $m
-         | if $m == null then false else cpToolsAt($f; $k; $m.v) end),
-       odd: any($f[]; test("^\\s*[{?\\[]|<<|^\\s*[\"\\x27][^:]*\\\\"))} end;
+         | if $m == null then false else cpToolsAt($f; $k; $m.v) end)} | {hooks, mode, broad, odd} end;
 `;
 
 /** The environment names `start --env` accepts (anything else exits 2): a session's portal-tool token and where to reach them, and the switch that keeps claude.ai's connectors out. */
@@ -201,11 +240,12 @@ export const ACCOUNT_HELPER = '/etc/claudepilot/bin/account-key';
  *   `rulesOnly` (no `.mcp.json`, every file read, and each holds nothing but `$schema` and `permissions` with
  *   `allow`, `deny` and `ask` lists of strings: no hook, server, plugin, env, helper command or default mode);
  *   `broadAllow` (T-366: an allow rule, or a skill's or command's `allowed-tools` entry, is a blanket or a command runner,
- *   {@link TRUST_BROAD_JQ}; a boolean, never the rule); `extras` (T-366, only beside a settings file and not at the files root:
+ *   {@link TRUST_BROAD_JQ}, each allow rule read with its own file's `deny` list; a boolean, never the rule); `extras` (T-366,
+ *   only beside a settings file and not at the files root:
  *   `skill:hooks`, `command:hooks`, `agent:hooks` when a `.claude/skills/**\/SKILL.md`, `.claude/commands/**\/*.md` or
  *   `.claude/agents/**\/*.md` frontmatter declares hooks, `…:mode` when it sets a `permissionMode`, `unreadable` when one can't
  *   be checked: a link, more than {@link TRUST_MAX_EXTRA_FILES} files, one over {@link TRUST_MAX_EXTRA_BYTES} bytes, YAML it
- *   doesn't read; any of them clears `rulesOnly`);
+ *   doesn't read, a frontmatter key not in {@link TRUST_FRONTMATTER_KEYS}; any of them clears `rulesOnly`);
  *   `files` (those present) and `invalid` (present but not a JSON object, or not read). `hash` is the
  *   sha256 of `<sha256 of the file>  <name>` lines for the files present, in that order, then the same lines for the skill,
  *   command and agent files read, so any change to any of them changes it; with no settings file it's
@@ -933,7 +973,7 @@ case "$cmd" in
         | .key] | unique),
       plugins: ([$s[] | .enabledPlugins | objects | to_entries[] | select(.value == true) | .key] | unique),
       allowRules: ([$s[] | .permissions | objects | .allow | arrays | length] | add // 0),
-      broadAllow: (any($s[] | .permissions | objects | .allow | select(. != null) | if type == "array" then .[] else . end; cpBroad) or any($x[]; .broad)),
+      broadAllow: (any($s[] | .permissions | objects | .deny as $d | .allow | select(. != null) | if type == "array" then .[] else . end | cpBroadIn($d); .) or any($x[]; .broad)),
       envNames: ([$s[] | .env | objects | keys[]] | unique),
       extras: ((if $xbad != "" or any($x[]; .odd) then ["unreadable"] else [] end) + [$x[] | select(.hooks) | .k + ":hooks"] + [$x[] | select(.mode) | .k + ":mode"] | unique),
       rulesOnly: ($invalid == "" and ($files | split(" ") | any(. == ".mcp.json") | not) and $xbad == "" and all($x[]; (.hooks or .mode or .odd) | not)
