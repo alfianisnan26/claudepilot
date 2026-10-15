@@ -390,7 +390,7 @@ test('T-294 (review F2a): a turn that ends after a portal restart is told; an en
     const old = await worker(s, s.id, 'Done before');
     await s.controller.end(old.id);
     await until(() => reports(s).length === 1);
-    assert.match(reports(s)[0]!, /^Worker “Done before” .* ended \(closed by operator\)\./);
+    assert.match(reports(s)[0]!, /^Crew report, 1 worker .*\n- worker \([0-9a-f-]+\): ended \(closed by operator\)\n/);
 
     // A turn is running when the portal restarts (a deploy).
     await s.controller.messageFamily(s.id, w.id, 'Long job.');
@@ -459,7 +459,7 @@ test('T-294 (review F2d): a report the lead could not take (its budget paused me
     paused = false;
     s.controller.rename(s.id, 'Lead, unpaused'); // a change of the lead tries again (a retry may be on its way already)
     await until(() => reports(s).length === 1);
-    assert.match(reports(s)[0]!, /^Worker “Paused lead” .*“Done while paused\.”$/);
+    assert.match(reports(s)[0]!, /^Crew report, 1 worker .*\n- worker \([0-9a-f-]+\): idle “Done while paused\.”\n/);
   } finally {
     await s.done();
   }
@@ -520,7 +520,7 @@ test('T-294 (review F3): a report never relaunches a lead whose process is gone;
     s.ws.status.delete(lead);
     await s.answering(s.controller.control(s.id, 'resume')); // the person resumes it
     await until(() => reports(s).length === 1);
-    assert.match(reports(s)[0]!, /“Finished while the lead was gone\.”$/);
+    assert.match(reports(s)[0]!, /idle “Finished while the lead was gone\.”\n/);
     assert.equal(s.ws.starts, starts + 1, 'started once: by the resume');
   } finally {
     await s.done();
