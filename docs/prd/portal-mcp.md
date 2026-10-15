@@ -546,7 +546,9 @@ session control over MCP" is on (off by default); otherwise only `session_list`,
 A session's own tools for a crew (agent scope, [Chat sessions](chat-sessions.md) FR51, "Crew over MCP"):
 `session_spawn` takes `claude` (`same`, a plan Claude's name, or `auto`: room by a fresh, measured reading, the least
 busy first), `role` (the worker runs as `.claude/agents/<role>.md`), `model`, `effort`, `mode` (`default`, `plan`,
-`dontAsk`), `max_workers` and `subagents` (the worker's own limits, never wider than the caller's) and `report`
+`dontAsk`), `ticket` (`T-<n>`: the worker's ticket, the field usage attribution reads, so its cost counts under that ticket;
+none means "No ticket"; a malformed id or a ticket that does not exist is refused as `NOT_FOUND` and starts nothing, T-449),
+`max_workers` and `subagents` (the worker's own limits, never wider than the caller's) and `report`
 (`idle`, the default: the portal tells the lead in one line when the worker's turn
 ends, when it waits on a person and when it ends; `end`: only the end; `none`), `session_message` takes `to`
 (`workers` or `crew`) instead of `session_id`, every recipient counted against the hourly limit, and

@@ -9,6 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { AppError, isAppError } from '@isnanme/core';
 import { ToolRegistry } from '../portalmcp/registry.js';
+import { settingDef } from '../settings/registry.js';
+import { UsageSpend } from '../usagespend/service.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { MessageRate, type AgentCaps, type WorkerReport } from './agents.js';
 import { SESSION_CAP } from './caps.js';
@@ -283,6 +285,33 @@ test('T-449 over MCP: session_spawn’s ticket sets the worker’s ticketId (wha
 
     const none = await r.h.call(a.secret, 'session_spawn', { prompt: 'No ticket.', title: 'None' });
     assert.equal(r.s.controller.get(none.result!.structuredContent.session.id as string)?.ticketId, null);
+  } finally {
+    await r.done();
+  }
+});
+
+// T-449 end to end: the worker started through the MCP with a ticket is counted under that ticket's row, and one without stays "No ticket".
+test('T-449 over MCP: a session spawned with ticket shows up in attribution by ticket under that ticket', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.ticketExists = (id) => id === 'T-7';
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    const spawn = async (args: Record<string, unknown>) => (await r.h.call(a.secret, 'session_spawn', args)).result!.structuredContent.session.id as string;
+    const withTicket = await spawn({ prompt: 'Do T-7.', title: 'T7', ticket: 'T-7' });
+    const without = await spawn({ prompt: 'No ticket.', title: 'None' });
+    const db = r.s.store.db!;
+    const now = Date.now();
+    const usage = db.prepare(
+      `INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests, agents, duration_ms, kind)
+       VALUES (?, ?, ?, 'docker/ws1', '', 'claude-opus-4-5', 0, 0, 0, 0, ?, 1, 0, 0, 'turn')`,
+    );
+    usage.run(new Date(now - 60_000).toISOString(), now - 60_000, withTicket, 2);
+    usage.run(new Date(now - 60_000).toISOString(), now - 60_000, without, 1);
+    const settings = { get: <T>(key: string): T => settingDef(key)!.default as T };
+    const spend = new UsageSpend({ store: r.s.store, settings: settings as never, now: () => now, notify: () => undefined, log: () => undefined });
+    const rows = spend.attribution({ by: 'ticket', range: '1d' }).rows;
+    assert.equal(rows.find((x) => x.key === 'T-7')?.own.costUsd, 2, 'counted under T-7');
+    assert.equal(rows.find((x) => x.state === 'none')?.total.costUsd, 1, 'the one without stays No ticket');
   } finally {
     await r.done();
   }
