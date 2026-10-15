@@ -62,7 +62,7 @@ const [verb, kind, name] = a;
 if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
-else if (verb === 'create' && kind === 'secret') { const t = stdin(); lock((s) => { s.secrets[a[3]] = t; }); }
+else if (verb === 'create' && kind === 'secret') { const t = stdin(); fs.writeFileSync(path.join(F, 'secret-' + a[3] + '.env'), t); lock((s) => { s.secrets[a[3]] = t; }); }
 else if (verb === 'apply') { const m = stdin(); const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
   const lab = (k) => m.match(new RegExp(k + ': ([^,}]+)'))[1].trim();
   lock((s) => { s.seq += 1; s.jobs.push({ name: n, chat: lab('job-run/chat'), role: lab('job-run/role'), program: lab('job-run/program'), owner: m.match(/job-run\/owner: "([^"]*)"/)[1], suspend: true, seq: s.seq }); }); }
@@ -759,4 +759,71 @@ test('T-524: the heavy Jobs prefer a node other than the control plane (preferre
     if (tmp) assert.ok(gi(tmp) < gi(lim), `${name}: the in-memory /tmp (${tmp}) fits inside the limit (${lim}) with room for the processes`);
   }
   // The label the rule names is on k3s-master (kubectl get nodes --show-labels, 2026-10-15): node-role.kubernetes.io/control-plane=true.
+});
+
+// T-426: --pool-env NAME, the Secrets pool's scoped test credentials (E2E_CF_ACCESS_*) for the command. Values made at runtime, never literals.
+const POOL_SECRET = 'E2E_CF_ACCESS_CLIENT_SECRET', POOL_ID = 'E2E_CF_ACCESS_CLIENT_ID';
+
+test('T-426 --pool-env: the value goes on stdin into the Secret and reaches the run container by secretKeyRef; not fetch, argv, the spec or the log', () => {
+  const w = world();
+  const secret = `cs${hex(20)}`, id = `ci${hex(12)}`;
+  // The command prints both: the streamed output and the log file are masked for them.
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, `header ${secret} id ${id}\n`) }));
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_SECRET, '--pool-env', POOL_ID, '--pool-env', POOL_SECRET, '--', 'npm run e2e'],
+    { [POOL_SECRET]: secret, [POOL_ID]: id });
+  assert.equal(r.code, 0, r.out);
+  const text = w.applied1();
+  const m = yamlLoad(text) as Manifest;
+  const job = m.metadata.name;
+  // The run container: one secretKeyRef per name (the repeat is dropped), the key is the name.
+  const refs = container(m).env.filter((e) => e.name.startsWith('E2E_CF_ACCESS_'));
+  assert.deepEqual(refs, [
+    { name: POOL_SECRET, valueFrom: { secretKeyRef: { name: job, key: POOL_SECRET } } },
+    { name: POOL_ID, valueFrom: { secretKeyRef: { name: job, key: POOL_ID } } },
+  ]);
+  assert.deepEqual(Object.keys(fetchEnvOf(m)).filter((n) => n.startsWith('E2E_')), [], 'the fetch container does not get them');
+  // The Secret (on stdin) holds them; nothing else does.
+  const sec = readFileSync(join(w.root, `secret-${job}.env`), 'utf8');
+  assert.ok(sec.includes(`\n${POOL_SECRET}=${secret}\n`) && sec.includes(`\n${POOL_ID}=${id}\n`), 'both values are in the Secret');
+  for (const v of [secret, id]) {
+    assert.ok(!text.includes(v), 'not in the rendered spec');
+    assert.ok(!w.calls().includes(v), 'not on a kubectl command line');
+    assert.ok(!r.out.includes(v), 'not in the output');
+    assert.ok(!w.log().includes(v), 'not in the log file');
+  }
+  assert.match(r.out, /header \[redacted\] id \[redacted\]/);
+  assert.match(r.out, /WARNING: a credential was in the Job's log/);
+  assert.match(w.calls(), new RegExp(`delete secret ${job}`), 'the Secret goes with the Job');
+  assert.deepEqual(w.state().secrets, {});
+});
+
+test('T-426 without --pool-env the run container has no secretKeyRef at all (T-401 holds)', () => {
+  const w = world();
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { [POOL_SECRET]: `cs${hex(20)}` });
+  assert.equal(r.code, 0, r.out);
+  const m = yamlLoad(w.applied1()) as Manifest;
+  assert.deepEqual(container(m).env.filter((e) => e.valueFrom?.secretKeyRef).map((e) => e.name), []);
+  assert.ok(!readFileSync(join(w.root, `secret-${m.metadata.name}.env`), 'utf8').includes(POOL_SECRET), 'a pool variable is copied only when named');
+});
+
+test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_ACCESS_*, a non-name (not echoed), an unset, empty or multi-line one', () => {
+  const w = world();
+  const val = `cs${hex(20)}`;
+  const cases: [string[], Record<string, string>, RegExp][] = [
+    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: only E2E_CF_ACCESS_\* names \(got GITHUB_TOKEN\)/],
+    [['--pool-env', 'E2E_CF_ACCESS_'], {}, /only E2E_CF_ACCESS_\* names \(got E2E_CF_ACCESS_\)/],
+    [['--pool-env', 'E2E_CF_ACCESS_id'], { E2E_CF_ACCESS_id: val }, /only E2E_CF_ACCESS_\* names/],
+    [['--pool-env', `E2E_CF_ACCESS_X=${val}`], {}, /the argument is not a variable name; not shown/],
+    [['--pool-env', 'E2E_CF_ACCESS_NOT_SET'], {}, /--pool-env: E2E_CF_ACCESS_NOT_SET is not set in this workspace/],
+    [['--pool-env', POOL_ID], { [POOL_ID]: '' }, /--pool-env: E2E_CF_ACCESS_CLIENT_ID is not set in this workspace/],
+    [['--pool-env', POOL_ID], { [POOL_ID]: `${val}\nX=y` }, /--pool-env: E2E_CF_ACCESS_CLIENT_ID holds a line break; refused/],
+  ];
+  for (const [opt, over, want] of cases) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', ...opt, '--', 'true'], over);
+    assert.equal(r.code, 2, `${opt.join(' ')}: ${r.out}`);
+    assert.match(r.out, want);
+    assert.ok(!r.out.includes(val), 'a value is never shown');
+  }
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+  assert.deepEqual(w.applied(), []);
 });

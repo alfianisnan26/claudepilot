@@ -26,6 +26,10 @@
 #     --big                                             8Gi of memory instead of 4Gi (T-524; /tmp 4Gi instead of 2Gi), for a run that was OOMKilled;
 #                                                       only k3s-node2 has room for it. Memory is requested = limited: the scheduler places a Job
 #                                                       only where it fits, says why it is Pending, and an OOMKilled Job says so with its limit.
+#     --pool-env <NAME>                                 (repeatable, T-426) a scoped test credential from this workspace's Secrets pool for the
+#                                                       command (Konfersi's stg e2e: Cloudflare Access). Only E2E_CF_ACCESS_* names, set here; the
+#                                                       value goes on stdin into the Job's Secret (deleted with the Job), the command's container
+#                                                       gets it as env by secretKeyRef (fetch does not), and the log is masked for it
 #   scripts/job-run.sh --list                           the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
@@ -75,10 +79,11 @@ case "${1:-}" in
     echo "$n job(s) stopped"; exit 0 ;;
 esac
 
-repo=; ref=; against=; keep=; steps=npm-ci; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=
+repo=; ref=; against=; keep=; steps=npm-ci; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; pool=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role) [ $# -ge 2 ] || die "$1 needs a value" ;;&
+    --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role|--pool-env) [ $# -ge 2 ] || die "$1 needs a value" ;;&
+    --pool-env) pool+=("$2"); shift 2 ;;
     --big) big=1; shift ;;
     --repo) repo=$2; shift 2 ;;
     --ref) ref=$2; shift 2 ;;
@@ -102,6 +107,19 @@ for a in $artifacts; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./*-]*$ && ! $a =~ (^|
 [[ -z $against || ( $against =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ && ! $against =~ \.\. ) ]] || die "--against: a branch or commit name (got $against)"
 [ -z "$keep" ] || [ -n "$against" ] || die "--keep-tests needs --against"
 for a in $keep; do [[ $a =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ && ! $a =~ (^|/)\.\.(/|$) ]] || die "--keep-tests: file paths inside the repository (got $a)"; done
+# --pool-env (T-426): the scoped test credentials of the Secrets pool, by NAME, for the command. Checked here, before any kubectl call.
+# Only E2E_CF_ACCESS_* names; a refused argument is echoed only when it looks like a variable name (a value pasted by mistake is never shown).
+pool_names=
+for n in ${pool[@]+"${pool[@]}"}; do
+  if [[ ! $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ ]]; then
+    [[ $n =~ ^[A-Za-z_][A-Za-z0-9_]{0,63}$ ]] && die "--pool-env: only E2E_CF_ACCESS_* names (got $n)"
+    die "--pool-env: only E2E_CF_ACCESS_* names (the argument is not a variable name; not shown)"
+  fi
+  [ -n "${!n:-}" ] || die "--pool-env: $n is not set in this workspace (the Secrets pool delivers it)"
+  [[ ${!n} != *[$'\n\r']* ]] || die "--pool-env: $n holds a line break; refused"
+  [[ " $pool_names " == *" $n "* ]] || pool_names="$pool_names $n"
+done
+pool_names=${pool_names# }
 
 # The repository: named, or the current folder's origin (its user and password part never kept or shown).
 origin=$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://)[^@/]*@#\1#' || true)
@@ -199,9 +217,18 @@ else
   secret="$secret"$'\n'"git-user=${u:-git}"$'\n'"git-token=$t"; mask=$t
 fi
 unset t
+# --pool-env (T-426): each value into the Secret under its own name, and onto the mask; the manifest gets only the name and a secretKeyRef,
+# in the run container (the command needs it), never in fetch.
+pool_refs=
+for n in $pool_names; do
+  secret="$secret"$'\n'"$n=${!n}"; mask="$mask"$'\n'"${!n}"
+  pool_refs="$pool_refs\\n            - {name: $n, valueFrom: {secretKeyRef: {name: $job, key: $n}}}"
+done
+pool_refs=${pool_refs#\\n}
+[ -n "$pool_refs" ] || pool_refs='            # no --pool-env'
 printf '%s\n' "$secret" | kubectl -n "$ns" create secret generic "$job" --from-env-file=/dev/stdin >/dev/null
 unset secret
-sed -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" \
+sed -e "s|^ *# __POOL_ENV__.*\$|$pool_refs|" -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" \
     -e "s#__MEMORY__#$memory#g" -e "s#__TMP_SIZE__#$tmp_size#" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
     -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" \
     -e "s#__AGAINST__#$against#" -e "s#__KEEP__#$keep#" -e "s#__STEPS__#$steps#" -e "s#__ARTIFACTS__#$artifacts#" -e "s#__ARTMAX__#$art_max#" -e "s#__CMD__#$(printf '%s' "$cmd" | base64 -w0)#" \
@@ -285,9 +312,9 @@ done
 
 # The log: streamed, masked for the credentials, the artifacts block set aside; NR is kept so a broken stream can be resumed.
 # shellcheck disable=SC2016 # awk's own variables
-FILTER='BEGIN { tok = ENVIRON["JR_MASK"]; art = ENVIRON["JR_ART"]; lf = ENVIRON["JR_LOG"] }
+FILTER='BEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\n"); art = ENVIRON["JR_ART"]; lf = ENVIRON["JR_LOG"] }
 { line = $0
-  if (length(tok) >= 8) while ((i = index(line, tok)) > 0) { line = substr(line, 1, i - 1) "[redacted]" substr(line, i + length(tok)); leak = 1 }
+  for (k = 1; k <= nt; k++) { tok = toks[k]; if (length(tok) >= 8) while ((i = index(line, tok)) > 0) { line = substr(line, 1, i - 1) "[redacted]" substr(line, i + length(tok)); leak = 1 } }
   if (line == "=== JOB-RUN ARTIFACTS BEGIN") { inart = 1; next }
   if (line == "=== JOB-RUN ARTIFACTS END") { inart = 0; next }
   if (inart) { print line >> art; next }
