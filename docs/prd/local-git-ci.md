@@ -574,3 +574,22 @@ Under the UI text diet (PLAN rule 12): one-or-two-word labels, no paragraphs und
 | Q10 | Should a green run on a ticket's branch be able to move the ticket to review? (v0.1: never; a person or the agent does.) | Product |
 
 **Needs you (T-146):** a deployment waiting for a person's approval (FR41) is listed on Needs you ([attention.md](attention.md) §2, `ci/attention.ts`) with the environment, the gate's verdict and the commit, for a person only.
+
+## 23. Runners: CI jobs on another workspace by label (T-557)
+
+The owner (2026-10-15): *"not moving the workspace, only the CI jobs to a remote node, including Codespaces; and the secrets must transfer too ... like a self-hosted job runner assignment."* A **runner** is a workspace that takes the runs of other workspaces: one in the cluster, or a machine enrolled through Connect (a VPS, a spare PC, a Mac), later a GitHub Codespace (T-557 S3). The repository's workspace keeps the run's record, its remote and its events; the runner executes it.
+
+**What exists (S1, built, tested with two homes and the real cp-ci):**
+
+| Part | Where | What it does |
+| --- | --- | --- |
+| `runs-on` | `spec/validate.ts` | A label or a list. `self-hosted` is dropped; `ubuntu-*`, `linux` and `workspace` keep running in the workspace (a warning for GitHub's names); GitHub's `macos-*` and `windows-*` images stay an error. Labels: lowercase, at most 8. Every job of a pipeline names the same labels for now (`runs-on-mixed`); per-job runners are later. |
+| Runner record | migration 789 `ci_runners` | workspace id, labels (at most 16), runs at once (1 to 8), enabled, drained, note. Set by a person with manage on that workspace (`PUT /api/ci/runners/:workspace`), audited `ci.runner_changed`. |
+| Assignment | `CiService.#toRunner` | The least busy runner that is enabled, not drained, online and has a free slot, whose labels include all of the run's. None carries the labels: the run fails at once, `no_runner`, naming them. Runners exist but none is free or online: the run waits up to 30 minutes (`runnerWaitMs`), then `no_runner`. A failure on the way is retried like a start (3 tries). |
+| Commit | cp-ci `repo bundle` / `repo outbox` (source), `mirror heads` / `mirror put` (runner) | A git bundle of the commit minus what the runner's mirror has (its newest 50 refs), carried by the portal in 1 MiB base64 chunks over cp-ci's stdin and replies, so every runtime works without knowing the runner's home. On the runner it lands in a MIRROR (`~/.claudepilot/ci/mirrors/m-<8 hex of the source workspace>-<remote>.git`), never in its own remotes; no hooks run on it. A commit the mirror already has travels not at all. Cap 512 MiB a bundle. |
+| Secrets | cp-ci `lease`, `SecretsKind.deliveredValue` | The names the run's jobs list are resolved from the REPOSITORY workspace's Secrets & env (as a run there would get them), sent on stdin as JSON, written 0600 in a 0700 folder of that run on the runner, read by the supervisor, masked in the logs like any secret, and removed when the run ends (gc after a day if a run never ended). One audit row per run with the secret NAMES (`ci.run_on_runner`), never a value. |
+| The run's view | `CiRunSummary.runsOn`, `runnerWorkspaceId` | Logs, cancel, approvals and the archive go to where the run executes. |
+
+**Security notes.** A runner executes other workspaces' code with their secrets: making a workspace a runner is a person's act (manage on it; tokens and agents are refused) and is audited. The lease exists only for the run; a runner's own workspace secrets are not read for a leased run. The mirror is separate per source workspace, so two remotes of one name never mix. What a runner does with a job's environment while the job runs is the same trust as a run in the workspace itself: pick runners you control.
+
+**Not verified yet / next slices.** S2: a real Connect host as a runner (installing `cp-ci` under its user, exec through the hub). S3: a Codespaces pool that starts a codespace when runs wait and no runner matches, and stops it when idle, within a monthly spending cap the owner sets (codespaces-poc.md). S4: the UI (Runners in CI settings: labels, state, running, Drain, Remove; the runner on each run). Later: per-job runners, an estimate of transfer size before the first sync.

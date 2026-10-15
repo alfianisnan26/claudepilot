@@ -208,10 +208,10 @@ async function gateFromLog(deps: RuleDeps, run: RunRow, gate: CiRunStateFile['jo
   const last = steps.at(-1);
   if (!last) return 'the gate job ran no step';
   // The size first, then the end of the log, where the verdict is.
-  const head = await deps.cp(run.workspace_id, ['log', run.id, RULE_JOBS.gate, String(last.idx), '0', '--max', '1024']);
+  const head = await deps.cp(run.runner_workspace_id ?? run.workspace_id, ['log', run.id, RULE_JOBS.gate, String(last.idx), '0', '--max', '1024']);
   if (!head.ok || typeof head.size !== 'number') return 'the gate job’s log can not be read';
   const from = Math.max(0, head.size - GATE_TAIL_BYTES);
-  const tail = from === 0 && head.next === head.size ? head : await deps.cp(run.workspace_id, ['log', run.id, RULE_JOBS.gate, String(last.idx), String(from), '--max', String(GATE_TAIL_BYTES)]);
+  const tail = from === 0 && head.next === head.size ? head : await deps.cp(run.runner_workspace_id ?? run.workspace_id, ['log', run.id, RULE_JOBS.gate, String(last.idx), String(from), '--max', String(GATE_TAIL_BYTES)]);
   if (!tail.ok || typeof tail.text !== 'string') return 'the gate job’s log can not be read';
   return gateVerdict(tail.text, run.sha);
 }

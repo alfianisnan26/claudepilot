@@ -3,7 +3,7 @@
 
 // src/ci/runner/main.ts
 var import_node_crypto4 = require("node:crypto");
-var import_node_fs7 = require("node:fs");
+var import_node_fs8 = require("node:fs");
 
 // src/ci/limits.ts
 var KiB = 1024;
@@ -65,7 +65,15 @@ var CI_LIMITS = {
   failuresToPause: 3,
   pauseWindowMs: 30 * MINUTE,
   /** A step is killed this long after the polite signal. */
-  killGraceMs: 5e3
+  killGraceMs: 5e3,
+  /** Runners (T-557): labels a job may name, labels a runner may carry, runs one runner may take at once (the most a person may set). */
+  runnerLabels: 8,
+  runnerLabelsPerRunner: 16,
+  runnerMaxRuns: 8,
+  /** A run waits this long for a runner with its labels to come online or free up before it fails as `no_runner`. */
+  runnerWaitMs: 30 * MINUTE,
+  /** A repository bundle sent to a runner (the whole history the first time, only what is new after that). */
+  runnerBundleBytes: 512 * MiB
 };
 
 // src/ci/runner/common.ts
@@ -461,9 +469,178 @@ async function repoMerge(repo, opts) {
 
 // src/ci/runner/runs.ts
 var import_node_child_process2 = require("node:child_process");
-var import_node_fs4 = require("node:fs");
+var import_node_fs5 = require("node:fs");
 var import_node_os4 = require("node:os");
+var import_node_path5 = require("node:path");
+
+// src/ci/runner/remote.ts
+var import_node_fs4 = require("node:fs");
 var import_node_path4 = require("node:path");
+var MIRROR_NAME = /^m-[0-9a-f]{8}-[a-z0-9][a-z0-9._-]{0,63}$/;
+var validMirror = (m) => typeof m === "string" && MIRROR_NAME.test(m) && !m.endsWith(".git") && !m.includes("..");
+var mirrorsDir = () => (0, import_node_path4.join)(ciRoot(), "mirrors");
+var mirrorDir = (m) => (0, import_node_path4.join)(mirrorsDir(), `${m}.git`);
+var outboxDir = () => (0, import_node_path4.join)(ciRoot(), "outbox");
+var inboxDir = () => (0, import_node_path4.join)(ciRoot(), "inbox");
+var leasesDir = () => (0, import_node_path4.join)(ciRoot(), "leases");
+var leaseDir = (runId) => (0, import_node_path4.join)(leasesDir(), runId);
+function needId(id) {
+  if (!validRunId(id)) throw new Fail("bad_run", "That is not a run id.");
+  return id;
+}
+function needMirror(m) {
+  if (!validMirror(m)) throw new Fail("bad_name", "That is not a mirror name.");
+  const dir = mirrorDir(m);
+  if (!(0, import_node_fs4.existsSync)((0, import_node_path4.join)(dir, "HEAD"))) throw new Fail("no_repo", `There is no mirror named ${m}.`);
+  return dir;
+}
+var MAX_HAVES = 50;
+var KEEP_REFS = 50;
+async function repoBundle(remote, sha, id, haves) {
+  const dir = needRepo(remote);
+  const run = needId(id);
+  if (!validSha(sha)) throw new Fail("bad_sha", "That is not a full commit hash.");
+  const commit = await git(["cat-file", "-e", `${sha}^{commit}`], { gitDir: dir });
+  if (commit.code !== 0) throw new Fail("no_commit", "The remote does not have that commit.");
+  const known = [];
+  for (const h of haves.filter(validSha).slice(0, MAX_HAVES)) if ((await git(["cat-file", "-e", `${h}^{commit}`], { gitDir: dir })).code === 0) known.push(h);
+  if (known.includes(sha)) return { ok: true, empty: true };
+  const ref = `refs/pilot-runner/${run}`;
+  ensureDir(outboxDir());
+  const path = (0, import_node_path4.join)(outboxDir(), `${run}.bundle`);
+  try {
+    const set = await git(["update-ref", ref, sha], { gitDir: dir });
+    if (set.code !== 0) throw new Fail("git_failed", "Could not mark the commit for the bundle.");
+    const made = await git(["bundle", "create", "--quiet", path, ref, ...known.map((h) => `^${h}`)], { gitDir: dir, timeoutMs: 6e5 });
+    if (made.code !== 0) {
+      if (/empty bundle/i.test(made.stderr)) return { ok: true, empty: true };
+      throw new Fail("git_failed", `Could not bundle the commit: ${made.stderr.trim().split("\n")[0] ?? "git bundle failed"}`);
+    }
+    const size = (0, import_node_fs4.statSync)(path).size;
+    if (size > CI_LIMITS.runnerBundleBytes) throw new Fail("too_large", `The commit needs a ${Math.round(size / 1048576)} MiB bundle; a runner takes at most ${CI_LIMITS.runnerBundleBytes / 1048576} MiB at once.`);
+    (0, import_node_fs4.writeFileSync)((0, import_node_path4.join)(outboxDir(), `${run}.b64`), (0, import_node_fs4.readFileSync)(path).toString("base64"), { mode: 384 });
+    return { ok: true, empty: false, bytes: (0, import_node_fs4.statSync)((0, import_node_path4.join)(outboxDir(), `${run}.b64`)).size };
+  } finally {
+    (0, import_node_fs4.rmSync)(path, { force: true });
+    await git(["update-ref", "-d", ref], { gitDir: dir }).catch(() => void 0);
+  }
+}
+function outbox(id, offset, max, drop) {
+  const run = needId(id);
+  const path = (0, import_node_path4.join)(outboxDir(), `${run}.b64`);
+  if (drop) {
+    (0, import_node_fs4.rmSync)(path, { force: true });
+    return { ok: true };
+  }
+  if (!(0, import_node_fs4.existsSync)(path)) throw new Fail("no_bundle", "There is no bundle for that run.");
+  const all = (0, import_node_fs4.readFileSync)(path);
+  const data = all.subarray(offset, offset + max).toString("ascii");
+  const next = Math.min(all.length, offset + max);
+  return { ok: true, data, next, size: all.length, done: next >= all.length };
+}
+async function mirrorHeads(m, sha) {
+  if (!validMirror(m)) throw new Fail("bad_name", "That is not a mirror name.");
+  const dir = mirrorDir(m);
+  if (!(0, import_node_fs4.existsSync)((0, import_node_path4.join)(dir, "HEAD"))) return { ok: true, exists: false, heads: [], has: false };
+  const refs = await git(["for-each-ref", "--sort=-committerdate", `--count=${MAX_HAVES}`, "--format=%(objectname)", "refs/pilot-runner/"], { gitDir: dir });
+  const heads2 = [...new Set(refs.stdout.toString("utf8").split("\n").filter(validSha))];
+  const has = sha && validSha(sha) ? (await git(["cat-file", "-e", `${sha}^{commit}`], { gitDir: dir })).code === 0 : false;
+  return { ok: true, exists: true, heads: heads2, has };
+}
+async function mirrorPut(m, id, sha, part, last, chunk) {
+  if (!validMirror(m)) throw new Fail("bad_name", "That is not a mirror name.");
+  const run = needId(id);
+  if (!validSha(sha)) throw new Fail("bad_sha", "That is not a full commit hash.");
+  ensureDir(inboxDir());
+  const path = (0, import_node_path4.join)(inboxDir(), `${run}.bundle`);
+  const bytes = Buffer.from(chunk.toString("ascii"), "base64");
+  if (part === 0) (0, import_node_fs4.writeFileSync)(path, bytes, { mode: 384 });
+  else {
+    if (!(0, import_node_fs4.existsSync)(path)) throw new Fail("no_bundle", "The bundle's first part never arrived.");
+    (0, import_node_fs4.appendFileSync)(path, bytes);
+  }
+  if ((0, import_node_fs4.statSync)(path).size > CI_LIMITS.runnerBundleBytes) {
+    (0, import_node_fs4.rmSync)(path, { force: true });
+    throw new Fail("too_large", "The bundle is too large.");
+  }
+  if (!last) return { ok: true, part };
+  try {
+    const dir = mirrorDir(m);
+    if (!(0, import_node_fs4.existsSync)((0, import_node_path4.join)(dir, "HEAD"))) {
+      (0, import_node_fs4.mkdirSync)(mirrorsDir(), { recursive: true, mode: 448 });
+      const init = await git(["init", "--bare", "--quiet", dir]);
+      if (init.code !== 0) throw new Fail("git_failed", "Could not make the mirror.");
+    }
+    const check = await git(["bundle", "verify", "--quiet", path], { gitDir: dir, timeoutMs: 6e5 });
+    if (check.code !== 0) throw new Fail("bad_bundle", `The bundle does not apply: ${check.stderr.trim().split("\n")[0] ?? "git bundle verify failed"}`);
+    const fetched = await git(["fetch", "--quiet", "--no-tags", path, "refs/pilot-runner/*:refs/pilot-runner/*"], { gitDir: dir, timeoutMs: 6e5 });
+    if (fetched.code !== 0) throw new Fail("git_failed", `Could not take the bundle: ${fetched.stderr.trim().split("\n")[0] ?? "git fetch failed"}`);
+    if ((await git(["cat-file", "-e", `${sha}^{commit}`], { gitDir: dir })).code !== 0) throw new Fail("no_commit", "The bundle did not bring the commit.");
+    await pruneRefs(dir);
+    return { ok: true, part, imported: true };
+  } finally {
+    (0, import_node_fs4.rmSync)(path, { force: true });
+  }
+}
+async function pruneRefs(dir) {
+  const refs = await git(["for-each-ref", "--sort=-committerdate", "--format=%(refname)", "refs/pilot-runner/"], { gitDir: dir });
+  const names = refs.stdout.toString("utf8").split("\n").filter((r) => r.startsWith("refs/pilot-runner/"));
+  for (const r of names.slice(KEEP_REFS)) await git(["update-ref", "-d", r], { gitDir: dir });
+}
+var SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+function leaseWrite(id, raw) {
+  const run = needId(id);
+  let x;
+  try {
+    x = JSON.parse(raw.toString("utf8"));
+  } catch {
+    throw new Fail("bad_lease", "The lease is not JSON.");
+  }
+  if (!x || typeof x !== "object" || Array.isArray(x)) throw new Fail("bad_lease", "The lease is a map of names to values.");
+  const entries = Object.entries(x);
+  if (entries.length > 20) throw new Fail("bad_lease", "A run takes at most 20 secrets.");
+  for (const [k, v] of entries) if (!SECRET_NAME.test(k) || k.startsWith("PILOT_") || typeof v !== "string" || Buffer.byteLength(v) > 65536) throw new Fail("bad_lease", "A lease entry is not a name with a value.");
+  const dir = leaseDir(run);
+  (0, import_node_fs4.rmSync)(dir, { recursive: true, force: true });
+  (0, import_node_fs4.mkdirSync)(leasesDir(), { recursive: true, mode: 448 });
+  (0, import_node_fs4.mkdirSync)(dir, { mode: 448 });
+  for (const [k, v] of entries) (0, import_node_fs4.writeFileSync)((0, import_node_path4.join)(dir, k), v, { mode: 384 });
+  return { ok: true, count: entries.length };
+}
+function leaseDrop(id) {
+  (0, import_node_fs4.rmSync)(leaseDir(needId(id)), { recursive: true, force: true });
+  return { ok: true };
+}
+function leaseRead(runId, names) {
+  const out = {};
+  for (const name of names) {
+    let text;
+    try {
+      text = (0, import_node_fs4.readFileSync)((0, import_node_path4.join)(leaseDir(runId), name), "utf8");
+    } catch {
+      throw new Error(`The secret ${name} was not handed to this runner. Assign it in Secrets & env to the repository's workspace.`);
+    }
+    out[name] = text;
+  }
+  return out;
+}
+function gcRemote() {
+  let n = 0;
+  const cutoff = Date.now() - 864e5;
+  for (const d of [leasesDir(), inboxDir(), outboxDir()]) {
+    if (!(0, import_node_fs4.existsSync)(d)) continue;
+    for (const name of (0, import_node_fs4.readdirSync)(d)) {
+      const p = (0, import_node_path4.join)(d, name);
+      try {
+        if ((0, import_node_fs4.statSync)(p).mtimeMs < cutoff) (0, import_node_fs4.rmSync)(p, { recursive: true, force: true }), n++;
+      } catch {
+      }
+    }
+  }
+  return n;
+}
+
+// src/ci/runner/runs.ts
 var NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 var ENV_NAME = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 var GATE = /^[0-9a-f]{64}$/;
@@ -523,6 +700,9 @@ function parsePlan(raw) {
     const g2 = j.approval;
     if (g2 !== void 0 && g2 !== null && (typeof g2 !== "object" || typeof g2.environment !== "string" || !ENV_NAME.test(g2.environment) || typeof g2.gate !== "string" || !GATE.test(g2.gate))) throw bad(`Job ${id} has a bad approval gate.`);
   }
+  if (x.mirror !== void 0 && !validMirror(x.mirror)) throw bad("The plan names a bad mirror.");
+  if (x.leased !== void 0 && typeof x.leased !== "boolean") throw bad("The plan has a bad lease flag.");
+  if (x.runsOn !== void 0 && (!Array.isArray(x.runsOn) || x.runsOn.length > CI_LIMITS.runnerLabels || x.runsOn.some((l) => typeof l !== "string" || !/^[a-z0-9][a-z0-9._-]{0,39}$/.test(l)))) throw bad("The plan has bad runner labels.");
   const by = new Map(jobs.map((j) => [j.id, j.needs]));
   const seen = /* @__PURE__ */ new Set();
   const done = /* @__PURE__ */ new Set();
@@ -538,14 +718,14 @@ function parsePlan(raw) {
 }
 function readJson(path) {
   try {
-    return JSON.parse((0, import_node_fs4.readFileSync)(path, "utf8"));
+    return JSON.parse((0, import_node_fs5.readFileSync)(path, "utf8"));
   } catch {
     return null;
   }
 }
 function startTicks(pid) {
   try {
-    const stat = (0, import_node_fs4.readFileSync)(`/proc/${pid}/stat`, "utf8");
+    const stat = (0, import_node_fs5.readFileSync)(`/proc/${pid}/stat`, "utf8");
     return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
   } catch {
     return null;
@@ -554,7 +734,7 @@ function startTicks(pid) {
 function supervisorAlive(runId) {
   let raw;
   try {
-    raw = (0, import_node_fs4.readFileSync)((0, import_node_path4.join)(runDir(runId), "supervisor.pid"), "utf8");
+    raw = (0, import_node_fs5.readFileSync)((0, import_node_path5.join)(runDir(runId), "supervisor.pid"), "utf8");
   } catch {
     return false;
   }
@@ -626,29 +806,30 @@ async function startRun(runId, bytes) {
   if (!Number.isInteger(bytes) || bytes < 2 || bytes > 1048576) throw new Fail("bad_plan", "The plan is empty or too large.");
   const plan = parsePlan(await readExactly(bytes));
   if (plan.runId !== runId) throw new Fail("bad_plan", "The plan is for another run.");
-  needRepo(plan.repo);
+  if (plan.mirror) needMirror(plan.mirror);
+  else needRepo(plan.repo);
   ensureDir(runsDir(), 448);
   const dir = runDir(runId);
   try {
-    (0, import_node_fs4.mkdirSync)(dir, { mode: 448 });
+    (0, import_node_fs5.mkdirSync)(dir, { mode: 448 });
   } catch (e) {
-    if (e.code === "EEXIST") return { ok: true, already: true, status: readJson((0, import_node_path4.join)(dir, "state.json"))?.status ?? "queued" };
+    if (e.code === "EEXIST") return { ok: true, already: true, status: readJson((0, import_node_path5.join)(dir, "state.json"))?.status ?? "queued" };
     throw e;
   }
   try {
-    const fs = (0, import_node_fs4.statfsSync)((0, import_node_os4.homedir)());
+    const fs = (0, import_node_fs5.statfsSync)((0, import_node_os4.homedir)());
     if (fs.bavail * fs.bsize < CI_LIMITS.freeDiskBytes) throw new Fail("no_space", "The workspace is almost out of disk space.");
-    writeAtomic((0, import_node_path4.join)(dir, "plan.json"), JSON.stringify(plan));
-    writeAtomic((0, import_node_path4.join)(dir, "state.json"), JSON.stringify(initialState(plan)));
-    const log = (0, import_node_fs4.openSync)((0, import_node_path4.join)(dir, "supervisor.log"), "a", 384);
-    const child = (0, import_node_child_process2.spawn)(process.execPath, [(0, import_node_fs4.realpathSync)(process.argv[1]), "exec", runId], { detached: true, stdio: ["ignore", log, log], cwd: (0, import_node_os4.homedir)(), env: process.env });
+    writeAtomic((0, import_node_path5.join)(dir, "plan.json"), JSON.stringify(plan));
+    writeAtomic((0, import_node_path5.join)(dir, "state.json"), JSON.stringify(initialState(plan)));
+    const log = (0, import_node_fs5.openSync)((0, import_node_path5.join)(dir, "supervisor.log"), "a", 384);
+    const child = (0, import_node_child_process2.spawn)(process.execPath, [(0, import_node_fs5.realpathSync)(process.argv[1]), "exec", runId], { detached: true, stdio: ["ignore", log, log], cwd: (0, import_node_os4.homedir)(), env: process.env });
     child.unref();
-    (0, import_node_fs4.closeSync)(log);
-    if (child.pid) (0, import_node_fs4.writeFileSync)((0, import_node_path4.join)(dir, "supervisor.pid"), `${child.pid}
+    (0, import_node_fs5.closeSync)(log);
+    if (child.pid) (0, import_node_fs5.writeFileSync)((0, import_node_path5.join)(dir, "supervisor.pid"), `${child.pid}
 `, { mode: 384 });
     return { ok: true, pid: child.pid ?? null };
   } catch (e) {
-    (0, import_node_fs4.rmSync)(dir, { recursive: true, force: true });
+    (0, import_node_fs5.rmSync)(dir, { recursive: true, force: true });
     throw e;
   }
 }
@@ -658,18 +839,18 @@ function poll(opts, self) {
   const runs = {};
   for (const id of opts.runs.slice(0, 200)) {
     if (!validRunId(id)) continue;
-    runs[id] = { state: readJson((0, import_node_path4.join)(runDir(id), "state.json")), alive: supervisorAlive(id) };
+    runs[id] = { state: readJson((0, import_node_path5.join)(runDir(id), "state.json")), alive: supervisorAlive(id) };
   }
   const repos = [];
-  if ((0, import_node_fs4.existsSync)(gitRoot())) {
-    for (const entry of (0, import_node_fs4.readdirSync)(gitRoot())) {
+  if ((0, import_node_fs5.existsSync)(gitRoot())) {
+    for (const entry of (0, import_node_fs5.readdirSync)(gitRoot())) {
       const name = entry.slice(0, -4);
-      if (entry.endsWith(".git") && validRepoName(name) && (0, import_node_fs4.existsSync)((0, import_node_path4.join)(gitRoot(), entry, "HEAD"))) repos.push({ name, hook: hookState(name, self) });
+      if (entry.endsWith(".git") && validRepoName(name) && (0, import_node_fs5.existsSync)((0, import_node_path5.join)(gitRoot(), entry, "HEAD"))) repos.push({ name, hook: hookState(name, self) });
     }
   }
   let freeBytes = null;
   try {
-    const fs = (0, import_node_fs4.statfsSync)((0, import_node_os4.homedir)());
+    const fs = (0, import_node_fs5.statfsSync)((0, import_node_os4.homedir)());
     freeBytes = fs.bavail * fs.bsize;
   } catch {
   }
@@ -678,14 +859,14 @@ function poll(opts, self) {
 function cancelRun(runId) {
   if (!validRunId(runId)) throw new Fail("bad_run", "That is not a run id.");
   const dir = runDir(runId);
-  const path = (0, import_node_path4.join)(dir, "state.json");
+  const path = (0, import_node_path5.join)(dir, "state.json");
   const state = readJson(path);
   if (!state) throw new Fail("no_run", "There is no such run here.");
   if (isTerminal(state.status)) return { ok: true, status: state.status, alreadyOver: true };
-  writeAtomic((0, import_node_path4.join)(dir, "cancel"), nowIso());
+  writeAtomic((0, import_node_path5.join)(dir, "cancel"), nowIso());
   if (supervisorAlive(runId)) {
     try {
-      const pid = Number((0, import_node_fs4.readFileSync)((0, import_node_path4.join)(dir, "supervisor.pid"), "utf8").trim().split(" ")[0]);
+      const pid = Number((0, import_node_fs5.readFileSync)((0, import_node_path5.join)(dir, "supervisor.pid"), "utf8").trim().split(" ")[0]);
       process.kill(pid, "SIGTERM");
     } catch {
     }
@@ -705,13 +886,13 @@ function cancelRun(runId) {
   writeAtomic(path, JSON.stringify(state));
   return { ok: true, status: "cancelled", signalled: false };
 }
-var approvalPath = (runId, job) => (0, import_node_path4.join)(runDir(runId), "approvals", job);
+var approvalPath = (runId, job) => (0, import_node_path5.join)(runDir(runId), "approvals", job);
 async function approveRun(runId, job, decision, bytes) {
   if (!validRunId(runId)) throw new Fail("bad_run", "That is not a run id.");
   if (typeof job !== "string" || !JOB_ID.test(job)) throw new Fail("bad_job", "That is not a job id.");
   const dir = runDir(runId);
-  const plan = readJson((0, import_node_path4.join)(dir, "plan.json"));
-  const state = readJson((0, import_node_path4.join)(dir, "state.json"));
+  const plan = readJson((0, import_node_path5.join)(dir, "plan.json"));
+  const state = readJson((0, import_node_path5.join)(dir, "state.json"));
   if (!plan || !state) throw new Fail("no_run", "There is no such run here.");
   const pj = plan.jobs.find((j) => j.id === job);
   const js = state.jobs.find((j) => j.id === job);
@@ -725,7 +906,7 @@ async function approveRun(runId, job, decision, bytes) {
     key = (await readExactly(bytes)).toString("utf8");
     if (!KEY.test(key)) throw new Fail("bad_key", "The approval key is not valid.");
   }
-  ensureDir((0, import_node_path4.join)(dir, "approvals"), 448);
+  ensureDir((0, import_node_path5.join)(dir, "approvals"), 448);
   writeAtomic(approvalPath(runId, job), JSON.stringify({ decision, key, at: nowIso() }));
   return { ok: true, decision, status: js.status };
 }
@@ -747,30 +928,30 @@ function fromBoundary(buf) {
   return buf.subarray(i);
 }
 function readRange(path, from, length) {
-  const fd = (0, import_node_fs4.openSync)(path, "r");
+  const fd = (0, import_node_fs5.openSync)(path, "r");
   try {
-    const size = (0, import_node_fs4.statSync)(path).size;
+    const size = (0, import_node_fs5.statSync)(path).size;
     const len = Math.max(0, Math.min(length, size - from));
     const buf = Buffer.alloc(len);
     let got = 0;
     while (got < len) {
-      const n = (0, import_node_fs4.readSync)(fd, buf, got, len - got, from + got);
+      const n = (0, import_node_fs5.readSync)(fd, buf, got, len - got, from + got);
       if (n <= 0) break;
       got += n;
     }
     return { bytes: buf.subarray(0, got), size };
   } finally {
-    (0, import_node_fs4.closeSync)(fd);
+    (0, import_node_fs5.closeSync)(fd);
   }
 }
-var logPath = (runId, job, n) => (0, import_node_path4.join)(runDir(runId), "logs", job, `${n}.log`);
+var logPath = (runId, job, n) => (0, import_node_path5.join)(runDir(runId), "logs", job, `${n}.log`);
 function readLog(runId, job, step, offset, max) {
   if (!validRunId(runId) || typeof job !== "string" || !JOB_ID.test(job) || !Number.isInteger(step) || step < 0 || step > CI_LIMITS.stepsPerJob) throw new Fail("bad_log", "That is not a log.");
   const path = logPath(runId, job, step);
-  const state = readJson((0, import_node_path4.join)(runDir(runId), "state.json"));
+  const state = readJson((0, import_node_path5.join)(runDir(runId), "state.json"));
   const unit = state?.jobs.find((j) => j.id === job)?.steps[step];
   const over = !unit || unit.status !== "running" && unit.status !== "pending";
-  if (!(0, import_node_fs4.existsSync)(path)) return { ok: true, text: "", next: offset, size: 0, done: over };
+  if (!(0, import_node_fs5.existsSync)(path)) return { ok: true, text: "", next: offset, size: 0, done: over };
   const want = Math.max(1024, Math.min(max, CI_LIMITS.logChunkBytes));
   const { bytes, size } = readRange(path, Math.max(0, offset), want);
   let chunk = wholeChars(bytes);
@@ -784,15 +965,15 @@ function readLog(runId, job, step, offset, max) {
 }
 function archiveLogs(runId, head, tail, total) {
   if (!validRunId(runId)) throw new Fail("bad_run", "That is not a run id.");
-  const state = readJson((0, import_node_path4.join)(runDir(runId), "state.json"));
+  const state = readJson((0, import_node_path5.join)(runDir(runId), "state.json"));
   if (!state) throw new Fail("no_run", "There is no such run here.");
   let budget = total;
   const steps = [];
   for (const j of state.jobs) {
     for (const s of j.steps) {
       const path = logPath(runId, j.id, s.idx);
-      if (!(0, import_node_fs4.existsSync)(path)) continue;
-      const size = (0, import_node_fs4.statSync)(path).size;
+      if (!(0, import_node_fs5.existsSync)(path)) continue;
+      const size = (0, import_node_fs5.statSync)(path).size;
       if (size === 0) continue;
       if (budget <= 0) {
         steps.push({ job: j.id, step: s.idx, size, head: "", tail: null, omitted: size });
@@ -813,30 +994,31 @@ function archiveLogs(runId, head, tail, total) {
   return { ok: true, steps };
 }
 function gc(days) {
+  const remote = gcRemote();
   let runs = 0;
   let work = 0;
   const cutoff = Date.now() - days * 864e5;
-  if ((0, import_node_fs4.existsSync)(runsDir())) {
-    for (const id of (0, import_node_fs4.readdirSync)(runsDir())) {
+  if ((0, import_node_fs5.existsSync)(runsDir())) {
+    for (const id of (0, import_node_fs5.readdirSync)(runsDir())) {
       if (!validRunId(id)) continue;
       const dir2 = runDir(id);
-      const state = readJson((0, import_node_path4.join)(dir2, "state.json"));
+      const state = readJson((0, import_node_path5.join)(dir2, "state.json"));
       const alive = supervisorAlive(id);
-      if (!alive && (0, import_node_fs4.existsSync)((0, import_node_path4.join)(dir2, "work"))) {
-        (0, import_node_fs4.rmSync)((0, import_node_path4.join)(dir2, "work"), { recursive: true, force: true });
+      if (!alive && (0, import_node_fs5.existsSync)((0, import_node_path5.join)(dir2, "work"))) {
+        (0, import_node_fs5.rmSync)((0, import_node_path5.join)(dir2, "work"), { recursive: true, force: true });
         work++;
       }
       try {
-        const old = (0, import_node_fs4.statSync)((0, import_node_path4.join)(dir2, "state.json")).mtimeMs < cutoff;
+        const old = (0, import_node_fs5.statSync)((0, import_node_path5.join)(dir2, "state.json")).mtimeMs < cutoff;
         if (!alive && (old || !state)) {
           if (!state || isTerminal(state.status)) {
-            (0, import_node_fs4.rmSync)(dir2, { recursive: true, force: true });
+            (0, import_node_fs5.rmSync)(dir2, { recursive: true, force: true });
             runs++;
           }
         }
       } catch {
         if (!alive && !state) {
-          (0, import_node_fs4.rmSync)(dir2, { recursive: true, force: true });
+          (0, import_node_fs5.rmSync)(dir2, { recursive: true, force: true });
           runs++;
         }
       }
@@ -844,19 +1026,19 @@ function gc(days) {
   }
   let events = pruneEvents(CI_LIMITS.eventDays);
   const dir = eventsDir();
-  if ((0, import_node_fs4.existsSync)(dir)) {
-    for (const name of (0, import_node_fs4.readdirSync)(dir)) {
+  if ((0, import_node_fs5.existsSync)(dir)) {
+    for (const name of (0, import_node_fs5.readdirSync)(dir)) {
       if (!name.endsWith(".json")) continue;
       try {
-        if ((0, import_node_fs4.statSync)((0, import_node_path4.join)(dir, name)).mtimeMs < Date.now() - CI_LIMITS.eventDays * 864e5) {
-          (0, import_node_fs4.rmSync)((0, import_node_path4.join)(dir, name), { force: true });
+        if ((0, import_node_fs5.statSync)((0, import_node_path5.join)(dir, name)).mtimeMs < Date.now() - CI_LIMITS.eventDays * 864e5) {
+          (0, import_node_fs5.rmSync)((0, import_node_path5.join)(dir, name), { force: true });
           events++;
         }
       } catch {
       }
     }
   }
-  return { ok: true, runs, work, events };
+  return { ok: true, runs, work, events, remote };
 }
 
 // src/ci/runner/changes.ts
@@ -966,9 +1148,9 @@ async function snapshot(repo, sha) {
 // src/ci/runner/supervise.ts
 var import_node_child_process3 = require("node:child_process");
 var import_node_crypto3 = require("node:crypto");
-var import_node_fs5 = require("node:fs");
+var import_node_fs6 = require("node:fs");
 var import_node_os5 = require("node:os");
-var import_node_path5 = require("node:path");
+var import_node_path6 = require("node:path");
 var import_node_perf_hooks = require("node:perf_hooks");
 
 // src/ci/glob.ts
@@ -1051,7 +1233,7 @@ var LogSink = class {
   constructor(path, cap, budget, secretValues = []) {
     this.cap = cap;
     this.budget = budget;
-    this.#ws = (0, import_node_fs5.createWriteStream)(path, { flags: "a", mode: 384 });
+    this.#ws = (0, import_node_fs6.createWriteStream)(path, { flags: "a", mode: 384 });
     this.#ws.on("error", () => void 0);
     this.#mask = new Masker(secretValues);
   }
@@ -1087,7 +1269,7 @@ var LogSink = class {
     return new Promise((resolve2) => this.#ws.end(resolve2));
   }
 };
-var BASH = ["/bin/bash", "/usr/bin/bash"].find((p) => (0, import_node_fs5.existsSync)(p)) ?? null;
+var BASH = ["/bin/bash", "/usr/bin/bash"].find((p) => (0, import_node_fs6.existsSync)(p)) ?? null;
 var signalGroup = (child, signal) => {
   if (!child.pid) return;
   try {
@@ -1122,7 +1304,7 @@ var Supervisor = class {
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
     try {
-      writeAtomic((0, import_node_path5.join)(this.dir, "state.json"), JSON.stringify(this.state));
+      writeAtomic((0, import_node_path6.join)(this.dir, "state.json"), JSON.stringify(this.state));
     } catch {
     }
   }
@@ -1155,11 +1337,11 @@ var Supervisor = class {
     state.status = "running";
     state.startedAt = nowIso();
     const ticks = startTicks(process.pid);
-    (0, import_node_fs5.writeFileSync)((0, import_node_path5.join)(this.dir, "supervisor.pid"), `${process.pid}${ticks ? ` ${ticks}` : ""}
+    (0, import_node_fs6.writeFileSync)((0, import_node_path6.join)(this.dir, "supervisor.pid"), `${process.pid}${ticks ? ` ${ticks}` : ""}
 `, { mode: 384 });
     this.flush();
     const watch = setInterval(() => {
-      if ((0, import_node_fs5.existsSync)((0, import_node_path5.join)(this.dir, "cancel"))) this.cancel();
+      if ((0, import_node_fs6.existsSync)((0, import_node_path6.join)(this.dir, "cancel"))) this.cancel();
     }, 500);
     const runTimer = setTimeout(() => {
       this.timedOut = true;
@@ -1237,7 +1419,7 @@ var Supervisor = class {
     state.reason = this.cancelled ? "cancelled" : this.rejected ? "rejected" : this.timedOut ? "timeout" : failed.length ? failed.find((j) => j.reason === "timeout" || j.reason === "runner_error")?.reason ?? "step_failed" : null;
     state.finishedAt = nowIso();
     state.durationMs = Math.round(import_node_perf_hooks.performance.now() - t0);
-    (0, import_node_fs5.rmSync)((0, import_node_path5.join)(this.dir, "work"), { recursive: true, force: true });
+    (0, import_node_fs6.rmSync)((0, import_node_path6.join)(this.dir, "work"), { recursive: true, force: true });
     this.flush();
   }
   /**
@@ -1246,7 +1428,7 @@ var Supervisor = class {
    */
   #decision(job) {
     const path = approvalPath(this.plan.runId, job.id);
-    if (!(0, import_node_fs5.existsSync)(path)) return null;
+    if (!(0, import_node_fs6.existsSync)(path)) return null;
     const d = readJson(path);
     if (d?.decision === "reject") return "reject";
     if (d?.decision === "approve" && typeof d.key === "string" && job.approval) {
@@ -1254,7 +1436,7 @@ var Supervisor = class {
       const want = Buffer.from(job.approval.gate, "hex");
       if (got.length === want.length && (0, import_node_crypto3.timingSafeEqual)(got, want)) return "approve";
     }
-    (0, import_node_fs5.rmSync)(path, { force: true });
+    (0, import_node_fs6.rmSync)(path, { force: true });
     console.error(`[pilot] ${nowIso()} an approval for ${job.id} did not carry the right key; still waiting`);
     return null;
   }
@@ -1270,8 +1452,8 @@ var Supervisor = class {
     const s = js.steps.find((x) => x.status === "pending" || x.status === "running");
     if (!s) return;
     try {
-      ensureDir((0, import_node_path5.join)(this.dir, "logs", job.id));
-      (0, import_node_fs5.writeFileSync)((0, import_node_path5.join)(this.dir, "logs", job.id, `${s.idx}.log`), `${message}
+      ensureDir((0, import_node_path6.join)(this.dir, "logs", job.id));
+      (0, import_node_fs6.writeFileSync)((0, import_node_path6.join)(this.dir, "logs", job.id, `${s.idx}.log`), `${message}
 `, { flag: "a", mode: 384 });
     } catch {
     }
@@ -1286,7 +1468,7 @@ var Supervisor = class {
     js.status = "running";
     js.startedAt = nowIso();
     this.flush();
-    const work = (0, import_node_path5.join)(this.dir, "work", job.id);
+    const work = (0, import_node_path6.join)(this.dir, "work", job.id);
     let failed = false;
     let secrets = {};
     const timer = setTimeout(() => {
@@ -1338,14 +1520,15 @@ var Supervisor = class {
         js.artifactsSkipped += 1;
       }
     }
-    (0, import_node_fs5.rmSync)(work, { recursive: true, force: true });
+    (0, import_node_fs6.rmSync)(work, { recursive: true, force: true });
     js.durationMs = Math.round(import_node_perf_hooks.performance.now() - t0);
     this.flush();
   }
   /** A clean checkout of the commit from the bare repository, with hooks off. */
   async #checkout(work) {
-    ensureDir((0, import_node_path5.dirname)(work));
-    const clone = await git(["clone", "--local", "--no-checkout", "--quiet", bareDir(this.plan.repo), work], { timeoutMs: 6e5 });
+    ensureDir((0, import_node_path6.dirname)(work));
+    const source = this.plan.mirror ? mirrorDir(this.plan.mirror) : bareDir(this.plan.repo);
+    const clone = await git(["clone", "--local", "--no-checkout", "--quiet", source, work], { timeoutMs: 6e5 });
     if (clone.code !== 0) throw new Error(`Checkout failed: ${clone.stderr.trim().split("\n")[0] ?? "git clone failed"}`);
     const out = await git(["checkout", "--quiet", "--detach", this.plan.sha], { cwd: work, timeoutMs: 6e5 });
     if (out.code !== 0) throw new Error(`Checkout failed: ${out.stderr.trim().split("\n")[0] ?? "git checkout failed"}`);
@@ -1356,15 +1539,16 @@ var Supervisor = class {
    * this process and the steps' environments, and are masked in their logs.
    */
   #secrets(job) {
+    if (this.plan.leased) return Object.fromEntries(Object.entries(leaseRead(this.plan.runId, job.secrets)).map(([k, v]) => [k, v.endsWith("\n") ? v.slice(0, -1) : v]));
     const out = {};
-    const etc = (0, import_node_path5.dirname)((0, import_node_path5.dirname)((0, import_node_fs5.realpathSync)(process.argv[1])));
+    const etc = (0, import_node_path6.dirname)((0, import_node_path6.dirname)((0, import_node_fs6.realpathSync)(process.argv[1])));
     for (const name of job.secrets) {
-      const path = (0, import_node_path5.join)(etc, "secrets", "files", name);
+      const path = (0, import_node_path6.join)(etc, "secrets", "files", name);
       let text;
       try {
-        const st = (0, import_node_fs5.lstatSync)(path);
+        const st = (0, import_node_fs6.lstatSync)(path);
         if (!st.isFile() || st.size > 65536) throw new Error("not a file the size of a secret");
-        text = (0, import_node_fs5.readFileSync)(path, "utf8");
+        text = (0, import_node_fs6.readFileSync)(path, "utf8");
       } catch {
         throw new Error(`The secret ${name} is not available in this workspace. Assign it in Secrets & env as a secret or a tool login.`);
       }
@@ -1375,8 +1559,8 @@ var Supervisor = class {
   /** What the jobs this one needs kept is copied in before its steps. */
   #restore(job, work) {
     for (const need of job.needs) {
-      const src = (0, import_node_path5.join)(this.dir, "artifacts", need);
-      if ((0, import_node_fs5.existsSync)(src)) (0, import_node_fs5.cpSync)(src, work, { recursive: true, force: true });
+      const src = (0, import_node_path6.join)(this.dir, "artifacts", need);
+      if ((0, import_node_fs6.existsSync)(src)) (0, import_node_fs6.cpSync)(src, work, { recursive: true, force: true });
     }
   }
   /* ---------- A step ---------- */
@@ -1385,8 +1569,8 @@ var Supervisor = class {
     st.status = "running";
     st.startedAt = nowIso();
     this.flush();
-    ensureDir((0, import_node_path5.join)(this.dir, "logs", job.id));
-    const sink = new LogSink((0, import_node_path5.join)(this.dir, "logs", job.id, `${st.idx}.log`), CI_LIMITS.stepLogBytes, this.#logBudget, Object.values(secrets));
+    ensureDir((0, import_node_path6.join)(this.dir, "logs", job.id));
+    const sink = new LogSink((0, import_node_path6.join)(this.dir, "logs", job.id, `${st.idx}.log`), CI_LIMITS.stepLogBytes, this.#logBudget, Object.values(secrets));
     const finish = async (status, reason, exitCode) => {
       await sink.end();
       st.status = status;
@@ -1397,15 +1581,15 @@ var Supervisor = class {
       st.durationMs = Math.round(import_node_perf_hooks.performance.now() - t0);
       this.flush();
     };
-    const cwd = (0, import_node_path5.join)(work, step.workingDirectory === "." ? "" : step.workingDirectory);
+    const cwd = (0, import_node_path6.join)(work, step.workingDirectory === "." ? "" : step.workingDirectory);
     let real;
     try {
-      real = (0, import_node_fs5.realpathSync)(cwd);
+      real = (0, import_node_fs6.realpathSync)(cwd);
     } catch {
       sink.note(`[pilot] working-directory ${step.workingDirectory} does not exist in this commit`);
       return finish("failed", "step_failed", null);
     }
-    if (!inside((0, import_node_fs5.realpathSync)(work), real)) {
+    if (!inside((0, import_node_fs6.realpathSync)(work), real)) {
       sink.note("[pilot] working-directory leaves the checkout");
       return finish("failed", "step_failed", null);
     }
@@ -1471,10 +1655,10 @@ var Supervisor = class {
   /* ---------- Artifacts ---------- */
   #collect(job, work) {
     const spec = job.artifacts;
-    const out = (0, import_node_path5.join)(this.dir, "artifacts", job.id);
+    const out = (0, import_node_path6.join)(this.dir, "artifacts", job.id);
     const artifacts = [];
     let skipped = 0;
-    const root = (0, import_node_fs5.realpathSync)(work);
+    const root = (0, import_node_fs6.realpathSync)(work);
     const startOf = (p) => {
       const out2 = [];
       for (const seg of p.replace(/\/+$/, "").split("/")) {
@@ -1487,10 +1671,10 @@ var Supervisor = class {
     let visited = 0;
     const walk = (rel) => {
       if (visited > 2e5) return;
-      const abs = (0, import_node_path5.join)(root, rel);
+      const abs = (0, import_node_path6.join)(root, rel);
       let st;
       try {
-        st = (0, import_node_fs5.lstatSync)(abs);
+        st = (0, import_node_fs6.lstatSync)(abs);
       } catch {
         return;
       }
@@ -1501,7 +1685,7 @@ var Supervisor = class {
       }
       if (st.isDirectory()) {
         if (rel === ".git") return;
-        for (const name of (0, import_node_fs5.readdirSync)(abs)) walk(rel ? `${rel}/${name}` : name);
+        for (const name of (0, import_node_fs6.readdirSync)(abs)) walk(rel ? `${rel}/${name}` : name);
         return;
       }
       if (!st.isFile() || !artifactMatches(spec.paths, rel)) return;
@@ -1509,16 +1693,16 @@ var Supervisor = class {
         skipped++;
         return;
       }
-      const dest = (0, import_node_path5.join)(out, rel);
+      const dest = (0, import_node_path6.join)(out, rel);
       if (!inside(out, dest)) return;
-      (0, import_node_fs5.mkdirSync)((0, import_node_path5.dirname)(dest), { recursive: true });
-      (0, import_node_fs5.copyFileSync)(abs, dest);
+      (0, import_node_fs6.mkdirSync)((0, import_node_path6.dirname)(dest), { recursive: true });
+      (0, import_node_fs6.copyFileSync)(abs, dest);
       this.#artifactBudget.left -= st.size;
       artifacts.push({ path: rel, bytes: st.size });
     };
     for (const start of starts) {
-      const abs = (0, import_node_path5.join)(root, start);
-      if (!(0, import_node_fs5.existsSync)(abs) || !inside(root, (0, import_node_fs5.realpathSync)(abs))) continue;
+      const abs = (0, import_node_path6.join)(root, start);
+      if (!(0, import_node_fs6.existsSync)(abs) || !inside(root, (0, import_node_fs6.realpathSync)(abs))) continue;
       walk(start);
     }
     return { artifacts: artifacts.sort((a, b) => a.path.localeCompare(b.path)), skipped };
@@ -1526,8 +1710,8 @@ var Supervisor = class {
 };
 async function supervise(runId) {
   const dir = runDir(runId);
-  const plan = readJson((0, import_node_path5.join)(dir, "plan.json"));
-  const state = readJson((0, import_node_path5.join)(dir, "state.json"));
+  const plan = readJson((0, import_node_path6.join)(dir, "plan.json"));
+  const state = readJson((0, import_node_path6.join)(dir, "state.json"));
   if (!plan || !state) return;
   const sv = new Supervisor(plan, state);
   try {
@@ -1541,16 +1725,18 @@ async function supervise(runId) {
       for (const s of j.steps) if (s.status === "running" || s.status === "pending") s.status = "failed", s.reason = "runner_error";
     }
     sv.flush();
-    (0, import_node_fs5.writeFileSync)((0, import_node_path5.join)(dir, "supervisor.error"), `${e.stack ?? String(e)}
+    (0, import_node_fs6.writeFileSync)((0, import_node_path6.join)(dir, "supervisor.error"), `${e.stack ?? String(e)}
 `, { mode: 384 });
+  } finally {
+    if (plan.leased) (0, import_node_fs6.rmSync)(leaseDir(runId), { recursive: true, force: true });
   }
 }
 
 // src/ci/runner/upstream.ts
-var import_node_fs6 = require("node:fs");
+var import_node_fs7 = require("node:fs");
 var import_node_net = require("node:net");
-var import_node_path6 = require("node:path");
-var SECRET_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+var import_node_path7 = require("node:path");
+var SECRET_NAME2 = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 var NO_PROXY_VARS = ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"];
 function upstreamUrl(raw) {
   if (typeof raw !== "string" || raw.length > 500 || /[\s\0]/.test(raw)) throw new Fail("bad_url", "The upstream is an https URL.");
@@ -1565,14 +1751,14 @@ function upstreamUrl(raw) {
   return u;
 }
 function secretValue(name) {
-  if (!SECRET_NAME.test(name) || name.includes("..")) throw new Fail("bad_secret", "That is not a secret's name.");
-  const etc = (0, import_node_path6.dirname)((0, import_node_path6.dirname)((0, import_node_fs6.realpathSync)(process.argv[1])));
-  const path = (0, import_node_path6.join)(etc, "secrets", "files", name);
+  if (!SECRET_NAME2.test(name) || name.includes("..")) throw new Fail("bad_secret", "That is not a secret's name.");
+  const etc = (0, import_node_path7.dirname)((0, import_node_path7.dirname)((0, import_node_fs7.realpathSync)(process.argv[1])));
+  const path = (0, import_node_path7.join)(etc, "secrets", "files", name);
   let text;
   try {
-    const st = (0, import_node_fs6.lstatSync)(path);
+    const st = (0, import_node_fs7.lstatSync)(path);
     if (!st.isFile() || st.size > 65536) throw new Error("size");
-    text = (0, import_node_fs6.readFileSync)(path, "utf8");
+    text = (0, import_node_fs7.readFileSync)(path, "utf8");
   } catch {
     throw new Fail("no_secret", `The secret ${name} is not available in this workspace. Assign it in Secrets & env as a secret or a tool login.`);
   }
@@ -1742,7 +1928,7 @@ async function dispatch(cmd, args, self) {
   switch (cmd) {
     case "version": {
       const v = await git(["--version"]);
-      return { ok: true, version: (0, import_node_crypto4.createHash)("sha256").update((0, import_node_fs7.readFileSync)(self)).digest("hex").slice(0, 16), node: process.version, git: v.stdout.toString("utf8").trim().replace(/^git version /, "") };
+      return { ok: true, version: (0, import_node_crypto4.createHash)("sha256").update((0, import_node_fs8.readFileSync)(self)).digest("hex").slice(0, 16), node: process.version, git: v.stdout.toString("utf8").trim().replace(/^git version /, "") };
     }
     case "repo": {
       const [sub, ...rest] = args;
@@ -1774,6 +1960,14 @@ async function dispatch(cmd, args, self) {
           const { pos } = parse(rest, {});
           return repoRev(pos[0], pos[1]);
         }
+        case "bundle": {
+          const { pos, flags } = parse(rest, { id: "value", haves: "value" });
+          return repoBundle(pos[0], pos[1], str(flags.id), list(flags.haves));
+        }
+        case "outbox": {
+          const { pos, flags } = parse(rest, { offset: "value", max: "value", drop: "bool" });
+          return outbox(pos[0], num(flags.offset, 0, 0, Number.MAX_SAFE_INTEGER), num(flags.max, 1048576, 1024, 4194304), flags.drop === true);
+        }
         case "sync": {
           const { pos, flags } = parse(rest, { url: "value", secret: "value", pin: "value", reset: "bool" });
           return repoSync(pos[0], { url: str(flags.url), secret: str(flags.secret), pin: str(flags.pin), reset: flags.reset === true });
@@ -1781,6 +1975,24 @@ async function dispatch(cmd, args, self) {
         default:
           throw new Fail("bad_command", "Unknown repo command.");
       }
+    }
+    case "mirror": {
+      const [sub, ...rest] = args;
+      if (sub === "heads") {
+        const { pos, flags } = parse(rest, { sha: "value" });
+        return mirrorHeads(pos[0], str(flags.sha));
+      }
+      if (sub === "put") {
+        const { pos, flags } = parse(rest, { part: "value", last: "bool", bytes: "value" });
+        const bytes = num(flags.bytes, 0, 1, 4194304);
+        return mirrorPut(pos[0], pos[1], pos[2], num(flags.part, 0, 0, 1e5), flags.last === true, await readExactly(bytes, 12e4));
+      }
+      throw new Fail("bad_command", "Unknown mirror command.");
+    }
+    case "lease": {
+      const { pos, flags } = parse(args, { bytes: "value", drop: "bool" });
+      if (flags.drop === true) return leaseDrop(pos[0]);
+      return leaseWrite(pos[0], await readExactly(num(flags.bytes, 0, 2, 2e6)));
     }
     case "merge": {
       const { pos, flags } = parse(args, { strategy: "value", expect: "value", message: "value", author: "value" });
@@ -1836,7 +2048,7 @@ async function dispatch(cmd, args, self) {
 }
 async function main(argv) {
   const [cmd, ...rest] = argv;
-  const self = (0, import_node_fs7.realpathSync)(process.argv[1]);
+  const self = (0, import_node_fs8.realpathSync)(process.argv[1]);
   try {
     const out = await dispatch(cmd, rest, self);
     if (out === null || cmd === "hook") return 0;

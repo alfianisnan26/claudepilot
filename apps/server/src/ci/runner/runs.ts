@@ -12,6 +12,7 @@ import type { Plan } from '../plan.js';
 import { ackEvents, pendingEvents, pruneEvents } from './events.js';
 import { ensureDir, eventsDir, Fail, gitRoot, JOB_ID, nowIso, runDir, runsDir, validRef, validRepoName, validRunId, validSha, writeAtomic } from './common.js';
 import { hookState, needRepo } from './repo.js';
+import { gcRemote, needMirror, validMirror } from './remote.js';
 
 /* ---------- Reading a plan ---------- */
 
@@ -80,6 +81,10 @@ export function parsePlan(raw: Buffer): Plan {
     const g2 = j.approval as { environment?: unknown; gate?: unknown } | null | undefined;
     if (g2 !== undefined && g2 !== null && (typeof g2 !== 'object' || typeof g2.environment !== 'string' || !ENV_NAME.test(g2.environment) || typeof g2.gate !== 'string' || !GATE.test(g2.gate))) throw bad(`Job ${id} has a bad approval gate.`);
   }
+  // Runners (T-557): all optional, so a plan from before them still reads.
+  if (x.mirror !== undefined && !validMirror(x.mirror)) throw bad('The plan names a bad mirror.');
+  if (x.leased !== undefined && typeof x.leased !== 'boolean') throw bad('The plan has a bad lease flag.');
+  if (x.runsOn !== undefined && (!Array.isArray(x.runsOn) || x.runsOn.length > CI_LIMITS.runnerLabels || x.runsOn.some((l) => typeof l !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,39}$/.test(l)))) throw bad('The plan has bad runner labels.');
   // A cycle would leave jobs waiting forever.
   const by = new Map(jobs.map((j) => [j.id as string, j.needs as string[]]));
   const seen = new Set<string>();
@@ -198,7 +203,9 @@ export async function startRun(runId: unknown, bytes: number): Promise<Record<st
   if (!Number.isInteger(bytes) || bytes < 2 || bytes > 1_048_576) throw new Fail('bad_plan', 'The plan is empty or too large.');
   const plan = parsePlan(await readExactly(bytes));
   if (plan.runId !== runId) throw new Fail('bad_plan', 'The plan is for another run.');
-  needRepo(plan.repo);
+  // A run a runner takes for another workspace clones the mirror the portal filled (T-557); its own runs, the remote.
+  if (plan.mirror) needMirror(plan.mirror);
+  else needRepo(plan.repo);
 
   ensureDir(runsDir(), 0o700);
   const dir = runDir(runId);
@@ -426,6 +433,7 @@ export function archiveLogs(runId: unknown, head: number, tail: number, total: n
 
 /** `gc [--days n]`: deletes finished runs' folders older than the retention, work folders nobody is using, and old events. */
 export function gc(days: number): Record<string, unknown> {
+  const remote = gcRemote();
   let runs = 0;
   let work = 0;
   const cutoff = Date.now() - days * 86_400_000;
@@ -472,6 +480,6 @@ export function gc(days: number): Record<string, unknown> {
       }
     }
   }
-  return { ok: true, runs, work, events };
+  return { ok: true, runs, work, events, remote };
 }
 
