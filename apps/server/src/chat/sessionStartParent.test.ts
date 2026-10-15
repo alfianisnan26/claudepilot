@@ -81,7 +81,7 @@ test('session_start with parent: a worker of that session, in its family, and it
     tail.push(line({ type: 'assistant', message: { content: [{ type: 'text', text: 'Done.' }] }, parent_tool_use_id: null, uuid: randomUUID() }));
     tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: 0.01, duration_ms: 10, usage: { input_tokens: 1, output_tokens: 1 }, is_error: false, session_id: csid }));
     await until(() => reportsOf(r).some((x) => x.includes(id)));
-    assert.match(reportsOf(r).find((x) => x.includes(id))!, /Worker “Slice one”/);
+    assert.match(reportsOf(r).find((x) => x.includes(id))!, new RegExp(`- worker \\(${id}\\)`));
   } finally {
     await r.done();
   }
