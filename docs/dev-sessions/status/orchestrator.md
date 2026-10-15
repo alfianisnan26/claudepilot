@@ -30,6 +30,7 @@ FIRST: integration d354977 (agent policy: CLAUDE_CODE_AUTO_COMPACT_WINDOW 200000
 65-85 % of crew cost, sessions grow to 400k-970k before compacting). Then: T-366 (images portal,workspace), T-417, T-427, T-404, T-375+T-369, T-376 S2 if they pass. Deploy with /deploy (gate input on).
 
 ## DECISIONS (binding)
+- 04:15 CONFLICT named: the supervisor's nudge (continue, 5 workers, claude auto) vs the coordinator's hand-over order at 250k context (de232389 is past 297k; every further turn re-reads it: the D-63 cost finding). Default: the hand-over wins; de232389 starts no new work. The supervisor should start the continuation; it resumes from FIRST STEPS.
 - D-63 (coordinator): verifier/ux/reviewer on SONNET; opus only for blind reviews of gate/rule/security changes and large implementer
   slices; REUSE a live role session via session_message; the lead never implements or commits code; close on QA PASS + merge.
 - D-61: at most 3 live workers, NO Agent-tool sub-agents, heavy work ONLY via scripts/job-run.sh or gate-job.sh (never in the pod).
