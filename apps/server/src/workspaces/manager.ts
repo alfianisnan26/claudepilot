@@ -38,6 +38,11 @@ const CHECK_TTL_MS = 10_000;
 const CHECK_TIMEOUT_MS = 4_000;
 /** How long one target's list may take before the manager answers from its last good list (T-515): a slow API never holds up the page. */
 const LIST_TIMEOUT_MS = 8_000;
+/** One element of a stored last good list that can be shown: an object with its id, name and target as text. */
+const isStoredWorkspace = (w: unknown): w is Workspace => {
+  const x = w as Partial<Record<'id' | 'name' | 'target' | 'createdAt', unknown>> | null;
+  return !!x && typeof x === 'object' && typeof x.id === 'string' && typeof x.name === 'string' && typeof x.target === 'string' && typeof x.createdAt === 'string';
+};
 /** How often an unchanged last good list is written again (only its time moved): the file stays quiet while the lists do. */
 const LAST_KNOWN_REWRITE_MS = 60_000;
 
@@ -160,8 +165,11 @@ export class Workspaces {
     const stored = lastKnown?.read() ?? {};
     for (const [id, entry] of Object.entries(stored && typeof stored === 'object' ? stored : {})) {
       if (entry && typeof entry.at === 'string' && Array.isArray(entry.workspaces)) {
-        this.#lastGood.set(id, entry);
-        this.#lastWritten.set(id, { at: Date.parse(entry.at) || 0, json: JSON.stringify(entry.workspaces) });
+        // A bad element (null, a string, a record without its names) is skipped, never the whole list (T-515).
+        const workspaces = entry.workspaces.filter(isStoredWorkspace);
+        if (workspaces.length !== entry.workspaces.length) console.error(`[workspaces] last known list of ${id}: skipped ${entry.workspaces.length - workspaces.length} bad element(s)`);
+        this.#lastGood.set(id, { at: entry.at, workspaces });
+        this.#lastWritten.set(id, { at: Date.parse(entry.at) || 0, json: JSON.stringify(workspaces) });
       }
     }
   }
@@ -324,8 +332,9 @@ export class Workspaces {
   }
 
   async list(): Promise<Workspace[]> {
-    const targets = (await this.targets()).filter((t) => this.#runtimes.has(t.id));
-    const lists = await Promise.all(targets.map((t) => this.#listOf(this.#runtimes.get(t.id)!, t)));
+    // One deadline per target for the check AND the list together (T-515): a first check that takes 4 s must not leave 8 s more for the list.
+    const deadline = Date.now() + this.#listTimeoutMs;
+    const lists = await Promise.all([...this.#runtimes.values()].map((r) => this.#listTarget(r, deadline)));
     // Every workspace a runtime reports has an identity: one it has no record of yet gets its id now, with the runtime name the runtime
     // says it has (T-42); the response carries both the id and the alias.
     const found = lists.flat().map((w) => this.#identified(w));
@@ -341,14 +350,27 @@ export class Workspaces {
    * Any other target whose check or list fails or takes longer than the list timeout shows its last good list, each `unavailable` with the
    * reason and the time of that answer (T-515), instead of vanishing; its next good answer replaces it.
    */
-  async #listOf(runtime: Runtime, t: WorkspaceTarget): Promise<Workspace[]> {
+  async #listTarget(runtime: Runtime, deadline: number): Promise<Workspace[]> {
+    const left = () => Math.max(1, deadline - Date.now());
+    try {
+      const t = await timeout(this.#target(runtime, false), left());
+      return await this.#listOf(runtime, t, left);
+    } catch (e) {
+      // The check did not finish within the deadline.
+      if (runtime.listLastKnown) return runtime.listLastKnown();
+      console.error(`[workspaces] listing ${runtime.target.id} failed: ${unavailableReason(e)}`);
+      return this.#fromLastGood(runtime.target.id, e);
+    }
+  }
+
+  async #listOf(runtime: Runtime, t: WorkspaceTarget, left: () => number): Promise<Workspace[]> {
     const id = t.id;
     if (!t.available) {
       if (runtime.listLastKnown) return runtime.listLastKnown();
       return this.#fromLastGood(id, t.problem ?? 'No answer');
     }
     try {
-      const list = await timeout(runtime.list(), this.#listTimeoutMs);
+      const list = await timeout(runtime.list(), left());
       if (this.#runtimes.get(id) === runtime) this.#remember(id, list);
       return list;
     } catch (e) {
@@ -739,6 +761,7 @@ export class Workspaces {
   }
 
   async start(target: string, name: string) {
+    this.#refuseIfUnavailable(target);
     try {
       await this.#applyPendingResources(target, name);
       return await this.#run(target, (r) => r.start(name));
@@ -748,6 +771,7 @@ export class Workspaces {
   }
 
   async stop(target: string, name: string) {
+    this.#refuseIfUnavailable(target);
     // Events written just before a stop are pulled first (foundation PRD §8); never blocks a stop long.
     const pull = this.hooks.beforeStop?.(workspaceId(target, name)).catch(() => undefined);
     if (pull) await Promise.race([pull, new Promise((r) => setTimeout(r, 5_000).unref())]);
@@ -764,6 +788,7 @@ export class Workspaces {
    */
   async recreate(target: string, name: string, image: string, progress: (detail: string) => void, opts?: { label?: string }) {
     const runtime = this.#runtime(target);
+    this.#refuseIfUnavailable(target);
     if (!runtime.recreate) throw new AppError('CONFLICT', 'This target can’t recreate a workspace from another image.');
     const pull = this.hooks.beforeStop?.(workspaceId(target, name)).catch(() => undefined);
     if (pull) await Promise.race([pull, new Promise((r) => setTimeout(r, 5_000).unref())]);
@@ -785,6 +810,7 @@ export class Workspaces {
     }
     if (this.#pending.get(id)?.status === 'creating')
       throw new AppError('CONFLICT', 'Wait for it to finish creating, then remove it.');
+    this.#refuseIfUnavailable(target);
     this.#deletePending(id);
     try {
       await this.#run(target, (r) => r.remove(name));
@@ -859,9 +885,21 @@ export class Workspaces {
     return runtime;
   }
 
+  /**
+   * A target whose workspaces are shown from last-known data (its API did not answer, T-515) takes no runtime action: the call would only
+   * wait for the client's own timeout. Refused at once, with the reason; it runs after the seam's check, so what an actor may not see stays a 404.
+   */
+  #refuseIfUnavailable(target: string) {
+    const reason = this.#unavailable.get(target);
+    if (reason === undefined) return;
+    const label = this.#runtimes.get(target)?.target.label ?? target;
+    throw new AppError('SERVICE_UNAVAILABLE', `${label} isn’t answering (${reason}), so this can’t run now. Try again when it is back.`);
+  }
+
   /** Runs a runtime call; Docker/Kubernetes failures come back as a readable 503. */
   async #run<T>(target: string, fn: (r: Runtime) => Promise<T>): Promise<T> {
     const runtime = this.#runtime(target);
+    this.#refuseIfUnavailable(target);
     try {
       return await fn(runtime);
     } catch (e) {
