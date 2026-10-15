@@ -76,7 +76,7 @@ const MEASURE = `(() => {
     tileStates: tiles.map((t) => t.getAttribute('data-state')),
     tileTips: tiles.filter((t) => t.querySelector('[aria-label^="About"]')).length,
     tileBasis: tiles.filter((t) => /MEASURED|ESTIMATE|UNAVAILABLE/.test(t.innerText)).length,
-    was: (document.body.innerText.match(/\\bwas [0-9$]/g) || []).length,
+    was: document.querySelectorAll('[data-was]').length,
     detail: !!root.querySelector('[data-scorecard-detail]'),
   };
 })()`;
@@ -124,7 +124,7 @@ try {
       check(`${tag}: 6h still lists the card, no sideways scroll`, s.tiles >= 5 && noScroll(s));
 
       check(`${tag}: Compare clicks`, await clickLabel(b, 'Compare'));
-      await b.waitFor(`/\\bwas [0-9$]/.test(document.body.innerText)`, LOAD_MS, 'was').catch(() => {});
+      await b.waitFor(`document.querySelectorAll('[data-was]').length > 0`, LOAD_MS, 'was').catch(() => {});
       await sleep(300);
       s = await m(b);
       check(`${tag}: compare: layout holds, no sideways scroll`, s.tiles >= 5 && noScroll(s) && s.bad.length === 0);

@@ -30,7 +30,7 @@ function TileView({ t }: { t: Tile }) {
         ) : (
           <span className={`text-[17px] font-semibold tabular-nums ${STATE_CLASS[t.state]}`}>{t.value}</span>
         )}
-        {t.was !== null && <span className="ml-1.5 text-[11.5px] text-muted tabular-nums">was {t.was}</span>}
+        {t.was !== null && <span data-was="" className="ml-1.5 text-[11.5px] text-muted tabular-nums">was {t.was}</span>}
         <span className="mt-0.5 block text-[10.5px] uppercase tracking-wide text-muted">
           {t.state === 'unavailable' ? t.basis : `${t.state} · ${t.basis}`}
         </span>
