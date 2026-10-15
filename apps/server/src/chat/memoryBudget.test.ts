@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { AppError } from '@isnanme/core';
 import { parseMemoryProbe, type MemoryReading } from '../workspaces/memory.js';
 import { MEMORY_BUDGET, MEMORY_HEADROOM_BYTES, SESSION_MEMORY_ESTIMATE_BYTES, WorkspaceMemory } from './memory.js';
+import { ChatStore } from './store.js';
 import { liveSession, sleep, until } from './testkit.js';
 
 const GiB = 1024 ** 3;
@@ -92,13 +93,26 @@ test('T-416: a launch not running yet counts: the second start in the same windo
   }
 });
 
-test('T-416: two creates at once with room for exactly one: one starts, the other is refused with the budget reason', async () => {
+const HASH = 'a'.repeat(64);
+const REPO = '/home/node/work/repo';
+/** Trust for the repository folder, so a create there (with a worktree) passes the folder checks. */
+function trustRepo(s: Awaited<ReturnType<typeof liveSession>>): void {
+  s.ws.scanFor = () => JSON.stringify({ hash: HASH, files: ['.claude/settings.json'], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 57, envNames: [], rulesOnly: true, extras: [] });
+  new ChatStore(s.store).saveFolderTrust('docker/ws1', REPO, HASH, { files: ['.claude/settings.json'], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 57, envNames: [] }, 'ui');
+}
+
+test('T-416: two creates at once with room for exactly one, the first held after its check (a worktree): one starts, the other is refused with the budget reason', async () => {
   const s = await liveSession();
   try {
+    trustRepo(s);
     s.controller.memory = budget(ONE_FITS).memory;
     const starts = s.ws.starts;
-    // Both reach the check before either has made a row: the estimate of the first must already count when the second looks.
-    const [a, b] = await Promise.allSettled([s.controller.create({ workspaceId: 'docker/ws1' }), s.controller.create({ workspaceId: 'docker/ws1' })]);
+    // The first passes the check and then waits on its worktree (a macrotask), before it has a row or a granted slot. The second looks
+    // meanwhile: without the reservation made in the check's own step it sees nothing pending and both start (fails on d37c5f0).
+    const [a, b] = await Promise.allSettled([
+      s.controller.create({ workspaceId: 'docker/ws1', cwd: REPO, worktree: { branch: 'dev/t-416-race' } }),
+      s.controller.create({ workspaceId: 'docker/ws1', cwd: REPO }),
+    ]);
     const made = [a, b].filter((r) => r.status === 'fulfilled');
     const refused = [a, b].filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     assert.equal(made.length, 1, 'one succeeds');
@@ -107,6 +121,51 @@ test('T-416: two creates at once with room for exactly one: one starts, the othe
     assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 1);
     await until(() => s.ws.starts === starts + 1);
     assert.equal(s.ws.starts, starts + 1, 'one process');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416: a create that throws after its check (the worktree fails) releases its reservation: the next create with room for one runs', async () => {
+  const s = await liveSession();
+  try {
+    trustRepo(s);
+    s.controller.memory = budget(ONE_FITS).memory;
+    const real = s.ws.wtAdd;
+    s.ws.wtAdd = () => ({ code: 1, out: 'no such branch\n' });
+    await assert.rejects(s.controller.create({ workspaceId: 'docker/ws1', cwd: REPO, worktree: { branch: 'dev/t-416-leak' } }), (e: unknown) => !isBudget(e));
+    s.ws.wtAdd = real;
+    const starts = s.ws.starts;
+    const made = await s.controller.create({ workspaceId: 'docker/ws1', cwd: REPO });
+    await until(() => s.controller.get(made.id)?.process === 'live');
+    assert.equal(s.ws.starts, starts + 1);
+    assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 0, 'never refused for a reservation that should be gone');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416: a launch whose process fails to spawn releases its reservation: the next create with room for one runs', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.memory = budget(ONE_FITS).memory;
+    const real = s.ws.exec.bind(s.ws);
+    let broken = true;
+    let attempts = 0;
+    s.ws.exec = async (target: string, name: string, command: string[]) => {
+      if (broken && command[2] === 'start') {
+        attempts++;
+        throw new Error('spawn failed');
+      }
+      return real(target, name, command);
+    };
+    await s.controller.create({ workspaceId: 'docker/ws1' });
+    await until(() => attempts === 1);
+    await sleep(100); // the launch settles and lets go
+    broken = false;
+    const made = await s.controller.create({ workspaceId: 'docker/ws1' });
+    await until(() => s.controller.get(made.id)?.process === 'live');
+    assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 0);
   } finally {
     await s.done();
   }

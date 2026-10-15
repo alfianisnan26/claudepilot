@@ -150,7 +150,9 @@ test('T-416: the Needs you item reaches the push bridge with its kind in fixed w
   const stop = bridgeAttentionNotify(registry, bus, () => ['u_owner']);
   try {
     registry.check(); // the baseline
-    const long = `kubernetes/${'w'.repeat(150)}`;
+    // Long enough that the title is cut at 120, short enough that the item's id fits the bus's 200-character subject id (a longer one
+    // is dropped by `validateEvent`: "bad subject"; real workspace ids are far shorter).
+    const long = `kubernetes/${'w'.repeat(100)}`;
     now += 61_000;
     next = reading(Math.round(7 * GiB), 8 * GiB, now);
     await mem.look(['kubernetes/kohi-event', long]);
