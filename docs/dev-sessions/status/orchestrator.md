@@ -9,16 +9,16 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
 ## IN FLIGHT (4 of 4 workers, D-65: 7d33708d impl-t558 (opus, why D-62 authz) T-558 (claimed, plan 4930), 03b631f0 impl-t531-s2c (sonnet) T-531 S2c,
-  47710391 qa (sonnet) T-401 QA (GO 12:24, has the cluster slot), 30dc0f13 rev-t401-t379 (opus, why D-62) blind review T-401 then T-379)
+  47710391 qa (sonnet) T-401 QA (GO 12:24, has the cluster slot), d39c25c1 impl-t379-s2 (sonnet) T-379 S2 review fixes (4942))
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
   Cluster: T-401 QA -> T-531 S2c (WAITING 7afbd0d) -> T-486 QA (6eb6fbf, reuse 47710391) -> T-558. Next free workers: T-426 QA +
   blind review (after T-401 merges), T-416 S1b QA, T-546 + T-548.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
-- T-379 DONE 3ddbcbc (0df3dd19 ended): src/ci 144/144 job-5b4609a6 (4905); lead live proof on the final script PASS job-c71c5bfe (4906).
-  Next: blind review (30dc0f13), merge right after T-401.
-- T-401 (high, security): S1 DONE 060aca4 (4 Jobs green per author; fetch does npm ci --ignore-scripts with creds). Touches
-  gate-job.yaml: review must confirm the gate's checks unchanged (4745). Next: blind review (opus) + QA, lead gate, merge.
+- T-379 3ddbcbc: src/ci 144/144 job-5b4609a6 (4905); lead live proof PASS job-c71c5bfe (4906); blind review 30dc0f13 PASS WITH
+  CONDITIONS (4938: DEPLOY_REGISTRY bypasses the allow-list) -> S2 d39c25c1 -> Job -> merge after T-401.
+- T-401 060aca4: blind review PASS WITH CONDITIONS (4936). HELD for a person's ack of the gate change (4941, NEEDS A HUMAN);
+  QA Jobs running; then gate-job on the merge head. Major 2 + JOB_RUN_IMAGE -> T-567 (high, D-62).
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
   ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
@@ -49,8 +49,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 11:00 Coordinator: the next implementer slot goes to T-401 (security: job-run env carries GIT_TOKEN/NODE_AUTH_TOKEN), then T-426
   (--pool-env door for Konfersi stg e2e), then T-379 (Python in job-run). They unblock 6 Konfersi tickets. Opus + blind review
   (gate/security). They come before T-416 S2, T-537 and T-538..T-540.
-- 11:05 Coordinator: sweep 10 in_review tickets against live. Order: T-401 keeps the first free slot (it blocks 6 Konfersi tickets);
-  the sweep takes the second. QA cannot close tickets it doesn't hold, so it reports and the lead closes on PASS (D-63).
+- 11:05 Coordinator: sweep of in_review tickets; QA reports, the lead closes on PASS (D-63).
 - 10:25 dontAsk workers cannot wait: the lead hands out the cluster slot with "GO T-n"; workers end with WAITING <hash>.
 - 10:02 The free-slot check counts only OUR program's Jobs (app=claudepilot-gate or job-run/program=claudepilot); Konfersi Jobs are
   capped per program by job-run.sh.
@@ -62,6 +61,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - Hand over before 250k context (coordinator).
 
 ## NEEDS A HUMAN (D-62)
+- T-401 gate wall (via the coordinator): the owner acks on T-401 that gate-job.yaml's change is credential plumbing plus one
+  stricter red (exit 3 on a credential value in the gate's files); gate.sh's checks unchanged. Question text in 4941.
 - T-93 Konfersi production only. Coordinator items: T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
   T-433's persona-wall question (2984).
 - For the coordinator, NOT the owner (not tagged owner-checklist): T-476 lead may START a deploy whose release waits for a person
