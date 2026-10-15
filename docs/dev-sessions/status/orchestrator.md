@@ -8,7 +8,10 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 2. Workers live (3 = D-61 budget), each posts its own report on its ticket (T-433 landed); read the verdict line only:
    - (ended) 458defa3: T-404 second blind review = SAFE AFTER FIXES (full report on T-404): 10 items closed, 30/30 tests (f40365e5); MAJOR bypasses still allowed by the real guard: a fixer (opus) on dev/t-404-1 in dev-t-352-1, then a third reviewer. One slot is FREE.
    - b22b5fae ux-checker, sonnet, alfian.isnan, dev-t-333-1: T-375 + T-369 re-check of dev/t-375-1 013b974.
-   - ca172194 implementer, sonnet, fadlilah, dev-t-349-1: T-376 S2 double page read on open, new branch dev/t-376-3.
+   - (ended) ca172194 T-376 S2 fix: NOT DONE (report on T-376): dev/t-376-3 0b0faf7 = t-376-2 + 1 commit; the dontAsk sandbox refused
+     `git merge origin/integration` 3 times; it found one caller and one mount (cause in a production build not shown). dev-t-349-1 may be left on
+     dev/t-376-3: check `git -C ~/work/claudepilot.worktrees/dev-t-349-1 status -sb` first. Next: the lead merges integration into dev/t-376-3
+     (or an implementer in a folder where merge is allowed), then a ux re-check that counts page reads in a production build.
 
 ## STATE PER TICKET
 - T-366: CLOSED, on integration 7b1a05a. Needs deploy images=portal,workspace (every folder re-trusts once).
