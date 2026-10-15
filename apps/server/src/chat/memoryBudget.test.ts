@@ -92,6 +92,38 @@ test('T-416: a launch not running yet counts: the second start in the same windo
   }
 });
 
+test('T-416: two creates at once with room for exactly one: one starts, the other is refused with the budget reason', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.memory = budget(ONE_FITS).memory;
+    const starts = s.ws.starts;
+    // Both reach the check before either has made a row: the estimate of the first must already count when the second looks.
+    const [a, b] = await Promise.allSettled([s.controller.create({ workspaceId: 'docker/ws1' }), s.controller.create({ workspaceId: 'docker/ws1' })]);
+    const made = [a, b].filter((r) => r.status === 'fulfilled');
+    const refused = [a, b].filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    assert.equal(made.length, 1, 'one succeeds');
+    assert.equal(refused.length, 1, 'one is refused');
+    assert.ok(isBudget(refused[0]!.reason), String(refused[0]!.reason));
+    assert.equal(s.controller.audit({ kind: 'memory.refused' }).length, 1);
+    await until(() => s.ws.starts === starts + 1);
+    assert.equal(s.ws.starts, starts + 1, 'one process');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-416: a refused create leaves no reservation behind', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.memory = budget(ONE_FITS + 1).memory;
+    await assert.rejects(s.controller.create({ workspaceId: 'docker/ws1' }), isBudget);
+    await assert.rejects(s.controller.create({ workspaceId: 'docker/ws1' }), isBudget);
+    assert.deepEqual(s.controller.audit({ kind: 'memory.refused' }).map((a) => a.detail.pending), [0, 0]);
+  } finally {
+    await s.done();
+  }
+});
+
 test('T-416: a wake counts the sleeping session’s sub-agents: refused with two running, it stays asleep; with none it wakes', async () => {
   const s = await liveSession({ idleSleepMs: 200 }, true);
   try {
