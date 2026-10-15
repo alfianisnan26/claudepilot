@@ -22,8 +22,10 @@ const rules = (hash: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ ...EMPTY_SCAN, hash, files: ['.claude/settings.json'], allowRules: 2, rulesOnly: true, broadAllow: false, ...extra });
 
 const err = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => (isAppError(e) ? e : new Error(String(e))));
-const trustRow = (s: Live, folder: string) =>
-  s.store.db!.prepare('SELECT scan_hash, actor FROM chat_folder_trust WHERE workspace_id = ? AND folder = ?').get('docker/ws1', folder) as { scan_hash: string; actor: string } | undefined;
+const trustRow = (s: Live, folder: string) => {
+  const row = s.store.db!.prepare('SELECT scan_hash, actor FROM chat_folder_trust WHERE workspace_id = ? AND folder = ?').get('docker/ws1', folder) as { scan_hash: string; actor: string } | undefined;
+  return row ? { scan_hash: row.scan_hash, actor: row.actor } : undefined; // a plain object (node:sqlite rows have no prototype)
+};
 
 async function start(s: Live, req: Record<string, unknown>) {
   const before = s.ws.tails.length;
