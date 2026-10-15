@@ -4,10 +4,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## DONE
 - MERGED ff 275cea5b: T-586, T-486 (S2d+S2e), T-547, T-611, T-548 (gate GREEN 4071aa5, claudepilot-gate-4071aa5-b4a2; 5795-5800).
+- MERGED ff bcb27182: T-561 S1c, T-546 (gate GREEN 36632f8, claudepilot-gate-36632f8-7b4c; 5892/5893). T-546 CLOSED done.
+  T-561 open, waits-t640 (5898): its done-when is a live crew check -> T-640 (scratch portal, real Claude Code).
 ## IN FLIGHT (6 of 6, D-71): all sonnet
-- BATCH 2 premerge e48066f (T-561 S1c 0beae29 + T-546 10b22e0; conflicts: migrations 778/779 kept both, PRD FR51 = T-546's + FR79)
-  gate e48066f GREEN (2 flakes rerun -> T-638); integration had code (T-636 supervisor, release -14) -> merged in, pack, 36632f8a
-  REGATE RUNNING (job-out/gate-36632f8.log) -> ff integration on green.
 - T-591 S1d DONE 394abdd5 (5867; 783->784, lead checked no dup) -> QA Perf delta. Backend respawned 4083876c (ticket/T-325-s1) on T-325 S1 (5549 (b); S3 held).
   Old Backend 4b4edaf8 ended: T-600 BE 1a95fb03 (5756) + T-597 S1b 75656845 (5849) DONE -> QA Perf.
 - T-631 review CHANGES 5850 -> lead 5853: absolute-path entry (a) for the coordinator; F2 small slice; F1 also on job-run.sh -> T-635 (high).
