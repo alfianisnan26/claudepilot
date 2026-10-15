@@ -67,7 +67,7 @@ test('an agent adding owner-checklist alone is refused with the D-62 path and an
     assert.equal(r.tickets.list(UI, {}).total, 0, 'nothing was made');
     const t = r.tickets.create(r.worker, { summary: 'A permissions question', tags: ['permissions'] });
     assertD62(refusal(() => r.tickets.update(r.worker, t.id, { tags: ['permissions', CL] })), 'update');
-    assert.deepEqual(r.tickets.get(UI, t.id).tags, ['permissions'], 'the tags are unchanged');
+    assert.deepEqual(r.tickets.get(UI, t.id).ticket.tags, ['permissions'], 'the tags are unchanged');
     assert.deepEqual(r.listed(), [], 'not on Needs you');
     assert.equal(r.audits.length, 2);
     assert.deepEqual(r.audits[0], {
