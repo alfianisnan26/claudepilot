@@ -24,6 +24,7 @@ Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: c
 - Deploy cap three a day; run 31 was the first of 2026-10-15. Next deploy needs images=portal,workspace once T-366 is in.
 
 ## NEEDS A HUMAN
+- T-397 (permissions): let crew workers comment on their lead's tickets (authz) and give the verifier, reviewer and ux-checker roles ticket_get/ticket_comment (persona). Steps: decide (a) and (b) on T-397; until then the lead copies every report.
 - T-93 production cutover (Konfersi, paused).
 - T-306 item 4 / T-340: installing the rtk hook is a permission change.
 
