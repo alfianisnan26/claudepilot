@@ -4,6 +4,8 @@ import { isTargetUnreachable, type Runtime } from '../workspaces/runtime.js';
 /** Foundation PRD §8: one JSON object per line, at most this long. */
 const LINE_MAX = 4096;
 const PULL_EVERY_MS = 10_000;
+/** Timer pulls running at once; the rest wait their turn in the same tick. */
+export const MAX_CONCURRENT_PULLS = 4;
 const SEEN_FOR_MS = 24 * 60 * 60_000;
 const OUTBOX = '/home/node/.claudepilot/outbox';
 /** `<type>.<n>.pulling`: a sealed outbox file. Only these names are ever passed back to the script. */
@@ -85,6 +87,9 @@ export class Outbox {
   readonly #inFlight = new Map<string, Promise<void>>();
   #timer: NodeJS.Timeout | undefined;
   #lastPrune = 0;
+  /** Workspaces the timer will pull, and how many of its pulls run now. */
+  #queue: string[] = [];
+  #timed = 0;
   /** Workspaces whose last pull met an unreachable target (logged once until a pull succeeds). */
   readonly #unreachable = new Set<string>();
 
@@ -108,20 +113,35 @@ export class Outbox {
   }
 
   #tick() {
-    const ids = new Set([...this.#subs.values()].flatMap((s) => s.workspaces()));
-    for (const id of ids)
-      void this.pull(id).then(
-        () => void this.#unreachable.delete(id),
-        (e: unknown) => {
-          // A target whose tunnel is down: one line per outage, not one per pull (targets-connect PRD §12.5).
-          if (isTargetUnreachable(e)) {
-            if (!this.#unreachable.has(id)) console.error(`[outbox] ${id}: ${(e as Error).message}`);
-            this.#unreachable.add(id);
-            return;
-          }
-          console.error(`[outbox] ${id}: ${(e as Error).message}`);
-        },
-      );
+    // Each tick replaces the queue: a workspace still waiting from the last tick is not pulled twice.
+    this.#queue = [...new Set([...this.#subs.values()].flatMap((s) => s.workspaces()))].filter((id) => !this.#inFlight.has(id));
+    this.#drain();
+  }
+
+  /** Starts queued pulls, at most MAX_CONCURRENT_PULLS at once (T-404: the guard channel covers many workspaces). */
+  #drain() {
+    while (this.#timed < MAX_CONCURRENT_PULLS && this.#queue.length) {
+      const id = this.#queue.shift()!;
+      if (this.#inFlight.has(id)) continue;
+      this.#timed++;
+      void this.pull(id)
+        .then(
+          () => void this.#unreachable.delete(id),
+          (e: unknown) => {
+            // A target whose tunnel is down: one line per outage, not one per pull (targets-connect PRD §12.5).
+            if (isTargetUnreachable(e)) {
+              if (!this.#unreachable.has(id)) console.error(`[outbox] ${id}: ${(e as Error).message}`);
+              this.#unreachable.add(id);
+              return;
+            }
+            console.error(`[outbox] ${id}: ${(e as Error).message}`);
+          },
+        )
+        .finally(() => {
+          this.#timed--;
+          this.#drain();
+        });
+    }
   }
 
   /** One pull of a running workspace; a call during one shares it. */

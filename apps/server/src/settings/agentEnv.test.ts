@@ -178,6 +178,23 @@ test('status per workspace: unavailable until the drop-in lands, applied after, 
   }
 });
 
+test('T-404 review 7: the guard pull covers only workspaces the policy landed in, and not removed ones', async () => {
+  const h = await setup();
+  try {
+    // Known to the portal (a delivery row) but nothing landed yet: not pulled.
+    h.store.db!.prepare('INSERT INTO workspace_delivery (workspace_id) VALUES (?)').run('docker/other');
+    assert.deepEqual(h.agentEnv.guardedWorkspaces(), []);
+    await h.reconciler.request(WS, 'test');
+    assert.deepEqual(h.agentEnv.guardedWorkspaces(), [WS]);
+    // A removed workspace whose row was not forgotten (the caller says it is gone) is dropped.
+    assert.deepEqual(h.agentEnv.guardedWorkspaces((id) => id !== WS), []);
+    h.agentEnv.forgetWorkspace(WS);
+    assert.deepEqual(h.agentEnv.guardedWorkspaces(), []);
+  } finally {
+    h.done();
+  }
+});
+
 /** The settings routes behind a stand-in for the sign-in guard: the owner (a session token) by default, `actor` when given, nobody for null. */
 function routes(h: Awaited<ReturnType<typeof setup>>, actor?: Actor | null) {
   const app = new Hono<{ Variables: { token: string; actor: Actor } }>();

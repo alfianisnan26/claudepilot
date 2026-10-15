@@ -190,6 +190,19 @@ export class AgentEnvPolicy implements FragmentProvider {
     return { workspaceId, state, values, appliedAt };
   }
 
+  /**
+   * The workspaces the policy drop-in (and with it the rule-file guard) landed in, for the guard's outbox pull (T-404):
+   * not every known workspace; `isLive` drops the removed ones (a workspace removed by a path that did not forget it).
+   */
+  guardedWorkspaces(isLive: (workspaceId: string) => boolean = () => true): string[] {
+    try {
+      const rows = (this.store.db?.prepare('SELECT workspace_id FROM policy_env_state').all() ?? []) as { workspace_id: string }[];
+      return rows.map((r) => r.workspace_id).filter((id) => isLive(id));
+    } catch {
+      return [];
+    }
+  }
+
   /** A workspace was removed: nothing to remember about it. */
   forgetWorkspace(workspaceId: string): void {
     if (!this.store.writable) return;
