@@ -11,10 +11,11 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
 
 ## IN FLIGHT
 - Integration 7f86942 pushed: T-378 S1 + coordinator cc4be7a (gate GREEN 7f86942-e17c).
-- Lead proof Job: T-376 S2 chat-paging on 6685059 --against 8a5cf70 (job-out/t376-proof.log). QA PASS WITH GAPS 3424.
-- Worker f646e77b (implementer, sonnet, satria): T-460 on dev/t-460-1 (11c1f00) in dev-t-460-1.
-- Worker a8412b0f (implementer, opus, alfian.isnan): T-450 S1a on dev/t-450-1 (11c1f00) in dev-t-450-1.
-- Worker af18baca (qa-verifier, sonnet, fadlilah, main folder, read-only): idle, kept for T-460 / T-450 QA.
+- Integration 2c500bd pushed: T-376 S2 merge + pack (gate GREEN 2c500bd-daec; proof structural only, gaps -> S3, comment 3464).
+- T-460 e9834bc QA round 2 PASS (3535, Jobs 82567c2a + 4db696d8 proof): merge with T-450 S1a after gate 2c500bd; f646e77b ended; fee31b8a (qa, sonnet) kept for S1b QA.
+- T-449 UX: db9cedfd NOT VERIFIED (3540: main folder dist stale, job-run refused there). Re-run as a Job by cf7d2801 (ux-checker, sonnet, satria) in worktree qa/t-449-ux with a harness tools/qa/attribution-tab.mjs.
+- T-450 S1a 858c4c5 QA PASS WITH GAPS (3513): merge after gate 2c500bd is green (decision 3514). Verifier af18baca and implementer a8412b0f ended.
+- T-450 S1b: 3ffbc3e1 (implementer, opus, alfian.isnan) on dev/t-450-2 (base dev/t-450-1), with the S1a gaps in scope.
 
 ## STATE PER TICKET
 - T-404: third blind review gave NO verdict (declined probes, design point -> T-451); fixes verified 3325; open until deployed.
@@ -27,6 +28,8 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
 - Next batch (2026-10-16): T-427, T-404, T-376 S2 if they pass.
 
 ## DECISIONS (binding)
+- 05:50 UX checks run as cluster Jobs from a fresh worktree (build + with-portal in the Job), never from the main folder: its dist is stale and job-run is refused there.
+- 05:30 Ended a8412b0f (T-450 S1a done) so T-460's re-verify could start at once within the 3-worker cap; af18baca stays on T-450 QA.
 - 05:04 T-459 closed: the coordinator fixed the trust scan (cc4be7a; next deploy rebuilds the workspace image) and the 5 stale
   spares were removed (job-out archived to job-out/archive/). New slices get FRESH worktrees from integration, never old spares.
 - 05:04 claude auto put an opus worker on fadlilah (projected 91 % at the 06:40 reset): ended it, respawned on alfian.isnan by
@@ -47,6 +50,8 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
   T-433's persona-wall question (comment 2984).
 
 ## NEXT (in order, as slots free)
+0. Merge T-450 S1a (858c4c5) + T-460 (e9834bc), pack, gate, push. Then T-472 (high, cost: context-only deliveries never restart
+   sessions; debounce; path-scope the pack) right after T-449/T-450 S1, before new features (coordinator 05:3x; pool off since 05:29).
 1. Deploy watch; then merge T-427 (QA 3126) + T-413 (dev/t-413-2 28f1a00, QA 3138; gaps -> T-448), pack, gate.
 2. Coordinator order (04:16): T-449 (spawn takes ticket; small) -> T-450 S1 (crew scorecard server + MCP tool, opus implementer,
    sonnet QA) -> T-450 S2 (page, phone first). Worker titles start with "T-n" until T-449 ships.
@@ -55,5 +60,5 @@ Older log: `orchestrator-log-2026-10-14.md`. Hand-overs: ab99b45 (a8393f6b), bb5
    T-386, T-409, T-402, T-398, T-399. 7. T-370 HOLD, then T-371..T-374, T-363. 8. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356,
    T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149.
 
-LESSONS: never chain a commit after a merge that may conflict; dontAsk workers cannot Read /tmp (job-out/ inside the worktree) and cannot
+LESSONS: a gate-done notification always needs action (read the verdict, push or fix), never "no response"; never chain a commit after a merge that may conflict; dontAsk workers cannot Read /tmp (job-out/ inside the worktree) and cannot
 git merge; end job-run commands with the test's own rc; FULL hashes with job-run; gate before every integration push.

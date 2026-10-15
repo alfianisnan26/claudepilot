@@ -96,7 +96,20 @@ export function TurnDone({ usage, onOpen }: { usage: TurnUsage; onOpen?: () => v
 }
 
 /** Usage (⋯ → Usage): the session's totals, then each turn's time, tokens and cost. */
-export function UsageDialog({ open, onClose, events, session }: { open: boolean; onClose: () => void; events: ChatEvent[]; session: ChatSession | null }) {
+export function UsageDialog({
+  open,
+  onClose,
+  events,
+  partial = false,
+  session,
+}: {
+  open: boolean;
+  onClose: () => void;
+  events: ChatEvent[];
+  /** The transcript holds its newest pages only (T-376): the figures count the turns held, and say so. */
+  partial?: boolean;
+  session: ChatSession | null;
+}) {
   const turns = useMemo(() => turnUsage(events), [events]);
   const known = (pick: (u: TurnUsage) => number | null) => turns.reduce((n, u) => n + (pick(u) ?? 0), 0);
   const cost = known((u) => u.costUsd);
@@ -132,6 +145,7 @@ export function UsageDialog({ open, onClose, events, session }: { open: boolean;
       }
       size="sm"
     >
+      {partial && <p className="mb-3 text-[12.5px] text-muted">Loaded turns only. Scroll up in the chat to load earlier ones.</p>}
       <StatGrid cols={2}>
         <StatTile label="Cost" value={formatUsd(cost)} size="sm" />
         <StatTile label="Turns" value={String(turns.length)} size="sm" />

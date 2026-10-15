@@ -25,6 +25,16 @@ export type Item =
 
 export const rowSeq = (r: TranscriptRow): number => (r.type === 'tool' ? r.call.seq : r.type === 'group' ? r.tools[0]!.call.seq : r.event.seq);
 
+/** A row's last seq: a run of calls by its latest call. */
+const rowLastSeq = (r: TranscriptRow): number => (r.type === 'group' ? r.tools[r.tools.length - 1]!.call.seq : rowSeq(r));
+
+/**
+ * What the transcript anchors an item by while an older page goes in above (T-376, scrollAnchor.ts): its last seq. Its key is its first
+ * seq, which changes when older rows join a turn that started before the page held; its last one does not.
+ */
+export const anchorSeq = (it: Item): number =>
+  it.kind === 'done' ? it.result.seq : it.kind === 'activity' ? rowLastSeq(it.rows[it.rows.length - 1]!) : rowLastSeq(it.row);
+
 const headOf = (r: TranscriptRow): ChatEvent => (r.type === 'tool' ? r.call : r.type === 'group' ? r.tools[0]!.call : r.event);
 
 /** The Task call that started the sub-agent a row came from; null for the main agent's own rows. */
