@@ -3,6 +3,7 @@
 Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: commit ab99b45.
 
 ## DONE
+- 02:44 DEPLOY run #32 rmv8xqej06e545e started on integration 721420f (images=portal, gate=true): urgent for the coordinator's 8ae4fb2 (open agent ticket cap a setting, default 600; it blocked Konfersi filing findings). Carries T-348, T-315 s1, T-330/T-331/T-272, T-349, T-352, T-321, T-376 S1, T-400. Third portal deploy of the day (run 31, the coordinator's hand release -2, this): the cap. After it: the coordinator checks ticket_create for a worker; owner checks nothing (D-62).
 - 02:37 integration cb48b49 PUSHED (origin + pilot): T-400 (gate claudepilot-gate-575a48a-b052 GREEN, server suite 487 s) CLOSED.
 - 02:3x integration 6166d2e PUSHED (origin + pilot): T-321 (CLOSED) and T-376 S1 (full gate claudepilot-gate-6166d2e GREEN, server suite 405 s).
 - 02:16 integration c1aa862 PUSHED (origin + pilot): T-349 and T-352 (full gate claudepilot-gate-06e7564-e0ed GREEN: typecheck 39 s, web build 24 s, server suite 379 s); both CLOSED with evidence. T-400 verified (PASS WITH GAPS, gaps T-409), merged locally 3f0ab24.
@@ -16,7 +17,7 @@ Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: c
 - T-369 (urgent): fix done and run (comment 2568: web 576/576, flip proof, session-crew 5/5 on ff0088d). Needs: the browser re-check of item 4 (one ux-checker run on T-375's branch covers both), then merge.
 - T-378 (high): S1 DONE 9834ff7 (comment 2631): FAIL proof on the owner's cases (density 16 failing, crew-tree 12 failing pre-fix; crew-tree 0 failing on T-369). Merge S1 with the next batch; S2 transcript-perf + long-lists next.
 - T-417 (high): worker d8dfb37f (opus, hasyim) in dev-t-336-1 on dev/t-417-1 (estimate + Bypass decision comment 2617); blind reviewer before merge.
-- T-404 (high, D-60 guard hook): worker 87a9f89b (opus, rossi) in dev-t-352-1 on dev/t-404-1 (estimate comment 2512).
+- T-404 (high, D-60 guard hook): built (comment 2750: guard 11/11, typecheck, 136 pass). Blind reviewer worker da58543e (opus, hasyim) in dev-t-352-1. Then real QA job after a deploy; persona/skill text proposals corrected for D-62.
 - T-376 (high): S1 on integration; S2 web done 1fa258c on dev/t-376-2 (comment 2580: web 589/589, typecheck): needs a ux-checker and the S3 perf-tester, then merge. dev-t-336-1 is a free trusted spare again.
 - T-375 (high): worker 07cef3b0 (opus, hasyim) in dev-t-333-1 (switched to dev/t-375-1; the untrusted dev-t-375-1 worktree was clean and pushed, removed by the lead) merges T-369's fix (SessionRow.tsx conflict) and runs T-378's density check. Then ONE ux-checker for T-369 item 4 + T-375.
 - MERGE QUEUE: next batch = T-378 S1 (9834ff7, qa tools only) + T-369/T-375 after the ux-check; T-376 S2 after its ux-check and S3.
