@@ -26,7 +26,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-490 (4166: M, ~2.5 h): S1 DONE 18dadd3 (4213; server 1000/1000 Job 63f3ddd1; web 626/626 b00ac52f; typecheck 9453d4fb on 3b0070c;
   proof 93946bb7; migration 777, no clash with T-486's 782); 80940188 ended. Blind review d74ad0bc PASS WITH CONDITIONS (4227; major:
   `model:'default'` passes the gate); ended. Decision 4229: allow-list (only sonnet/haiku without why); minors -> follow-up ticket.
-  Fixer bbe851a2 (sonnet, two.claude) on dev/t-490-2 from 18dadd3. Then QA (sonnet). Kit SKILL.md:63 wording -> T-509 proposal.
+  Fixer bbe851a2 DONE c8c8197 (4259; chat+personas+portalmcp 821/821 Job ab99d109; typecheck 36a333e4; proof d0c6fb7f); lead read the
+  diff (BELOW_OPUS_MODEL allow-list, agents.ts ~199-226); ended. QA 429def59 (sonnet, two.claude) on qa/t-490-1 at c8c8197. Minors -> T-520.
 - T-472: live check NOT VERIFIED (4157, 4168): needs a verifier WITH portal_status/session_context/attention_list (check its tools first).
 - T-435, T-397, T-491: merged; close after the next deploy (live checks per ticket).
 
@@ -61,9 +62,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   then with `--apply`.
 
 ## NEXT (in order, as slots free)
-1. T-483 gate c0837f7 -> ff integration, push, deploy (gate on).
-3. T-486 QA after the fixer; merge. 4. T-490 blind review + QA. 5. T-472 live check (verifier with portal tools).
-6. Deploy (gate on) after T-483; live checks for T-435, T-397, T-491, T-483.
+1. Deploy #36 (gate on) -> live checks T-435, T-397, T-491, T-483 (+ T-472) by a verifier WITH portal tools; close.
+2. T-486 lead reads df6dc0c7's diff; merge. 3. T-490 merge on QA PASS. 4. T-515 QA + ux-checker. 5. Remove wip-t483-premerge.
 7. T-450 S3, T-416, T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399,
    T-370 HOLD, T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512.
 
