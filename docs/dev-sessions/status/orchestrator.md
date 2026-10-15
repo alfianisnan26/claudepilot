@@ -13,11 +13,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   Old Backend 4b4edaf8 ended: T-600 BE 1a95fb03 (5756) + T-597 S1b 75656845 (5849) DONE -> QA Perf.
 - T-631 review CHANGES 5850 -> lead 5853: absolute-path entry (a) for the coordinator; F2 small slice; F1 also on job-run.sh -> T-635 (high).
 - T-558 S1b DONE 728b58d0 (5900; 191bd6f1 ended) -> QA Perf queue. IMPL T-631 F2 2b82636c (ticket/T-631-f2-symlink).
-- NEXT FREE SLOTS: 3) T-638 flakes. BATCH 3: T-576, then QA-passed of T-591/T-597/T-600/T-623.
+- NEXT FREE SLOTS: 1) T-578 blind review (opus). 2) T-638 flakes. BATCH 4: QA-passed of T-591/T-597/T-600/T-623/T-416.
 - T-416 S1c DONE 7af4b269 (0e5bcf50 ended; prior QA FAIL 5792 -> 5808) -> QA ec59993c -> blind review (opus) -> gate -> merge.
 - T-623 S1b DONE 784926f (5855; 6d431441 ended; lead read diff: stdin not argv, Memory emptyDir 0400, no values in audit/hash, no RBAC) -> QA Perf queue.
-- BE INFRA respawned e92c5ba3 (ticket/T-578-gate-reuse) on T-578 S1 (reuse green gate of same tree + per-file progress): a GATE change,
-  merge only on a person's ack + blind review. T-578 claim refused by id (T-634): worker on it by spawn.
+- T-578 S1 DONE 51f6c153 (6010; e92c5ba3 ended): a GATE change -> blind review (opus, why: gate) at next free slot -> merge only on a person's ack.
+- BE INFRA respawned 88f36411 (ticket/T-426-s1e from T-426-s1d) on T-426 S1e (5995).
 - QA PERF 7e4879c7 (lane/cp-qa-perf) queue (19:59): T-623 S1b -> T-636 -> T-591 S1d -> T-600 BE/T-597 (if not done) -> T-325 S1 -> T-558 S1b.
 - T-576 phone check (390/1280 on the real build) still open; kit 44 px -> T-639. Closes on that evidence (5991).
 - T-600 FE S1c DONE d1b31305 (5954; fa9d3d56 ended) -> QA UI respawned de862414 on qa/T-600-ui-r4 81684f78 (r3 + FE head, lead merge)
