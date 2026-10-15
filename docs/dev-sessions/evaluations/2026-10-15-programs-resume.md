@@ -76,3 +76,28 @@ What is still wrong, and the defaults now in force (D-63): opus where sonnet doe
 security reviews and large slices); spawn churn instead of reusing function sessions; Event's lead implementing; leads copying worker reports
 because workers have no ticket tools in ClaudePilot and Konfersi (T-433); leads growing 200k to 300k context an hour (T-423). Next measurement
 at about 05:30 UTC, same table.
+
+## Cost spikes (owner's request, 04:00 UTC)
+
+Sources: the portal's spike detector (`/api/usage-spend/spikes?range=1d`: 37 events, 29 outliers, 8 rate spikes; an "outlier" is one agent
+TURN, which can hold dozens of model requests) and the raw Claude Code tapes of the spiking sessions in the pod (per request: input, cache
+read, cache write, output; weights input 1, cache read 0.1, cache write 1.25 or 2, output 5). MEASURED.
+
+| Session | Spike | Requests | Context p50 / max | Cost share: cache read / write / output |
+| --- | --- | --- | --- | --- |
+| old ClaudePilot lead 619018ca (fable, yesterday) | one turn 107 USD, one 80 USD | 191 | 213k / 363k | 71 / 13 / 16 percent |
+| old Event lead e1235d03 (yesterday) | one turn 53 USD | 121 | 105k / 191k | 64 / 18 / 17 |
+| konfersi-qa 1448a718 (sonnet, reused across tickets) | 36 USD in 15 min; turns of 16 and 18 USD | 499 | **397k / 967k** | **85** / 10 / 6 |
+| konfersi-core 30f199b2 | one turn 19 USD | 290 | 277k / 484k | 81 / 10 / 9 |
+| Konfersi lead b317c7ab | turns of 14 and 10 USD | 302 | 272k / 479k | 81 / 9 / 10 |
+| Event lead 88591c13 | | 222 | 259k / 387k | 76 / 11 / 13 |
+
+No cache misses: every session writes its cache with the 1-hour TTL, and no request rewrote more than 100k. The cost is the size of the
+context times the number of requests: cache reads are 64 to 85 percent of it. With 1M-token models Claude Code compacts only near 1M, so a
+long-lived or reused session keeps growing (a QA worker reused across tickets reached 967k).
+
+Done: the agent policy sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000` for every Claude (setting `agents.autoCompactWindow`, integration
+d354977, live after the next deploy and each Claude's next start); until then any worker over 200k context is replaced after its ticket,
+QA briefs stay narrow (the diff, the criteria, logs through grep or tail). Expected effect (ESTIMATE): requests of the big sessions read
+about half to a third of today's context, so their cost per request falls by the same factor. Measure after the deploy: context p50 and
+cost per request of workers and leads, the spike count per day.
