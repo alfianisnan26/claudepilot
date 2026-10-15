@@ -17,7 +17,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-548 S1 9b822ba + T-591 S1 bf932c3: blind review 9651c9fa (ended) PASS W/ COND both (5512/5513; sev 2 vault authz on T-591). Decisions
   5514/5515: S1b fixes. IMPL 4ba6c5db (impl-t591-s1b, sonnet, ticket/T-591-s1b-review). T-548 S1b = one-off sonnet at next free slot.
   LANE 5f8f392b "ClaudePilot Backend" (lane-backend, sonnet, ticket/T-546-crew-digest): T-546 DONE 10b22e0 (5535; mutation caught) -> QA Perf.
-  Now PLANS T-600 BE; builds after the lead merges FE 7d19c94 into its branch (T-595 workaround). Queue: T-597 -> T-325 -> T-591 S2. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
+  PLANNED T-600 BE 5540, T-597 5546, T-325 5547 (S1+S2 only, 5549). Builds after the lead merges FE 7d19c94 into its branch (T-595 workaround). LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
   ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); T-556 PLANNED 5497 (one "Upstream" dialog, 4 fields: no upstream UI exists);
   builds after T-486 merges + T-595. QA UI then T-576 ux. 5 of 5: QA Perf, Backend, Frontend, QA UI, impl-t591-s1b.
   Jobs: each agent starts its own (15:29). Still to place: T-558 QA (e652c44, 5052). No prettier/eslint in Jobs (T-612).
@@ -64,7 +64,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - For the coordinator, NOT the owner (not tagged owner-checklist): T-476 lead may START a deploy whose release waits for a person
   (3813); T-491 Event token scope until T-426 (3965); deploys #35/#36/#37 production approval showed "auto", not changed by an agent;
   T-509 kit republish; T-594 alfian.isnan signed out; T-525 session_get + scribe tools + QA UI browser tools (5505); T-595 lane Bash (5443);
-  T-591 #40 backfill after deploy (5511); T-527 finding 4 (owner triggers tagging owner-checklist).
+  T-591 #40 backfill after deploy (5511); T-325 S3 push door vs charter "only the main chat merges integration" + its token (5549); T-527 finding 4 (owner triggers tagging owner-checklist).
 
 ## NEXT (in order, as slots free)
 1. Merges: T-401 (ack) -> T-426 -> T-379 -> T-486; deploys are the coordinator's. 2. T-416 S1b QA -> blind review (opus) -> merge; then S2.
@@ -76,4 +76,4 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
    T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2.
 
 LESSONS: node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait, and Bash only in their spawn worktree (new branch = new worker); whole
-test folders; trailers in one block; FULL hashes; gate before every push; status via Edit/Write ONLY (broken twice 2026-10-15: python, sed -i); ancestor check before ff.
+test folders; cite a comment id only after the post returns it (wrong twice); trailers in one block; FULL hashes; gate before every push; status via Edit/Write ONLY (broken twice 2026-10-15: python, sed -i); ancestor check before ff.
