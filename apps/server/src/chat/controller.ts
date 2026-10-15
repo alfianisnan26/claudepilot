@@ -1767,8 +1767,8 @@ export class ChatController {
         }
         return;
       }
-      if (this.#busy.get(id) === held) this.#busy.delete(id);
-      // T-416 review: the memory is checked (and held) again when the slot comes, which can be many minutes after the create.
+      // T-416 review: the memory is checked (and held) again when the slot comes, which can be many minutes after the create. `#busy` is
+      // still held through the check, so a send meanwhile waits for this start instead of running a wake check of its own (review 6310).
       try {
         const now = this.#chat.row(id) ?? row;
         await this.#memoryBudget(now.workspace_id, now, now.started_by ?? 'portal', id, 'queued');
@@ -1781,6 +1781,7 @@ export class ChatController {
         }
         return;
       }
+      if (this.#busy.get(id) === held) this.#busy.delete(id); // the launch holds `#busy` itself from here
       try {
         await this.#startProcess(id, { checked }).catch(() => undefined);
       } finally {
@@ -3038,11 +3039,18 @@ export class ChatController {
     const agents = this.#chat.tasks(sessionId).filter((t) => t.status === 'running').length;
     // A deliberate restart keeps Bypass (the person confirmed it for this chat), while the policy allows it and the session can.
     const keep = row.mode === 'bypassPermissions' && this.#keepsBypass(row);
-    await this.#stopForRestart(sessionId, 'The session restarted.', keep);
-    this.#queuedRestart.delete(sessionId); // whatever waited for the turn's end is done by this one
-    // `--resume` on a new segment; its settings are put back. No memory check (T-416 review): it needs no more than the process it stopped,
-    // and a refusal here would leave it stopped, a Bypass lead in the start mode.
-    await this.#live(sessionId, true, false);
+    // T-416: only a restart of a running process skips the memory check (it needs no more than the process it stops). One that is asleep
+    // or gone is a wake: checked and held as one, before anything is touched, so a refusal leaves it (and its mode) as it was (review 6310).
+    const wake = row.process !== 'live';
+    if (wake) await this.#memoryBudget(row.workspace_id, row, o.actor, sessionId, 'restart');
+    try {
+      await this.#stopForRestart(sessionId, 'The session restarted.', keep);
+      this.#queuedRestart.delete(sessionId); // whatever waited for the turn's end is done by this one
+      // `--resume` on a new segment; its settings are put back. The check (if any) was made above.
+      await this.#live(sessionId, true, false);
+    } finally {
+      if (wake) this.#releaseMemory(sessionId); // `#live` let go already when it launched; this covers a throw or a launch it skipped
+    }
     this.#append(sessionId, { kind: 'system', text: 'Restarted: MCP reconnected', restart: true });
     if (keep) await this.#keepBypass(sessionId, 'restart');
     const now = this.#chat.row(sessionId);
@@ -3750,7 +3758,7 @@ export class ChatController {
    * headroom free: its estimate (one more per Agent-tool sub-agent it runs) plus one per launch there that the reading can't see yet (a slot
    * granted or a launch in flight). An unavailable reading, or no `memory` installed, never blocks. The refusal is on the record.
    */
-  async #memoryBudget(workspaceId: string, waking: ChatSessionRow | null, actor: string, reserveFor: string | null = null, at?: 'queued'): Promise<void> {
+  async #memoryBudget(workspaceId: string, waking: ChatSessionRow | null, actor: string, reserveFor: string | null = null, at?: 'queued' | 'restart'): Promise<void> {
     if (!this.memory) return;
     const reading = await this.memory.reading(workspaceId);
     if (!reading) return;
