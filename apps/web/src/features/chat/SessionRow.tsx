@@ -115,19 +115,15 @@ const BAR: Record<'neutral' | 'warn' | 'critical', string> = { neutral: 'bg-ink-
 const PCT: Record<'neutral' | 'warn' | 'critical', string> = { neutral: '', warn: 'text-amber-700 dark:text-amber-400', critical: 'text-danger' };
 
 /**
- * The Claude a session runs on, then its mini quota bar (28 x 4 px): the 5-hour window's percent used, neutral, amber from 70, red from 90;
- * grey with no number when the reading is unavailable; no bar for a pool or a key. The words (5-hour and week, resets, the reading's age)
+ * The mini quota bar (28 x 4 px) of the Claude a session runs on, then its name (capped; a short line cuts the name, never the bar): the
+ * 5-hour window's percent used, neutral, amber from 70, red from 90; grey with no number when the reading is unavailable; no bar for a pool
+ * or a key. The words (5-hour and week, resets, the reading's age)
  * are the tip and the screen reader's text: the row is one link, and a button inside a link is not allowed (nor would a tap stay on it).
  */
 function ClaudeQuota({ claude }: { claude: NonNullable<RowMeta['claude']> }) {
   const m: QuotaMeter = claude.meter;
   return (
     <span data-row-claude="" title={m.title} className="inline-flex items-center gap-1">
-      {claude.name && (
-        <span aria-hidden="true" className="max-w-16 min-w-0 truncate">
-          {claude.name}
-        </span>
-      )}
       {m.kind !== 'no_limits' && (
         <span
           aria-hidden="true"
@@ -140,6 +136,11 @@ function ClaudeQuota({ claude }: { claude: NonNullable<RowMeta['claude']> }) {
       {m.kind === 'plan' && (
         <span aria-hidden="true" className={cn('shrink-0 tabular-nums', PCT[m.tone])}>
           {Math.round(m.usedPct)}%
+        </span>
+      )}
+      {claude.name && (
+        <span aria-hidden="true" className="max-w-16 min-w-0 truncate">
+          {claude.name}
         </span>
       )}
       <span className="sr-only">{m.title}</span>
@@ -157,7 +158,7 @@ const BYPASS_DOT = (
 /**
  * One session in the list (T-375): two lines at 390 px, a third only when it carries something.
  *   (o) Konfersi: migration              [crew 3]   2m  ⋯
- *       ● Working · Opus 5.5 · satria ▬▬── 62% · ≈ $10.39
+ *       ● Working · Opus 5.5 · ▬▬── 62% satria · ≈ $10.39
  * The icon is the state's ring (amber needs you, accent working, a line otherwise) around the session's kind (a role, asleep, removed, a
  * chat), or the persona's avatar when the rows on screen have more than one persona; Bypass is a red shield dot on its corner (a tip says
  * it; the word too from 640 px). Line one: the title, the pin, the role (an icon on a phone, hidden when the title already starts with it),
