@@ -62,7 +62,9 @@ test('unavailable is a state with its reason, never 0 or a guess', () => {
 test('breaches: the count of breached targets, the state is the worst', () => {
   const b = (ts: CrewTarget[]) => by(program({ targets: ts }), 'breaches');
   assert.deepEqual([b([target('ok')]).state, b([target('ok')]).value], ['ok', '0']);
-  assert.equal(b([target('ok'), target('warn')]).state, 'warn');
+  const warned = b([target('ok'), target('warn'), target('warn', 'owner_queue')]);
+  assert.deepEqual([warned.state, warned.value], ['warn', '2 warn']);
+  assert.equal(b([target('breach'), target('warn', 'owner_queue')]).value, '1');
   const bad = b([target('breach'), target('breach', 'owner_queue'), target('ok', 'lead_subagents')]);
   assert.deepEqual([bad.state, bad.value], ['breach', '2']);
   const none = b([target('unavailable'), target('unavailable', 'owner_queue')]);

@@ -85,7 +85,7 @@ const clickLabel = (b, text) =>
   b.eval(`(() => { const e = [...document.querySelectorAll('button, [role=tab], [role=radio], label')].find((x) => (x.innerText || '').trim() === ${JSON.stringify(text)}); if (!e) return false; e.click(); return true; })()`);
 // The Details button reads "Details" plus a +/- glyph: match its start.
 const clickDetails = (b) =>
-  b.eval(`(() => { const e = [...document.querySelectorAll('button[aria-expanded]')].find((x) => /^(Details|Hide)/.test((x.innerText || '').trim())); if (!e) return false; e.click(); return true; })()`);
+  b.eval(`(() => { const e = [...document.querySelectorAll('button[aria-expanded]')].find((x) => /^(Show|Hide) details/.test(x.getAttribute('aria-label') || '')); if (!e) return false; e.click(); return true; })()`);
 const noScroll =(s) => s.docScroll <= s.docClient + 1 && s.rootScroll <= s.rootClient + 1;
 
 const cookie = await login();
