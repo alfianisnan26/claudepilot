@@ -14,7 +14,7 @@ import { runToEnd } from './workspaces/runToEnd.js';
 import { memoryAttentionSource, WorkspaceMemory } from './chat/memory.js';
 import { Reconciler, type FragmentProvider } from './delivery/reconciler.js';
 import { References } from './pools/references.js';
-import { exposedSecretValues } from './secrets/exposed.js';
+import { deliveredSecretValue, exposedSecretValues } from './secrets/exposed.js';
 import { SecretsKind } from './secrets/kind.js';
 import { registerMcpSets } from './mcp/index.js';
 import { SkillsModule } from './skills/module.js';
@@ -47,6 +47,7 @@ import { internalUrlResolver } from './portalmcp/internalUrl.js';
 import { OrphanSweep } from './tickets/orphans.js';
 import { Tickets } from './tickets/service.js';
 import { CiService } from './ci/service.js';
+import { upstreamHostsFrom } from './ci/settings.js';
 import { WorkspacesCiHost } from './ci/host.js';
 import { registerCiTools } from './ci/portalTools.js';
 import { valueRedactors } from './ci/values.js';
@@ -71,6 +72,7 @@ import { DockerRuntime } from './workspaces/docker.js';
 import { attachShell, cookie } from './workspaces/shell.js';
 import { ChatController } from './chat/controller.js';
 import { BYPASS_SETTING } from './chat/bypass.js';
+import { LEAD_RULES_SETTING } from './chat/leadRules.js';
 import { AUTO_TRUST_SETTING } from './chat/trust.js';
 import { AGENT_CHILDREN_SETTING, AGENT_DEPTH_SETTING, AGENT_MESSAGES_SETTING, AGENT_SPAWNS_SETTING } from './chat/agents.js';
 import { BUDGET_SETTING, CAP_TOTAL_SETTING, CAP_WORKSPACE_SETTING } from './chat/caps.js';
@@ -153,8 +155,15 @@ if (ws.local.enabled && !PLAIN_NAME.test(ws.local.name)) {
   ws.local.name = 'local';
 }
 if (ws.local.enabled) runtimes.push(new LocalRuntime({ name: ws.local.name, state: new JsonFile(`${config.paths.data}/local-workspace.json`, {}) }));
-// Every workspace's stable id, its `<target>/<name>` alias and its stored runtime name (T-42), kept in the store.
-const workspaces = new Workspaces(runtimes, new JsonFile(`${config.paths.data}/pending-creates.json`, []), {}, new WorkspaceIdentities(store));
+// Every workspace's stable id, its `<target>/<name>` alias and its stored runtime name (T-42), kept in the store. Each target's last good
+// list (T-515) is kept beside the pending creates, so a portal restarted while a target's API is down still lists its workspaces.
+const workspaces = new Workspaces(
+  runtimes,
+  new JsonFile(`${config.paths.data}/pending-creates.json`, []),
+  {},
+  new WorkspaceIdentities(store),
+  new JsonFile(`${config.paths.data}/last-known-workspaces.json`, {}),
+);
 
 // Chat sessions: one controller shared by the REST routes and the chat socket.
 const chatController = new ChatController(store, workspaces);
@@ -223,6 +232,8 @@ poolService.reconciler = reconciler;
 settingsModule.reconciler = reconciler;
 // Bypass in chat (chat PRD FR20): the interim policy switch, and what is true of a workspace for the confirmation.
 chatController.bypassAllowed = () => settingsModule.settings.get<boolean>(BYPASS_SETTING);
+// T-561: crew leads launch with the lead rules (a hook in their --settings) while the policy is on; it applies at each lead's next start.
+chatController.leadRulesOn = () => settingsModule.settings.get<boolean>(LEAD_RULES_SETTING);
 chatController.autoTrustRules = () => settingsModule.settings.get<boolean>(AUTO_TRUST_SETTING);
 // How many sessions may be awake (chat PRD FR39): per workspace and in total, from the shared settings.
 chatController.liveCaps = () => ({ perWorkspace: settingsModule.settings.get<number>(CAP_WORKSPACE_SETTING), total: settingsModule.settings.get<number>(CAP_TOTAL_SETTING) });
@@ -331,7 +342,10 @@ const live = new LiveHub(
 );
 // Needs you (docs/prd/attention.md): what waits for a person, read from each module's own state. The topics of the modules it reads
 // (pools: MCP catalog and skills; tickets; CI) make it look again; the chat's events and a minute's tick are chained further down.
-const attention = createAttention(store, { publish: () => live.publish('attention') });
+const attention = createAttention(store, {
+  publish: () => live.publish('attention'),
+  agentAssignUserTags: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.agentAssignUserTags),
+});
 // T-416 (D-61): each workspace's memory (anon + active_file against memory.max), read through its runtime: the budget of a start or a
 // wake, and the 85 percent alert (a Needs you item, so a notification) on the chat's liveness round.
 const workspaceMemory = new WorkspaceMemory({
@@ -427,6 +441,9 @@ tickets.start();
 const orphanSweep = new OrphanSweep(tickets);
 orphanSweep.start();
 chatController.ticketExists = (id) => tickets.exists(id);
+// T-546: the crew digest's window is a setting, and each worker's line points to its latest ticket comment.
+chatController.crewSettings = (key) => settingsModule.settings.get(key);
+chatController.crewTicketOf = (sessionId) => tickets.latestCommentOf(sessionId);
 // T-270: a continuation takes its predecessors' tickets in the transaction that creates it.
 chatController.continueTickets = (to, from) => tickets.continueFrom(to, from);
 // T-136: recover in place reads its cap and pause from the settings; past the cap, ONE watchdog ticket says so (facts, no transcript).
@@ -472,6 +489,12 @@ const ci = new CiService(store, new WorkspacesCiHost(workspaces), {
   redactFor: ciValues.redactFor,
   streamFor: ciValues.streamFor,
   secrets: (id, name) => secretName(references, id, name),
+  // T-557: a runner taking this workspace's run gets the secrets it names as a lease, in memory and on stdin only.
+  // T-486 S2: the same value checks the upstream webhook's signature (the remote's hook secret), in memory only. One rule, one helper:
+  // both read a SECRET (never a variable) the workspace's sets deliver, and names are unique across a workspace's sets (decision on T-486).
+  secretValue: (id, name) => deliveredSecretValue(poolService, id, name),
+  // T-486 S2: the upstream host allow-list setting, read at each use.
+  upstreamHosts: upstreamHostsFrom(settingsModule.settings),
   // Deployment approvals and environment protection changes (FR41) go to the platform audit, created further down.
   audit: (e) => platform.audit.record(e),
 });
@@ -530,7 +553,7 @@ chatController.sendGate = (info) => usageSpend.gate(info);
 registerUsageSpendTools(usageSpend);
 // The efficiency lab (T-287, claude-usage PRD §28): per-slice counts from every accepted stream line, experiments, outcomes from the
 // tickets' timelines, the read routes and Portal MCP tools (lab/authz.ts), and retention of the request rows (14 days, once a day).
-const lab = new Lab({ store, log: (m) => console.warn(m) });
+const lab = new Lab({ store, log: (m) => console.warn(m), paceSource: async () => (await claudeUsage.report()).claudes });
 chatController.onStreamLine = (sessionId, raw) => lab.line(sessionId, raw);
 registerLabTools(lab);
 lab.start();

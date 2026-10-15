@@ -15,8 +15,14 @@ The operating kit's persona (T-132 item 1). `pilot-way.json` is the exact body o
 | `explorer` | Read-only search; answers with `path:line`. | haiku, low, 15 turns | Read, Grep, Glob | Finding where something is or whether it exists, before planning or briefing. |
 | `ux-checker` | Real-browser UI check: phone width first, then desktop, light and dark, every state, 44 px targets, screenshots. | sonnet, medium, 60 turns | All but Edit, NotebookEdit, SendMessage | After any visible UI change, before the merge. |
 | `perf-tester` | Latency, frames, bundle size and memory against budgets and the base commit, through the job runner, medians with sources. | sonnet, medium, 60 turns | All but Edit, NotebookEdit, SendMessage | A change that may affect speed or size, or a ticket that names a budget. |
+| `lane-backend` | Long-lived build lane (D-70): APIs, data, performance, security, algorithms, logic; ticket after ticket from its lead, a worktree per ticket. | sonnet, high, 150 turns | All but `SendMessage` | Spawned once per program and kept; every backend ticket. |
+| `lane-frontend` | Long-lived build lane (D-70): pages, components, UI and UX, Lighthouse before and after. | sonnet, high, 150 turns | All but `SendMessage` | Spawned once per program and kept; every frontend ticket. |
+| `lane-qa-ui` | Long-lived QA lane (D-70): UI/UX, refinement, Lighthouse, responsiveness, journeys end to end in a real browser; keeps the browser e2e suites. Never edits product code. | sonnet, high, 100 turns | All but `NotebookEdit`, `SendMessage` | Every delivery a user can see, before the merge. Writes `<Program>/QA/<Area>.md` in the vault (D-72). |
+| `lane-qa-perf` | Long-lived QA lane (D-70): API behaviour, performance, security, load tests on the test environment; keeps those suites. Never edits product code. | sonnet, high, 100 turns | All but `NotebookEdit`, `SendMessage` | Every backend delivery, before the merge. At most two QA lanes per program. Writes `<Program>/QA/<Area>.md` with the baselines (D-72). |
 
 "All but" roles keep the inherited tools, Portal MCP tools included, because they need the CI, ticket, knowledge or browser tools. Every prompt has the same parts: inputs, steps, done criteria, never, report format, skills to load, and the charter walls in one line. The roles with a fixed tools list get `Skill` so they can load the skills their prompt names.
+
+Retired 2026-10-15: the `event-*` roles (Event left pilot, D-67) and `konfersi-web`, `konfersi-core`, `konfersi-qa`, `konfersi-qa-ui`, `konfersi-ai` and `konfersi-metocean` (replaced by the lanes, D-70; Konfersi splits its build lanes by area).
 
 ## What the instructions cover
 

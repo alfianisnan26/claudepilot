@@ -132,6 +132,14 @@ export interface ChatSession {
    * Checked at each spawn, so a change applies at once. Absent on rows from before (null).
    */
   maxWorkers?: number | null;
+  /** T-561: its starter marked it a crew lead (`CreateChatSessionRequest.lead`, kept by a continuation). Absent: not marked. */
+  lead?: boolean;
+  /**
+   * T-561: its current process was launched with the portal's lead rules (policy `sessions.leadRules` on, and it is a crew lead: marked, or
+   * it has started workers): Edit, Write and NotebookEdit are refused outside its status files, its notes folder and the scratch folder,
+   * Bypass included; Bash stays. Absent: launched without them, or not known since a portal restart.
+   */
+  leadRules?: boolean;
   /**
    * T-294: whether its Claude may start Claude Code sub-agents (the Agent tool, older name Task). False: every start of its process is
    * launched with `--disallowedTools Agent Task Workflow RemoteTrigger`, so a change applies at the next start (a Restart). On or off only: Claude Code has no count.
@@ -620,6 +628,11 @@ export interface CreateChatSessionRequest {
    * created when the folder is untrusted or the start is refused.
    */
   worktree?: ChatWorktreeRequest;
+  /**
+   * T-561: marks it a crew lead (the dev supervisor's leads). It only ever makes a session stricter: with the policy `sessions.leadRules`
+   * on, a lead launches with the lead rules (`ChatSession.leadRules`). A session that starts workers is a lead without it.
+   */
+  lead?: boolean;
 }
 
 /** The parts of a worktree a caller may choose; the portal picks the folder. */

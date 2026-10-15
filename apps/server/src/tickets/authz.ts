@@ -117,6 +117,36 @@ export function canAgentAssignUser(facts: {
   return { allow: true };
 }
 
+/* ---------- An agent puts a ticket on the owner checklist (D-62, T-527) ---------- */
+
+/** The owner's checklist tag (T-509): a ticket carrying it is listed on Needs you whatever its assignee. */
+export const OWNER_CHECKLIST_TAG = 'owner-checklist';
+
+/** The refusal an agent reads when it tags a ticket owner-checklist without an allowed tag: the same D-62 path as {@link D62_ASSIGN_REFUSAL}. */
+export const D62_CHECKLIST_REFUSAL =
+  'D-62: agents do not put a ticket on the owner checklist (tag owner-checklist) on their own. Decide by the written default and note it on the ticket; a production step goes on the owner checklist with the tag production as well; a rule change goes through a blind reviewer and the coordinator.';
+
+export type AgentChecklistDecision = { allow: true } | { allow: false; why: 'checklist_without_allowed_tag' };
+
+/**
+ * THE rule for an agent adding `owner-checklist` (FR9d, D-62, T-527), the tickets module's `can()` for it, next to {@link canAgentAssignUser}:
+ * the tag puts a ticket in the owner's Needs you without an assignee, so it needs the same allowed tag (`tickets.agentAssignUserTags`,
+ * default `production`). Only an agent's own token is judged; a person, the portal, an admin's token and a trigger are never refused.
+ * Only ADDING the tag is judged: removing it is always allowed, and a ticket that already carries it is not judged again.
+ * Pure: the service gathers the facts, refuses with {@link D62_CHECKLIST_REFUSAL} and writes the audit row.
+ */
+export function canAgentTagChecklist(facts: {
+  callerKind: 'ui' | 'system' | 'token' | 'agent' | 'trigger';
+  tagsBefore: readonly string[];
+  tagsAfter: readonly string[];
+  allowedTags: readonly string[];
+}): AgentChecklistDecision {
+  if (facts.callerKind !== 'agent') return { allow: true };
+  if (!facts.tagsAfter.includes(OWNER_CHECKLIST_TAG) || facts.tagsBefore.includes(OWNER_CHECKLIST_TAG)) return { allow: true };
+  if (facts.tagsAfter.some((t) => facts.allowedTags.includes(t))) return { allow: true };
+  return { allow: false, why: 'checklist_without_allowed_tag' };
+}
+
 /* ---------- A crew worker reports on its work (T-294, T-397) ---------- */
 
 /** Why a worker may comment: the ticket its spawn named (`spawn_ticket`), or a ticket its lead holds (`lead_ticket`). */

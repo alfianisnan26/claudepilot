@@ -37,6 +37,8 @@ const REASON: Record<CrewUnavailable, string> = {
   no_source: 'the portal has no table for it',
   no_samples: 'nothing to divide by in this window',
   not_recorded: 'it was never recorded',
+  windows_just_reset: 'the quota windows just reset',
+  no_claude: 'no Claude is signed in and readable',
 };
 
 export const reasonText = (r: CrewUnavailable | undefined): string => (r ? REASON[r] : 'not available');

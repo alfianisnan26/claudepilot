@@ -68,6 +68,16 @@ export class FakeKube {
   /** Answers SelfSubjectAccessReview. */
   rbac: (attrs: { verb?: string; resource?: string; group?: string; subresource?: string; namespace?: string }) => boolean = () => true;
   #rv = 100;
+  #stalled = false;
+  readonly #held: (() => void)[] = [];
+  /** true: every request is held unanswered (an API server too slow to answer, T-515); false again answers the held ones. */
+  get stalled(): boolean {
+    return this.#stalled;
+  }
+  set stalled(on: boolean) {
+    this.#stalled = on;
+    if (!on) for (const release of this.#held.splice(0)) release();
+  }
   #server: http.Server;
   #wss = new WebSocketServer({ noServer: true, handleProtocols: (p) => (p.has('v4.channel.k8s.io') ? 'v4.channel.k8s.io' : false) });
   readonly #watchers = new Set<{ kind: string; selector: string; write(line: string): void; close(): void }>();
@@ -94,6 +104,7 @@ export class FakeKube {
   }
 
   async stop(): Promise<void> {
+    this.stalled = false;
     for (const w of this.#watchers) w.close();
     this.#watchers.clear();
     for (const s of this.#sockets) s.destroy();
@@ -147,6 +158,7 @@ export class FakeKube {
     for await (const c of req) parts.push(c as Buffer);
     const body = Buffer.concat(parts);
     this.requests.push({ method: req.method ?? '', url: req.url ?? '', headers: req.headers, body });
+    if (this.#stalled) await new Promise<void>((r) => this.#held.push(r));
     const url = new URL(req.url ?? '/', 'http://fake');
     const path = url.pathname;
     const method = req.method ?? 'GET';

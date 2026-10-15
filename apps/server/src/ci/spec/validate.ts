@@ -45,6 +45,10 @@ export interface PJob {
   artifacts: { paths: string[]; expireDays: number; when: 'success' | 'always' } | null;
   /** The environment it deploys to (PRD FR41): the portal decides from its own record whether a person must approve it first. */
   environment: string | null;
+  /** `runs-on` labels (T-557): the run goes to a runner whose labels include all of them; null runs it in the repository's workspace. */
+  runsOn: string[] | null;
+  /** `runs-on: { labels, fallback: workspace }`: with no runner ready, or a hand-off that fails, the run goes to the repository's workspace. */
+  runsOnFallback: 'workspace' | null;
 }
 
 export interface Pipeline {
@@ -62,6 +66,10 @@ export interface Pipeline {
   env: Record<string, Interp>;
   timeoutMs: number | null;
   concurrency: { group: Interp; cancelInProgress: boolean } | null;
+  /** The runner labels every job shares (T-557: one runner per run for now); null: the repository's workspace. */
+  runsOn: string[] | null;
+  /** What every job shares of `fallback` (owner, 2026-10-15): `workspace` runs it here when no runner is ready; null waits or fails. */
+  runsOnFallback: 'workspace' | null;
   jobs: PJob[];
 }
 
@@ -610,12 +618,9 @@ function readJob(d: Diags, id: string, raw: unknown, scopeBase: { inputs: Set<st
   }
   checkKeys(d, raw, path, JOB_KEYS, FOREIGN_JOB);
   for (const key of Object.keys(NOT_YET)) if (own(raw, key)) d.error([...path, key], 'not-yet', NOT_YET[key]!, undefined, 'key');
-  if (own(raw, 'runs-on')) {
-    const on = raw['runs-on'];
-    const text = typeof on === 'string' ? on : Array.isArray(on) ? on.join(',') : '';
-    if (/^(self-hosted|workspace|linux|ubuntu-.*)(,.*)?$/.test(text) && !/(windows|macos)/.test(text)) d.add('warning', [...path, 'runs-on'], 'ignored-runs-on', 'runs-on has no effect: a job runs in the workspace.', 'Remove it.', 'key');
-    else d.error([...path, 'runs-on'], 'unsupported-runner', `${JSON.stringify(on)} is not a place jobs can run.`, 'Jobs run in the workspace, which is Linux.');
-  }
+  const target = own(raw, 'runs-on') ? runsOnOf(d, raw['runs-on'], [...path, 'runs-on']) : null;
+  const runsOn = target?.labels ?? null;
+  const runsOnFallback = target?.fallback ?? null;
   const hidden = id.startsWith('.');
   const secrets = secretsOf(d, raw.secrets, [...path, 'secrets']);
   const strategy = strategyOf(d, raw.strategy, [...path, 'strategy']);
@@ -656,7 +661,65 @@ function readJob(d: Diags, id: string, raw: unknown, scopeBase: { inputs: Set<st
     steps,
     artifacts: readArtifacts(d, raw.artifacts, [...path, 'artifacts']),
     environment: environmentOf(d, raw.environment, [...path, 'environment']),
+    runsOn,
+    runsOnFallback,
   };
+}
+
+/** A runner label (T-557): lowercase, like a GitHub Actions self-hosted label. */
+export const RUNNER_LABEL = /^[a-z0-9][a-z0-9._-]{0,39}$/;
+/** Names GitHub uses for its own machines: a job that names only these runs in the workspace, as it always did. */
+const HOSTED = /^(ubuntu|linux|workspace)(-[a-z0-9.]+)?$/;
+
+/**
+ * `runs-on` (T-557): a label or a list of labels. `self-hosted` is accepted and dropped (every runner is); GitHub's hosted names alone
+ * (`ubuntu-latest`, `linux`) keep the old meaning: the repository's workspace, with a warning. Anything else picks a runner by labels.
+ * Or a map `{ labels, fallback: workspace }` (owner, 2026-10-15): the same labels, and when no runner with them is online and free, or the
+ * hand-off to it fails, the run starts in the repository's workspace at once instead of waiting or failing.
+ */
+function runsOnOf(d: Diags, on: unknown, path: (string | number)[]): { labels: string[]; fallback: 'workspace' | null } | null {
+  let fallback: 'workspace' | null = null;
+  if (on && typeof on === 'object' && !Array.isArray(on)) {
+    const m = on as Record<string, unknown>;
+    const extra = Object.keys(m).find((k) => k !== 'labels' && k !== 'fallback');
+    if (extra) {
+      d.error([...path, extra], 'unknown-key', `runs-on has no "${extra}".`, 'Use labels and fallback.', 'key');
+      return null;
+    }
+    if (m.fallback !== undefined && m.fallback !== 'workspace') {
+      d.error([...path, 'fallback'], 'bad-value', 'fallback can only be workspace.', 'fallback: workspace runs it in the repository workspace when no runner is ready.');
+      return null;
+    }
+    fallback = m.fallback === 'workspace' ? 'workspace' : null;
+    on = m.labels;
+    path = [...path, 'labels'];
+  }
+  const list = typeof on === 'string' ? [on] : Array.isArray(on) && on.every((x) => typeof x === 'string') ? (on as string[]) : null;
+  if (!list || !list.length) {
+    d.error(path, 'bad-type', 'runs-on is a runner label or a list of labels.', 'For example: runs-on: [python, 8gb], or { labels: [mac], fallback: workspace }');
+    return null;
+  }
+  const labels = [...new Set(list.map((l) => l.trim().toLowerCase()).filter((l) => l && l !== 'self-hosted'))];
+  if (!labels.length || labels.every((l) => HOSTED.test(l))) {
+    if (!labels.includes('workspace')) d.add('warning', path, 'ignored-runs-on', 'runs-on has no effect: the job runs in the workspace.', 'Remove it, or name the labels of a runner.', 'key');
+    return null;
+  }
+  // GitHub's hosted macOS and Windows images (`macos-latest`, `windows-2022`) do not exist here; a runner of our own says `macos`.
+  const hostedOther = labels.find((l) => /^(macos|windows)-(latest|\d[a-z0-9.-]*)$/.test(l));
+  if (hostedOther) {
+    d.error(path, 'unsupported-runner', `${hostedOther} is one of GitHub's machines, not a runner here.`, 'Name the labels of a runner (CI > Runners), or remove runs-on to run in the workspace (Linux).');
+    return null;
+  }
+  const bad = labels.find((l) => !RUNNER_LABEL.test(l));
+  if (bad) {
+    d.error(path, 'bad-name', `"${bad}" is not a runner label.`, 'Lowercase letters, digits, ".", "-" and "_", at most 40 characters.');
+    return null;
+  }
+  if (labels.length > CI_LIMITS.runnerLabels) {
+    d.error(path, 'too-many', `runs-on names at most ${CI_LIMITS.runnerLabels} labels.`);
+    return null;
+  }
+  return { labels: labels.sort(), fallback };
 }
 
 /** The first cycle among the jobs' `needs`, as a path of ids; null when there is none. */
@@ -769,7 +832,15 @@ export function validatePipeline(file: string, text: string): Validated {
     if (jobs.length && jobs.every((j) => j.hidden)) d.error(['jobs'], 'empty', 'Every job is hidden (starts with "."), so nothing would run.');
   }
 
-  const pipeline: Pipeline = { file, id, name, on, env, timeoutMs: timeoutOf(d, root, []), concurrency, jobs };
+  // One runner per run for now (T-557): every job that runs names the same labels, or none.
+  const runnable = jobs.filter((j) => !j.hidden);
+  const key = (j: PJob) => (j.runsOn ? `${j.runsOn.join(',')}${j.runsOnFallback ? ' or workspace' : ''}` : '');
+  const odd = runnable.find((j) => key(j) !== key(runnable[0]!));
+  if (odd) d.error(['jobs', odd.id, 'runs-on'], 'runs-on-mixed', 'Every job of a pipeline runs on the same runner for now.', `Give every job the same runs-on (${runnable[0]!.runsOn ? `[${runnable[0]!.runsOn.join(', ')}]` : 'none'}), or split the pipeline.`, 'key');
+  const runsOn = runnable[0]?.runsOn ?? null;
+  const runsOnFallback = runsOn ? (runnable[0]?.runsOnFallback ?? null) : null;
+
+  const pipeline: Pipeline = { file, id, name, on, env, timeoutMs: timeoutOf(d, root, []), concurrency, runsOn, runsOnFallback, jobs };
   if (!(on.push || on.merge || on.manual) && !d.list.some((x) => x.path === 'on')) d.error(['on'], 'empty', 'on needs at least one trigger.', 'Choose from push, merge, manual.');
   const triggers = ON_KEYS.filter((k) => (k === 'schedule' ? false : on[k] !== null));
   const valid = d.errors === 0;

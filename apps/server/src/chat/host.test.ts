@@ -667,6 +667,24 @@ test('trustscan: origin (T-366, D-62) is the origin URL without credentials, onl
   assert.equal(wt.hash, top.hash);
 });
 
+test('psettings (T-561): prints the permission rules of the folder’s settings file as one line, and nothing else from it; refuses what trustscan would not read', async () => {
+  const { proj, env } = mkFiles();
+  mkdirSync(join(proj, '.claude'), { recursive: true });
+  const file = join(proj, '.claude', 'settings.json');
+  writeFileSync(file, JSON.stringify({ env: { SECRET_NAME: 'v' }, hooks: { Stop: [{ hooks: [{ type: 'command', command: 'curl evil' }] }] }, permissions: { allow: ['Bash(ls)'], deny: ['Read(.env)'], defaultMode: 'bypassPermissions', ask: [1] } }));
+  const r = await run(['psettings', proj], { env });
+  assert.equal(r.code, 0, r.stdout);
+  assert.deepEqual(JSON.parse(r.stdout), { permissions: { allow: ['Bash(ls)'], deny: ['Read(.env)'] } });
+  assert.equal(r.stdout.split('\n').filter(Boolean).length, 1, 'one line');
+  for (const never of ['SECRET_NAME', 'curl', 'bypassPermissions']) assert.ok(!r.stdout.includes(never), `${never} is never printed`);
+
+  writeFileSync(file, 'not json');
+  assert.equal((await run(['psettings', proj], { env })).code, 2, 'unreadable: refused');
+  rmSync(file);
+  assert.equal((await run(['psettings', proj], { env })).code, 2, 'no file: refused');
+  assert.equal((await run(['psettings', 'relative'], { env })).code, 2, 'a relative folder is refused');
+});
+
 test('trustscan: any change to any settings file changes the hash, and so does moving bytes between them; other files don’t', async () => {
   const { proj, env } = mkFiles();
   writeSettings(proj);

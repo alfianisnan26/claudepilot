@@ -62,6 +62,7 @@ if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ i
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
 else if (verb === 'create' && kind === 'secret') { const t = stdin(); lock((s) => { s.secrets[a[3]] = t; }); }
+else if (verb === 'top' && kind === 'nodes') { const t = path.join(F, 'top.txt'); if (!fs.existsSync(t)) process.exit(1); const v = fs.readFileSync(t, 'utf8'); if (v === 'FAIL') process.exit(1); process.stdout.write(v); }
 else if (verb === 'apply') { const m = stdin(); const n = m.match(/^ {2}name: (\S+)/m)[1]; fs.mkdirSync(path.join(F, 'applied'), { recursive: true }); fs.writeFileSync(path.join(F, 'applied', n + '.yaml'), m);
   const lab = (k) => m.match(new RegExp(k + ': ([^,}]+)'))[1].trim();
   lock((s) => { s.seq += 1; s.jobs.push({ name: n, chat: lab('job-run/chat'), role: lab('job-run/role'), program: lab('job-run/program'), owner: m.match(/job-run\/owner: "([^"]*)"/)[1], suspend: true, seq: s.seq }); }); }
@@ -74,7 +75,8 @@ else { process.stderr.write('unexpected kubectl ' + args.join(' ') + '\n'); proc
 `;
 
 interface Seed { name: string; chat: string; suspend?: boolean; done?: boolean; rc?: number; owner?: string; program?: string; repo?: string }
-interface Scenario { log?: string; rc?: number; hang?: boolean; oom?: boolean; evicted?: string; reason?: string }
+/** What the fake "kubectl top nodes" prints for the control-plane node (T-611): a memory percentage, a raw text, or "FAIL"; none = the metrics API is missing (exit 1). */
+interface Scenario { top?: number | string; log?: string; rc?: number; hang?: boolean; oom?: boolean; evicted?: string; reason?: string }
 
 const hex = (n: number) => randomBytes(n).toString('hex');
 
@@ -96,6 +98,7 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
   writeFileSync(join(bin, 'gh'), '#!/bin/sh\nexit 1\n'); chmodSync(join(bin, 'gh'), 0o755);
   writeFileSync(join(root, 'state.json'), JSON.stringify({ seq: seeds.length, secrets: {}, jobs: seeds.map((s, i) => ({ suspend: false, ...s, seq: i })) }));
   const rc = scenario.rc ?? 0;
+  if (scenario.top !== undefined) writeFileSync(join(root, 'top.txt'), typeof scenario.top === 'number' ? `k3s-master   310m   7%   9000Mi   ${scenario.top}%\n` : scenario.top);
   writeFileSync(join(root, 'scenario.json'), JSON.stringify({ ...scenario, rc, hang: scenario.hang ?? false, log: scenario.log ?? jobLog(root, rc) }));
   // Runtime-made credentials (never literals): the npm token, and Gitea's through git's credential helper as the real script reads it.
   const npmToken = `fx${hex(18)}`, giteaToken = `gt${hex(18)}`;
@@ -114,8 +117,8 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     const done = new Promise<{ code: number | null; out: string }>((res) => p.on('close', (code) => res({ code, out })));
     return { p, done, out: () => out };
   };
-  const run = (argv: string[], over: Record<string, string> = {}) => {
-    const r = spawnSync('bash', [SCRIPT, ...argv], { env: env(over), cwd: root, encoding: 'utf8', timeout: 30_000 });
+  const run = (argv: string[], over: Record<string, string> = {}, script = SCRIPT) => {
+    const r = spawnSync('bash', [script, ...argv], { env: env(over), cwd: root, encoding: 'utf8', timeout: 30_000 });
     return { code: r.status, out: r.stdout + r.stderr };
   };
   const state = () => JSON.parse(readFileSync(join(root, 'state.json'), 'utf8')) as { secrets: Record<string, string>; jobs: (Seed & { suspend: boolean })[] };
@@ -366,6 +369,100 @@ test('T-524 Pending for memory: one clear line (not a silent wait), then the Job
   assert.match(r2.out, /did not start in 1s \(pod: Pending: 0\/2 nodes are available/);
 });
 
+test('T-524 a full in-memory /tmp: "No space left on device" in a failed Job gives the --big hint (no eviction comes); a passing Job does not', () => {
+  const full = 'npm error nospc ENOSPC: No space left on device, write\n';
+  for (const [argv, re] of [[[], /: No space left on device: \/tmp holds at most 2Gi in memory \(it and \/dev\/shm count against the 4Gi limit\); rerun with --big \(\/tmp 4Gi\)/],
+    [['--big'], /: No space left on device: \/tmp holds at most 4Gi in memory .*the 8Gi limit\); 4Gi is the most \/tmp gets/]] as const) {
+    const w = world();
+    writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 1, log: jobLog(w.root, 1, full) }));
+    const r = w.run([...argv, '--repo', 'claudepilot', '--ref', 'main', '--', 'npm ci']);
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, re);
+  }
+  const ok = world();
+  writeFileSync(join(ok.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(ok.root, 0, full) }));
+  const r = ok.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
+  assert.equal(r.code, 0, r.out);
+  assert.doesNotMatch(r.out, /job-run: .*No space left/, 'the text in a passing Job is not a failure');
+});
+
+/** scripts/gate-job.sh in a scratch checkout, against a fake kubectl: the Job is done when the file "done" exists, its pod Pending while "pending" holds the scheduler's message. */
+const FAKE_GATE_KUBECTL = String.raw`#!/usr/bin/env bash
+printf 'kubectl %s\n' "$*" >> "$FAKE/calls.log"
+case " $* " in
+  *" create secret "*|*" apply -f -"*) cat > /dev/null ;;
+  *" get job "*"metadata.uid"*) printf 'uid-1' ;;
+  *" get job "*) if [ -f "$FAKE/done" ]; then printf '1/'; else printf '/'; fi ;;
+  *" get pods "*) if [ -f "$FAKE/pending" ]; then jq -n --rawfile m "$FAKE/pending" '{items: [{status: {phase: "Pending", conditions: [{type: "PodScheduled", status: "False", reason: "Unschedulable", message: $m}]}}]}'
+    else printf '{"items":[{"status":{"phase":"Running"}}]}'; fi ;;
+  *" logs job/"*) if [ -f "$FAKE/joblog" ]; then cat "$FAKE/joblog"; else printf '=== SUMMARY\ntypecheck rc=0 1s\nGATE-VERDICT: green\n'; fi ;;
+  *) ;;
+esac
+`;
+
+function gateWorld() {
+  const root = mkdtempSync(join(tmpdir(), 'cp-gatejob-'));
+  roots.push(root);
+  const bin = join(root, 'bin'), repo = join(root, 'repo');
+  mkdirSync(bin); mkdirSync(join(repo, 'scripts'), { recursive: true }); mkdirSync(join(repo, 'deploy/k3s-build'), { recursive: true });
+  writeFileSync(join(bin, 'kubectl'), FAKE_GATE_KUBECTL); chmodSync(join(bin, 'kubectl'), 0o755);
+  writeFileSync(join(root, 'token'), `gx${hex(18)}`); // made at runtime, never a literal
+  writeFileSync(join(bin, 'gh'), '#!/bin/sh\n[ "$1 $2" = "auth token" ] && cat "$FAKE/token"\n'); chmodSync(join(bin, 'gh'), 0o755);
+  for (const f of ['scripts/gate-job.sh', 'scripts/gate-verdict.sh', 'deploy/k3s-build/gate-job.yaml']) writeFileSync(join(repo, f), readFileSync(join(REPO, f), 'utf8'));
+  const env = { PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`, HOME: root, TMPDIR: root, FAKE: root, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (args: string[]) => spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: repo, env, encoding: 'utf8' });
+  git(['init', '-q']); git(['add', '.']); git(['commit', '-qm', 'gate']);
+  const start = (over: Record<string, string>) => {
+    const p = spawn('bash', ['scripts/gate-job.sh', 'HEAD', 'typecheck'], { cwd: repo, env: { ...env, GATE_IMAGE: 'registry.test/claudepilot/workspace:1-dev-1', GATE_JOB_LOG: join(root, 'gate.log'), GATE_JOB_POLL_S: '1', ...over } });
+    children.push(p);
+    let out = '';
+    p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d));
+    return { done: new Promise<{ code: number | null; out: string }>((res) => p.on('close', (code) => res({ code, out }))), out: () => out };
+  };
+  return { root, start };
+}
+
+test('T-524 gate-job.sh: a gate Pending for room says so with the reason; never scheduled ends red naming that, not "did not finish"', async () => {
+  const why = '0/2 nodes are available: 2 Insufficient memory. preemption: 0/2 nodes are available: 2 No preemption victims found for incoming pod.';
+  const w = gateWorld();
+  writeFileSync(join(w.root, 'pending'), why);
+  const r = await w.start({ GATE_JOB_WAIT_S: '3' }).done;
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /gate job claudepilot-gate-[0-9a-f]{7}-[0-9a-f]{4} is Pending: 0\/2 nodes are available: 2 Insufficient memory\. .*; it waits for a node with room \(a Job that ends frees memory\), up to 3s\n/);
+  assert.equal((r.out.match(/is Pending/g) ?? []).length, 1, 'said once, not every poll');
+  assert.match(r.out, /\nGATE-VERDICT: red: not scheduled in \d+s: 0\/2 nodes are available: 2 Insufficient memory\./);
+  assert.doesNotMatch(r.out, /did not finish/, 'the cause is named');
+
+  // Pending, then room frees: it says so and the gate's own verdict stands (green, exit 0).
+  const w2 = gateWorld();
+  writeFileSync(join(w2.root, 'pending'), why);
+  writeFileSync(join(w2.root, 'joblog'), '=== SUMMARY\ntypecheck rc=0 1s\nmemory peak=5120Mi limit=8192Mi oom_kills=0\nGATE-VERDICT: green\n');
+  const s = w2.start({ GATE_JOB_WAIT_S: '60' });
+  await waitFor('the Pending line', () => /is Pending/.test(s.out()));
+  rmSync(join(w2.root, 'pending'));
+  await waitFor('scheduled', () => /scheduled after \d+s Pending/.test(s.out()));
+  writeFileSync(join(w2.root, 'done'), '');
+  const r2 = await s.done;
+  assert.equal(r2.code, 0, r2.out);
+  assert.match(r2.out, /GATE-VERDICT: green\n$/);
+  assert.match(r2.out, /\ntypecheck rc=0 1s\nmemory peak=5120Mi limit=8192Mi oom_kills=0\nlog: /, 'the Job\'s memory peak in the summary');
+  assert.equal((r2.out.match(/memory peak=/g) ?? []).length, 1, 'one memory line');
+
+  // A Job that printed no memory line (an older manifest): the summary says unavailable, never a guess; the verdict is unchanged.
+  const w4 = gateWorld();
+  writeFileSync(join(w4.root, 'done'), '');
+  const r4 = await w4.start({ GATE_JOB_WAIT_S: '10' }).done;
+  assert.equal(r4.code, 0, r4.out);
+  assert.match(r4.out, /\ntypecheck rc=0 1s\nmemory peak=unavailable \(the gate Job printed no memory line\)\nlog: [^\n]+\nGATE-VERDICT: green\n$/);
+
+  // Scheduled but not finished in time: the old message, unchanged.
+  const w3 = gateWorld();
+  const r3 = await w3.start({ GATE_JOB_WAIT_S: '2' }).done;
+  assert.equal(r3.code, 1, r3.out);
+  assert.match(r3.out, /GATE-VERDICT: red: the job did not finish in 2s\n$/);
+  assert.doesNotMatch(r3.out, /Pending|not scheduled/);
+});
+
 test('cleanup: interrupted while queued, the Job and its Secret are deleted', async () => {
   const w = world([1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' })));
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MAX_PER_CHAT: '5' });
@@ -614,7 +711,7 @@ test('the Job\'s own script: the proof (passes on the ref, fails on the other, k
 
 test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred: a required rule left every Job Pending)', () => {
   for (const name of ['job-run.yaml', 'gate-job.yaml']) {
-    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__[A-Z_]+__/g, 'x');
+    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MASTER_REQUIRED__/g, '').replace(/__[A-Z_]+__/g, 'x');
     type Term = { weight: number; podAffinityTerm: { namespaces: string[]; labelSelector: { matchLabels: Record<string, string> } } };
     const job = yamlLoad(text) as { spec: { template: { spec: { affinity?: { podAntiAffinity?: { requiredDuringSchedulingIgnoredDuringExecution?: unknown[]; preferredDuringSchedulingIgnoredDuringExecution?: Term[] } } } } } };
     const anti = job.spec.template.spec.affinity?.podAntiAffinity;
@@ -634,7 +731,7 @@ test('T-524: the heavy Jobs prefer a node other than the control plane (preferre
     containers: { resources: { requests: { memory: string }; limits: { memory: string } } }[]; volumes?: { name: string; emptyDir?: { sizeLimit?: string } }[] };
   const gi = (v: string) => { const m = /^(\d+)(Gi|Mi)$/.exec(v); assert.ok(m, v); return Number(m[1]) / (m[2] === 'Mi' ? 1024 : 1); };
   for (const name of ['job-run.yaml', 'gate-job.yaml', 'browser-job.yaml']) {
-    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MEMORY__/g, '4Gi').replace(/__TMP_SIZE__/g, '2Gi').replace(/__[A-Z_]+__/g, 'x');
+    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__MASTER_REQUIRED__/g, '').replace(/__MEMORY__/g, '4Gi').replace(/__TMP_SIZE__/g, '2Gi').replace(/__[A-Z_]+__/g, 'x');
     const pod = (yamlLoad(text) as { spec: { template: { spec: Pod } } }).spec.template.spec;
     const na = pod.affinity?.nodeAffinity;
     assert.equal(na?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: never required (a required rule left every Job Pending)`);
@@ -645,4 +742,73 @@ test('T-524: the heavy Jobs prefer a node other than the control plane (preferre
     if (tmp) assert.ok(gi(tmp) < gi(lim), `${name}: the in-memory /tmp (${tmp}) fits inside the limit (${lim}) with room for the processes`);
   }
   // The label the rule names is on k3s-master (kubectl get nodes --show-labels, 2026-10-15): node-role.kubernetes.io/control-plane=true.
+});
+
+// T-611: the scheduler counts memory REQUESTS, the control-plane node's own pods use far more for real. job-run.sh reads its real use
+// (kubectl top) and, over JOB_RUN_MASTER_MAX_PCT (75), makes the rule away from the control plane REQUIRED in the Job's manifest.
+const CP_RULE = { nodeSelectorTerms: [{ matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] }] };
+type NodeAff = { requiredDuringSchedulingIgnoredDuringExecution?: unknown; preferredDuringSchedulingIgnoredDuringExecution?: unknown };
+function placed(top: number | string | undefined, extra: string[] = [], over: Record<string, string> = {}, script = SCRIPT) {
+  const w = world([], top === undefined ? {} : { top });
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', ...extra, '--', 'true'], over, script);
+  const m = yamlLoad(w.applied1()) as Manifest;
+  const na = (m.spec.template.spec.affinity as { nodeAffinity: NodeAff }).nodeAffinity;
+  return { r, required: na.requiredDuringSchedulingIgnoredDuringExecution, preferred: na.preferredDuringSchedulingIgnoredDuringExecution };
+}
+/** A scratch checkout of the two files under test, each optionally edited (the mutation: the same check must fail on the mutant). */
+function mutant(editYaml: (s: string) => string, editScript: (s: string) => string) {
+  const dir = mkdtempSync(join(tmpdir(), 'cp-jobrun-mut-'));
+  roots.push(dir);
+  mkdirSync(join(dir, 'scripts')); mkdirSync(join(dir, 'deploy/k3s-build'), { recursive: true });
+  writeFileSync(join(dir, 'deploy/k3s-build/job-run.yaml'), editYaml(readFileSync(TEMPLATE, 'utf8')));
+  writeFileSync(join(dir, 'scripts/job-run.sh'), editScript(readFileSync(SCRIPT, 'utf8')));
+  return join(dir, 'scripts/job-run.sh');
+}
+
+test('T-611: over the line the Job gets a REQUIRED rule away from the control plane, for a normal Job and --big, and the log says so', () => {
+  for (const extra of [[], ['--big']]) {
+    const p = placed(83, extra);
+    assert.equal(p.r.code, 0, p.r.out);
+    assert.deepEqual(p.required, CP_RULE, `required rule (${extra.join(' ') || 'normal'})`);
+    assert.ok(p.preferred, 'the preferred rules stay');
+    assert.match(p.r.out, /placement: the control-plane node is at 83% of its memory \(over 75%\).*waits for k3s-node2/);
+    assert.match(p.r.out, /rc=0 in \d+s .* on k3s-master with/, 'the final line names the node');
+  }
+  assert.deepEqual(placed(76).required, CP_RULE, 'just over');
+  const custom = placed(60, [], { JOB_RUN_MASTER_MAX_PCT: '50' });
+  assert.deepEqual(custom.required, CP_RULE, 'the line is JOB_RUN_MASTER_MAX_PCT');
+});
+
+test('T-611: at or under the line, or when the metrics fail, only the preferred rules apply (a metrics failure never blocks every Job)', () => {
+  const cases: [string, number | string | undefined][] = [['under', 60], ['at the line', 75], ['API missing', undefined], ['kubectl fails', 'FAIL'], ['not a number', 'k3s-master <unknown> <unknown> <unknown> <unknown>\n'], ['empty', '']];
+  for (const [what, top] of cases) {
+    for (const extra of [[], ['--big']]) {
+      const p = placed(top, extra);
+      assert.equal(p.r.code, 0, `${what}: ${p.r.out}`);
+      assert.equal(p.required, undefined, `${what}: no required rule`);
+      assert.ok(p.preferred, `${what}: preferred rules`);
+    }
+  }
+  assert.match(placed(60).r.out, /placement: the control-plane node is at 60% of its memory \(limit 75%\): preferred rules only/);
+  assert.match(placed(undefined).r.out, /placement: the control-plane node's memory is unknown \(metrics unavailable\): preferred rules only/);
+  const bad = world([], { top: 50 }).run(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MASTER_MAX_PCT: 'lots' });
+  assert.equal(bad.code, 2, 'a bad line is a usage error');
+});
+
+test('T-611 mutation: without the rule in the Job\'s clone of the template, or in the script, the over-the-line check fails', () => {
+  assert.deepEqual(placed(90).required, CP_RULE, 'the real files pass the check');
+  const noTemplateMarker = mutant((y) => y.replace(/^ *__MASTER_REQUIRED__\n/m, ''), (s) => s);
+  assert.notDeepEqual(placed(90, [], {}, noTemplateMarker).required, CP_RULE, 'template without the marker: the required rule is missing, so the check catches it');
+  const noScriptRule = mutant((y) => y, (s) => s.replace('-e "s#__MASTER_REQUIRED__#$master_rule#"', '-e "s#__MASTER_REQUIRED__##"'));
+  assert.notDeepEqual(placed(90, [], {}, noScriptRule).required, CP_RULE, 'script that never fills the rule: caught');
+  const neverOver = mutant((y) => y, (s) => s.replace('[ "$master_pct" -gt "$master_max" ]', '[ "$master_pct" -gt 1000 ]'));
+  assert.notDeepEqual(placed(90, [], {}, neverOver).required, CP_RULE, 'script that ignores the reading: caught');
+});
+
+test('T-611: a Job Pending on the required rule says it waits for k3s-node2', async () => {
+  const w = world([], { top: 88 });
+  writeFileSync(join(w.root, 'pending'), "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 Insufficient memory.");
+  const j = w.start(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' });
+  const r = await j.done;
+  assert.match(r.out, /is Pending: the control-plane node is over 75% of its memory, so this Job waits for k3s-node2/);
 });

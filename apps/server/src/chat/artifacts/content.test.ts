@@ -213,3 +213,22 @@ test('isStagedUpload: only a Read of exactly a file staged for this chat is the 
     await c.done();
   }
 });
+
+test('send (T-597 S1b, M2): a slash command with an attachment stays framed, even from an MCP token; without one it goes bare', async () => {
+  const c = await liveChat();
+  try {
+    const textOf = (uuid: string) => {
+      const content = c.sent(uuid).message.content;
+      return typeof content === 'string' ? content : (content as { text?: string }[]).map((b) => b.text ?? '').join('');
+    };
+    const f = await c.upload('data.csv', Buffer.from('a,b\n'));
+    const withFile = randomUUID();
+    await c.controller.send(c.id, withFile, '/compact keep the plan', { actor: 'portal-mcp:ptk_1', attachments: [{ uploadId: f.id }] });
+    assert.match(textOf(withFile), /\[Portal message from /, 'framed: the attachment note would follow the command');
+    const bare = randomUUID();
+    await c.controller.send(c.id, bare, '/compact keep the plan', { actor: 'portal-mcp:ptk_1' });
+    assert.equal(textOf(bare), '/compact keep the plan');
+  } finally {
+    await c.done();
+  }
+});

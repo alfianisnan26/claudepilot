@@ -116,10 +116,31 @@ export const CI_POLICIES = {
   // The auto-approve rule (T-110, FR41a): a person with manage only (the handler refuses tokens and agents); no tool reaches it.
   'PUT /api/ci/repos/:id/environments/:name/auto-approve': { ...repo('manage'), audit: 'ci.environment_auto_approve' },
   'POST /api/ci/validate': { kind: 'signed-in' },
+  // Runners (T-557): the list shows the workspaces the person may see (the handler filters). Making a workspace a runner sends other
+  // workspaces' commits and secrets to it: manage on that workspace, a person only (the handler refuses tokens and agents), audited.
+  'GET /api/ci/runners': { kind: 'signed-in' },
+  'PUT /api/ci/runners/:id': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'id' }], audit: 'ci.runner_changed' },
+  'DELETE /api/ci/runners/:id': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'id' }], audit: 'ci.runner_changed' },
+} satisfies RoutePolicies;
+
+/**
+ * The public upstream webhook (FR8a, T-486 S2), outside /api and the session guard: its door is the Git host's signature, then the seam
+ * acts as the remote's owner. Every refusal before the kick is the same 404. Kept apart from CI_POLICIES, which lists the /api/ci routes.
+ */
+export const CI_HOOK_POLICIES = {
+  'POST /hooks/ci/:id': {
+    kind: 'handler',
+    checks: [
+      'the remote follows an upstream and names a hook secret that its workspace delivers',
+      'the Git host’s HMAC-SHA256 over the raw body (X-Hub-Signature-256 or X-Gitea-Signature)',
+      'the remote’s owner is the actor: can(owner, operate, ci_repo)',
+    ],
+  },
 } satisfies RoutePolicies;
 
 export function declareCiPolicies(): void {
   declarePolicies('ci', CI_POLICIES);
+  declarePolicies('ci', CI_HOOK_POLICIES);
   // The tools filter to the caller's own runs themselves (an agent: its branch, its ticket, its session's runs). None approves.
   declareToolPolicies('ci', {
     ci_runs_list: { kind: 'signed-in', filter: 'ci_run' },

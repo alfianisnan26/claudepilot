@@ -72,7 +72,29 @@
       "Bash(pwd)",
       "Bash(nproc)",
       "Bash(chmod +x:*)",
-      "Bash(git update-index --chmod=+x:*)"
+      "Bash(git update-index --chmod=+x:*)",
+      "mcp__plugin_cpb-browser_browser__browser_navigate",
+      "mcp__plugin_cpb-browser_browser__browser_navigate_back",
+      "mcp__plugin_cpb-browser_browser__browser_navigate_forward",
+      "mcp__plugin_cpb-browser_browser__browser_reload",
+      "mcp__plugin_cpb-browser_browser__browser_snapshot",
+      "mcp__plugin_cpb-browser_browser__browser_take_screenshot",
+      "mcp__plugin_cpb-browser_browser__browser_resize",
+      "mcp__plugin_cpb-browser_browser__browser_emulate_media",
+      "mcp__plugin_cpb-browser_browser__browser_click",
+      "mcp__plugin_cpb-browser_browser__browser_hover",
+      "mcp__plugin_cpb-browser_browser__browser_type",
+      "mcp__plugin_cpb-browser_browser__browser_fill_form",
+      "mcp__plugin_cpb-browser_browser__browser_press_key",
+      "mcp__plugin_cpb-browser_browser__browser_select_option",
+      "mcp__plugin_cpb-browser_browser__browser_wait_for",
+      "mcp__plugin_cpb-browser_browser__browser_tabs",
+      "mcp__plugin_cpb-browser_browser__browser_find",
+      "mcp__plugin_cpb-browser_browser__browser_console_messages",
+      "mcp__plugin_cpb-browser_browser__browser_network_requests",
+      "mcp__plugin_cpb-browser_browser__browser_handle_dialog",
+      "mcp__plugin_cpb-browser_browser__browser_status",
+      "mcp__plugin_cpb-browser_browser__browser_handoff"
     ],
     "ask": [],
     "deny": [
@@ -152,7 +174,13 @@
       "Bash(printenv | *)",
       "Bash(set | *)",
       "Bash(* /proc/*/environ*)",
-      "Bash(cat /proc/*/environ*)"
+      "Bash(cat /proc/*/environ*)",
+      "mcp__plugin_cpb-browser_browser__browser_run_code_unsafe",
+      "mcp__plugin_cpb-browser_browser__browser_file_upload",
+      "mcp__plugin_cpb-browser_browser__browser_drop",
+      "Bash(git commit *--amend*)",
+      "Bash(git commit --amend*)",
+      "Bash(git -C * commit *--amend*)"
     ]
   }
 }

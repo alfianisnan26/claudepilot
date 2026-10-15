@@ -36,6 +36,7 @@ const REASON: Partial<Record<CiReason, string>> = {
   condition: 'Condition',
   fail_fast: 'Matrix stopped',
   rejected: 'Rejected',
+  no_runner: 'No runner',
 };
 
 /** What a run row shows: a running run with a job held for a person's approval shows the hand. */

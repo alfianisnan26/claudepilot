@@ -8,9 +8,9 @@ import { chipCount, listWords } from '../shared/format';
 
 export type WorkspaceBucket = 'failing' | 'busy' | 'running' | 'stopped';
 
-/** `error` and `unreachable` are failing; a workspace on its way up or down is busy. */
+/** `error`, `unreachable` and `unavailable` (its target's API did not answer, T-515) are failing; a workspace on its way up or down is busy. */
 export const bucketOf = (s: WorkspaceStatus): WorkspaceBucket =>
-  s === 'error' || s === 'unreachable' ? 'failing' : s === 'running' ? 'running' : s === 'stopped' ? 'stopped' : 'busy';
+  s === 'error' || s === 'unreachable' || s === 'unavailable' ? 'failing' : s === 'running' ? 'running' : s === 'stopped' ? 'stopped' : 'busy';
 
 const BUCKET_ORDER: Record<WorkspaceBucket, number> = { failing: 0, busy: 1, running: 2, stopped: 3 };
 

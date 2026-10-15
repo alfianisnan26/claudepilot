@@ -2880,6 +2880,41 @@ test('usage: each result stores its turn’s tokens and duration, and what the t
 
 /* ========================= Usage metrics ========================= */
 
+test('usage (T-610): a process resumed with --resume carries Claude Code’s running total over, so its first turn costs the change, not the whole total; a total that starts again from zero is a new process’s', async () => {
+  const s = await liveSession();
+  try {
+    const turn = async (tail: { push(x: string): void }, total: number) => {
+      tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: total, duration_ms: 10, usage: { input_tokens: 1, output_tokens: 1 }, is_error: false, session_id: s.id }));
+      tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
+    };
+    s.tail.push(init(s.id));
+    await until(() => s.controller.history(s.id).some((e) => e.text === 'Ready'));
+    await s.answering(sleep(30));
+    await turn(s.tail, 0.5);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 1);
+
+    // The process goes away and comes back with --resume: Claude Code restores the session's cost, so the first result says 0.62.
+    await vanish(s);
+    await s.answering(s.controller.control(s.id, 'resume'));
+    assert.ok(s.ws.startArgs[1]!.includes('--resume'));
+    s.ws.tails[1]!.push(init(s.id));
+    await until(() => s.controller.history(s.id).filter((e) => e.text === 'Ready').length >= 1);
+    await s.answering(sleep(30));
+    await turn(s.ws.tails[1]!, 0.62);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 2);
+    const resumed = s.controller.history(s.id).filter((e) => e.kind === 'result')[1]!;
+    assert.ok(Math.abs(resumed.turnCostUsd! - 0.12) < 1e-9, `the change since the last total, not the whole running total: ${resumed.turnCostUsd}`);
+
+    // A total lower than the last one is a process that counts from zero again: that total is the turn.
+    await turn(s.ws.tails[1]!, 0.03);
+    await until(() => s.controller.history(s.id).filter((e) => e.kind === 'result').length === 3);
+    const fresh = s.controller.history(s.id).filter((e) => e.kind === 'result')[2]!;
+    assert.ok(Math.abs(fresh.turnCostUsd! - 0.03) < 1e-9, `a new count: ${fresh.turnCostUsd}`);
+  } finally {
+    await s.done();
+  }
+});
+
 test('usage metrics: each turn is stored per model from the change in the running totals, sub-agents included, and charts add them up', async () => {
   const s = await liveSession();
   try {

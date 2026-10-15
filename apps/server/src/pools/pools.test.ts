@@ -746,6 +746,11 @@ async function routes() {
     const err = isAppError(e) ? e : new AppError('INTERNAL_ERROR', undefined, { cause: e });
     return c.json(err.toJSON(), err.status as ContentfulStatusCode);
   });
+  // Like app.ts's session guard: the caller is the signed-in owner (the workspace routes ask the seam, T-531).
+  app.use('*', async (c, next) => {
+    (c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in');
+    await next();
+  });
   app.route('/api/pools', createPoolRoutes({ service: h.service }));
   app.route('/api/workspaces', createWorkspacePoolRoutes({ service: h.service, reconciler: h.reconciler }));
   const call = async <T>(method: string, path: string, body?: unknown) => {

@@ -15,7 +15,7 @@ const STATES = ['starting', 'idle', 'working', 'waiting', 'interrupted', 'ended'
 /** Over MCP a session's mode is limited to the ones that can't run commands unasked (PRD §13.3): never Auto (the controller refuses it too) or Bypass. */
 const MCP_MODES = ['plan', 'default', 'acceptEdits', 'dontAsk'] as const satisfies readonly ChatPermissionMode[];
 /** Slash commands MCP text may use (chat-sessions FR13): anything else is for the terminal. */
-const SLASH_ALLOWED = new Set(['/compact', '/context', '/reload-plugins']);
+import { SLASH_ALLOWED, slashWord } from '../../chat/slash.js';
 /** What `session_get` returns of the transcript stays under this, so one call fits a result block. */
 const EVENT_CHARS_MAX = 12_000;
 /** T-294: `session_get` lists at most this many of a session's workers (live ones first); the count is always whole. */
@@ -275,8 +275,8 @@ export function registerSessionTools(
     ctx: PortalToolContext,
     as?: { actor: `session:${string}`; relation: 'parent' },
   ) {
-    const first = text.trimStart().split(/\s/)[0] ?? '';
-    if (first.startsWith('/') && !SLASH_ALLOWED.has(first)) throw new PortalToolError('FORBIDDEN', `${cleanText(first, 40)} is for the terminal. Over MCP only ${[...SLASH_ALLOWED].join(', ')} are allowed.`);
+    const first = slashWord(text);
+    if (first && !SLASH_ALLOWED.has(first)) throw new PortalToolError('FORBIDDEN', `${cleanText(first, 40)} is for the terminal. Over MCP only ${[...SLASH_ALLOWED].join(', ')} are allowed.`);
     const from = as ? { actor: as.actor, relation: as.relation } : { actor: ctx.actor, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) };
     await chat.send(id, randomUUID(), text, { ...from, ...(priority ? { priority } : {}) });
   }

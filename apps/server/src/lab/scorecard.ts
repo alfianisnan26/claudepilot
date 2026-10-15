@@ -651,7 +651,8 @@ export function programScore(p: Program, facts: CrewFacts, windowMs: number, com
 
 export const SCORECARD_BASIS: Record<string, string> = {
   program: 'The top of a session’s lineage (continuations, then parents) with at least one worker; the lead chain is that row and its continuations.',
-  tickets: 'A program’s tickets: held by one of its sessions (ticket_id), assigned to one, or with an event written by one. MEASURED.',
+  quotaUnused: 'Quota left unused at reset (T-547): per Claude and plan window, 100 minus the percent used in the last usage reading taken within 30 minutes before the reset. No such reading: unavailable. MEASURED.',
+  tickets: 'A program’s tickets:held by one of its sessions (ticket_id), assigned to one, or with an event written by one. MEASURED.',
   done: 'Tickets whose status is done and closed_at is in the window. MEASURED.',
   reopened: 'Tickets with a reopen (or a change from done or wont_do back to work) in the window. MEASURED.',
   leadTime: 'From the first change to in_progress to closed_at, per done ticket; p50 and p90 by nearest rank. MEASURED.',
@@ -670,5 +671,11 @@ export const SCORECARD_BASIS: Record<string, string> = {
   perDone: 'All-in: the window’s dollars over its done tickets; workers only: the workers’ dollars over them. ESTIMATE.',
   qaReviewOpus:
     'D-63 (T-490): of the QA, verifier, ux-check and review workers (their role) with a request in the window, the share with a request on opus or fable; how many of those were started with a why (session_spawn). Unavailable with no such worker. MEASURED.',
+  pace: 'T-600 headline: sum of usedPct over sum of evenPct of the 5-hour session window of every Claude on its own plan that is signed in and has a pace (claudeusage WindowPace); 1 spends the quota exactly by its reset. Under 10 points of even pace in all: windows_just_reset; no such Claude: no_claude; an agent’s read: no_source (quota is not a program’s). ESTIMATE.',
+  unusedAtReset: 'T-600 headline: with the pace under 0.9, 100 minus the mean projectedPct at reset of those Claudes. ESTIMATE.',
+  usage: 'T-600 headline: requests and estimated dollars of the programs’ sessions in the window, per hour. Requests MEASURED, dollars ESTIMATE.',
+  resolved: 'T-600 headline: tickets of the programs done (won’t-do apart) with closed_at in the window; a ticket two programs touched counts once globally and once in each program. MEASURED.',
+  perResolved: 'T-600 headline: the window’s dollars over its resolved tickets; unavailable (no_samples) with none. ESTIMATE.',
+  createdPerClosed: 'T-600 headline: tickets created in the window over tickets closed (done plus won’t-do) in it; under 1 the backlog shrinks; unavailable (no_samples) with none closed. MEASURED.',
   targets: 'D-61 live workers and no Agent-tool sub-agents in a lead; D-62 the owner’s queue; D-63 QA and review on sonnet (a worker started with a why is not an offender). Live workers are measured now; the rest over the window.',
 };

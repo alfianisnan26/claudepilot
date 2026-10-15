@@ -22,6 +22,7 @@ import { LAB_POLICIES } from './authz.js';
 import { Lab } from './index.js';
 import { registerLabTools, scoreShort } from './portalTools.js';
 import { createLabRoutes } from './routes.js';
+import { paceBlock, type PaceClaude } from './headline.js';
 import { percentile } from './scorecard.js';
 
 const H = 3_600_000;
@@ -648,6 +649,167 @@ test('MCP crew_scorecard: short by default, full on ask; an agent of program A g
     assert.ok(refused(await mcp.call(m1.secret, 'crew_scorecard', { program: 'L1' })));
     assert.ok(refused(await mcp.call(admin.secret, 'crew_scorecard', { program: 'nope' })), 'not found for admin too');
     assert.ok(refused(await mcp.call(admin.secret, 'crew_scorecard', { window: 'year' })));
+  } finally {
+    mcp.done();
+    h.done();
+  }
+});
+
+/* ---------- T-600: the headline (lab/headline.ts) ---------- */
+
+type PaceTriple = [used: number, even: number | null, projected?: number | null];
+const pfig = (v: number | null | undefined) => (v === null || v === undefined ? { value: null, basis: 'unavailable', reason: 'no_samples' } : { value: v, basis: 'estimate' });
+const win = (key: string, t: PaceTriple) => ({ key, usedPct: t[0], pace: { evenPct: pfig(t[1]), projectedPct: pfig(t[2]) } as never });
+function claude(id: string, o: { runsOn?: PaceClaude['runsOn']; state?: PaceClaude['state']; session?: PaceTriple; week?: PaceTriple } = {}): PaceClaude {
+  return { claudeId: id, claudeName: `Claude ${id}`, runsOn: o.runsOn ?? 'plan', state: o.state ?? 'ok', windows: [...(o.session ? [win('session', o.session)] : []), ...(o.week ? [win('week', o.week)] : [])] };
+}
+
+test('headline pace: signed-out, pooled, key and pace-less Claudes are left out; ratio is the sum of used over the sum of even', () => {
+  const p = paceBlock([
+    claude('a', { session: [30, 50, 60] }),
+    claude('b', { session: [20, 50, 70] }),
+    claude('c', { runsOn: 'none', state: 'signed_out', session: [90, 10, 95] }), // signed out
+    claude('d', { runsOn: 'pool', state: 'no_limits', session: [90, 10, 95] }), // pooled
+    claude('e', { runsOn: 'key', session: [90, 10, 95] }), // API key
+    claude('f', { state: 'signed_out', session: [90, 10, 95] }), // state says signed out
+    claude('g', { session: [40, null] }), // pace unavailable
+  ]);
+  assert.deepEqual([p.ratio.value, p.ratio.basis], [0.5, 'estimate']); // (30 + 20) / (50 + 50)
+  assert.ok(p.ratio.source.length > 0);
+  assert.deepEqual(p.claudes.map((c) => c.claude), ['a', 'b']);
+  assert.equal(p.unusedAtResetPct, 35); // under 0.9: 100 - mean(60, 70)
+});
+
+test('headline pace: under 10 points of even pace is windows_just_reset; none readable is no_claude; no source is no_source', () => {
+  const reset = paceBlock([claude('a', { session: [1, 4] }), claude('b', { session: [2, 5.9] })]);
+  assert.deepEqual([reset.ratio.value, reset.ratio.basis, reset.ratio.reason, reset.unusedAtResetPct], [null, 'unavailable', 'windows_just_reset', null]);
+  assert.equal(paceBlock([claude('a', { session: [5, 10] })]).ratio.value, 0.5, '10 is enough');
+  assert.equal(paceBlock([claude('a', { session: [5, 9.9] })]).ratio.reason, 'windows_just_reset', '9.9 is not');
+  for (const none of [[], [claude('c', { runsOn: 'none', state: 'signed_out', session: [9, 50] })], [claude('d', { runsOn: 'pool', session: [9, 50] })]]) {
+    const p = paceBlock(none);
+    assert.deepEqual([p.ratio.value, p.ratio.reason, p.claudes], [null, 'no_claude', []]);
+  }
+  const src = paceBlock(null);
+  assert.deepEqual([src.ratio.reason, src.weekly.reason, src.claudes], ['no_source', 'no_source', []]);
+});
+
+test('headline pace: a ratio of 0.9 or more shows no unused quota; one Claude with even pace 0 has no ratio of its own; weekly the same way', () => {
+  const p = paceBlock([claude('a', { session: [60, 60, 100], week: [30, 40] }), claude('b', { session: [3, 0, 100], week: [10, 20] })]);
+  assert.equal(p.ratio.value, 1.05); // 63 / 60
+  assert.equal(p.unusedAtResetPct, null);
+  const b = p.claudes.find((c) => c.claude === 'b')!;
+  assert.deepEqual([b.ratio.value, b.ratio.basis, b.ratio.reason], [null, 'unavailable', 'no_samples']);
+  assert.equal(p.claudes.find((c) => c.claude === 'a')!.ratio.value, 1);
+  assert.equal(p.weekly.value, 0.67); // 40 / 60
+  assert.equal(paceBlock([claude('a', { session: [60, 60] })]).weekly.reason, 'no_source', 'no Claude reports a week');
+  assert.equal(paceBlock([claude('a', { session: [10, 60, null] })]).unusedAtResetPct, null, 'under 0.9 but no projection: unknown, not guessed');
+});
+
+const PACES = [claude('a', { session: [30, 50, 60] }), claude('b', { session: [20, 50, 70] })];
+
+test('headline: counts and dollars match the program rows; previous only with compare', async () => {
+  const h = await seeded();
+  try {
+    const lab = new Lab({ store: h.store, now: () => NOW, paceSource: async () => PACES });
+    const s = (await lab.scorecardWithPace({ window: 'day' }))!;
+    const hl = s.headline!;
+    assert.equal(hl.pace.ratio.value, 0.5);
+    // Current [NOW-24h, NOW): done T-1, T-2, T-7 (A) and none in B; T-5 won't-do. Requests 8 (A 6, B 2), dollars A 4.10 + B 0.75 = 4.85 (the solo chat is no program).
+    assert.deepEqual([hl.current.resolved.value, hl.current.wontDo.value, hl.current.resolved.basis], [3, 1, 'measured']);
+    assert.deepEqual(hl.current.resolvedByProgram.map((r) => [r.program, r.count]).sort(), [['L1', 3], ['M1', 0]]);
+    for (const r of hl.current.resolvedByProgram) assert.equal(r.count, prog(s, r.program).current.effectiveness.done.value, `${r.program} equals its program row`);
+    assert.equal(hl.current.requestsPerHour.value, 0.33); // 8 / 24
+    assert.equal(hl.current.usdPerHour.value, 0.202); // 4.85 / 24
+    assert.equal(hl.current.perResolvedUsd.value, 1.62); // 4.85 / 3
+    assert.equal(hl.current.usdPerHour.basis, 'estimate');
+    // Created in the window: none (every seeded ticket is 45 h old). Closed: T-1, T-2, T-7, T-5 = 4.
+    assert.equal(hl.current.createdPerClosed.value, 0);
+    const cur = Object.fromEntries(hl.current.createdPerClosedByProgram.map((r) => [r.program, r]));
+    assert.deepEqual([cur.L1!.created, cur.L1!.closed, cur.L1!.ratio.value], [0, 4, 0]);
+    assert.deepEqual([cur.M1!.closed, cur.M1!.ratio.value, cur.M1!.ratio.reason], [0, null, 'no_samples'], 'none closed is not a division by zero');
+    // Previous [NOW-48h, NOW-24h): T-6 done; ten tickets of the programs created (A 7, B 3); requests 2, dollars 1.90.
+    const pv = hl.previous!;
+    assert.deepEqual([pv.resolved.value, pv.requestsPerHour.value, pv.usdPerHour.value, pv.perResolvedUsd.value], [1, 0.08, 0.079, 1.9]);
+    assert.equal(pv.createdPerClosed.value, 10);
+    const prevRows = Object.fromEntries(pv.createdPerClosedByProgram.map((r) => [r.program, r]));
+    assert.deepEqual([prevRows.L1!.created, prevRows.L1!.closed, prevRows.L1!.ratio.value, prevRows.M1!.created, prevRows.M1!.ratio.reason], [7, 1, 7, 3, 'no_samples']);
+    assert.equal(pv.fromMs, NOW - 48 * H);
+    assert.equal((await lab.scorecardWithPace({ window: 'day', compare: false }))!.headline!.previous, null);
+  } finally {
+    h.done();
+  }
+});
+
+test('headline: none resolved gives no per-resolved cost, none closed gives no created-per-closed (never a division by zero)', async () => {
+  const h = await seeded();
+  try {
+    const lab = new Lab({ store: h.store, now: () => NOW });
+    h.db.prepare(`UPDATE tickets SET status = 'open', closed_at = NULL WHERE number = 7`).run(); // T-7 was done exactly 1 h ago
+    const one = lab.scorecard({ window: '1h', compare: false })!.headline!.current;
+    assert.deepEqual([one.resolved.value, one.wontDo.value], [0, 1], 'only T-5 closed in the hour, as won’t-do');
+    assert.deepEqual([one.perResolvedUsd.value, one.perResolvedUsd.basis, one.perResolvedUsd.reason], [null, 'unavailable', 'no_samples']);
+    assert.equal(one.usdPerHour.value, 0.1, 'the hour still has W5’s dollar tenth: cost is known, resolved is zero');
+    assert.equal(one.createdPerClosed.value, 0); // 0 created / 1 closed
+    h.db.prepare(`UPDATE tickets SET status = 'open', closed_at = NULL WHERE number = 5`).run();
+    const nothing = lab.scorecard({ window: '1h', compare: false })!.headline!.current;
+    assert.deepEqual([nothing.createdPerClosed.value, nothing.createdPerClosed.reason], [null, 'no_samples']);
+    assert.ok(nothing.createdPerClosedByProgram.every((r) => r.ratio.value === null && r.ratio.reason === 'no_samples'));
+  } finally {
+    h.done();
+  }
+});
+
+test('headline: an agent sees only its own program and no pace; a failing pace source is no_source', async () => {
+  const h = await seeded();
+  const logs: string[] = [];
+  try {
+    const lab = new Lab({ store: h.store, now: () => NOW, paceSource: async () => PACES, log: (m) => logs.push(m) });
+    const mine = (await lab.scorecardWithPace({ window: 'day', sessionId: 'W3' }))!.headline!;
+    assert.deepEqual([mine.pace.ratio.reason, mine.pace.weekly.reason, mine.pace.claudes], ['no_source', 'no_source', []], 'pace is quota of every program: an agent never gets it');
+    assert.deepEqual(mine.current.resolvedByProgram.map((r) => r.program), ['L1'], 'no other program in any list');
+    assert.deepEqual(mine.current.createdPerClosedByProgram.map((r) => r.program), ['L1']);
+    assert.equal(mine.current.requestsPerHour.value, 0.25); // A's 6 requests only (B's 2 are not its)
+    assert.equal(mine.current.usdPerHour.value, 0.171); // 4.10 / 24
+    assert.equal(mine.current.resolved.value, 3);
+    const other = (await lab.scorecardWithPace({ window: 'day', sessionId: 'M1' }))!.headline!;
+    assert.deepEqual([other.current.resolved.value, other.current.requestsPerHour.value, other.current.resolvedByProgram.map((r) => r.program)], [0, 0.08, ['M1']]);
+    const solo = (await lab.scorecardWithPace({ window: 'day', sessionId: 'S1' }))!.headline!;
+    assert.deepEqual([solo.current.resolvedByProgram, solo.current.requestsPerHour.value, solo.current.resolved.value], [[], 0, 0]);
+    // The owner's read has it.
+    assert.equal((await lab.scorecardWithPace({ window: 'day' }))!.headline!.pace.ratio.value, 0.5);
+    // A source that fails: no_source, one log line without the error text.
+    const broken = new Lab({ store: h.store, now: () => NOW, log: (m) => logs.push(m), paceSource: async () => Promise.reject(new Error('probe secret-looking text')) });
+    const b = (await broken.scorecardWithPace({ window: 'day' }))!;
+    assert.equal(b.headline!.pace.ratio.reason, 'no_source');
+    assert.ok(logs.some((l) => l.includes('pace source failed')) && !logs.some((l) => l.includes('secret-looking')));
+    // No source wired: the same.
+    assert.equal(h.lab.scorecard({ window: 'day' })!.headline!.pace.ratio.reason, 'no_source');
+  } finally {
+    h.done();
+  }
+});
+
+test('headline: the route and the crew_scorecard tool carry it; an agent token gets no pace', async () => {
+  const h = await seeded();
+  const lab = new Lab({ store: h.store, now: () => NOW, paceSource: async () => PACES });
+  const registry = new ToolRegistry();
+  const mcp = await portalMcpHarness({ registry });
+  registerLabTools(lab, registry);
+  try {
+    const owner = (await (await app(lab).request('/api/lab/scorecard?window=day')).json()) as { data: CrewScorecard };
+    assert.equal(owner.data.headline?.pace.ratio.value, 0.5);
+    assert.equal(owner.data.headline?.current.resolved.value, 3);
+    const w3 = app(lab, { kind: 'agent', userId: 'u_owner', tokenId: 't', sessionId: 'W3', workspaceId: 'docker/api' } as Actor);
+    const mine = (await (await w3.request('/api/lab/scorecard')).json()) as { data: CrewScorecard };
+    assert.equal(mine.data.headline?.pace.ratio.reason, 'no_source');
+    assert.deepEqual(mine.data.headline?.current.resolvedByProgram.map((r) => r.program), ['L1']);
+    const admin = mcp.token('admin');
+    assert.equal(where(await mcp.call(admin.secret, 'crew_scorecard', {})).headline.pace.ratio.value, 0.5, 'short form');
+    const full = await mcp.call(admin.secret, 'crew_scorecard', { full: true });
+    assert.ok(!refused(full) && where(full).headline.current.resolved.value === 3, 'full form fits the result limit');
+    const agent = await mcp.agentToken('docker/api', 'W3');
+    const hl = where(await mcp.call(agent.secret, 'crew_scorecard', {})).headline;
+    assert.deepEqual([hl.pace.ratio.reason, hl.current.resolvedByProgram.map((r: any) => r.program)], ['no_source', ['L1']]);
   } finally {
     mcp.done();
     h.done();
