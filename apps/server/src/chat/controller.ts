@@ -84,6 +84,7 @@ import { decodeToolImage, pruneBlobs, readBlob, saveBlob } from './blobs.js';
 import { ineligibleError, NOT_SET_UP, NOT_SIGNED_IN, UNKNOWN, type Eligibility } from './eligibility.js';
 import { eventPage } from './eventPage.js';
 import { workspacePath } from './files.js';
+import { bareSlashCommand } from './slash.js';
 import { CP_SESSION_PATH, HOST_ENV_NAMES, parseStartOutput } from './host.js';
 import {
   allowResponse,
@@ -2313,6 +2314,10 @@ export class ChatController {
     const att = this.#content.check(sessionId, opts.attachments); // images inline, other files by upload: checked before anything is stored or sent
     if (!text.trim() && !att.count) throw new AppError('VALIDATION_FAILED', 'Type a message.');
     if (this.#chat.hasInput(sessionId, uuid)) throw new AppError('CONFLICT', 'That message was already sent.'); // integrity: a UUID is used once
+    // T-597: an allowed slash command (/compact, /context, /reload-plugins) from a portal actor is written bare, or Claude Code
+    // would read framed prose and never run it. The set is checked here so no caller can send another one bare; with an
+    // attachment the note would follow the command, so that text stays framed. The stored event keeps the actor.
+    const bare = portal !== null && bareSlashCommand(text, portal, att.count > 0);
 
     // T-294: a crew report wakes a sleeping lead, but never relaunches one whose process is gone nor runs one a person stopped.
     const report = opts.actor === CREW_REPORT_ACTOR;
@@ -2352,7 +2357,7 @@ export class ChatController {
     try {
       await this.#writeLine(
         sessionId,
-        userLine(att.withNote(portal ? portalFrame(portal, actorLabel, text, opts.relation) : text), { uuid, priority, images: att.inline(), imagesFirst: att.needsStaging }),
+        userLine(att.withNote(portal && !bare ? portalFrame(portal, actorLabel, text, opts.relation) : text), { uuid, priority, images: att.inline(), imagesFirst: att.needsStaging }),
       );
       att.done();
     } catch (e) {
