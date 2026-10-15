@@ -265,7 +265,8 @@ test('service: off writes nothing; dry writes one line and one audit row, approv
     await h.svc.settled();
     assert.equal(h.svc.environments(repo.id)[0]!.autoApprove, 'off');
     assert.equal(h.svc.get(first.id).deployments[0]!.autoApprove, null, 'off writes nothing');
-    assert.equal(audit.length, 0, 'no audit row');
+    // FR39 (T-476): every start by hand writes `ci.run_started`; the auto-approve rule itself writes nothing while off.
+    assert.deepEqual(audit.map((a) => a.kind), ['ci.run_started'], 'no audit row but the start itself');
     await h.svc.decide(first.id, 'release', 'approve', OWNER);
     await h.until('the first release to pass', () => h.svc.get(first.id).status === 'passed');
 
@@ -276,7 +277,7 @@ test('service: off writes nothing; dry writes one line and one audit row, approv
     const env = h.svc.setAutoApprove(repo.id, 'production', { mode: 'dry' }, OWNER);
     assert.deepEqual([env.autoApprove, env.autoApproveWindow, env.needsPerson], ['dry', null, [...CI_AUTO_APPROVE_DEFAULT_PATHS]]);
     h.svc.setAutoApprove(repo.id, 'production', { mode: 'dry' }, OWNER);
-    assert.deepEqual(audit.filter((a) => a.kind !== 'ci.deploy_approved').map((a) => [a.kind, a.actor, a.userId, a.subject, a.detail?.environment, a.detail?.mode, a.detail?.was]), [['ci.environment_auto_approve', 'user:u_owner', 'u_owner', `ci_repo:${repo.id}`, 'production', 'dry', 'off']], 'one row; no change, no row');
+    assert.deepEqual(audit.filter((a) => a.kind !== 'ci.deploy_approved' && a.kind !== 'ci.run_started').map((a) => [a.kind, a.actor, a.userId, a.subject, a.detail?.environment, a.detail?.mode, a.detail?.was]), [['ci.environment_auto_approve', 'user:u_owner', 'u_owner', `ci_repo:${repo.id}`, 'production', 'dry', 'off']], 'one row; no change, no row');
 
     // A harmless change, then a deploy: WOULD approve, and nothing else happens.
     push(h, { 'README.md': '# app, changed\n' });
