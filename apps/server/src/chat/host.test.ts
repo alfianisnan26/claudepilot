@@ -835,10 +835,11 @@ test('trustscan extras (T-366 M3, m1): a frontmatter key off the allow list, or 
   write('.claude/commands/c.md', '---\ndescription: d\nargument-hint: [x]\nallowed-tools: Grep\n---\nBody.\n');
   const plain = await trustscan(proj, env);
   assert.deepEqual([plain.extras, plain.rulesOnly, plain.broadAllow], [[], true, false]);
-  write('.claude/agents/a.md', '---\nname: a\nmcpServers:\n  srv: {command: x}\n---\n');
+  write('.claude/agents/a.md', '---\nname: a\nmcpServers:\n  srvname: {command: cmdvalue}\n---\n');
   const servers = await trustscan(proj, env);
-  assert.deepEqual([servers.extras, servers.rulesOnly], [['unreadable'], false]);
-  assert.ok(!servers.raw.includes('mcpServers') && !servers.raw.includes('srv'), 'never the key or its value');
+  assert.deepEqual([servers.extras, servers.rulesOnly, servers.mcpServers], [['unreadable'], false, []]);
+  // (`mcpServers` is a field of every scan, so only the frontmatter's own names are looked for.)
+  assert.ok(!servers.raw.includes('srvname') && !servers.raw.includes('cmdvalue'), 'never the frontmatter’s names or values');
   write('.claude/agents/a.md', '---\nname: a\n...\nhooks: {}\n---\n');
   const dots = await trustscan(proj, env);
   assert.deepEqual([dots.extras, dots.rulesOnly], [['agent:hooks', 'unreadable'], false]);
