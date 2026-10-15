@@ -21,9 +21,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   -> QA DELTAS f5b1026b (sonnet, qa/T-426-s1e) both -> T-426 merge on T-401 ack; T-631 F2 merge on PASS. BE Infra lane: respawn on T-638.
 - QA PERF 7e4879c7 (lane/cp-qa-perf) queue (19:59): T-623 S1b -> T-636 -> T-591 S1d -> T-600 BE/T-597 (if not done) -> T-325 S1 -> T-558 S1b.
 - MERGED ff ce819bd0: T-597 S1b (gate GREEN 2c53982, flake layout.test -> T-638) -> coordinator deploys with T-546. Next merge T-325 S1 (after QA).
-- T-576 phone check (390/1280 on the real build) still open; kit 44 px -> T-639. Closes on that evidence (5991).
-- T-600 FE S1c DONE d1b31305 (5954; fa9d3d56 ended) -> QA UI respawned de862414 on qa/T-600-ui-r4 81684f78 (r3 + FE head, lead merge)
-  re-runs crew-grid.mjs at 390/1280. Frontend lane is free: next FE item when the QA UI verdict is in.
+- T-576 phone check (390/1280 on the real build) with QA UI 8b13bb5a; kit 44 px -> T-639. Closes on that evidence (5991).
+- BATCH 5 premerge 6bb628cf: T-600 (BE QA 5864 + FE QA UI 6128 PASS WITH GAPS; conflicts with T-547 quotaUnused in lab/index.ts and
+  contracts/scorecard.ts: kept both) GATE RUNNING (job-out/gate-6bb628c.log) -> ff on green. QA UI respawned 8b13bb5a on T-576 phone check.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
   T-426 ab93b54: QA Perf PASS 33/33 (5564) but blind review d4c49b5c FAIL 5571 (sev 2: refused arg echoed, pasted hex secret printed).
   S1b 350dd399 (5661): 2nd blind review 14385e7d CHANGES 5674 (sev 2: parser :104 echoes $1, lead confirmed) -> decision 5682 ->
