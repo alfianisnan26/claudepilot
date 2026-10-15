@@ -9,14 +9,14 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - DEPLOYED run #37 rmv9dxygu680003 (0316fae = b37628e + status): gate 690 s, build, release, verify, chats all passed.
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
-## IN FLIGHT (4 of 4 workers, D-65): T-561 a649874 blind review PASS W/ CONDITIONS (5227); decision 5230:
+## IN FLIGHT (5 of 5 workers, D-68): T-561 a649874 blind review PASS W/ CONDITIONS (5227); decision 5230:
   7f11145e impl-t561-s1b (sonnet) on ticket/T-561-s1b fixes the 6 findings: WAITING fc35ded. T-576 DONE 2427d98 (Jobs green; no
-  prettier/eslint in the Job; d2e7b532 ended): ux BLOCKED (no node_modules, symlink denied; 5335; c30a3848 ended): waits on the coordinator (T-586). T-558 e652c44: QA runs its Jobs (5052).
-  3e1e48fd jobs-t486c (sonnet) HAS THE CLUSTER: T-486 Jobs on 3cb0883 (ticket/T-486-s2c-jobs; cee43422 ended after restart),
-  d23cb713 impl-t548 (sonnet) T-548 S1 WAITING 9b822ba (design 5152; migration 779, T-561 has 778). T-486 QA PASS W/ GAPS 5125.)
-  T-546 bb7cdb0: jobs-t546 (sonnet, ticket/T-546-jobs) re-runs the Jobs the restart cut (5143); waits for GO.
+  prettier/eslint in the Job): coordinator prepared node_modules (T-586): 3030a5ff ux-t576 (sonnet) WAITING build. T-558 e652c44: QA runs its Jobs (5052).
+  T-486 DONE ab61f5c (Jobs green + a deliveredSecretValue test; ticket/T-486-s2c-jobs): 3a11ae66 review-t486c (opus, D-62) blind review.
+  d23cb713 impl-t548 (sonnet) T-548 S1 HAS THE CLUSTER (GO, 9b822ba; migration 779 still free). T-486 QA PASS W/ GAPS 5125.)
+  T-546 bb7cdb0: 8822ba59 jobs-t546 (sonnet, ticket/T-546-jobs) re-runs the Jobs the restart cut (5143): WAITING. Next free slot: T-586 worktree-deps.sh (coordinator ask).
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-486 s2c (now) -> T-548 -> T-561 S1b -> T-546 -> T-558 QA. quick-check unusable by dontAsk workers: T-586 (mine,
+  Cluster: T-548 (now) -> T-576 web build (ux) -> T-561 S1b -> T-546 -> T-558 QA. quick-check unusable by dontAsk workers: T-586 (mine,
   coordinator decides); briefs say: its checks in ONE job-run Job. Next free slot: T-546 Jobs, T-558 QA, T-486 review.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
