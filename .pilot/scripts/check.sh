@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The Check pipeline's step (.pilot/check.yml). A push that changes only documents (docs/, *.md, the context pack) ends at once. Otherwise:
+# The Check pipeline's step (.pilot/check.yml). A push that changes only documents (docs/, *.md, the context pack) ends at once, and so does
+# a run whose commit is no longer the branch's head (the newer commit has its own run). Otherwise:
 # on a runner (PILOT_RUNNER is set: the Mac), the gate runs here, in the run's clean clone (scripts/gate.sh, what the gate Job runs);
 # in the repository's own workspace (the fallback), nothing heavy may run in the pod (D-61), so the gate goes to the cluster as one Job
 # (scripts/gate-job.sh on this commit, which must be on GitHub: integration is).
@@ -14,9 +15,17 @@ if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
     exit 0
   fi
 fi
+# A newer commit on the branch gets its own run: this one ends at once, so runs never queue up behind a long gate (2026-10-15: nine waited).
+branch="${PILOT_BRANCH:-integration}"
+head=$(git ls-remote origin "refs/heads/$branch" 2>/dev/null | cut -c1-40 || true)
+if [ -n "$head" ] && [ "$head" != "$sha" ]; then
+  echo "check: superseded: $branch is at ${head:0:8} now, and that commit is checked by its own run"
+  exit 0
+fi
 if [ -n "${PILOT_RUNNER:-}" ]; then
   echo "check: on the runner $PILOT_RUNNER: the gate at ${sha:0:8} runs here"
   exec bash scripts/gate.sh "$sha"
 fi
-echo "check: no runner free (or the hand-off failed): the gate at ${sha:0:8} goes to the cluster as a Job"
-exec bash scripts/gate-job.sh "$sha"
+# The cluster is shared and busy: here only typecheck and the web build (the deploy runs the whole gate, the suite included).
+echo "check: no runner free (or the hand-off failed): typecheck and web build at ${sha:0:8} go to the cluster as a Job"
+exec bash scripts/gate-job.sh "$sha" typecheck,web-build

@@ -35,6 +35,8 @@ function fixture(files: Record<string, string>) {
   copyFileSync(join(REPO, '.pilot/scripts/check.sh'), join(root, '.pilot/scripts/check.sh'));
   tool(join(root, 'scripts/gate.sh'), 'echo "GATE HERE $*"');
   tool(join(root, 'scripts/gate-job.sh'), 'echo "GATE JOB $*"');
+  // The run's clone has an origin whose branch head the step reads (a bare repository beside it).
+  sh(root, `git init -q --bare ../${root.split('/').pop()}-origin.git`);
   writeFileSync(join(root, 'a.ts'), 'export const a = 1;\n');
   sh(root, 'git init -q -b integration && git add -A && git commit -qm base');
   const base = sh(root, 'git rev-parse HEAD');
@@ -44,8 +46,9 @@ function fixture(files: Record<string, string>) {
   }
   sh(root, 'git add -A && git commit -qm head');
   const head = sh(root, 'git rev-parse HEAD');
+  sh(root, `git remote add origin ../${root.split('/').pop()}-origin.git && git push -q origin HEAD:refs/heads/integration`);
   const run = (env: Record<string, string>) => spawnSync('bash', ['.pilot/scripts/check.sh'], { cwd: root, encoding: 'utf8', env: { ...GIT_ENV, PILOT_SHA: head, PILOT_BASE_SHA: base, ...env } });
-  return { head, run };
+  return { head, run, root };
 }
 
 test('a push of documents only ends at once: no gate here, no Job', () => {
@@ -69,8 +72,19 @@ test('in the workspace (the fallback, no PILOT_RUNNER) the gate goes to the clus
   const f = fixture({ 'a.ts': 'export const a = 3;\n', 'docs/x.md': 'x\n' });
   const r = f.run({});
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, new RegExp(`GATE JOB ${f.head}`));
+  assert.match(r.stdout, new RegExp(`GATE JOB ${f.head} typecheck,web-build`));
   assert.doesNotMatch(r.stdout, /GATE HERE/);
+});
+
+test('a run whose commit is no longer the branch head ends at once: the newer commit has its own run', () => {
+  const f = fixture({ 'a.ts': 'export const a = 4;\n' });
+  const root = f.root;
+  writeFileSync(join(root, 'b.ts'), 'export const b = 1;\n');
+  sh(root, 'git add -A && git commit -qm newer && git push -q origin HEAD:refs/heads/integration');
+  const r = f.run({ PILOT_BRANCH: 'integration' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /superseded: integration is at/);
+  assert.doesNotMatch(r.stdout, /GATE/);
 });
 
 test('with no base commit (a manual run) the gate always runs', () => {
