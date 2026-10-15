@@ -477,7 +477,7 @@ export function SessionRow({
             </div>
             <p data-row-meta="" className="mt-0.5 flex min-w-0 items-center gap-1 overflow-hidden text-[12.5px] whitespace-nowrap text-muted">
               {facts2.map((f, i) => (
-                <span key={f.key} className={cn('items-center gap-1', f.shrinks ? 'flex min-w-0' : 'flex shrink-0', f.wide && 'hidden sm:flex')}>
+                <span key={f.key} className={cn('items-center gap-1', f.wide ? 'hidden sm:flex' : 'flex', f.shrinks ? 'min-w-0' : 'shrink-0')}>
                   {i > 0 && <span aria-hidden="true">·</span>}
                   {f.node}
                 </span>
