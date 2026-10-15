@@ -1,3 +1,4 @@
+// Superseded for list checks by seed-scale.mjs (T-378: crews, Claudes, readings, today's schema); kept for the old perf notes that name it.
 // Seeds a QA portal database with load: one session of N transcript events, M more sessions, and U usage rows.
 // Stop the portal first (it holds the database), then:  node tools/qa/seed-perf.mjs [dbPath] [events] [sessions] [usageRows]
 // Everything is marked "QA perf" / "QA bulk" so it is easy to find and to delete again with --purge.
