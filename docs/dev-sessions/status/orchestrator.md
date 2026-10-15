@@ -11,14 +11,14 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   5499/5651/5687/5685/5702; lead read webhook authz + hand-off (no route). GATE running -> job-out/gate-4071aa5.log -> ff integration.
 - T-591 S1c QA PASS WITH GAPS 5741; merge CONFLICT: migration 783 also T-486's -> S1d (renumber + M5a test) 5746, next free slot.
 - T-597 QA FAIL 5727 (sev 2: text after /compact goes unframed) -> decision 5742 -> S1b queued to Backend after T-600 BE.
-- QA PERF 7e4879c7 (lane/cp-qa-perf): T-426 S1c -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-558 e652c44; T-426 S1c to the front when DONE.
+- QA PERF 7e4879c7 (lane/cp-qa-perf): T-426 S1c -> T-623 -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-558 e652c44; T-426 S1c to the front when DONE.
 - QA UI b3f769c5 (qa/T-600-ui-r3 32f67b8f): T-619 PARTIAL 5720 (both targets blocked; scratch portal not started, no node_modules,
   deps script refused) -> asked coordinator to link deps 5726; then steps a,b,d. T-600 FE S1b FAIL 5721 (Pace 2 cols at 1280) -> FE S1c. Then T-576.
 - BACKEND 4b4edaf8 (ticket/T-600-be from T-600-fe-s1b 32985e2) on T-600 BE (plan 5540); then T-597 S1b; then T-325 S1+S2 (5549).
-- BE INFRA feaba810 (ticket/T-623-browser-access-headers from integration) on T-623 (plan 5622; opus blind review before merge); then T-610.
+- T-623 DONE 4d68e843 (5750; 174/174, typecheck; not real Chromium/k8s) -> REVIEW 6b97efb4 (opus, security) + QA Perf after T-426 (5754).
+  RBAC widening (all Secrets in workspaces ns) = person; CDP read-back vs "never visible". BE INFRA feaba810 ended; respawn: T-591 S1d, T-610.
 - T-619 egress review 2590789a PASS WITH CONDITIONS 5627 (ended) -> coordinator 5629: owner ack on D-60 relax before #41 release; T-624 follow-up.
 - FRONTEND: 6a1a061e DONE FE S1b 32985e2 (5621) -> QA UI; ended (slot for T-619). NEXT FREE SLOT: FE S1c T-600 Pace grid (5721); then T-556 after T-486.
-- Lane respawn = new base (lane-backend has no ff, T-595 5553).
 - Merge notes: T-546 merges 10b22e0, not branch head 0004ac5. T-486 = S2d 2979f99 + S2e ea1c006. Ended: 5f8f392b, 74a8d857, 83921ca7,
   f13a9442, 4ba6c5db, d4c49b5c, 219d5558. T-619: review CHANGES 5575 -> coordinator lands the named list (5584). No prettier/eslint in Jobs (T-612).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
@@ -59,6 +59,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## NEEDS A HUMAN (D-62)
 - T-401 gate wall (via the coordinator): the owner acks on T-401 that gate-job.yaml's change is credential plumbing plus one
   stricter red (exit 3 on a credential value in the gate's files); gate.sh's checks unchanged. Question text in 4941.
+- T-623 (via the coordinator): apply deploy/k3s/rbac.yaml secrets verbs (or a narrower form the review names), set the header values in Secrets & env.
 - T-93 Konfersi production only. Coordinator items: T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
   T-433's persona-wall question (2984). T-631 (allow list): let lane-qa-ui run worktree-deps.sh in its own worktree; r3 link (5726).
 - For the coordinator, NOT the owner (not tagged owner-checklist): T-476 lead may START a deploy whose release waits for a person
