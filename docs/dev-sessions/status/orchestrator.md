@@ -1,4 +1,4 @@
-# orchestrator status (2026-10-15 16:40 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-15 17:56 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-overs: ab99b45, bb58413, 639202e.
 
@@ -7,16 +7,15 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## IN FLIGHT (6 of 6, D-71): all sonnet
 - QA T-416 41381bf2 (qa/T-416-s1b at a769b008): suite, race test red on d37c5f0/green on a769b00, reservation release, push-bridge mutation,
   typecheck -> blind review (opus) -> gate -> merge.
-- T-591 S1c DONE b17a4e84 (5704; G1+G2 kill M4/M5, M5a survives, already redacted; no typecheck by author) -> QA Perf M4/M5 + typecheck. 2d679b18 ended.
-- QA PERF 7e4879c7 (lane/cp-qa-perf): (T-426 waits for S1c) T-486 S2e ea1c006 (5585) -> T-547 2bea754 (+typecheck, authz) -> T-597 1aeae88 -> T-611 4ac5982
-  -> T-586 (premerge wip/main-5b66aa0, gate GREEN) -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-548 -> T-558 e652c44. T-591 PASS WITH GAPS 5587.
+- PREMERGE batch1 wip/main-4071aa5 (premerge-batch1 worktree): T-586 + T-486 (S2d+S2e) + T-547 + T-611 + T-548, QA PASS WITH GAPS
+  5499/5651/5687/5685/5702; lead read webhook authz + hand-off (no route). GATE running -> job-out/gate-4071aa5.log -> ff integration.
+- T-591 S1c QA PASS WITH GAPS 5741; merge CONFLICT: migration 783 also T-486's -> S1d (renumber + M5a test) 5746, next free slot.
+- T-597 QA FAIL 5727 (sev 2: text after /compact goes unframed) -> decision 5742 -> S1b queued to Backend after T-600 BE.
+- QA PERF 7e4879c7 (lane/cp-qa-perf): T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-558 e652c44; T-426 S1c to the front when DONE.
 - QA UI b3f769c5 (qa/T-600-ui-r3 32f67b8f): T-619 PARTIAL 5720 (both targets blocked; scratch portal not started, no node_modules,
   deps script refused) -> asked coordinator to link deps 5726; then steps a,b,d. T-600 FE S1b FAIL 5721 (Pace 2 cols at 1280) -> FE S1c. Then T-576.
-- BACKEND 4b4edaf8 (ticket/T-600-be from T-600-fe-s1b 32985e2) on T-600 BE (plan 5540); then T-325 S1+S2 (5549, fresh branch).
-  T-597 DONE 1aeae88 (fix 4afc6efd, 39/39, mutation caught; 5691) -> QA Perf (whole chat folder + framing/authz probes). 6d72b5c6 ended.
+- BACKEND 4b4edaf8 (ticket/T-600-be from T-600-fe-s1b 32985e2) on T-600 BE (plan 5540); then T-597 S1b; then T-325 S1+S2 (5549).
 - BE INFRA feaba810 (ticket/T-623-browser-access-headers from integration) on T-623 (plan 5622; opus blind review before merge); then T-610.
-  T-547 DONE 2bea754 (89/89, mutation caught; typecheck on fa67900 only) -> QA Perf.
-- T-548 S1b DONE 3b8f5cb5 (5684; 32/32, mutation caught, typecheck clean; quick check refused) -> QA Perf S1+S1b. a6a0ea9d ended.
 - T-619 egress review 2590789a PASS WITH CONDITIONS 5627 (ended) -> coordinator 5629: owner ack on D-60 relax before #41 release; T-624 follow-up.
 - FRONTEND: 6a1a061e DONE FE S1b 32985e2 (5621) -> QA UI; ended (slot for T-619). NEXT FREE SLOT: FE S1c T-600 Pace grid (5721); then T-556 after T-486.
 - Lane respawn = new base (lane-backend has no ff, T-595 5553).
