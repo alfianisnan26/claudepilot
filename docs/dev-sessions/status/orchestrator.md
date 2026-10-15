@@ -20,8 +20,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - QA PERF 7e4879c7 (lane/cp-qa-perf): current item, then T-426 S1c+S1d 80f5bb72 (FRONT, owner), then rest of T-600 BE 1a95fb03 / T-597 S1b 75656845, then T-623 S1b 784926f, then T-591 S1d delta 394abdd5; T-636 trust check queued after T-426 (19:33). QA is the bottleneck (6 queued).
 - BATCH 3 premerge f63c5f9 (T-576 cb6bd216, QA UI PASS WITH GAPS 5883; PRD local-git-ci conflict: kept 23.1 + T-576 line) GATE RUNNING
   (job-out/gate-f63c5f9.log) -> ff integration on green. Kit 44 px gap -> T-639; phone check stays.
-- QA UI b3f769c5 ENDED (idle until FE S1c; slot swap, 19:19) -> FRONTEND fa9d3d56 (ticket/T-600-fe-s1c from 1a95fb03) on FE S1c
-  (Pace 3 cols at 1280, 5721). On its DONE: end FE, respawn QA UI (lane-qa-ui) to re-run T-600 (qa/T-600-ui-r3 32f67b8f, crew-grid.mjs).
+- T-600 FE S1c DONE d1b31305 (5954; fa9d3d56 ended) -> QA UI respawned de862414 on qa/T-600-ui-r4 81684f78 (r3 + FE head, lead merge)
+  re-runs crew-grid.mjs at 390/1280. Frontend lane is free: next FE item when the QA UI verdict is in.
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
   T-426 ab93b54: QA Perf PASS 33/33 (5564) but blind review d4c49b5c FAIL 5571 (sev 2: refused arg echoed, pasted hex secret printed).
   S1b 350dd399 (5661): 2nd blind review 14385e7d CHANGES 5674 (sev 2: parser :104 echoes $1, lead confirmed) -> decision 5682 ->
