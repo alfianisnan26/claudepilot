@@ -1528,6 +1528,7 @@ export class ChatController {
     try {
       return await this.#createBody(id, req, opts, spawnChecked);
     } catch (e) {
+      this.#memoryReserved.delete(id);
       throw e;
     }
   }
@@ -1679,7 +1680,7 @@ export class ChatController {
     // Its slot counts as running until the launch settles (T-417 review: else a start waiting in line takes the same room).
     void this.#startProcess(id, { checked: installed })
       .catch(() => undefined)
-      .finally(() => (this.#granted.delete(id), this.#memoryReserved.delete(id)));
+      .finally(() => this.#granted.delete(id));
     return session;
   }
 
