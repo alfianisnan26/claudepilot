@@ -14,12 +14,11 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-636 CLOSED done on QA PASS WITH GAPS 5962 (built by the coordinator, ad9f7ad8). T-576 CLOSED on QA UI PASS WITH GAPS 6268; 40 px -> T-681.
 
 ## IN FLIGHT (6 of 6, D-71)
-- T-633 OPEN: its new G3 test FLAKED in the gate (6312) + H1/H2 survivors -> Backend lane after T-325 S1c (fresh branch).
   QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts.
-- T-325 S1b 92bd7e23 QA PASS WITH GAPS 6297 (N3, N5 survive) -> decision (b) 6301: BACKEND lane 7979da21 (sonnet, respawned;
-  d762b5fc ended) adds N3/N5 tests on ticket/T-325-s1c; then QA delta, gate, merge S1+S1b+S1c.
-- T-416 S1d 89e270cc: review 6310 CHANGES (sev-2: restart of asleep/gone skips budget) -> decision (b) 6316: IMPL S1e 3d92ab62
-  (opus, why: incident) on ticket/T-416-s1e; QA PERF 7e4879c7 still on S1d, then S1e delta; then gate, merge.
+- T-325 S1c 1e6fe70f DONE (N3/N5 tests, 6327; Backend 7979da21 ended) -> QA PERF 7e4879c7 delta check; then gate, merge S1+S1b+S1c.
+- T-416 S1d 89e270cc: review 6310 CHANGES (sev-2 restart skips budget) + QA 6326 PASS WITH GAPS (M2/M3/M9/M10 survive) -> IMPL S1e
+  3d92ab62 (opus, why: incident) on ticket/T-416-s1e fixes 1-3 + those 4 tests; then QA Perf delta, gate, merge.
+- BACKEND lane 8962fc38 (sonnet, respawned) on T-633 S2: G3 deflake + H1/H2 tests (ticket/T-633-s2 from 1a4a7933).
 - QA BE 2 42e5408f (sonnet): T-574 124ca45f (Backend 6280) then T-341 e4284315 (BE Infra 6292; A partial, D not verified).
 - BE INFRA lane b6df312e (sonnet, respawned; aa8dc58b ended) on T-549 D-65 scorecard rows (ticket/T-549-d65-rows from integration).
 - QA UI 8b13bb5a: BLOCKED on T-376 (no Write; dontAsk refuses heredocs): posts harness design on T-376, idle. An implementer
