@@ -76,5 +76,5 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 7. T-472 live re-check (4294), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
    T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2.
 
-LESSONS: node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, gate or wait; whole
+LESSONS: node --test, never vitest; a gate-done notice needs action; dontAsk workers cannot read /tmp, merge, add worktrees (lead makes them), gate or wait; whole
 test folders; trailers in one block; FULL hashes; gate before every push; status via Edit/Write only; ancestor check before ff.
