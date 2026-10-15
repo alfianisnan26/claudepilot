@@ -409,7 +409,8 @@ test('a deleted continuation keeps its lead chain and its workers in the program
     use('Y3', 'K3', 3, 0.25);
     // The delete: K3 no longer continues K2, and Y2 has no parent (chat/store.ts deleteSession).
     chat.deleteSession('K2');
-    assert.deepEqual(db.prepare(`SELECT continued_from AS c FROM chat_sessions WHERE id = 'K3'`).get(), { c: null });
+    assert.equal((db.prepare(`SELECT continued_from AS c FROM chat_sessions WHERE id = 'K3'`).get() as { c: string | null }).c, null);
+    assert.equal((db.prepare(`SELECT parent_id AS p FROM chat_sessions WHERE id = 'Y2'`).get() as { p: string | null }).p, null);
 
     const s = h.lab.scorecard({ window: 'day' })!;
     assert.deepEqual(s.programs.map((p) => p.program).sort(), ['K1', 'L1', 'M1'], 'one program for C, named by its first row');
@@ -597,9 +598,14 @@ test('MCP crew_scorecard: short by default, full on ask; an agent of program A g
     const b = short.programs.find((p: any) => p.program === 'M1');
     assert.equal(b.now.per_done_usd, 'unavailable:no_samples');
     assert.equal(short.basis, undefined, 'the sources are in the full form');
-    const full = where(await mcp.call(admin.secret, 'crew_scorecard', { full: true, window: '6h' }));
+    const fullCall = await mcp.call(admin.secret, 'crew_scorecard', { full: true, window: '6h' });
+    assert.ok(!refused(fullCall), `the full form fits the result limit: ${JSON.stringify(fullCall).slice(0, 300)}`);
+    const full = where(fullCall);
     assert.equal(full.window, '6h');
-    assert.ok(full.basis.cost && full.programs[0].current.effectiveness.done.source);
+    // Each figure has its basis; its source is named once in `basis`.
+    const done = full.programs[0].current.effectiveness.done;
+    assert.deepEqual([done.basis, done.source, typeof full.basis.done, typeof full.basis.health], ['measured', undefined, 'string', 'string']);
+    assert.ok(full.programs[0].current.efficiency.requests && full.programs[0].current.health.refusals);
     assert.ok(JSON.stringify(full).length > JSON.stringify(short).length);
 
     const w3 = await mcp.agentToken('docker/api', 'W3');

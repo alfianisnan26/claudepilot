@@ -65,6 +65,15 @@ export function scoreShort(p: CrewProgramScore) {
   };
 }
 
+/** A copy with every figure's `source` left out (a figure: an object with `value`, `basis` and `source`). */
+export function withoutSources<T>(x: T): T {
+  if (Array.isArray(x)) return x.map(withoutSources) as T;
+  if (!x || typeof x !== 'object') return x;
+  const o = x as Record<string, unknown>;
+  const figure = 'value' in o && 'basis' in o && 'source' in o;
+  return Object.fromEntries(Object.entries(o).filter(([k]) => !(figure && k === 'source')).map(([k, v]) => [k, withoutSources(v)])) as T;
+}
+
 /** One short row: the figures the coordinator compares every pass. */
 export function compactRow(r: LabSummaryRow) {
   return {
@@ -160,8 +169,10 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       if (!s) throw new PortalToolError('NOT_FOUND', 'No such program.');
       const scope = own ? 'program' : 'portal';
       const summary = `${s.programs.length} program${s.programs.length === 1 ? '' : 's'} over the last ${s.window}${own ? ' (your own program only)' : ''}. Dollars are estimates.`;
-      if (args.full) return { summary, scope, ...s };
-      return { summary, scope, window: s.window, programs: s.programs.map(scoreShort), more: 'full: true for every figure with its basis and source, types, CI, deploys and the review list.' };
+      // Full: every figure without its own `source` (the `basis` map names each source once), so a portal of a few programs and two windows
+      // stays under the result limit (MAX_RESULT_CHARS); the route keeps the sources on each figure.
+      if (args.full) return { summary, scope, ...s, programs: s.programs.map(withoutSources) };
+      return { summary, scope, window: s.window, programs: s.programs.map(scoreShort), more: 'full: true for every figure with its basis, types, CI, deploys, efficiency, health and the review list; basis names the sources.' };
     },
   });
 
