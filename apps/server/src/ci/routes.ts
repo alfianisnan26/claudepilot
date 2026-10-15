@@ -27,7 +27,7 @@ import {
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { actorOf, can, requireCan, visible } from '../authz/seam.js';
-import { declareCiPolicies, registerCiAuthz } from './authz.js';
+import { declareCiPolicies, registerCiAuthz, requireVaultWrite } from './authz.js';
 import type { CiDecider, CiService } from './service.js';
 
 async function body<T>(c: Context): Promise<Partial<T>> {
@@ -169,9 +169,13 @@ export function createCiRoutes(ci: CiService): Hono {
   // tokens and agents); audited. The backfill takes a run id and nothing else: the vault and folder are always the remote's own setting.
   app.get('/repos/:id/release-report', (c) => (may(c, 'view', repoRef), c.json(success(ci.releaseReportSetting(id(c))))));
   app.put('/repos/:id/release-report', async (c) => {
-    const by = person(may(c, 'manage', repoRef));
+    const actor = may(c, 'manage', repoRef);
+    const by = person(actor);
     const req = await body<{ setting: CiReleaseReportSetting | null }>(c);
     if (req.setting !== null && (typeof req.setting !== 'object' || req.setting === undefined)) throw new AppError('VALIDATION_FAILED', 'Send { "setting": { pipeline, vaultId, folder } } or { "setting": null }.');
+    // The note is written as the portal later, so the person must be able to write that vault themselves (404 otherwise, as for one they cannot see).
+    const vaultId = typeof req.setting?.vaultId === 'string' ? req.setting.vaultId.trim() : '';
+    if (req.setting && vaultId && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(vaultId)) requireVaultWrite(actor, vaultId, (v) => ci.vaultExists(v));
     return c.json(success(ci.setReleaseReport(id(c), req.setting, by)));
   });
   app.post('/runs/:id/release-report', async (c) => {

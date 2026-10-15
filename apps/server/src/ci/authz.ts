@@ -4,8 +4,8 @@
 // person's acts: the routes also refuse any actor that is not a signed-in user, and no Portal MCP tool reaches them, so an agent never approves.
 
 import { AppError } from '@isnanme/core';
-import { FOUNDING_USER_ID, objectRef, workspaceRef, type CiRepo, type RoutePolicies, type UserId } from '@portal/contracts';
-import { declarePolicies, declareToolPolicies, registerResolver } from '../authz/seam.js';
+import { FOUNDING_USER_ID, objectRef, vaultRef, workspaceRef, type Actor, type CiRepo, type RoutePolicies, type UserId } from '@portal/contracts';
+import { can, declarePolicies, declareToolPolicies, registerResolver } from '../authz/seam.js';
 import { branchProblem } from '../chat/worktrees.js';
 import type { CiSession } from './sessions.js';
 
@@ -81,6 +81,15 @@ export function agentStart(me: CiSession | null, repo: Pick<CiRepo, 'name' | 'wo
   }
   const own = me?.branch ? ` (${me.branch})` : ', and this session has no worktree branch';
   return { rule: 'deployment', ref, refusal: new AppError('FORBIDDEN', `An agent can start a run only on the branch its own session works on${own}, or a pipeline that deploys to an environment.`) };
+}
+
+/**
+ * T-591: the release report is written as the portal (`system`), so the person who sets its vault must be able to WRITE there themselves
+ * (`operate` on the vault: OBJECT_TYPES `vault`). A vault that does not exist or that they may not write answers the same 404 as one they
+ * cannot see. The vault's own agent policy does not apply: the writer is never an agent.
+ */
+export function requireVaultWrite(actor: Actor, vaultId: string, exists: (vaultId: string) => boolean): void {
+  if (!exists(vaultId) || !can(actor, 'operate', vaultRef(vaultId)).allow) throw new AppError('NOT_FOUND', 'Not found.');
 }
 
 const run = (verb:'view' | 'operate' | 'manage') => ({ kind: 'objects' as const, checks: [{ type: 'ci_run' as const, verb, from: 'path' as const, param: 'id' }] });

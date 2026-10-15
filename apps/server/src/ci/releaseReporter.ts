@@ -30,6 +30,8 @@ import type { CiTicketsPort } from './tickets.js';
 
 /** What the reporter needs of the knowledge vault: read a note's text (null when there is none) and write one, as the portal. Nothing else. */
 export interface ReleaseNoteSink {
+  /** Whether the vault exists (false when it does not; any other failure is thrown). Without it a setting can not be saved. */
+  exists?(vaultId: string): boolean;
   read(vaultId: string, path: string): string | null;
   put(vaultId: string, path: string, content: string): { created: boolean; unchanged: boolean };
 }

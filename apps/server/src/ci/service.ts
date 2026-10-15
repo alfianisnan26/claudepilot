@@ -1814,7 +1814,7 @@ export class CiService {
     this.#hook(() => this.hooks.changed?.(row, previous));
     void this.#links.changed(row, previous).catch((e: unknown) => console.error(`[ci] ${id}: linking failed: ${(e as Error).message}`));
     // T-591: a release pipeline that ended writes its report (only when the remote has the setting and its release job passed).
-    if (row.status === 'passed' || row.status === 'failed' || row.status === 'cancelled') void this.#reporter.report(id).catch((e: unknown) => console.error(`[ci] ${id}: release report failed: ${(e as Error).message}`));
+    if (row.status === 'passed' || row.status === 'failed' || row.status === 'cancelled') void this.#reporter.report(id).catch((e: unknown) => console.error(`[ci] ${id}: release report failed: ${oneLine(this.#redact(row.workspace_id, (e as Error).message)) ?? 'unknown error'}`));
   }
 
   /* ---------- Release reports (T-591) ---------- */
@@ -1824,6 +1824,11 @@ export class CiService {
     const repo = this.#cs.repo(repoId);
     if (!repo || repo.removed_at) throw notFound('remote');
     return parseSetting(repo.release_report);
+  }
+
+  /** Whether the vault a setting names exists (false without a sink: fail closed). The route asks it, with the person's right to write there (ci/authz.ts). */
+  vaultExists(vaultId: string): boolean {
+    return this.releaseNotes?.exists?.(vaultId) ?? false;
   }
 
   /** Sets or clears it. A person only (the route refuses tokens and agents); audited. The vault must exist: it is checked when a note is written, so a wrong id fails loudly then. */
