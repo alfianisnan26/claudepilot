@@ -9,10 +9,11 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 
 ## IN FLIGHT (3 live workers = the D-61 budget; no Agent-tool sub-agents)
 - T-366 (urgent): built dev/t-366-1 086a9e1 (proof 57/57 vs 8 fail on base, chat 703/0 fail, typecheck 0; worker 033e1b23 ended). THIRD blind reviewer 5f83b665 (opus, hasyim) in dev-t-366-1. Then merge, deploy images=portal,workspace on 2026-10-16, real-job QA.
-- T-417 (high): review SAFE AFTER FIXES (comment 2875; reviewer 775a1756 ended). Fixer a1bf3da8 (opus, fadlilah) in dev-t-336-1 on dev/t-417-1 from 9622deb: findings 1,2,3,5,7,8,9. Then a DIFFERENT reviewer (not 775a1756), merge. Finding 6 = T-425 (new, normal). Bypass across sleep rests on the owner's T-417 text; D-row is the coordinator's.
-- T-375 (high) + T-369: dev/t-375-1 c84657f merges T-369; typecheck, web 589/589, crew 108, density 0/492 over 80 px, session-rows 44 (comment on T-375); worker 07cef3b0 ended. ux-checker e44c2a1b (sonnet, hasyim) in dev-t-333-1. Then merge both, regenerate the context pack.
+- T-417 (high): fixes on dev/t-417-1 c606ef6 (proof 7/7 vs 9622deb, chat 704/0 fail, typecheck 0; fixer a1bf3da8 ended). qa-verifier f20d8008 (opus, fadlilah) in dev-t-336-1 verifies T-417 AND T-427 (3198f5d). PASS on both -> merge both, gate.
+- T-375 (high) + T-369: ux-checker e44c2a1b was denied Read on /tmp shots and then Bash; told to use --out inside its folder (re-spawn if still blocked).
+   dev/t-375-1 c84657f merges T-369; typecheck, web 589/589, crew 108, density 0/492 over 80 px, session-rows 44 (comment on T-375); worker 07cef3b0 ended. ux-checker e44c2a1b (sonnet, hasyim) in dev-t-333-1. Then merge both, regenerate the context pack.
 
-- T-427 (high, in_review): dev/t-427-1 3198f5d; PROOF passes on fix, fails on 2121788; typecheck 0 (job dea8cc76, comment 2932). Needs a qa-verifier worker at the next free slot, then merge with T-417.
+- T-427 (high, in_review): dev/t-427-1 3198f5d; proof green (job dea8cc76, comment 2932); in f20d8008's verification.
 
 ## READY, NOT MERGED
 - T-369 (urgent): dev/t-369-1 ff0088d (comment 2568: web 576/576, flip proof f9d87e3b, session-crew 5/5 a9166dc2). Waits for the ux-check above.
