@@ -5,7 +5,8 @@
 // config. The supervisor can say "start" and "stop", nothing else, so a compromised supervisor can't run an
 // arbitrary program as uid 1000, and a compromised renderer (uid 1000) can't touch the supervisor's files.
 import { fork, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
+import { EXT_DIR } from './headers-ext.mjs';
 import { chromeArgs, limitedRelay, loadConfig, log, UID_CHROME, UID_CPB } from './lib.mjs';
 
 const cfg = loadConfig();
@@ -13,6 +14,8 @@ const headless = cfg.tier === 'headless';
 const RUN = process.env.CPB_RUN || '/run/cpb';
 const DISPLAY = process.env.CPB_DISPLAY || ':99';
 const CHROME_BIN = process.env.CPB_CHROME_BIN || '/usr/bin/chromium';
+const HEADERS_FILE = process.env.CPB_HEADERS_FILE || '/etc/cpb-secrets/headers.json';
+const HEADERS_EXT = process.env.CPB_HEADERS_EXT || '/opt/cpb/headers-ext.mjs';
 const profileDir = cfg.profile === 'fresh' ? '/tmp/cpb-profile' : cfg.profileDir;
 
 let supervisor = null;
@@ -88,18 +91,44 @@ function prepareProfile() {
   if (r.status !== 0) throw new Error(`profile folder ${profileDir}: ${(r.stderr || r.error?.message || 'failed').trim()}`);
 }
 
+/**
+ * Request headers from named secrets (PRD §24). `/etc/cpb-secrets/headers.json` is root-only, written by the portal; here, as root, it is
+ * read and its entries go by stdin to a uid 1000 child that writes the extension (files 0400, in memory, rebuilt at every start, so a
+ * removed header is gone at the next start). Returns the extension's folder, or null when there are no headers. Only names and counts are
+ * logged, never a value, and a bad file only costs the headers: Chromium starts without them.
+ */
+function prepareHeaders() {
+  let entries;
+  try {
+    entries = JSON.parse(readFileSync(HEADERS_FILE, 'utf8'));
+  } catch (e) {
+    if (e?.code !== 'ENOENT') log('headers file unreadable, starting without headers:', e instanceof SyntaxError ? 'not JSON' : e.message);
+    spawnSync(process.execPath, [HEADERS_EXT, 'write', EXT_DIR], { ...as(UID_CHROME), input: '[]', encoding: 'utf8' });
+    return null;
+  }
+  const r = spawnSync(process.execPath, [HEADERS_EXT, 'write', EXT_DIR], { ...as(UID_CHROME), input: JSON.stringify(entries), encoding: 'utf8' });
+  if (r.status !== 0) {
+    log('headers extension not built:', (r.stderr || r.error?.message || 'failed').trim().slice(0, 200));
+    return null;
+  }
+  const out = JSON.parse(r.stdout.trim().split('\n').at(-1) || '{}');
+  log(`headers: ${out.count} rule(s)${out.dropped?.length ? `, dropped: ${out.dropped.join(', ')}` : ''}`);
+  return out.count ? EXT_DIR : null;
+}
+
 function startChrome(id) {
   if (chrome) return tellSupervisor({ event: 'chrome-started', id, pid: chrome.pid, already: true });
   try {
     settleSandbox();
     prepareProfile();
+    const extensionDir = prepareHeaders();
     const env = {
       PATH: '/usr/local/bin:/usr/bin:/bin',
       HOME: '/home/node',
       LANG: process.env.LANG || 'C.UTF-8',
       ...(headless ? {} : { DISPLAY, XAUTHORITY: `${RUN}/xauth` }),
     };
-    const child = spawn(CHROME_BIN, chromeArgs(cfg, { headless, profileDir }), { ...as(UID_CHROME), env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(CHROME_BIN, chromeArgs(cfg, { headless, profileDir, extensionDir }), { ...as(UID_CHROME), env, stdio: ['ignore', 'pipe', 'pipe'] });
     const relay = limitedRelay('[chrome]');
     child.stdout.on('data', relay);
     child.stderr.on('data', relay);

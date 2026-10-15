@@ -54,7 +54,7 @@ export function loadConfig(path = process.env.CPB_CONFIG || '/etc/cpb/config.jso
  * Policy (sign-in off, no sync, no extensions) lives in the managed policy file, never in flags. Nothing here
  * hides automation: no stealth, user-agent or fingerprint flags (PRD §4).
  */
-export function chromeArgs(cfg, { headless, profileDir, cdpPort = CDP_PORT }) {
+export function chromeArgs(cfg, { headless, profileDir, cdpPort = CDP_PORT, extensionDir = null }) {
   const { width, height } = cfg.display;
   const args = [
     `--user-data-dir=${profileDir}`,
@@ -86,6 +86,8 @@ export function chromeArgs(cfg, { headless, profileDir, cdpPort = CDP_PORT }) {
   if (headless) args.push('--headless=new');
   else args.push('--start-maximized');
   if (!cfg.sandbox) args.push('--no-sandbox', '--disable-setuid-sandbox');
+  // The headers extension (PRD §24), built by the init for this start; the policy allows only its id.
+  if (extensionDir) args.push(`--load-extension=${extensionDir}`, `--disable-extensions-except=${extensionDir}`);
   args.push(...cfg.chromeFlags.filter((f) => /^--[a-z0-9-]+(=[^\s]*)?$/i.test(f) && !/remote-debugging|remote-allow-origins|user-data-dir|no-sandbox|disable-web-security/.test(f)));
   // Last, so nothing above can turn it into a different first page.
   args.push('about:blank');
