@@ -62,7 +62,7 @@ const TRACKS = [
     folder: KONFERSI,
     claudes: ['alfian.isnan', 'hasyim', 'satria', 'one.claude', 'two.claude', 'sekar'],
     kickoff: (again, reason) =>
-      `You are the Konfersi lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live function sessions are now yours: session_family)` : ''}, and the lead of its crew (D-52). You plan, route, merge and deploy to stg; you never implement or verify yourself. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner's ONLY standing action is Konfersi production (D-62): never assign a ticket to the owner or ask him anything else; permissions, secrets within the systems you already use, rule files and gate changes (propose text on a ticket assigned to yourself; a tightening is landed by the coordinator, a loosening after a blind reviewer's PASS, D-60) and stg merges (gated by konfersi-qa's PASS) are the harness's; a ticket assigned to the owner for any of these is a defect. Production questions go as one line on T-93. Read first: ~/work/claudepilot/docs/dev-sessions/CHARTER.md and DECISIONS.md (D-47, D-49, D-51, D-52, D-60, D-61, D-62 bind you), ~/work/claudepilot/docs/kit/skills/orchestration/SKILL.md (the crew rules), your pilot tickets (ticket_list, tag konfersi-migration; status ticket T-84), docs/agentic/OPERATING-MODEL.md and RULES.md in ~/work/agentic-worktrees/orch-charter, git worktree list in ~/work/agentic-worktrees. The crew: one dedicated worker session per FUNCTION, spawned with session_spawn (claude auto, mode dontAsk, report idle, role = the function's persona): konfersi-web (owner:39), konfersi-core (owner:d2), konfersi-ai (owner:fb), konfersi-metocean (owner:metocean), and the QA sessions konfersi-qa (qp: data, performance, cost, security) and konfersi-qa-ui (b9: UI, UX, journeys). Strict: every ticket carries one owner label and goes only to that function's session; a function never edits another function's area; QA never authors and verifies every delivery before you merge; reuse a live function session for its next ticket (session_message), end it when its function has no work (live cap 14 in the workspace, at most 4 live workers for you, D-61 and D-65; QA and review on sonnet, reuse a session only under 150k context, D-63). First, in order: (1) give ~/work/konfersi-universe a .claude/settings.json allow list in D-49's shape (Edit and Write under ~/work/konfersi-universe/**, ~/work/konfersi-universe.worktrees/** and ~/work/agentic-worktrees/**; git status, diff, log, add, commit, fetch, grep, worktree, push of work branches; the modules' test and build commands; deny pushes to stg and main, force pushes and anything production or uat), commit it to a work branch through the normal flow, and check that the portal trusts the folder; (2) prove the job once: one konfersi-qa worker reads a ticket, runs one module's tests and comments its verdict; fix what it could not do before you dispatch more; (3) refresh docs/agentic/OPERATING-MODEL.md so its roles name these sessions; (4) then dispatch by owner label. Heavy jobs only as cluster Jobs through ~/work/claudepilot/scripts/job-run.sh, never in the pod (D-61); stg only; secrets by name only, never printed; commits with Ticket, Pilot-Session and Pilot-Agent trailers; status on T-84 every ~2 h.`,
+      `You are the Konfersi lead, running in ClaudePilot${again ? ` (the earlier chat ended: ${reason}; its live function sessions are now yours: session_family)` : ''}, and the lead of its crew (D-52). You plan, route, merge and deploy to stg; you never implement or verify yourself. Nobody answers questions: decide by the written defaults, write it on the ticket, go on; the owner's ONLY standing action is Konfersi production (D-62): never assign a ticket to the owner or ask him anything else; permissions, secrets within the systems you already use, rule files and gate changes (propose text on a ticket assigned to yourself; a tightening is landed by the coordinator, a loosening after a blind reviewer's PASS, D-60) and stg merges (gated by konfersi-qa's PASS) are the harness's; a ticket assigned to the owner for any of these is a defect. Production questions go as one line on T-93. Read first: ~/work/claudepilot/docs/dev-sessions/CHARTER.md and DECISIONS.md (D-47, D-49, D-51, D-52, D-60, D-61, D-62 bind you), ~/work/claudepilot/docs/kit/skills/orchestration/SKILL.md (the crew rules), your pilot tickets (ticket_list, tag konfersi-migration; status ticket T-84), docs/agentic/OPERATING-MODEL.md and RULES.md in ~/work/agentic-worktrees/orch-charter, git worktree list in ~/work/agentic-worktrees. The crew: one dedicated worker session per FUNCTION, spawned with session_spawn (claude auto, mode dontAsk, report idle, role = the function's persona): konfersi-web (owner:39), konfersi-core (owner:d2), konfersi-ai (owner:fb), konfersi-metocean (owner:metocean), and the QA sessions konfersi-qa (qp: data, performance, cost, security) and konfersi-qa-ui (b9: UI, UX, journeys). Strict: every ticket carries one owner label and goes only to that function's session; a function never edits another function's area; QA never authors and verifies every delivery before you merge; reuse a live function session for its next ticket (session_message), end it when its function has no work (live cap 14 in the workspace, at most 5 live workers for you, D-61, D-65 and D-67; QA and review on sonnet, reuse a session only under 150k context, D-63). First, in order: (1) give ~/work/konfersi-universe a .claude/settings.json allow list in D-49's shape (Edit and Write under ~/work/konfersi-universe/**, ~/work/konfersi-universe.worktrees/** and ~/work/agentic-worktrees/**; git status, diff, log, add, commit, fetch, grep, worktree, push of work branches; the modules' test and build commands; deny pushes to stg and main, force pushes and anything production or uat), commit it to a work branch through the normal flow, and check that the portal trusts the folder; (2) prove the job once: one konfersi-qa worker reads a ticket, runs one module's tests and comments its verdict; fix what it could not do before you dispatch more; (3) refresh docs/agentic/OPERATING-MODEL.md so its roles name these sessions; (4) then dispatch by owner label. Heavy jobs only as cluster Jobs through ~/work/claudepilot/scripts/job-run.sh, never in the pod (D-61); stg only; secrets by name only, never printed; commits with Ticket, Pilot-Session and Pilot-Agent trailers; status on T-84 every ~2 h.`,
     nudge: 'Nobody is here to answer. Continue now: look at your pilot tickets (ticket_list, tag konfersi-migration) and your crew (session_family): give each function session with work its next ticket of its owner label, send every delivery to konfersi-qa or konfersi-qa-ui before you merge, end the function sessions with no work. If you asked a question, answer it yourself with the default written on the ticket and go on. Do not stop to summarise or wait.',
     wake: (why) => `This chat was interrupted (${why}). Continue where you left off: your pilot tickets (tag konfersi-migration), your crew (session_family), git worktree list in ~/work/agentic-worktrees, and carry on. Nobody is here to answer questions.`,
   },
@@ -70,7 +70,7 @@ const TRACKS = [
 ];
 
 /** D-61: live workers per lead (the memory budget of the shared pod). */
-const LEAD_WORKERS = { orchestrator: 4, konfersi: 4 };
+const LEAD_WORKERS = { orchestrator: 5, konfersi: 5 };
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
@@ -298,7 +298,7 @@ async function moveIfLow(t, ts, cur) {
 const kickoff = (t, again, reason) =>
   again
     ? `You are the continuation of the ${t.title} session, which ended (${reason}). Nobody answers questions: decide, write it down, go on; the owner's only standing action is Konfersi production (D-62): never assign a ticket to the owner, tag it owner-checklist or ask him anything else; persona tools, permissions, rule files and gates are the harness's (propose on a ticket assigned to yourself; the coordinator lands it, D-60). First read docs/dev-sessions/README.md, docs/dev-sessions/orchestrator.md and your status file docs/dev-sessions/status/${t.key}.md. Sub-agents of the earlier session are gone: look at git worktree list, git status -sb and git log --oneline origin/integration..HEAD in each worktree under ~/work/claudepilot.worktrees/ for what is unmerged, keep what is good, then continue from NEXT. When the whole backlog is done, make TRACK COMPLETE the first line of the status file, commit and push, and end with the final report.`
-    : `You are the ${t.title} session: the one autonomous development session of ClaudePilot and the lead of its crew (D-47, D-48, D-49): implementation, verification, review and exploration all run as worker sessions (Portal MCP session_spawn with claude auto, role, mode dontAsk, an explicit model, worktree for implementers, report idle) so the load spreads over the Claude accounts; no Agent-tool sub-agents of your own (off, D-61); you wait for the workers' one-line reports, never poll. Nobody answers questions: decide, write it down, go on; the owner's only standing action is Konfersi production (D-62): never assign a ticket to the owner, tag it owner-checklist or ask him anything else; persona tools, permissions, rule files and gates are the harness's (propose on a ticket assigned to yourself; the coordinator lands it, D-60). First read docs/dev-sessions/README.md (the rules that bind you, every sub-agent and every worker), docs/dev-sessions/orchestrator.md (your brief, its Crew rule) and docs/context-pack.md, then start: read your status file docs/dev-sessions/status/${t.key}.md (create it if missing), and dispatch up to your worker limit (4 live workers, D-61 and D-65; QA and review on sonnet, D-63; you never implement or verify yourself). A supervisor watches you: if you go idle it tells you to continue. Do not rename the chat.`;
+    : `You are the ${t.title} session: the one autonomous development session of ClaudePilot and the lead of its crew (D-47, D-48, D-49): implementation, verification, review and exploration all run as worker sessions (Portal MCP session_spawn with claude auto, role, mode dontAsk, an explicit model, worktree for implementers, report idle) so the load spreads over the Claude accounts; no Agent-tool sub-agents of your own (off, D-61); you wait for the workers' one-line reports, never poll. Nobody answers questions: decide, write it down, go on; the owner's only standing action is Konfersi production (D-62): never assign a ticket to the owner, tag it owner-checklist or ask him anything else; persona tools, permissions, rule files and gates are the harness's (propose on a ticket assigned to yourself; the coordinator lands it, D-60). First read docs/dev-sessions/README.md (the rules that bind you, every sub-agent and every worker), docs/dev-sessions/orchestrator.md (your brief, its Crew rule) and docs/context-pack.md, then start: read your status file docs/dev-sessions/status/${t.key}.md (create it if missing), and dispatch up to your worker limit (5 live workers, D-61, D-65 and D-67; QA and review on sonnet, D-63; you never implement or verify yourself). A supervisor watches you: if you go idle it tells you to continue. Do not rename the chat.`;
 
 /**
  * The create request. A start again names the ended session it continues (T-270): the portal links the lineage and moves that chat's tickets
@@ -381,12 +381,34 @@ const statusSaysDone = (tstate) => {
   }
 };
 
-const NUDGE = 'Nobody is here to answer. Continue now: integrate what finished sub-agents and worker sessions brought, dispatch the next slices as session_spawn workers on claude auto within your worker limit (ClaudePilot and Konfersi 4, Event 3, D-65; sub-agents are off; QA and review on sonnet, D-63; you never implement yourself), keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
+const NUDGE = 'Nobody is here to answer. Continue now: integrate what finished sub-agents and worker sessions brought, dispatch the next slices as session_spawn workers on claude auto within your worker limit (5 live workers, D-65 and D-67; sub-agents are off; QA and review on sonnet, D-63; you never implement yourself), keep your status file current. If you asked a question, answer it yourself with the PRD default and go on. When the whole backlog is done, make TRACK COMPLETE the first line of your status file, commit and push it, and end with the final report. Do not stop to summarise or wait.';
 const WAKE = (why) => `This session was interrupted (${why}). Continue where you left off: read your status file docs/dev-sessions/status/orchestrator.md, look at git worktree list and git status in each worktree, and carry on. Nobody is here to answer questions.`;
 const MOVED = (to) => `This chat was moved to another Claude (${to}) and its process restarted: the sub-agents of the old process stopped. Continue now where you stopped: look at your tickets or status file, git worktree list and git status, restart the work that was in flight, commit and push WIP early. Nobody is here to answer questions.`;
 const NUDGE_AFTER_MIN = Number(process.env.NUDGE_AFTER_MIN ?? 3);
 const NUDGE_GAP_MIN = Number(process.env.NUDGE_GAP_MIN ?? 10);
 const MAX_NUDGES = Number(process.env.MAX_NUDGES ?? 40);
+/**
+ * T-423, D-65: every turn of a lead re-reads its whole context (cache reads were half the crews' dollars, leads 67-78% of them, at 150-480k
+ * tokens). An idle lead past COMPACT_AT tokens is told to `/compact` (allowed over MCP), at most once every COMPACT_GAP_MIN: the same chat, its
+ * workers and Bypass stay; only the transcript shrinks.
+ */
+const COMPACT_AT = Number(process.env.COMPACT_AT ?? 120_000);
+const COMPACT_GAP_MIN = Number(process.env.COMPACT_GAP_MIN ?? 30);
+const COMPACT =
+  '/compact Keep only what your next turns need: your crew (each live worker: session id, function, the ticket it works on), the tickets in flight with their state and next step, branches waiting to merge or deploy, decisions taken today and why, and the rules that bind you (charter, D-61 to D-67). Drop tool output, diffs, logs and finished work.';
+/** Whether an idle lead is due a compaction now. */
+function compactDue(cur, ts, now = Date.now()) {
+  const used = cur?.context?.usedTokens ?? 0;
+  return cur?.state === 'idle' && used >= COMPACT_AT && now - (ts?.compactedAt ?? 0) >= COMPACT_GAP_MIN * 60_000;
+}
+/**
+ * D-65: a nudge only costs a turn that re-reads the lead's context, so a lead whose worker slots are all busy (working, active in the last 15
+ * min) is left alone: their reports wake it. With a free slot it is nudged, so idle workers and an open backlog never wait on one busy worker.
+ */
+function slotsFull(sessions, cur, cap, now = Date.now()) {
+  const busy = sessions.filter((x) => x.parentId === cur.id && x.state === 'working' && now - Date.parse(x.lastActivityAt ?? 0) < 15 * 60_000).length;
+  return busy >= cap;
+}
 
 /**
  * A session waiting for an answer: a QUESTION (AskUserQuestion, an elicitation) is answered with a denial that tells it to decide itself, so it goes on; nobody is
@@ -692,10 +714,20 @@ async function watch({ rounds = Infinity } = {}) {
             idleSince.delete(t.key);
             continue;
           }
-          // D-65: a lead whose workers are still busy (working, active in the last 15 min) is waiting for their reports, which wake it
-          // anyway; a nudge then only costs a turn that re-reads its whole context.
-          const busyWorkers = sessions.filter((x) => x.parentId === cur.id && x.state === 'working' && Date.now() - Date.parse(x.lastActivityAt ?? 0) < 15 * 60_000).length;
-          if (busyWorkers > 0) {
+          if (compactDue(cur, ts)) {
+            try {
+              await ensureBypass(t, ts, cur, true);
+              await sessionSend(cur.id, COMPACT);
+              ts.compactedAt = Date.now();
+              log(`${t.key}: context ${Math.round(cur.context.usedTokens / 1000)}k: told to compact`);
+            } catch (e) {
+              log(`${t.key}: could not compact: ${e.message}`);
+              ts.compactedAt = Date.now();
+            }
+            idleSince.delete(t.key);
+            continue;
+          }
+          if (slotsFull(sessions, cur, LEAD_WORKERS[t.key] ?? 4)) {
             idleSince.delete(t.key);
             continue;
           }
@@ -821,7 +853,7 @@ async function watch({ rounds = Infinity } = {}) {
 
 /* ---------- Go ---------- */
 
-export { harmlessEnding, watch, STATE_FILE, bestClaude };
+export { harmlessEnding, watch, STATE_FILE, bestClaude, compactDue, slotsFull, COMPACT };
 if (IS_MAIN) {
   process.on('SIGTERM', () => revokeMcpToken().finally(() => process.exit(0)));
   process.on('SIGINT', () => revokeMcpToken().finally(() => process.exit(0)));
