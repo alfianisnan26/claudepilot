@@ -14,7 +14,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## IN FLIGHT (4 of 4 workers, D-65: c10daf0e T-401 S1 (GO 11:28, has the slot), cffb12b1 impl-t486b (sonnet) T-486 S2b,
   47710391 qa-sweep (sonnet) T-531 S2 QA WAITING GO (sweep done: 4656), 0df3dd19 impl-t379 (sonnet) T-379 --image on fe62fa6)
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster slot order: T-401 -> T-531 QA -> T-379 (97bea19) -> T-486 S2b. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
+  Cluster slot order: T-401 -> T-531 QA -> T-379 (612911f) -> T-486 S2b. T-486 QA goes to 47710391 after T-531 (reuse); T-416 S1b QA after that. Next free worker slot: T-546 + T-548 (T-426 waits for T-401).
 - T-401 (high, security; claimed, 4576: M, sev 2, ~2.5 h): S1 c10daf0e (opus, impl-t401) on ticket/T-401-job-env from 58ce041:
   credentials only for clone/fetch (init container preferred), gone before npm scripts and the command; live FOUND/ABSENT check.
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
@@ -39,6 +39,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## DECISIONS (binding)
 - 11:30 Coordinator (owner priority, metocean): T-379 NOW in its own worker; built on T-401's fe62fa6 (fetch stage holds creds).
+- 11:40 Coordinator: epic T-557 (external runners, Codespaces first) after T-379/T-426; S0 + S1 in parallel with T-546/T-548.
 - 11:15 D-65 (coordinator): 4 ClaudePilot workers; implementers sonnet by default (opus only with a written why); small QA/review
   findings fixed in the same slice; a worker takes 2-3 related tickets (reuse under 150k); full report on the ticket, the lead
   reads line 1 and opens it only on FAIL; ready features over chores. Targets under 8 USD per ticket, lead share under 30 %.
@@ -52,7 +53,6 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - 10:25 dontAsk workers cannot wait: the lead hands out the cluster slot with "GO T-n"; workers end with WAITING <hash>.
 - 10:02 The free-slot check counts only OUR program's Jobs (app=claudepilot-gate or job-run/program=claudepilot); Konfersi Jobs are
   capped per program by job-run.sh.
-- 09:43 Server and web tests are node --test (npm test), not vitest. Vitest Jobs are no evidence.
 - 09:12 Workers cannot run scripts/gate-job.sh (refused in dontAsk): the lead runs gates for slices.
 - 09:00 Coordinator: persona, role-tool and permission questions go to the coordinator (ticket assigned to me), NEVER the owner;
   `owner-checklist` is production only.
@@ -70,8 +70,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## NEXT (in order, as slots free)
 1. T-531 S2 Jobs -> QA (sonnet) -> lead gate -> merge. 2. T-416 QA Jobs -> blind review (opus) -> lead gate -> merge -> deploy; then S2.
-3. NEXT FREE SLOT: T-546 + T-548 (one sonnet worker); T-426 (opus, why: secret door) + T-379 once T-401 merges;
-   then T-547 + T-549. Sweep results (47710391): the lead closes on PASS or reopens with the gap. 4. T-524 measurement with T-513.
+3. NEXT FREE SLOTS: T-426 (opus, why: secret door) once T-401 merges; then in parallel T-557 S0 PRD (sonnet implementer),
+   T-557 S1 runner seam (sonnet, fake runner), T-546 + T-548 (one sonnet worker); then T-547 + T-549; T-557 S2 (opus, transport). Sweep results (47710391): the lead closes on PASS or reopens with the gap. 4. T-524 measurement with T-513.
 4. T-486 S2 -> QA -> deploy. 5. T-537. 6. T-513 (cluster GitOps MR).
 7. T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
    T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2.
