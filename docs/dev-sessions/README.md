@@ -18,7 +18,7 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
    `Pilot-Agent` trailers on every commit; MODEL by role (`.claude/agents`).
 2. **Worktrees.** Sub-agents work in a git worktree each, never in the main folder `~/work/claudepilot`, and never in another agent's worktree. Prepared
    ones (with `node_modules`) are in `~/work/claudepilot.worktrees/`; a new one is `git worktree add ~/work/claudepilot.worktrees/<name> -b dev/<name> origin/integration`
-   and then `flock /tmp/heavy.lock npm ci` (`NODE_AUTH_TOKEN` is set in the shell; the private `@isnanme/ui` package needs it). The Agent tool's
+   with NO `npm ci` in the pod (D-61, T-413): tests, typecheck and builds run on the pushed branch through `scripts/job-run.sh`. The Agent tool's
    `isolation: "worktree"` also works, for a short task that needs no `node_modules`.
 3. **Safety, whatever Bypass lets you do.**
    - Never print, log, commit or paste a credential. No token-shaped literal anywhere in the repo (build fixtures at runtime). Do not read
@@ -38,10 +38,10 @@ Read `CLAUDE.md`, `docs/dev-context.md` and `docs/dev-session.md` first, `DECISI
    a Job on another node (push the WIP branch first: `git push origin HEAD:wip/<name>`; at most 3 Jobs at once and 2 per chat, the rest wait
    "queued behind K"; `--list`, `--stop --chat <id>`). An image (no Docker here, D-5) is built by `scripts/image-build.sh --repo .. --ref .. --dockerfile ..
    --destination <registry/path:tag>` (T-141: kaniko, one at a time, the registry credential as one JSON line on stdin with `--credential-stdin`;
-   `--check` first, 0 exists, 3 not). Lighthouse and timing measurements run there too (a quiet node). **flock only for what must
-   run in the pod** (a scratch portal, a browser check against it, `npm ci` of a worktree): `flock /tmp/heavy.lock nice -n 10 <command>`; a command that leaves a process running (a scratch
-   portal) takes `flock -o`, so the lock ends with the command (T-159: a portal held it for 50 minutes). A
-   targeted test (one file) may run directly. At most one scratch portal and one Chromium per sub-agent; stop them when done. Keep `/tmp` clean (`/tmp/gate-*`, `/tmp/cp-*`): a full `/tmp` makes CI tests fail. **At most five sub-agents run at once** (D-43).
+   `--check` first, 0 exists, 3 not). Lighthouse and timing measurements run there too (a quiet node). **Nothing heavy runs in the pod** (D-61, T-413:
+   the pod was OOMKilled at 8 GiB): `npm ci`, tests, typecheck, builds, a scratch portal and browser checks go through `scripts/job-run.sh`, one test file
+   included. Keep `/tmp` clean (`/tmp/gate-*`, `/tmp/cp-*`): a full `/tmp` makes CI tests fail. **At most three live workers per lead, and no
+   Agent-tool sub-agents** (D-61, replacing D-43's five).
 5. **Do not loop.** The same command failing three times means change the approach or move to the next item and write down why.
 6. **Quota.** The portal moves the chat to another Claude by itself when one runs out. If a turn fails with a limit error, wait a few minutes and go on.
 7. **No SendMessage** (coordinator, T-136, until the portal accepts the case): a sub-agent NEVER calls SendMessage to the main conversation
@@ -62,7 +62,7 @@ in a paragraph of its own before `Co-Authored-By` is not a trailer; T-352). The 
 
 ```sh
 cd ~/work/claudepilot && git fetch origin && git merge --no-ff origin/<branch>     # or rebase the branch first; never discard somebody's lines
-flock /tmp/heavy.lock nice -n 10 scripts/gate-quick.sh                              # FAST LANE: typecheck, web build+tests if web, the touched areas' tests
+git push origin HEAD:refs/heads/wip/main-<sha> && scripts/gate-job.sh <full sha>      # the gate as a Job (D-61: never in the pod)
 git push origin HEAD:integration && git push pilot HEAD:integration                 # fast-forward only; if refused: fetch, merge, check again
 ```
 

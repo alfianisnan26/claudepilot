@@ -1,8 +1,9 @@
 // Concurrency caps for chat sessions (chat-sessions PRD FR39, Settings & policies FR13): how many Claude Code processes may be
-// awake in one workspace and in the whole portal. A new session over a cap makes room by putting the longest-idle session to
-// sleep (it wakes on its next message) and is refused, naming the cap and where it comes from, when nothing can sleep. Lowering a
-// cap never stops a running session. An Ultracode session counts as two. These are shared settings, so the Settings page lists
-// them; the controller reads them through `liveCaps`.
+// awake in one workspace and in the whole portal. A new session over a cap makes room by putting an idle session to sleep (it
+// wakes on its next message): idle workers first, then idle chats without workers, never a lead (T-417). When nothing can sleep
+// the start waits for a slot, saying so, and is refused naming the cap only when the wait runs out. Lowering a cap never stops
+// a running session. An Ultracode session counts as two. These are shared settings, so the Settings page lists them; the
+// controller reads them through `liveCaps`.
 
 import { AppError, defineErrorCodes } from '@isnanme/core';
 import { defineSetting } from '../settings/registry.js';
@@ -28,7 +29,7 @@ defineSetting({
   group: 'sessions',
   order: 20,
   label: 'Sessions per workspace',
-  help: 'How many chat sessions may have Claude Code running in one workspace. A new session over the cap puts the longest-idle one to sleep (it wakes on its next message); if none can sleep, it is refused. Ultracode counts as two. Lowering it never stops a running session.',
+  help: 'How many chat sessions may have Claude Code running in one workspace. A new session over the cap puts an idle worker to sleep, else an idle chat without workers (it wakes on its next message); a lead (live workers, Keep going, or a workers limit) never sleeps for it. If none can sleep, the start waits for a slot. Ultracode counts as two. Lowering it never stops a running session.',
 });
 
 defineSetting({
@@ -54,12 +55,13 @@ export interface LiveCaps {
 export const weightOf = (row: { ultracode: number }): number => (row.ultracode === 1 ? 2 : 1);
 
 /**
- * Which sessions to put to sleep, longest-idle first, for a new one of `weight` to fit; null when even sleeping everything that
- * may sleep would not make room (the caller refuses). `live` is every awake session, `sleepable` the ones that may be put to sleep.
+ * Which sessions to put to sleep for a new one of `weight` to fit: the lowest `rank` first (T-417: idle workers are 0, idle chats
+ * without workers 1), longest-idle first within a rank; `refuse` when even sleeping everything that may sleep would not make room
+ * (the caller waits for a slot). `live` is every awake session, `sleepable` the ones that may be put to sleep.
  */
 export function makeRoom(
   live: { id: string; workspaceId: string; weight: number }[],
-  sleepable: { id: string; since: number }[],
+  sleepable: { id: string; since: number; rank?: number }[],
   workspaceId: string,
   weight: number,
   caps: LiveCaps,
@@ -75,7 +77,7 @@ export function makeRoom(
     }
     return { ws, all };
   };
-  const byAge = [...sleepable].sort((a, b) => a.since - b.since);
+  const byAge = [...sleepable].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0) || a.since - b.since);
   const where = new Map(live.map((s) => [s.id, s.workspaceId]));
   for (;;) {
     const { ws, all } = counts();
@@ -86,6 +88,11 @@ export function makeRoom(
     if (!victim) return { refuse: { scope: over, limit: over === 'workspace' ? caps.perWorkspace : caps.total, running: over === 'workspace' ? ws : all } };
     asleep.add(victim.id);
   }
+}
+
+/** T-417: what a start that waits for a slot shows (FR39's "Waiting for a slot · 4 of 4 running"), and where the number comes from. */
+export function slotWaitText(scope: 'workspace' | 'total', limit: number, running: number, workspaceId: string): string {
+  return `Waiting for a slot · ${running} of ${limit} running ${scope === 'workspace' ? `in ${workspaceId}` : 'in total'} (Settings › Sessions)`;
 }
 
 /** The refusal: which cap, how many are running, and where the number comes from. */
