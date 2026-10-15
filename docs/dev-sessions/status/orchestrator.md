@@ -11,8 +11,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - BACKEND respawned 4b025fae (ticket/T-633-digest-mutants from integration) on T-633. QA T-416 S1c ec59993c (qa/T-416-s1c-r2, sonnet) on 7af4b269.
   Old Backend 4b4edaf8 ended: T-600 BE 1a95fb03 (5756) + T-597 S1b 75656845 (5849) DONE -> QA Perf.
 - T-631 review CHANGES 5850 -> lead 5853: absolute-path entry (a) for the coordinator; F2 small slice; F1 also on job-run.sh -> T-635 (high).
-- IMPL T-558 S1b 191bd6f1 (ticket/T-558-s1b from e652c44; QA FAIL 5846 -> 5847).
-- NEXT FREE SLOTS: 1) T-631 F2 slice. 3) T-638 flakes. BATCH 3: T-576, then QA-passed of T-591/T-597/T-600/T-623.
+- T-558 S1b DONE 728b58d0 (5900; 191bd6f1 ended) -> QA Perf queue. IMPL T-631 F2 2b82636c (ticket/T-631-f2-symlink).
+- NEXT FREE SLOTS: 3) T-638 flakes. BATCH 3: T-576, then QA-passed of T-591/T-597/T-600/T-623.
 - T-416 S1c DONE 7af4b269 (0e5bcf50 ended; prior QA FAIL 5792 -> 5808) -> QA ec59993c -> blind review (opus) -> gate -> merge.
 - T-623 S1b DONE 784926f (5855; 6d431441 ended; lead read diff: stdin not argv, Memory emptyDir 0400, no values in audit/hash, no RBAC) -> QA Perf queue.
 - BE INFRA respawned e92c5ba3 (ticket/T-578-gate-reuse) on T-578 S1 (reuse green gate of same tree + per-file progress): a GATE change,
