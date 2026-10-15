@@ -15,7 +15,9 @@ import type {
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import type { Reconciler } from '../delivery/reconciler.js';
+import { workspaceGuard } from '../workspaces/authz.js';
 import { deliveryState } from '../workspaces/view.js';
+import { declareWorkspacePoolPolicies } from './authz.js';
 import type { MultiPoolType } from './kinds.js';
 import type { PoolService } from './service.js';
 
@@ -106,10 +108,11 @@ export function createPoolRoutes({ service }: Pick<PoolRoutesDeps, 'service'>): 
 
 /** Mounted on `/api/workspaces`: a workspace's pools of every registered type, and changing one type's list. */
 export function createWorkspacePoolRoutes({ service, reconciler }: PoolRoutesDeps): Hono {
+  declareWorkspacePoolPolicies();
   const app = new Hono();
   const workspaceId = (c: Context) => `${c.req.param('target')}/${c.req.param('name')}`;
 
-  app.get('/:target/:name/pools', (c) => {
+  app.get('/:target/:name/pools', workspaceGuard('view'), (c) => {
     const id = workspaceId(c);
     const all = service.assignmentsFor(id);
     const delivery = deliveryState(reconciler, id);
@@ -120,7 +123,7 @@ export function createWorkspacePoolRoutes({ service, reconciler }: PoolRoutesDep
     };
     return c.json(success(view));
   });
-  app.put('/:target/:name/pools/:type', async (c) => {
+  app.put('/:target/:name/pools/:type', workspaceGuard('manage'), async (c) => {
     const type = c.req.param('type');
     service.kind(type);
     const { items } = await body<SetWorkspacePoolsRequest>(c);
