@@ -114,7 +114,9 @@ test('pickSpawnClaude (T-427): with no Claude with room, the least used now (nev
   assert.deepEqual(pick('auto', [over('p', 70), over('a', 28), usageRow('b', 100, NOW)]), { claudeId: 'a', why: 'no_room_lowest' }, 'a Claude at its limit is never picked');
   assert.deepEqual(pick('auto', [over('p', 70), over('a', 40, { stale: true }), over('b', 30, { ageMin: 20 })]), { claudeId: 'p', why: 'no_room' }, 'a stale or old reading is never picked');
   assert.deepEqual(pick('auto', [over('p', 70), usageRow('a', 100, NOW), usageRow('b', 100, NOW)]), { claudeId: 'p', why: 'no_room' }, 'the parent’s only when every other is at its limit');
-  assert.deepEqual(pick('auto', [over('p', 95), usageRow('a', 95, NOW)]), { claudeId: 'p', why: 'no_room' }, 'equal use: the parent’s');
+  assert.deepEqual(pick('auto', [over('p', 10), over('a', 60)]), { claudeId: 'a', why: 'no_room_lowest' }, 'another Claude even when the parent’s is the least used');
+  assert.deepEqual(pick('auto', [over('p', 70), usageRow('a', 92, NOW), usageRow('b', 90, NOW)]), { claudeId: 'p', why: 'no_room' }, 'never one with 10 % left or less (it would be moved off at once)');
+  assert.deepEqual(pick('auto', [over('p', 70), usageRow('a', 89, NOW)]), { claudeId: 'a', why: 'no_room_lowest' }, 'a tight Claude above the floor qualifies');
 
   // Spread: three spawns in a row, each counted as a live session on the Claude it got.
   const load: Record<string, number> = { p: 1 };

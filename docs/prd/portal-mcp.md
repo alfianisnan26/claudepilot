@@ -545,8 +545,9 @@ session control over MCP" is on (off by default); otherwise only `session_list`,
 
 A session's own tools for a crew (agent scope, [Chat sessions](chat-sessions.md) FR51, "Crew over MCP"):
 `session_spawn` takes `claude` (`same`, a plan Claude's name, or `auto`: room by a fresh, measured reading, the least
-busy first; with none, T-427, the least used now of those not at their limit, no Claude above ceil(live / Claudes) + 1 live
-sessions, why `no_room_lowest`; its own only when every other is at its limit), `role` (the worker runs as `.claude/agents/<role>.md`), `model`, `effort`, `mode` (`default`, `plan`,
+busy first; with none, T-427, another Claude, the least used now of those with more than 10 % left (the auto move's default
+threshold), none above ceil((sessions + 1) / Claudes) + 1 sessions not ended (asleep ones count: a message wakes them), why
+`no_room_lowest`; its own only when no other qualifies), `role` (the worker runs as `.claude/agents/<role>.md`), `model`, `effort`, `mode` (`default`, `plan`,
 `dontAsk`), `max_workers` and `subagents` (the worker's own limits, never wider than the caller's) and `report`
 (`idle`, the default: the portal tells the lead in one line when the worker's turn
 ends, when it waits on a person and when it ends; `end`: only the end; `none`), `session_message` takes `to`
