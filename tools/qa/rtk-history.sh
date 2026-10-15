@@ -22,8 +22,10 @@ cleanenv() { env -i PATH="$PATH" HOME="$H" LANG=C.UTF-8 NO_COLOR=1 CI=1 RTK_TELE
 "$R" --version > "$out/rtk-version.txt" 2>&1
 cd "$here"
 
-# --- real history: deepen the shallow clone (the clone's own remote and its own git credential helper; nothing else is read) ---
-if [ "$(git rev-parse --is-shallow-repository)" = true ]; then git fetch -q --deepen=400 origin 2>"$out/fetch.err" || echo "deepen failed (see fetch.err)" >&2; fi
+# --- history: the Job's clone is depth 1 AND has no `origin` (Job claudepilot-job-e9baa000: "fatal: 'origin' does not appear to be a git
+# repository"), so the history is whatever the clone holds (one real commit with a 7-line body and trailers). A deeper history needs a
+# bundle shipped into the Job: not done (T-341 report). history.txt records what was there. ---
+if [ "$(git rev-parse --is-shallow-repository)" = true ] && git remote | grep -q origin; then git fetch -q --deepen=400 origin 2>"$out/fetch.err" || echo "deepen failed (see fetch.err)" >&2; fi
 { echo "commits: $(git rev-list --count HEAD)"; echo "merges: $(git rev-list --merges --count HEAD)"; echo "authors: $(git log --format=%ae | sort -u | wc -l)"; echo "shallow: $(git rev-parse --is-shallow-repository)"; } > "$out/history.txt"
 
 printf 'case\tclass\tplain\trewrite_exit\trtk\texit_plain\texit_rtk\tbytes_plain\tbytes_rtk\n' > "$out/cases.tsv"

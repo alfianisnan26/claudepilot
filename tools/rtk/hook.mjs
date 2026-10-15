@@ -60,12 +60,15 @@ const only = (words, ok) => words.every((w) => !isFlag(w) || w === "--" || ok(w)
 
 /** The allowlist (T-306, evidence: docs/dev-sessions/overhaul/evidence/rtk-subset-2026-10-14.md): the classes that kept 100 percent of
  *  their facts AND got smaller, in the forms that got smaller. Kept but not here because rtk passes them through byte for byte (a rewrite
- *  would only add rtk's start-up): git status -s/-sb, git log --oneline/--stat, git diff --stat/--name-only/--name-status, grep -c/rg --count.
+ *  would only add rtk's start-up): git status -s/-sb, git log --oneline/--stat (and every other git log form was DROPPED, T-341), git diff --stat/--name-only/--name-status, grep -c/rg --count.
  *  Dropped on fidelity: ls (rtk shows 50 entries and hides the rest behind `rtk recall`, and drops node_modules), find (hides most paths),
  *  grep -n/rg -n (cuts long lines and leaves out matches). Not scored: tree (not installed), npm ls (rtk does not rewrite it). */
 export const ALLOW = {
-  "git-status": (w) => w[0] === "git" && w[1] === "status" && only(w.slice(2), () => false),
-  "git-log": (w) => w[0] === "git" && w[1] === "log" && only(w.slice(2), (f) => /^-\d+$/.test(f) || /^--max-count=\d+$/.test(f)),
+  // T-341: exactly the measured forms: `git status` with no flag, optionally `--` once, then path operands (13 cases, busy tree, 99.4 percent).
+  // Operands are NOT inspected (`git status .env` is rewritten): rtk git status prints paths and states only, never file contents, and the
+  // rewritten command still goes through the deny rules; this is not a bypass, an operand cannot make git status read anything it would not.
+  // git log is NOT here (T-341): rtk keeps three body lines (the trailers go), shows a relative date and drops the e-mail.
+  "git-status": (w) => w[0] === "git" && w[1] === "status" && w.slice(2).every((x, i, a) => !isFlag(x) || (x === "--" && a.indexOf("--") === i)),
   "grep-list": (w) =>
     (w[0] === "grep" && only(w.slice(1), (f) => /^-[rRi]*l[rRi]*$/.test(f)) && w.slice(1).some((f) => /^-[rRi]*l/.test(f))) ||
     (w[0] === "rg" && only(w.slice(1), (f) => /^-i?li?$/.test(f) || f === "--files-with-matches") && w.slice(1).some((f) => /^-i?l/.test(f) || f === "--files-with-matches")),
