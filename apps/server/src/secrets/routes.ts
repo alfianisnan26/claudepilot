@@ -28,7 +28,7 @@ export function createSecretsRoutes({ pools, workspaces }: SecretsRoutesDeps): H
   };
   const workspaceId = (c: Context) => `${c.req.param('target')}/${c.req.param('name')}`;
 
-  app.get('/:target/:name/secrets', workspaceGuard('view'), (c) => c.json(success<WorkspaceSecrets>(kind().workspaceView(workspaceId(c)))));
+  app.get('/:target/:name/secrets', workspaceGuard('operate'), (c) => c.json(success<WorkspaceSecrets>(kind().workspaceView(workspaceId(c)))));
   // An exec as the workspace user that reports names only; POST, since it runs something in the workspace.
   app.post('/:target/:name/secrets/check', workspaceGuard('operate'), async (c) => {
     kind();

@@ -88,6 +88,7 @@ export function createWorkspaceReposRoutes(repos: ReposService): Hono {
   // T-531: the seam first, with the verb declared in ./authz.ts; a workspace the caller may not see is the same 404 as a missing one.
   const toView = workspaceGuard('view');
   const toOperate = workspaceGuard('operate');
+  const toManage = workspaceGuard('manage');
 
   r.get('/:target/:name/repos', toView, async (c) => c.json(success(await repos.workspace(wid(c)))));
 
@@ -98,7 +99,7 @@ export function createWorkspaceReposRoutes(repos: ReposService): Hono {
   });
 
   r.get('/:target/:name/repos/settings', toView, (c) => c.json(success(repos.settings(wid(c)))));
-  r.put('/:target/:name/repos/settings', toOperate, async (c) => c.json(success(repos.updateSettings(wid(c), await body<UpdateRepoSettingsRequest>(c), ACTOR))));
+  r.put('/:target/:name/repos/settings', toManage, async (c) => c.json(success(repos.updateSettings(wid(c), await body<UpdateRepoSettingsRequest>(c), ACTOR))));
 
   return r;
 }

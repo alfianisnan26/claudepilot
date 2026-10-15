@@ -37,6 +37,7 @@ export function createBrowserRoutes(service: BrowserService) {
   // T-531: the seam first, with the verb declared in ./authz.ts; a workspace the caller may not see is the same 404 as a missing one.
   const toView = workspaceGuard('view');
   const toOperate = workspaceGuard('operate');
+  const toManage = workspaceGuard('manage');
 
   app.get('/:target/:name/browser', toView, async (c) =>
     c.json(
@@ -70,7 +71,7 @@ export function createBrowserRoutes(service: BrowserService) {
     return c.json(success({ ok: true }));
   });
 
-  app.post('/:target/:name/browser/install/retry', toOperate, (c) => {
+  app.post('/:target/:name/browser/install/retry', toManage, (c) => {
     service.retryInstall(id(c));
     return c.json(success({ ok: true }));
   });
