@@ -16,7 +16,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 
 - T-433 (high, in_review): blind review PASS conditional (comment 2984): A ok; B/C hit the persona wall (named for the coordinator); A may be redundant (tools likely missing via --agent lists, not refused). T-436 (vault binding) filed. Coordinator lands.
 
-- T-404 (high): fixer e5806f91 (opus, hasyim) in dev-t-352-1 on dev/t-404-1: B1, B2, 3-10 (merges integration first). Then a NEW blind reviewer.
+- T-404 (high): fixes DONE b80f77f (fa2ee49 B1,B2,3-6,8-10; b80f77f item 7; integration merged). Second blind reviewer 458defa3 (opus, alfian.isnan) in dev-t-352-1, posts on T-404.
 
 - T-413 (incident): incident-analyst 2bd7d46e (sonnet, fadlilah) writing the post-mortem.
 
