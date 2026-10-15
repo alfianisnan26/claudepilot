@@ -246,7 +246,9 @@ export const ACCOUNT_HELPER = '/etc/claudepilot/bin/account-key';
  *   `.claude/agents/**\/*.md` frontmatter declares hooks, `…:mode` when it sets a `permissionMode`, `unreadable` when one can't
  *   be checked: a link, more than {@link TRUST_MAX_EXTRA_FILES} files, one over {@link TRUST_MAX_EXTRA_BYTES} bytes, YAML it
  *   doesn't read, a frontmatter key not in {@link TRUST_FRONTMATTER_KEYS}; any of them clears `rulesOnly`);
- *   `files` (those present) and `invalid` (present but not a JSON object, or not read). `hash` is the
+ *   `files` (those present) and `invalid` (present but not a JSON object, or not read); `origin` (T-366, D-62: only beside a
+ *   settings file, not at the files root, and only when the folder is the top of a git work tree with a `remote.origin.url`: that
+ *   URL with `user:password@`, a query and a fragment taken out; left out otherwise). `hash` is the
  *   sha256 of `<sha256 of the file>  <name>` lines for the files present, in that order, then the same lines for the skill,
  *   command and agent files read, so any change to any of them changes it; with no settings file it's
  *   {@link TRUST_EMPTY_HASH}. Each file is read once, through
@@ -959,9 +961,21 @@ case "$cmd" in
         done < "$t/xl"
       fi
     fi
+    # The repository the folder is (T-366, D-62): its origin remote's URL, credentials taken out, only when the folder is the top of a
+    # git work tree (a clone or a worktree), beside a settings file and not at the files root. Git runs hardened; nothing else is read.
+    origin=
+    if [ -n "$files" ] && [ "$here" != "$root" ]; then
+      origin="$(hardened
+        if top="$(hg rev-parse --show-toplevel 2>/dev/null && printf x)"; then
+          top="\${top%x}"; top="\${top%"$nl"}"
+          if real "$top" && [ "$r" = "$here" ]; then
+            timeout 10 git $gf config --get remote.origin.url 2>/dev/null | head -n 1 | sed -e 's|\\(://\\)[^/]*@|\\1|' -e 's|^[^/@]*@||' -e 's|[?#].*$||'
+          fi
+        fi)" || origin=
+    fi
     # Names only, from the files that parsed: never a value, a command or an argument.
     jq -cn --arg hash "$(sha256sum < "$t/sums" | cut -c1-64)" --arg files "$files" --arg invalid "$invalid" --arg here "$here" --arg home "\${HOME:-}" \\
-      --arg xbad "$xbad" --slurpfile fm "$t/fm" '${TRUST_BROAD_JQ}
+      --arg xbad "$xbad" --arg origin "$origin" --slurpfile fm "$t/fm" '${TRUST_BROAD_JQ}
     [inputs] as $s | ($fm | map((.s | cpFront) + {k: .k})) as $x | {
       hash: $hash,
       files: ($files | split(" ") | map(select(. != ""))),
@@ -980,7 +994,7 @@ case "$cmd" in
         and all($s[]; (keys - ["$schema", "permissions"]) == []
           and ((.permissions // {}) | type == "object" and (keys - ["allow", "deny", "ask"]) == []
             and all(.[]; type == "array" and all(.[]; type == "string")))))
-    }' "$@" </dev/null || exit 1
+    } + (if $origin == "" then {} else {origin: $origin} end)' "$@" </dev/null || exit 1
     exit 0
     ;;
   authcheck)

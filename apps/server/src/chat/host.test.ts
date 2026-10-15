@@ -542,6 +542,7 @@ type TrustScanOut = {
   rulesOnly: boolean;
   broadAllow: boolean;
   extras: string[];
+  origin?: string;
 };
 
 const EMPTY_TRUST_SCAN: TrustScanOut = {
@@ -629,6 +630,41 @@ test('trustscan: names what .mcp.json and .claude/settings*.json would load, nev
   });
   for (const value of ['ghp_VALUE', 'npx', 'gh-mcp', 'docs.example', 'curl', 'evil', 'judge it', 'npm test', 'Read(.env)', 'sk-never', '/tmp/', 'off@tools'])
     assert.ok(!raw.includes(value), `${value} is never printed`);
+});
+
+test('trustscan: origin (T-366, D-62) is the origin URL without credentials, only at the top of a git work tree beside a settings file; a worktree says the same', async () => {
+  const { root, proj, env } = mkFiles();
+  const settings = (dir: string) => {
+    mkdirSync(join(dir, '.claude'), { recursive: true });
+    writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(ls)'] } }));
+  };
+  settings(proj);
+  assert.equal((await trustscan(proj, env)).origin, undefined, 'not a repository');
+  git(proj, 'init', '-q');
+  assert.equal((await trustscan(proj, env)).origin, undefined, 'a repository without an origin');
+
+  const pass = ['pw', 'never', 'shown'].join('-'); // built here: no credential-shaped literal
+  git(proj, 'remote', 'add', 'origin', `https://someone:${pass}@Example.com/acme/proj.git?x=1#y`);
+  const https = await trustscan(proj, env);
+  assert.equal(https.origin, 'https://Example.com/acme/proj.git');
+  assert.ok(!https.raw.includes(pass) && !https.raw.includes('someone'), 'the credentials never leave the host');
+  git(proj, 'remote', 'set-url', 'origin', 'git@example.com:acme/proj.git');
+  assert.equal((await trustscan(proj, env)).origin, 'example.com:acme/proj.git', 'the scp form’s user is taken out');
+
+  // A subfolder with its own settings is not the top of the work tree: no origin.
+  settings(join(proj, 'sub'));
+  assert.equal((await trustscan(join(proj, 'sub'), env)).origin, undefined);
+  // Without a settings file there is nothing to trust and no origin either.
+  rmSync(join(proj, 'sub', '.claude'), { recursive: true });
+  assert.equal((await trustscan(join(proj, 'sub'), env)).origin, undefined);
+
+  // A worktree of the repository: the same origin and, with the same committed settings, the same hash.
+  git(proj, 'add', '.claude');
+  git(proj, 'commit', '-qm', 'settings');
+  git(proj, 'worktree', 'add', '-q', '-b', 'w1', join(root, 'wt'));
+  const [top, wt] = [await trustscan(proj, env), await trustscan(join(root, 'wt'), env)];
+  assert.equal(wt.origin, 'example.com:acme/proj.git');
+  assert.equal(wt.hash, top.hash);
 });
 
 test('trustscan: any change to any settings file changes the hash, and so does moving bytes between them; other files don’t', async () => {

@@ -691,9 +691,21 @@ case "$cmd" in
         done < "$t/xl"
       fi
     fi
+    # The repository the folder is (T-366, D-62): its origin remote's URL, credentials taken out, only when the folder is the top of a
+    # git work tree (a clone or a worktree), beside a settings file and not at the files root. Git runs hardened; nothing else is read.
+    origin=
+    if [ -n "$files" ] && [ "$here" != "$root" ]; then
+      origin="$(hardened
+        if top="$(hg rev-parse --show-toplevel 2>/dev/null && printf x)"; then
+          top="${top%x}"; top="${top%"$nl"}"
+          if real "$top" && [ "$r" = "$here" ]; then
+            timeout 10 git $gf config --get remote.origin.url 2>/dev/null | head -n 1 | sed -e 's|\(://\)[^/]*@|\1|' -e 's|^[^/@]*@||' -e 's|[?#].*$||'
+          fi
+        fi)" || origin=
+    fi
     # Names only, from the files that parsed: never a value, a command or an argument.
     jq -cn --arg hash "$(sha256sum < "$t/sums" | cut -c1-64)" --arg files "$files" --arg invalid "$invalid" --arg here "$here" --arg home "${HOME:-}" \
-      --arg xbad "$xbad" --slurpfile fm "$t/fm" 'def cpIn(xs): . as $x | any(xs; . == $x);
+      --arg xbad "$xbad" --arg origin "$origin" --slurpfile fm "$t/fm" 'def cpIn(xs): . as $x | any(xs; . == $x);
 def cpTrim: sub("^\\s+"; "") | sub("\\s+$"; "");
 def cpVetted: .[0] | gsub("[\"\\x27\\\\]"; "") | cpIn("ls", "pwd", "echo");
 def cpOptVal($r; $i): $i > 0 and ($r[$i - 1] | startswith("-") and (contains("=") | not));
@@ -806,7 +818,7 @@ def cpFront:
         and all($s[]; (keys - ["$schema", "permissions"]) == []
           and ((.permissions // {}) | type == "object" and (keys - ["allow", "deny", "ask"]) == []
             and all(.[]; type == "array" and all(.[]; type == "string")))))
-    }' "$@" </dev/null || exit 1
+    } + (if $origin == "" then {} else {origin: $origin} end)' "$@" </dev/null || exit 1
     exit 0
     ;;
   authcheck)
