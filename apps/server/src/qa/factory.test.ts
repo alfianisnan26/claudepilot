@@ -1029,6 +1029,34 @@ test('T-352 m1: a budget-stopped session still working after the grace is ended 
   assert.deepEqual(mf.calls, []);
 });
 
+test('T-352 m1: a session_end that fails after the budget stop is one EXCEPTION line, the watch goes on (T-342 N1) and the next round tries again', async () => {
+  const NO_GIT = { taken: () => null, addWorktree: () => { throw new Error('no worktree may be made'); } };
+  const bad = started('s-7');
+  const other = started('s-9');
+  const portal = fakePortal([bad.t, other.t]);
+  let fail = true;
+  const ended = new Set<string>();
+  const mcp = fakeMcp({
+    session_get: (a) => sessionGet(String(a.id), { state: ended.has(String(a.id)) ? 'ended' : 'working', createdMin: 300 }),
+    session_end: (a) => { if (fail) throw new Error('session_end: no answer (502)'); ended.add(String(a.id)); return {}; },
+  });
+  const round = (at: number) => r.runRound({ portal, now: at, models: MODELS, changed: () => [], apply: true, git: NO_GIT, watch: (raw: unknown) => f.watchBudget(raw, { portal, mcp, now: at }) });
+  const ends = () => mcp.calls.filter(([n]) => n === 'session_end').length;
+  await round(NOW); // both dispatches are stopped
+  const r2 = await round(NOW + 20 * 60000); // past the grace, session_end throws: the round survives
+  assert.equal(ends(), 2, 'both sessions are tried: one failure does not switch the watch off for the other');
+  assert.ok(r2.lines.includes(`EXCEPTION ${bad.t.id} ${bad.id}: stopped session s-7 not ended this round: session_end: no answer (502)`), r2.lines.join('\n'));
+  assert.ok(r2.lines.includes(`EXCEPTION ${other.t.id} ${other.id}: stopped session s-9 not ended this round: session_end: no answer (502)`));
+  assert.ok(!r2.lines.some((l: string) => l.endsWith(': ended')), 'not reported as ended');
+  assert.equal(portal.writes.length, 2, 'no ticket comment after the two END markers');
+  fail = false; // next round: tried again, now ended
+  const r3 = await round(NOW + 30 * 60000);
+  assert.equal(ends(), 4);
+  assert.ok(r3.lines.some((l: string) => l.startsWith(`EXCEPTION ${bad.t.id} ${bad.id}: stopped session s-7 was still working`) && l.endsWith(': ended')), r3.lines.join('\n'));
+  const direct = await f.watchBudget(portal.byId.get(bad.t.id), { portal, mcp: fakeMcp({ session_get: (a) => sessionGet(String(a.id), { state: 'working' }), session_end: () => { throw new Error('x'); } }), now: NOW + 40 * 60000 });
+  assert.equal(direct.action, 'error');
+});
+
 test('T-352: the cost stop acts mid-turn on session_get\'s live estimate (T-343 cost_basis estimate, built with the portal\'s own costFields) and names its basis; unavailable is the reported total only', async () => {
   // the session_get cost fields exactly as sessionBrief makes them (portalmcp/tools/sessions.ts: ...costFields(s))
   const live = (costUsd: number, turnCostEstimateUsd?: number | null) => costFields({ costUsd, turnCostEstimateUsd } as never);

@@ -958,7 +958,13 @@ async function endAfterStop(t, { mcp, now, graceMin, exceptions }) {
   }
   const state = got?.session?.state;
   if (!state || state === 'ended' || state === 'idle') return { action: state === 'ended' ? 'ended' : 'none', exceptions };
-  await mcp.call('session_end', { id: sid });
+  // A session_end that fails never throws out of the watch (T-342 N1): one line, not marked ended, and next round tries again.
+  try {
+    await mcp.call('session_end', { id: sid });
+  } catch (e) {
+    exceptions.push({ ticket: t.id, dispatchId, reason: `stopped session ${sid} not ended this round: ${String(e?.message ?? e).split('\n')[0].slice(0, 160)}` });
+    return { action: 'error', exceptions };
+  }
   exceptions.push({ ticket: t.id, dispatchId, reason: `stopped session ${sid} was still ${String(state).slice(0, 20)} ${since} min after its budget stop (grace ${graceMin} min): ended` });
   return { action: 'ended-after-stop', exceptions };
 }
