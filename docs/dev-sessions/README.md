@@ -67,14 +67,15 @@ git push origin HEAD:integration && git push pilot HEAD:integration             
 ```
 
 **Two lanes (T-36, owner 2026-10-13).** INTEGRATION is the fast lane: `scripts/gate-quick.sh` (minutes; it maps the changed paths to the server
-areas that test them, and runs the whole server suite when contracts, migrations, authz, the platform, settings or the app's own files changed),
+areas that test them, and runs the whole server suite when contracts, migrations, authz, the platform, settings or the app's own files changed;
+it runs typecheck, builds and tests in the checkout it is started in, so **never from the workspace pod** (D-61): use the Job form below),
 then push: after every slice, and at least every 8 commits or every 2 hours (nothing piles up on the pod disk). RELEASE is the full gate:
-`scripts/gate.sh` on the exact commit before any deploy (the deploy pipeline's `gate` input stays true; `gate=false` only with a green full gate
+`scripts/gate-job.sh <commit>` (`scripts/gate.sh` run as a Job) on the exact commit before any deploy (the deploy pipeline's `gate` input stays true; `gate=false` only with a green full gate
 on that very commit), and once every two hours on integration's head in the background. A red full gate on integration is fixed first, before
-any new slice is merged: integration stays shippable. **Heavy work leaves the pod (T-37):** a full gate, and a typecheck plus web build when
-the pod is loaded, run as a Job in the cluster: `scripts/gate-job.sh <commit> [typecheck,web-build,server-suite]` (the commit on GitHub; push an
-unpushed merge to `wip/orchestrator-local-backup` first); the deploy pipeline's gate does too. Sub-agents run only their package's typecheck and
-their test files, never a build or a gate.
+any new slice is merged: integration stays shippable. **Heavy work leaves the pod (T-37, D-61 from T-413):** a full gate, a typecheck and a web build
+always run as a Job in the cluster: `scripts/gate-job.sh <commit> [typecheck,web-build,server-suite]` (the commit on GitHub; push an
+unpushed merge to `wip/orchestrator-local-backup` first); the deploy pipeline's gate does too. Sub-agents run their package's typecheck and
+their test files the same way, through `scripts/job-run.sh --ref <full commit of a pushed branch>` (never in the pod), and never a build or a gate.
 Then the sub-agent on that branch brings it up to date: rebase ONLY commits that were never pushed; once a branch is pushed, merge `origin/integration` into it instead (`git merge origin/integration`), because a rebased pushed branch could only be pushed back with a force push, which is denied. Remove `/tmp/gate-<sha>*` afterwards.
 
 ## Migrations

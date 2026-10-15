@@ -91,9 +91,8 @@ section_commands() {
   echo; echo "## Commands"; echo
   cat <<'EOF'
 Heavy jobs (typecheck, the suite, a build) one at a time: ONLY through `scripts/job-run.sh` (a Job in the cluster on a pushed ref) or `scripts/gate-job.sh`, never in the pod (D-61, T-413: the pod was OOMKilled). Wrap long output in `scripts/quiet.sh` so only one line enters the context.
-- Typecheck: `npm run typecheck` (server, web, contracts). Web build: `npm run build -w @portal/web`.
-- One server test file: `(cd apps/server && node --import tsx --test src/<area>/<file>.test.ts)`; the suite: `(cd apps/server && npm test)` (Docker tests skip without CLAUDEPILOT_DOCKER_TESTS=1).
-- Gate: `scripts/gate-quick.sh` before pushing integration (touched areas only); `scripts/gate.sh [commit]` the release gate on a clean copy; `scripts/gate-job.sh <commit>` the same as a Job.
+- Form: `scripts/job-run.sh --ref <full commit hash of a pushed branch> --out job-out/ -- '<command>; exit $?'` (end with the command's own exit code). Typecheck: `npm run typecheck`. Web build: `npm run build -w @portal/web`. One server test file: `cd apps/server && node --import tsx --test src/<area>/<file>.test.ts`. The suite: `cd apps/server && npm test` (Docker tests skip without CLAUDEPILOT_DOCKER_TESTS=1). The `(cd apps/server && ...)` Test lines below are what the Job runs, never run them in the pod.
+- Gate: `scripts/gate-job.sh <commit>` (the release gate as a Job in the cluster, on a pushed commit), before a release and before pushing integration. `scripts/gate.sh` and `scripts/gate-quick.sh` run npm ci, typecheck, builds and tests in the pod they are started in: never start them from the workspace pod.
 - UI: `scripts/scratch-portal.sh start 3403` then the browser checks in `tools/qa/` (Chromium over CDP; `tools/qa/with-portal.sh` wraps one); stop it after.
 - Deploy: `/deploy` (the pipeline `.pilot/deploy.yml`, the owner approves the release). Slash commands: `.claude/commands/`.
 - This pack: `scripts/context-pack.sh` (regenerate and commit after a merge; the gate fails on a stale pack).
@@ -101,6 +100,10 @@ EOF
   echo
   echo "Scripts:"
   files scripts | grep -E '^scripts/[^/]+\.sh$' | while IFS= read -r f; do
+    case "$f" in
+      scripts/gate.sh) echo "- \`$f\`: the release gate (npm ci, typecheck, web build, server suite) on a clean copy; heavy, runs in the pod it starts in: agents use \`scripts/gate-job.sh\` (D-61)"; continue ;;
+      scripts/gate-quick.sh) echo "- \`$f\`: typecheck, web build and the touched server tests in THIS checkout; heavy, never from the workspace pod: use \`scripts/gate-job.sh\` (D-61)"; continue ;;
+    esac
     echo "- \`$f\`: $(rd "$f" | sed -n '2s/^# *//p' | clip 170)"
   done
   echo
