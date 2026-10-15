@@ -145,7 +145,7 @@ export function seedScale(db, { events = [25_000, 10_000] } = {}) {
       let seq = 0;
       let t = now - count * 1500;
       let turn = 0;
-      const put = (kind, payload, uuid = null) => ev.run(sid, ++seq, iso((t += 1500)), kind, uuid, JSON.stringify(payload));
+      const put = (kind, payload, uuid = null) => seq < count && ev.run(sid, ++seq, iso((t += 1500)), kind, uuid, JSON.stringify(payload));
       while (seq < count) {
         turn++;
         put('user', { text: `Turn ${turn}: look at module ${turn % 37} and fix what is wrong.` }, `${sid}-u${turn}`);
