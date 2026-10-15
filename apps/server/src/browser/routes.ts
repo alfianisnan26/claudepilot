@@ -5,6 +5,8 @@ import { AppError, success } from '@isnanme/core';
 import type { BrowserAction, BrowserControl, BrowserControlRequest, BrowserHandoffAnswer, BrowserStatus } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { config } from '../config.js';
+import { workspaceGuard } from '../workspaces/authz.js';
+import { declareBrowserPolicies } from './authz.js';
 import type { BrowserService } from './service.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
@@ -29,10 +31,15 @@ const ACTIONS: readonly BrowserAction[] = ['wake', 'stop', 'restart'];
  * restart. Mounted behind the session guard, with the origin check every mutating request already has.
  */
 export function createBrowserRoutes(service: BrowserService) {
+  declareBrowserPolicies();
   const app = new Hono<Env>();
   const id = (c: Context<Env>) => `${c.req.param('target')}/${c.req.param('name')}`;
+  // T-531: the seam first, with the verb declared in ./authz.ts; a workspace the caller may not see is the same 404 as a missing one.
+  const toView = workspaceGuard('view');
+  const toOperate = workspaceGuard('operate');
+  const toManage = workspaceGuard('manage');
 
-  app.get('/:target/:name/browser', async (c) =>
+  app.get('/:target/:name/browser', toView, async (c) =>
     c.json(
       success<BrowserStatus>(
         await service.status(id(c), {
@@ -55,23 +62,23 @@ export function createBrowserRoutes(service: BrowserService) {
   };
 
   // Take, renew or release control from a device (PRD §12.3); the device renews while it is around.
-  app.put('/:target/:name/browser/control', async (c) => c.json(success<BrowserControl>(await service.setControl(id(c), await body<BrowserControlRequest>(c), who(c)))));
+  app.put('/:target/:name/browser/control', toOperate, async (c) => c.json(success<BrowserControl>(await service.setControl(id(c), await body<BrowserControlRequest>(c), who(c)))));
 
   // Answer a handoff: handed back, or declined.
-  app.post('/:target/:name/browser/handoffs/:handoff', async (c) => {
+  app.post('/:target/:name/browser/handoffs/:handoff', toOperate, async (c) => {
     const b = await body<BrowserHandoffAnswer & { deviceId?: string }>(c);
     await service.answerHandoff(id(c), c.req.param('handoff'), b, { device: typeof b.deviceId === 'string' ? b.deviceId : null, session: who(c).session });
     return c.json(success({ ok: true }));
   });
 
-  app.post('/:target/:name/browser/install/retry', (c) => {
+  app.post('/:target/:name/browser/install/retry', toManage, (c) => {
     service.retryInstall(id(c));
     return c.json(success({ ok: true }));
   });
 
-  app.get('/:target/:name/browser/configuration', (c) => c.json(success(service.configuration(id(c)))));
+  app.get('/:target/:name/browser/configuration', toView, (c) => c.json(success(service.configuration(id(c)))));
 
-  app.post('/:target/:name/browser/:action', async (c) => {
+  app.post('/:target/:name/browser/:action', toOperate, async (c) => {
     const action = c.req.param('action') as BrowserAction;
     if (!ACTIONS.includes(action)) throw new AppError('NOT_FOUND');
     await service.action(id(c), action);

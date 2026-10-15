@@ -130,6 +130,8 @@ export function run(
     finishedAt: finished === undefined || finished === null ? null : ago(finished),
     durationMs: null,
     jobs: [],
+    runsOn: null,
+    runnerWorkspaceId: null,
     ...rest,
   };
 }

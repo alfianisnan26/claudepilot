@@ -41,7 +41,7 @@ spec:
         kubernetes.io/hostname: k3s-node2
       containers:
         - name: portal
-          image: registry.int.isnan.me/claudepilot/portal:2026.10.15-8
+          image: registry.int.isnan.me/claudepilot/portal:2026.10.15-9
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -63,6 +63,15 @@ spec:
               value: isnan-claudepilot-workspaces
             - name: PORTAL_K8S_IMAGE
               value: registry.int.isnan.me/claudepilot/workspace:2.1.296-2026.10.15-2
+            # Browser pool on Kubernetes (browser-desktop-pool PRD §10, B3 verified on a rig): the image of the `browser` container a
+            # workspace gets when a Browser pool is assigned. Unset: browsers are not offered on this target. Assigning one restarts the
+            # workspace at its next start (the restart rule); egress stays isolated (the default).
+            - name: PORTAL_K8S_BROWSER_IMAGE
+              value: registry.int.isnan.me/claudepilot/browser:t97-2026.10.13-1
+            # Connect GitHub (codespaces-poc.md §8.2, T-557 S3): the owner's OAuth App "ClaudePilot" with the device flow on. A client ID is
+            # public; there is no client secret anywhere, on purpose. Scopes: the default, `codespace`.
+            - name: PORTAL_GITHUB_CLIENT_ID
+              value: Ov23liLYMjgpDAfrkayB
             - name: PORTAL_K8S_STORAGE_CLASS
               value: local-path
             - name: PORTAL_K8S_STORAGE

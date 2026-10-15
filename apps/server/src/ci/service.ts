@@ -43,6 +43,8 @@ import {
   type CiAutoApproveMode,
   type UpdateCiAutoApproveRequest,
   type CiUpstreamSyncResult,
+  type CiRunner,
+  type UpsertCiRunnerRequest,
 } from '@portal/contracts';
 import { NO_VALUES, SessionStream } from '../chat/valueRedact.js';
 import { evaluateRule, needsPersonOf, ruleLine, WINDOW } from './autoApprove.js';
@@ -51,8 +53,8 @@ import { globMatches } from './glob.js';
 import { CiUnreachable, type CiHost, type CiReply } from './host.js';
 import { CI_LIMITS } from './limits.js';
 import { replan, compile, matches, resolveInputs, branchOf, tagOf, type EventContext } from './spec/compile.js';
-import { validateFiles, type SnapshotFile, type Validated } from './spec/validate.js';
-import { CiStore, type DeploymentRow, type EnvironmentRow, type RepoRow, type RunRow } from './store.js';
+import { RUNNER_LABEL, validateFiles, type SnapshotFile, type Validated } from './spec/validate.js';
+import { CiStore, type DeploymentRow, type EnvironmentRow, type RepoRow, type RunnerRow, type RunRow } from './store.js';
 import { CiLinks, runLink, type CiBumper } from './links.js';
 import type { CiSessionsPort } from './sessions.js';
 import { DeployChatsWatch } from './deployChats.js';
@@ -60,7 +62,7 @@ import type { CiTicketsPort } from './tickets.js';
 import { cleanLog, oneLine, redactSecrets } from './text.js';
 import { flakyComment, flakyDescription, flakyExcerpt, flakyTitle, parseFlaky, repoTag, type FlakySighting } from './flaky.js';
 import type { CiEventFile, Plan } from './plan.js';
-import { checkUpstream, defaultLookup, EMPTY_STATE, nextState, readState, upstreamPin, upstreamView, type Lookup, type SyncReply } from './upstream.js';
+import { checkUpstream, defaultLookup, EMPTY_STATE, nextState, readState, upstreamPin, upstreamView, withoutUserinfo, type Lookup, type SyncReply } from './upstream.js';
 
 /** The flaky rows of a run, per job: the count and the distinct tickets, in order. */
 function flakyOfJobs(rows: { job: string; ticket_id: string | null }[]): CiRunFlaky[] {
@@ -84,6 +86,23 @@ const json = <T>(text: string | null | undefined, fallback: T): T => {
 };
 
 /** The facts of a run a deployment row copies. */
+/** Where a run executes (T-557): the runner that took it, or the repository's workspace. */
+export const execOf = (r: Pick<RunRow, 'workspace_id' | 'runner_workspace_id'>): string => r.runner_workspace_id ?? r.workspace_id;
+/** The `runs-on` labels a run asked for (T-557), or null for the repository's workspace. */
+export function runsOnOf(r: Pick<RunRow, 'runs_on'>): string[] | null {
+  if (!r.runs_on) return null;
+  try {
+    const v = JSON.parse(r.runs_on) as unknown;
+    return Array.isArray(v) && v.length && v.every((x) => typeof x === 'string') ? (v as string[]) : null;
+  } catch {
+    return null;
+  }
+}
+/** The mirror a runner keeps of a workspace's remote (T-557): never the runner's own remote of the same name. */
+export const mirrorOf = (workspaceId: string, repo: string) => `m-${createHash('sha256').update(workspaceId).digest('hex').slice(0, 8)}-${repo}`;
+/** Base64 characters per chunk of a bundle on its way to a runner: under cp-ci's 4 MiB stdin and reply caps. */
+const BUNDLE_CHUNK = 1_048_576;
+
 const row0 = (r: RunRow) => ({ id: r.id, number: r.number, pipeline: r.pipeline, sha: r.sha, ref: r.ref, actor: r.actor, created_at: r.created_at });
 
 const newRunId = () => `r${Date.now().toString(36)}${randomBytes(3).toString('hex')}`;
@@ -162,15 +181,31 @@ export interface CiServiceOptions {
   sessions?: CiSessionsPort;
   /** Whether a Secrets & env name reaches a workspace (names only, never a value). Without it secret names are not checked before a run. */
   secrets?: (workspaceId: string, name: string) => { kind: string; asFile: boolean; asVariable: boolean } | null;
+  /**
+   * The VALUE of a secret as the workspace's Secrets & env sets deliver it as a file (T-557), for the lease a runner gets when it takes that
+   * workspace's run. In memory only: handed to the runner on stdin, never logged, stored or returned. Without it a run that names a secret
+   * can not go to a runner.
+   * T-486 S2 uses the same value to check the upstream webhook's signature (the remote's hook secret, a SECRET by name; one rule, one
+   * helper: decision on T-486). Never logged, stored, returned or audited there either; null (no such secret, or Locked) refuses every delivery.
+   */
+  secretValue?: (workspaceId: string, name: string) => string | null;
   /** The platform audit (approvals, protection changes). Names, ids and fixed codes only. */
   audit?: (e: { kind: string; actor: string; userId: string | null; severity?: 'info' | 'medium' | 'high'; subject?: string; detail?: Record<string, unknown> }) => void;
   /** The clock of the auto-approve rule (its daily cap and window, FR41a); tests pass a fake one. */
   now?: () => Date;
   /** Upstream sync (FR8a): how a host name resolves for the SSRF guard (default: the system's resolver); tests pass a fake one. */
   lookup?: Lookup;
-  /** Upstream sync: the only hosts an upstream may be on. Unset: any host whose every address is public. */
-  upstreamHosts?: readonly string[];
+  /**
+   * Upstream sync: the only hosts an upstream may be on, read at each use (T-486 S2: the `ci.upstreamHosts` setting). Unset or empty: any
+   * host whose every address is public. The SSRF guard holds either way.
+   */
+  upstreamHosts?: readonly string[] | (() => readonly string[] | undefined);
+  /** T-486 S2: the least time between two webhook-kicked syncs of one remote (default UPSTREAM_HOOK_GAP_MS); tests pass a short one. */
+  hookGapMs?: number;
 }
+
+/** T-486 S2: webhook kicks of one remote closer than this coalesce into one sync. */
+export const UPSTREAM_HOOK_GAP_MS = 10_000;
 
 /** Who decided something a person must decide (an approval, a protection change): the actor string for records and the user for the audit. */
 export interface CiDecider {
@@ -201,10 +236,17 @@ export class CiService {
   onChange?: () => void;
   hooks: CiHooks = {};
   readonly #cs: CiStore;
-  readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'audit' | 'upstreamHosts'>> & Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'audit' | 'upstreamHosts'>;
+  readonly #opts: Required<Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>> &
+    Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>;
+  /** Runs a runner is being handed right now (T-557), so two workspaces' dispatches can not both fill its last slot. */
+  readonly #handing = new Map<string, number>();
   /** Upstream sync: when each remote last tried (ms), and the sync in flight per remote (one at a time). */
   readonly #upstreamAt = new Map<string, number>();
   readonly #syncing = new Map<string, Promise<SyncReply>>();
+  /** T-486 S2: remotes a webhook asked for while their sync ran: one more sync after it, however many asked. */
+  readonly #again = new Set<string>();
+  /** T-486 S2: one wake-up timer per remote whose webhook sync is due after the gap. */
+  readonly #wake = new Map<string, NodeJS.Timeout>();
   /** The auto-approve rule's evaluations in flight (dry mode), so a test or a shutdown can wait for them. */
   readonly #ruling = new Set<Promise<void>>();
   /** Runs with an approval being decided right now: one decision at a time per run. */
@@ -241,11 +283,20 @@ export class CiService {
       redactFor: opts.redactFor,
       streamFor: opts.streamFor,
       secrets: opts.secrets,
+      secretValue: opts.secretValue,
       audit: opts.audit,
       now: opts.now ?? (() => new Date()),
       lookup: opts.lookup ?? defaultLookup,
       upstreamHosts: opts.upstreamHosts,
+      hookGapMs: opts.hookGapMs ?? UPSTREAM_HOOK_GAP_MS,
     };
+  }
+
+  /** The upstream host allow-list as it is now (a setting may change it at any time); undefined: none. */
+  #allowedHosts(): readonly string[] | undefined {
+    const h = this.#opts.upstreamHosts;
+    const list = typeof h === 'function' ? h() : h;
+    return list?.length ? list : undefined;
   }
 
   /* ---------- Life ---------- */
@@ -391,10 +442,60 @@ export class CiService {
   #sync(repo: RepoRow, by: CiDecider | null): Promise<SyncReply> {
     const running = this.#syncing.get(repo.id);
     if (running) return running;
-    this.#upstreamAt.set(repo.id, Date.now());
-    const p = this.#syncOnce(repo, by).finally(() => this.#syncing.delete(repo.id));
+    const started = Date.now();
+    this.#upstreamAt.set(repo.id, started);
+    this.#again.delete(repo.id);
+    const p = this.#syncOnce(repo, by).finally(() => {
+      this.#syncing.delete(repo.id);
+      // A webhook came while this sync ran: the push it announced may be newer than this fetch. One more, due one gap after this start.
+      if (this.#again.delete(repo.id)) this.#dueAt(repo, started + this.#opts.hookGapMs);
+    });
     this.#syncing.set(repo.id, p);
     return p;
+  }
+
+  /** Makes a remote's next sync due at `at` (ms) instead of after its `everyS`, and has the workspace looked at soon. */
+  #dueAt(repo: RepoRow, at: number): void {
+    const every = (repo.upstream_every_s ?? 30) * 1000;
+    this.#upstreamAt.set(repo.id, Math.min(this.#upstreamAt.get(repo.id) ?? 0, at - every));
+    this.kick(repo.workspace_id);
+    // Due later than now (the gap): look again then, not at the next idle poll.
+    const wait = at - Date.now();
+    if (wait > 0 && !this.#wake.has(repo.id)) {
+      const t = setTimeout(() => {
+        this.#wake.delete(repo.id);
+        this.kick(repo.workspace_id);
+      }, wait);
+      t.unref();
+      this.#wake.set(repo.id, t);
+    }
+  }
+
+  /**
+   * T-486 S2: the upstream's webhook asks for a sync now. It never fetches here: it only makes the remote's detached, one-at-a-time sync due
+   * (started by the next poll). Kicks coalesce: during a sync they ask for ONE more after it; otherwise a sync at most every
+   * `UPSTREAM_HOOK_GAP_MS` per remote. The caller has checked the signature and the seam.
+   */
+  kickUpstream(id: string): void {
+    const repo = this.#cs.repo(id);
+    if (!repo || repo.removed_at || !repo.upstream_url) return;
+    if (this.#syncing.has(id)) {
+      this.#again.add(id);
+      return;
+    }
+    this.#dueAt(repo, Math.max(Date.now(), (this.#upstreamAt.get(id) ?? 0) + this.#opts.hookGapMs));
+  }
+
+  /**
+   * T-486 S2: what the webhook route needs to check a delivery for remote `id`: its workspace and the signing value, or null (no such
+   * remote, it follows no upstream, no hook secret set, or the value is not available). The value is never kept beyond the check.
+   */
+  upstreamHookKey(id: string): { workspaceId: string; key: string } | null {
+    if (!this.#ok()) return null;
+    const repo = this.#cs.repo(id);
+    if (!repo || repo.removed_at || !repo.upstream_url || !repo.upstream_hook_secret) return null;
+    const key = this.#opts.secretValue?.(repo.workspace_id, repo.upstream_hook_secret) ?? null;
+    return key ? { workspaceId: repo.workspace_id, key } : null;
   }
 
   async #syncOnce(repo: RepoRow, by: CiDecider | null): Promise<SyncReply> {
@@ -402,17 +503,23 @@ export class CiService {
     const prev = readState(repo.upstream_state);
     const at = new Date().toISOString();
     const fail = (message: string): never => {
-      const error = oneLine(this.#redact(repo.workspace_id, message))?.slice(0, 300) ?? 'The sync failed.';
-      if (prev.error !== error) {
-        this.#cs.updateRepo(repo.id, { upstream_state: JSON.stringify({ ...prev, at, error }) });
-        this.#changed();
+      const error = oneLine(withoutUserinfo(this.#redact(repo.workspace_id, message)))?.slice(0, 300) ?? 'The sync failed.';
+      // T-486 S2: the first failure of a row is when the Needs you item starts; a later, different message keeps that time.
+      const errorSince = (prev.error && prev.errorSince) || at;
+      if (prev.error !== error || prev.errorSince !== errorSince) {
+        // Only if it still follows this upstream (it may have been changed or removed while this sync ran).
+        const still = this.#cs.repo(repo.id);
+        if (still && !still.removed_at && still.upstream_url === url) {
+          this.#cs.updateRepo(repo.id, { upstream_state: JSON.stringify({ ...prev, at, error, errorSince }) });
+          this.#changed();
+        }
       }
       throw new AppError('SERVICE_UNAVAILABLE', error, { expose: true });
     };
     // The SSRF guard, before every sync: the host may resolve elsewhere now. git is pinned to the address checked here.
     let pin: string;
     try {
-      pin = await upstreamPin(url, this.#opts.lookup, this.#opts.upstreamHosts);
+      pin = await upstreamPin(url, this.#opts.lookup, this.#allowedHosts());
     } catch (e) {
       return fail((e as Error).message);
     }
@@ -570,7 +677,7 @@ export class CiService {
           ? { ...base, status: 'failed', reason: 'invalid_pipeline', diagnostics: JSON.stringify(missing), finished_at: now, duration_ms: 0, archived: 1 }
           : gates && 'problem' in gates
             ? { ...base, status: 'failed', reason: 'invalid_pipeline', diagnostics: JSON.stringify([gates.problem]), finished_at: now, duration_ms: 0, archived: 1 }
-            : { ...base, plan: JSON.stringify(c.plan), concurrency_group: c.group, cancel_in_progress: c.cancelInProgress ? 1 : 0 };
+            : { ...base, plan: JSON.stringify(c.plan), concurrency_group: c.group, cancel_in_progress: c.cancelInProgress ? 1 : 0, ...(c.plan.runsOn && this.#cs.runnersReady ? { runs_on: JSON.stringify(c.plan.runsOn) } : {}) };
       this.#cs.insertRun(row);
       if (gates && 'deployments' in gates && row.status === 'queued') for (const d of gates.deployments) this.#cs.insertDeployment(d);
       return row;
@@ -664,6 +771,12 @@ export class CiService {
           continue;
         }
       }
+      // `runs-on` (T-557): a runner takes it, not this workspace's own slots.
+      const labels = runsOnOf(run);
+      if (labels) {
+        await this.#toRunner(run, labels);
+        continue;
+      }
       const text = run.plan;
       let reply: CiReply;
       try {
@@ -684,6 +797,162 @@ export class CiService {
         this.#finishFailed(run, 'runner_error', reply.message ?? 'The runner refused the plan.');
       } else this.#retry(run, reply.message ?? reply.error ?? 'start failed');
     }
+  }
+
+  /**
+   * A run with `runs-on` (T-557): the least busy enabled runner whose labels include all of the run's, running and with a free slot, gets
+   * the commit (a bundle into its mirror of this remote, only what it lacks), the run's secrets (a lease on stdin, from the repository
+   * workspace's Secrets & env), and the plan. No runner carries the labels at all: the run fails at once as `no_runner`. Runners exist but
+   * none is free or online: it waits, up to `runnerWaitMs` from when it was queued. A failure on the way is retried like a start (3 tries).
+   */
+  async #toRunner(run: RunRow, labels: string[]): Promise<void> {
+    const fits = this.#cs.runners().filter((r) => {
+      const has = new Set(JSON.parse(r.labels) as string[]);
+      return r.enabled && labels.every((l) => has.has(l));
+    });
+    if (!fits.length) return this.#finishFailed(run, 'no_runner', `No runner has the labels ${labels.join(', ')}. Add one in CI > Runners, or change runs-on.`);
+    const ready: { id: string; load: number }[] = [];
+    for (const r of fits) {
+      if (r.drained) continue;
+      const state = await this.host.state(r.workspace_id).catch(() => 'gone' as const);
+      if (state !== 'running') continue;
+      const load = this.#cs.runningRuns(r.workspace_id).length + (this.#handing.get(r.workspace_id) ?? 0);
+      if (load < r.max_runs) ready.push({ id: r.workspace_id, load });
+    }
+    if (!ready.length) {
+      if (Date.now() - Date.parse(run.created_at) > CI_LIMITS.runnerWaitMs)
+        this.#finishFailed(run, 'no_runner', `No runner with the labels ${labels.join(', ')} was online and free for ${Math.round(CI_LIMITS.runnerWaitMs / 60_000)} minutes.`);
+      return;
+    }
+    const runner = ready.sort((a, b) => a.load - b.load || a.id.localeCompare(b.id))[0]!.id;
+    this.#handing.set(runner, (this.#handing.get(runner) ?? 0) + 1);
+    const local = runner === run.workspace_id;
+    let leased = false;
+    try {
+      const plan = JSON.parse(run.plan!) as Plan;
+      const names = [...new Set(plan.jobs.filter((j) => !j.skip).flatMap((j) => j.secrets))];
+      if (!local) {
+        await this.host.install(runner);
+        plan.mirror = mirrorOf(run.workspace_id, run.repo);
+        await this.#sendCommit(run, runner, plan.mirror);
+        if (names.length) {
+          const values: Record<string, string> = {};
+          for (const name of names) {
+            const v = this.#opts.secretValue?.(run.workspace_id, name) ?? null;
+            if (v === null) return this.#finishFailed(run, 'invalid_pipeline', `The secret ${name} is not available in the repository's workspace, so it can not be handed to a runner.`);
+            values[name] = v;
+          }
+          const text = JSON.stringify(values);
+          const lease = await this.host.cp(runner, ['lease', run.id, '--bytes', String(Buffer.byteLength(text))], { stdin: text, timeoutMs: 30_000 });
+          if (!lease.ok) throw new Error(lease.message ?? lease.error ?? 'the lease was refused');
+          plan.leased = true;
+          leased = true;
+        }
+      }
+      const text = JSON.stringify(plan);
+      const reply = await this.host.cp(runner, ['start', run.id, '--bytes', String(Buffer.byteLength(text))], { stdin: text, timeoutMs: 30_000 });
+      if (!reply.ok) {
+        if (reply.error === 'no_space') return this.#finishFailed(run, 'no_space', 'The runner is almost out of disk space.');
+        if (reply.error === 'bad_plan') return this.#finishFailed(run, 'runner_error', reply.message ?? 'The runner refused the plan.');
+        throw new Error(reply.message ?? reply.error ?? 'start failed');
+      }
+      leased = false;
+      this.#cs.updateRun(run.id, { status: 'running', started_at: new Date().toISOString(), attempts: 0, runner_workspace_id: local ? null : runner });
+      this.#changed();
+      this.#moved(run.id, 'queued');
+      this.kick(runner);
+      console.log(`[ci] ${run.id} started ${run.pipeline} on ${run.repo}@${shortSha(run.sha)} on the runner ${runner}`);
+      this.#opts.audit?.({ kind: 'ci.run_on_runner', actor: run.actor, userId: null, subject: `ci_run:${run.id}`, detail: { workspace: run.workspace_id, runner, labels, secrets: names, repo: run.repo, run: run.number, sha: shortSha(run.sha) } });
+    } catch (e) {
+      this.#retry(run, `runner ${runner}: ${(e as Error).message}`);
+    } finally {
+      // A lease handed over for a start that did not happen goes again (the runner's gc removes it after a day otherwise).
+      if (leased) await this.host.cp(runner, ['lease', run.id, '--drop']).catch(() => undefined);
+      const n = (this.#handing.get(runner) ?? 1) - 1;
+      if (n > 0) this.#handing.set(runner, n);
+      else this.#handing.delete(runner);
+    }
+  }
+
+  /** The commit into the runner's mirror (T-557): what the mirror already has is left out; nothing travels when it has the commit. */
+  async #sendCommit(run: RunRow, runner: string, mirror: string): Promise<void> {
+    const heads = await this.host.cp(runner, ['mirror', 'heads', mirror, '--sha', run.sha], { timeoutMs: 30_000 });
+    if (!heads.ok) throw new Error(heads.message ?? heads.error ?? 'the runner did not say what it has');
+    if (heads.has === true) return;
+    const haves = ((heads.heads as string[] | undefined) ?? []).slice(0, 50);
+    const made = await this.host.cp(run.workspace_id, ['repo', 'bundle', run.repo, run.sha, '--id', run.id, ...(haves.length ? ['--haves', haves.join(',')] : [])], { timeoutMs: 600_000 });
+    if (!made.ok) throw new Error(made.message ?? made.error ?? 'the bundle failed');
+    if (made.empty === true) return;
+    try {
+      let offset = 0;
+      for (let part = 0; ; part++) {
+        const chunk = await this.host.cp(run.workspace_id, ['repo', 'outbox', run.id, '--offset', String(offset), '--max', String(BUNDLE_CHUNK)], { timeoutMs: 60_000 });
+        if (!chunk.ok || typeof chunk.data !== 'string') throw new Error(chunk.message ?? chunk.error ?? 'the bundle could not be read');
+        const last = chunk.done === true;
+        const put = await this.host.cp(runner, ['mirror', 'put', mirror, run.id, run.sha, '--part', String(part), ...(last ? ['--last'] : []), '--bytes', String(Buffer.byteLength(chunk.data))], { stdin: chunk.data, timeoutMs: last ? 600_000 : 120_000 });
+        if (!put.ok) throw new Error(put.message ?? put.error ?? 'the runner refused the bundle');
+        if (last) return;
+        offset = Number(chunk.next);
+      }
+    } finally {
+      await this.host.cp(run.workspace_id, ['repo', 'outbox', run.id, '--drop']).catch(() => undefined);
+    }
+  }
+
+  /* ---------- Runners (T-557) ---------- */
+
+  /** Every runner with its workspace's state and the runs executing on it now. */
+  async runners(): Promise<CiRunner[]> {
+    const states = await this.host.states();
+    return this.#cs.runners().map((r) => this.#runnerView(r, states));
+  }
+
+  #runnerView(r: RunnerRow, states: Map<string, 'running' | 'stopped'>): CiRunner {
+    const s = states.get(r.workspace_id);
+    return {
+      workspaceId: r.workspace_id,
+      labels: json<string[]>(r.labels, []),
+      maxRuns: r.max_runs,
+      enabled: r.enabled === 1,
+      drained: r.drained === 1,
+      note: r.note,
+      state: s === 'running' ? 'online' : s === 'stopped' ? 'offline' : 'gone',
+      running: this.#cs.runningRuns(r.workspace_id).length,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
+  }
+
+  /** Makes a workspace a runner, or changes one (a person's act, audited). Labels: lowercase, at most `runnerLabelsPerRunner`. */
+  async upsertRunner(workspaceId: string, req: Partial<UpsertCiRunnerRequest>, by: CiDecider): Promise<CiRunner> {
+    if (!this.#cs.runnersReady) throw new AppError('SERVICE_UNAVAILABLE', 'This portal can not hold runners yet (its database is not up to date).');
+    if (!/^[^/]+\/[^/]+$/.test(workspaceId)) throw invalid('workspaceId', 'A workspace id is <target>/<name>.');
+    if ((await this.host.state(workspaceId)) === 'gone') throw notFound('workspace');
+    const was = this.#cs.runner(workspaceId);
+    if (!Array.isArray(req.labels) && !was) throw invalid('labels', 'Give the runner at least one label.');
+    const raw: unknown[] = Array.isArray(req.labels) ? req.labels : json<string[]>(was!.labels, []);
+    const labels = [...new Set(raw.map((l) => (typeof l === 'string' ? l.trim().toLowerCase() : '')))].sort();
+    if (!labels.length) throw invalid('labels', 'Give the runner at least one label.');
+    if (labels.length > CI_LIMITS.runnerLabelsPerRunner) throw invalid('labels', `A runner has at most ${CI_LIMITS.runnerLabelsPerRunner} labels.`);
+    const bad: string | undefined = labels.find((l) => !RUNNER_LABEL.test(l) || l === 'self-hosted' || l === 'workspace');
+    if (bad !== undefined) throw invalid('labels', `"${bad.slice(0, 40)}" is not a runner label: lowercase letters, digits, ".", "-" and "_" (self-hosted and workspace are reserved).`);
+    const maxRuns = req.maxRuns ?? was?.max_runs ?? 1;
+    if (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > CI_LIMITS.runnerMaxRuns) throw invalid('maxRuns', `A runner takes 1 to ${CI_LIMITS.runnerMaxRuns} runs at once.`);
+    const note = req.note === undefined ? (was?.note ?? null) : req.note === null ? null : String(req.note).slice(0, 200);
+    const row = this.#cs.upsertRunner(
+      { workspace_id: workspaceId, labels: JSON.stringify(labels), max_runs: maxRuns, enabled: (req.enabled ?? (was ? was.enabled === 1 : true)) ? 1 : 0, drained: (req.drained ?? (was ? was.drained === 1 : false)) ? 1 : 0, note },
+      by.actor,
+    );
+    this.#opts.audit?.({ kind: 'ci.runner_changed', actor: by.actor, userId: by.userId, severity: 'medium', subject: `workspace:${workspaceId}`, detail: { workspace: workspaceId, labels, maxRuns, enabled: row.enabled === 1, drained: row.drained === 1, created: !was } });
+    this.#changed();
+    return this.#runnerView(row, await this.host.states());
+  }
+
+  /** A runner no more. Its running runs finish; queued runs that need its labels wait for another, or fail as `no_runner` later. */
+  async removeRunner(workspaceId: string, by: CiDecider): Promise<void> {
+    if (!this.#cs.removeRunner(workspaceId)) throw notFound('runner');
+    this.#opts.audit?.({ kind: 'ci.runner_changed', actor: by.actor, userId: by.userId, severity: 'medium', subject: `workspace:${workspaceId}`, detail: { workspace: workspaceId, removed: true } });
+    this.#changed();
   }
 
   #retry(run: RunRow, why: string): void {
@@ -857,7 +1126,7 @@ export class CiService {
   async #archive(runId: string): Promise<void> {
     const row = this.#cs.run(runId);
     if (!row || row.archived) return;
-    const reply = await this.host.cp(row.workspace_id, ['archive', runId, '--head', String(CI_LIMITS.archiveHeadBytes), '--tail', String(CI_LIMITS.archiveTailBytes), '--total', String(CI_LIMITS.archiveRunBytes)], { timeoutMs: 30_000 });
+    const reply = await this.host.cp(execOf(row), ['archive', runId, '--head', String(CI_LIMITS.archiveHeadBytes), '--tail', String(CI_LIMITS.archiveTailBytes), '--total', String(CI_LIMITS.archiveRunBytes)], { timeoutMs: 30_000 });
     if (!reply.ok) throw new Error(reply.message ?? reply.error ?? 'archive failed');
     const redact = this.#redactor(row.workspace_id);
     const steps = (reply.steps as { job: string; step: number; size: number; head: string; tail: string | null; omitted: number }[] | undefined) ?? [];
@@ -921,7 +1190,7 @@ export class CiService {
 
   /** Housekeeping on a quiet poll: logs that could not be kept earlier, old runs, and the workspace's own cleanup. */
   async #maintenance(workspaceId: string): Promise<void> {
-    for (const row of this.#cs.unarchived(5).filter((r) => r.workspace_id === workspaceId)) await this.#archive(row.id).catch(() => undefined);
+    for (const row of this.#cs.unarchived(5).filter((r) => execOf(r) === workspaceId)) await this.#archive(row.id).catch(() => undefined);
     const now = Date.now();
     if (now - this.#lastPrune >= 60 * 60_000) {
       this.#lastPrune = now;
@@ -953,12 +1222,12 @@ export class CiService {
       return;
     }
     if (row.status !== 'running') throw new AppError('CONFLICT', 'That run is already over.');
-    const reply = await this.host.cp(row.workspace_id, ['cancel', row.id]).catch((e: unknown) => {
+    const reply = await this.host.cp(execOf(row), ['cancel', row.id]).catch((e: unknown) => {
       throw new AppError('SERVICE_UNAVAILABLE', (e as Error).message, { expose: true });
     });
     if (!reply.ok) throw fromReply(reply);
     this.#cs.updateRun(row.id, { ...who, ...(reason === 'superseded' ? { reason: 'superseded' as const } : {}) });
-    this.kick(row.workspace_id);
+    this.kick(execOf(row));
   }
 
   async rerun(id: string, actor = 'ui'): Promise<CiRun> {
@@ -1016,12 +1285,12 @@ export class CiService {
     if (this.#deciding.has(row.id)) throw new AppError('CONFLICT', 'Someone is deciding this right now.');
     this.#deciding.add(row.id);
     try {
-      await this.#running(row.workspace_id);
+      await this.#running(execOf(row));
       // Read again inside the lock: what the caller saw may have been decided meanwhile.
       const live = this.#cs.deployment(row.id, job);
       if (!live || live.approval !== 'waiting' || !live.gate_key) throw new AppError('CONFLICT', 'That job is not waiting for an approval.');
       const key = live.gate_key;
-      const reply = decision === 'approve' ? await this.#cp(row.workspace_id, ['approve', row.id, job, '--bytes', String(Buffer.byteLength(key))], { stdin: key }) : await this.#cp(row.workspace_id, ['approve', row.id, job, '--reject']);
+      const reply = decision === 'approve' ? await this.#cp(execOf(row), ['approve', row.id, job, '--bytes', String(Buffer.byteLength(key))], { stdin: key }) : await this.#cp(execOf(row), ['approve', row.id, job, '--reject']);
       if (!reply.ok) {
         if (reply.error === 'over' || reply.error === 'not_waiting') throw new AppError('CONFLICT', 'That job is not waiting any more.');
         throw fromReply(reply);
@@ -1229,6 +1498,8 @@ export class CiService {
       finishedAt: row.finished_at,
       durationMs: row.duration_ms,
       jobs,
+      runsOn: runsOnOf(row),
+      runnerWorkspaceId: row.runner_workspace_id ?? null,
     };
   }
 
@@ -1312,7 +1583,8 @@ export class CiService {
   async show(id: string): Promise<CiRun> {
     const run = this.get(id);
     const states = await this.host.states();
-    return { ...run, workspaceState: states.get(run.workspaceId) ?? 'gone' };
+    // A runner's run (T-557): its logs live where it executes.
+    return { ...run, workspaceState: states.get(run.runnerWorkspaceId ?? run.workspaceId) ?? 'gone' };
   }
 
   /* ---------- Logs ---------- */
@@ -1335,7 +1607,7 @@ export class CiService {
     const stream = live && live.offset === from ? live : { stream: this.#opts.streamFor?.(row.workspace_id) ?? new SessionStream(NO_VALUES), offset: from };
     let reply: CiReply;
     try {
-      reply = await this.host.cp(row.workspace_id, ['log', id, job, String(n), String(from)], { timeoutMs: 15_000 });
+      reply = await this.host.cp(execOf(row), ['log', id, job, String(n), String(from)], { timeoutMs: 15_000 });
     } catch {
       return { text: '', next: from, done: false, truncated: false, source: 'workspace' };
     }
@@ -1445,21 +1717,26 @@ export class CiService {
       if (req.upstream === null) {
         // The old upstream's staging refs stay in the remote until the next sync clears them: remember that, even after the removal.
         const stale = repo.upstream_url || readState(repo.upstream_state).reset;
-        Object.assign(patch, { upstream_url: null, upstream_secret: null, upstream_every_s: null, upstream_state: stale ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null });
+        Object.assign(patch, { upstream_url: null, upstream_secret: null, upstream_every_s: null, upstream_hook_secret: null, upstream_state: stale ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null });
         if (repo.upstream_url) audit = { kind: 'ci.upstream_cleared', detail: { repo: repo.name, url: repo.upstream_url } };
       } else {
         const u = checkUpstream(req.upstream);
         // The SSRF guard on set too, so a refused host is said at once, not by the first sync.
-        await upstreamPin(u.url, this.#opts.lookup, this.#opts.upstreamHosts);
+        await upstreamPin(u.url, this.#opts.lookup, this.#allowedHosts());
         if (u.secret && this.#opts.secrets) {
           const info = this.#opts.secrets(repo.workspace_id, u.secret);
           if (!info?.asFile) throw invalid('upstream.secret', `${u.secret} does not reach this workspace as a file. Assign it in Secrets & env as a secret or a tool login.`);
         }
+        // T-486 S2: the webhook's signing secret is checked by the portal itself, so it must be a secret the workspace's sets deliver.
+        if (u.hookSecret && this.#opts.secrets) {
+          const info = this.#opts.secrets(repo.workspace_id, u.hookSecret);
+          if (info?.kind !== 'secret') throw invalid('upstream.hookSecret', `${u.hookSecret} is not a secret assigned to this workspace. Add it in Secrets & env as a secret.`);
+        }
         // A new URL is a new upstream (the same URL again is not): its sync starts from a clean staging area, so it is a baseline.
         const changed = u.url !== repo.upstream_url;
         const staged = changed && (repo.upstream_url || readState(repo.upstream_state).reset);
-        Object.assign(patch, { upstream_url: u.url, upstream_secret: u.secret, upstream_every_s: u.everyS, ...(changed ? { upstream_state: staged ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null } : {}) });
-        audit = { kind: 'ci.upstream_set', detail: { repo: repo.name, url: u.url, secret: u.secret, everyS: u.everyS } };
+        Object.assign(patch, { upstream_url: u.url, upstream_secret: u.secret, upstream_every_s: u.everyS, upstream_hook_secret: u.hookSecret, ...(changed ? { upstream_state: staged ? JSON.stringify({ ...EMPTY_STATE, reset: true }) : null } : {}) });
+        audit = { kind: 'ci.upstream_set', detail: { repo: repo.name, url: u.url, secret: u.secret, everyS: u.everyS, hookSecret: u.hookSecret } };
       }
       this.#upstreamAt.delete(repo.id);
     }

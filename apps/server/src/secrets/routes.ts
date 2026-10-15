@@ -6,7 +6,9 @@ import { AppError, success } from '@isnanme/core';
 import type { SecretsMigrationCheck, WorkspaceSecrets } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import type { PoolService } from '../pools/service.js';
+import { workspaceGuard } from '../workspaces/authz.js';
 import type { Runtime } from '../workspaces/runtime.js';
+import { declareWorkspaceSecretsPolicies } from './authz.js';
 import { SecretsKind } from './kind.js';
 import { checkHomeCredentials } from './preflight.js';
 
@@ -16,6 +18,7 @@ export interface SecretsRoutesDeps {
 }
 
 export function createSecretsRoutes({ pools, workspaces }: SecretsRoutesDeps): Hono {
+  declareWorkspaceSecretsPolicies();
   const app = new Hono();
   /** The registered secrets kind; a portal without it has no such routes (404). */
   const kind = (): SecretsKind => {
@@ -25,9 +28,9 @@ export function createSecretsRoutes({ pools, workspaces }: SecretsRoutesDeps): H
   };
   const workspaceId = (c: Context) => `${c.req.param('target')}/${c.req.param('name')}`;
 
-  app.get('/:target/:name/secrets', (c) => c.json(success<WorkspaceSecrets>(kind().workspaceView(workspaceId(c)))));
+  app.get('/:target/:name/secrets', workspaceGuard('operate'), (c) => c.json(success<WorkspaceSecrets>(kind().workspaceView(workspaceId(c)))));
   // An exec as the workspace user that reports names only; POST, since it runs something in the workspace.
-  app.post('/:target/:name/secrets/check', async (c) => {
+  app.post('/:target/:name/secrets/check', workspaceGuard('operate'), async (c) => {
     kind();
     const access = workspaces.runtimeFor(c.req.param('target') ?? '')?.delivery;
     const findings = access ? await checkHomeCredentials(access, c.req.param('name') ?? '') : null;

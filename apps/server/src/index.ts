@@ -11,7 +11,7 @@ import { SocketGuard } from './sockets.js';
 import { workspaceView } from './workspaces/view.js';
 import { Reconciler, type FragmentProvider } from './delivery/reconciler.js';
 import { References } from './pools/references.js';
-import { exposedSecretValues } from './secrets/exposed.js';
+import { deliveredSecretValue, exposedSecretValues } from './secrets/exposed.js';
 import { SecretsKind } from './secrets/kind.js';
 import { registerMcpSets } from './mcp/index.js';
 import { SkillsModule } from './skills/module.js';
@@ -44,6 +44,7 @@ import { internalUrlResolver } from './portalmcp/internalUrl.js';
 import { OrphanSweep } from './tickets/orphans.js';
 import { Tickets } from './tickets/service.js';
 import { CiService } from './ci/service.js';
+import { upstreamHostsFrom } from './ci/settings.js';
 import { WorkspacesCiHost } from './ci/host.js';
 import { registerCiTools } from './ci/portalTools.js';
 import { valueRedactors } from './ci/values.js';
@@ -470,6 +471,12 @@ const ci = new CiService(store, new WorkspacesCiHost(workspaces), {
   redactFor: ciValues.redactFor,
   streamFor: ciValues.streamFor,
   secrets: (id, name) => secretName(references, id, name),
+  // T-557: a runner taking this workspace's run gets the secrets it names as a lease, in memory and on stdin only.
+  // T-486 S2: the same value checks the upstream webhook's signature (the remote's hook secret), in memory only. One rule, one helper:
+  // both read a SECRET (never a variable) the workspace's sets deliver, and names are unique across a workspace's sets (decision on T-486).
+  secretValue: (id, name) => deliveredSecretValue(poolService, id, name),
+  // T-486 S2: the upstream host allow-list setting, read at each use.
+  upstreamHosts: upstreamHostsFrom(settingsModule.settings),
   // Deployment approvals and environment protection changes (FR41) go to the platform audit, created further down.
   audit: (e) => platform.audit.record(e),
 });

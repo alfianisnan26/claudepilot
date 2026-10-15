@@ -3216,6 +3216,41 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 783,
+    name: 'CI: the secret name that signs a remote’s upstream webhook (T-486 S2)',
+    up(db) {
+      // T-486 S2 (local-git-ci PRD FR8a): an upstream may call `POST /hooks/ci/<remote id>` on a push, signed with the value of this
+      // Secrets & env NAME (never a value here). Null on every row so far: no webhook, the timer only, as before.
+      db.exec(`ALTER TABLE ci_repos ADD COLUMN upstream_hook_secret TEXT;`);
+    },
+  },
+  {
+    version: 789,
+    name: 'CI: runners with labels, and the runner a run executes on (T-557)',
+    up(db) {
+      // T-557 (local-git-ci PRD §23, runners): a runner is a workspace (in the cluster or a machine enrolled through Connect) that takes
+      // runs whose pipeline says `runs-on: [labels]`. `labels` is a sorted JSON array; `max_runs` caps the runs it executes at once;
+      // `drained` lets its running runs finish and gives it no new one. On a run: `runs_on` is the labels it asked for (JSON, null: the
+      // repository's workspace, as before) and `runner_workspace_id` the workspace it executes on (null: `workspace_id`, as before).
+      db.exec(`
+        CREATE TABLE ci_runners (
+          workspace_id TEXT PRIMARY KEY,
+          labels TEXT NOT NULL,
+          max_runs INTEGER NOT NULL DEFAULT 1,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          drained INTEGER NOT NULL DEFAULT 0,
+          note TEXT,
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        ALTER TABLE ci_runs ADD COLUMN runs_on TEXT;
+        ALTER TABLE ci_runs ADD COLUMN runner_workspace_id TEXT;
+        CREATE INDEX ci_runs_runner ON ci_runs (runner_workspace_id, status) WHERE runner_workspace_id IS NOT NULL;
+      `);
+    },
+  },
+  {
     version: 773,
     name: 'chat sessions: the agent a session runs as (T-294)',
     up(db) {
