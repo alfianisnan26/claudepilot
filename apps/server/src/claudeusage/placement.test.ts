@@ -35,7 +35,7 @@ test('unusedAtReset: 100 minus the last reading before each finished reset; none
   const samples = [
     s(-700, 50, reset1),
     s(-612, 72, reset1), // 12 min before reset1: the last one
-    s(-590, 1, reset1 + 5 * 3_600_000), // after the reset: the next period
+    s(-590, 1, reset1 + 5 * 3_600_000), // the next period (finished at NOW - 300 min): its only reading is 290 min before it
     s(-300, 20, reset2),
     s(-130, 55, reset2 + 20_000), // 30 min before, the reset time wanders by seconds: same period
     s(-40, 3, reset3),
@@ -45,6 +45,7 @@ test('unusedAtReset: 100 minus the last reading before each finished reset; none
     rows.map((r) => [r.resetAtMs, r.unusedPct.value, r.unusedPct.basis]),
     [
       [reset1, 28, 'measured'],
+      [reset1 + 5 * 3_600_000, null, 'unavailable'],
       [reset2, 45, 'measured'],
     ],
   );
