@@ -16,7 +16,7 @@ mkdir -p "$main/packages/contracts" "$main/apps/server" "$main/apps/web" "$main/
   "$main/node_modules/@portal" "$main/node_modules/.bin" "$main/apps/web/node_modules/vite"
 echo '{"name":"root"}' > "$main/package.json"; echo '{"lock":1}' > "$main/package-lock.json"
 for d in packages/contracts apps/server apps/web; do echo "{\"name\":\"$d\"}" > "$main/$d/package.json"; done
-printf 'node_modules/\n' > "$main/.gitignore"
+cp "$here/.gitignore" "$main/.gitignore"   # the real one: a symlink must be ignored too
 ln -s ../../apps/web "$main/node_modules/@portal/web"
 g -C "$main" init -q -b integration
 g -C "$main" add -A
