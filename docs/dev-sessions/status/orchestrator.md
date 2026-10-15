@@ -1,29 +1,20 @@
-# orchestrator status (2026-10-15 16:01 UTC, session 355881a3, continuation of de232389)
+# orchestrator status (2026-10-15 16:40 UTC, session 355881a3, continuation of de232389)
 
 Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-overs: ab99b45, bb58413, 639202e.
 
 ## DONE
 - MERGED ff cc26c96: T-531 S2c (gate GREEN 55d5fad). CLOSED T-531.
-## IN FLIGHT (6 of 6, D-71/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf): queue T-426 -> T-591 -> T-586 -> T-561 S1c -> T-546 -> T-548 (+ T-486 S2e).
-  T-561: S1b QA PASS WITH GAPS (5440, symlink holes A, B) -> S1c DONE 0beae29 (5498/5501; 77c04fc0 ended) -> QA Perf re-probe -> lead
-  gate + merge. LANE bbbe2b38 "ClaudePilot QA UI" (lane-qa-ui, sonnet, qa/T-600-ui, deps linked by lead) on T-600 FE ux: browser tools refused (5503 PASS
-  WITH GAPS; T-525 5505 to coordinator); default: headless tools/qa/*.mjs. T-576 DONE 2427d98 (Jobs green; no
-  prettier/eslint in the Job): ux BLOCKED (a `folder` spawn gets no Bash; 5368) until T-586 merges. T-586 DONE 1d27635 (Job 6be903ec rc 0, mutation
-  caught, 5419; 2ae78a99 ended): review PASS W/ COND (5456) -> S2 fc9ce1d DONE (5464; 813992cf ended) -> premerge
-  wip/main-5b66aa0, gate GREEN gate-5b66aa0-44ef (suite 559 s, peak 2172Mi) -> QA Perf after T-548 -> ff integration (no deploy).
-  T-486 S2d 2979f99: QA Perf PASS WITH GAPS 5548 (junk drains the global 120/min bucket -> signed hook 429). Decision 5551: S2e fix
-  -> BACKEND LANE 74a8d857 (respawned, sonnet, ticket/T-486-s2e-bucket from 2979f99) -> QA Perf re-probe -> gate + merge. QA Perf on T-426 at 7fbbe4c (lead merge, its ff worked).
-  T-548 S1 9b822ba + T-591 S1 bf932c3: blind review 9651c9fa (ended) PASS W/ COND both (5512/5513; sev 2 vault authz on T-591). Decisions
-  5514/5515: S1b fixes. T-591 S1b DONE 09ade72 (5563; 192/192 ci+authz, mutation caught; lead read authz: sound; 4ba6c5db ended)
-  -> QA Perf. T-548 S1b = one-off sonnet at next free slot. REVIEWER d4c49b5c (opus, why: secret door) on T-426.
-  Backend 5f8f392b ENDED (ff refused): T-546 DONE 10b22e0 (5535) -> QA Perf; merge 10b22e0, not the branch head 0004ac5 (has S2d).
-  PLANNED T-600 BE 5540, T-597 5546, T-325 5547 (S1+S2 only, 5549). T-600 BE: respawn Backend on a branch from FE 7d19c94 after QA UI. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
-  ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); T-556 PLANNED 5497 (one "Upstream" dialog, 4 fields: no upstream UI exists);
-  builds after T-486 merges + T-595. QA UI then T-576 ux. LANE 83921ca7 "ClaudePilot BE Infra" (lane-backend, sonnet,
-  ticket/T-611-job-placement) on T-611; queue T-547, T-610 (T-401/T-426 fixes, if any). 6 of 6: QA Perf, Backend, BE Infra, QA UI, Frontend, impl-t426. T-619: review 219d5558 CHANGES 5575 (no wildcard; named list,
-  egress allowlist) -> coordinator lands (5584). LANE 6a1a061e "ClaudePilot Frontend" (respawned, ticket/T-600-fe-s1b from 7d19c94) on FE S1b.
-  T-600 FE: QA UI FAIL 5565 (Home card grid follows viewport; labels cut at 1280) -> FE S1b (5573) Frontend 6a1a061e;
-  QA UI fixes home.mjs harness meanwhile. T-558 QA -> end of QA Perf queue. No prettier/eslint in Jobs (T-612).
+## IN FLIGHT (6 of 6, D-71): all sonnet
+- QA PERF 7e4879c7 (lane/cp-qa-perf): T-591 (S1 bf932c3 + S1b 09ade72, 5563) -> T-486 S2e ea1c006 (5585) -> T-611 4ac5982 (5580)
+  -> T-586 (premerge wip/main-5b66aa0, gate GREEN) -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-548 -> T-558 e652c44. T-426 S1b jumps in.
+- QA UI bbbe2b38 (qa/T-600-ui): home.mjs harness fix; then FE S1b re-run; then T-576 ux (2427d98, after T-586 merges). Headless only (5503).
+- BACKEND 6d72b5c6 (ticket/T-597-portal-slash, plan 5546) on T-597; then T-600 BE (plan 5540, respawn on FE S1b), T-325 S1+S2 (5549).
+- BE INFRA 5825f112 (ticket/T-547-quota-placement) on T-547; then T-610.
+- FRONTEND 6a1a061e (ticket/T-600-fe-s1b from 7d19c94) on T-600 FE S1b (QA UI FAIL 5565, decision 5573); then T-556 (5497/5525) after T-486.
+- IMPL 7ec2dc72 (ticket/T-426-s1b-review) on T-426 S1b.
+- Waiting for a slot: T-548 S1b (5515, one-off sonnet from 9b822ba). Lane respawn = new base (lane-backend has no ff, T-595 5553).
+- Merge notes: T-546 merges 10b22e0, not branch head 0004ac5. T-486 = S2d 2979f99 + S2e ea1c006. Ended: 5f8f392b, 74a8d857, 83921ca7,
+  f13a9442, 4ba6c5db, d4c49b5c, 219d5558. T-619: review CHANGES 5575 -> coordinator lands the named list (5584). No prettier/eslint in Jobs (T-612).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
   T-426 ab93b54: QA Perf PASS 33/33 (5564) but blind review d4c49b5c FAIL 5571 (sev 2: refused arg echoed, pasted hex secret printed).
   IMPL 7ec2dc72 (impl-t426-s1b, sonnet, ticket/T-426-s1b-review) -> QA Perf re-probe -> 2nd blind review -> gate -> merge on T-401 ack.
