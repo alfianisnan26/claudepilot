@@ -10,8 +10,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
 ## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf) on T-548 QA read.
-  T-561 S1b 7227bb3: QA PASS WITH GAPS (5440: 743/749 0 fail, mutation caught; symlink holes A, B). Decision 5442: S1c fix by Backend lane in
-  lead-made worktree t561-s1c-symlinks (T-595 Bash test) -> QA Perf re-probe -> lead gate + merge. T-576 DONE 2427d98 (Jobs green; no
+  T-561 S1b 7227bb3: QA PASS WITH GAPS (5440: 743/749 0 fail, mutation caught; symlink holes A, B). Decision 5442/5444: S1c fix = one-off sonnet
+  implementer (own spawn worktree, base origin/ticket/T-561-s1c-symlinks) at next free slot -> QA Perf re-probe -> lead gate + merge. T-576 DONE 2427d98 (Jobs green; no
   prettier/eslint in the Job): ux BLOCKED (a `folder` spawn gets no Bash; 5368) until T-586 merges. T-586 DONE 1d27635 (Job 6be903ec rc 0, mutation
   caught, 5419; 2ae78a99 ended): blind review next free slot -> gate -> merge. T-558 e652c44: QA runs its Jobs (5052).
   T-486 ab61f5c: blind review PASS W/ CONDITIONS (5349); decision 5352: 5feb4875 impl-t486-s2d (sonnet) adds the tests; then lead merge + gate.
@@ -35,13 +35,13 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## STATE PER TICKET (T-404: open until deployed, design point -> T-451)
 - T-376 (high): S2 dev/t-376-3 0b0faf7 needs integration merged in by the lead, then ux re-check (production build), then S3 perf-tester.
-- T-378 S1 dev/t-378-1 9834ff7 ready: needs a verifier.
 
 ## DECISIONS (binding)
 - 14:56 D-70 LANES (DECISIONS.md; my decision T-595 5380): current 5 workers finish; freed slots become lanes, spawned ONCE on sonnet and fed
   by session_message, never ended for lack of work: CP Backend -> CP QA Perf -> CP Frontend -> CP QA UI -> 5th = blind reviewer.
   Every delivery goes to its side's QA lane before merge. T-591 S1 stays with eaec4cc5, then Backend. T-595 5389: the LEAD makes each ticket's
-  worktree+branch (git worktree add -b ticket/T-n-slug origin/integration) and gives the lane the path; risk (5390): Bash outside the spawn worktree.
+  worktree+branch and gives the lane the path. 15:19 CONFIRMED refused (5443): no lane can take a 2nd ticket; coordinator asked (a/b/c);
+  default: lanes keep their ticket, a new-branch ticket goes to a one-off sonnet implementer (own spawn worktree) at a free slot.
 - 15:50 Workspace restarted 13:46 UTC; 03c496b6 (T-546, mid-Jobs) and cee43422 (T-486 port, WAITING 3cb0883) are gone, all branches
   pushed and clean. Deploy #39 (coordinator, RBAC + T-557 fix) holds the cluster, finishes by itself. 14:05 Coordinator AWAY (owner offline): restart POSTPONED, long work OK, Mac runner off.
   BINDING: the coordinator runs deploys (#38-#40); I start NO deploy. (Old T-546/T-486 workers replaced.)
