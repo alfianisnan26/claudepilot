@@ -5,7 +5,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## DONE
 - MERGED ff cc26c96: T-531 S2c (gate GREEN 55d5fad). CLOSED T-531.
 ## IN FLIGHT (6 of 6, D-71): all sonnet
-- QA PERF 7e4879c7 (lane/cp-qa-perf): T-591 (S1 bf932c3 + S1b 09ade72, 5563) -> T-486 S2e ea1c006 (5585) -> T-611 4ac5982 (5580)
+- NEXT FREE SLOT: T-591 S1c (one-off sonnet from 09ade72; G1+G2 kill M4/M5, decision 5639) -> QA Perf M4/M5 only -> gate -> merge.
+- QA PERF 7e4879c7 (lane/cp-qa-perf): T-591 PASS WITH GAPS 5587 (done) -> now T-486 S2e ea1c006 (5585) -> T-611 4ac5982 (5580)
   -> T-586 (premerge wip/main-5b66aa0, gate GREEN) -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-548 -> T-558 e652c44. T-426 S1b jumps in.
 - QA UI bbbe2b38 (qa/T-600-ui): home.mjs fix 924f1bfb PASS WITH GAPS (27/27 on its branch, not on integration; rides with T-600); now re-running FE S1b 32985e2 (crew-summary, Home/Crew grids); then T-576 ux (2427d98, after T-586 merges). Headless only (5503).
 - BACKEND 6d72b5c6 (ticket/T-597-portal-slash, plan 5546) on T-597; then T-600 BE (plan 5540, respawn on FE S1b), T-325 S1+S2 (5549).
