@@ -60,7 +60,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## NEEDS A HUMAN (D-62)
 - T-578 (gate wall, via coordinator): owner picks same-tree gate reuse (a) portal CI store [lead default], (b) pipeline-only RBAC
-  ConfigMap, (c) accept risk, (d) drop reuse; reuse also conflicts with "full gate on the exact commit" (charter). Lead can't comment (T-634).
+  ConfigMap, (c) accept risk, (d) drop reuse; reuse also conflicts with "full gate on the exact commit" (charter). Lead can't comment (T-634). RBAC: T-666 (cross-program configmap write).
 - T-401 gate wall (via the coordinator): the owner acks on T-401 that gate-job.yaml's change is credential plumbing plus one
   stricter red (exit 3 on a credential value in the gate's files); gate.sh's checks unchanged. Question text in 4941.
 - T-93 Konfersi production only. Coordinator items: T-422 (sudo), T-306 item 4 / T-340; D-row for T-417's Bypass across sleep;
