@@ -37,6 +37,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-378 S1 dev/t-378-1 9834ff7 ready: needs a verifier.
 
 ## DECISIONS (binding)
+- 11:00 Coordinator: the next implementer slot goes to T-401 (security: job-run env carries GIT_TOKEN/NODE_AUTH_TOKEN), then T-426
+  (--pool-env door for Konfersi stg e2e), then T-379 (Python in job-run). They unblock 6 Konfersi tickets. Opus + blind review
+  (gate/security). They come before T-416 S2, T-537 and T-538..T-540.
 - 10:40 Scribe workers cannot hand in (no Bash, no ticket tools): doc fixes go to implementer slices until the coordinator decides.
 - 10:25 dontAsk workers cannot wait: the lead hands out the cluster slot with "GO T-n"; workers end with WAITING <hash>.
 - 10:02 The free-slot check counts only OUR program's Jobs (app=claudepilot-gate or job-run/program=claudepilot); Konfersi Jobs are
@@ -61,7 +64,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-509 kit republish; T-525 session_get + scribe tools; T-527 finding 4 (owner triggers tagging owner-checklist).
 
 ## NEXT (in order, as slots free)
-1. 2. T-531 review -> QA. 3. T-416 review + QA, then S2.
+1. T-531 S2 Jobs -> QA (sonnet) -> lead gate -> merge. 2. T-416 QA Jobs -> blind review (opus) -> lead gate -> merge -> deploy; then S2.
+3. NEXT FREE SLOT: T-401 (opus), then T-426, then T-379 (coordinator 11:00). 4. T-524 measurement with T-513.
 4. T-486 S2 -> QA -> deploy. 5. T-537. 6. T-513 (cluster GitOps MR).
 7. T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
    T-371..T-374, T-363, T-451, T-470, T-507, T-508, T-512, T-520; T-376 S2.
