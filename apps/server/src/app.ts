@@ -60,7 +60,7 @@ import { RateLimiter } from './rateLimit.js';
 import { ClaudeLogins } from './workspaces/claudeLogin.js';
 import { Terminals } from './workspaces/terminals.js';
 import { deliveryState, workspaceView } from './workspaces/view.js';
-import { declareWorkspacePolicies } from './workspaces/authz.js';
+import { declareWorkspacePolicies, workspaceGuard } from './workspaces/authz.js';
 import { generateSecretKey, parseSecretKey, SecretKeyError } from './store/secretBox.js';
 import type { Store } from './store/store.js';
 import type { Workspaces } from './workspaces/manager.js';
@@ -96,7 +96,7 @@ import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
-import { actorOf, visible } from './authz/seam.js';
+import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
 import { jsonCompress } from './jsonCompress.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
@@ -465,8 +465,17 @@ export function createApp(
     group.use(base, plainName);
     group.use(`${base}/*`, plainName);
   };
-  ws.get('/targets', async (c) => c.json(success(await workspaces.targets(c.req.query('fresh') === '1'))));
-  ws.get('/usage', async (c) => c.json(success(await workspaces.usage())));
+  // T-531: every route here is declared in workspaces/authz.ts; each `/:target/:name…` one runs the seam's guard with its declared verb
+  // first (`view`, `operate`, `manage`), so a workspace the actor may not see is the same 404 as a missing one. Lists keep what it may view.
+  const toView = workspaceGuard('view');
+  const toOperate = workspaceGuard('operate');
+  const toManage = workspaceGuard('manage');
+  // The routes whose handler follows a label alias through the manager (T-42) ask the seam about the workspace it resolves to.
+  const aliasOf = (id: string) => workspaces.resolve(id)?.legacyId;
+  const toViewAlias = workspaceGuard('view', aliasOf);
+  const toOperateAlias = workspaceGuard('operate', aliasOf);
+  ws.get('/targets', async (c) => c.json(success(visible(actorOf(c), 'target', await workspaces.targets(c.req.query('fresh') === '1'), (t) => t.id))));
+  ws.get('/usage', async (c) => c.json(success(visible(actorOf(c), 'workspace', await workspaces.usage(), (u) => u.id))));
   // The labels of renamed workspaces (T-42), from the records only: the app learns them once, so every place that holds an id shows the label.
   ws.get('/labels', (c) => {
     const labels = workspaces.identities.labels();
@@ -497,15 +506,15 @@ export function createApp(
     if (!claude) throw new AppError('NOT_FOUND', 'That Claude isn’t on this workspace.');
     return claude.directory;
   };
-  ws.get('/:target/:name/claude-login', async (c) =>
+  ws.get('/:target/:name/claude-login', toView, async (c) =>
     c.json(success<ClaudeAuthStatus>(await logins.status(c.req.param('target'), c.req.param('name'), claudeDir(c)))),
   );
-  ws.post('/:target/:name/claude-login', async (c) => {
+  ws.post('/:target/:name/claude-login', toManage, async (c) => {
     const [target, name] = ownSignIn(c);
     const req = (await c.req.json().catch(() => ({}))) as Partial<ClaudeLoginRequest> | null;
     return c.json(success<ClaudeLoginStart>(await logins.start(target, name, { sso: req?.sso === true, email: req?.email, dir: claudeDir(c) })));
   });
-  ws.post('/:target/:name/claude-login/code', async (c) => {
+  ws.post('/:target/:name/claude-login/code', toManage, async (c) => {
     const { code } = await body<{ code: string }>(c);
     const [target, name] = ownSignIn(c);
     const dir = claudeDir(c);
@@ -513,11 +522,11 @@ export function createApp(
     chatController.forgetClaudeModelsAt(`${target}/${name}`, dir); // T-109: another account may offer other models
     return c.json(success({ ok: true }));
   });
-  ws.delete('/:target/:name/claude-login', async (c) => {
+  ws.delete('/:target/:name/claude-login', toManage, async (c) => {
     await logins.cancel(c.req.param('target'), c.req.param('name'), claudeDir(c));
     return c.json(success({ ok: true }));
   });
-  ws.post('/:target/:name/claude-logout', async (c) => {
+  ws.post('/:target/:name/claude-logout', toManage, async (c) => {
     const [target, name] = ownSignIn(c);
     const dir = claudeDir(c);
     await logins.logout(target, name, dir);
@@ -527,21 +536,21 @@ export function createApp(
 
   // Terminals that outlive the browser (tmux sessions), several Claude Codes side by side.
   const terminals = new Terminals(workspaces, logins, chatController);
-  ws.get('/:target/:name/terminals', async (c) =>
+  ws.get('/:target/:name/terminals', toView, async (c) =>
     c.json(success<WorkspaceTerminal[]>(await terminals.list(c.req.param('target'), c.req.param('name')))),
   );
-  ws.post('/:target/:name/terminals', async (c) => {
+  ws.post('/:target/:name/terminals', toOperate, async (c) => {
     const req = (await c.req.json().catch(() => ({}))) as Partial<CreateTerminalRequest> | null;
     return c.json(success<WorkspaceTerminal>(await terminals.create(c.req.param('target'), c.req.param('name'), req ?? {})), 201);
   });
-  ws.delete('/:target/:name/terminals/:term', async (c) => {
+  ws.delete('/:target/:name/terminals/:term', toOperate, async (c) => {
     await terminals.close(c.req.param('target'), c.req.param('name'), c.req.param('term'));
     return c.json(success({ ok: true }));
   });
 
   // The workspace's Claudes (Workspace Claudes), each with its own Claude Code login: sign-in state
   // from `claude auth status` (status and method only), and the terminals running as each.
-  ws.get('/:target/:name/claudes', async (c) => {
+  ws.get('/:target/:name/claudes', toView, async (c) => {
     const [target, name] = [c.req.param('target'), c.req.param('name')];
     const live = (await chatController.claudesOf(`${target}/${name}`)).filter((x) => !x.removedAt);
     const open = await terminals.list(target, name).catch(() => []);
@@ -554,18 +563,18 @@ export function createApp(
     );
     return c.json(success(states));
   });
-  ws.patch('/:target/:name/claudes/:claude', async (c) => {
+  ws.patch('/:target/:name/claudes/:claude', toOperate, async (c) => {
     const { name: label } = await body<{ name: string }>(c);
     return c.json(success(chatController.renameClaude(`${c.req.param('target')}/${c.req.param('name')}`, c.req.param('claude'), String(label ?? ''))));
   });
-  ws.delete('/:target/:name/claudes/:claude', async (c) => {
+  ws.delete('/:target/:name/claudes/:claude', toManage, async (c) => {
     const [target, name, claudeId] = [c.req.param('target'), c.req.param('name'), c.req.param('claude')];
     if ((await terminals.list(target, name).catch(() => [])).some((t) => t.claudeId === claudeId))
       throw new AppError('CONFLICT', 'Close this Claude’s terminals first.');
     chatController.removeClaude(`${target}/${name}`, claudeId);
     return c.json(success({ ok: true }));
   });
-  ws.get('/', async (c) => c.json(success((await workspaces.list()).map(decorate))));
+  ws.get('/', async (c) => c.json(success(visible(actorOf(c), 'workspace', await workspaces.list(), (w) => w.id).map(decorate))));
   // One workspace by either form of its id (T-42): `/api/workspaces/ws_0123456789ab` or the alias `/api/workspaces/<target>/<name>`. Both go
   // through the manager's one resolver, which follows the alias before the seam is asked; unknown and not yours are the same 404.
   ws.get('/:ref', async (c) => {
@@ -585,11 +594,11 @@ export function createApp(
     if (!isStableWorkspaceId(ref)) return next();
     return c.json(success<WorkspaceResources>(await workspaces.setResources(ref, await body<UpdateWorkspaceResourcesRequest>(c), actorOf(c))));
   });
-  ws.get('/:target/:name/resources', async (c) => c.json(success<WorkspaceResources>(await workspaces.resourcesOf(`${c.req.param('target')}/${c.req.param('name')}`, actorOf(c)))));
-  ws.patch('/:target/:name/resources', async (c) =>
+  ws.get('/:target/:name/resources', toViewAlias, async (c) => c.json(success<WorkspaceResources>(await workspaces.resourcesOf(`${c.req.param('target')}/${c.req.param('name')}`, actorOf(c)))));
+  ws.patch('/:target/:name/resources', toOperateAlias, async (c) =>
     c.json(success<WorkspaceResources>(await workspaces.setResources(`${c.req.param('target')}/${c.req.param('name')}`, await body<UpdateWorkspaceResourcesRequest>(c), actorOf(c)))),
   );
-  ws.get('/:target/:name', async (c) => c.json(success(decorate(await workspaces.get(`${c.req.param('target')}/${c.req.param('name')}`, actorOf(c))))));
+  ws.get('/:target/:name', toViewAlias, async (c) => c.json(success(decorate(await workspaces.get(`${c.req.param('target')}/${c.req.param('name')}`, actorOf(c))))));
   // Rename (T-42 slice 2): the label only, by either form of the id. Nothing running is touched; the old forms keep resolving.
   const rename = async (c: Context<Env>, ref: string) => {
     const { label } = await body<RenameWorkspaceRequest>(c);
@@ -600,7 +609,7 @@ export function createApp(
     if (!isStableWorkspaceId(ref)) throw new AppError('NOT_FOUND', 'Not found.');
     return rename(c, ref);
   });
-  ws.patch('/:target/:name', async (c) => rename(c, `${c.req.param('target')}/${c.req.param('name')}`));
+  ws.patch('/:target/:name', toOperateAlias, async (c) => rename(c, `${c.req.param('target')}/${c.req.param('name')}`));
   ws.post('/', async (c) => {
     const req = await body<CreateWorkspaceRequest>(c);
     const poolId = req.accountPoolId ?? null;
@@ -614,30 +623,45 @@ export function createApp(
     console.log(`[workspaces] creating ${created.id}${poolId ? ' with an account pool' : ''}`);
     return c.json(success(decorate(created)), 202);
   });
-  ws.put('/:target/:name/account', async (c) => {
+  ws.put('/:target/:name/account', toManage, async (c) => {
     const id = `${c.req.param('target')}/${c.req.param('name')}`;
     const state = pools.assign(id, await body<AssignAccountPoolRequest>(c), { existing: true });
     return c.json(success({ account: state }));
   });
-  ws.get('/:target/:name/preflight', async (c) => {
+  /**
+   * T-531: the platform audit row of a runtime action (start, stop, adopt, remove), written after it succeeded: who, and the workspace by its
+   * stable id when the portal knows one (`subject`), else by `<target>/<name>`. Read the identity BEFORE a remove, which retires it.
+   */
+  const auditRuntime = (c: Context<Env>, kind: string, subject: string | null) => {
+    const actor = actorOf(c);
+    const workspace = `${c.req.param('target')}/${c.req.param('name')}`;
+    workspaces.hooks.audit?.({ kind, actor: actorString(actor), userId: actorUserId(actor), subject: subject ?? workspace, detail: { workspace } });
+  };
+  const stableIdOf = (c: Context<Env>) => workspaces.resolve(`${c.req.param('target')}/${c.req.param('name')}`)?.id ?? null;
+  ws.get('/:target/:name/preflight', toView, async (c) => {
     const access = workspaces.runtimeFor(c.req.param('target'))?.delivery;
     if (!access) return c.json(success({ findings: null }));
     return c.json(success({ findings: await runPreflight(access, c.req.param('name')) }));
   });
-  ws.post('/:target/:name/adopt', async (c) => {
+  ws.post('/:target/:name/adopt', toOperate, async (c) => {
     await reconciler.adopt(`${c.req.param('target')}/${c.req.param('name')}`);
+    auditRuntime(c, 'workspace.adopt', stableIdOf(c));
     return c.json(success({ delivery: delivery(`${c.req.param('target')}/${c.req.param('name')}`) }));
   });
-  ws.post('/:target/:name/start', async (c) => {
+  ws.post('/:target/:name/start', toOperate, async (c) => {
     await workspaces.start(c.req.param('target'), c.req.param('name'));
+    auditRuntime(c, 'workspace.start', stableIdOf(c));
     return c.json(success({ ok: true }));
   });
-  ws.post('/:target/:name/stop', async (c) => {
+  ws.post('/:target/:name/stop', toOperate, async (c) => {
     await workspaces.stop(c.req.param('target'), c.req.param('name'));
+    auditRuntime(c, 'workspace.stop', stableIdOf(c));
     return c.json(success({ ok: true }));
   });
-  ws.delete('/:target/:name', async (c) => {
+  ws.delete('/:target/:name', toManage, async (c) => {
+    const stableId = stableIdOf(c);
     await workspaces.remove(c.req.param('target'), c.req.param('name'));
+    auditRuntime(c, 'workspace.remove', stableId);
     pools.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     poolService.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
     settings?.lockdown.forgetWorkspace(`${c.req.param('target')}/${c.req.param('name')}`);
