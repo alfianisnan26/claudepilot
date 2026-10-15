@@ -10,11 +10,12 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - MERGED ff ffd4bcdd: T-600 (BE QA 5864, FE QA UI 6128; gate GREEN 6bb628c, claudepilot-gate-6bb628c-3b2f; + portal tag -15 merged in).
 - MERGED ff 8d9eab44 (batch 6): T-623 S1b (6069), T-591 S1d (6107), T-558 S1b (6182), T-631 F2 (6195); gate GREEN 033f0e2
   (job-out/gate-033f0e2.log); comments 6244-6249. Deploy = coordinator's.
+- MERGED ff 1a4a7933 (batch 7): T-633 (6283) + T-638 (6284, CLOSED); gate GREEN 7d87d90 (claudepilot-gate-7d87d90-b744).
 - T-636 CLOSED done on QA PASS WITH GAPS 5962 (built by the coordinator, ad9f7ad8). T-576 CLOSED on QA UI PASS WITH GAPS 6268; 40 px -> T-681.
 
 ## IN FLIGHT (6 of 6, D-71)
-- GATE batch 7 premerge 7d87d90a (wip/main-7d87d90; job-out/gate-7d87d90.log): T-633 399e7b5d (QA 6283) + T-638 6fdb5b29 (QA 6284).
-  QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts. T-633 H1/H2 mutant tests -> Backend lane after T-574.
+- T-633 OPEN: its new G3 test FLAKED in the gate (6312) + H1/H2 survivors -> Backend lane after T-325 S1c (fresh branch).
+  QA Perf's ticket_comment refused on unassigned tickets: lead posts its verdicts.
 - T-325 S1b 92bd7e23 QA PASS WITH GAPS 6297 (N3, N5 survive) -> decision (b) 6301: BACKEND lane 7979da21 (sonnet, respawned;
   d762b5fc ended) adds N3/N5 tests on ticket/T-325-s1c; then QA delta, gate, merge S1+S1b+S1c.
 - T-416 S1d DONE 89e270cc (impl 41675b08 ended; 6289; 5/8/10 -> T-675) -> REVIEWER 6a216d7b (sonnet, delta a63e181e..89e270cc)
@@ -64,7 +65,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## NEXT (in order, as slots free)
 1. Merges: T-401 060aca4 (ack 4941) -> T-426 S1e -> T-379 S2 3f11b28 (PASS 4948, review 4938); deploys are the coordinator's.
-2. Backend lane after T-325 S1c: T-633 H1/H2 tests (fresh branch). Implementer for T-681 (40 px). QA: T-325 S1c delta -> T-416 S1d (then a delta blind review for T-416, gate, merge; then S2 = Bypass restore).
+2. Backend lane after T-325 S1c: T-633 G3 deflake + H1/H2 tests (fresh branch). Implementer for T-681 (40 px). QA: T-325 S1c delta -> T-416 S1d (then a delta blind review for T-416, gate, merge; then S2 = Bypass restore).
 3. RTK (coordinator 14:55): T-340 (a hook change is landed by a person/coordinator) -> T-341 -> T-306 delivery (dev/t-306-1 has items 1-2);
    T-549 (+ wasted-calls row, 4802); T-574 (session_family summary, 4801). 4. T-524 measurement with T-513. 5. T-537. 6. T-513.
 7. T-472 live re-check (4294), T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399, T-370 HOLD,
