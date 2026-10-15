@@ -20,10 +20,10 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   PLANNED T-600 BE 5540, T-597 5546, T-325 5547 (S1+S2 only, 5549). T-600 BE: respawn Backend on a branch from FE 7d19c94 after QA UI. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
   ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); T-556 PLANNED 5497 (one "Upstream" dialog, 4 fields: no upstream UI exists);
   builds after T-486 merges + T-595. QA UI then T-576 ux. LANE 83921ca7 "ClaudePilot BE Infra" (lane-backend, sonnet,
-  ticket/T-611-job-placement) on T-611; queue T-547, T-610 (T-401/T-426 fixes, if any). 6 of 6: QA Perf, Backend, BE Infra, QA UI, reviewer T-619, impl-t426.
-  16:35 Frontend f13a9442 ENDED (idle, T-556 parked) for REVIEWER 219d5558 (sonnet) on T-619 browser allow-list (owner priority).
-  T-600 FE: QA UI FAIL 5565 (Home card grid follows viewport; labels cut at 1280) -> FE S1b (5573): respawn Frontend on a fresh
-  branch from 7d19c94 at next free slot; QA UI fixes home.mjs harness meanwhile. T-558 QA -> end of QA Perf queue. No prettier/eslint in Jobs (T-612).
+  ticket/T-611-job-placement) on T-611; queue T-547, T-610 (T-401/T-426 fixes, if any). 6 of 6: QA Perf, Backend, BE Infra, QA UI, Frontend, impl-t426. T-619: review 219d5558 CHANGES 5575 (no wildcard; named list,
+  egress allowlist) -> coordinator lands (5584). LANE 6a1a061e "ClaudePilot Frontend" (respawned, ticket/T-600-fe-s1b from 7d19c94) on FE S1b.
+  T-600 FE: QA UI FAIL 5565 (Home card grid follows viewport; labels cut at 1280) -> FE S1b (5573) Frontend 6a1a061e;
+  QA UI fixes home.mjs harness meanwhile. T-558 QA -> end of QA Perf queue. No prettier/eslint in Jobs (T-612).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
   T-426 ab93b54: QA Perf PASS 33/33 (5564) but blind review d4c49b5c FAIL 5571 (sev 2: refused arg echoed, pasted hex secret printed).
   IMPL 7ec2dc72 (impl-t426-s1b, sonnet, ticket/T-426-s1b-review) -> QA Perf re-probe -> 2nd blind review -> gate -> merge on T-401 ack.
