@@ -35,7 +35,7 @@ test('an agent works the queue over MCP: claim, comment, block, close; ticket te
     const { client, close } = await r.h.client(a.secret, 'modern');
     try {
       const names = (await client.listTools()).tools.map((t) => t.name).filter((n) => n.startsWith('ticket_')).sort();
-      assert.deepEqual(names, ['ticket_adopt', 'ticket_claim_next', 'ticket_close', 'ticket_comment', 'ticket_create', 'ticket_get', 'ticket_list', 'ticket_update'], 'no start_session for agents');
+      assert.deepEqual(names, ['ticket_adopt', 'ticket_claim_next', 'ticket_close', 'ticket_comment', 'ticket_create', 'ticket_get', 'ticket_list', 'ticket_update', 'ticket_verdict'], 'no start_session for agents');
       const call = async (name: string, args: Record<string, unknown> = {}) => (await client.callTool({ name, arguments: args })) as { isError?: boolean; structuredContent?: any; content: { text: string }[] };
 
       const listed = (await call('ticket_list', { assignee: 'unassigned' })).structuredContent;

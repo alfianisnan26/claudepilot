@@ -14,6 +14,8 @@ export interface TicketSessionInfo extends TicketSession {
   archivedAt?: string | null;
   /** The session that started it (a crew worker's lead, T-294), or null. */
   parentId?: string | null;
+  /** The agent it runs as (`.claude/agents/<name>.md`), or null. Its name says whether it may record a QA or review verdict (T-325). */
+  agent?: string | null;
 }
 
 /** Creating the session a ticket starts (tickets PRD FR15). */
@@ -56,6 +58,7 @@ function info(s: ChatSession): TicketSessionInfo {
     continuedFrom: s.continuedFrom ?? null,
     archivedAt: s.archivedAt ?? null,
     parentId: s.parentId ?? null,
+    agent: s.agent ?? null,
   };
 }
 

@@ -827,6 +827,7 @@ The table above is the target. What is true today: 26 tools carry a declaration 
 | `notify_status` | self | nothing | the token's own user (`notify/portalTools.ts:21`) |
 | `session_recover`, `session_request_clear` | agent, reach workspace | nothing | `requireCan` workspace (agent) or session (person) (`chat/portalTools.ts:357`, `:403`) |
 | `ticket_adopt` | agent, reach workspace | nothing | the adopt rule in the service (`tickets/portalTools.ts:372`) |
+| `ticket_verdict` | agent, reach workspace | nothing | the verdict rule `canRecordVerdict` (`tickets/verdicts.ts`): a QA or review session of its own role, never the author or the lead; an invisible ticket is the same not found (T-325) |
 | `lab_summary`, `lab_arm_draw` | agent, reach session | nothing | its own session only (`lab/portalTools.ts:81-82`, `:114`) |
 | `crew_scorecard` (T-450) | agent, reach session | nothing | its own program only (the top of its session's lineage; another program is `NOT_FOUND`) in `Lab.scorecard` (`lab/index.ts`) |
 
