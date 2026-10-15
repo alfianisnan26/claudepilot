@@ -25,7 +25,8 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-433: CLOSED (coordinator landed A+B). T-378 S1 dev/t-378-1 9834ff7 ready (qa tools only).
 
 ## NEXT DEPLOY BATCH (2026-10-16; today's cap of 3 used by run 32)
-T-366 (images portal,workspace), T-417, T-427, T-404, T-375+T-369, T-376 S2 if they pass. Deploy with /deploy (gate input on).
+FIRST: integration d354977 (agent policy: CLAUDE_CODE_AUTO_COMPACT_WINDOW 200000 for every Claude; coordinator 04:05: cache reads are
+65-85 % of crew cost, sessions grow to 400k-970k before compacting). Then: T-366 (images portal,workspace), T-417, T-427, T-404, T-375+T-369, T-376 S2 if they pass. Deploy with /deploy (gate input on).
 
 ## DECISIONS (binding)
 - D-63 (coordinator): verifier/ux/reviewer on SONNET; opus only for blind reviews of gate/rule/security changes and large implementer
