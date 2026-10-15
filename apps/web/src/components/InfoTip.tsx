@@ -10,9 +10,9 @@ const WIDTH = 256;
  * visible (the visual viewport, so the keyboard counts, less the safe areas: lib/popover.ts), never over the composer or under the
  * session header; in the stack above the composer it opens upwards (T-102). Its text wraps anywhere. It closes on a tap elsewhere,
  * Escape, or scrolling. For the explanations a page shouldn't spell out in full. `text` shows a word instead of the ⓘ ("est." beside an
- * estimated number). On a phone the button is 44 px (the tap target) with negative margins, so it takes the room it took before.
+ * estimated number), `icon` a mark of its own (a session row's Bypass dot). On a phone the button is 44 px (the tap target) with negative margins, so it takes the room it took before.
  */
-export function InfoTip({ label, children, className, text }: { label: string; children: ReactNode; className?: string; text?: string }) {
+export function InfoTip({ label, children, className, text, icon }: { label: string; children: ReactNode; className?: string; text?: string; icon?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [style, setStyle] = useState<CSSProperties>({ position: 'fixed', visibility: 'hidden', top: 0, left: 0, width: WIDTH });
   const button = useRef<HTMLButtonElement>(null);
@@ -67,7 +67,7 @@ export function InfoTip({ label, children, className, text }: { label: string; c
         }}
         className={`press inline-flex shrink-0 items-center justify-center text-muted hover:bg-surface-2 hover:text-ink ${text ? 'h-6 min-w-6 rounded-md px-1 text-[11px] font-semibold underline decoration-dotted underline-offset-2 tap:h-11 tap:min-w-11 tap:-mx-2 tap:-my-2.5' : 'size-6 rounded-full tap:size-11 tap:-m-2.5'} ${className ?? ''}`}
       >
-        {text ?? <Info className="size-4" />}
+        {text ?? icon ?? <Info className="size-4" />}
       </button>
       {open &&
         createPortal(

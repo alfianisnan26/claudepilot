@@ -15,6 +15,7 @@ import { Card } from '@/components/Card';
 import { PageHeader } from '@/components/PageHeader';
 import { GlanceStrip } from '@/features/glance/Strip';
 import { usePersonaIdentities } from '@/features/personas/identities';
+import { useClaudeUsage, useNow } from '@/features/usage/claude/useClaudeUsage';
 import { errorText } from '@/lib/api';
 import { chatApi } from './api';
 import { BulkBar, runBulk, type BulkAction } from './BulkBar';
@@ -22,7 +23,8 @@ import { crewStatusGroup, selectable } from './crew';
 import { canFold, chipCounts, ofProgram, programCounts, withChange, withDefaultChip, type ChipChoice } from './listOrder';
 import { NewSessionDialog } from './NewSessionDialog';
 import { ArchiveSessionDialog, DeleteSessionDialog, EndSessionDialog, RenameSessionDialog } from './SessionDialogs';
-import { SessionRow, type RowActions } from './SessionRow';
+import { avatarsShown, listFacts, workspaceShown } from './rowMeta';
+import { SessionRow, type RowActions, type RowFacts } from './SessionRow';
 import { SessionsToolbar, type ViewState } from './SessionsToolbar';
 import { useMoveChat } from './SwitchDialog';
 import { useChatList } from './useChatSocket';
@@ -182,6 +184,16 @@ export function SessionsPage() {
     },
   };
 
+  // T-375: what the rows on screen have in common (one workspace, one persona: then no row says it) and the Claudes' quota (the shared
+  // claude-usage snapshot the top bar reads; no request of its own), read at a minute's clock so a passed reset turns a bar grey.
+  const { report: usage } = useClaudeUsage();
+  const nowMs = useNow(60_000);
+  const usageById = useMemo(() => (usage ? new Map(usage.claudes.map((c) => [c.claudeId, c])) : null), [usage]);
+  const facts: RowFacts = useMemo(() => {
+    const shownFacts = listFacts(list ? list.groups.flatMap((g) => g.rows) : [], personas);
+    return { showWorkspace: workspaceShown(shownFacts, view.groupBy), showAvatars: avatarsShown(shownFacts), usage: usageById, nowMs };
+  }, [list, personas, view.groupBy, usageById, nowMs]);
+
   const byId = useMemo(() => new Map((sessions ?? []).map((s) => [s.id, s])), [sessions]);
   const chosen = [...selected].map((id) => byId.get(id)).filter((s): s is ChatSession => !!s);
   // Select all takes the sessions shown, never a lead header (T-369).
@@ -278,6 +290,7 @@ export function SessionsPage() {
                     onCollapse={(id) => setCollapsed((c) => flip(c, id))}
                     actions={actions}
                     personas={personas}
+                    facts={facts}
                   />
                 ))}
               </Group>
