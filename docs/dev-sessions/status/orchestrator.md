@@ -5,7 +5,9 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## DONE
 - MERGED ff cc26c96: T-531 S2c (gate GREEN 55d5fad). CLOSED T-531.
 ## IN FLIGHT (6 of 6, D-71): all sonnet
-- IMPL 2d679b18 (impl-t591-s1c, ticket/T-591-s1c from 09ade72): G1+G2 kill M4/M5 (5639) -> QA Perf M4/M5 only -> gate -> merge.
+- QA T-416 41381bf2 (qa/T-416-s1b at a769b008): suite, race test red on d37c5f0/green on a769b00, reservation release, push-bridge mutation,
+  typecheck -> blind review (opus) -> gate -> merge.
+- T-591 S1c DONE b17a4e84 (5704; G1+G2 kill M4/M5, M5a survives, already redacted; no typecheck by author) -> QA Perf M4/M5 + typecheck. 2d679b18 ended.
 - QA PERF 7e4879c7 (lane/cp-qa-perf): (T-426 waits for S1c) T-486 S2e ea1c006 (5585) -> T-547 2bea754 (+typecheck, authz) -> T-597 1aeae88 -> T-611 4ac5982
   -> T-586 (premerge wip/main-5b66aa0, gate GREEN) -> T-561 S1c 0beae29 -> T-546 10b22e0 (5535) -> T-548 -> T-558 e652c44. T-591 PASS WITH GAPS 5587.
 - QA UI b3f769c5 (qa/T-600-ui-r3 from d688e0fa = r2 + integration with allow-list 208bdaa2): 1) T-619 browser proof (5679; r2 folder refused
@@ -26,9 +28,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   IMPL b7e209d5 (impl-t426-s1c, ticket/T-426-s1c) -> QA Perf full re-probe -> delta re-review (opus) -> gate -> merge on T-401 ack.
   T-401 re-merged wip/main-54ba328: gate GREEN gate-54ba328-6502 (suite 570 s, peak 2228Mi; 5560/5562); ff only on the person's ack (4941).
 - T-379 S2 3f11b28 PASS (4948; review 4938) -> merge after T-401. T-401 060aca4: review 4936, QA 4943; HELD on the ack (4941).
-- T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
-  ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
-  then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
+- T-416 (high incident): S1 d37c5f0 QA PASS WITH GAPS 4623; S1b a769b00 (4637/4688) now in QA 41381bf2. S2 = Bypass restore.
 
 ## DECISIONS (binding)
 - 16:57 Workspace restarted by coordinator (pilot browser, T-619, D-73); release portal 2026.10.15-12 merged (c29d75c7). All 6 workers' processes stopped;
