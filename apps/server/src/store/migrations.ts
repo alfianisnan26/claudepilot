@@ -3301,6 +3301,15 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 778,
+    name: 'chat sessions: marked a crew lead at its start (T-561)',
+    up(db) {
+      // T-561: a session its starter marked a crew lead (the supervisor's leads, `lead: true` on create; a continuation keeps it). With the
+      // policy `sessions.leadRules` on, a lead launches with the portal's lead rules. 1 marked; null for every row so far and every other start.
+      db.exec(`ALTER TABLE chat_sessions ADD COLUMN lead INTEGER;`);
+    },
+  },
+  {
     version: 779,
     name: 'chat sessions: auto hand-off, an implementer\'s DONE starts QA (T-548)',
     up(db) {

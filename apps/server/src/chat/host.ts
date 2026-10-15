@@ -999,6 +999,20 @@ case "$cmd" in
     } + (if $origin == "" then {} else {origin: $origin} end)' "$@" </dev/null || exit 1
     exit 0
     ;;
+  psettings)
+    # T-561: the permission rules of the folder's own .claude/settings.json (never anything else in it), as one JSON line, so that the portal
+    # can pass one merged --settings value. The same checks as trustscan's read: under the files root, not at the root, a regular file read
+    # through its real path, at most ${TRUST_MAX_FILE_BYTES} bytes. Anything else exits 2 and prints nothing.
+    exec 2>/dev/null
+    enter "\${1:-}" || exit 2
+    [ "$here" != "$root" ] || exit 2
+    t="$(mktemp -d)" || exit 1
+    trap 'rm -rf "$t"' EXIT
+    trap 'exit 1' HUP INT TERM
+    real .claude/settings.json && inroot "$r" && [ -f "$r" ] && [ -r "$r" ] && grab "$t/s" 3<"$r" && [ -f "$t/s" ] || exit 2
+    jq -ce 'select(type == "object") | {permissions: ((.permissions | objects // {}) | {allow, deny, ask} | with_entries(select(.value | type == "array" and all(type == "string"))))}' "$t/s" </dev/null || exit 2
+    exit 0
+    ;;
   authcheck)
     # Only whether Account Pool's helper is what Claude Code is configured to use: the drop-in, a regular
     # file and not a link (which could lead anywhere, the home folder included), holding one JSON object

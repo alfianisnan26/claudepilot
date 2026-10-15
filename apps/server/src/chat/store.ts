@@ -106,6 +106,8 @@ export type ChatSessionRow = {
   folder_branch?: string | null;
   /** T-490 (migration 777): why its lead started it above its role's model (D-63); null: none given. */
   spawn_why?: string | null;
+  /** T-561 (migration 778): 1 when its starter marked it a crew lead; null otherwise. */
+  lead?: number | null;
   bypass_capable?: number | null;
   claude_session_id?: string | null;
   cost_base_usd?: number | null;
@@ -406,6 +408,8 @@ export class ChatStore {
     subagents?: boolean;
     /** T-490 (D-63): why its lead started it above its role's model; redacted and capped here. */
     spawnWhy?: string | null;
+    /** T-561: its starter marked it a crew lead (stored 1; otherwise null). */
+    lead?: boolean;
   }): ChatSession {
     const now = this.#stamp();
     const db = this.#writable();
@@ -414,8 +418,8 @@ export class ChatStore {
       .prepare(
         `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
            ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from, agent,
-           max_workers, subagents, folder_branch, spawn_why)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           max_workers, subagents, folder_branch, spawn_why, lead)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         opts.id,
@@ -442,6 +446,7 @@ export class ChatStore {
         opts.subagents === false ? 0 : 1,
         opts.worktree ? null : (opts.folderBranch ?? null),
         why,
+        opts.lead === true ? 1 : null,
       );
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(opts.id, opts.claudeId ?? '', opts.id, opts.cwd, now);
@@ -482,6 +487,11 @@ export class ChatStore {
       .prepare(`SELECT * FROM chat_sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY last_activity_at DESC, created_at DESC`)
       .all(...vals) as ChatSessionRow[];
     return rows.map((r) => this.toSession(this.#keyed(r)));
+  }
+
+  /** T-561: whether any session (live or ended) was started as a worker of `id`: one that ever had workers is a crew lead. */
+  hasWorkers(id: string): boolean {
+    return this.#db().prepare('SELECT 1 FROM chat_sessions WHERE parent_id = ? LIMIT 1').get(id) !== undefined;
   }
 
   /** T-294: what a worker reports to its lead unasked (`session_spawn` `report`), set once when it is started. */
@@ -576,6 +586,7 @@ export class ChatStore {
       maxWorkers: row.max_workers ?? null,
       subagents: row.subagents !== 0,
       ...(row.spawn_why ? { spawnWhy: row.spawn_why } : {}),
+      ...(row.lead === 1 ? { lead: true } : {}),
     };
   }
 
