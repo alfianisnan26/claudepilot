@@ -74,3 +74,34 @@ export function canActForEnded(facts: {
   if (!facts.holderHasLiveSuccessor) return { allow: true, why: 'orphan' };
   return { allow: false, why: 'live_successor' };
 }
+
+/* ---------- A crew worker reports on its work (T-294, T-397) ---------- */
+
+/** Why a worker may comment: the ticket its spawn named (`spawn_ticket`), or a ticket its lead holds (`lead_ticket`). */
+export type WorkerCommentReason = 'spawn_ticket' | 'lead_ticket';
+export type WorkerCommentDecision = { allow: true; why: WorkerCommentReason } | { allow: false };
+
+/**
+ * THE rule for a crew worker's COMMENT on a ticket it does not hold (FR9b, T-294 and T-397), the tickets module's `can()` for it. It grants a
+ * comment only: never a change, a close, a claim or an adoption. The worker must be LIVE and have a lead (`parentId`). Then it may comment on:
+ * - `lead_ticket`: a ticket a session holds that is its lead, or a session continuing its lead (`continued_from` back from the holder reaches
+ *   the lead: a restarted lead's tickets move to its successor, FR18a). Its lead's own lead is not followed.
+ * - `spawn_ticket`: the ticket its spawn named (the session's `ticketId`, set only by `session_spawn`) while NOBODY holds it (the lead started
+ *   the worker before claiming). Held by a person or by another session, it is refused: a lead cannot open someone else's ticket by naming it.
+ * Pure: the service gathers the facts, keeps today's refusal on a deny, and writes the audit row with `why`.
+ */
+export function canWorkerComment(facts: {
+  worker: RuleSession & { parentId?: string | null; ticketId?: string | null };
+  /** The ticket, `T-<n>`. */
+  ticketId: string;
+  holderKind: 'session' | 'user' | null;
+  holderId: string | null;
+  /** The holder session's predecessors, nearest first (`continued_from` back); empty when it is not a session. */
+  holderAncestors: readonly string[];
+}): WorkerCommentDecision {
+  const lead = facts.worker.parentId;
+  if (!lead || facts.worker.state === 'ended') return { allow: false };
+  if (facts.holderKind === 'session' && facts.holderId && (facts.holderId === lead || facts.holderAncestors.includes(lead))) return { allow: true, why: 'lead_ticket' };
+  if (facts.holderKind === null && facts.worker.ticketId === facts.ticketId) return { allow: true, why: 'spawn_ticket' };
+  return { allow: false };
+}

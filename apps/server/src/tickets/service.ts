@@ -48,7 +48,7 @@ import {
 import { assertBumpable, bumpMode, bumpNote, bumpTargets as targetsFor } from '../chat/bump.js';
 import { cleanText } from '../portalmcp/sanitize.js';
 import type { Store } from '../store/store.js';
-import { canActForEnded, type EndedGrantReason } from './authz.js';
+import { canActForEnded, canWorkerComment, type EndedGrantReason, type WorkerCommentReason } from './authz.js';
 import './errors.js';
 import { bumpTicketMessage, openingMessage } from './opening.js';
 import type { TicketSessionInfo, TicketSessions } from './sessions.js';
@@ -466,23 +466,48 @@ export class Tickets {
     });
   }
 
-  /** FR29: commenting is what FR9 allows, and also the answer of a session a person asked about the ticket (Ask) in the last day. */
-  #assertCanComment(caller: Caller, row: Row, w: Writer): EndedGrant | null {
+  /**
+   * FR29: commenting is what FR9 allows, and also the answer of a session a person asked about the ticket (Ask) in the last day. FR9b
+   * (T-294, T-397): a crew worker's comment on its spawn's ticket or its lead's (authz.ts `canWorkerComment`). A refusal keeps FR9's text.
+   */
+  #assertCanComment(caller: Caller, row: Row, w: Writer): { ended: EndedGrant | null; worker: WorkerCommentReason | null } {
     try {
-      return this.#assertCanModify(caller, row, w);
+      return { ended: this.#assertCanModify(caller, row, w), worker: null };
     } catch (e) {
-      if (caller.kind === 'agent' && !isTicketClosed(row.status) && this.#bumpedInto(row.number, caller.sessionId, ASK_ANSWER_MS)) return null;
-      // T-294: a crew worker reports on its lead's tickets (a comment only: the status, the assignee and the rest stay its lead's).
-      if (caller.kind === 'agent' && !isTicketClosed(row.status) && row.assignee_kind === 'session' && this.#workerOf(caller.sessionId, row.assignee_ref)) return null;
+      if (caller.kind === 'agent' && !isTicketClosed(row.status) && this.#bumpedInto(row.number, caller.sessionId, ASK_ANSWER_MS)) return { ended: null, worker: null };
+      if (caller.kind === 'agent' && !isTicketClosed(row.status)) {
+        const why = this.#workerComment(w.session!, row);
+        if (why) return { ended: null, worker: why };
+      }
       throw e;
     }
   }
 
-  /** Whether `sessionId` is a live worker that `leadId` started (T-294 crew). */
-  #workerOf(sessionId: string, leadId: string | null): boolean {
-    if (!leadId) return false;
-    const s = this.sessions.get(sessionId);
-    return !!s && s.parentId === leadId && s.state !== 'ended';
+  /** FR9b: why the worker `s` may comment on `row` (authz.ts `canWorkerComment`), or null. */
+  #workerComment(s: TicketSessionInfo, row: Row): WorkerCommentReason | null {
+    const holder = row.assignee_kind === 'session' && row.assignee_ref ? this.sessions.get(row.assignee_ref) : null;
+    const d = canWorkerComment({
+      worker: s,
+      ticketId: ticketIdOf(row.number),
+      holderKind: row.assignee_kind,
+      holderId: row.assignee_ref,
+      holderAncestors: holder ? this.#ancestors(holder) : [],
+    });
+    return d.allow ? d.why : null;
+  }
+
+  /** The audit row of a worker's comment under FR9b: the worker that wrote it, its lead and why. */
+  #auditWorkerComment(why: WorkerCommentReason | null, w: Writer, row: Row) {
+    if (!why) return;
+    const ticketId = ticketIdOf(row.number);
+    this.onAudit?.({
+      kind: 'ticket.worker_commented',
+      actor: w.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: `ticket:${ticketId}`,
+      detail: { ticketId, sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, holder: row.assignee_ref ?? null, why },
+    });
   }
 
   /** Whether the ticket was bumped into the session within `withinMs`. */
@@ -884,7 +909,8 @@ export class Tickets {
       this.#addEvent(row.number, 'comment', w, body, w.session ? { session: w.session.id } : null);
       return Number((this.#db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id);
     });
-    this.#auditForEnded(grant, w, row, 'comment');
+    this.#auditForEnded(grant.ended, w, row, 'comment');
+    this.#auditWorkerComment(grant.worker, w, row);
     this.onChange?.();
     return this.#events(row.number).find((e) => e.id === eventId)!;
   }

@@ -331,3 +331,72 @@ test('T-294: a crew worker comments on its lead’s ticket and changes nothing e
     r.done();
   }
 });
+
+test('T-397: a worker comments on the ticket its spawn named and on its lead’s (or its lead’s successor’s) tickets, audited as itself; nothing else', async () => {
+  const r = await rig();
+  const audits: { kind: string; actor: string; detail?: Record<string, unknown> }[] = [];
+  r.tickets.onAudit = (e) => void audits.push(e);
+  try {
+    await r.agent('docker/api', 'lead');
+    await r.agent('docker/api', 'lead2');
+    await r.agent('docker/api', 'boss');
+    await r.agent('docker/api', 'peer');
+    const w = await r.agent('docker/api', 'wk');
+    const stranger = await r.agent('docker/api', 'other');
+    const patch = (id: string, over: Record<string, unknown>) => r.sessions.sessions.set(id, { ...r.sessions.sessions.get(id)!, ...over });
+    patch('lead', { parentId: 'boss' });
+    patch('lead2', { continuedFrom: 'lead' }); // the lead restarted: its successor holds its tickets (FR18a)
+    patch('wk', { parentId: 'lead', ticketId: 'T-1' }); // session_spawn with ticket T-1 (T-449)
+    r.tickets.create(UI, { summary: 'the spawn’s ticket, not claimed yet' }); // T-1
+    r.tickets.create(UI, { summary: 'held by the lead', assignee: { kind: 'session', sessionId: 'lead' } }); // T-2
+    r.tickets.create(UI, { summary: 'held by the lead’s successor', assignee: { kind: 'session', sessionId: 'lead2' } }); // T-3
+    r.tickets.create(UI, { summary: 'unrelated, nobody holds it' }); // T-4
+    r.tickets.create(UI, { summary: 'held by the lead’s own lead', assignee: { kind: 'session', sessionId: 'boss' } }); // T-5
+    r.tickets.create(UI, { summary: 'held by a peer', assignee: { kind: 'session', sessionId: 'peer' } }); // T-6
+    r.tickets.create(UI, { summary: 'held by a person', assignee: { kind: 'user', name: 'Admin' } }); // T-7
+    const err = async (t: { secret: string }, tool: string, args: Record<string, unknown>) => (await r.h.call(t.secret, tool, args)).result?.structuredContent?.error as { code: string; message: string } | undefined;
+
+    // Allowed: a comment, written as the worker.
+    for (const [id, why] of [['T-1', 'spawn_ticket'], ['T-2', 'lead_ticket'], ['T-3', 'lead_ticket']] as const) {
+      assert.equal(await err(w, 'ticket_comment', { id, text: `report on ${id}` }), undefined, `${id}: ${why}`);
+      const entry = r.tickets.get(UI, id).events.find((e) => e.kind === 'comment' && e.body === `report on ${id}`);
+      assert.equal(entry?.actor, 'session:wk', `${id}: the timeline names the worker, not its lead`);
+      const row = audits.find((a) => a.kind === 'ticket.worker_commented' && a.detail?.ticketId === id);
+      assert.deepEqual(row && { actor: row.actor, sessionId: row.detail!.sessionId, leadId: row.detail!.leadId, why: row.detail!.why }, { actor: 'session:wk', sessionId: 'wk', leadId: 'lead', why }, `${id}: the audit row`);
+    }
+    const mcpRows = r.h.module.audit.list({ limit: 100 }).filter((x) => x.tool === 'ticket_comment' && x.actor === 'session:wk');
+    assert.equal(mcpRows.length, 3, 'the tool call is audited as the worker too');
+
+    // Refused, with the very text a stranger gets.
+    for (const id of ['T-4', 'T-5', 'T-6', 'T-7']) {
+      const mine = await err(w, 'ticket_comment', { id, text: 'x' });
+      const theirs = await err(stranger, 'ticket_comment', { id, text: 'x' });
+      assert.equal(mine?.code, 'FORBIDDEN', `${id}: refused`);
+      assert.deepEqual(mine, theirs, `${id}: the same refusal as any other session`);
+    }
+    // The spawn's ticket held by someone else: refused (a lead cannot name its way into another's ticket).
+    r.tickets.update(UI, 'T-1', { assignee: { kind: 'session', sessionId: 'peer' } });
+    assert.equal((await err(w, 'ticket_comment', { id: 'T-1', text: 'x' }))?.code, 'FORBIDDEN', 'spawn ticket held by a peer');
+    r.tickets.update(UI, 'T-1', { assignee: { kind: 'user', name: 'Admin' } });
+    assert.equal((await err(w, 'ticket_comment', { id: 'T-1', text: 'x' }))?.code, 'FORBIDDEN', 'spawn ticket held by a person');
+    r.tickets.update(UI, 'T-1', { assignee: null });
+
+    // A comment only: no change, close or claim of the lead's ticket.
+    const before = r.tickets.get(UI, 'T-2').ticket;
+    assert.equal((await err(w, 'ticket_update', { id: 'T-2', priority: 'urgent' }))?.code, 'FORBIDDEN', 'not an update');
+    assert.equal((await err(w, 'ticket_close', { id: 'T-2', summary: 'done' }))?.code, 'FORBIDDEN', 'not a close');
+    assert.equal(r.out(await r.h.call(w.secret, 'ticket_claim_next', { id: 'T-2' })).ticket, null, 'not a claim: nothing to claim');
+    const after = r.tickets.get(UI, 'T-2').ticket;
+    assert.deepEqual([after.status, after.priority, after.assignee], [before.status, before.priority, { kind: 'session', sessionId: 'lead' }], 'the lead’s ticket is unchanged');
+
+    // A closed ticket and an ended worker: refused.
+    r.tickets.close(UI, 'T-3', { outcome: 'done' });
+    assert.equal((await err(w, 'ticket_comment', { id: 'T-3', text: 'x' }))?.code, 'FORBIDDEN', 'a closed ticket');
+    patch('wk', { state: 'ended' });
+    assert.equal((await err(w, 'ticket_comment', { id: 'T-1', text: 'late' }))?.code, 'FORBIDDEN', 'an ended worker, its spawn ticket');
+    assert.equal((await err(w, 'ticket_comment', { id: 'T-2', text: 'late' }))?.code, 'FORBIDDEN', 'an ended worker, its lead’s ticket');
+    assert.equal(audits.filter((a) => a.kind === 'ticket.worker_commented').length, 3, 'only the three allowed comments are audited');
+  } finally {
+    r.done();
+  }
+});
