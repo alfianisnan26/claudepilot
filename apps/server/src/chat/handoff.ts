@@ -8,7 +8,7 @@ export const HANDOFF_TOKEN_BUDGET = 150_000;
 export const HANDOFF_IMPLEMENTER = 'implementer';
 export const HANDOFF_QA = 'qa-verifier';
 
-const DONE_RE = /^DONE ([0-9a-f]{40})$/;
+const DONE_RE = /DONE ([0-9a-f]{40})/;
 const VERDICT_RE = /^(PASS|FAIL) ([0-9a-f]{40})(?::[ \t]?(.*))?$/;
 
 /** The sha of a strict `DONE <40-hex>` on the first line of a reply, else null (loose, forged or quoted text starts nothing). */
