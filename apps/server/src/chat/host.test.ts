@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { CHAT_MAX_DOWNLOAD_BYTES } from '@portal/contracts';
-import { ACCOUNT_DROPIN, ACCOUNT_HELPER, CP_SESSION, DIFF_MAX_PATCH_BYTES, LS_MAX_ENTRIES, parseStartOutput, TRUST_EMPTY_HASH, TRUST_FILES, TRUST_MAX_FILE_BYTES } from './host.js';
+import { ACCOUNT_DROPIN, ACCOUNT_HELPER, CP_SESSION, DIFF_MAX_PATCH_BYTES, LS_MAX_ENTRIES, parseStartOutput, TRUST_BROAD_JQ, TRUST_EMPTY_HASH, TRUST_FILES, TRUST_MAX_FILE_BYTES } from './host.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(cond: () => boolean, ms = 3000) {
@@ -540,9 +540,21 @@ type TrustScanOut = {
   allowRules: number;
   envNames: string[];
   rulesOnly: boolean;
+  broadAllow: boolean;
 };
 
-const EMPTY_TRUST_SCAN: TrustScanOut = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [], rulesOnly: true };
+const EMPTY_TRUST_SCAN: TrustScanOut = {
+  hash: TRUST_EMPTY_HASH,
+  files: [],
+  invalid: [],
+  mcpServers: [],
+  hooks: [],
+  plugins: [],
+  allowRules: 0,
+  envNames: [],
+  rulesOnly: true,
+  broadAllow: false,
+};
 const sha = (b: string | Buffer) => createHash('sha256').update(b).digest('hex');
 
 /** Runs `trustscan`, expecting one JSON line and exit 0. */
@@ -610,6 +622,7 @@ test('trustscan: names what .mcp.json and .claude/settings*.json would load, nev
     allowRules: 3,
     envNames: ['DEBUG', 'NODE_OPTIONS'],
     rulesOnly: false,
+    broadAllow: true, // a bare Read and a bare Edit
   });
   for (const value of ['ghp_VALUE', 'npx', 'gh-mcp', 'docs.example', 'curl', 'evil', 'judge it', 'npm test', 'Read(.env)', 'sk-never', '/tmp/', 'off@tools'])
     assert.ok(!raw.includes(value), `${value} is never printed`);
@@ -729,6 +742,64 @@ test('trustscan refuses what the Files commands refuse: outside the root, symlin
     assert.equal(r.code, 2, `${args.join(' ')} is refused`);
     assert.equal(r.stdout.length, 0, `${args.join(' ')} prints nothing`);
   }
+});
+
+/** Allow rules `cpBroad` must call broad (T-366, D-55): blankets, whole-disk or home paths, command runners, and what it can't read. */
+const BROAD_RULES: unknown[] = [
+  'Bash', 'bash', ' Bash ', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'Read', '*', 'mcp__*',
+  'Bash(*)', 'Bash(:*)', 'Bash()', 'Bash( * )', 'Edit(**)', 'Write(*)', 'WebFetch(domain:*)', 'WebFetch(https://x.example)',
+  'Edit(/**)', 'Edit(//**)', 'Write(~/**)', 'Read(~/**)', 'Edit($HOME/**)', 'Edit(~)', 'Edit(//*/x)', 'Read(~/.ssh/id_x)',
+  'Edit(~/.claude/settings.json)', 'Edit(//home/node/**)', 'Edit(/home/*/work/**)', 'Read(//etc/**)', 'Edit(../**)', 'Edit(src/../../x)',
+  'Bash(sudo:*)', 'Bash(sudo *)', 'Bash( sudo:* )', 'Bash(SUDO:*)', 'Bash(Sudo ls)', 'Bash(/usr/bin/env:*)', 'Bash(env FOO=1 npm test)',
+  'Bash("bash" -c x)', 'Bash(\\sudo ls)', 'Bash(FOO=1 npm test)', 'Bash(flock /tmp/heavy.lock:*)', 'Bash(flock /tmp/heavy.lock *)',
+  'Bash(timeout 60 npm test:*)', 'Bash(nice -n 10:*)', 'Bash(nohup:*)', 'Bash(stdbuf -oL:*)', 'Bash(time:*)', 'Bash(watch:*)',
+  'Bash(setsid:*)', 'Bash(chroot:*)', 'Bash(ssh host:*)', 'Bash(xargs:*)', 'Bash(eval:*)', 'Bash(exec:*)', 'Bash(sh -c:*)',
+  'Bash(zsh:*)', 'Bash(dash:*)', 'Bash(su:*)', 'Bash(doas:*)', 'Bash(awk:*)',
+  'Bash(node -e:*)', 'Bash(node --eval:*)', 'Bash(node:*)', 'Bash(node --import tsx:*)', 'Bash(python -c:*)', 'Bash(python3 -c:*)',
+  'Bash(python3:*)', 'Bash(perl -e:*)', 'Bash(perl -pe s/a/b/ x)', 'Bash(deno eval:*)',
+  'Bash(find . -name x -exec rm {} ;)', 'Bash(find:*)', 'Bash(npx:*)', 'Bash(npx tsx:*)', 'Bash(npx -y:*)', 'Bash(npx -c:*)',
+  'Bash(npm exec:*)', 'Bash(npm:*)', 'Bash(uv run:*)', 'Bash(uv run python:*)',
+  'Bash(git:*)', 'Bash(git -c alias.x=y x)', 'Bash(git config:*)', 'Bash(kubectl exec:*)', 'Bash(docker run:*)',
+  'Bash(* /x)', 'Bash(npm test && *)', 'Bash($(x):*)', 'Bash(foo', 'Bash(ls)\nBash(sudo:*)', 42, null, { rule: 'Bash' },
+];
+/** Allow rules `cpBroad` must leave alone: narrow commands and paths (this repository's own kind of rules). */
+const NARROW_RULES = [
+  'Bash(npm run typecheck:*)', 'Bash(npm test:*)', 'Bash(npm ci)', 'Bash(npx tsc:*)', 'Bash(git status:*)', 'Bash(git push:*)',
+  'Bash(git update-index --chmod=+x:*)', 'Bash(kubectl get:*)', 'Bash(kubectl rollout restart:*)', 'Bash(gh pr view:*)', 'Bash(ls:*)',
+  'Bash(echo:*)', 'Bash(pwd)', 'Bash(chmod +x:*)', 'Bash(node --import tsx --test src/a.test.ts)', 'Bash(node scripts/x.mjs:*)',
+  'Bash(python3 -m pytest:*)', 'Bash(uv run pytest:*)', 'Bash(sudoku:*)', 'Bash(envsubst:*)', 'Bash(timeouts:*)',
+  'Edit(~/work/claudepilot/**)', 'Write(~/work/claudepilot.worktrees/**)', 'Edit(./**)', 'Edit(src/**)', 'Read(//home/node/work/x/**)',
+  'WebFetch(domain:github.com)', 'Glob', 'Grep', 'mcp__pilot__ticket_get',
+  // Observed limit (FR43): a repository script that runs its arguments can't be told from one that doesn't; the lead keeps it out.
+  'Bash(scripts/job-run.sh:*)',
+];
+
+test('trustscan broadAllow (T-366): cpBroad calls blankets, whole-disk or home paths and command runners broad, and leaves narrow rules alone', () => {
+  const rules = [...BROAD_RULES, ...NARROW_RULES];
+  const out = execFileSync('jq', ['-cn', '--argjson', 'rules', JSON.stringify(rules), `${TRUST_BROAD_JQ} [$rules[] | cpBroad]`], { encoding: 'utf8' });
+  const got = JSON.parse(out) as boolean[];
+  const wrong = rules.filter((r, i) => got[i] !== i < BROAD_RULES.length).map((r) => JSON.stringify(r));
+  assert.deepEqual(wrong, [], 'every rule classified as expected');
+  assert.ok(!TRUST_BROAD_JQ.includes("'"), 'the script holds it in single quotes');
+});
+
+test('trustscan broadAllow (T-366): true when any allow rule in any file is broad, false for narrow rules, never the rule text', async () => {
+  const { proj, env } = mkFiles();
+  mkdirSync(join(proj, '.claude'));
+  const settings = (v: unknown, name = 'settings.json') => writeFileSync(join(proj, '.claude', name), JSON.stringify(v));
+  settings({ permissions: { allow: ['Bash(npm test:*)', 'Edit(~/work/x/**)'], deny: ['Bash(sudo:*)'] } });
+  const narrow = await trustscan(proj, env);
+  assert.deepEqual([narrow.rulesOnly, narrow.broadAllow, narrow.allowRules], [true, false, 2], 'a deny rule is never an allow');
+  settings({ permissions: { allow: ['Bash(flock /tmp/heavy.lock:*)'] } }, 'settings.local.json');
+  const runner = await trustscan(proj, env);
+  assert.deepEqual([runner.rulesOnly, runner.broadAllow], [true, true]);
+  assert.ok(!runner.raw.includes('flock') && !runner.raw.includes('heavy'), 'the rule is never printed');
+  settings({ permissions: { allow: 'Bash' } }, 'settings.local.json');
+  assert.equal((await trustscan(proj, env)).broadAllow, true, 'an allow that is not a list');
+  settings({ permissions: { allow: [7] } }, 'settings.local.json');
+  assert.equal((await trustscan(proj, env)).broadAllow, true, 'an entry that is not a string');
+  settings({ permissions: { deny: ['Bash'] } }, 'settings.local.json');
+  assert.equal((await trustscan(proj, env)).broadAllow, false);
 });
 
 test('trustscan never reads stdin, which an exec leaves open', async () => {

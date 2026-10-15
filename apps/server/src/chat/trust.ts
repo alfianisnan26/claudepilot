@@ -24,10 +24,12 @@ defineErrorCodes({ [CHAT_FOLDER_UNTRUSTED]: { status: 409, message: 'Check this 
 /** Why a session in a folder trusted before won't start: its files changed since. */
 export const FOLDER_CHANGED = "This folder's project settings changed since you trusted it. Check them and trust it again.";
 /**
- * Re-trusting a folder whose settings hold permission rules only (T-38). Off: any change to the files stops the next
- * start, resume, wake or Move until a person trusts the folder again. On: a folder trusted before whose scan names no
- * hook, server, plugin, env name, helper command or default mode (only `allow`, `deny` and `ask` lists) is trusted again
- * by itself when its hash changes, with an audit row. Rules can widen what runs without asking, so it asks to confirm.
+ * Trusting a folder whose settings hold permission rules only (T-38, T-366, D-55). Off: a folder with project settings waits
+ * for a person, and any change to its files stops the next start, resume, wake or Move until a person trusts it again. On:
+ * a folder whose scan names no hook, server, plugin, env name, helper command or default mode (only `allow`, `deny` and `ask`
+ * lists) and no allow rule that is a blanket or a command runner is trusted by itself, the first time (a new worktree, a
+ * repository's first settings) and when its hash changes, with an audit row. Rules can widen what runs without asking, so it
+ * asks to confirm.
  */
 export const AUTO_TRUST_SETTING = 'chat.trust.autoPermissionOnly';
 
@@ -38,8 +40,8 @@ defineSetting({
   scope: 'global',
   group: 'sessions',
   order: 20,
-  label: 'Re-trust rule changes',
-  help: 'When a trusted folder’s Claude Code settings change and they hold only permission rules (allow, deny, ask), the folder is trusted again by itself, so a Move, restart or auto move does not stop. A new hook, MCP server, plugin or env still needs you. Rules can let tools run without asking.',
+  label: 'Trust rules-only folders',
+  help: 'A folder whose Claude Code settings hold only permission rules (allow, deny, ask) is trusted by itself, the first time and when the rules change, so a new worktree, a Move, a restart or an auto move does not stop. A hook, MCP server, plugin or env still needs you, and so does an allow rule that is a blanket (Bash, Edit, a whole-disk path) or runs any command (sudo, env, bash, flock, timeout, xargs, node -e and the like). The check cannot see what a repository script does: one that runs its arguments (like scripts/job-run.sh) must stay out of allow lists. Rules can let tools run without asking.',
   protective: false,
 });
 
@@ -55,6 +57,9 @@ export interface FolderScan extends ChatFolderScan {
   files: string[];
   invalid: string[];
   rulesOnly: boolean;
+  broadAllow: boolean;
+  /** Set by the session launch when the policy is on and the folder can't be trusted by itself: why, by name ({@link autoTrustRefusal}). */
+  autoRefusal?: string;
 }
 
 /** What `trustscan` prints, checked and cleaned. */
@@ -69,6 +74,8 @@ export interface HostScan {
   envNames: string[];
   /** Nothing but permission rules (`allow`, `deny`, `ask`) in files that were all read; false from a host older than this. */
   rulesOnly: boolean;
+  /** An allow rule is a blanket or a command runner (T-366, host.ts `TRUST_BROAD_JQ`); true from a host older than this (fail closed). */
+  broadAllow: boolean;
 }
 
 export interface TrustOptions {
@@ -129,6 +136,7 @@ export function parseTrustScan(out: string): HostScan {
   const allowRules = o.allowRules;
   if (typeof allowRules !== 'number' || !Number.isSafeInteger(allowRules) || allowRules < 0) throw unexpected();
   if (o.rulesOnly !== undefined && typeof o.rulesOnly !== 'boolean') throw unexpected();
+  if (o.broadAllow !== undefined && typeof o.broadAllow !== 'boolean') throw unexpected();
   const scan: HostScan = {
     hash: o.hash,
     files: fileNames(o.files),
@@ -139,6 +147,7 @@ export function parseTrustScan(out: string): HostScan {
     allowRules,
     envNames: names(o.envNames),
     rulesOnly: o.rulesOnly === true,
+    broadAllow: o.broadAllow !== false,
   };
   // Nothing there must read exactly as nothing there.
   if ((scan.files.length === 0) !== (scan.hash === TRUST_EMPTY_HASH)) throw unexpected();
@@ -262,17 +271,34 @@ export async function scanFolder(workspaces: Workspaces, store: Store, workspace
     files: host.files,
     invalid: host.invalid,
     rulesOnly: host.rulesOnly,
+    broadAllow: host.broadAllow,
   };
 }
 
 /**
- * Whether a scan may be trusted again without a person (T-38, under {@link AUTO_TRUST_SETTING}): the folder was trusted
- * before at another hash, and its files hold permission rules only. The names are checked too, not only the host's word.
+ * Why a scan can't be trusted without a person (T-38, T-366, D-55), by name only, never a rule or a value; null when it can:
+ * every file read, no `.mcp.json`, no server, hook, plugin or env name, nothing but permission rules (the host's word), and no
+ * allow rule that is a blanket or a command runner. The names are checked too, not only the host's word.
+ */
+export function autoTrustRefusal(scan: FolderScan): string | null {
+  const why: string[] = [];
+  if (scan.invalid.length) why.push('a settings file can’t be read');
+  if (scan.mcpServers.length || scan.files.includes('.mcp.json')) why.push('it starts MCP servers');
+  if (scan.hooks.length) why.push('it loads hooks');
+  if (scan.plugins.length) why.push('it enables plugins');
+  if (scan.envNames.length) why.push('it sets environment variables');
+  if (!scan.rulesOnly && why.length === 0) why.push('it holds more than permission rules');
+  if (scan.broadAllow) why.push('an allow rule runs any command or covers everything');
+  return why.length ? why.join('; ') : null;
+}
+
+/**
+ * Whether a scan may be trusted without a person (under {@link AUTO_TRUST_SETTING}): a folder with settings, not trusted at this
+ * hash, never trusted before (T-366) or trusted at another hash (T-38), with nothing {@link autoTrustRefusal} names.
  */
 export function autoTrustable(scan: FolderScan, before: { hash: string | null } | null): boolean {
-  if (scan.empty || scan.trusted || !before?.hash || before.hash === scan.hash) return false;
-  const loads = scan.mcpServers.length + scan.hooks.length + scan.plugins.length + scan.envNames.length + scan.invalid.length;
-  return scan.rulesOnly && loads === 0 && !scan.files.includes('.mcp.json');
+  if (scan.empty || scan.trusted || (before?.hash && before.hash === scan.hash)) return false;
+  return autoTrustRefusal(scan) === null;
 }
 
 /**
@@ -302,7 +328,11 @@ export function saveTrust(store: Store, scan: FolderScan, actor: string | null):
   new ChatStore(store).saveFolderTrust(scan.workspaceId, scan.folder, scan.hash, { files, invalid, mcpServers, hooks, plugins, allowRules, envNames }, actor);
 }
 
-/** The refusal a session start gets in a folder that needs trusting: 409 `FOLDER_UNTRUSTED`, the scan as details. */
-export function untrustedError(scan: ChatFolderScan, changed: boolean): AppError {
-  return new AppError(CHAT_FOLDER_UNTRUSTED, changed ? FOLDER_CHANGED : FOLDER_NOT_TRUSTED, { details: scan });
+/**
+ * The refusal a session start gets in a folder that needs trusting: 409 `FOLDER_UNTRUSTED`, the scan as details. When the
+ * policy was on and refused to trust it by itself, the message says why (names only).
+ */
+export function untrustedError(scan: ChatFolderScan & { autoRefusal?: string }, changed: boolean): AppError {
+  const base = changed ? FOLDER_CHANGED : FOLDER_NOT_TRUSTED;
+  return new AppError(CHAT_FOLDER_UNTRUSTED, scan.autoRefusal ? `${base} Not trusted by itself: ${scan.autoRefusal}.` : base, { details: scan });
 }

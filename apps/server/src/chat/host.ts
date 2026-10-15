@@ -25,6 +25,81 @@ export const TRUST_MAX_FILE_BYTES = 1_000_000;
 /** `trustscan`'s hash when none of {@link TRUST_FILES} is there: the sha256 of nothing. */
 export const TRUST_EMPTY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
+/**
+ * The jq definitions behind `trustscan`'s `broadAllow` (T-366, D-55): `cpBroad` reads one `permissions.allow` entry and is true when
+ * the rule would let anything run or be touched without asking, so a folder holding it is never trusted by itself:
+ * - a blanket: a bare `Bash`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `WebFetch` or `Read`, a tool name with a wildcard, or a
+ *   spec of wildcards only (`*`, `:*`, `**`, empty);
+ * - a path rule (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Read`) over the whole disk or home: `/**`, `//**`, `~/**`, `$HOME/**`,
+ *   `**`, a first segment with a glob, a dotfile in home, a whole home under `/home` or `/Users`, `/root`, `/etc`, `/proc`, or any `..`;
+ * - a Bash rule whose command runs another command: sudo, env, the shells, eval, exec, xargs, flock, timeout, nice, nohup, stdbuf,
+ *   time, watch, setsid, chroot, ssh, awk and the like (matched on the command's base name, unquoted, any case: `/usr/bin/env`,
+ *   `"sudo"`); an interpreter with an eval flag (`node -e`, `python3 -c`, `perl -e`, `deno eval`) or with a wildcard and no script;
+ *   `find`/`fd` with `-exec` or a wildcard; `npx`/`npm exec`/`uv run` and the like with what they launch checked the same way; git
+ *   with `-c`, a config wildcard or a command option; `kubectl`/`docker exec`, `run` or `debug`; a leading `NAME=value`; a command
+ *   name with a glob or an expansion; a launcher followed by a wildcard; a shell operator together with a wildcard;
+ * - anything it can't read (not a string, a control character, unbalanced parentheses, a WebFetch spec other than `domain:`).
+ * When in doubt it is broad. It cannot know what a repository's own script does with its arguments: that one is the lead's.
+ * No single quote (the script holds it in one) and no template expression.
+ */
+export const TRUST_BROAD_JQ = String.raw`def cpIn(xs): . as $x | any(xs; . == $x);
+def cpTrim: sub("^\\s+"; "") | sub("\\s+$"; "");
+def cpOptVal($r; $i): $i > 0 and ($r[$i - 1] | startswith("-") and (contains("=") | not));
+def cpLeadWild: . as $r | ([range(0; length) | select(($r[.] | test("\\*")) or ((($r[.] | startswith("-")) | not) and (cpOptVal($r; .) | not)))] | first) as $i | if $i == null then false else ($r[$i] | test("\\*")) end;
+def cpScript: . as $r | any(range(0; length); . as $i | $r[$i] as $x | (if $i > 0 then $r[$i - 1] else "" end) as $p
+  | ($x | test("^[^-*]") and (test("\\*") | not))
+    and ((($x | test("/|\\.[A-Za-z0-9]+$")) and ($p | cpIn("--import", "--require", "-r", "--loader", "--experimental-loader", "-I", "-M") | not)) or $p == "-m"));
+def cpInterp: test("^(node|nodejs|tsx|ts-node|deno|bun|python[0-9.]*|pypy[0-9.]*|perl[0-9.]*|ruby[0-9.]*|php[0-9.]*|lua[0-9.]*|luajit|rscript|r|osascript|pwsh|powershell|irb|julia|groovy|jshell|tclsh|wish|expect)$");
+def cpRunner: cpIn("sudo", "su", "doas", "env", "bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh", "busybox", "eval", "exec", "command", "builtin", "source", ".", "xargs", "parallel", "flock", "timeout", "nice", "ionice", "chrt", "taskset", "nohup", "stdbuf", "unbuffer", "time", "watch", "setsid", "chroot", "unshare", "nsenter", "runuser", "pkexec", "script", "ssh", "strace", "ltrace", "gdb", "systemd-run", "gosu", "su-exec", "sg", "fakeroot", "firejail", "bwrap", "awk", "gawk", "mawk", "nawk");
+def cpDropOpts: if length > 0 and (.[0] | startswith("-")) then (if (.[0] | cpIn("-p", "--package")) then .[2:] else .[1:] end | cpDropOpts) else . end;
+def cpCmd:
+  def launch($wild): if any(.[]; cpIn("-c", "--call") or startswith("--call=")) then true else cpDropOpts as $v | if ($v | length) == 0 then $wild else ($v | cpCmd) end end;
+  def after($t; words): ([range(0; $t | length) | select($t[.] | cpIn(words))] | first) as $i | if $i == null then null else $t[$i + 1:] end;
+  . as $t | any($t[]; test("\\*")) as $wild | $t[1:] as $r
+  | ($t[0] | gsub("[\"'\\\\]"; "")) as $raw | ($raw | sub("^.*/"; "") | ascii_downcase) as $c
+  | if ($raw | test("^[A-Za-z_][A-Za-z0-9_]*=")) then true
+    elif $c == "" or ($c | test("[*?\\[\\]{}$`()~!<>|;&]")) then true
+    elif ($c | cpRunner) then true
+    elif ($c | cpIn("find", "gfind", "fd", "fdfind")) then $wild or any($r[]; cpIn("-exec", "-execdir", "-ok", "-okdir", "-x", "-X") or startswith("--exec"))
+    elif ($c | cpInterp) then any($r[]; test("^-[A-Za-z]*[ecpE][A-Za-z]*$") or test("^--(eval|print|command|exec)(=|$)") or cpIn("eval", "exec", "x", "repl", "-")) or ($wild and ($r | cpScript | not))
+    elif ($c | cpIn("npx", "bunx", "pnpx", "uvx", "pipx")) then $r | launch($wild)
+    elif ($c | cpIn("npm", "pnpm", "yarn")) then ($r | cpLeadWild) or (after($r; "exec", "x", "dlx") as $u | if $u == null then false else $u | launch($wild) end)
+    elif ($c | cpIn("uv", "poetry", "pipenv", "pdm", "hatch", "rye")) then ($r | cpLeadWild) or (after($r; "run") as $u | if $u == null then false else $u | launch($wild) end)
+    elif ($c | cpIn("kubectl", "docker", "podman", "nerdctl", "crictl", "ctr", "oc", "lxc")) then ($r | cpLeadWild) or any($r[]; cpIn("exec", "run", "debug"))
+    elif $c == "git" then ($r | cpLeadWild) or any($r[]; cpIn("-c", "--config-env", "-x", "--exec", "--extcmd", "foreach", "filter-branch", "run") or startswith("--config-env=") or startswith("--exec=") or startswith("--extcmd=")) or ($wild and any($r[]; . == "config"))
+    else false end;
+def cpBash: cpTrim as $s
+  | if ($s | test("[;|&`]|\\$\\(|[<>]\\(") and test("\\*")) then true
+    else ($s | gsub(":\\*"; " *") | [splits("\\s+")] | map(select(. != ""))) as $t | if ($t | length) == 0 then true else $t | cpCmd end end;
+def cpGlob: test("[*?\\[{]");
+def cpPath: cpTrim as $p
+  | if ($p | test("(^|/)\\.\\.(/|$)")) then true
+    else ($p | sub("^\\$\\{?HOME\\}?"; "~")) as $q
+    | (if ($q | startswith("~")) then "home" elif ($q | startswith("/")) then "root" elif ($q | startswith("./")) or $q == "." then "here" else "rel" end) as $a
+    | ($q | sub("^(~|/+|\\./)"; "") | split("/") | map(select(. != ""))) as $seg
+    | ([foreach $seg[] as $x (true; . and ($x | cpGlob | not); if . then $x else empty end)]) as $fixed
+    | if $a == "here" then false
+      elif $a == "rel" then ($seg | length) == 0 or all($seg[]; test("^[*?]+$"))
+      elif ($fixed | length) == 0 then true
+      elif $a == "home" then ($fixed[0] | startswith("."))
+      else ($fixed[0] | cpIn("root", "etc", "proc", "sys", "dev")) or (($fixed[0] | cpIn("home", "Users")) and (($fixed | length) <= 2 or (($fixed[2] // "") | startswith(".")))) end end;
+def cpFetch: cpTrim | if startswith("domain:") then (ltrimstr("domain:") | cpTrim | test("^[*.]*$")) else true end;
+def cpBroad:
+  if type != "string" then true
+  elif test("[\\x00-\\x1f\\x7f]") then true
+  else cpTrim as $r
+  | ($r | capture("^(?<tool>[^()]*)\\((?<spec>.*)\\)$")? // null) as $m
+  | if $m == null and ($r | test("[()]")) then true
+    else (if $m == null then $r else $m.tool end | cpTrim | ascii_downcase) as $tool
+    | if $tool == "" or ($tool | test("[*?]")) then true
+      elif $m == null then $tool | cpIn("bash", "edit", "write", "multiedit", "notebookedit", "webfetch", "read")
+      elif ($m.spec | test("^[\\s*:]*$")) then true
+      elif $tool == "bash" then $m.spec | cpBash
+      elif ($tool | cpIn("edit", "write", "multiedit", "notebookedit", "read")) then $m.spec | cpPath
+      elif $tool == "webfetch" then $m.spec | cpFetch
+      else false end end end;
+`;
+
 /** The environment names `start --env` accepts (anything else exits 2): a session's portal-tool token and where to reach them, and the switch that keeps claude.ai's connectors out. */
 export const HOST_ENV_NAMES = ['PILOT_MCP_TOKEN', 'PILOT_SESSION_ID', 'PILOT_WORKSPACE_ID', 'PILOT_MCP_URL', 'ENABLE_CLAUDEAI_MCP_SERVERS'] as const;
 
@@ -89,6 +164,7 @@ export const ACCOUNT_HELPER = '/etc/claudepilot/bin/account-key';
  *   `allowRules` (entries in `permissions.allow`) and `envNames` (keys of `env`), from every file read;
  *   `rulesOnly` (no `.mcp.json`, every file read, and each holds nothing but `$schema` and `permissions` with
  *   `allow`, `deny` and `ask` lists of strings: no hook, server, plugin, env, helper command or default mode);
+ *   `broadAllow` (T-366: an allow rule is a blanket or a command runner, {@link TRUST_BROAD_JQ}; a boolean, never the rule);
  *   `files` (those present) and `invalid` (present but not a JSON object, or not read). `hash` is the
  *   sha256 of `<sha256 of the file>  <name>` lines for the files present, in that order, so any change
  *   to any of them changes it; with none it's {@link TRUST_EMPTY_HASH}. Each file is read once, through
@@ -755,7 +831,8 @@ case "$cmd" in
       printf '%s  %s\\n' "$d" "$name" >> "$t/sums"
     done
     # Names only, from the files that parsed: never a value, a command or an argument.
-    jq -cn --arg hash "$(sha256sum < "$t/sums" | cut -c1-64)" --arg files "$files" --arg invalid "$invalid" '[inputs] as $s | {
+    jq -cn --arg hash "$(sha256sum < "$t/sums" | cut -c1-64)" --arg files "$files" --arg invalid "$invalid" '${TRUST_BROAD_JQ}
+    [inputs] as $s | {
       hash: $hash,
       files: ($files | split(" ") | map(select(. != ""))),
       invalid: ($invalid | split(" ") | map(select(. != ""))),
@@ -766,6 +843,7 @@ case "$cmd" in
         | .key] | unique),
       plugins: ([$s[] | .enabledPlugins | objects | to_entries[] | select(.value == true) | .key] | unique),
       allowRules: ([$s[] | .permissions | objects | .allow | arrays | length] | add // 0),
+      broadAllow: any($s[] | .permissions | objects | .allow | select(. != null) | if type == "array" then .[] else . end; cpBroad),
       envNames: ([$s[] | .env | objects | keys[]] | unique),
       rulesOnly: ($invalid == "" and ($files | split(" ") | any(. == ".mcp.json") | not)
         and all($s[]; (keys - ["$schema", "permissions"]) == []

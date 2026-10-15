@@ -14,7 +14,7 @@ import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { CP_SESSION, CP_SESSION_PATH, TRUST_EMPTY_HASH } from './host.js';
 import { ChatStore } from './store.js';
-import { autoTrustable, FOLDER_CHANGED, FOLDER_NOT_TRUSTED, parseTrustScan, scanFolder, trustFolder, untrustedError, type FolderScan, type HostScan } from './trust.js';
+import { autoTrustable, autoTrustRefusal, FOLDER_CHANGED, FOLDER_NOT_TRUSTED, parseTrustScan, scanFolder, trustFolder, untrustedError, type FolderScan, type HostScan } from './trust.js';
 import { createChatTrustRoutes } from './trustRoutes.js';
 
 const HASH_A = 'a'.repeat(64);
@@ -31,8 +31,9 @@ const SCAN_A: HostScan = {
   allowRules: 2,
   envNames: ['NODE_OPTIONS'],
   rulesOnly: false,
+  broadAllow: true,
 };
-const EMPTY: HostScan = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [], rulesOnly: true };
+const EMPTY: HostScan = { hash: TRUST_EMPTY_HASH, files: [], invalid: [], mcpServers: [], hooks: [], plugins: [], allowRules: 0, envNames: [], rulesOnly: true, broadAllow: false };
 
 /* ========================= parsing (pure) ========================= */
 
@@ -55,17 +56,45 @@ test('parseTrustScan: rulesOnly is the host’s word when it gives one, false fr
   assert.throws(() => parseTrustScan(JSON.stringify({ ...rules, rulesOnly: 'yes' })), (e) => isAppError(e) && e.status === 503);
 });
 
-test('autoTrustable: only a folder trusted before, at another hash, whose files hold permission rules only and name nothing that loads (T-38)', () => {
+test('parseTrustScan: broadAllow is the host’s word when it gives one, true from a host that doesn’t (T-366, fail closed)', () => {
+  const rules = { ...EMPTY, hash: HASH_A, files: ['.claude/settings.json'], allowRules: 3 };
+  assert.equal(parseTrustScan(JSON.stringify({ ...rules, broadAllow: false })).broadAllow, false);
+  assert.equal(parseTrustScan(JSON.stringify({ ...rules, broadAllow: true })).broadAllow, true);
+  assert.equal(parseTrustScan(JSON.stringify({ ...rules, broadAllow: undefined })).broadAllow, true);
+  assert.throws(() => parseTrustScan(JSON.stringify({ ...rules, broadAllow: 'no' })), (e) => isAppError(e) && e.status === 503);
+});
+
+test('autoTrustable: a folder with rules only, trusted before at another hash (T-38) or never (T-366), never with a broad allow rule or anything that loads', () => {
   const rules: FolderScan = { workspaceId: 'docker/ws1', folder: '/home/node/proj', ...EMPTY, hash: HASH_B, files: ['.claude/settings.json'], allowRules: 3, empty: false, trusted: false };
   const before = { hash: HASH_A };
   assert.equal(autoTrustable(rules, before), true);
-  assert.equal(autoTrustable(rules, null), false, 'never trusted: a person first');
-  assert.equal(autoTrustable(rules, { hash: null }), false);
+  assert.equal(autoTrustable(rules, null), true, 'never trusted (T-366): trusted the first time');
+  assert.equal(autoTrustable(rules, { hash: null }), true);
   assert.equal(autoTrustable({ ...rules, trusted: true }, before), false);
+  assert.equal(autoTrustable({ ...rules, empty: true }, null), false);
   assert.equal(autoTrustable({ ...rules, rulesOnly: false }, before), false);
+  assert.equal(autoTrustable({ ...rules, broadAllow: true }, before), false, 're-trust stops on a broad rule (T-366)');
+  assert.equal(autoTrustable({ ...rules, broadAllow: true }, null), false, 'first trust too');
   for (const extra of [{ hooks: ['Stop'] }, { mcpServers: ['x'] }, { plugins: ['p@m'] }, { envNames: ['NODE_OPTIONS'] }, { invalid: ['.claude/settings.json'] }, { files: ['.mcp.json'] }]) {
     assert.equal(autoTrustable({ ...rules, ...extra }, before), false, JSON.stringify(extra));
+    assert.equal(autoTrustable({ ...rules, ...extra }, null), false, JSON.stringify(extra));
   }
+});
+
+test('autoTrustRefusal: says why by name, never a rule or a value (T-366)', () => {
+  const rules: FolderScan = { workspaceId: 'docker/ws1', folder: '/home/node/proj', ...EMPTY, hash: HASH_B, files: ['.claude/settings.json'], allowRules: 3, empty: false, trusted: false };
+  assert.equal(autoTrustRefusal(rules), null);
+  assert.equal(autoTrustRefusal({ ...rules, broadAllow: true }), 'an allow rule runs any command or covers everything');
+  assert.equal(autoTrustRefusal({ ...rules, hooks: ['SessionStart'], rulesOnly: false }), 'it loads hooks');
+  assert.equal(autoTrustRefusal({ ...rules, files: ['.mcp.json'], mcpServers: ['github'], rulesOnly: false }), 'it starts MCP servers');
+  assert.equal(autoTrustRefusal({ ...rules, plugins: ['p@m'] }), 'it enables plugins');
+  assert.equal(autoTrustRefusal({ ...rules, envNames: ['NODE_OPTIONS'], rulesOnly: false }), 'it sets environment variables');
+  assert.equal(autoTrustRefusal({ ...rules, invalid: ['.claude/settings.json'] }), 'a settings file can’t be read');
+  assert.equal(autoTrustRefusal({ ...rules, rulesOnly: false }), 'it holds more than permission rules');
+  assert.equal(autoTrustRefusal({ ...rules, hooks: ['Stop'], broadAllow: true }), 'it loads hooks; an allow rule runs any command or covers everything');
+  const e = untrustedError({ ...rules, autoRefusal: 'it loads hooks' }, false);
+  assert.equal(e.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: it loads hooks.`);
+  assert.equal(untrustedError(rules, true).message, FOLDER_CHANGED, 'no reason when the policy did not look');
 });
 
 test('parseTrustScan: anything off is a 503, never a scan that reads as empty', () => {
@@ -378,7 +407,7 @@ test('end to end: scan, trust, change a file, and the trust no longer holds — 
     const scan = await get();
     assert.deepEqual(
       { ...scan, hash: undefined },
-      { workspaceId: 'docker/ws1', folder: proj, hash: undefined, empty: false, files: ['.mcp.json', '.claude/settings.json'], invalid: [], mcpServers: ['github'], hooks: ['SessionStart'], plugins: [], allowRules: 0, envNames: ['FOO'], trusted: false, rulesOnly: false },
+      { workspaceId: 'docker/ws1', folder: proj, hash: undefined, empty: false, files: ['.mcp.json', '.claude/settings.json'], invalid: [], mcpServers: ['github'], hooks: ['SessionStart'], plugins: [], allowRules: 0, envNames: ['FOO'], trusted: false, rulesOnly: false, broadAllow: false },
     );
     assert.ok(!JSON.stringify(scan).includes('ghp_never'));
 
