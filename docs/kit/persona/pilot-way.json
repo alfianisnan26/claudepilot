@@ -40,7 +40,11 @@
           "Grep",
           "Glob",
           "Bash",
-          "Skill"
+          "Skill",
+          "mcp__pilot__ticket_get",
+          "mcp__pilot__ticket_comment",
+          "mcp__pilot__note_read",
+          "mcp__pilot__session_message"
         ],
         "disallowedTools": [],
         "model": "sonnet",
@@ -56,7 +60,11 @@
           "Grep",
           "Glob",
           "Bash",
-          "Skill"
+          "Skill",
+          "mcp__pilot__ticket_get",
+          "mcp__pilot__ticket_comment",
+          "mcp__pilot__note_read",
+          "mcp__pilot__session_message"
         ],
         "disallowedTools": [],
         "model": "sonnet",
