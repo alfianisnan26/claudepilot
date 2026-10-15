@@ -4,9 +4,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 
 ## DONE
 - MERGED ff cc26c96: T-531 S2c (gate GREEN 55d5fad, suite 587 s, peak 1971Mi). CLOSED T-531. Rides the deploy after #38.
-- MERGED ff 3f81869: T-524 S2 (gate GREEN gate-3f81869-1ecd). DEPLOYED #37 (0316fae); CLOSED T-527, T-515. Details: git history.
 
-## IN FLIGHT (5 of 5, D-68/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf): queue T-426 -> T-591 -> T-586 -> T-561 S1c -> T-546 -> T-548 (+ T-486 S2e).
+## IN FLIGHT (6 of 6, D-71/D-70): LANE 7e4879c7 "ClaudePilot QA Perf" (lane-qa-perf, sonnet, lane/cp-qa-perf): queue T-426 -> T-591 -> T-586 -> T-561 S1c -> T-546 -> T-548 (+ T-486 S2e).
   T-561: S1b QA PASS WITH GAPS (5440, symlink holes A, B) -> S1c DONE 0beae29 (5498/5501; 77c04fc0 ended) -> QA Perf re-probe -> lead
   gate + merge. LANE bbbe2b38 "ClaudePilot QA UI" (lane-qa-ui, sonnet, qa/T-600-ui, deps linked by lead) on T-600 FE ux: browser tools refused (5503 PASS
   WITH GAPS; T-525 5505 to coordinator); default: headless tools/qa/*.mjs. T-576 DONE 2427d98 (Jobs green; no
@@ -22,7 +21,8 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   PLANNED T-600 BE 5540, T-597 5546, T-325 5547 (S1+S2 only, 5549). T-600 BE: respawn Backend on a branch from FE 7d19c94 after QA UI. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
   ticket/T-600-crew-pace-ui): T-600 FE DONE 7d19c94 (5473/5478); T-556 PLANNED 5497 (one "Upstream" dialog, 4 fields: no upstream UI exists);
   builds after T-486 merges + T-595. QA UI then T-576 ux. LANE 83921ca7 "ClaudePilot BE Infra" (lane-backend, sonnet,
-  ticket/T-611-job-placement) on T-611; queue T-547, T-610 (T-401/T-426 fixes, if any). 6 of 6: QA Perf, Backend, BE Infra, Frontend, QA UI, reviewer.
+  ticket/T-611-job-placement) on T-611; queue T-547, T-610 (T-401/T-426 fixes, if any). 6 of 6: QA Perf, Backend, BE Infra, QA UI, 2 reviewers.
+  16:35 Frontend f13a9442 ENDED (idle, T-556 parked) for REVIEWER 219d5558 (sonnet) on T-619 browser allow-list (owner priority).
   Jobs: each agent starts its own (15:29). Still to place: T-558 QA (e652c44, 5052). No prettier/eslint in Jobs (T-612).
 - 16:12 OWNER PRIORITY (coordinator, T-426 5538): T-401 then T-426 FIRST (Konfersi QA UI needs stg login in a Job; done = T-617 screenshots).
   T-426 ab93b54 (on T-401 060aca4): QA Perf FIRST (5541), blind review opus at next free slot (impl-t591 ends -> reviewer), gate, merge.
@@ -31,7 +31,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
   ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
-- STATE: T-404 open until deployed (design point -> T-451). T-376 (high): S2 dev/t-376-3 0b0faf7 needs integration merged in, ux re-check, S3 perf.
+- T-404 open until deployed. T-376 (high): S2 0b0faf7 needs integration merged in, ux re-check, S3 perf.
 
 ## DECISIONS (binding)
 - 16:30 D-71 (coordinator): limit 6; 3rd build lane BE Infra (CI, runners, job-run, k3s, deploy, secrets delivery, usage, spend, quota):
