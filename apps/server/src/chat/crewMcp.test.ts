@@ -14,6 +14,7 @@ import { MessageRate, type AgentCaps, type WorkerReport } from './agents.js';
 import { SESSION_CAP } from './caps.js';
 import { CREW_REPORT_ACTOR, crewQuote, type ChatController } from './controller.js';
 import { registerChatTools } from './portalTools.js';
+import { ChatStore } from './store.js';
 import { line, liveSession, ok, restartPortal, sleep, until, type Live } from './testkit.js';
 
 const CAPS: AgentCaps = { maxDepth: 1, maxChildren: 5, spawnsPerHour: 20, messagesPerHour: 40 };
@@ -583,5 +584,32 @@ test('T-294 live use: the report line says how to get the whole reply, and sessi
     assert.equal((await r.h.call(wt.secret, 'session_family', { reply_of: r.s.id })).result!.isError, undefined, 'a worker reads its lead');
   } finally {
     await r.done();
+  }
+});
+
+test('T-294 hand-over: a continuation takes over its predecessor’s live workers (ended ones stay); a worker orphaned before is adopted when the portal starts', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.agentCaps = () => ({ ...CAPS, maxChildren: 5, spawnsPerHour: 20 });
+    const live = await worker(s, s.id, 'cpbview gate flakes');
+    const done = await worker(s, s.id, 'Finished');
+    await s.controller.end(done.id);
+    await s.controller.end(s.id); // the lead hands over at a full context
+    const next = await s.controller.create({ workspaceId: 'docker/ws1', title: 'Lead', continuedFrom: s.id });
+    assert.equal(s.controller.get(live.id)!.parentId, next.id, 'the live worker reports to the continuation');
+    assert.equal(s.controller.get(done.id)!.parentId, s.id, 'an ended worker stays where it was');
+    assert.deepEqual(s.controller.children(next.id).map((c) => c.id), [live.id]);
+    const audit = s.controller.audit({ kind: 'session.continued' }).find((a) => a.sessionId === next.id)!;
+    assert.deepEqual(audit.detail.workers, [live.id]);
+    assert.ok(s.controller.history(next.id).some((e) => e.kind === 'system' && e.text === 'Took over 1 live worker of the chat it continues.'));
+
+    // A worker orphaned before this fix (its lead ended and was continued without taking it over): adopted at the next portal start.
+    new ChatStore(s.store).reparentChildren(next.id, s.id);
+    assert.equal(s.controller.get(live.id)!.parentId, s.id);
+    const restarted = await restartPortal(s);
+    assert.equal(restarted.get(live.id)!.parentId, next.id, 'adopted by the live continuation');
+    assert.ok(restarted.audit({ kind: 'agent.adopted' }).some((a) => a.sessionId === next.id && a.detail.worker === live.id && a.detail.from === s.id));
+  } finally {
+    await s.done();
   }
 });

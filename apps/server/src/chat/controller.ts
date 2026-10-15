@@ -774,6 +774,26 @@ export class ChatController {
     } catch {
       // the store is unavailable: the liveness rounds and the next launch close them
     }
+    // T-294: a live worker whose lead ended and was continued (a hand-over before this fix, or one made while the portal was down) is
+    // adopted by the newest live continuation of that lead, audited.
+    try {
+      for (const row of this.#chat.liveRows()) {
+        if (!row.parent_id) continue;
+        const lead = this.#chat.get(row.parent_id);
+        if (!lead || lead.state !== 'ended') continue;
+        let next = this.#chat.continuationOf(lead.id);
+        for (let hops = 0; next && hops < 20; hops++) {
+          const s = this.#chat.get(next);
+          if (s && s.state !== 'ended') break;
+          next = this.#chat.continuationOf(next);
+        }
+        if (!next) continue;
+        this.#chat.adoptLiveChildren(lead.id, next);
+        this.#chat.addAudit({ severity: 'info', kind: 'agent.adopted', sessionId: next, workspaceId: row.workspace_id, actor: 'portal', detail: { from: lead.id, worker: row.id } });
+      }
+    } catch {
+      // the store is unavailable: the next start tries again
+    }
     // T-294: each live worker's state as found counts as told to its lead, so the change that follows a restart is told (a turn that was
     // running when the portal went down ends after it), and none twice.
     try {
@@ -1439,12 +1459,16 @@ export class ChatController {
     if (continuedFrom) {
       // The link and the tickets in ONE transaction: the predecessor is asked again inside it (it may have been woken meanwhile).
       let moved: string[] = [];
+      let adopted: string[] = [];
       this.#chat.transaction(() => {
         const chain = this.#continuation(continuedFrom.id, workspaceId)!.chain;
         session = this.#chat.create({ ...row, continuedFrom: continuedFrom.id });
         moved = this.continueTickets?.(id, chain) ?? [];
+        // T-294: the predecessors' live workers become this chat's crew (their reports and session_family follow the work, not the ended chat).
+        for (const pred of chain) adopted.push(...this.#chat.adoptLiveChildren(pred, id));
       });
-      this.#chat.addAudit({ severity: 'info', kind: 'session.continued', sessionId: id, workspaceId, actor, detail: { from: continuedFrom.id, chain: continuedFrom.chain.length, tickets: moved } });
+      this.#chat.addAudit({ severity: 'info', kind: 'session.continued', sessionId: id, workspaceId, actor, detail: { from: continuedFrom.id, chain: continuedFrom.chain.length, tickets: moved, workers: adopted } });
+      if (adopted.length) this.#note(id, `Took over ${adopted.length} live ${adopted.length === 1 ? 'worker' : 'workers'} of the chat it continues.`);
     } else session = this.#chat.create(row);
     if (worktree) {
       this.#chat.activateWorktree(workspaceId, worktree.path, id);

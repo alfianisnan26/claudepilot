@@ -474,6 +474,22 @@ export class ChatStore {
     this.#writable().prepare('UPDATE chat_sessions SET report = ? WHERE id = ?').run(report, sessionId);
   }
 
+  /**
+   * T-294: the workers of `from` that have not ended report to `to` from now on (a continuation takes over its predecessor's live crew);
+   * ended ones stay where they were (history). Returns the ids moved.
+   */
+  adoptLiveChildren(from: string, to: string): string[] {
+    const ids = (this.#db().prepare(`SELECT id FROM chat_sessions WHERE parent_id = ? AND state != 'ended'`).all(from) as { id: string }[]).map((r) => r.id);
+    if (ids.length) this.#writable().prepare(`UPDATE chat_sessions SET parent_id = ? WHERE parent_id = ? AND state != 'ended'`).run(to, from);
+    return ids;
+  }
+
+  /** The newest session that continues `id` (its `continued_from`), or null. */
+  continuationOf(id: string): string | null {
+    const row = this.#db().prepare('SELECT id FROM chat_sessions WHERE continued_from = ? ORDER BY created_at DESC LIMIT 1').get(id) as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
   /** Sessions that report to `from` report to `to` instead (a transfer: the successor carries on as the parent). */
   reparentChildren(from: string, to: string): void {
     this.#writable().prepare('UPDATE chat_sessions SET parent_id = ? WHERE parent_id = ?').run(to, from);
