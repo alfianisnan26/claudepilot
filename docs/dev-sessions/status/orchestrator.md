@@ -13,7 +13,7 @@ Older log: `orchestrator-log-2026-10-14.md` (same folder). Previous hand-over: c
 - T-369 (urgent): Agent-tool SUB-AGENT ux-checker (sonnet) on 731fa28. Merge after T-321.
 - T-375 (high): Agent-tool SUB-AGENT implementer (opus) in dev-t-369-1.worktrees/dev-t-375-1 (dev/t-375-1 from 731fa28). Worker 151ab26d could not switch worktrees in dontAsk; a new worker there got FOLDER_UNTRUSTED (T-366's gap). T-375 comment 2341.
 - T-349: qa-verifier worker 1d680467 (sonnet) on b58d4b7 (ACTUAL copied: comment 2325).
-- T-352: qa-verifier worker e1bd7bce (sonnet) on aa8b815 (ACTUAL copied: comment 2329).
+- T-352: verifier e1bd7bce PASS WITH GAPS (job 301d13a2; comment 2345). Gap G1 session_end unguarded (factory.mjs:961): Agent-tool SUB-AGENT implementer (sonnet) fixing it on dev/t-352-1; then the lead re-runs the proof and merges.
 - WAITING FOR A SLOT: T-321 set B (base under the same load as set A 15/15, job 59b3c5d7), a qa-verifier worker; T-369 sits on dev/t-321-2.
 
 ## DECISIONS
