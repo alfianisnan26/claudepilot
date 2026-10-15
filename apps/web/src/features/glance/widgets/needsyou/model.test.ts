@@ -18,7 +18,7 @@ const item = (kind: AttentionItem['kind'], id: string, since: string): Attention
 });
 const list = (over: Partial<AttentionList> = {}): AttentionList => ({
   total: 3,
-  counts: { mcp_version: 2, skill_version: 0, ci_deploy: null, ticket_approval: 1, tool_approval: null, keepgoing_down: null, persona_proposal: null },
+  counts: { mcp_version: 2, skill_version: 0, ci_deploy: null, ticket_approval: 1, tool_approval: null, keepgoing_down: null, persona_proposal: null, ci_upstream: null },
   unavailable: ['ci_deploy'],
   items: [item('mcp_version', 'a', at(-30)), item('ticket_approval', 'T-9', at(-2)), item('mcp_version', 'b', at(-10))],
   offset: 0,

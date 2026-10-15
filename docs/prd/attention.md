@@ -48,6 +48,7 @@ module's own route that decides it: a POST path, or `SOCKET` for the chat).
 | `keepgoing_down` | `keepgoing/attention.ts` | a chat with Keep going on that the sweep reported left down (the cap, a refused start, still ended 15 minutes after it ended; T-257 item 1) and that has not run again; it goes when the chat runs (the next look clears the report). Announced by Keep going's own `keepgoing_attention` notification, so the bridge stays quiet | question | ended · the workspace | operate on the session |
 
 | `persona_proposal` | `personas/attention.ts` | a session's `pending` proposal to change its own persona: instructions (never auto-approved), or a name or avatar the persona's switch did not let through (Persona PRD I11; slice 3) | gate | what changes · its size (`adds 120 chars, 2 replacements`, never the text) · the revision it was made against · the workspace | a person with manage on the persona |
+| `ci_upstream` | `ci/upstreamAttention.ts` | a pilot remote's branch that diverged from the upstream it follows; the sync leaves it untouched (CI FR8a, T-486); it goes once the branches agree again | question | pilot sha · upstream sha · upstream host | a person with operate on the remote (action: Sync now) |
 
 Not a source yet: pool revisions in `waiting_review` (they follow from unapproved versions), Bypass acknowledgements, and three that do
 not exist in the code yet: settings an agent proposed (T-138), stg PRs (T-116), the login queue (T-140). Each is one file and one line in

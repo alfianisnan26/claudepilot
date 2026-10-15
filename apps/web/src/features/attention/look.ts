@@ -1,6 +1,6 @@
 import type { BadgeTone } from '@isnanme/ui';
 import type { AttentionKind, AttentionWhy } from '@portal/contracts';
-import { PlugZap, PowerOff, Puzzle, Rocket, ShieldQuestion, Ticket, UserRound, type LucideIcon } from 'lucide-react';
+import { GitBranch, PlugZap, PowerOff, Puzzle, Rocket, ShieldQuestion, Ticket, UserRound, type LucideIcon } from 'lucide-react';
 
 // How an item looks wherever it is drawn (the list, the deck, the Home widget): one icon per kind, one tone and one InfoTip per why.
 
@@ -12,6 +12,7 @@ export const KIND_ICON: Record<AttentionKind, LucideIcon> = {
   tool_approval: ShieldQuestion,
   keepgoing_down: PowerOff,
   persona_proposal: UserRound,
+  ci_upstream: GitBranch,
 };
 
 export const WHY_TONE: Record<AttentionWhy, BadgeTone> = {

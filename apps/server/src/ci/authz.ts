@@ -102,7 +102,10 @@ export const CI_POLICIES = {
   'POST /api/ci/runs/:id/reject': { ...run('manage'), audit: 'ci.deploy_rejected' },
   'GET /api/ci/repos': { kind: 'signed-in', filter: 'ci_repo' },
   'POST /api/ci/repos': { kind: 'objects', checks: [{ type: 'workspace', verb: 'operate', from: 'body', param: 'workspaceId' }], creates: 'ci_repo' },
+  // Its `upstream` (FR8a, T-486) is a person's setting only: the handler refuses tokens and agents; the service audits it.
   'PATCH /api/ci/repos/:id': repo('manage'),
+  // Sync now (FR8a): what the loop does every 30 s; audited by the service when a branch moved.
+  'POST /api/ci/repos/:id/sync': repo('operate'),
   'DELETE /api/ci/repos/:id': repo('manage'),
   'POST /api/ci/repos/:id/connect': repo('operate'),
   'GET /api/ci/repos/:id/branches': repo('view'),

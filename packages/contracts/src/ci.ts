@@ -384,6 +384,45 @@ export interface CiRepo {
   hooks: CiHookState;
   workspaceState: 'running' | 'stopped' | 'gone';
   createdAt: string;
+  /** T-486: the upstream this remote follows by itself (fast-forward only), or null. */
+  upstream: CiUpstream | null;
+}
+
+/** T-486 (local-git-ci PRD FR8a): a remote that keeps itself in step with an upstream on GitHub or Gitea. Names only, never a secret value. */
+export interface CiUpstream {
+  /** The https URL fetched (no credentials in it). */
+  url: string;
+  /** The Secrets & env NAME whose value is the token for the fetch; null for a public repository. */
+  secret: string | null;
+  /** Seconds between two syncs. */
+  everyS: number;
+  /** The last sync: when, and its error (null when it worked). */
+  lastAt: string | null;
+  error: string | null;
+  /** Branches left as they are because pilot and the upstream each have commits the other lacks (a Needs you item each). */
+  diverged: CiUpstreamDiverged[];
+  /** Branches where pilot has commits the upstream lacks (left as they are; not an item). */
+  ahead: string[];
+  /** Branches deleted upstream that pilot keeps. */
+  gone: string[];
+}
+
+export interface CiUpstreamDiverged {
+  branch: string;
+  /** pilot's commit, and the upstream's. */
+  local: string;
+  upstream: string;
+  since: string;
+}
+
+/** Every 30 s unless a remote says otherwise; the bounds of `everyS`. */
+export const CI_UPSTREAM_EVERY_S = { default: 30, min: 15, max: 3600 } as const;
+
+/** What `PATCH /api/ci/repos/:id` takes for the upstream: null removes it. A person only (manage). */
+export interface UpdateCiUpstream {
+  url: string;
+  secret?: string | null;
+  everyS?: number;
 }
 
 /** A branch of a remote with where the checks stand. */
@@ -411,6 +450,14 @@ export interface CreateCiRepoRequest {
 export interface UpdateCiRepoRequest {
   defaultBranch?: string;
   protected?: string[];
+  /** T-486: follow an upstream (null: stop following). */
+  upstream?: UpdateCiUpstream | null;
+}
+
+/** `POST /api/ci/repos/:id/sync`: what one upstream sync did. */
+export interface CiUpstreamSyncResult {
+  moved: { branch: string; old: string; new: string }[];
+  repo: CiRepo;
 }
 
 export interface ConnectCiRepoRequest {
@@ -476,6 +523,8 @@ export const CI_API = {
   pipelines: (id: string) => `/api/ci/repos/${encodeURIComponent(id)}/pipelines`,
   /** POST `MergeCiRequest`: `MergeCiResult`. */
   merge: (id: string) => `/api/ci/repos/${encodeURIComponent(id)}/merge`,
+  /** POST: sync from the upstream now (T-486): `CiUpstreamSyncResult`. */
+  sync: (id: string) => `/api/ci/repos/${encodeURIComponent(id)}/sync`,
   /** POST `ValidateCiRequest`: `ValidateCiResult`. */
   validate: '/api/ci/validate',
   /** POST `CiApprovalRequest`: let the waiting job run (a person only); returns the `CiRun`. */
