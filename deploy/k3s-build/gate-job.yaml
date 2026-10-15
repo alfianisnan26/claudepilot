@@ -26,7 +26,12 @@ spec:
       restartPolicy: Never
       automountServiceAccountToken: false
       affinity:
+        # Never on the portal's node (T-365): a heavy Job there starved the portal's SQLite fsync and it stopped answering for minutes (2026-10-15, twice).
         podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              namespaces: [isnan-claudepilot]
+              labelSelector: {matchLabels: {app: claudepilot-portal}}
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:

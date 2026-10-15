@@ -416,3 +416,18 @@ test('the Job\'s own script: the proof (passes on the ref, fails on the other, k
   assert.equal(dead.status, 7);
   assert.match(dead.stdout, /retrying once[\s\S]*npm ci failed in claudepilot \(rc=7\)\n=== JOB-RUN EXIT 7\n$/);
 });
+
+test('T-365: job-run and gate Jobs are never scheduled on the portal’s node (a heavy Job there starved its SQLite fsync)', () => {
+  for (const name of ['job-run.yaml', 'gate-job.yaml']) {
+    const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8').replace(/__[A-Z_]+__/g, 'x');
+    const job = yamlLoad(text) as { spec: { template: { spec: { affinity?: { podAntiAffinity?: { requiredDuringSchedulingIgnoredDuringExecution?: unknown[] } } } } } };
+    const required = job.spec.template.spec.affinity?.podAntiAffinity?.requiredDuringSchedulingIgnoredDuringExecution ?? [];
+    assert.deepEqual(
+      required,
+      [{ topologyKey: 'kubernetes.io/hostname', namespaces: ['isnan-claudepilot'], labelSelector: { matchLabels: { app: 'claudepilot-portal' } } }],
+      `${name}: required anti-affinity to the portal pod (label app=claudepilot-portal, deploy/k3s)`,
+    );
+  }
+  // The label the rule names is the portal Deployment's own pod label.
+  assert.match(readFileSync(join(REPO, 'deploy/k3s/portal.yaml'), 'utf8'), /app: claudepilot-portal/);
+});
