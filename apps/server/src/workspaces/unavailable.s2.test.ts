@@ -66,7 +66,12 @@ test('an unavailable workspace takes no runtime action: refused at once with the
     ['shell', () => ws.shell('kubernetes', 'kohi', { cols: 80, rows: 24 })],
     ['recreate', () => ws.recreate('kubernetes', 'kohi', 'img', () => undefined)],
   ];
-  for (const [name, run] of actions) await assert.rejects(run(), refused, `${name} is refused with the clear error`);
+  // A call that is not refused hangs (the runtime never answers): the race turns that into a failure instead of a stuck test.
+  const within = <T>(p: Promise<T>) => {
+    let timer: NodeJS.Timeout | undefined;
+    return Promise.race([p, new Promise<never>((_, rej) => (timer = setTimeout(() => rej(new Error('hung: not refused')), 500)))]).finally(() => clearTimeout(timer));
+  };
+  for (const [name, run] of actions) await assert.rejects(within(run()), refused, `${name} is refused with the clear error`);
   assert.ok(Date.now() - t < 80, `all refused in ${Date.now() - t} ms`);
   assert.deepEqual(calls, [], 'nothing reached the runtime');
   assert.ok((await ws.list()).some((w) => w.id === 'kubernetes/kohi'), 'remove did not forget the workspace');
