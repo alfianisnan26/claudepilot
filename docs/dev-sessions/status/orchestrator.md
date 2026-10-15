@@ -19,7 +19,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   efficiency order): T-546 -> T-600 BE -> T-597 -> T-325 -> T-591 S2. LANE f13a9442 "ClaudePilot Frontend" (lane-frontend, sonnet,
   spawn worktree ticket/T-600-crew-pace-ui) on T-600 FE (5413). Next slots: blind review (T-586, T-548), QA UI (T-576 ux, T-600). QA Perf queue: T-561, T-548, T-486, T-546.
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-561 QA (GO now) -> T-486 S2d -> T-546 -> T-591 S1 6853486 -> T-558 QA. quick-check unusable by dontAsk workers (T-586): its checks in ONE Job.
+  Cluster: T-561 QA (GO now) -> T-486 S2d -> T-600 FE 8cf263a (5431, untested) -> T-546 -> T-591 S1 6853486 -> T-558 QA. quick-check unusable by dontAsk workers (T-586): its checks in ONE Job.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
 - T-379 3ddbcbc: src/ci 144/144 job-5b4609a6 (4905); lead live proof PASS job-c71c5bfe (4906); blind review 30dc0f13 PASS WITH
