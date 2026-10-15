@@ -1,6 +1,6 @@
 // T-515 on the REAL Workspaces page of a scratch portal: a workspace whose target's API did not answer shows as "Unavailable", its ⓘ says
 // the reason and "last seen", and its sheet still lists its Claudes. A scratch portal has no Kubernetes, so the list is the portal's own with
-// one stand-in workspace added (`fetch` of `/api/workspaces` answered in the page, as the server serves it during an outage); everything
+// two stand-in workspaces added, one unavailable and one running (`fetch` of `/api/workspaces` answered in the page, as the server serves it during an outage); everything
 // else is the portal's own. At 390 px (touch) and 1280 px, light and dark: no horizontal scroll, the ⓘ is a 44 px target on touch.
 // usage: tools/qa/with-portal.sh 3523 node tools/qa/workspace-unavailable.mjs [--shots dir]
 import { Browser } from './browser.mjs';
@@ -15,9 +15,12 @@ const kohi = {
   id: 'kubernetes/kohi-event', name: 'kohi-event', stableId: 'ws_515515515515', target: 'kubernetes', image: 'workspace', status: 'unavailable',
   detail: 'Timed out', lastSeenAt: seen, createdAt: '2026-09-01T00:00:00.000Z',
 };
+// A scratch portal starts with no workspace: one running beside it, as another target answers during the outage.
+const other = { id: 'docker/api', name: 'api', target: 'docker', image: 'workspace', status: 'running', createdAt: '2026-09-01T00:00:00.000Z' };
 const claude = { id: 'c515', workspaceId: kohi.id, name: 'Default', directory: '', removedAt: null, createdAt: '2026-09-01T00:00:00.000Z' };
 const STUB = `(() => {
   const kohi = ${JSON.stringify(kohi)};
+  const other = ${JSON.stringify(other)};
   const claudes = ${JSON.stringify([{ claude, auth: null, terminals: 0 }])};
   const real = window.fetch.bind(window);
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -25,7 +28,7 @@ const STUB = `(() => {
     const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
     if (path === '/api/workspaces') {
       const body = await (await real(input, init)).json();
-      return json({ ...body, data: [...(body.data ?? []).filter((w) => w.id !== kohi.id), kohi] });
+      return json({ ...body, data: [...(body.data ?? []).filter((w) => w.id !== kohi.id && w.id !== other.id), other, kohi] });
     }
     if (path === '/api/workspaces/' + kohi.id + '/claudes') {
       const body = await (await real('/api/workspaces')).json();
@@ -77,7 +80,7 @@ try {
       check(/Unavailable/.test(r.text), `${tag}: the row says "Unavailable"`);
       check(/Last seen 4 minutes ago/.test(r.text), `${tag}: the row says when it was last seen (${JSON.stringify(r.text.replace(/\s+/g, ' ').slice(0, 120))})`);
       check(!/Timed out/.test(r.text), `${tag}: the reason is in the ⓘ, not on the row (text diet)`);
-      check(r.rows >= 2, `${tag}: the portal's own workspaces are listed beside it (${r.rows} rows)`);
+      check(r.rows >= 2, `${tag}: the other workspaces are listed beside it (${r.rows} rows)`);
       check(!r.scroll, `${tag}: no horizontal scroll`);
       check(!!r.tip && (size.w >= 600 || (r.tip[0] >= 44 && r.tip[1] >= 44)), `${tag}: the ⓘ is there${size.w < 600 ? ', a 44 px target on touch' : ''} (${JSON.stringify(r.tip)})`);
       await b.shot(`workspace-unavailable-${tag}`);
