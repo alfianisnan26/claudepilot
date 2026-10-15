@@ -1193,12 +1193,14 @@ export class Tickets {
    * The sessions whose work a ticket's verdict would judge (`authors`) and the sessions that lead them (`leads`): the holder and its
    * lineage, every session that was ever assigned the ticket, and every session started on it, and the parents of all of those.
    */
-  #workers(row: Row): { authors: Set<string>; leads: Set<string> } {
+  #workers(row: Row): { authors: Set<string>; leads: Set<string>; leadHolders: Set<string> } {
     const authors = new Set<string>();
+    const holderLine: string[] = [];
+    const holder = row.assignee_kind === 'session' && row.assignee_ref ? this.sessions.get(row.assignee_ref) : null;
     if (row.assignee_kind === 'session' && row.assignee_ref) {
-      authors.add(row.assignee_ref);
-      const holder = this.sessions.get(row.assignee_ref);
-      if (holder) for (const a of this.#ancestors(holder)) authors.add(a);
+      holderLine.push(row.assignee_ref);
+      if (holder) holderLine.push(...this.#ancestors(holder));
+      for (const a of holderLine) authors.add(a);
     }
     const assigned = this.#db.prepare("SELECT DISTINCT json_extract(data, '$.to.sessionId') AS s FROM ticket_events WHERE ticket_number = ? AND kind = 'assigned'").all(row.number) as { s: string | null }[];
     for (const r of assigned) if (r.s) authors.add(r.s);
@@ -1208,7 +1210,31 @@ export class Tickets {
       const p = this.sessions.get(id)?.parentId;
       if (p) leads.add(p);
     }
-    return { authors, leads };
+    // T-325 S1b: the holder (with its lineage) may be a verifier's ancestor only when it leads the work: it is the parent of another author
+    // and was not itself started on this ticket. An implementer holding the ticket leads nobody, so a QA it spawns is refused.
+    const leadsWork = !!row.assignee_ref && leads.has(row.assignee_ref) && holder?.ticketId !== ticketIdOf(row.number);
+    return { authors, leads, leadHolders: new Set(leadsWork ? holderLine : []) };
+  }
+
+  /** A session's spawn chain, nearest first: its parent and the session it continues, then theirs (bounded, cycle safe). Not the session itself. */
+  #spawnChain(s: TicketSessionInfo): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>([s.id]);
+    let frontier: TicketSessionInfo[] = [s];
+    while (frontier.length && out.length < 200) {
+      const next: TicketSessionInfo[] = [];
+      for (const cur of frontier) {
+        for (const up of [cur.parentId, cur.continuedFrom]) {
+          if (!up || seen.has(up)) continue;
+          seen.add(up);
+          out.push(up);
+          const info = this.sessions.get(up);
+          if (info) next.push(info);
+        }
+      }
+      frontier = next;
+    }
+    return out;
   }
 
   /**
@@ -1224,8 +1250,9 @@ export class Tickets {
     const commit = normalizeSha(req.commit);
     const w = this.#writer(caller, opts.sessionId);
     // An admin's token acting "for" a session is not that session: only the agent's own token or a person may record.
-    const { authors, leads } = this.#workers(row);
-    const d = canRecordVerdict({ callerKind: caller.kind, role, session: caller.kind === 'agent' && w.session ? { id: w.session.id, agent: w.session.agent } : null, authors, leads, commit });
+    const { authors, leads, leadHolders } = this.#workers(row);
+    const self = caller.kind === 'agent' && w.session ? w.session : null;
+    const d = canRecordVerdict({ callerKind: caller.kind, role, session: self ? { id: self.id, agent: self.agent } : null, authors, leads, commit, chain: self ? this.#spawnChain(self) : [], leadHolders });
     const ticketId = ticketIdOf(row.number);
     if (!d.allow) {
       this.onAudit?.({ kind: 'ticket.verdict_refused', actor: w.actor, actorLabel: null, userId: FOUNDING_USER_ID, subject: `ticket:${ticketId}`, detail: { ticketId, role, why: d.why, sessionId: w.session?.id ?? null } });

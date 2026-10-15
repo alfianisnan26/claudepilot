@@ -27,7 +27,7 @@ test('normalizeSha and verdictRoleOfAgent: only a full sha, and only QA or revie
 
 test('canRecordVerdict: a person, or a QA/review session of its own role that is neither author nor lead', () => {
   const none = new Set<string>();
-  const base = { callerKind: 'agent' as const, role: 'qa' as const, session: { id: 'q', agent: 'qa-verifier' }, authors: none, leads: none, commit: A };
+  const base = { callerKind: 'agent' as const, role: 'qa' as const, session: { id: 'q', agent: 'qa-verifier' }, authors: none, leads: none, commit: A, chain: [] as string[], leadHolders: none };
   assert.deepEqual(canRecordVerdict(base), { allow: true });
   assert.deepEqual(canRecordVerdict({ ...base, callerKind: 'ui', session: null }), { allow: true });
   assert.deepEqual(canRecordVerdict({ ...base, commit: null }), { allow: false, why: 'bad_commit' });

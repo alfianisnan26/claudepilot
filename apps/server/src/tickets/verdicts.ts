@@ -24,7 +24,7 @@ export function verdictRoleOfAgent(agent: string | null | undefined): VerdictRol
   return null;
 }
 
-export type VerdictRefusal = 'not_a_verifier' | 'wrong_role' | 'is_author' | 'is_lead' | 'bad_commit';
+export type VerdictRefusal = 'not_a_verifier' | 'wrong_role' | 'is_author' | 'is_lead' | 'descends_from_author' | 'bad_commit';
 
 export type VerdictDecision = { allow: true } | { allow: false; why: VerdictRefusal };
 
@@ -33,6 +33,7 @@ export const VERDICT_REFUSAL_TEXT: Record<VerdictRefusal, string> = {
   wrong_role: 'Your agent role is not the role you tried to record.',
   is_author: 'The author of this ticket’s work cannot verify it.',
   is_lead: 'The lead of this ticket’s work cannot record its verdict.',
+  descends_from_author: 'This session descends from an author of this ticket’s work (it was started by one), so it cannot verify it.',
   bad_commit: 'A verdict names the full commit sha (40 hex characters).',
 };
 
@@ -41,6 +42,11 @@ export const VERDICT_REFUSAL_TEXT: Record<VerdictRefusal, string> = {
  * session of the role it claims, and never when it is the author of the ticket's work or its lead. Every other caller (the portal itself, an
  * admin's token, a trigger) is refused: a verdict needs an identity that can be compared with the author. Pure; the service gathers
  * `authors` (the ticket's holder, their lineage, every session that held it or works on it) and `leads` (those sessions' parents).
+ *
+ * T-325 S1b (QA F1): a session's agent name is chosen by whoever spawned it, so the role is only worth something when no one up the caller's
+ * spawn `chain` (its parents and the sessions it continues) is an author: an author's child, grandchild or successor is refused whatever it is
+ * named. The one ancestor allowed is a holder that LEADS the work (`leadHolders`: the holder and its lineage when it is the parent of another
+ * author and was not itself started on the ticket), so the orchestrator that holds a ticket can still send its own QA worker.
  */
 export function canRecordVerdict(facts: {
   callerKind: 'ui' | 'system' | 'token' | 'agent' | 'trigger';
@@ -50,6 +56,10 @@ export function canRecordVerdict(facts: {
   authors: ReadonlySet<string>;
   leads: ReadonlySet<string>;
   commit: string | null;
+  /** The caller's spawn chain: parents and continued-from predecessors, walked up (not the caller itself). */
+  chain: readonly string[];
+  /** Authors that may be in `chain`: the holder and its lineage when it leads the work. */
+  leadHolders: ReadonlySet<string>;
 }): VerdictDecision {
   if (!facts.commit) return { allow: false, why: 'bad_commit' };
   if (facts.callerKind === 'ui') return { allow: true };
@@ -58,6 +68,7 @@ export function canRecordVerdict(facts: {
   if (!mine) return { allow: false, why: 'not_a_verifier' };
   if (facts.authors.has(facts.session.id)) return { allow: false, why: 'is_author' };
   if (facts.leads.has(facts.session.id)) return { allow: false, why: 'is_lead' };
+  if (facts.chain.some((a) => facts.authors.has(a) && !facts.leadHolders.has(a))) return { allow: false, why: 'descends_from_author' };
   if (mine !== facts.role) return { allow: false, why: 'wrong_role' };
   return { allow: true };
 }
