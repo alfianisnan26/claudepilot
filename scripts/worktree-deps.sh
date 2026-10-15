@@ -10,7 +10,7 @@
 # node_modules is gitignored, so `git status` stays clean. Running it again changes nothing.
 # It REFUSES (exit 2) when package-lock.json or any package.json differs from the main checkout's ("cluster npm ci needed": then the
 # dependencies are not the same and a link would lie), when <worktree> is not a git worktree of the main checkout's repository, and
-# for the main checkout itself. It deletes only symlinks it replaces; a real file or folder in its way is left and reported.
+# for the main checkout itself, and when apps, packages, apps/web, apps/server or packages/contracts in the worktree is a symlink. It deletes only symlinks it replaces; a real file or folder in its way is left and reported.
 set -eu
 set -o pipefail
 refuse() { echo "refused: $*" >&2; exit 2; }
@@ -46,6 +46,12 @@ files=$( { git -C "$wt" ls-files; git -C "$main" ls-files; } | grep -E '(^|/)(pa
 [ -n "$files" ] || refuse "no package.json found"
 for f in $files; do
   cmp -s "$wt/$f" "$main/$f" || { echo "refused: $f differs from the main checkout's: cluster npm ci needed" >&2; exit 2; }
+done
+
+# No link is written through a symlink inside the worktree: apps, packages and the three workspace folders must be real folders,
+# or a link could land in a folder outside the worktree (T-631 F2). Checked before anything is created.
+for d in apps packages apps/web apps/server packages/contracts; do
+  [ ! -L "$wt/$d" ] || refuse "$wt/$d is a symbolic link: nothing is linked through it"
 done
 
 # Links $2 to $1 (replacing only a symlink); a real file or folder at $2 is left alone.
