@@ -9,16 +9,16 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   Carries T-486 S1, T-490, T-450 S3, T-524 S1, T-515, T-527. CLOSED T-527 (live D-62 refusal 10:42) and T-515.
 
 ## IN FLIGHT (4 of 4 workers, D-65: 7d33708d impl-t558 (opus, why D-62 authz) T-558 (claimed, plan 4930), 03b631f0 impl-t531-s2c (sonnet) T-531 S2c,
-  47710391 qa (sonnet) T-401 QA (GO 12:24, has the cluster slot), d39c25c1 impl-t379-s2 (sonnet) T-379 S2 review fixes (4942))
+  fb538d7d qa-t486 (sonnet) T-486 QA (reading, then GO), d39c25c1 impl-t379-s2 (sonnet) T-379 S2 3f11b28 (GO 13:08, has the slot))
   Sweep: PASS T-109/280/282/285, GAP T-259/294/136(?)/338/317/287; nobody can claim in_review tickets -> coordinator (T-525 4659).
-  Cluster: T-401 QA -> T-531 S2c (WAITING 7afbd0d) -> T-486 QA (6eb6fbf, reuse 47710391) -> T-558. Next free workers: T-426 QA +
+  Cluster: T-379 S2 Job -> T-401 gate-job 3d7ba13 (lead) -> T-531 S2c (WAITING 7afbd0d) -> T-486 QA -> T-558. 47710391 ended. Next free workers: T-426 QA +
   blind review (after T-401 merges), T-416 S1b QA, T-546 + T-548.
 - T-557: the COORDINATOR builds it (dev/t557-runners); 8dc6a739 ended, its 02357fd offered as input (4925). Collision lines on T-557.
 - T-426 (mine again, 4926): ab93b54 --pool-env; the coordinator reuses its secret resolution. QA + blind review after T-401 merges.
 - T-379 3ddbcbc: src/ci 144/144 job-5b4609a6 (4905); lead live proof PASS job-c71c5bfe (4906); blind review 30dc0f13 PASS WITH
   CONDITIONS (4938: DEPLOY_REGISTRY bypasses the allow-list) -> S2 d39c25c1 -> Job -> merge after T-401.
 - T-401 060aca4: blind review PASS WITH CONDITIONS (4936). HELD for a person's ack of the gate change (4941, NEEDS A HUMAN);
-  QA Jobs running; then gate-job on the merge head. Major 2 + JOB_RUN_IMAGE -> T-567 (high, D-62).
+  QA PASS WITH GAPS (4943: 189/189 --big; 4Gi hit ENOSPC /tmp). Pre-merge 3d7ba13 (wip/main-3d7ba13): gate-job next. T-567 follow-ups.
 - T-416 (high incident): S1 d37c5f0; QA b1aa2e47 PASS WITH GAPS (4623: 995/999 0 fail job-2c410105; mutations A2/B/C caught);
   ended. Decision 4637: S1b a769b00 (race fix + push-bridge test, UNTESTED; author ended for T-379, 4688). QA runs its Jobs,
   then blind review (opus), lead gate, merge, deploy. S2 = Bypass restore.
