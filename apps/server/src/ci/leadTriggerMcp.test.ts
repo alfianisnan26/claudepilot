@@ -92,7 +92,7 @@ test('a worker whose folder was on dev/y at its start: gate on dev/y, refused on
   const rows = new Map<string, Partial<ChatSession> & Record<string, unknown>>([
     ['w', { id: 'w', workspaceId: WS, cwd: '/w/crew-api', state: 'idle', parentId: 'l', worktree: null, folderBranch: 'dev/y' }],
     ['m', { id: 'm', workspaceId: WS, cwd: '/w/crew-api', state: 'idle', parentId: 'l', worktree: null, folderBranch: 'main' }],
-    ['t', { id: 't', workspaceId: WS, cwd: '/w/app', state: 'idle', parentId: null, worktree: { branch: 'dev/wt' }, folderBranch: 'main' }],
+    ['t', { id: 't', workspaceId: WS, cwd: '/w/app', state: 'idle', parentId: null, worktree: { branch: 'dev/wt' } as never,folderBranch: 'main' }],
     ['l', { id: 'l', workspaceId: WS, cwd: '/w/app', state: 'idle', parentId: null, worktree: null }],
     ['solo', { id: 'solo', workspaceId: WS, cwd: '/w/app', state: 'idle', parentId: null, worktree: null }],
   ]);
