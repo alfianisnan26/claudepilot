@@ -8,7 +8,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - Filed: T-397 (proposal, mine), T-398, T-399, T-402, T-403 (settled by D-62), T-409, T-413 (incident: OOM 02:11, my share stated), T-422 (sudo, proposal, mine).
 
 ## IN FLIGHT (3 live workers = the D-61 budget; no Agent-tool sub-agents)
-- T-366 (urgent): built dev/t-366-1 086a9e1 (proof 57/57 vs 8 fail on base, chat 703/0 fail, typecheck 0; worker 033e1b23 ended). THIRD blind reviewer 5f83b665 (opus, hasyim) in dev-t-366-1. Then merge, deploy images=portal,workspace on 2026-10-16, real-job QA.
+- T-366 (urgent): third review SAFE AFTER FIXES (comment 2950: blocker 1 xbad/symlinked skills skip the hash, major 2 hooks/MCP code outside the hash). Fixer 05b23440 (opus, hasyim) in dev-t-366-1 on 1,2,3,5; finding 4 = T-432 (low). Then a FOURTH reviewer (new session) on the fix diff, merge, deploy portal+workspace 2026-10-16.
 - T-417 (high): fixes on dev/t-417-1 c606ef6 (proof 7/7 vs 9622deb, chat 704/0 fail, typecheck 0; fixer a1bf3da8 ended). qa-verifier f20d8008 (opus, fadlilah) in dev-t-336-1 verifies T-417 AND T-427 (3198f5d). PASS on both -> merge both, gate.
 - T-375 (high) + T-369: ux-checker e44c2a1b was denied Read on /tmp shots and then Bash; told to use --out inside its folder (re-spawn if still blocked).
    dev/t-375-1 c84657f merges T-369; typecheck, web 589/589, crew 108, density 0/492 over 80 px, session-rows 44 (comment on T-375); worker 07cef3b0 ended. ux-checker e44c2a1b (sonnet, hasyim) in dev-t-333-1. Then merge both, regenerate the context pack.
@@ -39,7 +39,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 2. T-413 post-mortem (incident-analyst worker, sonnet).
 3. ux-checker + S3 perf-tester for T-376 S2.
 4. T-416 (portal memory budget, high), T-422 build (sudo), T-147 (narrow ClusterRole in a rig, after T-416/T-417).
-5. T-425, T-378 S2-S4, T-382, T-377, T-386, T-409, T-402, T-398, T-399.
+5. T-425, T-432, T-378 S2-S4, T-382, T-377, T-386, T-409, T-402, T-398, T-399.
 6. T-370 HOLD (claudepilot-b7), then T-371..T-374, T-363 (read D-59 / PRD 8b criteria first).
 7. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356, T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149.
 
