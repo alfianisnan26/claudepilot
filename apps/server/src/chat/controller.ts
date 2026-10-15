@@ -1528,7 +1528,6 @@ export class ChatController {
     try {
       return await this.#createBody(id, req, opts, spawnChecked);
     } catch (e) {
-      this.#memoryReserved.delete(id);
       throw e;
     }
   }
