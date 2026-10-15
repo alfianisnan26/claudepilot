@@ -12,12 +12,21 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
 ## IN FLIGHT (3 of 3 workers)
 - T-483 (urgent; 4057): 8ca232d (impl 4105) + blind review 93b26659 PASS WITH CONDITIONS (4123; D-62 met); decision 4126/4138.
   Slice 999d9653 (impl-t483-2, sonnet, alfian.isnan) on dev/t-483-2 from 8ca232d: FR12 docs, audit row for allowed person assignments,
-  + T-509 (4146): kit bootstrap line 19, Needs-you shows open `owner-checklist` tickets. Then ONE QA (sonnet) on its head, merge, gate.
+  + T-509 (4146): kit bootstrap line 19, Needs-you shows open `owner-checklist` tickets. DONE d2dcd92 (4191; 172/172 Job 7ace90e8;
+  typecheck 6d53be3f; proof f3b2f879); 999d9653 ended. QA 0b695a8d PASS WITH GAPS (4207; 246/246 Job 7a6bbbf0; typecheck 4bc9caea); ended.
+  MERGED: integration c0837f7 (merge 4103c8f + pack), gate GREEN (Job claudepilot-gate-c0837f7-a5af; repos/actions flaky -> T-512), pushed.
+  Deploy run started 08:3x (gate on); close after a live refusal by a fresh worker. Kit republish = owner (T-509).
+- T-515 (high; 4211: M, sev 2, ~2.5 h): S1 52f95911 (implementer, opus, rossi) on dev/t-515-1 from be31491: last-known workspaces
+  `unavailable` + reason + last good time, store-backed; bounded kube list; UI InfoTip 390/1280. Then QA (sonnet) + ux-checker.
 - T-486 (L; 4020): S1 c670297 (4124), blind review 4cbf90d2 PASS WITH CONDITIONS (4161; D-62 met). Decision 4171: sync off the CI poll path,
-  first-sync baseline, no proxy/insteadOf; allow-list setting -> S2. Fixer impl-t486-2 (opus) on dev/t-486-2 from c670297 (spawn timed out
-  but started; id arrives with its report). Then QA (sonnet), merge (pack by lead). S2: webhook + real Event check.
-- T-490 (4166: M, ~2.5 h): S1 80940188 (implementer, opus, hasyim) on dev/t-490-1 from a2b6ce5: kit persona sonnet roles, spawn default
-  model + `why` refusal naming D-63, scorecard opus share. Then blind review (opus), QA (sonnet).
+  first-sync baseline, no proxy/insteadOf; allow-list setting -> S2. Fixer f83c384d DONE 3ab6e6e (4212; 269/269 + byte-equal runner Job 6c8469a6;
+  typecheck 885cfdcf; proof ef980ac1); ended. QA 3c99ce95 PASS WITH GAPS (4228; 269/269 Job 30caf490;
+  runner byte-equal f6f38cad); ended. Decision 4231: URL change must reset the baseline (fix df6dc0c7, sonnet, dev/t-486-3 from 3ab6e6e;
+  lead reads the diff); attention for failing sync -> S2. Then merge (pack by lead). S2: webhook + real Event check.
+- T-490 (4166: M, ~2.5 h): S1 DONE 18dadd3 (4213; server 1000/1000 Job 63f3ddd1; web 626/626 b00ac52f; typecheck 9453d4fb on 3b0070c;
+  proof 93946bb7; migration 777, no clash with T-486's 782); 80940188 ended. Blind review d74ad0bc PASS WITH CONDITIONS (4227; major:
+  `model:'default'` passes the gate); ended. Decision 4229: allow-list (only sonnet/haiku without why); minors -> follow-up ticket.
+  Fixer bbe851a2 (sonnet, two.claude) on dev/t-490-2 from 18dadd3. Then QA (sonnet). Kit SKILL.md:63 wording -> T-509 proposal.
 - T-472: live check NOT VERIFIED (4157, 4168): needs a verifier WITH portal_status/session_context/attention_list (check its tools first).
 - T-435, T-397, T-491: merged; close after the next deploy (live checks per ticket).
 
@@ -52,9 +61,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   then with `--apply`.
 
 ## NEXT (in order, as slots free)
-1. T-483 QA (sonnet) on the slice head -> merge, pack, gate, push.
-2. T-515 (high; workspace list empty while the kube API is slow: keep last-known workspaces `unavailable` with their Claudes; fake kube
-   client that times out; UI 390/1280): implementer opus.
+1. T-483 gate c0837f7 -> ff integration, push, deploy (gate on).
 3. T-486 QA after the fixer; merge. 4. T-490 blind review + QA. 5. T-472 live check (verifier with portal tools).
 6. Deploy (gate on) after T-483; live checks for T-435, T-397, T-491, T-483.
 7. T-450 S3, T-416, T-422, T-147, T-438, T-425, T-436, T-437, T-432, T-378 S1 verify, T-382, T-377, T-386, T-409, T-402, T-398, T-399,
