@@ -4,10 +4,10 @@
 // ci_runs_list gives the lead the minutes since its program's last stg deploy that passed, or "unavailable".
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { CiDecider } from '@portal/contracts';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { agentStart, deploysOnlyToStg } from './authz.js';
 import { registerCiTools } from './portalTools.js';
+import type { CiDecider } from './service.js';
 import { FakeSessions } from './sessions.js';
 import { harness, remote, WS } from './testkit.js';
 
@@ -20,6 +20,7 @@ const FILES = {
   '.pilot/uat-deploy.yml': deployTo('uat'),
   '.pilot/staging-deploy.yml': deployTo('staging'),
   '.pilot/mixed.yml': 'on: manual\njobs:\n  a:\n    environment: stg\n    steps: [{ run: echo a }]\n  b:\n    environment: production\n    steps: [{ run: echo b }]\n',
+  '.pilot/stg-broken.yml': 'on: manual\njobs:\n  release:\n    environment: stg\n    steps: [{ run: exit 1 }]\n',
   '.pilot/gate.yml': 'on: manual\njobs:\n  t:\n    steps: [{ run: echo gate }]\n',
   // An environment from an input is not a pipeline the portal runs (environment names are literal): the file is invalid.
   '.pilot/from-input.yml': deployTo('${{ inputs.target }}', TARGET),
@@ -149,6 +150,15 @@ test('stg age: "unavailable" before any stg deploy passed, then whole minutes si
     assert.deepEqual(await age(lead), [{ repo: 'app', minutes: 37 }]);
     clock = new Date(finished - 5_000);
     assert.deepEqual(await age(lead), [{ repo: 'app', minutes: 0 }], 'a clock behind the run never goes negative');
+
+    // A stg deploy that FAILED, ended later, is not "the last deploy that passed": the age still counts from the passed one.
+    clock = new Date(finished + 20 * 60_000);
+    const bad = await h.svc.startRun({ repoId: repo.id, pipeline: 'stg-broken', ref: 'stg' }, 'ui');
+    await h.until('the failing stg run to end', () => h.svc.get(bad.id).status === 'failed');
+    const badEnd = Date.parse(h.svc.get(bad.id).finishedAt!);
+    assert.ok(badEnd >= finished + 19 * 60_000, 'the failed run ended 20 minutes after the passed one (the service stamps on its clock)');
+    clock = new Date(finished + 25 * 60_000);
+    assert.deepEqual(await age(lead), [{ repo: 'app', minutes: 25 }], 'counted from the deploy that passed (25), not the failed one (5)');
   } finally {
     mcp.done();
     h.done();
