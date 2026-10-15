@@ -90,6 +90,42 @@ test('send: a portal actor’s message is stored with its actor and label, recor
   }
 });
 
+test('send (T-597): an allowed slash command from any portal actor reaches Claude as the bare command, still attributed; nothing else does', async () => {
+  const s = await liveSession();
+  try {
+    const sent = () => s.ws.sends.filter((x) => x.line.includes('"type":"user"')).map((x) => sentText(x.line));
+    const cases: [string, string, string][] = [
+      ['portal-mcp:ptk_1', '/compact keep the plan', 'bare'],
+      ['portal-mcp:ptk_1', '/context', 'bare'],
+      ['portal-mcp:ptk_1', '/reload-plugins', 'bare'],
+      ['portal-mcp:ptk_1', '  \n/compact\nkeep X', 'bare'],
+      ['ticket:T-12', '/compact keep T-12', 'bare'],
+      ['ci:run_42', '/compact keep ci', 'bare'],
+      ['portal-mcp:ptk_1', '/clear', 'framed'],
+      ['portal-mcp:ptk_1', '/compactfoo', 'framed'],
+      ['portal-mcp:ptk_1', 'please /compact now', 'framed'],
+      ['ticket:T-12', '/login', 'framed'],
+    ];
+    let n = 0;
+    for (const [actor, text, how] of cases) {
+      await s.controller.send(s.id, `m-slash-${n++}`, text, { actor });
+      await until(() => sent().length === n);
+      const got = sent()[n - 1]!;
+      if (how === 'bare') assert.equal(got, text, `${actor} ${JSON.stringify(text)} goes bare`);
+      else assert.match(got, /^\[Portal message from /, `${actor} ${JSON.stringify(text)} stays framed`);
+    }
+    const users = s.controller.history(s.id).filter((e) => e.kind === 'user');
+    assert.equal(users[0]!.actor, 'portal-mcp:ptk_1', 'the transcript still shows who sent the bare command');
+    assert.equal(users[4]!.actor, 'ticket:T-12');
+    // The person's own message is unchanged.
+    await s.controller.send(s.id, 'm-slash-ui', '/compact keep me', { actor: 'ui' });
+    await until(() => sent().length === n + 1);
+    assert.equal(sent()[n], '/compact keep me');
+  } finally {
+    await s.done();
+  }
+});
+
 test('send: a bad actor is refused, a session can’t message itself, and a label can’t close the frame or smuggle control characters', async () => {
   const s = await liveSession();
   try {
