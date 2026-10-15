@@ -100,6 +100,13 @@ guards the sanctioned path (and every caller that only has MCP or the API), not 
 **Every deploy:** push `integration` to GitHub and to `pilot` (`git push origin integration && git push pilot integration`), then run `/deploy`
 (or Run in the portal), approve when the hand shows, and `git pull` afterwards (the release commit is on `integration`).
 
+**Upstream sync** (optional, local-git-ci PRD FR8a, T-486): a remote can follow its GitHub repository, so a push there reaches `pilot`
+without a hand push. The owner sets it on the remote (URL, a read token by Secrets & env name for a private one). For a sync at once on
+each push instead of every 30 s: add a Secrets & env *secret* (a random string) assigned to this workspace, name it as the remote's hook
+secret, and in GitHub add a webhook to `https://<portal>/hooks/ci/<remote id>` (content type JSON, that string as the secret, the push
+event). A wrong signature gets the same 404 as an unknown remote; a failing sync shows in Needs you. Settings → CI → Upstream hosts limits
+the hosts (empty: any public host).
+
 ## Gates in the cluster
 
 The workspace pod has 4 CPUs shared with the agents, their scratch portals and Chromium; the full gate took 15 to 40 minutes there and hung

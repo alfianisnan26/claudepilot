@@ -68,6 +68,28 @@ test('exposedSecretValues: nothing while Locked, and nothing from a portal witho
   assert.deepEqual(exposedSecretValues({ kind: () => { throw new Error('No such pool type.'); } }, WS), []);
 });
 
+// T-557 / T-486: the value a CI runner's lease and the upstream webhook's signature check read, by name, for one workspace.
+test('deliveredSecretValue: the file secret a workspace gets, never a variable, an unassigned name, another workspace, or a portal with no Secrets & env kind (a real Locked store is not exercised here)', async () => {
+  const { deliveredSecretValue } = await import('./exposed.js');
+  const value = `fixture-${Math.random().toString(36).slice(2)}-hook-value`;
+  const h = await secretsHarness();
+  try {
+    const p = h.service.create('secrets', {
+      name: 'hook',
+      content: { entries: [{ kind: 'variable', name: 'REGION', value: 'eu-west-1-plain' }, { kind: 'secret', name: 'HOOK_KEY', newValue: value }] },
+    });
+    assert.equal(deliveredSecretValue(h.service, WS, 'HOOK_KEY'), null, 'not assigned yet');
+    h.service.setAssignments(WS, 'secrets', [{ poolId: p.id }]);
+    assert.equal(deliveredSecretValue(h.service, WS, 'HOOK_KEY'), value);
+    assert.equal(deliveredSecretValue(h.service, WS, 'REGION'), null, 'a variable is not a secret file');
+    assert.equal(deliveredSecretValue(h.service, WS, 'NOPE'), null);
+    assert.equal(deliveredSecretValue(h.service, 'docker/other', 'HOOK_KEY'), null);
+  } finally {
+    h.done();
+  }
+  assert.equal(deliveredSecretValue({ kind: () => { throw new Error('No such pool type.'); } }, WS, 'HOOK_KEY'), null);
+});
+
 // A5: names only. A pipeline that lists `secrets: [NAME]` asks whether the name reaches the workspace, never for a value.
 test('secretNamesOf / secretName: what reaches a workspace by name and how, never a value', async () => {
   const { secretName, secretNamesOf } = await import('./names.js');
