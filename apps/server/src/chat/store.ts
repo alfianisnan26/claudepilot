@@ -1224,6 +1224,14 @@ export class ChatStore {
     return row ? { hash: row.scan_hash, trustedAt: row.trusted_at } : null;
   }
 
+  /** The folders of a workspace trusted at this hash, the latest first, at most `limit` (T-366, D-62: a clone or worktree of the same repository). */
+  foldersTrustedAt(workspaceId: string, hash: string, limit: number): string[] {
+    const rows = this.#db()
+      .prepare('SELECT folder FROM chat_folder_trust WHERE workspace_id = ? AND scan_hash = ? ORDER BY trusted_at DESC, folder LIMIT ?')
+      .all(workspaceId, hash, limit) as { folder: string }[];
+    return rows.map((r) => r.folder);
+  }
+
   /** Trusts a folder as scanned: its hash, what the scan named (names only, never values), when and by whom. */
   saveFolderTrust(workspaceId: string, folder: string, hash: string, scan: Record<string, unknown>, actor: string | null): void {
     this.#writable()

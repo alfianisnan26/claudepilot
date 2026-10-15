@@ -73,12 +73,13 @@ test('parseTrustScan: extras are the host’s fixed names, `unscanned` from a ho
     assert.throws(() => parseTrustScan(JSON.stringify({ ...rules, extras })), (e) => isAppError(e) && e.status === 503, JSON.stringify(extras));
 });
 
-test('autoTrustable: a folder with rules only, trusted before at another hash (T-38) or never (T-366), never with a broad allow rule or anything that loads', () => {
+test('autoTrustable: a changed folder with rules only, trusted before at another hash (T-38), never with a broad allow rule or anything that loads; never one never trusted (D-62)', () => {
   const rules: FolderScan = { workspaceId: 'docker/ws1', folder: '/home/node/proj', ...EMPTY, hash: HASH_B, files: ['.claude/settings.json'], allowRules: 3, empty: false, trusted: false };
   const before = { hash: HASH_A };
   assert.equal(autoTrustable(rules, before), true);
-  assert.equal(autoTrustable(rules, null), true, 'never trusted (T-366): trusted the first time');
-  assert.equal(autoTrustable(rules, { hash: null }), true);
+  assert.equal(autoTrustable(rules, null), false, 'never trusted (D-62): never by what the files say, only by repository');
+  assert.equal(autoTrustable(rules, { hash: null }), false);
+  assert.equal(autoTrustable(rules, { hash: HASH_B }), false, 'already at this hash');
   assert.equal(autoTrustable({ ...rules, trusted: true }, before), false);
   assert.equal(autoTrustable({ ...rules, empty: true }, null), false);
   assert.equal(autoTrustable({ ...rules, rulesOnly: false }, before), false);
@@ -99,6 +100,33 @@ test('autoTrustable: a folder with rules only, trusted before at another hash (T
     assert.equal(autoTrustable({ ...rules, ...extra }, before), false, JSON.stringify(extra));
     assert.equal(autoTrustable({ ...rules, ...extra }, null), false, JSON.stringify(extra));
   }
+});
+
+test('parseTrustScan: origin is the repository’s identity (T-366, D-62): https, ssh and scp forms read the same, credentials out; unreadable ones are left out', () => {
+  const rules = { ...EMPTY, hash: HASH_A, files: ['.claude/settings.json'], allowRules: 3 };
+  const origin = (o: unknown) => parseTrustScan(JSON.stringify({ ...rules, origin: o })).origin;
+  const user = ['u', 'p'].join(':'); // built here: never a credential-shaped literal
+  for (const url of [
+    'https://github.com/acme/proj.git',
+    'https://GitHub.com/acme/proj',
+    `https://${user}@github.com/acme/proj.git/`,
+    'https://github.com:443/acme/proj.git?ref=x#y',
+    'ssh://git@github.com/acme/proj.git',
+    'ssh://git@github.com:22/acme//proj.git',
+    'git@github.com:acme/proj.git',
+    'github.com:acme/proj',
+  ])
+    assert.equal(origin(url), 'github.com/acme/proj', url);
+  assert.equal(origin('https://github.com/Acme/Proj'), 'github.com/Acme/Proj', 'the path keeps its case');
+  assert.equal(origin('ssh://git@git.example:2222/acme/proj'), 'git.example:2222/acme/proj', 'another port is another server');
+  assert.equal(origin('/home/node/.claudepilot/git/proj.git'), 'file:/home/node/.claudepilot/git/proj');
+  assert.equal(origin('file:///home/node/.claudepilot/git/proj.git/'), 'file:/home/node/.claudepilot/git/proj');
+  // Can't be read for sure: left out, so never matched (fail closed).
+  for (const url of ['', '../proj', 'proj', '/home/node/../x', 'https://github.com/', 'https://h/a b', `https://h/${'x'.repeat(400)}`, 'https://h/a\nb', 'file://other/x'])
+    assert.equal(origin(url), undefined, JSON.stringify(url));
+  assert.equal(parseTrustScan(JSON.stringify(rules)).origin, undefined, 'a host that doesn’t say: no origin');
+  assert.ok(!('origin' in parseTrustScan(JSON.stringify(rules))), 'and no key');
+  for (const o of [1, null, ['x'], { u: 'x' }]) assert.throws(() => parseTrustScan(JSON.stringify({ ...rules, origin: o })), (e) => isAppError(e) && e.status === 503, JSON.stringify(o));
 });
 
 test('autoTrustRefusal: says why by name, never a rule or a value (T-366)', () => {

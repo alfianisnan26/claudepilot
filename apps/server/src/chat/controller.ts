@@ -116,7 +116,7 @@ import { ChatStore, claudeSessionOf, EVENT_TEXT_MAX, sessionCwd, type ChatSessio
 import { BtwEngine, readBtwConfig, type BtwHost } from './btw.js';
 import { BtwStore } from './btwStore.js';
 import { conversationBudget, transferConversation, transferFile, transferOpening, type TransferMeta } from './transfer.js';
-import { autoTrustable, autoTrustRefusal, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError, type FolderScan } from './trust.js';
+import { autoTrustable, autoTrustRefusal, findSameRepo, FOLDER_CHANGED, saveTrust, scanFolder, untrustedError, type FolderScan } from './trust.js';
 import { usageReport } from './usage.js';
 import {
   controlDigest,
@@ -631,7 +631,7 @@ export class ChatController {
   modelWindow?: (claudeId: string, family: string) => boolean;
   /** Installed by the owner (T-109, `automove.returnToOriginalModel`): a move to a Claude that has the chat's original model goes back to it. Unset: no. */
   returnToOriginalModel?: () => boolean;
-  /** Installed by the owner (T-38, T-366): whether a folder whose settings hold permission rules only, no blanket or runner allow rule, is trusted by itself (`chat.trust.autoPermissionOnly`). Unset: no. */
+  /** Installed by the owner (T-38, T-366, D-62): whether a folder is trusted by itself (`chat.trust.autoPermissionOnly`): the first time by repository identity, a change when it holds permission rules only and no broad rule. Unset: no. */
   autoTrustRules?: () => boolean;
   /**
    * Installed by the owner (delivery, `workspace_delivery.applied_at`): when the latest delivery that wrote into a workspace landed (MCP
@@ -3369,8 +3369,8 @@ export class ChatController {
         // T-323: trusted now, so its launch gets the project rules too (the scan above was noted before this trust existed).
         this.#noteProjectSettings(workspaceId, cwd, { ...scan, trusted: true });
       } else {
-        // Otherwise a rules-only worktree may be trusted by the policy (T-366, D-55), or the person is asked.
-        scan = this.#autoTrust(workspaceId, cwd, scan);
+        // Otherwise the policy may trust it by repository (T-366, D-62: another trusted folder of it at this hash), or the person is asked.
+        scan = await this.#autoTrust(workspaceId, cwd, scan);
         if (!scan.trusted) throw untrustedError({ ...scan, worktree: { repo: repoFolder, branch: made.branch, ...(wt.base ? { base: wt.base } : {}) } }, false);
       }
     }
@@ -5187,12 +5187,16 @@ export class ChatController {
   }
 
   /**
-   * Under `chat.trust.autoPermissionOnly`, a folder whose files hold permission rules only and no blanket or command-runner allow
-   * rule is trusted without a person (D-55): the first time (T-366: a lead's new worktree, a repository's first settings) and
-   * after a rules edit (T-38), so a start, resume, wake or Move (auto move's included) doesn't stop; audited `trust.auto` with
-   * `reason` first or changed. When the policy is on and refuses, the scan carries why (`autoRefusal`, names only) for the 409.
+   * Under `chat.trust.autoPermissionOnly`, a folder is trusted without a person, so a start, resume, wake or Move (auto move's
+   * included) doesn't stop:
+   * - never trusted (T-366, D-62): only a clone or worktree of a repository that already has a trusted folder here, its files byte
+   *   for byte that folder's ({@link findSameRepo}); never by what its files say, so a stranger's repository always waits. Audited
+   *   `trust.auto` reason `same-repo` with the matched folder;
+   * - trusted at another hash (T-38): only when the classifier finds permission rules only and no blanket or command-runner allow
+   *   rule ({@link autoTrustRefusal}). Audited reason `changed` with the old hash.
+   * When the policy is on and refuses, the scan carries why (`autoRefusal`, names only) for the 409.
    */
-  #autoTrust(workspaceId: string, folder: string, scan: FolderScan): FolderScan {
+  async #autoTrust(workspaceId: string, folder: string, scan: FolderScan): Promise<FolderScan> {
     if (scan.empty || scan.trusted) return scan;
     let allowed = false;
     try {
@@ -5201,26 +5205,24 @@ export class ChatController {
       // the policy couldn't be read: no
     }
     if (!allowed) return scan;
-    const refusal = autoTrustRefusal(scan);
-    if (refusal) return { ...scan, autoRefusal: refusal };
     const before = this.#chat.folderTrust(scan.workspaceId, scan.folder);
-    if (!autoTrustable(scan, before)) return scan;
+    let detail: Record<string, unknown>;
+    let actor: string;
+    if (before?.hash) {
+      const refusal = autoTrustRefusal(scan);
+      if (refusal) return { ...scan, autoRefusal: refusal };
+      if (!autoTrustable(scan, before)) return scan;
+      actor = 'portal:rules-only';
+      detail = { reason: 'changed', folder: scan.folder, hash: scan.hash, before: before.hash, files: scan.files, allowRules: scan.allowRules };
+    } else {
+      const same = await findSameRepo(this.#workspaces, this.#store, scan, { timeoutMs: this.execTimeoutMs });
+      if ('refusal' in same) return { ...scan, autoRefusal: same.refusal };
+      actor = 'portal:same-repo';
+      detail = { reason: 'same-repo', folder: scan.folder, hash: scan.hash, matched: same.matched, files: scan.files, allowRules: scan.allowRules };
+    }
     this.#noteProjectSettings(workspaceId, folder, { ...scan, trusted: true });
-    saveTrust(this.#store, scan, 'portal:rules-only');
-    this.#chat.addAudit({
-      severity: 'medium',
-      kind: 'trust.auto',
-      workspaceId: scan.workspaceId,
-      actor: 'portal',
-      detail: {
-        reason: before?.hash ? 'changed' : 'first',
-        folder: scan.folder,
-        hash: scan.hash,
-        ...(before?.hash ? { before: before.hash } : {}),
-        files: scan.files,
-        allowRules: scan.allowRules,
-      },
-    });
+    saveTrust(this.#store, scan, actor);
+    this.#chat.addAudit({ severity: 'medium', kind: 'trust.auto', workspaceId: scan.workspaceId, actor: 'portal', detail });
     return { ...scan, trusted: true };
   }
 

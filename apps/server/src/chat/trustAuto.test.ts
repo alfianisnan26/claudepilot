@@ -1,7 +1,8 @@
-// Folder trust without a person (T-366, D-55): under `chat.trust.autoPermissionOnly` a folder never trusted before is trusted by
-// itself when its settings hold permission rules only and no allow rule is broad; a hook, a server, env, a broad rule or the
-// policy off still waits for a person, and the 409 says why by name. A rules edit that adds a runner stops the re-trust (T-38) too,
-// and a portal worktree still copies its repository's trust at the same hash first.
+// Folder trust without a person (T-366, D-55, D-62): under `chat.trust.autoPermissionOnly` a folder never trusted before is trusted by
+// itself ONLY by repository identity: the top of a clone or worktree whose origin is that of a folder trusted in the workspace, with
+// its files byte for byte that folder's (the same hash), that folder still at the hash it was trusted at. Never by what its files say:
+// a stranger's repository with harmless settings waits, and the 409 says why. A rules edit to a trusted folder is trusted again only
+// when the classifier finds no broad rule (T-38). A portal worktree still copies its repository's trust at the same hash first.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -11,11 +12,21 @@ import { ChatStore } from './store.js';
 import { EMPTY_SCAN, liveSession, until, type Live } from './testkit.js';
 import { FOLDER_CHANGED, FOLDER_NOT_TRUSTED } from './trust.js';
 
+// The refusals as the 409 words them (trust.ts NO_SAME_REPO, NOT_A_REPO), spelled out: the text is the contract.
+const NO_SAME_REPO = 'no trusted folder of the same repository has exactly these settings, skills, commands and agents';
+const NOT_A_REPO = 'it is not the top folder of a git clone or worktree with an origin remote';
+
 const LEAD = '/home/node/lead';
 const REPO = '/home/node/proj';
+const WT = '/home/node/proj.worktrees/w1';
+const STRANGER = '/home/node/stranger';
 const H1 = '1'.repeat(64);
 const H2 = '2'.repeat(64);
 const BROAD = 'an allow rule runs any command or covers everything';
+/** The same repository written three ways (https with a user, ssh, the scp form): one identity. */
+const ORIGIN_HTTPS = `https://${['u', 'p'].join(':')}@GitHub.com/acme/proj.git`;
+const ORIGIN_SCP = 'git@github.com:acme/proj';
+const ORIGIN_SSH = 'ssh://git@github.com:22/acme/proj.git/';
 
 /** What `trustscan` prints for a folder whose one settings file holds permission rules only (no broad rule unless `extra` says so). */
 const rules = (hash: string, extra: Record<string, unknown> = {}) =>
@@ -26,6 +37,8 @@ const trustRow = (s: Live, folder: string) => {
   const row = s.store.db!.prepare('SELECT scan_hash, actor FROM chat_folder_trust WHERE workspace_id = ? AND folder = ?').get('docker/ws1', folder) as { scan_hash: string; actor: string } | undefined;
   return row ? { scan_hash: row.scan_hash, actor: row.actor } : undefined; // a plain object (node:sqlite rows have no prototype)
 };
+const codeOf = (e: Error | null) => (e && isAppError(e) ? e.code : String(e));
+const refusalOf = (e: Error | null) => (e as unknown as { details: ChatFolderScan & { autoRefusal?: string } }).details.autoRefusal;
 
 async function start(s: Live, req: Record<string, unknown>) {
   const before = s.ws.tails.length;
@@ -34,54 +47,97 @@ async function start(s: Live, req: Record<string, unknown>) {
   return session;
 }
 
-/** The scan `trustscan` gives the lead's folder; every other folder has no settings. */
+/** `trustscan` per folder from a table; a folder not in it has no settings. */
+const scans = (s: Live, table: Record<string, string>) => (s.ws.scanFor = (f) => table[f] ?? JSON.stringify(EMPTY_SCAN));
+/** The scan `trustscan` gives one folder; every other folder has no settings. */
 const only = (s: Live, folder: string, out: () => string) => (s.ws.scanFor = (f) => (f === folder ? out() : JSON.stringify(EMPTY_SCAN)));
 
-test('first trust: a folder never trusted, rules only, is refused with the policy off and trusted by itself with it on, audited first', async () => {
+test('same repo: a new worktree of a trusted repository with byte-identical files waits with the policy off, and with it on is trusted, audited same-repo with the matched folder', async () => {
   const s = await liveSession();
   try {
-    only(s, LEAD, () => rules(H1));
-    // The policy off: the person is asked, as before, and the message is the usual one.
-    const off = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: LEAD }));
-    assert.deepEqual([off && isAppError(off) ? off.code : String(off), off?.message], [CHAT_FOLDER_UNTRUSTED, FOLDER_NOT_TRUSTED]);
-    assert.equal(trustRow(s, LEAD), undefined);
+    new ChatStore(s.store).saveFolderTrust('docker/ws1', REPO, H1, {}, 'ui');
+    // A broad rule too: a person trusted exactly these files in this repository, and identity, not content, is the test (D-62).
+    scans(s, { [REPO]: rules(H1, { origin: ORIGIN_HTTPS, broadAllow: true }), [WT]: rules(H1, { origin: ORIGIN_SCP, broadAllow: true }) });
 
-    // On: it starts, the trust is the portal's, and one audit row says it was the first.
+    // The policy off: nothing changes, the person is asked with the usual message.
+    const off = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: WT }));
+    assert.deepEqual([codeOf(off), off?.message], [CHAT_FOLDER_UNTRUSTED, FOLDER_NOT_TRUSTED]);
+    assert.equal(trustRow(s, WT), undefined);
+    assert.equal(s.controller.audit({ kind: 'trust.auto' }).length, 0);
+
     s.controller.autoTrustRules = () => true;
-    const session = await start(s, { cwd: LEAD });
-    assert.equal(session.cwd, LEAD);
-    assert.deepEqual(trustRow(s, LEAD), { scan_hash: H1, actor: 'portal:rules-only' });
+    const session = await start(s, { cwd: WT });
+    assert.equal(session.cwd, WT);
+    assert.deepEqual(trustRow(s, WT), { scan_hash: H1, actor: 'portal:same-repo' });
+    assert.deepEqual(trustRow(s, REPO), { scan_hash: H1, actor: 'ui' }, 'the repository’s own trust is untouched');
     const rows = s.controller.audit({ kind: 'trust.auto' });
     assert.equal(rows.length, 1);
     assert.deepEqual([rows[0]!.severity, rows[0]!.actor, rows[0]!.workspaceId], ['medium', 'portal', 'docker/ws1']);
-    assert.deepEqual(rows[0]!.detail, { reason: 'first', folder: LEAD, hash: H1, files: ['.claude/settings.json'], allowRules: 2 });
-    // T-323: trusted now, so the launch passes the project's rules.
-    assert.ok(s.ws.startArgs.at(-1)!.join(' ').includes(`${LEAD}/.claude/settings.json`), 'the project rules apply');
+    assert.deepEqual(rows[0]!.detail, { reason: 'same-repo', folder: WT, hash: H1, matched: REPO, files: ['.claude/settings.json'], allowRules: 2 });
   } finally {
     await s.done();
   }
 });
 
-test('first trust: refused with the reason by name for a broad allow rule, a hook, an MCP server, env, or a host that does not say', async () => {
+test('same repo: a worktree whose settings file differs from every trusted folder’s waits, with the reason, and nothing is trusted', async () => {
   const s = await liveSession();
   try {
     s.controller.autoTrustRules = () => true;
-    for (const [extra, why] of [
-      [{ broadAllow: true }, BROAD], // a runner (Bash(flock …:*)) or a blanket (Bash, Edit(/**)): the host's one flag, host.test.ts tells them apart
-      [{ broadAllow: undefined }, BROAD], // a host older than T-366: broad until it says otherwise
-      [{ hooks: ['SessionStart'], rulesOnly: false }, 'it loads hooks'],
-      [{ files: ['.mcp.json', '.claude/settings.json'], mcpServers: ['db'], rulesOnly: false }, 'it starts MCP servers'],
-      [{ envNames: ['NODE_OPTIONS'], rulesOnly: false }, 'it sets environment variables'],
-      [{ rulesOnly: false }, 'it holds more than permission rules'],
-    ] as const) {
-      only(s, LEAD, () => rules(H1, extra));
-      const e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: LEAD }));
-      assert.equal(e && isAppError(e) ? e.code : String(e), CHAT_FOLDER_UNTRUSTED, JSON.stringify(extra));
-      assert.equal(e!.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: ${why}.`, JSON.stringify(extra));
-      assert.equal(((e as unknown as { details: ChatFolderScan & { autoRefusal?: string } }).details).autoRefusal, why);
-      assert.equal(trustRow(s, LEAD), undefined, JSON.stringify(extra));
-    }
+    new ChatStore(s.store).saveFolderTrust('docker/ws1', REPO, H1, {}, 'ui');
+    // Rules only and nothing broad: it would have passed the content check, and still waits.
+    scans(s, { [REPO]: rules(H1, { origin: ORIGIN_SCP }), [WT]: rules(H2, { origin: ORIGIN_SCP }) });
+    const e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: WT }));
+    assert.equal(codeOf(e), CHAT_FOLDER_UNTRUSTED);
+    assert.equal(e!.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: ${NO_SAME_REPO}.`);
+    assert.equal(refusalOf(e), NO_SAME_REPO);
+    assert.equal(trustRow(s, WT), undefined);
     assert.equal(s.controller.audit({ kind: 'trust.auto' }).length, 0);
+  } finally {
+    await s.done();
+  }
+});
+
+test('stranger: a clone of an untrusted repository with harmless settings waits, even byte-identical to a trusted folder; a folder that is no repository waits', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.autoTrustRules = () => true;
+    // Nothing trusted at all: rules only, nothing broad, a real origin, and it waits.
+    scans(s, { [STRANGER]: rules(H1, { origin: 'https://github.com/someone/else.git' }) });
+    let e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: STRANGER }));
+    assert.equal(e!.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: ${NO_SAME_REPO}.`);
+
+    // A trusted folder with the very same files, but another repository: still waits.
+    new ChatStore(s.store).saveFolderTrust('docker/ws1', REPO, H1, {}, 'ui');
+    scans(s, { [REPO]: rules(H1, { origin: ORIGIN_SCP }), [STRANGER]: rules(H1, { origin: 'https://github.com/someone/else.git' }) });
+    e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: STRANGER }));
+    assert.equal(e!.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: ${NO_SAME_REPO}.`);
+
+    // Not the top of a git work tree (the host says no origin): waits, saying so.
+    scans(s, { [REPO]: rules(H1, { origin: ORIGIN_SCP }), [LEAD]: rules(H1) });
+    e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: LEAD }));
+    assert.equal(e!.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: ${NOT_A_REPO}.`);
+
+    for (const f of [STRANGER, LEAD]) assert.equal(trustRow(s, f), undefined, f);
+    assert.equal(s.controller.audit({ kind: 'trust.auto' }).length, 0);
+  } finally {
+    await s.done();
+  }
+});
+
+test('same repo: a trusted folder that is no longer at the hash it was trusted at, or is gone, matches nothing', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.autoTrustRules = () => true;
+    new ChatStore(s.store).saveFolderTrust('docker/ws1', REPO, H1, {}, 'ui');
+    // The repository's files changed since (H2) and nobody trusted them: a worktree at the old H1 isn't matched by it.
+    scans(s, { [REPO]: rules(H2, { origin: ORIGIN_SSH }), [WT]: rules(H1, { origin: ORIGIN_SSH }) });
+    let e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: WT }));
+    assert.equal(e!.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: ${NO_SAME_REPO}.`);
+    // Gone: its scan fails, so it is skipped.
+    s.ws.scanFor = (f) => (f === WT ? rules(H1, { origin: ORIGIN_SSH }) : f === REPO ? '' : JSON.stringify(EMPTY_SCAN));
+    e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: WT }));
+    assert.equal(e!.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: ${NO_SAME_REPO}.`);
+    assert.equal(trustRow(s, WT), undefined);
   } finally {
     await s.done();
   }
@@ -94,7 +150,7 @@ test('re-trust (T-38): a rules edit that adds a runner waits for a person, with 
     new ChatStore(s.store).saveFolderTrust('docker/ws1', LEAD, H1, {}, 'ui');
     only(s, LEAD, () => rules(H2, { broadAllow: true, allowRules: 3 }));
     const e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: LEAD }));
-    assert.equal(e && isAppError(e) ? e.code : String(e), CHAT_FOLDER_UNTRUSTED);
+    assert.equal(codeOf(e), CHAT_FOLDER_UNTRUSTED);
     assert.equal(e!.message, `${FOLDER_CHANGED} Not trusted by itself: ${BROAD}.`);
     assert.deepEqual(trustRow(s, LEAD), { scan_hash: H1, actor: 'ui' }, 'the old trust stands');
     assert.equal(s.controller.audit({ kind: 'trust.auto' }).length, 0);
@@ -124,23 +180,19 @@ test('worktree: the repository’s trust at the same hash is still copied (porta
   }
 });
 
-test('worktree: other rules-only settings in a new worktree are trusted by the policy (first); a broad rule there is refused with the reason and the plan', async () => {
+test('worktree: other rules-only settings in a new portal worktree are no longer trusted by content; it waits with the reason and the plan', async () => {
   const s = await liveSession();
   try {
     s.controller.autoTrustRules = () => true;
     new ChatStore(s.store).saveFolderTrust('docker/ws1', REPO, H1, {}, 'ui');
-    s.ws.scanFor = (f) => (f === REPO ? rules(H1) : rules(H2));
-    const made = await start(s, { cwd: REPO, worktree: {} });
-    assert.deepEqual(trustRow(s, made.cwd), { scan_hash: H2, actor: 'portal:rules-only' });
-    assert.deepEqual(s.controller.audit({ kind: 'trust.auto' }).map((r) => [r.detail.reason, r.detail.folder]), [['first', made.cwd]]);
-
-    s.ws.scanFor = (f) => (f === REPO ? rules(H1) : rules(H2, { broadAllow: true }));
+    s.ws.scanFor = (f) => (f === REPO ? rules(H1, { origin: ORIGIN_SCP }) : rules(H2, { origin: ORIGIN_SCP }));
     const e = await err(s.controller.create({ workspaceId: 'docker/ws1', cwd: REPO, worktree: {} }));
-    assert.equal(e && isAppError(e) ? e.code : String(e), CHAT_FOLDER_UNTRUSTED);
-    assert.equal(e!.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: ${BROAD}.`);
+    assert.equal(codeOf(e), CHAT_FOLDER_UNTRUSTED);
+    assert.equal(e!.message, `${FOLDER_NOT_TRUSTED} Not trusted by itself: ${NO_SAME_REPO}.`);
     const scan = (e as unknown as { details: ChatFolderScan }).details;
     assert.equal(scan.worktree?.repo, REPO, 'the retry’s plan rides along');
     assert.equal(trustRow(s, scan.folder), undefined);
+    assert.equal(s.controller.audit({ kind: 'trust.auto' }).length, 0);
   } finally {
     await s.done();
   }
