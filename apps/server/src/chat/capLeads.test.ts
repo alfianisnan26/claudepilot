@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { controls, init, line, liveSession, ok, sleep, until, type Live } from './testkit.js';
+import { controls, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
 
 const FLAG = '--allow-dangerously-skip-permissions';
 
@@ -93,6 +93,7 @@ test('T-417: the cap full with only working workers and idle leads: the start wa
 
     // The worker's turn ends: an idle worker may sleep, so the waiting start takes its slot.
     endTurn(worker.id, worker.tail, 'w-turn-1');
+    worker.tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY)); // the usage check after a turn (§6 rule 3), answered as Claude Code does
     const seen = () => JSON.stringify({ worker: pick(s, worker.id), queued: pick(s, queued.id), lead: pick(s, s.id), inputs: s.inputs('w-turn-1') });
     await until(() => s.controller.get(worker.id)!.state === 'idle').catch(() => assert.fail(`the worker's turn did not end: ${seen()}`));
     await until(() => s.controller.get(queued.id)!.process === 'live' && s.controller.get(queued.id)!.state === 'idle').catch(() => assert.fail(`the waiting start did not run: ${seen()}`));
