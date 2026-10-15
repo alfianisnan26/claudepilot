@@ -13,7 +13,7 @@ Older log: `orchestrator-log-2026-10-14.md` and git history of this file. Hand-o
   T-561 S1b 7227bb3: QA PASS WITH GAPS (5440: 743/749 0 fail, mutation caught; symlink holes A, B). Decision 5442/5444: S1c fix = one-off sonnet
   implementer (own spawn worktree, base origin/ticket/T-561-s1c-symlinks) at next free slot -> QA Perf re-probe -> lead gate + merge. T-576 DONE 2427d98 (Jobs green; no
   prettier/eslint in the Job): ux BLOCKED (a `folder` spawn gets no Bash; 5368) until T-586 merges. T-586 DONE 1d27635 (Job 6be903ec rc 0, mutation
-  caught, 5419; 2ae78a99 ended): blind review e9489bb0 (sonnet, scripts) -> gate -> merge. T-558 e652c44: QA runs its Jobs (5052).
+  caught, 5419; 2ae78a99 ended): review PASS W/ COND (5456) -> S2 813992cf narrow flags (5457) -> Job -> gate -> merge. T-558 e652c44: QA runs its Jobs (5052).
   T-486 S2d DONE 2979f99 (5454/5455: tests 16/16, typecheck, ci+secrets 258/259, mutation caught; 5feb4875 ended) -> QA Perf -> lead merge + gate.
   T-548 S1 DONE 9b822ba (Jobs green, 5364; d23cb713 ended): QA (sonnet) + blind review (opus, authz) next. eaec4cc5 impl-t591 (sonnet) S1 (plan 5366).
   LANE 5f8f392b "ClaudePilot Backend" (lane-backend, sonnet) on T-546 Jobs (ticket/T-546-digest; 8822ba59 ended). Backend queue (coordinator,
