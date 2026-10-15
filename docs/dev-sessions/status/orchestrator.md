@@ -8,7 +8,7 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - Filed: T-397 (proposal, mine), T-398, T-399, T-402, T-403 (settled by D-62), T-409, T-413 (incident: OOM 02:11, my share stated), T-422 (sudo, proposal, mine).
 
 ## IN FLIGHT (3 live workers = the D-61 budget; no Agent-tool sub-agents)
-- T-366 (urgent): fixes dev/t-366-1 f541f64 (comment 2974). FOURTH reviewer 3596b2c3 (opus, hasyim) on 086a9e1..f541f64. T-435 (high), T-432 (low) filed.
+- T-366 (urgent): fourth review SAFE (comment 2989). Merged LOCALLY 423cb65 (+context pack), full gate Job running on it (wip/main-423cb65); push integration only on green. Minors = T-437. Deploy portal+workspace 2026-10-16.
 - T-417 (high): fixes on dev/t-417-1 c606ef6 (proof 7/7 vs 9622deb, chat 704/0 fail, typecheck 0; fixer a1bf3da8 ended). qa-verifier f20d8008 (opus, fadlilah) in dev-t-336-1 verifies T-417 AND T-427 (3198f5d). PASS on both -> merge both, gate.
 - T-375 (high) + T-369: ux FAIL on c84657f (comment 2978). Fixer ee1a1b05 (opus, hasyim) in dev-t-333-1: no clipped values at 390, header 44 px, new checks. Then a new ux-checker.
 
@@ -16,11 +16,12 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 
 - T-433 (high, in_review): blind review PASS conditional (comment 2984): A ok; B/C hit the persona wall (named for the coordinator); A may be redundant (tools likely missing via --agent lists, not refused). T-436 (vault binding) filed. Coordinator lands.
 
+- T-404 (high): fixer e5806f91 (opus, hasyim) in dev-t-352-1 on dev/t-404-1: B1, B2, 3-10 (merges integration first). Then a NEW blind reviewer.
+
 ## READY, NOT MERGED
-- T-369 (urgent): dev/t-369-1 ff0088d (comment 2568: web 576/576, flip proof f9d87e3b, session-crew 5/5 a9166dc2). Waits for the ux-check above.
+- T-369 (urgent): dev/t-369-1 ff0088d (comment 2568: web 576/576, flip proof f9d87e3b, session-crew 5/5 a9166dc2). In dev/t-375-1; see T-375 above.
 - T-376 (high): S2 web dev/t-376-2 1fa258c (comment 2580: web 589/589). Needs a ux-checker (390/1280, light/dark, scroll-up hold) and S3 perf-tester (10k/25k fixture from T-378's seed-scale.mjs).
 - T-378 (high): S1 dev/t-378-1 9834ff7 (comment 2631: FAIL proof on the owner's cases). Merge with the next batch (qa tools only); S2 transcript-perf + long-lists next; S4 the PASS runs.
-- T-404 (high): dev/t-404-1 2dd0f9e (comment 2750); blind review SAFE AFTER FIXES (comment 2770): guard must protect /etc/claude-code and /etc/claudepilot, own ~20 s deadline, readers/git writers 3-4, MCP verbs 5, eval of file 6, pull scope 7, /usr/bin/env 8, audit label 9. Persona/skill text to propose after the fix, corrected for D-62.
 
 ## DECISIONS (binding)
 - 04:00 coordinator T-433: copy only a worker's verdict line + pointer, never the whole report (until A lands; then workers comment themselves). T-433 blind reviewer = FIRST free slot (D-61 cap 3 kept; conflict named on T-433).
@@ -36,12 +37,11 @@ Older log: `orchestrator-log-2026-10-14.md`. Previous hand-overs: ab99b45 (a8393
 - T-93 Konfersi production only. Coordinator items: T-397 (authz+persona loosening; charter-wall conflict named), T-422 (sudo removal, tightening), T-306 item 4 / T-340 (rtk hook).
 
 ## NEXT (in order, as slots free)
-1. T-427 (high, owner's ticket, coordinator 03:45: same batch as T-417; agents.ts pickSpawnClaude + agents.test.ts; implementer, sonnet is enough). Next deploy batch = T-417 + T-427, on 2026-10-16 (today's cap of 3 is used).
-1b. T-404 fixes (worker in dev-t-352-1 on dev/t-404-1), then a new blind reviewer.
+1. On f20d8008's PASS: merge T-417 + T-427, gate Job, push. Deploy batch 2026-10-16: T-366 (portal+workspace), T-417, T-427.
 2. T-413 post-mortem (incident-analyst worker, sonnet).
 3. ux-checker + S3 perf-tester for T-376 S2.
 4. T-435 (high), T-416 (portal memory budget, high), T-422 build (sudo), T-147 (narrow ClusterRole in a rig, after T-416/T-417).
-5. T-425, T-432, T-378 S2-S4, T-382, T-377, T-386, T-409, T-402, T-398, T-399.
+5. T-425, T-436, T-437, T-432, T-378 S2-S4, T-382, T-377, T-386, T-409, T-402, T-398, T-399.
 6. T-370 HOLD (claudepilot-b7), then T-371..T-374, T-363 (read D-59 / PRD 8b criteria first).
 7. T-365 rest, T-354, T-347, T-350, T-351, T-355, T-356, T-388, T-341, T-344, T-345, T-332, T-335, T-313, T-314, T-306 item 3, T-149.
 
